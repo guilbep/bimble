@@ -56,7 +56,8 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 **Next, in this order** (Pierre, 5 Nov 2026 evening):
 1. ✅ Section box: clip the model to a box, cut solids show their cut surface, drag handles in the
    viewer, `render --clip` (ADR 0014)
-2. ☐ View cube (top right) and navigation buttons like Revit (zoom all / fit, standard views)
+2. ✅ View cube (top right: 6 faces, 12 edges, 8 corners, animated turns, compass) and navigation
+   bar (Home, Fit all, Fit selection, zoom). North is +Y until IFC TrueNorth is read
 3. ☐ Measure ("prendre des cotes"): distance between points, edges, faces of any elements; keep as annotations
 4. ☐ Storey plan cut to SVG **at scale** (1:1 … 1:5000), printable to PDF on A4 … A0
 5. ☐ Linked models: load another model as a reference (e.g. the architect's IFC) and compare visually

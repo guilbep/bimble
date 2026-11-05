@@ -18,8 +18,17 @@ use std::time::{Duration, Instant};
 
 mod section;
 mod style_editor;
+mod viewcube;
 
 const SAMPLES: u32 = 4;
+/// Duration of a view-cube camera turn.
+const TURN_SECONDS: f32 = 0.3;
+
+struct Turn {
+    from: (f32, f32),
+    to: (f32, f32),
+    start: Instant,
+}
 
 /// Open the viewer window, optionally loading a file and a graphic style. Blocks until the
 /// window is closed.
@@ -115,6 +124,8 @@ struct Viewer {
     /// Section box: on/off, and the box (kept when switched off).
     section_on: bool,
     section_box: Option<ClipBox>,
+    /// Camera turn in progress (view cube).
+    turn: Option<Turn>,
 
     style_window: bool,
     /// File the style was loaded from or saved to.
@@ -149,6 +160,7 @@ impl Viewer {
             fit_pending: false,
             section_on: false,
             section_box: None,
+            turn: None,
             style_window: false,
             style_path: None,
             style_message: None,
@@ -264,18 +276,61 @@ impl Viewer {
         self.needs_render = true;
     }
 
+    /// Frame what is visible (within the section box, if on).
     fn fit(&mut self, aspect: f32) {
-        if let Some(l) = &self.loaded {
-            let mut shown = l.scene.clone();
-            let keep: Vec<bool> = (0..shown.elements.len()).map(|i| self.visible(i)).collect();
-            let mut k = keep.iter();
-            shown.elements.retain(|_| *k.next().unwrap());
-            if shown.elements.is_empty() {
-                shown = l.scene.clone();
+        self.fit_where(aspect, |_| true);
+    }
+
+    /// Frame the selection, or everything visible when nothing is selected.
+    fn fit_selection(&mut self, aspect: f32) {
+        let sel = self.selected;
+        self.fit_where(aspect, |i| sel.is_none_or(|s| s == i));
+    }
+
+    fn fit_where(&mut self, aspect: f32, keep: impl Fn(usize) -> bool) {
+        let Some(l) = &self.loaded else { return };
+        let b = ClipBox::around(&l.scene, |i| self.visible(i) && keep(i))
+            .or_else(|| ClipBox::around(&l.scene, |_| true));
+        let Some(mut b) = b else { return };
+        if let Some(c) = self.clip() {
+            let (lo, hi) = (b.min.max(c.min), b.max.min(c.max));
+            if lo.cmple(hi).all() {
+                b = ClipBox { min: lo, max: hi };
             }
-            self.camera.fit(&shown, aspect);
-            self.needs_render = true;
         }
+        self.camera.fit_box(b.min, b.max, aspect);
+        self.needs_render = true;
+    }
+
+    /// Turn the camera smoothly to a yaw and pitch.
+    fn turn_to(&mut self, yaw: f32, pitch: f32) {
+        let tau = std::f32::consts::TAU;
+        // Shortest way round.
+        let mut dy = (yaw - self.camera.yaw) % tau;
+        if dy > std::f32::consts::PI {
+            dy -= tau;
+        } else if dy < -std::f32::consts::PI {
+            dy += tau;
+        }
+        self.turn = Some(Turn {
+            from: (self.camera.yaw, self.camera.pitch),
+            to: (self.camera.yaw + dy, pitch),
+            start: Instant::now(),
+        });
+    }
+
+    /// Advance a camera turn; true while it is running.
+    fn animate(&mut self) -> bool {
+        let Some(t) = &self.turn else { return false };
+        let k = (t.start.elapsed().as_secs_f32() / TURN_SECONDS).min(1.0);
+        let e = k * k * (3.0 - 2.0 * k); // smoothstep
+        self.camera.yaw = t.from.0 + (t.to.0 - t.from.0) * e;
+        self.camera.pitch = t.from.1 + (t.to.1 - t.from.1) * e;
+        self.needs_render = true;
+        if k >= 1.0 {
+            self.turn = None;
+        }
+        true
     }
 
     /// Make sure the offscreen target matches the view size, and redraw it if needed.
@@ -452,6 +507,73 @@ impl Viewer {
             ui.separator();
             ui.weak("Drag: orbit · Right-drag / Shift-drag: pan · Scroll: zoom · Click: select · Double-click / F: fit · T: top");
         });
+    }
+
+    /// View cube and navigation bar, top right of the 3D view.
+    fn navigation(&mut self, ui: &mut egui::Ui, rect: egui::Rect, aspect: f32) {
+        let size = 120.0;
+        let cube = egui::Rect::from_min_size(
+            egui::pos2(rect.max.x - size - 8.0, rect.min.y + 8.0),
+            Vec2::splat(size),
+        );
+        if !rect.contains_rect(cube) {
+            return;
+        }
+        let a = self.opts.style.selection.0;
+        let accent = Color32::from_rgb(a[0], a[1], a[2]);
+        match viewcube::show(ui, cube, self.camera.yaw, self.camera.pitch, accent) {
+            viewcube::Action::Look(d) => {
+                let (yaw, pitch) = viewcube::orientation(d, self.camera.yaw);
+                self.turn_to(yaw, pitch);
+            }
+            viewcube::Action::Orbit(d) => {
+                self.turn = None;
+                self.camera.orbit(d.x * 0.008, d.y * 0.008);
+                self.needs_render = true;
+            }
+            viewcube::Action::Turn(da) => {
+                self.turn = None;
+                self.camera.orbit(da, 0.0);
+                self.needs_render = true;
+            }
+            viewcube::Action::None => {}
+        }
+        // Navigation bar under the cube.
+        let w = 64.0;
+        let mut y = cube.max.y + 4.0;
+        let mut button = |ui: &mut egui::Ui, text: &str, tip: &str| {
+            let r = egui::Rect::from_min_size(
+                egui::pos2(cube.center().x - w / 2.0, y),
+                Vec2::new(w, 22.0),
+            );
+            y += 26.0;
+            ui.put(r, egui::Button::new(text))
+                .on_hover_text(tip)
+                .clicked()
+        };
+        if button(ui, "Home", "Default 3D view of everything visible") {
+            let d = Camera::default();
+            self.turn_to(d.yaw, d.pitch);
+            self.fit(aspect);
+        }
+        if button(
+            ui,
+            "Fit all",
+            "Zoom to everything visible (F or double-click)",
+        ) {
+            self.fit(aspect);
+        }
+        if self.selected.is_some() && button(ui, "Fit sel.", "Zoom to the selection") {
+            self.fit_selection(aspect);
+        }
+        if button(ui, "+", "Zoom in") {
+            self.camera.zoom(0.8);
+            self.needs_render = true;
+        }
+        if button(ui, "-", "Zoom out") {
+            self.camera.zoom(1.25);
+            self.needs_render = true;
+        }
     }
 
     fn style_panel(&mut self, ui: &mut egui::Ui) {
@@ -703,6 +825,10 @@ impl eframe::App for Viewer {
                         self.section_box = Some(b);
                         self.needs_render = true;
                     }
+                }
+                self.navigation(ui, rect, aspect);
+                if self.animate() {
+                    ctx.request_repaint();
                 }
                 if self.needs_render || self.needs_upload {
                     ctx.request_repaint();
