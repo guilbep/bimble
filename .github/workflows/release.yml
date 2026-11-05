@@ -1,15 +1,27 @@
 name: release
 
-# Tags v* publish a GitHub Release. Pull requests and manual runs build the same archives as
-# workflow artifacts, so a build can be tried before anything is published.
+# Ways to publish:
+#   - push a tag v*  (or create the release on GitHub, which creates the tag), or
+#   - run this workflow by hand with `tag: vX.Y.Z` to (re)build an existing tag and attach the
+#     archives to its release.
+# Pull requests and manual runs without a tag build the same archives as workflow artifacts.
 on:
   push:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach to its release (e.g. v0.1.0). Empty: build only."
+        required: false
+        default: ""
 
 permissions:
   contents: read
+
+env:
+  # The tag being released, if any: from a manual run's input, or from a tag push.
+  RELEASE_TAG: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
 
 jobs:
   build:
@@ -28,6 +40,9 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Build the tagged source, even when this workflow file comes from a newer branch.
+          ref: ${{ env.RELEASE_TAG || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -38,15 +53,15 @@ jobs:
         id: v
         run: |
           crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            tag="${GITHUB_REF#refs/tags/v}"
+          if [[ -n "$RELEASE_TAG" ]]; then
+            tag="${RELEASE_TAG#v}"
             if [[ "$tag" != "$crate" ]]; then
-              echo "Tag v$tag does not match Cargo.toml version $crate" >&2
+              echo "Tag $RELEASE_TAG does not match Cargo.toml version $crate" >&2
               exit 1
             fi
             echo "name=$crate" >> "$GITHUB_OUTPUT"
           else
-            echo "name=$crate-dev.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "name=$crate-dev.$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
           fi
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p bimble-cli
@@ -81,12 +96,13 @@ jobs:
           retention-days: 14
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ inputs.tag != '' || startsWith(github.ref, 'refs/tags/v') }}
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      # Notes template from the branch running the workflow.
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
@@ -94,10 +110,16 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
-      - name: Create release
+      # The release may already exist (created by hand on GitHub, which also creates the tag):
+      # then attach the files and keep its title and notes.
+      - name: Create release or attach to it
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          sed "s/{{VERSION}}/$tag/g" .github/release-notes.md > notes.md
-          gh release create "$tag" dist/* --title "Bimble $tag" --notes-file notes.md --prerelease
+          tag="$RELEASE_TAG"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            sed "s/{{VERSION}}/$tag/g" .github/release-notes.md > notes.md
+            gh release create "$tag" dist/* --title "Bimble $tag" --notes-file notes.md --prerelease
+          fi
