@@ -1,0 +1,194 @@
+//! Boolean operations on closed triangle meshes, through the manifold3d kernel (ADR 0010).
+//!
+//! Input and output are triangle soups in f64 (mm, world). Shared vertices are welded exactly
+//! (same bits), and everything is shifted to a local origin first so site coordinates keep full
+//! precision. Inputs that aren't closed 2-manifolds are rejected with an error: callers then draw
+//! the element uncut and report it, rather than guessing.
+
+use manifold_csg::Manifold;
+use std::collections::HashMap;
+
+pub type Tri = [[f64; 3]; 3];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Op {
+    Difference,
+    Union,
+    Intersection,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BooleanError(pub String);
+
+impl std::fmt::Display for BooleanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for BooleanError {}
+
+fn bounds(sets: &[&[Tri]]) -> Option<([f64; 3], [f64; 3])> {
+    let mut it = sets.iter().flat_map(|s| s.iter()).flat_map(|t| t.iter());
+    let first = *it.next()?;
+    Some(it.fold((first, first), |(mut lo, mut hi), p| {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+        (lo, hi)
+    }))
+}
+
+fn to_manifold(tris: &[Tri], origin: [f64; 3]) -> Result<Manifold, BooleanError> {
+    let mut index: HashMap<[u64; 3], u64> = HashMap::new();
+    let mut verts: Vec<f64> = Vec::new();
+    let mut idx: Vec<u64> = Vec::with_capacity(tris.len() * 3);
+    for t in tris {
+        for p in t {
+            // `+ 0.0` turns -0.0 into 0.0 so equal coordinates weld.
+            let q = [
+                p[0] - origin[0] + 0.0,
+                p[1] - origin[1] + 0.0,
+                p[2] - origin[2] + 0.0,
+            ];
+            let key = q.map(f64::to_bits);
+            let next = (verts.len() / 3) as u64;
+            let i = *index.entry(key).or_insert_with(|| {
+                verts.extend_from_slice(&q);
+                next
+            });
+            idx.push(i);
+        }
+    }
+    let m = Manifold::from_mesh_f64(&verts, 3, &idx)
+        .map_err(|e| BooleanError(format!("not a closed solid: {e}")))?;
+    m.status()
+        .map_err(|e| BooleanError(format!("not a closed solid: {e}")))?;
+    Ok(m)
+}
+
+fn from_manifold(m: &Manifold, origin: [f64; 3]) -> Vec<Tri> {
+    let (props, n, idx) = m.to_mesh_f64();
+    let v = |i: u64| {
+        let i = i as usize * n;
+        [
+            props[i] + origin[0],
+            props[i + 1] + origin[1],
+            props[i + 2] + origin[2],
+        ]
+    };
+    idx.as_chunks::<3>()
+        .0
+        .iter()
+        .map(|t| [v(t[0]), v(t[1]), v(t[2])])
+        .collect()
+}
+
+/// `a op (union of b)`. Each operand must be one or more closed, non-overlapping solids.
+pub fn apply(op: Op, a: &[Tri], b: &[&[Tri]]) -> Result<Vec<Tri>, BooleanError> {
+    let b: Vec<&[Tri]> = b.iter().copied().filter(|s| !s.is_empty()).collect();
+    if b.is_empty() {
+        return Ok(match op {
+            Op::Intersection => Vec::new(),
+            _ => a.to_vec(),
+        });
+    }
+    let mut all = vec![a];
+    all.extend(b.iter().copied());
+    let Some((lo, hi)) = bounds(&all) else {
+        return Ok(Vec::new());
+    };
+    let origin = [0, 1, 2].map(|k| ((lo[k] + hi[k]) / 2.0).round());
+
+    let ma = to_manifold(a, origin)?;
+    let cutters: Vec<Manifold> = b
+        .iter()
+        .map(|s| to_manifold(s, origin))
+        .collect::<Result<_, _>>()?;
+    let mut cut = cutters[0].clone();
+    for c in &cutters[1..] {
+        cut = cut.union(c);
+    }
+    let r = match op {
+        Op::Difference => ma.difference(&cut),
+        Op::Union => ma.union(&cut),
+        Op::Intersection => ma.intersection(&cut),
+    };
+    r.status()
+        .map_err(|e| BooleanError(format!("boolean failed: {e}")))?;
+    Ok(from_manifold(&r, origin))
+}
+
+/// Closed box from `lo` to `hi`, outward-facing (for tests and half-space solids).
+pub fn cuboid(lo: [f64; 3], hi: [f64; 3]) -> Vec<Tri> {
+    let p = |x: usize, y: usize, z: usize| {
+        [
+            if x == 0 { lo[0] } else { hi[0] },
+            if y == 0 { lo[1] } else { hi[1] },
+            if z == 0 { lo[2] } else { hi[2] },
+        ]
+    };
+    // Each face as two triangles, counter-clockwise seen from outside.
+    let quads = [
+        [p(0, 0, 0), p(0, 1, 0), p(1, 1, 0), p(1, 0, 0)], // -z
+        [p(0, 0, 1), p(1, 0, 1), p(1, 1, 1), p(0, 1, 1)], // +z
+        [p(0, 0, 0), p(1, 0, 0), p(1, 0, 1), p(0, 0, 1)], // -y
+        [p(0, 1, 0), p(0, 1, 1), p(1, 1, 1), p(1, 1, 0)], // +y
+        [p(0, 0, 0), p(0, 0, 1), p(0, 1, 1), p(0, 1, 0)], // -x
+        [p(1, 0, 0), p(1, 1, 0), p(1, 1, 1), p(1, 0, 1)], // +x
+    ];
+    quads
+        .iter()
+        .flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]])
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn volume(tris: &[Tri]) -> f64 {
+        let o = tris[0][0];
+        tris.iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|p| [p[0] - o[0], p[1] - o[1], p[2] - o[2]]);
+                a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+                    + a[2] * (b[0] * c[1] - b[1] * c[0])
+            })
+            .sum::<f64>()
+            / 6.0
+    }
+
+    #[test]
+    fn wall_minus_openings_is_exact_at_site_coordinates() {
+        let (x, y) = (2_500_000_000.0, 1_100_000_000.0);
+        let wall = cuboid([x, y, 0.0], [x + 6000.0, y + 200.0, 2800.0]);
+        let door = cuboid([x + 1000.0, y - 10.0, 0.0], [x + 2200.0, y + 210.0, 2100.0]);
+        let window = cuboid(
+            [x + 3000.0, y - 10.0, 900.0],
+            [x + 4200.0, y + 210.0, 2100.0],
+        );
+        let r = apply(Op::Difference, &wall, &[&door, &window]).unwrap();
+        let want = 6000.0 * 200.0 * 2800.0 - 1200.0 * 200.0 * 2100.0 - 1200.0 * 200.0 * 1200.0;
+        assert!(
+            (volume(&r) - want).abs() / want < 1e-9,
+            "{} vs {want}",
+            volume(&r)
+        );
+    }
+
+    #[test]
+    fn open_mesh_is_rejected() {
+        let mut open = cuboid([0.0; 3], [1.0; 3]);
+        open.truncate(10); // drop one face
+        let c = cuboid([0.5; 3], [2.0; 3]);
+        assert!(apply(Op::Difference, &open, &[&c]).is_err());
+    }
+
+    #[test]
+    fn nothing_to_cut_returns_the_input() {
+        let a = cuboid([0.0; 3], [1.0; 3]);
+        assert_eq!(apply(Op::Difference, &a, &[]).unwrap(), a);
+    }
+}

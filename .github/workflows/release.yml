@@ -64,7 +64,18 @@ jobs:
             echo "name=$crate-dev.$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
           fi
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p bimble-cli
+        shell: bash
+        run: |
+          # C++ dependencies (manifold) are built by CMake, which ignores cargo's --target on macOS
+          # and builds for the runner's arch unless told otherwise (ADR 0010).
+          if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
+            arch="${{ matrix.target }}"; arch="${arch%%-*}"; [[ "$arch" == aarch64 ]] && arch=arm64
+            export CMAKE_OSX_ARCHITECTURES="$arch"
+          fi
+          cargo build --release --locked --target ${{ matrix.target }} -p bimble-cli
+          if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
+            lipo -archs target/${{ matrix.target }}/release/bimble
+          fi
       - name: Smoke test
         if: matrix.run
         run: |

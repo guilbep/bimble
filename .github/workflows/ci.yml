@@ -53,3 +53,42 @@ jobs:
         with:
           name: demo-render
           path: frame.png
+
+  # Performance trend (ADR 0011). The deterministic geometry budgets are a test in the rust job;
+  # this job tracks wall-clock times, which are too noisy on shared runners to fail a build.
+  # Pushes to main store a baseline; pull requests are compared with the latest one and get a
+  # warning when a metric is more than 25 % slower. Software GPU: only relative numbers matter.
+  perf:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers
+      - run: cargo build --release -p bimble-cli
+      - name: Benchmark (3 runs, best of each metric is compared)
+        run: |
+          for i in 1 2 3; do
+            ./target/release/bimble bench --json --frames 20 --width 640 --height 360 > bench-$i.json
+          done
+      - if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-main
+          path: bench-*.json
+          retention-days: 90
+      - name: Compare with the latest main baseline
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run=$(gh run list -R "$GITHUB_REPOSITORY" -b main -w ci -e push -s success -L 1 --json databaseId -q '.[0].databaseId')
+          if [ -z "$run" ] || ! gh run download "$run" -R "$GITHUB_REPOSITORY" -n bench-main -D base; then
+            echo "No main baseline yet: it is created by the first push to main with this job." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # The baseline is reduced to its best run too, so both sides are compared alike.
+          python3 -I scripts/bench_compare.py bench-*.json --baseline base/bench-*.json

@@ -15,6 +15,8 @@ a decision that changes an old one says which one it supersedes.
 | [0007](0007-units-precision-tolerances.md) | Units, precision, tolerances | Accepted |
 | [0008](0008-untrusted-input-and-client-data.md) | Untrusted-input limits; client data stays out of the repo | Accepted |
 | [0009](0009-testing-ci-releases.md) | IfcOpenShell oracle, CI with software GPU, release workflow | Accepted |
+| [0010](0010-geometry-kernel.md) | Geometry kernel: manifold3d for mesh booleans; exact B-rep later | Accepted |
+| [0011](0011-performance-regressions.md) | Performance: geometry budgets fail the build, timing trend warns | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 
