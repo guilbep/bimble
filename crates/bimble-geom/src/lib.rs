@@ -17,7 +17,23 @@ pub struct Mesh {
     pub normals: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
     /// Feature edges as pairs of positions (profile outline at both ends + vertical edges).
-    pub edges: Vec<[[f32; 3]; 2]>,
+    pub edges: Vec<Segment>,
+    /// For each edge, the normals of its two faces (snorm8, w unused). An edge whose faces both
+    /// face away from the viewer is hidden behind its own solid, and only seen through a section
+    /// cut, where it must not be drawn. Boundary edges store opposite normals (never both away);
+    /// zero normals mean "unknown, always draw". May be shorter than `edges` (missing = unknown).
+    pub edge_normals: Vec<EdgeNormals>,
+}
+
+/// An edge: two positions.
+pub type Segment = [[f32; 3]; 2];
+/// The packed normals of the two faces of an edge (see `Mesh::edge_normals`).
+pub type EdgeNormals = [[i8; 4]; 2];
+
+/// A unit normal packed as snorm8.
+pub fn pack_normal(n: [f32; 3]) -> [i8; 4] {
+    let q = |c: f32| (c.clamp(-1.0, 1.0) * 127.0).round() as i8;
+    [q(n[0]), q(n[1]), q(n[2]), 0]
 }
 
 impl Mesh {
@@ -159,7 +175,7 @@ mod tests {
             normals: vec![[0.0, 0.0, 1.0]; 4],
             // One side only: an open surface. Relative to the origin this would be 1e6×1200/3.
             indices: vec![0, 1, 2, 0, 2, 3],
-            edges: vec![],
+            ..Default::default()
         };
         assert!(m.volume().abs() < 1.0, "{}", m.volume());
         // A closed box far away keeps its exact volume.

@@ -149,6 +149,8 @@ pub struct GraphicStyle {
     pub hatch_darken: f32,
     /// Share of light that does not depend on the face orientation (0..1). 1 = flat colours.
     pub ambient: f32,
+    /// Brightness of surfaces cut by the clipping box, relative to their fill (0..1).
+    pub cut_shade: f32,
     pub families: Families,
 }
 
@@ -213,6 +215,7 @@ impl Default for GraphicStyle {
             hatch_strength: 0.5,
             hatch_darken: 0.45,
             ambient: 0.62,
+            cut_shade: 0.72,
             families: Families {
                 concrete: Fill {
                     stipple: Some(Stipple {
@@ -314,6 +317,7 @@ impl GraphicStyle {
         unit("hatch_strength", self.hatch_strength)?;
         unit("hatch_darken", self.hatch_darken)?;
         unit("ambient", self.ambient)?;
+        unit("cut_shade", self.cut_shade)?;
         for c in MaterialCategory::ALL {
             let f = self.families.get(c);
             let at = |field: &str| format!("families.{}.{field}", c.label().to_lowercase());

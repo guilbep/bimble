@@ -19,6 +19,7 @@ a decision that changes an old one says which one it supersedes.
 | [0011](0011-performance-regressions.md) | Performance: geometry budgets fail the build, timing trend warns | Accepted |
 | [0012](0012-parallel-loading.md) | Parallel loading: chunked parse, per-element geometry on all cores, mimalloc | Accepted |
 | [0013](0013-graphic-style.md) | Graphic style: every colour, hatch and light value is data (JSON, `--style`, live editor) | Accepted |
+| [0014](0014-section-box.md) | Section box: GPU clipping, back faces as cut surfaces, back edges hidden | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

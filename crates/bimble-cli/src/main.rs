@@ -126,6 +126,10 @@ enum Cmd {
         /// Graphic style file (JSON; see `bimble style`)
         #[arg(long)]
         style: Option<PathBuf>,
+        /// Section box in model coordinates (mm): x0,y0,z0,x1,y1,z1. Only what is inside is
+        /// drawn; cut solids show their cut surface.
+        #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
+        clip: Option<Vec<f64>>,
     },
 }
 
@@ -275,6 +279,7 @@ fn run(cli: Cli) -> Result<(), String> {
             hide,
             samples,
             style,
+            clip,
         } => {
             use bimble_core::MaterialCategory;
             use bimble_render::{Camera, DrawOptions, GraphicStyle, Headless, Renderer, Target};
@@ -297,6 +302,30 @@ fn run(cli: Cli) -> Result<(), String> {
             let t0 = Instant::now();
             let scene = load_scene(&path)?;
             let t_load = t0.elapsed();
+            let clip = match clip.as_deref() {
+                None => None,
+                Some([x0, y0, z0, x1, y1, z1]) => {
+                    let (a, b) = ([*x0, *y0, *z0], [*x1, *y1, *z1]);
+                    if a.iter().chain(&b).any(|v| !v.is_finite()) {
+                        return Err("--clip: values must be numbers".into());
+                    }
+                    // Model coordinates to scene coordinates (relative to the scene origin).
+                    let o = scene.origin_mm;
+                    let rel = |p: [f64; 3]| {
+                        glam::Vec3::new(
+                            (p[0] - o[0]) as f32,
+                            (p[1] - o[1]) as f32,
+                            (p[2] - o[2]) as f32,
+                        )
+                    };
+                    let (a, b) = (rel(a), rel(b));
+                    Some(bimble_render::ClipBox {
+                        min: a.min(b),
+                        max: a.max(b),
+                    })
+                }
+                Some(_) => return Err("--clip needs six numbers: x0,y0,z0,x1,y1,z1".into()),
+            };
             let gpu = Headless::new().map_err(|x| x.to_string())?;
             let max = gpu.max_target_size();
             if width == 0 || height == 0 || width > max || height > max {
@@ -306,7 +335,7 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             let r = Renderer::new(&gpu.device, samples);
             let visible = bimble_render::hidden_by_category(&hidden);
-            let gs = r.upload(&gpu.device, &scene, &visible);
+            let gs = r.upload_with(&gpu.device, &scene, &visible, clip.is_some());
             let target = Target::new(&gpu.device, (width, height), samples);
             let mut cam = Camera {
                 yaw: azimuth.to_radians(),
@@ -316,7 +345,20 @@ fn run(cli: Cli) -> Result<(), String> {
             };
             let mut shown = scene.clone();
             shown.elements.retain(|e| !hidden.contains(&e.category));
-            cam.fit(&shown, width as f32 / height as f32);
+            let aspect = width as f32 / height as f32;
+            match (&clip, shown.bounds()) {
+                // Frame what is left: the part of the model inside the box.
+                (Some(c), Some((lo, hi))) => {
+                    let lo = c.min.max(glam::Vec3::from(lo));
+                    let hi = c.max.min(glam::Vec3::from(hi));
+                    if lo.cmple(hi).all() {
+                        cam.fit_box(lo, hi, aspect);
+                    } else {
+                        cam.fit(&shown, aspect);
+                    }
+                }
+                _ => cam.fit(&shown, aspect),
+            }
             let t1 = Instant::now();
             r.render(
                 &gpu.device,
@@ -326,6 +368,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 &cam,
                 &DrawOptions {
                     style,
+                    clip,
                     ..Default::default()
                 },
             );

@@ -451,6 +451,7 @@ dependencies = [
  "bimble-render",
  "bimble-viewer",
  "clap",
+ "glam",
  "memory-stats",
  "mimalloc",
  "serde_json",
