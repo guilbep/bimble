@@ -2,12 +2,12 @@
 
 Usage:
   bimble info model.ifc --elements-json > ours.jsonl
-  python3 scripts/compare_ifcopenshell.py model.ifc ours.jsonl
+  python3 scripts/compare_ifcopenshell.py model.ifc ours.jsonl [--no-openings]
 
 Checks, per GlobalId: same set of elements, same IFC class, volume within 0.5 % (flat or
 open elements with ~zero volume are compared against 0.1 % of their bounding-box volume),
-world bounding box within 1 mm. Openings are not subtracted on either side
-(Bimble doesn't cut openings yet), so geometry is compared like for like.
+world bounding box within 1 mm. Openings (IfcRelVoidsElement) are subtracted on both sides;
+--no-openings compares uncut geometry (for readers that don't cut them).
 Exit code 1 on any mismatch.
 """
 import json
@@ -43,7 +43,7 @@ VOL_TOL = 5e-3
 BBOX_TOL_MM = 1.0
 
 
-def main(ifc_path, ours_path):
+def main(ifc_path, ours_path, no_openings=False):
     ours = {}
     for line in open(ours_path):
         e = json.loads(line)
@@ -53,7 +53,8 @@ def main(ifc_path, ours_path):
     to_mm = 1000.0  # IfcOpenShell geometry is in metres
     s = ifcopenshell.geom.settings()
     s.set("use-world-coords", True)
-    s.set("disable-opening-subtractions", True)
+    if no_openings:
+        s.set("disable-opening-subtractions", True)
     it = ifcopenshell.geom.iterator(s, f, 2)
     theirs = {}
     assert it.initialize()
@@ -127,4 +128,4 @@ def main(ifc_path, ours_path):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    main(sys.argv[1], sys.argv[2], "--no-openings" in sys.argv[3:])

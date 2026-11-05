@@ -29,7 +29,7 @@ _5 Nov 2026. Supersedes v0 (Python / IFC-file-as-native). Sources: the Bimble PR
 | Rendering | **Own renderer on `wgpu`** | wgpu is the low-level GPU API (Vulkan / Metal / DX12, with an **OpenGL fallback for old machines**, and WebGPU/WebGL2 in the browser). Flat shading, edge lines, procedural hatching in the shader, instancing, culling. No textures, no game engine. |
 | UI (POC) | `egui` + `winit` | Fast to build, same code native and web. Can be replaced later. |
 | Geometry (POC) | Own mesher: profile extrusion + `earcutr` | Covers columns, beams, walls, slabs, footings. |
-| Geometry (later) | Booleans and exact B-Rep: evaluate `manifold`, OCCT (C++ bindings), `truck` | ADR before Phase 2 (openings, rebar) |
+| Geometry kernel | **manifold3d** (`manifold-csg`) for mesh booleans: openings, clipping, CSG (ADR 0010). Exact B-rep later | ✅ booleans · B-rep ADR when exact curves are needed |
 | IFC export | Own IFC4 STEP writer | Validated in tests against IfcOpenShell |
 | IFC import | **Display:** own Rust reader (ADR 0002), checked element by element against IfcOpenShell. **Editing import:** IfcOpenShell from Rust or extend our reader | ✅ display (v0.1) · editing ADR at I3 |
 | Native format | `.bimble`: canonical JSON for the POC → content-addressed object store (git-like) | Format spec in `docs/format/` |
@@ -98,7 +98,7 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 node editor. Merge/review UI and a sync server come along with collaboration. Ray-traced still images when useful.
 
 ## 5. Open decisions
-1. Exact-geometry/boolean kernel (before openings and rebar)
+1. ~~Exact-geometry/boolean kernel~~ → manifold3d for booleans (ADR 0010); exact B-rep still open
 2. IFC import: IfcOpenShell via C++ bindings vs web-ifc
 3. Desktop shell: native winit app vs Tauri + web
 4. Performance target: confirm the reference "old machine" with real users
