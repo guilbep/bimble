@@ -30,3 +30,4 @@ eframe = { version = "0.37", default-features = false, features = ["wgpu", "defa
 rfd = "0.17"
 # Geometry kernel (ADR 0010). No TBB: per-element booleans are small.
 manifold-csg = { version = "0.4", default-features = false }
+memory-stats = "1"
