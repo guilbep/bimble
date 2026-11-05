@@ -44,7 +44,19 @@ warnings) on all fixtures, the synthetic files and the three real files, and sta
 fixtures and a sample with quotes in comments, `;` in strings, malformed and duplicate statements
 and data after `ENDSEC`; it fails when the splitter ignores strings.
 
+### Allocator trade-off (same VM, medians of 5, peak RSS)
+| Load | system allocator | mimalloc | mimalloc, `MIMALLOC_PURGE_DELAY=0` |
+|---|---|---|---|
+| Frame IFC, 50 MB | 1 534 ms, 481 MB | 890 ms, 489 MB | 1 126 ms, 458 MB |
+| Real file, 21 MB | 595 ms, 302 MB | 480 ms, 367 MB | 624 ms, 335 MB |
+
+With several threads the system allocator contends; mimalloc is 1.2–1.7× faster for +2 to +22 %
+peak memory (it keeps freed pages for reuse). Purging at once gives most of the speed back. Kept at
+defaults: speed first (Pierre). `bimble bench` memory after each case: +30 MB on small models,
++60–70 MB (~9 %) on 51k elements. Frame times are unchanged (same machine, 3 runs each, ±3 %).
+
 ## Consequences
+- Peak memory while loading is up to ~20 % higher (allocator, above).
 - When a budget runs out, which elements were cut short can vary between runs (threads race for
   the shared budget). Within budget, results are deterministic.
 - Malformed files whose statements contain comments with quotes could resynchronise differently
