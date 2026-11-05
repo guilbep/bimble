@@ -9,3 +9,4 @@ license.workspace = true
 bimble-core.workspace = true
 bimble-geom.workspace = true
 pdf-writer.workspace = true
+resvg.workspace = true

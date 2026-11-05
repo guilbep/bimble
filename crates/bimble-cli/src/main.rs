@@ -36,11 +36,14 @@ enum Cmd {
         #[arg(long)]
         link: Option<PathBuf>,
     },
-    /// Storey plan at scale, as PDF or SVG (by the output's extension)
+    /// Storey plan at scale, as PDF, SVG or PNG (by the output's extension)
     Plan {
         file: PathBuf,
-        /// Output: .pdf or .svg
+        /// Output: .pdf, .svg or .png
         out: PathBuf,
+        /// Resolution of a .png output, dots per inch
+        #[arg(long, default_value_t = 150.0)]
+        dpi: f64,
         /// Storey name (see `bimble info`)
         #[arg(long)]
         storey: String,
@@ -176,6 +179,7 @@ fn run(cli: Cli) -> Result<(), String> {
             cut,
             style,
             project,
+            dpi,
         } => {
             use bimble_drawing::plan::{PlanOptions, plan};
             use bimble_drawing::sheet::Paper;
@@ -194,8 +198,11 @@ fn run(cli: Cli) -> Result<(), String> {
                 .extension()
                 .and_then(|x| x.to_str())
                 .map(str::to_ascii_lowercase);
-            if !matches!(ext.as_deref(), Some("pdf" | "svg")) {
-                return Err("the output must end in .pdf or .svg".into());
+            if !matches!(ext.as_deref(), Some("pdf" | "svg" | "png")) {
+                return Err("the output must end in .pdf, .svg or .png".into());
+            }
+            if !(10.0..=1200.0).contains(&dpi) {
+                return Err("--dpi must be between 10 and 1200".into());
             }
             let scene = load_scene(&path)?;
             let project = project.unwrap_or_else(|| {
@@ -213,12 +220,22 @@ fn run(cli: Cli) -> Result<(), String> {
                 date: bimble_drawing::today(),
             };
             let (sheet, info) = plan(&scene, &opts)?;
-            let bytes = if ext.as_deref() == Some("pdf") {
-                sheet.to_pdf()
-            } else {
-                sheet.to_svg().into_bytes()
-            };
-            file::write_atomic(&out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+            match ext.as_deref() {
+                Some("png") => {
+                    let r = sheet.rasterize(dpi / 25.4)?;
+                    bimble_render::write_png(&out, r.width, r.height, &r.rgba)
+                        .map_err(|e| format!("{}: {e}", out.display()))?;
+                }
+                _ => {
+                    let bytes = if ext.as_deref() == Some("pdf") {
+                        sheet.to_pdf()
+                    } else {
+                        sheet.to_svg().into_bytes()
+                    };
+                    file::write_atomic(&out, &bytes)
+                        .map_err(|e| format!("{}: {e}", out.display()))?;
+                }
+            }
             println!(
                 "plan 1:{} on {}{}: {} cut elements, {} lines below, {} above → {}",
                 scale,

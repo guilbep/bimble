@@ -33,6 +33,18 @@ struct PlanSettings {
     paper: Option<bimble_drawing::sheet::Paper>,
     cut_mm: f64,
     message: Option<String>,
+    /// Preview: shown or not, zoom (1 = fit the window), and the image with what it was made from.
+    preview: bool,
+    zoom: f32,
+    preview_image: Option<PlanPreview>,
+}
+
+/// A rendered plan preview and the settings it shows (recomputed when they change).
+struct PlanPreview {
+    key: (String, u32, Option<bimble_drawing::sheet::Paper>, u64, bimble_core::style::GraphicStyle, u32),
+    texture: Option<egui::TextureHandle>,
+    error: Option<String>,
+    size_mm: (f64, f64),
 }
 
 impl Default for PlanSettings {
@@ -43,6 +55,9 @@ impl Default for PlanSettings {
             paper: None,
             cut_mm: 1200.0,
             message: None,
+            preview: false,
+            zoom: 1.0,
+            preview_image: None,
         }
     }
 }
@@ -1074,6 +1089,84 @@ impl Viewer {
         if let Some(m) = &p.message {
             ui.label(m);
         }
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut p.preview, "Preview");
+            if p.preview {
+                ui.add(egui::Slider::new(&mut p.zoom, 1.0..=8.0).logarithmic(true).text("zoom"));
+            }
+        });
+        if !p.preview {
+            return;
+        }
+        // Width of the image: the window width times the zoom, in screen pixels.
+        let avail = ui.available_width().max(200.0);
+        let ppp = ui.ctx().pixels_per_point();
+        let px_w = (avail * p.zoom * ppp).round() as u32;
+        let key = (
+            p.storey.clone(),
+            p.scale,
+            p.paper,
+            p.cut_mm.to_bits(),
+            self.opts.style,
+            px_w / 50 * 50,
+        );
+        if p.preview_image.as_ref().is_none_or(|i| i.key != key) {
+            let opts = bimble_drawing::plan::PlanOptions {
+                storey: p.storey.clone(),
+                cut_above_mm: p.cut_mm,
+                scale: p.scale,
+                paper: p.paper,
+                style: self.opts.style,
+                project: l
+                    .path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                date: today(),
+            };
+            let mut img = PlanPreview {
+                key,
+                texture: None,
+                error: None,
+                size_mm: (0.0, 0.0),
+            };
+            match bimble_drawing::plan::plan(&l.scene, &opts) {
+                Err(e) => img.error = Some(e),
+                Ok((sheet, _)) => {
+                    img.size_mm = (sheet.width_mm, sheet.height_mm);
+                    match sheet.rasterize(px_w as f64 / sheet.width_mm) {
+                        Err(e) => img.error = Some(e),
+                        Ok(r) => {
+                            let ci = egui::ColorImage::from_rgba_unmultiplied(
+                                [r.width as usize, r.height as usize],
+                                &r.rgba,
+                            );
+                            img.texture = Some(ui.ctx().load_texture(
+                                "plan-preview",
+                                ci,
+                                egui::TextureOptions::LINEAR,
+                            ));
+                        }
+                    }
+                }
+            }
+            p.preview_image = Some(img);
+        }
+        let Some(img) = &p.preview_image else { return };
+        if let Some(e) = &img.error {
+            ui.colored_label(Color32::from_rgb(220, 80, 60), e);
+            return;
+        }
+        if let Some(t) = &img.texture {
+            let w = avail * p.zoom;
+            let h = w * (img.size_mm.1 / img.size_mm.0) as f32;
+            egui::ScrollArea::both()
+                .max_height(ui.ctx().content_rect().height() * 0.7)
+                .show(ui, |ui| {
+                    ui.add(egui::Image::from_texture((t.id(), Vec2::new(w, h))));
+                });
+        }
     }
 
     fn style_panel(&mut self, ui: &mut egui::Ui) {
@@ -1349,6 +1442,7 @@ impl eframe::App for Viewer {
             egui::Window::new("Storey plan")
                 .open(&mut open)
                 .default_width(300.0)
+                .resizable(true)
                 .show(&ctx, |ui| self.plan_panel(ui));
             self.plan_window = open;
         }

@@ -502,3 +502,40 @@ mod tests {
         assert_eq!(win_ansi("é – ✓"), vec![0xe9, b' ', 0x96, b' ', b'?']);
     }
 }
+
+/// A sheet rasterized to RGBA pixels (from its SVG, so it matches the exported drawing).
+pub struct Raster {
+    pub width: u32,
+    pub height: u32,
+    /// Straight (non-premultiplied) RGBA, row by row.
+    pub rgba: Vec<u8>,
+}
+
+impl Sheet {
+    /// Rasterize at `px_per_mm` (e.g. 3.94 for 100 dpi). Text uses the system fonts.
+    pub fn rasterize(&self, px_per_mm: f64) -> Result<Raster, String> {
+        use resvg::{tiny_skia, usvg};
+        let mut opt = usvg::Options::default();
+        opt.fontdb_mut().load_system_fonts();
+        let tree = usvg::Tree::from_str(&self.to_svg(), &opt).map_err(|e| e.to_string())?;
+        let size = tree.size();
+        // usvg sizes are in px at 96 dpi; the sheet's are mm.
+        let k = px_per_mm as f32 * self.width_mm as f32 / size.width();
+        let (w, h) = (
+            (size.width() * k).round().max(1.0) as u32,
+            (size.height() * k).round().max(1.0) as u32,
+        );
+        if w as u64 * h as u64 > 200_000_000 {
+            return Err(format!("{w} × {h} pixels is too large"));
+        }
+        let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or("cannot allocate the image")?;
+        pixmap.fill(tiny_skia::Color::WHITE);
+        resvg::render(&tree, tiny_skia::Transform::from_scale(k, k), &mut pixmap.as_mut());
+        // The background is opaque, so premultiplied and straight alpha are the same.
+        Ok(Raster {
+            width: w,
+            height: h,
+            rgba: pixmap.take(),
+        })
+    }
+}
