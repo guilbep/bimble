@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
+mod measure;
 mod section;
 mod style_editor;
 mod viewcube;
@@ -127,6 +128,13 @@ struct Viewer {
     /// Camera turn in progress (view cube).
     turn: Option<Turn>,
 
+    /// Measuring: on/off, first point of the dimension being made, finished dimensions, and
+    /// what the cursor would snap to.
+    measure_on: bool,
+    measure_first: Option<measure::Snap>,
+    dimensions: Vec<measure::Dimension>,
+    hover_snap: Option<measure::Snap>,
+
     style_window: bool,
     /// File the style was loaded from or saved to.
     style_path: Option<PathBuf>,
@@ -161,6 +169,10 @@ impl Viewer {
             section_on: false,
             section_box: None,
             turn: None,
+            measure_on: false,
+            measure_first: None,
+            dimensions: Vec::new(),
+            hover_snap: None,
             style_window: false,
             style_path: None,
             style_message: None,
@@ -214,6 +226,9 @@ impl Viewer {
                 // A box from the previous model means nothing for this one.
                 self.section_on = false;
                 self.section_box = None;
+                self.measure_first = None;
+                self.dimensions.clear();
+                self.hover_snap = None;
             }
             Err(e) => self.error = Some(format!("{}: {e}", path.display())),
         }
@@ -406,6 +421,22 @@ impl Viewer {
                 self.needs_render = true;
             }
         }
+        if self.measure_on {
+            // Snap under the cursor, for the marker and the next click.
+            self.hover_snap = resp
+                .hover_pos()
+                .or(resp.interact_pointer_pos())
+                .and_then(|p| self.snap_at(p, rect, aspect));
+            if resp.clicked()
+                && let Some(s) = self.hover_snap
+            {
+                match self.measure_first.take() {
+                    None => self.measure_first = Some(s),
+                    Some(a) => self.dimensions.push(measure::Dimension { a, b: s }),
+                }
+            }
+            return;
+        }
         if resp.double_clicked() {
             self.fit(aspect);
         } else if resp.clicked()
@@ -430,7 +461,7 @@ impl Viewer {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        let (f, o, e, h, t, esc, b) = ctx.input(|i| {
+        let (f, o, e, h, t, esc, b, m) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::F),
                 i.key_pressed(egui::Key::O),
@@ -439,8 +470,14 @@ impl Viewer {
                 i.key_pressed(egui::Key::T),
                 i.key_pressed(egui::Key::Escape),
                 i.key_pressed(egui::Key::B),
+                i.key_pressed(egui::Key::M),
             )
         });
+        if m {
+            self.measure_on = !self.measure_on;
+            self.measure_first = None;
+            self.hover_snap = None;
+        }
         if b && self.loaded.is_some() {
             self.toggle_section_box();
         }
@@ -464,7 +501,9 @@ impl Viewer {
             self.camera.yaw = -std::f32::consts::FRAC_PI_2;
             self.needs_render = true;
         }
-        if esc && self.selected.take().is_some() {
+        // Esc first drops a half-made dimension, then the selection.
+        if esc && self.measure_first.take().is_some() {
+        } else if esc && self.selected.take().is_some() {
             self.needs_upload = true;
         }
     }
@@ -503,10 +542,113 @@ impl Viewer {
                 self.fit_section_box();
             }
             ui.separator();
+            if ui
+                .checkbox(&mut self.measure_on, "Measure (M)")
+                .on_hover_text("Click two points: corners, edges or faces. Esc cancels the first point")
+                .changed()
+            {
+                self.measure_first = None;
+                self.hover_snap = None;
+            }
+            ui.separator();
             ui.toggle_value(&mut self.style_window, "Style…");
             ui.separator();
             ui.weak("Drag: orbit · Right-drag / Shift-drag: pan · Scroll: zoom · Click: select · Double-click / F: fit · T: top");
         });
+    }
+
+    /// What a click at a screen point would measure from (corner, edge or face).
+    fn snap_at(&self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) -> Option<measure::Snap> {
+        let l = self.loaded.as_ref()?;
+        let ndc = [
+            (pos.x - rect.min.x) / rect.width() * 2.0 - 1.0,
+            1.0 - (pos.y - rect.min.y) / rect.height() * 2.0,
+        ];
+        let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
+        let clip = self.clip();
+        let hit = bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref())?;
+        let vp = self.camera.view_proj(aspect, &l.bounds);
+        let mesh = &l.scene.elements[hit.element].mesh;
+        Some(measure::snap(mesh, &hit, (o, d), &vp, rect, pos))
+    }
+
+    /// Dimensions, the one being made, and the snap marker, over the 3D view.
+    fn draw_dimensions(&self, ui: &egui::Ui, rect: egui::Rect, aspect: f32) {
+        let Some(l) = &self.loaded else { return };
+        let vp = self.camera.view_proj(aspect, &l.bounds);
+        let painter = ui.painter_at(rect);
+        let c = self.opts.style.dimensions.0;
+        let col = Color32::from_rgb(c[0], c[1], c[2]);
+        let stroke = egui::Stroke::new(1.5, col);
+        let p = |v: glam::Vec3| section::project(&vp, rect, v);
+        let label = |at: egui::Pos2, text: String| {
+            let galley =
+                painter.layout_no_wrap(text, egui::FontId::proportional(13.0), Color32::WHITE);
+            let r = egui::Rect::from_center_size(at, galley.size() + Vec2::new(8.0, 4.0));
+            painter.rect_filled(r, 3.0, col);
+            painter.galley(r.min + Vec2::new(4.0, 2.0), galley, Color32::WHITE);
+        };
+        for d in &self.dimensions {
+            if let (Some(a), Some(b)) = (p(d.a.point), p(d.b.point)) {
+                painter.line_segment([a, b], stroke);
+                for e in [a, b] {
+                    painter.circle_filled(e, 3.0, col);
+                }
+                let text = match d.perpendicular() {
+                    Some(n) if (n - d.distance()).abs() > 0.5 => {
+                        format!(
+                            "{}  (faces {})",
+                            measure::format_mm(d.distance()),
+                            measure::format_mm(n)
+                        )
+                    }
+                    _ => measure::format_mm(d.distance()),
+                };
+                label(a + (b - a) * 0.5, text);
+            }
+        }
+        if !self.measure_on {
+            return;
+        }
+        if let (Some(a), Some(h)) = (self.measure_first, self.hover_snap)
+            && let (Some(pa), Some(ph)) = (p(a.point), p(h.point))
+        {
+            painter.line_segment([pa, ph], egui::Stroke::new(1.0, col));
+            label(
+                pa + (ph - pa) * 0.5,
+                measure::format_mm((h.point - a.point).length()),
+            );
+        }
+        if let Some(a) = self.measure_first.and_then(|a| p(a.point)) {
+            painter.circle_filled(a, 3.5, col);
+        }
+        // Snap marker: square = corner, triangle = edge, circle = face.
+        if let Some(h) = self.hover_snap
+            && let Some(m) = p(h.point)
+        {
+            let s = egui::Stroke::new(2.0, col);
+            match h.kind {
+                measure::SnapKind::Vertex => {
+                    painter.rect_stroke(
+                        egui::Rect::from_center_size(m, Vec2::splat(10.0)),
+                        0.0,
+                        s,
+                        egui::StrokeKind::Middle,
+                    );
+                }
+                measure::SnapKind::Edge => {
+                    let pts = vec![
+                        m + Vec2::new(0.0, -6.0),
+                        m + Vec2::new(6.0, 5.0),
+                        m + Vec2::new(-6.0, 5.0),
+                    ];
+                    painter.add(egui::Shape::closed_line(pts, s));
+                }
+                measure::SnapKind::Face => {
+                    painter.circle_stroke(m, 5.0, s);
+                }
+            }
+        }
     }
 
     /// View cube and navigation bar, top right of the 3D view.
@@ -637,6 +779,36 @@ impl Viewer {
         };
         let mut changed = false;
         egui::ScrollArea::vertical().show(ui, |ui| {
+            if !self.dimensions.is_empty() {
+                ui.heading("Measurements");
+                let mut remove = None;
+                for (k, d) in self.dimensions.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        if ui.small_button("x").on_hover_text("Delete").clicked() {
+                            remove = Some(k);
+                        }
+                        ui.label(format!("{}. {}", k + 1, measure::format_mm(d.distance())));
+                    });
+                    let v = d.delta();
+                    let mut detail = format!(
+                        "ΔX {}\nΔY {}\nΔZ {}",
+                        measure::format_mm(v.x),
+                        measure::format_mm(v.y),
+                        measure::format_mm(v.z)
+                    );
+                    if let Some(n) = d.perpendicular() {
+                        detail.push_str(&format!("\nbetween faces {}", measure::format_mm(n)));
+                    }
+                    ui.weak(detail);
+                }
+                if let Some(k) = remove {
+                    self.dimensions.remove(k);
+                }
+                if ui.small_button("Clear all").clicked() {
+                    self.dimensions.clear();
+                }
+                ui.add_space(8.0);
+            }
             ui.heading("Materials");
             for (cat, n) in &l.categories {
                 let mut on = !self.hidden_categories.contains(cat);
@@ -766,6 +938,7 @@ impl eframe::App for Viewer {
         egui::Panel::left("filters")
             .resizable(true)
             .default_size(220.0)
+            .min_size(190.0)
             .show(ui, |ui| self.side_panel(ui));
         if self.selected.is_some() {
             egui::Panel::right("properties")
@@ -826,6 +999,7 @@ impl eframe::App for Viewer {
                         self.needs_render = true;
                     }
                 }
+                self.draw_dimensions(ui, rect, aspect);
                 self.navigation(ui, rect, aspect);
                 if self.animate() {
                     ctx.request_repaint();

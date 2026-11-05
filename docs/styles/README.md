@@ -21,7 +21,8 @@ once. **Save…** writes only what differs from the default.
 
 | Field | Meaning |
 |---|---|
-| `background`, `edges`, `selection` | Colours, `"#rrggbb"` (sRGB) |
+| `background`, `edges`, `selection`, `dimensions` | Colours, `"#rrggbb"` (sRGB); `dimensions` is the colour of measurements |
+| `cut_shade` | Brightness of surfaces cut by the section box, relative to their fill, 0..1 |
 | `hatch_strength` | Overall hatch intensity, 0..1 (the H key turns hatching off and on) |
 | `hatch_darken` | For families without `ink`: how much darker hatch lines are than the fill, 0..1 |
 | `ambient` | Light that ignores face orientation, 0..1. `1` gives flat colours, as on a printed plan |

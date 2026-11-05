@@ -143,6 +143,8 @@ pub struct GraphicStyle {
     pub edges: Rgb,
     /// Fill of selected elements (drawn without hatch).
     pub selection: Rgb,
+    /// Dimension lines and their text (measuring).
+    pub dimensions: Rgb,
     /// Overall hatch intensity, 0 (none) .. 1.
     pub hatch_strength: f32,
     /// How much darker hatch ink is than the fill when a family sets no `ink` (0..1).
@@ -212,6 +214,7 @@ impl Default for GraphicStyle {
             background: rgb(247, 247, 245),
             edges: rgb(26, 26, 28),
             selection: rgb(232, 126, 4),
+            dimensions: rgb(20, 110, 220),
             hatch_strength: 0.5,
             hatch_darken: 0.45,
             ambient: 0.62,
