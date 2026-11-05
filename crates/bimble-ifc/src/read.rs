@@ -11,7 +11,9 @@ use bimble_core::MaterialCategory;
 use bimble_geom::boolean::{self, Op, Tri};
 use bimble_geom::scene::{cross, dot, norm, sub};
 use bimble_geom::{ElementInfo, MeshBuilder, Scene, SceneBuilder};
+use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_NESTING: usize = 32;
@@ -84,13 +86,9 @@ pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadErr
         warnings: BTreeMap::new(),
         arc_tol: 0.5,
         angle_scale: 1.0,
-        item_visits_left: limits.max_item_visits,
         map_stack: Vec::new(),
     };
-    let mut budget = Budget {
-        triangles_left: limits.max_triangles,
-        exhausted: false,
-    };
+    let budget = Budget::new(&limits);
     if skipped > 0 {
         r.warn(format!("{skipped} malformed entity instance(s) skipped"));
     }
@@ -102,72 +100,98 @@ pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadErr
     let voids = r.voids();
     let materials = r.materials();
 
-    let mut ids: Vec<u64> = file.entities.keys().copied().collect();
+    let mut ids: Vec<u64> = file
+        .entities
+        .iter()
+        .filter(|(_, e)| {
+            !SKIP_CLASSES.contains(&e.name.as_str())
+                && file
+                    .deref(e.arg(6))
+                    .is_some_and(|s| s.name == "IFCPRODUCTDEFINITIONSHAPE")
+                && file
+                    .deref(e.arg(5))
+                    .is_some_and(|p| p.name.ends_with("PLACEMENT"))
+        })
+        .map(|(id, _)| *id)
+        .collect();
     ids.sort_unstable();
-    let mut sb = SceneBuilder::default();
-    for id in ids {
-        let e = &file.entities[&id];
-        if SKIP_CLASSES.contains(&e.name.as_str()) {
-            continue;
-        }
-        let (Some(pl), Some(shape)) = (file.deref(e.arg(5)), file.deref(e.arg(6))) else {
-            continue;
-        };
-        if shape.name != "IFCPRODUCTDEFINITIONSHAPE" || !pl.name.ends_with("PLACEMENT") {
-            continue;
-        }
-        let mut mb = MeshBuilder::default();
-        {
-            let mut emit = Emit {
-                mb: &mut mb,
-                scale,
-                budget: &mut budget,
-            };
-            r.product_body(e, &mut emit);
-        }
-        // Openings (IfcRelVoidsElement): subtract them from their host.
-        if let Some(ops) = voids.get(&id).filter(|_| !mb.tris.is_empty()) {
-            let mut cutters: Vec<Vec<Tri>> = Vec::new();
-            for &o in ops {
-                let Some(oe) = file.get(o) else { continue };
-                let mut ob = MeshBuilder::default();
-                let mut emit = Emit {
-                    mb: &mut ob,
-                    scale,
-                    budget: &mut budget,
-                };
-                r.product_body(oe, &mut emit);
-                if !ob.tris.is_empty() {
-                    cutters.push(ob.tris);
-                }
-            }
-            r.cut(&mut mb.tris, &cutters, &class_name(&e.name));
-        }
-        let class = class_name(&e.name);
-        let (material, mut category) = materials
-            .get(&id)
-            .cloned()
-            .unwrap_or((String::new(), MaterialCategory::Other));
-        if material.is_empty() && e.name == "IFCGEOGRAPHICELEMENT" {
-            category = MaterialCategory::Earth;
-        }
-        sb.push(
-            ElementInfo {
-                global_id: e.arg(0).as_str().unwrap_or("").to_owned(),
-                class,
-                name: e.arg(2).as_str().unwrap_or("").to_owned(),
-                storey: containers.get(&id).cloned().unwrap_or_default(),
-                material,
-                category,
+
+    // Elements are independent: mesh them on all cores. Each worker has its own placement cache
+    // and warnings; budgets are shared. Results keep file order.
+    let (arc_tol, angle_scale) = (r.arc_tol, r.angle_scale);
+    let results: Vec<(ElementInfo, MeshBuilder, BTreeMap<String, usize>)> = ids
+        .par_iter()
+        .map_init(
+            || Reader {
+                f: &file,
+                placements: HashMap::new(),
+                warnings: BTreeMap::new(),
+                arc_tol,
+                angle_scale,
+                map_stack: Vec::new(),
             },
-            mb,
-        );
+            |w, &id| {
+                let e = &file.entities[&id];
+                let mut mb = MeshBuilder::default();
+                {
+                    let mut emit = Emit {
+                        mb: &mut mb,
+                        scale,
+                        budget: &budget,
+                    };
+                    w.product_body(e, &mut emit);
+                }
+                // Openings (IfcRelVoidsElement): subtract them from their host.
+                if let Some(ops) = voids.get(&id).filter(|_| !mb.tris.is_empty()) {
+                    let mut cutters: Vec<Vec<Tri>> = Vec::new();
+                    for &o in ops {
+                        let Some(oe) = file.get(o) else { continue };
+                        let mut ob = MeshBuilder::default();
+                        let mut emit = Emit {
+                            mb: &mut ob,
+                            scale,
+                            budget: &budget,
+                        };
+                        w.product_body(oe, &mut emit);
+                        if !ob.tris.is_empty() {
+                            cutters.push(ob.tris);
+                        }
+                    }
+                    w.cut(&mut mb.tris, &cutters, &class_name(&e.name));
+                }
+                let class = class_name(&e.name);
+                let (material, mut category) = materials
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or((String::new(), MaterialCategory::Other));
+                if material.is_empty() && e.name == "IFCGEOGRAPHICELEMENT" {
+                    category = MaterialCategory::Earth;
+                }
+                let info = ElementInfo {
+                    global_id: e.arg(0).as_str().unwrap_or("").to_owned(),
+                    class,
+                    name: e.arg(2).as_str().unwrap_or("").to_owned(),
+                    storey: containers.get(&id).cloned().unwrap_or_default(),
+                    material,
+                    category,
+                };
+                (info, mb, std::mem::take(&mut w.warnings))
+            },
+        )
+        .collect();
+
+    let mut sb = SceneBuilder::default();
+    for (info, mb, warnings) in results {
+        for (k, n) in warnings {
+            *r.warnings.entry(k).or_default() += n;
+        }
+        sb.push(info, mb);
     }
-    if budget.exhausted {
+    if budget.exhausted() {
+        let tris = limits.max_triangles - budget.triangles_left.load(Ordering::Relaxed);
+        let items = limits.max_item_visits - budget.visits_left.load(Ordering::Relaxed);
         r.warn(format!(
-            "model too large or nested too deeply: stopped after {} triangles / {} items; the rest is not shown",
-            limits.max_triangles - budget.triangles_left,
-            limits.max_item_visits - r.item_visits_left
+            "model too large or nested too deeply: stopped after {tris} triangles / {items} items; the rest is not shown"
         ));
     }
     sb.warnings = r
@@ -175,6 +199,8 @@ pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadErr
         .into_iter()
         .map(|(k, n)| if n > 1 { format!("{k} (×{n})") } else { k })
         .collect();
+    // Freeing millions of parsed values takes a noticeable time: do it off the caller's path.
+    std::thread::spawn(move || drop(file));
     Ok(sb.finish())
 }
 
@@ -333,28 +359,61 @@ fn normalize(v: [f64; 3]) -> Option<[f64; 3]> {
     (l > 1e-12 && l.is_finite()).then(|| v.map(|c| c / l))
 }
 
+/// Limits shared by all worker threads: total triangles and representation items visited.
+/// Once either runs out, `exhausted` is set and every thread stops adding geometry.
 struct Budget {
-    triangles_left: usize,
-    exhausted: bool,
+    triangles_left: AtomicUsize,
+    visits_left: AtomicUsize,
+    exhausted: AtomicBool,
+}
+
+impl Budget {
+    fn new(limits: &Limits) -> Self {
+        Budget {
+            triangles_left: AtomicUsize::new(limits.max_triangles),
+            visits_left: AtomicUsize::new(limits.max_item_visits),
+            exhausted: AtomicBool::new(false),
+        }
+    }
+    fn exhausted(&self) -> bool {
+        self.exhausted.load(Ordering::Relaxed)
+    }
+    /// Takes one item visit; false (and exhausted) when none are left.
+    fn visit(&self) -> bool {
+        let ok = !self.exhausted()
+            && self
+                .visits_left
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1))
+                .is_ok();
+        if !ok {
+            self.exhausted.store(true, Ordering::Relaxed);
+        }
+        ok
+    }
 }
 
 struct Emit<'a> {
     mb: &'a mut MeshBuilder,
     scale: f64,
-    budget: &'a mut Budget,
+    budget: &'a Budget,
 }
 
 impl Emit<'_> {
     /// False once the triangle budget is used up; geometry is then dropped.
     fn has_budget(&mut self) -> bool {
-        if self.budget.triangles_left == 0 {
-            self.budget.exhausted = true;
+        if self.budget.triangles_left.load(Ordering::Relaxed) == 0 {
+            self.budget.exhausted.store(true, Ordering::Relaxed);
         }
-        !self.budget.exhausted
+        !self.budget.exhausted()
     }
     fn charge(&mut self, before: usize) {
         let used = self.mb.tris.len().saturating_sub(before);
-        self.budget.triangles_left = self.budget.triangles_left.saturating_sub(used);
+        let _ = self
+            .budget
+            .triangles_left
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some(v.saturating_sub(used))
+            });
     }
     fn polygon(&mut self, outer: &[[f64; 3]], holes: &[Vec<[f64; 3]>]) {
         if !self.has_budget() {
@@ -390,7 +449,6 @@ struct Reader<'a> {
     arc_tol: f64,
     /// Plane angle unit → radians (Revit IFC2x3 often writes degrees).
     angle_scale: f64,
-    item_visits_left: usize,
     /// Representation maps being expanded, to stop a map that contains itself.
     map_stack: Vec<u64>,
 }
@@ -717,11 +775,9 @@ impl<'a> Reader<'a> {
             self.warn("representation nesting too deep");
             return;
         }
-        if out.budget.exhausted || self.item_visits_left == 0 {
-            out.budget.exhausted = true;
+        if !out.budget.visit() {
             return;
         }
-        self.item_visits_left -= 1;
         let Some(e) = self.f.get(id) else { return };
         match e.name.as_str() {
             "IFCEXTRUDEDAREASOLID" => self.extrusion(e, tf, out),
@@ -841,7 +897,7 @@ impl<'a> Reader<'a> {
             let mut tmp = Emit {
                 mb: &mut mb,
                 scale: out.scale,
-                budget: &mut *out.budget,
+                budget: out.budget,
             };
             self.item(id, tf, &mut tmp, depth);
         }
@@ -1745,14 +1801,14 @@ mod tests {
     /// Small full circles: within ~1.2 % of the exact area (15° segments), like IfcOpenShell.
     fn tube_mesh(path: &[[f64; 3]], r: f64, n: usize) -> bimble_geom::Mesh {
         let mut mb = MeshBuilder::default();
-        let mut budget = Budget {
-            triangles_left: usize::MAX,
-            exhausted: false,
-        };
+        let budget = Budget::new(&Limits {
+            max_triangles: usize::MAX,
+            max_item_visits: usize::MAX,
+        });
         let mut out = Emit {
             mb: &mut mb,
             scale: 1.0,
-            budget: &mut budget,
+            budget: &budget,
         };
         tube(path, r, n, &mut out);
         mb.build([0.0; 3])

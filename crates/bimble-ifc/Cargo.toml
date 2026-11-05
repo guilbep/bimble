@@ -10,3 +10,4 @@ bimble-core.workspace = true
 bimble-geom.workspace = true
 serde_json.workspace = true
 blake3.workspace = true
+rayon.workspace = true

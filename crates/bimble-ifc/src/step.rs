@@ -3,7 +3,52 @@
 //! Input is untrusted: nesting depth is bounded, ids are validated, and errors are reported
 //! with a line number instead of panicking.
 
+use rayon::prelude::*;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+/// An upper-case STEP keyword (entity, type or enumeration name), shared between all instances
+/// that use it: a 50 MB file has millions of them but only hundreds of distinct ones, and one
+/// allocation each made parsing and freeing the file twice as slow.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Name(Arc<str>);
+
+impl Name {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl std::ops::Deref for Name {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+impl From<&str> for Name {
+    fn from(s: &str) -> Self {
+        Name(s.into())
+    }
+}
+impl PartialEq<str> for Name {
+    fn eq(&self, o: &str) -> bool {
+        &*self.0 == o
+    }
+}
+impl PartialEq<&str> for Name {
+    fn eq(&self, o: &&str) -> bool {
+        &*self.0 == *o
+    }
+}
+impl std::fmt::Display for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::fmt::Debug for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&*self.0, f)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -12,11 +57,11 @@ pub enum Value {
     Int(i64),
     Real(f64),
     Str(String),
-    Enum(String),
+    Enum(Name),
     Ref(u64),
     List(Vec<Value>),
     /// Typed parameter, e.g. IFCLABEL('x') → ("IFCLABEL", Str("x"))
-    Typed(String, Box<Value>),
+    Typed(Name, Box<Value>),
 }
 
 impl Value {
@@ -68,7 +113,7 @@ impl Value {
 #[derive(Debug, Clone)]
 pub struct Entity {
     /// Upper-case entity name, e.g. "IFCWALL"
-    pub name: String,
+    pub name: Name,
     pub args: Vec<Value>,
 }
 
@@ -121,6 +166,8 @@ struct Parser<'a> {
     s: &'a [u8],
     i: usize,
     line: usize,
+    /// Keywords seen so far, by their raw bytes.
+    names: HashMap<Vec<u8>, Name>,
 }
 
 impl<'a> Parser<'a> {
@@ -184,6 +231,30 @@ impl<'a> Parser<'a> {
             }
         }
         String::from_utf8_lossy(&self.s[start..self.i]).to_ascii_uppercase()
+    }
+
+    /// Like `keyword`, interned.
+    fn keyword_name(&mut self) -> Name {
+        self.skip_ws();
+        let start = self.i;
+        while let Some(c) = self.peek() {
+            if c.is_ascii_alphanumeric() || c == b'_' {
+                self.i += 1;
+            } else {
+                break;
+            }
+        }
+        self.intern(start, self.i)
+    }
+
+    fn intern(&mut self, start: usize, end: usize) -> Name {
+        let raw = &self.s[start..end];
+        if let Some(n) = self.names.get(raw) {
+            return n.clone();
+        }
+        let n = Name::from(String::from_utf8_lossy(raw).to_ascii_uppercase().as_str());
+        self.names.insert(raw.to_vec(), n.clone());
+        n
     }
 
     fn number(&mut self) -> Result<Value, ParseError> {
@@ -282,7 +353,7 @@ impl<'a> Parser<'a> {
                 while self.peek().is_some_and(|c| c != b'.') {
                     self.i += 1;
                 }
-                let t = String::from_utf8_lossy(&self.s[start..self.i]).to_ascii_uppercase();
+                let t = self.intern(start, self.i);
                 self.i += 1;
                 Ok(Value::Enum(t))
             }
@@ -293,7 +364,7 @@ impl<'a> Parser<'a> {
             }
             Some(c) if c.is_ascii_digit() || c == b'-' || c == b'+' => self.number(),
             Some(c) if c.is_ascii_alphabetic() => {
-                let name = self.keyword();
+                let name = self.keyword_name();
                 self.expect(b'(')?;
                 let mut items = self.items(depth + 1)?;
                 let inner = if items.len() == 1 {
@@ -417,10 +488,15 @@ pub fn decode_step_string(raw: &[u8]) -> String {
 
 /// Parse a STEP file. Malformed entity instances are skipped and counted in `skipped`.
 pub fn parse(text: &str) -> Result<(StepFile, usize), ParseError> {
+    parse_chunked(text, CHUNK_BYTES)
+}
+
+fn parse_chunked(text: &str, chunk_bytes: usize) -> Result<(StepFile, usize), ParseError> {
     let mut p = Parser {
         s: text.as_bytes(),
         i: 0,
         line: 1,
+        names: HashMap::new(),
     };
     let mut file = StepFile::default();
     let mut skipped = 0;
@@ -440,6 +516,7 @@ pub fn parse(text: &str) -> Result<(StepFile, usize), ParseError> {
             s: header.as_bytes(),
             i: fs + "FILE_SCHEMA".len(),
             line: 1,
+            names: HashMap::new(),
         };
         if hp.expect(b'(').is_ok()
             && let Ok(v) = hp.items(1)
@@ -457,8 +534,73 @@ pub fn parse(text: &str) -> Result<(StepFile, usize), ParseError> {
     p.line = text[..data_pos].matches('\n').count() + 1;
     p.i = data_pos + text[data_pos..].find("DATA;").unwrap() + 5;
 
+    // Split the DATA section at statement starts, then parse the chunks on all cores and merge
+    // them in file order, so later duplicates still win as in a serial parse. The split uses the
+    // parser's own skip_ws/skip_statement, i.e. the same statement boundaries as error recovery.
+    let (starts, end) = data_chunks(&mut p, chunk_bytes);
+    let parts: Vec<(Vec<(u64, Entity)>, usize)> = (0..starts.len())
+        .into_par_iter()
+        .map(|k| {
+            let stop = starts.get(k + 1).map_or(end, |s| s.0);
+            parse_chunk(text.as_bytes(), starts[k], stop)
+        })
+        .collect();
+    file.entities
+        .reserve(parts.iter().map(|(v, _)| v.len()).sum());
+    for (entities, sk) in parts {
+        skipped += sk;
+        file.entities.extend(entities);
+    }
+    Ok((file, skipped))
+}
+
+/// Target size of a parse chunk. Small enough to balance cores, large enough that per-chunk
+/// overhead is negligible.
+const CHUNK_BYTES: usize = 1 << 20;
+
+/// Statement starts (byte offset, line) beginning a new chunk, and the end of the data section
+/// (ENDSEC or end of text). The parser is left at the end.
+fn data_chunks(p: &mut Parser, target: usize) -> (Vec<(usize, usize)>, usize) {
+    let mut starts: Vec<(usize, usize)> = Vec::new();
     loop {
         p.skip_ws();
+        let here = (p.i, p.line);
+        match p.peek() {
+            None => break,
+            Some(b'#') => {}
+            Some(_) => {
+                if p.keyword() == "ENDSEC" {
+                    p.i = here.0;
+                    p.line = here.1;
+                    break;
+                }
+                p.i = here.0;
+                p.line = here.1;
+            }
+        }
+        if starts.last().is_none_or(|s| here.0 - s.0 >= target) {
+            starts.push(here);
+        }
+        p.skip_statement();
+    }
+    (starts, p.i)
+}
+
+/// Parse the statements in `s[start.0..stop]`. Malformed instances are skipped and counted.
+fn parse_chunk(s: &[u8], start: (usize, usize), stop: usize) -> (Vec<(u64, Entity)>, usize) {
+    let mut p = Parser {
+        s,
+        i: start.0,
+        line: start.1,
+        names: HashMap::new(),
+    };
+    let mut out = Vec::new();
+    let mut skipped = 0;
+    loop {
+        p.skip_ws();
+        if p.i >= stop {
+            break;
+        }
         match p.peek() {
             None => break,
             Some(b'#') => {}
@@ -482,13 +624,13 @@ pub fn parse(text: &str) -> Result<(StepFile, usize), ParseError> {
             let entity = if p.peek() == Some(b'(') {
                 // Complex instance: (A(...)B(...)). Keep the first part, which is enough for units.
                 p.i += 1;
-                let name = p.keyword();
+                let name = p.keyword_name();
                 p.expect(b'(')?;
                 let args = p.items(1)?;
                 p.skip_statement_inner();
                 Entity { name, args }
             } else {
-                let name = p.keyword();
+                let name = p.keyword_name();
                 if name.is_empty() {
                     return p.err("expected entity name");
                 }
@@ -500,9 +642,7 @@ pub fn parse(text: &str) -> Result<(StepFile, usize), ParseError> {
             Ok((id, entity))
         })();
         match res {
-            Ok((id, e)) => {
-                file.entities.insert(id, e);
-            }
+            Ok(x) => out.push(x),
             Err(_) => {
                 skipped += 1;
                 p.i = stmt_start.0;
@@ -511,7 +651,7 @@ pub fn parse(text: &str) -> Result<(StepFile, usize), ParseError> {
             }
         }
     }
-    Ok((file, skipped))
+    (out, skipped)
 }
 
 impl Parser<'_> {
@@ -540,6 +680,70 @@ DATA;
 ENDSEC;
 END-ISO-10303-21;
 ";
+
+    /// Everything that could make a chunk boundary disagree with the serial parse.
+    const TRICKY: &str = "ISO-10303-21;
+HEADER;FILE_SCHEMA(('IFC4'));ENDSEC;
+DATA;
+/* a comment with a quote ' and a ; */
+#1=IFCLABEL('semi;colon and #2=IFCX(); inside');
+#2=IFCWALL('it''s',$,'l''est;',(#1,#1),.T.);
+#3=IFCBROKEN(#1,,);
+#5=IFCY(1.);
+#6=IFCY(2.);
+#6=IFCY(3.);
+  /* trailing */ #7=(IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.)OTHER());
+#8=IFCZ($);
+#4=IFCX('unterminated; swallows the rest;
+ENDSEC;
+#9=IFCAFTER(1);
+END-ISO-10303-21;
+";
+
+    fn canonical(f: &StepFile, skipped: usize) -> String {
+        let mut v: Vec<_> = f.entities.iter().collect();
+        v.sort_by_key(|(k, _)| **k);
+        format!("{skipped} {v:?}")
+    }
+
+    #[test]
+    fn chunked_parse_matches_serial() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+        let mut texts = vec![SAMPLE.to_owned(), TRICKY.to_owned()];
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.extension().is_some_and(|x| x == "ifc") {
+                texts.push(std::fs::read_to_string(p).unwrap());
+            }
+        }
+        for t in &texts {
+            let (serial, s1) = parse_chunked(t, usize::MAX).unwrap();
+            for chunk in [1, 7, 64] {
+                let (par, s2) = parse_chunked(t, chunk).unwrap();
+                assert_eq!(canonical(&serial, s1), canonical(&par, s2), "chunk {chunk}");
+            }
+        }
+        // The tricky sample itself, against what a serial reading must give.
+        let (f, skipped) = parse_chunked(TRICKY, 1).unwrap();
+        assert_eq!(
+            f.get(1).unwrap().arg(0).as_str(),
+            Some("semi;colon and #2=IFCX(); inside")
+        );
+        assert_eq!(f.get(2).unwrap().arg(2).as_str(), Some("l'est;"));
+        assert_eq!(
+            f.get(6).unwrap().arg(0).as_f64(),
+            Some(3.0),
+            "later duplicate wins"
+        );
+        assert_eq!(f.get(7).unwrap().name, "IFCSIUNIT");
+        assert!(f.get(8).is_some());
+        assert!(
+            f.get(9).is_none(),
+            "nothing after ENDSEC or the unterminated string"
+        );
+        assert!(f.get(3).is_none() && f.get(4).is_none());
+        assert_eq!(skipped, 2);
+    }
 
     #[test]
     fn parses_sample() {
