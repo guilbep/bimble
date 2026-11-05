@@ -10,6 +10,7 @@ name = "bimble"
 path = "src/main.rs"
 
 [dependencies]
+bimble-drawing.workspace = true
 glam.workspace = true
 mimalloc.workspace = true
 bimble-core.workspace = true

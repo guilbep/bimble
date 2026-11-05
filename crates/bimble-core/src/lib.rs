@@ -5,6 +5,7 @@ pub mod demo;
 pub mod file;
 mod guid;
 mod model;
+pub mod style;
 pub mod version;
 
 pub use command::{Command, CommandError, History};

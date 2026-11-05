@@ -25,6 +25,28 @@ const SAMPLES: u32 = 4;
 /// Duration of a view-cube camera turn.
 const TURN_SECONDS: f32 = 0.3;
 
+/// Settings of the plan export window.
+struct PlanSettings {
+    storey: String,
+    scale: u32,
+    /// None: the smallest paper that fits.
+    paper: Option<bimble_drawing::sheet::Paper>,
+    cut_mm: f64,
+    message: Option<String>,
+}
+
+impl Default for PlanSettings {
+    fn default() -> Self {
+        PlanSettings {
+            storey: String::new(),
+            scale: 100,
+            paper: None,
+            cut_mm: 1200.0,
+            message: None,
+        }
+    }
+}
+
 struct Turn {
     from: (f32, f32),
     to: (f32, f32),
@@ -135,6 +157,10 @@ struct Viewer {
     dimensions: Vec<measure::Dimension>,
     hover_snap: Option<measure::Snap>,
 
+    /// Plan export window and its settings.
+    plan_window: bool,
+    plan: PlanSettings,
+
     style_window: bool,
     /// File the style was loaded from or saved to.
     style_path: Option<PathBuf>,
@@ -173,6 +199,8 @@ impl Viewer {
             measure_first: None,
             dimensions: Vec::new(),
             hover_snap: None,
+            plan_window: false,
+            plan: PlanSettings::default(),
             style_window: false,
             style_path: None,
             style_message: None,
@@ -551,6 +579,8 @@ impl Viewer {
                 self.hover_snap = None;
             }
             ui.separator();
+            ui.toggle_value(&mut self.plan_window, "Plan…")
+                .on_hover_text("Storey plan at scale, as PDF or SVG");
             ui.toggle_value(&mut self.style_window, "Style…");
             ui.separator();
             ui.weak("Drag: orbit · Right-drag / Shift-drag: pan · Scroll: zoom · Click: select · Double-click / F: fit · T: top");
@@ -715,6 +745,122 @@ impl Viewer {
         if button(ui, "-", "Zoom out") {
             self.camera.zoom(1.25);
             self.needs_render = true;
+        }
+    }
+
+    fn plan_panel(&mut self, ui: &mut egui::Ui) {
+        use bimble_drawing::sheet::Paper;
+        let Some(l) = &self.loaded else {
+            ui.weak("Open a model first.");
+            return;
+        };
+        if l.scene.storeys.is_empty() {
+            ui.weak("This model has no storeys.");
+            return;
+        }
+        let p = &mut self.plan;
+        if !l.scene.storeys.iter().any(|s| s.name == p.storey) {
+            // Default: the lowest storey at or above 0, else the first.
+            p.storey = l
+                .scene
+                .storeys
+                .iter()
+                .find(|s| s.elevation_mm >= -1.0)
+                .unwrap_or(&l.scene.storeys[0])
+                .name
+                .clone();
+        }
+        egui::Grid::new("plan-settings")
+            .num_columns(2)
+            .spacing([12.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Storey");
+                egui::ComboBox::from_id_salt("plan-storey")
+                    .selected_text(p.storey.clone())
+                    .show_ui(ui, |ui| {
+                        for s in l.scene.storeys.iter().rev() {
+                            ui.selectable_value(
+                                &mut p.storey,
+                                s.name.clone(),
+                                format!("{}  ({:+.3} m)", s.name, s.elevation_mm / 1000.0),
+                            );
+                        }
+                    });
+                ui.end_row();
+                ui.label("Scale 1:");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut p.scale).range(1..=5000));
+                    for s in [50, 100, 200, 500] {
+                        if ui.small_button(format!("{s}")).clicked() {
+                            p.scale = s;
+                        }
+                    }
+                });
+                ui.end_row();
+                ui.label("Paper");
+                egui::ComboBox::from_id_salt("plan-paper")
+                    .selected_text(p.paper.map_or("Smallest that fits", |x| x.name()))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut p.paper, None, "Smallest that fits");
+                        for x in Paper::ALL {
+                            ui.selectable_value(&mut p.paper, Some(x), x.name());
+                        }
+                    });
+                ui.end_row();
+                ui.label("Cut height");
+                ui.add(
+                    egui::DragValue::new(&mut p.cut_mm)
+                        .range(-10_000.0..=10_000.0)
+                        .suffix(" mm"),
+                );
+                ui.end_row();
+            });
+        ui.weak("Colours, hatches and pens come from the graphic style (Style…).");
+        if ui.button("Export PDF or SVG…").clicked()
+            && let Some(out) = rfd::FileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .add_filter("SVG", &["svg"])
+                .set_file_name(format!("plan-{}-1-{}.pdf", p.storey, p.scale))
+                .save_file()
+        {
+            let opts = bimble_drawing::plan::PlanOptions {
+                storey: p.storey.clone(),
+                cut_above_mm: p.cut_mm,
+                scale: p.scale,
+                paper: p.paper,
+                style: self.opts.style,
+                project: l
+                    .path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                date: today(),
+            };
+            p.message = Some(match bimble_drawing::plan::plan(&l.scene, &opts) {
+                Err(e) => e,
+                Ok((sheet, info)) => {
+                    let svg = out
+                        .extension()
+                        .is_some_and(|x| x.eq_ignore_ascii_case("svg"));
+                    let bytes = if svg {
+                        sheet.to_svg().into_bytes()
+                    } else {
+                        sheet.to_pdf()
+                    };
+                    match bimble_core::file::write_atomic(&out, &bytes) {
+                        Ok(()) => format!(
+                            "Saved {} ({}{})",
+                            out.display(),
+                            info.paper.name(),
+                            if info.portrait { " portrait" } else { "" }
+                        ),
+                        Err(e) => format!("{}: {e}", out.display()),
+                    }
+                }
+            });
+        }
+        if let Some(m) = &p.message {
+            ui.label(m);
         }
     }
 
@@ -946,6 +1092,14 @@ impl eframe::App for Viewer {
                 .default_size(280.0)
                 .show(ui, |ui| self.properties(ui));
         }
+        if self.plan_window {
+            let mut open = true;
+            egui::Window::new("Storey plan")
+                .open(&mut open)
+                .default_width(300.0)
+                .show(&ctx, |ui| self.plan_panel(ui));
+            self.plan_window = open;
+        }
         if self.style_window {
             let mut open = true;
             egui::Window::new("Graphic style")
@@ -1013,4 +1167,9 @@ impl eframe::App for Viewer {
             }
         });
     }
+}
+
+/// Today's date (UTC) as YYYY-MM-DD, for title blocks.
+fn today() -> String {
+    bimble_drawing::today()
 }

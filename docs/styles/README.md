@@ -28,6 +28,16 @@ once. **Save…** writes only what differs from the default.
 | `ambient` | Light that ignores face orientation, 0..1. `1` gives flat colours, as on a printed plan |
 | `families.<family>` | One entry per material family: `concrete`, `steel`, `timber`, `masonry`, `insulation`, `earth`, `glass`, `other` |
 
+`paper` sets drawings on paper (plans), in mm on the printed sheet:
+
+| Field | Meaning |
+|---|---|
+| `cut_pen_mm` | Outline of what the cut plane cuts (default 0.5) |
+| `projection_pen_mm` | Visible edges below the cut plane (0.18) |
+| `above_pen_mm`, `above_dash_mm` | Edges above the cut plane, dashed: pen, then [dash, gap] (0.13, [2, 1]) |
+| `hatch_pen_mm`, `hatch_mm_per_px` | Hatch lines: pen, and paper spacing per screen pixel of a family's `spacing_px` (0.13, 0.35) |
+| `frame_pen_mm`, `text_mm` | Sheet frame and title block: pen and text height (0.5, 2.5) |
+
 Each family:
 
 | Field | Meaning |

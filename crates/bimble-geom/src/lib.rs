@@ -7,7 +7,7 @@
 pub mod boolean;
 pub mod scene;
 
-pub use scene::{ElementInfo, MeshBuilder, Scene, SceneBuilder, SceneElement};
+pub use scene::{ElementInfo, MeshBuilder, Scene, SceneBuilder, SceneElement, StoreyLevel};
 
 use bimble_core::{Element, Placement, Profile};
 

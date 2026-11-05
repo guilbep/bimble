@@ -33,6 +33,30 @@ enum Cmd {
         #[arg(long)]
         style: Option<PathBuf>,
     },
+    /// Storey plan at scale, as PDF or SVG (by the output's extension)
+    Plan {
+        file: PathBuf,
+        /// Output: .pdf or .svg
+        out: PathBuf,
+        /// Storey name (see `bimble info`)
+        #[arg(long)]
+        storey: String,
+        /// Scale 1:N, N from 1 to 5000
+        #[arg(long, default_value_t = 100)]
+        scale: u32,
+        /// A4, A3, A2, A1 or A0; by default the smallest that fits
+        #[arg(long)]
+        paper: Option<String>,
+        /// Height of the cut plane above the storey level, mm
+        #[arg(long, default_value_t = 1200.0, allow_hyphen_values = true)]
+        cut: f64,
+        /// Graphic style file (colours, hatches, pens on paper; see `bimble style`)
+        #[arg(long)]
+        style: Option<PathBuf>,
+        /// Project name in the title block (default: the file name)
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// Print the complete default graphic style, or check a style file and print it in full
     Style {
         /// Style file to check; without it, the default style is printed
@@ -140,6 +164,69 @@ fn run(cli: Cli) -> Result<(), String> {
     };
     match cmd {
         Cmd::View { file, style } => bimble_viewer::run(file, style)?,
+        Cmd::Plan {
+            file: path,
+            out,
+            storey,
+            scale,
+            paper,
+            cut,
+            style,
+            project,
+        } => {
+            use bimble_drawing::plan::{PlanOptions, plan};
+            use bimble_drawing::sheet::Paper;
+            let paper = match paper {
+                None => None,
+                Some(p) => Some(
+                    Paper::parse(&p)
+                        .ok_or_else(|| format!("--paper {p:?}: A4, A3, A2, A1 or A0"))?,
+                ),
+            };
+            let style = match style {
+                Some(p) => bimble_render::GraphicStyle::load(&p)?,
+                None => bimble_render::GraphicStyle::default(),
+            };
+            let ext = out
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(str::to_ascii_lowercase);
+            if !matches!(ext.as_deref(), Some("pdf" | "svg")) {
+                return Err("the output must end in .pdf or .svg".into());
+            }
+            let scene = load_scene(&path)?;
+            let project = project.unwrap_or_else(|| {
+                path.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            });
+            let opts = PlanOptions {
+                storey,
+                cut_above_mm: cut,
+                scale,
+                paper,
+                style,
+                project,
+                date: bimble_drawing::today(),
+            };
+            let (sheet, info) = plan(&scene, &opts)?;
+            let bytes = if ext.as_deref() == Some("pdf") {
+                sheet.to_pdf()
+            } else {
+                sheet.to_svg().into_bytes()
+            };
+            file::write_atomic(&out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+            println!(
+                "plan 1:{} on {}{}: {} cut elements, {} lines below, {} above → {}",
+                scale,
+                info.paper.name(),
+                if info.portrait { " portrait" } else { "" },
+                info.cut_elements,
+                info.projection_lines,
+                info.above_lines,
+                out.display()
+            );
+        }
         Cmd::Style { file } => {
             let s = match file {
                 Some(p) => bimble_render::GraphicStyle::load(&p)?,
@@ -189,6 +276,9 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             println!("elements  {}", scene.elements.len());
             println!("storeys   {}", storeys.len());
+            for st in &scene.storeys {
+                println!("  {:>10.3} m  {}", st.elevation_mm / 1000.0, st.name);
+            }
             println!("classes   {}", fmt_counts(&classes));
             println!("materials {}", fmt_counts(&cats));
             let edges: usize = scene.elements.iter().map(|e| e.mesh.edges.len()).sum();

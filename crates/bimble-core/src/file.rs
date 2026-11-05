@@ -64,12 +64,18 @@ pub fn from_str(s: &str) -> Result<Model, FileError> {
 }
 
 pub fn save(m: &Model, path: impl AsRef<std::path::Path>) -> Result<(), FileError> {
-    // Write to a temp file then rename, so an interrupted save never leaves a broken file.
-    let path = path.as_ref();
-    let tmp = path.with_extension("bimble.tmp");
-    std::fs::write(&tmp, to_string(m))?;
-    std::fs::rename(&tmp, path)?;
+    write_atomic(path.as_ref(), to_string(m).as_bytes())?;
     Ok(())
+}
+
+/// Write to a temp file next to `path`, then rename: an interrupted write never leaves a broken
+/// file behind.
+pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
 }
 
 pub fn load(path: impl AsRef<std::path::Path>) -> Result<Model, FileError> {

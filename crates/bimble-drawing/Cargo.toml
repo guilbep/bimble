@@ -1,0 +1,11 @@
+[package]
+name = "bimble-drawing"
+description = "Drawings on paper: storey plans at scale, written as SVG and PDF"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bimble-core.workspace = true
+bimble-geom.workspace = true
+pdf-writer.workspace = true

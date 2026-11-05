@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/bimble-core", "crates/bimble-geom", "crates/bimble-ifc", "crates/bimble-render", "crates/bimble-viewer", "crates/bimble-cli"]
+members = ["crates/bimble-core", "crates/bimble-geom", "crates/bimble-ifc", "crates/bimble-render", "crates/bimble-drawing", "crates/bimble-viewer", "crates/bimble-cli"]
 
 [workspace.package]
 version = "0.2.0"
@@ -12,6 +12,7 @@ repository = "https://github.com/guilbep/bimble"
 bimble-core = { path = "crates/bimble-core" }
 bimble-geom = { path = "crates/bimble-geom" }
 bimble-ifc = { path = "crates/bimble-ifc" }
+bimble-drawing = { path = "crates/bimble-drawing" }
 bimble-render = { path = "crates/bimble-render" }
 bimble-viewer = { path = "crates/bimble-viewer" }
 serde = { version = "1", features = ["derive"] }
@@ -30,6 +31,8 @@ eframe = { version = "0.37", default-features = false, features = ["wgpu", "defa
 rfd = "0.17"
 # Data parallelism for loading (parse chunks, per-element geometry). Pure Rust.
 rayon = "1"
+# PDF output for drawings (pure Rust, small).
+pdf-writer = "0.15"
 # Allocator for the bimble binary: parsing and freeing big IFC files are allocation-bound.
 mimalloc = { version = "0.1", default-features = false }
 # Geometry kernel (ADR 0010). No TBB: per-element booleans are small.

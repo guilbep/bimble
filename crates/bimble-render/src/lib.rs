@@ -17,8 +17,9 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// PNG stores, and it needs no sRGB view formats (missing on some old OpenGL drivers).
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-pub mod style;
-pub use style::{Fill, GraphicStyle, Lines, Rgb, Stipple};
+/// The graphic style is data in `bimble_core::style`; re-exported here for convenience.
+pub use bimble_core::style::{self, Fill, GraphicStyle, Lines, Rgb, Stipple};
+mod style_gpu;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -43,7 +44,7 @@ struct Uniforms {
     eye: [f32; 4],
     /// xyz: view direction (unit).
     view_dir: [f32; 4],
-    table: [style::GpuFill; style::SLOTS],
+    table: [style_gpu::GpuFill; style_gpu::SLOTS],
 }
 
 /// An edge end: position, and the normals of the edge's two faces (see `Mesh::edge_normals`).
@@ -573,9 +574,9 @@ impl Renderer {
                 continue;
             }
             let slot = if s == Style::Selected {
-                style::SELECTED_SLOT
+                style_gpu::SELECTED_SLOT
             } else {
-                style::slot(e.category)
+                style_gpu::slot(e.category)
             };
             let color = [0, 0, 0, slot];
             for &k in &e.mesh.indices {
@@ -673,7 +674,7 @@ impl Renderer {
                 let d = (camera.target - camera.eye()).normalize_or(Vec3::NEG_Z);
                 [d.x, d.y, d.z, 0.0]
             },
-            table: style::gpu_table(st),
+            table: style_gpu::gpu_table(st),
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
 
