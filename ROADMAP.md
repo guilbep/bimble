@@ -77,7 +77,7 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 - Display reading is done (I1). Still to do: relationships and property sets into the editable model, an
   architect's IFC as a background reference, opening cuts (needs the geometry-kernel decision), round-trip
   tests with Bonsai, FreeCAD, Revit
-- First real fixture: `LA24070_LMP_STR_32_R25` (Revit 2025 structural export, IFC4, metres, 881 elements).
+- First real fixture: a Revit 2025 structural export from a real project (IFC4, metres, 881 elements; kept out of the repo).
   Measured with IfcOpenShell 0.9 (5 Nov 2026):
   - Geometry is light: 809 products tessellate to ~21k triangles in 3.4 s on 2 cores. The viewer's challenge
     is element count and draw calls, not triangles.
