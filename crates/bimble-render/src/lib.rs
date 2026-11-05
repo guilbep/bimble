@@ -755,7 +755,30 @@ pub fn pick(
     dir: Vec3,
     clip: Option<&ClipBox>,
 ) -> Option<(usize, f32)> {
-    let mut best: Option<(usize, f32)> = None;
+    pick_hit(scene, visible, origin, dir, clip).map(|h| (h.element, h.distance))
+}
+
+/// Where a ray hits the scene.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hit {
+    pub element: usize,
+    /// Along the ray, from its origin.
+    pub distance: f32,
+    /// Hit point, scene coordinates.
+    pub point: Vec3,
+    /// Unit normal of the hit triangle (as wound; may face away from the ray).
+    pub normal: Vec3,
+}
+
+/// The nearest visible hit, ignoring what the clipping box removes.
+pub fn pick_hit(
+    scene: &Scene,
+    visible: impl Fn(usize) -> bool,
+    origin: Vec3,
+    dir: Vec3,
+    clip: Option<&ClipBox>,
+) -> Option<Hit> {
+    let mut best: Option<Hit> = None;
     for (i, e) in scene.elements.iter().enumerate() {
         if !visible(i) {
             continue;
@@ -763,10 +786,15 @@ pub fn pick(
         for t in e.mesh.indices.as_chunks::<3>().0 {
             let [a, b, c] = t.map(|k| Vec3::from(e.mesh.positions[k as usize]));
             if let Some(d) = ray_triangle(origin, dir, a, b, c)
-                && best.is_none_or(|(_, bd)| d < bd)
+                && best.is_none_or(|h| d < h.distance)
                 && clip.is_none_or(|c| c.contains(origin + dir * d))
             {
-                best = Some((i, d));
+                best = Some(Hit {
+                    element: i,
+                    distance: d,
+                    point: origin + dir * d,
+                    normal: (b - a).cross(c - a).normalize_or_zero(),
+                });
             }
         }
     }
