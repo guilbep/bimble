@@ -990,17 +990,39 @@ mod tests {
             assert!(n > 100, "{}: only {n} pixels of its fill", c.label());
         }
 
-        // Hatch strength changes faces only.
+        // Hatching changes faces only. A dense hatch (half the area inked) on every family, so the
+        // share of changed face pixels does not depend on the GPU's rasterisation details.
+        let mut dense = GraphicStyle {
+            hatch_strength: 1.0,
+            ..style
+        };
+        for c in MaterialCategory::ALL {
+            let f = dense.families.get_mut(c);
+            f.lines = [
+                Some(Lines {
+                    angle_deg: 45.0,
+                    spacing_px: 4.0,
+                    width: 0.5,
+                    dash_px: None,
+                    dash_on: 1.0,
+                }),
+                None,
+            ];
+            f.stipple = None;
+            f.ink = Some(Rgb([0, 0, 0]));
+        }
         let hatched = DrawOptions {
-            style: GraphicStyle {
-                hatch_strength: 1.0,
-                ..style
-            },
+            style: dense,
             ..opts
         };
         let px2 = draw(&gpu, &scene, &hatched);
+        let faces = px.len() - count(&px, style.background, 0);
         let changed = px.iter().zip(&px2).filter(|(a, b)| a != b).count();
-        assert!(changed > 200, "hatching changed only {changed} pixels");
+        eprintln!("hatching changed {changed} of {faces} face pixels");
+        assert!(
+            changed * 4 > faces,
+            "hatching changed only {changed} of {faces} face pixels"
+        );
         assert_eq!(
             count(&px2, style.background, 0),
             count(&px, style.background, 0)
