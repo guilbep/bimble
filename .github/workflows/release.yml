@@ -56,7 +56,7 @@ jobs:
           if [[ -n "$RELEASE_TAG" ]]; then
             tag="${RELEASE_TAG#v}"
             if [[ "$tag" != "$crate" ]]; then
-              echo "Tag $RELEASE_TAG does not match Cargo.toml version $crate" >&2
+              echo "::error::Tag $RELEASE_TAG does not match Cargo.toml version $crate. Bump the version in Cargo.toml first, then tag (see docs/RELEASING.md)."
               exit 1
             fi
             echo "name=$crate" >> "$GITHUB_OUTPUT"
@@ -121,5 +121,5 @@ jobs:
             gh release upload "$tag" dist/* --clobber
           else
             sed "s/{{VERSION}}/$tag/g" .github/release-notes.md > notes.md
-            gh release create "$tag" dist/* --title "Bimble $tag" --notes-file notes.md --prerelease
+            gh release create "$tag" dist/* --title "Bimble $tag" --notes-file notes.md --generate-notes --prerelease
           fi
