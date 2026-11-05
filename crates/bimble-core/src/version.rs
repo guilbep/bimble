@@ -6,6 +6,24 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Canonical copy of a value: every `-0.0` becomes `0.0`. Both compare equal but serialize
+/// differently, so without this two equal models could hash differently.
+///
+/// Validate first: values must be finite (JSON cannot hold NaN or infinity).
+pub fn canonical<T: Serialize + serde::de::DeserializeOwned>(v: T) -> T {
+    fn walk(v: &mut Value) {
+        match v {
+            Value::Number(n) if n.is_f64() && n.as_f64() == Some(0.0) => *v = Value::from(0.0),
+            Value::Array(a) => a.iter_mut().for_each(walk),
+            Value::Object(o) => o.values_mut().for_each(walk),
+            _ => {}
+        }
+    }
+    let mut j = serde_json::to_value(&v).expect("model types always serialize");
+    walk(&mut j);
+    serde_json::from_value(j).expect("canonical form deserializes to the same type")
+}
+
 /// Hash of any serializable object's canonical JSON form.
 pub fn content_hash<T: Serialize>(v: &T) -> blake3::Hash {
     blake3::hash(&serde_json::to_vec(v).expect("model types always serialize"))

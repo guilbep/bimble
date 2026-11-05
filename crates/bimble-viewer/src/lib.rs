@@ -68,7 +68,7 @@ struct Loaded {
     path: PathBuf,
     scene: Scene,
     load_time: Duration,
-    radius: f32,
+    bounds: bimble_render::Sphere,
     classes: BTreeMap<String, usize>,
     storeys: BTreeMap<String, usize>,
     categories: BTreeMap<MaterialCategory, usize>,
@@ -157,15 +157,12 @@ impl Viewer {
                     *storeys.entry(e.storey.clone()).or_default() += 1;
                     *categories.entry(e.category).or_default() += 1;
                 }
-                let radius = scene
-                    .bounds()
-                    .map(|(lo, hi)| (glam::Vec3::from(hi) - glam::Vec3::from(lo)).length() / 2.0)
-                    .unwrap_or(1.0);
+                let bounds = bimble_render::Sphere::of(&scene);
                 self.loaded = Some(Loaded {
                     path,
                     scene,
                     load_time,
-                    radius,
+                    bounds,
                     classes,
                     storeys,
                     categories,
@@ -294,7 +291,7 @@ impl Viewer {
                 (pos.x - rect.min.x) / rect.width() * 2.0 - 1.0,
                 1.0 - (pos.y - rect.min.y) / rect.height() * 2.0,
             ];
-            let (o, d) = self.camera.ray(ndc, aspect, l.radius);
+            let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
             let hit = bimble_render::pick(&l.scene, |i| self.visible(i), o, d).map(|(i, _)| i);
             if hit != self.selected {
                 self.selected = hit;

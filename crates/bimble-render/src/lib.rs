@@ -72,6 +72,31 @@ struct Uniforms {
 
 // ---------------------------------------------------------------- camera
 
+/// Bounding sphere of a scene, in scene coordinates (mm).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sphere {
+    pub center: Vec3,
+    pub radius: f32,
+}
+
+impl Sphere {
+    pub fn of(scene: &Scene) -> Sphere {
+        match scene.bounds() {
+            Some((lo, hi)) => {
+                let (lo, hi) = (Vec3::from(lo), Vec3::from(hi));
+                Sphere {
+                    center: (lo + hi) / 2.0,
+                    radius: ((hi - lo).length() / 2.0).max(1.0),
+                }
+            }
+            None => Sphere {
+                center: Vec3::ZERO,
+                radius: 1.0,
+            },
+        }
+    }
+}
+
 /// Orbit camera around a target, Z up (IFC convention). Units: mm, scene coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
@@ -117,7 +142,9 @@ impl Camera {
         }
     }
 
-    pub fn view_proj(&self, aspect: f32, scene_radius: f32) -> Mat4 {
+    /// Clip planes come from the scene's bounding sphere seen from the eye, not from the orbit
+    /// target, so panning away and orbiting back never clips the model.
+    pub fn view_proj(&self, aspect: f32, scene: &Sphere) -> Mat4 {
         let eye = self.eye();
         let up = if self.pitch.abs() > 1.55 {
             Vec3::Y
@@ -125,22 +152,27 @@ impl Camera {
             Vec3::Z
         };
         let view = look_at_mat4(eye, self.target, up);
-        let far = self.distance + 4.0 * scene_radius.max(1.0);
+        let r = scene.radius.max(1.0) * 1.01;
+        // Depth of the sphere centre along the viewing direction: every point of the sphere has
+        // a view depth within d ± r (the near and far planes are planes, not spheres).
+        let forward = (self.target - eye).normalize_or(Vec3::NEG_Z);
+        let d = (scene.center - eye).dot(forward);
+        let far = (d + r).max(1.0);
         let proj = if self.orthographic {
             let h = self.distance * (self.fov_y / 2.0).tan();
-            directx::orthographic(-h * aspect, h * aspect, -h, h, -far, far)
+            // Orthographic depth is linear: the near plane may sit behind the eye.
+            directx::orthographic(-h * aspect, h * aspect, -h, h, d - r, far)
         } else {
-            let near = (self.distance - 2.0 * scene_radius)
-                .max(self.distance * 0.002)
-                .max(1.0);
-            directx::perspective(self.fov_y, aspect.max(1e-3), near, far)
+            // Keep far/near under ~1e4 for depth precision; 1 mm minimum.
+            let near = (d - r).max(far * 1e-4).max(1.0);
+            directx::perspective(self.fov_y, aspect.max(1e-3), near, far.max(near * 2.0))
         };
         proj * view
     }
 
     /// World-space ray through a point in normalized device coords (x, y in -1..1, y up).
-    pub fn ray(&self, ndc: [f32; 2], aspect: f32, scene_radius: f32) -> (Vec3, Vec3) {
-        let inv = self.view_proj(aspect, scene_radius).inverse();
+    pub fn ray(&self, ndc: [f32; 2], aspect: f32, scene: &Sphere) -> (Vec3, Vec3) {
+        let inv = self.view_proj(aspect, scene).inverse();
         let a = inv.project_point3(Vec3::new(ndc[0], ndc[1], 0.0));
         let b = inv.project_point3(Vec3::new(ndc[0], ndc[1], 1.0));
         (a, (b - a).normalize())
@@ -180,7 +212,8 @@ pub struct GpuScene {
     face_vertices: u32,
     lines: wgpu::Buffer,
     line_vertices: u32,
-    pub radius: f32,
+    /// Bounds of the whole scene (not just the visible part), for stable clip planes.
+    pub bounds: Sphere,
 }
 
 impl GpuScene {
@@ -456,11 +489,7 @@ impl Renderer {
                 lines.extend_from_slice(seg);
             }
         }
-        let radius = scene
-            .bounds()
-            .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() / 2.0)
-            .unwrap_or(1.0)
-            .max(1.0);
+        let bounds = Sphere::of(scene);
         let buf = |label, contents: &[u8]| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
@@ -478,7 +507,7 @@ impl Renderer {
             face_vertices: faces.len() as u32,
             lines: buf("bimble line vb", bytemuck::cast_slice(&lines)),
             line_vertices: lines.len() as u32,
-            radius,
+            bounds,
         }
     }
 
@@ -492,7 +521,7 @@ impl Renderer {
         opts: &DrawOptions,
     ) {
         let aspect = target.size.0 as f32 / target.size.1 as f32;
-        let vp = camera.view_proj(aspect, scene.radius);
+        let vp = camera.view_proj(aspect, &scene.bounds);
         // Light from over the viewer's left shoulder.
         let light = (camera.eye() - camera.target).normalize() + Vec3::new(-0.3, -0.2, 0.9);
         let u = Uniforms {
@@ -659,6 +688,11 @@ impl Headless {
         })
     }
 
+    /// Largest width or height a target can have on this device.
+    pub fn max_target_size(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
     /// Read a target back as tightly packed RGBA8 (sRGB) rows.
     pub fn read_rgba(&self, target: &Target) -> Result<Vec<u8>, HeadlessError> {
         let (w, h) = target.size;
@@ -667,7 +701,7 @@ impl Headless {
             row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bimble readback"),
-            size: (padded * h) as u64,
+            size: padded as u64 * h as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -708,9 +742,9 @@ impl Headless {
         let data = slice
             .get_mapped_range()
             .map_err(|e| HeadlessError::Readback(e.to_string()))?;
-        let mut out = Vec::with_capacity((row * h) as usize);
-        for y in 0..h {
-            let s = (y * padded) as usize;
+        let mut out = Vec::with_capacity(row as usize * h as usize);
+        for y in 0..h as usize {
+            let s = y * padded as usize;
             out.extend_from_slice(&data[s..s + row as usize]);
         }
         Ok(out)
@@ -774,14 +808,53 @@ mod tests {
         let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
         let mut cam = Camera::default();
         cam.fit(&scene, 1.5);
-        let r = scene
-            .bounds()
-            .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() / 2.0)
-            .unwrap();
-        let (o, d) = cam.ray([0.0, 0.0], 1.5, r);
+        let (o, d) = cam.ray([0.0, 0.0], 1.5, &Sphere::of(&scene));
         assert!(pick(&scene, |_| true, o, d).is_some());
         // Looking away from the scene hits nothing.
         assert!(pick(&scene, |_| true, o, -d).is_none());
+    }
+
+    /// Review 2026-11-05: clip planes used to follow the orbit target, so pan + orbit clipped
+    /// the model. Every scene corner must project inside the depth range from any camera.
+    #[test]
+    fn clip_planes_contain_the_scene_after_pan_and_orbit() {
+        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let bounds = Sphere::of(&scene);
+        let (lo, hi) = scene.bounds().unwrap();
+        let corners: Vec<Vec3> = (0..8)
+            .map(|i| {
+                Vec3::new(
+                    if i & 1 == 0 { lo[0] } else { hi[0] },
+                    if i & 2 == 0 { lo[1] } else { hi[1] },
+                    if i & 4 == 0 { lo[2] } else { hi[2] },
+                )
+            })
+            .collect();
+        for ortho in [false, true] {
+            let mut cam = Camera {
+                orthographic: ortho,
+                ..Default::default()
+            };
+            cam.fit(&scene, 1.5);
+            cam.pan(2.0, 0.5);
+            for step in 0..8 {
+                cam.orbit(0.8, 0.1 * (step % 3) as f32 - 0.1);
+                let vp = cam.view_proj(1.5, &bounds);
+                let eye = cam.eye();
+                for c in &corners {
+                    let clip = vp * c.extend(1.0);
+                    // Points behind a perspective eye can't be on screen anyway.
+                    if !ortho && (*c - eye).dot(cam.target - eye) <= 0.0 {
+                        continue;
+                    }
+                    let z = clip.z / clip.w;
+                    assert!(
+                        (-1e-4..=1.0 + 1e-4).contains(&z),
+                        "ortho={ortho} step={step}: depth {z} for {c}"
+                    );
+                }
+            }
+        }
     }
 
     /// Renders on whatever adapter exists (a software one in CI containers). Skipped if none.

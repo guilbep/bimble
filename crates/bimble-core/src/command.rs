@@ -1,6 +1,7 @@
 //! Every model mutation is a `Command`. Applying a command returns its inverse, which gives
 //! undo/redo for free and a replayable operation log for history and agents.
 
+use crate::version::canonical;
 use crate::{Element, Generator, GlobalId, Material, Model, Placement, Storey};
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +43,8 @@ impl Command {
                 if !s.elevation.is_finite() {
                     return Err(CommandError::Invalid("storey elevation".into()));
                 }
+                // Validate first: canonical() goes through JSON, where NaN is not representable.
+                let s = canonical(s);
                 let id = s.id;
                 m.storeys.insert(id, s);
                 Ok(RemoveStorey { id })
@@ -79,6 +82,8 @@ impl Command {
                     return Err(CommandError::NotFound(e.material));
                 }
                 e.generator.validate().map_err(CommandError::Invalid)?;
+                e.placement.validate().map_err(CommandError::Invalid)?;
+                let e = canonical(e);
                 let id = e.id;
                 m.elements.insert(id, e);
                 Ok(RemoveElement { id })
@@ -89,11 +94,14 @@ impl Command {
             }
             SetGenerator { id, generator } => {
                 generator.validate().map_err(CommandError::Invalid)?;
+                let generator = canonical(generator);
                 let e = m.elements.get_mut(&id).ok_or(CommandError::NotFound(id))?;
                 let old = std::mem::replace(&mut e.generator, generator);
                 Ok(SetGenerator { id, generator: old })
             }
             SetPlacement { id, placement } => {
+                placement.validate().map_err(CommandError::Invalid)?;
+                let placement = canonical(placement);
                 let e = m.elements.get_mut(&id).ok_or(CommandError::NotFound(id))?;
                 let old = std::mem::replace(&mut e.placement, placement);
                 Ok(SetPlacement { id, placement: old })

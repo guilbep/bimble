@@ -246,6 +246,12 @@ fn run(cli: Cli) -> Result<(), String> {
             let scene = load_scene(&path)?;
             let t_load = t0.elapsed();
             let gpu = Headless::new().map_err(|x| x.to_string())?;
+            let max = gpu.max_target_size();
+            if width == 0 || height == 0 || width > max || height > max {
+                return Err(format!(
+                    "--width and --height must be between 1 and {max} on this GPU"
+                ));
+            }
             let r = Renderer::new(&gpu.device, samples);
             let visible = bimble_render::hidden_by_category(&hidden);
             let gs = r.upload(&gpu.device, &scene, &visible);

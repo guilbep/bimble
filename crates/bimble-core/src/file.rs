@@ -60,7 +60,7 @@ pub fn from_str(s: &str) -> Result<Model, FileError> {
         return Err(FileError::Version(f.version));
     }
     f.model.validate().map_err(FileError::Invalid)?;
-    Ok(f.model)
+    Ok(crate::version::canonical(f.model))
 }
 
 pub fn save(m: &Model, path: impl AsRef<std::path::Path>) -> Result<(), FileError> {

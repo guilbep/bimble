@@ -134,6 +134,8 @@ impl SceneBuilder {
                     category: info.category,
                     mesh: mb.build(origin),
                 })
+                // Degenerate triangles are dropped in build(): an element can end up empty.
+                .filter(|e| !e.mesh.indices.is_empty())
                 .collect(),
             warnings: self.warnings,
         }
@@ -314,6 +316,30 @@ pub fn norm(a: [f64; 3]) -> f64 {
 mod tests {
     use super::*;
     use bimble_core::demo::{FrameSpec, concrete_frame};
+
+    /// Review 2026-11-05: an element whose triangles are all degenerate must not survive as an
+    /// empty mesh (its bounding box would be ±f64::MAX).
+    #[test]
+    fn degenerate_element_is_dropped() {
+        let info = |name: &str| ElementInfo {
+            global_id: name.into(),
+            class: "IfcWall".into(),
+            name: name.into(),
+            storey: String::new(),
+            material: String::new(),
+            category: MaterialCategory::Other,
+        };
+        let mut flat = MeshBuilder::default();
+        flat.add_triangle([[0.0; 3], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]); // collinear
+        let mut ok = MeshBuilder::default();
+        ok.add_triangle([[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+        let mut b = SceneBuilder::default();
+        b.push(info("flat"), flat);
+        b.push(info("ok"), ok);
+        let s = b.finish();
+        assert_eq!(s.elements.len(), 1);
+        assert_eq!(s.elements[0].name, "ok");
+    }
 
     #[test]
     fn polygon_with_hole_area() {

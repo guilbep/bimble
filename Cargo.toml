@@ -15,7 +15,7 @@ bimble-ifc = { path = "crates/bimble-ifc" }
 bimble-render = { path = "crates/bimble-render" }
 bimble-viewer = { path = "crates/bimble-viewer" }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 blake3 = "1"
 uuid = { version = "1", features = ["v4"] }
 earcutr = "0.5"
