@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 /// Bytes the renderer uploads per face vertex and per edge vertex (see bimble-render).
 const FACE_VERTEX_BYTES: usize = 28;
-const LINE_VERTEX_BYTES: usize = 12;
+const LINE_VERTEX_BYTES: usize = 20;
 
 fn fixture(name: &str) -> String {
     std::fs::read_to_string(format!(

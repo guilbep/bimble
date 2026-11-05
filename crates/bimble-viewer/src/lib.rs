@@ -6,7 +6,9 @@
 
 use bimble_core::MaterialCategory;
 use bimble_geom::Scene;
-use bimble_render::{Camera, DrawOptions, GpuScene, GraphicStyle, Renderer, Style, Target};
+use bimble_render::{
+    Camera, ClipBox, DrawOptions, GpuScene, GraphicStyle, Renderer, Style, Target,
+};
 use eframe::egui::{self, Color32, PointerButton, Sense, Vec2};
 use eframe::egui_wgpu;
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
+mod section;
 mod style_editor;
 
 const SAMPLES: u32 = 4;
@@ -109,6 +112,10 @@ struct Viewer {
     selected: Option<usize>,
     fit_pending: bool,
 
+    /// Section box: on/off, and the box (kept when switched off).
+    section_on: bool,
+    section_box: Option<ClipBox>,
+
     style_window: bool,
     /// File the style was loaded from or saved to.
     style_path: Option<PathBuf>,
@@ -140,6 +147,8 @@ impl Viewer {
             hidden_storeys: BTreeSet::new(),
             selected: None,
             fit_pending: false,
+            section_on: false,
+            section_box: None,
             style_window: false,
             style_path: None,
             style_message: None,
@@ -190,9 +199,36 @@ impl Viewer {
                 self.selected = None;
                 self.needs_upload = true;
                 self.fit_pending = true;
+                // A box from the previous model means nothing for this one.
+                self.section_on = false;
+                self.section_box = None;
             }
             Err(e) => self.error = Some(format!("{}: {e}", path.display())),
         }
+    }
+
+    /// The active clipping box, if the section box is on.
+    fn clip(&self) -> Option<ClipBox> {
+        self.section_box.filter(|_| self.section_on)
+    }
+
+    /// Fit the section box to the selection, or to everything visible.
+    fn fit_section_box(&mut self) {
+        let Some(l) = &self.loaded else { return };
+        let sel = self.selected;
+        let b = ClipBox::around(&l.scene, |i| self.visible(i) && sel.is_none_or(|s| s == i));
+        if b.is_some() {
+            self.section_box = b;
+            self.needs_render = true;
+        }
+    }
+
+    fn toggle_section_box(&mut self) {
+        self.section_on = !self.section_on;
+        if self.section_on && self.section_box.is_none() {
+            self.fit_section_box();
+        }
+        self.needs_render = true;
     }
 
     fn visible(&self, i: usize) -> bool {
@@ -269,6 +305,7 @@ impl Viewer {
         let t = Instant::now();
         let opts = DrawOptions {
             hatch_scale: ppp,
+            clip: self.clip(),
             ..self.opts
         };
         self.renderer
@@ -315,7 +352,9 @@ impl Viewer {
                 1.0 - (pos.y - rect.min.y) / rect.height() * 2.0,
             ];
             let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
-            let hit = bimble_render::pick(&l.scene, |i| self.visible(i), o, d).map(|(i, _)| i);
+            let hit =
+                bimble_render::pick(&l.scene, |i| self.visible(i), o, d, self.clip().as_ref())
+                    .map(|(i, _)| i);
             if hit != self.selected {
                 self.selected = hit;
                 self.needs_upload = true;
@@ -327,7 +366,7 @@ impl Viewer {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        let (f, o, e, h, t, esc) = ctx.input(|i| {
+        let (f, o, e, h, t, esc, b) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::F),
                 i.key_pressed(egui::Key::O),
@@ -335,8 +374,12 @@ impl Viewer {
                 i.key_pressed(egui::Key::H),
                 i.key_pressed(egui::Key::T),
                 i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::B),
             )
         });
+        if b && self.loaded.is_some() {
+            self.toggle_section_box();
+        }
         if f {
             self.fit(aspect);
         }
@@ -378,6 +421,22 @@ impl Viewer {
             changed |= ui.checkbox(&mut self.camera.orthographic, "Orthographic (O)").changed();
             if changed {
                 self.needs_render = true;
+            }
+            ui.separator();
+            let mut on = self.section_on;
+            if ui
+                .checkbox(&mut on, "Section box (B)")
+                .on_hover_text("Clip the model to a box; drag the arrows to move its faces")
+                .changed()
+            {
+                self.toggle_section_box();
+            }
+            if self.section_on
+                && ui
+                    .button(if self.selected.is_some() { "Box to selection" } else { "Box to visible" })
+                    .clicked()
+            {
+                self.fit_section_box();
             }
             ui.separator();
             ui.toggle_value(&mut self.style_window, "Style…");
@@ -627,6 +686,15 @@ impl eframe::App for Viewer {
                     .sense(Sense::click_and_drag());
                 let resp = ui.add(img);
                 self.handle_view_input(ui, &resp);
+                if let (true, Some(mut b), Some(l)) = (self.section_on, self.section_box, &self.loaded) {
+                    let vp = self.camera.view_proj(aspect, &l.bounds);
+                    let a = self.opts.style.selection.0;
+                    let accent = Color32::from_rgb(a[0], a[1], a[2]);
+                    if section::overlay(ui, rect, &vp, &mut b, accent) {
+                        self.section_box = Some(b);
+                        self.needs_render = true;
+                    }
+                }
                 if self.needs_render || self.needs_upload {
                     ctx.request_repaint();
                 }

@@ -228,7 +228,9 @@ impl MeshBuilder {
             }
             m.indices.extend([base, base + 1, base + 2]);
         }
-        m.edges = crease_edges(&m, 20.0);
+        let (edges, normals) = crease_edges_with_normals(&m, 20.0);
+        m.edges = edges;
+        m.edge_normals = normals;
         m
     }
 }
@@ -237,6 +239,8 @@ struct EdgeUse {
     count: usize,
     /// Normal of the first face using this edge.
     normal: [f32; 3],
+    /// Normal of the last other face using it.
+    other: [f32; 3],
     crease: bool,
     seg: [[f32; 3]; 2],
 }
@@ -244,6 +248,14 @@ struct EdgeUse {
 /// Edges to outline: boundary edges, and edges where adjacent faces meet at more than `angle_deg`.
 /// Coplanar triangulation diagonals and smooth curved surfaces (arc segments) are not outlined.
 pub fn crease_edges(m: &Mesh, angle_deg: f32) -> Vec<[[f32; 3]; 2]> {
+    crease_edges_with_normals(m, angle_deg).0
+}
+
+/// Crease and boundary edges, with the normals of the faces on both sides (see `Mesh`).
+pub fn crease_edges_with_normals(
+    m: &Mesh,
+    angle_deg: f32,
+) -> (Vec<crate::Segment>, Vec<crate::EdgeNormals>) {
     let cos_limit = angle_deg.to_radians().cos();
     // Quantize to 0.01 mm to weld duplicated vertices.
     let key = |p: [f32; 3]| p.map(|c| (c * 100.0).round() as i64);
@@ -263,6 +275,7 @@ pub fn crease_edges(m: &Mesh, angle_deg: f32) -> Vec<[[f32; 3]; 2]> {
             let e = map.entry(k2).or_insert(EdgeUse {
                 count: 0,
                 normal: n,
+                other: n,
                 crease: false,
                 seg: [a, b],
             });
@@ -271,6 +284,7 @@ pub fn crease_edges(m: &Mesh, angle_deg: f32) -> Vec<[[f32; 3]; 2]> {
                 if c < cos_limit {
                     e.crease = true;
                 }
+                e.other = n;
             }
             e.count += 1;
         }
@@ -278,15 +292,25 @@ pub fn crease_edges(m: &Mesh, angle_deg: f32) -> Vec<[[f32; 3]; 2]> {
     let mut out: Vec<_> = map
         .into_values()
         .filter(|e| e.count == 1 || e.crease)
-        .map(|e| e.seg)
+        .map(|e| {
+            let n1 = crate::pack_normal(e.normal);
+            let n2 = match e.count {
+                // Boundary: opposite normals, so the edge is never "behind its own solid".
+                1 => crate::pack_normal(e.normal.map(|c| -c)),
+                // Two faces: the second one. More than two (non-manifold): unknown, always draw.
+                2 => crate::pack_normal(e.other),
+                _ => return (e.seg, [[0; 4]; 2]),
+            };
+            (e.seg, [n1, n2])
+        })
         .collect();
     // Deterministic order (HashMap iteration is random).
     out.sort_by(|a, b| {
-        a.as_flattened()
-            .partial_cmp(b.as_flattened())
+        a.0.as_flattened()
+            .partial_cmp(b.0.as_flattened())
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    out
+    out.into_iter().unzip()
 }
 
 pub fn newell(poly: &[[f64; 3]]) -> [f64; 3] {

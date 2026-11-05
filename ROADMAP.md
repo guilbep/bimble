@@ -53,6 +53,16 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 
 ## 4. Iterations
 
+**Next, in this order** (Pierre, 5 Nov 2026 evening):
+1. ✅ Section box: clip the model to a box, cut solids show their cut surface, drag handles in the
+   viewer, `render --clip` (ADR 0014)
+2. ☐ View cube (top right) and navigation buttons like Revit (zoom all / fit, standard views)
+3. ☐ Measure ("prendre des cotes"): distance between points, edges, faces of any elements; keep as annotations
+4. ☐ Storey plan cut to SVG **at scale** (1:1 … 1:5000), printable to PDF on A4 … A0
+5. ☐ Linked models: load another model as a reference (e.g. the architect's IFC) and compare visually
+6. ☐ Hover highlight: the element under the cursor gets its edges in another colour before you click
+7. Then the rest below (I2 editing and history, I3 import for editing, I4 formwork plans, rebar)
+
 **I0 — Core** ✅ (PR #1)
 - Crates: `bimble-core` (IFC-typed model, GlobalIds, generators, materials, commands + undo, hash, diff),
   `bimble-geom` (extrusion meshes), `bimble-ifc` (IFC4 export), `bimble-cli`

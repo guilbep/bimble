@@ -22,8 +22,16 @@ struct Uniforms {
     light: vec4<f32>,
     // rgb: edge colour (sRGB), a: unused
     edge: vec4<f32>,
-    // x: hatch scale (pixels per hatch unit), y: hatch strength 0..1, z: ambient light 0..1
+    // x: hatch scale (pixels per hatch unit), y: hatch strength 0..1, z: ambient light 0..1,
+    // w: brightness of cut surfaces (clipping box) 0..1
     params: vec4<f32>,
+    // Clipping box in scene coordinates; clip_min.w = 1 when it is on.
+    clip_min: vec4<f32>,
+    clip_max: vec4<f32>,
+    // xyz: camera position (scene coordinates), w: 1 for orthographic
+    eye: vec4<f32>,
+    // xyz: view direction
+    view_dir: vec4<f32>,
     table: array<Fill, 16>,
 };
 
@@ -40,10 +48,19 @@ struct FaceOut {
     @builtin(position) clip: vec4<f32>,
     // Faces are flat (one normal per triangle), so colours are constant per triangle: no
     // interpolation needed, which saves work per pixel on software and old GPUs.
+    // Unlit fill and ink; `shade` is the light of the face. Cut surfaces use their own light.
     @location(0) @interpolate(flat) color: vec3<f32>,
     @location(1) @interpolate(flat) ink: vec3<f32>,
     @location(2) @interpolate(flat) slot: u32,
+    @location(3) @interpolate(flat) shade: f32,
+    // Scene position, for the clipping box.
+    @location(4) pos: vec3<f32>,
 };
+
+// True if p is outside the clipping box (when it is on).
+fn clipped(p: vec3<f32>) -> bool {
+    return u.clip_min.w != 0.0 && (any(p < u.clip_min.xyz) || any(p > u.clip_max.xyz));
+}
 
 @vertex
 fn vs_face(v: FaceIn) -> FaceOut {
@@ -53,11 +70,11 @@ fn vs_face(v: FaceIn) -> FaceOut {
     let l = normalize(u.light.xyz);
     // Two-sided Lambert with a high ambient: reads like a shaded drawing.
     let ambient = u.params.z;
-    let shade = ambient + (1.0 - ambient) * abs(dot(normalize(v.normal), l));
+    o.shade = ambient + (1.0 - ambient) * abs(dot(normalize(v.normal), l));
     let f = u.table[o.slot];
-    o.color = f.fill.rgb * shade;
-    // A darkened fill was computed from the unshaded fill on the CPU: shade both alike.
-    o.ink = f.ink.rgb * shade;
+    o.color = f.fill.rgb;
+    o.ink = f.ink.rgb;
+    o.pos = v.pos;
     return o;
 }
 
@@ -82,8 +99,15 @@ fn family(p: vec2<f32>, l: vec4<f32>, dash: vec4<f32>) -> f32 {
 }
 
 @fragment
-fn fs_face(i: FaceOut) -> @location(0) vec4<f32> {
-    var c = i.color;
+fn fs_face(i: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if clipped(i.pos) {
+        discard;
+    }
+    // Inside a cut solid we see its back faces (meshes are closed and wound outward): drawing
+    // them flat and darker shows the cut surface, hatched like the material.
+    let cut = u.clip_min.w != 0.0 && !front;
+    let shade = select(i.shade, u.params.w, cut);
+    var c = i.color * shade;
     let bits = u32(u.table[i.slot].fill.a);
     // Families without hatch (and hatching off) skip the pattern code entirely; otherwise only
     // the patterns the family has are evaluated.
@@ -102,7 +126,7 @@ fn fs_face(i: FaceOut) -> @location(0) vec4<f32> {
             let h = fract(sin(dot(cell, vec2<f32>(12.9898, 78.233))) * 43758.5453);
             ink = max(ink, select(0.0, st.z, h > 1.0 - st.y));
         }
-        c = mix(c, i.ink, ink * u.params.y);
+        c = mix(c, i.ink * shade, ink * u.params.y);
     }
     // The target is a plain Unorm texture holding gamma-encoded colour.
     return vec4<f32>(linear_to_srgb(c), 1.0);
@@ -110,17 +134,36 @@ fn fs_face(i: FaceOut) -> @location(0) vec4<f32> {
 
 struct LineOut {
     @builtin(position) clip: vec4<f32>,
+    @location(0) pos: vec3<f32>,
+    // 1 if both faces of the edge face away from the camera
+    @location(1) @interpolate(flat) back: u32,
 };
 
 @vertex
-fn vs_line(@location(0) pos: vec3<f32>) -> LineOut {
+fn vs_line(
+    @location(0) pos: vec3<f32>,
+    @location(1) n1: vec4<f32>,
+    @location(2) n2: vec4<f32>,
+) -> LineOut {
     var o: LineOut;
     o.clip = u.view_proj * vec4<f32>(pos, 1.0);
+    o.pos = pos;
+    // Towards the viewer from this point.
+    let v = select(u.eye.xyz - pos, -u.view_dir.xyz, u.eye.w != 0.0);
+    o.back = select(0u, 1u, dot(n1.xyz, v) < 0.0 && dot(n2.xyz, v) < 0.0);
     return o;
 }
 
 @fragment
 fn fs_line(i: LineOut) -> @location(0) vec4<f32> {
+    if clipped(i.pos) {
+        discard;
+    }
+    // An edge behind its own solid is only visible through a section cut: inside the cut
+    // surface, where it would make the solid look hollow.
+    if u.clip_min.w != 0.0 && i.back != 0u {
+        discard;
+    }
     // Already sRGB-encoded, like the target.
     return vec4<f32>(u.edge.rgb, 1.0);
 }

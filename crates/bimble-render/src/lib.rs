@@ -37,7 +37,55 @@ struct Uniforms {
     light: [f32; 4],
     edge: [f32; 4],
     params: [f32; 4],
+    clip_min: [f32; 4],
+    clip_max: [f32; 4],
+    /// xyz: camera position (scene coordinates), w: 1 for orthographic.
+    eye: [f32; 4],
+    /// xyz: view direction (unit).
+    view_dir: [f32; 4],
     table: [style::GpuFill; style::SLOTS],
+}
+
+/// An edge end: position, and the normals of the edge's two faces (see `Mesh::edge_normals`).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LineVertex {
+    pos: [f32; 3],
+    n1: [i8; 4],
+    n2: [i8; 4],
+}
+
+/// An axis-aligned clipping box ("section box"), in scene coordinates (mm, relative to
+/// `Scene::origin_mm`). Geometry outside is not drawn; solids it cuts show their cut surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClipBox {
+    pub min: Vec3,
+    pub max: Vec3,
+}
+
+impl ClipBox {
+    pub fn contains(&self, p: Vec3) -> bool {
+        p.cmpge(self.min).all() && p.cmple(self.max).all()
+    }
+    /// The bounding box of a scene, or of some of its elements.
+    pub fn around(scene: &Scene, mut keep: impl FnMut(usize) -> bool) -> Option<ClipBox> {
+        let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+        for (i, e) in scene.elements.iter().enumerate() {
+            if !keep(i) {
+                continue;
+            }
+            for p in &e.mesh.positions {
+                lo = lo.min(Vec3::from(*p));
+                hi = hi.max(Vec3::from(*p));
+            }
+        }
+        // A small margin: faces lying exactly on a clip plane would flicker in and out.
+        let m = Vec3::splat(1.0) + (hi - lo) * 1e-5;
+        lo.cmple(hi).all().then_some(ClipBox {
+            min: lo - m,
+            max: hi + m,
+        })
+    }
 }
 
 // ---------------------------------------------------------------- camera
@@ -102,14 +150,18 @@ impl Camera {
     /// Frame the whole scene.
     pub fn fit(&mut self, scene: &Scene, aspect: f32) {
         if let Some((lo, hi)) = scene.bounds() {
-            let (lo, hi) = (Vec3::from(lo), Vec3::from(hi));
-            self.target = (lo + hi) / 2.0;
-            let r = ((hi - lo).length() / 2.0).max(1.0);
-            // Half-angle of the narrower side of the view frustum.
-            let half_v = self.fov_y / 2.0;
-            let half_h = (half_v.tan() * aspect.max(1e-3)).atan();
-            self.distance = r / half_v.min(half_h).sin() * 1.02;
+            self.fit_box(Vec3::from(lo), Vec3::from(hi), aspect);
         }
+    }
+
+    /// Frame an axis-aligned box (scene coordinates).
+    pub fn fit_box(&mut self, lo: Vec3, hi: Vec3, aspect: f32) {
+        self.target = (lo + hi) / 2.0;
+        let r = ((hi - lo).length() / 2.0).max(1.0);
+        // Half-angle of the narrower side of the view frustum.
+        let half_v = self.fov_y / 2.0;
+        let half_h = (half_v.tan() * aspect.max(1e-3)).atan();
+        self.distance = r / half_v.min(half_h).sin() * 1.02;
     }
 
     /// Clip planes come from the scene's bounding sphere seen from the eye, not from the orbit
@@ -260,6 +312,8 @@ impl Target {
 
 pub struct Renderer {
     face_pipeline: wgpu::RenderPipeline,
+    face_front_pipeline: wgpu::RenderPipeline,
+    face_back_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
@@ -275,6 +329,8 @@ pub struct DrawOptions {
     pub edges: bool,
     /// Colours, hatches and light.
     pub style: GraphicStyle,
+    /// Section box: draw only what is inside.
+    pub clip: Option<ClipBox>,
 }
 
 impl Default for DrawOptions {
@@ -284,6 +340,7 @@ impl Default for DrawOptions {
             hatching: true,
             edges: true,
             style: GraphicStyle::default(),
+            clip: None,
         }
     }
 }
@@ -338,49 +395,59 @@ impl Renderer {
         })];
 
         let face_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4];
-        let face_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("bimble faces"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_face"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<FaceVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &face_attrs,
-                })],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                // Imported meshes don't always have consistent winding: draw both sides.
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                // Push faces back so the edges drawn afterwards win the depth test.
-                bias: wgpu::DepthBiasState {
-                    constant: 2,
-                    slope_scale: 1.5,
-                    clamp: 0.0,
+        let face_pipeline_with = |label: &str, cull_mode: Option<wgpu::Face>, bias: (i32, f32)| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_face"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<FaceVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &face_attrs,
+                    })],
                 },
-            }),
-            multisample,
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_face"),
-                compilation_options: Default::default(),
-                targets: &target,
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    // Push faces back so the edges drawn afterwards win the depth test.
+                    bias: wgpu::DepthBiasState {
+                        constant: bias.0,
+                        slope_scale: bias.1,
+                        clamp: 0.0,
+                    },
+                }),
+                multisample,
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_face"),
+                    compilation_options: Default::default(),
+                    targets: &target,
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        // Imported meshes don't always have consistent winding: draw both sides at once.
+        let face_pipeline = face_pipeline_with("bimble faces", None, (2, 1.5));
+        // With a section box, inward faces show cut surfaces. Drawn in a second pass pushed a
+        // little further back, so where an outward and an inward face meet (silhouette corners)
+        // the outward one wins instead of speckling the outline with cut colour.
+        let face_front_pipeline =
+            face_pipeline_with("bimble faces, outward", Some(wgpu::Face::Back), (2, 1.5));
+        let face_back_pipeline =
+            face_pipeline_with("bimble faces, inward", Some(wgpu::Face::Front), (8, 4.0));
 
-        let line_attrs = wgpu::vertex_attr_array![0 => Float32x3];
+        let line_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Snorm8x4, 2 => Snorm8x4];
         let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("bimble edges"),
             layout: Some(&layout),
@@ -389,7 +456,7 @@ impl Renderer {
                 entry_point: Some("vs_line"),
                 compilation_options: Default::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: 12,
+                    array_stride: std::mem::size_of::<LineVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &line_attrs,
                 })],
@@ -418,6 +485,8 @@ impl Renderer {
 
         Renderer {
             face_pipeline,
+            face_front_pipeline,
+            face_back_pipeline,
             line_pipeline,
             uniforms,
             bind_group,
@@ -433,7 +502,7 @@ impl Renderer {
         style: impl Fn(usize, &SceneElement) -> Style,
     ) -> GpuScene {
         let mut faces: Vec<FaceVertex> = Vec::new();
-        let mut lines: Vec<[f32; 3]> = Vec::new();
+        let mut lines: Vec<LineVertex> = Vec::new();
         for (i, e) in scene.elements.iter().enumerate() {
             let s = style(i, e);
             if s == Style::Hidden {
@@ -453,8 +522,11 @@ impl Renderer {
                     color,
                 });
             }
-            for seg in &e.mesh.edges {
-                lines.extend_from_slice(seg);
+            for (k, seg) in e.mesh.edges.iter().enumerate() {
+                let [n1, n2] = e.mesh.edge_normals.get(k).copied().unwrap_or_default();
+                for &pos in seg {
+                    lines.push(LineVertex { pos, n1, n2 });
+                }
             }
         }
         let bounds = Sphere::of(scene);
@@ -508,8 +580,24 @@ impl Renderer {
                     0.0
                 },
                 st.ambient,
-                0.0,
+                st.cut_shade,
             ],
+            clip_min: match opts.clip {
+                Some(c) => [c.min.x, c.min.y, c.min.z, 1.0],
+                None => [0.0; 4],
+            },
+            clip_max: match opts.clip {
+                Some(c) => [c.max.x, c.max.y, c.max.z, 0.0],
+                None => [0.0; 4],
+            },
+            eye: {
+                let e = camera.eye();
+                [e.x, e.y, e.z, if camera.orthographic { 1.0 } else { 0.0 }]
+            },
+            view_dir: {
+                let d = (camera.target - camera.eye()).normalize_or(Vec3::NEG_Z);
+                [d.x, d.y, d.z, 0.0]
+            },
             table: style::gpu_table(st),
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
@@ -554,9 +642,16 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.bind_group, &[]);
             if scene.face_vertices > 0 {
-                pass.set_pipeline(&self.face_pipeline);
                 pass.set_vertex_buffer(0, scene.faces.slice(..));
-                pass.draw(0..scene.face_vertices, 0..1);
+                if opts.clip.is_some() {
+                    pass.set_pipeline(&self.face_front_pipeline);
+                    pass.draw(0..scene.face_vertices, 0..1);
+                    pass.set_pipeline(&self.face_back_pipeline);
+                    pass.draw(0..scene.face_vertices, 0..1);
+                } else {
+                    pass.set_pipeline(&self.face_pipeline);
+                    pass.draw(0..scene.face_vertices, 0..1);
+                }
             }
             if opts.edges && scene.line_vertices > 0 {
                 pass.set_pipeline(&self.line_pipeline);
@@ -576,6 +671,7 @@ pub fn pick(
     visible: impl Fn(usize) -> bool,
     origin: Vec3,
     dir: Vec3,
+    clip: Option<&ClipBox>,
 ) -> Option<(usize, f32)> {
     let mut best: Option<(usize, f32)> = None;
     for (i, e) in scene.elements.iter().enumerate() {
@@ -586,6 +682,7 @@ pub fn pick(
             let [a, b, c] = t.map(|k| Vec3::from(e.mesh.positions[k as usize]));
             if let Some(d) = ray_triangle(origin, dir, a, b, c)
                 && best.is_none_or(|(_, bd)| d < bd)
+                && clip.is_none_or(|c| c.contains(origin + dir * d))
             {
                 best = Some((i, d));
             }
@@ -791,9 +888,9 @@ mod tests {
         let mut cam = Camera::default();
         cam.fit(&scene, 1.5);
         let (o, d) = cam.ray([0.0, 0.0], 1.5, &Sphere::of(&scene));
-        assert!(pick(&scene, |_| true, o, d).is_some());
+        assert!(pick(&scene, |_| true, o, d, None).is_some());
         // Looking away from the scene hits nothing.
-        assert!(pick(&scene, |_| true, o, -d).is_none());
+        assert!(pick(&scene, |_| true, o, -d, None).is_none());
     }
 
     /// Review 2026-11-05: clip planes used to follow the orbit target, so pan + orbit clipped
@@ -1027,5 +1124,111 @@ mod tests {
             count(&px2, style.background, 0),
             count(&px, style.background, 0)
         );
+    }
+
+    fn srgb_to_linear(c: f32) -> f32 {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    fn linear_to_srgb(c: f32) -> f32 {
+        if c <= 0.0031308 {
+            c * 12.92
+        } else {
+            1.055 * c.powf(1.0 / 2.4) - 0.055
+        }
+    }
+
+    /// The section box hides what is outside and shows the cut surface of solids it cuts.
+    #[test]
+    fn clip_box_cuts_solids_and_shows_the_cut() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let scene = family_boxes();
+        let all = ClipBox::around(&scene, |_| true).unwrap();
+        // Keep the lower half of every box (boxes are 0..1000 mm high).
+        let half = ClipBox {
+            max: Vec3::new(all.max.x, all.max.y, all.min.z + 500.0),
+            ..all
+        };
+        let fill = Rgb([200, 60, 60]);
+        let mut style = GraphicStyle {
+            ambient: 1.0,
+            hatch_strength: 0.0,
+            cut_shade: 0.5,
+            ..GraphicStyle::default()
+        };
+        for c in MaterialCategory::ALL {
+            style.families.get_mut(c).color = fill;
+        }
+        let mut opts = DrawOptions {
+            style,
+            edges: false,
+            ..Default::default()
+        };
+        let whole = draw(&gpu, &scene, &opts);
+        opts.clip = Some(half);
+        let cut = draw(&gpu, &scene, &opts);
+
+        // Cut surface: the fill at `cut_shade` brightness (in linear light), unlit.
+        let cut_rgb = Rgb(fill.0.map(|c| {
+            (linear_to_srgb(srgb_to_linear(c as f32 / 255.0) * 0.5) * 255.0).round() as u8
+        }));
+        assert_eq!(count(&whole, cut_rgb, 2), 0, "no cut colour without a box");
+        let n_cut = count(&cut, cut_rgb, 2);
+        assert!(n_cut > 300, "only {n_cut} cut-surface pixels");
+        // Half of every box is gone: fewer object pixels, more background.
+        let bg = GraphicStyle::default().background;
+        assert!(
+            count(&cut, bg, 0) > count(&whole, bg, 0),
+            "nothing was removed"
+        );
+
+        // A box that contains everything changes nothing.
+        opts.clip = Some(all);
+        let same = draw(&gpu, &scene, &opts);
+        let differ = whole.iter().zip(&same).filter(|(a, b)| a != b).count();
+        assert!(
+            differ < 50,
+            "{differ} pixels differ with an all-enclosing box"
+        );
+    }
+
+    #[test]
+    fn picking_ignores_what_the_clip_box_removes() {
+        let scene = family_boxes();
+        // Straight down through the first box (x 0..1000, y 0..1000, z 0..1000, scene coords).
+        // The exact box of element 0 (`around` adds a margin).
+        let ps = scene.elements[0]
+            .mesh
+            .positions
+            .iter()
+            .map(|p| Vec3::from(*p));
+        let b0 = ClipBox {
+            min: ps.clone().fold(Vec3::INFINITY, Vec3::min),
+            max: ps.fold(Vec3::NEG_INFINITY, Vec3::max),
+        };
+        let mid = (b0.min + b0.max) / 2.0;
+        let o = Vec3::new(mid.x, mid.y, b0.max.z + 5000.0);
+        let (i, d) = pick(&scene, |_| true, o, Vec3::NEG_Z, None).unwrap();
+        assert_eq!(i, 0);
+        assert!((d - 5000.0).abs() < 1.0, "hits the top face first: {d}");
+        // With the top half removed, the first hit is the bottom face, seen from inside.
+        let lower = ClipBox {
+            max: Vec3::new(b0.max.x, b0.max.y, b0.min.z + 500.0),
+            ..b0
+        };
+        let (_, d2) = pick(&scene, |_| true, o, Vec3::NEG_Z, Some(&lower)).unwrap();
+        assert!((d2 - 6000.0).abs() < 1.0, "hits the bottom face: {d2}");
+        // Box beside the element: nothing to hit.
+        let beside = ClipBox {
+            min: b0.min + Vec3::new(0.0, 5000.0, 0.0),
+            max: b0.max + Vec3::new(0.0, 5000.0, 0.0),
+        };
+        assert!(pick(&scene, |_| true, o, Vec3::NEG_Z, Some(&beside)).is_none());
     }
 }
