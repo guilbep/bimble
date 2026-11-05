@@ -17,6 +17,7 @@ pub fn edit(ui: &mut egui::Ui, s: &mut GraphicStyle) -> bool {
             changed |= colour_row(ui, "Background", &mut s.background);
             changed |= colour_row(ui, "Edges", &mut s.edges);
             changed |= colour_row(ui, "Selection", &mut s.selection);
+            changed |= colour_row(ui, "Hover", &mut s.hover);
             changed |= colour_row(ui, "Dimensions", &mut s.dimensions);
             ui.label("Hatch strength");
             changed |= ui

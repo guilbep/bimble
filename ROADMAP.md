@@ -66,7 +66,7 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
    block (cartouche), classes to show, hidden-line removal
 5. ✅ Linked models: "Link model…" / `view --link`, solid or edges, aligned by world coordinates; "Show
    differences" colours what only one model has (matched by geometry, not id; ADR 0016)
-6. ☐ Hover highlight: the element under the cursor gets its edges in another colour before you click
+6. ✅ Hover highlight: the visible edges of the element under the cursor in the `hover` colour (blue)
 7. Then the rest below (I2 editing and history, I3 import for editing, I4 formwork plans, rebar)
 
 **I0 — Core** ✅ (PR #1)

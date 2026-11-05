@@ -143,6 +143,8 @@ pub struct GraphicStyle {
     pub edges: Rgb,
     /// Fill of selected elements (drawn without hatch).
     pub selection: Rgb,
+    /// Edges of the element under the cursor (what a click would select).
+    pub hover: Rgb,
     /// Dimension lines and their text (measuring).
     pub dimensions: Rgb,
     /// A linked (reference) model: its faces and its edges.
@@ -245,6 +247,7 @@ impl Default for GraphicStyle {
             background: rgb(247, 247, 245),
             edges: rgb(26, 26, 28),
             selection: rgb(232, 126, 4),
+            hover: rgb(30, 144, 255),
             dimensions: rgb(20, 110, 220),
             reference: rgb(190, 214, 238),
             reference_edges: rgb(52, 110, 180),

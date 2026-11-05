@@ -183,6 +183,12 @@ struct Viewer {
     dimensions: Vec<measure::Dimension>,
     hover_snap: Option<measure::Snap>,
 
+    /// Element under the cursor, its edges uploaded for the highlight, and the pointer position
+    /// it was picked at (picking again only when the pointer moves).
+    hovered: Option<usize>,
+    hover_gpu: Option<GpuScene>,
+    hover_at: Option<egui::Pos2>,
+
     /// Linked (reference) model, one being loaded, and whether differences are coloured.
     linked: Option<Linked>,
     linking: Option<Loading>,
@@ -232,6 +238,9 @@ impl Viewer {
             measure_first: None,
             dimensions: Vec::new(),
             hover_snap: None,
+            hovered: None,
+            hover_gpu: None,
+            hover_at: None,
             linked: None,
             linking: None,
             compare_on: false,
@@ -346,6 +355,7 @@ impl Viewer {
                 self.selected = None;
                 self.needs_upload = true;
                 self.fit_pending = true;
+                self.set_hovered(None);
                 // A linked model and a box from the previous model mean nothing for this one.
                 self.linked = None;
                 self.compare_on = false;
@@ -357,6 +367,24 @@ impl Viewer {
             }
             Err(e) => self.error = Some(format!("{}: {e}", path.display())),
         }
+    }
+
+    /// Change the element under the cursor; uploads its edges for the highlight.
+    fn set_hovered(&mut self, h: Option<usize>) {
+        if h == self.hovered {
+            return;
+        }
+        self.hovered = h;
+        self.hover_gpu = match (h, &self.loaded) {
+            (Some(i), Some(l)) => Some(self.renderer.upload_with(
+                &self.device,
+                &l.scene,
+                |j, _| if j == i { Style::Normal } else { Style::Hidden },
+                self.section_on,
+            )),
+            _ => None,
+        };
+        self.needs_render = true;
     }
 
     /// The active clipping box, if the section box is on.
@@ -419,6 +447,10 @@ impl Viewer {
         if let (Some(k), Some(g)) = (self.linked.as_mut(), linked_gpu) {
             k.gpu = Some(g);
         }
+        // Re-picked at the next pointer move (visibility or the section box may have changed).
+        self.hovered = None;
+        self.hover_gpu = None;
+        self.hover_at = None;
         let here = self.linked.as_ref().map(|k| &k.matched_here);
         let style = |i: usize, _: &bimble_geom::SceneElement| {
             if !self.visible(i) {
@@ -548,7 +580,11 @@ impl Viewer {
                 offset: k.offset,
                 faces: k.mode == LinkMode::Solid,
                 edge_color: Some(self.opts.style.reference_edges),
+                linked: true,
             });
+        }
+        if let Some(h) = &self.hover_gpu {
+            layers.push(bimble_render::Layer::highlight(h, self.opts.style.hover));
         }
         let bounds = self.loaded.as_ref().map_or(gs.bounds, |l| l.bounds);
         self.renderer.render_layers(
@@ -593,6 +629,7 @@ impl Viewer {
             }
         }
         if self.measure_on {
+            self.set_hovered(None);
             // Snap under the cursor, for the marker and the next click.
             self.hover_snap = resp
                 .hover_pos()
@@ -607,6 +644,27 @@ impl Viewer {
                 }
             }
             return;
+        }
+        // Hover highlight: pick again only when the pointer moved, never while dragging.
+        let pointer = resp.hover_pos();
+        if resp.dragged() || pointer.is_none() {
+            if pointer.is_none() {
+                self.hover_at = None;
+                self.set_hovered(None);
+            }
+        } else if pointer != self.hover_at
+            && let (Some(pos), Some(l)) = (pointer, &self.loaded)
+        {
+            self.hover_at = pointer;
+            let ndc = [
+                (pos.x - rect.min.x) / rect.width() * 2.0 - 1.0,
+                1.0 - (pos.y - rect.min.y) / rect.height() * 2.0,
+            ];
+            let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
+            let clip = self.clip();
+            let h = bimble_render::pick(&l.scene, |i| self.visible(i), o, d, clip.as_ref())
+                .map(|(i, _)| i);
+            self.set_hovered(h);
         }
         if resp.double_clicked() {
             self.fit(aspect);

@@ -268,6 +268,9 @@ pub struct Layer<'a> {
     pub faces: bool,
     /// Edge colour; None: the style's.
     pub edge_color: Option<Rgb>,
+    /// A linked model: pushed back a hair in depth and drawn before the others, so the model
+    /// wins where both have the same face or edge.
+    pub linked: bool,
 }
 
 impl<'a> Layer<'a> {
@@ -277,6 +280,18 @@ impl<'a> Layer<'a> {
             offset: Vec3::ZERO,
             faces: true,
             edge_color: None,
+            linked: false,
+        }
+    }
+
+    /// Highlight: the edges of `scene` in `color`, drawn last (e.g. the element under the cursor).
+    pub fn highlight(scene: &'a GpuScene, color: Rgb) -> Layer<'a> {
+        Layer {
+            scene,
+            offset: Vec3::ZERO,
+            faces: false,
+            edge_color: Some(color),
+            linked: false,
         }
     }
 }
@@ -723,7 +738,7 @@ impl Renderer {
         let light = (camera.eye() - camera.target).normalize() + Vec3::new(-0.3, -0.2, 0.9);
         let st = &opts.style;
         let layers = &layers[..layers.len().min(MAX_LAYERS)];
-        for (i, (layer, (buf, _))) in layers.iter().zip(&self.layer_uniforms).enumerate() {
+        for (layer, (buf, _)) in layers.iter().zip(&self.layer_uniforms) {
             // The layer's coordinates + offset = the model's scene coordinates.
             let off = layer.offset;
             let edge = layer.edge_color.unwrap_or(st.edges).unit();
@@ -765,7 +780,12 @@ impl Renderer {
                 },
                 // The model draws at its depth; linked models a hair behind, so where both
                 // have the same face the model wins instead of a patchwork of both.
-                layer: [if i == 0 { 0.0 } else { LINKED_DEPTH_PUSH }, 0.0, 0.0, 0.0],
+                layer: [
+                    if layer.linked { LINKED_DEPTH_PUSH } else { 0.0 },
+                    0.0,
+                    0.0,
+                    0.0,
+                ],
                 table: style_gpu::gpu_table(st),
             };
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&u));
@@ -809,9 +829,14 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            // Linked models first, the model last: its edges are drawn over theirs where they
-            // coincide (edges don't write depth).
-            for (layer, (_, bind_group)) in layers.iter().zip(&self.layer_uniforms).rev() {
+            // Linked models first, then the others in order: the model's edges are drawn over
+            // theirs where they coincide (edges don't write depth), highlights last.
+            let paired: Vec<_> = layers.iter().zip(&self.layer_uniforms).collect();
+            let order = paired
+                .iter()
+                .filter(|(l, _)| l.linked)
+                .chain(paired.iter().filter(|(l, _)| !l.linked));
+            for (layer, (_, bind_group)) in order {
                 let scene = layer.scene;
                 pass.set_bind_group(0, bind_group, &[]);
                 if layer.faces && scene.face_vertices > 0 {
@@ -1522,6 +1547,7 @@ mod tests {
             offset,
             faces: true,
             edge_color: Some(style.reference_edges),
+            linked: true,
         };
         let px = draw(&[Layer::main(&g_main), solid]);
         let concrete = style.families.concrete.color;
