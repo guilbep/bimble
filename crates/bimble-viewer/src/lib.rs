@@ -264,16 +264,22 @@ impl Viewer {
         let rect = resp.rect;
         let aspect = rect.width() / rect.height().max(1.0);
         if resp.dragged_by(PointerButton::Primary) && !ui.input(|i| i.modifiers.shift) {
+            // Only redraw when the pointer actually moved: holding the button still must not
+            // loop (a redraw request here would schedule the next frame, forever).
             let d = resp.drag_delta();
-            self.camera.orbit(d.x * 0.008, d.y * 0.008);
-            self.needs_render = true;
+            if d != egui::Vec2::ZERO {
+                self.camera.orbit(d.x * 0.008, d.y * 0.008);
+                self.needs_render = true;
+            }
         } else if resp.dragged_by(PointerButton::Secondary)
             || resp.dragged_by(PointerButton::Middle)
             || (resp.dragged_by(PointerButton::Primary) && ui.input(|i| i.modifiers.shift))
         {
             let d = resp.drag_delta() / rect.height().max(1.0);
-            self.camera.pan(d.x, d.y);
-            self.needs_render = true;
+            if d != egui::Vec2::ZERO {
+                self.camera.pan(d.x, d.y);
+                self.needs_render = true;
+            }
         }
         if resp.hovered() {
             let (scroll, zoom) = ui.input(|i| (i.smooth_scroll_delta().y, i.zoom_delta()));
