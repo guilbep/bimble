@@ -1,0 +1,103 @@
+name: release
+
+# Tags v* publish a GitHub Release. Pull requests and manual runs build the same archives as
+# workflow artifacts, so a build can be tried before anything is published.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest supported Ubuntu runner: a lower glibc so the binary runs on more distros.
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, ext: tar.gz, run: true }
+          - { os: macos-14, target: aarch64-apple-darwin, ext: tar.gz, run: true }
+          - { os: macos-14, target: x86_64-apple-darwin, ext: tar.gz, run: false }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: zip, run: true }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Version
+        id: v
+        run: |
+          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF#refs/tags/v}"
+            if [[ "$tag" != "$crate" ]]; then
+              echo "Tag v$tag does not match Cargo.toml version $crate" >&2
+              exit 1
+            fi
+            echo "name=$crate" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=$crate-dev.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p bimble-cli
+      - name: Smoke test
+        if: matrix.run
+        run: |
+          bin=target/${{ matrix.target }}/release/bimble
+          $bin --version
+          $bin demo smoke.bimble
+          $bin info smoke.bimble
+          $bin export-ifc smoke.bimble smoke.ifc
+          $bin info smoke.ifc
+      - name: Package
+        id: pkg
+        run: |
+          name="bimble-${{ steps.v.outputs.name }}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          exe=bimble; [[ "${{ matrix.target }}" == *windows* ]] && exe=bimble.exe
+          cp "target/${{ matrix.target }}/release/$exe" "dist/$name/"
+          cp README.md LICENSE "dist/$name/"
+          cd dist
+          if [[ "${{ matrix.ext }}" == zip ]]; then
+            7z a -tzip "$name.zip" "$name" > /dev/null
+          else
+            tar czf "$name.tar.gz" "$name"
+          fi
+          echo "file=dist/$name.${{ matrix.ext }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bimble-${{ matrix.target }}
+          path: ${{ steps.pkg.outputs.file }}
+          retention-days: 14
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          sed "s/{{VERSION}}/$tag/g" .github/release-notes.md > notes.md
+          gh release create "$tag" dist/* --title "Bimble $tag" --notes-file notes.md --prerelease

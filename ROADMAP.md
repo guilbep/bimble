@@ -31,7 +31,7 @@ _5 Nov 2026. Supersedes v0 (Python / IFC-file-as-native). Sources: the Bimble PR
 | Geometry (POC) | Own mesher: profile extrusion + `earcutr` | Covers columns, beams, walls, slabs, footings. |
 | Geometry (later) | Booleans and exact B-Rep: evaluate `manifold`, OCCT (C++ bindings), `truck` | ADR before Phase 2 (openings, rebar) |
 | IFC export | Own IFC4 STEP writer | Validated in tests against IfcOpenShell |
-| IFC import | **IfcOpenShell (C++) called from Rust** is the main option: it parses and validates untrusted IFC files for us. Alternative: `web-ifc` | ADR at I3 |
+| IFC import | **Display:** own Rust reader (ADR 0002), checked element by element against IfcOpenShell. **Editing import:** IfcOpenShell from Rust or extend our reader | ✅ display (v0.1) · editing ADR at I3 |
 | Native format | `.bimble`: canonical JSON for the POC → content-addressed object store (git-like) | Format spec in `docs/format/` |
 | Geometry cache | **`.b3d`**: chunked binary meshes (per storey / spatial chunk, instanced), so the viewer opens without re-meshing. A derived cache, never the source of truth | Built when the viewer needs it (I1–I2). Spec in `docs/format/` before any code |
 | Test oracle | IfcOpenShell (Python) **in tests only** | Proves our IFC opens in a reference tool |
@@ -53,22 +53,30 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 
 ## 4. Iterations
 
-**I0 — Core (now)**
+**I0 — Core** ✅ (PR #1)
 - Crates: `bimble-core` (IFC-typed model, GlobalIds, generators, materials, commands + undo, hash, diff),
   `bimble-geom` (extrusion meshes), `bimble-ifc` (IFC4 export), `bimble-cli`
 - Demo: the 2-storey 3×2-bay concrete frame → `.bimble` → IFC that IfcOpenShell opens → diff two versions
 
-**I1 — Viewer (fast 3D)**
-- `bimble-viewer`: wgpu renderer, flat shading + edges, hatch pattern per material, 12-colour palette,
-  instanced meshes, orbit camera, picking, storey filter
-- Benchmark fixture: 20k elements; frame time measured on a real old laptop
+**I1 — Viewer (fast 3D)** — mostly done (v0.1)
+- ✅ `bimble-render`: wgpu renderer, flat shading + edges, hatch pattern per material, palette, orbit camera
+  (perspective/ortho), picking, headless PNG (`bimble render`)
+- ✅ `bimble-viewer`: opens IFC and `.bimble`, filters by material / IFC class / storey, properties, redraws
+  only on change
+- ✅ IFC reader for display, pulled forward from I3 (ADR 0002)
+- ✅ Release workflow: macOS (arm64, x86_64), Windows, Linux binaries on tags; PR builds as artifacts
+- ☐ Instancing for repeated geometry (`IfcMappedItem` is currently flattened)
+- ☐ Benchmark on a real old laptop: 20k-element fixture, frame time, memory. **Needs a person and a machine.**
+- ☐ Measure GPU frame time (the status bar shows CPU submit time only)
 
 **I2 — Edit and history** (after reading CADCraft's command and undo design)
 - Command palette in the viewer, undo/redo, property panel with IFC names
 - Object store: commit, log, branch, checkout, diff between commits; CLI first (`bimble commit / log / diff`)
 
-**I3 — IFC import**
-- IfcOpenShell from Rust; an architect's IFC as a background reference; round-trip tests with Bonsai, FreeCAD, Revit
+**I3 — IFC import for editing**
+- Display reading is done (I1). Still to do: relationships and property sets into the editable model, an
+  architect's IFC as a background reference, opening cuts (needs the geometry-kernel decision), round-trip
+  tests with Bonsai, FreeCAD, Revit
 - First real fixture: `LA24070_LMP_STR_32_R25` (Revit 2025 structural export, IFC4, metres, 881 elements).
   Measured with IfcOpenShell 0.9 (5 Nov 2026):
   - Geometry is light: 809 products tessellate to ~21k triangles in 3.4 s on 2 cores. The viewer's challenge
