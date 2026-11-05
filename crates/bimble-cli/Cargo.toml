@@ -1,0 +1,17 @@
+[package]
+name = "bimble-cli"
+description = "Bimble command-line tool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bimble"
+path = "src/main.rs"
+
+[dependencies]
+bimble-core.workspace = true
+bimble-geom.workspace = true
+bimble-ifc.workspace = true
+clap.workspace = true
+serde_json.workspace = true

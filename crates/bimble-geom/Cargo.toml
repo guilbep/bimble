@@ -1,0 +1,10 @@
+[package]
+name = "bimble-geom"
+description = "Mesh generation for Bimble elements"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bimble-core.workspace = true
+earcutr.workspace = true
