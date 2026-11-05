@@ -169,4 +169,88 @@ mod tests {
             Err(file::FileError::Invalid(_))
         ));
     }
+
+    /// Review 2026-11-05: serde_json without `float_roundtrip` read some values back off by one
+    /// ulp, which changed the model hash and produced false diffs.
+    #[test]
+    fn non_round_floats_roundtrip_exactly() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        let id = first(&m, IfcClass::IfcColumn);
+        let mut p = m.elements[&id].placement.clone();
+        p.origin = [57414.518664216484, -1234.5678901234567, 0.1 + 0.2];
+        Command::SetPlacement { id, placement: p }
+            .apply(&mut m)
+            .unwrap();
+        // A spread of awkward values, not just the one found in review.
+        let mut x = 0.123456789012345_f64;
+        for (i, e) in m.elements.values_mut().enumerate() {
+            x = (x * 7919.0 + i as f64 * 0.3141592653589793).rem_euclid(100_000.0);
+            e.placement.origin[0] = x;
+        }
+        let back = file::from_str(&file::to_string(&m)).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(version::model_hash(&back), version::model_hash(&m));
+        assert!(version::diff(&m, &back).is_empty());
+    }
+
+    /// Review 2026-11-05: -0.0 == 0.0 but serialized differently, so equal models hashed apart.
+    #[test]
+    fn negative_zero_does_not_change_the_hash() {
+        let a = concrete_frame(&FrameSpec::default());
+        let mut b = a.clone();
+        let id = first(&b, IfcClass::IfcColumn);
+        let mut p = b.elements[&id].placement.clone();
+        p.origin[2] = -0.0;
+        Command::SetPlacement { id, placement: p }
+            .apply(&mut b)
+            .unwrap();
+        assert_eq!(a, b);
+        assert_eq!(version::model_hash(&a), version::model_hash(&b));
+    }
+
+    /// Review 2026-11-05: skewed, scaled or NaN axes were accepted and drew wrongly.
+    #[test]
+    fn placement_axes_are_validated() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        let id = first(&m, IfcClass::IfcColumn);
+        let base = m.elements[&id].placement.clone();
+        let bad = [
+            Placement {
+                z_axis: [0.0, 0.0, 2.0],
+                ..base.clone()
+            },
+            Placement {
+                x_axis: [0.0, 0.0, 1.0],
+                ..base.clone()
+            },
+            Placement {
+                x_axis: [f64::NAN, 0.0, 0.0],
+                ..base.clone()
+            },
+            Placement {
+                z_axis: [0.0, 0.0, 0.0],
+                ..base.clone()
+            },
+        ];
+        for p in bad {
+            let r = Command::SetPlacement {
+                id,
+                placement: p.clone(),
+            }
+            .apply(&mut m);
+            assert!(matches!(r, Err(CommandError::Invalid(_))), "accepted {p:?}");
+            let mut file_model = m.clone();
+            file_model.elements.get_mut(&id).unwrap().placement = p;
+            assert!(file::from_str(&file::to_string(&file_model)).is_err());
+        }
+        // A rotated but valid frame is fine.
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let ok = Placement {
+            x_axis: [s, s, 0.0],
+            ..base
+        };
+        Command::SetPlacement { id, placement: ok }
+            .apply(&mut m)
+            .unwrap();
+    }
 }

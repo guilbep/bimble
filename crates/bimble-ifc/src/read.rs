@@ -49,7 +49,30 @@ pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<Scene, ReadError> 
     read_str(&String::from_utf8_lossy(&bytes))
 }
 
+/// Caps that keep a malicious or broken file from exhausting memory or time. Mapped items can
+/// nest (a map inside a map...), so a tiny file can otherwise expand exponentially.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    /// Stop adding geometry after this many triangles (whole file).
+    pub max_triangles: usize,
+    /// Stop after visiting this many representation items (whole file).
+    pub max_item_visits: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            max_triangles: 10_000_000,
+            max_item_visits: 5_000_000,
+        }
+    }
+}
+
 pub fn read_str(text: &str) -> Result<Scene, ReadError> {
+    read_str_with_limits(text, Limits::default())
+}
+
+pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadError> {
     let (file, skipped) = step::parse(text).map_err(ReadError::Parse)?;
     if !file.schemas.iter().any(|s| s.starts_with("IFC")) {
         return Err(ReadError::NotIfc(file.schemas.join(",")));
@@ -59,6 +82,12 @@ pub fn read_str(text: &str) -> Result<Scene, ReadError> {
         placements: HashMap::new(),
         warnings: BTreeMap::new(),
         arc_tol: 0.5,
+        item_visits_left: limits.max_item_visits,
+        map_stack: Vec::new(),
+    };
+    let mut budget = Budget {
+        triangles_left: limits.max_triangles,
+        exhausted: false,
     };
     if skipped > 0 {
         r.warn(format!("{skipped} malformed entity instance(s) skipped"));
@@ -85,7 +114,11 @@ pub fn read_str(text: &str) -> Result<Scene, ReadError> {
         }
         let placement = r.object_placement(e.arg(5).as_ref().unwrap(), 0);
         let mut mb = MeshBuilder::default();
-        let mut emit = Emit { mb: &mut mb, scale };
+        let mut emit = Emit {
+            mb: &mut mb,
+            scale,
+            budget: &mut budget,
+        };
         for rep in shape.arg(2).as_list().unwrap_or(&[]) {
             let Some(rep) = file.deref(rep) else { continue };
             if !is_body(rep) {
@@ -116,6 +149,13 @@ pub fn read_str(text: &str) -> Result<Scene, ReadError> {
             },
             mb,
         );
+    }
+    if budget.exhausted {
+        r.warn(format!(
+            "model too large or nested too deeply: stopped after {} triangles / {} items; the rest is not shown",
+            limits.max_triangles - budget.triangles_left,
+            limits.max_item_visits - r.item_visits_left
+        ));
     }
     sb.warnings = r
         .warnings
@@ -275,21 +315,48 @@ fn normalize(v: [f64; 3]) -> Option<[f64; 3]> {
     (l > 1e-12 && l.is_finite()).then(|| v.map(|c| c / l))
 }
 
+struct Budget {
+    triangles_left: usize,
+    exhausted: bool,
+}
+
 struct Emit<'a> {
     mb: &'a mut MeshBuilder,
     scale: f64,
+    budget: &'a mut Budget,
 }
 
 impl Emit<'_> {
+    /// False once the triangle budget is used up; geometry is then dropped.
+    fn has_budget(&mut self) -> bool {
+        if self.budget.triangles_left == 0 {
+            self.budget.exhausted = true;
+        }
+        !self.budget.exhausted
+    }
+    fn charge(&mut self, before: usize) {
+        let used = self.mb.tris.len().saturating_sub(before);
+        self.budget.triangles_left = self.budget.triangles_left.saturating_sub(used);
+    }
     fn polygon(&mut self, outer: &[[f64; 3]], holes: &[Vec<[f64; 3]>]) {
+        if !self.has_budget() {
+            return;
+        }
+        let before = self.mb.tris.len();
         let s = self.scale;
         let sc = |l: &[[f64; 3]]| l.iter().map(|p| p.map(|c| c * s)).collect::<Vec<_>>();
         let holes: Vec<_> = holes.iter().map(|h| sc(h)).collect();
         self.mb.add_polygon(&sc(outer), &holes);
+        self.charge(before);
     }
     fn triangle(&mut self, t: [[f64; 3]; 3]) {
+        if !self.has_budget() {
+            return;
+        }
+        let before = self.mb.tris.len();
         let s = self.scale;
         self.mb.add_triangle(t.map(|p| p.map(|c| c * s)));
+        self.charge(before);
     }
 }
 
@@ -299,6 +366,9 @@ struct Reader<'a> {
     warnings: BTreeMap<String, usize>,
     /// Arc tessellation tolerance in file units.
     arc_tol: f64,
+    item_visits_left: usize,
+    /// Representation maps being expanded, to stop a map that contains itself.
+    map_stack: Vec<u64>,
 }
 
 impl<'a> Reader<'a> {
@@ -528,8 +598,8 @@ impl<'a> Reader<'a> {
         let x = x_given
             .and_then(|x| normalize(sub(x, z.map(|c| c * dot(x, z)))))
             .or_else(|| {
-                // Default x: world X projected, or world Y if Z is along X.
-                let cand = if z[0].abs() < 0.9 {
+                // Default x: world X projected onto the plane, unless Z is (almost exactly) along X.
+                let cand = if 1.0 - z[0].abs() > 1e-9 {
                     [1., 0., 0.]
                 } else {
                     [0., 1., 0.]
@@ -597,7 +667,16 @@ impl<'a> Reader<'a> {
                 let y = sub(sub(y, z.map(|c| c * dot(y, z))), x.map(|c| c * dot(y, x)));
                 normalize(y).unwrap_or(cross(z, x))
             }
-            None => cross(z, x),
+            // IfcSecondProjAxis: project world Y. Unlike cross(z, x) this can give a mirror,
+            // which is what the spec (and IfcOpenShell) do.
+            None => {
+                let v = [0., 1., 0.];
+                normalize(sub(
+                    sub(v, z.map(|c| c * dot(v, z))),
+                    x.map(|c| c * dot(v, x)),
+                ))
+                .unwrap_or(cross(z, x))
+            }
         };
         Affine {
             x: x.map(|c| c * s),
@@ -614,6 +693,11 @@ impl<'a> Reader<'a> {
             self.warn("representation nesting too deep");
             return;
         }
+        if out.budget.exhausted || self.item_visits_left == 0 {
+            out.budget.exhausted = true;
+            return;
+        }
+        self.item_visits_left -= 1;
         let Some(e) = self.f.get(id) else { return };
         match e.name.as_str() {
             "IFCEXTRUDEDAREASOLID" => self.extrusion(e, tf, out),
@@ -634,20 +718,29 @@ impl<'a> Reader<'a> {
                 }
             }
             "IFCMAPPEDITEM" => {
-                let Some(map) = self.get(e.arg(0)) else {
+                let Some(map_id) = e.arg(0).as_ref() else {
                     return;
                 };
+                let Some(map) = self.f.get(map_id) else {
+                    return;
+                };
+                if self.map_stack.contains(&map_id) {
+                    self.warn("representation map contains itself (cycle skipped)");
+                    return;
+                }
                 let origin = self.axis_placement(map.arg(0));
                 let target = self.transform_operator(e.arg(1));
                 let t = tf.then(&target).then(&origin);
                 let Some(rep) = self.get(map.arg(1)) else {
                     return;
                 };
+                self.map_stack.push(map_id);
                 for it in rep.arg(3).as_list().unwrap_or(&[]) {
                     if let Some(i) = it.as_ref() {
                         self.item(i, &t, out, depth + 1);
                     }
                 }
+                self.map_stack.pop();
             }
             "IFCBOOLEANCLIPPINGRESULT" | "IFCBOOLEANRESULT" => {
                 self.warn("boolean result drawn without its cut (first operand only)");

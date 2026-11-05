@@ -1,4 +1,5 @@
 /target
 *.ifc
 *.bimble
-!fixtures/**
+!**/fixtures/*.ifc
+!**/fixtures/*.bimble

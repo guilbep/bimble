@@ -190,6 +190,26 @@ pub struct Placement {
 }
 
 impl Placement {
+    /// Placement axes must be finite, unit length and perpendicular. Files are untrusted input:
+    /// a skewed or scaled frame would draw differently here than in other IFC tools.
+    pub fn validate(&self) -> Result<(), String> {
+        let all = self.origin.iter().chain(&self.z_axis).chain(&self.x_axis);
+        if all.into_iter().any(|v| !v.is_finite()) {
+            return Err("non-finite placement".into());
+        }
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        const TOL: f64 = 1e-6;
+        if (dot(self.z_axis, self.z_axis) - 1.0).abs() > TOL
+            || (dot(self.x_axis, self.x_axis) - 1.0).abs() > TOL
+        {
+            return Err("placement axes must be unit vectors".into());
+        }
+        if dot(self.z_axis, self.x_axis).abs() > TOL {
+            return Err("placement x_axis must be perpendicular to z_axis".into());
+        }
+        Ok(())
+    }
+
     pub fn at(x: f64, y: f64, z: f64) -> Self {
         Placement {
             origin: [x, y, z],
@@ -416,15 +436,7 @@ impl Model {
             if !self.materials.contains_key(&e.material) {
                 return Err(ctx(format!("unknown material {}", e.material)));
             }
-            let p = &e.placement;
-            if p.origin
-                .iter()
-                .chain(&p.z_axis)
-                .chain(&p.x_axis)
-                .any(|v| !v.is_finite())
-            {
-                return Err(ctx("non-finite placement".into()));
-            }
+            e.placement.validate().map_err(ctx)?;
             e.generator.validate().map_err(ctx)?;
         }
         Ok(())
