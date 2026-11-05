@@ -1,6 +1,8 @@
 //! `bimble` command-line tool. Same commands the viewer and agents will use.
 
 use bimble_core::{Command, Generator, GlobalId, History, demo, file, version};
+mod bench;
+
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -63,6 +65,26 @@ enum Cmd {
     },
     /// Export to IFC4
     ExportIfc { file: PathBuf, out: PathBuf },
+    /// Measure rendering speed on this machine (generated models of 1k–50k elements, plus files)
+    Bench {
+        /// Extra .ifc / .bimble files to benchmark
+        files: Vec<PathBuf>,
+        #[arg(long, default_value_t = 120)]
+        frames: usize,
+        #[arg(long, default_value_t = 1920)]
+        width: u32,
+        #[arg(long, default_value_t = 1080)]
+        height: u32,
+        /// MSAA samples (1 or 4; the viewer uses 4)
+        #[arg(long, default_value_t = 4)]
+        samples: u32,
+        /// Only the smallest generated model
+        #[arg(long)]
+        quick: bool,
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
     /// Render a .ifc or .bimble file to a PNG, without a window
     Render {
         file: PathBuf,
@@ -285,6 +307,28 @@ fn run(cli: Cli) -> Result<(), String> {
                 gpu.adapter_info.backend,
                 out.display()
             );
+        }
+        Cmd::Bench {
+            files,
+            frames,
+            width,
+            height,
+            samples,
+            quick,
+            json,
+        } => {
+            if !matches!(samples, 1 | 4) {
+                return Err("--samples must be 1 or 4".into());
+            }
+            bench::run(bench::BenchArgs {
+                files,
+                frames,
+                width,
+                height,
+                samples,
+                quick,
+                json,
+            })?;
         }
         Cmd::ExportIfc { file: path, out } => {
             let m = file::load(&path).map_err(e)?;
