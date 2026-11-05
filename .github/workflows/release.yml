@@ -31,8 +31,8 @@ jobs:
         include:
           # Oldest supported Ubuntu runner: a lower glibc so the binary runs on more distros.
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, ext: tar.gz, run: true }
-          - { os: macos-14, target: aarch64-apple-darwin, ext: tar.gz, run: true }
-          - { os: macos-14, target: x86_64-apple-darwin, ext: tar.gz, run: false }
+          - { os: macos-15, target: aarch64-apple-darwin, ext: tar.gz, run: true }
+          - { os: macos-15, target: x86_64-apple-darwin, ext: tar.gz, run: false }
           - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: zip, run: true }
     runs-on: ${{ matrix.os }}
     defaults:
