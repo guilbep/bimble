@@ -48,7 +48,9 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 - Elements serialize **canonically** (sorted keys, fixed float formatting) → a **content hash** per element.
 - Model hash = hash of the sorted (GlobalId, element hash) pairs. Same model → same hash, on any machine.
 - **Semantic diff**: added / removed / modified elements, field by field ("IfcBeam B12: height 500 → 600").
-- Next: commits (parent, author, message, model hash), branches, merge with element-level conflicts, review UI.
+- ✅ History next to the model (`<model>-history/`): commits, log, branches, switch, three-way merge by
+  GlobalId then field by field (ADR 0017); CLI `bimble history …` and the viewer's History window.
+- Next: a shared remote (push/pull), a review UI, pack files for very large models.
 - Plain Git merges of text files are not enough for BIM. Merges are done on elements, not lines.
 
 ## 4. Iterations
@@ -69,6 +71,15 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 6. ✅ Hover highlight: the visible edges of the element under the cursor in the `hover` colour (blue)
 7. Then the rest below (I2 editing and history, I3 import for editing, I4 formwork plans, rebar)
 
+**6 Nov 2026** (Pierre: "a preview of plan?", I2 "own format, I trust you", I4 "you can start"):
+- ✅ Plan preview in the viewer's Plan window (rendered sheet, zoom) and `bimble plan … .png --dpi`
+- ✅ I4 formwork-style plans (ADR 0018): plan templates (title block, legend, words; French example in
+  `docs/templates/`), seen-below-the-cut fills painted low to high, IfcGrid axes with bubbles (or axes
+  through the columns), axis-to-axis and overall dimension chains in cm, slab levels, opening crosses,
+  rebar and terrain hidden by default
+- ✅ I2 history store and CLI (ADR 0017); editing in the viewer (ADR 0019): properties, move, copy,
+  delete, place column/beam/wall/slab by clicking, undo/redo, save, commit, branches, merge
+
 **I0 — Core** ✅ (PR #1)
 - Crates: `bimble-core` (IFC-typed model, GlobalIds, generators, materials, commands + undo, hash, diff),
   `bimble-geom` (extrusion meshes), `bimble-ifc` (IFC4 export), `bimble-cli`
@@ -88,9 +99,11 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 - ☐ Benchmark on a real old laptop: 20k-element fixture, frame time, memory. **Needs a person and a machine.**
 - ☐ Measure GPU frame time (the status bar shows CPU submit time only)
 
-**I2 — Edit and history** (after reading CADCraft's command and undo design)
-- Command palette in the viewer, undo/redo, property panel with IFC names
-- Object store: commit, log, branch, checkout, diff between commits; CLI first (`bimble commit / log / diff`)
+**I2 — Edit and history** — first version done (6 Nov)
+- ✅ Undo/redo, property panel (name, sizes, origin), move/copy/delete, placing by clicks (ADR 0019)
+- ✅ Object store: commit, log, branch, switch, diff between commits, merge (ADR 0017)
+- ☐ Command palette; snapping placement to axes and elements; rotation; multi-selection
+- ☐ Measurements saved in the model (IfcAnnotation)
 
 **I3 — IFC import for editing**
 - Display reading is done (I1). Still to do: relationships and property sets into the editable model, an
@@ -110,8 +123,11 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
   - Materials: GL24h glulam (420 elements) alongside C30/37 concrete. Timber is in real projects from day 1.
   - Units are metres: import converts to mm.
 
-**I4 — First formwork plan**
-- Storey section → 2D lines → SVG/PDF with dimensions; compared against a real office drawing
+**I4 — First formwork plan** — first version done (6 Nov, ADR 0018)
+- ✅ Storey section → sheet → SVG/PDF/PNG with axes, dimension chains, legend, template title block;
+  compared with the office's own plan of real file #1 (axes and spacings match)
+- ☐ Openings and reservations dimensioned, element labels (e.g. "GL24h 24x46"), section markers,
+  sloped tops (true hidden-line removal), dash-dot axis pens
 
 **Then** (from the Feuille de route): concrete formwork MVP + sub-models/locking → rebar → steel and timber →
 node editor. Merge/review UI and a sync server come along with collaboration. Ray-traced still images when useful.

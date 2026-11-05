@@ -1,6 +1,6 @@
 # ADR 0004 — Versioning: stable ids, canonical form, element hashes, semantic diff
 
-- Status: Accepted (5 Nov 2026); commits/branches/merge not built yet
+- Status: Accepted (5 Nov 2026); the store is built (ADR 0017, 6 Nov 2026)
 - Decided by: Pierre ("we need GitHub-like features but for architects, so we should anticipate that");
   the mechanism below was proposed and implemented by Claude
 - Reversal cost: medium (hash format changes invalidate stored hashes)
