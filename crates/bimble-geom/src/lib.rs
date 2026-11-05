@@ -25,13 +25,24 @@ impl Mesh {
     }
 
     /// Signed volume (divergence theorem). Positive when the triangles face outward.
+    ///
+    /// Computed relative to the mesh's first vertex. For a closed mesh the reference point doesn't
+    /// matter; for an open or flat surface it does (the result grows with area × distance). Using
+    /// a vertex of the element makes a flat sheet read ~0 instead of depending on where the scene
+    /// origin happens to be (a 2400 mm² plate 1.3 m from the origin read 1e6 mm³).
     pub fn volume(&self) -> f64 {
+        let Some(o) = self.positions.first().map(|p| p.map(f64::from)) else {
+            return 0.0;
+        };
         self.indices
             .as_chunks::<3>()
             .0
             .iter()
             .map(|t| {
-                let [a, b, c] = [0, 1, 2].map(|k| self.positions[t[k] as usize].map(f64::from));
+                let [a, b, c] = [0, 1, 2].map(|k| {
+                    let p = self.positions[t[k] as usize];
+                    [p[0] as f64 - o[0], p[1] as f64 - o[1], p[2] as f64 - o[2]]
+                });
                 a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
                     + a[2] * (b[0] * c[1] - b[1] * c[0])
             })
@@ -130,6 +141,39 @@ mod tests {
 
     fn approx(a: f64, b: f64) {
         assert!((a - b).abs() <= 1e-6 * b.abs().max(1.0), "{a} != {b}");
+    }
+
+    /// An open, flat sheet away from the scene origin reads ~0, not area × distance / 3.
+    #[test]
+    fn flat_open_mesh_away_from_origin_has_zero_volume() {
+        let (x, y, z) = (600.0f32, -450.0f32, 1200.0f32);
+        let q = [
+            [x, y, z],
+            [x + 1000.0, y, z],
+            [x + 1000.0, y + 1000.0, z],
+            [x, y + 1000.0, z],
+        ];
+        let m = Mesh {
+            positions: q.to_vec(),
+            normals: vec![[0.0, 0.0, 1.0]; 4],
+            // One side only: an open surface. Relative to the origin this would be 1e6×1200/3.
+            indices: vec![0, 1, 2, 0, 2, 3],
+            edges: vec![],
+        };
+        assert!(m.volume().abs() < 1.0, "{}", m.volume());
+        // A closed box far away keeps its exact volume.
+        let g = bimble_core::Generator::RectColumn {
+            width: 300.0,
+            depth: 400.0,
+            height: 3000.0,
+        };
+        let mut b = extrude(&g.profile(), g.depth()).unwrap();
+        for p in &mut b.positions {
+            p[0] += x;
+            p[1] += y;
+            p[2] += z;
+        }
+        approx(b.volume(), 300.0 * 400.0 * 3000.0);
     }
 
     #[test]

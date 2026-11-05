@@ -4,7 +4,8 @@ Usage:
   bimble info model.ifc --elements-json > ours.jsonl
   python3 scripts/compare_ifcopenshell.py model.ifc ours.jsonl
 
-Checks, per GlobalId: same set of elements, same IFC class, volume within 0.5 %,
+Checks, per GlobalId: same set of elements, same IFC class, volume within 0.5 % (flat or
+open elements with ~zero volume are compared against 0.1 % of their bounding-box volume),
 world bounding box within 1 mm. Openings are not subtracted on either side
 (Bimble doesn't cut openings yet), so geometry is compared like for like.
 Exit code 1 on any mismatch.
@@ -14,8 +15,29 @@ import sys
 
 import ifcopenshell
 import ifcopenshell.geom
-import ifcopenshell.util.shape as su
 import ifcopenshell.util.unit as uu
+
+def local_volume(geometry):
+    """Signed mesh volume (m3) computed relative to the mesh's own first vertex.
+
+    ifcopenshell.util.shape.get_volume sums terms in world coordinates; with real site
+    coordinates (millions of metres) those terms cancel catastrophically and the result can
+    exceed the bounding-box volume by orders of magnitude. Shifting to a local origin first
+    keeps full precision.
+    """
+    v, f = geometry.verts, geometry.faces
+    if not f:
+        return 0.0
+    ox, oy, oz = v[0], v[1], v[2]
+    total = 0.0
+    for i in range(0, len(f), 3):
+        a, b, c = (f[i + k] * 3 for k in range(3))
+        ax, ay, az = v[a] - ox, v[a + 1] - oy, v[a + 2] - oz
+        bx, by, bz = v[b] - ox, v[b + 1] - oy, v[b + 2] - oz
+        cx, cy, cz = v[c] - ox, v[c + 1] - oy, v[c + 2] - oz
+        total += ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)
+    return total / 6.0
+
 
 VOL_TOL = 5e-3
 BBOX_TOL_MM = 1.0
@@ -43,7 +65,7 @@ def main(ifc_path, ours_path):
             xs, ys, zs = v[0::3], v[1::3], v[2::3]
             theirs[el.GlobalId] = {
                 "class": el.is_a(),
-                "volume_mm3": su.get_volume(sh.geometry) * to_mm**3,
+                "volume_mm3": local_volume(sh.geometry) * to_mm**3,
                 "bbox_min_mm": [min(xs) * to_mm, min(ys) * to_mm, min(zs) * to_mm],
                 "bbox_max_mm": [max(xs) * to_mm, max(ys) * to_mm, max(zs) * to_mm],
             }
@@ -65,7 +87,11 @@ def main(ifc_path, ours_path):
         if a["class"] != b["class"]:
             problems.append(f"{g}: class {a['class']} != {b['class']}")
         vb = abs(b["volume_mm3"])
-        rel = abs(abs(a["volume_mm3"]) - vb) / max(vb, 1.0)
+        # Flat or open surfaces (plates drawn as sheets, symbols) have ~zero volume on both
+        # sides; compare those against a scale from the bounding box, not a 1 mm3 floor.
+        size = [hi - lo for lo, hi in zip(a["bbox_min_mm"], a["bbox_max_mm"])]
+        bbox_vol = max(size[0] * size[1] * size[2], 1.0)
+        rel = abs(abs(a["volume_mm3"]) - vb) / max(vb, 1e-3 * bbox_vol, 1.0)
         if rel > worst_vol[0]:
             worst_vol = (rel, g)
         if rel > VOL_TOL:
@@ -85,7 +111,12 @@ def main(ifc_path, ours_path):
     print(f"elements: Bimble {len(ours)}, IfcOpenShell {len(theirs)}, common {common}")
     print(f"worst volume difference: {worst_vol[0]:.4%} ({worst_vol[1]})")
     print(f"worst bounding-box difference: {worst_bb[0]:.3f} mm ({worst_bb[1]})")
-    neg = [g for g, e in ours.items() if e["volume_mm3"] < 0]
+    def box_vol(e):
+        s = [hi - lo for lo, hi in zip(e["bbox_min_mm"], e["bbox_max_mm"])]
+        return s[0] * s[1] * s[2]
+
+    # Inward-facing solids only; a flat sheet's sign means nothing.
+    neg = [g for g, e in ours.items() if e["volume_mm3"] < -1e-3 * box_vol(e)]
     if neg:
         problems.append(f"{len(neg)} element(s) with inward-facing meshes (negative volume), e.g. {neg[0]}")
     if problems:
