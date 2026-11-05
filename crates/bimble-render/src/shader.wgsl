@@ -1,14 +1,29 @@
 // Drawing-style shading: flat faces, a soft directional light, and screen-space hatching per
 // material family. No textures: cheap on old integrated GPUs.
 
+// One entry of the style table (see style.rs, GpuFill). Lengths are in pixels.
+struct Fill {
+    // rgb: fill (sRGB), a: 1 = hatch uses `ink.rgb`, 0 = hatch darkens the fill
+    fill: vec4<f32>,
+    // rgb: ink (sRGB), a: darkening factor when the fill is darkened
+    ink: vec4<f32>,
+    // per line family: xy = normal / spacing, z = line width (fraction), w = 1 if present
+    lines: array<vec4<f32>, 2>,
+    // xy: dashes of family 0 (1 / period, on fraction), zw: same for family 1
+    dashes: vec4<f32>,
+    // x: 1 / cell size, y: density, z: strength
+    stipple: vec4<f32>,
+};
+
 struct Uniforms {
     view_proj: mat4x4<f32>,
     // xyz: light direction (world, towards the light)
     light: vec4<f32>,
-    // rgb: edge colour, a: unused
+    // rgb: edge colour (sRGB), a: unused
     edge: vec4<f32>,
-    // x: hatch scale (pixels per hatch unit), y: hatch strength 0..1
-    hatch: vec4<f32>,
+    // x: hatch scale (pixels per hatch unit), y: hatch strength 0..1, z: ambient light 0..1
+    params: vec4<f32>,
+    table: array<Fill, 16>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -16,26 +31,28 @@ struct Uniforms {
 struct FaceIn {
     @location(0) pos: vec3<f32>,
     @location(1) normal: vec3<f32>,
-    // rgb: base colour, a: hatch pattern id / 255
+    // a: style table slot / 255 (rgb unused)
     @location(2) color: vec4<f32>,
 };
 
 struct FaceOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec3<f32>,
-    @location(1) @interpolate(flat) pattern: u32,
+    @location(1) @interpolate(flat) slot: u32,
+    @location(2) @interpolate(flat) shade: f32,
 };
 
 @vertex
 fn vs_face(v: FaceIn) -> FaceOut {
     var o: FaceOut;
     o.clip = u.view_proj * vec4<f32>(v.pos, 1.0);
+    o.slot = min(u32(round(v.color.a * 255.0)), 15u);
     let l = normalize(u.light.xyz);
     // Two-sided Lambert with a high ambient: reads like a shaded drawing.
-    let shade = 0.62 + 0.38 * abs(dot(normalize(v.normal), l));
-    // Palette colours are sRGB: shade in linear space, encode back in the fragment shader.
-    o.color = srgb_to_linear(v.color.rgb) * shade;
-    o.pattern = u32(round(v.color.a * 255.0));
+    let ambient = u.params.z;
+    o.shade = ambient + (1.0 - ambient) * abs(dot(normalize(v.normal), l));
+    // Style colours are sRGB: shade in linear space, encode back in the fragment shader.
+    o.color = srgb_to_linear(u.table[o.slot].fill.rgb) * o.shade;
     return o;
 }
 
@@ -56,30 +73,32 @@ fn stripe(t: f32, width: f32) -> f32 {
     return select(0.0, 1.0, fract(t) < width);
 }
 
+// Ink of one line family at pixel p: 0 or 1.
+fn family(p: vec2<f32>, l: vec4<f32>, dash: vec2<f32>) -> f32 {
+    if l.w == 0.0 {
+        return 0.0;
+    }
+    var ink = stripe(dot(p, l.xy), l.z);
+    if dash.x > 0.0 {
+        // Along the lines: perpendicular to the normal.
+        let along = normalize(vec2<f32>(l.y, -l.x));
+        ink = ink * stripe(dot(p, along) * dash.x, dash.y);
+    }
+    return ink;
+}
+
 @fragment
 fn fs_face(i: FaceOut) -> @location(0) vec4<f32> {
-    let p = i.clip.xy / max(u.hatch.x, 1.0);
-    var ink = 0.0;
-    switch i.pattern {
-        // 1 concrete: sparse stipple
-        case 1u: {
-            let c = floor(p * 1.6);
-            let h = fract(sin(dot(c, vec2<f32>(12.9898, 78.233))) * 43758.5453);
-            ink = select(0.0, 0.8, h > 0.93);
-        }
-        // 2 timber: 45° lines
-        case 2u: { ink = stripe((p.x + p.y) / 9.0, 0.1); }
-        // 3 steel: dense 45° lines the other way
-        case 3u: { ink = stripe((p.x - p.y) / 5.0, 0.12); }
-        // 4 masonry: 45° lines, wider spacing, both families
-        case 4u: { ink = max(stripe((p.x + p.y) / 12.0, 0.08), stripe((p.x - p.y) / 24.0, 0.05)); }
-        // 5 insulation: horizontal dashes
-        case 5u: { ink = stripe(p.y / 8.0, 0.12) * stripe(p.x / 10.0, 0.6); }
-        // 6 earth: cross-hatch
-        case 6u: { ink = max(stripe((p.x + p.y) / 10.0, 0.08), stripe((p.x - p.y) / 10.0, 0.08)); }
-        default: {}
+    let f = u.table[i.slot];
+    let p = i.clip.xy / max(u.params.x, 1.0);
+    var ink = max(family(p, f.lines[0], f.dashes.xy), family(p, f.lines[1], f.dashes.zw));
+    if f.stipple.y > 0.0 {
+        let c = floor(p * f.stipple.x);
+        let h = fract(sin(dot(c, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+        ink = max(ink, select(0.0, f.stipple.z, h > 1.0 - f.stipple.y));
     }
-    let c = mix(i.color, i.color * 0.55, ink * u.hatch.y);
+    let target_ink = select(i.color * f.ink.w, srgb_to_linear(f.ink.rgb) * i.shade, f.fill.w > 0.5);
+    let c = mix(i.color, target_ink, ink * u.params.y);
     // The target is a plain Unorm texture holding gamma-encoded colour.
     return vec4<f32>(linear_to_srgb(c), 1.0);
 }

@@ -27,7 +27,17 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Open the 3D viewer (optionally with a .ifc or .bimble file)
-    View { file: Option<PathBuf> },
+    View {
+        file: Option<PathBuf>,
+        /// Graphic style file (JSON; see `bimble style`)
+        #[arg(long)]
+        style: Option<PathBuf>,
+    },
+    /// Print the complete default graphic style, or check a style file and print it in full
+    Style {
+        /// Style file to check; without it, the default style is printed
+        file: Option<PathBuf>,
+    },
     /// Generate the demo concrete frame (2 storeys, 3×2 bays by default)
     Demo {
         out: PathBuf,
@@ -113,16 +123,26 @@ enum Cmd {
         /// MSAA samples (1 or 4)
         #[arg(long, default_value_t = 4)]
         samples: u32,
+        /// Graphic style file (JSON; see `bimble style`)
+        #[arg(long)]
+        style: Option<PathBuf>,
     },
 }
 
 fn run(cli: Cli) -> Result<(), String> {
     let e = |x: file::FileError| x.to_string();
     let Some(cmd) = cli.cmd else {
-        return bimble_viewer::run(None);
+        return bimble_viewer::run(None, None);
     };
     match cmd {
-        Cmd::View { file } => bimble_viewer::run(file)?,
+        Cmd::View { file, style } => bimble_viewer::run(file, style)?,
+        Cmd::Style { file } => {
+            let s = match file {
+                Some(p) => bimble_render::GraphicStyle::load(&p)?,
+                None => bimble_render::GraphicStyle::default(),
+            };
+            print!("{}", s.to_json());
+        }
         Cmd::Demo {
             out,
             bays_x,
@@ -254,9 +274,14 @@ fn run(cli: Cli) -> Result<(), String> {
             ortho,
             hide,
             samples,
+            style,
         } => {
             use bimble_core::MaterialCategory;
-            use bimble_render::{Camera, DrawOptions, Headless, Renderer, Target};
+            use bimble_render::{Camera, DrawOptions, GraphicStyle, Headless, Renderer, Target};
+            let style = match style {
+                Some(p) => GraphicStyle::load(&p)?,
+                None => GraphicStyle::default(),
+            };
             let hidden: Vec<MaterialCategory> = hide
                 .iter()
                 .map(|h| {
@@ -299,7 +324,10 @@ fn run(cli: Cli) -> Result<(), String> {
                 &target,
                 &gs,
                 &cam,
-                &DrawOptions::default(),
+                &DrawOptions {
+                    style,
+                    ..Default::default()
+                },
             );
             let px = gpu.read_rgba(&target).map_err(|x| x.to_string())?;
             let t_render = t1.elapsed();

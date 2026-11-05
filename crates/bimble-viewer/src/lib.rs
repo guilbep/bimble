@@ -6,7 +6,7 @@
 
 use bimble_core::MaterialCategory;
 use bimble_geom::Scene;
-use bimble_render::{Camera, DrawOptions, GpuScene, Renderer, Style, Target, palette};
+use bimble_render::{Camera, DrawOptions, GpuScene, GraphicStyle, Renderer, Style, Target};
 use eframe::egui::{self, Color32, PointerButton, Sense, Vec2};
 use eframe::egui_wgpu;
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,10 +14,17 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
+mod style_editor;
+
 const SAMPLES: u32 = 4;
 
-/// Open the viewer window, optionally loading a file. Blocks until the window is closed.
-pub fn run(file: Option<PathBuf>) -> Result<(), String> {
+/// Open the viewer window, optionally loading a file and a graphic style. Blocks until the
+/// window is closed.
+pub fn run(file: Option<PathBuf>, style: Option<PathBuf>) -> Result<(), String> {
+    let initial_style = match &style {
+        Some(p) => GraphicStyle::load(p)?,
+        None => GraphicStyle::default(),
+    };
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
@@ -36,6 +43,8 @@ pub fn run(file: Option<PathBuf>) -> Result<(), String> {
                 .as_ref()
                 .ok_or("the viewer needs the wgpu renderer")?;
             let mut app = Viewer::new(rs);
+            app.opts.style = initial_style;
+            app.style_path = style;
             if let Some(f) = file {
                 app.open(f, &cc.egui_ctx);
             }
@@ -99,6 +108,11 @@ struct Viewer {
     hidden_storeys: BTreeSet<String>,
     selected: Option<usize>,
     fit_pending: bool,
+
+    style_window: bool,
+    /// File the style was loaded from or saved to.
+    style_path: Option<PathBuf>,
+    style_message: Option<String>,
 }
 
 impl Viewer {
@@ -126,6 +140,9 @@ impl Viewer {
             hidden_storeys: BTreeSet::new(),
             selected: None,
             fit_pending: false,
+            style_window: false,
+            style_path: None,
+            style_message: None,
         }
     }
 
@@ -332,11 +349,7 @@ impl Viewer {
             self.needs_render = true;
         }
         if h {
-            self.opts.hatch_strength = if self.opts.hatch_strength > 0.0 {
-                0.0
-            } else {
-                0.5
-            };
+            self.opts.hatching = !self.opts.hatching;
             self.needs_render = true;
         }
         if t {
@@ -361,18 +374,70 @@ impl Viewer {
             ui.separator();
             let mut changed = false;
             changed |= ui.checkbox(&mut self.opts.edges, "Edges (E)").changed();
-            let mut hatch = self.opts.hatch_strength > 0.0;
-            if ui.checkbox(&mut hatch, "Hatching (H)").changed() {
-                self.opts.hatch_strength = if hatch { 0.5 } else { 0.0 };
-                changed = true;
-            }
+            changed |= ui.checkbox(&mut self.opts.hatching, "Hatching (H)").changed();
             changed |= ui.checkbox(&mut self.camera.orthographic, "Orthographic (O)").changed();
             if changed {
                 self.needs_render = true;
             }
             ui.separator();
+            ui.toggle_value(&mut self.style_window, "Style…");
+            ui.separator();
             ui.weak("Drag: orbit · Right-drag / Shift-drag: pan · Scroll: zoom · Click: select · Double-click / F: fit · T: top");
         });
+    }
+
+    fn style_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui.button("Load…").clicked()
+                && let Some(p) = rfd::FileDialog::new()
+                    .add_filter("Bimble style", &["json"])
+                    .pick_file()
+            {
+                match GraphicStyle::load(&p) {
+                    Ok(s) => {
+                        self.opts.style = s;
+                        self.style_message = Some(format!("Loaded {}", p.display()));
+                        self.style_path = Some(p);
+                        self.needs_render = true;
+                    }
+                    Err(e) => self.style_message = Some(e),
+                }
+            }
+            if ui
+                .button("Save…")
+                .on_hover_text("Writes only what differs from the default style")
+                .clicked()
+            {
+                let mut dialog = rfd::FileDialog::new().add_filter("Bimble style", &["json"]);
+                dialog = match &self.style_path {
+                    Some(p) => dialog.set_file_name(
+                        p.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                    ),
+                    None => dialog.set_file_name("style.json"),
+                };
+                if let Some(p) = dialog.save_file() {
+                    self.style_message =
+                        Some(match std::fs::write(&p, self.opts.style.to_json_diff()) {
+                            Ok(()) => format!("Saved {}", p.display()),
+                            Err(e) => format!("{}: {e}", p.display()),
+                        });
+                    self.style_path = Some(p);
+                }
+            }
+            if ui.button("Reset").clicked() {
+                self.opts.style = GraphicStyle::default();
+                self.needs_render = true;
+            }
+        });
+        if let Some(m) = &self.style_message {
+            ui.weak(m);
+        }
+        ui.separator();
+        if style_editor::edit(ui, &mut self.opts.style) {
+            self.needs_render = true;
+        }
     }
 
     fn side_panel(&mut self, ui: &mut egui::Ui) {
@@ -386,7 +451,7 @@ impl Viewer {
             for (cat, n) in &l.categories {
                 let mut on = !self.hidden_categories.contains(cat);
                 ui.horizontal(|ui| {
-                    let c = palette::category(*cat);
+                    let c = self.opts.style.families.get(*cat).color.0;
                     let (r, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
                     ui.painter()
                         .rect_filled(r, 2.0, Color32::from_rgb(c[0], c[1], c[2]));
@@ -517,6 +582,16 @@ impl eframe::App for Viewer {
                 .resizable(true)
                 .default_size(280.0)
                 .show(ui, |ui| self.properties(ui));
+        }
+        if self.style_window {
+            let mut open = true;
+            egui::Window::new("Graphic style")
+                .open(&mut open)
+                .default_width(320.0)
+                .default_height(620.0)
+                .vscroll(true)
+                .show(&ctx, |ui| self.style_panel(ui));
+            self.style_window = open;
         }
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let rect = ui.available_rect_before_wrap();

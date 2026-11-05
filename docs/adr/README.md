@@ -18,6 +18,7 @@ a decision that changes an old one says which one it supersedes.
 | [0010](0010-geometry-kernel.md) | Geometry kernel: manifold3d for mesh booleans; exact B-rep later | Accepted |
 | [0011](0011-performance-regressions.md) | Performance: geometry budgets fail the build, timing trend warns | Accepted |
 | [0012](0012-parallel-loading.md) | Parallel loading: chunked parse, per-element geometry on all cores, mimalloc | Accepted |
+| [0013](0013-graphic-style.md) | Graphic style: every colour, hatch and light value is data (JSON, `--style`, live editor) | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 
