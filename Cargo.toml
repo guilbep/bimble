@@ -28,3 +28,4 @@ pollster = "1"
 png = "0.18"
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland", "accesskit"] }
 rfd = "0.17"
+memory-stats = "1"

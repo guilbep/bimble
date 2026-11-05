@@ -49,6 +49,8 @@ jobs:
           python -I scripts/compare_ifcopenshell.py frame.ifc ours.jsonl
       - name: Render
         run: ./target/release/bimble render frame.ifc frame.png
+      - name: Benchmark (software GPU: checks it runs, numbers are not meaningful)
+        run: ./target/release/bimble bench --quick --frames 5 --width 640 --height 360 frame.ifc
       - uses: actions/upload-artifact@v4
         with:
           name: demo-render
