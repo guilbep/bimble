@@ -85,7 +85,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          run=$(gh run list -R "$GITHUB_REPOSITORY" -b main -w ci -e push -s success -L 1 --json databaseId -q '.[0].databaseId')
+          # A missing or unreadable baseline must never fail the job: it only skips the comparison.
+          run=$(gh run list -R "$GITHUB_REPOSITORY" -b main -w ci.yml -e push -s success -L 1 --json databaseId -q '.[0].databaseId' || true)
           if [ -z "$run" ] || ! gh run download "$run" -R "$GITHUB_REPOSITORY" -n bench-main -D base; then
             echo "No main baseline yet: it is created by the first push to main with this job." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
