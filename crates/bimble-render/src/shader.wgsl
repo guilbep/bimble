@@ -1,16 +1,17 @@
 // Drawing-style shading: flat faces, a soft directional light, and screen-space hatching per
 // material family. No textures: cheap on old integrated GPUs.
 
-// One entry of the style table (see style.rs, GpuFill). Lengths are in pixels.
+// One entry of the style table (see style.rs, GpuFill). Lengths are in pixels; colours are
+// linear (converted once on the CPU).
 struct Fill {
-    // rgb: fill (sRGB), a: 1 = hatch uses `ink.rgb`, 0 = hatch darkens the fill
+    // rgb: fill, a: pattern bits (1: lines[0], 2: lines[1], 4: stipple)
     fill: vec4<f32>,
-    // rgb: ink (sRGB), a: darkening factor when the fill is darkened
+    // rgb: hatch ink, a: 1 = ink is its own colour (shaded), 0 = darkened fill (already shaded)
     ink: vec4<f32>,
     // per line family: xy = normal / spacing, z = line width (fraction), w = 1 if present
     lines: array<vec4<f32>, 2>,
-    // xy: dashes of family 0 (1 / period, on fraction), zw: same for family 1
-    dashes: vec4<f32>,
+    // per line family: xy = direction along the lines / dash period, z = on fraction, w = 1 if dashed
+    dashes: array<vec4<f32>, 2>,
     // x: 1 / cell size, y: density, z: strength
     stipple: vec4<f32>,
 };
@@ -37,9 +38,11 @@ struct FaceIn {
 
 struct FaceOut {
     @builtin(position) clip: vec4<f32>,
-    @location(0) color: vec3<f32>,
-    @location(1) @interpolate(flat) slot: u32,
-    @location(2) @interpolate(flat) shade: f32,
+    // Faces are flat (one normal per triangle), so colours are constant per triangle: no
+    // interpolation needed, which saves work per pixel on software and old GPUs.
+    @location(0) @interpolate(flat) color: vec3<f32>,
+    @location(1) @interpolate(flat) ink: vec3<f32>,
+    @location(2) @interpolate(flat) slot: u32,
 };
 
 @vertex
@@ -50,16 +53,12 @@ fn vs_face(v: FaceIn) -> FaceOut {
     let l = normalize(u.light.xyz);
     // Two-sided Lambert with a high ambient: reads like a shaded drawing.
     let ambient = u.params.z;
-    o.shade = ambient + (1.0 - ambient) * abs(dot(normalize(v.normal), l));
-    // Style colours are sRGB: shade in linear space, encode back in the fragment shader.
-    o.color = srgb_to_linear(u.table[o.slot].fill.rgb) * o.shade;
+    let shade = ambient + (1.0 - ambient) * abs(dot(normalize(v.normal), l));
+    let f = u.table[o.slot];
+    o.color = f.fill.rgb * shade;
+    // A darkened fill was computed from the unshaded fill on the CPU: shade both alike.
+    o.ink = f.ink.rgb * shade;
     return o;
-}
-
-fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
-    let lo = c / 12.92;
-    let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
-    return select(hi, lo, c <= vec3<f32>(0.04045));
 }
 
 fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
@@ -74,31 +73,37 @@ fn stripe(t: f32, width: f32) -> f32 {
 }
 
 // Ink of one line family at pixel p: 0 or 1.
-fn family(p: vec2<f32>, l: vec4<f32>, dash: vec2<f32>) -> f32 {
-    if l.w == 0.0 {
-        return 0.0;
-    }
+fn family(p: vec2<f32>, l: vec4<f32>, dash: vec4<f32>) -> f32 {
     var ink = stripe(dot(p, l.xy), l.z);
-    if dash.x > 0.0 {
-        // Along the lines: perpendicular to the normal.
-        let along = normalize(vec2<f32>(l.y, -l.x));
-        ink = ink * stripe(dot(p, along) * dash.x, dash.y);
+    if dash.w != 0.0 {
+        ink = ink * stripe(dot(p, dash.xy), dash.z);
     }
     return ink;
 }
 
 @fragment
 fn fs_face(i: FaceOut) -> @location(0) vec4<f32> {
-    let f = u.table[i.slot];
-    let p = i.clip.xy / max(u.params.x, 1.0);
-    var ink = max(family(p, f.lines[0], f.dashes.xy), family(p, f.lines[1], f.dashes.zw));
-    if f.stipple.y > 0.0 {
-        let c = floor(p * f.stipple.x);
-        let h = fract(sin(dot(c, vec2<f32>(12.9898, 78.233))) * 43758.5453);
-        ink = max(ink, select(0.0, f.stipple.z, h > 1.0 - f.stipple.y));
+    var c = i.color;
+    let bits = u32(u.table[i.slot].fill.a);
+    // Families without hatch (and hatching off) skip the pattern code entirely; otherwise only
+    // the patterns the family has are evaluated.
+    if u.params.y > 0.0 && bits != 0u {
+        let p = i.clip.xy / max(u.params.x, 1.0);
+        var ink = 0.0;
+        if (bits & 1u) != 0u {
+            ink = family(p, u.table[i.slot].lines[0], u.table[i.slot].dashes[0]);
+        }
+        if (bits & 2u) != 0u {
+            ink = max(ink, family(p, u.table[i.slot].lines[1], u.table[i.slot].dashes[1]));
+        }
+        if (bits & 4u) != 0u {
+            let st = u.table[i.slot].stipple;
+            let cell = floor(p * st.x);
+            let h = fract(sin(dot(cell, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+            ink = max(ink, select(0.0, st.z, h > 1.0 - st.y));
+        }
+        c = mix(c, i.ink, ink * u.params.y);
     }
-    let target_ink = select(i.color * f.ink.w, srgb_to_linear(f.ink.rgb) * i.shade, f.fill.w > 0.5);
-    let c = mix(i.color, target_ink, ink * u.params.y);
     // The target is a plain Unorm texture holding gamma-encoded colour.
     return vec4<f32>(linear_to_srgb(c), 1.0);
 }

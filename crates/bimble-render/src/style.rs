@@ -399,27 +399,45 @@ pub(crate) fn slot(c: MaterialCategory) -> u8 {
     MaterialCategory::ALL.iter().position(|&x| x == c).unwrap() as u8
 }
 
-/// One table entry, laid out as six vec4 for the shader (see shader.wgsl).
+/// One table entry, laid out as seven vec4 for the shader (see shader.wgsl). Everything that is
+/// constant per family is computed here, once, so the fragment shader only evaluates patterns.
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct GpuFill {
     fill: [f32; 4],
     ink: [f32; 4],
     lines: [[f32; 4]; 2],
-    dashes: [f32; 4],
+    dashes: [[f32; 4]; 2],
     stipple: [f32; 4],
+}
+
+/// sRGB-encoded 0..1 to linear, as the shader did per vertex.
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear(c: Rgb) -> [f32; 3] {
+    c.unit().map(srgb_to_linear)
 }
 
 impl GpuFill {
     fn new(f: &Fill, darken: f32) -> GpuFill {
-        let c = f.color.unit();
+        let c = linear(f.color);
+        // Which patterns this family has, as bits for the shader: 1 lines 0, 2 lines 1, 4 stipple.
+        let flags =
+            f.lines[0].map_or(0, |_| 1) | f.lines[1].map_or(0, |_| 2) | f.stipple.map_or(0, |_| 4);
+        // ink.rgb: linear ink colour, ink.a: 1 = use it; otherwise the fill darkened.
         let (ink, mode) = match f.ink {
-            Some(i) => (i.unit(), 1.0),
-            None => ([0.0; 3], 0.0),
+            Some(i) => (linear(i), 1.0),
+            None => (c.map(|x| x * (1.0 - darken)), 0.0),
         };
         let mut g = GpuFill {
-            fill: [c[0], c[1], c[2], mode],
-            ink: [ink[0], ink[1], ink[2], 1.0 - darken],
+            fill: [c[0], c[1], c[2], flags as f32],
+            ink: [ink[0], ink[1], ink[2], mode],
             ..Default::default()
         };
         for (k, l) in f.lines.iter().enumerate() {
@@ -430,8 +448,7 @@ impl GpuFill {
             let inv = 1.0 / l.spacing_px;
             g.lines[k] = [a.sin() * inv, a.cos() * inv, l.width, 1.0];
             if let Some(d) = l.dash_px {
-                g.dashes[2 * k] = 1.0 / d;
-                g.dashes[2 * k + 1] = l.dash_on;
+                g.dashes[k] = [a.cos() / d, -a.sin() / d, l.dash_on, 1.0];
             }
         }
         if let Some(s) = f.stipple {

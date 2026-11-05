@@ -37,7 +37,17 @@ anything (red lines, the office's hatch conventions, a print style) meant changi
   colour is hard-coded again (checked).
 - Style parsing tests: round trip, partial override, typos, ranges, size cap, colour syntax.
 
+### Cost
+Frame time on the software GPU (llvmpipe, 1280×720, `bimble bench`, 3 alternating runs):
++5–7 % against the hard-coded shader; no difference at 160×90, so it is per-pixel work. Already
+done: colours converted to linear on the CPU, constant per-triangle values passed `flat`, pattern
+code skipped for families without hatch and only the patterns a family has evaluated (first version
+was +10 %). Passing all pattern data as flat varyings instead of indexing the table gave nothing.
+Not measured on a hardware GPU yet.
+
 ## Revisit when
 - Office drawing conventions arrive (I4): they become a style file, and may need per-material
   overrides and line weights (edges are 1 px; wide lines need a quad-based line renderer).
 - A title block / sheet style is designed: it should live next to this format, not inside it.
+- The old-laptop benchmark shows the 5–7 % matters: specialise the pipeline per style (override
+  constants or generated WGSL, rebuilt when the style changes).
