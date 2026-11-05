@@ -33,6 +33,7 @@ _5 Nov 2026. Supersedes v0 (Python / IFC-file-as-native). Sources: the Bimble PR
 | IFC export | Own IFC4 STEP writer | Validated in tests against IfcOpenShell |
 | IFC import | **IfcOpenShell (C++) called from Rust** is the main option: it parses and validates untrusted IFC files for us. Alternative: `web-ifc` | ADR at I3 |
 | Native format | `.bimble`: canonical JSON for the POC → content-addressed object store (git-like) | Format spec in `docs/format/` |
+| Geometry cache | **`.b3d`**: chunked binary meshes (per storey / spatial chunk, instanced), so the viewer opens without re-meshing. A derived cache, never the source of truth | Built when the viewer needs it (I1–I2). Spec in `docs/format/` before any code |
 | Test oracle | IfcOpenShell (Python) **in tests only** | Proves our IFC opens in a reference tool |
 | Architecture reference | **CADCraft** (Rust): crate layout, command registry, undo/redo, CLI/MCP access | Read before I2. Reference only, not a dependency |
 | CI | GitHub Actions, Linux / macOS / Windows | |
@@ -68,6 +69,19 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 
 **I3 — IFC import**
 - IfcOpenShell from Rust; an architect's IFC as a background reference; round-trip tests with Bonsai, FreeCAD, Revit
+- First real fixture: `LA24070_LMP_STR_32_R25` (Revit 2025 structural export, IFC4, metres, 881 elements).
+  Measured with IfcOpenShell 0.9 (5 Nov 2026):
+  - Geometry is light: 809 products tessellate to ~21k triangles in 3.4 s on 2 cores. The viewer's challenge
+    is element count and draw calls, not triangles.
+  - ~90 % of bodies are `IfcExtrudedAreaSolid` with `IfcArbitraryClosedProfileDef`: Revit writes even
+    rectangular beams as polylines. We need an **extruded-polygon generator** (with voids), and rectangle
+    detection to map back to `rect_beam` / `rect_column`.
+  - The rest is `IfcPolygonalFaceSet` (parts, some walls and footings, roofs): we need an **explicit-mesh**
+    element kind for non-parametric imports.
+  - Also present: `IfcBuildingElementPart` (153), `IfcRoof`, 33 `IfcOpeningElement` (openings → booleans needed),
+    `IfcGeographicElement` (terrain).
+  - Materials: GL24h glulam (420 elements) alongside C30/37 concrete. Timber is in real projects from day 1.
+  - Units are metres: import converts to mm.
 
 **I4 — First formwork plan**
 - Storey section → 2D lines → SVG/PDF with dimensions; compared against a real office drawing
