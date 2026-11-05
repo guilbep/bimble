@@ -1,5 +1,5 @@
-//! Drawing-style renderer on wgpu: flat-shaded faces, black edges, ~12-colour palette, hatch
-//! patterns per material family, no textures.
+//! Drawing-style renderer on wgpu: flat-shaded faces, edges, hatch patterns per material family,
+//! no textures. Every colour, hatch and light parameter comes from a `GraphicStyle`.
 //!
 //! The renderer draws into an offscreen `Target`. The viewer shows that texture in its window;
 //! `bimble render` reads it back as a PNG. Both paths run the same code.
@@ -17,47 +17,16 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// PNG stores, and it needs no sRGB view formats (missing on some old OpenGL drivers).
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// The palette: background, edges, selection, and one muted colour per material family.
-pub mod palette {
-    use bimble_core::MaterialCategory;
-
-    pub const BACKGROUND: [f32; 3] = [0.97, 0.97, 0.96];
-    pub const EDGE: [f32; 3] = [0.10, 0.10, 0.11];
-    pub const SELECTION: [u8; 3] = [232, 126, 4];
-
-    /// sRGB 0..255
-    pub fn category(c: MaterialCategory) -> [u8; 3] {
-        match c {
-            MaterialCategory::Concrete => [214, 214, 210],
-            MaterialCategory::Timber => [226, 196, 150],
-            MaterialCategory::Steel => [150, 170, 196],
-            MaterialCategory::Masonry => [206, 150, 128],
-            MaterialCategory::Insulation => [236, 220, 120],
-            MaterialCategory::Earth => [176, 160, 132],
-            MaterialCategory::Glass => [176, 214, 226],
-            MaterialCategory::Other => [238, 238, 236],
-        }
-    }
-
-    /// Hatch pattern id used by the shader.
-    pub fn hatch(c: MaterialCategory) -> u8 {
-        match c {
-            MaterialCategory::Concrete => 1,
-            MaterialCategory::Timber => 2,
-            MaterialCategory::Steel => 3,
-            MaterialCategory::Masonry => 4,
-            MaterialCategory::Insulation => 5,
-            MaterialCategory::Earth => 6,
-            MaterialCategory::Glass | MaterialCategory::Other => 0,
-        }
-    }
-}
+pub mod style;
+pub use style::{Fill, GraphicStyle, Lines, Rgb, Stipple};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct FaceVertex {
     pos: [f32; 3],
     normal: [f32; 3],
+    /// rgb unused (kept for layout), a: style table slot. Colours come from the style uniform,
+    /// so restyling never re-uploads the model.
     color: [u8; 4],
 }
 
@@ -67,7 +36,8 @@ struct Uniforms {
     view_proj: [[f32; 4]; 4],
     light: [f32; 4],
     edge: [f32; 4],
-    hatch: [f32; 4],
+    params: [f32; 4],
+    table: [style::GpuFill; style::SLOTS],
 }
 
 // ---------------------------------------------------------------- camera
@@ -300,17 +270,20 @@ pub struct Renderer {
 pub struct DrawOptions {
     /// Hatch spacing multiplier in pixels (use the display scale factor on HiDPI).
     pub hatch_scale: f32,
-    /// 0 = no hatching, 1 = full.
-    pub hatch_strength: f32,
+    /// Draw hatches (their intensity is `style.hatch_strength`).
+    pub hatching: bool,
     pub edges: bool,
+    /// Colours, hatches and light.
+    pub style: GraphicStyle,
 }
 
 impl Default for DrawOptions {
     fn default() -> Self {
         DrawOptions {
             hatch_scale: 1.0,
-            hatch_strength: 0.5,
+            hatching: true,
             edges: true,
+            style: GraphicStyle::default(),
         }
     }
 }
@@ -466,17 +439,12 @@ impl Renderer {
             if s == Style::Hidden {
                 continue;
             }
-            let rgb = if s == Style::Selected {
-                palette::SELECTION
+            let slot = if s == Style::Selected {
+                style::SELECTED_SLOT
             } else {
-                palette::category(e.category)
+                style::slot(e.category)
             };
-            let pattern = if s == Style::Selected {
-                0
-            } else {
-                palette::hatch(e.category)
-            };
-            let color = [rgb[0], rgb[1], rgb[2], pattern];
+            let color = [0, 0, 0, slot];
             for &k in &e.mesh.indices {
                 let k = k as usize;
                 faces.push(FaceVertex {
@@ -524,11 +492,25 @@ impl Renderer {
         let vp = camera.view_proj(aspect, &scene.bounds);
         // Light from over the viewer's left shoulder.
         let light = (camera.eye() - camera.target).normalize() + Vec3::new(-0.3, -0.2, 0.9);
+        let st = &opts.style;
         let u = Uniforms {
             view_proj: vp.to_cols_array_2d(),
             light: [light.x, light.y, light.z, 0.0],
-            edge: [palette::EDGE[0], palette::EDGE[1], palette::EDGE[2], 1.0],
-            hatch: [opts.hatch_scale, opts.hatch_strength, 0.0, 0.0],
+            edge: {
+                let e = st.edges.unit();
+                [e[0], e[1], e[2], 1.0]
+            },
+            params: [
+                opts.hatch_scale,
+                if opts.hatching {
+                    st.hatch_strength
+                } else {
+                    0.0
+                },
+                st.ambient,
+                0.0,
+            ],
+            table: style::gpu_table(st),
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
 
@@ -536,8 +518,8 @@ impl Renderer {
             label: Some("bimble"),
         });
         {
-            // The target stores gamma-encoded values, so the sRGB palette is written as is.
-            let bg = palette::BACKGROUND.map(f64::from);
+            // The target stores gamma-encoded values, so the sRGB colour is written as is.
+            let bg = st.background.0.map(|c| c as f64 / 255.0);
             let (view, resolve) = match &target.msaa_view {
                 Some(m) => (m, Some(&target.color_view)),
                 None => (&target.color_view, None),
@@ -880,7 +862,7 @@ mod tests {
         );
         let px = gpu.read_rgba(&target).unwrap();
         assert_eq!(px.len(), 320 * 200 * 4);
-        let bg = palette::BACKGROUND.map(|c| (c * 255.0).round() as i32);
+        let bg = GraphicStyle::default().background.0.map(i32::from);
         let differs = px
             .as_chunks::<4>()
             .0
@@ -899,5 +881,151 @@ mod tests {
             "only {differs} non-background pixels"
         );
         assert!(dark > 100, "only {dark} edge pixels");
+    }
+
+    /// One 1 m box per material family, in a row.
+    fn family_boxes() -> Scene {
+        use bimble_geom::{ElementInfo, MeshBuilder, SceneBuilder};
+        let mut sb = SceneBuilder::default();
+        for (k, c) in MaterialCategory::ALL.into_iter().enumerate() {
+            let (x0, x1) = (k as f64 * 1500.0, k as f64 * 1500.0 + 1000.0);
+            let p = |i: usize| {
+                [
+                    if i & 1 == 0 { x0 } else { x1 },
+                    if i & 2 == 0 { 0.0 } else { 1000.0 },
+                    if i & 4 == 0 { 0.0 } else { 1000.0 },
+                ]
+            };
+            let mut mb = MeshBuilder::default();
+            // Six faces as quads (a, b, c, d), outward.
+            for q in [
+                [0, 2, 3, 1],
+                [4, 5, 7, 6],
+                [0, 1, 5, 4],
+                [2, 6, 7, 3],
+                [0, 4, 6, 2],
+                [1, 3, 7, 5],
+            ] {
+                mb.add_triangle([p(q[0]), p(q[1]), p(q[2])]);
+                mb.add_triangle([p(q[0]), p(q[2]), p(q[3])]);
+            }
+            sb.push(
+                ElementInfo {
+                    global_id: format!("box{k}"),
+                    class: "IfcBuildingElementProxy".into(),
+                    name: c.label().into(),
+                    storey: String::new(),
+                    material: c.label().into(),
+                    category: c,
+                },
+                mb,
+            );
+        }
+        sb.finish()
+    }
+
+    fn draw(gpu: &Headless, scene: &Scene, opts: &DrawOptions) -> Vec<[u8; 4]> {
+        let r = Renderer::new(&gpu.device, 1);
+        let gs = r.upload(&gpu.device, scene, |_, _| Style::Normal);
+        let target = Target::new(&gpu.device, (400, 200), 1);
+        let mut cam = Camera::default();
+        cam.fit(scene, 2.0);
+        r.render(&gpu.device, &gpu.queue, &target, &gs, &cam, opts);
+        let px = gpu.read_rgba(&target).unwrap();
+        px.as_chunks::<4>().0.to_vec()
+    }
+
+    fn count(px: &[[u8; 4]], c: Rgb, tol: i32) -> usize {
+        px.iter()
+            .filter(|p| (0..3).all(|k| (p[k] as i32 - c.0[k] as i32).abs() <= tol))
+            .count()
+    }
+
+    /// Every colour of the drawing comes from the style ("red lines instead of black").
+    #[test]
+    fn graphic_style_drives_every_colour() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let scene = family_boxes();
+        // Flat light and no hatch: each face shows exactly its family's fill.
+        let mut style = GraphicStyle {
+            background: Rgb([10, 200, 30]),
+            edges: Rgb([220, 0, 0]),
+            ambient: 1.0,
+            hatch_strength: 0.0,
+            ..GraphicStyle::default()
+        };
+        let fills = [
+            [255, 0, 255],
+            [0, 0, 255],
+            [255, 255, 0],
+            [0, 255, 255],
+            [128, 0, 0],
+            [0, 128, 128],
+            [64, 64, 192],
+            [192, 128, 0],
+        ];
+        for (c, rgb) in MaterialCategory::ALL.into_iter().zip(fills) {
+            style.families.get_mut(c).color = Rgb(rgb);
+        }
+        let opts = DrawOptions {
+            style,
+            ..Default::default()
+        };
+        let px = draw(&gpu, &scene, &opts);
+        assert!(
+            count(&px, style.background, 0) > 400 * 200 / 4,
+            "background"
+        );
+        assert!(count(&px, style.edges, 0) > 200, "red edges");
+        assert_eq!(
+            count(&px, GraphicStyle::default().edges, 8),
+            0,
+            "no default edges left"
+        );
+        for (c, rgb) in MaterialCategory::ALL.into_iter().zip(fills) {
+            let n = count(&px, Rgb(rgb), 1);
+            assert!(n > 100, "{}: only {n} pixels of its fill", c.label());
+        }
+
+        // Hatching changes faces only. A dense hatch (half the area inked) on every family, so the
+        // share of changed face pixels does not depend on the GPU's rasterisation details.
+        let mut dense = GraphicStyle {
+            hatch_strength: 1.0,
+            ..style
+        };
+        for c in MaterialCategory::ALL {
+            let f = dense.families.get_mut(c);
+            f.lines = [
+                Some(Lines {
+                    angle_deg: 45.0,
+                    spacing_px: 4.0,
+                    width: 0.5,
+                    dash_px: None,
+                    dash_on: 1.0,
+                }),
+                None,
+            ];
+            f.stipple = None;
+            f.ink = Some(Rgb([0, 0, 0]));
+        }
+        let hatched = DrawOptions {
+            style: dense,
+            ..opts
+        };
+        let px2 = draw(&gpu, &scene, &hatched);
+        let faces = px.len() - count(&px, style.background, 0);
+        let changed = px.iter().zip(&px2).filter(|(a, b)| a != b).count();
+        eprintln!("hatching changed {changed} of {faces} face pixels");
+        assert!(
+            changed * 4 > faces,
+            "hatching changed only {changed} of {faces} face pixels"
+        );
+        assert_eq!(
+            count(&px2, style.background, 0),
+            count(&px, style.background, 0)
+        );
     }
 }

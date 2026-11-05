@@ -443,7 +443,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "bimble-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bimble-core",
  "bimble-geom",
@@ -458,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "bimble-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "serde",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "bimble-geom"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bimble-core",
  "earcutr",
@@ -479,7 +479,7 @@ dependencies = [
 
 [[package]]
 name = "bimble-ifc"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bimble-core",
  "bimble-geom",
@@ -490,7 +490,7 @@ dependencies = [
 
 [[package]]
 name = "bimble-render"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bimble-core",
  "bimble-geom",
@@ -498,12 +498,14 @@ dependencies = [
  "glam",
  "png",
  "pollster 1.0.1",
+ "serde",
+ "serde_json",
  "wgpu",
 ]
 
 [[package]]
 name = "bimble-viewer"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bimble-core",
  "bimble-geom",

@@ -1,0 +1,16 @@
+{
+  "background": "#ffffff",
+  "edges": "#000000",
+  "ambient": 1.0,
+  "hatch_strength": 1.0,
+  "families": {
+    "concrete":   { "color": "#ffffff", "ink": "#000000", "stipple": { "cell_px": 2.0, "density": 0.08, "strength": 1.0 } },
+    "steel":      { "color": "#ffffff", "ink": "#000000" },
+    "timber":     { "color": "#ffffff", "ink": "#000000" },
+    "masonry":    { "color": "#ffffff", "ink": "#000000" },
+    "insulation": { "color": "#ffffff", "ink": "#000000" },
+    "earth":      { "color": "#ffffff", "ink": "#000000" },
+    "glass":      { "color": "#ffffff" },
+    "other":      { "color": "#ffffff" }
+  }
+}

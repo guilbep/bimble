@@ -1,0 +1,536 @@
+//! Graphic style: every colour, hatch and lighting parameter of a drawing, as data.
+//!
+//! A style is a JSON file. It only needs the values that differ from the default, e.g. red edges:
+//!
+//! ```json
+//! { "edges": "#d01010" }
+//! ```
+//!
+//! `bimble style` prints the complete default, which is the reference for every field.
+//! Files are untrusted input: values are range-checked and unknown fields are refused, so a typo
+//! is reported instead of silently ignored.
+
+use bimble_core::MaterialCategory;
+use serde::{Deserialize, Serialize};
+
+/// An sRGB colour, written `"#rrggbb"` in files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rgb(pub [u8; 3]);
+
+impl Rgb {
+    pub fn to_hex(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.0[0], self.0[1], self.0[2])
+    }
+    pub fn parse(s: &str) -> Result<Rgb, String> {
+        let h = s
+            .strip_prefix('#')
+            .filter(|h| h.len() == 6 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+            .ok_or_else(|| format!("colour {s:?}: expected \"#rrggbb\""))?;
+        let c = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap();
+        Ok(Rgb([c(0), c(2), c(4)]))
+    }
+    /// 0..1 per channel, still sRGB-encoded.
+    pub fn unit(self) -> [f32; 3] {
+        self.0.map(|c| c as f32 / 255.0)
+    }
+}
+
+impl Serialize for Rgb {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for Rgb {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Rgb::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// A family of parallel lines, sized in screen pixels (drawings read the same at every zoom).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lines {
+    /// Direction of the lines, degrees counter-clockwise from horizontal.
+    pub angle_deg: f32,
+    /// Distance between lines, pixels.
+    pub spacing_px: f32,
+    /// Line thickness as a fraction of the spacing (0..1).
+    pub width: f32,
+    /// Dashes along the lines: period in pixels, or absent for continuous lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash_px: Option<f32>,
+    /// Fraction of each dash period that is drawn (0..1).
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub dash_on: f32,
+}
+
+/// Random dots on a pixel grid.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Stipple {
+    /// Grid cell size, pixels.
+    pub cell_px: f32,
+    /// Fraction of cells with a dot (0..1).
+    pub density: f32,
+    /// Ink of a dot relative to a line (0..1).
+    pub strength: f32,
+}
+
+/// How faces of one material family are drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fill {
+    pub color: Rgb,
+    /// Up to two line families (e.g. a cross-hatch). An empty list draws no lines.
+    #[serde(with = "two_lines")]
+    pub lines: [Option<Lines>; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stipple: Option<Stipple>,
+    /// Colour of the hatch ink. Absent: the fill colour, darkened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ink: Option<Rgb>,
+}
+
+/// One `Fill` per material family.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Families {
+    pub concrete: Fill,
+    pub steel: Fill,
+    pub timber: Fill,
+    pub masonry: Fill,
+    pub insulation: Fill,
+    pub earth: Fill,
+    pub glass: Fill,
+    pub other: Fill,
+}
+
+impl Families {
+    pub fn get(&self, c: MaterialCategory) -> &Fill {
+        match c {
+            MaterialCategory::Concrete => &self.concrete,
+            MaterialCategory::Steel => &self.steel,
+            MaterialCategory::Timber => &self.timber,
+            MaterialCategory::Masonry => &self.masonry,
+            MaterialCategory::Insulation => &self.insulation,
+            MaterialCategory::Earth => &self.earth,
+            MaterialCategory::Glass => &self.glass,
+            MaterialCategory::Other => &self.other,
+        }
+    }
+    pub fn get_mut(&mut self, c: MaterialCategory) -> &mut Fill {
+        match c {
+            MaterialCategory::Concrete => &mut self.concrete,
+            MaterialCategory::Steel => &mut self.steel,
+            MaterialCategory::Timber => &mut self.timber,
+            MaterialCategory::Masonry => &mut self.masonry,
+            MaterialCategory::Insulation => &mut self.insulation,
+            MaterialCategory::Earth => &mut self.earth,
+            MaterialCategory::Glass => &mut self.glass,
+            MaterialCategory::Other => &mut self.other,
+        }
+    }
+}
+
+/// Everything that decides how a drawing looks.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphicStyle {
+    pub background: Rgb,
+    /// Colour of edges (outlines and creases).
+    pub edges: Rgb,
+    /// Fill of selected elements (drawn without hatch).
+    pub selection: Rgb,
+    /// Overall hatch intensity, 0 (none) .. 1.
+    pub hatch_strength: f32,
+    /// How much darker hatch ink is than the fill when a family sets no `ink` (0..1).
+    pub hatch_darken: f32,
+    /// Share of light that does not depend on the face orientation (0..1). 1 = flat colours.
+    pub ambient: f32,
+    pub families: Families,
+}
+
+fn one() -> f32 {
+    1.0
+}
+fn is_one(x: &f32) -> bool {
+    *x == 1.0
+}
+
+/// `lines` is a JSON list of 0..2 families; stored as a fixed pair so the style stays `Copy`.
+mod two_lines {
+    use super::Lines;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    pub fn serialize<S: Serializer>(v: &[Option<Lines>; 2], s: S) -> Result<S::Ok, S::Error> {
+        v.iter().flatten().collect::<Vec<_>>().serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[Option<Lines>; 2], D::Error> {
+        let v = Vec::<Lines>::deserialize(d)?;
+        if v.len() > 2 {
+            return Err(serde::de::Error::custom(
+                "at most two line families per fill",
+            ));
+        }
+        Ok([v.first().copied(), v.get(1).copied()])
+    }
+}
+
+const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
+    Rgb([r, g, b])
+}
+
+const fn lines(angle_deg: f32, spacing_px: f32, width: f32) -> Option<Lines> {
+    Some(Lines {
+        angle_deg,
+        spacing_px,
+        width,
+        dash_px: None,
+        dash_on: 1.0,
+    })
+}
+
+const fn plain(color: Rgb) -> Fill {
+    Fill {
+        color,
+        lines: [None, None],
+        stipple: None,
+        ink: None,
+    }
+}
+
+impl Default for GraphicStyle {
+    /// The built-in drawing style: muted fills, near-black edges, one hatch per family.
+    fn default() -> Self {
+        // Spacings are the distances between lines measured across them (pixels), so a line
+        // family at 45° with spacing 9/√2 repeats every 9 px along x.
+        let s2 = std::f32::consts::SQRT_2;
+        GraphicStyle {
+            background: rgb(247, 247, 245),
+            edges: rgb(26, 26, 28),
+            selection: rgb(232, 126, 4),
+            hatch_strength: 0.5,
+            hatch_darken: 0.45,
+            ambient: 0.62,
+            families: Families {
+                concrete: Fill {
+                    stipple: Some(Stipple {
+                        cell_px: 0.625,
+                        density: 0.07,
+                        strength: 0.8,
+                    }),
+                    ..plain(rgb(214, 214, 210))
+                },
+                steel: Fill {
+                    lines: [lines(135.0, 5.0 / s2, 0.12), None],
+                    ..plain(rgb(150, 170, 196))
+                },
+                timber: Fill {
+                    lines: [lines(45.0, 9.0 / s2, 0.1), None],
+                    ..plain(rgb(226, 196, 150))
+                },
+                masonry: Fill {
+                    lines: [lines(45.0, 12.0 / s2, 0.08), lines(135.0, 24.0 / s2, 0.05)],
+                    ..plain(rgb(206, 150, 128))
+                },
+                insulation: Fill {
+                    lines: [
+                        Some(Lines {
+                            angle_deg: 0.0,
+                            spacing_px: 8.0,
+                            width: 0.12,
+                            dash_px: Some(10.0),
+                            dash_on: 0.6,
+                        }),
+                        None,
+                    ],
+                    ..plain(rgb(236, 220, 120))
+                },
+                earth: Fill {
+                    lines: [lines(45.0, 10.0 / s2, 0.08), lines(135.0, 10.0 / s2, 0.08)],
+                    ..plain(rgb(176, 160, 132))
+                },
+                glass: plain(rgb(176, 214, 226)),
+                other: plain(rgb(238, 238, 236)),
+            },
+        }
+    }
+}
+
+/// Largest style file accepted.
+pub const MAX_STYLE_BYTES: usize = 1 << 20;
+
+impl GraphicStyle {
+    /// Reads a style file: the values it gives, on top of the default.
+    pub fn from_json(text: &str) -> Result<GraphicStyle, String> {
+        if text.len() > MAX_STYLE_BYTES {
+            return Err(format!("style file larger than {MAX_STYLE_BYTES} bytes"));
+        }
+        let user: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        if !user.is_object() {
+            return Err("a style file is a JSON object".into());
+        }
+        let mut merged = serde_json::to_value(GraphicStyle::default()).unwrap();
+        merge(&mut merged, user);
+        let s: GraphicStyle = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+        s.validate()?;
+        Ok(s)
+    }
+
+    pub fn load(path: &std::path::Path) -> Result<GraphicStyle, String> {
+        let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        if meta.len() > MAX_STYLE_BYTES as u64 {
+            return Err(format!(
+                "{}: larger than {MAX_STYLE_BYTES} bytes",
+                path.display()
+            ));
+        }
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        GraphicStyle::from_json(&text).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// The complete style as pretty JSON (all fields).
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap() + "\n"
+    }
+
+    /// Only the values that differ from the default: what a user would write by hand.
+    pub fn to_json_diff(&self) -> String {
+        let mine = serde_json::to_value(self).unwrap();
+        let base = serde_json::to_value(GraphicStyle::default()).unwrap();
+        let d = diff(&mine, &base).unwrap_or(serde_json::json!({}));
+        serde_json::to_string_pretty(&d).unwrap() + "\n"
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        let unit = |name: &str, x: f32| {
+            if (0.0..=1.0).contains(&x) {
+                Ok(())
+            } else {
+                Err(format!("{name} = {x}: must be between 0 and 1"))
+            }
+        };
+        unit("hatch_strength", self.hatch_strength)?;
+        unit("hatch_darken", self.hatch_darken)?;
+        unit("ambient", self.ambient)?;
+        for c in MaterialCategory::ALL {
+            let f = self.families.get(c);
+            let at = |field: &str| format!("families.{}.{field}", c.label().to_lowercase());
+            for l in f.lines.iter().flatten() {
+                if !l.angle_deg.is_finite() {
+                    return Err(format!("{}: not a number", at("lines.angle_deg")));
+                }
+                if !(1.0..=1000.0).contains(&l.spacing_px) {
+                    return Err(format!(
+                        "{} = {}: must be between 1 and 1000 pixels",
+                        at("lines.spacing_px"),
+                        l.spacing_px
+                    ));
+                }
+                unit(&at("lines.width"), l.width)?;
+                unit(&at("lines.dash_on"), l.dash_on)?;
+                if let Some(d) = l.dash_px
+                    && !(1.0..=1000.0).contains(&d)
+                {
+                    return Err(format!(
+                        "{} = {d}: must be between 1 and 1000 pixels",
+                        at("lines.dash_px")
+                    ));
+                }
+            }
+            if let Some(s) = f.stipple {
+                if !(0.25..=1000.0).contains(&s.cell_px) {
+                    return Err(format!(
+                        "{} = {}: must be between 0.25 and 1000 pixels",
+                        at("stipple.cell_px"),
+                        s.cell_px
+                    ));
+                }
+                unit(&at("stipple.density"), s.density)?;
+                unit(&at("stipple.strength"), s.strength)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Deep merge: objects are merged key by key, anything else replaces.
+fn merge(base: &mut serde_json::Value, top: serde_json::Value) {
+    match (base, top) {
+        (serde_json::Value::Object(b), serde_json::Value::Object(t)) => {
+            for (k, v) in t {
+                match b.get_mut(&k) {
+                    Some(slot) => merge(slot, v),
+                    None => {
+                        b.insert(k, v);
+                    }
+                }
+            }
+        }
+        (b, t) => *b = t,
+    }
+}
+
+/// The parts of `a` that differ from `b` (objects key by key).
+fn diff(a: &serde_json::Value, b: &serde_json::Value) -> Option<serde_json::Value> {
+    match (a, b) {
+        (serde_json::Value::Object(x), serde_json::Value::Object(y)) => {
+            let m: serde_json::Map<_, _> = x
+                .iter()
+                .filter_map(|(k, v)| match y.get(k) {
+                    Some(w) => diff(v, w).map(|d| (k.clone(), d)),
+                    None => Some((k.clone(), v.clone())),
+                })
+                .collect();
+            (!m.is_empty()).then_some(serde_json::Value::Object(m))
+        }
+        _ => (a != b).then(|| a.clone()),
+    }
+}
+
+// ---------------------------------------------------------------- GPU table
+
+/// Slots in the shader's style table: one per material family, then selection.
+pub(crate) const SLOTS: usize = 16;
+pub(crate) const SELECTED_SLOT: u8 = 15;
+
+pub(crate) fn slot(c: MaterialCategory) -> u8 {
+    MaterialCategory::ALL.iter().position(|&x| x == c).unwrap() as u8
+}
+
+/// One table entry, laid out as seven vec4 for the shader (see shader.wgsl). Everything that is
+/// constant per family is computed here, once, so the fragment shader only evaluates patterns.
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct GpuFill {
+    fill: [f32; 4],
+    ink: [f32; 4],
+    lines: [[f32; 4]; 2],
+    dashes: [[f32; 4]; 2],
+    stipple: [f32; 4],
+}
+
+/// sRGB-encoded 0..1 to linear, as the shader did per vertex.
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear(c: Rgb) -> [f32; 3] {
+    c.unit().map(srgb_to_linear)
+}
+
+impl GpuFill {
+    fn new(f: &Fill, darken: f32) -> GpuFill {
+        let c = linear(f.color);
+        // Which patterns this family has, as bits for the shader: 1 lines 0, 2 lines 1, 4 stipple.
+        let flags =
+            f.lines[0].map_or(0, |_| 1) | f.lines[1].map_or(0, |_| 2) | f.stipple.map_or(0, |_| 4);
+        // ink.rgb: linear ink colour, ink.a: 1 = use it; otherwise the fill darkened.
+        let (ink, mode) = match f.ink {
+            Some(i) => (linear(i), 1.0),
+            None => (c.map(|x| x * (1.0 - darken)), 0.0),
+        };
+        let mut g = GpuFill {
+            fill: [c[0], c[1], c[2], flags as f32],
+            ink: [ink[0], ink[1], ink[2], mode],
+            ..Default::default()
+        };
+        for (k, l) in f.lines.iter().enumerate() {
+            let Some(l) = l else { continue };
+            // Screen y points down: a line at angle a has the pixel-space normal (sin a, cos a)
+            // and runs along (cos a, -sin a).
+            let a = l.angle_deg.to_radians();
+            let inv = 1.0 / l.spacing_px;
+            g.lines[k] = [a.sin() * inv, a.cos() * inv, l.width, 1.0];
+            if let Some(d) = l.dash_px {
+                g.dashes[k] = [a.cos() / d, -a.sin() / d, l.dash_on, 1.0];
+            }
+        }
+        if let Some(s) = f.stipple {
+            g.stipple = [1.0 / s.cell_px, s.density, s.strength, 0.0];
+        }
+        g
+    }
+}
+
+pub(crate) fn gpu_table(s: &GraphicStyle) -> [GpuFill; SLOTS] {
+    let mut t = [GpuFill::default(); SLOTS];
+    for c in MaterialCategory::ALL {
+        t[slot(c) as usize] = GpuFill::new(s.families.get(c), s.hatch_darken);
+    }
+    t[SELECTED_SLOT as usize] = GpuFill::new(&plain(s.selection), s.hatch_darken);
+    t
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_round_trips_through_json() {
+        let d = GraphicStyle::default();
+        assert_eq!(GraphicStyle::from_json(&d.to_json()).unwrap(), d);
+        assert_eq!(d.to_json_diff().trim(), "{}");
+        d.validate().unwrap();
+    }
+
+    #[test]
+    fn partial_file_overrides_only_what_it_says() {
+        let s = GraphicStyle::from_json(
+            r##"{ "edges": "#d01010", "families": { "concrete": { "color": "#808080" } } }"##,
+        )
+        .unwrap();
+        let d = GraphicStyle::default();
+        assert_eq!(s.edges, Rgb([0xd0, 0x10, 0x10]));
+        assert_eq!(s.families.concrete.color, Rgb([128, 128, 128]));
+        // Everything else, including concrete's stipple, keeps the default.
+        assert_eq!(s.families.concrete.stipple, d.families.concrete.stipple);
+        assert_eq!(s.families.steel, d.families.steel);
+        assert_eq!(s.background, d.background);
+        assert_eq!(
+            s.to_json_diff(),
+            "{\n  \"edges\": \"#d01010\",\n  \"families\": {\n    \"concrete\": {\n      \"color\": \"#808080\"\n    }\n  }\n}\n"
+        );
+    }
+
+    #[test]
+    fn bad_files_are_reported() {
+        for (text, needle) in [
+            (r#"{ "edges": "red" }"#, "#rrggbb"),
+            (r##"{ "egdes": "#ff0000" }"##, "unknown field"),
+            (r#"{ "ambient": 2 }"#, "ambient"),
+            (r#"{ "hatch_strength": -1 }"#, "hatch_strength"),
+            (r#"[1, 2]"#, "JSON object"),
+            (
+                r#"{ "families": { "steel": { "lines": [ {"angle_deg": 0, "spacing_px": 0, "width": 0.1} ] } } }"#,
+                "spacing_px",
+            ),
+            (
+                r#"{ "families": { "steel": { "lines": [ {"angle_deg": 0, "spacing_px": 5, "width": 0.1}, {"angle_deg": 0, "spacing_px": 5, "width": 0.1}, {"angle_deg": 0, "spacing_px": 5, "width": 0.1} ] } } }"#,
+                "at most two",
+            ),
+        ] {
+            let e = GraphicStyle::from_json(text).unwrap_err();
+            assert!(e.contains(needle), "{text}: {e}");
+        }
+        let big = format!("{{\"x\": \"{}\"}}", "a".repeat(MAX_STYLE_BYTES));
+        assert!(
+            GraphicStyle::from_json(&big)
+                .unwrap_err()
+                .contains("larger")
+        );
+    }
+
+    #[test]
+    fn colour_parsing() {
+        assert_eq!(Rgb::parse("#0aFf10").unwrap(), Rgb([10, 255, 16]));
+        for bad in ["0aff10", "#0aff1", "#0aff1g", "#0aff100", ""] {
+            assert!(Rgb::parse(bad).is_err(), "{bad}");
+        }
+    }
+}

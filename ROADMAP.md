@@ -64,6 +64,9 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 - ✅ `bimble-viewer`: opens IFC and `.bimble`, filters by material / IFC class / storey, properties, redraws
   only on change
 - ✅ IFC reader for display, pulled forward from I3 (ADR 0002)
+- ✅ Parametric graphics: every colour, hatch and light value in a `GraphicStyle` (JSON file, `--style`,
+  live "Style…" editor in the viewer; ADR 0013). Next: per-material overrides, line weights, title block
+- ✅ Parallel loading (ADR 0012), performance budgets and trend in CI (ADR 0011)
 - ✅ Release workflow: macOS (arm64, x86_64), Windows, Linux binaries on tags; PR builds as artifacts
 - ☐ Instancing for repeated geometry (`IfcMappedItem` is currently flattened)
 - ☐ Benchmark on a real old laptop: 20k-element fixture, frame time, memory. **Needs a person and a machine.**
@@ -102,7 +105,8 @@ node editor. Merge/review UI and a sync server come along with collaboration. Ra
 2. IFC import: IfcOpenShell via C++ bindings vs web-ifc
 3. Desktop shell: native winit app vs Tauri + web
 4. Performance target: confirm the reference "old machine" with real users
-5. Palette and hatch patterns per material: agree with the engineer (office drawing conventions)
+5. Palette and hatch patterns per material: agree with the engineer (office drawing conventions). Now a
+   style file (ADR 0013): the office conventions become a `docs/styles/` file, no code change
 6. Rebar code (SIA 262 / EC2) — engineer
 7. Licence: legal check
 
