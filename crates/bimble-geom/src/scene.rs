@@ -3,6 +3,7 @@
 
 use crate::Mesh;
 use bimble_core::{MaterialCategory, Model};
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -45,32 +46,39 @@ impl Scene {
     }
 
     pub fn from_model(m: &Model) -> Scene {
-        let mut b = SceneBuilder::default();
-        for e in m.elements.values() {
-            let Ok(local) = crate::element_mesh(e) else {
-                b.warnings
-                    .push(format!("{} {}: could not mesh", e.class.name(), e.name));
-                continue;
-            };
-            let storey = &m.storeys[&e.storey];
-            let mat = &m.materials[&e.material];
-            let t = crate::placement_matrix(&e.placement, storey.elevation);
-            let mut mb = MeshBuilder::default();
-            for tri in local.indices.as_chunks::<3>().0 {
-                let p = tri.map(|i| transform(&t, local.positions[i as usize].map(f64::from)));
-                mb.add_triangle(p);
-            }
-            b.push(
-                ElementInfo {
+        // Elements are meshed on all cores; results keep the model's (sorted) order.
+        let elements: Vec<_> = m.elements.values().collect();
+        let meshed: Vec<Result<(ElementInfo, MeshBuilder), String>> = elements
+            .par_iter()
+            .map(|e| {
+                let Ok(local) = crate::element_mesh(e) else {
+                    return Err(format!("{} {}: could not mesh", e.class.name(), e.name));
+                };
+                let storey = &m.storeys[&e.storey];
+                let mat = &m.materials[&e.material];
+                let t = crate::placement_matrix(&e.placement, storey.elevation);
+                let mut mb = MeshBuilder::default();
+                for tri in local.indices.as_chunks::<3>().0 {
+                    let p = tri.map(|i| transform(&t, local.positions[i as usize].map(f64::from)));
+                    mb.add_triangle(p);
+                }
+                let info = ElementInfo {
                     global_id: e.id.to_string(),
                     class: e.class.name().to_owned(),
                     name: e.name.clone(),
                     storey: storey.name.clone(),
                     material: mat.name.clone(),
                     category: mat.category,
-                },
-                mb,
-            );
+                };
+                Ok((info, mb))
+            })
+            .collect();
+        let mut b = SceneBuilder::default();
+        for r in meshed {
+            match r {
+                Ok((info, mb)) => b.push(info, mb),
+                Err(w) => b.warnings.push(w),
+            }
         }
         b.finish()
     }
@@ -124,7 +132,7 @@ impl SceneBuilder {
             origin_mm: origin,
             elements: self
                 .items
-                .into_iter()
+                .into_par_iter()
                 .map(|(info, mb)| SceneElement {
                     global_id: info.global_id,
                     class: info.class,

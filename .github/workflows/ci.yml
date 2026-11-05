@@ -85,11 +85,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # A missing or unreadable baseline must never fail the job: it only skips the comparison.
-          run=$(gh run list -R "$GITHUB_REPOSITORY" -b main -w ci.yml -e push -s success -L 1 --json databaseId -q '.[0].databaseId' || true)
+          # Newest unexpired bench-main artifact (only pushes to main upload one). A missing or
+          # unreadable baseline never fails the job: it only skips the comparison.
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=bench-main&per_page=50" \
+            --jq '[.artifacts[] | select(.expired | not) | select(.workflow_run.head_branch == "main")]
+                  | sort_by(.created_at) | last | .workflow_run.id // empty' || true)
           if [ -z "$run" ] || ! gh run download "$run" -R "$GITHUB_REPOSITORY" -n bench-main -D base; then
             echo "No main baseline yet: it is created by the first push to main with this job." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          echo "Baseline: run $run" | tee -a "$GITHUB_STEP_SUMMARY"
           # The baseline is reduced to its best run too, so both sides are compared alike.
           python3 -I scripts/bench_compare.py bench-*.json --baseline base/bench-*.json

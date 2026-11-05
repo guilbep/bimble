@@ -1,5 +1,10 @@
 //! `bimble` command-line tool. Same commands the viewer and agents will use.
 
+/// Measured on a 50 MB IFC: 10–20 % faster loading, freeing the parsed file 1.7× faster
+/// (docs/journal/2026-11-05.md). Set for the binary only; the libraries leave the choice to users.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use bimble_core::{Command, Generator, GlobalId, History, demo, file, version};
 mod bench;
 

@@ -10,6 +10,7 @@ name = "bimble"
 path = "src/main.rs"
 
 [dependencies]
+mimalloc.workspace = true
 bimble-core.workspace = true
 bimble-geom.workspace = true
 bimble-ifc.workspace = true
