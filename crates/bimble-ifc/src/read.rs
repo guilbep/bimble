@@ -1114,11 +1114,14 @@ fn signed_area(l: &[[f64; 2]]) -> f64 {
 }
 
 /// Segments needed so that chords stay within `tol` of a circle of radius `r` over `sweep` radians.
+/// Also at most 15° per segment, so small circles (bolts, drill holes) stay round: with the
+/// distance tolerance alone a Ø20 mm hole got 10 segments and lost 6.5 % of its volume.
 fn arc_segments(r: f64, sweep: f64, tol: f64) -> usize {
+    const MAX_STEP: f64 = std::f64::consts::PI / 12.0;
     let step = if tol > 0.0 && tol < r {
-        2.0 * (1.0 - tol / r).acos()
+        (2.0 * (1.0 - tol / r).acos()).min(MAX_STEP)
     } else {
-        sweep.abs()
+        MAX_STEP
     };
     ((sweep.abs() / step.max(1e-3)).ceil() as usize).clamp(8, 1024)
 }
@@ -1158,6 +1161,22 @@ fn arc(a: [f64; 2], b: [f64; 2], c: [f64; 2], tol: f64) -> Vec<[f64; 2]> {
 mod tests {
     use super::*;
     use bimble_core::demo::{FrameSpec, concrete_frame};
+
+    /// Small full circles: within ~1.2 % of the exact area (15° segments), like IfcOpenShell.
+    #[test]
+    fn small_circles_stay_round() {
+        let tol = ARC_TOLERANCE_MM; // file in mm
+        for r in [5.0, 10.0, 50.0] {
+            let n = arc_segments(r, std::f64::consts::TAU, tol);
+            let area = 0.5 * n as f64 * r * r * (std::f64::consts::TAU / n as f64).sin();
+            let exact = std::f64::consts::PI * r * r;
+            assert!(
+                (exact - area) / exact < 0.012,
+                "r={r}: {n} segments, {:.2}% short",
+                (exact - area) / exact * 100.0
+            );
+        }
+    }
 
     #[test]
     fn arc_half_circle() {

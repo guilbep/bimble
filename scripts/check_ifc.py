@@ -16,8 +16,29 @@ import sys
 import ifcopenshell
 import ifcopenshell.geom
 import ifcopenshell.util.element as eu
-import ifcopenshell.util.shape as su
 import ifcopenshell.util.unit as uu
+
+def local_volume(geometry):
+    """Signed mesh volume (m3) computed relative to the mesh's own first vertex.
+
+    ifcopenshell.util.shape.get_volume sums terms in world coordinates; with real site
+    coordinates (millions of metres) those terms cancel catastrophically and the result can
+    exceed the bounding-box volume by orders of magnitude. Shifting to a local origin first
+    keeps full precision.
+    """
+    v, f = geometry.verts, geometry.faces
+    if not f:
+        return 0.0
+    ox, oy, oz = v[0], v[1], v[2]
+    total = 0.0
+    for i in range(0, len(f), 3):
+        a, b, c = (f[i + k] * 3 for k in range(3))
+        ax, ay, az = v[a] - ox, v[a + 1] - oy, v[a + 2] - oz
+        bx, by, bz = v[b] - ox, v[b + 1] - oy, v[b + 2] - oz
+        cx, cy, cz = v[c] - ox, v[c + 1] - oy, v[c + 2] - oz
+        total += ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)
+    return total / 6.0
+
 
 
 def analytic_volume_mm3(g):
@@ -66,7 +87,7 @@ def main(bimble_path, ifc_path):
             errors.append(f"{e['name']}: geometry failed: {ex}")
             continue
         # IfcOpenShell geometry is in metres.
-        vol_mm3 = su.get_volume(shape.geometry) * 1e9
+        vol_mm3 = local_volume(shape.geometry) * 1e9
         want = analytic_volume_mm3(e["generator"])
         if abs(vol_mm3 - want) > 1e-4 * want:
             errors.append(f"{e['name']}: volume {vol_mm3:.0f} mm3 != {want:.0f} mm3")
