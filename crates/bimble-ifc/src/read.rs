@@ -8,6 +8,7 @@
 
 use crate::step::{self, Entity, StepFile, Value};
 use bimble_core::MaterialCategory;
+use bimble_geom::boolean::{self, Op, Tri};
 use bimble_geom::scene::{cross, dot, norm, sub};
 use bimble_geom::{ElementInfo, MeshBuilder, Scene, SceneBuilder};
 use std::collections::{BTreeMap, HashMap};
@@ -98,6 +99,7 @@ pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadErr
     r.arc_tol = ARC_TOLERANCE_MM / scale;
     r.angle_scale = r.plane_angle_to_radians();
     let containers = r.containers();
+    let voids = r.voids();
     let materials = r.materials();
 
     let mut ids: Vec<u64> = file.entities.keys().copied().collect();
@@ -114,23 +116,32 @@ pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadErr
         if shape.name != "IFCPRODUCTDEFINITIONSHAPE" || !pl.name.ends_with("PLACEMENT") {
             continue;
         }
-        let placement = r.object_placement(e.arg(5).as_ref().unwrap(), 0);
         let mut mb = MeshBuilder::default();
-        let mut emit = Emit {
-            mb: &mut mb,
-            scale,
-            budget: &mut budget,
-        };
-        for rep in shape.arg(2).as_list().unwrap_or(&[]) {
-            let Some(rep) = file.deref(rep) else { continue };
-            if !is_body(rep) {
-                continue;
-            }
-            for item in rep.arg(3).as_list().unwrap_or(&[]) {
-                if let Some(item_id) = item.as_ref() {
-                    r.item(item_id, &placement, &mut emit, 0);
+        {
+            let mut emit = Emit {
+                mb: &mut mb,
+                scale,
+                budget: &mut budget,
+            };
+            r.product_body(e, &mut emit);
+        }
+        // Openings (IfcRelVoidsElement): subtract them from their host.
+        if let Some(ops) = voids.get(&id).filter(|_| !mb.tris.is_empty()) {
+            let mut cutters: Vec<Vec<Tri>> = Vec::new();
+            for &o in ops {
+                let Some(oe) = file.get(o) else { continue };
+                let mut ob = MeshBuilder::default();
+                let mut emit = Emit {
+                    mb: &mut ob,
+                    scale,
+                    budget: &mut budget,
+                };
+                r.product_body(oe, &mut emit);
+                if !ob.tris.is_empty() {
+                    cutters.push(ob.tris);
                 }
             }
+            r.cut(&mut mb.tris, &cutters, &class_name(&e.name));
         }
         let class = class_name(&e.name);
         let (material, mut category) = materials
@@ -307,6 +318,11 @@ impl Affine {
             t: self.apply(other.t),
         }
     }
+    /// World point → local coordinates (axes may be scaled but must be orthogonal).
+    pub fn local(&self, p: [f64; 3]) -> [f64; 3] {
+        let d = sub(p, self.t);
+        [self.x, self.y, self.z].map(|a| dot(d, a) / dot(a, a).max(1e-300))
+    }
     fn determinant(&self) -> f64 {
         dot(self.x, cross(self.y, self.z))
     }
@@ -352,12 +368,16 @@ impl Emit<'_> {
         self.charge(before);
     }
     fn triangle(&mut self, t: [[f64; 3]; 3]) {
+        let s = self.scale;
+        self.triangle_mm(t.map(|p| p.map(|c| c * s)));
+    }
+    /// A triangle already in mm (boolean results).
+    fn triangle_mm(&mut self, t: [[f64; 3]; 3]) {
         if !self.has_budget() {
             return;
         }
         let before = self.mb.tris.len();
-        let s = self.scale;
-        self.mb.add_triangle(t.map(|p| p.map(|c| c * s)));
+        self.mb.add_triangle(t);
         self.charge(before);
     }
 }
@@ -746,15 +766,179 @@ impl<'a> Reader<'a> {
                 }
                 self.map_stack.pop();
             }
-            "IFCBOOLEANCLIPPINGRESULT" | "IFCBOOLEANRESULT" => {
-                self.warn("boolean result drawn without its cut (first operand only)");
-                if let Some(first) = e.arg(1).as_ref() {
-                    self.item(first, tf, out, depth + 1);
-                }
-            }
+            "IFCBOOLEANCLIPPINGRESULT" | "IFCBOOLEANRESULT" => self.boolean(e, tf, out, depth),
             "IFCSWEPTDISKSOLID" | "IFCSWEPTDISKSOLIDPOLYGONAL" => self.swept_disk(e, tf, out),
             "IFCSTYLEDITEM" => {}
             other => self.warn(format!("unsupported geometry {other} (skipped)")),
+        }
+    }
+
+    /// The Body representation of a product, placed in the world, into `out`.
+    fn product_body(&mut self, e: &Entity, out: &mut Emit) {
+        let (Some(pl), Some(shape)) = (e.arg(5).as_ref(), self.f.deref(e.arg(6))) else {
+            return;
+        };
+        let placement = self.object_placement(pl, 0);
+        for rep in shape.arg(2).as_list().unwrap_or(&[]) {
+            let Some(rep) = self.f.deref(rep) else {
+                continue;
+            };
+            if !is_body(rep) {
+                continue;
+            }
+            for item in rep.arg(3).as_list().unwrap_or(&[]) {
+                if let Some(item_id) = item.as_ref() {
+                    self.item(item_id, &placement, out, 0);
+                }
+            }
+        }
+    }
+
+    /// Host element id → its openings (IfcRelVoidsElement).
+    fn voids(&self) -> HashMap<u64, Vec<u64>> {
+        let mut out: HashMap<u64, Vec<u64>> = HashMap::new();
+        for (_, rel) in self.f.by_type("IFCRELVOIDSELEMENT") {
+            if let (Some(h), Some(o)) = (rel.arg(4).as_ref(), rel.arg(5).as_ref()) {
+                out.entry(h).or_default().push(o);
+            }
+        }
+        for v in out.values_mut() {
+            v.sort_unstable();
+        }
+        out
+    }
+
+    /// Subtract cutters from `tris` (mm). If the whole set fails (e.g. one opening isn't a closed
+    /// solid), retry one cutter at a time and keep the ones that work.
+    fn cut(&mut self, tris: &mut Vec<Tri>, cutters: &[Vec<Tri>], what: &str) {
+        if cutters.is_empty() {
+            return;
+        }
+        let refs: Vec<&[Tri]> = cutters.iter().map(Vec::as_slice).collect();
+        match boolean::apply(Op::Difference, tris, &refs) {
+            Ok(r) => *tris = r,
+            Err(_) => {
+                let mut failed = 0;
+                for c in cutters {
+                    match boolean::apply(Op::Difference, tris, &[c]) {
+                        Ok(r) => *tris = r,
+                        Err(_) => failed += 1,
+                    }
+                }
+                if failed > 0 {
+                    self.warn(format!(
+                        "{what}: {failed} opening(s) not cut (geometry not a closed solid)"
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Triangles (mm, world) of one representation item, evaluated on its own.
+    fn solid_tris(&mut self, id: u64, tf: &Affine, out: &mut Emit, depth: usize) -> Vec<Tri> {
+        let mut mb = MeshBuilder::default();
+        {
+            let mut tmp = Emit {
+                mb: &mut mb,
+                scale: out.scale,
+                budget: &mut *out.budget,
+            };
+            self.item(id, tf, &mut tmp, depth);
+        }
+        mb.tris
+    }
+
+    /// IfcBooleanResult / IfcBooleanClippingResult (Operator, FirstOperand, SecondOperand).
+    fn boolean(&mut self, e: &Entity, tf: &Affine, out: &mut Emit, depth: usize) {
+        let op = match e.arg(0).as_enum() {
+            Some("UNION") => Op::Union,
+            Some("INTERSECTION") => Op::Intersection,
+            _ => Op::Difference,
+        };
+        let Some(first) = e.arg(1).as_ref() else {
+            return;
+        };
+        let a = self.solid_tris(first, tf, out, depth + 1);
+        if a.is_empty() {
+            return;
+        }
+        let b = match self.get(e.arg(2)) {
+            Some(h)
+                if matches!(
+                    h.name.as_str(),
+                    "IFCHALFSPACESOLID" | "IFCBOXEDHALFSPACE" | "IFCPOLYGONALBOUNDEDHALFSPACE"
+                ) =>
+            {
+                self.half_space(h, tf, &a, out.scale)
+            }
+            Some(_) => self.solid_tris(e.arg(2).as_ref().unwrap(), tf, out, depth + 1),
+            None => Vec::new(),
+        };
+        match boolean::apply(op, &a, &[&b]) {
+            Ok(r) => {
+                for t in r {
+                    out.triangle_mm(t);
+                }
+            }
+            Err(err) => {
+                self.warn(format!("boolean cut failed, drawn uncut ({err})"));
+                for t in a {
+                    out.triangle_mm(t);
+                }
+            }
+        }
+    }
+
+    /// A half-space as a finite solid (mm, world), large enough to contain `operand`.
+    /// IfcHalfSpaceSolid(BaseSurface, AgreementFlag): with AgreementFlag TRUE the plane normal
+    /// points away from the half-space's material, so the material is on the −normal side.
+    fn half_space(&mut self, h: &Entity, tf: &Affine, operand: &[Tri], scale: f64) -> Vec<Tri> {
+        let Some(plane) = self.get(h.arg(0)).filter(|p| p.name == "IFCPLANE") else {
+            self.warn(format!("{}: unsupported base surface (not cut)", h.name));
+            return Vec::new();
+        };
+        let pos = tf.then(&self.axis_placement(plane.arg(0)));
+        let material_below = h.arg(1).as_enum() != Some("F");
+        // Size from the operand (file units), centred on its projection onto the plane.
+        let pts = operand.iter().flatten().map(|p| p.map(|c| c / scale));
+        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for p in pts {
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        let l = 2.0 * norm(sub(hi, lo)) + 1.0;
+        let c = pos.local([0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0));
+        let rect = vec![
+            [c[0] - l, c[1] - l],
+            [c[0] + l, c[1] - l],
+            [c[0] + l, c[1] + l],
+            [c[0] - l, c[1] + l],
+        ];
+        let (z0, z1) = if material_below {
+            (-l + c[2].min(0.0), 0.0)
+        } else {
+            (0.0, l + c[2].max(0.0))
+        };
+        let half = prism_tris(&rect, &pos, z0, z1, scale);
+        if h.name != "IFCPOLYGONALBOUNDEDHALFSPACE" {
+            return half;
+        }
+        // IfcPolygonalBoundedHalfSpace(.., Position, PolygonalBoundary): also inside the boundary
+        // prism (extruded along Position's Z).
+        let ppos = tf.then(&self.axis_placement(h.arg(2)));
+        let Some(poly) = self.curve(h.arg(3)) else {
+            return Vec::new();
+        };
+        let cz = ppos.local([0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0))[2];
+        let prism = prism_tris(&poly, &ppos, cz - l, cz + l, scale);
+        match boolean::apply(Op::Intersection, &half, &[&prism]) {
+            Ok(t) => t,
+            Err(err) => {
+                self.warn(format!("polygonal half-space failed ({err}); not cut"));
+                Vec::new()
+            }
         }
     }
 
@@ -855,6 +1039,38 @@ impl<'a> Reader<'a> {
                     })
                     .collect();
                 placed(self, vec![c], e.arg(2))
+            }
+            "IFCCIRCLEHOLLOWPROFILEDEF" => {
+                // (ProfileType, ProfileName, Position, Radius, WallThickness)
+                let (r, t) = (e.arg(3).as_f64()?, e.arg(4).as_f64()?);
+                let ring = |rad: f64| {
+                    let n = arc_segments(r, std::f64::consts::TAU, self.arc_tol);
+                    (0..n)
+                        .map(|i| {
+                            let a = i as f64 / n as f64 * std::f64::consts::TAU;
+                            [rad * a.cos(), rad * a.sin()]
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let mut loops = vec![ring(r)];
+                if t > 0.0 && t < r {
+                    loops.push(ring(r - t));
+                }
+                placed(self, loops, e.arg(2))
+            }
+            "IFCRECTANGLEHOLLOWPROFILEDEF" => {
+                // (ProfileType, ProfileName, Position, XDim, YDim, WallThickness, ..fillets ignored)
+                let (x, y, t) = (
+                    e.arg(3).as_f64()? / 2.0,
+                    e.arg(4).as_f64()? / 2.0,
+                    e.arg(5).as_f64()?,
+                );
+                let rect = |a: f64, b: f64| vec![[-a, -b], [a, -b], [a, b], [-a, b]];
+                let mut loops = vec![rect(x, y)];
+                if t > 0.0 && t < x.min(y) {
+                    loops.push(rect(x - t, y - t));
+                }
+                placed(self, loops, e.arg(2))
             }
             "IFCISHAPEPROFILEDEF" => {
                 // Root fillets between web and flanges (FilletRadius); flange edge radii and
@@ -1306,6 +1522,35 @@ fn signed_area(l: &[[f64; 2]]) -> f64 {
         .map(|(a, b)| a[0] * b[1] - b[0] * a[1])
         .sum::<f64>()
         / 2.0
+}
+
+/// Closed prism (mm): a 2D loop in `pos`'s XY plane, from z0 to z1 along its Z. Outward-facing.
+fn prism_tris(loop2d: &[[f64; 2]], pos: &Affine, z0: f64, z1: f64, scale: f64) -> Vec<Tri> {
+    let mut l = loop2d.to_vec();
+    if signed_area(&l) < 0.0 {
+        l.reverse();
+    }
+    let p = |q: [f64; 2], z: f64| pos.apply([q[0], q[1], z]).map(|c| c * scale);
+    let bottom: Vec<[f64; 3]> = l.iter().rev().map(|q| p(*q, z0)).collect();
+    let top: Vec<[f64; 3]> = l.iter().map(|q| p(*q, z1)).collect();
+    let mut mb = MeshBuilder::default();
+    mb.add_polygon(&bottom, &[]);
+    mb.add_polygon(&top, &[]);
+    let n = l.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (bi, bj, ti, tj) = (p(l[i], z0), p(l[j], z0), p(l[i], z1), p(l[j], z1));
+        mb.add_triangle([bi, bj, tj]);
+        mb.add_triangle([bi, tj, ti]);
+    }
+    let mut tris = mb.tris;
+    // A mirroring placement turns the solid inside out.
+    if pos.determinant() < 0.0 {
+        for t in &mut tris {
+            t.swap(1, 2);
+        }
+    }
+    tris
 }
 
 /// Arc through three points in 3D, within `tol` of the true arc (via the 2D version in the

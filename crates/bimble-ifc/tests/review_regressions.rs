@@ -110,3 +110,49 @@ fn axis2placement_default_x_follows_world_x_for_steep_axes() {
         0.01,
     );
 }
+
+/// Boolean cuts and openings (geometry kernel, ADR 0010). Expected values are exact (worked out by
+/// hand) and match IfcOpenShell 0.9 on the same file.
+#[test]
+fn boolean_cuts_and_openings_are_exact() {
+    let s = read_str(&fixture("booleans.ifc")).unwrap();
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    let vol = |name: &str| {
+        s.elements
+            .iter()
+            .find(|e| e.name == name)
+            .unwrap()
+            .mesh
+            .volume()
+    };
+    let close = |name: &str, want: f64, tol: f64| {
+        let v = vol(name);
+        assert!((v - want).abs() / want < tol, "{name}: {v} vs {want}");
+    };
+    // Column 1000×400×3000 clipped by the plane z = 2000 + 0.5x, keeping the part below.
+    close("clipped", 1000.0 * 400.0 * 2000.0, 1e-9);
+    assert_box(
+        bbox(&s, "clipped"),
+        ([-500.0, -200.0, 0.0], [500.0, 200.0, 2250.0]),
+        0.01,
+    );
+    // Polygonal bounded half-space: removes x∈[0,500], y∈[0,200], z∈[2500,3000].
+    close(
+        "polygonal",
+        1000.0 * 400.0 * 3000.0 - 500.0 * 200.0 * 500.0,
+        1e-9,
+    );
+    // Ø200 hole through the 400 mm thickness (24-sided circle: within 1.2 % of the hole volume).
+    let hole = std::f64::consts::PI * 100.0 * 100.0 * 400.0;
+    close(
+        "drilled",
+        1000.0 * 400.0 * 3000.0 - hole,
+        1.2e-2 * hole / (1.2e9 - hole),
+    );
+    // Wall 6000×200×2800 with a 1200×2100 door opening (IfcRelVoidsElement).
+    close(
+        "wall",
+        6000.0 * 200.0 * 2800.0 - 1200.0 * 200.0 * 2100.0,
+        1e-9,
+    );
+}

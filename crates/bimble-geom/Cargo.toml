@@ -8,3 +8,4 @@ license.workspace = true
 [dependencies]
 bimble-core.workspace = true
 earcutr.workspace = true
+manifold-csg.workspace = true

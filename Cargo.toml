@@ -28,3 +28,5 @@ pollster = "1"
 png = "0.18"
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland", "accesskit"] }
 rfd = "0.17"
+# Geometry kernel (ADR 0010). No TBB: per-element booleans are small.
+manifold-csg = { version = "0.4", default-features = false }
