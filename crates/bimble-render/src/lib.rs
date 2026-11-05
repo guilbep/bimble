@@ -809,11 +809,15 @@ mod tests {
         assert_eq!(px.len(), 320 * 200 * 4);
         let bg = palette::BACKGROUND.map(|c| (c * 255.0).round() as i32);
         let differs = px
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| (0..3).any(|k| (p[k] as i32 - bg[k]).abs() > 3))
             .count();
         let dark = px
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] < 60 && p[1] < 60 && p[2] < 60)
             .count();
         // The frame covers a good part of the image and has edges drawn.
