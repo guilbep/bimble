@@ -1,9 +1,13 @@
 name: ci
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   rust:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -13,11 +17,15 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      # A software Vulkan driver, so the renderer tests actually draw instead of skipping.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
-  # Our IFC export must open correctly in a reference implementation.
+  # Our IFC export must open correctly in a reference implementation, and our IFC reader must
+  # agree with it element by element.
   ifc-oracle:
     runs-on: ubuntu-latest
     steps:
@@ -28,8 +36,20 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ifcopenshell
+      - run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers
       - run: cargo build --release
-      - run: |
+      - name: Export checked by IfcOpenShell
+        run: |
           ./target/release/bimble demo frame.bimble
           ./target/release/bimble export-ifc frame.bimble frame.ifc
           python -I scripts/check_ifc.py frame.bimble frame.ifc
+      - name: Reader compared with IfcOpenShell
+        run: |
+          ./target/release/bimble info frame.ifc --elements-json > ours.jsonl
+          python -I scripts/compare_ifcopenshell.py frame.ifc ours.jsonl
+      - name: Render
+        run: ./target/release/bimble render frame.ifc frame.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-render
+          path: frame.png

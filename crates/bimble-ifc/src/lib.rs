@@ -7,6 +7,9 @@
 //! Each element gets explicit SweptSolid geometry (readable by any IFC tool) plus a
 //! `Bimble_Generator` property set holding the generator name, version and parameters.
 
+pub mod read;
+pub mod step;
+
 use bimble_core::{Element, Generator, GlobalId, Model, Profile};
 use std::fmt::Write;
 
