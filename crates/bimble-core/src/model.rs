@@ -35,9 +35,23 @@ pub enum MaterialCategory {
     Timber,
     Masonry,
     Insulation,
+    Earth,
+    Glass,
+    Other,
 }
 
 impl MaterialCategory {
+    pub const ALL: [MaterialCategory; 8] = [
+        MaterialCategory::Concrete,
+        MaterialCategory::Steel,
+        MaterialCategory::Timber,
+        MaterialCategory::Masonry,
+        MaterialCategory::Insulation,
+        MaterialCategory::Earth,
+        MaterialCategory::Glass,
+        MaterialCategory::Other,
+    ];
+
     /// IFC4 IfcMaterial.Category recommended value.
     pub fn ifc_category(self) -> &'static str {
         match self {
@@ -46,6 +60,106 @@ impl MaterialCategory {
             MaterialCategory::Timber => "wood",
             MaterialCategory::Masonry => "brick",
             MaterialCategory::Insulation => "insulation",
+            MaterialCategory::Earth => "earth",
+            MaterialCategory::Glass => "glass",
+            MaterialCategory::Other => "",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MaterialCategory::Concrete => "Concrete",
+            MaterialCategory::Steel => "Steel",
+            MaterialCategory::Timber => "Timber",
+            MaterialCategory::Masonry => "Masonry",
+            MaterialCategory::Insulation => "Insulation",
+            MaterialCategory::Earth => "Earth",
+            MaterialCategory::Glass => "Glass",
+            MaterialCategory::Other => "Other",
+        }
+    }
+
+    /// Best-effort family from a material name as found in IFC files ("C30/37", "GL24h", "S355",
+    /// "Béton armé", "LMP_Earth"…). A heuristic: unknown names give `Other`.
+    pub fn classify(name: &str) -> MaterialCategory {
+        let n = name.to_lowercase();
+        let has = |words: &[&str]| words.iter().any(|w| n.contains(w));
+        let digits_after = |prefix: &str| {
+            n.strip_prefix(prefix)
+                .is_some_and(|r| r.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        };
+        // Concrete strength classes have a slash (C30/37, LC25/28); timber classes don't (C24, GL24h, D30).
+        if has(&["concrete", "béton", "beton", "beton"])
+            || (n.contains('/') && (digits_after("c") || digits_after("lc")))
+        {
+            MaterialCategory::Concrete
+        } else if has(&[
+            "timber", "wood", "bois", "clt", "glulam", "lamellé", "lamelle",
+        ]) || digits_after("gl")
+            || digits_after("c")
+            || digits_after("d")
+        {
+            MaterialCategory::Timber
+        } else if has(&["steel", "acier", "stahl", "metal", "métal"]) || digits_after("s") {
+            MaterialCategory::Steel
+        } else if has(&[
+            "brick",
+            "brique",
+            "masonry",
+            "maçonnerie",
+            "maconnerie",
+            "block",
+            "parpaing",
+            "stone",
+            "pierre",
+        ]) {
+            // Before earth: "terre cuite" is fired clay, not soil.
+            MaterialCategory::Masonry
+        } else if has(&[
+            "earth", "terre", "soil", "ground", "terrain", "gravel", "gravier", "molasse",
+        ]) {
+            MaterialCategory::Earth
+        } else if has(&[
+            "insulation",
+            "isolation",
+            "isolant",
+            "mineral wool",
+            "laine",
+            "xps",
+            "eps",
+        ]) {
+            MaterialCategory::Insulation
+        } else if has(&["glass", "verre", "glazing", "vitrage"]) {
+            MaterialCategory::Glass
+        } else {
+            MaterialCategory::Other
+        }
+    }
+}
+
+#[cfg(test)]
+mod material_tests {
+    use super::MaterialCategory::{self, *};
+
+    #[test]
+    fn classify_real_names() {
+        let cases = [
+            ("C30/37", Concrete),
+            ("C30/37(P)", Concrete),
+            ("C80/95 (P)", Concrete),
+            ("Concrete_T4", Concrete),
+            ("Béton armé", Concrete),
+            ("GL24h", Timber),
+            ("C24 (CLT)", Timber),
+            ("Toit de base:LM_SLAB_TIMBER_CLT_240", Timber),
+            ("S355", Steel),
+            ("LMP_Earth", Earth),
+            ("Laine minérale", Insulation),
+            ("Brique terre cuite", Masonry),
+            ("Mystery", Other),
+        ];
+        for (name, want) in cases {
+            assert_eq!(MaterialCategory::classify(name), want, "{name}");
         }
     }
 }

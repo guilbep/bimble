@@ -25,8 +25,13 @@ enum Cmd {
         #[arg(long, default_value_t = 2)]
         storeys: usize,
     },
-    /// Summary of a .bimble file: counts, hash, mesh size and meshing time
-    Info { file: PathBuf },
+    /// Summary of a .bimble or .ifc file: counts, materials, triangles, load time
+    Info {
+        file: PathBuf,
+        /// Print one JSON object per element (GlobalId, class, volume, world bounding box in mm)
+        #[arg(long)]
+        elements_json: bool,
+    },
     /// List elements (GlobalId, IFC class, name, generator)
     Ls {
         file: PathBuf,
@@ -73,25 +78,43 @@ fn run(cli: Cli) -> Result<(), String> {
             file::save(&m, &out).map_err(e)?;
             println!("{} elements → {}", m.elements.len(), out.display());
         }
-        Cmd::Info { file: path } => {
-            let m = file::load(&path).map_err(e)?;
-            println!("project   {} [{}]", m.project_name, m.project_id);
-            println!("hash      {}", version::model_hash(&m));
-            println!("storeys   {}", m.storeys.len());
-            println!("materials {}", m.materials.len());
-            println!("elements  {}", m.elements.len());
+        Cmd::Info {
+            file: path,
+            elements_json,
+        } => {
             let t = Instant::now();
-            let (mut tris, mut edges) = (0, 0);
-            for el in m.elements.values() {
-                let mesh =
-                    bimble_geom::element_mesh(el).map_err(|x| format!("{}: {x:?}", el.name))?;
-                tris += mesh.triangle_count();
-                edges += mesh.edges.len();
+            let scene = load_scene(&path)?;
+            let load = t.elapsed();
+            if elements_json {
+                print_elements_json(&scene);
+                return Ok(());
             }
+            if !is_ifc(&path) {
+                let m = file::load(&path).map_err(e)?;
+                println!("project   {} [{}]", m.project_name, m.project_id);
+                println!("hash      {}", version::model_hash(&m));
+            }
+            let mut classes: std::collections::BTreeMap<&str, usize> = Default::default();
+            let mut cats: std::collections::BTreeMap<&str, usize> = Default::default();
+            let mut storeys: std::collections::BTreeSet<&str> = Default::default();
+            for el in &scene.elements {
+                *classes.entry(&el.class).or_default() += 1;
+                *cats.entry(el.category.label()).or_default() += 1;
+                storeys.insert(&el.storey);
+            }
+            println!("elements  {}", scene.elements.len());
+            println!("storeys   {}", storeys.len());
+            println!("classes   {}", fmt_counts(&classes));
+            println!("materials {}", fmt_counts(&cats));
+            let edges: usize = scene.elements.iter().map(|e| e.mesh.edges.len()).sum();
             println!(
-                "meshes    {tris} triangles, {edges} edges, built in {:.1?}",
-                t.elapsed()
+                "meshes    {} triangles, {edges} edges",
+                scene.triangle_count()
             );
+            println!("loaded in {load:.1?}");
+            for w in &scene.warnings {
+                println!("warning   {w}");
+            }
         }
         Cmd::Ls { file: path, class } => {
             use std::io::Write;
@@ -172,6 +195,57 @@ fn run(cli: Cli) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn is_ifc(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|x| x.eq_ignore_ascii_case("ifc"))
+}
+
+/// Load a .ifc or .bimble file as a render-ready scene.
+fn load_scene(path: &std::path::Path) -> Result<bimble_geom::Scene, String> {
+    if is_ifc(path) {
+        bimble_ifc::read::read_file(path).map_err(|x| x.to_string())
+    } else {
+        let m = file::load(path).map_err(|x| x.to_string())?;
+        Ok(bimble_geom::Scene::from_model(&m))
+    }
+}
+
+fn fmt_counts(m: &std::collections::BTreeMap<&str, usize>) -> String {
+    let mut v: Vec<_> = m.iter().collect();
+    v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    v.iter()
+        .map(|(k, n)| format!("{k} {n}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn print_elements_json(scene: &bimble_geom::Scene) {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    let o = scene.origin_mm;
+    for el in &scene.elements {
+        let mut lo = [f64::MAX; 3];
+        let mut hi = [f64::MIN; 3];
+        for p in &el.mesh.positions {
+            for k in 0..3 {
+                let w = p[k] as f64 + o[k];
+                lo[k] = lo[k].min(w);
+                hi[k] = hi[k].max(w);
+            }
+        }
+        let j = serde_json::json!({
+            "global_id": el.global_id, "class": el.class, "name": el.name, "storey": el.storey,
+            "material": el.material, "category": el.category.label(),
+            "triangles": el.mesh.triangle_count(), "volume_mm3": el.mesh.volume(),
+            "bbox_min_mm": lo, "bbox_max_mm": hi,
+        });
+        if writeln!(out, "{j}").is_err() {
+            break;
+        }
+    }
 }
 
 /// UTC timestamp without pulling in a date crate.

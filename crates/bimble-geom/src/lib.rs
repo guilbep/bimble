@@ -4,6 +4,10 @@
 //! Faces get their own vertices (flat shading, crisp drawing look). Feature edges are listed
 //! separately so the renderer can draw outlines like a technical drawing.
 
+pub mod scene;
+
+pub use scene::{ElementInfo, MeshBuilder, Scene, SceneBuilder, SceneElement};
+
 use bimble_core::{Element, Placement, Profile};
 
 #[derive(Debug, Default, Clone)]

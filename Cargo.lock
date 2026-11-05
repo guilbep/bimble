@@ -99,6 +99,7 @@ name = "bimble-ifc"
 version = "0.0.1"
 dependencies = [
  "bimble-core",
+ "bimble-geom",
  "blake3",
  "serde_json",
 ]
