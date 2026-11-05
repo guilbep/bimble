@@ -234,6 +234,8 @@ pub struct GpuScene {
     face_vertices: u32,
     lines: wgpu::Buffer,
     line_vertices: u32,
+    /// Whether edges carry face normals (needed to hide back edges in the section box).
+    pub edge_normals: bool,
     /// Bounds of the whole scene (not just the visible part), for stable clip planes.
     pub bounds: Sphere,
 }
@@ -314,6 +316,9 @@ pub struct Renderer {
     face_pipeline: wgpu::RenderPipeline,
     face_front_pipeline: wgpu::RenderPipeline,
     face_back_pipeline: wgpu::RenderPipeline,
+    line_clip_pipeline: wgpu::RenderPipeline,
+    line_wide_pipeline: wgpu::RenderPipeline,
+    line_clip_lean_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
@@ -395,13 +400,16 @@ impl Renderer {
         })];
 
         let face_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4];
-        let face_pipeline_with = |label: &str, cull_mode: Option<wgpu::Face>, bias: (i32, f32)| {
+        let face_pipeline_with = |label: &str,
+                                  (vs, fs): (&str, &str),
+                                  cull_mode: Option<wgpu::Face>,
+                                  bias: (i32, f32)| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: Some("vs_face"),
+                    entry_point: Some(vs),
                     compilation_options: Default::default(),
                     buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<FaceVertex>() as u64,
@@ -429,7 +437,7 @@ impl Renderer {
                 multisample,
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_face"),
+                    entry_point: Some(fs),
                     compilation_options: Default::default(),
                     targets: &target,
                 }),
@@ -438,56 +446,98 @@ impl Renderer {
             })
         };
         // Imported meshes don't always have consistent winding: draw both sides at once.
-        let face_pipeline = face_pipeline_with("bimble faces", None, (2, 1.5));
+        let face_pipeline =
+            face_pipeline_with("bimble faces", ("vs_face", "fs_face"), None, (2, 1.5));
         // With a section box, inward faces show cut surfaces. Drawn in a second pass pushed a
         // little further back, so where an outward and an inward face meet (silhouette corners)
         // the outward one wins instead of speckling the outline with cut colour.
-        let face_front_pipeline =
-            face_pipeline_with("bimble faces, outward", Some(wgpu::Face::Back), (2, 1.5));
-        let face_back_pipeline =
-            face_pipeline_with("bimble faces, inward", Some(wgpu::Face::Front), (8, 4.0));
+        let face_front_pipeline = face_pipeline_with(
+            "bimble faces, outward, section box",
+            ("vs_face_clip", "fs_face_clip"),
+            Some(wgpu::Face::Back),
+            (2, 1.5),
+        );
+        let face_back_pipeline = face_pipeline_with(
+            "bimble faces, inward (cut surfaces), section box",
+            ("vs_face_clip", "fs_face_cut"),
+            Some(wgpu::Face::Front),
+            (8, 4.0),
+        );
 
-        let line_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Snorm8x4, 2 => Snorm8x4];
-        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("bimble edges"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_line"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<LineVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &line_attrs,
-                })],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample,
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_line"),
-                compilation_options: Default::default(),
-                targets: &target,
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        // Normal viewing reads only positions; the section box also reads the face normals.
+        let line_attrs_lean = wgpu::vertex_attr_array![0 => Float32x3];
+        let line_attrs_clip =
+            wgpu::vertex_attr_array![0 => Float32x3, 1 => Snorm8x4, 2 => Snorm8x4];
+        let line_pipeline_with =
+            |label: &str,
+             (vs, fs): (&str, &str),
+             stride: usize,
+             attrs: &[wgpu::VertexAttribute]| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some(vs),
+                        compilation_options: Default::default(),
+                        buffers: &[Some(wgpu::VertexBufferLayout {
+                            array_stride: stride as u64,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: attrs,
+                        })],
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::LineList,
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample,
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some(fs),
+                        compilation_options: Default::default(),
+                        targets: &target,
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+        let line_pipeline =
+            line_pipeline_with("bimble edges", ("vs_line", "fs_line"), 12, &line_attrs_lean);
+        let line_clip_lean_pipeline = line_pipeline_with(
+            "bimble edges, section box, no normals",
+            ("vs_line_clip_lean", "fs_line_clip"),
+            12,
+            &line_attrs_lean,
+        );
+        // Edges with normals, drawn without the box (the box was used, then switched off).
+        let line_wide_pipeline = line_pipeline_with(
+            "bimble edges (with normals)",
+            ("vs_line", "fs_line"),
+            std::mem::size_of::<LineVertex>(),
+            &line_attrs_lean,
+        );
+        let line_clip_pipeline = line_pipeline_with(
+            "bimble edges, section box",
+            ("vs_line_clip", "fs_line_clip"),
+            std::mem::size_of::<LineVertex>(),
+            &line_attrs_clip,
+        );
 
         Renderer {
             face_pipeline,
             face_front_pipeline,
             face_back_pipeline,
             line_pipeline,
+            line_wide_pipeline,
+            line_clip_pipeline,
+            line_clip_lean_pipeline,
             uniforms,
             bind_group,
             samples,
@@ -501,8 +551,22 @@ impl Renderer {
         scene: &Scene,
         style: impl Fn(usize, &SceneElement) -> Style,
     ) -> GpuScene {
+        self.upload_with(device, scene, style, false)
+    }
+
+    /// Like `upload`; with `edge_normals`, edges also carry the normals of their faces, which the
+    /// section box needs to hide edges behind their own solid. They cost 8 bytes per edge
+    /// vertex (12 → 20), so they are only uploaded when the box is used.
+    pub fn upload_with(
+        &self,
+        device: &wgpu::Device,
+        scene: &Scene,
+        style: impl Fn(usize, &SceneElement) -> Style,
+        edge_normals: bool,
+    ) -> GpuScene {
         let mut faces: Vec<FaceVertex> = Vec::new();
         let mut lines: Vec<LineVertex> = Vec::new();
+        let mut lines_lean: Vec<[f32; 3]> = Vec::new();
         for (i, e) in scene.elements.iter().enumerate() {
             let s = style(i, e);
             if s == Style::Hidden {
@@ -522,10 +586,16 @@ impl Renderer {
                     color,
                 });
             }
-            for (k, seg) in e.mesh.edges.iter().enumerate() {
-                let [n1, n2] = e.mesh.edge_normals.get(k).copied().unwrap_or_default();
-                for &pos in seg {
-                    lines.push(LineVertex { pos, n1, n2 });
+            if edge_normals {
+                for (k, seg) in e.mesh.edges.iter().enumerate() {
+                    let [n1, n2] = e.mesh.edge_normals.get(k).copied().unwrap_or_default();
+                    for &pos in seg {
+                        lines.push(LineVertex { pos, n1, n2 });
+                    }
+                }
+            } else {
+                for seg in &e.mesh.edges {
+                    lines_lean.extend_from_slice(seg);
                 }
             }
         }
@@ -545,8 +615,13 @@ impl Renderer {
         GpuScene {
             faces: buf("bimble face vb", bytemuck::cast_slice(&faces)),
             face_vertices: faces.len() as u32,
-            lines: buf("bimble line vb", bytemuck::cast_slice(&lines)),
-            line_vertices: lines.len() as u32,
+            lines: if edge_normals {
+                buf("bimble line vb", bytemuck::cast_slice(&lines))
+            } else {
+                buf("bimble line vb", bytemuck::cast_slice(&lines_lean))
+            },
+            line_vertices: (lines.len() + lines_lean.len()) as u32,
+            edge_normals,
             bounds,
         }
     }
@@ -654,7 +729,14 @@ impl Renderer {
                 }
             }
             if opts.edges && scene.line_vertices > 0 {
-                pass.set_pipeline(&self.line_pipeline);
+                pass.set_pipeline(match (opts.clip.is_some(), scene.edge_normals) {
+                    (true, true) => &self.line_clip_pipeline,
+                    // Without normals, back edges can't be told apart: clipped, but drawn. The
+                    // viewer and `render --clip` upload normals when the box is on.
+                    (true, false) => &self.line_clip_lean_pipeline,
+                    (false, false) => &self.line_pipeline,
+                    (false, true) => &self.line_wide_pipeline,
+                });
                 pass.set_vertex_buffer(0, scene.lines.slice(..));
                 pass.draw(0..scene.line_vertices, 0..1);
             }
@@ -1023,7 +1105,12 @@ mod tests {
 
     fn draw(gpu: &Headless, scene: &Scene, opts: &DrawOptions) -> Vec<[u8; 4]> {
         let r = Renderer::new(&gpu.device, 1);
-        let gs = r.upload(&gpu.device, scene, |_, _| Style::Normal);
+        let gs = r.upload_with(
+            &gpu.device,
+            scene,
+            |_, _| Style::Normal,
+            opts.clip.is_some(),
+        );
         let target = Target::new(&gpu.device, (400, 200), 1);
         let mut cam = Camera::default();
         cam.fit(scene, 2.0);

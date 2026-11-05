@@ -19,10 +19,14 @@ operation seen from above.
 - **Two passes only when the box is on**: outward faces, then inward faces pushed slightly back,
   so silhouette corners (where an outward and an inward face meet at equal depth) don't speckle
   with cut colour. With the box off, rendering is unchanged (one pass, both sides).
-- **Back edges hidden in sections.** Each edge now carries the normals of its two faces (snorm8,
-  8 bytes per edge vertex: 12 → 20 bytes). With the box on, an edge whose two faces both face away
-  from the viewer is not drawn: such an edge is only ever visible through a cut, where it made cut
-  solids look hollow.
+- **Back edges hidden in sections.** Each edge carries the normals of its two faces (snorm8). With
+  the box on, an edge whose two faces both face away from the viewer is not drawn: such an edge is
+  only ever visible through a cut, where it made cut solids look hollow.
+- **Normal viewing pays nothing.** Separate shader entry points and pipelines for the box: the
+  normal path has no per-pixel position and reads only edge positions. Edge normals (8 more bytes
+  per edge vertex) are uploaded only while the box is on (`Renderer::upload_with`); the viewer
+  re-uploads once when the box is first switched on. A first version always carried both and cost
+  +12–18 % frame time and +115–150 MB on the largest bench model with the box off.
 - **Viewer:** "Section box (B)" fits the box to the selection or to what is visible; six handles
   (one per face) move faces along their axis, with the drag projected on the axis as seen on screen;
   the box is reset when another model is opened.
@@ -42,8 +46,10 @@ operation seen from above.
   pixels (it changed 158, at silhouette corners, before the two-pass fix).
 - `picking_ignores_what_the_clip_box_removes`: hits the top face, then the bottom face from inside
   once the top is cut, then nothing when the box is beside the element.
-- Geometry budgets: edge counts unchanged; GPU bytes +15 % on the 51 301-element frame
-  (66.5 → 76.3 MB), from the edge normals.
+- Geometry budgets: unchanged for normal viewing (`budgets.json` identical to main). With the box
+  on, edges cost 20 instead of 12 bytes per vertex.
+- `bimble bench`, same machine, 3 alternating runs against main: frame times equal, memory within
+  noise (+3 to +15 MB on the largest model).
 - Viewer on a virtual display with a real model: B shows the box, dragging the top handle cuts the
   upper storeys and does not orbit; 0 CPU ticks in 5 s idle with the box on.
 

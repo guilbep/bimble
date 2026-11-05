@@ -225,6 +225,10 @@ impl Viewer {
 
     fn toggle_section_box(&mut self) {
         self.section_on = !self.section_on;
+        // The box needs edge normals in the uploaded scene; the first use re-uploads once.
+        if self.section_on && self.gpu_scene.as_ref().is_some_and(|g| !g.edge_normals) {
+            self.needs_upload = true;
+        }
         if self.section_on && self.section_box.is_none() {
             self.fit_section_box();
         }
@@ -250,7 +254,12 @@ impl Viewer {
                 Style::Normal
             }
         };
-        self.gpu_scene = Some(self.renderer.upload(&self.device, &l.scene, style));
+        // Edge normals only while the section box is on (they cost GPU memory).
+        self.gpu_scene =
+            Some(
+                self.renderer
+                    .upload_with(&self.device, &l.scene, style, self.section_on),
+            );
         self.needs_upload = false;
         self.needs_render = true;
     }
