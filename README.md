@@ -30,7 +30,19 @@ bimble ls frame.bimble --class IfcBeam         # GlobalId, class, name, paramete
 bimble set frame.bimble <GlobalId> height=600 -o frame2.bimble
 bimble diff frame.bimble frame2.bimble         # element-level diff
 bimble export-ifc frame.bimble frame.ifc       # IFC4
+bimble plan model.ifc plan.pdf --storey "Niveau 1" --scale 100      # storey plan (.pdf, .svg, .png)
+bimble plan model.ifc plan.pdf --storey N01 --template docs/templates/plan-fr.json \
+       --field phase="Projet d'ouvrage"                              # office title block and words
+bimble plan-template                           # the default plan template (JSON) to start from
+
+bimble history init frame.bimble               # history in frame.bimble-history/
+bimble history commit frame.bimble -m "Deeper beams"
+bimble history log frame.bimble
+bimble history branch frame.bimble variant && bimble history switch frame.bimble variant
+bimble history merge frame.bimble variant      # by GlobalId, field by field; --prefer ours|theirs
 ```
+
+`.bimble` models can also be edited in the viewer (Edit…, History…, Ctrl+Z / Ctrl+Y / Ctrl+S).
 
 ## Build from source
 
