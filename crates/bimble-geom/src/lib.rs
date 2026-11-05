@@ -23,7 +23,9 @@ impl Mesh {
     /// Signed volume (divergence theorem). Positive when the triangles face outward.
     pub fn volume(&self) -> f64 {
         self.indices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| {
                 let [a, b, c] = [0, 1, 2].map(|k| self.positions[t[k] as usize].map(f64::from));
                 a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
@@ -74,7 +76,7 @@ pub fn extrude(profile: &Profile, depth: f64) -> Result<Mesh, GeomError> {
             m.positions.push(p(i, z));
             m.normals.push([0.0, 0.0, nz]);
         }
-        for t in tris.chunks_exact(3) {
+        for t in tris.as_chunks::<3>().0 {
             let t = [t[0] as u32, t[1] as u32, t[2] as u32];
             let t = if rev { [t[0], t[2], t[1]] } else { t };
             m.indices.extend(t.map(|k| base + k));
