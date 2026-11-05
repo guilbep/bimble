@@ -5,6 +5,7 @@
 //! separately so the renderer can draw outlines like a technical drawing.
 
 pub mod boolean;
+pub mod compare;
 pub mod scene;
 
 pub use scene::{ElementInfo, MeshBuilder, Scene, SceneBuilder, SceneElement, StoreyLevel};

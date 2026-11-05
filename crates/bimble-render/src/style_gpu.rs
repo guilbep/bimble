@@ -9,6 +9,9 @@ use bimble_core::style::{Fill, GraphicStyle, Rgb, plain};
 /// Slots in the shader's style table: one per material family, then selection.
 pub(crate) const SLOTS: usize = 16;
 pub(crate) const SELECTED_SLOT: u8 = 15;
+pub(crate) const REFERENCE_SLOT: u8 = 14;
+pub(crate) const ONLY_HERE_SLOT: u8 = 13;
+pub(crate) const ONLY_IN_REFERENCE_SLOT: u8 = 12;
 
 pub(crate) fn slot(c: MaterialCategory) -> u8 {
     MaterialCategory::ALL.iter().position(|&x| x == c).unwrap() as u8
@@ -79,5 +82,8 @@ pub(crate) fn gpu_table(s: &GraphicStyle) -> [GpuFill; SLOTS] {
         t[slot(c) as usize] = GpuFill::new(s.families.get(c), s.hatch_darken);
     }
     t[SELECTED_SLOT as usize] = GpuFill::new(&plain(s.selection), s.hatch_darken);
+    t[REFERENCE_SLOT as usize] = GpuFill::new(&plain(s.reference), s.hatch_darken);
+    t[ONLY_HERE_SLOT as usize] = GpuFill::new(&plain(s.only_here), s.hatch_darken);
+    t[ONLY_IN_REFERENCE_SLOT as usize] = GpuFill::new(&plain(s.only_in_reference), s.hatch_darken);
     t
 }
