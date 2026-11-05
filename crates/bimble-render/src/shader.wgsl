@@ -33,7 +33,7 @@ fn vs_face(v: FaceIn) -> FaceOut {
     let l = normalize(u.light.xyz);
     // Two-sided Lambert with a high ambient: reads like a shaded drawing.
     let shade = 0.62 + 0.38 * abs(dot(normalize(v.normal), l));
-    // Palette colours are sRGB; the target is an sRGB texture, so shade in linear space.
+    // Palette colours are sRGB: shade in linear space, encode back in the fragment shader.
     o.color = srgb_to_linear(v.color.rgb) * shade;
     o.pattern = u32(round(v.color.a * 255.0));
     return o;
@@ -43,6 +43,12 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;
     let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
     return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let lo = c * 12.92;
+    let hi = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(hi, lo, c <= vec3<f32>(0.0031308));
 }
 
 fn stripe(t: f32, width: f32) -> f32 {
@@ -74,7 +80,8 @@ fn fs_face(i: FaceOut) -> @location(0) vec4<f32> {
         default: {}
     }
     let c = mix(i.color, i.color * 0.55, ink * u.hatch.y);
-    return vec4<f32>(c, 1.0);
+    // The target is a plain Unorm texture holding gamma-encoded colour.
+    return vec4<f32>(linear_to_srgb(c), 1.0);
 }
 
 struct LineOut {
@@ -90,5 +97,6 @@ fn vs_line(@location(0) pos: vec3<f32>) -> LineOut {
 
 @fragment
 fn fs_line(i: LineOut) -> @location(0) vec4<f32> {
+    // Already sRGB-encoded, like the target.
     return vec4<f32>(u.edge.rgb, 1.0);
 }

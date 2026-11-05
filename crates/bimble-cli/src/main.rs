@@ -7,14 +7,20 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 #[derive(Parser)]
-#[command(name = "bimble", version, about = "Open-source structural BIM")]
+#[command(
+    name = "bimble",
+    version,
+    about = "Open-source structural BIM. Run without arguments to open the viewer."
+)]
 struct Cli {
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Open the 3D viewer (optionally with a .ifc or .bimble file)
+    View { file: Option<PathBuf> },
     /// Generate the demo concrete frame (2 storeys, 3×2 bays by default)
     Demo {
         out: PathBuf,
@@ -85,7 +91,11 @@ enum Cmd {
 
 fn run(cli: Cli) -> Result<(), String> {
     let e = |x: file::FileError| x.to_string();
-    match cli.cmd {
+    let Some(cmd) = cli.cmd else {
+        return bimble_viewer::run(None);
+    };
+    match cmd {
+        Cmd::View { file } => bimble_viewer::run(file)?,
         Cmd::Demo {
             out,
             bays_x,
@@ -292,12 +302,7 @@ fn is_ifc(path: &std::path::Path) -> bool {
 
 /// Load a .ifc or .bimble file as a render-ready scene.
 fn load_scene(path: &std::path::Path) -> Result<bimble_geom::Scene, String> {
-    if is_ifc(path) {
-        bimble_ifc::read::read_file(path).map_err(|x| x.to_string())
-    } else {
-        let m = file::load(path).map_err(|x| x.to_string())?;
-        Ok(bimble_geom::Scene::from_model(&m))
-    }
+    bimble_viewer::load_scene(path)
 }
 
 fn fmt_counts(m: &std::collections::BTreeMap<&str, usize>) -> String {

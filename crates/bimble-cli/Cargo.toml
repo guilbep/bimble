@@ -14,5 +14,6 @@ bimble-core.workspace = true
 bimble-geom.workspace = true
 bimble-ifc.workspace = true
 bimble-render.workspace = true
+bimble-viewer.workspace = true
 clap.workspace = true
 serde_json.workspace = true

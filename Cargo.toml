@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/bimble-core", "crates/bimble-geom", "crates/bimble-ifc", "crates/bimble-render", "crates/bimble-cli"]
+members = ["crates/bimble-core", "crates/bimble-geom", "crates/bimble-ifc", "crates/bimble-render", "crates/bimble-viewer", "crates/bimble-cli"]
 
 [workspace.package]
 version = "0.0.1"

@@ -13,7 +13,9 @@ use wgpu::util::DeviceExt;
 pub use wgpu;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// Plain (non-sRGB) target holding gamma-encoded colours: what egui expects for textures, what
+/// PNG stores, and it needs no sRGB view formats (missing on some old OpenGL drivers).
+pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// The palette: background, edges, selection, and one muted colour per material family.
 pub mod palette {
@@ -496,12 +498,7 @@ impl Renderer {
         let u = Uniforms {
             view_proj: vp.to_cols_array_2d(),
             light: [light.x, light.y, light.z, 0.0],
-            edge: [
-                srgb_to_linear(palette::EDGE[0]),
-                srgb_to_linear(palette::EDGE[1]),
-                srgb_to_linear(palette::EDGE[2]),
-                1.0,
-            ],
+            edge: [palette::EDGE[0], palette::EDGE[1], palette::EDGE[2], 1.0],
             hatch: [opts.hatch_scale, opts.hatch_strength, 0.0, 0.0],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
@@ -510,7 +507,8 @@ impl Renderer {
             label: Some("bimble"),
         });
         {
-            let bg = palette::BACKGROUND.map(|c| srgb_to_linear(c) as f64);
+            // The target stores gamma-encoded values, so the sRGB palette is written as is.
+            let bg = palette::BACKGROUND.map(f64::from);
             let (view, resolve) = match &target.msaa_view {
                 Some(m) => (m, Some(&target.color_view)),
                 None => (&target.color_view, None),
@@ -556,14 +554,6 @@ impl Renderer {
             }
         }
         queue.submit([enc.finish()]);
-    }
-}
-
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
     }
 }
 
