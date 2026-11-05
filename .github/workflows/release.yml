@@ -94,10 +94,16 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
-      - name: Create release
+      # The release may already exist (created by hand on GitHub, which also creates the tag):
+      # then attach the files and keep its title and notes.
+      - name: Create release or attach to it
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          sed "s/{{VERSION}}/$tag/g" .github/release-notes.md > notes.md
-          gh release create "$tag" dist/* --title "Bimble $tag" --notes-file notes.md --prerelease
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            sed "s/{{VERSION}}/$tag/g" .github/release-notes.md > notes.md
+            gh release create "$tag" dist/* --title "Bimble $tag" --notes-file notes.md --prerelease
+          fi
