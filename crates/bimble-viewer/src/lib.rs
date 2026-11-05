@@ -37,14 +37,49 @@ struct PlanSettings {
     preview: bool,
     zoom: f32,
     preview_image: Option<PlanPreview>,
+    /// Title block, legend, texts and what is shown; `template_rev` counts its changes.
+    template: bimble_drawing::template::PlanTemplate,
+    template_path: Option<std::path::PathBuf>,
+    template_rev: u64,
 }
+
+type PreviewKey = (
+    String,
+    u32,
+    Option<bimble_drawing::sheet::Paper>,
+    u64,
+    bimble_core::style::GraphicStyle,
+    u32,
+    u64,
+);
 
 /// A rendered plan preview and the settings it shows (recomputed when they change).
 struct PlanPreview {
-    key: (String, u32, Option<bimble_drawing::sheet::Paper>, u64, bimble_core::style::GraphicStyle, u32),
+    key: PreviewKey,
     texture: Option<egui::TextureHandle>,
     error: Option<String>,
     size_mm: (f64, f64),
+}
+
+/// The plan settings as drawing options; the project name is the model's file name.
+fn plan_options(
+    p: &PlanSettings,
+    path: &std::path::Path,
+    style: bimble_core::style::GraphicStyle,
+) -> bimble_drawing::plan::PlanOptions {
+    bimble_drawing::plan::PlanOptions {
+        storey: p.storey.clone(),
+        cut_above_mm: p.cut_mm,
+        scale: p.scale,
+        paper: p.paper,
+        style,
+        project: path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        date: today(),
+        template: p.template.clone(),
+    }
 }
 
 impl Default for PlanSettings {
@@ -58,6 +93,9 @@ impl Default for PlanSettings {
             preview: false,
             zoom: 1.0,
             preview_image: None,
+            template: Default::default(),
+            template_path: None,
+            template_rev: 0,
         }
     }
 }
@@ -1042,6 +1080,55 @@ impl Viewer {
                 );
                 ui.end_row();
             });
+        ui.horizontal(|ui| {
+            let t = &mut p.template;
+            let mut changed = false;
+            changed |= ui.checkbox(&mut t.seen_fills, "Seen fills").changed();
+            let mut axes = t.axes != bimble_drawing::template::Axes::Off;
+            if ui.checkbox(&mut axes, "Axes").changed() {
+                t.axes = if axes {
+                    bimble_drawing::template::Axes::ModelOrColumns
+                } else {
+                    bimble_drawing::template::Axes::Off
+                };
+                changed = true;
+            }
+            changed |= ui.checkbox(&mut t.dimensions, "Dimensions").changed();
+            changed |= ui.checkbox(&mut t.legend.show, "Legend").changed();
+            changed |= ui.checkbox(&mut t.slab_levels, "Levels").changed();
+            if changed {
+                p.template_rev += 1;
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Template…").clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Plan template", &["json"])
+                    .pick_file()
+            {
+                match bimble_drawing::template::PlanTemplate::load(&path) {
+                    Ok(t) => {
+                        p.template = t;
+                        p.template_path = Some(path);
+                        p.template_rev += 1;
+                        p.message = None;
+                    }
+                    Err(e) => p.message = Some(e),
+                }
+            }
+            if p.template_path.is_some() && ui.small_button("Default").clicked() {
+                p.template = Default::default();
+                p.template_path = None;
+                p.template_rev += 1;
+            }
+            ui.weak(match &p.template_path {
+                Some(path) => path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                None => "Default template".into(),
+            });
+        });
         ui.weak("Colours, hatches and pens come from the graphic style (Style…).");
         if ui.button("Export PDF or SVG…").clicked()
             && let Some(out) = rfd::FileDialog::new()
@@ -1050,19 +1137,7 @@ impl Viewer {
                 .set_file_name(format!("plan-{}-1-{}.pdf", p.storey, p.scale))
                 .save_file()
         {
-            let opts = bimble_drawing::plan::PlanOptions {
-                storey: p.storey.clone(),
-                cut_above_mm: p.cut_mm,
-                scale: p.scale,
-                paper: p.paper,
-                style: self.opts.style,
-                project: l
-                    .path
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                date: today(),
-            };
+            let opts = plan_options(p, &l.path, self.opts.style);
             p.message = Some(match bimble_drawing::plan::plan(&l.scene, &opts) {
                 Err(e) => e,
                 Ok((sheet, info)) => {
@@ -1093,7 +1168,11 @@ impl Viewer {
         ui.horizontal(|ui| {
             ui.checkbox(&mut p.preview, "Preview");
             if p.preview {
-                ui.add(egui::Slider::new(&mut p.zoom, 1.0..=8.0).logarithmic(true).text("zoom"));
+                ui.add(
+                    egui::Slider::new(&mut p.zoom, 1.0..=8.0)
+                        .logarithmic(true)
+                        .text("zoom"),
+                );
             }
         });
         if !p.preview {
@@ -1110,21 +1189,10 @@ impl Viewer {
             p.cut_mm.to_bits(),
             self.opts.style,
             px_w / 50 * 50,
+            p.template_rev,
         );
         if p.preview_image.as_ref().is_none_or(|i| i.key != key) {
-            let opts = bimble_drawing::plan::PlanOptions {
-                storey: p.storey.clone(),
-                cut_above_mm: p.cut_mm,
-                scale: p.scale,
-                paper: p.paper,
-                style: self.opts.style,
-                project: l
-                    .path
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                date: today(),
-            };
+            let opts = plan_options(p, &l.path, self.opts.style);
             let mut img = PlanPreview {
                 key,
                 texture: None,

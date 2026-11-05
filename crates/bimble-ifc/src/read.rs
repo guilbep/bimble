@@ -181,6 +181,7 @@ pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadErr
         .collect();
 
     let mut sb = SceneBuilder::with_storeys(r.storey_levels(scale));
+    sb.grids = r.grid_axes(scale);
     for (info, mb, warnings) in results {
         for (k, n) in warnings {
             *r.warnings.entry(k).or_default() += n;
@@ -531,6 +532,83 @@ impl<'a> Reader<'a> {
                     name,
                     elevation_mm: z * scale,
                 });
+            }
+        }
+        out
+    }
+
+    /// Axes of every IfcGrid, in plan (world mm): the first and last point of each axis curve
+    /// (IfcPolyline or IfcIndexedPolyCurve; other curve types are skipped), placed by the grid's
+    /// placement. Axes repeated with the same tag and position (one grid per storey) are kept
+    /// once.
+    fn grid_axes(&mut self, scale: f64) -> Vec<bimble_geom::GridAxis> {
+        const MAX_AXES: usize = 10_000;
+        let f = self.f;
+        let mut out = Vec::new();
+        // In file order, so the result doesn't depend on how the file is indexed.
+        let mut grids: Vec<_> = f.by_type("IFCGRID").collect();
+        grids.sort_by_key(|(id, _)| *id);
+        for (_, g) in grids {
+            let place = match g.arg(5).as_ref() {
+                Some(pl) => self.object_placement(pl, 0),
+                None => Affine::IDENTITY,
+            };
+            for list in [g.arg(7), g.arg(8), g.arg(9)] {
+                for ax in list.as_list().unwrap_or(&[]) {
+                    if out.len() >= MAX_AXES {
+                        return out;
+                    }
+                    let Some(ax) = self.get(ax) else { continue };
+                    let tag = ax.arg(0).as_str().unwrap_or("").to_owned();
+                    let Some(curve) = self.get(ax.arg(1)) else {
+                        continue;
+                    };
+                    let pts: Vec<[f64; 3]> = match curve.name.as_str() {
+                        "IFCPOLYLINE" => curve
+                            .arg(0)
+                            .as_list()
+                            .unwrap_or(&[])
+                            .iter()
+                            .filter_map(|p| self.point(p))
+                            .collect(),
+                        // Points of an IfcCartesianPointList2D/3D; the segments don't matter
+                        // for the end points.
+                        "IFCINDEXEDPOLYCURVE" => self
+                            .get(curve.arg(0))
+                            .and_then(|l| l.arg(0).as_list())
+                            .map(|coords| {
+                                let at = |c: &Value| {
+                                    let c = c.as_list()?;
+                                    let g = |i: usize| c.get(i).and_then(Value::as_f64);
+                                    Some([g(0)?, g(1)?, g(2).unwrap_or(0.0)])
+                                };
+                                [coords.first(), coords.last()]
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(at)
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        _ => Vec::new(),
+                    };
+                    let (Some(a), Some(b)) = (pts.first(), pts.last()) else {
+                        continue;
+                    };
+                    let (a, b) = (place.apply(*a), place.apply(*b));
+                    let xy = |p: [f64; 3]| [p[0] * scale, p[1] * scale];
+                    let (a, b) = (xy(a), xy(b));
+                    // Grids are often repeated per storey: keep each axis once.
+                    let dup = out.iter().any(|g: &bimble_geom::GridAxis| {
+                        g.tag == tag && g.start_mm == a && g.end_mm == b
+                    });
+                    if !dup && a != b && a.iter().chain(&b).all(|v| v.is_finite()) {
+                        out.push(bimble_geom::GridAxis {
+                            tag,
+                            start_mm: a,
+                            end_mm: b,
+                        });
+                    }
+                }
             }
         }
         out
@@ -1967,6 +2045,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// IfcGrid axes come out in world mm, moved by the grid's placement, with their tags;
+    /// polylines and indexed poly curves; a grid repeated on another storey adds nothing.
+    #[test]
+    fn grid_axes_are_read_in_world_mm() {
+        let m = concrete_frame(&FrameSpec::default());
+        let ifc = crate::export(&m, "t.ifc", "t");
+        let grid = "#900001=IFCCARTESIANPOINT((1000.,2000.,0.));
+#900002=IFCAXIS2PLACEMENT3D(#900001,$,$);
+#900003=IFCLOCALPLACEMENT($,#900002);
+#900010=IFCCARTESIANPOINT((0.,-500.));
+#900011=IFCCARTESIANPOINT((0.,6000.));
+#900012=IFCPOLYLINE((#900010,#900011));
+#900013=IFCGRIDAXIS('A',#900012,.T.);
+#900020=IFCCARTESIANPOINT((-500.,0.));
+#900021=IFCCARTESIANPOINT((9000.,0.));
+#900022=IFCPOLYLINE((#900020,#900021));
+#900023=IFCGRIDAXIS('1',#900022,.T.);
+#900024=IFCCIRCLE($,1.);
+#900025=IFCGRIDAXIS('skipped',#900024,.T.);
+#900026=IFCCARTESIANPOINTLIST2D(((3000.,-500.),(3000.,2000.),(3000.,6000.)),$);
+#900027=IFCINDEXEDPOLYCURVE(#900026,$,.F.);
+#900028=IFCGRIDAXIS('B',#900027,.T.);
+#900030=IFCGRID('3abcdefghijklmnopqrstu',$,'Grid',$,$,#900003,$,(#900013,#900025,#900028),(#900023),$,$);
+#900031=IFCGRID('3abcdefghijklmnopqrstv',$,'Same grid, next storey',$,$,#900003,$,(#900013),(#900023),$,$);
+ENDSEC;
+END-ISO";
+        let ifc = ifc.replacen("ENDSEC;\nEND-ISO", grid, 1);
+        assert!(ifc.contains("IFCGRID("), "fixture not inserted");
+        let s = read_str(&ifc).unwrap();
+        assert_eq!(
+            s.grids,
+            vec![
+                bimble_geom::GridAxis {
+                    tag: "A".into(),
+                    start_mm: [1000.0, 1500.0],
+                    end_mm: [1000.0, 8000.0],
+                },
+                bimble_geom::GridAxis {
+                    tag: "B".into(),
+                    start_mm: [4000.0, 1500.0],
+                    end_mm: [4000.0, 8000.0],
+                },
+                bimble_geom::GridAxis {
+                    tag: "1".into(),
+                    start_mm: [500.0, 2000.0],
+                    end_mm: [10000.0, 2000.0],
+                },
+            ]
+        );
     }
 
     #[test]

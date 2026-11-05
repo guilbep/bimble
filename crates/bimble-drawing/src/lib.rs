@@ -3,6 +3,7 @@
 pub mod cut;
 pub mod plan;
 pub mod sheet;
+pub mod template;
 
 /// Today's date (UTC) as YYYY-MM-DD, for title blocks.
 pub fn today() -> String {

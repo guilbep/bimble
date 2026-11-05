@@ -75,13 +75,85 @@ pub enum Item {
     },
     /// Open polylines.
     Lines { lines: Vec<Vec<[f64; 2]>>, pen: Pen },
-    /// Text; `pos` is the left end of the baseline.
+    /// Text on a baseline through `pos`; `anchor` says which point of the baseline `pos` is.
     Text {
         pos: [f64; 2],
         size_mm: f64,
         text: String,
         color: Rgb,
+        anchor: Anchor,
+        /// Baseline direction, degrees counter-clockwise from horizontal (on paper).
+        angle_deg: f64,
+        bold: bool,
     },
+}
+
+/// Which point of a text's baseline its position is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Anchor {
+    #[default]
+    Start,
+    Middle,
+    End,
+}
+
+impl Item {
+    /// Horizontal, regular text starting at `pos`.
+    pub fn text(pos: [f64; 2], size_mm: f64, text: impl Into<String>, color: Rgb) -> Item {
+        Item::Text {
+            pos,
+            size_mm,
+            text: text.into(),
+            color,
+            anchor: Anchor::Start,
+            angle_deg: 0.0,
+            bold: false,
+        }
+    }
+}
+
+/// Advance widths of Helvetica for ASCII 0x20..=0x7e, 1/1000 em (Adobe AFM).
+const HELVETICA: [u16; 95] = [
+    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, // ' '../
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, // 0..9
+    278, 278, 584, 584, 584, 556, 1015, // :..@
+    667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, // A..M
+    722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, // N..Z
+    278, 278, 278, 469, 556, 333, // [..`
+    556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, // a..m
+    556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, // n..z
+    334, 260, 334, 584, // {..~
+];
+
+/// Approximate width of `text` in Helvetica (bold ≈ 6 % wider), mm.
+pub fn text_width_mm(text: &str, size_mm: f64, bold: bool) -> f64 {
+    let units: u32 = text
+        .chars()
+        .map(|c| match c as u32 {
+            v @ 0x20..=0x7e => HELVETICA[(v - 0x20) as usize] as u32,
+            _ => 556,
+        })
+        .sum();
+    units as f64 / 1000.0 * size_mm * if bold { 1.06 } else { 1.0 }
+}
+
+/// Where a text starts (left end of its baseline) and its baseline direction (y down).
+fn text_start(
+    pos: [f64; 2],
+    size_mm: f64,
+    text: &str,
+    anchor: Anchor,
+    angle_deg: f64,
+    bold: bool,
+) -> ([f64; 2], [f64; 2]) {
+    let a = angle_deg.to_radians();
+    let u = [a.cos(), -a.sin()];
+    let back = match anchor {
+        Anchor::Start => 0.0,
+        Anchor::Middle => text_width_mm(text, size_mm, bold) / 2.0,
+        Anchor::End => text_width_mm(text, size_mm, bold),
+    };
+    ([pos[0] - u[0] * back, pos[1] - u[1] * back], u)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -248,12 +320,26 @@ impl Sheet {
                     size_mm,
                     text,
                     color,
+                    anchor,
+                    angle_deg,
+                    bold,
                 } => {
+                    // Positioned from the computed start so SVG and PDF place text alike.
+                    let (p, _) = text_start(*pos, *size_mm, text, *anchor, *angle_deg, *bold);
+                    let rot = if *angle_deg != 0.0 {
+                        format!(
+                            r#" transform="rotate({:.3} {:.3} {:.3})""#,
+                            -angle_deg, p[0], p[1]
+                        )
+                    } else {
+                        String::new()
+                    };
+                    let weight = if *bold { r#" font-weight="bold""# } else { "" };
                     let _ = writeln!(
                         s,
-                        r#"<text x="{:.3}" y="{:.3}" font-family="Helvetica, Arial, sans-serif" font-size="{:.3}" fill="{}">{}</text>"#,
-                        pos[0],
-                        pos[1],
+                        r#"<text x="{:.3}" y="{:.3}" font-family="Helvetica, Arial, sans-serif" font-size="{:.3}"{weight} fill="{}"{rot}>{}</text>"#,
+                        p[0],
+                        p[1],
                         size_mm,
                         hex(*color),
                         svg_escape(text)
@@ -269,13 +355,14 @@ impl Sheet {
         use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str};
         const PT: f64 = 72.0 / 25.4;
         let (w, h) = (self.width_mm * PT, self.height_mm * PT);
-        let (catalog, pages, page, content_id, font, info) = (
+        let (catalog, pages, page, content_id, font, info, bold_font) = (
             Ref::new(1),
             Ref::new(2),
             Ref::new(3),
             Ref::new(4),
             Ref::new(5),
             Ref::new(6),
+            Ref::new(7),
         );
         let mut pdf = Pdf::new();
         pdf.catalog(catalog).pages(pages);
@@ -285,11 +372,17 @@ impl Sheet {
             p.media_box(Rect::new(0.0, 0.0, w as f32, h as f32))
                 .parent(pages)
                 .contents(content_id);
-            p.resources().fonts().pair(Name(b"F1"), font);
+            p.resources()
+                .fonts()
+                .pair(Name(b"F1"), font)
+                .pair(Name(b"F2"), bold_font);
             p.finish();
         }
         pdf.type1_font(font)
             .base_font(Name(b"Helvetica"))
+            .encoding_predefined(Name(b"WinAnsiEncoding"));
+        pdf.type1_font(bold_font)
+            .base_font(Name(b"Helvetica-Bold"))
             .encoding_predefined(Name(b"WinAnsiEncoding"));
         pdf.document_info(info)
             .title(pdf_writer::TextStr(&self.title))
@@ -370,14 +463,19 @@ impl Sheet {
                     size_mm,
                     text,
                     color,
+                    anchor,
+                    angle_deg,
+                    bold,
                 } => {
                     let [r, g, b] = rgb(*color);
                     c.set_fill_rgb(r, g, b);
                     c.begin_text();
-                    c.set_font(Name(b"F1"), 1.0);
-                    // Undo the y flip for the glyphs.
-                    let s = *size_mm as f32;
-                    c.set_text_matrix([s, 0.0, 0.0, -s, pos[0] as f32, pos[1] as f32]);
+                    c.set_font(Name(if *bold { b"F2" } else { b"F1" }), 1.0);
+                    let (p, u) = text_start(*pos, *size_mm, text, *anchor, *angle_deg, *bold);
+                    // Glyph x along the baseline, glyph y "up" on paper (y is down here).
+                    let s = *size_mm;
+                    let m = [s * u[0], s * u[1], s * u[1], -s * u[0], p[0], p[1]];
+                    c.set_text_matrix(m.map(|v| v as f32));
                     c.show(Str(&win_ansi(text)));
                     c.end_text();
                 }
@@ -441,11 +539,15 @@ mod tests {
                         dash: Some([2.0, 1.0]),
                     },
                 },
+                Item::text([10.0, 200.0], 3.5, "Plan N01 – 1:100", black),
                 Item::Text {
-                    pos: [10.0, 200.0],
-                    size_mm: 3.5,
-                    text: "Plan N01 – 1:100".into(),
+                    pos: [100.0, 100.0],
+                    size_mm: 2.5,
+                    text: "362".into(),
                     color: black,
+                    anchor: Anchor::Middle,
+                    angle_deg: 90.0,
+                    bold: true,
                 },
             ],
         }
@@ -498,6 +600,23 @@ mod tests {
     }
 
     #[test]
+    fn rotated_and_centred_text_is_placed_the_same_in_svg_and_pdf() {
+        let s = sample().to_svg();
+        // "362" is 3 × 556/1000 × 2.5 × 1.06 mm wide; centred and turned 90° it starts below pos.
+        let w = text_width_mm("362", 2.5, true);
+        assert!((w - 4.4202).abs() < 1e-9, "{w}");
+        let y = 100.0 + w / 2.0;
+        assert!(
+            s.contains(&format!(
+                r##"x="100.000" y="{y:.3}" font-family="Helvetica, Arial, sans-serif" font-size="2.500" font-weight="bold" fill="#000000" transform="rotate(-90.000 100.000 {y:.3})""##
+            )),
+            "{s}"
+        );
+        let pdf = String::from_utf8_lossy(&sample().to_pdf()).into_owned();
+        assert!(pdf.contains("/Helvetica-Bold"));
+    }
+
+    #[test]
     fn non_latin_text_does_not_break_the_pdf() {
         assert_eq!(win_ansi("é – ✓"), vec![0xe9, b' ', 0x96, b' ', b'?']);
     }
@@ -530,7 +649,11 @@ impl Sheet {
         }
         let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or("cannot allocate the image")?;
         pixmap.fill(tiny_skia::Color::WHITE);
-        resvg::render(&tree, tiny_skia::Transform::from_scale(k, k), &mut pixmap.as_mut());
+        resvg::render(
+            &tree,
+            tiny_skia::Transform::from_scale(k, k),
+            &mut pixmap.as_mut(),
+        );
         // The background is opaque, so premultiplied and straight alpha are the same.
         Ok(Raster {
             width: w,

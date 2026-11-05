@@ -489,6 +489,8 @@ dependencies = [
  "bimble-geom",
  "pdf-writer",
  "resvg",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -186,6 +186,10 @@ pub struct PaperStyle {
     pub frame_pen_mm: f32,
     /// Text height in the title block.
     pub text_mm: f32,
+    /// Grid axes and dimension lines.
+    pub annotation_pen_mm: f32,
+    /// What is seen below the cut is filled with the family colour mixed with this much white.
+    pub seen_lighten: f32,
 }
 
 fn one() -> f32 {
@@ -266,6 +270,8 @@ impl Default for GraphicStyle {
                 hatch_mm_per_px: 0.35,
                 frame_pen_mm: 0.5,
                 text_mm: 2.5,
+                annotation_pen_mm: 0.13,
+                seen_lighten: 0.6,
             },
             families: Families {
                 concrete: Fill {
@@ -383,6 +389,7 @@ impl GraphicStyle {
             ("above_pen_mm", p.above_pen_mm),
             ("hatch_pen_mm", p.hatch_pen_mm),
             ("frame_pen_mm", p.frame_pen_mm),
+            ("annotation_pen_mm", p.annotation_pen_mm),
         ] {
             range(n, x, 0.05, 5.0)?;
         }
@@ -390,6 +397,7 @@ impl GraphicStyle {
         range("above_dash_mm[1]", p.above_dash_mm[1], 0.1, 50.0)?;
         range("hatch_mm_per_px", p.hatch_mm_per_px, 0.05, 10.0)?;
         range("text_mm", p.text_mm, 1.0, 20.0)?;
+        range("seen_lighten", p.seen_lighten, 0.0, 1.0)?;
         for c in MaterialCategory::ALL {
             let f = self.families.get(c);
             let at = |field: &str| format!("families.{}.{field}", c.label().to_lowercase());

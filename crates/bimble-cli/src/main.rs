@@ -62,6 +62,17 @@ enum Cmd {
         /// Project name in the title block (default: the file name)
         #[arg(long)]
         project: Option<String>,
+        /// Plan template: title block, legend, texts, what is shown (see `bimble plan-template`)
+        #[arg(long)]
+        template: Option<PathBuf>,
+        /// A title block value, KEY=VALUE, used as {KEY} in the template (repeatable)
+        #[arg(long = "field", value_name = "KEY=VALUE")]
+        fields: Vec<String>,
+    },
+    /// Print the default plan template, or check a template file and print it in full
+    PlanTemplate {
+        /// Template to check; without it, the default template is printed
+        file: Option<PathBuf>,
     },
     /// Print the complete default graphic style, or check a style file and print it in full
     Style {
@@ -180,6 +191,8 @@ fn run(cli: Cli) -> Result<(), String> {
             style,
             project,
             dpi,
+            template,
+            fields,
         } => {
             use bimble_drawing::plan::{PlanOptions, plan};
             use bimble_drawing::sheet::Paper;
@@ -218,6 +231,19 @@ fn run(cli: Cli) -> Result<(), String> {
                 style,
                 project,
                 date: bimble_drawing::today(),
+                template: {
+                    let mut t = match template {
+                        Some(p) => bimble_drawing::template::PlanTemplate::load(&p)?,
+                        None => Default::default(),
+                    };
+                    for f in fields {
+                        let (k, v) = f
+                            .split_once('=')
+                            .ok_or_else(|| format!("--field {f:?}: expected KEY=VALUE"))?;
+                        t.fields.insert(k.trim().to_owned(), v.replace("\\n", "\n"));
+                    }
+                    t
+                },
             };
             let (sheet, info) = plan(&scene, &opts)?;
             match ext.as_deref() {
@@ -237,15 +263,34 @@ fn run(cli: Cli) -> Result<(), String> {
                 }
             }
             println!(
-                "plan 1:{} on {}{}: {} cut elements, {} lines below, {} above → {}",
+                "plan 1:{} on {}{}: {} cut elements, {} seen, {} lines below, {} above, {} axes{}{} → {}",
                 scale,
                 info.paper.name(),
                 if info.portrait { " portrait" } else { "" },
                 info.cut_elements,
+                info.seen_elements,
                 info.projection_lines,
                 info.above_lines,
+                info.axes,
+                if info.axes > 0 && !info.model_axes {
+                    " (from the columns)"
+                } else {
+                    ""
+                },
+                if info.hidden_elements > 0 {
+                    format!(", {} hidden by class", info.hidden_elements)
+                } else {
+                    String::new()
+                },
                 out.display()
             );
+        }
+        Cmd::PlanTemplate { file } => {
+            let t = match file {
+                Some(p) => bimble_drawing::template::PlanTemplate::load(&p)?,
+                None => Default::default(),
+            };
+            println!("{}", t.to_json());
         }
         Cmd::Style { file } => {
             let s = match file {

@@ -10,3 +10,5 @@ bimble-core.workspace = true
 bimble-geom.workspace = true
 pdf-writer.workspace = true
 resvg.workspace = true
+serde.workspace = true
+serde_json.workspace = true
