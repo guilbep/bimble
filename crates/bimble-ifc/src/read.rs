@@ -82,6 +82,7 @@ pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadErr
         placements: HashMap::new(),
         warnings: BTreeMap::new(),
         arc_tol: 0.5,
+        angle_scale: 1.0,
         item_visits_left: limits.max_item_visits,
         map_stack: Vec::new(),
     };
@@ -95,6 +96,7 @@ pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadErr
     let scale = r.length_scale_to_mm();
     // Curves are tessellated so chords deviate at most 0.5 mm from the true arc.
     r.arc_tol = ARC_TOLERANCE_MM / scale;
+    r.angle_scale = r.plane_angle_to_radians();
     let containers = r.containers();
     let materials = r.materials();
 
@@ -366,6 +368,8 @@ struct Reader<'a> {
     warnings: BTreeMap<String, usize>,
     /// Arc tessellation tolerance in file units.
     arc_tol: f64,
+    /// Plane angle unit → radians (Revit IFC2x3 often writes degrees).
+    angle_scale: f64,
     item_visits_left: usize,
     /// Representation maps being expanded, to stop a map that contains itself.
     map_stack: Vec<u64>,
@@ -748,6 +752,7 @@ impl<'a> Reader<'a> {
                     self.item(first, tf, out, depth + 1);
                 }
             }
+            "IFCSWEPTDISKSOLID" | "IFCSWEPTDISKSOLIDPOLYGONAL" => self.swept_disk(e, tf, out),
             "IFCSTYLEDITEM" => {}
             other => self.warn(format!("unsupported geometry {other} (skipped)")),
         }
@@ -852,7 +857,8 @@ impl<'a> Reader<'a> {
                 placed(self, vec![c], e.arg(2))
             }
             "IFCISHAPEPROFILEDEF" => {
-                // Without fillets.
+                // Root fillets between web and flanges (FilletRadius); flange edge radii and
+                // slopes are ignored.
                 let (w, h, tw, tf) = (
                     e.arg(3).as_f64()? / 2.0,
                     e.arg(4).as_f64()? / 2.0,
@@ -873,6 +879,12 @@ impl<'a> Reader<'a> {
                     [-tw, -h + tf],
                     [-w, -h + tf],
                 ];
+                let r = e.arg(7).as_f64().filter(|r| r.is_finite() && *r > 0.0);
+                let c = match r {
+                    // Inner corners where the web meets the flanges.
+                    Some(r) => fillet(&c, &[3, 4, 9, 10], r, self.arc_tol),
+                    None => c,
+                };
                 placed(self, vec![c], e.arg(2))
             }
             "IFCDERIVEDPROFILEDEF" if depth < 4 => {
@@ -919,36 +931,59 @@ impl<'a> Reader<'a> {
 
     /// Closed 2D curve → points (without repeating the first).
     fn curve(&mut self, v: &Value) -> Option<Vec<[f64; 2]>> {
+        let mut pts: Vec<[f64; 2]> = self
+            .curve3(v, 0)?
+            .into_iter()
+            .map(|p| [p[0], p[1]])
+            .collect();
+        if pts.len() > 1 && dist2(pts[0], *pts.last().unwrap()) < 1e-18 {
+            pts.pop();
+        }
+        pts.dedup_by(|a, b| dist2(*a, *b) < 1e-18);
+        (pts.len() >= 3).then_some(pts)
+    }
+
+    /// Any bounded curve → points along it (2D curves get z = 0). Arcs are tessellated within
+    /// `arc_tol`. Consecutive duplicate points are removed.
+    fn curve3(&mut self, v: &Value, depth: usize) -> Option<Vec<[f64; 3]>> {
+        if depth > 16 {
+            self.warn("curve nesting too deep");
+            return None;
+        }
         let e = self.get(v)?;
-        let mut pts: Vec<[f64; 2]> = match e.name.as_str() {
+        let mut pts: Vec<[f64; 3]> = match e.name.as_str() {
             "IFCPOLYLINE" => e
                 .arg(0)
                 .as_list()?
                 .iter()
-                .filter_map(|p| self.point(p).map(|q| [q[0], q[1]]))
+                .filter_map(|p| self.point(p))
                 .collect(),
             "IFCINDEXEDPOLYCURVE" => {
                 let list = self.get(e.arg(0))?.arg(0).as_list()?;
-                let coords: Vec<[f64; 2]> = list
+                let coords: Vec<[f64; 3]> = list
                     .iter()
                     .filter_map(|c| {
                         let c = c.as_list()?;
-                        Some([c.first()?.as_f64()?, c.get(1)?.as_f64()?])
+                        Some([
+                            c.first()?.as_f64()?,
+                            c.get(1)?.as_f64()?,
+                            c.get(2).and_then(Value::as_f64).unwrap_or(0.0),
+                        ])
                     })
                     .collect();
-                let at = |i: &Value| -> Option<[f64; 2]> {
+                let at = |i: &Value| -> Option<[f64; 3]> {
                     coords.get((i.as_i64()? as usize).checked_sub(1)?).copied()
                 };
                 match e.arg(1).as_list() {
                     None => coords.clone(),
                     Some(segs) => {
-                        let mut out: Vec<[f64; 2]> = Vec::new();
+                        let mut out: Vec<[f64; 3]> = Vec::new();
                         for s in segs {
                             let Value::Typed(kind, inner) = s else {
                                 continue;
                             };
                             let idx = inner.as_list().unwrap_or(&[]);
-                            let p: Vec<[f64; 2]> = idx.iter().filter_map(at).collect();
+                            let p: Vec<[f64; 3]> = idx.iter().filter_map(at).collect();
                             if p.len() != idx.len() || p.is_empty() {
                                 continue;
                             }
@@ -957,7 +992,7 @@ impl<'a> Reader<'a> {
                             }
                             match kind.as_str() {
                                 "IFCARCINDEX" if p.len() == 3 => out.extend(
-                                    arc(p[0], p[1], p[2], self.arc_tol).into_iter().skip(1),
+                                    arc3(p[0], p[1], p[2], self.arc_tol).into_iter().skip(1),
                                 ),
                                 _ => out.extend_from_slice(&p[1..]),
                             }
@@ -966,16 +1001,176 @@ impl<'a> Reader<'a> {
                     }
                 }
             }
+            "IFCCOMPOSITECURVE" | "IFCCOMPOSITECURVEONSURFACE" => {
+                let mut out: Vec<[f64; 3]> = Vec::new();
+                for seg in e.arg(0).as_list()? {
+                    // IfcCompositeCurveSegment(Transition, SameSense, ParentCurve)
+                    let s = self.get(seg)?;
+                    let mut p = self.curve3(s.arg(2), depth + 1)?;
+                    if s.arg(1).as_enum() == Some("F") {
+                        p.reverse();
+                    }
+                    if let (Some(last), Some(first)) = (out.last(), p.first())
+                        && norm(sub(*last, *first)) < 1e-9
+                    {
+                        p.remove(0);
+                    }
+                    out.extend(p);
+                }
+                out
+            }
+            "IFCTRIMMEDCURVE" => self.trimmed_curve(e, depth)?,
+            "IFCCIRCLE" | "IFCELLIPSE" => {
+                let pos = self.axis_placement(e.arg(0));
+                let r1 = e.arg(1).as_f64()?;
+                let r2 = if e.name == "IFCELLIPSE" {
+                    e.arg(2).as_f64()?
+                } else {
+                    r1
+                };
+                let n = arc_segments(r1.max(r2), std::f64::consts::TAU, self.arc_tol);
+                (0..n)
+                    .map(|i| {
+                        let a = i as f64 / n as f64 * std::f64::consts::TAU;
+                        pos.apply([r1 * a.cos(), r2 * a.sin(), 0.0])
+                    })
+                    .collect()
+            }
             other => {
-                self.warn(format!("unsupported profile curve {other} (skipped)"));
+                self.warn(format!("unsupported curve {other} (skipped)"));
                 return None;
             }
         };
-        if pts.len() > 1 && dist2(pts[0], *pts.last().unwrap()) < 1e-18 {
-            pts.pop();
+        pts.dedup_by(|a, b| norm(sub(*a, *b)) < 1e-9);
+        (pts.len() >= 2).then_some(pts)
+    }
+
+    /// IfcTrimmedCurve(BasisCurve, Trim1, Trim2, SenseAgreement, MasterRepresentation) on a line,
+    /// circle or ellipse. Cartesian trims are preferred unless the file says PARAMETER.
+    fn trimmed_curve(&mut self, e: &Entity, depth: usize) -> Option<Vec<[f64; 3]>> {
+        let basis = self.get(e.arg(0))?;
+        let sense = e.arg(3).as_enum() != Some("F");
+        let prefer_param = e.arg(4).as_enum() == Some("PARAMETER");
+        let trim = |r: &Self, v: &Value| -> (Option<[f64; 3]>, Option<f64>) {
+            let (mut pt, mut par) = (None, None);
+            for x in v.as_list().unwrap_or(&[]) {
+                match x {
+                    Value::Typed(n, inner) if n == "IFCPARAMETERVALUE" => par = inner.as_f64(),
+                    Value::Ref(_) => pt = r.point(x),
+                    _ => {}
+                }
+            }
+            (pt, par)
+        };
+        let (t1, t2) = (trim(self, e.arg(1)), trim(self, e.arg(2)));
+        match basis.name.as_str() {
+            "IFCLINE" => {
+                let p0 = self.point(basis.arg(0))?;
+                let vec = self.get(basis.arg(1))?;
+                let d = self.direction(vec.arg(0))?;
+                let m = vec.arg(1).as_f64().unwrap_or(1.0);
+                let at = |t: f64| {
+                    [
+                        p0[0] + d[0] * m * t,
+                        p0[1] + d[1] * m * t,
+                        p0[2] + d[2] * m * t,
+                    ]
+                };
+                let pick = |t: (Option<[f64; 3]>, Option<f64>)| match (t, prefer_param) {
+                    ((_, Some(p)), true) | ((None, Some(p)), false) => Some(at(p)),
+                    ((Some(q), _), _) => Some(q),
+                    _ => None,
+                };
+                Some(vec![pick(t1)?, pick(t2)?])
+            }
+            "IFCCIRCLE" | "IFCELLIPSE" => {
+                let pos = self.axis_placement(basis.arg(0));
+                let r1 = basis.arg(1).as_f64()?;
+                let r2 = if basis.name == "IFCELLIPSE" {
+                    basis.arg(2).as_f64()?
+                } else {
+                    r1
+                };
+                let angle_of = |q: [f64; 3]| {
+                    let d = sub(q, pos.t);
+                    (dot(d, pos.y) / r2).atan2(dot(d, pos.x) / r1)
+                };
+                let angle = |t: (Option<[f64; 3]>, Option<f64>)| match (t, prefer_param) {
+                    ((_, Some(p)), true) | ((None, Some(p)), false) => Some(p * self.angle_scale),
+                    ((Some(q), _), _) => Some(angle_of(q)),
+                    _ => None,
+                };
+                let (a1, a2) = (angle(t1)?, angle(t2)?);
+                let tau = std::f64::consts::TAU;
+                let sweep = if sense {
+                    let s = (a2 - a1).rem_euclid(tau);
+                    if s < 1e-12 { tau } else { s }
+                } else {
+                    let s = (a1 - a2).rem_euclid(tau);
+                    -(if s < 1e-12 { tau } else { s })
+                };
+                let n = arc_segments(r1.max(r2), sweep, self.arc_tol);
+                let mut pts: Vec<[f64; 3]> = (0..=n)
+                    .map(|i| {
+                        let a = a1 + sweep * i as f64 / n as f64;
+                        pos.apply([r1 * a.cos(), r2 * a.sin(), 0.0])
+                    })
+                    .collect();
+                // Snap the ends onto Cartesian trims so joined segments meet exactly.
+                if let (Some(q), false) = (t1.0, prefer_param) {
+                    pts[0] = q;
+                }
+                if let (Some(q), false) = (t2.0, prefer_param) {
+                    pts[n] = q;
+                }
+                Some(pts)
+            }
+            _ => {
+                self.warn(format!("trimmed {} drawn untrimmed", basis.name));
+                self.curve3(e.arg(0), depth + 1)
+            }
         }
-        pts.dedup_by(|a, b| dist2(*a, *b) < 1e-18);
-        (pts.len() >= 3).then_some(pts)
+    }
+
+    /// Plane angle unit from the project units, as a factor to radians.
+    fn plane_angle_to_radians(&mut self) -> f64 {
+        let f = self.f;
+        let assignment = f
+            .by_type("IFCPROJECT")
+            .next()
+            .and_then(|(_, p)| self.get(p.arg(8)));
+        for u in assignment.and_then(|a| a.arg(0).as_list()).unwrap_or(&[]) {
+            let Some(u) = self.get(u) else { continue };
+            if u.arg(1).as_enum() != Some("PLANEANGLEUNIT") {
+                continue;
+            }
+            match u.name.as_str() {
+                "IFCSIUNIT" => return 1.0,
+                "IFCCONVERSIONBASEDUNIT" => {
+                    if let Some(factor) = self.get(u.arg(3)).and_then(|m| m.arg(0).as_f64()) {
+                        return factor;
+                    }
+                }
+                _ => {}
+            }
+        }
+        1.0
+    }
+
+    /// IfcSweptDiskSolid: a tube of radius `Radius` along `Directrix` (reinforcing bars, cables).
+    fn swept_disk(&mut self, e: &Entity, tf: &Affine, out: &mut Emit) {
+        let Some(path) = self.curve3(e.arg(0), 0) else {
+            return;
+        };
+        let Some(r) = e.arg(1).as_f64().filter(|r| r.is_finite() && *r > 0.0) else {
+            return;
+        };
+        if e.arg(2).as_f64().is_some_and(|ri| ri > 0.0) {
+            self.warn("hollow swept disk drawn solid (inner radius ignored)");
+        }
+        let path: Vec<[f64; 3]> = path.into_iter().map(|p| tf.apply(p)).collect();
+        let n = arc_segments(r, std::f64::consts::TAU, self.arc_tol);
+        tube(&path, r, n, out);
     }
 
     fn point_list_3d(&self, v: &Value) -> Vec<[f64; 3]> {
@@ -1113,6 +1308,146 @@ fn signed_area(l: &[[f64; 2]]) -> f64 {
         / 2.0
 }
 
+/// Arc through three points in 3D, within `tol` of the true arc (via the 2D version in the
+/// arc's own plane). Collinear points give the straight polyline.
+fn arc3(a: [f64; 3], b: [f64; 3], c: [f64; 3], tol: f64) -> Vec<[f64; 3]> {
+    let n = cross(sub(b, a), sub(c, a));
+    let (Some(e1), Some(n)) = (normalize(sub(b, a)), normalize(n)) else {
+        return vec![a, b, c];
+    };
+    let e2 = cross(n, e1);
+    let to2 = |p: [f64; 3]| {
+        let d = sub(p, a);
+        [dot(d, e1), dot(d, e2)]
+    };
+    arc(to2(a), to2(b), to2(c), tol)
+        .into_iter()
+        .map(|q| {
+            [
+                a[0] + e1[0] * q[0] + e2[0] * q[1],
+                a[1] + e1[1] * q[0] + e2[1] * q[1],
+                a[2] + e1[2] * q[0] + e2[2] * q[1],
+            ]
+        })
+        .collect()
+}
+
+/// Replace the given (right-angle, concave or convex) polygon corners with arcs of radius `r`.
+fn fillet(poly: &[[f64; 2]], corners: &[usize], r: f64, tol: f64) -> Vec<[f64; 2]> {
+    let n = poly.len();
+    let mut out = Vec::with_capacity(n + corners.len() * 8);
+    for (i, &c) in poly.iter().enumerate() {
+        if !corners.contains(&i) {
+            out.push(c);
+            continue;
+        }
+        let (p, q) = (poly[(i + n - 1) % n], poly[(i + 1) % n]);
+        let l1 = ((c[0] - p[0]).powi(2) + (c[1] - p[1]).powi(2)).sqrt();
+        let l2 = ((q[0] - c[0]).powi(2) + (q[1] - c[1]).powi(2)).sqrt();
+        if r >= l1 || r >= l2 || l1 == 0.0 || l2 == 0.0 {
+            out.push(c);
+            continue;
+        }
+        let d1 = [(c[0] - p[0]) / l1, (c[1] - p[1]) / l1];
+        let d2 = [(q[0] - c[0]) / l2, (q[1] - c[1]) / l2];
+        let t1 = [c[0] - d1[0] * r, c[1] - d1[1] * r];
+        let t2 = [c[0] + d2[0] * r, c[1] + d2[1] * r];
+        // Centre of a fillet at a right angle; the arc's middle point lies towards the corner.
+        let center = [t1[0] + d2[0] * r, t1[1] + d2[1] * r];
+        let k = ((c[0] - center[0]).powi(2) + (c[1] - center[1]).powi(2)).sqrt();
+        let mid = [
+            center[0] + (c[0] - center[0]) / k * r,
+            center[1] + (c[1] - center[1]) / k * r,
+        ];
+        out.extend(arc(t1, mid, t2, tol));
+    }
+    out
+}
+
+/// Tube of radius `r` with `n` sides along a polyline: rings carried along the path without
+/// twisting, mitred at corners so the radius stays `r`, with end caps unless the path is closed.
+fn tube(path: &[[f64; 3]], r: f64, n: usize, out: &mut Emit) {
+    let mut p: Vec<[f64; 3]> = path.to_vec();
+    p.dedup_by(|a, b| norm(sub(*a, *b)) < 1e-9);
+    if p.len() < 2 {
+        return;
+    }
+    let closed = norm(sub(p[0], *p.last().unwrap())) < 1e-9;
+    if closed {
+        p.pop();
+    }
+    let m = p.len();
+    let seg = |i: usize| normalize(sub(p[(i + 1) % m], p[i]));
+    let mut rings: Vec<Vec<[f64; 3]>> = Vec::with_capacity(m);
+    let mut prev_n: Option<[f64; 3]> = None;
+    for (i, pi) in p.iter().enumerate() {
+        let d_in = if i > 0 || closed {
+            seg((i + m - 1) % m)
+        } else {
+            None
+        };
+        let d_out = if i + 1 < m || closed { seg(i) } else { None };
+        let (Some(t), d_in) = (
+            match (d_in, d_out) {
+                (Some(a), Some(b)) => {
+                    normalize([a[0] + b[0], a[1] + b[1], a[2] + b[2]]).or(Some(b))
+                }
+                (a, b) => a.or(b),
+            },
+            d_in,
+        ) else {
+            return;
+        };
+        // Frame: carry the previous normal along (parallel transport), so rings don't twist.
+        let seed = prev_n.unwrap_or(if t[2].abs() < 0.9 {
+            [0.0, 0.0, 1.0]
+        } else {
+            [1.0, 0.0, 0.0]
+        });
+        let Some(nrm) = normalize(sub(seed, t.map(|c| c * dot(seed, t)))) else {
+            return;
+        };
+        prev_n = Some(nrm);
+        let bin = cross(t, nrm);
+        // Mitre: stretch across the bend by 1 / cos(half angle) so the tube keeps radius r.
+        let (bend, stretch) = match (d_in, d_out) {
+            (Some(a), Some(b)) => {
+                let c = dot(a, t).clamp(0.3, 1.0);
+                (normalize(cross(t, cross(a, b))), 1.0 / c)
+            }
+            _ => (None, 1.0),
+        };
+        let ring = (0..n)
+            .map(|j| {
+                let a = j as f64 / n as f64 * std::f64::consts::TAU;
+                let mut off = [0, 1, 2].map(|k| r * (a.cos() * nrm[k] + a.sin() * bin[k]));
+                if let Some(bd) = bend {
+                    let extra = dot(off, bd) * (stretch - 1.0);
+                    off = [0, 1, 2].map(|k| off[k] + extra * bd[k]);
+                }
+                [pi[0] + off[0], pi[1] + off[1], pi[2] + off[2]]
+            })
+            .collect();
+        rings.push(ring);
+    }
+    let pairs = if closed { m } else { m - 1 };
+    for i in 0..pairs {
+        let (a, b) = (&rings[i], &rings[(i + 1) % m]);
+        for j in 0..n {
+            let k = (j + 1) % n;
+            // Rings turn counter-clockwise around the tangent t. With edges along t and around
+            // the ring, (a_j, b_k, b_j) has normal +radial: facing outward.
+            out.triangle([a[j], b[k], b[j]]);
+            out.triangle([a[j], a[k], b[k]]);
+        }
+    }
+    if !closed {
+        let start: Vec<[f64; 3]> = rings[0].iter().rev().copied().collect();
+        out.polygon(&start, &[]);
+        out.polygon(&rings[m - 1], &[]);
+    }
+}
+
 /// Segments needed so that chords stay within `tol` of a circle of radius `r` over `sweep` radians.
 /// Also at most 15° per segment, so small circles (bolts, drill holes) stay round: with the
 /// distance tolerance alone a Ø20 mm hole got 10 segments and lost 6.5 % of its volume.
@@ -1163,6 +1498,78 @@ mod tests {
     use bimble_core::demo::{FrameSpec, concrete_frame};
 
     /// Small full circles: within ~1.2 % of the exact area (15° segments), like IfcOpenShell.
+    fn tube_mesh(path: &[[f64; 3]], r: f64, n: usize) -> bimble_geom::Mesh {
+        let mut mb = MeshBuilder::default();
+        let mut budget = Budget {
+            triangles_left: usize::MAX,
+            exhausted: false,
+        };
+        let mut out = Emit {
+            mb: &mut mb,
+            scale: 1.0,
+            budget: &mut budget,
+        };
+        tube(path, r, n, &mut out);
+        mb.build([0.0; 3])
+    }
+
+    #[test]
+    fn straight_tube_is_a_closed_outward_prism() {
+        let (r, n, l) = (8.0, 24, 1000.0);
+        let m = tube_mesh(&[[0.0, 0.0, 0.0], [l, 0.0, 0.0]], r, n);
+        let prism = 0.5 * n as f64 * r * r * (std::f64::consts::TAU / n as f64).sin() * l;
+        assert!(m.volume() > 0.0, "inward-facing: {}", m.volume());
+        assert!(
+            (m.volume() - prism).abs() / prism < 1e-6,
+            "{} vs {prism}",
+            m.volume()
+        );
+    }
+
+    #[test]
+    fn bent_tube_keeps_its_radius_at_the_corner() {
+        // L-shaped bar: 1 m along X, then 1 m along Y. Mitred corner: volume = 2 m of section.
+        let (r, n) = (8.0, 24);
+        let m = tube_mesh(
+            &[[0.0, 0.0, 0.0], [1000.0, 0.0, 0.0], [1000.0, 1000.0, 0.0]],
+            r,
+            n,
+        );
+        let section = 0.5 * n as f64 * r * r * (std::f64::consts::TAU / n as f64).sin();
+        let want = section * 2000.0;
+        assert!(
+            (m.volume() - want).abs() / want < 1e-3,
+            "{} vs {want}",
+            m.volume()
+        );
+        // Every vertex at the corner ring stays within the corner's miter: none collapses inward.
+        let near_corner = m
+            .positions
+            .iter()
+            .filter(|p| (p[0] - 1000.0).abs() < 20.0 && p[1].abs() < 20.0)
+            .count();
+        assert!(near_corner > 0);
+    }
+
+    #[test]
+    fn fillet_replaces_corners_with_arcs() {
+        let sq = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        let f = fillet(&sq, &[2], 2.0, 0.01);
+        assert!(f.len() > 5);
+        // Area of a square with one rounded corner: 100 − r² (1 − π/4).
+        let area: f64 = f
+            .iter()
+            .zip(f.iter().cycle().skip(1))
+            .map(|(a, b)| a[0] * b[1] - b[0] * a[1])
+            .sum::<f64>()
+            / 2.0;
+        // Exact rounded area, minus what the arc's chords cut off: n · r²/2 · (θ − sin θ).
+        let segs = (f.len() - 3 - 1) as f64;
+        let th = std::f64::consts::FRAC_PI_2 / segs;
+        let want = 100.0 - 4.0 * (1.0 - std::f64::consts::FRAC_PI_4) - segs * 2.0 * (th - th.sin());
+        assert!((area - want).abs() < 1e-9, "{area} vs {want}");
+    }
+
     #[test]
     fn small_circles_stay_round() {
         let tol = ARC_TOLERANCE_MM; // file in mm
