@@ -25,6 +25,65 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum HistoryCmd {
+    /// Start a history for a .bimble model
+    Init { model: PathBuf },
+    /// Record the model as it is now
+    Commit {
+        model: PathBuf,
+        #[arg(short, long)]
+        message: String,
+        /// Default: $BIMBLE_AUTHOR, else $USER
+        #[arg(long)]
+        author: Option<String>,
+    },
+    /// What changed since the last commit
+    Status { model: PathBuf },
+    /// Commits, newest first
+    Log {
+        model: PathBuf,
+        /// Branch, commit (or prefix) or HEAD~n
+        #[arg(default_value = "HEAD")]
+        rev: String,
+        #[arg(short = 'n', long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Changes between two revisions; with one, between it and the model as it is now
+    Diff {
+        model: PathBuf,
+        a: String,
+        b: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List branches, or create one at HEAD (or at --at)
+    Branch {
+        model: PathBuf,
+        name: Option<String>,
+        #[arg(long)]
+        at: Option<String>,
+    },
+    /// Switch to a branch or commit: the model file is replaced by its state there
+    Switch {
+        model: PathBuf,
+        rev: String,
+        /// Even when the model has changes not committed (they are lost)
+        #[arg(long)]
+        force: bool,
+    },
+    /// Merge a branch or commit into the current branch (object by object, by GlobalId)
+    Merge {
+        model: PathBuf,
+        rev: String,
+        /// When both sides changed the same object: keep ours or theirs instead of stopping
+        #[arg(long, value_parser = ["ours", "theirs"])]
+        prefer: Option<String>,
+        #[arg(long)]
+        author: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// Open the 3D viewer (optionally with a .ifc or .bimble file)
     View {
@@ -121,6 +180,11 @@ enum Cmd {
     },
     /// Export to IFC4
     ExportIfc { file: PathBuf, out: PathBuf },
+    /// Model history: commits, branches, log, diff and merge (kept in <model>-history/)
+    History {
+        #[command(subcommand)]
+        cmd: HistoryCmd,
+    },
     /// Measure rendering speed on this machine (generated models of 1k–50k elements, plus files)
     Bench {
         /// Extra .ifc / .bimble files to benchmark
@@ -410,6 +474,7 @@ fn run(cli: Cli) -> Result<(), String> {
             file::save(&m, &out).map_err(e)?;
             println!("{} → {}", assignment, out.display());
         }
+        Cmd::History { cmd } => history(cmd)?,
         Cmd::Diff { a, b, json } => {
             let (ma, mb) = (file::load(&a).map_err(e)?, file::load(&b).map_err(e)?);
             let d = version::diff(&ma, &mb);
@@ -582,6 +647,171 @@ fn is_ifc(path: &std::path::Path) -> bool {
 }
 
 /// Load a .ifc or .bimble file as a render-ready scene.
+fn history(cmd: HistoryCmd) -> Result<(), String> {
+    use bimble_core::repo::{Head, Merged, Prefer, Repo};
+    let e = |x: bimble_core::repo::RepoError| x.to_string();
+    let fe = |x: file::FileError| x.to_string();
+    let author_of = |a: Option<String>| {
+        a.or_else(|| std::env::var("BIMBLE_AUTHOR").ok())
+            .or_else(|| std::env::var("USER").ok())
+            .or_else(|| std::env::var("USERNAME").ok())
+            .unwrap_or_else(|| "unknown".into())
+    };
+    let short = |h: &str| h[..12].to_owned();
+    let print_changes = |d: &[version::Change], json: bool| {
+        if json {
+            println!("{}", serde_json::to_string_pretty(d).unwrap());
+        } else if d.is_empty() {
+            println!("no changes");
+        } else {
+            for c in d {
+                println!("{c}");
+            }
+        }
+    };
+    let now = bimble_core::date::now_secs;
+    match cmd {
+        HistoryCmd::Init { model } => {
+            // The model must be a readable .bimble file: the history is of that model.
+            file::load(&model).map_err(fe)?;
+            let r = Repo::init(&model).map_err(e)?;
+            println!("history started in {} (branch main)", r.dir().display());
+        }
+        HistoryCmd::Commit {
+            model,
+            message,
+            author,
+        } => {
+            let r = Repo::open(&model).map_err(e)?;
+            let m = file::load(&model).map_err(fe)?;
+            let changes = r.status(&m).map_err(e)?.len();
+            let h = r
+                .commit(&m, &message, &author_of(author), now())
+                .map_err(e)?;
+            println!("{} {message} ({changes} change(s))", short(&h));
+        }
+        HistoryCmd::Status { model } => {
+            let r = Repo::open(&model).map_err(e)?;
+            let m = file::load(&model).map_err(fe)?;
+            match r.head().map_err(e)? {
+                Head::Branch(b) => println!("on branch {b}"),
+                Head::Detached(h) => println!("at commit {} (no branch)", short(&h)),
+            }
+            print_changes(&r.status(&m).map_err(e)?, false);
+        }
+        HistoryCmd::Log { model, rev, limit } => {
+            let r = Repo::open(&model).map_err(e)?;
+            if r.head_commit().map_err(e)?.is_none() && rev == "HEAD" {
+                println!("no commits yet");
+                return Ok(());
+            }
+            let branches = r.branches().map_err(e)?;
+            for (h, c) in r.log(&rev, limit).map_err(e)? {
+                let names: Vec<&str> = branches
+                    .iter()
+                    .filter(|(_, b)| *b == h)
+                    .map(|(n, _)| n.as_str())
+                    .collect();
+                let tags = if names.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", names.join(", "))
+                };
+                let merge = if c.parents.len() > 1 { " [merge]" } else { "" };
+                println!(
+                    "{}{tags}{merge}  {}  {}\n    {}",
+                    short(&h),
+                    bimble_core::date::format_utc(c.time),
+                    c.author,
+                    c.message.replace('\n', "\n    ")
+                );
+            }
+        }
+        HistoryCmd::Diff { model, a, b, json } => {
+            let r = Repo::open(&model).map_err(e)?;
+            let ma = r.model_at(&a).map_err(e)?;
+            let mb = match b {
+                Some(b) => r.model_at(&b).map_err(e)?,
+                None => file::load(&model).map_err(fe)?,
+            };
+            print_changes(&version::diff(&ma, &mb), json);
+        }
+        HistoryCmd::Branch { model, name, at } => {
+            let r = Repo::open(&model).map_err(e)?;
+            match name {
+                Some(n) => {
+                    let h = r.create_branch(&n, at.as_deref()).map_err(e)?;
+                    println!("branch {n} at {}", short(&h));
+                }
+                None => {
+                    let cur = r.head().map_err(e)?;
+                    for (n, h) in r.branches().map_err(e)? {
+                        let mark = if cur == Head::Branch(n.clone()) {
+                            "*"
+                        } else {
+                            " "
+                        };
+                        println!("{mark} {n}  {}", short(&h));
+                    }
+                }
+            }
+        }
+        HistoryCmd::Switch { model, rev, force } => {
+            let r = Repo::open(&model).map_err(e)?;
+            let working = file::load(&model).map_err(fe)?;
+            let pending = r.status(&working).map_err(e)?;
+            if !pending.is_empty() && !force {
+                return Err(format!(
+                    "{} change(s) not committed; commit them or use --force to drop them",
+                    pending.len()
+                ));
+            }
+            let m = r.switch(&rev).map_err(e)?;
+            file::save(&m, &model).map_err(fe)?;
+            println!("switched to {rev}: {} elements", m.elements.len());
+        }
+        HistoryCmd::Merge {
+            model,
+            rev,
+            prefer,
+            author,
+        } => {
+            let r = Repo::open(&model).map_err(e)?;
+            let working = file::load(&model).map_err(fe)?;
+            if !r.status(&working).map_err(e)?.is_empty() {
+                return Err("the model has changes not committed; commit them first".into());
+            }
+            let prefer = match prefer.as_deref() {
+                Some("ours") => Prefer::Ours,
+                Some("theirs") => Prefer::Theirs,
+                _ => Prefer::Neither,
+            };
+            match r
+                .merge(&rev, prefer, &author_of(author), now())
+                .map_err(e)?
+            {
+                Ok((how, m)) => {
+                    file::save(&m, &model).map_err(fe)?;
+                    match how {
+                        Merged::UpToDate => println!("already up to date"),
+                        Merged::FastForward(h) => println!("fast-forward to {}", short(&h)),
+                        Merged::Commit(h) => println!("merged {rev}: {}", short(&h)),
+                    }
+                }
+                Err(conflicts) => {
+                    let list: Vec<String> = conflicts.iter().map(|c| format!("  {c}")).collect();
+                    return Err(format!(
+                        "{} conflict(s), nothing merged (use --prefer ours|theirs):\n{}",
+                        conflicts.len(),
+                        list.join("\n")
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn load_scene(path: &std::path::Path) -> Result<bimble_geom::Scene, String> {
     bimble_viewer::load_scene(path)
 }
