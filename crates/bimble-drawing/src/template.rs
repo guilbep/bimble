@@ -100,7 +100,7 @@ pub struct TitleBlock {
     pub columns: Vec<Column>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct Column {
     /// None: the columns without a width share what is left.
@@ -138,15 +138,6 @@ fn entry(label: &str, value: &str) -> Entry {
         value: value.into(),
         color: None,
         size: 1.0,
-    }
-}
-
-impl Default for Column {
-    fn default() -> Self {
-        Column {
-            width_mm: None,
-            entries: Vec::new(),
-        }
     }
 }
 

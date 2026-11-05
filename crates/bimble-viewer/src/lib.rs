@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
+mod edit;
 mod measure;
 mod section;
 mod style_editor;
@@ -170,21 +171,30 @@ pub fn run(
 
 /// Load a .ifc or .bimble file as a scene.
 pub fn load_scene(path: &Path) -> Result<Scene, String> {
+    load_any(path).map(|(s, _)| s)
+}
+
+/// A scene, and for a .bimble file the model itself (it can then be edited).
+fn load_any(path: &Path) -> Result<(Scene, Option<bimble_core::Model>), String> {
     let is_ifc = path
         .extension()
         .and_then(|x| x.to_str())
         .is_some_and(|x| x.eq_ignore_ascii_case("ifc"));
     if is_ifc {
-        bimble_ifc::read::read_file(path).map_err(|e| e.to_string())
+        bimble_ifc::read::read_file(path)
+            .map(|s| (s, None))
+            .map_err(|e| e.to_string())
     } else {
         let m = bimble_core::file::load(path).map_err(|e| e.to_string())?;
-        Ok(Scene::from_model(&m))
+        Ok((Scene::from_model(&m), Some(m)))
     }
 }
 
+type LoadResult = Result<(Scene, Option<bimble_core::Model>, Duration), String>;
+
 struct Loading {
     path: PathBuf,
-    rx: Receiver<Result<(Scene, Duration), String>>,
+    rx: Receiver<LoadResult>,
 }
 
 struct Loaded {
@@ -195,6 +205,38 @@ struct Loaded {
     classes: BTreeMap<String, usize>,
     storeys: BTreeMap<String, usize>,
     categories: BTreeMap<MaterialCategory, usize>,
+    /// The model of a .bimble file, editable.
+    edit: Option<edit::Editor>,
+}
+
+type Counts = (
+    BTreeMap<String, usize>,
+    BTreeMap<String, usize>,
+    BTreeMap<MaterialCategory, usize>,
+);
+
+/// Elements per IFC class, storey and material family.
+fn counts(scene: &Scene) -> Counts {
+    let mut classes = BTreeMap::new();
+    let mut storeys = BTreeMap::new();
+    let mut categories = BTreeMap::new();
+    for e in &scene.elements {
+        *classes.entry(e.class.clone()).or_default() += 1;
+        *storeys.entry(e.storey.clone()).or_default() += 1;
+        *categories.entry(e.category).or_default() += 1;
+    }
+    (classes, storeys, categories)
+}
+
+/// What the history window shows, read when it opens and after each history action.
+struct HistoryView {
+    /// None: the model has no history yet.
+    branch: Option<String>,
+    branches: Vec<(String, String)>,
+    log: Vec<(String, bimble_core::repo::Commit)>,
+    /// Changes not committed.
+    pending: usize,
+    error: Option<String>,
 }
 
 struct Viewer {
@@ -257,6 +299,11 @@ struct Viewer {
     /// File the style was loaded from or saved to.
     style_path: Option<PathBuf>,
     style_message: Option<String>,
+
+    /// Editing panel (for .bimble models) and the history window.
+    edit_window: bool,
+    history_window: bool,
+    history_view: Option<HistoryView>,
 }
 
 impl Viewer {
@@ -303,6 +350,9 @@ impl Viewer {
             style_window: false,
             style_path: None,
             style_message: None,
+            edit_window: false,
+            history_window: false,
+            history_view: None,
         }
     }
 
@@ -312,7 +362,7 @@ impl Viewer {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let t = Instant::now();
-            let r = load_scene(&p).map(|s| (s, t.elapsed()));
+            let r = load_any(&p).map(|(s, m)| (s, m, t.elapsed()));
             let _ = tx.send(r);
             ctx.request_repaint();
         });
@@ -327,7 +377,7 @@ impl Viewer {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let t = Instant::now();
-            let r = load_scene(&p).map(|s| (s, t.elapsed()));
+            let r = load_scene(&p).map(|s| (s, None, t.elapsed()));
             let _ = tx.send(r);
             ctx.request_repaint();
         });
@@ -340,7 +390,7 @@ impl Viewer {
         let path = self.linking.take().unwrap().path;
         let Some(main) = &mut self.loaded else { return };
         match result {
-            Ok((scene, _)) => {
+            Ok((scene, _, _)) => {
                 let o = |k: usize| (scene.origin_mm[k] - main.scene.origin_mm[k]) as f32;
                 let offset = glam::Vec3::new(o(0), o(1), o(2));
                 let (matched_here, matched_there) = bimble_geom::compare::match_models(
@@ -383,15 +433,8 @@ impl Viewer {
         let Ok(result) = l.rx.try_recv() else { return };
         let path = self.loading.take().unwrap().path;
         match result {
-            Ok((scene, load_time)) => {
-                let mut classes = BTreeMap::new();
-                let mut storeys = BTreeMap::new();
-                let mut categories = BTreeMap::new();
-                for e in &scene.elements {
-                    *classes.entry(e.class.clone()).or_default() += 1;
-                    *storeys.entry(e.storey.clone()).or_default() += 1;
-                    *categories.entry(e.category).or_default() += 1;
-                }
+            Ok((scene, model, load_time)) => {
+                let (classes, storeys, categories) = counts(&scene);
                 let bounds = bimble_render::Sphere::of(&scene);
                 self.loaded = Some(Loaded {
                     path,
@@ -401,7 +444,9 @@ impl Viewer {
                     classes,
                     storeys,
                     categories,
+                    edit: model.map(edit::Editor::new),
                 });
+                self.history_view = None;
                 self.hidden_classes.clear();
                 self.hidden_storeys.clear();
                 self.hidden_categories.clear();
@@ -419,6 +464,337 @@ impl Viewer {
                 self.hover_snap = None;
             }
             Err(e) => self.error = Some(format!("{}: {e}", path.display())),
+        }
+    }
+
+    // ---------- editing
+
+    /// Apply commands from the editor as one undoable step, then show the result.
+    fn apply_commands(&mut self, cmds: Vec<bimble_core::Command>) {
+        let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) else {
+            return;
+        };
+        match ed.apply(cmds) {
+            Ok(()) => {
+                ed.message = None;
+                let select = ed.select_after.take();
+                self.rebuild_scene(select.map(|g| g.to_string()));
+            }
+            Err(e) => {
+                ed.message = Some(e);
+                ed.select_after = None;
+            }
+        }
+    }
+
+    fn undo_redo(&mut self, undo: bool) {
+        let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) else {
+            return;
+        };
+        if if undo { ed.undo() } else { ed.redo() } {
+            self.rebuild_scene(None);
+        }
+    }
+
+    /// The scene again from the edited model; keeps the selection (by GlobalId) unless told
+    /// what to select.
+    fn rebuild_scene(&mut self, select: Option<String>) {
+        let Some(l) = self.loaded.as_mut() else {
+            return;
+        };
+        let Some(ed) = &l.edit else { return };
+        let keep = select.or_else(|| {
+            self.selected
+                .and_then(|i| l.scene.elements.get(i))
+                .map(|e| e.global_id.clone())
+        });
+        l.scene = Scene::from_model(&ed.model);
+        (l.classes, l.storeys, l.categories) = counts(&l.scene);
+        let b = bimble_render::Sphere::of(&l.scene);
+        l.bounds = match &self.linked {
+            Some(k) => {
+                let rb = bimble_render::Sphere::of(&k.scene);
+                b.merge(bimble_render::Sphere {
+                    center: rb.center + k.offset,
+                    radius: rb.radius,
+                })
+            }
+            None => b,
+        };
+        self.selected = keep.and_then(|g| l.scene.elements.iter().position(|e| e.global_id == g));
+        self.hovered = None;
+        self.hover_gpu = None;
+        self.hover_at = None;
+        if let Some(k) = &mut self.linked {
+            // Matches were computed against the old scene.
+            let (here, there) = bimble_geom::compare::match_models(
+                &l.scene,
+                &k.scene,
+                bimble_geom::compare::Tolerance::default(),
+            );
+            k.matched_here = here;
+            k.matched_there = there;
+        }
+        self.needs_upload = true;
+    }
+
+    fn save(&mut self) {
+        let Some(l) = self.loaded.as_mut() else {
+            return;
+        };
+        let Some(ed) = l.edit.as_mut() else { return };
+        match bimble_core::file::save(&ed.model, &l.path) {
+            Ok(()) => {
+                ed.dirty = false;
+                ed.message = Some(format!("Saved {}", l.path.display()));
+            }
+            Err(e) => ed.message = Some(format!("{}: {e}", l.path.display())),
+        }
+        if self.history_window {
+            self.refresh_history();
+        }
+    }
+
+    fn refresh_history(&mut self) {
+        let Some(l) = &self.loaded else { return };
+        let Some(ed) = &l.edit else { return };
+        use bimble_core::repo::{Head, Repo, RepoError};
+        let read = || -> Result<HistoryView, RepoError> {
+            let r = match Repo::open(&l.path) {
+                Ok(r) => r,
+                Err(RepoError::NoRepo(_)) => {
+                    return Ok(HistoryView {
+                        branch: None,
+                        branches: Vec::new(),
+                        log: Vec::new(),
+                        pending: 0,
+                        error: None,
+                    });
+                }
+                Err(e) => return Err(e),
+            };
+            let branch = match r.head()? {
+                Head::Branch(b) => b,
+                Head::Detached(h) => format!("(commit {})", &h[..12]),
+            };
+            let log = match r.head_commit()? {
+                Some(_) => r.log("HEAD", 50)?,
+                None => Vec::new(),
+            };
+            Ok(HistoryView {
+                branch: Some(branch),
+                branches: r.branches()?,
+                log,
+                pending: r.status(&ed.model)?.len(),
+                error: None,
+            })
+        };
+        self.history_view = Some(read().unwrap_or_else(|e| HistoryView {
+            branch: None,
+            branches: Vec::new(),
+            log: Vec::new(),
+            pending: 0,
+            error: Some(e.to_string()),
+        }));
+    }
+
+    fn history_panel(&mut self, ui: &mut egui::Ui) {
+        use bimble_core::repo::Repo;
+        let Some(l) = self.loaded.as_mut() else {
+            return;
+        };
+        let Some(ed) = l.edit.as_mut() else {
+            ui.weak("History is for .bimble models.");
+            return;
+        };
+        let Some(v) = &self.history_view else {
+            return;
+        };
+        let author = std::env::var("BIMBLE_AUTHOR")
+            .or_else(|_| std::env::var("USER"))
+            .or_else(|_| std::env::var("USERNAME"))
+            .unwrap_or_else(|_| "unknown".into());
+        let now = bimble_core::date::now_secs();
+        let mut refresh = false;
+        let mut reload: Option<bimble_core::Model> = None;
+        if let Some(e) = &v.error {
+            ui.colored_label(Color32::RED, e);
+        }
+        let Some(branch) = &v.branch else {
+            ui.label("This model has no history yet.");
+            ui.label("Message of the first commit:");
+            ui.text_edit_singleline(&mut ed.commit_message);
+            if ui
+                .add_enabled(
+                    !ed.commit_message.trim().is_empty(),
+                    egui::Button::new("Start history and commit"),
+                )
+                .clicked()
+            {
+                let saved = if ed.dirty {
+                    bimble_core::file::save(&ed.model, &l.path).map_err(|e| e.to_string())
+                } else {
+                    Ok(())
+                };
+                ed.message = Some(
+                    match saved.and_then(|()| {
+                        Repo::init(&l.path)
+                            .and_then(|r| r.commit(&ed.model, &ed.commit_message, &author, now))
+                            .map_err(|e| e.to_string())
+                    }) {
+                        Ok(h) => {
+                            ed.dirty = false;
+                            ed.commit_message.clear();
+                            format!("Committed {}", &h[..12])
+                        }
+                        Err(e) => e,
+                    },
+                );
+                refresh = true;
+            }
+            if let Some(m) = &ed.message {
+                ui.label(m);
+            }
+            if refresh {
+                self.refresh_history();
+            }
+            return;
+        };
+        ui.label(format!(
+            "On {branch} · {} change(s) not committed",
+            v.pending
+        ));
+        ui.horizontal(|ui| {
+            ui.text_edit_singleline(&mut ed.commit_message)
+                .on_hover_text("Commit message");
+            if ui
+                .add_enabled(
+                    v.pending > 0 && !ed.commit_message.trim().is_empty(),
+                    egui::Button::new("Commit"),
+                )
+                .clicked()
+            {
+                // Save first, so the file and the history agree.
+                let saved = if ed.dirty {
+                    bimble_core::file::save(&ed.model, &l.path).map_err(|e| e.to_string())
+                } else {
+                    Ok(())
+                };
+                ed.message = Some(
+                    match saved.and_then(|()| {
+                        Repo::open(&l.path)
+                            .and_then(|r| r.commit(&ed.model, &ed.commit_message, &author, now))
+                            .map_err(|e| e.to_string())
+                    }) {
+                        Ok(h) => {
+                            ed.dirty = false;
+                            ed.commit_message.clear();
+                            format!("Committed {}", &h[..12])
+                        }
+                        Err(e) => e,
+                    },
+                );
+                refresh = true;
+            }
+        });
+        ui.separator();
+        ui.label("Branches");
+        for (name, h) in &v.branches {
+            ui.horizontal(|ui| {
+                let current = Some(name) == v.branch.as_ref();
+                ui.label(format!("{} {name}  {}", if current { "●" } else { "○" }, &h[..10]));
+                if !current
+                    && ui
+                        .add_enabled(v.pending == 0, egui::Button::new("Switch"))
+                        .on_hover_text("Commit or undo the changes first")
+                        .clicked()
+                {
+                    match Repo::open(&l.path).and_then(|r| r.switch(name)) {
+                        Ok(m) => reload = Some(m),
+                        Err(e) => ed.message = Some(e.to_string()),
+                    }
+                }
+                if !current
+                    && ui
+                        .add_enabled(v.pending == 0, egui::Button::new("Merge"))
+                        .on_hover_text("Merge this branch into the current one")
+                        .clicked()
+                {
+                    use bimble_core::repo::Prefer;
+                    match Repo::open(&l.path).and_then(|r| r.merge(name, Prefer::Neither, &author, now)) {
+                        Ok(Ok((_, m))) => reload = Some(m),
+                        Ok(Err(conflicts)) => {
+                            let list: Vec<String> = conflicts.iter().take(8).map(|c| c.to_string()).collect();
+                            ed.message = Some(format!(
+                                "{} conflict(s), nothing merged (merge from the command line with --prefer):\n{}",
+                                conflicts.len(),
+                                list.join("\n")
+                            ));
+                        }
+                        Err(e) => ed.message = Some(e.to_string()),
+                    }
+                }
+            });
+        }
+        ui.horizontal(|ui| {
+            ui.text_edit_singleline(&mut ed.new_branch)
+                .on_hover_text("New branch name");
+            if ui
+                .add_enabled(
+                    !ed.new_branch.trim().is_empty(),
+                    egui::Button::new("New branch"),
+                )
+                .clicked()
+            {
+                let name = ed.new_branch.trim().to_owned();
+                ed.message = Some(
+                    match Repo::open(&l.path).and_then(|r| {
+                        r.create_branch(&name, None)?;
+                        r.switch(&name)
+                    }) {
+                        Ok(_) => {
+                            ed.new_branch.clear();
+                            format!("On new branch {name}")
+                        }
+                        Err(e) => e.to_string(),
+                    },
+                );
+                refresh = true;
+            }
+        });
+        if let Some(m) = &ed.message {
+            ui.label(m);
+        }
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .max_height(320.0)
+            .show(ui, |ui| {
+                for (h, c) in &v.log {
+                    ui.label(egui::RichText::new(&c.message).strong());
+                    ui.weak(format!(
+                        "{}  {}  {}{}",
+                        &h[..10],
+                        bimble_core::date::format_utc(c.time),
+                        c.author,
+                        if c.parents.len() > 1 { "  [merge]" } else { "" }
+                    ));
+                }
+            });
+        if let Some(m) = reload {
+            // The working file follows the history (no changes were pending).
+            let ed = l.edit.as_mut().unwrap();
+            ed.model = m;
+            ed.history = bimble_core::History::default();
+            ed.form = None;
+            match bimble_core::file::save(&ed.model, &l.path) {
+                Ok(()) => ed.dirty = false,
+                Err(e) => ed.message = Some(e.to_string()),
+            }
+            self.rebuild_scene(None);
+            refresh = true;
+        }
+        if refresh {
+            self.refresh_history();
         }
     }
 
@@ -681,6 +1057,26 @@ impl Viewer {
                 self.needs_render = true;
             }
         }
+        if self
+            .loaded
+            .as_ref()
+            .and_then(|l| l.edit.as_ref())
+            .is_some_and(|ed| ed.placing.is_some())
+        {
+            self.set_hovered(None);
+            if resp.clicked()
+                && let Some(pos) = resp.interact_pointer_pos()
+                && let Some(p) = self.storey_point(pos, rect, aspect)
+            {
+                let ed = self.loaded.as_mut().and_then(|l| l.edit.as_mut()).unwrap();
+                match ed.click(p) {
+                    Some(Ok(cmds)) => self.apply_commands(cmds),
+                    Some(Err(e)) => ed.message = Some(e),
+                    None => {}
+                }
+            }
+            return;
+        }
         if self.measure_on {
             self.set_hovered(None);
             // Snap under the cursor, for the marker and the next click.
@@ -743,6 +1139,31 @@ impl Viewer {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
+        // Editing shortcuts (a .bimble model).
+        if self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) {
+            let (undo, redo, save, del) = ctx.input_mut(|i| {
+                let cmd = egui::Modifiers::COMMAND;
+                let shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+                (
+                    i.consume_key(cmd, egui::Key::Z),
+                    i.consume_key(cmd, egui::Key::Y) || i.consume_key(shift, egui::Key::Z),
+                    i.consume_key(cmd, egui::Key::S),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Delete),
+                )
+            });
+            if undo || redo {
+                self.undo_redo(undo);
+            }
+            if save {
+                self.save();
+            }
+            if del
+                && let (Some(i), Some(l)) = (self.selected, &self.loaded)
+                && let Ok(id) = l.scene.elements[i].global_id.parse()
+            {
+                self.apply_commands(edit::delete(&[id]));
+            }
+        }
         let (f, o, e, h, t, esc, b, m) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::F),
@@ -783,9 +1204,15 @@ impl Viewer {
             self.camera.yaw = -std::f32::consts::FRAC_PI_2;
             self.needs_render = true;
         }
-        // Esc first drops a half-made dimension, then the selection.
-        if esc && self.measure_first.take().is_some() {
-        } else if esc && self.selected.take().is_some() {
+        // Esc first stops placing, drops a half-made dimension, then the selection.
+        let stopped_placing = esc
+            && self
+                .loaded
+                .as_mut()
+                .and_then(|l| l.edit.as_mut())
+                .is_some_and(|ed| ed.placing.take().is_some());
+        let handled = stopped_placing || (esc && self.measure_first.take().is_some());
+        if !handled && esc && self.selected.take().is_some() {
             self.needs_upload = true;
         }
     }
@@ -847,9 +1274,57 @@ impl Viewer {
             ui.toggle_value(&mut self.plan_window, "Plan…")
                 .on_hover_text("Storey plan at scale, as PDF or SVG");
             ui.toggle_value(&mut self.style_window, "Style…");
+            if let Some(ed) = self.loaded.as_ref().and_then(|l| l.edit.as_ref()) {
+                ui.separator();
+                let dirty = ed.dirty;
+                if ui.button("Undo").on_hover_text("Undo (Ctrl+Z)").clicked() {
+                    self.undo_redo(true);
+                }
+                if ui.button("Redo").on_hover_text("Redo (Ctrl+Y)").clicked() {
+                    self.undo_redo(false);
+                }
+                if ui
+                    .add_enabled(dirty, egui::Button::new(if dirty { "Save*" } else { "Save" }))
+                    .on_hover_text("Ctrl+S")
+                    .clicked()
+                {
+                    self.save();
+                }
+                ui.toggle_value(&mut self.edit_window, "Edit…")
+                    .on_hover_text("Place columns, beams, walls and slabs");
+                if ui.toggle_value(&mut self.history_window, "History…").changed() && self.history_window {
+                    self.refresh_history();
+                }
+            }
             ui.separator();
             ui.weak("Drag: orbit · Right-drag / Shift-drag: pan · Scroll: zoom · Click: select · Double-click / F: fit · T: top");
         });
+    }
+
+    /// Where a screen point's ray meets the level of the storey being edited: storey-relative
+    /// x, y in mm (model coordinates), rounded to 10 mm.
+    fn storey_point(&self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) -> Option<[f64; 2]> {
+        let l = self.loaded.as_ref()?;
+        let ed = l.edit.as_ref()?;
+        let ndc = [
+            (pos.x - rect.min.x) / rect.width() * 2.0 - 1.0,
+            1.0 - (pos.y - rect.min.y) / rect.height() * 2.0,
+        ];
+        let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
+        let z = (ed.storey_elevation() - l.scene.origin_mm[2]) as f32;
+        if d.z.abs() < 1e-6 {
+            return None;
+        }
+        let t = (z - o.z) / d.z;
+        if t < 0.0 {
+            return None;
+        }
+        let p = o + d * t;
+        let round = |v: f64| (v / 10.0).round() * 10.0;
+        Some([
+            round(p.x as f64 + l.scene.origin_mm[0]),
+            round(p.y as f64 + l.scene.origin_mm[1]),
+        ])
     }
 
     /// What a click at a screen point would measure from (corner, edge or face).
@@ -1422,10 +1897,24 @@ impl Viewer {
         }
     }
 
-    fn properties(&self, ui: &mut egui::Ui) {
-        let (Some(i), Some(l)) = (self.selected, &self.loaded) else {
+    fn properties(&mut self, ui: &mut egui::Ui) {
+        let (Some(i), Some(l)) = (self.selected, self.loaded.as_mut()) else {
             return;
         };
+        if let Some(ed) = l.edit.as_mut()
+            && let Ok(id) = l.scene.elements[i]
+                .global_id
+                .parse::<bimble_core::GlobalId>()
+        {
+            ed.element_panel(ui, id);
+            if let Some(m) = &ed.message {
+                ui.label(m);
+            }
+            if let Some(cmds) = ed.pending.take() {
+                self.apply_commands(cmds);
+            }
+            return;
+        }
         let e = &l.scene.elements[i];
         ui.heading(&e.class);
         egui::Grid::new("props")
@@ -1513,6 +2002,32 @@ impl eframe::App for Viewer {
                 .resizable(true)
                 .show(&ctx, |ui| self.plan_panel(ui));
             self.plan_window = open;
+        }
+        if self.edit_window && self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) {
+            let mut open = true;
+            egui::Window::new("Place elements")
+                .open(&mut open)
+                .default_width(260.0)
+                .show(&ctx, |ui| {
+                    if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
+                        ed.place_panel(ui);
+                        if let Some(m) = &ed.message {
+                            ui.label(m);
+                        }
+                    }
+                });
+            if !open && let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
+                ed.placing = None;
+            }
+            self.edit_window = open;
+        }
+        if self.history_window && self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) {
+            let mut open = true;
+            egui::Window::new("History")
+                .open(&mut open)
+                .default_width(340.0)
+                .show(&ctx, |ui| self.history_panel(ui));
+            self.history_window = open;
         }
         if self.style_window {
             let mut open = true;

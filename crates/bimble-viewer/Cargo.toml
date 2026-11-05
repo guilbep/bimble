@@ -14,3 +14,4 @@ bimble-render.workspace = true
 eframe.workspace = true
 rfd.workspace = true
 glam.workspace = true
+serde_json.workspace = true
