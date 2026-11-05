@@ -58,4 +58,4 @@ python3 scripts/compare_ifcopenshell.py model.ifc ours.jsonl    # our reader vs 
 | `bimble-viewer` | The viewer window (eframe) |
 | `bimble-cli` | The `bimble` binary |
 
-See [ROADMAP.md](ROADMAP.md), [docs/adr](docs/adr) and [docs/format](docs/format).
+See [ROADMAP.md](ROADMAP.md), [docs/adr](docs/adr), [docs/format](docs/format) and, to publish a version, [docs/RELEASING.md](docs/RELEASING.md).
