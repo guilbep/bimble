@@ -1,0 +1,172 @@
+//! Bimble core: IFC-typed building model, commands with undo, canonical hashing and diff.
+
+mod command;
+pub mod demo;
+pub mod file;
+mod guid;
+mod model;
+pub mod version;
+
+pub use command::{Command, CommandError, History};
+pub use guid::GlobalId;
+pub use model::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use demo::{FrameSpec, concrete_frame};
+
+    fn first(m: &Model, class: IfcClass) -> GlobalId {
+        *m.elements.iter().find(|(_, e)| e.class == class).unwrap().0
+    }
+
+    #[test]
+    fn demo_frame_counts_and_validates() {
+        let spec = FrameSpec::default();
+        let m = concrete_frame(&spec);
+        m.validate().unwrap();
+        assert_eq!(m.elements.len(), spec.element_count());
+        let n = |c| m.elements.values().filter(|e| e.class == c).count();
+        assert_eq!(n(IfcClass::IfcFooting), 12);
+        assert_eq!(n(IfcClass::IfcColumn), 24);
+        assert_eq!(n(IfcClass::IfcBeam), 34);
+        assert_eq!(n(IfcClass::IfcSlab), 2);
+    }
+
+    #[test]
+    fn file_roundtrip_is_lossless_and_hash_stable() {
+        let m = concrete_frame(&FrameSpec::default());
+        let s = file::to_string(&m);
+        let back = file::from_str(&s).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(version::model_hash(&back), version::model_hash(&m));
+        assert_eq!(file::to_string(&back), s, "serialization must be canonical");
+    }
+
+    #[test]
+    fn undo_redo_restores_exact_state() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        let h0 = version::model_hash(&m);
+        let beam = first(&m, IfcClass::IfcBeam);
+        let col = first(&m, IfcClass::IfcColumn);
+        let mut hist = History::default();
+        hist.apply(
+            &mut m,
+            vec![
+                Command::SetGenerator {
+                    id: beam,
+                    generator: Generator::RectBeam {
+                        width: 250.0,
+                        height: 600.0,
+                        length: 6000.0,
+                    },
+                },
+                Command::RemoveElement { id: col },
+            ],
+        )
+        .unwrap();
+        let h1 = version::model_hash(&m);
+        assert_ne!(h0, h1);
+        assert!(hist.undo(&mut m));
+        assert_eq!(version::model_hash(&m), h0);
+        assert!(hist.redo(&mut m));
+        assert_eq!(version::model_hash(&m), h1);
+    }
+
+    #[test]
+    fn failed_transaction_rolls_back() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        let h0 = version::model_hash(&m);
+        let col = first(&m, IfcClass::IfcColumn);
+        let mut hist = History::default();
+        let err = hist.apply(
+            &mut m,
+            vec![
+                Command::Rename {
+                    id: col,
+                    name: "renamed".into(),
+                },
+                Command::SetGenerator {
+                    id: col,
+                    generator: Generator::RectColumn {
+                        width: -1.0,
+                        depth: 300.0,
+                        height: 3000.0,
+                    },
+                },
+            ],
+        );
+        assert!(matches!(err, Err(CommandError::Invalid(_))));
+        assert_eq!(version::model_hash(&m), h0);
+        assert!(!hist.undo(&mut m));
+    }
+
+    #[test]
+    fn storey_in_use_cannot_be_removed() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        let st = *m.storeys.keys().next().unwrap();
+        assert_eq!(
+            Command::RemoveStorey { id: st }.apply(&mut m),
+            Err(CommandError::InUse(st))
+        );
+    }
+
+    #[test]
+    fn semantic_diff_reports_field_changes() {
+        let a = concrete_frame(&FrameSpec::default());
+        let mut b = a.clone();
+        let beam = first(&b, IfcClass::IfcBeam);
+        let col = first(&b, IfcClass::IfcColumn);
+        let Generator::RectBeam { width, length, .. } = b.elements[&beam].generator else {
+            unreachable!()
+        };
+        Command::SetGenerator {
+            id: beam,
+            generator: Generator::RectBeam {
+                width,
+                height: 600.0,
+                length,
+            },
+        }
+        .apply(&mut b)
+        .unwrap();
+        Command::RemoveElement { id: col }.apply(&mut b).unwrap();
+
+        let d = version::diff(&a, &b);
+        assert_eq!(d.len(), 2, "{d:#?}");
+        assert!(
+            d.iter()
+                .any(|c| matches!(c, version::Change::Removed { id, .. } if *id == col))
+        );
+        let mods: Vec<_> = d
+            .iter()
+            .filter_map(|c| match c {
+                version::Change::Modified { id, fields, .. } if *id == beam => Some(fields),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(mods.len(), 1);
+        assert_eq!(mods[0].len(), 1);
+        assert_eq!(mods[0][0].path, "generator.height");
+        assert!(version::diff(&a, &a).is_empty());
+    }
+
+    #[test]
+    fn rejects_bad_files() {
+        assert!(file::from_str(r#"{"format":"x","version":1,"model":{}}"#).is_err());
+        let m = concrete_frame(&FrameSpec::default());
+        let bumped = file::to_string(&m).replacen("\"version\": 1", "\"version\": 99", 1);
+        assert!(matches!(
+            file::from_str(&bumped),
+            Err(file::FileError::Version(99))
+        ));
+        // Dangling storey reference
+        let mut bad = m.clone();
+        let e = bad.elements.values_mut().next().unwrap();
+        e.storey = GlobalId::new();
+        assert!(matches!(
+            file::from_str(&file::to_string(&bad)),
+            Err(file::FileError::Invalid(_))
+        ));
+    }
+}

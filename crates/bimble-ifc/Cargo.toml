@@ -1,0 +1,11 @@
+[package]
+name = "bimble-ifc"
+description = "IFC4 STEP export for Bimble models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bimble-core.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
