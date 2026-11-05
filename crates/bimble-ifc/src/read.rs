@@ -180,7 +180,7 @@ pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadErr
         )
         .collect();
 
-    let mut sb = SceneBuilder::default();
+    let mut sb = SceneBuilder::with_storeys(r.storey_levels(scale));
     for (info, mb, warnings) in results {
         for (k, n) in warnings {
             *r.warnings.entry(k).or_default() += n;
@@ -515,6 +515,27 @@ impl<'a> Reader<'a> {
     // ---------- relationships ----------
 
     /// Element id → storey (or other spatial container) name, following aggregation to the parent.
+    /// Storey names and levels (world mm): the z of the storey's placement, or its Elevation
+    /// attribute when it has no placement.
+    fn storey_levels(&mut self, scale: f64) -> Vec<bimble_geom::StoreyLevel> {
+        let f = self.f;
+        let mut out = Vec::new();
+        for (_, st) in f.by_type("IFCBUILDINGSTOREY") {
+            let name = st.arg(2).as_str().unwrap_or("").to_owned();
+            let z = match st.arg(5).as_ref() {
+                Some(pl) => Some(self.object_placement(pl, 0).t[2]),
+                None => st.arg(9).as_f64(),
+            };
+            if let Some(z) = z.filter(|z| z.is_finite()) {
+                out.push(bimble_geom::StoreyLevel {
+                    name,
+                    elevation_mm: z * scale,
+                });
+            }
+        }
+        out
+    }
+
     fn containers(&self) -> HashMap<u64, String> {
         let f = self.f;
         let mut direct: HashMap<u64, String> = HashMap::new();

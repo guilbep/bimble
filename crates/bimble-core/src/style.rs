@@ -10,7 +10,7 @@
 //! Files are untrusted input: values are range-checked and unknown fields are refused, so a typo
 //! is reported instead of silently ignored.
 
-use bimble_core::MaterialCategory;
+use crate::MaterialCategory;
 use serde::{Deserialize, Serialize};
 
 /// An sRGB colour, written `"#rrggbb"` in files.
@@ -154,6 +154,30 @@ pub struct GraphicStyle {
     /// Brightness of surfaces cut by the clipping box, relative to their fill (0..1).
     pub cut_shade: f32,
     pub families: Families,
+    /// Drawings on paper (plans, sections): pens and hatch sizes in mm on the sheet.
+    pub paper: PaperStyle,
+}
+
+/// Line weights and sizes for drawings on paper, in mm on the printed sheet.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PaperStyle {
+    /// Outline of what the cut plane cuts (walls, columns, slabs).
+    pub cut_pen_mm: f32,
+    /// Visible edges below the cut plane.
+    pub projection_pen_mm: f32,
+    /// Edges above the cut plane (beams over), dashed.
+    pub above_pen_mm: f32,
+    /// Dash and gap length of lines above the cut plane.
+    pub above_dash_mm: [f32; 2],
+    /// Hatch lines.
+    pub hatch_pen_mm: f32,
+    /// Hatch spacing on paper per screen pixel of the family's `spacing_px`.
+    pub hatch_mm_per_px: f32,
+    /// Sheet frame and title block lines.
+    pub frame_pen_mm: f32,
+    /// Text height in the title block.
+    pub text_mm: f32,
 }
 
 fn one() -> f32 {
@@ -195,7 +219,8 @@ const fn lines(angle_deg: f32, spacing_px: f32, width: f32) -> Option<Lines> {
     })
 }
 
-const fn plain(color: Rgb) -> Fill {
+/// A fill without hatch.
+pub const fn plain(color: Rgb) -> Fill {
     Fill {
         color,
         lines: [None, None],
@@ -219,6 +244,16 @@ impl Default for GraphicStyle {
             hatch_darken: 0.45,
             ambient: 0.62,
             cut_shade: 0.72,
+            paper: PaperStyle {
+                cut_pen_mm: 0.5,
+                projection_pen_mm: 0.18,
+                above_pen_mm: 0.13,
+                above_dash_mm: [2.0, 1.0],
+                hatch_pen_mm: 0.13,
+                hatch_mm_per_px: 0.35,
+                frame_pen_mm: 0.5,
+                text_mm: 2.5,
+            },
             families: Families {
                 concrete: Fill {
                     stipple: Some(Stipple {
@@ -321,6 +356,27 @@ impl GraphicStyle {
         unit("hatch_darken", self.hatch_darken)?;
         unit("ambient", self.ambient)?;
         unit("cut_shade", self.cut_shade)?;
+        let p = &self.paper;
+        let range = |name: &str, x: f32, lo: f32, hi: f32| {
+            if x.is_finite() && (lo..=hi).contains(&x) {
+                Ok(())
+            } else {
+                Err(format!("paper.{name} = {x}: must be between {lo} and {hi}"))
+            }
+        };
+        for (n, x) in [
+            ("cut_pen_mm", p.cut_pen_mm),
+            ("projection_pen_mm", p.projection_pen_mm),
+            ("above_pen_mm", p.above_pen_mm),
+            ("hatch_pen_mm", p.hatch_pen_mm),
+            ("frame_pen_mm", p.frame_pen_mm),
+        ] {
+            range(n, x, 0.05, 5.0)?;
+        }
+        range("above_dash_mm[0]", p.above_dash_mm[0], 0.1, 50.0)?;
+        range("above_dash_mm[1]", p.above_dash_mm[1], 0.1, 50.0)?;
+        range("hatch_mm_per_px", p.hatch_mm_per_px, 0.05, 10.0)?;
+        range("text_mm", p.text_mm, 1.0, 20.0)?;
         for c in MaterialCategory::ALL {
             let f = self.families.get(c);
             let at = |field: &str| format!("families.{}.{field}", c.label().to_lowercase());
@@ -394,84 +450,6 @@ fn diff(a: &serde_json::Value, b: &serde_json::Value) -> Option<serde_json::Valu
         }
         _ => (a != b).then(|| a.clone()),
     }
-}
-
-// ---------------------------------------------------------------- GPU table
-
-/// Slots in the shader's style table: one per material family, then selection.
-pub(crate) const SLOTS: usize = 16;
-pub(crate) const SELECTED_SLOT: u8 = 15;
-
-pub(crate) fn slot(c: MaterialCategory) -> u8 {
-    MaterialCategory::ALL.iter().position(|&x| x == c).unwrap() as u8
-}
-
-/// One table entry, laid out as seven vec4 for the shader (see shader.wgsl). Everything that is
-/// constant per family is computed here, once, so the fragment shader only evaluates patterns.
-#[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct GpuFill {
-    fill: [f32; 4],
-    ink: [f32; 4],
-    lines: [[f32; 4]; 2],
-    dashes: [[f32; 4]; 2],
-    stipple: [f32; 4],
-}
-
-/// sRGB-encoded 0..1 to linear, as the shader did per vertex.
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-fn linear(c: Rgb) -> [f32; 3] {
-    c.unit().map(srgb_to_linear)
-}
-
-impl GpuFill {
-    fn new(f: &Fill, darken: f32) -> GpuFill {
-        let c = linear(f.color);
-        // Which patterns this family has, as bits for the shader: 1 lines 0, 2 lines 1, 4 stipple.
-        let flags =
-            f.lines[0].map_or(0, |_| 1) | f.lines[1].map_or(0, |_| 2) | f.stipple.map_or(0, |_| 4);
-        // ink.rgb: linear ink colour, ink.a: 1 = use it; otherwise the fill darkened.
-        let (ink, mode) = match f.ink {
-            Some(i) => (linear(i), 1.0),
-            None => (c.map(|x| x * (1.0 - darken)), 0.0),
-        };
-        let mut g = GpuFill {
-            fill: [c[0], c[1], c[2], flags as f32],
-            ink: [ink[0], ink[1], ink[2], mode],
-            ..Default::default()
-        };
-        for (k, l) in f.lines.iter().enumerate() {
-            let Some(l) = l else { continue };
-            // Screen y points down: a line at angle a has the pixel-space normal (sin a, cos a)
-            // and runs along (cos a, -sin a).
-            let a = l.angle_deg.to_radians();
-            let inv = 1.0 / l.spacing_px;
-            g.lines[k] = [a.sin() * inv, a.cos() * inv, l.width, 1.0];
-            if let Some(d) = l.dash_px {
-                g.dashes[k] = [a.cos() / d, -a.sin() / d, l.dash_on, 1.0];
-            }
-        }
-        if let Some(s) = f.stipple {
-            g.stipple = [1.0 / s.cell_px, s.density, s.strength, 0.0];
-        }
-        g
-    }
-}
-
-pub(crate) fn gpu_table(s: &GraphicStyle) -> [GpuFill; SLOTS] {
-    let mut t = [GpuFill::default(); SLOTS];
-    for c in MaterialCategory::ALL {
-        t[slot(c) as usize] = GpuFill::new(s.families.get(c), s.hatch_darken);
-    }
-    t[SELECTED_SLOT as usize] = GpuFill::new(&plain(s.selection), s.hatch_darken);
-    t
 }
 
 #[cfg(test)]

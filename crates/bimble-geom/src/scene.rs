@@ -18,11 +18,20 @@ pub struct SceneElement {
     pub mesh: Mesh,
 }
 
+/// A building storey: its name (as on elements) and its level, world mm.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoreyLevel {
+    pub name: String,
+    pub elevation_mm: f64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Scene {
     /// World position (mm) of the mesh coordinate origin. Keeps f32 precise for site coordinates.
     pub origin_mm: [f64; 3],
     pub elements: Vec<SceneElement>,
+    /// Storeys, lowest first.
+    pub storeys: Vec<StoreyLevel>,
     /// Things the loader could not represent exactly (unsupported geometry, etc.).
     pub warnings: Vec<String>,
 }
@@ -73,7 +82,17 @@ impl Scene {
                 Ok((info, mb))
             })
             .collect();
-        let mut b = SceneBuilder::default();
+        let mut b = SceneBuilder {
+            storeys: m
+                .storeys
+                .values()
+                .map(|s| StoreyLevel {
+                    name: s.name.clone(),
+                    elevation_mm: s.elevation,
+                })
+                .collect(),
+            ..Default::default()
+        };
         for r in meshed {
             match r {
                 Ok((info, mb)) => b.push(info, mb),
@@ -104,9 +123,18 @@ pub struct ElementInfo {
 pub struct SceneBuilder {
     items: Vec<(ElementInfo, MeshBuilder)>,
     pub warnings: Vec<String>,
+    /// Storeys (any order; sorted by elevation in `finish`).
+    pub storeys: Vec<StoreyLevel>,
 }
 
 impl SceneBuilder {
+    pub fn with_storeys(storeys: Vec<StoreyLevel>) -> SceneBuilder {
+        SceneBuilder {
+            storeys,
+            ..Default::default()
+        }
+    }
+
     pub fn push(&mut self, info: ElementInfo, mesh: MeshBuilder) {
         if !mesh.tris.is_empty() {
             self.items.push((info, mesh));
@@ -146,6 +174,11 @@ impl SceneBuilder {
                 .filter(|e| !e.mesh.indices.is_empty())
                 .collect(),
             warnings: self.warnings,
+            storeys: {
+                let mut v = self.storeys;
+                v.sort_by(|a, b| a.elevation_mm.total_cmp(&b.elevation_mm));
+                v
+            },
         }
     }
 }

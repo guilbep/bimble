@@ -61,7 +61,9 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 3. ✅ Measure ("prendre des cotes", M): snaps to visible corners, edges, faces; distance, ΔX/ΔY/ΔZ, and the
    perpendicular distance between parallel faces; dimensions listed and kept for the session. Saving them
    in the model (IfcAnnotation) comes with editing (I2)
-4. ☐ Storey plan cut to SVG **at scale** (1:1 … 1:5000), printable to PDF on A4 … A0
+4. ✅ Storey plan at scale (1:1 … 1:5000) as PDF or SVG on A4 … A0: exact sections, hatches and pens from
+   the style, title block, scale bar (`bimble plan`, viewer "Plan…"; ADR 0015). Next: configurable title
+   block (cartouche), classes to show, hidden-line removal
 5. ☐ Linked models: load another model as a reference (e.g. the architect's IFC) and compare visually
 6. ☐ Hover highlight: the element under the cursor gets its edges in another colour before you click
 7. Then the rest below (I2 editing and history, I3 import for editing, I4 formwork plans, rebar)
