@@ -47,6 +47,27 @@ impl Default for PlanSettings {
     }
 }
 
+/// How a linked model is shown.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LinkMode {
+    Solid,
+    Edges,
+    Hidden,
+}
+
+/// A model loaded next to ours as a reference (e.g. the architect's IFC).
+struct Linked {
+    path: PathBuf,
+    scene: Scene,
+    gpu: Option<GpuScene>,
+    /// Added to the linked scene's coordinates to get ours (both are placed in world mm).
+    offset: glam::Vec3,
+    mode: LinkMode,
+    /// For each of our elements / each of theirs: whether the other model has something there.
+    matched_here: Vec<bool>,
+    matched_there: Vec<bool>,
+}
+
 struct Turn {
     from: (f32, f32),
     to: (f32, f32),
@@ -55,7 +76,11 @@ struct Turn {
 
 /// Open the viewer window, optionally loading a file and a graphic style. Blocks until the
 /// window is closed.
-pub fn run(file: Option<PathBuf>, style: Option<PathBuf>) -> Result<(), String> {
+pub fn run(
+    file: Option<PathBuf>,
+    style: Option<PathBuf>,
+    link: Option<PathBuf>,
+) -> Result<(), String> {
     let initial_style = match &style {
         Some(p) => GraphicStyle::load(p)?,
         None => GraphicStyle::default(),
@@ -83,6 +108,7 @@ pub fn run(file: Option<PathBuf>, style: Option<PathBuf>) -> Result<(), String> 
             if let Some(f) = file {
                 app.open(f, &cc.egui_ctx);
             }
+            app.pending_link = link;
             Ok(Box::new(app))
         }),
     )
@@ -157,6 +183,13 @@ struct Viewer {
     dimensions: Vec<measure::Dimension>,
     hover_snap: Option<measure::Snap>,
 
+    /// Linked (reference) model, one being loaded, and whether differences are coloured.
+    linked: Option<Linked>,
+    linking: Option<Loading>,
+    compare_on: bool,
+    /// Model to link once ours is loaded (`bimble view --link`).
+    pending_link: Option<PathBuf>,
+
     /// Plan export window and its settings.
     plan_window: bool,
     plan: PlanSettings,
@@ -199,6 +232,10 @@ impl Viewer {
             measure_first: None,
             dimensions: Vec::new(),
             hover_snap: None,
+            linked: None,
+            linking: None,
+            compare_on: false,
+            pending_link: None,
             plan_window: false,
             plan: PlanSettings::default(),
             style_window: false,
@@ -219,6 +256,64 @@ impl Viewer {
         });
         self.loading = Some(Loading { path, rx });
         self.error = None;
+    }
+
+    /// Load another model as a reference, next to ours.
+    fn link(&mut self, path: PathBuf, ctx: &egui::Context) {
+        let (tx, rx) = channel();
+        let p = path.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let t = Instant::now();
+            let r = load_scene(&p).map(|s| (s, t.elapsed()));
+            let _ = tx.send(r);
+            ctx.request_repaint();
+        });
+        self.linking = Some(Loading { path, rx });
+    }
+
+    fn poll_linking(&mut self) {
+        let Some(l) = &self.linking else { return };
+        let Ok(result) = l.rx.try_recv() else { return };
+        let path = self.linking.take().unwrap().path;
+        let Some(main) = &mut self.loaded else { return };
+        match result {
+            Ok((scene, _)) => {
+                let o = |k: usize| (scene.origin_mm[k] - main.scene.origin_mm[k]) as f32;
+                let offset = glam::Vec3::new(o(0), o(1), o(2));
+                let (matched_here, matched_there) = bimble_geom::compare::match_models(
+                    &main.scene,
+                    &scene,
+                    bimble_geom::compare::Tolerance::default(),
+                );
+                // Depth range must cover both models.
+                let rb = bimble_render::Sphere::of(&scene);
+                main.bounds = bimble_render::Sphere::of(&main.scene).merge(bimble_render::Sphere {
+                    center: rb.center + offset,
+                    radius: rb.radius,
+                });
+                self.linked = Some(Linked {
+                    path,
+                    scene,
+                    gpu: None,
+                    offset,
+                    mode: LinkMode::Solid,
+                    matched_here,
+                    matched_there,
+                });
+                self.needs_upload = true;
+            }
+            Err(e) => self.error = Some(format!("{}: {e}", path.display())),
+        }
+    }
+
+    fn unlink(&mut self) {
+        self.linked = None;
+        self.compare_on = false;
+        if let Some(l) = &mut self.loaded {
+            l.bounds = bimble_render::Sphere::of(&l.scene);
+        }
+        self.needs_upload = true;
     }
 
     fn poll_loading(&mut self) {
@@ -251,7 +346,9 @@ impl Viewer {
                 self.selected = None;
                 self.needs_upload = true;
                 self.fit_pending = true;
-                // A box from the previous model means nothing for this one.
+                // A linked model and a box from the previous model mean nothing for this one.
+                self.linked = None;
+                self.compare_on = false;
                 self.section_on = false;
                 self.section_box = None;
                 self.measure_first = None;
@@ -299,16 +396,42 @@ impl Viewer {
     }
 
     fn upload(&mut self) {
-        let Some(l) = &self.loaded else { return };
+        if self.loaded.is_none() {
+            return;
+        }
+        let comparing = self.compare_on && self.linked.is_some();
+        // The linked model first: it needs no borrow of ours.
+        let linked_gpu = self.linked.as_ref().map(|k| {
+            let there = &k.matched_there;
+            self.renderer.upload_with(
+                &self.device,
+                &k.scene,
+                |i, _| {
+                    if comparing && !there.get(i).copied().unwrap_or(true) {
+                        Style::OnlyInReference
+                    } else {
+                        Style::Reference
+                    }
+                },
+                self.section_on,
+            )
+        });
+        if let (Some(k), Some(g)) = (self.linked.as_mut(), linked_gpu) {
+            k.gpu = Some(g);
+        }
+        let here = self.linked.as_ref().map(|k| &k.matched_here);
         let style = |i: usize, _: &bimble_geom::SceneElement| {
             if !self.visible(i) {
                 Style::Hidden
             } else if self.selected == Some(i) {
                 Style::Selected
+            } else if comparing && here.is_some_and(|m| !m.get(i).copied().unwrap_or(true)) {
+                Style::OnlyHere
             } else {
                 Style::Normal
             }
         };
+        let Some(l) = &self.loaded else { return };
         // Edge normals only while the section box is on (they cost GPU memory).
         self.gpu_scene =
             Some(
@@ -415,8 +538,28 @@ impl Viewer {
             clip: self.clip(),
             ..self.opts
         };
-        self.renderer
-            .render(&self.device, &self.queue, target, gs, &self.camera, &opts);
+        let mut layers = vec![bimble_render::Layer::main(gs)];
+        if let Some(k) = &self.linked
+            && let Some(g) = &k.gpu
+            && k.mode != LinkMode::Hidden
+        {
+            layers.push(bimble_render::Layer {
+                scene: g,
+                offset: k.offset,
+                faces: k.mode == LinkMode::Solid,
+                edge_color: Some(self.opts.style.reference_edges),
+            });
+        }
+        let bounds = self.loaded.as_ref().map_or(gs.bounds, |l| l.bounds);
+        self.renderer.render_layers(
+            &self.device,
+            &self.queue,
+            target,
+            &layers,
+            &bounds,
+            &self.camera,
+            &opts,
+        );
         self.last_render = t.elapsed();
         self.needs_render = false;
     }
@@ -544,6 +687,17 @@ impl Viewer {
                     .pick_file()
             {
                 self.open(p, ui.ctx());
+            }
+            if self.loaded.is_some()
+                && ui
+                    .button(if self.linking.is_some() { "Linking…" } else { "Link model…" })
+                    .on_hover_text("Load another model as a reference (e.g. the architect's IFC)")
+                    .clicked()
+                && let Some(p) = rfd::FileDialog::new()
+                    .add_filter("Building models", &["ifc", "IFC", "bimble"])
+                    .pick_file()
+            {
+                self.link(p, ui.ctx());
             }
             ui.separator();
             let mut changed = false;
@@ -924,6 +1078,7 @@ impl Viewer {
             return;
         };
         let mut changed = false;
+        let mut unlink_requested = false;
         egui::ScrollArea::vertical().show(ui, |ui| {
             if !self.dimensions.is_empty() {
                 ui.heading("Measurements");
@@ -954,6 +1109,36 @@ impl Viewer {
                     self.dimensions.clear();
                 }
                 ui.add_space(8.0);
+            }
+            if let Some(k) = &self.linked {
+                ui.heading("Linked model");
+                ui.label(k.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+                let mut mode = k.mode;
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut mode, LinkMode::Solid, "Solid");
+                    ui.radio_value(&mut mode, LinkMode::Edges, "Edges");
+                    ui.radio_value(&mut mode, LinkMode::Hidden, "Hidden");
+                });
+                let (only_here, only_there) = (
+                    k.matched_here.iter().filter(|m| !**m).count(),
+                    k.matched_there.iter().filter(|m| !**m).count(),
+                );
+                let mut cmp = self.compare_on;
+                let r = ui
+                    .checkbox(&mut cmp, "Show differences")
+                    .on_hover_text("Matched by position (bounding boxes, 20 mm tolerance, 80 % covered), not by id");
+                ui.weak(format!("{only_here} only here · {only_there} only in the linked model"));
+                let unlink = ui.small_button("Unlink").clicked();
+                ui.add_space(8.0);
+                if mode != k.mode {
+                    self.linked.as_mut().unwrap().mode = mode;
+                    self.needs_render = true;
+                }
+                if r.changed() {
+                    self.compare_on = cmp;
+                    self.needs_upload = true;
+                }
+                unlink_requested = unlink;
             }
             ui.heading("Materials");
             for (cat, n) in &l.categories {
@@ -1012,6 +1197,9 @@ impl Viewer {
                 self.selected = None;
             }
             self.needs_upload = true;
+        }
+        if unlink_requested {
+            self.unlink();
         }
     }
 
@@ -1072,6 +1260,12 @@ impl eframe::App for Viewer {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_loading();
+        if self.loaded.is_some()
+            && let Some(p) = self.pending_link.take()
+        {
+            self.link(p, &ctx);
+        }
+        self.poll_linking();
 
         // Files dropped on the window.
         if let Some(f) = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()))

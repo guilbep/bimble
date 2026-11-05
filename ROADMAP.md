@@ -64,7 +64,8 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 4. ✅ Storey plan at scale (1:1 … 1:5000) as PDF or SVG on A4 … A0: exact sections, hatches and pens from
    the style, title block, scale bar (`bimble plan`, viewer "Plan…"; ADR 0015). Next: configurable title
    block (cartouche), classes to show, hidden-line removal
-5. ☐ Linked models: load another model as a reference (e.g. the architect's IFC) and compare visually
+5. ✅ Linked models: "Link model…" / `view --link`, solid or edges, aligned by world coordinates; "Show
+   differences" colours what only one model has (matched by geometry, not id; ADR 0016)
 6. ☐ Hover highlight: the element under the cursor gets its edges in another colour before you click
 7. Then the rest below (I2 editing and history, I3 import for editing, I4 formwork plans, rebar)
 

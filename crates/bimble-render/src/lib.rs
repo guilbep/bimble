@@ -44,6 +44,8 @@ struct Uniforms {
     eye: [f32; 4],
     /// xyz: view direction (unit).
     view_dir: [f32; 4],
+    /// x: depth push (NDC, times w) of the layer.
+    layer: [f32; 4],
     table: [style_gpu::GpuFill; style_gpu::SLOTS],
 }
 
@@ -99,6 +101,21 @@ pub struct Sphere {
 }
 
 impl Sphere {
+    /// The smallest sphere containing both.
+    pub fn merge(self, o: Sphere) -> Sphere {
+        let d = o.center - self.center;
+        let dist = d.length();
+        if dist + o.radius <= self.radius {
+            return self;
+        }
+        if dist + self.radius <= o.radius {
+            return o;
+        }
+        let radius = (dist + self.radius + o.radius) / 2.0;
+        let center = self.center + d * ((radius - self.radius) / dist.max(1e-6));
+        Sphere { center, radius }
+    }
+
     pub fn of(scene: &Scene) -> Sphere {
         match scene.bounds() {
             Some((lo, hi)) => {
@@ -228,6 +245,40 @@ pub enum Style {
     Hidden,
     Normal,
     Selected,
+    /// An element of a linked (reference) model.
+    Reference,
+    /// Comparing: our element, absent from the reference.
+    OnlyHere,
+    /// Comparing: a reference element, absent from ours.
+    OnlyInReference,
+}
+
+/// Most scenes drawn together: the model and up to three linked models.
+pub const MAX_LAYERS: usize = 4;
+/// Depth push of linked models (NDC depth, times w).
+const LINKED_DEPTH_PUSH: f32 = 2e-5;
+
+/// One scene in a multi-scene drawing.
+#[derive(Clone, Copy)]
+pub struct Layer<'a> {
+    pub scene: &'a GpuScene,
+    /// Added to the layer's scene coordinates to get the model's (main layer's) coordinates.
+    pub offset: Vec3,
+    /// Draw faces; false draws edges only (whatever `DrawOptions::edges` says).
+    pub faces: bool,
+    /// Edge colour; None: the style's.
+    pub edge_color: Option<Rgb>,
+}
+
+impl<'a> Layer<'a> {
+    pub fn main(scene: &'a GpuScene) -> Layer<'a> {
+        Layer {
+            scene,
+            offset: Vec3::ZERO,
+            faces: true,
+            edge_color: None,
+        }
+    }
 }
 
 pub struct GpuScene {
@@ -321,8 +372,8 @@ pub struct Renderer {
     line_wide_pipeline: wgpu::RenderPipeline,
     line_clip_lean_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
-    uniforms: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
+    /// One uniform buffer per layer (the model, then linked models).
+    layer_uniforms: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     pub samples: u32,
 }
 
@@ -357,12 +408,6 @@ impl Renderer {
             label: Some("bimble shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
-        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bimble uniforms"),
-            size: std::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("bimble bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -376,14 +421,25 @@ impl Renderer {
                 count: None,
             }],
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("bimble bg"),
-            layout: &bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniforms.as_entire_binding(),
-            }],
-        });
+        let layer_uniforms = (0..MAX_LAYERS)
+            .map(|_| {
+                let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("bimble uniforms"),
+                    size: std::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("bimble bg"),
+                    layout: &bgl,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buf.as_entire_binding(),
+                    }],
+                });
+                (buf, bg)
+            })
+            .collect();
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("bimble layout"),
             bind_group_layouts: &[Some(&bgl)],
@@ -539,8 +595,7 @@ impl Renderer {
             line_wide_pipeline,
             line_clip_pipeline,
             line_clip_lean_pipeline,
-            uniforms,
-            bind_group,
+            layer_uniforms,
             samples,
         }
     }
@@ -573,10 +628,12 @@ impl Renderer {
             if s == Style::Hidden {
                 continue;
             }
-            let slot = if s == Style::Selected {
-                style_gpu::SELECTED_SLOT
-            } else {
-                style_gpu::slot(e.category)
+            let slot = match s {
+                Style::Selected => style_gpu::SELECTED_SLOT,
+                Style::Reference => style_gpu::REFERENCE_SLOT,
+                Style::OnlyHere => style_gpu::ONLY_HERE_SLOT,
+                Style::OnlyInReference => style_gpu::ONLY_IN_REFERENCE_SLOT,
+                Style::Normal | Style::Hidden => style_gpu::slot(e.category),
             };
             let color = [0, 0, 0, slot];
             for &k in &e.mesh.indices {
@@ -636,47 +693,83 @@ impl Renderer {
         camera: &Camera,
         opts: &DrawOptions,
     ) {
+        self.render_layers(
+            device,
+            queue,
+            target,
+            &[Layer::main(scene)],
+            &scene.bounds,
+            camera,
+            opts,
+        );
+    }
+
+    /// Draw several scenes in one image: the model first, then linked models. `bounds` must
+    /// contain all of them (it sets the depth range). At most `MAX_LAYERS` layers are drawn.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_layers(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &Target,
+        layers: &[Layer],
+        bounds: &Sphere,
+        camera: &Camera,
+        opts: &DrawOptions,
+    ) {
         let aspect = target.size.0 as f32 / target.size.1 as f32;
-        let vp = camera.view_proj(aspect, &scene.bounds);
+        let vp = camera.view_proj(aspect, bounds);
         // Light from over the viewer's left shoulder.
         let light = (camera.eye() - camera.target).normalize() + Vec3::new(-0.3, -0.2, 0.9);
         let st = &opts.style;
-        let u = Uniforms {
-            view_proj: vp.to_cols_array_2d(),
-            light: [light.x, light.y, light.z, 0.0],
-            edge: {
-                let e = st.edges.unit();
-                [e[0], e[1], e[2], 1.0]
-            },
-            params: [
-                opts.hatch_scale,
-                if opts.hatching {
-                    st.hatch_strength
-                } else {
-                    0.0
+        let layers = &layers[..layers.len().min(MAX_LAYERS)];
+        for (i, (layer, (buf, _))) in layers.iter().zip(&self.layer_uniforms).enumerate() {
+            // The layer's coordinates + offset = the model's scene coordinates.
+            let off = layer.offset;
+            let edge = layer.edge_color.unwrap_or(st.edges).unit();
+            let u = Uniforms {
+                view_proj: (vp * Mat4::from_translation(off)).to_cols_array_2d(),
+                light: [light.x, light.y, light.z, 0.0],
+                edge: [edge[0], edge[1], edge[2], 1.0],
+                params: [
+                    opts.hatch_scale,
+                    if opts.hatching {
+                        st.hatch_strength
+                    } else {
+                        0.0
+                    },
+                    st.ambient,
+                    st.cut_shade,
+                ],
+                clip_min: match opts.clip {
+                    Some(c) => {
+                        let m = c.min - off;
+                        [m.x, m.y, m.z, 1.0]
+                    }
+                    None => [0.0; 4],
                 },
-                st.ambient,
-                st.cut_shade,
-            ],
-            clip_min: match opts.clip {
-                Some(c) => [c.min.x, c.min.y, c.min.z, 1.0],
-                None => [0.0; 4],
-            },
-            clip_max: match opts.clip {
-                Some(c) => [c.max.x, c.max.y, c.max.z, 0.0],
-                None => [0.0; 4],
-            },
-            eye: {
-                let e = camera.eye();
-                [e.x, e.y, e.z, if camera.orthographic { 1.0 } else { 0.0 }]
-            },
-            view_dir: {
-                let d = (camera.target - camera.eye()).normalize_or(Vec3::NEG_Z);
-                [d.x, d.y, d.z, 0.0]
-            },
-            table: style_gpu::gpu_table(st),
-        };
-        queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
+                clip_max: match opts.clip {
+                    Some(c) => {
+                        let m = c.max - off;
+                        [m.x, m.y, m.z, 0.0]
+                    }
+                    None => [0.0; 4],
+                },
+                eye: {
+                    let e = camera.eye() - off;
+                    [e.x, e.y, e.z, if camera.orthographic { 1.0 } else { 0.0 }]
+                },
+                view_dir: {
+                    let d = (camera.target - camera.eye()).normalize_or(Vec3::NEG_Z);
+                    [d.x, d.y, d.z, 0.0]
+                },
+                // The model draws at its depth; linked models a hair behind, so where both
+                // have the same face the model wins instead of a patchwork of both.
+                layer: [if i == 0 { 0.0 } else { LINKED_DEPTH_PUSH }, 0.0, 0.0, 0.0],
+                table: style_gpu::gpu_table(st),
+            };
+            queue.write_buffer(buf, 0, bytemuck::bytes_of(&u));
+        }
 
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bimble"),
@@ -716,30 +809,35 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            if scene.face_vertices > 0 {
-                pass.set_vertex_buffer(0, scene.faces.slice(..));
-                if opts.clip.is_some() {
-                    pass.set_pipeline(&self.face_front_pipeline);
-                    pass.draw(0..scene.face_vertices, 0..1);
-                    pass.set_pipeline(&self.face_back_pipeline);
-                    pass.draw(0..scene.face_vertices, 0..1);
-                } else {
-                    pass.set_pipeline(&self.face_pipeline);
-                    pass.draw(0..scene.face_vertices, 0..1);
+            // Linked models first, the model last: its edges are drawn over theirs where they
+            // coincide (edges don't write depth).
+            for (layer, (_, bind_group)) in layers.iter().zip(&self.layer_uniforms).rev() {
+                let scene = layer.scene;
+                pass.set_bind_group(0, bind_group, &[]);
+                if layer.faces && scene.face_vertices > 0 {
+                    pass.set_vertex_buffer(0, scene.faces.slice(..));
+                    if opts.clip.is_some() {
+                        pass.set_pipeline(&self.face_front_pipeline);
+                        pass.draw(0..scene.face_vertices, 0..1);
+                        pass.set_pipeline(&self.face_back_pipeline);
+                        pass.draw(0..scene.face_vertices, 0..1);
+                    } else {
+                        pass.set_pipeline(&self.face_pipeline);
+                        pass.draw(0..scene.face_vertices, 0..1);
+                    }
                 }
-            }
-            if opts.edges && scene.line_vertices > 0 {
-                pass.set_pipeline(match (opts.clip.is_some(), scene.edge_normals) {
-                    (true, true) => &self.line_clip_pipeline,
-                    // Without normals, back edges can't be told apart: clipped, but drawn. The
-                    // viewer and `render --clip` upload normals when the box is on.
-                    (true, false) => &self.line_clip_lean_pipeline,
-                    (false, false) => &self.line_pipeline,
-                    (false, true) => &self.line_wide_pipeline,
-                });
-                pass.set_vertex_buffer(0, scene.lines.slice(..));
-                pass.draw(0..scene.line_vertices, 0..1);
+                if (opts.edges || !layer.faces) && scene.line_vertices > 0 {
+                    pass.set_pipeline(match (opts.clip.is_some(), scene.edge_normals) {
+                        (true, true) => &self.line_clip_pipeline,
+                        // Without normals, back edges can't be told apart: clipped, but drawn.
+                        // The viewer and `render --clip` upload normals when the box is on.
+                        (true, false) => &self.line_clip_lean_pipeline,
+                        (false, false) => &self.line_pipeline,
+                        (false, true) => &self.line_wide_pipeline,
+                    });
+                    pass.set_vertex_buffer(0, scene.lines.slice(..));
+                    pass.draw(0..scene.line_vertices, 0..1);
+                }
             }
         }
         queue.submit([enc.finish()]);
@@ -1346,5 +1444,124 @@ mod tests {
             max: b0.max + Vec3::new(0.0, 5000.0, 0.0),
         };
         assert!(pick(&scene, |_| true, o, Vec3::NEG_Z, Some(&beside)).is_none());
+    }
+
+    #[test]
+    fn merged_spheres_contain_both() {
+        let a = Sphere {
+            center: Vec3::ZERO,
+            radius: 1.0,
+        };
+        let b = Sphere {
+            center: Vec3::new(10.0, 0.0, 0.0),
+            radius: 2.0,
+        };
+        let m = a.merge(b);
+        for (s, sign) in [(a, -1.0), (b, 1.0)] {
+            let far = s.center + Vec3::X * sign * s.radius;
+            assert!((far - m.center).length() <= m.radius + 1e-4);
+        }
+        assert!((m.radius - 6.5).abs() < 1e-5);
+        // One inside the other.
+        let big = Sphere {
+            center: Vec3::ZERO,
+            radius: 100.0,
+        };
+        assert_eq!(big.merge(a), big);
+        assert_eq!(a.merge(big), big);
+    }
+
+    /// A linked model is drawn at its offset, in the reference colours; edges-only shows no fill.
+    #[test]
+    fn linked_layers_are_drawn_at_their_offset_in_their_colours() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        // Main: one box. Linked: the same box, 3 m along x in the main scene's coordinates.
+        let main = family_boxes();
+        let main_one = Scene {
+            elements: main.elements[..1].to_vec(),
+            ..main.clone()
+        };
+        let r = Renderer::new(&gpu.device, 1);
+        let style = GraphicStyle {
+            ambient: 1.0,
+            hatch_strength: 0.0,
+            ..GraphicStyle::default()
+        };
+        let opts = DrawOptions {
+            style,
+            ..Default::default()
+        };
+        let g_main = r.upload(&gpu.device, &main_one, |_, _| Style::Normal);
+        let g_ref = r.upload(&gpu.device, &main_one, |_, _| Style::Reference);
+        let offset = Vec3::new(3000.0, 0.0, 0.0);
+        let bounds = g_main.bounds.merge(Sphere {
+            center: g_ref.bounds.center + offset,
+            radius: g_ref.bounds.radius,
+        });
+        let target = Target::new(&gpu.device, (400, 200), 1);
+        let mut cam = Camera::default();
+        let all = ClipBox::around(&main_one, |_| true).unwrap();
+        cam.fit_box(all.min, all.max + offset, 2.0);
+        let draw = |layers: &[Layer]| {
+            r.render_layers(
+                &gpu.device,
+                &gpu.queue,
+                &target,
+                layers,
+                &bounds,
+                &cam,
+                &opts,
+            );
+            gpu.read_rgba(&target).unwrap().as_chunks::<4>().0.to_vec()
+        };
+        let solid = Layer {
+            scene: &g_ref,
+            offset,
+            faces: true,
+            edge_color: Some(style.reference_edges),
+        };
+        let px = draw(&[Layer::main(&g_main), solid]);
+        let concrete = style.families.concrete.color;
+        assert!(count(&px, concrete, 1) > 200, "the model is drawn");
+        assert!(
+            count(&px, style.reference, 1) > 200,
+            "the linked model is drawn"
+        );
+        assert!(
+            count(&px, style.reference_edges, 0) > 50,
+            "with its edge colour"
+        );
+        // Same position (offset 0): the linked box hides behind/at the model's box; offset 3 m it
+        // must be beside it: the reference colour sits right of the concrete.
+        let mean_x = |c: Rgb| {
+            let xs: Vec<usize> = px
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| (0..3).all(|k| (p[k] as i32 - c.0[k] as i32).abs() <= 1))
+                .map(|(i, _)| i % 400)
+                .collect();
+            xs.iter().sum::<usize>() as f32 / xs.len().max(1) as f32
+        };
+        assert!(mean_x(style.reference) > mean_x(concrete) + 20.0);
+
+        let wire = Layer {
+            faces: false,
+            ..solid
+        };
+        let px = draw(&[Layer::main(&g_main), wire]);
+        assert_eq!(
+            count(&px, style.reference, 1),
+            0,
+            "edges only: no reference fill"
+        );
+        assert!(count(&px, style.reference_edges, 0) > 50, "but its edges");
+
+        // Comparing: our only-here colour.
+        let g_diff = r.upload(&gpu.device, &main_one, |_, _| Style::OnlyHere);
+        let px = draw(&[Layer::main(&g_diff)]);
+        assert!(count(&px, style.only_here, 1) > 200);
     }
 }

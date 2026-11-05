@@ -32,6 +32,8 @@ struct Uniforms {
     eye: vec4<f32>,
     // xyz: view direction
     view_dir: vec4<f32>,
+    // x: depth push of this layer (linked models lose against the model where they coincide)
+    layer: vec4<f32>,
     table: array<Fill, 16>,
 };
 
@@ -118,6 +120,7 @@ struct FaceOut {
 fn vs_face(v: FaceIn) -> FaceOut {
     var o: FaceOut;
     o.clip = u.view_proj * vec4<f32>(v.pos, 1.0);
+    o.clip.z += u.layer.x * o.clip.w;
     o.slot = face_slot(v.color);
     let shade = face_shade(v.normal);
     o.color = u.table[o.slot].fill.rgb * shade;
@@ -155,6 +158,7 @@ fn clipped(p: vec3<f32>) -> bool {
 fn vs_face_clip(v: FaceIn) -> FaceClipOut {
     var o: FaceClipOut;
     o.clip = u.view_proj * vec4<f32>(v.pos, 1.0);
+    o.clip.z += u.layer.x * o.clip.w;
     o.slot = face_slot(v.color);
     o.shade = face_shade(v.normal);
     o.color = u.table[o.slot].fill.rgb;
@@ -198,6 +202,7 @@ struct LineOut {
 fn vs_line(@location(0) pos: vec3<f32>) -> LineOut {
     var o: LineOut;
     o.clip = u.view_proj * vec4<f32>(pos, 1.0);
+    o.clip.z += u.layer.x * o.clip.w;
     return o;
 }
 
@@ -222,6 +227,7 @@ fn vs_line_clip(
 ) -> LineClipOut {
     var o: LineClipOut;
     o.clip = u.view_proj * vec4<f32>(pos, 1.0);
+    o.clip.z += u.layer.x * o.clip.w;
     o.pos = pos;
     // Towards the viewer from this point.
     let v = select(u.eye.xyz - pos, -u.view_dir.xyz, u.eye.w != 0.0);
@@ -234,6 +240,7 @@ fn vs_line_clip(
 fn vs_line_clip_lean(@location(0) pos: vec3<f32>) -> LineClipOut {
     var o: LineClipOut;
     o.clip = u.view_proj * vec4<f32>(pos, 1.0);
+    o.clip.z += u.layer.x * o.clip.w;
     o.pos = pos;
     o.back = 0u;
     return o;

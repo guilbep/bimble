@@ -32,6 +32,9 @@ enum Cmd {
         /// Graphic style file (JSON; see `bimble style`)
         #[arg(long)]
         style: Option<PathBuf>,
+        /// Another model to show as a reference (e.g. the architect's IFC), to compare
+        #[arg(long)]
+        link: Option<PathBuf>,
     },
     /// Storey plan at scale, as PDF or SVG (by the output's extension)
     Plan {
@@ -160,10 +163,10 @@ enum Cmd {
 fn run(cli: Cli) -> Result<(), String> {
     let e = |x: file::FileError| x.to_string();
     let Some(cmd) = cli.cmd else {
-        return bimble_viewer::run(None, None);
+        return bimble_viewer::run(None, None, None);
     };
     match cmd {
-        Cmd::View { file, style } => bimble_viewer::run(file, style)?,
+        Cmd::View { file, style, link } => bimble_viewer::run(file, style, link)?,
         Cmd::Plan {
             file: path,
             out,

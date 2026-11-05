@@ -145,6 +145,12 @@ pub struct GraphicStyle {
     pub selection: Rgb,
     /// Dimension lines and their text (measuring).
     pub dimensions: Rgb,
+    /// A linked (reference) model: its faces and its edges.
+    pub reference: Rgb,
+    pub reference_edges: Rgb,
+    /// Comparing with a linked model: our elements it doesn't have, and its elements we don't.
+    pub only_here: Rgb,
+    pub only_in_reference: Rgb,
     /// Overall hatch intensity, 0 (none) .. 1.
     pub hatch_strength: f32,
     /// How much darker hatch ink is than the fill when a family sets no `ink` (0..1).
@@ -240,6 +246,10 @@ impl Default for GraphicStyle {
             edges: rgb(26, 26, 28),
             selection: rgb(232, 126, 4),
             dimensions: rgb(20, 110, 220),
+            reference: rgb(190, 214, 238),
+            reference_edges: rgb(52, 110, 180),
+            only_here: rgb(224, 75, 58),
+            only_in_reference: rgb(46, 160, 90),
             hatch_strength: 0.5,
             hatch_darken: 0.45,
             ambient: 0.62,
