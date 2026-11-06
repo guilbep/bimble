@@ -399,6 +399,8 @@ struct Viewer {
     side_views: Option<viewing::SideViews>,
     view_form: Option<bimble_core::view::View>,
     view_message: Option<String>,
+    /// What was just done with views (added a reference, saved the side file).
+    view_note: Option<String>,
     moving_ref: Option<bimble_core::GlobalId>,
     reference_view: Option<bimble_core::GlobalId>,
     pdf_scale: f64,
@@ -460,6 +462,7 @@ impl Viewer {
             side_views: None,
             view_form: None,
             view_message: None,
+            view_note: None,
             moving_ref: None,
             reference_view: None,
             pdf_scale: 100.0,

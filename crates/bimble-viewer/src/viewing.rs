@@ -87,6 +87,7 @@ impl Viewer {
         self.view_form = None;
         self.moving_ref = None;
         self.view_message = None;
+        self.view_note = None;
         let Some(l) = &self.loaded else { return };
         if l.edit.is_none() {
             // In a browser there is no file next to the model to read.
@@ -131,6 +132,7 @@ impl Viewer {
         self.active_view = Some(id);
         self.view_form = None;
         self.view_message = None;
+        self.view_note = None;
         self.moving_ref = None;
         self.turn = None;
         self.measure_first = None;
@@ -280,7 +282,7 @@ impl Viewer {
         match r {
             Ok(m) => {
                 s.dirty = false;
-                self.view_message = Some(m);
+                self.view_note = Some(m);
             }
             Err(e) => self.view_message = Some(e),
         }
@@ -556,10 +558,16 @@ impl Viewer {
             if let Some(m) = &self.view_message {
                 ui.colored_label(ui.visuals().warn_fg_color, m);
             }
+            if let Some(m) = &self.view_note {
+                ui.weak(m);
+            }
             egui::Grid::new("view-props").num_columns(2).show(ui, |ui| {
                 ui.label("Name");
                 commit |= ui
-                    .add_enabled(editable, egui::TextEdit::singleline(&mut form.name))
+                    .add_enabled(
+                        editable,
+                        egui::TextEdit::singleline(&mut form.name).desired_width(180.0),
+                    )
                     .lost_focus();
                 ui.end_row();
                 match &mut form.kind {
@@ -834,7 +842,7 @@ impl Viewer {
         let id = v.id;
         match self.store_view(v) {
             Ok(()) => {
-                self.view_message = Some(format!(
+                self.view_note = Some(format!(
                     "Added {}: {notes}{}",
                     p.name,
                     if placed {
