@@ -29,6 +29,7 @@ a decision that changes an old one says which one it supersedes.
 | [0021](0021-views-and-reference-plans.md) | Views: 3D, plans looking down/up with a view range, sections; reference plans (DXF, PDF) as dead geometry; navigator layout | Accepted |
 | [0022](0022-one-button-release.md) | Releases from one button: the workflow sets the version, commits, tags, builds | Accepted |
 | [0023](0023-paper-drawings-of-views.md) | Paper drawings of any view (turned scene); seen from above = upward faces; own hidden edges dropped | Accepted |
+| [0024](0024-sheets.md) | Sheets: views placed at their own scales, one title block; dimensions and texts belong to views | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

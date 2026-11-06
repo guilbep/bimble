@@ -24,6 +24,84 @@ pub struct View {
     /// Reference plans placed in this view (2D views only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<Reference>,
+    /// Dimensions and texts of this view (2D views only): they show wherever the view is placed
+    /// (#33, #34).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<Annotation>,
+}
+
+/// Most annotations in one view.
+pub const MAX_ANNOTATIONS: usize = 20_000;
+
+/// A dimension or a text belonging to a view.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Annotation {
+    /// The distance between two points, its line `offset_mm` (model mm, in the view's plane)
+    /// to the left of a→b as seen in the view.
+    Dimension {
+        id: GlobalId,
+        a: Anchor,
+        b: Anchor,
+        offset_mm: f64,
+    },
+    /// A text at a point (world mm), its size on paper.
+    Text {
+        id: GlobalId,
+        text: String,
+        at: [f64; 3],
+        size_mm: f64,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        angle_deg: f64,
+    },
+}
+
+fn is_zero(x: &f64) -> bool {
+    *x == 0.0
+}
+
+/// A point a dimension is attached to: world mm, and the element it was taken on (it then
+/// follows that element when it moves; #34).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Anchor {
+    pub at: [f64; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element: Option<GlobalId>,
+}
+
+impl Annotation {
+    pub fn id(&self) -> GlobalId {
+        match self {
+            Annotation::Dimension { id, .. } | Annotation::Text { id, .. } => *id,
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let finite = |p: &[f64; 3]| p.iter().all(|v| v.is_finite() && v.abs() < 1e9);
+        match self {
+            Annotation::Dimension {
+                a, b, offset_mm, ..
+            } => {
+                if !(finite(&a.at) && finite(&b.at) && offset_mm.is_finite()) {
+                    return Err("a dimension needs finite points and offset".into());
+                }
+            }
+            Annotation::Text {
+                text,
+                at,
+                size_mm,
+                angle_deg,
+                ..
+            } => {
+                if !finite(at) {
+                    return Err("a text needs a finite position".into());
+                }
+                crate::sheet::check_text(text, *size_mm, *angle_deg)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -345,8 +423,8 @@ impl View {
         }
         match &self.kind {
             ViewKind::ThreeD => {
-                if !self.references.is_empty() {
-                    return Err(ctx("reference plans go in 2D views".into()));
+                if !self.references.is_empty() || !self.annotations.is_empty() {
+                    return Err(ctx("reference plans and annotations go in 2D views".into()));
                 }
             }
             ViewKind::Plan {
@@ -372,6 +450,12 @@ impl View {
         for r in &self.references {
             r.validate().map_err(ctx)?;
         }
+        if self.annotations.len() > MAX_ANNOTATIONS {
+            return Err(ctx("too many dimensions and texts".into()));
+        }
+        for a in &self.annotations {
+            a.validate().map_err(ctx)?;
+        }
         Ok(())
     }
 
@@ -390,6 +474,7 @@ pub fn default_views(levels: &[Level]) -> Vec<View> {
         kind: ViewKind::ThreeD,
         visibility: Visibility::default(),
         references: Vec::new(),
+        annotations: Vec::new(),
     }];
     let mut sorted: Vec<&Level> = levels.iter().collect();
     sorted.sort_by(|a, b| a.elevation_mm.total_cmp(&b.elevation_mm));
@@ -424,6 +509,7 @@ pub fn default_views(levels: &[Level]) -> Vec<View> {
                 },
                 visibility: Visibility::default(),
                 references: Vec::new(),
+                annotations: Vec::new(),
             });
         }
     }
@@ -454,6 +540,9 @@ pub struct ViewsFile {
     pub format: String,
     pub version: u32,
     pub views: BTreeMap<GlobalId, View>,
+    /// Sheets (#33): version 2 files.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sheets: BTreeMap<GlobalId, crate::sheet::Sheet>,
 }
 
 pub const VIEWS_FORMAT: &str = "bimble-views";
@@ -467,11 +556,16 @@ pub fn side_file(model: &std::path::Path) -> std::path::PathBuf {
 }
 
 impl ViewsFile {
-    pub fn new(views: BTreeMap<GlobalId, View>) -> ViewsFile {
+    /// Version 1 without sheets (read by Bimble 0.6), 2 with them.
+    pub fn new(
+        views: BTreeMap<GlobalId, View>,
+        sheets: BTreeMap<GlobalId, crate::sheet::Sheet>,
+    ) -> ViewsFile {
         ViewsFile {
             format: VIEWS_FORMAT.into(),
-            version: 1,
+            version: if sheets.is_empty() { 1 } else { 2 },
             views,
+            sheets,
         }
     }
 
@@ -480,7 +574,7 @@ impl ViewsFile {
             return Err("views file too large".into());
         }
         let f: ViewsFile = serde_json::from_slice(b).map_err(|e| e.to_string())?;
-        if f.format != VIEWS_FORMAT || f.version != 1 {
+        if f.format != VIEWS_FORMAT || !(1..=2).contains(&f.version) {
             return Err(format!(
                 "not a bimble views file (format {:?} version {})",
                 f.format, f.version
@@ -492,6 +586,18 @@ impl ViewsFile {
             }
             for r in &v.references {
                 r.validate()?;
+            }
+        }
+        // Which views exist depends on the model's storeys (default views): checked when the
+        // file is applied to its model.
+        let mut numbers = std::collections::BTreeSet::new();
+        for (k, sh) in &f.sheets {
+            if *k != sh.id {
+                return Err(format!("sheet {k}: key does not match id"));
+            }
+            sh.validate(|_| true)?;
+            if !numbers.insert(sh.number.as_str()) {
+                return Err(format!("two sheets are numbered {}", sh.number));
             }
         }
         Ok(crate::version::canonical(f))
@@ -623,6 +729,7 @@ mod tests {
             },
             visibility: Visibility::default(),
             references: Vec::new(),
+            annotations: Vec::new(),
         };
         let stored: BTreeMap<_, _> =
             [(changed.id, changed.clone()), (extra.id, extra.clone())].into();
@@ -655,7 +762,7 @@ mod tests {
     fn side_file_round_trips_and_rejects_others() {
         let l = levels();
         let v = default_views(&l).remove(1);
-        let f = ViewsFile::new([(v.id, v)].into());
+        let f = ViewsFile::new([(v.id, v)].into(), Default::default());
         assert_eq!(ViewsFile::from_bytes(f.to_json().as_bytes()).unwrap(), f);
         assert!(ViewsFile::from_bytes(br#"{"format":"x","version":1,"views":{}}"#).is_err());
         assert!(ViewsFile::from_bytes(b"not json").is_err());

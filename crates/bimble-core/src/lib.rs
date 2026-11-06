@@ -7,6 +7,7 @@ pub mod file;
 mod guid;
 mod model;
 pub mod repo;
+pub mod sheet;
 pub mod style;
 pub mod version;
 pub mod view;

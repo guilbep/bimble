@@ -405,6 +405,9 @@ pub struct Model {
     /// Views (ADR 0021). Absent from files that have none, so their hashes don't change.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub views: BTreeMap<GlobalId, crate::view::View>,
+    /// Sheets (#33). Absent from files that have none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sheets: BTreeMap<GlobalId, crate::sheet::Sheet>,
 }
 
 impl Model {
@@ -449,7 +452,26 @@ impl Model {
             }
             v.validate(&levels)?;
         }
+        let view_ids = self.view_ids();
+        let mut numbers = std::collections::BTreeSet::new();
+        for (k, s) in &self.sheets {
+            if *k != s.id {
+                return Err(format!("sheet {k}: key does not match id"));
+            }
+            s.validate(|v| view_ids.contains(&v))?;
+            if !numbers.insert(s.number.as_str()) {
+                return Err(format!("two sheets are numbered {}", s.number));
+            }
+        }
         Ok(())
+    }
+
+    /// Ids of every view of the model: stored ones and the default ones (ADR 0021).
+    pub fn view_ids(&self) -> std::collections::BTreeSet<GlobalId> {
+        crate::view::effective(&self.views, &self.levels())
+            .into_iter()
+            .map(|v| v.id)
+            .collect()
     }
 
     /// The storeys as levels for views (key: the storey's GlobalId).

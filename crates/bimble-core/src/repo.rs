@@ -62,6 +62,8 @@ pub struct Tree {
     /// Absent in trees of models without views (older histories read unchanged).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub views: BTreeMap<GlobalId, Hash>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sheets: BTreeMap<GlobalId, Hash>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -238,6 +240,7 @@ impl Repo {
             materials: map(self, &m.materials)?,
             elements: map(self, &m.elements)?,
             views: map(self, &m.views)?,
+            sheets: map(self, &m.sheets)?,
         };
         self.put(&t)
     }
@@ -258,6 +261,7 @@ impl Repo {
             materials: map::<Material>(self, &t.materials)?,
             elements: map::<Element>(self, &t.elements)?,
             views: map::<crate::view::View>(self, &t.views)?,
+            sheets: map::<crate::sheet::Sheet>(self, &t.sheets)?,
         };
         m.validate()
             .map_err(|e| RepoError::Damaged(hash.into(), format!("invalid model: {e}")))?;
@@ -722,6 +726,15 @@ pub fn merge_models(
             prefer,
             &mut conflicts,
         ),
+        sheets: map(
+            "sheet",
+            &base.sheets,
+            &ours.sheets,
+            &theirs.sheets,
+            |s| format!("{} {}", s.number, s.name),
+            prefer,
+            &mut conflicts,
+        ),
     };
     (m, conflicts)
 }
@@ -1063,6 +1076,44 @@ mod tests {
     }
 
     /// Views are versioned like elements: committed, read back, merged field by field.
+    #[test]
+    fn sheets_are_committed_and_merged() {
+        let (_t, path) = tmp("sheets");
+        let r = Repo::init(&path).unwrap();
+        let mut m = concrete_frame(&FrameSpec::default());
+        let v = crate::view::default_views(&m.levels())
+            .into_iter()
+            .find(|v| v.name == "Plan Niveau 1")
+            .unwrap();
+        let mut s = crate::sheet::Sheet::new("S-101", "Plans");
+        s.placed.push(crate::sheet::Placed {
+            id: GlobalId::new(),
+            view: v.id,
+            scale: 100,
+            at_mm: [400.0, 300.0],
+        });
+        Command::AddSheet(s.clone()).apply(&mut m).unwrap();
+        r.commit(&m, "a sheet", "a", 1).unwrap();
+        assert_eq!(r.model_at("HEAD").unwrap(), m);
+        // A new name on one branch, a new paper on the other: both kept.
+        r.create_branch("b", None).unwrap();
+        let mut ours = m.clone();
+        let mut renamed = s.clone();
+        renamed.name = "Formwork".into();
+        Command::SetSheet(renamed).apply(&mut ours).unwrap();
+        r.commit(&ours, "rename", "a", 2).unwrap();
+        r.switch("b").unwrap();
+        let mut theirs = m.clone();
+        let mut a0 = s.clone();
+        a0.paper = "A0".into();
+        Command::SetSheet(a0).apply(&mut theirs).unwrap();
+        r.commit(&theirs, "paper", "a", 3).unwrap();
+        r.switch("main").unwrap();
+        let (_, merged) = r.merge("b", Prefer::Neither, "a", 4).unwrap().unwrap();
+        let ms = &merged.sheets[&s.id];
+        assert_eq!((ms.name.as_str(), ms.paper.as_str()), ("Formwork", "A0"));
+    }
+
     #[test]
     fn views_are_committed_and_merged() {
         let (_t, path) = tmp("views");

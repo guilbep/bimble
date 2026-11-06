@@ -52,6 +52,13 @@ pub fn model_hash(m: &Model) -> blake3::Hash {
             h.update(vh.as_bytes());
         }
     }
+    if !m.sheets.is_empty() {
+        h.update(b"sheets");
+        for (id, sh) in hash_map(&m.sheets) {
+            h.update(id.as_str().as_bytes());
+            h.update(sh.as_bytes());
+        }
+    }
     h.finalize()
 }
 
@@ -129,6 +136,13 @@ pub fn diff(a: &Model, b: &Model) -> Vec<Change> {
         &b.views,
         |_| "view".into(),
         |v| v.name.clone(),
+        &mut out,
+    );
+    diff_map(
+        &a.sheets,
+        &b.sheets,
+        |_| "sheet".into(),
+        |s| format!("{} {}", s.number, s.name),
         &mut out,
     );
     out

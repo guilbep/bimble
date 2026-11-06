@@ -164,6 +164,7 @@ pub fn new_plan(level: &Level, look: Look) -> View {
         },
         visibility: Visibility::default(),
         references: Vec::new(),
+        annotations: Vec::new(),
     }
 }
 
@@ -183,6 +184,7 @@ pub fn new_section(scene: &Scene, facing: Facing, n: usize) -> View {
         },
         visibility: Visibility::default(),
         references: Vec::new(),
+        annotations: Vec::new(),
     }
 }
 

@@ -91,6 +91,7 @@ fn plan_options(
         date: today(),
         template: p.template.clone(),
         view,
+        bare: false,
     }
 }
 
