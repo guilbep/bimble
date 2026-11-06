@@ -160,17 +160,9 @@ impl Viewer {
         {
             ed.storey = Some(sid);
         }
-        // The plan window starts from this plan.
-        if let ViewKind::Plan {
-            storey,
-            look: Look::Down,
-            range,
-        } = &v.kind
-            && let Some(level) = self.levels().into_iter().find(|l| &l.key == storey)
-            && let Ok(r) = bimble_core::view::resolve(range, Look::Down, storey, &self.levels())
-        {
-            self.plan.storey = level.name;
-            self.plan.cut_mm = r.cut - level.elevation_mm;
+        // The plan window draws the view shown, if it is 2D.
+        if v.is_2d() {
+            self.plan.view_id = Some(v.id);
         }
         self.needs_upload = true;
         self.needs_render = true;

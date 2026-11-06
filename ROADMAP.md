@@ -95,8 +95,11 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
   the properties of the selected element, else of the view
 - ✅ Views: 3D, plans looking down, ceiling plans looking up, sections; view range (top, cut plane,
   bottom, view depth as level + offset); views saved in `.bimble`, a side file for IFC
-- ☐ Sheets with several views (Layouts); raster PDF and image references; the side file in the
-  browser; section markers on plans
+- ✅ Paper drawings of any view: plans with their range, ceiling plans, sections (#32, ADR 0023);
+  sloped and stepped tops seen from above (#22); dash-dot axes (#23); one-button release (ADR 0022)
+- ☐ Next (Pierre, 6 Nov): sheets (#33) → layouts in the main view (#34) → labels, opening
+  dimensions, section markers (#24) → snapping (#25) → #35, #36 → several linked models (#39);
+  then the UI/UX design proposals
 
 **I0 — Core** ✅ (PR #1)
 - Crates: `bimble-core` (IFC-typed model, GlobalIds, generators, materials, commands + undo, hash, diff),

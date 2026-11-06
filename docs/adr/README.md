@@ -28,6 +28,7 @@ a decision that changes an old one says which one it supersedes.
 | [0020](0020-web-version.md) | Bimble in a browser: the same Rust as WebAssembly; WebGPU or WebGL2; manifold's own wasm | Accepted |
 | [0021](0021-views-and-reference-plans.md) | Views: 3D, plans looking down/up with a view range, sections; reference plans (DXF, PDF) as dead geometry; navigator layout | Accepted |
 | [0022](0022-one-button-release.md) | Releases from one button: the workflow sets the version, commits, tags, builds | Accepted |
+| [0023](0023-paper-drawings-of-views.md) | Paper drawings of any view (turned scene); seen from above = upward faces; own hidden edges dropped | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

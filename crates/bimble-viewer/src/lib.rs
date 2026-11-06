@@ -47,6 +47,9 @@ struct PlanSettings {
     template: bimble_drawing::template::PlanTemplate,
     template_path: Option<std::path::PathBuf>,
     template_rev: u64,
+    /// Draw this view (plan with its range, ceiling plan, section) instead of `storey` cut at
+    /// `cut_mm`; follows the active 2D view.
+    view_id: Option<bimble_core::GlobalId>,
 }
 
 type PreviewKey = (
@@ -57,6 +60,7 @@ type PreviewKey = (
     bimble_core::style::GraphicStyle,
     u32,
     u64,
+    String,
 );
 
 /// A rendered plan preview and the settings it shows (recomputed when they change).
@@ -72,6 +76,7 @@ fn plan_options(
     p: &PlanSettings,
     path: &std::path::Path,
     style: bimble_core::style::GraphicStyle,
+    view: Option<bimble_core::view::View>,
 ) -> bimble_drawing::plan::PlanOptions {
     bimble_drawing::plan::PlanOptions {
         storey: p.storey.clone(),
@@ -85,6 +90,7 @@ fn plan_options(
             .unwrap_or_default(),
         date: today(),
         template: p.template.clone(),
+        view,
     }
 }
 
@@ -102,6 +108,7 @@ impl Default for PlanSettings {
             template: Default::default(),
             template_path: None,
             template_rev: 0,
+            view_id: None,
         }
     }
 }
@@ -1851,23 +1858,47 @@ impl Viewer {
                 .name
                 .clone();
         }
+        // The view drawn, if any (it may have been deleted).
+        if p.view_id
+            .is_some_and(|id| !self.views.iter().any(|v| v.id == id && v.is_2d()))
+        {
+            p.view_id = None;
+        }
+        let view = p
+            .view_id
+            .and_then(|id| self.views.iter().find(|v| v.id == id))
+            .cloned();
+        let views = &self.views;
         egui::Grid::new("plan-settings")
             .num_columns(2)
             .spacing([12.0, 6.0])
             .show(ui, |ui| {
-                ui.label("Storey");
-                egui::ComboBox::from_id_salt("plan-storey")
-                    .selected_text(p.storey.clone())
+                ui.label("Draw");
+                egui::ComboBox::from_id_salt("plan-view")
+                    .selected_text(view.as_ref().map_or("Storey plan", |v| v.name.as_str()))
                     .show_ui(ui, |ui| {
-                        for s in l.scene.storeys.iter().rev() {
-                            ui.selectable_value(
-                                &mut p.storey,
-                                s.name.clone(),
-                                format!("{}  ({:+.3} m)", s.name, s.elevation_mm / 1000.0),
-                            );
+                        ui.selectable_value(&mut p.view_id, None, "Storey plan");
+                        for v in views.iter().filter(|v| v.is_2d()) {
+                            ui.selectable_value(&mut p.view_id, Some(v.id), &v.name);
                         }
                     });
                 ui.end_row();
+                // A view brings its storey and range; the storey plan needs them here.
+                if view.is_none() {
+                    ui.label("Storey");
+                    egui::ComboBox::from_id_salt("plan-storey")
+                        .selected_text(p.storey.clone())
+                        .show_ui(ui, |ui| {
+                            for s in l.scene.storeys.iter().rev() {
+                                ui.selectable_value(
+                                    &mut p.storey,
+                                    s.name.clone(),
+                                    format!("{}  ({:+.3} m)", s.name, s.elevation_mm / 1000.0),
+                                );
+                            }
+                        });
+                    ui.end_row();
+                }
                 ui.label("Scale 1:");
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(&mut p.scale).range(1..=5000));
@@ -1888,13 +1919,15 @@ impl Viewer {
                         }
                     });
                 ui.end_row();
-                ui.label("Cut height");
-                ui.add(
-                    egui::DragValue::new(&mut p.cut_mm)
-                        .range(-10_000.0..=10_000.0)
-                        .suffix(" mm"),
-                );
-                ui.end_row();
+                if view.is_none() {
+                    ui.label("Cut height");
+                    ui.add(
+                        egui::DragValue::new(&mut p.cut_mm)
+                            .range(-10_000.0..=10_000.0)
+                            .suffix(" mm"),
+                    );
+                    ui.end_row();
+                }
             });
         ui.horizontal(|ui| {
             let t = &mut p.template;
@@ -1944,7 +1977,7 @@ impl Viewer {
             }
         });
         if let Some(svg) = export.inner {
-            let opts = plan_options(p, &l.path, self.opts.style);
+            let opts = plan_options(p, &l.path, self.opts.style, view.clone());
             p.message = Some(match bimble_drawing::plan::plan(&l.scene, &opts) {
                 Err(e) => e,
                 Ok((sheet, info)) => {
@@ -1953,7 +1986,8 @@ impl Viewer {
                     } else {
                         (sheet.to_pdf(), "pdf")
                     };
-                    let name = format!("plan-{}-1-{}.{ext}", p.storey, p.scale);
+                    let what = view.as_ref().map_or(p.storey.as_str(), |v| v.name.as_str());
+                    let name = format!("plan-{what}-1-{}.{ext}", p.scale);
                     let filter: (&str, &[&str]) = if svg {
                         ("SVG", &["svg"])
                     } else {
@@ -2000,9 +2034,12 @@ impl Viewer {
             self.opts.style,
             px_w / 50 * 50,
             p.template_rev,
+            view.as_ref()
+                .map(|v| serde_json::to_string(v).unwrap_or_default())
+                .unwrap_or_default(),
         );
         if p.preview_image.as_ref().is_none_or(|i| i.key != key) {
-            let opts = plan_options(p, &l.path, self.opts.style);
+            let opts = plan_options(p, &l.path, self.opts.style, view.clone());
             let mut img = PlanPreview {
                 key,
                 texture: None,
