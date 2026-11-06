@@ -573,6 +573,9 @@ pub struct ViewsFile {
     /// Sheets (#33): version 2 files.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sheets: BTreeMap<GlobalId, crate::sheet::Sheet>,
+    /// Project information (ADR 0030): version 3 files.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub project: BTreeMap<String, String>,
 }
 
 pub const VIEWS_FORMAT: &str = "bimble-views";
@@ -596,7 +599,17 @@ impl ViewsFile {
             version: if sheets.is_empty() { 1 } else { 2 },
             views,
             sheets,
+            project: BTreeMap::new(),
         }
+    }
+
+    /// With project information (ADR 0030): a version 3 file when there is some.
+    pub fn with_project(mut self, project: BTreeMap<String, String>) -> ViewsFile {
+        if !project.is_empty() {
+            self.version = 3;
+        }
+        self.project = project;
+        self
     }
 
     pub fn from_bytes(b: &[u8]) -> Result<ViewsFile, String> {
@@ -604,12 +617,13 @@ impl ViewsFile {
             return Err("views file too large".into());
         }
         let f: ViewsFile = serde_json::from_slice(b).map_err(|e| e.to_string())?;
-        if f.format != VIEWS_FORMAT || !(1..=2).contains(&f.version) {
+        if f.format != VIEWS_FORMAT || !(1..=3).contains(&f.version) {
             return Err(format!(
                 "not a bimble views file (format {:?} version {})",
                 f.format, f.version
             ));
         }
+        crate::project::validate(&f.project)?;
         for (k, v) in &f.views {
             if *k != v.id {
                 return Err(format!("view {k}: key does not match id"));

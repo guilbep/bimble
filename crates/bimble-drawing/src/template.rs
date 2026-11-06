@@ -284,6 +284,21 @@ impl PlanTemplate {
     }
 }
 
+impl PlanTemplate {
+    /// This template with the project information (ADR 0030) among its fields: a title block's
+    /// `{client}`, `{project_number}`… come from the project; the template's own fields fill
+    /// what the project leaves empty.
+    pub fn with_project(&self, project: &BTreeMap<String, String>) -> PlanTemplate {
+        let mut t = self.clone();
+        for (k, v) in project {
+            if !v.trim().is_empty() {
+                t.fields.insert(k.clone(), v.clone());
+            }
+        }
+        t
+    }
+}
+
 /// Replace `{key}` placeholders from `values` (built-ins first, then `fields`).
 pub fn fill(text: &str, values: &[(&str, String)], fields: &BTreeMap<String, String>) -> String {
     let mut out = String::with_capacity(text.len());
@@ -321,6 +336,27 @@ pub fn fill(text: &str, values: &[(&str, String)], fields: &BTreeMap<String, Str
 
 #[cfg(test)]
 mod tests {
+
+    /// Project information fills a title block's placeholders; the project wins over the
+    /// template's own fields, which still fill what the project leaves empty (ADR 0030).
+    #[test]
+    fn project_information_fills_placeholders() {
+        let mut t = PlanTemplate::default();
+        t.fields.insert("client".into(), "From the template".into());
+        t.fields.insert("phase".into(), "Tender".into());
+        let p: BTreeMap<String, String> = [
+            ("client".to_string(), "Synthetic client".to_string()),
+            ("project_number".to_string(), "P-001".to_string()),
+            ("phase".to_string(), "  ".to_string()),
+        ]
+        .into();
+        let t = t.with_project(&p);
+        assert_eq!(
+            fill("{client} · {project_number} · {phase}", &[], &t.fields),
+            "Synthetic client · P-001 · Tender"
+        );
+    }
+
     use super::*;
 
     #[test]

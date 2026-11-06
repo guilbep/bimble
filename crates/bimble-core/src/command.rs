@@ -44,6 +44,10 @@ pub enum Command {
     },
     /// Replace a sheet (number, name, paper, placed views, texts…); its id stays.
     SetSheet(crate::sheet::Sheet),
+    /// Replace the project information (ADR 0030).
+    SetProject {
+        project: std::collections::BTreeMap<String, String>,
+    },
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -199,6 +203,11 @@ impl Command {
                 let old = m.sheets.insert(s.id, s).expect("checked above");
                 Ok(SetSheet(old))
             }
+            SetProject { project } => {
+                crate::project::validate(&project).map_err(CommandError::Invalid)?;
+                let old = std::mem::replace(&mut m.project, project);
+                Ok(SetProject { project: old })
+            }
         }
     }
 }
@@ -267,6 +276,7 @@ impl Command {
             Command::AddSheet(x) => format!("add the sheet {}", x.number),
             Command::RemoveSheet { id } => format!("delete {}", sheet(id)),
             Command::SetSheet(x) => format!("change the sheet {}", x.number),
+            Command::SetProject { .. } => "change the project information".into(),
         }
     }
 }

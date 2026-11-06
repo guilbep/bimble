@@ -15,6 +15,8 @@ pub(crate) struct SideViews {
     pub stored: BTreeMap<GlobalId, View>,
     /// Sheets of the side file (#33), kept and saved back.
     pub sheets: BTreeMap<GlobalId, bimble_core::sheet::Sheet>,
+    /// Project information (ADR 0030), kept and saved back.
+    pub project: BTreeMap<String, String>,
     pub dirty: bool,
 }
 
@@ -47,6 +49,7 @@ impl Viewer {
         self.side_views = Some(SideViews {
             stored: f.views,
             sheets: f.sheets,
+            project: f.project,
             dirty: false,
         });
         self.active_view = None;
@@ -57,6 +60,11 @@ impl Viewer {
             msg.push_str(&format!(" ({})", warnings.join("; ")));
         }
         Ok(msg)
+    }
+
+    /// The project information (ADR 0030).
+    pub(crate) fn project_info(&self) -> BTreeMap<String, String> {
+        project_of(&self.loaded, &self.side_views)
     }
 
     pub(crate) fn levels(&self) -> Vec<Level> {
@@ -124,26 +132,27 @@ impl Viewer {
         if l.edit.is_none() {
             // In a browser there is no file next to the model to read.
             #[cfg(target_arch = "wasm32")]
-            let (stored, sheets) = (BTreeMap::new(), BTreeMap::new());
+            let (stored, sheets, project) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
             #[cfg(not(target_arch = "wasm32"))]
-            let (stored, sheets) = {
+            let (stored, sheets, project) = {
                 let p = side_file(&l.path);
                 match p.exists().then(|| {
                     std::fs::read(&p)
                         .map_err(|e| e.to_string())
                         .and_then(|b| ViewsFile::from_bytes(&b))
                 }) {
-                    Some(Ok(f)) => (f.views, f.sheets),
+                    Some(Ok(f)) => (f.views, f.sheets, f.project),
                     Some(Err(e)) => {
                         self.view_message = Some(format!("{}: {e}", p.display()));
-                        (BTreeMap::new(), BTreeMap::new())
+                        (BTreeMap::new(), BTreeMap::new(), BTreeMap::new())
                     }
-                    None => (BTreeMap::new(), BTreeMap::new()),
+                    None => (BTreeMap::new(), BTreeMap::new(), BTreeMap::new()),
                 }
             };
             self.side_views = Some(SideViews {
                 stored,
                 sheets,
+                project,
                 dirty: false,
             });
         }
@@ -155,6 +164,7 @@ impl Viewer {
     pub(crate) fn activate_view(&mut self, id: GlobalId) {
         // Choosing a view leaves a schedule shown in its place.
         self.schedule = None;
+        self.project_page = None;
         if self.active_view == Some(id) {
             return;
         }
@@ -324,7 +334,7 @@ impl Viewer {
         let Some(l) = &self.loaded else { return };
         let o = bimble_drawing::sheetdraw::SheetOptions {
             style: self.opts.style.clone(),
-            template: self.plan.template.clone(),
+            template: self.plan.template.with_project(&self.project_info()),
             project: l
                 .path
                 .file_stem()
@@ -359,7 +369,9 @@ impl Viewer {
         let Some(s) = &mut self.side_views else {
             return;
         };
-        let text = ViewsFile::new(s.stored.clone(), s.sheets.clone()).to_json();
+        let text = ViewsFile::new(s.stored.clone(), s.sheets.clone())
+            .with_project(s.project.clone())
+            .to_json();
         #[cfg(target_arch = "wasm32")]
         let r = {
             let name = side_file(Path::new(

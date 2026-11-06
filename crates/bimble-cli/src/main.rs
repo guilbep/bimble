@@ -163,6 +163,13 @@ enum Cmd {
     Views { file: PathBuf },
     /// List the sheets of a model (number, name, paper, the views placed on them)
     Sheets { file: PathBuf },
+    /// Project information (ADR 0030): print it, or set entries with KEY=VALUE (an empty VALUE
+    /// removes the entry). Title blocks show each value where they say {KEY}
+    Project {
+        file: PathBuf,
+        /// KEY=VALUE, e.g. client="City of X" project_number=P-001 (repeatable)
+        set: Vec<String>,
+    },
     /// List the schedules (columns, beams, slabs, walls, footings by material) and their counts
     Schedules { file: PathBuf },
     /// A schedule as a table: each element measured (section, length, area, volume), grouped
@@ -370,6 +377,8 @@ fn run(cli: Cli) -> Result<(), String> {
                         Some(p) => bimble_drawing::template::PlanTemplate::load(&p)?,
                         None => Default::default(),
                     };
+                    // The project's information, then --field on top (ADR 0030).
+                    t = t.with_project(&model_project(&path)?);
                     for f in fields {
                         let (k, v) = f
                             .split_once('=')
@@ -555,8 +564,9 @@ fn run(cli: Cli) -> Result<(), String> {
                 },
                 template: match template {
                     Some(p) => bimble_drawing::template::PlanTemplate::load(&p)?,
-                    None => Default::default(),
-                },
+                    None => bimble_drawing::template::PlanTemplate::default(),
+                }
+                .with_project(&model_project(&path)?),
                 project: project.unwrap_or_else(|| {
                     path.file_stem()
                         .map(|s| s.to_string_lossy().into_owned())
@@ -663,6 +673,42 @@ fn run(cli: Cli) -> Result<(), String> {
             let number = def.number.clone();
             save_sheet(&path, def)?;
             println!("sheet {number} added to {}", path.display());
+        }
+        Cmd::Project { file: path, set } => {
+            let mut p = model_project(&path)?;
+            if set.is_empty() {
+                for (k, v) in &p {
+                    println!("{k:<20} {v}");
+                }
+                return Ok(());
+            }
+            for kv in &set {
+                let (k, v) = kv
+                    .split_once('=')
+                    .ok_or_else(|| format!("{kv:?}: expected KEY=VALUE"))?;
+                let k = bimble_core::project::key_of(k);
+                if v.trim().is_empty() {
+                    p.remove(&k);
+                } else {
+                    p.insert(k, v.to_string());
+                }
+            }
+            bimble_core::project::validate(&p)?;
+            if is_ifc(&path) {
+                let f = read_side(&path)?;
+                let f = bimble_core::view::ViewsFile::new(f.views, f.sheets).with_project(p);
+                let side = bimble_core::view::side_file(&path);
+                file::write_atomic(&side, f.to_json().as_bytes())
+                    .map_err(|e| format!("{}: {e}", side.display()))?;
+                println!("project information → {}", side.display());
+            } else {
+                let mut m = file::load(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                bimble_core::Command::SetProject { project: p }
+                    .apply(&mut m)
+                    .map_err(|e| e.to_string())?;
+                file::save(&m, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+                println!("project information → {}", path.display());
+            }
         }
         Cmd::Schedules { file: path } => {
             let scene = load_scene(&path)?;
@@ -1144,6 +1190,30 @@ fn history(cmd: HistoryCmd) -> Result<(), String> {
 }
 
 /// The views of a model: stored in a .bimble, in the side file of an IFC, over the defaults.
+/// The project information of a model (ADR 0030): in a .bimble, or in an IFC's side file.
+fn model_project(
+    path: &std::path::Path,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let is_ifc = path
+        .extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|x| x.eq_ignore_ascii_case("ifc"));
+    if is_ifc {
+        let side = bimble_core::view::side_file(path);
+        if !side.exists() {
+            return Ok(Default::default());
+        }
+        let bytes = std::fs::read(&side).map_err(|e| format!("{}: {e}", side.display()))?;
+        Ok(bimble_core::view::ViewsFile::from_bytes(&bytes)
+            .map_err(|e| format!("{}: {e}", side.display()))?
+            .project)
+    } else {
+        Ok(bimble_core::file::load(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .project)
+    }
+}
+
 fn model_views(
     path: &std::path::Path,
     scene: &bimble_geom::Scene,
@@ -1209,7 +1279,8 @@ fn save_sheet(path: &std::path::Path, def: bimble_core::sheet::Sheet) -> Result<
             return Err(format!("sheet number {} is already used", def.number));
         }
         f.sheets.insert(def.id, def);
-        let f = bimble_core::view::ViewsFile::new(f.views, f.sheets);
+        // Project information kept as it was (ADR 0030).
+        let f = bimble_core::view::ViewsFile::new(f.views, f.sheets).with_project(f.project);
         let side = bimble_core::view::side_file(path);
         file::write_atomic(&side, f.to_json().as_bytes())
             .map_err(|e| format!("{}: {e}", side.display()))

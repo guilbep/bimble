@@ -24,6 +24,7 @@ mod files;
 mod icons;
 mod layout;
 mod measure;
+mod project_page;
 mod ribbon;
 mod schedules;
 mod section;
@@ -79,6 +80,17 @@ struct PlanPreview {
     size_mm: (f64, f64),
 }
 
+/// The project information (ADR 0030): the model's, or an IFC's side file's.
+fn project_of(
+    loaded: &Option<Loaded>,
+    side: &Option<viewing::SideViews>,
+) -> BTreeMap<String, String> {
+    if let Some(ed) = loaded.as_ref().and_then(|l| l.edit.as_ref()) {
+        return ed.model.project.clone();
+    }
+    side.as_ref().map(|s| s.project.clone()).unwrap_or_default()
+}
+
 /// The plan settings as drawing options; the project name is the model's file name.
 fn plan_options(
     p: &PlanSettings,
@@ -86,6 +98,7 @@ fn plan_options(
     style: bimble_core::style::GraphicStyle,
     view: Option<bimble_core::view::View>,
     views: &[bimble_core::view::View],
+    project: &BTreeMap<String, String>,
 ) -> bimble_drawing::plan::PlanOptions {
     bimble_drawing::plan::PlanOptions {
         storey: p.storey.clone(),
@@ -98,7 +111,7 @@ fn plan_options(
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default(),
         date: today(),
-        template: p.template.clone(),
+        template: p.template.with_project(project),
         view,
         bare: false,
         section_marks: bimble_drawing::plan::section_marks(views),
@@ -460,6 +473,8 @@ struct Viewer {
     open_tabs: Vec<ribbon::TabRef>,
     /// A schedule open in the main view, and the schedules' row counts per scene revision.
     schedule: Option<schedules::OpenSchedule>,
+    /// The project information page, when open in the main view (ADR 0030).
+    project_page: Option<project_page::ProjectPage>,
     schedule_counts: Option<(u64, Vec<(String, usize)>)>,
     /// File the style was loaded from or saved to.
     style_path: Option<PathBuf>,
@@ -550,6 +565,7 @@ impl Viewer {
             palette: None,
             open_tabs: Vec::new(),
             schedule: None,
+            project_page: None,
             schedule_counts: None,
             style_path: None,
             style_message: None,
@@ -2233,6 +2249,7 @@ impl Viewer {
                 self.opts.style.clone(),
                 view.clone(),
                 &self.views,
+                &project_of(&self.loaded, &self.side_views),
             );
             p.message = Some(match bimble_drawing::plan::plan(&l.scene, &opts) {
                 Err(e) => e,
@@ -2301,6 +2318,7 @@ impl Viewer {
                 self.opts.style.clone(),
                 view.clone(),
                 &self.views,
+                &project_of(&self.loaded, &self.side_views),
             );
             let mut img = PlanPreview {
                 key,
@@ -2981,6 +2999,11 @@ impl eframe::App for Viewer {
                     });
                     ui.label(msg);
                 });
+                return;
+            }
+            // The project information page: it takes the main view.
+            if self.project_page.is_some() {
+                self.project_ui(ui);
                 return;
             }
             // A schedule open: it takes the main view.

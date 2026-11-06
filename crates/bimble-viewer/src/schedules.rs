@@ -60,6 +60,7 @@ impl Viewer {
     /// Open a schedule in the main view (a sheet open is closed; the view stays as it was).
     pub(crate) fn open_schedule(&mut self, name: &str) {
         self.close_sheet();
+        self.project_page = None;
         if self.schedule.as_ref().is_some_and(|s| s.name == name) {
             return;
         }

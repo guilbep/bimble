@@ -52,6 +52,11 @@ pub fn model_hash(m: &Model) -> blake3::Hash {
             h.update(vh.as_bytes());
         }
     }
+    // Only when there is project information: older models keep their hash.
+    if !m.project.is_empty() {
+        h.update(b"project");
+        h.update(content_hash(&m.project).as_bytes());
+    }
     if !m.sheets.is_empty() {
         h.update(b"sheets");
         for (id, sh) in hash_map(&m.sheets) {
@@ -108,6 +113,25 @@ pub fn diff(a: &Model, b: &Model) -> Vec<Change> {
                 before: a.project_name.clone().into(),
                 after: b.project_name.clone().into(),
             }],
+        });
+    }
+    if a.project != b.project {
+        let keys: std::collections::BTreeSet<&String> =
+            a.project.keys().chain(b.project.keys()).collect();
+        let fields = keys
+            .into_iter()
+            .filter(|k| a.project.get(*k) != b.project.get(*k))
+            .map(|k| FieldChange {
+                path: format!("project.{k}"),
+                before: a.project.get(k).cloned().unwrap_or_default().into(),
+                after: b.project.get(k).cloned().unwrap_or_default().into(),
+            })
+            .collect();
+        out.push(Change::Modified {
+            kind: "IfcProject".into(),
+            id: b.project_id,
+            name: "project information".into(),
+            fields,
         });
     }
     diff_map(

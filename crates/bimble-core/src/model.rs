@@ -408,6 +408,9 @@ pub struct Model {
     /// Sheets (#33). Absent from files that have none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sheets: BTreeMap<GlobalId, crate::sheet::Sheet>,
+    /// Project information (ADR 0030): client, architect, number, phase… for title blocks.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub project: BTreeMap<String, String>,
 }
 
 impl Model {
@@ -421,6 +424,7 @@ impl Model {
 
     /// Referential and parameter integrity. Run after loading any file.
     pub fn validate(&self) -> Result<(), String> {
+        crate::project::validate(&self.project)?;
         for (k, s) in &self.storeys {
             if *k != s.id || !s.elevation.is_finite() {
                 return Err(format!("storey {k}: inconsistent id or elevation"));

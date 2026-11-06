@@ -81,6 +81,7 @@ impl Viewer {
     /// Open a sheet in the main view.
     pub(crate) fn open_sheet(&mut self, id: GlobalId) {
         self.schedule = None;
+        self.project_page = None;
         if self.layout.as_ref().is_some_and(|l| l.sheet == id) {
             return;
         }
@@ -212,13 +213,16 @@ impl Viewer {
                 .as_bytes(),
             &self.scene_rev.to_le_bytes(),
             &self.plan.template_rev.to_le_bytes(),
+            serde_json::to_string(&self.project_info())
+                .unwrap_or_default()
+                .as_bytes(),
         ]);
         if key == lay.key {
             return;
         }
         let o = SheetOptions {
             style: self.opts.style.clone(),
-            template: self.plan.template.clone(),
+            template: self.plan.template.with_project(&self.project_info()),
             project: l
                 .path
                 .file_stem()
