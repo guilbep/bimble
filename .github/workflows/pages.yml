@@ -1,0 +1,52 @@
+# The browser version on GitHub Pages (ADR 0020): the web zip of the latest release.
+#
+# It runs after the release workflow, not inside it: a workflow started by a tag can't deploy to
+# the `github-pages` environment, which by default accepts deployments from the default branch
+# only. `workflow_run` and manual runs start from the default branch, so no setting is needed.
+name: pages
+
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release to publish, e.g. v0.5.0"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # After a release run: only a successful one, for a tag (head_branch is the tag's name).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: The release's web zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*-web.zip' --dir zip
+          mkdir site && unzip -q zip/*-web.zip -d site
+          test -f site/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -106,8 +106,8 @@ jobs:
           path: ${{ steps.pkg.outputs.file }}
           retention-days: 14
 
-  # The browser version (ADR 0020): a zip with the page, attached to the release, and the same
-  # page on GitHub Pages (enable Pages with "GitHub Actions" as the source in the repo settings).
+  # The browser version (ADR 0020): a zip with the page, attached to the release. pages.yml then
+  # publishes that zip on GitHub Pages.
   web:
     runs-on: ubuntu-latest
     steps:
@@ -132,25 +132,6 @@ jobs:
           name: bimble-web
           path: dist/*.zip
           retention-days: 14
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: web/dist
-
-  pages:
-    if: ${{ inputs.tag != '' || startsWith(github.ref, 'refs/tags/v') }}
-    needs: web
-    runs-on: ubuntu-latest
-    # Pages may not be enabled yet: that must not fail the release.
-    continue-on-error: true
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - id: deploy
-        uses: actions/deploy-pages@v4
 
   publish:
     # The web zip is attached when its build worked; a failed web build (e.g. rebuilding a tag
