@@ -14,6 +14,8 @@ use bimble_core::{Element, Generator, GlobalId, Model, Profile};
 use std::fmt::Write;
 
 pub const GENERATOR_PSET: &str = "Bimble_Generator";
+/// The project information's property set on IfcProject (ADR 0030).
+pub const PROJECT_PSET: &str = "Bimble_ProjectInformation";
 
 /// Format a STEP REAL: always contains a '.', exponent as 'E'.
 fn real(x: f64) -> String {
@@ -123,14 +125,22 @@ pub fn export(m: &Model, file_name: &str, timestamp: &str) -> String {
         string(GlobalId::derived(format!("{}/{seed}", m.project_id).as_bytes()).as_str())
     };
 
-    // Units: mm, m², m³, radian.
+    // Units: mm, m², m³, radian; for material values (ADR 0031): kg, Pa, kg/m³.
     let u_len = w.add("IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.)");
     let u_area = w.add("IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.)");
     let u_vol = w.add("IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.)");
     let u_ang = w.add("IFCSIUNIT(*,.PLANEANGLEUNIT.,$,.RADIAN.)");
+    let u_mass = w.add("IFCSIUNIT(*,.MASSUNIT.,.KILO.,.GRAM.)");
+    let u_pa = w.add("IFCSIUNIT(*,.PRESSUREUNIT.,$,.PASCAL.)");
+    let u_m = w.add("IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.)");
+    let de_kg = w.add(format!("IFCDERIVEDUNITELEMENT(#{u_mass},1)"));
+    let de_m = w.add(format!("IFCDERIVEDUNITELEMENT(#{u_m},-3)"));
+    let u_rho = w.add(format!(
+        "IFCDERIVEDUNIT((#{de_kg},#{de_m}),.MASSDENSITYUNIT.,$)"
+    ));
     let units = w.add(format!(
         "IFCUNITASSIGNMENT(({}))",
-        refs(&[u_len, u_area, u_vol, u_ang])
+        refs(&[u_len, u_area, u_vol, u_ang, u_mass, u_pa, u_rho])
     ));
 
     let origin = w.add(point3([0.0; 3]));
@@ -142,11 +152,43 @@ pub fn export(m: &Model, file_name: &str, timestamp: &str) -> String {
         "IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#{ctx},$,.MODEL_VIEW.,$)"
     ));
 
+    // Project information (ADR 0030): the project's long name and phase in IfcProject's own
+    // attributes, the building's name in IfcBuilding, everything in a property set.
+    let opt = |k: &str| {
+        m.project
+            .get(k)
+            .filter(|v| !v.trim().is_empty())
+            .map_or_else(|| "$".to_string(), |v| string(v))
+    };
     let project = w.add(format!(
-        "IFCPROJECT({},$,{},$,$,$,$,(#{ctx}),#{units})",
+        "IFCPROJECT({},$,{},$,$,{},{},(#{ctx}),#{units})",
         string(m.project_id.as_str()),
-        string(&m.project_name)
+        string(&m.project_name),
+        opt("project_title"),
+        opt("phase")
     ));
+    if !m.project.is_empty() {
+        let props: Vec<usize> = m
+            .project
+            .iter()
+            .map(|(k, v)| {
+                w.add(format!(
+                    "IFCPROPERTYSINGLEVALUE({},$,IFCTEXT({}),$)",
+                    string(k),
+                    string(v)
+                ))
+            })
+            .collect();
+        let pset = w.add(format!(
+            "IFCPROPERTYSET({},$,'{PROJECT_PSET}',$,({}))",
+            gid("project-information"),
+            refs(&props)
+        ));
+        w.add(format!(
+            "IFCRELDEFINESBYPROPERTIES({},$,$,$,(#{project}),#{pset})",
+            gid("project-information/rel")
+        ));
+    }
     let site_pl = w.add(format!("IFCLOCALPLACEMENT($,#{world})"));
     let site = w.add(format!(
         "IFCSITE({},$,'Site',$,$,#{site_pl},$,$,.ELEMENT.,$,$,$,$,$)",
@@ -154,8 +196,12 @@ pub fn export(m: &Model, file_name: &str, timestamp: &str) -> String {
     ));
     let bldg_pl = w.add(format!("IFCLOCALPLACEMENT(#{site_pl},#{world})"));
     let bldg = w.add(format!(
-        "IFCBUILDING({},$,'Building',$,$,#{bldg_pl},$,$,.ELEMENT.,$,$,$)",
-        gid("building")
+        "IFCBUILDING({},$,{},$,$,#{bldg_pl},$,$,.ELEMENT.,$,$,$)",
+        gid("building"),
+        m.project
+            .get("building")
+            .filter(|v| !v.trim().is_empty())
+            .map_or_else(|| "'Building'".to_string(), |v| string(v))
     ));
     w.add(format!(
         "IFCRELAGGREGATES({},$,$,$,#{project},(#{site}))",
@@ -286,6 +332,47 @@ pub fn export(m: &Model, file_name: &str, timestamp: &str) -> String {
             string(&mat.name),
             string(mat.category.ifc_category())
         ));
+        // Its values in the standard property sets (ADR 0031): density, modulus, strength.
+        let p = &mat.props;
+        let mut sets: Vec<(&str, Vec<usize>)> = Vec::new();
+        if let Some(rho) = p.density_kg_m3 {
+            let v = w.add(format!(
+                "IFCPROPERTYSINGLEVALUE('MassDensity',$,IFCMASSDENSITYMEASURE({}),$)",
+                real(rho)
+            ));
+            sets.push(("Pset_MaterialCommon", vec![v]));
+        }
+        if let Some(e) = p.e_mpa {
+            let v = w.add(format!(
+                "IFCPROPERTYSINGLEVALUE('YoungModulus',$,IFCMODULUSOFELASTICITYMEASURE({}),$)",
+                real(e * 1e6)
+            ));
+            sets.push(("Pset_MaterialMechanical", vec![v]));
+        }
+        if let Some(f) = p.strength_mpa {
+            let pa = real(f * 1e6);
+            match mat.category {
+                bimble_core::MaterialCategory::Concrete => {
+                    let v = w.add(format!(
+                        "IFCPROPERTYSINGLEVALUE('CompressiveStrength',$,IFCPRESSUREMEASURE({pa}),$)"
+                    ));
+                    sets.push(("Pset_MaterialConcrete", vec![v]));
+                }
+                bimble_core::MaterialCategory::Steel => {
+                    let v = w.add(format!(
+                        "IFCPROPERTYSINGLEVALUE('YieldStress',$,IFCPRESSUREMEASURE({pa}),$)"
+                    ));
+                    sets.push(("Pset_MaterialSteel", vec![v]));
+                }
+                _ => {}
+            }
+        }
+        for (name, props) in sets {
+            w.add(format!(
+                "IFCMATERIALPROPERTIES('{name}',$,({}),#{me})",
+                refs(&props)
+            ));
+        }
         w.add(format!(
             "IFCRELASSOCIATESMATERIAL({},$,$,$,({}),#{me})",
             gid(&format!("material/{mid}")),
@@ -308,6 +395,34 @@ pub fn export(m: &Model, file_name: &str, timestamp: &str) -> String {
 mod tests {
     use super::*;
     use bimble_core::demo::{FrameSpec, concrete_frame};
+
+    /// A material's values go in the standard property sets, in SI units (ADR 0031).
+    #[test]
+    fn material_values_are_exported_in_standard_psets() {
+        let m = concrete_frame(&FrameSpec::default());
+        let ifc = export(&m, "frame.ifc", "2026-11-06T00:00:00");
+        assert!(ifc.contains("IFCMATERIALPROPERTIES('Pset_MaterialCommon'"));
+        assert!(ifc.contains("'MassDensity',$,IFCMASSDENSITYMEASURE(2500."));
+        assert!(ifc.contains("'YoungModulus',$,IFCMODULUSOFELASTICITYMEASURE(33000000000."));
+        assert!(ifc.contains("'CompressiveStrength',$,IFCPRESSUREMEASURE(30000000."));
+        assert!(ifc.contains(".MASSDENSITYUNIT."));
+    }
+
+    /// Project information goes in IfcProject's long name and phase, IfcBuilding's name, and a
+    /// property set (ADR 0030); without it, nothing changes.
+    #[test]
+    fn project_information_is_exported() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        let plain = export(&m, "frame.ifc", "t");
+        assert!(!plain.contains(PROJECT_PSET));
+        assert!(plain.contains("'Building'"));
+        m.project.insert("phase".into(), "Tender".into());
+        m.project.insert("building".into(), "Hall C".into());
+        let ifc = export(&m, "frame.ifc", "t");
+        assert!(ifc.contains(",'Tender',(#"), "phase in IfcProject");
+        assert!(ifc.contains("IFCBUILDING(") && ifc.contains(",'Hall C',"));
+        assert!(ifc.contains(PROJECT_PSET));
+    }
 
     #[test]
     fn reals() {
