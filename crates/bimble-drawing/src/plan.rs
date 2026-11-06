@@ -1309,7 +1309,8 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             };
             let (p, q) = (to_paper(&a), to_paper(&b));
             items.push(text_at(
-                [q[0] + 0.8, (p[1] + q[1]) / 2.0 + t * 0.3],
+                // Above-right of it, off the axes that run through its centre.
+                [q[0] + 0.6, q[1] - 0.6],
                 t * 0.8,
                 label,
                 Anchor::Start,

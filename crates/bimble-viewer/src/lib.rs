@@ -1760,11 +1760,15 @@ impl Viewer {
         let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
         let clip = self.clip();
         let vp = self.camera.view_proj(aspect, &l.bounds);
-        let ours = bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref())
-            .map(|hit| {
+        let ours = bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref()).map(
+            |hit| {
                 let mesh = &l.scene.elements[hit.element].mesh;
-                (hit.distance, measure::snap(mesh, &hit, (o, d), &vp, rect, pos))
-            });
+                (
+                    hit.distance,
+                    measure::snap(mesh, &hit, (o, d), &vp, rect, pos),
+                )
+            },
+        );
         // Linked models (#39): measured and snapped to like ours, in their place.
         let theirs = self.links.iter().filter_map(|k| {
             if k.mode == LinkMode::Hidden || self.hidden_links.contains(&k.name()) {

@@ -92,7 +92,7 @@ fn parse_hatch_lines(s: &str) -> Option<Vec<bimble_core::hatches::HatchLine>> {
                 .split_whitespace()
                 .map(|x| x.parse().ok())
                 .collect::<Option<_>>()?;
-            if n.len() < 2 || (n.len() > 3 && (n.len() - 3) % 2 != 0) {
+            if n.len() < 2 || (n.len() > 3 && !(n.len() - 3).is_multiple_of(2)) {
                 return None;
             }
             Some(bimble_core::hatches::HatchLine {

@@ -124,7 +124,7 @@ impl PenTable {
         if self.scales.is_empty() || self.scales.len() > MAX_SCALES {
             return Err(format!("pens.scales: 1 to {MAX_SCALES} scales"));
         }
-        if self.scales.windows(2).any(|w| w[0] >= w[1]) || self.scales.iter().any(|s| *s == 0) {
+        if self.scales.windows(2).any(|w| w[0] >= w[1]) || self.scales.contains(&0) {
             return Err("pens.scales: increasing scales 1:N, N ≥ 1".into());
         }
         if self.model.len() != PENS || self.model.iter().any(|r| r.len() != self.scales.len()) {
@@ -498,8 +498,10 @@ mod tests {
         let v = default_line_types();
         validate_lines(&v, &LineRoles::default()).unwrap();
         assert!(v.iter().any(|t| t.name == "orange_dash_3"));
-        let mut bad = LineRoles::default();
-        bad.cut = "nope".into();
+        let bad = LineRoles {
+            cut: "nope".into(),
+            ..Default::default()
+        };
         assert!(validate_lines(&v, &bad).unwrap_err().contains("lines.cut"));
     }
 
