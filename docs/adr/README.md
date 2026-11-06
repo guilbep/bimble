@@ -9,7 +9,7 @@ a decision that changes an old one says which one it supersedes.
 | [0001](0001-iteration-1-stack.md) | Rust core, own wgpu renderer, IFC-typed native format | Accepted |
 | [0002](0002-pure-rust-ifc-reader-for-display.md) | Pure-Rust IFC reader for display; IfcOpenShell as reference | Accepted |
 | [0003](0003-scope-and-data-model.md) | Structural scope; IFC as the model; `.bimble` as a superset; `.b3d` cache | Accepted |
-| [0004](0004-versioning-model.md) | Stable ids, canonical form, hashes, semantic diff ("GitHub for building models") | Accepted, store not built |
+| [0004](0004-versioning-model.md) | Stable ids, canonical form, hashes, semantic diff ("GitHub for building models") | Accepted; store in 0017 |
 | [0005](0005-commands-undo-transactions.md) | All changes are Commands; undo via inverses; atomic groups | Accepted |
 | [0006](0006-rendering.md) | Drawing-style rendering, offscreen target, redraw on change | Accepted |
 | [0007](0007-units-precision-tolerances.md) | Units, precision, tolerances | Accepted |
@@ -22,6 +22,9 @@ a decision that changes an old one says which one it supersedes.
 | [0014](0014-section-box.md) | Section box: GPU clipping, back faces as cut surfaces, back edges hidden | Accepted |
 | [0015](0015-drawings-plans-at-scale.md) | Drawings on paper: one sheet model (SVG, PDF); plans as exact sections at scale | Accepted |
 | [0016](0016-linked-models-and-comparison.md) | Linked models (layers) and comparison by geometry, not by id | Accepted |
+| [0017](0017-history-store.md) | History next to the model: content-addressed objects, branches, field-level merge | Accepted |
+| [0018](0018-plan-templates-and-conventions.md) | Plans like the office's: templates, seen fills, grid axes, dimension chains | Accepted |
+| [0019](0019-editing-in-the-viewer.md) | Editing .bimble models in the viewer through Commands; rebuild; history | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

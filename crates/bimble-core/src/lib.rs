@@ -1,10 +1,12 @@
 //! Bimble core: IFC-typed building model, commands with undo, canonical hashing and diff.
 
 mod command;
+pub mod date;
 pub mod demo;
 pub mod file;
 mod guid;
 mod model;
+pub mod repo;
 pub mod style;
 pub mod version;
 

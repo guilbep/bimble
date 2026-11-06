@@ -33,6 +33,8 @@ rfd = "0.17"
 rayon = "1"
 # PDF output for drawings (pure Rust, small).
 pdf-writer = "0.15"
+# Rasterizes drawing sheets (plan preview, PNG output). Pure Rust.
+resvg = "0.49"
 # Allocator for the bimble binary: parsing and freeing big IFC files are allocation-bound.
 mimalloc = { version = "0.1", default-features = false }
 # Geometry kernel (ADR 0010). No TBB: per-element booleans are small.

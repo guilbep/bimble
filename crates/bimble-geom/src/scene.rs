@@ -18,6 +18,15 @@ pub struct SceneElement {
     pub mesh: Mesh,
 }
 
+/// One axis of a structural grid (IfcGridAxis): its tag ("A", "1") and its end points in plan,
+/// world mm.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridAxis {
+    pub tag: String,
+    pub start_mm: [f64; 2],
+    pub end_mm: [f64; 2],
+}
+
 /// A building storey: its name (as on elements) and its level, world mm.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoreyLevel {
@@ -32,6 +41,8 @@ pub struct Scene {
     pub elements: Vec<SceneElement>,
     /// Storeys, lowest first.
     pub storeys: Vec<StoreyLevel>,
+    /// Structural grid axes (plan, world mm), in file order.
+    pub grids: Vec<GridAxis>,
     /// Things the loader could not represent exactly (unsupported geometry, etc.).
     pub warnings: Vec<String>,
 }
@@ -125,6 +136,7 @@ pub struct SceneBuilder {
     pub warnings: Vec<String>,
     /// Storeys (any order; sorted by elevation in `finish`).
     pub storeys: Vec<StoreyLevel>,
+    pub grids: Vec<GridAxis>,
 }
 
 impl SceneBuilder {
@@ -174,6 +186,7 @@ impl SceneBuilder {
                 .filter(|e| !e.mesh.indices.is_empty())
                 .collect(),
             warnings: self.warnings,
+            grids: self.grids,
             storeys: {
                 let mut v = self.storeys;
                 v.sort_by(|a, b| a.elevation_mm.total_cmp(&b.elevation_mm));

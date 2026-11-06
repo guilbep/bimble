@@ -1,0 +1,47 @@
+{
+  "title": "Plan {storey}, éch 1 : {n}",
+  "level_note": "Niveau zéro ±0.00 m = {zero}",
+  "legend": {
+    "title": "Légende :",
+    "cut": "{family} coupé",
+    "seen": "{family} vu",
+    "above": "Au-dessus de la coupe",
+    "families": {
+      "Concrete": "Béton",
+      "Steel": "Charpente métallique",
+      "Timber": "Charpente bois",
+      "Masonry": "Maçonnerie",
+      "Insulation": "Isolation",
+      "Earth": "Terrain",
+      "Glass": "Verre",
+      "Other": "Autre"
+    }
+  },
+  "title_block": {
+    "height_mm": 34,
+    "columns": [
+      { "width_mm": 45, "entries": [ { "label": "{office}", "value": "{office_address}" } ] },
+      { "entries": [ { "label": "PROJET", "value": "{project}" }, { "label": "PROJET N°", "value": "{project_no}" } ] },
+      { "width_mm": 45, "entries": [ { "label": "PHASE", "value": "{phase}", "color": "#d22020", "size": 1.3 } ] },
+      { "width_mm": 50, "entries": [ { "label": "MAÎTRE D'OUVRAGE", "value": "{client}" } ] },
+      { "width_mm": 50, "entries": [ { "label": "ARCHITECTE", "value": "{architect}" } ] },
+      { "width_mm": 34, "entries": [ { "label": "RÉVISION", "value": "{revision}" } ] },
+      { "width_mm": 18, "entries": [ { "label": "DESS.", "value": "{drawn}" }, { "label": "CTR.", "value": "{checked}" } ] },
+      { "width_mm": 26, "entries": [ { "label": "FORMAT", "value": "{paper}" }, { "label": "ÉCHELLE", "value": "1 : {n}" } ] },
+      { "width_mm": 48, "entries": [ { "label": "DATE", "value": "{date}" }, { "label": "PLAN N°", "value": "{drawing_no}" } ] }
+    ]
+  },
+  "fields": {
+    "office": "BUREAU",
+    "office_address": "",
+    "project_no": "",
+    "phase": "",
+    "client": "",
+    "architect": "",
+    "revision": "",
+    "drawn": "",
+    "checked": "",
+    "drawing_no": "",
+    "zero": "… msm"
+  }
+}
