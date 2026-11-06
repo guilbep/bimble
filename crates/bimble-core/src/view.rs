@@ -44,6 +44,9 @@ pub enum Annotation {
         a: Anchor,
         b: Anchor,
         offset_mm: f64,
+        /// Measured along a→b (aligned), or across the view (horizontal) or up it (vertical).
+        #[serde(default, skip_serializing_if = "DimAxis::is_aligned")]
+        axis: DimAxis,
     },
     /// A text at a point (world mm), its size on paper.
     Text {
@@ -58,6 +61,22 @@ pub enum Annotation {
 
 fn is_zero(x: &f64) -> bool {
     *x == 0.0
+}
+
+/// How a dimension measures, as seen in its view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimAxis {
+    #[default]
+    Aligned,
+    Horizontal,
+    Vertical,
+}
+
+impl DimAxis {
+    fn is_aligned(&self) -> bool {
+        *self == DimAxis::Aligned
+    }
 }
 
 /// A point a dimension is attached to: world mm, and the element it was taken on (it then

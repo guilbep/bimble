@@ -94,6 +94,8 @@ pub struct PlanInfo {
     pub hidden_elements: usize,
     /// The legend's entries (drawn on the sheet unless `bare`).
     pub legend: Vec<(String, Swatch)>,
+    /// From world mm to paper mm and back.
+    pub frame: crate::viewdraw::ViewFrame,
 }
 
 /// A legend entry's swatch.
@@ -999,30 +1001,36 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         for a in &v.annotations {
             match a {
                 bimble_core::view::Annotation::Dimension {
-                    a, b, offset_mm, ..
+                    a,
+                    b,
+                    offset_mm,
+                    axis,
+                    ..
                 } => {
                     let (pa, pb) = (at(&a.at), at(&b.at));
-                    let d = [pb[0] - pa[0], pb[1] - pa[1]];
-                    let len = d[0].hypot(d[1]);
-                    if len < 1e-6 {
+                    let Some((u, qa, qb, len)) =
+                        crate::viewdraw::dimension_on_paper(pa, pb, offset_mm * k, *axis)
+                    else {
                         continue;
-                    }
-                    let u = [d[0] / len, d[1] / len];
-                    // Left of a→b as seen on paper (y down).
+                    };
                     let n = [u[1], -u[0]];
-                    let off = offset_mm * k;
-                    let side = if off < 0.0 { -1.0 } else { 1.0 };
-                    let shift = |p: P2, s: f64| [p[0] + n[0] * s, p[1] + n[1] * s];
-                    let (qa, qb) = (shift(pa, off), shift(pb, off));
-                    lines.push(vec![shift(pa, side * 1.0), shift(qa, side * 1.5)]);
-                    lines.push(vec![shift(pb, side * 1.0), shift(qb, side * 1.5)]);
+                    // Extension lines from just off the points to just past the dimension line.
+                    for (p, q) in [(pa, qa), (pb, qb)] {
+                        let e = [q[0] - p[0], q[1] - p[1]];
+                        let el = e[0].hypot(e[1]);
+                        let e = if el > 1e-9 { [e[0] / el, e[1] / el] } else { n };
+                        lines.push(vec![
+                            [p[0] + e[0], p[1] + e[1]],
+                            [q[0] + e[0] * 1.5, q[1] + e[1] * 1.5],
+                        ]);
+                    }
                     lines.push(vec![qa, qb]);
                     for q in [qa, qb] {
                         let s = 0.9;
                         let t = [(u[0] - n[0]) * s, (u[1] - n[1]) * s];
                         ticks.push(vec![[q[0] - t[0], q[1] - t[1]], [q[0] + t[0], q[1] + t[1]]]);
                     }
-                    let mut angle = -d[1].atan2(d[0]).to_degrees();
+                    let mut angle = -u[1].atan2(u[0]).to_degrees();
                     if !(-90.0..=90.0).contains(&angle) {
                         angle += if angle > 0.0 { -180.0 } else { 180.0 };
                     }
@@ -1209,6 +1217,16 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         model_axes,
         hidden_elements: hidden,
         legend,
+        frame: crate::viewdraw::ViewFrame {
+            turn: setup.turn,
+            origin: scene.origin_mm,
+            x0: lo[0],
+            y1: hi[1],
+            k,
+            ox,
+            oy,
+            cut,
+        },
     };
     let sheet = Sheet {
         width_mm: w,

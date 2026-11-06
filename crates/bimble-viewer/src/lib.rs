@@ -20,6 +20,7 @@ use web_time::Instant;
 
 mod edit;
 mod files;
+mod layout;
 mod measure;
 mod section;
 mod style_editor;
@@ -413,6 +414,10 @@ struct Viewer {
     reference_view: Option<bimble_core::GlobalId>,
     pdf_scale: f64,
     last_aspect: f32,
+    /// The sheet open in the main view, if any (#34), and a counter of scene changes (its
+    /// drawing is redone when the model changes).
+    layout: Option<layout::Layout>,
+    scene_rev: u64,
 }
 
 impl Viewer {
@@ -475,6 +480,8 @@ impl Viewer {
             reference_view: None,
             pdf_scale: 100.0,
             last_aspect: 1.0,
+            layout: None,
+            scene_rev: 0,
         }
     }
 
@@ -710,6 +717,8 @@ impl Viewer {
                 self.measure_first = None;
                 self.dimensions.clear();
                 self.hover_snap = None;
+                self.scene_rev += 1;
+                self.layout = None;
                 self.setup_views_after_load();
             }
             Err(e) => self.error = Some(format!("{}: {e}", path.display())),
@@ -785,6 +794,7 @@ impl Viewer {
             k.matched_there = there;
         }
         self.needs_upload = true;
+        self.scene_rev += 1;
         // Undo and redo can change views too; storeys can change the default ones.
         self.refresh_views();
     }
@@ -2349,6 +2359,8 @@ impl eframe::App for Viewer {
                                 } else {
                                     self.properties(ui);
                                 }
+                            } else if self.layout.is_some() {
+                                self.layout_properties(ui);
                             } else {
                                 self.view_properties(ui);
                             }
@@ -2422,6 +2434,14 @@ impl eframe::App for Viewer {
                 });
                 return;
             }
+            // A sheet open: it takes the main view.
+            if self.layout.is_some() {
+                self.layout_ui(ui, rect);
+                if let Some(err) = &self.error {
+                    ui.colored_label(Color32::RED, err);
+                }
+                return;
+            }
             if self.fit_pending {
                 self.fit(aspect);
                 self.fit_pending = false;
@@ -2448,6 +2468,7 @@ impl eframe::App for Viewer {
                 }
                 if self.in_2d() {
                     self.draw_references(ui, rect, aspect);
+                    self.draw_annotations(ui, rect, aspect);
                 }
                 self.draw_dimensions(ui, rect, aspect);
                 self.navigation(ui, rect, aspect);

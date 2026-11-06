@@ -499,6 +499,84 @@ fn win_ansi(s: &str) -> Vec<u8> {
 }
 
 /// A sheet rasterized to RGBA pixels (from its SVG, so it matches the exported drawing).
+/// Fonts for drawing sheets, loaded once: the system's, or the font egui ships where there are
+/// none (a browser, a bare container).
+fn svg_options() -> resvg::usvg::Options<'static> {
+    use resvg::usvg;
+    use std::sync::{Arc, OnceLock};
+    static DB: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
+    let db = DB.get_or_init(|| {
+        let mut db = usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        if db.is_empty() {
+            db.load_font_data(epaint_default_fonts::UBUNTU_LIGHT.to_vec());
+            db.set_sans_serif_family("Ubuntu");
+        }
+        Arc::new(db)
+    });
+    usvg::Options {
+        fontdb: db.clone(),
+        ..Default::default()
+    }
+}
+
+/// A sheet ready to be drawn in pieces.
+pub struct Prepared {
+    tree: resvg::usvg::Tree,
+    svg_px_per_mm: f64,
+    pub width_mm: f64,
+    pub height_mm: f64,
+}
+
+impl Prepared {
+    /// A `w` × `h` pixel image of the sheet at `px_per_mm`, its top-left corner at `origin_mm`
+    /// on the sheet. Around the paper: grey.
+    pub fn render(
+        &self,
+        px_per_mm: f64,
+        origin_mm: [f64; 2],
+        w: u32,
+        h: u32,
+    ) -> Result<Raster, String> {
+        use resvg::tiny_skia;
+        if !(px_per_mm.is_finite() && px_per_mm > 0.0) {
+            return Err("bad zoom".into());
+        }
+        if w as u64 * h as u64 > 200_000_000 {
+            return Err(format!("{w} × {h} pixels is too large"));
+        }
+        let mut pixmap =
+            tiny_skia::Pixmap::new(w.max(1), h.max(1)).ok_or("cannot allocate the image")?;
+        pixmap.fill(tiny_skia::Color::from_rgba8(200, 200, 200, 255));
+        let (x0, y0) = (
+            (-origin_mm[0] * px_per_mm) as f32,
+            (-origin_mm[1] * px_per_mm) as f32,
+        );
+        if let Some(r) = tiny_skia::Rect::from_xywh(
+            x0,
+            y0,
+            (self.width_mm * px_per_mm) as f32,
+            (self.height_mm * px_per_mm) as f32,
+        ) {
+            let mut paint = tiny_skia::Paint::default();
+            paint.set_color(tiny_skia::Color::WHITE);
+            pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), None);
+        }
+        let s = (px_per_mm / self.svg_px_per_mm) as f32;
+        resvg::render(
+            &self.tree,
+            tiny_skia::Transform::from_row(s, 0.0, 0.0, s, x0, y0),
+            &mut pixmap.as_mut(),
+        );
+        // The background is opaque, so premultiplied and straight alpha are the same.
+        Ok(Raster {
+            width: w.max(1),
+            height: h.max(1),
+            rgba: pixmap.take(),
+        })
+    }
+}
+
 pub struct Raster {
     pub width: u32,
     pub height: u32,
@@ -509,38 +587,26 @@ pub struct Raster {
 impl Sheet {
     /// Rasterize at `px_per_mm` (e.g. 3.94 for 100 dpi). Text uses the system fonts.
     pub fn rasterize(&self, px_per_mm: f64) -> Result<Raster, String> {
-        use resvg::{tiny_skia, usvg};
-        let mut opt = usvg::Options::default();
-        let db = opt.fontdb_mut();
-        db.load_system_fonts();
-        // No system fonts (a browser, a bare container): the font egui ships, as sans-serif.
-        if db.is_empty() {
-            db.load_font_data(epaint_default_fonts::UBUNTU_LIGHT.to_vec());
-            db.set_sans_serif_family("Ubuntu");
-        }
-        let tree = usvg::Tree::from_str(&self.to_svg(), &opt).map_err(|e| e.to_string())?;
-        let size = tree.size();
-        // usvg sizes are in px at 96 dpi; the sheet's are mm.
-        let k = px_per_mm as f32 * self.width_mm as f32 / size.width();
+        let p = self.prepare()?;
         let (w, h) = (
-            (size.width() * k).round().max(1.0) as u32,
-            (size.height() * k).round().max(1.0) as u32,
+            (self.width_mm * px_per_mm).round().max(1.0) as u32,
+            (self.height_mm * px_per_mm).round().max(1.0) as u32,
         );
-        if w as u64 * h as u64 > 200_000_000 {
-            return Err(format!("{w} × {h} pixels is too large"));
-        }
-        let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or("cannot allocate the image")?;
-        pixmap.fill(tiny_skia::Color::WHITE);
-        resvg::render(
-            &tree,
-            tiny_skia::Transform::from_scale(k, k),
-            &mut pixmap.as_mut(),
-        );
-        // The background is opaque, so premultiplied and straight alpha are the same.
-        Ok(Raster {
-            width: w,
-            height: h,
-            rgba: pixmap.take(),
+        p.render(px_per_mm, [0.0, 0.0], w, h)
+    }
+
+    /// The sheet parsed once, to draw parts of it at any zoom (the layout view, #34).
+    pub fn prepare(&self) -> Result<Prepared, String> {
+        use resvg::usvg;
+        let opt = svg_options();
+        let tree = usvg::Tree::from_str(&self.to_svg(), &opt).map_err(|e| e.to_string())?;
+        // usvg sizes are in px at 96 dpi; the sheet's are mm.
+        let svg_px_per_mm = tree.size().width() as f64 / self.width_mm;
+        Ok(Prepared {
+            tree,
+            svg_px_per_mm,
+            width_mm: self.width_mm,
+            height_mm: self.height_mm,
         })
     }
 }

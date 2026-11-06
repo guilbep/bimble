@@ -364,6 +364,7 @@ impl Viewer {
             }
         }
         if let Some(id) = activate {
+            self.close_sheet();
             self.activate_view(id);
         }
     }
@@ -382,6 +383,10 @@ impl Viewer {
         let mut select_element = None;
         let mut open_plan = false;
         let mut export_sheet: Option<bimble_core::sheet::Sheet> = None;
+        let mut open_sheet = None;
+        let mut delete_sheet = None;
+        let mut new_sheet = false;
+        let open_sheet_id = self.layout.as_ref().map(|l| l.sheet);
         let sheets = self.sheets();
         {
             {
@@ -419,7 +424,18 @@ impl Viewer {
                                                 v.references.len()
                                             ));
                                         }
-                                        let r = ui.selectable_label(on, name);
+                                        let on = on && self.layout.is_none();
+                                        // 2D views can be dragged onto a sheet.
+                                        let sense = if v.is_2d() {
+                                            Sense::click_and_drag()
+                                        } else {
+                                            Sense::click()
+                                        };
+                                        let r =
+                                            ui.add(egui::Button::selectable(on, name).sense(sense));
+                                        if v.is_2d() {
+                                            r.dnd_set_drag_payload(crate::layout::ViewDrag(v.id));
+                                        }
                                         if r.clicked() {
                                             activate = Some(v.id);
                                         }
@@ -512,21 +528,24 @@ impl Viewer {
                     ui,
                     |ui| {
                         for sh in &sheets {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("{}  {}", sh.number, sh.name));
-                                if ui
-                                    .small_button("PDF…")
-                                    .on_hover_text("The sheet, its views at their scales")
-                                    .clicked()
-                                {
+                            let on = open_sheet_id == Some(sh.id);
+                            let r = ui.selectable_label(on, format!("{}  {}", sh.number, sh.name));
+                            if r.clicked() {
+                                open_sheet = Some(sh.id);
+                            }
+                            r.context_menu(|ui| {
+                                if ui.button("Export PDF…").clicked() {
                                     export_sheet = Some(sh.clone());
+                                    ui.close();
+                                }
+                                if ui.button("Delete sheet").clicked() {
+                                    delete_sheet = Some(sh.id);
+                                    ui.close();
                                 }
                             });
                         }
-                        if sheets.is_empty() {
-                            ui.weak(
-                                "No sheets yet (bimble sheet-new; placing views here comes next).",
-                            );
+                        if ui.button("New sheet").clicked() {
+                            new_sheet = true;
                         }
                         if ui.button("Drawing on paper…").clicked() {
                             open_plan = true;
@@ -592,6 +611,15 @@ impl Viewer {
         }
         if let Some(sh) = export_sheet {
             self.export_sheet(&sh);
+        }
+        if let Some(id) = open_sheet {
+            self.open_sheet(id);
+        }
+        if let Some(id) = delete_sheet {
+            self.delete_sheet(id);
+        }
+        if new_sheet {
+            self.new_sheet();
         }
     }
 
@@ -989,6 +1017,101 @@ impl Viewer {
     }
 
     /// Reference plans over a 2D view, in the reference colour.
+    /// The active 2D view's dimensions and texts over it (they belong to the view, ADR 0024).
+    pub(crate) fn draw_annotations(&self, ui: &egui::Ui, rect: egui::Rect, aspect: f32) {
+        use bimble_core::view::Annotation;
+        use bimble_drawing::viewdraw::{Turn, ViewFrame, dimension_on_paper};
+        let (Some(l), Some(v)) = (&self.loaded, self.active_view()) else {
+            return;
+        };
+        if v.annotations.is_empty() {
+            return;
+        }
+        let vp = self.camera.view_proj(aspect, &l.bounds);
+        let o = l.scene.origin_mm;
+        // The view's plane in model mm ("paper" at 1:1), and from there to the screen.
+        let frame = ViewFrame {
+            turn: Turn::of(v),
+            origin: o,
+            x0: 0.0,
+            y1: 0.0,
+            k: 1.0,
+            ox: 0.0,
+            oy: 0.0,
+            cut: 0.0,
+        };
+        let screen = |p: [f64; 2]| {
+            let w = frame.to_world(p);
+            section::project(
+                &vp,
+                rect,
+                Vec3::new(
+                    (w[0] - o[0]) as f32,
+                    (w[1] - o[1]) as f32,
+                    (w[2] - o[2]) as f32,
+                ),
+            )
+        };
+        let px_per_mm = match (screen([0.0, 0.0]), screen([1000.0, 0.0])) {
+            (Some(a), Some(b)) => (a.distance(b) / 1000.0) as f64,
+            _ => return,
+        };
+        let a = self.opts.style.dimensions.0;
+        let col = Color32::from_rgb(a[0], a[1], a[2]);
+        let stroke = egui::Stroke::new(1.0, col);
+        let painter = ui.painter_at(rect);
+        // Text sizes as at 1:100, within readable bounds.
+        let font = |size_mm: f64| {
+            egui::FontId::proportional((size_mm * 100.0 * px_per_mm).clamp(8.0, 40.0) as f32)
+        };
+        for an in &v.annotations {
+            match an {
+                Annotation::Dimension {
+                    a,
+                    b,
+                    offset_mm,
+                    axis,
+                    ..
+                } => {
+                    let (pa, pb) = (frame.to_paper(a.at), frame.to_paper(b.at));
+                    let Some((_, qa, qb, len)) = dimension_on_paper(pa, pb, *offset_mm, *axis)
+                    else {
+                        continue;
+                    };
+                    let pts = [pa, qa, pb, qb].map(screen);
+                    let [Some(sa), Some(sqa), Some(sb), Some(sqb)] = pts else {
+                        continue;
+                    };
+                    painter.line_segment([sa, sqa], stroke);
+                    painter.line_segment([sb, sqb], stroke);
+                    painter.line_segment([sqa, sqb], stroke);
+                    let mid = sqa + (sqb - sqa) / 2.0;
+                    let angle = (sqb - sqa).angle();
+                    let angle = if angle.abs() > std::f32::consts::FRAC_PI_2 {
+                        angle + std::f32::consts::PI
+                    } else {
+                        angle
+                    };
+                    let text = self.plan.template.dimension_unit.format(len);
+                    let galley = painter.layout_no_wrap(text, font(2.25), col);
+                    let size = galley.size();
+                    let (s, c) = angle.sin_cos();
+                    // Centred over the line, upright.
+                    let up = egui::vec2(s, -c) * (size.y + 2.0);
+                    let pos = mid + up - egui::vec2(c, s) * (size.x / 2.0);
+                    painter.add(egui::epaint::TextShape::new(pos, galley, col).with_angle(angle));
+                }
+                Annotation::Text {
+                    text, at, size_mm, ..
+                } => {
+                    if let Some(p) = screen(frame.to_paper(*at)) {
+                        painter.text(p, egui::Align2::LEFT_BOTTOM, text, font(*size_mm), col);
+                    }
+                }
+            }
+        }
+    }
+
     pub(crate) fn draw_references(&self, ui: &egui::Ui, rect: egui::Rect, aspect: f32) {
         let Some(l) = &self.loaded else { return };
         let refs = self.shown_references();

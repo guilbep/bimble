@@ -26,6 +26,21 @@ pub struct SheetInfo {
     pub views_drawn: usize,
     /// Views that could not be drawn, with why (they show as a note on the sheet).
     pub problems: Vec<String>,
+    /// Where each placed view was drawn (for picking, moving and dimensioning on screen).
+    pub placed: Vec<PlacedInfo>,
+}
+
+/// A placed view on paper.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedInfo {
+    /// The `Placed` entry and its view.
+    pub id: bimble_core::GlobalId,
+    pub view: bimble_core::GlobalId,
+    /// Its drawing's box on the paper, mm: x0, y0, x1, y1.
+    pub rect: [f64; 4],
+    pub frame: crate::viewdraw::ViewFrame,
+    /// Its lines on paper, for snapping.
+    pub segments: Vec<[[f64; 2]; 2]>,
 }
 
 /// Move every point of an item by `d` (paper mm).
@@ -76,10 +91,38 @@ pub fn draw(
                     p.at_mm[0] - drawn.width_mm / 2.0,
                     p.at_mm[1] - drawn.height_mm / 2.0,
                 ];
+                let mut segments = Vec::new();
                 for mut it in drawn.items {
                     shift(&mut it, d);
+                    match &it {
+                        Item::Lines { lines, .. } => {
+                            for l in lines {
+                                segments.extend(l.windows(2).map(|w| [w[0], w[1]]));
+                            }
+                        }
+                        Item::Area {
+                            loops,
+                            outline: Some(_),
+                            ..
+                        } => {
+                            for l in loops {
+                                segments.extend(l.windows(2).map(|w| [w[0], w[1]]));
+                                if let (Some(a), Some(b)) = (l.last(), l.first()) {
+                                    segments.push([*a, *b]);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                     items.push(it);
                 }
+                info.placed.push(PlacedInfo {
+                    id: p.id,
+                    view: p.view,
+                    rect: [d[0], d[1], d[0] + drawn.width_mm, d[1] + drawn.height_mm],
+                    frame: pi.frame.shifted(d),
+                    segments,
+                });
                 for e in pi.legend {
                     if !legend.contains(&e) {
                         legend.push(e);
@@ -321,6 +364,7 @@ mod tests {
                 element: None,
             },
             offset_mm: -1500.0,
+            axis: Default::default(),
         });
         let id = v.id;
         let mut def = SheetDef::new("S-102", "Plan");
