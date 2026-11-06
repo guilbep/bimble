@@ -208,6 +208,7 @@ impl Viewer {
             .collect();
         self.hidden_classes = v.hidden_classes.iter().cloned().collect();
         self.hidden_storeys = v.hidden_storeys.iter().cloned().collect();
+        self.hidden_links = v.hidden_links.iter().cloned().collect();
         if self.selected.is_some_and(|i| !self.visible(i)) {
             self.selected = None;
         }
@@ -222,6 +223,7 @@ impl Viewer {
                 .collect(),
             hidden_classes: self.hidden_classes.iter().cloned().collect(),
             hidden_storeys: self.hidden_storeys.iter().cloned().collect(),
+            hidden_links: self.hidden_links.iter().cloned().collect(),
         }
     }
 
@@ -827,6 +829,16 @@ impl Viewer {
                     if ui.checkbox(&mut on, format!("{label} ({n})")).changed() {
                         toggle(&mut self.hidden_storeys, storey.clone(), on);
                         visibility_changed = true;
+                    }
+                }
+                if !self.links.is_empty() {
+                    ui.separator();
+                    for name in self.links.iter().map(Linked::name).collect::<Vec<_>>() {
+                        let mut on = !self.hidden_links.contains(&name);
+                        if ui.checkbox(&mut on, format!("Link: {name}")).changed() {
+                            toggle(&mut self.hidden_links, name, on);
+                            visibility_changed = true;
+                        }
                     }
                 }
             });

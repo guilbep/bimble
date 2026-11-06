@@ -362,7 +362,8 @@ pub fn resolve(
     Ok(r)
 }
 
-/// What is hidden in a view: material families (by label), IFC classes, storeys (by name).
+/// What is hidden in a view: material families (by label), IFC classes, storeys (by name),
+/// linked models (by file name).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Visibility {
@@ -372,6 +373,9 @@ pub struct Visibility {
     pub hidden_classes: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hidden_storeys: Vec<String>,
+    /// Linked models hidden in this view, by file name (#39).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden_links: Vec<String>,
 }
 
 impl Visibility {
@@ -379,6 +383,7 @@ impl Visibility {
         self.hidden_families.is_empty()
             && self.hidden_classes.is_empty()
             && self.hidden_storeys.is_empty()
+            && self.hidden_links.is_empty()
     }
 }
 
