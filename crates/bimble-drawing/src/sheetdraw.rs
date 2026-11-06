@@ -83,6 +83,7 @@ pub fn draw(
             template: o.template.clone(),
             view: Some(v.clone()),
             bare: true,
+            section_marks: crate::plan::section_marks(views),
             ..Default::default()
         };
         match plan(scene, &opts) {

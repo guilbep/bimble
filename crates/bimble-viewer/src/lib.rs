@@ -78,6 +78,7 @@ fn plan_options(
     path: &std::path::Path,
     style: bimble_core::style::GraphicStyle,
     view: Option<bimble_core::view::View>,
+    views: &[bimble_core::view::View],
 ) -> bimble_drawing::plan::PlanOptions {
     bimble_drawing::plan::PlanOptions {
         storey: p.storey.clone(),
@@ -93,6 +94,7 @@ fn plan_options(
         template: p.template.clone(),
         view,
         bare: false,
+        section_marks: bimble_drawing::plan::section_marks(views),
     }
 }
 
@@ -1961,6 +1963,20 @@ impl Viewer {
             }
         });
         ui.horizontal(|ui| {
+            let t = &mut p.template;
+            let mut changed = false;
+            changed |= ui
+                .checkbox(&mut t.element_labels, "Sections of columns, beams")
+                .changed();
+            changed |= ui.checkbox(&mut t.opening_dimensions, "Openings").changed();
+            changed |= ui
+                .checkbox(&mut t.section_markers, "Section marks")
+                .changed();
+            if changed {
+                p.template_rev += 1;
+            }
+        });
+        ui.horizontal(|ui| {
             if ui.button("Template…").clicked() {
                 self.files.pick(files::Purpose::PlanTemplate, ui.ctx());
             }
@@ -1988,7 +2004,13 @@ impl Viewer {
             }
         });
         if let Some(svg) = export.inner {
-            let opts = plan_options(p, &l.path, self.opts.style.clone(), view.clone());
+            let opts = plan_options(
+                p,
+                &l.path,
+                self.opts.style.clone(),
+                view.clone(),
+                &self.views,
+            );
             p.message = Some(match bimble_drawing::plan::plan(&l.scene, &opts) {
                 Err(e) => e,
                 Ok((sheet, info)) => {
@@ -2050,7 +2072,13 @@ impl Viewer {
                 .unwrap_or_default(),
         );
         if p.preview_image.as_ref().is_none_or(|i| i.key != key) {
-            let opts = plan_options(p, &l.path, self.opts.style.clone(), view.clone());
+            let opts = plan_options(
+                p,
+                &l.path,
+                self.opts.style.clone(),
+                view.clone(),
+                &self.views,
+            );
             let mut img = PlanPreview {
                 key,
                 texture: None,

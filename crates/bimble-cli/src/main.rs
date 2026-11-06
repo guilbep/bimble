@@ -339,7 +339,11 @@ fn run(cli: Cli) -> Result<(), String> {
                 Some(name) => Some(find_view(&path, &scene, &name)?),
                 None => None,
             };
+            let section_marks = bimble_drawing::plan::section_marks(
+                &model_views(&path, &scene).unwrap_or_default(),
+            );
             let opts = PlanOptions {
+                section_marks,
                 storey: storey.unwrap_or_default(),
                 cut_above_mm: cut,
                 view,
