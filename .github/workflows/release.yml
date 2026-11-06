@@ -1,16 +1,21 @@
 name: release
 
-# Ways to publish:
-#   - push a tag v*  (or create the release on GitHub, which creates the tag), or
-#   - run this workflow by hand with `tag: vX.Y.Z` to (re)build an existing tag and attach the
-#     archives to its release.
-# Pull requests and manual runs without a tag build the same archives as workflow artifacts.
+# Ways to publish (docs/RELEASING.md, ADR 0022):
+#   - Actions → release → Run workflow with `version: X.Y.Z`: sets the version in Cargo.toml and
+#     Cargo.lock, commits that to main, tags vX.Y.Z, builds and publishes (the usual way);
+#   - push a tag v* whose version is already in Cargo.toml (or create the release on GitHub);
+#   - run by hand with `tag: vX.Y.Z` to (re)build an existing tag and attach the archives.
+# Pull requests and manual runs without a version or tag build the same archives as artifacts.
 on:
   push:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
     inputs:
+      version:
+        description: "Version to release, e.g. 0.7.0: bumps Cargo.toml, commits to main, tags, builds, publishes"
+        required: false
+        default: ""
       tag:
         description: "Existing tag to build and attach to its release (e.g. v0.1.0). Empty: build only."
         required: false
@@ -21,10 +26,64 @@ permissions:
 
 env:
   # The tag being released, if any: from a manual run's input, or from a tag push.
-  RELEASE_TAG: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
+  RELEASE_TAG: ${{ (inputs.version && format('v{0}', inputs.version)) || inputs.tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
 
 jobs:
+  # One-button release: the version goes into Cargo.toml and Cargo.lock on main, then the tag.
+  # The tag is pushed with the workflow's token, which starts no other workflow: this run builds it.
+  prepare:
+    if: ${{ inputs.version != '' && inputs.version != null }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Only from main
+        if: github.ref != 'refs/heads/main'
+        run: echo "::error::Run the release from main (it commits the version there)." && exit 1
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check the version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::'$VERSION' is not a version like 0.7.0 (no leading v)." && exit 1
+          fi
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "::error::Release v$VERSION already exists. To rebuild it, run with tag: v$VERSION." && exit 1
+          fi
+          # A tag without a release is a release that didn't happen (e.g. tagged before the
+          # bump): it is moved to the commit released now.
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null; then
+            echo "::warning::Tag v$VERSION existed without a release; it is moved to this release's commit."
+            git push origin ":refs/tags/v$VERSION"
+          fi
+      - name: Set the version, commit, tag
+        run: |
+          current=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [[ "$current" != "$VERSION" ]]; then
+            sed -i "0,/^version = \"$current\"/s//version = \"$VERSION\"/" Cargo.toml
+            cargo update --workspace
+            changed=$(git diff --name-only | sort | tr '\n' ' ')
+            if [[ "$changed" != "Cargo.lock Cargo.toml " ]]; then
+              echo "::error::Expected only Cargo.toml and Cargo.lock to change, got: $changed" && exit 1
+            fi
+            git commit -am "Version $VERSION"
+            git push origin HEAD:main
+          fi
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+
   build:
+    needs: prepare
+    # Runs when there was nothing to prepare (prepare skipped) or it succeeded.
+    if: ${{ !cancelled() && needs.prepare.result != 'failure' }}
     strategy:
       fail-fast: false
       matrix:
@@ -109,6 +168,8 @@ jobs:
   # The browser version (ADR 0020): a zip with the page, attached to the release. pages.yml then
   # publishes that zip on GitHub Pages.
   web:
+    needs: prepare
+    if: ${{ !cancelled() && needs.prepare.result != 'failure' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -136,7 +197,7 @@ jobs:
   publish:
     # The web zip is attached when its build worked; a failed web build (e.g. rebuilding a tag
     # older than the web version) doesn't hold back the desktop archives.
-    if: ${{ always() && needs.build.result == 'success' && (inputs.tag != '' || startsWith(github.ref, 'refs/tags/v')) }}
+    if: ${{ always() && needs.build.result == 'success' && (inputs.version != '' || inputs.tag != '' || startsWith(github.ref, 'refs/tags/v')) }}
     needs: [build, web]
     runs-on: ubuntu-latest
     permissions:
