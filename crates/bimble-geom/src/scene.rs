@@ -65,6 +65,9 @@ pub struct Scene {
     pub grids: Vec<GridAxis>,
     /// Things the loader could not represent exactly (unsupported geometry, etc.).
     pub warnings: Vec<String>,
+    /// Density (kg/m³) of the materials that state one, by material name: a `.bimble` model's
+    /// own values (ADR 0031). Empty for an IFC.
+    pub densities: std::collections::BTreeMap<String, f64>,
 }
 
 impl Scene {
@@ -131,7 +134,13 @@ impl Scene {
                 Err(w) => b.warnings.push(w),
             }
         }
-        b.finish()
+        let mut scene = b.finish();
+        scene.densities = m
+            .materials
+            .values()
+            .filter_map(|x| Some((x.name.clone(), x.props.density_kg_m3?)))
+            .collect();
+        scene
     }
 }
 
@@ -190,6 +199,7 @@ impl SceneBuilder {
             [0.0; 3]
         };
         Scene {
+            densities: Default::default(),
             origin_mm: origin,
             elements: self
                 .items

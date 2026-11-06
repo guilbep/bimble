@@ -172,7 +172,13 @@ impl Default for TitleBlock {
         TitleBlock {
             height_mm: 28.0,
             columns: vec![
-                col(None, vec![entry("PROJECT", "{project}")]),
+                col(
+                    None,
+                    vec![
+                        entry("PROJECT", "{project} {project_number}"),
+                        entry("CLIENT", "{client}"),
+                    ],
+                ),
                 col(Some(60.0), vec![entry("DRAWING", "{drawing}")]),
                 col(
                     Some(30.0),
@@ -180,9 +186,12 @@ impl Default for TitleBlock {
                 ),
                 col(
                     Some(30.0),
-                    vec![entry("DATE", "{date}"), entry("REVISION", "")],
+                    vec![entry("DATE", "{date}"), entry("REVISION", "{revision}")],
                 ),
-                col(Some(24.0), vec![entry("DRAWN", ""), entry("CHECKED", "")]),
+                col(
+                    Some(24.0),
+                    vec![entry("DRAWN", "{drawn}"), entry("CHECKED", "{checked}")],
+                ),
                 col(Some(40.0), vec![entry("DRAWING N°", "{drawing_no}")]),
             ],
         }
@@ -284,7 +293,31 @@ impl PlanTemplate {
     }
 }
 
+impl PlanTemplate {
+    /// This template with the project information (ADR 0030) among its fields: a title block's
+    /// `{client}`, `{project_number}`… come from the project; the template's own fields fill
+    /// what the project leaves empty.
+    pub fn with_project(&self, project: &BTreeMap<String, String>) -> PlanTemplate {
+        let mut t = self.clone();
+        for (k, v) in project {
+            if !v.trim().is_empty() {
+                t.fields.insert(k.clone(), v.clone());
+            }
+        }
+        t
+    }
+}
+
 /// Replace `{key}` placeholders from `values` (built-ins first, then `fields`).
+/// Keys a title block may show before anyone filled them: the project information's offered
+/// keys (ADR 0030) and the sheet's own (phase, revision, drawn, checked, drawing number).
+fn may_be_empty(key: &str) -> bool {
+    ["phase", "revision", "drawn", "checked", "drawing_no"].contains(&key)
+        || bimble_core::project::KNOWN
+            .iter()
+            .any(|(_, k, _)| *k == key)
+}
+
 pub fn fill(text: &str, values: &[(&str, String)], fields: &BTreeMap<String, String>) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -301,6 +334,8 @@ pub fn fill(text: &str, values: &[(&str, String)], fields: &BTreeMap<String, Str
                     .or_else(|| fields.get(key).map(String::as_str));
                 match v {
                     Some(v) => out.push_str(v),
+                    // A known key with no value yet: nothing (a typo still shows).
+                    None if may_be_empty(key) => {}
                     None => {
                         out.push('{');
                         out.push_str(key);
@@ -321,6 +356,33 @@ pub fn fill(text: &str, values: &[(&str, String)], fields: &BTreeMap<String, Str
 
 #[cfg(test)]
 mod tests {
+
+    /// Project information fills a title block's placeholders; the project wins over the
+    /// template's own fields, which still fill what the project leaves empty (ADR 0030).
+    #[test]
+    fn project_information_fills_placeholders() {
+        let mut t = PlanTemplate::default();
+        t.fields.insert("client".into(), "From the template".into());
+        t.fields.insert("phase".into(), "Tender".into());
+        let p: BTreeMap<String, String> = [
+            ("client".to_string(), "Synthetic client".to_string()),
+            ("project_number".to_string(), "P-001".to_string()),
+            ("phase".to_string(), "  ".to_string()),
+        ]
+        .into();
+        let t = t.with_project(&p);
+        assert_eq!(
+            fill("{client} · {project_number} · {phase}", &[], &t.fields),
+            "Synthetic client · P-001 · Tender"
+        );
+        // A known key not filled yet is empty on the sheet; a typo still shows.
+        let none = BTreeMap::new();
+        assert_eq!(
+            fill("[{client}] [{revision}] [{clinet}]", &[], &none),
+            "[] [] [{clinet}]"
+        );
+    }
+
     use super::*;
 
     #[test]

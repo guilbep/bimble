@@ -52,6 +52,16 @@ pub fn model_hash(m: &Model) -> blake3::Hash {
             h.update(vh.as_bytes());
         }
     }
+    // Only when there are schedules: older models keep their hash.
+    if !m.schedules.is_empty() {
+        h.update(b"schedules");
+        h.update(content_hash(&m.schedules).as_bytes());
+    }
+    // Only when there is project information: older models keep their hash.
+    if !m.project.is_empty() {
+        h.update(b"project");
+        h.update(content_hash(&m.project).as_bytes());
+    }
     if !m.sheets.is_empty() {
         h.update(b"sheets");
         for (id, sh) in hash_map(&m.sheets) {
@@ -108,6 +118,37 @@ pub fn diff(a: &Model, b: &Model) -> Vec<Change> {
                 before: a.project_name.clone().into(),
                 after: b.project_name.clone().into(),
             }],
+        });
+    }
+    if a.schedules != b.schedules {
+        out.push(Change::Modified {
+            kind: "schedule".into(),
+            id: b.project_id,
+            name: "schedules".into(),
+            fields: vec![FieldChange {
+                path: "schedules".into(),
+                before: serde_json::to_value(&a.schedules).unwrap_or_default(),
+                after: serde_json::to_value(&b.schedules).unwrap_or_default(),
+            }],
+        });
+    }
+    if a.project != b.project {
+        let keys: std::collections::BTreeSet<&String> =
+            a.project.keys().chain(b.project.keys()).collect();
+        let fields = keys
+            .into_iter()
+            .filter(|k| a.project.get(*k) != b.project.get(*k))
+            .map(|k| FieldChange {
+                path: format!("project.{k}"),
+                before: a.project.get(k).cloned().unwrap_or_default().into(),
+                after: b.project.get(k).cloned().unwrap_or_default().into(),
+            })
+            .collect();
+        out.push(Change::Modified {
+            kind: "IfcProject".into(),
+            id: b.project_id,
+            name: "project information".into(),
+            fields,
         });
     }
     diff_map(

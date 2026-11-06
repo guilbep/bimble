@@ -33,6 +33,10 @@ a decision that changes an old one says which one it supersedes.
 | [0025](0025-layouts-in-the-main-view.md) | Layouts in the main view: the sheet rendered from its own drawing; tools in paper mm | Accepted |
 | [0026](0026-office-standards-on-paper.md) | Office standards on paper: pens per scale, line, text, dimension and hatch types, all in the style | Accepted |
 | [0027](0027-main-window-ribbon-palette-standards.md) | Main window: ribbon, command palette (Ctrl+K), standards in a side panel | Accepted |
+| [0028](0028-explicit-state.md) | Explicit state: status bar chips, unsaved work in words, confirm before close and reset | Accepted |
+| [0029](0029-schedules.md) | Schedules: element tables measured from the geometry, grouped by level, CSV | Accepted |
+| [0030](0030-project-information.md) | Project information: one map in the model, for every title block | Accepted |
+| [0031](0031-material-library.md) | Material library (EN/SIA grades with values), material browser, mass in schedules | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

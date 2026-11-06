@@ -64,6 +64,12 @@ pub struct Tree {
     pub views: BTreeMap<GlobalId, Hash>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sheets: BTreeMap<GlobalId, Hash>,
+    /// Project information, inline (it is small).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub project: BTreeMap<String, String>,
+    /// Schedules, inline (small).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schedules: Vec<crate::schedule::ScheduleDef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -241,6 +247,8 @@ impl Repo {
             elements: map(self, &m.elements)?,
             views: map(self, &m.views)?,
             sheets: map(self, &m.sheets)?,
+            project: m.project.clone(),
+            schedules: m.schedules.clone(),
         };
         self.put(&t)
     }
@@ -262,6 +270,8 @@ impl Repo {
             elements: map::<Element>(self, &t.elements)?,
             views: map::<crate::view::View>(self, &t.views)?,
             sheets: map::<crate::sheet::Sheet>(self, &t.sheets)?,
+            project: t.project,
+            schedules: t.schedules,
         };
         m.validate()
             .map_err(|e| RepoError::Damaged(hash.into(), format!("invalid model: {e}")))?;
@@ -687,8 +697,71 @@ pub fn merge_models(
             name: "project name".into(),
         });
     }
+    // Project information, key by key.
+    let mut project = BTreeMap::new();
+    let keys: std::collections::BTreeSet<&String> = base
+        .project
+        .keys()
+        .chain(ours.project.keys())
+        .chain(theirs.project.keys())
+        .collect();
+    for k in keys {
+        let (v, c) = pick(
+            base.project.get(k),
+            ours.project.get(k),
+            theirs.project.get(k),
+            prefer,
+        );
+        if c {
+            conflicts.push(Conflict {
+                kind: "IfcProject",
+                id: None,
+                name: format!("project information {k}"),
+            });
+        }
+        if let Some(v) = v {
+            project.insert(k.clone(), v);
+        }
+    }
+    // Schedules, by name: each one picked like an element.
+    let mut schedules = Vec::new();
+    let names: Vec<String> = {
+        let mut n: Vec<String> = Vec::new();
+        for s in base
+            .schedules
+            .iter()
+            .chain(&ours.schedules)
+            .chain(&theirs.schedules)
+        {
+            if !n.contains(&s.name) {
+                n.push(s.name.clone());
+            }
+        }
+        n
+    };
+    for name in names {
+        let get = |v: &[crate::schedule::ScheduleDef]| v.iter().find(|s| s.name == name).cloned();
+        let (b, o, t) = (
+            get(&base.schedules),
+            get(&ours.schedules),
+            get(&theirs.schedules),
+        );
+        let (s, c) = pick(b.as_ref(), o.as_ref(), t.as_ref(), prefer);
+        if c {
+            conflicts.push(Conflict {
+                kind: "schedule",
+                id: None,
+                name,
+            });
+        }
+        if let Some(s) = s {
+            schedules.push(s);
+        }
+    }
     let m = Model {
         project_id: ours.project_id,
+        project,
+        schedules,
         project_name: project_name.unwrap_or_default(),
         storeys: map(
             "IfcBuildingStorey",
@@ -1112,6 +1185,51 @@ mod tests {
         let (_, merged) = r.merge("b", Prefer::Neither, "a", 4).unwrap().unwrap();
         let ms = &merged.sheets[&s.id];
         assert_eq!((ms.name.as_str(), ms.paper.as_str()), ("Formwork", "A0"));
+    }
+
+    /// Project information is committed, read back, and merged key by key (ADR 0030).
+    #[test]
+    fn project_information_is_committed_and_merged() {
+        let (_t, path) = tmp("project");
+        let r = Repo::init(&path).unwrap();
+        let mut m = concrete_frame(&FrameSpec::default());
+        let info = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        Command::SetProject {
+            project: info(&[("client", "Synthetic client"), ("phase", "Tender")]),
+        }
+        .apply(&mut m)
+        .unwrap();
+        r.commit(&m, "project", "a", 1).unwrap();
+        assert_eq!(r.model_at("HEAD").unwrap(), m);
+        r.create_branch("b", None).unwrap();
+        let mut ours = m.clone();
+        Command::SetProject {
+            project: info(&[("client", "Synthetic client"), ("phase", "Execution")]),
+        }
+        .apply(&mut ours)
+        .unwrap();
+        r.commit(&ours, "phase", "a", 2).unwrap();
+        r.switch("b").unwrap();
+        let mut theirs = m.clone();
+        Command::SetProject {
+            project: info(&[
+                ("client", "Synthetic client"),
+                ("phase", "Tender"),
+                ("project_number", "P-001"),
+            ]),
+        }
+        .apply(&mut theirs)
+        .unwrap();
+        r.commit(&theirs, "number", "a", 3).unwrap();
+        r.switch("main").unwrap();
+        let (_, merged) = r.merge("b", Prefer::Neither, "a", 4).unwrap().unwrap();
+        assert_eq!(merged.project["phase"], "Execution");
+        assert_eq!(merged.project["project_number"], "P-001");
     }
 
     #[test]

@@ -15,6 +15,10 @@ pub(crate) struct SideViews {
     pub stored: BTreeMap<GlobalId, View>,
     /// Sheets of the side file (#33), kept and saved back.
     pub sheets: BTreeMap<GlobalId, bimble_core::sheet::Sheet>,
+    /// Project information (ADR 0030), kept and saved back.
+    pub project: BTreeMap<String, String>,
+    /// Schedules changed or added (ADR 0029), kept and saved back.
+    pub schedules: Vec<bimble_core::schedule::ScheduleDef>,
     pub dirty: bool,
 }
 
@@ -47,6 +51,8 @@ impl Viewer {
         self.side_views = Some(SideViews {
             stored: f.views,
             sheets: f.sheets,
+            project: f.project,
+            schedules: f.schedules,
             dirty: false,
         });
         self.active_view = None;
@@ -57,6 +63,11 @@ impl Viewer {
             msg.push_str(&format!(" ({})", warnings.join("; ")));
         }
         Ok(msg)
+    }
+
+    /// The project information (ADR 0030).
+    pub(crate) fn project_info(&self) -> BTreeMap<String, String> {
+        project_of(&self.loaded, &self.side_views)
     }
 
     pub(crate) fn levels(&self) -> Vec<Level> {
@@ -124,26 +135,43 @@ impl Viewer {
         if l.edit.is_none() {
             // In a browser there is no file next to the model to read.
             #[cfg(target_arch = "wasm32")]
-            let (stored, sheets) = (BTreeMap::new(), BTreeMap::new());
+            let (stored, sheets, project, schedules) = (
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                Vec::new(),
+            );
             #[cfg(not(target_arch = "wasm32"))]
-            let (stored, sheets) = {
+            let (stored, sheets, project, schedules) = {
                 let p = side_file(&l.path);
                 match p.exists().then(|| {
                     std::fs::read(&p)
                         .map_err(|e| e.to_string())
                         .and_then(|b| ViewsFile::from_bytes(&b))
                 }) {
-                    Some(Ok(f)) => (f.views, f.sheets),
+                    Some(Ok(f)) => (f.views, f.sheets, f.project, f.schedules),
                     Some(Err(e)) => {
                         self.view_message = Some(format!("{}: {e}", p.display()));
-                        (BTreeMap::new(), BTreeMap::new())
+                        (
+                            BTreeMap::new(),
+                            BTreeMap::new(),
+                            BTreeMap::new(),
+                            Vec::new(),
+                        )
                     }
-                    None => (BTreeMap::new(), BTreeMap::new()),
+                    None => (
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                        Vec::new(),
+                    ),
                 }
             };
             self.side_views = Some(SideViews {
                 stored,
                 sheets,
+                project,
+                schedules,
                 dirty: false,
             });
         }
@@ -153,6 +181,8 @@ impl Viewer {
 
     /// Switch to a view: its camera (remembered per view), clip and visibility.
     pub(crate) fn activate_view(&mut self, id: GlobalId) {
+        // Choosing a view leaves a schedule shown in its place.
+        self.close_pages();
         if self.active_view == Some(id) {
             return;
         }
@@ -212,6 +242,27 @@ impl Viewer {
         if self.selected.is_some_and(|i| !self.visible(i)) {
             self.selected = None;
         }
+    }
+
+    /// Show everything in the active view again, and save that with the view (ADR 0028).
+    pub(crate) fn show_all_in_view(&mut self) {
+        self.hidden_categories.clear();
+        self.hidden_classes.clear();
+        self.hidden_storeys.clear();
+        self.hidden_links.clear();
+        let editable =
+            self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) || self.side_views.is_some();
+        if editable
+            && let Some(mut v) = self.active_view().cloned()
+            && !v.visibility.is_empty()
+        {
+            v.visibility = Visibility::default();
+            if let Err(e) = self.store_view(v) {
+                self.view_message = Some(e);
+            }
+        }
+        self.view_form = None;
+        self.needs_upload = true;
     }
 
     fn current_visibility(&self) -> Visibility {
@@ -301,7 +352,7 @@ impl Viewer {
         let Some(l) = &self.loaded else { return };
         let o = bimble_drawing::sheetdraw::SheetOptions {
             style: self.opts.style.clone(),
-            template: self.plan.template.clone(),
+            template: self.plan.template.with_project(&self.project_info()),
             project: l
                 .path
                 .file_stem()
@@ -336,7 +387,10 @@ impl Viewer {
         let Some(s) = &mut self.side_views else {
             return;
         };
-        let text = ViewsFile::new(s.stored.clone(), s.sheets.clone()).to_json();
+        let text = ViewsFile::new(s.stored.clone(), s.sheets.clone())
+            .with_project(s.project.clone())
+            .with_schedules(s.schedules.clone())
+            .to_json();
         #[cfg(target_arch = "wasm32")]
         let r = {
             let name = side_file(Path::new(
@@ -370,7 +424,7 @@ impl Viewer {
 
     // ---------------------------------------------------------------- navigator
 
-    /// The model navigator: views, quantities, layouts, objects, links, measurements, warnings.
+    /// The model navigator: views, schedules, layouts, objects, links, measurements, warnings.
     pub(crate) fn navigator(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical()
             .id_salt("navigator")
@@ -402,6 +456,10 @@ impl Viewer {
     }
 
     fn navigator_tree(&mut self, ui: &mut egui::Ui) {
+        let schedule_counts = self.schedule_counts();
+        let open_schedule_name = self.schedule.as_ref().map(|s| s.name.clone());
+        let mut open_schedule: Option<String> = None;
+        let mut new_schedule = false;
         let Some(l) = &self.loaded else {
             ui.weak("No model loaded.");
             return;
@@ -539,21 +597,22 @@ impl Viewer {
                             }
                         });
                     });
-                egui::CollapsingHeader::new(egui::RichText::new("Quantities").strong()).show(
+                egui::CollapsingHeader::new(egui::RichText::new("Schedules").strong()).show(
                     ui,
                     |ui| {
-                        egui::Grid::new("quantities").striped(true).show(ui, |ui| {
-                            ui.strong("IFC class");
-                            ui.strong("Count");
-                            ui.strong("Volume");
-                            ui.end_row();
-                            for (class, n, vol) in views::quantities(&l.scene) {
-                                ui.label(class);
-                                ui.label(n.to_string());
-                                ui.label(format!("{vol:.3} m³"));
-                                ui.end_row();
+                        if ui.button("New schedule").clicked() {
+                            new_schedule = true;
+                        }
+                        for (name, n) in &schedule_counts {
+                            let on = open_schedule_name.as_deref() == Some(name.as_str());
+                            let r = ui.add_enabled(
+                                *n > 0,
+                                egui::Button::selectable(on, format!("{name}  ({n})")),
+                            );
+                            if r.clicked() {
+                                open_schedule = Some(name.clone());
                             }
-                        });
+                        }
                     },
                 );
                 egui::CollapsingHeader::new(egui::RichText::new("Layouts").strong()).show(
@@ -646,6 +705,12 @@ impl Viewer {
         }
         if let Some(id) = open_sheet {
             self.open_sheet(id);
+        }
+        if let Some(n) = open_schedule {
+            self.open_schedule(&n);
+        }
+        if new_schedule {
+            self.new_schedule();
         }
         if let Some(id) = delete_sheet {
             self.delete_sheet(id);

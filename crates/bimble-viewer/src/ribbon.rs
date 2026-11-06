@@ -70,12 +70,14 @@ pub(crate) enum Action {
     LinkModel,
     ReferencePlan,
     Standards,
+    Project,
+    Materials,
     History,
     Palette,
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 29] = [
+pub(crate) const ALL_ACTIONS: [Action; 31] = [
     Action::Open,
     Action::Save,
     Action::Undo,
@@ -105,6 +107,8 @@ pub(crate) const ALL_ACTIONS: [Action; 29] = [
     Action::LinkModel,
     Action::ReferencePlan,
     Action::Standards,
+    Action::Project,
+    Action::Materials,
 ];
 
 impl Action {
@@ -138,6 +142,8 @@ impl Action {
             Action::LinkModel => "Link a model…".into(),
             Action::ReferencePlan => "Reference plan (DXF, PDF)…".into(),
             Action::Standards => "Graphic standards".into(),
+            Action::Project => "Project information".into(),
+            Action::Materials => "Materials".into(),
             Action::History => "History…".into(),
             Action::Palette => "Command palette".into(),
         }
@@ -179,12 +185,31 @@ impl Action {
             | Action::Top => Tab::View,
             Action::OnPaper | Action::NewSheet | Action::CloseSheet => Tab::Sheets,
             Action::LinkModel | Action::ReferencePlan => Tab::Links,
-            Action::Standards | Action::History => Tab::Manage,
+            Action::Standards | Action::Project | Action::Materials | Action::History => {
+                Tab::Manage
+            }
             Action::Open | Action::Save | Action::Undo | Action::Redo | Action::Palette => {
                 Tab::Model
             }
         }
     }
+}
+
+/// A tab over the main view: a view, a sheet or a schedule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TabRef {
+    View(GlobalId),
+    Sheet(GlobalId),
+    Schedule(String),
+    Project,
+    Materials,
+}
+
+/// What a palette entry does: run an action, or show a view, sheet or schedule.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PaletteGo {
+    Action(Action),
+    Tab(TabRef),
 }
 
 /// The command palette's state: what is typed and which result is highlighted.
@@ -213,6 +238,13 @@ pub(crate) fn matches(label: &str, query: &str) -> bool {
 }
 
 impl Viewer {
+    /// What Undo (or Redo) would do, in words (ADR 0028).
+    pub(crate) fn undo_text(&self, undo: bool) -> Option<String> {
+        let h = &self.loaded.as_ref()?.edit.as_ref()?.history;
+        let l = if undo { h.undo_label() } else { h.redo_label() }?;
+        Some(l.to_string())
+    }
+
     fn editable(&self) -> bool {
         self.loaded.as_ref().is_some_and(|l| l.edit.is_some())
     }
@@ -231,7 +263,9 @@ impl Viewer {
                         .and_then(|l| l.edit.as_ref())
                         .is_some_and(|e| e.dirty)
             }
-            Action::Undo | Action::Redo | Action::Place(_) | Action::History => self.editable(),
+            Action::Undo => self.undo_text(true).is_some(),
+            Action::Redo => self.undo_text(false).is_some(),
+            Action::Place(_) | Action::History => self.editable(),
             Action::Orthographic | Action::SectionBox | Action::Top => loaded && !flat,
             Action::BoxToSelection => loaded && !flat && self.section_on,
             Action::SheetTool(_) | Action::CloseSheet => self.layout.is_some(),
@@ -262,6 +296,8 @@ impl Viewer {
             Action::SlabLevels => t.slab_levels,
             Action::SheetTool(tool) => self.layout.as_ref().is_some_and(|l| l.tool == tool),
             Action::Standards => self.standards_open,
+            Action::Project => self.project_page.is_some(),
+            Action::Materials => self.materials_page.is_some(),
             Action::History => self.history_window,
             _ => false,
         }
@@ -359,6 +395,24 @@ impl Viewer {
                 self.files.pick(files::Purpose::Reference, ctx);
             }
             Action::Standards => self.standards_open = !self.standards_open,
+            Action::Project => {
+                if self.project_page.is_some() {
+                    self.close_pages();
+                } else {
+                    self.close_pages();
+                    self.close_sheet();
+                    self.project_page = Some(Default::default());
+                }
+            }
+            Action::Materials => {
+                if self.materials_page.is_some() {
+                    self.close_pages();
+                } else {
+                    self.close_pages();
+                    self.close_sheet();
+                    self.materials_page = Some(Default::default());
+                }
+            }
             Action::History => {
                 self.history_window = !self.history_window;
                 if self.history_window {
@@ -386,11 +440,19 @@ impl Viewer {
                     .file_name()
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                let dirty = self.action_enabled(Action::Save);
-                ui.label(
-                    egui::RichText::new(if dirty { format!("{name} •") } else { name })
-                        .color(th::TEXT_MUTED),
-                );
+                ui.label(egui::RichText::new(name).color(th::TEXT_MUTED));
+                // What isn't saved, said in words (ADR 0028).
+                let unsaved = crate::state::unsaved(&self.snapshot());
+                if !unsaved.is_empty() {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        format!("Not saved: {}", unsaved.join(", ")),
+                    )
+                    .on_hover_text(
+                        "Save (Ctrl S) saves the model or the views; the standards are saved \
+                         from their panel",
+                    );
+                }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let p = ui
@@ -407,10 +469,41 @@ impl Viewer {
                 ui.add_space(th::GAP_L);
                 for a in [Action::Redo, Action::Undo, Action::Save, Action::Open] {
                     let b = ui.add_enabled(self.action_enabled(a), egui::Button::new(a.label()));
-                    let b = if a.keys().is_empty() {
+                    // Undo and Redo say what they would do; greyed, why not.
+                    let tip = match a {
+                        Action::Undo | Action::Redo => {
+                            let undo = a == Action::Undo;
+                            match self.undo_text(undo) {
+                                Some(t) => format!(
+                                    "{}: {t} ({})",
+                                    if undo { "Undo" } else { "Redo" },
+                                    a.keys()
+                                ),
+                                None => {
+                                    format!("Nothing to {}", if undo { "undo" } else { "redo" })
+                                }
+                            }
+                        }
+                        Action::Save => {
+                            let st = self.snapshot();
+                            let mut t = if st.model_dirty {
+                                "Save the model (Ctrl S)".to_string()
+                            } else if st.views_dirty {
+                                "Save the views next to the IFC (Ctrl S)".to_string()
+                            } else {
+                                "The model and its views are saved".to_string()
+                            };
+                            if st.standards_changed {
+                                t.push_str("\nThe standards are changed: Save… in their panel");
+                            }
+                            t
+                        }
+                        _ => a.keys().to_string(),
+                    };
+                    let b = if tip.is_empty() {
                         b
                     } else {
-                        b.on_hover_text(a.keys())
+                        b.on_hover_text(&tip).on_disabled_hover_text(&tip)
                     };
                     if b.clicked() {
                         run = Some(a);
@@ -655,6 +748,15 @@ impl Viewer {
                     &[(Action::Standards, "Graphic standards")],
                     &mut run,
                 );
+                self.group(
+                    ui,
+                    "Project",
+                    &[
+                        (Action::Project, "Project information"),
+                        (Action::Materials, "Materials"),
+                    ],
+                    &mut run,
+                );
                 if cfg!(not(target_arch = "wasm32")) {
                     self.group(ui, "Versions", &[(Action::History, "History")], &mut run);
                 }
@@ -699,43 +801,62 @@ impl Viewer {
         });
     }
 
-    /// Tabs of the open views and sheets, over the main view.
+    /// Tabs of the open views, sheets and schedules, over the main view.
     pub(crate) fn view_tabs(&mut self, ui: &mut egui::Ui) {
-        // The active view or sheet always has its tab.
-        let current = self.layout.as_ref().map(|l| l.sheet).or(self.active_view);
-        if let Some(c) = current
-            && !self.open_tabs.contains(&c)
+        // What the main view shows always has its tab.
+        let current = if self.materials_page.is_some() {
+            Some(TabRef::Materials)
+        } else if self.project_page.is_some() {
+            Some(TabRef::Project)
+        } else if let Some(s) = &self.schedule {
+            Some(TabRef::Schedule(s.name.clone()))
+        } else if let Some(l) = &self.layout {
+            Some(TabRef::Sheet(l.sheet))
+        } else {
+            self.active_view.map(TabRef::View)
+        };
+        if let Some(c) = &current
+            && !self.open_tabs.contains(c)
         {
-            self.open_tabs.push(c);
+            self.open_tabs.push(c.clone());
         }
         let sheets = self.sheets();
-        self.open_tabs.retain(|id| {
-            self.views.iter().any(|v| v.id == *id) || sheets.iter().any(|s| s.id == *id)
+        let schedules = self.schedule_defs();
+        self.open_tabs.retain(|t| match t {
+            TabRef::View(id) => self.views.iter().any(|v| v.id == *id),
+            TabRef::Sheet(id) => sheets.iter().any(|s| s.id == *id),
+            TabRef::Schedule(n) => schedules.iter().any(|d| d.name == *n),
+            TabRef::Project | TabRef::Materials => true,
         });
-        let mut go: Option<GlobalId> = None;
-        let mut close: Option<GlobalId> = None;
+        let mut go: Option<TabRef> = None;
+        let mut close: Option<TabRef> = None;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            for id in self.open_tabs.clone() {
-                let (name, sheet) = match sheets.iter().find(|s| s.id == id) {
-                    Some(s) => (format!("{} · {}", s.number, s.name), true),
-                    None => (
-                        self.views
-                            .iter()
-                            .find(|v| v.id == id)
-                            .map(|v| v.name.clone())
-                            .unwrap_or_default(),
-                        false,
-                    ),
+            for (k, t) in self.open_tabs.clone().into_iter().enumerate() {
+                let name = match &t {
+                    TabRef::Sheet(id) => sheets
+                        .iter()
+                        .find(|s| s.id == *id)
+                        .map(|s| format!("{} · {}", s.number, s.name))
+                        .unwrap_or_default(),
+                    TabRef::View(id) => self
+                        .views
+                        .iter()
+                        .find(|v| v.id == *id)
+                        .map(|v| v.name.clone())
+                        .unwrap_or_default(),
+                    TabRef::Schedule(n) => format!("Schedule · {n}"),
+                    TabRef::Project => "Project information".to_string(),
+                    TabRef::Materials => "Materials".to_string(),
                 };
-                let on = current == Some(id);
+                let on = current.as_ref() == Some(&t);
                 let fill = if on { th::CANVAS } else { th::RIBBON_BG };
                 let color = if on {
                     egui::Color32::from_rgb(0x1a, 0x1a, 0x1a)
                 } else {
                     th::TEXT
                 };
-                ui.push_id(id.as_str(), |ui| {
+                ui.push_id(k, |ui| {
                     let r = ui.add(
                         egui::Button::new(egui::RichText::new(&name).color(color))
                             .fill(fill)
@@ -748,38 +869,60 @@ impl Viewer {
                             }),
                     );
                     if r.clicked() {
-                        go = Some(id);
+                        go = Some(t.clone());
                     }
                     if r.middle_clicked() {
-                        close = Some(id);
+                        close = Some(t.clone());
                     }
                     if self.open_tabs.len() > 1
                         && ui
                             .small_button("×")
-                            .on_hover_text(if sheet {
-                                "Close the sheet"
-                            } else {
-                                "Close the tab"
-                            })
+                            .on_hover_text("Close the tab")
                             .clicked()
                     {
-                        close = Some(id);
+                        close = Some(t.clone());
                     }
                 });
             }
         });
-        if let Some(id) = close {
-            self.open_tabs.retain(|x| *x != id);
-            if current == Some(id) {
-                go = self.open_tabs.last().copied();
+        if let Some(t) = close {
+            self.open_tabs.retain(|x| *x != t);
+            if current.as_ref() == Some(&t) {
+                go = self.open_tabs.last().cloned();
+                if go.is_none() {
+                    self.close_pages();
+                    self.close_sheet();
+                }
             }
         }
-        if let Some(id) = go {
-            if sheets.iter().any(|s| s.id == id) {
-                self.open_sheet(id);
-            } else {
+        if let Some(t) = go {
+            self.go_to(t);
+        }
+    }
+
+    /// Show what a tab refers to in the main view: a view, a sheet, a schedule, a page.
+    pub(crate) fn go_to(&mut self, t: TabRef) {
+        match t {
+            TabRef::Sheet(id) => self.open_sheet(id),
+            TabRef::View(id) => {
+                self.close_pages();
                 self.close_sheet();
                 self.activate_view(id);
+            }
+            TabRef::Schedule(n) => self.open_schedule(&n),
+            TabRef::Project => {
+                if self.project_page.is_none() {
+                    self.close_pages();
+                    self.close_sheet();
+                    self.project_page = Some(Default::default());
+                }
+            }
+            TabRef::Materials => {
+                if self.materials_page.is_none() {
+                    self.close_pages();
+                    self.close_sheet();
+                    self.materials_page = Some(Default::default());
+                }
             }
         }
     }
@@ -803,6 +946,16 @@ impl Viewer {
                     "the end"
                 }
             );
+        }
+        if self.materials_page.is_some() {
+            return "Materials: choose one on the left; Add takes a grade from the library".into();
+        }
+        if self.project_page.is_some() {
+            return "Project information: a value is saved when you leave its field".into();
+        }
+        if self.schedule.is_some() {
+            return "Schedule: click a row to select its element · a column's title to sort by it"
+                .into();
         }
         if let Some(l) = &self.layout {
             return match l.tool {
@@ -829,13 +982,62 @@ impl Viewer {
     }
 
     /// The command palette, over everything.
-    pub(crate) fn palette_ui(&mut self, ctx: &egui::Context) {
-        let Some(p) = &mut self.palette else { return };
-        let found: Vec<Action> = ALL_ACTIONS
+    /// Everything the palette can find: the actions, then the views, sheets and schedules to go
+    /// to. Each with its label, where it is (tab and key, or what it is), and whether it can run.
+    fn palette_entries(&mut self) -> Vec<(String, String, bool, PaletteGo)> {
+        let mut v: Vec<(String, String, bool, PaletteGo)> = ALL_ACTIONS
             .iter()
             .chain([Action::History].iter())
-            .copied()
-            .filter(|a| matches(&a.label(), &p.query))
+            .map(|a| {
+                let where_ = match a.keys() {
+                    "" => a.tab().label().to_string(),
+                    k => format!("{} · {k}", a.tab().label()),
+                };
+                (
+                    a.label(),
+                    where_,
+                    self.action_enabled(*a),
+                    PaletteGo::Action(*a),
+                )
+            })
+            .collect();
+        for view in &self.views {
+            v.push((
+                format!("Go to {}", view.name),
+                "View".into(),
+                true,
+                PaletteGo::Tab(TabRef::View(view.id)),
+            ));
+        }
+        for sh in self.sheets() {
+            v.push((
+                format!("Go to sheet {} {}", sh.number, sh.name),
+                "Sheet".into(),
+                true,
+                PaletteGo::Tab(TabRef::Sheet(sh.id)),
+            ));
+        }
+        for (name, n) in self.schedule_counts() {
+            v.push((
+                format!("Schedule: {name}"),
+                format!("{n} elements"),
+                n > 0,
+                PaletteGo::Tab(TabRef::Schedule(name)),
+            ));
+        }
+        v
+    }
+
+    /// The command palette, over everything.
+    pub(crate) fn palette_ui(&mut self, ctx: &egui::Context) {
+        if self.palette.is_none() {
+            return;
+        }
+        let entries = self.palette_entries();
+        let Some(p) = &mut self.palette else { return };
+        let found: Vec<(String, String, bool, PaletteGo)> = entries
+            .into_iter()
+            .filter(|e| matches(&e.0, &p.query))
             .collect();
         let (up, down, enter, esc) = ctx.input(|i| {
             (
@@ -852,9 +1054,8 @@ impl Viewer {
             p.index = p.index.saturating_sub(1);
         }
         p.index = p.index.min(found.len().saturating_sub(1));
-        let mut run = None;
+        let mut run: Option<PaletteGo> = None;
         let mut close = esc;
-        let enabled: Vec<bool> = found.iter().map(|a| self.action_enabled(*a)).collect();
         let p = self.palette.as_mut().expect("checked above");
         let mut lost = false;
         let area = egui::Area::new(egui::Id::unique("command-palette"))
@@ -867,7 +1068,7 @@ impl Viewer {
                         ui.set_width(480.0);
                         let r = ui.add(
                             egui::TextEdit::singleline(&mut p.query)
-                                .hint_text("Type a command")
+                                .hint_text("A command, a view, a sheet or a schedule")
                                 .desired_width(f32::INFINITY),
                         );
                         // Esc in the field gives its focus up: that closes the palette.
@@ -880,21 +1081,24 @@ impl Viewer {
                         egui::ScrollArea::vertical()
                             .max_height(320.0)
                             .show(ui, |ui| {
-                                for (k, a) in found.iter().enumerate() {
+                                for (k, (label, where_, enabled, go)) in found.iter().enumerate() {
                                     let on = k == p.index;
-                                    let text = egui::RichText::new(a.label())
-                                        .color(if enabled[k] { th::TEXT } else { th::TEXT_MUTED });
-                                    let where_ = match a.keys() {
-                                        "" => a.tab().label().to_string(),
-                                        k => format!("{} · {k}", a.tab().label()),
-                                    };
+                                    let text = egui::RichText::new(label).color(if *enabled {
+                                        th::TEXT
+                                    } else {
+                                        th::TEXT_MUTED
+                                    });
                                     let row = ui.add(
                                         egui::Button::selectable(on, text)
-                                            .shortcut_text(where_)
+                                            .shortcut_text(where_.as_str())
                                             .min_size(egui::vec2(ui.available_width(), 24.0)),
                                     );
-                                    if row.clicked() {
-                                        run = Some(*a);
+                                    if on {
+                                        row.scroll_to_me(None);
+                                    }
+                                    // A greyed command can't run now: the palette stays open.
+                                    if row.clicked() && *enabled {
+                                        run = Some(go.clone());
                                     }
                                 }
                                 if found.is_empty() {
@@ -912,16 +1116,22 @@ impl Viewer {
         });
         let settled = p.frames >= 2;
         close |= settled && (outside || (lost && !enter));
-        if enter && let Some(a) = found.get(p.index) {
-            run = Some(*a);
+        if enter
+            && let Some(e) = found.get(p.index)
+            && e.2
+        {
+            run = Some(e.3.clone());
         }
         if let Some(p) = &mut self.palette {
             p.frames += 1;
         }
-        if let Some(a) = run {
+        if let Some(go) = run {
             close = true;
             self.palette = None;
-            self.run_action(a, ctx);
+            match go {
+                PaletteGo::Action(a) => self.run_action(a, ctx),
+                PaletteGo::Tab(t) => self.go_to(t),
+            }
         }
         if close {
             self.palette = None;

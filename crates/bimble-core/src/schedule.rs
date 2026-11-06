@@ -1,0 +1,303 @@
+//! Schedules (ADR 0029): tables of elements and their quantities, like Revit's nomenclatures.
+//!
+//! A schedule is data: which elements (IFC classes, a material family), which columns, how
+//! rows are grouped and sorted, whether totals are shown. The values are measured from the
+//! geometry when the schedule is drawn (see `bimble_drawing::schedule`), so a schedule works the
+//! same on a `.bimble` model and on any IFC.
+
+use crate::MaterialCategory;
+use serde::{Deserialize, Serialize};
+
+/// A column of a schedule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Field {
+    /// The storey the element is on.
+    Level,
+    /// Where it stands on the grid ("B-2"): the axis crossing nearest its centre in plan.
+    Location,
+    Name,
+    /// The IFC class.
+    Class,
+    Material,
+    /// Its section: "30/30", "Ø30", "GL24h 24x46" (as on plans).
+    Section,
+    /// Along its axis, m (a column's height, a beam's or wall's length).
+    Length,
+    /// Across its axis, cm (a wall's thickness, a beam's width).
+    Width,
+    /// Vertical extent, cm (a beam's depth, a slab's thickness, a wall's height).
+    Height,
+    /// m²: a wall's face (length × height), a slab's or footing's plan area.
+    Area,
+    /// m³, from the closed mesh.
+    Volume,
+    /// kg: the volume times the density of its material's grade, found in the material library
+    /// by name (ADR 0031); empty when the grade isn't known.
+    Mass,
+    GlobalId,
+}
+
+impl Field {
+    pub const ALL: [Field; 13] = [
+        Field::Level,
+        Field::Location,
+        Field::Name,
+        Field::Class,
+        Field::Material,
+        Field::Section,
+        Field::Length,
+        Field::Width,
+        Field::Height,
+        Field::Area,
+        Field::Volume,
+        Field::Mass,
+        Field::GlobalId,
+    ];
+
+    /// The column's title, with its unit.
+    pub fn title(self) -> &'static str {
+        match self {
+            Field::Level => "Level",
+            Field::Location => "Location",
+            Field::Name => "Name",
+            Field::Class => "IFC class",
+            Field::Material => "Material",
+            Field::Section => "Section",
+            Field::Length => "Length (m)",
+            Field::Width => "Width (cm)",
+            Field::Height => "Height (cm)",
+            Field::Area => "Area (m²)",
+            Field::Volume => "Volume (m³)",
+            Field::Mass => "Mass (kg)",
+            Field::GlobalId => "GlobalId",
+        }
+    }
+
+    /// Summed in the totals.
+    pub fn summed(self) -> bool {
+        matches!(
+            self,
+            Field::Length | Field::Area | Field::Volume | Field::Mass
+        )
+    }
+}
+
+/// What a schedule lists and shows.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduleDef {
+    pub name: String,
+    /// The IFC classes listed (case-insensitive); empty: every class.
+    pub classes: Vec<String>,
+    /// Only elements of this material family; none: every family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<MaterialCategory>,
+    pub fields: Vec<Field>,
+    /// Rows grouped by level, lowest first, a subtotal under each.
+    #[serde(default)]
+    pub group_by_level: bool,
+    /// A total line at the end.
+    #[serde(default)]
+    pub totals: bool,
+}
+
+impl ScheduleDef {
+    /// Whether an element of this class and family belongs in the schedule.
+    pub fn lists(&self, class: &str, family: MaterialCategory) -> bool {
+        (self.classes.is_empty() || self.classes.iter().any(|c| c.eq_ignore_ascii_case(class)))
+            && self.family.is_none_or(|f| f == family)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() || self.name.chars().count() > 100 {
+            return Err("a schedule needs a name (at most 100 characters)".into());
+        }
+        if self.fields.is_empty() || self.fields.len() > 32 {
+            return Err(format!("schedule {}: 1 to 32 columns", self.name));
+        }
+        if self.classes.len() > 64 {
+            return Err(format!("schedule {}: at most 64 classes", self.name));
+        }
+        Ok(())
+    }
+}
+
+/// Most schedules a model keeps.
+pub const MAX_SCHEDULES: usize = 200;
+
+/// Checks a model's schedules: each valid, names unique.
+pub fn validate_all(v: &[ScheduleDef]) -> Result<(), String> {
+    if v.len() > MAX_SCHEDULES {
+        return Err(format!("at most {MAX_SCHEDULES} schedules"));
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for d in v {
+        d.validate()?;
+        if !names.insert(d.name.to_lowercase()) {
+            return Err(format!("two schedules are named {}", d.name));
+        }
+    }
+    Ok(())
+}
+
+/// The schedules offered: the built-in ones, each replaced by the model's schedule of the same
+/// name if it has one, then the model's own, in their order.
+pub fn effective(stored: &[ScheduleDef]) -> Vec<ScheduleDef> {
+    let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+    let mut v: Vec<ScheduleDef> = default_schedules()
+        .into_iter()
+        .map(|d| {
+            stored
+                .iter()
+                .find(|s| same(&s.name, &d.name))
+                .cloned()
+                .unwrap_or(d)
+        })
+        .collect();
+    for s in stored {
+        if !v.iter().any(|d| same(&d.name, &s.name)) {
+            v.push(s.clone());
+        }
+    }
+    v
+}
+
+/// Whether a schedule name is one of the built-in ones.
+pub fn is_builtin(name: &str) -> bool {
+    default_schedules()
+        .iter()
+        .any(|d| d.name.eq_ignore_ascii_case(name))
+}
+
+fn def(
+    name: &str,
+    classes: &[&str],
+    family: Option<MaterialCategory>,
+    fields: &[Field],
+) -> ScheduleDef {
+    ScheduleDef {
+        name: name.into(),
+        classes: classes.iter().map(|c| c.to_string()).collect(),
+        family,
+        fields: fields.to_vec(),
+        group_by_level: true,
+        totals: true,
+    }
+}
+
+/// The built-in schedules, one per kind of structural element and material, as an engineering
+/// office keeps them: columns, beams, slabs, walls, footings, in concrete, steel, timber.
+pub fn default_schedules() -> Vec<ScheduleDef> {
+    use Field::*;
+    use MaterialCategory::*;
+    let col = [Level, Location, Name, Material, Section, Length, Volume];
+    let beam = [
+        Level, Name, Material, Section, Length, Width, Height, Volume,
+    ];
+    // Steel is ordered and priced by weight.
+    let steel_col = [
+        Level, Location, Name, Material, Section, Length, Volume, Mass,
+    ];
+    let steel_beam = [
+        Level, Name, Material, Section, Length, Width, Height, Volume, Mass,
+    ];
+    vec![
+        def("Concrete columns", &["IfcColumn"], Some(Concrete), &col),
+        def("Steel columns", &["IfcColumn"], Some(Steel), &steel_col),
+        def("Timber columns", &["IfcColumn"], Some(Timber), &col),
+        def("Concrete beams", &["IfcBeam"], Some(Concrete), &beam),
+        def("Steel beams", &["IfcBeam"], Some(Steel), &steel_beam),
+        def("Timber beams", &["IfcBeam"], Some(Timber), &beam),
+        def(
+            "Slabs",
+            &["IfcSlab"],
+            None,
+            &[Level, Name, Material, Height, Area, Volume],
+        ),
+        def(
+            "Walls",
+            &["IfcWall", "IfcWallStandardCase"],
+            None,
+            &[Level, Name, Material, Width, Length, Height, Area, Volume],
+        ),
+        def(
+            "Footings",
+            &["IfcFooting"],
+            None,
+            &[Level, Location, Name, Material, Section, Height, Volume],
+        ),
+        def(
+            "All elements",
+            &[],
+            None,
+            &[Level, Name, Class, Material, Volume, Mass],
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_are_valid_and_named_once() {
+        let v = default_schedules();
+        let mut names: Vec<&str> = v.iter().map(|d| d.name.as_str()).collect();
+        for d in &v {
+            d.validate().unwrap();
+        }
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), v.len());
+    }
+
+    /// A model's schedule of a built-in name replaces it, in place; a new one comes after; the
+    /// command says which, and the model refuses two of one name.
+    #[test]
+    fn model_schedules_override_and_add() {
+        use crate::{Command, History};
+        let mut beams = default_schedules()
+            .into_iter()
+            .find(|d| d.name == "Steel beams")
+            .unwrap();
+        beams.fields.retain(|f| *f != Field::Mass);
+        let mine = ScheduleDef {
+            name: "Rebar check".into(),
+            ..beams.clone()
+        };
+        let e = effective(&[beams.clone(), mine.clone()]);
+        let i = e.iter().position(|d| d.name == "Steel beams").unwrap();
+        assert_eq!(e[i], beams);
+        assert_eq!(e.last().unwrap().name, "Rebar check");
+        assert_eq!(e.len(), default_schedules().len() + 1);
+        assert!(is_builtin("steel BEAMS") && !is_builtin("Rebar check"));
+
+        let mut m = crate::demo::concrete_frame(&crate::demo::FrameSpec::default());
+        let mut h = History::default();
+        h.apply(
+            &mut m,
+            vec![Command::SetSchedules {
+                schedules: vec![mine.clone()],
+            }],
+        )
+        .unwrap();
+        assert_eq!(h.undo_label(), Some("add the schedule Rebar check"));
+        m.validate().unwrap();
+        let twice = Command::SetSchedules {
+            schedules: vec![mine.clone(), mine],
+        };
+        assert!(twice.apply(&mut m).is_err());
+    }
+
+    #[test]
+    fn a_schedule_lists_its_classes_and_family() {
+        let v = default_schedules();
+        let steel_beams = v.iter().find(|d| d.name == "Steel beams").unwrap();
+        assert!(steel_beams.lists("IFCBEAM", MaterialCategory::Steel));
+        assert!(!steel_beams.lists("IfcBeam", MaterialCategory::Concrete));
+        assert!(!steel_beams.lists("IfcColumn", MaterialCategory::Steel));
+        let all = v.iter().find(|d| d.name == "All elements").unwrap();
+        assert!(all.lists("IfcAnything", MaterialCategory::Other));
+    }
+}

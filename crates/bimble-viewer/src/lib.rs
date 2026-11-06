@@ -23,10 +23,14 @@ mod edit;
 mod files;
 mod icons;
 mod layout;
+mod materials_page;
 mod measure;
+mod project_page;
 mod ribbon;
+mod schedules;
 mod section;
 mod snap;
+mod state;
 mod style_editor;
 mod ui_theme;
 mod viewcube;
@@ -77,6 +81,17 @@ struct PlanPreview {
     size_mm: (f64, f64),
 }
 
+/// The project information (ADR 0030): the model's, or an IFC's side file's.
+fn project_of(
+    loaded: &Option<Loaded>,
+    side: &Option<viewing::SideViews>,
+) -> BTreeMap<String, String> {
+    if let Some(ed) = loaded.as_ref().and_then(|l| l.edit.as_ref()) {
+        return ed.model.project.clone();
+    }
+    side.as_ref().map(|s| s.project.clone()).unwrap_or_default()
+}
+
 /// The plan settings as drawing options; the project name is the model's file name.
 fn plan_options(
     p: &PlanSettings,
@@ -84,6 +99,7 @@ fn plan_options(
     style: bimble_core::style::GraphicStyle,
     view: Option<bimble_core::view::View>,
     views: &[bimble_core::view::View],
+    project: &BTreeMap<String, String>,
 ) -> bimble_drawing::plan::PlanOptions {
     bimble_drawing::plan::PlanOptions {
         storey: p.storey.clone(),
@@ -96,7 +112,7 @@ fn plan_options(
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default(),
         date: today(),
-        template: p.template.clone(),
+        template: p.template.with_project(project),
         view,
         bare: false,
         section_marks: bimble_drawing::plan::section_marks(views),
@@ -164,6 +180,17 @@ fn bounds_with_links(scene: &Scene, links: &[Linked]) -> bimble_render::Sphere {
     })
 }
 
+/// A question the user must answer before Bimble goes on (ADR 0028).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Confirm {
+    /// The window is closing with unsaved work.
+    Close,
+    /// A model or views file is opening over unsaved work (`pending_open`).
+    Open,
+    /// Reset every standard to the default.
+    ResetStandards,
+}
+
 struct Turn {
     from: (f32, f32),
     to: (f32, f32),
@@ -192,6 +219,7 @@ pub async fn start_web(canvas: web_sys::HtmlCanvasElement) -> Result<(), String>
                     .as_ref()
                     .ok_or("the viewer needs the wgpu renderer")?;
                 ui_theme::apply(&cc.egui_ctx);
+                state::guard_page_unload();
                 Ok(Box::new(Viewer::new(rs)))
             }),
         )
@@ -256,6 +284,7 @@ pub fn run(
             ui_theme::apply(&cc.egui_ctx);
             let mut app = Viewer::new(rs);
             app.opts.style = initial_style;
+            app.style_baseline = app.opts.style.clone();
             app.style_path = style;
             if let Some(f) = file {
                 app.open(f, &cc.egui_ctx);
@@ -431,11 +460,29 @@ struct Viewer {
 
     /// The Standards panel (graphic style) on the right (ADR 0027).
     standards_open: bool,
+    /// The standards as last loaded or saved (or the default): what "changed" is measured
+    /// against, and what Revert goes back to (ADR 0028).
+    style_baseline: GraphicStyle,
+    /// The plan template as last loaded (or the default), likewise for the plan options.
+    template_baseline: bimble_drawing::template::PlanTemplate,
+    /// A question waiting for an answer: close with unsaved work, reset the standards.
+    confirm: Option<Confirm>,
+    /// The user answered "close" to the question: let the window close.
+    allow_close: bool,
+    /// The file waiting for the answer to `Confirm::Open`.
+    pending_open: Option<files::Picked>,
     standards_query: String,
     /// The ribbon's open tab, the command palette, tabs of open views and sheets.
     ribbon_tab: ribbon::Tab,
     palette: Option<ribbon::Palette>,
-    open_tabs: Vec<bimble_core::GlobalId>,
+    open_tabs: Vec<ribbon::TabRef>,
+    /// A schedule open in the main view, and the schedules' row counts per scene revision.
+    schedule: Option<schedules::OpenSchedule>,
+    /// The project information page, when open in the main view (ADR 0030).
+    project_page: Option<project_page::ProjectPage>,
+    /// The material browser, when open in the main view (ADR 0031).
+    materials_page: Option<materials_page::MaterialsPage>,
+    schedule_counts: Option<(u64, Vec<(String, usize)>)>,
     /// File the style was loaded from or saved to.
     style_path: Option<PathBuf>,
     style_message: Option<String>,
@@ -516,10 +563,19 @@ impl Viewer {
             plan_window: false,
             plan: PlanSettings::default(),
             standards_open: false,
+            style_baseline: GraphicStyle::default(),
+            template_baseline: Default::default(),
+            confirm: None,
+            allow_close: false,
+            pending_open: None,
             standards_query: String::new(),
             ribbon_tab: ribbon::Tab::default(),
             palette: None,
             open_tabs: Vec::new(),
+            schedule: None,
+            project_page: None,
+            materials_page: None,
+            schedule_counts: None,
             style_path: None,
             style_message: None,
             history_window: false,
@@ -596,9 +652,27 @@ impl Viewer {
         ctx.request_repaint();
     }
 
-    /// Files picked in dialogs (or dropped), by what they are for.
+    /// Files picked in dialogs (or dropped), by what they are for. Opening a model or a views
+    /// file over unsaved work asks first (ADR 0028), as closing does.
     fn handle_picked(&mut self, ctx: &egui::Context) {
-        while let Some(p) = self.files.poll() {
+        while self.confirm.is_none() {
+            let Some(p) = self.files.poll() else { break };
+            let replaces = p.purpose == files::Purpose::Open
+                && ![".dxf", ".pdf", ".dwg"]
+                    .iter()
+                    .any(|x| p.name.to_ascii_lowercase().ends_with(x));
+            let s = self.snapshot();
+            if replaces && (s.model_dirty || s.views_dirty) {
+                self.pending_open = Some(p);
+                self.confirm = Some(Confirm::Open);
+                break;
+            }
+            self.handle_one(p, ctx);
+        }
+    }
+
+    fn handle_one(&mut self, p: files::Picked, ctx: &egui::Context) {
+        {
             // A plan dropped on a 2D view is a reference plan for it.
             let lower = p.name.to_ascii_lowercase();
             if p.purpose == files::Purpose::Open
@@ -615,7 +689,7 @@ impl Viewer {
                         p.name
                     ));
                 }
-                continue;
+                return;
             }
             // A views side file (#36), recognised by its format field.
             if p.purpose == files::Purpose::Open && lower.ends_with(".json") {
@@ -626,7 +700,7 @@ impl Viewer {
                     }
                     Err(e) => self.error = Some(e),
                 }
-                continue;
+                return;
             }
             match p.purpose {
                 files::Purpose::Reference => self.add_reference(p),
@@ -640,6 +714,7 @@ impl Viewer {
                     });
                     match r {
                         Ok(t) => {
+                            self.template_baseline = t.clone();
                             self.plan.template = t;
                             self.plan.template_path = Some(p.path_or_name());
                             self.plan.template_rev += 1;
@@ -655,6 +730,7 @@ impl Viewer {
                     });
                     match r {
                         Ok(s) => {
+                            self.style_baseline = s.clone();
                             self.opts.style = s;
                             self.style_message = Some(format!("Loaded {}", p.name));
                             self.style_path = Some(p.path_or_name());
@@ -830,8 +906,22 @@ impl Viewer {
         let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) else {
             return;
         };
+        let before: Vec<String> = bimble_core::schedule::effective(&ed.model.schedules)
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
         if if undo { ed.undo() } else { ed.redo() } {
             self.rebuild_scene(None);
+            let after: Vec<String> = self.schedule_defs().into_iter().map(|d| d.name).collect();
+            if let Some(o) = &mut self.schedule
+                && !after.contains(&o.name)
+            {
+                // Undoing a rename: follow it; undoing "New schedule": nothing left to show.
+                match schedules::follow_rename(&before, &after) {
+                    Some(n) => o.name = n,
+                    None => self.schedule = None,
+                }
+            }
         }
     }
 
@@ -1050,7 +1140,7 @@ impl Viewer {
         for (name, h) in &v.branches {
             ui.horizontal(|ui| {
                 let current = Some(name) == v.branch.as_ref();
-                ui.label(format!("{} {name}  {}", if current { "●" } else { "○" }, &h[..10]));
+                ui.label(format!("{} {name}  {}", if current { "*" } else { " " }, &h[..10]));
                 if !current
                     && ui
                         .add_enabled(v.pending == 0, egui::Button::new("Switch"))
@@ -1162,6 +1252,22 @@ impl Viewer {
             ))
         });
         self.needs_render = true;
+    }
+
+    /// Close the pages that take the main view (schedule, project, materials): a view, a sheet
+    /// or another page is shown instead.
+    pub(crate) fn close_pages(&mut self) {
+        // What was typed on a page and not yet stored is stored first, not lost.
+        self.commit_pages();
+        self.schedule = None;
+        self.project_page = None;
+        self.materials_page = None;
+    }
+
+    /// Store what pages hold and haven't stored yet (a field still being typed in).
+    pub(crate) fn commit_pages(&mut self) {
+        self.commit_project_page();
+        self.commit_materials_page();
     }
 
     /// Change the element under the cursor; uploads its edges for the highlight.
@@ -2173,6 +2279,7 @@ impl Viewer {
                 p.template = Default::default();
                 p.template_path = None;
                 p.template_rev += 1;
+                self.template_baseline = Default::default();
             }
             ui.weak(match &p.template_path {
                 Some(path) => path
@@ -2199,6 +2306,7 @@ impl Viewer {
                 self.opts.style.clone(),
                 view.clone(),
                 &self.views,
+                &project_of(&self.loaded, &self.side_views),
             );
             p.message = Some(match bimble_drawing::plan::plan(&l.scene, &opts) {
                 Err(e) => e,
@@ -2256,9 +2364,15 @@ impl Viewer {
             self.opts.style.clone(),
             px_w / 50 * 50,
             p.template_rev,
-            view.as_ref()
-                .map(|v| serde_json::to_string(v).unwrap_or_default())
-                .unwrap_or_default(),
+            // The view, and the project information its title block shows.
+            format!(
+                "{}|{}",
+                view.as_ref()
+                    .map(|v| serde_json::to_string(v).unwrap_or_default())
+                    .unwrap_or_default(),
+                serde_json::to_string(&project_of(&self.loaded, &self.side_views))
+                    .unwrap_or_default()
+            ),
         );
         if p.preview_image.as_ref().is_none_or(|i| i.key != key) {
             let opts = plan_options(
@@ -2267,6 +2381,7 @@ impl Viewer {
                 self.opts.style.clone(),
                 view.clone(),
                 &self.views,
+                &project_of(&self.loaded, &self.side_views),
             );
             let mut img = PlanPreview {
                 key,
@@ -2313,6 +2428,24 @@ impl Viewer {
     }
 
     fn style_panel(&mut self, ui: &mut egui::Ui) {
+        // Which standards these are, and whether they are saved (ADR 0028).
+        let source = self
+            .style_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned());
+        let changed = self.opts.style != self.style_baseline;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(match &source {
+                Some(n) => format!("From {n}"),
+                None => "Bimble's default".to_string(),
+            });
+            if changed {
+                ui.colored_label(ui.visuals().warn_fg_color, "· changed, not saved");
+            } else {
+                ui.weak("· saved");
+            }
+        });
         ui.horizontal(|ui| {
             if ui.button("Load…").clicked() {
                 self.files.pick(files::Purpose::Style, ui.ctx());
@@ -2322,25 +2455,28 @@ impl Viewer {
                 .on_hover_text("Writes only what differs from the default style")
                 .clicked()
             {
-                let name = self
-                    .style_path
-                    .as_ref()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "style.json".into());
-                let json = self.opts.style.to_json_diff();
-                match files::save(&name, &[("Bimble style", &["json"])], json.as_bytes()) {
-                    Ok(Some(to)) => {
-                        self.style_message = Some(format!("Saved {to}"));
-                        self.style_path = Some(PathBuf::from(to));
-                    }
-                    Ok(None) => {}
-                    Err(e) => self.style_message = Some(e),
-                }
+                self.save_style();
             }
-            if ui.button("Reset").clicked() {
-                self.opts.style = GraphicStyle::default();
+            if ui
+                .add_enabled(changed, egui::Button::new("Revert"))
+                .on_hover_text(match &source {
+                    Some(n) => format!("Back to {n} as loaded or last saved"),
+                    None => "Back to Bimble's default".to_string(),
+                })
+                .clicked()
+            {
+                self.opts.style = self.style_baseline.clone();
                 self.needs_render = true;
+            }
+            if ui
+                .add_enabled(
+                    self.opts.style != GraphicStyle::default(),
+                    egui::Button::new("Reset to default…"),
+                )
+                .on_hover_text("Every standard back to Bimble's default (asks first)")
+                .clicked()
+            {
+                self.confirm = Some(Confirm::ResetStandards);
             }
         });
         if let Some(m) = &self.style_message {
@@ -2349,6 +2485,228 @@ impl Viewer {
         ui.separator();
         if style_editor::edit(ui, &mut self.opts.style, &mut self.standards_query) {
             self.needs_render = true;
+        }
+    }
+
+    /// Save the standards to a file (asks where). True when saved.
+    fn save_style(&mut self) -> bool {
+        let name = self
+            .style_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "style.json".into());
+        let json = self.opts.style.to_json_diff();
+        match files::save(&name, &[("Bimble style", &["json"])], json.as_bytes()) {
+            Ok(Some(to)) => {
+                self.style_message = Some(format!("Saved {to}"));
+                self.style_path = Some(PathBuf::from(to));
+                self.style_baseline = self.opts.style.clone();
+                true
+            }
+            Ok(None) => false,
+            Err(e) => {
+                self.style_message = Some(e);
+                false
+            }
+        }
+    }
+
+    /// What the viewer is doing, for the chips and the unsaved list (ADR 0028).
+    fn snapshot(&self) -> state::Snapshot {
+        let ed = self.loaded.as_ref().and_then(|l| l.edit.as_ref());
+        let hidden_links = self
+            .links
+            .iter()
+            .filter(|k| self.hidden_links.contains(&k.name()))
+            .count();
+        state::Snapshot {
+            placing: ed.and_then(|e| e.placing.as_ref()).map(|p| p.kind.label()),
+            measuring: self.measure_on,
+            sheet_tool: self.layout.as_ref().and_then(|l| match l.tool {
+                layout::Tool::Select => None,
+                layout::Tool::Text => Some("Text"),
+                layout::Tool::Dimension => Some("Dimension"),
+            }),
+            section_box: self.section_on && !self.in_2d(),
+            edges: self.opts.edges,
+            hatching: self.opts.hatching,
+            orthographic: self.camera.orthographic && !self.in_2d(),
+            hidden: [
+                self.hidden_categories.len(),
+                self.hidden_classes.len(),
+                self.hidden_storeys.len(),
+                hidden_links,
+            ],
+            measurements: self.dimensions.len(),
+            plan_options_changed: self.plan.template != self.template_baseline,
+            model_dirty: ed.is_some_and(|e| e.dirty),
+            views_dirty: self.side_views_dirty(),
+            standards_changed: self.opts.style != self.style_baseline,
+        }
+    }
+
+    /// Leave a state shown by a chip: back to the default.
+    fn reset_chip(&mut self, c: state::Chip, ctx: &egui::Context) {
+        use state::Chip;
+        match c {
+            Chip::Placing => {
+                if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
+                    ed.placing = None;
+                }
+            }
+            Chip::Measuring => self.run_action(ribbon::Action::Measure, ctx),
+            Chip::SheetTool => {
+                if let Some(l) = &mut self.layout {
+                    l.tool = layout::Tool::Select;
+                }
+            }
+            Chip::SectionBox => self.toggle_section_box(),
+            Chip::EdgesOff => self.run_action(ribbon::Action::Edges, ctx),
+            Chip::HatchingOff => self.run_action(ribbon::Action::Hatching, ctx),
+            Chip::Orthographic => self.run_action(ribbon::Action::Orthographic, ctx),
+            Chip::Hidden => self.show_all_in_view(),
+            Chip::Measurements => {
+                self.dimensions.clear();
+                self.measure_first = None;
+            }
+            Chip::PlanOptions => {
+                self.plan.template = self.template_baseline.clone();
+                self.plan.template_rev += 1;
+            }
+        }
+        self.needs_render = true;
+    }
+
+    /// The questions that need an answer before going on.
+    fn confirm_ui(&mut self, ctx: &egui::Context) {
+        let Some(c) = self.confirm else { return };
+        let unsaved = state::unsaved(&self.snapshot());
+        let mut answer: Option<bool> = None;
+        let mut save_all = false;
+        egui::Modal::new(egui::Id::unique("bimble-confirm")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            match c {
+                Confirm::Close => {
+                    ui.heading("Close Bimble?");
+                    ui.label(format!(
+                        "Not saved: {}. Closing now loses these changes.",
+                        unsaved.join(", ")
+                    ));
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Save and close").clicked() {
+                            save_all = true;
+                        }
+                        if ui.button("Close without saving").clicked() {
+                            answer = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            answer = Some(false);
+                        }
+                    });
+                }
+                Confirm::Open => {
+                    let name = self.pending_open.as_ref().map_or("", |p| p.name.as_str());
+                    ui.heading(format!("Open {name}?"));
+                    ui.label(format!(
+                        "Not saved: {}. Opening another file now loses these changes.",
+                        unsaved.join(", ")
+                    ));
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Save, then open").clicked() {
+                            save_all = true;
+                        }
+                        if ui.button("Open without saving").clicked() {
+                            answer = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            answer = Some(false);
+                        }
+                    });
+                }
+                Confirm::ResetStandards => {
+                    ui.heading("Reset the standards?");
+                    ui.label(
+                        "Every pen, line, text, dimension and hatch type, and every colour, goes \
+                         back to Bimble's default. Your style file is not changed; Revert or Load… \
+                         brings it back.",
+                    );
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Reset to default").clicked() {
+                            answer = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            answer = Some(false);
+                        }
+                    });
+                }
+            }
+        });
+        if save_all {
+            // Each unsaved kind saved in turn; close only when all of them are.
+            let s = self.snapshot();
+            if s.model_dirty || s.views_dirty {
+                if self.side_views.is_some() {
+                    self.save_side_views();
+                } else {
+                    self.save();
+                }
+            }
+            if s.standards_changed {
+                self.save_style();
+            }
+            let s = self.snapshot();
+            let saved = match c {
+                // Opening replaces the model and views, not the standards.
+                Confirm::Open => !s.model_dirty && !s.views_dirty,
+                _ => state::unsaved(&s).is_empty(),
+            };
+            if saved {
+                answer = Some(true);
+            } else {
+                // The save's own message says why; the question stays open to choose again.
+                let why = self
+                    .error
+                    .clone()
+                    .or_else(|| {
+                        self.loaded
+                            .as_ref()
+                            .and_then(|l| l.edit.as_ref()?.message.clone())
+                    })
+                    .or_else(|| self.view_message.clone())
+                    .unwrap_or_default();
+                self.error = Some(
+                    format!("Not everything was saved. {why}")
+                        .trim()
+                        .to_string(),
+                );
+            }
+        }
+        match (c, answer) {
+            (Confirm::Close, Some(true)) => {
+                self.confirm = None;
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            (Confirm::Open, Some(true)) => {
+                self.confirm = None;
+                if let Some(p) = self.pending_open.take() {
+                    self.handle_one(p, ctx);
+                }
+            }
+            (Confirm::ResetStandards, Some(true)) => {
+                self.confirm = None;
+                self.opts.style = GraphicStyle::default();
+                self.needs_render = true;
+            }
+            (_, Some(false)) => {
+                self.confirm = None;
+                self.pending_open = None;
+            }
+            _ => {}
         }
     }
 
@@ -2543,10 +2901,23 @@ impl Viewer {
             });
     }
 
-    fn status_bar(&self, ui: &mut egui::Ui) {
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let mut reset = None;
         ui.horizontal(|ui| {
             ui.label(self.status_hint());
             ui.separator();
+            // Every state that isn't the default, with its way back (ADR 0028).
+            for (chip, label) in state::chips(&self.snapshot()) {
+                let r = ui.add(
+                    egui::Button::new(egui::RichText::new(format!("{label}  ×")).small())
+                        .fill(ui_theme::SELECTED_BG)
+                        .corner_radius(10.0),
+                );
+                if r.on_hover_text(chip.reset_hint()).clicked() {
+                    reset = Some(chip);
+                }
+            }
             if let Some(l) = &self.loaded {
                 let visible = (0..l.scene.elements.len()).filter(|&i| self.visible(i)).count();
                 ui.weak(format!(
@@ -2561,6 +2932,9 @@ impl Viewer {
                 ui.weak(&self.adapter);
             });
         });
+        if let Some(c) = reset {
+            self.reset_chip(c, &ctx);
+        }
     }
 }
 
@@ -2658,6 +3032,8 @@ impl eframe::App for Viewer {
                                 } else {
                                     self.properties(ui);
                                 }
+                            } else if self.schedule.is_some() {
+                                self.schedule_properties(ui);
                             } else if self.layout.is_some() {
                                 self.layout_properties(ui);
                             } else {
@@ -2741,6 +3117,21 @@ impl eframe::App for Viewer {
                 });
                 return;
             }
+            // The material browser: it takes the main view.
+            if self.materials_page.is_some() {
+                self.materials_ui(ui);
+                return;
+            }
+            // The project information page: it takes the main view.
+            if self.project_page.is_some() {
+                self.project_ui(ui);
+                return;
+            }
+            // A schedule open: it takes the main view.
+            if self.schedule.is_some() {
+                self.schedule_ui(ui);
+                return;
+            }
             // A sheet open: it takes the main view.
             if self.layout.is_some() {
                 self.layout_ui(ui, rect);
@@ -2792,6 +3183,23 @@ impl eframe::App for Viewer {
             }
         });
         self.palette_ui(&ctx);
+        #[cfg(target_arch = "wasm32")]
+        state::UNSAVED.store(
+            !state::unsaved(&self.snapshot()).is_empty(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        // Closing with unsaved work asks first (ADR 0028).
+        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
+            // A value typed but not yet stored counts too.
+            self.commit_pages();
+            if !state::unsaved(&self.snapshot()).is_empty() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                // Another question open (reset the standards…) gives way to this one.
+                self.confirm = Some(Confirm::Close);
+                self.pending_open = None;
+            }
+        }
+        self.confirm_ui(&ctx);
     }
 }
 

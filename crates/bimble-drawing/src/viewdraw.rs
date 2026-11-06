@@ -288,6 +288,7 @@ fn map_scene(
         })
         .collect();
     Scene {
+        densities: scene.densities.clone(),
         origin_mm: scene.origin_mm,
         elements,
         storeys: scene.storeys.clone(),
