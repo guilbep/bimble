@@ -1573,7 +1573,7 @@ impl Viewer {
             }
             ui.separator();
             ui.toggle_value(&mut self.plan_window, "Plan…")
-                .on_hover_text("Storey plan at scale, as PDF or SVG");
+                .on_hover_text("A plan, ceiling plan or section at scale, as PDF or SVG");
             ui.toggle_value(&mut self.style_window, "Style…");
             if self.side_views_dirty() {
                 ui.separator();
@@ -2356,7 +2356,7 @@ impl eframe::App for Viewer {
             });
         if self.plan_window {
             let mut open = true;
-            egui::Window::new("Storey plan")
+            egui::Window::new("On paper")
                 .open(&mut open)
                 .default_width(300.0)
                 .resizable(true)

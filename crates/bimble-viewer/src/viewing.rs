@@ -456,7 +456,7 @@ impl Viewer {
                 egui::CollapsingHeader::new(egui::RichText::new("Layouts").strong()).show(
                     ui,
                     |ui| {
-                        if ui.button("Storey plan on paper…").clicked() {
+                        if ui.button("Drawing on paper…").clicked() {
                             open_plan = true;
                         }
                         ui.weak("Sheets with several views come later.");
