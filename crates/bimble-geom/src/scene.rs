@@ -42,7 +42,11 @@ impl Scene {
         self.storeys
             .iter()
             .map(|s| bimble_core::view::Level {
-                key: if s.id.is_empty() { s.name.clone() } else { s.id.clone() },
+                key: if s.id.is_empty() {
+                    s.name.clone()
+                } else {
+                    s.id.clone()
+                },
                 name: s.name.clone(),
                 elevation_mm: s.elevation_mm,
             })

@@ -9,16 +9,33 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Command {
     AddStorey(Storey),
-    RemoveStorey { id: GlobalId },
+    RemoveStorey {
+        id: GlobalId,
+    },
     AddMaterial(Material),
-    RemoveMaterial { id: GlobalId },
+    RemoveMaterial {
+        id: GlobalId,
+    },
     AddElement(Element),
-    RemoveElement { id: GlobalId },
-    SetGenerator { id: GlobalId, generator: Generator },
-    SetPlacement { id: GlobalId, placement: Placement },
-    Rename { id: GlobalId, name: String },
+    RemoveElement {
+        id: GlobalId,
+    },
+    SetGenerator {
+        id: GlobalId,
+        generator: Generator,
+    },
+    SetPlacement {
+        id: GlobalId,
+        placement: Placement,
+    },
+    Rename {
+        id: GlobalId,
+        name: String,
+    },
     AddView(crate::view::View),
-    RemoveView { id: GlobalId },
+    RemoveView {
+        id: GlobalId,
+    },
     /// Replace a view (name, range, visibility, references…); its id stays.
     SetView(crate::view::View),
 }

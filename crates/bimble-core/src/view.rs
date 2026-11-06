@@ -249,7 +249,9 @@ pub fn resolve(
     };
     if !ok {
         return Err(match look {
-            Look::Down => "looking down, the planes must be in order: view depth ≤ bottom ≤ cut ≤ top",
+            Look::Down => {
+                "looking down, the planes must be in order: view depth ≤ bottom ≤ cut ≤ top"
+            }
             Look::Up => "looking up, the planes must be in order: bottom ≤ cut ≤ top ≤ view depth",
         }
         .into());
@@ -316,7 +318,10 @@ impl Reference {
     pub fn validate(&self) -> Result<(), String> {
         let n: usize = self.polylines.iter().map(Vec::len).sum();
         if n > MAX_REFERENCE_POINTS {
-            return Err(format!("reference {}: {n} points, more than {MAX_REFERENCE_POINTS}", self.name));
+            return Err(format!(
+                "reference {}: {n} points, more than {MAX_REFERENCE_POINTS}",
+                self.name
+            ));
         }
         let finite = self
             .polylines
@@ -344,7 +349,11 @@ impl View {
                     return Err(ctx("reference plans go in 2D views".into()));
                 }
             }
-            ViewKind::Plan { storey, look, range } => {
+            ViewKind::Plan {
+                storey,
+                look,
+                range,
+            } => {
                 resolve(range, *look, storey, levels).map_err(ctx)?;
             }
             ViewKind::Section {
@@ -354,7 +363,9 @@ impl View {
                     && depth_mm.is_finite()
                     && *depth_mm >= 0.0)
                 {
-                    return Err(ctx("section origin and depth must be numbers, depth ≥ 0".into()));
+                    return Err(ctx(
+                        "section origin and depth must be numbers, depth ≥ 0".into()
+                    ));
                 }
             }
         }
@@ -391,8 +402,10 @@ pub fn default_views(levels: &[Level]) -> Vec<View> {
                 .map(|n| n.elevation_mm - l.elevation_mm)
                 .find(|&h| h > 1.0);
             let mut range = ViewRange::default_for(look);
-            if let Some(h) = height {
-                range.cut.offset_mm = range.cut.offset_mm.min(h / 2.0);
+            if let Some(h) = height
+                && range.cut.offset_mm >= h
+            {
+                range.cut.offset_mm = (h / 2.0).round();
             }
             let tag = match look {
                 Look::Down => "down",
@@ -468,7 +481,10 @@ impl ViewsFile {
         }
         let f: ViewsFile = serde_json::from_slice(b).map_err(|e| e.to_string())?;
         if f.format != VIEWS_FORMAT || f.version != 1 {
-            return Err(format!("not a bimble views file (format {:?} version {})", f.format, f.version));
+            return Err(format!(
+                "not a bimble views file (format {:?} version {})",
+                f.format, f.version
+            ));
         }
         for (k, v) in &f.views {
             if *k != v.id {
@@ -481,7 +497,7 @@ impl ViewsFile {
         Ok(crate::version::canonical(f))
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("views serialize")
     }
 }
@@ -491,20 +507,27 @@ mod tests {
     use super::*;
 
     fn levels() -> Vec<Level> {
-        [("a", "N00", 0.0), ("b", "N01", 3000.0), ("c", "N02", 6200.0)]
-            .map(|(k, n, e)| Level {
-                key: k.into(),
-                name: n.into(),
-                elevation_mm: e,
-            })
-            .to_vec()
+        [
+            ("a", "N00", 0.0),
+            ("b", "N01", 3000.0),
+            ("c", "N02", 6200.0),
+        ]
+        .map(|(k, n, e)| Level {
+            key: k.into(),
+            name: n.into(),
+            elevation_mm: e,
+        })
+        .to_vec()
     }
 
     #[test]
     fn default_ranges_resolve_like_revit() {
         let l = levels();
         let down = resolve(&ViewRange::default_for(Look::Down), Look::Down, "b", &l).unwrap();
-        assert_eq!((down.top, down.cut, down.bottom, down.depth), (6200.0, 4200.0, 3000.0, 3000.0));
+        assert_eq!(
+            (down.top, down.cut, down.bottom, down.depth),
+            (6200.0, 4200.0, 3000.0, 3000.0)
+        );
         assert_eq!(down.visible(Look::Down), (3000.0, 4200.0));
         let up = resolve(&ViewRange::default_for(Look::Up), Look::Up, "b", &l).unwrap();
         assert_eq!(up.visible(Look::Up), (5300.0, 6200.0));
@@ -517,12 +540,45 @@ mod tests {
         assert_eq!(resolve(&r, Look::Down, "a", &l).unwrap().depth, -500.0);
     }
 
+    /// The usual cut heights where they fit (a 3 m storey keeps 1.2 m and 2.3 m), half the
+    /// storey where they don't (a 0.8 m foundation level).
+    #[test]
+    fn default_cuts_are_lowered_only_where_they_dont_fit() {
+        let mut lv = levels();
+        lv.push(Level {
+            key: "f".into(),
+            name: "Foundations".into(),
+            elevation_mm: -800.0,
+        });
+        let cut = |name: &str| {
+            default_views(&lv)
+                .into_iter()
+                .find(|v| v.name == name)
+                .and_then(|v| match v.kind {
+                    ViewKind::Plan { range, .. } => Some(range.cut.offset_mm),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(cut("Plan N00"), 1200.0);
+        assert_eq!(cut("Ceiling N00"), 2300.0);
+        assert_eq!(cut("Plan Foundations"), 400.0);
+        assert_eq!(cut("Ceiling Foundations"), 400.0);
+        for v in default_views(&lv) {
+            v.validate(&lv).unwrap();
+        }
+    }
+
     #[test]
     fn planes_out_of_order_are_refused() {
         let l = levels();
         let mut r = ViewRange::default_for(Look::Down);
         r.cut.offset_mm = 9000.0; // above the level above
-        assert!(resolve(&r, Look::Down, "b", &l).unwrap_err().contains("order"));
+        assert!(
+            resolve(&r, Look::Down, "b", &l)
+                .unwrap_err()
+                .contains("order")
+        );
         let mut r = ViewRange::default_for(Look::Down);
         r.depth = plane(LevelRef::Associated, 100.0); // depth above bottom
         assert!(resolve(&r, Look::Down, "b", &l).is_err());
@@ -548,8 +604,12 @@ mod tests {
             })
             .to_vec();
         for v in default_views(&low).iter().chain(&d) {
-            v.validate(if v.name.contains("Found") || v.name.contains("Ground") { &low } else { &l })
-                .unwrap();
+            v.validate(if v.name.contains("Found") || v.name.contains("Ground") {
+                &low
+            } else {
+                &l
+            })
+            .unwrap();
         }
         let mut changed = d[2].clone();
         changed.name = "Plan N01 (formwork)".into();
@@ -564,7 +624,8 @@ mod tests {
             visibility: Visibility::default(),
             references: Vec::new(),
         };
-        let stored: BTreeMap<_, _> = [(changed.id, changed.clone()), (extra.id, extra.clone())].into();
+        let stored: BTreeMap<_, _> =
+            [(changed.id, changed.clone()), (extra.id, extra.clone())].into();
         let e = effective(&stored, &l);
         assert_eq!(e.len(), d.len() + 1);
         assert_eq!(e[2], changed);
@@ -595,7 +656,7 @@ mod tests {
         let l = levels();
         let v = default_views(&l).remove(1);
         let f = ViewsFile::new([(v.id, v)].into());
-        assert_eq!(ViewsFile::from_bytes(f.to_string().as_bytes()).unwrap(), f);
+        assert_eq!(ViewsFile::from_bytes(f.to_json().as_bytes()).unwrap(), f);
         assert!(ViewsFile::from_bytes(br#"{"format":"x","version":1,"views":{}}"#).is_err());
         assert!(ViewsFile::from_bytes(b"not json").is_err());
         assert_eq!(
@@ -620,7 +681,8 @@ mod tests {
             .find(|v| v.name == "Plan Niveau 1")
             .unwrap();
         let mut h = History::default();
-        h.apply(&mut m, vec![Command::AddView(plan.clone())]).unwrap();
+        h.apply(&mut m, vec![Command::AddView(plan.clone())])
+            .unwrap();
         assert_ne!(crate::version::model_hash(&m), hash0);
         // A bad range is refused before anything changes.
         if let ViewKind::Plan { range, .. } = &mut plan.kind {
@@ -633,7 +695,8 @@ mod tests {
         if let ViewKind::Plan { range, .. } = &mut plan.kind {
             range.cut.offset_mm = 900.0;
         }
-        h.apply(&mut m, vec![Command::SetView(plan.clone())]).unwrap();
+        h.apply(&mut m, vec![Command::SetView(plan.clone())])
+            .unwrap();
         assert_eq!(m.views[&plan.id], plan);
         // The plan's storey can't be removed while the view uses it.
         let storey = match &plan.kind {
@@ -648,7 +711,10 @@ mod tests {
         let text = crate::file::to_string(&m);
         assert_eq!(crate::file::from_str(&text).unwrap(), m);
         let d = crate::version::diff(&concrete_frame(&FrameSpec::default()), &m);
-        assert!(d.iter().any(|c| c.to_string().contains(&plan.name)), "{d:?}");
+        assert!(
+            d.iter().any(|c| c.to_string().contains(&plan.name)),
+            "{d:?}"
+        );
         // Undo twice: the model is back, byte for byte.
         assert!(h.undo(&mut m) && h.undo(&mut m));
         assert_eq!(crate::file::to_string(&m), before);

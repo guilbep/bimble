@@ -124,7 +124,13 @@ pub fn diff(a: &Model, b: &Model) -> Vec<Change> {
         |e| e.name.clone(),
         &mut out,
     );
-    diff_map(&a.views, &b.views, |_| "view".into(), |v| v.name.clone(), &mut out);
+    diff_map(
+        &a.views,
+        &b.views,
+        |_| "view".into(),
+        |v| v.name.clone(),
+        &mut out,
+    );
     out
 }
 

@@ -559,9 +559,13 @@ pub fn merge_models(
         }
     }
     /// Tagged enums (generators' "kind", view kinds' "type") are one variant on every side.
-    fn same_variant(a: &serde_json::Map<String, Value>, b: &serde_json::Map<String, Value>) -> bool {
+    fn same_variant(
+        a: &serde_json::Map<String, Value>,
+        b: &serde_json::Map<String, Value>,
+    ) -> bool {
         ["kind", "type"].iter().all(|k| {
-            let tag = |m: &serde_json::Map<String, Value>| m.get(*k).filter(|v| v.is_string()).cloned();
+            let tag =
+                |m: &serde_json::Map<String, Value>| m.get(*k).filter(|v| v.is_string()).cloned();
             tag(a) == tag(b)
         })
     }
@@ -1090,7 +1094,9 @@ mod tests {
         let (_, merged) = r.merge("b", Prefer::Neither, "a", 4).unwrap().unwrap();
         let mv = &merged.views[&v.id];
         assert_eq!(mv.name, "Formwork N1");
-        assert!(matches!(&mv.kind, crate::view::ViewKind::Plan { range, .. } if range.cut.offset_mm == 1000.0));
+        assert!(
+            matches!(&mv.kind, crate::view::ViewKind::Plan { range, .. } if range.cut.offset_mm == 1000.0)
+        );
     }
 
     #[test]

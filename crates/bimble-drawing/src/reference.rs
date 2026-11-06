@@ -32,10 +32,12 @@ pub fn read(name: &str, bytes: &[u8], pdf_scale: f64) -> Result<Read, String> {
     } else if lower.ends_with(".pdf") {
         read_pdf(bytes, pdf_scale)
     } else if lower.ends_with(".dwg") {
-        Err("DWG can't be read directly (its libraries are closed or GPL). Convert it to DXF \
+        Err(
+            "DWG can't be read directly (its libraries are closed or GPL). Convert it to DXF \
              first, for example with the free ODA File Converter or LibreDWG's dwg2dxf, then \
              add the DXF."
-            .into())
+                .into(),
+        )
     } else {
         Err(format!("{name}: a reference plan must be a .dxf or a .pdf"))
     }
@@ -93,7 +95,9 @@ fn arc(c: [f64; 2], r: f64, a0: f64, a1: f64) -> Polyline {
     while sweep <= 0.0 {
         sweep += std::f64::consts::TAU;
     }
-    let n = ((sweep / std::f64::consts::TAU) * CIRCLE_SEGMENTS).ceil().max(2.0) as usize;
+    let n = ((sweep / std::f64::consts::TAU) * CIRCLE_SEGMENTS)
+        .ceil()
+        .max(2.0) as usize;
     (0..=n)
         .map(|i| {
             let a = a0 + sweep * i as f64 / n as f64;
@@ -138,7 +142,9 @@ pub fn read_dxf(bytes: &[u8]) -> Result<Read, String> {
     }
     let mut notes = vec![format!("DXF units: {unit}")];
     if skipped > 0 {
-        notes.push(format!("{skipped} entities not drawn (text, hatches, 3D, nesting)"));
+        notes.push(format!(
+            "{skipped} entities not drawn (text, hatches, 3D, nesting)"
+        ));
     }
     if out.truncated {
         notes.push(format!("stopped at {MAX_REFERENCE_POINTS} points"));
@@ -175,7 +181,10 @@ fn dxf_entity(
             a.end_angle.to_radians(),
         ))),
         T::Ellipse(el) => {
-            let (c, ax) = ([el.center.x, el.center.y], [el.major_axis.x, el.major_axis.y]);
+            let (c, ax) = (
+                [el.center.x, el.center.y],
+                [el.major_axis.x, el.major_axis.y],
+            );
             let r = el.minor_axis_ratio;
             let mut t1 = el.end_parameter;
             while t1 <= el.start_parameter {
@@ -197,7 +206,8 @@ fn dxf_entity(
             out.push(mapped(pl));
         }
         T::LwPolyline(p) => {
-            let v: Vec<([f64; 2], f64)> = p.vertices.iter().map(|v| ([v.x, v.y], v.bulge)).collect();
+            let v: Vec<([f64; 2], f64)> =
+                p.vertices.iter().map(|v| ([v.x, v.y], v.bulge)).collect();
             out.push(mapped(bulged(&v, p.is_closed())));
         }
         T::Polyline(p) => {
@@ -213,13 +223,19 @@ fn dxf_entity(
             } else {
                 &s.control_points
             };
-            out.push(pts.iter().map(|p| p2(p)).collect());
+            out.push(pts.iter().map(&p2).collect());
         }
         T::Solid(s) => out.push(
-            [&s.first_corner, &s.second_corner, &s.fourth_corner, &s.third_corner, &s.first_corner]
-                .iter()
-                .map(|p| p2(p))
-                .collect(),
+            [
+                &s.first_corner,
+                &s.second_corner,
+                &s.fourth_corner,
+                &s.third_corner,
+                &s.first_corner,
+            ]
+            .iter()
+            .map(|p| p2(p))
+            .collect(),
         ),
         T::Insert(ins) => {
             let Some(b) = blocks.get(ins.name.as_str()) else {
@@ -291,7 +307,9 @@ fn bulged(v: &[([f64; 2], f64)], closed: bool) -> Polyline {
         let nrm = [-(b[1] - a[1]) / chord, (b[0] - a[0]) / chord];
         let c = [mid[0] + nrm[0] * h, mid[1] + nrm[1] * h];
         let a0 = (a[1] - c[1]).atan2(a[0] - c[0]);
-        let steps = ((theta.abs() / std::f64::consts::TAU) * CIRCLE_SEGMENTS).ceil().max(2.0) as usize;
+        let steps = ((theta.abs() / std::f64::consts::TAU) * CIRCLE_SEGMENTS)
+            .ceil()
+            .max(2.0) as usize;
         let rr = r.abs();
         for k in 1..=steps {
             let t = a0 + theta * k as f64 / steps as f64;
@@ -315,13 +333,12 @@ pub fn read_pdf(bytes: &[u8], scale: f64) -> Result<Read, String> {
     let content = doc
         .get_page_content_with_limit(page, MAX_FILE_BYTES)
         .map_err(|e| format!("page {n}: {e}"))?;
-    let resources = doc
-        .get_page_resources(page)
-        .ok()
-        .and_then(|(d, ids)| {
-            d.cloned()
-                .or_else(|| ids.first().and_then(|id| doc.get_dictionary(*id).ok().cloned()))
-        });
+    let resources = doc.get_page_resources(page).ok().and_then(|(d, ids)| {
+        d.cloned().or_else(|| {
+            ids.first()
+                .and_then(|id| doc.get_dictionary(*id).ok().cloned())
+        })
+    });
     let k = 25.4 / 72.0 * scale;
     let mut out = Out {
         polylines: Vec::new(),
@@ -346,7 +363,9 @@ pub fn read_pdf(bytes: &[u8], scale: f64) -> Result<Read, String> {
         notes.push("no vector lines found (a scanned PDF has none)".into());
     }
     if skipped > 0 {
-        notes.push(format!("{skipped} drawings not read (too deeply nested or unreadable)"));
+        notes.push(format!(
+            "{skipped} drawings not read (too deeply nested or unreadable)"
+        ));
     }
     if out.truncated {
         notes.push(format!("stopped at {MAX_REFERENCE_POINTS} points"));
@@ -576,10 +595,12 @@ mod tests {
             Point::new(0.3, 0.0, 0.0),
         ))));
         d.add_block(block);
-        let mut ins = Insert::default();
-        ins.name = "COL".into();
-        ins.location = Point::new(5.0, 5.0, 0.0);
-        ins.rotation = 90.0;
+        let ins = Insert {
+            name: "COL".into(),
+            location: Point::new(5.0, 5.0, 0.0),
+            rotation: 90.0,
+            ..Default::default()
+        };
         d.add_entity(Entity::new(EntityType::Insert(ins)));
         let mut text = Vec::new();
         d.save(&mut text).unwrap();
@@ -596,7 +617,10 @@ mod tests {
         assert!((east - 1500.0).abs() < 5.0, "{east}");
         // The block's 300 mm line, turned 90° at (5 m, 5 m).
         let b = &r.polylines[2];
-        assert!(near(b[0], [5000.0, 5000.0]) && near(b[1], [5000.0, 5300.0]), "{b:?}");
+        assert!(
+            near(b[0], [5000.0, 5000.0]) && near(b[1], [5000.0, 5300.0]),
+            "{b:?}"
+        );
     }
 
     /// A minimal PDF with one page: a 100 × 50 pt rectangle and a stroked line through cm.
@@ -642,7 +666,11 @@ mod tests {
         assert!(near(r.polylines[0][0], [10.0 * k, 20.0 * k]));
         assert!(near(r.polylines[0][2], [110.0 * k, 70.0 * k]));
         // 72 pt = 1 inch = 25.4 mm on paper = 2540 mm at 1:100.
-        assert!(near(r.polylines[1][1], [2540.0, 0.0]), "{:?}", r.polylines[1]);
+        assert!(
+            near(r.polylines[1][1], [2540.0, 0.0]),
+            "{:?}",
+            r.polylines[1]
+        );
     }
 
     #[test]
@@ -663,9 +691,12 @@ mod tests {
             dxf::Point::new(0.0, 0.0, 0.0),
             dxf::Point::new(1.0, 0.0, 0.0),
         ))));
-        let mut ins = Insert::default();
-        ins.name = "LOOP".into();
-        b.entities.push(Entity::new(EntityType::Insert(ins.clone())));
+        let ins = Insert {
+            name: "LOOP".into(),
+            ..Default::default()
+        };
+        b.entities
+            .push(Entity::new(EntityType::Insert(ins.clone())));
         d.add_block(b);
         d.add_entity(Entity::new(EntityType::Insert(ins)));
         let mut text = Vec::new();
