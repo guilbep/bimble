@@ -205,6 +205,13 @@ pub(crate) enum TabRef {
     Materials,
 }
 
+/// What a palette entry does: run an action, or show a view, sheet or schedule.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PaletteGo {
+    Action(Action),
+    Tab(TabRef),
+}
+
 /// The command palette's state: what is typed and which result is highlighted.
 #[derive(Default)]
 pub(crate) struct Palette {
@@ -889,27 +896,32 @@ impl Viewer {
             }
         }
         if let Some(t) = go {
-            match t {
-                TabRef::Sheet(id) => self.open_sheet(id),
-                TabRef::View(id) => {
+            self.go_to(t);
+        }
+    }
+
+    /// Show what a tab refers to in the main view: a view, a sheet, a schedule, a page.
+    pub(crate) fn go_to(&mut self, t: TabRef) {
+        match t {
+            TabRef::Sheet(id) => self.open_sheet(id),
+            TabRef::View(id) => {
+                self.close_pages();
+                self.close_sheet();
+                self.activate_view(id);
+            }
+            TabRef::Schedule(n) => self.open_schedule(&n),
+            TabRef::Project => {
+                if self.project_page.is_none() {
                     self.close_pages();
                     self.close_sheet();
-                    self.activate_view(id);
+                    self.project_page = Some(Default::default());
                 }
-                TabRef::Schedule(n) => self.open_schedule(&n),
-                TabRef::Project => {
-                    if self.project_page.is_none() {
-                        self.close_pages();
-                        self.close_sheet();
-                        self.project_page = Some(Default::default());
-                    }
-                }
-                TabRef::Materials => {
-                    if self.materials_page.is_none() {
-                        self.close_pages();
-                        self.close_sheet();
-                        self.materials_page = Some(Default::default());
-                    }
+            }
+            TabRef::Materials => {
+                if self.materials_page.is_none() {
+                    self.close_pages();
+                    self.close_sheet();
+                    self.materials_page = Some(Default::default());
                 }
             }
         }
@@ -970,13 +982,62 @@ impl Viewer {
     }
 
     /// The command palette, over everything.
-    pub(crate) fn palette_ui(&mut self, ctx: &egui::Context) {
-        let Some(p) = &mut self.palette else { return };
-        let found: Vec<Action> = ALL_ACTIONS
+    /// Everything the palette can find: the actions, then the views, sheets and schedules to go
+    /// to. Each with its label, where it is (tab and key, or what it is), and whether it can run.
+    fn palette_entries(&mut self) -> Vec<(String, String, bool, PaletteGo)> {
+        let mut v: Vec<(String, String, bool, PaletteGo)> = ALL_ACTIONS
             .iter()
             .chain([Action::History].iter())
-            .copied()
-            .filter(|a| matches(&a.label(), &p.query))
+            .map(|a| {
+                let where_ = match a.keys() {
+                    "" => a.tab().label().to_string(),
+                    k => format!("{} · {k}", a.tab().label()),
+                };
+                (
+                    a.label(),
+                    where_,
+                    self.action_enabled(*a),
+                    PaletteGo::Action(*a),
+                )
+            })
+            .collect();
+        for view in &self.views {
+            v.push((
+                format!("Go to {}", view.name),
+                "View".into(),
+                true,
+                PaletteGo::Tab(TabRef::View(view.id)),
+            ));
+        }
+        for sh in self.sheets() {
+            v.push((
+                format!("Go to sheet {} {}", sh.number, sh.name),
+                "Sheet".into(),
+                true,
+                PaletteGo::Tab(TabRef::Sheet(sh.id)),
+            ));
+        }
+        for (name, n) in self.schedule_counts() {
+            v.push((
+                format!("Schedule: {name}"),
+                format!("{n} elements"),
+                n > 0,
+                PaletteGo::Tab(TabRef::Schedule(name)),
+            ));
+        }
+        v
+    }
+
+    /// The command palette, over everything.
+    pub(crate) fn palette_ui(&mut self, ctx: &egui::Context) {
+        if self.palette.is_none() {
+            return;
+        }
+        let entries = self.palette_entries();
+        let Some(p) = &mut self.palette else { return };
+        let found: Vec<(String, String, bool, PaletteGo)> = entries
+            .into_iter()
+            .filter(|e| matches(&e.0, &p.query))
             .collect();
         let (up, down, enter, esc) = ctx.input(|i| {
             (
@@ -993,9 +1054,8 @@ impl Viewer {
             p.index = p.index.saturating_sub(1);
         }
         p.index = p.index.min(found.len().saturating_sub(1));
-        let mut run = None;
+        let mut run: Option<PaletteGo> = None;
         let mut close = esc;
-        let enabled: Vec<bool> = found.iter().map(|a| self.action_enabled(*a)).collect();
         let p = self.palette.as_mut().expect("checked above");
         let mut lost = false;
         let area = egui::Area::new(egui::Id::unique("command-palette"))
@@ -1008,7 +1068,7 @@ impl Viewer {
                         ui.set_width(480.0);
                         let r = ui.add(
                             egui::TextEdit::singleline(&mut p.query)
-                                .hint_text("Type a command")
+                                .hint_text("A command, a view, a sheet or a schedule")
                                 .desired_width(f32::INFINITY),
                         );
                         // Esc in the field gives its focus up: that closes the palette.
@@ -1021,21 +1081,23 @@ impl Viewer {
                         egui::ScrollArea::vertical()
                             .max_height(320.0)
                             .show(ui, |ui| {
-                                for (k, a) in found.iter().enumerate() {
+                                for (k, (label, where_, enabled, go)) in found.iter().enumerate() {
                                     let on = k == p.index;
-                                    let text = egui::RichText::new(a.label())
-                                        .color(if enabled[k] { th::TEXT } else { th::TEXT_MUTED });
-                                    let where_ = match a.keys() {
-                                        "" => a.tab().label().to_string(),
-                                        k => format!("{} · {k}", a.tab().label()),
-                                    };
+                                    let text = egui::RichText::new(label).color(if *enabled {
+                                        th::TEXT
+                                    } else {
+                                        th::TEXT_MUTED
+                                    });
                                     let row = ui.add(
                                         egui::Button::selectable(on, text)
-                                            .shortcut_text(where_)
+                                            .shortcut_text(where_.as_str())
                                             .min_size(egui::vec2(ui.available_width(), 24.0)),
                                     );
+                                    if on {
+                                        row.scroll_to_me(None);
+                                    }
                                     if row.clicked() {
-                                        run = Some(*a);
+                                        run = Some(go.clone());
                                     }
                                 }
                                 if found.is_empty() {
@@ -1053,16 +1115,19 @@ impl Viewer {
         });
         let settled = p.frames >= 2;
         close |= settled && (outside || (lost && !enter));
-        if enter && let Some(a) = found.get(p.index) {
-            run = Some(*a);
+        if enter && let Some(e) = found.get(p.index) {
+            run = Some(e.3.clone());
         }
         if let Some(p) = &mut self.palette {
             p.frames += 1;
         }
-        if let Some(a) = run {
+        if let Some(go) = run {
             close = true;
             self.palette = None;
-            self.run_action(a, ctx);
+            match go {
+                PaletteGo::Action(a) => self.run_action(a, ctx),
+                PaletteGo::Tab(t) => self.go_to(t),
+            }
         }
         if close {
             self.palette = None;
