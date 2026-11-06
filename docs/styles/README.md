@@ -37,7 +37,8 @@ once. **Save…** writes only what differs from the default.
 | `above_pen_mm`, `above_dash_mm` | Edges above the cut plane, dashed: pen, then [dash, gap] (0.13, [2, 1]) |
 | `hatch_pen_mm`, `hatch_mm_per_px` | Hatch lines: pen, and paper spacing per screen pixel of a family's `spacing_px` (0.13, 0.35) |
 | `frame_pen_mm`, `text_mm` | Sheet frame and title block: pen and text height (0.5, 2.5) |
-| `annotation_pen_mm` | Grid axes and dimension lines (0.13) |
+| `annotation_pen_mm` | Dimension lines (0.13) |
+| `axis_pen_mm`, `axis_dash_mm` | Grid axes, dash-dot: pen, then [dash, gap, dot, gap] (0.13, [12, 1.5, 0.5, 1.5]) |
 | `seen_lighten` | What is seen below the cut is filled with the family colour mixed with this much white, 0..1 (0.6) |
 
 Each family:

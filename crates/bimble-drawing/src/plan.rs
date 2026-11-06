@@ -503,13 +503,13 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         v.iter().map(|l| l.iter().map(to_paper).collect()).collect()
     };
     let ink = style.edges;
-    let pen = |width: f32, dash: Option<[f64; 2]>| Pen {
+    let pen = |width: f32, dash: Vec<f64>| Pen {
         width_mm: width as f64,
         color: ink,
         dash,
     };
-    let proj_pen = pen(paper_style.projection_pen_mm, None);
-    let note_pen = pen(paper_style.annotation_pen_mm, None);
+    let proj_pen = pen(paper_style.projection_pen_mm, Vec::new());
+    let note_pen = pen(paper_style.annotation_pen_mm, Vec::new());
     let t = paper_style.text_mm as f64;
     let text = |pos: P2, size: f64, s: String| Item::text(pos, size, s, ink);
     let text_at =
@@ -537,10 +537,13 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
                 pen: Pen {
                     width_mm: paper_style.hatch_pen_mm as f64,
                     color: hatch_ink,
-                    dash: l.dash_px.map(|d| {
-                        let d = d as f64 * mm_per_px;
-                        [d * l.dash_on as f64, d * (1.0 - l.dash_on as f64)]
-                    }),
+                    dash: l
+                        .dash_px
+                        .map(|d| {
+                            let d = d as f64 * mm_per_px;
+                            vec![d * l.dash_on as f64, d * (1.0 - l.dash_on as f64)]
+                        })
+                        .unwrap_or_default(),
                 },
             })
             .collect()
@@ -636,7 +639,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         let d = paper_style.above_dash_mm;
         items.push(Item::Lines {
             lines: seg_lines(&above),
-            pen: pen(paper_style.above_pen_mm, Some([d[0] as f64, d[1] as f64])),
+            pen: pen(paper_style.above_pen_mm, vec![d[0] as f64, d[1] as f64]),
         });
     }
 
@@ -688,10 +691,11 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
     if !axis_lines.is_empty() {
         items.push(Item::Lines {
             lines: axis_lines,
-            pen: Pen {
-                dash: Some([8.0, 1.0]),
-                ..note_pen.clone()
-            },
+            // Dash-dot, the axis line of office drawings.
+            pen: pen(
+                paper_style.axis_pen_mm,
+                paper_style.axis_dash_mm.iter().map(|&x| x as f64).collect(),
+            ),
         });
     }
 
@@ -714,13 +718,13 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
                 loops: paper_loops(&c.loops),
                 fill: None,
                 hatches: Vec::new(),
-                outline: Some(pen(paper_style.cut_pen_mm, None)),
+                outline: Some(pen(paper_style.cut_pen_mm, Vec::new())),
             });
         }
         if !c.open.is_empty() {
             items.push(Item::Lines {
                 lines: paper_loops(&c.open),
-                pen: pen(paper_style.cut_pen_mm, None),
+                pen: pen(paper_style.cut_pen_mm, Vec::new()),
             });
         }
     }
@@ -731,7 +735,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             loops: vec![circle(*c, BUBBLE / 2.0)],
             fill: Some(Rgb([255, 255, 255])),
             hatches: Vec::new(),
-            outline: Some(pen(paper_style.projection_pen_mm, None)),
+            outline: Some(pen(paper_style.projection_pen_mm, Vec::new())),
         });
         let size = if tag.chars().count() > 2 { 3.0 } else { 4.0 };
         items.push(text_at(
@@ -823,7 +827,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         });
         items.push(Item::Lines {
             lines: dim_ticks,
-            pen: pen(paper_style.projection_pen_mm * 2.0, None),
+            pen: pen(paper_style.projection_pen_mm * 2.0, Vec::new()),
         });
         for (pos, value, angle, anchor) in dim_texts {
             items.push(text_at(pos, dim_size, value, anchor, angle, false));
@@ -867,7 +871,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         let tw = text_width_mm(&title, size, true);
         items.push(Item::Lines {
             lines: vec![vec![[x, title_y + 1.0], [x + tw, title_y + 1.0]]],
-            pen: pen(paper_style.cut_pen_mm * 0.7, None),
+            pen: pen(paper_style.cut_pen_mm * 0.7, Vec::new()),
         });
     }
     // Graphic scale bar at the right of the title line: a round length about 50 mm long.
@@ -954,7 +958,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
                     loops: rect,
                     fill: Some(style.families.get(*c).color),
                     hatches: hatches_of(*c),
-                    outline: Some(pen(paper_style.cut_pen_mm, None)),
+                    outline: Some(pen(paper_style.cut_pen_mm, Vec::new())),
                 }),
                 Swatch::Seen(c) => items.push(Item::Area {
                     loops: rect,
@@ -966,7 +970,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
                     let d = paper_style.above_dash_mm;
                     items.push(Item::Lines {
                         lines: vec![vec![[sx, sy + 2.0], [sx + 10.0, sy + 2.0]]],
-                        pen: pen(paper_style.above_pen_mm, Some([d[0] as f64, d[1] as f64])),
+                        pen: pen(paper_style.above_pen_mm, vec![d[0] as f64, d[1] as f64]),
                     });
                 }
             }
@@ -975,7 +979,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
     }
 
     // ---- frame and title block
-    let frame_pen = pen(paper_style.frame_pen_mm, None);
+    let frame_pen = pen(paper_style.frame_pen_mm, Vec::new());
     let rect =
         |x0: f64, y0: f64, x1: f64, y1: f64| vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
     items.push(Item::Lines {
@@ -1294,6 +1298,25 @@ mod tests {
         for tag in ["A", "D", "1", "3"] {
             assert!(t.iter().any(|x| x == tag), "{tag}: {t:?}");
         }
+    }
+
+    /// Grid axes are dash-dot (long dash, gap, dot, gap) with the axis pen, in SVG and in PDF.
+    #[test]
+    fn grid_axes_are_dash_dot() {
+        let (sheet, _) = plan(&demo(), &opts(&demo_first(), 100, None)).unwrap();
+        let svg = sheet.to_svg();
+        assert!(
+            svg.contains(r#"stroke-dasharray="12.000 1.500 0.500 1.500""#),
+            "no dash-dot in the SVG"
+        );
+        // PDF content streams are compressed: decompress and look for the dash operator.
+        let pdf = lopdf::Document::load_mem(&sheet.to_pdf()).unwrap();
+        let page = *pdf.get_pages().values().next().unwrap();
+        let content = String::from_utf8_lossy(&pdf.get_page_content(page)).into_owned();
+        assert!(
+            content.contains("[12 1.5 0.5 1.5] 0 d"),
+            "no dash-dot in the PDF content"
+        );
     }
 
     fn demo_first() -> String {
