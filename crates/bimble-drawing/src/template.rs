@@ -4,7 +4,8 @@
 //!
 //! Texts may contain placeholders, replaced when the sheet is drawn:
 //! `{project}`, `{storey}`, `{level}` (storey level, m, signed), `{scale}` (`1:100`), `{n}` (`100`),
-//! `{paper}`, `{date}`, `{bimble}` (version), and any key of `fields` (`{phase}`, `{client}`, …).
+//! `{paper}`, `{date}`, `{bimble}` (version), `{view}` (the view drawn, if any), `{drawing}` (the
+//! view's name, else "Plan <storey>"), and any key of `fields` (`{phase}`, `{client}`, …).
 //! Unknown placeholders are left as they are, so a typo shows on the sheet.
 
 use bimble_core::style::Rgb;
@@ -164,7 +165,7 @@ impl Default for TitleBlock {
             height_mm: 28.0,
             columns: vec![
                 col(None, vec![entry("PROJECT", "{project}")]),
-                col(Some(60.0), vec![entry("DRAWING", "Plan {storey}")]),
+                col(Some(60.0), vec![entry("DRAWING", "{drawing}")]),
                 col(
                     Some(30.0),
                     vec![entry("SCALE", "{scale}"), entry("FORMAT", "{paper}")],

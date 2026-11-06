@@ -11,7 +11,7 @@
 //! chains (axis to axis, then overall), slab levels, opening crosses, a legend, the drawing
 //! title, a level note and a title block.
 
-use crate::cut::{P2, clip_z, section};
+use crate::cut::{P2, clip_z, edge_seen_from_above, facing_up_region, section};
 use crate::sheet::{Anchor, Hatch, Item, Paper, Pen, Sheet, text_width_mm};
 use crate::template::{Axes, PlanTemplate, fill};
 use bimble_core::MaterialCategory;
@@ -52,6 +52,9 @@ pub struct PlanOptions {
     pub project: String,
     pub date: String,
     pub template: PlanTemplate,
+    /// Draw this view (a plan with its view range, a ceiling plan, a section) instead of
+    /// `storey` cut at `cut_above_mm` (#32).
+    pub view: Option<bimble_core::view::View>,
 }
 
 impl Default for PlanOptions {
@@ -65,6 +68,7 @@ impl Default for PlanOptions {
             project: String::new(),
             date: String::new(),
             template: PlanTemplate::default(),
+            view: None,
         }
     }
 }
@@ -204,6 +208,56 @@ fn circle(c: P2, r: f64) -> Vec<P2> {
         .collect()
 }
 
+/// A storey plan the classic way: `storey` (by name) cut `cut_above_mm` over its level, seen
+/// down to the level, with the storey's elements above the cut up to the next storey.
+fn storey_setup<'a>(
+    scene: &'a Scene,
+    storey: &str,
+    cut_above_mm: f64,
+) -> Result<crate::viewdraw::ViewSetup<'a>, String> {
+    let storeys: Vec<String> = scene
+        .storeys
+        .iter()
+        .map(|s| format!("{} ({:+.3} m)", s.name, s.elevation_mm / 1000.0))
+        .collect();
+    let idx = scene
+        .storeys
+        .iter()
+        .position(|s| s.name == storey)
+        .or_else(|| {
+            scene
+                .storeys
+                .iter()
+                .position(|s| s.name.eq_ignore_ascii_case(storey))
+        })
+        .ok_or_else(|| {
+            if storeys.is_empty() {
+                "this model has no storeys".to_string()
+            } else {
+                format!("no storey {storey:?}. Storeys: {}", storeys.join(", "))
+            }
+        })?;
+    let st = &scene.storeys[idx];
+    let oz = scene.origin_mm[2];
+    let level = st.elevation_mm - oz;
+    let next = scene.storeys[idx + 1..]
+        .iter()
+        .map(|s| s.elevation_mm - oz)
+        .find(|&z| z > level + 1.0)
+        .unwrap_or(f64::INFINITY);
+    Ok(crate::viewdraw::ViewSetup {
+        scene: std::borrow::Cow::Borrowed(scene),
+        level,
+        cut: level + cut_above_mm,
+        next,
+        storey: Some(st.name.clone()),
+        storey_name: st.name.clone(),
+        storey_elevation_mm: st.elevation_mm,
+        plan_down: true,
+        axes: true,
+    })
+}
+
 pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String> {
     if !(1..=5000).contains(&o.scale) {
         return Err(format!(
@@ -216,37 +270,14 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
     }
     let tpl = &o.template;
     tpl.check()?;
-    let storeys: Vec<String> = scene
-        .storeys
-        .iter()
-        .map(|s| format!("{} ({:+.3} m)", s.name, s.elevation_mm / 1000.0))
-        .collect();
-    let idx = scene
-        .storeys
-        .iter()
-        .position(|s| s.name == o.storey)
-        .or_else(|| {
-            scene
-                .storeys
-                .iter()
-                .position(|s| s.name.eq_ignore_ascii_case(&o.storey))
-        })
-        .ok_or_else(|| {
-            if storeys.is_empty() {
-                "this model has no storeys".to_string()
-            } else {
-                format!("no storey {:?}. Storeys: {}", o.storey, storeys.join(", "))
-            }
-        })?;
-    let st = &scene.storeys[idx];
+    // What is drawn: the scene as seen from above, the heights that matter, the storey.
+    let setup = match &o.view {
+        Some(v) => crate::viewdraw::setup(scene, v)?,
+        None => storey_setup(scene, &o.storey, o.cut_above_mm)?,
+    };
+    let scene = &setup.scene;
     let oz = scene.origin_mm[2];
-    let level = st.elevation_mm - oz;
-    let cut = level + o.cut_above_mm;
-    let next = scene.storeys[idx + 1..]
-        .iter()
-        .map(|s| s.elevation_mm - oz)
-        .find(|&z| z > level + 1.0)
-        .unwrap_or(f64::INFINITY);
+    let (level, cut, next) = (setup.level, setup.cut, setup.next);
     let style = &o.style;
     let paper_style = &style.paper;
 
@@ -283,22 +314,23 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         }
         let edge = |seg: &[[f32; 3]; 2]| (seg[0].map(f64::from), seg[1].map(f64::from));
         if zmax >= level - 1.0 && zmin <= cut {
+            // Edges whose two faces turn away are behind the element itself (a stair's
+            // underside under its treads): not drawn (#22).
             let edges: Vec<[P2; 2]> = m
                 .edges
                 .iter()
-                .filter_map(|seg| {
+                .enumerate()
+                .filter(|(i, _)| m.edge_normals.get(*i).is_none_or(edge_seen_from_above))
+                .filter_map(|(_, seg)| {
                     let (a, b) = edge(seg);
                     clip_z(a, b, level - 1.0, cut)
                 })
                 .filter(long)
                 .collect();
             if tpl.seen_fills && !is_cut {
-                // Its top: a section just under its highest point.
-                let top = if zmax - zmin > 2.0 {
-                    section(m, zmax - 1.0).loops
-                } else {
-                    Vec::new()
-                };
+                // What is seen of it from above: all its faces turned upwards (a sloped slab,
+                // a ramp, stair treads, footing steps), not only its highest part (#22).
+                let top = facing_up_region(m);
                 seen.push(Seen {
                     cat: e.category,
                     class: e.class.clone(),
@@ -310,7 +342,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
                 projection.extend(edges);
             }
         }
-        if e.storey == st.name && zmax > cut {
+        if setup.storey.as_ref() == Some(&e.storey) && zmax > cut {
             for seg in &m.edges {
                 let (a, b) = edge(seg);
                 if let Some(s) = clip_z(a, b, cut, next)
@@ -333,17 +365,20 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             .chain(projection.iter().flatten())
             .chain(above.iter().flatten()),
     ) else {
-        return Err(format!(
-            "nothing to draw at storey {} (cut at {:+.3} m)",
-            st.name,
-            (cut + oz) / 1000.0
-        ));
+        return Err(match &o.view {
+            Some(v) => format!("nothing to draw in view {}", v.name),
+            None => format!(
+                "nothing to draw at storey {} (cut at {:+.3} m)",
+                setup.storey_name,
+                (cut + oz) / 1000.0
+            ),
+        });
     };
 
     // ---- grid axes (scene mm)
     let mut axes: Vec<Axis> = Vec::new();
     let mut model_axes = false;
-    if tpl.axes != Axes::Off {
+    if tpl.axes != Axes::Off && setup.axes {
         let (ox_, oy_) = (scene.origin_mm[0], scene.origin_mm[1]);
         axes = scene
             .grids
@@ -608,6 +643,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         }
         if slab
             && tpl.slab_levels
+            && setup.plan_down
             && let Some((a, b)) = bounds(s.top.iter().flatten())
         {
             let (p, q) = (to_paper(&a), to_paper(&b));
@@ -838,8 +874,22 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
     let n = o.scale.to_string();
     let values = [
         ("project", o.project.clone()),
-        ("storey", st.name.clone()),
-        ("level", format!("{:+.2}", st.elevation_mm / 1000.0 + 0.0)),
+        ("storey", setup.storey_name.clone()),
+        (
+            "level",
+            format!("{:+.2}", setup.storey_elevation_mm / 1000.0 + 0.0),
+        ),
+        (
+            "view",
+            o.view.as_ref().map(|v| v.name.clone()).unwrap_or_default(),
+        ),
+        // What the drawing is: the view's name, else "Plan <storey>".
+        (
+            "drawing",
+            o.view
+                .as_ref()
+                .map_or_else(|| format!("Plan {}", setup.storey_name), |v| v.name.clone()),
+        ),
         ("scale", format!("1:{n}")),
         ("n", n.clone()),
         (
@@ -855,7 +905,13 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
     ];
     let filled = |s: &str| fill(s, &values, &tpl.fields);
     // Drawing title, bold and underlined, under the drawing at its left.
-    let title = filled(&tpl.title);
+    // Ceiling plans and sections are titled by the view's name (the template's title says
+    // "plan"); plans keep the template's.
+    let title = if o.view.is_some() && !setup.plan_down {
+        filled("{view}, {scale}")
+    } else {
+        filled(&tpl.title)
+    };
     let title_y = oy + model.1 * k + PAD + TITLE_BAND - 4.0;
     if !title.is_empty() {
         let size = t * 2.0;
@@ -1421,5 +1477,205 @@ mod tests {
         assert!(t.contains(&format!("Plan {first}, éch 1 : 100")), "{t:?}");
         assert!(t.contains(&"PHASE".to_string()) && t.contains(&"Tender".to_string()));
         assert!(sheet.title.ends_with(&format!("Plan {first}, éch 1 : 100")));
+    }
+
+    /// A convex prism: `profile` in the x–z plane, extruded from y0 to y1, faces outwards.
+    fn prism(profile: &[[f64; 2]], y0: f64, y1: f64) -> Vec<bimble_geom::boolean::Tri> {
+        let n = profile.len();
+        let p = |k: usize, y: f64| [profile[k % n][0], y, profile[k % n][1]];
+        let mut tris = Vec::new();
+        for k in 0..n {
+            tris.push([p(k, y0), p(k + 1, y0), p(k + 1, y1)]);
+            tris.push([p(k, y0), p(k + 1, y1), p(k, y1)]);
+        }
+        for k in 1..n - 1 {
+            tris.push([p(0, y0), p(k, y0), p(k + 1, y0)]);
+            tris.push([p(0, y1), p(k + 1, y1), p(k, y1)]);
+        }
+        // Turn each triangle outwards (the solid is convex).
+        let c = {
+            let all: Vec<[f64; 3]> = tris.iter().flatten().copied().collect();
+            let s = all
+                .iter()
+                .fold([0.0; 3], |a, q| [a[0] + q[0], a[1] + q[1], a[2] + q[2]]);
+            s.map(|v| v / all.len() as f64)
+        };
+        for t in &mut tris {
+            let (u, v) = (
+                [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]],
+                [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]],
+            );
+            let nrm = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let out = (0..3).map(|k| nrm[k] * (t[0][k] - c[k])).sum::<f64>();
+            if out < 0.0 {
+                t.swap(1, 2);
+            }
+        }
+        tris
+    }
+
+    fn seen_colour() -> bimble_core::style::Rgb {
+        let style = GraphicStyle::default();
+        lighten(
+            style.families.get(MaterialCategory::Concrete).color,
+            style.paper.seen_lighten,
+        )
+    }
+
+    /// Bounding boxes (paper mm) of the areas filled as seen from above (not the legend's
+    /// 10 × 4 mm swatch).
+    fn seen_boxes(sheet: &Sheet) -> Vec<(P2, P2)> {
+        let seen = seen_colour();
+        sheet
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Area {
+                    loops,
+                    fill: Some(f),
+                    ..
+                } if *f == seen => bounds(loops.iter().flatten()),
+                _ => None,
+            })
+            .filter(|(lo, hi)| hi[0] - lo[0] > 12.0 || hi[1] - lo[1] > 6.0)
+            .collect()
+    }
+
+    /// A ramp seen below the cut is filled over its whole area, not only near its highest
+    /// point (#22): 4 × 2 m at 1:100 is 40 × 20 mm on paper.
+    #[test]
+    fn a_sloped_slab_below_the_cut_is_filled_over_its_whole_area() {
+        let ramp = prism(
+            &[[0.0, 0.0], [4000.0, 0.0], [4000.0, 800.0], [0.0, 200.0]],
+            0.0,
+            2000.0,
+        );
+        let scene = boxes(vec![("IfcSlab", ramp)]);
+        let (sheet, info) = plan(&scene, &opts("L0", 100, None)).unwrap();
+        assert_eq!(info.seen_elements, 1);
+        let b = seen_boxes(&sheet);
+        assert_eq!(b.len(), 1, "{b:?}");
+        let (lo, hi) = b[0];
+        assert!(
+            (hi[0] - lo[0] - 40.0).abs() < 0.1 && (hi[1] - lo[1] - 20.0).abs() < 0.1,
+            "seen area {:.2} × {:.2} mm",
+            hi[0] - lo[0],
+            hi[1] - lo[1]
+        );
+    }
+
+    /// A downstand beam under a slab (one solid) is hidden by the slab: its edges, which face
+    /// away from above, aren't drawn over the slab (#22).
+    #[test]
+    fn a_downstand_under_its_slab_is_not_drawn() {
+        use bimble_geom::boolean::{Op, apply, cuboid};
+        let solid = apply(
+            Op::Union,
+            &cuboid([0.0, 0.0, 200.0], [2000.0, 1000.0, 400.0]),
+            &[&cuboid([800.0, 0.0, 0.0], [1200.0, 1000.0, 200.0])],
+        )
+        .unwrap();
+        let scene = boxes(vec![("IfcSlab", solid)]);
+        let mut o = opts("L0", 100, None);
+        o.template.dimensions = false;
+        let (sheet, _) = plan(&scene, &o).unwrap();
+        let b = seen_boxes(&sheet);
+        assert_eq!(b.len(), 1, "{b:?}");
+        let (lo, hi) = b[0];
+        // The slab is 20 × 10 mm on paper; lines strictly inside it are the downstand's.
+        let inside = |p: &P2| p[0] > lo[0] + 0.5 && p[0] < hi[0] - 0.5;
+        let lines_inside: usize = sheet
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Lines { lines, .. } => Some(lines),
+                _ => None,
+            })
+            .flatten()
+            .filter(|l| {
+                l.iter()
+                    .all(|p| inside(p) && p[1] > lo[1] - 0.5 && p[1] < hi[1] + 0.5)
+            })
+            .count();
+        assert_eq!(lines_inside, 0, "the downstand shows through its slab");
+    }
+
+    fn view_named(scene: &Scene, name: &str) -> bimble_core::view::View {
+        bimble_core::view::default_views(&scene.levels())
+            .into_iter()
+            .find(|v| v.name == name)
+            .unwrap()
+    }
+
+    /// A plan view with the default range draws the same sheet as the storey plan it replaces.
+    #[test]
+    fn a_plan_view_draws_like_the_storey_plan() {
+        let scene = demo();
+        let first = demo_first();
+        let classic = plan(&scene, &opts(&first, 100, None)).unwrap().0;
+        let mut o = opts("", 100, None);
+        o.view = Some(view_named(&scene, &format!("Plan {first}")));
+        let by_view = plan(&scene, &o).unwrap().0;
+        assert_eq!(by_view.to_svg(), classic.to_svg());
+    }
+
+    /// A ceiling plan (looking up) and a section have paper drawings: cut columns, titles by
+    /// the view's name.
+    #[test]
+    fn ceiling_plans_and_sections_are_drawn() {
+        let scene = demo();
+        let first = demo_first();
+        let mut o = opts("", 100, None);
+        o.view = Some(view_named(&scene, &format!("Ceiling {first}")));
+        let (sheet, info) = plan(&scene, &o).unwrap();
+        // The 12 columns are cut at +2.3 m; the slab above is seen from below.
+        assert!(info.cut_elements >= 12, "{info:?}");
+        assert!(info.seen_elements >= 1, "{info:?}");
+        assert!(
+            texts(&sheet)
+                .iter()
+                .any(|t| t == &format!("Ceiling {first}, 1:100"))
+        );
+
+        let section = bimble_core::view::View {
+            id: bimble_core::GlobalId::new(),
+            name: "Section A".into(),
+            kind: bimble_core::view::ViewKind::Section {
+                origin: [9000.0, 5000.0],
+                facing: bimble_core::view::Facing::North,
+                depth_mm: 0.0,
+            },
+            visibility: Default::default(),
+            references: Vec::new(),
+        };
+        o.view = Some(section);
+        let (sheet, info) = plan(&scene, &o).unwrap();
+        // Through the middle row: 4 columns, slabs and beams along x are cut.
+        assert!(info.cut_elements >= 4, "{info:?}");
+        assert_eq!(info.axes, 0);
+        assert!(texts(&sheet).iter().any(|t| t == "Section A, 1:100"));
+        // A section is taller than wide here? No: 18 m wide, about 7 m high.
+        assert!(sheet.width_mm > 0.0);
+    }
+
+    /// A view hides what its visibility says, on paper too.
+    #[test]
+    fn a_view_hides_classes_on_paper() {
+        let scene = demo();
+        let mut v = view_named(&scene, &format!("Plan {}", demo_first()));
+        let all = {
+            let mut o = opts("", 100, None);
+            o.view = Some(v.clone());
+            plan(&scene, &o).unwrap().1
+        };
+        v.visibility.hidden_classes = vec!["IfcColumn".into()];
+        let mut o = opts("", 100, None);
+        o.view = Some(v);
+        let (_, info) = plan(&scene, &o).unwrap();
+        assert!(info.cut_elements < all.cut_elements, "{info:?} vs {all:?}");
     }
 }

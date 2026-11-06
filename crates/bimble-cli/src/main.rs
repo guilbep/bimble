@@ -95,7 +95,7 @@ enum Cmd {
         #[arg(long)]
         link: Option<PathBuf>,
     },
-    /// Storey plan at scale, as PDF, SVG or PNG (by the output's extension)
+    /// A storey plan or any view (ceiling plan, section) at scale, as PDF, SVG or PNG (by extension)
     Plan {
         file: PathBuf,
         /// Output: .pdf, .svg or .png
@@ -104,8 +104,12 @@ enum Cmd {
         #[arg(long, default_value_t = 150.0)]
         dpi: f64,
         /// Storey name (see `bimble info`)
-        #[arg(long)]
-        storey: String,
+        #[arg(long, required_unless_present = "view")]
+        storey: Option<String>,
+        /// Draw a view instead (a plan with its view range, a ceiling plan, a section) by name,
+        /// e.g. "Ceiling Level 1"; `bimble views` lists them
+        #[arg(long, conflicts_with_all = ["storey", "cut"])]
+        view: Option<String>,
         /// Scale 1:N, N from 1 to 5000
         #[arg(long, default_value_t = 100)]
         scale: u32,
@@ -155,6 +159,8 @@ enum Cmd {
         #[arg(long)]
         elements_json: bool,
     },
+    /// List the views of a model (plans, ceiling plans, sections), for `plan --view`
+    Views { file: PathBuf },
     /// List elements (GlobalId, IFC class, name, generator)
     Ls {
         file: PathBuf,
@@ -257,6 +263,7 @@ fn run(cli: Cli) -> Result<(), String> {
             dpi,
             template,
             fields,
+            view,
         } => {
             use bimble_drawing::plan::{PlanOptions, plan};
             use bimble_drawing::sheet::Paper;
@@ -287,9 +294,14 @@ fn run(cli: Cli) -> Result<(), String> {
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default()
             });
+            let view = match view {
+                Some(name) => Some(find_view(&path, &scene, &name)?),
+                None => None,
+            };
             let opts = PlanOptions {
-                storey,
+                storey: storey.unwrap_or_default(),
                 cut_above_mm: cut,
+                view,
                 scale,
                 paper,
                 style,
@@ -418,6 +430,62 @@ fn run(cli: Cli) -> Result<(), String> {
             println!("loaded in {load:.1?}");
             for w in &scene.warnings {
                 println!("warning   {w}");
+            }
+        }
+        Cmd::Views { file: path } => {
+            use bimble_core::view::{Look, ViewKind};
+            let scene = load_scene(&path)?;
+            let levels = scene.levels();
+            for v in model_views(&path, &scene)? {
+                let what = match &v.kind {
+                    ViewKind::ThreeD => "3D".to_string(),
+                    ViewKind::Plan {
+                        storey,
+                        look,
+                        range,
+                    } => {
+                        let r = bimble_core::view::resolve(range, *look, storey, &levels);
+                        let kind = match look {
+                            Look::Down => "plan",
+                            Look::Up => "ceiling plan",
+                        };
+                        match r {
+                            Ok(r) => {
+                                let (lo, hi) = r.visible(*look);
+                                let m = |z: f64| {
+                                    if z.is_finite() {
+                                        format!("{:+.3} m", z / 1000.0)
+                                    } else {
+                                        "unlimited".into()
+                                    }
+                                };
+                                format!("{kind}, cut {}, shows {} to {}", m(r.cut), m(lo), m(hi))
+                            }
+                            Err(e) => format!("{kind} (invalid: {e})"),
+                        }
+                    }
+                    ViewKind::Section {
+                        origin,
+                        facing,
+                        depth_mm,
+                    } => format!(
+                        "section looking {} through {:.0}, {:.0}{}",
+                        facing.label(),
+                        origin[0],
+                        origin[1],
+                        if *depth_mm > 0.0 {
+                            format!(", depth {:.0} mm", depth_mm)
+                        } else {
+                            String::new()
+                        }
+                    ),
+                };
+                let refs = if v.references.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {} reference plan(s)", v.references.len())
+                };
+                println!("{:<28} {what}{refs}", v.name);
             }
         }
         Cmd::Ls { file: path, class } => {
@@ -810,6 +878,56 @@ fn history(cmd: HistoryCmd) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The views of a model: stored in a .bimble, in the side file of an IFC, over the defaults.
+fn model_views(
+    path: &std::path::Path,
+    scene: &bimble_geom::Scene,
+) -> Result<Vec<bimble_core::view::View>, String> {
+    use bimble_core::view::{ViewsFile, effective, side_file};
+    let is_ifc = path
+        .extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|x| x.eq_ignore_ascii_case("ifc"));
+    let stored = if is_ifc {
+        let side = side_file(path);
+        if side.exists() {
+            let bytes = std::fs::read(&side).map_err(|e| format!("{}: {e}", side.display()))?;
+            ViewsFile::from_bytes(&bytes)
+                .map_err(|e| format!("{}: {e}", side.display()))?
+                .views
+        } else {
+            Default::default()
+        }
+    } else {
+        bimble_core::file::load(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .views
+    };
+    Ok(effective(&stored, &scene.levels()))
+}
+
+/// A view by name (any letter case).
+fn find_view(
+    path: &std::path::Path,
+    scene: &bimble_geom::Scene,
+    name: &str,
+) -> Result<bimble_core::view::View, String> {
+    let views = model_views(path, scene)?;
+    views
+        .iter()
+        .find(|v| v.name == name)
+        .or_else(|| views.iter().find(|v| v.name.eq_ignore_ascii_case(name)))
+        .cloned()
+        .ok_or_else(|| {
+            let names: Vec<&str> = views
+                .iter()
+                .filter(|v| v.is_2d())
+                .map(|v| v.name.as_str())
+                .collect();
+            format!("no view {name:?}. Plans and sections: {}", names.join(", "))
+        })
 }
 
 fn load_scene(path: &std::path::Path) -> Result<bimble_geom::Scene, String> {

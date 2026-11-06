@@ -157,6 +157,80 @@ pub fn area(l: &[P2]) -> f64 {
         / 2.0
 }
 
+type Key3 = (i64, i64, i64);
+
+/// Upward faces steeper than this (|n.z| of a unit normal) count as seen from above.
+const FACING_MIN_NZ: f64 = 0.02;
+
+/// What of a mesh is seen from above: the outline (loops, even-odd) of all its faces turned
+/// upwards, projected on the plan. A flat top gives its outline; a sloped slab, a ramp, a stair
+/// (its treads) or a stepped footing give the whole area they cover, not only a slice near their
+/// highest point.
+pub fn facing_up_region(mesh: &Mesh) -> Vec<Vec<P2>> {
+    // Edges of the upward triangles, keyed by their 3D end points: an edge shared by two of
+    // them is inside the region; one used once is on its outline.
+    let key3 = |p: [f64; 3]| {
+        (
+            (p[0] / WELD_MM).round() as i64,
+            (p[1] / WELD_MM).round() as i64,
+            (p[2] / WELD_MM).round() as i64,
+        )
+    };
+    let mut count: HashMap<(Key3, Key3), (usize, [P2; 2])> = HashMap::new();
+    for t in mesh.indices.as_chunks::<3>().0 {
+        let p = t.map(|i| mesh.positions[i as usize].map(f64::from));
+        let (u, v) = (
+            [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]],
+            [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]],
+        );
+        let n = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if len < 1e-12 || n[2] / len <= FACING_MIN_NZ {
+            continue;
+        }
+        for k in 0..3 {
+            let (a, b) = (p[k], p[(k + 1) % 3]);
+            let (ka, kb) = (key3(a), key3(b));
+            let id = if ka <= kb { (ka, kb) } else { (kb, ka) };
+            count
+                .entry(id)
+                .or_insert((0, [[a[0], a[1]], [b[0], b[1]]]))
+                .0 += 1;
+        }
+    }
+    let mut segs: Vec<[P2; 2]> = count
+        .into_values()
+        .filter(|(n, s)| *n == 1 && key(s[0]) != key(s[1]))
+        .map(|(_, s)| s)
+        .collect();
+    // HashMap order is random: sort so the same mesh always gives the same loops.
+    segs.sort_by(|a, b| {
+        a.iter()
+            .flatten()
+            .zip(b.iter().flatten())
+            .map(|(x, y)| x.total_cmp(y))
+            .find(|o| o.is_ne())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    chain(segs).loops
+}
+
+/// Whether an edge can be seen from above: one of its two faces turns upwards. Edges whose faces
+/// both turn down or sideways (a stair's underside, a beam's bottom) are hidden by their own
+/// solid. Unknown normals (zero) count as seen.
+pub fn edge_seen_from_above(n: &bimble_geom::EdgeNormals) -> bool {
+    let unknown = |v: &[i8; 4]| v[0] == 0 && v[1] == 0 && v[2] == 0;
+    if unknown(&n[0]) || unknown(&n[1]) {
+        return true;
+    }
+    // snorm8: 127 = 1. A face turned up more than ~1°.
+    n[0][2] > 2 || n[1][2] > 2
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
