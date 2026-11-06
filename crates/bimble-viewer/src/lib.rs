@@ -441,7 +441,6 @@ struct Viewer {
     style_message: Option<String>,
 
     /// Editing panel (for .bimble models) and the history window.
-    edit_window: bool,
     history_window: bool,
     history_view: Option<HistoryView>,
 
@@ -523,7 +522,6 @@ impl Viewer {
             open_tabs: Vec::new(),
             style_path: None,
             style_message: None,
-            edit_window: false,
             history_window: false,
             history_view: None,
             files: files::Files::default(),
@@ -2632,7 +2630,22 @@ impl eframe::App for Viewer {
                         .id_salt("properties")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            if self.link_selected.is_some() {
+                            let placing = self
+                                .loaded
+                                .as_ref()
+                                .and_then(|l| l.edit.as_ref())
+                                .is_some_and(|e| e.placing.is_some());
+                            if placing {
+                                // While placing, what is placed: storey and sizes (ADR 0027).
+                                if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut())
+                                {
+                                    ui.heading("Place");
+                                    ed.place_panel(ui);
+                                    if let Some(m) = &ed.message {
+                                        ui.label(m);
+                                    }
+                                }
+                            } else if self.link_selected.is_some() {
                                 if ui.small_button("Back to the view").clicked() {
                                     self.select_link_element(None);
                                 } else {
@@ -2661,24 +2674,6 @@ impl eframe::App for Viewer {
                 .resizable(true)
                 .show(&ctx, |ui| self.plan_panel(ui));
             self.plan_window = open;
-        }
-        if self.edit_window && self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) {
-            let mut open = true;
-            egui::Window::new("Place elements")
-                .open(&mut open)
-                .default_width(260.0)
-                .show(&ctx, |ui| {
-                    if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
-                        ed.place_panel(ui);
-                        if let Some(m) = &ed.message {
-                            ui.label(m);
-                        }
-                    }
-                });
-            if !open && let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
-                ed.placing = None;
-            }
-            self.edit_window = open;
         }
         if self.history_window && self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) {
             let mut open = true;
