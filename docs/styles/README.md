@@ -14,8 +14,8 @@ bimble view model.ifc --style my-style.json
 bimble render model.ifc out.png --style my-style.json
 ```
 
-In the viewer, **Style…** opens the same settings with colour pickers and sliders. Changes show at
-once. **Save…** writes only what differs from the default.
+In the viewer, **Manage → Graphic standards** opens the same settings in the Standards panel
+(ADR 0027). Changes show at once. **Save…** writes only what differs from the default.
 
 ## Fields
 
@@ -40,6 +40,13 @@ once. **Save…** writes only what differs from the default.
 | `annotation_pen_mm` | Dimension lines (0.13) |
 | `axis_pen_mm`, `axis_dash_mm` | Grid axes, dash-dot: pen, then [dash, gap, dot, gap] (0.13, [12, 1.5, 0.5, 1.5]) |
 | `seen_lighten` | What is seen below the cut is filled with the family colour mixed with this much white, 0..1 (0.6) |
+| `pens` | Line weights (ADR 0026): `scales` (e.g. `[5, 10, 20, 50, 100, 200, 500]`), `model` (16 rows, one width per scale), `perspective` and `annotation` (16 widths). A scale between two columns takes the nearest |
+| `line_types` | `[{name, color, dash_mm, pen}]`: dash, gap… in mm (empty: continuous), pen 1–16 |
+| `lines` | The line type of each kind of line: `cut`, `seen`, `above`, `hatch`, `axis`, `dimension`, `frame`. They replace the `*_pen_mm` and dash fields above |
+| `text_types` | `[{name, font, size_mm, color}]` |
+| `dimension_types` | `[{name, unit ("m", "cm", "mm"), decimals, show_unit, color, text_mm, line_type}]` |
+| `hatch_types` | `[{name, fill?, lines: [{angle_deg, spacing_mm, offset_mm?, dash_mm?}], color, pen}]`: spacing in mm on paper, the same at every scale |
+| `material_hatches` | `[{category, cut?, seen?}]`: the hatch type of a material family where cut and where seen; a family not listed keeps its own pattern |
 
 Each family:
 
@@ -62,6 +69,9 @@ Unknown fields and out-of-range values are errors: a typo is reported instead of
 ## Not yet
 
 - Overrides per material or per IFC class (only per material family today).
-- Line weights: edges are 1 pixel. Thicker lines need a different line renderer.
+- Line weights on screen: edges are 1 pixel (on paper they follow `pens`). Thicker lines need a
+  different line renderer.
+- Hatch types on screen: the screen uses each family's `lines` and `stipple`; `hatch_types` are for
+  paper.
 - Title block, legend and the words on a plan are not in the style: they are in the plan template
   (`bimble plan-template`, ADR 0018).
