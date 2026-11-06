@@ -18,6 +18,7 @@ use std::time::Duration;
 // std's Instant panics in browsers; web-time is std's on the desktop.
 use web_time::Instant;
 
+mod cutlines;
 mod edit;
 mod files;
 mod layout;
@@ -375,6 +376,8 @@ struct Viewer {
     /// pointer snaps to (model mm) with what it snapped to.
     place_targets: Option<((u64, i64), snap::Targets)>,
     place_snap: Option<([f64; 2], Option<snap::SnapTo>)>,
+    /// Cut outlines of the clip box's front faces (#35), for a key of what they depend on.
+    cut_cache: Option<(u64, std::sync::Arc<Vec<[glam::Vec3; 2]>>)>,
 
     /// Element under the cursor, its edges uploaded for the highlight, and the pointer position
     /// it was picked at (picking again only when the pointer moves).
@@ -461,6 +464,7 @@ impl Viewer {
             hover_snap: None,
             place_targets: None,
             place_snap: None,
+            cut_cache: None,
             hovered: None,
             hover_gpu: None,
             hover_at: None,
@@ -1741,6 +1745,54 @@ impl Viewer {
         }
     }
 
+    /// Outlines of what the clip box cuts (#35), on its faces turned to the camera: crisp and
+    /// complete, where the mesh's own edges may lose against a face at the same depth.
+    fn draw_cut_lines(&mut self, ui: &egui::Ui, rect: egui::Rect, aspect: f32) {
+        let Some(clip) = self.clip() else {
+            self.cut_cache = None;
+            return;
+        };
+        let Some(l) = &self.loaded else { return };
+        let eye = if self.camera.orthographic {
+            self.camera.target + (self.camera.eye() - self.camera.target).normalize_or_zero() * 1e9
+        } else {
+            self.camera.eye()
+        };
+        let faces = cutlines::front_faces(&clip, eye);
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            self.scene_rev.hash(&mut h);
+            for v in clip.min.to_array().into_iter().chain(clip.max.to_array()) {
+                v.to_bits().hash(&mut h);
+            }
+            faces.hash(&mut h);
+            for i in 0..l.scene.elements.len() {
+                self.visible(i).hash(&mut h);
+            }
+            h.finish()
+        };
+        if self.cut_cache.as_ref().is_none_or(|(k, _)| *k != key) {
+            let lines = cutlines::cut_lines(&l.scene, &clip, faces, |i| self.visible(i));
+            self.cut_cache = Some((key, std::sync::Arc::new(lines)));
+        }
+        let Some((_, lines)) = &self.cut_cache else {
+            return;
+        };
+        let vp = self.camera.view_proj(aspect, &l.bounds);
+        let c = self.opts.style.edges.0;
+        let stroke = egui::Stroke::new(1.5, Color32::from_rgb(c[0], c[1], c[2]));
+        let painter = ui.painter_at(rect);
+        for s in lines.iter() {
+            if let (Some(a), Some(b)) = (
+                section::project(&vp, rect, s[0]),
+                section::project(&vp, rect, s[1]),
+            ) {
+                painter.line_segment([a, b], stroke);
+            }
+        }
+    }
+
     /// Dimensions, the one being made, and the snap marker, over the 3D view.
     fn draw_dimensions(&self, ui: &egui::Ui, rect: egui::Rect, aspect: f32) {
         let Some(l) = &self.loaded else { return };
@@ -2588,6 +2640,7 @@ impl eframe::App for Viewer {
                     self.draw_references(ui, rect, aspect);
                     self.draw_annotations(ui, rect, aspect);
                 }
+                self.draw_cut_lines(ui, rect, aspect);
                 self.draw_dimensions(ui, rect, aspect);
                 self.navigation(ui, rect, aspect);
                 if self.animate() {
