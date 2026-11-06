@@ -177,10 +177,7 @@ pub fn new_section(scene: &Scene, facing: Facing, n: usize) -> View {
         id: GlobalId::new(),
         name: format!("Section {n} (looking {})", facing.label()),
         kind: ViewKind::Section {
-            origin: [
-                (c.x as f64 + o[0]).round(),
-                (c.y as f64 + o[1]).round(),
-            ],
+            origin: [(c.x as f64 + o[0]).round(), (c.y as f64 + o[1]).round()],
             facing,
             depth_mm: 0.0,
         },
@@ -225,15 +222,15 @@ mod tests {
         // Niveau 1 at 0: from the level up to the cut 1.2 m above it.
         assert!((b.min.z + oz).abs() < 1e-3, "{}", b.min.z + oz);
         assert!((b.max.z + oz - 1200.0).abs() < 1e-3, "{}", b.max.z + oz);
-        // Looking up: from the cut up to the level above (3 m).
+        // Looking up: from the cut (2.3 m) up to the level above (3 m).
         let up = default_views(&l)
             .into_iter()
             .find(|v| v.name == "Ceiling Niveau 1")
             .unwrap();
         let b = view_clip(&up, &s, &l).unwrap().unwrap();
-        assert!((b.min.z + oz - 1500.0).abs() < 1e-3, "{}", b.min.z + oz);
+        assert!((b.min.z + oz - 2300.0).abs() < 1e-3, "{}", b.min.z + oz);
         assert!((b.max.z + oz - 3000.0).abs() < 1e-3);
-        assert_eq!(camera_angles(&up).unwrap().2, true, "mirrored");
+        assert!(camera_angles(&up).unwrap().2, "mirrored");
     }
 
     #[test]
@@ -287,7 +284,10 @@ mod tests {
         assert!((segs[1][1].y as f64 + o[1] - 600.0).abs() < 1e-3);
         // A drag in a section moves along the screen and up.
         let sec = new_section(&s, Facing::East, 1);
-        assert_eq!(reference_move(&sec, Vec3::new(0.0, -10.0, 5.0)), [10.0, 5.0]);
+        assert_eq!(
+            reference_move(&sec, Vec3::new(0.0, -10.0, 5.0)),
+            [10.0, 5.0]
+        );
     }
 
     #[test]

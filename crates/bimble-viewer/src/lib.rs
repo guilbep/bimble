@@ -20,11 +20,12 @@ use web_time::Instant;
 
 mod edit;
 mod files;
-mod views;
 mod measure;
 mod section;
 mod style_editor;
 mod viewcube;
+mod viewing;
+mod views;
 
 const SAMPLES: u32 = 4;
 /// Duration of a view-cube camera turn.
@@ -388,6 +389,20 @@ struct Viewer {
 
     files: files::Files,
     parse_later: Option<ParseLater>,
+
+    /// Views (ADR 0021): all of them (stored over the defaults), the one shown, the camera each
+    /// view was left with, the side file of an IFC model, the view properties being edited, the
+    /// reference plan dragged in the view, the view a picked reference goes to, the PDF scale.
+    views: Vec<bimble_core::view::View>,
+    active_view: Option<bimble_core::GlobalId>,
+    view_cameras: std::collections::HashMap<bimble_core::GlobalId, Camera>,
+    side_views: Option<viewing::SideViews>,
+    view_form: Option<bimble_core::view::View>,
+    view_message: Option<String>,
+    moving_ref: Option<bimble_core::GlobalId>,
+    reference_view: Option<bimble_core::GlobalId>,
+    pdf_scale: f64,
+    last_aspect: f32,
 }
 
 impl Viewer {
@@ -439,6 +454,16 @@ impl Viewer {
             history_view: None,
             files: files::Files::default(),
             parse_later: None,
+            views: Vec::new(),
+            active_view: None,
+            view_cameras: Default::default(),
+            side_views: None,
+            view_form: None,
+            view_message: None,
+            moving_ref: None,
+            reference_view: None,
+            pdf_scale: 100.0,
+            last_aspect: 1.0,
         }
     }
 
@@ -499,7 +524,26 @@ impl Viewer {
     /// Files picked in dialogs (or dropped), by what they are for.
     fn handle_picked(&mut self, ctx: &egui::Context) {
         while let Some(p) = self.files.poll() {
+            // A plan dropped on a 2D view is a reference plan for it.
+            let lower = p.name.to_ascii_lowercase();
+            if p.purpose == files::Purpose::Open
+                && [".dxf", ".pdf", ".dwg"].iter().any(|x| lower.ends_with(x))
+            {
+                if self.in_2d() && self.loaded.is_some() {
+                    self.reference_view = self.active_view;
+                    self.add_reference(p);
+                } else {
+                    self.view_message =
+                        Some("Open a plan or section view to add a reference plan.".into());
+                    self.error = Some(format!(
+                        "{}: reference plans go in a plan or section view",
+                        p.name
+                    ));
+                }
+                continue;
+            }
             match p.purpose {
+                files::Purpose::Reference => self.add_reference(p),
                 files::Purpose::Open | files::Purpose::Link => self.open_picked(p, ctx),
                 files::Purpose::PlanTemplate => {
                     let r = p.content().and_then(|b| {
@@ -655,6 +699,7 @@ impl Viewer {
                 self.measure_first = None;
                 self.dimensions.clear();
                 self.hover_snap = None;
+                self.setup_views_after_load();
             }
             Err(e) => self.error = Some(format!("{}: {e}", path.display())),
         }
@@ -729,9 +774,16 @@ impl Viewer {
             k.matched_there = there;
         }
         self.needs_upload = true;
+        // Undo and redo can change views too; storeys can change the default ones.
+        self.refresh_views();
     }
 
     fn save(&mut self) {
+        if self.side_views.is_some() {
+            // An IFC model is not written: its views go in the side file.
+            self.save_side_views();
+            return;
+        }
         let Some(l) = self.loaded.as_mut() else {
             return;
         };
@@ -1013,16 +1065,24 @@ impl Viewer {
                 &self.device,
                 &l.scene,
                 |j, _| if j == i { Style::Normal } else { Style::Hidden },
-                self.section_on,
+                self.clipping(),
             )),
             _ => None,
         };
         self.needs_render = true;
     }
 
-    /// The active clipping box, if the section box is on.
+    /// The active clipping box: the 2D view's range, else the section box if it is on.
     fn clip(&self) -> Option<ClipBox> {
+        if self.in_2d() {
+            return self.view_clip();
+        }
         self.section_box.filter(|_| self.section_on)
+    }
+
+    /// Whether the scene is cut (the upload then needs edge normals).
+    fn clipping(&self) -> bool {
+        self.section_on || self.in_2d()
     }
 
     /// Fit the section box to the selection, or to everything visible.
@@ -1074,7 +1134,7 @@ impl Viewer {
                         Style::Reference
                     }
                 },
-                self.section_on,
+                self.clipping(),
             )
         });
         if let (Some(k), Some(g)) = (self.linked.as_mut(), linked_gpu) {
@@ -1101,7 +1161,7 @@ impl Viewer {
         self.gpu_scene =
             Some(
                 self.renderer
-                    .upload_with(&self.device, &l.scene, style, self.section_on),
+                    .upload_with(&self.device, &l.scene, style, self.clipping()),
             );
         self.needs_upload = false;
         self.needs_render = true;
@@ -1236,7 +1296,21 @@ impl Viewer {
     fn handle_view_input(&mut self, ui: &egui::Ui, resp: &egui::Response) {
         let rect = resp.rect;
         let aspect = rect.width() / rect.height().max(1.0);
-        if resp.dragged_by(PointerButton::Primary) && !ui.input(|i| i.modifiers.shift) {
+        let flat = self.in_2d();
+        if flat && resp.dragged_by(PointerButton::Primary) && self.moving_ref.is_some() {
+            // Moving a reference plan over the model.
+            let d = resp.drag_delta();
+            if d != egui::Vec2::ZERO && self.drag_reference(d, rect, aspect) {
+                self.needs_render = true;
+            }
+        } else if flat && resp.dragged_by(PointerButton::Primary) {
+            // 2D views don't orbit: dragging pans.
+            let d = resp.drag_delta() / rect.height().max(1.0);
+            if d != egui::Vec2::ZERO {
+                self.camera.pan(d.x, d.y);
+                self.needs_render = true;
+            }
+        } else if resp.dragged_by(PointerButton::Primary) && !ui.input(|i| i.modifiers.shift) {
             // Only redraw when the pointer actually moved: holding the button still must not
             // loop (a redraw request here would schedule the next frame, forever).
             let d = resp.drag_delta();
@@ -1253,6 +1327,9 @@ impl Viewer {
                 self.camera.pan(d.x, d.y);
                 self.needs_render = true;
             }
+        }
+        if resp.drag_stopped() && self.moving_ref.is_some() {
+            self.finish_reference_drag();
         }
         if resp.hovered() {
             let (scroll, zoom) = ui.input(|i| (i.smooth_scroll_delta().y, i.zoom_delta()));
@@ -1368,6 +1445,12 @@ impl Viewer {
                 self.apply_commands(edit::delete(&[id]));
             }
         }
+        // An IFC model's views are saved to their side file.
+        if self.side_views.is_some()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
+        {
+            self.save_side_views();
+        }
         let (f, o, e, h, t, esc, b, m) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::F),
@@ -1385,6 +1468,9 @@ impl Viewer {
             self.measure_first = None;
             self.hover_snap = None;
         }
+        // 2D views are cut by their range and seen square on: no box, perspective or turn.
+        let flat = self.in_2d();
+        let (b, o, t) = (b && !flat, o && !flat, t && !flat);
         if b && self.loaded.is_some() {
             self.toggle_section_box();
         }
@@ -1438,20 +1524,28 @@ impl Viewer {
             let mut changed = false;
             changed |= ui.checkbox(&mut self.opts.edges, "Edges (E)").changed();
             changed |= ui.checkbox(&mut self.opts.hatching, "Hatching (H)").changed();
-            changed |= ui.checkbox(&mut self.camera.orthographic, "Orthographic (O)").changed();
+            let flat = self.in_2d();
+            changed |= ui
+                .add_enabled(
+                    !flat,
+                    egui::Checkbox::new(&mut self.camera.orthographic, "Orthographic (O)"),
+                )
+                .changed();
             if changed {
                 self.needs_render = true;
             }
             ui.separator();
-            let mut on = self.section_on;
+            let mut on = self.section_on && !flat;
             if ui
-                .checkbox(&mut on, "Section box (B)")
+                .add_enabled(!flat, egui::Checkbox::new(&mut on, "Section box (B)"))
+                .on_disabled_hover_text("A plan or section is cut by its view range")
                 .on_hover_text("Clip the model to a box; drag the arrows to move its faces")
                 .changed()
             {
                 self.toggle_section_box();
             }
             if self.section_on
+                && !flat
                 && ui
                     .button(if self.selected.is_some() { "Box to selection" } else { "Box to visible" })
                     .clicked()
@@ -1471,6 +1565,16 @@ impl Viewer {
             ui.toggle_value(&mut self.plan_window, "Plan…")
                 .on_hover_text("Storey plan at scale, as PDF or SVG");
             ui.toggle_value(&mut self.style_window, "Style…");
+            if self.side_views_dirty() {
+                ui.separator();
+                if ui
+                    .button("Save views")
+                    .on_hover_text("The IFC file is not changed: views go in a .bimble-views.json next to it (Ctrl+S)")
+                    .clicked()
+                {
+                    self.save_side_views();
+                }
+            }
             if let Some(ed) = self.loaded.as_ref().and_then(|l| l.edit.as_ref()) {
                 ui.separator();
                 let dirty = ed.dirty;
@@ -1497,7 +1601,11 @@ impl Viewer {
                 }
             }
             ui.separator();
-            ui.weak("Drag: orbit · Right-drag / Shift-drag: pan · Scroll: zoom · Click: select · Double-click / F: fit · T: top");
+            ui.weak(if self.in_2d() {
+                "Drag: pan · Scroll: zoom · Click: select · Double-click / F: fit"
+            } else {
+                "Drag: orbit · Right-drag / Shift-drag: pan · Scroll: zoom · Click: select · Double-click / F: fit · T: top"
+            });
         });
     }
 
@@ -1536,10 +1644,33 @@ impl Viewer {
         ];
         let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
         let clip = self.clip();
-        let hit = bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref())?;
         let vp = self.camera.view_proj(aspect, &l.bounds);
-        let mesh = &l.scene.elements[hit.element].mesh;
-        Some(measure::snap(mesh, &hit, (o, d), &vp, rect, pos))
+        let model = bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref())
+            .map(|hit| {
+                let mesh = &l.scene.elements[hit.element].mesh;
+                measure::snap(mesh, &hit, (o, d), &vp, rect, pos)
+            });
+        // Reference plans (2D views): a corner or edge of theirs against the model's snap,
+        // corners before edges before faces, then the nearer on screen.
+        let Some((r, rd)) = self.reference_snap(pos, rect, aspect) else {
+            return model;
+        };
+        let rank = |k: measure::SnapKind| match k {
+            measure::SnapKind::Vertex => 0,
+            measure::SnapKind::Edge => 1,
+            measure::SnapKind::Face => 2,
+        };
+        match model {
+            Some(m) => {
+                let md = section::project(&vp, rect, m.point).map_or(f32::MAX, |p| p.distance(pos));
+                if (rank(m.kind), md) <= (rank(r.kind), rd) {
+                    Some(m)
+                } else {
+                    Some(r)
+                }
+            }
+            None => Some(r),
+        }
     }
 
     /// Dimensions, the one being made, and the snap marker, over the 3D view.
@@ -1633,7 +1764,14 @@ impl Viewer {
         }
         let a = self.opts.style.selection.0;
         let accent = Color32::from_rgb(a[0], a[1], a[2]);
-        match viewcube::show(ui, cube, self.camera.yaw, self.camera.pitch, accent) {
+        // 2D views are seen square on: no cube, no Home.
+        let flat = self.in_2d();
+        let action = if flat {
+            viewcube::Action::None
+        } else {
+            viewcube::show(ui, cube, self.camera.yaw, self.camera.pitch, accent)
+        };
+        match action {
             viewcube::Action::Look(d) => {
                 let (yaw, pitch) = viewcube::orientation(d, self.camera.yaw);
                 self.turn_to(yaw, pitch);
@@ -1652,7 +1790,7 @@ impl Viewer {
         }
         // Navigation bar under the cube.
         let w = 64.0;
-        let mut y = cube.max.y + 4.0;
+        let mut y = if flat { cube.min.y } else { cube.max.y + 4.0 };
         let mut button = |ui: &mut egui::Ui, text: &str, tip: &str| {
             let r = egui::Rect::from_min_size(
                 egui::pos2(cube.center().x - w / 2.0, y),
@@ -1663,7 +1801,7 @@ impl Viewer {
                 .on_hover_text(tip)
                 .clicked()
         };
-        if button(ui, "Home", "Default 3D view of everything visible") {
+        if !flat && button(ui, "Home", "Default 3D view of everything visible") {
             let d = Camera::default();
             self.turn_to(d.yaw, d.pitch);
             self.fit(aspect);
@@ -1946,16 +2084,68 @@ impl Viewer {
         }
     }
 
-    fn side_panel(&mut self, ui: &mut egui::Ui) {
-        let Some(l) = &self.loaded else {
-            ui.weak("No model loaded.");
+    /// Under the navigator: links (models and reference plans), measurements, warnings.
+    fn side_extras(&mut self, ui: &mut egui::Ui) {
+        if self.loaded.is_none() {
             return;
-        };
+        }
         let mut changed = false;
         let mut unlink_requested = false;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            if !self.dimensions.is_empty() {
-                ui.heading("Measurements");
+        let mut link_requested = false;
+        egui::CollapsingHeader::new(egui::RichText::new("Links").strong())
+            .default_open(self.linked.is_some())
+            .show(ui, |ui| {
+                match &self.linked {
+                    Some(k) => {
+                        ui.label(
+                            k.path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                        );
+                        let mut mode = k.mode;
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut mode, LinkMode::Solid, "Solid");
+                            ui.radio_value(&mut mode, LinkMode::Edges, "Edges");
+                            ui.radio_value(&mut mode, LinkMode::Hidden, "Hidden");
+                        });
+                        let (only_here, only_there) = (
+                            k.matched_here.iter().filter(|m| !**m).count(),
+                            k.matched_there.iter().filter(|m| !**m).count(),
+                        );
+                        let mut cmp = self.compare_on;
+                        let r = ui.checkbox(&mut cmp, "Show differences").on_hover_text(
+                            "Matched by position (bounding boxes, 20 mm tolerance, 80 % covered), not by id",
+                        );
+                        ui.weak(format!(
+                            "{only_here} only here · {only_there} only in the linked model"
+                        ));
+                        unlink_requested = ui.small_button("Unlink").clicked();
+                        if mode != k.mode {
+                            self.linked.as_mut().unwrap().mode = mode;
+                            self.needs_render = true;
+                        }
+                        if r.changed() {
+                            self.compare_on = cmp;
+                            changed = true;
+                        }
+                    }
+                    None => {
+                        link_requested = ui
+                            .button(if self.linking.is_some() { "Linking…" } else { "Link model…" })
+                            .on_hover_text("Load another model as a reference (e.g. the architect's IFC)")
+                            .clicked();
+                    }
+                }
+                ui.separator();
+                self.reference_links(ui);
+            });
+        if !self.dimensions.is_empty() {
+            egui::CollapsingHeader::new(
+                egui::RichText::new(format!("Measurements ({})", self.dimensions.len())).strong(),
+            )
+            .default_open(true)
+            .show(ui, |ui| {
                 let mut remove = None;
                 for (k, d) in self.dimensions.iter().enumerate() {
                     ui.horizontal(|ui| {
@@ -1982,95 +2172,25 @@ impl Viewer {
                 if ui.small_button("Clear all").clicked() {
                     self.dimensions.clear();
                 }
-                ui.add_space(8.0);
-            }
-            if let Some(k) = &self.linked {
-                ui.heading("Linked model");
-                ui.label(k.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
-                let mut mode = k.mode;
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut mode, LinkMode::Solid, "Solid");
-                    ui.radio_value(&mut mode, LinkMode::Edges, "Edges");
-                    ui.radio_value(&mut mode, LinkMode::Hidden, "Hidden");
-                });
-                let (only_here, only_there) = (
-                    k.matched_here.iter().filter(|m| !**m).count(),
-                    k.matched_there.iter().filter(|m| !**m).count(),
-                );
-                let mut cmp = self.compare_on;
-                let r = ui
-                    .checkbox(&mut cmp, "Show differences")
-                    .on_hover_text("Matched by position (bounding boxes, 20 mm tolerance, 80 % covered), not by id");
-                ui.weak(format!("{only_here} only here · {only_there} only in the linked model"));
-                let unlink = ui.small_button("Unlink").clicked();
-                ui.add_space(8.0);
-                if mode != k.mode {
-                    self.linked.as_mut().unwrap().mode = mode;
-                    self.needs_render = true;
-                }
-                if r.changed() {
-                    self.compare_on = cmp;
-                    self.needs_upload = true;
-                }
-                unlink_requested = unlink;
-            }
-            ui.heading("Materials");
-            for (cat, n) in &l.categories {
-                let mut on = !self.hidden_categories.contains(cat);
-                ui.horizontal(|ui| {
-                    let c = self.opts.style.families.get(*cat).color.0;
-                    let (r, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
-                    ui.painter()
-                        .rect_filled(r, 2.0, Color32::from_rgb(c[0], c[1], c[2]));
-                    if ui
-                        .checkbox(&mut on, format!("{} ({n})", cat.label()))
-                        .changed()
-                    {
-                        toggle(&mut self.hidden_categories, *cat, on);
-                        changed = true;
+            });
+        }
+        if let Some(l) = &self.loaded
+            && !l.scene.warnings.is_empty()
+        {
+            egui::CollapsingHeader::new(format!("Warnings ({})", l.scene.warnings.len())).show(
+                ui,
+                |ui| {
+                    for w in &l.scene.warnings {
+                        ui.label(w);
                     }
-                });
-            }
-            ui.add_space(8.0);
-            ui.heading("IFC classes");
-            for (class, n) in &l.classes {
-                let mut on = !self.hidden_classes.contains(class);
-                if ui.checkbox(&mut on, format!("{class} ({n})")).changed() {
-                    toggle(&mut self.hidden_classes, class.clone(), on);
-                    changed = true;
-                }
-            }
-            ui.add_space(8.0);
-            ui.heading("Storeys");
-            for (storey, n) in &l.storeys {
-                let mut on = !self.hidden_storeys.contains(storey);
-                let label = if storey.is_empty() {
-                    "(none)"
-                } else {
-                    storey.as_str()
-                };
-                if ui.checkbox(&mut on, format!("{label} ({n})")).changed() {
-                    toggle(&mut self.hidden_storeys, storey.clone(), on);
-                    changed = true;
-                }
-            }
-            if !l.scene.warnings.is_empty() {
-                ui.add_space(8.0);
-                egui::CollapsingHeader::new(format!("Warnings ({})", l.scene.warnings.len())).show(
-                    ui,
-                    |ui| {
-                        for w in &l.scene.warnings {
-                            ui.label(w);
-                        }
-                    },
-                );
-            }
-        });
+                },
+            );
+        }
         if changed {
-            if self.selected.is_some_and(|i| !self.visible(i)) {
-                self.selected = None;
-            }
             self.needs_upload = true;
+        }
+        if link_requested {
+            self.files.pick(files::Purpose::Link, ui.ctx());
         }
         if unlink_requested {
             self.unlink();
@@ -2164,17 +2284,36 @@ impl eframe::App for Viewer {
 
         egui::Panel::top("toolbar").show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        egui::Panel::left("filters")
+        // Left: the model navigator above, the properties (of the selected element, else of
+        // the view) below.
+        egui::Panel::left("browser")
             .resizable(true)
-            .default_size(220.0)
-            .min_size(190.0)
-            .show(ui, |ui| self.side_panel(ui));
-        if self.selected.is_some() {
-            egui::Panel::right("properties")
-                .resizable(true)
-                .default_size(280.0)
-                .show(ui, |ui| self.properties(ui));
-        }
+            .default_size(290.0)
+            .min_size(220.0)
+            .show(ui, |ui| {
+                egui::Panel::top("navigator")
+                    .resizable(true)
+                    .default_size(ui.available_height() * 0.45)
+                    .min_size(120.0)
+                    .show(ui, |ui| self.navigator(ui));
+                egui::CentralPanel::default().show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("properties")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            if self.selected.is_some() {
+                                if ui.small_button("← View properties").clicked() {
+                                    self.selected = None;
+                                    self.needs_upload = true;
+                                } else {
+                                    self.properties(ui);
+                                }
+                            } else {
+                                self.view_properties(ui);
+                            }
+                        });
+                });
+            });
         if self.plan_window {
             let mut open = true;
             egui::Window::new("Storey plan")
@@ -2223,6 +2362,7 @@ impl eframe::App for Viewer {
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let rect = ui.available_rect_before_wrap();
             let aspect = rect.width() / rect.height().max(1.0);
+            self.last_aspect = aspect;
             self.handle_keys(&ctx, aspect);
 
             if let Some(l) = &self.loading {
@@ -2254,7 +2394,9 @@ impl eframe::App for Viewer {
                     .sense(Sense::click_and_drag());
                 let resp = ui.add(img);
                 self.handle_view_input(ui, &resp);
-                if let (true, Some(mut b), Some(l)) = (self.section_on, self.section_box, &self.loaded) {
+                if let (true, false, Some(mut b), Some(l)) =
+                    (self.section_on, self.in_2d(), self.section_box, &self.loaded)
+                {
                     let vp = self.camera.view_proj(aspect, &l.bounds);
                     let a = self.opts.style.selection.0;
                     let accent = Color32::from_rgb(a[0], a[1], a[2]);
@@ -2262,6 +2404,9 @@ impl eframe::App for Viewer {
                         self.section_box = Some(b);
                         self.needs_render = true;
                     }
+                }
+                if self.in_2d() {
+                    self.draw_references(ui, rect, aspect);
                 }
                 self.draw_dimensions(ui, rect, aspect);
                 self.navigation(ui, rect, aspect);

@@ -15,6 +15,8 @@ pub enum Purpose {
     Link,
     PlanTemplate,
     Style,
+    /// A reference plan (DXF, vector PDF; DWG is refused with a hint to convert it).
+    Reference,
 }
 
 impl Purpose {
@@ -23,6 +25,10 @@ impl Purpose {
             Purpose::Open | Purpose::Link => ("Building models", &["ifc", "IFC", "bimble"]),
             Purpose::PlanTemplate => ("Plan template", &["json"]),
             Purpose::Style => ("Bimble style", &["json"]),
+            Purpose::Reference => (
+                "Reference plan",
+                &["dxf", "DXF", "pdf", "PDF", "dwg", "DWG"],
+            ),
         }
     }
 }
