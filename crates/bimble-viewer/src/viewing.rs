@@ -13,6 +13,8 @@ use glam::Vec3;
 /// The views of a model that isn't edited (IFC): kept in a side file next to it.
 pub(crate) struct SideViews {
     pub stored: BTreeMap<GlobalId, View>,
+    /// Sheets of the side file (#33), kept and saved back.
+    pub sheets: BTreeMap<GlobalId, bimble_core::sheet::Sheet>,
     pub dirty: bool,
 }
 
@@ -92,25 +94,26 @@ impl Viewer {
         if l.edit.is_none() {
             // In a browser there is no file next to the model to read.
             #[cfg(target_arch = "wasm32")]
-            let stored = BTreeMap::new();
+            let (stored, sheets) = (BTreeMap::new(), BTreeMap::new());
             #[cfg(not(target_arch = "wasm32"))]
-            let stored = {
+            let (stored, sheets) = {
                 let p = side_file(&l.path);
                 match p.exists().then(|| {
                     std::fs::read(&p)
                         .map_err(|e| e.to_string())
                         .and_then(|b| ViewsFile::from_bytes(&b))
                 }) {
-                    Some(Ok(f)) => f.views,
+                    Some(Ok(f)) => (f.views, f.sheets),
                     Some(Err(e)) => {
                         self.view_message = Some(format!("{}: {e}", p.display()));
-                        BTreeMap::new()
+                        (BTreeMap::new(), BTreeMap::new())
                     }
-                    None => BTreeMap::new(),
+                    None => (BTreeMap::new(), BTreeMap::new()),
                 }
             };
             self.side_views = Some(SideViews {
                 stored,
+                sheets,
                 dirty: false,
             });
         }
@@ -246,13 +249,62 @@ impl Viewer {
         self.needs_upload = true;
     }
 
+    /// The model's sheets (#33), by number.
+    pub(crate) fn sheets(&self) -> Vec<bimble_core::sheet::Sheet> {
+        let mut v: Vec<_> = match (&self.loaded, &self.side_views) {
+            (Some(l), _) if l.edit.is_some() => l
+                .edit
+                .as_ref()
+                .map(|ed| ed.model.sheets.values().cloned().collect())
+                .unwrap_or_default(),
+            (_, Some(s)) => s.sheets.values().cloned().collect(),
+            _ => Vec::new(),
+        };
+        v.sort_by(|a, b| a.number.cmp(&b.number));
+        v
+    }
+
+    /// A sheet as PDF (saved, or downloaded in a browser).
+    fn export_sheet(&mut self, sh: &bimble_core::sheet::Sheet) {
+        let Some(l) = &self.loaded else { return };
+        let o = bimble_drawing::sheetdraw::SheetOptions {
+            style: self.opts.style,
+            template: self.plan.template.clone(),
+            project: l
+                .path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            date: bimble_drawing::today(),
+        };
+        self.view_note = None;
+        self.view_message = None;
+        match bimble_drawing::sheetdraw::draw(&l.scene, sh, &self.views, &o) {
+            Err(e) => self.view_message = Some(e),
+            Ok((sheet, info)) => {
+                let name = format!("{} {}.pdf", sh.number, sh.name);
+                match files::save(&name, &[("PDF", &["pdf"])], &sheet.to_pdf()) {
+                    Ok(Some(to)) => {
+                        self.view_note = Some(if info.problems.is_empty() {
+                            format!("Saved {to}")
+                        } else {
+                            format!("Saved {to}; {}", info.problems.join("; "))
+                        })
+                    }
+                    Ok(None) => {}
+                    Err(e) => self.view_message = Some(e),
+                }
+            }
+        }
+    }
+
     /// Save the side file of an IFC model (a download in a browser).
     pub(crate) fn save_side_views(&mut self) {
         let Some(l) = &self.loaded else { return };
         let Some(s) = &mut self.side_views else {
             return;
         };
-        let text = ViewsFile::new(s.stored.clone()).to_json();
+        let text = ViewsFile::new(s.stored.clone(), s.sheets.clone()).to_json();
         #[cfg(target_arch = "wasm32")]
         let r = {
             let name = side_file(Path::new(
@@ -329,6 +381,8 @@ impl Viewer {
         let mut remove = None;
         let mut select_element = None;
         let mut open_plan = false;
+        let mut export_sheet: Option<bimble_core::sheet::Sheet> = None;
+        let sheets = self.sheets();
         {
             {
                 egui::CollapsingHeader::new(egui::RichText::new("Views").strong())
@@ -431,6 +485,7 @@ impl Viewer {
                                     kind: ViewKind::ThreeD,
                                     visibility: Visibility::default(),
                                     references: Vec::new(),
+                                    annotations: Vec::new(),
                                 });
                                 ui.close();
                             }
@@ -456,10 +511,26 @@ impl Viewer {
                 egui::CollapsingHeader::new(egui::RichText::new("Layouts").strong()).show(
                     ui,
                     |ui| {
+                        for sh in &sheets {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{}  {}", sh.number, sh.name));
+                                if ui
+                                    .small_button("PDF…")
+                                    .on_hover_text("The sheet, its views at their scales")
+                                    .clicked()
+                                {
+                                    export_sheet = Some(sh.clone());
+                                }
+                            });
+                        }
+                        if sheets.is_empty() {
+                            ui.weak(
+                                "No sheets yet (bimble sheet-new; placing views here comes next).",
+                            );
+                        }
                         if ui.button("Drawing on paper…").clicked() {
                             open_plan = true;
                         }
-                        ui.weak("Sheets with several views come later.");
                     },
                 );
                 egui::CollapsingHeader::new(egui::RichText::new("Objects").strong()).show(
@@ -518,6 +589,9 @@ impl Viewer {
         }
         if open_plan {
             self.plan_window = true;
+        }
+        if let Some(sh) = export_sheet {
+            self.export_sheet(&sh);
         }
     }
 

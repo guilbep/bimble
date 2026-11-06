@@ -175,7 +175,7 @@ impl Default for TitleBlock {
                     vec![entry("DATE", "{date}"), entry("REVISION", "")],
                 ),
                 col(Some(24.0), vec![entry("DRAWN", ""), entry("CHECKED", "")]),
-                col(Some(40.0), vec![entry("DRAWING N°", "")]),
+                col(Some(40.0), vec![entry("DRAWING N°", "{drawing_no}")]),
             ],
         }
     }

@@ -55,6 +55,9 @@ pub struct PlanOptions {
     /// Draw this view (a plan with its view range, a ceiling plan, a section) instead of
     /// `storey` cut at `cut_above_mm` (#32).
     pub view: Option<bimble_core::view::View>,
+    /// Only the drawing, its axes, dimensions and title, on a page just its size: no frame,
+    /// title block, legend or scale bar (a view placed on a sheet, #33).
+    pub bare: bool,
 }
 
 impl Default for PlanOptions {
@@ -69,6 +72,7 @@ impl Default for PlanOptions {
             date: String::new(),
             template: PlanTemplate::default(),
             view: None,
+            bare: false,
         }
     }
 }
@@ -88,6 +92,141 @@ pub struct PlanInfo {
     pub model_axes: bool,
     /// Elements left out because of their class (template `hidden_classes`).
     pub hidden_elements: usize,
+    /// The legend's entries (drawn on the sheet unless `bare`).
+    pub legend: Vec<(String, Swatch)>,
+}
+
+/// A legend entry's swatch.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Swatch {
+    Cut(MaterialCategory),
+    Seen(MaterialCategory),
+    Above,
+}
+
+fn legend_height(n: usize) -> f64 {
+    if n == 0 {
+        0.0
+    } else {
+        10.0 + n.min(LEGEND_ROWS) as f64 * LEGEND_ROW + PAD
+    }
+}
+
+fn legend_width(n: usize) -> f64 {
+    n.div_ceil(LEGEND_ROWS) as f64 * LEGEND_COL + 4.0
+}
+
+/// Hatch lines of a material family on paper.
+fn hatches_for(style: &GraphicStyle, c: MaterialCategory) -> Vec<Hatch> {
+    let paper_style = &style.paper;
+    let mm_per_px = paper_style.hatch_mm_per_px as f64;
+    let fam = style.families.get(c);
+    let hatch_ink = fam
+        .ink
+        .unwrap_or_else(|| darken(fam.color, style.hatch_darken));
+    fam.lines
+        .iter()
+        .flatten()
+        .map(|l| Hatch {
+            angle_deg: l.angle_deg as f64,
+            spacing_mm: l.spacing_px as f64 * mm_per_px,
+            pen: Pen {
+                width_mm: paper_style.hatch_pen_mm as f64,
+                color: hatch_ink,
+                dash: l
+                    .dash_px
+                    .map(|d| {
+                        let d = d as f64 * mm_per_px;
+                        vec![d * l.dash_on as f64, d * (1.0 - l.dash_on as f64)]
+                    })
+                    .unwrap_or_default(),
+            },
+        })
+        .collect()
+}
+
+/// The fill of what is seen below the cut: the family colour, lighter.
+fn seen_fill_for(style: &GraphicStyle, c: MaterialCategory) -> Rgb {
+    lighten(style.families.get(c).color, style.paper.seen_lighten)
+}
+
+/// The legend box, its bottom on `bottom` (paper mm), its left at `x0`.
+pub(crate) fn draw_legend(
+    items: &mut Vec<Item>,
+    x0: f64,
+    bottom: f64,
+    legend: &[(String, Swatch)],
+    tpl: &PlanTemplate,
+    style: &GraphicStyle,
+) {
+    if legend.is_empty() {
+        return;
+    }
+    let paper_style = &style.paper;
+    let ink = style.edges;
+    let t = paper_style.text_mm as f64;
+    let pen = |width: f32, dash: Vec<f64>| Pen {
+        width_mm: width as f64,
+        color: ink,
+        dash,
+    };
+    let proj_pen = pen(paper_style.projection_pen_mm, Vec::new());
+    let (y0, x1, y1) = (
+        bottom - legend_height(legend.len()) + PAD,
+        x0 + legend_width(legend.len()),
+        bottom,
+    );
+    items.push(Item::Lines {
+        lines: vec![vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]],
+        pen: proj_pen.clone(),
+    });
+    items.push(Item::Text {
+        pos: [x0 + 3.0, y0 + 5.5],
+        size_mm: t,
+        text: tpl.legend.title.clone(),
+        color: ink,
+        anchor: Anchor::Start,
+        angle_deg: 0.0,
+        bold: true,
+    });
+    for (i, (label, sw)) in legend.iter().enumerate() {
+        let (col, row) = (i / LEGEND_ROWS, i % LEGEND_ROWS);
+        let sx = x0 + 3.0 + col as f64 * LEGEND_COL;
+        let sy = y0 + 9.0 + row as f64 * LEGEND_ROW;
+        let rect = vec![vec![
+            [sx, sy],
+            [sx + 10.0, sy],
+            [sx + 10.0, sy + 4.0],
+            [sx, sy + 4.0],
+        ]];
+        match sw {
+            Swatch::Cut(c) => items.push(Item::Area {
+                loops: rect,
+                fill: Some(style.families.get(*c).color),
+                hatches: hatches_for(style, *c),
+                outline: Some(pen(paper_style.cut_pen_mm, Vec::new())),
+            }),
+            Swatch::Seen(c) => items.push(Item::Area {
+                loops: rect,
+                fill: Some(seen_fill_for(style, *c)),
+                hatches: Vec::new(),
+                outline: Some(proj_pen.clone()),
+            }),
+            Swatch::Above => {
+                let d = paper_style.above_dash_mm;
+                items.push(Item::Lines {
+                    lines: vec![vec![[sx, sy + 2.0], [sx + 10.0, sy + 2.0]]],
+                    pen: pen(paper_style.above_pen_mm, vec![d[0] as f64, d[1] as f64]),
+                });
+            }
+        }
+        items.push(Item::text(
+            [sx + 13.0, sy + 3.3],
+            t * 0.9,
+            label.clone(),
+            ink,
+        ));
+    }
 }
 
 fn darken(c: Rgb, k: f32) -> Rgb {
@@ -255,6 +394,7 @@ fn storey_setup<'a>(
         storey_elevation_mm: st.elevation_mm,
         plan_down: true,
         axes: true,
+        turn: crate::viewdraw::Turn::None,
     })
 }
 
@@ -434,11 +574,6 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             &tpl.fields,
         )
     };
-    enum Swatch {
-        Cut(MaterialCategory),
-        Seen(MaterialCategory),
-        Above,
-    }
     let mut legend: Vec<(String, Swatch)> = Vec::new();
     if tpl.legend.show {
         for c in MaterialCategory::ALL {
@@ -455,15 +590,17 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             legend.push((tpl.legend.above.clone(), Swatch::Above));
         }
     }
-    let legend_cols = legend.len().div_ceil(LEGEND_ROWS);
-    let legend_h = if legend.is_empty() {
-        0.0
-    } else {
-        10.0 + legend.len().min(LEGEND_ROWS) as f64 * LEGEND_ROW + PAD
-    };
+    // A bare drawing's legend goes on its sheet's (PlanInfo::legend).
+    let legend_n = if o.bare { 0 } else { legend.len() };
+    let legend_h = legend_height(legend_n);
 
     // ---- paper
-    let tb_h = tpl.title_block.height_mm;
+    let tb_h = if o.bare {
+        0.0
+    } else {
+        tpl.title_block.height_mm
+    };
+    let margin = if o.bare { 0.0 } else { MARGIN };
     let chains = |any: bool| {
         if !tpl.dimensions {
             0.0
@@ -481,53 +618,59 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
     let model = (hi[0] - lo[0], hi[1] - lo[1]);
     let k = 1.0 / o.scale as f64;
     let need = (model.0 * k + extra.0, model.1 * k + extra.1);
-    let room = |w: f64, h: f64| (w - 2.0 * MARGIN, h - 2.0 * MARGIN - tb_h - legend_h);
-    let legend_w = legend_cols as f64 * LEGEND_COL + 4.0;
+    let room = |w: f64, h: f64| (w - 2.0 * margin, h - 2.0 * margin - tb_h - legend_h);
+    let legend_w = legend_width(legend_n);
     let fits = |p: Paper, portrait: bool| {
         let (w, h) = p.size();
         let (w, h) = if portrait { (h, w) } else { (w, h) };
         let (rw, rh) = room(w, h);
         need.0 <= rw && need.1 <= rh && legend_w <= rw
     };
-    let candidates: Vec<Paper> = match o.paper {
-        Some(p) => vec![p],
-        None => Paper::ALL.to_vec(),
-    };
-    let chosen = candidates
-        .iter()
-        .flat_map(|&p| [(p, false), (p, true)])
-        .find(|&(p, portrait)| fits(p, portrait));
-    let Some((paper, portrait)) = chosen else {
-        let biggest = *candidates.last().unwrap();
-        let (bw, bh) = biggest.size();
-        // The scale at which the drawing would fit the biggest paper (either orientation).
-        let fit = |w: f64, h: f64| {
-            let (rw, rh) = room(w, h);
-            (model.0 / (rw - extra.0)).max(model.1 / (rh - extra.1))
+    // A bare drawing's page is just its size.
+    let (paper, portrait, w, h) = if o.bare {
+        (o.paper.unwrap_or(Paper::A4), false, need.0, need.1)
+    } else {
+        let candidates: Vec<Paper> = match o.paper {
+            Some(p) => vec![p],
+            None => Paper::ALL.to_vec(),
         };
-        let n = fit(bw, bh).min(fit(bh, bw));
-        let hint = match next_standard_scale(n).filter(|_| n > 0.0) {
-            Some(s) => format!("1:{s} fits on {}", biggest.name()),
-            None => "no scale up to 1:5000 fits".into(),
+        let chosen = candidates
+            .iter()
+            .flat_map(|&p| [(p, false), (p, true)])
+            .find(|&(p, portrait)| fits(p, portrait));
+        let Some((paper, portrait)) = chosen else {
+            let biggest = *candidates.last().unwrap();
+            let (bw, bh) = biggest.size();
+            // The scale at which the drawing would fit the biggest paper (either orientation).
+            let fit = |w: f64, h: f64| {
+                let (rw, rh) = room(w, h);
+                (model.0 / (rw - extra.0)).max(model.1 / (rh - extra.1))
+            };
+            let n = fit(bw, bh).min(fit(bh, bw));
+            let hint = match next_standard_scale(n).filter(|_| n > 0.0) {
+                Some(s) => format!("1:{s} fits on {}", biggest.name()),
+                None => "no scale up to 1:5000 fits".into(),
+            };
+            return Err(format!(
+                "at 1:{} the plan ({:.1} × {:.1} m) needs {:.0} × {:.0} mm and does not fit on {}; {hint}",
+                o.scale,
+                model.0 / 1000.0,
+                model.1 / 1000.0,
+                need.0,
+                need.1,
+                biggest.name()
+            ));
         };
-        return Err(format!(
-            "at 1:{} the plan ({:.1} × {:.1} m) needs {:.0} × {:.0} mm and does not fit on {}; {hint}",
-            o.scale,
-            model.0 / 1000.0,
-            model.1 / 1000.0,
-            need.0,
-            need.1,
-            biggest.name()
-        ));
-    };
-    let (w, h) = {
-        let (w, h) = paper.size();
-        if portrait { (h, w) } else { (w, h) }
+        let (w, h) = {
+            let (w, h) = paper.size();
+            if portrait { (h, w) } else { (w, h) }
+        };
+        (paper, portrait, w, h)
     };
     let (rw, rh) = room(w, h);
     // Centre the drawing and its decorations in the space above the legend and title block.
-    let ox = MARGIN + PAD + left_extra + (rw - need.0) / 2.0;
-    let oy = MARGIN + PAD + top_extra + (rh - need.1) / 2.0;
+    let ox = margin + PAD + left_extra + (rw - need.0) / 2.0;
+    let oy = margin + PAD + top_extra + (rh - need.1) / 2.0;
     let to_paper = |p: &P2| [ox + (p[0] - lo[0]) * k, oy + (hi[1] - p[1]) * k];
     let seg_lines = |v: &[[P2; 2]]| -> Vec<Vec<P2>> {
         v.iter()
@@ -557,34 +700,8 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             angle_deg,
             bold,
         };
-    let mm_per_px = paper_style.hatch_mm_per_px as f64;
-    let hatches_of = |c: MaterialCategory| -> Vec<Hatch> {
-        let fam = style.families.get(c);
-        let hatch_ink = fam
-            .ink
-            .unwrap_or_else(|| darken(fam.color, style.hatch_darken));
-        fam.lines
-            .iter()
-            .flatten()
-            .map(|l| Hatch {
-                angle_deg: l.angle_deg as f64,
-                spacing_mm: l.spacing_px as f64 * mm_per_px,
-                pen: Pen {
-                    width_mm: paper_style.hatch_pen_mm as f64,
-                    color: hatch_ink,
-                    dash: l
-                        .dash_px
-                        .map(|d| {
-                            let d = d as f64 * mm_per_px;
-                            vec![d * l.dash_on as f64, d * (1.0 - l.dash_on as f64)]
-                        })
-                        .unwrap_or_default(),
-                },
-            })
-            .collect()
-    };
-    let seen_fill =
-        |c: MaterialCategory| lighten(style.families.get(c).color, paper_style.seen_lighten);
+    let hatches_of = |c: MaterialCategory| hatches_for(style, c);
+    let seen_fill = |c: MaterialCategory| seen_fill_for(style, c);
 
     // ---- items, back to front
     let mut items = Vec::new();
@@ -870,6 +987,91 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         }
     }
 
+    // ---- the view's own dimensions and texts (#33)
+    if let Some(v) = &o.view {
+        let so = scene.origin_mm;
+        let at = |p: &[f64; 3]| {
+            let q = setup.turn.apply([p[0] - so[0], p[1] - so[1], p[2] - so[2]]);
+            to_paper(&[q[0], q[1]])
+        };
+        let mut lines = Vec::new();
+        let mut ticks = Vec::new();
+        for a in &v.annotations {
+            match a {
+                bimble_core::view::Annotation::Dimension {
+                    a, b, offset_mm, ..
+                } => {
+                    let (pa, pb) = (at(&a.at), at(&b.at));
+                    let d = [pb[0] - pa[0], pb[1] - pa[1]];
+                    let len = d[0].hypot(d[1]);
+                    if len < 1e-6 {
+                        continue;
+                    }
+                    let u = [d[0] / len, d[1] / len];
+                    // Left of a→b as seen on paper (y down).
+                    let n = [u[1], -u[0]];
+                    let off = offset_mm * k;
+                    let side = if off < 0.0 { -1.0 } else { 1.0 };
+                    let shift = |p: P2, s: f64| [p[0] + n[0] * s, p[1] + n[1] * s];
+                    let (qa, qb) = (shift(pa, off), shift(pb, off));
+                    lines.push(vec![shift(pa, side * 1.0), shift(qa, side * 1.5)]);
+                    lines.push(vec![shift(pb, side * 1.0), shift(qb, side * 1.5)]);
+                    lines.push(vec![qa, qb]);
+                    for q in [qa, qb] {
+                        let s = 0.9;
+                        let t = [(u[0] - n[0]) * s, (u[1] - n[1]) * s];
+                        ticks.push(vec![[q[0] - t[0], q[1] - t[1]], [q[0] + t[0], q[1] + t[1]]]);
+                    }
+                    let mut angle = -d[1].atan2(d[0]).to_degrees();
+                    if !(-90.0..=90.0).contains(&angle) {
+                        angle += if angle > 0.0 { -180.0 } else { 180.0 };
+                    }
+                    let mid = [(qa[0] + qb[0]) / 2.0, (qa[1] + qb[1]) / 2.0];
+                    // The value just above its line, upright.
+                    let r = angle.to_radians();
+                    let pos = [mid[0] - r.sin() * 0.8, mid[1] - r.cos() * 0.8];
+                    items.push(text_at(
+                        pos,
+                        t * 0.9,
+                        unit.format(len / k),
+                        Anchor::Middle,
+                        angle,
+                        false,
+                    ));
+                }
+                bimble_core::view::Annotation::Text {
+                    text,
+                    at: p,
+                    size_mm,
+                    angle_deg,
+                    ..
+                } => {
+                    for (i, line) in text.split('\n').enumerate() {
+                        let q = at(p);
+                        items.push(text_at(
+                            [q[0], q[1] + i as f64 * size_mm * 1.25],
+                            *size_mm,
+                            line.to_string(),
+                            Anchor::Start,
+                            *angle_deg,
+                            false,
+                        ));
+                    }
+                }
+            }
+        }
+        if !lines.is_empty() {
+            items.push(Item::Lines {
+                lines,
+                pen: note_pen.clone(),
+            });
+            items.push(Item::Lines {
+                lines: ticks,
+                pen: pen(paper_style.projection_pen_mm * 2.0, Vec::new()),
+            });
+        }
+    }
+
     // ---- texts
     let n = o.scale.to_string();
     let values = [
@@ -892,6 +1094,11 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         ),
         ("scale", format!("1:{n}")),
         ("n", n.clone()),
+        // A sheet's number; a single plan takes it from the fields (--field drawing_no=…).
+        (
+            "drawing_no",
+            tpl.fields.get("drawing_no").cloned().unwrap_or_default(),
+        ),
         (
             "paper",
             format!(
@@ -930,110 +1137,120 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             pen: pen(paper_style.cut_pen_mm * 0.7, Vec::new()),
         });
     }
-    // Graphic scale bar at the right of the title line: a round length about 50 mm long.
-    let target_m = 50.0 / k / 1000.0;
-    let mag = 10f64.powf(target_m.log10().floor());
-    let len_m = [1.0, 2.0, 5.0, 10.0]
-        .into_iter()
-        .map(|f| f * mag)
-        .rfind(|&l| l <= target_m)
-        .unwrap_or(mag);
-    let bar = len_m * 1000.0 * k;
-    {
-        let (bx, by) = (w - MARGIN - PAD - bar, title_y - 2.0);
-        for i in 0..4 {
-            let (x0, x1) = (bx + bar * i as f64 / 4.0, bx + bar * (i + 1) as f64 / 4.0);
-            items.push(Item::Area {
-                loops: vec![vec![[x0, by], [x1, by], [x1, by + 2.0], [x0, by + 2.0]]],
-                fill: Some(if i % 2 == 0 {
-                    ink
-                } else {
-                    Rgb([255, 255, 255])
-                }),
-                hatches: Vec::new(),
-                outline: Some(proj_pen.clone()),
-            });
-        }
-        items.push(text([bx, by - 1.5], t * 0.8, "0".into()));
-        let label = if len_m >= 1.0 {
-            format!("{len_m} m")
-        } else {
-            format!("{} mm", len_m * 1000.0)
-        };
-        items.push(text_at(
-            [bx + bar, by - 1.5],
-            t * 0.8,
-            label,
-            Anchor::End,
-            0.0,
-            false,
-        ));
-    }
-    // Level note just above the title block, at the right.
-    let tb_top = h - MARGIN - tb_h;
-    let note = filled(&tpl.level_note);
-    if !note.is_empty() {
-        items.push(text_at(
-            [w - MARGIN - PAD, tb_top - 2.5],
-            t * 0.9,
-            note,
-            Anchor::End,
-            0.0,
-            false,
-        ));
-    }
-
-    // ---- legend, above the title block at the left
-    if !legend.is_empty() {
-        let (x0, y0) = (MARGIN, tb_top - legend_h + PAD);
-        let (x1, y1) = (x0 + legend_w, tb_top);
-        items.push(Item::Lines {
-            lines: vec![vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]],
-            pen: proj_pen.clone(),
-        });
-        items.push(text_at(
-            [x0 + 3.0, y0 + 5.5],
-            t,
-            tpl.legend.title.clone(),
-            Anchor::Start,
-            0.0,
-            true,
-        ));
-        for (i, (label, sw)) in legend.iter().enumerate() {
-            let (col, row) = (i / LEGEND_ROWS, i % LEGEND_ROWS);
-            let sx = x0 + 3.0 + col as f64 * LEGEND_COL;
-            let sy = y0 + 9.0 + row as f64 * LEGEND_ROW;
-            let rect = vec![vec![
-                [sx, sy],
-                [sx + 10.0, sy],
-                [sx + 10.0, sy + 4.0],
-                [sx, sy + 4.0],
-            ]];
-            match sw {
-                Swatch::Cut(c) => items.push(Item::Area {
-                    loops: rect,
-                    fill: Some(style.families.get(*c).color),
-                    hatches: hatches_of(*c),
-                    outline: Some(pen(paper_style.cut_pen_mm, Vec::new())),
-                }),
-                Swatch::Seen(c) => items.push(Item::Area {
-                    loops: rect,
-                    fill: Some(seen_fill(*c)),
+    // Scale bar, level note, legend, frame and title block: whole sheets only.
+    if !o.bare {
+        // Graphic scale bar at the right of the title line: a round length about 50 mm long.
+        let target_m = 50.0 / k / 1000.0;
+        let mag = 10f64.powf(target_m.log10().floor());
+        let len_m = [1.0, 2.0, 5.0, 10.0]
+            .into_iter()
+            .map(|f| f * mag)
+            .rfind(|&l| l <= target_m)
+            .unwrap_or(mag);
+        let bar = len_m * 1000.0 * k;
+        {
+            let (bx, by) = (w - MARGIN - PAD - bar, title_y - 2.0);
+            for i in 0..4 {
+                let (x0, x1) = (bx + bar * i as f64 / 4.0, bx + bar * (i + 1) as f64 / 4.0);
+                items.push(Item::Area {
+                    loops: vec![vec![[x0, by], [x1, by], [x1, by + 2.0], [x0, by + 2.0]]],
+                    fill: Some(if i % 2 == 0 {
+                        ink
+                    } else {
+                        Rgb([255, 255, 255])
+                    }),
                     hatches: Vec::new(),
                     outline: Some(proj_pen.clone()),
-                }),
-                Swatch::Above => {
-                    let d = paper_style.above_dash_mm;
-                    items.push(Item::Lines {
-                        lines: vec![vec![[sx, sy + 2.0], [sx + 10.0, sy + 2.0]]],
-                        pen: pen(paper_style.above_pen_mm, vec![d[0] as f64, d[1] as f64]),
-                    });
-                }
+                });
             }
-            items.push(text([sx + 13.0, sy + 3.3], t * 0.9, label.clone()));
+            items.push(text([bx, by - 1.5], t * 0.8, "0".into()));
+            let label = if len_m >= 1.0 {
+                format!("{len_m} m")
+            } else {
+                format!("{} mm", len_m * 1000.0)
+            };
+            items.push(text_at(
+                [bx + bar, by - 1.5],
+                t * 0.8,
+                label,
+                Anchor::End,
+                0.0,
+                false,
+            ));
         }
+        // Level note just above the title block, at the right.
+        let tb_top = h - MARGIN - tb_h;
+        let note = filled(&tpl.level_note);
+        if !note.is_empty() {
+            items.push(text_at(
+                [w - MARGIN - PAD, tb_top - 2.5],
+                t * 0.9,
+                note,
+                Anchor::End,
+                0.0,
+                false,
+            ));
+        }
+
+        // ---- legend, above the title block at the left
+        draw_legend(&mut items, MARGIN, tb_top, &legend, tpl, style);
+
+        frame_and_title_block(&mut items, w, h, tpl, &filled, ink, paper_style);
     }
 
+    let info = PlanInfo {
+        paper,
+        portrait,
+        cut_elements: cuts.len(),
+        seen_elements: seen.iter().filter(|s| !s.top.is_empty()).count(),
+        projection_lines: projection.len() + seen_lines,
+        above_lines: above.len(),
+        axes: bubbles.len(),
+        model_axes,
+        hidden_elements: hidden,
+        legend,
+    };
+    let sheet = Sheet {
+        width_mm: w,
+        height_mm: h,
+        title: if o.project.is_empty() {
+            title
+        } else {
+            format!("{} – {title}", o.project)
+        },
+        items,
+    };
+    Ok((sheet, info))
+}
+
+/// The sheet frame and the template's title block along the bottom, for a `w` × `h` mm sheet.
+pub(crate) fn frame_and_title_block(
+    items: &mut Vec<Item>,
+    w: f64,
+    h: f64,
+    tpl: &PlanTemplate,
+    filled: &dyn Fn(&str) -> String,
+    ink: Rgb,
+    paper_style: &bimble_core::style::PaperStyle,
+) {
+    let t = paper_style.text_mm as f64;
+    let tb_h = tpl.title_block.height_mm;
+    let tb_top = h - MARGIN - tb_h;
+    let pen = |width: f32, dash: Vec<f64>| Pen {
+        width_mm: width as f64,
+        color: ink,
+        dash,
+    };
+    let text_at =
+        |pos: P2, size: f64, s: String, anchor: Anchor, angle_deg: f64, bold: bool| Item::Text {
+            pos,
+            size_mm: size,
+            text: s,
+            color: ink,
+            anchor,
+            angle_deg,
+            bold,
+        };
     // ---- frame and title block
     let frame_pen = pen(paper_style.frame_pen_mm, Vec::new());
     let rect =
@@ -1113,29 +1330,6 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         0.0,
         false,
     ));
-
-    let info = PlanInfo {
-        paper,
-        portrait,
-        cut_elements: cuts.len(),
-        seen_elements: seen.iter().filter(|s| !s.top.is_empty()).count(),
-        projection_lines: projection.len() + seen_lines,
-        above_lines: above.len(),
-        axes: bubbles.len(),
-        model_axes,
-        hidden_elements: hidden,
-    };
-    let sheet = Sheet {
-        width_mm: w,
-        height_mm: h,
-        title: if o.project.is_empty() {
-            title
-        } else {
-            format!("{} – {title}", o.project)
-        },
-        items,
-    };
-    Ok((sheet, info))
 }
 
 #[cfg(test)]
@@ -1651,6 +1845,7 @@ mod tests {
             },
             visibility: Default::default(),
             references: Vec::new(),
+            annotations: Vec::new(),
         };
         o.view = Some(section);
         let (sheet, info) = plan(&scene, &o).unwrap();

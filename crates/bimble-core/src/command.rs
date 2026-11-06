@@ -38,6 +38,12 @@ pub enum Command {
     },
     /// Replace a view (name, range, visibility, references…); its id stays.
     SetView(crate::view::View),
+    AddSheet(crate::sheet::Sheet),
+    RemoveSheet {
+        id: GlobalId,
+    },
+    /// Replace a sheet (number, name, paper, placed views, texts…); its id stays.
+    SetSheet(crate::sheet::Sheet),
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -147,6 +153,17 @@ impl Command {
                 Ok(RemoveView { id })
             }
             RemoveView { id } => {
+                // A view placed on a sheet stays (a default view is reset, not removed: it
+                // keeps its id, so it stays placed).
+                let defaults = crate::view::default_views(&m.levels());
+                let is_default = defaults.iter().any(|d| d.id == id);
+                if !is_default
+                    && m.sheets
+                        .values()
+                        .any(|s| s.placed.iter().any(|p| p.view == id))
+                {
+                    return Err(CommandError::InUse(id));
+                }
                 let v = m.views.remove(&id).ok_or(CommandError::NotFound(id))?;
                 Ok(AddView(v))
             }
@@ -159,8 +176,48 @@ impl Command {
                 let old = m.views.insert(v.id, v).expect("checked above");
                 Ok(SetView(old))
             }
+            AddSheet(s) => {
+                if m.sheets.contains_key(&s.id) {
+                    return Err(CommandError::Exists(s.id));
+                }
+                check_sheet(m, &s)?;
+                let s = canonical(s);
+                let id = s.id;
+                m.sheets.insert(id, s);
+                Ok(RemoveSheet { id })
+            }
+            RemoveSheet { id } => {
+                let s = m.sheets.remove(&id).ok_or(CommandError::NotFound(id))?;
+                Ok(AddSheet(s))
+            }
+            SetSheet(s) => {
+                if !m.sheets.contains_key(&s.id) {
+                    return Err(CommandError::NotFound(s.id));
+                }
+                check_sheet(m, &s)?;
+                let s = canonical(s);
+                let old = m.sheets.insert(s.id, s).expect("checked above");
+                Ok(SetSheet(old))
+            }
         }
     }
+}
+
+/// A sheet is valid on its own, places only views of the model, and has its own number.
+fn check_sheet(m: &Model, s: &crate::sheet::Sheet) -> Result<(), CommandError> {
+    let ids = m.view_ids();
+    s.validate(|v| ids.contains(&v))
+        .map_err(CommandError::Invalid)?;
+    if m.sheets
+        .values()
+        .any(|o| o.id != s.id && o.number == s.number)
+    {
+        return Err(CommandError::Invalid(format!(
+            "sheet number {} is already used",
+            s.number
+        )));
+    }
+    Ok(())
 }
 
 /// Undo/redo stacks. Each entry is a group of inverses applied together (one user action).

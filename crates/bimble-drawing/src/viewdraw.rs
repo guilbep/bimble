@@ -32,6 +32,30 @@ pub struct ViewSetup<'a> {
     pub plan_down: bool,
     /// Plans (down or up): grid axes, from the model or the columns.
     pub axes: bool,
+    /// How a point of the scene is turned for this view.
+    pub turn: Turn,
+}
+
+/// How the scene is turned so the view looks straight down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Turn {
+    /// A plan looking down: as it is.
+    None,
+    /// A ceiling plan: reflected, z → −z.
+    Reflect,
+    /// A section looking along `[dx, dy]`.
+    Section([f64; 2]),
+}
+
+impl Turn {
+    /// A point of the scene (mm, relative to its origin) in the turned scene.
+    pub fn apply(self, p: [f64; 3]) -> [f64; 3] {
+        match self {
+            Turn::None => p,
+            Turn::Reflect => [p[0], p[1], -p[2]],
+            Turn::Section([dx, dy]) => [dy * p[0] - dx * p[1], p[2], -(dx * p[0] + dy * p[1])],
+        }
+    }
 }
 
 /// Turn `scene` for `view`. 3D views have no paper drawing.
@@ -74,6 +98,7 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
                     storey_elevation_mm: st.elevation_mm,
                     plan_down: true,
                     axes: true,
+                    turn: Turn::None,
                 }),
                 Look::Up => Ok(ViewSetup {
                     // Reflected: what is higher is nearer the viewer below.
@@ -92,6 +117,7 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
                     storey_elevation_mm: st.elevation_mm,
                     plan_down: false,
                     axes: true,
+                    turn: Turn::Reflect,
                 }),
             }
         }
@@ -134,6 +160,7 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
                 storey_elevation_mm: elevation,
                 plan_down: false,
                 axes: false,
+                turn: Turn::Section(d),
             })
         }
     }

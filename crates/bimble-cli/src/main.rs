@@ -161,6 +161,47 @@ enum Cmd {
     },
     /// List the views of a model (plans, ceiling plans, sections), for `plan --view`
     Views { file: PathBuf },
+    /// List the sheets of a model (number, name, paper, the views placed on them)
+    Sheets { file: PathBuf },
+    /// Draw a sheet (its views at their scales, title block, legend) as PDF, SVG or PNG
+    Sheet {
+        file: PathBuf,
+        /// Sheet number, e.g. S-101 (see `bimble sheets`)
+        number: String,
+        /// Output: .pdf, .svg or .png
+        out: PathBuf,
+        /// Resolution of a .png output, dots per inch
+        #[arg(long, default_value_t = 150.0)]
+        dpi: f64,
+        /// Graphic style file (see `bimble style`)
+        #[arg(long)]
+        style: Option<PathBuf>,
+        /// Plan template: title block, legend, texts (see `bimble plan-template`)
+        #[arg(long)]
+        template: Option<PathBuf>,
+        /// Project name in the title block (default: the file name)
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Add a sheet with views laid out side by side, e.g.
+    /// `bimble sheet-new m.bimble --name Plans --place "Plan Level 1:100" --place "Section 1:50"`.
+    /// Saved in the .bimble file, or in the side file of an IFC
+    SheetNew {
+        file: PathBuf,
+        #[arg(long)]
+        name: String,
+        /// Sheet number; by default the next free one (S-101, S-102…)
+        #[arg(long)]
+        number: Option<String>,
+        /// A4, A3, A2, A1 or A0
+        #[arg(long, default_value = "A1")]
+        paper: String,
+        #[arg(long)]
+        portrait: bool,
+        /// A view and its scale, VIEW:N (repeatable, placed left to right)
+        #[arg(long = "place", value_name = "VIEW:N")]
+        place: Vec<String>,
+    },
     /// List elements (GlobalId, IFC class, name, generator)
     Ls {
         file: PathBuf,
@@ -302,6 +343,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 storey: storey.unwrap_or_default(),
                 cut_above_mm: cut,
                 view,
+                bare: false,
                 scale,
                 paper,
                 style,
@@ -431,6 +473,180 @@ fn run(cli: Cli) -> Result<(), String> {
             for w in &scene.warnings {
                 println!("warning   {w}");
             }
+        }
+        Cmd::Sheets { file: path } => {
+            let scene = load_scene(&path)?;
+            let views = model_views(&path, &scene)?;
+            let sheets = model_sheets(&path)?;
+            if sheets.is_empty() {
+                println!("no sheets (bimble sheet-new adds one)");
+            }
+            for s in sheets {
+                let placed: Vec<String> = s
+                    .placed
+                    .iter()
+                    .map(|p| {
+                        let name = views
+                            .iter()
+                            .find(|v| v.id == p.view)
+                            .map_or("(missing view)", |v| v.name.as_str());
+                        format!("{name} 1:{}", p.scale)
+                    })
+                    .collect();
+                println!(
+                    "{:<10} {:<30} {}{}  {}",
+                    s.number,
+                    s.name,
+                    s.paper,
+                    if s.portrait { " portrait" } else { "" },
+                    placed.join(", ")
+                );
+            }
+        }
+        Cmd::Sheet {
+            file: path,
+            number,
+            out,
+            dpi,
+            style,
+            template,
+            project,
+        } => {
+            let ext = out
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(str::to_ascii_lowercase);
+            if !matches!(ext.as_deref(), Some("pdf" | "svg" | "png")) {
+                return Err("the output must end in .pdf, .svg or .png".into());
+            }
+            if !(10.0..=1200.0).contains(&dpi) {
+                return Err("--dpi must be between 10 and 1200".into());
+            }
+            let scene = load_scene(&path)?;
+            let views = model_views(&path, &scene)?;
+            let sheets = model_sheets(&path)?;
+            let def = sheets
+                .iter()
+                .find(|s| s.number.eq_ignore_ascii_case(&number))
+                .ok_or_else(|| {
+                    let n: Vec<&str> = sheets.iter().map(|s| s.number.as_str()).collect();
+                    format!("no sheet {number:?}. Sheets: {}", n.join(", "))
+                })?;
+            let o = bimble_drawing::sheetdraw::SheetOptions {
+                style: match style {
+                    Some(p) => bimble_render::GraphicStyle::load(&p)?,
+                    None => Default::default(),
+                },
+                template: match template {
+                    Some(p) => bimble_drawing::template::PlanTemplate::load(&p)?,
+                    None => Default::default(),
+                },
+                project: project.unwrap_or_else(|| {
+                    path.file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                }),
+                date: bimble_drawing::today(),
+            };
+            let (sheet, info) = bimble_drawing::sheetdraw::draw(&scene, def, &views, &o)?;
+            match ext.as_deref() {
+                Some("png") => {
+                    let r = sheet.rasterize(dpi / 25.4)?;
+                    bimble_render::write_png(&out, r.width, r.height, &r.rgba)
+                        .map_err(|e| format!("{}: {e}", out.display()))?;
+                }
+                _ => {
+                    let bytes = if ext.as_deref() == Some("pdf") {
+                        sheet.to_pdf()
+                    } else {
+                        sheet.to_svg().into_bytes()
+                    };
+                    file::write_atomic(&out, &bytes)
+                        .map_err(|e| format!("{}: {e}", out.display()))?;
+                }
+            }
+            println!(
+                "sheet {} on {}: {} views{} → {}",
+                def.number,
+                def.paper,
+                info.views_drawn,
+                if info.problems.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", info.problems.join("; "))
+                },
+                out.display()
+            );
+        }
+        Cmd::SheetNew {
+            file: path,
+            name,
+            number,
+            paper,
+            portrait,
+            place,
+        } => {
+            let scene = load_scene(&path)?;
+            let sheets = model_sheets(&path)?;
+            let number = number.unwrap_or_else(|| {
+                bimble_core::sheet::next_number(sheets.iter().map(|s| s.number.as_str()))
+            });
+            let mut def = bimble_core::sheet::Sheet::new(number, name);
+            def.paper = paper.to_ascii_uppercase();
+            def.portrait = portrait;
+            let (w, h) = def
+                .size_mm()
+                .ok_or_else(|| format!("--paper {paper}: A4, A3, A2, A1 or A0"))?;
+            // Each view's drawing size at its scale, then left to right, centred in the space
+            // above the title block.
+            let template = bimble_drawing::template::PlanTemplate::default();
+            let mut sizes = Vec::new();
+            for p in &place {
+                let (vname, n) = p
+                    .rsplit_once(':')
+                    .ok_or_else(|| format!("--place {p:?}: expected VIEW:N"))?;
+                let scale: u32 = n
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("--place {p:?}: scale N must be a number"))?;
+                let v = find_view(&path, &scene, vname.trim())?;
+                let (drawn, _) = bimble_drawing::plan::plan(
+                    &scene,
+                    &bimble_drawing::plan::PlanOptions {
+                        scale,
+                        view: Some(v.clone()),
+                        bare: true,
+                        template: template.clone(),
+                        ..Default::default()
+                    },
+                )?;
+                sizes.push((v.id, scale, drawn.width_mm, drawn.height_mm));
+            }
+            let margin = 10.0;
+            let usable_h = h - 2.0 * margin - template.title_block.height_mm;
+            let total_w: f64 = sizes.iter().map(|s| s.2).sum();
+            let gap = ((w - 2.0 * margin - total_w) / (sizes.len() as f64 + 1.0)).max(0.0);
+            let mut x = margin + gap;
+            for (view, scale, sw, sh) in sizes {
+                if sh > usable_h || x + sw > w - margin {
+                    eprintln!(
+                        "warning: views don't all fit on {paper}: move them or use bigger paper"
+                    );
+                }
+                def.placed.push(bimble_core::sheet::Placed {
+                    id: GlobalId::new(),
+                    view,
+                    scale,
+                    at_mm: [
+                        (x + sw / 2.0).clamp(0.0, w),
+                        (margin + usable_h / 2.0).clamp(0.0, h),
+                    ],
+                });
+                x += sw + gap;
+            }
+            let number = def.number.clone();
+            save_sheet(&path, def)?;
+            println!("sheet {number} added to {}", path.display());
         }
         Cmd::Views { file: path } => {
             use bimble_core::view::{Look, ViewKind};
@@ -906,6 +1122,57 @@ fn model_views(
             .views
     };
     Ok(effective(&stored, &scene.levels()))
+}
+
+/// The sheets of a model: in a .bimble, or in the side file of an IFC.
+fn model_sheets(path: &std::path::Path) -> Result<Vec<bimble_core::sheet::Sheet>, String> {
+    let mut v: Vec<_> = if is_ifc(path) {
+        read_side(path)?.sheets.into_values().collect()
+    } else {
+        bimble_core::file::load(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .sheets
+            .into_values()
+            .collect()
+    };
+    v.sort_by(|a, b| a.number.cmp(&b.number));
+    Ok(v)
+}
+
+/// The side file of an IFC (empty when there is none).
+fn read_side(path: &std::path::Path) -> Result<bimble_core::view::ViewsFile, String> {
+    use bimble_core::view::{ViewsFile, side_file};
+    let side = side_file(path);
+    if !side.exists() {
+        return Ok(ViewsFile::new(Default::default(), Default::default()));
+    }
+    let bytes = std::fs::read(&side).map_err(|e| format!("{}: {e}", side.display()))?;
+    ViewsFile::from_bytes(&bytes).map_err(|e| format!("{}: {e}", side.display()))
+}
+
+/// Add a sheet: a Command in a .bimble model (saved), else in the IFC's side file.
+fn save_sheet(path: &std::path::Path, def: bimble_core::sheet::Sheet) -> Result<(), String> {
+    if is_ifc(path) {
+        let scene = load_scene(path)?;
+        let ids: std::collections::BTreeSet<GlobalId> =
+            model_views(path, &scene)?.iter().map(|v| v.id).collect();
+        def.validate(|v| ids.contains(&v))?;
+        let mut f = read_side(path)?;
+        if f.sheets.values().any(|s| s.number == def.number) {
+            return Err(format!("sheet number {} is already used", def.number));
+        }
+        f.sheets.insert(def.id, def);
+        let f = bimble_core::view::ViewsFile::new(f.views, f.sheets);
+        let side = bimble_core::view::side_file(path);
+        file::write_atomic(&side, f.to_json().as_bytes())
+            .map_err(|e| format!("{}: {e}", side.display()))
+    } else {
+        let mut m = file::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        bimble_core::Command::AddSheet(def)
+            .apply(&mut m)
+            .map_err(|e| e.to_string())?;
+        file::save(&m, path).map_err(|e| format!("{}: {e}", path.display()))
+    }
 }
 
 /// A view by name (any letter case).
