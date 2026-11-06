@@ -11,3 +11,8 @@ serde_json.workspace = true
 blake3.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Random GlobalIds and the clock come from the browser.
+uuid = { workspace = true, features = ["js"] }
+js-sys.workspace = true

@@ -5,7 +5,9 @@
 //! precision. Inputs that aren't closed 2-manifolds are rejected with an error: callers then draw
 //! the element uncut and report it, rather than guessing.
 
+#[cfg(not(target_arch = "wasm32"))]
 use manifold_csg::Manifold;
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 
 pub type Tri = [[f64; 3]; 3];
@@ -28,6 +30,7 @@ impl std::fmt::Display for BooleanError {
 
 impl std::error::Error for BooleanError {}
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn bounds(sets: &[&[Tri]]) -> Option<([f64; 3], [f64; 3])> {
     let mut it = sets.iter().flat_map(|s| s.iter()).flat_map(|t| t.iter());
     let first = *it.next()?;
@@ -40,6 +43,7 @@ fn bounds(sets: &[&[Tri]]) -> Option<([f64; 3], [f64; 3])> {
     }))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn to_manifold(tris: &[Tri], origin: [f64; 3]) -> Result<Manifold, BooleanError> {
     let mut index: HashMap<[u64; 3], u64> = HashMap::new();
     let mut verts: Vec<f64> = Vec::new();
@@ -68,6 +72,7 @@ fn to_manifold(tris: &[Tri], origin: [f64; 3]) -> Result<Manifold, BooleanError>
     Ok(m)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn from_manifold(m: &Manifold, origin: [f64; 3]) -> Vec<Tri> {
     let (props, n, idx) = m.to_mesh_f64();
     let v = |i: u64| {
@@ -86,6 +91,15 @@ fn from_manifold(m: &Manifold, origin: [f64; 3]) -> Vec<Tri> {
 }
 
 /// `a op (union of b)`. Each operand must be one or more closed, non-overlapping solids.
+/// Not in the web build yet: callers draw the element uncut and report it (ADR 0020).
+#[cfg(target_arch = "wasm32")]
+pub fn apply(_op: Op, _a: &[Tri], _b: &[&[Tri]]) -> Result<Vec<Tri>, BooleanError> {
+    Err(BooleanError(
+        "boolean operations are not available in the web version yet".into(),
+    ))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn apply(op: Op, a: &[Tri], b: &[&[Tri]]) -> Result<Vec<Tri>, BooleanError> {
     let b: Vec<&[Tri]> = b.iter().copied().filter(|s| !s.is_empty()).collect();
     if b.is_empty() {

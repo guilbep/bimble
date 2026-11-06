@@ -9,4 +9,7 @@ license.workspace = true
 rayon.workspace = true
 bimble-core.workspace = true
 earcutr.workspace = true
+
+# The kernel is C++: native builds only. The web build has no booleans yet (ADR 0020).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 manifold-csg.workspace = true

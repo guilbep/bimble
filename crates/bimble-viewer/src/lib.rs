@@ -14,9 +14,12 @@ use eframe::egui_wgpu;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// std's Instant panics in browsers; web-time is std's on the desktop.
+use web_time::Instant;
 
 mod edit;
+mod files;
 mod measure;
 mod section;
 mod style_editor;
@@ -128,8 +131,62 @@ struct Turn {
     start: Instant,
 }
 
+/// Start the viewer in a browser page, drawing into `canvas` (WebGPU, or WebGL2 where the
+/// browser has no WebGPU). Files are opened with the file picker or by dropping them on the page.
+#[cfg(target_arch = "wasm32")]
+pub async fn start_web(canvas: web_sys::HtmlCanvasElement) -> Result<(), String> {
+    let mut options = eframe::WebOptions::default();
+    // Browsers can expose WebGPU without an adapter behind it (Chrome on many Linux machines):
+    // wgpu would pick WebGPU and fail, so ask for an adapter first and use WebGL2 without one.
+    if !has_webgpu_adapter().await
+        && let eframe::egui_wgpu::WgpuSetup::CreateNew(c) = &mut options.wgpu_options.wgpu_setup
+    {
+        c.instance_descriptor.backends = eframe::wgpu::Backends::GL;
+    }
+    eframe::WebRunner::new()
+        .start(
+            canvas,
+            options,
+            Box::new(|cc| {
+                let rs = cc
+                    .wgpu_render_state
+                    .as_ref()
+                    .ok_or("the viewer needs the wgpu renderer")?;
+                Ok(Box::new(Viewer::new(rs)))
+            }),
+        )
+        .await
+        .map_err(|e| format!("{e:?}"))
+}
+
+/// Whether `navigator.gpu.requestAdapter()` gives an adapter.
+#[cfg(target_arch = "wasm32")]
+async fn has_webgpu_adapter() -> bool {
+    use wasm_bindgen::JsCast;
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let get = |o: &wasm_bindgen::JsValue, k: &str| js_sys::Reflect::get(o, &k.into()).ok();
+    let Some(gpu) = get(&window.navigator().into(), "gpu").filter(|g| !g.is_undefined()) else {
+        return false;
+    };
+    let Some(request) =
+        get(&gpu, "requestAdapter").and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+    else {
+        return false;
+    };
+    let Ok(promise) = request.call0(&gpu) else {
+        return false;
+    };
+    match wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(promise)).await {
+        Ok(adapter) => !adapter.is_null() && !adapter.is_undefined(),
+        Err(_) => false,
+    }
+}
+
 /// Open the viewer window, optionally loading a file and a graphic style. Blocks until the
 /// window is closed.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run(
     file: Option<PathBuf>,
     style: Option<PathBuf>,
@@ -188,6 +245,29 @@ fn load_any(path: &Path) -> Result<(Scene, Option<bimble_core::Model>), String> 
         let m = bimble_core::file::load(path).map_err(|e| e.to_string())?;
         Ok((Scene::from_model(&m), Some(m)))
     }
+}
+
+/// A model from a file's content (picked or dropped in a browser): IFC or .bimble by name.
+fn load_bytes(name: &str, bytes: &[u8]) -> Result<(Scene, Option<bimble_core::Model>), String> {
+    let is_ifc = name.to_ascii_lowercase().ends_with(".ifc");
+    if is_ifc {
+        bimble_ifc::read::read_bytes(bytes)
+            .map(|s| (s, None))
+            .map_err(|e| e.to_string())
+    } else {
+        let m = bimble_core::file::from_bytes(bytes).map_err(|e| e.to_string())?;
+        Ok((Scene::from_model(&m), Some(m)))
+    }
+}
+
+/// A file's content to load on a later frame, so "Loading…" is drawn before the browser's only
+/// thread is busy parsing.
+struct ParseLater {
+    name: String,
+    bytes: Vec<u8>,
+    link: bool,
+    frames: u8,
+    tx: std::sync::mpsc::Sender<LoadResult>,
 }
 
 type LoadResult = Result<(Scene, Option<bimble_core::Model>, Duration), String>;
@@ -304,6 +384,9 @@ struct Viewer {
     edit_window: bool,
     history_window: bool,
     history_view: Option<HistoryView>,
+
+    files: files::Files,
+    parse_later: Option<ParseLater>,
 }
 
 impl Viewer {
@@ -353,9 +436,113 @@ impl Viewer {
             edit_window: false,
             history_window: false,
             history_view: None,
+            files: files::Files::default(),
+            parse_later: None,
         }
     }
 
+    /// Load a picked or dropped file: from its path on a thread (desktop), or from its bytes on a
+    /// later frame (browser).
+    fn open_picked(&mut self, p: files::Picked, ctx: &egui::Context) {
+        let link = p.purpose == files::Purpose::Link;
+        if let (Some(path), None) = (&p.path, &p.bytes) {
+            if link {
+                self.link(path.clone(), ctx);
+            } else {
+                self.open(path.clone(), ctx);
+            }
+            return;
+        }
+        let Some(bytes) = p.bytes else { return };
+        let (tx, rx) = channel();
+        let loading = Loading {
+            path: PathBuf::from(&p.name),
+            rx,
+        };
+        if link {
+            self.linking = Some(loading);
+        } else {
+            self.loading = Some(loading);
+            self.error = None;
+        }
+        self.parse_later = Some(ParseLater {
+            name: p.name,
+            bytes,
+            link,
+            frames: 2,
+            tx,
+        });
+        ctx.request_repaint();
+    }
+
+    /// Parse a file's content once "Loading…" has been drawn.
+    fn run_parse_later(&mut self, ctx: &egui::Context) {
+        let Some(job) = &mut self.parse_later else {
+            return;
+        };
+        if job.frames > 0 {
+            job.frames -= 1;
+            ctx.request_repaint();
+            return;
+        }
+        let job = self.parse_later.take().unwrap();
+        let t = Instant::now();
+        let r = load_bytes(&job.name, &job.bytes).map(|(s, m)| {
+            let m = if job.link { None } else { m };
+            (s, m, t.elapsed())
+        });
+        let _ = job.tx.send(r);
+        ctx.request_repaint();
+    }
+
+    /// Files picked in dialogs (or dropped), by what they are for.
+    fn handle_picked(&mut self, ctx: &egui::Context) {
+        while let Some(p) = self.files.poll() {
+            match p.purpose {
+                files::Purpose::Open | files::Purpose::Link => self.open_picked(p, ctx),
+                files::Purpose::PlanTemplate => {
+                    let r = p.content().and_then(|b| {
+                        bimble_drawing::template::PlanTemplate::from_json(&String::from_utf8_lossy(
+                            &b,
+                        ))
+                        .map_err(|e| format!("{}: {e}", p.name))
+                    });
+                    match r {
+                        Ok(t) => {
+                            self.plan.template = t;
+                            self.plan.template_path = Some(p.path_or_name());
+                            self.plan.template_rev += 1;
+                            self.plan.message = None;
+                        }
+                        Err(e) => self.plan.message = Some(e),
+                    }
+                }
+                files::Purpose::Style => {
+                    let r = p.content().and_then(|b| {
+                        GraphicStyle::from_json(&String::from_utf8_lossy(&b))
+                            .map_err(|e| format!("{}: {e}", p.name))
+                    });
+                    match r {
+                        Ok(s) => {
+                            self.opts.style = s;
+                            self.style_message = Some(format!("Loaded {}", p.name));
+                            self.style_path = Some(p.path_or_name());
+                            self.needs_render = true;
+                        }
+                        Err(e) => self.style_message = Some(e),
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn open(&mut self, _path: PathBuf, _ctx: &egui::Context) {}
+
+    #[cfg(target_arch = "wasm32")]
+    fn link(&mut self, _path: PathBuf, _ctx: &egui::Context) {}
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn open(&mut self, path: PathBuf, ctx: &egui::Context) {
         let (tx, rx) = channel();
         let p = path.clone();
@@ -371,6 +558,7 @@ impl Viewer {
     }
 
     /// Load another model as a reference, next to ours.
+    #[cfg(not(target_arch = "wasm32"))]
     fn link(&mut self, path: PathBuf, ctx: &egui::Context) {
         let (tx, rx) = channel();
         let p = path.clone();
@@ -543,7 +731,18 @@ impl Viewer {
             return;
         };
         let Some(ed) = l.edit.as_mut() else { return };
-        match bimble_core::file::save(&ed.model, &l.path) {
+        // In a browser there is no file to write back to: the model is downloaded.
+        #[cfg(target_arch = "wasm32")]
+        let r = files::download(
+            &l.path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "model.bimble".into()),
+            bimble_core::file::to_string(&ed.model).as_bytes(),
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        let r = bimble_core::file::save(&ed.model, &l.path).map_err(|e| e.to_string());
+        match r {
             Ok(()) => {
                 ed.dirty = false;
                 ed.message = Some(format!("Saved {}", l.path.display()));
@@ -1219,23 +1418,16 @@ impl Viewer {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("Open…").clicked()
-                && let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Building models", &["ifc", "IFC", "bimble"])
-                    .pick_file()
-            {
-                self.open(p, ui.ctx());
+            if ui.button("Open…").clicked() {
+                self.files.pick(files::Purpose::Open, ui.ctx());
             }
             if self.loaded.is_some()
                 && ui
                     .button(if self.linking.is_some() { "Linking…" } else { "Link model…" })
                     .on_hover_text("Load another model as a reference (e.g. the architect's IFC)")
                     .clicked()
-                && let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Building models", &["ifc", "IFC", "bimble"])
-                    .pick_file()
             {
-                self.link(p, ui.ctx());
+                self.files.pick(files::Purpose::Link, ui.ctx());
             }
             ui.separator();
             let mut changed = false;
@@ -1292,7 +1484,10 @@ impl Viewer {
                 }
                 ui.toggle_value(&mut self.edit_window, "Edit…")
                     .on_hover_text("Place columns, beams, walls and slabs");
-                if ui.toggle_value(&mut self.history_window, "History…").changed() && self.history_window {
+                if cfg!(not(target_arch = "wasm32"))
+                    && ui.toggle_value(&mut self.history_window, "History…").changed()
+                    && self.history_window
+                {
                     self.refresh_history();
                 }
             }
@@ -1576,20 +1771,8 @@ impl Viewer {
             }
         });
         ui.horizontal(|ui| {
-            if ui.button("Template…").clicked()
-                && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Plan template", &["json"])
-                    .pick_file()
-            {
-                match bimble_drawing::template::PlanTemplate::load(&path) {
-                    Ok(t) => {
-                        p.template = t;
-                        p.template_path = Some(path);
-                        p.template_rev += 1;
-                        p.message = None;
-                    }
-                    Err(e) => p.message = Some(e),
-                }
+            if ui.button("Template…").clicked() {
+                self.files.pick(files::Purpose::PlanTemplate, ui.ctx());
             }
             if p.template_path.is_some() && ui.small_button("Default").clicked() {
                 p.template = Default::default();
@@ -1605,33 +1788,39 @@ impl Viewer {
             });
         });
         ui.weak("Colours, hatches and pens come from the graphic style (Style…).");
-        if ui.button("Export PDF or SVG…").clicked()
-            && let Some(out) = rfd::FileDialog::new()
-                .add_filter("PDF", &["pdf"])
-                .add_filter("SVG", &["svg"])
-                .set_file_name(format!("plan-{}-1-{}.pdf", p.storey, p.scale))
-                .save_file()
-        {
+        let export = ui.horizontal(|ui| {
+            if ui.button("Export PDF…").clicked() {
+                Some(false)
+            } else if ui.button("Export SVG…").clicked() {
+                Some(true)
+            } else {
+                None
+            }
+        });
+        if let Some(svg) = export.inner {
             let opts = plan_options(p, &l.path, self.opts.style);
             p.message = Some(match bimble_drawing::plan::plan(&l.scene, &opts) {
                 Err(e) => e,
                 Ok((sheet, info)) => {
-                    let svg = out
-                        .extension()
-                        .is_some_and(|x| x.eq_ignore_ascii_case("svg"));
-                    let bytes = if svg {
-                        sheet.to_svg().into_bytes()
+                    let (bytes, ext) = if svg {
+                        (sheet.to_svg().into_bytes(), "svg")
                     } else {
-                        sheet.to_pdf()
+                        (sheet.to_pdf(), "pdf")
                     };
-                    match bimble_core::file::write_atomic(&out, &bytes) {
-                        Ok(()) => format!(
-                            "Saved {} ({}{})",
-                            out.display(),
+                    let name = format!("plan-{}-1-{}.{ext}", p.storey, p.scale);
+                    let filter: (&str, &[&str]) = if svg {
+                        ("SVG", &["svg"])
+                    } else {
+                        ("PDF", &["pdf"])
+                    };
+                    match files::save(&name, &[filter], &bytes) {
+                        Ok(Some(to)) => format!(
+                            "Saved {to} ({}{})",
                             info.paper.name(),
                             if info.portrait { " portrait" } else { "" }
                         ),
-                        Err(e) => format!("{}: {e}", out.display()),
+                        Ok(None) => String::new(),
+                        Err(e) => e,
                     }
                 }
             });
@@ -1714,42 +1903,28 @@ impl Viewer {
 
     fn style_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("Load…").clicked()
-                && let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Bimble style", &["json"])
-                    .pick_file()
-            {
-                match GraphicStyle::load(&p) {
-                    Ok(s) => {
-                        self.opts.style = s;
-                        self.style_message = Some(format!("Loaded {}", p.display()));
-                        self.style_path = Some(p);
-                        self.needs_render = true;
-                    }
-                    Err(e) => self.style_message = Some(e),
-                }
+            if ui.button("Load…").clicked() {
+                self.files.pick(files::Purpose::Style, ui.ctx());
             }
             if ui
                 .button("Save…")
                 .on_hover_text("Writes only what differs from the default style")
                 .clicked()
             {
-                let mut dialog = rfd::FileDialog::new().add_filter("Bimble style", &["json"]);
-                dialog = match &self.style_path {
-                    Some(p) => dialog.set_file_name(
-                        p.file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default(),
-                    ),
-                    None => dialog.set_file_name("style.json"),
-                };
-                if let Some(p) = dialog.save_file() {
-                    self.style_message =
-                        Some(match std::fs::write(&p, self.opts.style.to_json_diff()) {
-                            Ok(()) => format!("Saved {}", p.display()),
-                            Err(e) => format!("{}: {e}", p.display()),
-                        });
-                    self.style_path = Some(p);
+                let name = self
+                    .style_path
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "style.json".into());
+                let json = self.opts.style.to_json_diff();
+                match files::save(&name, &[("Bimble style", &["json"])], json.as_bytes()) {
+                    Ok(Some(to)) => {
+                        self.style_message = Some(format!("Saved {to}"));
+                        self.style_path = Some(PathBuf::from(to));
+                    }
+                    Ok(None) => {}
+                    Err(e) => self.style_message = Some(e),
                 }
             }
             if ui.button("Reset").clicked() {
@@ -1976,10 +2151,11 @@ impl eframe::App for Viewer {
         self.poll_linking();
 
         // Files dropped on the window.
-        if let Some(f) = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()))
-        {
-            self.open(f, &ctx);
+        if let Some(f) = ctx.input(|i| i.raw.dropped_files.first().cloned()) {
+            self.files.dropped(f, &ctx);
         }
+        self.handle_picked(&ctx);
+        self.run_parse_later(&ctx);
 
         egui::Panel::top("toolbar").show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
@@ -2101,4 +2277,30 @@ impl eframe::App for Viewer {
 /// Today's date (UTC) as YYYY-MM-DD, for title blocks.
 fn today() -> String {
     bimble_drawing::today()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What a browser gives (a name and bytes) loads like the file on disk.
+    #[test]
+    fn files_load_from_bytes_like_from_disk() {
+        let ifc = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bimble-ifc/tests/fixtures/curves.ifc"
+        );
+        let bytes = std::fs::read(ifc).unwrap();
+        let (a, m) = load_bytes("curves.IFC", &bytes).unwrap();
+        let (b, _) = load_any(Path::new(ifc)).unwrap();
+        assert!(m.is_none());
+        assert_eq!(a.elements.len(), b.elements.len());
+        let model = bimble_core::demo::concrete_frame(&Default::default());
+        let text = bimble_core::file::to_string(&model);
+        let (s, m) = load_bytes("frame.bimble", text.as_bytes()).unwrap();
+        assert_eq!(m.unwrap(), model);
+        assert_eq!(s.elements.len(), model.elements.len());
+        // Not UTF-8: an error, not a panic.
+        assert!(load_bytes("x.bimble", &[0xff, 0xfe, 0x00]).is_err());
+    }
 }

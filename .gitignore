@@ -3,3 +3,4 @@
 *.bimble
 !**/fixtures/*.ifc
 !**/fixtures/*.bimble
+web/dist/
