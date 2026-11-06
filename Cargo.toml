@@ -35,6 +35,9 @@ rayon = "1"
 pdf-writer = "0.15"
 # Rasterizes drawing sheets (plan preview, PNG output). Pure Rust.
 resvg = "0.49"
+# Reference plans in 2D views (ADR 0021): DXF and vector PDF. Both MIT.
+dxf = "0.6"
+lopdf = { version = "0.47", default-features = false }
 # A font for rasterized sheets where the system has none (browsers, bare containers).
 epaint_default_fonts = "0.37"
 # Allocator for the bimble binary: parsing and freeing big IFC files are allocation-bound.

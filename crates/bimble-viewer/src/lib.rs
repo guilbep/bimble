@@ -20,6 +20,7 @@ use web_time::Instant;
 
 mod edit;
 mod files;
+mod views;
 mod measure;
 mod section;
 mod style_editor;
