@@ -455,7 +455,7 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bimble-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bimble-core",
  "bimble-drawing",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "bimble-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "blake3",
  "serde",
@@ -483,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "bimble-drawing"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bimble-core",
  "bimble-geom",
@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "bimble-geom"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bimble-core",
  "earcutr",
@@ -505,7 +505,7 @@ dependencies = [
 
 [[package]]
 name = "bimble-ifc"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bimble-core",
  "bimble-geom",
@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "bimble-render"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bimble-core",
  "bimble-geom",
@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "bimble-viewer"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bimble-core",
  "bimble-drawing",
