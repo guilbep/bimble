@@ -153,6 +153,8 @@ impl Viewer {
 
     /// Switch to a view: its camera (remembered per view), clip and visibility.
     pub(crate) fn activate_view(&mut self, id: GlobalId) {
+        // Choosing a view leaves a schedule shown in its place.
+        self.schedule = None;
         if self.active_view == Some(id) {
             return;
         }
@@ -391,7 +393,7 @@ impl Viewer {
 
     // ---------------------------------------------------------------- navigator
 
-    /// The model navigator: views, quantities, layouts, objects, links, measurements, warnings.
+    /// The model navigator: views, schedules, layouts, objects, links, measurements, warnings.
     pub(crate) fn navigator(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical()
             .id_salt("navigator")
@@ -423,6 +425,9 @@ impl Viewer {
     }
 
     fn navigator_tree(&mut self, ui: &mut egui::Ui) {
+        let schedule_counts = self.schedule_counts();
+        let open_schedule_name = self.schedule.as_ref().map(|s| s.name.clone());
+        let mut open_schedule: Option<String> = None;
         let Some(l) = &self.loaded else {
             ui.weak("No model loaded.");
             return;
@@ -560,21 +565,19 @@ impl Viewer {
                             }
                         });
                     });
-                egui::CollapsingHeader::new(egui::RichText::new("Quantities").strong()).show(
+                egui::CollapsingHeader::new(egui::RichText::new("Schedules").strong()).show(
                     ui,
                     |ui| {
-                        egui::Grid::new("quantities").striped(true).show(ui, |ui| {
-                            ui.strong("IFC class");
-                            ui.strong("Count");
-                            ui.strong("Volume");
-                            ui.end_row();
-                            for (class, n, vol) in views::quantities(&l.scene) {
-                                ui.label(class);
-                                ui.label(n.to_string());
-                                ui.label(format!("{vol:.3} m³"));
-                                ui.end_row();
+                        for (name, n) in &schedule_counts {
+                            let on = open_schedule_name.as_deref() == Some(name.as_str());
+                            let r = ui.add_enabled(
+                                *n > 0,
+                                egui::Button::selectable(on, format!("{name}  ({n})")),
+                            );
+                            if r.clicked() {
+                                open_schedule = Some(name.clone());
                             }
-                        });
+                        }
                     },
                 );
                 egui::CollapsingHeader::new(egui::RichText::new("Layouts").strong()).show(
@@ -667,6 +670,9 @@ impl Viewer {
         }
         if let Some(id) = open_sheet {
             self.open_sheet(id);
+        }
+        if let Some(n) = open_schedule {
+            self.open_schedule(&n);
         }
         if let Some(id) = delete_sheet {
             self.delete_sheet(id);

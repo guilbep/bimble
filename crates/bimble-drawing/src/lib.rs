@@ -3,6 +3,7 @@
 pub mod cut;
 pub mod plan;
 pub mod reference;
+pub mod schedule;
 pub mod sheet;
 pub mod sheetdraw;
 pub mod template;

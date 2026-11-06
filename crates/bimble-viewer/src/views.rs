@@ -188,17 +188,6 @@ pub fn new_section(scene: &Scene, facing: Facing, n: usize) -> View {
     }
 }
 
-/// Element count and volume (m³) per IFC class, sorted by class.
-pub fn quantities(scene: &Scene) -> Vec<(String, usize, f64)> {
-    let mut m: std::collections::BTreeMap<String, (usize, f64)> = Default::default();
-    for e in &scene.elements {
-        let q = m.entry(e.class.clone()).or_default();
-        q.0 += 1;
-        q.1 += e.mesh.volume() / 1e9;
-    }
-    m.into_iter().map(|(k, (n, v))| (k, n, v)).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,14 +279,5 @@ mod tests {
             reference_move(&sec, Vec3::new(0.0, -10.0, 5.0)),
             [10.0, 5.0]
         );
-    }
-
-    #[test]
-    fn quantities_count_and_measure_per_class() {
-        let (s, _) = demo();
-        let q = quantities(&s);
-        let col = q.iter().find(|(c, ..)| c == "IfcColumn").unwrap();
-        assert_eq!(col.1, 24);
-        assert!(col.2 > 0.0);
     }
 }

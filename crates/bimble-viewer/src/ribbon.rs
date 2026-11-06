@@ -187,6 +187,14 @@ impl Action {
     }
 }
 
+/// A tab over the main view: a view, a sheet or a schedule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TabRef {
+    View(GlobalId),
+    Sheet(GlobalId),
+    Schedule(String),
+}
+
 /// The command palette's state: what is typed and which result is highlighted.
 #[derive(Default)]
 pub(crate) struct Palette {
@@ -747,43 +755,55 @@ impl Viewer {
         });
     }
 
-    /// Tabs of the open views and sheets, over the main view.
+    /// Tabs of the open views, sheets and schedules, over the main view.
     pub(crate) fn view_tabs(&mut self, ui: &mut egui::Ui) {
-        // The active view or sheet always has its tab.
-        let current = self.layout.as_ref().map(|l| l.sheet).or(self.active_view);
-        if let Some(c) = current
-            && !self.open_tabs.contains(&c)
+        // What the main view shows always has its tab.
+        let current = if let Some(s) = &self.schedule {
+            Some(TabRef::Schedule(s.name.clone()))
+        } else if let Some(l) = &self.layout {
+            Some(TabRef::Sheet(l.sheet))
+        } else {
+            self.active_view.map(TabRef::View)
+        };
+        if let Some(c) = &current
+            && !self.open_tabs.contains(c)
         {
-            self.open_tabs.push(c);
+            self.open_tabs.push(c.clone());
         }
         let sheets = self.sheets();
-        self.open_tabs.retain(|id| {
-            self.views.iter().any(|v| v.id == *id) || sheets.iter().any(|s| s.id == *id)
+        let schedules = crate::schedules::schedule_defs();
+        self.open_tabs.retain(|t| match t {
+            TabRef::View(id) => self.views.iter().any(|v| v.id == *id),
+            TabRef::Sheet(id) => sheets.iter().any(|s| s.id == *id),
+            TabRef::Schedule(n) => schedules.iter().any(|d| d.name == *n),
         });
-        let mut go: Option<GlobalId> = None;
-        let mut close: Option<GlobalId> = None;
+        let mut go: Option<TabRef> = None;
+        let mut close: Option<TabRef> = None;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            for id in self.open_tabs.clone() {
-                let (name, sheet) = match sheets.iter().find(|s| s.id == id) {
-                    Some(s) => (format!("{} · {}", s.number, s.name), true),
-                    None => (
-                        self.views
-                            .iter()
-                            .find(|v| v.id == id)
-                            .map(|v| v.name.clone())
-                            .unwrap_or_default(),
-                        false,
-                    ),
+            for (k, t) in self.open_tabs.clone().into_iter().enumerate() {
+                let name = match &t {
+                    TabRef::Sheet(id) => sheets
+                        .iter()
+                        .find(|s| s.id == *id)
+                        .map(|s| format!("{} · {}", s.number, s.name))
+                        .unwrap_or_default(),
+                    TabRef::View(id) => self
+                        .views
+                        .iter()
+                        .find(|v| v.id == *id)
+                        .map(|v| v.name.clone())
+                        .unwrap_or_default(),
+                    TabRef::Schedule(n) => format!("Schedule · {n}"),
                 };
-                let on = current == Some(id);
+                let on = current.as_ref() == Some(&t);
                 let fill = if on { th::CANVAS } else { th::RIBBON_BG };
                 let color = if on {
                     egui::Color32::from_rgb(0x1a, 0x1a, 0x1a)
                 } else {
                     th::TEXT
                 };
-                ui.push_id(id.as_str(), |ui| {
+                ui.push_id(k, |ui| {
                     let r = ui.add(
                         egui::Button::new(egui::RichText::new(&name).color(color))
                             .fill(fill)
@@ -796,38 +816,41 @@ impl Viewer {
                             }),
                     );
                     if r.clicked() {
-                        go = Some(id);
+                        go = Some(t.clone());
                     }
                     if r.middle_clicked() {
-                        close = Some(id);
+                        close = Some(t.clone());
                     }
                     if self.open_tabs.len() > 1
                         && ui
                             .small_button("×")
-                            .on_hover_text(if sheet {
-                                "Close the sheet"
-                            } else {
-                                "Close the tab"
-                            })
+                            .on_hover_text("Close the tab")
                             .clicked()
                     {
-                        close = Some(id);
+                        close = Some(t.clone());
                     }
                 });
             }
         });
-        if let Some(id) = close {
-            self.open_tabs.retain(|x| *x != id);
-            if current == Some(id) {
-                go = self.open_tabs.last().copied();
+        if let Some(t) = close {
+            self.open_tabs.retain(|x| *x != t);
+            if current.as_ref() == Some(&t) {
+                go = self.open_tabs.last().cloned();
+                if go.is_none() {
+                    self.schedule = None;
+                    self.close_sheet();
+                }
             }
         }
-        if let Some(id) = go {
-            if sheets.iter().any(|s| s.id == id) {
-                self.open_sheet(id);
-            } else {
-                self.close_sheet();
-                self.activate_view(id);
+        if let Some(t) = go {
+            match t {
+                TabRef::Sheet(id) => self.open_sheet(id),
+                TabRef::View(id) => {
+                    self.schedule = None;
+                    self.close_sheet();
+                    self.activate_view(id);
+                }
+                TabRef::Schedule(n) => self.open_schedule(&n),
             }
         }
     }
@@ -851,6 +874,10 @@ impl Viewer {
                     "the end"
                 }
             );
+        }
+        if self.schedule.is_some() {
+            return "Schedule: click a row to select its element · a column's title to sort by it"
+                .into();
         }
         if let Some(l) = &self.layout {
             return match l.tool {

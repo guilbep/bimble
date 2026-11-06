@@ -508,7 +508,7 @@ fn dimension_items(
 const LABELLED: [&str; 4] = ["IfcColumn", "IfcBeam", "IfcMember", "IfcPile"];
 
 /// A length as written in a section label: whole cm, or one decimal.
-fn cm(mm: f64) -> String {
+pub(crate) fn cm(mm: f64) -> String {
     let c = mm / 10.0;
     if (c - c.round()).abs() < 0.05 {
         format!("{}", c.round() as i64)
@@ -518,7 +518,7 @@ fn cm(mm: f64) -> String {
 }
 
 /// "30/30", or for timber with a material name "GL24h 24x46".
-fn section_text(cat: MaterialCategory, material: &str, b: f64, h: f64) -> String {
+pub(crate) fn section_text(cat: MaterialCategory, material: &str, b: f64, h: f64) -> String {
     let m = material.trim();
     if cat == MaterialCategory::Timber && !m.is_empty() && m.chars().count() <= 40 {
         format!("{m} {}x{}", cm(b), cm(h))
@@ -641,7 +641,7 @@ fn inside(p: P2, l: &[P2]) -> bool {
 }
 
 /// Spreadsheet-like tags: A..Z, AA, AB, …
-fn letter_tag(mut i: usize) -> String {
+pub(crate) fn letter_tag(mut i: usize) -> String {
     let mut s = Vec::new();
     loop {
         s.push(b'A' + (i % 26) as u8);
@@ -655,7 +655,7 @@ fn letter_tag(mut i: usize) -> String {
 }
 
 /// Positions shared by at least two of `vals` (within `tol`), averaged, sorted.
-fn clusters(mut vals: Vec<f64>, tol: f64) -> Vec<f64> {
+pub(crate) fn clusters(mut vals: Vec<f64>, tol: f64) -> Vec<f64> {
     vals.sort_by(f64::total_cmp);
     let mut out = Vec::new();
     let mut i = 0;

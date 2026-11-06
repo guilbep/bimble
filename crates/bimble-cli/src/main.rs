@@ -163,6 +163,18 @@ enum Cmd {
     Views { file: PathBuf },
     /// List the sheets of a model (number, name, paper, the views placed on them)
     Sheets { file: PathBuf },
+    /// List the schedules (columns, beams, slabs, walls, footings by material) and their counts
+    Schedules { file: PathBuf },
+    /// A schedule as a table: each element measured (section, length, area, volume), grouped
+    /// by level with subtotals; printed, or written as CSV for a spreadsheet
+    Schedule {
+        file: PathBuf,
+        /// Schedule name, e.g. "Concrete columns" (see `bimble schedules`)
+        name: String,
+        /// Write CSV here instead of printing a table
+        #[arg(long)]
+        csv: Option<PathBuf>,
+    },
     /// Draw a sheet (its views at their scales, title block, legend) as PDF, SVG or PNG
     Sheet {
         file: PathBuf,
@@ -651,6 +663,37 @@ fn run(cli: Cli) -> Result<(), String> {
             let number = def.number.clone();
             save_sheet(&path, def)?;
             println!("sheet {number} added to {}", path.display());
+        }
+        Cmd::Schedules { file: path } => {
+            let scene = load_scene(&path)?;
+            for d in bimble_core::schedule::default_schedules() {
+                let t = bimble_drawing::schedule::schedule(&scene, &d);
+                println!("{:<20} {:>6}", d.name, t.count);
+            }
+        }
+        Cmd::Schedule {
+            file: path,
+            name,
+            csv,
+        } => {
+            let scene = load_scene(&path)?;
+            let defs = bimble_core::schedule::default_schedules();
+            let d = defs
+                .iter()
+                .find(|d| d.name.eq_ignore_ascii_case(name.trim()))
+                .ok_or_else(|| {
+                    let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+                    format!("no schedule {name:?}. Schedules: {}", names.join(", "))
+                })?;
+            let t = bimble_drawing::schedule::schedule(&scene, d);
+            match csv {
+                Some(out) => {
+                    std::fs::write(&out, bimble_drawing::schedule::to_csv(&t))
+                        .map_err(|e| format!("{}: {e}", out.display()))?;
+                    println!("{}: {} rows → {}", t.name, t.count, out.display());
+                }
+                None => print!("{}", bimble_drawing::schedule::to_text(&t)),
+            }
         }
         Cmd::Views { file: path } => {
             use bimble_core::view::{Look, ViewKind};

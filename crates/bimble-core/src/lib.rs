@@ -9,6 +9,7 @@ pub mod hatches;
 mod model;
 pub mod pens;
 pub mod repo;
+pub mod schedule;
 pub mod sheet;
 pub mod style;
 pub mod version;

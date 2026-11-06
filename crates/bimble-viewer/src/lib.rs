@@ -25,6 +25,7 @@ mod icons;
 mod layout;
 mod measure;
 mod ribbon;
+mod schedules;
 mod section;
 mod snap;
 mod state;
@@ -456,7 +457,10 @@ struct Viewer {
     /// The ribbon's open tab, the command palette, tabs of open views and sheets.
     ribbon_tab: ribbon::Tab,
     palette: Option<ribbon::Palette>,
-    open_tabs: Vec<bimble_core::GlobalId>,
+    open_tabs: Vec<ribbon::TabRef>,
+    /// A schedule open in the main view, and the schedules' row counts per scene revision.
+    schedule: Option<schedules::OpenSchedule>,
+    schedule_counts: Option<(u64, Vec<(String, usize)>)>,
     /// File the style was loaded from or saved to.
     style_path: Option<PathBuf>,
     style_message: Option<String>,
@@ -545,6 +549,8 @@ impl Viewer {
             ribbon_tab: ribbon::Tab::default(),
             palette: None,
             open_tabs: Vec::new(),
+            schedule: None,
+            schedule_counts: None,
             style_path: None,
             style_message: None,
             history_window: false,
@@ -2975,6 +2981,11 @@ impl eframe::App for Viewer {
                     });
                     ui.label(msg);
                 });
+                return;
+            }
+            // A schedule open: it takes the main view.
+            if self.schedule.is_some() {
+                self.schedule_ui(ui);
                 return;
             }
             // A sheet open: it takes the main view.
