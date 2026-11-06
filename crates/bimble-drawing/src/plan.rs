@@ -1304,7 +1304,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
     if tpl.element_labels {
         for c in &cuts {
             let Some(label) = cut_label(c) else { continue };
-            let Some((a, b)) = bounds(c.loops.iter().flatten()) else {
+            let Some((_, b)) = bounds(c.loops.iter().flatten()) else {
                 continue;
             };
             let q = to_paper(&b);
