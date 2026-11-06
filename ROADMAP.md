@@ -100,9 +100,12 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 - ✅ Sheets (#33, ADR 0024): several views at their own scales, one title block; dimensions and
   texts stored in views
 - ✅ Layouts in the main view (#34, ADR 0025): drag views in, move, text and dimension tools
-- ☐ Next (Pierre, 6 Nov): line weights and line types (#42) → annotation types (#43) → hatch types
-  (#44) → labels, opening dimensions, section markers (#24) → snapping (#25) → #35, #36 → several
-  linked models (#39); then the UI/UX design proposals
+- ✅ Office standards on paper (ADR 0026): pens per scale, line types (#42), text and dimension
+  types (#43), hatch types per material cut and seen (#44)
+- ✅ Plans: section labels, opening sizes and positions, section marks (#24); snapping when placing
+  (#25); crisp cut outlines on screen (#35); views files read back in the browser (#36); several
+  read-only links shown per view (#39)
+- ☐ Next: the UI/UX design proposals; selecting linked elements, dimensions following them (#39)
 
 **I0 — Core** ✅ (PR #1)
 - Crates: `bimble-core` (IFC-typed model, GlobalIds, generators, materials, commands + undo, hash, diff),
