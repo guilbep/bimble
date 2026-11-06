@@ -42,6 +42,13 @@ files must stay theirs: nothing uploaded.
 - Download: `bimble_web_bg.wasm` 14 MB, 4.3 MB gzipped (no wasm-opt yet), plus manifold 0.5 MB.
 - Demo frame, plan preview and PDF export (A3, as on the desktop) work in the page.
 
+## Publishing
+Each release attaches `bimble-vX-web.zip`; `pages.yml` then publishes it on GitHub Pages. It runs
+after the release workflow (`workflow_run`), from the default branch: a workflow started by a tag
+is refused by the `github-pages` environment, whose default rule allows the default branch only
+(found on v0.5.0). No `gh-pages` branch, no setting to change. A release can be published again by
+hand: Actions → pages → Run workflow, with its tag.
+
 ## Alternatives considered
 - **A JavaScript viewer (three.js, web-ifc)**: a second code base, and the plans, styles and
   editing would have to be written twice.
