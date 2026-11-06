@@ -26,6 +26,7 @@ a decision that changes an old one says which one it supersedes.
 | [0018](0018-plan-templates-and-conventions.md) | Plans like the office's: templates, seen fills, grid axes, dimension chains | Accepted |
 | [0019](0019-editing-in-the-viewer.md) | Editing .bimble models in the viewer through Commands; rebuild; history | Accepted |
 | [0020](0020-web-version.md) | Bimble in a browser: the same Rust as WebAssembly; WebGPU or WebGL2; manifold's own wasm | Accepted |
+| [0021](0021-views-and-reference-plans.md) | Views: 3D, plans looking down/up with a view range, sections; reference plans (DXF, PDF) as dead geometry; navigator layout | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

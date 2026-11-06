@@ -9,14 +9,35 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Command {
     AddStorey(Storey),
-    RemoveStorey { id: GlobalId },
+    RemoveStorey {
+        id: GlobalId,
+    },
     AddMaterial(Material),
-    RemoveMaterial { id: GlobalId },
+    RemoveMaterial {
+        id: GlobalId,
+    },
     AddElement(Element),
-    RemoveElement { id: GlobalId },
-    SetGenerator { id: GlobalId, generator: Generator },
-    SetPlacement { id: GlobalId, placement: Placement },
-    Rename { id: GlobalId, name: String },
+    RemoveElement {
+        id: GlobalId,
+    },
+    SetGenerator {
+        id: GlobalId,
+        generator: Generator,
+    },
+    SetPlacement {
+        id: GlobalId,
+        placement: Placement,
+    },
+    Rename {
+        id: GlobalId,
+        name: String,
+    },
+    AddView(crate::view::View),
+    RemoveView {
+        id: GlobalId,
+    },
+    /// Replace a view (name, range, visibility, references…); its id stays.
+    SetView(crate::view::View),
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -50,7 +71,11 @@ impl Command {
                 Ok(RemoveStorey { id })
             }
             RemoveStorey { id } => {
-                if m.elements.values().any(|e| e.storey == id) {
+                let key = id.to_string();
+                let in_view = m.views.values().any(|v| {
+                    matches!(&v.kind, crate::view::ViewKind::Plan { storey, .. } if *storey == key)
+                });
+                if in_view || m.elements.values().any(|e| e.storey == id) {
                     return Err(CommandError::InUse(id));
                 }
                 let s = m.storeys.remove(&id).ok_or(CommandError::NotFound(id))?;
@@ -110,6 +135,29 @@ impl Command {
                 let e = m.elements.get_mut(&id).ok_or(CommandError::NotFound(id))?;
                 let old = std::mem::replace(&mut e.name, name);
                 Ok(Rename { id, name: old })
+            }
+            AddView(v) => {
+                if m.views.contains_key(&v.id) {
+                    return Err(CommandError::Exists(v.id));
+                }
+                v.validate(&m.levels()).map_err(CommandError::Invalid)?;
+                let v = canonical(v);
+                let id = v.id;
+                m.views.insert(id, v);
+                Ok(RemoveView { id })
+            }
+            RemoveView { id } => {
+                let v = m.views.remove(&id).ok_or(CommandError::NotFound(id))?;
+                Ok(AddView(v))
+            }
+            SetView(v) => {
+                if !m.views.contains_key(&v.id) {
+                    return Err(CommandError::NotFound(v.id));
+                }
+                v.validate(&m.levels()).map_err(CommandError::Invalid)?;
+                let v = canonical(v);
+                let old = m.views.insert(v.id, v).expect("checked above");
+                Ok(SetView(old))
             }
         }
     }

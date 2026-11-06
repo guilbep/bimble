@@ -32,6 +32,26 @@ pub struct GridAxis {
 pub struct StoreyLevel {
     pub name: String,
     pub elevation_mm: f64,
+    /// The storey's GlobalId when it has one (views refer to it), else empty.
+    pub id: String,
+}
+
+impl Scene {
+    /// The storeys as levels for views: keyed by GlobalId, or by name when there is none.
+    pub fn levels(&self) -> Vec<bimble_core::view::Level> {
+        self.storeys
+            .iter()
+            .map(|s| bimble_core::view::Level {
+                key: if s.id.is_empty() {
+                    s.name.clone()
+                } else {
+                    s.id.clone()
+                },
+                name: s.name.clone(),
+                elevation_mm: s.elevation_mm,
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -100,6 +120,7 @@ impl Scene {
                 .map(|s| StoreyLevel {
                     name: s.name.clone(),
                     elevation_mm: s.elevation,
+                    id: s.id.to_string(),
                 })
                 .collect(),
             ..Default::default()

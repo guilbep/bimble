@@ -9,6 +9,7 @@ mod model;
 pub mod repo;
 pub mod style;
 pub mod version;
+pub mod view;
 
 pub use command::{Command, CommandError, History};
 pub use guid::GlobalId;

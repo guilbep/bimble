@@ -144,6 +144,9 @@ pub struct Camera {
     pub distance: f32,
     pub fov_y: f32,
     pub orthographic: bool,
+    /// Mirror the picture left-right: a plan looking up is drawn as reflected in a mirror on the
+    /// floor, so north stays up and east stays right (ADR 0021).
+    pub mirror_x: bool,
 }
 
 impl Default for Camera {
@@ -155,6 +158,7 @@ impl Default for Camera {
             distance: 10_000.0,
             fov_y: 35f32.to_radians(),
             orthographic: false,
+            mirror_x: false,
         }
     }
 }
@@ -207,7 +211,11 @@ impl Camera {
             let near = (d - r).max(far * 1e-4).max(1.0);
             directx::perspective(self.fov_y, aspect.max(1e-3), near, far.max(near * 2.0))
         };
-        proj * view
+        if self.mirror_x {
+            Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)) * proj * view
+        } else {
+            proj * view
+        }
     }
 
     /// World-space ray through a point in normalized device coords (x, y in -1..1, y up).
@@ -229,6 +237,7 @@ impl Camera {
         let right = fwd.cross(Vec3::Z).normalize_or(Vec3::X);
         let up = right.cross(fwd);
         let h = 2.0 * self.distance * (self.fov_y / 2.0).tan();
+        let dx = if self.mirror_x { -dx } else { dx };
         self.target += (-dx * right + dy * up) * h;
     }
 
@@ -383,6 +392,8 @@ pub struct Renderer {
     face_pipeline: wgpu::RenderPipeline,
     face_front_pipeline: wgpu::RenderPipeline,
     face_back_pipeline: wgpu::RenderPipeline,
+    face_front_mirrored: wgpu::RenderPipeline,
+    face_back_mirrored: wgpu::RenderPipeline,
     line_clip_pipeline: wgpu::RenderPipeline,
     line_wide_pipeline: wgpu::RenderPipeline,
     line_clip_lean_pipeline: wgpu::RenderPipeline,
@@ -475,6 +486,7 @@ impl Renderer {
         let face_pipeline_with = |label: &str,
                                   (vs, fs): (&str, &str),
                                   cull_mode: Option<wgpu::Face>,
+                                  front_face: wgpu::FrontFace,
                                   bias: (i32, f32)| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -492,6 +504,7 @@ impl Renderer {
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     cull_mode,
+                    front_face,
                     ..Default::default()
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
@@ -518,23 +531,37 @@ impl Renderer {
             })
         };
         // Imported meshes don't always have consistent winding: draw both sides at once.
+        let ccw = wgpu::FrontFace::Ccw;
         let face_pipeline =
-            face_pipeline_with("bimble faces", ("vs_face", "fs_face"), None, (2, 1.5));
-        // With a section box, inward faces show cut surfaces. Drawn in a second pass pushed a
-        // little further back, so where an outward and an inward face meet (silhouette corners)
-        // the outward one wins instead of speckling the outline with cut colour.
-        let face_front_pipeline = face_pipeline_with(
-            "bimble faces, outward, section box",
-            ("vs_face_clip", "fs_face_clip"),
-            Some(wgpu::Face::Back),
-            (2, 1.5),
-        );
-        let face_back_pipeline = face_pipeline_with(
-            "bimble faces, inward (cut surfaces), section box",
-            ("vs_face_clip", "fs_face_cut"),
-            Some(wgpu::Face::Front),
-            (8, 4.0),
-        );
+            face_pipeline_with("bimble faces", ("vs_face", "fs_face"), None, ccw, (2, 1.5));
+        // With a section box, inward faces show cut surfaces. Drawn in a second pass, pushed back
+        // more where they slope away (so where an outward and an inward face meet, at
+        // silhouette corners, the outward one wins instead of speckling the outline with cut
+        // colour) but forward where they face the camera: a column's bottom, seen from inside,
+        // then wins over the top of the slab it stands on (same depth), and a plan shows the
+        // column's cut.
+        // A mirrored camera turns every triangle's winding around: the same passes then need
+        // the other winding as front.
+        let clip_pipelines = |front: wgpu::FrontFace| {
+            (
+                face_pipeline_with(
+                    "bimble faces, outward, section box",
+                    ("vs_face_clip", "fs_face_clip"),
+                    Some(wgpu::Face::Back),
+                    front,
+                    (2, 1.5),
+                ),
+                face_pipeline_with(
+                    "bimble faces, inward (cut surfaces), section box",
+                    ("vs_face_clip", "fs_face_cut"),
+                    Some(wgpu::Face::Front),
+                    front,
+                    (-2, 4.0),
+                ),
+            )
+        };
+        let (face_front_pipeline, face_back_pipeline) = clip_pipelines(ccw);
+        let (face_front_mirrored, face_back_mirrored) = clip_pipelines(wgpu::FrontFace::Cw);
 
         // Normal viewing reads only positions; the section box also reads the face normals.
         let line_attrs_lean = wgpu::vertex_attr_array![0 => Float32x3];
@@ -606,6 +633,8 @@ impl Renderer {
             face_pipeline,
             face_front_pipeline,
             face_back_pipeline,
+            face_front_mirrored,
+            face_back_mirrored,
             line_pipeline,
             line_wide_pipeline,
             line_clip_pipeline,
@@ -842,9 +871,14 @@ impl Renderer {
                 if layer.faces && scene.face_vertices > 0 {
                     pass.set_vertex_buffer(0, scene.faces.slice(..));
                     if opts.clip.is_some() {
-                        pass.set_pipeline(&self.face_front_pipeline);
+                        let (front, back) = if camera.mirror_x {
+                            (&self.face_front_mirrored, &self.face_back_mirrored)
+                        } else {
+                            (&self.face_front_pipeline, &self.face_back_pipeline)
+                        };
+                        pass.set_pipeline(front);
                         pass.draw(0..scene.face_vertices, 0..1);
-                        pass.set_pipeline(&self.face_back_pipeline);
+                        pass.set_pipeline(back);
                         pass.draw(0..scene.face_vertices, 0..1);
                     } else {
                         pass.set_pipeline(&self.face_pipeline);
@@ -895,6 +929,9 @@ pub struct Hit {
 }
 
 /// The nearest visible hit, ignoring what the clipping box removes.
+///
+/// Where the box cuts a solid, the ray reaches the solid's inside first: what it hits is the cut
+/// surface (as drawn), on the box, so a cut column is picked before the slab it stands on.
 pub fn pick_hit(
     scene: &Scene,
     visible: impl Fn(usize) -> bool,
@@ -902,6 +939,27 @@ pub fn pick_hit(
     dir: Vec3,
     clip: Option<&ClipBox>,
 ) -> Option<Hit> {
+    // Where the ray enters the box, and through which face (its normal, towards the ray).
+    let entry = clip.and_then(|c| {
+        let mut t_in = 0.0f32;
+        let mut normal = Vec3::ZERO;
+        for k in 0..3 {
+            if dir[k].abs() < 1e-12 {
+                continue;
+            }
+            let (a, b) = (
+                (c.min[k] - origin[k]) / dir[k],
+                (c.max[k] - origin[k]) / dir[k],
+            );
+            let near = a.min(b);
+            if near > t_in {
+                t_in = near;
+                normal = Vec3::ZERO;
+                normal[k] = -dir[k].signum();
+            }
+        }
+        (normal != Vec3::ZERO).then_some((t_in, normal))
+    });
     let mut best: Option<Hit> = None;
     for (i, e) in scene.elements.iter().enumerate() {
         if !visible(i) {
@@ -909,16 +967,30 @@ pub fn pick_hit(
         }
         for t in e.mesh.indices.as_chunks::<3>().0 {
             let [a, b, c] = t.map(|k| Vec3::from(e.mesh.positions[k as usize]));
-            if let Some(d) = ray_triangle(origin, dir, a, b, c)
-                && best.is_none_or(|h| d < h.distance)
-                && clip.is_none_or(|c| c.contains(origin + dir * d))
-            {
-                best = Some(Hit {
+            let Some(d) = ray_triangle(origin, dir, a, b, c) else {
+                continue;
+            };
+            if clip.is_some_and(|c| !c.contains(origin + dir * d)) {
+                continue;
+            }
+            let normal = (b - a).cross(c - a).normalize_or_zero();
+            // Seen from inside (meshes are wound outward): the solid is cut, its front removed.
+            let hit = match entry {
+                Some((t_in, n)) if normal.dot(dir) > 0.0 && t_in < d => Hit {
+                    element: i,
+                    distance: t_in,
+                    point: origin + dir * t_in,
+                    normal: n,
+                },
+                _ => Hit {
                     element: i,
                     distance: d,
                     point: origin + dir * d,
-                    normal: (b - a).cross(c - a).normalize_or_zero(),
-                });
+                    normal,
+                },
+            };
+            if best.is_none_or(|h| hit.distance < h.distance) {
+                best = Some(hit);
             }
         }
     }
@@ -1256,6 +1328,15 @@ mod tests {
     }
 
     fn draw(gpu: &Headless, scene: &Scene, opts: &DrawOptions) -> Vec<[u8; 4]> {
+        draw_with(gpu, scene, opts, |_| {})
+    }
+
+    fn draw_with(
+        gpu: &Headless,
+        scene: &Scene,
+        opts: &DrawOptions,
+        camera: impl Fn(&mut Camera),
+    ) -> Vec<[u8; 4]> {
         let r = Renderer::new(&gpu.device, 1);
         let gs = r.upload_with(
             &gpu.device,
@@ -1266,6 +1347,7 @@ mod tests {
         let target = Target::new(&gpu.device, (400, 200), 1);
         let mut cam = Camera::default();
         cam.fit(scene, 2.0);
+        camera(&mut cam);
         r.render(&gpu.device, &gpu.queue, &target, &gs, &cam, opts);
         let px = gpu.read_rgba(&target).unwrap();
         px.as_chunks::<4>().0.to_vec()
@@ -1437,6 +1519,139 @@ mod tests {
         );
     }
 
+    /// Axis-aligned boxes (min, max in mm) as a scene, one element each.
+    fn boxes(list: &[([f64; 3], [f64; 3], MaterialCategory)]) -> Scene {
+        use bimble_geom::{ElementInfo, MeshBuilder, SceneBuilder};
+        let mut sb = SceneBuilder::default();
+        for (k, (lo, hi, c)) in list.iter().enumerate() {
+            let p = |i: usize| {
+                [
+                    if i & 1 == 0 { lo[0] } else { hi[0] },
+                    if i & 2 == 0 { lo[1] } else { hi[1] },
+                    if i & 4 == 0 { lo[2] } else { hi[2] },
+                ]
+            };
+            let mut mb = MeshBuilder::default();
+            for q in [
+                [0, 2, 3, 1],
+                [4, 5, 7, 6],
+                [0, 1, 5, 4],
+                [2, 6, 7, 3],
+                [0, 4, 6, 2],
+                [1, 3, 7, 5],
+            ] {
+                mb.add_triangle([p(q[0]), p(q[1]), p(q[2])]);
+                mb.add_triangle([p(q[0]), p(q[2]), p(q[3])]);
+            }
+            sb.push(
+                ElementInfo {
+                    global_id: format!("box{k}"),
+                    class: "IfcBuildingElementProxy".into(),
+                    name: String::new(),
+                    storey: String::new(),
+                    material: c.label().into(),
+                    category: *c,
+                },
+                mb,
+            );
+        }
+        sb.finish()
+    }
+
+    /// A plan cut through a column standing on a slab shows the column's cut surface, not the
+    /// slab's top face under it (the column's bottom, seen from inside, is at the same depth).
+    #[test]
+    fn cut_surface_wins_over_the_slab_the_column_stands_on() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let c = MaterialCategory::Concrete;
+        let column = ([-150.0, -150.0, 0.0], [150.0, 150.0, 3000.0], c);
+        let slab = ([-2000.0, -1000.0, -200.0], [2000.0, 1000.0, 0.0], c);
+        let plan = |scene: &Scene| {
+            // Same frame and cut for both scenes (scene coordinates are relative to the
+            // scene's origin, which differs: place the box from it).
+            let o = Vec3::new(
+                scene.origin_mm[0] as f32,
+                scene.origin_mm[1] as f32,
+                scene.origin_mm[2] as f32,
+            );
+            let clip = ClipBox {
+                min: Vec3::new(-3000.0, -3000.0, -500.0) - o,
+                max: Vec3::new(3000.0, 3000.0, 1200.0) - o,
+            };
+            let opts = DrawOptions {
+                clip: Some(clip),
+                edges: false,
+                ..Default::default()
+            };
+            draw_with(&gpu, scene, &opts, |cam| {
+                cam.orthographic = true;
+                cam.yaw = -std::f32::consts::FRAC_PI_2;
+                cam.pitch = std::f32::consts::FRAC_PI_2;
+                cam.fit_box(
+                    Vec3::new(-2000.0, -1000.0, -200.0) - o,
+                    Vec3::new(2000.0, 1000.0, 3000.0) - o,
+                    2.0,
+                );
+            })
+        };
+        let alone = plan(&boxes(&[column]));
+        let on_slab = plan(&boxes(&[column, slab]));
+        let w = 400usize;
+        let differ = (95..105)
+            .flat_map(|y| (195..205).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let (a, b) = (alone[y * w + x], on_slab[y * w + x]);
+                (0..3).any(|k| (a[k] as i32 - b[k] as i32).abs() > 4)
+            })
+            .count();
+        assert_eq!(
+            differ, 0,
+            "{differ} of 100 pixels of the column's cut differ"
+        );
+    }
+
+    /// A mirrored camera (plans looking up) draws the same picture flipped left-right, cut
+    /// surfaces included: the clip passes use the other winding as front.
+    #[test]
+    fn mirrored_camera_flips_the_picture_with_cut_surfaces() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let scene = family_boxes();
+        let all = ClipBox::around(&scene, |_| true).unwrap();
+        let half = ClipBox {
+            max: Vec3::new(all.max.x, all.max.y, all.min.z + 500.0),
+            ..all
+        };
+        let opts = DrawOptions {
+            clip: Some(half),
+            edges: false,
+            ..Default::default()
+        };
+        let plain = draw(&gpu, &scene, &opts);
+        let mirrored = draw_with(&gpu, &scene, &opts, |c| c.mirror_x = true);
+        let (w, h) = (400usize, 200usize);
+        let differ = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let (a, b) = (plain[y * w + x], mirrored[y * w + (w - 1 - x)]);
+                (0..3).any(|k| (a[k] as i32 - b[k] as i32).abs() > 8)
+            })
+            .count();
+        let bg = GraphicStyle::default().background;
+        let objects = w * h - count(&plain, bg, 0);
+        assert!(objects > 1000, "nothing drawn");
+        // Hatch patterns are in screen space, so they don't mirror: compare with a tolerance.
+        assert!(
+            differ * 10 < objects,
+            "{differ} of {objects} object pixels differ from the flipped picture"
+        );
+    }
+
     #[test]
     fn picking_ignores_what_the_clip_box_removes() {
         let scene = family_boxes();
@@ -1462,13 +1677,43 @@ mod tests {
             ..b0
         };
         let (_, d2) = pick(&scene, |_| true, o, Vec3::NEG_Z, Some(&lower)).unwrap();
-        assert!((d2 - 6000.0).abs() < 1.0, "hits the bottom face: {d2}");
+        // Seen from inside: the cut surface, on the box (500 mm above the bottom).
+        assert!((d2 - 5500.0).abs() < 1.0, "hits the cut surface: {d2}");
         // Box beside the element: nothing to hit.
         let beside = ClipBox {
             min: b0.min + Vec3::new(0.0, 5000.0, 0.0),
             max: b0.max + Vec3::new(0.0, 5000.0, 0.0),
         };
         assert!(pick(&scene, |_| true, o, Vec3::NEG_Z, Some(&beside)).is_none());
+    }
+
+    /// Clicking a column cut by a plan selects the column, not the slab it stands on (whose top
+    /// is level with the column's bottom).
+    #[test]
+    fn picking_a_cut_column_on_a_slab_gives_the_column() {
+        let c = MaterialCategory::Concrete;
+        // The slab first: on equal distances the first element would win.
+        let scene = boxes(&[
+            ([-2000.0, -1000.0, -200.0], [2000.0, 1000.0, 0.0], c),
+            ([-150.0, -150.0, 0.0], [150.0, 150.0, 3000.0], c),
+        ]);
+        let o = Vec3::new(
+            scene.origin_mm[0] as f32,
+            scene.origin_mm[1] as f32,
+            scene.origin_mm[2] as f32,
+        );
+        let plan = ClipBox {
+            min: Vec3::new(-3000.0, -3000.0, 0.0) - o,
+            max: Vec3::new(3000.0, 3000.0, 1200.0) - o,
+        };
+        let from = Vec3::new(0.0, 0.0, 10_000.0) - o;
+        let hit = pick_hit(&scene, |_| true, from, Vec3::NEG_Z, Some(&plan)).unwrap();
+        assert_eq!(scene.elements[hit.element].global_id, "box1", "the column");
+        assert!(
+            (hit.point.z + o.z - 1200.0).abs() < 1.0,
+            "on the cut: {:?}",
+            hit.point
+        );
     }
 
     #[test]

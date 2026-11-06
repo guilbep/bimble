@@ -543,6 +543,7 @@ impl<'a> Reader<'a> {
                 out.push(bimble_geom::StoreyLevel {
                     name,
                     elevation_mm: z * scale,
+                    id: st.arg(0).as_str().unwrap_or("").to_owned(),
                 });
             }
         }
