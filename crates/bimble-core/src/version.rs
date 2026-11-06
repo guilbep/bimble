@@ -44,6 +44,14 @@ pub fn model_hash(m: &Model) -> blake3::Hash {
             h.update(eh.as_bytes());
         }
     }
+    // Only when there are views: models without views keep their hash.
+    if !m.views.is_empty() {
+        h.update(b"views");
+        for (id, vh) in hash_map(&m.views) {
+            h.update(id.as_str().as_bytes());
+            h.update(vh.as_bytes());
+        }
+    }
     h.finalize()
 }
 
@@ -116,6 +124,7 @@ pub fn diff(a: &Model, b: &Model) -> Vec<Change> {
         |e| e.name.clone(),
         &mut out,
     );
+    diff_map(&a.views, &b.views, |_| "view".into(), |v| v.name.clone(), &mut out);
     out
 }
 

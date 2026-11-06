@@ -402,6 +402,9 @@ pub struct Model {
     pub storeys: BTreeMap<GlobalId, Storey>,
     pub materials: BTreeMap<GlobalId, Material>,
     pub elements: BTreeMap<GlobalId, Element>,
+    /// Views (ADR 0021). Absent from files that have none, so their hashes don't change.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub views: BTreeMap<GlobalId, crate::view::View>,
 }
 
 impl Model {
@@ -439,6 +442,25 @@ impl Model {
             e.placement.validate().map_err(ctx)?;
             e.generator.validate().map_err(ctx)?;
         }
+        let levels = self.levels();
+        for (k, v) in &self.views {
+            if *k != v.id {
+                return Err(format!("view {k}: key does not match id"));
+            }
+            v.validate(&levels)?;
+        }
         Ok(())
+    }
+
+    /// The storeys as levels for views (key: the storey's GlobalId).
+    pub fn levels(&self) -> Vec<crate::view::Level> {
+        self.storeys
+            .values()
+            .map(|s| crate::view::Level {
+                key: s.id.to_string(),
+                name: s.name.clone(),
+                elevation_mm: s.elevation,
+            })
+            .collect()
     }
 }

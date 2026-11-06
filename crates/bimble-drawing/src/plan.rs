@@ -1206,10 +1206,12 @@ mod tests {
             StoreyLevel {
                 name: "L0".into(),
                 elevation_mm: 0.0,
+                id: String::new(),
             },
             StoreyLevel {
                 name: "L1".into(),
                 elevation_mm: 3000.0,
+                id: String::new(),
             },
         ]);
         for (i, (class, tris)) in items.into_iter().enumerate() {

@@ -59,6 +59,9 @@ pub struct Tree {
     pub storeys: BTreeMap<GlobalId, Hash>,
     pub materials: BTreeMap<GlobalId, Hash>,
     pub elements: BTreeMap<GlobalId, Hash>,
+    /// Absent in trees of models without views (older histories read unchanged).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub views: BTreeMap<GlobalId, Hash>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -234,6 +237,7 @@ impl Repo {
             storeys: map(self, &m.storeys)?,
             materials: map(self, &m.materials)?,
             elements: map(self, &m.elements)?,
+            views: map(self, &m.views)?,
         };
         self.put(&t)
     }
@@ -253,6 +257,7 @@ impl Repo {
             storeys: map::<Storey>(self, &t.storeys)?,
             materials: map::<Material>(self, &t.materials)?,
             elements: map::<Element>(self, &t.elements)?,
+            views: map::<crate::view::View>(self, &t.views)?,
         };
         m.validate()
             .map_err(|e| RepoError::Damaged(hash.into(), format!("invalid model: {e}")))?;
@@ -553,6 +558,13 @@ pub fn merge_models(
             (take.cloned(), true)
         }
     }
+    /// Tagged enums (generators' "kind", view kinds' "type") are one variant on every side.
+    fn same_variant(a: &serde_json::Map<String, Value>, b: &serde_json::Map<String, Value>) -> bool {
+        ["kind", "type"].iter().all(|k| {
+            let tag = |m: &serde_json::Map<String, Value>| m.get(*k).filter(|v| v.is_string()).cloned();
+            tag(a) == tag(b)
+        })
+    }
     /// Field-level three-way merge of JSON values: objects (of the same `kind`, for generators)
     /// merge key by key; anything else is taken whole. Returns the paths in conflict.
     fn merge_value(
@@ -565,8 +577,8 @@ pub fn merge_models(
     ) -> Option<Value> {
         if let (Some(Value::Object(bo)), Some(Value::Object(oo)), Some(Value::Object(to))) =
             (b, o, t)
-            && oo.get("kind") == to.get("kind")
-            && bo.get("kind") == oo.get("kind")
+            && same_variant(bo, oo)
+            && same_variant(oo, to)
             && o != t
         {
             let keys: std::collections::BTreeSet<&String> =
@@ -694,6 +706,15 @@ pub fn merge_models(
             &ours.elements,
             &theirs.elements,
             |e| format!("{} {}", e.class.name(), e.name),
+            prefer,
+            &mut conflicts,
+        ),
+        views: map(
+            "view",
+            &base.views,
+            &ours.views,
+            &theirs.views,
+            |v| v.name.clone(),
             prefer,
             &mut conflicts,
         ),
@@ -1035,6 +1056,41 @@ mod tests {
         let (_, c) = merge_models(&base, &ours, &theirs, Prefer::Neither);
         assert_eq!(c.len(), 1);
         assert!(c[0].name.ends_with("generator.width"), "{}", c[0]);
+    }
+
+    /// Views are versioned like elements: committed, read back, merged field by field.
+    #[test]
+    fn views_are_committed_and_merged() {
+        let (_t, path) = tmp("views");
+        let r = Repo::init(&path).unwrap();
+        let mut m = concrete_frame(&FrameSpec::default());
+        let v = crate::view::default_views(&m.levels())
+            .into_iter()
+            .find(|v| v.name == "Plan Niveau 1")
+            .unwrap();
+        Command::AddView(v.clone()).apply(&mut m).unwrap();
+        r.commit(&m, "a plan view", "a", 1).unwrap();
+        assert_eq!(r.model_at("HEAD").unwrap(), m);
+        // Rename on one branch, change the cut on the other: both kept.
+        r.create_branch("b", None).unwrap();
+        let mut ours = m.clone();
+        let mut renamed = v.clone();
+        renamed.name = "Formwork N1".into();
+        Command::SetView(renamed).apply(&mut ours).unwrap();
+        r.commit(&ours, "rename", "a", 2).unwrap();
+        r.switch("b").unwrap();
+        let mut theirs = m.clone();
+        let mut cut = v.clone();
+        if let crate::view::ViewKind::Plan { range, .. } = &mut cut.kind {
+            range.cut.offset_mm = 1000.0;
+        }
+        Command::SetView(cut).apply(&mut theirs).unwrap();
+        r.commit(&theirs, "cut", "a", 3).unwrap();
+        r.switch("main").unwrap();
+        let (_, merged) = r.merge("b", Prefer::Neither, "a", 4).unwrap().unwrap();
+        let mv = &merged.views[&v.id];
+        assert_eq!(mv.name, "Formwork N1");
+        assert!(matches!(&mv.kind, crate::view::ViewKind::Plan { range, .. } if range.cut.offset_mm == 1000.0));
     }
 
     #[test]
