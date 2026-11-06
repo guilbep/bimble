@@ -105,7 +105,9 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 - ✅ Plans: section labels, opening sizes and positions, section marks (#24); snapping when placing
   (#25); crisp cut outlines on screen (#35); views files read back in the browser (#36); several
   read-only links shown per view (#39)
-- ☐ Next: the UI/UX design proposals; selecting linked elements, dimensions following them (#39)
+- ✅ UI (ADR 0027): ribbon, command palette, view tabs, standards panel, theme; chosen on the design
+  canvas "Bimble UI options"
+- ☐ Next: ribbon icons; selecting linked elements, dimensions following them (#39)
 
 **I0 — Core** ✅ (PR #1)
 - Crates: `bimble-core` (IFC-typed model, GlobalIds, generators, materials, commands + undo, hash, diff),

@@ -21,11 +21,14 @@ use web_time::Instant;
 mod cutlines;
 mod edit;
 mod files;
+mod icons;
 mod layout;
 mod measure;
+mod ribbon;
 mod section;
 mod snap;
 mod style_editor;
+mod ui_theme;
 mod viewcube;
 mod viewing;
 mod views;
@@ -188,6 +191,7 @@ pub async fn start_web(canvas: web_sys::HtmlCanvasElement) -> Result<(), String>
                     .wgpu_render_state
                     .as_ref()
                     .ok_or("the viewer needs the wgpu renderer")?;
+                ui_theme::apply(&cc.egui_ctx);
                 Ok(Box::new(Viewer::new(rs)))
             }),
         )
@@ -249,6 +253,7 @@ pub fn run(
                 .wgpu_render_state
                 .as_ref()
                 .ok_or("the viewer needs the wgpu renderer")?;
+            ui_theme::apply(&cc.egui_ctx);
             let mut app = Viewer::new(rs);
             app.opts.style = initial_style;
             app.style_path = style;
@@ -413,6 +418,10 @@ struct Viewer {
     compare_with: Option<usize>,
     /// Linked models hidden in the active view, by file name.
     hidden_links: BTreeSet<String>,
+    /// An element of a linked model selected (#39): the link, the element, and its edges
+    /// uploaded for the highlight. Read-only.
+    link_selected: Option<(usize, usize)>,
+    link_selected_gpu: Option<GpuScene>,
     /// Model to link once ours is loaded (`bimble view --link`).
     pending_link: Option<PathBuf>,
 
@@ -420,13 +429,18 @@ struct Viewer {
     plan_window: bool,
     plan: PlanSettings,
 
-    style_window: bool,
+    /// The Standards panel (graphic style) on the right (ADR 0027).
+    standards_open: bool,
+    standards_query: String,
+    /// The ribbon's open tab, the command palette, tabs of open views and sheets.
+    ribbon_tab: ribbon::Tab,
+    palette: Option<ribbon::Palette>,
+    open_tabs: Vec<bimble_core::GlobalId>,
     /// File the style was loaded from or saved to.
     style_path: Option<PathBuf>,
     style_message: Option<String>,
 
     /// Editing panel (for .bimble models) and the history window.
-    edit_window: bool,
     history_window: bool,
     history_view: Option<HistoryView>,
 
@@ -496,13 +510,18 @@ impl Viewer {
             linking: None,
             compare_with: None,
             hidden_links: BTreeSet::new(),
+            link_selected: None,
+            link_selected_gpu: None,
             pending_link: None,
             plan_window: false,
             plan: PlanSettings::default(),
-            style_window: false,
+            standards_open: false,
+            standards_query: String::new(),
+            ribbon_tab: ribbon::Tab::default(),
+            palette: None,
+            open_tabs: Vec::new(),
             style_path: None,
             style_message: None,
-            edit_window: false,
             history_window: false,
             history_view: None,
             files: files::Files::default(),
@@ -725,6 +744,8 @@ impl Viewer {
             return;
         }
         self.links.remove(i);
+        self.link_selected = None;
+        self.link_selected_gpu = None;
         self.compare_with = match self.compare_with {
             Some(c) if c == i => None,
             Some(c) if c > i => Some(c - 1),
@@ -768,6 +789,8 @@ impl Viewer {
                 self.set_hovered(None);
                 // A linked model and a box from the previous model mean nothing for this one.
                 self.links.clear();
+                self.link_selected = None;
+                self.link_selected_gpu = None;
                 self.compare_with = None;
                 self.hidden_links.clear();
                 self.section_on = false;
@@ -1123,6 +1146,24 @@ impl Viewer {
         }
     }
 
+    /// Select an element of a linked model (or none); uploads its edges for the highlight.
+    fn select_link_element(&mut self, s: Option<(usize, usize)>) {
+        if s == self.link_selected {
+            return;
+        }
+        self.link_selected = s;
+        self.link_selected_gpu = s.and_then(|(n, i)| {
+            let k = self.links.get(n)?;
+            Some(self.renderer.upload_with(
+                &self.device,
+                &k.scene,
+                |j, _| if j == i { Style::Normal } else { Style::Hidden },
+                self.clipping(),
+            ))
+        });
+        self.needs_render = true;
+    }
+
     /// Change the element under the cursor; uploads its edges for the highlight.
     fn set_hovered(&mut self, h: Option<usize>) {
         if h == self.hovered {
@@ -1356,6 +1397,14 @@ impl Viewer {
         if let Some(h) = &self.hover_gpu {
             layers.push(bimble_render::Layer::highlight(h, self.opts.style.hover));
         }
+        if let (Some(g), Some((n, _))) = (&self.link_selected_gpu, self.link_selected)
+            && let Some(k) = self.links.get(n)
+        {
+            layers.push(bimble_render::Layer {
+                offset: k.offset,
+                ..bimble_render::Layer::highlight(g, self.opts.style.selection)
+            });
+        }
         let bounds = self.loaded.as_ref().map_or(gs.bounds, |l| l.bounds);
         self.renderer.render_layers(
             &self.device,
@@ -1488,18 +1537,46 @@ impl Viewer {
                 1.0 - (pos.y - rect.min.y) / rect.height() * 2.0,
             ];
             let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
-            let hit =
-                bimble_render::pick(&l.scene, |i| self.visible(i), o, d, self.clip().as_ref())
-                    .map(|(i, _)| i);
+            let clip = self.clip();
+            let ours = bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref());
+            // The nearest hit among the shown links, if nearer than ours (#39).
+            let theirs = self
+                .links
+                .iter()
+                .enumerate()
+                .filter(|(_, k)| {
+                    k.mode != LinkMode::Hidden && !self.hidden_links.contains(&k.name())
+                })
+                .filter_map(|(n, k)| {
+                    let c = clip.map(|c| ClipBox {
+                        min: c.min - k.offset,
+                        max: c.max - k.offset,
+                    });
+                    bimble_render::pick_hit(&k.scene, |_| true, o - k.offset, d, c.as_ref())
+                        .map(|h| (n, h))
+                })
+                .min_by(|a, b| a.1.distance.total_cmp(&b.1.distance));
+            let (hit, link_hit) = match (ours, theirs) {
+                (Some(h), Some((_, t))) if h.distance <= t.distance => (Some(h.element), None),
+                (_, Some((n, t))) => (None, Some((n, t.element))),
+                (Some(h), None) => (Some(h.element), None),
+                (None, None) => (None, None),
+            };
             if hit != self.selected {
                 self.selected = hit;
                 self.needs_upload = true;
             }
+            self.select_link_element(link_hit);
         }
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context, aspect: f32) {
-        if ctx.egui_wants_keyboard_input() {
+        if self.palette.is_none()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::K))
+        {
+            self.palette = Some(ribbon::Palette::default());
+        }
+        if self.palette.is_some() || ctx.egui_wants_keyboard_input() {
             return;
         }
         // Editing shortcuts (a .bimble model).
@@ -1587,108 +1664,9 @@ impl Viewer {
         if !handled && esc && self.selected.take().is_some() {
             self.needs_upload = true;
         }
-    }
-
-    fn top_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui.button("Open…").clicked() {
-                self.files.pick(files::Purpose::Open, ui.ctx());
-            }
-            if self.loaded.is_some()
-                && ui
-                    .button(if self.linking.is_some() { "Linking…" } else { "Link model…" })
-                    .on_hover_text("Load another model as a reference (e.g. the architect's IFC)")
-                    .clicked()
-            {
-                self.files.pick(files::Purpose::Link, ui.ctx());
-            }
-            ui.separator();
-            let mut changed = false;
-            changed |= ui.checkbox(&mut self.opts.edges, "Edges (E)").changed();
-            changed |= ui.checkbox(&mut self.opts.hatching, "Hatching (H)").changed();
-            let flat = self.in_2d();
-            changed |= ui
-                .add_enabled(
-                    !flat,
-                    egui::Checkbox::new(&mut self.camera.orthographic, "Orthographic (O)"),
-                )
-                .changed();
-            if changed {
-                self.needs_render = true;
-            }
-            ui.separator();
-            let mut on = self.section_on && !flat;
-            if ui
-                .add_enabled(!flat, egui::Checkbox::new(&mut on, "Section box (B)"))
-                .on_disabled_hover_text("A plan or section is cut by its view range")
-                .on_hover_text("Clip the model to a box; drag the arrows to move its faces")
-                .changed()
-            {
-                self.toggle_section_box();
-            }
-            if self.section_on
-                && !flat
-                && ui
-                    .button(if self.selected.is_some() { "Box to selection" } else { "Box to visible" })
-                    .clicked()
-            {
-                self.fit_section_box();
-            }
-            ui.separator();
-            if ui
-                .checkbox(&mut self.measure_on, "Measure (M)")
-                .on_hover_text("Click two points: corners, edges or faces. Esc cancels the first point")
-                .changed()
-            {
-                self.measure_first = None;
-                self.hover_snap = None;
-            }
-            ui.separator();
-            ui.toggle_value(&mut self.plan_window, "Plan…")
-                .on_hover_text("A plan, ceiling plan or section at scale, as PDF or SVG");
-            ui.toggle_value(&mut self.style_window, "Style…");
-            if self.side_views_dirty() {
-                ui.separator();
-                if ui
-                    .button("Save views")
-                    .on_hover_text("The IFC file is not changed: views go in a .bimble-views.json next to it (Ctrl+S)")
-                    .clicked()
-                {
-                    self.save_side_views();
-                }
-            }
-            if let Some(ed) = self.loaded.as_ref().and_then(|l| l.edit.as_ref()) {
-                ui.separator();
-                let dirty = ed.dirty;
-                if ui.button("Undo").on_hover_text("Undo (Ctrl+Z)").clicked() {
-                    self.undo_redo(true);
-                }
-                if ui.button("Redo").on_hover_text("Redo (Ctrl+Y)").clicked() {
-                    self.undo_redo(false);
-                }
-                if ui
-                    .add_enabled(dirty, egui::Button::new(if dirty { "Save*" } else { "Save" }))
-                    .on_hover_text("Ctrl+S")
-                    .clicked()
-                {
-                    self.save();
-                }
-                ui.toggle_value(&mut self.edit_window, "Edit…")
-                    .on_hover_text("Place columns, beams, walls and slabs");
-                if cfg!(not(target_arch = "wasm32"))
-                    && ui.toggle_value(&mut self.history_window, "History…").changed()
-                    && self.history_window
-                {
-                    self.refresh_history();
-                }
-            }
-            ui.separator();
-            ui.weak(if self.in_2d() {
-                "Drag: pan · Scroll: zoom · Click: select · Double-click / F: fit"
-            } else {
-                "Drag: orbit · Right-drag / Shift-drag: pan · Scroll: zoom · Click: select · Double-click / F: fit · T: top"
-            });
-        });
+        if !handled && esc {
+            self.select_link_element(None);
+        }
     }
 
     /// Where a click places a point (#25): snapped to axis crossings, column centres, corners,
@@ -2369,7 +2347,7 @@ impl Viewer {
             ui.weak(m);
         }
         ui.separator();
-        if style_editor::edit(ui, &mut self.opts.style) {
+        if style_editor::edit(ui, &mut self.opts.style, &mut self.standards_query) {
             self.needs_render = true;
         }
     }
@@ -2488,6 +2466,44 @@ impl Viewer {
         }
     }
 
+    /// The properties of a selected element of a linked model: read only (#39).
+    fn link_properties(&mut self, ui: &mut egui::Ui) {
+        let Some((n, i)) = self.link_selected else {
+            return;
+        };
+        let Some(k) = self.links.get(n) else { return };
+        let Some(e) = k.scene.elements.get(i) else {
+            return;
+        };
+        ui.heading(&e.class);
+        ui.weak(format!("In the linked model {} (read-only)", k.name()));
+        egui::Grid::new("link-props")
+            .num_columns(2)
+            .striped(true)
+            .show(ui, |ui| {
+                let mut row = |a: &str, v: &str| {
+                    ui.label(a);
+                    ui.add(egui::Label::new(v).selectable(true));
+                    ui.end_row();
+                };
+                row("Name", &e.name);
+                row("GlobalId", &e.global_id);
+                row("Storey", &e.storey);
+                row("Material", &e.material);
+                row("Family", e.category.label());
+                row("Volume", &format!("{:.3} m³", e.mesh.volume() / 1e9));
+                let matched = k.matched_there.get(i).copied().unwrap_or(true);
+                row(
+                    "In the host",
+                    if matched {
+                        "something at the same place"
+                    } else {
+                        "nothing at this place"
+                    },
+                );
+            });
+    }
+
     fn properties(&mut self, ui: &mut egui::Ui) {
         let (Some(i), Some(l)) = (self.selected, self.loaded.as_mut()) else {
             return;
@@ -2529,11 +2545,12 @@ impl Viewer {
 
     fn status_bar(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            ui.label(self.status_hint());
+            ui.separator();
             if let Some(l) = &self.loaded {
                 let visible = (0..l.scene.elements.len()).filter(|&i| self.visible(i)).count();
-                ui.label(format!(
-                    "{} · {visible}/{} elements · {} triangles · loaded in {:.0?} · last draw {:.1?} (CPU)",
-                    l.path.file_name().map(|s| s.to_string_lossy()).unwrap_or_default(),
+                ui.weak(format!(
+                    "{visible}/{} elements · {} triangles · loaded in {:.0?} · last draw {:.1?} (CPU)",
                     l.scene.elements.len(),
                     self.gpu_scene.as_ref().map_or(0, |g| g.triangles()),
                     l.load_time,
@@ -2573,7 +2590,28 @@ impl eframe::App for Viewer {
         self.handle_picked(&ctx);
         self.run_parse_later(&ctx);
 
-        egui::Panel::top("toolbar").show(ui, |ui| self.top_bar(ui));
+        let bar = |fill: egui::Color32| {
+            egui::Frame::new()
+                .fill(fill)
+                .inner_margin(egui::Margin::symmetric(ui_theme::GAP_M as i8, 4))
+        };
+        egui::Panel::top("title")
+            .frame(bar(ui_theme::TITLE_BG))
+            .show(ui, |ui| self.title_row(ui));
+        egui::Panel::top("ribbon-tabs")
+            .frame(bar(ui_theme::TABS_BG).inner_margin(egui::Margin {
+                left: ui_theme::GAP_M as i8,
+                right: 0,
+                top: 2,
+                bottom: 0,
+            }))
+            .show(ui, |ui| self.ribbon_tabs(ui));
+        egui::Panel::top("ribbon")
+            .frame(
+                bar(ui_theme::RIBBON_BG)
+                    .inner_margin(egui::Margin::symmetric(ui_theme::GAP_M as i8, 6)),
+            )
+            .show(ui, |ui| self.ribbon_panel(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         // Left: the model navigator above, the properties (of the selected element, else of
         // the view) below.
@@ -2592,8 +2630,29 @@ impl eframe::App for Viewer {
                         .id_salt("properties")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            if self.selected.is_some() {
-                                if ui.small_button("← View properties").clicked() {
+                            let placing = self
+                                .loaded
+                                .as_ref()
+                                .and_then(|l| l.edit.as_ref())
+                                .is_some_and(|e| e.placing.is_some());
+                            if placing {
+                                // While placing, what is placed: storey and sizes (ADR 0027).
+                                if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut())
+                                {
+                                    ui.heading("Place");
+                                    ed.place_panel(ui);
+                                    if let Some(m) = &ed.message {
+                                        ui.label(m);
+                                    }
+                                }
+                            } else if self.link_selected.is_some() {
+                                if ui.small_button("Back to the view").clicked() {
+                                    self.select_link_element(None);
+                                } else {
+                                    self.link_properties(ui);
+                                }
+                            } else if self.selected.is_some() {
+                                if ui.small_button("Back to the view").clicked() {
                                     self.selected = None;
                                     self.needs_upload = true;
                                 } else {
@@ -2616,24 +2675,6 @@ impl eframe::App for Viewer {
                 .show(&ctx, |ui| self.plan_panel(ui));
             self.plan_window = open;
         }
-        if self.edit_window && self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) {
-            let mut open = true;
-            egui::Window::new("Place elements")
-                .open(&mut open)
-                .default_width(260.0)
-                .show(&ctx, |ui| {
-                    if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
-                        ed.place_panel(ui);
-                        if let Some(m) = &ed.message {
-                            ui.label(m);
-                        }
-                    }
-                });
-            if !open && let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
-                ed.placing = None;
-            }
-            self.edit_window = open;
-        }
         if self.history_window && self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) {
             let mut open = true;
             egui::Window::new("History")
@@ -2642,15 +2683,41 @@ impl eframe::App for Viewer {
                 .show(&ctx, |ui| self.history_panel(ui));
             self.history_window = open;
         }
-        if self.style_window {
-            let mut open = true;
-            egui::Window::new("Graphic style")
-                .open(&mut open)
-                .default_width(320.0)
-                .default_height(620.0)
-                .vscroll(true)
-                .show(&ctx, |ui| self.style_panel(ui));
-            self.style_window = open;
+        // Right: the graphic standards, edited live (ADR 0027).
+        if self.standards_open {
+            egui::Panel::right("standards")
+                .resizable(true)
+                .default_size(400.0)
+                .min_size(300.0)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("Standards");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("×").on_hover_text("Close").clicked() {
+                                self.standards_open = false;
+                            }
+                        });
+                    });
+                    // Wide tables scroll; the panel keeps the width the user gave it.
+                    egui::ScrollArea::both()
+                        .id_salt("standards-scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| self.style_panel(ui));
+                });
+        }
+        if self.loaded.is_some() {
+            egui::Panel::top("view-tabs")
+                .frame(
+                    egui::Frame::new()
+                        .fill(ui_theme::TITLE_BG)
+                        .inner_margin(egui::Margin {
+                            left: 6,
+                            right: 6,
+                            top: 4,
+                            bottom: 0,
+                        }),
+                )
+                .show(ui, |ui| self.view_tabs(ui));
         }
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let rect = ui.available_rect_before_wrap();
@@ -2724,6 +2791,7 @@ impl eframe::App for Viewer {
                 ui.colored_label(Color32::RED, err);
             }
         });
+        self.palette_ui(&ctx);
     }
 }
 

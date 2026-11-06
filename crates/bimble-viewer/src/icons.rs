@@ -1,0 +1,279 @@
+//! Ribbon icons (ADR 0027), drawn as strokes so they need no image files and stay sharp at any
+//! scale. Each is drawn on a 24 × 24 grid, like the design canvas's icons, then fitted to a rect.
+
+use crate::ribbon::Action;
+use eframe::egui::{self, Color32, Pos2, Rect, Shape, Stroke, pos2};
+
+/// One piece of an icon on the 24 × 24 grid.
+enum Part {
+    /// An open polyline.
+    Line(&'static [[f32; 2]]),
+    /// A closed polygon, outlined.
+    Poly(&'static [[f32; 2]]),
+    /// A dashed polyline.
+    Dashed(&'static [[f32; 2]]),
+    /// A circle: centre, radius.
+    Circle([f32; 2], f32),
+    /// A filled polygon.
+    Fill(&'static [[f32; 2]]),
+}
+
+use Part::*;
+
+/// The parts of an action's icon.
+fn parts(a: Action) -> &'static [Part] {
+    use crate::edit::Kind;
+    use crate::layout::Tool;
+    match a {
+        Action::Place(Kind::Column) => {
+            &[Poly(&[[9.0, 3.0], [15.0, 3.0], [15.0, 21.0], [9.0, 21.0]])]
+        }
+        Action::Place(Kind::Beam) => &[Poly(&[[3.0, 9.0], [21.0, 9.0], [21.0, 15.0], [3.0, 15.0]])],
+        Action::Place(Kind::Wall) => &[
+            Poly(&[[3.0, 6.0], [21.0, 6.0], [21.0, 18.0], [3.0, 18.0]]),
+            Line(&[[3.0, 12.0], [21.0, 12.0]]),
+            Line(&[[9.0, 6.0], [9.0, 12.0]]),
+            Line(&[[15.0, 12.0], [15.0, 18.0]]),
+        ],
+        Action::Place(Kind::Slab) => &[
+            Poly(&[[3.0, 10.0], [12.0, 6.0], [21.0, 10.0], [12.0, 14.0]]),
+            Line(&[
+                [3.0, 10.0],
+                [3.0, 13.0],
+                [12.0, 17.0],
+                [21.0, 13.0],
+                [21.0, 10.0],
+            ]),
+            Line(&[[12.0, 14.0], [12.0, 17.0]]),
+        ],
+        Action::Measure => &[
+            Poly(&[[3.0, 17.0], [17.0, 3.0], [21.0, 7.0], [7.0, 21.0]]),
+            Line(&[[8.0, 12.0], [10.0, 14.0]]),
+            Line(&[[11.0, 9.0], [13.0, 11.0]]),
+            Line(&[[14.0, 6.0], [16.0, 8.0]]),
+        ],
+        Action::SheetTool(Tool::Select) => {
+            &[Poly(&[[6.0, 3.0], [18.0, 13.0], [12.5, 14.0], [9.5, 20.0]])]
+        }
+        Action::SheetTool(Tool::Text) => &[
+            Line(&[[5.0, 5.0], [19.0, 5.0]]),
+            Line(&[[12.0, 5.0], [12.0, 19.0]]),
+            Line(&[[9.0, 19.0], [15.0, 19.0]]),
+        ],
+        Action::SheetTool(Tool::Dimension) => &[
+            Line(&[[3.0, 8.0], [3.0, 16.0]]),
+            Line(&[[21.0, 8.0], [21.0, 16.0]]),
+            Line(&[[3.0, 12.0], [21.0, 12.0]]),
+            Line(&[[1.5, 13.5], [4.5, 10.5]]),
+            Line(&[[19.5, 13.5], [22.5, 10.5]]),
+        ],
+        Action::SectionLabels => &[
+            Poly(&[[4.0, 8.0], [12.0, 8.0], [12.0, 16.0], [4.0, 16.0]]),
+            Line(&[[14.0, 7.0], [21.0, 7.0]]),
+            Line(&[[14.0, 11.0], [19.0, 11.0]]),
+        ],
+        Action::Openings => &[
+            Poly(&[[4.0, 5.0], [20.0, 5.0], [20.0, 19.0], [4.0, 19.0]]),
+            Line(&[[4.0, 5.0], [20.0, 19.0]]),
+            Line(&[[20.0, 5.0], [4.0, 19.0]]),
+        ],
+        Action::SectionMarks => &[
+            Dashed(&[[5.0, 12.0], [19.0, 12.0]]),
+            Line(&[[3.0, 7.0], [3.0, 17.0]]),
+            Line(&[[21.0, 7.0], [21.0, 17.0]]),
+            Fill(&[[3.0, 4.0], [7.0, 7.0], [3.0, 7.0]]),
+            Fill(&[[21.0, 4.0], [17.0, 7.0], [21.0, 7.0]]),
+        ],
+        Action::SlabLevels => &[
+            Fill(&[[8.0, 6.0], [16.0, 6.0], [12.0, 12.0]]),
+            Line(&[[4.0, 12.0], [20.0, 12.0]]),
+            Line(&[[6.0, 17.0], [18.0, 17.0]]),
+        ],
+        Action::Edges => &[
+            Poly(&[
+                [4.0, 8.0],
+                [12.0, 4.0],
+                [20.0, 8.0],
+                [20.0, 16.0],
+                [12.0, 20.0],
+                [4.0, 16.0],
+            ]),
+            Line(&[[4.0, 8.0], [12.0, 12.0], [20.0, 8.0]]),
+            Line(&[[12.0, 12.0], [12.0, 20.0]]),
+        ],
+        Action::Hatching => &[
+            Poly(&[[4.0, 4.0], [20.0, 4.0], [20.0, 20.0], [4.0, 20.0]]),
+            Line(&[[4.0, 12.0], [12.0, 4.0]]),
+            Line(&[[4.0, 20.0], [20.0, 4.0]]),
+            Line(&[[12.0, 20.0], [20.0, 12.0]]),
+        ],
+        Action::Orthographic => &[
+            Poly(&[[4.0, 9.0], [15.0, 9.0], [15.0, 20.0], [4.0, 20.0]]),
+            Line(&[[4.0, 9.0], [9.0, 4.0], [20.0, 4.0], [15.0, 9.0]]),
+            Line(&[[20.0, 4.0], [20.0, 15.0], [15.0, 20.0]]),
+        ],
+        Action::SectionBox => &[Dashed(&[
+            [4.0, 4.0],
+            [20.0, 4.0],
+            [20.0, 20.0],
+            [4.0, 20.0],
+            [4.0, 4.0],
+        ])],
+        Action::BoxToSelection => &[
+            Dashed(&[
+                [4.0, 4.0],
+                [20.0, 4.0],
+                [20.0, 20.0],
+                [4.0, 20.0],
+                [4.0, 4.0],
+            ]),
+            Poly(&[[9.0, 9.0], [15.0, 9.0], [15.0, 15.0], [9.0, 15.0]]),
+        ],
+        Action::Fit => &[
+            Line(&[[4.0, 9.0], [4.0, 4.0], [9.0, 4.0]]),
+            Line(&[[15.0, 4.0], [20.0, 4.0], [20.0, 9.0]]),
+            Line(&[[20.0, 15.0], [20.0, 20.0], [15.0, 20.0]]),
+            Line(&[[9.0, 20.0], [4.0, 20.0], [4.0, 15.0]]),
+            Poly(&[[9.0, 9.0], [15.0, 9.0], [15.0, 15.0], [9.0, 15.0]]),
+        ],
+        Action::Top => &[
+            Line(&[[12.0, 2.0], [12.0, 10.0]]),
+            Line(&[[9.0, 7.0], [12.0, 10.0], [15.0, 7.0]]),
+            Poly(&[[4.0, 15.0], [12.0, 12.0], [20.0, 15.0], [12.0, 18.0]]),
+        ],
+        Action::OnPaper => &[
+            Poly(&[
+                [5.0, 3.0],
+                [15.0, 3.0],
+                [19.0, 7.0],
+                [19.0, 21.0],
+                [5.0, 21.0],
+            ]),
+            Line(&[[8.0, 11.0], [16.0, 11.0]]),
+            Line(&[[8.0, 15.0], [16.0, 15.0]]),
+        ],
+        Action::NewSheet => &[
+            Poly(&[
+                [5.0, 3.0],
+                [15.0, 3.0],
+                [19.0, 7.0],
+                [19.0, 21.0],
+                [5.0, 21.0],
+            ]),
+            Line(&[[12.0, 9.0], [12.0, 17.0]]),
+            Line(&[[8.0, 13.0], [16.0, 13.0]]),
+        ],
+        Action::CloseSheet => &[
+            Poly(&[
+                [5.0, 3.0],
+                [15.0, 3.0],
+                [19.0, 7.0],
+                [19.0, 21.0],
+                [5.0, 21.0],
+            ]),
+            Line(&[[9.0, 10.0], [15.0, 16.0]]),
+            Line(&[[15.0, 10.0], [9.0, 16.0]]),
+        ],
+        Action::LinkModel => &[
+            Poly(&[[3.0, 10.0], [10.0, 10.0], [10.0, 14.0], [3.0, 14.0]]),
+            Poly(&[[14.0, 10.0], [21.0, 10.0], [21.0, 14.0], [14.0, 14.0]]),
+            Line(&[[8.0, 12.0], [16.0, 12.0]]),
+        ],
+        Action::ReferencePlan => &[
+            Poly(&[[4.0, 5.0], [20.0, 5.0], [20.0, 19.0], [4.0, 19.0]]),
+            Dashed(&[[7.0, 9.0], [17.0, 9.0]]),
+            Dashed(&[[7.0, 12.0], [17.0, 12.0]]),
+            Dashed(&[[7.0, 15.0], [13.0, 15.0]]),
+        ],
+        Action::Standards => &[
+            Line(&[[4.0, 7.0], [20.0, 7.0]]),
+            Fill(&[[4.0, 11.0], [20.0, 11.0], [20.0, 13.0], [4.0, 13.0]]),
+            Fill(&[[4.0, 16.0], [20.0, 16.0], [20.0, 19.5], [4.0, 19.5]]),
+        ],
+        Action::History => &[
+            Circle([12.0, 12.0], 8.0),
+            Line(&[[12.0, 7.0], [12.0, 12.0], [16.0, 14.0]]),
+        ],
+        Action::Open => &[Poly(&[
+            [4.0, 18.0],
+            [4.0, 7.0],
+            [7.0, 5.0],
+            [11.0, 5.0],
+            [13.0, 7.0],
+            [20.0, 7.0],
+            [20.0, 18.0],
+        ])],
+        Action::Save | Action::Undo | Action::Redo | Action::Palette => &[],
+    }
+}
+
+/// Paint an action's icon, fitted into `rect` (square, centred).
+pub(crate) fn paint(p: &egui::Painter, rect: Rect, a: Action, color: Color32) {
+    let s = rect.width().min(rect.height()) / 24.0;
+    let o = rect.center() - egui::vec2(12.0 * s, 12.0 * s);
+    let at = |q: [f32; 2]| -> Pos2 { pos2(o.x + q[0] * s, o.y + q[1] * s) };
+    let stroke = Stroke::new((1.6 * s).max(1.0), color);
+    for part in parts(a) {
+        match part {
+            Line(pts) => {
+                p.add(Shape::line(pts.iter().map(|q| at(*q)).collect(), stroke));
+            }
+            Poly(pts) => {
+                p.add(Shape::closed_line(
+                    pts.iter().map(|q| at(*q)).collect(),
+                    stroke,
+                ));
+            }
+            Dashed(pts) => {
+                let v: Vec<Pos2> = pts.iter().map(|q| at(*q)).collect();
+                p.extend(Shape::dashed_line(&v, stroke, 3.0 * s, 2.0 * s));
+            }
+            Circle(c, r) => {
+                p.circle_stroke(at(*c), r * s, stroke);
+            }
+            Fill(pts) => {
+                p.add(Shape::convex_polygon(
+                    pts.iter().map(|q| at(*q)).collect(),
+                    color,
+                    Stroke::NONE,
+                ));
+            }
+        }
+    }
+}
+
+/// Whether an action has an icon.
+#[cfg(test)]
+pub(crate) fn has(a: Action) -> bool {
+    !parts(a).is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every ribbon action has an icon, drawn inside its 24 × 24 grid.
+    #[test]
+    fn ribbon_actions_have_icons_on_the_grid() {
+        for a in crate::ribbon::ALL_ACTIONS
+            .iter()
+            .chain([Action::History].iter())
+        {
+            if matches!(a, Action::Save | Action::Undo | Action::Redo) {
+                continue;
+            }
+            assert!(has(*a), "{a:?}");
+            for part in parts(*a) {
+                let pts: Vec<[f32; 2]> = match part {
+                    Line(p) | Poly(p) | Dashed(p) | Fill(p) => p.to_vec(),
+                    Circle(c, r) => vec![[c[0] - r, c[1] - r], [c[0] + r, c[1] + r]],
+                };
+                assert!(
+                    pts.iter()
+                        .all(|q| (0.0..=24.0).contains(&q[0]) && (0.0..=24.0).contains(&q[1])),
+                    "{a:?}"
+                );
+            }
+        }
+    }
+}
