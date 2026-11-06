@@ -1307,7 +1307,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             let Some((a, b)) = bounds(c.loops.iter().flatten()) else {
                 continue;
             };
-            let (p, q) = (to_paper(&a), to_paper(&b));
+            let q = to_paper(&b);
             items.push(text_at(
                 // Above-right of it, off the axes that run through its centre.
                 [q[0] + 0.6, q[1] - 0.6],
