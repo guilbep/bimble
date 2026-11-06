@@ -95,7 +95,7 @@ enum Cmd {
         #[arg(long)]
         link: Option<PathBuf>,
     },
-    /// Storey plan at scale, as PDF, SVG or PNG (by the output's extension)
+    /// A storey plan or any view (ceiling plan, section) at scale, as PDF, SVG or PNG (by extension)
     Plan {
         file: PathBuf,
         /// Output: .pdf, .svg or .png
