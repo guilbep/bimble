@@ -24,14 +24,15 @@ concurrency:
 
 jobs:
   deploy:
-    # After a release run: only a successful one started by pushing a tag (head_branch is then the
-    # tag's name). Release runs for pull requests have the PR's branch there: a branch named
-    # "views" passed a "starts with v" test alone.
+    # After a successful release run that can have published: started by a tag push (head_branch
+    # is then the tag's name) or by hand (one-button release). Not after pull requests: a branch
+    # named "views" once passed a "starts with v" test alone.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       startsWith(github.event.workflow_run.head_branch, 'v'))
+       (github.event.workflow_run.event == 'workflow_dispatch' ||
+        (github.event.workflow_run.event == 'push' &&
+         startsWith(github.event.workflow_run.head_branch, 'v'))))
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -43,8 +44,14 @@ jobs:
       - name: The release's web zip
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+          # A tag push names its release; after a manual release run, the newest release (its
+          # version isn't in the event).
+          TAG: ${{ inputs.tag || (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch) || '' }}
         run: |
+          if [[ -z "$TAG" ]]; then
+            TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
+          fi
+          echo "Publishing $TAG"
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*-web.zip' --dir zip
           mkdir site && unzip -q zip/*-web.zip -d site
           test -f site/index.html
