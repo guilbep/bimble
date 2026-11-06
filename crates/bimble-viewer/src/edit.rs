@@ -621,6 +621,9 @@ impl Editor {
                 _ if p.kind == Kind::Slab => "Click the opposite corner.",
                 _ => "Click the end point.",
             });
+            ui.weak(
+                "Snaps to axis crossings, column centres, corners, axes and edges. Shift: free.",
+            );
         }
     }
 }

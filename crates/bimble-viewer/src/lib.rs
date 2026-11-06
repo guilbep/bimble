@@ -23,6 +23,7 @@ mod files;
 mod layout;
 mod measure;
 mod section;
+mod snap;
 mod style_editor;
 mod viewcube;
 mod viewing;
@@ -370,6 +371,10 @@ struct Viewer {
     measure_first: Option<measure::Snap>,
     dimensions: Vec<measure::Dimension>,
     hover_snap: Option<measure::Snap>,
+    /// Snap targets while placing (#25), for (scene revision, storey level), and the point the
+    /// pointer snaps to (model mm) with what it snapped to.
+    place_targets: Option<((u64, i64), snap::Targets)>,
+    place_snap: Option<([f64; 2], Option<snap::SnapTo>)>,
 
     /// Element under the cursor, its edges uploaded for the highlight, and the pointer position
     /// it was picked at (picking again only when the pointer moves).
@@ -454,6 +459,8 @@ impl Viewer {
             measure_first: None,
             dimensions: Vec::new(),
             hover_snap: None,
+            place_targets: None,
+            place_snap: None,
             hovered: None,
             hover_gpu: None,
             hover_at: None,
@@ -1368,9 +1375,14 @@ impl Viewer {
             .is_some_and(|ed| ed.placing.is_some())
         {
             self.set_hovered(None);
+            let free = ui.input(|i| i.modifiers.shift);
+            self.place_snap = resp
+                .hover_pos()
+                .or(resp.interact_pointer_pos())
+                .and_then(|pos| self.placing_point(pos, rect, aspect, free));
             if resp.clicked()
                 && let Some(pos) = resp.interact_pointer_pos()
-                && let Some(p) = self.storey_point(pos, rect, aspect)
+                && let Some((p, _)) = self.placing_point(pos, rect, aspect, free)
             {
                 let ed = self.loaded.as_mut().and_then(|l| l.edit.as_mut()).unwrap();
                 match ed.click(p) {
@@ -1632,8 +1644,42 @@ impl Viewer {
         });
     }
 
+    /// Where a click places a point (#25): snapped to axis crossings, column centres, corners,
+    /// axes and edges within 12 pixels; with Shift (`free`) or nothing near, rounded to 10 mm.
+    fn placing_point(
+        &mut self,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+        free: bool,
+    ) -> Option<([f64; 2], Option<snap::SnapTo>)> {
+        let p = self.storey_point(pos, rect, aspect)?;
+        let round = |v: f64| (v / 10.0).round() * 10.0;
+        if free {
+            return Some(([round(p[0]), round(p[1])], None));
+        }
+        let tol = self
+            .storey_point(pos + Vec2::new(12.0, 0.0), rect, aspect)
+            .map_or(0.0, |q| (q[0] - p[0]).hypot(q[1] - p[1]));
+        let l = self.loaded.as_ref()?;
+        let level = l.edit.as_ref()?.storey_elevation();
+        let key = (self.scene_rev, level.round() as i64);
+        if self.place_targets.as_ref().is_none_or(|(k, _)| *k != key) {
+            let next = l
+                .scene
+                .levels()
+                .iter()
+                .map(|v| v.elevation_mm)
+                .filter(|e| *e > level + 1.0)
+                .fold(level + 4000.0, f64::min);
+            self.place_targets = Some((key, snap::targets(&l.scene, level, next)));
+        }
+        let t = &self.place_targets.as_ref()?.1;
+        Some(snap::snap(p, tol, t))
+    }
+
     /// Where a screen point's ray meets the level of the storey being edited: storey-relative
-    /// x, y in mm (model coordinates), rounded to 10 mm.
+    /// x, y in mm (model coordinates).
     fn storey_point(&self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) -> Option<[f64; 2]> {
         let l = self.loaded.as_ref()?;
         let ed = l.edit.as_ref()?;
@@ -1651,10 +1697,9 @@ impl Viewer {
             return None;
         }
         let p = o + d * t;
-        let round = |v: f64| (v / 10.0).round() * 10.0;
         Some([
-            round(p.x as f64 + l.scene.origin_mm[0]),
-            round(p.y as f64 + l.scene.origin_mm[1]),
+            p.x as f64 + l.scene.origin_mm[0],
+            p.y as f64 + l.scene.origin_mm[1],
         ])
     }
 
@@ -1729,6 +1774,51 @@ impl Viewer {
                     _ => measure::format_mm(d.distance()),
                 };
                 label(a + (b - a) * 0.5, text);
+            }
+        }
+        // Where a placed point would go (#25): a marker, and what it snapped to.
+        if let Some(ed) = l.edit.as_ref().filter(|ed| ed.placing.is_some())
+            && let Some((q, kind)) = self.place_snap
+        {
+            let o = l.scene.origin_mm;
+            let z = ed.storey_elevation() - o[2];
+            if let Some(m) = p(glam::Vec3::new(
+                (q[0] - o[0]) as f32,
+                (q[1] - o[1]) as f32,
+                z as f32,
+            )) {
+                let s = egui::Stroke::new(2.0, col);
+                match kind {
+                    Some(snap::SnapTo::AxisCrossing | snap::SnapTo::ColumnCentre) => {
+                        painter.circle_stroke(m, 6.0, s);
+                        painter.line_segment([m - Vec2::X * 9.0, m + Vec2::X * 9.0], s);
+                        painter.line_segment([m - Vec2::Y * 9.0, m + Vec2::Y * 9.0], s);
+                    }
+                    Some(snap::SnapTo::Corner) => {
+                        painter.rect_stroke(
+                            egui::Rect::from_center_size(m, Vec2::splat(10.0)),
+                            0.0,
+                            s,
+                            egui::StrokeKind::Middle,
+                        );
+                    }
+                    Some(snap::SnapTo::Axis | snap::SnapTo::Edge) => {
+                        let pts = vec![
+                            m + Vec2::new(0.0, -6.0),
+                            m + Vec2::new(6.0, 5.0),
+                            m + Vec2::new(-6.0, 5.0),
+                        ];
+                        painter.add(egui::Shape::closed_line(pts, s));
+                    }
+                    None => {
+                        painter.circle_filled(m, 3.0, col);
+                    }
+                }
+                let text = match kind {
+                    Some(k) => format!("{} · {:.0}, {:.0}", k.label(), q[0], q[1]),
+                    None => format!("{:.0}, {:.0} (Shift: no snap)", q[0], q[1]),
+                };
+                label(m + Vec2::new(0.0, 22.0), text);
             }
         }
         if !self.measure_on {
