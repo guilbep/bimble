@@ -23,6 +23,7 @@ mod edit;
 mod files;
 mod icons;
 mod layout;
+mod materials_page;
 mod measure;
 mod project_page;
 mod ribbon;
@@ -475,6 +476,8 @@ struct Viewer {
     schedule: Option<schedules::OpenSchedule>,
     /// The project information page, when open in the main view (ADR 0030).
     project_page: Option<project_page::ProjectPage>,
+    /// The material browser, when open in the main view (ADR 0031).
+    materials_page: Option<materials_page::MaterialsPage>,
     schedule_counts: Option<(u64, Vec<(String, usize)>)>,
     /// File the style was loaded from or saved to.
     style_path: Option<PathBuf>,
@@ -566,6 +569,7 @@ impl Viewer {
             open_tabs: Vec::new(),
             schedule: None,
             project_page: None,
+            materials_page: None,
             schedule_counts: None,
             style_path: None,
             style_message: None,
@@ -1211,6 +1215,14 @@ impl Viewer {
             ))
         });
         self.needs_render = true;
+    }
+
+    /// Close the pages that take the main view (schedule, project, materials): a view, a sheet
+    /// or another page is shown instead.
+    pub(crate) fn close_pages(&mut self) {
+        self.schedule = None;
+        self.project_page = None;
+        self.materials_page = None;
     }
 
     /// Change the element under the cursor; uploads its edges for the highlight.
@@ -2999,6 +3011,11 @@ impl eframe::App for Viewer {
                     });
                     ui.label(msg);
                 });
+                return;
+            }
+            // The material browser: it takes the main view.
+            if self.materials_page.is_some() {
+                self.materials_ui(ui);
                 return;
             }
             // The project information page: it takes the main view.

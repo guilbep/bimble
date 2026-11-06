@@ -45,6 +45,10 @@ pub fn concrete_frame(spec: &FrameSpec) -> Model {
         id: GlobalId::new(),
         name: "C30/37".into(),
         category: MaterialCategory::Concrete,
+        // Its density, modulus and strength from the library (ADR 0031).
+        props: crate::library::lookup("C30/37")
+            .map(|m| m.props)
+            .unwrap_or_default(),
     };
     let mat = concrete.id;
     cmds.push(Command::AddMaterial(concrete));

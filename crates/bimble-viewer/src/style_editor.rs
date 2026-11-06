@@ -162,7 +162,11 @@ fn hatch_swatches(ui: &mut egui::Ui, paper: &bimble_core::style::PaperStyle, q: 
 }
 
 /// A hatch type painted in `rect`: its fill (white without one), then its line families.
-fn paint_hatch(p: &egui::Painter, rect: egui::Rect, t: &bimble_core::hatches::HatchType) {
+pub(crate) fn paint_hatch(
+    p: &egui::Painter,
+    rect: egui::Rect,
+    t: &bimble_core::hatches::HatchType,
+) {
     let c = |c: Rgb| egui::Color32::from_rgb(c.0[0], c.0[1], c.0[2]);
     let p = p.with_clip_rect(rect);
     p.rect_filled(rect, 2.0, t.fill.map_or(egui::Color32::WHITE, c));

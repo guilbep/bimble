@@ -32,11 +32,14 @@ pub enum Field {
     Area,
     /// m³, from the closed mesh.
     Volume,
+    /// kg: the volume times the density of its material's grade, found in the material library
+    /// by name (ADR 0031); empty when the grade isn't known.
+    Mass,
     GlobalId,
 }
 
 impl Field {
-    pub const ALL: [Field; 12] = [
+    pub const ALL: [Field; 13] = [
         Field::Level,
         Field::Location,
         Field::Name,
@@ -48,6 +51,7 @@ impl Field {
         Field::Height,
         Field::Area,
         Field::Volume,
+        Field::Mass,
         Field::GlobalId,
     ];
 
@@ -65,13 +69,17 @@ impl Field {
             Field::Height => "Height (cm)",
             Field::Area => "Area (m²)",
             Field::Volume => "Volume (m³)",
+            Field::Mass => "Mass (kg)",
             Field::GlobalId => "GlobalId",
         }
     }
 
     /// Summed in the totals.
     pub fn summed(self) -> bool {
-        matches!(self, Field::Length | Field::Area | Field::Volume)
+        matches!(
+            self,
+            Field::Length | Field::Area | Field::Volume | Field::Mass
+        )
     }
 }
 
@@ -140,12 +148,19 @@ pub fn default_schedules() -> Vec<ScheduleDef> {
     let beam = [
         Level, Name, Material, Section, Length, Width, Height, Volume,
     ];
+    // Steel is ordered and priced by weight.
+    let steel_col = [
+        Level, Location, Name, Material, Section, Length, Volume, Mass,
+    ];
+    let steel_beam = [
+        Level, Name, Material, Section, Length, Width, Height, Volume, Mass,
+    ];
     vec![
         def("Concrete columns", &["IfcColumn"], Some(Concrete), &col),
-        def("Steel columns", &["IfcColumn"], Some(Steel), &col),
+        def("Steel columns", &["IfcColumn"], Some(Steel), &steel_col),
         def("Timber columns", &["IfcColumn"], Some(Timber), &col),
         def("Concrete beams", &["IfcBeam"], Some(Concrete), &beam),
-        def("Steel beams", &["IfcBeam"], Some(Steel), &beam),
+        def("Steel beams", &["IfcBeam"], Some(Steel), &steel_beam),
         def("Timber beams", &["IfcBeam"], Some(Timber), &beam),
         def(
             "Slabs",
@@ -169,7 +184,7 @@ pub fn default_schedules() -> Vec<ScheduleDef> {
             "All elements",
             &[],
             None,
-            &[Level, Name, Class, Material, Volume],
+            &[Level, Name, Class, Material, Volume, Mass],
         ),
     ]
 }

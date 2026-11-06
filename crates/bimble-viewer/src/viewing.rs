@@ -163,8 +163,7 @@ impl Viewer {
     /// Switch to a view: its camera (remembered per view), clip and visibility.
     pub(crate) fn activate_view(&mut self, id: GlobalId) {
         // Choosing a view leaves a schedule shown in its place.
-        self.schedule = None;
-        self.project_page = None;
+        self.close_pages();
         if self.active_view == Some(id) {
             return;
         }

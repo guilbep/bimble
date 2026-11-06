@@ -71,12 +71,13 @@ pub(crate) enum Action {
     ReferencePlan,
     Standards,
     Project,
+    Materials,
     History,
     Palette,
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 30] = [
+pub(crate) const ALL_ACTIONS: [Action; 31] = [
     Action::Open,
     Action::Save,
     Action::Undo,
@@ -107,6 +108,7 @@ pub(crate) const ALL_ACTIONS: [Action; 30] = [
     Action::ReferencePlan,
     Action::Standards,
     Action::Project,
+    Action::Materials,
 ];
 
 impl Action {
@@ -141,6 +143,7 @@ impl Action {
             Action::ReferencePlan => "Reference plan (DXF, PDF)…".into(),
             Action::Standards => "Graphic standards".into(),
             Action::Project => "Project information".into(),
+            Action::Materials => "Materials".into(),
             Action::History => "History…".into(),
             Action::Palette => "Command palette".into(),
         }
@@ -182,7 +185,9 @@ impl Action {
             | Action::Top => Tab::View,
             Action::OnPaper | Action::NewSheet | Action::CloseSheet => Tab::Sheets,
             Action::LinkModel | Action::ReferencePlan => Tab::Links,
-            Action::Standards | Action::Project | Action::History => Tab::Manage,
+            Action::Standards | Action::Project | Action::Materials | Action::History => {
+                Tab::Manage
+            }
             Action::Open | Action::Save | Action::Undo | Action::Redo | Action::Palette => {
                 Tab::Model
             }
@@ -197,6 +202,7 @@ pub(crate) enum TabRef {
     Sheet(GlobalId),
     Schedule(String),
     Project,
+    Materials,
 }
 
 /// The command palette's state: what is typed and which result is highlighted.
@@ -284,6 +290,7 @@ impl Viewer {
             Action::SheetTool(tool) => self.layout.as_ref().is_some_and(|l| l.tool == tool),
             Action::Standards => self.standards_open,
             Action::Project => self.project_page.is_some(),
+            Action::Materials => self.materials_page.is_some(),
             Action::History => self.history_window,
             _ => false,
         }
@@ -385,9 +392,18 @@ impl Viewer {
                 if self.project_page.is_some() {
                     self.project_page = None;
                 } else {
-                    self.schedule = None;
+                    self.close_pages();
                     self.close_sheet();
                     self.project_page = Some(Default::default());
+                }
+            }
+            Action::Materials => {
+                if self.materials_page.is_some() {
+                    self.materials_page = None;
+                } else {
+                    self.close_pages();
+                    self.close_sheet();
+                    self.materials_page = Some(Default::default());
                 }
             }
             Action::History => {
@@ -728,7 +744,10 @@ impl Viewer {
                 self.group(
                     ui,
                     "Project",
-                    &[(Action::Project, "Project information")],
+                    &[
+                        (Action::Project, "Project information"),
+                        (Action::Materials, "Materials"),
+                    ],
                     &mut run,
                 );
                 if cfg!(not(target_arch = "wasm32")) {
@@ -778,7 +797,9 @@ impl Viewer {
     /// Tabs of the open views, sheets and schedules, over the main view.
     pub(crate) fn view_tabs(&mut self, ui: &mut egui::Ui) {
         // What the main view shows always has its tab.
-        let current = if self.project_page.is_some() {
+        let current = if self.materials_page.is_some() {
+            Some(TabRef::Materials)
+        } else if self.project_page.is_some() {
             Some(TabRef::Project)
         } else if let Some(s) = &self.schedule {
             Some(TabRef::Schedule(s.name.clone()))
@@ -798,7 +819,7 @@ impl Viewer {
             TabRef::View(id) => self.views.iter().any(|v| v.id == *id),
             TabRef::Sheet(id) => sheets.iter().any(|s| s.id == *id),
             TabRef::Schedule(n) => schedules.iter().any(|d| d.name == *n),
-            TabRef::Project => true,
+            TabRef::Project | TabRef::Materials => true,
         });
         let mut go: Option<TabRef> = None;
         let mut close: Option<TabRef> = None;
@@ -819,6 +840,7 @@ impl Viewer {
                         .unwrap_or_default(),
                     TabRef::Schedule(n) => format!("Schedule · {n}"),
                     TabRef::Project => "Project information".to_string(),
+                    TabRef::Materials => "Materials".to_string(),
                 };
                 let on = current.as_ref() == Some(&t);
                 let fill = if on { th::CANVAS } else { th::RIBBON_BG };
@@ -861,8 +883,7 @@ impl Viewer {
             if current.as_ref() == Some(&t) {
                 go = self.open_tabs.last().cloned();
                 if go.is_none() {
-                    self.schedule = None;
-                    self.project_page = None;
+                    self.close_pages();
                     self.close_sheet();
                 }
             }
@@ -871,17 +892,23 @@ impl Viewer {
             match t {
                 TabRef::Sheet(id) => self.open_sheet(id),
                 TabRef::View(id) => {
-                    self.schedule = None;
-                    self.project_page = None;
+                    self.close_pages();
                     self.close_sheet();
                     self.activate_view(id);
                 }
                 TabRef::Schedule(n) => self.open_schedule(&n),
                 TabRef::Project => {
-                    self.schedule = None;
-                    self.close_sheet();
                     if self.project_page.is_none() {
+                        self.close_pages();
+                        self.close_sheet();
                         self.project_page = Some(Default::default());
+                    }
+                }
+                TabRef::Materials => {
+                    if self.materials_page.is_none() {
+                        self.close_pages();
+                        self.close_sheet();
+                        self.materials_page = Some(Default::default());
                     }
                 }
             }
@@ -907,6 +934,9 @@ impl Viewer {
                     "the end"
                 }
             );
+        }
+        if self.materials_page.is_some() {
+            return "Materials: choose one on the left; Add takes a grade from the library".into();
         }
         if self.project_page.is_some() {
             return "Project information: a value is saved when you leave its field".into();

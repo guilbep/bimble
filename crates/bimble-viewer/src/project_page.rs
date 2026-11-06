@@ -46,6 +46,7 @@ impl Viewer {
             .fill(th::PANEL_BG)
             .inner_margin(egui::Margin::same(th::GAP_L as i8))
             .show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
                 ui.heading("Project information");
                 ui.weak(if ifc {
                     "Saved with the views next to the IFC (the IFC itself is not changed). \

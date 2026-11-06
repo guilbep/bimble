@@ -6,6 +6,7 @@ pub mod demo;
 pub mod file;
 mod guid;
 pub mod hatches;
+pub mod library;
 mod model;
 pub mod pens;
 pub mod project;

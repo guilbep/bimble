@@ -272,6 +272,12 @@ fn cell(f: Field, e: &SceneElement, m: &Measures, location: &str) -> Cell {
         Field::Height => Cell::Num(m.height / 10.0, 1),
         Field::Area => Cell::Num(m.area_m2, 2),
         Field::Volume => Cell::Num(m.volume_m3, 3),
+        Field::Mass => {
+            match bimble_core::library::lookup(&e.material).and_then(|l| l.props.density_kg_m3) {
+                Some(rho) => Cell::Num(m.volume_m3 * rho, 0),
+                None => Cell::Empty,
+            }
+        }
         Field::GlobalId => text(&e.global_id),
     }
 }
@@ -292,7 +298,12 @@ fn totals(fields: &[Field], rows: &[Row], label: String) -> Vec<Cell> {
                     .sum::<f64>()
                     // An empty sum is -0.0: written "0.000", never "-0.000".
                     + 0.0;
-                Cell::Num(s, if *f == Field::Area { 2 } else { 3 })
+                let decimals = match f {
+                    Field::Area => 2,
+                    Field::Mass => 0,
+                    _ => 3,
+                };
+                Cell::Num(s, decimals)
             } else {
                 Cell::Empty
             }
@@ -464,7 +475,12 @@ pub fn to_text(t: &Table) -> String {
         .map(|f| {
             matches!(
                 f,
-                Field::Length | Field::Width | Field::Height | Field::Area | Field::Volume
+                Field::Length
+                    | Field::Width
+                    | Field::Height
+                    | Field::Area
+                    | Field::Volume
+                    | Field::Mass
             )
         })
         .collect();

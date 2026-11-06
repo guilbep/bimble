@@ -110,6 +110,9 @@ fn concrete(m: &Model) -> (GlobalId, Option<Command>) {
                     id,
                     name: "C30/37".into(),
                     category: MaterialCategory::Concrete,
+                    props: bimble_core::library::lookup("C30/37")
+                        .map(|m| m.props)
+                        .unwrap_or_default(),
                 })),
             )
         }

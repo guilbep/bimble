@@ -80,8 +80,7 @@ fn hash_of(parts: &[&[u8]]) -> u64 {
 impl Viewer {
     /// Open a sheet in the main view.
     pub(crate) fn open_sheet(&mut self, id: GlobalId) {
-        self.schedule = None;
-        self.project_page = None;
+        self.close_pages();
         if self.layout.as_ref().is_some_and(|l| l.sheet == id) {
             return;
         }

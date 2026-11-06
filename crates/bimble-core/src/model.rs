@@ -170,6 +170,13 @@ pub struct Material {
     /// e.g. "C30/37", "S355", "GL24h"
     pub name: String,
     pub category: MaterialCategory,
+    /// Density, modulus, strength and their source (ADR 0031). Absent when unknown, so
+    /// older models keep their hash.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::library::MaterialProps::is_empty"
+    )]
+    pub props: crate::library::MaterialProps,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -431,6 +438,7 @@ impl Model {
             }
         }
         for (k, m) in &self.materials {
+            m.props.validate()?;
             if *k != m.id {
                 return Err(format!("material {k}: key does not match id"));
             }

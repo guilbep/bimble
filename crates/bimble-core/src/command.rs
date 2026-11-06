@@ -44,6 +44,8 @@ pub enum Command {
     },
     /// Replace a sheet (number, name, paper, placed views, texts…); its id stays.
     SetSheet(crate::sheet::Sheet),
+    /// Replace a material (name, family, properties); its id stays (ADR 0031).
+    SetMaterial(Material),
     /// Replace the project information (ADR 0030).
     SetProject {
         project: std::collections::BTreeMap<String, String>,
@@ -203,6 +205,19 @@ impl Command {
                 let old = m.sheets.insert(s.id, s).expect("checked above");
                 Ok(SetSheet(old))
             }
+            SetMaterial(x) => {
+                if !m.materials.contains_key(&x.id) {
+                    return Err(CommandError::NotFound(x.id));
+                }
+                if x.name.trim().is_empty() || x.name.chars().count() > 200 {
+                    return Err(CommandError::Invalid(
+                        "a material needs a name (at most 200 characters)".into(),
+                    ));
+                }
+                x.props.validate().map_err(CommandError::Invalid)?;
+                let old = m.materials.insert(x.id, x).expect("checked above");
+                Ok(SetMaterial(old))
+            }
             SetProject { project } => {
                 crate::project::validate(&project).map_err(CommandError::Invalid)?;
                 let old = std::mem::replace(&mut m.project, project);
@@ -277,6 +292,12 @@ impl Command {
             Command::RemoveSheet { id } => format!("delete {}", sheet(id)),
             Command::SetSheet(x) => format!("change the sheet {}", x.number),
             Command::SetProject { .. } => "change the project information".into(),
+            Command::SetMaterial(x) => match m.materials.get(&x.id) {
+                Some(old) if old.name != x.name => {
+                    format!("rename the material {} to {}", old.name, x.name)
+                }
+                _ => format!("change the material {}", x.name),
+            },
         }
     }
 }
