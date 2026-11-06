@@ -51,18 +51,43 @@ stay on your computer: nothing is uploaded. Saving and plan exports are download
 history is desktop-only for now.
 
 ```bash
-rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli --version <the wasm-bindgen version in Cargo.lock>
-scripts/build-web.sh                     # → web/dist/ (static files)
-python3 -m http.server -d web/dist 8000  # then open http://localhost:8000
+make web-setup   # once: wasm32 target and the matching wasm-bindgen-cli
+make serve       # builds web/dist/ (static files, needs npm), then open http://localhost:8000
 ```
 
 ## Build from source
 
+### Prerequisites
+
+Rust stable (through [rustup](https://rustup.rs)), plus CMake and a C++ compiler for the geometry
+kernel.
+
 ```bash
-cargo build --release          # binary in target/release/bimble
-cargo test --workspace
+# macOS
+xcode-select --install
+brew install rustup cmake
+echo 'export PATH="$(brew --prefix rustup)/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+rustup default stable
+
+# Debian / Ubuntu (rustup from https://rustup.rs)
+sudo apt-get install build-essential cmake
+
+# Windows (Visual Studio Build Tools with the C++ workload, which rustup offers to install)
+winget install Rustlang.Rustup Kitware.CMake
 ```
+
+Optional: `npm` for the browser build, `wasm-opt` (binaryen) for a smaller page,
+`pip install ifcopenshell` for the checks below.
+
+### Build
+
+```bash
+make                           # binary in target/release/bimble
+make check                     # format, clippy and tests, as in CI
+make help                      # the other targets
+```
+
+No `make` (Windows): `cargo build --release -p bimble-cli`, `cargo test --workspace`.
 
 Checks against IfcOpenShell (`pip install ifcopenshell`):
 
