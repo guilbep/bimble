@@ -146,12 +146,15 @@ pub fn draw(
         }
     }
     for t in &def.texts {
+        let tt = t.kind.as_ref().and_then(|k| o.style.paper.text_type(k));
+        let size = tt.map_or(t.size_mm, |x| x.size_mm as f64);
+        let color = tt.map_or(ink, |x| x.color);
         for (i, line) in t.text.split('\n').enumerate() {
             items.push(Item::Text {
-                pos: [t.at_mm[0], t.at_mm[1] + i as f64 * t.size_mm * 1.25],
-                size_mm: t.size_mm,
+                pos: [t.at_mm[0], t.at_mm[1] + i as f64 * size * 1.25],
+                size_mm: size,
                 text: line.to_string(),
-                color: ink,
+                color,
                 anchor: Anchor::Start,
                 angle_deg: t.angle_deg,
                 bold: false,
@@ -266,6 +269,7 @@ mod tests {
                 at: [0.0, 5000.0, 3500.0],
                 size_mm: 3.5,
                 angle_deg: 0.0,
+                kind: None,
             }],
         };
         views.push(section.clone());
@@ -294,6 +298,7 @@ mod tests {
             at_mm: [40.0, 40.0],
             size_mm: 5.0,
             angle_deg: 0.0,
+            kind: None,
         });
         let o = SheetOptions {
             project: "Demo".into(),
@@ -365,6 +370,7 @@ mod tests {
             },
             offset_mm: -1500.0,
             axis: Default::default(),
+            kind: None,
         });
         let id = v.id;
         let mut def = SheetDef::new("S-102", "Plan");
@@ -380,6 +386,73 @@ mod tests {
             "{:?}",
             texts(&sheet)
         );
+    }
+
+    /// A dimension of a type is written in that type's unit and colour, and a sheet text of a
+    /// type takes that type's size and colour (#43).
+    #[test]
+    fn annotation_types_set_unit_size_and_colour() {
+        use bimble_core::sheet::SheetText;
+        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let mut views = default_views(&scene.levels());
+        let v = views
+            .iter_mut()
+            .find(|v| v.name == "Plan Niveau 1")
+            .unwrap();
+        v.annotations.push(Annotation::Dimension {
+            id: GlobalId::new(),
+            a: VAnchor {
+                at: [0.0, 0.0, 0.0],
+                element: None,
+            },
+            b: VAnchor {
+                at: [6000.0, 0.0, 0.0],
+                element: None,
+            },
+            offset_mm: -1500.0,
+            axis: Default::default(),
+            kind: Some("red m".into()),
+        });
+        let id = v.id;
+        let mut def = SheetDef::new("S-104", "Typed");
+        def.placed.push(Placed {
+            id: GlobalId::new(),
+            view: id,
+            scale: 100,
+            at_mm: [400.0, 250.0],
+        });
+        def.texts.push(SheetText {
+            id: GlobalId::new(),
+            text: "Note".into(),
+            at_mm: [100.0, 100.0],
+            size_mm: 9.0,
+            angle_deg: 0.0,
+            kind: Some("Arial 4 mm blue".into()),
+        });
+        let o = SheetOptions::default();
+        let red = o.style.paper.dim_type("red m").unwrap().color;
+        let blue = o.style.paper.text_type("Arial 4 mm blue").unwrap().color;
+        let (sheet, _) = draw(&scene, &def, &views, &o).unwrap();
+        let found = |want: &str| {
+            sheet.items.iter().find_map(|i| match i {
+                Item::Text {
+                    text,
+                    color,
+                    size_mm,
+                    ..
+                } if text == want => Some((*color, *size_mm)),
+                _ => None,
+            })
+        };
+        let (c, size) = found("6.00 m").unwrap_or_else(|| panic!("{:?}", texts(&sheet)));
+        assert_eq!(c, red);
+        assert!((size - 2.5).abs() < 1e-6);
+        let (c, size) = found("Note").unwrap();
+        assert_eq!(c, blue);
+        assert!((size - 4.0).abs() < 1e-6);
+        // Its lines are red too.
+        assert!(sheet.items.iter().any(|i| matches!(i,
+            Item::Lines { pen, .. } if pen.color == red)));
     }
 
     /// A placed view that can't be drawn leaves a note, not a failed sheet.

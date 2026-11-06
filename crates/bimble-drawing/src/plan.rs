@@ -1052,8 +1052,6 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             let q = setup.turn.apply([p[0] - so[0], p[1] - so[1], p[2] - so[2]]);
             to_paper(&[q[0], q[1]])
         };
-        let mut lines = Vec::new();
-        let mut ticks = Vec::new();
         for a in &v.annotations {
             match a {
                 bimble_core::view::Annotation::Dimension {
@@ -1061,15 +1059,32 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
                     b,
                     offset_mm,
                     axis,
+                    kind,
                     ..
                 } => {
+                    let dt = kind.as_ref().and_then(|k| paper_style.dim_type(k));
                     let (pa, pb) = (at(&a.at), at(&b.at));
                     let Some((u, qa, qb, len)) =
                         crate::viewdraw::dimension_on_paper(pa, pb, offset_mm * k, *axis)
                     else {
                         continue;
                     };
+                    // Its type's line (annotation pen) in its colour, else the dimension line.
+                    let mut pen = note_pen.clone();
+                    if let Some(dt) = dt {
+                        if let Some(lt) = paper_style.line_type(&dt.line_type)
+                            && let Some(w) = paper_style.pens.annotation_mm(lt.pen)
+                        {
+                            pen.width_mm = w as f64;
+                            pen.dash = lt.dash_mm.iter().map(|&d| d as f64).collect();
+                        }
+                        pen.color = dt.color;
+                    }
+                    let mut tick_pen = pen.clone();
+                    tick_pen.width_mm *= 2.0;
+                    tick_pen.dash.clear();
                     let n = [u[1], -u[0]];
+                    let mut lines = Vec::new();
                     // Extension lines from just off the points to just past the dimension line.
                     for (p, q) in [(pa, qa), (pb, qb)] {
                         let e = [q[0] - p[0], q[1] - p[1]];
@@ -1081,11 +1096,19 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
                         ]);
                     }
                     lines.push(vec![qa, qb]);
-                    for q in [qa, qb] {
-                        let s = 0.9;
-                        let t = [(u[0] - n[0]) * s, (u[1] - n[1]) * s];
-                        ticks.push(vec![[q[0] - t[0], q[1] - t[1]], [q[0] + t[0], q[1] + t[1]]]);
-                    }
+                    let ticks = [qa, qb]
+                        .iter()
+                        .map(|q| {
+                            let s = 0.9;
+                            let t = [(u[0] - n[0]) * s, (u[1] - n[1]) * s];
+                            vec![[q[0] - t[0], q[1] - t[1]], [q[0] + t[0], q[1] + t[1]]]
+                        })
+                        .collect();
+                    items.push(Item::Lines { lines, pen });
+                    items.push(Item::Lines {
+                        lines: ticks,
+                        pen: tick_pen,
+                    });
                     let mut angle = -u[1].atan2(u[0]).to_degrees();
                     if !(-90.0..=90.0).contains(&angle) {
                         angle += if angle > 0.0 { -180.0 } else { 180.0 };
@@ -1094,45 +1117,45 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
                     // The value just above its line, upright.
                     let r = angle.to_radians();
                     let pos = [mid[0] - r.sin() * 0.8, mid[1] - r.cos() * 0.8];
-                    items.push(text_at(
+                    let (value, size, color) = match dt {
+                        Some(dt) => (dt.format(len / k), dt.text_mm as f64, dt.color),
+                        None => (unit.format(len / k), t * 0.9, ink),
+                    };
+                    items.push(Item::Text {
                         pos,
-                        t * 0.9,
-                        unit.format(len / k),
-                        Anchor::Middle,
-                        angle,
-                        false,
-                    ));
+                        size_mm: size,
+                        text: value,
+                        color,
+                        anchor: Anchor::Middle,
+                        angle_deg: angle,
+                        bold: false,
+                    });
                 }
                 bimble_core::view::Annotation::Text {
                     text,
                     at: p,
                     size_mm,
                     angle_deg,
+                    kind,
                     ..
                 } => {
+                    let tt = kind.as_ref().and_then(|k| paper_style.text_type(k));
+                    let size = tt.map_or(*size_mm, |t| t.size_mm as f64);
+                    let color = tt.map_or(ink, |t| t.color);
                     for (i, line) in text.split('\n').enumerate() {
                         let q = at(p);
-                        items.push(text_at(
-                            [q[0], q[1] + i as f64 * size_mm * 1.25],
-                            *size_mm,
-                            line.to_string(),
-                            Anchor::Start,
-                            *angle_deg,
-                            false,
-                        ));
+                        items.push(Item::Text {
+                            pos: [q[0], q[1] + i as f64 * size * 1.25],
+                            size_mm: size,
+                            text: line.to_string(),
+                            color,
+                            anchor: Anchor::Start,
+                            angle_deg: *angle_deg,
+                            bold: false,
+                        });
                     }
                 }
             }
-        }
-        if !lines.is_empty() {
-            items.push(Item::Lines {
-                lines,
-                pen: note_pen.clone(),
-            });
-            items.push(Item::Lines {
-                lines: ticks,
-                pen: thicker(Role::Dimension, 2.0),
-            });
         }
     }
 

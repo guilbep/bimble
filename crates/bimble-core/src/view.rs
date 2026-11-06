@@ -47,6 +47,9 @@ pub enum Annotation {
         /// Measured along a→b (aligned), or across the view (horizontal) or up it (vertical).
         #[serde(default, skip_serializing_if = "DimAxis::is_aligned")]
         axis: DimAxis,
+        /// Its dimension type (graphic style, #43); none: the plan template's unit.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
     },
     /// A text at a point (world mm), its size on paper.
     Text {
@@ -56,6 +59,9 @@ pub enum Annotation {
         size_mm: f64,
         #[serde(default, skip_serializing_if = "is_zero")]
         angle_deg: f64,
+        /// Its text type (#43): colour, and size when set.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
     },
 }
 

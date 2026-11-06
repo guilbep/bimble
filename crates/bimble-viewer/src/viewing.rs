@@ -1058,7 +1058,6 @@ impl Viewer {
         };
         let a = self.opts.style.dimensions.0;
         let col = Color32::from_rgb(a[0], a[1], a[2]);
-        let stroke = egui::Stroke::new(1.0, col);
         let painter = ui.painter_at(rect);
         // Text sizes as at 1:100, within readable bounds.
         let font = |size_mm: f64| {
@@ -1071,8 +1070,16 @@ impl Viewer {
                     b,
                     offset_mm,
                     axis,
+                    kind,
                     ..
                 } => {
+                    let dt = kind
+                        .as_ref()
+                        .and_then(|k| self.opts.style.paper.dim_type(k));
+                    let col = dt.map_or(col, |d| {
+                        Color32::from_rgb(d.color.0[0], d.color.0[1], d.color.0[2])
+                    });
+                    let stroke = egui::Stroke::new(1.0, col);
                     let (pa, pb) = (frame.to_paper(a.at), frame.to_paper(b.at));
                     let Some((_, qa, qb, len)) = dimension_on_paper(pa, pb, *offset_mm, *axis)
                     else {
@@ -1092,8 +1099,11 @@ impl Viewer {
                     } else {
                         angle
                     };
-                    let text = self.plan.template.dimension_unit.format(len);
-                    let galley = painter.layout_no_wrap(text, font(2.25), col);
+                    let (text, size) = match dt {
+                        Some(d) => (d.format(len), d.text_mm as f64),
+                        None => (self.plan.template.dimension_unit.format(len), 2.25),
+                    };
+                    let galley = painter.layout_no_wrap(text, font(size), col);
                     let size = galley.size();
                     let (s, c) = angle.sin_cos();
                     // Centred over the line, upright.
@@ -1102,10 +1112,21 @@ impl Viewer {
                     painter.add(egui::epaint::TextShape::new(pos, galley, col).with_angle(angle));
                 }
                 Annotation::Text {
-                    text, at, size_mm, ..
+                    text,
+                    at,
+                    size_mm,
+                    kind,
+                    ..
                 } => {
+                    let tt = kind
+                        .as_ref()
+                        .and_then(|k| self.opts.style.paper.text_type(k));
+                    let col = tt.map_or(col, |t| {
+                        Color32::from_rgb(t.color.0[0], t.color.0[1], t.color.0[2])
+                    });
+                    let size = tt.map_or(*size_mm, |t| t.size_mm as f64);
                     if let Some(p) = screen(frame.to_paper(*at)) {
-                        painter.text(p, egui::Align2::LEFT_BOTTOM, text, font(*size_mm), col);
+                        painter.text(p, egui::Align2::LEFT_BOTTOM, text, font(size), col);
                     }
                 }
             }

@@ -56,6 +56,9 @@ pub(crate) struct Layout {
     /// The text being edited in the properties, and whether it changed.
     text_form: Option<(Picked, String, f64)>,
     pub last_render_ms: f64,
+    /// The text type and dimension type new texts and dimensions get (#43).
+    pub text_kind: Option<String>,
+    pub dim_kind: Option<String>,
 }
 
 fn hash_of(parts: &[&[u8]]) -> u64 {
@@ -90,6 +93,8 @@ impl Viewer {
             hover: None,
             text_form: None,
             last_render_ms: 0.0,
+            text_kind: None,
+            dim_kind: None,
         });
         self.selected = None;
         self.needs_upload = true;
@@ -442,6 +447,11 @@ impl Viewer {
                         // In a view: the view's.
                         Some(pi) => {
                             let world = pi.frame.to_world(at);
+                            let kind = lay.text_kind.clone();
+                            let size = kind
+                                .as_ref()
+                                .and_then(|k| self.opts.style.paper.text_type(k))
+                                .map_or(3.5, |t| t.size_mm as f64);
                             view_change = Some((
                                 pi.view,
                                 Box::new(move |v: &mut View| {
@@ -449,8 +459,9 @@ impl Viewer {
                                         id,
                                         text: "Text".into(),
                                         at: world,
-                                        size_mm: 3.5,
+                                        size_mm: size,
                                         angle_deg: 0.0,
+                                        kind,
                                     })
                                 }),
                             ));
@@ -458,12 +469,18 @@ impl Viewer {
                         }
                         None => {
                             let mut s = def.clone();
+                            let kind = lay.text_kind.clone();
+                            let size = kind
+                                .as_ref()
+                                .and_then(|k| self.opts.style.paper.text_type(k))
+                                .map_or(5.0, |t| t.size_mm as f64);
                             s.texts.push(SheetText {
                                 id,
                                 text: "Text".into(),
                                 at_mm: at,
-                                size_mm: 5.0,
+                                size_mm: size,
                                 angle_deg: 0.0,
+                                kind,
                             });
                             store = Some(s);
                             lay.picked = Some(Picked::SheetText(id));
@@ -508,6 +525,7 @@ impl Viewer {
                                     let (wa, wb) = (pi.frame.to_world(a), pi.frame.to_world(b));
                                     let offset_mm = (off_paper / pi.frame.k).round();
                                     let id = GlobalId::new();
+                                    let kind = lay.dim_kind.clone();
                                     view_change = Some((
                                         pi.view,
                                         Box::new(move |v: &mut View| {
@@ -523,6 +541,7 @@ impl Viewer {
                                                 },
                                                 offset_mm,
                                                 axis,
+                                                kind,
                                             })
                                         }),
                                     ));
@@ -720,6 +739,36 @@ impl Viewer {
                 lay.fit = true;
             }
         });
+        // The type new texts or dimensions get.
+        let paper = &self.opts.style.paper;
+        let text_names: Vec<String> = paper.text_types.iter().map(|t| t.name.clone()).collect();
+        let dim_names: Vec<String> = paper
+            .dimension_types
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        let lay = self.layout.as_mut().expect("checked above");
+        match lay.tool {
+            Tool::Text => {
+                kind_combo(
+                    ui,
+                    "New texts",
+                    "text-kind",
+                    &text_names,
+                    &mut lay.text_kind,
+                );
+            }
+            Tool::Dimension => {
+                kind_combo(
+                    ui,
+                    "New dimensions",
+                    "dim-kind",
+                    &dim_names,
+                    &mut lay.dim_kind,
+                );
+            }
+            Tool::Select => {}
+        }
         ui.separator();
         if let Some(m) = &self.view_message {
             ui.colored_label(ui.visuals().warn_fg_color, m);
@@ -786,8 +835,89 @@ impl Viewer {
         }
     }
 
+    /// The type of a selected text or dimension, and a picker to change it.
+    fn kind_properties(&mut self, ui: &mut egui::Ui, def: &SheetDef, pk: Picked) {
+        let paper = &self.opts.style.paper;
+        let current: Option<(Option<String>, bool)> = match pk {
+            Picked::SheetText(id) => def
+                .texts
+                .iter()
+                .find(|t| t.id == id)
+                .map(|t| (t.kind.clone(), false)),
+            Picked::Annotation(v, a) => self
+                .views
+                .iter()
+                .find(|x| x.id == v)
+                .and_then(|x| x.annotations.iter().find(|y| y.id() == a))
+                .map(|y| match y {
+                    Annotation::Text { kind, .. } => (kind.clone(), false),
+                    Annotation::Dimension { kind, .. } => (kind.clone(), true),
+                }),
+            Picked::Placed(_) => None,
+        };
+        let Some((mut kind, is_dim)) = current else {
+            return;
+        };
+        let names: Vec<String> = if is_dim {
+            paper
+                .dimension_types
+                .iter()
+                .map(|t| t.name.clone())
+                .collect()
+        } else {
+            paper.text_types.iter().map(|t| t.name.clone()).collect()
+        };
+        let size = kind
+            .as_ref()
+            .and_then(|k| paper.text_type(k))
+            .map(|t| t.size_mm as f64);
+        if !kind_combo(ui, "Type", "picked-kind", &names, &mut kind) {
+            return;
+        }
+        let size = kind
+            .as_ref()
+            .and_then(|k| self.opts.style.paper.text_type(k))
+            .map(|t| t.size_mm as f64)
+            .or(size);
+        match pk {
+            Picked::SheetText(id) => {
+                let mut d = def.clone();
+                if let Some(t) = d.texts.iter_mut().find(|t| t.id == id) {
+                    t.kind = kind;
+                    if let Some(s) = size {
+                        t.size_mm = s;
+                    }
+                }
+                if let Err(e) = self.store_sheet(d) {
+                    self.view_message = Some(e);
+                }
+            }
+            Picked::Annotation(v, a) => {
+                self.update_view(v, move |x| {
+                    match x.annotations.iter_mut().find(|y| y.id() == a) {
+                        Some(Annotation::Text {
+                            kind: k, size_mm, ..
+                        }) => {
+                            *k = kind;
+                            if let Some(s) = size {
+                                *size_mm = s;
+                            }
+                        }
+                        Some(Annotation::Dimension { kind: k, .. }) => *k = kind,
+                        None => {}
+                    }
+                });
+            }
+            Picked::Placed(_) => {}
+        }
+        if let Some(l) = self.layout.as_mut() {
+            l.text_form = None;
+        }
+    }
+
     /// A text (the sheet's or a view's) or a dimension.
     fn text_properties(&mut self, ui: &mut egui::Ui, def: &SheetDef, pk: Picked) {
+        self.kind_properties(ui, def, pk);
         // The current text and size.
         let current = match pk {
             Picked::SheetText(id) => def
@@ -961,6 +1091,30 @@ impl Viewer {
     }
 }
 
+/// A type picker: none (plain) or one of `names`. Returns whether it changed.
+fn kind_combo(
+    ui: &mut egui::Ui,
+    label: &str,
+    salt: &str,
+    names: &[String],
+    kind: &mut Option<String>,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        egui::ComboBox::from_id_salt(salt)
+            .selected_text(kind.clone().unwrap_or_else(|| "Plain".into()))
+            .height(300.0)
+            .show_ui(ui, |ui| {
+                changed |= ui.selectable_value(kind, None, "Plain").changed();
+                for n in names {
+                    changed |= ui.selectable_value(kind, Some(n.clone()), n).changed();
+                }
+            });
+    });
+    changed
+}
+
 /// The nearest end of a line within `tol` (paper mm), else the nearest point on a line, else
 /// the point itself.
 fn snap(segments: &[[[f64; 2]; 2]], p: [f64; 2], tol: f64) -> [f64; 2] {
@@ -1106,6 +1260,7 @@ mod tests {
             at_mm: [100.0, 100.0],
             size_mm: 5.0,
             angle_deg: 0.0,
+            kind: None,
         });
         assert_eq!(
             pick_text(&def, [110.0, 98.0], 0.5),

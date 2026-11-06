@@ -206,9 +206,22 @@ pub struct PaperStyle {
     /// When set, they replace the `*_pen_mm` and dash fields above.
     #[serde(default)]
     pub lines: crate::pens::LineRoles,
+    /// Text types and dimension types offered by the Text and Dimension tools (#43).
+    #[serde(default = "crate::pens::default_text_types")]
+    pub text_types: Vec<crate::pens::TextType>,
+    #[serde(default = "crate::pens::default_dim_types")]
+    pub dimension_types: Vec<crate::pens::DimType>,
 }
 
 impl PaperStyle {
+    pub fn text_type(&self, name: &str) -> Option<&crate::pens::TextType> {
+        self.text_types.iter().find(|t| t.name == name)
+    }
+
+    pub fn dim_type(&self, name: &str) -> Option<&crate::pens::DimType> {
+        self.dimension_types.iter().find(|t| t.name == name)
+    }
+
     /// A line type by name.
     pub fn line_type(&self, name: &str) -> Option<&crate::pens::LineType> {
         self.line_types.iter().find(|t| t.name == name)
@@ -306,6 +319,8 @@ impl Default for GraphicStyle {
                 pens: Default::default(),
                 line_types: crate::pens::default_line_types(),
                 lines: Default::default(),
+                text_types: crate::pens::default_text_types(),
+                dimension_types: crate::pens::default_dim_types(),
             },
             families: Families {
                 concrete: Fill {
@@ -438,6 +453,7 @@ impl GraphicStyle {
         range("seen_lighten", p.seen_lighten, 0.0, 1.0)?;
         p.pens.validate()?;
         crate::pens::validate_lines(&p.line_types, &p.lines)?;
+        crate::pens::validate_annotation_types(&p.text_types, &p.dimension_types, &p.line_types)?;
         for c in MaterialCategory::ALL {
             let f = self.families.get(c);
             let at = |field: &str| format!("families.{}.{field}", c.label().to_lowercase());

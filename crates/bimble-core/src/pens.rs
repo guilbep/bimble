@@ -86,7 +86,9 @@ impl PenTable {
     }
 
     pub fn perspective_mm(&self, pen: u8) -> Option<f32> {
-        self.perspective.get((pen as usize).checked_sub(1)?).copied()
+        self.perspective
+            .get((pen as usize).checked_sub(1)?)
+            .copied()
     }
 
     /// Add a scale column (thicknesses copied from the nearest one); keeps the scales sorted.
@@ -122,8 +124,7 @@ impl PenTable {
         if self.scales.is_empty() || self.scales.len() > MAX_SCALES {
             return Err(format!("pens.scales: 1 to {MAX_SCALES} scales"));
         }
-        if self.scales.windows(2).any(|w| w[0] >= w[1]) || self.scales.iter().any(|s| *s == 0)
-        {
+        if self.scales.windows(2).any(|w| w[0] >= w[1]) || self.scales.iter().any(|s| *s == 0) {
             return Err("pens.scales: increasing scales 1:N, N ≥ 1".into());
         }
         if self.model.len() != PENS || self.model.iter().any(|r| r.len() != self.scales.len()) {
@@ -133,7 +134,9 @@ impl PenTable {
             ));
         }
         if self.perspective.len() != PENS || self.annotation.len() != PENS {
-            return Err(format!("pens.perspective and pens.annotation: {PENS} thicknesses each"));
+            return Err(format!(
+                "pens.perspective and pens.annotation: {PENS} thicknesses each"
+            ));
         }
         let ok = |x: &f32| x.is_finite() && (0.01..=20.0).contains(x);
         if !self
@@ -294,7 +297,9 @@ pub fn validate_lines(types: &[LineType], roles: &LineRoles) -> Result<(), Strin
         }
         if t.dash_mm.len() > 16
             || t.dash_mm.len() % 2 == 1
-            || t.dash_mm.iter().any(|d| !(d.is_finite() && (0.05..=100.0).contains(d)))
+            || t.dash_mm
+                .iter()
+                .any(|d| !(d.is_finite() && (0.05..=100.0).contains(d)))
         {
             return Err(format!(
                 "line type {}: dashes are pairs of lengths (dash, gap), 0.05 to 100 mm",
@@ -305,6 +310,155 @@ pub fn validate_lines(types: &[LineType], roles: &LineRoles) -> Result<(), Strin
     for (role, name) in roles.all() {
         if !names.contains(name) {
             return Err(format!("lines.{role}: no line type named {name:?}"));
+        }
+    }
+    Ok(())
+}
+
+/// A text type (#43): font, size on paper, colour.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextType {
+    pub name: String,
+    pub font: String,
+    pub size_mm: f32,
+    pub color: Rgb,
+}
+
+/// The unit a dimension type writes its value in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimUnit {
+    M,
+    Cm,
+    Mm,
+}
+
+/// A dimension type (#43): how the value is written, colour, text size, line.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DimType {
+    pub name: String,
+    pub unit: DimUnit,
+    pub decimals: u8,
+    /// Write the unit after the value ("1.00 m") or not ("100").
+    pub show_unit: bool,
+    pub color: Rgb,
+    pub text_mm: f32,
+    /// The line type of its lines (its colour is replaced by the type's).
+    pub line_type: String,
+}
+
+impl DimType {
+    /// A length in mm, written as this type says.
+    pub fn format(&self, mm: f64) -> String {
+        let (v, u) = match self.unit {
+            DimUnit::M => (mm / 1000.0, "m"),
+            DimUnit::Cm => (mm / 10.0, "cm"),
+            DimUnit::Mm => (mm, "mm"),
+        };
+        let d = self.decimals.min(6) as usize;
+        let s = format!("{v:.d$}");
+        if self.show_unit {
+            format!("{s} {u}")
+        } else {
+            s
+        }
+    }
+}
+
+const ANNOTATION_COLORS: [(&str, Rgb); 5] = [
+    ("black", Rgb([0, 0, 0])),
+    ("red", Rgb([230, 40, 30])),
+    ("green", Rgb([40, 160, 40])),
+    ("brown", Rgb([190, 110, 40])),
+    ("blue", Rgb([30, 110, 240])),
+];
+
+/// Arial 5, 4, 3.5, 2.5 and 2 mm in black, red, green, brown and blue (the office's list).
+pub fn default_text_types() -> Vec<TextType> {
+    let mut v = Vec::new();
+    for (c, rgb) in ANNOTATION_COLORS {
+        for size in [5.0f32, 4.0, 3.5, 2.5, 2.0] {
+            v.push(TextType {
+                name: format!("Arial {size} mm {c}"),
+                font: "Arial".into(),
+                size_mm: size,
+                color: rgb,
+            });
+        }
+    }
+    v
+}
+
+/// In black, red, blue and green: metres with 2 decimals and the unit ("1.00 m"), centimetres
+/// without it ("100"), millimetres with it ("1414 mm").
+pub fn default_dim_types() -> Vec<DimType> {
+    let mut v = Vec::new();
+    for (c, rgb) in [
+        ANNOTATION_COLORS[0],
+        ANNOTATION_COLORS[1],
+        ANNOTATION_COLORS[4],
+        ANNOTATION_COLORS[2],
+    ] {
+        for (unit, decimals, show, label) in [
+            (DimUnit::Cm, 0, false, "cm"),
+            (DimUnit::M, 2, true, "m"),
+            (DimUnit::Mm, 0, true, "mm"),
+        ] {
+            v.push(DimType {
+                name: format!("{c} {label}"),
+                unit,
+                decimals,
+                show_unit: show,
+                color: rgb,
+                text_mm: 2.5,
+                line_type: "black_continu_1".into(),
+            });
+        }
+    }
+    v
+}
+
+/// Checks text and dimension types.
+pub fn validate_annotation_types(
+    texts: &[TextType],
+    dims: &[DimType],
+    line_types: &[LineType],
+) -> Result<(), String> {
+    if texts.len() > MAX_LINE_TYPES || dims.len() > MAX_LINE_TYPES {
+        return Err(format!("at most {MAX_LINE_TYPES} text and dimension types"));
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for t in texts {
+        if t.name.trim().is_empty() || !names.insert(("t", t.name.as_str())) {
+            return Err(format!("text type {:?}: a unique name is needed", t.name));
+        }
+        if !(t.size_mm.is_finite() && (0.5..=50.0).contains(&t.size_mm)) {
+            return Err(format!("text type {}: size 0.5 to 50 mm", t.name));
+        }
+        if t.font.chars().count() > 80 {
+            return Err(format!("text type {}: font name too long", t.name));
+        }
+    }
+    for d in dims {
+        if d.name.trim().is_empty() || !names.insert(("d", d.name.as_str())) {
+            return Err(format!(
+                "dimension type {:?}: a unique name is needed",
+                d.name
+            ));
+        }
+        if !(d.text_mm.is_finite() && (0.5..=50.0).contains(&d.text_mm)) || d.decimals > 6 {
+            return Err(format!(
+                "dimension type {}: text 0.5 to 50 mm, at most 6 decimals",
+                d.name
+            ));
+        }
+        if !line_types.iter().any(|l| l.name == d.line_type) {
+            return Err(format!(
+                "dimension type {}: no line type named {:?}",
+                d.name, d.line_type
+            ));
         }
     }
     Ok(())
@@ -347,5 +501,16 @@ mod tests {
         let mut bad = LineRoles::default();
         bad.cut = "nope".into();
         assert!(validate_lines(&v, &bad).unwrap_err().contains("lines.cut"));
+    }
+
+    #[test]
+    fn dimension_types_write_values_their_way() {
+        let t = default_dim_types();
+        let by = |n: &str| t.iter().find(|d| d.name == n).unwrap();
+        assert_eq!(by("black cm").format(1000.0), "100");
+        assert_eq!(by("red m").format(1000.0), "1.00 m");
+        assert_eq!(by("blue mm").format(1414.2), "1414 mm");
+        validate_annotation_types(&default_text_types(), &t, &default_line_types()).unwrap();
+        assert_eq!(default_text_types().len(), 25);
     }
 }

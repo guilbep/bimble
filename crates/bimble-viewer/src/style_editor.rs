@@ -52,6 +52,174 @@ pub fn edit(ui: &mut egui::Ui, s: &mut GraphicStyle) -> bool {
     egui::CollapsingHeader::new("Lines on drawings")
         .id_salt("line-roles")
         .show(ui, |ui| changed |= roles(ui, &mut s.paper));
+    egui::CollapsingHeader::new("Text types")
+        .id_salt("text-types")
+        .show(ui, |ui| changed |= text_types(ui, &mut s.paper));
+    egui::CollapsingHeader::new("Dimension types")
+        .id_salt("dim-types")
+        .show(ui, |ui| changed |= dim_types(ui, &mut s.paper));
+    changed
+}
+
+/// A name not used yet: `base 1`, `base 2`…
+fn fresh_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    let mut n = 1;
+    while taken(&format!("{base} {n}")) {
+        n += 1;
+    }
+    format!("{base} {n}")
+}
+
+/// Text types (#43): name, font, size on paper, colour.
+fn text_types(ui: &mut egui::Ui, paper: &mut bimble_core::style::PaperStyle) -> bool {
+    let v = &mut paper.text_types;
+    let mut changed = false;
+    let mut remove = None;
+    egui::ScrollArea::vertical()
+        .id_salt("text-types-scroll")
+        .max_height(300.0)
+        .show(ui, |ui| {
+            egui::Grid::new("text-types-grid")
+                .striped(true)
+                .spacing([6.0, 2.0])
+                .show(ui, |ui| {
+                    ui.strong("Name");
+                    ui.strong("Font");
+                    ui.strong("Size (mm)");
+                    ui.strong("Colour");
+                    ui.label("");
+                    ui.end_row();
+                    for (i, t) in v.iter_mut().enumerate() {
+                        changed |= ui
+                            .add(egui::TextEdit::singleline(&mut t.name).desired_width(140.0))
+                            .lost_focus();
+                        changed |= ui
+                            .add(egui::TextEdit::singleline(&mut t.font).desired_width(70.0))
+                            .lost_focus();
+                        changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut t.size_mm)
+                                    .range(0.5..=50.0)
+                                    .speed(0.1),
+                            )
+                            .changed();
+                        changed |= ui.color_edit_button_srgb(&mut t.color.0).changed();
+                        if ui.small_button("x").clicked() {
+                            remove = Some(i);
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+    if let Some(i) = remove {
+        v.remove(i);
+        changed = true;
+    }
+    if ui.button("Add text type").clicked() {
+        let name = fresh_name("Text", |n| v.iter().any(|t| t.name == n));
+        v.push(bimble_core::pens::TextType {
+            name,
+            font: "Arial".into(),
+            size_mm: 2.5,
+            color: Rgb([0, 0, 0]),
+        });
+        changed = true;
+    }
+    changed
+}
+
+/// Dimension types (#43): unit, decimals, unit written or not, colour, text size, line type.
+fn dim_types(ui: &mut egui::Ui, paper: &mut bimble_core::style::PaperStyle) -> bool {
+    use bimble_core::pens::DimUnit;
+    let names: Vec<String> = paper.line_types.iter().map(|t| t.name.clone()).collect();
+    let v = &mut paper.dimension_types;
+    let mut changed = false;
+    let mut remove = None;
+    egui::ScrollArea::vertical()
+        .id_salt("dim-types-scroll")
+        .max_height(300.0)
+        .show(ui, |ui| {
+            egui::Grid::new("dim-types-grid")
+                .striped(true)
+                .spacing([6.0, 2.0])
+                .show(ui, |ui| {
+                    for h in [
+                        "Name",
+                        "Unit",
+                        "Decimals",
+                        "Unit shown",
+                        "Colour",
+                        "Text (mm)",
+                        "Line",
+                        "",
+                    ] {
+                        ui.strong(h);
+                    }
+                    ui.end_row();
+                    for (i, t) in v.iter_mut().enumerate() {
+                        changed |= ui
+                            .add(egui::TextEdit::singleline(&mut t.name).desired_width(110.0))
+                            .lost_focus();
+                        egui::ComboBox::from_id_salt(("dim-unit", i))
+                            .selected_text(match t.unit {
+                                DimUnit::M => "m",
+                                DimUnit::Cm => "cm",
+                                DimUnit::Mm => "mm",
+                            })
+                            .width(50.0)
+                            .show_ui(ui, |ui| {
+                                for (u, l) in
+                                    [(DimUnit::M, "m"), (DimUnit::Cm, "cm"), (DimUnit::Mm, "mm")]
+                                {
+                                    changed |= ui.selectable_value(&mut t.unit, u, l).changed();
+                                }
+                            });
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut t.decimals).range(0..=4))
+                            .changed();
+                        changed |= ui.checkbox(&mut t.show_unit, "").changed();
+                        changed |= ui.color_edit_button_srgb(&mut t.color.0).changed();
+                        changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut t.text_mm)
+                                    .range(0.5..=20.0)
+                                    .speed(0.1),
+                            )
+                            .changed();
+                        egui::ComboBox::from_id_salt(("dim-line", i))
+                            .selected_text(t.line_type.clone())
+                            .height(300.0)
+                            .show_ui(ui, |ui| {
+                                for n in &names {
+                                    changed |= ui
+                                        .selectable_value(&mut t.line_type, n.clone(), n)
+                                        .changed();
+                                }
+                            });
+                        if ui.small_button("x").clicked() {
+                            remove = Some(i);
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+    if let Some(i) = remove {
+        v.remove(i);
+        changed = true;
+    }
+    if ui.button("Add dimension type").clicked() {
+        let name = fresh_name("Dimension", |n| v.iter().any(|t| t.name == n));
+        v.push(bimble_core::pens::DimType {
+            name,
+            unit: DimUnit::Cm,
+            decimals: 0,
+            show_unit: false,
+            color: Rgb([0, 0, 0]),
+            text_mm: 2.5,
+            line_type: names.first().cloned().unwrap_or_default(),
+        });
+        changed = true;
+    }
     changed
 }
 
@@ -112,7 +280,10 @@ fn pens(ui: &mut egui::Ui, t: &mut bimble_core::pens::PenTable) -> bool {
                         ui.horizontal(|ui| {
                             ui.strong(format!("1:{sc}"));
                             if t.scales.len() > 1
-                                && ui.small_button("x").on_hover_text("Remove this scale").clicked()
+                                && ui
+                                    .small_button("x")
+                                    .on_hover_text("Remove this scale")
+                                    .clicked()
                             {
                                 remove = Some(sc);
                             }
@@ -231,6 +402,11 @@ fn line_types(ui: &mut egui::Ui, paper: &mut bimble_core::style::PaperStyle) -> 
                     *f = t.name.clone();
                 }
             }
+            for d in &mut paper.dimension_types {
+                if d.line_type == *o {
+                    d.line_type = t.name.clone();
+                }
+            }
         }
     }
     let v = &mut paper.line_types;
@@ -259,28 +435,30 @@ fn roles(ui: &mut egui::Ui, p: &mut bimble_core::style::PaperStyle) -> bool {
     let mut changed = false;
     let names: Vec<String> = p.line_types.iter().map(|t| t.name.clone()).collect();
     let l = &mut p.lines;
-    egui::Grid::new("line-roles-grid").num_columns(2).show(ui, |ui| {
-        for (label, field) in [
-            ("Cut outlines", &mut l.cut),
-            ("Seen edges", &mut l.seen),
-            ("Above the cut", &mut l.above),
-            ("Hatches (width)", &mut l.hatch),
-            ("Grid axes", &mut l.axis),
-            ("Dimensions", &mut l.dimension),
-            ("Frame, title block", &mut l.frame),
-        ] {
-            ui.label(label);
-            egui::ComboBox::from_id_salt(("role", label))
-                .selected_text(field.clone())
-                .height(300.0)
-                .show_ui(ui, |ui| {
-                    for n in &names {
-                        changed |= ui.selectable_value(field, n.clone(), n).changed();
-                    }
-                });
-            ui.end_row();
-        }
-    });
+    egui::Grid::new("line-roles-grid")
+        .num_columns(2)
+        .show(ui, |ui| {
+            for (label, field) in [
+                ("Cut outlines", &mut l.cut),
+                ("Seen edges", &mut l.seen),
+                ("Above the cut", &mut l.above),
+                ("Hatches (width)", &mut l.hatch),
+                ("Grid axes", &mut l.axis),
+                ("Dimensions", &mut l.dimension),
+                ("Frame, title block", &mut l.frame),
+            ] {
+                ui.label(label);
+                egui::ComboBox::from_id_salt(("role", label))
+                    .selected_text(field.clone())
+                    .height(300.0)
+                    .show_ui(ui, |ui| {
+                        for n in &names {
+                            changed |= ui.selectable_value(field, n.clone(), n).changed();
+                        }
+                    });
+                ui.end_row();
+            }
+        });
     changed
 }
 
