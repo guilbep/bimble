@@ -37,6 +37,8 @@ once. **Save…** writes only what differs from the default.
 | `above_pen_mm`, `above_dash_mm` | Edges above the cut plane, dashed: pen, then [dash, gap] (0.13, [2, 1]) |
 | `hatch_pen_mm`, `hatch_mm_per_px` | Hatch lines: pen, and paper spacing per screen pixel of a family's `spacing_px` (0.13, 0.35) |
 | `frame_pen_mm`, `text_mm` | Sheet frame and title block: pen and text height (0.5, 2.5) |
+| `annotation_pen_mm` | Grid axes and dimension lines (0.13) |
+| `seen_lighten` | What is seen below the cut is filled with the family colour mixed with this much white, 0..1 (0.6) |
 
 Each family:
 
@@ -60,4 +62,5 @@ Unknown fields and out-of-range values are errors: a typo is reported instead of
 
 - Overrides per material or per IFC class (only per material family today).
 - Line weights: edges are 1 pixel. Thicker lines need a different line renderer.
-- Title block (cartouche) and sheet layout: they belong with drawings (I4).
+- Title block, legend and the words on a plan are not in the style: they are in the plan template
+  (`bimble plan-template`, ADR 0018).
