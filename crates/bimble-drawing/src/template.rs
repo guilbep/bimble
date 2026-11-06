@@ -172,7 +172,13 @@ impl Default for TitleBlock {
         TitleBlock {
             height_mm: 28.0,
             columns: vec![
-                col(None, vec![entry("PROJECT", "{project}")]),
+                col(
+                    None,
+                    vec![
+                        entry("PROJECT", "{project} {project_number}"),
+                        entry("CLIENT", "{client}"),
+                    ],
+                ),
                 col(Some(60.0), vec![entry("DRAWING", "{drawing}")]),
                 col(
                     Some(30.0),
@@ -180,9 +186,12 @@ impl Default for TitleBlock {
                 ),
                 col(
                     Some(30.0),
-                    vec![entry("DATE", "{date}"), entry("REVISION", "")],
+                    vec![entry("DATE", "{date}"), entry("REVISION", "{revision}")],
                 ),
-                col(Some(24.0), vec![entry("DRAWN", ""), entry("CHECKED", "")]),
+                col(
+                    Some(24.0),
+                    vec![entry("DRAWN", "{drawn}"), entry("CHECKED", "{checked}")],
+                ),
                 col(Some(40.0), vec![entry("DRAWING N°", "{drawing_no}")]),
             ],
         }
@@ -300,6 +309,15 @@ impl PlanTemplate {
 }
 
 /// Replace `{key}` placeholders from `values` (built-ins first, then `fields`).
+/// Keys a title block may show before anyone filled them: the project information's offered
+/// keys (ADR 0030) and the sheet's own (phase, revision, drawn, checked, drawing number).
+fn may_be_empty(key: &str) -> bool {
+    ["phase", "revision", "drawn", "checked", "drawing_no"].contains(&key)
+        || bimble_core::project::KNOWN
+            .iter()
+            .any(|(_, k, _)| *k == key)
+}
+
 pub fn fill(text: &str, values: &[(&str, String)], fields: &BTreeMap<String, String>) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -316,6 +334,8 @@ pub fn fill(text: &str, values: &[(&str, String)], fields: &BTreeMap<String, Str
                     .or_else(|| fields.get(key).map(String::as_str));
                 match v {
                     Some(v) => out.push_str(v),
+                    // A known key with no value yet: nothing (a typo still shows).
+                    None if may_be_empty(key) => {}
                     None => {
                         out.push('{');
                         out.push_str(key);
@@ -354,6 +374,12 @@ mod tests {
         assert_eq!(
             fill("{client} · {project_number} · {phase}", &[], &t.fields),
             "Synthetic client · P-001 · Tender"
+        );
+        // A known key not filled yet is empty on the sheet; a typo still shows.
+        let none = BTreeMap::new();
+        assert_eq!(
+            fill("[{client}] [{revision}] [{clinet}]", &[], &none),
+            "[] [] [{clinet}]"
         );
     }
 
