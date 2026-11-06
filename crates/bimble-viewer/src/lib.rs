@@ -1282,7 +1282,7 @@ impl Viewer {
         let opts = DrawOptions {
             hatch_scale: ppp,
             clip: self.clip(),
-            ..self.opts
+            ..self.opts.clone()
         };
         let mut layers = vec![bimble_render::Layer::main(gs)];
         if let Some(k) = &self.linked
@@ -1988,7 +1988,7 @@ impl Viewer {
             }
         });
         if let Some(svg) = export.inner {
-            let opts = plan_options(p, &l.path, self.opts.style, view.clone());
+            let opts = plan_options(p, &l.path, self.opts.style.clone(), view.clone());
             p.message = Some(match bimble_drawing::plan::plan(&l.scene, &opts) {
                 Err(e) => e,
                 Ok((sheet, info)) => {
@@ -2042,7 +2042,7 @@ impl Viewer {
             p.scale,
             p.paper,
             p.cut_mm.to_bits(),
-            self.opts.style,
+            self.opts.style.clone(),
             px_w / 50 * 50,
             p.template_rev,
             view.as_ref()
@@ -2050,7 +2050,7 @@ impl Viewer {
                 .unwrap_or_default(),
         );
         if p.preview_image.as_ref().is_none_or(|i| i.key != key) {
-            let opts = plan_options(p, &l.path, self.opts.style, view.clone());
+            let opts = plan_options(p, &l.path, self.opts.style.clone(), view.clone());
             let mut img = PlanPreview {
                 key,
                 texture: None,

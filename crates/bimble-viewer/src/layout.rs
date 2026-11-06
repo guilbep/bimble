@@ -204,7 +204,7 @@ impl Viewer {
             return;
         }
         let o = SheetOptions {
-            style: self.opts.style,
+            style: self.opts.style.clone(),
             template: self.plan.template.clone(),
             project: l
                 .path

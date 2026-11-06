@@ -135,7 +135,7 @@ impl Families {
 }
 
 /// Everything that decides how a drawing looks.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphicStyle {
     pub background: Rgb,
@@ -167,7 +167,7 @@ pub struct GraphicStyle {
 }
 
 /// Line weights and sizes for drawings on paper, in mm on the printed sheet.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PaperStyle {
     /// Outline of what the cut plane cuts (walls, columns, slabs).
@@ -196,6 +196,23 @@ pub struct PaperStyle {
     pub axis_dash_mm: [f32; 4],
     /// What is seen below the cut is filled with the family colour mixed with this much white.
     pub seen_lighten: f32,
+    /// Pen thicknesses per pen number (and per scale for model lines), #42.
+    #[serde(default)]
+    pub pens: crate::pens::PenTable,
+    /// Named line types: colour, dash pattern, pen.
+    #[serde(default = "crate::pens::default_line_types")]
+    pub line_types: Vec<crate::pens::LineType>,
+    /// The line type of each kind of line (cut, seen, above, hatch, axis, dimension, frame).
+    /// When set, they replace the `*_pen_mm` and dash fields above.
+    #[serde(default)]
+    pub lines: crate::pens::LineRoles,
+}
+
+impl PaperStyle {
+    /// A line type by name.
+    pub fn line_type(&self, name: &str) -> Option<&crate::pens::LineType> {
+        self.line_types.iter().find(|t| t.name == name)
+    }
 }
 
 fn axis_pen() -> f32 {
@@ -286,6 +303,9 @@ impl Default for GraphicStyle {
                 axis_pen_mm: axis_pen(),
                 axis_dash_mm: axis_dash(),
                 seen_lighten: 0.6,
+                pens: Default::default(),
+                line_types: crate::pens::default_line_types(),
+                lines: Default::default(),
             },
             families: Families {
                 concrete: Fill {
@@ -416,6 +436,8 @@ impl GraphicStyle {
         range("hatch_mm_per_px", p.hatch_mm_per_px, 0.05, 10.0)?;
         range("text_mm", p.text_mm, 1.0, 20.0)?;
         range("seen_lighten", p.seen_lighten, 0.0, 1.0)?;
+        p.pens.validate()?;
+        crate::pens::validate_lines(&p.line_types, &p.lines)?;
         for c in MaterialCategory::ALL {
             let f = self.families.get(c);
             let at = |field: &str| format!("families.{}.{field}", c.label().to_lowercase());

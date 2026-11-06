@@ -118,8 +118,71 @@ fn legend_width(n: usize) -> f64 {
     n.div_ceil(LEGEND_ROWS) as f64 * LEGEND_COL + 4.0
 }
 
+/// A kind of line on a drawing (#42).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Cut,
+    Seen,
+    Above,
+    Hatch,
+    Axis,
+    Dimension,
+    Frame,
+}
+
+/// The pen of a kind of line at 1:`scale`: its line type's colour, dashes and thickness (model
+/// pens by scale; annotation pens for axes, dimensions and frames). Styles without that line
+/// type fall back to their `*_pen_mm` fields.
+pub fn role_pen(style: &GraphicStyle, role: Role, scale: u32) -> Pen {
+    let p = &style.paper;
+    let name = match role {
+        Role::Cut => &p.lines.cut,
+        Role::Seen => &p.lines.seen,
+        Role::Above => &p.lines.above,
+        Role::Hatch => &p.lines.hatch,
+        Role::Axis => &p.lines.axis,
+        Role::Dimension => &p.lines.dimension,
+        Role::Frame => &p.lines.frame,
+    };
+    let annotation = matches!(role, Role::Axis | Role::Dimension | Role::Frame);
+    if let Some(lt) = p.line_type(name) {
+        let w = if annotation {
+            p.pens.annotation_mm(lt.pen)
+        } else {
+            p.pens.model_mm(lt.pen, scale)
+        };
+        if let Some(w) = w {
+            return Pen {
+                width_mm: w as f64,
+                color: lt.color,
+                dash: lt.dash_mm.iter().map(|&d| d as f64).collect(),
+            };
+        }
+    }
+    let (w, dash): (f32, Vec<f64>) = match role {
+        Role::Cut => (p.cut_pen_mm, Vec::new()),
+        Role::Seen => (p.projection_pen_mm, Vec::new()),
+        Role::Above => (
+            p.above_pen_mm,
+            p.above_dash_mm.iter().map(|&d| d as f64).collect(),
+        ),
+        Role::Hatch => (p.hatch_pen_mm, Vec::new()),
+        Role::Axis => (
+            p.axis_pen_mm,
+            p.axis_dash_mm.iter().map(|&d| d as f64).collect(),
+        ),
+        Role::Dimension => (p.annotation_pen_mm, Vec::new()),
+        Role::Frame => (p.frame_pen_mm, Vec::new()),
+    };
+    Pen {
+        width_mm: w as f64,
+        color: style.edges,
+        dash,
+    }
+}
+
 /// Hatch lines of a material family on paper.
-fn hatches_for(style: &GraphicStyle, c: MaterialCategory) -> Vec<Hatch> {
+fn hatches_for(style: &GraphicStyle, c: MaterialCategory, scale: u32) -> Vec<Hatch> {
     let paper_style = &style.paper;
     let mm_per_px = paper_style.hatch_mm_per_px as f64;
     let fam = style.families.get(c);
@@ -133,7 +196,7 @@ fn hatches_for(style: &GraphicStyle, c: MaterialCategory) -> Vec<Hatch> {
             angle_deg: l.angle_deg as f64,
             spacing_mm: l.spacing_px as f64 * mm_per_px,
             pen: Pen {
-                width_mm: paper_style.hatch_pen_mm as f64,
+                width_mm: role_pen(style, Role::Hatch, scale).width_mm,
                 color: hatch_ink,
                 dash: l
                     .dash_px
@@ -167,12 +230,8 @@ pub(crate) fn draw_legend(
     let paper_style = &style.paper;
     let ink = style.edges;
     let t = paper_style.text_mm as f64;
-    let pen = |width: f32, dash: Vec<f64>| Pen {
-        width_mm: width as f64,
-        color: ink,
-        dash,
-    };
-    let proj_pen = pen(paper_style.projection_pen_mm, Vec::new());
+    // Swatches as at 1:100.
+    let proj_pen = role_pen(style, Role::Seen, 100);
     let (y0, x1, y1) = (
         bottom - legend_height(legend.len()) + PAD,
         x0 + legend_width(legend.len()),
@@ -205,8 +264,8 @@ pub(crate) fn draw_legend(
             Swatch::Cut(c) => items.push(Item::Area {
                 loops: rect,
                 fill: Some(style.families.get(*c).color),
-                hatches: hatches_for(style, *c),
-                outline: Some(pen(paper_style.cut_pen_mm, Vec::new())),
+                hatches: hatches_for(style, *c, 100),
+                outline: Some(role_pen(style, Role::Cut, 100)),
             }),
             Swatch::Seen(c) => items.push(Item::Area {
                 loops: rect,
@@ -215,10 +274,9 @@ pub(crate) fn draw_legend(
                 outline: Some(proj_pen.clone()),
             }),
             Swatch::Above => {
-                let d = paper_style.above_dash_mm;
                 items.push(Item::Lines {
                     lines: vec![vec![[sx, sy + 2.0], [sx + 10.0, sy + 2.0]]],
-                    pen: pen(paper_style.above_pen_mm, vec![d[0] as f64, d[1] as f64]),
+                    pen: role_pen(style, Role::Above, 100),
                 });
             }
         }
@@ -683,13 +741,15 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         v.iter().map(|l| l.iter().map(to_paper).collect()).collect()
     };
     let ink = style.edges;
-    let pen = |width: f32, dash: Vec<f64>| Pen {
-        width_mm: width as f64,
-        color: ink,
-        dash,
+    let line = |role: Role| role_pen(style, role, o.scale);
+    let thicker = |role: Role, k: f64| {
+        let mut p = line(role);
+        p.width_mm *= k;
+        p.dash.clear();
+        p
     };
-    let proj_pen = pen(paper_style.projection_pen_mm, Vec::new());
-    let note_pen = pen(paper_style.annotation_pen_mm, Vec::new());
+    let proj_pen = line(Role::Seen);
+    let note_pen = line(Role::Dimension);
     let t = paper_style.text_mm as f64;
     let text = |pos: P2, size: f64, s: String| Item::text(pos, size, s, ink);
     let text_at =
@@ -702,7 +762,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             angle_deg,
             bold,
         };
-    let hatches_of = |c: MaterialCategory| hatches_for(style, c);
+    let hatches_of = |c: MaterialCategory| hatches_for(style, c, o.scale);
     let seen_fill = |c: MaterialCategory| seen_fill_for(style, c);
 
     // ---- items, back to front
@@ -791,10 +851,9 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         ));
     }
     if !above.is_empty() {
-        let d = paper_style.above_dash_mm;
         items.push(Item::Lines {
             lines: seg_lines(&above),
-            pen: pen(paper_style.above_pen_mm, vec![d[0] as f64, d[1] as f64]),
+            pen: line(Role::Above),
         });
     }
 
@@ -847,10 +906,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         items.push(Item::Lines {
             lines: axis_lines,
             // Dash-dot, the axis line of office drawings.
-            pen: pen(
-                paper_style.axis_pen_mm,
-                paper_style.axis_dash_mm.iter().map(|&x| x as f64).collect(),
-            ),
+            pen: line(Role::Axis),
         });
     }
 
@@ -873,13 +929,13 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
                 loops: paper_loops(&c.loops),
                 fill: None,
                 hatches: Vec::new(),
-                outline: Some(pen(paper_style.cut_pen_mm, Vec::new())),
+                outline: Some(line(Role::Cut)),
             });
         }
         if !c.open.is_empty() {
             items.push(Item::Lines {
                 lines: paper_loops(&c.open),
-                pen: pen(paper_style.cut_pen_mm, Vec::new()),
+                pen: line(Role::Cut),
             });
         }
     }
@@ -890,7 +946,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             loops: vec![circle(*c, BUBBLE / 2.0)],
             fill: Some(Rgb([255, 255, 255])),
             hatches: Vec::new(),
-            outline: Some(pen(paper_style.projection_pen_mm, Vec::new())),
+            outline: Some(line(Role::Seen)),
         });
         let size = if tag.chars().count() > 2 { 3.0 } else { 4.0 };
         items.push(text_at(
@@ -982,7 +1038,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         });
         items.push(Item::Lines {
             lines: dim_ticks,
-            pen: pen(paper_style.projection_pen_mm * 2.0, Vec::new()),
+            pen: thicker(Role::Dimension, 2.0),
         });
         for (pos, value, angle, anchor) in dim_texts {
             items.push(text_at(pos, dim_size, value, anchor, angle, false));
@@ -1075,7 +1131,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             });
             items.push(Item::Lines {
                 lines: ticks,
-                pen: pen(paper_style.projection_pen_mm * 2.0, Vec::new()),
+                pen: thicker(Role::Dimension, 2.0),
             });
         }
     }
@@ -1142,7 +1198,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         let tw = text_width_mm(&title, size, true);
         items.push(Item::Lines {
             lines: vec![vec![[x, title_y + 1.0], [x + tw, title_y + 1.0]]],
-            pen: pen(paper_style.cut_pen_mm * 0.7, Vec::new()),
+            pen: thicker(Role::Cut, 0.7),
         });
     }
     // Scale bar, level note, legend, frame and title block: whole sheets only.
@@ -1203,7 +1259,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         // ---- legend, above the title block at the left
         draw_legend(&mut items, MARGIN, tb_top, &legend, tpl, style);
 
-        frame_and_title_block(&mut items, w, h, tpl, &filled, ink, paper_style);
+        frame_and_title_block(&mut items, w, h, tpl, &filled, ink, style);
     }
 
     let info = PlanInfo {
@@ -1249,16 +1305,11 @@ pub(crate) fn frame_and_title_block(
     tpl: &PlanTemplate,
     filled: &dyn Fn(&str) -> String,
     ink: Rgb,
-    paper_style: &bimble_core::style::PaperStyle,
+    style: &GraphicStyle,
 ) {
-    let t = paper_style.text_mm as f64;
+    let t = style.paper.text_mm as f64;
     let tb_h = tpl.title_block.height_mm;
     let tb_top = h - MARGIN - tb_h;
-    let pen = |width: f32, dash: Vec<f64>| Pen {
-        width_mm: width as f64,
-        color: ink,
-        dash,
-    };
     let text_at =
         |pos: P2, size: f64, s: String, anchor: Anchor, angle_deg: f64, bold: bool| Item::Text {
             pos,
@@ -1270,7 +1321,7 @@ pub(crate) fn frame_and_title_block(
             bold,
         };
     // ---- frame and title block
-    let frame_pen = pen(paper_style.frame_pen_mm, Vec::new());
+    let frame_pen = role_pen(style, Role::Frame, 100);
     let rect =
         |x0: f64, y0: f64, x1: f64, y1: f64| vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
     items.push(Item::Lines {

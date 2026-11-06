@@ -77,7 +77,7 @@ pub fn draw(
         let opts = PlanOptions {
             scale: p.scale,
             paper: Some(paper),
-            style: o.style,
+            style: o.style.clone(),
             project: o.project.clone(),
             date: o.date.clone(),
             template: o.template.clone(),
@@ -201,7 +201,7 @@ pub fn draw(
         ("n", String::new()),
     ];
     let filled = |s: &str| fill(s, &values, &fields);
-    frame_and_title_block(&mut items, w, h, &o.template, &filled, ink, &o.style.paper);
+    frame_and_title_block(&mut items, w, h, &o.template, &filled, ink, &o.style);
     let title = format!("{} {}", def.number, def.name);
     Ok((
         Sheet {

@@ -6,6 +6,7 @@ pub mod demo;
 pub mod file;
 mod guid;
 mod model;
+pub mod pens;
 pub mod repo;
 pub mod sheet;
 pub mod style;

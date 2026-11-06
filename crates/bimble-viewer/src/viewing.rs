@@ -268,7 +268,7 @@ impl Viewer {
     fn export_sheet(&mut self, sh: &bimble_core::sheet::Sheet) {
         let Some(l) = &self.loaded else { return };
         let o = bimble_drawing::sheetdraw::SheetOptions {
-            style: self.opts.style,
+            style: self.opts.style.clone(),
             template: self.plan.template.clone(),
             project: l
                 .path

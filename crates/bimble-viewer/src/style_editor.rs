@@ -41,6 +41,246 @@ pub fn edit(ui: &mut egui::Ui, s: &mut GraphicStyle) -> bool {
             .id_salt(c.label())
             .show(ui, |ui| changed |= fill(ui, c, s.families.get_mut(c)));
     }
+    ui.separator();
+    ui.strong("On paper");
+    egui::CollapsingHeader::new("Line weights")
+        .id_salt("pens")
+        .show(ui, |ui| changed |= pens(ui, &mut s.paper.pens));
+    egui::CollapsingHeader::new("Line types")
+        .id_salt("line-types")
+        .show(ui, |ui| changed |= line_types(ui, &mut s.paper));
+    egui::CollapsingHeader::new("Lines on drawings")
+        .id_salt("line-roles")
+        .show(ui, |ui| changed |= roles(ui, &mut s.paper));
+    changed
+}
+
+/// Which pen table is shown.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum PenTab {
+    #[default]
+    Model,
+    Perspective,
+    Annotation,
+}
+
+/// The pen tables, like Revit's *Line weights* dialog: 16 pens; model pens per scale.
+fn pens(ui: &mut egui::Ui, t: &mut bimble_core::pens::PenTable) -> bool {
+    use bimble_core::pens::PENS;
+    let id = egui::Id::unique("bimble-pen-tab");
+    let mut tab: PenTab = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        for (k, label) in [
+            (PenTab::Model, "Model"),
+            (PenTab::Perspective, "Perspective"),
+            (PenTab::Annotation, "Annotation"),
+        ] {
+            if ui.selectable_label(tab == k, label).clicked() {
+                tab = k;
+            }
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(id, tab));
+    ui.weak(match tab {
+        PenTab::Model => {
+            "Lines of objects (cut, seen, hatches): the thickness depends on the drawing's scale; \
+             the nearest scale's column is used."
+        }
+        PenTab::Perspective => "Lines in 3D views.",
+        PenTab::Annotation => "Dimensions, grids, texts, frames: the same at every scale.",
+    });
+    let cell = |ui: &mut egui::Ui, v: &mut f32| {
+        ui.add(
+            egui::DragValue::new(v)
+                .range(0.01..=20.0)
+                .speed(0.01)
+                .max_decimals(4)
+                .suffix(" mm"),
+        )
+        .changed()
+    };
+    egui::ScrollArea::horizontal().show(ui, |ui| {
+        egui::Grid::new(("pen-grid", tab as u8))
+            .striped(true)
+            .spacing([6.0, 2.0])
+            .show(ui, |ui| match tab {
+                PenTab::Model => {
+                    ui.label("");
+                    let mut remove = None;
+                    for sc in t.scales.clone() {
+                        ui.horizontal(|ui| {
+                            ui.strong(format!("1:{sc}"));
+                            if t.scales.len() > 1
+                                && ui.small_button("x").on_hover_text("Remove this scale").clicked()
+                            {
+                                remove = Some(sc);
+                            }
+                        });
+                    }
+                    ui.end_row();
+                    for (p, row) in t.model.iter_mut().enumerate().take(PENS) {
+                        ui.label((p + 1).to_string());
+                        for v in row.iter_mut() {
+                            changed |= cell(ui, v);
+                        }
+                        ui.end_row();
+                    }
+                    if let Some(sc) = remove {
+                        t.remove_scale(sc);
+                        changed = true;
+                    }
+                }
+                PenTab::Perspective | PenTab::Annotation => {
+                    let v = if tab == PenTab::Perspective {
+                        &mut t.perspective
+                    } else {
+                        &mut t.annotation
+                    };
+                    for (p, x) in v.iter_mut().enumerate().take(PENS) {
+                        ui.label((p + 1).to_string());
+                        changed |= cell(ui, x);
+                        ui.end_row();
+                    }
+                }
+            });
+    });
+    if tab == PenTab::Model {
+        let id = egui::Id::unique("bimble-new-scale");
+        let mut n: u32 = ui.data(|d| d.get_temp(id)).unwrap_or(75);
+        ui.horizontal(|ui| {
+            ui.label("Add scale 1:");
+            ui.add(egui::DragValue::new(&mut n).range(1..=10_000));
+            if ui.button("Add").clicked() {
+                t.add_scale(n);
+                changed = true;
+            }
+        });
+        ui.data_mut(|d| d.insert_temp(id, n));
+    }
+    changed
+}
+
+/// The named line types: name, colour, dashes, pen.
+fn line_types(ui: &mut egui::Ui, paper: &mut bimble_core::style::PaperStyle) -> bool {
+    let old: Vec<String> = paper.line_types.iter().map(|t| t.name.clone()).collect();
+    let v = &mut paper.line_types;
+    let mut changed = false;
+    let mut remove = None;
+    ui.weak("Dashes: dash, gap, dash, gap… in mm (empty: continuous).");
+    egui::ScrollArea::vertical()
+        .id_salt("line-types-scroll")
+        .max_height(300.0)
+        .show(ui, |ui| {
+            egui::Grid::new("line-types-grid")
+                .striped(true)
+                .spacing([6.0, 2.0])
+                .show(ui, |ui| {
+                    ui.strong("Name");
+                    ui.strong("Colour");
+                    ui.strong("Dashes");
+                    ui.strong("Pen");
+                    ui.label("");
+                    ui.end_row();
+                    for (i, t) in v.iter_mut().enumerate() {
+                        changed |= ui
+                            .add(egui::TextEdit::singleline(&mut t.name).desired_width(140.0))
+                            .lost_focus();
+                        changed |= ui.color_edit_button_srgb(&mut t.color.0).changed();
+                        let mut text = t
+                            .dash_mm
+                            .iter()
+                            .map(|d| d.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(90.0));
+                        if r.changed() {
+                            let parsed: Option<Vec<f32>> =
+                                text.split_whitespace().map(|x| x.parse().ok()).collect();
+                            if let Some(d) = parsed.filter(|d| d.len() % 2 == 0) {
+                                t.dash_mm = d;
+                                changed = true;
+                            }
+                        }
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut t.pen).range(1..=16))
+                            .changed();
+                        if ui.small_button("x").clicked() {
+                            remove = Some(i);
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+    // A renamed line type: the kinds of line that used it follow.
+    for (i, t) in v.iter().enumerate() {
+        if let Some(o) = old.get(i)
+            && *o != t.name
+        {
+            let l = &mut paper.lines;
+            for f in [
+                &mut l.cut,
+                &mut l.seen,
+                &mut l.above,
+                &mut l.hatch,
+                &mut l.axis,
+                &mut l.dimension,
+                &mut l.frame,
+            ] {
+                if f == o {
+                    *f = t.name.clone();
+                }
+            }
+        }
+    }
+    let v = &mut paper.line_types;
+    if let Some(i) = remove {
+        v.remove(i);
+        changed = true;
+    }
+    if ui.button("Add line type").clicked() {
+        let mut n = v.len() + 1;
+        while v.iter().any(|t| t.name == format!("line_{n}")) {
+            n += 1;
+        }
+        v.push(bimble_core::pens::LineType {
+            name: format!("line_{n}"),
+            color: Rgb([0, 0, 0]),
+            dash_mm: Vec::new(),
+            pen: 1,
+        });
+        changed = true;
+    }
+    changed
+}
+
+/// Which line type each kind of line uses.
+fn roles(ui: &mut egui::Ui, p: &mut bimble_core::style::PaperStyle) -> bool {
+    let mut changed = false;
+    let names: Vec<String> = p.line_types.iter().map(|t| t.name.clone()).collect();
+    let l = &mut p.lines;
+    egui::Grid::new("line-roles-grid").num_columns(2).show(ui, |ui| {
+        for (label, field) in [
+            ("Cut outlines", &mut l.cut),
+            ("Seen edges", &mut l.seen),
+            ("Above the cut", &mut l.above),
+            ("Hatches (width)", &mut l.hatch),
+            ("Grid axes", &mut l.axis),
+            ("Dimensions", &mut l.dimension),
+            ("Frame, title block", &mut l.frame),
+        ] {
+            ui.label(label);
+            egui::ComboBox::from_id_salt(("role", label))
+                .selected_text(field.clone())
+                .height(300.0)
+                .show_ui(ui, |ui| {
+                    for n in &names {
+                        changed |= ui.selectable_value(field, n.clone(), n).changed();
+                    }
+                });
+            ui.end_row();
+        }
+    });
     changed
 }
 
