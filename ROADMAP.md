@@ -87,6 +87,17 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 - ☐ History in the browser (OPFS), wasm-opt, measure memory on large models, compare boolean
   results element by element with the desktop
 
+**Before the next task: views** (Pierre, 6 Nov, with Revit screenshots and a wireframe; ADR 0021)
+- ✅ Select and edit elements in 2D views exactly as in 3D (2D views reuse the 3D renderer)
+- ✅ Reference plans in a 2D view: DXF and vector PDF (DWG through a converter), dead geometry,
+  only in that view, moved by dragging or typed offsets, snapped to when measuring
+- ✅ Left panel like the wireframe: model navigator (views, quantities, layouts, objects, links) above
+  the properties of the selected element, else of the view
+- ✅ Views: 3D, plans looking down, ceiling plans looking up, sections; view range (top, cut plane,
+  bottom, view depth as level + offset); views saved in `.bimble`, a side file for IFC
+- ☐ Sheets with several views (Layouts); raster PDF and image references; the side file in the
+  browser; section markers on plans
+
 **I0 — Core** ✅ (PR #1)
 - Crates: `bimble-core` (IFC-typed model, GlobalIds, generators, materials, commands + undo, hash, diff),
   `bimble-geom` (extrusion meshes), `bimble-ifc` (IFC4 export), `bimble-cli`

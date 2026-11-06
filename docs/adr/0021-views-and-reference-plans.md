@@ -63,7 +63,9 @@ Until now Bimble had one 3D view, a section box, and a plan export window.
 ## Evidence
 - `bimble-core` tests: range order, defaults, low storeys, views in commands, history and merges.
 - `bimble-render` test `mirrored_camera_flips_the_picture_with_cut_surfaces` fails without the
-  winding fix (1728 of 2269 pixels differ).
+  winding fix (1728 of 2269 pixels differ). `cut_surface_wins_over_the_slab_the_column_stands_on`
+  (100 of 100 pixels differed before) and `picking_a_cut_column_on_a_slab_gives_the_column`: a plan
+  through a column standing on a slab shows and selects the column, not the slab.
 - `bimble-drawing::reference` tests: DXF entities, blocks, recursion limit, units; PDF paths.
 - Driven in headless Chrome on the demo model with a synthetic DXF (journal 2026-11-06).
 
