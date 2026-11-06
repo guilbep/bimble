@@ -107,7 +107,13 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
   read-only links shown per view (#39)
 - ✅ UI (ADR 0027): ribbon, command palette, view tabs, standards panel, theme; chosen on the design
   canvas "Bimble UI options"
-- ☐ Next: ribbon icons; selecting linked elements, dimensions following them (#39)
+- ✅ Ribbon icons; selecting a linked element (#39)
+- ✅ Nothing implicit (ADR 0028): state chips with ×, "Not saved: …", close confirmation, Undo/Redo
+  say what they do, standards Revert / Reset to default with confirmation
+- ✅ Schedules (ADR 0029): measured from the geometry, editable, kept in the model; CSV export
+- ✅ Project information (ADR 0030) in title blocks and IFC exports; material library and browser
+  (ADR 0031), material psets in IFC exports
+- ☐ Next: dimensions following linked elements (#39); schedule filters on values
 
 **I0 — Core** ✅ (PR #1)
 - Crates: `bimble-core` (IFC-typed model, GlobalIds, generators, materials, commands + undo, hash, diff),

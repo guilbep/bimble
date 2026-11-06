@@ -32,8 +32,15 @@ area, volume, with totals. The viewer only had a count and volume per IFC class.
 ## Alternatives considered
 - Values from IFC property sets (Qto_*BaseQuantities): absent or inconsistent across exporters;
   measuring is the same for every file. Property sets can be added as fields later.
-- Schedules stored in the model now: built-in ones first; storing user-defined ones is a small
-  step (the type is serde-ready).
+- Schedules only built in: done first, then (same day) schedules of one's own.
+
+## Update (6 Nov 2026, evening): editing schedules
+Schedules are now kept with the model: `Model.schedules` changed through `Command::SetSchedules`
+(undo, history, hash, diff, merge by name), or the views file next to an IFC. A stored schedule
+with a built-in name replaces that one; `effective()` gives the list shown. In the viewer the
+properties panel edits name, IFC classes, family, grouping, totals and columns (tick, move
+earlier); **Duplicate**, **New schedule**, **Back to built-in**, **Delete**. A Mass column
+(volume × the library density, ADR 0031) was added; steel schedules show it.
 
 ## Evidence
 Tests on the demo frame: 24 concrete columns "30/30" located A-1…D-3, 2.78 m, total volume =
@@ -42,4 +49,4 @@ an empty f64 sum is -0.0); natural order. Checked on the virtual display: Concre
 subtotals per level, a row selecting its element.
 
 ## Revisit when
-Users need their own schedules (fields, filters) or parameters from the IFC property sets.
+Users need filters on values or parameters from the IFC property sets.
