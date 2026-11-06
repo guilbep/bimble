@@ -35,6 +35,13 @@ type ViewEdit = Box<dyn FnOnce(&mut View)>;
 pub(crate) struct ViewDrag(pub GlobalId);
 
 /// The open sheet: its drawing, the camera on it, the tool and what is selected.
+impl Layout {
+    /// Fit the sheet in the view at the next frame.
+    pub fn fit_next(&mut self) {
+        self.fit = true;
+    }
+}
+
 pub(crate) struct Layout {
     pub sheet: GlobalId,
     key: u64,

@@ -7,64 +7,200 @@ use bimble_core::MaterialCategory;
 use bimble_render::{Fill, GraphicStyle, Lines, Rgb, Stipple};
 use eframe::egui::{self, Slider};
 
-/// Draws the editor. Returns true when the style changed.
-pub fn edit(ui: &mut egui::Ui, s: &mut GraphicStyle) -> bool {
+/// Draws the editor. Returns true when the style changed. `query` filters the sections: a
+/// section shows when its title, or the name of one of its types, contains every word typed.
+pub fn edit(ui: &mut egui::Ui, s: &mut GraphicStyle, query: &mut String) -> bool {
     let mut changed = false;
-    egui::Grid::new("style-general")
-        .num_columns(2)
-        .spacing([12.0, 6.0])
-        .show(ui, |ui| {
-            changed |= colour_row(ui, "Background", &mut s.background);
-            changed |= colour_row(ui, "Edges", &mut s.edges);
-            changed |= colour_row(ui, "Selection", &mut s.selection);
-            changed |= colour_row(ui, "Hover", &mut s.hover);
-            changed |= colour_row(ui, "Dimensions", &mut s.dimensions);
-            ui.label("Hatch strength");
-            changed |= ui
-                .add(Slider::new(&mut s.hatch_strength, 0.0..=1.0))
-                .changed();
-            ui.end_row();
-            ui.label("Hatch darkening")
-                .on_hover_text("For families without an ink colour: how much darker the hatch is");
-            changed |= ui
-                .add(Slider::new(&mut s.hatch_darken, 0.0..=1.0))
-                .changed();
-            ui.end_row();
-            ui.label("Ambient light")
-                .on_hover_text("1 = flat colours, lower = faces shaded by orientation");
-            changed |= ui.add(Slider::new(&mut s.ambient, 0.0..=1.0)).changed();
-            ui.end_row();
-        });
-    ui.separator();
-    for c in MaterialCategory::ALL {
-        egui::CollapsingHeader::new(c.label())
-            .id_salt(c.label())
-            .show(ui, |ui| changed |= fill(ui, c, s.families.get_mut(c)));
-    }
-    ui.separator();
+    ui.add(
+        egui::TextEdit::singleline(query)
+            .hint_text("Find a pen, line, text, dimension or hatch type")
+            .desired_width(f32::INFINITY),
+    );
+    let q = query.trim().to_lowercase();
+    let hit = |text: &str| {
+        let t = text.to_lowercase();
+        q.split_whitespace().all(|w| t.contains(w))
+    };
+    let names = |v: Vec<&str>| q.is_empty() || v.into_iter().any(&hit);
+    // Open what matches while searching; otherwise as the user left it.
+    let section = |title: &str, salt: &str, shown: bool| -> Option<egui::CollapsingHeader> {
+        if !(q.is_empty() || hit(title) || shown) {
+            return None;
+        }
+        let h = egui::CollapsingHeader::new(title).id_salt(salt);
+        Some(if q.is_empty() { h } else { h.open(Some(true)) })
+    };
+    let p = &s.paper;
+    let any_text = !q.is_empty() && names(p.text_types.iter().map(|t| t.name.as_str()).collect());
+    let any_dim =
+        !q.is_empty() && names(p.dimension_types.iter().map(|t| t.name.as_str()).collect());
+    let any_line = !q.is_empty() && names(p.line_types.iter().map(|t| t.name.as_str()).collect());
+    let any_hatch = !q.is_empty() && names(p.hatch_types.iter().map(|t| t.name.as_str()).collect());
+    let any_material = !q.is_empty() && MaterialCategory::ALL.iter().any(|c| hit(c.label()));
+
+    ui.add_space(4.0);
     ui.strong("On paper");
-    egui::CollapsingHeader::new("Line weights")
-        .id_salt("pens")
-        .show(ui, |ui| changed |= pens(ui, &mut s.paper.pens));
-    egui::CollapsingHeader::new("Line types")
-        .id_salt("line-types")
-        .show(ui, |ui| changed |= line_types(ui, &mut s.paper));
-    egui::CollapsingHeader::new("Lines on drawings")
-        .id_salt("line-roles")
-        .show(ui, |ui| changed |= roles(ui, &mut s.paper));
-    egui::CollapsingHeader::new("Text types")
-        .id_salt("text-types")
-        .show(ui, |ui| changed |= text_types(ui, &mut s.paper));
-    egui::CollapsingHeader::new("Dimension types")
-        .id_salt("dim-types")
-        .show(ui, |ui| changed |= dim_types(ui, &mut s.paper));
-    egui::CollapsingHeader::new("Hatch types")
-        .id_salt("hatch-types")
-        .show(ui, |ui| changed |= hatch_types(ui, &mut s.paper));
-    egui::CollapsingHeader::new("Hatches by material")
-        .id_salt("material-hatches")
-        .show(ui, |ui| changed |= material_hatches(ui, &mut s.paper));
+    if let Some(h) = section("Line weights", "pens", hit("pen")) {
+        h.show(ui, |ui| changed |= pens(ui, &mut s.paper.pens));
+    }
+    if let Some(h) = section("Line types", "line-types", any_line) {
+        h.show(ui, |ui| changed |= line_types(ui, &mut s.paper));
+    }
+    if let Some(h) = section("Lines on drawings", "line-roles", hit("cut") || hit("axis")) {
+        h.show(ui, |ui| changed |= roles(ui, &mut s.paper));
+    }
+    if let Some(h) = section("Text types", "text-types", any_text) {
+        h.show(ui, |ui| changed |= text_types(ui, &mut s.paper));
+    }
+    if let Some(h) = section("Dimension types", "dim-types", any_dim) {
+        h.show(ui, |ui| changed |= dim_types(ui, &mut s.paper));
+    }
+    if let Some(h) = section("Hatch types", "hatch-types", any_hatch) {
+        h.show(ui, |ui| {
+            hatch_swatches(ui, &s.paper, &q);
+            ui.add_space(4.0);
+            changed |= hatch_types(ui, &mut s.paper);
+        });
+    }
+    if let Some(h) = section(
+        "Hatches by material",
+        "material-hatches",
+        any_material || any_hatch,
+    ) {
+        h.show(ui, |ui| changed |= material_hatches(ui, &mut s.paper));
+    }
+    ui.add_space(4.0);
+    ui.strong("On screen");
+    if let Some(h) = section("Colours and light", "style-general", hit("colour")) {
+        h.show(ui, |ui| {
+            egui::Grid::new("style-general")
+                .num_columns(2)
+                .spacing([12.0, 6.0])
+                .show(ui, |ui| {
+                    changed |= colour_row(ui, "Background", &mut s.background);
+                    changed |= colour_row(ui, "Edges", &mut s.edges);
+                    changed |= colour_row(ui, "Selection", &mut s.selection);
+                    changed |= colour_row(ui, "Hover", &mut s.hover);
+                    changed |= colour_row(ui, "Dimensions", &mut s.dimensions);
+                    ui.label("Hatch strength");
+                    changed |= ui
+                        .add(Slider::new(&mut s.hatch_strength, 0.0..=1.0))
+                        .changed();
+                    ui.end_row();
+                    ui.label("Hatch darkening").on_hover_text(
+                        "For families without an ink colour: how much darker the hatch is",
+                    );
+                    changed |= ui
+                        .add(Slider::new(&mut s.hatch_darken, 0.0..=1.0))
+                        .changed();
+                    ui.end_row();
+                    ui.label("Ambient light")
+                        .on_hover_text("1 = flat colours, lower = faces shaded by orientation");
+                    changed |= ui.add(Slider::new(&mut s.ambient, 0.0..=1.0)).changed();
+                    ui.end_row();
+                });
+        });
+    }
+    for c in MaterialCategory::ALL {
+        if let Some(h) = section(
+            &format!("{} on screen", c.label()),
+            c.label(),
+            hit(c.label()),
+        ) {
+            h.show(ui, |ui| changed |= fill(ui, c, s.families.get_mut(c)));
+        }
+    }
     changed
+}
+
+/// Paper mm per swatch point: a hatch is shown at twice its printed size.
+const SWATCH_PX_PER_MM: f32 = 2.0;
+
+/// The hatch types as swatches (their fill and lines, as printed, enlarged), the ones whose name
+/// matches `q`, with the materials that use each.
+fn hatch_swatches(ui: &mut egui::Ui, paper: &bimble_core::style::PaperStyle, q: &str) {
+    let size = egui::vec2(72.0, 40.0);
+    // As many per row as fit the panel (its width, not the widest table below).
+    let per_row = ((ui.clip_rect().width() - 16.0) / (size.x + 8.0))
+        .floor()
+        .max(1.0) as usize;
+    let shown: Vec<&bimble_core::hatches::HatchType> = paper
+        .hatch_types
+        .iter()
+        .filter(|t| {
+            let name = t.name.to_lowercase();
+            q.split_whitespace().all(|w| name.contains(w))
+        })
+        .collect();
+    for chunk in shown.chunks(per_row) {
+        ui.horizontal(|ui| {
+            for t in chunk {
+                let used: Vec<String> = paper
+                    .material_hatches
+                    .iter()
+                    .flat_map(|u| {
+                        [(&u.cut, "cut"), (&u.seen, "seen")]
+                            .into_iter()
+                            .filter(|(n, _)| n.as_deref() == Some(t.name.as_str()))
+                            .map(move |(_, k)| format!("{} ({k})", u.category.label()))
+                    })
+                    .collect();
+                ui.vertical(|ui| {
+                    ui.set_width(size.x);
+                    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::hover());
+                    paint_hatch(ui.painter(), rect, t);
+                    resp.on_hover_text(if used.is_empty() {
+                        "Not used by a material".to_string()
+                    } else {
+                        format!("Used by {}", used.join(", "))
+                    });
+                    ui.add(egui::Label::new(egui::RichText::new(&t.name).small()).truncate());
+                });
+            }
+        });
+    }
+}
+
+/// A hatch type painted in `rect`: its fill (white without one), then its line families.
+fn paint_hatch(p: &egui::Painter, rect: egui::Rect, t: &bimble_core::hatches::HatchType) {
+    let c = |c: Rgb| egui::Color32::from_rgb(c.0[0], c.0[1], c.0[2]);
+    let p = p.with_clip_rect(rect);
+    p.rect_filled(rect, 2.0, t.fill.map_or(egui::Color32::WHITE, c));
+    let stroke = egui::Stroke::new(1.0, c(t.color));
+    let diag = rect.size().length();
+    for l in &t.lines {
+        let spacing = l.spacing_mm * SWATCH_PX_PER_MM;
+        if !(spacing.is_finite() && spacing >= 1.5) {
+            continue;
+        }
+        // Screen y points down: counter-clockwise on paper is clockwise here.
+        let a = l.angle_deg.to_radians();
+        let d = egui::vec2(a.cos(), -a.sin());
+        let n = egui::vec2(-d.y, d.x);
+        let off = l.offset_mm * SWATCH_PX_PER_MM;
+        let k = (diag / spacing).ceil() as i32 + 1;
+        let dash: Vec<f32> = l.dash_mm.iter().map(|x| x * SWATCH_PX_PER_MM).collect();
+        for i in -k..=k {
+            let o = rect.center() + n * (i as f32 * spacing + off);
+            let (s, e) = (o - d * diag, o + d * diag);
+            if dash.is_empty() || dash.iter().sum::<f32>() <= 0.0 {
+                p.line_segment([s, e], stroke);
+            } else {
+                p.extend(egui::Shape::dashed_line(
+                    &[s, e],
+                    stroke,
+                    dash[0],
+                    dash.get(1).copied().unwrap_or(dash[0]),
+                ));
+            }
+        }
+    }
+    p.rect_stroke(
+        rect,
+        2.0,
+        egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// The line families of a hatch as text: `angle spacing [offset [dash gap…]]`, `;` between them.
