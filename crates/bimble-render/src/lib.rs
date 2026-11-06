@@ -144,6 +144,9 @@ pub struct Camera {
     pub distance: f32,
     pub fov_y: f32,
     pub orthographic: bool,
+    /// Mirror the picture left-right: a plan looking up is drawn as reflected in a mirror on the
+    /// floor, so north stays up and east stays right (ADR 0021).
+    pub mirror_x: bool,
 }
 
 impl Default for Camera {
@@ -155,6 +158,7 @@ impl Default for Camera {
             distance: 10_000.0,
             fov_y: 35f32.to_radians(),
             orthographic: false,
+            mirror_x: false,
         }
     }
 }
@@ -207,7 +211,11 @@ impl Camera {
             let near = (d - r).max(far * 1e-4).max(1.0);
             directx::perspective(self.fov_y, aspect.max(1e-3), near, far.max(near * 2.0))
         };
-        proj * view
+        if self.mirror_x {
+            Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)) * proj * view
+        } else {
+            proj * view
+        }
     }
 
     /// World-space ray through a point in normalized device coords (x, y in -1..1, y up).
@@ -229,6 +237,7 @@ impl Camera {
         let right = fwd.cross(Vec3::Z).normalize_or(Vec3::X);
         let up = right.cross(fwd);
         let h = 2.0 * self.distance * (self.fov_y / 2.0).tan();
+        let dx = if self.mirror_x { -dx } else { dx };
         self.target += (-dx * right + dy * up) * h;
     }
 
@@ -383,6 +392,8 @@ pub struct Renderer {
     face_pipeline: wgpu::RenderPipeline,
     face_front_pipeline: wgpu::RenderPipeline,
     face_back_pipeline: wgpu::RenderPipeline,
+    face_front_mirrored: wgpu::RenderPipeline,
+    face_back_mirrored: wgpu::RenderPipeline,
     line_clip_pipeline: wgpu::RenderPipeline,
     line_wide_pipeline: wgpu::RenderPipeline,
     line_clip_lean_pipeline: wgpu::RenderPipeline,
@@ -475,6 +486,7 @@ impl Renderer {
         let face_pipeline_with = |label: &str,
                                   (vs, fs): (&str, &str),
                                   cull_mode: Option<wgpu::Face>,
+                                  front_face: wgpu::FrontFace,
                                   bias: (i32, f32)| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -492,6 +504,7 @@ impl Renderer {
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     cull_mode,
+                    front_face,
                     ..Default::default()
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
@@ -518,23 +531,34 @@ impl Renderer {
             })
         };
         // Imported meshes don't always have consistent winding: draw both sides at once.
+        let ccw = wgpu::FrontFace::Ccw;
         let face_pipeline =
-            face_pipeline_with("bimble faces", ("vs_face", "fs_face"), None, (2, 1.5));
+            face_pipeline_with("bimble faces", ("vs_face", "fs_face"), None, ccw, (2, 1.5));
         // With a section box, inward faces show cut surfaces. Drawn in a second pass pushed a
         // little further back, so where an outward and an inward face meet (silhouette corners)
         // the outward one wins instead of speckling the outline with cut colour.
-        let face_front_pipeline = face_pipeline_with(
-            "bimble faces, outward, section box",
-            ("vs_face_clip", "fs_face_clip"),
-            Some(wgpu::Face::Back),
-            (2, 1.5),
-        );
-        let face_back_pipeline = face_pipeline_with(
-            "bimble faces, inward (cut surfaces), section box",
-            ("vs_face_clip", "fs_face_cut"),
-            Some(wgpu::Face::Front),
-            (8, 4.0),
-        );
+        // A mirrored camera turns every triangle's winding around: the same passes then need
+        // the other winding as front.
+        let clip_pipelines = |front: wgpu::FrontFace| {
+            (
+                face_pipeline_with(
+                    "bimble faces, outward, section box",
+                    ("vs_face_clip", "fs_face_clip"),
+                    Some(wgpu::Face::Back),
+                    front,
+                    (2, 1.5),
+                ),
+                face_pipeline_with(
+                    "bimble faces, inward (cut surfaces), section box",
+                    ("vs_face_clip", "fs_face_cut"),
+                    Some(wgpu::Face::Front),
+                    front,
+                    (8, 4.0),
+                ),
+            )
+        };
+        let (face_front_pipeline, face_back_pipeline) = clip_pipelines(ccw);
+        let (face_front_mirrored, face_back_mirrored) = clip_pipelines(wgpu::FrontFace::Cw);
 
         // Normal viewing reads only positions; the section box also reads the face normals.
         let line_attrs_lean = wgpu::vertex_attr_array![0 => Float32x3];
@@ -606,6 +630,8 @@ impl Renderer {
             face_pipeline,
             face_front_pipeline,
             face_back_pipeline,
+            face_front_mirrored,
+            face_back_mirrored,
             line_pipeline,
             line_wide_pipeline,
             line_clip_pipeline,
@@ -842,9 +868,14 @@ impl Renderer {
                 if layer.faces && scene.face_vertices > 0 {
                     pass.set_vertex_buffer(0, scene.faces.slice(..));
                     if opts.clip.is_some() {
-                        pass.set_pipeline(&self.face_front_pipeline);
+                        let (front, back) = if camera.mirror_x {
+                            (&self.face_front_mirrored, &self.face_back_mirrored)
+                        } else {
+                            (&self.face_front_pipeline, &self.face_back_pipeline)
+                        };
+                        pass.set_pipeline(front);
                         pass.draw(0..scene.face_vertices, 0..1);
-                        pass.set_pipeline(&self.face_back_pipeline);
+                        pass.set_pipeline(back);
                         pass.draw(0..scene.face_vertices, 0..1);
                     } else {
                         pass.set_pipeline(&self.face_pipeline);
@@ -1256,6 +1287,15 @@ mod tests {
     }
 
     fn draw(gpu: &Headless, scene: &Scene, opts: &DrawOptions) -> Vec<[u8; 4]> {
+        draw_with(gpu, scene, opts, |_| {})
+    }
+
+    fn draw_with(
+        gpu: &Headless,
+        scene: &Scene,
+        opts: &DrawOptions,
+        camera: impl Fn(&mut Camera),
+    ) -> Vec<[u8; 4]> {
         let r = Renderer::new(&gpu.device, 1);
         let gs = r.upload_with(
             &gpu.device,
@@ -1266,6 +1306,7 @@ mod tests {
         let target = Target::new(&gpu.device, (400, 200), 1);
         let mut cam = Camera::default();
         cam.fit(scene, 2.0);
+        camera(&mut cam);
         r.render(&gpu.device, &gpu.queue, &target, &gs, &cam, opts);
         let px = gpu.read_rgba(&target).unwrap();
         px.as_chunks::<4>().0.to_vec()
@@ -1434,6 +1475,45 @@ mod tests {
         assert!(
             differ < 50,
             "{differ} pixels differ with an all-enclosing box"
+        );
+    }
+
+    /// A mirrored camera (plans looking up) draws the same picture flipped left-right, cut
+    /// surfaces included: the clip passes use the other winding as front.
+    #[test]
+    fn mirrored_camera_flips_the_picture_with_cut_surfaces() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let scene = family_boxes();
+        let all = ClipBox::around(&scene, |_| true).unwrap();
+        let half = ClipBox {
+            max: Vec3::new(all.max.x, all.max.y, all.min.z + 500.0),
+            ..all
+        };
+        let opts = DrawOptions {
+            clip: Some(half),
+            edges: false,
+            ..Default::default()
+        };
+        let plain = draw(&gpu, &scene, &opts);
+        let mirrored = draw_with(&gpu, &scene, &opts, |c| c.mirror_x = true);
+        let (w, h) = (400usize, 200usize);
+        let differ = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let (a, b) = (plain[y * w + x], mirrored[y * w + (w - 1 - x)]);
+                (0..3).any(|k| (a[k] as i32 - b[k] as i32).abs() > 8)
+            })
+            .count();
+        let bg = GraphicStyle::default().background;
+        let objects = w * h - count(&plain, bg, 0);
+        assert!(objects > 1000, "nothing drawn");
+        // Hatch patterns are in screen space, so they don't mirror: compare with a tolerance.
+        assert!(
+            differ * 10 < objects,
+            "{differ} of {objects} object pixels differ from the flipped picture"
         );
     }
 
