@@ -573,6 +573,17 @@ impl Viewer {
                 }
                 continue;
             }
+            // A views side file (#36), recognised by its format field.
+            if p.purpose == files::Purpose::Open && lower.ends_with(".json") {
+                match p.content().and_then(|b| self.open_side_file(&p.name, &b)) {
+                    Ok(m) => {
+                        self.view_message = Some(m);
+                        self.error = None;
+                    }
+                    Err(e) => self.error = Some(e),
+                }
+                continue;
+            }
             match p.purpose {
                 files::Purpose::Reference => self.add_reference(p),
                 files::Purpose::Open | files::Purpose::Link => self.open_picked(p, ctx),

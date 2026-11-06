@@ -22,7 +22,11 @@ pub enum Purpose {
 impl Purpose {
     fn filter(self) -> (&'static str, &'static [&'static str]) {
         match self {
-            Purpose::Open | Purpose::Link => ("Building models", &["ifc", "IFC", "bimble"]),
+            Purpose::Open => (
+                "Building models, views files",
+                &["ifc", "IFC", "bimble", "json"],
+            ),
+            Purpose::Link => ("Building models", &["ifc", "IFC", "bimble"]),
             Purpose::PlanTemplate => ("Plan template", &["json"]),
             Purpose::Style => ("Bimble style", &["json"]),
             Purpose::Reference => (

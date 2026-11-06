@@ -29,6 +29,36 @@ struct RefEdits {
 }
 
 impl Viewer {
+    /// A views side file opened or dropped (#36): its views and sheets replace those of the
+    /// open IFC, once its plans are checked against the model's storeys. In a browser this is
+    /// how views saved earlier (downloaded) come back.
+    pub(crate) fn open_side_file(&mut self, name: &str, bytes: &[u8]) -> Result<String, String> {
+        let Some(l) = &self.loaded else {
+            return Err(format!("{name}: open its model first, then the views file"));
+        };
+        if l.edit.is_some() {
+            return Err(format!(
+                "{name}: a .bimble model keeps its views inside; views files are for IFC"
+            ));
+        }
+        let f = ViewsFile::from_bytes(bytes).map_err(|e| format!("{name}: {e}"))?;
+        let warnings = check_side_file(&f, &self.levels()).map_err(|e| format!("{name}: {e}"))?;
+        let (n, s) = (f.views.len(), f.sheets.len());
+        self.side_views = Some(SideViews {
+            stored: f.views,
+            sheets: f.sheets,
+            dirty: false,
+        });
+        self.active_view = None;
+        self.layout = None;
+        self.refresh_views();
+        let mut msg = format!("{name}: {n} views, {s} sheets");
+        if !warnings.is_empty() {
+            msg.push_str(&format!(" ({})", warnings.join("; ")));
+        }
+        Ok(msg)
+    }
+
     pub(crate) fn levels(&self) -> Vec<Level> {
         self.loaded
             .as_ref()
@@ -1272,5 +1302,69 @@ impl Viewer {
             self.view_message = Some(e);
             self.view_form = None;
         }
+    }
+}
+
+/// Whether a views file fits a model: its plans must be on the model's storeys. None fitting
+/// (and some plans): another model's file, refused. Some not fitting: listed as warnings.
+pub(crate) fn check_side_file(f: &ViewsFile, levels: &[Level]) -> Result<Vec<String>, String> {
+    let plans: Vec<(&str, &str)> = f
+        .views
+        .values()
+        .filter_map(|v| match &v.kind {
+            bimble_core::view::ViewKind::Plan { storey, .. } => {
+                Some((v.name.as_str(), storey.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    let missing: Vec<&str> = plans
+        .iter()
+        .filter(|(_, s)| !levels.iter().any(|l| l.key == *s))
+        .map(|(n, _)| *n)
+        .collect();
+    if !plans.is_empty() && missing.len() == plans.len() {
+        return Err(
+            "none of its plans is on a storey of this model: views of another model?".into(),
+        );
+    }
+    Ok(missing
+        .into_iter()
+        .map(|n| format!("plan {n}: its storey is not in this model"))
+        .collect())
+}
+
+#[cfg(test)]
+mod side_file_tests {
+    use super::*;
+    use bimble_core::demo::{FrameSpec, concrete_frame};
+
+    /// A views file of this model is taken; one whose plans are on no storey of it is refused;
+    /// one with a plan on a missing storey is taken with a warning.
+    #[test]
+    fn a_views_file_is_checked_against_the_storeys() {
+        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let levels = scene.levels();
+        let views: BTreeMap<GlobalId, View> = default_views(&levels)
+            .into_iter()
+            .map(|v| (v.id, v))
+            .collect();
+        let f = ViewsFile::new(views.clone(), BTreeMap::new());
+        let f = ViewsFile::from_bytes(&serde_json::to_vec(&f).unwrap()).unwrap();
+        assert_eq!(check_side_file(&f, &levels).unwrap(), Vec::<String>::new());
+        let other: Vec<Level> = levels
+            .iter()
+            .map(|l| Level {
+                key: format!("other-{}", l.key),
+                ..l.clone()
+            })
+            .collect();
+        assert!(check_side_file(&f, &other).is_err());
+        let fewer = &levels[1..];
+        let w = check_side_file(&f, fewer).unwrap();
+        assert!(
+            !w.is_empty() && w.iter().all(|x| x.contains("storey")),
+            "{w:?}"
+        );
     }
 }
