@@ -67,6 +67,9 @@ pub struct Tree {
     /// Project information, inline (it is small).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub project: BTreeMap<String, String>,
+    /// Schedules, inline (small).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schedules: Vec<crate::schedule::ScheduleDef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -245,6 +248,7 @@ impl Repo {
             views: map(self, &m.views)?,
             sheets: map(self, &m.sheets)?,
             project: m.project.clone(),
+            schedules: m.schedules.clone(),
         };
         self.put(&t)
     }
@@ -267,6 +271,7 @@ impl Repo {
             views: map::<crate::view::View>(self, &t.views)?,
             sheets: map::<crate::sheet::Sheet>(self, &t.sheets)?,
             project: t.project,
+            schedules: t.schedules,
         };
         m.validate()
             .map_err(|e| RepoError::Damaged(hash.into(), format!("invalid model: {e}")))?;
@@ -718,9 +723,45 @@ pub fn merge_models(
             project.insert(k.clone(), v);
         }
     }
+    // Schedules, by name: each one picked like an element.
+    let mut schedules = Vec::new();
+    let names: Vec<String> = {
+        let mut n: Vec<String> = Vec::new();
+        for s in base
+            .schedules
+            .iter()
+            .chain(&ours.schedules)
+            .chain(&theirs.schedules)
+        {
+            if !n.contains(&s.name) {
+                n.push(s.name.clone());
+            }
+        }
+        n
+    };
+    for name in names {
+        let get = |v: &[crate::schedule::ScheduleDef]| v.iter().find(|s| s.name == name).cloned();
+        let (b, o, t) = (
+            get(&base.schedules),
+            get(&ours.schedules),
+            get(&theirs.schedules),
+        );
+        let (s, c) = pick(b.as_ref(), o.as_ref(), t.as_ref(), prefer);
+        if c {
+            conflicts.push(Conflict {
+                kind: "schedule",
+                id: None,
+                name,
+            });
+        }
+        if let Some(s) = s {
+            schedules.push(s);
+        }
+    }
     let m = Model {
         project_id: ours.project_id,
         project,
+        schedules,
         project_name: project_name.unwrap_or_default(),
         storeys: map(
             "IfcBuildingStorey",

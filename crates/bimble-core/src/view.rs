@@ -576,6 +576,9 @@ pub struct ViewsFile {
     /// Project information (ADR 0030): version 3 files.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub project: BTreeMap<String, String>,
+    /// Schedules changed or added (ADR 0029): version 3 files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schedules: Vec<crate::schedule::ScheduleDef>,
 }
 
 pub const VIEWS_FORMAT: &str = "bimble-views";
@@ -600,7 +603,17 @@ impl ViewsFile {
             views,
             sheets,
             project: BTreeMap::new(),
+            schedules: Vec::new(),
         }
+    }
+
+    /// With schedules (ADR 0029): a version 3 file when there are some.
+    pub fn with_schedules(mut self, schedules: Vec<crate::schedule::ScheduleDef>) -> ViewsFile {
+        if !schedules.is_empty() {
+            self.version = 3;
+        }
+        self.schedules = schedules;
+        self
     }
 
     /// With project information (ADR 0030): a version 3 file when there is some.
@@ -624,6 +637,7 @@ impl ViewsFile {
             ));
         }
         crate::project::validate(&f.project)?;
+        crate::schedule::validate_all(&f.schedules)?;
         for (k, v) in &f.views {
             if *k != v.id {
                 return Err(format!("view {k}: key does not match id"));

@@ -821,7 +821,7 @@ impl Viewer {
             self.open_tabs.push(c.clone());
         }
         let sheets = self.sheets();
-        let schedules = crate::schedules::schedule_defs();
+        let schedules = self.schedule_defs();
         self.open_tabs.retain(|t| match t {
             TabRef::View(id) => self.views.iter().any(|v| v.id == *id),
             TabRef::Sheet(id) => sheets.iter().any(|s| s.id == *id),

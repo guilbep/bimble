@@ -17,6 +17,8 @@ pub(crate) struct SideViews {
     pub sheets: BTreeMap<GlobalId, bimble_core::sheet::Sheet>,
     /// Project information (ADR 0030), kept and saved back.
     pub project: BTreeMap<String, String>,
+    /// Schedules changed or added (ADR 0029), kept and saved back.
+    pub schedules: Vec<bimble_core::schedule::ScheduleDef>,
     pub dirty: bool,
 }
 
@@ -50,6 +52,7 @@ impl Viewer {
             stored: f.views,
             sheets: f.sheets,
             project: f.project,
+            schedules: f.schedules,
             dirty: false,
         });
         self.active_view = None;
@@ -132,27 +135,43 @@ impl Viewer {
         if l.edit.is_none() {
             // In a browser there is no file next to the model to read.
             #[cfg(target_arch = "wasm32")]
-            let (stored, sheets, project) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+            let (stored, sheets, project, schedules) = (
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                Vec::new(),
+            );
             #[cfg(not(target_arch = "wasm32"))]
-            let (stored, sheets, project) = {
+            let (stored, sheets, project, schedules) = {
                 let p = side_file(&l.path);
                 match p.exists().then(|| {
                     std::fs::read(&p)
                         .map_err(|e| e.to_string())
                         .and_then(|b| ViewsFile::from_bytes(&b))
                 }) {
-                    Some(Ok(f)) => (f.views, f.sheets, f.project),
+                    Some(Ok(f)) => (f.views, f.sheets, f.project, f.schedules),
                     Some(Err(e)) => {
                         self.view_message = Some(format!("{}: {e}", p.display()));
-                        (BTreeMap::new(), BTreeMap::new(), BTreeMap::new())
+                        (
+                            BTreeMap::new(),
+                            BTreeMap::new(),
+                            BTreeMap::new(),
+                            Vec::new(),
+                        )
                     }
-                    None => (BTreeMap::new(), BTreeMap::new(), BTreeMap::new()),
+                    None => (
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                        Vec::new(),
+                    ),
                 }
             };
             self.side_views = Some(SideViews {
                 stored,
                 sheets,
                 project,
+                schedules,
                 dirty: false,
             });
         }
@@ -370,6 +389,7 @@ impl Viewer {
         };
         let text = ViewsFile::new(s.stored.clone(), s.sheets.clone())
             .with_project(s.project.clone())
+            .with_schedules(s.schedules.clone())
             .to_json();
         #[cfg(target_arch = "wasm32")]
         let r = {
@@ -439,6 +459,7 @@ impl Viewer {
         let schedule_counts = self.schedule_counts();
         let open_schedule_name = self.schedule.as_ref().map(|s| s.name.clone());
         let mut open_schedule: Option<String> = None;
+        let mut new_schedule = false;
         let Some(l) = &self.loaded else {
             ui.weak("No model loaded.");
             return;
@@ -579,6 +600,9 @@ impl Viewer {
                 egui::CollapsingHeader::new(egui::RichText::new("Schedules").strong()).show(
                     ui,
                     |ui| {
+                        if ui.button("New schedule").clicked() {
+                            new_schedule = true;
+                        }
                         for (name, n) in &schedule_counts {
                             let on = open_schedule_name.as_deref() == Some(name.as_str());
                             let r = ui.add_enabled(
@@ -684,6 +708,9 @@ impl Viewer {
         }
         if let Some(n) = open_schedule {
             self.open_schedule(&n);
+        }
+        if new_schedule {
+            self.new_schedule();
         }
         if let Some(id) = delete_sheet {
             self.delete_sheet(id);

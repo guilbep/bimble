@@ -110,8 +110,8 @@ impl ScheduleDef {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.name.trim().is_empty() {
-            return Err("a schedule needs a name".into());
+        if self.name.trim().is_empty() || self.name.chars().count() > 100 {
+            return Err("a schedule needs a name (at most 100 characters)".into());
         }
         if self.fields.is_empty() || self.fields.len() > 32 {
             return Err(format!("schedule {}: 1 to 32 columns", self.name));
@@ -121,6 +121,53 @@ impl ScheduleDef {
         }
         Ok(())
     }
+}
+
+/// Most schedules a model keeps.
+pub const MAX_SCHEDULES: usize = 200;
+
+/// Checks a model's schedules: each valid, names unique.
+pub fn validate_all(v: &[ScheduleDef]) -> Result<(), String> {
+    if v.len() > MAX_SCHEDULES {
+        return Err(format!("at most {MAX_SCHEDULES} schedules"));
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for d in v {
+        d.validate()?;
+        if !names.insert(d.name.to_lowercase()) {
+            return Err(format!("two schedules are named {}", d.name));
+        }
+    }
+    Ok(())
+}
+
+/// The schedules offered: the built-in ones, each replaced by the model's schedule of the same
+/// name if it has one, then the model's own, in their order.
+pub fn effective(stored: &[ScheduleDef]) -> Vec<ScheduleDef> {
+    let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+    let mut v: Vec<ScheduleDef> = default_schedules()
+        .into_iter()
+        .map(|d| {
+            stored
+                .iter()
+                .find(|s| same(&s.name, &d.name))
+                .cloned()
+                .unwrap_or(d)
+        })
+        .collect();
+    for s in stored {
+        if !v.iter().any(|d| same(&d.name, &s.name)) {
+            v.push(s.clone());
+        }
+    }
+    v
+}
+
+/// Whether a schedule name is one of the built-in ones.
+pub fn is_builtin(name: &str) -> bool {
+    default_schedules()
+        .iter()
+        .any(|d| d.name.eq_ignore_ascii_case(name))
 }
 
 fn def(
@@ -203,6 +250,44 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), v.len());
+    }
+
+    /// A model's schedule of a built-in name replaces it, in place; a new one comes after; the
+    /// command says which, and the model refuses two of one name.
+    #[test]
+    fn model_schedules_override_and_add() {
+        use crate::{Command, History};
+        let mut beams = default_schedules()
+            .into_iter()
+            .find(|d| d.name == "Steel beams")
+            .unwrap();
+        beams.fields.retain(|f| *f != Field::Mass);
+        let mine = ScheduleDef {
+            name: "Rebar check".into(),
+            ..beams.clone()
+        };
+        let e = effective(&[beams.clone(), mine.clone()]);
+        let i = e.iter().position(|d| d.name == "Steel beams").unwrap();
+        assert_eq!(e[i], beams);
+        assert_eq!(e.last().unwrap().name, "Rebar check");
+        assert_eq!(e.len(), default_schedules().len() + 1);
+        assert!(is_builtin("steel BEAMS") && !is_builtin("Rebar check"));
+
+        let mut m = crate::demo::concrete_frame(&crate::demo::FrameSpec::default());
+        let mut h = History::default();
+        h.apply(
+            &mut m,
+            vec![Command::SetSchedules {
+                schedules: vec![mine.clone()],
+            }],
+        )
+        .unwrap();
+        assert_eq!(h.undo_label(), Some("add the schedule Rebar check"));
+        m.validate().unwrap();
+        let twice = Command::SetSchedules {
+            schedules: vec![mine.clone(), mine],
+        };
+        assert!(twice.apply(&mut m).is_err());
     }
 
     #[test]

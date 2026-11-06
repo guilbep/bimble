@@ -418,6 +418,9 @@ pub struct Model {
     /// Project information (ADR 0030): client, architect, number, phase… for title blocks.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub project: BTreeMap<String, String>,
+    /// Schedules of this model (ADR 0029): new ones, and built-in ones changed (same name).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schedules: Vec<crate::schedule::ScheduleDef>,
 }
 
 impl Model {
@@ -432,6 +435,7 @@ impl Model {
     /// Referential and parameter integrity. Run after loading any file.
     pub fn validate(&self) -> Result<(), String> {
         crate::project::validate(&self.project)?;
+        crate::schedule::validate_all(&self.schedules)?;
         for (k, s) in &self.storeys {
             if *k != s.id || !s.elevation.is_finite() {
                 return Err(format!("storey {k}: inconsistent id or elevation"));

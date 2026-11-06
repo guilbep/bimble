@@ -1103,7 +1103,7 @@ impl Viewer {
         for (name, h) in &v.branches {
             ui.horizontal(|ui| {
                 let current = Some(name) == v.branch.as_ref();
-                ui.label(format!("{} {name}  {}", if current { "●" } else { "○" }, &h[..10]));
+                ui.label(format!("{} {name}  {}", if current { "*" } else { " " }, &h[..10]));
                 if !current
                     && ui
                         .add_enabled(v.pending == 0, egui::Button::new("Switch"))
@@ -2930,6 +2930,8 @@ impl eframe::App for Viewer {
                                 } else {
                                     self.properties(ui);
                                 }
+                            } else if self.schedule.is_some() {
+                                self.schedule_properties(ui);
                             } else if self.layout.is_some() {
                                 self.layout_properties(ui);
                             } else {

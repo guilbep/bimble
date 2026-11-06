@@ -52,6 +52,11 @@ pub fn model_hash(m: &Model) -> blake3::Hash {
             h.update(vh.as_bytes());
         }
     }
+    // Only when there are schedules: older models keep their hash.
+    if !m.schedules.is_empty() {
+        h.update(b"schedules");
+        h.update(content_hash(&m.schedules).as_bytes());
+    }
     // Only when there is project information: older models keep their hash.
     if !m.project.is_empty() {
         h.update(b"project");
@@ -112,6 +117,18 @@ pub fn diff(a: &Model, b: &Model) -> Vec<Change> {
                 path: "project_name".into(),
                 before: a.project_name.clone().into(),
                 after: b.project_name.clone().into(),
+            }],
+        });
+    }
+    if a.schedules != b.schedules {
+        out.push(Change::Modified {
+            kind: "schedule".into(),
+            id: b.project_id,
+            name: "schedules".into(),
+            fields: vec![FieldChange {
+                path: "schedules".into(),
+                before: serde_json::to_value(&a.schedules).unwrap_or_default(),
+                after: serde_json::to_value(&b.schedules).unwrap_or_default(),
             }],
         });
     }

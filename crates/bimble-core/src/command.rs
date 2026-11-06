@@ -46,6 +46,10 @@ pub enum Command {
     SetSheet(crate::sheet::Sheet),
     /// Replace a material (name, family, properties); its id stays (ADR 0031).
     SetMaterial(Material),
+    /// Replace the model's schedules (ADR 0029): the whole list, small.
+    SetSchedules {
+        schedules: Vec<crate::schedule::ScheduleDef>,
+    },
     /// Replace the project information (ADR 0030).
     SetProject {
         project: std::collections::BTreeMap<String, String>,
@@ -218,6 +222,11 @@ impl Command {
                 let old = m.materials.insert(x.id, x).expect("checked above");
                 Ok(SetMaterial(old))
             }
+            SetSchedules { schedules } => {
+                crate::schedule::validate_all(&schedules).map_err(CommandError::Invalid)?;
+                let old = std::mem::replace(&mut m.schedules, schedules);
+                Ok(SetSchedules { schedules: old })
+            }
             SetProject { project } => {
                 crate::project::validate(&project).map_err(CommandError::Invalid)?;
                 let old = std::mem::replace(&mut m.project, project);
@@ -292,6 +301,24 @@ impl Command {
             Command::RemoveSheet { id } => format!("delete {}", sheet(id)),
             Command::SetSheet(x) => format!("change the sheet {}", x.number),
             Command::SetProject { .. } => "change the project information".into(),
+            Command::SetSchedules { schedules } => {
+                let old: Vec<&str> = m.schedules.iter().map(|s| s.name.as_str()).collect();
+                let new: Vec<&str> = schedules.iter().map(|s| s.name.as_str()).collect();
+                match (
+                    new.iter().find(|n| !old.contains(n)),
+                    old.iter().find(|n| !new.contains(n)),
+                ) {
+                    (Some(n), None) => format!("add the schedule {n}"),
+                    (None, Some(n)) => format!("delete the schedule {n}"),
+                    (Some(n), Some(o)) => format!("rename the schedule {o} to {n}"),
+                    (None, None) => schedules
+                        .iter()
+                        .find(|s| !m.schedules.contains(s))
+                        .map_or("change the schedules".into(), |s| {
+                            format!("change the schedule {}", s.name)
+                        }),
+                }
+            }
             Command::SetMaterial(x) => match m.materials.get(&x.id) {
                 Some(old) if old.name != x.name => {
                     format!("rename the material {} to {}", old.name, x.name)

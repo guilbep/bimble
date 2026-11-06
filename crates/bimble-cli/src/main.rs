@@ -696,7 +696,9 @@ fn run(cli: Cli) -> Result<(), String> {
             bimble_core::project::validate(&p)?;
             if is_ifc(&path) {
                 let f = read_side(&path)?;
-                let f = bimble_core::view::ViewsFile::new(f.views, f.sheets).with_project(p);
+                let f = bimble_core::view::ViewsFile::new(f.views, f.sheets)
+                    .with_project(p)
+                    .with_schedules(f.schedules);
                 let side = bimble_core::view::side_file(&path);
                 file::write_atomic(&side, f.to_json().as_bytes())
                     .map_err(|e| format!("{}: {e}", side.display()))?;
@@ -712,7 +714,7 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Cmd::Schedules { file: path } => {
             let scene = load_scene(&path)?;
-            for d in bimble_core::schedule::default_schedules() {
+            for d in bimble_core::schedule::effective(&model_schedules(&path)?) {
                 let t = bimble_drawing::schedule::schedule(&scene, &d);
                 println!("{:<20} {:>6}", d.name, t.count);
             }
@@ -723,7 +725,7 @@ fn run(cli: Cli) -> Result<(), String> {
             csv,
         } => {
             let scene = load_scene(&path)?;
-            let defs = bimble_core::schedule::default_schedules();
+            let defs = bimble_core::schedule::effective(&model_schedules(&path)?);
             let d = defs
                 .iter()
                 .find(|d| d.name.eq_ignore_ascii_case(name.trim()))
@@ -1190,6 +1192,26 @@ fn history(cmd: HistoryCmd) -> Result<(), String> {
 }
 
 /// The views of a model: stored in a .bimble, in the side file of an IFC, over the defaults.
+/// The schedules a model keeps (ADR 0029): in a .bimble, or in an IFC's side file.
+fn model_schedules(
+    path: &std::path::Path,
+) -> Result<Vec<bimble_core::schedule::ScheduleDef>, String> {
+    if is_ifc(path) {
+        let side = bimble_core::view::side_file(path);
+        if !side.exists() {
+            return Ok(Vec::new());
+        }
+        let bytes = std::fs::read(&side).map_err(|e| format!("{}: {e}", side.display()))?;
+        Ok(bimble_core::view::ViewsFile::from_bytes(&bytes)
+            .map_err(|e| format!("{}: {e}", side.display()))?
+            .schedules)
+    } else {
+        Ok(bimble_core::file::load(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .schedules)
+    }
+}
+
 /// The project information of a model (ADR 0030): in a .bimble, or in an IFC's side file.
 fn model_project(
     path: &std::path::Path,
@@ -1280,7 +1302,9 @@ fn save_sheet(path: &std::path::Path, def: bimble_core::sheet::Sheet) -> Result<
         }
         f.sheets.insert(def.id, def);
         // Project information kept as it was (ADR 0030).
-        let f = bimble_core::view::ViewsFile::new(f.views, f.sheets).with_project(f.project);
+        let f = bimble_core::view::ViewsFile::new(f.views, f.sheets)
+            .with_project(f.project)
+            .with_schedules(f.schedules);
         let side = bimble_core::view::side_file(path);
         file::write_atomic(&side, f.to_json().as_bytes())
             .map_err(|e| format!("{}: {e}", side.display()))

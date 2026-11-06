@@ -3,13 +3,14 @@
 
 use super::*;
 use crate::ui_theme as th;
-use bimble_core::schedule::{ScheduleDef, default_schedules};
+use bimble_core::schedule::{Field, ScheduleDef, effective, is_builtin};
 use bimble_drawing::schedule::{Cell, Table, schedule, to_csv};
 
 /// An open schedule: its name, its table for a scene revision, how it is sorted.
 pub(crate) struct OpenSchedule {
     pub name: String,
-    table: Option<(u64, Table)>,
+    /// The table, for a scene revision and a definition.
+    table: Option<((u64, String), Table)>,
     /// Sorted by this column, ascending or not; none: by level, location and name.
     sort: Option<(usize, bool)>,
 }
@@ -24,15 +25,90 @@ impl OpenSchedule {
     }
 }
 
-/// The schedule definitions offered (the built-in ones for now).
-pub(crate) fn schedule_defs() -> Vec<ScheduleDef> {
-    default_schedules()
-}
-
 impl Viewer {
+    /// The schedules this model keeps (new ones and built-in ones changed).
+    pub(crate) fn stored_schedules(&self) -> Vec<ScheduleDef> {
+        if let Some(ed) = self.loaded.as_ref().and_then(|l| l.edit.as_ref()) {
+            return ed.model.schedules.clone();
+        }
+        self.side_views
+            .as_ref()
+            .map(|s| s.schedules.clone())
+            .unwrap_or_default()
+    }
+
+    /// The schedules offered: built-in ones (as changed) and the model's own.
+    pub(crate) fn schedule_defs(&self) -> Vec<ScheduleDef> {
+        effective(&self.stored_schedules())
+    }
+
+    /// Store the model's schedules: a command in a `.bimble` model, the side file for an IFC.
+    fn store_schedules(&mut self, v: Vec<ScheduleDef>) -> Result<(), String> {
+        bimble_core::schedule::validate_all(&v)?;
+        if self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) {
+            self.apply_commands(vec![bimble_core::Command::SetSchedules { schedules: v }]);
+            Ok(())
+        } else if let Some(s) = &mut self.side_views {
+            s.schedules = v;
+            s.dirty = true;
+            self.schedule_counts = None;
+            Ok(())
+        } else {
+            Err("Open a model first.".into())
+        }
+    }
+
+    /// Change one schedule (by its current name): stored under its (maybe new) name.
+    fn change_schedule(&mut self, old_name: &str, d: ScheduleDef) -> Result<(), String> {
+        let mut v = self.stored_schedules();
+        match v.iter_mut().find(|s| s.name == old_name) {
+            Some(s) => *s = d.clone(),
+            None => v.push(d.clone()),
+        }
+        self.store_schedules(v)?;
+        if let Some(o) = &mut self.schedule {
+            o.name = d.name;
+        }
+        Ok(())
+    }
+
+    /// A new schedule of the model, listing every element, open.
+    pub(crate) fn new_schedule(&mut self) {
+        let defs = self.schedule_defs();
+        let mut n = 1;
+        let name = loop {
+            let c = format!("Schedule {n}");
+            if !defs.iter().any(|d| d.name.eq_ignore_ascii_case(&c)) {
+                break c;
+            }
+            n += 1;
+        };
+        let d = ScheduleDef {
+            name: name.clone(),
+            classes: Vec::new(),
+            family: None,
+            fields: vec![
+                Field::Level,
+                Field::Name,
+                Field::Class,
+                Field::Material,
+                Field::Volume,
+            ],
+            group_by_level: true,
+            totals: true,
+        };
+        let mut v = self.stored_schedules();
+        v.push(d);
+        match self.store_schedules(v) {
+            Ok(()) => self.open_schedule(&name),
+            Err(e) => self.view_message = Some(e),
+        }
+    }
+
     /// How many rows each schedule has, for the project browser (once per scene revision).
     pub(crate) fn schedule_counts(&mut self) -> Vec<(String, usize)> {
-        let rev = self.scene_rev;
+        let defs = self.schedule_defs();
+        let rev = self.scene_rev ^ hash_text(&serde_json::to_string(&defs).unwrap_or_default());
         if let Some((r, v)) = &self.schedule_counts
             && *r == rev
         {
@@ -41,7 +117,7 @@ impl Viewer {
         let Some(l) = &self.loaded else {
             return Vec::new();
         };
-        let v: Vec<(String, usize)> = schedule_defs()
+        let v: Vec<(String, usize)> = defs
             .iter()
             .map(|d| {
                 let n = l
@@ -71,11 +147,13 @@ impl Viewer {
     /// The open schedule's table, measured again when the model changed.
     fn schedule_table(&mut self) -> Option<Table> {
         let rev = self.scene_rev;
+        let name = self.schedule.as_ref()?.name.clone();
+        let def = self.schedule_defs().into_iter().find(|d| d.name == name)?;
+        let key = (rev, serde_json::to_string(&def).unwrap_or_default());
         let l = self.loaded.as_ref()?;
         let s = self.schedule.as_mut()?;
-        if s.table.as_ref().is_none_or(|(r, _)| *r != rev) {
-            let def = schedule_defs().into_iter().find(|d| d.name == s.name)?;
-            s.table = Some((rev, schedule(&l.scene, &def)));
+        if s.table.as_ref().is_none_or(|(k, _)| *k != key) {
+            s.table = Some((key, schedule(&l.scene, &def)));
         }
         let (_, t) = s.table.as_ref()?;
         let mut t = t.clone();
@@ -151,8 +229,8 @@ impl Viewer {
                             .show(ui, |ui| {
                                 for (k, f) in t.fields.iter().enumerate() {
                                     let mark = match sort {
-                                        Some((c, true)) if c == k => " ▲",
-                                        Some((c, false)) if c == k => " ▼",
+                                        Some((c, true)) if c == k => " (up)",
+                                        Some((c, false)) if c == k => " (down)",
                                         _ => "",
                                     };
                                     if ui
@@ -248,6 +326,197 @@ impl Viewer {
         if show_in_view {
             self.schedule = None;
             self.fit_selection(self.last_aspect);
+        }
+    }
+}
+
+/// A short hash of a text (cache keys).
+fn hash_text(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+impl Viewer {
+    /// The open schedule's settings, where the properties are (Revit's Fields, Filter, Sort and
+    /// group): name, what it lists, its columns in order, grouping and totals (ADR 0029).
+    pub(crate) fn schedule_properties(&mut self, ui: &mut egui::Ui) {
+        let Some(name) = self.schedule.as_ref().map(|s| s.name.clone()) else {
+            return;
+        };
+        let Some(def) = self.schedule_defs().into_iter().find(|d| d.name == name) else {
+            return;
+        };
+        let builtin = is_builtin(&name);
+        let changed_builtin = builtin
+            && self
+                .stored_schedules()
+                .iter()
+                .any(|s| s.name.eq_ignore_ascii_case(&name));
+        let mut d = def.clone();
+        ui.heading("Schedule");
+        if builtin {
+            ui.weak(if changed_builtin {
+                "A built-in schedule, changed for this model."
+            } else {
+                "A built-in schedule. Changes are kept with this model."
+            });
+        }
+        let mut rename: Option<String> = None;
+        egui::Grid::new("schedule-props")
+            .num_columns(2)
+            .spacing([10.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Name");
+                let id = egui::Id::unique(("schedule-name", &name));
+                let mut text: String = ui.data(|m| m.get_temp(id)).unwrap_or_else(|| name.clone());
+                let r = ui.add_enabled(
+                    !builtin,
+                    egui::TextEdit::singleline(&mut text).desired_width(180.0),
+                );
+                if r.lost_focus() && text.trim() != name && !text.trim().is_empty() {
+                    rename = Some(text.trim().to_string());
+                }
+                if r.has_focus() {
+                    ui.data_mut(|m| m.insert_temp(id, text));
+                } else {
+                    ui.data_mut(|m| m.remove::<String>(id));
+                }
+                ui.end_row();
+                ui.label("IFC classes");
+                // Held while typed; applied when the field is left.
+                let cid = egui::Id::unique(("schedule-classes", &name));
+                let mut classes: String = ui
+                    .data(|m| m.get_temp(cid))
+                    .unwrap_or_else(|| d.classes.join(", "));
+                let r = ui
+                    .add(egui::TextEdit::singleline(&mut classes).desired_width(180.0))
+                    .on_hover_text("Separated by commas; empty: every class");
+                if r.lost_focus() {
+                    d.classes = classes
+                        .split(',')
+                        .map(|c| c.trim().to_string())
+                        .filter(|c| !c.is_empty())
+                        .collect();
+                }
+                if r.has_focus() {
+                    ui.data_mut(|m| m.insert_temp(cid, classes));
+                } else {
+                    ui.data_mut(|m| m.remove::<String>(cid));
+                }
+                ui.end_row();
+                ui.label("Family");
+                egui::ComboBox::from_id_salt("schedule-family")
+                    .selected_text(d.family.map_or("Any", |f| f.label()))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut d.family, None, "Any");
+                        for c in bimble_core::MaterialCategory::ALL {
+                            ui.selectable_value(&mut d.family, Some(c), c.label());
+                        }
+                    });
+                ui.end_row();
+            });
+        ui.checkbox(&mut d.group_by_level, "Group by level, with subtotals");
+        ui.checkbox(&mut d.totals, "Total at the end");
+        ui.add_space(4.0);
+        ui.strong("Columns");
+        ui.weak("Ticked columns show, in this order.");
+        let mut order: Vec<(Field, bool)> = d.fields.iter().map(|f| (*f, true)).collect();
+        for f in Field::ALL {
+            if !d.fields.contains(&f) {
+                order.push((f, false));
+            }
+        }
+        let mut swap: Option<usize> = None;
+        for (k, (f, on)) in order.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                ui.checkbox(on, f.title());
+                if *on
+                    && k > 0
+                    && ui
+                        .small_button("Earlier")
+                        .on_hover_text("One column to the left")
+                        .clicked()
+                {
+                    swap = Some(k);
+                }
+            });
+        }
+        if let Some(k) = swap {
+            order.swap(k - 1, k);
+        }
+        let fields: Vec<Field> = order
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(f, _)| *f)
+            .collect();
+        if !fields.is_empty() {
+            d.fields = fields;
+        }
+        ui.add_space(6.0);
+        let mut delete = false;
+        let mut reset = false;
+        let mut duplicate = false;
+        ui.horizontal(|ui| {
+            duplicate = ui.button("Duplicate").clicked();
+            if builtin {
+                reset = ui
+                    .add_enabled(changed_builtin, egui::Button::new("Back to built-in"))
+                    .on_hover_text("Forget this model's changes to it")
+                    .clicked();
+            } else {
+                delete = ui.button("Delete").clicked();
+            }
+        });
+        if let Some(n) = rename {
+            if self
+                .schedule_defs()
+                .iter()
+                .any(|s| s.name.eq_ignore_ascii_case(&n))
+            {
+                self.view_message = Some(format!("A schedule is already named {n}."));
+            } else {
+                d.name = n;
+            }
+        }
+        let r = if delete || reset {
+            let v: Vec<ScheduleDef> = self
+                .stored_schedules()
+                .into_iter()
+                .filter(|s| !s.name.eq_ignore_ascii_case(&name))
+                .collect();
+            let r = self.store_schedules(v);
+            if delete {
+                self.schedule = None;
+            }
+            r
+        } else if duplicate {
+            let defs = self.schedule_defs();
+            let mut n = 2;
+            let copy = loop {
+                let c = format!("{name} ({n})");
+                if !defs.iter().any(|s| s.name.eq_ignore_ascii_case(&c)) {
+                    break c;
+                }
+                n += 1;
+            };
+            let mut c = d.clone();
+            c.name = copy.clone();
+            let mut v = self.stored_schedules();
+            v.push(c);
+            let r = self.store_schedules(v);
+            if r.is_ok() {
+                self.open_schedule(&copy);
+            }
+            r
+        } else if d != def {
+            self.change_schedule(&name, d)
+        } else {
+            Ok(())
+        };
+        if let Err(e) = r {
+            self.view_message = Some(e);
         }
     }
 }
