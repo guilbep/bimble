@@ -58,6 +58,197 @@ pub fn edit(ui: &mut egui::Ui, s: &mut GraphicStyle) -> bool {
     egui::CollapsingHeader::new("Dimension types")
         .id_salt("dim-types")
         .show(ui, |ui| changed |= dim_types(ui, &mut s.paper));
+    egui::CollapsingHeader::new("Hatch types")
+        .id_salt("hatch-types")
+        .show(ui, |ui| changed |= hatch_types(ui, &mut s.paper));
+    egui::CollapsingHeader::new("Hatches by material")
+        .id_salt("material-hatches")
+        .show(ui, |ui| changed |= material_hatches(ui, &mut s.paper));
+    changed
+}
+
+/// The line families of a hatch as text: `angle spacing [offset [dash gap…]]`, `;` between them.
+fn hatch_lines_text(l: &[bimble_core::hatches::HatchLine]) -> String {
+    l.iter()
+        .map(|l| {
+            let mut v = vec![l.angle_deg.to_string(), l.spacing_mm.to_string()];
+            if l.offset_mm != 0.0 || !l.dash_mm.is_empty() {
+                v.push(l.offset_mm.to_string());
+            }
+            v.extend(l.dash_mm.iter().map(|d| d.to_string()));
+            v.join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Reads `hatch_lines_text` back. None if a family is malformed.
+fn parse_hatch_lines(s: &str) -> Option<Vec<bimble_core::hatches::HatchLine>> {
+    s.split(';')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let n: Vec<f32> = p
+                .split_whitespace()
+                .map(|x| x.parse().ok())
+                .collect::<Option<_>>()?;
+            if n.len() < 2 || (n.len() > 3 && (n.len() - 3) % 2 != 0) {
+                return None;
+            }
+            Some(bimble_core::hatches::HatchLine {
+                angle_deg: n[0],
+                spacing_mm: n[1],
+                offset_mm: n.get(2).copied().unwrap_or(0.0),
+                dash_mm: n.get(3..).map(<[f32]>::to_vec).unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+/// Hatch types (#44): name, solid fill, line families, colour, pen.
+fn hatch_types(ui: &mut egui::Ui, paper: &mut bimble_core::style::PaperStyle) -> bool {
+    let old: Vec<String> = paper.hatch_types.iter().map(|t| t.name.clone()).collect();
+    let v = &mut paper.hatch_types;
+    let mut changed = false;
+    let mut remove = None;
+    ui.weak("Lines: angle spacing [offset [dash gap…]] in mm on paper, \";\" between families.");
+    egui::ScrollArea::vertical()
+        .id_salt("hatch-types-scroll")
+        .max_height(300.0)
+        .show(ui, |ui| {
+            egui::Grid::new("hatch-types-grid")
+                .striped(true)
+                .spacing([6.0, 2.0])
+                .show(ui, |ui| {
+                    for h in ["Name", "Fill", "Lines", "Colour", "Pen", ""] {
+                        ui.strong(h);
+                    }
+                    ui.end_row();
+                    for (i, t) in v.iter_mut().enumerate() {
+                        changed |= ui
+                            .add(egui::TextEdit::singleline(&mut t.name).desired_width(120.0))
+                            .lost_focus();
+                        ui.horizontal(|ui| {
+                            let mut on = t.fill.is_some();
+                            if ui.checkbox(&mut on, "").changed() {
+                                t.fill = on.then_some(Rgb([200, 200, 200]));
+                                changed = true;
+                            }
+                            if let Some(f) = &mut t.fill {
+                                changed |= ui.color_edit_button_srgb(&mut f.0).changed();
+                            }
+                        });
+                        let mut text = hatch_lines_text(&t.lines);
+                        let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(160.0));
+                        if r.changed()
+                            && let Some(l) = parse_hatch_lines(&text)
+                        {
+                            t.lines = l;
+                            changed = true;
+                        }
+                        changed |= ui.color_edit_button_srgb(&mut t.color.0).changed();
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut t.pen).range(1..=16))
+                            .changed();
+                        if ui.small_button("x").clicked() {
+                            remove = Some(i);
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+    // A renamed hatch type: the materials that used it follow.
+    for (i, t) in paper.hatch_types.iter().enumerate() {
+        if let Some(o) = old.get(i)
+            && *o != t.name
+        {
+            for u in &mut paper.material_hatches {
+                for f in [&mut u.cut, &mut u.seen] {
+                    if f.as_deref() == Some(o.as_str()) {
+                        *f = Some(t.name.clone());
+                    }
+                }
+            }
+        }
+    }
+    if let Some(i) = remove {
+        // A removed hatch type: the materials that used it go back to their own pattern.
+        let name = paper.hatch_types.remove(i).name;
+        for u in &mut paper.material_hatches {
+            for f in [&mut u.cut, &mut u.seen] {
+                if f.as_deref() == Some(name.as_str()) {
+                    *f = None;
+                }
+            }
+        }
+        changed = true;
+    }
+    let v = &mut paper.hatch_types;
+    if ui.button("Add hatch type").clicked() {
+        let name = fresh_name("Hatch", |n| v.iter().any(|t| t.name == n));
+        v.push(bimble_core::hatches::HatchType {
+            name,
+            fill: None,
+            lines: vec![bimble_core::hatches::HatchLine {
+                angle_deg: 45.0,
+                spacing_mm: 2.0,
+                offset_mm: 0.0,
+                dash_mm: Vec::new(),
+            }],
+            color: Rgb([0, 0, 0]),
+            pen: 1,
+        });
+        changed = true;
+    }
+    changed
+}
+
+/// Which hatch type each material family uses where cut and where seen (#44).
+fn material_hatches(ui: &mut egui::Ui, paper: &mut bimble_core::style::PaperStyle) -> bool {
+    let names: Vec<String> = paper.hatch_types.iter().map(|t| t.name.clone()).collect();
+    let mut changed = false;
+    ui.weak("\"Own pattern\": the family's colour and pattern above, scaled to paper.");
+    egui::Grid::new("material-hatches-grid")
+        .num_columns(3)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            ui.strong("Material");
+            ui.strong("Cut");
+            ui.strong("Seen");
+            ui.end_row();
+            for c in MaterialCategory::ALL {
+                ui.label(c.label());
+                let u = match paper.material_hatches.iter().position(|u| u.category == c) {
+                    Some(i) => paper.material_hatches[i].clone(),
+                    None => bimble_core::hatches::MaterialHatch {
+                        category: c,
+                        cut: None,
+                        seen: None,
+                    },
+                };
+                let mut u2 = u.clone();
+                for (k, f) in [("cut", &mut u2.cut), ("seen", &mut u2.seen)] {
+                    egui::ComboBox::from_id_salt(("material-hatch", c.label(), k))
+                        .selected_text(f.clone().unwrap_or_else(|| "Own pattern".into()))
+                        .height(300.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(f, None, "Own pattern");
+                            for n in &names {
+                                ui.selectable_value(f, Some(n.clone()), n);
+                            }
+                        });
+                }
+                ui.end_row();
+                if u2 != u {
+                    paper.material_hatches.retain(|x| x.category != c);
+                    if u2.cut.is_some() || u2.seen.is_some() {
+                        paper.material_hatches.push(u2);
+                        paper.material_hatches.sort_by_key(|x| x.category);
+                    }
+                    changed = true;
+                }
+            }
+        });
     changed
 }
 
@@ -570,4 +761,22 @@ fn line_family(ui: &mut egui::Ui, c: MaterialCategory, k: usize, l: &mut Option<
         });
     }
     changed
+}
+
+#[cfg(test)]
+mod hatch_text_tests {
+    use super::*;
+
+    #[test]
+    fn hatch_lines_round_trip_through_text() {
+        for t in bimble_core::hatches::default_hatch_types() {
+            let s = hatch_lines_text(&t.lines);
+            assert_eq!(parse_hatch_lines(&s).unwrap(), t.lines, "{s}");
+        }
+        // An odd dash list, or a number missing, is refused.
+        assert!(parse_hatch_lines("45 2 0 1").is_none());
+        assert!(parse_hatch_lines("45").is_none());
+        assert!(parse_hatch_lines("45 x").is_none());
+        assert_eq!(parse_hatch_lines("").unwrap(), Vec::new());
+    }
 }

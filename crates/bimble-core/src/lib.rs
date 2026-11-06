@@ -5,6 +5,7 @@ pub mod date;
 pub mod demo;
 pub mod file;
 mod guid;
+pub mod hatches;
 mod model;
 pub mod pens;
 pub mod repo;

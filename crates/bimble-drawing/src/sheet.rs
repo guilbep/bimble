@@ -62,6 +62,8 @@ pub struct Hatch {
     /// Line direction, degrees counter-clockwise from horizontal (on paper, y up).
     pub angle_deg: f64,
     pub spacing_mm: f64,
+    /// Shift of the lines across their direction, mm.
+    pub offset_mm: f64,
     pub pen: Pen,
 }
 
@@ -242,14 +244,19 @@ fn hatch_lines(loops: &[Vec<[f64; 2]>], h: &Hatch) -> Vec<[[f64; 2]; 2]> {
         d1 = d1.max(proj(c, d));
     }
     // Lines at multiples of the spacing (aligned across areas, like a printed pattern).
-    let first = (n0 / h.spacing_mm).ceil() as i64;
-    let last = (n1 / h.spacing_mm).floor() as i64;
+    let off = if h.offset_mm.is_finite() {
+        h.offset_mm
+    } else {
+        0.0
+    };
+    let first = ((n0 - off) / h.spacing_mm).ceil() as i64;
+    let last = ((n1 - off) / h.spacing_mm).floor() as i64;
     if last - first > 100_000 {
         return Vec::new();
     }
     (first..=last)
         .map(|k| {
-            let s = k as f64 * h.spacing_mm;
+            let s = k as f64 * h.spacing_mm + off;
             let at = |t: f64| [n[0] * s + d[0] * t, n[1] * s + d[1] * t];
             [at(d0), at(d1)]
         })
@@ -631,6 +638,7 @@ mod tests {
                     hatches: vec![Hatch {
                         angle_deg: 45.0,
                         spacing_mm: 2.0,
+                        offset_mm: 0.0,
                         pen: Pen {
                             width_mm: 0.13,
                             color: black,
@@ -697,6 +705,7 @@ mod tests {
         let h = Hatch {
             angle_deg: 90.0,
             spacing_mm: 5.0,
+            offset_mm: 0.0,
             pen: Pen {
                 width_mm: 0.1,
                 color: Rgb([0, 0, 0]),
@@ -709,6 +718,19 @@ mod tests {
         for seg in &l {
             assert!((seg[0][0] - seg[1][0]).abs() < 1e-9, "vertical: {seg:?}");
         }
+        // Shifted by 1 mm across: x = 1, 6, ..., 96.
+        let l = hatch_lines(
+            &loops,
+            &Hatch {
+                offset_mm: 1.0,
+                ..h
+            },
+        );
+        assert_eq!(l.len(), 20);
+        assert!(
+            l.iter()
+                .all(|s| (s[0][0].rem_euclid(5.0) - 1.0).abs() < 1e-9)
+        );
     }
 
     #[test]

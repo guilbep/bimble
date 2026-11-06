@@ -211,6 +211,12 @@ pub struct PaperStyle {
     pub text_types: Vec<crate::pens::TextType>,
     #[serde(default = "crate::pens::default_dim_types")]
     pub dimension_types: Vec<crate::pens::DimType>,
+    /// Hatch types (#44), and which one each material family uses cut and seen. A family not
+    /// listed keeps its own pattern.
+    #[serde(default = "crate::hatches::default_hatch_types")]
+    pub hatch_types: Vec<crate::hatches::HatchType>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_hatches: Vec<crate::hatches::MaterialHatch>,
 }
 
 impl PaperStyle {
@@ -220,6 +226,20 @@ impl PaperStyle {
 
     pub fn dim_type(&self, name: &str) -> Option<&crate::pens::DimType> {
         self.dimension_types.iter().find(|t| t.name == name)
+    }
+
+    pub fn hatch_type(&self, name: &str) -> Option<&crate::hatches::HatchType> {
+        self.hatch_types.iter().find(|t| t.name == name)
+    }
+
+    /// The hatch type of a material family where it is cut (`cut`) or seen, if it has one.
+    pub fn material_hatch(
+        &self,
+        c: crate::MaterialCategory,
+        cut: bool,
+    ) -> Option<&crate::hatches::HatchType> {
+        let u = self.material_hatches.iter().find(|u| u.category == c)?;
+        self.hatch_type(if cut { u.cut.as_ref() } else { u.seen.as_ref() }?)
     }
 
     /// A line type by name.
@@ -321,6 +341,8 @@ impl Default for GraphicStyle {
                 lines: Default::default(),
                 text_types: crate::pens::default_text_types(),
                 dimension_types: crate::pens::default_dim_types(),
+                hatch_types: crate::hatches::default_hatch_types(),
+                material_hatches: Vec::new(),
             },
             families: Families {
                 concrete: Fill {
@@ -454,6 +476,7 @@ impl GraphicStyle {
         p.pens.validate()?;
         crate::pens::validate_lines(&p.line_types, &p.lines)?;
         crate::pens::validate_annotation_types(&p.text_types, &p.dimension_types, &p.line_types)?;
+        crate::hatches::validate_hatches(&p.hatch_types, &p.material_hatches)?;
         for c in MaterialCategory::ALL {
             let f = self.families.get(c);
             let at = |field: &str| format!("families.{}.{field}", c.label().to_lowercase());

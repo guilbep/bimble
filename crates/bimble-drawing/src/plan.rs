@@ -195,6 +195,7 @@ fn hatches_for(style: &GraphicStyle, c: MaterialCategory, scale: u32) -> Vec<Hat
         .map(|l| Hatch {
             angle_deg: l.angle_deg as f64,
             spacing_mm: l.spacing_px as f64 * mm_per_px,
+            offset_mm: 0.0,
             pen: Pen {
                 width_mm: role_pen(style, Role::Hatch, scale).width_mm,
                 color: hatch_ink,
@@ -213,6 +214,68 @@ fn hatches_for(style: &GraphicStyle, c: MaterialCategory, scale: u32) -> Vec<Hat
 /// The fill of what is seen below the cut: the family colour, lighter.
 fn seen_fill_for(style: &GraphicStyle, c: MaterialCategory) -> Rgb {
     lighten(style.families.get(c).color, style.paper.seen_lighten)
+}
+
+/// The lines of a hatch type (#44), its width from the model pens at the scale.
+fn hatch_type_lines(
+    style: &GraphicStyle,
+    h: &bimble_core::hatches::HatchType,
+    scale: u32,
+) -> Vec<Hatch> {
+    let width = style.paper.pens.model_mm(h.pen, scale).map_or_else(
+        || role_pen(style, Role::Hatch, scale).width_mm,
+        |w| w as f64,
+    );
+    h.lines
+        .iter()
+        .map(|l| Hatch {
+            angle_deg: l.angle_deg as f64,
+            spacing_mm: l.spacing_mm as f64,
+            offset_mm: l.offset_mm as f64,
+            pen: Pen {
+                width_mm: width,
+                color: h.color,
+                dash: l.dash_mm.iter().map(|&d| d as f64).collect(),
+            },
+        })
+        .collect()
+}
+
+/// Fill and hatches of a material family where it is cut: its hatch type if it has one, else
+/// its own colour and pattern.
+pub(crate) fn cut_look(
+    style: &GraphicStyle,
+    c: MaterialCategory,
+    scale: u32,
+) -> (Option<Rgb>, Vec<Hatch>) {
+    match style.paper.material_hatch(c, true) {
+        Some(h) => (
+            // No fill: white paper, hiding what lies under it.
+            Some(h.fill.unwrap_or(Rgb([255, 255, 255]))),
+            hatch_type_lines(style, h, scale),
+        ),
+        None => (
+            Some(style.families.get(c).color),
+            hatches_for(style, c, scale),
+        ),
+    }
+}
+
+/// Fill and hatches of a material family seen from above: its hatch type if it has one, else
+/// its colour, lighter.
+pub(crate) fn seen_look(
+    style: &GraphicStyle,
+    c: MaterialCategory,
+    scale: u32,
+) -> (Option<Rgb>, Vec<Hatch>) {
+    match style.paper.material_hatch(c, false) {
+        Some(h) => (
+            // No fill: white paper, hiding what lies under it.
+            Some(h.fill.unwrap_or(Rgb([255, 255, 255]))),
+            hatch_type_lines(style, h, scale),
+        ),
+        None => (Some(seen_fill_for(style, c)), Vec::new()),
+    }
 }
 
 /// The legend box, its bottom on `bottom` (paper mm), its left at `x0`.
@@ -261,18 +324,24 @@ pub(crate) fn draw_legend(
             [sx, sy + 4.0],
         ]];
         match sw {
-            Swatch::Cut(c) => items.push(Item::Area {
-                loops: rect,
-                fill: Some(style.families.get(*c).color),
-                hatches: hatches_for(style, *c, 100),
-                outline: Some(role_pen(style, Role::Cut, 100)),
-            }),
-            Swatch::Seen(c) => items.push(Item::Area {
-                loops: rect,
-                fill: Some(seen_fill_for(style, *c)),
-                hatches: Vec::new(),
-                outline: Some(proj_pen.clone()),
-            }),
+            Swatch::Cut(c) => {
+                let (fill, hatches) = cut_look(style, *c, 100);
+                items.push(Item::Area {
+                    loops: rect,
+                    fill,
+                    hatches,
+                    outline: Some(role_pen(style, Role::Cut, 100)),
+                })
+            }
+            Swatch::Seen(c) => {
+                let (fill, hatches) = seen_look(style, *c, 100);
+                items.push(Item::Area {
+                    loops: rect,
+                    fill,
+                    hatches,
+                    outline: Some(proj_pen.clone()),
+                })
+            }
             Swatch::Above => {
                 items.push(Item::Lines {
                     lines: vec![vec![[sx, sy + 2.0], [sx + 10.0, sy + 2.0]]],
@@ -762,8 +831,8 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             angle_deg,
             bold,
         };
-    let hatches_of = |c: MaterialCategory| hatches_for(style, c, o.scale);
-    let seen_fill = |c: MaterialCategory| seen_fill_for(style, c);
+    let cut_of = |c: MaterialCategory| cut_look(style, c, o.scale);
+    let seen_of = |c: MaterialCategory| seen_look(style, c, o.scale);
 
     // ---- items, back to front
     let mut items = Vec::new();
@@ -786,10 +855,11 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         if s.top.is_empty() {
             continue;
         }
+        let (fill, hatches) = seen_of(s.cat);
         items.push(Item::Area {
             loops: paper_loops(&s.top),
-            fill: Some(seen_fill(s.cat)),
-            hatches: Vec::new(),
+            fill,
+            hatches,
             outline: Some(proj_pen.clone()),
         });
         let slab = s.class.eq_ignore_ascii_case("IfcSlab");
@@ -916,10 +986,11 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         if c.loops.is_empty() {
             continue;
         }
+        let (fill, hatches) = cut_of(c.cat);
         items.push(Item::Area {
             loops: paper_loops(&c.loops),
-            fill: Some(style.families.get(c.cat).color),
-            hatches: hatches_of(c.cat),
+            fill,
+            hatches,
             outline: None,
         });
     }
@@ -1442,6 +1513,48 @@ mod tests {
 
     fn demo() -> Scene {
         Scene::from_model(&concrete_frame(&FrameSpec::default()))
+    }
+
+    /// A material given a hatch type is drawn with it where cut (#44): its spacing in paper mm,
+    /// its colour, its fill; the legend swatch follows.
+    #[test]
+    fn a_material_hatch_type_draws_cut_elements() {
+        use bimble_core::hatches::MaterialHatch;
+        let scene = demo();
+        let first = scene
+            .storeys
+            .iter()
+            .find(|s| s.elevation_mm >= 0.0)
+            .unwrap()
+            .name
+            .clone();
+        let mut o = opts(&first, 50, Some(Paper::A1));
+        o.style.paper.material_hatches = vec![MaterialHatch {
+            category: MaterialCategory::Concrete,
+            cut: Some("diagonals red".into()),
+            seen: None,
+        }];
+        let red = o.style.paper.hatch_type("diagonals red").unwrap().color;
+        let (sheet, _) = plan(&scene, &o).unwrap();
+        let hatched: Vec<&Hatch> = sheet
+            .items
+            .iter()
+            .flat_map(|i| match i {
+                Item::Area { hatches, .. } => hatches.iter().collect(),
+                _ => Vec::new(),
+            })
+            .filter(|h| h.pen.color == red)
+            .collect();
+        assert!(hatched.len() >= 12, "{}", hatched.len());
+        assert!(
+            hatched
+                .iter()
+                .all(|h| (h.spacing_mm - 2.0).abs() < 1e-9 && (h.angle_deg - 45.0).abs() < 1e-9)
+        );
+        // Without it, the family's own pattern: no red.
+        let (sheet, _) = plan(&scene, &opts(&first, 50, Some(Paper::A1))).unwrap();
+        assert!(!sheet.items.iter().any(|i| matches!(i,
+            Item::Area { hatches, .. } if hatches.iter().any(|h| h.pen.color == red))));
     }
 
     #[test]
