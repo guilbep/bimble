@@ -22,4 +22,4 @@ log.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 js-sys.workspace = true
-web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "Url", "Navigator"] }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "Url", "Navigator", "BeforeUnloadEvent", "Event"] }

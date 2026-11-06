@@ -27,6 +27,7 @@ mod measure;
 mod ribbon;
 mod section;
 mod snap;
+mod state;
 mod style_editor;
 mod ui_theme;
 mod viewcube;
@@ -164,6 +165,15 @@ fn bounds_with_links(scene: &Scene, links: &[Linked]) -> bimble_render::Sphere {
     })
 }
 
+/// A question the user must answer before Bimble goes on (ADR 0028).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Confirm {
+    /// The window is closing with unsaved work.
+    Close,
+    /// Reset every standard to the default.
+    ResetStandards,
+}
+
 struct Turn {
     from: (f32, f32),
     to: (f32, f32),
@@ -192,6 +202,7 @@ pub async fn start_web(canvas: web_sys::HtmlCanvasElement) -> Result<(), String>
                     .as_ref()
                     .ok_or("the viewer needs the wgpu renderer")?;
                 ui_theme::apply(&cc.egui_ctx);
+                state::guard_page_unload();
                 Ok(Box::new(Viewer::new(rs)))
             }),
         )
@@ -256,6 +267,7 @@ pub fn run(
             ui_theme::apply(&cc.egui_ctx);
             let mut app = Viewer::new(rs);
             app.opts.style = initial_style;
+            app.style_baseline = app.opts.style.clone();
             app.style_path = style;
             if let Some(f) = file {
                 app.open(f, &cc.egui_ctx);
@@ -431,6 +443,15 @@ struct Viewer {
 
     /// The Standards panel (graphic style) on the right (ADR 0027).
     standards_open: bool,
+    /// The standards as last loaded or saved (or the default): what "changed" is measured
+    /// against, and what Revert goes back to (ADR 0028).
+    style_baseline: GraphicStyle,
+    /// The plan template as last loaded (or the default), likewise for the plan options.
+    template_baseline: bimble_drawing::template::PlanTemplate,
+    /// A question waiting for an answer: close with unsaved work, reset the standards.
+    confirm: Option<Confirm>,
+    /// The user answered "close" to the question: let the window close.
+    allow_close: bool,
     standards_query: String,
     /// The ribbon's open tab, the command palette, tabs of open views and sheets.
     ribbon_tab: ribbon::Tab,
@@ -516,6 +537,10 @@ impl Viewer {
             plan_window: false,
             plan: PlanSettings::default(),
             standards_open: false,
+            style_baseline: GraphicStyle::default(),
+            template_baseline: Default::default(),
+            confirm: None,
+            allow_close: false,
             standards_query: String::new(),
             ribbon_tab: ribbon::Tab::default(),
             palette: None,
@@ -640,6 +665,7 @@ impl Viewer {
                     });
                     match r {
                         Ok(t) => {
+                            self.template_baseline = t.clone();
                             self.plan.template = t;
                             self.plan.template_path = Some(p.path_or_name());
                             self.plan.template_rev += 1;
@@ -655,6 +681,7 @@ impl Viewer {
                     });
                     match r {
                         Ok(s) => {
+                            self.style_baseline = s.clone();
                             self.opts.style = s;
                             self.style_message = Some(format!("Loaded {}", p.name));
                             self.style_path = Some(p.path_or_name());
@@ -2173,6 +2200,7 @@ impl Viewer {
                 p.template = Default::default();
                 p.template_path = None;
                 p.template_rev += 1;
+                self.template_baseline = Default::default();
             }
             ui.weak(match &p.template_path {
                 Some(path) => path
@@ -2313,6 +2341,24 @@ impl Viewer {
     }
 
     fn style_panel(&mut self, ui: &mut egui::Ui) {
+        // Which standards these are, and whether they are saved (ADR 0028).
+        let source = self
+            .style_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned());
+        let changed = self.opts.style != self.style_baseline;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(match &source {
+                Some(n) => format!("From {n}"),
+                None => "Bimble's default".to_string(),
+            });
+            if changed {
+                ui.colored_label(ui.visuals().warn_fg_color, "· changed, not saved");
+            } else {
+                ui.weak("· saved");
+            }
+        });
         ui.horizontal(|ui| {
             if ui.button("Load…").clicked() {
                 self.files.pick(files::Purpose::Style, ui.ctx());
@@ -2322,25 +2368,28 @@ impl Viewer {
                 .on_hover_text("Writes only what differs from the default style")
                 .clicked()
             {
-                let name = self
-                    .style_path
-                    .as_ref()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "style.json".into());
-                let json = self.opts.style.to_json_diff();
-                match files::save(&name, &[("Bimble style", &["json"])], json.as_bytes()) {
-                    Ok(Some(to)) => {
-                        self.style_message = Some(format!("Saved {to}"));
-                        self.style_path = Some(PathBuf::from(to));
-                    }
-                    Ok(None) => {}
-                    Err(e) => self.style_message = Some(e),
-                }
+                self.save_style();
             }
-            if ui.button("Reset").clicked() {
-                self.opts.style = GraphicStyle::default();
+            if ui
+                .add_enabled(changed, egui::Button::new("Revert"))
+                .on_hover_text(match &source {
+                    Some(n) => format!("Back to {n} as loaded or last saved"),
+                    None => "Back to Bimble's default".to_string(),
+                })
+                .clicked()
+            {
+                self.opts.style = self.style_baseline.clone();
                 self.needs_render = true;
+            }
+            if ui
+                .add_enabled(
+                    self.opts.style != GraphicStyle::default(),
+                    egui::Button::new("Reset to default…"),
+                )
+                .on_hover_text("Every standard back to Bimble's default (asks first)")
+                .clicked()
+            {
+                self.confirm = Some(Confirm::ResetStandards);
             }
         });
         if let Some(m) = &self.style_message {
@@ -2349,6 +2398,177 @@ impl Viewer {
         ui.separator();
         if style_editor::edit(ui, &mut self.opts.style, &mut self.standards_query) {
             self.needs_render = true;
+        }
+    }
+
+    /// Save the standards to a file (asks where). True when saved.
+    fn save_style(&mut self) -> bool {
+        let name = self
+            .style_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "style.json".into());
+        let json = self.opts.style.to_json_diff();
+        match files::save(&name, &[("Bimble style", &["json"])], json.as_bytes()) {
+            Ok(Some(to)) => {
+                self.style_message = Some(format!("Saved {to}"));
+                self.style_path = Some(PathBuf::from(to));
+                self.style_baseline = self.opts.style.clone();
+                true
+            }
+            Ok(None) => false,
+            Err(e) => {
+                self.style_message = Some(e);
+                false
+            }
+        }
+    }
+
+    /// What the viewer is doing, for the chips and the unsaved list (ADR 0028).
+    fn snapshot(&self) -> state::Snapshot {
+        let ed = self.loaded.as_ref().and_then(|l| l.edit.as_ref());
+        let hidden_links = self
+            .links
+            .iter()
+            .filter(|k| self.hidden_links.contains(&k.name()))
+            .count();
+        state::Snapshot {
+            placing: ed.and_then(|e| e.placing.as_ref()).map(|p| p.kind.label()),
+            measuring: self.measure_on,
+            sheet_tool: self.layout.as_ref().and_then(|l| match l.tool {
+                layout::Tool::Select => None,
+                layout::Tool::Text => Some("Text"),
+                layout::Tool::Dimension => Some("Dimension"),
+            }),
+            section_box: self.section_on && !self.in_2d(),
+            edges: self.opts.edges,
+            hatching: self.opts.hatching,
+            orthographic: self.camera.orthographic && !self.in_2d(),
+            hidden: [
+                self.hidden_categories.len(),
+                self.hidden_classes.len(),
+                self.hidden_storeys.len(),
+                hidden_links,
+            ],
+            measurements: self.dimensions.len(),
+            plan_options_changed: self.plan.template != self.template_baseline,
+            model_dirty: ed.is_some_and(|e| e.dirty),
+            views_dirty: self.side_views_dirty(),
+            standards_changed: self.opts.style != self.style_baseline,
+        }
+    }
+
+    /// Leave a state shown by a chip: back to the default.
+    fn reset_chip(&mut self, c: state::Chip, ctx: &egui::Context) {
+        use state::Chip;
+        match c {
+            Chip::Placing => {
+                if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
+                    ed.placing = None;
+                }
+            }
+            Chip::Measuring => self.run_action(ribbon::Action::Measure, ctx),
+            Chip::SheetTool => {
+                if let Some(l) = &mut self.layout {
+                    l.tool = layout::Tool::Select;
+                }
+            }
+            Chip::SectionBox => self.toggle_section_box(),
+            Chip::EdgesOff => self.run_action(ribbon::Action::Edges, ctx),
+            Chip::HatchingOff => self.run_action(ribbon::Action::Hatching, ctx),
+            Chip::Orthographic => self.run_action(ribbon::Action::Orthographic, ctx),
+            Chip::Hidden => self.show_all_in_view(),
+            Chip::Measurements => {
+                self.dimensions.clear();
+                self.measure_first = None;
+            }
+            Chip::PlanOptions => {
+                self.plan.template = self.template_baseline.clone();
+                self.plan.template_rev += 1;
+            }
+        }
+        self.needs_render = true;
+    }
+
+    /// The questions that need an answer before going on.
+    fn confirm_ui(&mut self, ctx: &egui::Context) {
+        let Some(c) = self.confirm else { return };
+        let unsaved = state::unsaved(&self.snapshot());
+        let mut answer: Option<bool> = None;
+        let mut save_all = false;
+        egui::Modal::new(egui::Id::unique("bimble-confirm")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            match c {
+                Confirm::Close => {
+                    ui.heading("Close Bimble?");
+                    ui.label(format!(
+                        "Not saved: {}. Closing now loses these changes.",
+                        unsaved.join(", ")
+                    ));
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Save and close").clicked() {
+                            save_all = true;
+                        }
+                        if ui.button("Close without saving").clicked() {
+                            answer = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            answer = Some(false);
+                        }
+                    });
+                }
+                Confirm::ResetStandards => {
+                    ui.heading("Reset the standards?");
+                    ui.label(
+                        "Every pen, line, text, dimension and hatch type, and every colour, goes \
+                         back to Bimble's default. Your style file is not changed; Revert or Load… \
+                         brings it back.",
+                    );
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Reset to default").clicked() {
+                            answer = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            answer = Some(false);
+                        }
+                    });
+                }
+            }
+        });
+        if save_all {
+            // Each unsaved kind saved in turn; close only when all of them are.
+            let s = self.snapshot();
+            if s.model_dirty || s.views_dirty {
+                if self.side_views.is_some() {
+                    self.save_side_views();
+                } else {
+                    self.save();
+                }
+            }
+            if s.standards_changed {
+                self.save_style();
+            }
+            answer = Some(state::unsaved(&self.snapshot()).is_empty());
+            if answer == Some(false) {
+                self.error = Some("Not everything was saved: Bimble stays open.".into());
+            }
+        }
+        match (c, answer) {
+            (Confirm::Close, Some(true)) => {
+                self.confirm = None;
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            (Confirm::ResetStandards, Some(true)) => {
+                self.confirm = None;
+                self.opts.style = GraphicStyle::default();
+                self.needs_render = true;
+            }
+            (_, Some(false)) => self.confirm = None,
+            _ => {}
         }
     }
 
@@ -2543,10 +2763,23 @@ impl Viewer {
             });
     }
 
-    fn status_bar(&self, ui: &mut egui::Ui) {
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let mut reset = None;
         ui.horizontal(|ui| {
             ui.label(self.status_hint());
             ui.separator();
+            // Every state that isn't the default, with its way back (ADR 0028).
+            for (chip, label) in state::chips(&self.snapshot()) {
+                let r = ui.add(
+                    egui::Button::new(egui::RichText::new(format!("{label}  ×")).small())
+                        .fill(ui_theme::SELECTED_BG)
+                        .corner_radius(10.0),
+                );
+                if r.on_hover_text(chip.reset_hint()).clicked() {
+                    reset = Some(chip);
+                }
+            }
             if let Some(l) = &self.loaded {
                 let visible = (0..l.scene.elements.len()).filter(|&i| self.visible(i)).count();
                 ui.weak(format!(
@@ -2561,6 +2794,9 @@ impl Viewer {
                 ui.weak(&self.adapter);
             });
         });
+        if let Some(c) = reset {
+            self.reset_chip(c, &ctx);
+        }
     }
 }
 
@@ -2792,6 +3028,20 @@ impl eframe::App for Viewer {
             }
         });
         self.palette_ui(&ctx);
+        #[cfg(target_arch = "wasm32")]
+        state::UNSAVED.store(
+            !state::unsaved(&self.snapshot()).is_empty(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        // Closing with unsaved work asks first (ADR 0028).
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.allow_close
+            && !state::unsaved(&self.snapshot()).is_empty()
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm = Some(Confirm::Close);
+        }
+        self.confirm_ui(&ctx);
     }
 }
 

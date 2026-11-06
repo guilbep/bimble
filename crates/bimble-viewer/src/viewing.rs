@@ -214,6 +214,27 @@ impl Viewer {
         }
     }
 
+    /// Show everything in the active view again, and save that with the view (ADR 0028).
+    pub(crate) fn show_all_in_view(&mut self) {
+        self.hidden_categories.clear();
+        self.hidden_classes.clear();
+        self.hidden_storeys.clear();
+        self.hidden_links.clear();
+        let editable =
+            self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) || self.side_views.is_some();
+        if editable
+            && let Some(mut v) = self.active_view().cloned()
+            && !v.visibility.is_empty()
+        {
+            v.visibility = Visibility::default();
+            if let Err(e) = self.store_view(v) {
+                self.view_message = Some(e);
+            }
+        }
+        self.view_form = None;
+        self.needs_upload = true;
+    }
+
     fn current_visibility(&self) -> Visibility {
         Visibility {
             hidden_families: self

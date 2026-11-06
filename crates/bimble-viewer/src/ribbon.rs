@@ -386,11 +386,19 @@ impl Viewer {
                     .file_name()
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                let dirty = self.action_enabled(Action::Save);
-                ui.label(
-                    egui::RichText::new(if dirty { format!("{name} •") } else { name })
-                        .color(th::TEXT_MUTED),
-                );
+                ui.label(egui::RichText::new(name).color(th::TEXT_MUTED));
+                // What isn't saved, said in words (ADR 0028).
+                let unsaved = crate::state::unsaved(&self.snapshot());
+                if !unsaved.is_empty() {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        format!("Not saved: {}", unsaved.join(", ")),
+                    )
+                    .on_hover_text(
+                        "Save (Ctrl S) saves the model or the views; the standards are saved \
+                         from their panel",
+                    );
+                }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let p = ui
