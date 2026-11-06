@@ -220,16 +220,91 @@ fn check_sheet(m: &Model, s: &crate::sheet::Sheet) -> Result<(), CommandError> {
     Ok(())
 }
 
-/// Undo/redo stacks. Each entry is a group of inverses applied together (one user action).
+impl Command {
+    /// What applying it to `m` does, in a few words for the Undo / Redo buttons: "move P1",
+    /// "change the sizes of B3", "add the sheet S-101". Names are read from `m` before applying.
+    pub fn describe(&self, m: &Model) -> String {
+        let el = |id: &GlobalId| {
+            m.elements
+                .get(id)
+                .map_or_else(|| "an element".to_string(), |e| e.name.clone())
+        };
+        let view = |id: &GlobalId| {
+            m.views
+                .get(id)
+                .map_or_else(|| "a view".to_string(), |v| format!("the view {}", v.name))
+        };
+        let sheet = |id: &GlobalId| {
+            m.sheets.get(id).map_or_else(
+                || "a sheet".to_string(),
+                |s| format!("the sheet {}", s.number),
+            )
+        };
+        match self {
+            Command::AddStorey(s) => format!("add the storey {}", s.name),
+            Command::RemoveStorey { id } => format!(
+                "delete the storey {}",
+                m.storeys.get(id).map_or("", |s| s.name.as_str())
+            ),
+            Command::AddMaterial(x) => format!("add the material {}", x.name),
+            Command::RemoveMaterial { id } => format!(
+                "delete the material {}",
+                m.materials.get(id).map_or("", |x| x.name.as_str())
+            ),
+            Command::AddElement(e) => format!("add {}", e.name),
+            Command::RemoveElement { id } => format!("delete {}", el(id)),
+            Command::SetGenerator { id, .. } => format!("change the sizes of {}", el(id)),
+            Command::SetPlacement { id, .. } => format!("move {}", el(id)),
+            Command::Rename { id, name } => format!("rename {} to {name}", el(id)),
+            Command::AddView(v) => format!("add the view {}", v.name),
+            Command::RemoveView { id } => format!("delete {}", view(id)),
+            Command::SetView(v) => match m.views.get(&v.id) {
+                Some(old) if old.name != v.name => {
+                    format!("rename the view {} to {}", old.name, v.name)
+                }
+                _ => format!("change the view {}", v.name),
+            },
+            Command::AddSheet(x) => format!("add the sheet {}", x.number),
+            Command::RemoveSheet { id } => format!("delete {}", sheet(id)),
+            Command::SetSheet(x) => format!("change the sheet {}", x.number),
+        }
+    }
+}
+
+/// What a group of commands does, from its first one: "move P1", "add P2 and 3 more".
+fn describe_group(cmds: &[Command], m: &Model) -> String {
+    match cmds {
+        [] => "nothing".into(),
+        [c] => c.describe(m),
+        [c, rest @ ..] => format!(
+            "{} and {} more change{}",
+            c.describe(m),
+            rest.len(),
+            if rest.len() == 1 { "" } else { "s" }
+        ),
+    }
+}
+
+/// One step of the history: what it did, in words, and the commands that take it back (or
+/// forward again).
+#[derive(Debug)]
+struct Step {
+    label: String,
+    cmds: Vec<Command>,
+}
+
+/// Undo/redo stacks. Each entry is a group of inverses applied together (one user action), with
+/// what that action did in words.
 #[derive(Default, Debug)]
 pub struct History {
-    undo: Vec<Vec<Command>>,
-    redo: Vec<Vec<Command>>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
 }
 
 impl History {
     /// Apply a group of commands as one transaction: all succeed or none are kept.
     pub fn apply(&mut self, m: &mut Model, cmds: Vec<Command>) -> Result<(), CommandError> {
+        let label = describe_group(&cmds, m);
         let mut inverses = Vec::with_capacity(cmds.len());
         for c in cmds {
             match c.apply(m) {
@@ -244,9 +319,22 @@ impl History {
             }
         }
         inverses.reverse();
-        self.undo.push(inverses);
+        self.undo.push(Step {
+            label,
+            cmds: inverses,
+        });
         self.redo.clear();
         Ok(())
+    }
+
+    /// What Undo would take back, in words; None when there is nothing to undo.
+    pub fn undo_label(&self) -> Option<&str> {
+        self.undo.last().map(|s| s.label.as_str())
+    }
+
+    /// What Redo would do again, in words; None when there is nothing to redo.
+    pub fn redo_label(&self) -> Option<&str> {
+        self.redo.last().map(|s| s.label.as_str())
     }
 
     pub fn undo(&mut self, m: &mut Model) -> bool {
@@ -257,16 +345,82 @@ impl History {
         Self::swap(m, &mut self.redo, &mut self.undo)
     }
 
-    fn swap(m: &mut Model, from: &mut Vec<Vec<Command>>, to: &mut Vec<Vec<Command>>) -> bool {
-        let Some(group) = from.pop() else {
+    fn swap(m: &mut Model, from: &mut Vec<Step>, to: &mut Vec<Step>) -> bool {
+        let Some(step) = from.pop() else {
             return false;
         };
-        let mut inv: Vec<Command> = group
+        let mut inv: Vec<Command> = step
+            .cmds
             .into_iter()
             .map(|c| c.apply(m).expect("history inverse must apply"))
             .collect();
         inv.reverse();
-        to.push(inv);
+        to.push(Step {
+            label: step.label,
+            cmds: inv,
+        });
         true
+    }
+}
+
+#[cfg(test)]
+mod describe_tests {
+    use super::*;
+    use crate::demo::{FrameSpec, concrete_frame};
+
+    /// Undo and Redo say what they would do, in words, and nothing when there is nothing.
+    #[test]
+    fn history_says_what_undo_and_redo_would_do() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        let mut h = History::default();
+        assert_eq!(h.undo_label(), None);
+        let e = m.elements.values().next().unwrap().clone();
+        let mut p = e.placement.clone();
+        p.origin[0] += 100.0;
+        h.apply(
+            &mut m,
+            vec![Command::SetPlacement {
+                id: e.id,
+                placement: p,
+            }],
+        )
+        .unwrap();
+        let moved = format!("move {}", e.name);
+        assert_eq!(h.undo_label(), Some(moved.as_str()));
+        assert_eq!(h.redo_label(), None);
+        assert!(h.undo(&mut m));
+        assert_eq!(h.undo_label(), None);
+        assert_eq!(h.redo_label(), Some(moved.as_str()));
+        // A rename, then several changes in one step.
+        h.apply(
+            &mut m,
+            vec![Command::Rename {
+                id: e.id,
+                name: "X1".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            h.undo_label(),
+            Some(format!("rename {} to X1", e.name).as_str())
+        );
+        assert_eq!(
+            h.redo_label(),
+            None,
+            "a new change drops what could be redone"
+        );
+        let ids: Vec<GlobalId> = m.elements.keys().take(3).copied().collect();
+        let names: Vec<String> = ids.iter().map(|i| m.elements[i].name.clone()).collect();
+        h.apply(
+            &mut m,
+            ids.iter()
+                .map(|id| Command::RemoveElement { id: *id })
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(
+            h.undo_label(),
+            Some(format!("delete {} and 2 more changes", names[0]).as_str())
+        );
     }
 }

@@ -213,6 +213,13 @@ pub(crate) fn matches(label: &str, query: &str) -> bool {
 }
 
 impl Viewer {
+    /// What Undo (or Redo) would do, in words (ADR 0028).
+    pub(crate) fn undo_text(&self, undo: bool) -> Option<String> {
+        let h = &self.loaded.as_ref()?.edit.as_ref()?.history;
+        let l = if undo { h.undo_label() } else { h.redo_label() }?;
+        Some(l.to_string())
+    }
+
     fn editable(&self) -> bool {
         self.loaded.as_ref().is_some_and(|l| l.edit.is_some())
     }
@@ -231,7 +238,9 @@ impl Viewer {
                         .and_then(|l| l.edit.as_ref())
                         .is_some_and(|e| e.dirty)
             }
-            Action::Undo | Action::Redo | Action::Place(_) | Action::History => self.editable(),
+            Action::Undo => self.undo_text(true).is_some(),
+            Action::Redo => self.undo_text(false).is_some(),
+            Action::Place(_) | Action::History => self.editable(),
             Action::Orthographic | Action::SectionBox | Action::Top => loaded && !flat,
             Action::BoxToSelection => loaded && !flat && self.section_on,
             Action::SheetTool(_) | Action::CloseSheet => self.layout.is_some(),
@@ -415,10 +424,41 @@ impl Viewer {
                 ui.add_space(th::GAP_L);
                 for a in [Action::Redo, Action::Undo, Action::Save, Action::Open] {
                     let b = ui.add_enabled(self.action_enabled(a), egui::Button::new(a.label()));
-                    let b = if a.keys().is_empty() {
+                    // Undo and Redo say what they would do; greyed, why not.
+                    let tip = match a {
+                        Action::Undo | Action::Redo => {
+                            let undo = a == Action::Undo;
+                            match self.undo_text(undo) {
+                                Some(t) => format!(
+                                    "{}: {t} ({})",
+                                    if undo { "Undo" } else { "Redo" },
+                                    a.keys()
+                                ),
+                                None => {
+                                    format!("Nothing to {}", if undo { "undo" } else { "redo" })
+                                }
+                            }
+                        }
+                        Action::Save => {
+                            let st = self.snapshot();
+                            let mut t = if st.model_dirty {
+                                "Save the model (Ctrl S)".to_string()
+                            } else if st.views_dirty {
+                                "Save the views next to the IFC (Ctrl S)".to_string()
+                            } else {
+                                "The model and its views are saved".to_string()
+                            };
+                            if st.standards_changed {
+                                t.push_str("\nThe standards are changed: Save… in their panel");
+                            }
+                            t
+                        }
+                        _ => a.keys().to_string(),
+                    };
+                    let b = if tip.is_empty() {
                         b
                     } else {
-                        b.on_hover_text(a.keys())
+                        b.on_hover_text(&tip).on_disabled_hover_text(&tip)
                     };
                     if b.clicked() {
                         run = Some(a);
