@@ -17,6 +17,10 @@
   <div id="status">Loading Bimble…<br><small>Files you open stay on this computer: nothing is uploaded.</small></div>
   <script type="module">
     import init from "./bimble_web.js";
+    import { loadManifold } from "./manifold-bridge.js";
+    // The geometry kernel first, so openings are cut in the first model opened. Without it,
+    // Bimble still runs and draws elements uncut.
+    try { await loadManifold(); } catch (e) { console.warn("manifold not loaded:", e); }
     init().catch((e) => {
       document.getElementById("status").textContent = "Bimble could not start: " + e;
     });

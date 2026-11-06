@@ -25,6 +25,7 @@ a decision that changes an old one says which one it supersedes.
 | [0017](0017-history-store.md) | History next to the model: content-addressed objects, branches, field-level merge | Accepted |
 | [0018](0018-plan-templates-and-conventions.md) | Plans like the office's: templates, seen fills, grid axes, dimension chains | Accepted |
 | [0019](0019-editing-in-the-viewer.md) | Editing .bimble models in the viewer through Commands; rebuild; history | Accepted |
+| [0020](0020-web-version.md) | Bimble in a browser: the same Rust as WebAssembly; WebGPU or WebGL2; manifold's own wasm | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

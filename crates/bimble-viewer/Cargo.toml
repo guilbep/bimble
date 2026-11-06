@@ -16,6 +16,7 @@ rfd.workspace = true
 glam.workspace = true
 serde_json.workspace = true
 web-time.workspace = true
+log.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen.workspace = true

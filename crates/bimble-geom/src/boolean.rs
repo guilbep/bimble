@@ -7,8 +7,6 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use manifold_csg::Manifold;
-#[cfg(not(target_arch = "wasm32"))]
-use std::collections::HashMap;
 
 pub type Tri = [[f64; 3]; 3];
 
@@ -30,7 +28,6 @@ impl std::fmt::Display for BooleanError {
 
 impl std::error::Error for BooleanError {}
 
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn bounds(sets: &[&[Tri]]) -> Option<([f64; 3], [f64; 3])> {
     let mut it = sets.iter().flat_map(|s| s.iter()).flat_map(|t| t.iter());
     let first = *it.next()?;
@@ -43,9 +40,9 @@ fn bounds(sets: &[&[Tri]]) -> Option<([f64; 3], [f64; 3])> {
     }))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn to_manifold(tris: &[Tri], origin: [f64; 3]) -> Result<Manifold, BooleanError> {
-    let mut index: HashMap<[u64; 3], u64> = HashMap::new();
+/// Shared vertices welded exactly (same bits after shifting to `origin`): positions and indices.
+fn weld(tris: &[Tri], origin: [f64; 3]) -> (Vec<f64>, Vec<u64>) {
+    let mut index: std::collections::HashMap<[u64; 3], u64> = std::collections::HashMap::new();
     let mut verts: Vec<f64> = Vec::new();
     let mut idx: Vec<u64> = Vec::with_capacity(tris.len() * 3);
     for t in tris {
@@ -65,6 +62,12 @@ fn to_manifold(tris: &[Tri], origin: [f64; 3]) -> Result<Manifold, BooleanError>
             idx.push(i);
         }
     }
+    (verts, idx)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn to_manifold(tris: &[Tri], origin: [f64; 3]) -> Result<Manifold, BooleanError> {
+    let (verts, idx) = weld(tris, origin);
     let m = Manifold::from_mesh_f64(&verts, 3, &idx)
         .map_err(|e| BooleanError(format!("not a closed solid: {e}")))?;
     m.status()
@@ -91,15 +94,6 @@ fn from_manifold(m: &Manifold, origin: [f64; 3]) -> Vec<Tri> {
 }
 
 /// `a op (union of b)`. Each operand must be one or more closed, non-overlapping solids.
-/// Not in the web build yet: callers draw the element uncut and report it (ADR 0020).
-#[cfg(target_arch = "wasm32")]
-pub fn apply(_op: Op, _a: &[Tri], _b: &[&[Tri]]) -> Result<Vec<Tri>, BooleanError> {
-    Err(BooleanError(
-        "boolean operations are not available in the web version yet".into(),
-    ))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub fn apply(op: Op, a: &[Tri], b: &[&[Tri]]) -> Result<Vec<Tri>, BooleanError> {
     let b: Vec<&[Tri]> = b.iter().copied().filter(|s| !s.is_empty()).collect();
     if b.is_empty() {
@@ -113,8 +107,13 @@ pub fn apply(op: Op, a: &[Tri], b: &[&[Tri]]) -> Result<Vec<Tri>, BooleanError> 
     let Some((lo, hi)) = bounds(&all) else {
         return Ok(Vec::new());
     };
+    // Coordinates relative to the middle keep full precision with site coordinates.
     let origin = [0, 1, 2].map(|k| ((lo[k] + hi[k]) / 2.0).round());
+    kernel(op, a, &b, origin)
+}
 
+#[cfg(not(target_arch = "wasm32"))]
+fn kernel(op: Op, a: &[Tri], b: &[&[Tri]], origin: [f64; 3]) -> Result<Vec<Tri>, BooleanError> {
     let ma = to_manifold(a, origin)?;
     let cutters: Vec<Manifold> = b
         .iter()
@@ -132,6 +131,75 @@ pub fn apply(op: Op, a: &[Tri], b: &[&[Tri]]) -> Result<Vec<Tri>, BooleanError> 
     r.status()
         .map_err(|e| BooleanError(format!("boolean failed: {e}")))?;
     Ok(from_manifold(&r, origin))
+}
+
+/// In a browser, the same kernel through its official WebAssembly build (npm `manifold-3d`),
+/// which the page loads and exposes as `bimbleBoolean` (web/manifold-bridge.js, ADR 0020).
+/// It takes f32 positions: relative to `origin`, that is 1 µm or better up to ±8 m.
+#[cfg(target_arch = "wasm32")]
+mod js {
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_name = bimbleBoolean, catch)]
+        pub fn boolean(
+            op: u32,
+            a_pos: &[f32],
+            a_tri: &[u32],
+            cutters: &js_sys::Array,
+        ) -> Result<js_sys::Array, JsValue>;
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn kernel(op: Op, a: &[Tri], b: &[&[Tri]], origin: [f64; 3]) -> Result<Vec<Tri>, BooleanError> {
+    let flat = |tris: &[Tri]| -> Result<(Vec<f32>, Vec<u32>), BooleanError> {
+        let (v, i) = weld(tris, origin);
+        let i = i
+            .into_iter()
+            .map(u32::try_from)
+            .collect::<Result<Vec<u32>, _>>()
+            .map_err(|_| BooleanError("mesh too large".into()))?;
+        Ok((v.into_iter().map(|x| x as f32).collect(), i))
+    };
+    let (ap, at) = flat(a)?;
+    let cutters = js_sys::Array::new();
+    for s in b {
+        let (p, t) = flat(s)?;
+        cutters.push(&js_sys::Array::of2(
+            &js_sys::Float32Array::from(p.as_slice()),
+            &js_sys::Uint32Array::from(t.as_slice()),
+        ));
+    }
+    let code = match op {
+        Op::Difference => 0,
+        Op::Union => 1,
+        Op::Intersection => 2,
+    };
+    let r = js::boolean(code, &ap, &at, &cutters).map_err(|e| {
+        BooleanError(
+            e.as_string()
+                .or_else(|| js_sys::Error::from(e).message().as_string())
+                .unwrap_or_else(|| "boolean failed".into()),
+        )
+    })?;
+    let pos = js_sys::Float32Array::from(r.get(0)).to_vec();
+    let tri = js_sys::Uint32Array::from(r.get(1)).to_vec();
+    let v = |i: u32| -> Option<[f64; 3]> {
+        let i = i as usize * 3;
+        Some([
+            *pos.get(i)? as f64 + origin[0],
+            *pos.get(i + 1)? as f64 + origin[1],
+            *pos.get(i + 2)? as f64 + origin[2],
+        ])
+    };
+    tri.as_chunks::<3>()
+        .0
+        .iter()
+        .map(|t| Some([v(t[0])?, v(t[1])?, v(t[2])?]))
+        .collect::<Option<Vec<Tri>>>()
+        .ok_or_else(|| BooleanError("bad mesh from the kernel".into()))
 }
 
 /// Closed box from `lo` to `hi`, outward-facing (for tests and half-space solids).

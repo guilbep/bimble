@@ -622,6 +622,10 @@ impl Viewer {
         let path = self.loading.take().unwrap().path;
         match result {
             Ok((scene, model, load_time)) => {
+                // Also in the browser's console, where they can be copied.
+                for w in scene.warnings.iter().take(50) {
+                    log::warn!("{w}");
+                }
                 let (classes, storeys, categories) = counts(&scene);
                 let bounds = bimble_render::Sphere::of(&scene);
                 self.loaded = Some(Loaded {

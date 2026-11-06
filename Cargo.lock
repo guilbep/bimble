@@ -501,8 +501,10 @@ version = "0.3.0"
 dependencies = [
  "bimble-core",
  "earcutr",
+ "js-sys",
  "manifold-csg",
  "rayon",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -543,6 +545,7 @@ dependencies = [
  "eframe",
  "glam",
  "js-sys",
+ "log",
  "rfd",
  "serde_json",
  "wasm-bindgen",
