@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bimble</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #f4f4f2; }
+    canvas#bimble { position: absolute; inset: 0; width: 100%; height: 100%; outline: none; }
+    #status { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%);
+              font: 15px system-ui, sans-serif; color: #333; text-align: center; max-width: 36em; }
+    #status:empty { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="bimble"></canvas>
+  <div id="status">Loading Bimble…<br><small>Files you open stay on this computer: nothing is uploaded.</small></div>
+  <script type="module">
+    import init from "./bimble_web.js";
+    import { loadManifold } from "./manifold-bridge.js";
+    // The geometry kernel first, so openings are cut in the first model opened. Without it,
+    // Bimble still runs and draws elements uncut.
+    try { await loadManifold(); } catch (e) { console.warn("manifold not loaded:", e); }
+    init().catch((e) => {
+      document.getElementById("status").textContent = "Bimble could not start: " + e;
+    });
+  </script>
+</body>
+</html>

@@ -80,6 +80,13 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
 - ✅ I2 history store and CLI (ADR 0017); editing in the viewer (ADR 0019): properties, move, copy,
   delete, place column/beam/wall/slab by clicking, undo/redo, save, commit, branches, merge
 
+**Next release (0.5): Bimble in a browser** (Pierre, 6 Nov; ADR 0020)
+- ✅ All crates build for WebAssembly; the viewer runs in a page (WebGPU or WebGL2), files opened
+  or dropped stay local, saving and exports are downloads, booleans through manifold's own wasm
+- ✅ CI builds the page; releases attach it and publish it on GitHub Pages (once Pages is enabled)
+- ☐ History in the browser (OPFS), wasm-opt, measure memory on large models, compare boolean
+  results element by element with the desktop
+
 **I0 — Core** ✅ (PR #1)
 - Crates: `bimble-core` (IFC-typed model, GlobalIds, generators, materials, commands + undo, hash, diff),
   `bimble-geom` (extrusion meshes), `bimble-ifc` (IFC4 export), `bimble-cli`

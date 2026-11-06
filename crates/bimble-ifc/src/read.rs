@@ -49,7 +49,15 @@ pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<Scene, ReadError> 
         return Err(ReadError::TooLarge(len));
     }
     let bytes = std::fs::read(path).map_err(ReadError::Io)?;
-    read_str(&String::from_utf8_lossy(&bytes))
+    read_bytes(&bytes)
+}
+
+/// Read an IFC file's content (e.g. picked in a browser). Same size cap as `read_file`.
+pub fn read_bytes(bytes: &[u8]) -> Result<Scene, ReadError> {
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(ReadError::TooLarge(bytes.len() as u64));
+    }
+    read_str(&String::from_utf8_lossy(bytes))
 }
 
 /// Caps that keep a malicious or broken file from exhausting memory or time. Mapped items can
@@ -201,7 +209,11 @@ pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadErr
         .map(|(k, n)| if n > 1 { format!("{k} (×{n})") } else { k })
         .collect();
     // Freeing millions of parsed values takes a noticeable time: do it off the caller's path.
+    // Freeing a big parsed file takes a while: off the caller's thread where there are threads.
+    #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || drop(file));
+    #[cfg(target_arch = "wasm32")]
+    drop(file);
     Ok(sb.finish())
 }
 

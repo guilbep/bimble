@@ -9,4 +9,12 @@ license.workspace = true
 rayon.workspace = true
 bimble-core.workspace = true
 earcutr.workspace = true
+
+# The kernel is C++: linked natively; in a browser its own WebAssembly build is called through
+# JavaScript (ADR 0020).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 manifold-csg.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+js-sys.workspace = true

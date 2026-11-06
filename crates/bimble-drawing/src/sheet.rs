@@ -512,7 +512,13 @@ impl Sheet {
     pub fn rasterize(&self, px_per_mm: f64) -> Result<Raster, String> {
         use resvg::{tiny_skia, usvg};
         let mut opt = usvg::Options::default();
-        opt.fontdb_mut().load_system_fonts();
+        let db = opt.fontdb_mut();
+        db.load_system_fonts();
+        // No system fonts (a browser, a bare container): the font egui ships, as sans-serif.
+        if db.is_empty() {
+            db.load_font_data(epaint_default_fonts::UBUNTU_LIGHT.to_vec());
+            db.set_sans_serif_family("Ubuntu");
+        }
         let tree = usvg::Tree::from_str(&self.to_svg(), &opt).map_err(|e| e.to_string())?;
         let size = tree.size();
         // usvg sizes are in px at 96 dpi; the sheet's are mm.

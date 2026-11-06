@@ -1,6 +1,14 @@
 //! Dates without a time-zone database: UTC only.
 
 /// Seconds since 1970-01-01 UTC, now.
+#[cfg(target_arch = "wasm32")]
+pub fn now_secs() -> i64 {
+    // std's clock panics in browsers.
+    (js_sys::Date::now() / 1000.0) as i64
+}
+
+/// Seconds since 1970-01-01 UTC, now.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

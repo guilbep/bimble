@@ -78,6 +78,16 @@ pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()>
     std::fs::rename(&tmp, path)
 }
 
+/// A model from a file's content (e.g. picked in a browser). Same size cap as `load`.
+pub fn from_bytes(bytes: &[u8]) -> Result<Model, FileError> {
+    if bytes.len() > MAX_FILE_BYTES {
+        return Err(FileError::TooLarge(bytes.len()));
+    }
+    let text = std::str::from_utf8(bytes)
+        .map_err(|e| FileError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+    from_str(text)
+}
+
 pub fn load(path: impl AsRef<std::path::Path>) -> Result<Model, FileError> {
     let len = std::fs::metadata(path.as_ref())?.len() as usize;
     if len > MAX_FILE_BYTES {

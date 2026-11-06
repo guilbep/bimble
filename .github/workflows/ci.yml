@@ -24,6 +24,28 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  # The browser build (ADR 0020): clippy for wasm32, then the page as a downloadable artifact.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: wasm-bindgen-cli (the version in Cargo.lock)
+        run: |
+          v=$(awk '/^name = "wasm-bindgen"$/ {getline; gsub(/version = |"/, ""); print; exit}' Cargo.lock)
+          [ "$(wasm-bindgen --version 2>/dev/null | awk '{print $2}')" = "$v" ] || cargo install wasm-bindgen-cli --version "$v" --locked
+      - run: cargo clippy -p bimble-web -p bimble-viewer --target wasm32-unknown-unknown -- -D warnings
+      - run: scripts/build-web.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bimble-web
+          path: web/dist
+          retention-days: 14
+
   # Our IFC export must open correctly in a reference implementation, and our IFC reader must
   # agree with it element by element.
   ifc-oracle:

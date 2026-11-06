@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/bimble-core", "crates/bimble-geom", "crates/bimble-ifc", "crates/bimble-render", "crates/bimble-drawing", "crates/bimble-viewer", "crates/bimble-cli"]
+members = ["crates/bimble-core", "crates/bimble-geom", "crates/bimble-ifc", "crates/bimble-render", "crates/bimble-drawing", "crates/bimble-viewer", "crates/bimble-cli", "crates/bimble-web"]
 
 [workspace.package]
 version = "0.4.0"
@@ -35,8 +35,17 @@ rayon = "1"
 pdf-writer = "0.15"
 # Rasterizes drawing sheets (plan preview, PNG output). Pure Rust.
 resvg = "0.49"
+# A font for rasterized sheets where the system has none (browsers, bare containers).
+epaint_default_fonts = "0.37"
 # Allocator for the bimble binary: parsing and freeing big IFC files are allocation-bound.
 mimalloc = { version = "0.1", default-features = false }
 # Geometry kernel (ADR 0010). No TBB: per-element booleans are small.
 manifold-csg = { version = "0.4", default-features = false }
 memory-stats = "1"
+log = "0.4"
+# Web build (wasm32): browser APIs, time and async glue.
+web-time = "1"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = "0.3"

@@ -44,6 +44,19 @@ bimble history merge frame.bimble variant      # by GlobalId, field by field; --
 
 `.bimble` models can also be edited in the viewer (Edit…, History…, Ctrl+Z / Ctrl+Y / Ctrl+S).
 
+## In a browser
+
+The viewer also runs in a web page (WebGPU, or WebGL2 where there is no WebGPU). Files you open
+stay on your computer: nothing is uploaded. Saving and plan exports are downloads; the model
+history is desktop-only for now.
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version <the wasm-bindgen version in Cargo.lock>
+scripts/build-web.sh                     # → web/dist/ (static files)
+python3 -m http.server -d web/dist 8000  # then open http://localhost:8000
+```
+
 ## Build from source
 
 ```bash
