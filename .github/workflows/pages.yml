@@ -24,10 +24,13 @@ concurrency:
 
 jobs:
   deploy:
-    # After a release run: only a successful one, for a tag (head_branch is the tag's name).
+    # After a release run: only a successful one started by pushing a tag (head_branch is then the
+    # tag's name). Release runs for pull requests have the PR's branch there: a branch named
+    # "views" passed a "starts with v" test alone.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     permissions:
