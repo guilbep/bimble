@@ -15,8 +15,9 @@ pub(crate) struct MaterialsPage {
     query: String,
     /// The selected material, by name.
     selected: Option<String>,
-    /// The name being typed (applied when the field is left).
-    name_edit: Option<String>,
+    /// The name being typed (applied when the field is left), with the name it started from:
+    /// when the material's name changes otherwise (undo), what was typed is dropped.
+    name_edit: Option<(String, String)>,
     /// Values being dragged or typed, for the material named (one undo step when done).
     props_edit: Option<(String, MaterialProps)>,
 }
@@ -96,6 +97,11 @@ impl Viewer {
         let mut select: Option<String> = None;
         let paper = self.opts.style.paper.clone();
         let families = self.opts.style.families;
+        // A refused change says why here (a name already taken, a value out of range).
+        let refused = self
+            .loaded
+            .as_ref()
+            .and_then(|l| l.edit.as_ref()?.message.clone());
         egui::Frame::new()
             .fill(th::PANEL_BG)
             .inner_margin(egui::Margin::same(th::GAP_L as i8))
@@ -108,6 +114,9 @@ impl Viewer {
                     "The IFC's materials, read only. Values come from the library grade their name \
                      refers to."
                 });
+                if let Some(m) = &refused {
+                    ui.colored_label(ui.visuals().warn_fg_color, m);
+                }
                 ui.add_space(th::GAP_M);
                 ui.horizontal_top(|ui| {
                     // ---- left: the list, then the library
@@ -209,8 +218,16 @@ impl Viewer {
                                 ui.label("Name");
                                 match &r.model {
                                     Some(m) => {
-                                        let text =
-                                            page.name_edit.get_or_insert_with(|| m.name.clone());
+                                        if page
+                                            .name_edit
+                                            .as_ref()
+                                            .is_some_and(|(from, _)| *from != m.name)
+                                        {
+                                            page.name_edit = None;
+                                        }
+                                        let (_, text) = page.name_edit.get_or_insert_with(|| {
+                                            (m.name.clone(), m.name.clone())
+                                        });
                                         let resp = ui.add_sized(
                                             [240.0, 22.0],
                                             egui::TextEdit::singleline(text),
@@ -430,6 +447,25 @@ impl Viewer {
                     });
                 });
             });
+        if select.is_some() && cmds.is_empty() {
+            // Another material chosen: what was typed for this one is kept first.
+            cmds = self.materials_pending();
+        }
+        if !cmds.is_empty() {
+            self.apply_commands(cmds);
+            let refused = self
+                .loaded
+                .as_ref()
+                .is_some_and(|l| l.edit.as_ref().is_some_and(|e| e.message.is_some()));
+            if let Some(p) = &mut self.materials_page {
+                p.name_edit = None;
+                p.props_edit = None;
+                if refused && select.as_ref() != p.selected.as_ref() {
+                    // A rename refused: stay on the material, under its name.
+                    select = None;
+                }
+            }
+        }
         if let Some(s) = select
             && let Some(p) = &mut self.materials_page
         {
@@ -437,15 +473,59 @@ impl Viewer {
             p.name_edit = None;
             p.props_edit = None;
         }
-        if !cmds.is_empty() {
-            self.apply_commands(cmds);
-            if let Some(p) = &mut self.materials_page {
-                p.name_edit = None;
-            }
-        }
         if let Some(q) = open_standards {
             self.standards_open = true;
             self.standards_query = q;
+        }
+    }
+}
+
+impl Viewer {
+    /// What was typed or dragged on the page and not stored yet, as commands: a name not yet
+    /// confirmed, values held while dragging.
+    fn materials_pending(&self) -> Vec<bimble_core::Command> {
+        let (Some(p), Some(ed)) = (
+            &self.materials_page,
+            self.loaded.as_ref().and_then(|l| l.edit.as_ref()),
+        ) else {
+            return Vec::new();
+        };
+        let Some(m) = ed
+            .model
+            .materials
+            .values()
+            .find(|m| Some(&m.name) == p.selected.as_ref())
+        else {
+            return Vec::new();
+        };
+        let mut x = m.clone();
+        if let Some((n, props)) = &p.props_edit
+            && *n == m.name
+        {
+            x.props = props.clone();
+        }
+        if let Some((from, n)) = &p.name_edit
+            && *from == m.name
+            && !n.trim().is_empty()
+        {
+            x.name = n.trim().to_string();
+        }
+        if x == *m {
+            Vec::new()
+        } else {
+            vec![bimble_core::Command::SetMaterial(x)]
+        }
+    }
+
+    /// Store what the page holds before it goes away (another page, a view, closing).
+    pub(crate) fn commit_materials_page(&mut self) {
+        let cmds = self.materials_pending();
+        if !cmds.is_empty() {
+            self.apply_commands(cmds);
+        }
+        if let Some(p) = &mut self.materials_page {
+            p.name_edit = None;
+            p.props_edit = None;
         }
     }
 }

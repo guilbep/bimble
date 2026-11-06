@@ -397,7 +397,7 @@ impl Viewer {
             Action::Standards => self.standards_open = !self.standards_open,
             Action::Project => {
                 if self.project_page.is_some() {
-                    self.project_page = None;
+                    self.close_pages();
                 } else {
                     self.close_pages();
                     self.close_sheet();
@@ -406,7 +406,7 @@ impl Viewer {
             }
             Action::Materials => {
                 if self.materials_page.is_some() {
-                    self.materials_page = None;
+                    self.close_pages();
                 } else {
                     self.close_pages();
                     self.close_sheet();
@@ -1096,7 +1096,8 @@ impl Viewer {
                                     if on {
                                         row.scroll_to_me(None);
                                     }
-                                    if row.clicked() {
+                                    // A greyed command can't run now: the palette stays open.
+                                    if row.clicked() && *enabled {
                                         run = Some(go.clone());
                                     }
                                 }
@@ -1115,7 +1116,10 @@ impl Viewer {
         });
         let settled = p.frames >= 2;
         close |= settled && (outside || (lost && !enter));
-        if enter && let Some(e) = found.get(p.index) {
+        if enter
+            && let Some(e) = found.get(p.index)
+            && e.2
+        {
             run = Some(e.3.clone());
         }
         if let Some(p) = &mut self.palette {

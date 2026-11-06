@@ -10,13 +10,18 @@ use bimble_core::project::{KNOWN, key_of};
 #[derive(Default)]
 pub(crate) struct ProjectPage {
     form: Option<BTreeMap<String, String>>,
+    /// The project the form was taken from: when the project changes (undo, another file) the
+    /// form follows it; otherwise what was typed is kept until stored.
+    base: Option<BTreeMap<String, String>>,
     new_field: String,
     message: Option<String>,
 }
 
 impl Viewer {
     /// Store project information: a command in a `.bimble` model, the side file for an IFC.
-    fn store_project(&mut self, project: BTreeMap<String, String>) -> Result<(), String> {
+    fn store_project(&mut self, mut project: BTreeMap<String, String>) -> Result<(), String> {
+        // An entry emptied is removed (ADR 0030): a field of one's own too.
+        project.retain(|_, v| !v.trim().is_empty());
         bimble_core::project::validate(&project)?;
         if self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) {
             self.apply_commands(vec![bimble_core::Command::SetProject { project }]);
@@ -34,9 +39,12 @@ impl Viewer {
     pub(crate) fn project_ui(&mut self, ui: &mut egui::Ui) {
         let current = self.project_info();
         let page = self.project_page.get_or_insert_with(ProjectPage::default);
-        // The form follows the model (undo, another file) unless something is being typed.
-        if page.form.is_none() || !ui.ctx().egui_wants_keyboard_input() {
+        // The form follows the project when the project changes (undo, another file). It is not
+        // reset merely because no field has the focus: a click elsewhere takes the focus away
+        // before the field reports it, and the typed value would be lost.
+        if page.form.is_none() || page.base.as_ref() != Some(&current) {
             page.form = Some(current.clone());
+            page.base = Some(current.clone());
         }
         let ifc = self.loaded.as_ref().is_some_and(|l| l.edit.is_none());
         let mut commit = false;
@@ -171,14 +179,28 @@ impl Viewer {
             commit = true;
         }
         if commit {
-            let f = form.clone();
-            if f != current {
+            self.commit_project_page();
+        }
+    }
+
+    /// Store what the page's form holds, if it differs from the project (when a field is left,
+    /// and before the page goes away: another page, a view, closing).
+    pub(crate) fn commit_project_page(&mut self) {
+        let current = self.project_info();
+        let Some(f) = self.project_page.as_ref().and_then(|p| p.form.clone()) else {
+            return;
+        };
+        {
+            let mut kept = f.clone();
+            kept.retain(|_, v| !v.trim().is_empty());
+            if kept != current {
                 let r = self.store_project(f);
                 let page = self.project_page.as_mut().expect("set above");
                 match r {
                     Ok(()) => {
                         page.message = None;
                         page.form = None;
+                        page.base = None;
                     }
                     Err(e) => page.message = Some(e),
                 }

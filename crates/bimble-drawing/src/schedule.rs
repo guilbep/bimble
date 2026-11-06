@@ -252,7 +252,17 @@ fn crossings(scene: &Scene) -> Vec<([f64; 2], String)> {
 }
 
 /// A cell of a field for an element.
-fn cell(f: Field, e: &SceneElement, m: &Measures, location: &str) -> Cell {
+/// A material's density (kg/m³): the model's own value, else its library grade's (ADR 0031).
+pub fn density(scene: &Scene, material: &str) -> Option<f64> {
+    scene
+        .densities
+        .get(material)
+        .copied()
+        .or_else(|| bimble_core::library::lookup(material).and_then(|l| l.props.density_kg_m3))
+}
+
+/// `density`: kg/m³ of the element's material, if known (for Mass).
+fn cell(f: Field, e: &SceneElement, m: &Measures, location: &str, density: Option<f64>) -> Cell {
     let text = |s: &str| {
         if s.is_empty() {
             Cell::Empty
@@ -272,12 +282,10 @@ fn cell(f: Field, e: &SceneElement, m: &Measures, location: &str) -> Cell {
         Field::Height => Cell::Num(m.height / 10.0, 1),
         Field::Area => Cell::Num(m.area_m2, 2),
         Field::Volume => Cell::Num(m.volume_m3, 3),
-        Field::Mass => {
-            match bimble_core::library::lookup(&e.material).and_then(|l| l.props.density_kg_m3) {
-                Some(rho) => Cell::Num(m.volume_m3 * rho, 0),
-                None => Cell::Empty,
-            }
-        }
+        Field::Mass => match density {
+            Some(rho) => Cell::Num(m.volume_m3 * rho, 0),
+            None => Cell::Empty,
+        },
         Field::GlobalId => text(&e.global_id),
     }
 }
@@ -336,10 +344,11 @@ pub fn schedule(scene: &Scene, def: &ScheduleDef) -> Table {
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, n)| n.clone())
             .unwrap_or_default();
+        let rho = density(scene, &e.material);
         let cells: Vec<Cell> = def
             .fields
             .iter()
-            .map(|f| cell(*f, e, &m, &location))
+            .map(|f| cell(*f, e, &m, &location, rho))
             .collect();
         let key = vec![Cell::Text(location.clone()), Cell::Text(e.name.clone())];
         rows.push((e.storey.clone(), Row { element: i, cells }, key));
@@ -588,5 +597,30 @@ mod tests {
         let mut v = ["P10", "P9", "P1"].map(|s| Cell::Text(s.into()));
         v.sort_by(|a, b| a.sort_key().partial_cmp(&b.sort_key()).unwrap());
         assert_eq!(v.map(|c| c.text()), ["P1", "P9", "P10"]);
+    }
+
+    /// Mass uses the density the model gives its material (edited in the material browser), not
+    /// only the library grade's: 2000 kg/m³ set on C30/37 gives 2000 × volume.
+    #[test]
+    fn mass_uses_the_models_density() {
+        let mut model = concrete_frame(&FrameSpec::default());
+        for x in model.materials.values_mut() {
+            x.props.density_kg_m3 = Some(2000.0);
+        }
+        let scene = Scene::from_model(&model);
+        let def = default_schedules()
+            .into_iter()
+            .find(|d| d.name == "All elements")
+            .unwrap();
+        let (v, k) = (
+            def.fields.iter().position(|f| *f == Field::Volume).unwrap(),
+            def.fields.iter().position(|f| *f == Field::Mass).unwrap(),
+        );
+        let t = schedule(&scene, &def);
+        let r = &t.groups[0].rows[0];
+        let (Cell::Num(vol, _), Cell::Num(mass, _)) = (&r.cells[v], &r.cells[k]) else {
+            panic!("volume and mass are numbers");
+        };
+        assert!((mass - vol * 2000.0).abs() < 1e-6, "{mass} vs {vol}");
     }
 }

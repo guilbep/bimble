@@ -11,8 +11,9 @@ pub(crate) struct OpenSchedule {
     pub name: String,
     /// The table, for a scene revision and a definition.
     table: Option<((u64, String), Table)>,
-    /// Sorted by this column, ascending or not; none: by level, location and name.
-    sort: Option<(usize, bool)>,
+    /// Sorted by this field, ascending or not; none: by level, location and name. A field, not
+    /// a column index: columns can be removed or moved while the schedule is open.
+    sort: Option<(Field, bool)>,
 }
 
 impl OpenSchedule {
@@ -136,6 +137,7 @@ impl Viewer {
     /// Open a schedule in the main view (a sheet open is closed; the view stays as it was).
     pub(crate) fn open_schedule(&mut self, name: &str) {
         self.close_sheet();
+        self.commit_pages();
         self.project_page = None;
         self.materials_page = None;
         if self.schedule.as_ref().is_some_and(|s| s.name == name) {
@@ -157,16 +159,11 @@ impl Viewer {
         }
         let (_, t) = s.table.as_ref()?;
         let mut t = t.clone();
-        if let Some((col, asc)) = s.sort {
-            for g in &mut t.groups {
-                g.rows.sort_by(|a, b| {
-                    let o = a.cells[col]
-                        .sort_key()
-                        .partial_cmp(&b.cells[col].sort_key())
-                        .unwrap_or(std::cmp::Ordering::Equal);
-                    if asc { o } else { o.reverse() }
-                });
-            }
+        // A column gone: back to the default order, which the header then shows.
+        if let Some(sort) = s.sort
+            && !sort_rows(&mut t, sort)
+        {
+            s.sort = None;
         }
         Some(t)
     }
@@ -227,10 +224,10 @@ impl Viewer {
                             .spacing([16.0, 4.0])
                             .min_col_width(40.0)
                             .show(ui, |ui| {
-                                for (k, f) in t.fields.iter().enumerate() {
+                                for f in &t.fields {
                                     let mark = match sort {
-                                        Some((c, true)) if c == k => " (up)",
-                                        Some((c, false)) if c == k => " (down)",
+                                        Some((c, true)) if c == *f => " (up)",
+                                        Some((c, false)) if c == *f => " (down)",
                                         _ => "",
                                     };
                                     if ui
@@ -245,8 +242,8 @@ impl Viewer {
                                         .clicked()
                                     {
                                         new_sort = Some(Some(match sort {
-                                            Some((c, asc)) if c == k => (k, !asc),
-                                            _ => (k, true),
+                                            Some((c, asc)) if c == *f => (*f, !asc),
+                                            _ => (*f, true),
                                         }));
                                     }
                                 }
@@ -518,5 +515,84 @@ impl Viewer {
         if let Err(e) = r {
             self.view_message = Some(e);
         }
+    }
+}
+
+/// Sort each group's rows by a field; false (rows unchanged) when the table has no such column.
+fn sort_rows(t: &mut Table, (field, asc): (Field, bool)) -> bool {
+    let Some(col) = t.fields.iter().position(|f| *f == field) else {
+        return false;
+    };
+    for g in &mut t.groups {
+        g.rows.sort_by(|a, b| {
+            let (Some(x), Some(y)) = (a.cells.get(col), b.cells.get(col)) else {
+                return std::cmp::Ordering::Equal;
+            };
+            let o = x
+                .sort_key()
+                .partial_cmp(&y.sort_key())
+                .unwrap_or(std::cmp::Ordering::Equal);
+            if asc { o } else { o.reverse() }
+        });
+    }
+    true
+}
+
+/// After undo or redo removed the open schedule's name: the one name that appeared, if exactly one
+/// did (a rename undone), else none (the schedule itself was undone).
+pub(crate) fn follow_rename(before: &[String], after: &[String]) -> Option<String> {
+    let mut new = after.iter().filter(|n| !before.contains(n));
+    match (new.next(), new.next()) {
+        (Some(n), None) => Some(n.clone()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn undo_follows_a_rename_or_closes() {
+        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // "Schedule 1" renamed "Piles", undone: back to "Schedule 1".
+        assert_eq!(
+            follow_rename(&v(&["Slabs", "Piles"]), &v(&["Slabs", "Schedule 1"])),
+            Some("Schedule 1".into())
+        );
+        // "New schedule" undone: nothing to follow.
+        assert_eq!(
+            follow_rename(&v(&["Slabs", "Schedule 1"]), &v(&["Slabs"])),
+            None
+        );
+    }
+    use super::*;
+    use bimble_core::demo::{FrameSpec, concrete_frame};
+    use bimble_core::schedule::default_schedules;
+
+    /// Sorted by its last column, then that column removed (or undone): the old index pointed past
+    /// the row's cells and panicked. A field that is gone leaves the order as it is.
+    #[test]
+    fn sort_by_a_removed_column_is_ignored() {
+        let scene = bimble_geom::Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let mut def = default_schedules()
+            .into_iter()
+            .find(|d| d.name == "Concrete beams")
+            .unwrap();
+        let last = *def.fields.last().unwrap();
+        let mut t = schedule(&scene, &def);
+        assert!(sort_rows(&mut t, (last, false)));
+        def.fields.pop();
+        let mut t = schedule(&scene, &def);
+        let before: Vec<usize> = t
+            .groups
+            .iter()
+            .flat_map(|g| g.rows.iter().map(|r| r.element))
+            .collect();
+        assert!(!sort_rows(&mut t, (last, true)));
+        let after: Vec<usize> = t
+            .groups
+            .iter()
+            .flat_map(|g| g.rows.iter().map(|r| r.element))
+            .collect();
+        assert_eq!(before, after);
     }
 }

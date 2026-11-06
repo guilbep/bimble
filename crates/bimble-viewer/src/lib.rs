@@ -185,6 +185,8 @@ fn bounds_with_links(scene: &Scene, links: &[Linked]) -> bimble_render::Sphere {
 enum Confirm {
     /// The window is closing with unsaved work.
     Close,
+    /// A model or views file is opening over unsaved work (`pending_open`).
+    Open,
     /// Reset every standard to the default.
     ResetStandards,
 }
@@ -467,6 +469,8 @@ struct Viewer {
     confirm: Option<Confirm>,
     /// The user answered "close" to the question: let the window close.
     allow_close: bool,
+    /// The file waiting for the answer to `Confirm::Open`.
+    pending_open: Option<files::Picked>,
     standards_query: String,
     /// The ribbon's open tab, the command palette, tabs of open views and sheets.
     ribbon_tab: ribbon::Tab,
@@ -563,6 +567,7 @@ impl Viewer {
             template_baseline: Default::default(),
             confirm: None,
             allow_close: false,
+            pending_open: None,
             standards_query: String::new(),
             ribbon_tab: ribbon::Tab::default(),
             palette: None,
@@ -647,9 +652,27 @@ impl Viewer {
         ctx.request_repaint();
     }
 
-    /// Files picked in dialogs (or dropped), by what they are for.
+    /// Files picked in dialogs (or dropped), by what they are for. Opening a model or a views
+    /// file over unsaved work asks first (ADR 0028), as closing does.
     fn handle_picked(&mut self, ctx: &egui::Context) {
-        while let Some(p) = self.files.poll() {
+        while self.confirm.is_none() {
+            let Some(p) = self.files.poll() else { break };
+            let replaces = p.purpose == files::Purpose::Open
+                && ![".dxf", ".pdf", ".dwg"]
+                    .iter()
+                    .any(|x| p.name.to_ascii_lowercase().ends_with(x));
+            let s = self.snapshot();
+            if replaces && (s.model_dirty || s.views_dirty) {
+                self.pending_open = Some(p);
+                self.confirm = Some(Confirm::Open);
+                break;
+            }
+            self.handle_one(p, ctx);
+        }
+    }
+
+    fn handle_one(&mut self, p: files::Picked, ctx: &egui::Context) {
+        {
             // A plan dropped on a 2D view is a reference plan for it.
             let lower = p.name.to_ascii_lowercase();
             if p.purpose == files::Purpose::Open
@@ -666,7 +689,7 @@ impl Viewer {
                         p.name
                     ));
                 }
-                continue;
+                return;
             }
             // A views side file (#36), recognised by its format field.
             if p.purpose == files::Purpose::Open && lower.ends_with(".json") {
@@ -677,7 +700,7 @@ impl Viewer {
                     }
                     Err(e) => self.error = Some(e),
                 }
-                continue;
+                return;
             }
             match p.purpose {
                 files::Purpose::Reference => self.add_reference(p),
@@ -883,8 +906,22 @@ impl Viewer {
         let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) else {
             return;
         };
+        let before: Vec<String> = bimble_core::schedule::effective(&ed.model.schedules)
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
         if if undo { ed.undo() } else { ed.redo() } {
             self.rebuild_scene(None);
+            let after: Vec<String> = self.schedule_defs().into_iter().map(|d| d.name).collect();
+            if let Some(o) = &mut self.schedule
+                && !after.contains(&o.name)
+            {
+                // Undoing a rename: follow it; undoing "New schedule": nothing left to show.
+                match schedules::follow_rename(&before, &after) {
+                    Some(n) => o.name = n,
+                    None => self.schedule = None,
+                }
+            }
         }
     }
 
@@ -1220,9 +1257,17 @@ impl Viewer {
     /// Close the pages that take the main view (schedule, project, materials): a view, a sheet
     /// or another page is shown instead.
     pub(crate) fn close_pages(&mut self) {
+        // What was typed on a page and not yet stored is stored first, not lost.
+        self.commit_pages();
         self.schedule = None;
         self.project_page = None;
         self.materials_page = None;
+    }
+
+    /// Store what pages hold and haven't stored yet (a field still being typed in).
+    pub(crate) fn commit_pages(&mut self) {
+        self.commit_project_page();
+        self.commit_materials_page();
     }
 
     /// Change the element under the cursor; uploads its edges for the highlight.
@@ -2319,9 +2364,15 @@ impl Viewer {
             self.opts.style.clone(),
             px_w / 50 * 50,
             p.template_rev,
-            view.as_ref()
-                .map(|v| serde_json::to_string(v).unwrap_or_default())
-                .unwrap_or_default(),
+            // The view, and the project information its title block shows.
+            format!(
+                "{}|{}",
+                view.as_ref()
+                    .map(|v| serde_json::to_string(v).unwrap_or_default())
+                    .unwrap_or_default(),
+                serde_json::to_string(&project_of(&self.loaded, &self.side_views))
+                    .unwrap_or_default()
+            ),
         );
         if p.preview_image.as_ref().is_none_or(|i| i.key != key) {
             let opts = plan_options(
@@ -2555,6 +2606,26 @@ impl Viewer {
                         }
                     });
                 }
+                Confirm::Open => {
+                    let name = self.pending_open.as_ref().map_or("", |p| p.name.as_str());
+                    ui.heading(format!("Open {name}?"));
+                    ui.label(format!(
+                        "Not saved: {}. Opening another file now loses these changes.",
+                        unsaved.join(", ")
+                    ));
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Save, then open").clicked() {
+                            save_all = true;
+                        }
+                        if ui.button("Open without saving").clicked() {
+                            answer = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            answer = Some(false);
+                        }
+                    });
+                }
                 Confirm::ResetStandards => {
                     ui.heading("Reset the standards?");
                     ui.label(
@@ -2587,9 +2658,31 @@ impl Viewer {
             if s.standards_changed {
                 self.save_style();
             }
-            answer = Some(state::unsaved(&self.snapshot()).is_empty());
-            if answer == Some(false) {
-                self.error = Some("Not everything was saved: Bimble stays open.".into());
+            let s = self.snapshot();
+            let saved = match c {
+                // Opening replaces the model and views, not the standards.
+                Confirm::Open => !s.model_dirty && !s.views_dirty,
+                _ => state::unsaved(&s).is_empty(),
+            };
+            if saved {
+                answer = Some(true);
+            } else {
+                // The save's own message says why; the question stays open to choose again.
+                let why = self
+                    .error
+                    .clone()
+                    .or_else(|| {
+                        self.loaded
+                            .as_ref()
+                            .and_then(|l| l.edit.as_ref()?.message.clone())
+                    })
+                    .or_else(|| self.view_message.clone())
+                    .unwrap_or_default();
+                self.error = Some(
+                    format!("Not everything was saved. {why}")
+                        .trim()
+                        .to_string(),
+                );
             }
         }
         match (c, answer) {
@@ -2598,12 +2691,21 @@ impl Viewer {
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
+            (Confirm::Open, Some(true)) => {
+                self.confirm = None;
+                if let Some(p) = self.pending_open.take() {
+                    self.handle_one(p, ctx);
+                }
+            }
             (Confirm::ResetStandards, Some(true)) => {
                 self.confirm = None;
                 self.opts.style = GraphicStyle::default();
                 self.needs_render = true;
             }
-            (_, Some(false)) => self.confirm = None,
+            (_, Some(false)) => {
+                self.confirm = None;
+                self.pending_open = None;
+            }
             _ => {}
         }
     }
@@ -3087,12 +3189,15 @@ impl eframe::App for Viewer {
             std::sync::atomic::Ordering::Relaxed,
         );
         // Closing with unsaved work asks first (ADR 0028).
-        if ctx.input(|i| i.viewport().close_requested())
-            && !self.allow_close
-            && !state::unsaved(&self.snapshot()).is_empty()
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.confirm = Some(Confirm::Close);
+        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
+            // A value typed but not yet stored counts too.
+            self.commit_pages();
+            if !state::unsaved(&self.snapshot()).is_empty() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                // Another question open (reset the standards…) gives way to this one.
+                self.confirm = Some(Confirm::Close);
+                self.pending_open = None;
+            }
         }
         self.confirm_ui(&ctx);
     }

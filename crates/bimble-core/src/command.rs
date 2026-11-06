@@ -101,6 +101,8 @@ impl Command {
                 if m.materials.contains_key(&mat.id) {
                     return Err(CommandError::Exists(mat.id));
                 }
+                mat.props.validate().map_err(CommandError::Invalid)?;
+                let mat = canonical(mat);
                 let id = mat.id;
                 m.materials.insert(id, mat);
                 Ok(RemoveMaterial { id })
@@ -219,6 +221,18 @@ impl Command {
                     ));
                 }
                 x.props.validate().map_err(CommandError::Invalid)?;
+                // Materials are shown, scheduled and selected by name: two of one name would be
+                // one in every list.
+                if m.materials
+                    .values()
+                    .any(|o| o.id != x.id && o.name.trim().eq_ignore_ascii_case(x.name.trim()))
+                {
+                    return Err(CommandError::Invalid(format!(
+                        "there is already a material named {:?}",
+                        x.name.trim()
+                    )));
+                }
+                let x = canonical(x);
                 let old = m.materials.insert(x.id, x).expect("checked above");
                 Ok(SetMaterial(old))
             }
@@ -480,5 +494,22 @@ mod describe_tests {
             h.undo_label(),
             Some(format!("delete {} and 2 more changes", names[0]).as_str())
         );
+    }
+
+    /// Two materials of one name would be one in every list (materials page, schedules): renaming
+    /// into a taken name is refused; values out of range are refused when adding too.
+    #[test]
+    fn material_names_stay_unique_and_values_valid() {
+        let mut m = crate::demo::concrete_frame(&crate::demo::FrameSpec::default());
+        let taken = m.materials.values().next().unwrap().name.clone();
+        let s = crate::library::to_material(&crate::library::lookup("S235").unwrap());
+        Command::AddMaterial(s.clone()).apply(&mut m).unwrap();
+        let mut x = s.clone();
+        x.name = format!(" {} ", taken.to_lowercase());
+        assert!(Command::SetMaterial(x).apply(&mut m).is_err());
+        let mut bad = crate::library::to_material(&crate::library::lookup("S355").unwrap());
+        bad.props.density_kg_m3 = Some(-1.0);
+        assert!(Command::AddMaterial(bad).apply(&mut m).is_err());
+        assert!(m.validate().is_ok());
     }
 }
