@@ -61,6 +61,9 @@ pub struct SheetText {
     pub size_mm: f64,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub angle_deg: f64,
+    /// Its text type (#43).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 fn is_zero(x: &f64) -> bool {
@@ -233,6 +236,7 @@ mod tests {
             at_mm: [f64::NAN, 1.0],
             size_mm: 3.0,
             angle_deg: 0.0,
+            kind: None,
         });
         assert!(nan.validate(|_| true).is_err());
         let mut scale = s;

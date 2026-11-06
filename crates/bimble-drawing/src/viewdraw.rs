@@ -47,7 +47,73 @@ pub enum Turn {
     Section([f64; 2]),
 }
 
+/// Where a view's drawing is on paper: from world mm to paper mm and back (#34).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewFrame {
+    pub turn: Turn,
+    /// The scene's origin, world mm.
+    pub origin: [f64; 3],
+    /// Paper = (ox + (x − x0)·k, oy + (y1 − y)·k), x, y in the turned scene.
+    pub x0: f64,
+    pub y1: f64,
+    pub k: f64,
+    pub ox: f64,
+    pub oy: f64,
+    /// Height of the cut plane in the turned scene: points picked on paper lie on it.
+    pub cut: f64,
+}
+
+impl ViewFrame {
+    pub fn to_paper(&self, world: [f64; 3]) -> [f64; 2] {
+        let o = self.origin;
+        let q = self
+            .turn
+            .apply([world[0] - o[0], world[1] - o[1], world[2] - o[2]]);
+        [
+            self.ox + (q[0] - self.x0) * self.k,
+            self.oy + (self.y1 - q[1]) * self.k,
+        ]
+    }
+
+    /// The world point (on the cut plane) drawn at `paper`.
+    pub fn to_world(&self, paper: [f64; 2]) -> [f64; 3] {
+        let q = [
+            self.x0 + (paper[0] - self.ox) / self.k,
+            self.y1 - (paper[1] - self.oy) / self.k,
+            self.cut,
+        ];
+        let p = self.turn.invert(q);
+        let o = self.origin;
+        [p[0] + o[0], p[1] + o[1], p[2] + o[2]]
+    }
+
+    /// The same frame moved by `d` on paper.
+    pub fn shifted(mut self, d: [f64; 2]) -> ViewFrame {
+        self.ox += d[0];
+        self.oy += d[1];
+        self
+    }
+}
+
 impl Turn {
+    /// How a view turns the scene (3D views: not at all).
+    pub fn of(v: &View) -> Turn {
+        match &v.kind {
+            ViewKind::Plan { look: Look::Up, .. } => Turn::Reflect,
+            ViewKind::Section { facing, .. } => Turn::Section(facing.dir()),
+            _ => Turn::None,
+        }
+    }
+
+    /// The scene point (relative to its origin) that `apply` turns into `q`.
+    pub fn invert(self, q: [f64; 3]) -> [f64; 3] {
+        match self {
+            Turn::None => q,
+            Turn::Reflect => [q[0], q[1], -q[2]],
+            Turn::Section([dx, dy]) => [q[0] * dy - q[2] * dx, -q[0] * dx - q[2] * dy, q[1]],
+        }
+    }
+
     /// A point of the scene (mm, relative to its origin) in the turned scene.
     pub fn apply(self, p: [f64; 3]) -> [f64; 3] {
         match self {
@@ -232,5 +298,70 @@ fn map_scene(
             Vec::new()
         },
         warnings: Vec::new(),
+    }
+}
+
+/// Direction (unit), the dimension line's two ends, and the length measured, paper mm.
+pub type DimOnPaper = ([f64; 2], [f64; 2], [f64; 2], f64);
+
+/// A dimension on paper: from points `pa`, `pb` (paper mm), its line `off` mm to the left of
+/// its direction (aligned: a→b; horizontal; vertical). Returns the direction (unit), the line's
+/// ends and the length measured (paper mm); None when there is nothing to measure.
+pub fn dimension_on_paper(
+    pa: [f64; 2],
+    pb: [f64; 2],
+    off: f64,
+    axis: bimble_core::view::DimAxis,
+) -> Option<DimOnPaper> {
+    use bimble_core::view::DimAxis;
+    let d0 = [pb[0] - pa[0], pb[1] - pa[1]];
+    if d0[0].hypot(d0[1]) < 1e-6 {
+        return None;
+    }
+    let d = match axis {
+        DimAxis::Aligned => d0,
+        DimAxis::Horizontal => [if d0[0] < 0.0 { -1.0 } else { 1.0 }, 0.0],
+        DimAxis::Vertical => [0.0, if d0[1] < 0.0 { -1.0 } else { 1.0 }],
+    };
+    let dl = d[0].hypot(d[1]);
+    let u = [d[0] / dl, d[1] / dl];
+    let n = [u[1], -u[0]];
+    let qa = [pa[0] + n[0] * off, pa[1] + n[1] * off];
+    let along = (pb[0] - qa[0]) * u[0] + (pb[1] - qa[1]) * u[1];
+    let qb = [qa[0] + u[0] * along, qa[1] + u[1] * along];
+    (along.abs() > 1e-6).then_some((u, qa, qb, along.abs()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turns_invert() {
+        for t in [
+            Turn::None,
+            Turn::Reflect,
+            Turn::Section([0.0, 1.0]),
+            Turn::Section([1.0, 0.0]),
+            Turn::Section([0.0, -1.0]),
+            Turn::Section([-1.0, 0.0]),
+        ] {
+            let p = [1234.0, -567.0, 89.0];
+            let q = t.invert(t.apply(p));
+            assert!((0..3).all(|k| (q[k] - p[k]).abs() < 1e-9), "{t:?}: {q:?}");
+        }
+        let f = ViewFrame {
+            turn: Turn::Section([1.0, 0.0]),
+            origin: [100.0, 200.0, 300.0],
+            x0: -5000.0,
+            y1: 4000.0,
+            k: 0.01,
+            ox: 20.0,
+            oy: 30.0,
+            cut: -50.0,
+        };
+        let w = f.to_world([55.0, 66.0]);
+        let back = f.to_paper(w);
+        assert!((back[0] - 55.0).abs() < 1e-9 && (back[1] - 66.0).abs() < 1e-9);
     }
 }

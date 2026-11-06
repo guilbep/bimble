@@ -29,6 +29,36 @@ struct RefEdits {
 }
 
 impl Viewer {
+    /// A views side file opened or dropped (#36): its views and sheets replace those of the
+    /// open IFC, once its plans are checked against the model's storeys. In a browser this is
+    /// how views saved earlier (downloaded) come back.
+    pub(crate) fn open_side_file(&mut self, name: &str, bytes: &[u8]) -> Result<String, String> {
+        let Some(l) = &self.loaded else {
+            return Err(format!("{name}: open its model first, then the views file"));
+        };
+        if l.edit.is_some() {
+            return Err(format!(
+                "{name}: a .bimble model keeps its views inside; views files are for IFC"
+            ));
+        }
+        let f = ViewsFile::from_bytes(bytes).map_err(|e| format!("{name}: {e}"))?;
+        let warnings = check_side_file(&f, &self.levels()).map_err(|e| format!("{name}: {e}"))?;
+        let (n, s) = (f.views.len(), f.sheets.len());
+        self.side_views = Some(SideViews {
+            stored: f.views,
+            sheets: f.sheets,
+            dirty: false,
+        });
+        self.active_view = None;
+        self.layout = None;
+        self.refresh_views();
+        let mut msg = format!("{name}: {n} views, {s} sheets");
+        if !warnings.is_empty() {
+            msg.push_str(&format!(" ({})", warnings.join("; ")));
+        }
+        Ok(msg)
+    }
+
     pub(crate) fn levels(&self) -> Vec<Level> {
         self.loaded
             .as_ref()
@@ -178,6 +208,7 @@ impl Viewer {
             .collect();
         self.hidden_classes = v.hidden_classes.iter().cloned().collect();
         self.hidden_storeys = v.hidden_storeys.iter().cloned().collect();
+        self.hidden_links = v.hidden_links.iter().cloned().collect();
         if self.selected.is_some_and(|i| !self.visible(i)) {
             self.selected = None;
         }
@@ -192,6 +223,7 @@ impl Viewer {
                 .collect(),
             hidden_classes: self.hidden_classes.iter().cloned().collect(),
             hidden_storeys: self.hidden_storeys.iter().cloned().collect(),
+            hidden_links: self.hidden_links.iter().cloned().collect(),
         }
     }
 
@@ -268,7 +300,7 @@ impl Viewer {
     fn export_sheet(&mut self, sh: &bimble_core::sheet::Sheet) {
         let Some(l) = &self.loaded else { return };
         let o = bimble_drawing::sheetdraw::SheetOptions {
-            style: self.opts.style,
+            style: self.opts.style.clone(),
             template: self.plan.template.clone(),
             project: l
                 .path
@@ -364,6 +396,7 @@ impl Viewer {
             }
         }
         if let Some(id) = activate {
+            self.close_sheet();
             self.activate_view(id);
         }
     }
@@ -382,6 +415,10 @@ impl Viewer {
         let mut select_element = None;
         let mut open_plan = false;
         let mut export_sheet: Option<bimble_core::sheet::Sheet> = None;
+        let mut open_sheet = None;
+        let mut delete_sheet = None;
+        let mut new_sheet = false;
+        let open_sheet_id = self.layout.as_ref().map(|l| l.sheet);
         let sheets = self.sheets();
         {
             {
@@ -419,7 +456,18 @@ impl Viewer {
                                                 v.references.len()
                                             ));
                                         }
-                                        let r = ui.selectable_label(on, name);
+                                        let on = on && self.layout.is_none();
+                                        // 2D views can be dragged onto a sheet.
+                                        let sense = if v.is_2d() {
+                                            Sense::click_and_drag()
+                                        } else {
+                                            Sense::click()
+                                        };
+                                        let r =
+                                            ui.add(egui::Button::selectable(on, name).sense(sense));
+                                        if v.is_2d() {
+                                            r.dnd_set_drag_payload(crate::layout::ViewDrag(v.id));
+                                        }
                                         if r.clicked() {
                                             activate = Some(v.id);
                                         }
@@ -512,21 +560,24 @@ impl Viewer {
                     ui,
                     |ui| {
                         for sh in &sheets {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("{}  {}", sh.number, sh.name));
-                                if ui
-                                    .small_button("PDF…")
-                                    .on_hover_text("The sheet, its views at their scales")
-                                    .clicked()
-                                {
+                            let on = open_sheet_id == Some(sh.id);
+                            let r = ui.selectable_label(on, format!("{}  {}", sh.number, sh.name));
+                            if r.clicked() {
+                                open_sheet = Some(sh.id);
+                            }
+                            r.context_menu(|ui| {
+                                if ui.button("Export PDF…").clicked() {
                                     export_sheet = Some(sh.clone());
+                                    ui.close();
+                                }
+                                if ui.button("Delete sheet").clicked() {
+                                    delete_sheet = Some(sh.id);
+                                    ui.close();
                                 }
                             });
                         }
-                        if sheets.is_empty() {
-                            ui.weak(
-                                "No sheets yet (bimble sheet-new; placing views here comes next).",
-                            );
+                        if ui.button("New sheet").clicked() {
+                            new_sheet = true;
                         }
                         if ui.button("Drawing on paper…").clicked() {
                             open_plan = true;
@@ -592,6 +643,15 @@ impl Viewer {
         }
         if let Some(sh) = export_sheet {
             self.export_sheet(&sh);
+        }
+        if let Some(id) = open_sheet {
+            self.open_sheet(id);
+        }
+        if let Some(id) = delete_sheet {
+            self.delete_sheet(id);
+        }
+        if new_sheet {
+            self.new_sheet();
         }
     }
 
@@ -769,6 +829,16 @@ impl Viewer {
                     if ui.checkbox(&mut on, format!("{label} ({n})")).changed() {
                         toggle(&mut self.hidden_storeys, storey.clone(), on);
                         visibility_changed = true;
+                    }
+                }
+                if !self.links.is_empty() {
+                    ui.separator();
+                    for name in self.links.iter().map(Linked::name).collect::<Vec<_>>() {
+                        let mut on = !self.hidden_links.contains(&name);
+                        if ui.checkbox(&mut on, format!("Link: {name}")).changed() {
+                            toggle(&mut self.hidden_links, name, on);
+                            visibility_changed = true;
+                        }
                     }
                 }
             });
@@ -989,6 +1059,122 @@ impl Viewer {
     }
 
     /// Reference plans over a 2D view, in the reference colour.
+    /// The active 2D view's dimensions and texts over it (they belong to the view, ADR 0024).
+    pub(crate) fn draw_annotations(&self, ui: &egui::Ui, rect: egui::Rect, aspect: f32) {
+        use bimble_core::view::Annotation;
+        use bimble_drawing::viewdraw::{Turn, ViewFrame, dimension_on_paper};
+        let (Some(l), Some(v)) = (&self.loaded, self.active_view()) else {
+            return;
+        };
+        if v.annotations.is_empty() {
+            return;
+        }
+        let vp = self.camera.view_proj(aspect, &l.bounds);
+        let o = l.scene.origin_mm;
+        // The view's plane in model mm ("paper" at 1:1), and from there to the screen.
+        let frame = ViewFrame {
+            turn: Turn::of(v),
+            origin: o,
+            x0: 0.0,
+            y1: 0.0,
+            k: 1.0,
+            ox: 0.0,
+            oy: 0.0,
+            cut: 0.0,
+        };
+        let screen = |p: [f64; 2]| {
+            let w = frame.to_world(p);
+            section::project(
+                &vp,
+                rect,
+                Vec3::new(
+                    (w[0] - o[0]) as f32,
+                    (w[1] - o[1]) as f32,
+                    (w[2] - o[2]) as f32,
+                ),
+            )
+        };
+        let px_per_mm = match (screen([0.0, 0.0]), screen([1000.0, 0.0])) {
+            (Some(a), Some(b)) => (a.distance(b) / 1000.0) as f64,
+            _ => return,
+        };
+        let a = self.opts.style.dimensions.0;
+        let col = Color32::from_rgb(a[0], a[1], a[2]);
+        let painter = ui.painter_at(rect);
+        // Text sizes as at 1:100, within readable bounds.
+        let font = |size_mm: f64| {
+            egui::FontId::proportional((size_mm * 100.0 * px_per_mm).clamp(8.0, 40.0) as f32)
+        };
+        for an in &v.annotations {
+            match an {
+                Annotation::Dimension {
+                    a,
+                    b,
+                    offset_mm,
+                    axis,
+                    kind,
+                    ..
+                } => {
+                    let dt = kind
+                        .as_ref()
+                        .and_then(|k| self.opts.style.paper.dim_type(k));
+                    let col = dt.map_or(col, |d| {
+                        Color32::from_rgb(d.color.0[0], d.color.0[1], d.color.0[2])
+                    });
+                    let stroke = egui::Stroke::new(1.0, col);
+                    let (pa, pb) = (frame.to_paper(a.at), frame.to_paper(b.at));
+                    let Some((_, qa, qb, len)) = dimension_on_paper(pa, pb, *offset_mm, *axis)
+                    else {
+                        continue;
+                    };
+                    let pts = [pa, qa, pb, qb].map(screen);
+                    let [Some(sa), Some(sqa), Some(sb), Some(sqb)] = pts else {
+                        continue;
+                    };
+                    painter.line_segment([sa, sqa], stroke);
+                    painter.line_segment([sb, sqb], stroke);
+                    painter.line_segment([sqa, sqb], stroke);
+                    let mid = sqa + (sqb - sqa) / 2.0;
+                    let angle = (sqb - sqa).angle();
+                    let angle = if angle.abs() > std::f32::consts::FRAC_PI_2 {
+                        angle + std::f32::consts::PI
+                    } else {
+                        angle
+                    };
+                    let (text, size) = match dt {
+                        Some(d) => (d.format(len), d.text_mm as f64),
+                        None => (self.plan.template.dimension_unit.format(len), 2.25),
+                    };
+                    let galley = painter.layout_no_wrap(text, font(size), col);
+                    let size = galley.size();
+                    let (s, c) = angle.sin_cos();
+                    // Centred over the line, upright.
+                    let up = egui::vec2(s, -c) * (size.y + 2.0);
+                    let pos = mid + up - egui::vec2(c, s) * (size.x / 2.0);
+                    painter.add(egui::epaint::TextShape::new(pos, galley, col).with_angle(angle));
+                }
+                Annotation::Text {
+                    text,
+                    at,
+                    size_mm,
+                    kind,
+                    ..
+                } => {
+                    let tt = kind
+                        .as_ref()
+                        .and_then(|k| self.opts.style.paper.text_type(k));
+                    let col = tt.map_or(col, |t| {
+                        Color32::from_rgb(t.color.0[0], t.color.0[1], t.color.0[2])
+                    });
+                    let size = tt.map_or(*size_mm, |t| t.size_mm as f64);
+                    if let Some(p) = screen(frame.to_paper(*at)) {
+                        painter.text(p, egui::Align2::LEFT_BOTTOM, text, font(size), col);
+                    }
+                }
+            }
+        }
+    }
+
     pub(crate) fn draw_references(&self, ui: &egui::Ui, rect: egui::Rect, aspect: f32) {
         let Some(l) = &self.loaded else { return };
         let refs = self.shown_references();
@@ -1128,5 +1314,69 @@ impl Viewer {
             self.view_message = Some(e);
             self.view_form = None;
         }
+    }
+}
+
+/// Whether a views file fits a model: its plans must be on the model's storeys. None fitting
+/// (and some plans): another model's file, refused. Some not fitting: listed as warnings.
+pub(crate) fn check_side_file(f: &ViewsFile, levels: &[Level]) -> Result<Vec<String>, String> {
+    let plans: Vec<(&str, &str)> = f
+        .views
+        .values()
+        .filter_map(|v| match &v.kind {
+            bimble_core::view::ViewKind::Plan { storey, .. } => {
+                Some((v.name.as_str(), storey.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    let missing: Vec<&str> = plans
+        .iter()
+        .filter(|(_, s)| !levels.iter().any(|l| l.key == *s))
+        .map(|(n, _)| *n)
+        .collect();
+    if !plans.is_empty() && missing.len() == plans.len() {
+        return Err(
+            "none of its plans is on a storey of this model: views of another model?".into(),
+        );
+    }
+    Ok(missing
+        .into_iter()
+        .map(|n| format!("plan {n}: its storey is not in this model"))
+        .collect())
+}
+
+#[cfg(test)]
+mod side_file_tests {
+    use super::*;
+    use bimble_core::demo::{FrameSpec, concrete_frame};
+
+    /// A views file of this model is taken; one whose plans are on no storey of it is refused;
+    /// one with a plan on a missing storey is taken with a warning.
+    #[test]
+    fn a_views_file_is_checked_against_the_storeys() {
+        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let levels = scene.levels();
+        let views: BTreeMap<GlobalId, View> = default_views(&levels)
+            .into_iter()
+            .map(|v| (v.id, v))
+            .collect();
+        let f = ViewsFile::new(views.clone(), BTreeMap::new());
+        let f = ViewsFile::from_bytes(&serde_json::to_vec(&f).unwrap()).unwrap();
+        assert_eq!(check_side_file(&f, &levels).unwrap(), Vec::<String>::new());
+        let other: Vec<Level> = levels
+            .iter()
+            .map(|l| Level {
+                key: format!("other-{}", l.key),
+                ..l.clone()
+            })
+            .collect();
+        assert!(check_side_file(&f, &other).is_err());
+        let fewer = &levels[1..];
+        let w = check_side_file(&f, fewer).unwrap();
+        assert!(
+            !w.is_empty() && w.iter().all(|x| x.contains("storey")),
+            "{w:?}"
+        );
     }
 }

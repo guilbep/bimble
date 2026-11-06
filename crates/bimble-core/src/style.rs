@@ -135,7 +135,7 @@ impl Families {
 }
 
 /// Everything that decides how a drawing looks.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphicStyle {
     pub background: Rgb,
@@ -167,7 +167,7 @@ pub struct GraphicStyle {
 }
 
 /// Line weights and sizes for drawings on paper, in mm on the printed sheet.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PaperStyle {
     /// Outline of what the cut plane cuts (walls, columns, slabs).
@@ -196,6 +196,56 @@ pub struct PaperStyle {
     pub axis_dash_mm: [f32; 4],
     /// What is seen below the cut is filled with the family colour mixed with this much white.
     pub seen_lighten: f32,
+    /// Pen thicknesses per pen number (and per scale for model lines), #42.
+    #[serde(default)]
+    pub pens: crate::pens::PenTable,
+    /// Named line types: colour, dash pattern, pen.
+    #[serde(default = "crate::pens::default_line_types")]
+    pub line_types: Vec<crate::pens::LineType>,
+    /// The line type of each kind of line (cut, seen, above, hatch, axis, dimension, frame).
+    /// When set, they replace the `*_pen_mm` and dash fields above.
+    #[serde(default)]
+    pub lines: crate::pens::LineRoles,
+    /// Text types and dimension types offered by the Text and Dimension tools (#43).
+    #[serde(default = "crate::pens::default_text_types")]
+    pub text_types: Vec<crate::pens::TextType>,
+    #[serde(default = "crate::pens::default_dim_types")]
+    pub dimension_types: Vec<crate::pens::DimType>,
+    /// Hatch types (#44), and which one each material family uses cut and seen. A family not
+    /// listed keeps its own pattern.
+    #[serde(default = "crate::hatches::default_hatch_types")]
+    pub hatch_types: Vec<crate::hatches::HatchType>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_hatches: Vec<crate::hatches::MaterialHatch>,
+}
+
+impl PaperStyle {
+    pub fn text_type(&self, name: &str) -> Option<&crate::pens::TextType> {
+        self.text_types.iter().find(|t| t.name == name)
+    }
+
+    pub fn dim_type(&self, name: &str) -> Option<&crate::pens::DimType> {
+        self.dimension_types.iter().find(|t| t.name == name)
+    }
+
+    pub fn hatch_type(&self, name: &str) -> Option<&crate::hatches::HatchType> {
+        self.hatch_types.iter().find(|t| t.name == name)
+    }
+
+    /// The hatch type of a material family where it is cut (`cut`) or seen, if it has one.
+    pub fn material_hatch(
+        &self,
+        c: crate::MaterialCategory,
+        cut: bool,
+    ) -> Option<&crate::hatches::HatchType> {
+        let u = self.material_hatches.iter().find(|u| u.category == c)?;
+        self.hatch_type(if cut { u.cut.as_ref() } else { u.seen.as_ref() }?)
+    }
+
+    /// A line type by name.
+    pub fn line_type(&self, name: &str) -> Option<&crate::pens::LineType> {
+        self.line_types.iter().find(|t| t.name == name)
+    }
 }
 
 fn axis_pen() -> f32 {
@@ -286,6 +336,13 @@ impl Default for GraphicStyle {
                 axis_pen_mm: axis_pen(),
                 axis_dash_mm: axis_dash(),
                 seen_lighten: 0.6,
+                pens: Default::default(),
+                line_types: crate::pens::default_line_types(),
+                lines: Default::default(),
+                text_types: crate::pens::default_text_types(),
+                dimension_types: crate::pens::default_dim_types(),
+                hatch_types: crate::hatches::default_hatch_types(),
+                material_hatches: Vec::new(),
             },
             families: Families {
                 concrete: Fill {
@@ -416,6 +473,10 @@ impl GraphicStyle {
         range("hatch_mm_per_px", p.hatch_mm_per_px, 0.05, 10.0)?;
         range("text_mm", p.text_mm, 1.0, 20.0)?;
         range("seen_lighten", p.seen_lighten, 0.0, 1.0)?;
+        p.pens.validate()?;
+        crate::pens::validate_lines(&p.line_types, &p.lines)?;
+        crate::pens::validate_annotation_types(&p.text_types, &p.dimension_types, &p.line_types)?;
+        crate::hatches::validate_hatches(&p.hatch_types, &p.material_hatches)?;
         for c in MaterialCategory::ALL {
             let f = self.families.get(c);
             let at = |field: &str| format!("families.{}.{field}", c.label().to_lowercase());

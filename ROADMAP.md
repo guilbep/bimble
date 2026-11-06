@@ -99,9 +99,13 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
   sloped and stepped tops seen from above (#22); dash-dot axes (#23); one-button release (ADR 0022)
 - ✅ Sheets (#33, ADR 0024): several views at their own scales, one title block; dimensions and
   texts stored in views
-- ☐ Next (Pierre, 6 Nov): layouts in the main view (#34) → labels, opening
-  dimensions, section markers (#24) → snapping (#25) → #35, #36 → several linked models (#39);
-  then the UI/UX design proposals
+- ✅ Layouts in the main view (#34, ADR 0025): drag views in, move, text and dimension tools
+- ✅ Office standards on paper (ADR 0026): pens per scale, line types (#42), text and dimension
+  types (#43), hatch types per material cut and seen (#44)
+- ✅ Plans: section labels, opening sizes and positions, section marks (#24); snapping when placing
+  (#25); crisp cut outlines on screen (#35); views files read back in the browser (#36); several
+  read-only links shown per view (#39)
+- ☐ Next: the UI/UX design proposals; selecting linked elements, dimensions following them (#39)
 
 **I0 — Core** ✅ (PR #1)
 - Crates: `bimble-core` (IFC-typed model, GlobalIds, generators, materials, commands + undo, hash, diff),

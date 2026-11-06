@@ -18,10 +18,13 @@ use std::time::Duration;
 // std's Instant panics in browsers; web-time is std's on the desktop.
 use web_time::Instant;
 
+mod cutlines;
 mod edit;
 mod files;
+mod layout;
 mod measure;
 mod section;
+mod snap;
 mod style_editor;
 mod viewcube;
 mod viewing;
@@ -77,6 +80,7 @@ fn plan_options(
     path: &std::path::Path,
     style: bimble_core::style::GraphicStyle,
     view: Option<bimble_core::view::View>,
+    views: &[bimble_core::view::View],
 ) -> bimble_drawing::plan::PlanOptions {
     bimble_drawing::plan::PlanOptions {
         storey: p.storey.clone(),
@@ -92,6 +96,7 @@ fn plan_options(
         template: p.template.clone(),
         view,
         bare: false,
+        section_marks: bimble_drawing::plan::section_marks(views),
     }
 }
 
@@ -133,6 +138,27 @@ struct Linked {
     /// For each of our elements / each of theirs: whether the other model has something there.
     matched_here: Vec<bool>,
     matched_there: Vec<bool>,
+}
+
+impl Linked {
+    /// Its file name: how views refer to it (#39).
+    fn name(&self) -> String {
+        self.path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+}
+
+/// Our scene's bounds grown to cover the linked models (the depth range must cover them all).
+fn bounds_with_links(scene: &Scene, links: &[Linked]) -> bimble_render::Sphere {
+    links.iter().fold(bimble_render::Sphere::of(scene), |b, k| {
+        let rb = bimble_render::Sphere::of(&k.scene);
+        b.merge(bimble_render::Sphere {
+            center: rb.center + k.offset,
+            radius: rb.radius,
+        })
+    })
 }
 
 struct Turn {
@@ -367,6 +393,12 @@ struct Viewer {
     measure_first: Option<measure::Snap>,
     dimensions: Vec<measure::Dimension>,
     hover_snap: Option<measure::Snap>,
+    /// Snap targets while placing (#25), for (scene revision, storey level), and the point the
+    /// pointer snaps to (model mm) with what it snapped to.
+    place_targets: Option<((u64, i64), snap::Targets)>,
+    place_snap: Option<([f64; 2], Option<snap::SnapTo>)>,
+    /// Cut outlines of the clip box's front faces (#35), for a key of what they depend on.
+    cut_cache: Option<(u64, std::sync::Arc<Vec<[glam::Vec3; 2]>>)>,
 
     /// Element under the cursor, its edges uploaded for the highlight, and the pointer position
     /// it was picked at (picking again only when the pointer moves).
@@ -374,10 +406,13 @@ struct Viewer {
     hover_gpu: Option<GpuScene>,
     hover_at: Option<egui::Pos2>,
 
-    /// Linked (reference) model, one being loaded, and whether differences are coloured.
-    linked: Option<Linked>,
+    /// Linked (reference) models, read-only (#39), one being loaded, and the one whose
+    /// differences with ours are coloured, if any.
+    links: Vec<Linked>,
     linking: Option<Loading>,
-    compare_on: bool,
+    compare_with: Option<usize>,
+    /// Linked models hidden in the active view, by file name.
+    hidden_links: BTreeSet<String>,
     /// Model to link once ours is loaded (`bimble view --link`).
     pending_link: Option<PathBuf>,
 
@@ -413,6 +448,10 @@ struct Viewer {
     reference_view: Option<bimble_core::GlobalId>,
     pdf_scale: f64,
     last_aspect: f32,
+    /// The sheet open in the main view, if any (#34), and a counter of scene changes (its
+    /// drawing is redone when the model changes).
+    layout: Option<layout::Layout>,
+    scene_rev: u64,
 }
 
 impl Viewer {
@@ -447,12 +486,16 @@ impl Viewer {
             measure_first: None,
             dimensions: Vec::new(),
             hover_snap: None,
+            place_targets: None,
+            place_snap: None,
+            cut_cache: None,
             hovered: None,
             hover_gpu: None,
             hover_at: None,
-            linked: None,
+            links: Vec::new(),
             linking: None,
-            compare_on: false,
+            compare_with: None,
+            hidden_links: BTreeSet::new(),
             pending_link: None,
             plan_window: false,
             plan: PlanSettings::default(),
@@ -475,6 +518,8 @@ impl Viewer {
             reference_view: None,
             pdf_scale: 100.0,
             last_aspect: 1.0,
+            layout: None,
+            scene_rev: 0,
         }
     }
 
@@ -550,6 +595,17 @@ impl Viewer {
                         "{}: reference plans go in a plan or section view",
                         p.name
                     ));
+                }
+                continue;
+            }
+            // A views side file (#36), recognised by its format field.
+            if p.purpose == files::Purpose::Open && lower.ends_with(".json") {
+                match p.content().and_then(|b| self.open_side_file(&p.name, &b)) {
+                    Ok(m) => {
+                        self.view_message = Some(m);
+                        self.error = None;
+                    }
+                    Err(e) => self.error = Some(e),
                 }
                 continue;
             }
@@ -642,13 +698,7 @@ impl Viewer {
                     &scene,
                     bimble_geom::compare::Tolerance::default(),
                 );
-                // Depth range must cover both models.
-                let rb = bimble_render::Sphere::of(&scene);
-                main.bounds = bimble_render::Sphere::of(&main.scene).merge(bimble_render::Sphere {
-                    center: rb.center + offset,
-                    radius: rb.radius,
-                });
-                self.linked = Some(Linked {
+                let k = Linked {
                     path,
                     scene,
                     gpu: None,
@@ -656,18 +706,32 @@ impl Viewer {
                     mode: LinkMode::Solid,
                     matched_here,
                     matched_there,
-                });
+                };
+                // The same file linked again replaces the old link.
+                let name = k.name();
+                match self.links.iter().position(|x| x.name() == name) {
+                    Some(i) => self.links[i] = k,
+                    None => self.links.push(k),
+                }
+                main.bounds = bounds_with_links(&main.scene, &self.links);
                 self.needs_upload = true;
             }
             Err(e) => self.error = Some(format!("{}: {e}", path.display())),
         }
     }
 
-    fn unlink(&mut self) {
-        self.linked = None;
-        self.compare_on = false;
+    fn unlink(&mut self, i: usize) {
+        if i >= self.links.len() {
+            return;
+        }
+        self.links.remove(i);
+        self.compare_with = match self.compare_with {
+            Some(c) if c == i => None,
+            Some(c) if c > i => Some(c - 1),
+            c => c,
+        };
         if let Some(l) = &mut self.loaded {
-            l.bounds = bimble_render::Sphere::of(&l.scene);
+            l.bounds = bounds_with_links(&l.scene, &self.links);
         }
         self.needs_upload = true;
     }
@@ -703,13 +767,16 @@ impl Viewer {
                 self.fit_pending = true;
                 self.set_hovered(None);
                 // A linked model and a box from the previous model mean nothing for this one.
-                self.linked = None;
-                self.compare_on = false;
+                self.links.clear();
+                self.compare_with = None;
+                self.hidden_links.clear();
                 self.section_on = false;
                 self.section_box = None;
                 self.measure_first = None;
                 self.dimensions.clear();
                 self.hover_snap = None;
+                self.scene_rev += 1;
+                self.layout = None;
                 self.setup_views_after_load();
             }
             Err(e) => self.error = Some(format!("{}: {e}", path.display())),
@@ -759,22 +826,12 @@ impl Viewer {
         });
         l.scene = Scene::from_model(&ed.model);
         (l.classes, l.storeys, l.categories) = counts(&l.scene);
-        let b = bimble_render::Sphere::of(&l.scene);
-        l.bounds = match &self.linked {
-            Some(k) => {
-                let rb = bimble_render::Sphere::of(&k.scene);
-                b.merge(bimble_render::Sphere {
-                    center: rb.center + k.offset,
-                    radius: rb.radius,
-                })
-            }
-            None => b,
-        };
+        l.bounds = bounds_with_links(&l.scene, &self.links);
         self.selected = keep.and_then(|g| l.scene.elements.iter().position(|e| e.global_id == g));
         self.hovered = None;
         self.hover_gpu = None;
         self.hover_at = None;
-        if let Some(k) = &mut self.linked {
+        for k in &mut self.links {
             // Matches were computed against the old scene.
             let (here, there) = bimble_geom::compare::match_models(
                 &l.scene,
@@ -785,6 +842,7 @@ impl Viewer {
             k.matched_there = there;
         }
         self.needs_upload = true;
+        self.scene_rev += 1;
         // Undo and redo can change views too; storeys can change the default ones.
         self.refresh_views();
     }
@@ -1131,31 +1189,38 @@ impl Viewer {
         if self.loaded.is_none() {
             return;
         }
-        let comparing = self.compare_on && self.linked.is_some();
-        // The linked model first: it needs no borrow of ours.
-        let linked_gpu = self.linked.as_ref().map(|k| {
-            let there = &k.matched_there;
-            self.renderer.upload_with(
-                &self.device,
-                &k.scene,
-                |i, _| {
-                    if comparing && !there.get(i).copied().unwrap_or(true) {
-                        Style::OnlyInReference
-                    } else {
-                        Style::Reference
-                    }
-                },
-                self.clipping(),
-            )
-        });
-        if let (Some(k), Some(g)) = (self.linked.as_mut(), linked_gpu) {
+        let compare = self.compare_with.filter(|c| *c < self.links.len());
+        // The linked models first: they need no borrow of ours.
+        let linked_gpu: Vec<GpuScene> = self
+            .links
+            .iter()
+            .enumerate()
+            .map(|(n, k)| {
+                let comparing = compare == Some(n);
+                let there = &k.matched_there;
+                self.renderer.upload_with(
+                    &self.device,
+                    &k.scene,
+                    |i, _| {
+                        if comparing && !there.get(i).copied().unwrap_or(true) {
+                            Style::OnlyInReference
+                        } else {
+                            Style::Reference
+                        }
+                    },
+                    self.clipping(),
+                )
+            })
+            .collect();
+        for (k, g) in self.links.iter_mut().zip(linked_gpu) {
             k.gpu = Some(g);
         }
         // Re-picked at the next pointer move (visibility or the section box may have changed).
         self.hovered = None;
         self.hover_gpu = None;
         self.hover_at = None;
-        let here = self.linked.as_ref().map(|k| &k.matched_here);
+        let comparing = compare.is_some();
+        let here = compare.map(|c| &self.links[c].matched_here);
         let style = |i: usize, _: &bimble_geom::SceneElement| {
             if !self.visible(i) {
                 Style::Hidden
@@ -1272,13 +1337,14 @@ impl Viewer {
         let opts = DrawOptions {
             hatch_scale: ppp,
             clip: self.clip(),
-            ..self.opts
+            ..self.opts.clone()
         };
         let mut layers = vec![bimble_render::Layer::main(gs)];
-        if let Some(k) = &self.linked
-            && let Some(g) = &k.gpu
-            && k.mode != LinkMode::Hidden
-        {
+        for k in &self.links {
+            let Some(g) = &k.gpu else { continue };
+            if k.mode == LinkMode::Hidden || self.hidden_links.contains(&k.name()) {
+                continue;
+            }
             layers.push(bimble_render::Layer {
                 scene: g,
                 offset: k.offset,
@@ -1356,9 +1422,14 @@ impl Viewer {
             .is_some_and(|ed| ed.placing.is_some())
         {
             self.set_hovered(None);
+            let free = ui.input(|i| i.modifiers.shift);
+            self.place_snap = resp
+                .hover_pos()
+                .or(resp.interact_pointer_pos())
+                .and_then(|pos| self.placing_point(pos, rect, aspect, free));
             if resp.clicked()
                 && let Some(pos) = resp.interact_pointer_pos()
-                && let Some(p) = self.storey_point(pos, rect, aspect)
+                && let Some((p, _)) = self.placing_point(pos, rect, aspect, free)
             {
                 let ed = self.loaded.as_mut().and_then(|l| l.edit.as_mut()).unwrap();
                 match ed.click(p) {
@@ -1620,8 +1691,42 @@ impl Viewer {
         });
     }
 
+    /// Where a click places a point (#25): snapped to axis crossings, column centres, corners,
+    /// axes and edges within 12 pixels; with Shift (`free`) or nothing near, rounded to 10 mm.
+    fn placing_point(
+        &mut self,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+        free: bool,
+    ) -> Option<([f64; 2], Option<snap::SnapTo>)> {
+        let p = self.storey_point(pos, rect, aspect)?;
+        let round = |v: f64| (v / 10.0).round() * 10.0;
+        if free {
+            return Some(([round(p[0]), round(p[1])], None));
+        }
+        let tol = self
+            .storey_point(pos + Vec2::new(12.0, 0.0), rect, aspect)
+            .map_or(0.0, |q| (q[0] - p[0]).hypot(q[1] - p[1]));
+        let l = self.loaded.as_ref()?;
+        let level = l.edit.as_ref()?.storey_elevation();
+        let key = (self.scene_rev, level.round() as i64);
+        if self.place_targets.as_ref().is_none_or(|(k, _)| *k != key) {
+            let next = l
+                .scene
+                .levels()
+                .iter()
+                .map(|v| v.elevation_mm)
+                .filter(|e| *e > level + 1.0)
+                .fold(level + 4000.0, f64::min);
+            self.place_targets = Some((key, snap::targets(&l.scene, level, next)));
+        }
+        let t = &self.place_targets.as_ref()?.1;
+        Some(snap::snap(p, tol, t))
+    }
+
     /// Where a screen point's ray meets the level of the storey being edited: storey-relative
-    /// x, y in mm (model coordinates), rounded to 10 mm.
+    /// x, y in mm (model coordinates).
     fn storey_point(&self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) -> Option<[f64; 2]> {
         let l = self.loaded.as_ref()?;
         let ed = l.edit.as_ref()?;
@@ -1639,10 +1744,9 @@ impl Viewer {
             return None;
         }
         let p = o + d * t;
-        let round = |v: f64| (v / 10.0).round() * 10.0;
         Some([
-            round(p.x as f64 + l.scene.origin_mm[0]),
-            round(p.y as f64 + l.scene.origin_mm[1]),
+            p.x as f64 + l.scene.origin_mm[0],
+            p.y as f64 + l.scene.origin_mm[1],
         ])
     }
 
@@ -1656,11 +1760,37 @@ impl Viewer {
         let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
         let clip = self.clip();
         let vp = self.camera.view_proj(aspect, &l.bounds);
-        let model = bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref())
-            .map(|hit| {
+        let ours = bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref()).map(
+            |hit| {
                 let mesh = &l.scene.elements[hit.element].mesh;
-                measure::snap(mesh, &hit, (o, d), &vp, rect, pos)
+                (
+                    hit.distance,
+                    measure::snap(mesh, &hit, (o, d), &vp, rect, pos),
+                )
+            },
+        );
+        // Linked models (#39): measured and snapped to like ours, in their place.
+        let theirs = self.links.iter().filter_map(|k| {
+            if k.mode == LinkMode::Hidden || self.hidden_links.contains(&k.name()) {
+                return None;
+            }
+            let clip = clip.map(|c| ClipBox {
+                min: c.min - k.offset,
+                max: c.max - k.offset,
             });
+            let hit = bimble_render::pick_hit(&k.scene, |_| true, o - k.offset, d, clip.as_ref())?;
+            let vpl = vp * glam::Mat4::from_translation(k.offset);
+            let mesh = &k.scene.elements[hit.element].mesh;
+            let mut s = measure::snap(mesh, &hit, (o - k.offset, d), &vpl, rect, pos);
+            s.point += k.offset;
+            s.element = usize::MAX;
+            Some((hit.distance, s))
+        });
+        let model = ours
+            .into_iter()
+            .chain(theirs)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, s)| s);
         // Reference plans (2D views): a corner or edge of theirs against the model's snap,
         // corners before edges before faces, then the nearer on screen.
         let Some((r, rd)) = self.reference_snap(pos, rect, aspect) else {
@@ -1681,6 +1811,54 @@ impl Viewer {
                 }
             }
             None => Some(r),
+        }
+    }
+
+    /// Outlines of what the clip box cuts (#35), on its faces turned to the camera: crisp and
+    /// complete, where the mesh's own edges may lose against a face at the same depth.
+    fn draw_cut_lines(&mut self, ui: &egui::Ui, rect: egui::Rect, aspect: f32) {
+        let Some(clip) = self.clip() else {
+            self.cut_cache = None;
+            return;
+        };
+        let Some(l) = &self.loaded else { return };
+        let eye = if self.camera.orthographic {
+            self.camera.target + (self.camera.eye() - self.camera.target).normalize_or_zero() * 1e9
+        } else {
+            self.camera.eye()
+        };
+        let faces = cutlines::front_faces(&clip, eye);
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            self.scene_rev.hash(&mut h);
+            for v in clip.min.to_array().into_iter().chain(clip.max.to_array()) {
+                v.to_bits().hash(&mut h);
+            }
+            faces.hash(&mut h);
+            for i in 0..l.scene.elements.len() {
+                self.visible(i).hash(&mut h);
+            }
+            h.finish()
+        };
+        if self.cut_cache.as_ref().is_none_or(|(k, _)| *k != key) {
+            let lines = cutlines::cut_lines(&l.scene, &clip, faces, |i| self.visible(i));
+            self.cut_cache = Some((key, std::sync::Arc::new(lines)));
+        }
+        let Some((_, lines)) = &self.cut_cache else {
+            return;
+        };
+        let vp = self.camera.view_proj(aspect, &l.bounds);
+        let c = self.opts.style.edges.0;
+        let stroke = egui::Stroke::new(1.5, Color32::from_rgb(c[0], c[1], c[2]));
+        let painter = ui.painter_at(rect);
+        for s in lines.iter() {
+            if let (Some(a), Some(b)) = (
+                section::project(&vp, rect, s[0]),
+                section::project(&vp, rect, s[1]),
+            ) {
+                painter.line_segment([a, b], stroke);
+            }
         }
     }
 
@@ -1717,6 +1895,51 @@ impl Viewer {
                     _ => measure::format_mm(d.distance()),
                 };
                 label(a + (b - a) * 0.5, text);
+            }
+        }
+        // Where a placed point would go (#25): a marker, and what it snapped to.
+        if let Some(ed) = l.edit.as_ref().filter(|ed| ed.placing.is_some())
+            && let Some((q, kind)) = self.place_snap
+        {
+            let o = l.scene.origin_mm;
+            let z = ed.storey_elevation() - o[2];
+            if let Some(m) = p(glam::Vec3::new(
+                (q[0] - o[0]) as f32,
+                (q[1] - o[1]) as f32,
+                z as f32,
+            )) {
+                let s = egui::Stroke::new(2.0, col);
+                match kind {
+                    Some(snap::SnapTo::AxisCrossing | snap::SnapTo::ColumnCentre) => {
+                        painter.circle_stroke(m, 6.0, s);
+                        painter.line_segment([m - Vec2::X * 9.0, m + Vec2::X * 9.0], s);
+                        painter.line_segment([m - Vec2::Y * 9.0, m + Vec2::Y * 9.0], s);
+                    }
+                    Some(snap::SnapTo::Corner) => {
+                        painter.rect_stroke(
+                            egui::Rect::from_center_size(m, Vec2::splat(10.0)),
+                            0.0,
+                            s,
+                            egui::StrokeKind::Middle,
+                        );
+                    }
+                    Some(snap::SnapTo::Axis | snap::SnapTo::Edge) => {
+                        let pts = vec![
+                            m + Vec2::new(0.0, -6.0),
+                            m + Vec2::new(6.0, 5.0),
+                            m + Vec2::new(-6.0, 5.0),
+                        ];
+                        painter.add(egui::Shape::closed_line(pts, s));
+                    }
+                    None => {
+                        painter.circle_filled(m, 3.0, col);
+                    }
+                }
+                let text = match kind {
+                    Some(k) => format!("{} · {:.0}, {:.0}", k.label(), q[0], q[1]),
+                    None => format!("{:.0}, {:.0} (Shift: no snap)", q[0], q[1]),
+                };
+                label(m + Vec2::new(0.0, 22.0), text);
             }
         }
         if !self.measure_on {
@@ -1951,6 +2174,20 @@ impl Viewer {
             }
         });
         ui.horizontal(|ui| {
+            let t = &mut p.template;
+            let mut changed = false;
+            changed |= ui
+                .checkbox(&mut t.element_labels, "Sections of columns, beams")
+                .changed();
+            changed |= ui.checkbox(&mut t.opening_dimensions, "Openings").changed();
+            changed |= ui
+                .checkbox(&mut t.section_markers, "Section marks")
+                .changed();
+            if changed {
+                p.template_rev += 1;
+            }
+        });
+        ui.horizontal(|ui| {
             if ui.button("Template…").clicked() {
                 self.files.pick(files::Purpose::PlanTemplate, ui.ctx());
             }
@@ -1978,7 +2215,13 @@ impl Viewer {
             }
         });
         if let Some(svg) = export.inner {
-            let opts = plan_options(p, &l.path, self.opts.style, view.clone());
+            let opts = plan_options(
+                p,
+                &l.path,
+                self.opts.style.clone(),
+                view.clone(),
+                &self.views,
+            );
             p.message = Some(match bimble_drawing::plan::plan(&l.scene, &opts) {
                 Err(e) => e,
                 Ok((sheet, info)) => {
@@ -2032,7 +2275,7 @@ impl Viewer {
             p.scale,
             p.paper,
             p.cut_mm.to_bits(),
-            self.opts.style,
+            self.opts.style.clone(),
             px_w / 50 * 50,
             p.template_rev,
             view.as_ref()
@@ -2040,7 +2283,13 @@ impl Viewer {
                 .unwrap_or_default(),
         );
         if p.preview_image.as_ref().is_none_or(|i| i.key != key) {
-            let opts = plan_options(p, &l.path, self.opts.style, view.clone());
+            let opts = plan_options(
+                p,
+                &l.path,
+                self.opts.style.clone(),
+                view.clone(),
+                &self.views,
+            );
             let mut img = PlanPreview {
                 key,
                 texture: None,
@@ -2131,53 +2380,54 @@ impl Viewer {
             return;
         }
         let mut changed = false;
-        let mut unlink_requested = false;
+        let mut unlink_requested = None;
         let mut link_requested = false;
         egui::CollapsingHeader::new(egui::RichText::new("Links").strong())
-            .default_open(self.linked.is_some())
+            .default_open(!self.links.is_empty())
             .show(ui, |ui| {
-                match &self.linked {
-                    Some(k) => {
-                        ui.label(
-                            k.path
-                                .file_name()
-                                .map(|n| n.to_string_lossy().into_owned())
-                                .unwrap_or_default(),
-                        );
+                ui.weak("Linked models are read-only; this one is the host.");
+                let mut compare = self.compare_with;
+                for (n, k) in self.links.iter_mut().enumerate() {
+                    ui.push_id(n, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(k.name());
+                            if ui.small_button("Unlink").clicked() {
+                                unlink_requested = Some(n);
+                            }
+                        });
                         let mut mode = k.mode;
                         ui.horizontal(|ui| {
                             ui.radio_value(&mut mode, LinkMode::Solid, "Solid");
                             ui.radio_value(&mut mode, LinkMode::Edges, "Edges");
                             ui.radio_value(&mut mode, LinkMode::Hidden, "Hidden");
                         });
+                        if mode != k.mode {
+                            k.mode = mode;
+                            self.needs_render = true;
+                        }
                         let (only_here, only_there) = (
                             k.matched_here.iter().filter(|m| !**m).count(),
                             k.matched_there.iter().filter(|m| !**m).count(),
                         );
-                        let mut cmp = self.compare_on;
+                        let mut cmp = compare == Some(n);
                         let r = ui.checkbox(&mut cmp, "Show differences").on_hover_text(
                             "Matched by position (bounding boxes, 20 mm tolerance, 80 % covered), not by id",
                         );
-                        ui.weak(format!(
-                            "{only_here} only here · {only_there} only in the linked model"
-                        ));
-                        unlink_requested = ui.small_button("Unlink").clicked();
-                        if mode != k.mode {
-                            self.linked.as_mut().unwrap().mode = mode;
-                            self.needs_render = true;
-                        }
                         if r.changed() {
-                            self.compare_on = cmp;
+                            compare = cmp.then_some(n);
                             changed = true;
                         }
-                    }
-                    None => {
-                        link_requested = ui
-                            .button(if self.linking.is_some() { "Linking…" } else { "Link model…" })
-                            .on_hover_text("Load another model as a reference (e.g. the architect's IFC)")
-                            .clicked();
-                    }
+                        ui.weak(format!(
+                            "{only_here} only here · {only_there} only in this link"
+                        ));
+                        ui.separator();
+                    });
                 }
+                self.compare_with = compare;
+                link_requested = ui
+                    .button(if self.linking.is_some() { "Linking…" } else { "Link model…" })
+                    .on_hover_text("Load another model as a read-only reference (e.g. the architect's IFC)")
+                    .clicked();
                 ui.separator();
                 self.reference_links(ui);
             });
@@ -2233,8 +2483,8 @@ impl Viewer {
         if link_requested {
             self.files.pick(files::Purpose::Link, ui.ctx());
         }
-        if unlink_requested {
-            self.unlink();
+        if let Some(i) = unlink_requested {
+            self.unlink(i);
         }
     }
 
@@ -2349,6 +2599,8 @@ impl eframe::App for Viewer {
                                 } else {
                                     self.properties(ui);
                                 }
+                            } else if self.layout.is_some() {
+                                self.layout_properties(ui);
                             } else {
                                 self.view_properties(ui);
                             }
@@ -2422,6 +2674,14 @@ impl eframe::App for Viewer {
                 });
                 return;
             }
+            // A sheet open: it takes the main view.
+            if self.layout.is_some() {
+                self.layout_ui(ui, rect);
+                if let Some(err) = &self.error {
+                    ui.colored_label(Color32::RED, err);
+                }
+                return;
+            }
             if self.fit_pending {
                 self.fit(aspect);
                 self.fit_pending = false;
@@ -2448,7 +2708,9 @@ impl eframe::App for Viewer {
                 }
                 if self.in_2d() {
                     self.draw_references(ui, rect, aspect);
+                    self.draw_annotations(ui, rect, aspect);
                 }
+                self.draw_cut_lines(ui, rect, aspect);
                 self.draw_dimensions(ui, rect, aspect);
                 self.navigation(ui, rect, aspect);
                 if self.animate() {
@@ -2473,6 +2735,30 @@ fn today() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// With several links, the depth range covers every one where it is placed (#39).
+    #[test]
+    fn bounds_cover_every_link() {
+        use bimble_core::demo::{FrameSpec, concrete_frame};
+        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let link = |name: &str, x: f32| Linked {
+            path: PathBuf::from(name),
+            scene: scene.clone(),
+            gpu: None,
+            offset: glam::Vec3::new(x, 0.0, 0.0),
+            mode: LinkMode::Solid,
+            matched_here: Vec::new(),
+            matched_there: Vec::new(),
+        };
+        let links = vec![link("a.ifc", 100_000.0), link("dir/b.ifc", -100_000.0)];
+        assert_eq!(links[1].name(), "b.ifc");
+        let b = bounds_with_links(&scene, &links);
+        let own = bimble_render::Sphere::of(&scene);
+        for x in [100_000.0f32, -100_000.0] {
+            let c = own.center + glam::Vec3::new(x, 0.0, 0.0);
+            assert!((c - b.center).length() + own.radius <= b.radius * 1.0001);
+        }
+    }
 
     /// What a browser gives (a name and bytes) loads like the file on disk.
     #[test]

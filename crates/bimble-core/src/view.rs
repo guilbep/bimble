@@ -44,6 +44,12 @@ pub enum Annotation {
         a: Anchor,
         b: Anchor,
         offset_mm: f64,
+        /// Measured along a→b (aligned), or across the view (horizontal) or up it (vertical).
+        #[serde(default, skip_serializing_if = "DimAxis::is_aligned")]
+        axis: DimAxis,
+        /// Its dimension type (graphic style, #43); none: the plan template's unit.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
     },
     /// A text at a point (world mm), its size on paper.
     Text {
@@ -53,11 +59,30 @@ pub enum Annotation {
         size_mm: f64,
         #[serde(default, skip_serializing_if = "is_zero")]
         angle_deg: f64,
+        /// Its text type (#43): colour, and size when set.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
     },
 }
 
 fn is_zero(x: &f64) -> bool {
     *x == 0.0
+}
+
+/// How a dimension measures, as seen in its view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimAxis {
+    #[default]
+    Aligned,
+    Horizontal,
+    Vertical,
+}
+
+impl DimAxis {
+    fn is_aligned(&self) -> bool {
+        *self == DimAxis::Aligned
+    }
 }
 
 /// A point a dimension is attached to: world mm, and the element it was taken on (it then
@@ -337,7 +362,8 @@ pub fn resolve(
     Ok(r)
 }
 
-/// What is hidden in a view: material families (by label), IFC classes, storeys (by name).
+/// What is hidden in a view: material families (by label), IFC classes, storeys (by name),
+/// linked models (by file name).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Visibility {
@@ -347,6 +373,9 @@ pub struct Visibility {
     pub hidden_classes: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hidden_storeys: Vec<String>,
+    /// Linked models hidden in this view, by file name (#39).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden_links: Vec<String>,
 }
 
 impl Visibility {
@@ -354,6 +383,7 @@ impl Visibility {
         self.hidden_families.is_empty()
             && self.hidden_classes.is_empty()
             && self.hidden_storeys.is_empty()
+            && self.hidden_links.is_empty()
     }
 }
 

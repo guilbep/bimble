@@ -403,7 +403,7 @@ pub struct Renderer {
     pub samples: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DrawOptions {
     /// Hatch spacing multiplier in pixels (use the display scale factor on HiDPI).
     pub hatch_scale: f32,
@@ -1389,7 +1389,7 @@ mod tests {
             style.families.get_mut(c).color = Rgb(rgb);
         }
         let opts = DrawOptions {
-            style,
+            style: style.clone(),
             ..Default::default()
         };
         let px = draw(&gpu, &scene, &opts);
@@ -1761,7 +1761,7 @@ mod tests {
             ..GraphicStyle::default()
         };
         let opts = DrawOptions {
-            style,
+            style: style.clone(),
             ..Default::default()
         };
         let g_main = r.upload(&gpu.device, &main_one, |_, _| Style::Normal);

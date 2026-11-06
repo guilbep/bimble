@@ -30,6 +30,8 @@ a decision that changes an old one says which one it supersedes.
 | [0022](0022-one-button-release.md) | Releases from one button: the workflow sets the version, commits, tags, builds | Accepted |
 | [0023](0023-paper-drawings-of-views.md) | Paper drawings of any view (turned scene); seen from above = upward faces; own hidden edges dropped | Accepted |
 | [0024](0024-sheets.md) | Sheets: views placed at their own scales, one title block; dimensions and texts belong to views | Accepted |
+| [0025](0025-layouts-in-the-main-view.md) | Layouts in the main view: the sheet rendered from its own drawing; tools in paper mm | Accepted |
+| [0026](0026-office-standards-on-paper.md) | Office standards on paper: pens per scale, line, text, dimension and hatch types, all in the style | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

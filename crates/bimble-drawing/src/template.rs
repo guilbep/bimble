@@ -33,6 +33,14 @@ pub struct PlanTemplate {
     pub slab_levels: bool,
     /// Diagonal cross in rectangular openings of the slabs seen below the cut.
     pub opening_crosses: bool,
+    /// Size of rectangular slab openings ("60x40", cm), and their position from the nearest
+    /// grid axes.
+    pub opening_dimensions: bool,
+    /// Section labels of columns and beams ("30/30", "GL24h 24x46"): beside what is cut, and
+    /// along the beams above the cut of a plan.
+    pub element_labels: bool,
+    /// Section marks on plans: where each section view cuts, which way it looks, its tag.
+    pub section_markers: bool,
     pub legend: Legend,
     pub title_block: TitleBlock,
     /// Values for placeholders, e.g. {"phase": "Tender", "client": "…"}.
@@ -204,6 +212,9 @@ impl Default for PlanTemplate {
             dimensions: true,
             slab_levels: true,
             opening_crosses: true,
+            opening_dimensions: true,
+            element_labels: true,
+            section_markers: true,
             legend: Legend::default(),
             title_block: TitleBlock::default(),
             fields: BTreeMap::new(),

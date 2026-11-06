@@ -26,6 +26,21 @@ pub struct SheetInfo {
     pub views_drawn: usize,
     /// Views that could not be drawn, with why (they show as a note on the sheet).
     pub problems: Vec<String>,
+    /// Where each placed view was drawn (for picking, moving and dimensioning on screen).
+    pub placed: Vec<PlacedInfo>,
+}
+
+/// A placed view on paper.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedInfo {
+    /// The `Placed` entry and its view.
+    pub id: bimble_core::GlobalId,
+    pub view: bimble_core::GlobalId,
+    /// Its drawing's box on the paper, mm: x0, y0, x1, y1.
+    pub rect: [f64; 4],
+    pub frame: crate::viewdraw::ViewFrame,
+    /// Its lines on paper, for snapping.
+    pub segments: Vec<[[f64; 2]; 2]>,
 }
 
 /// Move every point of an item by `d` (paper mm).
@@ -62,12 +77,13 @@ pub fn draw(
         let opts = PlanOptions {
             scale: p.scale,
             paper: Some(paper),
-            style: o.style,
+            style: o.style.clone(),
             project: o.project.clone(),
             date: o.date.clone(),
             template: o.template.clone(),
             view: Some(v.clone()),
             bare: true,
+            section_marks: crate::plan::section_marks(views),
             ..Default::default()
         };
         match plan(scene, &opts) {
@@ -76,10 +92,38 @@ pub fn draw(
                     p.at_mm[0] - drawn.width_mm / 2.0,
                     p.at_mm[1] - drawn.height_mm / 2.0,
                 ];
+                let mut segments = Vec::new();
                 for mut it in drawn.items {
                     shift(&mut it, d);
+                    match &it {
+                        Item::Lines { lines, .. } => {
+                            for l in lines {
+                                segments.extend(l.windows(2).map(|w| [w[0], w[1]]));
+                            }
+                        }
+                        Item::Area {
+                            loops,
+                            outline: Some(_),
+                            ..
+                        } => {
+                            for l in loops {
+                                segments.extend(l.windows(2).map(|w| [w[0], w[1]]));
+                                if let (Some(a), Some(b)) = (l.last(), l.first()) {
+                                    segments.push([*a, *b]);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                     items.push(it);
                 }
+                info.placed.push(PlacedInfo {
+                    id: p.id,
+                    view: p.view,
+                    rect: [d[0], d[1], d[0] + drawn.width_mm, d[1] + drawn.height_mm],
+                    frame: pi.frame.shifted(d),
+                    segments,
+                });
                 for e in pi.legend {
                     if !legend.contains(&e) {
                         legend.push(e);
@@ -103,12 +147,15 @@ pub fn draw(
         }
     }
     for t in &def.texts {
+        let tt = t.kind.as_ref().and_then(|k| o.style.paper.text_type(k));
+        let size = tt.map_or(t.size_mm, |x| x.size_mm as f64);
+        let color = tt.map_or(ink, |x| x.color);
         for (i, line) in t.text.split('\n').enumerate() {
             items.push(Item::Text {
-                pos: [t.at_mm[0], t.at_mm[1] + i as f64 * t.size_mm * 1.25],
-                size_mm: t.size_mm,
+                pos: [t.at_mm[0], t.at_mm[1] + i as f64 * size * 1.25],
+                size_mm: size,
                 text: line.to_string(),
-                color: ink,
+                color,
                 anchor: Anchor::Start,
                 angle_deg: t.angle_deg,
                 bold: false,
@@ -158,7 +205,7 @@ pub fn draw(
         ("n", String::new()),
     ];
     let filled = |s: &str| fill(s, &values, &fields);
-    frame_and_title_block(&mut items, w, h, &o.template, &filled, ink, &o.style.paper);
+    frame_and_title_block(&mut items, w, h, &o.template, &filled, ink, &o.style);
     let title = format!("{} {}", def.number, def.name);
     Ok((
         Sheet {
@@ -223,6 +270,7 @@ mod tests {
                 at: [0.0, 5000.0, 3500.0],
                 size_mm: 3.5,
                 angle_deg: 0.0,
+                kind: None,
             }],
         };
         views.push(section.clone());
@@ -251,6 +299,7 @@ mod tests {
             at_mm: [40.0, 40.0],
             size_mm: 5.0,
             angle_deg: 0.0,
+            kind: None,
         });
         let o = SheetOptions {
             project: "Demo".into(),
@@ -321,6 +370,8 @@ mod tests {
                 element: None,
             },
             offset_mm: -1500.0,
+            axis: Default::default(),
+            kind: None,
         });
         let id = v.id;
         let mut def = SheetDef::new("S-102", "Plan");
@@ -336,6 +387,73 @@ mod tests {
             "{:?}",
             texts(&sheet)
         );
+    }
+
+    /// A dimension of a type is written in that type's unit and colour, and a sheet text of a
+    /// type takes that type's size and colour (#43).
+    #[test]
+    fn annotation_types_set_unit_size_and_colour() {
+        use bimble_core::sheet::SheetText;
+        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let mut views = default_views(&scene.levels());
+        let v = views
+            .iter_mut()
+            .find(|v| v.name == "Plan Niveau 1")
+            .unwrap();
+        v.annotations.push(Annotation::Dimension {
+            id: GlobalId::new(),
+            a: VAnchor {
+                at: [0.0, 0.0, 0.0],
+                element: None,
+            },
+            b: VAnchor {
+                at: [6000.0, 0.0, 0.0],
+                element: None,
+            },
+            offset_mm: -1500.0,
+            axis: Default::default(),
+            kind: Some("red m".into()),
+        });
+        let id = v.id;
+        let mut def = SheetDef::new("S-104", "Typed");
+        def.placed.push(Placed {
+            id: GlobalId::new(),
+            view: id,
+            scale: 100,
+            at_mm: [400.0, 250.0],
+        });
+        def.texts.push(SheetText {
+            id: GlobalId::new(),
+            text: "Note".into(),
+            at_mm: [100.0, 100.0],
+            size_mm: 9.0,
+            angle_deg: 0.0,
+            kind: Some("Arial 4 mm blue".into()),
+        });
+        let o = SheetOptions::default();
+        let red = o.style.paper.dim_type("red m").unwrap().color;
+        let blue = o.style.paper.text_type("Arial 4 mm blue").unwrap().color;
+        let (sheet, _) = draw(&scene, &def, &views, &o).unwrap();
+        let found = |want: &str| {
+            sheet.items.iter().find_map(|i| match i {
+                Item::Text {
+                    text,
+                    color,
+                    size_mm,
+                    ..
+                } if text == want => Some((*color, *size_mm)),
+                _ => None,
+            })
+        };
+        let (c, size) = found("6.00 m").unwrap_or_else(|| panic!("{:?}", texts(&sheet)));
+        assert_eq!(c, red);
+        assert!((size - 2.5).abs() < 1e-6);
+        let (c, size) = found("Note").unwrap();
+        assert_eq!(c, blue);
+        assert!((size - 4.0).abs() < 1e-6);
+        // Its lines are red too.
+        assert!(sheet.items.iter().any(|i| matches!(i,
+            Item::Lines { pen, .. } if pen.color == red)));
     }
 
     /// A placed view that can't be drawn leaves a note, not a failed sheet.
