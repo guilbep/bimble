@@ -51,8 +51,9 @@ impl Paper {
 pub struct Pen {
     pub width_mm: f64,
     pub color: Rgb,
-    /// Dash and gap lengths, mm. None: continuous.
-    pub dash: Option<[f64; 2]>,
+    /// Dash pattern, mm: dash, gap, dash, gap… (e.g. dash-dot: long dash, gap, dot, gap).
+    /// Empty: continuous.
+    pub dash: Vec<f64>,
 }
 
 /// Parallel hatch lines inside an area.
@@ -200,8 +201,9 @@ fn pen_attrs(p: &Pen) -> String {
         hex(p.color),
         p.width_mm
     );
-    if let Some([a, b]) = p.dash {
-        let _ = write!(s, r#" stroke-dasharray="{a:.3} {b:.3}""#);
+    if !p.dash.is_empty() {
+        let d: Vec<String> = p.dash.iter().map(|x| format!("{x:.3}")).collect();
+        let _ = write!(s, r#" stroke-dasharray="{}""#, d.join(" "));
     }
     s
 }
@@ -413,10 +415,7 @@ impl Sheet {
             let [r, g, b] = rgb(p.color);
             c.set_stroke_rgb(r, g, b);
             c.set_line_width(p.width_mm as f32);
-            match p.dash {
-                Some([a, b]) => c.set_dash_pattern([a as f32, b as f32], 0.0),
-                None => c.set_dash_pattern([], 0.0),
-            };
+            c.set_dash_pattern(p.dash.iter().map(|&x| x as f32), 0.0);
         };
         for item in &self.items {
             match item {
@@ -569,13 +568,13 @@ mod tests {
                         pen: Pen {
                             width_mm: 0.13,
                             color: black,
-                            dash: None,
+                            dash: Vec::new(),
                         },
                     }],
                     outline: Some(Pen {
                         width_mm: 0.5,
                         color: black,
-                        dash: None,
+                        dash: Vec::new(),
                     }),
                 },
                 Item::Lines {
@@ -583,7 +582,7 @@ mod tests {
                     pen: Pen {
                         width_mm: 0.13,
                         color: black,
-                        dash: Some([2.0, 1.0]),
+                        dash: vec![2.0, 1.0],
                     },
                 },
                 Item::text([10.0, 200.0], 3.5, "Plan N01 – 1:100", black),
@@ -635,7 +634,7 @@ mod tests {
             pen: Pen {
                 width_mm: 0.1,
                 color: Rgb([0, 0, 0]),
-                dash: None,
+                dash: Vec::new(),
             },
         };
         // Vertical lines every 5 mm across 100 mm: x = 0, 5, ..., 100.

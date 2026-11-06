@@ -186,12 +186,24 @@ pub struct PaperStyle {
     pub frame_pen_mm: f32,
     /// Text height in the title block.
     pub text_mm: f32,
-    /// Grid axes and dimension lines.
+    /// Dimension lines (and grid axes in styles written before `axis_pen_mm`).
     pub annotation_pen_mm: f32,
+    /// Grid axes: pen, and dash pattern (dash, gap, dot, gap…; any even number of lengths), the
+    /// dash-dot of axes on office drawings.
+    #[serde(default = "axis_pen")]
+    pub axis_pen_mm: f32,
+    #[serde(default = "axis_dash")]
+    pub axis_dash_mm: [f32; 4],
     /// What is seen below the cut is filled with the family colour mixed with this much white.
     pub seen_lighten: f32,
 }
 
+fn axis_pen() -> f32 {
+    0.13
+}
+fn axis_dash() -> [f32; 4] {
+    [12.0, 1.5, 0.5, 1.5]
+}
 fn one() -> f32 {
     1.0
 }
@@ -271,6 +283,8 @@ impl Default for GraphicStyle {
                 frame_pen_mm: 0.5,
                 text_mm: 2.5,
                 annotation_pen_mm: 0.13,
+                axis_pen_mm: axis_pen(),
+                axis_dash_mm: axis_dash(),
                 seen_lighten: 0.6,
             },
             families: Families {
@@ -390,11 +404,15 @@ impl GraphicStyle {
             ("hatch_pen_mm", p.hatch_pen_mm),
             ("frame_pen_mm", p.frame_pen_mm),
             ("annotation_pen_mm", p.annotation_pen_mm),
+            ("axis_pen_mm", p.axis_pen_mm),
         ] {
             range(n, x, 0.05, 5.0)?;
         }
         range("above_dash_mm[0]", p.above_dash_mm[0], 0.1, 50.0)?;
         range("above_dash_mm[1]", p.above_dash_mm[1], 0.1, 50.0)?;
+        for (k, x) in p.axis_dash_mm.iter().enumerate() {
+            range(&format!("axis_dash_mm[{k}]"), *x, 0.1, 100.0)?;
+        }
         range("hatch_mm_per_px", p.hatch_mm_per_px, 0.05, 10.0)?;
         range("text_mm", p.text_mm, 1.0, 20.0)?;
         range("seen_lighten", p.seen_lighten, 0.0, 1.0)?;
@@ -510,6 +528,10 @@ mod tests {
             (r#"{ "edges": "red" }"#, "#rrggbb"),
             (r##"{ "egdes": "#ff0000" }"##, "unknown field"),
             (r#"{ "ambient": 2 }"#, "ambient"),
+            (
+                r#"{ "paper": { "axis_dash_mm": [0, 1.5, 0.5, 1.5] } }"#,
+                "axis_dash_mm[0]",
+            ),
             (r#"{ "hatch_strength": -1 }"#, "hatch_strength"),
             (r#"[1, 2]"#, "JSON object"),
             (
