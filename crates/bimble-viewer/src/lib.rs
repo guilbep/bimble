@@ -418,6 +418,10 @@ struct Viewer {
     compare_with: Option<usize>,
     /// Linked models hidden in the active view, by file name.
     hidden_links: BTreeSet<String>,
+    /// An element of a linked model selected (#39): the link, the element, and its edges
+    /// uploaded for the highlight. Read-only.
+    link_selected: Option<(usize, usize)>,
+    link_selected_gpu: Option<GpuScene>,
     /// Model to link once ours is loaded (`bimble view --link`).
     pending_link: Option<PathBuf>,
 
@@ -507,6 +511,8 @@ impl Viewer {
             linking: None,
             compare_with: None,
             hidden_links: BTreeSet::new(),
+            link_selected: None,
+            link_selected_gpu: None,
             pending_link: None,
             plan_window: false,
             plan: PlanSettings::default(),
@@ -740,6 +746,8 @@ impl Viewer {
             return;
         }
         self.links.remove(i);
+        self.link_selected = None;
+        self.link_selected_gpu = None;
         self.compare_with = match self.compare_with {
             Some(c) if c == i => None,
             Some(c) if c > i => Some(c - 1),
@@ -783,6 +791,8 @@ impl Viewer {
                 self.set_hovered(None);
                 // A linked model and a box from the previous model mean nothing for this one.
                 self.links.clear();
+                self.link_selected = None;
+                self.link_selected_gpu = None;
                 self.compare_with = None;
                 self.hidden_links.clear();
                 self.section_on = false;
@@ -1138,6 +1148,24 @@ impl Viewer {
         }
     }
 
+    /// Select an element of a linked model (or none); uploads its edges for the highlight.
+    fn select_link_element(&mut self, s: Option<(usize, usize)>) {
+        if s == self.link_selected {
+            return;
+        }
+        self.link_selected = s;
+        self.link_selected_gpu = s.and_then(|(n, i)| {
+            let k = self.links.get(n)?;
+            Some(self.renderer.upload_with(
+                &self.device,
+                &k.scene,
+                |j, _| if j == i { Style::Normal } else { Style::Hidden },
+                self.clipping(),
+            ))
+        });
+        self.needs_render = true;
+    }
+
     /// Change the element under the cursor; uploads its edges for the highlight.
     fn set_hovered(&mut self, h: Option<usize>) {
         if h == self.hovered {
@@ -1371,6 +1399,14 @@ impl Viewer {
         if let Some(h) = &self.hover_gpu {
             layers.push(bimble_render::Layer::highlight(h, self.opts.style.hover));
         }
+        if let (Some(g), Some((n, _))) = (&self.link_selected_gpu, self.link_selected)
+            && let Some(k) = self.links.get(n)
+        {
+            layers.push(bimble_render::Layer {
+                offset: k.offset,
+                ..bimble_render::Layer::highlight(g, self.opts.style.selection)
+            });
+        }
         let bounds = self.loaded.as_ref().map_or(gs.bounds, |l| l.bounds);
         self.renderer.render_layers(
             &self.device,
@@ -1503,13 +1539,36 @@ impl Viewer {
                 1.0 - (pos.y - rect.min.y) / rect.height() * 2.0,
             ];
             let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
-            let hit =
-                bimble_render::pick(&l.scene, |i| self.visible(i), o, d, self.clip().as_ref())
-                    .map(|(i, _)| i);
+            let clip = self.clip();
+            let ours = bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref());
+            // The nearest hit among the shown links, if nearer than ours (#39).
+            let theirs = self
+                .links
+                .iter()
+                .enumerate()
+                .filter(|(_, k)| {
+                    k.mode != LinkMode::Hidden && !self.hidden_links.contains(&k.name())
+                })
+                .filter_map(|(n, k)| {
+                    let c = clip.map(|c| ClipBox {
+                        min: c.min - k.offset,
+                        max: c.max - k.offset,
+                    });
+                    bimble_render::pick_hit(&k.scene, |_| true, o - k.offset, d, c.as_ref())
+                        .map(|h| (n, h))
+                })
+                .min_by(|a, b| a.1.distance.total_cmp(&b.1.distance));
+            let (hit, link_hit) = match (ours, theirs) {
+                (Some(h), Some((_, t))) if h.distance <= t.distance => (Some(h.element), None),
+                (_, Some((n, t))) => (None, Some((n, t.element))),
+                (Some(h), None) => (Some(h.element), None),
+                (None, None) => (None, None),
+            };
             if hit != self.selected {
                 self.selected = hit;
                 self.needs_upload = true;
             }
+            self.select_link_element(link_hit);
         }
     }
 
@@ -1606,6 +1665,9 @@ impl Viewer {
         let handled = stopped_placing || (esc && self.measure_first.take().is_some());
         if !handled && esc && self.selected.take().is_some() {
             self.needs_upload = true;
+        }
+        if !handled && esc {
+            self.select_link_element(None);
         }
     }
 
@@ -2406,6 +2468,44 @@ impl Viewer {
         }
     }
 
+    /// The properties of a selected element of a linked model: read only (#39).
+    fn link_properties(&mut self, ui: &mut egui::Ui) {
+        let Some((n, i)) = self.link_selected else {
+            return;
+        };
+        let Some(k) = self.links.get(n) else { return };
+        let Some(e) = k.scene.elements.get(i) else {
+            return;
+        };
+        ui.heading(&e.class);
+        ui.weak(format!("In the linked model {} (read-only)", k.name()));
+        egui::Grid::new("link-props")
+            .num_columns(2)
+            .striped(true)
+            .show(ui, |ui| {
+                let mut row = |a: &str, v: &str| {
+                    ui.label(a);
+                    ui.add(egui::Label::new(v).selectable(true));
+                    ui.end_row();
+                };
+                row("Name", &e.name);
+                row("GlobalId", &e.global_id);
+                row("Storey", &e.storey);
+                row("Material", &e.material);
+                row("Family", e.category.label());
+                row("Volume", &format!("{:.3} m³", e.mesh.volume() / 1e9));
+                let matched = k.matched_there.get(i).copied().unwrap_or(true);
+                row(
+                    "In the host",
+                    if matched {
+                        "something at the same place"
+                    } else {
+                        "nothing at this place"
+                    },
+                );
+            });
+    }
+
     fn properties(&mut self, ui: &mut egui::Ui) {
         let (Some(i), Some(l)) = (self.selected, self.loaded.as_mut()) else {
             return;
@@ -2532,8 +2632,14 @@ impl eframe::App for Viewer {
                         .id_salt("properties")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            if self.selected.is_some() {
-                                if ui.small_button("← View properties").clicked() {
+                            if self.link_selected.is_some() {
+                                if ui.small_button("Back to the view").clicked() {
+                                    self.select_link_element(None);
+                                } else {
+                                    self.link_properties(ui);
+                                }
+                            } else if self.selected.is_some() {
+                                if ui.small_button("Back to the view").clicked() {
                                     self.selected = None;
                                     self.needs_upload = true;
                                 } else {
