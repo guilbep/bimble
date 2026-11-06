@@ -21,6 +21,7 @@ use web_time::Instant;
 mod cutlines;
 mod edit;
 mod files;
+mod icons;
 mod layout;
 mod measure;
 mod ribbon;

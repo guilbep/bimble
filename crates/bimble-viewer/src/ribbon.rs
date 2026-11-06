@@ -460,28 +460,64 @@ impl Viewer {
         });
     }
 
-    /// One ribbon button: pressed when its action is on, greyed when it can't run.
+    /// One ribbon button, its icon above its name: pressed when its action is on, greyed when it
+    /// can't run.
     fn ribbon_button(&self, ui: &mut egui::Ui, a: Action, text: &str) -> bool {
         let on = self.action_on(a);
-        let b = egui::Button::new(egui::RichText::new(text))
-            .fill(if on {
-                th::SELECTED_BG
-            } else {
-                egui::Color32::TRANSPARENT
-            })
-            .stroke(if on {
-                egui::Stroke::new(1.0, th::ACCENT)
-            } else {
-                egui::Stroke::NONE
-            })
-            .min_size(egui::vec2(64.0, 34.0));
-        let mut r = ui.add_enabled(self.action_enabled(a), b);
+        let enabled = self.action_enabled(a);
+        let galley = ui.painter().layout_no_wrap(
+            text.to_string(),
+            egui::FontId::proportional(th::TEXT_SMALL + 0.5),
+            th::TEXT,
+        );
+        let w = (galley.size().x + 12.0).max(56.0);
+        let sense = if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        };
+        let (rect, mut r) = ui.allocate_exact_size(egui::vec2(w, 50.0), sense);
+        let fill = if on {
+            th::SELECTED_BG
+        } else if enabled && r.hovered() {
+            egui::Color32::from_rgb(0x35, 0x35, 0x35)
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        let p = ui.painter();
+        p.rect_filled(rect, th::RADIUS as f32, fill);
+        if on {
+            p.rect_stroke(
+                rect,
+                th::RADIUS as f32,
+                egui::Stroke::new(1.0, th::ACCENT),
+                egui::StrokeKind::Inside,
+            );
+        }
+        let color = if enabled {
+            th::TEXT
+        } else {
+            egui::Color32::from_gray(0x66)
+        };
+        let icon = egui::Rect::from_center_size(
+            egui::pos2(rect.center().x, rect.top() + 16.0),
+            egui::vec2(22.0, 22.0),
+        );
+        crate::icons::paint(p, icon, a, color);
+        p.galley(
+            egui::pos2(
+                rect.center().x - galley.size().x / 2.0,
+                rect.bottom() - 17.0,
+            ),
+            galley,
+            color,
+        );
         let tip = match a.keys() {
             "" => a.label(),
             k => format!("{} ({k})", a.label()),
         };
         r = r.on_hover_text(tip);
-        r.clicked()
+        enabled && r.clicked()
     }
 
     /// A named group of the ribbon.
