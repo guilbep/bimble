@@ -105,7 +105,7 @@ impl Choose {
         );
         let cap = cap.min(self.parsed.limits().max_triangles);
         let (scene, _) = self.parsed.scene(|i| keep[i], cap);
-        self.parsed.free();
+        drop(self.parsed);
         Outcome::Ready {
             scene,
             model: None,
@@ -163,7 +163,8 @@ pub fn load_ifc(source: Source, budget: u64, read_anyway: bool) -> Result<Outcom
     let cap = cost.affordable_triangles(budget).min(limits.max_triangles);
     let (scene, not_shown) = parsed.scene(|_| true, cap);
     if not_shown == 0 {
-        parsed.free();
+        // Freed before the scene is drawn: it would otherwise overlap the GPU upload.
+        drop(parsed);
         return Ok(Outcome::ready(scene, None, t.elapsed()));
     }
     drop(scene);

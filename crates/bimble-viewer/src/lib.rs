@@ -3145,7 +3145,7 @@ impl Viewer {
                     ctx,
                 );
             }
-            (_, big::Ask::Choose(c)) => c.parsed.free(),
+            (_, big::Ask::Choose(c)) => drop(c),
             _ => {}
         }
     }

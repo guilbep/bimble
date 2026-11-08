@@ -51,7 +51,8 @@ pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<Scene, ReadError> 
     }
     let p = parse_file(path.as_ref())?;
     let (scene, _) = p.scene(|_| true, p.limits.max_triangles);
-    p.free();
+    // Freed before the scene is drawn: it would otherwise overlap the GPU upload.
+    drop(p);
     Ok(scene)
 }
 
@@ -97,7 +98,8 @@ pub fn displayed_bytes_of_file(path: &std::path::Path) -> Result<u64, ReadError>
 pub fn read_bytes(bytes: Vec<u8>) -> Result<Scene, ReadError> {
     let p = parse_bytes(bytes)?;
     let (scene, _) = p.scene(|_| true, p.limits.max_triangles);
-    p.free();
+    // Freed before the scene is drawn: it would otherwise overlap the GPU upload.
+    drop(p);
     Ok(scene)
 }
 
@@ -243,7 +245,8 @@ fn parse(text: &str) -> Result<(StepFile, usize), ReadError> {
 fn read_parsed(parsed: (StepFile, usize), limits: Limits) -> Result<Scene, ReadError> {
     let p = Parsed::new(parsed, limits)?;
     let (scene, _) = p.scene(|_| true, limits.max_triangles);
-    p.free();
+    // Freed before the scene is drawn: it would otherwise overlap the GPU upload.
+    drop(p);
     Ok(scene)
 }
 
@@ -696,15 +699,6 @@ impl Parsed {
 
     pub fn is_empty(&self) -> bool {
         self.ids.is_empty()
-    }
-
-    /// Free the parsed file: millions of values take a while, so off the caller's thread
-    /// where there are threads.
-    pub fn free(self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        std::thread::spawn(move || drop(self));
-        #[cfg(target_arch = "wasm32")]
-        drop(self);
     }
 }
 
