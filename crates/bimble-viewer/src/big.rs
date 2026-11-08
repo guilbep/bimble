@@ -96,6 +96,7 @@ impl Choose {
             .filter(|(_, k)| **k)
             .map(|(c, _)| c.triangles)
             .sum();
+        let cap = cap.min(self.parsed.limits().max_triangles);
         let (scene, _) = self.parsed.scene(|i| keep[i], cap);
         self.parsed.free();
         Outcome::Ready {
@@ -124,9 +125,12 @@ pub fn load_ifc(bytes: Vec<u8>, budget: u64, read_anyway: bool) -> Result<Outcom
             budget,
         })));
     }
-    let parsed = bimble_ifc::read::parse_bytes(bytes).map_err(|e| e.to_string())?;
-    // Mesh what fits; only a model that does not fit all pays for a census.
-    let (scene, not_shown) = parsed.scene(|_| true, cost.affordable_triangles(budget));
+    let limits = bimble_ifc::read::Limits::for_displayed(cost.displayed);
+    let parsed = bimble_ifc::read::parse_bytes_with(bytes, limits).map_err(|e| e.to_string())?;
+    // Mesh what fits; only a model that does not fit all pays for a census. Never past the
+    // guard against hostile expansion.
+    let cap = cost.affordable_triangles(budget).min(limits.max_triangles);
+    let (scene, not_shown) = parsed.scene(|_| true, cap);
     if not_shown == 0 {
         parsed.free();
         return Ok(Outcome::ready(scene, None, t.elapsed()));

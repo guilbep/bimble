@@ -89,7 +89,7 @@ fn class_of(upper: &str) -> Option<IfcClass> {
 
 /// Read an IFC file (STEP text) into an editable model and a report.
 pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
-    import_str_with_limits(text, Limits::default())
+    import_str_with_limits(text, Limits::for_text(text.as_bytes()))
 }
 
 /// `import_str` with explicit caps on the geometry tessellated for the whole file.

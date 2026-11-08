@@ -156,3 +156,18 @@ fn boolean_cuts_and_openings_are_exact() {
         1e-9,
     );
 }
+
+/// With the default limits, a 3 KB file of nested maps (2^18 boxes, 3.1 M triangles: 917 per
+/// byte) stops at the expansion guard, while real files (at most 0.11 per byte) never meet it.
+#[test]
+fn a_small_file_that_explodes_stops_at_the_expansion_guard() {
+    let s = bimble_ifc::read::read_str(&fixture("chain18.ifc")).unwrap();
+    assert!(s.triangle_count() <= 1_000_000, "{}", s.triangle_count());
+    assert!(
+        s.warnings.iter().any(|w| w.contains("too large")),
+        "{:?}",
+        s.warnings
+    );
+    let l = bimble_ifc::read::Limits::for_displayed(500_000_000);
+    assert_eq!(l.max_triangles, 5_000_000_000);
+}

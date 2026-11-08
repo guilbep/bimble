@@ -60,8 +60,15 @@ pub fn read_bytes(bytes: Vec<u8>) -> Result<Scene, ReadError> {
     Ok(scene)
 }
 
-/// Parse for display without meshing (ADR 0033). The bytes are dropped once parsed.
+/// Parse for display without meshing (ADR 0033), with limits for this file's size. The bytes
+/// are dropped once parsed.
 pub fn parse_bytes(bytes: Vec<u8>) -> Result<Parsed, ReadError> {
+    let limits = Limits::for_text(&bytes);
+    parse_bytes_with(bytes, limits)
+}
+
+/// `parse_bytes` with given limits.
+pub fn parse_bytes_with(bytes: Vec<u8>, limits: Limits) -> Result<Parsed, ReadError> {
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(ReadError::TooLarge(bytes.len() as u64));
     }
@@ -69,7 +76,7 @@ pub fn parse_bytes(bytes: Vec<u8>) -> Result<Parsed, ReadError> {
         Ok(text) => parse(&text)?,
         Err(e) => parse(&String::from_utf8_lossy(e.as_bytes()))?,
     };
-    Parsed::new(parsed, Limits::default())
+    Parsed::new(parsed, limits)
 }
 
 /// Bytes of the instances the display parses (all but `NOT_DISPLAYED`), from a scan that
@@ -120,8 +127,34 @@ impl Default for Limits {
     }
 }
 
+/// Triangles a real file makes per byte of displayed text, at most, with headroom: 17 real IFC
+/// files reached 0.11 (instanced electrical fittings), a nested-map bomb 917 (the `chain18`
+/// fixture). 10 is ~90× from both.
+const TRIANGLES_PER_BYTE: u64 = 10;
+
+impl Limits {
+    /// Limits that scale with the file: what is hostile is expansion (a small file that
+    /// explodes), not size. Floors of 1 M triangles and 5 M item visits for small files.
+    pub fn for_displayed(displayed_bytes: u64) -> Limits {
+        let n = |x: u64| usize::try_from(x).unwrap_or(usize::MAX);
+        Limits {
+            max_triangles: n(displayed_bytes.saturating_mul(TRIANGLES_PER_BYTE)).max(1_000_000),
+            max_item_visits: n(displayed_bytes / 10).max(5_000_000),
+        }
+    }
+
+    /// `for_displayed` from the file's text.
+    pub fn for_text(text: &[u8]) -> Limits {
+        Limits::for_displayed(displayed_bytes(text))
+    }
+}
+
+/// Most triangles one element may take: none real comes close, and it bounds what one thread
+/// holds while counting (ADR 0033).
+const ELEMENT_MAX_TRIANGLES: usize = 50_000_000;
+
 pub fn read_str(text: &str) -> Result<Scene, ReadError> {
-    read_str_with_limits(text, Limits::default())
+    read_str_with_limits(text, Limits::for_text(text.as_bytes()))
 }
 
 pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadError> {
@@ -314,7 +347,11 @@ impl Parsed {
         // An element past the cap is never shown: counting it to cap + 1 says so, and bounds
         // what one element holds while counted.
         let budget = Budget {
-            element_max: self.limits.max_triangles.saturating_add(1),
+            element_max: self
+                .limits
+                .max_triangles
+                .min(ELEMENT_MAX_TRIANGLES)
+                .saturating_add(1),
             ..Budget::new(&Limits {
                 max_triangles: usize::MAX,
                 ..self.limits
@@ -362,7 +399,7 @@ impl Parsed {
         type Meshed = (ElementInfo, MeshBuilder, BTreeMap<String, usize>);
         'batches: for batch in picked.chunks(1024) {
             let guard = || Budget {
-                element_max: cap.saturating_add(1),
+                element_max: cap.min(ELEMENT_MAX_TRIANGLES).saturating_add(1),
                 ..Budget::new(&Limits {
                     max_triangles: (cap - total).saturating_add(cap).saturating_add(1),
                     max_item_visits: visits.visits_left.load(Ordering::Relaxed),
@@ -434,6 +471,12 @@ impl Parsed {
             .map(|(k, n)| if n > 1 { format!("{k} (×{n})") } else { k })
             .collect();
         (sb.finish(), picked.len() - shown)
+    }
+
+    /// The limits this file was parsed with: `max_triangles` is the guard against hostile
+    /// expansion, which a `scene` cap must not exceed.
+    pub fn limits(&self) -> Limits {
+        self.limits
     }
 
     /// How many elements have a body (what `census` lists).
