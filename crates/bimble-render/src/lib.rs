@@ -231,6 +231,19 @@ impl Camera {
         self.pitch = (self.pitch + dy).clamp(-1.57, 1.57);
     }
 
+    /// Orbit about `pivot` (scene coordinates): the camera turns rigidly about it, so the
+    /// pivot stays where it is on screen, like the wheel's zoom about the cursor.
+    pub fn orbit_about(&mut self, dx: f32, dy: f32, pivot: Vec3) {
+        let (yaw, pitch) = (self.yaw, self.pitch);
+        self.orbit(dx, dy);
+        // The turn actually made (the pitch is clamped): about Z, then about the horizontal
+        // axis the pitch turns about (right of the view, before the yaw).
+        let h = Vec3::new(-yaw.sin(), yaw.cos(), 0.0);
+        let r = glam::Quat::from_rotation_z(self.yaw - yaw)
+            * glam::Quat::from_axis_angle(h, -(self.pitch - pitch));
+        self.target = pivot + r * (self.target - pivot);
+    }
+
     /// Pan by a screen-space fraction of the view height.
     pub fn pan(&mut self, dx: f32, dy: f32) {
         let fwd = (self.target - self.eye()).normalize();
@@ -1320,6 +1333,44 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn orbiting_about_a_point_keeps_it_on_screen() {
+        let bounds = Sphere {
+            center: Vec3::ZERO,
+            radius: 20_000.0,
+        };
+        let ndc = |c: &Camera, p: Vec3| c.view_proj(1.5, &bounds).project_point3(p).truncate();
+        for mirror_x in [false, true] {
+            let mut cam = Camera {
+                mirror_x,
+                ..Camera::default()
+            };
+            cam.pan(0.1, -0.05);
+            let pivot = cam
+                .eye()
+                .lerp(cam.on_target_plane([0.5, -0.3], 1.5, &bounds), 0.6);
+            let eye_to_pivot = (pivot - cam.eye()).length();
+            let off_axis = |c: &Camera| (pivot - c.eye()).angle_between(c.target - c.eye());
+            for (dx, dy) in [(0.05, 0.0), (0.0, 0.04), (-0.1, -0.07)] {
+                let before = ndc(&cam, pivot);
+                cam.orbit_about(dx, dy, pivot);
+                let after = ndc(&cam, pivot);
+                assert!(
+                    (before - after).length() < 1e-3,
+                    "mirror={mirror_x} ({dx}, {dy}): {before} -> {after}"
+                );
+                assert!(((pivot - cam.eye()).length() - eye_to_pivot).abs() < 1.0);
+            }
+            // Into the pitch clamp: only the turn actually made is applied. (Near vertical the
+            // view's up switches to +Y, which rolls the picture; the pivot's angle from the
+            // view axis and its distance don't change.)
+            let a = off_axis(&cam);
+            cam.orbit_about(0.02, 3.0, pivot);
+            assert!((off_axis(&cam) - a).abs() < 1e-4);
+            assert!(((pivot - cam.eye()).length() - eye_to_pivot).abs() < 1.0);
         }
     }
 

@@ -511,6 +511,8 @@ struct Viewer {
     hover_at: Option<egui::Pos2>,
     /// The wheel's last zoom pivot: the pointer position, the camera after that zoom, the pivot.
     zoom_pivot: Option<(egui::Pos2, Camera, glam::Vec3)>,
+    /// What the current drag turns the view about (picked when it started).
+    orbit_pivot: Option<glam::Vec3>,
 
     /// Linked (reference) models, read-only (#39), one being loaded, and the one whose
     /// differences with ours are coloured, if any.
@@ -636,6 +638,7 @@ impl Viewer {
             hover_gpu: None,
             hover_at: None,
             zoom_pivot: None,
+            orbit_pivot: None,
             links: Vec::new(),
             linking: None,
             compare_with: None,
@@ -1723,6 +1726,24 @@ impl Viewer {
         self.needs_render = false;
     }
 
+    /// What a drag turns the view about: the geometry under the press, else the selected
+    /// element's centre, else (None) the orbit target.
+    fn orbit_pivot_at(&self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) -> Option<glam::Vec3> {
+        let l = self.loaded.as_ref()?;
+        let ndc = [
+            (pos.x - rect.min.x) / rect.width() * 2.0 - 1.0,
+            1.0 - (pos.y - rect.min.y) / rect.height() * 2.0,
+        ];
+        let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
+        let clip = self.clip();
+        bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref())
+            .map(|h| h.point)
+            .or_else(|| {
+                let s = self.selected?;
+                ClipBox::around(&l.scene, |i| i == s).map(|b| (b.min + b.max) / 2.0)
+            })
+    }
+
     /// What the wheel zooms about: the geometry under the cursor in 3D, else (nothing there, or
     /// a 2D view, where depth changes nothing on screen) the plane through the orbit target.
     /// Picking a big model is slow, so the pivot is kept while only the wheel moves the camera:
@@ -1775,12 +1796,32 @@ impl Viewer {
                 self.needs_render = true;
             }
         } else if resp.dragged_by(PointerButton::Primary) && !ui.input(|i| i.modifiers.shift) {
+            if resp.drag_started() {
+                let press = ui.input(|i| i.pointer.press_origin());
+                self.orbit_pivot = press.and_then(|p| self.orbit_pivot_at(p, rect, aspect));
+            }
             // Only redraw when the pointer actually moved: holding the button still must not
             // loop (a redraw request here would schedule the next frame, forever).
             let d = resp.drag_delta();
             if d != egui::Vec2::ZERO {
-                self.camera.orbit(d.x * 0.008, d.y * 0.008);
+                match self.orbit_pivot {
+                    Some(p) => self.camera.orbit_about(d.x * 0.008, d.y * 0.008, p),
+                    None => self.camera.orbit(d.x * 0.008, d.y * 0.008),
+                }
                 self.needs_render = true;
+            }
+            // Where the view turns about.
+            if let (Some(p), Some(l)) = (self.orbit_pivot, &self.loaded) {
+                let q = self.camera.view_proj(aspect, &l.bounds).project_point3(p);
+                if q.z > 0.0 && q.z < 1.0 {
+                    let at = egui::pos2(
+                        rect.min.x + (q.x + 1.0) / 2.0 * rect.width(),
+                        rect.min.y + (1.0 - q.y) / 2.0 * rect.height(),
+                    );
+                    let c = ui.visuals().selection.bg_fill;
+                    ui.painter()
+                        .circle(at, 4.0, c, egui::Stroke::new(1.5, Color32::WHITE));
+                }
             }
         } else if resp.dragged_by(PointerButton::Secondary)
             || resp.dragged_by(PointerButton::Middle)
@@ -1791,6 +1832,9 @@ impl Viewer {
                 self.camera.pan(d.x, d.y);
                 self.needs_render = true;
             }
+        }
+        if resp.drag_stopped() {
+            self.orbit_pivot = None;
         }
         if resp.drag_stopped() && self.moving_ref.is_some() {
             self.finish_reference_drag();
