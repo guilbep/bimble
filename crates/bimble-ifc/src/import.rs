@@ -524,7 +524,7 @@ fn key(pset: &str, prop: &str) -> String {
 /// An `IfcValue` select as text: labels, texts, identifiers, booleans, integers, reals.
 fn property_value(v: &Value, file: &StepFile) -> Option<String> {
     match v {
-        Value::Typed(name, inner) => select_value(name.as_str(), inner),
+        Value::Typed(t) => select_value(t.0.as_str(), &t.1),
         Value::Ref(_) => {
             let ent = file.deref(v)?;
             select_value(ent.name.as_str(), ent.arg(0))

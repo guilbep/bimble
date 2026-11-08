@@ -63,5 +63,8 @@ Bimble to know before it runs out, and to let the user decide what to drop.
 - Done (8 Nov, after ADR 0034): refitted on stored triangles (own + each shared shape once + one
   per copy): 505 MB + 6.3 × displayed bytes + 143 B a stored triangle, margin 1.25 (worst
   under-estimate 20 %). The read estimate is unchanged (parsing didn't change).
+- Done again after the compact parse (24-byte values, exact-size lists): 495 MB + 3.38 ×
+  displayed bytes + 219 B a stored triangle (worst under-estimate 23 %); reading: text + 5 ×
+  displayed bytes.
 - Degrading (draw order by size, simplify while navigating, frame-rate target) replaces choosing.
 - Browser coefficients: calibrated on native memory, which overestimates the wasm heap (safe).

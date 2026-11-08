@@ -56,12 +56,25 @@ pub enum Value {
     Derived,
     Int(i64),
     Real(f64),
-    Str(String),
+    Str(Box<str>),
     Enum(Name),
     Ref(u64),
-    List(Vec<Value>),
-    /// Typed parameter, e.g. IFCLABEL('x') → ("IFCLABEL", Str("x"))
-    Typed(Name, Box<Value>),
+    /// Exactly sized: a parsed file is millions of short lists (points, loops, faces).
+    List(Box<[Value]>),
+    /// Typed parameter, e.g. IFCLABEL('x') → ("IFCLABEL", Str("x")). Boxed: it is rare, and
+    /// keeps every value at 24 bytes.
+    Typed(Box<(Name, Value)>),
+}
+
+impl Value {
+    /// A typed parameter's type name and value.
+    pub fn as_typed(&self) -> Option<(&str, &Value)> {
+        if let Value::Typed(t) = self {
+            Some((t.0.as_str(), &t.1))
+        } else {
+            None
+        }
+    }
 }
 
 impl Value {
@@ -76,21 +89,21 @@ impl Value {
         match self {
             Value::Real(x) => Some(*x),
             Value::Int(i) => Some(*i as f64),
-            Value::Typed(_, v) => v.as_f64(),
+            Value::Typed(t) => t.1.as_f64(),
             _ => None,
         }
     }
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::Int(i) => Some(*i),
-            Value::Typed(_, v) => v.as_i64(),
+            Value::Typed(t) => t.1.as_i64(),
             _ => None,
         }
     }
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::Str(s) => Some(s),
-            Value::Typed(_, v) => v.as_str(),
+            Value::Typed(t) => t.1.as_str(),
             _ => None,
         }
     }
@@ -114,7 +127,7 @@ impl Value {
 pub struct Entity {
     /// Upper-case entity name, e.g. "IFCWALL"
     pub name: Name,
-    pub args: Vec<Value>,
+    pub args: Box<[Value]>,
 }
 
 impl Entity {
@@ -335,7 +348,7 @@ impl<'a> Parser<'a> {
                     None => self.err("bad reference"),
                 }
             }
-            Some(b'\'') => Ok(Value::Str(self.string()?)),
+            Some(b'\'') => Ok(Value::Str(self.string()?.into_boxed_str())),
             Some(b'"') => {
                 // Binary: keep the hex digits as text.
                 self.i += 1;
@@ -343,7 +356,7 @@ impl<'a> Parser<'a> {
                 while self.peek().is_some_and(|c| c != b'"') {
                     self.i += 1;
                 }
-                let t = String::from_utf8_lossy(&self.s[start..self.i]).into_owned();
+                let t = String::from_utf8_lossy(&self.s[start..self.i]).into();
                 self.i += 1;
                 Ok(Value::Str(t))
             }
@@ -366,25 +379,25 @@ impl<'a> Parser<'a> {
             Some(c) if c.is_ascii_alphabetic() => {
                 let name = self.keyword_name();
                 self.expect(b'(')?;
-                let mut items = self.items(depth + 1)?;
+                let items = self.items(depth + 1)?;
                 let inner = if items.len() == 1 {
-                    items.pop().unwrap()
+                    items.into_vec().pop().unwrap_or(Value::Null)
                 } else {
                     Value::List(items)
                 };
-                Ok(Value::Typed(name, Box::new(inner)))
+                Ok(Value::Typed(Box::new((name, inner))))
             }
             other => self.err(format!("unexpected {:?}", other.map(|b| b as char))),
         }
     }
 
     /// Comma-separated values up to and including ')'.
-    fn items(&mut self, depth: usize) -> Result<Vec<Value>, ParseError> {
+    fn items(&mut self, depth: usize) -> Result<Box<[Value]>, ParseError> {
         let mut out = Vec::new();
         self.skip_ws();
         if self.peek() == Some(b')') {
             self.i += 1;
-            return Ok(out);
+            return Ok(out.into_boxed_slice());
         }
         loop {
             out.push(self.value(depth)?);
@@ -393,7 +406,8 @@ impl<'a> Parser<'a> {
                 Some(b',') => self.i += 1,
                 Some(b')') => {
                     self.i += 1;
-                    return Ok(out);
+                    // Exact size: a Vec grown by pushes keeps up to twice what it holds.
+                    return Ok(out.into_boxed_slice());
                 }
                 other => {
                     return self.err(format!(
@@ -531,11 +545,11 @@ fn parse_chunked(
         if hp.expect(b'(').is_ok()
             && let Ok(v) = hp.items(1)
         {
-            let mut stack = v;
+            let mut stack = v.into_vec();
             while let Some(x) = stack.pop() {
                 match x {
                     Value::Str(s) => file.schemas.push(s.to_ascii_uppercase()),
-                    Value::List(l) => stack.extend(l),
+                    Value::List(l) => stack.extend(l.into_vec()),
                     _ => {}
                 }
             }
@@ -712,6 +726,14 @@ END-ISO-10303-21;
         }
     }
 
+    /// A parsed file is millions of these: a value is 24 bytes, an entity 32 (they were 32
+    /// and 40, with lists keeping up to twice the room they need).
+    #[test]
+    fn parsed_values_stay_small() {
+        assert_eq!(std::mem::size_of::<Value>(), 24);
+        assert_eq!(std::mem::size_of::<Entity>(), 32);
+    }
+
     /// Everything that could make a chunk boundary disagree with the serial parse.
     const TRICKY: &str = "ISO-10303-21;
 HEADER;FILE_SCHEMA(('IFC4'));ENDSEC;
@@ -797,7 +819,7 @@ END-ISO-10303-21;
         assert_eq!(w.arg(8).as_enum(), Some("SOLIDWALL"));
         assert_eq!(
             f.get(3).unwrap().arg(2),
-            &Value::Typed("IFCLABEL".into(), Box::new(Value::Str("EI60".into())))
+            &Value::Typed(Box::new(("IFCLABEL".into(), Value::Str("EI60".into()))))
         );
         assert_eq!(f.get(5).unwrap().name, "IFCSIUNIT");
     }

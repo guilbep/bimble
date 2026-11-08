@@ -1821,7 +1821,7 @@ impl<'a> Reader<'a> {
                     Some(segs) => {
                         let mut out: Vec<[f64; 3]> = Vec::new();
                         for s in segs {
-                            let Value::Typed(kind, inner) = s else {
+                            let Some((kind, inner)) = s.as_typed() else {
                                 continue;
                             };
                             let idx = inner.as_list().unwrap_or(&[]);
@@ -1832,7 +1832,7 @@ impl<'a> Reader<'a> {
                             if out.is_empty() {
                                 out.push(p[0]);
                             }
-                            match kind.as_str() {
+                            match kind {
                                 "IFCARCINDEX" if p.len() == 3 => out.extend(
                                     arc3(p[0], p[1], p[2], self.arc_tol).into_iter().skip(1),
                                 ),
@@ -1897,7 +1897,7 @@ impl<'a> Reader<'a> {
             let (mut pt, mut par) = (None, None);
             for x in v.as_list().unwrap_or(&[]) {
                 match x {
-                    Value::Typed(n, inner) if n == "IFCPARAMETERVALUE" => par = inner.as_f64(),
+                    Value::Typed(t) if t.0.as_str() == "IFCPARAMETERVALUE" => par = t.1.as_f64(),
                     Value::Ref(_) => pt = r.point(x),
                     _ => {}
                 }
