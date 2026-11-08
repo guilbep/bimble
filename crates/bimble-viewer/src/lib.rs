@@ -300,6 +300,24 @@ pub fn run(
     .map_err(|e| e.to_string())
 }
 
+/// The smallest size (pixels) drawn in the next moving frame, after one that took `dt`
+/// seconds, aiming at `fps`: up by half while slower than 15 % over the target, down by a third
+/// while 30 % under it, to 0 (everything) at the bottom. A gap over 0.25 s is a pause, not a
+/// slow frame.
+fn next_moving_px(px: f32, dt: f32, fps: u32) -> f32 {
+    let target = 1.0 / fps.max(1) as f32;
+    if dt >= 0.25 {
+        px
+    } else if dt > target * 1.15 {
+        (px.max(0.5) * 1.5).min(48.0)
+    } else if dt < target * 0.7 {
+        let p = px / 1.5;
+        if p < 0.5 { 0.0 } else { p }
+    } else {
+        px
+    }
+}
+
 /// Load a .ifc or .bimble file as a scene.
 pub fn load_scene(path: &Path) -> Result<Scene, String> {
     load_any(path).map(|(s, _)| s)
@@ -518,6 +536,13 @@ struct Viewer {
     zoom_pivot: Option<(egui::Pos2, Camera, glam::Vec3)>,
     /// What the current drag turns the view about (picked when it started).
     orbit_pivot: Option<glam::Vec3>,
+    /// Navigation (ADR 0035): the camera last drawn, when the last moving frame was drawn,
+    /// how small (pixels) a thing may be and still be drawn while moving, and whether the
+    /// picture on screen left things out (redrawn whole once the view stops).
+    drawn_camera: Option<Camera>,
+    moving_frame_at: Option<Instant>,
+    moving_px: f32,
+    simplified: bool,
 
     /// Linked (reference) models, read-only (#39), one being loaded, and the one whose
     /// differences with ours are coloured, if any.
@@ -644,6 +669,10 @@ impl Viewer {
             hover_at: None,
             zoom_pivot: None,
             orbit_pivot: None,
+            drawn_camera: None,
+            moving_frame_at: None,
+            moving_px: 0.0,
+            simplified: false,
             links: Vec::new(),
             linking: None,
             compare_with: None,
@@ -1686,13 +1715,15 @@ impl Viewer {
         if !self.needs_render {
             return;
         }
+        let t = Instant::now();
+        let min_radius = self.moving_detail(t, size_px.1);
         let (Some(target), Some(gs)) = (&self.target, &self.gpu_scene) else {
             return;
         };
-        let t = Instant::now();
         let opts = DrawOptions {
             hatch_scale: ppp,
             clip: self.clip(),
+            min_radius,
             ..self.opts.clone()
         };
         let mut layers = vec![bimble_render::Layer::main(gs)];
@@ -1732,6 +1763,27 @@ impl Viewer {
         );
         self.last_render = t.elapsed();
         self.needs_render = false;
+    }
+
+    /// How small a thing may be and still be drawn this frame (mm, 0: everything). While the
+    /// camera moves, the threshold follows the frame rate: up while frames are slower than the
+    /// setting, down while faster; once it stops, everything (ADR 0035).
+    fn moving_detail(&mut self, now: Instant, height_px: u32) -> f32 {
+        let moving = self.drawn_camera.is_some_and(|c| c != self.camera);
+        self.drawn_camera = Some(self.camera);
+        let fps = self.settings.moving_fps;
+        if !moving || fps == 0 {
+            self.moving_frame_at = None;
+            self.simplified = false;
+            return 0.0;
+        }
+        if let Some(prev) = self.moving_frame_at {
+            let dt = now.duration_since(prev).as_secs_f32();
+            self.moving_px = next_moving_px(self.moving_px, dt, fps);
+        }
+        self.moving_frame_at = Some(now);
+        self.simplified = self.moving_px > 0.0;
+        self.moving_px * self.camera.mm_per_pixel(height_px)
     }
 
     /// What a drag turns the view about: the geometry under the press, else the selected
@@ -3127,6 +3179,22 @@ impl Viewer {
                         ));
                     }
                 }
+                ui.add_space(8.0);
+                ui.strong("While the view moves");
+                ui.horizontal(|ui| {
+                    for (fps, label) in [
+                        (0, "Draw everything"),
+                        (15, "15 fps"),
+                        (30, "30 fps"),
+                        (60, "60 fps"),
+                    ] {
+                        ui.selectable_value(&mut self.settings.moving_fps, fps, label);
+                    }
+                });
+                ui.label(
+                    "Below this frame rate, what is smallest on screen is left out while the view \
+                     turns, pans or zooms, and drawn again as soon as it stops.",
+                );
             });
         if self.settings != before {
             self.settings.save();
@@ -3734,6 +3802,18 @@ impl eframe::App for Viewer {
                 self.fit(aspect);
                 self.fit_pending = false;
             }
+            // A picture drawn while moving left things out: draw it whole once the view has
+            // been still a moment.
+            if self.simplified {
+                if self
+                    .moving_frame_at
+                    .is_none_or(|t| t.elapsed() > Duration::from_millis(150))
+                {
+                    self.needs_render = true;
+                } else {
+                    ctx.request_repaint_after(Duration::from_millis(160));
+                }
+            }
             let ppp = ctx.pixels_per_point();
             let size_px = ((rect.width() * ppp).round().max(1.0) as u32, (rect.height() * ppp).round().max(1.0) as u32);
             self.render_view(size_px, ppp);
@@ -3804,6 +3884,24 @@ fn today() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Slow moving frames raise the size threshold, fast ones lower it back to everything, and
+    /// a pause changes nothing.
+    #[test]
+    fn the_moving_threshold_follows_the_frame_rate() {
+        let mut px = 0.0;
+        for _ in 0..4 {
+            px = next_moving_px(px, 0.060, 30);
+        }
+        assert!(px > 2.0, "{px}");
+        assert_eq!(next_moving_px(px, 1.0, 30), px);
+        assert_eq!(next_moving_px(px, 0.033, 30), px);
+        for _ in 0..20 {
+            px = next_moving_px(px, 0.010, 30);
+        }
+        assert_eq!(px, 0.0);
+        assert!(next_moving_px(40.0, 0.2, 30) <= 48.0);
+    }
 
     /// With several links, the depth range covers every one where it is placed (#39).
     #[test]

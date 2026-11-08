@@ -28,7 +28,18 @@ struct Case {
     upload: Duration,
     first_frame: Duration,
     frames: Vec<Duration>,
+    /// The same orbit drawn as while navigating: elements under `MOVING_PX` left out.
+    moving: Vec<Duration>,
     memory_mb: Option<f64>,
+}
+
+/// Elements smaller than this on screen (bounding radius, pixels) are left out while moving.
+const MOVING_PX: f32 = 3.0;
+
+fn sorted(d: &[Duration]) -> Vec<Duration> {
+    let mut v = d.to_vec();
+    v.sort();
+    v
 }
 
 fn percentile(sorted: &[Duration], p: f64) -> Duration {
@@ -79,8 +90,11 @@ fn run_case(
 
     let mut cam = Camera::default();
     cam.fit(&scene, args.width as f32 / args.height as f32);
-    let opts = DrawOptions::default();
-    let frame = |cam: &Camera| {
+    let frame = |cam: &Camera, min_radius: f32| {
+        let opts = DrawOptions {
+            min_radius,
+            ..DrawOptions::default()
+        };
         let t = Instant::now();
         r.render(&gpu.device, &gpu.queue, target, &gs, cam, &opts);
         let _ = gpu
@@ -88,13 +102,19 @@ fn run_case(
             .poll(bimble_render::wgpu::PollType::wait_indefinitely());
         t.elapsed()
     };
-    let first_frame = frame(&cam);
+    let first_frame = frame(&cam, 0.0);
     let n = args.frames.max(1);
     let step = std::f32::consts::TAU / n as f32;
     let frames = (0..n)
         .map(|_| {
             cam.orbit(step, 0.0);
-            frame(&cam)
+            frame(&cam, 0.0)
+        })
+        .collect();
+    let moving = (0..n)
+        .map(|_| {
+            cam.orbit(step, 0.0);
+            frame(&cam, cam.mm_per_pixel(target.size.1) * MOVING_PX)
         })
         .collect();
     Case {
@@ -105,6 +125,7 @@ fn run_case(
         upload,
         first_frame,
         frames,
+        moving,
         memory_mb: memory_mb(),
     }
 }
@@ -169,6 +190,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
                     "load_ms": ms(c.load), "upload_ms": ms(c.upload), "first_frame_ms": ms(c.first_frame),
                     "frame_median_ms": ms(percentile(&s, 0.5)), "frame_p95_ms": ms(percentile(&s, 0.95)),
                     "frame_max_ms": ms(*s.last().unwrap()), "memory_mb": c.memory_mb,
+                    "moving_median_ms": ms(percentile(&sorted(&c.moving), 0.5)),
                 })
             })
             .collect();
@@ -188,7 +210,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         args.width, args.height, args.samples, args.frames
     );
     println!(
-        "{:<20} {:>9} {:>10} {:>9} {:>9} {:>10} {:>10} {:>8} {:>9}",
+        "{:<20} {:>9} {:>10} {:>9} {:>9} {:>10} {:>10} {:>8} {:>10} {:>9}",
         "model",
         "elements",
         "triangles",
@@ -197,6 +219,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         "median ms",
         "p95 ms",
         "fps",
+        "moving ms",
         "proc MB"
     );
     for c in &cases {
@@ -206,7 +229,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         let p95 = percentile(&s, 0.95);
         let ms = |d: Duration| d.as_secs_f64() * 1000.0;
         println!(
-            "{:<20} {:>9} {:>10} {:>9.1} {:>9.1} {:>10.2} {:>10.2} {:>8.0} {:>9}",
+            "{:<20} {:>9} {:>10} {:>9.1} {:>9.1} {:>10.2} {:>10.2} {:>8.0} {:>10.2} {:>9}",
             c.name,
             c.elements,
             c.triangles,
@@ -215,11 +238,14 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
             ms(med),
             ms(p95),
             1000.0 / ms(med).max(1e-3),
+            ms(percentile(&sorted(&c.moving), 0.5)),
             c.memory_mb.map_or("n/a".into(), |m| format!("{m:.0}")),
         );
     }
     println!(
-        "\nfps = 1000 / median frame time. proc MB = memory of this process after the model (cumulative)."
+        "\nfps = 1000 / median frame time. moving ms = median frame drawn as while navigating \
+         (elements under {MOVING_PX} px left out). proc MB = memory of this process after the model \
+         (cumulative)."
     );
     println!("The viewer only redraws on change, so idle costs nothing.");
     Ok(())

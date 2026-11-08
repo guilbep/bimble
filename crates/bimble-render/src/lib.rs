@@ -290,6 +290,11 @@ impl Camera {
         self.target += (-dx * right + dy * up) * h;
     }
 
+    /// Millimetres one pixel covers at the orbit target, for a view `height_px` high.
+    pub fn mm_per_pixel(&self, height_px: u32) -> f32 {
+        2.0 * self.distance * (self.fov_y / 2.0).tan() / height_px.max(1) as f32
+    }
+
     pub fn zoom(&mut self, factor: f32) {
         self.zoom_at(factor, self.target);
     }
@@ -381,6 +386,9 @@ pub struct GpuScene {
     /// buffer size limit (256 MiB by default): a large model needs several.
     faces: Vec<(wgpu::Buffer, u32)>,
     lines: Vec<(wgpu::Buffer, u32)>,
+    /// Merged elements come largest first: (bounding radius, face and line vertices before
+    /// it), so "everything at least this big" is a prefix of the buffers.
+    steps: Vec<(f32, u32, u32)>,
     /// Shared shapes (ADR 0034): their vertices, packed in buffers like the merged ones, and
     /// one draw per shape (and per mirroring) over its copies in `instances`.
     shape_faces: Vec<(wgpu::Buffer, u32)>,
@@ -403,6 +411,8 @@ struct ShapeDraw {
     instances: std::ops::Range<u32>,
     /// Its placements mirror: triangles wound the other way.
     mirrored: bool,
+    /// The largest bounding radius of its copies (mm): a draw skipped when too small.
+    radius: f32,
 }
 
 impl GpuScene {
@@ -415,6 +425,18 @@ impl GpuScene {
             .map(|d| d.faces.1.len() as u32 / 3 * d.instances.len() as u32)
             .sum();
         merged + shared
+    }
+
+    /// Face and line vertices of the merged elements at least `min_radius` big (a prefix).
+    fn prefix(&self, min_radius: f32) -> (u32, u32) {
+        if min_radius <= 0.0 {
+            return (u32::MAX, u32::MAX);
+        }
+        let k = self.steps.partition_point(|s| s.0 >= min_radius);
+        match self.steps.get(k) {
+            Some(s) => (s.1, s.2),
+            None => (u32::MAX, u32::MAX),
+        }
     }
 
     /// Draw calls a frame makes for faces (merged buffers, then one per shared shape).
@@ -497,6 +519,22 @@ impl<'d, T: bytemuck::Pod> Chunks<'d, T> {
         self.flush();
         self.done
     }
+}
+
+/// Half the diagonal of a mesh's bounds, placed (scaled by the placement's longest column).
+fn radius(m: &bimble_geom::Mesh, p: Option<&Placement32>) -> f32 {
+    let b = bimble_geom::bvh::Aabb::of_points(&m.positions);
+    if b.is_empty() {
+        return 0.0;
+    }
+    let d = Vec3::from(b.max) - Vec3::from(b.min);
+    let scale = p.map_or(1.0, |p| {
+        [p.x, p.y, p.z]
+            .map(|c| Vec3::from(c).length())
+            .into_iter()
+            .fold(0.0, f32::max)
+    });
+    d.length() / 2.0 * scale
 }
 
 /// A mesh's triangles as face vertices: positions, the face's normal and a style slot.
@@ -627,12 +665,16 @@ pub struct DrawOptions {
     pub style: GraphicStyle,
     /// Section box: draw only what is inside.
     pub clip: Option<ClipBox>,
+    /// Skip elements smaller than this (bounding radius, mm): while navigating, small things
+    /// are left out to keep the frame rate (0: draw everything).
+    pub min_radius: f32,
 }
 
 impl Default for DrawOptions {
     fn default() -> Self {
         DrawOptions {
             hatch_scale: 1.0,
+            min_radius: 0.0,
             hatching: true,
             edges: true,
             style: GraphicStyle::default(),
@@ -893,10 +935,8 @@ impl Renderer {
         let mut faces = Chunks::<FaceVertex>::new(device, queue, "bimble face vb");
         let mut lines = Chunks::<LineVertex>::new(device, queue, "bimble line vb");
         let mut lines_lean = Chunks::<[f32; 3]>::new(device, queue, "bimble line vb");
-        let mut merge = |m: &bimble_geom::Mesh, slot: u8| {
-            push_faces(m, slot, |v| faces.push(v));
-            push_lines(m, edge_normals, |v| lines.push(v), |p| lines_lean.push(p));
-        };
+        // Merged elements are pushed largest first, below.
+        let mut merged: Vec<(f32, std::borrow::Cow<bimble_geom::Mesh>, u8)> = Vec::new();
         // Copies of shared shapes, by shape, in first-seen order.
         type Copies<'a> = (&'a Arc<bimble_geom::Mesh>, Vec<(Placement32, u8)>);
         let mut groups: Vec<Copies> = Vec::new();
@@ -914,7 +954,9 @@ impl Renderer {
                 Style::Normal | Style::Hidden => style_gpu::slot(e.category),
             };
             match &e.geometry {
-                Geometry::Own(m) => merge(m, slot),
+                Geometry::Own(m) => {
+                    merged.push((radius(m, None), std::borrow::Cow::Borrowed(m), slot))
+                }
                 Geometry::Instance { shape, to_scene } => {
                     let g = *group_of.entry(Arc::as_ptr(shape)).or_insert_with(|| {
                         groups.push((shape, Vec::new()));
@@ -948,10 +990,15 @@ impl Renderer {
             let Some((f, l)) = placed else {
                 // Few copies (or a shape larger than a buffer): merged, each placed.
                 for (p, slot) in copies {
-                    merge(&p.mesh(shape), slot);
+                    let m = p.mesh(shape);
+                    merged.push((radius(&m, None), std::borrow::Cow::Owned(m), slot));
                 }
                 continue;
             };
+            let r = copies
+                .iter()
+                .map(|(p, _)| radius(shape, Some(p)))
+                .fold(0.0f32, f32::max);
             for mirrored in [false, true] {
                 let start = instances.len() as u32;
                 instances.extend(copies.iter().filter(|(p, _)| p.mirrors() == mirrored).map(
@@ -969,10 +1016,24 @@ impl Renderer {
                         lines: l.clone(),
                         instances: start..instances.len() as u32,
                         mirrored,
+                        radius: r,
                     });
                 }
             }
         }
+        merged.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut steps = Vec::with_capacity(merged.len());
+        let (mut nf, mut nl) = (0u32, 0u32);
+        for (r, m, slot) in &merged {
+            steps.push((*r, nf, nl));
+            push_faces(m, *slot, |v| {
+                nf += 1;
+                faces.push(v)
+            });
+            push_lines(m, edge_normals, |v| lines.push(v), |p| lines_lean.push(p));
+            nl += 2 * m.edges.len() as u32;
+        }
+        drop(merged);
         let init = |label, contents: &[u8]| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
@@ -993,6 +1054,7 @@ impl Renderer {
             } else {
                 shape_lines_lean.finish()
             },
+            steps,
             shapes,
             instances: (!instances.is_empty())
                 .then(|| init("bimble instances", bytemuck::cast_slice(&instances))),
@@ -1163,12 +1225,18 @@ impl Renderer {
                     for k in 0..passes {
                         pass.set_pipeline(pipelines(camera.mirror_x)[k]);
                         pass.set_vertex_buffer(1, scene.identity.slice(..));
+                        let mut left = scene.prefix(opts.min_radius).0;
                         for (buf, n) in &scene.faces {
+                            let n = (*n).min(left);
+                            if n == 0 {
+                                break;
+                            }
+                            left -= n;
                             pass.set_vertex_buffer(0, buf.slice(..));
-                            pass.draw(0..*n, 0..1);
+                            pass.draw(0..n, 0..1);
                         }
                         if let Some(inst) = &scene.instances {
-                            for d in &scene.shapes {
+                            for d in scene.shapes.iter().filter(|d| d.radius >= opts.min_radius) {
                                 pass.set_pipeline(pipelines(camera.mirror_x != d.mirrored)[k]);
                                 pass.set_vertex_buffer(0, scene.shape_faces[d.faces.0].0.slice(..));
                                 let r = &d.instances;
@@ -1193,12 +1261,22 @@ impl Renderer {
                         (false, true) => &self.line_wide_pipeline,
                     });
                     pass.set_vertex_buffer(1, scene.identity.slice(..));
+                    let mut left = scene.prefix(opts.min_radius).1;
                     for (buf, n) in &scene.lines {
+                        let n = (*n).min(left);
+                        if n == 0 {
+                            break;
+                        }
+                        left -= n;
                         pass.set_vertex_buffer(0, buf.slice(..));
-                        pass.draw(0..*n, 0..1);
+                        pass.draw(0..n, 0..1);
                     }
                     if let Some(inst) = &scene.instances {
-                        for d in scene.shapes.iter().filter(|d| !d.lines.1.is_empty()) {
+                        for d in scene
+                            .shapes
+                            .iter()
+                            .filter(|d| !d.lines.1.is_empty() && d.radius >= opts.min_radius)
+                        {
                             pass.set_vertex_buffer(0, scene.shape_lines[d.lines.0].0.slice(..));
                             let r = &d.instances;
                             pass.set_vertex_buffer(
@@ -1865,6 +1943,31 @@ mod tests {
                 clip.is_some()
             );
         }
+    }
+
+    /// Merged geometry is largest first: "at least this big" is a prefix that shrinks as the
+    /// size grows, all of it at 0, none past the largest element.
+    #[test]
+    fn small_elements_are_a_suffix_of_the_merged_buffers() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let r = Renderer::new(&gpu.device, 1);
+        let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
+        let all: u32 = gs.faces.iter().map(|(_, n)| n).sum();
+        assert!(gs.prefix(0.0).0 >= all);
+        assert_eq!(gs.prefix(1e9), (0, 0));
+        let sizes: Vec<f32> = gs.steps.iter().map(|s| s.0).collect();
+        assert!(sizes.windows(2).all(|w| w[0] >= w[1]), "largest first");
+        let mut last = u32::MAX;
+        for r in [100.0, 1000.0, 3000.0, 10_000.0] {
+            let f = gs.prefix(r).0.min(all);
+            assert!(f <= last.min(all), "{r}: {f}");
+            last = f;
+        }
+        assert!(gs.prefix(1000.0).0 < all, "columns and beams are under 1 m");
     }
 
     /// Renders on whatever adapter exists (a software one in CI containers). Skipped if none.

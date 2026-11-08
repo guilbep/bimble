@@ -8,11 +8,17 @@ pub struct Settings {
     /// Share of the machine's memory one model may take (ADR 0033), 0.2–1.0. The browser
     /// ignores it: a tab gets all it can address (4 GB).
     pub memory_share: f64,
+    /// While the view moves, keep at least this frame rate by leaving out what is smallest on
+    /// screen, and draw everything again once it stops (0: never leave anything out).
+    pub moving_fps: u32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { memory_share: 0.8 }
+        Settings {
+            memory_share: 0.8,
+            moving_fps: 30,
+        }
     }
 }
 
@@ -25,11 +31,15 @@ impl Settings {
                 .as_f64()
                 .filter(|x| x.is_finite())
                 .map_or(d.memory_share, |x| x.clamp(0.2, 1.0)),
+            moving_fps: v["moving_fps"]
+                .as_u64()
+                .map_or(d.moving_fps, |x| x.min(240) as u32),
         }
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::json!({ "memory_share": self.memory_share }).to_string()
+        serde_json::json!({ "memory_share": self.memory_share, "moving_fps": self.moving_fps })
+            .to_string()
     }
 
     pub fn load() -> Settings {
@@ -97,7 +107,10 @@ mod tests {
 
     #[test]
     fn settings_round_trip_and_bad_values_fall_back() {
-        let s = Settings { memory_share: 0.5 };
+        let s = Settings {
+            memory_share: 0.5,
+            moving_fps: 60,
+        };
         assert_eq!(Settings::from_json(&s.to_json()), s);
         assert_eq!(Settings::from_json("not json"), Settings::default());
         assert_eq!(
