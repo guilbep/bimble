@@ -15,7 +15,7 @@ FILE_NAME('revit-style.ifc','2026-11-08T10:00:00',(''),(''),'Revit','','');
 FILE_SCHEMA(('IFC4'));
 ENDSEC;
 DATA;
-#1=IFCPROJECT('2MrcuFTa90SfJXy$ZbCd1A',$,'Projet',$,$,$,$,$,#2,#3);
+#1=IFCPROJECT('2MrcuFTa90SfJXy$ZbCd1A',$,'Projet',$,$,$,$,(#2),#3);
 #2=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#4,$);
 #3=IFCUNITASSIGNMENT((#5,#6,#7));
 #4=IFCAXIS2PLACEMENT3D(#8,$,$);
@@ -583,4 +583,102 @@ fn openings_without_id_stay_without_id() {
     assert!(!text.contains("\"id\": null"));
     let back = bimble_core::file::from_str(&text).unwrap();
     assert_eq!(back, m);
+}
+
+/// The fixture's project units are read: no "assuming millimetres" fallback.
+#[test]
+fn revit_fixture_length_unit_is_read() {
+    let (_, rep) = import(REVIT_STYLE);
+    assert!(
+        !rep.warnings.iter().any(|w| w.contains("no length unit")),
+        "warnings: {:?}",
+        rep.warnings
+    );
+}
+
+/// The same fixture in metres imports to the same model in mm, and the display reader puts
+/// it in the same place.
+#[test]
+fn metre_units_import_like_millimetres() {
+    let mut metres = REVIT_STYLE.to_string();
+    for (from, to) in [
+        (".MILLI.,.METRE.", "$,.METRE."),
+        ("((4000.,0.))", "((4.,0.))"),
+        ("((4000.,200.))", "((4.,0.2))"),
+        ("((0.,200.))", "((0.,0.2))"),
+        ("#35,2700.)", "#35,2.7)"),
+        ("((1000.,0.,900.))", "((1.,0.,0.9))"),
+        ("((1200.,0.))", "((1.2,0.))"),
+        ("((1200.,200.))", "((1.2,0.2))"),
+        ("#51,1200.)", "#51,1.2)"),
+    ] {
+        assert!(metres.contains(from), "{from}");
+        metres = metres.replace(from, to);
+    }
+    let (mm, _) = import(REVIT_STYLE);
+    let (m, rep) = import(&metres);
+    assert!(
+        !rep.warnings.iter().any(|w| w.contains("no length unit")),
+        "warnings: {:?}",
+        rep.warnings
+    );
+    let (a, b) = (
+        mm.elements.values().next().unwrap(),
+        m.elements.values().next().unwrap(),
+    );
+    let close = |x: &[f64], y: &[f64]| {
+        x.len() == y.len() && x.iter().zip(y).all(|(p, q)| (p - q).abs() < 1e-6)
+    };
+    let (
+        Generator::Wall {
+            length,
+            thickness,
+            height,
+        },
+        Generator::Wall {
+            length: l2,
+            thickness: t2,
+            height: h2,
+        },
+    ) = (&a.generator, &b.generator)
+    else {
+        panic!("expected walls: {:?} / {:?}", a.generator, b.generator);
+    };
+    assert!(
+        close(&[*length, *thickness, *height], &[*l2, *t2, *h2]),
+        "{:?}",
+        b.generator
+    );
+    let p = |e: &Element| -> Vec<f64> {
+        let Placement {
+            origin,
+            z_axis,
+            x_axis,
+        } = &e.placement;
+        origin.iter().chain(z_axis).chain(x_axis).copied().collect()
+    };
+    assert!(close(&p(a), &p(b)), "{:?}", b.placement);
+    let opening = |e: &Element| -> Vec<f64> {
+        let Generator::Mesh { positions, .. } = &e.openings[0].generator else {
+            panic!("expected a mesh opening");
+        };
+        positions.iter().flatten().copied().collect()
+    };
+    assert!(close(&opening(a), &opening(b)));
+    // The display reader scales the same way.
+    let boxes = |t: &str| -> Vec<f64> {
+        let s = bimble_ifc::read::read_str(t).expect("reader");
+        world_boxes(&s)
+            .values()
+            .flatten()
+            .flatten()
+            .copied()
+            .collect()
+    };
+    let (ra, rb) = (boxes(REVIT_STYLE), boxes(&metres));
+    assert!(!ra.is_empty());
+    assert!(
+        ra.iter().zip(&rb).all(|(p, q)| (p - q).abs() < 1e-3),
+        "{ra:?} vs {rb:?}"
+    );
 }
