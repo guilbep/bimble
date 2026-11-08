@@ -330,13 +330,23 @@ fn load_bytes(name: &str, bytes: &[u8]) -> Result<(Scene, Option<bimble_core::Mo
     }
 }
 
-/// The editable .bimble copy next to an IFC file: same stem (ADR 0032).
+/// The editable .bimble copy next to an IFC file: same stem (ADR 0032), or
+/// "<stem> (imported).bimble", "<stem> (imported 2).bimble"… when that model already exists, so
+/// Save never overwrites one.
 fn editable_copy_path(ifc: &Path) -> PathBuf {
     let stem = ifc
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "model".into());
-    ifc.with_file_name(format!("{stem}.bimble"))
+    [
+        format!("{stem}.bimble"),
+        format!("{stem} (imported).bimble"),
+    ]
+    .into_iter()
+    .chain((2u64..).map(|n| format!("{stem} (imported {n}).bimble")))
+    .map(|n| ifc.with_file_name(n))
+    .find(|p| !p.exists())
+    .expect("an unused name")
 }
 
 /// An IFC file imported as an editable model (ADR 0032). Ctrl S then saves the copy.
@@ -396,6 +406,8 @@ type LoadResult = Result<(Scene, Option<bimble_core::Model>, Duration), String>;
 struct Loading {
     path: PathBuf,
     rx: Receiver<LoadResult>,
+    /// An IFC imported as an editable copy: not on disk yet, so the editor starts dirty.
+    imported: bool,
 }
 
 struct Loaded {
@@ -666,6 +678,7 @@ impl Viewer {
         let loading = Loading {
             path: PathBuf::from(&p.name),
             rx,
+            imported: false,
         };
         if link {
             self.linking = Some(loading);
@@ -814,6 +827,7 @@ impl Viewer {
         self.loading = Some(Loading {
             path: editable_copy_path(Path::new(&p.name)),
             rx,
+            imported: true,
         });
         self.error = None;
         self.parse_later = Some(ParseLater {
@@ -844,6 +858,7 @@ impl Viewer {
         self.loading = Some(Loading {
             path: editable_copy_path(&path),
             rx,
+            imported: true,
         });
         self.error = None;
     }
@@ -865,7 +880,11 @@ impl Viewer {
             let _ = tx.send(r);
             ctx.request_repaint();
         });
-        self.loading = Some(Loading { path, rx });
+        self.loading = Some(Loading {
+            path,
+            rx,
+            imported: false,
+        });
         self.error = None;
     }
 
@@ -881,7 +900,11 @@ impl Viewer {
             let _ = tx.send(r);
             ctx.request_repaint();
         });
-        self.linking = Some(Loading { path, rx });
+        self.linking = Some(Loading {
+            path,
+            rx,
+            imported: false,
+        });
     }
 
     fn poll_linking(&mut self) {
@@ -941,7 +964,7 @@ impl Viewer {
     fn poll_loading(&mut self) {
         let Some(l) = &self.loading else { return };
         let Ok(result) = l.rx.try_recv() else { return };
-        let path = self.loading.take().unwrap().path;
+        let Loading { path, imported, .. } = self.loading.take().unwrap();
         match result {
             Ok((scene, model, load_time)) => {
                 // Also in the browser's console, where they can be copied.
@@ -958,7 +981,11 @@ impl Viewer {
                     classes,
                     storeys,
                     categories,
-                    edit: model.map(edit::Editor::new),
+                    edit: model.map(if imported {
+                        edit::Editor::imported
+                    } else {
+                        edit::Editor::new
+                    }),
                 });
                 self.history_view = None;
                 self.hidden_classes.clear();
@@ -3360,5 +3387,26 @@ mod tests {
         assert_eq!(s.elements.len(), model.elements.len());
         // Not UTF-8: an error, not a panic.
         assert!(load_bytes("x.bimble", &[0xff, 0xfe, 0x00]).is_err());
+    }
+
+    /// The editable copy of an imported IFC never takes the name of an existing model, which
+    /// Save would then overwrite.
+    #[test]
+    fn import_copy_never_overwrites_a_model() {
+        let dir = std::env::temp_dir().join(format!("bimble-import-copy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ifc = dir.join("house.ifc");
+        assert_eq!(editable_copy_path(&ifc), dir.join("house.bimble"));
+        std::fs::write(dir.join("house.bimble"), "x").unwrap();
+        assert_eq!(
+            editable_copy_path(&ifc),
+            dir.join("house (imported).bimble")
+        );
+        std::fs::write(dir.join("house (imported).bimble"), "x").unwrap();
+        assert_eq!(
+            editable_copy_path(&ifc),
+            dir.join("house (imported 2).bimble")
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

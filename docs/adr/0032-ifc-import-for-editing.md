@@ -48,7 +48,9 @@ The roadmap left an open decision: IfcOpenShell via C++ bindings, web-ifc, or ex
 4. **CLI first:** `bimble import-ifc model.ifc model.bimble` prints the report (counts by class,
    parametric vs mesh, openings, property values, warnings). The viewer entry ("Import IFC…")
    imports an IFC as an editable .bimble copy saved next to the file with the same stem; Ctrl S
-   writes that copy.
+   writes that copy. The copy starts unsaved (Save enabled, closing asks), and when a model with
+   that name already exists it becomes `<stem> (imported).bimble`, `<stem> (imported 2).bimble`…
+   so Save never overwrites one.
 5. **Round-trip is the test:** `frame.bimble → export-ifc → import-ifc` must give back the same
    elements (GlobalIds, classes, generators, geometry) — checked in CI, with IfcOpenShell (ADR 0009)
    reading the intermediate IFC as today.

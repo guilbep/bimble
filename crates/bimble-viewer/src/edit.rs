@@ -387,6 +387,15 @@ impl Editor {
         }
     }
 
+    /// An IFC imported as an editable copy (ADR 0032): nothing on disk yet, so it starts dirty —
+    /// Save is enabled and closing or opening another file asks first.
+    pub fn imported(model: Model) -> Editor {
+        Editor {
+            dirty: true,
+            ..Editor::new(model)
+        }
+    }
+
     /// Apply a group of commands as one undoable step.
     pub fn apply(&mut self, cmds: Vec<Command>) -> Result<(), String> {
         if cmds.is_empty() {
@@ -706,6 +715,14 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// An imported IFC exists only in memory until saved: Save is enabled and closing asks.
+    #[test]
+    fn imported_model_starts_unsaved() {
+        let (m, _) = demo();
+        assert!(!Editor::new(m.clone()).dirty);
+        assert!(Editor::imported(m).dirty);
     }
 
     #[test]
