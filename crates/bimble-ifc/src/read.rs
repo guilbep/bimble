@@ -54,6 +54,14 @@ pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<Scene, ReadError> 
 /// Read an IFC file's content (e.g. picked in a browser). Same size cap as `read_file`.
 /// Takes the bytes to drop them once parsed: they would otherwise stay alive while meshing.
 pub fn read_bytes(bytes: Vec<u8>) -> Result<Scene, ReadError> {
+    let p = parse_bytes(bytes)?;
+    let (scene, _) = p.scene(|_| true, p.limits.max_triangles);
+    p.free();
+    Ok(scene)
+}
+
+/// Parse for display without meshing (ADR 0033). The bytes are dropped once parsed.
+pub fn parse_bytes(bytes: Vec<u8>) -> Result<Parsed, ReadError> {
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(ReadError::TooLarge(bytes.len() as u64));
     }
@@ -61,7 +69,36 @@ pub fn read_bytes(bytes: Vec<u8>) -> Result<Scene, ReadError> {
         Ok(text) => parse(&text)?,
         Err(e) => parse(&String::from_utf8_lossy(e.as_bytes()))?,
     };
-    read_parsed(parsed, Limits::default())
+    Parsed::new(parsed, Limits::default())
+}
+
+/// Bytes of the instances the display parses (all but `NOT_DISPLAYED`), from a scan that
+/// parses nothing: what reading will cost is known before reading. Approximate: a statement's
+/// bytes go to the type named at the start of its first line.
+pub fn displayed_bytes(bytes: &[u8]) -> u64 {
+    let mut skipped = 0u64;
+    let mut in_skipped = false;
+    for line in bytes.split(|&b| b == b'\n') {
+        if line.first() == Some(&b'#') {
+            let rest = line
+                .iter()
+                .position(|&b| b == b'=')
+                .map_or(&[][..], |k| &line[k + 1..]);
+            let rest = rest.trim_ascii_start();
+            let end = rest
+                .iter()
+                .position(|b| !(b.is_ascii_alphanumeric() || *b == b'_'))
+                .unwrap_or(rest.len());
+            let name = &rest[..end];
+            in_skipped = NOT_DISPLAYED
+                .iter()
+                .any(|n| n.as_bytes().eq_ignore_ascii_case(name));
+        }
+        if in_skipped {
+            skipped += line.len() as u64 + 1;
+        }
+    }
+    (bytes.len() as u64).saturating_sub(skipped)
 }
 
 /// Caps that keep a malicious or broken file from exhausting memory or time. Mapped items can
@@ -116,137 +153,306 @@ fn parse(text: &str) -> Result<(StepFile, usize), ReadError> {
     step::parse_skipping(text, NOT_DISPLAYED).map_err(ReadError::Parse)
 }
 
-fn read_parsed((file, skipped): (StepFile, usize), limits: Limits) -> Result<Scene, ReadError> {
-    if !file.schemas.iter().any(|s| s.starts_with("IFC")) {
-        return Err(ReadError::NotIfc(file.schemas.join(",")));
-    }
-    let mut r = Reader {
-        f: &file,
-        placements: HashMap::new(),
-        warnings: BTreeMap::new(),
-        arc_tol: 0.5,
-        angle_scale: 1.0,
-        map_stack: Vec::new(),
-    };
-    let budget = Budget::new(&limits);
-    if skipped > 0 {
-        r.warn(format!("{skipped} malformed entity instance(s) skipped"));
-    }
-    let scale = r.length_scale_to_mm();
-    // Curves are tessellated so chords deviate at most 0.5 mm from the true arc.
-    r.arc_tol = ARC_TOLERANCE_MM / scale;
-    r.angle_scale = r.plane_angle_to_radians();
-    let containers = r.containers();
-    let voids = r.voids();
-    let materials = r.materials();
+fn read_parsed(parsed: (StepFile, usize), limits: Limits) -> Result<Scene, ReadError> {
+    let p = Parsed::new(parsed, limits)?;
+    let (scene, _) = p.scene(|_| true, limits.max_triangles);
+    p.free();
+    Ok(scene)
+}
 
-    let mut ids: Vec<u64> = file
-        .entities
-        .iter()
-        .filter(|(_, e)| {
-            !SKIP_CLASSES.contains(&e.name.as_str())
-                && file
-                    .deref(e.arg(6))
-                    .is_some_and(|s| s.name == "IFCPRODUCTDEFINITIONSHAPE")
-                && file
-                    .deref(e.arg(5))
-                    .is_some_and(|p| p.name.ends_with("PLACEMENT"))
-        })
-        .map(|(id, _)| *id)
-        .collect();
-    ids.sort_unstable();
+/// An IFC file parsed for display, before meshing: what the elements are (storey, class,
+/// material) is known, their geometry not yet. Large models stop here so the viewer can ask
+/// what to show (ADR 0033); the browser keeps it between frames, so it owns the parsed file.
+pub struct Parsed {
+    file: StepFile,
+    limits: Limits,
+    scale: f64,
+    arc_tol: f64,
+    angle_scale: f64,
+    /// Products with a body, in file (GlobalId-independent, id) order: element `i` of
+    /// `census` and of the `scene` filter is `ids[i]`.
+    ids: Vec<u64>,
+    containers: HashMap<u64, String>,
+    voids: HashMap<u64, Vec<u64>>,
+    materials: HashMap<u64, (String, MaterialCategory)>,
+    storeys: Vec<bimble_geom::StoreyLevel>,
+    grids: Vec<bimble_geom::GridAxis>,
+    warnings: BTreeMap<String, usize>,
+}
 
-    // Elements are independent: mesh them on all cores. Each worker has its own placement cache
-    // and warnings; budgets are shared. Results keep file order.
-    let (arc_tol, angle_scale) = (r.arc_tol, r.angle_scale);
-    let results: Vec<(ElementInfo, MeshBuilder, BTreeMap<String, usize>)> = ids
-        .par_iter()
-        .map_init(
-            || Reader {
-                f: &file,
-                placements: HashMap::new(),
-                warnings: BTreeMap::new(),
-                arc_tol,
-                angle_scale,
-                map_stack: Vec::new(),
-            },
-            |w, &id| {
-                let e = &file.entities[&id];
-                let mut mb = MeshBuilder::default();
-                {
-                    let mut emit = Emit {
-                        mb: &mut mb,
-                        scale,
-                        budget: &budget,
-                    };
-                    w.product_body(e, &mut emit);
-                }
-                // Openings (IfcRelVoidsElement): subtract them from their host.
-                if let Some(ops) = voids.get(&id).filter(|_| !mb.tris.is_empty()) {
-                    let mut cutters: Vec<Vec<Tri>> = Vec::new();
-                    for &o in ops {
-                        let Some(oe) = file.get(o) else { continue };
-                        let mut ob = MeshBuilder::default();
-                        let mut emit = Emit {
-                            mb: &mut ob,
-                            scale,
-                            budget: &budget,
-                        };
-                        w.product_body(oe, &mut emit);
-                        if !ob.tris.is_empty() {
-                            cutters.push(ob.tris);
-                        }
-                    }
-                    w.cut(&mut mb.tris, &cutters, &class_name(&e.name));
-                }
-                let class = class_name(&e.name);
-                let (material, mut category) = materials
-                    .get(&id)
-                    .cloned()
-                    .unwrap_or((String::new(), MaterialCategory::Other));
-                if material.is_empty() && e.name == "IFCGEOGRAPHICELEMENT" {
-                    category = MaterialCategory::Earth;
-                }
-                let info = ElementInfo {
-                    global_id: e.arg(0).as_str().unwrap_or("").to_owned(),
-                    class,
-                    name: e.arg(2).as_str().unwrap_or("").to_owned(),
-                    storey: containers.get(&id).cloned().unwrap_or_default(),
-                    material,
-                    category,
-                };
-                (info, mb, std::mem::take(&mut w.warnings))
-            },
-        )
-        .collect();
+/// One element of a parsed file and how many triangles it meshes to.
+#[derive(Clone, Debug)]
+pub struct Counted {
+    pub info: ElementInfo,
+    pub triangles: usize,
+}
 
-    let mut sb = SceneBuilder::with_storeys(r.storey_levels(scale));
-    sb.grids = r.grid_axes(scale);
-    for (info, mb, warnings) in results {
-        for (k, n) in warnings {
-            *r.warnings.entry(k).or_default() += n;
+impl Parsed {
+    pub fn new((file, skipped): (StepFile, usize), limits: Limits) -> Result<Parsed, ReadError> {
+        if !file.schemas.iter().any(|s| s.starts_with("IFC")) {
+            return Err(ReadError::NotIfc(file.schemas.join(",")));
         }
-        sb.push(info, mb);
+        let mut r = Reader {
+            f: &file,
+            placements: HashMap::new(),
+            warnings: BTreeMap::new(),
+            arc_tol: 0.5,
+            angle_scale: 1.0,
+            map_stack: Vec::new(),
+        };
+        if skipped > 0 {
+            r.warn(format!("{skipped} malformed entity instance(s) skipped"));
+        }
+        let scale = r.length_scale_to_mm();
+        // Curves are tessellated so chords deviate at most 0.5 mm from the true arc.
+        r.arc_tol = ARC_TOLERANCE_MM / scale;
+        r.angle_scale = r.plane_angle_to_radians();
+        let containers = r.containers();
+        let voids = r.voids();
+        let materials = r.materials();
+        let mut ids: Vec<u64> = file
+            .entities
+            .iter()
+            .filter(|(_, e)| {
+                !SKIP_CLASSES.contains(&e.name.as_str())
+                    && file
+                        .deref(e.arg(6))
+                        .is_some_and(|s| s.name == "IFCPRODUCTDEFINITIONSHAPE")
+                    && file
+                        .deref(e.arg(5))
+                        .is_some_and(|p| p.name.ends_with("PLACEMENT"))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        let storeys = r.storey_levels(scale);
+        let grids = r.grid_axes(scale);
+        let (arc_tol, angle_scale, warnings) = (r.arc_tol, r.angle_scale, r.warnings);
+        Ok(Parsed {
+            file,
+            limits,
+            scale,
+            arc_tol,
+            angle_scale,
+            ids,
+            containers,
+            voids,
+            materials,
+            storeys,
+            grids,
+            warnings,
+        })
     }
-    if budget.exhausted() {
-        let tris = limits.max_triangles - budget.triangles_left.load(Ordering::Relaxed);
-        let items = limits.max_item_visits - budget.visits_left.load(Ordering::Relaxed);
-        r.warn(format!(
-            "model too large or nested too deeply: stopped after {tris} triangles / {items} items; the rest is not shown"
-        ));
+
+    /// Mesh element `id` with its openings cut.
+    fn element(&self, w: &mut Reader, id: u64, budget: &Budget) -> (ElementInfo, MeshBuilder) {
+        let file = &self.file;
+        let e = &file.entities[&id];
+        let mut mb = MeshBuilder::default();
+        {
+            let mut emit = Emit {
+                mb: &mut mb,
+                scale: self.scale,
+                budget,
+            };
+            w.product_body(e, &mut emit);
+        }
+        // Openings (IfcRelVoidsElement): subtract them from their host.
+        if let Some(ops) = self.voids.get(&id).filter(|_| !mb.tris.is_empty()) {
+            let mut cutters: Vec<Vec<Tri>> = Vec::new();
+            for &o in ops {
+                let Some(oe) = file.get(o) else { continue };
+                let mut ob = MeshBuilder::default();
+                let mut emit = Emit {
+                    mb: &mut ob,
+                    scale: self.scale,
+                    budget,
+                };
+                w.product_body(oe, &mut emit);
+                if !ob.tris.is_empty() {
+                    cutters.push(ob.tris);
+                }
+            }
+            w.cut(&mut mb.tris, &cutters, &class_name(&e.name));
+        }
+        let class = class_name(&e.name);
+        let (material, mut category) = self
+            .materials
+            .get(&id)
+            .cloned()
+            .unwrap_or((String::new(), MaterialCategory::Other));
+        if material.is_empty() && e.name == "IFCGEOGRAPHICELEMENT" {
+            category = MaterialCategory::Earth;
+        }
+        let info = ElementInfo {
+            global_id: e.arg(0).as_str().unwrap_or("").to_owned(),
+            class,
+            name: e.arg(2).as_str().unwrap_or("").to_owned(),
+            storey: self.containers.get(&id).cloned().unwrap_or_default(),
+            material,
+            category,
+        };
+        (info, mb)
     }
-    sb.warnings = r
-        .warnings
-        .into_iter()
-        .map(|(k, n)| if n > 1 { format!("{k} (×{n})") } else { k })
-        .collect();
-    // Freeing millions of parsed values takes a noticeable time: do it off the caller's path.
-    // Freeing a big parsed file takes a while: off the caller's thread where there are threads.
-    #[cfg(not(target_arch = "wasm32"))]
-    std::thread::spawn(move || drop(file));
-    #[cfg(target_arch = "wasm32")]
-    drop(file);
-    Ok(sb.finish())
+
+    /// A worker's reader: its own placement cache and warnings.
+    fn reader(&self) -> Reader<'_> {
+        Reader {
+            f: &self.file,
+            placements: HashMap::new(),
+            warnings: BTreeMap::new(),
+            arc_tol: self.arc_tol,
+            angle_scale: self.angle_scale,
+            map_stack: Vec::new(),
+        }
+    }
+
+    /// Every element and its triangle count, meshing each and keeping nothing: the cost of
+    /// any subset is then exact. Not capped in triangles (it stores none); the item-visit cap
+    /// still guards against maps nested to explode.
+    pub fn census(&self) -> Vec<Counted> {
+        // An element past the cap is never shown: counting it to cap + 1 says so, and bounds
+        // what one element holds while counted.
+        let budget = Budget {
+            element_max: self.limits.max_triangles.saturating_add(1),
+            ..Budget::new(&Limits {
+                max_triangles: usize::MAX,
+                ..self.limits
+            })
+        };
+        self.ids
+            .par_iter()
+            .map_init(
+                || self.reader(),
+                |w, &id| {
+                    let (info, mb) = self.element(w, id, &budget);
+                    let triangles = mb.tris.len();
+                    Counted { info, triangles }
+                },
+            )
+            .collect()
+    }
+
+    /// The scene of the elements `keep(i)` selects (`i` as in `census`), at most
+    /// `max_triangles` of them in file order: the same elements every time, whatever the
+    /// thread timing. With how many selected elements it could not show.
+    pub fn scene(
+        &self,
+        keep: impl Fn(usize) -> bool + Sync,
+        max_triangles: usize,
+    ) -> (Scene, usize) {
+        // Meshing runs in parallel, so a shared triangle budget cuts wherever threads happen
+        // to be. Batches in file order instead, the cap applied in order: it stops at the first
+        // element that does not fit, the same one every time. An element stops at cap + 1
+        // triangles (it could not fit whole), and each batch shares a memory guard; a batch
+        // that trips it is meshed again in order on one thread, so the cut stays the same.
+        let cap = max_triangles;
+        let visits = Budget::new(&Limits {
+            max_triangles: usize::MAX,
+            ..self.limits
+        });
+        let picked: Vec<u64> = (self.ids.iter().enumerate())
+            .filter(|(i, _)| keep(*i))
+            .map(|(_, id)| *id)
+            .collect();
+        let mut warnings = self.warnings.clone();
+        let mut sb = SceneBuilder::with_storeys(self.storeys.clone());
+        sb.grids = self.grids.clone();
+        let (mut total, mut shown) = (0usize, 0usize);
+        type Meshed = (ElementInfo, MeshBuilder, BTreeMap<String, usize>);
+        'batches: for batch in picked.chunks(1024) {
+            let guard = || Budget {
+                element_max: cap.saturating_add(1),
+                ..Budget::new(&Limits {
+                    max_triangles: (cap - total).saturating_add(cap).saturating_add(1),
+                    max_item_visits: visits.visits_left.load(Ordering::Relaxed),
+                })
+            };
+            let g = guard();
+            let mut results: Vec<Meshed> = batch
+                .par_iter()
+                .map_init(
+                    || self.reader(),
+                    |w, &id| {
+                        let (info, mb) = self.element(w, id, &g);
+                        (info, mb, std::mem::take(&mut w.warnings))
+                    },
+                )
+                .collect();
+            let mut used = &g;
+            let g2;
+            if g.exhausted() {
+                drop(results);
+                g2 = guard();
+                let mut w = self.reader();
+                let mut sum = total;
+                results = Vec::new();
+                for &id in batch {
+                    let (info, mb) = self.element(&mut w, id, &g2);
+                    sum += mb.tris.len();
+                    results.push((info, mb, std::mem::take(&mut w.warnings)));
+                    if sum > cap {
+                        break;
+                    }
+                }
+                used = &g2;
+            }
+            // The batch's item visits count against the whole file's.
+            let left = used.visits_left.load(Ordering::Relaxed);
+            visits.visits_left.store(left, Ordering::Relaxed);
+            if left == 0 {
+                visits.exhausted.store(true, Ordering::Relaxed);
+            }
+            for (info, mb, w) in results {
+                for (k, n) in w {
+                    *warnings.entry(k).or_default() += n;
+                }
+                if total + mb.tris.len() > cap {
+                    break 'batches;
+                }
+                total += mb.tris.len();
+                shown += 1;
+                sb.push(info, mb);
+            }
+            if visits.exhausted() {
+                break;
+            }
+        }
+        let budget = visits;
+        if shown < picked.len() || budget.exhausted() {
+            let items = self.limits.max_item_visits - budget.visits_left.load(Ordering::Relaxed);
+            warnings.insert(
+                format!(
+                    "model too large or nested too deeply: {} element(s) not shown after {total} triangles / {items} items",
+                    picked.len() - shown
+                ),
+                1,
+            );
+        }
+        sb.warnings = warnings
+            .into_iter()
+            .map(|(k, n)| if n > 1 { format!("{k} (×{n})") } else { k })
+            .collect();
+        (sb.finish(), picked.len() - shown)
+    }
+
+    /// How many elements have a body (what `census` lists).
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    /// Free the parsed file: millions of values take a while, so off the caller's thread
+    /// where there are threads.
+    pub fn free(self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(move || drop(self));
+        #[cfg(target_arch = "wasm32")]
+        drop(self);
+    }
 }
 
 pub(crate) const SKIP_CLASSES: &[&str] = &[
@@ -410,6 +616,8 @@ pub(crate) struct Budget {
     triangles_left: AtomicUsize,
     visits_left: AtomicUsize,
     exhausted: AtomicBool,
+    /// Most triangles one element may take; past it that element gets no more (others do).
+    element_max: usize,
 }
 
 impl Budget {
@@ -418,6 +626,7 @@ impl Budget {
             triangles_left: AtomicUsize::new(limits.max_triangles),
             visits_left: AtomicUsize::new(limits.max_item_visits),
             exhausted: AtomicBool::new(false),
+            element_max: usize::MAX,
         }
     }
     pub(crate) fn exhausted(&self) -> bool {
@@ -449,7 +658,7 @@ impl Emit<'_> {
         if self.budget.triangles_left.load(Ordering::Relaxed) == 0 {
             self.budget.exhausted.store(true, Ordering::Relaxed);
         }
-        !self.budget.exhausted()
+        !self.budget.exhausted() && self.mb.tris.len() < self.budget.element_max
     }
     pub(crate) fn charge(&mut self, before: usize) {
         let used = self.mb.tris.len().saturating_sub(before);
@@ -919,7 +1128,8 @@ impl<'a> Reader<'a> {
             self.warn("representation nesting too deep");
             return;
         }
-        if !out.budget.visit() {
+        // An element at its own limit stops here too: nothing it visits would be kept.
+        if out.mb.tris.len() >= out.budget.element_max || !out.budget.visit() {
             return;
         }
         let Some(e) = self.f.get(id) else { return };
@@ -1941,6 +2151,75 @@ fn arc(a: [f64; 2], b: [f64; 2], c: [f64; 2], tol: f64) -> Vec<[f64; 2]> {
 mod tests {
     use super::*;
     use bimble_core::demo::{FrameSpec, concrete_frame};
+
+    /// The demo frame as IFC, made once: the demo mints new GlobalIds each time.
+    fn demo_parsed(limits: Limits) -> Parsed {
+        static IFC: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let ifc =
+            IFC.get_or_init(|| crate::export(&concrete_frame(&FrameSpec::default()), "t.ifc", "t"));
+        Parsed::new(parse(ifc).unwrap(), limits).unwrap()
+    }
+
+    fn ids<'a>(it: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
+        let mut v: Vec<&str> = it.collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// The census counts what the scene draws, element by element, and a filtered scene holds
+    /// exactly the chosen elements (one storey here).
+    #[test]
+    fn census_counts_what_a_filtered_scene_draws() {
+        let census = demo_parsed(Limits::default()).census();
+        let (full, _) = demo_parsed(Limits::default()).scene(|_| true, usize::MAX);
+        let counted: usize = census.iter().map(|c| c.triangles).sum();
+        let drawn: usize = full.elements.iter().map(|e| e.mesh.indices.len() / 3).sum();
+        assert_eq!(counted, drawn);
+        let storey = census[0].info.storey.clone();
+        let chosen = ids(census
+            .iter()
+            .filter(|c| c.info.storey == storey)
+            .map(|c| c.info.global_id.as_str()));
+        assert!(chosen.len() < census.len(), "the demo has several storeys");
+        let (part, _) =
+            demo_parsed(Limits::default()).scene(|i| census[i].info.storey == storey, usize::MAX);
+        assert_eq!(
+            ids(part.elements.iter().map(|e| e.global_id.as_str())),
+            chosen
+        );
+    }
+
+    /// Past the triangle cap, the first elements in file order are shown, every time: the
+    /// shared parallel budget cut wherever threads happened to be (a 758 MB model showed a
+    /// different part on each load).
+    #[test]
+    fn the_triangle_cap_keeps_the_first_elements_in_file_order() {
+        let census = demo_parsed(Limits::default()).census();
+        let cap = census.iter().map(|c| c.triangles).sum::<usize>() / 2;
+        let mut fit = Vec::new();
+        let mut total = 0;
+        for c in &census {
+            if total + c.triangles > cap {
+                break;
+            }
+            total += c.triangles;
+            fit.push(c.info.global_id.as_str());
+        }
+        let fit = ids(fit.into_iter());
+        for _ in 0..5 {
+            let (s, not_shown) = demo_parsed(Limits::default()).scene(|_| true, cap);
+            assert_eq!(not_shown, census.len() - fit.len());
+            assert_eq!(ids(s.elements.iter().map(|e| e.global_id.as_str())), fit);
+            assert!(s.warnings.iter().any(|w| w.contains("not shown")));
+        }
+    }
+
+    #[test]
+    fn displayed_bytes_leave_out_property_sets() {
+        let text = "ISO-10303-21;\nDATA;\n#1=IFCWALL('a');\n#2= IFCPROPERTYSET('b',\n  (#3));\n#3=IFCPROPERTYSINGLEVALUE('c');\n#4=IFCSLAB('d');\nENDSEC;\n";
+        let shown = "ISO-10303-21;\nDATA;\n#1=IFCWALL('a');\n#4=IFCSLAB('d');\nENDSEC;\n";
+        assert_eq!(displayed_bytes(text.as_bytes()), shown.len() as u64);
+    }
 
     /// Small full circles: within ~1.2 % of the exact area (15° segments), like IfcOpenShell.
     fn tube_mesh(path: &[[f64; 3]], r: f64, n: usize) -> bimble_geom::Mesh {
