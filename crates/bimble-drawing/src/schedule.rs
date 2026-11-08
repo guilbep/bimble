@@ -290,7 +290,7 @@ fn cell(f: Field, e: &SceneElement, m: &Measures, location: &str, density: Optio
     }
 }
 
-/// Sums of the summed fields, and the number of rows in the first text column.
+/// Sums of the summed fields, and the label (with the row count) in the first other column.
 fn totals(fields: &[Field], rows: &[Row], label: String) -> Vec<Cell> {
     let mut out: Vec<Cell> = fields
         .iter()
@@ -317,8 +317,10 @@ fn totals(fields: &[Field], rows: &[Row], label: String) -> Vec<Cell> {
             }
         })
         .collect();
-    if let Some(first) = out.first_mut() {
-        *first = Cell::Text(label);
+    // The label goes in the first non-summed column; when every column is summed, the sums
+    // win and the row has no label (cells stay aligned with the headers).
+    if let Some(k) = fields.iter().position(|f| !f.summed()) {
+        out[k] = Cell::Text(label);
     }
     out
 }
@@ -622,5 +624,37 @@ mod tests {
             panic!("volume and mass are numbers");
         };
         assert!((mass - vol * 2000.0).abs() < 1e-6, "{mass} vs {vol}");
+    }
+
+    /// A summed first column keeps its sum in the totals: the label goes in the first
+    /// non-summed column, or nowhere when every column is summed.
+    #[test]
+    fn summed_first_column_keeps_its_total() {
+        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let mut def = default_schedules()
+            .into_iter()
+            .find(|d| d.name == "Concrete columns")
+            .unwrap();
+        for fields in [
+            vec![Field::Volume, Field::Name],
+            vec![Field::Volume, Field::Area],
+        ] {
+            def.fields = fields;
+            let t = schedule(&scene, &def);
+            let tot = t.total.as_ref().unwrap();
+            assert_eq!(tot.len(), def.fields.len());
+            let Cell::Num(v, _) = tot[0] else {
+                panic!("volume total lost: {tot:?}");
+            };
+            assert!(v > 0.0, "{tot:?}");
+            assert!(
+                t.groups
+                    .iter()
+                    .all(|g| matches!(g.subtotal[0], Cell::Num(..)))
+            );
+            if def.fields[1] == Field::Name {
+                assert_eq!(tot[1], Cell::Text(format!("Total ({})", t.count)));
+            }
+        }
     }
 }
