@@ -392,3 +392,43 @@ fn rotated_rectangle_profile_keeps_its_rotation() {
         assert_same_place_as_reader(&text);
     }
 }
+
+/// A storey placed off the origin, or turned, still puts its elements where the IFC says, and
+/// the opening still cuts the window out of the wall.
+#[test]
+fn storey_offset_or_rotation_keeps_world_positions() {
+    let offset = REVIT_STYLE.replace(
+        "#17=IFCAXIS2PLACEMENT3D(#8,$,$);",
+        "#17=IFCAXIS2PLACEMENT3D(#90,$,$);\n#90=IFCCARTESIANPOINT((5000.,0.,3000.));",
+    );
+    let turned = offset.replace(
+        "#17=IFCAXIS2PLACEMENT3D(#90,$,$);",
+        "#17=IFCAXIS2PLACEMENT3D(#90,$,#91);\n#91=IFCDIRECTION((0.,1.,0.));",
+    );
+    for text in [offset, turned] {
+        let m = assert_same_place_as_reader(&text);
+        let (_, rep) = import(&text);
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("Niveau 1")),
+            "the storey frame is reported: {rep:?}"
+        );
+        let e = m.elements.values().next().unwrap();
+        let full = 4000.0 * 200.0 * 2700.0;
+        let cut = volume(&bimble_geom::element_tris(e).unwrap());
+        let window = 1200.0 * 200.0 * 1200.0;
+        assert!((full - cut - window).abs() < full * 1e-4, "{full} vs {cut}");
+    }
+}
+
+/// An element in no storey goes into the first one and keeps its world height (not raised by
+/// that storey's elevation a second time).
+#[test]
+fn element_without_storey_keeps_world_height() {
+    let text = REVIT_STYLE
+        .replace(
+            "#17=IFCAXIS2PLACEMENT3D(#8,$,$);",
+            "#17=IFCAXIS2PLACEMENT3D(#90,$,$);\n#90=IFCCARTESIANPOINT((0.,0.,3000.));",
+        )
+        .replace("#36=IFCRELCONTAINEDINSPATIALSTRUCTURE", "#36=IFCRELNOTHING");
+    assert_same_place_as_reader(&text);
+}

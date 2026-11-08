@@ -87,19 +87,30 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
     r.arc_tol = crate::read::ARC_TOLERANCE_MM / scale;
     r.angle_scale = r.plane_angle_to_radians();
 
-    // Storeys: step id → (GlobalId, storey, world placement in file units).
+    // Storeys: step id → GlobalId. A Bimble storey is a level only: elements keep their world
+    // placement minus the storey elevation, whatever the storey's own frame.
     let mut storeys: BTreeMap<GlobalId, Storey> = BTreeMap::new();
     let mut storey_gid: HashMap<u64, GlobalId> = HashMap::new();
-    let mut storey_frame: HashMap<u64, Affine> = HashMap::new();
     let mut storey_ids: HashSet<u64> = HashSet::new();
     for (id, st) in file.by_type("IFCBUILDINGSTOREY") {
         let name = st.arg(2).as_str().unwrap_or("").to_owned();
-        let (elevation, frame) = match st.arg(5).as_ref() {
+        let elevation = match st.arg(5).as_ref() {
             Some(pl) => {
                 let f = r.object_placement(pl, 0);
-                (f.t[2] * scale, f)
+                let same = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-9);
+                if (f.t[0] * scale).abs() > 1e-6
+                    || (f.t[1] * scale).abs() > 1e-6
+                    || !same(f.x, [1.0, 0.0, 0.0])
+                    || !same(f.y, [0.0, 1.0, 0.0])
+                {
+                    rep.warn(format!(
+                        "storey {name:?}: placement offset or turned in plan; \
+                         its elements keep their world position"
+                    ));
+                }
+                f.t[2] * scale
             }
-            None => (st.arg(9).as_f64().unwrap_or(0.0) * scale, Affine::IDENTITY),
+            None => st.arg(9).as_f64().unwrap_or(0.0) * scale,
         };
         let raw = st.arg(0).as_str().unwrap_or("");
         let gid = GlobalId::try_from(raw.to_owned()).unwrap_or_else(|_| {
@@ -117,7 +128,6 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
             },
         );
         storey_gid.insert(id, gid);
-        storey_frame.insert(id, frame);
         storey_ids.insert(id);
     }
     if storeys.is_empty() {
@@ -159,30 +169,18 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
             continue;
         };
 
-        // Which storey (and its frame) this element hangs from.
-        let storey_step = contained.storey_of(*id, &storey_ids);
-        let (storey, storey_elevation, world) = match storey_step {
-            Some(s) => (
-                storey_gid[&s],
-                model.storeys[&storey_gid[&s]].elevation,
-                storey_frame[&s],
-            ),
-            None => (
-                fallback_storey,
-                model.storeys[&fallback_storey].elevation,
-                {
-                    // The synthetic or first storey: elements keep world coordinates minus elevation.
-                    Affine::IDENTITY
-                },
-            ),
-        };
+        // Which storey this element hangs from (the fallback one when none).
+        let storey = contained
+            .storey_of(*id, &storey_ids)
+            .map_or(fallback_storey, |s| storey_gid[&s]);
+        let storey_elevation = model.storeys[&storey].elevation;
 
-        // The element's placement relative to its storey (file units).
-        let element_world = match e.arg(5).as_ref() {
+        // The element's placement: world, minus the storey elevation (file units).
+        let mut rel = match e.arg(5).as_ref() {
             Some(pl) => r.object_placement(pl, 0),
             None => Affine::IDENTITY,
         };
-        let rel = storey_inverse(&world, &element_world);
+        rel.t[2] -= storey_elevation / scale;
 
         // First: an extruded body → parametric rectangle, ExtrudedPolygon.
         let mut element = match extruded_solid(&file, e).and_then(|solid| {
@@ -235,7 +233,6 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
                 &file,
                 ops,
                 &element,
-                &world,
                 scale,
                 storey_elevation,
                 &what,
@@ -344,19 +341,6 @@ fn contained_storeys(file: &StepFile) -> ContainedStoreys {
     ContainedStoreys { direct, parent }
 }
 
-/// rel = storey_world⁻¹ ∘ element_world, assuming the storey frame is orthogonal (the usual
-/// case: a placement under the building). rel maps the element's local space to storey space.
-fn storey_inverse(storey: &Affine, element: &Affine) -> Affine {
-    // Inverse of an orthogonal frame: rotate = transpose of the column frame.
-    let tr = |v: [f64; 3]| [dot3(storey.x, v), dot3(storey.y, v), dot3(storey.z, v)];
-    Affine {
-        x: tr(element.x),
-        y: tr(element.y),
-        z: tr(element.z),
-        t: tr(sub_v(element.t, storey.t)),
-    }
-}
-
 /// Openings of a host element: tessellated in world mm, moved into element-local coordinates,
 /// and stored as `Mesh` generators (ADR 0032). An opening without usable geometry is skipped:
 /// the element is then drawn uncut there, like a boolean that fails.
@@ -366,7 +350,6 @@ fn element_openings(
     file: &StepFile,
     op_ids: &[u64],
     host: &Element,
-    world: &Affine,
     scale: f64,
     elevation: f64,
     what: &str,
@@ -389,27 +372,17 @@ fn element_openings(
             rep.skip(format!("{what}: opening without usable geometry"));
             continue;
         }
-        // World mm → element-local mm, the same way the host's own geometry was placed.
-        let to_local: Box<dyn Fn([f64; 3]) -> [f64; 3]> =
-            if matches!(host.generator, Generator::Mesh { .. }) {
-                // A mesh host is storey-relative: world mm with the storey elevation subtracted.
-                Box::new(move |p: [f64; 3]| [p[0], p[1], p[2] - elevation])
-            } else {
-                // An extruded host: through the storey frame, then the element placement's
-                // frame (both orthogonal, so `Affine::local` is their exact inverse).
-                let f = Affine {
-                    x: host.placement.x_axis,
-                    y: host.placement.y_axis(),
-                    z: host.placement.z_axis,
-                    t: host.placement.origin,
-                };
-                let world = *world;
-                Box::new(move |p: [f64; 3]| {
-                    let p = world.local(p.map(|c| c / scale)).map(|c| c * scale);
-                    f.local(p)
-                })
-            };
-        let tris: Vec<[[f64; 3]; 3]> = mb.tris.iter().map(|t| t.map(&*to_local)).collect();
+        // World mm → element-local mm, the same way the host was placed: storey elevation off,
+        // then the placement's frame (orthogonal, so `Affine::local` is its exact inverse; a
+        // mesh host's placement is the identity).
+        let f = Affine {
+            x: host.placement.x_axis,
+            y: host.placement.y_axis(),
+            z: host.placement.z_axis,
+            t: host.placement.origin,
+        };
+        let to_local = |p: [f64; 3]| f.local([p[0], p[1], p[2] - elevation]);
+        let tris: Vec<[[f64; 3]; 3]> = mb.tris.iter().map(|t| t.map(to_local)).collect();
         let (positions, indices) = mesh_from_tris(&tris, 0.0);
         out.push(Opening {
             placement: Placement::at(0.0, 0.0, 0.0),
@@ -489,10 +462,6 @@ fn unit(v: [f64; 3]) -> Option<[f64; 3]> {
 
 fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn sub_v(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 /// The first IfcExtrudedAreaSolid of a product's Body representation, following mapped items.
