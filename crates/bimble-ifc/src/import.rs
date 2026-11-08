@@ -320,7 +320,11 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
                 .into(),
         );
     }
-    Ok((model, rep))
+    // Validate, then canonical form (no -0.0), like any model mutation: hashes depend on it.
+    model
+        .validate()
+        .map_err(|e| format!("imported model invalid: {e}"))?;
+    Ok((bimble_core::version::canonical(model), rep))
 }
 
 /// Element step id → storey step id (containment, then aggregation up the spatial tree).
@@ -810,7 +814,8 @@ fn mesh_from_tris(tris: &[[[f64; 3]; 3]], storey_elevation: f64) -> (Vec<[f64; 3
     let mut indices: Vec<u32> = Vec::with_capacity(tris.len() * 3);
     for t in tris {
         for p in t {
-            let p = [p[0], p[1], p[2] - storey_elevation];
+            // `+ 0.0` turns -0.0 into 0.0: one vertex, one key.
+            let p = [p[0] + 0.0, p[1] + 0.0, p[2] - storey_elevation + 0.0];
             let next = positions.len() as u32;
             let i = *index.entry(p.map(|c| c.to_bits())).or_insert(next);
             if i == next {

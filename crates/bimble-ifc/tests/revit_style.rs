@@ -524,3 +524,19 @@ fn invalid_global_ids_are_reported() {
     assert_eq!(rep.elements, 1, "report: {rep:?}");
     assert_eq!(skipped(&rep, "invalid GlobalId"), 1, "report: {rep:?}");
 }
+
+/// An imported model is already canonical (no -0.0): its hash doesn't change when it is saved
+/// and loaded again. A downward extrusion used to leave a z axis of [-0.0, -0.0, -1.0].
+#[test]
+fn imported_model_is_canonical() {
+    use bimble_core::version::model_hash;
+    let down = REVIT_STYLE.replace(
+        "#35=IFCDIRECTION((0.,0.,1.));",
+        "#35=IFCDIRECTION((0.,0.,-1.));",
+    );
+    let (m, _) = import(&down);
+    let text = bimble_core::file::to_string(&m);
+    let back = bimble_core::file::from_str(&text).unwrap();
+    assert_eq!(model_hash(&m), model_hash(&back));
+    assert!(!text.contains("-0.0"));
+}
