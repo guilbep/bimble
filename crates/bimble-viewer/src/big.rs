@@ -147,19 +147,16 @@ pub fn load_ifc(bytes: Vec<u8>, budget: u64, read_anyway: bool) -> Result<Outcom
     }))))
 }
 
-/// Share of the machine's memory one model may take.
-pub const BUDGET_SHARE: f64 = 0.8;
-
-/// What a new model may take: `BUDGET_SHARE` of the machine's memory (of 4 GB in a browser,
-/// what wasm can address; 8 GB where it can't be read), less what Bimble already holds — the
-/// model shown and its links stay alive while the next one loads.
-pub fn memory_budget() -> u64 {
-    let total = if cfg!(target_arch = "wasm32") {
+/// What a new model may take: `share` of the machine's memory (a setting, 80 % by default; 8 GB
+/// assumed where it can't be read), less what Bimble already holds — the model shown and its
+/// links stay alive while the next one loads. In a browser, all a tab can address (4 GB).
+pub fn memory_budget(share: f64) -> u64 {
+    let limit = if cfg!(target_arch = "wasm32") {
         4_000_000_000
     } else {
-        total_memory().unwrap_or(8_000_000_000)
+        (total_memory().unwrap_or(8_000_000_000) as f64 * share) as u64
     };
-    ((total as f64 * BUDGET_SHARE) as u64).saturating_sub(in_use())
+    limit.saturating_sub(in_use())
 }
 
 /// Memory this process holds now.
@@ -174,8 +171,9 @@ fn in_use() -> u64 {
     }
 }
 
+/// The machine's memory, if it can be read.
 #[cfg(target_os = "macos")]
-fn total_memory() -> Option<u64> {
+pub fn total_memory() -> Option<u64> {
     let mut v: u64 = 0;
     let mut len = std::mem::size_of::<u64>();
     // SAFETY: hw.memsize is a u64; `v` and `len` describe that buffer exactly.
@@ -192,7 +190,7 @@ fn total_memory() -> Option<u64> {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn total_memory() -> Option<u64> {
+pub fn total_memory() -> Option<u64> {
     let s = std::fs::read_to_string("/proc/meminfo").ok()?;
     let kb: u64 = s
         .lines()
@@ -206,7 +204,7 @@ fn total_memory() -> Option<u64> {
 }
 
 #[cfg(windows)]
-fn total_memory() -> Option<u64> {
+pub fn total_memory() -> Option<u64> {
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     // SAFETY: a zeroed MEMORYSTATUSEX with dwLength set is what the call expects.
     unsafe {
@@ -217,7 +215,7 @@ fn total_memory() -> Option<u64> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn total_memory() -> Option<u64> {
+pub fn total_memory() -> Option<u64> {
     None
 }
 

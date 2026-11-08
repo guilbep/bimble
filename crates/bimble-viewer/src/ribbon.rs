@@ -75,11 +75,12 @@ pub(crate) enum Action {
     Project,
     Materials,
     History,
+    Settings,
     Palette,
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 32] = [
+pub(crate) const ALL_ACTIONS: [Action; 33] = [
     Action::Open,
     Action::ImportIfc,
     Action::Save,
@@ -112,6 +113,7 @@ pub(crate) const ALL_ACTIONS: [Action; 32] = [
     Action::Standards,
     Action::Project,
     Action::Materials,
+    Action::Settings,
 ];
 
 impl Action {
@@ -149,6 +151,7 @@ impl Action {
             Action::Project => "Project information".into(),
             Action::Materials => "Materials".into(),
             Action::History => "History…".into(),
+            Action::Settings => "Settings…".into(),
             Action::Palette => "Command palette".into(),
         }
     }
@@ -189,9 +192,11 @@ impl Action {
             | Action::Top => Tab::View,
             Action::OnPaper | Action::NewSheet | Action::CloseSheet => Tab::Sheets,
             Action::LinkModel | Action::ReferencePlan => Tab::Links,
-            Action::Standards | Action::Project | Action::Materials | Action::History => {
-                Tab::Manage
-            }
+            Action::Standards
+            | Action::Project
+            | Action::Materials
+            | Action::History
+            | Action::Settings => Tab::Manage,
             Action::Open
             | Action::ImportIfc
             | Action::Save
@@ -273,6 +278,7 @@ impl Viewer {
             Action::Undo => self.undo_text(true).is_some(),
             Action::Redo => self.undo_text(false).is_some(),
             Action::Place(_) | Action::History => self.editable(),
+            Action::Settings => true,
             Action::Orthographic | Action::SectionBox | Action::Top => loaded && !flat,
             Action::BoxToSelection => loaded && !flat && self.section_on,
             Action::SheetTool(_) | Action::CloseSheet => self.layout.is_some(),
@@ -306,6 +312,7 @@ impl Viewer {
             Action::Project => self.project_page.is_some(),
             Action::Materials => self.materials_page.is_some(),
             Action::History => self.history_window,
+            Action::Settings => self.settings_window,
             _ => false,
         }
     }
@@ -421,6 +428,7 @@ impl Viewer {
                     self.materials_page = Some(Default::default());
                 }
             }
+            Action::Settings => self.settings_window = !self.settings_window,
             Action::History => {
                 self.history_window = !self.history_window;
                 if self.history_window {

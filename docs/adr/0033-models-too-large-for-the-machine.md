@@ -16,8 +16,14 @@ Bimble to know before it runs out, and to let the user decide what to drop.
 
 ## Decision
 
-1. **A memory budget**: 80 % of the machine's memory (of 4 GB in a browser; 8 GB assumed where
-   it can't be read). The viewer's triangle cap is what fits in it, not a constant.
+1. **A memory budget**: a setting (Manage → Settings…), 80 % of the machine's memory by default,
+   less what Bimble already holds (8 GB assumed where memory can't be read). In a browser, all a
+   tab can address: 4 GB (Pierre: "as much as possible for the browser"). The viewer's triangle
+   cap is what fits in it, not a constant. Settings live in a JSON file in the platform's
+   settings folder, or the browser's local storage.
+   **The guard against hostile files is separate and scales with the file**: 10 triangles per
+   displayed byte (floor 1 M), an item visit per 10 bytes (floor 5 M), 50 M per element. Real
+   files reach 0.11 triangles per byte; the `chain18` nested-map bomb 917.
 2. **An estimate from what is known**, fitted on 17 IFC files (0.2–872 MB, peak footprint of
    `bimble render`, GPU included; within 16 % on every file over 25 MB):
    reading = 1.2 × (text + 7.5 × displayed bytes); showing = 1.2 × (480 MB + 6.2 × displayed
@@ -34,7 +40,7 @@ Bimble to know before it runs out, and to let the user decide what to drop.
    the browser pauses there the same way (no threads).
 5. **A partial model says so**: a "Showing part: …" chip (ADR 0028); its × opens the file again.
 6. **The cut is deterministic**: meshing in file-order batches, the cap stops at the first
-   element that doesn't fit. The reader's own cap (10 M, CLI and links) stays as a guard.
+   element that doesn't fit.
    Import (ADR 0032) never opens partially: a partial copy would silently drop elements.
 
 ## Alternatives considered
@@ -55,5 +61,5 @@ Bimble to know before it runs out, and to let the user decide what to drop.
 ## Revisit when
 
 - Instancing or compact vertices land: 300 B/triangle changes; re-run the calibration.
-- The budget becomes a setting, or degrading (LOD, culling) replaces choosing.
+- Degrading (draw order by size, simplify while navigating, frame-rate target) replaces choosing.
 - Browser coefficients: calibrated on native memory, which overestimates the wasm heap (safe).

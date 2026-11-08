@@ -30,6 +30,7 @@ mod project_page;
 mod ribbon;
 mod schedules;
 mod section;
+mod settings;
 mod snap;
 mod state;
 mod style_editor;
@@ -566,6 +567,9 @@ struct Viewer {
     parse_later: Option<ParseLater>,
     /// A model too large for this machine, waiting for the user to choose (ADR 0033).
     ask: Option<(PathBuf, Box<big::Ask>)>,
+    /// The user's settings (kept between sessions), and whether their window is open.
+    settings: settings::Settings,
+    settings_window: bool,
     /// What a load had to say (an IFC import's report), shown until closed.
     report: Option<(PathBuf, Vec<String>)>,
     /// Browser: meshing the chosen part, on a later frame (after "Loading…" is drawn).
@@ -662,6 +666,8 @@ impl Viewer {
             files: files::Files::default(),
             parse_later: None,
             ask: None,
+            settings: settings::Settings::load(),
+            settings_window: false,
             report: None,
             mesh_later: None,
             views: Vec::new(),
@@ -733,7 +739,11 @@ impl Viewer {
         let r = if job.import {
             import_bytes(&job.name, &job.bytes).map(|(s, m, report)| imported(s, m, t, report))
         } else if is_ifc && !job.link {
-            big::load_ifc(job.bytes, big::memory_budget(), job.read_anyway)
+            big::load_ifc(
+                job.bytes,
+                big::memory_budget(self.settings.memory_share),
+                job.read_anyway,
+            )
         } else {
             load_bytes(&job.name, job.bytes).map(|(s, m)| {
                 let m = if job.link { None } else { m };
@@ -900,13 +910,14 @@ impl Viewer {
         let (tx, rx) = channel();
         let p = path.clone();
         let ctx = ctx.clone();
+        let share = self.settings.memory_share;
         std::thread::spawn(move || {
             let t = Instant::now();
             let is_ifc = p.extension().is_some_and(|x| x.eq_ignore_ascii_case("ifc"));
             let r = if is_ifc {
                 std::fs::read(&p)
                     .map_err(|e| e.to_string())
-                    .and_then(|b| big::load_ifc(b, big::memory_budget(), false))
+                    .and_then(|b| big::load_ifc(b, big::memory_budget(share), false))
             } else {
                 load_any(&p).map(|(s, m)| big::Outcome::ready(s, m, t.elapsed()))
             };
@@ -2892,7 +2903,7 @@ impl Viewer {
                          or stop Bimble.",
                         big::gb(cost.read()),
                         big::gb(*budget),
-                        (big::BUDGET_SHARE * 100.0) as u32,
+                        (self.settings.memory_share * 100.0).round() as u32,
                     ));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
@@ -3002,6 +3013,44 @@ impl Viewer {
             (_, big::Ask::Choose(c)) => c.parsed.free(),
             _ => {}
         }
+    }
+
+    /// Settings, kept between sessions.
+    fn settings_ui(&mut self, ctx: &egui::Context) {
+        if !self.settings_window {
+            return;
+        }
+        let mut open = true;
+        let before = self.settings.clone();
+        egui::Window::new("Settings")
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(380.0)
+            .show(ctx, |ui| {
+                ui.strong("Memory for one model");
+                if cfg!(target_arch = "wasm32") {
+                    ui.label(
+                        "In a browser a model may use all a tab can address: 4 GB. Larger \
+                         models ask which part to show.",
+                    );
+                } else {
+                    let mut pct = (self.settings.memory_share * 100.0).round();
+                    ui.add(egui::Slider::new(&mut pct, 20.0..=100.0).suffix(" %"));
+                    self.settings.memory_share = pct / 100.0;
+                    if let Some(total) = big::total_memory() {
+                        ui.label(format!(
+                            "{} of this computer's {}. A model that needs more asks which part \
+                             to show (storeys, IFC classes, materials) before anything is cut.",
+                            big::gb((total as f64 * self.settings.memory_share) as u64),
+                            big::gb(total)
+                        ));
+                    }
+                }
+            });
+        if self.settings != before {
+            self.settings.save();
+        }
+        self.settings_window = open;
     }
 
     /// An import's report (ADR 0032: what didn't come in is said, not dropped).
@@ -3655,6 +3704,7 @@ impl eframe::App for Viewer {
         }
         self.confirm_ui(&ctx);
         self.ask_ui(&ctx);
+        self.settings_ui(&ctx);
         self.report_ui(&ctx);
     }
 }
