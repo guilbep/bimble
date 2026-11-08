@@ -351,7 +351,10 @@ struct Chunks<'d, T> {
     queue: &'d wgpu::Queue,
     label: &'static str,
     /// Vertices per buffer: within the device's limit, at most 64 MiB, and a multiple of 6 so
-    /// buffers split only between whole triangles and whole segments.
+    /// buffers split only between whole triangles and whole segments. 64 MiB measured best on a
+    /// 9M-triangle model: 16 MiB drew 25 % slower, 256 MiB drew the same but held 540 MB more
+    /// after loading. Total GPU memory is not queryable (wgpu, WebGPU), and the sum is the same
+    /// whatever the piece size.
     per: usize,
     cur: Vec<T>,
     done: Vec<(wgpu::Buffer, u32)>,
