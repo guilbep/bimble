@@ -374,14 +374,14 @@ fn normalize(v: [f64; 3]) -> Option<[f64; 3]> {
 
 /// Limits shared by all worker threads: total triangles and representation items visited.
 /// Once either runs out, `exhausted` is set and every thread stops adding geometry.
-struct Budget {
+pub(crate) struct Budget {
     triangles_left: AtomicUsize,
     visits_left: AtomicUsize,
     exhausted: AtomicBool,
 }
 
 impl Budget {
-    fn new(limits: &Limits) -> Self {
+    pub(crate) fn new(limits: &Limits) -> Self {
         Budget {
             triangles_left: AtomicUsize::new(limits.max_triangles),
             visits_left: AtomicUsize::new(limits.max_item_visits),
@@ -405,21 +405,21 @@ impl Budget {
     }
 }
 
-struct Emit<'a> {
-    mb: &'a mut MeshBuilder,
-    scale: f64,
-    budget: &'a Budget,
+pub(crate) struct Emit<'a> {
+    pub(crate) mb: &'a mut MeshBuilder,
+    pub(crate) scale: f64,
+    pub(crate) budget: &'a Budget,
 }
 
 impl Emit<'_> {
     /// False once the triangle budget is used up; geometry is then dropped.
-    fn has_budget(&mut self) -> bool {
+    pub(crate) fn has_budget(&mut self) -> bool {
         if self.budget.triangles_left.load(Ordering::Relaxed) == 0 {
             self.budget.exhausted.store(true, Ordering::Relaxed);
         }
         !self.budget.exhausted()
     }
-    fn charge(&mut self, before: usize) {
+    pub(crate) fn charge(&mut self, before: usize) {
         let used = self.mb.tris.len().saturating_sub(before);
         let _ = self
             .budget
@@ -428,7 +428,7 @@ impl Emit<'_> {
                 Some(v.saturating_sub(used))
             });
     }
-    fn polygon(&mut self, outer: &[[f64; 3]], holes: &[Vec<[f64; 3]>]) {
+    pub(crate) fn polygon(&mut self, outer: &[[f64; 3]], holes: &[Vec<[f64; 3]>]) {
         if !self.has_budget() {
             return;
         }
@@ -439,12 +439,12 @@ impl Emit<'_> {
         self.mb.add_polygon(&sc(outer), &holes);
         self.charge(before);
     }
-    fn triangle(&mut self, t: [[f64; 3]; 3]) {
+    pub(crate) fn triangle(&mut self, t: [[f64; 3]; 3]) {
         let s = self.scale;
         self.triangle_mm(t.map(|p| p.map(|c| c * s)));
     }
     /// A triangle already in mm (boolean results).
-    fn triangle_mm(&mut self, t: [[f64; 3]; 3]) {
+    pub(crate) fn triangle_mm(&mut self, t: [[f64; 3]; 3]) {
         if !self.has_budget() {
             return;
         }
@@ -454,30 +454,30 @@ impl Emit<'_> {
     }
 }
 
-struct Reader<'a> {
-    f: &'a StepFile,
-    placements: HashMap<u64, Affine>,
-    warnings: BTreeMap<String, usize>,
+pub(crate) struct Reader<'a> {
+    pub(crate) f: &'a StepFile,
+    pub(crate) placements: HashMap<u64, Affine>,
+    pub(crate) warnings: BTreeMap<String, usize>,
     /// Arc tessellation tolerance in file units.
-    arc_tol: f64,
+    pub(crate) arc_tol: f64,
     /// Plane angle unit → radians (Revit IFC2x3 often writes degrees).
-    angle_scale: f64,
+    pub(crate) angle_scale: f64,
     /// Representation maps being expanded, to stop a map that contains itself.
-    map_stack: Vec<u64>,
+    pub(crate) map_stack: Vec<u64>,
 }
 
 impl<'a> Reader<'a> {
-    fn warn(&mut self, w: impl Into<String>) {
+    pub(crate) fn warn(&mut self, w: impl Into<String>) {
         *self.warnings.entry(w.into()).or_default() += 1;
     }
 
-    fn get(&self, v: &Value) -> Option<&'a Entity> {
+    pub(crate) fn get(&self, v: &Value) -> Option<&'a Entity> {
         self.f.deref(v)
     }
 
     // ---------- units ----------
 
-    fn length_scale_to_mm(&mut self) -> f64 {
+    pub(crate) fn length_scale_to_mm(&mut self) -> f64 {
         let f = self.f;
         let assignment = f
             .by_type("IFCPROJECT")
@@ -671,7 +671,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Element id → (material display name, family). Type-level materials are inherited.
-    fn materials(&self) -> HashMap<u64, (String, MaterialCategory)> {
+    pub(crate) fn materials(&self) -> HashMap<u64, (String, MaterialCategory)> {
         let f = self.f;
         let mut direct: HashMap<u64, (String, MaterialCategory)> = HashMap::new();
         for (_, rel) in f.by_type("IFCRELASSOCIATESMATERIAL") {
@@ -766,19 +766,19 @@ impl<'a> Reader<'a> {
 
     // ---------- placements ----------
 
-    fn point(&self, v: &Value) -> Option<[f64; 3]> {
+    pub(crate) fn point(&self, v: &Value) -> Option<[f64; 3]> {
         let e = self.get(v)?;
         let c = e.arg(0).as_list()?;
         let g = |i: usize| c.get(i).and_then(Value::as_f64);
         Some([g(0)?, g(1)?, g(2).unwrap_or(0.0)])
     }
 
-    fn direction(&self, v: &Value) -> Option<[f64; 3]> {
+    pub(crate) fn direction(&self, v: &Value) -> Option<[f64; 3]> {
         self.point(v).and_then(normalize)
     }
 
     /// IfcAxis2Placement3D / 2D → Affine.
-    fn axis_placement(&self, v: &Value) -> Affine {
+    pub(crate) fn axis_placement(&self, v: &Value) -> Affine {
         let Some(e) = self.get(v) else {
             return Affine::IDENTITY;
         };
@@ -805,7 +805,7 @@ impl<'a> Reader<'a> {
         Affine { x, y, z, t }
     }
 
-    fn object_placement(&mut self, id: u64, depth: usize) -> Affine {
+    pub(crate) fn object_placement(&mut self, id: u64, depth: usize) -> Affine {
         if let Some(a) = self.placements.get(&id) {
             return *a;
         }
@@ -942,7 +942,7 @@ impl<'a> Reader<'a> {
     }
 
     /// The Body representation of a product, placed in the world, into `out`.
-    fn product_body(&mut self, e: &Entity, out: &mut Emit) {
+    pub(crate) fn product_body(&mut self, e: &Entity, out: &mut Emit) {
         let (Some(pl), Some(shape)) = (e.arg(5).as_ref(), self.f.deref(e.arg(6))) else {
             return;
         };
@@ -963,7 +963,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Host element id → its openings (IfcRelVoidsElement).
-    fn voids(&self) -> HashMap<u64, Vec<u64>> {
+    pub(crate) fn voids(&self) -> HashMap<u64, Vec<u64>> {
         let mut out: HashMap<u64, Vec<u64>> = HashMap::new();
         for (_, rel) in self.f.by_type("IFCRELVOIDSELEMENT") {
             if let (Some(h), Some(o)) = (rel.arg(4).as_ref(), rel.arg(5).as_ref()) {
@@ -1162,7 +1162,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Profile → loops in profile coordinates (outer first, then holes). Points are 2D.
-    fn profile(&mut self, v: &Value, depth: usize) -> Option<Vec<Vec<[f64; 2]>>> {
+    pub(crate) fn profile(&mut self, v: &Value, depth: usize) -> Option<Vec<Vec<[f64; 2]>>> {
         let e = self.get(v)?;
         let placed = |r: &Self, loops: Vec<Vec<[f64; 2]>>, pos: &Value| {
             let a = r.axis_placement(pos);
@@ -1314,7 +1314,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Closed 2D curve → points (without repeating the first).
-    fn curve(&mut self, v: &Value) -> Option<Vec<[f64; 2]>> {
+    pub(crate) fn curve(&mut self, v: &Value) -> Option<Vec<[f64; 2]>> {
         let mut pts: Vec<[f64; 2]> = self
             .curve3(v, 0)?
             .into_iter()
@@ -1517,7 +1517,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Plane angle unit from the project units, as a factor to radians.
-    fn plane_angle_to_radians(&mut self) -> f64 {
+    pub(crate) fn plane_angle_to_radians(&mut self) -> f64 {
         let f = self.f;
         let assignment = f
             .by_type("IFCPROJECT")
@@ -1684,7 +1684,7 @@ fn dist2(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)
 }
 
-fn signed_area(l: &[[f64; 2]]) -> f64 {
+pub(crate) fn signed_area(l: &[[f64; 2]]) -> f64 {
     l.iter()
         .zip(l.iter().cycle().skip(1))
         .map(|(a, b)| a[0] * b[1] - b[0] * a[1])

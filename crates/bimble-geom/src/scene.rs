@@ -481,7 +481,8 @@ mod tests {
             depth: 300.0,
             height: 3000.0,
         };
-        let m = crate::extrude(&g.profile(), g.depth()).unwrap();
+        let x = g.extrusion().unwrap();
+        let m = crate::extrude(&x.profile, &x.voids, x.depth).unwrap();
         assert_eq!(crease_edges(&m, 20.0).len(), 12);
     }
 

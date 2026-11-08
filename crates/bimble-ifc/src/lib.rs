@@ -7,10 +7,12 @@
 //! Each element gets explicit SweptSolid geometry (readable by any IFC tool) plus a
 //! `Bimble_Generator` property set holding the generator name, version and parameters.
 
+pub mod import;
 pub mod read;
 pub mod step;
 
-use bimble_core::{Element, Generator, GlobalId, Model, Profile};
+use bimble_core::{Element, Generator, GlobalId, IfcClass, Model, Profile};
+use std::collections::HashMap;
 use std::fmt::Write;
 
 pub const GENERATOR_PSET: &str = "Bimble_Generator";
@@ -105,13 +107,33 @@ fn refs(ids: &[usize]) -> String {
         .join(",")
 }
 
+/// An IfcFacetedBrep of an explicit triangle mesh, in the element's local space. Point entities
+/// are shared and created in first-use order, so the output stays deterministic.
+fn faceted_brep(w: &mut Writer, positions: &[[f64; 3]], indices: &[u32]) -> usize {
+    let mut point_id: HashMap<[u64; 3], usize> = HashMap::new();
+    let mut pt = |w: &mut Writer, p: [f64; 3]| {
+        *point_id
+            .entry(p.map(|c| c.to_bits()))
+            .or_insert_with(|| w.add(point3(p)))
+    };
+    let mut faces: Vec<usize> = Vec::with_capacity(indices.len() / 3);
+    for t in indices.as_chunks::<3>().0 {
+        let loop_pts: Vec<usize> = t.iter().map(|i| pt(w, positions[*i as usize])).collect();
+        let poly = w.add(format!("IFCPOLYLOOP(({}))", refs(&loop_pts)));
+        let bound = w.add(format!("IFCFACEOUTERBOUND(#{poly},.T.)"));
+        faces.push(w.add(format!("IFCFACE((#{bound}))")));
+    }
+    let shell = w.add(format!("IFCCLOSEDSHELL(({}))", refs(&faces)));
+    w.add(format!("IFCFACETEDBREP(#{shell})"))
+}
+
 fn predefined(e: &Element) -> &'static str {
-    match e.generator {
-        Generator::RectColumn { .. } => ".COLUMN.",
-        Generator::RectBeam { .. } => ".BEAM.",
-        Generator::Slab { .. } => ".FLOOR.",
-        Generator::Wall { .. } => ".SOLIDWALL.",
-        Generator::PadFooting { .. } => ".PAD_FOOTING.",
+    match e.class {
+        IfcClass::IfcColumn => ".COLUMN.",
+        IfcClass::IfcBeam => ".BEAM.",
+        IfcClass::IfcSlab => ".FLOOR.",
+        IfcClass::IfcWall => ".SOLIDWALL.",
+        IfcClass::IfcFooting => ".PAD_FOOTING.",
     }
 }
 
@@ -251,34 +273,67 @@ pub fn export(m: &Model, file_name: &str, timestamp: &str) -> String {
         let a = w.add(format!("IFCAXIS2PLACEMENT3D(#{o},#{az},#{ax})"));
         let pl = w.add(format!("IFCLOCALPLACEMENT(#{storey_pl},#{a})"));
 
-        let profile = match e.generator.profile() {
-            Profile::Rectangle { x_dim, y_dim } => w.add(format!(
-                "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,{},{})",
-                real(x_dim),
-                real(y_dim)
-            )),
-            Profile::Polygon(pts) => {
-                let mut ids: Vec<usize> = pts
-                    .iter()
-                    .map(|q| {
-                        w.add(format!(
-                            "IFCCARTESIANPOINT(({},{}))",
-                            real(q[0]),
-                            real(q[1])
-                        ))
-                    })
-                    .collect();
-                ids.push(ids[0]); // closed polyline repeats the first point
-                let poly = w.add(format!("IFCPOLYLINE(({}))", refs(&ids)));
-                w.add(format!("IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,#{poly})"))
+        // Geometry: an extrusion (SweptSolid) or an explicit mesh (FacetedBrep, ADR 0032).
+        let (shape_repr, solid_id) = match &e.generator {
+            Generator::Mesh { positions, indices } => {
+                ("FacetedBrep", faceted_brep(&mut w, positions, indices))
+            }
+            g => {
+                let x = g.extrusion().expect("non-mesh generators extrude");
+                let profile = match (&x.profile, x.voids.is_empty()) {
+                    (Profile::Rectangle { x_dim, y_dim }, true) => w.add(format!(
+                        "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,{},{})",
+                        real(*x_dim),
+                        real(*y_dim)
+                    )),
+                    (profile, with_voids) => {
+                        let mut polyline = |pts: &[[f64; 2]]| {
+                            let mut ids: Vec<usize> = pts
+                                .iter()
+                                .map(|q| {
+                                    w.add(format!(
+                                        "IFCCARTESIANPOINT(({},{}))",
+                                        real(q[0]),
+                                        real(q[1])
+                                    ))
+                                })
+                                .collect();
+                            ids.push(ids[0]); // closed polyline repeats the first point
+                            w.add(format!("IFCPOLYLINE(({}))", refs(&ids)))
+                        };
+                        let rect_pts = |x_dim: &f64, y_dim: &f64| {
+                            let (x, y) = (x_dim / 2.0, y_dim / 2.0);
+                            vec![[-x, -y], [x, -y], [x, y], [-x, y]]
+                        };
+                        let outer_pts: Vec<[f64; 2]> = match profile {
+                            Profile::Rectangle { x_dim, y_dim } => rect_pts(x_dim, y_dim),
+                            Profile::Polygon(pts) => pts.clone(),
+                        };
+                        let outer = polyline(&outer_pts);
+                        if with_voids {
+                            let inners = x
+                                .voids
+                                .iter()
+                                .map(|v| format!("#{}", polyline(v)))
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            w.add(format!(
+                                "IFCARBITRARYPROFILEDEFWITHVOIDS(.AREA.,$,#{outer},({inners}))"
+                            ))
+                        } else {
+                            w.add(format!("IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,#{outer})"))
+                        }
+                    }
+                };
+                let solid = w.add(format!(
+                    "IFCEXTRUDEDAREASOLID(#{profile},#{world},#{z},{})",
+                    real(x.depth)
+                ));
+                ("SweptSolid", solid)
             }
         };
-        let solid = w.add(format!(
-            "IFCEXTRUDEDAREASOLID(#{profile},#{world},#{z},{})",
-            real(e.generator.depth())
-        ));
         let shape = w.add(format!(
-            "IFCSHAPEREPRESENTATION(#{body},'Body','SweptSolid',(#{solid}))"
+            "IFCSHAPEREPRESENTATION(#{body},'Body','{shape_repr}',(#{solid_id}))"
         ));
         let pds = w.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))"));
 
