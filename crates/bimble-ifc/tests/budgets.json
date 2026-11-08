@@ -2,49 +2,49 @@
   "booleans.ifc": {
     "edges": 133,
     "elements": 4,
-    "gpu_bytes": 20664,
+    "gpu_bytes": 13176,
     "triangles": 208
   },
   "curves.ifc": {
     "edges": 274,
     "elements": 3,
-    "gpu_bytes": 79824,
+    "gpu_bytes": 48432,
     "triangles": 872
   },
   "cyclic_map.ifc": {
     "edges": 12,
     "elements": 1,
-    "gpu_bytes": 1296,
+    "gpu_bytes": 864,
     "triangles": 12
   },
   "frame 10x10x3": {
     "edges": 13764,
     "elements": 1147,
-    "gpu_bytes": 1486512,
+    "gpu_bytes": 991008,
     "triangles": 13764
   },
   "frame 3x3x2": {
     "edges": 1176,
     "elements": 98,
-    "gpu_bytes": 127008,
+    "gpu_bytes": 84672,
     "triangles": 1176
   },
   "frame 40x40x10": {
     "edges": 615612,
     "elements": 51301,
-    "gpu_bytes": 66486096,
+    "gpu_bytes": 44324064,
     "triangles": 615612
   },
   "mirror.ifc": {
     "edges": 24,
     "elements": 2,
-    "gpu_bytes": 2592,
+    "gpu_bytes": 1728,
     "triangles": 24
   },
   "tilt.ifc": {
     "edges": 12,
     "elements": 1,
-    "gpu_bytes": 1296,
+    "gpu_bytes": 864,
     "triangles": 12
   }
 }

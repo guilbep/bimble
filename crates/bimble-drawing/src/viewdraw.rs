@@ -265,9 +265,6 @@ fn map_scene(
             for p in &mut m.positions {
                 *p = f(*p);
             }
-            for n in &mut m.normals {
-                *n = f(*n);
-            }
             if reflect {
                 for t in m.indices.as_chunks_mut::<3>().0 {
                     t.swap(1, 2);

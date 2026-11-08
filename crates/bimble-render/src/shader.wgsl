@@ -41,10 +41,13 @@ struct Uniforms {
 
 struct FaceIn {
     @location(0) pos: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    // a: style table slot / 255 (rgb unused)
-    @location(2) color: vec4<f32>,
+    // rgb: the face's normal × 0.5 + 0.5; a: style table slot / 255
+    @location(1) normal_slot: vec4<f32>,
 };
+
+fn face_normal(v: FaceIn) -> vec3<f32> {
+    return v.normal_slot.xyz * 2.0 - 1.0;
+}
 
 // Two variants of each shader: a lean one for normal viewing, and one for the section box
 // (scene position passed to pixels, cut surfaces, back edges). Extra per-vertex outputs cost
@@ -121,8 +124,8 @@ fn vs_face(v: FaceIn) -> FaceOut {
     var o: FaceOut;
     o.clip = u.view_proj * vec4<f32>(v.pos, 1.0);
     o.clip.z += u.layer.x * o.clip.w;
-    o.slot = face_slot(v.color);
-    let shade = face_shade(v.normal);
+    o.slot = face_slot(v.normal_slot);
+    let shade = face_shade(face_normal(v));
     o.color = u.table[o.slot].fill.rgb * shade;
     // A darkened fill was computed from the unshaded fill on the CPU: shade both alike.
     o.ink = u.table[o.slot].ink.rgb * shade;
@@ -159,8 +162,8 @@ fn vs_face_clip(v: FaceIn) -> FaceClipOut {
     var o: FaceClipOut;
     o.clip = u.view_proj * vec4<f32>(v.pos, 1.0);
     o.clip.z += u.layer.x * o.clip.w;
-    o.slot = face_slot(v.color);
-    o.shade = face_shade(v.normal);
+    o.slot = face_slot(v.normal_slot);
+    o.shade = face_shade(face_normal(v));
     o.color = u.table[o.slot].fill.rgb;
     o.ink = u.table[o.slot].ink.rgb;
     o.pos = v.pos;

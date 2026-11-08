@@ -16,7 +16,7 @@ use bimble_geom::Scene;
 use std::collections::BTreeMap;
 
 /// Bytes the renderer uploads per face vertex and per edge vertex (see bimble-render).
-const FACE_VERTEX_BYTES: usize = 28;
+const FACE_VERTEX_BYTES: usize = 16;
 const LINE_VERTEX_BYTES: usize = 12;
 
 fn fixture(name: &str) -> String {

@@ -11,7 +11,6 @@ pub mod scene;
 pub use scene::{
     ElementInfo, GridAxis, MeshBuilder, Scene, SceneBuilder, SceneElement, StoreyLevel,
 };
-use scene::{cross, norm, sub};
 
 use bimble_core::Generator;
 use std::collections::HashMap;
@@ -20,8 +19,9 @@ use bimble_core::{Element, Placement, Profile};
 
 #[derive(Debug, Default, Clone)]
 pub struct Mesh {
+    /// Welded per element: faces are flat, so a face's normal comes from its triangle, not
+    /// from its vertices (renderers compute it).
     pub positions: Vec<[f32; 3]>,
-    pub normals: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
     /// Feature edges as pairs of positions (profile outline at both ends + vertical edges).
     pub edges: Vec<Segment>,
@@ -211,15 +211,6 @@ pub fn mesh_from_tris(tris: &[crate::boolean::Tri]) -> Mesh {
         indices,
         ..Default::default()
     };
-    for t in tris {
-        let n = norm(cross(sub(t[1], t[0]), sub(t[2], t[0])));
-        let n = if n > 1e-12 {
-            cross(sub(t[1], t[0]), sub(t[2], t[0])).map(|v| (v / n) as f32)
-        } else {
-            [0.0, 0.0, 1.0]
-        };
-        m.normals.extend([n; 3]);
-    }
     // Feature edges (profile outline, corners), like the scene build draws them.
     m.edges = crate::scene::crease_edges(&m, 20.0);
     m
@@ -342,7 +333,6 @@ mod tests {
         ];
         let m = Mesh {
             positions: q.to_vec(),
-            normals: vec![[0.0, 0.0, 1.0]; 4],
             // One side only: an open surface. Relative to the origin this would be 1e6×1200/3.
             indices: vec![0, 1, 2, 0, 2, 3],
             ..Default::default()

@@ -25,10 +25,10 @@ mod style_gpu;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct FaceVertex {
     pos: [f32; 3],
-    normal: [f32; 3],
-    /// rgb unused (kept for layout), a: style table slot. Colours come from the style uniform,
-    /// so restyling never re-uploads the model.
-    color: [u8; 4],
+    /// rgb: the face's normal (n × 0.5 + 0.5, unorm8: shading is flat and two-sided, so 8 bits
+    /// and the sign don't show); a: style table slot. Colours come from the style uniform, so
+    /// restyling never re-uploads the model. 16 bytes a vertex (was 28 with an f32 normal).
+    normal_slot: [u8; 4],
 }
 
 #[repr(C)]
@@ -579,7 +579,7 @@ impl Renderer {
             write_mask: wgpu::ColorWrites::ALL,
         })];
 
-        let face_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4];
+        let face_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4];
         let face_pipeline_with = |label: &str,
                                   (vs, fs): (&str, &str),
                                   cull_mode: Option<wgpu::Face>,
@@ -778,14 +778,16 @@ impl Renderer {
                 Style::OnlyInReference => style_gpu::ONLY_IN_REFERENCE_SLOT,
                 Style::Normal | Style::Hidden => style_gpu::slot(e.category),
             };
-            let color = [0, 0, 0, slot];
-            for &k in &e.mesh.indices {
-                let k = k as usize;
-                faces.push(FaceVertex {
-                    pos: e.mesh.positions[k],
-                    normal: e.mesh.normals[k],
-                    color,
-                });
+            for t in e.mesh.indices.as_chunks::<3>().0 {
+                let [a, b, c] = t.map(|k| e.mesh.positions[k as usize]);
+                let n = (Vec3::from(b) - Vec3::from(a))
+                    .cross(Vec3::from(c) - Vec3::from(a))
+                    .normalize_or(Vec3::Z);
+                let q = |x: f32| ((x * 0.5 + 0.5) * 255.0).round() as u8;
+                let normal_slot = [q(n.x), q(n.y), q(n.z), slot];
+                for pos in [a, b, c] {
+                    faces.push(FaceVertex { pos, normal_slot });
+                }
             }
             if edge_normals {
                 for (k, seg) in e.mesh.edges.iter().enumerate() {

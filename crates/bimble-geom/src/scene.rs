@@ -281,9 +281,10 @@ impl MeshBuilder {
         }
     }
 
-    /// Build the GPU mesh relative to `origin`, with crease edges for outlines.
+    /// Build the mesh relative to `origin`, positions welded, with crease edges for outlines.
     pub fn build(&self, origin: [f64; 3]) -> Mesh {
         let mut m = Mesh::default();
+        let mut index: HashMap<[u32; 3], u32> = HashMap::new();
         let rel = |p: [f64; 3]| {
             [
                 (p[0] - origin[0]) as f32,
@@ -292,18 +293,18 @@ impl MeshBuilder {
             ]
         };
         for t in &self.tris {
-            let n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
-            let l = norm(n);
+            let l = norm(cross(sub(t[1], t[0]), sub(t[2], t[0])));
             if l.is_nan() || l <= 0.0 {
                 continue;
             }
-            let n = n.map(|c| (c / l) as f32);
-            let base = m.positions.len() as u32;
             for p in t {
-                m.positions.push(rel(*p));
-                m.normals.push(n);
+                let p = rel(*p);
+                let k = *index.entry(p.map(f32::to_bits)).or_insert_with(|| {
+                    m.positions.push(p);
+                    m.positions.len() as u32 - 1
+                });
+                m.indices.push(k);
             }
-            m.indices.extend([base, base + 1, base + 2]);
         }
         let (edges, normals) = crease_edges_with_normals(&m, 20.0);
         m.edges = edges;

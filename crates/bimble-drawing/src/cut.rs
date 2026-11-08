@@ -292,7 +292,6 @@ mod tests {
         let mut m = outer.clone();
         let base = m.positions.len() as u32;
         m.positions.extend(inner.positions.iter());
-        m.normals.extend(inner.normals.iter());
         // Inner shell reversed (faces point into the hole).
         for t in inner.indices.as_chunks::<3>().0 {
             m.indices.extend([t[0] + base, t[2] + base, t[1] + base]);
