@@ -468,3 +468,59 @@ fn import_limits_cover_the_whole_file() {
         "report: {rep:?}"
     );
 }
+
+/// The fixture with more entities, sharing the wall's placement and body.
+fn with_entities(extra: &str) -> String {
+    REVIT_STYLE.replace("ENDSEC;\nEND-ISO", &format!("{extra}\nENDSEC;\nEND-ISO"))
+}
+
+fn skipped(rep: &bimble_ifc::import::ImportReport, what: &str) -> usize {
+    rep.skipped
+        .iter()
+        .filter(|(k, _)| k.contains(what))
+        .map(|(_, n)| n)
+        .sum()
+}
+
+#[test]
+fn wall_elemented_case_is_imported() {
+    let (m, rep) = import(&with_entities(
+        "#70=IFCWALLELEMENTEDCASE('2MrcuFTa90SfJXy$ZbCd1U',$,'Elemented',$,$,#23,#31,$,$);",
+    ));
+    assert_eq!(rep.elements, 2, "report: {rep:?}");
+    assert_eq!(m.elements.len(), 2);
+}
+
+/// Nothing is dropped silently (ADR 0032): an unsupported product is in the report; the
+/// spatial structure, openings and plain geometry entities are not.
+#[test]
+fn unsupported_products_are_reported() {
+    let (_, rep) = import(REVIT_STYLE);
+    assert!(rep.skipped.is_empty(), "report: {rep:?}");
+    let (_, rep) = import(&with_entities(
+        "#70=IFCROOF('2MrcuFTa90SfJXy$ZbCd1T',$,'Roof',$,$,#23,#31,$,$);",
+    ));
+    assert_eq!(skipped(&rep, "IFCROOF"), 1, "report: {rep:?}");
+    assert_eq!(rep.skipped.len(), 1, "report: {rep:?}");
+}
+
+/// A second product with the same GlobalId is skipped and reported, not written over the first;
+/// the first one in the file wins.
+#[test]
+fn duplicate_global_ids_are_reported() {
+    let (m, rep) = import(&with_entities(
+        "#70=IFCWALL('2MrcuFTa90SfJXy$ZbCd1H',$,'Copy',$,$,#23,#31,$,$);",
+    ));
+    assert_eq!(rep.elements, 1, "report: {rep:?}");
+    assert_eq!(skipped(&rep, "duplicate GlobalId"), 1, "report: {rep:?}");
+    assert_eq!(m.elements.values().next().unwrap().name, "Basic Wall");
+}
+
+#[test]
+fn invalid_global_ids_are_reported() {
+    let (_, rep) = import(&with_entities(
+        "#70=IFCWALL('not a GlobalId',$,'Bad',$,$,#23,#31,$,$);",
+    ));
+    assert_eq!(rep.elements, 1, "report: {rep:?}");
+    assert_eq!(skipped(&rep, "invalid GlobalId"), 1, "report: {rep:?}");
+}

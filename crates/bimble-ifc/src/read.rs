@@ -217,7 +217,7 @@ pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadErr
     Ok(sb.finish())
 }
 
-const SKIP_CLASSES: &[&str] = &[
+pub(crate) const SKIP_CLASSES: &[&str] = &[
     "IFCOPENINGELEMENT",
     "IFCOPENINGSTANDARDCASE",
     "IFCSPACE",

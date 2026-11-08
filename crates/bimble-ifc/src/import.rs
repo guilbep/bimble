@@ -53,7 +53,7 @@ const SUPPORTED: &[(&str, IfcClass)] = &[
     ("IFCSLAB", IfcClass::IfcSlab),
     ("IFCWALL", IfcClass::IfcWall),
     ("IFCWALLSTANDARDCASE", IfcClass::IfcWall),
-    ("IFCWALLEMENTEDEDCASE", IfcClass::IfcWall),
+    ("IFCWALLELEMENTEDCASE", IfcClass::IfcWall),
     ("IFCFOOTING", IfcClass::IfcFooting),
 ];
 
@@ -166,8 +166,20 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
     // One budget for the whole file: elements and openings draw from the same caps.
     let budget = Budget::new(&limits);
 
-    for (id, e) in file.entities.iter() {
+    // File order, so the first of two products sharing a GlobalId is the one kept.
+    let mut ids: Vec<u64> = file.entities.keys().copied().collect();
+    ids.sort_unstable();
+    for id in &ids {
+        let e = &file.entities[id];
         let Some(class) = class_of(&e.name) else {
+            // A product with a body that isn't one of ours: reported, not silently dropped.
+            if !crate::read::SKIP_CLASSES.contains(&e.name.as_str())
+                && file
+                    .deref(e.arg(6))
+                    .is_some_and(|s| s.name == "IFCPRODUCTDEFINITIONSHAPE")
+            {
+                rep.skip(format!("{}: unsupported class", e.name));
+            }
             continue;
         };
         let name = e.arg(2).as_str().unwrap_or("").to_owned();
@@ -175,6 +187,14 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
             rep.skip(format!("{}: invalid GlobalId", class.name()));
             continue;
         };
+        if model.elements.contains_key(&gid) {
+            rep.skip(format!("{}: duplicate GlobalId", class.name()));
+            rep.warn(format!(
+                "{} {name:?}: GlobalId {gid} already used; skipped",
+                class.name()
+            ));
+            continue;
+        }
 
         // Which storey this element hangs from (the fallback one when none).
         let storey = contained
