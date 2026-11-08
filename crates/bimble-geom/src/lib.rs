@@ -5,6 +5,7 @@
 //! separately so the renderer can draw outlines like a technical drawing.
 
 pub mod boolean;
+pub mod bvh;
 pub mod compare;
 pub mod scene;
 

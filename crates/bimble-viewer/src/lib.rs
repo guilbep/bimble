@@ -152,6 +152,8 @@ enum LinkMode {
 struct Linked {
     path: PathBuf,
     scene: Scene,
+    /// Its elements' bounds as a tree, for picking.
+    bvh: bimble_geom::bvh::Bvh,
     gpu: Option<GpuScene>,
     /// Added to the linked scene's coordinates to get ours (both are placed in world mm).
     offset: glam::Vec3,
@@ -418,6 +420,9 @@ struct Loading {
 struct Loaded {
     path: PathBuf,
     scene: Scene,
+    /// Its elements' bounds as a tree (picking, snapping; later culling and clashes). Rebuilt
+    /// with the scene: 15 ms for 30 000 elements.
+    bvh: bimble_geom::bvh::Bvh,
     load_time: Duration,
     /// Part of the file shown, when it was too large to show whole (ADR 0033).
     partial: Option<String>,
@@ -971,6 +976,7 @@ impl Viewer {
                 );
                 let k = Linked {
                     path,
+                    bvh: bimble_geom::bvh::Bvh::build(&bimble_geom::bvh::element_boxes(&scene)),
                     scene,
                     gpu: None,
                     offset,
@@ -1038,6 +1044,7 @@ impl Viewer {
                 let bounds = bimble_render::Sphere::of(&scene);
                 self.loaded = Some(Loaded {
                     path,
+                    bvh: bimble_geom::bvh::Bvh::build(&bimble_geom::bvh::element_boxes(&scene)),
                     scene,
                     load_time,
                     partial,
@@ -1134,6 +1141,7 @@ impl Viewer {
                 .map(|e| e.global_id.clone())
         });
         l.scene = Scene::from_model(&ed.model);
+        l.bvh = bimble_geom::bvh::Bvh::build(&bimble_geom::bvh::element_boxes(&l.scene));
         (l.classes, l.storeys, l.categories) = counts(&l.scene);
         l.bounds = bounds_with_links(&l.scene, &self.links);
         self.selected = keep.and_then(|g| l.scene.elements.iter().position(|e| e.global_id == g));
@@ -1736,7 +1744,7 @@ impl Viewer {
         ];
         let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
         let clip = self.clip();
-        bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref())
+        bimble_render::pick_hit_bvh(&l.scene, &l.bvh, |i| self.visible(i), o, d, clip.as_ref())
             .map(|h| h.point)
             .or_else(|| {
                 let s = self.selected?;
@@ -1772,7 +1780,7 @@ impl Viewer {
         } else {
             let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
             let clip = self.clip();
-            bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref())
+            bimble_render::pick_hit_bvh(&l.scene, &l.bvh, |i| self.visible(i), o, d, clip.as_ref())
                 .map_or(plane, |h| h.point)
         };
         Some(p)
@@ -1912,8 +1920,16 @@ impl Viewer {
             ];
             let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
             let clip = self.clip();
-            let h = bimble_render::pick(&l.scene, |i| self.visible(i), o, d, clip.as_ref())
-                .map(|(i, _)| i);
+            let h = bimble_render::pick_hit_bvh(
+                &l.scene,
+                &l.bvh,
+                |i| self.visible(i),
+                o,
+                d,
+                clip.as_ref(),
+            )
+            .map(|h| (h.element, h.distance))
+            .map(|(i, _)| i);
             self.set_hovered(h);
         }
         if resp.double_clicked() {
@@ -1927,7 +1943,14 @@ impl Viewer {
             ];
             let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
             let clip = self.clip();
-            let ours = bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref());
+            let ours = bimble_render::pick_hit_bvh(
+                &l.scene,
+                &l.bvh,
+                |i| self.visible(i),
+                o,
+                d,
+                clip.as_ref(),
+            );
             // The nearest hit among the shown links, if nearer than ours (#39).
             let theirs = self
                 .links
@@ -1941,8 +1964,15 @@ impl Viewer {
                         min: c.min - k.offset,
                         max: c.max - k.offset,
                     });
-                    bimble_render::pick_hit(&k.scene, |_| true, o - k.offset, d, c.as_ref())
-                        .map(|h| (n, h))
+                    bimble_render::pick_hit_bvh(
+                        &k.scene,
+                        &k.bvh,
+                        |_| true,
+                        o - k.offset,
+                        d,
+                        c.as_ref(),
+                    )
+                    .map(|h| (n, h))
                 })
                 .min_by(|a, b| a.1.distance.total_cmp(&b.1.distance));
             let (hit, link_hit) = match (ours, theirs) {
@@ -2127,15 +2157,15 @@ impl Viewer {
         let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
         let clip = self.clip();
         let vp = self.camera.view_proj(aspect, &l.bounds);
-        let ours = bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref()).map(
-            |hit| {
-                let mesh = &l.scene.elements[hit.element].mesh;
-                (
-                    hit.distance,
-                    measure::snap(mesh, &hit, (o, d), &vp, rect, pos),
-                )
-            },
-        );
+        let ours =
+            bimble_render::pick_hit_bvh(&l.scene, &l.bvh, |i| self.visible(i), o, d, clip.as_ref())
+                .map(|hit| {
+                    let mesh = &l.scene.elements[hit.element].mesh;
+                    (
+                        hit.distance,
+                        measure::snap(mesh, &hit, (o, d), &vp, rect, pos),
+                    )
+                });
         // Linked models (#39): measured and snapped to like ours, in their place.
         let theirs = self.links.iter().filter_map(|k| {
             if k.mode == LinkMode::Hidden || self.hidden_links.contains(&k.name()) {
@@ -2145,7 +2175,14 @@ impl Viewer {
                 min: c.min - k.offset,
                 max: c.max - k.offset,
             });
-            let hit = bimble_render::pick_hit(&k.scene, |_| true, o - k.offset, d, clip.as_ref())?;
+            let hit = bimble_render::pick_hit_bvh(
+                &k.scene,
+                &k.bvh,
+                |_| true,
+                o - k.offset,
+                d,
+                clip.as_ref(),
+            )?;
             let vpl = vp * glam::Mat4::from_translation(k.offset);
             let mesh = &k.scene.elements[hit.element].mesh;
             let mut s = measure::snap(mesh, &hit, (o - k.offset, d), &vpl, rect, pos);
@@ -3770,6 +3807,7 @@ mod tests {
         let link = |name: &str, x: f32| Linked {
             path: PathBuf::from(name),
             scene: scene.clone(),
+            bvh: Default::default(),
             gpu: None,
             offset: glam::Vec3::new(x, 0.0, 0.0),
             mode: LinkMode::Solid,

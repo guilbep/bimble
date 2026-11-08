@@ -1024,8 +1024,24 @@ pub fn pick_hit(
     dir: Vec3,
     clip: Option<&ClipBox>,
 ) -> Option<Hit> {
-    // Where the ray enters the box, and through which face (its normal, towards the ray).
-    let entry = clip.and_then(|c| {
+    let entry = clip_entry(origin, dir, clip);
+    let mut best: Option<Hit> = None;
+    for (i, e) in scene.elements.iter().enumerate() {
+        if !visible(i) {
+            continue;
+        }
+        if let Some(hit) = element_hit(e, i, origin, dir, clip, entry)
+            && best.is_none_or(|h| hit.distance < h.distance)
+        {
+            best = Some(hit);
+        }
+    }
+    best
+}
+
+/// Where a ray enters the clipping box, and through which face (its normal, towards the ray).
+fn clip_entry(origin: Vec3, dir: Vec3, clip: Option<&ClipBox>) -> Option<(f32, Vec3)> {
+    clip.and_then(|c| {
         let mut t_in = 0.0f32;
         let mut normal = Vec3::ZERO;
         for k in 0..3 {
@@ -1044,42 +1060,82 @@ pub fn pick_hit(
             }
         }
         (normal != Vec3::ZERO).then_some((t_in, normal))
-    });
-    let mut best: Option<Hit> = None;
-    for (i, e) in scene.elements.iter().enumerate() {
-        if !visible(i) {
-            continue;
-        }
-        for t in e.mesh.indices.as_chunks::<3>().0 {
-            let [a, b, c] = t.map(|k| Vec3::from(e.mesh.positions[k as usize]));
-            let Some(d) = ray_triangle(origin, dir, a, b, c) else {
-                continue;
-            };
-            if clip.is_some_and(|c| !c.contains(origin + dir * d)) {
-                continue;
-            }
-            let normal = (b - a).cross(c - a).normalize_or_zero();
-            // Seen from inside (meshes are wound outward): the solid is cut, its front removed.
-            let hit = match entry {
-                Some((t_in, n)) if normal.dot(dir) > 0.0 && t_in < d => Hit {
-                    element: i,
-                    distance: t_in,
-                    point: origin + dir * t_in,
-                    normal: n,
-                },
-                _ => Hit {
-                    element: i,
-                    distance: d,
-                    point: origin + dir * d,
-                    normal,
-                },
-            };
-            if best.is_none_or(|h| hit.distance < h.distance) {
-                best = Some(hit);
-            }
+    })
+}
+
+/// `pick_hit` through a tree of the scene's element bounds (`bvh::element_boxes`): only the
+/// elements whose box the ray meets are tested, nearest first, and none past the best hit.
+pub fn pick_hit_bvh(
+    scene: &Scene,
+    bvh: &bimble_geom::bvh::Bvh,
+    visible: impl Fn(usize) -> bool,
+    origin: Vec3,
+    dir: Vec3,
+    clip: Option<&ClipBox>,
+) -> Option<Hit> {
+    // Ties (two cut solids entered at the same point) go to the smaller element index, as in
+    // `pick_hit`.
+    struct ByElement(Hit);
+    impl PartialEq for ByElement {
+        fn eq(&self, o: &Self) -> bool {
+            self.0.element == o.0.element
         }
     }
-    best
+    impl PartialOrd for ByElement {
+        fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+            self.0.element.partial_cmp(&o.0.element)
+        }
+    }
+    let entry = clip_entry(origin, dir, clip);
+    bvh.ray(origin.into(), dir.into(), |i, _| {
+        let i = i as usize;
+        let e = scene.elements.get(i).filter(|_| visible(i))?;
+        element_hit(e, i, origin, dir, clip, entry).map(|h| (h.distance, ByElement(h)))
+    })
+    .map(|(_, h)| h.0)
+}
+
+/// The nearest hit of a ray on one element (see `pick_hit`). With a clipping box, an element
+/// counts as cut (hit where the ray enters the box) only if the nearest of its triangles the ray
+/// meets inside the box faces away, i.e. the ray starts inside that solid; an element wholly
+/// behind is hit on its front face as usual.
+fn element_hit(
+    e: &SceneElement,
+    i: usize,
+    origin: Vec3,
+    dir: Vec3,
+    clip: Option<&ClipBox>,
+    entry: Option<(f32, Vec3)>,
+) -> Option<Hit> {
+    let mut nearest: Option<(f32, Vec3)> = None;
+    for t in e.mesh.indices.as_chunks::<3>().0 {
+        let [a, b, c] = t.map(|k| Vec3::from(e.mesh.positions[k as usize]));
+        let Some(d) = ray_triangle(origin, dir, a, b, c) else {
+            continue;
+        };
+        if clip.is_some_and(|c| !c.contains(origin + dir * d)) {
+            continue;
+        }
+        if nearest.is_none_or(|(n, _)| d < n) {
+            nearest = Some((d, (b - a).cross(c - a).normalize_or_zero()));
+        }
+    }
+    let (d, normal) = nearest?;
+    Some(match entry {
+        // Seen from inside (meshes are wound outward): the solid is cut, its front removed.
+        Some((t_in, n)) if normal.dot(dir) > 0.0 && t_in < d => Hit {
+            element: i,
+            distance: t_in,
+            point: origin + dir * t_in,
+            normal: n,
+        },
+        _ => Hit {
+            element: i,
+            distance: d,
+            point: origin + dir * d,
+            normal,
+        },
+    })
 }
 
 /// Möller–Trumbore, two-sided.
@@ -1336,6 +1392,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Picking through the tree finds what testing every element finds, with and without a
+    /// section box.
+    #[test]
+    fn picking_through_the_tree_matches_testing_everything() {
+        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let bvh = bimble_geom::bvh::Bvh::build(&bimble_geom::bvh::element_boxes(&scene));
+        let bounds = Sphere::of(&scene);
+        let mut cam = Camera::default();
+        cam.fit(&scene, 1.5);
+        let b = ClipBox::around(&scene, |_| true).unwrap();
+        let half = ClipBox {
+            min: b.min,
+            max: (b.min + b.max) / 2.0 + Vec3::new(0.0, 0.0, 1000.0),
+        };
+        let mut hits = 0;
+        for clip in [None, Some(&half)] {
+            for k in 0..400 {
+                let ndc = [(k % 20) as f32 / 10.0 - 0.95, (k / 20) as f32 / 10.0 - 0.95];
+                let (o, d) = cam.ray(ndc, 1.5, &bounds);
+                let brute = pick_hit(&scene, |_| true, o, d, clip);
+                let tree = pick_hit_bvh(&scene, &bvh, |_| true, o, d, clip);
+                assert_eq!(
+                    brute.map(|h| (h.element, h.distance)),
+                    tree.map(|h| (h.element, h.distance)),
+                    "ray {k}, clip {}",
+                    clip.is_some()
+                );
+                hits += brute.is_some() as usize;
+            }
+        }
+        assert!(hits > 50, "{hits}");
     }
 
     #[test]
