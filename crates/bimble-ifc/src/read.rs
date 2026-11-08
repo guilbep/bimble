@@ -48,19 +48,20 @@ pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<Scene, ReadError> 
     if len > MAX_FILE_BYTES {
         return Err(ReadError::TooLarge(len));
     }
-    // The text is dropped once parsed: it would otherwise stay alive while meshing.
-    let parsed = parse(&String::from_utf8_lossy(
-        &std::fs::read(path).map_err(ReadError::Io)?,
-    ))?;
-    read_parsed(parsed, Limits::default())
+    read_bytes(std::fs::read(path).map_err(ReadError::Io)?)
 }
 
 /// Read an IFC file's content (e.g. picked in a browser). Same size cap as `read_file`.
-pub fn read_bytes(bytes: &[u8]) -> Result<Scene, ReadError> {
+/// Takes the bytes to drop them once parsed: they would otherwise stay alive while meshing.
+pub fn read_bytes(bytes: Vec<u8>) -> Result<Scene, ReadError> {
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(ReadError::TooLarge(bytes.len() as u64));
     }
-    read_str(&String::from_utf8_lossy(bytes))
+    let parsed = match String::from_utf8(bytes) {
+        Ok(text) => parse(&text)?,
+        Err(e) => parse(&String::from_utf8_lossy(e.as_bytes()))?,
+    };
+    read_parsed(parsed, Limits::default())
 }
 
 /// Caps that keep a malicious or broken file from exhausting memory or time. Mapped items can

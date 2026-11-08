@@ -318,14 +318,14 @@ fn load_any(path: &Path) -> Result<(Scene, Option<bimble_core::Model>), String> 
 }
 
 /// A model from a file's content (picked or dropped in a browser): IFC or .bimble by name.
-fn load_bytes(name: &str, bytes: &[u8]) -> Result<(Scene, Option<bimble_core::Model>), String> {
+fn load_bytes(name: &str, bytes: Vec<u8>) -> Result<(Scene, Option<bimble_core::Model>), String> {
     let is_ifc = name.to_ascii_lowercase().ends_with(".ifc");
     if is_ifc {
         bimble_ifc::read::read_bytes(bytes)
             .map(|s| (s, None))
             .map_err(|e| e.to_string())
     } else {
-        let m = bimble_core::file::from_bytes(bytes).map_err(|e| e.to_string())?;
+        let m = bimble_core::file::from_bytes(&bytes).map_err(|e| e.to_string())?;
         Ok((Scene::from_model(&m), Some(m)))
     }
 }
@@ -702,7 +702,7 @@ impl Viewer {
         let r = if job.import {
             import_bytes(&job.name, &job.bytes).map(|(s, m)| (s, Some(m), t.elapsed()))
         } else {
-            load_bytes(&job.name, &job.bytes).map(|(s, m)| {
+            load_bytes(&job.name, job.bytes).map(|(s, m)| {
                 let m = if job.link { None } else { m };
                 (s, m, t.elapsed())
             })
@@ -3398,16 +3398,16 @@ mod tests {
             "/../bimble-ifc/tests/fixtures/curves.ifc"
         );
         let bytes = std::fs::read(ifc).unwrap();
-        let (a, m) = load_bytes("curves.IFC", &bytes).unwrap();
+        let (a, m) = load_bytes("curves.IFC", bytes).unwrap();
         let (b, _) = load_any(Path::new(ifc)).unwrap();
         assert!(m.is_none());
         assert_eq!(a.elements.len(), b.elements.len());
         let model = bimble_core::demo::concrete_frame(&Default::default());
         let text = bimble_core::file::to_string(&model);
-        let (s, m) = load_bytes("frame.bimble", text.as_bytes()).unwrap();
+        let (s, m) = load_bytes("frame.bimble", text.into_bytes()).unwrap();
         assert_eq!(m.unwrap(), model);
         assert_eq!(s.elements.len(), model.elements.len());
         // Not UTF-8: an error, not a panic.
-        assert!(load_bytes("x.bimble", &[0xff, 0xfe, 0x00]).is_err());
+        assert!(load_bytes("x.bimble", vec![0xff, 0xfe, 0x00]).is_err());
     }
 }
