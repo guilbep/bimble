@@ -242,7 +242,29 @@ impl Camera {
     }
 
     pub fn zoom(&mut self, factor: f32) {
-        self.distance = (self.distance * factor).clamp(10.0, 1.0e8);
+        self.zoom_at(factor, self.target);
+    }
+
+    /// Zoom about `pivot` (scene coordinates): the camera is scaled about it, so the pivot stays
+    /// at the same place on screen, in perspective and orthographic views alike.
+    pub fn zoom_at(&mut self, factor: f32, pivot: Vec3) {
+        let d = (self.distance * factor).clamp(10.0, 1.0e8);
+        // The factor actually applied: at the clamp, the target must not keep sliding.
+        let f = d / self.distance;
+        self.target = pivot + (self.target - pivot) * f;
+        self.distance = d;
+    }
+
+    /// Where a point in normalized device coords meets the plane through the target, facing
+    /// the viewer: the zoom pivot when nothing is under the cursor, and in 2D views.
+    pub fn on_target_plane(&self, ndc: [f32; 2], aspect: f32, scene: &Sphere) -> Vec3 {
+        let (o, d) = self.ray(ndc, aspect, scene);
+        let n = (self.target - self.eye()).normalize_or(Vec3::NEG_Z);
+        let den = d.dot(n);
+        if den.abs() < 1e-6 {
+            return self.target;
+        }
+        o + d * ((self.target - o).dot(n) / den)
     }
 }
 
@@ -306,10 +328,10 @@ impl<'a> Layer<'a> {
 }
 
 pub struct GpuScene {
-    faces: wgpu::Buffer,
-    face_vertices: u32,
-    lines: wgpu::Buffer,
-    line_vertices: u32,
+    /// Vertex buffers with their vertex counts, each within the device's buffer size limit
+    /// (256 MiB by default): a large model needs several.
+    faces: Vec<(wgpu::Buffer, u32)>,
+    lines: Vec<(wgpu::Buffer, u32)>,
     /// Whether edges carry face normals (needed to hide back edges in the section box).
     pub edge_normals: bool,
     /// Bounds of the whole scene (not just the visible part), for stable clip planes.
@@ -318,7 +340,7 @@ pub struct GpuScene {
 
 impl GpuScene {
     pub fn triangles(&self) -> u32 {
-        self.face_vertices / 3
+        self.faces.iter().map(|(_, n)| n / 3).sum()
     }
 }
 
@@ -702,27 +724,39 @@ impl Renderer {
             }
         }
         let bounds = Sphere::of(scene);
-        let buf = |label, contents: &[u8]| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                // Never create an empty buffer: some backends reject it.
-                contents: if contents.is_empty() {
-                    &[0u8; 16]
-                } else {
-                    contents
-                },
-                usage: wgpu::BufferUsages::VERTEX,
-            })
+        // ponytail: the whole model is built in RAM, then split; flush while building if the
+        // transient copy (~750 MB for 9M triangles) matters.
+        let max = device.limits().max_buffer_size;
+        let split = |label, bytes: &[u8], stride: usize| -> Vec<(wgpu::Buffer, u32)> {
+            // Cut only between whole triangles and whole segments: a multiple of 6 vertices.
+            let per = (max as usize / stride / 6 * 6).max(6);
+            bytes
+                .chunks(per * stride)
+                .map(|c| {
+                    let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some(label),
+                        contents: c,
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                    (buf, (c.len() / stride) as u32)
+                })
+                .collect()
         };
         GpuScene {
-            faces: buf("bimble face vb", bytemuck::cast_slice(&faces)),
-            face_vertices: faces.len() as u32,
+            faces: split(
+                "bimble face vb",
+                bytemuck::cast_slice(&faces),
+                std::mem::size_of::<FaceVertex>(),
+            ),
             lines: if edge_normals {
-                buf("bimble line vb", bytemuck::cast_slice(&lines))
+                split(
+                    "bimble line vb",
+                    bytemuck::cast_slice(&lines),
+                    std::mem::size_of::<LineVertex>(),
+                )
             } else {
-                buf("bimble line vb", bytemuck::cast_slice(&lines_lean))
+                split("bimble line vb", bytemuck::cast_slice(&lines_lean), 12)
             },
-            line_vertices: (lines.len() + lines_lean.len()) as u32,
             edge_normals,
             bounds,
         }
@@ -868,24 +902,21 @@ impl Renderer {
             for (layer, (_, bind_group)) in order {
                 let scene = layer.scene;
                 pass.set_bind_group(0, bind_group, &[]);
-                if layer.faces && scene.face_vertices > 0 {
-                    pass.set_vertex_buffer(0, scene.faces.slice(..));
-                    if opts.clip.is_some() {
-                        let (front, back) = if camera.mirror_x {
-                            (&self.face_front_mirrored, &self.face_back_mirrored)
-                        } else {
-                            (&self.face_front_pipeline, &self.face_back_pipeline)
-                        };
-                        pass.set_pipeline(front);
-                        pass.draw(0..scene.face_vertices, 0..1);
-                        pass.set_pipeline(back);
-                        pass.draw(0..scene.face_vertices, 0..1);
-                    } else {
-                        pass.set_pipeline(&self.face_pipeline);
-                        pass.draw(0..scene.face_vertices, 0..1);
+                if layer.faces {
+                    let pipelines: &[&wgpu::RenderPipeline] = match (opts.clip, camera.mirror_x) {
+                        (None, _) => &[&self.face_pipeline],
+                        (Some(_), false) => &[&self.face_front_pipeline, &self.face_back_pipeline],
+                        (Some(_), true) => &[&self.face_front_mirrored, &self.face_back_mirrored],
+                    };
+                    for p in pipelines {
+                        pass.set_pipeline(p);
+                        for (buf, n) in &scene.faces {
+                            pass.set_vertex_buffer(0, buf.slice(..));
+                            pass.draw(0..*n, 0..1);
+                        }
                     }
                 }
-                if (opts.edges || !layer.faces) && scene.line_vertices > 0 {
+                if (opts.edges || !layer.faces) && !scene.lines.is_empty() {
                     pass.set_pipeline(match (opts.clip.is_some(), scene.edge_normals) {
                         (true, true) => &self.line_clip_pipeline,
                         // Without normals, back edges can't be told apart: clipped, but drawn.
@@ -894,8 +925,10 @@ impl Renderer {
                         (false, false) => &self.line_pipeline,
                         (false, true) => &self.line_wide_pipeline,
                     });
-                    pass.set_vertex_buffer(0, scene.lines.slice(..));
-                    pass.draw(0..scene.line_vertices, 0..1);
+                    for (buf, n) in &scene.lines {
+                        pass.set_vertex_buffer(0, buf.slice(..));
+                        pass.draw(0..*n, 0..1);
+                    }
                 }
             }
         }
@@ -1050,6 +1083,11 @@ pub struct Headless {
 
 impl Headless {
     pub fn new() -> Result<Headless, HeadlessError> {
+        Self::with_max_buffer_size(None)
+    }
+
+    /// `max_buffer_size`: a lower limit than the default 256 MiB, to test how large scenes split.
+    fn with_max_buffer_size(max_buffer_size: Option<u64>) -> Result<Headless, HeadlessError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all()),
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -1062,7 +1100,13 @@ impl Headless {
         let adapter_info = adapter.get_info();
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("bimble headless"),
-            required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            required_limits: {
+                let mut l = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
+                if let Some(m) = max_buffer_size {
+                    l.max_buffer_size = m;
+                }
+                l
+            },
             ..Default::default()
         }))
         .map_err(|e| HeadlessError::Device(e.to_string()))?;
@@ -1240,6 +1284,85 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn zooming_keeps_the_pivot_under_the_cursor() {
+        let bounds = Sphere {
+            center: Vec3::ZERO,
+            radius: 20_000.0,
+        };
+        let ndc = |c: &Camera, p: Vec3| c.view_proj(1.5, &bounds).project_point3(p).truncate();
+        for (ortho, mirror_x) in [(false, false), (true, false), (false, true), (true, true)] {
+            for factor in [0.5, 1.7, 1e-6, 1e6] {
+                let mut cam = Camera {
+                    orthographic: ortho,
+                    mirror_x,
+                    ..Camera::default()
+                };
+                cam.pan(0.1, -0.05);
+                // A point on the target plane, and one in front of it (picked geometry).
+                for pivot in [
+                    cam.on_target_plane([0.6, -0.3], 1.5, &bounds),
+                    cam.eye()
+                        .lerp(cam.on_target_plane([-0.4, 0.5], 1.5, &bounds), 0.3),
+                ] {
+                    let mut c = cam;
+                    let before = ndc(&c, pivot);
+                    c.zoom_at(factor, pivot);
+                    let after = ndc(&c, pivot);
+                    assert!(
+                        (before - after).length() < 1e-3,
+                        "ortho={ortho} mirror={mirror_x} f={factor}: {before} -> {after}"
+                    );
+                    assert!((10.0..=1e8).contains(&c.distance));
+                }
+            }
+        }
+    }
+
+    /// A scene larger than the device's buffer size limit is split, not a validation panic
+    /// (a 200 MB IFC made a 742 MB face buffer against 256 MiB), and draws the same picture.
+    #[test]
+    fn scenes_larger_than_a_gpu_buffer_are_split() {
+        let draw = |gpu: &Headless| {
+            let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+            let r = Renderer::new(&gpu.device, 1);
+            let gs = r.upload_with(&gpu.device, &scene, |_, _| Style::Normal, true);
+            let target = Target::new(&gpu.device, (64, 40), 1);
+            let mut cam = Camera::default();
+            cam.fit(&scene, 1.6);
+            r.render(
+                &gpu.device,
+                &gpu.queue,
+                &target,
+                &gs,
+                &cam,
+                &DrawOptions::default(),
+            );
+            (
+                gs.faces.len(),
+                gs.lines.len(),
+                gs.triangles(),
+                gpu.read_rgba(&target).unwrap(),
+            )
+        };
+        let (Ok(big), Ok(small)) = (
+            Headless::new(),
+            Headless::with_max_buffer_size(Some(16_384)),
+        ) else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let (f1, l1, t1, px1) = draw(&big);
+        let (f2, l2, t2, px2) = draw(&small);
+        assert_eq!((f1, l1), (1, 1));
+        assert!(
+            f2 > 1 && l2 > 1,
+            "split into {f2} face and {l2} line buffers"
+        );
+        assert_eq!(t1, t2);
+        assert!(px1 == px2, "same picture whatever the split");
     }
 
     /// Renders on whatever adapter exists (a software one in CI containers). Skipped if none.

@@ -490,6 +490,8 @@ struct Viewer {
     hovered: Option<usize>,
     hover_gpu: Option<GpuScene>,
     hover_at: Option<egui::Pos2>,
+    /// The wheel's last zoom pivot: the pointer position, the camera after that zoom, the pivot.
+    zoom_pivot: Option<(egui::Pos2, Camera, glam::Vec3)>,
 
     /// Linked (reference) models, read-only (#39), one being loaded, and the one whose
     /// differences with ours are coloured, if any.
@@ -604,6 +606,7 @@ impl Viewer {
             hovered: None,
             hover_gpu: None,
             hover_at: None,
+            zoom_pivot: None,
             links: Vec::new(),
             linking: None,
             compare_with: None,
@@ -1630,6 +1633,40 @@ impl Viewer {
         self.needs_render = false;
     }
 
+    /// What the wheel zooms about: the geometry under the cursor in 3D, else (nothing there, or
+    /// a 2D view, where depth changes nothing on screen) the plane through the orbit target.
+    /// Picking a big model is slow, so the pivot is kept while only the wheel moves the camera:
+    /// zooming about a point leaves it under the cursor.
+    fn wheel_pivot(
+        &mut self,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+        flat: bool,
+    ) -> Option<glam::Vec3> {
+        if let Some((at, cam, p)) = self.zoom_pivot
+            && at == pos
+            && cam == self.camera
+        {
+            return Some(p);
+        }
+        let l = self.loaded.as_ref()?;
+        let ndc = [
+            (pos.x - rect.min.x) / rect.width() * 2.0 - 1.0,
+            1.0 - (pos.y - rect.min.y) / rect.height() * 2.0,
+        ];
+        let plane = self.camera.on_target_plane(ndc, aspect, &l.bounds);
+        let p = if flat {
+            plane
+        } else {
+            let (o, d) = self.camera.ray(ndc, aspect, &l.bounds);
+            let clip = self.clip();
+            bimble_render::pick_hit(&l.scene, |i| self.visible(i), o, d, clip.as_ref())
+                .map_or(plane, |h| h.point)
+        };
+        Some(p)
+    }
+
     fn handle_view_input(&mut self, ui: &egui::Ui, resp: &egui::Response) {
         let rect = resp.rect;
         let aspect = rect.width() / rect.height().max(1.0);
@@ -1671,7 +1708,14 @@ impl Viewer {
         if resp.hovered() {
             let (scroll, zoom) = ui.input(|i| (i.smooth_scroll_delta().y, i.zoom_delta()));
             if scroll != 0.0 || zoom != 1.0 {
-                self.camera.zoom((-scroll * 0.0015).exp() / zoom);
+                let factor = (-scroll * 0.0015).exp() / zoom;
+                let pos = resp.hover_pos();
+                let pivot = pos.and_then(|pos| self.wheel_pivot(pos, rect, aspect, flat));
+                match pivot {
+                    Some(p) => self.camera.zoom_at(factor, p),
+                    None => self.camera.zoom(factor),
+                }
+                self.zoom_pivot = pos.zip(pivot).map(|(pos, p)| (pos, self.camera, p));
                 self.needs_render = true;
             }
         }
