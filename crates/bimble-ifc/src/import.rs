@@ -7,7 +7,7 @@
 //! the mesh is built. Property sets are imported as text (`"Pset/Prop" → value`). Everything
 //! unsupported is skipped and reported.
 
-use crate::read::{Affine, Budget, Emit, Reader, signed_area};
+use crate::read::{Affine, Budget, Emit, Limits, Reader, signed_area};
 use crate::step::{self, StepFile, Value};
 use crate::{GENERATOR_PSET, PROJECT_PSET};
 use bimble_core::{
@@ -53,7 +53,7 @@ const SUPPORTED: &[(&str, IfcClass)] = &[
     ("IFCSLAB", IfcClass::IfcSlab),
     ("IFCWALL", IfcClass::IfcWall),
     ("IFCWALLSTANDARDCASE", IfcClass::IfcWall),
-    ("IFCWALLEMENTEDEDCASE", IfcClass::IfcWall),
+    ("IFCWALLELEMENTEDCASE", IfcClass::IfcWall),
     ("IFCFOOTING", IfcClass::IfcFooting),
 ];
 
@@ -63,6 +63,11 @@ fn class_of(upper: &str) -> Option<IfcClass> {
 
 /// Read an IFC file (STEP text) into an editable model and a report.
 pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
+    import_str_with_limits(text, Limits::default())
+}
+
+/// `import_str` with explicit caps on the geometry tessellated for the whole file.
+pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, ImportReport), String> {
     let (file, skipped) = step::parse(text).map_err(|e| format!("parse: {e}"))?;
     if !file.schemas.iter().any(|s| s.starts_with("IFC")) {
         return Err(format!(
@@ -87,19 +92,30 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
     r.arc_tol = crate::read::ARC_TOLERANCE_MM / scale;
     r.angle_scale = r.plane_angle_to_radians();
 
-    // Storeys: step id → (GlobalId, storey, world placement in file units).
+    // Storeys: step id → GlobalId. A Bimble storey is a level only: elements keep their world
+    // placement minus the storey elevation, whatever the storey's own frame.
     let mut storeys: BTreeMap<GlobalId, Storey> = BTreeMap::new();
     let mut storey_gid: HashMap<u64, GlobalId> = HashMap::new();
-    let mut storey_frame: HashMap<u64, Affine> = HashMap::new();
     let mut storey_ids: HashSet<u64> = HashSet::new();
     for (id, st) in file.by_type("IFCBUILDINGSTOREY") {
         let name = st.arg(2).as_str().unwrap_or("").to_owned();
-        let (elevation, frame) = match st.arg(5).as_ref() {
+        let elevation = match st.arg(5).as_ref() {
             Some(pl) => {
                 let f = r.object_placement(pl, 0);
-                (f.t[2] * scale, f)
+                let same = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-9);
+                if (f.t[0] * scale).abs() > 1e-6
+                    || (f.t[1] * scale).abs() > 1e-6
+                    || !same(f.x, [1.0, 0.0, 0.0])
+                    || !same(f.y, [0.0, 1.0, 0.0])
+                {
+                    rep.warn(format!(
+                        "storey {name:?}: placement offset or turned in plan; \
+                         its elements keep their world position"
+                    ));
+                }
+                f.t[2] * scale
             }
-            None => (st.arg(9).as_f64().unwrap_or(0.0) * scale, Affine::IDENTITY),
+            None => st.arg(9).as_f64().unwrap_or(0.0) * scale,
         };
         let raw = st.arg(0).as_str().unwrap_or("");
         let gid = GlobalId::try_from(raw.to_owned()).unwrap_or_else(|_| {
@@ -117,7 +133,6 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
             },
         );
         storey_gid.insert(id, gid);
-        storey_frame.insert(id, frame);
         storey_ids.insert(id);
     }
     if storeys.is_empty() {
@@ -148,9 +163,24 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
     model.storeys = storeys;
     let mut model_materials: BTreeMap<GlobalId, Material> = BTreeMap::new();
     let mut material_id: BTreeMap<(String, MaterialCategory), GlobalId> = BTreeMap::new();
+    // One budget for the whole file: elements and openings draw from the same caps.
+    let budget = Budget::new(&limits);
+    let mut opening_ids: HashSet<GlobalId> = HashSet::new();
 
-    for (id, e) in file.entities.iter() {
+    // File order, so the first of two products sharing a GlobalId is the one kept.
+    let mut ids: Vec<u64> = file.entities.keys().copied().collect();
+    ids.sort_unstable();
+    for id in &ids {
+        let e = &file.entities[id];
         let Some(class) = class_of(&e.name) else {
+            // A product with a body that isn't one of ours: reported, not silently dropped.
+            if !crate::read::SKIP_CLASSES.contains(&e.name.as_str())
+                && file
+                    .deref(e.arg(6))
+                    .is_some_and(|s| s.name == "IFCPRODUCTDEFINITIONSHAPE")
+            {
+                rep.skip(format!("{}: unsupported class", e.name));
+            }
             continue;
         };
         let name = e.arg(2).as_str().unwrap_or("").to_owned();
@@ -158,31 +188,27 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
             rep.skip(format!("{}: invalid GlobalId", class.name()));
             continue;
         };
+        if model.elements.contains_key(&gid) {
+            rep.skip(format!("{}: duplicate GlobalId", class.name()));
+            rep.warn(format!(
+                "{} {name:?}: GlobalId {gid} already used; skipped",
+                class.name()
+            ));
+            continue;
+        }
 
-        // Which storey (and its frame) this element hangs from.
-        let storey_step = contained.storey_of(*id, &storey_ids);
-        let (storey, storey_elevation, world) = match storey_step {
-            Some(s) => (
-                storey_gid[&s],
-                model.storeys[&storey_gid[&s]].elevation,
-                storey_frame[&s],
-            ),
-            None => (
-                fallback_storey,
-                model.storeys[&fallback_storey].elevation,
-                {
-                    // The synthetic or first storey: elements keep world coordinates minus elevation.
-                    Affine::IDENTITY
-                },
-            ),
-        };
+        // Which storey this element hangs from (the fallback one when none).
+        let storey = contained
+            .storey_of(*id, &storey_ids)
+            .map_or(fallback_storey, |s| storey_gid[&s]);
+        let storey_elevation = model.storeys[&storey].elevation;
 
-        // The element's placement relative to its storey (file units).
-        let element_world = match e.arg(5).as_ref() {
+        // The element's placement: world, minus the storey elevation (file units).
+        let mut rel = match e.arg(5).as_ref() {
             Some(pl) => r.object_placement(pl, 0),
             None => Affine::IDENTITY,
         };
-        let rel = storey_inverse(&world, &element_world);
+        rel.t[2] -= storey_elevation / scale;
 
         // First: an extruded body → parametric rectangle, ExtrudedPolygon.
         let mut element = match extruded_solid(&file, e).and_then(|solid| {
@@ -198,7 +224,6 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
             }
             None => {
                 // Otherwise: explicit geometry → tessellate into a Mesh (storey-relative mm).
-                let budget = Budget::new(&Default::default());
                 let mut mb = bimble_geom::MeshBuilder::default();
                 {
                     let mut emit = Emit {
@@ -235,9 +260,10 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
                 &file,
                 ops,
                 &element,
-                &world,
                 scale,
                 storey_elevation,
+                &budget,
+                &mut opening_ids,
                 &what,
                 &mut rep,
             );
@@ -279,6 +305,12 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
         );
     }
     model.materials = model_materials;
+    if budget.exhausted() {
+        rep.warn(
+            "model too large or nested too deeply: geometry stopped at the import limits; \
+             what was left is skipped",
+        );
+    }
 
     // Reader warnings (units, placements…) go into the report too, with counts.
     for (k, n) in r.warnings {
@@ -290,7 +322,11 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
                 .into(),
         );
     }
-    Ok((model, rep))
+    // Validate, then canonical form (no -0.0), like any model mutation: hashes depend on it.
+    model
+        .validate()
+        .map_err(|e| format!("imported model invalid: {e}"))?;
+    Ok((bimble_core::version::canonical(model), rep))
 }
 
 /// Element step id → storey step id (containment, then aggregation up the spatial tree).
@@ -344,19 +380,6 @@ fn contained_storeys(file: &StepFile) -> ContainedStoreys {
     ContainedStoreys { direct, parent }
 }
 
-/// rel = storey_world⁻¹ ∘ element_world, assuming the storey frame is orthogonal (the usual
-/// case: a placement under the building). rel maps the element's local space to storey space.
-fn storey_inverse(storey: &Affine, element: &Affine) -> Affine {
-    // Inverse of an orthogonal frame: rotate = transpose of the column frame.
-    let tr = |v: [f64; 3]| [dot3(storey.x, v), dot3(storey.y, v), dot3(storey.z, v)];
-    Affine {
-        x: tr(element.x),
-        y: tr(element.y),
-        z: tr(element.z),
-        t: tr(sub_v(element.t, storey.t)),
-    }
-}
-
 /// Openings of a host element: tessellated in world mm, moved into element-local coordinates,
 /// and stored as `Mesh` generators (ADR 0032). An opening without usable geometry is skipped:
 /// the element is then drawn uncut there, like a boolean that fails.
@@ -366,22 +389,22 @@ fn element_openings(
     file: &StepFile,
     op_ids: &[u64],
     host: &Element,
-    world: &Affine,
     scale: f64,
     elevation: f64,
+    budget: &Budget,
+    used_ids: &mut HashSet<GlobalId>,
     what: &str,
     rep: &mut ImportReport,
 ) -> Vec<Opening> {
     let mut out = Vec::new();
     for &op_id in op_ids {
         let Some(op) = file.get(op_id) else { continue };
-        let budget = Budget::new(&Default::default());
         let mut mb = bimble_geom::MeshBuilder::default();
         {
             let mut emit = Emit {
                 mb: &mut mb,
                 scale,
-                budget: &budget,
+                budget,
             };
             r.product_body(op, &mut emit);
         }
@@ -389,29 +412,31 @@ fn element_openings(
             rep.skip(format!("{what}: opening without usable geometry"));
             continue;
         }
-        // World mm → element-local mm, the same way the host's own geometry was placed.
-        let to_local: Box<dyn Fn([f64; 3]) -> [f64; 3]> =
-            if matches!(host.generator, Generator::Mesh { .. }) {
-                // A mesh host is storey-relative: world mm with the storey elevation subtracted.
-                Box::new(move |p: [f64; 3]| [p[0], p[1], p[2] - elevation])
-            } else {
-                // An extruded host: through the storey frame, then the element placement's
-                // frame (both orthogonal, so `Affine::local` is their exact inverse).
-                let f = Affine {
-                    x: host.placement.x_axis,
-                    y: host.placement.y_axis(),
-                    z: host.placement.z_axis,
-                    t: host.placement.origin,
-                };
-                let world = *world;
-                Box::new(move |p: [f64; 3]| {
-                    let p = world.local(p.map(|c| c / scale)).map(|c| c * scale);
-                    f.local(p)
-                })
-            };
-        let tris: Vec<[[f64; 3]; 3]> = mb.tris.iter().map(|t| t.map(&*to_local)).collect();
+        // World mm → element-local mm, the same way the host was placed: storey elevation off,
+        // then the placement's frame (orthogonal, so `Affine::local` is its exact inverse; a
+        // mesh host's placement is the identity).
+        let f = Affine {
+            x: host.placement.x_axis,
+            y: host.placement.y_axis(),
+            z: host.placement.z_axis,
+            t: host.placement.origin,
+        };
+        let to_local = |p: [f64; 3]| f.local([p[0], p[1], p[2] - elevation]);
+        let tris: Vec<[[f64; 3]; 3]> = mb.tris.iter().map(|t| t.map(to_local)).collect();
         let (positions, indices) = mesh_from_tris(&tris, 0.0);
+        // Its GlobalId, once per file; without a valid one, export derives one.
+        let id = GlobalId::try_from(op.arg(0).as_str().unwrap_or("").to_owned()).ok();
+        let id = match id {
+            Some(g) if !used_ids.insert(g) => {
+                rep.warn(format!(
+                    "{what}: opening GlobalId {g} already used; a new one is derived on export"
+                ));
+                None
+            }
+            id => id,
+        };
         out.push(Opening {
+            id,
             placement: Placement::at(0.0, 0.0, 0.0),
             generator: Generator::Mesh { positions, indices },
         });
@@ -489,10 +514,6 @@ fn unit(v: [f64; 3]) -> Option<[f64; 3]> {
 
 fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn sub_v(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 /// The first IfcExtrudedAreaSolid of a product's Body representation, following mapped items.
@@ -633,6 +654,14 @@ fn generator_for(
         ]
     };
     let scaled_origin = |c: [f64; 2]| to_world(c).map(|v| v * scale);
+    // A profile direction as a 3D axis of the frame.
+    let axis = |u: [f64; 2]| {
+        unit([
+            frame.x[0] * u[0] + frame.y[0] * u[1],
+            frame.x[1] * u[0] + frame.y[1] * u[1],
+            frame.x[2] * u[0] + frame.y[2] * u[1],
+        ])
+    };
 
     let scale_pt = |p: [f64; 2]| [p[0] * scale, p[1] * scale];
     let (placement, generator, parametric) = match (class, &rect) {
@@ -640,7 +669,7 @@ fn generator_for(
             Placement {
                 origin: scaled_origin(rc.centre),
                 z_axis: z,
-                x_axis: unit(frame.x)?,
+                x_axis: axis(rc.u)?,
             },
             Generator::RectColumn {
                 width: rc.w * scale,
@@ -653,7 +682,7 @@ fn generator_for(
             Placement {
                 origin: scaled_origin(rc.centre),
                 z_axis: z,
-                x_axis: unit(frame.x)?,
+                x_axis: axis(rc.u)?,
             },
             Generator::RectBeam {
                 width: rc.w * scale,
@@ -666,7 +695,7 @@ fn generator_for(
             Placement {
                 origin: scaled_origin(rc.centre),
                 z_axis: z,
-                x_axis: unit(frame.x)?,
+                x_axis: axis(rc.u)?,
             },
             Generator::PadFooting {
                 width: rc.w * scale,
@@ -678,21 +707,16 @@ fn generator_for(
         (IfcClass::IfcWall, Some(rc)) => {
             // Wall profile starts at the origin and runs along +X, centred on its thickness:
             // origin at the middle of one short end, x along the long side.
-            let (length, thickness, along_x) = if rc.w >= rc.h {
-                (rc.w, rc.h, true)
+            let (length, thickness, u) = if rc.w >= rc.h {
+                (rc.w, rc.h, rc.u)
             } else {
-                (rc.h, rc.w, false)
+                (rc.h, rc.w, toward_x([-rc.u[1], rc.u[0]]))
             };
-            let u = if along_x { [1.0, 0.0] } else { [0.0, 1.0] };
             let start = [
                 rc.centre[0] - u[0] * length / 2.0,
                 rc.centre[1] - u[1] * length / 2.0,
             ];
-            let x3 = unit([
-                frame.x[0] * u[0] + frame.y[0] * u[1],
-                frame.x[1] * u[0] + frame.y[1] * u[1],
-                frame.x[2] * u[0] + frame.y[2] * u[1],
-            ])?;
+            let x3 = axis(u)?;
             (
                 Placement {
                     origin: scaled_origin(start),
@@ -739,12 +763,23 @@ fn generator_for(
     Some((placement, generator, parametric))
 }
 
-/// A 4-point rectangle: right angles, equal opposite sides. Centre and side lengths
-/// (w along the first edge, h along the second).
+/// A 4-point rectangle: right angles, equal opposite sides. Centre, side lengths, and `u`, the
+/// unit direction of the `w` side: whichever side runs closest to profile +X, so the result
+/// doesn't depend on the polyline's start vertex or direction.
 struct Rect {
     centre: [f64; 2],
     w: f64,
     h: f64,
+    u: [f64; 2],
+}
+
+/// A unit 2D direction, flipped if needed to point towards +X (or +Y when along Y).
+fn toward_x(u: [f64; 2]) -> [f64; 2] {
+    if u[0] < 0.0 || (u[0] == 0.0 && u[1] < 0.0) {
+        [-u[0], -u[1]]
+    } else {
+        u
+    }
 }
 
 fn rectangle(loop_: &[[f64; 2]]) -> Option<Rect> {
@@ -776,11 +811,14 @@ fn rectangle(loop_: &[[f64; 2]]) -> Option<Rect> {
         loop_.iter().map(|p| p[0]).sum::<f64>() / 4.0,
         loop_.iter().map(|p| p[1]).sum::<f64>() / 4.0,
     ];
-    Some(Rect {
-        centre,
-        w: len(edges[0]),
-        h: len(edges[1]),
-    })
+    let dir = |e: [f64; 2]| toward_x([e[0] / len(e), e[1] / len(e)]);
+    let (a, b) = (edges[0], edges[1]);
+    let (u, w, h) = if dir(a)[0] >= dir(b)[0] {
+        (dir(a), len(a), len(b))
+    } else {
+        (dir(b), len(b), len(a))
+    };
+    Some(Rect { centre, w, h, u })
 }
 
 /// Tessellated world-space triangles (mm) → a Mesh generator's data, storey-relative,
@@ -791,7 +829,8 @@ fn mesh_from_tris(tris: &[[[f64; 3]; 3]], storey_elevation: f64) -> (Vec<[f64; 3
     let mut indices: Vec<u32> = Vec::with_capacity(tris.len() * 3);
     for t in tris {
         for p in t {
-            let p = [p[0], p[1], p[2] - storey_elevation];
+            // `+ 0.0` turns -0.0 into 0.0: one vertex, one key.
+            let p = [p[0] + 0.0, p[1] + 0.0, p[2] - storey_elevation + 0.0];
             let next = positions.len() as u32;
             let i = *index.entry(p.map(|c| c.to_bits())).or_insert(next);
             if i == next {

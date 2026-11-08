@@ -249,7 +249,7 @@ fn read_parsed((file, skipped): (StepFile, usize), limits: Limits) -> Result<Sce
     Ok(sb.finish())
 }
 
-const SKIP_CLASSES: &[&str] = &[
+pub(crate) const SKIP_CLASSES: &[&str] = &[
     "IFCOPENINGELEMENT",
     "IFCOPENINGSTANDARDCASE",
     "IFCSPACE",
@@ -420,7 +420,7 @@ impl Budget {
             exhausted: AtomicBool::new(false),
         }
     }
-    fn exhausted(&self) -> bool {
+    pub(crate) fn exhausted(&self) -> bool {
         self.exhausted.load(Ordering::Relaxed)
     }
     /// Takes one item visit; false (and exhausted) when none are left.

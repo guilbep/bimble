@@ -268,6 +268,7 @@ fn opening_on_mesh_host_lands_in_element_space() {
         placement: Placement::at(0.0, 0.0, 0.0),
         generator: box_from_to([0.0, 0.0, 0.0], [2000.0, 3000.0, 300.0]),
         openings: vec![bimble_core::Opening {
+            id: None,
             placement: Placement::at(0.0, 0.0, 0.0),
             generator: box_from_to([500.0, 500.0, 0.0], [1500.0, 2500.0, 300.0]),
         }],
@@ -305,4 +306,281 @@ fn opening_on_mesh_host_lands_in_element_space() {
     let cut = volume(&bimble_geom::element_tris(b).unwrap());
     let hole = 1000.0 * 2000.0 * 300.0;
     assert!((full - cut - hole).abs() < full * 1e-4, "{full} vs {cut}");
+}
+
+/// World bounding box of each element, by GlobalId: (min, max) in mm.
+fn world_boxes(scene: &bimble_geom::Scene) -> std::collections::BTreeMap<String, [[f64; 3]; 2]> {
+    let mut out = std::collections::BTreeMap::new();
+    for e in &scene.elements {
+        let mut b = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
+        for p in &e.mesh.positions {
+            for k in 0..3 {
+                let v = p[k] as f64 + scene.origin_mm[k];
+                b[0][k] = b[0][k].min(v);
+                b[1][k] = b[1][k].max(v);
+            }
+        }
+        out.insert(e.global_id.clone(), b);
+    }
+    out
+}
+
+/// The imported model, meshed, sits where the display reader (the reference) puts the IFC.
+fn assert_same_place_as_reader(text: &str) -> bimble_core::Model {
+    let (m, rep) = import(text);
+    let got = world_boxes(&bimble_geom::Scene::from_model(&m));
+    let want = world_boxes(&bimble_ifc::read::read_str(text).expect("reader"));
+    assert_eq!(got.len(), want.len(), "report: {rep:?}");
+    for (id, w) in &want {
+        let g = got.get(id).unwrap_or_else(|| panic!("{id} not imported"));
+        for (a, b) in g.iter().flatten().zip(w.iter().flatten()) {
+            assert!((a - b).abs() < 0.5, "{id}: imported {g:?}, reader {w:?}");
+        }
+    }
+    m
+}
+
+/// A rectangle whose polyline starts on a short edge, or runs the other way round, is still
+/// the same box: the wall is not turned 90°, the column keeps its width along its long side.
+#[test]
+fn rectangle_detection_ignores_start_vertex_and_direction() {
+    let reversed = REVIT_STYLE.replace(
+        "#29=IFCPOLYLINE((#25,#26,#27,#28,#25));",
+        "#29=IFCPOLYLINE((#25,#28,#27,#26,#25));",
+    );
+    let m = assert_same_place_as_reader(&reversed);
+    let e = m.elements.values().next().unwrap();
+    let Generator::Wall {
+        length, thickness, ..
+    } = e.generator
+    else {
+        panic!("expected a wall, got {:?}", e.generator);
+    };
+    assert_eq!((length, thickness), (4000.0, 200.0));
+
+    let column = reversed.replace("IFCWALLSTANDARDCASE(", "IFCCOLUMN(");
+    let m = assert_same_place_as_reader(&column);
+    let e = m.elements.values().next().unwrap();
+    let Generator::RectColumn { width, depth, .. } = e.generator else {
+        panic!("expected a rect column, got {:?}", e.generator);
+    };
+    assert_eq!((width, depth), (4000.0, 200.0));
+}
+
+/// A rectangle turned 30° in its profile is detected and placed turned, as wall and column.
+#[test]
+fn rotated_rectangle_profile_keeps_its_rotation() {
+    let rotated = REVIT_STYLE
+        .replace(
+            "#26=IFCCARTESIANPOINT((4000.,0.));",
+            "#26=IFCCARTESIANPOINT((3464.1016151377546,2000.));",
+        )
+        .replace(
+            "#27=IFCCARTESIANPOINT((4000.,200.));",
+            "#27=IFCCARTESIANPOINT((3364.1016151377546,2173.2050807568877));",
+        )
+        .replace(
+            "#28=IFCCARTESIANPOINT((0.,200.));",
+            "#28=IFCCARTESIANPOINT((-100.,173.20508075688772));",
+        )
+        .replace("#52=IFCRELVOIDSELEMENT", "#52=IFCRELNOTHING");
+    for text in [
+        rotated.clone(),
+        rotated.replace("IFCWALLSTANDARDCASE(", "IFCCOLUMN("),
+    ] {
+        let (_, rep) = import(&text);
+        assert_eq!(rep.parametric, 1, "report: {rep:?}");
+        assert_same_place_as_reader(&text);
+    }
+}
+
+/// A storey placed off the origin, or turned, still puts its elements where the IFC says, and
+/// the opening still cuts the window out of the wall.
+#[test]
+fn storey_offset_or_rotation_keeps_world_positions() {
+    let offset = REVIT_STYLE.replace(
+        "#17=IFCAXIS2PLACEMENT3D(#8,$,$);",
+        "#17=IFCAXIS2PLACEMENT3D(#90,$,$);\n#90=IFCCARTESIANPOINT((5000.,0.,3000.));",
+    );
+    let turned = offset.replace(
+        "#17=IFCAXIS2PLACEMENT3D(#90,$,$);",
+        "#17=IFCAXIS2PLACEMENT3D(#90,$,#91);\n#91=IFCDIRECTION((0.,1.,0.));",
+    );
+    for text in [offset, turned] {
+        let m = assert_same_place_as_reader(&text);
+        let (_, rep) = import(&text);
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("Niveau 1")),
+            "the storey frame is reported: {rep:?}"
+        );
+        let e = m.elements.values().next().unwrap();
+        let full = 4000.0 * 200.0 * 2700.0;
+        let cut = volume(&bimble_geom::element_tris(e).unwrap());
+        let window = 1200.0 * 200.0 * 1200.0;
+        assert!((full - cut - window).abs() < full * 1e-4, "{full} vs {cut}");
+    }
+}
+
+/// An element in no storey goes into the first one and keeps its world height (not raised by
+/// that storey's elevation a second time).
+#[test]
+fn element_without_storey_keeps_world_height() {
+    let text = REVIT_STYLE
+        .replace(
+            "#17=IFCAXIS2PLACEMENT3D(#8,$,$);",
+            "#17=IFCAXIS2PLACEMENT3D(#90,$,$);\n#90=IFCCARTESIANPOINT((0.,0.,3000.));",
+        )
+        .replace("#36=IFCRELCONTAINEDINSPATIALSTRUCTURE", "#36=IFCRELNOTHING");
+    assert_same_place_as_reader(&text);
+}
+
+/// The fixture with a second window in the wall, at x = 2500 (same body as the first).
+fn two_openings() -> String {
+    REVIT_STYLE.replace(
+        "ENDSEC;\nEND-ISO",
+        "#64=IFCOPENINGELEMENT('2MrcuFTa90SfJXy$ZbCd1R',$,'Window 2',$,$,#65,#47,$,.OPENING.);
+#65=IFCLOCALPLACEMENT(#23,#66);
+#66=IFCAXIS2PLACEMENT3D(#67,$,$);
+#67=IFCCARTESIANPOINT((2500.,0.,900.));
+#68=IFCRELVOIDSELEMENT('2MrcuFTa90SfJXy$ZbCd1S',$,$,$,#22,#64);
+ENDSEC;\nEND-ISO",
+    )
+}
+
+/// The file's limits hold for the whole import, not per element or opening: with room for one
+/// opening's triangles, the second is reported as stopped, not imported.
+#[test]
+fn import_limits_cover_the_whole_file() {
+    let text = two_openings();
+    let (m, rep) = import(&text);
+    assert_eq!(rep.openings, 2, "report: {rep:?}");
+    let e = m.elements.values().next().unwrap();
+    let Generator::Mesh { indices, .. } = &e.openings[0].generator else {
+        panic!("mesh opening");
+    };
+    let limits = bimble_ifc::read::Limits {
+        max_triangles: indices.len() / 3,
+        ..Default::default()
+    };
+    let (_, rep) = bimble_ifc::import::import_str_with_limits(&text, limits).unwrap();
+    assert_eq!(rep.openings, 1, "report: {rep:?}");
+    assert!(
+        rep.warnings.iter().any(|w| w.contains("stopped")),
+        "report: {rep:?}"
+    );
+}
+
+/// The fixture with more entities, sharing the wall's placement and body.
+fn with_entities(extra: &str) -> String {
+    REVIT_STYLE.replace("ENDSEC;\nEND-ISO", &format!("{extra}\nENDSEC;\nEND-ISO"))
+}
+
+fn skipped(rep: &bimble_ifc::import::ImportReport, what: &str) -> usize {
+    rep.skipped
+        .iter()
+        .filter(|(k, _)| k.contains(what))
+        .map(|(_, n)| n)
+        .sum()
+}
+
+#[test]
+fn wall_elemented_case_is_imported() {
+    let (m, rep) = import(&with_entities(
+        "#70=IFCWALLELEMENTEDCASE('2MrcuFTa90SfJXy$ZbCd1U',$,'Elemented',$,$,#23,#31,$,$);",
+    ));
+    assert_eq!(rep.elements, 2, "report: {rep:?}");
+    assert_eq!(m.elements.len(), 2);
+}
+
+/// Nothing is dropped silently (ADR 0032): an unsupported product is in the report; the
+/// spatial structure, openings and plain geometry entities are not.
+#[test]
+fn unsupported_products_are_reported() {
+    let (_, rep) = import(REVIT_STYLE);
+    assert!(rep.skipped.is_empty(), "report: {rep:?}");
+    let (_, rep) = import(&with_entities(
+        "#70=IFCROOF('2MrcuFTa90SfJXy$ZbCd1T',$,'Roof',$,$,#23,#31,$,$);",
+    ));
+    assert_eq!(skipped(&rep, "IFCROOF"), 1, "report: {rep:?}");
+    assert_eq!(rep.skipped.len(), 1, "report: {rep:?}");
+}
+
+/// A second product with the same GlobalId is skipped and reported, not written over the first;
+/// the first one in the file wins.
+#[test]
+fn duplicate_global_ids_are_reported() {
+    let (m, rep) = import(&with_entities(
+        "#70=IFCWALL('2MrcuFTa90SfJXy$ZbCd1H',$,'Copy',$,$,#23,#31,$,$);",
+    ));
+    assert_eq!(rep.elements, 1, "report: {rep:?}");
+    assert_eq!(skipped(&rep, "duplicate GlobalId"), 1, "report: {rep:?}");
+    assert_eq!(m.elements.values().next().unwrap().name, "Basic Wall");
+}
+
+#[test]
+fn invalid_global_ids_are_reported() {
+    let (_, rep) = import(&with_entities(
+        "#70=IFCWALL('not a GlobalId',$,'Bad',$,$,#23,#31,$,$);",
+    ));
+    assert_eq!(rep.elements, 1, "report: {rep:?}");
+    assert_eq!(skipped(&rep, "invalid GlobalId"), 1, "report: {rep:?}");
+}
+
+/// An imported model is already canonical (no -0.0): its hash doesn't change when it is saved
+/// and loaded again. A downward extrusion used to leave a z axis of [-0.0, -0.0, -1.0].
+#[test]
+fn imported_model_is_canonical() {
+    use bimble_core::version::model_hash;
+    let down = REVIT_STYLE.replace(
+        "#35=IFCDIRECTION((0.,0.,1.));",
+        "#35=IFCDIRECTION((0.,0.,-1.));",
+    );
+    let (m, _) = import(&down);
+    let text = bimble_core::file::to_string(&m);
+    let back = bimble_core::file::from_str(&text).unwrap();
+    assert_eq!(model_hash(&m), model_hash(&back));
+    assert!(!text.contains("-0.0"));
+}
+
+/// Openings keep their IfcOpeningElement GlobalId through import, .bimble and export; removing
+/// one opening doesn't renumber the others.
+#[test]
+fn opening_global_ids_are_stable() {
+    let (mut m, _) = import(&two_openings());
+    let ids = |m: &bimble_core::Model| -> Vec<Option<String>> {
+        m.elements
+            .values()
+            .next()
+            .unwrap()
+            .openings
+            .iter()
+            .map(|o| o.id.map(|g| g.to_string()))
+            .collect()
+    };
+    assert_eq!(
+        ids(&m),
+        [
+            Some("2MrcuFTa90SfJXy$ZbCd1J".to_owned()),
+            Some("2MrcuFTa90SfJXy$ZbCd1R".to_owned())
+        ]
+    );
+    let saved = bimble_core::file::from_str(&bimble_core::file::to_string(&m)).unwrap();
+    assert_eq!(ids(&saved), ids(&m));
+
+    m.elements.values_mut().next().unwrap().openings.remove(0);
+    let text = bimble_ifc::export(&m, "one.ifc", "2026-11-08T10:00:00");
+    assert!(text.contains("IFCOPENINGELEMENT('2MrcuFTa90SfJXy$ZbCd1R'"));
+    let (back, _) = import(&text);
+    assert_eq!(ids(&back), [Some("2MrcuFTa90SfJXy$ZbCd1R".to_owned())]);
+}
+
+/// A .bimble written before openings had ids still loads, and is written back the same way.
+#[test]
+fn openings_without_id_stay_without_id() {
+    let (mut m, _) = import(REVIT_STYLE);
+    m.elements.values_mut().next().unwrap().openings[0].id = None;
+    let text = bimble_core::file::to_string(&m);
+    assert!(!text.contains("\"id\": null"));
+    let back = bimble_core::file::from_str(&text).unwrap();
+    assert_eq!(back, m);
 }
