@@ -41,6 +41,7 @@ a decision that changes an old one says which one it supersedes.
 | [0033](0033-models-too-large-for-the-machine.md) | Models too large for the machine: an 80 % memory budget, estimate, census, choose storeys/classes/materials before a cut | Accepted |
 | [0034](0034-shapes-once-and-a-box-tree.md) | Shapes meshed once and placed many times (instancing of mapped items); a box tree over elements for picking, culling and clashes | Accepted |
 | [0035](0035-simplify-while-the-view-moves.md) | While the view moves, leave out what is smallest on screen; a frame-rate target (setting, 30 fps) decides how much; stills whole | Accepted |
+| [0036](0036-detail-levels-when-the-numbers-ask.md) | Detail levels (Nanite-like clusters): not yet; cheaper steps first and what would make them worth it | Proposed |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

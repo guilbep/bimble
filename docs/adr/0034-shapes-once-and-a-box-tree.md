@@ -71,6 +71,15 @@ spatial index anyway.
   An element now counts as cut only if the nearest of its triangles the ray meets faces away.
 - `bvh::tests::queries_match_brute_force` (rays, boxes, pairs).
 
+Results (9 Nov):
+- Phase 1 (CPU): load 2.5 → 0.46 s (200 MB model); every one of its 28 318 instances has the
+  bounds expanding gave (0.0 mm).
+- Phase 2 (GPU, every draw instanced; ≥ 4 copies): render peak 1.71 → 1.01 GB, upload 255 → 17 ms,
+  frame unchanged, renders pixel-identical to phase 1. The 415 MB model shows all its 35.8 M
+  triangles (cut at 10 M before) at 30 fps; test `instanced_shapes_draw_like_placed_copies`
+  (mirror and section box; it fails with 463 pixels if the mirror's winding is ignored).
+- Memory estimates (ADR 0033) count stored triangles: own, each shape once, one per copy.
+
 ## Prior art
 
 - IfcOpenShell's wgpu viewer (`src/ifcviewer`, Oct 2026): local-coordinate shapes from the
