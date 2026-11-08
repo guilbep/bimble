@@ -2,13 +2,17 @@
 //!
 //! Extruded solids become the parametric generators when their profile is a rectangle
 //! (detected back out of Revit's polylines), an `ExtrudedPolygon` when it isn't, and a `Mesh`
-//! when the body is explicit geometry (polygonal face sets, faceted breps). Openings are
-//! recorded and reported, not cut yet. Everything unsupported is skipped and reported.
+//! when the body is explicit geometry (polygonal face sets, faceted breps). Openings
+//! (`IfcOpeningElement` voids) are kept on the element as `Mesh` generators and cut out when
+//! the mesh is built. Property sets are imported as text (`"Pset/Prop" → value`). Everything
+//! unsupported is skipped and reported.
 
 use crate::read::{Affine, Budget, Emit, Reader, signed_area};
-use crate::step::{self, StepFile};
+use crate::step::{self, StepFile, Value};
+use crate::{GENERATOR_PSET, PROJECT_PSET};
 use bimble_core::{
-    Element, Generator, GlobalId, IfcClass, Material, MaterialCategory, Model, Placement, Storey,
+    Element, Generator, GlobalId, IfcClass, Material, MaterialCategory, Model, Opening, Placement,
+    Storey,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -25,8 +29,10 @@ pub struct ImportReport {
     pub meshes: usize,
     /// Imported elements per IFC class.
     pub by_class: BTreeMap<String, usize>,
-    /// Openings found on imported elements (kept uncut in this version).
+    /// Openings found on imported elements, kept as meshes and cut out at mesh time.
     pub openings: usize,
+    /// Property values imported into `Element.properties`.
+    pub properties: usize,
     /// Products of supported classes with no usable geometry, and other losses.
     pub skipped: BTreeMap<String, usize>,
     pub warnings: Vec<String>,
@@ -131,6 +137,12 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
     let contained = contained_storeys(&file);
     let materials_of = r.materials();
     let openings = r.voids();
+    let (psets, psets_skipped) = property_sets(&file);
+    if psets_skipped > 0 {
+        rep.warn(format!(
+            "{psets_skipped} property value(s) not imported (unsupported kind)"
+        ));
+    }
 
     let mut model = Model::new("Imported model");
     model.storeys = storeys;
@@ -172,12 +184,8 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
         };
         let rel = storey_inverse(&world, &element_world);
 
-        if let Some(ops) = openings.get(id) {
-            rep.openings += ops.len();
-        }
-
         // First: an extruded body → parametric rectangle, ExtrudedPolygon.
-        let element = match extruded_solid(&file, e).and_then(|solid| {
+        let mut element = match extruded_solid(&file, e).and_then(|solid| {
             extruded_element(&mut r, solid, &rel, class, gid, &name, storey, scale)
         }) {
             Some((el, parametric)) => {
@@ -209,14 +217,36 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
                 Element {
                     id: gid,
                     class,
-                    name,
+                    name: name.clone(),
                     storey,
                     material: GlobalId::derived(b"material/none"),
                     placement: Placement::at(0.0, 0.0, 0.0),
                     generator: Generator::Mesh { positions, indices },
+                    openings: Vec::new(),
+                    properties: Default::default(),
                 }
             }
         };
+
+        if let Some(ops) = openings.get(id) {
+            let what = format!("{} {name}", class.name());
+            element.openings = element_openings(
+                &mut r,
+                &file,
+                ops,
+                &element,
+                &world,
+                scale,
+                storey_elevation,
+                &what,
+                &mut rep,
+            );
+            rep.openings += element.openings.len();
+        }
+        if let Some(props) = psets.get(id) {
+            rep.properties += props.len();
+            element.properties = props.clone();
+        }
 
         // Material (name → deterministic id, category from the grade).
         let (mat_name, cat) = materials_of
@@ -324,6 +354,131 @@ fn storey_inverse(storey: &Affine, element: &Affine) -> Affine {
         y: tr(element.y),
         z: tr(element.z),
         t: tr(sub_v(element.t, storey.t)),
+    }
+}
+
+/// Openings of a host element: tessellated in world mm, moved into element-local coordinates,
+/// and stored as `Mesh` generators (ADR 0032). An opening without usable geometry is skipped:
+/// the element is then drawn uncut there, like a boolean that fails.
+#[allow(clippy::too_many_arguments)]
+fn element_openings(
+    r: &mut Reader,
+    file: &StepFile,
+    op_ids: &[u64],
+    host: &Element,
+    world: &Affine,
+    scale: f64,
+    elevation: f64,
+    what: &str,
+    rep: &mut ImportReport,
+) -> Vec<Opening> {
+    let mut out = Vec::new();
+    for &op_id in op_ids {
+        let Some(op) = file.get(op_id) else { continue };
+        let budget = Budget::new(&Default::default());
+        let mut mb = bimble_geom::MeshBuilder::default();
+        {
+            let mut emit = Emit {
+                mb: &mut mb,
+                scale,
+                budget: &budget,
+            };
+            r.product_body(op, &mut emit);
+        }
+        if mb.tris.is_empty() {
+            rep.skip(format!("{what}: opening without usable geometry"));
+            continue;
+        }
+        // World mm → element-local mm, the same way the host's own geometry was placed.
+        let to_local: Box<dyn Fn([f64; 3]) -> [f64; 3]> =
+            if matches!(host.generator, Generator::Mesh { .. }) {
+                // A mesh host is storey-relative: world mm with the storey elevation subtracted.
+                Box::new(move |p: [f64; 3]| [p[0], p[1], p[2] - elevation])
+            } else {
+                // An extruded host: through the storey frame, then the element placement's
+                // frame (both orthogonal, so `Affine::local` is their exact inverse).
+                let f = Affine {
+                    x: host.placement.x_axis,
+                    y: host.placement.y_axis(),
+                    z: host.placement.z_axis,
+                    t: host.placement.origin,
+                };
+                let world = *world;
+                Box::new(move |p: [f64; 3]| {
+                    let p = world.local(p.map(|c| c / scale)).map(|c| c * scale);
+                    f.local(p)
+                })
+            };
+        let tris: Vec<[[f64; 3]; 3]> = mb.tris.iter().map(|t| t.map(&*to_local)).collect();
+        let (positions, indices) = mesh_from_tris(&tris, 0.0);
+        out.push(Opening {
+            placement: Placement::at(0.0, 0.0, 0.0),
+            generator: Generator::Mesh { positions, indices },
+        });
+    }
+    out
+}
+
+/// Element step id → property sets as text (`"Pset/Prop" → value`), from
+/// `IfcRelDefinesByProperties` → `IfcPropertySet` → `IfcPropertySingleValue`. Bimble's own
+/// psets are skipped: the generator parameters and project information are re-derived on
+/// export, not copied. Values are select values as text; other kinds are counted as skipped.
+fn property_sets(file: &StepFile) -> (HashMap<u64, BTreeMap<String, String>>, usize) {
+    let mut out: HashMap<u64, BTreeMap<String, String>> = HashMap::new();
+    let mut skipped = 0usize;
+    for (_, rel) in file.by_type("IFCRELDEFINESBYPROPERTIES") {
+        let Some(pset) = file.deref(rel.arg(5)) else {
+            continue;
+        };
+        if pset.name != "IFCPROPERTYSET" {
+            continue;
+        }
+        let pset_name = pset.arg(2).as_str().unwrap_or("");
+        if pset_name.is_empty() || pset_name == GENERATOR_PSET || pset_name == PROJECT_PSET {
+            continue;
+        }
+        for prop in pset.arg(4).as_list().unwrap_or(&[]) {
+            let Some(prop) = file.deref(prop) else {
+                continue;
+            };
+            let Some(prop_name) = prop.arg(0).as_str() else {
+                continue;
+            };
+            let Some(value) = property_value(prop.arg(2), file) else {
+                skipped += 1;
+                continue;
+            };
+            for host in rel.arg(4).as_list().unwrap_or(&[]) {
+                if let Some(host) = host.as_ref() {
+                    out.entry(host)
+                        .or_default()
+                        .insert(format!("{pset_name}/{prop_name}"), value.clone());
+                }
+            }
+        }
+    }
+    (out, skipped)
+}
+
+/// An `IfcValue` select as text: labels, texts, identifiers, booleans, integers, reals.
+fn property_value(v: &Value, file: &StepFile) -> Option<String> {
+    match v {
+        Value::Typed(name, inner) => select_value(name.as_str(), inner),
+        Value::Ref(_) => {
+            let ent = file.deref(v)?;
+            select_value(ent.name.as_str(), ent.arg(0))
+        }
+        _ => None,
+    }
+}
+
+fn select_value(name: &str, v: &Value) -> Option<String> {
+    match name {
+        "IFCLABEL" | "IFCTEXT" | "IFCIDENTIFIER" => v.as_str().map(str::to_owned),
+        "IFCBOOLEAN" | "IFCLOGICAL" => v.as_enum().map(str::to_owned),
+        "IFCINTEGER" => v.as_i64().map(|n| n.to_string()),
+        "IFCREAL" => v.as_f64().map(|x| format!("{x}")),
+        _ => None,
     }
 }
 
@@ -450,6 +605,8 @@ fn extruded_element(
             material: GlobalId::derived(b"material/none"),
             placement,
             generator,
+            openings: Vec::new(),
+            properties: Default::default(),
         },
         parametric,
     ))

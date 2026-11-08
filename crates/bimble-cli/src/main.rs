@@ -1042,9 +1042,12 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             if rep.openings > 0 {
                 println!(
-                    "  openings: {} found, kept uncut (edit the element or cut them later)",
+                    "  openings: {} cut on import (as meshes, subtracted at draw time)",
                     rep.openings
                 );
+            }
+            if rep.properties > 0 {
+                println!("  property values: {}", rep.properties);
             }
             for (what, n) in &rep.skipped {
                 println!("  skipped: {what} (×{n})");

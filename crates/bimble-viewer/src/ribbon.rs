@@ -47,6 +47,8 @@ impl Tab {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
     Open,
+    /// Import an IFC file as an editable .bimble copy (ADR 0032).
+    ImportIfc,
     Save,
     Undo,
     Redo,
@@ -77,8 +79,9 @@ pub(crate) enum Action {
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 31] = [
+pub(crate) const ALL_ACTIONS: [Action; 32] = [
     Action::Open,
+    Action::ImportIfc,
     Action::Save,
     Action::Undo,
     Action::Redo,
@@ -115,6 +118,7 @@ impl Action {
     pub fn label(self) -> String {
         match self {
             Action::Open => "Open…".into(),
+            Action::ImportIfc => "Import IFC…".into(),
             Action::Save => "Save".into(),
             Action::Undo => "Undo".into(),
             Action::Redo => "Redo".into(),
@@ -188,9 +192,12 @@ impl Action {
             Action::Standards | Action::Project | Action::Materials | Action::History => {
                 Tab::Manage
             }
-            Action::Open | Action::Save | Action::Undo | Action::Redo | Action::Palette => {
-                Tab::Model
-            }
+            Action::Open
+            | Action::ImportIfc
+            | Action::Save
+            | Action::Undo
+            | Action::Redo
+            | Action::Palette => Tab::Model,
         }
     }
 }
@@ -254,7 +261,7 @@ impl Viewer {
         let loaded = self.loaded.is_some();
         let flat = self.in_2d();
         match a {
-            Action::Open | Action::Palette | Action::Standards => true,
+            Action::Open | Action::ImportIfc | Action::Palette | Action::Standards => true,
             Action::Save => {
                 self.side_views_dirty()
                     || self
@@ -310,6 +317,7 @@ impl Viewer {
         }
         match a {
             Action::Open => self.files.pick(files::Purpose::Open, ctx),
+            Action::ImportIfc => self.files.pick(files::Purpose::ImportIfc, ctx),
             Action::Save => {
                 if self.side_views.is_some() {
                     self.save_side_views();

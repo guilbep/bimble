@@ -31,7 +31,7 @@ _5 Nov 2026. Supersedes v0 (Python / IFC-file-as-native). Sources: the Bimble PR
 | Geometry (POC) | Own mesher: profile extrusion + `earcutr` | Covers columns, beams, walls, slabs, footings. |
 | Geometry kernel | **manifold3d** (`manifold-csg`) for mesh booleans: openings, clipping, CSG (ADR 0010). Exact B-rep later | ✅ booleans · B-rep ADR when exact curves are needed |
 | IFC export | Own IFC4 STEP writer | Validated in tests against IfcOpenShell |
-| IFC import | **Display:** own Rust reader (ADR 0002), checked element by element against IfcOpenShell. **Editing import:** the same reader, converted to generators (ADR 0032) | ✅ display (v0.1) · ✅ editing CLI (I3) |
+| IFC import | **Display:** own Rust reader (ADR 0002), checked element by element against IfcOpenShell. **Editing import:** the same reader, converted to generators (ADR 0032) | ✅ display (v0.1) · ✅ editing CLI + viewer (I3) |
 | Native format | `.bimble`: canonical JSON for the POC → content-addressed object store (git-like) | Format spec in `docs/format/` |
 | Geometry cache | **`.b3d`**: chunked binary meshes (per storey / spatial chunk, instanced), so the viewer opens without re-meshing. A derived cache, never the source of truth | Built when the viewer needs it (I1–I2). Spec in `docs/format/` before any code |
 | Test oracle | IfcOpenShell (Python) **in tests only** | Proves our IFC opens in a reference tool |
@@ -145,9 +145,17 @@ an integrated GPU (Intel HD 520 class) and 8 GB RAM. Measured on a generated fix
   materials, units → mm, GlobalIds kept; rectangle detection back to parametric generators,
   `ExtrudedPolygon` for the rest, `Mesh` for explicit geometry; a report of what mapped and what didn't
 - ✅ Round-trip test in CI (`.bimble → IFC → import → .bimble`), the re-export checked with IfcOpenShell
-- Display reading is done (I1). Still to do: openings cut on import (manifold3d), property sets into the
-  editable model, an architect's IFC as a background reference, the viewer's "import as editable copy",
-  round-trip tests with Bonsai, FreeCAD, Revit
+- ✅ Openings cut on import (8 Nov): `IfcOpeningElement` voids are kept on the element as meshes in
+  element-local coordinates and subtracted at mesh time with manifold3d (ADR 0010); an opening that
+  isn't a closed solid is drawn uncut and reported
+- ✅ Property sets beyond the material (8 Nov): `IfcPropertySingleValue` values as text
+  (`"Pset/Prop" → value`), exported again grouped by pset; Bimble's own psets are re-derived, not copied
+- ✅ Viewer entry "Import IFC…" (8 Nov): an IFC file becomes an editable `.bimble` copy next to it,
+  Ctrl S writes the copy
+- Revit-style fixture (polyline profiles, voids, psets) round-trips twice in
+  `crates/bimble-ifc/tests/revit_style.rs`. Still to do: an architect's IFC as a background reference;
+  round-trip tests with Bonsai, FreeCAD, Revit (needs a person with those tools — the real 881-element
+  Revit export is kept out of the repo)
 - First real fixture: a Revit 2025 structural export from a real project (IFC4, metres, 881 elements; kept out of the repo).
   Measured with IfcOpenShell 0.9 (5 Nov 2026):
   - Geometry is light: 809 products tessellate to ~21k triangles in 3.4 s on 2 cores. The viewer's challenge

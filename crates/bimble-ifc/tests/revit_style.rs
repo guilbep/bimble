@@ -1,0 +1,308 @@
+//! A Revit-style IFC4 fixture, written the way Revit writes walls: extruded solids from
+//! polyline profiles (no typed rectangle profile), openings as `IfcOpeningElement` voids,
+//! and property sets as `IfcPropertySingleValue` labels. The import must detect the rectangle
+//! back into the parametric wall, keep the opening as a mesh cut into the element, and read
+//! the properties as text (ADR 0032). It then round trips: export → import again.
+
+use bimble_core::{Element, Generator, Placement};
+
+/// The fixture: one storey, one Revit-style wall with a window opening and two property sets
+/// (one of them Bimble's own generator pset, which must be skipped). Units are millimetres.
+const REVIT_STYLE: &str = r#"ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');
+FILE_NAME('revit-style.ifc','2026-11-08T10:00:00',(''),(''),'Revit','','');
+FILE_SCHEMA(('IFC4'));
+ENDSEC;
+DATA;
+#1=IFCPROJECT('2MrcuFTa90SfJXy$ZbCd1A',$,'Projet',$,$,$,$,$,#2,#3);
+#2=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#4,$);
+#3=IFCUNITASSIGNMENT((#5,#6,#7));
+#4=IFCAXIS2PLACEMENT3D(#8,$,$);
+#5=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);
+#6=IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.);
+#7=IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.);
+#8=IFCCARTESIANPOINT((0.,0.,0.));
+#9=IFCSITE('2MrcuFTa90SfJXy$ZbCd1B',$,'Site',$,$,#10,$,$,.ELEMENT.,$,$,$,$,$);
+#10=IFCLOCALPLACEMENT($,#11);
+#11=IFCAXIS2PLACEMENT3D(#8,$,$);
+#12=IFCBUILDING('2MrcuFTa90SfJXy$ZbCd1C',$,'Batiment',$,$,#13,$,$,.ELEMENT.,$,$,$);
+#13=IFCLOCALPLACEMENT(#10,#14);
+#14=IFCAXIS2PLACEMENT3D(#8,$,$);
+#15=IFCBUILDINGSTOREY('2MrcuFTa90SfJXy$ZbCd1D',$,'Niveau 1',$,$,#16,$,$,.ELEMENT.,0.);
+#16=IFCLOCALPLACEMENT(#13,#17);
+#17=IFCAXIS2PLACEMENT3D(#8,$,$);
+#18=IFCRELAGGREGATES('2MrcuFTa90SfJXy$ZbCd1E',$,$,$,#1,(#9));
+#19=IFCRELAGGREGATES('2MrcuFTa90SfJXy$ZbCd1F',$,$,$,#9,(#12));
+#20=IFCRELAGGREGATES('2MrcuFTa90SfJXy$ZbCd1G',$,$,$,#12,(#15));
+#21=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#2,$,.MODEL_VIEW.,$);
+#22=IFCWALLSTANDARDCASE('2MrcuFTa90SfJXy$ZbCd1H',$,'Basic Wall',$,$,#23,#31,$);
+#23=IFCLOCALPLACEMENT(#16,#24);
+#24=IFCAXIS2PLACEMENT3D(#8,$,$);
+#25=IFCCARTESIANPOINT((0.,0.));
+#26=IFCCARTESIANPOINT((4000.,0.));
+#27=IFCCARTESIANPOINT((4000.,200.));
+#28=IFCCARTESIANPOINT((0.,200.));
+#29=IFCPOLYLINE((#25,#26,#27,#28,#25));
+#30=IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,#29);
+#31=IFCPRODUCTDEFINITIONSHAPE($,$,(#32));
+#32=IFCSHAPEREPRESENTATION(#21,'Body','SweptSolid',(#33));
+#33=IFCEXTRUDEDAREASOLID(#30,#34,#35,2700.);
+#34=IFCAXIS2PLACEMENT3D(#8,$,$);
+#35=IFCDIRECTION((0.,0.,1.));
+#36=IFCRELCONTAINEDINSPATIALSTRUCTURE('2MrcuFTa90SfJXy$ZbCd1I',$,$,$,(#22),#15);
+#37=IFCOPENINGELEMENT('2MrcuFTa90SfJXy$ZbCd1J',$,'Window',$,$,#38,#47,$,.OPENING.);
+#38=IFCLOCALPLACEMENT(#23,#39);
+#39=IFCAXIS2PLACEMENT3D(#40,$,$);
+#40=IFCCARTESIANPOINT((1000.,0.,900.));
+#41=IFCCARTESIANPOINT((0.,0.));
+#42=IFCCARTESIANPOINT((1200.,0.));
+#43=IFCCARTESIANPOINT((1200.,200.));
+#44=IFCCARTESIANPOINT((0.,200.));
+#45=IFCPOLYLINE((#41,#42,#43,#44,#41));
+#46=IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,#45);
+#47=IFCPRODUCTDEFINITIONSHAPE($,$,(#48));
+#48=IFCSHAPEREPRESENTATION(#21,'Body','SweptSolid',(#49));
+#49=IFCEXTRUDEDAREASOLID(#46,#50,#51,1200.);
+#50=IFCAXIS2PLACEMENT3D(#8,$,$);
+#51=IFCDIRECTION((0.,0.,1.));
+#52=IFCRELVOIDSELEMENT('2MrcuFTa90SfJXy$ZbCd1K',$,$,$,#22,#37);
+#53=IFCPROPERTYSINGLEVALUE('FireRating',$,IFCLABEL('REI 60'),$);
+#54=IFCPROPERTYSINGLEVALUE('IsExternal',$,IFCBOOLEAN(.T.),$);
+#55=IFCPROPERTYSINGLEVALUE('ThermalTransmittance',$,IFCREAL(0.35),$);
+#56=IFCPROPERTYSET('2MrcuFTa90SfJXy$ZbCd1L',$,'Pset_WallCommon',$,(#53,#54,#55));
+#57=IFCRELDEFINESBYPROPERTIES('2MrcuFTa90SfJXy$ZbCd1M',$,$,$,(#22),#56);
+#58=IFCPROPERTYSINGLEVALUE('SomeParam',$,IFCINTEGER(3),$);
+#59=IFCPROPERTYSET('2MrcuFTa90SfJXy$ZbCd1N',$,'Bimble_Generator',$,(#58));
+#60=IFCRELDEFINESBYPROPERTIES('2MrcuFTa90SfJXy$ZbCd1O',$,$,$,(#22),#59);
+#61=IFCPROPERTYSINGLEVALUE('Mark',$,IFCLABEL('W1'),$);
+#62=IFCPROPERTYSET('2MrcuFTa90SfJXy$ZbCd1P',$,'Bimble_Properties',$,(#61));
+#63=IFCRELDEFINESBYPROPERTIES('2MrcuFTa90SfJXy$ZbCd1Q',$,$,$,(#22),#62);
+ENDSEC;
+END-ISO-10303-21;
+"#;
+
+fn import(text: &str) -> (bimble_core::Model, bimble_ifc::import::ImportReport) {
+    bimble_ifc::import::import_str(text).expect("import succeeds")
+}
+
+/// Signed volume of a closed triangle soup (divergence theorem, origin tetrahedra).
+fn volume(tris: &[[[f64; 3]; 3]]) -> f64 {
+    let mut v = 0.0;
+    for t in tris {
+        let [[ax, ay, az], [bx, by, bz], [cx, cy, cz]] = *t;
+        v += (ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)) / 6.0;
+    }
+    v.abs()
+}
+
+#[test]
+fn revit_wall_imports_parametric_with_cut_opening_and_psets() {
+    let (m, rep) = import(REVIT_STYLE);
+    assert_eq!(rep.elements, 1, "report: {rep:?}");
+    assert_eq!(rep.parametric, 1, "report: {rep:?}");
+    assert_eq!(rep.openings, 1, "report: {rep:?}");
+    assert_eq!(rep.properties, 4, "report: {rep:?}");
+
+    let e: &Element = m.elements.values().next().expect("the wall");
+    assert_eq!(e.class, bimble_core::IfcClass::IfcWall);
+    // Rectangle detected out of Revit's polyline profile.
+    let Generator::Wall {
+        length,
+        thickness,
+        height,
+    } = &e.generator
+    else {
+        panic!("expected a parametric wall, got {:?}", e.generator);
+    };
+    assert!((*length - 4000.0).abs() < 1e-6, "{length}");
+    assert!((*thickness - 200.0).abs() < 1e-6, "{thickness}");
+    assert!((*height - 2700.0).abs() < 1e-6, "{height}");
+
+    // The opening, in element-local coordinates: the window hole.
+    assert_eq!(e.openings.len(), 1);
+    let Generator::Mesh { positions, .. } = &e.openings[0].generator else {
+        panic!("expected a mesh opening, got {:?}", e.openings[0].generator);
+    };
+    assert!(!positions.is_empty());
+    let mut lo = positions[0];
+    let mut hi = positions[0];
+    for p in positions {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    }
+    // The opening is placed at (1000, 0, 900) on the wall, 1200 wide, 200 deep, 1200 high.
+    for (k, (a, b)) in [
+        (0usize, (1000.0, 2200.0)),
+        (1, (-100.0, 100.0)),
+        (2, (900.0, 2100.0)),
+    ] {
+        assert!((lo[k] - a).abs() < 1e-6, "min[{k}] = {} vs {a}", lo[k]);
+        assert!((hi[k] - b).abs() < 1e-6, "max[{k}] = {} vs {b}", hi[k]);
+    }
+
+    // Property sets as text, under "Pset/Prop" keys; Bimble's own pset is skipped.
+    assert_eq!(
+        e.properties,
+        [
+            ("Pset_WallCommon/FireRating".to_owned(), "REI 60".to_owned()),
+            ("Pset_WallCommon/IsExternal".to_owned(), "T".to_owned()),
+            (
+                "Pset_WallCommon/ThermalTransmittance".to_owned(),
+                "0.35".to_owned()
+            ),
+            ("Bimble_Properties/Mark".to_owned(), "W1".to_owned()),
+        ]
+        .into_iter()
+        .collect()
+    );
+
+    // The opening is really cut: the wall's triangles lose the window's volume.
+    let full = volume(
+        &bimble_geom::extrude_tris(
+            &bimble_core::Profile::Polygon(vec![
+                [0.0, -100.0],
+                [4000.0, -100.0],
+                [4000.0, 100.0],
+                [0.0, 100.0],
+            ]),
+            &[],
+            2700.0,
+        )
+        .expect("wall extrudes"),
+    );
+    let cut = volume(&bimble_geom::element_tris(e).expect("element triangles"));
+    let window = 1200.0 * 200.0 * 1200.0;
+    assert!((full - cut - window).abs() < full * 1e-4, "{full} vs {cut}");
+}
+
+/// Double hop: import the fixture, export it, import again — properties and the opening
+/// survive a second pass, and the model validates each time.
+#[test]
+fn revit_fixture_round_trips_twice() {
+    let (first, rep1) = import(REVIT_STYLE);
+    first.validate().expect("first import validates");
+    let text = bimble_ifc::export(&first, "again.ifc", "2026-11-08T10:00:00");
+    let (second, rep2) = import(&text);
+    second.validate().expect("second import validates");
+
+    assert_eq!(rep2.openings, rep1.openings, "report: {rep2:?}");
+    let a: &Element = first.elements.values().next().unwrap();
+    let b: &Element = second.elements.values().next().unwrap();
+    assert_eq!(a.properties, b.properties);
+    assert_eq!(a.openings.len(), b.openings.len());
+    let va = volume(&bimble_geom::element_tris(a).unwrap());
+    let vb = volume(&bimble_geom::element_tris(b).unwrap());
+    assert!((va - vb).abs() < va * 1e-6, "{va} vs {vb}");
+
+    // Saving and loading the imported model keeps everything too.
+    let path = std::env::temp_dir().join("bimble-revit-style-test.bimble");
+    bimble_core::file::save(&second, &path).expect("save");
+    let loaded = bimble_core::file::load(&path).expect("load");
+    std::fs::remove_file(&path).ok();
+    let c: &Element = loaded.elements.values().next().unwrap();
+    assert_eq!(c.properties, b.properties);
+    assert_eq!(c.openings.len(), b.openings.len());
+}
+
+/// A mesh host (explicit geometry, no placement) gets its opening in the same storey-relative
+/// space as its own triangles.
+#[test]
+fn opening_on_mesh_host_lands_in_element_space() {
+    use bimble_core::{GlobalId, Model, Storey};
+    let mut m = Model::new("mesh host");
+    let st = Storey {
+        id: GlobalId::derived(b"storey/test"),
+        name: "Niveau 1".into(),
+        elevation: 3000.0,
+    };
+    let st_id = st.id;
+    m.storeys.insert(st.id, st);
+    let mat = bimble_core::Material {
+        id: GlobalId::derived(b"material/test"),
+        name: "C30/37".into(),
+        category: bimble_core::MaterialCategory::Concrete,
+        props: Default::default(),
+    };
+    let mat_id = mat.id;
+    m.materials.insert(mat.id, mat);
+    let box_from_to = |a: [f64; 3], b: [f64; 3]| {
+        let positions: Vec<[f64; 3]> = vec![
+            [a[0], a[1], a[2]],
+            [b[0], a[1], a[2]],
+            [b[0], b[1], a[2]],
+            [a[0], b[1], a[2]],
+            [a[0], a[1], b[2]],
+            [b[0], a[1], b[2]],
+            [b[0], b[1], b[2]],
+            [a[0], b[1], b[2]],
+        ];
+        let mut indices = Vec::new();
+        for t in [
+            [0, 2, 1],
+            [0, 3, 2],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [1, 2, 6],
+            [1, 6, 5],
+            [2, 3, 7],
+            [2, 7, 6],
+            [3, 0, 4],
+            [3, 4, 7],
+        ] {
+            indices.extend(t.map(|i| i as u32));
+        }
+        Generator::Mesh { positions, indices }
+    };
+    // A slab-ish block: positions are element-local (storey-relative), storey at 3000.
+    let e = Element {
+        id: GlobalId::derived(b"element/slab"),
+        class: bimble_core::IfcClass::IfcSlab,
+        name: "Dalle".into(),
+        storey: st_id,
+        material: mat_id,
+        placement: Placement::at(0.0, 0.0, 0.0),
+        generator: box_from_to([0.0, 0.0, 0.0], [2000.0, 3000.0, 300.0]),
+        openings: vec![bimble_core::Opening {
+            placement: Placement::at(0.0, 0.0, 0.0),
+            generator: box_from_to([500.0, 500.0, 0.0], [1500.0, 2500.0, 300.0]),
+        }],
+        properties: Default::default(),
+    };
+    m.elements.insert(e.id, e.clone());
+    m.validate().expect("model validates");
+
+    let (back, rep) = import(&bimble_ifc::export(&m, "mesh.ifc", "2026-11-08T10:00:00"));
+    assert_eq!(rep.openings, 1, "report: {rep:?}");
+    let b: &Element = back.elements.values().next().unwrap();
+    assert_eq!(b.openings.len(), 1);
+    let Generator::Mesh { positions, .. } = &b.openings[0].generator else {
+        panic!("expected a mesh opening");
+    };
+    // Element space is storey-relative: everything shifted down by the 3000 elevation.
+    let mut lo = positions[0];
+    let mut hi = positions[0];
+    for p in positions {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    }
+    for (k, (a, x)) in [
+        (0usize, (500.0, 1500.0)),
+        (1, (500.0, 2500.0)),
+        (2, (0.0, 300.0)),
+    ] {
+        assert!((lo[k] - a).abs() < 1e-6, "min[{k}] = {} vs {a}", lo[k]);
+        assert!((hi[k] - x).abs() < 1e-6, "max[{k}] = {} vs {x}", hi[k]);
+    }
+    // And the cut removes the hole from the host's triangles.
+    let full = 2000.0 * 3000.0 * 300.0;
+    let cut = volume(&bimble_geom::element_tris(b).unwrap());
+    let hole = 1000.0 * 2000.0 * 300.0;
+    assert!((full - cut - hole).abs() < full * 1e-4, "{full} vs {cut}");
+}

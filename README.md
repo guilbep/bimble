@@ -30,7 +30,8 @@ bimble ls frame.bimble --class IfcBeam         # GlobalId, class, name, paramete
 bimble set frame.bimble <GlobalId> height=600 -o frame2.bimble
 bimble diff frame.bimble frame2.bimble         # element-level diff
 bimble export-ifc frame.bimble frame.ifc       # IFC4
-bimble import-ifc model.ifc model.bimble       # IFC → editable .bimble (columns, beams, slabs, walls, footings)
+bimble import-ifc model.ifc model.bimble       # IFC → editable .bimble (columns, beams, slabs, walls, footings,
+                                               # openings cut, property sets, report of what didn't map)
 bimble plan model.ifc plan.pdf --storey "Niveau 1" --scale 100      # storey plan (.pdf, .svg, .png)
 bimble plan model.ifc plan.pdf --storey N01 --template docs/templates/plan-fr.json \
        --field phase="Projet d'ouvrage"                              # office title block and words

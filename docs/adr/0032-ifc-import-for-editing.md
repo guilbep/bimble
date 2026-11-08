@@ -36,12 +36,19 @@ The roadmap left an open decision: IfcOpenShell via C++ bindings, web-ifc, or ex
      placement only, not parametrically.
 3. **Scope of the first version:** the five structural classes (`IfcColumn`, `IfcBeam`, `IfcSlab`,
    `IfcWall`, `IfcFooting`), storeys, materials (name and category guessed from the grade),
-   units converted to mm, GlobalIds kept. Openings are recorded per element and reported as
-   warnings, not cut (manifold3d cuts come next, ADR 0010). Anything unsupported is skipped and
-   reported in an import report — never silently dropped.
+   units converted to mm, GlobalIds kept. Openings arrive as `IfcOpeningElement` voids, are kept
+   on the element as `Mesh` generators in element-local coordinates, and are cut from the mesh at
+   draw time with manifold3d (ADR 0010); an opening whose geometry isn't a closed solid is drawn
+   uncut and reported. Property sets beyond the material are read as text: each
+   `IfcPropertySingleValue` becomes `"Pset_Name/Property" → value` on the element, exported again
+   grouped by pset (labels, so the round trip is byte-stable); Bimble's own psets
+   (`Bimble_Generator`, `Bimble_Properties`, `Bimble_ProjectInformation`) are re-derived on
+   export, not copied. Anything unsupported is skipped and reported in an import report — never
+   silently dropped.
 4. **CLI first:** `bimble import-ifc model.ifc model.bimble` prints the report (counts by class,
-   parametric vs mesh, warnings). The viewer entry ("import as editable copy") follows once the
-   conversion is trusted.
+   parametric vs mesh, openings, property values, warnings). The viewer entry ("Import IFC…")
+   imports an IFC as an editable .bimble copy saved next to the file with the same stem; Ctrl S
+   writes that copy.
 5. **Round-trip is the test:** `frame.bimble → export-ifc → import-ifc` must give back the same
    elements (GlobalIds, classes, generators, geometry) — checked in CI, with IfcOpenShell (ADR 0009)
    reading the intermediate IFC as today.
@@ -64,7 +71,8 @@ The roadmap left an open decision: IfcOpenShell via C++ bindings, web-ifc, or ex
 
 ## Revisit when
 
-- Openings are cut on import (next step, with manifold3d).
-- More classes are imported (`IfcRoof`, `IfcBuildingElementPart`, `IfcPile`…), or property sets
-  beyond materials are carried into the model.
+- More classes are imported (`IfcRoof`, `IfcBuildingElementPart`, `IfcPile`…).
+- Property values richer than text are needed (measures with units, lists, per-type editing).
+- The round trip is checked against other tools' files (Bonsai, FreeCAD) on a machine that has
+  them — the Revit-style fixture in `crates/bimble-ifc/tests/revit_style.rs` stands in for now.
 - A real project file maps worse than 95 % of elements without warnings.

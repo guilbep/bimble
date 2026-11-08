@@ -117,6 +117,8 @@ fn extruded_polygon_and_mesh_round_trip() {
                 voids: vec![],
                 height: 2500.0,
             },
+            openings: Vec::new(),
+            properties: Default::default(),
         },
         Element {
             id: bimble_core::GlobalId::derived(b"element/mesh"),
@@ -126,6 +128,8 @@ fn extruded_polygon_and_mesh_round_trip() {
             material: mat_id,
             placement: Placement::at(0.0, 0.0, 0.0),
             generator: mesh,
+            openings: Vec::new(),
+            properties: Default::default(),
         },
     ];
     for e in &elements {
@@ -164,6 +168,164 @@ fn extruded_polygon_and_mesh_round_trip() {
     };
     assert_eq!(positions.len(), 5);
     assert_eq!(indices.len(), 18);
+}
+
+/// A wall with a window opening and property sets: everything comes back, and the opening is
+/// cut from the wall's triangles each time (ADR 0032).
+#[test]
+fn openings_and_properties_round_trip() {
+    let mut m = Model::new("wall with window");
+    let st = bimble_core::Storey {
+        id: bimble_core::GlobalId::derived(b"storey/test"),
+        name: "Niveau 1".into(),
+        elevation: 0.0,
+    };
+    let st_id = st.id;
+    m.storeys.insert(st.id, st);
+    let mat = bimble_core::Material {
+        id: bimble_core::GlobalId::derived(b"material/test"),
+        name: "C30/37".into(),
+        category: bimble_core::MaterialCategory::Concrete,
+        props: Default::default(),
+    };
+    let mat_id = mat.id;
+    m.materials.insert(mat.id, mat);
+
+    let mut e = Element {
+        id: bimble_core::GlobalId::derived(b"element/wall"),
+        class: IfcClass::IfcWall,
+        name: "Mur".into(),
+        storey: st_id,
+        material: mat_id,
+        placement: Placement {
+            origin: [0.0, 100.0, 0.0],
+            z_axis: [0.0, 0.0, 1.0],
+            x_axis: [1.0, 0.0, 0.0],
+        },
+        generator: Generator::Wall {
+            length: 4000.0,
+            thickness: 200.0,
+            height: 2700.0,
+        },
+        openings: vec![bimble_core::Opening {
+            placement: Placement::at(1000.0, -100.0, 900.0),
+            generator: Generator::ExtrudedPolygon {
+                outline: vec![[0.0, 0.0], [1200.0, 0.0], [1200.0, 200.0], [0.0, 200.0]],
+                voids: vec![],
+                height: 1200.0,
+            },
+        }],
+        properties: [
+            ("Pset_WallCommon/FireRating".to_owned(), "REI 60".to_owned()),
+            ("Pset_WallCommon/IsExternal".to_owned(), "T".to_owned()),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    m.elements.insert(e.id, e.clone());
+    m.validate().expect("model validates");
+
+    let (back, rep) = import(&export(&m));
+    assert_eq!(rep.elements, 1, "report: {rep:?}");
+    assert_eq!(rep.openings, 1, "report: {rep:?}");
+    assert_eq!(rep.properties, 2, "report: {rep:?}");
+    assert!(rep.skipped.is_empty(), "report: {rep:?}");
+
+    let b: &Element = &back.elements[&e.id];
+    assert_eq!(b.class, e.class);
+    assert_eq!(b.name, e.name);
+    compare_placement(&b.placement, &e.placement, &e);
+    assert_eq!(b.openings.len(), 1);
+    // The opening comes back as a mesh in element-local coordinates (its placement is baked
+    // in), so compare the region it covers: placement ∘ outline, extruded along z.
+    let region = |op: &bimble_core::Opening| {
+        let x = op.generator.extrusion().expect("extrudes");
+        let pts: Vec<[f64; 2]> = match &x.profile {
+            bimble_core::Profile::Rectangle { x_dim, y_dim } => {
+                let (hx, hy) = (x_dim / 2.0, y_dim / 2.0);
+                vec![[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]]
+            }
+            bimble_core::Profile::Polygon(pts) => pts.clone(),
+        };
+        let pl = &op.placement;
+        let at = |p: [f64; 2], z: f64| {
+            [
+                pl.origin[0] + pl.x_axis[0] * p[0] + pl.y_axis()[0] * p[1],
+                pl.origin[1] + pl.x_axis[1] * p[0] + pl.y_axis()[1] * p[1],
+                pl.origin[2] + pl.x_axis[2] * p[0] + pl.y_axis()[2] * p[1] + z,
+            ]
+        };
+        let mut pts: Vec<[f64; 3]> = pts
+            .iter()
+            .flat_map(|p| [at(*p, 0.0), at(*p, x.depth)])
+            .collect();
+        sort3(&mut pts);
+        pts
+    };
+    let eb = region(&e.openings[0]);
+    let Generator::Mesh { positions, .. } = &b.openings[0].generator else {
+        panic!("expected a mesh opening");
+    };
+    assert!(!positions.is_empty());
+    let mut bb: Vec<[f64; 3]> = positions.clone();
+    sort3(&mut bb);
+    // Same corners: the mesh welds the solid's 8 unique vertices.
+    let mut eb8 = eb.clone();
+    eb8.dedup();
+    let mut bb8 = bb.clone();
+    bb8.dedup();
+    assert_eq!(eb8, bb8, "opening region");
+    assert_eq!(b.properties, e.properties);
+    back.validate().expect("imported model validates");
+
+    // The opening is cut both before and after the trip, with the same volume lost.
+    let lost = |el: &Element| {
+        let solid = bimble_geom::extrude_tris(
+            &bimble_core::Profile::Polygon(vec![
+                [0.0, -100.0],
+                [4000.0, -100.0],
+                [4000.0, 100.0],
+                [0.0, 100.0],
+            ]),
+            &[],
+            2700.0,
+        )
+        .expect("extrudes");
+        let full: f64 = solid
+            .iter()
+            .map(|t| {
+                let [[ax, ay, az], [bx, by, bz], [cx, cy, cz]] = *t;
+                (ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx))
+                    / 6.0
+            })
+            .sum::<f64>()
+            .abs();
+        let cut: f64 = bimble_geom::element_tris(el)
+            .expect("cut")
+            .iter()
+            .map(|t| {
+                let [[ax, ay, az], [bx, by, bz], [cx, cy, cz]] = *t;
+                (ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx))
+                    / 6.0
+            })
+            .sum::<f64>()
+            .abs();
+        full - cut
+    };
+    let window = 1200.0 * 200.0 * 1200.0;
+    assert!((lost(&e) - window).abs() < window * 1e-3, "{}", lost(&e));
+    assert!((lost(b) - window).abs() < window * 1e-3, "{}", lost(b));
+
+    let _ = &mut e; // e is only the reference model here
+}
+
+/// Sort 3D points lexicographically, for comparing vertex sets.
+fn sort3(pts: &mut [[f64; 3]]) {
+    pts.sort_by(|a, b| {
+        a[0].total_cmp(&b[0])
+            .then(a[1].total_cmp(&b[1]))
+            .then(a[2].total_cmp(&b[2]))
+    });
 }
 
 fn compare_placement(b: &Placement, e: &Placement, el: &Element) {

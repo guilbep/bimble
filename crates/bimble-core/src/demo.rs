@@ -67,7 +67,10 @@ pub fn concrete_frame(spec: &FrameSpec) -> Model {
         material: mat,
         placement,
         generator,
+        openings: Vec::new(),
+        properties: Default::default(),
     };
+    // no openings or properties in the demo frame
 
     let mut storey_ids = Vec::new();
     for s in 0..=spec.storeys {

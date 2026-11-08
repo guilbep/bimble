@@ -330,12 +330,62 @@ fn load_bytes(name: &str, bytes: &[u8]) -> Result<(Scene, Option<bimble_core::Mo
     }
 }
 
+/// The editable .bimble copy next to an IFC file: same stem (ADR 0032).
+fn editable_copy_path(ifc: &Path) -> PathBuf {
+    let stem = ifc
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "model".into());
+    ifc.with_file_name(format!("{stem}.bimble"))
+}
+
+/// An IFC file imported as an editable model (ADR 0032). Ctrl S then saves the copy.
+fn import_any(path: &Path) -> Result<(Scene, bimble_core::Model), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let (m, rep) = bimble_ifc::import::import_str(&text)?;
+    log::info!(
+        "imported {}: {} elements, {} openings, {} property values",
+        path.display(),
+        rep.elements,
+        rep.openings,
+        rep.properties
+    );
+    let mut m = m;
+    m.project_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Imported model")
+        .to_owned();
+    m.validate()
+        .map_err(|e| format!("imported model invalid: {e}"))?;
+    Ok((Scene::from_model(&m), m))
+}
+
+/// An IFC file's bytes imported as an editable model (browser).
+fn import_bytes(name: &str, bytes: &[u8]) -> Result<(Scene, bimble_core::Model), String> {
+    let text = String::from_utf8_lossy(bytes);
+    let (m, rep) = bimble_ifc::import::import_str(&text)?;
+    log::info!(
+        "imported {name}: {} elements, {} openings, {} property values",
+        rep.elements,
+        rep.openings,
+        rep.properties
+    );
+    let mut m = m;
+    m.project_name = name.strip_suffix(".ifc").unwrap_or(name).to_owned();
+    m.validate()
+        .map_err(|e| format!("imported model invalid: {e}"))?;
+    Ok((Scene::from_model(&m), m))
+}
+
 /// A file's content to load on a later frame, so "Loading…" is drawn before the browser's only
 /// thread is busy parsing.
 struct ParseLater {
     name: String,
     bytes: Vec<u8>,
     link: bool,
+    /// An IFC file imported as an editable .bimble copy (ADR 0032).
+    import: bool,
     frames: u8,
     tx: std::sync::mpsc::Sender<LoadResult>,
 }
@@ -626,6 +676,7 @@ impl Viewer {
             name: p.name,
             bytes,
             link,
+            import: false,
             frames: 2,
             tx,
         });
@@ -644,10 +695,14 @@ impl Viewer {
         }
         let job = self.parse_later.take().unwrap();
         let t = Instant::now();
-        let r = load_bytes(&job.name, &job.bytes).map(|(s, m)| {
-            let m = if job.link { None } else { m };
-            (s, m, t.elapsed())
-        });
+        let r = if job.import {
+            import_bytes(&job.name, &job.bytes).map(|(s, m)| (s, Some(m), t.elapsed()))
+        } else {
+            load_bytes(&job.name, &job.bytes).map(|(s, m)| {
+                let m = if job.link { None } else { m };
+                (s, m, t.elapsed())
+            })
+        };
         let _ = job.tx.send(r);
         ctx.request_repaint();
     }
@@ -657,7 +712,8 @@ impl Viewer {
     fn handle_picked(&mut self, ctx: &egui::Context) {
         while self.confirm.is_none() {
             let Some(p) = self.files.poll() else { break };
-            let replaces = p.purpose == files::Purpose::Open
+            let replaces = (p.purpose == files::Purpose::Open
+                || p.purpose == files::Purpose::ImportIfc)
                 && ![".dxf", ".pdf", ".dwg"]
                     .iter()
                     .any(|x| p.name.to_ascii_lowercase().ends_with(x));
@@ -705,6 +761,7 @@ impl Viewer {
             match p.purpose {
                 files::Purpose::Reference => self.add_reference(p),
                 files::Purpose::Open | files::Purpose::Link => self.open_picked(p, ctx),
+                files::Purpose::ImportIfc => self.import_picked(p, ctx),
                 files::Purpose::PlanTemplate => {
                     let r = p.content().and_then(|b| {
                         bimble_drawing::template::PlanTemplate::from_json(&String::from_utf8_lossy(
@@ -741,6 +798,53 @@ impl Viewer {
                 }
             }
         }
+    }
+
+    /// Import an IFC file as an editable .bimble copy (ADR 0032): from its path on a thread
+    /// (desktop), or from its bytes on a later frame (browser). The copy is saved next to the
+    /// file, with the same stem.
+    fn import_picked(&mut self, p: files::Picked, ctx: &egui::Context) {
+        if let (Some(path), None) = (&p.path, &p.bytes) {
+            self.import_ifc(path.clone(), ctx);
+            return;
+        }
+        let Some(bytes) = p.bytes else { return };
+        let (tx, rx) = channel();
+        self.loading = Some(Loading {
+            path: editable_copy_path(Path::new(&p.name)),
+            rx,
+        });
+        self.error = None;
+        self.parse_later = Some(ParseLater {
+            name: p.name,
+            bytes,
+            link: false,
+            import: true,
+            frames: 2,
+            tx,
+        });
+        ctx.request_repaint();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn import_ifc(&mut self, _path: PathBuf, _ctx: &egui::Context) {}
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn import_ifc(&mut self, path: PathBuf, ctx: &egui::Context) {
+        let (tx, rx) = channel();
+        let p = path.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let t = Instant::now();
+            let r = import_any(&p).map(|(s, m)| (s, Some(m), t.elapsed()));
+            let _ = tx.send(r);
+            ctx.request_repaint();
+        });
+        self.loading = Some(Loading {
+            path: editable_copy_path(&path),
+            rx,
+        });
+        self.error = None;
     }
 
     #[cfg(target_arch = "wasm32")]

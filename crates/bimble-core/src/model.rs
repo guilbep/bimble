@@ -499,6 +499,23 @@ pub struct Element {
     pub material: GlobalId,
     pub placement: Placement,
     pub generator: Generator,
+    /// Openings cut out of this element (windows in a wall…), in element-local coordinates,
+    /// subtracted when the mesh is built (ADR 0032). Absent when there are none, so files
+    /// without openings keep their hashes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub openings: Vec<Opening>,
+    /// Property sets beyond the material (ADR 0032): "Pset_Name/Property" → value as text.
+    /// Absent when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, String>,
+}
+
+/// A solid subtracted from its element: a window or door cut out of a wall, for instance.
+/// Data only, never executed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Opening {
+    pub placement: Placement,
+    pub generator: Generator,
 }
 
 /// The whole project. BTreeMaps keep serialization order canonical (sorted by GlobalId).
@@ -560,6 +577,17 @@ impl Model {
             }
             e.placement.validate().map_err(ctx)?;
             e.generator.validate().map_err(ctx)?;
+            for (i, o) in e.openings.iter().enumerate() {
+                let ctx =
+                    |msg: String| format!("{} {} (opening {i}): {msg}", e.class.name(), e.name);
+                o.placement.validate().map_err(ctx)?;
+                o.generator.validate().map_err(ctx)?;
+            }
+            for k in e.properties.keys() {
+                if k.is_empty() {
+                    return Err(ctx("empty property key".into()));
+                }
+            }
         }
         let levels = self.levels();
         for (k, v) in &self.views {
