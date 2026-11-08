@@ -573,6 +573,7 @@ dependencies = [
  "eframe",
  "glam",
  "js-sys",
+ "libc",
  "log",
  "rfd",
  "serde_json",
@@ -580,6 +581,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

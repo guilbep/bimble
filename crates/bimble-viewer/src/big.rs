@@ -1,0 +1,411 @@
+//! Models too large for the machine (ADR 0033): what a model will cost before it is read, and
+//! what to offer when it does not fit: one storey, some IFC classes, a material.
+
+use bimble_geom::Scene;
+use bimble_ifc::read::{Counted, Parsed};
+use std::time::Duration;
+use web_time::Instant;
+
+/// What loading a file gave: a scene to show, or a question first.
+// Moved once per load: boxing would buy nothing.
+#[allow(clippy::large_enum_variant)]
+pub enum Outcome {
+    /// The scene, the model behind it (a .bimble file), the load time, and what part of the
+    /// file it shows when not all of it.
+    Ready {
+        scene: Scene,
+        model: Option<bimble_core::Model>,
+        time: Duration,
+        partial: Option<String>,
+    },
+    Ask(Box<Ask>),
+}
+
+impl Outcome {
+    pub fn ready(scene: Scene, model: Option<bimble_core::Model>, time: Duration) -> Outcome {
+        Outcome::Ready {
+            scene,
+            model,
+            time,
+            partial: None,
+        }
+    }
+}
+
+/// A model too large for this machine, waiting for the user.
+#[allow(clippy::large_enum_variant)]
+pub enum Ask {
+    /// Reading the file alone would take more than the budget: nothing read yet.
+    Read {
+        bytes: Vec<u8>,
+        cost: Cost,
+        budget: u64,
+    },
+    /// Read; showing all of it would take more than the budget.
+    Choose(Choose),
+}
+
+pub struct Choose {
+    pub parsed: Parsed,
+    pub census: Vec<Counted>,
+    pub cost: Cost,
+    pub budget: u64,
+    pub split: Split,
+    pub chosen: Vec<String>,
+}
+
+impl Choose {
+    pub fn all_triangles(&self) -> usize {
+        self.census.iter().map(|c| c.triangles).sum()
+    }
+
+    pub fn chosen_triangles(&self) -> usize {
+        chosen_triangles(&self.census, self.split, &self.chosen)
+    }
+
+    /// What the chosen part is, for the status bar.
+    pub fn label(&self) -> String {
+        let n = groups(&self.census, self.split).len();
+        let what = match self.split {
+            Split::Storey => "storeys",
+            Split::Class => "IFC classes",
+            Split::Material => "materials",
+        };
+        if self.chosen.len() == 1 {
+            format!("{} (1 of {n} {what})", self.chosen[0])
+        } else {
+            format!("{} of {n} {what}", self.chosen.len())
+        }
+    }
+
+    /// Mesh the chosen groups (all of them with `everything`) and free the parsed file.
+    pub fn scene(self, everything: bool) -> Outcome {
+        let t = Instant::now();
+        let partial = (!everything).then(|| self.label());
+        let keep: Vec<bool> = self
+            .census
+            .iter()
+            .map(|c| everything || self.chosen.iter().any(|g| g == self.split.key(c)))
+            .collect();
+        let (scene, _) = self.parsed.scene(|i| keep[i], usize::MAX);
+        self.parsed.free();
+        Outcome::Ready {
+            scene,
+            model: None,
+            time: t.elapsed(),
+            partial,
+        }
+    }
+}
+
+/// Load an IFC file's bytes within `budget` (ADR 0033): straight through when it fits (the
+/// usual case); otherwise stop and ask, before reading when reading alone would not fit
+/// (unless `read_anyway`), after reading when showing all of it would not.
+pub fn load_ifc(bytes: Vec<u8>, budget: u64, read_anyway: bool) -> Result<Outcome, String> {
+    let t = Instant::now();
+    let cost = Cost {
+        file: bytes.len() as u64,
+        displayed: bimble_ifc::read::displayed_bytes(&bytes),
+    };
+    if !read_anyway && cost.read() > budget {
+        return Ok(Outcome::Ask(Box::new(Ask::Read {
+            bytes,
+            cost,
+            budget,
+        })));
+    }
+    let parsed = bimble_ifc::read::parse_bytes(bytes).map_err(|e| e.to_string())?;
+    // Mesh what fits; only a model that does not fit all pays for a census.
+    let (scene, not_shown) = parsed.scene(|_| true, cost.affordable_triangles(budget));
+    if not_shown == 0 {
+        parsed.free();
+        return Ok(Outcome::ready(scene, None, t.elapsed()));
+    }
+    drop(scene);
+    let census = parsed.census();
+    Ok(Outcome::Ask(Box::new(Ask::Choose(Choose {
+        parsed,
+        census,
+        cost,
+        budget,
+        split: Split::Storey,
+        chosen: Vec::new(),
+    }))))
+}
+
+/// Share of the machine's memory one model may take.
+pub const BUDGET_SHARE: f64 = 0.8;
+
+/// What Bimble lets one model take: `BUDGET_SHARE` of the machine's memory; in a browser, of
+/// 4 GB (what wasm can address). A machine whose memory can't be read counts as 8 GB.
+pub fn memory_budget() -> u64 {
+    let total = if cfg!(target_arch = "wasm32") {
+        4_000_000_000
+    } else {
+        total_memory().unwrap_or(8_000_000_000)
+    };
+    (total as f64 * BUDGET_SHARE) as u64
+}
+
+#[cfg(target_os = "macos")]
+fn total_memory() -> Option<u64> {
+    let mut v: u64 = 0;
+    let mut len = std::mem::size_of::<u64>();
+    // SAFETY: hw.memsize is a u64; `v` and `len` describe that buffer exactly.
+    let r = unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&raw mut v).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (r == 0 && v > 0).then_some(v)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn total_memory() -> Option<u64> {
+    let s = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let kb: u64 = s
+        .lines()
+        .find_map(|l| l.strip_prefix("MemTotal:"))?
+        .trim()
+        .trim_end_matches("kB")
+        .trim()
+        .parse()
+        .ok()?;
+    Some(kb * 1024)
+}
+
+#[cfg(windows)]
+fn total_memory() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: a zeroed MEMORYSTATUSEX with dwLength set is what the call expects.
+    unsafe {
+        let mut m: MEMORYSTATUSEX = std::mem::zeroed();
+        m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        (GlobalMemoryStatusEx(&mut m) != 0).then_some(m.ullTotalPhys)
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn total_memory() -> Option<u64> {
+    None
+}
+
+// Peak memory, fitted on 17 IFC files of 0.2–872 MB (peak memory footprint of `bimble
+// render`, Apple unified memory, so GPU buffers included; `scripts/calibrate_memory.sh`
+// measures and fits again):
+// within 16 % on every file over 25 MB, before the margin. Instancing or compact meshes
+// change PER_TRIANGLE: measure again then.
+/// Reading: the text plus ~7.5 bytes per byte of displayed IFC (parse chunks in flight).
+const READ_PER_DISPLAYED: f64 = 7.5;
+const BASE: f64 = 480e6;
+/// Parsed entities kept while meshing.
+const PARSED_PER_DISPLAYED: f64 = 6.2;
+/// Mesh, edges and GPU buffers.
+const PER_TRIANGLE: f64 = 300.0;
+/// The fit's worst under-estimate was 16 %.
+const MARGIN: f64 = 1.2;
+
+/// What a file costs before meshing: `file` bytes, of which `displayed` are parsed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cost {
+    pub file: u64,
+    pub displayed: u64,
+}
+
+impl Cost {
+    /// Peak while reading the file.
+    pub fn read(&self) -> u64 {
+        (MARGIN * (self.file as f64 + READ_PER_DISPLAYED * self.displayed as f64)) as u64
+    }
+
+    /// Peak to read and show `triangles`.
+    pub fn shown(&self, triangles: usize) -> u64 {
+        let mesh =
+            BASE + PARSED_PER_DISPLAYED * self.displayed as f64 + PER_TRIANGLE * triangles as f64;
+        self.read().max((MARGIN * mesh) as u64)
+    }
+
+    /// Most triangles that can be shown within `budget`.
+    pub fn affordable_triangles(&self, budget: u64) -> usize {
+        let left = budget as f64 / MARGIN - BASE - PARSED_PER_DISPLAYED * self.displayed as f64;
+        (left / PER_TRIANGLE).max(0.0) as usize
+    }
+}
+
+/// How a large model is split for choosing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Split {
+    Storey,
+    Class,
+    Material,
+}
+
+impl Split {
+    pub const ALL: [Split; 3] = [Split::Storey, Split::Class, Split::Material];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Split::Storey => "Storey",
+            Split::Class => "IFC class",
+            Split::Material => "Material",
+        }
+    }
+
+    /// The group an element belongs to.
+    pub fn key(self, c: &Counted) -> &str {
+        let s = match self {
+            Split::Storey => &c.info.storey,
+            Split::Class => &c.info.class,
+            Split::Material => &c.info.material,
+        };
+        if s.is_empty() { "(none)" } else { s }
+    }
+}
+
+/// One group of a split: its name, elements and triangles.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Group {
+    pub name: String,
+    pub elements: usize,
+    pub triangles: usize,
+}
+
+/// The groups of a split, by name (storeys in file order would be nicer; names sort well
+/// enough for levels named by number).
+pub fn groups(census: &[Counted], split: Split) -> Vec<Group> {
+    let mut m: std::collections::BTreeMap<&str, (usize, usize)> = Default::default();
+    for c in census {
+        let g = m.entry(split.key(c)).or_default();
+        g.0 += 1;
+        g.1 += c.triangles;
+    }
+    m.into_iter()
+        .map(|(name, (elements, triangles))| Group {
+            name: name.to_owned(),
+            elements,
+            triangles,
+        })
+        .collect()
+}
+
+/// Triangles of the elements in the chosen groups.
+pub fn chosen_triangles(census: &[Counted], split: Split, chosen: &[String]) -> usize {
+    census
+        .iter()
+        .filter(|c| chosen.iter().any(|g| g == split.key(c)))
+        .map(|c| c.triangles)
+        .sum()
+}
+
+pub fn gb(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / 1e9)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bimble_core::MaterialCategory;
+    use bimble_geom::ElementInfo;
+
+    fn counted(storey: &str, class: &str, triangles: usize) -> Counted {
+        Counted {
+            info: ElementInfo {
+                global_id: String::new(),
+                class: class.into(),
+                name: String::new(),
+                storey: storey.into(),
+                material: String::new(),
+                category: MaterialCategory::Other,
+            },
+            triangles,
+        }
+    }
+
+    fn demo_ifc() -> Vec<u8> {
+        let m = bimble_core::demo::concrete_frame(&bimble_core::demo::FrameSpec::default());
+        bimble_ifc::export(&m, "t.ifc", "t").into_bytes()
+    }
+
+    /// A model that fits loads straight through; one that does not asks, with its census;
+    /// one whose reading alone would not fit asks before reading.
+    #[test]
+    fn a_model_is_loaded_or_asked_about_by_its_cost() {
+        let ifc = demo_ifc();
+        assert!(matches!(
+            load_ifc(ifc.clone(), 100_000_000_000, false),
+            Ok(Outcome::Ready { partial: None, .. })
+        ));
+        let cost = Cost {
+            file: ifc.len() as u64,
+            displayed: bimble_ifc::read::displayed_bytes(&ifc),
+        };
+        // Room to read, and for the base, but not for the triangles.
+        let tight = cost.shown(0).max(cost.read());
+        let Ok(Outcome::Ask(a)) = load_ifc(ifc.clone(), tight, false) else {
+            panic!("expected a question")
+        };
+        let Ask::Choose(mut c) = *a else {
+            panic!("expected a choice")
+        };
+        assert!(c.all_triangles() > 0);
+        let first = groups(&c.census, Split::Storey)[0].name.clone();
+        c.chosen = vec![first];
+        let want = c.chosen_triangles();
+        let Outcome::Ready { scene, partial, .. } = c.scene(false) else {
+            panic!()
+        };
+        assert!(partial.is_some_and(|p| p.contains("of")));
+        let got: usize = scene
+            .elements
+            .iter()
+            .map(|e| e.mesh.indices.len() / 3)
+            .sum();
+        assert_eq!(got, want);
+        assert!(matches!(
+            load_ifc(ifc, cost.read() - 1, false),
+            Ok(Outcome::Ask(a)) if matches!(*a, Ask::Read { .. })
+        ));
+    }
+
+    /// The fit's own numbers: a 200 MB file (78 MB displayed, 8.8 M triangles) peaked at
+    /// 3.7 GB; with the margin the estimate must not be under it.
+    #[test]
+    fn the_estimate_covers_a_measured_model() {
+        let c = Cost {
+            file: 200_000_000,
+            displayed: 78_000_000,
+        };
+        let est = c.shown(8_840_000);
+        assert!((3_700_000_000..4_700_000_000).contains(&est), "{est}");
+        // What fits in a budget is what the estimate says fits.
+        let n = c.affordable_triangles(est);
+        assert!(c.shown(n) <= est && c.shown(n + 1000) > est);
+    }
+
+    #[test]
+    fn a_storey_costs_its_triangles() {
+        let census = [
+            counted("Level 1", "IfcWall", 4_000_000),
+            counted("Level 1", "IfcSlab", 1_000_000),
+            counted("Level 2", "IfcWall", 3_000_000),
+            counted("", "IfcBeam", 10),
+        ];
+        let g = groups(&census, Split::Storey);
+        let names: Vec<&str> = g.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, ["(none)", "Level 1", "Level 2"]);
+        assert_eq!((g[1].elements, g[1].triangles), (2, 5_000_000));
+        let two = chosen_triangles(&census, Split::Storey, &["Level 2".into()]);
+        assert_eq!(two, 3_000_000);
+        let walls = chosen_triangles(&census, Split::Class, &["IfcWall".into()]);
+        assert_eq!(walls, 7_000_000);
+        let c = Cost {
+            file: 100_000_000,
+            displayed: 50_000_000,
+        };
+        assert!(c.shown(two) < c.shown(walls));
+    }
+}

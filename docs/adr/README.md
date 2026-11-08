@@ -38,6 +38,7 @@ a decision that changes an old one says which one it supersedes.
 | [0030](0030-project-information.md) | Project information: one map in the model, for every title block | Accepted |
 | [0031](0031-material-library.md) | Material library (EN/SIA grades with values), material browser, mass in schedules | Accepted |
 | [0032](0032-ifc-import-for-editing.md) | IFC import for editing: extend the own reader, convert to generators; openings reported, not cut | Accepted |
+| [0033](0033-models-too-large-for-the-machine.md) | Models too large for the machine: an 80 % memory budget, estimate, census, choose storeys/classes/materials before a cut | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

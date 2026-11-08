@@ -27,6 +27,8 @@ pub struct Snapshot {
     pub model_dirty: bool,
     pub views_dirty: bool,
     pub standards_changed: bool,
+    /// Only part of a model too large for this machine is shown (ADR 0033): which part.
+    pub partial: Option<String>,
 }
 
 /// A state that isn't the default, and how to leave it.
@@ -42,6 +44,7 @@ pub enum Chip {
     Hidden,
     Measurements,
     PlanOptions,
+    Partial,
 }
 
 impl Chip {
@@ -58,6 +61,7 @@ impl Chip {
             Chip::Hidden => "Show everything in this view (saved with the view)",
             Chip::Measurements => "Delete the measurements",
             Chip::PlanOptions => "Back to the plan template's options",
+            Chip::Partial => "Open the file again to choose another part",
         }
     }
 }
@@ -70,6 +74,10 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 /// then how the view looks, then what is kept.
 pub fn chips(s: &Snapshot) -> Vec<(Chip, String)> {
     let mut v = Vec::new();
+    // What is loaded at all comes before everything else.
+    if let Some(p) = &s.partial {
+        v.push((Chip::Partial, format!("Showing part: {p}")));
+    }
     if let Some(k) = s.placing {
         v.push((Chip::Placing, format!("Placing: {}", k.to_lowercase())));
     }

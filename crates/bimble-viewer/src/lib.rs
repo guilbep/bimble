@@ -18,6 +18,7 @@ use std::time::Duration;
 // std's Instant panics in browsers; web-time is std's on the desktop.
 use web_time::Instant;
 
+mod big;
 mod cutlines;
 mod edit;
 mod files;
@@ -397,11 +398,13 @@ struct ParseLater {
     link: bool,
     /// An IFC file imported as an editable .bimble copy (ADR 0032).
     import: bool,
+    /// Read even though reading alone exceeds the memory budget (ADR 0033).
+    read_anyway: bool,
     frames: u8,
     tx: std::sync::mpsc::Sender<LoadResult>,
 }
 
-type LoadResult = Result<(Scene, Option<bimble_core::Model>, Duration), String>;
+type LoadResult = Result<big::Outcome, String>;
 
 struct Loading {
     path: PathBuf,
@@ -414,6 +417,8 @@ struct Loaded {
     path: PathBuf,
     scene: Scene,
     load_time: Duration,
+    /// Part of the file shown, when it was too large to show whole (ADR 0033).
+    partial: Option<String>,
     bounds: bimble_render::Sphere,
     classes: BTreeMap<String, usize>,
     storeys: BTreeMap<String, usize>,
@@ -558,6 +563,11 @@ struct Viewer {
 
     files: files::Files,
     parse_later: Option<ParseLater>,
+    /// A model too large for this machine, waiting for the user to choose (ADR 0033).
+    ask: Option<(PathBuf, Box<big::Ask>)>,
+    /// Browser: meshing the chosen part, on a later frame (after "Loading…" is drawn).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    mesh_later: Option<(u8, Box<dyn FnOnce()>)>,
 
     /// Views (ADR 0021): all of them (stored over the defaults), the one shown, the camera each
     /// view was left with, the side file of an IFC model, the view properties being edited, the
@@ -648,6 +658,8 @@ impl Viewer {
             history_view: None,
             files: files::Files::default(),
             parse_later: None,
+            ask: None,
+            mesh_later: None,
             views: Vec::new(),
             active_view: None,
             view_cameras: Default::default(),
@@ -694,6 +706,7 @@ impl Viewer {
             bytes,
             link,
             import: false,
+            read_anyway: false,
             frames: 2,
             tx,
         });
@@ -712,12 +725,16 @@ impl Viewer {
         }
         let job = self.parse_later.take().unwrap();
         let t = Instant::now();
+        let is_ifc = job.name.to_ascii_lowercase().ends_with(".ifc");
         let r = if job.import {
-            import_bytes(&job.name, &job.bytes).map(|(s, m)| (s, Some(m), t.elapsed()))
+            import_bytes(&job.name, &job.bytes)
+                .map(|(s, m)| big::Outcome::ready(s, Some(m), t.elapsed()))
+        } else if is_ifc && !job.link {
+            big::load_ifc(job.bytes, big::memory_budget(), job.read_anyway)
         } else {
             load_bytes(&job.name, job.bytes).map(|(s, m)| {
                 let m = if job.link { None } else { m };
-                (s, m, t.elapsed())
+                big::Outcome::ready(s, m, t.elapsed())
             })
         };
         let _ = job.tx.send(r);
@@ -838,6 +855,7 @@ impl Viewer {
             bytes,
             link: false,
             import: true,
+            read_anyway: false,
             frames: 2,
             tx,
         });
@@ -854,7 +872,7 @@ impl Viewer {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let t = Instant::now();
-            let r = import_any(&p).map(|(s, m)| (s, Some(m), t.elapsed()));
+            let r = import_any(&p).map(|(s, m)| big::Outcome::ready(s, Some(m), t.elapsed()));
             let _ = tx.send(r);
             ctx.request_repaint();
         });
@@ -879,7 +897,14 @@ impl Viewer {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let t = Instant::now();
-            let r = load_any(&p).map(|(s, m)| (s, m, t.elapsed()));
+            let is_ifc = p.extension().is_some_and(|x| x.eq_ignore_ascii_case("ifc"));
+            let r = if is_ifc {
+                std::fs::read(&p)
+                    .map_err(|e| e.to_string())
+                    .and_then(|b| big::load_ifc(b, big::memory_budget(), false))
+            } else {
+                load_any(&p).map(|(s, m)| big::Outcome::ready(s, m, t.elapsed()))
+            };
             let _ = tx.send(r);
             ctx.request_repaint();
         });
@@ -899,7 +924,7 @@ impl Viewer {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let t = Instant::now();
-            let r = load_scene(&p).map(|s| (s, None, t.elapsed()));
+            let r = load_scene(&p).map(|s| big::Outcome::ready(s, None, t.elapsed()));
             let _ = tx.send(r);
             ctx.request_repaint();
         });
@@ -916,7 +941,8 @@ impl Viewer {
         let path = self.linking.take().unwrap().path;
         let Some(main) = &mut self.loaded else { return };
         match result {
-            Ok((scene, _, _)) => {
+            Ok(big::Outcome::Ask(_)) => {}
+            Ok(big::Outcome::Ready { scene, .. }) => {
                 let o = |k: usize| (scene.origin_mm[k] - main.scene.origin_mm[k]) as f32;
                 let offset = glam::Vec3::new(o(0), o(1), o(2));
                 let (matched_here, matched_there) = bimble_geom::compare::match_models(
@@ -969,7 +995,15 @@ impl Viewer {
         let Ok(result) = l.rx.try_recv() else { return };
         let Loading { path, imported, .. } = self.loading.take().unwrap();
         match result {
-            Ok((scene, model, load_time)) => {
+            Ok(big::Outcome::Ask(a)) => {
+                self.ask = Some((path, a));
+            }
+            Ok(big::Outcome::Ready {
+                scene,
+                model,
+                time: load_time,
+                partial,
+            }) => {
                 // Also in the browser's console, where they can be copied.
                 for w in scene.warnings.iter().take(50) {
                     log::warn!("{w}");
@@ -980,6 +1014,7 @@ impl Viewer {
                     path,
                     scene,
                     load_time,
+                    partial,
                     bounds,
                     classes,
                     storeys,
@@ -2724,6 +2759,7 @@ impl Viewer {
             model_dirty: ed.is_some_and(|e| e.dirty),
             views_dirty: self.side_views_dirty(),
             standards_changed: self.opts.style != self.style_baseline,
+            partial: self.loaded.as_ref().and_then(|l| l.partial.clone()),
         }
     }
 
@@ -2755,8 +2791,197 @@ impl Viewer {
                 self.plan.template = self.template_baseline.clone();
                 self.plan.template_rev += 1;
             }
+            // Open the file again, to choose another part.
+            Chip::Partial => {
+                if let Some(p) = self.loaded.as_ref().map(|l| l.path.clone()) {
+                    self.open(p, ctx);
+                }
+            }
         }
         self.needs_render = true;
+    }
+
+    /// Run `job` (which sends its outcome on `tx`) off the UI: on a thread, or in a browser on
+    /// a later frame, once "Loading…" is drawn.
+    fn load_later(
+        &mut self,
+        path: PathBuf,
+        job: impl FnOnce(std::sync::mpsc::Sender<LoadResult>) + Send + 'static,
+        ctx: &egui::Context,
+    ) {
+        let (tx, rx) = channel();
+        self.loading = Some(Loading {
+            path,
+            rx,
+            imported: false,
+        });
+        self.error = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                job(tx);
+                ctx.request_repaint();
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.mesh_later = Some((2, Box::new(move || job(tx))));
+            ctx.request_repaint();
+        }
+    }
+
+    /// Browser: the job `load_later` left for a later frame.
+    fn run_mesh_later(&mut self, ctx: &egui::Context) {
+        let Some((frames, _)) = &mut self.mesh_later else {
+            return;
+        };
+        if *frames > 0 {
+            *frames -= 1;
+            ctx.request_repaint();
+            return;
+        }
+        let (_, job) = self.mesh_later.take().unwrap();
+        job();
+        ctx.request_repaint();
+    }
+
+    /// A model too large for this machine (ADR 0033): read it anyway, or choose a part of it
+    /// (storeys, IFC classes, materials) whose estimate fits, or all of it anyway.
+    fn ask_ui(&mut self, ctx: &egui::Context) {
+        enum Do {
+            ReadAnyway,
+            Show { everything: bool },
+            Cancel,
+        }
+        let Some((path, ask)) = &mut self.ask else {
+            return;
+        };
+        let name = path
+            .file_name()
+            .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+        let mut act = None;
+        egui::Modal::new(egui::Id::unique("bimble-too-large")).show(ctx, |ui| {
+            ui.set_width(460.0);
+            match ask.as_mut() {
+                big::Ask::Read { cost, budget, .. } => {
+                    ui.heading(format!("{name} is very large"));
+                    ui.label(format!(
+                        "Reading it needs about {}; Bimble keeps under {} on this computer \
+                         ({}% of its memory). Reading it anyway may make the computer very slow \
+                         or stop Bimble.",
+                        big::gb(cost.read()),
+                        big::gb(*budget),
+                        (big::BUDGET_SHARE * 100.0) as u32,
+                    ));
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Read it anyway").clicked() {
+                            act = Some(Do::ReadAnyway);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            act = Some(Do::Cancel);
+                        }
+                    });
+                }
+                big::Ask::Choose(c) => {
+                    let all = c.cost.shown(c.all_triangles());
+                    ui.heading(format!("{name} is too large to show whole"));
+                    ui.label(format!(
+                        "Showing all of it ({:.1} M triangles) needs about {}; Bimble keeps \
+                         under {} on this computer. Choose a part to show:",
+                        c.all_triangles() as f64 / 1e6,
+                        big::gb(all),
+                        big::gb(c.budget),
+                    ));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        for sp in big::Split::ALL {
+                            if ui.selectable_label(c.split == sp, sp.label()).clicked()
+                                && c.split != sp
+                            {
+                                c.split = sp;
+                                c.chosen.clear();
+                            }
+                        }
+                    });
+                    egui::ScrollArea::vertical()
+                        .max_height(280.0)
+                        .show(ui, |ui| {
+                            for g in big::groups(&c.census, c.split) {
+                                let mut on = c.chosen.contains(&g.name);
+                                let alone = c.cost.shown(g.triangles);
+                                let text = format!(
+                                    "{}  ·  {} elements, about {}",
+                                    g.name,
+                                    g.elements,
+                                    big::gb(alone)
+                                );
+                                let r = ui.add_enabled(
+                                    on || alone <= c.budget,
+                                    egui::Checkbox::new(&mut on, text),
+                                );
+                                if r.changed() {
+                                    if on {
+                                        c.chosen.push(g.name.clone());
+                                    } else {
+                                        c.chosen.retain(|x| *x != g.name);
+                                    }
+                                }
+                            }
+                        });
+                    let need = c.cost.shown(c.chosen_triangles());
+                    let fits = !c.chosen.is_empty() && need <= c.budget;
+                    ui.add_space(4.0);
+                    ui.label(if c.chosen.is_empty() {
+                        "Nothing chosen.".to_owned()
+                    } else if fits {
+                        format!("Chosen: about {} — fits.", big::gb(need))
+                    } else {
+                        format!("Chosen: about {} — too much.", big::gb(need))
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(fits, egui::Button::new("Show the chosen part"))
+                            .clicked()
+                        {
+                            act = Some(Do::Show { everything: false });
+                        }
+                        if ui.button("Show all of it anyway").clicked() {
+                            act = Some(Do::Show { everything: true });
+                        }
+                        if ui.button("Cancel").clicked() {
+                            act = Some(Do::Cancel);
+                        }
+                    });
+                }
+            }
+        });
+        let Some(act) = act else { return };
+        let (path, ask) = self.ask.take().unwrap();
+        match (act, *ask) {
+            (Do::ReadAnyway, big::Ask::Read { bytes, budget, .. }) => {
+                self.load_later(
+                    path,
+                    move |tx| {
+                        let _ = tx.send(big::load_ifc(bytes, budget, true));
+                    },
+                    ctx,
+                );
+            }
+            (Do::Show { everything }, big::Ask::Choose(c)) => {
+                self.load_later(
+                    path,
+                    move |tx| {
+                        let _ = tx.send(Ok(c.scene(everything)));
+                    },
+                    ctx,
+                );
+            }
+            (_, big::Ask::Choose(c)) => c.parsed.free(),
+            _ => {}
+        }
     }
 
     /// The questions that need an answer before going on.
@@ -3144,6 +3369,7 @@ impl eframe::App for Viewer {
         }
         self.handle_picked(&ctx);
         self.run_parse_later(&ctx);
+        self.run_mesh_later(&ctx);
 
         let bar = |fill: egui::Color32| {
             egui::Frame::new()
@@ -3381,6 +3607,7 @@ impl eframe::App for Viewer {
             }
         }
         self.confirm_ui(&ctx);
+        self.ask_ui(&ctx);
     }
 }
 

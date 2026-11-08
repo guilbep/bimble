@@ -45,6 +45,9 @@ mimalloc = { version = "0.1", default-features = false }
 # Geometry kernel (ADR 0010). No TBB: per-element booleans are small.
 manifold-csg = { version = "0.4", default-features = false }
 memory-stats = "1"
+# Total RAM for the large-model check (ADR 0033): already in the tree via wgpu/winit.
+libc = "0.2"
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
 log = "0.4"
 # Web build (wasm32): browser APIs, time and async glue.
 web-time = "1"
