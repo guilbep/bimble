@@ -143,7 +143,8 @@ fn revit_wall_imports_parametric_with_cut_opening_and_psets() {
         assert!((hi[k] - b).abs() < 1e-6, "max[{k}] = {} vs {b}", hi[k]);
     }
 
-    // Property sets as text, under "Pset/Prop" keys; Bimble's own pset is skipped.
+    // Property sets as text, under "Pset/Prop" keys; what Bimble wrote without a prefix
+    // (Bimble_Properties) comes back under its bare name.
     assert_eq!(
         e.properties,
         [
@@ -153,7 +154,7 @@ fn revit_wall_imports_parametric_with_cut_opening_and_psets() {
                 "Pset_WallCommon/ThermalTransmittance".to_owned(),
                 "0.35".to_owned()
             ),
-            ("Bimble_Properties/Mark".to_owned(), "W1".to_owned()),
+            ("Mark".to_owned(), "W1".to_owned()),
         ]
         .into_iter()
         .collect()

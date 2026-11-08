@@ -9,7 +9,7 @@
 
 use crate::read::{Affine, Budget, Emit, Limits, Reader, signed_area};
 use crate::step::{self, StepFile, Value};
-use crate::{GENERATOR_PSET, PROJECT_PSET};
+use crate::{GENERATOR_PSET, PROJECT_PSET, PROPERTIES_PSET};
 use bimble_core::{
     Element, Generator, GlobalId, IfcClass, Material, MaterialCategory, Model, Opening, Placement,
     Storey,
@@ -477,12 +477,22 @@ fn property_sets(file: &StepFile) -> (HashMap<u64, BTreeMap<String, String>>, us
                 if let Some(host) = host.as_ref() {
                     out.entry(host)
                         .or_default()
-                        .insert(format!("{pset_name}/{prop_name}"), value.clone());
+                        .insert(key(pset_name, prop_name), value.clone());
                 }
             }
         }
     }
     (out, skipped)
+}
+
+/// The element property key for a pset's property: "Pset/Property", or the bare name for
+/// what Bimble exported without a prefix (`Bimble_Properties`), so it round-trips unchanged.
+fn key(pset: &str, prop: &str) -> String {
+    if pset == PROPERTIES_PSET {
+        prop.to_owned()
+    } else {
+        format!("{pset}/{prop}")
+    }
 }
 
 /// An `IfcValue` select as text: labels, texts, identifiers, booleans, integers, reals.

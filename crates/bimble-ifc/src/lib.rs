@@ -18,6 +18,8 @@ use std::fmt::Write;
 pub const GENERATOR_PSET: &str = "Bimble_Generator";
 /// The project information's property set on IfcProject (ADR 0030).
 pub const PROJECT_PSET: &str = "Bimble_ProjectInformation";
+/// Element properties written without a "Pset/" prefix (ADR 0032).
+pub const PROPERTIES_PSET: &str = "Bimble_Properties";
 
 /// Format a STEP REAL: always contains a '.', exponent as 'E'.
 fn real(x: f64) -> String {
@@ -411,7 +413,7 @@ pub fn export(m: &Model, file_name: &str, timestamp: &str) -> String {
         for (k, v) in &e.properties {
             let (pset, prop) = match k.split_once('/') {
                 Some((p, r)) => (p, (r.to_owned(), v)),
-                None => ("Bimble_Properties", (k.clone(), v)),
+                None => (PROPERTIES_PSET, (k.clone(), v)),
             };
             sets.entry(pset).or_default().push((prop.0, prop.1));
         }

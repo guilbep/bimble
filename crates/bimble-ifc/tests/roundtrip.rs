@@ -428,3 +428,19 @@ fn compare_generator(b: &Generator, e: &Generator, el: &Element) {
         (a, b2) => panic!("{}: generator changed: {a:?} from {b2:?}", el.name),
     }
 }
+
+/// A property without a "Pset/" prefix is exported in `Bimble_Properties` (ADR 0032); it must
+/// come back under its own name, not as "Bimble_Properties/…", or every round trip renames it.
+#[test]
+fn bare_property_keys_round_trip_unchanged() {
+    let mut m = concrete_frame(&Default::default());
+    let id = *m.elements.keys().next().unwrap();
+    let e = m.elements.get_mut(&id).unwrap();
+    e.properties.insert("Note".into(), "check cover".into());
+    e.properties.insert("Pset_Custom/Phase".into(), "2".into());
+    let (back, _) = import(&export(&m));
+    let (again, _) = import(&export(&back));
+    for model in [&back, &again] {
+        assert_eq!(model.elements[&id].properties, m.elements[&id].properties);
+    }
+}
