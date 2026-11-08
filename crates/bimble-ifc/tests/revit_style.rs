@@ -306,3 +306,89 @@ fn opening_on_mesh_host_lands_in_element_space() {
     let hole = 1000.0 * 2000.0 * 300.0;
     assert!((full - cut - hole).abs() < full * 1e-4, "{full} vs {cut}");
 }
+
+/// World bounding box of each element, by GlobalId: (min, max) in mm.
+fn world_boxes(scene: &bimble_geom::Scene) -> std::collections::BTreeMap<String, [[f64; 3]; 2]> {
+    let mut out = std::collections::BTreeMap::new();
+    for e in &scene.elements {
+        let mut b = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
+        for p in &e.mesh.positions {
+            for k in 0..3 {
+                let v = p[k] as f64 + scene.origin_mm[k];
+                b[0][k] = b[0][k].min(v);
+                b[1][k] = b[1][k].max(v);
+            }
+        }
+        out.insert(e.global_id.clone(), b);
+    }
+    out
+}
+
+/// The imported model, meshed, sits where the display reader (the reference) puts the IFC.
+fn assert_same_place_as_reader(text: &str) -> bimble_core::Model {
+    let (m, rep) = import(text);
+    let got = world_boxes(&bimble_geom::Scene::from_model(&m));
+    let want = world_boxes(&bimble_ifc::read::read_str(text).expect("reader"));
+    assert_eq!(got.len(), want.len(), "report: {rep:?}");
+    for (id, w) in &want {
+        let g = got.get(id).unwrap_or_else(|| panic!("{id} not imported"));
+        for (a, b) in g.iter().flatten().zip(w.iter().flatten()) {
+            assert!((a - b).abs() < 0.5, "{id}: imported {g:?}, reader {w:?}");
+        }
+    }
+    m
+}
+
+/// A rectangle whose polyline starts on a short edge, or runs the other way round, is still
+/// the same box: the wall is not turned 90°, the column keeps its width along its long side.
+#[test]
+fn rectangle_detection_ignores_start_vertex_and_direction() {
+    let reversed = REVIT_STYLE.replace(
+        "#29=IFCPOLYLINE((#25,#26,#27,#28,#25));",
+        "#29=IFCPOLYLINE((#25,#28,#27,#26,#25));",
+    );
+    let m = assert_same_place_as_reader(&reversed);
+    let e = m.elements.values().next().unwrap();
+    let Generator::Wall {
+        length, thickness, ..
+    } = e.generator
+    else {
+        panic!("expected a wall, got {:?}", e.generator);
+    };
+    assert_eq!((length, thickness), (4000.0, 200.0));
+
+    let column = reversed.replace("IFCWALLSTANDARDCASE(", "IFCCOLUMN(");
+    let m = assert_same_place_as_reader(&column);
+    let e = m.elements.values().next().unwrap();
+    let Generator::RectColumn { width, depth, .. } = e.generator else {
+        panic!("expected a rect column, got {:?}", e.generator);
+    };
+    assert_eq!((width, depth), (4000.0, 200.0));
+}
+
+/// A rectangle turned 30° in its profile is detected and placed turned, as wall and column.
+#[test]
+fn rotated_rectangle_profile_keeps_its_rotation() {
+    let rotated = REVIT_STYLE
+        .replace(
+            "#26=IFCCARTESIANPOINT((4000.,0.));",
+            "#26=IFCCARTESIANPOINT((3464.1016151377546,2000.));",
+        )
+        .replace(
+            "#27=IFCCARTESIANPOINT((4000.,200.));",
+            "#27=IFCCARTESIANPOINT((3364.1016151377546,2173.2050807568877));",
+        )
+        .replace(
+            "#28=IFCCARTESIANPOINT((0.,200.));",
+            "#28=IFCCARTESIANPOINT((-100.,173.20508075688772));",
+        )
+        .replace("#52=IFCRELVOIDSELEMENT", "#52=IFCRELNOTHING");
+    for text in [
+        rotated.clone(),
+        rotated.replace("IFCWALLSTANDARDCASE(", "IFCCOLUMN("),
+    ] {
+        let (_, rep) = import(&text);
+        assert_eq!(rep.parametric, 1, "report: {rep:?}");
+        assert_same_place_as_reader(&text);
+    }
+}

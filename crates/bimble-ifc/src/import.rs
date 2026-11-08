@@ -633,6 +633,14 @@ fn generator_for(
         ]
     };
     let scaled_origin = |c: [f64; 2]| to_world(c).map(|v| v * scale);
+    // A profile direction as a 3D axis of the frame.
+    let axis = |u: [f64; 2]| {
+        unit([
+            frame.x[0] * u[0] + frame.y[0] * u[1],
+            frame.x[1] * u[0] + frame.y[1] * u[1],
+            frame.x[2] * u[0] + frame.y[2] * u[1],
+        ])
+    };
 
     let scale_pt = |p: [f64; 2]| [p[0] * scale, p[1] * scale];
     let (placement, generator, parametric) = match (class, &rect) {
@@ -640,7 +648,7 @@ fn generator_for(
             Placement {
                 origin: scaled_origin(rc.centre),
                 z_axis: z,
-                x_axis: unit(frame.x)?,
+                x_axis: axis(rc.u)?,
             },
             Generator::RectColumn {
                 width: rc.w * scale,
@@ -653,7 +661,7 @@ fn generator_for(
             Placement {
                 origin: scaled_origin(rc.centre),
                 z_axis: z,
-                x_axis: unit(frame.x)?,
+                x_axis: axis(rc.u)?,
             },
             Generator::RectBeam {
                 width: rc.w * scale,
@@ -666,7 +674,7 @@ fn generator_for(
             Placement {
                 origin: scaled_origin(rc.centre),
                 z_axis: z,
-                x_axis: unit(frame.x)?,
+                x_axis: axis(rc.u)?,
             },
             Generator::PadFooting {
                 width: rc.w * scale,
@@ -678,21 +686,16 @@ fn generator_for(
         (IfcClass::IfcWall, Some(rc)) => {
             // Wall profile starts at the origin and runs along +X, centred on its thickness:
             // origin at the middle of one short end, x along the long side.
-            let (length, thickness, along_x) = if rc.w >= rc.h {
-                (rc.w, rc.h, true)
+            let (length, thickness, u) = if rc.w >= rc.h {
+                (rc.w, rc.h, rc.u)
             } else {
-                (rc.h, rc.w, false)
+                (rc.h, rc.w, toward_x([-rc.u[1], rc.u[0]]))
             };
-            let u = if along_x { [1.0, 0.0] } else { [0.0, 1.0] };
             let start = [
                 rc.centre[0] - u[0] * length / 2.0,
                 rc.centre[1] - u[1] * length / 2.0,
             ];
-            let x3 = unit([
-                frame.x[0] * u[0] + frame.y[0] * u[1],
-                frame.x[1] * u[0] + frame.y[1] * u[1],
-                frame.x[2] * u[0] + frame.y[2] * u[1],
-            ])?;
+            let x3 = axis(u)?;
             (
                 Placement {
                     origin: scaled_origin(start),
@@ -739,12 +742,23 @@ fn generator_for(
     Some((placement, generator, parametric))
 }
 
-/// A 4-point rectangle: right angles, equal opposite sides. Centre and side lengths
-/// (w along the first edge, h along the second).
+/// A 4-point rectangle: right angles, equal opposite sides. Centre, side lengths, and `u`, the
+/// unit direction of the `w` side: whichever side runs closest to profile +X, so the result
+/// doesn't depend on the polyline's start vertex or direction.
 struct Rect {
     centre: [f64; 2],
     w: f64,
     h: f64,
+    u: [f64; 2],
+}
+
+/// A unit 2D direction, flipped if needed to point towards +X (or +Y when along Y).
+fn toward_x(u: [f64; 2]) -> [f64; 2] {
+    if u[0] < 0.0 || (u[0] == 0.0 && u[1] < 0.0) {
+        [-u[0], -u[1]]
+    } else {
+        u
+    }
 }
 
 fn rectangle(loop_: &[[f64; 2]]) -> Option<Rect> {
@@ -776,11 +790,14 @@ fn rectangle(loop_: &[[f64; 2]]) -> Option<Rect> {
         loop_.iter().map(|p| p[0]).sum::<f64>() / 4.0,
         loop_.iter().map(|p| p[1]).sum::<f64>() / 4.0,
     ];
-    Some(Rect {
-        centre,
-        w: len(edges[0]),
-        h: len(edges[1]),
-    })
+    let dir = |e: [f64; 2]| toward_x([e[0] / len(e), e[1] / len(e)]);
+    let (a, b) = (edges[0], edges[1]);
+    let (u, w, h) = if dir(a)[0] >= dir(b)[0] {
+        (dir(a), len(a), len(b))
+    } else {
+        (dir(b), len(b), len(a))
+    };
+    Some(Rect { centre, w, h, u })
 }
 
 /// Tessellated world-space triangles (mm) → a Mesh generator's data, storey-relative,
