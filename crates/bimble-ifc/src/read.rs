@@ -598,6 +598,7 @@ impl Parsed {
         }
         type Meshed = (ElementInfo, Piece, BTreeMap<String, usize>);
         let mut seen = std::collections::HashSet::new();
+        let mut drawn = 0usize;
         'batches: for batch in picked.chunks(1024) {
             let guard = || Budget {
                 element_max: cap.min(ELEMENT_MAX_TRIANGLES).saturating_add(1),
@@ -654,10 +655,14 @@ impl Parsed {
                     }
                     Piece::Instance(..) => 1,
                 };
-                if total + n > cap {
+                // The guard against hostile expansion is on what is drawn: a shape stored once
+                // and placed by thousands of small products is still drawn thousands of times.
+                let drawn_n = piece.triangles();
+                if total + n > cap || drawn + drawn_n > self.limits.max_triangles {
                     break 'batches;
                 }
                 total += n;
+                drawn += drawn_n;
                 shown += 1;
                 match piece {
                     Piece::Tris(mb) => sb.push(info, mb),

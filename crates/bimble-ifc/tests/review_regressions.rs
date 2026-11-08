@@ -219,3 +219,52 @@ ENDSEC;";
         assert!(e.world_mesh().volume() > 0.0, "{} faces outward", e.name);
     }
 }
+
+/// Instancing stores a shape once, but every copy is drawn: a small file placing one shape
+/// thousands of times must stop at the expansion guard on drawn triangles, as a nested-map bomb
+/// does (stored triangles alone would let it through).
+#[test]
+fn many_copies_of_one_shape_stop_at_the_drawn_triangle_guard() {
+    let mut copies = String::new();
+    for k in 0..300u64 {
+        let b = 1000 + k * 10;
+        copies += &format!(
+            "#{b}=IFCCARTESIANPOINT(({}.,0.,0.));
+#{}=IFCAXIS2PLACEMENT3D(#{b},$,$);
+#{}=IFCLOCALPLACEMENT($,#{});
+#{}=IFCMAPPEDITEM(#23,#25);
+#{}=IFCSHAPEREPRESENTATION(#5,'Body','MappedRepresentation',(#{}));
+#{}=IFCPRODUCTDEFINITIONSHAPE($,$,(#{}));
+#{}=IFCBUILDINGELEMENTPROXY('{}',$,'copy',$,$,#{},#{},$,$);
+",
+            k * 2000,
+            b + 1,
+            b + 2,
+            b + 1,
+            b + 3,
+            b + 4,
+            b + 3,
+            b + 5,
+            b + 4,
+            b + 6,
+            bimble_core::GlobalId::derived(format!("copy{k}").as_bytes()),
+            b + 2,
+            b + 5,
+        );
+    }
+    let text = fixture("mirror.ifc");
+    let at = text.rfind("ENDSEC;").unwrap();
+    let text = format!("{}{copies}{}", &text[..at], &text[at..]);
+    let limits = Limits {
+        max_triangles: 1000,
+        max_item_visits: 1_000_000,
+    };
+    let s = read_str_with_limits(&text, limits).unwrap();
+    assert!(s.triangle_count() <= 1000, "{} drawn", s.triangle_count());
+    assert!(s.elements.len() > 10, "the first copies are shown");
+    assert!(
+        s.warnings.iter().any(|w| w.contains("too large")),
+        "{:?}",
+        s.warnings
+    );
+}

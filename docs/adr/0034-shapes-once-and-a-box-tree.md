@@ -79,6 +79,11 @@ Results (9 Nov):
   triangles (cut at 10 M before) at 30 fps; test `instanced_shapes_draw_like_placed_copies`
   (mirror and section box; it fails with 463 pixels if the mirror's winding is ignored).
 - Memory estimates (ADR 0033) count stored triangles: own, each shape once, one per copy.
+- The guard against hostile files counts **drawn** triangles (10 a displayed byte): a shape stored
+  once but placed by thousands of small products would otherwise pass it (test
+  `many_copies_of_one_shape_stop_at_the_drawn_triangle_guard`; 3 624 drawn against 1 000 before).
+- Plans expand only what their view range shows: a storey plan of the 415 MB model peaks at
+  1.67 GB, under `render`'s 2.06 GB.
 
 ## Prior art
 

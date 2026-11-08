@@ -181,26 +181,33 @@ pub fn load_ifc(source: Source, budget: u64, read_anyway: bool) -> Result<Outcom
 
 /// What a new model may take: `share` of the machine's memory (a setting, 80 % by default; 8 GB
 /// assumed where it can't be read), less what Bimble already holds — the model shown and its
-/// links stay alive while the next one loads. In a browser, all a tab can address (4 GB).
-pub fn memory_budget(share: f64) -> u64 {
-    let limit = if cfg!(target_arch = "wasm32") {
-        4_000_000_000
-    } else {
-        (total_memory().unwrap_or(8_000_000_000) as f64 * share) as u64
-    };
+/// links stay alive while the next one loads. In a browser, all a tab can address (4 GB) less
+/// `held` (the estimate of what is loaded: a wasm heap never shrinks, so its size says what was
+/// once used, not what is).
+pub fn memory_budget(share: f64, held: u64) -> u64 {
+    if cfg!(target_arch = "wasm32") {
+        return 4_000_000_000u64.saturating_sub(held);
+    }
+    let _ = held;
+    let limit = (total_memory().unwrap_or(8_000_000_000) as f64 * share) as u64;
     limit.saturating_sub(in_use())
 }
 
-/// Memory this process holds now.
+/// Memory this process holds now (desktop).
 fn in_use() -> u64 {
     #[cfg(target_arch = "wasm32")]
     {
-        (core::arch::wasm32::memory_size(0) * 65_536) as u64
+        0
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         memory_stats::memory_stats().map_or(0, |m| m.physical_mem as u64)
     }
+}
+
+/// What a loaded scene holds (its meshes and GPU buffers; its parsed file is gone).
+pub fn held(scene: &bimble_geom::Scene) -> u64 {
+    (PER_TRIANGLE * scene.stored_triangles() as f64) as u64
 }
 
 /// The machine's memory, if it can be read.
@@ -255,17 +262,17 @@ pub fn total_memory() -> Option<u64> {
 // render`, Apple unified memory, so GPU buffers included; `scripts/calibrate_memory.sh`
 // measures and fits again). Refitted after shapes were meshed once and drawn instanced
 // (ADR 0034): "triangles" are what is stored — own triangles, each shared shape once, one per
-// copy. Refitted again after the compact parse (24-byte values, exact-size lists). Within 23 %
-// on every file over 15 MB, before the margin.
+// copy. Refitted after the compact parse, the dense id table, streamed reading and freeing the
+// parse before the upload. Within 20 % on every file over 15 MB, before the margin.
 /// Reading: the text plus ~5 bytes per byte of displayed IFC (an upper bound: `info` peaks,
 /// which include meshing, reach 3.8–4.8).
 const READ_PER_DISPLAYED: f64 = 5.0;
-const BASE: f64 = 495e6;
+const BASE: f64 = 532e6;
 /// Parsed entities kept while meshing.
-const PARSED_PER_DISPLAYED: f64 = 3.38;
+const PARSED_PER_DISPLAYED: f64 = 1.93;
 /// Mesh, edges and GPU buffers, per stored triangle.
-const PER_TRIANGLE: f64 = 219.0;
-/// The fit's worst under-estimate was 23 %.
+const PER_TRIANGLE: f64 = 225.0;
+/// The fit's worst under-estimate was 20 %.
 const MARGIN: f64 = 1.25;
 
 /// What a file costs before meshing: `file` bytes, of which `displayed` are parsed.
@@ -427,7 +434,7 @@ mod tests {
     }
 
     /// The fit's own numbers: a 200 MB file (78 MB displayed, 0.38 M triangles stored, 8.8 M
-    /// drawn) peaked at 0.88 GB; with the margin the estimate must not be under it.
+    /// drawn) peaked at 0.83 GB; with the margin the estimate must not be under it.
     #[test]
     fn the_estimate_covers_a_measured_model() {
         let c = Cost {
@@ -435,7 +442,7 @@ mod tests {
             displayed: 78_000_000,
         };
         let est = c.shown(376_901);
-        assert!((880_000_000..1_500_000_000).contains(&est), "{est}");
+        assert!((830_000_000..1_400_000_000).contains(&est), "{est}");
         // What fits in a budget is what the estimate says fits.
         let n = c.affordable_triangles(est);
         assert!(c.shown(n) <= est && c.shown(n + 1000) > est);

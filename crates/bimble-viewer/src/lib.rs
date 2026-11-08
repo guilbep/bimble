@@ -778,7 +778,7 @@ impl Viewer {
         } else if is_ifc && !job.link {
             big::load_ifc(
                 big::Source::Bytes(job.bytes),
-                big::memory_budget(self.settings.memory_share),
+                big::memory_budget(self.settings.memory_share, self.held()),
                 job.read_anyway,
             )
         } else {
@@ -954,7 +954,7 @@ impl Viewer {
             let r = if is_ifc {
                 big::load_ifc(
                     big::Source::File(p.clone()),
-                    big::memory_budget(share),
+                    big::memory_budget(share, 0),
                     false,
                 )
             } else {
@@ -1765,6 +1765,12 @@ impl Viewer {
         );
         self.last_render = t.elapsed();
         self.needs_render = false;
+    }
+
+    /// Estimate of what the loaded model and its links hold (the browser's budget, ADR 0033).
+    fn held(&self) -> u64 {
+        self.loaded.as_ref().map_or(0, |l| big::held(&l.scene))
+            + self.links.iter().map(|k| big::held(&k.scene)).sum::<u64>()
     }
 
     /// How small a thing may be and still be drawn this frame (mm, 0: everything). While the

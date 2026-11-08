@@ -66,5 +66,9 @@ Bimble to know before it runs out, and to let the user decide what to drop.
 - Done again after the compact parse (24-byte values, exact-size lists): 495 MB + 3.38 ×
   displayed bytes + 219 B a stored triangle (worst under-estimate 23 %); reading: text + 5 ×
   displayed bytes.
+- And after the dense id table, streamed reading (64 MB windows) and freeing the parse before the
+  upload: 532 MB + 1.93 × displayed bytes + 225 B a stored triangle (worst 20 %); reading: one
+  window + 5 × displayed bytes on the desktop. In a browser the budget is 4 GB less an estimate
+  of what is loaded (225 B a stored triangle): a wasm heap never shrinks, so its size can't say.
 - Degrading (draw order by size, simplify while navigating, frame-rate target) replaces choosing.
 - Browser coefficients: calibrated on native memory, which overestimates the wasm heap (safe).
