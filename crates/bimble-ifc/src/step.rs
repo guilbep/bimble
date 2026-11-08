@@ -140,7 +140,98 @@ impl Entity {
 pub struct StepFile {
     /// Schema names from FILE_SCHEMA, e.g. ["IFC4"]
     pub schemas: Vec<String>,
-    pub entities: HashMap<u64, Entity>,
+    pub entities: Entities,
+}
+
+/// Entity instances by id. Ids are usually dense (1, 2, 3…): then a table indexed by id, 32
+/// bytes a slot and no hashing; a hash map when they are sparse (a file numbered by tens of
+/// thousands, or a hostile id near u64::MAX).
+#[derive(Debug)]
+pub enum Entities {
+    Dense {
+        slots: Vec<Option<Entity>>,
+        len: usize,
+    },
+    Sparse(HashMap<u64, Entity>),
+}
+
+impl Default for Entities {
+    fn default() -> Self {
+        Entities::Sparse(HashMap::new())
+    }
+}
+
+impl Entities {
+    /// From instances in file order: a later duplicate id wins, as in a serial parse.
+    fn from_ordered(parts: impl IntoIterator<Item = Vec<(u64, Entity)>>, count: usize) -> Self {
+        let mut parts: Vec<Vec<(u64, Entity)>> = parts.into_iter().collect();
+        let max = parts.iter().flatten().map(|(id, _)| *id).max().unwrap_or(0);
+        // Dense when no more than about half the slots would be empty.
+        let dense = usize::try_from(max).is_ok_and(|m| m <= count.saturating_mul(2) + 1024);
+        if dense {
+            let mut slots: Vec<Option<Entity>> = Vec::new();
+            slots.resize_with(max as usize + 1, || None);
+            let mut len = 0;
+            for part in parts.drain(..) {
+                for (id, e) in part {
+                    let s = &mut slots[id as usize];
+                    len += usize::from(s.is_none());
+                    *s = Some(e);
+                }
+            }
+            Entities::Dense { slots, len }
+        } else {
+            let mut m = HashMap::with_capacity(count);
+            for part in parts.drain(..) {
+                m.extend(part);
+            }
+            Entities::Sparse(m)
+        }
+    }
+
+    pub fn get(&self, id: &u64) -> Option<&Entity> {
+        match self {
+            Entities::Dense { slots, .. } => slots
+                .get(usize::try_from(*id).ok()?)
+                .and_then(Option::as_ref),
+            Entities::Sparse(m) => m.get(id),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Entities::Dense { len, .. } => *len,
+            Entities::Sparse(m) => m.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// (id, entity), in no particular order.
+    pub fn iter(&self) -> Box<dyn Iterator<Item = (u64, &Entity)> + Send + '_> {
+        match self {
+            Entities::Dense { slots, .. } => Box::new(
+                slots
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, e)| e.as_ref().map(|e| (i as u64, e))),
+            ),
+            Entities::Sparse(m) => Box::new(m.iter().map(|(k, e)| (*k, e))),
+        }
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = u64> + '_ {
+        self.iter().map(|(k, _)| k)
+    }
+}
+
+impl std::ops::Index<&u64> for Entities {
+    type Output = Entity;
+    fn index(&self, id: &u64) -> &Entity {
+        self.get(id).expect("an entity of this file")
+    }
 }
 
 impl StepFile {
@@ -152,10 +243,7 @@ impl StepFile {
         v.as_ref().and_then(|r| self.get(r))
     }
     pub fn by_type<'a>(&'a self, name: &'a str) -> impl Iterator<Item = (u64, &'a Entity)> + 'a {
-        self.entities
-            .iter()
-            .filter(move |(_, e)| e.name == name)
-            .map(|(k, e)| (*k, e))
+        self.entities.iter().filter(move |(_, e)| e.name == name)
     }
 }
 
@@ -569,12 +657,9 @@ fn parse_chunked(
             parse_chunk(text.as_bytes(), starts[k], stop, skip)
         })
         .collect();
-    file.entities
-        .reserve(parts.iter().map(|(v, _)| v.len()).sum());
-    for (entities, sk) in parts {
-        skipped += sk;
-        file.entities.extend(entities);
-    }
+    let count = parts.iter().map(|(v, _)| v.len()).sum();
+    skipped += parts.iter().map(|(_, sk)| sk).sum::<usize>();
+    file.entities = Entities::from_ordered(parts.into_iter().map(|(v, _)| v), count);
     Ok((file, skipped))
 }
 
@@ -721,9 +806,35 @@ END-ISO-10303-21;
         assert_eq!(s1, s2);
         assert!(all.get(3).is_some() && some.get(3).is_none());
         assert_eq!(some.entities.len(), all.entities.len() - 1);
-        for (id, e) in &some.entities {
-            assert_eq!(e.args, all.entities[id].args);
+        for (id, e) in some.entities.iter() {
+            assert_eq!(e.args, all.entities[&id].args);
         }
+    }
+
+    /// Dense ids get a table, sparse ones (or a hostile id near u64::MAX) a hash map; both
+    /// answer the same, and a later duplicate id wins.
+    #[test]
+    fn entities_dense_or_sparse() {
+        let file = |ids: &str| {
+            format!(
+                "ISO-10303-21;\nHEADER;FILE_SCHEMA(('IFC4'));ENDSEC;\nDATA;\n{ids}ENDSEC;\nEND-ISO-10303-21;\n"
+            )
+        };
+        let (d, _) = parse(&file(
+            "#1=IFCX(1);\n#2=IFCX(2);\n#2=IFCX(3);\n#4=IFCX(4);\n",
+        ))
+        .unwrap();
+        assert!(matches!(d.entities, Entities::Dense { .. }));
+        assert_eq!(d.entities.len(), 3);
+        assert_eq!(d.get(2).unwrap().arg(0).as_i64(), Some(3));
+        assert!(d.get(3).is_none() && d.get(u64::MAX).is_none());
+        let (s, _) = parse(&file("#1=IFCX(1);\n#18446744073709551000=IFCX(2);\n")).unwrap();
+        assert!(matches!(s.entities, Entities::Sparse(_)));
+        assert_eq!(
+            s.get(18446744073709551000).unwrap().arg(0).as_i64(),
+            Some(2)
+        );
+        assert_eq!(s.entities.keys().count(), 2);
     }
 
     /// A parsed file is millions of these: a value is 24 bytes, an entity 32 (they were 32
@@ -755,7 +866,7 @@ END-ISO-10303-21;
 
     fn canonical(f: &StepFile, skipped: usize) -> String {
         let mut v: Vec<_> = f.entities.iter().collect();
-        v.sort_by_key(|(k, _)| **k);
+        v.sort_by_key(|(k, _)| *k);
         format!("{skipped} {v:?}")
     }
 

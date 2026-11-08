@@ -194,7 +194,7 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
     let mut opening_ids: HashSet<GlobalId> = HashSet::new();
 
     // File order, so the first of two products sharing a GlobalId is the one kept.
-    let mut ids: Vec<u64> = file.entities.keys().copied().collect();
+    let mut ids: Vec<u64> = file.entities.keys().collect();
     ids.sort_unstable();
     for id in &ids {
         let e = &file.entities[id];

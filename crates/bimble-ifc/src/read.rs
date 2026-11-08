@@ -291,7 +291,7 @@ impl Parsed {
                         .deref(e.arg(5))
                         .is_some_and(|p| p.name.ends_with("PLACEMENT"))
             })
-            .map(|(id, _)| *id)
+            .map(|(id, _)| id)
             .collect();
         ids.sort_unstable();
         let storeys = r.storey_levels(scale);
