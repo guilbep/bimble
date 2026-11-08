@@ -208,6 +208,7 @@ fn openings_and_properties_round_trip() {
             height: 2700.0,
         },
         openings: vec![bimble_core::Opening {
+            id: None,
             placement: Placement::at(1000.0, -100.0, 900.0),
             generator: Generator::ExtrudedPolygon {
                 outline: vec![[0.0, 0.0], [1200.0, 0.0], [1200.0, 200.0], [0.0, 200.0]],

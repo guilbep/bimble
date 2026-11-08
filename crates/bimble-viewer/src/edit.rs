@@ -247,6 +247,10 @@ pub fn copy_by(m: &Model, ids: &[GlobalId], d: [f64; 3]) -> (Vec<Command>, Vec<G
     for e in ids.iter().filter_map(|id| m.elements.get(id)) {
         let mut c = e.clone();
         c.id = GlobalId::new();
+        // New openings too: export derives their GlobalIds from the copy's.
+        for o in &mut c.openings {
+            o.id = None;
+        }
         // "B1" → "B1 (2)", "B1 (3)", …
         c.name = (2..)
             .map(|n| format!("{} ({n})", e.name))
@@ -723,6 +727,26 @@ mod tests {
         let (m, _) = demo();
         assert!(!Editor::new(m.clone()).dirty);
         assert!(Editor::imported(m).dirty);
+    }
+
+    /// A copy's openings are new openings: they don't carry the original's GlobalIds, which
+    /// would then appear twice in an IFC export.
+    #[test]
+    fn copy_drops_opening_ids() {
+        let (mut m, _) = demo();
+        let id = *m.elements.keys().next().unwrap();
+        let e = m.elements.get_mut(&id).unwrap();
+        e.openings.push(bimble_core::Opening {
+            id: Some(GlobalId::new()),
+            placement: bimble_core::Placement::at(0.0, 0.0, 0.0),
+            generator: e.generator.clone(),
+        });
+        let (cmds, _) = copy_by(&m, &[id], [0.0, 1000.0, 0.0]);
+        let Command::AddElement(c) = &cmds[0] else {
+            panic!("expected AddElement");
+        };
+        assert_eq!(c.openings.len(), 1);
+        assert_eq!(c.openings[0].id, None);
     }
 
     #[test]

@@ -165,6 +165,7 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
     let mut material_id: BTreeMap<(String, MaterialCategory), GlobalId> = BTreeMap::new();
     // One budget for the whole file: elements and openings draw from the same caps.
     let budget = Budget::new(&limits);
+    let mut opening_ids: HashSet<GlobalId> = HashSet::new();
 
     // File order, so the first of two products sharing a GlobalId is the one kept.
     let mut ids: Vec<u64> = file.entities.keys().copied().collect();
@@ -262,6 +263,7 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
                 scale,
                 storey_elevation,
                 &budget,
+                &mut opening_ids,
                 &what,
                 &mut rep,
             );
@@ -390,6 +392,7 @@ fn element_openings(
     scale: f64,
     elevation: f64,
     budget: &Budget,
+    used_ids: &mut HashSet<GlobalId>,
     what: &str,
     rep: &mut ImportReport,
 ) -> Vec<Opening> {
@@ -421,7 +424,19 @@ fn element_openings(
         let to_local = |p: [f64; 3]| f.local([p[0], p[1], p[2] - elevation]);
         let tris: Vec<[[f64; 3]; 3]> = mb.tris.iter().map(|t| t.map(to_local)).collect();
         let (positions, indices) = mesh_from_tris(&tris, 0.0);
+        // Its GlobalId, once per file; without a valid one, export derives one.
+        let id = GlobalId::try_from(op.arg(0).as_str().unwrap_or("").to_owned()).ok();
+        let id = match id {
+            Some(g) if !used_ids.insert(g) => {
+                rep.warn(format!(
+                    "{what}: opening GlobalId {g} already used; a new one is derived on export"
+                ));
+                None
+            }
+            id => id,
+        };
         out.push(Opening {
+            id,
             placement: Placement::at(0.0, 0.0, 0.0),
             generator: Generator::Mesh { positions, indices },
         });

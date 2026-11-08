@@ -25,7 +25,9 @@ IFC base64 alphabet): `storeys`, `materials`, `elements`.
 - **Generators** (`kind` + parameters) are data only. They are never executed.
 - **Openings** (optional, ADR 0032): each element may list openings — a placement in element-local
   coordinates plus a generator, normally a `Mesh` for an imported `IfcOpeningElement`. They are
-  subtracted from the element's mesh when it is built; absent when there are none.
+  subtracted from the element's mesh when it is built; absent when there are none. An opening may
+  carry an optional `id`, the `IfcOpeningElement` GlobalId kept from import and written back on
+  export; without one (older files, copies), export derives it from the element and the index.
 - **Properties** (optional, ADR 0032): property sets beyond the material, as
   `"Pset_Name/Property" → value` with the value as text. Exported grouped by pset as `IFCLABEL`
   values; absent when empty.

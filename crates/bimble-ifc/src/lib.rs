@@ -390,15 +390,20 @@ pub fn export(m: &Model, file_name: &str, timestamp: &str) -> String {
                 "IFCSHAPEREPRESENTATION(#{body},'Body','{repr}',(#{solid}))"
             ));
             let opds = w.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))"));
-            let ogid = gid(&format!("opening/{}/{}", e.id, i));
+            // The opening's own GlobalId when it has one (stable when others are removed),
+            // else derived from its index.
+            let (ogid, rel) = match op.id {
+                Some(id) => (string(id.as_str()), gid(&format!("voids/{id}"))),
+                None => (
+                    gid(&format!("opening/{}/{}", e.id, i)),
+                    gid(&format!("voids/{}/{}", e.id, i)),
+                ),
+            };
             let opening = w.add(format!(
                 "IFCOPENINGELEMENT({},$,$,$,$,#{opl},#{opds},$,.OPENING.)",
                 ogid
             ));
-            w.add(format!(
-                "IFCRELVOIDSELEMENT({},$,$,$,#{el},#{opening})",
-                gid(&format!("voids/{}/{}", e.id, i))
-            ));
+            w.add(format!("IFCRELVOIDSELEMENT({rel},$,$,$,#{el},#{opening})"));
         }
 
         // Property sets beyond the material (ADR 0032), grouped by their "Pset/Property" prefix.

@@ -268,6 +268,7 @@ fn opening_on_mesh_host_lands_in_element_space() {
         placement: Placement::at(0.0, 0.0, 0.0),
         generator: box_from_to([0.0, 0.0, 0.0], [2000.0, 3000.0, 300.0]),
         openings: vec![bimble_core::Opening {
+            id: None,
             placement: Placement::at(0.0, 0.0, 0.0),
             generator: box_from_to([500.0, 500.0, 0.0], [1500.0, 2500.0, 300.0]),
         }],
@@ -539,4 +540,47 @@ fn imported_model_is_canonical() {
     let back = bimble_core::file::from_str(&text).unwrap();
     assert_eq!(model_hash(&m), model_hash(&back));
     assert!(!text.contains("-0.0"));
+}
+
+/// Openings keep their IfcOpeningElement GlobalId through import, .bimble and export; removing
+/// one opening doesn't renumber the others.
+#[test]
+fn opening_global_ids_are_stable() {
+    let (mut m, _) = import(&two_openings());
+    let ids = |m: &bimble_core::Model| -> Vec<Option<String>> {
+        m.elements
+            .values()
+            .next()
+            .unwrap()
+            .openings
+            .iter()
+            .map(|o| o.id.map(|g| g.to_string()))
+            .collect()
+    };
+    assert_eq!(
+        ids(&m),
+        [
+            Some("2MrcuFTa90SfJXy$ZbCd1J".to_owned()),
+            Some("2MrcuFTa90SfJXy$ZbCd1R".to_owned())
+        ]
+    );
+    let saved = bimble_core::file::from_str(&bimble_core::file::to_string(&m)).unwrap();
+    assert_eq!(ids(&saved), ids(&m));
+
+    m.elements.values_mut().next().unwrap().openings.remove(0);
+    let text = bimble_ifc::export(&m, "one.ifc", "2026-11-08T10:00:00");
+    assert!(text.contains("IFCOPENINGELEMENT('2MrcuFTa90SfJXy$ZbCd1R'"));
+    let (back, _) = import(&text);
+    assert_eq!(ids(&back), [Some("2MrcuFTa90SfJXy$ZbCd1R".to_owned())]);
+}
+
+/// A .bimble written before openings had ids still loads, and is written back the same way.
+#[test]
+fn openings_without_id_stay_without_id() {
+    let (mut m, _) = import(REVIT_STYLE);
+    m.elements.values_mut().next().unwrap().openings[0].id = None;
+    let text = bimble_core::file::to_string(&m);
+    assert!(!text.contains("\"id\": null"));
+    let back = bimble_core::file::from_str(&text).unwrap();
+    assert_eq!(back, m);
 }

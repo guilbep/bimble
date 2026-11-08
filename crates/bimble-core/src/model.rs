@@ -514,6 +514,11 @@ pub struct Element {
 /// Data only, never executed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Opening {
+    /// The IfcOpeningElement's GlobalId, kept from import so it stays stable when other openings
+    /// are removed. Absent on older files and on openings without one: export then derives it
+    /// from the element and the opening's index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<GlobalId>,
     pub placement: Placement,
     pub generator: Generator,
 }
