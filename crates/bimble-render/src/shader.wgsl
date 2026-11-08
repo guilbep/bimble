@@ -49,6 +49,33 @@ fn face_normal(v: FaceIn) -> vec3<f32> {
     return v.normal_slot.xyz * 2.0 - 1.0;
 }
 
+// Every draw is instanced (ADR 0034): a shared shape once per element that is it, and merged
+// geometry as one identity instance. Columns of the placement, and the element's style slot;
+// slot 255 means "the vertex's own" (merged geometry: one buffer, many elements).
+struct Inst {
+    @location(3) x: vec3<f32>,
+    @location(4) y: vec3<f32>,
+    @location(5) z: vec3<f32>,
+    @location(6) t: vec3<f32>,
+    @location(7) slot: vec4<f32>,
+};
+
+fn place(i: Inst, p: vec3<f32>) -> vec3<f32> {
+    return i.x * p.x + i.y * p.y + i.z * p.z + i.t;
+}
+
+// Normals turn with the shape (exact for rotations and mirrors; shading is two-sided).
+fn turn(i: Inst, n: vec3<f32>) -> vec3<f32> {
+    return i.x * n.x + i.y * n.y + i.z * n.z;
+}
+
+fn slot_of(v: FaceIn, i: Inst) -> u32 {
+    if i.slot.a > 0.999 {
+        return face_slot(v.normal_slot);
+    }
+    return face_slot(i.slot);
+}
+
 // Two variants of each shader: a lean one for normal viewing, and one for the section box
 // (scene position passed to pixels, cut surfaces, back edges). Extra per-vertex outputs cost
 // memory and time on software and old GPUs, so normal viewing must not pay for the box.
@@ -120,12 +147,12 @@ struct FaceOut {
 };
 
 @vertex
-fn vs_face(v: FaceIn) -> FaceOut {
+fn vs_face(v: FaceIn, i: Inst) -> FaceOut {
     var o: FaceOut;
-    o.clip = u.view_proj * vec4<f32>(v.pos, 1.0);
+    o.clip = u.view_proj * vec4<f32>(place(i, v.pos), 1.0);
     o.clip.z += u.layer.x * o.clip.w;
-    o.slot = face_slot(v.normal_slot);
-    let shade = face_shade(face_normal(v));
+    o.slot = slot_of(v, i);
+    let shade = face_shade(turn(i, face_normal(v)));
     o.color = u.table[o.slot].fill.rgb * shade;
     // A darkened fill was computed from the unshaded fill on the CPU: shade both alike.
     o.ink = u.table[o.slot].ink.rgb * shade;
@@ -158,15 +185,16 @@ fn clipped(p: vec3<f32>) -> bool {
 }
 
 @vertex
-fn vs_face_clip(v: FaceIn) -> FaceClipOut {
+fn vs_face_clip(v: FaceIn, i: Inst) -> FaceClipOut {
     var o: FaceClipOut;
-    o.clip = u.view_proj * vec4<f32>(v.pos, 1.0);
+    let pos = place(i, v.pos);
+    o.clip = u.view_proj * vec4<f32>(pos, 1.0);
     o.clip.z += u.layer.x * o.clip.w;
-    o.slot = face_slot(v.normal_slot);
-    o.shade = face_shade(face_normal(v));
+    o.slot = slot_of(v, i);
+    o.shade = face_shade(turn(i, face_normal(v)));
     o.color = u.table[o.slot].fill.rgb;
     o.ink = u.table[o.slot].ink.rgb;
-    o.pos = v.pos;
+    o.pos = pos;
     return o;
 }
 
@@ -202,9 +230,9 @@ struct LineOut {
 };
 
 @vertex
-fn vs_line(@location(0) pos: vec3<f32>) -> LineOut {
+fn vs_line(@location(0) local: vec3<f32>, i: Inst) -> LineOut {
     var o: LineOut;
-    o.clip = u.view_proj * vec4<f32>(pos, 1.0);
+    o.clip = u.view_proj * vec4<f32>(place(i, local), 1.0);
     o.clip.z += u.layer.x * o.clip.w;
     return o;
 }
@@ -224,11 +252,15 @@ struct LineClipOut {
 
 @vertex
 fn vs_line_clip(
-    @location(0) pos: vec3<f32>,
-    @location(1) n1: vec4<f32>,
-    @location(2) n2: vec4<f32>,
+    @location(0) local: vec3<f32>,
+    @location(1) n1l: vec4<f32>,
+    @location(2) n2l: vec4<f32>,
+    i: Inst,
 ) -> LineClipOut {
     var o: LineClipOut;
+    let pos = place(i, local);
+    let n1 = vec4<f32>(turn(i, n1l.xyz), 0.0);
+    let n2 = vec4<f32>(turn(i, n2l.xyz), 0.0);
     o.clip = u.view_proj * vec4<f32>(pos, 1.0);
     o.clip.z += u.layer.x * o.clip.w;
     o.pos = pos;
@@ -240,8 +272,9 @@ fn vs_line_clip(
 
 // Section box without edge normals (fallback): clip, but back edges can't be told apart.
 @vertex
-fn vs_line_clip_lean(@location(0) pos: vec3<f32>) -> LineClipOut {
+fn vs_line_clip_lean(@location(0) local: vec3<f32>, i: Inst) -> LineClipOut {
     var o: LineClipOut;
+    let pos = place(i, local);
     o.clip = u.view_proj * vec4<f32>(pos, 1.0);
     o.clip.z += u.layer.x * o.clip.w;
     o.pos = pos;
