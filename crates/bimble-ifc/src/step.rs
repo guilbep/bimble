@@ -488,10 +488,20 @@ pub fn decode_step_string(raw: &[u8]) -> String {
 
 /// Parse a STEP file. Malformed entity instances are skipped and counted in `skipped`.
 pub fn parse(text: &str) -> Result<(StepFile, usize), ParseError> {
-    parse_chunked(text, CHUNK_BYTES)
+    parse_chunked(text, CHUNK_BYTES, &[])
 }
 
-fn parse_chunked(text: &str, chunk_bytes: usize) -> Result<(StepFile, usize), ParseError> {
+/// Like `parse`, without the instances of the entity types in `skip` (upper case): they are
+/// stepped over, never parsed or stored. Property sets can be most of a file.
+pub fn parse_skipping(text: &str, skip: &[&str]) -> Result<(StepFile, usize), ParseError> {
+    parse_chunked(text, CHUNK_BYTES, skip)
+}
+
+fn parse_chunked(
+    text: &str,
+    chunk_bytes: usize,
+    skip: &[&str],
+) -> Result<(StepFile, usize), ParseError> {
     let mut p = Parser {
         s: text.as_bytes(),
         i: 0,
@@ -542,7 +552,7 @@ fn parse_chunked(text: &str, chunk_bytes: usize) -> Result<(StepFile, usize), Pa
         .into_par_iter()
         .map(|k| {
             let stop = starts.get(k + 1).map_or(end, |s| s.0);
-            parse_chunk(text.as_bytes(), starts[k], stop)
+            parse_chunk(text.as_bytes(), starts[k], stop, skip)
         })
         .collect();
     file.entities
@@ -587,7 +597,12 @@ fn data_chunks(p: &mut Parser, target: usize) -> (Vec<(usize, usize)>, usize) {
 }
 
 /// Parse the statements in `s[start.0..stop]`. Malformed instances are skipped and counted.
-fn parse_chunk(s: &[u8], start: (usize, usize), stop: usize) -> (Vec<(u64, Entity)>, usize) {
+fn parse_chunk(
+    s: &[u8],
+    start: (usize, usize),
+    stop: usize,
+    skip: &[&str],
+) -> (Vec<(u64, Entity)>, usize) {
     let mut p = Parser {
         s,
         i: start.0,
@@ -614,7 +629,7 @@ fn parse_chunk(s: &[u8], start: (usize, usize), stop: usize) -> (Vec<(u64, Entit
             }
         }
         let stmt_start = (p.i, p.line);
-        let res: Result<(u64, Entity), ParseError> = (|| {
+        let res: Result<Option<(u64, Entity)>, ParseError> = (|| {
             let id = match p.value(0)? {
                 Value::Ref(r) => r,
                 _ => return p.err("expected entity id"),
@@ -634,15 +649,19 @@ fn parse_chunk(s: &[u8], start: (usize, usize), stop: usize) -> (Vec<(u64, Entit
                 if name.is_empty() {
                     return p.err("expected entity name");
                 }
+                if skip.contains(&name.as_str()) {
+                    p.skip_statement();
+                    return Ok(None);
+                }
                 p.expect(b'(')?;
                 let args = p.items(1)?;
                 p.expect(b';')?;
                 Entity { name, args }
             };
-            Ok((id, entity))
+            Ok(Some((id, entity)))
         })();
         match res {
-            Ok(x) => out.push(x),
+            Ok(x) => out.extend(x),
             Err(_) => {
                 skipped += 1;
                 p.i = stmt_start.0;
@@ -681,6 +700,18 @@ ENDSEC;
 END-ISO-10303-21;
 ";
 
+    #[test]
+    fn skipped_types_are_not_stored_and_the_rest_parses_the_same() {
+        let (all, s1) = parse(SAMPLE).unwrap();
+        let (some, s2) = parse_skipping(SAMPLE, &["IFCPROPERTYSINGLEVALUE"]).unwrap();
+        assert_eq!(s1, s2);
+        assert!(all.get(3).is_some() && some.get(3).is_none());
+        assert_eq!(some.entities.len(), all.entities.len() - 1);
+        for (id, e) in &some.entities {
+            assert_eq!(e.args, all.entities[id].args);
+        }
+    }
+
     /// Everything that could make a chunk boundary disagree with the serial parse.
     const TRICKY: &str = "ISO-10303-21;
 HEADER;FILE_SCHEMA(('IFC4'));ENDSEC;
@@ -717,14 +748,14 @@ END-ISO-10303-21;
             }
         }
         for t in &texts {
-            let (serial, s1) = parse_chunked(t, usize::MAX).unwrap();
+            let (serial, s1) = parse_chunked(t, usize::MAX, &[]).unwrap();
             for chunk in [1, 7, 64] {
-                let (par, s2) = parse_chunked(t, chunk).unwrap();
+                let (par, s2) = parse_chunked(t, chunk, &[]).unwrap();
                 assert_eq!(canonical(&serial, s1), canonical(&par, s2), "chunk {chunk}");
             }
         }
         // The tricky sample itself, against what a serial reading must give.
-        let (f, skipped) = parse_chunked(TRICKY, 1).unwrap();
+        let (f, skipped) = parse_chunked(TRICKY, 1, &[]).unwrap();
         assert_eq!(
             f.get(1).unwrap().arg(0).as_str(),
             Some("semi;colon and #2=IFCX(); inside")

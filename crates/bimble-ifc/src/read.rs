@@ -48,8 +48,11 @@ pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<Scene, ReadError> 
     if len > MAX_FILE_BYTES {
         return Err(ReadError::TooLarge(len));
     }
-    let bytes = std::fs::read(path).map_err(ReadError::Io)?;
-    read_bytes(&bytes)
+    // The text is dropped once parsed: it would otherwise stay alive while meshing.
+    let parsed = parse(&String::from_utf8_lossy(
+        &std::fs::read(path).map_err(ReadError::Io)?,
+    ))?;
+    read_parsed(parsed, Limits::default())
 }
 
 /// Read an IFC file's content (e.g. picked in a browser). Same size cap as `read_file`.
@@ -84,7 +87,35 @@ pub fn read_str(text: &str) -> Result<Scene, ReadError> {
 }
 
 pub fn read_str_with_limits(text: &str, limits: Limits) -> Result<Scene, ReadError> {
-    let (file, skipped) = step::parse(text).map_err(ReadError::Parse)?;
+    read_parsed(parse(text)?, limits)
+}
+
+/// Entity types the display never reads (properties and quantities): often most of a file, so
+/// they are not parsed at all. `import-ifc` parses everything.
+const NOT_DISPLAYED: &[&str] = &[
+    "IFCPROPERTYSINGLEVALUE",
+    "IFCPROPERTYENUMERATEDVALUE",
+    "IFCPROPERTYLISTVALUE",
+    "IFCPROPERTYBOUNDEDVALUE",
+    "IFCPROPERTYTABLEVALUE",
+    "IFCPROPERTYREFERENCEVALUE",
+    "IFCCOMPLEXPROPERTY",
+    "IFCPROPERTYSET",
+    "IFCRELDEFINESBYPROPERTIES",
+    "IFCELEMENTQUANTITY",
+    "IFCQUANTITYLENGTH",
+    "IFCQUANTITYAREA",
+    "IFCQUANTITYVOLUME",
+    "IFCQUANTITYCOUNT",
+    "IFCQUANTITYWEIGHT",
+    "IFCQUANTITYTIME",
+];
+
+fn parse(text: &str) -> Result<(StepFile, usize), ReadError> {
+    step::parse_skipping(text, NOT_DISPLAYED).map_err(ReadError::Parse)
+}
+
+fn read_parsed((file, skipped): (StepFile, usize), limits: Limits) -> Result<Scene, ReadError> {
     if !file.schemas.iter().any(|s| s.starts_with("IFC")) {
         return Err(ReadError::NotIfc(file.schemas.join(",")));
     }
