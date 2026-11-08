@@ -612,39 +612,10 @@ fn parse_chunked(
     };
     let mut file = StepFile::default();
     let mut skipped = 0;
-
-    p.skip_ws();
-    if p.keyword() != "ISO" {
-        return p.err("not a STEP file (missing ISO-10303-21 header)");
-    }
-    // Header: find FILE_SCHEMA, then DATA.
-    let data_pos = match text.find("\nDATA;").or_else(|| text.find("DATA;")) {
-        Some(x) => x,
-        None => return p.err("no DATA section"),
-    };
-    let header = &text[..data_pos];
-    if let Some(fs) = header.find("FILE_SCHEMA") {
-        let mut hp = Parser {
-            s: header.as_bytes(),
-            i: fs + "FILE_SCHEMA".len(),
-            line: 1,
-            names: HashMap::new(),
-        };
-        if hp.expect(b'(').is_ok()
-            && let Ok(v) = hp.items(1)
-        {
-            let mut stack = v.into_vec();
-            while let Some(x) = stack.pop() {
-                match x {
-                    Value::Str(s) => file.schemas.push(s.to_ascii_uppercase()),
-                    Value::List(l) => stack.extend(l.into_vec()),
-                    _ => {}
-                }
-            }
-        }
-    }
-    p.line = text[..data_pos].matches('\n').count() + 1;
-    p.i = data_pos + text[data_pos..].find("DATA;").unwrap() + 5;
+    let (schemas, data, line) = header(text.as_bytes())?;
+    file.schemas = schemas;
+    p.i = data;
+    p.line = line;
 
     // Split the DATA section at statement starts, then parse the chunks on all cores and merge
     // them in file order, so later duplicates still win as in a serial parse. The split uses the
@@ -661,6 +632,189 @@ fn parse_chunked(
     skipped += parts.iter().map(|(_, sk)| sk).sum::<usize>();
     file.entities = Entities::from_ordered(parts.into_iter().map(|(v, _)| v), count);
     Ok((file, skipped))
+}
+
+/// The header of a STEP text: schema names, and where the DATA section's statements start
+/// (byte offset and line).
+fn header(text: &[u8]) -> Result<(Vec<String>, usize, usize), ParseError> {
+    let mut p = Parser {
+        s: text,
+        i: 0,
+        line: 1,
+        names: HashMap::new(),
+    };
+    p.skip_ws();
+    if p.keyword() != "ISO" {
+        return p.err("not a STEP file (missing ISO-10303-21 header)");
+    }
+    let find = |pat: &[u8]| text.windows(pat.len()).position(|w| w == pat);
+    // Header: find FILE_SCHEMA, then DATA.
+    let data_pos = match find(b"\nDATA;").or_else(|| find(b"DATA;")) {
+        Some(x) => x,
+        None => return p.err("no DATA section"),
+    };
+    let head = &text[..data_pos];
+    let mut schemas = Vec::new();
+    if let Some(fs) = head.windows(11).position(|w| w == b"FILE_SCHEMA") {
+        let mut hp = Parser {
+            s: head,
+            i: fs + "FILE_SCHEMA".len(),
+            line: 1,
+            names: HashMap::new(),
+        };
+        if hp.expect(b'(').is_ok()
+            && let Ok(v) = hp.items(1)
+        {
+            let mut stack = v.into_vec();
+            while let Some(x) = stack.pop() {
+                match x {
+                    Value::Str(s) => schemas.push(s.to_ascii_uppercase()),
+                    Value::List(l) => stack.extend(l.into_vec()),
+                    _ => {}
+                }
+            }
+        }
+    }
+    let line = head.iter().filter(|&&b| b == b'\n').count() + 1;
+    let data = data_pos
+        + text[data_pos..]
+            .windows(5)
+            .position(|w| w == b"DATA;")
+            .unwrap_or(0)
+        + 5;
+    Ok((schemas, data, line))
+}
+
+/// Bytes of the file read and parsed at a time by `parse_read_skipping`.
+const READ_WINDOW: usize = 64 << 20;
+
+/// Like `parse_skipping`, from a reader, a window at a time: the text is never whole in memory
+/// (a 900 MB file would sit next to its parsed entities). Statements cut by a window's end wait
+/// for the next one; one larger than a window makes the window grow.
+pub fn parse_read_skipping(
+    r: impl std::io::Read,
+    skip: &[&str],
+) -> Result<(StepFile, usize), ParseError> {
+    parse_read_with(r, skip, READ_WINDOW, CHUNK_BYTES)
+}
+
+fn parse_read_with(
+    mut r: impl std::io::Read,
+    skip: &[&str],
+    window: usize,
+    chunk_bytes: usize,
+) -> Result<(StepFile, usize), ParseError> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut eof = false;
+    // Read until `buf` holds `want` bytes or the reader ends.
+    let mut fill = |buf: &mut Vec<u8>, eof: &mut bool, want: usize| -> Result<(), ParseError> {
+        while !*eof && buf.len() < want {
+            let old = buf.len();
+            buf.resize(want, 0);
+            match r.read(&mut buf[old..]) {
+                Ok(0) => {
+                    *eof = true;
+                    buf.truncate(old);
+                }
+                Ok(n) => buf.truncate(old + n),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => buf.truncate(old),
+                Err(e) => {
+                    return Err(ParseError {
+                        line: 0,
+                        msg: e.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    };
+    // The header: read until DATA; is in.
+    let mut want = window.max(1 << 16);
+    let (schemas, mut pos, mut line) = loop {
+        fill(&mut buf, &mut eof, want)?;
+        match header(&buf) {
+            Ok(h) => break h,
+            Err(e) if eof => return Err(e),
+            Err(_) => want = buf.len() + window,
+        }
+    };
+    let mut file = StepFile {
+        schemas,
+        ..Default::default()
+    };
+    let (mut parts, mut count, mut skipped) = (Vec::new(), 0usize, 0usize);
+    let mut want = pos + window;
+    loop {
+        fill(&mut buf, &mut eof, want)?;
+        let mut p = Parser {
+            s: &buf,
+            i: pos,
+            line,
+            names: HashMap::new(),
+        };
+        let (starts, end, done) = complete_chunks(&mut p, chunk_bytes, eof);
+        let got: Vec<(Vec<(u64, Entity)>, usize)> = (0..starts.len())
+            .into_par_iter()
+            .map(|k| {
+                let stop = starts.get(k + 1).map_or(end.0, |s| s.0);
+                parse_chunk(&buf, starts[k], stop, skip)
+            })
+            .collect();
+        for (v, sk) in got {
+            count += v.len();
+            skipped += sk;
+            parts.push(v);
+        }
+        if done {
+            break;
+        }
+        // Keep what isn't parsed yet; a window that held no whole statement grows.
+        let progressed = end.0 > pos;
+        buf.drain(..end.0);
+        (pos, line) = (0, end.1);
+        want = if progressed {
+            window
+        } else {
+            buf.len() + window
+        };
+    }
+    file.entities = Entities::from_ordered(parts, count);
+    Ok((file, skipped))
+}
+
+/// Like `data_chunks`, over a buffer that may stop in the middle of a statement: chunk starts,
+/// the end of the last whole statement (offset, line), and whether the data section ended.
+fn complete_chunks(
+    p: &mut Parser,
+    target: usize,
+    eof: bool,
+) -> (Vec<(usize, usize)>, (usize, usize), bool) {
+    let mut starts: Vec<(usize, usize)> = Vec::new();
+    loop {
+        let before = (p.i, p.line);
+        p.skip_ws();
+        let here = (p.i, p.line);
+        match p.peek() {
+            // A comment or white space cut by the window's end waits for the next window.
+            None => return (starts, if eof { here } else { before }, eof),
+            Some(b'#') => {}
+            Some(_) => {
+                if p.keyword() == "ENDSEC" {
+                    return (starts, here, true);
+                }
+                p.i = here.0;
+                p.line = here.1;
+            }
+        }
+        p.skip_statement();
+        let whole = p.i > here.0 && p.s.get(p.i - 1) == Some(&b';');
+        if !whole && !eof {
+            return (starts, here, false);
+        }
+        if starts.last().is_none_or(|s| here.0 - s.0 >= target) {
+            starts.push(here);
+        }
+    }
 }
 
 /// Target size of a parse chunk. Small enough to balance cores, large enough that per-chunk
@@ -808,6 +962,30 @@ END-ISO-10303-21;
         assert_eq!(some.entities.len(), all.entities.len() - 1);
         for (id, e) in some.entities.iter() {
             assert_eq!(e.args, all.entities[&id].args);
+        }
+    }
+
+    /// Reading a window at a time gives what parsing the whole text gives, whatever the
+    /// window's size: statements, strings and comments cut by a window's end, a window smaller
+    /// than one statement.
+    #[test]
+    fn reading_in_windows_matches_the_whole_text() {
+        let demo = crate::export(
+            &bimble_core::demo::concrete_frame(&bimble_core::demo::FrameSpec::default()),
+            "t.ifc",
+            "t",
+        );
+        for text in [SAMPLE, TRICKY, demo.as_str()] {
+            let (whole, s1) = parse(text).unwrap();
+            for window in [1, 7, 64, 1000, 1 << 20] {
+                let (read, s2) = parse_read_with(text.as_bytes(), &[], window, 1).unwrap();
+                assert_eq!(
+                    canonical(&read, s2),
+                    canonical(&whole, s1),
+                    "window {window}"
+                );
+                assert_eq!(read.schemas, whole.schemas);
+            }
         }
     }
 

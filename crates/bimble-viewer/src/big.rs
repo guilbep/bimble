@@ -40,7 +40,7 @@ impl Outcome {
 pub enum Ask {
     /// Reading the file alone would take more than the budget: nothing read yet.
     Read {
-        bytes: Vec<u8>,
+        source: Source,
         cost: Cost,
         budget: u64,
     },
@@ -116,24 +116,48 @@ impl Choose {
     }
 }
 
-/// Load an IFC file's bytes within `budget` (ADR 0033): straight through when it fits (the
-/// usual case); otherwise stop and ask, before reading when reading alone would not fit
-/// (unless `read_anyway`), after reading when showing all of it would not.
-pub fn load_ifc(bytes: Vec<u8>, budget: u64, read_anyway: bool) -> Result<Outcome, String> {
+/// Where an IFC comes from: its bytes (a browser), or a file read a window at a time.
+pub enum Source {
+    Bytes(Vec<u8>),
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    File(std::path::PathBuf),
+}
+
+/// What reading holds of the text at a time when it streams a file: one window.
+const STREAM_WINDOW: u64 = 64 << 20;
+
+/// Load an IFC within `budget` (ADR 0033): straight through when it fits (the usual case);
+/// otherwise stop and ask, before reading when reading alone would not fit (unless
+/// `read_anyway`), after reading when showing all of it would not.
+pub fn load_ifc(source: Source, budget: u64, read_anyway: bool) -> Result<Outcome, String> {
     let t = Instant::now();
-    let cost = Cost {
-        file: bytes.len() as u64,
-        displayed: bimble_ifc::read::displayed_bytes(&bytes),
+    let cost = match &source {
+        Source::Bytes(b) => Cost {
+            file: b.len() as u64,
+            displayed: bimble_ifc::read::displayed_bytes(b),
+        },
+        // A streamed file is never whole in memory: one window of its text at a time.
+        Source::File(p) => Cost {
+            file: std::fs::metadata(p)
+                .map_err(|e| e.to_string())?
+                .len()
+                .min(STREAM_WINDOW),
+            displayed: bimble_ifc::read::displayed_bytes_of_file(p).map_err(|e| e.to_string())?,
+        },
     };
     if !read_anyway && cost.read() > budget {
         return Ok(Outcome::Ask(Box::new(Ask::Read {
-            bytes,
+            source,
             cost,
             budget,
         })));
     }
     let limits = bimble_ifc::read::Limits::for_displayed(cost.displayed);
-    let parsed = bimble_ifc::read::parse_bytes_with(bytes, limits).map_err(|e| e.to_string())?;
+    let parsed = match source {
+        Source::Bytes(b) => bimble_ifc::read::parse_bytes_with(b, limits),
+        Source::File(p) => bimble_ifc::read::parse_file_with(&p, limits),
+    }
+    .map_err(|e| e.to_string())?;
     // Mesh what fits; only a model that does not fit all pays for a census. Never past the
     // guard against hostile expansion.
     let cap = cost.affordable_triangles(budget).min(limits.max_triangles);
@@ -370,7 +394,7 @@ mod tests {
     fn a_model_is_loaded_or_asked_about_by_its_cost() {
         let ifc = demo_ifc();
         assert!(matches!(
-            load_ifc(ifc.clone(), 100_000_000_000, false),
+            load_ifc(Source::Bytes(ifc.clone()), 100_000_000_000, false),
             Ok(Outcome::Ready { partial: None, .. })
         ));
         let cost = Cost {
@@ -379,7 +403,7 @@ mod tests {
         };
         // Room to read, and for the base, but not for the triangles.
         let tight = cost.shown(0).max(cost.read());
-        let Ok(Outcome::Ask(a)) = load_ifc(ifc.clone(), tight, false) else {
+        let Ok(Outcome::Ask(a)) = load_ifc(Source::Bytes(ifc.clone()), tight, false) else {
             panic!("expected a question")
         };
         let Ask::Choose(mut c) = *a else {
@@ -396,7 +420,7 @@ mod tests {
         let got: usize = scene.elements.iter().map(|e| e.triangle_count()).sum();
         assert_eq!(got, want);
         assert!(matches!(
-            load_ifc(ifc, cost.read() - 1, false),
+            load_ifc(Source::Bytes(ifc), cost.read() - 1, false),
             Ok(Outcome::Ask(a)) if matches!(*a, Ask::Read { .. })
         ));
     }

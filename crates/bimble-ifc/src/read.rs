@@ -49,7 +49,47 @@ pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<Scene, ReadError> 
     if len > MAX_FILE_BYTES {
         return Err(ReadError::TooLarge(len));
     }
-    read_bytes(std::fs::read(path).map_err(ReadError::Io)?)
+    let p = parse_file(path.as_ref())?;
+    let (scene, _) = p.scene(|_| true, p.limits.max_triangles);
+    p.free();
+    Ok(scene)
+}
+
+/// Parse a file for display without meshing, a window at a time: the text is never whole in
+/// memory (ADR 0033). Limits for its size.
+pub fn parse_file(path: &std::path::Path) -> Result<Parsed, ReadError> {
+    let limits = Limits::for_displayed(displayed_bytes_of_file(path)?);
+    parse_file_with(path, limits)
+}
+
+/// `parse_file` with given limits.
+pub fn parse_file_with(path: &std::path::Path, limits: Limits) -> Result<Parsed, ReadError> {
+    let len = std::fs::metadata(path).map_err(ReadError::Io)?.len();
+    if len > MAX_FILE_BYTES {
+        return Err(ReadError::TooLarge(len));
+    }
+    let f = std::fs::File::open(path).map_err(ReadError::Io)?;
+    let parsed = step::parse_read_skipping(f, NOT_DISPLAYED).map_err(ReadError::Parse)?;
+    Parsed::new(parsed, limits)
+}
+
+/// `displayed_bytes` of a file, read a window at a time.
+pub fn displayed_bytes_of_file(path: &std::path::Path) -> Result<u64, ReadError> {
+    use std::io::BufRead;
+    let f = std::fs::File::open(path).map_err(ReadError::Io)?;
+    let mut r = std::io::BufReader::with_capacity(1 << 20, f);
+    let mut d = Displayed::default();
+    let (mut line, mut total) = (Vec::new(), 0u64);
+    loop {
+        line.clear();
+        let n = r.read_until(b'\n', &mut line).map_err(ReadError::Io)?;
+        if n == 0 {
+            break;
+        }
+        total += n as u64;
+        d.line(line.strip_suffix(b"\n").unwrap_or(&line));
+    }
+    Ok(total.saturating_sub(d.skipped))
 }
 
 /// Read an IFC file's content (e.g. picked in a browser). Same size cap as `read_file`.
@@ -84,9 +124,23 @@ pub fn parse_bytes_with(bytes: Vec<u8>, limits: Limits) -> Result<Parsed, ReadEr
 /// parses nothing: what reading will cost is known before reading. Approximate: a statement's
 /// bytes go to the type named at the start of its first line.
 pub fn displayed_bytes(bytes: &[u8]) -> u64 {
-    let mut skipped = 0u64;
-    let mut in_skipped = false;
+    let mut d = Displayed::default();
     for line in bytes.split(|&b| b == b'\n') {
+        d.line(line);
+    }
+    (bytes.len() as u64).saturating_sub(d.skipped)
+}
+
+/// The displayed-bytes count, line by line.
+#[derive(Default)]
+struct Displayed {
+    skipped: u64,
+    in_skipped: bool,
+}
+
+impl Displayed {
+    /// One line, without its newline.
+    fn line(&mut self, line: &[u8]) {
         if line.first() == Some(&b'#') {
             let rest = line
                 .iter()
@@ -98,15 +152,14 @@ pub fn displayed_bytes(bytes: &[u8]) -> u64 {
                 .position(|b| !(b.is_ascii_alphanumeric() || *b == b'_'))
                 .unwrap_or(rest.len());
             let name = &rest[..end];
-            in_skipped = NOT_DISPLAYED
+            self.in_skipped = NOT_DISPLAYED
                 .iter()
                 .any(|n| n.as_bytes().eq_ignore_ascii_case(name));
         }
-        if in_skipped {
-            skipped += line.len() as u64 + 1;
+        if self.in_skipped {
+            self.skipped += line.len() as u64 + 1;
         }
     }
-    (bytes.len() as u64).saturating_sub(skipped)
 }
 
 /// Caps that keep a malicious or broken file from exhausting memory or time. Mapped items can

@@ -777,7 +777,7 @@ impl Viewer {
             import_bytes(&job.name, &job.bytes).map(|(s, m, report)| imported(s, m, t, report))
         } else if is_ifc && !job.link {
             big::load_ifc(
-                job.bytes,
+                big::Source::Bytes(job.bytes),
                 big::memory_budget(self.settings.memory_share),
                 job.read_anyway,
             )
@@ -952,9 +952,11 @@ impl Viewer {
             let t = Instant::now();
             let is_ifc = p.extension().is_some_and(|x| x.eq_ignore_ascii_case("ifc"));
             let r = if is_ifc {
-                std::fs::read(&p)
-                    .map_err(|e| e.to_string())
-                    .and_then(|b| big::load_ifc(b, big::memory_budget(share), false))
+                big::load_ifc(
+                    big::Source::File(p.clone()),
+                    big::memory_budget(share),
+                    false,
+                )
             } else {
                 load_any(&p).map(|(s, m)| big::Outcome::ready(s, m, t.elapsed()))
             };
@@ -3125,11 +3127,11 @@ impl Viewer {
         let Some(act) = act else { return };
         let (path, ask) = self.ask.take().unwrap();
         match (act, *ask) {
-            (Do::ReadAnyway, big::Ask::Read { bytes, budget, .. }) => {
+            (Do::ReadAnyway, big::Ask::Read { source, budget, .. }) => {
                 self.load_later(
                     path,
                     move |tx| {
-                        let _ = tx.send(big::load_ifc(bytes, budget, true));
+                        let _ = tx.send(big::load_ifc(source, budget, true));
                     },
                     ctx,
                 );
