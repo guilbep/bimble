@@ -340,6 +340,7 @@ fn editable_copy_path(ifc: &Path) -> PathBuf {
 }
 
 /// An IFC file imported as an editable model (ADR 0032). Ctrl S then saves the copy.
+#[cfg(not(target_arch = "wasm32"))]
 fn import_any(path: &Path) -> Result<(Scene, bimble_core::Model), String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let (m, rep) = bimble_ifc::import::import_str(&text)?;
