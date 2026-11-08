@@ -338,7 +338,26 @@ pub fn crease_edges_with_normals(
     let key = |p: [f32; 3]| p.map(|c| (c * 100.0).round() as i64);
     let mut map: HashMap<([i64; 3], [i64; 3]), EdgeUse> = HashMap::new();
     for t in m.indices.as_chunks::<3>().0 {
-        let n = m.normals[t[0] as usize];
+        // The face's own normal, from its geometry: welded meshes don't keep a normal per
+        // vertex, and flat-shaded faces are exactly what creases are computed from.
+        let (a0, b0, c0) = (
+            m.positions[t[0] as usize],
+            m.positions[t[1] as usize],
+            m.positions[t[2] as usize],
+        );
+        let u = [b0[0] - a0[0], b0[1] - a0[1], b0[2] - a0[2]];
+        let v = [c0[0] - a0[0], c0[1] - a0[1], c0[2] - a0[2]];
+        let cr = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        let l = (cr[0] * cr[0] + cr[1] * cr[1] + cr[2] * cr[2]).sqrt();
+        let n: [f32; 3] = if l > 1e-12 {
+            cr.map(|c| c / l)
+        } else {
+            [0.0, 0.0, 1.0]
+        };
         for k in 0..3 {
             let (a, b) = (
                 m.positions[t[k] as usize],
@@ -481,7 +500,8 @@ mod tests {
             depth: 300.0,
             height: 3000.0,
         };
-        let m = crate::extrude(&g.profile(), g.depth()).unwrap();
+        let x = g.extrusion().unwrap();
+        let m = crate::extrude(&x.profile, &x.voids, x.depth).unwrap();
         assert_eq!(crease_edges(&m, 20.0).len(), 12);
     }
 

@@ -65,6 +65,11 @@ jobs:
           ./target/release/bimble demo frame.bimble
           ./target/release/bimble export-ifc frame.bimble frame.ifc
           python -I scripts/check_ifc.py frame.bimble frame.ifc
+      - name: Double hop (import → export) checked by IfcOpenShell
+        run: |
+          ./target/release/bimble import-ifc frame.ifc frame2.bimble
+          ./target/release/bimble export-ifc frame2.bimble frame2.ifc
+          python -I scripts/check_ifc.py frame2.bimble frame2.ifc
       - name: Reader compared with IfcOpenShell
         run: |
           ./target/release/bimble info frame.ifc --elements-json > ours.jsonl

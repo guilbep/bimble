@@ -217,6 +217,20 @@ fn parts(a: Action) -> &'static [Part] {
             [20.0, 7.0],
             [20.0, 18.0],
         ])],
+        // A folder with an arrow into it: import.
+        Action::ImportIfc => &[
+            Poly(&[
+                [4.0, 18.0],
+                [4.0, 7.0],
+                [7.0, 5.0],
+                [11.0, 5.0],
+                [13.0, 7.0],
+                [20.0, 7.0],
+                [20.0, 18.0],
+            ]),
+            Line(&[[12.0, 9.0], [12.0, 14.0]]),
+            Line(&[[9.5, 11.5], [12.0, 14.0], [14.5, 11.5]]),
+        ],
         Action::Save | Action::Undo | Action::Redo | Action::Palette => &[],
     }
 }

@@ -212,6 +212,8 @@ pub fn new_element(
         material: mat,
         placement,
         generator,
+        openings: Vec::new(),
+        properties: Default::default(),
     };
     Ok(add_mat
         .into_iter()

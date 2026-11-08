@@ -11,6 +11,10 @@ pub mod scene;
 pub use scene::{
     ElementInfo, GridAxis, MeshBuilder, Scene, SceneBuilder, SceneElement, StoreyLevel,
 };
+use scene::{cross, norm, sub};
+
+use bimble_core::Generator;
+use std::collections::HashMap;
 
 use bimble_core::{Element, Placement, Profile};
 
@@ -86,59 +90,222 @@ fn profile_points(p: &Profile) -> Vec<[f64; 2]> {
     }
 }
 
-/// Extrude a counter-clockwise profile along local +Z by `depth`.
-pub fn extrude(profile: &Profile, depth: f64) -> Result<Mesh, GeomError> {
+/// Triangulate a counter-clockwise loop with clockwise holes (earcut wants the start index of
+/// each hole, holes stored contiguously after the outer loop).
+fn earcut_indices(outer: &[[f64; 2]], holes: &[Vec<[f64; 2]>]) -> Result<Vec<u32>, GeomError> {
+    let mut flat: Vec<f64> = outer.iter().flatten().copied().collect();
+    let mut hole_indices: Vec<usize> = Vec::new();
+    for h in holes {
+        hole_indices.push(flat.len() / 2);
+        flat.extend(h.iter().flatten().copied());
+    }
+    let tris = earcutr::earcut(&flat, &hole_indices, 2)
+        .map_err(|e| GeomError::Triangulation(format!("{e:?}")))?;
+    Ok(tris.iter().map(|i| *i as u32).collect())
+}
+
+/// Extrude a counter-clockwise profile along local +Z by `depth`, cutting out clockwise voids,
+/// as f64 triangles with outward winding (closed solid, ready for booleans).
+pub fn extrude_tris(
+    profile: &Profile,
+    voids: &[Vec<[f64; 2]>],
+    depth: f64,
+) -> Result<Vec<crate::boolean::Tri>, GeomError> {
     let pts = profile_points(profile);
     let n = pts.len();
-    let flat: Vec<f64> = pts.iter().flatten().copied().collect();
-    let tris =
-        earcutr::earcut(&flat, &[], 2).map_err(|e| GeomError::Triangulation(format!("{e:?}")))?;
-    if tris.len() / 3 != n - 2 {
+    let tris = earcut_indices(&pts, voids)?;
+    let total = n + voids.iter().map(Vec::len).sum::<usize>();
+    // Euler: a polygon with h holes triangulates to nv - 2 + 2h triangles.
+    let expected = total - 2 + 2 * voids.len();
+    if tris.len() / 3 != expected {
         return Err(GeomError::Triangulation(format!(
-            "expected {} triangles, got {}",
-            n - 2,
+            "expected {expected} triangles, got {}",
             tris.len() / 3
         )));
     }
-    let d = depth as f32;
-    let p = |i: usize, z: f32| [pts[i][0] as f32, pts[i][1] as f32, z];
-    let mut m = Mesh::default();
+    let all: Vec<&[[f64; 2]]> = std::iter::once(&pts[..])
+        .chain(voids.iter().map(|v| v.as_slice()))
+        .collect();
+    // 3D points of the caps, per loop.
+    let at = |loop_idx: usize, i: usize, z: f64| {
+        let q = all[loop_idx][i];
+        [q[0], q[1], z]
+    };
+    let mut out: Vec<crate::boolean::Tri> = Vec::with_capacity(tris.len() + all.len() * 6);
 
-    // Bottom cap (normal -Z) gets reversed winding; top cap (normal +Z) keeps the profile winding.
-    for (z, nz, rev) in [(0.0, -1.0, true), (d, 1.0, false)] {
-        let base = m.positions.len() as u32;
-        for i in 0..n {
-            m.positions.push(p(i, z));
-            m.normals.push([0.0, 0.0, nz]);
-        }
+    // Caps: bottom (normal -Z) reversed, top (normal +Z) as-is.
+    for (z, rev) in [(0.0, true), (depth, false)] {
         for t in tris.as_chunks::<3>().0 {
-            let t = [t[0] as u32, t[1] as u32, t[2] as u32];
-            let t = if rev { [t[0], t[2], t[1]] } else { t };
-            m.indices.extend(t.map(|k| base + k));
+            let mut t: [usize; 3] = [t[0] as usize, t[1] as usize, t[2] as usize];
+            if rev {
+                t.swap(1, 2);
+            }
+            // Map a welded vertex index back to (loop, point-in-loop).
+            let pt = |k: usize| {
+                let mut k = k;
+                for (li, l) in all.iter().enumerate() {
+                    if k < l.len() {
+                        return at(li, k, z);
+                    }
+                    k -= l.len();
+                }
+                unreachable!("earcut index out of range");
+            };
+            out.push(t.map(pt));
         }
     }
 
-    // Side quads, one per profile edge, with an outward normal.
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let (a, b) = (pts[i], pts[j]);
-        let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
-        let len = (ex * ex + ey * ey).sqrt();
-        let nrm = [(ey / len) as f32, (-ex / len) as f32, 0.0];
-        let base = m.positions.len() as u32;
-        m.positions.extend([p(i, 0.0), p(j, 0.0), p(j, d), p(i, d)]);
-        m.normals.extend([nrm; 4]);
-        m.indices
-            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
-        m.edges.push([p(i, 0.0), p(j, 0.0)]);
-        m.edges.push([p(i, d), p(j, d)]);
-        m.edges.push([p(i, 0.0), p(i, d)]);
+    // Sides: one quad per profile edge (void edges included), outward.
+    for (li, l) in all.iter().enumerate() {
+        for i in 0..l.len() {
+            let j = (i + 1) % l.len();
+            let (a, b) = (at(li, i, 0.0), at(li, j, 0.0));
+            let (a2, b2) = (at(li, i, depth), at(li, j, depth));
+            out.push([a, b, b2]);
+            out.push([a, b2, a2]);
+        }
     }
-    Ok(m)
+    Ok(out)
+}
+
+/// Extrude a profile into a render-ready mesh (flat normals, profile edges listed).
+pub fn extrude(profile: &Profile, voids: &[Vec<[f64; 2]>], depth: f64) -> Result<Mesh, GeomError> {
+    let tris = extrude_tris(profile, voids, depth)?;
+    Ok(mesh_from_tris(&tris))
+}
+
+/// A triangle mesh as stored in a `Mesh` generator, with flat per-face normals and edges.
+pub fn mesh_from(positions: &[[f64; 3]], indices: &[u32]) -> Result<Mesh, GeomError> {
+    if !indices.len().is_multiple_of(3) {
+        return Err(GeomError::Triangulation(
+            "index count not a multiple of 3".into(),
+        ));
+    }
+    let tris: Vec<crate::boolean::Tri> = indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|t| t.map(|i| positions[i as usize]))
+        .collect();
+    Ok(mesh_from_tris(&tris))
+}
+
+/// Weld a triangle soup (same bits) into a mesh with flat per-face normals.
+pub fn mesh_from_tris(tris: &[crate::boolean::Tri]) -> Mesh {
+    let mut positions: Vec<[f64; 3]> = Vec::new();
+    let mut index: HashMap<[u64; 3], u32> = HashMap::new();
+    let mut indices: Vec<u32> = Vec::with_capacity(tris.len() * 3);
+    for t in tris {
+        for p in t {
+            let p = p.map(|c| c + 0.0); // -0.0 → 0.0 so equal coordinates weld
+            let next = positions.len() as u32;
+            let i = *index.entry(p.map(f64::to_bits)).or_insert(next);
+            if i == next {
+                positions.push(p);
+            }
+            indices.push(i);
+        }
+    }
+    let mut m = Mesh {
+        positions: positions.iter().map(|p| p.map(|c| c as f32)).collect(),
+        indices,
+        ..Default::default()
+    };
+    for t in tris {
+        let n = norm(cross(sub(t[1], t[0]), sub(t[2], t[0])));
+        let n = if n > 1e-12 {
+            cross(sub(t[1], t[0]), sub(t[2], t[0])).map(|v| (v / n) as f32)
+        } else {
+            [0.0, 0.0, 1.0]
+        };
+        m.normals.extend([n; 3]);
+    }
+    // Feature edges (profile outline, corners), like the scene build draws them.
+    m.edges = crate::scene::crease_edges(&m, 20.0);
+    m
+}
+
+/// The element's triangles in element-local coordinates (mm, f64), openings subtracted.
+/// An opening that can't be cut (not closed solids) is skipped: drawn uncut, like the viewer.
+pub fn element_tris(e: &Element) -> Result<Vec<crate::boolean::Tri>, GeomError> {
+    let mut tris: Vec<crate::boolean::Tri> = match &e.generator {
+        Generator::Mesh { positions, indices } => {
+            if !indices.len().is_multiple_of(3) {
+                return Err(GeomError::Triangulation(
+                    "index count not a multiple of 3".into(),
+                ));
+            }
+            indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|t| t.map(|i| positions[i as usize]))
+                .collect()
+        }
+        g => {
+            let x = g
+                .extrusion()
+                .ok_or_else(|| GeomError::Triangulation("no extrusion".into()))?;
+            extrude_tris(&x.profile, &x.voids, x.depth)?
+        }
+    };
+    if e.openings.is_empty() {
+        return Ok(tris);
+    }
+    let cutters: Vec<Vec<crate::boolean::Tri>> = e
+        .openings
+        .iter()
+        .filter_map(|o| opening_tris(o).ok())
+        .collect();
+    if cutters.is_empty() {
+        return Ok(tris);
+    }
+    let refs: Vec<&[crate::boolean::Tri]> = cutters.iter().map(Vec::as_slice).collect();
+    // A boolean that fails (not closed solids) leaves the element drawn uncut.
+    if let Ok(r) = crate::boolean::apply(crate::boolean::Op::Difference, &tris, &refs) {
+        tris = r;
+    }
+    Ok(tris)
+}
+
+/// An opening's solid, transformed from its own placement into element coordinates.
+fn opening_tris(o: &bimble_core::Opening) -> Result<Vec<crate::boolean::Tri>, GeomError> {
+    let mut tris = match &o.generator {
+        Generator::Mesh { positions, indices } => {
+            if !indices.len().is_multiple_of(3) {
+                return Err(GeomError::Triangulation(
+                    "index count not a multiple of 3".into(),
+                ));
+            }
+            indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|t| t.map(|i| positions[i as usize]))
+                .collect::<Vec<_>>()
+        }
+        g => {
+            let x = g
+                .extrusion()
+                .ok_or_else(|| GeomError::Triangulation("no extrusion".into()))?;
+            extrude_tris(&x.profile, &x.voids, x.depth)?
+        }
+    };
+    let t = placement_matrix(&o.placement, 0.0);
+    for tri in &mut tris {
+        for p in tri {
+            *p = transform(&t, *p);
+        }
+    }
+    Ok(tris)
+}
+
+fn transform(t: &[[f64; 4]; 4], p: [f64; 3]) -> [f64; 3] {
+    [0, 1, 2].map(|r| t[0][r] * p[0] + t[1][r] * p[1] + t[2][r] * p[2] + t[3][r])
 }
 
 pub fn element_mesh(e: &Element) -> Result<Mesh, GeomError> {
-    extrude(&e.generator.profile(), e.generator.depth())
+    Ok(mesh_from_tris(&element_tris(e)?))
 }
 
 /// Column-major 4×4 transform from an element placement plus its storey elevation (mm, f64).
@@ -187,7 +354,8 @@ mod tests {
             depth: 400.0,
             height: 3000.0,
         };
-        let mut b = extrude(&g.profile(), g.depth()).unwrap();
+        let xg = g.extrusion().unwrap();
+        let mut b = extrude(&xg.profile, &xg.voids, xg.depth).unwrap();
         for p in &mut b.positions {
             p[0] += x;
             p[1] += y;
@@ -203,7 +371,8 @@ mod tests {
             depth: 400.0,
             height: 3000.0,
         };
-        let m = extrude(&g.profile(), g.depth()).unwrap();
+        let x = g.extrusion().unwrap();
+        let m = extrude(&x.profile, &x.voids, x.depth).unwrap();
         assert_eq!(m.triangle_count(), 12);
         approx(m.volume(), 300.0 * 400.0 * 3000.0);
         assert_eq!(m.edges.len(), 12);
@@ -223,7 +392,8 @@ mod tests {
             ],
             thickness: 200.0,
         };
-        let m = extrude(&g.profile(), g.depth()).unwrap();
+        let x = g.extrusion().unwrap();
+        let m = extrude(&x.profile, &x.voids, x.depth).unwrap();
         approx(m.volume(), 27.0e6 * 200.0);
     }
 
@@ -234,7 +404,8 @@ mod tests {
             thickness: 200.0,
             height: 2800.0,
         };
-        let m = extrude(&g.profile(), g.depth()).unwrap();
+        let x = g.extrusion().unwrap();
+        let m = extrude(&x.profile, &x.voids, x.depth).unwrap();
         approx(m.volume(), 5000.0 * 200.0 * 2800.0);
         let xmin = m.positions.iter().map(|p| p[0]).fold(f32::MAX, f32::min);
         assert_eq!(xmin, 0.0);

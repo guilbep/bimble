@@ -23,6 +23,12 @@ IFC base64 alphabet): `storeys`, `materials`, `elements`.
   a material, a placement relative to the storey (`origin`, `z_axis` = extrusion direction, `x_axis`)
   and a `generator`.
 - **Generators** (`kind` + parameters) are data only. They are never executed.
+- **Openings** (optional, ADR 0032): each element may list openings — a placement in element-local
+  coordinates plus a generator, normally a `Mesh` for an imported `IfcOpeningElement`. They are
+  subtracted from the element's mesh when it is built; absent when there are none.
+- **Properties** (optional, ADR 0032): property sets beyond the material, as
+  `"Pset_Name/Property" → value` with the value as text. Exported grouped by pset as `IFCLABEL`
+  values; absent when empty.
 - **Validation on load:** format and version header, size limit, references (storey, material),
   finite numbers, positive dimensions, counter-clockwise slab outlines.
 - **Saves are atomic:** write to a temporary file, then rename.
@@ -33,6 +39,8 @@ IFC base64 alphabet): `storeys`, `materials`, `elements`.
 |---|---|
 | element | IfcColumn / IfcBeam / IfcSlab / IfcWall / IfcFooting, same GlobalId |
 | geometry | IfcExtrudedAreaSolid of IfcRectangleProfileDef or IfcArbitraryClosedProfileDef |
+| openings | IfcOpeningElement per opening (geometry relative to the element), via IfcRelVoidsElement |
+| properties | IfcPropertySet per `Pset_Name`, values as IfcLabel, via IfcRelDefinesByProperties |
 | generator | Pset `Bimble_Generator`: `Generator` (label), `Version` (integer), `Parameters` (JSON text) |
 | storey | IfcBuildingStorey, same GlobalId, elements contained via IfcRelContainedInSpatialStructure |
 | material | IfcMaterial (name, category), via IfcRelAssociatesMaterial |

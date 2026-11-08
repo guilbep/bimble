@@ -12,6 +12,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Purpose {
     Open,
+    /// An IFC file imported as an editable .bimble copy (ADR 0032).
+    ImportIfc,
     Link,
     PlanTemplate,
     Style,
@@ -26,6 +28,7 @@ impl Purpose {
                 "Building models, views files",
                 &["ifc", "IFC", "bimble", "json"],
             ),
+            Purpose::ImportIfc => ("IFC file", &["ifc", "IFC"]),
             Purpose::Link => ("Building models", &["ifc", "IFC", "bimble"]),
             Purpose::PlanTemplate => ("Plan template", &["json"]),
             Purpose::Style => ("Bimble style", &["json"]),

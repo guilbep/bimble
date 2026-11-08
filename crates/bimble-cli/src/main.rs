@@ -246,6 +246,8 @@ enum Cmd {
     },
     /// Export to IFC4
     ExportIfc { file: PathBuf, out: PathBuf },
+    /// Convert an IFC file into an editable .bimble model (ADR 0032)
+    ImportIfc { file: PathBuf, out: PathBuf },
     /// Model history: commits, branches, log, diff and merge (kept in <model>-history/)
     History {
         #[command(subcommand)]
@@ -1014,6 +1016,45 @@ fn run(cli: Cli) -> Result<(), String> {
             let ifc = bimble_ifc::export(&m, name, &now_iso());
             std::fs::write(&out, ifc).map_err(|x| x.to_string())?;
             println!("{} elements → {}", m.elements.len(), out.display());
+        }
+        Cmd::ImportIfc { file: path, out } => {
+            let text =
+                std::fs::read_to_string(&path).map_err(|x| format!("{}: {x}", path.display()))?;
+            let (mut m, rep) = bimble_ifc::import::import_str(&text)?;
+            m.project_name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Imported model")
+                .to_owned();
+            m.validate()
+                .map_err(|x| format!("imported model invalid: {x}"))?;
+            file::save(&m, &out).map_err(e)?;
+            println!(
+                "{} elements → {} ({} parametric, {} extruded polygons, {} meshes)",
+                rep.elements,
+                out.display(),
+                rep.parametric,
+                rep.extruded,
+                rep.meshes
+            );
+            for (class, n) in &rep.by_class {
+                println!("  {class}: {n}");
+            }
+            if rep.openings > 0 {
+                println!(
+                    "  openings: {} cut on import (as meshes, subtracted at draw time)",
+                    rep.openings
+                );
+            }
+            if rep.properties > 0 {
+                println!("  property values: {}", rep.properties);
+            }
+            for (what, n) in &rep.skipped {
+                println!("  skipped: {what} (×{n})");
+            }
+            for w in &rep.warnings {
+                println!("  warning: {w}");
+            }
         }
     }
     Ok(())

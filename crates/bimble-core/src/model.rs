@@ -274,6 +274,30 @@ pub enum Generator {
         depth: f64,
         height: f64,
     },
+    /// A non-rectangular extrusion, imported from IFC (ADR 0032). Counter-clockwise outline,
+    /// clockwise voids, extruded along local +Z.
+    ExtrudedPolygon {
+        outline: Vec<[f64; 2]>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        voids: Vec<Vec<[f64; 2]>>,
+        height: f64,
+    },
+    /// An explicit triangle mesh, imported from IFC (IfcPolygonalFaceSet and friends, ADR 0032).
+    /// Editable as properties and placement only, not parametrically.
+    Mesh {
+        positions: Vec<[f64; 3]>,
+        indices: Vec<u32>,
+    },
+}
+
+/// The extrusion that defines an element's body, when its generator is an extrusion.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Extrusion {
+    pub profile: Profile,
+    /// Inner loops of the profile (holes), each clockwise when the outline is counter-clockwise.
+    pub voids: Vec<Vec<[f64; 2]>>,
+    /// Extrusion depth along local +Z.
+    pub depth: f64,
 }
 
 impl Generator {
@@ -284,6 +308,8 @@ impl Generator {
             Generator::Slab { .. } => "slab",
             Generator::Wall { .. } => "wall",
             Generator::PadFooting { .. } => "pad_footing",
+            Generator::ExtrudedPolygon { .. } => "extruded_polygon",
+            Generator::Mesh { .. } => "mesh",
         }
     }
 
@@ -292,37 +318,68 @@ impl Generator {
         1
     }
 
-    pub fn profile(&self) -> Profile {
+    /// The extrusion defining this generator's body, or `None` for an explicit mesh.
+    pub fn extrusion(&self) -> Option<Extrusion> {
         match self {
-            Generator::RectColumn { width, depth, .. }
-            | Generator::PadFooting { width, depth, .. } => Profile::Rectangle {
-                x_dim: *width,
-                y_dim: *depth,
-            },
-            Generator::RectBeam { width, height, .. } => Profile::Rectangle {
-                x_dim: *width,
-                y_dim: *height,
-            },
-            Generator::Slab { outline, .. } => Profile::Polygon(outline.clone()),
+            Generator::RectColumn {
+                width,
+                depth,
+                height,
+            }
+            | Generator::PadFooting {
+                width,
+                depth,
+                height,
+            } => Some(Extrusion {
+                profile: Profile::Rectangle {
+                    x_dim: *width,
+                    y_dim: *depth,
+                },
+                voids: Vec::new(),
+                depth: *height,
+            }),
+            Generator::RectBeam {
+                width,
+                height,
+                length,
+            } => Some(Extrusion {
+                profile: Profile::Rectangle {
+                    x_dim: *width,
+                    y_dim: *height,
+                },
+                voids: Vec::new(),
+                depth: *length,
+            }),
+            Generator::Slab { outline, thickness } => Some(Extrusion {
+                profile: Profile::Polygon(outline.clone()),
+                voids: Vec::new(),
+                depth: *thickness,
+            }),
             // Wall profile starts at the local origin and runs along +X; centred on its thickness.
             Generator::Wall {
-                length, thickness, ..
-            } => Profile::Polygon(vec![
-                [0.0, -thickness / 2.0],
-                [*length, -thickness / 2.0],
-                [*length, thickness / 2.0],
-                [0.0, thickness / 2.0],
-            ]),
-        }
-    }
-
-    /// Extrusion depth along local +Z.
-    pub fn depth(&self) -> f64 {
-        match self {
-            Generator::RectColumn { height, .. } | Generator::PadFooting { height, .. } => *height,
-            Generator::RectBeam { length, .. } => *length,
-            Generator::Slab { thickness, .. } => *thickness,
-            Generator::Wall { height, .. } => *height,
+                length,
+                thickness,
+                height,
+            } => Some(Extrusion {
+                profile: Profile::Polygon(vec![
+                    [0.0, -thickness / 2.0],
+                    [*length, -thickness / 2.0],
+                    [*length, thickness / 2.0],
+                    [0.0, thickness / 2.0],
+                ]),
+                voids: Vec::new(),
+                depth: *height,
+            }),
+            Generator::ExtrudedPolygon {
+                outline,
+                voids,
+                height,
+            } => Some(Extrusion {
+                profile: Profile::Polygon(outline.clone()),
+                voids: voids.clone(),
+                depth: *height,
+            }),
+            Generator::Mesh { .. } => None,
         }
     }
 
@@ -386,8 +443,51 @@ impl Generator {
                 }
                 Ok(())
             }
+            Generator::ExtrudedPolygon {
+                outline,
+                voids,
+                height,
+            } => {
+                pos("height", *height)?;
+                loop_check("outline", outline)?;
+                let area2: f64 = outline
+                    .iter()
+                    .zip(outline.iter().cycle().skip(1))
+                    .map(|(a, b)| a[0] * b[1] - b[0] * a[1])
+                    .sum();
+                if area2 <= 0.0 {
+                    return Err("extruded polygon outline must be counter-clockwise".into());
+                }
+                for (i, v) in voids.iter().enumerate() {
+                    loop_check(&format!("void {i}"), v)?;
+                }
+                Ok(())
+            }
+            Generator::Mesh { positions, indices } => {
+                if positions.iter().flatten().any(|v| !v.is_finite()) {
+                    return Err("mesh has non-finite coordinates".into());
+                }
+                if positions.len() > u32::MAX as usize {
+                    return Err("mesh has too many vertices".into());
+                }
+                if indices.iter().any(|i| (*i as usize) >= positions.len()) {
+                    return Err("mesh index out of range".into());
+                }
+                Ok(())
+            }
         }
     }
+}
+
+/// A closed loop of at least 3 finite points (used by polygon generators).
+fn loop_check(what: &str, loop_: &[[f64; 2]]) -> Result<(), String> {
+    if loop_.len() < 3 {
+        return Err(format!("{what} needs at least 3 points"));
+    }
+    if loop_.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(format!("{what} has non-finite coordinates"));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -397,6 +497,23 @@ pub struct Element {
     pub name: String,
     pub storey: GlobalId,
     pub material: GlobalId,
+    pub placement: Placement,
+    pub generator: Generator,
+    /// Openings cut out of this element (windows in a wall…), in element-local coordinates,
+    /// subtracted when the mesh is built (ADR 0032). Absent when there are none, so files
+    /// without openings keep their hashes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub openings: Vec<Opening>,
+    /// Property sets beyond the material (ADR 0032): "Pset_Name/Property" → value as text.
+    /// Absent when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, String>,
+}
+
+/// A solid subtracted from its element: a window or door cut out of a wall, for instance.
+/// Data only, never executed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Opening {
     pub placement: Placement,
     pub generator: Generator,
 }
@@ -460,6 +577,17 @@ impl Model {
             }
             e.placement.validate().map_err(ctx)?;
             e.generator.validate().map_err(ctx)?;
+            for (i, o) in e.openings.iter().enumerate() {
+                let ctx =
+                    |msg: String| format!("{} {} (opening {i}): {msg}", e.class.name(), e.name);
+                o.placement.validate().map_err(ctx)?;
+                o.generator.validate().map_err(ctx)?;
+            }
+            for k in e.properties.keys() {
+                if k.is_empty() {
+                    return Err(ctx("empty property key".into()));
+                }
+            }
         }
         let levels = self.levels();
         for (k, v) in &self.views {

@@ -56,6 +56,34 @@ def analytic_volume_mm3(g):
     raise ValueError(k)
 
 
+def mesh_volume_mm3(g):
+    """Volume of an explicit mesh generator (divergence theorem, first vertex as origin)."""
+    v, idx = g["positions"], g["indices"]
+    if not idx:
+        return 0.0
+    o = v[idx[0]]
+    total = 0.0
+    for i in range(0, len(idx), 3):
+        a, b, c = (idx[i + k] for k in range(3))
+        ax, ay, az = (v[a][k] - o[k] for k in range(3))
+        bx, by, bz = (v[b][k] - o[k] for k in range(3))
+        cx, cy, cz = (v[c][k] - o[k] for k in range(3))
+        total += ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)
+    return abs(total / 6.0)
+
+
+def openings_volume_mm3(e):
+    """Volume the element's openings remove (their own generators, element-local)."""
+    total = 0.0
+    for op in e.get("openings", []):
+        g = op["generator"]
+        if g["kind"] == "mesh":
+            total += mesh_volume_mm3(g)
+        else:
+            total += analytic_volume_mm3(g)
+    return total
+
+
 def main(bimble_path, ifc_path):
     src = json.load(open(bimble_path))["model"]
     f = ifcopenshell.open(ifc_path)
@@ -88,7 +116,7 @@ def main(bimble_path, ifc_path):
             continue
         # IfcOpenShell geometry is in metres.
         vol_mm3 = local_volume(shape.geometry) * 1e9
-        want = analytic_volume_mm3(e["generator"])
+        want = analytic_volume_mm3(e["generator"]) - openings_volume_mm3(e)
         if abs(vol_mm3 - want) > 1e-4 * want:
             errors.append(f"{e['name']}: volume {vol_mm3:.0f} mm3 != {want:.0f} mm3")
         # Bottom of a column sits on its storey level.
