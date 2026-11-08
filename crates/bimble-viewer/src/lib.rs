@@ -749,6 +749,8 @@ impl Viewer {
     fn handle_picked(&mut self, ctx: &egui::Context) {
         while self.confirm.is_none() {
             let Some(p) = self.files.poll() else { break };
+            // A value typed on a page but not yet stored is unsaved work too.
+            self.commit_pages();
             let replaces = (p.purpose == files::Purpose::Open
                 || p.purpose == files::Purpose::ImportIfc)
                 && ![".dxf", ".pdf", ".dwg"]
@@ -1008,6 +1010,9 @@ impl Viewer {
                 partial,
                 report,
             }) => {
+                // Pages belong to the model being replaced: what they hold goes to it, not to
+                // the new one when they are closed later.
+                self.close_pages();
                 if !report.is_empty() {
                     self.report = Some((path.clone(), report));
                 }
