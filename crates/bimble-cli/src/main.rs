@@ -936,7 +936,7 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             let r = Renderer::new(&gpu.device, samples);
             let visible = bimble_render::hidden_by_category(&hidden);
-            let gs = r.upload_with(&gpu.device, &scene, &visible, clip.is_some());
+            let gs = r.upload_with(&gpu.device, &gpu.queue, &scene, &visible, clip.is_some());
             let target = Target::new(&gpu.device, (width, height), samples);
             let mut cam = Camera {
                 yaw: azimuth.to_radians(),

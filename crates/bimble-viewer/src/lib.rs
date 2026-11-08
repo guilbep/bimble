@@ -1354,6 +1354,7 @@ impl Viewer {
             let k = self.links.get(n)?;
             Some(self.renderer.upload_with(
                 &self.device,
+                &self.queue,
                 &k.scene,
                 |j, _| if j == i { Style::Normal } else { Style::Hidden },
                 self.clipping(),
@@ -1387,6 +1388,7 @@ impl Viewer {
         self.hover_gpu = match (h, &self.loaded) {
             (Some(i), Some(l)) => Some(self.renderer.upload_with(
                 &self.device,
+                &self.queue,
                 &l.scene,
                 |j, _| if j == i { Style::Normal } else { Style::Hidden },
                 self.clipping(),
@@ -1455,6 +1457,7 @@ impl Viewer {
                 let there = &k.matched_there;
                 self.renderer.upload_with(
                     &self.device,
+                    &self.queue,
                     &k.scene,
                     |i, _| {
                         if comparing && !there.get(i).copied().unwrap_or(true) {
@@ -1489,11 +1492,13 @@ impl Viewer {
         };
         let Some(l) = &self.loaded else { return };
         // Edge normals only while the section box is on (they cost GPU memory).
-        self.gpu_scene =
-            Some(
-                self.renderer
-                    .upload_with(&self.device, &l.scene, style, self.clipping()),
-            );
+        self.gpu_scene = Some(self.renderer.upload_with(
+            &self.device,
+            &self.queue,
+            &l.scene,
+            style,
+            self.clipping(),
+        ));
         self.needs_upload = false;
         self.needs_render = true;
     }

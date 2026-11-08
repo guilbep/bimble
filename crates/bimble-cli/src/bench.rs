@@ -70,7 +70,7 @@ fn run_case(
     args: &BenchArgs,
 ) -> Case {
     let t = Instant::now();
-    let gs = r.upload(&gpu.device, &scene, |_, _| Style::Normal);
+    let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
     // Make sure the upload itself is finished before timing frames.
     let _ = gpu
         .device

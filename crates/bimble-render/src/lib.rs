@@ -344,6 +344,65 @@ impl GpuScene {
     }
 }
 
+/// Vertex buffers filled as vertices come: each is sent to the GPU when full, so the CPU never
+/// holds more than one (a 9M-triangle model is ~750 MB of face vertices).
+struct Chunks<'d, T> {
+    device: &'d wgpu::Device,
+    queue: &'d wgpu::Queue,
+    label: &'static str,
+    /// Vertices per buffer: within the device's limit, at most 64 MiB, and a multiple of 6 so
+    /// buffers split only between whole triangles and whole segments.
+    per: usize,
+    cur: Vec<T>,
+    done: Vec<(wgpu::Buffer, u32)>,
+}
+
+impl<'d, T: bytemuck::Pod> Chunks<'d, T> {
+    fn new(device: &'d wgpu::Device, queue: &'d wgpu::Queue, label: &'static str) -> Self {
+        let bytes = device.limits().max_buffer_size.min(64 << 20) as usize;
+        let per = (bytes / std::mem::size_of::<T>() / 6 * 6).max(6);
+        Chunks {
+            device,
+            queue,
+            label,
+            per,
+            cur: Vec::new(),
+            done: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, v: T) {
+        self.cur.push(v);
+        if self.cur.len() == self.per {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.cur.is_empty() {
+            return;
+        }
+        let buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(self.label),
+                contents: bytemuck::cast_slice(&self.cur),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        self.done.push((buf, self.cur.len() as u32));
+        self.cur.clear();
+        // The copy goes through a staging buffer, freed only once a submission has used it:
+        // without this, every chunk's staging copy stays alive until the first frame.
+        self.queue.submit([]);
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    fn finish(mut self) -> Vec<(wgpu::Buffer, u32)> {
+        self.flush();
+        self.done
+    }
+}
+
 // ---------------------------------------------------------------- target
 
 /// Offscreen colour + depth (+ MSAA) textures.
@@ -670,10 +729,11 @@ impl Renderer {
     pub fn upload(
         &self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         scene: &Scene,
         style: impl Fn(usize, &SceneElement) -> Style,
     ) -> GpuScene {
-        self.upload_with(device, scene, style, false)
+        self.upload_with(device, queue, scene, style, false)
     }
 
     /// Like `upload`; with `edge_normals`, edges also carry the normals of their faces, which the
@@ -682,13 +742,14 @@ impl Renderer {
     pub fn upload_with(
         &self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         scene: &Scene,
         style: impl Fn(usize, &SceneElement) -> Style,
         edge_normals: bool,
     ) -> GpuScene {
-        let mut faces: Vec<FaceVertex> = Vec::new();
-        let mut lines: Vec<LineVertex> = Vec::new();
-        let mut lines_lean: Vec<[f32; 3]> = Vec::new();
+        let mut faces = Chunks::<FaceVertex>::new(device, queue, "bimble face vb");
+        let mut lines = Chunks::<LineVertex>::new(device, queue, "bimble line vb");
+        let mut lines_lean = Chunks::<[f32; 3]>::new(device, queue, "bimble line vb");
         for (i, e) in scene.elements.iter().enumerate() {
             let s = style(i, e);
             if s == Style::Hidden {
@@ -718,47 +779,20 @@ impl Renderer {
                     }
                 }
             } else {
-                for seg in &e.mesh.edges {
-                    lines_lean.extend_from_slice(seg);
+                for &pos in e.mesh.edges.iter().flatten() {
+                    lines_lean.push(pos);
                 }
             }
         }
-        let bounds = Sphere::of(scene);
-        // ponytail: the whole model is built in RAM, then split; flush while building if the
-        // transient copy (~750 MB for 9M triangles) matters.
-        let max = device.limits().max_buffer_size;
-        let split = |label, bytes: &[u8], stride: usize| -> Vec<(wgpu::Buffer, u32)> {
-            // Cut only between whole triangles and whole segments: a multiple of 6 vertices.
-            let per = (max as usize / stride / 6 * 6).max(6);
-            bytes
-                .chunks(per * stride)
-                .map(|c| {
-                    let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some(label),
-                        contents: c,
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-                    (buf, (c.len() / stride) as u32)
-                })
-                .collect()
-        };
         GpuScene {
-            faces: split(
-                "bimble face vb",
-                bytemuck::cast_slice(&faces),
-                std::mem::size_of::<FaceVertex>(),
-            ),
+            faces: faces.finish(),
             lines: if edge_normals {
-                split(
-                    "bimble line vb",
-                    bytemuck::cast_slice(&lines),
-                    std::mem::size_of::<LineVertex>(),
-                )
+                lines.finish()
             } else {
-                split("bimble line vb", bytemuck::cast_slice(&lines_lean), 12)
+                lines_lean.finish()
             },
             edge_normals,
-            bounds,
+            bounds: Sphere::of(scene),
         }
     }
 
@@ -1328,7 +1362,7 @@ mod tests {
         let draw = |gpu: &Headless| {
             let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
             let r = Renderer::new(&gpu.device, 1);
-            let gs = r.upload_with(&gpu.device, &scene, |_, _| Style::Normal, true);
+            let gs = r.upload_with(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal, true);
             let target = Target::new(&gpu.device, (64, 40), 1);
             let mut cam = Camera::default();
             cam.fit(&scene, 1.6);
@@ -1374,7 +1408,7 @@ mod tests {
         };
         let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
         let r = Renderer::new(&gpu.device, 4);
-        let gs = r.upload(&gpu.device, &scene, |_, _| Style::Normal);
+        let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
         let target = Target::new(&gpu.device, (320, 200), 4);
         let mut cam = Camera::default();
         cam.fit(&scene, 1.6);
@@ -1463,6 +1497,7 @@ mod tests {
         let r = Renderer::new(&gpu.device, 1);
         let gs = r.upload_with(
             &gpu.device,
+            &gpu.queue,
             scene,
             |_, _| Style::Normal,
             opts.clip.is_some(),
@@ -1887,8 +1922,8 @@ mod tests {
             style: style.clone(),
             ..Default::default()
         };
-        let g_main = r.upload(&gpu.device, &main_one, |_, _| Style::Normal);
-        let g_ref = r.upload(&gpu.device, &main_one, |_, _| Style::Reference);
+        let g_main = r.upload(&gpu.device, &gpu.queue, &main_one, |_, _| Style::Normal);
+        let g_ref = r.upload(&gpu.device, &gpu.queue, &main_one, |_, _| Style::Reference);
         let offset = Vec3::new(3000.0, 0.0, 0.0);
         let bounds = g_main.bounds.merge(Sphere {
             center: g_ref.bounds.center + offset,
@@ -1954,7 +1989,7 @@ mod tests {
         assert!(count(&px, style.reference_edges, 0) > 50, "but its edges");
 
         // Comparing: our only-here colour.
-        let g_diff = r.upload(&gpu.device, &main_one, |_, _| Style::OnlyHere);
+        let g_diff = r.upload(&gpu.device, &gpu.queue, &main_one, |_, _| Style::OnlyHere);
         let px = draw(&[Layer::main(&g_diff)]);
         assert!(count(&px, style.only_here, 1) > 200);
     }
