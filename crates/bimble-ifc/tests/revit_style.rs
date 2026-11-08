@@ -432,3 +432,39 @@ fn element_without_storey_keeps_world_height() {
         .replace("#36=IFCRELCONTAINEDINSPATIALSTRUCTURE", "#36=IFCRELNOTHING");
     assert_same_place_as_reader(&text);
 }
+
+/// The fixture with a second window in the wall, at x = 2500 (same body as the first).
+fn two_openings() -> String {
+    REVIT_STYLE.replace(
+        "ENDSEC;\nEND-ISO",
+        "#64=IFCOPENINGELEMENT('2MrcuFTa90SfJXy$ZbCd1R',$,'Window 2',$,$,#65,#47,$,.OPENING.);
+#65=IFCLOCALPLACEMENT(#23,#66);
+#66=IFCAXIS2PLACEMENT3D(#67,$,$);
+#67=IFCCARTESIANPOINT((2500.,0.,900.));
+#68=IFCRELVOIDSELEMENT('2MrcuFTa90SfJXy$ZbCd1S',$,$,$,#22,#64);
+ENDSEC;\nEND-ISO",
+    )
+}
+
+/// The file's limits hold for the whole import, not per element or opening: with room for one
+/// opening's triangles, the second is reported as stopped, not imported.
+#[test]
+fn import_limits_cover_the_whole_file() {
+    let text = two_openings();
+    let (m, rep) = import(&text);
+    assert_eq!(rep.openings, 2, "report: {rep:?}");
+    let e = m.elements.values().next().unwrap();
+    let Generator::Mesh { indices, .. } = &e.openings[0].generator else {
+        panic!("mesh opening");
+    };
+    let limits = bimble_ifc::read::Limits {
+        max_triangles: indices.len() / 3,
+        ..Default::default()
+    };
+    let (_, rep) = bimble_ifc::import::import_str_with_limits(&text, limits).unwrap();
+    assert_eq!(rep.openings, 1, "report: {rep:?}");
+    assert!(
+        rep.warnings.iter().any(|w| w.contains("stopped")),
+        "report: {rep:?}"
+    );
+}

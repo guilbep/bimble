@@ -388,7 +388,7 @@ impl Budget {
             exhausted: AtomicBool::new(false),
         }
     }
-    fn exhausted(&self) -> bool {
+    pub(crate) fn exhausted(&self) -> bool {
         self.exhausted.load(Ordering::Relaxed)
     }
     /// Takes one item visit; false (and exhausted) when none are left.

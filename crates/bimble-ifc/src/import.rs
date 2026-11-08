@@ -7,7 +7,7 @@
 //! the mesh is built. Property sets are imported as text (`"Pset/Prop" → value`). Everything
 //! unsupported is skipped and reported.
 
-use crate::read::{Affine, Budget, Emit, Reader, signed_area};
+use crate::read::{Affine, Budget, Emit, Limits, Reader, signed_area};
 use crate::step::{self, StepFile, Value};
 use crate::{GENERATOR_PSET, PROJECT_PSET};
 use bimble_core::{
@@ -63,6 +63,11 @@ fn class_of(upper: &str) -> Option<IfcClass> {
 
 /// Read an IFC file (STEP text) into an editable model and a report.
 pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
+    import_str_with_limits(text, Limits::default())
+}
+
+/// `import_str` with explicit caps on the geometry tessellated for the whole file.
+pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, ImportReport), String> {
     let (file, skipped) = step::parse(text).map_err(|e| format!("parse: {e}"))?;
     if !file.schemas.iter().any(|s| s.starts_with("IFC")) {
         return Err(format!(
@@ -158,6 +163,8 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
     model.storeys = storeys;
     let mut model_materials: BTreeMap<GlobalId, Material> = BTreeMap::new();
     let mut material_id: BTreeMap<(String, MaterialCategory), GlobalId> = BTreeMap::new();
+    // One budget for the whole file: elements and openings draw from the same caps.
+    let budget = Budget::new(&limits);
 
     for (id, e) in file.entities.iter() {
         let Some(class) = class_of(&e.name) else {
@@ -196,7 +203,6 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
             }
             None => {
                 // Otherwise: explicit geometry → tessellate into a Mesh (storey-relative mm).
-                let budget = Budget::new(&Default::default());
                 let mut mb = bimble_geom::MeshBuilder::default();
                 {
                     let mut emit = Emit {
@@ -235,6 +241,7 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
                 &element,
                 scale,
                 storey_elevation,
+                &budget,
                 &what,
                 &mut rep,
             );
@@ -276,6 +283,12 @@ pub fn import_str(text: &str) -> Result<(Model, ImportReport), String> {
         );
     }
     model.materials = model_materials;
+    if budget.exhausted() {
+        rep.warn(
+            "model too large or nested too deeply: geometry stopped at the import limits; \
+             what was left is skipped",
+        );
+    }
 
     // Reader warnings (units, placements…) go into the report too, with counts.
     for (k, n) in r.warnings {
@@ -352,19 +365,19 @@ fn element_openings(
     host: &Element,
     scale: f64,
     elevation: f64,
+    budget: &Budget,
     what: &str,
     rep: &mut ImportReport,
 ) -> Vec<Opening> {
     let mut out = Vec::new();
     for &op_id in op_ids {
         let Some(op) = file.get(op_id) else { continue };
-        let budget = Budget::new(&Default::default());
         let mut mb = bimble_geom::MeshBuilder::default();
         {
             let mut emit = Emit {
                 mb: &mut mb,
                 scale,
-                budget: &budget,
+                budget,
             };
             r.product_body(op, &mut emit);
         }
