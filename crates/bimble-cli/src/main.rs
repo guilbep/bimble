@@ -1029,31 +1029,9 @@ fn run(cli: Cli) -> Result<(), String> {
             m.validate()
                 .map_err(|x| format!("imported model invalid: {x}"))?;
             file::save(&m, &out).map_err(e)?;
-            println!(
-                "{} elements → {} ({} parametric, {} extruded polygons, {} meshes)",
-                rep.elements,
-                out.display(),
-                rep.parametric,
-                rep.extruded,
-                rep.meshes
-            );
-            for (class, n) in &rep.by_class {
-                println!("  {class}: {n}");
-            }
-            if rep.openings > 0 {
-                println!(
-                    "  openings: {} cut on import (as meshes, subtracted at draw time)",
-                    rep.openings
-                );
-            }
-            if rep.properties > 0 {
-                println!("  property values: {}", rep.properties);
-            }
-            for (what, n) in &rep.skipped {
-                println!("  skipped: {what} (×{n})");
-            }
-            for w in &rep.warnings {
-                println!("  warning: {w}");
+            println!("→ {}", out.display());
+            for l in rep.lines() {
+                println!("{l}");
             }
         }
     }

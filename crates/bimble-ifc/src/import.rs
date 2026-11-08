@@ -39,6 +39,32 @@ pub struct ImportReport {
 }
 
 impl ImportReport {
+    /// The report in words, one line each: what came in, how, and what didn't (ADR 0032:
+    /// never silently dropped). The CLI prints it; the viewer shows it after an import.
+    pub fn lines(&self) -> Vec<String> {
+        let mut v = vec![format!(
+            "{} elements ({} parametric, {} extruded polygons, {} meshes)",
+            self.elements, self.parametric, self.extruded, self.meshes
+        )];
+        v.extend(self.by_class.iter().map(|(c, n)| format!("  {c}: {n}")));
+        if self.openings > 0 {
+            v.push(format!(
+                "openings: {} cut on import (as meshes, subtracted at draw time)",
+                self.openings
+            ));
+        }
+        if self.properties > 0 {
+            v.push(format!("property values: {}", self.properties));
+        }
+        v.extend(
+            self.skipped
+                .iter()
+                .map(|(w, n)| format!("skipped: {w} (×{n})")),
+        );
+        v.extend(self.warnings.iter().map(|w| format!("warning: {w}")));
+        v
+    }
+
     fn warn(&mut self, w: impl Into<String>) {
         self.warnings.push(w.into());
     }

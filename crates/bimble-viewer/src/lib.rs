@@ -352,16 +352,9 @@ fn editable_copy_path(ifc: &Path) -> PathBuf {
 
 /// An IFC file imported as an editable model (ADR 0032). Ctrl S then saves the copy.
 #[cfg(not(target_arch = "wasm32"))]
-fn import_any(path: &Path) -> Result<(Scene, bimble_core::Model), String> {
+fn import_any(path: &Path) -> Result<(Scene, bimble_core::Model, Vec<String>), String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let (m, rep) = bimble_ifc::import::import_str(&text)?;
-    log::info!(
-        "imported {}: {} elements, {} openings, {} property values",
-        path.display(),
-        rep.elements,
-        rep.openings,
-        rep.properties
-    );
     let mut m = m;
     m.project_name = path
         .file_stem()
@@ -370,24 +363,32 @@ fn import_any(path: &Path) -> Result<(Scene, bimble_core::Model), String> {
         .to_owned();
     m.validate()
         .map_err(|e| format!("imported model invalid: {e}"))?;
-    Ok((Scene::from_model(&m), m))
+    Ok((Scene::from_model(&m), m, rep.lines()))
+}
+
+/// An import's outcome: the model, and its report to show.
+fn imported(scene: Scene, m: bimble_core::Model, t: Instant, report: Vec<String>) -> big::Outcome {
+    big::Outcome::Ready {
+        scene,
+        model: Some(m),
+        time: t.elapsed(),
+        partial: None,
+        report,
+    }
 }
 
 /// An IFC file's bytes imported as an editable model (browser).
-fn import_bytes(name: &str, bytes: &[u8]) -> Result<(Scene, bimble_core::Model), String> {
+fn import_bytes(
+    name: &str,
+    bytes: &[u8],
+) -> Result<(Scene, bimble_core::Model, Vec<String>), String> {
     let text = String::from_utf8_lossy(bytes);
     let (m, rep) = bimble_ifc::import::import_str(&text)?;
-    log::info!(
-        "imported {name}: {} elements, {} openings, {} property values",
-        rep.elements,
-        rep.openings,
-        rep.properties
-    );
     let mut m = m;
     m.project_name = name.strip_suffix(".ifc").unwrap_or(name).to_owned();
     m.validate()
         .map_err(|e| format!("imported model invalid: {e}"))?;
-    Ok((Scene::from_model(&m), m))
+    Ok((Scene::from_model(&m), m, rep.lines()))
 }
 
 /// A file's content to load on a later frame, so "Loading…" is drawn before the browser's only
@@ -565,6 +566,8 @@ struct Viewer {
     parse_later: Option<ParseLater>,
     /// A model too large for this machine, waiting for the user to choose (ADR 0033).
     ask: Option<(PathBuf, Box<big::Ask>)>,
+    /// What a load had to say (an IFC import's report), shown until closed.
+    report: Option<(PathBuf, Vec<String>)>,
     /// Browser: meshing the chosen part, on a later frame (after "Loading…" is drawn).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     mesh_later: Option<(u8, Box<dyn FnOnce()>)>,
@@ -659,6 +662,7 @@ impl Viewer {
             files: files::Files::default(),
             parse_later: None,
             ask: None,
+            report: None,
             mesh_later: None,
             views: Vec::new(),
             active_view: None,
@@ -727,8 +731,7 @@ impl Viewer {
         let t = Instant::now();
         let is_ifc = job.name.to_ascii_lowercase().ends_with(".ifc");
         let r = if job.import {
-            import_bytes(&job.name, &job.bytes)
-                .map(|(s, m)| big::Outcome::ready(s, Some(m), t.elapsed()))
+            import_bytes(&job.name, &job.bytes).map(|(s, m, report)| imported(s, m, t, report))
         } else if is_ifc && !job.link {
             big::load_ifc(job.bytes, big::memory_budget(), job.read_anyway)
         } else {
@@ -872,7 +875,7 @@ impl Viewer {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let t = Instant::now();
-            let r = import_any(&p).map(|(s, m)| big::Outcome::ready(s, Some(m), t.elapsed()));
+            let r = import_any(&p).map(|(s, m, report)| imported(s, m, t, report));
             let _ = tx.send(r);
             ctx.request_repaint();
         });
@@ -1003,7 +1006,11 @@ impl Viewer {
                 model,
                 time: load_time,
                 partial,
+                report,
             }) => {
+                if !report.is_empty() {
+                    self.report = Some((path.clone(), report));
+                }
                 // Also in the browser's console, where they can be copied.
                 for w in scene.warnings.iter().take(50) {
                     log::warn!("{w}");
@@ -2984,6 +2991,33 @@ impl Viewer {
         }
     }
 
+    /// An import's report (ADR 0032: what didn't come in is said, not dropped).
+    fn report_ui(&mut self, ctx: &egui::Context) {
+        let Some((path, lines)) = &self.report else {
+            return;
+        };
+        let mut open = true;
+        let name = path
+            .file_name()
+            .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+        egui::Window::new(format!("Imported: {name}"))
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for l in lines {
+                            ui.label(l);
+                        }
+                    });
+            });
+        if !open {
+            self.report = None;
+        }
+    }
+
     /// The questions that need an answer before going on.
     fn confirm_ui(&mut self, ctx: &egui::Context) {
         let Some(c) = self.confirm else { return };
@@ -3608,6 +3642,7 @@ impl eframe::App for Viewer {
         }
         self.confirm_ui(&ctx);
         self.ask_ui(&ctx);
+        self.report_ui(&ctx);
     }
 }
 

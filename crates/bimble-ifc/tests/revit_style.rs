@@ -504,6 +504,14 @@ fn unsupported_products_are_reported() {
     ));
     assert_eq!(skipped(&rep, "IFCROOF"), 1, "report: {rep:?}");
     assert_eq!(rep.skipped.len(), 1, "report: {rep:?}");
+    // The report in words (CLI and viewer) says it too.
+    let lines = rep.lines();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("skipped:") && l.contains("IFCROOF")),
+        "{lines:?}"
+    );
 }
 
 /// A second product with the same GlobalId is skipped and reported, not written over the first;

@@ -17,6 +17,8 @@ pub enum Outcome {
         model: Option<bimble_core::Model>,
         time: Duration,
         partial: Option<String>,
+        /// What to tell about the load (an IFC import's report), shown until closed.
+        report: Vec<String>,
     },
     Ask(Box<Ask>),
 }
@@ -28,6 +30,7 @@ impl Outcome {
             model,
             time,
             partial: None,
+            report: Vec::new(),
         }
     }
 }
@@ -94,6 +97,7 @@ impl Choose {
             model: None,
             time: t.elapsed(),
             partial,
+            report: Vec::new(),
         }
     }
 }
