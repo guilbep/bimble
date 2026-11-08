@@ -98,7 +98,7 @@ pub struct Measures {
 
 /// Measure one element from its mesh.
 pub fn measure(scene: &Scene, e: &SceneElement) -> Option<Measures> {
-    let m = &e.mesh;
+    let m = e.world_mesh();
     let o = scene.origin_mm;
     if m.positions.is_empty() {
         return None;
@@ -203,7 +203,7 @@ fn crossings(scene: &Scene) -> Vec<([f64; 2], String)> {
             .filter(|e| e.class.eq_ignore_ascii_case("IfcColumn"))
             .filter_map(|e| {
                 let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-                for p in &e.mesh.positions {
+                for p in &e.world_mesh().positions {
                     for k in 0..2 {
                         lo[k] = lo[k].min(p[k] as f64 + o[k]);
                         hi[k] = hi[k].max(p[k] as f64 + o[k]);

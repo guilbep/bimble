@@ -769,7 +769,8 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             hidden += 1;
             continue;
         }
-        let m = &e.mesh;
+        let world = e.world_mesh();
+        let m: &bimble_geom::Mesh = &world;
         let (zmin, zmax) = m
             .positions
             .iter()

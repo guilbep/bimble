@@ -2160,7 +2160,7 @@ impl Viewer {
         let ours =
             bimble_render::pick_hit_bvh(&l.scene, &l.bvh, |i| self.visible(i), o, d, clip.as_ref())
                 .map(|hit| {
-                    let mesh = &l.scene.elements[hit.element].mesh;
+                    let mesh = &*l.scene.elements[hit.element].world_mesh();
                     (
                         hit.distance,
                         measure::snap(mesh, &hit, (o, d), &vp, rect, pos),
@@ -2184,7 +2184,7 @@ impl Viewer {
                 clip.as_ref(),
             )?;
             let vpl = vp * glam::Mat4::from_translation(k.offset);
-            let mesh = &k.scene.elements[hit.element].mesh;
+            let mesh = &*k.scene.elements[hit.element].world_mesh();
             let mut s = measure::snap(mesh, &hit, (o - k.offset, d), &vpl, rect, pos);
             s.point += k.offset;
             s.element = usize::MAX;
@@ -3432,7 +3432,10 @@ impl Viewer {
                 row("Storey", &e.storey);
                 row("Material", &e.material);
                 row("Family", e.category.label());
-                row("Volume", &format!("{:.3} m³", e.mesh.volume() / 1e9));
+                row(
+                    "Volume",
+                    &format!("{:.3} m³", e.world_mesh().volume() / 1e9),
+                );
                 let matched = k.matched_there.get(i).copied().unwrap_or(true);
                 row(
                     "In the host",
@@ -3479,8 +3482,11 @@ impl Viewer {
                 row("Storey", &e.storey);
                 row("Material", &e.material);
                 row("Family", e.category.label());
-                row("Triangles", &e.mesh.triangle_count().to_string());
-                row("Volume", &format!("{:.3} m³", e.mesh.volume() / 1e9));
+                row("Triangles", &e.triangle_count().to_string());
+                row(
+                    "Volume",
+                    &format!("{:.3} m³", e.world_mesh().volume() / 1e9),
+                );
             });
     }
 

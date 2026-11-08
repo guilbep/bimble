@@ -4,7 +4,9 @@
 use crate::Mesh;
 use bimble_core::{MaterialCategory, Model};
 use rayon::prelude::*;
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct SceneElement {
@@ -15,7 +17,156 @@ pub struct SceneElement {
     pub storey: String,
     pub material: String,
     pub category: MaterialCategory,
-    pub mesh: Mesh,
+    pub geometry: Geometry,
+}
+
+/// An element's triangles: its own, or a shape shared with other elements and placed
+/// (ADR 0034: a mapped IFC shape is meshed once, whatever the number of copies).
+#[derive(Debug, Clone)]
+pub enum Geometry {
+    /// Scene coordinates (mm, relative to the scene origin).
+    Own(Mesh),
+    /// The shape in its own coordinates (mm), and where it goes in the scene.
+    Instance {
+        shape: Arc<Mesh>,
+        to_scene: Placement32,
+    },
+}
+
+/// Where a shape goes in the scene: columns of the linear part (rotation, maybe mirror or
+/// scale) and a translation, mm, f32 relative to the scene origin.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placement32 {
+    pub x: [f32; 3],
+    pub y: [f32; 3],
+    pub z: [f32; 3],
+    pub t: [f32; 3],
+}
+
+impl Placement32 {
+    pub fn apply(&self, p: [f32; 3]) -> [f32; 3] {
+        [0, 1, 2].map(|k| self.x[k] * p[0] + self.y[k] * p[1] + self.z[k] * p[2] + self.t[k])
+    }
+
+    pub fn rotate(&self, v: [f32; 3]) -> [f32; 3] {
+        [0, 1, 2].map(|k| self.x[k] * v[0] + self.y[k] * v[1] + self.z[k] * v[2])
+    }
+
+    /// A mirror turns triangles inside out: their winding must be flipped.
+    pub fn mirrors(&self) -> bool {
+        let c = [
+            self.y[1] * self.z[2] - self.y[2] * self.z[1],
+            self.y[2] * self.z[0] - self.y[0] * self.z[2],
+            self.y[0] * self.z[1] - self.y[1] * self.z[0],
+        ];
+        self.x[0] * c[0] + self.x[1] * c[1] + self.x[2] * c[2] < 0.0
+    }
+
+    /// The shape's mesh in the scene.
+    pub fn mesh(&self, shape: &Mesh) -> Mesh {
+        let mut indices = shape.indices.clone();
+        if self.mirrors() {
+            for t in indices.as_chunks_mut::<3>().0 {
+                t.swap(1, 2);
+            }
+        }
+        let unpack = |n: [i8; 4]| [n[0], n[1], n[2]].map(|c| c as f32 / 127.0);
+        let turn = |n: [i8; 4]| {
+            if n == [0; 4] {
+                return n;
+            }
+            let v = self.rotate(unpack(n));
+            let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-12);
+            crate::pack_normal(v.map(|c| c / l))
+        };
+        Mesh {
+            positions: shape.positions.iter().map(|p| self.apply(*p)).collect(),
+            indices,
+            edges: shape
+                .edges
+                .iter()
+                .map(|s| [self.apply(s[0]), self.apply(s[1])])
+                .collect(),
+            edge_normals: shape
+                .edge_normals
+                .iter()
+                .map(|[a, b]| [turn(*a), turn(*b)])
+                .collect(),
+        }
+    }
+}
+
+/// A placement while building, f64 world mm (`Placement32` once the scene origin is known).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Transform {
+    pub x: [f64; 3],
+    pub y: [f64; 3],
+    pub z: [f64; 3],
+    pub t: [f64; 3],
+}
+
+impl Transform {
+    pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
+        [0, 1, 2].map(|k| self.x[k] * p[0] + self.y[k] * p[1] + self.z[k] * p[2] + self.t[k])
+    }
+
+    fn relative_to(&self, origin: [f64; 3]) -> Placement32 {
+        let f = |v: [f64; 3]| v.map(|c| c as f32);
+        Placement32 {
+            x: f(self.x),
+            y: f(self.y),
+            z: f(self.z),
+            t: [0, 1, 2].map(|k| (self.t[k] - origin[k]) as f32),
+        }
+    }
+}
+
+impl SceneElement {
+    /// Its triangles in scene coordinates: its own, or its shape placed (computed).
+    pub fn world_mesh(&self) -> Cow<'_, Mesh> {
+        match &self.geometry {
+            Geometry::Own(m) => Cow::Borrowed(m),
+            Geometry::Instance { shape, to_scene } => Cow::Owned(to_scene.mesh(shape)),
+        }
+    }
+
+    pub fn triangle_count(&self) -> usize {
+        self.local_mesh().triangle_count()
+    }
+
+    pub fn edge_count(&self) -> usize {
+        self.local_mesh().edges.len()
+    }
+
+    /// Its own mesh, or its shape in the shape's coordinates.
+    pub fn local_mesh(&self) -> &Mesh {
+        match &self.geometry {
+            Geometry::Own(m) => m,
+            Geometry::Instance { shape, .. } => shape,
+        }
+    }
+
+    /// Bounds in scene coordinates.
+    pub fn bounds(&self) -> crate::bvh::Aabb {
+        use crate::bvh::Aabb;
+        match &self.geometry {
+            Geometry::Own(m) => Aabb::of_points(&m.positions),
+            Geometry::Instance { shape, to_scene } => {
+                let b = Aabb::of_points(&shape.positions);
+                if b.is_empty() {
+                    return b;
+                }
+                let corners: Vec<[f32; 3]> = (0..8)
+                    .map(|i| {
+                        let c =
+                            [0, 1, 2].map(|k| if i >> k & 1 == 0 { b.min[k] } else { b.max[k] });
+                        to_scene.apply(c)
+                    })
+                    .collect();
+                Aabb::of_points(&corners)
+            }
+        }
+    }
 }
 
 /// One axis of a structural grid (IfcGridAxis): its tag ("A", "1") and its end points in plan,
@@ -72,20 +223,16 @@ pub struct Scene {
 
 impl Scene {
     pub fn triangle_count(&self) -> usize {
-        self.elements.iter().map(|e| e.mesh.triangle_count()).sum()
+        self.elements.iter().map(|e| e.triangle_count()).sum()
     }
 
     /// Bounding box in scene coordinates (relative to origin), or None if empty.
     pub fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
-        let mut it = self.elements.iter().flat_map(|e| e.mesh.positions.iter());
-        let first = *it.next()?;
-        Some(it.fold((first, first), |(mut lo, mut hi), p| {
-            for k in 0..3 {
-                lo[k] = lo[k].min(p[k]);
-                hi[k] = hi[k].max(p[k]);
-            }
-            (lo, hi)
-        }))
+        let b = self
+            .elements
+            .iter()
+            .fold(crate::bvh::Aabb::EMPTY, |b, e| b.union(&e.bounds()));
+        (!b.is_empty()).then_some((b.min, b.max))
     }
 
     pub fn from_model(m: &Model) -> Scene {
@@ -162,7 +309,7 @@ pub struct ElementInfo {
 /// Collects world-space (f64, mm) triangles per element, then rebases them to a common origin.
 #[derive(Default)]
 pub struct SceneBuilder {
-    items: Vec<(ElementInfo, MeshBuilder)>,
+    items: Vec<(ElementInfo, Body)>,
     pub warnings: Vec<String>,
     /// Storeys (any order; sorted by elevation in `finish`).
     pub storeys: Vec<StoreyLevel>,
@@ -179,17 +326,36 @@ impl SceneBuilder {
 
     pub fn push(&mut self, info: ElementInfo, mesh: MeshBuilder) {
         if !mesh.tris.is_empty() {
-            self.items.push((info, mesh));
+            self.items.push((info, Body::Tris(mesh)));
+        }
+    }
+
+    /// An element that is a shared shape (mm, its own coordinates, already built) placed in the
+    /// world (ADR 0034).
+    pub fn push_instance(&mut self, info: ElementInfo, shape: Arc<Mesh>, to_world: Transform) {
+        if !shape.indices.is_empty() {
+            self.items.push((info, Body::Instance(shape, to_world)));
         }
     }
 
     pub fn finish(self) -> Scene {
         let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-        for (_, mb) in &self.items {
-            for p in mb.tris.iter().flatten() {
-                for k in 0..3 {
-                    lo[k] = lo[k].min(p[k]);
-                    hi[k] = hi[k].max(p[k]);
+        let mut add = |p: [f64; 3]| {
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        };
+        for (_, body) in &self.items {
+            match body {
+                Body::Tris(mb) => mb.tris.iter().flatten().for_each(|p| add(*p)),
+                Body::Instance(shape, tf) => {
+                    let b = crate::bvh::Aabb::of_points(&shape.positions);
+                    for i in 0..8 {
+                        let c = [0, 1, 2]
+                            .map(|k| f64::from(if i >> k & 1 == 0 { b.min[k] } else { b.max[k] }));
+                        add(tf.apply(c));
+                    }
                 }
             }
         }
@@ -204,17 +370,23 @@ impl SceneBuilder {
             elements: self
                 .items
                 .into_par_iter()
-                .map(|(info, mb)| SceneElement {
+                .map(|(info, body)| SceneElement {
                     global_id: info.global_id,
                     class: info.class,
                     name: info.name,
                     storey: info.storey,
                     material: info.material,
                     category: info.category,
-                    mesh: mb.build(origin),
+                    geometry: match body {
+                        Body::Tris(mb) => Geometry::Own(mb.build(origin)),
+                        Body::Instance(shape, tf) => Geometry::Instance {
+                            shape,
+                            to_scene: tf.relative_to(origin),
+                        },
+                    },
                 })
                 // Degenerate triangles are dropped in build(): an element can end up empty.
-                .filter(|e| !e.mesh.indices.is_empty())
+                .filter(|e| e.triangle_count() > 0)
                 .collect(),
             warnings: self.warnings,
             grids: self.grids,
@@ -225,6 +397,12 @@ impl SceneBuilder {
             },
         }
     }
+}
+
+/// What an element is made of while building: world triangles, or a placed shape.
+enum Body {
+    Tris(MeshBuilder),
+    Instance(Arc<Mesh>, Transform),
 }
 
 /// World-space triangle soup for one element. Each triangle gets its own flat normal.
@@ -511,7 +689,7 @@ mod tests {
         let model = concrete_frame(&FrameSpec::default());
         let s = Scene::from_model(&model);
         assert_eq!(s.elements.len(), model.elements.len());
-        let v: f64 = s.elements.iter().map(|e| e.mesh.volume()).sum();
+        let v: f64 = s.elements.iter().map(|e| e.world_mesh().volume()).sum();
         let want: f64 = model
             .elements
             .values()

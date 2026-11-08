@@ -78,11 +78,7 @@ const LEAF: usize = 4;
 
 /// The bounds of each element of a scene, for a tree over them (empty for an empty mesh).
 pub fn element_boxes(scene: &crate::Scene) -> Vec<Aabb> {
-    scene
-        .elements
-        .iter()
-        .map(|e| Aabb::of_points(&e.mesh.positions))
-        .collect()
+    scene.elements.iter().map(|e| e.bounds()).collect()
 }
 
 impl Bvh {

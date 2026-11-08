@@ -26,7 +26,7 @@ pub fn cut_lines(
         if !visible(i) {
             continue;
         }
-        let m = &e.mesh;
+        let m = e.world_mesh();
         let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
         for p in &m.positions {
             let p = Vec3::from_array(*p);

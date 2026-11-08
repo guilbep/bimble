@@ -13,6 +13,7 @@ use bimble_geom::scene::{cross, dot, norm, sub};
 use bimble_geom::{ElementInfo, MeshBuilder, Scene, SceneBuilder};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -213,6 +214,24 @@ pub struct Parsed {
     warnings: BTreeMap<String, usize>,
 }
 
+/// Shapes of representation maps, by map id (ADR 0034).
+type Shapes = HashMap<u64, Arc<bimble_geom::Mesh>>;
+
+/// An element's geometry while meshing: its own triangles, or a shape placed.
+enum Piece {
+    Tris(MeshBuilder),
+    Instance(Arc<bimble_geom::Mesh>, bimble_geom::scene::Transform),
+}
+
+impl Piece {
+    fn triangles(&self) -> usize {
+        match self {
+            Piece::Tris(mb) => mb.tris.len(),
+            Piece::Instance(shape, _) => shape.triangle_count(),
+        }
+    }
+}
+
 /// One element of a parsed file and how many triangles it meshes to.
 #[derive(Clone, Debug)]
 pub struct Counted {
@@ -277,10 +296,94 @@ impl Parsed {
         })
     }
 
-    /// Mesh element `id` with its openings cut.
-    fn element(&self, w: &mut Reader, id: u64, budget: &Budget) -> (ElementInfo, MeshBuilder) {
+    /// The single IfcMappedItem an element's Body is, when that is all it is and nothing cuts
+    /// it: such an element is its map's shape, placed (ADR 0034).
+    fn mapped_item(&self, id: u64) -> Option<&Entity> {
+        if self.voids.contains_key(&id) {
+            return None;
+        }
+        let f = &self.file;
+        let shape = f.deref(f.entities.get(&id)?.arg(6))?;
+        let mut items = shape
+            .arg(2)
+            .as_list()?
+            .iter()
+            .filter_map(|r| f.deref(r))
+            .filter(|r| is_body(r))
+            .flat_map(|r| r.arg(3).as_list().unwrap_or(&[]).iter());
+        let only = f.deref(items.next()?)?;
+        (items.next().is_none() && only.name == "IFCMAPPEDITEM").then_some(only)
+    }
+
+    /// The shapes of the maps that the elements `ids` are, each meshed once (mm, the map's
+    /// coordinates), with what meshing them had to say.
+    fn shapes(&self, ids: &[u64], budget: &Budget) -> (Shapes, BTreeMap<String, usize>) {
+        let maps: std::collections::BTreeSet<u64> = ids
+            .iter()
+            .filter_map(|&id| self.mapped_item(id)?.arg(0).as_ref())
+            .collect();
+        let maps: Vec<u64> = maps.into_iter().collect();
+        let meshed: Vec<(u64, Arc<bimble_geom::Mesh>, BTreeMap<String, usize>)> = maps
+            .par_iter()
+            .map_init(
+                || self.reader(),
+                |w, &m| {
+                    let mut mb = MeshBuilder::default();
+                    if let Some(map) = self.file.get(m) {
+                        let mut emit = Emit {
+                            mb: &mut mb,
+                            scale: self.scale,
+                            budget,
+                        };
+                        w.map_shape(m, map, &mut emit);
+                    }
+                    (
+                        m,
+                        Arc::new(mb.build([0.0; 3])),
+                        std::mem::take(&mut w.warnings),
+                    )
+                },
+            )
+            .collect();
+        let mut warnings = BTreeMap::new();
+        let mut shapes = HashMap::new();
+        for (m, shape, w) in meshed {
+            for (k, n) in w {
+                *warnings.entry(k).or_default() += n;
+            }
+            shapes.insert(m, shape);
+        }
+        (shapes, warnings)
+    }
+
+    /// Element `id`: its map's shape placed, or its own triangles with its openings cut.
+    fn piece(
+        &self,
+        w: &mut Reader,
+        id: u64,
+        shapes: &Shapes,
+        budget: &Budget,
+    ) -> (ElementInfo, Piece) {
         let file = &self.file;
         let e = &file.entities[&id];
+        let info = self.info(id, e);
+        if let Some(mi) = self.mapped_item(id)
+            && let Some(shape) = mi.arg(0).as_ref().and_then(|m| shapes.get(&m))
+            && let Some(pl) = e.arg(5).as_ref()
+        {
+            // As `item` places a map: product placement ∘ mapping target ∘ map origin, the
+            // origin being in the shape already. File units → mm: the translation scales.
+            let t = w
+                .object_placement(pl, 0)
+                .then(&w.transform_operator(mi.arg(1)));
+            let to_world = bimble_geom::scene::Transform {
+                x: t.x,
+                y: t.y,
+                z: t.z,
+                t: t.t.map(|c| c * self.scale),
+            };
+            return (info, Piece::Instance(shape.clone(), to_world));
+        }
         let mut mb = MeshBuilder::default();
         {
             let mut emit = Emit {
@@ -308,7 +411,10 @@ impl Parsed {
             }
             w.cut(&mut mb.tris, &cutters, &class_name(&e.name));
         }
-        let class = class_name(&e.name);
+        (info, Piece::Tris(mb))
+    }
+
+    fn info(&self, id: u64, e: &Entity) -> ElementInfo {
         let (material, mut category) = self
             .materials
             .get(&id)
@@ -317,15 +423,14 @@ impl Parsed {
         if material.is_empty() && e.name == "IFCGEOGRAPHICELEMENT" {
             category = MaterialCategory::Earth;
         }
-        let info = ElementInfo {
+        ElementInfo {
             global_id: e.arg(0).as_str().unwrap_or("").to_owned(),
-            class,
+            class: class_name(&e.name),
             name: e.arg(2).as_str().unwrap_or("").to_owned(),
             storey: self.containers.get(&id).cloned().unwrap_or_default(),
             material,
             category,
-        };
-        (info, mb)
+        }
     }
 
     /// A worker's reader: its own placement cache and warnings.
@@ -357,14 +462,18 @@ impl Parsed {
                 ..self.limits
             })
         };
+        // Each shape is meshed once and counted for each element that is it.
+        let (shapes, _) = self.shapes(&self.ids, &budget);
         self.ids
             .par_iter()
             .map_init(
                 || self.reader(),
                 |w, &id| {
-                    let (info, mb) = self.element(w, id, &budget);
-                    let triangles = mb.tris.len();
-                    Counted { info, triangles }
+                    let (info, piece) = self.piece(w, id, &shapes, &budget);
+                    Counted {
+                        info,
+                        triangles: piece.triangles(),
+                    }
                 },
             )
             .collect()
@@ -396,7 +505,20 @@ impl Parsed {
         let mut sb = SceneBuilder::with_storeys(self.storeys.clone());
         sb.grids = self.grids.clone();
         let (mut total, mut shown) = (0usize, 0usize);
-        type Meshed = (ElementInfo, MeshBuilder, BTreeMap<String, usize>);
+        let (shapes, shape_warnings) = self.shapes(
+            &picked,
+            &Budget {
+                element_max: cap.min(ELEMENT_MAX_TRIANGLES).saturating_add(1),
+                ..Budget::new(&Limits {
+                    max_triangles: usize::MAX,
+                    ..self.limits
+                })
+            },
+        );
+        for (k, n) in shape_warnings {
+            *warnings.entry(k).or_default() += n;
+        }
+        type Meshed = (ElementInfo, Piece, BTreeMap<String, usize>);
         'batches: for batch in picked.chunks(1024) {
             let guard = || Budget {
                 element_max: cap.min(ELEMENT_MAX_TRIANGLES).saturating_add(1),
@@ -411,8 +533,8 @@ impl Parsed {
                 .map_init(
                     || self.reader(),
                     |w, &id| {
-                        let (info, mb) = self.element(w, id, &g);
-                        (info, mb, std::mem::take(&mut w.warnings))
+                        let (info, piece) = self.piece(w, id, &shapes, &g);
+                        (info, piece, std::mem::take(&mut w.warnings))
                     },
                 )
                 .collect();
@@ -425,9 +547,9 @@ impl Parsed {
                 let mut sum = total;
                 results = Vec::new();
                 for &id in batch {
-                    let (info, mb) = self.element(&mut w, id, &g2);
-                    sum += mb.tris.len();
-                    results.push((info, mb, std::mem::take(&mut w.warnings)));
+                    let (info, piece) = self.piece(&mut w, id, &shapes, &g2);
+                    sum += piece.triangles();
+                    results.push((info, piece, std::mem::take(&mut w.warnings)));
                     if sum > cap {
                         break;
                     }
@@ -440,16 +562,20 @@ impl Parsed {
             if left == 0 {
                 visits.exhausted.store(true, Ordering::Relaxed);
             }
-            for (info, mb, w) in results {
+            for (info, piece, w) in results {
                 for (k, n) in w {
                     *warnings.entry(k).or_default() += n;
                 }
-                if total + mb.tris.len() > cap {
+                let n = piece.triangles();
+                if total + n > cap {
                     break 'batches;
                 }
-                total += mb.tris.len();
+                total += n;
                 shown += 1;
-                sb.push(info, mb);
+                match piece {
+                    Piece::Tris(mb) => sb.push(info, mb),
+                    Piece::Instance(shape, tf) => sb.push_instance(info, shape, tf),
+                }
             }
             if visits.exhausted() {
                 break;
@@ -1224,6 +1350,22 @@ impl<'a> Reader<'a> {
             "IFCSTYLEDITEM" => {}
             other => self.warn(format!("unsupported geometry {other} (skipped)")),
         }
+    }
+
+    /// A representation map's items in the map's own coordinates (its origin applied), into
+    /// `out`: the shape every element mapping it shares (ADR 0034).
+    pub(crate) fn map_shape(&mut self, map_id: u64, map: &Entity, out: &mut Emit) {
+        let origin = self.axis_placement(map.arg(0));
+        let Some(rep) = self.get(map.arg(1)) else {
+            return;
+        };
+        self.map_stack.push(map_id);
+        for it in rep.arg(3).as_list().unwrap_or(&[]) {
+            if let Some(i) = it.as_ref() {
+                self.item(i, &origin, out, 1);
+            }
+        }
+        self.map_stack.pop();
     }
 
     /// The Body representation of a product, placed in the world, into `out`.
@@ -2216,7 +2358,7 @@ mod tests {
         let census = demo_parsed(Limits::default()).census();
         let (full, _) = demo_parsed(Limits::default()).scene(|_| true, usize::MAX);
         let counted: usize = census.iter().map(|c| c.triangles).sum();
-        let drawn: usize = full.elements.iter().map(|e| e.mesh.indices.len() / 3).sum();
+        let drawn: usize = full.elements.iter().map(|e| e.triangle_count()).sum();
         assert_eq!(counted, drawn);
         let storey = census[0].info.storey.clone();
         let chosen = ids(census
@@ -2388,13 +2530,13 @@ mod tests {
             assert_eq!(e.class, n.class);
             assert_eq!(e.storey, n.storey);
             assert_eq!(e.category, MaterialCategory::Concrete);
-            let (v1, v2) = (e.mesh.volume(), n.mesh.volume());
+            let (v1, v2) = (e.world_mesh().volume(), n.world_mesh().volume());
             assert!((v1 - v2).abs() / v2 < 1e-5, "{}: {v1} vs {v2}", e.name);
             // World bounding boxes agree to 0.01 mm.
             let bb = |el: &bimble_geom::SceneElement, o: [f64; 3]| {
                 let mut lo = [f64::MAX; 3];
                 let mut hi = [f64::MIN; 3];
-                for p in &el.mesh.positions {
+                for p in &el.world_mesh().positions {
                     for k in 0..3 {
                         let w = p[k] as f64 + o[k];
                         lo[k] = lo[k].min(w);

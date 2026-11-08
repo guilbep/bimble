@@ -28,8 +28,16 @@ fn fixture(name: &str) -> String {
 }
 
 fn measure(scene: &Scene) -> serde_json::Value {
-    let tris: usize = scene.elements.iter().map(|e| e.mesh.triangle_count()).sum();
-    let edges: usize = scene.elements.iter().map(|e| e.mesh.edges.len()).sum();
+    let tris: usize = scene
+        .elements
+        .iter()
+        .map(|e| e.world_mesh().triangle_count())
+        .sum();
+    let edges: usize = scene
+        .elements
+        .iter()
+        .map(|e| e.world_mesh().edges.len())
+        .sum();
     serde_json::json!({
         "elements": scene.elements.len(),
         "triangles": tris,

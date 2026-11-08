@@ -261,7 +261,9 @@ fn map_scene(
         .filter(|e| visible(e))
         .map(|e| {
             let mut e = e.clone();
-            let m = &mut e.mesh;
+            // The view's transform applies to world triangles: an instance becomes its own.
+            let mut mesh = e.world_mesh().into_owned();
+            let m = &mut mesh;
             for p in &mut m.positions {
                 *p = f(*p);
             }
@@ -281,6 +283,7 @@ fn map_scene(
                     }
                 }
             }
+            e.geometry = bimble_geom::scene::Geometry::Own(mesh);
             e
         })
         .collect();

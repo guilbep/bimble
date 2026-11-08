@@ -86,7 +86,7 @@ pub fn targets(scene: &Scene, level: f64, next: f64) -> Targets {
     let key = |p: [f64; 2]| [(p[0] * 10.0).round() as i64, (p[1] * 10.0).round() as i64];
     let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     for e in &scene.elements {
-        let m = &e.mesh;
+        let m = e.world_mesh();
         let (mut zmin, mut zmax) = (f64::INFINITY, f64::NEG_INFINITY);
         let (mut elo, mut ehi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
         for p in &m.positions {

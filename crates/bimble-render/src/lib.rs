@@ -77,9 +77,10 @@ impl ClipBox {
             if !keep(i) {
                 continue;
             }
-            for p in &e.mesh.positions {
-                lo = lo.min(Vec3::from(*p));
-                hi = hi.max(Vec3::from(*p));
+            let b = e.bounds();
+            if !b.is_empty() {
+                lo = lo.min(Vec3::from(b.min));
+                hi = hi.max(Vec3::from(b.max));
             }
         }
         // A small margin: faces lying exactly on a clip plane would flicker in and out.
@@ -778,8 +779,11 @@ impl Renderer {
                 Style::OnlyInReference => style_gpu::ONLY_IN_REFERENCE_SLOT,
                 Style::Normal | Style::Hidden => style_gpu::slot(e.category),
             };
-            for t in e.mesh.indices.as_chunks::<3>().0 {
-                let [a, b, c] = t.map(|k| e.mesh.positions[k as usize]);
+            // ponytail: instances expanded into world vertices here (ADR 0034 phase 1); one
+            // buffer per shape and an instance buffer is phase 2.
+            let m = e.world_mesh();
+            for t in m.indices.as_chunks::<3>().0 {
+                let [a, b, c] = t.map(|k| m.positions[k as usize]);
                 let n = (Vec3::from(b) - Vec3::from(a))
                     .cross(Vec3::from(c) - Vec3::from(a))
                     .normalize_or(Vec3::Z);
@@ -790,14 +794,14 @@ impl Renderer {
                 }
             }
             if edge_normals {
-                for (k, seg) in e.mesh.edges.iter().enumerate() {
-                    let [n1, n2] = e.mesh.edge_normals.get(k).copied().unwrap_or_default();
+                for (k, seg) in m.edges.iter().enumerate() {
+                    let [n1, n2] = m.edge_normals.get(k).copied().unwrap_or_default();
                     for &pos in seg {
                         lines.push(LineVertex { pos, n1, n2 });
                     }
                 }
             } else {
-                for &pos in e.mesh.edges.iter().flatten() {
+                for &pos in m.edges.iter().flatten() {
                     lines_lean.push(pos);
                 }
             }
@@ -1108,8 +1112,9 @@ fn element_hit(
     entry: Option<(f32, Vec3)>,
 ) -> Option<Hit> {
     let mut nearest: Option<(f32, Vec3)> = None;
-    for t in e.mesh.indices.as_chunks::<3>().0 {
-        let [a, b, c] = t.map(|k| Vec3::from(e.mesh.positions[k as usize]));
+    let m = e.world_mesh();
+    for t in m.indices.as_chunks::<3>().0 {
+        let [a, b, c] = t.map(|k| Vec3::from(m.positions[k as usize]));
         let Some(d) = ray_triangle(origin, dir, a, b, c) else {
             continue;
         };
@@ -1960,11 +1965,8 @@ mod tests {
         let scene = family_boxes();
         // Straight down through the first box (x 0..1000, y 0..1000, z 0..1000, scene coords).
         // The exact box of element 0 (`around` adds a margin).
-        let ps = scene.elements[0]
-            .mesh
-            .positions
-            .iter()
-            .map(|p| Vec3::from(*p));
+        let m0 = scene.elements[0].world_mesh();
+        let ps = m0.positions.iter().map(|p| Vec3::from(*p));
         let b0 = ClipBox {
             min: ps.clone().fold(Vec3::INFINITY, Vec3::min),
             max: ps.fold(Vec3::NEG_INFINITY, Vec3::max),

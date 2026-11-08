@@ -21,7 +21,7 @@ fn bbox(scene: &bimble_geom::Scene, name: &str) -> ([f64; 3], [f64; 3]) {
         .unwrap_or_else(|| panic!("no element {name}"));
     let mut lo = [f64::MAX; 3];
     let mut hi = [f64::MIN; 3];
-    for p in &e.mesh.positions {
+    for p in &e.world_mesh().positions {
         for k in 0..3 {
             let w = p[k] as f64 + scene.origin_mm[k];
             lo[k] = lo[k].min(w);
@@ -122,7 +122,7 @@ fn boolean_cuts_and_openings_are_exact() {
             .iter()
             .find(|e| e.name == name)
             .unwrap()
-            .mesh
+            .world_mesh()
             .volume()
     };
     let close = |name: &str, want: f64, tol: f64| {
@@ -170,4 +170,52 @@ fn a_small_file_that_explodes_stops_at_the_expansion_guard() {
     );
     let l = bimble_ifc::read::Limits::for_displayed(500_000_000);
     assert_eq!(l.max_triangles, 5_000_000_000);
+}
+
+/// Elements that are the same mapped shape share one mesh (ADR 0034), placed where expanding
+/// it would put it, mirrored placements included (their triangles still face outward).
+#[test]
+fn mapped_shapes_are_meshed_once_and_placed() {
+    use bimble_geom::scene::Geometry;
+    let copy = "#900=IFCCARTESIANPOINT((5000.,0.,0.));
+#901=IFCAXIS2PLACEMENT3D(#900,$,$);
+#902=IFCLOCALPLACEMENT($,#901);
+#903=IFCMAPPEDITEM(#23,#25);
+#904=IFCSHAPEREPRESENTATION(#5,'Body','MappedRepresentation',(#903));
+#905=IFCPRODUCTDEFINITIONSHAPE($,$,(#904));
+#906=IFCBUILDINGELEMENTPROXY('3YvctVUKr0kugbFTf53O9L',$,'copy',$,$,#902,#905,$,$);
+ENDSEC;";
+    let text = fixture("mirror.ifc").replacen("ENDSEC;", "ENDSEC;\0", 2);
+    // The second ENDSEC closes DATA: put the copy before it.
+    let mut parts = text.splitn(3, "ENDSEC;\0");
+    let (head, data, tail) = (
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+    );
+    let text = format!("{head}ENDSEC;{data}{copy}{tail}");
+    let s = bimble_ifc::read::read_str(&text).unwrap();
+    let get = |n: &str| s.elements.iter().find(|e| e.name == n).unwrap();
+    let (a, b) = (get("mapped"), get("copy"));
+    let (Geometry::Instance { shape: sa, .. }, Geometry::Instance { shape: sb, .. }) =
+        (&a.geometry, &b.geometry)
+    else {
+        panic!("both are instances");
+    };
+    assert!(std::sync::Arc::ptr_eq(sa, sb), "one shape, meshed once");
+    let (ba, bb) = (a.bounds(), b.bounds());
+    for k in 0..3 {
+        let shift = if k == 0 { 5000.0 } else { 0.0 };
+        assert!(
+            (bb.min[k] - ba.min[k] - shift).abs() < 0.01,
+            "{ba:?} {bb:?}"
+        );
+        assert!(
+            (bb.max[k] - ba.max[k] - shift).abs() < 0.01,
+            "{ba:?} {bb:?}"
+        );
+    }
+    for e in [a, b] {
+        assert!(e.world_mesh().volume() > 0.0, "{} faces outward", e.name);
+    }
 }

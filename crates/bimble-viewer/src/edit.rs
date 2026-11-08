@@ -694,7 +694,7 @@ mod tests {
         let scene = bimble_geom::Scene::from_model(&m);
         let col = scene.elements.iter().find(|e| e.name == "P1").unwrap();
         let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
-        for p in &col.mesh.positions {
+        for p in &col.world_mesh().positions {
             for k in 0..3 {
                 lo[k] = lo[k].min(p[k] as f64 + scene.origin_mm[k]);
                 hi[k] = hi[k].max(p[k] as f64 + scene.origin_mm[k]);

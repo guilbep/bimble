@@ -314,7 +314,7 @@ fn world_boxes(scene: &bimble_geom::Scene) -> std::collections::BTreeMap<String,
     let mut out = std::collections::BTreeMap::new();
     for e in &scene.elements {
         let mut b = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
-        for p in &e.mesh.positions {
+        for p in &e.world_mesh().positions {
             for k in 0..3 {
                 let v = p[k] as f64 + scene.origin_mm[k];
                 b[0][k] = b[0][k].min(v);

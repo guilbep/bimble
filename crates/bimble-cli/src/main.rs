@@ -491,7 +491,7 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             println!("classes   {}", fmt_counts(&classes));
             println!("materials {}", fmt_counts(&cats));
-            let edges: usize = scene.elements.iter().map(|e| e.mesh.edges.len()).sum();
+            let edges: usize = scene.elements.iter().map(|e| e.edge_count()).sum();
             println!(
                 "meshes    {} triangles, {edges} edges",
                 scene.triangle_count()
@@ -1378,7 +1378,8 @@ fn print_elements_json(scene: &bimble_geom::Scene) {
     for el in &scene.elements {
         let mut lo = [f64::MAX; 3];
         let mut hi = [f64::MIN; 3];
-        for p in &el.mesh.positions {
+        let world = el.world_mesh();
+        for p in &world.positions {
             for k in 0..3 {
                 let w = p[k] as f64 + o[k];
                 lo[k] = lo[k].min(w);
@@ -1388,7 +1389,7 @@ fn print_elements_json(scene: &bimble_geom::Scene) {
         let j = serde_json::json!({
             "global_id": el.global_id, "class": el.class, "name": el.name, "storey": el.storey,
             "material": el.material, "category": el.category.label(),
-            "triangles": el.mesh.triangle_count(), "volume_mm3": el.mesh.volume(),
+            "triangles": el.triangle_count(), "volume_mm3": world.volume(),
             "bbox_min_mm": lo, "bbox_max_mm": hi,
         });
         if writeln!(out, "{j}").is_err() {

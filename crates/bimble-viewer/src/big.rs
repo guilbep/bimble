@@ -384,11 +384,7 @@ mod tests {
             panic!()
         };
         assert!(partial.is_some_and(|p| p.contains("of")));
-        let got: usize = scene
-            .elements
-            .iter()
-            .map(|e| e.mesh.indices.len() / 3)
-            .sum();
+        let got: usize = scene.elements.iter().map(|e| e.triangle_count()).sum();
         assert_eq!(got, want);
         assert!(matches!(
             load_ifc(ifc, cost.read() - 1, false),

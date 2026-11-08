@@ -47,18 +47,11 @@ pub fn element_boxes(scene: &Scene) -> Vec<Option<Aabb>> {
         .elements
         .iter()
         .map(|e| {
-            let mut b = Aabb {
-                min: [f64::INFINITY; 3],
-                max: [f64::NEG_INFINITY; 3],
-            };
-            for p in &e.mesh.positions {
-                for k in 0..3 {
-                    let v = p[k] as f64 + o[k];
-                    b.min[k] = b.min[k].min(v);
-                    b.max[k] = b.max[k].max(v);
-                }
-            }
-            (b.min[0] <= b.max[0]).then_some(b)
+            let s = e.bounds();
+            (!s.is_empty()).then(|| Aabb {
+                min: [0, 1, 2].map(|k| s.min[k] as f64 + o[k]),
+                max: [0, 1, 2].map(|k| s.max[k] as f64 + o[k]),
+            })
         })
         .collect()
 }
