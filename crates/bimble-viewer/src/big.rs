@@ -82,6 +82,8 @@ impl Choose {
     }
 
     /// Mesh the chosen groups (all of them with `everything`) and free the parsed file.
+    /// "Anyway" overrides the memory budget, not the guard against hostile files: the cap is
+    /// what the census counted for the choice (each element itself capped while counted).
     pub fn scene(self, everything: bool) -> Outcome {
         let t = Instant::now();
         let partial = (!everything).then(|| self.label());
@@ -90,7 +92,11 @@ impl Choose {
             .iter()
             .map(|c| everything || self.chosen.iter().any(|g| g == self.split.key(c)))
             .collect();
-        let (scene, _) = self.parsed.scene(|i| keep[i], usize::MAX);
+        let cap: usize = (self.census.iter().zip(&keep))
+            .filter(|(_, k)| **k)
+            .map(|(c, _)| c.triangles)
+            .sum();
+        let (scene, _) = self.parsed.scene(|i| keep[i], cap);
         self.parsed.free();
         Outcome::Ready {
             scene,
@@ -140,15 +146,28 @@ pub fn load_ifc(bytes: Vec<u8>, budget: u64, read_anyway: bool) -> Result<Outcom
 /// Share of the machine's memory one model may take.
 pub const BUDGET_SHARE: f64 = 0.8;
 
-/// What Bimble lets one model take: `BUDGET_SHARE` of the machine's memory; in a browser, of
-/// 4 GB (what wasm can address). A machine whose memory can't be read counts as 8 GB.
+/// What a new model may take: `BUDGET_SHARE` of the machine's memory (of 4 GB in a browser,
+/// what wasm can address; 8 GB where it can't be read), less what Bimble already holds — the
+/// model shown and its links stay alive while the next one loads.
 pub fn memory_budget() -> u64 {
     let total = if cfg!(target_arch = "wasm32") {
         4_000_000_000
     } else {
         total_memory().unwrap_or(8_000_000_000)
     };
-    (total as f64 * BUDGET_SHARE) as u64
+    ((total as f64 * BUDGET_SHARE) as u64).saturating_sub(in_use())
+}
+
+/// Memory this process holds now.
+fn in_use() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        (core::arch::wasm32::memory_size(0) * 65_536) as u64
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        memory_stats::memory_stats().map_or(0, |m| m.physical_mem as u64)
+    }
 }
 
 #[cfg(target_os = "macos")]

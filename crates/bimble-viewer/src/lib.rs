@@ -2803,10 +2803,18 @@ impl Viewer {
                 self.plan.template = self.template_baseline.clone();
                 self.plan.template_rev += 1;
             }
-            // Open the file again, to choose another part.
+            // Open the file again, to choose another part: as a picked file, so unsaved work
+            // is asked about first (ADR 0028).
             Chip::Partial => {
                 if let Some(p) = self.loaded.as_ref().map(|l| l.path.clone()) {
-                    self.open(p, ctx);
+                    self.files.push(files::Picked {
+                        purpose: files::Purpose::Open,
+                        name: p
+                            .file_name()
+                            .map_or(String::new(), |n| n.to_string_lossy().into_owned()),
+                        path: Some(p),
+                        bytes: None,
+                    });
                 }
             }
         }

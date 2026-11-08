@@ -575,6 +575,7 @@ dependencies = [
  "js-sys",
  "libc",
  "log",
+ "memory-stats",
  "rfd",
  "serde_json",
  "wasm-bindgen",

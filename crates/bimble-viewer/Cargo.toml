@@ -17,6 +17,7 @@ glam.workspace = true
 serde_json.workspace = true
 web-time.workspace = true
 log.workspace = true
+memory-stats.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

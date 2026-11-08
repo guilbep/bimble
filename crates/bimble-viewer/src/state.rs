@@ -61,6 +61,9 @@ impl Chip {
             Chip::Hidden => "Show everything in this view (saved with the view)",
             Chip::Measurements => "Delete the measurements",
             Chip::PlanOptions => "Back to the plan template's options",
+            Chip::Partial if cfg!(target_arch = "wasm32") => {
+                "Open the file again (Open…) to choose another part"
+            }
             Chip::Partial => "Open the file again to choose another part",
         }
     }

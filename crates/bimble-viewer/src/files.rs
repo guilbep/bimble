@@ -153,6 +153,11 @@ impl Files {
         });
     }
 
+    /// Queue a file as if picked (e.g. the same file again), with the same questions first.
+    pub fn push(&self, p: Picked) {
+        let _ = self.tx.send(p);
+    }
+
     pub fn poll(&self) -> Option<Picked> {
         self.rx.try_recv().ok()
     }
