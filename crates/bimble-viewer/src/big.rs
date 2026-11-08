@@ -2,7 +2,7 @@
 //! what to offer when it does not fit: one storey, some IFC classes, a material.
 
 use bimble_geom::Scene;
-use bimble_ifc::read::{Counted, Parsed};
+use bimble_ifc::read::{Counted, Parsed, stored_triangles};
 use std::time::Duration;
 use web_time::Instant;
 
@@ -58,7 +58,13 @@ pub struct Choose {
 }
 
 impl Choose {
+    /// What all of it holds in memory, in triangles.
     pub fn all_triangles(&self) -> usize {
+        stored_triangles(&self.census)
+    }
+
+    /// Triangles drawn for all of it (every copy counted).
+    pub fn drawn_triangles(&self) -> usize {
         self.census.iter().map(|c| c.triangles).sum()
     }
 
@@ -92,10 +98,11 @@ impl Choose {
             .iter()
             .map(|c| everything || self.chosen.iter().any(|g| g == self.split.key(c)))
             .collect();
-        let cap: usize = (self.census.iter().zip(&keep))
-            .filter(|(_, k)| **k)
-            .map(|(c, _)| c.triangles)
-            .sum();
+        let cap = stored_triangles(
+            (self.census.iter().zip(&keep))
+                .filter(|(_, k)| **k)
+                .map(|(c, _)| c),
+        );
         let cap = cap.min(self.parsed.limits().max_triangles);
         let (scene, _) = self.parsed.scene(|i| keep[i], cap);
         self.parsed.free();
@@ -221,18 +228,18 @@ pub fn total_memory() -> Option<u64> {
 
 // Peak memory, fitted on 17 IFC files of 0.2–872 MB (peak memory footprint of `bimble
 // render`, Apple unified memory, so GPU buffers included; `scripts/calibrate_memory.sh`
-// measures and fits again):
-// within 16 % on every file over 25 MB, before the margin. Instancing or compact meshes
-// change PER_TRIANGLE: measure again then.
+// measures and fits again). Refitted after shapes were meshed once and drawn instanced
+// (ADR 0034): "triangles" are what is stored — own triangles, each shared shape once, one per
+// copy. Within 20 % on every file over 15 MB, before the margin.
 /// Reading: the text plus ~7.5 bytes per byte of displayed IFC (parse chunks in flight).
 const READ_PER_DISPLAYED: f64 = 7.5;
-const BASE: f64 = 480e6;
+const BASE: f64 = 505e6;
 /// Parsed entities kept while meshing.
-const PARSED_PER_DISPLAYED: f64 = 6.2;
-/// Mesh, edges and GPU buffers.
-const PER_TRIANGLE: f64 = 300.0;
-/// The fit's worst under-estimate was 16 %.
-const MARGIN: f64 = 1.2;
+const PARSED_PER_DISPLAYED: f64 = 6.3;
+/// Mesh, edges and GPU buffers, per stored triangle.
+const PER_TRIANGLE: f64 = 143.0;
+/// The fit's worst under-estimate was 20 %.
+const MARGIN: f64 = 1.25;
 
 /// What a file costs before meshing: `file` bytes, of which `displayed` are parsed.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -302,28 +309,27 @@ pub struct Group {
 /// The groups of a split, by name (storeys in file order would be nicer; names sort well
 /// enough for levels named by number).
 pub fn groups(census: &[Counted], split: Split) -> Vec<Group> {
-    let mut m: std::collections::BTreeMap<&str, (usize, usize)> = Default::default();
+    let mut m: std::collections::BTreeMap<&str, Vec<&Counted>> = Default::default();
     for c in census {
-        let g = m.entry(split.key(c)).or_default();
-        g.0 += 1;
-        g.1 += c.triangles;
+        m.entry(split.key(c)).or_default().push(c);
     }
     m.into_iter()
-        .map(|(name, (elements, triangles))| Group {
+        .map(|(name, cs)| Group {
             name: name.to_owned(),
-            elements,
-            triangles,
+            elements: cs.len(),
+            triangles: stored_triangles(cs),
         })
         .collect()
 }
 
 /// Triangles of the elements in the chosen groups.
+/// What the chosen groups hold in memory, in triangles (`stored_triangles`).
 pub fn chosen_triangles(census: &[Counted], split: Split, chosen: &[String]) -> usize {
-    census
-        .iter()
-        .filter(|c| chosen.iter().any(|g| g == split.key(c)))
-        .map(|c| c.triangles)
-        .sum()
+    stored_triangles(
+        census
+            .iter()
+            .filter(|c| chosen.iter().any(|g| g == split.key(c))),
+    )
 }
 
 pub fn gb(bytes: u64) -> String {
@@ -347,6 +353,7 @@ mod tests {
                 category: MaterialCategory::Other,
             },
             triangles,
+            shape: None,
         }
     }
 
@@ -392,16 +399,16 @@ mod tests {
         ));
     }
 
-    /// The fit's own numbers: a 200 MB file (78 MB displayed, 8.8 M triangles) peaked at
-    /// 3.7 GB; with the margin the estimate must not be under it.
+    /// The fit's own numbers: a 200 MB file (78 MB displayed, 0.38 M triangles stored, 8.8 M
+    /// drawn) peaked at 1.06 GB; with the margin the estimate must not be under it.
     #[test]
     fn the_estimate_covers_a_measured_model() {
         let c = Cost {
             file: 200_000_000,
             displayed: 78_000_000,
         };
-        let est = c.shown(8_840_000);
-        assert!((3_700_000_000..4_700_000_000).contains(&est), "{est}");
+        let est = c.shown(376_901);
+        assert!((1_057_000_000..1_700_000_000).contains(&est), "{est}");
         // What fits in a budget is what the estimate says fits.
         let n = c.affordable_triangles(est);
         assert!(c.shown(n) <= est && c.shown(n + 1000) > est);

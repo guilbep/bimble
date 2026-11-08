@@ -496,6 +496,11 @@ fn run(cli: Cli) -> Result<(), String> {
                 "meshes    {} triangles, {edges} edges",
                 scene.triangle_count()
             );
+            println!(
+                "stored    {} triangles ({} elements are copies of shared shapes)",
+                scene.stored_triangles(),
+                scene.instance_count()
+            );
             println!("loaded in {load:.1?}");
             for w in &scene.warnings {
                 println!("warning   {w}");

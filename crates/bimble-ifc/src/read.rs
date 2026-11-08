@@ -236,7 +236,24 @@ impl Piece {
 #[derive(Clone, Debug)]
 pub struct Counted {
     pub info: ElementInfo,
+    /// Triangles drawn for it (its shape's, if it is one).
     pub triangles: usize,
+    /// The shape it is (a representation map's id), if it is one (ADR 0034).
+    pub shape: Option<u64>,
+}
+
+/// What some elements hold in memory, in triangles (ADR 0033/0034): their own triangles, each
+/// shape they share once, and one per copy of a shape (its placement).
+pub fn stored_triangles<'a>(counted: impl IntoIterator<Item = &'a Counted>) -> usize {
+    let mut shapes = std::collections::HashSet::new();
+    counted
+        .into_iter()
+        .map(|c| match c.shape {
+            None => c.triangles,
+            Some(s) if shapes.insert(s) => 1 + c.triangles,
+            Some(_) => 1,
+        })
+        .sum()
 }
 
 impl Parsed {
@@ -470,9 +487,14 @@ impl Parsed {
                 || self.reader(),
                 |w, &id| {
                     let (info, piece) = self.piece(w, id, &shapes, &budget);
+                    let shape = match piece {
+                        Piece::Instance(..) => self.mapped_item(id).and_then(|m| m.arg(0).as_ref()),
+                        Piece::Tris(_) => None,
+                    };
                     Counted {
                         info,
                         triangles: piece.triangles(),
+                        shape,
                     }
                 },
             )
@@ -519,6 +541,7 @@ impl Parsed {
             *warnings.entry(k).or_default() += n;
         }
         type Meshed = (ElementInfo, Piece, BTreeMap<String, usize>);
+        let mut seen = std::collections::HashSet::new();
         'batches: for batch in picked.chunks(1024) {
             let guard = || Budget {
                 element_max: cap.min(ELEMENT_MAX_TRIANGLES).saturating_add(1),
@@ -566,7 +589,15 @@ impl Parsed {
                 for (k, n) in w {
                     *warnings.entry(k).or_default() += n;
                 }
-                let n = piece.triangles();
+                // What it adds in memory: its triangles, or its shape's the first time and a
+                // placement after (`stored_triangles`).
+                let n = match &piece {
+                    Piece::Tris(mb) => mb.tris.len(),
+                    Piece::Instance(shape, _) if seen.insert(Arc::as_ptr(shape)) => {
+                        1 + shape.triangle_count()
+                    }
+                    Piece::Instance(..) => 1,
+                };
                 if total + n > cap {
                     break 'batches;
                 }

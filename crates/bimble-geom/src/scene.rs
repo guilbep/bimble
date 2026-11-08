@@ -226,6 +226,30 @@ impl Scene {
         self.elements.iter().map(|e| e.triangle_count()).sum()
     }
 
+    /// What the scene holds in memory, in triangles: own triangles, each shared shape once,
+    /// and one per copy (its placement). See ADR 0034.
+    pub fn stored_triangles(&self) -> usize {
+        let mut shapes = std::collections::HashSet::new();
+        self.elements
+            .iter()
+            .map(|e| match &e.geometry {
+                Geometry::Own(m) => m.triangle_count(),
+                Geometry::Instance { shape, .. } if shapes.insert(Arc::as_ptr(shape)) => {
+                    1 + shape.triangle_count()
+                }
+                Geometry::Instance { .. } => 1,
+            })
+            .sum()
+    }
+
+    /// Elements that are a copy of a shared shape.
+    pub fn instance_count(&self) -> usize {
+        self.elements
+            .iter()
+            .filter(|e| matches!(e.geometry, Geometry::Instance { .. }))
+            .count()
+    }
+
     /// Bounding box in scene coordinates (relative to origin), or None if empty.
     pub fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
         let b = self

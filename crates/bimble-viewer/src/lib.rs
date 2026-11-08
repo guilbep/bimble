@@ -3002,7 +3002,7 @@ impl Viewer {
                     ui.label(format!(
                         "Showing all of it ({:.1} M triangles) needs about {}; Bimble keeps \
                          under {} on this computer. Choose a part to show:",
-                        c.all_triangles() as f64 / 1e6,
+                        c.drawn_triangles() as f64 / 1e6,
                         big::gb(all),
                         big::gb(c.budget),
                     ));

@@ -9,7 +9,7 @@ dir=${1:?usage: $0 <dir> [bimble]}
 bin=${2:-target/release/bimble}
 out=$(mktemp -d)
 rows=$out/rows.txt
-echo "file_mb displayed_mb triangles peak_mb" > "$rows"
+echo "file_mb displayed_mb stored_triangles peak_mb" > "$rows"
 for f in "$dir"/*.ifc; do
   skip=$(LC_ALL=C awk '/^#[0-9]+ *=/{ s=$0; sub(/^#[0-9]+ *= */,"",s); t=substr(s,1,index(s,"(")-1)
     on = (t ~ /^IFC(PROPERTY|COMPLEXPROPERTY|RELDEFINESBYPROPERTIES|ELEMENTQUANTITY|QUANTITY)/) }
@@ -17,7 +17,8 @@ for f in "$dir"/*.ifc; do
   size=$(wc -c < "$f")
   peak=$( { /usr/bin/time -l "$bin" render "$f" "$out/r.png" >/dev/null; } 2>&1 \
     | awk '/peak memory footprint/{ printf "%d", $1 / 1e6 }')
-  tris=$("$bin" info "$f" 2>/dev/null | awk '/^meshes/{ print $2 }')
+  # What memory follows: triangles stored (own + each shared shape once + one per copy).
+  tris=$("$bin" info "$f" 2>/dev/null | awk '/^stored/{ print $2 }')
   echo "$((size / 1000000)) $(((size - skip) / 1000000)) $tris $peak" >> "$rows"
 done
 column -t "$rows"
