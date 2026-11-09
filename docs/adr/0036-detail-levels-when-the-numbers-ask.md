@@ -137,6 +137,30 @@ Test `rotated_copies_share_one_shape` (turned and stretched share; mirrored and 
 a sixteenth of the scene (3× the draws, slower) and not instancing shapes under 32 triangles
 (the 200 MB model's fittings back in the merged buffers, +40 % GPU memory, no faster).
 
+## #3 half done: highlights over the kept picture; the redraw in bands dropped (9 Nov)
+
+- **Done: highlights drawn over the kept picture.** The element under the cursor and a selected
+  linked element were drawn with the model, so each hover change redrew the whole model. They
+  now draw into a transparent overlay (`Renderer::render_overlay`), depth-tested against the
+  model's depth, which is kept (stored instead of discarded), and egui lays it over the picture.
+  `bimble bench` "hover ms": 0.24–0.33 ms on the five models, where a hover change cost a full
+  frame (4.4–33 ms). Test `highlights_drawn_over_the_kept_picture_match`: pixels wholly in the
+  overlay, and pixels outside it, match drawing the highlight with the model (it fails with 14
+  pixels if the overlay ignores the depth). A partly covered edge pixel blends with the resolved
+  picture under it rather than per sample: a slightly darker fringe. Keeping the depth costs
+  nothing measurable on the M4 Pro (within the noise of the day's runs).
+- **Dropped, measured: completing a moving picture in size bands.** After the view stops, add
+  only what moving left out, over the kept picture, a size band a frame (halving down to half a
+  pixel), then all edges again (pixel-identical to a whole picture in a test). On the 415 MB
+  model it took 54 ms in all against a 31 ms whole frame, and one band alone 49 ms: most
+  triangles are small, so they fall in the last band, and every pass reloads the MSAA colour and
+  depth and goes over every draw again. To try again only if a weak GPU shows a still frame long
+  enough to block input, with slices of equal cost rather than size bands.
+- **#4 (no MSAA, lower resolution while moving): not built.** On the M4 Pro neither MSAA 1 nor
+  half resolution made frames faster (the GPU is not short of pixel throughput here). The weak
+  GPU measurement decides: `bimble bench --samples 1`, and `--width 960 --height 540`, against
+  the defaults.
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
@@ -156,7 +180,8 @@ measured with `bimble bench` before and after (CLAUDE.md), on the M4 Pro and on 
 | 10 | 4 | GPU-driven culling: depth pyramid, compute, indirect draws | ~2× (VTK WebGPU) | no | L |
 
 Order: steps 1–3 above first (all done: frustum culling, indexed shapes with #2, dedup), then #3, #4, #1/#5
-(after a weak-GPU measurement), then the rest.
+(after a weak-GPU measurement), then the rest. #3: highlights done, bands dropped; #4 waits for the
+weak-GPU measurement.
 
 ## Revisit when
 

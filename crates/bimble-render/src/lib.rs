@@ -459,8 +459,9 @@ struct Cull {
 
 impl Cull {
     /// Planes of a clip-space matrix with depth 0..1 (Gribb–Hartmann), normalized.
-    fn new(m: Mat4, clip: Option<(Vec3, Vec3)>, min_radius: f32, on: bool) -> Cull {
-        if !on {
+    fn new(m: Mat4, clip: Option<(Vec3, Vec3)>, opts: &DrawOptions) -> Cull {
+        let min_radius = opts.min_radius;
+        if !opts.cull {
             return Cull {
                 planes: [Vec4::W; 6],
                 clip: None,
@@ -530,8 +531,7 @@ impl GpuScene {
         let cull = Cull::new(
             camera.view_proj(aspect, &self.bounds),
             opts.clip.map(|c| (c.min, c.max)),
-            opts.min_radius,
-            opts.cull,
+            opts,
         );
         let merged: u64 = self
             .clusters
@@ -837,6 +837,67 @@ fn push_lines(
 }
 
 // ---------------------------------------------------------------- target
+
+/// Where a pass draws: colour (and its MSAA resolve), depth, and how they start.
+struct Out<'a> {
+    size: (u32, u32),
+    view: &'a wgpu::TextureView,
+    resolve: Option<&'a wgpu::TextureView>,
+    depth: &'a wgpu::TextureView,
+    clear: wgpu::Color,
+    load_depth: bool,
+}
+
+/// A transparent picture laid over a `Target`'s (`Renderer::render_overlay`): highlights.
+/// Its colour is premultiplied by its alpha, as egui blends.
+pub struct Overlay {
+    pub color: wgpu::Texture,
+    pub color_view: wgpu::TextureView,
+    msaa_view: Option<wgpu::TextureView>,
+}
+
+impl Overlay {
+    /// For a target of this size and sample count.
+    pub fn new(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Overlay {
+        let size = (size.0.max(1), size.1.max(1));
+        let tex = |label, samples, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: size.0,
+                    height: size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format: COLOR_FORMAT,
+                view_formats: &[],
+                usage,
+            })
+        };
+        let color = tex(
+            "bimble overlay",
+            1,
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+        );
+        let msaa_view = (samples > 1).then(|| {
+            tex(
+                "bimble overlay msaa",
+                samples,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            )
+            .create_view(&Default::default())
+        });
+        Overlay {
+            color_view: color.create_view(&Default::default()),
+            color,
+            msaa_view,
+        }
+    }
+}
 
 /// Offscreen colour + depth (+ MSAA) textures.
 pub struct Target {
@@ -1453,6 +1514,7 @@ impl Renderer {
 
     /// Draw several scenes in one image: the model first, then linked models. `bounds` must
     /// contain all of them (it sets the depth range). At most `MAX_LAYERS` layers are drawn.
+    /// The depth is kept, for `render_overlay`.
     #[allow(clippy::too_many_arguments)]
     pub fn render_layers(
         &self,
@@ -1464,7 +1526,71 @@ impl Renderer {
         camera: &Camera,
         opts: &DrawOptions,
     ) {
-        let aspect = target.size.0 as f32 / target.size.1 as f32;
+        // The target stores gamma-encoded values, so the sRGB colour is written as is.
+        let bg = opts.style.background.0.map(|c| c as f64 / 255.0);
+        let (view, resolve) = match &target.msaa_view {
+            Some(m) => (m, Some(&target.color_view)),
+            None => (&target.color_view, None),
+        };
+        let out = Out {
+            size: target.size,
+            view,
+            resolve,
+            depth: &target.depth_view,
+            clear: wgpu::Color {
+                r: bg[0],
+                g: bg[1],
+                b: bg[2],
+                a: 1.0,
+            },
+            load_depth: false,
+        };
+        self.draw(device, queue, out, layers, bounds, camera, opts);
+    }
+
+    /// Draw layers (highlights: the element under the cursor, a selected linked element) into
+    /// `overlay`, transparent elsewhere, hidden where the target's last picture is in front:
+    /// shown over it, they change without drawing the model again (ADR 0036 #3). The camera,
+    /// bounds and options must be those of that picture.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_overlay(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &Target,
+        overlay: &Overlay,
+        layers: &[Layer],
+        bounds: &Sphere,
+        camera: &Camera,
+        opts: &DrawOptions,
+    ) {
+        let (view, resolve) = match &overlay.msaa_view {
+            Some(m) => (m, Some(&overlay.color_view)),
+            None => (&overlay.color_view, None),
+        };
+        let out = Out {
+            size: target.size,
+            view,
+            resolve,
+            depth: &target.depth_view,
+            clear: wgpu::Color::TRANSPARENT,
+            load_depth: true,
+        };
+        self.draw(device, queue, out, layers, bounds, camera, opts);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        out: Out,
+        layers: &[Layer],
+        bounds: &Sphere,
+        camera: &Camera,
+        opts: &DrawOptions,
+    ) {
+        let aspect = out.size.0 as f32 / out.size.1 as f32;
         let vp = camera.view_proj(aspect, bounds);
         // Light from over the viewer's left shoulder.
         let light = (camera.eye() - camera.target).normalize() + Vec3::new(-0.3, -0.2, 0.9);
@@ -1531,8 +1657,7 @@ impl Renderer {
                 Cull::new(
                     vp * Mat4::from_translation(l.offset),
                     opts.clip.map(|c| (c.min - l.offset, c.max - l.offset)),
-                    opts.min_radius,
-                    opts.cull,
+                    opts,
                 )
             })
             .collect();
@@ -1552,33 +1677,27 @@ impl Renderer {
             label: Some("bimble"),
         });
         {
-            // The target stores gamma-encoded values, so the sRGB colour is written as is.
-            let bg = st.background.0.map(|c| c as f64 / 255.0);
-            let (view, resolve) = match &target.msaa_view {
-                Some(m) => (m, Some(&target.color_view)),
-                None => (&target.color_view, None),
-            };
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("bimble pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
+                    view: out.view,
                     depth_slice: None,
-                    resolve_target: resolve,
+                    resolve_target: out.resolve,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: bg[0],
-                            g: bg[1],
-                            b: bg[2],
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(out.clear),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &target.depth_view,
+                    view: out.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
+                        load: if out.load_depth {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(1.0)
+                        },
+                        // Kept for an overlay drawn later.
+                        store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
                 }),
@@ -1957,7 +2076,12 @@ impl Headless {
 
     /// Read a target back as tightly packed RGBA8 (sRGB) rows.
     pub fn read_rgba(&self, target: &Target) -> Result<Vec<u8>, HeadlessError> {
-        let (w, h) = target.size;
+        self.read_texture(&target.color)
+    }
+
+    /// RGBA8 rows of a single-sample colour texture (a target's, an overlay's).
+    pub fn read_texture(&self, texture: &wgpu::Texture) -> Result<Vec<u8>, HeadlessError> {
+        let (w, h) = (texture.width(), texture.height());
         let row = w * 4;
         let padded =
             row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -1970,7 +2094,7 @@ impl Headless {
         let mut enc = self.device.create_command_encoder(&Default::default());
         enc.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &target.color,
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -2569,6 +2693,90 @@ mod tests {
             top * 100 >= all * 98,
             "{top} of {all} pixels in 4 colours: {n:?}"
         );
+    }
+
+    /// A highlight drawn as an overlay over the kept picture (ADR 0036 #3) looks as when drawn
+    /// with the model: where the element is hidden, the kept depth hides its edges too.
+    #[test]
+    fn highlights_drawn_over_the_kept_picture_match() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let scene = own(Scene::from_model(&concrete_frame(&FrameSpec::default())));
+        let r = Renderer::new(&gpu.device, 1);
+        let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
+        let mut cam = Camera::default();
+        cam.fit(&scene, 1.6);
+        // The column nearest the camera (the frame's order is random: its GlobalIds are).
+        let centre = |k: usize| {
+            let b = ClipBox::around(&scene, |i| i == k).unwrap();
+            (b.min + b.max) / 2.0
+        };
+        let col = (0..scene.elements.len())
+            .filter(|&k| scene.elements[k].class == "IfcColumn")
+            .min_by(|&a, &b| {
+                let d = |k| centre(k).distance(cam.eye());
+                d(a).total_cmp(&d(b))
+            })
+            .unwrap();
+        let hi = r.upload(&gpu.device, &gpu.queue, &scene, |j, _| {
+            if j == col {
+                Style::Normal
+            } else {
+                Style::Hidden
+            }
+        });
+        // One sample: every pixel is wholly in the overlay or not.
+        let target = Target::new(&gpu.device, (200, 125), 1);
+        let overlay = Overlay::new(&gpu.device, target.size, 1);
+        let opts = DrawOptions::default();
+        let red = Rgb([230, 20, 20]);
+        let draw = |layers: &[Layer]| {
+            r.render_layers(
+                &gpu.device,
+                &gpu.queue,
+                &target,
+                layers,
+                &gs.bounds,
+                &cam,
+                &opts,
+            );
+        };
+        draw(&[Layer::main(&gs), Layer::highlight(&hi, red)]);
+        let together = gpu.read_rgba(&target).unwrap();
+        draw(&[Layer::main(&gs)]);
+        let base = gpu.read_rgba(&target).unwrap();
+        r.render_overlay(
+            &gpu.device,
+            &gpu.queue,
+            &target,
+            &overlay,
+            &[Layer::highlight(&hi, red)],
+            &gs.bounds,
+            &cam,
+            &opts,
+        );
+        let over = gpu.read_texture(&overlay.color).unwrap();
+        let px = |v: &[u8]| v.as_chunks::<4>().0.to_vec();
+        let (together, base, over) = (px(&together), px(&base), px(&over));
+        // Pixels the overlay covers wholly look the same; where it is empty, so do the pictures
+        // (nothing hidden shows, nothing visible is missed). Partly covered pixels blend with
+        // the resolved picture under them, not per sample: a slightly darker fringe.
+        let near = |a: &[u8; 4], b: &[u8; 4]| (0..3).all(|k| a[k].abs_diff(b[k]) <= 2);
+        let (mut whole, mut off) = (0, 0);
+        for ((t, b), o) in together.iter().zip(&base).zip(&over) {
+            match o[3] {
+                255 => {
+                    whole += 1;
+                    off += usize::from(!near(t, &[o[0], o[1], o[2], 255]));
+                }
+                0 => off += usize::from(!near(t, b)),
+                _ => {}
+            }
+        }
+        assert!(whole > 20, "{whole} pixels wholly in the overlay");
+        assert_eq!(off, 0, "{off} pixels differ");
     }
 
     /// Renders on whatever adapter exists (a software one in CI containers). Skipped if none.

@@ -7,7 +7,7 @@
 use bimble_core::MaterialCategory;
 use bimble_geom::Scene;
 use bimble_render::{
-    Camera, ClipBox, DrawOptions, GpuScene, GraphicStyle, Renderer, Style, Target,
+    Camera, ClipBox, DrawOptions, GpuScene, GraphicStyle, Overlay, Renderer, Style, Target,
 };
 use eframe::egui::{self, Color32, PointerButton, Sense, Vec2};
 use eframe::egui_wgpu;
@@ -506,8 +506,12 @@ struct Viewer {
     gpu_scene: Option<GpuScene>,
     target: Option<Target>,
     texture: Option<egui::TextureId>,
+    /// Highlights (the element under the cursor, a selected linked element), drawn over the
+    /// kept picture: changing them doesn't draw the model again (ADR 0036 #3).
+    overlay: Option<(Overlay, egui::TextureId)>,
     needs_upload: bool,
     needs_render: bool,
+    needs_overlay: bool,
     last_render: Duration,
 
     camera: Camera,
@@ -656,8 +660,10 @@ impl Viewer {
             gpu_scene: None,
             target: None,
             texture: None,
+            overlay: None,
             needs_upload: false,
             needs_render: true,
+            needs_overlay: false,
             last_render: Duration::ZERO,
             camera: Camera::default(),
             opts: DrawOptions::default(),
@@ -1500,7 +1506,7 @@ impl Viewer {
                 self.clipping(),
             ))
         });
-        self.needs_render = true;
+        self.needs_overlay = true;
     }
 
     /// Close the pages that take the main view (schedule, project, materials): a view, a sheet
@@ -1535,7 +1541,7 @@ impl Viewer {
             )),
             _ => None,
         };
-        self.needs_render = true;
+        self.needs_overlay = true;
     }
 
     /// The active clipping box: the 2D view's range, else the section box if it is on.
@@ -1721,26 +1727,90 @@ impl Viewer {
                     ))
                 }
             }
+            let overlay = Overlay::new(&self.device, size_px, SAMPLES);
+            let id = match self.overlay.take() {
+                Some((_, id)) => {
+                    r.update_egui_texture_from_wgpu_texture(
+                        &self.device,
+                        &overlay.color_view,
+                        eframe::wgpu::FilterMode::Linear,
+                        id,
+                    );
+                    id
+                }
+                None => r.register_native_texture(
+                    &self.device,
+                    &overlay.color_view,
+                    eframe::wgpu::FilterMode::Linear,
+                ),
+            };
+            self.overlay = Some((overlay, id));
             self.target = Some(target);
             self.needs_render = true;
         }
         if self.needs_upload {
             self.upload();
         }
-        if !self.needs_render {
-            return;
+        if self.needs_render {
+            self.render_model(size_px, ppp);
+            self.needs_overlay = true;
         }
+        if self.needs_overlay {
+            self.render_highlights(ppp);
+            self.needs_overlay = false;
+        }
+    }
+
+    /// The options a picture of the model is drawn with (the moving threshold aside).
+    fn draw_options(&self, ppp: f32, min_radius: f32) -> DrawOptions {
+        DrawOptions {
+            hatch_scale: ppp,
+            clip: self.clip(),
+            min_radius,
+            ..self.opts.clone()
+        }
+    }
+
+    /// Draw the highlights over the kept picture of the model.
+    fn render_highlights(&mut self, ppp: f32) {
+        let (Some(target), Some((overlay, _)), Some(gs)) =
+            (&self.target, &self.overlay, &self.gpu_scene)
+        else {
+            return;
+        };
+        let mut layers = Vec::new();
+        if let Some(h) = &self.hover_gpu {
+            layers.push(bimble_render::Layer::highlight(h, self.opts.style.hover));
+        }
+        if let (Some(g), Some((n, _))) = (&self.link_selected_gpu, self.link_selected)
+            && let Some(k) = self.links.get(n)
+        {
+            layers.push(bimble_render::Layer {
+                offset: k.offset,
+                ..bimble_render::Layer::highlight(g, self.opts.style.selection)
+            });
+        }
+        let bounds = self.loaded.as_ref().map_or(gs.bounds, |l| l.bounds);
+        self.renderer.render_overlay(
+            &self.device,
+            &self.queue,
+            target,
+            overlay,
+            &layers,
+            &bounds,
+            &self.camera,
+            &self.draw_options(ppp, 0.0),
+        );
+    }
+
+    /// Draw the model and its links into the target.
+    fn render_model(&mut self, size_px: (u32, u32), ppp: f32) {
         let t = Instant::now();
         let min_radius = self.moving_detail(t, size_px.1);
         let (Some(target), Some(gs)) = (&self.target, &self.gpu_scene) else {
             return;
         };
-        let opts = DrawOptions {
-            hatch_scale: ppp,
-            clip: self.clip(),
-            min_radius,
-            ..self.opts.clone()
-        };
+        let opts = self.draw_options(ppp, min_radius);
         let mut layers = vec![bimble_render::Layer::main(gs)];
         for k in &self.links {
             let Some(g) = &k.gpu else { continue };
@@ -1753,17 +1823,6 @@ impl Viewer {
                 faces: k.mode == LinkMode::Solid,
                 edge_color: Some(self.opts.style.reference_edges),
                 linked: true,
-            });
-        }
-        if let Some(h) = &self.hover_gpu {
-            layers.push(bimble_render::Layer::highlight(h, self.opts.style.hover));
-        }
-        if let (Some(g), Some((n, _))) = (&self.link_selected_gpu, self.link_selected)
-            && let Some(k) = self.links.get(n)
-        {
-            layers.push(bimble_render::Layer {
-                offset: k.offset,
-                ..bimble_render::Layer::highlight(g, self.opts.style.selection)
             });
         }
         let bounds = self.loaded.as_ref().map_or(gs.bounds, |l| l.bounds);
@@ -3846,6 +3905,14 @@ impl eframe::App for Viewer {
                     .fit_to_exact_size(rect.size())
                     .sense(Sense::click_and_drag());
                 let resp = ui.add(img);
+                if let Some((_, id)) = &self.overlay {
+                    ui.painter().image(
+                        *id,
+                        rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
                 self.handle_view_input(ui, &resp);
                 if let (true, false, Some(mut b), Some(l)) =
                     (self.section_on, self.in_2d(), self.section_box, &self.loaded)
@@ -3868,7 +3935,7 @@ impl eframe::App for Viewer {
                 if self.animate() {
                     ctx.request_repaint();
                 }
-                if self.needs_render || self.needs_upload {
+                if self.needs_render || self.needs_upload || self.needs_overlay {
                     ctx.request_repaint();
                 }
             }
