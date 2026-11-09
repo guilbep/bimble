@@ -42,6 +42,29 @@ Where Bimble stands after ADR 0034/0035 (1080p, MSAA 4, M4 Pro, `bimble bench`):
      Kabsch fit) — the 872 MB model is 55 % unshared breps.
   4. Measure on a weak GPU (an integrated GPU, a software adapter, WebGL2) before going further.
 
+## Step 1 done: frustum culling (9 Nov)
+
+Merged geometry is cut into spatial clusters (Morton order of element centres, ~32 768
+triangles each, within a buffer; largest first inside each, so the moving size filter is a prefix
+per cluster). Each frame tests clusters and every shape instance against the frustum (planes from
+the layer's matrix), the section box and the size threshold; shapes with copies left out draw from
+a packed copy of their visible instances. `DrawOptions::cull` turns it off to compare.
+
+`bimble bench` (1080p, MSAA 4, M4 Pro), new "close" orbit at 1/5 of the fitted distance:
+
+| model | close before | close after | drawn |
+|---|---|---|---|
+| 200 MB electrical | 7.75 ms | 4.86 ms | 46 % |
+| 335 MB architecture | 5.23 ms | 4.16 ms | 60 % |
+| 415 MB sprinklers | 42.0 / 43.0 / 44.5 ms | 22.2 / 21.8 / 20.8 ms | 44 % |
+| 758 MB sanitary | 24.1 ms | 13.4 ms | 50 % |
+| 872 MB plumbing | 14.4 ms | 4.2 ms | 45 % |
+
+The whole-model orbit is unchanged within run-to-run noise (415 MB: before 58.2 / 47.0 ms,
+after 48.2 / 47.8 ms, 120 frames). Test `culling_changes_nothing_on_screen`: 12 cameras (close,
+orthographic, mirrored, section box, an offset linked model) give identical pixels with and
+without culling, and close up it does leave triangles out.
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is

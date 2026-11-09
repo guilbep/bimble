@@ -8,7 +8,7 @@ use bimble_core::MaterialCategory;
 use bimble_geom::scene::{Geometry, Placement32};
 use bimble_geom::{Scene, SceneElement};
 use glam::camera::rh::{proj::directx, view::look_at_mat4};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec3, Vec4};
 use std::collections::HashMap;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -386,21 +386,109 @@ pub struct GpuScene {
     /// buffer size limit (256 MiB by default): a large model needs several.
     faces: Vec<(wgpu::Buffer, u32)>,
     lines: Vec<(wgpu::Buffer, u32)>,
-    /// Merged elements come largest first: (bounding radius, face and line vertices before
-    /// it), so "everything at least this big" is a prefix of the buffers.
-    steps: Vec<(f32, u32, u32)>,
+    /// Merged elements in spatial clusters (ADR 0036): a cluster off screen or outside the
+    /// section box is not drawn. Inside a cluster, elements come largest first, so "everything
+    /// at least this big" is a prefix of its range.
+    clusters: Vec<Cluster>,
+    /// Elements too large for one buffer: always drawn, whole.
+    huge_faces: Vec<(wgpu::Buffer, u32)>,
+    huge_lines: Vec<(wgpu::Buffer, u32)>,
     /// Shared shapes (ADR 0034): their vertices, packed in buffers like the merged ones, and
     /// one draw per shape (and per mirroring) over its copies in `instances`.
     shape_faces: Vec<(wgpu::Buffer, u32)>,
     shape_lines: Vec<(wgpu::Buffer, u32)>,
     shapes: Vec<ShapeDraw>,
     instances: Option<wgpu::Buffer>,
+    /// The instances again on the CPU, with each one's bounding sphere (centre, radius): the
+    /// visible ones are copied into `visible` before a frame that leaves some out.
+    instance_data: Vec<InstanceData>,
+    instance_spheres: Vec<[f32; 4]>,
+    visible: Option<wgpu::Buffer>,
     /// The one identity instance merged geometry is drawn with.
     identity: wgpu::Buffer,
     /// Whether edges carry face normals (needed to hide back edges in the section box).
     pub edge_normals: bool,
     /// Bounds of the whole scene (not just the visible part), for stable clip planes.
     pub bounds: Sphere,
+}
+
+/// Merged elements near each other, in one run of each vertex buffer.
+#[derive(Clone, Debug)]
+struct Cluster {
+    faces: (usize, std::ops::Range<u32>),
+    lines: (usize, std::ops::Range<u32>),
+    /// Bounding sphere of its elements: centre, radius.
+    sphere: [f32; 4],
+    /// Its elements largest first: (bounding radius, face and line vertices before it).
+    steps: Vec<(f32, u32, u32)>,
+}
+
+impl Cluster {
+    /// Face and line vertices of its elements at least `min_radius` big (a prefix).
+    fn prefix(&self, min_radius: f32) -> (u32, u32) {
+        let all = (self.faces.1.len() as u32, self.lines.1.len() as u32);
+        if min_radius <= 0.0 {
+            return all;
+        }
+        let k = self.steps.partition_point(|s| s.0 >= min_radius);
+        self.steps.get(k).map_or(all, |s| (s.1, s.2))
+    }
+}
+
+/// Merged elements per cluster: about this many face vertices (32 768 triangles). Fewer
+/// clusters, fewer draws; smaller ones, finer culling.
+/// (Tests use small ones, so a small model has several.)
+const CLUSTER_VERTICES: usize = if cfg!(test) { 3 * 512 } else { 3 * 32_768 };
+
+/// What of a scene one frame draws: a frustum (planes as `n·p + d ≥ 0`, layer coordinates),
+/// the section box, and the smallest size drawn.
+struct Cull {
+    planes: [Vec4; 6],
+    clip: Option<(Vec3, Vec3)>,
+    min_radius: f32,
+}
+
+impl Cull {
+    /// Planes of a clip-space matrix with depth 0..1 (Gribb–Hartmann), normalized.
+    fn new(m: Mat4, clip: Option<(Vec3, Vec3)>, min_radius: f32, on: bool) -> Cull {
+        if !on {
+            return Cull {
+                planes: [Vec4::W; 6],
+                clip: None,
+                min_radius,
+            };
+        }
+        let r = [m.row(0), m.row(1), m.row(2), m.row(3)];
+        let planes = [
+            r[3] + r[0],
+            r[3] - r[0],
+            r[3] + r[1],
+            r[3] - r[1],
+            r[2],
+            r[3] - r[2],
+        ]
+        .map(|p| p / p.truncate().length().max(1e-20));
+        Cull {
+            planes,
+            clip,
+            min_radius,
+        }
+    }
+
+    /// Whether anything of a sphere (centre, radius) may be drawn.
+    fn keeps(&self, s: [f32; 4]) -> bool {
+        let c = Vec3::new(s[0], s[1], s[2]);
+        let r = s[3];
+        if r < self.min_radius {
+            return false;
+        }
+        if let Some((lo, hi)) = self.clip
+            && (c + r).cmplt(lo).any() | (c - r).cmpgt(hi).any()
+        {
+            return false;
+        }
+        self.planes.iter().all(|p| p.truncate().dot(c) + p.w >= -r)
+    }
 }
 
 /// One shared shape's draw: where its vertices are, and which instances.
@@ -418,7 +506,12 @@ struct ShapeDraw {
 impl GpuScene {
     /// Triangles drawn (each copy of a shape counted).
     pub fn triangles(&self) -> u32 {
-        let merged: u32 = self.faces.iter().map(|(_, n)| n / 3).sum();
+        let merged: u32 = self
+            .faces
+            .iter()
+            .chain(&self.huge_faces)
+            .map(|(_, n)| n / 3)
+            .sum();
         let shared: u32 = self
             .shapes
             .iter()
@@ -427,22 +520,76 @@ impl GpuScene {
         merged + shared
     }
 
-    /// Face and line vertices of the merged elements at least `min_radius` big (a prefix).
-    fn prefix(&self, min_radius: f32) -> (u32, u32) {
-        if min_radius <= 0.0 {
-            return (u32::MAX, u32::MAX);
-        }
-        let k = self.steps.partition_point(|s| s.0 >= min_radius);
-        match self.steps.get(k) {
-            Some(s) => (s.1, s.2),
-            None => (u32::MAX, u32::MAX),
-        }
+    /// Triangles a frame would draw from this camera (culled, as `render` does).
+    pub fn visible_triangles(&self, camera: &Camera, aspect: f32, opts: &DrawOptions) -> u64 {
+        let cull = Cull::new(
+            camera.view_proj(aspect, &self.bounds),
+            opts.clip.map(|c| (c.min, c.max)),
+            opts.min_radius,
+            opts.cull,
+        );
+        let merged: u64 = self
+            .clusters
+            .iter()
+            .filter(|c| cull.keeps(c.sphere))
+            .map(|c| c.prefix(cull.min_radius).0 as u64 / 3)
+            .sum();
+        let huge: u64 = self.huge_faces.iter().map(|(_, n)| *n as u64 / 3).sum();
+        let shared: u64 = self
+            .shapes
+            .iter()
+            .map(|d| {
+                let n = d
+                    .instances
+                    .clone()
+                    .filter(|&i| cull.keeps(self.instance_spheres[i as usize]))
+                    .count();
+                d.faces.1.len() as u64 / 3 * n as u64
+            })
+            .sum();
+        merged + huge + shared
     }
 
     /// Draw calls a frame makes for faces (merged buffers, then one per shared shape).
     pub fn face_draws(&self) -> usize {
-        self.faces.len() + self.shapes.len()
+        self.clusters.len() + self.huge_faces.len() + self.shapes.len()
     }
+}
+
+/// Per shape draw, the instances a frame draws: `(false, range)` in the scene's instance buffer
+/// when all of them are kept (nothing to copy), else `(true, range)` in its visible buffer,
+/// where the kept ones are written packed.
+fn visible_instances(
+    scene: &GpuScene,
+    cull: &Cull,
+    queue: &wgpu::Queue,
+) -> Vec<(bool, std::ops::Range<u32>)> {
+    let mut packed: Vec<InstanceData> = Vec::new();
+    let out = scene
+        .shapes
+        .iter()
+        .map(|d| {
+            if d.radius < cull.min_radius {
+                return (false, 0..0);
+            }
+            let start = packed.len();
+            for i in d.instances.clone() {
+                if cull.keeps(scene.instance_spheres[i as usize]) {
+                    packed.push(scene.instance_data[i as usize]);
+                }
+            }
+            if packed.len() - start == d.instances.len() {
+                packed.truncate(start);
+                (false, d.instances.clone())
+            } else {
+                (true, start as u32..packed.len() as u32)
+            }
+        })
+        .collect();
+    if let (Some(b), false) = (&scene.visible, packed.is_empty()) {
+        queue.write_buffer(b, 0, bytemuck::cast_slice(&packed));
+    }
+    out
 }
 
 /// Vertex buffers filled as vertices come: each is sent to the GPU when full, so the CPU never
@@ -521,20 +668,26 @@ impl<'d, T: bytemuck::Pod> Chunks<'d, T> {
     }
 }
 
-/// Half the diagonal of a mesh's bounds, placed (scaled by the placement's longest column).
-fn radius(m: &bimble_geom::Mesh, p: Option<&Placement32>) -> f32 {
+/// A sphere around a mesh's bounds, placed: the centre of the box, half its diagonal (scaled by
+/// the placement's longest column). Its radius is how big the element is (ADR 0035).
+fn sphere(m: &bimble_geom::Mesh, p: Option<&Placement32>) -> [f32; 4] {
     let b = bimble_geom::bvh::Aabb::of_points(&m.positions);
     if b.is_empty() {
-        return 0.0;
+        return [0.0; 4];
     }
-    let d = Vec3::from(b.max) - Vec3::from(b.min);
-    let scale = p.map_or(1.0, |p| {
-        [p.x, p.y, p.z]
-            .map(|c| Vec3::from(c).length())
-            .into_iter()
-            .fold(0.0, f32::max)
-    });
-    d.length() / 2.0 * scale
+    let (lo, hi) = (Vec3::from(b.min), Vec3::from(b.max));
+    let c = ((lo + hi) / 2.0).to_array();
+    let (c, scale) = match p {
+        None => (c, 1.0),
+        Some(p) => (
+            p.apply(c),
+            [p.x, p.y, p.z]
+                .map(|c| Vec3::from(c).length())
+                .into_iter()
+                .fold(0.0, f32::max),
+        ),
+    };
+    [c[0], c[1], c[2], (hi - lo).length() / 2.0 * scale]
 }
 
 /// A mesh's triangles as face vertices: positions, the face's normal and a style slot.
@@ -668,6 +821,8 @@ pub struct DrawOptions {
     /// Skip elements smaller than this (bounding radius, mm): while navigating, small things
     /// are left out to keep the frame rate (0: draw everything).
     pub min_radius: f32,
+    /// Leave out what is off screen or outside the section box (ADR 0036). Off only to compare.
+    pub cull: bool,
 }
 
 impl Default for DrawOptions {
@@ -675,6 +830,7 @@ impl Default for DrawOptions {
         DrawOptions {
             hatch_scale: 1.0,
             min_radius: 0.0,
+            cull: true,
             hatching: true,
             edges: true,
             style: GraphicStyle::default(),
@@ -936,7 +1092,7 @@ impl Renderer {
         let mut lines = Chunks::<LineVertex>::new(device, queue, "bimble line vb");
         let mut lines_lean = Chunks::<[f32; 3]>::new(device, queue, "bimble line vb");
         // Merged elements are pushed largest first, below.
-        let mut merged: Vec<(f32, std::borrow::Cow<bimble_geom::Mesh>, u8)> = Vec::new();
+        let mut merged: Vec<([f32; 4], std::borrow::Cow<bimble_geom::Mesh>, u8)> = Vec::new();
         // Copies of shared shapes, by shape, in first-seen order.
         type Copies<'a> = (&'a Arc<bimble_geom::Mesh>, Vec<(Placement32, u8)>);
         let mut groups: Vec<Copies> = Vec::new();
@@ -955,7 +1111,7 @@ impl Renderer {
             };
             match &e.geometry {
                 Geometry::Own(m) => {
-                    merged.push((radius(m, None), std::borrow::Cow::Borrowed(m), slot))
+                    merged.push((sphere(m, None), std::borrow::Cow::Borrowed(m), slot))
                 }
                 Geometry::Instance { shape, to_scene } => {
                     let g = *group_of.entry(Arc::as_ptr(shape)).or_insert_with(|| {
@@ -970,6 +1126,7 @@ impl Renderer {
         let mut shape_lines = Chunks::<LineVertex>::new(device, queue, "bimble shape line vb");
         let mut shape_lines_lean = Chunks::<[f32; 3]>::new(device, queue, "bimble shape line vb");
         let mut instances: Vec<InstanceData> = Vec::new();
+        let mut instance_spheres: Vec<[f32; 4]> = Vec::new();
         let mut shapes = Vec::new();
         for (shape, copies) in groups {
             let mut fv = Vec::new();
@@ -991,25 +1148,25 @@ impl Renderer {
                 // Few copies (or a shape larger than a buffer): merged, each placed.
                 for (p, slot) in copies {
                     let m = p.mesh(shape);
-                    merged.push((radius(&m, None), std::borrow::Cow::Owned(m), slot));
+                    merged.push((sphere(&m, None), std::borrow::Cow::Owned(m), slot));
                 }
                 continue;
             };
-            let r = copies
-                .iter()
-                .map(|(p, _)| radius(shape, Some(p)))
-                .fold(0.0f32, f32::max);
+            let mut r = 0.0f32;
             for mirrored in [false, true] {
                 let start = instances.len() as u32;
-                instances.extend(copies.iter().filter(|(p, _)| p.mirrors() == mirrored).map(
-                    |(p, slot)| InstanceData {
+                for (p, slot) in copies.iter().filter(|(p, _)| p.mirrors() == mirrored) {
+                    let sp = sphere(shape, Some(p));
+                    r = r.max(sp[3]);
+                    instance_spheres.push(sp);
+                    instances.push(InstanceData {
                         x: p.x,
                         y: p.y,
                         z: p.z,
                         t: p.t,
                         slot: [0, 0, 0, *slot],
-                    },
-                ));
+                    });
+                }
                 if instances.len() as u32 > start {
                     shapes.push(ShapeDraw {
                         faces: f.clone(),
@@ -1021,17 +1178,98 @@ impl Renderer {
                 }
             }
         }
-        merged.sort_by(|a, b| b.0.total_cmp(&a.0));
-        let mut steps = Vec::with_capacity(merged.len());
-        let (mut nf, mut nl) = (0u32, 0u32);
-        for (r, m, slot) in &merged {
-            steps.push((*r, nf, nl));
-            push_faces(m, *slot, |v| {
-                nf += 1;
-                faces.push(v)
-            });
-            push_lines(m, edge_normals, |v| lines.push(v), |p| lines_lean.push(p));
-            nl += 2 * m.edges.len() as u32;
+        // Merged elements in spatial clusters: Morton order of their centres over the scene's
+        // bounds, cut every `CLUSTER_VERTICES` face vertices; largest first inside each.
+        let bounds = Sphere::of(scene);
+        let lo = bounds.center - bounds.radius;
+        let cell = (2.0 * bounds.radius).max(1.0) / 1023.0;
+        let morton = |c: [f32; 4]| -> u32 {
+            let q = |x: f32, o: f32| (((x - o) / cell).clamp(0.0, 1023.0) as u32) & 1023;
+            let spread = |mut v: u32| {
+                v = (v | (v << 16)) & 0x0300_00ff;
+                v = (v | (v << 8)) & 0x0300_f00f;
+                v = (v | (v << 4)) & 0x030c_30c3;
+                (v | (v << 2)) & 0x0924_9249
+            };
+            spread(q(c[0], lo.x)) | (spread(q(c[1], lo.y)) << 1) | (spread(q(c[2], lo.z)) << 2)
+        };
+        merged.sort_by_cached_key(|e| morton(e.0));
+        let mut huge_faces = Chunks::<FaceVertex>::new(device, queue, "bimble huge face vb");
+        let mut huge_lines = Chunks::<LineVertex>::new(device, queue, "bimble huge line vb");
+        let mut huge_lines_lean = Chunks::<[f32; 3]>::new(device, queue, "bimble huge line vb");
+        let mut clusters = Vec::new();
+        let mut rest = &mut merged[..];
+        // A cluster fits in a buffer (small on some devices): faces and edges both.
+        let face_cap = CLUSTER_VERTICES.min(faces.per);
+        let line_cap = if edge_normals {
+            lines.per
+        } else {
+            lines_lean.per
+        };
+        while !rest.is_empty() {
+            // The next cluster: elements until the vertex budget (at least one).
+            let (mut n, mut fv_n, mut lv_n) = (0, 0, 0);
+            while n < rest.len() {
+                let (f, l) = (rest[n].1.indices.len(), 2 * rest[n].1.edges.len());
+                if n > 0 && (fv_n + f > face_cap || lv_n + l > line_cap) {
+                    break;
+                }
+                (fv_n, lv_n) = (fv_n + f, lv_n + l);
+                n += 1;
+            }
+            let (group, tail) = rest.split_at_mut(n);
+            rest = tail;
+            group.sort_by(|a, b| b.0[3].total_cmp(&a.0[3]));
+            let (mut fv, mut lv, mut ll) = (Vec::new(), Vec::new(), Vec::new());
+            let mut steps = Vec::with_capacity(group.len());
+            let mut ball: Option<Sphere> = None;
+            for (sp, m, slot) in group.iter() {
+                steps.push((sp[3], fv.len() as u32, (lv.len() + ll.len()) as u32));
+                push_faces(m, *slot, |v| fv.push(v));
+                push_lines(m, edge_normals, |v| lv.push(v), |p| ll.push(p));
+                let b = Sphere {
+                    center: Vec3::new(sp[0], sp[1], sp[2]),
+                    radius: sp[3],
+                };
+                ball = Some(ball.map_or(b, |a| a.merge(b)));
+            }
+            let f = faces.push_run(&fv);
+            let l = if edge_normals {
+                lines.push_run(&lv)
+            } else {
+                lines_lean.push_run(&ll)
+            };
+            match (f, l) {
+                (Some(f), Some(l)) => {
+                    let b = ball.unwrap_or(Sphere {
+                        center: Vec3::ZERO,
+                        radius: 0.0,
+                    });
+                    clusters.push(Cluster {
+                        faces: f,
+                        lines: l,
+                        sphere: [b.center.x, b.center.y, b.center.z, b.radius],
+                        steps,
+                    });
+                }
+                // One element larger than a buffer (a cluster of more is cut before): what
+                // doesn't fit streams across buffers of its own; drawn always, whole.
+                (f, l) => {
+                    if f.is_none() {
+                        fv.into_iter().for_each(|v| huge_faces.push(v));
+                    }
+                    if l.is_none() {
+                        lv.into_iter().for_each(|v| huge_lines.push(v));
+                        ll.into_iter().for_each(|v| huge_lines_lean.push(v));
+                    }
+                    clusters.push(Cluster {
+                        faces: f.unwrap_or((0, 0..0)),
+                        lines: l.unwrap_or((0, 0..0)),
+                        sphere: [0.0, 0.0, 0.0, f32::INFINITY],
+                        steps: Vec::new(),
+                    });
+                }
+            }
         }
         drop(merged);
         let init = |label, contents: &[u8]| {
@@ -1054,16 +1292,32 @@ impl Renderer {
             } else {
                 shape_lines_lean.finish()
             },
-            steps,
+            clusters,
+            huge_faces: huge_faces.finish(),
+            huge_lines: if edge_normals {
+                huge_lines.finish()
+            } else {
+                huge_lines_lean.finish()
+            },
             shapes,
             instances: (!instances.is_empty())
                 .then(|| init("bimble instances", bytemuck::cast_slice(&instances))),
+            visible: (!instances.is_empty()).then(|| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("bimble visible instances"),
+                    size: std::mem::size_of_val(&instances[..]) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            }),
+            instance_data: instances,
+            instance_spheres,
             identity: init(
                 "bimble identity instance",
                 bytemuck::bytes_of(&InstanceData::IDENTITY),
             ),
             edge_normals,
-            bounds: Sphere::of(scene),
+            bounds,
         }
     }
 
@@ -1159,6 +1413,25 @@ impl Renderer {
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&u));
         }
 
+        // What each layer draws (ADR 0036): clusters and instances off screen, outside the box
+        // or too small are left out; shapes with some left out draw from a packed copy.
+        let culls: Vec<Cull> = layers
+            .iter()
+            .map(|l| {
+                Cull::new(
+                    vp * Mat4::from_translation(l.offset),
+                    opts.clip.map(|c| (c.min - l.offset, c.max - l.offset)),
+                    opts.min_radius,
+                    opts.cull,
+                )
+            })
+            .collect();
+        let draws: Vec<Vec<(bool, std::ops::Range<u32>)>> = layers
+            .iter()
+            .zip(&culls)
+            .map(|(l, cull)| visible_instances(l.scene, cull, queue))
+            .collect();
+
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bimble"),
         });
@@ -1199,15 +1472,35 @@ impl Renderer {
             });
             // Linked models first, then the others in order: the model's edges are drawn over
             // theirs where they coincide (edges don't write depth), highlights last.
-            let paired: Vec<_> = layers.iter().zip(&self.layer_uniforms).collect();
+            let paired: Vec<_> = layers
+                .iter()
+                .zip(&self.layer_uniforms)
+                .zip(culls.iter().zip(&draws))
+                .map(|((l, u), cd)| (l, (u, cd)))
+                .collect();
             let order = paired
                 .iter()
                 .filter(|(l, _)| l.linked)
                 .chain(paired.iter().filter(|(l, _)| !l.linked));
-            for (layer, (_, bind_group)) in order {
+            let stride = std::mem::size_of::<InstanceData>() as u64;
+            for (layer, ((_, bind_group), (cull, shape_draws))) in order {
                 let scene = layer.scene;
+                // A shape's instances: all from its buffer, or the visible ones packed.
+                let inst_slice = |k: usize| {
+                    let (packed, r) = &shape_draws[k];
+                    let buf = if *packed {
+                        scene.visible.as_ref()
+                    } else {
+                        scene.instances.as_ref()
+                    };
+                    buf.map(|b| {
+                        (
+                            b.slice(r.start as u64 * stride..r.end as u64 * stride),
+                            r.len() as u32,
+                        )
+                    })
+                };
                 pass.set_bind_group(0, bind_group, &[]);
-                let stride = std::mem::size_of::<InstanceData>() as u64;
                 if layer.faces {
                     // A mirrored camera, or a mirrored shape, turns the winding around.
                     let pipelines = |mirror: bool| -> [&wgpu::RenderPipeline; 2] {
@@ -1225,32 +1518,35 @@ impl Renderer {
                     for k in 0..passes {
                         pass.set_pipeline(pipelines(camera.mirror_x)[k]);
                         pass.set_vertex_buffer(1, scene.identity.slice(..));
-                        let mut left = scene.prefix(opts.min_radius).0;
-                        for (buf, n) in &scene.faces {
-                            let n = (*n).min(left);
-                            if n == 0 {
-                                break;
+                        for c in scene.clusters.iter().filter(|c| cull.keeps(c.sphere)) {
+                            let n = c.prefix(cull.min_radius).0;
+                            if n > 0 {
+                                pass.set_vertex_buffer(0, scene.faces[c.faces.0].0.slice(..));
+                                pass.draw(c.faces.1.start..c.faces.1.start + n, 0..1);
                             }
-                            left -= n;
-                            pass.set_vertex_buffer(0, buf.slice(..));
-                            pass.draw(0..n, 0..1);
                         }
-                        if let Some(inst) = &scene.instances {
-                            for d in scene.shapes.iter().filter(|d| d.radius >= opts.min_radius) {
-                                pass.set_pipeline(pipelines(camera.mirror_x != d.mirrored)[k]);
-                                pass.set_vertex_buffer(0, scene.shape_faces[d.faces.0].0.slice(..));
-                                let r = &d.instances;
-                                pass.set_vertex_buffer(
-                                    1,
-                                    inst.slice(r.start as u64 * stride..r.end as u64 * stride),
-                                );
-                                pass.draw(d.faces.1.clone(), 0..r.len() as u32);
+                        for (buf, n) in &scene.huge_faces {
+                            pass.set_vertex_buffer(0, buf.slice(..));
+                            pass.draw(0..*n, 0..1);
+                        }
+                        for (i, d) in scene.shapes.iter().enumerate() {
+                            let Some((inst, n)) = inst_slice(i) else {
+                                continue;
+                            };
+                            if n == 0 {
+                                continue;
                             }
+                            pass.set_pipeline(pipelines(camera.mirror_x != d.mirrored)[k]);
+                            pass.set_vertex_buffer(0, scene.shape_faces[d.faces.0].0.slice(..));
+                            pass.set_vertex_buffer(1, inst);
+                            pass.draw(d.faces.1.clone(), 0..n);
                         }
                     }
                 }
                 if (opts.edges || !layer.faces)
-                    && (!scene.lines.is_empty() || !scene.shapes.is_empty())
+                    && (!scene.lines.is_empty()
+                        || !scene.huge_lines.is_empty()
+                        || !scene.shapes.is_empty())
                 {
                     pass.set_pipeline(match (opts.clip.is_some(), scene.edge_normals) {
                         (true, true) => &self.line_clip_pipeline,
@@ -1261,30 +1557,30 @@ impl Renderer {
                         (false, true) => &self.line_wide_pipeline,
                     });
                     pass.set_vertex_buffer(1, scene.identity.slice(..));
-                    let mut left = scene.prefix(opts.min_radius).1;
-                    for (buf, n) in &scene.lines {
-                        let n = (*n).min(left);
-                        if n == 0 {
-                            break;
+                    for c in scene.clusters.iter().filter(|c| cull.keeps(c.sphere)) {
+                        let n = c.prefix(cull.min_radius).1;
+                        if n > 0 {
+                            pass.set_vertex_buffer(0, scene.lines[c.lines.0].0.slice(..));
+                            pass.draw(c.lines.1.start..c.lines.1.start + n, 0..1);
                         }
-                        left -= n;
-                        pass.set_vertex_buffer(0, buf.slice(..));
-                        pass.draw(0..n, 0..1);
                     }
-                    if let Some(inst) = &scene.instances {
-                        for d in scene
-                            .shapes
-                            .iter()
-                            .filter(|d| !d.lines.1.is_empty() && d.radius >= opts.min_radius)
-                        {
-                            pass.set_vertex_buffer(0, scene.shape_lines[d.lines.0].0.slice(..));
-                            let r = &d.instances;
-                            pass.set_vertex_buffer(
-                                1,
-                                inst.slice(r.start as u64 * stride..r.end as u64 * stride),
-                            );
-                            pass.draw(d.lines.1.clone(), 0..r.len() as u32);
+                    for (buf, n) in &scene.huge_lines {
+                        pass.set_vertex_buffer(0, buf.slice(..));
+                        pass.draw(0..*n, 0..1);
+                    }
+                    for (i, d) in scene.shapes.iter().enumerate() {
+                        if d.lines.1.is_empty() {
+                            continue;
                         }
+                        let Some((inst, n)) = inst_slice(i) else {
+                            continue;
+                        };
+                        if n == 0 {
+                            continue;
+                        }
+                        pass.set_vertex_buffer(0, scene.shape_lines[d.lines.0].0.slice(..));
+                        pass.set_vertex_buffer(1, inst);
+                        pass.draw(d.lines.1.clone(), 0..n);
                     }
                 }
             }
@@ -1826,8 +2122,8 @@ mod tests {
                 &DrawOptions::default(),
             );
             (
-                gs.faces.len(),
-                gs.lines.len(),
+                gs.faces.len() + gs.huge_faces.len(),
+                gs.lines.len() + gs.huge_lines.len(),
                 gs.triangles(),
                 gpu.read_rgba(&target).unwrap(),
             )
@@ -1945,10 +2241,11 @@ mod tests {
         }
     }
 
-    /// Merged geometry is largest first: "at least this big" is a prefix that shrinks as the
-    /// size grows, all of it at 0, none past the largest element.
+    /// Merged geometry is in clusters, largest first inside each: "at least this big" is a
+    /// prefix of each cluster that shrinks as the size grows, all of it at 0, none past the
+    /// largest element.
     #[test]
-    fn small_elements_are_a_suffix_of_the_merged_buffers() {
+    fn small_elements_are_a_suffix_of_each_cluster() {
         let Ok(gpu) = Headless::new() else {
             eprintln!("no GPU adapter, skipping");
             return;
@@ -1957,17 +2254,137 @@ mod tests {
         let r = Renderer::new(&gpu.device, 1);
         let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
         let all: u32 = gs.faces.iter().map(|(_, n)| n).sum();
-        assert!(gs.prefix(0.0).0 >= all);
-        assert_eq!(gs.prefix(1e9), (0, 0));
-        let sizes: Vec<f32> = gs.steps.iter().map(|s| s.0).collect();
-        assert!(sizes.windows(2).all(|w| w[0] >= w[1]), "largest first");
+        let in_clusters: u32 = gs.clusters.iter().map(|c| c.faces.1.len() as u32).sum();
+        assert_eq!(in_clusters, all, "every merged vertex is in one cluster");
+        let at = |r: f32| -> u32 { gs.clusters.iter().map(|c| c.prefix(r).0).sum() };
+        assert_eq!(at(0.0), all);
+        assert_eq!(at(1e9), 0);
+        for c in &gs.clusters {
+            let sizes: Vec<f32> = c.steps.iter().map(|s| s.0).collect();
+            assert!(sizes.windows(2).all(|w| w[0] >= w[1]), "largest first");
+        }
         let mut last = u32::MAX;
         for r in [100.0, 1000.0, 3000.0, 10_000.0] {
-            let f = gs.prefix(r).0.min(all);
+            let f = at(r);
             assert!(f <= last.min(all), "{r}: {f}");
             last = f;
         }
-        assert!(gs.prefix(1000.0).0 < all, "columns and beams are under 1 m");
+        assert!(at(1000.0) < all, "columns and beams are under 1 m");
+    }
+
+    /// Culling (ADR 0036) leaves out only what isn't seen: close-up, turned, orthographic,
+    /// mirrored, with the section box and with an offset linked model, frames are the same with
+    /// and without it; and from close up it does leave things out (so a cull that never fires
+    /// can't pass).
+    #[test]
+    fn culling_changes_nothing_on_screen() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let spec = FrameSpec {
+            bays_x: 12,
+            bays_y: 12,
+            storeys: 3,
+            ..Default::default()
+        };
+        let mut scene = Scene::from_model(&concrete_frame(&spec));
+        // Shared shapes too: a column placed on a grid, one copy in four mirrored.
+        let column = scene
+            .elements
+            .iter()
+            .find(|e| e.class == "IfcColumn")
+            .unwrap()
+            .clone();
+        let shape = Arc::new(column.world_mesh().into_owned());
+        let (lo, hi) = scene.bounds().unwrap();
+        for k in 0..64 {
+            let (i, j) = ((k % 8) as f32, (k / 8) as f32);
+            let mut p = Placement32 {
+                x: [1.0, 0.0, 0.0],
+                y: [0.0, 1.0, 0.0],
+                z: [0.0, 0.0, 1.0],
+                t: [
+                    (hi[0] - lo[0]) * (i / 8.0 - 0.4),
+                    (hi[1] - lo[1]) * (j / 8.0 - 0.4),
+                    0.0,
+                ],
+            };
+            if k % 4 == 1 {
+                p.x = [-1.0, 0.0, 0.0];
+            }
+            scene.elements.push(SceneElement {
+                geometry: Geometry::Instance {
+                    shape: shape.clone(),
+                    to_scene: p,
+                },
+                ..column.clone()
+            });
+        }
+        let r = Renderer::new(&gpu.device, 1);
+        let gs = r.upload_with(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal, true);
+        assert!(gs.clusters.len() > 1, "{} clusters", gs.clusters.len());
+        assert!(!gs.shapes.is_empty());
+        let target = Target::new(&gpu.device, (160, 100), 1);
+        let aspect = 1.6;
+        let mut fit = Camera::default();
+        fit.fit(&scene, aspect);
+        let b = ClipBox::around(&scene, |_| true).unwrap();
+        let half = ClipBox {
+            min: b.min,
+            max: Vec3::new((b.min.x + b.max.x) / 2.0, b.max.y, b.max.z),
+        };
+        let link_off = Vec3::new(b.max.x - b.min.x + 2000.0, 0.0, 0.0);
+        let mut cut_some = false;
+        for k in 0..12 {
+            let mut cam = fit;
+            cam.distance /= [1.0, 4.0, 20.0][k % 3];
+            cam.orbit(k as f32 * 0.9, -0.2 * (k % 2) as f32);
+            cam.orthographic = k % 4 == 3;
+            cam.mirror_x = k % 5 == 4;
+            let clip = (k % 3 == 1).then_some(half);
+            let shot = |cull: bool| {
+                let opts = DrawOptions {
+                    clip,
+                    cull,
+                    ..DrawOptions::default()
+                };
+                let mut link = Layer::main(&gs);
+                link.offset = link_off;
+                link.linked = true;
+                let bounds = Sphere {
+                    center: gs.bounds.center + link_off / 2.0,
+                    radius: gs.bounds.radius + link_off.length() / 2.0,
+                };
+                r.render_layers(
+                    &gpu.device,
+                    &gpu.queue,
+                    &target,
+                    &[Layer::main(&gs), link],
+                    &bounds,
+                    &cam,
+                    &opts,
+                );
+                gpu.read_rgba(&target).unwrap()
+            };
+            let (on, off) = (shot(true), shot(false));
+            let differ = on
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(off.as_chunks::<4>().0)
+                .filter(|(p, q)| p != q)
+                .count();
+            assert_eq!(differ, 0, "camera {k}: {differ} pixels differ");
+            let opts = DrawOptions {
+                clip,
+                ..DrawOptions::default()
+            };
+            if gs.visible_triangles(&cam, aspect, &opts) * 10 < gs.triangles() as u64 * 7 {
+                cut_some = true;
+            }
+        }
+        assert!(cut_some, "close up, culling leaves things out");
     }
 
     /// Renders on whatever adapter exists (a software one in CI containers). Skipped if none.

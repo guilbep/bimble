@@ -21,10 +21,14 @@ while moving and draw everything when the view stops.
    and no per-frame work over elements. `DrawOptions::min_radius`.
 2. **Screen size.** The threshold is in pixels at the orbit target (`Camera::mm_per_pixel`).
 3. **A frame-rate target, not a fixed threshold.** Settings → "While the view moves": draw
-   everything / 15 / 30 (default) / 60 fps. The threshold starts at 0 and rises by half while
+   everything / 15 / 30 (default) / 60 / 120 / 240 fps. The threshold starts at 0 and rises by half while
    moving frames are 15 % slower than the target, falls by a third while 30 % faster, back to 0
    (`next_moving_px`). A fast machine never leaves anything out; a gap over 0.25 s is a pause,
    not a slow frame.
+   Frames are timed between presents, so the screen's refresh caps them (9 Nov): the shortest
+   frame seen while moving is taken as the refresh, a target above 60 fps is no faster than it
+   (120 on a 60 Hz screen means 60), and a frame at it counts as fast, so one slow frame doesn't
+   raise the threshold for good (test `the_screen_refresh_caps_the_target`).
 4. **Stills are whole.** 150 ms after the camera stops, the view is drawn again with everything.
    Animated turns (view cube) count as moving.
 

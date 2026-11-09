@@ -30,11 +30,19 @@ struct Case {
     frames: Vec<Duration>,
     /// The same orbit drawn as while navigating: elements under `MOVING_PX` left out.
     moving: Vec<Duration>,
+    /// The orbit at a fifth of the distance, around the model's centre: most of it is off
+    /// screen, as when working inside a building (what culling saves).
+    close: Vec<Duration>,
+    /// Share of the triangles the close-up orbit draws (culling, ADR 0036), on average.
+    close_drawn: f64,
     memory_mb: Option<f64>,
 }
 
 /// Elements smaller than this on screen (bounding radius, pixels) are left out while moving.
 const MOVING_PX: f32 = 3.0;
+
+/// The close-up orbit's distance: the fitted one divided by this.
+const CLOSE: f32 = 5.0;
 
 fn sorted(d: &[Duration]) -> Vec<Duration> {
     let mut v = d.to_vec();
@@ -117,6 +125,18 @@ fn run_case(
             frame(&cam, cam.mm_per_pixel(target.size.1) * MOVING_PX)
         })
         .collect();
+    let fit = cam.distance;
+    cam.distance = fit / CLOSE;
+    let aspect = args.width as f32 / args.height as f32;
+    let mut drawn = 0u64;
+    let close = (0..n)
+        .map(|_| {
+            cam.orbit(step, 0.0);
+            drawn += gs.visible_triangles(&cam, aspect, &DrawOptions::default());
+            frame(&cam, 0.0)
+        })
+        .collect();
+    let close_drawn = drawn as f64 / n as f64 / gs.triangles().max(1) as f64;
     Case {
         name,
         elements: scene.elements.len(),
@@ -126,6 +146,8 @@ fn run_case(
         first_frame,
         frames,
         moving,
+        close,
+        close_drawn,
         memory_mb: memory_mb(),
     }
 }
@@ -191,6 +213,8 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
                     "frame_median_ms": ms(percentile(&s, 0.5)), "frame_p95_ms": ms(percentile(&s, 0.95)),
                     "frame_max_ms": ms(*s.last().unwrap()), "memory_mb": c.memory_mb,
                     "moving_median_ms": ms(percentile(&sorted(&c.moving), 0.5)),
+                    "close_median_ms": ms(percentile(&sorted(&c.close), 0.5)),
+                    "close_drawn": c.close_drawn,
                 })
             })
             .collect();
@@ -210,7 +234,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         args.width, args.height, args.samples, args.frames
     );
     println!(
-        "{:<20} {:>9} {:>10} {:>9} {:>9} {:>10} {:>10} {:>8} {:>10} {:>9}",
+        "{:<20} {:>9} {:>10} {:>9} {:>9} {:>10} {:>10} {:>8} {:>10} {:>9} {:>8} {:>9}",
         "model",
         "elements",
         "triangles",
@@ -220,6 +244,8 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         "p95 ms",
         "fps",
         "moving ms",
+        "close ms",
+        "drawn",
         "proc MB"
     );
     for c in &cases {
@@ -229,7 +255,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         let p95 = percentile(&s, 0.95);
         let ms = |d: Duration| d.as_secs_f64() * 1000.0;
         println!(
-            "{:<20} {:>9} {:>10} {:>9.1} {:>9.1} {:>10.2} {:>10.2} {:>8.0} {:>10.2} {:>9}",
+            "{:<20} {:>9} {:>10} {:>9.1} {:>9.1} {:>10.2} {:>10.2} {:>8.0} {:>10.2} {:>9.2} {:>7.0}% {:>9}",
             c.name,
             c.elements,
             c.triangles,
@@ -239,12 +265,15 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
             ms(p95),
             1000.0 / ms(med).max(1e-3),
             ms(percentile(&sorted(&c.moving), 0.5)),
+            ms(percentile(&sorted(&c.close), 0.5)),
+            c.close_drawn * 100.0,
             c.memory_mb.map_or("n/a".into(), |m| format!("{m:.0}")),
         );
     }
     println!(
         "\nfps = 1000 / median frame time. moving ms = median frame drawn as while navigating \
-         (elements under {MOVING_PX} px left out). proc MB = memory of this process after the model \
+         (elements under {MOVING_PX} px left out). close ms = the orbit at 1/{CLOSE} of the distance, \
+         around the centre; drawn = share of the triangles it draws (culling). proc MB = memory of this process after the model \
          (cumulative)."
     );
     println!("The viewer only redraws on change, so idle costs nothing.");
