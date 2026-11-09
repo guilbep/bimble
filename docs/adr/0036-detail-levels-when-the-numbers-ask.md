@@ -376,8 +376,7 @@ it in the pictures drawn without MSAA while moving on a slow machine (#4).
 
 Test `screen_edges_follow_the_edge_lines` (the generated frame): 2 349 of 2 380 line pixels have
 a screen edge within a pixel, and every screen edge lies within two pixels of a line. Screen
-edges miss creases between coplanar faces of two elements (no bend) and edges hidden behind
-nothing else, as a drawing's lines don't need; stills keep lines.
+edges miss the seam between two elements' coplanar faces (no bend there); stills keep lines.
 
 ## #1 done: occlusion queries on the GPU, last frame's answers (9 Nov)
 
@@ -403,6 +402,23 @@ and #5 on machines that miss it (better on the weak GPU, and works on WebGL2). T
 picture is the exact one, and from above something is hidden; it fails with 492 pixels if hidden
 parts' boxes aren't probed.
 
+## #10 done, neutral: culling shape copies on the GPU (9 Nov)
+
+`gpu_cull.wgsl`, `DrawOptions::gpu_cull`. A compute pass tests each shape copy's sphere against
+the view's planes and the size threshold, packs the kept copies into each shape draw's region and
+counts them into indirect arguments; shapes are then drawn with `draw_indexed_indirect` (edges
+with `draw_indirect`), each from its region (no first instance: WebGPU lacks it). It replaces the
+CPU's per-copy test and the upload of the packed copies. Four storage buffers (the downlevel
+limit): the copies, a record per copy (sphere, draw, region start), the kept copies, the
+arguments. Where compute shaders exist (native, WebGPU; not WebGL2), on the model's main layer,
+and only when no other per-copy decision is made (CPU occlusion, proxies, queries, section box).
+
+`bimble bench --gpu-cull` on the M4 Pro: unchanged within noise on the five models (e.g. 415 MB
+24.8 / 24.7 → 24.9 / 30.1 ms, 872 MB 5.59 / 5.45 → 5.48 / 5.27 ms). The CPU work it removes is
+0.1–1.4 ms a frame here; it could matter with a weak CPU and a capable GPU, which isn't measured,
+so the viewer doesn't turn it on. Test `gpu_culling_draws_what_cpu_culling_does` (8 cameras:
+close, orthographic, mirrored, size threshold); it fails if the shader's plane test is inverted.
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
@@ -423,7 +439,8 @@ measured with `bimble bench` before and after (CLAUDE.md), on the M4 Pro and on 
 
 Order: steps 1–3 above first (all done: frustum culling, indexed shapes with #2, dedup), then #3, #4, #1/#5
 (after a weak-GPU measurement), then the rest. #3: highlights done, bands dropped; #4 waits for the
-weak-GPU measurement (now done); #5 done (slow GPUs only); #8: the codec done, not yet used; #9 done (while moving on slow machines); #7 done (small); #6 done (moving on slow machines); #1 done (native, fast machines).
+weak-GPU measurement (now done); #5 done (slow GPUs only); #8: the codec done, not yet used; #9 done (while moving on slow machines); #7 done (small); #6 done (moving on slow machines); #1 done (native, fast machines); #10 done (neutral, not used by the viewer). All ten done or
+measured.
 
 ## Revisit when
 

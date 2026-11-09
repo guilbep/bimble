@@ -444,6 +444,8 @@ pub struct GpuScene {
     occluder_elements: Vec<std::ops::Range<u32>>,
     /// Stand-ins for far cells (ADR 0036 #9), and which cells may be used in this upload.
     proxies: Option<(Arc<GpuProxies>, Vec<bool>)>,
+    /// Culling shape copies on the GPU (ADR 0036 #10), where compute shaders exist.
+    gpu_cull: Option<GpuCullBuffers>,
     /// GPU occlusion queries' state (ADR 0036 #1), made when first used.
     gpu_occ: std::sync::Mutex<Option<gpu_occlusion::State>>,
     /// Boxes to probe hidden clusters and shape draws with: unit cubes placed over their boxes,
@@ -461,6 +463,18 @@ struct Faces {
     indices: wgpu::Buffer,
     /// Indices: three a triangle.
     n: u32,
+}
+
+/// A scene's buffers for culling shape copies on the GPU (ADR 0036 #10).
+struct GpuCullBuffers {
+    bind_group: wgpu::BindGroup,
+    /// Copies kept, packed in each shape draw's region (as `instances`).
+    dst: wgpu::Buffer,
+    /// Indirect arguments per shape draw (faces at 36 × k, edges at 36 × k + 20), and their
+    /// values before counting.
+    args: wgpu::Buffer,
+    args_init: Vec<u32>,
+    copies: u32,
 }
 
 /// Merged elements near each other, in one run of each vertex buffer.
@@ -1293,6 +1307,9 @@ impl Target {
 // ---------------------------------------------------------------- renderer
 
 pub struct Renderer {
+    /// Culling shape copies on the GPU (ADR 0036 #10): pipeline, its bindings' layout, the
+    /// view's uniforms. None without compute shaders (WebGL2).
+    gpu_cull: Option<(wgpu::ComputePipeline, wgpu::BindGroupLayout, wgpu::Buffer)>,
     /// A unit cube (0..1), to probe boxes with occlusion queries (ADR 0036 #1).
     cube: (wgpu::Buffer, wgpu::Buffer),
     /// Edges found on screen from the depth (single-sample renderers only; ADR 0036 #6).
@@ -1340,6 +1357,9 @@ pub struct DrawOptions {
     /// Occlusion culling with GPU queries, last frame's answers (ADR 0036 #1; native backends
     /// only, the main layer only, off with a section box).
     pub gpu_occlusion: bool,
+    /// Cull shape copies on the GPU (ADR 0036 #10; where compute shaders exist, the main layer,
+    /// without occlusion, proxies or a section box).
+    pub gpu_cull: bool,
 }
 
 impl Default for DrawOptions {
@@ -1352,6 +1372,7 @@ impl Default for DrawOptions {
             proxy_px: 0.0,
             screen_edges: false,
             gpu_occlusion: false,
+            gpu_cull: false,
             hatching: true,
             edges: true,
             style: GraphicStyle::default(),
@@ -1696,7 +1717,66 @@ impl Renderer {
             )
         };
 
+        let gpu_cull = (device.limits().max_storage_buffers_per_shader_stage >= 4
+            && device.limits().max_compute_workgroup_size_x >= 64)
+            .then(|| {
+                let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("bimble gpu cull"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("gpu_cull.wgsl").into()),
+                });
+                let storage = |binding, read_only| wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                };
+                let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("bimble gpu cull"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        storage(1, true),
+                        storage(2, true),
+                        storage(3, false),
+                        storage(4, false),
+                    ],
+                });
+                let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("bimble gpu cull"),
+                    bind_group_layouts: &[Some(&bgl)],
+                    immediate_size: 0,
+                });
+                let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("bimble gpu cull"),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some("cull_copies"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+                let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("bimble gpu cull"),
+                    size: 7 * 16,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                (pipeline, bgl, uniforms)
+            });
+
         Renderer {
+            gpu_cull,
             cube,
             screen_edges,
             face_pipeline,
@@ -2028,7 +2108,87 @@ impl Renderer {
                 .collect();
             (!data.is_empty()).then(|| init("bimble probe boxes", bytemuck::cast_slice(&data)))
         };
+        let gpu_cull = match (&self.gpu_cull, instances.is_empty()) {
+            (Some((_, bgl, uniforms)), false) => {
+                let storage = |label, contents: &[u8], usage| {
+                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some(label),
+                        contents,
+                        usage: wgpu::BufferUsages::STORAGE | usage,
+                    })
+                };
+                // Per copy: sphere, then its draw and the draw's first copy (as u32 bits).
+                let mut meta = vec![[0u32; 8]; instances.len()];
+                let mut args_init = Vec::with_capacity(shapes.len() * 9);
+                for (k, d) in shapes.iter().enumerate() {
+                    for i in d.instances.clone() {
+                        let sp = instance_spheres[i as usize].map(f32::to_bits);
+                        meta[i as usize] = [
+                            sp[0],
+                            sp[1],
+                            sp[2],
+                            sp[3],
+                            k as u32,
+                            d.instances.start,
+                            0,
+                            0,
+                        ];
+                    }
+                    args_init.extend([d.faces.1.len() as u32, 0, d.faces.1.start, 0, 0]);
+                    args_init.extend([d.lines.1.len() as u32, 0, d.lines.1.start, 0]);
+                }
+                if args_init.is_empty() {
+                    args_init.extend([0; 9]);
+                }
+                let src = storage(
+                    "bimble gpu cull copies",
+                    bytemuck::cast_slice(&instances),
+                    wgpu::BufferUsages::empty(),
+                );
+                let copies = storage(
+                    "bimble gpu cull spheres",
+                    bytemuck::cast_slice(&meta),
+                    wgpu::BufferUsages::empty(),
+                );
+                let dst = storage(
+                    "bimble gpu cull kept",
+                    bytemuck::cast_slice(&instances),
+                    wgpu::BufferUsages::VERTEX,
+                );
+                let args = storage(
+                    "bimble gpu cull args",
+                    bytemuck::cast_slice(&args_init),
+                    wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                );
+                fn entry(binding: u32, b: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
+                    wgpu::BindGroupEntry {
+                        binding,
+                        resource: b.as_entire_binding(),
+                    }
+                }
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("bimble gpu cull"),
+                    layout: bgl,
+                    entries: &[
+                        entry(0, uniforms),
+                        entry(1, &src),
+                        entry(2, &copies),
+                        entry(3, &dst),
+                        entry(4, &args),
+                    ],
+                });
+                Some(GpuCullBuffers {
+                    bind_group,
+                    dst,
+                    args,
+                    args_init,
+                    copies: instances.len() as u32,
+                })
+            }
+            _ => None,
+        };
         GpuScene {
+            gpu_cull,
             faces: faces.finish(),
             lines: if edge_normals {
                 lines.finish()
@@ -2448,6 +2608,22 @@ impl Renderer {
             .filter(|_| asking)
             .map(|st| (&st.set, st.capacity));
         let mut asked: Vec<gpu_occlusion::Item> = Vec::new();
+        // Shape copies culled on the GPU (ADR 0036 #10): the model's first layer, when no other
+        // per-copy decision (occlusion, proxies, queries, section box) is needed.
+        let gi = layers
+            .iter()
+            .position(|l| !l.linked && l.faces)
+            .filter(|&i| {
+                let c = &culls[i];
+                opts.gpu_cull
+                    && opts.cull
+                    && opts.clip.is_none()
+                    && self.gpu_cull.is_some()
+                    && layers[i].scene.gpu_cull.is_some()
+                    && c.occ.is_none()
+                    && c.replaced.is_empty()
+                    && c.gpu.is_none()
+            });
         let draws: Vec<Vec<(bool, std::ops::Range<u32>)>> = layers
             .iter()
             .zip(&culls)
@@ -2456,13 +2632,34 @@ impl Renderer {
                 // Writes land before the frame's one submit: a scene drawn in two layers can
                 // hold one packed list, so only its first layer packs; the others draw all.
                 let first = !layers[..i].iter().any(|o| std::ptr::eq(o.scene, l.scene));
-                visible_instances(l.scene, cull, first.then_some(queue))
+                // Culled on the GPU: nothing packed here.
+                visible_instances(l.scene, cull, (first && Some(i) != gi).then_some(queue))
             })
             .collect();
 
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bimble"),
         });
+        if let (Some(i), Some((pipeline, _, uniforms))) = (gi, &self.gpu_cull)
+            && let Some(b) = &layers[i].scene.gpu_cull
+        {
+            let c = &culls[i];
+            let mut u = [0f32; 28];
+            for (k, p) in c.planes.iter().enumerate() {
+                u[k * 4..k * 4 + 4].copy_from_slice(&p.to_array());
+            }
+            u[24] = c.min_radius;
+            u[25] = b.copies as f32;
+            queue.write_buffer(uniforms, 0, bytemuck::cast_slice(&u));
+            queue.write_buffer(&b.args, 0, bytemuck::cast_slice(&b.args_init));
+            let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("bimble gpu cull"),
+                timestamp_writes: None,
+            });
+            cp.set_pipeline(pipeline);
+            cp.set_bind_group(0, &b.bind_group, &[]);
+            cp.dispatch_workgroups(b.copies.div_ceil(64), 1, 1);
+        }
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("bimble pass"),
@@ -2507,6 +2704,7 @@ impl Renderer {
             let stride = std::mem::size_of::<InstanceData>() as u64;
             for (layer, ((_, bind_group), (cull, shape_draws))) in order {
                 let scene = layer.scene;
+                let culled_here = gi.is_some_and(|i| std::ptr::eq(*layer, &layers[i]));
                 // A shape's instances: all from its buffer, or the visible ones packed.
                 let inst_slice = |k: usize| {
                     let (packed, r) = &shape_draws[k];
@@ -2591,7 +2789,27 @@ impl Renderer {
                                 pass.draw_indexed(r.clone(), 0, 0..1);
                             }
                         }
+                        let gpu_culled = scene.gpu_cull.as_ref().filter(|_| culled_here);
                         for (i, d) in scene.shapes.iter().enumerate() {
+                            if let Some(b) = gpu_culled {
+                                if d.radius < cull.min_radius {
+                                    continue;
+                                }
+                                pass.set_pipeline(pipelines(camera.mirror_x != d.mirrored)[k]);
+                                let f = &scene.shape_faces[d.faces.0];
+                                pass.set_vertex_buffer(0, f.vertices.slice(..));
+                                pass.set_index_buffer(
+                                    f.indices.slice(..),
+                                    wgpu::IndexFormat::Uint32,
+                                );
+                                let r = &d.instances;
+                                pass.set_vertex_buffer(
+                                    1,
+                                    b.dst.slice(r.start as u64 * stride..r.end as u64 * stride),
+                                );
+                                pass.draw_indexed_indirect(&b.args, i as u64 * 36);
+                                continue;
+                            }
                             let Some((inst, n)) = inst_slice(i) else {
                                 continue;
                             };
@@ -2710,6 +2928,18 @@ impl Renderer {
                     }
                     for (i, d) in scene.shapes.iter().enumerate() {
                         if d.lines.1.is_empty() {
+                            continue;
+                        }
+                        if let Some(b) = scene.gpu_cull.as_ref().filter(|_| culled_here) {
+                            if d.radius >= cull.min_radius {
+                                let r = &d.instances;
+                                pass.set_vertex_buffer(0, scene.shape_lines[d.lines.0].0.slice(..));
+                                pass.set_vertex_buffer(
+                                    1,
+                                    b.dst.slice(r.start as u64 * stride..r.end as u64 * stride),
+                                );
+                                pass.draw_indirect(&b.args, i as u64 * 36 + 20);
+                            }
                             continue;
                         }
                         let Some((inst, n)) = inst_slice(i) else {
@@ -3802,6 +4032,59 @@ mod tests {
                     .count();
                 assert!(hidden > 0, "something is hidden from above");
             }
+        }
+    }
+
+    /// Copies culled on the GPU (ADR 0036 #10) draw what the CPU's culling draws: close up,
+    /// orthographic, mirrored and with a size threshold.
+    #[test]
+    fn gpu_culling_draws_what_cpu_culling_does() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let spec = FrameSpec {
+            bays_x: 12,
+            bays_y: 12,
+            storeys: 3,
+            ..Default::default()
+        };
+        let scene = Scene::from_model(&concrete_frame(&spec));
+        let r = Renderer::new(&gpu.device, 1);
+        if r.gpu_cull.is_none() {
+            eprintln!("no compute shaders, skipping");
+            return;
+        }
+        let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
+        assert!(gs.gpu_cull.is_some() && !gs.shapes.is_empty());
+        let target = Target::new(&gpu.device, (320, 200), 1);
+        let mut fit = Camera::default();
+        fit.fit(&scene, 1.6);
+        for k in 0..8 {
+            let mut cam = fit;
+            cam.distance /= [1.0, 4.0, 12.0][k % 3];
+            cam.orbit(k as f32 * 0.8, 0.0);
+            cam.orthographic = k % 4 == 3;
+            cam.mirror_x = k % 5 == 4;
+            let min_radius = if k % 2 == 1 { 500.0 } else { 0.0 };
+            let shot = |on: bool| {
+                let o = DrawOptions {
+                    gpu_cull: on,
+                    min_radius,
+                    ..DrawOptions::default()
+                };
+                r.render(&gpu.device, &gpu.queue, &target, &gs, &cam, &o);
+                gpu.read_rgba(&target).unwrap()
+            };
+            let (cpu, on_gpu) = (shot(false), shot(true));
+            let differ = cpu
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(on_gpu.as_chunks::<4>().0)
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 40))
+                .count();
+            assert_eq!(differ, 0, "camera {k}: {differ} pixels differ");
         }
     }
 

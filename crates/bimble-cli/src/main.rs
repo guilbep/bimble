@@ -318,6 +318,9 @@ enum Cmd {
         /// With occlusion culling by GPU queries (last frame's answers; native backends)
         #[arg(long)]
         gpu_occlusion: bool,
+        /// Cull shape copies on the GPU (compute shaders, indirect draws)
+        #[arg(long)]
+        gpu_cull: bool,
         /// Machine-readable output
         #[arg(long)]
         json: bool,
@@ -1050,6 +1053,7 @@ fn run(cli: Cli) -> Result<(), String> {
             occlusion,
             proxies,
             gpu_occlusion,
+            gpu_cull,
             json,
         } => {
             if !matches!(samples, 1 | 4) {
@@ -1059,6 +1063,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 occlusion,
                 proxies,
                 gpu_occlusion,
+                gpu_cull,
                 files,
                 frames,
                 width,
