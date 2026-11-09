@@ -47,7 +47,7 @@ struct Case {
     /// would leave out, ADR 0036 #1), whole model and close up, over 8 views.
     hidden: f64,
     hidden_close: f64,
-    /// Face draw calls of a whole frame (merged clusters, then one per shared shape).
+    /// Face draw calls of a whole-model frame (culled and joined) (merged clusters, then one per shared shape).
     draws: usize,
     memory_mb: Option<f64>,
 }
@@ -173,6 +173,15 @@ fn run_case(
         }
         sum / 8.0
     };
+    let draws = gs.frame_draws(
+        &cam,
+        target.size,
+        &DrawOptions {
+            occlusion: args.occlusion,
+            proxy_px: args.proxies,
+            ..DrawOptions::default()
+        },
+    );
     let hidden = hidden_over(&mut cam);
     let fit = cam.distance;
     cam.distance = fit / CLOSE;
@@ -239,7 +248,7 @@ fn run_case(
         hidden,
         hidden_close,
         gpu_mb: gs.gpu_bytes() as f64 / 1_048_576.0,
-        draws: gs.face_draws(),
+        draws,
         memory_mb: memory_mb(),
     }
 }

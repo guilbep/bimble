@@ -479,6 +479,9 @@ impl Cluster {
 /// (Tests use small ones, so a small model has several.)
 const CLUSTER_VERTICES: usize = if cfg!(test) { 3 * 512 } else { 3 * 32_768 };
 
+/// A run of merged geometry: face buffer, index range, line buffer, vertex range.
+type DrawRun = (usize, std::ops::Range<u32>, usize, std::ops::Range<u32>);
+
 /// What of a scene one frame draws: a frustum (planes as `n·p + d ≥ 0`, layer coordinates),
 /// the section box, and the smallest size drawn.
 struct Cull {
@@ -605,13 +608,29 @@ impl Cull {
         self
     }
 
-    /// Ranges (relative to each cluster's own) of merged elements to draw: per kept cluster, its
-    /// elements at least the size threshold, and with occlusion only those it may show, in runs.
-    fn runs<'s>(
-        &self,
-        scene: &'s GpuScene,
-    ) -> Vec<(&'s Cluster, std::ops::Range<u32>, std::ops::Range<u32>)> {
-        let mut out = Vec::new();
+    /// Merged elements to draw, as (face buffer, index range, line buffer, vertex range): per
+    /// kept cluster, its elements at least the size threshold, and with occlusion or proxies
+    /// only those to show, in runs. Runs that follow each other in the same buffers are joined
+    /// into one draw (ADR 0036 #7): neighbouring clusters lie one after the other.
+    fn runs(&self, scene: &GpuScene) -> Vec<DrawRun> {
+        let mut out: Vec<DrawRun> = Vec::new();
+        let mut push = |c: &Cluster, f: std::ops::Range<u32>, l: std::ops::Range<u32>| {
+            let (f, l) = (
+                c.faces.1.start + f.start..c.faces.1.start + f.end,
+                c.lines.1.start + l.start..c.lines.1.start + l.end,
+            );
+            if let Some(last) = out.last_mut()
+                && last.0 == c.faces.0
+                && last.2 == c.lines.0
+                && last.1.end == f.start
+                && last.3.end == l.start
+            {
+                last.1.end = f.end;
+                last.3.end = l.end;
+            } else {
+                out.push((c.faces.0, f, c.lines.0, l));
+            }
+        };
         for c in scene
             .clusters
             .iter()
@@ -619,7 +638,7 @@ impl Cull {
         {
             let (nf, nl) = c.prefix(self.min_radius);
             if (self.occ.is_none() && self.replaced.is_empty()) || c.steps.is_empty() {
-                out.push((c, 0..nf, 0..nl));
+                push(c, 0..nf, 0..nl);
                 continue;
             }
             let end = |k: usize| c.steps.get(k + 1).map_or((nf, nl), |s| (s.1, s.2));
@@ -633,11 +652,11 @@ impl Cull {
                 if self.sees(&c.boxes[k]) && self.shown(scene, c.elements[k]) {
                     run = Some(run.map_or((s.1, fe, s.2, le), |r| (r.0, fe, r.2, le)));
                 } else if let Some(r) = run.take() {
-                    out.push((c, r.0..r.1, r.2..r.3));
+                    push(c, r.0..r.1, r.2..r.3);
                 }
             }
             if let Some(r) = run {
-                out.push((c, r.0..r.1, r.2..r.3));
+                push(c, r.0..r.1, r.2..r.3);
             }
         }
         out
@@ -714,7 +733,7 @@ impl GpuScene {
         let merged: u64 = cull
             .runs(self)
             .iter()
-            .map(|(_, f, _)| f.len() as u64 / 3)
+            .map(|(_, f, _, _)| f.len() as u64 / 3)
             .sum();
         let huge: u64 = self.huge_faces.iter().map(|(_, n)| *n as u64 / 3).sum();
         let shared: u64 = self
@@ -768,6 +787,37 @@ impl GpuScene {
     /// Draw calls a frame makes for faces (merged buffers, then one per shared shape).
     pub fn face_draws(&self) -> usize {
         self.clusters.len() + self.huge_faces.len() + self.shapes.len()
+    }
+
+    /// Face draw calls a frame makes from this camera (culled and joined, as `render` does).
+    pub fn frame_draws(&self, camera: &Camera, size: (u32, u32), opts: &DrawOptions) -> usize {
+        let aspect = size.0 as f32 / size.1.max(1) as f32;
+        let m = camera.view_proj(aspect, &self.bounds);
+        let cull = Cull::new(m, opts.clip.map(|c| (c.min, c.max)), opts)
+            .occluding(m, aspect, self, opts)
+            .proxied(
+                self,
+                camera.eye(),
+                |d| camera.mm_per_pixel_at(d, size.1),
+                opts,
+            );
+        let shapes = self
+            .shapes
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| {
+                d.radius >= cull.min_radius
+                    && d.instances.clone().any(|i| {
+                        cull.keeps(self.instance_spheres[i as usize])
+                            && cull.sees(&self.instance_boxes[i as usize])
+                            && cull.shown(self, self.instance_elements[i as usize])
+                    })
+            })
+            .count();
+        cull.runs(self).iter().filter(|r| !r.1.is_empty()).count()
+            + self.huge_faces.len()
+            + shapes
+            + cull.proxied.len()
     }
 }
 
@@ -2227,21 +2277,20 @@ impl Renderer {
                         pass.set_pipeline(pipelines(camera.mirror_x)[k]);
                         pass.set_vertex_buffer(1, scene.identity.slice(..));
                         let mut bound = usize::MAX;
-                        for (c, r, _) in &runs {
+                        for (b, r, _, _) in &runs {
                             if r.is_empty() {
                                 continue;
                             }
-                            if bound != c.faces.0 {
-                                let f = &scene.faces[c.faces.0];
+                            if bound != *b {
+                                let f = &scene.faces[*b];
                                 pass.set_vertex_buffer(0, f.vertices.slice(..));
                                 pass.set_index_buffer(
                                     f.indices.slice(..),
                                     wgpu::IndexFormat::Uint32,
                                 );
-                                bound = c.faces.0;
+                                bound = *b;
                             }
-                            let s = c.faces.1.start;
-                            pass.draw_indexed(s + r.start..s + r.end, 0, 0..1);
+                            pass.draw_indexed(r.clone(), 0, 0..1);
                         }
                         for (buf, n) in &scene.huge_faces {
                             pass.set_vertex_buffer(0, buf.slice(..));
@@ -2291,11 +2340,10 @@ impl Renderer {
                         (false, true) => &self.line_wide_pipeline,
                     });
                     pass.set_vertex_buffer(1, scene.identity.slice(..));
-                    for (c, _, r) in &runs {
+                    for (_, _, b, r) in &runs {
                         if !r.is_empty() {
-                            pass.set_vertex_buffer(0, scene.lines[c.lines.0].0.slice(..));
-                            let s = c.lines.1.start;
-                            pass.draw(s + r.start..s + r.end, 0..1);
+                            pass.set_vertex_buffer(0, scene.lines[*b].0.slice(..));
+                            pass.draw(r.clone(), 0..1);
                         }
                     }
                     for (buf, n) in &scene.huge_lines {

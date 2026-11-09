@@ -346,6 +346,15 @@ thread). Test `proxies_stand_for_far_cells`: with 0 px nothing changes; with a l
 than half the triangles are drawn and under 10 % of the pixels change much (it fails with 8 268
 if proxies aren't drawn); a hidden element keeps the root from being used.
 
+## #7 done, small: draws joined (9 Nov)
+
+Merged geometry is drawn in runs with absolute ranges; a run that continues the previous one in
+the same buffers joins it (neighbouring clusters lie one after the other). `bimble bench` "draws"
+now counts a whole-model frame's face draws after culling and joining: 315 → 308, 492 → 426,
+186 → 168, 657 → 567, 871 → 770 on the five models; frame times unchanged within noise. Most
+draws left are one per shared shape (each with its own instance range); joining those needs
+multi-draw (`multi_draw_indexed_indirect`), which WebGPU and WebGL2 don't have: not done.
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
@@ -366,7 +375,7 @@ measured with `bimble bench` before and after (CLAUDE.md), on the M4 Pro and on 
 
 Order: steps 1–3 above first (all done: frustum culling, indexed shapes with #2, dedup), then #3, #4, #1/#5
 (after a weak-GPU measurement), then the rest. #3: highlights done, bands dropped; #4 waits for the
-weak-GPU measurement (now done); #5 done (slow GPUs only); #8: the codec done, not yet used; #9 done (while moving on slow machines).
+weak-GPU measurement (now done); #5 done (slow GPUs only); #8: the codec done, not yet used; #9 done (while moving on slow machines); #7 done (small).
 
 ## Revisit when
 
