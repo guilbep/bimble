@@ -965,6 +965,7 @@ impl Target {
 
 pub struct Renderer {
     face_pipeline: wgpu::RenderPipeline,
+    probe_pipeline: wgpu::RenderPipeline,
     face_front_pipeline: wgpu::RenderPipeline,
     face_back_pipeline: wgpu::RenderPipeline,
     face_front_mirrored: wgpu::RenderPipeline,
@@ -1070,11 +1071,18 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &INSTANCE_ATTRS,
         };
+        // Probing what a finished picture shows (occlusion queries): same depth, nothing written.
+        let probe_target = [Some(wgpu::ColorTargetState {
+            format: COLOR_FORMAT,
+            blend: None,
+            write_mask: wgpu::ColorWrites::empty(),
+        })];
         let face_pipeline_with = |label: &str,
                                   (vs, fs): (&str, &str),
                                   cull_mode: Option<wgpu::Face>,
                                   front_face: wgpu::FrontFace,
-                                  bias: (i32, f32)| {
+                                  bias: (i32, f32),
+                                  probe: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -1099,8 +1107,12 @@ impl Renderer {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    depth_write_enabled: Some(!probe),
+                    depth_compare: Some(if probe {
+                        wgpu::CompareFunction::LessEqual
+                    } else {
+                        wgpu::CompareFunction::Less
+                    }),
                     stencil: Default::default(),
                     // Push faces back so the edges drawn afterwards win the depth test.
                     bias: wgpu::DepthBiasState {
@@ -1114,7 +1126,7 @@ impl Renderer {
                     module: &shader,
                     entry_point: Some(fs),
                     compilation_options: Default::default(),
-                    targets: &target,
+                    targets: if probe { &probe_target } else { &target },
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -1122,8 +1134,22 @@ impl Renderer {
         };
         // Imported meshes don't always have consistent winding: draw both sides at once.
         let ccw = wgpu::FrontFace::Ccw;
-        let face_pipeline =
-            face_pipeline_with("bimble faces", ("vs_face", "fs_face"), None, ccw, (2, 1.5));
+        let face_pipeline = face_pipeline_with(
+            "bimble faces",
+            ("vs_face", "fs_face"),
+            None,
+            ccw,
+            (2, 1.5),
+            false,
+        );
+        let probe_pipeline = face_pipeline_with(
+            "bimble faces, probe",
+            ("vs_face", "fs_face"),
+            None,
+            ccw,
+            (2, 1.5),
+            true,
+        );
         // With a section box, inward faces show cut surfaces. Drawn in a second pass, pushed back
         // more where they slope away (so where an outward and an inward face meet, at
         // silhouette corners, the outward one wins instead of speckling the outline with cut
@@ -1140,6 +1166,7 @@ impl Renderer {
                     Some(wgpu::Face::Back),
                     front,
                     (2, 1.5),
+                    false,
                 ),
                 face_pipeline_with(
                     "bimble faces, inward (cut surfaces), section box",
@@ -1147,6 +1174,7 @@ impl Renderer {
                     Some(wgpu::Face::Front),
                     front,
                     (-2, 4.0),
+                    false,
                 ),
             )
         };
@@ -1224,6 +1252,7 @@ impl Renderer {
 
         Renderer {
             face_pipeline,
+            probe_pipeline,
             face_front_pipeline,
             face_back_pipeline,
             face_front_mirrored,
@@ -1577,6 +1606,150 @@ impl Renderer {
             load_depth: true,
         };
         self.draw(device, queue, out, layers, bounds, camera, opts);
+    }
+
+    /// Share of the drawn triangles a perfect occlusion culling would leave out (ADR 0036 #1),
+    /// per merged element and per shape copy: draws the picture, then each of them again
+    /// against its depth with an occlusion query; those with no sample left were hidden. A
+    /// measurement (one query and one draw call per element), not for every frame.
+    pub fn hidden_share(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &Target,
+        scene: &GpuScene,
+        camera: &Camera,
+        opts: &DrawOptions,
+    ) -> f64 {
+        self.render(device, queue, target, scene, camera, opts);
+        let cull = Cull::new(
+            camera.view_proj(target.size.0 as f32 / target.size.1 as f32, &scene.bounds),
+            opts.clip.map(|c| (c.min, c.max)),
+            opts,
+        );
+        // (triangles, draw): what each query draws.
+        enum Probe {
+            Merged(usize, std::ops::Range<u32>),
+            Copy(usize, u32),
+        }
+        let mut probes: Vec<(u64, Probe)> = Vec::new();
+        for c in scene.clusters.iter().filter(|c| cull.keeps(c.sphere)) {
+            let n = c.prefix(cull.min_radius).0;
+            let mut cuts: Vec<u32> = c.steps.iter().map(|s| s.1).filter(|&o| o < n).collect();
+            if cuts.is_empty() {
+                cuts.push(0);
+            }
+            cuts.push(n);
+            for w in cuts.windows(2).filter(|w| w[1] > w[0]) {
+                let r = c.faces.1.start + w[0]..c.faces.1.start + w[1];
+                probes.push((r.len() as u64 / 3, Probe::Merged(c.faces.0, r)));
+            }
+        }
+        for (k, d) in scene.shapes.iter().enumerate() {
+            for i in d.instances.clone() {
+                if cull.keeps(scene.instance_spheres[i as usize]) {
+                    probes.push((d.faces.1.len() as u64 / 3, Probe::Copy(k, i)));
+                }
+            }
+        }
+        let total: u64 = probes.iter().map(|p| p.0).sum();
+        let (view, resolve) = match &target.msaa_view {
+            Some(m) => (m, Some(&target.color_view)),
+            None => (&target.color_view, None),
+        };
+        let stride = std::mem::size_of::<InstanceData>() as u64;
+        let mut hidden = 0u64;
+        // A query set holds at most 4096 queries.
+        for chunk in probes.chunks(4096) {
+            let set = device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("bimble probe"),
+                ty: wgpu::QueryType::Occlusion,
+                count: chunk.len() as u32,
+            });
+            let bytes = chunk.len() as u64 * 8;
+            let resolved = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("bimble probe resolve"),
+                size: bytes,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let read = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("bimble probe read"),
+                size: bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let mut enc = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("bimble probe pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: resolve,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &target.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: Some(&set),
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.probe_pipeline);
+                pass.set_bind_group(0, &self.layer_uniforms[0].1, &[]);
+                for (q, (_, p)) in chunk.iter().enumerate() {
+                    pass.begin_occlusion_query(q as u32);
+                    match p {
+                        Probe::Merged(b, r) => {
+                            let f = &scene.faces[*b];
+                            pass.set_vertex_buffer(0, f.vertices.slice(..));
+                            pass.set_vertex_buffer(1, scene.identity.slice(..));
+                            pass.set_index_buffer(f.indices.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(r.clone(), 0, 0..1);
+                        }
+                        Probe::Copy(k, i) => {
+                            let d = &scene.shapes[*k];
+                            let f = &scene.shape_faces[d.faces.0];
+                            let inst = scene.instances.as_ref().expect("shapes have instances");
+                            pass.set_vertex_buffer(0, f.vertices.slice(..));
+                            pass.set_vertex_buffer(
+                                1,
+                                inst.slice(*i as u64 * stride..(*i as u64 + 1) * stride),
+                            );
+                            pass.set_index_buffer(f.indices.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(d.faces.1.clone(), 0, 0..1);
+                        }
+                    }
+                    pass.end_occlusion_query();
+                }
+            }
+            enc.resolve_query_set(&set, 0..chunk.len() as u32, &resolved, 0);
+            enc.copy_buffer_to_buffer(&resolved, 0, &read, 0, bytes);
+            queue.submit([enc.finish()]);
+            let slice = read.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            let Ok(data) = slice.get_mapped_range() else {
+                continue;
+            };
+            let counts: &[u64] = bytemuck::cast_slice(&data);
+            hidden += chunk
+                .iter()
+                .zip(counts)
+                .filter(|(_, n)| **n == 0)
+                .map(|(p, _)| p.0)
+                .sum::<u64>();
+        }
+        hidden as f64 / total.max(1) as f64
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2693,6 +2866,35 @@ mod tests {
             top * 100 >= all * 98,
             "{top} of {all} pixels in 4 colours: {n:?}"
         );
+    }
+
+    /// The occlusion measurement (ADR 0036 #1): an element alone is never hidden; a column
+    /// behind a wall of others mostly is.
+    #[test]
+    fn hidden_share_counts_what_is_behind() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        for samples in [1, 4] {
+            let r = Renderer::new(&gpu.device, samples);
+            let target = Target::new(&gpu.device, (160, 100), samples);
+            let mut cam = Camera::default();
+            cam.fit(&scene, 1.6);
+            let one = r.upload(&gpu.device, &gpu.queue, &scene, |j, _| {
+                if j == 0 { Style::Normal } else { Style::Hidden }
+            });
+            let opts = DrawOptions::default();
+            let h1 = r.hidden_share(&gpu.device, &gpu.queue, &target, &one, &cam, &opts);
+            let all = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
+            let ha = r.hidden_share(&gpu.device, &gpu.queue, &target, &all, &cam, &opts);
+            let o = own(scene.clone());
+            let allo = r.upload(&gpu.device, &gpu.queue, &o, |_, _| Style::Normal);
+            let hao = r.hidden_share(&gpu.device, &gpu.queue, &target, &allo, &cam, &opts);
+            assert_eq!(h1, 0.0, "one element alone");
+            assert!(ha < 0.8 && hao < 0.8, "{ha} {hao}");
+        }
     }
 
     /// A highlight drawn as an overlay over the kept picture (ADR 0036 #3) looks as when drawn

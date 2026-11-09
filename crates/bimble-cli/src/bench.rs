@@ -40,6 +40,10 @@ struct Case {
     /// Redrawing the highlight of the element under the cursor over the kept picture (what a
     /// hover change costs, ADR 0036 #3; it was a whole frame).
     hover: Vec<Duration>,
+    /// Share of the drawn triangles hidden behind others (what perfect occlusion culling
+    /// would leave out, ADR 0036 #1), whole model and close up, over 8 views.
+    hidden: f64,
+    hidden_close: f64,
     /// Face draw calls of a whole frame (merged clusters, then one per shared shape).
     draws: usize,
     memory_mb: Option<f64>,
@@ -132,6 +136,22 @@ fn run_case(
             frame(&cam, cam.mm_per_pixel(target.size.1) * MOVING_PX)
         })
         .collect();
+    let hidden_over = |cam: &mut Camera| {
+        let mut sum = 0.0;
+        for _ in 0..8 {
+            cam.orbit(std::f32::consts::TAU / 8.0, 0.0);
+            sum += r.hidden_share(
+                &gpu.device,
+                &gpu.queue,
+                target,
+                &gs,
+                cam,
+                &DrawOptions::default(),
+            );
+        }
+        sum / 8.0
+    };
+    let hidden = hidden_over(&mut cam);
     let fit = cam.distance;
     cam.distance = fit / CLOSE;
     let aspect = args.width as f32 / args.height as f32;
@@ -144,6 +164,7 @@ fn run_case(
         })
         .collect();
     let close_drawn = drawn as f64 / n as f64 / gs.triangles().max(1) as f64;
+    let hidden_close = hidden_over(&mut cam);
     // Hover: the middle element highlighted over the last close-up picture.
     let k = scene.elements.len() / 2;
     let hi = r.upload(&gpu.device, &gpu.queue, &scene, |j, _| {
@@ -182,6 +203,8 @@ fn run_case(
         close,
         close_drawn,
         hover,
+        hidden,
+        hidden_close,
         gpu_mb: gs.gpu_bytes() as f64 / 1_048_576.0,
         draws: gs.face_draws(),
         memory_mb: memory_mb(),
@@ -250,7 +273,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
                     "frame_max_ms": ms(*s.last().unwrap()), "memory_mb": c.memory_mb,
                     "moving_median_ms": ms(percentile(&sorted(&c.moving), 0.5)),
                     "close_median_ms": ms(percentile(&sorted(&c.close), 0.5)),
-                    "close_drawn": c.close_drawn,
+                    "close_drawn": c.close_drawn, "hidden": c.hidden, "hidden_close": c.hidden_close,
                     "hover_median_ms": ms(percentile(&sorted(&c.hover), 0.5)), "gpu_mb": c.gpu_mb, "draws": c.draws,
                 })
             })
@@ -271,7 +294,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         args.width, args.height, args.samples, args.frames
     );
     println!(
-        "{:<20} {:>9} {:>10} {:>9} {:>9} {:>10} {:>10} {:>8} {:>10} {:>9} {:>8} {:>8} {:>8} {:>6} {:>9}",
+        "{:<20} {:>9} {:>10} {:>9} {:>9} {:>10} {:>10} {:>8} {:>10} {:>9} {:>8} {:>8} {:>7} {:>7} {:>8} {:>6} {:>9}",
         "model",
         "elements",
         "triangles",
@@ -284,6 +307,8 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         "close ms",
         "drawn",
         "hover ms",
+        "hidden",
+        "hid.cl",
         "GPU MB",
         "draws",
         "proc MB"
@@ -295,7 +320,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         let p95 = percentile(&s, 0.95);
         let ms = |d: Duration| d.as_secs_f64() * 1000.0;
         println!(
-            "{:<20} {:>9} {:>10} {:>9.1} {:>9.1} {:>10.2} {:>10.2} {:>8.0} {:>10.2} {:>9.2} {:>7.0}% {:>8.2} {:>8.0} {:>6} {:>9}",
+            "{:<20} {:>9} {:>10} {:>9.1} {:>9.1} {:>10.2} {:>10.2} {:>8.0} {:>10.2} {:>9.2} {:>7.0}% {:>8.2} {:>6.0}% {:>6.0}% {:>8.0} {:>6} {:>9}",
             c.name,
             c.elements,
             c.triangles,
@@ -308,6 +333,8 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
             ms(percentile(&sorted(&c.close), 0.5)),
             c.close_drawn * 100.0,
             ms(percentile(&sorted(&c.hover), 0.5)),
+            c.hidden * 100.0,
+            c.hidden_close * 100.0,
             c.gpu_mb,
             c.draws,
             c.memory_mb.map_or("n/a".into(), |m| format!("{m:.0}")),
@@ -317,7 +344,9 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         "\nfps = 1000 / median frame time. moving ms = median frame drawn as while navigating \
          (elements under {MOVING_PX} px left out). close ms = the orbit at 1/{CLOSE} of the distance, \
          around the centre; drawn = share of the triangles it draws (culling). \
-         hover ms = redrawing one element's highlight over the kept picture. GPU MB = geometry \
+         hover ms = redrawing one element's highlight over the kept picture. \
+         hidden / hid.cl = share of the drawn triangles hidden behind others, whole and close up \
+         (what perfect occlusion culling would leave out). GPU MB = geometry \
          buffers; draws = face draw calls of a whole frame. proc MB = memory of this process after the model \
          (cumulative)."
     );

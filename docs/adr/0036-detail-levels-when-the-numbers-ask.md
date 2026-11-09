@@ -172,6 +172,23 @@ a sixteenth of the scene (3× the draws, slower) and not instancing shapes under
   drops it. Half resolution was not built: 15–25 % more, for a blurred picture. Highlights are
   hidden while such a picture is shown (they are depth-tested against the MSAA picture).
 
+## How much is hidden: the ceiling of occlusion culling (#1, #5; 9 Nov)
+
+`Renderer::hidden_share` draws the picture, then each merged element and each shape copy again
+against its depth with an occlusion query: those with no sample left are hidden. `bimble bench`
+"hidden" / "hid.cl" (whole model / close up, 8 views each), share of the drawn triangles:
+
+| model | per element: whole / close | per cluster (merged) and per copy |
+|---|---|---|
+| 200 MB electrical | 36 % / 20 % | – |
+| 335 MB architecture | 92 % / 97 % | 72 % / 83 % |
+| 415 MB sprinklers | 75 % / 9 % | 74 % / 8 % |
+| 758 MB sanitary | 63 % / 41 % | – |
+| 872 MB plumbing | 51 % / 42 % | 40 % / 25 % |
+
+These are ceilings (perfect culling, no cost). Test `hidden_share_counts_what_is_behind` (an
+element alone: 0 %).
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
