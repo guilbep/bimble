@@ -525,6 +525,11 @@ struct Viewer {
     needs_upload: bool,
     needs_render: bool,
     needs_overlay: bool,
+    /// When the last pictures were drawn (the last second's), for the frame rate in the footer.
+    drawn_at: std::collections::VecDeque<Instant>,
+    /// The memory share the open model was read with (Settings shows a change and offers to
+    /// reopen with it).
+    opened_share: f64,
     last_render: Duration,
 
     camera: Camera,
@@ -688,6 +693,8 @@ impl Viewer {
             needs_upload: false,
             needs_render: true,
             needs_overlay: false,
+            drawn_at: Default::default(),
+            opened_share: 0.0,
             last_render: Duration::ZERO,
             camera: Camera::default(),
             opts: DrawOptions::default(),
@@ -995,6 +1002,7 @@ impl Viewer {
         let p = path.clone();
         let ctx = ctx.clone();
         let share = self.settings.memory_share;
+        self.opened_share = share;
         std::thread::spawn(move || {
             let t = Instant::now();
             let is_ifc = p.extension().is_some_and(|x| x.eq_ignore_ascii_case("ifc"));
@@ -1929,6 +1937,14 @@ impl Viewer {
         self.last_render = t.elapsed();
         self.needs_render = false;
         self.occlusion_waiting = true;
+        self.drawn_at.push_back(t);
+        while self
+            .drawn_at
+            .front()
+            .is_some_and(|f| t.duration_since(*f) > Duration::from_secs(1))
+        {
+            self.drawn_at.pop_front();
+        }
     }
 
     /// Estimate of what the loaded model and its links hold (the browser's budget, ADR 0033).
@@ -3335,6 +3351,7 @@ impl Viewer {
         }
         let mut open = true;
         let before = self.settings.clone();
+        let mut reopen: Option<PathBuf> = None;
         egui::Window::new("Settings")
             .open(&mut open)
             .collapsible(false)
@@ -3351,12 +3368,34 @@ impl Viewer {
                     ui.add(egui::Slider::new(&mut pct, 20.0..=100.0).suffix(" %"));
                     self.settings.memory_share = pct / 100.0;
                     if let Some(total) = big::total_memory() {
+                        let limit = (total as f64 * self.settings.memory_share) as u64;
                         ui.label(format!(
                             "{} of this computer's {}. A model that needs more asks which part \
-                             to show (storeys, IFC classes, materials) before anything is cut.",
-                            big::gb((total as f64 * self.settings.memory_share) as u64),
+                             to show (storeys, IFC classes, materials) before anything is cut. \
+                             Used when a model is opened.",
+                            big::gb(limit),
                             big::gb(total)
                         ));
+                        // What it means for the model open now, and a way to apply it.
+                        if let Some(l) = &self.loaded {
+                            let held = self.held();
+                            let mut line = format!(
+                                "The open model holds about {}{}.",
+                                big::gb(held),
+                                match &l.partial {
+                                    Some(p) => format!(", opened in part ({p})"),
+                                    None => " (whole)".to_owned(),
+                                }
+                            );
+                            if held > limit {
+                                line += " That is over this limit: reopened, it would ask which part to show.";
+                            }
+                            ui.label(egui::RichText::new(line).strong());
+                            let changed = (self.settings.memory_share - self.opened_share).abs() > 1e-6;
+                            if changed && ui.button("Reopen with this limit").clicked() {
+                                reopen = Some(l.path.clone());
+                            }
+                        }
                     }
                 }
                 ui.add_space(8.0);
@@ -3390,6 +3429,12 @@ impl Viewer {
             self.settings.save();
         }
         self.settings_window = open;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = reopen {
+            self.open(p, ctx);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = reopen;
     }
 
     /// An import's report (ADR 0032: what didn't come in is said, not dropped).
@@ -3767,13 +3812,40 @@ impl Viewer {
             }
             if let Some(l) = &self.loaded {
                 let visible = (0..l.scene.elements.len()).filter(|&i| self.visible(i)).count();
+                // Pictures drawn in the last second; nothing drawn for half a second: idle.
+                let now = Instant::now();
+                let rate = match self.drawn_at.back() {
+                    Some(b) if now.duration_since(*b) < Duration::from_millis(500) => format!(
+                        "{} fps",
+                        self.drawn_at
+                            .iter()
+                            .filter(|t| now.duration_since(**t) <= Duration::from_secs(1))
+                            .count()
+                    ),
+                    _ => "idle".to_owned(),
+                };
+                if rate != "idle" {
+                    // One more look once drawing stops, to say so.
+                    ui.ctx().request_repaint_after(Duration::from_millis(600));
+                }
+                let app = big::in_use();
                 ui.weak(format!(
-                    "{visible}/{} elements · {} triangles · loaded in {:.0?} · last draw {:.1?} (CPU)",
+                    "{visible}/{} elements · {} triangles · loaded in {:.0?} · model ≈ {}{} · {rate}",
                     l.scene.elements.len(),
                     self.gpu_scene.as_ref().map_or(0, |g| g.triangles()),
                     l.load_time,
-                    self.last_render,
-                ));
+                    big::gb(self.held()),
+                    if app > 0 {
+                        format!(" · app {}", big::gb(app))
+                    } else {
+                        String::new()
+                    },
+                ))
+                .on_hover_text(
+                    "Model: what its meshes hold, estimated (ADR 0033). App: what Bimble holds in \
+                     memory now. fps: pictures drawn in the last second; idle when nothing moves \
+                     (Bimble only draws on change).",
+                );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.weak(&self.adapter);

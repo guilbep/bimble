@@ -193,8 +193,8 @@ pub fn memory_budget(share: f64, held: u64) -> u64 {
     limit.saturating_sub(in_use())
 }
 
-/// Memory this process holds now (desktop).
-fn in_use() -> u64 {
+/// Memory this process holds now (desktop; 0 in a browser, which doesn't tell).
+pub fn in_use() -> u64 {
     #[cfg(target_arch = "wasm32")]
     {
         0
