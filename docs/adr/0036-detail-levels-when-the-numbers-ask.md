@@ -1,6 +1,7 @@
 # ADR 0036 — Detail levels (Nanite-like clusters): not yet; what would make them worth it
 
-- Status: Proposed (9 Nov 2026) — to decide with Pierre
+- Status: Proposed (9 Nov 2026) — Nanite itself undecided until measured (Pierre: "only facts-based
+  decisions"); the cheaper steps and the list below accepted to do (9 Nov)
 - Decided by: — (Pierre asked to look at it: "6 (Nanite-style detail levels)")
 - Reversal cost: n/a
 
@@ -40,6 +41,27 @@ Where Bimble stands after ADR 0034/0035 (1080p, MSAA 4, M4 Pro, `bimble bench`):
   3. Dedup of geometry the file didn't instance (IfcOpenShell's `MeshDedup`: bucket, invariants,
      Kabsch fit) — the 872 MB model is 55 % unshared breps.
   4. Measure on a weak GPU (an integrated GPU, a software adapter, WebGL2) before going further.
+
+## Further optimizations to do (research, 9 Nov; one issue each)
+
+Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
+measured with `bimble bench` before and after (CLAUDE.md), on the M4 Pro and on a weak GPU.
+
+| # | Score /10 | Optimization | Published gain (system) | WebGL2 | Cost |
+|---|---|---|---|---|---|
+| 1 | 8 | Occlusion culling: GPU queries on box-tree nodes, reusing last frame's results (CHC++); buffers ordered by tree leaf | 7–40× interior, 2–6× exterior views, frustum-only baseline (Revit models, GRAPP 2013) | wgpu's GL backend reads results too early (to check); else #5 | M–L |
+| 2 | 8 | Face normals from screen derivatives in the shader; welded indexed vertices; meshoptimizer vertex-cache order | est. 2–3× fewer vertex-shader runs on boxy shapes | yes | S |
+| 3 | 8 | Full redraw spread over frames into a kept image; hover and selection drawn over the copy | Autodesk viewer "progressive display" (no figure) | yes | S–M |
+| 4 | 7 | While moving: no MSAA and lower resolution; still: averaged jittered frames | FSR1 +22 % on an Intel iGPU (game); est. 4× less colour bandwidth without MSAA 4 | yes | M |
+| 5 | 7 | CPU occlusion culling: walls and slabs rasterized coarsely (Masked Occlusion Culling) | culls 98 % of what a full depth buffer does (HPG 2016) | yes (SIMD128) | L |
+| 6 | 6 | Edges found in screen space (depth, normal, element id) instead of line geometry, while moving | est.; Speckle's choice | yes | M |
+| 7 | 5 | Visible draw ranges merged; multi-draw where it exists | 1.25–1.7× from fewer draw calls (GRAPP 2013) | Chrome only, not through wgpu | S |
+| 8 | 5 | Compressed geometry (meshopt codec) for caches and downloads | 2–4× smaller than packed data, decodes 3–6 GB/s | yes | S–M |
+| 9 | 5 | Simplified proxies per box-tree cell for what is far (HLOD) | est.; iTwin.js and 3D Tiles do it | yes | L |
+| 10 | 4 | GPU-driven culling: depth pyramid, compute, indirect draws | ~2× (VTK WebGPU) | no | L |
+
+Order: steps 1–3 above first (frustum culling, indexed shapes with #2, dedup), then #3, #4, #1/#5
+(after a weak-GPU measurement), then the rest.
 
 ## Revisit when
 
