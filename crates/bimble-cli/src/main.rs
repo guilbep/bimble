@@ -7,6 +7,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use bimble_core::{Command, Generator, GlobalId, History, demo, file, version};
 mod bench;
+mod codec_bench;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -253,6 +254,9 @@ enum Cmd {
         #[command(subcommand)]
         cmd: HistoryCmd,
     },
+    /// Geometry codec sizes and speeds on files (ADR 0036 #8; maintenance)
+    #[command(hide = true)]
+    CodecBench { files: Vec<PathBuf> },
     /// Measure rendering speed on this machine (generated models of 1k–50k elements, plus files)
     Bench {
         /// Extra .ifc / .bimble files to benchmark
@@ -990,6 +994,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 out.display()
             );
         }
+        Cmd::CodecBench { files } => codec_bench::run(files)?,
         Cmd::Bench {
             files,
             frames,

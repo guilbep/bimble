@@ -490,6 +490,7 @@ dependencies = [
  "bimble-render",
  "bimble-viewer",
  "clap",
+ "flate2",
  "glam",
  "memory-stats",
  "mimalloc",

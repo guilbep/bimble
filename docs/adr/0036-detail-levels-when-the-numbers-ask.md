@@ -189,6 +189,48 @@ against its depth with an occlusion query: those with no sample left are hidden.
 These are ceilings (perfect culling, no cost). Test `hidden_share_counts_what_is_behind` (an
 element alone: 0 %).
 
+## #8 done: a geometry codec (9 Nov)
+
+`bimble_geom::codec::{encode, decode}`: a `Mesh` to bytes and back, pure Rust, no new
+dependency, builds for wasm32. Not yet used by any file or download (that waits for the viewing
+format). Positions are quantized to 1/16 mm from the mesh's lower corner, as differences from
+the previous vertex (zigzag varints); the encoder checks every vertex comes back within
+0.05 mm and otherwise keeps the mesh's raw f32 (far from the origin, not finite). Indices are
+differences from the previous index. Edge endpoints that are vertices become vertex indices
+(decoded bit for bit like the vertex); others are quantized. Edge normals become indices into
+the mesh's table of distinct normals. `decode` reads untrusted bytes: counts are checked against
+the bytes left before allocating, indices against the vertex count, nothing may be left over.
+
+`bimble codec-bench` (hidden; M4 Pro, one thread, each own mesh and each shared shape once;
+raw = the bytes in memory: positions 12 B, indices 4 B, edges 24 B and their normals 8 B;
+speeds in raw MB/s):
+
+| model | raw | encoded | ratio | encode | decode | gzip raw / gzip encoded |
+|---|---|---|---|---|---|---|
+| 49 MB (Schependomlaan) | 5.6 MB | 1.3 MB | 4.4× | 615 MB/s | 2.1 GB/s | 1.3 / 0.7 MB |
+| 342 MB (Sixty5) | 12.8 MB | 2.9 MB | 4.4× | 618 MB/s | 2.2 GB/s | 2.7 / 1.4 MB |
+| 394 MB | 61.1 MB | 17.3 MB | 3.5× | 400 MB/s | 1.5 GB/s | 20.0 / 9.6 MB |
+| 415 MB | 54.0 MB | 15.3 MB | 3.5× | 429 MB/s | 1.6 GB/s | 19.1 / 9.8 MB |
+| 709 MB | 307 MB | 70.5 MB | 4.4× | 613 MB/s | 2.2 GB/s | 83.7 / 31.0 MB |
+| 758 MB | 86.6 MB | 24.5 MB | 3.5× | 596 MB/s | 1.8 GB/s | 28.8 / 15.7 MB |
+| 872 MB | 88.2 MB | 25.5 MB | 3.5× | 627 MB/s | 1.8 GB/s | 31.0 / 16.0 MB |
+
+So 3.5–4.4× smaller, decoding at 1.5–2.2 GB/s (meshopt publishes 3–6 GB/s, with SIMD). About
+5 bytes a vertex, 1.1–1.25 an index, 5 an edge with its normals. Gzip, which HTTP adds anyway,
+halves the encoded bytes again (gzip of the raw bytes alone reaches 2.7–3.7×); gunzip then
+decode runs at 0.3–1 GB/s. Tests: `round_trip_within_tolerance` (demo frame, empty, far from
+the origin, out-of-order indices, edges off the vertices, NaN), `corrupt_bytes_are_errors_not_panics`
+(every prefix, byte flips, random bytes, a huge count with nothing behind it).
+
+Tried and dropped, measured:
+- Indices against the next new vertex (welding numbers vertices by first use): 1.10–1.30 bytes
+  an index, against 1.07–1.25 for the previous index. Per triangle (first index against the
+  previous triangle's, the other two against the first): the same as the previous index.
+- Edge normals as their 6 bytes: 8.3 bytes an edge; with the table of distinct normals 4.8–5.0
+  (the 49 and 342 MB models went from 3.4× to 4.4× in all).
+- Deflate inside the codec: not added (`miniz_oxide` isn't a dependency of `bimble-geom`); a
+  cache file or HTTP can gzip the encoded bytes, as measured above.
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
@@ -209,7 +251,7 @@ measured with `bimble bench` before and after (CLAUDE.md), on the M4 Pro and on 
 
 Order: steps 1–3 above first (all done: frustum culling, indexed shapes with #2, dedup), then #3, #4, #1/#5
 (after a weak-GPU measurement), then the rest. #3: highlights done, bands dropped; #4 waits for the
-weak-GPU measurement.
+weak-GPU measurement; #8: the codec done, not yet used.
 
 ## Revisit when
 

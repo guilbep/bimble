@@ -21,3 +21,5 @@ bimble-viewer.workspace = true
 clap.workspace = true
 serde_json.workspace = true
 memory-stats.workspace = true
+# gzip of meshes in `codec-bench` (already in the tree through png and lopdf).
+flate2.workspace = true
