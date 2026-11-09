@@ -432,7 +432,11 @@ and only when no other per-copy decision is made (CPU occlusion, proxies, querie
 `bimble bench --gpu-cull` on the M4 Pro: unchanged within noise on the five models (e.g. 415 MB
 24.8 / 24.7 → 24.9 / 30.1 ms, 872 MB 5.59 / 5.45 → 5.48 / 5.27 ms). The CPU work it removes is
 0.1–1.4 ms a frame here; it could matter with a weak CPU and a capable GPU, which isn't measured,
-so the viewer doesn't turn it on. Test `gpu_culling_draws_what_cpu_culling_does` (8 cameras:
+so the viewer doesn't turn it on (Settings offers it, off by default). Re-measured on the
+simulated weak GPU (llvmpipe, 2 cores, MSAA 1), two runs each, whole-model frames: 415 MB 4.7 /
+8.1 s without, 9.0 / 6.6 s with; 758 MB 5.8 / 4.9 s without, 4.8 / 5.7 s with. Inconclusive: runs
+of the same setting differ as much (other builds shared the CPU, and llvmpipe runs the compute
+pass on it too). On the 5 GB file (ADR 0039, M4 Pro): 22.4 → 20.5 ms, within noise. Test `gpu_culling_draws_what_cpu_culling_does` (8 cameras:
 close, orthographic, mirrored, size threshold); it fails if the shader's plane test is inverted.
 
 ## Further optimizations to do (research, 9 Nov; one issue each)
