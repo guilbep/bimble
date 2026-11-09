@@ -227,6 +227,30 @@ impl Entities {
     }
 }
 
+/// Freed on all cores: a parsed file is tens of millions of small allocations, and freeing a
+/// 5 GB file's on one thread took 15 s, a third of its load (ADR 0039). In batches: memory
+/// held while freeing stays a few batches.
+impl Drop for Entities {
+    fn drop(&mut self) {
+        const BATCH: usize = 4096;
+        match self {
+            Entities::Dense { slots, .. } => std::mem::take(slots)
+                .into_par_iter()
+                .with_min_len(BATCH)
+                .for_each(drop),
+            Entities::Sparse(m) => {
+                let mut all = m.drain();
+                std::iter::from_fn(|| {
+                    let batch: Vec<(u64, Entity)> = all.by_ref().take(BATCH).collect();
+                    (!batch.is_empty()).then_some(batch)
+                })
+                .par_bridge()
+                .for_each(drop)
+            }
+        }
+    }
+}
+
 impl std::ops::Index<&u64> for Entities {
     type Output = Entity;
     fn index(&self, id: &u64) -> &Entity {
@@ -690,20 +714,30 @@ const READ_WINDOW: usize = 64 << 20;
 
 /// Like `parse_skipping`, from a reader, a window at a time: the text is never whole in memory
 /// (a 900 MB file would sit next to its parsed entities). Statements cut by a window's end wait
-/// for the next one; one larger than a window makes the window grow.
+/// for the next one; one larger than a window makes the window grow, up to `MAX_STATEMENT`.
 pub fn parse_read_skipping(
     r: impl std::io::Read,
     skip: &[&str],
 ) -> Result<(StepFile, usize), ParseError> {
-    parse_read_with(r, skip, READ_WINDOW, CHUNK_BYTES)
+    parse_read_with(r, skip, READ_WINDOW, CHUNK_BYTES, MAX_STATEMENT)
 }
+
+/// Longest statement (or header) read from a file: far past any real one (a point list of
+/// millions of points is tens of MB), and what a file without a `;` would otherwise make
+/// reading hold: all of it.
+const MAX_STATEMENT: usize = 1 << 30;
 
 fn parse_read_with(
     mut r: impl std::io::Read,
     skip: &[&str],
     window: usize,
     chunk_bytes: usize,
+    max_statement: usize,
 ) -> Result<(StepFile, usize), ParseError> {
+    let too_long = |line| ParseError {
+        line,
+        msg: format!("a statement longer than {max_statement} bytes"),
+    };
     let mut buf: Vec<u8> = Vec::new();
     let mut eof = false;
     // Read until `buf` holds `want` bytes or the reader ends.
@@ -735,6 +769,7 @@ fn parse_read_with(
         match header(&buf) {
             Ok(h) => break h,
             Err(e) if eof => return Err(e),
+            Err(_) if buf.len() > max_statement => return Err(too_long(0)),
             Err(_) => want = buf.len() + window,
         }
     };
@@ -771,6 +806,9 @@ fn parse_read_with(
         // Keep what isn't parsed yet; a window that held no whole statement grows.
         let progressed = end.0 > pos;
         buf.drain(..end.0);
+        if !progressed && buf.len() > max_statement {
+            return Err(too_long(end.1));
+        }
         (pos, line) = (0, end.1);
         want = if progressed {
             window
@@ -978,7 +1016,8 @@ END-ISO-10303-21;
         for text in [SAMPLE, TRICKY, demo.as_str()] {
             let (whole, s1) = parse(text).unwrap();
             for window in [1, 7, 64, 1000, 1 << 20] {
-                let (read, s2) = parse_read_with(text.as_bytes(), &[], window, 1).unwrap();
+                let (read, s2) =
+                    parse_read_with(text.as_bytes(), &[], window, 1, usize::MAX).unwrap();
                 assert_eq!(
                     canonical(&read, s2),
                     canonical(&whole, s1),
@@ -987,6 +1026,26 @@ END-ISO-10303-21;
                 assert_eq!(read.schemas, whole.schemas);
             }
         }
+    }
+
+    /// A file without a `;` (or a header without DATA;) is refused once a statement passes
+    /// the cap, instead of growing the window to the whole file.
+    #[test]
+    fn a_statement_past_the_cap_is_refused() {
+        let body = "x".repeat(100_000);
+        let open =
+            format!("ISO-10303-21;\nHEADER;FILE_SCHEMA(('IFC4'));ENDSEC;\nDATA;\n#1=IFCX('{body}");
+        let no_data = format!("ISO-10303-21;\nHEADER;FILE_SCHEMA(('IFC4'));{body}");
+        for text in [open, no_data] {
+            let e = parse_read_with(text.as_bytes(), &[], 64, 1, 1000).unwrap_err();
+            assert!(e.msg.contains("longer than"), "{e}");
+        }
+        // Under the cap, the same statement is read.
+        let ok = format!(
+            "ISO-10303-21;\nHEADER;FILE_SCHEMA(('IFC4'));ENDSEC;\nDATA;\n#1=IFCX('{body}');\nENDSEC;\n"
+        );
+        let (f, _) = parse_read_with(ok.as_bytes(), &[], 64, 1, 200_000).unwrap();
+        assert_eq!(f.entities.len(), 1);
     }
 
     /// Dense ids get a table, sparse ones (or a hostile id near u64::MAX) a hash map; both

@@ -44,6 +44,7 @@ a decision that changes an old one says which one it supersedes.
 | [0036](0036-detail-levels-when-the-numbers-ask.md) | Detail levels (Nanite-like clusters): not yet; cheaper steps first, ten further optimizations to do, what would make them worth it | Proposed |
 | [0037](0037-one-top-row-file-menu-project-tab.md) | One top row: File menu, tabs, quick access as icons; a Project tab first (#51) | Accepted |
 | [0038](0038-collaborate-like-git.md) | Collaborate like git: a shared-folder remote, Synchronize = fetch, merge, push; elements borrowed until sync; conflicts kept mine/theirs per element; viewer/modeller/owner | Accepted (server remote, chat proposed) |
+| [0039](0039-open-5-gb-ifc-files.md) | Open 5 GB IFC files: cap 2 → 64 GiB with a 1 GiB statement cap, parse freed on all cores, synthetic repeated test files; 5 and 7 GB open natively; browser needs streaming + a prepared format | Accepted (desktop), browser proposed |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 
