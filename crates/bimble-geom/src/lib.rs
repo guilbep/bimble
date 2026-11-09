@@ -8,6 +8,7 @@ pub mod boolean;
 pub mod bvh;
 pub mod compare;
 pub mod dedup;
+pub mod hlod;
 pub mod scene;
 
 pub use scene::{
