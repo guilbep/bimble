@@ -103,6 +103,9 @@ enum HistoryCmd {
     /// Fetch, merge and push; give back your borrowed elements
     Sync {
         model: PathBuf,
+        /// When both changed the same field: keep ours or theirs instead of stopping
+        #[arg(long, value_parser = ["ours", "theirs"])]
+        prefer: Option<String>,
         #[arg(long)]
         author: Option<String>,
     },
@@ -1085,12 +1088,19 @@ fn is_ifc(path: &std::path::Path) -> bool {
 fn history(cmd: HistoryCmd) -> Result<(), String> {
     use bimble_core::remote;
     use bimble_core::repo::{Head, Merged, Prefer, Repo};
-    let open_remote = |model: &std::path::Path| -> Result<(Repo, Repo), String> {
+    // Only a push may create the remote: a mistyped or unreachable path must not become a new,
+    // empty shared history that a sync then "synchronizes" with.
+    let open_remote = |model: &std::path::Path, create: bool| -> Result<(Repo, Repo), String> {
         let r = Repo::open(model).map_err(|x| x.to_string())?;
         let dir = remote::remote_of(&r)
             .map_err(|x| x.to_string())?
             .ok_or("no remote: set one with `bimble history remote <model> <folder>`")?;
-        let share = remote::open_or_init(&dir).map_err(|x| x.to_string())?;
+        let share = if create {
+            remote::open_or_init(&dir)
+        } else {
+            Repo::open_dir(&dir)
+        }
+        .map_err(|x| format!("remote not reachable: {} ({x})", dir.display()))?;
         Ok((r, share))
     };
     let e = |x: bimble_core::repo::RepoError| x.to_string();
@@ -1278,7 +1288,7 @@ fn history(cmd: HistoryCmd) -> Result<(), String> {
             println!("cloned {branch}: {} elements", m.elements.len());
         }
         HistoryCmd::Push { model, author } => {
-            let (r, share) = open_remote(&model)?;
+            let (r, share) = open_remote(&model, true)?;
             let branch = match r.head().map_err(e)? {
                 Head::Branch(b) => b,
                 Head::Detached(_) => return Err("not on a branch".into()),
@@ -1286,13 +1296,22 @@ fn history(cmd: HistoryCmd) -> Result<(), String> {
             let h = remote::push(&r, &share, &branch, &author_of(author), now()).map_err(e)?;
             println!("pushed {branch}: {}", short(&h));
         }
-        HistoryCmd::Sync { model, author } => {
-            let (r, share) = open_remote(&model)?;
+        HistoryCmd::Sync {
+            model,
+            prefer,
+            author,
+        } => {
+            let (r, share) = open_remote(&model, false)?;
             let working = file::load(&model).map_err(fe)?;
             if !r.status(&working).map_err(e)?.is_empty() {
                 return Err("the model has changes not committed; commit them first".into());
             }
-            match remote::sync(&r, &share, &author_of(author), now()).map_err(e)? {
+            let prefer = match prefer.as_deref() {
+                Some("ours") => Prefer::Ours,
+                Some("theirs") => Prefer::Theirs,
+                _ => Prefer::Neither,
+            };
+            match remote::sync(&r, &share, &author_of(author), now(), prefer).map_err(e)? {
                 Ok((how, m)) => {
                     file::save(&m, &model).map_err(fe)?;
                     match how {
@@ -1304,7 +1323,8 @@ fn history(cmd: HistoryCmd) -> Result<(), String> {
                 Err(conflicts) => {
                     let list: Vec<String> = conflicts.iter().map(|c| format!("  {c}")).collect();
                     return Err(format!(
-                        "{} conflict(s), nothing pushed:\n{}",
+                        "{} conflict(s), nothing pushed (use --prefer ours|theirs; an element \
+                         borrowed by someone else waits until they synchronize):\n{}",
                         conflicts.len(),
                         list.join("\n")
                     ));
@@ -1312,7 +1332,7 @@ fn history(cmd: HistoryCmd) -> Result<(), String> {
             }
         }
         HistoryCmd::Borrow { model, ids, author } => {
-            let (_, share) = open_remote(&model)?;
+            let (_, share) = open_remote(&model, false)?;
             let ids = ids
                 .iter()
                 .map(|s| s.parse::<GlobalId>())

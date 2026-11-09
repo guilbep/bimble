@@ -2,8 +2,9 @@
 
 - Status: Accepted (9 Nov 2026) as amended by the office's answers, with conflicts (Q4) and rights (Q5)
   below. Built so far: shared-folder remote, clone, fetch, push (fast-forward only, locked),
-  synchronize, element borrowing. Not built yet: per-element conflict resolution (only "all mine /
-  all theirs"), the `people` object and its rights, layers, the UI. Still proposals: the HTTP
+  synchronize (with `--prefer ours|theirs` for the whole sync), element borrowing (explicit,
+  `bimble history borrow`). Not built yet: conflict resolution per element, borrowing on first
+  edit, the `people` object and its rights, layers, the UI. Still proposals: the HTTP
   server remote, a chat.
 - Decided by: the office (#51 answers); Pierre ("let's be inspired by git"; Q4 and Q5: "I trust
   you on that"); Q4, Q5 and the format by Claude

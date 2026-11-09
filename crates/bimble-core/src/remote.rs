@@ -40,7 +40,9 @@ pub fn remote_of(local: &Repo) -> Result<Option<PathBuf>> {
     Ok(Some(PathBuf::from(std::fs::read_to_string(p)?.trim())))
 }
 
+/// Stored absolute, so it works from any working directory.
 pub fn set_remote(local: &Repo, dir: &Path) -> Result<()> {
+    let dir = std::path::absolute(dir)?;
     let text = dir
         .to_str()
         .ok_or_else(|| RepoError::Bad("the remote's path is not valid text".into()))?;
@@ -293,13 +295,15 @@ fn changed_elements(r: &Repo, from: Option<&str>, to: &str) -> Result<BTreeSet<G
 
 /// Synchronize: fetch the remote's branch, merge it into the local one, push the result, then
 /// give back `who`'s borrowed elements. Stops before pushing anything when the merge has
-/// conflicts, or when local changes touch elements someone else borrowed; both are returned as
+/// conflicts (unless `prefer` picks a side), or when local changes touch elements someone else
+/// borrowed (whatever `prefer` says: their owner synchronizes first); both are returned as
 /// conflicts. Returns how the local branch moved and the model to write to the working file.
 pub fn sync(
     local: &Repo,
     remote: &Repo,
     who: &str,
     time: i64,
+    prefer: Prefer,
 ) -> Result<std::result::Result<(Merged, Model), Vec<Conflict>>> {
     let Head::Branch(branch) = local.head()? else {
         return Err(RepoError::Bad(
@@ -343,7 +347,7 @@ pub fn sync(
             None => (Merged::UpToDate, local.model_at(&ours)?),
             Some(t) => match local.merge_with_message(
                 t,
-                Prefer::Neither,
+                prefer,
                 who,
                 time,
                 &format!("Synchronize {branch}"),
@@ -449,18 +453,24 @@ mod tests {
         assert_eq!(remote_of(&b).unwrap(), Some(o.share.clone()));
         let share = Repo::open_dir(&o.share).unwrap();
         let (beam, col) = (id_of(&m, IfcClass::IfcBeam), id_of(&m, IfcClass::IfcColumn));
+        // A mistyped or unreachable remote is an error, never a new empty one.
+        let typo = o.share.with_file_name("hosue.bimble-history");
+        assert!(Repo::open_dir(&typo).is_err());
+        assert!(!typo.exists());
 
         // Alice renames a beam and synchronizes: nothing to merge, pushed.
         let ma = rename(&m, beam, "Alice's beam");
         a.commit(&ma, "beam", ALICE, 2).unwrap();
-        let (how, _) = sync(&a, &share, ALICE, 2).unwrap().unwrap();
+        let (how, _) = sync(&a, &share, ALICE, 2, Prefer::Neither)
+            .unwrap()
+            .unwrap();
         assert_eq!(how, Merged::UpToDate);
         assert_eq!(share_main(&o), a.head_commit().unwrap().unwrap());
 
         // Bob renamed a column meanwhile: his sync merges Alice's beam in and pushes the merge.
         let mb = rename(&m, col, "Bob's column");
         b.commit(&mb, "column", BOB, 3).unwrap();
-        let (how, merged) = sync(&b, &share, BOB, 3).unwrap().unwrap();
+        let (how, merged) = sync(&b, &share, BOB, 3, Prefer::Neither).unwrap().unwrap();
         assert!(matches!(how, Merged::Commit(_)), "{how:?}");
         assert_eq!(merged.elements[&beam].name, "Alice's beam");
         assert_eq!(merged.elements[&col].name, "Bob's column");
@@ -469,7 +479,9 @@ mod tests {
         assert_eq!(b.commit_info(&tip).unwrap().message, "Synchronize main");
 
         // Alice synchronizes: a fast-forward to the same model.
-        let (how, back) = sync(&a, &share, ALICE, 4).unwrap().unwrap();
+        let (how, back) = sync(&a, &share, ALICE, 4, Prefer::Neither)
+            .unwrap()
+            .unwrap();
         assert_eq!(how, Merged::FastForward(tip));
         assert_eq!(back, merged);
     }
@@ -515,14 +527,23 @@ mod tests {
         let col = id_of(&m, IfcClass::IfcColumn);
         a.commit(&rename(&m, col, "C-alice"), "a", ALICE, 2)
             .unwrap();
-        sync(&a, &share, ALICE, 2).unwrap().unwrap();
+        sync(&a, &share, ALICE, 2, Prefer::Neither)
+            .unwrap()
+            .unwrap();
         let alices = share_main(&o);
         let bobs = b.commit(&rename(&m, col, "C-bob"), "b", BOB, 3).unwrap();
-        let conflicts = sync(&b, &share, BOB, 3).unwrap().unwrap_err();
+        let conflicts = sync(&b, &share, BOB, 3, Prefer::Neither)
+            .unwrap()
+            .unwrap_err();
         assert_eq!(conflicts.len(), 1, "{conflicts:?}");
         assert_eq!(conflicts[0].id, Some(col));
         assert_eq!(share_main(&o), alices);
         assert_eq!(b.head_commit().unwrap(), Some(bobs));
+        // Keeping theirs resolves it: the merge is pushed with Alice's name on the column.
+        let (how, merged) = sync(&b, &share, BOB, 4, Prefer::Theirs).unwrap().unwrap();
+        assert!(matches!(how, Merged::Commit(_)), "{how:?}");
+        assert_eq!(merged.elements[&col].name, "C-alice");
+        assert_eq!(share_main(&o), b.head_commit().unwrap().unwrap());
     }
 
     #[test]
@@ -545,10 +566,16 @@ mod tests {
         b.commit(&rename(&m, beam, "Bob's beam"), "b", BOB, 4)
             .unwrap();
         let before = share_main(&o);
-        let c = sync(&b, &share, BOB, 4).unwrap().unwrap_err();
+        let c = sync(&b, &share, BOB, 4, Prefer::Neither)
+            .unwrap()
+            .unwrap_err();
         assert_eq!(c.len(), 1);
         assert_eq!((c[0].kind, c[0].id), ("borrowed", Some(beam)));
         assert!(c[0].name.contains(ALICE), "{}", c[0]);
+        assert_eq!(share_main(&o), before);
+        // Preferring his side does not override a borrow.
+        let c = sync(&b, &share, BOB, 4, Prefer::Ours).unwrap().unwrap_err();
+        assert_eq!(c[0].kind, "borrowed");
         assert_eq!(share_main(&o), before);
         // His own borrowed column is not in the way.
         assert_eq!(
@@ -557,14 +584,16 @@ mod tests {
         );
 
         // Alice synchronizes (nothing changed): her borrows are given back, Bob's stay.
-        sync(&a, &share, ALICE, 5).unwrap().unwrap();
+        sync(&a, &share, ALICE, 5, Prefer::Neither)
+            .unwrap()
+            .unwrap();
         let left = borrowed(&share).unwrap();
         assert_eq!(
             left.into_iter().collect::<Vec<_>>(),
             vec![(col, BOB.to_owned())]
         );
         // Now Bob's sync goes through, and gives back his column.
-        sync(&b, &share, BOB, 6).unwrap().unwrap();
+        sync(&b, &share, BOB, 6, Prefer::Neither).unwrap().unwrap();
         assert!(borrowed(&share).unwrap().is_empty());
         assert_eq!(
             Repo::open_dir(&o.share)
