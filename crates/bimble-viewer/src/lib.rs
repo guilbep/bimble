@@ -1780,6 +1780,7 @@ impl Viewer {
         }
         // Proxies when this machine is short of GPU, once per model; big models only.
         if self.slow_gpu
+            && self.settings.moving_proxies
             && let Some(l) = &mut self.loaded
             && l.proxies.is_none()
             && l.scene.triangle_count() > PROXY_MIN_TRIANGLES
@@ -1815,9 +1816,10 @@ impl Viewer {
             occlusion: self.slow_gpu,
             // GPU queries where they are free and work: native backends keeping the target
             // (ADR 0036 #1); slow machines use the CPU's (#5).
-            gpu_occlusion: !self.slow_gpu && self.gpu_queries,
+            gpu_occlusion: !self.slow_gpu && self.gpu_queries && !self.settings.gpu_cull,
+            gpu_cull: self.settings.gpu_cull,
             // Far cells' stand-ins while moving on a machine that misses the target.
-            proxy_px: if self.moving_lean {
+            proxy_px: if self.moving_lean && self.settings.moving_proxies {
                 MOVING_PROXY_PX
             } else {
                 0.0
@@ -3374,6 +3376,14 @@ impl Viewer {
                 ui.label(
                     "Below this frame rate, what is smallest on screen is left out while the view \
                      turns, pans or zooms, and drawn again as soon as it stops.",
+                );
+                ui.checkbox(
+                    &mut self.settings.moving_proxies,
+                    "Simplified far parts while moving, on a machine below that rate",
+                );
+                ui.checkbox(
+                    &mut self.settings.gpu_cull,
+                    "Test shared shapes' copies on the GPU (experimental)",
                 );
             });
         if self.settings != before {

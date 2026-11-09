@@ -2721,7 +2721,19 @@ impl Renderer {
                     })
                 };
                 pass.set_bind_group(0, bind_group, &[]);
-                let runs = cull.runs(scene);
+                let mut runs = cull.runs(scene);
+                // With GPU queries, nearest clusters first: a query counts what passes the depth
+                // test when drawn, so occluders must come before what they hide.
+                if cull.gpu.is_some() {
+                    let eye = camera.eye() - layer.offset;
+                    runs.sort_by(|a, b| {
+                        let d = |r: &DrawRun| {
+                            let s = scene.clusters[r.4 as usize].sphere;
+                            (Vec3::new(s[0], s[1], s[2]).distance(eye) - s[3]).max(0.0)
+                        };
+                        d(a).total_cmp(&d(b))
+                    });
+                }
                 let line_runs = if cull.gpu.is_some() {
                     cull.runs_with(scene, false)
                 } else {
@@ -2863,7 +2875,7 @@ impl Renderer {
                                     &mut pass,
                                     ci as u64,
                                     &mut asked,
-                                    gpu_occlusion::Item::Cluster(ci as u32),
+                                    gpu_occlusion::Item::ClusterBox(ci as u32),
                                 );
                             }
                         }
@@ -2879,7 +2891,7 @@ impl Renderer {
                                     &mut pass,
                                     nc + k as u64,
                                     &mut asked,
-                                    gpu_occlusion::Item::Shape(k as u32),
+                                    gpu_occlusion::Item::ShapeBox(k as u32),
                                 );
                             }
                         }
@@ -3013,7 +3025,14 @@ impl Renderer {
         if let Some(st) = gpu_occ.as_mut().and_then(|g| g.as_mut())
             && asking
         {
-            st.wait_for(asked);
+            // The view the answers belong to (see `gpu_occlusion`).
+            let view = vp
+                .to_cols_array()
+                .iter()
+                .fold(0xcbf2_9ce4_8422_2325u64, |h, x| {
+                    (h ^ x.to_bits() as u64).wrapping_mul(0x0100_0000_01b3)
+                });
+            st.wait_for(asked, view);
         }
     }
 }
@@ -3972,23 +3991,77 @@ mod tests {
             eprintln!("no GPU adapter, skipping");
             return;
         };
-        let spec = FrameSpec {
-            bays_x: 12,
-            bays_y: 12,
-            storeys: 3,
-            ..Default::default()
+        // A wall, and behind it (+y) a grid of small boxes: from the front they are hidden,
+        // from behind they show.
+        let boxed = |lo: [f64; 3], hi: [f64; 3]| {
+            let mut mb = bimble_geom::scene::MeshBuilder::default();
+            let c = |i: usize| [0, 1, 2].map(|k| if i >> k & 1 == 0 { lo[k] } else { hi[k] });
+            for (a, b, cc, d) in [
+                (0, 2, 3, 1),
+                (4, 5, 7, 6),
+                (0, 1, 5, 4),
+                (2, 6, 7, 3),
+                (0, 4, 6, 2),
+                (1, 3, 7, 5),
+            ] {
+                mb.add_polygon(&[c(a), c(b), c(cc), c(d)], &[]);
+            }
+            mb
         };
-        // Merged clusters and shape draws: every other element with its own mesh.
-        let mut both = Scene::from_model(&concrete_frame(&spec));
-        for e in both.elements.iter_mut().step_by(2) {
-            e.geometry = Geometry::Own(e.world_mesh().into_owned());
+        let info = |n: usize| bimble_geom::scene::ElementInfo {
+            global_id: format!("e{n}"),
+            class: "IfcWall".into(),
+            name: format!("e{n}"),
+            storey: String::new(),
+            material: String::new(),
+            category: bimble_core::MaterialCategory::Concrete,
+        };
+        let mut b = bimble_geom::scene::SceneBuilder::default();
+        // The wall in two halves with a 4 m gap at x = 0.
+        b.push(
+            info(0),
+            boxed([-60_000.0, -1_000.0, -20_000.0], [-2_000.0, 0.0, 20_000.0]),
+        );
+        b.push(
+            info(1),
+            boxed([2_000.0, -1_000.0, -20_000.0], [60_000.0, 0.0, 20_000.0]),
+        );
+        // One element in two pieces, one behind each half: hidden, but its box spans the gap and
+        // shows through it (the case that made a still view redraw forever).
+        let mut pair = boxed(
+            [-30_000.0, 2_000.0, -1_000.0],
+            [-28_000.0, 4_000.0, 1_000.0],
+        );
+        pair.tris
+            .extend(boxed([28_000.0, 2_000.0, -1_000.0], [30_000.0, 4_000.0, 1_000.0]).tris);
+        b.push(info(2), pair);
+        let mut n = 3;
+        for x in 0..12 {
+            for z in 0..12 {
+                // Behind the halves, not the gap.
+                let x0 = if x < 6 { -45_000.0 } else { 10_000.0 } + (x % 6) as f64 * 5_000.0;
+                let z0 = -15_000.0 + z as f64 * 2_500.0;
+                let s = 400.0 + (x * 12 + z) as f64;
+                b.push(
+                    info(n),
+                    boxed([x0, 10_000.0, z0], [x0 + s, 10_000.0 + s, z0 + s]),
+                );
+                n += 1;
+            }
         }
+        // Own meshes (boxes of other sizes would otherwise all be copies of one shape): merged
+        // clusters, the wall's apart from the boxes'.
+        let both = own(b.finish());
+        let mut cam = Camera {
+            target: Vec3::ZERO,
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            distance: 60_000.0,
+            ..Camera::default()
+        };
         let r = Renderer::new(&gpu.device, 1);
         let gs = r.upload(&gpu.device, &gpu.queue, &both, |_, _| Style::Normal);
         let target = Target::new(&gpu.device, (320, 200), 1);
-        let mut cam = Camera::default();
-        cam.fit(&both, 1.6);
-        cam.distance /= 3.0;
         let shot = |cam: &Camera, o: &DrawOptions| {
             r.render(&gpu.device, &gpu.queue, &target, &gs, cam, o);
             gpu.read_rgba(&target).unwrap()
@@ -3997,9 +4070,9 @@ mod tests {
             gpu_occlusion: true,
             ..DrawOptions::default()
         };
-        // Half round and from below: what the slabs hid from above must come back (its box is
+        // From the front, then from behind: what the wall hid must come back (its box is
         // probed).
-        for (turn, tilt) in [(0.0, 0.0), (std::f32::consts::PI, -0.8)] {
+        for (turn, tilt) in [(0.0, 0.0), (std::f32::consts::PI, 0.0)] {
             cam.orbit(turn, tilt);
             let exact = shot(&cam, &DrawOptions::default());
             let mut last = shot(&cam, &q);
@@ -4021,6 +4094,16 @@ mod tests {
                 differ, 0,
                 "turned {turn}: {differ} pixels differ once settled"
             );
+            // Settled means no more drawing: a still view stops asking for frames.
+            for _ in 0..3 {
+                r.render(&gpu.device, &gpu.queue, &target, &gs, &cam, &q);
+                let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+                assert_ne!(
+                    gs.gpu_occlusion_poll(&gpu.device),
+                    Settle::Changed,
+                    "turned {turn}: a still view keeps redrawing"
+                );
+            }
             if turn == 0.0 {
                 let g = gs.gpu_occ.lock().unwrap();
                 let st = g.as_ref().expect("queries made");
@@ -4030,7 +4113,7 @@ mod tests {
                     .chain(&st.shapes)
                     .filter(|v| !**v)
                     .count();
-                assert!(hidden > 0, "something is hidden from above");
+                assert!(hidden > 0, "the boxes are hidden from the front");
             }
         }
     }

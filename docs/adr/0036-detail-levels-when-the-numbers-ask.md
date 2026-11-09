@@ -396,6 +396,15 @@ only (wgpu's WebGL2 backend reads results too early); off with a section box.
 | llvmpipe 2 cores, MSAA 1: full / moving / close | 983 → 744 / 669 → 515 / 782 → 602 ms | 1398 → 1306 / 310 → 309 / 571 → 570 ms | – |
 | same with #5 (CPU) instead | 681 / 424 / 477 ms | 1383 / 307 / 565 ms | – |
 
+Fixed after use (Pierre: "it keeps redrawing even if I don't use the mouse"): a part whose own draw
+showed nothing was probed by its box, larger than the part, which peeked out (through a gap, past
+an edge), so the part came back, was drawn, showed nothing again: a still view redrew forever.
+Now only a part coming back into view asks for a redraw, and a box seen from the view at which
+the part's own draw found it hidden doesn't bring it back. Clusters are drawn nearest first when
+asking (a query counts what passes the depth test when drawn, so occluders must come first). The
+test now uses a wall in two halves and boxes behind it, one element in two pieces whose box spans
+the gap: with the old rule it fails ("a still view keeps redrawing").
+
 So the viewer uses the queries on native backends that keep the frame-rate target (free there),
 and #5 on machines that miss it (better on the weak GPU, and works on WebGL2). Test
 `gpu_occlusion_settles_on_the_exact_picture`: from above and then from below, once settled, the
