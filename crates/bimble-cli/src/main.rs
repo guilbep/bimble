@@ -23,6 +23,51 @@ use std::time::Instant;
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
+    /// More messages on stderr: -v what is loaded and how long it took, -vv each step,
+    /// -vvv the libraries' too. Errors and warnings are always shown
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    verbose: u8,
+}
+
+/// Log messages to stderr: Bimble's at the level `-v` chose, the libraries' (window, GPU)
+/// errors only unless `-vvv`, so a normal run stays quiet.
+struct Stderr {
+    level: log::LevelFilter,
+    all: bool,
+}
+
+impl log::Log for Stderr {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        if self.all || m.target().starts_with("bimble") {
+            m.level() <= self.level
+        } else {
+            m.level() <= log::Level::Error
+        }
+    }
+
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            let level = r.level().as_str().to_ascii_lowercase();
+            eprintln!("{level}: {}", r.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn init_log(verbose: u8) {
+    let level = match verbose {
+        0 => log::LevelFilter::Warn,
+        1 => log::LevelFilter::Info,
+        _ => log::LevelFilter::Debug,
+    };
+    let logger = Stderr {
+        level,
+        all: verbose >= 3,
+    };
+    if log::set_boxed_logger(Box::new(logger)).is_ok() {
+        log::set_max_level(level);
+    }
 }
 
 #[derive(Subcommand)]
@@ -1623,7 +1668,9 @@ fn now_iso() -> String {
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    let cli = Cli::parse();
+    init_log(cli.verbose);
+    match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(msg) => {
             eprintln!("error: {msg}");

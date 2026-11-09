@@ -14,7 +14,7 @@ use bimble_geom::{ElementInfo, MeshBuilder, Scene, SceneBuilder};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 /// Largest file read: ~10x the largest IFC reported (7 GB, ADR 0039). Files are streamed, so
 /// size alone costs time, not memory: what a file costs in memory is guarded by its displayed
@@ -46,14 +46,22 @@ impl std::fmt::Display for ReadError {
 impl std::error::Error for ReadError {}
 
 pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<Scene, ReadError> {
-    let len = std::fs::metadata(path.as_ref())
-        .map_err(ReadError::Io)?
-        .len();
+    read_file_progress(path, &Progress::default())
+}
+
+/// `read_file`, reporting each stage to `progress`.
+pub fn read_file_progress(
+    path: impl AsRef<std::path::Path>,
+    progress: &Progress,
+) -> Result<Scene, ReadError> {
+    let path = path.as_ref();
+    let len = std::fs::metadata(path).map_err(ReadError::Io)?.len();
     if len > MAX_FILE_BYTES {
         return Err(ReadError::TooLarge(len));
     }
-    let p = parse_file(path.as_ref())?;
-    let (scene, _) = p.scene(|_| true, p.limits.max_triangles);
+    let limits = Limits::for_displayed(displayed_bytes_of_file_progress(path, progress)?);
+    let p = parse_file_progress(path, limits, progress)?;
+    let (scene, _) = p.scene_progress(|_| true, p.limits.max_triangles, progress);
     // Freed before the scene is drawn: it would otherwise overlap the GPU upload.
     drop(p);
     Ok(scene)
@@ -68,20 +76,141 @@ pub fn parse_file(path: &std::path::Path) -> Result<Parsed, ReadError> {
 
 /// `parse_file` with given limits.
 pub fn parse_file_with(path: &std::path::Path, limits: Limits) -> Result<Parsed, ReadError> {
+    parse_file_progress(path, limits, &Progress::default())
+}
+
+/// `parse_file_with`, reporting the bytes read to `progress` (stage `Reading`).
+pub fn parse_file_progress(
+    path: &std::path::Path,
+    limits: Limits,
+    progress: &Progress,
+) -> Result<Parsed, ReadError> {
     let len = std::fs::metadata(path).map_err(ReadError::Io)?.len();
     if len > MAX_FILE_BYTES {
         return Err(ReadError::TooLarge(len));
     }
     let f = std::fs::File::open(path).map_err(ReadError::Io)?;
-    let parsed = step::parse_read_skipping(f, NOT_DISPLAYED).map_err(ReadError::Parse)?;
+    progress.start(Stage::Reading, len);
+    let parsed =
+        step::parse_read_skipping(progress.counting(f), NOT_DISPLAYED).map_err(ReadError::Parse)?;
     Parsed::new(parsed, limits)
 }
 
 /// `displayed_bytes` of a file, read a window at a time. A line is kept only up to its first
 /// `LINE_HEAD` bytes (all the scan looks at): a file without line breaks costs no more memory.
 pub fn displayed_bytes_of_file(path: &std::path::Path) -> Result<u64, ReadError> {
+    displayed_bytes_of_file_progress(path, &Progress::default())
+}
+
+/// `displayed_bytes_of_file`, reporting the bytes scanned to `progress` (stage `Checking`).
+pub fn displayed_bytes_of_file_progress(
+    path: &std::path::Path,
+    progress: &Progress,
+) -> Result<u64, ReadError> {
     let f = std::fs::File::open(path).map_err(ReadError::Io)?;
-    displayed_bytes_of_read(f).map_err(ReadError::Io)
+    let len = f.metadata().map_err(ReadError::Io)?.len();
+    progress.start(Stage::Checking, len);
+    displayed_bytes_of_read(progress.counting(f)).map_err(ReadError::Io)
+}
+
+/// A step of loading a file, in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// Scanning the file for its size and the memory it will need.
+    Checking,
+    /// Reading (parsing) the text.
+    Reading,
+    /// Meshing the elements.
+    Building,
+}
+
+impl Stage {
+    /// Its words for the user.
+    pub fn label(self) -> &'static str {
+        match self {
+            Stage::Checking => "Checking size and memory",
+            Stage::Reading => "Reading the file",
+            Stage::Building => "Building shapes",
+        }
+    }
+
+    /// Where the stage starts and ends in the whole load, 0 to 1. Rough shares of the time
+    /// measured on large files: the scan is quick, reading and meshing about even.
+    fn span(self) -> (f32, f32) {
+        match self {
+            Stage::Checking => (0.0, 0.1),
+            Stage::Reading => (0.1, 0.55),
+            Stage::Building => (0.55, 1.0),
+        }
+    }
+}
+
+/// How far a load has come: written by the loading thread, read by the one that draws it.
+/// Relaxed atomics: a value read mid-update only shows a bar a step behind.
+#[derive(Debug, Default)]
+pub struct Progress {
+    stage: AtomicU8,
+    done: AtomicU64,
+    total: AtomicU64,
+}
+
+impl Progress {
+    /// Enter `stage`, with `total` units (bytes, elements) to do.
+    pub fn start(&self, stage: Stage, total: u64) {
+        self.done.store(0, Ordering::Relaxed);
+        self.total.store(total, Ordering::Relaxed);
+        self.stage.store(stage as u8, Ordering::Relaxed);
+    }
+
+    /// `n` more units done.
+    pub fn advance(&self, n: u64) {
+        self.done.fetch_add(n, Ordering::Relaxed);
+    }
+
+    pub fn stage(&self) -> Stage {
+        match self.stage.load(Ordering::Relaxed) {
+            0 => Stage::Checking,
+            1 => Stage::Reading,
+            _ => Stage::Building,
+        }
+    }
+
+    /// Units done and to do in the current stage.
+    pub fn counts(&self) -> (u64, u64) {
+        let total = self.total.load(Ordering::Relaxed);
+        (self.done.load(Ordering::Relaxed).min(total), total)
+    }
+
+    /// The whole load done, 0 to 1.
+    pub fn overall(&self) -> f32 {
+        let (a, b) = self.stage().span();
+        let (done, total) = self.counts();
+        let f = if total == 0 {
+            0.0
+        } else {
+            done as f32 / total as f32
+        };
+        a + (b - a) * f
+    }
+
+    /// `r`, counting what is read from it.
+    fn counting<R: std::io::Read>(&self, r: R) -> Counting<'_, R> {
+        Counting { r, progress: self }
+    }
+}
+
+/// A reader that reports its bytes to a `Progress`.
+struct Counting<'a, R> {
+    r: R,
+    progress: &'a Progress,
+}
+
+impl<R: std::io::Read> std::io::Read for Counting<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.r.read(buf)?;
+        self.progress.advance(n as u64);
+        Ok(n)
+    }
 }
 
 /// Bytes of a line the displayed-bytes scan reads: its id and type name.
@@ -588,6 +717,16 @@ impl Parsed {
         keep: impl Fn(usize) -> bool + Sync,
         max_triangles: usize,
     ) -> (Scene, usize) {
+        self.scene_progress(keep, max_triangles, &Progress::default())
+    }
+
+    /// `scene`, reporting the elements meshed to `progress` (stage `Building`).
+    pub fn scene_progress(
+        &self,
+        keep: impl Fn(usize) -> bool + Sync,
+        max_triangles: usize,
+        progress: &Progress,
+    ) -> (Scene, usize) {
         // Meshing runs in parallel, so a shared triangle budget cuts wherever threads happen
         // to be. Batches in file order instead, the cap applied in order: it stops at the first
         // element that does not fit, the same one every time. An element stops at cap + 1
@@ -602,6 +741,7 @@ impl Parsed {
             .filter(|(i, _)| keep(*i))
             .map(|(_, id)| *id)
             .collect();
+        progress.start(Stage::Building, picked.len() as u64);
         let mut warnings = self.warnings.clone();
         let mut sb = SceneBuilder::with_storeys(self.storeys.clone());
         sb.grids = self.grids.clone();
@@ -692,6 +832,7 @@ impl Parsed {
                     Piece::Instance(shape, tf) => sb.push_instance(info, shape, tf),
                 }
             }
+            progress.advance(batch.len() as u64);
             if visits.exhausted() {
                 break;
             }
@@ -2540,6 +2681,35 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         let (scene, _) = parsed.unwrap().scene(|_| true, usize::MAX);
         assert!(!scene.elements.is_empty());
+    }
+
+    /// Loading a file reports each stage in order, ending with every element meshed: the bar
+    /// the viewer draws from it reaches 100 %.
+    #[test]
+    fn reading_a_file_reports_its_progress() {
+        let path = std::env::temp_dir().join(format!("bimble-progress-{}.ifc", std::process::id()));
+        let text = crate::export(
+            &bimble_core::demo::concrete_frame(&bimble_core::demo::FrameSpec::default()),
+            "t.ifc",
+            "t",
+        );
+        std::fs::write(&path, &text).unwrap();
+        let progress = Progress::default();
+        let limits =
+            Limits::for_displayed(displayed_bytes_of_file_progress(&path, &progress).unwrap());
+        assert_eq!(progress.stage(), Stage::Checking);
+        assert_eq!(progress.counts(), (text.len() as u64, text.len() as u64));
+        assert!((progress.overall() - 0.1).abs() < 1e-6);
+        let parsed = parse_file_progress(&path, limits, &progress);
+        std::fs::remove_file(&path).unwrap();
+        let parsed = parsed.unwrap();
+        assert_eq!(progress.stage(), Stage::Reading);
+        assert_eq!(progress.counts(), (text.len() as u64, text.len() as u64));
+        let (scene, _) = parsed.scene_progress(|_| true, usize::MAX, &progress);
+        assert_eq!(progress.stage(), Stage::Building);
+        let (done, total) = progress.counts();
+        assert!(total > 0 && done == total && total as usize >= scene.elements.len());
+        assert_eq!(progress.overall(), 1.0);
     }
 
     /// Small full circles: within ~1.2 % of the exact area (15° segments), like IfcOpenShell.

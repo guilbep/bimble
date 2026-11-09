@@ -19,6 +19,7 @@ bimble-ifc.workspace = true
 bimble-render.workspace = true
 bimble-viewer.workspace = true
 clap.workspace = true
+log.workspace = true
 serde_json.workspace = true
 memory-stats.workspace = true
 # gzip of meshes in `codec-bench` (already in the tree through png and lopdf).
