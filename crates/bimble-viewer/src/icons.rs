@@ -225,6 +225,19 @@ fn parts(a: Action) -> &'static [Part] {
             [20.0, 7.0],
             [20.0, 18.0],
         ])],
+        // A page and an arrow out of it: this file converted.
+        Action::ConvertOpen => &[
+            Poly(&[
+                [5.0, 4.0],
+                [13.0, 4.0],
+                [17.0, 8.0],
+                [17.0, 20.0],
+                [5.0, 20.0],
+                [5.0, 4.0],
+            ]),
+            Line(&[[9.0, 14.0], [20.0, 14.0]]),
+            Line(&[[17.5, 11.5], [20.0, 14.0], [17.5, 16.5]]),
+        ],
         // A folder with an arrow into it: import.
         Action::ImportIfc => &[
             Poly(&[

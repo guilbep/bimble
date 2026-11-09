@@ -51,6 +51,8 @@ pub(crate) enum Action {
     Open,
     /// Import an IFC file as an editable .bimble copy (ADR 0032).
     ImportIfc,
+    /// The same for the IFC file open now.
+    ConvertOpen,
     Save,
     Undo,
     Redo,
@@ -82,9 +84,10 @@ pub(crate) enum Action {
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 33] = [
+pub(crate) const ALL_ACTIONS: [Action; 34] = [
     Action::Open,
     Action::ImportIfc,
+    Action::ConvertOpen,
     Action::Save,
     Action::Undo,
     Action::Redo,
@@ -123,6 +126,7 @@ impl Action {
         match self {
             Action::Open => "Open…".into(),
             Action::ImportIfc => "Import IFC…".into(),
+            Action::ConvertOpen => "Convert this IFC to .bimble (editable)".into(),
             Action::Save => "Save".into(),
             Action::Undo => "Undo".into(),
             Action::Redo => "Redo".into(),
@@ -179,7 +183,9 @@ impl Action {
     /// Where it lives, as the palette shows it: its ribbon tab, the File menu or quick access.
     pub fn home(self) -> &'static str {
         let tab = match self {
-            Action::Open | Action::ImportIfc | Action::Save => return "File",
+            Action::Open | Action::ImportIfc | Action::ConvertOpen | Action::Save => {
+                return "File";
+            }
             Action::Undo | Action::Redo | Action::Palette => return "Quick access",
             Action::Place(_) | Action::Measure => Tab::Model,
             Action::SheetTool(_)
@@ -264,6 +270,16 @@ impl Viewer {
         let flat = self.in_2d();
         match a {
             Action::Open | Action::ImportIfc | Action::Palette | Action::Standards => true,
+            // An IFC open, read-only (the browser keeps no path to read it again).
+            Action::ConvertOpen => {
+                cfg!(not(target_arch = "wasm32"))
+                    && self.loaded.as_ref().is_some_and(|l| {
+                        l.edit.is_none()
+                            && l.path
+                                .extension()
+                                .is_some_and(|x| x.eq_ignore_ascii_case("ifc"))
+                    })
+            }
             Action::Save => {
                 self.side_views_dirty()
                     || self
@@ -322,6 +338,11 @@ impl Viewer {
         match a {
             Action::Open => self.files.pick(files::Purpose::Open, ctx),
             Action::ImportIfc => self.files.pick(files::Purpose::ImportIfc, ctx),
+            Action::ConvertOpen => {
+                if let Some(p) = self.loaded.as_ref().map(|l| l.path.clone()) {
+                    self.import_ifc(p, ctx);
+                }
+            }
             Action::Save => {
                 if self.side_views.is_some() {
                     self.save_side_views();
@@ -563,7 +584,12 @@ impl Viewer {
     fn file_menu(&self, ui: &mut egui::Ui, run: &mut Option<Action>) {
         ui.menu_button("File", |ui| {
             let groups: &[&[Action]] = &[
-                &[Action::Open, Action::ImportIfc, Action::Save],
+                &[
+                    Action::Open,
+                    Action::ImportIfc,
+                    Action::ConvertOpen,
+                    Action::Save,
+                ],
                 &[Action::LinkModel, Action::ReferencePlan],
                 &[Action::OnPaper],
                 &[Action::Project, Action::Settings],
