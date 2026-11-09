@@ -22,6 +22,7 @@ pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// The graphic style is data in `bimble_core::style`; re-exported here for convenience.
 pub use bimble_core::style::{self, Fill, GraphicStyle, Lines, Rgb, Stipple};
+mod gpu_occlusion;
 mod occlusion;
 mod proxies;
 pub use proxies::GpuProxies;
@@ -338,6 +339,17 @@ impl Camera {
 
 // ---------------------------------------------------------------- GPU scene
 
+/// Where GPU occlusion queries stand after a frame (ADR 0036 #1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Settle {
+    /// Nothing to do.
+    Settled,
+    /// Answers not arrived yet: look again soon.
+    Waiting,
+    /// Answers changed what is shown: draw again.
+    Changed,
+}
+
 /// How each element should be drawn this upload.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Style {
@@ -432,6 +444,11 @@ pub struct GpuScene {
     occluder_elements: Vec<std::ops::Range<u32>>,
     /// Stand-ins for far cells (ADR 0036 #9), and which cells may be used in this upload.
     proxies: Option<(Arc<GpuProxies>, Vec<bool>)>,
+    /// GPU occlusion queries' state (ADR 0036 #1), made when first used.
+    gpu_occ: std::sync::Mutex<Option<gpu_occlusion::State>>,
+    /// Boxes to probe hidden clusters and shape draws with: unit cubes placed over their boxes,
+    /// clusters then shapes.
+    probe_boxes: Option<wgpu::Buffer>,
     /// Whether edges carry face normals (needed to hide back edges in the section box).
     pub edge_normals: bool,
     /// Bounds of the whole scene (not just the visible part), for stable clip planes.
@@ -480,7 +497,13 @@ impl Cluster {
 const CLUSTER_VERTICES: usize = if cfg!(test) { 3 * 512 } else { 3 * 32_768 };
 
 /// A run of merged geometry: face buffer, index range, line buffer, vertex range.
-type DrawRun = (usize, std::ops::Range<u32>, usize, std::ops::Range<u32>);
+type DrawRun = (
+    usize,
+    std::ops::Range<u32>,
+    usize,
+    std::ops::Range<u32>,
+    u32,
+);
 
 /// What of a scene one frame draws: a frustum (planes as `n·p + d ≥ 0`, layer coordinates),
 /// the section box, and the smallest size drawn.
@@ -494,6 +517,8 @@ struct Cull {
     /// elements are left out for one.
     proxied: Vec<u32>,
     replaced: Vec<bool>,
+    /// What showed last frame (GPU occlusion queries, ADR 0036 #1): per cluster, per shape draw.
+    gpu: Option<(Vec<bool>, Vec<bool>)>,
 }
 
 impl Cull {
@@ -508,6 +533,7 @@ impl Cull {
                 occ: None,
                 proxied: Vec::new(),
                 replaced: Vec::new(),
+                gpu: None,
             };
         }
         let r = [m.row(0), m.row(1), m.row(2), m.row(3)];
@@ -527,6 +553,7 @@ impl Cull {
             occ: None,
             proxied: Vec::new(),
             replaced: Vec::new(),
+            gpu: None,
         }
     }
 
@@ -567,6 +594,19 @@ impl Cull {
             }
         }
         self
+    }
+
+    /// With last frame's answers of the GPU occlusion queries (None: not used on this layer).
+    fn asking_gpu(mut self, shown: Option<(Vec<bool>, Vec<bool>)>) -> Cull {
+        self.gpu = shown;
+        self
+    }
+
+    /// Whether a shape draw showed last frame (GPU occlusion queries; true without them).
+    fn shape_shown(&self, k: usize) -> bool {
+        self.gpu
+            .as_ref()
+            .is_none_or(|(_, s)| s.get(k).copied().unwrap_or(true))
     }
 
     /// Whether a scene element is drawn itself (not left to a proxy).
@@ -613,13 +653,24 @@ impl Cull {
     /// only those to show, in runs. Runs that follow each other in the same buffers are joined
     /// into one draw (ADR 0036 #7): neighbouring clusters lie one after the other.
     fn runs(&self, scene: &GpuScene) -> Vec<DrawRun> {
+        self.runs_with(scene, true)
+    }
+
+    /// `runs`, leaving out what GPU queries found hidden only if `gpu` (faces; edges are all
+    /// drawn: an element whose faces lose every depth tie to a coplanar neighbour still shows
+    /// its edges on it).
+    fn runs_with(&self, scene: &GpuScene, gpu: bool) -> Vec<DrawRun> {
         let mut out: Vec<DrawRun> = Vec::new();
+        let join = self.gpu.is_none();
         let mut push = |c: &Cluster, f: std::ops::Range<u32>, l: std::ops::Range<u32>| {
+            let ci = (c as *const Cluster as usize - scene.clusters.as_ptr() as usize)
+                / std::mem::size_of::<Cluster>();
             let (f, l) = (
                 c.faces.1.start + f.start..c.faces.1.start + f.end,
                 c.lines.1.start + l.start..c.lines.1.start + l.end,
             );
             if let Some(last) = out.last_mut()
+                && join
                 && last.0 == c.faces.0
                 && last.2 == c.lines.0
                 && last.1.end == f.start
@@ -628,14 +679,22 @@ impl Cull {
                 last.1.end = f.end;
                 last.3.end = l.end;
             } else {
-                out.push((c.faces.0, f, c.lines.0, l));
+                out.push((c.faces.0, f, c.lines.0, l, ci as u32));
             }
         };
-        for c in scene
-            .clusters
-            .iter()
-            .filter(|c| self.keeps(c.sphere) && self.sees(&c.bbox))
-        {
+        for (ci, c) in scene.clusters.iter().enumerate() {
+            if !(self.keeps(c.sphere) && self.sees(&c.bbox)) {
+                continue;
+            }
+            // Hidden last frame (GPU queries): its box is probed instead.
+            if gpu
+                && self
+                    .gpu
+                    .as_ref()
+                    .is_some_and(|(cl, _)| !cl.get(ci).copied().unwrap_or(true))
+            {
+                continue;
+            }
             let (nf, nl) = c.prefix(self.min_radius);
             if (self.occ.is_none() && self.replaced.is_empty()) || c.steps.is_empty() {
                 push(c, 0..nf, 0..nl);
@@ -733,7 +792,7 @@ impl GpuScene {
         let merged: u64 = cull
             .runs(self)
             .iter()
-            .map(|(_, f, _, _)| f.len() as u64 / 3)
+            .map(|(_, f, _, _, _)| f.len() as u64 / 3)
             .sum();
         let huge: u64 = self.huge_faces.iter().map(|(_, n)| *n as u64 / 3).sum();
         let shared: u64 = self
@@ -753,6 +812,21 @@ impl GpuScene {
             })
             .sum();
         merged + huge + shared + proxies
+    }
+
+    /// GPU occlusion queries (ADR 0036 #1): read the answers that arrived since the last
+    /// frame. `Changed`: draw again (what shows changed); `Waiting`: look again later.
+    pub fn gpu_occlusion_poll(&self, device: &wgpu::Device) -> Settle {
+        let mut g = self.gpu_occ.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(st) = g.as_mut() else {
+            return Settle::Settled;
+        };
+        match st.harvest(device) {
+            Some(true) => Settle::Changed,
+            Some(false) => Settle::Settled,
+            None if st.waiting() => Settle::Waiting,
+            None => Settle::Settled,
+        }
     }
 
     /// Use proxies (ADR 0036 #9) uploaded for this scene, with the style this upload was made
@@ -1219,6 +1293,8 @@ impl Target {
 // ---------------------------------------------------------------- renderer
 
 pub struct Renderer {
+    /// A unit cube (0..1), to probe boxes with occlusion queries (ADR 0036 #1).
+    cube: (wgpu::Buffer, wgpu::Buffer),
     /// Edges found on screen from the depth (single-sample renderers only; ADR 0036 #6).
     screen_edges: Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::Buffer)>,
     face_pipeline: wgpu::RenderPipeline,
@@ -1261,6 +1337,9 @@ pub struct DrawOptions {
     /// Edges found on screen from the depth instead of drawn as lines (ADR 0036 #6): about half
     /// the cost of a frame, coarser. Single-sample renderers only (otherwise lines).
     pub screen_edges: bool,
+    /// Occlusion culling with GPU queries, last frame's answers (ADR 0036 #1; native backends
+    /// only, the main layer only, off with a section box).
+    pub gpu_occlusion: bool,
 }
 
 impl Default for DrawOptions {
@@ -1272,6 +1351,7 @@ impl Default for DrawOptions {
             occlusion: false,
             proxy_px: 0.0,
             screen_edges: false,
+            gpu_occlusion: false,
             hatching: true,
             edges: true,
             style: GraphicStyle::default(),
@@ -1584,7 +1664,40 @@ impl Renderer {
             (pipeline, bgl, uniforms)
         });
 
+        let cube = {
+            let v: Vec<FaceVertex> = (0..8)
+                .map(|i| FaceVertex {
+                    pos: [0, 1, 2].map(|k| (i >> k & 1) as f32),
+                    slot: [0; 4],
+                })
+                .collect();
+            let idx: [u32; 36] = [
+                0, 1, 3, 0, 3, 2, 4, 6, 7, 4, 7, 5, 0, 4, 5, 0, 5, 1, 2, 3, 7, 2, 7, 6, 0, 2, 6, 0,
+                6, 4, 1, 5, 7, 1, 7, 3,
+            ];
+            let init = |label, contents: &[u8], usage| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents,
+                    usage,
+                })
+            };
+            (
+                init(
+                    "bimble cube",
+                    bytemuck::cast_slice(&v),
+                    wgpu::BufferUsages::VERTEX,
+                ),
+                init(
+                    "bimble cube",
+                    bytemuck::cast_slice(&idx),
+                    wgpu::BufferUsages::INDEX,
+                ),
+            )
+        };
+
         Renderer {
+            cube,
             screen_edges,
             face_pipeline,
             probe_pipeline,
@@ -1884,6 +1997,37 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX,
             })
         };
+        // Unit cubes over the boxes of clusters, then of shape draws: probes for what GPU
+        // occlusion queries found hidden (ADR 0036 #1).
+        let probe_boxes = {
+            let cl = clusters.iter().map(|c| c.bbox);
+            let sh = shapes.iter().map(|d: &ShapeDraw| {
+                d.instances
+                    .clone()
+                    .fold([Vec3::INFINITY, Vec3::NEG_INFINITY], |a, i| {
+                        let b = instance_boxes[i as usize];
+                        [a[0].min(b[0]), a[1].max(b[1])]
+                    })
+            });
+            let data: Vec<InstanceData> = cl
+                .chain(sh)
+                .map(|[lo, hi]| {
+                    let (lo, d) = if lo.is_finite() && hi.is_finite() {
+                        (lo, hi - lo)
+                    } else {
+                        (Vec3::ZERO, Vec3::ZERO)
+                    };
+                    InstanceData {
+                        x: [d.x, 0.0, 0.0],
+                        y: [0.0, d.y, 0.0],
+                        z: [0.0, 0.0, d.z],
+                        t: lo.to_array(),
+                        slot: [0; 4],
+                    }
+                })
+                .collect();
+            (!data.is_empty()).then(|| init("bimble probe boxes", bytemuck::cast_slice(&data)))
+        };
         GpuScene {
             faces: faces.finish(),
             lines: if edge_normals {
@@ -1926,6 +2070,8 @@ impl Renderer {
             occluders: occluders.0,
             occluder_elements: occluders.1,
             proxies: None,
+            gpu_occ: std::sync::Mutex::new(None),
+            probe_boxes,
             edge_normals,
             bounds,
         }
@@ -2248,9 +2394,38 @@ impl Renderer {
 
         // What each layer draws (ADR 0036): clusters and instances off screen, outside the box
         // or too small are left out; shapes with some left out draw from a packed copy.
+        // GPU occlusion queries (ADR 0036 #1): on the first layer of the model, without a
+        // section box. Last frame's answers decide what is drawn; this frame asks again, unless
+        // they haven't arrived.
+        let qi = layers
+            .iter()
+            .position(|l| !l.linked && l.faces)
+            .filter(|_| opts.gpu_occlusion && opts.cull && opts.clip.is_none());
+        let mut gpu_occ = qi.map(|i| {
+            layers[i]
+                .scene
+                .gpu_occ
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+        });
+        if let (Some(g), Some(i)) = (&mut gpu_occ, qi)
+            && g.is_none()
+        {
+            let sc = layers[i].scene;
+            **g = gpu_occlusion::State::new(device, sc.clusters.len(), sc.shapes.len());
+        }
+        let asking = gpu_occ.as_mut().and_then(|g| g.as_mut()).is_some_and(|st| {
+            let _ = st.harvest(device);
+            !st.waiting()
+        });
+        let shown = gpu_occ
+            .as_ref()
+            .and_then(|g| g.as_ref())
+            .map(|st| (st.clusters.clone(), st.shapes.clone()));
         let culls: Vec<Cull> = layers
             .iter()
-            .map(|l| {
+            .enumerate()
+            .map(|(i, l)| {
                 let m = vp * Mat4::from_translation(l.offset);
                 Cull::new(
                     m,
@@ -2264,8 +2439,15 @@ impl Renderer {
                     |d| camera.mm_per_pixel_at(d, out.size.1),
                     opts,
                 )
+                .asking_gpu(if Some(i) == qi { shown.clone() } else { None })
             })
             .collect();
+        let query_set = gpu_occ
+            .as_ref()
+            .and_then(|g| g.as_ref())
+            .filter(|_| asking)
+            .map(|st| (&st.set, st.capacity));
+        let mut asked: Vec<gpu_occlusion::Item> = Vec::new();
         let draws: Vec<Vec<(bool, std::ops::Range<u32>)>> = layers
             .iter()
             .zip(&culls)
@@ -2307,7 +2489,7 @@ impl Renderer {
                     stencil_ops: None,
                 }),
                 timestamp_writes: None,
-                occlusion_query_set: None,
+                occlusion_query_set: query_set.map(|q| q.0),
                 multiview_mask: None,
             });
             // Linked models first, then the others in order: the model's edges are drawn over
@@ -2342,6 +2524,11 @@ impl Renderer {
                 };
                 pass.set_bind_group(0, bind_group, &[]);
                 let runs = cull.runs(scene);
+                let line_runs = if cull.gpu.is_some() {
+                    cull.runs_with(scene, false)
+                } else {
+                    runs.clone()
+                };
                 if layer.faces {
                     // A mirrored camera, or a mirrored shape, turns the winding around.
                     let pipelines = |mirror: bool| -> [&wgpu::RenderPipeline; 2] {
@@ -2360,7 +2547,8 @@ impl Renderer {
                         pass.set_pipeline(pipelines(camera.mirror_x)[k]);
                         pass.set_vertex_buffer(1, scene.identity.slice(..));
                         let mut bound = usize::MAX;
-                        for (b, r, _, _) in &runs {
+                        let ask = cull.gpu.is_some() && k == 0;
+                        for (b, r, _, _, ci) in &runs {
                             if r.is_empty() {
                                 continue;
                             }
@@ -2373,7 +2561,17 @@ impl Renderer {
                                 );
                                 bound = *b;
                             }
+                            let q = query_set
+                                .filter(|(_, cap)| ask && (asked.len() as u32) < *cap)
+                                .map(|_| asked.len() as u32);
+                            if let Some(q) = q {
+                                pass.begin_occlusion_query(q);
+                            }
                             pass.draw_indexed(r.clone(), 0, 0..1);
+                            if q.is_some() {
+                                pass.end_occlusion_query();
+                                asked.push(gpu_occlusion::Item::Cluster(*ci));
+                            }
                         }
                         for (buf, n) in &scene.huge_faces {
                             pass.set_vertex_buffer(0, buf.slice(..));
@@ -2397,7 +2595,7 @@ impl Renderer {
                             let Some((inst, n)) = inst_slice(i) else {
                                 continue;
                             };
-                            if n == 0 {
+                            if n == 0 || !cull.shape_shown(i) {
                                 continue;
                             }
                             pass.set_pipeline(pipelines(camera.mirror_x != d.mirrored)[k]);
@@ -2405,7 +2603,67 @@ impl Renderer {
                             pass.set_vertex_buffer(0, f.vertices.slice(..));
                             pass.set_index_buffer(f.indices.slice(..), wgpu::IndexFormat::Uint32);
                             pass.set_vertex_buffer(1, inst);
+                            let q = query_set
+                                .filter(|(_, cap)| ask && (asked.len() as u32) < *cap)
+                                .map(|_| asked.len() as u32);
+                            if let Some(q) = q {
+                                pass.begin_occlusion_query(q);
+                            }
                             pass.draw_indexed(d.faces.1.clone(), 0, 0..n);
+                            if q.is_some() {
+                                pass.end_occlusion_query();
+                                asked.push(gpu_occlusion::Item::Shape(i as u32));
+                            }
+                        }
+                    }
+                    // What was hidden last frame: its box, against this frame's depth.
+                    if let (Some((_, cap)), Some((cl, sh)), Some(boxes)) =
+                        (query_set, &cull.gpu, &scene.probe_boxes)
+                    {
+                        pass.set_pipeline(&self.probe_pipeline);
+                        pass.set_vertex_buffer(0, self.cube.0.slice(..));
+                        pass.set_index_buffer(self.cube.1.slice(..), wgpu::IndexFormat::Uint32);
+                        let probe = |pass: &mut wgpu::RenderPass,
+                                     j: u64,
+                                     asked: &mut Vec<gpu_occlusion::Item>,
+                                     it| {
+                            if asked.len() as u32 >= cap {
+                                return;
+                            }
+                            pass.set_vertex_buffer(1, boxes.slice(j * stride..(j + 1) * stride));
+                            pass.begin_occlusion_query(asked.len() as u32);
+                            pass.draw_indexed(0..36, 0, 0..1);
+                            pass.end_occlusion_query();
+                            asked.push(it);
+                        };
+                        for (ci, c) in scene.clusters.iter().enumerate() {
+                            if !cl.get(ci).copied().unwrap_or(true)
+                                && cull.keeps(c.sphere)
+                                && c.bbox[0].is_finite()
+                            {
+                                probe(
+                                    &mut pass,
+                                    ci as u64,
+                                    &mut asked,
+                                    gpu_occlusion::Item::Cluster(ci as u32),
+                                );
+                            }
+                        }
+                        let nc = scene.clusters.len() as u64;
+                        for (k, d) in scene.shapes.iter().enumerate() {
+                            if !sh.get(k).copied().unwrap_or(true)
+                                && d.radius >= cull.min_radius
+                                && d.instances
+                                    .clone()
+                                    .any(|i| cull.keeps(scene.instance_spheres[i as usize]))
+                            {
+                                probe(
+                                    &mut pass,
+                                    nc + k as u64,
+                                    &mut asked,
+                                    gpu_occlusion::Item::Shape(k as u32),
+                                );
+                            }
                         }
                     }
                 }
@@ -2423,7 +2681,7 @@ impl Renderer {
                         (false, true) => &self.line_wide_pipeline,
                     });
                     pass.set_vertex_buffer(1, scene.identity.slice(..));
-                    for (_, _, b, r) in &runs {
+                    for (_, _, b, r, _) in &line_runs {
                         if !r.is_empty() {
                             pass.set_vertex_buffer(0, scene.lines[*b].0.slice(..));
                             pass.draw(r.clone(), 0..1);
@@ -2466,6 +2724,11 @@ impl Renderer {
                     }
                 }
             }
+        }
+        if let Some(st) = gpu_occ.as_mut().and_then(|g| g.as_mut())
+            && asking
+        {
+            st.resolve(&mut enc, asked.len() as u32);
         }
         // Edges found on screen (ADR 0036 #6), over the picture, from its depth.
         if let (true, true, Some((pipeline, bgl, uniforms))) =
@@ -2517,6 +2780,11 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
         queue.submit([enc.finish()]);
+        if let Some(st) = gpu_occ.as_mut().and_then(|g| g.as_mut())
+            && asking
+        {
+            st.wait_for(asked);
+        }
     }
 }
 
@@ -3464,6 +3732,77 @@ mod tests {
             kept * 10 >= of_screen * 7,
             "{kept} of {of_screen} screen edges near a line"
         );
+    }
+
+    /// GPU occlusion queries (ADR 0036 #1): what was hidden last frame is left out; drawn
+    /// again until the answers settle, the picture is the exact one, and something is hidden.
+    #[test]
+    fn gpu_occlusion_settles_on_the_exact_picture() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let spec = FrameSpec {
+            bays_x: 12,
+            bays_y: 12,
+            storeys: 3,
+            ..Default::default()
+        };
+        // Merged clusters and shape draws: every other element with its own mesh.
+        let mut both = Scene::from_model(&concrete_frame(&spec));
+        for e in both.elements.iter_mut().step_by(2) {
+            e.geometry = Geometry::Own(e.world_mesh().into_owned());
+        }
+        let r = Renderer::new(&gpu.device, 1);
+        let gs = r.upload(&gpu.device, &gpu.queue, &both, |_, _| Style::Normal);
+        let target = Target::new(&gpu.device, (320, 200), 1);
+        let mut cam = Camera::default();
+        cam.fit(&both, 1.6);
+        cam.distance /= 3.0;
+        let shot = |cam: &Camera, o: &DrawOptions| {
+            r.render(&gpu.device, &gpu.queue, &target, &gs, cam, o);
+            gpu.read_rgba(&target).unwrap()
+        };
+        let q = DrawOptions {
+            gpu_occlusion: true,
+            ..DrawOptions::default()
+        };
+        // Half round and from below: what the slabs hid from above must come back (its box is
+        // probed).
+        for (turn, tilt) in [(0.0, 0.0), (std::f32::consts::PI, -0.8)] {
+            cam.orbit(turn, tilt);
+            let exact = shot(&cam, &DrawOptions::default());
+            let mut last = shot(&cam, &q);
+            for _ in 0..8 {
+                let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+                if gs.gpu_occlusion_poll(&gpu.device) != Settle::Changed {
+                    break;
+                }
+                last = shot(&cam, &q);
+            }
+            let differ = exact
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(last.as_chunks::<4>().0)
+                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 40))
+                .count();
+            assert_eq!(
+                differ, 0,
+                "turned {turn}: {differ} pixels differ once settled"
+            );
+            if turn == 0.0 {
+                let g = gs.gpu_occ.lock().unwrap();
+                let st = g.as_ref().expect("queries made");
+                let hidden = st
+                    .clusters
+                    .iter()
+                    .chain(&st.shapes)
+                    .filter(|v| !**v)
+                    .count();
+                assert!(hidden > 0, "something is hidden from above");
+            }
+        }
     }
 
     /// Proxies (ADR 0036 #9): with a budget of 0 pixels nothing changes; with a large one the

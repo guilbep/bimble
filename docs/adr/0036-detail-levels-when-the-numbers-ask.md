@@ -379,6 +379,30 @@ a screen edge within a pixel, and every screen edge lies within two pixels of a 
 edges miss creases between coplanar faces of two elements (no bend) and edges hidden behind
 nothing else, as a drawing's lines don't need; stills keep lines.
 
+## #1 done: occlusion queries on the GPU, last frame's answers (9 Nov)
+
+`gpu_occlusion.rs`, `DrawOptions::gpu_occlusion`. On the model's main layer each merged cluster
+and each shape draw is wrapped in an occlusion query; one that showed no pixel leaves its faces
+out of the next frame, and its box (a unit cube placed over it) is drawn with no colour and no
+depth to learn when it shows again (CHC++'s idea at the coarsest grain). Answers arrive a frame
+late: what is uncovered pops in a frame later, and the viewer, polling
+(`GpuScene::gpu_occlusion_poll`: settled / waiting / changed), draws again until they settle. Edges
+are always drawn: an element whose faces lose every depth tie to a coplanar neighbour reads as
+hidden but still shows its edges on it (the test caught 120 missing edge pixels). Native backends
+only (wgpu's WebGL2 backend reads results too early); off with a section box.
+
+| 1080p | 335 MB architecture | 872 MB plumbing | others |
+|---|---|---|---|
+| M4 Pro, MSAA 4, full | 4.09 → 3.67 ms | 5.43 → 5.47 ms | unchanged |
+| llvmpipe 2 cores, MSAA 1: full / moving / close | 983 → 744 / 669 → 515 / 782 → 602 ms | 1398 → 1306 / 310 → 309 / 571 → 570 ms | – |
+| same with #5 (CPU) instead | 681 / 424 / 477 ms | 1383 / 307 / 565 ms | – |
+
+So the viewer uses the queries on native backends that keep the frame-rate target (free there),
+and #5 on machines that miss it (better on the weak GPU, and works on WebGL2). Test
+`gpu_occlusion_settles_on_the_exact_picture`: from above and then from below, once settled, the
+picture is the exact one, and from above something is hidden; it fails with 492 pixels if hidden
+parts' boxes aren't probed.
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
@@ -399,7 +423,7 @@ measured with `bimble bench` before and after (CLAUDE.md), on the M4 Pro and on 
 
 Order: steps 1–3 above first (all done: frustum culling, indexed shapes with #2, dedup), then #3, #4, #1/#5
 (after a weak-GPU measurement), then the rest. #3: highlights done, bands dropped; #4 waits for the
-weak-GPU measurement (now done); #5 done (slow GPUs only); #8: the codec done, not yet used; #9 done (while moving on slow machines); #7 done (small); #6 done (moving on slow machines).
+weak-GPU measurement (now done); #5 done (slow GPUs only); #8: the codec done, not yet used; #9 done (while moving on slow machines); #7 done (small); #6 done (moving on slow machines); #1 done (native, fast machines).
 
 ## Revisit when
 

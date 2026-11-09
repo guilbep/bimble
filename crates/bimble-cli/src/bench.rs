@@ -20,6 +20,7 @@ pub struct BenchArgs {
     pub occlusion: bool,
     /// Draw far cells' proxies when their error spans at most this many pixels (0: off).
     pub proxies: f32,
+    pub gpu_occlusion: bool,
     pub json: bool,
 }
 
@@ -129,6 +130,7 @@ fn run_case(
             ..DrawOptions {
                 occlusion: args.occlusion,
                 proxy_px: args.proxies,
+                gpu_occlusion: args.gpu_occlusion,
                 ..DrawOptions::default()
             }
         };
@@ -167,6 +169,7 @@ fn run_case(
                 &DrawOptions {
                     occlusion: args.occlusion,
                     proxy_px: args.proxies,
+                    gpu_occlusion: args.gpu_occlusion,
                     ..DrawOptions::default()
                 },
             );
@@ -179,6 +182,7 @@ fn run_case(
         &DrawOptions {
             occlusion: args.occlusion,
             proxy_px: args.proxies,
+            gpu_occlusion: args.gpu_occlusion,
             ..DrawOptions::default()
         },
     );
@@ -195,6 +199,7 @@ fn run_case(
                 &DrawOptions {
                     occlusion: args.occlusion,
                     proxy_px: args.proxies,
+                    gpu_occlusion: args.gpu_occlusion,
                     ..DrawOptions::default()
                 },
             );
@@ -212,6 +217,7 @@ fn run_case(
     let opts = DrawOptions {
         occlusion: args.occlusion,
         proxy_px: args.proxies,
+        gpu_occlusion: args.gpu_occlusion,
         ..DrawOptions::default()
     };
     let hover = (0..n)

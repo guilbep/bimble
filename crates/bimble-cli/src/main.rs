@@ -315,6 +315,9 @@ enum Cmd {
         /// pixels (0: never)
         #[arg(long, default_value_t = 0.0)]
         proxies: f32,
+        /// With occlusion culling by GPU queries (last frame's answers; native backends)
+        #[arg(long)]
+        gpu_occlusion: bool,
         /// Machine-readable output
         #[arg(long)]
         json: bool,
@@ -1046,6 +1049,7 @@ fn run(cli: Cli) -> Result<(), String> {
             quick,
             occlusion,
             proxies,
+            gpu_occlusion,
             json,
         } => {
             if !matches!(samples, 1 | 4) {
@@ -1054,6 +1058,7 @@ fn run(cli: Cli) -> Result<(), String> {
             bench::run(bench::BenchArgs {
                 occlusion,
                 proxies,
+                gpu_occlusion,
                 files,
                 frames,
                 width,

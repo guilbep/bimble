@@ -574,6 +574,10 @@ struct Viewer {
     simplified: bool,
     /// This movement has been slower than the target: its frames drop MSAA until it stops.
     moving_lean: bool,
+    /// Answers of GPU occlusion queries may still change the last picture.
+    occlusion_waiting: bool,
+    /// The backend reads occlusion queries in time (not WebGL2/GL: ADR 0036 #1).
+    gpu_queries: bool,
     /// A movement has been slower than the target since the viewer started: the GPU is
     /// short, so occlusion culling (CPU time for GPU time) is worth it (ADR 0036 #5).
     slow_gpu: bool,
@@ -714,6 +718,8 @@ impl Viewer {
             simplified: false,
             moving_lean: false,
             slow_gpu: false,
+            occlusion_waiting: false,
+            gpu_queries: rs.adapter.get_info().backend != eframe::wgpu::Backend::Gl,
             links: Vec::new(),
             linking: None,
             compare_with: None,
@@ -1807,6 +1813,9 @@ impl Viewer {
             clip: self.clip(),
             min_radius,
             occlusion: self.slow_gpu,
+            // GPU queries where they are free and work: native backends keeping the target
+            // (ADR 0036 #1); slow machines use the CPU's (#5).
+            gpu_occlusion: !self.slow_gpu && self.gpu_queries,
             // Far cells' stand-ins while moving on a machine that misses the target.
             proxy_px: if self.moving_lean {
                 MOVING_PROXY_PX
@@ -1917,6 +1926,7 @@ impl Viewer {
         );
         self.last_render = t.elapsed();
         self.needs_render = false;
+        self.occlusion_waiting = true;
     }
 
     /// Estimate of what the loaded model and its links hold (the browser's budget, ADR 0033).
@@ -4027,6 +4037,22 @@ impl eframe::App for Viewer {
                 }
                 if self.needs_render || self.needs_upload || self.needs_overlay {
                     ctx.request_repaint();
+                }
+                // GPU occlusion queries answer a frame late (ADR 0036 #1): look again until they
+                // settle; draw again if they change what shows.
+                if self.occlusion_waiting
+                    && let Some(gs) = &self.gpu_scene
+                {
+                    match gs.gpu_occlusion_poll(&self.device) {
+                        bimble_render::Settle::Waiting => {
+                            ctx.request_repaint_after(Duration::from_millis(4));
+                        }
+                        bimble_render::Settle::Changed => {
+                            self.needs_render = true;
+                            ctx.request_repaint();
+                        }
+                        bimble_render::Settle::Settled => self.occlusion_waiting = false,
+                    }
                 }
             }
             if let Some(err) = &self.error {
