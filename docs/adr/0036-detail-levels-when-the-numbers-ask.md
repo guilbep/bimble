@@ -194,8 +194,8 @@ element alone: 0 %).
 `bimble_geom::codec::{encode, decode}`: a `Mesh` to bytes and back, pure Rust, no new
 dependency, builds for wasm32. Not yet used by any file or download (that waits for the viewing
 format). Positions are quantized to 1/16 mm from the mesh's lower corner, as differences from
-the previous vertex (zigzag varints); the encoder checks every vertex comes back within
-0.05 mm and otherwise keeps the mesh's raw f32 (far from the origin, not finite). Indices are
+the previous vertex (zigzag varints); a mesh keeps its raw f32 when a vertex isn't finite or it
+spans over 268 km (and, as a guard, when a vertex would come back over 0.05 mm away). Indices are
 differences from the previous index. Edge endpoints that are vertices become vertex indices
 (decoded bit for bit like the vertex); others are quantized. Edge normals become indices into
 the mesh's table of distinct normals. `decode` reads untrusted bytes: counts are checked against
@@ -215,10 +215,13 @@ speeds in raw MB/s):
 | 758 MB | 86.6 MB | 24.5 MB | 3.5× | 596 MB/s | 1.8 GB/s | 28.8 / 15.7 MB |
 | 872 MB | 88.2 MB | 25.5 MB | 3.5× | 627 MB/s | 1.8 GB/s | 31.0 / 16.0 MB |
 
-So 3.5–4.4× smaller, decoding at 1.5–2.2 GB/s (meshopt publishes 3–6 GB/s, with SIMD). About
-5 bytes a vertex, 1.1–1.25 an index, 5 an edge with its normals. Gzip, which HTTP adds anyway,
+So 3.5–4.4× smaller, decoding at 1.5–2.2 GB/s (meshopt publishes 3–6 GB/s, with SIMD);
+without the edge normals in either count, 3.0–3.8×. About 5 bytes a vertex, 1.1–1.25 an index,
+5 an edge with its normals. Every mesh of the seven comes back with the same indices and edge
+count, no point moved more than 0.031 mm, and none was kept raw. Gzip, which HTTP adds anyway,
 halves the encoded bytes again (gzip of the raw bytes alone reaches 2.7–3.7×); gunzip then
-decode runs at 0.3–1 GB/s. Tests: `round_trip_within_tolerance` (demo frame, empty, far from
+decode runs at 0.65–1 GB/s. A second run, with other work on the machine, gave encode and
+decode speeds up to half these on the 709 MB model; sizes are exact. Tests: `round_trip_within_tolerance` (demo frame, empty, far from
 the origin, out-of-order indices, edges off the vertices, NaN), `corrupt_bytes_are_errors_not_panics`
 (every prefix, byte flips, random bytes, a huge count with nothing behind it).
 

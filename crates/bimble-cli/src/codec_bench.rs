@@ -77,6 +77,35 @@ pub fn run(files: Vec<PathBuf>) -> Result<(), String> {
         }
         let t_dec = t.elapsed().as_secs_f64();
         let enc_all: Vec<u8> = enc.concat();
+        // Untimed: every mesh back with its topology, how far its points moved, how many raw.
+        let (mut err, mut kept_raw) = (0f64, 0);
+        for (m, b) in meshes.iter().zip(&enc) {
+            let d = codec::decode(b).map_err(|e| e.to_string())?;
+            if d.indices != m.indices || d.edges.len() != m.edges.len() {
+                return Err("codec changed a mesh's topology".into());
+            }
+            kept_raw += usize::from(b[4] == 0);
+            let pts = |m: &Mesh| -> Vec<[f32; 3]> {
+                m.positions
+                    .iter()
+                    .chain(m.edges.iter().flatten())
+                    .copied()
+                    .collect()
+            };
+            for (p, q) in pts(m).iter().zip(&pts(&d)) {
+                for k in 0..3 {
+                    err = err.max((p[k] as f64 - q[k] as f64).abs());
+                }
+            }
+        }
+        let normals: usize = meshes
+            .iter()
+            .map(|m| m.edge_normals.len().min(m.edges.len()))
+            .sum();
+        eprintln!(
+            "  largest move {err:.4} mm, {kept_raw} meshes kept raw, ratio without edge normals {:.2}",
+            (raw_all.len() - normals * 8) as f64 / enc_all.len() as f64
+        );
         let mb = |n: usize| n as f64 / 1e6;
         let r = raw_all.len();
         let gz = gzip(&enc_all);

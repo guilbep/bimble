@@ -1,9 +1,9 @@
 //! Compact bytes for a `Mesh` (ADR 0036 #8): for caches and downloads, not the GPU.
 //!
 //! Positions are quantized to 1/16 mm steps from the mesh's lower corner and coded as the
-//! difference from the previous vertex (zigzag, LEB128 varint). The encoder decodes each vertex
-//! as the decoder will and keeps the raw f32 bits for the whole mesh when one would move more than
-//! [`TOLERANCE_MM`] (far from the origin, where f32 itself is coarser), or isn't finite.
+//! difference from the previous vertex (zigzag, LEB128 varint). A mesh keeps its raw f32 bits when
+//! a vertex isn't finite, it spans over 268 km (u32 steps), or, as a guard, a vertex would come
+//! back more than [`TOLERANCE_MM`] away (the encoder decodes each one as the decoder will).
 //! Indices are coded as the difference from the previous index. Edge endpoints that are vertices
 //! become indices (decoded bit for bit like the vertex); others are quantized like positions.
 //! Edge normals become indices into the mesh's table of distinct normals (a box has six; w is
@@ -351,14 +351,10 @@ mod tests {
 
     fn odd_meshes() -> Vec<Mesh> {
         let far = Mesh {
-            // 2 000 km from the origin: f32 steps of 0.25 mm, so kept raw.
-            positions: vec![
-                [2.0e9, 0.0, 0.0],
-                [2.0e9 + 1000.0, 0.0, 0.0],
-                [2.0e9, 1.0, 5.0],
-            ],
+            // 300 km across: more 1/16 mm steps than a u32 holds, so kept raw.
+            positions: vec![[0.0, 0.0, 0.0], [3.0e8, 0.0, 0.0], [0.0, 1.0, 5.0]],
             indices: vec![0, 1, 2],
-            edges: vec![[[2.0e9, 0.0, 0.0], [2.0e9, 1.0, 5.0]]],
+            edges: vec![[[0.0, 0.0, 0.0], [0.0, 1.0, 5.0]]],
             edge_normals: vec![],
         };
         let odd = Mesh {
@@ -385,9 +381,12 @@ mod tests {
         for m in meshes.iter().chain(&odd_meshes()[..3]) {
             check(m);
         }
-        // Far from the origin the mesh is kept raw (exact).
+        // Too wide or not finite: kept raw (mode byte 0), exact.
         let far = &odd_meshes()[1];
+        assert_eq!(encode(far)[4], 0);
         assert_eq!(decode(&encode(far)).unwrap().positions, far.positions);
+        assert_eq!(encode(&scene_meshes()[0])[4], 1);
+        assert_eq!(encode(&odd_meshes()[3])[4], 0);
         let nan = decode(&encode(&odd_meshes()[3])).unwrap();
         assert!(nan.positions[0][0].is_nan());
     }
