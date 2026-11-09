@@ -530,6 +530,7 @@ version = "0.9.0"
 dependencies = [
  "bimble-core",
  "earcutr",
+ "flate2",
  "js-sys",
  "manifold-csg",
  "rayon",

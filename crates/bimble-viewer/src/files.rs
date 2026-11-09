@@ -26,10 +26,10 @@ impl Purpose {
         match self {
             Purpose::Open => (
                 "Building models, views files",
-                &["ifc", "IFC", "bimble", "json"],
+                &["ifc", "IFC", "bimble", "bimbleview", "json"],
             ),
             Purpose::ImportIfc => ("IFC file", &["ifc", "IFC"]),
-            Purpose::Link => ("Building models", &["ifc", "IFC", "bimble"]),
+            Purpose::Link => ("Building models", &["ifc", "IFC", "bimble", "bimbleview"]),
             Purpose::PlanTemplate => ("Plan template", &["json"]),
             Purpose::Style => ("Bimble style", &["json"]),
             Purpose::Reference => (

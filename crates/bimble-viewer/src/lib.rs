@@ -31,6 +31,7 @@ mod ribbon;
 mod schedules;
 mod section;
 mod settings;
+mod share;
 mod snap;
 mod state;
 mod style_editor;
@@ -427,6 +428,10 @@ pub fn load_scene(path: &Path) -> Result<Scene, String> {
 
 /// A scene, and for a .bimble file the model itself (it can then be edited).
 fn load_any(path: &Path) -> Result<(Scene, Option<bimble_core::Model>), String> {
+    if bimble_geom::viewfile::is_named(&path.to_string_lossy()) {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        return load_bytes(&path.to_string_lossy(), bytes);
+    }
     let is_ifc = path
         .extension()
         .and_then(|x| x.to_str())
@@ -443,6 +448,12 @@ fn load_any(path: &Path) -> Result<(Scene, Option<bimble_core::Model>), String> 
 
 /// A model from a file's content (picked or dropped in a browser): IFC or .bimble by name.
 fn load_bytes(name: &str, bytes: Vec<u8>) -> Result<(Scene, Option<bimble_core::Model>), String> {
+    // A prepared viewing file (ADR 0040): straight to a scene, read-only.
+    if bimble_geom::viewfile::is_named(name) {
+        return bimble_geom::viewfile::read_bytes(&bytes)
+            .map(|s| (s, None))
+            .map_err(|e| e.to_string());
+    }
     let is_ifc = name.to_ascii_lowercase().ends_with(".ifc");
     if is_ifc {
         bimble_ifc::read::read_bytes(bytes)
@@ -1218,6 +1229,11 @@ impl Viewer {
                     self.report = Some((path.clone(), report));
                 }
                 // Also in the browser's console, where they can be copied.
+                log::info!(
+                    "{}: {} elements read in {load_time:.2?}",
+                    path.display(),
+                    scene.elements.len()
+                );
                 for w in scene.warnings.iter().take(50) {
                     log::warn!("{w}");
                 }

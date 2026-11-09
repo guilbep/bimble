@@ -53,6 +53,8 @@ pub(crate) enum Action {
     ImportIfc,
     /// The same for the IFC file open now.
     ConvertOpen,
+    /// Save the open model as a prepared viewing file (ADR 0040).
+    ShareForViewing,
     Save,
     Undo,
     Redo,
@@ -84,10 +86,11 @@ pub(crate) enum Action {
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 34] = [
+pub(crate) const ALL_ACTIONS: [Action; 35] = [
     Action::Open,
     Action::ImportIfc,
     Action::ConvertOpen,
+    Action::ShareForViewing,
     Action::Save,
     Action::Undo,
     Action::Redo,
@@ -127,6 +130,7 @@ impl Action {
             Action::Open => "Open…".into(),
             Action::ImportIfc => "Import IFC…".into(),
             Action::ConvertOpen => "Convert this IFC to .bimble (editable)".into(),
+            Action::ShareForViewing => "Share for viewing… (.bimbleview)".into(),
             Action::Save => "Save".into(),
             Action::Undo => "Undo".into(),
             Action::Redo => "Redo".into(),
@@ -183,7 +187,11 @@ impl Action {
     /// Where it lives, as the palette shows it: its ribbon tab, the File menu or quick access.
     pub fn home(self) -> &'static str {
         let tab = match self {
-            Action::Open | Action::ImportIfc | Action::ConvertOpen | Action::Save => {
+            Action::Open
+            | Action::ImportIfc
+            | Action::ConvertOpen
+            | Action::ShareForViewing
+            | Action::Save => {
                 return "File";
             }
             Action::Undo | Action::Redo | Action::Palette => return "Quick access",
@@ -280,6 +288,8 @@ impl Viewer {
                                 .is_some_and(|x| x.eq_ignore_ascii_case("ifc"))
                     })
             }
+            // Not a part of a model too large to show whole: it would be shared as the whole.
+            Action::ShareForViewing => self.loaded.as_ref().is_some_and(|l| l.partial.is_none()),
             Action::Save => {
                 self.side_views_dirty()
                     || self
@@ -343,6 +353,7 @@ impl Viewer {
                     self.import_ifc(p, ctx);
                 }
             }
+            Action::ShareForViewing => self.share_for_viewing(),
             Action::Save => {
                 if self.side_views.is_some() {
                     self.save_side_views();
@@ -590,6 +601,7 @@ impl Viewer {
                     Action::ConvertOpen,
                     Action::Save,
                 ],
+                &[Action::ShareForViewing],
                 &[Action::LinkModel, Action::ReferencePlan],
                 &[Action::OnPaper],
                 &[Action::Project, Action::Settings],
@@ -782,7 +794,9 @@ impl Viewer {
                 );
                 self.group(ui, "Inspect", &[(Action::Measure, "Measure")], &mut run);
                 if !self.editable() && self.loaded.is_some() {
-                    ui.weak("An IFC is read-only: open a .bimble file to place elements.");
+                    ui.weak(
+                        "Read-only (an IFC or a view file): open a .bimble file to place elements.",
+                    );
                 }
             }
             Tab::Annotate => {
