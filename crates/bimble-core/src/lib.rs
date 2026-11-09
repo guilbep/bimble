@@ -10,6 +10,7 @@ pub mod library;
 mod model;
 pub mod pens;
 pub mod project;
+pub mod remote;
 pub mod repo;
 pub mod schedule;
 pub mod sheet;
