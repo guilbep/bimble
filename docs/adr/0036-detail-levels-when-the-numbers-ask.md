@@ -112,13 +112,13 @@ models are pipes of other lengths. Counted on the five models, of their own tria
 | 758 MB sanitary | 3.09 M | 1.55 M | 0.10 M |
 | 872 MB plumbing | 4.97 M | 2.71 M | 0.38 M |
 
-Four lessons, each measured:
+Five lessons, each measured:
 - Same indices is too strict: a polygon's diagonals depend on its orientation (the triangulation
   projects onto the plane its normal points most along), so turned copies triangulate
   differently. Vertices in the same order are matched; a copy takes the shape's triangulation.
 - The shape lies in its own frame (longest feature edge, then the longest across it). In scene
   axes, a turned first element gave a loose box; its copies' placed boxes were looser still,
-  which widened the scene bounds (the camera framed the model 2.5× smaller) and the culling
+  which widened the scene bounds (the fitted camera drew the model on 2.5× fewer pixels) and the culling
   spheres (77 % drawn close up instead of 60 %).
 - A copy whose placed box reaches over twice its own keeps its own mesh (sheared fits: 1 % of
   the 415 MB model's, up to 6×).
