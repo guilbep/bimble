@@ -158,6 +158,12 @@ impl Files {
         let _ = self.tx.send(p);
     }
 
+    /// Where files come from outside the viewer (a model named in the page's address).
+    #[cfg(target_arch = "wasm32")]
+    pub fn sender(&self) -> Sender<Picked> {
+        self.tx.clone()
+    }
+
     pub fn poll(&self) -> Option<Picked> {
         self.rx.try_recv().ok()
     }
