@@ -558,11 +558,11 @@ impl GpuScene {
 
 /// Per shape draw, the instances a frame draws: `(false, range)` in the scene's instance buffer
 /// when all of them are kept (nothing to copy), else `(true, range)` in its visible buffer,
-/// where the kept ones are written packed.
+/// where the kept ones are written packed. Without `queue`, nothing is packed: all are drawn.
 fn visible_instances(
     scene: &GpuScene,
     cull: &Cull,
-    queue: &wgpu::Queue,
+    queue: Option<&wgpu::Queue>,
 ) -> Vec<(bool, std::ops::Range<u32>)> {
     let mut packed: Vec<InstanceData> = Vec::new();
     let out = scene
@@ -571,6 +571,9 @@ fn visible_instances(
         .map(|d| {
             if d.radius < cull.min_radius {
                 return (false, 0..0);
+            }
+            if queue.is_none() {
+                return (false, d.instances.clone());
             }
             let start = packed.len();
             for i in d.instances.clone() {
@@ -586,8 +589,8 @@ fn visible_instances(
             }
         })
         .collect();
-    if let (Some(b), false) = (&scene.visible, packed.is_empty()) {
-        queue.write_buffer(b, 0, bytemuck::cast_slice(&packed));
+    if let (Some(b), Some(q), false) = (&scene.visible, queue, packed.is_empty()) {
+        q.write_buffer(b, 0, bytemuck::cast_slice(&packed));
     }
     out
 }
@@ -1429,7 +1432,13 @@ impl Renderer {
         let draws: Vec<Vec<(bool, std::ops::Range<u32>)>> = layers
             .iter()
             .zip(&culls)
-            .map(|(l, cull)| visible_instances(l.scene, cull, queue))
+            .enumerate()
+            .map(|(i, (l, cull))| {
+                // Writes land before the frame's one submit: a scene drawn in two layers can
+                // hold one packed list, so only its first layer packs; the others draw all.
+                let first = !layers[..i].iter().any(|o| std::ptr::eq(o.scene, l.scene));
+                visible_instances(l.scene, cull, first.then_some(queue))
+            })
             .collect();
 
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2334,7 +2343,8 @@ mod tests {
             min: b.min,
             max: Vec3::new((b.min.x + b.max.x) / 2.0, b.max.y, b.max.z),
         };
-        let link_off = Vec3::new(b.max.x - b.min.x + 2000.0, 0.0, 0.0);
+        // Half a model aside: close up, both copies are partly on screen and both cull.
+        let link_off = Vec3::new((b.max.x - b.min.x) / 2.0, 0.0, 0.0);
         let mut cut_some = false;
         for k in 0..12 {
             let mut cam = fit;

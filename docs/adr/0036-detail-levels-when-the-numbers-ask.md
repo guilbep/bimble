@@ -61,9 +61,12 @@ a packed copy of their visible instances. `DrawOptions::cull` turns it off to co
 | 872 MB plumbing | 14.4 ms | 4.2 ms | 45 % |
 
 The whole-model orbit is unchanged within run-to-run noise (415 MB: before 58.2 / 47.0 ms,
-after 48.2 / 47.8 ms, 120 frames). Test `culling_changes_nothing_on_screen`: 12 cameras (close,
-orthographic, mirrored, section box, an offset linked model) give identical pixels with and
-without culling, and close up it does leave triangles out.
+after 48.2 / 47.8 ms, 120 frames). Moving frames too (758 MB, 120 frames, interleaved: before 2.17 / 2.22 ms,
+after 2.10 / 2.15 ms). Test `culling_changes_nothing_on_screen`: 12 cameras (close,
+orthographic, mirrored, section box, the same model linked half a model aside) give identical
+pixels with and without culling, and close up it does leave triangles out. It caught a bug: a
+scene drawn in two layers packed its visible instances twice into one buffer before the frame's
+single submit, so one layer drew the other's (1 244 pixels); now only its first layer packs.
 
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
