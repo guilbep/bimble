@@ -388,7 +388,7 @@ impl SceneBuilder {
         } else {
             [0.0; 3]
         };
-        Scene {
+        let mut scene = Scene {
             densities: Default::default(),
             origin_mm: origin,
             elements: self
@@ -419,7 +419,10 @@ impl SceneBuilder {
                 v.sort_by(|a, b| a.elevation_mm.total_cmp(&b.elevation_mm));
                 v
             },
-        }
+        };
+        // Copies the file didn't mark as copies become shared shapes (ADR 0036 step 3).
+        crate::dedup::share_copies(&mut scene.elements);
+        scene
     }
 }
 

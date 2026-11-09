@@ -780,26 +780,25 @@ impl<'d> IndexedChunks<'d> {
     }
 }
 
-/// A sphere around a mesh's bounds, placed: the centre of the box, half its diagonal (scaled by
-/// the placement's longest column). Its radius is how big the element is (ADR 0035).
+/// A sphere around a mesh's box, placed: the placed box's centre, and its longest placed
+/// half-diagonal (exact for turned copies, and for stretched ones such as a longer pipe). Its
+/// radius is how big the element is (ADR 0035).
 fn sphere(m: &bimble_geom::Mesh, p: Option<&Placement32>) -> [f32; 4] {
     let b = bimble_geom::bvh::Aabb::of_points(&m.positions);
     if b.is_empty() {
         return [0.0; 4];
     }
     let (lo, hi) = (Vec3::from(b.min), Vec3::from(b.max));
-    let c = ((lo + hi) / 2.0).to_array();
-    let (c, scale) = match p {
-        None => (c, 1.0),
-        Some(p) => (
-            p.apply(c),
-            [p.x, p.y, p.z]
-                .map(|c| Vec3::from(c).length())
-                .into_iter()
-                .fold(0.0, f32::max),
-        ),
+    let (c, h) = ((lo + hi) / 2.0, (hi - lo) / 2.0);
+    let Some(p) = p else {
+        return [c.x, c.y, c.z, h.length()];
     };
-    [c[0], c[1], c[2], (hi - lo).length() / 2.0 * scale]
+    let pc = Vec3::from(p.apply(c.to_array()));
+    let r = [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)]
+        .map(|(sy, sz)| Vec3::from(p.rotate([h.x, sy * h.y, sz * h.z])).length())
+        .into_iter()
+        .fold(0.0, f32::max);
+    [pc.x, pc.y, pc.z, r]
 }
 
 /// A mesh's welded vertices with a style slot, and its triangles' indices after those already
@@ -2044,6 +2043,15 @@ mod tests {
     use super::*;
     use bimble_core::demo::{FrameSpec, concrete_frame};
 
+    /// The scene with every copy of a shared shape as its own mesh: the generated frame is all
+    /// copies once built (ADR 0036 step 3), and these tests are about merged geometry.
+    fn own(mut scene: Scene) -> Scene {
+        for e in &mut scene.elements {
+            e.geometry = Geometry::Own(e.world_mesh().into_owned());
+        }
+        scene
+    }
+
     #[test]
     fn ray_hits_triangle() {
         let t = ray_triangle(
@@ -2068,7 +2076,7 @@ mod tests {
 
     #[test]
     fn pick_from_camera_hits_something_in_the_middle() {
-        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let scene = own(Scene::from_model(&concrete_frame(&FrameSpec::default())));
         let mut cam = Camera::default();
         cam.fit(&scene, 1.5);
         let (o, d) = cam.ray([0.0, 0.0], 1.5, &Sphere::of(&scene));
@@ -2081,7 +2089,7 @@ mod tests {
     /// the model. Every scene corner must project inside the depth range from any camera.
     #[test]
     fn clip_planes_contain_the_scene_after_pan_and_orbit() {
-        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let scene = own(Scene::from_model(&concrete_frame(&FrameSpec::default())));
         let bounds = Sphere::of(&scene);
         let (lo, hi) = scene.bounds().unwrap();
         let corners: Vec<Vec3> = (0..8)
@@ -2124,7 +2132,7 @@ mod tests {
     /// section box.
     #[test]
     fn picking_through_the_tree_matches_testing_everything() {
-        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let scene = own(Scene::from_model(&concrete_frame(&FrameSpec::default())));
         let bvh = bimble_geom::bvh::Bvh::build(&bimble_geom::bvh::element_boxes(&scene));
         let bounds = Sphere::of(&scene);
         let mut cam = Camera::default();
@@ -2231,7 +2239,7 @@ mod tests {
     #[test]
     fn scenes_larger_than_a_gpu_buffer_are_split() {
         let draw = |gpu: &Headless| {
-            let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+            let scene = own(Scene::from_model(&concrete_frame(&FrameSpec::default())));
             let r = Renderer::new(&gpu.device, 1);
             let gs = r.upload_with(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal, true);
             let target = Target::new(&gpu.device, (32, 20), 1);
@@ -2279,7 +2287,7 @@ mod tests {
             eprintln!("no GPU adapter, skipping");
             return;
         };
-        let demo = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let demo = own(Scene::from_model(&concrete_frame(&FrameSpec::default())));
         let column = demo
             .elements
             .iter()
@@ -2375,7 +2383,7 @@ mod tests {
             eprintln!("no GPU adapter, skipping");
             return;
         };
-        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let scene = own(Scene::from_model(&concrete_frame(&FrameSpec::default())));
         let r = Renderer::new(&gpu.device, 1);
         let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
         let all: u32 = gs.faces.iter().map(|f| f.n).sum();
@@ -2413,7 +2421,7 @@ mod tests {
             storeys: 3,
             ..Default::default()
         };
-        let mut scene = Scene::from_model(&concrete_frame(&spec));
+        let mut scene = own(Scene::from_model(&concrete_frame(&spec)));
         // Shared shapes too: a column placed on a grid, one copy in four mirrored.
         let column = scene
             .elements
@@ -2526,7 +2534,7 @@ mod tests {
             eprintln!("no GPU adapter, skipping");
             return;
         };
-        let mut scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let mut scene = own(Scene::from_model(&concrete_frame(&FrameSpec::default())));
         scene.elements.retain(|e| e.class == "IfcColumn");
         scene.elements.truncate(1);
         let Geometry::Own(m) = &scene.elements[0].geometry else {
@@ -2570,7 +2578,7 @@ mod tests {
             eprintln!("no GPU adapter, skipping");
             return;
         };
-        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let scene = own(Scene::from_model(&concrete_frame(&FrameSpec::default())));
         let r = Renderer::new(&gpu.device, 4);
         let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
         let target = Target::new(&gpu.device, (320, 200), 4);

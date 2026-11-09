@@ -96,6 +96,47 @@ colours; it fails with a gradient). Without edges, the one-pixel line where two 
 in-between shades; the edges cover it. Not yet measured on a weak GPU: shading moved from the
 vertex to the pixel shader, which costs more where the GPU is short of pixel throughput.
 
+## Step 3 done: copies the file didn't mark (9 Nov)
+
+`bimble_geom::dedup::share_copies` runs when a scene is built (IFC and native). Elements with
+their own mesh and as many vertices, triangles and edges are fitted from four vertices (matched
+by order) with a linear map and a translation; every vertex must land within 0.1 mm. Unlike
+IfcOpenShell's `MeshDedup` (rotations only), copies may be stretched: most own meshes of MEP
+models are pipes of other lengths. Counted on the five models, of their own triangles:
+
+| model | own triangles | became copies | their shapes |
+|---|---|---|---|
+| 200 MB electrical | 0.10 M | 0.08 M | 0.006 M |
+| 335 MB architecture | 0.73 M | 0.32 M | 0.03 M |
+| 415 MB sprinklers | 1.39 M | 1.33 M | 0.003 M (15 shapes) |
+| 758 MB sanitary | 3.09 M | 1.55 M | 0.10 M |
+| 872 MB plumbing | 4.97 M | 2.71 M | 0.38 M |
+
+Four lessons, each measured:
+- Same indices is too strict: a polygon's diagonals depend on its orientation (the triangulation
+  projects onto the plane its normal points most along), so turned copies triangulate
+  differently. Vertices in the same order are matched; a copy takes the shape's triangulation.
+- The shape lies in its own frame (longest feature edge, then the longest across it). In scene
+  axes, a turned first element gave a loose box; its copies' placed boxes were looser still,
+  which widened the scene bounds (the camera framed the model 2.5× smaller) and the culling
+  spheres (77 % drawn close up instead of 60 %).
+- A copy whose placed box reaches over twice its own keeps its own mesh (sheared fits: 1 % of
+  the 415 MB model's, up to 6×).
+- Instance spheres: the placed box's centre and longest placed half-diagonal, exact for turned
+  and stretched copies (the longest column times the half-diagonal was 6× too large for a
+  stretched pipe).
+- Mirrored copies wind their faces the other way, so their vertices come in another order: they
+  keep their own mesh.
+
+`bimble bench`, step 2 → step 3 (interleaved runs): GPU geometry 18 → 15, 80 → 71, 103 → 63,
+136 → 95, 155 → 98 MB (−11 to −39 %); frames unchanged within noise (±3 %); upload 15–30 %
+faster; load time unchanged. `render` pictures: identical on the 335 MB model, within 699 pixels
+of 1.6 M on three others; the 758 MB model frames 0.1 % wider (its bounds), so its pixels shift.
+Test `rotated_copies_share_one_shape` (turned and stretched share; mirrored and a corner moved
+50 mm don't; every element's vertices stay within 0.2 mm). Tried and dropped: cutting clusters at
+a sixteenth of the scene (3× the draws, slower) and not instancing shapes under 32 triangles
+(the 200 MB model's fittings back in the merged buffers, +40 % GPU memory, no faster).
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
@@ -114,7 +155,7 @@ measured with `bimble bench` before and after (CLAUDE.md), on the M4 Pro and on 
 | 9 | 5 | Simplified proxies per box-tree cell for what is far (HLOD) | est.; iTwin.js and 3D Tiles do it | yes | L |
 | 10 | 4 | GPU-driven culling: depth pyramid, compute, indirect draws | ~2× (VTK WebGPU) | no | L |
 
-Order: steps 1–3 above first (frustum culling, indexed shapes with #2 (done), dedup), then #3, #4, #1/#5
+Order: steps 1–3 above first (all done: frustum culling, indexed shapes with #2, dedup), then #3, #4, #1/#5
 (after a weak-GPU measurement), then the rest.
 
 ## Revisit when
