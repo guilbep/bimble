@@ -43,6 +43,8 @@ pub enum RepoError {
     UnknownRev(String),
     #[error("damaged history: object {0} {1}")]
     Damaged(String, String),
+    #[error("the remote's {0} has changes you don't have yet: synchronize again")]
+    NotFastForward(String),
 }
 
 type Result<T> = std::result::Result<T, RepoError>;
@@ -141,11 +143,16 @@ fn read_small(path: &Path) -> Result<String> {
 impl Repo {
     /// Create the history of `model` (an empty one, HEAD on branch `main`).
     pub fn init(model: &Path) -> Result<Repo> {
-        let dir = history_dir(model);
+        Self::init_dir(&history_dir(model))
+    }
+
+    /// Create a history in `dir` itself (a remote has no model file next to it).
+    pub fn init_dir(dir: &Path) -> Result<Repo> {
+        let dir = dir.to_owned();
         if dir.join("format").exists() {
             return Err(RepoError::Bad(format!(
                 "{} already has a history",
-                model.display()
+                dir.display()
             )));
         }
         std::fs::create_dir_all(dir.join("objects"))?;
@@ -156,10 +163,18 @@ impl Repo {
     }
 
     pub fn open(model: &Path) -> Result<Repo> {
-        let dir = history_dir(model);
+        if !history_dir(model).join("format").exists() {
+            return Err(RepoError::NoRepo(model.to_owned()));
+        }
+        Self::open_dir(&history_dir(model))
+    }
+
+    /// Open the history in `dir` itself.
+    pub fn open_dir(dir: &Path) -> Result<Repo> {
+        let dir = dir.to_owned();
         let f = dir.join("format");
         if !f.exists() {
-            return Err(RepoError::NoRepo(model.to_owned()));
+            return Err(RepoError::NoRepo(dir));
         }
         let format = read_small(&f)?;
         if format != FORMAT {
@@ -181,8 +196,13 @@ impl Repo {
         self.dir.join("objects").join(&hash[..2]).join(&hash[2..])
     }
 
+    /// Whether the object is stored here (false for anything that is not a hash).
+    pub(crate) fn has(&self, hash: &str) -> bool {
+        is_hash(hash) && self.object_path(hash).exists()
+    }
+
     /// Store bytes under their hash; returns the hash. Existing objects are not rewritten.
-    fn put_bytes(&self, bytes: &[u8]) -> Result<Hash> {
+    pub(crate) fn put_bytes(&self, bytes: &[u8]) -> Result<Hash> {
         let hash = blake3::hash(bytes).to_hex().to_string();
         let path = self.object_path(&hash);
         if !path.exists() {
@@ -197,6 +217,12 @@ impl Repo {
     }
 
     fn get<T: DeserializeOwned>(&self, hash: &str) -> Result<T> {
+        let bytes = self.get_bytes(hash)?;
+        serde_json::from_slice(&bytes).map_err(|e| RepoError::Damaged(hash.into(), e.to_string()))
+    }
+
+    /// An object's bytes, checked against its name and size.
+    pub(crate) fn get_bytes(&self, hash: &str) -> Result<Vec<u8>> {
         if !is_hash(hash) {
             return Err(RepoError::Damaged(hash.into(), "is not a hash".into()));
         }
@@ -214,7 +240,7 @@ impl Repo {
                 "does not match its hash".into(),
             ));
         }
-        serde_json::from_slice(&bytes).map_err(|e| RepoError::Damaged(hash.into(), e.to_string()))
+        Ok(bytes)
     }
 
     pub fn commit_info(&self, hash: &str) -> Result<Commit> {
@@ -292,7 +318,7 @@ impl Repo {
         }
     }
 
-    fn set_head(&self, h: &Head) -> Result<()> {
+    pub(crate) fn set_head(&self, h: &Head) -> Result<()> {
         let text = match h {
             Head::Branch(b) => format!("ref: {b}\n"),
             Head::Detached(c) => format!("{c}\n"),
@@ -315,7 +341,7 @@ impl Repo {
         Ok(Some(h))
     }
 
-    fn set_branch(&self, name: &str, hash: &str) -> Result<()> {
+    pub(crate) fn set_branch(&self, name: &str, hash: &str) -> Result<()> {
         check_branch_name(name)?;
         let p = self.dir.join("refs/heads").join(name);
         if let Some(d) = p.parent() {
@@ -846,6 +872,18 @@ impl Repo {
         author: &str,
         time: i64,
     ) -> Result<std::result::Result<(Merged, Model), Vec<Conflict>>> {
+        self.merge_with_message(rev, prefer, author, time, &format!("Merge {rev}"))
+    }
+
+    /// `merge`, with the message of the merge commit.
+    pub(crate) fn merge_with_message(
+        &self,
+        rev: &str,
+        prefer: Prefer,
+        author: &str,
+        time: i64,
+        message: &str,
+    ) -> Result<std::result::Result<(Merged, Model), Vec<Conflict>>> {
         let theirs = self.resolve(rev)?;
         let Some(ours) = self.head_commit()? else {
             return Err(RepoError::Bad("nothing committed yet".into()));
@@ -889,7 +927,7 @@ impl Repo {
             parents: vec![ours, theirs],
             author: author.to_owned(),
             time,
-            message: format!("Merge {rev}"),
+            message: message.to_owned(),
         };
         let hash = self.put(&c)?;
         match self.head()? {

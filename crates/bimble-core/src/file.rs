@@ -69,10 +69,11 @@ pub fn save(m: &Model, path: impl AsRef<std::path::Path>) -> Result<(), FileErro
 }
 
 /// Write to a temp file next to `path`, then rename: an interrupted write never leaves a broken
-/// file behind.
+/// file behind. The temp name is unique, so two people writing the same file on a shared folder
+/// never rename each other's half-written file into place.
 pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
+    tmp.push(format!(".{}.tmp", uuid::Uuid::new_v4().simple()));
     let tmp = std::path::PathBuf::from(tmp);
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, path)

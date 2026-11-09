@@ -81,6 +81,38 @@ enum HistoryCmd {
         #[arg(long)]
         author: Option<String>,
     },
+    /// Show the shared folder this history synchronizes with, or set it
+    Remote {
+        model: PathBuf,
+        dir: Option<PathBuf>,
+    },
+    /// A new local copy of a shared history (its folder) as a model file
+    Clone {
+        remote: PathBuf,
+        model: PathBuf,
+        #[arg(long, default_value = "main")]
+        branch: String,
+    },
+    /// Send the current branch to the remote (refused unless it only adds to it)
+    Push {
+        model: PathBuf,
+        /// Your e-mail. Default: $BIMBLE_AUTHOR, else $USER
+        #[arg(long)]
+        author: Option<String>,
+    },
+    /// Fetch, merge and push; give back your borrowed elements
+    Sync {
+        model: PathBuf,
+        #[arg(long)]
+        author: Option<String>,
+    },
+    /// Borrow elements (GlobalIds) before changing them, so others are warned
+    Borrow {
+        model: PathBuf,
+        ids: Vec<String>,
+        #[arg(long)]
+        author: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1051,7 +1083,16 @@ fn is_ifc(path: &std::path::Path) -> bool {
 
 /// Load a .ifc or .bimble file as a render-ready scene.
 fn history(cmd: HistoryCmd) -> Result<(), String> {
+    use bimble_core::remote;
     use bimble_core::repo::{Head, Merged, Prefer, Repo};
+    let open_remote = |model: &std::path::Path| -> Result<(Repo, Repo), String> {
+        let r = Repo::open(model).map_err(|x| x.to_string())?;
+        let dir = remote::remote_of(&r)
+            .map_err(|x| x.to_string())?
+            .ok_or("no remote: set one with `bimble history remote <model> <folder>`")?;
+        let share = remote::open_or_init(&dir).map_err(|x| x.to_string())?;
+        Ok((r, share))
+    };
     let e = |x: bimble_core::repo::RepoError| x.to_string();
     let fe = |x: file::FileError| x.to_string();
     let author_of = |a: Option<String>| {
@@ -1209,6 +1250,85 @@ fn history(cmd: HistoryCmd) -> Result<(), String> {
                         list.join("\n")
                     ));
                 }
+            }
+        }
+        HistoryCmd::Remote { model, dir } => {
+            let r = Repo::open(&model).map_err(e)?;
+            match dir {
+                Some(d) => {
+                    remote::set_remote(&r, &d).map_err(e)?;
+                    println!("remote: {}", d.display());
+                }
+                None => match remote::remote_of(&r).map_err(e)? {
+                    Some(d) => println!("{}", d.display()),
+                    None => println!("no remote"),
+                },
+            }
+        }
+        HistoryCmd::Clone {
+            remote: dir,
+            model,
+            branch,
+        } => {
+            if model.exists() {
+                return Err(format!("{} already exists", model.display()));
+            }
+            let m = remote::clone(&dir, &model, &branch).map_err(e)?;
+            file::save(&m, &model).map_err(fe)?;
+            println!("cloned {branch}: {} elements", m.elements.len());
+        }
+        HistoryCmd::Push { model, author } => {
+            let (r, share) = open_remote(&model)?;
+            let branch = match r.head().map_err(e)? {
+                Head::Branch(b) => b,
+                Head::Detached(_) => return Err("not on a branch".into()),
+            };
+            let h = remote::push(&r, &share, &branch, &author_of(author), now()).map_err(e)?;
+            println!("pushed {branch}: {}", short(&h));
+        }
+        HistoryCmd::Sync { model, author } => {
+            let (r, share) = open_remote(&model)?;
+            let working = file::load(&model).map_err(fe)?;
+            if !r.status(&working).map_err(e)?.is_empty() {
+                return Err("the model has changes not committed; commit them first".into());
+            }
+            match remote::sync(&r, &share, &author_of(author), now()).map_err(e)? {
+                Ok((how, m)) => {
+                    file::save(&m, &model).map_err(fe)?;
+                    match how {
+                        Merged::UpToDate => println!("synchronized: nothing new from others"),
+                        Merged::FastForward(h) => println!("synchronized: now at {}", short(&h)),
+                        Merged::Commit(h) => println!("synchronized: merged {}", short(&h)),
+                    }
+                }
+                Err(conflicts) => {
+                    let list: Vec<String> = conflicts.iter().map(|c| format!("  {c}")).collect();
+                    return Err(format!(
+                        "{} conflict(s), nothing pushed:\n{}",
+                        conflicts.len(),
+                        list.join("\n")
+                    ));
+                }
+            }
+        }
+        HistoryCmd::Borrow { model, ids, author } => {
+            let (_, share) = open_remote(&model)?;
+            let ids = ids
+                .iter()
+                .map(|s| s.parse::<GlobalId>())
+                .collect::<Result<Vec<_>, _>>()?;
+            let taken = remote::borrow(&share, &author_of(author), &ids, now()).map_err(e)?;
+            if taken.is_empty() {
+                println!("borrowed {} element(s)", ids.len());
+            } else {
+                let list: Vec<String> = taken
+                    .iter()
+                    .map(|(id, who)| format!("  {id} belongs to {who}"))
+                    .collect();
+                return Err(format!(
+                    "nothing borrowed; ask them to synchronize:\n{}",
+                    list.join("\n")
+                ));
             }
         }
     }
