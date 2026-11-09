@@ -3653,17 +3653,15 @@ impl eframe::App for Viewer {
                 .fill(fill)
                 .inner_margin(egui::Margin::symmetric(ui_theme::GAP_M as i8, 4))
         };
+        // One row: the File menu, the ribbon's tabs, quick access (#51).
         egui::Panel::top("title")
-            .frame(bar(ui_theme::TITLE_BG))
-            .show(ui, |ui| self.title_row(ui));
-        egui::Panel::top("ribbon-tabs")
             .frame(bar(ui_theme::TABS_BG).inner_margin(egui::Margin {
                 left: ui_theme::GAP_M as i8,
-                right: 0,
+                right: ui_theme::GAP_M as i8,
                 top: 2,
                 bottom: 0,
             }))
-            .show(ui, |ui| self.ribbon_tabs(ui));
+            .show(ui, |ui| self.title_row(ui));
         egui::Panel::top("ribbon")
             .frame(
                 bar(ui_theme::RIBBON_BG)

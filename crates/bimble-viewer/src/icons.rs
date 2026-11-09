@@ -239,7 +239,44 @@ fn parts(a: Action) -> &'static [Part] {
             Line(&[[12.0, 9.0], [12.0, 14.0]]),
             Line(&[[9.5, 11.5], [12.0, 14.0], [14.5, 11.5]]),
         ],
-        Action::Save | Action::Undo | Action::Redo | Action::Palette => &[],
+        // A diskette: its label and its shutter.
+        Action::Save => &[
+            Poly(&[
+                [4.0, 4.0],
+                [17.0, 4.0],
+                [20.0, 7.0],
+                [20.0, 20.0],
+                [4.0, 20.0],
+            ]),
+            Poly(&[[8.0, 4.0], [15.0, 4.0], [15.0, 9.0], [8.0, 9.0]]),
+            Poly(&[[7.0, 13.0], [17.0, 13.0], [17.0, 20.0], [7.0, 20.0]]),
+        ],
+        // An arrow turning back to the left; Redo is its mirror.
+        Action::Undo => &[
+            Line(&[[9.0, 5.0], [5.0, 9.0], [9.0, 13.0]]),
+            Line(&[
+                [5.0, 9.0],
+                [15.0, 9.0],
+                [18.0, 10.5],
+                [19.5, 13.5],
+                [18.0, 17.0],
+                [15.0, 18.5],
+                [10.0, 18.5],
+            ]),
+        ],
+        Action::Redo => &[
+            Line(&[[15.0, 5.0], [19.0, 9.0], [15.0, 13.0]]),
+            Line(&[
+                [19.0, 9.0],
+                [9.0, 9.0],
+                [6.0, 10.5],
+                [4.5, 13.5],
+                [6.0, 17.0],
+                [9.0, 18.5],
+                [14.0, 18.5],
+            ]),
+        ],
+        Action::Palette => &[],
     }
 }
 
@@ -288,16 +325,13 @@ pub(crate) fn has(a: Action) -> bool {
 mod tests {
     use super::*;
 
-    /// Every ribbon action has an icon, drawn inside its 24 × 24 grid.
+    /// Every action has an icon (quick access shows only icons, #51), drawn inside its 24 × 24 grid.
     #[test]
     fn ribbon_actions_have_icons_on_the_grid() {
         for a in crate::ribbon::ALL_ACTIONS
             .iter()
             .chain([Action::History].iter())
         {
-            if matches!(a, Action::Save | Action::Undo | Action::Redo) {
-                continue;
-            }
             assert!(has(*a), "{a:?}");
             for part in parts(*a) {
                 let pts: Vec<[f32; 2]> = match part {

@@ -1,6 +1,7 @@
-//! The main window's frame (ADR 0027): a title row (file, quick access, command palette), a
-//! ribbon (tabs of tools in named groups), tabs of the open views and sheets, and a command
-//! palette (Ctrl+K) that finds every ribbon action by typing.
+//! The main window's frame (ADR 0027, ADR 0037): one top row (the File menu, the ribbon's tabs,
+//! the file's name, quick access as icons, the command palette), the ribbon (tools in named
+//! groups), tabs of the open views and sheets, and a command palette (Ctrl+K) that finds every
+//! action by typing.
 //!
 //! Every button of the ribbon and every entry of the palette is an `Action`, run by one function,
 //! so the two never disagree.
@@ -12,32 +13,33 @@ use bimble_core::GlobalId;
 /// The ribbon's tabs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum Tab {
+    /// What the project is, its settings and its links (#51).
+    Project,
     #[default]
     Model,
     Annotate,
     View,
     Sheets,
-    Links,
     Manage,
 }
 
 impl Tab {
     pub const ALL: [Tab; 6] = [
+        Tab::Project,
         Tab::Model,
         Tab::Annotate,
         Tab::View,
         Tab::Sheets,
-        Tab::Links,
         Tab::Manage,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Tab::Project => "Project",
             Tab::Model => "Model",
             Tab::Annotate => "Annotate",
             Tab::View => "View",
             Tab::Sheets => "Sheets",
-            Tab::Links => "Links",
             Tab::Manage => "Manage",
         }
     }
@@ -174,9 +176,11 @@ impl Action {
         }
     }
 
-    /// The ribbon tab it lives on.
-    pub fn tab(self) -> Tab {
-        match self {
+    /// Where it lives, as the palette shows it: its ribbon tab, the File menu or quick access.
+    pub fn home(self) -> &'static str {
+        let tab = match self {
+            Action::Open | Action::ImportIfc | Action::Save => return "File",
+            Action::Undo | Action::Redo | Action::Palette => return "Quick access",
             Action::Place(_) | Action::Measure => Tab::Model,
             Action::SheetTool(_)
             | Action::SectionLabels
@@ -191,19 +195,12 @@ impl Action {
             | Action::Fit
             | Action::Top => Tab::View,
             Action::OnPaper | Action::NewSheet | Action::CloseSheet => Tab::Sheets,
-            Action::LinkModel | Action::ReferencePlan => Tab::Links,
-            Action::Standards
-            | Action::Project
-            | Action::Materials
-            | Action::History
-            | Action::Settings => Tab::Manage,
-            Action::Open
-            | Action::ImportIfc
-            | Action::Save
-            | Action::Undo
-            | Action::Redo
-            | Action::Palette => Tab::Model,
-        }
+            Action::Project | Action::Settings | Action::LinkModel | Action::ReferencePlan => {
+                Tab::Project
+            }
+            Action::Standards | Action::Materials | Action::History => Tab::Manage,
+        };
+        tab.label()
     }
 }
 
@@ -444,92 +441,154 @@ impl Viewer {
         }
     }
 
-    /// The title row: the file, quick access, the palette.
+    /// The top row (#51): the File menu and the ribbon's tabs on the left; the file's name,
+    /// quick access as icons and the palette on the right.
     pub(crate) fn title_row(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let mut run = None;
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Bimble").strong());
-            if let Some(l) = &self.loaded {
-                let name = l
-                    .path
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                ui.label(egui::RichText::new(name).color(th::TEXT_MUTED));
-                // What isn't saved, said in words (ADR 0028).
-                let unsaved = crate::state::unsaved(&self.snapshot());
-                if !unsaved.is_empty() {
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        format!("Not saved: {}", unsaved.join(", ")),
-                    )
-                    .on_hover_text(
-                        "Save (Ctrl S) saves the model or the views; the standards are saved \
-                         from their panel",
-                    );
-                }
-            }
+            ui.add_space(th::GAP_M);
+            self.file_menu(ui, &mut run);
+            ui.add_space(th::GAP_M);
+            self.ribbon_tabs(ui);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let p = ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Type a command…   Ctrl K").color(th::TEXT_MUTED),
-                        )
-                        .min_size(egui::vec2(220.0, 0.0)),
-                    )
+                    .add(egui::Button::new(
+                        egui::RichText::new("Command…  Ctrl K").color(th::TEXT_MUTED),
+                    ))
                     .on_hover_text("Find and run any command");
                 if p.clicked() {
                     run = Some(Action::Palette);
                 }
-                ui.add_space(th::GAP_L);
+                ui.add_space(th::GAP_M);
                 for a in [Action::Redo, Action::Undo, Action::Save, Action::Open] {
-                    let b = ui.add_enabled(self.action_enabled(a), egui::Button::new(a.label()));
-                    // Undo and Redo say what they would do; greyed, why not.
-                    let tip = match a {
-                        Action::Undo | Action::Redo => {
-                            let undo = a == Action::Undo;
-                            match self.undo_text(undo) {
-                                Some(t) => format!(
-                                    "{}: {t} ({})",
-                                    if undo { "Undo" } else { "Redo" },
-                                    a.keys()
-                                ),
-                                None => {
-                                    format!("Nothing to {}", if undo { "undo" } else { "redo" })
-                                }
-                            }
-                        }
-                        Action::Save => {
-                            let st = self.snapshot();
-                            let mut t = if st.model_dirty {
-                                "Save the model (Ctrl S)".to_string()
-                            } else if st.views_dirty {
-                                "Save the views next to the IFC (Ctrl S)".to_string()
-                            } else {
-                                "The model and its views are saved".to_string()
-                            };
-                            if st.standards_changed {
-                                t.push_str("\nThe standards are changed: Save… in their panel");
-                            }
-                            t
-                        }
-                        _ => a.keys().to_string(),
-                    };
-                    let b = if tip.is_empty() {
-                        b
-                    } else {
-                        b.on_hover_text(&tip).on_disabled_hover_text(&tip)
-                    };
-                    if b.clicked() {
+                    let tip = self.quick_tip(a);
+                    if self.icon_button(ui, a, &tip) {
                         run = Some(a);
                     }
                 }
+                ui.add_space(th::GAP_M);
+                self.file_name(ui);
             });
         });
         if let Some(a) = run {
             self.run_action(a, &ctx);
         }
+    }
+
+    /// The open file's name and what isn't saved (ADR 0028), cut short when the row is full.
+    fn file_name(&self, ui: &mut egui::Ui) {
+        let Some(l) = &self.loaded else { return };
+        let name = l
+            .path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let unsaved = crate::state::unsaved(&self.snapshot());
+        if !unsaved.is_empty() {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!("Not saved: {}", unsaved.join(", ")))
+                        .color(ui.visuals().warn_fg_color),
+                )
+                .truncate(),
+            )
+            .on_hover_text(
+                "Save (Ctrl S) saves the model or the views; the standards are saved \
+                 from their panel",
+            );
+        }
+        ui.add(egui::Label::new(egui::RichText::new(&name).color(th::TEXT_MUTED)).truncate())
+            .on_hover_text(l.path.display().to_string());
+    }
+
+    /// What a quick-access button would do: Undo and Redo say what, Save says what is unsaved.
+    fn quick_tip(&self, a: Action) -> String {
+        match a {
+            Action::Undo | Action::Redo => {
+                let undo = a == Action::Undo;
+                let verb = if undo { "Undo" } else { "Redo" };
+                match self.undo_text(undo) {
+                    Some(t) => format!("{verb}: {t} ({})", a.keys()),
+                    None => format!("Nothing to {}", verb.to_lowercase()),
+                }
+            }
+            Action::Save => {
+                let st = self.snapshot();
+                let mut t = if st.model_dirty {
+                    "Save the model (Ctrl S)".to_string()
+                } else if st.views_dirty {
+                    "Save the views next to the IFC (Ctrl S)".to_string()
+                } else {
+                    "Save: the model and its views are saved".to_string()
+                };
+                if st.standards_changed {
+                    t.push_str("\nThe standards are changed: Save… in their panel");
+                }
+                t
+            }
+            _ => a.label(),
+        }
+    }
+
+    /// A small button showing an action's icon; the tip says what it does (and why not, greyed).
+    fn icon_button(&self, ui: &mut egui::Ui, a: Action, tip: &str) -> bool {
+        let enabled = self.action_enabled(a);
+        let sense = if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        };
+        let (rect, r) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), sense);
+        if enabled && r.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                th::RADIUS as f32,
+                egui::Color32::from_rgb(0x35, 0x35, 0x35),
+            );
+        }
+        let color = if enabled {
+            th::TEXT
+        } else {
+            egui::Color32::from_gray(0x66)
+        };
+        crate::icons::paint(ui.painter(), rect.shrink(3.0), a, color);
+        let r = r.on_hover_text(tip);
+        enabled && r.clicked()
+    }
+
+    /// The File menu (#51): what is done to files, then the project's settings; Exit on the
+    /// desktop. Every entry is an action, run like the ribbon's.
+    fn file_menu(&self, ui: &mut egui::Ui, run: &mut Option<Action>) {
+        ui.menu_button("File", |ui| {
+            let groups: &[&[Action]] = &[
+                &[Action::Open, Action::ImportIfc, Action::Save],
+                &[Action::LinkModel, Action::ReferencePlan],
+                &[Action::OnPaper],
+                &[Action::Project, Action::Settings],
+            ];
+            for (i, g) in groups.iter().enumerate() {
+                if i > 0 {
+                    ui.separator();
+                }
+                for a in *g {
+                    let b = egui::Button::new(a.label()).shortcut_text(a.keys());
+                    if ui.add_enabled(self.action_enabled(*a), b).clicked() {
+                        *run = Some(*a);
+                    }
+                }
+            }
+            if cfg!(not(target_arch = "wasm32")) {
+                if ui.button(Action::History.label()).clicked() {
+                    *run = Some(Action::History);
+                }
+                ui.separator();
+                if ui.button("Exit").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        });
     }
 
     /// The ribbon's tab strip.
@@ -660,6 +719,28 @@ impl Viewer {
         let ctx = ui.ctx().clone();
         let mut run = None;
         ui.horizontal(|ui| match self.ribbon_tab {
+            Tab::Project => {
+                self.group(
+                    ui,
+                    "Project",
+                    &[(Action::Project, "Project information")],
+                    &mut run,
+                );
+                self.group(ui, "Settings", &[(Action::Settings, "Settings")], &mut run);
+                self.group(
+                    ui,
+                    "Links",
+                    &[
+                        (Action::LinkModel, "Model…"),
+                        (Action::ReferencePlan, "Reference plan…"),
+                    ],
+                    &mut run,
+                );
+                ui.weak(format!(
+                    "{} linked model(s): display and differences under Links, left",
+                    self.links.len()
+                ));
+            }
             Tab::Model => {
                 let k = |k: edit::Kind| (Action::Place(k), k.label());
                 self.group(
@@ -742,21 +823,6 @@ impl Viewer {
                 );
                 self.group(ui, "Export", &[(Action::OnPaper, "On paper…")], &mut run);
             }
-            Tab::Links => {
-                self.group(
-                    ui,
-                    "Link",
-                    &[
-                        (Action::LinkModel, "Model…"),
-                        (Action::ReferencePlan, "Reference plan…"),
-                    ],
-                    &mut run,
-                );
-                ui.weak(format!(
-                    "{} linked model(s): display and differences under Links, left",
-                    self.links.len()
-                ));
-            }
             Tab::Manage => {
                 self.group(
                     ui,
@@ -764,15 +830,7 @@ impl Viewer {
                     &[(Action::Standards, "Graphic standards")],
                     &mut run,
                 );
-                self.group(
-                    ui,
-                    "Project",
-                    &[
-                        (Action::Project, "Project information"),
-                        (Action::Materials, "Materials"),
-                    ],
-                    &mut run,
-                );
+                self.group(ui, "Library", &[(Action::Materials, "Materials")], &mut run);
                 if cfg!(not(target_arch = "wasm32")) {
                     self.group(ui, "Versions", &[(Action::History, "History")], &mut run);
                 }
@@ -1006,8 +1064,8 @@ impl Viewer {
             .chain([Action::History].iter())
             .map(|a| {
                 let where_ = match a.keys() {
-                    "" => a.tab().label().to_string(),
-                    k => format!("{} · {k}", a.tab().label()),
+                    "" => a.home().to_string(),
+                    k => format!("{} · {k}", a.home()),
                 };
                 (
                     a.label(),
