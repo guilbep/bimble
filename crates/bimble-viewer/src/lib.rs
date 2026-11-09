@@ -300,17 +300,27 @@ pub fn run(
     .map_err(|e| e.to_string())
 }
 
-/// The smallest size (pixels) drawn in the next moving frame, after one that took `dt`
+/// The next "leave out what is smaller than this many pixels" while moving, after a frame of `dt`
 /// seconds, aiming at `fps`: up by half while slower than 15 % over the target, down by a third
 /// while 30 % under it, to 0 (everything) at the bottom. A gap over 0.25 s is a pause, not a
 /// slow frame.
-fn next_moving_px(px: f32, dt: f32, fps: u32) -> f32 {
-    let target = 1.0 / fps.max(1) as f32;
+///
+/// Frames are timed between presents, so the screen's refresh caps them: `floor` is the
+/// shortest frame seen while moving. Above 60 fps the target is no faster than that floor (a
+/// 120 fps target on a 60 Hz screen means 60), and a frame at the floor counts as fast: it is
+/// waiting for the screen, not drawing, and without this one slow frame would raise the
+/// threshold for good.
+fn next_moving_px(px: f32, dt: f32, fps: u32, floor: f32) -> f32 {
+    let want = 1.0 / fps.max(1) as f32;
+    let target = want.max(floor.min(1.0 / 60.0));
+    // Waiting for the screen: the floor looks like a refresh (50 Hz or faster) that the target
+    // asks more than.
+    let screen_bound = floor <= 0.02 && floor * 1.1 >= want && dt <= floor * 1.1;
     if dt >= 0.25 {
         px
     } else if dt > target * 1.15 {
         (px.max(0.5) * 1.5).min(48.0)
-    } else if dt < target * 0.7 {
+    } else if dt < target * 0.7 || screen_bound {
         let p = px / 1.5;
         if p < 0.5 { 0.0 } else { p }
     } else {
@@ -542,6 +552,8 @@ struct Viewer {
     drawn_camera: Option<Camera>,
     moving_frame_at: Option<Instant>,
     moving_px: f32,
+    /// The shortest frame seen while moving (s): the screen's refresh, at best.
+    frame_floor: f32,
     simplified: bool,
 
     /// Linked (reference) models, read-only (#39), one being loaded, and the one whose
@@ -672,6 +684,7 @@ impl Viewer {
             drawn_camera: None,
             moving_frame_at: None,
             moving_px: 0.0,
+            frame_floor: f32::INFINITY,
             simplified: false,
             links: Vec::new(),
             linking: None,
@@ -1787,7 +1800,10 @@ impl Viewer {
         }
         if let Some(prev) = self.moving_frame_at {
             let dt = now.duration_since(prev).as_secs_f32();
-            self.moving_px = next_moving_px(self.moving_px, dt, fps);
+            if dt > 0.002 {
+                self.frame_floor = self.frame_floor.min(dt);
+            }
+            self.moving_px = next_moving_px(self.moving_px, dt, fps, self.frame_floor);
         }
         self.moving_frame_at = Some(now);
         self.simplified = self.moving_px > 0.0;
@@ -3195,6 +3211,8 @@ impl Viewer {
                         (15, "15 fps"),
                         (30, "30 fps"),
                         (60, "60 fps"),
+                        (120, "120 fps"),
+                        (240, "240 fps"),
                     ] {
                         ui.selectable_value(&mut self.settings.moving_fps, fps, label);
                     }
@@ -3897,18 +3915,43 @@ mod tests {
     /// a pause changes nothing.
     #[test]
     fn the_moving_threshold_follows_the_frame_rate() {
+        let inf = f32::INFINITY;
         let mut px = 0.0;
         for _ in 0..4 {
-            px = next_moving_px(px, 0.060, 30);
+            px = next_moving_px(px, 0.060, 30, inf);
         }
         assert!(px > 2.0, "{px}");
-        assert_eq!(next_moving_px(px, 1.0, 30), px);
-        assert_eq!(next_moving_px(px, 0.033, 30), px);
+        assert_eq!(next_moving_px(px, 1.0, 30, inf), px);
+        assert_eq!(next_moving_px(px, 0.033, 30, inf), px);
         for _ in 0..20 {
-            px = next_moving_px(px, 0.010, 30);
+            px = next_moving_px(px, 0.010, 30, inf);
         }
         assert_eq!(px, 0.0);
-        assert!(next_moving_px(40.0, 0.2, 30) <= 48.0);
+        assert!(next_moving_px(40.0, 0.2, 30, inf) <= 48.0);
+    }
+
+    /// On a 60 Hz screen every frame takes 16.7 ms however fast the GPU: a 120 or 240 fps
+    /// target must not leave things out for it, and a threshold raised by one slow frame must
+    /// come back down. On a 120 Hz screen, 120 fps is held.
+    #[test]
+    fn the_screen_refresh_caps_the_target() {
+        let hz60 = 1.0 / 60.0;
+        for fps in [60, 120, 240] {
+            let mut px = 0.0;
+            for _ in 0..50 {
+                px = next_moving_px(px, hz60, fps, hz60);
+            }
+            assert_eq!(px, 0.0, "{fps} fps");
+            px = next_moving_px(px, 0.040, fps, hz60);
+            assert!(px > 0.0);
+            for _ in 0..20 {
+                px = next_moving_px(px, hz60, fps, hz60);
+            }
+            assert_eq!(px, 0.0, "{fps} fps comes back");
+        }
+        let hz120 = 1.0 / 120.0;
+        let px = next_moving_px(0.0, hz60, 120, hz120);
+        assert!(px > 0.0, "120 Hz screen, 60 fps frames: thin");
     }
 
     /// With several links, the depth range covers every one where it is placed (#39).
