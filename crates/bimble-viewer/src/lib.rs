@@ -668,7 +668,7 @@ struct Viewer {
     moving_lean: bool,
     /// Answers of GPU occlusion queries may still change the last picture.
     occlusion_waiting: bool,
-    /// The backend reads occlusion queries in time (not WebGL2/GL: ADR 0036 #1).
+    /// The backend handles occlusion queries (native ones only: ADR 0036 #1).
     gpu_queries: bool,
     /// A movement has been slower than the target since the viewer started: the GPU is
     /// short, so occlusion culling (CPU time for GPU time) is worth it (ADR 0036 #5).
@@ -813,7 +813,15 @@ impl Viewer {
             moving_lean: false,
             slow_gpu: false,
             occlusion_waiting: false,
-            gpu_queries: rs.adapter.get_info().backend != eframe::wgpu::Backend::Gl,
+            // Native backends only: wgpu 30's GL backend reads results too early, and its
+            // browser-WebGPU backend drops the pass's occlusion query set (the pass is then
+            // invalid and the view black).
+            gpu_queries: matches!(
+                rs.adapter.get_info().backend,
+                eframe::wgpu::Backend::Metal
+                    | eframe::wgpu::Backend::Vulkan
+                    | eframe::wgpu::Backend::Dx12
+            ),
             links: Vec::new(),
             linking: None,
             compare_with: None,

@@ -405,6 +405,13 @@ asking (a query counts what passes the depth test when drawn, so occluders must 
 test now uses a wall in two halves and boxes behind it, one element in two pieces whose box spans
 the gap: with the old rule it fails ("a still view keeps redrawing").
 
+Found by the bim-open-bench run (9 Nov, late): in the browser on WebGPU the 3D view was black. wgpu
+30's browser-WebGPU backend never passes the render pass's occlusion query set to the browser
+(`webgpu.rs` `begin_render_pass` copies timestamps, not `occlusion_query_set`), so the first
+`beginOcclusionQuery` makes Chrome reject the whole command buffer ("The occlusionQuerySet in
+RenderPassDescriptor is not set"). The viewer now uses the queries on Metal, Vulkan and DX12 only.
+A wgpu bug to report upstream.
+
 So the viewer uses the queries on native backends that keep the frame-rate target (free there),
 and #5 on machines that miss it (better on the weak GPU, and works on WebGL2). Test
 `gpu_occlusion_settles_on_the_exact_picture`: from above and then from below, once settled, the
