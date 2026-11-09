@@ -536,13 +536,7 @@ mod tests {
         let h = build(&scene, &opt);
         let deepest = h.cells.iter().map(|c| c.depth).max().unwrap();
         assert!(deepest >= 3, "{deepest} levels");
-        let original: Vec<[P; 3]> = scene
-            .elements
-            .iter()
-            .flat_map(|e| triangles(&e.world_mesh()))
-            .collect();
-
-        // Elements under each cell (leaves hold them).
+        // Elements under each cell (leaves hold them; children come after their parent).
         let mut under: Vec<Vec<u32>> = h.cells.iter().map(|c| c.elements.clone()).collect();
         for i in (0..h.cells.len()).rev() {
             for &c in &h.cells[i].children {
@@ -555,6 +549,11 @@ mod tests {
             let proxy: Vec<[P; 3]> = c.proxy.iter().flat_map(|(_, m)| triangles(m)).collect();
             assert!(!proxy.is_empty(), "cell {i} has no proxy");
             let err = f64::from(c.error_mm) + 1e-3;
+            // Against this cell's own elements: a proxy built from another cell's fails.
+            let original: Vec<[P; 3]> = under[i]
+                .iter()
+                .flat_map(|&el| triangles(&scene.elements[el as usize].world_mesh()))
+                .collect();
             let worst = samples(&proxy)
                 .into_iter()
                 .map(|p| nearest(p, &original))
