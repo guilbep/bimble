@@ -5,6 +5,11 @@
 //!
 //! Coordinates are scene coordinates (mm, relative to the scene origin): distances don't depend
 //! on the origin.
+//!
+//! Keys, as in Revit and AutoCAD: Shift keeps the second point on the X, Y or Z axis through the
+//! first (Revit's Shift constraint, AutoCAD's Ortho); Alt (Option) measures to the surface under
+//! the cursor without snapping; Ctrl (Cmd) + click goes on from that point (a chain); Esc drops
+//! the first point, a second Esc leaves the tool; a right click or Enter ends the chain.
 
 use bimble_geom::Mesh;
 use bimble_render::Hit;
@@ -109,6 +114,35 @@ pub fn snap(
     }
 }
 
+/// The face point under the cursor, no corner or edge snapping (Alt).
+pub fn unsnapped(hit: &Hit) -> Snap {
+    Snap {
+        point: hit.point,
+        kind: SnapKind::Face,
+        normal: Some(hit.normal),
+        element: hit.element,
+    }
+}
+
+/// Shift: the second point brought onto the X, Y or Z axis through `from`, the one its offset is
+/// longest along. It no longer lies on a face, so it has no normal.
+pub fn orthogonal(from: Vec3, to: Snap) -> Snap {
+    let d = to.point - from;
+    let a = d.abs();
+    let axis = if a.x >= a.y && a.x >= a.z {
+        Vec3::X
+    } else if a.y >= a.z {
+        Vec3::Y
+    } else {
+        Vec3::Z
+    };
+    Snap {
+        point: from + axis * d.dot(axis),
+        normal: None,
+        ..to
+    }
+}
+
 /// A dimension between two snapped points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Dimension {
@@ -158,6 +192,36 @@ pub fn format_mm(x: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shift keeps the second point on the axis it is nearest to, whatever the sign.
+    #[test]
+    fn shift_keeps_the_second_point_on_an_axis() {
+        let snap = |p: Vec3| Snap {
+            point: p,
+            kind: SnapKind::Vertex,
+            normal: Some(Vec3::Z),
+            element: 0,
+        };
+        let from = Vec3::new(100.0, 200.0, 300.0);
+        for (to, want) in [
+            (
+                Vec3::new(1100.0, 250.0, 280.0),
+                Vec3::new(1100.0, 200.0, 300.0),
+            ),
+            (
+                Vec3::new(90.0, -800.0, 310.0),
+                Vec3::new(100.0, -800.0, 300.0),
+            ),
+            (
+                Vec3::new(140.0, 230.0, 2300.0),
+                Vec3::new(100.0, 200.0, 2300.0),
+            ),
+        ] {
+            let s = orthogonal(from, snap(to));
+            assert!((s.point - want).length() < 1e-3, "{to} -> {}", s.point);
+            assert_eq!(s.normal, None);
+        }
+    }
     use eframe::egui::Vec2;
 
     fn face(p: Vec3, n: Vec3) -> Snap {

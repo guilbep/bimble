@@ -2137,17 +2137,39 @@ impl Viewer {
         if self.measure_on {
             self.set_hovered(None);
             // Snap under the cursor, for the marker and the next click.
+            // Keys as in Revit and AutoCAD (see `measure`): Shift along an axis, Alt no snap,
+            // Ctrl/Cmd + click goes on from there, right click or Enter ends.
+            let (shift, alt, chain, enter) = ui.input(|i| {
+                (
+                    i.modifiers.shift,
+                    i.modifiers.alt,
+                    i.modifiers.command,
+                    i.key_pressed(egui::Key::Enter),
+                )
+            });
             self.hover_snap = resp
                 .hover_pos()
                 .or(resp.interact_pointer_pos())
-                .and_then(|p| self.snap_at(p, rect, aspect));
+                .and_then(|p| self.snap_at(p, rect, aspect, alt))
+                .map(|s| match self.measure_first {
+                    Some(a) if shift => measure::orthogonal(a.point, s),
+                    _ => s,
+                });
             if resp.clicked()
                 && let Some(s) = self.hover_snap
             {
                 match self.measure_first.take() {
                     None => self.measure_first = Some(s),
-                    Some(a) => self.dimensions.push(measure::Dimension { a, b: s }),
+                    Some(a) => {
+                        self.dimensions.push(measure::Dimension { a, b: s });
+                        if chain {
+                            self.measure_first = Some(s);
+                        }
+                    }
                 }
+            }
+            if resp.secondary_clicked() || enter {
+                self.measure_first = None;
             }
             return;
         }
@@ -2327,7 +2349,13 @@ impl Viewer {
                 .as_mut()
                 .and_then(|l| l.edit.as_mut())
                 .is_some_and(|ed| ed.placing.take().is_some());
-        let handled = stopped_placing || (esc && self.measure_first.take().is_some());
+        let mut handled = stopped_placing || (esc && self.measure_first.take().is_some());
+        // A second Esc leaves the measure tool (Revit).
+        if !handled && esc && self.measure_on {
+            self.measure_on = false;
+            self.hover_snap = None;
+            handled = true;
+        }
         if !handled && esc && self.selected.take().is_some() {
             self.needs_upload = true;
         }
@@ -2396,7 +2424,14 @@ impl Viewer {
     }
 
     /// What a click at a screen point would measure from (corner, edge or face).
-    fn snap_at(&self, pos: egui::Pos2, rect: egui::Rect, aspect: f32) -> Option<measure::Snap> {
+    /// `free` (Alt): the surface point, no corner or edge snapping.
+    fn snap_at(
+        &self,
+        pos: egui::Pos2,
+        rect: egui::Rect,
+        aspect: f32,
+        free: bool,
+    ) -> Option<measure::Snap> {
         let l = self.loaded.as_ref()?;
         let ndc = [
             (pos.x - rect.min.x) / rect.width() * 2.0 - 1.0,
@@ -2411,7 +2446,11 @@ impl Viewer {
                     let mesh = &*l.scene.elements[hit.element].world_mesh();
                     (
                         hit.distance,
-                        measure::snap(mesh, &hit, (o, d), &vp, rect, pos),
+                        if free {
+                            measure::unsnapped(&hit)
+                        } else {
+                            measure::snap(mesh, &hit, (o, d), &vp, rect, pos)
+                        },
                     )
                 });
         // Linked models (#39): measured and snapped to like ours, in their place.
@@ -2433,7 +2472,11 @@ impl Viewer {
             )?;
             let vpl = vp * glam::Mat4::from_translation(k.offset);
             let mesh = &*k.scene.elements[hit.element].world_mesh();
-            let mut s = measure::snap(mesh, &hit, (o - k.offset, d), &vpl, rect, pos);
+            let mut s = if free {
+                measure::unsnapped(&hit)
+            } else {
+                measure::snap(mesh, &hit, (o - k.offset, d), &vpl, rect, pos)
+            };
             s.point += k.offset;
             s.element = usize::MAX;
             Some((hit.distance, s))

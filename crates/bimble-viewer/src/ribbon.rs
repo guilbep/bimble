@@ -1070,7 +1070,9 @@ impl Viewer {
             };
         }
         if self.measure_on {
-            return "Measure: click two points (corners, edges, faces) · Esc drops the first"
+            return "Measure: click two points (corners, edges, faces) · Shift: along an axis · \
+                    Alt: no snap · Ctrl+click: go on from there · Right click or Enter: end · \
+                    Esc: drop the first, again to leave"
                 .into();
         }
         if self.in_2d() {
