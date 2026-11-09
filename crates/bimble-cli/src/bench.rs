@@ -17,6 +17,7 @@ pub struct BenchArgs {
     pub height: u32,
     pub samples: u32,
     pub quick: bool,
+    pub occlusion: bool,
     pub json: bool,
 }
 
@@ -112,7 +113,10 @@ fn run_case(
     let frame = |cam: &Camera, min_radius: f32| {
         let opts = DrawOptions {
             min_radius,
-            ..DrawOptions::default()
+            ..DrawOptions {
+                occlusion: args.occlusion,
+                ..DrawOptions::default()
+            }
         };
         let t = Instant::now();
         r.render(&gpu.device, &gpu.queue, target, &gs, cam, &opts);
@@ -146,7 +150,10 @@ fn run_case(
                 target,
                 &gs,
                 cam,
-                &DrawOptions::default(),
+                &DrawOptions {
+                    occlusion: args.occlusion,
+                    ..DrawOptions::default()
+                },
             );
         }
         sum / 8.0
@@ -159,7 +166,14 @@ fn run_case(
     let close = (0..n)
         .map(|_| {
             cam.orbit(step, 0.0);
-            drawn += gs.visible_triangles(&cam, aspect, &DrawOptions::default());
+            drawn += gs.visible_triangles(
+                &cam,
+                aspect,
+                &DrawOptions {
+                    occlusion: args.occlusion,
+                    ..DrawOptions::default()
+                },
+            );
             frame(&cam, 0.0)
         })
         .collect();
@@ -171,7 +185,10 @@ fn run_case(
         if j == k { Style::Normal } else { Style::Hidden }
     });
     let overlay = Overlay::new(&gpu.device, target.size, args.samples);
-    let opts = DrawOptions::default();
+    let opts = DrawOptions {
+        occlusion: args.occlusion,
+        ..DrawOptions::default()
+    };
     let hover = (0..n)
         .map(|_| {
             let t = Instant::now();

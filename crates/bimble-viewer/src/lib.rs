@@ -566,6 +566,9 @@ struct Viewer {
     simplified: bool,
     /// This movement has been slower than the target: its frames drop MSAA until it stops.
     moving_lean: bool,
+    /// A movement has been slower than the target since the viewer started: the GPU is
+    /// short, so occlusion culling (CPU time for GPU time) is worth it (ADR 0036 #5).
+    slow_gpu: bool,
 
     /// Linked (reference) models, read-only (#39), one being loaded, and the one whose
     /// differences with ours are coloured, if any.
@@ -702,6 +705,7 @@ impl Viewer {
             frame_floor: f32::INFINITY,
             simplified: false,
             moving_lean: false,
+            slow_gpu: false,
             links: Vec::new(),
             linking: None,
             compare_with: None,
@@ -1777,6 +1781,7 @@ impl Viewer {
             hatch_scale: ppp,
             clip: self.clip(),
             min_radius,
+            occlusion: self.slow_gpu,
             ..self.opts.clone()
         }
     }
@@ -1910,6 +1915,7 @@ impl Viewer {
         // The first lever is MSAA: once the target is missed, it stays off until the view stops
         // (switching back and forth would make the controller swing).
         self.moving_lean |= self.moving_px > 0.0;
+        self.slow_gpu |= self.moving_lean;
         self.simplified = self.moving_px > 0.0 || self.moving_lean;
         self.moving_px * self.camera.mm_per_pixel(height_px)
     }

@@ -269,6 +269,9 @@ enum Cmd {
         /// Only the smallest generated model
         #[arg(long)]
         quick: bool,
+        /// With occlusion culling (the viewer turns it on when the GPU is slow)
+        #[arg(long)]
+        occlusion: bool,
         /// Machine-readable output
         #[arg(long)]
         json: bool,
@@ -997,12 +1000,14 @@ fn run(cli: Cli) -> Result<(), String> {
             height,
             samples,
             quick,
+            occlusion,
             json,
         } => {
             if !matches!(samples, 1 | 4) {
                 return Err("--samples must be 1 or 4".into());
             }
             bench::run(bench::BenchArgs {
+                occlusion,
                 files,
                 frames,
                 width,

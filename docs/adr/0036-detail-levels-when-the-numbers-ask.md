@@ -189,6 +189,42 @@ against its depth with an occlusion query: those with no sample left are hidden.
 These are ceilings (perfect culling, no cost). Test `hidden_share_counts_what_is_behind` (an
 element alone: 0 %).
 
+## #5 done: occlusion culling on the CPU, on slow GPUs only (9 Nov)
+
+`bimble-render/src/occlusion.rs`. At upload, the largest elements of at most 512 triangles (walls,
+slabs, columns; own or copies) become occluders, up to 60 000 triangles. Each frame they are drawn
+on the CPU into a 160-pixel-wide depth buffer, and each merged element (its box) and each shape
+copy (its placed box) is tested against it; visible merged elements are drawn in runs.
+Conservative, so the picture doesn't change:
+- an occluder element covers only pixels whose four neighbours it also covers (a gap between two
+  occluders narrower than a pixel stays open, the seams between its own triangles don't), at the
+  farthest depth its plane reaches within each pixel;
+- a tested box is widened by a pixel, and one reaching the eye plane is always drawn;
+- off with a section box (it cuts occluders away).
+
+Test `culling_changes_nothing_on_screen` (now with occlusion): the 12 cameras give the same
+pictures with culling on and off, and occlusion leaves something out. It fails with 1 407
+pixels if occluders are drawn nearer than they are. Pixels may move by a few levels on a
+triangle's border: screen-derivative shading (step 2) depends on how draws are split; the test
+counts a pixel only if it changes by more than 40 levels (an element or an edge missing changes it
+far more). Fixed by the test along the way: sampling occluders at pixel centres hid elements seen
+through sub-pixel gaps; the per-triangle "inner" rule left holes along each wall's diagonal.
+
+Measured, close-up "drawn" share and frame times (`bimble bench --occlusion`, 1080p):
+
+| | 335 MB architecture | 872 MB plumbing |
+|---|---|---|
+| drawn close up | 57 % → 38 % | 42 % → 42 % |
+| M4 Pro full / moving | 4.2 → 7.3 ms / 2.9 → 5.1 ms | 5.7 → 8.3 ms / 1.3 → 2.4 ms |
+| llvmpipe, 2 cores, MSAA 1: full / moving / close | 1002 → 745 / 692 → 512 / 796 → 484 ms | 1380 → 1417 / 313 → 310 / 707 → 568 ms |
+
+It costs 1–3 ms of CPU a frame (the occluder raster, after drawing spans per row instead of
+testing every pixel: 3.5–10 ms → 0.8 ms), which a fast GPU doesn't win back. So
+`DrawOptions::occlusion` is off by default, and the viewer turns it on once a movement has missed
+the frame-rate target (as #4): only machines short of GPU use it. The ceiling above (92–97 %
+hidden on the architecture model) is far from reached: the boxes of long elements cover much
+more screen than the elements, and MEP models have few large simple occluders.
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
