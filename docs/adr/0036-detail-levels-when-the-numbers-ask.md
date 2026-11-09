@@ -156,10 +156,21 @@ a sixteenth of the scene (3× the draws, slower) and not instancing shapes under
   triangles are small, so they fall in the last band, and every pass reloads the MSAA colour and
   depth and goes over every draw again. To try again only if a weak GPU shows a still frame long
   enough to block input, with slices of equal cost rather than size bands.
-- **#4 (no MSAA, lower resolution while moving): not built.** On the M4 Pro neither MSAA 1 nor
-  half resolution made frames faster (the GPU is not short of pixel throughput here). The weak
-  GPU measurement decides: `bimble bench --samples 1`, and `--width 960 --height 540`, against
-  the defaults.
+- **#4 done: no MSAA while moving, when the machine is too slow.** On the M4 Pro neither MSAA 1
+  nor half resolution made frames faster. On a simulated weak GPU (Mesa's llvmpipe, a CPU
+  Vulkan driver, in a Linux container capped to 2 cores; not a real old GPU, which pays less for
+  MSAA) at 1080p:
+
+  | model | MSAA 4 full / moving | MSAA 1 full / moving | MSAA 1, half resolution |
+  |---|---|---|---|
+  | 200 MB | 2.43 s / 283 ms | 1.94 s / 105 ms | 1.76 s / 78 ms |
+  | 335 MB | 2.80 s / 1.79 s | 1.41 s / 975 ms | 1.31 s / 816 ms |
+
+  So the viewer drops MSAA for the rest of a movement as soon as a moving frame misses the
+  frame-rate target (ADR 0035), drawing with a single-sample renderer into its own target, and
+  draws the still picture with MSAA once the view stops. A machine that keeps the target never
+  drops it. Half resolution was not built: 15–25 % more, for a blurred picture. Highlights are
+  hidden while such a picture is shown (they are depth-tested against the MSAA picture).
 
 ## Further optimizations to do (research, 9 Nov; one issue each)
 

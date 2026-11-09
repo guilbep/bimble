@@ -509,6 +509,11 @@ struct Viewer {
     /// Highlights (the element under the cursor, a selected linked element), drawn over the
     /// kept picture: changing them doesn't draw the model again (ADR 0036 #3).
     overlay: Option<(Overlay, egui::TextureId)>,
+    /// Pictures drawn while moving on a machine that can't keep the frame-rate target:
+    /// without MSAA (ADR 0036 #4), by a single-sample renderer into their own target. Made
+    /// when first needed; `lean_shown` while the picture on screen is one.
+    lean: Option<(Renderer, Target, egui::TextureId)>,
+    lean_shown: bool,
     needs_upload: bool,
     needs_render: bool,
     needs_overlay: bool,
@@ -559,6 +564,8 @@ struct Viewer {
     /// The shortest frame seen while moving (s): the screen's refresh, at best.
     frame_floor: f32,
     simplified: bool,
+    /// This movement has been slower than the target: its frames drop MSAA until it stops.
+    moving_lean: bool,
 
     /// Linked (reference) models, read-only (#39), one being loaded, and the one whose
     /// differences with ours are coloured, if any.
@@ -661,6 +668,8 @@ impl Viewer {
             target: None,
             texture: None,
             overlay: None,
+            lean: None,
+            lean_shown: false,
             needs_upload: false,
             needs_render: true,
             needs_overlay: false,
@@ -692,6 +701,7 @@ impl Viewer {
             moving_px: 0.0,
             frame_floor: f32::INFINITY,
             simplified: false,
+            moving_lean: false,
             links: Vec::new(),
             linking: None,
             compare_with: None,
@@ -1807,7 +1817,38 @@ impl Viewer {
     fn render_model(&mut self, size_px: (u32, u32), ppp: f32) {
         let t = Instant::now();
         let min_radius = self.moving_detail(t, size_px.1);
-        let (Some(target), Some(gs)) = (&self.target, &self.gpu_scene) else {
+        self.lean_shown = self.moving_lean;
+        if self.lean_shown && self.lean.as_ref().is_none_or(|l| l.1.size != size_px) {
+            let target = Target::new(&self.device, size_px, 1);
+            let mut r = self.egui_renderer.write();
+            self.lean = Some(match self.lean.take() {
+                Some((renderer, _, id)) => {
+                    r.update_egui_texture_from_wgpu_texture(
+                        &self.device,
+                        &target.color_view,
+                        eframe::wgpu::FilterMode::Linear,
+                        id,
+                    );
+                    (renderer, target, id)
+                }
+                None => {
+                    let id = r.register_native_texture(
+                        &self.device,
+                        &target.color_view,
+                        eframe::wgpu::FilterMode::Linear,
+                    );
+                    (Renderer::new(&self.device, 1), target, id)
+                }
+            });
+        }
+        let (renderer, target) = match (&self.lean, self.lean_shown) {
+            (Some((r, t, _)), true) => (r, t),
+            _ => match &self.target {
+                Some(t) => (&self.renderer, t),
+                None => return,
+            },
+        };
+        let Some(gs) = &self.gpu_scene else {
             return;
         };
         let opts = self.draw_options(ppp, min_radius);
@@ -1826,7 +1867,7 @@ impl Viewer {
             });
         }
         let bounds = self.loaded.as_ref().map_or(gs.bounds, |l| l.bounds);
-        self.renderer.render_layers(
+        renderer.render_layers(
             &self.device,
             &self.queue,
             target,
@@ -1855,6 +1896,7 @@ impl Viewer {
         if !moving || fps == 0 {
             self.moving_frame_at = None;
             self.simplified = false;
+            self.moving_lean = false;
             return 0.0;
         }
         if let Some(prev) = self.moving_frame_at {
@@ -1865,7 +1907,10 @@ impl Viewer {
             self.moving_px = next_moving_px(self.moving_px, dt, fps, self.frame_floor);
         }
         self.moving_frame_at = Some(now);
-        self.simplified = self.moving_px > 0.0;
+        // The first lever is MSAA: once the target is missed, it stays off until the view stops
+        // (switching back and forth would make the controller swing).
+        self.moving_lean |= self.moving_px > 0.0;
+        self.simplified = self.moving_px > 0.0 || self.moving_lean;
         self.moving_px * self.camera.mm_per_pixel(height_px)
     }
 
@@ -3900,12 +3945,17 @@ impl eframe::App for Viewer {
             let ppp = ctx.pixels_per_point();
             let size_px = ((rect.width() * ppp).round().max(1.0) as u32, (rect.height() * ppp).round().max(1.0) as u32);
             self.render_view(size_px, ppp);
-            if let Some(tex) = self.texture {
+            let shown = match (&self.lean, self.lean_shown) {
+                (Some((_, _, id)), true) => Some(*id),
+                _ => self.texture,
+            };
+            if let Some(tex) = shown {
                 let img = egui::Image::from_texture((tex, rect.size()))
                     .fit_to_exact_size(rect.size())
                     .sense(Sense::click_and_drag());
                 let resp = ui.add(img);
-                if let Some((_, id)) = &self.overlay {
+                // Highlights go with the picture whose depth they were tested against.
+                if let (Some((_, id)), false) = (&self.overlay, self.lean_shown) {
                     ui.painter().image(
                         *id,
                         rect,

@@ -29,7 +29,9 @@ while moving and draw everything when the view stops.
    frame seen while moving is taken as the refresh, a target above 60 fps is no faster than it
    (120 on a 60 Hz screen means 60), and a frame at it counts as fast, so one slow frame doesn't
    raise the threshold for good (test `the_screen_refresh_caps_the_target`).
-4. **Stills are whole.** 150 ms after the camera stops, the view is drawn again with everything.
+4. **MSAA first (9 Nov, ADR 0036 #4):** once a moving frame misses the target, the rest of the
+   movement is drawn without MSAA; the size threshold still follows the frame rate.
+5. **Stills are whole.** 150 ms after the camera stops, the view is drawn again with everything.
    Animated turns (view cube) count as moving.
 
 ## Alternatives considered
