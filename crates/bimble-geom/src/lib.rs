@@ -11,6 +11,7 @@ pub mod compare;
 pub mod dedup;
 pub mod hlod;
 pub mod scene;
+pub mod viewfile;
 
 pub use scene::{
     ElementInfo, GridAxis, MeshBuilder, Scene, SceneBuilder, SceneElement, StoreyLevel,

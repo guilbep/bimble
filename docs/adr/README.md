@@ -44,6 +44,7 @@ a decision that changes an old one says which one it supersedes.
 | [0036](0036-detail-levels-when-the-numbers-ask.md) | Detail levels (Nanite-like clusters): not yet; cheaper steps first, ten further optimizations to do, what would make them worth it | Proposed |
 | [0037](0037-one-top-row-file-menu-project-tab.md) | One top row: File menu, tabs, quick access as icons; a Project tab first (#51) | Accepted |
 | [0038](0038-collaborate-like-git.md) | Collaborate like git: a shared-folder remote, Synchronize = fetch, merge, push; elements borrowed until sync; conflicts kept mine/theirs per element; viewer/modeller/owner | Accepted (server remote, chat proposed) |
+| [0040](0040-prepared-viewing-format.md) | A prepared viewing format, `.bimbleview`: the scene (codec meshes, shapes once) in gzipped chunks; File → Share for viewing, `bimble pack`; property sets and proxies left out (measured) | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

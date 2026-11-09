@@ -292,6 +292,15 @@ enum Cmd {
     /// Geometry codec sizes and speeds on files (ADR 0036 #8; maintenance)
     #[command(hide = true)]
     CodecBench { files: Vec<PathBuf> },
+    /// A file to share for viewing (.bimbleview) from a .ifc or .bimble: opens without parsing
+    /// the IFC, read-only, also in a browser (ADR 0040)
+    Pack {
+        input: PathBuf,
+        out: PathBuf,
+        /// Leave it uncompressed (gzip is about half the size)
+        #[arg(long)]
+        no_gzip: bool,
+    },
     /// Measure rendering speed on this machine (generated models of 1k–50k elements, plus files)
     Bench {
         /// Extra .ifc / .bimble files to benchmark
@@ -1043,6 +1052,25 @@ fn run(cli: Cli) -> Result<(), String> {
             );
         }
         Cmd::CodecBench { files } => codec_bench::run(files)?,
+        Cmd::Pack {
+            input,
+            out,
+            no_gzip,
+        } => {
+            let t = Instant::now();
+            let scene = load_scene(&input)?;
+            let t_load = t.elapsed();
+            let t = Instant::now();
+            let bytes = bimble_geom::viewfile::write(&scene, !no_gzip);
+            let t_write = t.elapsed();
+            file::write_atomic(&out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+            println!(
+                "{} elements, {:.2} MB; load {t_load:.1?}, pack {t_write:.1?} → {}",
+                scene.elements.len(),
+                bytes.len() as f64 / 1e6,
+                out.display()
+            );
+        }
         Cmd::Bench {
             files,
             frames,

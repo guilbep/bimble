@@ -39,7 +39,7 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-fn put(out: &mut Vec<u8>, mut v: u64) {
+pub(crate) fn put(out: &mut Vec<u8>, mut v: u64) {
     while v >= 0x80 {
         out.push(v as u8 | 0x80);
         v >>= 7;
@@ -167,10 +167,10 @@ pub fn encode(m: &Mesh) -> Vec<u8> {
     out
 }
 
-struct Reader<'a>(&'a [u8]);
+pub(crate) struct Reader<'a>(pub(crate) &'a [u8]);
 
 impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], Error> {
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], Error> {
         if n > self.0.len() {
             return Err(Error::Truncated);
         }
@@ -178,14 +178,14 @@ impl<'a> Reader<'a> {
         self.0 = b;
         Ok(a)
     }
-    fn byte(&mut self) -> Result<u8, Error> {
+    pub(crate) fn byte(&mut self) -> Result<u8, Error> {
         Ok(self.take(1)?[0])
     }
-    fn f32(&mut self) -> Result<f32, Error> {
+    pub(crate) fn f32(&mut self) -> Result<f32, Error> {
         let b = self.take(4)?;
         Ok(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
-    fn varint(&mut self) -> Result<u64, Error> {
+    pub(crate) fn varint(&mut self) -> Result<u64, Error> {
         let mut v = 0u64;
         for shift in (0..64).step_by(7) {
             let b = self.byte()?;
