@@ -18,6 +18,8 @@ pub struct BenchArgs {
     pub samples: u32,
     pub quick: bool,
     pub occlusion: bool,
+    /// Draw far cells' proxies when their error spans at most this many pixels (0: off).
+    pub proxies: f32,
     pub json: bool,
 }
 
@@ -101,7 +103,18 @@ fn run_case(
     args: &BenchArgs,
 ) -> Case {
     let t = Instant::now();
-    let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
+    let mut gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
+    if args.proxies > 0.0 {
+        let h = std::time::Instant::now();
+        let hlod = bimble_geom::hlod::build(&scene, &bimble_geom::hlod::Options::default());
+        let p = r.upload_proxies(&gpu.device, &gpu.queue, &scene, &hlod);
+        eprintln!(
+            "  proxies: built and uploaded in {:.0} ms, {:.0} MB on the GPU",
+            h.elapsed().as_secs_f64() * 1000.0,
+            p.gpu_bytes() as f64 / 1_048_576.0
+        );
+        gs.use_proxies(std::sync::Arc::new(p), &scene, |_, _| Style::Normal);
+    }
     // Make sure the upload itself is finished before timing frames.
     let _ = gpu
         .device
@@ -115,6 +128,7 @@ fn run_case(
             min_radius,
             ..DrawOptions {
                 occlusion: args.occlusion,
+                proxy_px: args.proxies,
                 ..DrawOptions::default()
             }
         };
@@ -152,6 +166,7 @@ fn run_case(
                 cam,
                 &DrawOptions {
                     occlusion: args.occlusion,
+                    proxy_px: args.proxies,
                     ..DrawOptions::default()
                 },
             );
@@ -161,16 +176,16 @@ fn run_case(
     let hidden = hidden_over(&mut cam);
     let fit = cam.distance;
     cam.distance = fit / CLOSE;
-    let aspect = args.width as f32 / args.height as f32;
     let mut drawn = 0u64;
     let close = (0..n)
         .map(|_| {
             cam.orbit(step, 0.0);
             drawn += gs.visible_triangles(
                 &cam,
-                aspect,
+                target.size,
                 &DrawOptions {
                     occlusion: args.occlusion,
+                    proxy_px: args.proxies,
                     ..DrawOptions::default()
                 },
             );
@@ -187,6 +202,7 @@ fn run_case(
     let overlay = Overlay::new(&gpu.device, target.size, args.samples);
     let opts = DrawOptions {
         occlusion: args.occlusion,
+        proxy_px: args.proxies,
         ..DrawOptions::default()
     };
     let hover = (0..n)

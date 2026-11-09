@@ -40,6 +40,11 @@ mod viewing;
 mod views;
 
 const SAMPLES: u32 = 4;
+/// While moving on a slow machine, a far cell's stand-in is drawn when its error spans at most
+/// this many pixels (ADR 0036 #9: the 415 MB model's whole frame 29 → 1.3 ms at 3 px).
+const MOVING_PROXY_PX: f32 = 3.0;
+/// Models smaller than this (drawn triangles) never build stand-ins.
+const PROXY_MIN_TRIANGLES: usize = 1_000_000;
 /// Duration of a view-cube camera turn.
 const TURN_SECONDS: f32 = 0.3;
 
@@ -460,6 +465,9 @@ struct Loaded {
     categories: BTreeMap<MaterialCategory, usize>,
     /// The model of a .bimble file, editable.
     edit: Option<edit::Editor>,
+    /// Simplified stand-ins for far cells (ADR 0036 #9), built the first time this machine
+    /// misses the frame-rate target while moving; dropped when the scene changes.
+    proxies: Option<std::sync::Arc<bimble_render::GpuProxies>>,
 }
 
 type Counts = (
@@ -1121,6 +1129,7 @@ impl Viewer {
                     } else {
                         edit::Editor::new
                     }),
+                    proxies: None,
                 });
                 self.history_view = None;
                 self.hidden_classes.clear();
@@ -1205,6 +1214,7 @@ impl Viewer {
                 .map(|e| e.global_id.clone())
         });
         l.scene = Scene::from_model(&ed.model);
+        l.proxies = None;
         l.bvh = bimble_geom::bvh::Bvh::build(&bimble_geom::bvh::element_boxes(&l.scene));
         (l.classes, l.storeys, l.categories) = counts(&l.scene);
         l.bounds = bounds_with_links(&l.scene, &self.links);
@@ -1652,13 +1662,13 @@ impl Viewer {
         };
         let Some(l) = &self.loaded else { return };
         // Edge normals only while the section box is on (they cost GPU memory).
-        self.gpu_scene = Some(self.renderer.upload_with(
-            &self.device,
-            &self.queue,
-            &l.scene,
-            style,
-            self.clipping(),
-        ));
+        let mut gs =
+            self.renderer
+                .upload_with(&self.device, &self.queue, &l.scene, style, self.clipping());
+        if let Some(p) = &l.proxies {
+            gs.use_proxies(p.clone(), &l.scene, style);
+        }
+        self.gpu_scene = Some(gs);
         self.needs_upload = false;
         self.needs_render = true;
     }
@@ -1762,6 +1772,21 @@ impl Viewer {
             self.target = Some(target);
             self.needs_render = true;
         }
+        // Proxies when this machine is short of GPU, once per model; big models only.
+        if self.slow_gpu
+            && let Some(l) = &mut self.loaded
+            && l.proxies.is_none()
+            && l.scene.triangle_count() > PROXY_MIN_TRIANGLES
+        {
+            let hlod = bimble_geom::hlod::build(&l.scene, &bimble_geom::hlod::Options::default());
+            l.proxies = Some(std::sync::Arc::new(self.renderer.upload_proxies(
+                &self.device,
+                &self.queue,
+                &l.scene,
+                &hlod,
+            )));
+            self.needs_upload = true;
+        }
         if self.needs_upload {
             self.upload();
         }
@@ -1782,6 +1807,12 @@ impl Viewer {
             clip: self.clip(),
             min_radius,
             occlusion: self.slow_gpu,
+            // Far cells' stand-ins while moving on a machine that misses the target.
+            proxy_px: if self.moving_lean {
+                MOVING_PROXY_PX
+            } else {
+                0.0
+            },
             ..self.opts.clone()
         }
     }

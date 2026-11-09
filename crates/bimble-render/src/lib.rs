@@ -23,6 +23,8 @@ pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// The graphic style is data in `bimble_core::style`; re-exported here for convenience.
 pub use bimble_core::style::{self, Fill, GraphicStyle, Lines, Rgb, Stipple};
 mod occlusion;
+mod proxies;
+pub use proxies::GpuProxies;
 mod style_gpu;
 
 #[repr(C)]
@@ -291,6 +293,17 @@ impl Camera {
         self.target += (-dx * right + dy * up) * h;
     }
 
+    /// Millimetres one pixel covers at a distance from the eye (at any distance when
+    /// orthographic), for a view `height_px` high.
+    pub fn mm_per_pixel_at(&self, distance: f32, height_px: u32) -> f32 {
+        let d = if self.orthographic {
+            self.distance
+        } else {
+            distance
+        };
+        2.0 * d * (self.fov_y / 2.0).tan() / height_px.max(1) as f32
+    }
+
     /// Millimetres one pixel covers at the orbit target, for a view `height_px` high.
     pub fn mm_per_pixel(&self, height_px: u32) -> f32 {
         2.0 * self.distance * (self.fov_y / 2.0).tan() / height_px.max(1) as f32
@@ -407,6 +420,8 @@ pub struct GpuScene {
     instance_spheres: Vec<[f32; 4]>,
     /// Their boxes (min, max of the placed shape box's corners), for occlusion.
     instance_boxes: Vec<[Vec3; 2]>,
+    /// Their indices in the scene.
+    instance_elements: Vec<u32>,
     visible: Option<wgpu::Buffer>,
     /// The one identity instance merged geometry is drawn with.
     identity: wgpu::Buffer,
@@ -415,6 +430,8 @@ pub struct GpuScene {
     occluders: Vec<[Vec3; 3]>,
     /// The occluders' triangles per element.
     occluder_elements: Vec<std::ops::Range<u32>>,
+    /// Stand-ins for far cells (ADR 0036 #9), and which cells may be used in this upload.
+    proxies: Option<(Arc<GpuProxies>, Vec<bool>)>,
     /// Whether edges carry face normals (needed to hide back edges in the section box).
     pub edge_normals: bool,
     /// Bounds of the whole scene (not just the visible part), for stable clip planes.
@@ -441,6 +458,8 @@ struct Cluster {
     /// Their boxes (min, max), in the same order, and the box of them all (occlusion).
     boxes: Vec<[Vec3; 2]>,
     bbox: [Vec3; 2],
+    /// Their indices in the scene.
+    elements: Vec<u32>,
 }
 
 impl Cluster {
@@ -468,6 +487,10 @@ struct Cull {
     min_radius: f32,
     /// What the scene's largest elements hide (ADR 0036 #5).
     occ: Option<occlusion::DepthBuf>,
+    /// Proxy cells drawn in place of their elements (ADR 0036 #9), and per leaf whether its
+    /// elements are left out for one.
+    proxied: Vec<u32>,
+    replaced: Vec<bool>,
 }
 
 impl Cull {
@@ -480,6 +503,8 @@ impl Cull {
                 clip: None,
                 min_radius,
                 occ: None,
+                proxied: Vec::new(),
+                replaced: Vec::new(),
             };
         }
         let r = [m.row(0), m.row(1), m.row(2), m.row(3)];
@@ -497,7 +522,73 @@ impl Cull {
             clip,
             min_radius,
             occ: None,
+            proxied: Vec::new(),
+            replaced: Vec::new(),
         }
+    }
+
+    /// Cut the scene's proxy tree (ADR 0036 #9): a usable cell in view whose error, at its
+    /// distance from `eye`, spans at most `opts.proxy_px` pixels is drawn in place of its
+    /// elements. `mm_per_px(d)`: millimetres a pixel spans at distance d.
+    fn proxied(
+        mut self,
+        scene: &GpuScene,
+        eye: Vec3,
+        mm_per_px: impl Fn(f32) -> f32,
+        opts: &DrawOptions,
+    ) -> Cull {
+        let Some((p, usable)) = &scene.proxies else {
+            return self;
+        };
+        if opts.proxy_px <= 0.0 || opts.clip.is_some() || !opts.cull || p.cells.is_empty() {
+            return self;
+        }
+        self.replaced = vec![false; p.leaf_count as usize];
+        let mut stack = vec![0u32];
+        while let Some(k) = stack.pop() {
+            let c = &p.cells[k as usize];
+            let [lo, hi] = c.bounds;
+            let centre = (lo + hi) / 2.0;
+            let s = [centre.x, centre.y, centre.z, (hi - lo).length() / 2.0];
+            // Out of view: its elements are culled one by one anyway.
+            if !(s[3].is_finite() && self.keeps_view(s)) {
+                continue;
+            }
+            let d = (eye.clamp(lo, hi) - eye).length();
+            if c.draw.is_some() && usable[k as usize] && c.error_mm <= opts.proxy_px * mm_per_px(d)
+            {
+                self.proxied.push(k);
+                self.replaced[c.leaves.0 as usize..c.leaves.1 as usize].fill(true);
+            } else {
+                stack.extend(&c.children);
+            }
+        }
+        self
+    }
+
+    /// Whether a scene element is drawn itself (not left to a proxy).
+    fn shown(&self, scene: &GpuScene, e: u32) -> bool {
+        if self.replaced.is_empty() {
+            return true;
+        }
+        let Some((p, _)) = &scene.proxies else {
+            return true;
+        };
+        p.leaf_of
+            .get(e as usize)
+            .is_none_or(|&l| l == u32::MAX || !self.replaced[l as usize])
+    }
+
+    /// The frustum and section box alone (no size threshold).
+    fn keeps_view(&self, s: [f32; 4]) -> bool {
+        let c = Vec3::new(s[0], s[1], s[2]);
+        let r = s[3];
+        if let Some((lo, hi)) = self.clip
+            && (c + r).cmplt(lo).any() | (c - r).cmpgt(hi).any()
+        {
+            return false;
+        }
+        self.planes.iter().all(|p| p.truncate().dot(c) + p.w >= -r)
     }
 
     /// With occlusion culling against the scene's occluders, where it applies: not with a
@@ -527,10 +618,10 @@ impl Cull {
             .filter(|c| self.keeps(c.sphere) && self.sees(&c.bbox))
         {
             let (nf, nl) = c.prefix(self.min_radius);
-            let (Some(occ), false) = (&self.occ, c.steps.is_empty()) else {
+            if (self.occ.is_none() && self.replaced.is_empty()) || c.steps.is_empty() {
                 out.push((c, 0..nf, 0..nl));
                 continue;
-            };
+            }
             let end = |k: usize| c.steps.get(k + 1).map_or((nf, nl), |s| (s.1, s.2));
             let mut run: Option<(u32, u32, u32, u32)> = None;
             for (k, s) in c.steps.iter().enumerate() {
@@ -539,7 +630,7 @@ impl Cull {
                 }
                 let (fe, le) = end(k);
                 let (fe, le) = (fe.min(nf), le.min(nl));
-                if occ.may_see(&c.boxes[k]) {
+                if self.sees(&c.boxes[k]) && self.shown(scene, c.elements[k]) {
                     run = Some(run.map_or((s.1, fe, s.2, le), |r| (r.0, fe, r.2, le)));
                 } else if let Some(r) = run.take() {
                     out.push((c, r.0..r.1, r.2..r.3));
@@ -599,10 +690,27 @@ impl GpuScene {
     }
 
     /// Triangles a frame would draw from this camera (culled, as `render` does).
-    pub fn visible_triangles(&self, camera: &Camera, aspect: f32, opts: &DrawOptions) -> u64 {
+    /// `size`: the picture's, pixels.
+    pub fn visible_triangles(&self, camera: &Camera, size: (u32, u32), opts: &DrawOptions) -> u64 {
+        let aspect = size.0 as f32 / size.1.max(1) as f32;
         let m = camera.view_proj(aspect, &self.bounds);
-        let cull =
-            Cull::new(m, opts.clip.map(|c| (c.min, c.max)), opts).occluding(m, aspect, self, opts);
+        let cull = Cull::new(m, opts.clip.map(|c| (c.min, c.max)), opts)
+            .occluding(m, aspect, self, opts)
+            .proxied(
+                self,
+                camera.eye(),
+                |d| camera.mm_per_pixel_at(d, size.1),
+                opts,
+            );
+        let proxies: u64 = match &self.proxies {
+            Some((p, _)) => cull
+                .proxied
+                .iter()
+                .filter_map(|&k| p.cells[k as usize].draw.as_ref())
+                .map(|(f, _)| f.1.len() as u64 / 3)
+                .sum(),
+            None => 0,
+        };
         let merged: u64 = cull
             .runs(self)
             .iter()
@@ -619,12 +727,25 @@ impl GpuScene {
                     .filter(|&i| {
                         cull.keeps(self.instance_spheres[i as usize])
                             && cull.sees(&self.instance_boxes[i as usize])
+                            && cull.shown(self, self.instance_elements[i as usize])
                     })
                     .count();
                 d.faces.1.len() as u64 / 3 * n as u64
             })
             .sum();
-        merged + huge + shared
+        merged + huge + shared + proxies
+    }
+
+    /// Use proxies (ADR 0036 #9) uploaded for this scene, with the style this upload was made
+    /// with (cells over a hidden or highlighted element are never used).
+    pub fn use_proxies(
+        &mut self,
+        proxies: Arc<GpuProxies>,
+        scene: &Scene,
+        style: impl Fn(usize, &SceneElement) -> Style,
+    ) {
+        let usable = proxies.usable(scene, style);
+        self.proxies = Some((proxies, usable));
     }
 
     /// Bytes of geometry on the GPU: vertex, index and instance buffers.
@@ -673,6 +794,7 @@ fn visible_instances(
             for i in d.instances.clone() {
                 if cull.keeps(scene.instance_spheres[i as usize])
                     && cull.sees(&scene.instance_boxes[i as usize])
+                    && cull.shown(scene, scene.instance_elements[i as usize])
                 {
                     packed.push(scene.instance_data[i as usize]);
                 }
@@ -1072,6 +1194,9 @@ pub struct DrawOptions {
     /// Leave out what the largest elements hide (ADR 0036 #5; off with a section box). It costs
     /// CPU time (1–3 ms a frame on an M4 Pro) and saves GPU time: worth it on slow GPUs only.
     pub occlusion: bool,
+    /// Draw a far cell's simplified stand-in in place of its elements when its error spans at
+    /// most this many pixels (ADR 0036 #9; 0: never). Needs `GpuScene::use_proxies`.
+    pub proxy_px: f32,
 }
 
 impl Default for DrawOptions {
@@ -1081,6 +1206,7 @@ impl Default for DrawOptions {
             min_radius: 0.0,
             cull: true,
             occlusion: false,
+            proxy_px: 0.0,
             hatching: true,
             edges: true,
             style: GraphicStyle::default(),
@@ -1370,9 +1496,10 @@ impl Renderer {
         let mut lines = Chunks::<LineVertex>::new(device, queue, "bimble line vb");
         let mut lines_lean = Chunks::<[f32; 3]>::new(device, queue, "bimble line vb");
         // Merged elements are pushed largest first, below.
-        let mut merged: Vec<([f32; 4], std::borrow::Cow<bimble_geom::Mesh>, u8)> = Vec::new();
+        // Merged elements: sphere, mesh, style slot, element index.
+        let mut merged: Vec<([f32; 4], std::borrow::Cow<bimble_geom::Mesh>, u8, u32)> = Vec::new();
         // Copies of shared shapes, by shape, in first-seen order.
-        type Copies<'a> = (&'a Arc<bimble_geom::Mesh>, Vec<(Placement32, u8)>);
+        type Copies<'a> = (&'a Arc<bimble_geom::Mesh>, Vec<(Placement32, u8, u32)>);
         let mut groups: Vec<Copies> = Vec::new();
         let mut group_of: HashMap<*const bimble_geom::Mesh, usize> = HashMap::new();
         for (i, e) in scene.elements.iter().enumerate() {
@@ -1388,15 +1515,18 @@ impl Renderer {
                 Style::Normal | Style::Hidden => style_gpu::slot(e.category),
             };
             match &e.geometry {
-                Geometry::Own(m) => {
-                    merged.push((sphere(m, None), std::borrow::Cow::Borrowed(m), slot))
-                }
+                Geometry::Own(m) => merged.push((
+                    sphere(m, None),
+                    std::borrow::Cow::Borrowed(m),
+                    slot,
+                    i as u32,
+                )),
                 Geometry::Instance { shape, to_scene } => {
                     let g = *group_of.entry(Arc::as_ptr(shape)).or_insert_with(|| {
                         groups.push((shape, Vec::new()));
                         groups.len() - 1
                     });
-                    groups[g].1.push((*to_scene, slot));
+                    groups[g].1.push((*to_scene, slot, i as u32));
                 }
             }
         }
@@ -1406,6 +1536,7 @@ impl Renderer {
         let mut instances: Vec<InstanceData> = Vec::new();
         let mut instance_spheres: Vec<[f32; 4]> = Vec::new();
         let mut instance_boxes: Vec<[Vec3; 2]> = Vec::new();
+        let mut instance_elements: Vec<u32> = Vec::new();
         let mut shapes = Vec::new();
         // Copies of small shapes that may occlude, placed (merged ones are in `merged`).
         let mut occluder_copies: Vec<(Arc<bimble_geom::Mesh>, Vec<Placement32>)> = Vec::new();
@@ -1430,16 +1561,17 @@ impl Renderer {
             }
             let Some((f, l)) = placed else {
                 // Few copies (or a shape larger than a buffer): merged, each placed.
-                for (p, slot) in copies {
+                for (p, slot, i) in copies {
                     let m = p.mesh(shape);
-                    merged.push((sphere(&m, None), std::borrow::Cow::Owned(m), slot));
+                    merged.push((sphere(&m, None), std::borrow::Cow::Owned(m), slot, i));
                 }
                 continue;
             };
             let mut r = 0.0f32;
             for mirrored in [false, true] {
                 let start = instances.len() as u32;
-                for (p, slot) in copies.iter().filter(|(p, _)| p.mirrors() == mirrored) {
+                for (p, slot, e) in copies.iter().filter(|(p, _, _)| p.mirrors() == mirrored) {
+                    instance_elements.push(*e);
                     let sp = sphere(shape, Some(p));
                     r = r.max(sp[3]);
                     instance_spheres.push(sp);
@@ -1480,8 +1612,8 @@ impl Renderer {
         let occluders = {
             let mut cand: Vec<(f32, std::borrow::Cow<bimble_geom::Mesh>)> = merged
                 .iter()
-                .filter(|(_, m, _)| m.indices.len() <= 3 * occlusion::MAX_TRIANGLES)
-                .map(|(sp, m, _)| (sp[3], std::borrow::Cow::Borrowed(m.as_ref())))
+                .filter(|(_, m, _, _)| m.indices.len() <= 3 * occlusion::MAX_TRIANGLES)
+                .map(|(sp, m, _, _)| (sp[3], std::borrow::Cow::Borrowed(m.as_ref())))
                 .collect();
             for (shape, placements) in &occluder_copies {
                 for p in placements {
@@ -1550,8 +1682,10 @@ impl Renderer {
             let (mut fv, mut fi, mut lv, mut ll) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
             let mut steps = Vec::with_capacity(group.len());
             let mut boxes = Vec::with_capacity(group.len());
+            let mut elements = Vec::with_capacity(group.len());
             let mut ball: Option<Sphere> = None;
-            for (sp, m, slot) in group.iter() {
+            for (sp, m, slot, e) in group.iter() {
+                elements.push(*e);
                 steps.push((sp[3], fi.len() as u32, (lv.len() + ll.len()) as u32));
                 let b = bimble_geom::bvh::Aabb::of_points(&m.positions);
                 boxes.push([Vec3::from(b.min), Vec3::from(b.max)]);
@@ -1586,6 +1720,7 @@ impl Renderer {
                                 [a[0].min(b[0]), a[1].max(b[1])]
                             }),
                         boxes,
+                        elements,
                     });
                 }
                 // One element larger than a buffer (a cluster of more is cut before): what
@@ -1605,6 +1740,7 @@ impl Renderer {
                         steps: Vec::new(),
                         boxes: Vec::new(),
                         bbox: [Vec3::NEG_INFINITY, Vec3::INFINITY],
+                        elements,
                     });
                 }
             }
@@ -1651,15 +1787,29 @@ impl Renderer {
             instance_data: instances,
             instance_spheres,
             instance_boxes,
+            instance_elements,
             identity: init(
                 "bimble identity instance",
                 bytemuck::bytes_of(&InstanceData::IDENTITY),
             ),
             occluders: occluders.0,
             occluder_elements: occluders.1,
+            proxies: None,
             edge_normals,
             bounds,
         }
+    }
+
+    /// Upload the proxies built for a scene (ADR 0036 #9), once per model; attach them to each
+    /// upload with `GpuScene::use_proxies`.
+    pub fn upload_proxies(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &Scene,
+        hlod: &bimble_geom::hlod::Hlod,
+    ) -> GpuProxies {
+        GpuProxies::upload(device, queue, scene, hlod)
     }
 
     pub fn render(
@@ -1975,6 +2125,12 @@ impl Renderer {
                     opts,
                 )
                 .occluding(m, aspect, l.scene, opts)
+                .proxied(
+                    l.scene,
+                    camera.eye() - l.offset,
+                    |d| camera.mm_per_pixel_at(d, out.size.1),
+                    opts,
+                )
             })
             .collect();
         let draws: Vec<Vec<(bool, std::ops::Range<u32>)>> = layers
@@ -2091,6 +2247,20 @@ impl Renderer {
                             pass.set_vertex_buffer(0, buf.slice(..));
                             pass.draw(0..*n, 0..1);
                         }
+                        if let Some((p, _)) = &scene.proxies {
+                            for &k in &cull.proxied {
+                                let Some(((b, r), _)) = &p.cells[k as usize].draw else {
+                                    continue;
+                                };
+                                let f = &p.faces[*b];
+                                pass.set_vertex_buffer(0, f.vertices.slice(..));
+                                pass.set_index_buffer(
+                                    f.indices.slice(..),
+                                    wgpu::IndexFormat::Uint32,
+                                );
+                                pass.draw_indexed(r.clone(), 0, 0..1);
+                            }
+                        }
                         for (i, d) in scene.shapes.iter().enumerate() {
                             let Some((inst, n)) = inst_slice(i) else {
                                 continue;
@@ -2131,6 +2301,23 @@ impl Renderer {
                     for (buf, n) in &scene.huge_lines {
                         pass.set_vertex_buffer(0, buf.slice(..));
                         pass.draw(0..*n, 0..1);
+                    }
+                    if let (Some((p, _)), false) = (&scene.proxies, cull.proxied.is_empty()) {
+                        // Proxy edges are positions only.
+                        pass.set_pipeline(&self.line_pipeline);
+                        for &k in &cull.proxied {
+                            let Some((_, (b, r))) = &p.cells[k as usize].draw else {
+                                continue;
+                            };
+                            pass.set_vertex_buffer(0, p.lines[*b].0.slice(..));
+                            pass.draw(r.clone(), 0..1);
+                        }
+                        pass.set_pipeline(match (opts.clip.is_some(), scene.edge_normals) {
+                            (true, true) => &self.line_clip_pipeline,
+                            (true, false) => &self.line_clip_lean_pipeline,
+                            (false, false) => &self.line_pipeline,
+                            (false, true) => &self.line_wide_pipeline,
+                        });
                     }
                     for (i, d) in scene.shapes.iter().enumerate() {
                         if d.lines.1.is_empty() {
@@ -2966,7 +3153,7 @@ mod tests {
             };
             // The frame's GlobalIds are random, so its element order and clusters change from
             // run to run: close up, 14–36 % are left out.
-            if gs.visible_triangles(&cam, aspect, &opts) * 10 < gs.triangles() as u64 * 8 {
+            if gs.visible_triangles(&cam, target.size, &opts) * 10 < gs.triangles() as u64 * 8 {
                 cut_some = true;
             }
             let opts = DrawOptions {
@@ -2977,7 +3164,8 @@ mod tests {
                 occlusion: false,
                 ..opts.clone()
             };
-            if gs.visible_triangles(&cam, aspect, &opts) < gs.visible_triangles(&cam, aspect, &open)
+            if gs.visible_triangles(&cam, target.size, &opts)
+                < gs.visible_triangles(&cam, target.size, &open)
             {
                 occluded_some = true;
             }
@@ -3034,6 +3222,78 @@ mod tests {
         assert!(
             top * 100 >= all * 98,
             "{top} of {all} pixels in 4 colours: {n:?}"
+        );
+    }
+
+    /// Proxies (ADR 0036 #9): with a budget of 0 pixels nothing changes; with a large one the
+    /// far cells stand for their elements, fewer triangles are drawn and the picture stays
+    /// close (most pixels within a few levels).
+    #[test]
+    fn proxies_stand_for_far_cells() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let spec = FrameSpec {
+            bays_x: 12,
+            bays_y: 12,
+            storeys: 3,
+            ..Default::default()
+        };
+        let scene = Scene::from_model(&concrete_frame(&spec));
+        let r = Renderer::new(&gpu.device, 1);
+        let plain = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
+        let mut gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
+        let hlod = bimble_geom::hlod::build(
+            &scene,
+            // Coarse grids: the frame's boxes only simplify when they collapse.
+            &bimble_geom::hlod::Options {
+                leaf_triangles: 512,
+                resolution: 4,
+                ..Default::default()
+            },
+        );
+        let p = Arc::new(r.upload_proxies(&gpu.device, &gpu.queue, &scene, &hlod));
+        gs.use_proxies(p.clone(), &scene, |_, _| Style::Normal);
+        let target = Target::new(&gpu.device, (320, 200), 1);
+        let mut cam = Camera::default();
+        cam.fit(&scene, 1.6);
+        let shot = |g: &GpuScene, px: f32| {
+            let o = DrawOptions {
+                proxy_px: px,
+                ..DrawOptions::default()
+            };
+            r.render(&gpu.device, &gpu.queue, &target, g, &cam, &o);
+            (
+                gpu.read_rgba(&target).unwrap(),
+                g.visible_triangles(&cam, target.size, &o),
+            )
+        };
+        let (exact, n0) = shot(&plain, 0.0);
+        let (same, n1) = shot(&gs, 0.0);
+        assert_eq!(n0, n1);
+        assert!(exact == same, "no budget, no change");
+        let (coarse, n2) = shot(&gs, 40.0);
+        assert!(n2 * 2 < n0, "{n2} of {n0} triangles with proxies");
+        let far = exact
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(coarse.as_chunks::<4>().0)
+            .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 40))
+            .count();
+        assert!(far * 10 < 320 * 200, "{far} pixels changed much");
+        // A hidden element keeps its cells from being used.
+        let mut hid = r.upload(&gpu.device, &gpu.queue, &scene, |i, _| {
+            if i == 0 { Style::Hidden } else { Style::Normal }
+        });
+        hid.use_proxies(p, &scene, |i, _| {
+            if i == 0 { Style::Hidden } else { Style::Normal }
+        });
+        let (_, n3) = shot(&hid, 40.0);
+        assert!(
+            n3 > n2,
+            "the root can't stand for a scene with a hidden element"
         );
     }
 

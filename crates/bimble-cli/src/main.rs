@@ -311,6 +311,10 @@ enum Cmd {
         /// With occlusion culling (the viewer turns it on when the GPU is slow)
         #[arg(long)]
         occlusion: bool,
+        /// Draw far cells' simplified stand-ins when their error spans at most this many
+        /// pixels (0: never)
+        #[arg(long, default_value_t = 0.0)]
+        proxies: f32,
         /// Machine-readable output
         #[arg(long)]
         json: bool,
@@ -1041,6 +1045,7 @@ fn run(cli: Cli) -> Result<(), String> {
             samples,
             quick,
             occlusion,
+            proxies,
             json,
         } => {
             if !matches!(samples, 1 | 4) {
@@ -1048,6 +1053,7 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             bench::run(bench::BenchArgs {
                 occlusion,
+                proxies,
                 files,
                 frames,
                 width,

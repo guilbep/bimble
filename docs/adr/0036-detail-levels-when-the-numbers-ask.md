@@ -319,6 +319,33 @@ triangles each level up; it fails with an error stated at 0.3 grid), `proxies_fi
 `empty_scene_has_no_cells`. Not measured: peak memory while building (each depth's clusters are
 kept until their parents are built), and what it buys on screen (the renderer half).
 
+## #9 (renderer half): far cells drawn as their proxies (9 Nov)
+
+`Renderer::upload_proxies` sends a model's proxies (`bimble_geom::hlod`) to the GPU once;
+`GpuScene::use_proxies` attaches them to each upload, marking the cells under which an element is
+hidden, selected or compared (those must show as they are). Each frame the octree is cut: a cell in
+view whose error, at its distance, spans at most `DrawOptions::proxy_px` pixels is drawn as its
+proxy, and its elements are skipped (merged ones in runs, copies in the packed list). Off with a
+section box.
+
+`bimble bench --proxies <px>`, whole-model orbit (1080p, MSAA 4, M4 Pro), exact → proxies:
+
+| model | 3 px: full / moving | 8 px: full | drawn close up, 3 / 8 px | build + upload, GPU memory |
+|---|---|---|---|---|
+| 200 MB | 5.26 → 0.79 / 0.57 → 0.53 ms | 0.90 ms | 46 % / 13 % | 0.19 s, 19 MB |
+| 335 MB | 4.33 → 1.29 / 2.99 → 1.18 ms | 0.76 ms | 57 % / 32 % | 0.45 s, 48 MB |
+| 415 MB | 29.1 → 1.31 / 3.12 → 0.43 ms | 0.84 ms | 14 % / 2 % | 0.76 s, 44 MB |
+| 758 MB | 12.7 → 0.88 / 1.36 → 0.64 ms | 1.12 ms | 27 % / 7 % | 0.89 s, 92 MB |
+| 872 MB | 5.78 → 0.87 / 1.32 → 0.72 ms | 1.17 ms | 37 % / 17 % | 0.48 s, 47 MB |
+
+At 1 px almost nothing qualifies from the whole-model distance (a pixel there spans ~58 mm, the
+cells' errors more), so stills stay exact. The viewer uses 3 px while moving once the machine
+has missed the frame-rate target (as #4 and #5), building the proxies then, once per model, for
+models over 1 M drawn triangles (a pause of 0.2–0.9 s here; more on an old CPU — to move to a
+thread). Test `proxies_stand_for_far_cells`: with 0 px nothing changes; with a large budget fewer
+than half the triangles are drawn and under 10 % of the pixels change much (it fails with 8 268
+if proxies aren't drawn); a hidden element keeps the root from being used.
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
@@ -339,7 +366,7 @@ measured with `bimble bench` before and after (CLAUDE.md), on the M4 Pro and on 
 
 Order: steps 1–3 above first (all done: frustum culling, indexed shapes with #2, dedup), then #3, #4, #1/#5
 (after a weak-GPU measurement), then the rest. #3: highlights done, bands dropped; #4 waits for the
-weak-GPU measurement (now done); #5 done (slow GPUs only); #8: the codec done, not yet used.
+weak-GPU measurement (now done); #5 done (slow GPUs only); #8: the codec done, not yet used; #9 done (while moving on slow machines).
 
 ## Revisit when
 
