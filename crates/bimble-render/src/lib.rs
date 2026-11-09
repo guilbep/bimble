@@ -28,10 +28,10 @@ mod style_gpu;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct FaceVertex {
     pos: [f32; 3],
-    /// rgb: the face's normal (n × 0.5 + 0.5, unorm8: shading is flat and two-sided, so 8 bits
-    /// and the sign don't show); a: style table slot. Colours come from the style uniform, so
-    /// restyling never re-uploads the model. 16 bytes a vertex (was 28 with an f32 normal).
-    normal_slot: [u8; 4],
+    /// a: style table slot (rgb unused). Colours come from the style uniform, so restyling never
+    /// re-uploads the model. No normal: vertices are shared by the faces around them (indexed,
+    /// ADR 0036 step 2), and the shader finds each face's normal from screen derivatives.
+    slot: [u8; 4],
 }
 
 #[repr(C)]
@@ -384,18 +384,19 @@ impl<'a> Layer<'a> {
 pub struct GpuScene {
     /// Merged geometry: vertex buffers with their vertex counts, each within the device's
     /// buffer size limit (256 MiB by default): a large model needs several.
-    faces: Vec<(wgpu::Buffer, u32)>,
+    faces: Vec<Faces>,
     lines: Vec<(wgpu::Buffer, u32)>,
     /// Merged elements in spatial clusters (ADR 0036): a cluster off screen or outside the
     /// section box is not drawn. Inside a cluster, elements come largest first, so "everything
     /// at least this big" is a prefix of its range.
     clusters: Vec<Cluster>,
-    /// Elements too large for one buffer: always drawn, whole.
+    /// Elements too large for one buffer: always drawn, whole (not indexed: a triangle's
+    /// vertices may fall in two buffers).
     huge_faces: Vec<(wgpu::Buffer, u32)>,
     huge_lines: Vec<(wgpu::Buffer, u32)>,
     /// Shared shapes (ADR 0034): their vertices, packed in buffers like the merged ones, and
     /// one draw per shape (and per mirroring) over its copies in `instances`.
-    shape_faces: Vec<(wgpu::Buffer, u32)>,
+    shape_faces: Vec<Faces>,
     shape_lines: Vec<(wgpu::Buffer, u32)>,
     shapes: Vec<ShapeDraw>,
     instances: Option<wgpu::Buffer>,
@@ -412,6 +413,14 @@ pub struct GpuScene {
     pub bounds: Sphere,
 }
 
+/// Welded vertices and the indices of their triangles (into this buffer's vertices).
+struct Faces {
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    /// Indices: three a triangle.
+    n: u32,
+}
+
 /// Merged elements near each other, in one run of each vertex buffer.
 #[derive(Clone, Debug)]
 struct Cluster {
@@ -419,12 +428,12 @@ struct Cluster {
     lines: (usize, std::ops::Range<u32>),
     /// Bounding sphere of its elements: centre, radius.
     sphere: [f32; 4],
-    /// Its elements largest first: (bounding radius, face and line vertices before it).
+    /// Its elements largest first: (bounding radius, face indices and line vertices before it).
     steps: Vec<(f32, u32, u32)>,
 }
 
 impl Cluster {
-    /// Face and line vertices of its elements at least `min_radius` big (a prefix).
+    /// Face indices and line vertices of its elements at least `min_radius` big (a prefix).
     fn prefix(&self, min_radius: f32) -> (u32, u32) {
         let all = (self.faces.1.len() as u32, self.lines.1.len() as u32);
         if min_radius <= 0.0 {
@@ -506,12 +515,8 @@ struct ShapeDraw {
 impl GpuScene {
     /// Triangles drawn (each copy of a shape counted).
     pub fn triangles(&self) -> u32 {
-        let merged: u32 = self
-            .faces
-            .iter()
-            .chain(&self.huge_faces)
-            .map(|(_, n)| n / 3)
-            .sum();
+        let merged: u32 = self.faces.iter().map(|f| f.n / 3).sum::<u32>()
+            + self.huge_faces.iter().map(|(_, n)| n / 3).sum::<u32>();
         let shared: u32 = self
             .shapes
             .iter()
@@ -548,6 +553,23 @@ impl GpuScene {
             })
             .sum();
         merged + huge + shared
+    }
+
+    /// Bytes of geometry on the GPU: vertex, index and instance buffers.
+    pub fn gpu_bytes(&self) -> u64 {
+        let soup = |v: &Vec<(wgpu::Buffer, u32)>| v.iter().map(|(b, _)| b.size()).sum::<u64>();
+        let indexed = |v: &Vec<Faces>| {
+            v.iter()
+                .map(|f| f.vertices.size() + f.indices.size())
+                .sum::<u64>()
+        };
+        indexed(&self.faces)
+            + soup(&self.lines)
+            + soup(&self.huge_faces)
+            + soup(&self.huge_lines)
+            + indexed(&self.shape_faces)
+            + soup(&self.shape_lines)
+            + self.instances.as_ref().map_or(0, |b| 2 * b.size())
     }
 
     /// Draw calls a frame makes for faces (merged buffers, then one per shared shape).
@@ -671,6 +693,93 @@ impl<'d, T: bytemuck::Pod> Chunks<'d, T> {
     }
 }
 
+/// Indexed faces filled as meshes come, like `Chunks`: each buffer pair is sent to the GPU when
+/// full. Indices are u32 and point into their own buffer's vertices, so draws need no base
+/// vertex (WebGL2 has none).
+struct IndexedChunks<'d> {
+    device: &'d wgpu::Device,
+    queue: &'d wgpu::Queue,
+    label: &'static str,
+    per_vertices: usize,
+    per_indices: usize,
+    vertices: Vec<FaceVertex>,
+    indices: Vec<u32>,
+    done: Vec<Faces>,
+}
+
+impl<'d> IndexedChunks<'d> {
+    fn new(device: &'d wgpu::Device, queue: &'d wgpu::Queue, label: &'static str) -> Self {
+        let bytes = device.limits().max_buffer_size.min(64 << 20) as usize;
+        IndexedChunks {
+            device,
+            queue,
+            label,
+            per_vertices: (bytes / std::mem::size_of::<FaceVertex>()).max(3),
+            per_indices: (bytes / 4 / 3 * 3).max(3),
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            done: Vec::new(),
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.indices.is_empty() {
+            return;
+        }
+        let init = |contents: &[u8], usage| {
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(self.label),
+                    contents,
+                    usage,
+                })
+        };
+        self.done.push(Faces {
+            vertices: init(
+                bytemuck::cast_slice(&self.vertices),
+                wgpu::BufferUsages::VERTEX,
+            ),
+            indices: init(
+                bytemuck::cast_slice(&self.indices),
+                wgpu::BufferUsages::INDEX,
+            ),
+            n: self.indices.len() as u32,
+        });
+        self.vertices.clear();
+        self.indices.clear();
+        // As in `Chunks::flush`: free the staging copies now.
+        self.queue.submit([]);
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// Push a run (one shape, or one cluster) that must stay in one buffer pair, its indices
+    /// relative to its vertices: where its indices went, (buffer, range). None if too large.
+    fn push_run(
+        &mut self,
+        vertices: &[FaceVertex],
+        indices: &[u32],
+    ) -> Option<(usize, std::ops::Range<u32>)> {
+        if vertices.len() > self.per_vertices || indices.len() > self.per_indices {
+            return None;
+        }
+        if self.vertices.len() + vertices.len() > self.per_vertices
+            || self.indices.len() + indices.len() > self.per_indices
+        {
+            self.flush();
+        }
+        let base = self.vertices.len() as u32;
+        let start = self.indices.len() as u32;
+        self.vertices.extend_from_slice(vertices);
+        self.indices.extend(indices.iter().map(|k| k + base));
+        Some((self.done.len(), start..self.indices.len() as u32))
+    }
+
+    fn finish(mut self) -> Vec<Faces> {
+        self.flush();
+        self.done
+    }
+}
+
 /// A sphere around a mesh's bounds, placed: the centre of the box, half its diagonal (scaled by
 /// the placement's longest column). Its radius is how big the element is (ADR 0035).
 fn sphere(m: &bimble_geom::Mesh, p: Option<&Placement32>) -> [f32; 4] {
@@ -693,19 +802,18 @@ fn sphere(m: &bimble_geom::Mesh, p: Option<&Placement32>) -> [f32; 4] {
     [c[0], c[1], c[2], (hi - lo).length() / 2.0 * scale]
 }
 
-/// A mesh's triangles as face vertices: positions, the face's normal and a style slot.
-fn push_faces(m: &bimble_geom::Mesh, slot: u8, mut push: impl FnMut(FaceVertex)) {
-    for t in m.indices.as_chunks::<3>().0 {
-        let [a, b, c] = t.map(|k| m.positions[k as usize]);
-        let n = (Vec3::from(b) - Vec3::from(a))
-            .cross(Vec3::from(c) - Vec3::from(a))
-            .normalize_or(Vec3::Z);
-        let q = |x: f32| ((x * 0.5 + 0.5) * 255.0).round() as u8;
-        let normal_slot = [q(n.x), q(n.y), q(n.z), slot];
-        for pos in [a, b, c] {
-            push(FaceVertex { pos, normal_slot });
-        }
-    }
+/// A mesh's welded vertices with a style slot, and its triangles' indices after those already
+/// in `vertices`.
+fn push_faces(
+    m: &bimble_geom::Mesh,
+    slot: u8,
+    vertices: &mut Vec<FaceVertex>,
+    indices: &mut Vec<u32>,
+) {
+    let base = vertices.len() as u32;
+    let slot = [0, 0, 0, slot];
+    vertices.extend(m.positions.iter().map(|&pos| FaceVertex { pos, slot }));
+    indices.extend(m.indices.iter().map(|k| k + base));
 }
 
 /// A mesh's edges as line vertices, with the normals of their faces or without.
@@ -1091,7 +1199,7 @@ impl Renderer {
         style: impl Fn(usize, &SceneElement) -> Style,
         edge_normals: bool,
     ) -> GpuScene {
-        let mut faces = Chunks::<FaceVertex>::new(device, queue, "bimble face vb");
+        let mut faces = IndexedChunks::new(device, queue, "bimble face buffers");
         let mut lines = Chunks::<LineVertex>::new(device, queue, "bimble line vb");
         let mut lines_lean = Chunks::<[f32; 3]>::new(device, queue, "bimble line vb");
         // Merged elements are pushed largest first, below.
@@ -1125,21 +1233,21 @@ impl Renderer {
                 }
             }
         }
-        let mut shape_faces = Chunks::<FaceVertex>::new(device, queue, "bimble shape face vb");
+        let mut shape_faces = IndexedChunks::new(device, queue, "bimble shape face buffers");
         let mut shape_lines = Chunks::<LineVertex>::new(device, queue, "bimble shape line vb");
         let mut shape_lines_lean = Chunks::<[f32; 3]>::new(device, queue, "bimble shape line vb");
         let mut instances: Vec<InstanceData> = Vec::new();
         let mut instance_spheres: Vec<[f32; 4]> = Vec::new();
         let mut shapes = Vec::new();
         for (shape, copies) in groups {
-            let mut fv = Vec::new();
-            push_faces(shape, 0, |v| fv.push(v));
+            let (mut fv, mut fi) = (Vec::new(), Vec::new());
+            push_faces(shape, 0, &mut fv, &mut fi);
             let (mut lv, mut ll) = (Vec::new(), Vec::new());
             push_lines(shape, edge_normals, |v| lv.push(v), |p| ll.push(p));
             let placed = if copies.len() < MIN_INSTANCES {
                 None
             } else {
-                let f = shape_faces.push_run(&fv);
+                let f = shape_faces.push_run(&fv, &fi);
                 let l = if edge_normals {
                     shape_lines.push_run(&lv)
                 } else {
@@ -1203,7 +1311,7 @@ impl Renderer {
         let mut clusters = Vec::new();
         let mut rest = &mut merged[..];
         // A cluster fits in a buffer (small on some devices): faces and edges both.
-        let face_cap = CLUSTER_VERTICES.min(faces.per);
+        let face_cap = CLUSTER_VERTICES.min(faces.per_indices);
         let line_cap = if edge_normals {
             lines.per
         } else {
@@ -1223,12 +1331,12 @@ impl Renderer {
             let (group, tail) = rest.split_at_mut(n);
             rest = tail;
             group.sort_by(|a, b| b.0[3].total_cmp(&a.0[3]));
-            let (mut fv, mut lv, mut ll) = (Vec::new(), Vec::new(), Vec::new());
+            let (mut fv, mut fi, mut lv, mut ll) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
             let mut steps = Vec::with_capacity(group.len());
             let mut ball: Option<Sphere> = None;
             for (sp, m, slot) in group.iter() {
-                steps.push((sp[3], fv.len() as u32, (lv.len() + ll.len()) as u32));
-                push_faces(m, *slot, |v| fv.push(v));
+                steps.push((sp[3], fi.len() as u32, (lv.len() + ll.len()) as u32));
+                push_faces(m, *slot, &mut fv, &mut fi);
                 push_lines(m, edge_normals, |v| lv.push(v), |p| ll.push(p));
                 let b = Sphere {
                     center: Vec3::new(sp[0], sp[1], sp[2]),
@@ -1236,7 +1344,7 @@ impl Renderer {
                 };
                 ball = Some(ball.map_or(b, |a| a.merge(b)));
             }
-            let f = faces.push_run(&fv);
+            let f = faces.push_run(&fv, &fi);
             let l = if edge_normals {
                 lines.push_run(&lv)
             } else {
@@ -1259,7 +1367,7 @@ impl Renderer {
                 // doesn't fit streams across buffers of its own; drawn always, whole.
                 (f, l) => {
                     if f.is_none() {
-                        fv.into_iter().for_each(|v| huge_faces.push(v));
+                        fi.iter().for_each(|&k| huge_faces.push(fv[k as usize]));
                     }
                     if l.is_none() {
                         lv.into_iter().for_each(|v| huge_lines.push(v));
@@ -1530,8 +1638,13 @@ impl Renderer {
                         for c in scene.clusters.iter().filter(|c| cull.keeps(c.sphere)) {
                             let n = c.prefix(cull.min_radius).0;
                             if n > 0 {
-                                pass.set_vertex_buffer(0, scene.faces[c.faces.0].0.slice(..));
-                                pass.draw(c.faces.1.start..c.faces.1.start + n, 0..1);
+                                let f = &scene.faces[c.faces.0];
+                                pass.set_vertex_buffer(0, f.vertices.slice(..));
+                                pass.set_index_buffer(
+                                    f.indices.slice(..),
+                                    wgpu::IndexFormat::Uint32,
+                                );
+                                pass.draw_indexed(c.faces.1.start..c.faces.1.start + n, 0, 0..1);
                             }
                         }
                         for (buf, n) in &scene.huge_faces {
@@ -1546,9 +1659,11 @@ impl Renderer {
                                 continue;
                             }
                             pass.set_pipeline(pipelines(camera.mirror_x != d.mirrored)[k]);
-                            pass.set_vertex_buffer(0, scene.shape_faces[d.faces.0].0.slice(..));
+                            let f = &scene.shape_faces[d.faces.0];
+                            pass.set_vertex_buffer(0, f.vertices.slice(..));
+                            pass.set_index_buffer(f.indices.slice(..), wgpu::IndexFormat::Uint32);
                             pass.set_vertex_buffer(1, inst);
-                            pass.draw(d.faces.1.clone(), 0..n);
+                            pass.draw_indexed(d.faces.1.clone(), 0, 0..n);
                         }
                     }
                 }
@@ -2119,7 +2234,7 @@ mod tests {
             let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
             let r = Renderer::new(&gpu.device, 1);
             let gs = r.upload_with(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal, true);
-            let target = Target::new(&gpu.device, (64, 40), 1);
+            let target = Target::new(&gpu.device, (32, 20), 1);
             let mut cam = Camera::default();
             cam.fit(&scene, 1.6);
             r.render(
@@ -2139,7 +2254,8 @@ mod tests {
         };
         let (Ok(big), Ok(small)) = (
             Headless::new(),
-            Headless::with_max_buffer_size(Some(16_384)),
+            // Indexed faces of this frame take ~20 KB (were 41 KB unindexed).
+            Headless::with_max_buffer_size(Some(8_192)),
         ) else {
             eprintln!("no GPU adapter, skipping");
             return;
@@ -2262,7 +2378,7 @@ mod tests {
         let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
         let r = Renderer::new(&gpu.device, 1);
         let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
-        let all: u32 = gs.faces.iter().map(|(_, n)| n).sum();
+        let all: u32 = gs.faces.iter().map(|f| f.n).sum();
         let in_clusters: u32 = gs.clusters.iter().map(|c| c.faces.1.len() as u32).sum();
         assert_eq!(in_clusters, all, "every merged vertex is in one cluster");
         let at = |r: f32| -> u32 { gs.clusters.iter().map(|c| c.prefix(r).0).sum() };
@@ -2390,11 +2506,61 @@ mod tests {
                 clip,
                 ..DrawOptions::default()
             };
-            if gs.visible_triangles(&cam, aspect, &opts) * 10 < gs.triangles() as u64 * 7 {
+            // The frame's GlobalIds are random, so its element order and clusters change from
+            // run to run: close up, 14–36 % are left out.
+            if gs.visible_triangles(&cam, aspect, &opts) * 10 < gs.triangles() as u64 * 8 {
                 cut_some = true;
             }
         }
         assert!(cut_some, "close up, culling leaves things out");
+    }
+
+    /// Vertices are shared by the faces around them (ADR 0036 step 2): the shader still shades
+    /// each face flat, from its own plane. A column seen from a corner: its three sides and its
+    /// edges, four colours; interpolating anything per vertex would show a gradient. (Without
+    /// edges, the one-pixel line where two faces meet takes in-between shades: the edges cover
+    /// it.)
+    #[test]
+    fn welded_faces_are_shaded_flat() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let mut scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        scene.elements.retain(|e| e.class == "IfcColumn");
+        scene.elements.truncate(1);
+        let Geometry::Own(m) = &scene.elements[0].geometry else {
+            panic!("a column has its own mesh");
+        };
+        assert!(m.positions.len() * 2 < m.indices.len(), "welded");
+        let r = Renderer::new(&gpu.device, 1);
+        let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
+        let target = Target::new(&gpu.device, (256, 256), 1);
+        let mut cam = Camera::default();
+        cam.fit(&scene, 1.0);
+        let opts = DrawOptions {
+            hatching: false,
+            ..DrawOptions::default()
+        };
+        r.render(&gpu.device, &gpu.queue, &target, &gs, &cam, &opts);
+        let px = gpu.read_rgba(&target).unwrap();
+        let bg = opts.style.background.0;
+        let mut counts: HashMap<[u8; 4], usize> = HashMap::new();
+        for p in px.as_chunks::<4>().0 {
+            if p[..3] != bg[..] {
+                *counts.entry(*p).or_default() += 1;
+            }
+        }
+        let mut n: Vec<usize> = counts.into_values().collect();
+        n.sort_unstable_by(|a, b| b.cmp(a));
+        let all: usize = n.iter().sum();
+        // Three sides and the edges: 98 % of the pixels in four colours.
+        let top: usize = n.iter().take(4).sum();
+        assert!(all > 2000, "{all} pixels drawn");
+        assert!(
+            top * 100 >= all * 98,
+            "{top} of {all} pixels in 4 colours: {n:?}"
+        );
     }
 
     /// Renders on whatever adapter exists (a software one in CI containers). Skipped if none.

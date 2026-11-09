@@ -41,12 +41,15 @@ struct Uniforms {
 
 struct FaceIn {
     @location(0) pos: vec3<f32>,
-    // rgb: the face's normal × 0.5 + 0.5; a: style table slot / 255
-    @location(1) normal_slot: vec4<f32>,
+    // a: style table slot / 255
+    @location(1) slot: vec4<f32>,
 };
 
-fn face_normal(v: FaceIn) -> vec3<f32> {
-    return v.normal_slot.xyz * 2.0 - 1.0;
+// A face's normal (not normalized, either sign) from how the position changes across the screen:
+// vertices are shared by the faces around them (indexed, ADR 0036 step 2), so they carry none.
+// Called before any discard (derivatives need the whole 2×2 pixel quad).
+fn screen_normal(p: vec3<f32>) -> vec3<f32> {
+    return cross(dpdx(p), dpdy(p));
 }
 
 // Every draw is instanced (ADR 0034): a shared shape once per element that is it, and merged
@@ -64,14 +67,14 @@ fn place(i: Inst, p: vec3<f32>) -> vec3<f32> {
     return i.x * p.x + i.y * p.y + i.z * p.z + i.t;
 }
 
-// Normals turn with the shape (exact for rotations and mirrors; shading is two-sided).
+// Normals turn with the shape (exact for rotations and mirrors; edges' back-facing test).
 fn turn(i: Inst, n: vec3<f32>) -> vec3<f32> {
     return i.x * n.x + i.y * n.y + i.z * n.z;
 }
 
 fn slot_of(v: FaceIn, i: Inst) -> u32 {
     if i.slot.a > 0.999 {
-        return face_slot(v.normal_slot);
+        return face_slot(v.slot);
     }
     return face_slot(i.slot);
 }
@@ -81,10 +84,13 @@ fn slot_of(v: FaceIn, i: Inst) -> u32 {
 // memory and time on software and old GPUs, so normal viewing must not pay for the box.
 
 // Two-sided Lambert with a high ambient: reads like a shaded drawing.
+// A degenerate normal (a face seen edge-on, a sliver) is lit fully rather than NaN.
 fn face_shade(normal: vec3<f32>) -> f32 {
     let l = normalize(u.light.xyz);
     let ambient = u.params.z;
-    return ambient + (1.0 - ambient) * abs(dot(normalize(normal), l));
+    let len2 = dot(normal, normal);
+    let lambert = select(1.0, abs(dot(normal, l)) * inverseSqrt(len2), len2 > 1e-30);
+    return ambient + (1.0 - ambient) * lambert;
 }
 
 fn face_slot(color: vec4<f32>) -> u32 {
@@ -139,44 +145,42 @@ fn hatch(pixel: vec2<f32>, slot: u32) -> f32 {
 
 struct FaceOut {
     @builtin(position) clip: vec4<f32>,
-    // Faces are flat (one normal per triangle), so colours are constant per triangle: no
-    // interpolation needed, which saves work per pixel on software and old GPUs.
-    @location(0) @interpolate(flat) color: vec3<f32>,
-    @location(1) @interpolate(flat) ink: vec3<f32>,
-    @location(2) @interpolate(flat) slot: u32,
+    // Scene position relative to the eye (small numbers: precise derivatives close up).
+    @location(0) rel: vec3<f32>,
+    @location(1) @interpolate(flat) slot: u32,
 };
 
 @vertex
 fn vs_face(v: FaceIn, i: Inst) -> FaceOut {
     var o: FaceOut;
-    o.clip = u.view_proj * vec4<f32>(place(i, v.pos), 1.0);
+    let pos = place(i, v.pos);
+    o.clip = u.view_proj * vec4<f32>(pos, 1.0);
     o.clip.z += u.layer.x * o.clip.w;
     o.slot = slot_of(v, i);
-    let shade = face_shade(turn(i, face_normal(v)));
-    o.color = u.table[o.slot].fill.rgb * shade;
-    // A darkened fill was computed from the unshaded fill on the CPU: shade both alike.
-    o.ink = u.table[o.slot].ink.rgb * shade;
+    o.rel = pos - u.eye.xyz;
     return o;
+}
+
+// Fill and hatch ink shaded alike (a darkened fill was computed from the unshaded fill on the
+// CPU).
+fn shaded(pixel: vec2<f32>, slot: u32, shade: f32) -> vec4<f32> {
+    let c = mix(u.table[slot].fill.rgb, u.table[slot].ink.rgb, hatch(pixel, slot)) * shade;
+    // The target is a plain Unorm texture holding gamma-encoded colour.
+    return vec4<f32>(linear_to_srgb(c), 1.0);
 }
 
 @fragment
 fn fs_face(i: FaceOut) -> @location(0) vec4<f32> {
-    let c = mix(i.color, i.ink, hatch(i.clip.xy, i.slot));
-    // The target is a plain Unorm texture holding gamma-encoded colour.
-    return vec4<f32>(linear_to_srgb(c), 1.0);
+    return shaded(i.clip.xy, i.slot, face_shade(screen_normal(i.rel)));
 }
 
 // ---------------------------------------------------------------- faces, section box
 
 struct FaceClipOut {
     @builtin(position) clip: vec4<f32>,
-    // Unlit fill and ink, and the light of the face: cut surfaces use their own light.
-    @location(0) @interpolate(flat) color: vec3<f32>,
-    @location(1) @interpolate(flat) ink: vec3<f32>,
-    @location(2) @interpolate(flat) slot: u32,
-    @location(3) @interpolate(flat) shade: f32,
-    // Scene position, for the clipping box.
-    @location(4) pos: vec3<f32>,
+    // Scene position relative to the eye: the face's normal, and the clipping box.
+    @location(0) rel: vec3<f32>,
+    @location(1) @interpolate(flat) slot: u32,
 };
 
 // True if p is outside the clipping box.
@@ -191,25 +195,18 @@ fn vs_face_clip(v: FaceIn, i: Inst) -> FaceClipOut {
     o.clip = u.view_proj * vec4<f32>(pos, 1.0);
     o.clip.z += u.layer.x * o.clip.w;
     o.slot = slot_of(v, i);
-    o.shade = face_shade(turn(i, face_normal(v)));
-    o.color = u.table[o.slot].fill.rgb;
-    o.ink = u.table[o.slot].ink.rgb;
-    o.pos = pos;
+    o.rel = pos - u.eye.xyz;
     return o;
-}
-
-fn shade_clipped(i: FaceClipOut, shade: f32) -> vec4<f32> {
-    let c = mix(i.color * shade, i.ink * shade, hatch(i.clip.xy, i.slot));
-    return vec4<f32>(linear_to_srgb(c), 1.0);
 }
 
 // Outward faces inside the box.
 @fragment
 fn fs_face_clip(i: FaceClipOut) -> @location(0) vec4<f32> {
-    if clipped(i.pos) {
+    let shade = face_shade(screen_normal(i.rel));
+    if clipped(i.rel + u.eye.xyz) {
         discard;
     }
-    return shade_clipped(i, i.shade);
+    return shaded(i.clip.xy, i.slot, shade);
 }
 
 // Inward faces inside the box: where the box removed a solid's front we see its back faces
@@ -217,10 +214,10 @@ fn fs_face_clip(i: FaceClipOut) -> @location(0) vec4<f32> {
 // hatched like the material.
 @fragment
 fn fs_face_cut(i: FaceClipOut) -> @location(0) vec4<f32> {
-    if clipped(i.pos) {
+    if clipped(i.rel + u.eye.xyz) {
         discard;
     }
-    return shade_clipped(i, u.params.w);
+    return shaded(i.clip.xy, i.slot, u.params.w);
 }
 
 // ---------------------------------------------------------------- edges

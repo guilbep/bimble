@@ -68,6 +68,34 @@ pixels with and without culling, and close up it does leave triangles out. It ca
 scene drawn in two layers packed its visible instances twice into one buffer before the frame's
 single submit, so one layer drew the other's (1 244 pixels); now only its first layer packs.
 
+## Step 2 done: indexed faces, normals from the screen (9 Nov; with #2 below)
+
+Face vertices were three per triangle, each with the face's normal (16 bytes, 48 a triangle).
+The meshes are already welded per element, so the upload now sends their shared vertices
+(position and style slot, 16 bytes) and u32 indices into the same buffer (no base vertex:
+WebGL2 has none). The shader finds each face's normal per pixel from screen derivatives of the
+position relative to the eye (`cross(dpdx, dpdy)`), so faces stay flat. Elements larger than a
+buffer stay unindexed (their triangles may straddle two buffers). Skipped: 16-bit indices for
+shapes (shapes are stored once, so it saves little) and meshoptimizer's vertex-cache order
+(C, unverified on wasm).
+
+`bimble bench` (1080p, MSAA 4, M4 Pro, 120 frames), before → after:
+
+| model | GPU geometry | full frame | close-up | moving | upload |
+|---|---|---|---|---|---|
+| 200 MB electrical | 28 → 18 MB | 7.98 → 5.22 ms | 4.26 → 2.93 ms | 0.64 → 0.53 ms | 35 → 17 ms |
+| 335 MB architecture | 143 → 80 MB | 5.56 → 4.12 ms | 3.81 → 2.86 ms | 3.96 → 2.80 ms | 107 → 65 ms |
+| 415 MB sprinklers | 181 → 103 MB | 33.8 → 25.1 ms | 15.2 → 11.1 ms | 3.22 → 2.89 ms | 144 → 86 ms |
+| 758 MB sanitary | 258 → 136 MB | 20.9 → 12.1 ms | 10.3 → 6.7 ms | 1.76 → 1.23 ms | 156 → 91 ms |
+| 872 MB plumbing | 304 → 155 MB | 7.75 → 5.19 ms | 3.92 → 2.59 ms | 1.66 → 1.14 ms | 185 → 96 ms |
+
+Peak process memory unchanged (872 MB model, two runs each: 2.90 / 2.91 GB before, 2.91 / 2.93
+after). Pixels change slightly: the normal was 8 bits a component, now exact. Test
+`welded_faces_are_shaded_flat` (a column's three sides and edges: 98 % of its pixels in four
+colours; it fails with a gradient). Without edges, the one-pixel line where two faces meet takes
+in-between shades; the edges cover it. Not yet measured on a weak GPU: shading moved from the
+vertex to the pixel shader, which costs more where the GPU is short of pixel throughput.
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
@@ -86,7 +114,7 @@ measured with `bimble bench` before and after (CLAUDE.md), on the M4 Pro and on 
 | 9 | 5 | Simplified proxies per box-tree cell for what is far (HLOD) | est.; iTwin.js and 3D Tiles do it | yes | L |
 | 10 | 4 | GPU-driven culling: depth pyramid, compute, indirect draws | ~2× (VTK WebGPU) | no | L |
 
-Order: steps 1–3 above first (frustum culling, indexed shapes with #2, dedup), then #3, #4, #1/#5
+Order: steps 1–3 above first (frustum culling, indexed shapes with #2 (done), dedup), then #3, #4, #1/#5
 (after a weak-GPU measurement), then the rest.
 
 ## Revisit when

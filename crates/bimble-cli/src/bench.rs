@@ -35,6 +35,8 @@ struct Case {
     close: Vec<Duration>,
     /// Share of the triangles the close-up orbit draws (culling, ADR 0036), on average.
     close_drawn: f64,
+    /// Geometry on the GPU (MB).
+    gpu_mb: f64,
     memory_mb: Option<f64>,
 }
 
@@ -148,6 +150,7 @@ fn run_case(
         moving,
         close,
         close_drawn,
+        gpu_mb: gs.gpu_bytes() as f64 / 1_048_576.0,
         memory_mb: memory_mb(),
     }
 }
@@ -214,7 +217,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
                     "frame_max_ms": ms(*s.last().unwrap()), "memory_mb": c.memory_mb,
                     "moving_median_ms": ms(percentile(&sorted(&c.moving), 0.5)),
                     "close_median_ms": ms(percentile(&sorted(&c.close), 0.5)),
-                    "close_drawn": c.close_drawn,
+                    "close_drawn": c.close_drawn, "gpu_mb": c.gpu_mb,
                 })
             })
             .collect();
@@ -234,7 +237,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         args.width, args.height, args.samples, args.frames
     );
     println!(
-        "{:<20} {:>9} {:>10} {:>9} {:>9} {:>10} {:>10} {:>8} {:>10} {:>9} {:>8} {:>9}",
+        "{:<20} {:>9} {:>10} {:>9} {:>9} {:>10} {:>10} {:>8} {:>10} {:>9} {:>8} {:>8} {:>9}",
         "model",
         "elements",
         "triangles",
@@ -246,6 +249,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         "moving ms",
         "close ms",
         "drawn",
+        "GPU MB",
         "proc MB"
     );
     for c in &cases {
@@ -255,7 +259,7 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
         let p95 = percentile(&s, 0.95);
         let ms = |d: Duration| d.as_secs_f64() * 1000.0;
         println!(
-            "{:<20} {:>9} {:>10} {:>9.1} {:>9.1} {:>10.2} {:>10.2} {:>8.0} {:>10.2} {:>9.2} {:>7.0}% {:>9}",
+            "{:<20} {:>9} {:>10} {:>9.1} {:>9.1} {:>10.2} {:>10.2} {:>8.0} {:>10.2} {:>9.2} {:>7.0}% {:>8.0} {:>9}",
             c.name,
             c.elements,
             c.triangles,
@@ -267,13 +271,15 @@ pub fn run(args: BenchArgs) -> Result<(), String> {
             ms(percentile(&sorted(&c.moving), 0.5)),
             ms(percentile(&sorted(&c.close), 0.5)),
             c.close_drawn * 100.0,
+            c.gpu_mb,
             c.memory_mb.map_or("n/a".into(), |m| format!("{m:.0}")),
         );
     }
     println!(
         "\nfps = 1000 / median frame time. moving ms = median frame drawn as while navigating \
          (elements under {MOVING_PX} px left out). close ms = the orbit at 1/{CLOSE} of the distance, \
-         around the centre; drawn = share of the triangles it draws (culling). proc MB = memory of this process after the model \
+         around the centre; drawn = share of the triangles it draws (culling). GPU MB = geometry \
+         buffers. proc MB = memory of this process after the model \
          (cumulative)."
     );
     println!("The viewer only redraws on change, so idle costs nothing.");
