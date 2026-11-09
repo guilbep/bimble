@@ -207,13 +207,24 @@ struct Turn {
 }
 
 /// Start the viewer in a browser page, drawing into `canvas` (WebGPU, or WebGL2 where the
-/// browser has no WebGPU). Files are opened with the file picker or by dropping them on the page.
+/// browser has no WebGPU). Files are opened with the file picker or by dropping them on the page,
+/// or named in the address: `?url=<model.ifc>` opens that model, `&gl=1` forces WebGL2. The page
+/// start-up is told in `window.bimbleStates` (see `tell`), for benchmarks.
 #[cfg(target_arch = "wasm32")]
 pub async fn start_web(canvas: web_sys::HtmlCanvasElement) -> Result<(), String> {
+    let query = web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .unwrap_or_default();
+    let param = |k: &str| {
+        web_sys::UrlSearchParams::new_with_str(&query)
+            .ok()
+            .and_then(|p| p.get(k))
+    };
+    let open_url = param("url");
     let mut options = eframe::WebOptions::default();
     // Browsers can expose WebGPU without an adapter behind it (Chrome on many Linux machines):
     // wgpu would pick WebGPU and fail, so ask for an adapter first and use WebGL2 without one.
-    if !has_webgpu_adapter().await
+    if (param("gl").is_some() || !has_webgpu_adapter().await)
         && let eframe::egui_wgpu::WgpuSetup::CreateNew(c) = &mut options.wgpu_options.wgpu_setup
     {
         c.instance_descriptor.backends = eframe::wgpu::Backends::GL;
@@ -222,18 +233,94 @@ pub async fn start_web(canvas: web_sys::HtmlCanvasElement) -> Result<(), String>
         .start(
             canvas,
             options,
-            Box::new(|cc| {
+            Box::new(move |cc| {
                 let rs = cc
                     .wgpu_render_state
                     .as_ref()
                     .ok_or("the viewer needs the wgpu renderer")?;
                 ui_theme::apply(&cc.egui_ctx);
                 state::guard_page_unload();
-                Ok(Box::new(Viewer::new(rs)))
+                let app = Viewer::new(rs);
+                let backend = format!("{:?}", rs.adapter.get_info().backend);
+                tell("started", Some(&backend));
+                if let Some(url) = open_url {
+                    open_url_later(url, app.files.sender(), cc.egui_ctx.clone());
+                }
+                Ok(Box::new(app))
             }),
         )
         .await
         .map_err(|e| format!("{e:?}"))
+}
+
+/// Fetch the model at `url` and open it as if picked.
+#[cfg(target_arch = "wasm32")]
+fn open_url_later(url: String, tx: std::sync::mpsc::Sender<files::Picked>, ctx: egui::Context) {
+    wasm_bindgen_futures::spawn_local(async move {
+        match fetch_bytes(&url).await {
+            Ok(bytes) => {
+                tell("fetched", None);
+                let path = url.split(['?', '#']).next().unwrap_or_default();
+                let _ = tx.send(files::Picked {
+                    purpose: files::Purpose::Open,
+                    name: path.rsplit('/').next().unwrap_or_default().to_owned(),
+                    path: None,
+                    bytes: Some(bytes),
+                });
+                ctx.request_repaint();
+            }
+            Err(e) => tell("failed", Some(&e)),
+        }
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+    let err = |e: wasm_bindgen::JsValue| format!("{url}: {e:?}");
+    let window = web_sys::window().ok_or("no window")?;
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str(url))
+        .await
+        .map_err(err)?
+        .dyn_into()
+        .map_err(err)?;
+    if !resp.ok() {
+        return Err(format!("{url}: HTTP {}", resp.status()));
+    }
+    let buf = JsFuture::from(resp.array_buffer().map_err(err)?)
+        .await
+        .map_err(err)?;
+    Ok(js_sys::Uint8Array::new(&buf).to_vec())
+}
+
+/// Append `{state, at, message}` to `window.bimbleStates` (`at`: epoch milliseconds, so a parent
+/// page can put it on its own clock even while parsing blocks the page's only thread) and log it.
+/// States: "started" (message: the graphics backend), "fetched", "first-frame", "failed".
+#[cfg(target_arch = "wasm32")]
+fn tell(state: &str, message: Option<&str>) {
+    use wasm_bindgen::{JsCast, JsValue};
+    let Some(w) = web_sys::window() else { return };
+    let at = w.performance().map_or(0.0, |p| p.time_origin() + p.now());
+    let entry = js_sys::Object::new();
+    let set = |o: &JsValue, k: &str, v: JsValue| {
+        let _ = js_sys::Reflect::set(o, &k.into(), &v);
+    };
+    set(&entry, "state", state.into());
+    set(&entry, "at", at.into());
+    if let Some(m) = message {
+        set(&entry, "message", m.into());
+    }
+    let list = js_sys::Reflect::get(&w, &"bimbleStates".into())
+        .ok()
+        .and_then(|v| v.dyn_into::<js_sys::Array>().ok())
+        .unwrap_or_else(|| {
+            let a = js_sys::Array::new();
+            set(&w, "bimbleStates", a.clone().into());
+            a
+        });
+    list.push(&entry);
+    log::info!("bimble: {state} {}", message.unwrap_or_default());
 }
 
 /// Whether `navigator.gpu.requestAdapter()` gives an adapter.
@@ -1944,6 +2031,38 @@ impl Viewer {
             .is_some_and(|f| t.duration_since(*f) > Duration::from_secs(1))
         {
             self.drawn_at.pop_front();
+        }
+    }
+
+    /// Once per page: "first-frame" when the previous frame drew the first model (uploaded and
+    /// rendered, then presented before this frame began), or "failed" when opening it did not.
+    #[cfg(target_arch = "wasm32")]
+    fn tell_first_frame(&self, ctx: &egui::Context) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static TOLD: AtomicBool = AtomicBool::new(false);
+        if TOLD.load(Ordering::Relaxed) {
+            return;
+        }
+        let failed = if self.ask.is_some() {
+            Some("too large for the memory budget: asks which part to open")
+        } else if self.loading.is_none() && self.parse_later.is_none() {
+            self.error.as_deref()
+        } else {
+            None
+        };
+        if self.loaded.is_some()
+            && self.gpu_scene.is_some()
+            && !self.needs_upload
+            && !self.needs_render
+        {
+            TOLD.store(true, Ordering::Relaxed);
+            tell("first-frame", None);
+        } else if let Some(e) = failed {
+            TOLD.store(true, Ordering::Relaxed);
+            tell("failed", Some(e));
+        } else if self.loaded.is_some() {
+            // Until the stamp, a frame follows the one that draws.
+            ctx.request_repaint();
         }
     }
 
@@ -3911,6 +4030,8 @@ fn toggle<T: Ord>(set: &mut BTreeSet<T>, item: T, visible: bool) {
 impl eframe::App for Viewer {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        #[cfg(target_arch = "wasm32")]
+        self.tell_first_frame(&ctx);
         self.poll_loading();
         if self.loaded.is_some()
             && let Some(p) = self.pending_link.take()
