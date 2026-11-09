@@ -1813,6 +1813,9 @@ impl Viewer {
             } else {
                 0.0
             },
+            // Edges from the depth instead of lines, in the single-sample pictures drawn while
+            // moving on a slow machine (ADR 0036 #6).
+            screen_edges: self.moving_lean,
             ..self.opts.clone()
         }
     }

@@ -355,6 +355,30 @@ now counts a whole-model frame's face draws after culling and joining: 315 → 3
 draws left are one per shared shape (each with its own instance range); joining those needs
 multi-draw (`multi_draw_indexed_indirect`), which WebGPU and WebGL2 don't have: not done.
 
+## #6 done: edges found on screen, while moving on slow machines (9 Nov)
+
+Edge lines cost about half a frame: without them the 415 MB model's whole frame takes 8.9 ms
+instead of 30.8 (M4 Pro, MSAA 4). `DrawOptions::screen_edges` draws no edge lines and, after the
+picture, one full-screen pass (`edges.wgsl`) reads its depth, rebuilds scene positions with the
+inverse view-projection and marks a pixel where the surface jumps or bends across it (the second
+difference of positions over 0.3 of the steps on both sides; silhouettes against the background
+too). Single-sample pictures only (a multisampled depth can't be read on WebGL2): the viewer uses
+it in the pictures drawn without MSAA while moving on a slow machine (#4).
+
+| model | MSAA 1, lines → screen edges: full / moving |
+|---|---|
+| 200 MB | 5.29 → 2.50 / 0.55 → 0.37 ms |
+| 335 MB | 4.02 → 2.63 / 2.79 → 1.55 ms |
+| 415 MB | 29.1 → 8.64 / 3.16 → 0.76 ms |
+| 758 MB | 13.7 → 5.21 / 1.26 → 0.84 ms |
+| 872 MB | 5.97 → 2.83 / 1.19 → 0.93 ms |
+| 335 MB, llvmpipe 2 cores | 972 → 801 / 690 → 532 ms |
+
+Test `screen_edges_follow_the_edge_lines` (the generated frame): 2 349 of 2 380 line pixels have
+a screen edge within a pixel, and every screen edge lies within two pixels of a line. Screen
+edges miss creases between coplanar faces of two elements (no bend) and edges hidden behind
+nothing else, as a drawing's lines don't need; stills keep lines.
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
@@ -375,7 +399,7 @@ measured with `bimble bench` before and after (CLAUDE.md), on the M4 Pro and on 
 
 Order: steps 1–3 above first (all done: frustum culling, indexed shapes with #2, dedup), then #3, #4, #1/#5
 (after a weak-GPU measurement), then the rest. #3: highlights done, bands dropped; #4 waits for the
-weak-GPU measurement (now done); #5 done (slow GPUs only); #8: the codec done, not yet used; #9 done (while moving on slow machines); #7 done (small).
+weak-GPU measurement (now done); #5 done (slow GPUs only); #8: the codec done, not yet used; #9 done (while moving on slow machines); #7 done (small); #6 done (moving on slow machines).
 
 ## Revisit when
 

@@ -1084,6 +1084,10 @@ fn push_lines(
 
 // ---------------------------------------------------------------- target
 
+/// How much a surface must bend across a pixel, against its steps on both sides, to show an
+/// edge on screen (ADR 0036 #6): 0 every pixel, 1 only jumps.
+const SCREEN_EDGE_BEND: f32 = 0.3;
+
 /// Where a pass draws: colour (and its MSAA resolve), depth, and how they start.
 struct Out<'a> {
     size: (u32, u32),
@@ -1191,11 +1195,16 @@ impl Target {
             )
             .create_view(&Default::default())
         });
+        // A single-sample depth can be read back: edges found on screen (ADR 0036 #6).
         let depth = tex(
             "bimble depth",
             DEPTH_FORMAT,
             samples,
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
+            if samples == 1 {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+            } else {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+            },
         );
         Target {
             size,
@@ -1210,6 +1219,8 @@ impl Target {
 // ---------------------------------------------------------------- renderer
 
 pub struct Renderer {
+    /// Edges found on screen from the depth (single-sample renderers only; ADR 0036 #6).
+    screen_edges: Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::Buffer)>,
     face_pipeline: wgpu::RenderPipeline,
     probe_pipeline: wgpu::RenderPipeline,
     face_front_pipeline: wgpu::RenderPipeline,
@@ -1247,6 +1258,9 @@ pub struct DrawOptions {
     /// Draw a far cell's simplified stand-in in place of its elements when its error spans at
     /// most this many pixels (ADR 0036 #9; 0: never). Needs `GpuScene::use_proxies`.
     pub proxy_px: f32,
+    /// Edges found on screen from the depth instead of drawn as lines (ADR 0036 #6): about half
+    /// the cost of a frame, coarser. Single-sample renderers only (otherwise lines).
+    pub screen_edges: bool,
 }
 
 impl Default for DrawOptions {
@@ -1257,6 +1271,7 @@ impl Default for DrawOptions {
             cull: true,
             occlusion: false,
             proxy_px: 0.0,
+            screen_edges: false,
             hatching: true,
             edges: true,
             style: GraphicStyle::default(),
@@ -1504,7 +1519,73 @@ impl Renderer {
             &line_attrs_clip,
         );
 
+        let screen_edges = (samples == 1).then(|| {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("bimble screen edges"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("edges.wgsl").into()),
+            });
+            let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("bimble screen edges"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("bimble screen edges"),
+                bind_group_layouts: &[Some(&bgl)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("bimble screen edges"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_full"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs_edges"),
+                    compilation_options: Default::default(),
+                    targets: &target,
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+            let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("bimble screen edges"),
+                size: 96,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            (pipeline, bgl, uniforms)
+        });
+
         Renderer {
+            screen_edges,
             face_pipeline,
             probe_pipeline,
             face_front_pipeline,
@@ -2106,6 +2187,8 @@ impl Renderer {
     ) {
         let aspect = out.size.0 as f32 / out.size.1 as f32;
         let vp = camera.view_proj(aspect, bounds);
+        // Edges from the depth instead of lines: single-sample pictures only.
+        let screen = opts.screen_edges && self.screen_edges.is_some() && out.resolve.is_none();
         // Light from over the viewer's left shoulder.
         let light = (camera.eye() - camera.target).normalize() + Vec3::new(-0.3, -0.2, 0.9);
         let st = &opts.style;
@@ -2326,7 +2409,7 @@ impl Renderer {
                         }
                     }
                 }
-                if (opts.edges || !layer.faces)
+                if ((opts.edges && !screen) || !layer.faces)
                     && (!scene.lines.is_empty()
                         || !scene.huge_lines.is_empty()
                         || !scene.shapes.is_empty())
@@ -2383,6 +2466,55 @@ impl Renderer {
                     }
                 }
             }
+        }
+        // Edges found on screen (ADR 0036 #6), over the picture, from its depth.
+        if let (true, true, Some((pipeline, bgl, uniforms))) =
+            (screen, opts.edges, &self.screen_edges)
+        {
+            let edge = opts.style.edges.unit();
+            let mut u = [0f32; 24];
+            u[..16].copy_from_slice(&vp.inverse().to_cols_array());
+            u[16..20].copy_from_slice(&[edge[0], edge[1], edge[2], 1.0]);
+            u[20..24].copy_from_slice(&[
+                out.size.0 as f32,
+                out.size.1 as f32,
+                SCREEN_EDGE_BEND,
+                0.0,
+            ]);
+            queue.write_buffer(uniforms, 0, bytemuck::cast_slice(&u));
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("bimble screen edges"),
+                layout: bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniforms.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(out.depth),
+                    },
+                ],
+            });
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("bimble screen edges"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: out.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..3, 0..1);
         }
         queue.submit([enc.finish()]);
     }
@@ -3270,6 +3402,67 @@ mod tests {
         assert!(
             top * 100 >= all * 98,
             "{top} of {all} pixels in 4 colours: {n:?}"
+        );
+    }
+
+    /// Edges found on screen (ADR 0036 #6) fall where edge lines do: most line pixels have a
+    /// screen edge within a pixel, and most screen edges lie within two pixels of a line.
+    #[test]
+    fn screen_edges_follow_the_edge_lines() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let r = Renderer::new(&gpu.device, 1);
+        let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
+        let (w, h) = (320usize, 200usize);
+        let target = Target::new(&gpu.device, (w as u32, h as u32), 1);
+        let mut cam = Camera::default();
+        cam.fit(&scene, 1.6);
+        let dark = |screen: bool| {
+            let o = DrawOptions {
+                screen_edges: screen,
+                hatching: false,
+                ..DrawOptions::default()
+            };
+            r.render(&gpu.device, &gpu.queue, &target, &gs, &cam, &o);
+            let edge = o.style.edges.0;
+            gpu.read_rgba(&target)
+                .unwrap()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| (0..3).all(|c| p[c].abs_diff(edge[c]) < 8))
+                .collect::<Vec<bool>>()
+        };
+        let (lines, screen) = (dark(false), dark(true));
+        let near = |m: &[bool], x: usize, y: usize, d: usize| {
+            (y.saturating_sub(d)..(y + d + 1).min(h))
+                .any(|j| (x.saturating_sub(d)..(x + d + 1).min(w)).any(|i| m[j * w + i]))
+        };
+        let count = |a: &[bool], b: &[bool], d: usize| {
+            let (mut n, mut hit) = (0, 0);
+            for y in 0..h {
+                for x in 0..w {
+                    if a[y * w + x] {
+                        n += 1;
+                        hit += usize::from(near(b, x, y, d));
+                    }
+                }
+            }
+            (hit, n)
+        };
+        let (found, of_lines) = count(&lines, &screen, 1);
+        let (kept, of_screen) = count(&screen, &lines, 2);
+        assert!(of_lines > 500 && of_screen > 500, "{of_lines} {of_screen}");
+        assert!(
+            found * 10 >= of_lines * 7,
+            "{found} of {of_lines} line pixels found"
+        );
+        assert!(
+            kept * 10 >= of_screen * 7,
+            "{kept} of {of_screen} screen edges near a line"
         );
     }
 
