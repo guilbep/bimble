@@ -16,7 +16,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Largest file read: ~10x the largest IFC reported (7 GB, ADR 0039). Files are streamed, so
+/// size alone costs time, not memory: what a file costs in memory is guarded by its displayed
+/// bytes (`Limits`, the viewer's estimate, ADR 0033) and the longest statement (`step`).
+pub const MAX_FILE_BYTES: u64 = 64 << 30;
 const MAX_NESTING: usize = 32;
 /// Maximum distance between a tessellated arc and the true arc.
 pub const ARC_TOLERANCE_MM: f64 = 0.5;
@@ -74,21 +77,41 @@ pub fn parse_file_with(path: &std::path::Path, limits: Limits) -> Result<Parsed,
     Parsed::new(parsed, limits)
 }
 
-/// `displayed_bytes` of a file, read a window at a time.
+/// `displayed_bytes` of a file, read a window at a time. A line is kept only up to its first
+/// `LINE_HEAD` bytes (all the scan looks at): a file without line breaks costs no more memory.
 pub fn displayed_bytes_of_file(path: &std::path::Path) -> Result<u64, ReadError> {
-    use std::io::BufRead;
     let f = std::fs::File::open(path).map_err(ReadError::Io)?;
-    let mut r = std::io::BufReader::with_capacity(1 << 20, f);
+    displayed_bytes_of_read(f).map_err(ReadError::Io)
+}
+
+/// Bytes of a line the displayed-bytes scan reads: its id and type name.
+const LINE_HEAD: usize = 256;
+
+fn displayed_bytes_of_read(mut r: impl std::io::Read) -> std::io::Result<u64> {
     let mut d = Displayed::default();
-    let (mut line, mut total) = (Vec::new(), 0u64);
+    let mut buf = vec![0u8; 1 << 20];
+    let (mut head, mut len, mut total) = (Vec::with_capacity(LINE_HEAD), 0u64, 0u64);
     loop {
-        line.clear();
-        let n = r.read_until(b'\n', &mut line).map_err(ReadError::Io)?;
-        if n == 0 {
-            break;
-        }
+        let n = match r.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
         total += n as u64;
-        d.line(line.strip_suffix(b"\n").unwrap_or(&line));
+        for piece in buf[..n].split_inclusive(|&b| b == b'\n') {
+            let room = LINE_HEAD.saturating_sub(head.len()).min(piece.len());
+            head.extend_from_slice(&piece[..room]);
+            len += piece.len() as u64;
+            if piece.last() == Some(&b'\n') {
+                d.line(head.strip_suffix(b"\n").unwrap_or(&head), len - 1);
+                head.clear();
+                len = 0;
+            }
+        }
+    }
+    if len > 0 {
+        d.line(&head, len);
     }
     Ok(total.saturating_sub(d.skipped))
 }
@@ -128,7 +151,7 @@ pub fn parse_bytes_with(bytes: Vec<u8>, limits: Limits) -> Result<Parsed, ReadEr
 pub fn displayed_bytes(bytes: &[u8]) -> u64 {
     let mut d = Displayed::default();
     for line in bytes.split(|&b| b == b'\n') {
-        d.line(line);
+        d.line(line, line.len() as u64);
     }
     (bytes.len() as u64).saturating_sub(d.skipped)
 }
@@ -141,8 +164,8 @@ struct Displayed {
 }
 
 impl Displayed {
-    /// One line, without its newline.
-    fn line(&mut self, line: &[u8]) {
+    /// One line of `len` bytes without its newline; `line` is all of it or its start.
+    fn line(&mut self, line: &[u8], len: u64) {
         if line.first() == Some(&b'#') {
             let rest = line
                 .iter()
@@ -159,7 +182,7 @@ impl Displayed {
                 .any(|n| n.as_bytes().eq_ignore_ascii_case(name));
         }
         if self.in_skipped {
-            self.skipped += line.len() as u64 + 1;
+            self.skipped += len + 1;
         }
     }
 }
@@ -2487,6 +2510,36 @@ mod tests {
         let text = "ISO-10303-21;\nDATA;\n#1=IFCWALL('a');\n#2= IFCPROPERTYSET('b',\n  (#3));\n#3=IFCPROPERTYSINGLEVALUE('c');\n#4=IFCSLAB('d');\nENDSEC;\n";
         let shown = "ISO-10303-21;\nDATA;\n#1=IFCWALL('a');\n#4=IFCSLAB('d');\nENDSEC;\n";
         assert_eq!(displayed_bytes(text.as_bytes()), shown.len() as u64);
+        // Streamed, lines longer than what the scan keeps and than a read: the same count.
+        let long = format!(
+            "#5=IFCPROPERTYSINGLEVALUE('{}');\n#6=IFCWALL('{}')",
+            "x".repeat(3 << 20),
+            "y".repeat(LINE_HEAD)
+        );
+        for t in [text.to_string(), format!("{text}{long}")] {
+            let want = displayed_bytes(t.as_bytes());
+            assert_eq!(displayed_bytes_of_read(t.as_bytes()).unwrap(), want);
+        }
+    }
+
+    /// A file past 4 GiB opens (ADR 0039: it was refused over 2 GiB). Sparse: the model is at
+    /// the start, the rest is never written to disk nor read past the data section's end.
+    #[test]
+    fn a_file_past_4_gib_is_read() {
+        let path = std::env::temp_dir().join(format!("bimble-5gib-{}.ifc", std::process::id()));
+        let text = crate::export(
+            &bimble_core::demo::concrete_frame(&bimble_core::demo::FrameSpec::default()),
+            "t.ifc",
+            "t",
+        );
+        let f = std::fs::File::create(&path).unwrap();
+        std::io::Write::write_all(&mut &f, text.as_bytes()).unwrap();
+        f.set_len(5 << 30).unwrap();
+        drop(f);
+        let parsed = parse_file_with(&path, Limits::default());
+        std::fs::remove_file(&path).unwrap();
+        let (scene, _) = parsed.unwrap().scene(|_| true, usize::MAX);
+        assert!(!scene.elements.is_empty());
     }
 
     /// Small full circles: within ~1.2 % of the exact area (15° segments), like IfcOpenShell.
