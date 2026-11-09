@@ -2,7 +2,7 @@
 //! what to offer when it does not fit: one storey, some IFC classes, a material.
 
 use bimble_geom::Scene;
-use bimble_ifc::read::{Counted, Parsed, stored_triangles};
+use bimble_ifc::read::{Counted, Parsed, Progress, stored_triangles};
 use std::time::Duration;
 use web_time::Instant;
 
@@ -90,7 +90,7 @@ impl Choose {
     /// Mesh the chosen groups (all of them with `everything`) and free the parsed file.
     /// "Anyway" overrides the memory budget, not the guard against hostile files: the cap is
     /// what the census counted for the choice (each element itself capped while counted).
-    pub fn scene(self, everything: bool) -> Outcome {
+    pub fn scene(self, everything: bool, progress: &Progress) -> Outcome {
         let t = Instant::now();
         let partial = (!everything).then(|| self.label());
         let keep: Vec<bool> = self
@@ -104,7 +104,7 @@ impl Choose {
                 .map(|(c, _)| c),
         );
         let cap = cap.min(self.parsed.limits().max_triangles);
-        let (scene, _) = self.parsed.scene(|i| keep[i], cap);
+        let (scene, _) = self.parsed.scene_progress(|i| keep[i], cap, progress);
         drop(self.parsed);
         Outcome::Ready {
             scene,
@@ -129,7 +129,12 @@ const STREAM_WINDOW: u64 = 64 << 20;
 /// Load an IFC within `budget` (ADR 0033): straight through when it fits (the usual case);
 /// otherwise stop and ask, before reading when reading alone would not fit (unless
 /// `read_anyway`), after reading when showing all of it would not.
-pub fn load_ifc(source: Source, budget: u64, read_anyway: bool) -> Result<Outcome, String> {
+pub fn load_ifc(
+    source: Source,
+    budget: u64,
+    read_anyway: bool,
+    progress: &Progress,
+) -> Result<Outcome, String> {
     let t = Instant::now();
     let cost = match &source {
         Source::Bytes(b) => Cost {
@@ -142,7 +147,8 @@ pub fn load_ifc(source: Source, budget: u64, read_anyway: bool) -> Result<Outcom
                 .map_err(|e| e.to_string())?
                 .len()
                 .min(STREAM_WINDOW),
-            displayed: bimble_ifc::read::displayed_bytes_of_file(p).map_err(|e| e.to_string())?,
+            displayed: bimble_ifc::read::displayed_bytes_of_file_progress(p, progress)
+                .map_err(|e| e.to_string())?,
         },
     };
     if !read_anyway && cost.read() > budget {
@@ -155,13 +161,13 @@ pub fn load_ifc(source: Source, budget: u64, read_anyway: bool) -> Result<Outcom
     let limits = bimble_ifc::read::Limits::for_displayed(cost.displayed);
     let parsed = match source {
         Source::Bytes(b) => bimble_ifc::read::parse_bytes_with(b, limits),
-        Source::File(p) => bimble_ifc::read::parse_file_with(&p, limits),
+        Source::File(p) => bimble_ifc::read::parse_file_progress(&p, limits, progress),
     }
     .map_err(|e| e.to_string())?;
     // Mesh what fits; only a model that does not fit all pays for a census. Never past the
     // guard against hostile expansion.
     let cap = cost.affordable_triangles(budget).min(limits.max_triangles);
-    let (scene, not_shown) = parsed.scene(|_| true, cap);
+    let (scene, not_shown) = parsed.scene_progress(|_| true, cap, progress);
     if not_shown == 0 {
         // Freed before the scene is drawn: it would otherwise overlap the GPU upload.
         drop(parsed);
@@ -402,7 +408,12 @@ mod tests {
     fn a_model_is_loaded_or_asked_about_by_its_cost() {
         let ifc = demo_ifc();
         assert!(matches!(
-            load_ifc(Source::Bytes(ifc.clone()), 100_000_000_000, false),
+            load_ifc(
+                Source::Bytes(ifc.clone()),
+                100_000_000_000,
+                false,
+                &Progress::default(),
+            ),
             Ok(Outcome::Ready { partial: None, .. })
         ));
         let cost = Cost {
@@ -411,7 +422,12 @@ mod tests {
         };
         // Room to read, and for the base, but not for the triangles.
         let tight = cost.shown(0).max(cost.read());
-        let Ok(Outcome::Ask(a)) = load_ifc(Source::Bytes(ifc.clone()), tight, false) else {
+        let Ok(Outcome::Ask(a)) = load_ifc(
+            Source::Bytes(ifc.clone()),
+            tight,
+            false,
+            &Progress::default(),
+        ) else {
             panic!("expected a question")
         };
         let Ask::Choose(mut c) = *a else {
@@ -421,14 +437,14 @@ mod tests {
         let first = groups(&c.census, Split::Storey)[0].name.clone();
         c.chosen = vec![first];
         let want = c.chosen_triangles();
-        let Outcome::Ready { scene, partial, .. } = c.scene(false) else {
+        let Outcome::Ready { scene, partial, .. } = c.scene(false, &Progress::default()) else {
             panic!()
         };
         assert!(partial.is_some_and(|p| p.contains("of")));
         let got: usize = scene.elements.iter().map(|e| e.triangle_count()).sum();
         assert_eq!(got, want);
         assert!(matches!(
-            load_ifc(Source::Bytes(ifc), cost.read() - 1, false),
+            load_ifc(Source::Bytes(ifc), cost.read() - 1, false, &Progress::default()),
             Ok(Outcome::Ask(a)) if matches!(*a, Ask::Read { .. })
         ));
     }

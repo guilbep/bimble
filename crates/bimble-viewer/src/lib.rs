@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 // std's Instant panics in browsers; web-time is std's on the desktop.
+use bimble_ifc::read::Progress;
 use web_time::Instant;
 
 mod big;
@@ -425,6 +426,19 @@ pub fn load_scene(path: &Path) -> Result<Scene, String> {
     load_any(path).map(|(s, _)| s)
 }
 
+/// `load_scene`, an IFC file reporting each step to `progress`.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_scene_progress(path: &Path, progress: &Progress) -> Result<Scene, String> {
+    if path
+        .extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("ifc"))
+    {
+        bimble_ifc::read::read_file_progress(path, progress).map_err(|e| e.to_string())
+    } else {
+        load_scene(path)
+    }
+}
+
 /// A scene, and for a .bimble file the model itself (it can then be edited).
 fn load_any(path: &Path) -> Result<(Scene, Option<bimble_core::Model>), String> {
     let is_ifc = path
@@ -535,6 +549,115 @@ struct Loading {
     rx: Receiver<LoadResult>,
     /// An IFC imported as an editable copy: not on disk yet, so the editor starts dirty.
     imported: bool,
+    /// How far it has come, written by the loading thread.
+    progress: std::sync::Arc<Progress>,
+    started: Instant,
+    /// Each step as the UI saw it begin, since `started` (to within a frame): the log's timings.
+    steps: Vec<(bimble_ifc::read::Stage, Duration)>,
+}
+
+impl Loading {
+    fn new(path: PathBuf, rx: Receiver<LoadResult>, imported: bool) -> Loading {
+        log::info!("loading {}", path.display());
+        Loading {
+            path,
+            rx,
+            imported,
+            progress: Default::default(),
+            started: Instant::now(),
+            steps: Vec::new(),
+        }
+    }
+
+    /// Note a step that has begun since the last frame.
+    fn observe(&mut self) {
+        let (_, total) = self.progress.counts();
+        let stage = self.progress.stage();
+        if total == 0 || self.steps.last().is_some_and(|(s, _)| *s == stage) {
+            return;
+        }
+        let t = self.started.elapsed();
+        log::debug!(
+            "{}: {} ({:.2} s)",
+            self.path.display(),
+            stage.label(),
+            t.as_secs_f64()
+        );
+        self.steps.push((stage, t));
+    }
+
+    /// How long it took, and each step: "3.21 s (Reading the file 1.40 s, …)".
+    fn timing(&self) -> String {
+        let end = self.started.elapsed();
+        let mut s = format!("{:.2} s", end.as_secs_f64());
+        if !self.steps.is_empty() {
+            let ends = self.steps.iter().skip(1).map(|(_, t)| *t).chain([end]);
+            let parts: Vec<String> = (self.steps.iter().zip(ends))
+                .map(|((stage, a), b)| format!("{} {:.2} s", stage.label(), (b - *a).as_secs_f64()))
+                .collect();
+            s += &format!(" ({})", parts.join(", "));
+        }
+        s
+    }
+
+    /// What the status line says while it loads: the file, the step, how far, how long.
+    /// `None` for its first `PROGRESS_AFTER`: a quick load shows nothing.
+    fn shown(&self, verb: &str) -> Option<LoadShown> {
+        let t = self.started.elapsed();
+        if t < PROGRESS_AFTER {
+            return None;
+        }
+        let name = self.path.file_name().map_or_else(
+            || self.path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let (_, total) = self.progress.counts();
+        // Nothing reported (a .bimble file, an import): no step and no percentage to show.
+        let fraction = (total > 0).then(|| self.progress.overall());
+        let secs = t.as_secs();
+        let mut text = format!("{verb} {name}");
+        if let Some(f) = fraction {
+            text += &format!(" · {} {:.0} %", self.progress.stage().label(), f * 100.0);
+        } else {
+            text += "…";
+        }
+        text += &format!("  {}:{:02}", secs / 60, secs % 60);
+        Some(LoadShown { text, fraction })
+    }
+}
+
+/// The load's bar, 3 px along the top of the 3D view, above it. Without a fraction a segment
+/// sweeps across: something is happening, how much is left is not known.
+fn progress_bar(ctx: &egui::Context, view: egui::Rect, fraction: Option<f32>) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::unique("load progress"),
+    ));
+    let track = egui::Rect::from_min_size(view.min, egui::vec2(view.width(), 3.0));
+    painter.rect_filled(track, 0.0, ui_theme::BORDER);
+    let (a, b) = match fraction {
+        Some(f) => (0.0, f.clamp(0.0, 1.0)),
+        None => {
+            let t = ctx.input(|i| i.time) as f32;
+            let x = (t * 0.6).fract() * 1.25 - 0.25;
+            (x.max(0.0), (x + 0.25).min(1.0))
+        }
+    };
+    let fill = egui::Rect::from_x_y_ranges(
+        track.left() + a * track.width()..=track.left() + b * track.width(),
+        track.y_range(),
+    );
+    painter.rect_filled(fill, 0.0, ui_theme::ACCENT);
+}
+
+/// A load is shown once it takes longer than this: a quick one would only flash.
+const PROGRESS_AFTER: Duration = Duration::from_millis(250);
+
+/// A load in progress as shown: a thin bar over the 3D view and a line in the status bar.
+struct LoadShown {
+    text: String,
+    /// Done, 0 to 1; `None` when the load reports no progress (the bar then sweeps).
+    fraction: Option<f32>,
 }
 
 struct Loaded {
@@ -886,11 +1009,7 @@ impl Viewer {
         }
         let Some(bytes) = p.bytes else { return };
         let (tx, rx) = channel();
-        let loading = Loading {
-            path: PathBuf::from(&p.name),
-            rx,
-            imported: false,
-        };
+        let loading = Loading::new(PathBuf::from(&p.name), rx, false);
         if link {
             self.linking = Some(loading);
         } else {
@@ -929,6 +1048,7 @@ impl Viewer {
                 big::Source::Bytes(job.bytes),
                 big::memory_budget(self.settings.memory_share, self.held()),
                 job.read_anyway,
+                &Progress::default(),
             )
         } else {
             load_bytes(&job.name, job.bytes).map(|(s, m)| {
@@ -1045,11 +1165,11 @@ impl Viewer {
         }
         let Some(bytes) = p.bytes else { return };
         let (tx, rx) = channel();
-        self.loading = Some(Loading {
-            path: editable_copy_path(Path::new(&p.name)),
+        self.loading = Some(Loading::new(
+            editable_copy_path(Path::new(&p.name)),
             rx,
-            imported: true,
-        });
+            true,
+        ));
         self.error = None;
         self.parse_later = Some(ParseLater {
             name: p.name,
@@ -1077,11 +1197,7 @@ impl Viewer {
             let _ = tx.send(r);
             ctx.request_repaint();
         });
-        self.loading = Some(Loading {
-            path: editable_copy_path(&path),
-            rx,
-            imported: true,
-        });
+        self.loading = Some(Loading::new(editable_copy_path(&path), rx, true));
         self.error = None;
     }
 
@@ -1098,6 +1214,8 @@ impl Viewer {
         let ctx = ctx.clone();
         let share = self.settings.memory_share;
         self.opened_share = share;
+        let loading = Loading::new(path, rx, false);
+        let progress = loading.progress.clone();
         std::thread::spawn(move || {
             let t = Instant::now();
             let is_ifc = p.extension().is_some_and(|x| x.eq_ignore_ascii_case("ifc"));
@@ -1106,6 +1224,7 @@ impl Viewer {
                     big::Source::File(p.clone()),
                     big::memory_budget(share, 0),
                     false,
+                    &progress,
                 )
             } else {
                 load_any(&p).map(|(s, m)| big::Outcome::ready(s, m, t.elapsed()))
@@ -1113,11 +1232,7 @@ impl Viewer {
             let _ = tx.send(r);
             ctx.request_repaint();
         });
-        self.loading = Some(Loading {
-            path,
-            rx,
-            imported: false,
-        });
+        self.loading = Some(loading);
         self.error = None;
     }
 
@@ -1127,23 +1242,43 @@ impl Viewer {
         let (tx, rx) = channel();
         let p = path.clone();
         let ctx = ctx.clone();
+        let linking = Loading::new(path, rx, false);
+        let progress = linking.progress.clone();
         std::thread::spawn(move || {
             let t = Instant::now();
-            let r = load_scene(&p).map(|s| big::Outcome::ready(s, None, t.elapsed()));
+            let r = load_scene_progress(&p, &progress)
+                .map(|s| big::Outcome::ready(s, None, t.elapsed()));
             let _ = tx.send(r);
             ctx.request_repaint();
         });
-        self.linking = Some(Loading {
-            path,
-            rx,
-            imported: false,
-        });
+        self.linking = Some(linking);
+    }
+
+    /// The load to show, if one is running long enough: opening first, then linking.
+    fn load_shown(&self) -> Option<LoadShown> {
+        let opening = self
+            .loading
+            .as_ref()
+            .and_then(|l| l.shown(if l.imported { "Importing" } else { "Opening" }));
+        opening.or_else(|| self.linking.as_ref().and_then(|l| l.shown("Linking")))
     }
 
     fn poll_linking(&mut self) {
         let Some(l) = &self.linking else { return };
         let Ok(result) = l.rx.try_recv() else { return };
-        let path = self.linking.take().unwrap().path;
+        let l = self.linking.take().unwrap();
+        match &result {
+            Ok(big::Outcome::Ready { scene, .. }) => log::info!(
+                "linked {}: {} elements, {} triangles, {}",
+                l.path.display(),
+                scene.elements.len(),
+                scene.triangle_count(),
+                l.timing()
+            ),
+            Ok(big::Outcome::Ask(_)) => {}
+            Err(e) => log::error!("{}: {e}", l.path.display()),
+        }
+        let path = l.path;
         let Some(main) = &mut self.loaded else { return };
         match result {
             Ok(big::Outcome::Ask(_)) => {}
@@ -1199,7 +1334,26 @@ impl Viewer {
     fn poll_loading(&mut self) {
         let Some(l) = &self.loading else { return };
         let Ok(result) = l.rx.try_recv() else { return };
-        let Loading { path, imported, .. } = self.loading.take().unwrap();
+        let l = self.loading.take().unwrap();
+        let timing = l.timing();
+        let Loading { path, imported, .. } = l;
+        match &result {
+            Ok(big::Outcome::Ask(_)) => log::warn!(
+                "{}: more than this machine's memory budget, asking what to show ({timing})",
+                path.display()
+            ),
+            Ok(big::Outcome::Ready { scene, partial, .. }) => log::info!(
+                "{} {}: {} elements, {} triangles{}, {timing}",
+                if imported { "imported" } else { "opened" },
+                path.display(),
+                scene.elements.len(),
+                scene.triangle_count(),
+                partial
+                    .as_ref()
+                    .map_or(String::new(), |p| format!(" (part: {p})")),
+            ),
+            Err(e) => log::error!("{}: {e}", path.display()),
+        }
         match result {
             Ok(big::Outcome::Ask(a)) => {
                 self.ask = Some((path, a));
@@ -3336,27 +3490,25 @@ impl Viewer {
     fn load_later(
         &mut self,
         path: PathBuf,
-        job: impl FnOnce(std::sync::mpsc::Sender<LoadResult>) + Send + 'static,
+        job: impl FnOnce(std::sync::mpsc::Sender<LoadResult>, &Progress) + Send + 'static,
         ctx: &egui::Context,
     ) {
         let (tx, rx) = channel();
-        self.loading = Some(Loading {
-            path,
-            rx,
-            imported: false,
-        });
+        let loading = Loading::new(path, rx, false);
+        let progress = loading.progress.clone();
+        self.loading = Some(loading);
         self.error = None;
         #[cfg(not(target_arch = "wasm32"))]
         {
             let ctx = ctx.clone();
             std::thread::spawn(move || {
-                job(tx);
+                job(tx, &progress);
                 ctx.request_repaint();
             });
         }
         #[cfg(target_arch = "wasm32")]
         {
-            self.mesh_later = Some((2, Box::new(move || job(tx))));
+            self.mesh_later = Some((2, Box::new(move || job(tx, &progress))));
             ctx.request_repaint();
         }
     }
@@ -3494,8 +3646,8 @@ impl Viewer {
             (Do::ReadAnyway, big::Ask::Read { source, budget, .. }) => {
                 self.load_later(
                     path,
-                    move |tx| {
-                        let _ = tx.send(big::load_ifc(source, budget, true));
+                    move |tx, progress| {
+                        let _ = tx.send(big::load_ifc(source, budget, true, progress));
                     },
                     ctx,
                 );
@@ -3503,8 +3655,8 @@ impl Viewer {
             (Do::Show { everything }, big::Ask::Choose(c)) => {
                 self.load_later(
                     path,
-                    move |tx| {
-                        let _ = tx.send(Ok(c.scene(everything)));
+                    move |tx, progress| {
+                        let _ = tx.send(Ok(c.scene(everything, progress)));
                     },
                     ctx,
                 );
@@ -3967,6 +4119,10 @@ impl Viewer {
         let ctx = ui.ctx().clone();
         let mut reset = None;
         ui.horizontal(|ui| {
+            if let Some(shown) = self.load_shown() {
+                ui.label(egui::RichText::new(shown.text).color(ui_theme::ACCENT));
+                ui.separator();
+            }
             ui.label(self.status_hint());
             ui.separator();
             // Every state that isn't the default, with its way back (ADR 0028).
@@ -4047,6 +4203,13 @@ impl eframe::App for Viewer {
             self.link(p, &ctx);
         }
         self.poll_linking();
+        for l in [&mut self.loading, &mut self.linking].into_iter().flatten() {
+            l.observe();
+        }
+        // The loading thread only wakes the UI when it is done: redraw for the bar meanwhile.
+        if self.loading.is_some() || self.linking.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
 
         // Files dropped on the window.
         if let Some(f) = ctx.input(|i| i.raw.dropped_files.first().cloned()) {
@@ -4185,16 +4348,19 @@ impl eframe::App for Viewer {
                 )
                 .show(ui, |ui| self.view_tabs(ui));
         }
-        egui::CentralPanel::no_frame().show(ui, |ui| {
+        let view = egui::CentralPanel::no_frame().show(ui, |ui| {
             let rect = ui.available_rect_before_wrap();
             let aspect = rect.width() / rect.height().max(1.0);
             self.last_aspect = aspect;
             self.handle_keys(&ctx, aspect);
 
-            if let Some(l) = &self.loading {
+            // While a model loads, the one shown stays (and can be moved around): the progress
+            // is a thin bar over the view and a line in the status bar.
+            if self.loaded.is_none()
+                && let Some(l) = &self.loading
+            {
                 ui.centered_and_justified(|ui| {
-                    ui.spinner();
-                    ui.label(format!("Loading {}…", l.path.display()));
+                    ui.label(format!("Opening {}…", l.path.display()));
                 });
                 return;
             }
@@ -4313,6 +4479,9 @@ impl eframe::App for Viewer {
                 ui.colored_label(Color32::RED, err);
             }
         });
+        if let Some(shown) = self.load_shown() {
+            progress_bar(&ctx, view.response.rect, shown.fraction);
+        }
         self.palette_ui(&ctx);
         #[cfg(target_arch = "wasm32")]
         state::UNSAVED.store(
