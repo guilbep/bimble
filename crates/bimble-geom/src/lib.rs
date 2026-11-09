@@ -9,6 +9,7 @@ pub mod bvh;
 pub mod codec;
 pub mod compare;
 pub mod dedup;
+pub mod hlod;
 pub mod scene;
 
 pub use scene::{

@@ -270,6 +270,55 @@ Tried and dropped, measured:
 - Deflate inside the codec: not added (`miniz_oxide` isn't a dependency of `bimble-geom`); a
   cache file or HTTP can gzip the encoded bytes, as measured above.
 
+## #9 (geometry half): proxies (9 Nov)
+
+`bimble_geom::hlod::build(&scene, &Options)` cuts the scene into an octree and gives each cell a
+proxy mesh standing for every element under it, with its error in mm. The renderer (not wired
+yet) draws a cell's proxy when the error projects under a pixel, else its children; under a leaf,
+the elements.
+
+- **Octree, not the box tree's nodes.** Cubes halve per level, so the error does too: one error
+  per depth, as in 3D Tiles' implicit tiling. The box tree's median splits give boxes of any
+  shape and two to three times the levels. A cell is split while it draws more than 65 536
+  triangles (copies counted), down to depth 16; elements go by their centre.
+- **Vertex clustering on a grid** of `side / 64` (pure Rust): each vertex moves to the mean of
+  the vertices in its grid cell; triangles that lose a corner are dropped. Boxes larger than a
+  grid cell keep their corners. All grids are one lattice (powers of two from the root's
+  corner), so a parent clusters its children's proxies by halving their grid keys, which equals
+  clustering the originals: errors don't add up, and each original triangle is read once, by its
+  leaf (copies placed one at a time, nothing kept). One proxy per material family (the style
+  slot). Over 65 536 triangles, the grid doubles until it fits.
+- **The error is one-way:** `grid × √3`. Every proxy point is that close to the original. Not
+  the other way: what is thinner than a grid cell in two axes (a pipe) collapses and is left out;
+  it is then thinner than the error. Proxies ignore what the viewer hides (classes, families,
+  section box): a cell with something hidden must be descended.
+- **A proxy is kept only if it has at most a quarter of the triangles it stands for**; else the
+  renderer descends. At a half: 84 instead of 52 MB on the 415 MB model, 123 instead of 109 on
+  the 758 MB one. Proxies carry crease edges (the drawing look): ~60 % of their memory.
+
+`cargo run --release -p bimble-cli --example hlod -- <files>` (M4 Pro; load time not counted).
+Per depth: proxy triangles / error; memory is positions, indices, edges and edge normals:
+
+| model | elements | drawn | build | 0 | 1 | 2 | 3 | 4 | 5 | deeper | proxies |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 872 MB plumbing | 35 243 | 9.09 M | 0.44 s | 4 k / 3.0 m | 17 k / 1.5 m | 88 k / 761 | 324 k / 380 | 628 k / 190 | 337 k / 95 | 32 k / 48 | 1.43 M, 56 MB |
+| 758 MB sanitary | 48 794 | 21.0 M | 0.84 s | 6 k / 2.9 m | 20 k / 1.5 m | 83 k / 730 | 350 k / 365 | 870 k / 183 | 1.12 M / 91 | 318 k / 46 | 2.77 M, 109 MB |
+| 709 MB | 26 814 | 20.1 M | 1.34 s | 25 k / 4.9 m | 137 k / 1.2–2.5 m | 442 k / 614 | 949 k / 307 | 1.69 M / 153 | 1.69 M / 77 | – | 4.93 M, 222 MB |
+| 415 MB sprinklers | 32 766 | 35.8 M | 0.71 s | 1 k / 2.8 m | 4 k / 1.4 m | 12 k / 693 | 34 k / 347 | 104 k / 173 | 217 k / 87 | 781 k / 11–87 | 1.15 M, 52 MB |
+| 394 MB | 21 192 | 3.74 M | 0.21 s | 30 k / 2.4 m | 74 k / 1.2 m | 167 k / 593 | 330 k / 296 | 21 k / 148 | – | – | 0.62 M, 27 MB |
+| sixty5 (342 MB) | 16 300 | 1.65 M | 0.19 s | 36 k / 3.4 m | 158 k / 840 | 206 k / 420 | 139 k / 210 | – | – | – | 0.54 M, 23 MB |
+| schependomlaan (49 MB) | 3 511 | 0.26 M | 0.04 s | 26 k / 662 | 42 k / 331 | – | – | – | – | – | 0.07 M, 3 MB |
+
+Errors in mm unless m. At the root (2.4–4.9 m) a whole model is 1–36 k triangles; at depth 3
+(210–380 mm) 34–949 k, where 1.7–35.8 M are drawn (the 709 MB root and depth 1, and the sixty5
+root, hit the cap and coarsened). The 709 MB model (faceted
+breps, 7.9 M triangles stored) is the expensive one: 222 MB of proxies. Test
+`proxies_stay_within_their_error` (a concrete frame, four levels: every proxy sample within the
+error of the original, every element thicker than twice the error within it of its proxy, fewer
+triangles each level up; it fails with an error stated at 0.3 grid), `proxies_fit_their_cap`,
+`empty_scene_has_no_cells`. Not measured: peak memory while building (each depth's clusters are
+kept until their parents are built), and what it buys on screen (the renderer half).
+
 ## Further optimizations to do (research, 9 Nov; one issue each)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
@@ -285,7 +334,7 @@ measured with `bimble bench` before and after (CLAUDE.md), on the M4 Pro and on 
 | 6 | 6 | Edges found in screen space (depth, normal, element id) instead of line geometry, while moving | est.; Speckle's choice | yes | M |
 | 7 | 5 | Visible draw ranges merged; multi-draw where it exists | 1.25–1.7× from fewer draw calls (GRAPP 2013) | Chrome only, not through wgpu | S |
 | 8 | 5 | Compressed geometry (meshopt codec) for caches and downloads | 2–4× smaller than packed data, decodes 3–6 GB/s | yes | S–M |
-| 9 | 5 | Simplified proxies per box-tree cell for what is far (HLOD) | est.; iTwin.js and 3D Tiles do it | yes | L |
+| 9 | 5 | Simplified proxies per octree cell for what is far (HLOD); geometry done (above) | est.; iTwin.js and 3D Tiles do it | yes | L |
 | 10 | 4 | GPU-driven culling: depth pyramid, compute, indirect draws | ~2× (VTK WebGPU) | no | L |
 
 Order: steps 1–3 above first (all done: frustum culling, indexed shapes with #2, dedup), then #3, #4, #1/#5
