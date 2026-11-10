@@ -1167,13 +1167,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 .to_owned();
             m.validate()
                 .map_err(|x| format!("imported model invalid: {x}"))?;
-            // `.json`: the text form (version 1), to read or diff by eye.
-            if out.extension().is_some_and(|x| x == "json") {
-                file::write_atomic(&out, file::to_string(&m).as_bytes())
-                    .map_err(|x| x.to_string())?;
-            } else {
-                file::save(&m, &out).map_err(e)?;
-            }
+            file::save(&m, &out).map_err(e)?;
             println!("→ {}", out.display());
             for l in rep.lines() {
                 println!("{l}");

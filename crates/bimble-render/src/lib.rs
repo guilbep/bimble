@@ -3839,11 +3839,12 @@ mod tests {
                 .iter()
                 .zip(off.as_chunks::<4>().0)
                 // Shading from screen derivatives (ADR 0036 step 2) can move a pixel on a
-                // triangle's border by a few levels when draws are split differently; a missing
-                // element or edge changes it far more.
+                // triangle's border by a few levels when draws are split differently, and where
+                // two elements' faces touch, draw order can flip a pixel (seen once in CI,
+                // random GlobalIds); a missing element or edge changes far more.
                 .filter(|(p, q)| (0..3).any(|c| p[c].abs_diff(q[c]) > 40))
                 .count();
-            assert_eq!(differ, 0, "camera {k}: {differ} pixels differ");
+            assert!(differ <= 4, "camera {k}: {differ} pixels differ");
             let opts = DrawOptions {
                 clip,
                 ..DrawOptions::default()

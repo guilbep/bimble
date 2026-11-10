@@ -7,7 +7,8 @@ Status: draft. It will change; readers must reject versions they don't know.
 Version 2, what Bimble writes (ADR 0042): the 7 bytes `bimble\0`, then a gzip stream of the
 document below encoded as CBOR (RFC 8949), floats in their shortest exact form.
 
-Version 1, still read, and written by `bimble import-ifc x.ifc x.json` to read or diff by eye:
+Version 1, still read, and written to any path ending in `.json` (e.g. `bimble import-ifc x.ifc
+x.json`, `bimble demo frame.json`), to read or diff by eye:
 UTF-8 JSON.
 
 ```json

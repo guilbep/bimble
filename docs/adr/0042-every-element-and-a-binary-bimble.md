@@ -28,8 +28,8 @@ their doors, pipes and fittings. And the file was JSON text: 3.4× the IFC on th
 3. **`.bimble` version 2 is binary:** the line `bimble\0`, then gzip (fast level) of the same
    model as CBOR (RFC 8949). Same serde types, so canonical as before: sorted maps, floats exact
    (CBOR writes the shortest float that keeps the value), the same model gives the same bytes.
-   Version 1 JSON is still read, and `bimble import-ifc x.ifc x.json` writes it, to read or diff
-   by eye. Hashes and the collaboration store (ADR 0038) don't depend on the file encoding. What
+   Version 1 JSON is still read, and saving to a path ending in `.json` writes it, to read, diff
+   or check with other tools (CI's IfcOpenShell checks read it). Hashes and the collaboration store (ADR 0038) don't depend on the file encoding. What
    is decompressed is capped like the file (a small gzip can unpack huge).
 4. **Each shape once.** An element whose body is one IfcMappedItem, uncut, moved and turned only
    (a Placement can't scale or mirror), shares its map's mesh with the other copies: in memory

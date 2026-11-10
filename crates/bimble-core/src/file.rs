@@ -138,8 +138,15 @@ fn from_binary(bytes: &[u8]) -> Result<Model, FileError> {
     checked(f, BINARY_VERSION)
 }
 
+/// Binary (version 2); a path ending in `.json` gets the text form (version 1), to read, diff
+/// or check with other tools.
 pub fn save(m: &Model, path: impl AsRef<std::path::Path>) -> Result<(), FileError> {
-    write_atomic(path.as_ref(), &to_bytes(m))?;
+    let path = path.as_ref();
+    if path.extension().is_some_and(|x| x == "json") {
+        write_atomic(path, to_string(m).as_bytes())?;
+    } else {
+        write_atomic(path, &to_bytes(m))?;
+    }
     Ok(())
 }
 

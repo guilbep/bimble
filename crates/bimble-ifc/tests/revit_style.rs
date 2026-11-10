@@ -702,7 +702,9 @@ fn metre_units_import_like_millimetres() {
 /// relative to its own first point.
 #[test]
 fn other_classes_convert_as_proxies_keeping_their_class() {
+    // Checked out with CRLF on Windows.
     let text = include_str!("fixtures/tilt.ifc")
+        .replace("\r\n", "\n")
         .replace("IFCBUILDINGELEMENTPROXY(", "IFCPIPESEGMENT(")
         .replace(
             "ENDSEC;\nEND-ISO",
