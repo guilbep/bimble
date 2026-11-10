@@ -3999,6 +3999,24 @@ mod tests {
     /// screen edge within a pixel, and most screen edges lie within two pixels of a line.
     #[test]
     fn screen_edges_follow_the_edge_lines() {
+        screen_edges_match_lines(|_| {});
+    }
+
+    /// Close up and grazing (the view inside the model's sphere, so the near plane is far/10⁴
+    /// and depth is coarse far off), at a laptop screen's size: flat faces get no dots or
+    /// dashes from depth rounding (seen in the browser while checking #59).
+    #[test]
+    fn screen_edges_close_up_have_no_noise() {
+        // Without the rounding floor: 45 % and 46 % of the screen edges were real.
+        for pitch in [0.12, -0.3] {
+            screen_edges_match_lines(|cam| {
+                cam.distance *= 0.12;
+                cam.pitch = pitch;
+            });
+        }
+    }
+
+    fn screen_edges_match_lines(adjust: impl Fn(&mut Camera)) {
         let Ok(gpu) = Headless::new() else {
             eprintln!("no GPU adapter, skipping");
             return;
@@ -4006,10 +4024,11 @@ mod tests {
         let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
         let r = Renderer::new(&gpu.device, 1);
         let gs = r.upload(&gpu.device, &gpu.queue, &scene, |_, _| Style::Normal);
-        let (w, h) = (320usize, 200usize);
+        let (w, h) = (1280usize, 800usize);
         let target = Target::new(&gpu.device, (w as u32, h as u32), 1);
         let mut cam = Camera::default();
         cam.fit(&scene, 1.6);
+        adjust(&mut cam);
         let dark = |screen: bool| {
             let o = DrawOptions {
                 screen_edges: screen,
@@ -4050,8 +4069,9 @@ mod tests {
             found * 10 >= of_lines * 7,
             "{found} of {of_lines} line pixels found"
         );
+        // No noise: nearly every screen edge is a real one (close up, depth rounding made 30 %).
         assert!(
-            kept * 10 >= of_screen * 7,
+            kept * 100 >= of_screen * 95,
             "{kept} of {of_screen} screen edges near a line"
         );
     }
