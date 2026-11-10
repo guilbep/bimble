@@ -25,6 +25,7 @@ mod edit;
 mod files;
 mod icons;
 mod layout;
+mod links;
 mod materials_page;
 mod measure;
 mod project_page;
@@ -914,6 +915,12 @@ struct Viewer {
     settings: settings::Settings,
     settings_window: bool,
     about_window: bool,
+    /// Manage links (#58).
+    links_window: bool,
+    /// A reference plan being reloaded from another file: its id (the new lines replace it).
+    reference_replace: Option<bimble_core::GlobalId>,
+    /// A linked model being reloaded from another file: its index (the new one replaces it).
+    relink: Option<usize>,
     /// What a load had to say (an IFC import's report), shown until closed.
     report: Option<(PathBuf, Vec<String>)>,
     /// Browser: meshing the chosen part, on a later frame (after "Loading…" is drawn).
@@ -1046,6 +1053,9 @@ impl Viewer {
             settings: settings::Settings::load(),
             settings_window: false,
             about_window: false,
+            links_window: false,
+            reference_replace: None,
+            relink: None,
             report: None,
             mesh_later: None,
             views: Vec::new(),
@@ -1183,7 +1193,9 @@ impl Viewer {
                 return;
             }
             match p.purpose {
-                files::Purpose::Reference => self.add_reference(p),
+                files::Purpose::Reference
+                | files::Purpose::ReferenceDxf
+                | files::Purpose::ReferencePdf => self.add_reference(p),
                 files::Purpose::Open | files::Purpose::Link => self.open_picked(p, ctx),
                 files::Purpose::ImportIfc => self.import_picked(p, ctx),
                 files::Purpose::PlanTemplate => {
@@ -1369,9 +1381,15 @@ impl Viewer {
                     matched_here,
                     matched_there,
                 };
-                // The same file linked again replaces the old link.
+                // Reloaded from another file: in the old one's place. The same file linked
+                // again replaces the old link.
                 let name = k.name();
-                match self.links.iter().position(|x| x.name() == name) {
+                let at = self
+                    .relink
+                    .take()
+                    .filter(|&i| i < self.links.len())
+                    .or_else(|| self.links.iter().position(|x| x.name() == name));
+                match at {
                     Some(i) => self.links[i] = k,
                     None => self.links.push(k),
                 }
@@ -4691,6 +4709,7 @@ impl eframe::App for Viewer {
         self.ask_ui(&ctx);
         self.settings_ui(&ctx);
         self.about_ui(&ctx);
+        self.links_ui(&ctx);
         self.report_ui(&ctx);
     }
 }

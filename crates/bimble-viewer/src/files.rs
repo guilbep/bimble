@@ -19,6 +19,9 @@ pub enum Purpose {
     Style,
     /// A reference plan (DXF, vector PDF; DWG is refused with a hint to convert it).
     Reference,
+    /// The same, offering DXF (and DWG, for the hint) or PDF only (Collaborate, #58).
+    ReferenceDxf,
+    ReferencePdf,
 }
 
 impl Purpose {
@@ -36,6 +39,8 @@ impl Purpose {
                 "Reference plan",
                 &["dxf", "DXF", "pdf", "PDF", "dwg", "DWG"],
             ),
+            Purpose::ReferenceDxf => ("DXF plan", &["dxf", "DXF", "dwg", "DWG"]),
+            Purpose::ReferencePdf => ("PDF plan", &["pdf", "PDF"]),
         }
     }
 }

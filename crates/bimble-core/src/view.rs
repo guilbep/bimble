@@ -399,6 +399,9 @@ pub struct Reference {
     pub name: String,
     /// "pdf" or "dxf".
     pub format: String,
+    /// Where it was read from, when known (a desktop path): Manage links reloads it from there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub offset_mm: [f64; 2],
     pub rotation_deg: f64,
     #[serde(default = "yes")]
@@ -803,6 +806,7 @@ mod tests {
             id: GlobalId::new(),
             name: "archi.dxf".into(),
             format: "dxf".into(),
+            source: None,
             offset_mm: [1000.0, 0.0],
             rotation_deg: 90.0,
             visible: true,

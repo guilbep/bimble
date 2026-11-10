@@ -1001,6 +1001,7 @@ impl Viewer {
         }
         if pick_reference {
             self.reference_view = Some(active.id);
+            self.reference_replace = None;
             self.files.pick(files::Purpose::Reference, ui.ctx());
         }
     }
@@ -1032,14 +1033,29 @@ impl Viewer {
                 .next()
                 .unwrap_or_default()
                 .to_ascii_lowercase(),
+            source: p.path.as_ref().map(|p| p.display().to_string()),
             offset_mm: [0.0, 0.0],
             rotation_deg: 0.0,
             visible: true,
             polylines: read.polylines,
         };
-        let placed = self.place_reference(&v, &mut r);
         let notes = read.notes.join("; ");
-        v.references.push(r);
+        // Reloaded (Manage links): the new lines in the old one's place, kept where it was put.
+        let replacing = self
+            .reference_replace
+            .take()
+            .and_then(|old| v.references.iter_mut().find(|x| x.id == old));
+        let placed = match replacing {
+            Some(old) => {
+                crate::views::reload_reference(old, r);
+                false
+            }
+            None => {
+                let placed = self.place_reference(&v, &mut r);
+                v.references.push(r);
+                placed
+            }
+        };
         let id = v.id;
         match self.store_view(v) {
             Ok(()) => {
