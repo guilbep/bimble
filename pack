@@ -1,1 +1,1 @@
-{"clock":4,"ops":[{"kind":"change-labels","author":"e2dcf2b3ed83d9ac027fff26227cafd92ab54f89","time":1794313083,"origin":{"forge":"github.com/guilbep/bimble","event":"issue:6283827131"},"data":{"add":["assignee:guilbep"],"remove":null}}]}
+{"clock":5,"ops":[{"kind":"set-meta","author":"61b55b322674a787b89ef011a06fca88d5ce49b7","time":1794315548,"data":{"meta":{"git-board:guilbep/2:assignee":"guilbep"},"target":"91d3e473406c9ce65bfae90535e243f6261920b5:0"}}]}
