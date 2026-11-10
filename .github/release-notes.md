@@ -34,19 +34,21 @@ The installers aren't signed by a paid certificate yet:
 
 ## Try
 
-- `bimble view model.ifc`: the viewer. The left panel lists the model's **views** (3D, plans, ceiling plans looking up, sections) with their **view range** (top, cut plane, bottom, view depth); select, edit and measure in any of them. In a plan, **Add reference plan…** lays a DXF or vector PDF over the model (DWG: convert it to DXF first); move it into place and measure on it. Also: section box (B), measuring (M), view cube, linked models, **Plan…** with a live preview, **Style…** for every colour and hatch.
-- `bimble plan model.ifc plan.pdf --storey "Level 1" --scale 100`: a storey plan at scale on A4–A0 (PDF, SVG or PNG); `--template` for your office's title block and words.
-- `bimble demo frame.bimble`, then edit it in the viewer (Edit…, History…) or with `bimble history …`.
+- Open an IFC, then **File → Convert to .bimble (editable)…**: every element comes along; columns, beams, walls, slabs and footings are editable by their dimensions, the rest can be moved and versioned.
+- The left panel lists the model's **views** (3D, plans, ceiling plans, sections) with their view range; select, edit and measure in any of them. **Project → Reference plan…** lays a DXF or vector PDF over a plan.
+- **Sheets**: place views at their scales, dimension and annotate, export PDF or SVG. `bimble plan model.ifc plan.pdf --storey "Level 1" --scale 100` from the command line.
+- **File → Share for viewing…** writes a small `.bimbleview` that opens in seconds, also in a browser.
+- **History** (Manage tab, or `bimble history …`): commits, branches, merges; `bimble history clone / sync / borrow` to work together through a shared folder.
 - `bimble bench --json > bench.json`: how fast it is on your machine. Please send the file, especially from old laptops.
 
 ## Known limits
 
-- Editing works on `.bimble` models, not on IFC files (IFC is read for viewing and plans). An IFC's views are saved next to it in `model.ifc.bimble-views.json`.
-- Layouts: sheets with several views aren't there yet; the paper plan (**Plan…**) is a storey plan cut at one height.
+- `.bimble` files saved by 0.12 and later can't be opened by 0.11 and older: upgrade together, or share `.json`.
+- Elements of other classes than columns, beams, walls, slabs and footings are moved, not edited by dimensions.
+- Working together is command-line only (a shared folder); no Collaborate tab yet. No hide/isolate yet.
 - Reference plans: DXF model space and the first page of a vector PDF; no text, hatches or scanned PDFs.
-- In the browser: no model history yet, and an IFC's views file can't be read back; loading uses one processor core.
-- Plans: hidden lines are removed for flat tops only; no dimensioned openings, labels or section markers yet (see the issues).
+- In the browser: no model history yet; loading uses one processor core; at most 4 GB per tab.
 - Curved geometry is drawn as fine facets (0.5 mm tolerance), not exact surfaces.
-- Performance on old laptops still has to be measured. Please report what you see (model size, machine, how it feels).
+- On a machine whose graphics refuse a drawing step, Bimble turns that step off and says so in red: please report the message with your machine and system.
 
 ## Changes
