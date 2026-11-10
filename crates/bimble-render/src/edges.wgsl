@@ -12,7 +12,11 @@ struct EdgeUniforms {
 };
 
 @group(0) @binding(0) var<uniform> e: EdgeUniforms;
-@group(0) @binding(1) var depth: texture_depth_2d;
+// The depth, read as a plain float texture through a nearest sampler: GLSL (GL, WebGL2) cannot
+// `textureLoad` a depth texture, and GL ES leaves a depth texture without nearest filtering
+// incomplete (issue #59).
+@group(0) @binding(1) var depth: texture_2d<f32>;
+@group(0) @binding(2) var nearest: sampler;
 
 @vertex
 fn vs_full(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -25,7 +29,7 @@ fn vs_full(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
 fn at(p: vec2<i32>) -> vec4<f32> {
     let size = vec2<i32>(e.params.xy);
     let q = clamp(p, vec2<i32>(0), size - 1);
-    let d = textureLoad(depth, q, 0);
+    let d = textureSampleLevel(depth, nearest, (vec2<f32>(q) + 0.5) / e.params.xy, 0.0).x;
     let ndc = vec2<f32>(
         (f32(q.x) + 0.5) / e.params.x * 2.0 - 1.0,
         1.0 - (f32(q.y) + 0.5) / e.params.y * 2.0,

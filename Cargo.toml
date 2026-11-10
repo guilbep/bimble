@@ -23,6 +23,8 @@ earcutr = "0.5"
 clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 wgpu = "30"
+# Dev only: checks the shaders translate to GLSL, as wgpu does on GL and WebGL2 (issue #59).
+naga = "30"
 bytemuck = { version = "1", features = ["derive"] }
 glam = "0.34"
 pollster = "1"

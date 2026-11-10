@@ -560,6 +560,7 @@ dependencies = [
  "bimble-geom",
  "bytemuck",
  "glam",
+ "naga",
  "png",
  "pollster 1.0.1",
  "serde",

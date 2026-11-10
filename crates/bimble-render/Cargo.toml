@@ -16,6 +16,9 @@ png.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+naga = { workspace = true, features = ["wgsl-in", "glsl-out"] }
+
 # In browsers: WebGPU where it exists, WebGL2 otherwise.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { workspace = true, features = ["webgpu", "webgl"] }

@@ -1312,8 +1312,14 @@ pub struct Renderer {
     gpu_cull: Option<(wgpu::ComputePipeline, wgpu::BindGroupLayout, wgpu::Buffer)>,
     /// A unit cube (0..1), to probe boxes with occlusion queries (ADR 0036 #1).
     cube: (wgpu::Buffer, wgpu::Buffer),
-    /// Edges found on screen from the depth (single-sample renderers only; ADR 0036 #6).
-    screen_edges: Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::Buffer)>,
+    /// Edges found on screen from the depth (single-sample renderers only; ADR 0036 #6):
+    /// pipeline, its bindings' layout, uniforms, the nearest sampler that reads the depth.
+    screen_edges: Option<(
+        wgpu::RenderPipeline,
+        wgpu::BindGroupLayout,
+        wgpu::Buffer,
+        wgpu::Sampler,
+    )>,
     face_pipeline: wgpu::RenderPipeline,
     probe_pipeline: wgpu::RenderPipeline,
     face_front_pipeline: wgpu::RenderPipeline,
@@ -1641,11 +1647,18 @@ impl Renderer {
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
+                        // Not `Depth`: GLSL cannot load from a depth texture (issue #59).
                         ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Depth,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
                         },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                         count: None,
                     },
                 ],
@@ -1682,7 +1695,12 @@ impl Renderer {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            (pipeline, bgl, uniforms)
+            // Nearest by default: GL ES needs it to read a depth texture at all.
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("bimble screen edges"),
+                ..Default::default()
+            });
+            (pipeline, bgl, uniforms, sampler)
         });
 
         let cube = {
@@ -2973,7 +2991,7 @@ impl Renderer {
             st.resolve(&mut enc, asked.len() as u32);
         }
         // Edges found on screen (ADR 0036 #6), over the picture, from its depth.
-        if let (true, true, Some((pipeline, bgl, uniforms))) =
+        if let (true, true, Some((pipeline, bgl, uniforms, sampler))) =
             (screen, opts.edges, &self.screen_edges)
         {
             let edge = opts.style.edges.unit();
@@ -2998,6 +3016,10 @@ impl Renderer {
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: wgpu::BindingResource::TextureView(out.depth),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(sampler),
                     },
                 ],
             });
@@ -3372,6 +3394,56 @@ pub fn hidden_by_category(
 mod tests {
     use super::*;
     use bimble_core::demo::{FrameSpec, concrete_frame};
+
+    /// Every entry point of the shaders built on GL translates to GLSL, as wgpu-hal does it when it
+    /// creates a pipeline there: the render ones for WebGL2 (ES 3.0), the GPU culling for native
+    /// GL with compute (ES 3.1). Issue #59: the screen edges read the depth with `textureLoad`,
+    /// which naga cannot write in GLSL, and the app panicked at the first move on GL and WebGL2.
+    #[test]
+    fn shaders_translate_to_glsl() {
+        use naga::back::glsl;
+        for (name, src, version) in [
+            ("shader.wgsl", include_str!("shader.wgsl"), 300),
+            ("edges.wgsl", include_str!("edges.wgsl"), 300),
+            ("gpu_cull.wgsl", include_str!("gpu_cull.wgsl"), 310),
+        ] {
+            let module = naga::front::wgsl::parse_str(src).unwrap();
+            let info = naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::empty(),
+            )
+            .validate(&module)
+            .unwrap();
+            let options = glsl::Options {
+                version: glsl::Version::Embedded {
+                    version,
+                    is_webgl: version == 300,
+                },
+                writer_flags: glsl::WriterFlags::ADJUST_COORDINATE_SPACE
+                    | glsl::WriterFlags::FORCE_POINT_SIZE,
+                binding_map: Default::default(),
+                zero_initialize_workgroup_memory: true,
+            };
+            for ep in &module.entry_points {
+                let pipeline = glsl::PipelineOptions {
+                    shader_stage: ep.stage,
+                    entry_point: ep.name.clone(),
+                    multiview: None,
+                };
+                let mut out = String::new();
+                glsl::Writer::new(
+                    &mut out,
+                    &module,
+                    &info,
+                    &options,
+                    &pipeline,
+                    naga::proc::BoundsCheckPolicies::default(),
+                )
+                .and_then(|mut w| w.write())
+                .unwrap_or_else(|e| panic!("{name} {}: {e}", ep.name));
+            }
+        }
+    }
 
     /// The scene with every copy of a shared shape as its own mesh: the generated frame is all
     /// copies once built (ADR 0036 step 3), and these tests are about merged geometry.
