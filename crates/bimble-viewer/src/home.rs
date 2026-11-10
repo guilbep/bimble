@@ -6,6 +6,9 @@ use crate::Viewer;
 use crate::ribbon::Action;
 use eframe::egui;
 
+/// Previews' size on Home, pixels (the picture is shrunk to fit, keeping its shape).
+const PREVIEW: (u32, u32) = (192, 120);
+
 impl Viewer {
     pub(crate) fn home_ui(&mut self, ui: &mut egui::Ui) {
         let mut run = None;
@@ -52,8 +55,20 @@ impl Viewer {
                     if self.settings.recent.is_empty() {
                         ui.weak("None yet.");
                     }
+                    let recent = self.settings.recent.clone();
                     egui::Grid::new("recent").striped(true).show(ui, |ui| {
-                        for p in &self.settings.recent {
+                        for p in &recent {
+                            match self.preview(ui.ctx(), p) {
+                                Some(t) => {
+                                    ui.add(egui::Image::new(&t).max_size(egui::vec2(
+                                        PREVIEW.0 as f32 / 2.0,
+                                        PREVIEW.1 as f32 / 2.0,
+                                    )));
+                                }
+                                None => {
+                                    ui.label("");
+                                }
+                            }
                             let path = std::path::Path::new(p);
                             let name = path
                                 .file_name()
@@ -88,6 +103,57 @@ impl Viewer {
         }
     }
 
+    /// A recent file's preview, read once and kept as a texture.
+    fn preview(&mut self, ctx: &egui::Context, file: &str) -> Option<egui::TextureHandle> {
+        if let Some(t) = self.previews.get(file) {
+            return t.clone();
+        }
+        let t = crate::settings::thumbnail(file)
+            .and_then(|p| bimble_render::read_png(&p, 1024).ok())
+            .map(|(w, h, rgba)| {
+                ctx.load_texture(
+                    format!("preview {file}"),
+                    egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba),
+                    egui::TextureOptions::LINEAR,
+                )
+            });
+        self.previews.insert(file.to_owned(), t.clone());
+        t
+    }
+
+    /// Once a model opened on the desktop has drawn its first whole picture: keep a small copy
+    /// of it as its preview on Home.
+    pub(crate) fn keep_preview(&mut self) {
+        let ready = self.texture.is_some()
+            && !self.needs_render
+            && !self.needs_upload
+            && !self.fit_pending
+            && self.loading.is_none()
+            && !self.lean_shown;
+        if !ready {
+            return;
+        }
+        let Some(file) = self.preview_for.take() else {
+            return;
+        };
+        let (Some(target), Some(dest)) = (&self.target, crate::settings::thumbnail(&file)) else {
+            return;
+        };
+        let (w, h) = target.size;
+        let Ok(rgba) = bimble_render::read_texture(&self.device, &self.queue, &target.color) else {
+            return;
+        };
+        let (sw, sh, small) = shrink(&rgba, w, h, PREVIEW);
+        let saved = dest
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| bimble_render::write_png(&dest, sw, sh, &small));
+        if let Err(e) = saved {
+            log::warn!("preview of {file}: {e}");
+        }
+        self.previews.remove(&file);
+    }
+
     /// As if picked with Open…: unsaved work is asked about first.
     fn open_recent(&mut self, p: std::path::PathBuf, ctx: &egui::Context) {
         self.home_open = false;
@@ -101,5 +167,62 @@ impl Viewer {
             bytes: None,
         });
         ctx.request_repaint();
+    }
+}
+
+/// A picture shrunk to fit `max`, keeping its shape: each pixel the mean of the ones it covers.
+fn shrink(rgba: &[u8], w: u32, h: u32, max: (u32, u32)) -> (u32, u32, Vec<u8>) {
+    let k = (w as f64 / max.0 as f64)
+        .max(h as f64 / max.1 as f64)
+        .max(1.0);
+    let (sw, sh) = (
+        ((w as f64 / k) as u32).max(1),
+        ((h as f64 / k) as u32).max(1),
+    );
+    let mut out = Vec::with_capacity((sw * sh * 4) as usize);
+    for y in 0..sh {
+        let (y0, y1) = (
+            (y as f64 * k) as u32,
+            (((y + 1) as f64 * k) as u32).min(h).max(1),
+        );
+        for x in 0..sw {
+            let (x0, x1) = (
+                (x as f64 * k) as u32,
+                (((x + 1) as f64 * k) as u32).min(w).max(1),
+            );
+            let mut sum = [0u64; 4];
+            let mut n = 0u64;
+            for yy in y0..y1.max(y0 + 1).min(h) {
+                for xx in x0..x1.max(x0 + 1).min(w) {
+                    let i = ((yy * w + xx) * 4) as usize;
+                    for c in 0..4 {
+                        sum[c] += rgba[i + c] as u64;
+                    }
+                    n += 1;
+                }
+            }
+            out.extend(sum.map(|s| (s / n.max(1)) as u8));
+        }
+    }
+    (sw, sh, out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_picture_shrinks_to_fit_keeping_its_shape_and_colour() {
+        let (w, h) = (1000u32, 500u32);
+        let mut rgba = Vec::new();
+        for _ in 0..w * h {
+            rgba.extend([10, 200, 30, 255]);
+        }
+        let (sw, sh, small) = shrink(&rgba, w, h, PREVIEW);
+        assert_eq!((sw, sh), (192, 96));
+        assert_eq!(small.len(), (sw * sh * 4) as usize);
+        assert!(small.chunks(4).all(|p| p == [10, 200, 30, 255]));
+        // Smaller than the preview: kept as it is.
+        assert_eq!(shrink(&rgba[..4 * 50 * 20], 50, 20, PREVIEW).0, 50);
     }
 }

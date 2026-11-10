@@ -922,6 +922,10 @@ struct Viewer {
     links_window: bool,
     /// Home (#52) over the main view.
     home_open: bool,
+    /// Recent files' previews, read once (#52); None: none on disk.
+    previews: std::collections::HashMap<String, Option<egui::TextureHandle>>,
+    /// The file whose preview to keep once its first picture is drawn.
+    preview_for: Option<String>,
     /// When this model last synchronized (or was opened shared): the reminder (ADR 0038).
     synced_at: Option<Instant>,
     /// What the last Synchronize or Shared folder… said.
@@ -1073,6 +1077,8 @@ impl Viewer {
             about_window: false,
             links_window: false,
             home_open: false,
+            previews: Default::default(),
+            preview_for: None,
             synced_at: None,
             collab_message: None,
             also_selected: BTreeSet::new(),
@@ -1523,6 +1529,7 @@ impl Viewer {
                 {
                     self.settings.opened(&l.path.display().to_string());
                     self.settings.save();
+                    self.preview_for = Some(l.path.display().to_string());
                 }
                 self.hidden_classes.clear();
                 self.hidden_storeys.clear();
@@ -4827,6 +4834,7 @@ impl eframe::App for Viewer {
         self.about_ui(&ctx);
         self.links_ui(&ctx);
         self.belongs_ui(&ctx);
+        self.keep_preview();
         self.report_ui(&ctx);
     }
 }

@@ -3324,60 +3324,95 @@ impl Headless {
 
     /// RGBA8 rows of a single-sample colour texture (a target's, an overlay's).
     pub fn read_texture(&self, texture: &wgpu::Texture) -> Result<Vec<u8>, HeadlessError> {
-        let (w, h) = (texture.width(), texture.height());
-        let row = w * 4;
-        let padded =
-            row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bimble readback"),
-            size: padded as u64 * h as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut enc = self.device.create_command_encoder(&Default::default());
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buf,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded),
-                    rows_per_image: Some(h),
-                },
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.queue.submit([enc.finish()]);
-        let slice = buf.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| HeadlessError::Readback(e.to_string()))?;
-        rx.recv()
-            .map_err(|e| HeadlessError::Readback(e.to_string()))?
-            .map_err(|e| HeadlessError::Readback(e.to_string()))?;
-        let data = slice
-            .get_mapped_range()
-            .map_err(|e| HeadlessError::Readback(e.to_string()))?;
-        let mut out = Vec::with_capacity(row as usize * h as usize);
-        for y in 0..h as usize {
-            let s = y * padded as usize;
-            out.extend_from_slice(&data[s..s + row as usize]);
-        }
-        Ok(out)
+        read_texture(&self.device, &self.queue, texture)
     }
+}
+
+/// RGBA8 rows of a single-sample colour texture, waiting for the GPU (a thumbnail of the view,
+/// a test's picture).
+pub fn read_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+) -> Result<Vec<u8>, HeadlessError> {
+    let (w, h) = (texture.width(), texture.height());
+    let row = w * 4;
+    let padded =
+        row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("bimble readback"),
+        size: padded as u64 * h as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&Default::default());
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buf,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(h),
+            },
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit([enc.finish()]);
+    let slice = buf.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|e| HeadlessError::Readback(e.to_string()))?;
+    rx.recv()
+        .map_err(|e| HeadlessError::Readback(e.to_string()))?
+        .map_err(|e| HeadlessError::Readback(e.to_string()))?;
+    let data = slice
+        .get_mapped_range()
+        .map_err(|e| HeadlessError::Readback(e.to_string()))?;
+    let mut out = Vec::with_capacity(row as usize * h as usize);
+    for y in 0..h as usize {
+        let s = y * padded as usize;
+        out.extend_from_slice(&data[s..s + row as usize]);
+    }
+    Ok(out)
+}
+
+/// Read a PNG as RGBA8 pixels (thumbnails Bimble wrote), at most `max_side` wide and high.
+pub fn read_png(path: &std::path::Path, max_side: u32) -> std::io::Result<(u32, u32, Vec<u8>)> {
+    let bad = |e: png::DecodingError| std::io::Error::other(e.to_string());
+    let mut dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path)?));
+    dec.set_transformations(png::Transformations::EXPAND);
+    let mut r = dec.read_info().map_err(bad)?;
+    let (w, h) = (r.info().width, r.info().height);
+    if w > max_side || h > max_side {
+        return Err(std::io::Error::other("too large"));
+    }
+    let mut buf = vec![
+        0;
+        r.output_buffer_size()
+            .ok_or_else(|| std::io::Error::other("size"))?
+    ];
+    let info = r.next_frame(&mut buf).map_err(bad)?;
+    let px = &buf[..info.buffer_size()];
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => px.to_vec(),
+        png::ColorType::Rgb => px.chunks(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
+        _ => return Err(std::io::Error::other("not RGB")),
+    };
+    Ok((w, h, rgba))
 }
 
 /// Write RGBA8 pixels as a PNG.

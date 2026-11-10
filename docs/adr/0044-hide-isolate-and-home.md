@@ -28,7 +28,9 @@ visibility only by class, storey and material, and opened to an empty window.
 5. Commands in View → Visibility and on a **right click** on the view (not while measuring or
    placing); right-clicking an element outside the selection selects it first (Revit).
 6. **Home**: shown when nothing is open and from the house button; who you are, Open, Import
-   IFC, the files opened last (desktop, 12, missing ones greyed). Opening one asks about unsaved
+   IFC, the files opened last (desktop, 12, missing ones greyed), each with a preview: the first
+   whole picture after opening, read back from the GPU, shrunk to 192 × 120 and kept as a PNG
+   next to the settings (named by a hash of the path). Opening one asks about unsaved
    work like Open….
 7. **Who you are = Settings → You** (name, e-mail): the author of commits, the owner of borrowed
    elements. Signing in waits for a server (ADR 0038's HTTP remote).
@@ -37,8 +39,8 @@ visibility only by class, storey and material, and opened to an empty window.
 
 - Isolate in view as "hide all the others": a list as long as the model, and new elements
   would stay hidden; an isolation list keeps new ones out until unhidden, which is Revit's way.
-- Previews of recent files: a thumbnail per file needs a GPU read-back and an image cache;
-  later, if Home is used.
+- Previews from the file alone (rendering it again off screen): the model would be read twice;
+  the picture already on screen costs one read-back.
 
 ## Revisit when
 

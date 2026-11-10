@@ -179,6 +179,26 @@ fn path() -> Option<std::path::PathBuf> {
     Some(dir.join("settings.json"))
 }
 
+/// Where Home keeps a file's preview (#52): next to the settings, named by a hash of its path.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn thumbnail(file: &str) -> Option<std::path::PathBuf> {
+    // FNV-1a: stable across Rust versions, unlike the std hasher.
+    let h = file.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
+    });
+    Some(
+        path()?
+            .parent()?
+            .join("previews")
+            .join(format!("{h:016x}.png")),
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn thumbnail(_file: &str) -> Option<std::path::PathBuf> {
+    None
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn read() -> Option<String> {
     std::fs::read_to_string(path()?).ok()
