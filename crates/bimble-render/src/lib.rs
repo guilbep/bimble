@@ -4012,6 +4012,20 @@ mod tests {
 
     /// Edges found on screen (ADR 0036 #6) fall where edge lines do: most line pixels have a
     /// screen edge within a pixel, and most screen edges lie within two pixels of a line.
+    /// With `WGPU_BACKEND` set (CI's GL job), the GPU tests must run on that backend: without
+    /// an adapter they would all skip and the job pass having tested nothing.
+    #[test]
+    fn the_backend_asked_for_is_the_one_tested() {
+        let Some(asked) = wgpu::Backends::from_env() else {
+            return;
+        };
+        let gpu =
+            Headless::new().expect("WGPU_BACKEND is set but no adapter: nothing would be tested");
+        let got = gpu.adapter_info.backend;
+        assert!(asked.contains(got.into()), "asked {asked:?}, got {got:?}");
+        eprintln!("testing on {got:?}: {}", gpu.adapter_info.name);
+    }
+
     /// A GPU error (here a shader no backend accepts) is caught and kept, not a panic.
     #[test]
     fn gpu_errors_are_caught_not_fatal() {

@@ -24,6 +24,19 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  # The renderer on OpenGL (mesa's llvmpipe through EGL), as old laptops on Linux and WebGL2 run
+  # it: every pipeline must build there (issue #59). Fails if GL isn't what gets tested.
+  gl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libegl-mesa0 libgl1-mesa-dri libgles2
+      - run: cargo test -p bimble-render
+        env:
+          WGPU_BACKEND: gl
+
   # The browser build (ADR 0020): clippy for wasm32, then the page as a downloadable artifact.
   web:
     runs-on: ubuntu-latest

@@ -992,7 +992,9 @@ impl Viewer {
             frame_floor: f32::INFINITY,
             simplified: false,
             moving_lean: false,
-            slow_gpu: false,
+            // A software renderer (llvmpipe, SwiftShader: no GPU driver) is slow from the
+            // start: no need to wait for slow frames. Any real GPU is judged by its frames.
+            slow_gpu: info.device_type == eframe::wgpu::DeviceType::Cpu,
             gpu_error: bimble_render::catch_gpu_errors(&rs.device),
             gpu_safe: false,
             occlusion_waiting: false,
