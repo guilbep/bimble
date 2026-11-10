@@ -3,6 +3,7 @@
 use crate::GlobalId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// IFC classes supported so far. Names are the IFC entity names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -12,6 +13,9 @@ pub enum IfcClass {
     IfcSlab,
     IfcWall,
     IfcFooting,
+    /// Any other element with geometry, imported as a mesh (ADR 0042). Its own IFC class name is
+    /// kept in `Element::ifc_entity`.
+    IfcBuildingElementProxy,
 }
 
 impl IfcClass {
@@ -22,6 +26,7 @@ impl IfcClass {
             IfcClass::IfcSlab => "IfcSlab",
             IfcClass::IfcWall => "IfcWall",
             IfcClass::IfcFooting => "IfcFooting",
+            IfcClass::IfcBuildingElementProxy => "IfcBuildingElementProxy",
         }
     }
 }
@@ -283,10 +288,13 @@ pub enum Generator {
         height: f64,
     },
     /// An explicit triangle mesh, imported from IFC (IfcPolygonalFaceSet and friends, ADR 0032).
-    /// Editable as properties and placement only, not parametrically.
+    /// Editable as properties and placement only, not parametrically. Copies of one shape (an
+    /// IfcMappedItem) share it in memory and are written once in a binary file (ADR 0042).
     Mesh {
-        positions: Vec<[f64; 3]>,
-        indices: Vec<u32>,
+        #[serde(with = "crate::file::shared")]
+        positions: Arc<Vec<[f64; 3]>>,
+        #[serde(with = "crate::file::shared")]
+        indices: Arc<Vec<u32>>,
     },
 }
 
@@ -508,6 +516,17 @@ pub struct Element {
     /// Absent when empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub properties: BTreeMap<String, String>,
+    /// The element's own IFC class when it isn't one Bimble edits by dimensions ("IfcDoor",
+    /// "IfcPipeSegment"…), with `class` = IfcBuildingElementProxy (ADR 0042). Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ifc_entity: Option<String>,
+}
+
+impl Element {
+    /// The IFC class name to show: the element's own one when kept, else its class.
+    pub fn class_name(&self) -> &str {
+        self.ifc_entity.as_deref().unwrap_or(self.class.name())
+    }
 }
 
 /// A solid subtracted from its element: a window or door cut out of a wall, for instance.
@@ -570,7 +589,7 @@ impl Model {
             }
         }
         for (k, e) in &self.elements {
-            let ctx = |msg: String| format!("{} {k} ({}): {msg}", e.class.name(), e.name);
+            let ctx = |msg: String| format!("{} {k} ({}): {msg}", e.class_name(), e.name);
             if *k != e.id {
                 return Err(ctx("key does not match id".into()));
             }
@@ -584,7 +603,7 @@ impl Model {
             e.generator.validate().map_err(ctx)?;
             for (i, o) in e.openings.iter().enumerate() {
                 let ctx =
-                    |msg: String| format!("{} {} (opening {i}): {msg}", e.class.name(), e.name);
+                    |msg: String| format!("{} {} (opening {i}): {msg}", e.class_name(), e.name);
                 o.placement.validate().map_err(ctx)?;
                 o.generator.validate().map_err(ctx)?;
             }

@@ -336,7 +336,7 @@ pub fn sync(
                         "{} belongs to {}",
                         m.elements
                             .get(&id)
-                            .map(|e| format!("{} {}", e.class.name(), e.name))
+                            .map(|e| format!("{} {}", e.class_name(), e.name))
                             .unwrap_or_else(|| "a removed element".into()),
                         others[&id]
                     ),

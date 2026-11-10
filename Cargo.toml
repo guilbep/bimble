@@ -15,7 +15,7 @@ bimble-ifc = { path = "crates/bimble-ifc" }
 bimble-drawing = { path = "crates/bimble-drawing" }
 bimble-render = { path = "crates/bimble-render" }
 bimble-viewer = { path = "crates/bimble-viewer" }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 blake3 = "1"
 uuid = { version = "1", features = ["v4"] }
@@ -48,6 +48,8 @@ mimalloc = { version = "0.1", default-features = false }
 manifold-csg = { version = "0.4", default-features = false }
 memory-stats = "1"
 flate2 = "1"
+# Binary .bimble (ADR 0042): CBOR, the standard binary JSON; reads the model's serde types as is.
+ciborium = "0.2"
 # Total RAM for the large-model check (ADR 0033): already in the tree via wgpu/winit.
 libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }

@@ -1577,7 +1577,7 @@ impl Viewer {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "model.bimble".into()),
-            bimble_core::file::to_string(&ed.model).as_bytes(),
+            &bimble_core::file::to_bytes(&ed.model),
         );
         #[cfg(not(target_arch = "wasm32"))]
         let r = bimble_core::file::save(&ed.model, &l.path).map_err(|e| e.to_string());

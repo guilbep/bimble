@@ -200,6 +200,9 @@ fn predefined(e: &Element) -> &'static str {
         IfcClass::IfcSlab => ".FLOOR.",
         IfcClass::IfcWall => ".SOLIDWALL.",
         IfcClass::IfcFooting => ".PAD_FOOTING.",
+        // Its own class goes in ObjectType (ADR 0042), which USERDEFINED asks for.
+        IfcClass::IfcBuildingElementProxy if e.ifc_entity.is_some() => ".USERDEFINED.",
+        IfcClass::IfcBuildingElementProxy => ".NOTDEFINED.",
     }
 }
 
@@ -346,11 +349,16 @@ pub fn export(m: &Model, file_name: &str, timestamp: &str) -> String {
         ));
         let pds = w.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))"));
 
+        // Another class is written as a proxy, its name in ObjectType: their attribute lists
+        // differ, so writing IFCDOOR(…) with these attributes would be invalid (ADR 0042).
         let el = w.add(format!(
-            "{}({},$,{},$,$,#{pl},#{pds},$,{})",
+            "{}({},$,{},$,{},#{pl},#{pds},$,{})",
             e.class.name().to_uppercase(),
             string(e.id.as_str()),
             string(&e.name),
+            e.ifc_entity
+                .as_deref()
+                .map_or_else(|| "$".to_owned(), string),
             predefined(e)
         ));
         contained.entry(e.storey).or_default().push(el);

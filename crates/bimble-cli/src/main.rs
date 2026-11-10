@@ -917,14 +917,14 @@ fn run(cli: Cli) -> Result<(), String> {
             let m = file::load(&path).map_err(e)?;
             let mut out = std::io::stdout().lock();
             for el in m.elements.values() {
-                if class.as_deref().is_some_and(|c| c != el.class.name()) {
+                if class.as_deref().is_some_and(|c| c != el.class_name()) {
                     continue;
                 }
                 let params = serde_json::to_string(&el.generator).unwrap();
                 let line = format!(
                     "{}  {:<10} {:<10} {params}",
                     el.id,
-                    el.class.name(),
+                    el.class_name(),
                     el.name
                 );
                 // Stop quietly if the reader closed the pipe (e.g. `| head`).
@@ -1167,7 +1167,13 @@ fn run(cli: Cli) -> Result<(), String> {
                 .to_owned();
             m.validate()
                 .map_err(|x| format!("imported model invalid: {x}"))?;
-            file::save(&m, &out).map_err(e)?;
+            // `.json`: the text form (version 1), to read or diff by eye.
+            if out.extension().is_some_and(|x| x == "json") {
+                file::write_atomic(&out, file::to_string(&m).as_bytes())
+                    .map_err(|x| x.to_string())?;
+            } else {
+                file::save(&m, &out).map_err(e)?;
+            }
             println!("→ {}", out.display());
             for l in rep.lines() {
                 println!("{l}");

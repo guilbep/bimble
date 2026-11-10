@@ -129,7 +129,7 @@ impl Action {
         match self {
             Action::Open => "Open…".into(),
             Action::ImportIfc => "Import IFC…".into(),
-            Action::ConvertOpen => "Convert structural elements to .bimble (editable)…".into(),
+            Action::ConvertOpen => "Convert to .bimble (editable)…".into(),
             Action::ShareForViewing => "Share for viewing… (.bimbleview)".into(),
             Action::Save => "Save".into(),
             Action::Undo => "Undo".into(),
@@ -273,7 +273,8 @@ impl Viewer {
     }
 
     /// Whether an action can run now.
-    /// Elements of the open model the editor keeps on import (ADR 0032), and all of them.
+    /// Elements of the open model editable by dimensions once converted (ADR 0032), and all of
+    /// them (the rest are kept as shapes, ADR 0042).
     pub(crate) fn structural_count(&self) -> (usize, usize) {
         let Some(l) = &self.loaded else {
             return (0, 0);
@@ -308,7 +309,7 @@ impl Viewer {
                                 .extension()
                                 .is_some_and(|x| x.eq_ignore_ascii_case("ifc"))
                     })
-                    && self.structural_count().0 > 0
+                    && self.structural_count().1 > 0
             }
             // Not a part of a model too large to show whole: it would be shared as the whole.
             Action::ShareForViewing => self.loaded.as_ref().is_some_and(|l| l.partial.is_none()),
@@ -629,12 +630,13 @@ impl Viewer {
                     let b = egui::Button::new(a.label()).shortcut_text(a.keys());
                     let mut r = ui.add_enabled(self.action_enabled(*a), b);
                     if *a == Action::ConvertOpen {
-                        // Say what it keeps before it is chosen (ADR 0032).
+                        // Say what becomes editable before it is chosen (ADR 0042).
                         let (kept, all) = self.structural_count();
                         let text = format!(
-                            "The editor keeps columns, beams, slabs, walls and footings: {kept} of \
-                             this model's {all} elements. The rest (pipes, fittings, furniture…) is \
-                             left out. To share the whole model for viewing, use Share for viewing."
+                            "Every element is kept. Columns, beams, slabs, walls and footings \
+                             ({kept} of this model's {all} elements) are editable by dimensions; \
+                             the rest (pipes, doors, furniture…) can be moved, given properties \
+                             and synced."
                         );
                         r = r.on_hover_text(&text).on_disabled_hover_text(&text);
                     }

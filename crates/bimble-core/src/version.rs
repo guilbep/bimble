@@ -24,6 +24,44 @@ pub fn canonical<T: Serialize + serde::de::DeserializeOwned>(v: T) -> T {
     serde_json::from_value(j).expect("canonical form deserializes to the same type")
 }
 
+/// `canonical` for a whole model, its mesh arrays fixed in place rather than sent through JSON:
+/// copies sharing a mesh keep sharing it (ADR 0042), and the bulk of an imported model skips
+/// the trip.
+pub fn canonical_model(mut m: Model) -> Model {
+    type Pos = std::sync::Arc<Vec<[f64; 3]>>;
+    type Idx = std::sync::Arc<Vec<u32>>;
+    fn meshes(m: &mut Model) -> impl Iterator<Item = (&mut Pos, &mut Idx)> {
+        m.elements.values_mut().flat_map(|e| {
+            std::iter::once(&mut e.generator)
+                .chain(e.openings.iter_mut().map(|o| &mut o.generator))
+                .filter_map(|g| match g {
+                    crate::Generator::Mesh { positions, indices } => Some((positions, indices)),
+                    _ => None,
+                })
+        })
+    }
+    let taken: Vec<(Pos, Idx)> = meshes(&mut m)
+        .map(|(p, i)| (std::mem::take(p), std::mem::take(i)))
+        .collect();
+    let mut m = canonical(m);
+    let mut fixed: std::collections::HashMap<usize, Pos> = Default::default();
+    for ((p, i), (tp, ti)) in meshes(&mut m).zip(taken) {
+        *p = fixed
+            .entry(std::sync::Arc::as_ptr(&tp) as usize)
+            .or_insert_with(|| {
+                let negative_zero = |c: &f64| *c == 0.0 && c.is_sign_negative();
+                if tp.iter().flatten().any(negative_zero) {
+                    std::sync::Arc::new(tp.iter().map(|q| q.map(|c| c + 0.0)).collect())
+                } else {
+                    tp.clone()
+                }
+            })
+            .clone();
+        *i = ti;
+    }
+    m
+}
+
 /// Hash of any serializable object's canonical JSON form.
 pub fn content_hash<T: Serialize>(v: &T) -> blake3::Hash {
     blake3::hash(&serde_json::to_vec(v).expect("model types always serialize"))
@@ -168,7 +206,7 @@ pub fn diff(a: &Model, b: &Model) -> Vec<Change> {
     diff_map(
         &a.elements,
         &b.elements,
-        |e| e.class.name().into(),
+        |e| e.class_name().into(),
         |e| e.name.clone(),
         &mut out,
     );

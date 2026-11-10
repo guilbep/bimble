@@ -2,7 +2,7 @@
 //! Built from a native `.bimble` model or from an IFC file (see `bimble-ifc::read`).
 
 use crate::Mesh;
-use bimble_core::{MaterialCategory, Model};
+use bimble_core::{Element, MaterialCategory, Model};
 use rayon::prelude::*;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -262,29 +262,61 @@ impl Scene {
     pub fn from_model(m: &Model) -> Scene {
         // Elements are meshed on all cores; results keep the model's (sorted) order.
         let elements: Vec<_> = m.elements.values().collect();
-        let meshed: Vec<Result<(ElementInfo, MeshBuilder), String>> = elements
+        // A mesh shared by several uncut elements (copies of one shape, ADR 0042) is meshed once
+        // and placed, as the IFC reader does (ADR 0034).
+        let shared_key = |e: &Element| match &e.generator {
+            bimble_core::Generator::Mesh { positions, .. } if e.openings.is_empty() => {
+                Some(Arc::as_ptr(positions) as usize)
+            }
+            _ => None,
+        };
+        let mut first: HashMap<usize, (&Element, usize)> = HashMap::new();
+        for e in &elements {
+            if let Some(k) = shared_key(e) {
+                first.entry(k).or_insert((e, 0)).1 += 1;
+            }
+        }
+        let shapes: HashMap<usize, Arc<Mesh>> = first
+            .into_iter()
+            .filter(|(_, (_, n))| *n > 1)
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .filter_map(|(k, (e, _))| Some((k, Arc::new(crate::element_mesh(e).ok()?))))
+            .collect();
+        let meshed: Vec<Result<(ElementInfo, Built), String>> = elements
             .par_iter()
             .map(|e| {
-                let local = crate::element_mesh(e).map_err(|err| {
-                    format!("{} {}: could not mesh ({err:?})", e.class.name(), e.name)
-                })?;
                 let storey = &m.storeys[&e.storey];
                 let mat = &m.materials[&e.material];
+                let info = ElementInfo {
+                    global_id: e.id.to_string(),
+                    class: e.class_name().to_owned(),
+                    name: e.name.clone(),
+                    storey: storey.name.clone(),
+                    material: mat.name.clone(),
+                    category: mat.category,
+                };
+                if let Some(shape) = shared_key(e).and_then(|k| shapes.get(&k)) {
+                    let p = &e.placement;
+                    let o = p.origin;
+                    let to_world = Transform {
+                        x: p.x_axis,
+                        y: p.y_axis(),
+                        z: p.z_axis,
+                        t: [o[0], o[1], o[2] + storey.elevation],
+                    };
+                    return Ok((info, Built::Instance(shape.clone(), to_world)));
+                }
+                let local = crate::element_mesh(e).map_err(|err| {
+                    format!("{} {}: could not mesh ({err:?})", e.class_name(), e.name)
+                })?;
                 let t = crate::placement_matrix(&e.placement, storey.elevation);
                 let mut mb = MeshBuilder::default();
                 for tri in local.indices.as_chunks::<3>().0 {
                     let p = tri.map(|i| transform(&t, local.positions[i as usize].map(f64::from)));
                     mb.add_triangle(p);
                 }
-                let info = ElementInfo {
-                    global_id: e.id.to_string(),
-                    class: e.class.name().to_owned(),
-                    name: e.name.clone(),
-                    storey: storey.name.clone(),
-                    material: mat.name.clone(),
-                    category: mat.category,
-                };
-                Ok((info, mb))
+                Ok((info, Built::Own(mb)))
             })
             .collect();
         let mut b = SceneBuilder {
@@ -301,7 +333,8 @@ impl Scene {
         };
         for r in meshed {
             match r {
-                Ok((info, mb)) => b.push(info, mb),
+                Ok((info, Built::Own(mb))) => b.push(info, mb),
+                Ok((info, Built::Instance(shape, t))) => b.push_instance(info, shape, t),
                 Err(w) => b.warnings.push(w),
             }
         }
@@ -313,6 +346,12 @@ impl Scene {
             .collect();
         scene
     }
+}
+
+/// An element of a model, meshed: its own triangles, or a shared shape placed.
+enum Built {
+    Own(MeshBuilder),
+    Instance(Arc<Mesh>, Transform),
 }
 
 fn transform(t: &[[f64; 4]; 4], p: [f64; 3]) -> [f64; 3] {
@@ -729,6 +768,54 @@ mod tests {
                 (lo[k] + hi[k]).abs() < 2.0,
                 "not centred on axis {k}: {lo:?} {hi:?}"
             );
+        }
+    }
+
+    /// Copies sharing one mesh (ADR 0042) are placed instances of one shape, each where its
+    /// placement puts it, turned ones included.
+    #[test]
+    fn shared_meshes_become_placed_instances() {
+        let mut model = concrete_frame(&FrameSpec::default());
+        let template = model.elements.values().next().unwrap().clone();
+        let mesh = bimble_core::Generator::Mesh {
+            positions: vec![[0.0, 0.0, 0.0], [1000.0, 0.0, 0.0], [0.0, 500.0, 0.0]].into(),
+            indices: vec![0, 1, 2].into(),
+        };
+        let mut want = Vec::new();
+        for (k, (x_axis, origin)) in [([1.0, 0.0, 0.0], 0.0), ([0.0, 1.0, 0.0], 10_000.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut e = template.clone();
+            e.id = bimble_core::GlobalId::derived(format!("copy/{k}").as_bytes());
+            e.generator = mesh.clone();
+            e.openings.clear();
+            e.placement = bimble_core::Placement {
+                origin: [origin, 0.0, 0.0],
+                z_axis: [0.0, 0.0, 1.0],
+                x_axis,
+            };
+            want.push((e.id.to_string(), e.placement.clone()));
+            model.elements.insert(e.id, e);
+        }
+        let s = Scene::from_model(&model);
+        let z = model.storeys[&template.storey].elevation;
+        for (id, p) in want {
+            let e = s.elements.iter().find(|e| e.global_id == id).unwrap();
+            assert!(matches!(e.geometry, Geometry::Instance { .. }));
+            // The far corner (1000, 0) of the shape, in the world, against the scene's.
+            let w = [
+                p.origin[0] + 1000.0 * p.x_axis[0],
+                p.origin[1] + 1000.0 * p.x_axis[1],
+                z,
+            ];
+            let world = e.world_mesh();
+            let got = world.positions.iter().map(|q| {
+                (0..3)
+                    .map(|k| (f64::from(q[k]) + s.origin_mm[k] - w[k]).abs())
+                    .fold(0.0, f64::max)
+            });
+            assert!(got.fold(f64::MAX, f64::min) < 0.01, "{id}");
         }
     }
 }

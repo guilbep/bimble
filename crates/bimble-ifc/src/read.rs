@@ -527,17 +527,7 @@ impl Parsed {
         if self.voids.contains_key(&id) {
             return None;
         }
-        let f = &self.file;
-        let shape = f.deref(f.entities.get(&id)?.arg(6))?;
-        let mut items = shape
-            .arg(2)
-            .as_list()?
-            .iter()
-            .filter_map(|r| f.deref(r))
-            .filter(|r| is_body(r))
-            .flat_map(|r| r.arg(3).as_list().unwrap_or(&[]).iter());
-        let only = f.deref(items.next()?)?;
-        (items.next().is_none() && only.name == "IFCMAPPEDITEM").then_some(only)
+        mapped_item_of(&self.file, id)
     }
 
     /// The shapes of the maps that the elements `ids` are, each meshed once (mm, the map's
@@ -899,6 +889,14 @@ fn is_body(rep: &Entity) -> bool {
 }
 
 const CLASS_NAMES: &[&str] = &[
+    "IfcFlowController",
+    "IfcFlowMovingDevice",
+    "IfcFlowStorageDevice",
+    "IfcFlowTreatmentDevice",
+    "IfcEnergyConversionDevice",
+    "IfcDistributionControlElement",
+    "IfcDistributionFlowElement",
+    "IfcDistributionChamberElement",
     "IfcBeam",
     "IfcBeamStandardCase",
     "IfcColumn",
@@ -962,7 +960,21 @@ const CLASS_NAMES: &[&str] = &[
     "IfcLightFixture",
 ];
 
-fn class_name(upper: &str) -> String {
+/// The single IfcMappedItem element `id`'s Body is, when that is all it is (ADR 0034).
+pub(crate) fn mapped_item_of(f: &StepFile, id: u64) -> Option<&Entity> {
+    let shape = f.deref(f.entities.get(&id)?.arg(6))?;
+    let mut items = shape
+        .arg(2)
+        .as_list()?
+        .iter()
+        .filter_map(|r| f.deref(r))
+        .filter(|r| is_body(r))
+        .flat_map(|r| r.arg(3).as_list().unwrap_or(&[]).iter());
+    let only = f.deref(items.next()?)?;
+    (items.next().is_none() && only.name == "IFCMAPPEDITEM").then_some(only)
+}
+
+pub(crate) fn class_name(upper: &str) -> String {
     CLASS_NAMES
         .iter()
         .find(|c| c.eq_ignore_ascii_case(upper))
@@ -1491,7 +1503,7 @@ impl<'a> Reader<'a> {
     }
 
     /// IfcCartesianTransformationOperator3D (+ NonUniform) → Affine.
-    fn transform_operator(&self, v: &Value) -> Affine {
+    pub(crate) fn transform_operator(&self, v: &Value) -> Affine {
         let Some(e) = self.get(v) else {
             return Affine::IDENTITY;
         };

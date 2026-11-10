@@ -127,7 +127,7 @@ fn revit_wall_imports_parametric_with_cut_opening_and_psets() {
     assert!(!positions.is_empty());
     let mut lo = positions[0];
     let mut hi = positions[0];
-    for p in positions {
+    for p in positions.iter() {
         for k in 0..3 {
             lo[k] = lo[k].min(p[k]);
             hi[k] = hi[k].max(p[k]);
@@ -257,7 +257,10 @@ fn opening_on_mesh_host_lands_in_element_space() {
         ] {
             indices.extend(t.map(|i| i as u32));
         }
-        Generator::Mesh { positions, indices }
+        Generator::Mesh {
+            positions: positions.into(),
+            indices: indices.into(),
+        }
     };
     // A slab-ish block: positions are element-local (storey-relative), storey at 3000.
     let e = Element {
@@ -274,6 +277,7 @@ fn opening_on_mesh_host_lands_in_element_space() {
             generator: box_from_to([500.0, 500.0, 0.0], [1500.0, 2500.0, 300.0]),
         }],
         properties: Default::default(),
+        ifc_entity: None,
     };
     m.elements.insert(e.id, e.clone());
     m.validate().expect("model validates");
@@ -285,10 +289,16 @@ fn opening_on_mesh_host_lands_in_element_space() {
     let Generator::Mesh { positions, .. } = &b.openings[0].generator else {
         panic!("expected a mesh opening");
     };
-    // Element space is storey-relative: everything shifted down by the 3000 elevation.
+    // Element space is storey-relative (everything shifted down by the 3000 elevation), from
+    // the element's placement (the host mesh's first point).
+    let o = b.placement.origin;
+    let positions: Vec<[f64; 3]> = positions
+        .iter()
+        .map(|p| [p[0] + o[0], p[1] + o[1], p[2] + o[2]])
+        .collect();
     let mut lo = positions[0];
     let mut hi = positions[0];
-    for p in positions {
+    for p in positions.iter() {
         for k in 0..3 {
             lo[k] = lo[k].min(p[k]);
             hi[k] = hi[k].max(p[k]);
@@ -493,25 +503,20 @@ fn wall_elemented_case_is_imported() {
     assert_eq!(m.elements.len(), 2);
 }
 
-/// Nothing is dropped silently (ADR 0032): an unsupported product is in the report; the
-/// spatial structure, openings and plain geometry entities are not.
+/// Nothing is dropped silently (ADR 0032): a product of another class is converted as a proxy
+/// keeping its class (ADR 0042); the spatial structure, openings and plain geometry entities are
+/// not products to convert.
 #[test]
-fn unsupported_products_are_reported() {
+fn other_products_are_converted() {
     let (_, rep) = import(REVIT_STYLE);
     assert!(rep.skipped.is_empty(), "report: {rep:?}");
-    let (_, rep) = import(&with_entities(
+    let (m, rep) = import(&with_entities(
         "#70=IFCROOF('2MrcuFTa90SfJXy$ZbCd1T',$,'Roof',$,$,#23,#31,$,$);",
     ));
-    assert_eq!(skipped(&rep, "IFCROOF"), 1, "report: {rep:?}");
-    assert_eq!(rep.skipped.len(), 1, "report: {rep:?}");
-    // The report in words (CLI and viewer) says it too.
-    let lines = rep.lines();
-    assert!(
-        lines
-            .iter()
-            .any(|l| l.starts_with("skipped:") && l.contains("IFCROOF")),
-        "{lines:?}"
-    );
+    assert!(rep.skipped.is_empty(), "report: {rep:?}");
+    let roof = m.elements.values().find(|e| e.name == "Roof").unwrap();
+    assert_eq!(roof.class_name(), "IfcRoof");
+    assert_eq!(rep.by_class.get("IfcRoof"), Some(&1));
 }
 
 /// A second product with the same GlobalId is skipped and reported, not written over the first;
@@ -690,4 +695,44 @@ fn metre_units_import_like_millimetres() {
         ra.iter().zip(&rb).all(|(p, q)| (p - q).abs() < 1e-3),
         "{ra:?} vs {rb:?}"
     );
+}
+
+/// Classes not edited by dimensions are converted too (ADR 0042): a proxy that keeps its own class
+/// name, exported as a valid IfcBuildingElementProxy; a mesh far from the survey origin is stored
+/// relative to its own first point.
+#[test]
+fn other_classes_convert_as_proxies_keeping_their_class() {
+    let text = include_str!("fixtures/tilt.ifc")
+        .replace("IFCBUILDINGELEMENTPROXY(", "IFCPIPESEGMENT(")
+        .replace(
+            "ENDSEC;\nEND-ISO",
+            "#30=IFCCARTESIANPOINTLIST3D(((2500000000.,1100000000.,0.),(2500001000.,1100000000.,0.),\
+             (2500000000.,1100001000.,0.),(2500000000.,1100000000.,1000.)));\n\
+             #31=IFCTRIANGULATEDFACESET(#30,$,$,((1,3,2),(1,2,4),(2,3,4),(3,1,4)),$);\n\
+             #32=IFCSHAPEREPRESENTATION(#5,'Body','Tessellation',(#31));\n\
+             #33=IFCPRODUCTDEFINITIONSHAPE($,$,(#32));\n\
+             #34=IFCDOOR('2YvctVUKr0kugbFTf53O9L',$,'door',$,$,#7,#33,$,$,$,$,$,$);\n\
+             ENDSEC;\nEND-ISO",
+        );
+    let (m, rep) = import(&text);
+    assert_eq!(m.elements.len(), 2, "{:?}", rep.lines());
+    let by_name = |n: &str| m.elements.values().find(|e| e.name == n).unwrap();
+    let (pipe, door) = (by_name("tilt"), by_name("door"));
+    for (e, class) in [(pipe, "IfcPipeSegment"), (door, "IfcDoor")] {
+        assert_eq!(e.class, bimble_core::IfcClass::IfcBuildingElementProxy);
+        assert_eq!(e.class_name(), class);
+    }
+    let Generator::Mesh { positions, .. } = &door.generator else {
+        panic!("expected a mesh: {:?}", door.generator);
+    };
+    assert_eq!(door.placement.origin, [2.5e9, 1.1e9, 0.0]);
+    assert!(positions.iter().flatten().all(|c| c.abs() <= 1000.0));
+
+    let out = bimble_ifc::export(&m, "proxies.ifc", "2026-11-10T10:00:00");
+    assert!(out.contains("'IfcDoor'") && out.contains(".USERDEFINED."));
+    assert!(!out.contains("IFCDOOR(") && !out.contains("IFCPIPESEGMENT("));
+    let (back, _) = import(&out);
+    let mut classes: Vec<&str> = back.elements.values().map(|e| e.class_name()).collect();
+    classes.sort();
+    assert_eq!(classes, ["IfcDoor", "IfcPipeSegment"]);
 }

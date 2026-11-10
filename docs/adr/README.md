@@ -47,6 +47,7 @@ a decision that changes an old one says which one it supersedes.
 | [0039](0039-open-5-gb-ifc-files.md) | Open 5 GB IFC files: cap 2 → 64 GiB with a 1 GiB statement cap, parse freed on all cores, synthetic repeated test files; 5 and 7 GB open natively; browser needs streaming + a prepared format | Accepted (desktop), browser proposed |
 | [0040](0040-prepared-viewing-format.md) | A prepared viewing format, `.bimbleview`: the scene (codec meshes, shapes once) in gzipped chunks; File → Share for viewing, `bimble pack`; property sets and proxies left out (measured) | Accepted |
 | [0041](0041-themes-and-roboto.md) | Interface themes (Grey default per issue #53, Dark, Light, Solarized, High contrast; all text ≥ 4.5:1, tested), Roboto shipped for the interface and embedded in PDFs; sheet font in the graphic style | Accepted |
+| [0042](0042-every-element-and-a-binary-bimble.md) | Convert every element (others as `IfcBuildingElementProxy` keeping their class name, meshes relative to their first point); each shape once (mapped copies share a mesh in memory, file and scene); `.bimble` v2 = gzip of CBOR, JSON v1 still read | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

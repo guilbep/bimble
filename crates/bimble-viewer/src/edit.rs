@@ -214,6 +214,7 @@ pub fn new_element(
         generator,
         openings: Vec::new(),
         properties: Default::default(),
+        ifc_entity: None,
     };
     Ok(add_mat
         .into_iter()
@@ -466,7 +467,7 @@ impl Editor {
         if self.form.as_ref().is_none_or(|f| f.id != id) {
             self.form = Some(Form::of(e));
         }
-        let class = e.class.name();
+        let class = e.class_name();
         let storey = self
             .model
             .storeys

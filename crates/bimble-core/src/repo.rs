@@ -15,7 +15,7 @@
 //! message). An element unchanged between commits is stored once. Every object read is checked
 //! against its name, so a damaged history is reported, never silently used.
 
-use crate::version::{Change, canonical, content_hash, diff};
+use crate::version::{Change, content_hash, diff};
 use crate::{Element, GlobalId, Material, Model, Storey};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -301,7 +301,7 @@ impl Repo {
         };
         m.validate()
             .map_err(|e| RepoError::Damaged(hash.into(), format!("invalid model: {e}")))?;
-        Ok(canonical(m))
+        Ok(crate::version::canonical_model(m))
     }
 
     // ---------- refs
@@ -812,7 +812,7 @@ pub fn merge_models(
             &base.elements,
             &ours.elements,
             &theirs.elements,
-            |e| format!("{} {}", e.class.name(), e.name),
+            |e| format!("{} {}", e.class_name(), e.name),
             prefer,
             &mut conflicts,
         ),
@@ -920,7 +920,7 @@ impl Repo {
         merged
             .validate()
             .map_err(|e| RepoError::Bad(format!("the merged model is invalid: {e}")))?;
-        let merged = canonical(merged);
+        let merged = crate::version::canonical_model(merged);
         let tree = self.write_tree(&merged)?;
         let c = Commit {
             tree,

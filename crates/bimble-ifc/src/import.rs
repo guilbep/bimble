@@ -15,6 +15,7 @@ use bimble_core::{
     Storey,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 /// How the import went: counts and warnings, shown by the CLI after saving.
 #[derive(Default, Debug)]
@@ -201,22 +202,37 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
     // One budget for the whole file: elements and openings draw from the same caps.
     let budget = Budget::new(&limits);
     let mut opening_ids: HashSet<GlobalId> = HashSet::new();
+    let mut shapes: Shapes = HashMap::new();
 
     // File order, so the first of two products sharing a GlobalId is the one kept.
     let mut ids: Vec<u64> = file.entities.keys().collect();
     ids.sort_unstable();
     for id in &ids {
         let e = &file.entities[id];
-        let Some(class) = class_of(&e.name) else {
-            // A product with a body that isn't one of ours: reported, not silently dropped.
-            if !crate::read::SKIP_CLASSES.contains(&e.name.as_str())
+        // One of the classes edited by dimensions, or any other product with a body: a proxy
+        // that keeps its own class name (ADR 0042).
+        let (class, ifc_entity) = match class_of(&e.name) {
+            Some(c) => (c, None),
+            None if !crate::read::SKIP_CLASSES.contains(&e.name.as_str())
                 && file
                     .deref(e.arg(6))
-                    .is_some_and(|s| s.name == "IFCPRODUCTDEFINITIONSHAPE")
+                    .is_some_and(|s| s.name == "IFCPRODUCTDEFINITIONSHAPE") =>
             {
-                rep.skip(format!("{}: unsupported class", e.name));
+                // A proxy Bimble wrote names its class in ObjectType: read it back.
+                let written = e
+                    .arg(4)
+                    .as_str()
+                    .filter(|t| t.starts_with("Ifc") && t.chars().all(|c| c.is_ascii_alphabetic()));
+                (
+                    IfcClass::IfcBuildingElementProxy,
+                    if e.name == "IFCBUILDINGELEMENTPROXY" {
+                        written.map(str::to_owned)
+                    } else {
+                        Some(crate::read::class_name(&e.name))
+                    },
+                )
             }
-            continue;
+            None => continue,
         };
         let name = e.arg(2).as_str().unwrap_or("").to_owned();
         let Ok(gid) = GlobalId::try_from(e.arg(0).as_str().unwrap_or("").to_owned()) else {
@@ -257,6 +273,33 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
                 }
                 el
             }
+            // A copy of a shape (one IfcMappedItem, uncut, moved and turned only): its map's mesh,
+            // shared with the other copies, placed (ADR 0042).
+            None if let Some((placement, (positions, indices))) = mapped_copy(
+                &mut r,
+                &file,
+                *id,
+                &rel,
+                scale,
+                &openings,
+                &budget,
+                &mut shapes,
+            ) =>
+            {
+                rep.meshes += 1;
+                Element {
+                    id: gid,
+                    class,
+                    name: name.clone(),
+                    storey,
+                    material: GlobalId::derived(b"material/none"),
+                    placement,
+                    generator: Generator::Mesh { positions, indices },
+                    openings: Vec::new(),
+                    properties: Default::default(),
+                    ifc_entity: None,
+                }
+            }
             None => {
                 // Otherwise: explicit geometry → tessellate into a Mesh (storey-relative mm).
                 let mut mb = bimble_geom::MeshBuilder::default();
@@ -272,7 +315,13 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
                     rep.skip(format!("{}: no usable geometry", class.name()));
                     continue;
                 }
-                let (positions, indices) = mesh_from_tris(&mb.tris, storey_elevation);
+                let (mut positions, indices) = mesh_from_tris(&mb.tris, storey_elevation);
+                // Relative to its own first point (to the mm), not to the survey origin: smaller
+                // numbers, and two copies of a shape get the same positions.
+                let o = positions[0].map(f64::round);
+                for p in &mut positions {
+                    *p = [p[0] - o[0], p[1] - o[1], p[2] - o[2]];
+                }
                 rep.meshes += 1;
                 Element {
                     id: gid,
@@ -280,10 +329,14 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
                     name: name.clone(),
                     storey,
                     material: GlobalId::derived(b"material/none"),
-                    placement: Placement::at(0.0, 0.0, 0.0),
-                    generator: Generator::Mesh { positions, indices },
+                    placement: Placement::at(o[0], o[1], o[2]),
+                    generator: Generator::Mesh {
+                        positions: positions.into(),
+                        indices: indices.into(),
+                    },
                     openings: Vec::new(),
                     properties: Default::default(),
+                    ifc_entity: None,
                 }
             }
         };
@@ -329,15 +382,16 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
             props: Default::default(),
         });
 
-        *rep.by_class.entry(class.name().to_owned()).or_default() += 1;
+        let element = Element {
+            material: mid,
+            ifc_entity,
+            ..element
+        };
+        *rep.by_class
+            .entry(element.class_name().to_owned())
+            .or_default() += 1;
         rep.elements += 1;
-        model.elements.insert(
-            gid,
-            Element {
-                material: mid,
-                ..element
-            },
-        );
+        model.elements.insert(gid, element);
     }
     model.materials = model_materials;
     if budget.exhausted() {
@@ -352,16 +406,13 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
         rep.warn(if n > 1 { format!("{k} (×{n})") } else { k });
     }
     if rep.elements == 0 {
-        return Err(
-            "no importable elements (IfcColumn, IfcBeam, IfcSlab, IfcWall, IfcFooting) found"
-                .into(),
-        );
+        return Err("no element with geometry found".into());
     }
     // Validate, then canonical form (no -0.0), like any model mutation: hashes depend on it.
     model
         .validate()
         .map_err(|e| format!("imported model invalid: {e}"))?;
-    Ok((bimble_core::version::canonical(model), rep))
+    Ok((bimble_core::version::canonical_model(model), rep))
 }
 
 /// Element step id → storey step id (containment, then aggregation up the spatial tree).
@@ -473,7 +524,10 @@ fn element_openings(
         out.push(Opening {
             id,
             placement: Placement::at(0.0, 0.0, 0.0),
-            generator: Generator::Mesh { positions, indices },
+            generator: Generator::Mesh {
+                positions: positions.into(),
+                indices: indices.into(),
+            },
         });
     }
     out
@@ -673,6 +727,7 @@ fn extruded_element(
             generator,
             openings: Vec::new(),
             properties: Default::default(),
+            ifc_entity: None,
         },
         parametric,
     ))
@@ -868,6 +923,64 @@ fn rectangle(loop_: &[[f64; 2]]) -> Option<Rect> {
 
 /// Tessellated world-space triangles (mm) → a Mesh generator's data, storey-relative,
 /// positions deduplicated in first-use order.
+/// Meshes of representation maps, by map id: met once, shared by every copy (None: empty).
+type Shapes = HashMap<u64, Option<SharedMesh>>;
+/// A mesh's positions and indices, shared by its copies.
+type SharedMesh = (Arc<Vec<[f64; 3]>>, Arc<Vec<u32>>);
+
+/// Element `id` as a placed copy of its map's shape, when its body is one IfcMappedItem, nothing
+/// cuts it and the copy is only moved and turned (a Placement can't scale or mirror).
+#[allow(clippy::too_many_arguments)]
+fn mapped_copy(
+    r: &mut Reader,
+    file: &StepFile,
+    id: u64,
+    rel: &Affine,
+    scale: f64,
+    openings: &HashMap<u64, Vec<u64>>,
+    budget: &Budget,
+    shapes: &mut Shapes,
+) -> Option<(Placement, SharedMesh)> {
+    if openings.contains_key(&id) {
+        return None;
+    }
+    let mi = crate::read::mapped_item_of(file, id)?;
+    let map_id = mi.arg(0).as_ref()?;
+    // Product placement ∘ mapping target, the map's origin being in its shape (as the reader).
+    let t = rel.then(&r.transform_operator(mi.arg(1)));
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+    let d = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let placement = Placement {
+        origin: t.t.map(|c| c * scale),
+        z_axis: t.z,
+        x_axis: t.x,
+    };
+    let y = placement.y_axis();
+    let rigid = near(d(t.x, t.x), 1.0)
+        && near(d(t.z, t.z), 1.0)
+        && near(d(t.x, t.z), 0.0)
+        && (0..3).all(|k| near(y[k], t.y[k]));
+    if !rigid {
+        return None;
+    }
+    let shape = shapes.entry(map_id).or_insert_with(|| {
+        let map = file.get(map_id)?;
+        let mut mb = bimble_geom::MeshBuilder::default();
+        let mut emit = Emit {
+            mb: &mut mb,
+            scale,
+            budget,
+        };
+        r.map_shape(map_id, map, &mut emit);
+        if mb.tris.is_empty() {
+            return None;
+        }
+        let (p, i) = mesh_from_tris(&mb.tris, 0.0);
+        Some((Arc::new(p), Arc::new(i)))
+    });
+    Some((placement, shape.clone()?))
+}
+
 fn mesh_from_tris(tris: &[[[f64; 3]; 3]], storey_elevation: f64) -> (Vec<[f64; 3]>, Vec<u32>) {
     let mut positions: Vec<[f64; 3]> = Vec::new();
     let mut index: HashMap<[u64; 3], u32> = HashMap::new();

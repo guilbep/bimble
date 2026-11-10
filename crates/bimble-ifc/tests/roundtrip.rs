@@ -101,8 +101,9 @@ fn extruded_polygon_and_mesh_round_trip() {
             [1000.0, 1000.0, 0.0],
             [0.0, 1000.0, 0.0],
             [500.0, 500.0, 600.0],
-        ],
-        indices: vec![0, 2, 1, 0, 3, 2, 0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4],
+        ]
+        .into(),
+        indices: vec![0, 2, 1, 0, 3, 2, 0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4].into(),
     };
     let elements = [
         Element {
@@ -119,6 +120,7 @@ fn extruded_polygon_and_mesh_round_trip() {
             },
             openings: Vec::new(),
             properties: Default::default(),
+            ifc_entity: None,
         },
         Element {
             id: bimble_core::GlobalId::derived(b"element/mesh"),
@@ -130,6 +132,7 @@ fn extruded_polygon_and_mesh_round_trip() {
             generator: mesh,
             openings: Vec::new(),
             properties: Default::default(),
+            ifc_entity: None,
         },
     ];
     for e in &elements {
@@ -222,6 +225,7 @@ fn openings_and_properties_round_trip() {
         ]
         .into_iter()
         .collect(),
+        ifc_entity: None,
     };
     m.elements.insert(e.id, e.clone());
     m.validate().expect("model validates");
@@ -268,7 +272,7 @@ fn openings_and_properties_round_trip() {
         panic!("expected a mesh opening");
     };
     assert!(!positions.is_empty());
-    let mut bb: Vec<[f64; 3]> = positions.clone();
+    let mut bb: Vec<[f64; 3]> = positions.to_vec();
     sort3(&mut bb);
     // Same corners: the mesh welds the solid's 8 unique vertices.
     let mut eb8 = eb.clone();

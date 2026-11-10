@@ -69,6 +69,7 @@ pub fn concrete_frame(spec: &FrameSpec) -> Model {
         generator,
         openings: Vec::new(),
         properties: Default::default(),
+        ifc_entity: None,
     };
     // no openings or properties in the demo frame
 

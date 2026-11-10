@@ -55,6 +55,57 @@ mod tests {
     }
 
     #[test]
+    fn binary_file_roundtrip_is_exact_and_canonical() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        // A proxy with its own class and a mesh of awkward floats, exact after the trip.
+        let mut e = m.elements.values().next().unwrap().clone();
+        e.id = crate::GlobalId::derived(b"element/proxy");
+        e.class = IfcClass::IfcBuildingElementProxy;
+        e.ifc_entity = Some("IfcPipeSegment".into());
+        e.generator = crate::Generator::Mesh {
+            positions: vec![
+                [0.1, 1e-300, 2535844157.0496545],
+                [1.5, 0.0, 1.0],
+                [0.0, 1.0, 0.0],
+            ]
+            .into(),
+            indices: vec![0, 1, 2].into(),
+        };
+        // A copy of the same shape, placed elsewhere: shares the mesh, written once.
+        let mut copy = e.clone();
+        copy.id = crate::GlobalId::derived(b"element/proxy-copy");
+        copy.placement.origin[0] += 5000.0;
+        m.elements.insert(e.id, e);
+        m.elements.insert(copy.id, copy);
+        let b = file::to_bytes(&m);
+        assert!(b.starts_with(file::MAGIC));
+        let back = file::from_bytes(&b).unwrap();
+        assert_eq!(back, m);
+        let meshes: Vec<_> = back
+            .elements
+            .values()
+            .filter_map(|e| match &e.generator {
+                crate::Generator::Mesh { positions, .. } => Some(positions.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(meshes.len(), 2);
+        assert!(
+            std::sync::Arc::ptr_eq(&meshes[0], &meshes[1]),
+            "copies share again"
+        );
+        assert_eq!(version::model_hash(&back), version::model_hash(&m));
+        assert_eq!(
+            file::to_bytes(&back),
+            b,
+            "binary serialization must be canonical"
+        );
+        // The JSON text still opens, and a cut-off binary file is an error, not a panic.
+        assert_eq!(file::from_bytes(file::to_string(&m).as_bytes()).unwrap(), m);
+        assert!(file::from_bytes(&b[..b.len() / 2]).is_err());
+    }
+
+    #[test]
     fn undo_redo_restores_exact_state() {
         let mut m = concrete_frame(&FrameSpec::default());
         let h0 = version::model_hash(&m);
