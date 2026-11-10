@@ -265,9 +265,9 @@ impl Scene {
         let meshed: Vec<Result<(ElementInfo, MeshBuilder), String>> = elements
             .par_iter()
             .map(|e| {
-                let Ok(local) = crate::element_mesh(e) else {
-                    return Err(format!("{} {}: could not mesh", e.class.name(), e.name));
-                };
+                let local = crate::element_mesh(e).map_err(|err| {
+                    format!("{} {}: could not mesh ({err:?})", e.class.name(), e.name)
+                })?;
                 let storey = &m.storeys[&e.storey];
                 let mat = &m.materials[&e.material];
                 let t = crate::placement_matrix(&e.placement, storey.elevation);

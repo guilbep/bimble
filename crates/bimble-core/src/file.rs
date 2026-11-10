@@ -6,8 +6,13 @@ use serde::{Deserialize, Serialize};
 
 pub const FORMAT: &str = "bimble";
 pub const FORMAT_VERSION: u32 = 1;
-/// Refuse absurdly large files before parsing (untrusted input).
-pub const MAX_FILE_BYTES: usize = 512 * 1024 * 1024;
+/// Refuse absurdly large files before parsing (untrusted input). A model imported from a large
+/// IFC of faceted geometry can pass 2 GB of text (a 709 MB IFC gave 2.4 GB): 8 GiB on 64-bit
+/// machines; 1 GiB where memory addresses are 32-bit (the browser).
+#[cfg(target_pointer_width = "64")]
+pub const MAX_FILE_BYTES: usize = 8 << 30;
+#[cfg(not(target_pointer_width = "64"))]
+pub const MAX_FILE_BYTES: usize = 1 << 30;
 
 #[derive(Serialize)]
 struct Out<'a> {

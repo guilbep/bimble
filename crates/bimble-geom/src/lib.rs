@@ -109,6 +109,36 @@ fn earcut_indices(outer: &[[f64; 2]], holes: &[Vec<[f64; 2]>]) -> Result<Vec<u32
     Ok(tris.iter().map(|i| *i as u32).collect())
 }
 
+/// A loop without repeated or collinear points: earcut skips those, which would leave a cap with
+/// fewer triangles than the loop has corners (and the element unmeshed). A point is dropped when
+/// it lies within 1e-6 mm of its neighbours' line, or on its predecessor. The shape doesn't change.
+fn corners_only(l: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    let mut v: Vec<[f64; 2]> = l.to_vec();
+    loop {
+        let n = v.len();
+        if n < 3 {
+            return v;
+        }
+        let drop = (0..n).find(|&i| {
+            let (a, b, c) = (v[(i + n - 1) % n], v[i], v[(i + 1) % n]);
+            let (ux, uy, wx, wy) = (c[0] - a[0], c[1] - a[1], b[0] - a[0], b[1] - a[1]);
+            let len = (ux * ux + uy * uy).sqrt();
+            let same = (b[0] - a[0]).abs() < 1e-9 && (b[1] - a[1]).abs() < 1e-9;
+            // Distance of b from the line a–c, when b lies between a and c along it.
+            let along = (wx * ux + wy * uy) / (len * len).max(1e-30);
+            same || (len > 0.0
+                && (ux * wy - uy * wx).abs() / len < 1e-6
+                && (0.0..=1.0).contains(&along))
+        });
+        match drop {
+            Some(i) => {
+                v.remove(i);
+            }
+            None => return v,
+        }
+    }
+}
+
 /// Extrude a counter-clockwise profile along local +Z by `depth`, cutting out clockwise voids,
 /// as f64 triangles with outward winding (closed solid, ready for booleans).
 pub fn extrude_tris(
@@ -116,17 +146,49 @@ pub fn extrude_tris(
     voids: &[Vec<[f64; 2]>],
     depth: f64,
 ) -> Result<Vec<crate::boolean::Tri>, GeomError> {
-    let pts = profile_points(profile);
+    let pts = corners_only(&profile_points(profile));
+    let voids: Vec<Vec<[f64; 2]>> = voids.iter().map(|v| corners_only(v)).collect();
+    let voids = &voids[..];
+    if pts.len() < 3 {
+        return Err(GeomError::Triangulation(
+            "profile has fewer than 3 corners".into(),
+        ));
+    }
     let n = pts.len();
     let tris = earcut_indices(&pts, voids)?;
     let total = n + voids.iter().map(Vec::len).sum::<usize>();
-    // Euler: a polygon with h holes triangulates to nv - 2 + 2h triangles.
+    // Euler: a polygon with h holes triangulates to nv - 2 + 2h triangles. Fewer is fine when
+    // only slivers are missing (spikes, points touching): the caps still cover the outline's
+    // area. Missing area is refused: the element would show a hole.
     let expected = total - 2 + 2 * voids.len();
     if tris.len() / 3 != expected {
-        return Err(GeomError::Triangulation(format!(
-            "expected {expected} triangles, got {}",
-            tris.len() / 3
-        )));
+        let shoelace = |l: &[[f64; 2]]| {
+            (0..l.len())
+                .map(|i| {
+                    let (a, b) = (l[i], l[(i + 1) % l.len()]);
+                    a[0] * b[1] - b[0] * a[1]
+                })
+                .sum::<f64>()
+                .abs()
+                / 2.0
+        };
+        let want = shoelace(&pts) - voids.iter().map(|v| shoelace(v)).sum::<f64>();
+        let flat: Vec<[f64; 2]> = pts.iter().chain(voids.iter().flatten()).copied().collect();
+        let got: f64 = tris
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|k| flat[k as usize]);
+                ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() / 2.0
+            })
+            .sum();
+        if !(want > 0.0 && (got - want).abs() <= want * 1e-3) {
+            return Err(GeomError::Triangulation(format!(
+                "expected {expected} triangles, got {} covering {got:.0} of {want:.0} mm²",
+                tris.len() / 3
+            )));
+        }
     }
     let all: Vec<&[[f64; 2]]> = std::iter::once(&pts[..])
         .chain(voids.iter().map(|v| v.as_slice()))
@@ -318,6 +380,41 @@ pub fn placement_matrix(p: &Placement, storey_elevation: f64) -> [[f64; 4]; 4] {
 
 #[cfg(test)]
 mod tests {
+
+    /// An outline with points along its straight sides (as exporters write arcs and edits):
+    /// it meshes, with the same area as its corners alone (found on real slabs that didn't mesh).
+    #[test]
+    fn outlines_with_points_along_their_sides_mesh() {
+        let with_extra = Profile::Polygon(vec![
+            [0.0, 0.0],
+            [1000.0, 0.0],
+            [2000.0, 0.0],
+            [2000.0, 0.0],
+            [2000.0, 1000.0],
+            [1000.0, 1000.0 + 1e-9],
+            [0.0, 1000.0],
+            [0.0, 500.0],
+        ]);
+        let corners = Profile::Polygon(vec![
+            [0.0, 0.0],
+            [2000.0, 0.0],
+            [2000.0, 1000.0],
+            [0.0, 1000.0],
+        ]);
+        let area = |p: &Profile| {
+            let t = extrude_tris(p, &[], 100.0).expect("meshes");
+            // Top cap: triangles at z = depth.
+            t.iter()
+                .filter(|t| t.iter().all(|v| v[2] == 100.0))
+                .map(|t| {
+                    let (a, b, c) = (t[0], t[1], t[2]);
+                    ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() / 2.0
+                })
+                .sum::<f64>()
+        };
+        assert!((area(&with_extra) - area(&corners)).abs() < 1e-3);
+        assert!((area(&corners) - 2_000_000.0).abs() < 1e-3);
+    }
     use super::*;
     use bimble_core::Generator;
     use bimble_core::demo::{FrameSpec, concrete_frame};

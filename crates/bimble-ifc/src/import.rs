@@ -123,6 +123,8 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
     let mut storeys: BTreeMap<GlobalId, Storey> = BTreeMap::new();
     let mut storey_gid: HashMap<u64, GlobalId> = HashMap::new();
     let mut storey_ids: HashSet<u64> = HashSet::new();
+    // Storeys placed offset or turned in plan: said once, not once each.
+    let mut moved_storeys: Vec<String> = Vec::new();
     for (id, st) in file.by_type("IFCBUILDINGSTOREY") {
         let name = st.arg(2).as_str().unwrap_or("").to_owned();
         let elevation = match st.arg(5).as_ref() {
@@ -134,10 +136,7 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
                     || !same(f.x, [1.0, 0.0, 0.0])
                     || !same(f.y, [0.0, 1.0, 0.0])
                 {
-                    rep.warn(format!(
-                        "storey {name:?}: placement offset or turned in plan; \
-                         its elements keep their world position"
-                    ));
+                    moved_storeys.push(name.clone());
                 }
                 f.t[2] * scale
             }
@@ -160,6 +159,16 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
         );
         storey_gid.insert(id, gid);
         storey_ids.insert(id);
+    }
+    if !moved_storeys.is_empty() {
+        let shown: Vec<&str> = moved_storeys.iter().take(4).map(String::as_str).collect();
+        rep.warn(format!(
+            "{} storey(s) placed offset or turned in plan ({}{}): their elements keep their \
+             world position",
+            moved_storeys.len(),
+            shown.join(", "),
+            if moved_storeys.len() > 4 { ", …" } else { "" }
+        ));
     }
     if storeys.is_empty() {
         rep.warn("no IfcBuildingStorey in the file; elements go into a synthetic storey");

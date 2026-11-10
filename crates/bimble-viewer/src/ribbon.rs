@@ -129,7 +129,7 @@ impl Action {
         match self {
             Action::Open => "Open…".into(),
             Action::ImportIfc => "Import IFC…".into(),
-            Action::ConvertOpen => "Convert this IFC to .bimble (editable)".into(),
+            Action::ConvertOpen => "Convert structural elements to .bimble (editable)…".into(),
             Action::ShareForViewing => "Share for viewing… (.bimbleview)".into(),
             Action::Save => "Save".into(),
             Action::Undo => "Undo".into(),
@@ -273,12 +273,33 @@ impl Viewer {
     }
 
     /// Whether an action can run now.
+    /// Elements of the open model the editor keeps on import (ADR 0032), and all of them.
+    pub(crate) fn structural_count(&self) -> (usize, usize) {
+        let Some(l) = &self.loaded else {
+            return (0, 0);
+        };
+        let kept = [
+            "IfcColumn",
+            "IfcBeam",
+            "IfcSlab",
+            "IfcWall",
+            "IfcWallStandardCase",
+            "IfcWallElementedCase",
+            "IfcFooting",
+        ]
+        .iter()
+        .filter_map(|c| l.classes.get(*c))
+        .sum();
+        (kept, l.scene.elements.len())
+    }
+
     pub(crate) fn action_enabled(&self, a: Action) -> bool {
         let loaded = self.loaded.is_some();
         let flat = self.in_2d();
         match a {
             Action::Open | Action::ImportIfc | Action::Palette | Action::Standards => true,
-            // An IFC open, read-only (the browser keeps no path to read it again).
+            // An IFC open, read-only, with something the editor keeps (the browser keeps no
+            // path to read it again).
             Action::ConvertOpen => {
                 cfg!(not(target_arch = "wasm32"))
                     && self.loaded.as_ref().is_some_and(|l| {
@@ -287,6 +308,7 @@ impl Viewer {
                                 .extension()
                                 .is_some_and(|x| x.eq_ignore_ascii_case("ifc"))
                     })
+                    && self.structural_count().0 > 0
             }
             // Not a part of a model too large to show whole: it would be shared as the whole.
             Action::ShareForViewing => self.loaded.as_ref().is_some_and(|l| l.partial.is_none()),
@@ -605,7 +627,18 @@ impl Viewer {
                 }
                 for a in *g {
                     let b = egui::Button::new(a.label()).shortcut_text(a.keys());
-                    if ui.add_enabled(self.action_enabled(*a), b).clicked() {
+                    let mut r = ui.add_enabled(self.action_enabled(*a), b);
+                    if *a == Action::ConvertOpen {
+                        // Say what it keeps before it is chosen (ADR 0032).
+                        let (kept, all) = self.structural_count();
+                        let text = format!(
+                            "The editor keeps columns, beams, slabs, walls and footings: {kept} of \
+                             this model's {all} elements. The rest (pipes, fittings, furniture…) is \
+                             left out. To share the whole model for viewing, use Share for viewing."
+                        );
+                        r = r.on_hover_text(&text).on_disabled_hover_text(&text);
+                    }
+                    if r.clicked() {
                         *run = Some(*a);
                     }
                 }
