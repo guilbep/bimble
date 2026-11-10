@@ -69,6 +69,32 @@ pub enum CommandError {
 }
 
 impl Command {
+    /// The element this command creates or changes, if it is about one (ADR 0038: what is
+    /// borrowed on a first edit; a new element belongs to whoever made it until they sync).
+    pub fn element(&self) -> Option<GlobalId> {
+        match self {
+            Command::AddElement(e) => Some(e.id),
+            Command::RemoveElement { id }
+            | Command::SetGenerator { id, .. }
+            | Command::SetPlacement { id, .. }
+            | Command::Rename { id, .. } => Some(*id),
+            // Listed, not `_`: a new element command must say whether it borrows.
+            Command::AddStorey(_)
+            | Command::RemoveStorey { .. }
+            | Command::AddMaterial(_)
+            | Command::RemoveMaterial { .. }
+            | Command::AddView(_)
+            | Command::RemoveView { .. }
+            | Command::SetView(_)
+            | Command::AddSheet(_)
+            | Command::RemoveSheet { .. }
+            | Command::SetSheet(_)
+            | Command::SetMaterial(_)
+            | Command::SetSchedules { .. }
+            | Command::SetProject { .. } => None,
+        }
+    }
+
     /// Apply to the model. Returns the inverse command. On error the model is unchanged.
     pub fn apply(self, m: &mut Model) -> Result<Command, CommandError> {
         use Command::*;

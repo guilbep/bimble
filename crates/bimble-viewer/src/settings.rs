@@ -23,6 +23,10 @@ pub struct Settings {
     pub ui_font: String,
     /// Body text size of the interface, points.
     pub text_size: f32,
+    /// Who you are (#52, until there is a server to sign in to): the author of commits, the
+    /// owner of borrowed elements ("this element belongs to …").
+    pub user_name: String,
+    pub user_email: String,
 }
 
 impl Default for Settings {
@@ -35,8 +39,20 @@ impl Default for Settings {
             theme: crate::ui_theme::THEMES[0].id.to_owned(),
             ui_font: crate::ui_theme::UiFont::Roboto.id().to_owned(),
             text_size: crate::ui_theme::TEXT_SIZE,
+            user_name: String::new(),
+            user_email: String::new(),
         }
     }
+}
+
+/// A short line of text from a JSON value: no line breaks, at most 120 characters.
+fn short_line(v: &serde_json::Value) -> String {
+    v.as_str()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(120)
+        .collect()
 }
 
 impl Settings {
@@ -67,6 +83,9 @@ impl Settings {
                     let r = crate::ui_theme::TEXT_SIZES;
                     (x as f32).clamp(*r.start(), *r.end())
                 }),
+            // Kept short: it is written into every commit and borrow list.
+            user_name: short_line(&v["user_name"]),
+            user_email: short_line(&v["user_email"]),
         }
     }
 
@@ -79,8 +98,25 @@ impl Settings {
             "theme": self.theme,
             "ui_font": self.ui_font,
             "text_size": self.text_size,
+            "user_name": self.user_name,
+            "user_email": self.user_email,
         })
         .to_string()
+    }
+
+    /// Who you are, as written in commits and borrows: "Name <e-mail>", either one alone, or
+    /// the system's user name when neither is set.
+    pub fn author(&self) -> String {
+        let (n, e) = (self.user_name.trim(), self.user_email.trim());
+        match (n.is_empty(), e.is_empty()) {
+            (false, false) => format!("{n} <{e}>"),
+            (false, true) => n.to_owned(),
+            (true, false) => e.to_owned(),
+            (true, true) => std::env::var("BIMBLE_AUTHOR")
+                .or_else(|_| std::env::var("USER"))
+                .or_else(|_| std::env::var("USERNAME"))
+                .unwrap_or_else(|_| "unknown".into()),
+        }
     }
 
     pub fn load() -> Settings {
@@ -167,7 +203,10 @@ mod tests {
             theme: "solarized-light".into(),
             ui_font: "ubuntu".into(),
             text_size: 14.5,
+            user_name: "Ana".into(),
+            user_email: "ana@office.example".into(),
         };
+        assert_eq!(s.author(), "Ana <ana@office.example>");
         assert_eq!(Settings::from_json(&s.to_json()), s);
         // An unknown theme or font, a size out of range: the defaults, the nearest size.
         let odd = Settings::from_json(r#"{"theme": "neon", "ui_font": "comic", "text_size": 99}"#);

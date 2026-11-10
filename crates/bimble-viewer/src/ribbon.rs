@@ -96,6 +96,10 @@ pub(crate) enum Action {
     Unhide,
     /// Draw what is hidden by element, marked, to pick and unhide it.
     RevealHidden,
+    /// The folder the history is shared through (ADR 0038).
+    SharedFolder,
+    /// Save, commit, fetch, merge, push, give back the borrowed elements (ADR 0038).
+    Synchronize,
     Standards,
     Project,
     Materials,
@@ -107,7 +111,7 @@ pub(crate) enum Action {
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 44] = [
+pub(crate) const ALL_ACTIONS: [Action; 46] = [
     Action::Open,
     Action::ImportIfc,
     Action::ConvertOpen,
@@ -147,6 +151,8 @@ pub(crate) const ALL_ACTIONS: [Action; 44] = [
     Action::IsolateInView,
     Action::Unhide,
     Action::RevealHidden,
+    Action::SharedFolder,
+    Action::Synchronize,
     Action::Standards,
     Action::Project,
     Action::Materials,
@@ -195,6 +201,8 @@ impl Action {
             Action::IsolateInView => "Isolate in view".into(),
             Action::Unhide => "Unhide in view".into(),
             Action::RevealHidden => "Reveal hidden".into(),
+            Action::SharedFolder => "Shared folder…".into(),
+            Action::Synchronize => "Synchronize".into(),
             Action::Standards => "Graphic standards".into(),
             Action::Project => "Project information".into(),
             Action::Materials => "Materials".into(),
@@ -257,9 +265,12 @@ impl Action {
             | Action::IsolateInView
             | Action::Unhide
             | Action::RevealHidden => Tab::View,
-            Action::LinkModel | Action::LinkDxf | Action::LinkPdf | Action::ManageLinks => {
-                Tab::Collaborate
-            }
+            Action::LinkModel
+            | Action::LinkDxf
+            | Action::LinkPdf
+            | Action::ManageLinks
+            | Action::SharedFolder
+            | Action::Synchronize => Tab::Collaborate,
             Action::Standards | Action::Materials | Action::History => Tab::Manage,
         };
         tab.label()
@@ -378,6 +389,11 @@ impl Viewer {
             Action::SheetTool(_) | Action::CloseSheet => self.layout.is_some(),
             Action::LinkDxf | Action::LinkPdf => loaded && flat,
             Action::ManageLinks | Action::RevealHidden => loaded,
+            // The history lives next to the file: the desktop, a .bimble model.
+            Action::SharedFolder | Action::Synchronize => {
+                cfg!(not(target_arch = "wasm32"))
+                    && self.loaded.as_ref().is_some_and(|l| l.edit.is_some())
+            }
             Action::HideNow | Action::IsolateNow | Action::HideInView | Action::IsolateInView => {
                 self.selected.is_some()
             }
@@ -537,6 +553,7 @@ impl Viewer {
                 self.reveal_hidden = !self.reveal_hidden;
                 self.needs_upload = true;
             }
+            Action::SharedFolder | Action::Synchronize => self.run_collab(a),
             Action::Standards => self.standards_open = !self.standards_open,
             Action::Project => {
                 if self.project_page.is_some() {
@@ -896,6 +913,19 @@ impl Viewer {
                     ],
                     &mut run,
                 );
+                self.group(
+                    ui,
+                    "Work together",
+                    &[
+                        (Action::SharedFolder, "Shared folder"),
+                        (Action::Synchronize, "Synchronize"),
+                    ],
+                    &mut run,
+                );
+                if let Some(m) = &self.collab_message {
+                    let first = m.lines().next().unwrap_or_default();
+                    ui.weak(first).on_hover_text(m);
+                }
             }
             Tab::Model => {
                 let k = |k: edit::Kind| (Action::Place(k), k.label());

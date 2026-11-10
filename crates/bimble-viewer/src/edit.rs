@@ -363,6 +363,53 @@ pub struct Editor {
     pub pending: Option<Vec<Command>>,
     /// Elements to select after the pending commands (copies).
     pub select_after: Option<GlobalId>,
+    /// Working with others through a shared folder (ADR 0038): elements are borrowed there on
+    /// their first change.
+    pub borrowing: Option<Borrowing>,
+    /// A change refused: these elements belong to someone else (Synchronize or Cancel).
+    pub belongs: Option<Vec<String>>,
+}
+
+/// Where and as whom elements are borrowed, and those already borrowed this time.
+#[derive(Clone, Debug)]
+pub struct Borrowing {
+    pub remote: std::path::PathBuf,
+    pub who: String,
+    pub mine: std::collections::BTreeSet<GlobalId>,
+}
+
+impl Borrowing {
+    /// Borrow what isn't borrowed yet. Elements someone else has: "<class> <name> belongs to
+    /// <who>". Can't reach the folder: an error (the edit goes on; Synchronize checks again).
+    fn take(&mut self, model: &Model, ids: &[GlobalId]) -> Result<Vec<String>, String> {
+        let new: Vec<GlobalId> = ids
+            .iter()
+            .filter(|id| !self.mine.contains(id))
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if new.is_empty() {
+            return Ok(Vec::new());
+        }
+        let remote = bimble_core::remote::open_or_init(&self.remote).map_err(|e| e.to_string())?;
+        let taken =
+            bimble_core::remote::borrow(&remote, &self.who, &new, bimble_core::date::now_secs())
+                .map_err(|e| e.to_string())?;
+        if taken.is_empty() {
+            self.mine.extend(new);
+        }
+        Ok(taken
+            .into_iter()
+            .map(|(id, who)| {
+                let what = model.elements.get(&id).map_or_else(
+                    || "A new element".into(),
+                    |e| format!("{} {}", e.class_name(), e.name),
+                );
+                format!("{what} belongs to {who}")
+            })
+            .collect())
+    }
 }
 
 impl Editor {
@@ -389,6 +436,8 @@ impl Editor {
             message: None,
             pending: None,
             select_after: None,
+            borrowing: None,
+            belongs: None,
         }
     }
 
@@ -405,6 +454,26 @@ impl Editor {
     pub fn apply(&mut self, cmds: Vec<Command>) -> Result<(), String> {
         if cmds.is_empty() {
             return Ok(());
+        }
+        // Working together: borrow the elements first; someone else's stop the change.
+        let ids: Vec<GlobalId> = cmds.iter().filter_map(Command::element).collect();
+        if let Some(b) = &mut self.borrowing
+            && !ids.is_empty()
+        {
+            match b.take(&self.model, &ids) {
+                Ok(taken) if !taken.is_empty() => {
+                    let msg = taken.join("; ");
+                    self.belongs = Some(taken);
+                    return Err(msg);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    self.message = Some(format!(
+                        "Not borrowed (the shared folder can't be reached: {e}); Synchronize \
+                         will check"
+                    ))
+                }
+            }
         }
         self.history
             .apply(&mut self.model, cmds)
@@ -656,6 +725,43 @@ mod tests {
         let m = concrete_frame(&FrameSpec::default());
         let s = m.storeys.values().find(|s| s.elevation == 0.0).unwrap().id;
         (m, s)
+    }
+
+    /// Working together (ADR 0038, #51): the first change borrows the element on the shared
+    /// folder; someone else's change to it is refused, saying whose it is; others go on.
+    #[test]
+    fn a_first_change_borrows_and_others_are_refused() {
+        let dir = std::env::temp_dir().join(format!("bimble-borrow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let m = concrete_frame(&FrameSpec::default());
+        let beams: Vec<GlobalId> = m
+            .elements
+            .values()
+            .filter(|e| e.class == IfcClass::IfcBeam)
+            .map(|e| e.id)
+            .take(2)
+            .collect();
+        let with = |who: &str| {
+            let mut ed = Editor::new(m.clone());
+            ed.borrowing = Some(Borrowing {
+                remote: dir.clone(),
+                who: who.into(),
+                mine: Default::default(),
+            });
+            ed
+        };
+        let (mut ana, mut ben) = (with("Ana"), with("Ben"));
+        ana.apply(move_by(&ana.model, &beams[..1], [0.0, 0.0, 100.0]))
+            .unwrap();
+        let refused = ben.apply(move_by(&ben.model, &beams[..1], [0.0, 0.0, 50.0]));
+        assert!(refused.unwrap_err().ends_with("belongs to Ana"));
+        assert_eq!(ben.belongs.as_ref().map(Vec::len), Some(1));
+        assert!(!ben.dirty, "nothing changed");
+        // Another beam is free.
+        ben.apply(move_by(&ben.model, &beams[1..2], [0.0, 0.0, 50.0]))
+            .unwrap();
+        assert!(ben.borrowing.as_ref().unwrap().mine.contains(&beams[1]));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

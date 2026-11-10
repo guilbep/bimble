@@ -24,6 +24,8 @@ pub struct Snapshot {
     pub temporary: Option<(bool, usize)>,
     /// Reveal hidden is on (#54).
     pub revealing: bool,
+    /// Working together and not synchronized for this many hours (ADR 0038).
+    pub sync_due: Option<u64>,
     /// Measurements taken and kept.
     pub measurements: usize,
     /// The plan options (what plans show, unit, title block…) differ from the template loaded.
@@ -49,6 +51,7 @@ pub enum Chip {
     Hidden,
     Temporary,
     Revealing,
+    SyncDue,
     Measurements,
     PlanOptions,
     Partial,
@@ -68,6 +71,7 @@ impl Chip {
             Chip::Hidden => "Show everything in this view (saved with the view)",
             Chip::Temporary => "Show again what is hidden for now",
             Chip::Revealing => "Stop revealing hidden elements",
+            Chip::SyncDue => "Synchronize now: send your work, get the others'",
             Chip::Measurements => "Delete the measurements",
             Chip::PlanOptions => "Back to the plan template's options",
             Chip::Partial if cfg!(target_arch = "wasm32") => {
@@ -133,6 +137,9 @@ pub fn chips(s: &Snapshot) -> Vec<(Chip, String)> {
     }
     if s.revealing {
         v.push((Chip::Revealing, "Revealing hidden".into()));
+    }
+    if let Some(h) = s.sync_due {
+        v.push((Chip::SyncDue, format!("Not synchronized for {h} h")));
     }
     if s.measurements > 0 {
         v.push((
@@ -218,6 +225,7 @@ mod tests {
             hidden: [0, 2, 1, 1, 3, 2],
             temporary: Some((true, 4)),
             revealing: true,
+            sync_due: Some(5),
             measurements: 1,
             plan_options_changed: true,
             ..Default::default()
@@ -237,6 +245,7 @@ mod tests {
                 "Hidden: 2 classes, 1 storey, 1 link, 3 elements, 2 isolated",
                 "For now: 4 isolated",
                 "Revealing hidden",
+                "Not synchronized for 5 h",
                 "1 measurement",
                 "Plan options changed",
             ]

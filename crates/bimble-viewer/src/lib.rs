@@ -20,6 +20,7 @@ use bimble_ifc::read::Progress;
 use web_time::Instant;
 
 mod big;
+mod collab;
 mod cutlines;
 mod edit;
 mod files;
@@ -918,6 +919,10 @@ struct Viewer {
     about_window: bool,
     /// Manage links (#58).
     links_window: bool,
+    /// When this model last synchronized (or was opened shared): the reminder (ADR 0038).
+    synced_at: Option<Instant>,
+    /// What the last Synchronize or Shared folder… said.
+    collab_message: Option<String>,
     /// Elements added to the selection with Ctrl/Cmd (#54), besides `selected`.
     also_selected: BTreeSet<usize>,
     /// Hidden in the active view by GlobalId, or all but these (#54; saved with the view).
@@ -1064,6 +1069,8 @@ impl Viewer {
             settings_window: false,
             about_window: false,
             links_window: false,
+            synced_at: None,
+            collab_message: None,
             also_selected: BTreeSet::new(),
             hidden_ids: BTreeSet::new(),
             isolated_ids: BTreeSet::new(),
@@ -1502,6 +1509,8 @@ impl Viewer {
                     proxies: None,
                 });
                 self.history_view = None;
+                self.collab_message = None;
+                self.start_borrowing();
                 self.hidden_classes.clear();
                 self.hidden_storeys.clear();
                 self.hidden_categories.clear();
@@ -1689,6 +1698,7 @@ impl Viewer {
 
     fn history_panel(&mut self, ui: &mut egui::Ui) {
         use bimble_core::repo::Repo;
+        let author = self.settings.author();
         let Some(l) = self.loaded.as_mut() else {
             return;
         };
@@ -1699,10 +1709,6 @@ impl Viewer {
         let Some(v) = &self.history_view else {
             return;
         };
-        let author = std::env::var("BIMBLE_AUTHOR")
-            .or_else(|_| std::env::var("USER"))
-            .or_else(|_| std::env::var("USERNAME"))
-            .unwrap_or_else(|_| "unknown".into());
         let now = bimble_core::date::now_secs();
         let mut refresh = false;
         let mut reload: Option<bimble_core::Model> = None;
@@ -3584,6 +3590,7 @@ impl Viewer {
                 .as_ref()
                 .map(|t| (t.isolate, t.elements.len())),
             revealing: self.reveal_hidden,
+            sync_due: self.sync_due(),
             measurements: self.dimensions.len(),
             plan_options_changed: self.plan.template != self.template_baseline,
             model_dirty: ed.is_some_and(|e| e.dirty),
@@ -3618,6 +3625,7 @@ impl Viewer {
                 self.needs_upload = true;
             }
             Chip::Revealing => self.run_action(ribbon::Action::RevealHidden, ctx),
+            Chip::SyncDue => self.run_collab(ribbon::Action::Synchronize),
             Chip::Measurements => {
                 self.dimensions.clear();
                 self.measure_first = None;
@@ -3826,6 +3834,24 @@ impl Viewer {
     }
 
     /// Settings → Appearance: theme, font and text size of the interface (issue #53).
+    /// Settings → You (#52): who you are, until there is a server to sign in to.
+    fn you_ui(&mut self, ui: &mut egui::Ui) {
+        ui.strong("You");
+        egui::Grid::new("you").num_columns(2).show(ui, |ui| {
+            ui.label("Name");
+            ui.text_edit_singleline(&mut self.settings.user_name);
+            ui.end_row();
+            ui.label("E-mail");
+            ui.text_edit_singleline(&mut self.settings.user_email);
+            ui.end_row();
+        });
+        ui.weak(format!(
+            "Written as the author of commits and on the elements you borrow: {}",
+            self.settings.author()
+        ));
+        ui.add_space(8.0);
+    }
+
     fn appearance_ui(&mut self, ui: &mut egui::Ui) {
         ui.strong("Appearance");
         egui::Grid::new("appearance").num_columns(2).show(ui, |ui| {
@@ -3925,6 +3951,7 @@ impl Viewer {
             .collapsible(false)
             .default_width(380.0)
             .show(ctx, |ui| {
+                self.you_ui(ui);
                 self.appearance_ui(ui);
                 ui.add_space(8.0);
                 ui.strong("Memory for one model");
@@ -4773,6 +4800,7 @@ impl eframe::App for Viewer {
         self.settings_ui(&ctx);
         self.about_ui(&ctx);
         self.links_ui(&ctx);
+        self.belongs_ui(&ctx);
         self.report_ui(&ctx);
     }
 }
