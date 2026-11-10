@@ -1,1 +1,1 @@
-{"clock":2,"ops":[{"kind":"change-labels","author":"61b55b322674a787b89ef011a06fca88d5ce49b7","time":1794315548,"data":{"add":["status:todo"],"remove":null}}]}
+{"clock":3,"ops":[{"kind":"set-meta","author":"61b55b322674a787b89ef011a06fca88d5ce49b7","time":1794315548,"data":{"meta":{"git-board:guilbep/2:assignee":"","git-board:guilbep/2:milestone":"","git-board:guilbep/2:status":"todo"},"target":"03ee30dfee59d0708405b4cf4f4cfb81934e015d:0"}}]}
