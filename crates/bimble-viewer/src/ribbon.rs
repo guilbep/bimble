@@ -82,11 +82,13 @@ pub(crate) enum Action {
     Materials,
     History,
     Settings,
+    /// Version, graphics card and links, to say what runs in a bug report.
+    About,
     Palette,
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 35] = [
+pub(crate) const ALL_ACTIONS: [Action; 36] = [
     Action::Open,
     Action::ImportIfc,
     Action::ConvertOpen,
@@ -122,6 +124,7 @@ pub(crate) const ALL_ACTIONS: [Action; 35] = [
     Action::Project,
     Action::Materials,
     Action::Settings,
+    Action::About,
 ];
 
 impl Action {
@@ -162,6 +165,7 @@ impl Action {
             Action::Materials => "Materials".into(),
             Action::History => "History…".into(),
             Action::Settings => "Settings…".into(),
+            Action::About => "About Bimble…".into(),
             Action::Palette => "Command palette".into(),
         }
     }
@@ -192,6 +196,7 @@ impl Action {
             | Action::ConvertOpen
             | Action::ShareForViewing
             | Action::Settings
+            | Action::About
             | Action::Save => {
                 return "File";
             }
@@ -323,7 +328,7 @@ impl Viewer {
             Action::Undo => self.undo_text(true).is_some(),
             Action::Redo => self.undo_text(false).is_some(),
             Action::Place(_) | Action::History => self.editable(),
-            Action::Settings => true,
+            Action::Settings | Action::About => true,
             Action::Orthographic | Action::SectionBox | Action::Top => loaded && !flat,
             Action::BoxToSelection => loaded && !flat && self.section_on,
             Action::SheetTool(_) | Action::CloseSheet => self.layout.is_some(),
@@ -358,6 +363,7 @@ impl Viewer {
             Action::Materials => self.materials_page.is_some(),
             Action::History => self.history_window,
             Action::Settings => self.settings_window,
+            Action::About => self.about_window,
             _ => false,
         }
     }
@@ -480,6 +486,7 @@ impl Viewer {
                 }
             }
             Action::Settings => self.settings_window = !self.settings_window,
+            Action::About => self.about_window = !self.about_window,
             Action::History => {
                 self.history_window = !self.history_window;
                 if self.history_window {
@@ -501,7 +508,20 @@ impl Viewer {
         let ctx = ui.ctx().clone();
         let mut run = None;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Bimble").strong());
+            // The version on hover; a click opens About.
+            if ui
+                .add(
+                    egui::Label::new(egui::RichText::new("Bimble").strong())
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text(format!(
+                    "Bimble {} · About Bimble…",
+                    env!("CARGO_PKG_VERSION")
+                ))
+                .clicked()
+            {
+                run = Some(Action::About);
+            }
             ui.add_space(th::GAP_M);
             self.file_menu(ui, &mut run);
             ui.add_space(th::GAP_M);
@@ -619,7 +639,7 @@ impl Viewer {
                 &[Action::ShareForViewing],
                 &[Action::LinkModel, Action::ReferencePlan],
                 &[Action::OnPaper],
-                &[Action::Project, Action::Settings],
+                &[Action::Project, Action::Settings, Action::About],
             ];
             for (i, g) in groups.iter().enumerate() {
                 if i > 0 {

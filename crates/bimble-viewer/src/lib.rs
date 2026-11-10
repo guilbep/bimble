@@ -913,6 +913,7 @@ struct Viewer {
     /// The user's settings (kept between sessions), and whether their window is open.
     settings: settings::Settings,
     settings_window: bool,
+    about_window: bool,
     /// What a load had to say (an IFC import's report), shown until closed.
     report: Option<(PathBuf, Vec<String>)>,
     /// Browser: meshing the chosen part, on a later frame (after "Loading…" is drawn).
@@ -947,7 +948,12 @@ impl Viewer {
             device: rs.device.clone(),
             queue: rs.queue.clone(),
             egui_renderer: rs.renderer.clone(),
-            adapter: format!("{} ({:?})", info.name, info.backend),
+            // The browser's WebGPU names no adapter: the backend alone then.
+            adapter: if info.name.is_empty() {
+                format!("{:?}", info.backend)
+            } else {
+                format!("{} ({:?})", info.name, info.backend)
+            },
             renderer: Renderer::new(&rs.device, SAMPLES),
             loading: None,
             loaded: None,
@@ -1039,6 +1045,7 @@ impl Viewer {
             ask: None,
             settings: settings::Settings::load(),
             settings_window: false,
+            about_window: false,
             report: None,
             mesh_later: None,
             views: Vec::new(),
@@ -3797,6 +3804,54 @@ impl Viewer {
         }
     }
 
+    /// About Bimble: the version, what draws it and where to read or report, with a copy for a
+    /// bug report (issue #59 needed the graphics card and backend).
+    fn about_ui(&mut self, ctx: &egui::Context) {
+        if !self.about_window {
+            return;
+        }
+        let system = if cfg!(target_arch = "wasm32") {
+            "browser (WebAssembly)".to_owned()
+        } else {
+            format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)
+        };
+        let info = format!(
+            "Bimble {}\nGraphics: {}\nSystem: {system}",
+            env!("CARGO_PKG_VERSION"),
+            self.adapter
+        );
+        let mut open = true;
+        egui::Window::new("About Bimble")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading(format!("Bimble {}", env!("CARGO_PKG_VERSION")));
+                ui.label("Open-source structural BIM. MIT licence.");
+                ui.add_space(6.0);
+                ui.label(format!("Graphics: {}", self.adapter));
+                ui.label(format!("System: {system}"));
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.hyperlink_to("Manual", "https://guilbep.github.io/bimble-docs/");
+                    ui.hyperlink_to(
+                        "Report a problem",
+                        "https://github.com/guilbep/bimble/issues",
+                    );
+                    ui.hyperlink_to("Source", "https://github.com/guilbep/bimble");
+                });
+                ui.add_space(6.0);
+                if ui
+                    .button("Copy for a bug report")
+                    .on_hover_text("Version, graphics card and system, to paste in an issue")
+                    .clicked()
+                {
+                    ui.ctx().copy_text(info.clone());
+                }
+            });
+        self.about_window = open;
+    }
+
     /// Settings, kept between sessions.
     fn settings_ui(&mut self, ctx: &egui::Context) {
         if !self.settings_window {
@@ -4635,6 +4690,7 @@ impl eframe::App for Viewer {
         self.confirm_ui(&ctx);
         self.ask_ui(&ctx);
         self.settings_ui(&ctx);
+        self.about_ui(&ctx);
         self.report_ui(&ctx);
     }
 }
