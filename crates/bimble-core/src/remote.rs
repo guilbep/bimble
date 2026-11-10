@@ -372,6 +372,28 @@ pub fn sync(
     ))
 }
 
+/// Synchronize the model as it is (the viewer's Synchronize, ADR 0038): what isn't committed
+/// is committed first ("N change(s) before synchronizing"), then [`sync`].
+pub fn sync_working(
+    local: &Repo,
+    remote: &Repo,
+    working: &Model,
+    who: &str,
+    time: i64,
+    prefer: Prefer,
+) -> Result<std::result::Result<(Merged, Model), Vec<Conflict>>> {
+    let changes = local.status(working)?;
+    if !changes.is_empty() {
+        local.commit(
+            working,
+            &format!("{} change(s) before synchronizing", changes.len()),
+            who,
+            time,
+        )?;
+    }
+    sync(local, remote, who, time, prefer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,6 +507,26 @@ mod tests {
             .unwrap();
         assert_eq!(how, Merged::FastForward(tip));
         assert_eq!(back, merged);
+    }
+
+    /// The viewer's Synchronize: changes not committed are committed, then synchronized.
+    #[test]
+    fn synchronize_commits_what_is_not_committed() {
+        let (o, m) = office("working");
+        let (a, b) = (Repo::open(&o.alice).unwrap(), Repo::open(&o.bob).unwrap());
+        let share = Repo::open_dir(&o.share).unwrap();
+        let beam = id_of(&m, IfcClass::IfcBeam);
+        let ma = rename(&m, beam, "Alice's beam");
+        assert!(sync(&a, &share, ALICE, 2, Prefer::Neither).is_ok());
+        let (_, got) = sync_working(&a, &share, &ma, ALICE, 3, Prefer::Neither)
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.elements[&beam].name, "Alice's beam");
+        assert!(a.status(&ma).unwrap().is_empty(), "committed");
+        let (_, at_bob) = sync_working(&b, &share, &m, BOB, 4, Prefer::Neither)
+            .unwrap()
+            .unwrap();
+        assert_eq!(at_bob.elements[&beam].name, "Alice's beam");
     }
 
     #[test]

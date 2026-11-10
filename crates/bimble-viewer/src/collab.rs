@@ -130,25 +130,11 @@ impl Viewer {
             }
             ed.dirty = false;
         }
-        match local.status(&ed.model) {
-            Ok(changes) if !changes.is_empty() => {
-                if let Err(e) = local.commit(
-                    &ed.model,
-                    &format!("{} change(s) before synchronizing", changes.len()),
-                    &author,
-                    now,
-                ) {
-                    return e.to_string();
-                }
-            }
-            Ok(_) => {}
-            Err(e) => return e.to_string(),
-        }
         let shared = match remote::open_or_init(&dir) {
             Ok(r) => r,
             Err(e) => return format!("{}: {e}", dir.display()),
         };
-        match remote::sync(&local, &shared, &author, now, Prefer::Neither) {
+        match remote::sync_working(&local, &shared, &ed.model, &author, now, Prefer::Neither) {
             Ok(Ok((how, model))) => {
                 ed.model = model;
                 ed.history = bimble_core::History::default();

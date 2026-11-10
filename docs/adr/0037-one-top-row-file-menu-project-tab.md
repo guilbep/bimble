@@ -20,11 +20,12 @@ roles, permissions, layers, sync).
   the ribbon and the palette cannot disagree; shortcuts shown. Rhino's other entries (New, Save
   As, Save Small, Incremental Save, templates, worksessions, recent files) are not there: Bimble
   has no such commands yet.
-- **Tabs**: Project (project information; links: model, reference plan; Settings only in the
-  File menu, 10 Nov, Pierre: "it should be only in file"), Model (place,
+- **Tabs**: Project (project information), Collaborate (#58, 10 Nov: Link IFC, Link DXF, Link
+  PDF, Manage links; Shared folder, Synchronize, ADR 0038), Model (place,
   measure: kept, not replaced, as the tools need a tab), Annotate, View, Sheets, Manage (graphic
-  standards, materials, history). The Links tab is folded into Project. "Global settings" is the
-  existing Settings window (memory, frame rate) until project-wide settings exist.
+  standards, materials, history, Settings). Settings: in the File menu and under Manage (#58, the
+  office), not on Project (Pierre). "Global settings" is the existing Settings window (memory,
+  frame rate) until project-wide settings exist. A house button left of File opens Home (#52).
 - **Project information** offers the office's fields: postcode and city, phase as its SIA number,
   phase description, the engineer's e-mail and phone. `{phase}` keeps its key: title blocks
   using it are unchanged.
