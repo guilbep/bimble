@@ -2,23 +2,34 @@ Bimble {{VERSION}}: a preview of a fast, open-source structural BIM tool. It **v
 
 User manual: https://guilbep.github.io/bimble-docs/
 
-## Download
+## Install
 
-| System | File |
-|---|---|
-| macOS, Apple Silicon (M1–M4) | `bimble-*-aarch64-apple-darwin.tar.gz` |
-| macOS, Intel | `bimble-*-x86_64-apple-darwin.tar.gz` |
-| Windows 10/11 | `bimble-*-x86_64-pc-windows-msvc.zip` |
-| Linux x86_64 | `bimble-*-x86_64-unknown-linux-gnu.tar.gz` |
-| Any browser (static page, to host yourself) | `bimble-*-web.zip` |
+| System | Install with | Or the archive |
+|---|---|---|
+| macOS, Apple Silicon (M1–M4) | `Bimble_*_aarch64.dmg`, or Homebrew (below) | `bimble-*-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `Bimble_*_x64.dmg`, or Homebrew | `bimble-*-x86_64-apple-darwin.tar.gz` |
+| Windows 10/11 | `Bimble_*_x64_en-US.msi` | `bimble-*-x86_64-pc-windows-msvc.zip` |
+| Debian, Ubuntu | `bimble_*_amd64.deb`: `sudo apt install ./bimble_*_amd64.deb` | `bimble-*-x86_64-unknown-linux-gnu.tar.gz` |
+| Fedora, Red Hat, openSUSE | `bimble-*.x86_64.rpm`: `sudo dnf install ./bimble-*.x86_64.rpm` | same |
+| Any Linux | `bimble_*_x86_64.AppImage`: `chmod +x`, then run it | same |
+| Any browser (static page, to host yourself) | `bimble-*-web.zip` | |
+
+Homebrew (macOS and Linux), no security prompt:
+
+```sh
+brew tap guilbep/bimble https://github.com/guilbep/bimble
+brew install guilbep/bimble/bimble
+```
 
 `SHA256SUMS` lists the checksums. The browser version is also online: https://guilbep.github.io/bimble/ (files you open there stay on your computer).
 
 ## Run
 
-Unpack, then run `bimble` to open the viewer, or `bimble view your-model.ifc`. You can also drop a file on the window.
+Open **Bimble** from Applications, the Start menu or your desktop's menu, or run `bimble` in a terminal (`bimble view your-model.ifc`). You can also drop a file on the window.
 
-- **macOS:** the binary isn't signed yet. If macOS blocks it, run `xattr -d com.apple.quarantine bimble` in the unpacked folder once.
+The installers aren't signed by a paid certificate yet:
+
+- **macOS:** the first time, macOS says Bimble is from an unidentified developer. Open **System Settings → Privacy & Security** and click **Open Anyway** (or right-click Bimble → **Open**). Homebrew installs don't ask.
 - **Windows:** SmartScreen may warn about an unknown publisher; choose *More info → Run anyway*.
 
 ## Try

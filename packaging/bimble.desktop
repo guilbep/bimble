@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Bimble
+Comment=Open-source structural BIM: view IFC, draw plans, edit and version models
+Exec=bimble view %f
+Icon=bimble
+Terminal=false
+Categories=Graphics;Engineering;
+MimeType=application/x-step;
