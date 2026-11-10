@@ -100,6 +100,8 @@ pub(crate) enum Action {
     SharedFolder,
     /// Save, commit, fetch, merge, push, give back the borrowed elements (ADR 0038).
     Synchronize,
+    /// The start panel (#52): recent files, open, who you are.
+    Home,
     Standards,
     Project,
     Materials,
@@ -111,7 +113,7 @@ pub(crate) enum Action {
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 46] = [
+pub(crate) const ALL_ACTIONS: [Action; 47] = [
     Action::Open,
     Action::ImportIfc,
     Action::ConvertOpen,
@@ -153,6 +155,7 @@ pub(crate) const ALL_ACTIONS: [Action; 46] = [
     Action::RevealHidden,
     Action::SharedFolder,
     Action::Synchronize,
+    Action::Home,
     Action::Standards,
     Action::Project,
     Action::Materials,
@@ -203,6 +206,7 @@ impl Action {
             Action::RevealHidden => "Reveal hidden".into(),
             Action::SharedFolder => "Shared folder…".into(),
             Action::Synchronize => "Synchronize".into(),
+            Action::Home => "Home".into(),
             Action::Standards => "Graphic standards".into(),
             Action::Project => "Project information".into(),
             Action::Materials => "Materials".into(),
@@ -240,6 +244,7 @@ impl Action {
             | Action::ShareForViewing
             | Action::Settings
             | Action::About
+            | Action::Home
             | Action::Save => {
                 return "File";
             }
@@ -383,7 +388,7 @@ impl Viewer {
             Action::Undo => self.undo_text(true).is_some(),
             Action::Redo => self.undo_text(false).is_some(),
             Action::Place(_) | Action::History => self.editable(),
-            Action::Settings | Action::About => true,
+            Action::Settings | Action::About | Action::Home => true,
             Action::Orthographic | Action::SectionBox | Action::Top => loaded && !flat,
             Action::BoxToSelection => loaded && !flat && self.section_on,
             Action::SheetTool(_) | Action::CloseSheet => self.layout.is_some(),
@@ -432,6 +437,7 @@ impl Viewer {
             Action::Settings => self.settings_window,
             Action::About => self.about_window,
             Action::RevealHidden => self.reveal_hidden,
+            Action::Home => self.home_open,
             _ => false,
         }
     }
@@ -554,6 +560,10 @@ impl Viewer {
                 self.needs_upload = true;
             }
             Action::SharedFolder | Action::Synchronize => self.run_collab(a),
+            Action::Home => {
+                self.close_pages();
+                self.home_open = !self.home_open;
+            }
             Action::Standards => self.standards_open = !self.standards_open,
             Action::Project => {
                 if self.project_page.is_some() {
@@ -609,6 +619,9 @@ impl Viewer {
                 .clicked()
             {
                 run = Some(Action::About);
+            }
+            if self.icon_button(ui, Action::Home, "Home: recent files, open, who you are") {
+                run = Some(Action::Home);
             }
             ui.add_space(th::GAP_M);
             self.file_menu(ui, &mut run);

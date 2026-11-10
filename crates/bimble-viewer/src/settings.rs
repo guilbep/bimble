@@ -27,7 +27,12 @@ pub struct Settings {
     /// owner of borrowed elements ("this element belongs to …").
     pub user_name: String,
     pub user_email: String,
+    /// Files opened last, newest first (the desktop; Home, #52).
+    pub recent: Vec<String>,
 }
+
+/// How many recent files Home lists.
+pub const RECENT: usize = 12;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -41,6 +46,7 @@ impl Default for Settings {
             text_size: crate::ui_theme::TEXT_SIZE,
             user_name: String::new(),
             user_email: String::new(),
+            recent: Vec::new(),
         }
     }
 }
@@ -86,6 +92,17 @@ impl Settings {
             // Kept short: it is written into every commit and borrow list.
             user_name: short_line(&v["user_name"]),
             user_email: short_line(&v["user_email"]),
+            recent: v["recent"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|p| p.as_str())
+                        .filter(|p| !p.is_empty() && p.len() <= 4096)
+                        .take(RECENT)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -100,6 +117,7 @@ impl Settings {
             "text_size": self.text_size,
             "user_name": self.user_name,
             "user_email": self.user_email,
+            "recent": self.recent,
         })
         .to_string()
     }
@@ -117,6 +135,13 @@ impl Settings {
                 .or_else(|_| std::env::var("USERNAME"))
                 .unwrap_or_else(|_| "unknown".into()),
         }
+    }
+
+    /// A file just opened: first in the recent list, once.
+    pub fn opened(&mut self, path: &str) {
+        self.recent.retain(|p| p != path);
+        self.recent.insert(0, path.to_owned());
+        self.recent.truncate(RECENT);
     }
 
     pub fn load() -> Settings {
@@ -205,6 +230,7 @@ mod tests {
             text_size: 14.5,
             user_name: "Ana".into(),
             user_email: "ana@office.example".into(),
+            recent: vec!["/a/x.ifc".into(), "/b/y.bimble".into()],
         };
         assert_eq!(s.author(), "Ana <ana@office.example>");
         assert_eq!(Settings::from_json(&s.to_json()), s);
@@ -224,5 +250,18 @@ mod tests {
             Settings::from_json(r#"{"memory_share": "x"}"#),
             Settings::default()
         );
+    }
+
+    #[test]
+    fn recent_files_newest_first_once_and_bounded() {
+        let mut s = Settings::default();
+        for i in 0..20 {
+            s.opened(&format!("/m/{i}.ifc"));
+        }
+        s.opened("/m/15.ifc");
+        assert_eq!(s.recent.len(), RECENT);
+        assert_eq!(s.recent[0], "/m/15.ifc");
+        assert_eq!(s.recent.iter().filter(|p| *p == "/m/15.ifc").count(), 1);
+        assert_eq!(s.recent[1], "/m/19.ifc");
     }
 }

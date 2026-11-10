@@ -163,8 +163,8 @@ impl Files {
         let _ = self.tx.send(p);
     }
 
-    /// Where files come from outside the viewer (a model named in the page's address).
-    #[cfg(target_arch = "wasm32")]
+    /// Where files come from outside the dialogs (a model named in the page's address, a
+    /// recent file on Home).
     pub fn sender(&self) -> Sender<Picked> {
         self.tx.clone()
     }

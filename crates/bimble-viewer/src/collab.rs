@@ -8,7 +8,7 @@ use crate::ribbon::Action;
 use bimble_core::remote;
 use bimble_core::repo::{Merged, Prefer, Repo, RepoError};
 use eframe::egui;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// After this long without synchronizing, a chip says so (the office: "twice a day").
 pub(crate) const REMIND_AFTER: Duration = Duration::from_secs(4 * 3600);

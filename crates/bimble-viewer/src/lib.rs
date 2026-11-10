@@ -24,6 +24,7 @@ mod collab;
 mod cutlines;
 mod edit;
 mod files;
+mod home;
 mod icons;
 mod layout;
 mod links;
@@ -919,6 +920,8 @@ struct Viewer {
     about_window: bool,
     /// Manage links (#58).
     links_window: bool,
+    /// Home (#52) over the main view.
+    home_open: bool,
     /// When this model last synchronized (or was opened shared): the reminder (ADR 0038).
     synced_at: Option<Instant>,
     /// What the last Synchronize or Shared folder… said.
@@ -1069,6 +1072,7 @@ impl Viewer {
             settings_window: false,
             about_window: false,
             links_window: false,
+            home_open: false,
             synced_at: None,
             collab_message: None,
             also_selected: BTreeSet::new(),
@@ -1510,7 +1514,16 @@ impl Viewer {
                 });
                 self.history_view = None;
                 self.collab_message = None;
+                self.home_open = false;
                 self.start_borrowing();
+                // Home lists it (the desktop: a file on disk).
+                if let Some(l) = &self.loaded
+                    && l.path.is_absolute()
+                    && l.path.exists()
+                {
+                    self.settings.opened(&l.path.display().to_string());
+                    self.settings.save();
+                }
                 self.hidden_classes.clear();
                 self.hidden_storeys.clear();
                 self.hidden_categories.clear();
@@ -4638,13 +4651,9 @@ impl eframe::App for Viewer {
             if self.loaded.is_none() && self.loading.is_some() {
                 return;
             }
-            if self.loaded.is_none() {
-                ui.centered_and_justified(|ui| {
-                    let msg = self.error.clone().unwrap_or_else(|| {
-                        "Open an IFC or .bimble file (button above), or drop one on this window.".into()
-                    });
-                    ui.label(msg);
-                });
+            // Home (#52): when nothing is open, or asked for.
+            if self.loaded.is_none() || self.home_open {
+                self.home_ui(ui);
                 return;
             }
             // The material browser: it takes the main view.
@@ -4687,7 +4696,10 @@ impl eframe::App for Viewer {
                 }
             }
             let ppp = ctx.pixels_per_point();
-            let size_px = ((rect.width() * ppp).round().max(1.0) as u32, (rect.height() * ppp).round().max(1.0) as u32);
+            let size_px = (
+                (rect.width() * ppp).round().max(1.0) as u32,
+                (rect.height() * ppp).round().max(1.0) as u32,
+            );
             self.render_view(size_px, ppp);
             let shown = match (&self.lean, self.lean_shown) {
                 (Some((_, _, id)), true) => Some(*id),
@@ -4730,9 +4742,12 @@ impl eframe::App for Viewer {
                         self.run_action(a, &ctx);
                     }
                 }
-                if let (true, false, Some(mut b), Some(l)) =
-                    (self.section_on, self.in_2d(), self.section_box, &self.loaded)
-                {
+                if let (true, false, Some(mut b), Some(l)) = (
+                    self.section_on,
+                    self.in_2d(),
+                    self.section_box,
+                    &self.loaded,
+                ) {
                     let vp = self.camera.view_proj(aspect, &l.bounds);
                     let a = self.opts.style.selection.0;
                     let accent = Color32::from_rgb(a[0], a[1], a[2]);
