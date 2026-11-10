@@ -529,7 +529,9 @@ impl Editor {
     }
 
     /// The properties form of the selected element; queues commands when a field is left.
-    pub fn element_panel(&mut self, ui: &mut egui::Ui, id: GlobalId) {
+    /// The selected element's sizes and place; Move, Copy and Delete act on `group`, every
+    /// selected element (#54: several selected with Ctrl/Cmd).
+    pub fn element_panel(&mut self, ui: &mut egui::Ui, id: GlobalId, group: &[GlobalId]) {
         let Some(e) = self.model.elements.get(&id) else {
             return;
         };
@@ -620,17 +622,22 @@ impl Editor {
             }
             ui.weak("mm");
         });
+        let group: &[GlobalId] = if group.is_empty() { &[id] } else { group };
+        let n = |verb: &str| match group.len() {
+            1 => verb.to_owned(),
+            k => format!("{verb} {k}"),
+        };
         ui.horizontal(|ui| {
-            if ui.button("Move").clicked() {
-                self.pending = Some(move_by(&self.model, &[id], self.offset));
+            if ui.button(n("Move")).clicked() {
+                self.pending = Some(move_by(&self.model, group, self.offset));
             }
-            if ui.button("Copy").clicked() {
-                let (c, ids) = copy_by(&self.model, &[id], self.offset);
+            if ui.button(n("Copy")).clicked() {
+                let (c, ids) = copy_by(&self.model, group, self.offset);
                 self.pending = Some(c);
                 self.select_after = ids.first().copied();
             }
-            if ui.button("Delete").on_hover_text("Delete key").clicked() {
-                self.pending = Some(delete(&[id]));
+            if ui.button(n("Delete")).on_hover_text("Delete key").clicked() {
+                self.pending = Some(delete(group));
             }
         });
     }
@@ -725,6 +732,19 @@ mod tests {
         let m = concrete_frame(&FrameSpec::default());
         let s = m.storeys.values().find(|s| s.elevation == 0.0).unwrap().id;
         (m, s)
+    }
+
+    /// Several selected (#54): one Delete removes them all, and one undo brings them back.
+    #[test]
+    fn several_elements_are_deleted_and_restored_together() {
+        let m = concrete_frame(&FrameSpec::default());
+        let ids: Vec<GlobalId> = m.elements.keys().copied().take(3).collect();
+        let mut ed = Editor::new(m.clone());
+        ed.apply(delete(&ids)).unwrap();
+        assert!(ids.iter().all(|id| !ed.model.elements.contains_key(id)));
+        assert_eq!(ed.model.elements.len(), m.elements.len() - 3);
+        assert!(ed.undo());
+        assert_eq!(ed.model.elements, m.elements);
     }
 
     /// Working together (ADR 0038, #51): the first change borrows the element on the shared

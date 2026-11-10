@@ -2733,11 +2733,16 @@ impl Viewer {
             if save {
                 self.save();
             }
-            if del
-                && let (Some(i), Some(l)) = (self.selected, &self.loaded)
-                && let Ok(id) = l.scene.elements[i].global_id.parse()
-            {
-                self.apply_commands(edit::delete(&[id]));
+            // Delete: every selected element.
+            if del && let Some(l) = &self.loaded {
+                let ids: Vec<bimble_core::GlobalId> = self
+                    .selection()
+                    .iter()
+                    .filter_map(|&k| l.scene.elements[k].global_id.parse().ok())
+                    .collect();
+                if !ids.is_empty() {
+                    self.apply_commands(edit::delete(&ids));
+                }
             }
         }
         // An IFC model's views are saved to their side file.
@@ -4374,7 +4379,13 @@ impl Viewer {
                 .global_id
                 .parse::<bimble_core::GlobalId>()
         {
-            ed.element_panel(ui, id);
+            let group: Vec<bimble_core::GlobalId> = self
+                .selected
+                .into_iter()
+                .chain(self.also_selected.iter().copied())
+                .filter_map(|k| l.scene.elements[k].global_id.parse().ok())
+                .collect();
+            ed.element_panel(ui, id, &group);
             if let Some(m) = &ed.message {
                 ui.label(m);
             }

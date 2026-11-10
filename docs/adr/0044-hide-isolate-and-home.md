@@ -15,7 +15,8 @@ visibility only by class, storey and material, and opened to an empty window.
 ## Decision
 
 1. **A selection of several elements**: Ctrl/Cmd+click adds an element or takes it out; a plain
-   click selects one. Edits still act on the clicked one.
+   click selects one. Move, Copy and Delete (and the Delete key) act on all of them, as one
+   undoable step; sizes and names are the clicked one's.
 2. **Hide / Isolate for now**: per session, by GlobalId (survives edits that rebuild the
    scene), cleared on another view or model; a status chip "For now: N hidden ×" (ADR 0028).
 3. **Hide / Isolate in view**: saved in the view's `Visibility` as `hidden_elements` and
@@ -42,4 +43,4 @@ visibility only by class, storey and material, and opened to an empty window.
 ## Revisit when
 
 - A server exists: sign-in replaces Settings → You.
-- Edits should apply to the whole selection (move, delete several).
+- Sizes or properties should be set on several elements at once.
