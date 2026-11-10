@@ -20,7 +20,8 @@ roles, permissions, layers, sync).
   the ribbon and the palette cannot disagree; shortcuts shown. Rhino's other entries (New, Save
   As, Save Small, Incremental Save, templates, worksessions, recent files) are not there: Bimble
   has no such commands yet.
-- **Tabs**: Project (project information; Settings; links: model, reference plan), Model (place,
+- **Tabs**: Project (project information; links: model, reference plan; Settings only in the
+  File menu, 10 Nov, Pierre: "it should be only in file"), Model (place,
   measure: kept, not replaced, as the tools need a tab), Annotate, View, Sheets, Manage (graphic
   standards, materials, history). The Links tab is folded into Project. "Global settings" is the
   existing Settings window (memory, frame rate) until project-wide settings exist.

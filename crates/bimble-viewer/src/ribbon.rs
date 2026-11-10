@@ -13,7 +13,7 @@ use bimble_core::GlobalId;
 /// The ribbon's tabs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum Tab {
-    /// What the project is, its settings and its links (#51).
+    /// What the project is and its links (#51); settings are in the File menu.
     Project,
     #[default]
     Model,
@@ -191,6 +191,7 @@ impl Action {
             | Action::ImportIfc
             | Action::ConvertOpen
             | Action::ShareForViewing
+            | Action::Settings
             | Action::Save => {
                 return "File";
             }
@@ -209,9 +210,7 @@ impl Action {
             | Action::Fit
             | Action::Top => Tab::View,
             Action::OnPaper | Action::NewSheet | Action::CloseSheet => Tab::Sheets,
-            Action::Project | Action::Settings | Action::LinkModel | Action::ReferencePlan => {
-                Tab::Project
-            }
+            Action::Project | Action::LinkModel | Action::ReferencePlan => Tab::Project,
             Action::Standards | Action::Materials | Action::History => Tab::Manage,
         };
         tab.label()
@@ -788,7 +787,6 @@ impl Viewer {
                     &[(Action::Project, "Project information")],
                     &mut run,
                 );
-                self.group(ui, "Settings", &[(Action::Settings, "Settings")], &mut run);
                 self.group(
                     ui,
                     "Links",
