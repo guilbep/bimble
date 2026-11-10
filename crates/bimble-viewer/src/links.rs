@@ -58,11 +58,14 @@ impl Viewer {
                         .map(move |r| Row {
                             name: r.name.clone(),
                             place: v.name.clone(),
+                            // Reload only from a file there on this computer (the path was
+                            // written on whichever computer added it).
                             source: r
                                 .source
                                 .as_ref()
                                 .filter(|_| cfg!(not(target_arch = "wasm32")))
-                                .map(PathBuf::from),
+                                .map(PathBuf::from)
+                                .filter(|p| p.is_file()),
                             what: Which::Plan {
                                 view: v.id,
                                 id: r.id,

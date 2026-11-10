@@ -86,19 +86,51 @@ impl Viewer {
         else {
             return "No folder chosen.".into();
         };
-        let set = self
-            .local_history()
-            .and_then(|r| remote::set_remote(&r, &dir).map_err(|e| e.to_string()));
-        match set {
-            Ok(()) => {
-                self.start_borrowing();
-                format!(
-                    "Shared through {}. Synchronize to send your work there and get the others'.",
-                    dir.display()
-                )
+        let who = self.settings.author();
+        let Some(l) = self.loaded.as_mut() else {
+            return String::new();
+        };
+        let Some(ed) = l.edit.as_mut() else {
+            return "Working together is for .bimble models.".into();
+        };
+        // On file first: the history starts from what is saved.
+        if ed.dirty {
+            if let Err(e) = bimble_core::file::save(&ed.model, &l.path) {
+                return e.to_string();
             }
-            Err(e) => e,
+            ed.dirty = false;
         }
+        let now = bimble_core::date::now_secs();
+        let msg = match remote::join(&dir, &l.path, &ed.model, &who, now) {
+            Err(e) => return e.to_string(),
+            Ok(remote::Joined::First) => format!(
+                "Shared through {}: your work is the first there. Synchronize to send it.",
+                dir.display()
+            ),
+            Ok(remote::Joined::Linked) => format!("Shared through {}.", dir.display()),
+            Ok(remote::Joined::Copied(shared)) => {
+                // This copy becomes the shared model; what it was is kept beside it.
+                let kept = l.path.with_extension("before-sharing.bimble");
+                let backup = if *shared != ed.model {
+                    match bimble_core::file::save(&ed.model, &kept) {
+                        Ok(()) => format!(" Your copy as it was: {}.", kept.display()),
+                        Err(e) => return e.to_string(),
+                    }
+                } else {
+                    String::new()
+                };
+                ed.model = *shared;
+                ed.history = bimble_core::History::default();
+                ed.form = None;
+                if let Err(e) = bimble_core::file::save(&ed.model, &l.path) {
+                    return e.to_string();
+                }
+                self.rebuild_scene(None);
+                format!("Now the shared model, from {}.{backup}", dir.display())
+            }
+        };
+        self.start_borrowing();
+        msg
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -108,7 +140,14 @@ impl Viewer {
 
     /// Save, commit what isn't, then synchronize with the shared folder.
     fn synchronize(&mut self) -> String {
-        let author = self.settings.author();
+        // As whom the elements were borrowed: what Synchronize gives back (a name changed in
+        // Settings since opening takes effect after this sync).
+        let author = self
+            .loaded
+            .as_ref()
+            .and_then(|l| l.edit.as_ref())
+            .and_then(|e| e.borrowing.as_ref())
+            .map_or_else(|| self.settings.author(), |b| b.who.clone());
         let now = bimble_core::date::now_secs();
         let local = match self.local_history() {
             Ok(r) => r,
@@ -130,7 +169,8 @@ impl Viewer {
             }
             ed.dirty = false;
         }
-        let shared = match remote::open_or_init(&dir) {
+        // Open, never create (an unmounted share must not become a new, empty history).
+        let shared = match Repo::open_dir(&dir) {
             Ok(r) => r,
             Err(e) => return format!("{}: {e}", dir.display()),
         };
@@ -143,8 +183,9 @@ impl Viewer {
                     b.mine.clear();
                 }
                 let saved = bimble_core::file::save(&ed.model, &l.path);
-                self.synced_at = Some(Instant::now());
                 self.rebuild_scene(None);
+                // Nothing borrowed now: borrow from here on as who Settings says.
+                self.start_borrowing();
                 if self.history_window {
                     self.refresh_history();
                 }

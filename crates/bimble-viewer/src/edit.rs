@@ -392,7 +392,8 @@ impl Borrowing {
         if new.is_empty() {
             return Ok(Vec::new());
         }
-        let remote = bimble_core::remote::open_or_init(&self.remote).map_err(|e| e.to_string())?;
+        // Open, never create: a folder not mounted must not become a new, empty shared history.
+        let remote = bimble_core::repo::Repo::open_dir(&self.remote).map_err(|e| e.to_string())?;
         let taken =
             bimble_core::remote::borrow(&remote, &self.who, &new, bimble_core::date::now_secs())
                 .map_err(|e| e.to_string())?;
@@ -754,6 +755,28 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bimble-borrow-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let m = concrete_frame(&FrameSpec::default());
+        // A shared folder that isn't there (not mounted): the change goes on, nothing borrowed,
+        // and no history is created in its place.
+        let mut away = Editor::new(m.clone());
+        away.borrowing = Some(Borrowing {
+            remote: dir.clone(),
+            who: "Ana".into(),
+            mine: Default::default(),
+        });
+        let first = *m.elements.keys().next().unwrap();
+        away.apply(move_by(&away.model, &[first], [0.0, 0.0, 10.0]))
+            .unwrap();
+        assert!(
+            away.message
+                .as_deref()
+                .is_some_and(|t| t.starts_with("Not borrowed"))
+        );
+        assert!(
+            !dir.exists(),
+            "no history created in a missing shared folder"
+        );
+        // Shared folder… creates it.
+        bimble_core::remote::open_or_init(&dir).unwrap();
         let beams: Vec<GlobalId> = m
             .elements
             .values()

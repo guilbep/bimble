@@ -44,8 +44,9 @@ The installers aren't signed by a paid certificate yet:
 ## Known limits
 
 - `.bimble` files saved by 0.12 and later can't be opened by 0.11 and older: upgrade together, or share `.json`.
+- Models with elements hidden or isolated in a view, or with a reference plan added since 0.14, can't be opened by 0.13 and older: everyone working on a model upgrades together.
 - Elements of other classes than columns, beams, walls, slabs and footings are moved, not edited by dimensions.
-- Working together is command-line only (a shared folder); no Collaborate tab yet. No hide/isolate yet.
+- Working together (Collaborate → Shared folder, Synchronize): the desktop only; a conflict is settled for all elements at once (from the command line with `--prefer`), not element by element yet. Rights (view / annotate / model) aren't enforced yet.
 - Reference plans: DXF model space and the first page of a vector PDF; no text, hatches or scanned PDFs.
 - In the browser: no model history yet; loading uses one processor core; at most 4 GB per tab.
 - Curved geometry is drawn as fine facets (0.5 mm tolerance), not exact surfaces.
