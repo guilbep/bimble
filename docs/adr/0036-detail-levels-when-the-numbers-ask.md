@@ -1,7 +1,7 @@
 # ADR 0036 — Detail levels (Nanite-like clusters): not yet; what would make them worth it
 
-- Status: Proposed (9 Nov 2026) — Nanite itself undecided until measured (Pierre: "only facts-based
-  decisions"); the cheaper steps and the list below accepted to do (9 Nov)
+- Status: Accepted (10 Nov 2026): Nanite-style detail levels not adopted; the cheaper steps 1–3 and
+  the ten optimizations below all done or tried and measured (9 Nov). Reopened only by "Revisit when".
 - Decided by: — (Pierre asked to look at it: "6 (Nanite-style detail levels)")
 - Reversal cost: n/a
 
@@ -439,7 +439,7 @@ of the same setting differ as much (other builds shared the CPU, and llvmpipe ru
 pass on it too). On the 5 GB file (ADR 0039, M4 Pro): 22.4 → 20.5 ms, within noise. Test `gpu_culling_draws_what_cpu_culling_does` (8 cameras:
 close, orthographic, mirrored, size threshold); it fails if the shader's plane test is inverted.
 
-## Further optimizations to do (research, 9 Nov; one issue each)
+## Further optimizations (research, 9 Nov; all done or tried, see the sections above)
 
 Gains below are other systems' published figures or estimates (est.), not Bimble's. Each one is
 measured with `bimble bench` before and after (CLAUDE.md), on the M4 Pro and on a weak GPU.
