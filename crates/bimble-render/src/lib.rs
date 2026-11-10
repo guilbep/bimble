@@ -3254,6 +3254,21 @@ impl std::fmt::Display for HeadlessError {
 
 impl std::error::Error for HeadlessError {}
 
+/// GPU errors caught instead of panicking (wgpu's default): every one is logged, the first is
+/// kept for the caller to take and act on (turn optional GPU paths off, say why). A pipeline a
+/// backend can't build (issue #59, WebGL2) then costs a feature, not the program.
+pub fn catch_gpu_errors(device: &wgpu::Device) -> Arc<std::sync::Mutex<Option<String>>> {
+    let first = Arc::new(std::sync::Mutex::new(None));
+    let kept = first.clone();
+    device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
+        log::error!("GPU: {e}");
+        if let Ok(mut k) = kept.lock() {
+            k.get_or_insert_with(|| e.to_string());
+        }
+    }));
+    first
+}
+
 /// A GPU device without a window, for `bimble render` and tests.
 pub struct Headless {
     pub device: wgpu::Device,
@@ -3997,6 +4012,25 @@ mod tests {
 
     /// Edges found on screen (ADR 0036 #6) fall where edge lines do: most line pixels have a
     /// screen edge within a pixel, and most screen edges lie within two pixels of a line.
+    /// A GPU error (here a shader no backend accepts) is caught and kept, not a panic.
+    #[test]
+    fn gpu_errors_are_caught_not_fatal() {
+        let Ok(gpu) = Headless::new() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let first = catch_gpu_errors(&gpu.device);
+        let _ = gpu
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("broken"),
+                source: wgpu::ShaderSource::Wgsl("fn broken( {".into()),
+            });
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let kept = first.lock().unwrap().clone();
+        assert!(kept.is_some_and(|m| m.contains("broken")), "nothing caught");
+    }
+
     #[test]
     fn screen_edges_follow_the_edge_lines() {
         screen_edges_match_lines(|_| {});

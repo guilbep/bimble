@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+log.workspace = true
 bimble-core.workspace = true
 bimble-geom.workspace = true
 wgpu.workspace = true

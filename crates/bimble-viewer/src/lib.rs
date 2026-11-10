@@ -850,6 +850,10 @@ struct Viewer {
     /// A movement has been slower than the target since the viewer started: the GPU is
     /// short, so occlusion culling (CPU time for GPU time) is worth it (ADR 0036 #5).
     slow_gpu: bool,
+    /// The first GPU error caught (wgpu would panic): set from wgpu's error callback.
+    gpu_error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// After a GPU error: the optional GPU paths are off (screen edges, GPU queries and culling).
+    gpu_safe: bool,
 
     /// Linked (reference) models, read-only (#39), one being loaded, and the one whose
     /// differences with ours are coloured, if any.
@@ -989,6 +993,8 @@ impl Viewer {
             simplified: false,
             moving_lean: false,
             slow_gpu: false,
+            gpu_error: bimble_render::catch_gpu_errors(&rs.device),
+            gpu_safe: false,
             occlusion_waiting: false,
             // Native backends only: wgpu 30's GL backend reads results too early, and its
             // browser-WebGPU backend drops the pass's occlusion query set (the pass is then
@@ -2123,6 +2129,28 @@ impl Viewer {
         }
     }
 
+    /// A GPU error was caught: draw without the optional GPU paths from now on, and say so.
+    fn after_gpu_error(&mut self) {
+        if self.gpu_safe {
+            return;
+        }
+        let Some(e) = self.gpu_error.lock().ok().and_then(|mut e| e.take()) else {
+            return;
+        };
+        self.gpu_safe = true;
+        self.needs_render = true;
+        // wgpu's message goes from general ("Validation Error") to specific: show the last line.
+        let first = e
+            .lines()
+            .map(str::trim)
+            .rfind(|l| !l.is_empty())
+            .unwrap_or("");
+        self.error = Some(format!(
+            "The graphics card refused a drawing step, now off (edges while moving, GPU culling): \
+             {first}"
+        ));
+    }
+
     /// The options a picture of the model is drawn with (the moving threshold aside).
     fn draw_options(&self, ppp: f32, min_radius: f32) -> DrawOptions {
         DrawOptions {
@@ -2132,8 +2160,11 @@ impl Viewer {
             occlusion: self.slow_gpu,
             // GPU queries where they are free and work: native backends keeping the target
             // (ADR 0036 #1); slow machines use the CPU's (#5).
-            gpu_occlusion: !self.slow_gpu && self.gpu_queries && !self.settings.gpu_cull,
-            gpu_cull: self.settings.gpu_cull,
+            gpu_occlusion: !self.slow_gpu
+                && self.gpu_queries
+                && !self.settings.gpu_cull
+                && !self.gpu_safe,
+            gpu_cull: self.settings.gpu_cull && !self.gpu_safe,
             // Far cells' stand-ins while moving on a machine that misses the target.
             proxy_px: if self.moving_lean && self.settings.moving_proxies {
                 MOVING_PROXY_PX
@@ -2142,7 +2173,7 @@ impl Viewer {
             },
             // Edges from the depth instead of lines, in the single-sample pictures drawn while
             // moving on a slow machine (ADR 0036 #6).
-            screen_edges: self.moving_lean,
+            screen_edges: self.moving_lean && !self.gpu_safe,
             ..self.opts.clone()
         }
     }
@@ -4301,6 +4332,7 @@ impl eframe::App for Viewer {
         #[cfg(target_arch = "wasm32")]
         self.tell_first_frame(&ctx);
         self.poll_loading();
+        self.after_gpu_error();
         if self.loaded.is_some()
             && let Some(p) = self.pending_link.take()
         {
