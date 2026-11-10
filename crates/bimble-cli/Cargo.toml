@@ -24,3 +24,30 @@ serde_json.workspace = true
 memory-stats.workspace = true
 # gzip of meshes in `codec-bench` (already in the tree through png and lopdf).
 flate2.workspace = true
+
+# Installers (cargo-packager, ADR 0043): .app/.dmg, .msi, .deb, AppImage. Unsigned for now.
+[package.metadata.packager]
+product-name = "Bimble"
+identifier = "io.github.guilbep.bimble"
+publisher = "Bimble contributors"
+homepage = "https://github.com/guilbep/bimble"
+description = "Open-source structural BIM: view IFC, draw plans, edit and version models"
+category = "GraphicsAndDesign"
+icons = ["../../packaging/icon-*.png"]
+binaries = [{ path = "bimble", main = true }]
+
+[package.metadata.packager.macos]
+# Ad-hoc ("-"): a valid signature with no identity, so macOS says "unidentified developer"
+# (Open Anyway) instead of "damaged". A Developer ID goes here once there is one.
+signing-identity = "-"
+minimum-system-version = "11.0"
+
+# The .rpm (cargo-generate-rpm; cargo-packager has no rpm): binary, menu entry, icon.
+[package.metadata.generate-rpm]
+name = "bimble"
+summary = "Open-source structural BIM"
+assets = [
+    { source = "target/release/bimble", dest = "/usr/bin/bimble", mode = "755" },
+    { source = "../../packaging/bimble.desktop", dest = "/usr/share/applications/bimble.desktop", mode = "644" },
+    { source = "../../packaging/icon-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/bimble.png", mode = "644" },
+]

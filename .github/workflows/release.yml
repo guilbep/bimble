@@ -159,10 +159,34 @@ jobs:
             tar czf "$name.tar.gz" "$name"
           fi
           echo "file=dist/$name.${{ matrix.ext }}" >> "$GITHUB_OUTPUT"
+      # Installers (ADR 0043), unsigned: macOS .app in a .dmg (ad-hoc signed), Windows .msi,
+      # Linux .deb, .rpm and AppImage. Same binary as the archive.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-packager,cargo-generate-rpm
+      - name: Installers
+        run: |
+          case "${{ matrix.target }}" in
+            *apple-darwin) formats=app,dmg ;;
+            *windows*) formats=wix ;;
+            *linux*) formats=deb,appimage ;;
+          esac
+          cargo packager -p bimble-cli --release --target ${{ matrix.target }} -f $formats -o "$PWD/installers"
+          rm -rf installers/*.app
+          if [[ "${{ matrix.target }}" == *linux* ]]; then
+            cargo generate-rpm -p crates/bimble-cli --target ${{ matrix.target }} -o installers/
+          fi
+          ls -la installers
       - uses: actions/upload-artifact@v4
         with:
           name: bimble-${{ matrix.target }}
-          path: ${{ steps.pkg.outputs.file }}
+          path: |
+            ${{ steps.pkg.outputs.file }}
+            installers/*.dmg
+            installers/*.msi
+            installers/*.deb
+            installers/*.rpm
+            installers/*.AppImage
           retention-days: 14
 
   # The browser version (ADR 0020): a zip with the page, attached to the release. pages.yml then
@@ -210,7 +234,11 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Checksums
-        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+        run: |
+          # Artifacts keep their folders (installers/): attach every file flat.
+          find dist -mindepth 2 -type f -exec mv {} dist/ \;
+          find dist -mindepth 1 -type d -empty -delete
+          cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
       # The release may already exist (created by hand on GitHub, which also creates the tag):
       # then attach the files and keep its title and notes.
       - name: Create release or attach to it
@@ -223,4 +251,20 @@ jobs:
           else
             sed "s/{{VERSION}}/$tag/g" .github/release-notes.md > notes.md
             gh release create "$tag" dist/* --title "Bimble $tag" --notes-file notes.md --generate-notes --prerelease
+          fi
+      # Homebrew (ADR 0043): the formula in this repository points to this release's archives.
+      # `brew tap guilbep/bimble https://github.com/guilbep/bimble && brew install bimble`.
+      - name: Homebrew formula
+        # Not when rebuilding an older tag by hand: the formula follows the newest release.
+        if: ${{ inputs.tag == '' || inputs.tag == null }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin main && git checkout -B main origin/main
+          scripts/homebrew-formula.sh "${RELEASE_TAG#v}" dist/SHA256SUMS > Formula/bimble.rb
+          if ! git diff --quiet Formula/bimble.rb; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Homebrew formula: $RELEASE_TAG" Formula/bimble.rb
+            git push origin HEAD:main
           fi
