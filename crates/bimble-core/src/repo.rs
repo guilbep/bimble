@@ -72,6 +72,9 @@ pub struct Tree {
     /// Schedules, inline (small).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub schedules: Vec<crate::schedule::ScheduleDef>,
+    /// The mesh arrays the elements refer to by hash (ADR 0042), so copying a tree copies them.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub meshes: std::collections::BTreeSet<Hash>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -202,23 +205,43 @@ impl Repo {
     }
 
     /// Store bytes under their hash; returns the hash. Existing objects are not rewritten.
+    /// Stored gzipped (like git's objects), named by the hash of the bytes themselves.
     pub(crate) fn put_bytes(&self, bytes: &[u8]) -> Result<Hash> {
+        use std::io::Write;
         let hash = blake3::hash(bytes).to_hex().to_string();
         let path = self.object_path(&hash);
         if !path.exists() {
             std::fs::create_dir_all(path.parent().expect("objects/xx"))?;
-            crate::file::write_atomic(&path, bytes)?;
+            let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            gz.write_all(bytes)?;
+            crate::file::write_atomic(&path, &gz.finish()?)?;
         }
         Ok(hash)
     }
 
+    /// Store an object; the mesh arrays it holds are stored as their own objects first and
+    /// referred to by hash (ADR 0042), so copies of a shape store it once.
     fn put<T: Serialize>(&self, v: &T) -> Result<Hash> {
-        self.put_bytes(&serde_json::to_vec(v).expect("history types always serialize"))
+        let refs = crate::file::shared::Refs::start();
+        let bytes = serde_json::to_vec(v).expect("history types always serialize");
+        for (_, mesh) in refs.take_fresh() {
+            self.put_bytes(&mesh)?;
+        }
+        self.put_bytes(&bytes)
     }
 
     fn get<T: DeserializeOwned>(&self, hash: &str) -> Result<T> {
         let bytes = self.get_bytes(hash)?;
+        let _resolve = self.resolving();
         serde_json::from_slice(&bytes).map_err(|e| RepoError::Damaged(hash.into(), e.to_string()))
+    }
+
+    /// Mesh references read from this store while alive, each array once.
+    fn resolving(&self) -> crate::file::shared::Resolve {
+        let repo = Repo {
+            dir: self.dir.clone(),
+        };
+        crate::file::shared::Resolve::start(move |h| repo.get_bytes(h).ok())
     }
 
     /// An object's bytes, checked against its name and size.
@@ -233,7 +256,21 @@ impl Repo {
         if len > MAX_OBJECT_BYTES {
             return Err(RepoError::Damaged(hash.into(), "is too large".into()));
         }
-        let bytes = std::fs::read(&path)?;
+        let mut bytes = std::fs::read(&path)?;
+        // Gzipped (objects written since ADR 0042), or plain JSON (older ones). Untrusted: what
+        // unpacks is capped too.
+        if bytes.starts_with(&[0x1f, 0x8b]) {
+            use std::io::Read;
+            let mut plain = Vec::new();
+            flate2::read::GzDecoder::new(&bytes[..])
+                .take(MAX_OBJECT_BYTES + 1)
+                .read_to_end(&mut plain)
+                .map_err(|e| RepoError::Damaged(hash.into(), e.to_string()))?;
+            if plain.len() as u64 > MAX_OBJECT_BYTES {
+                return Err(RepoError::Damaged(hash.into(), "is too large".into()));
+            }
+            bytes = plain;
+        }
         if blake3::hash(&bytes).to_hex().as_str() != hash {
             return Err(RepoError::Damaged(
                 hash.into(),
@@ -265,7 +302,9 @@ impl Repo {
                 })
                 .collect()
         }
-        let t = Tree {
+        // One scope: each mesh hashed and stored once, and the tree lists them all.
+        let refs = crate::file::shared::Refs::start();
+        let mut t = Tree {
             project_id: m.project_id,
             project_name: m.project_name.clone(),
             storeys: map(self, &m.storeys)?,
@@ -275,13 +314,17 @@ impl Repo {
             sheets: map(self, &m.sheets)?,
             project: m.project.clone(),
             schedules: m.schedules.clone(),
+            meshes: Default::default(),
         };
+        t.meshes = refs.referenced();
         self.put(&t)
     }
 
     /// The model a tree describes, validated like a model file.
     pub fn read_tree(&self, hash: &str) -> Result<Model> {
         let t = self.tree(hash)?;
+        // One scope: copies sharing a mesh share it again.
+        let _resolve = self.resolving();
         fn map<T: DeserializeOwned>(
             r: &Repo,
             m: &BTreeMap<GlobalId, Hash>,

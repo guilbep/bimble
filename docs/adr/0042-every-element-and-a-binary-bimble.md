@@ -38,6 +38,12 @@ their doors, pipes and fittings. And the file was JSON text: 3.4× the IFC on th
    still see each element's mesh in full, so hashes don't change. `canonical_model` fixes mesh
    arrays in place instead of sending them through JSON, which kept copies apart and cost most
    of the open time.
+5. **The history stores each shape once too** (ADR 0038's store): an element object refers to
+   its mesh arrays by the blake3 hash of their JSON, each array its own object; the tree lists
+   them (`meshes`), so push, fetch and clone copy them before the tree, as any object. Element
+   hashes (`content_hash`, status, model hash) use the same references, so they changed once for
+   elements with meshes. Objects are stored gzipped, named by the hash of the plain bytes (as
+   git); plain objects of older histories still read, unpacked size capped.
 
 ## Alternatives considered
 
@@ -68,14 +74,16 @@ without step 4, JSON is version 1 of the same conversion:
 
 - All 17 convert (8 did before); the binary file is 5.5–46× smaller than the IFC (median 17×).
 - Converting the sprinkler model: 124 s and 9.0 GB peak before step 4, 7.8 s and 2.1 GB after.
+- History of the sprinkler model, first commit: 1.6 GB of objects (each copy's mesh in full,
+  JSON) → 128 MB with step 5's references → 56 MB gzipped; 6 s, `status` 2.8 s, clone 15 s.
+- Mirrored or scaled copies, left in full: the 395 MB model keeps 32 377 copies of the 32 717 the
+  viewer finds; the 709 MB model's count is unchanged.
 - Without step 4, CBOR + gzip was ~10× smaller than JSON but opened no faster (0.83 s vs 0.69 s
   on the 24 MB model): the time was in building the scene and in the JSON trip of
   `canonical`, not in parsing.
 
 ## Revisit when
 
-- Mirrored or scaled copies matter (they are stored in full today): a placement with a full
-  transform.
-- The history store (ADR 0038) keeps one object per element with its mesh in full: shapes as
-  their own objects if a converted model's history gets too large.
+- Mirrored or scaled copies matter (they are stored in full today; measured marginal): a
+  placement with a full transform.
 - Opening times matter more than size: positions as packed bytes, or a format without field names.

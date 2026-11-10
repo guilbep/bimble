@@ -263,37 +263,180 @@ pub(crate) mod shared {
         }
     }
 
-    pub(crate) fn serialize<T: Serialize + 'static, S: Serializer>(
+    /// Content references (the history store, ADR 0042): while a `Refs` scope is open, an array
+    /// is written as the blake3 hash (hex) of its JSON, which is also the name of the object it
+    /// is stored in. Hashes are cached per array for the scope (holding the array, so its address
+    /// can't be reused); `fresh` lists arrays met for the first time, to be stored.
+    #[derive(Default)]
+    struct RefsState {
+        hashes: HashMap<usize, (String, Box<dyn Any>)>,
+        fresh: Vec<(String, Vec<u8>)>,
+        referenced: std::collections::BTreeSet<String>,
+    }
+
+    /// Resolving references while reading: the store's bytes by hash, and arrays already read
+    /// (shared again between the elements that refer to them).
+    type Lookup = Box<dyn Fn(&str) -> Option<Vec<u8>>>;
+    struct ResolveState {
+        lookup: Lookup,
+        read: HashMap<String, Box<dyn Any>>,
+    }
+
+    thread_local! {
+        static REFS: RefCell<Option<RefsState>> = const { RefCell::new(None) };
+        static RESOLVE: RefCell<Option<ResolveState>> = const { RefCell::new(None) };
+    }
+
+    /// Arrays as references while alive. Nested scopes join the open one.
+    pub(crate) struct Refs {
+        outer: bool,
+    }
+    impl Refs {
+        pub(crate) fn start() -> Refs {
+            let outer = REFS.with(|r| {
+                let mut r = r.borrow_mut();
+                let outer = r.is_none();
+                if outer {
+                    *r = Some(RefsState::default());
+                }
+                outer
+            });
+            Refs { outer }
+        }
+        /// Arrays referred to for the first time since the last call: (hash, JSON bytes).
+        pub(crate) fn take_fresh(&self) -> Vec<(String, Vec<u8>)> {
+            REFS.with(|r| {
+                r.borrow_mut()
+                    .as_mut()
+                    .map(|s| std::mem::take(&mut s.fresh))
+            })
+            .unwrap_or_default()
+        }
+        /// Every array referred to in this scope.
+        pub(crate) fn referenced(&self) -> std::collections::BTreeSet<String> {
+            REFS.with(|r| r.borrow().as_ref().map(|s| s.referenced.clone()))
+                .unwrap_or_default()
+        }
+    }
+    impl Drop for Refs {
+        fn drop(&mut self) {
+            if self.outer {
+                REFS.with(|r| *r.borrow_mut() = None);
+            }
+        }
+    }
+
+    /// References resolved through `lookup` while alive. Nested scopes join the open one.
+    pub(crate) struct Resolve {
+        outer: bool,
+    }
+    impl Resolve {
+        pub(crate) fn start(lookup: impl Fn(&str) -> Option<Vec<u8>> + 'static) -> Resolve {
+            let outer = RESOLVE.with(|r| {
+                let mut r = r.borrow_mut();
+                let outer = r.is_none();
+                if outer {
+                    *r = Some(ResolveState {
+                        lookup: Box::new(lookup),
+                        read: HashMap::new(),
+                    });
+                }
+                outer
+            });
+            Resolve { outer }
+        }
+    }
+    impl Drop for Resolve {
+        fn drop(&mut self) {
+            if self.outer {
+                RESOLVE.with(|r| *r.borrow_mut() = None);
+            }
+        }
+    }
+
+    pub(crate) fn serialize<T: Serialize + Send + Sync + 'static, S: Serializer>(
         v: &Arc<T>,
         s: S,
     ) -> Result<S::Ok, S::Error> {
+        let key = Arc::as_ptr(v) as usize;
         let at = WRITE.with(|w| {
             w.borrow()
                 .as_ref()
-                .and_then(|t| t[slot::<T>()].get(&(Arc::as_ptr(v) as usize)).copied())
+                .and_then(|t| t[slot::<T>()].get(&key).copied())
         });
-        match at {
-            Some(i) => s.serialize_u64(i),
+        if let Some(i) = at {
+            return s.serialize_u64(i);
+        }
+        let hash = REFS.with(|r| {
+            let mut r = r.borrow_mut();
+            let st = r.as_mut()?;
+            let h = match st.hashes.get(&key) {
+                Some((h, _)) => h.clone(),
+                None => {
+                    let bytes = serde_json::to_vec(&**v).expect("mesh arrays serialize");
+                    let h = blake3::hash(&bytes).to_hex().to_string();
+                    st.hashes.insert(key, (h.clone(), Box::new(v.clone())));
+                    st.fresh.push((h.clone(), bytes));
+                    h
+                }
+            };
+            st.referenced.insert(h.clone());
+            Some(h)
+        });
+        match hash {
+            Some(h) => s.serialize_str(&h),
             None => v.serialize(s),
         }
     }
 
-    pub(crate) fn deserialize<'de, T: DeserializeOwned + 'static, D: Deserializer<'de>>(
+    /// An array in full, its index in the file's table, or a reference to a stored object.
+    pub(crate) fn deserialize<
+        'de,
+        T: DeserializeOwned + Send + Sync + 'static,
+        D: Deserializer<'de>,
+    >(
         d: D,
     ) -> Result<Arc<T>, D::Error> {
-        if READ.with(|r| r.borrow().is_none()) {
-            return Ok(Arc::new(T::deserialize(d)?));
+        struct V<T>(std::marker::PhantomData<T>);
+        impl<'de, T: DeserializeOwned + Send + Sync + 'static> serde::de::Visitor<'de> for V<T> {
+            type Value = Arc<T>;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a mesh array, its index in the file or its hash")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, a: A) -> Result<Arc<T>, A::Error> {
+                Ok(Arc::new(T::deserialize(
+                    serde::de::value::SeqAccessDeserializer::new(a),
+                )?))
+            }
+            fn visit_u64<E: Error>(self, i: u64) -> Result<Arc<T>, E> {
+                READ.with(|r| {
+                    r.borrow().as_ref().and_then(|t| {
+                        t[slot::<T>()]
+                            .get(i as usize)
+                            .and_then(|a| a.downcast_ref::<Arc<T>>())
+                            .cloned()
+                    })
+                })
+                .ok_or_else(|| E::custom(format!("mesh {i} not in the file's table")))
+            }
+            fn visit_str<E: Error>(self, h: &str) -> Result<Arc<T>, E> {
+                RESOLVE.with(|r| {
+                    let mut r = r.borrow_mut();
+                    let st = r
+                        .as_mut()
+                        .ok_or_else(|| E::custom("mesh reference outside a history"))?;
+                    if let Some(a) = st.read.get(h).and_then(|a| a.downcast_ref::<Arc<T>>()) {
+                        return Ok(a.clone());
+                    }
+                    let bytes = (st.lookup)(h)
+                        .ok_or_else(|| E::custom(format!("mesh object {h} missing or damaged")))?;
+                    let a: Arc<T> = Arc::new(serde_json::from_slice(&bytes).map_err(E::custom)?);
+                    st.read.insert(h.to_owned(), Box::new(a.clone()));
+                    Ok(a)
+                })
+            }
         }
-        let i = u64::deserialize(d)? as usize;
-        READ.with(|r| {
-            r.borrow().as_ref().and_then(|t| {
-                t[slot::<T>()]
-                    .get(i)
-                    .and_then(|a| a.downcast_ref::<Arc<T>>())
-                    .cloned()
-            })
-        })
-        .ok_or_else(|| D::Error::custom(format!("mesh {i} not in the file's table")))
+        d.deserialize_any(V(std::marker::PhantomData))
     }
 
     /// A table field of the binary file: kept for the model's references, read after it.

@@ -62,13 +62,17 @@ pub fn canonical_model(mut m: Model) -> Model {
     m
 }
 
-/// Hash of any serializable object's canonical JSON form.
+/// Hash of any serializable object's canonical JSON form, mesh arrays standing as their own
+/// hash (ADR 0042): what the history stores, and each shape hashed once however many copies.
 pub fn content_hash<T: Serialize>(v: &T) -> blake3::Hash {
+    let _refs = crate::file::shared::Refs::start();
     blake3::hash(&serde_json::to_vec(v).expect("model types always serialize"))
 }
 
 /// Model hash: depends on content only, not on insertion order or machine.
 pub fn model_hash(m: &Model) -> blake3::Hash {
+    // One scope: a mesh shared by many elements is hashed once.
+    let _refs = crate::file::shared::Refs::start();
     let mut h = blake3::Hasher::new();
     h.update(content_hash(&(&m.project_id, &m.project_name)).as_bytes());
     for (tag, map) in [

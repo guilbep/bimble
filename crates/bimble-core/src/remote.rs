@@ -67,6 +67,7 @@ fn tree_objects(t: &Tree) -> impl Iterator<Item = &Hash> {
         .chain(t.elements.values())
         .chain(t.views.values())
         .chain(t.sheets.values())
+        .chain(&t.meshes)
 }
 
 /// Copy `tip` and all it needs from `from` to `to`. Returns the number of commits copied.
@@ -619,7 +620,9 @@ mod tests {
         let obj = a.tree(&a.commit_info(&c).unwrap().tree).unwrap().elements[&beam].clone();
         let p = share.dir().join("objects").join(&obj[..2]).join(&obj[2..]);
         let mut bytes = std::fs::read(&p).unwrap();
-        bytes[5] ^= 1;
+        // In the content, not gzip's header (its time stamp is not content).
+        let k = bytes.len() / 2;
+        bytes[k] ^= 1;
         std::fs::write(&p, bytes).unwrap();
 
         let b = Repo::open(&o.bob).unwrap();
@@ -627,5 +630,44 @@ mod tests {
         assert!(matches!(e, RepoError::Damaged(..)), "{e}");
         assert!(!b.has(&obj));
         assert!(!b.has(&c), "the commit must not arrive without its objects");
+    }
+
+    /// Copies of a shape store it once in a history (ADR 0042), travel with it to the share
+    /// and to a clone, and share it again once read.
+    #[test]
+    fn shared_meshes_are_stored_once_and_travel() {
+        let (o, mut m) = office("meshes");
+        let template = m.elements.values().next().unwrap().clone();
+        let mesh = crate::Generator::Mesh {
+            positions: vec![[0.0, 0.0, 0.0], [1000.0, 0.0, 0.0], [0.0, 500.0, 0.0]].into(),
+            indices: vec![0, 1, 2].into(),
+        };
+        for k in 0..3 {
+            let mut e = template.clone();
+            e.id = GlobalId::derived(format!("copy/{k}").as_bytes());
+            e.generator = mesh.clone();
+            e.openings.clear();
+            e.placement.origin[0] += 5000.0 * k as f64;
+            m.elements.insert(e.id, e);
+        }
+        let a = Repo::open(&o.alice).unwrap();
+        let tip = a.commit(&m, "copies", ALICE, 2).unwrap();
+        let tree = a.tree(&a.commit_info(&tip).unwrap().tree).unwrap();
+        assert_eq!(tree.meshes.len(), 2, "positions and indices, once each");
+        let share = Repo::open_dir(&o.share).unwrap();
+        push(&a, &share, "main", ALICE, 2).unwrap();
+        let d = o.bob.with_file_name("bob2.bimble");
+        let back = clone(&o.share, &d, "main").unwrap();
+        assert_eq!(back, m);
+        let arrays: Vec<_> = back
+            .elements
+            .values()
+            .filter_map(|e| match &e.generator {
+                crate::Generator::Mesh { positions, .. } => Some(positions.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(arrays.len(), 3);
+        assert!(arrays.iter().all(|p| std::sync::Arc::ptr_eq(p, &arrays[0])));
     }
 }
