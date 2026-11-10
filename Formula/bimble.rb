@@ -2,24 +2,24 @@
 class Bimble < Formula
   desc "Open-source structural BIM: view IFC, draw plans, edit and version models"
   homepage "https://github.com/guilbep/bimble"
-  version "0.13.0"
+  version "0.13.1"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/guilbep/bimble/releases/download/v0.13.0/bimble-0.13.0-aarch64-apple-darwin.tar.gz"
-      sha256 "016bdb1e16ea5122b7e8d31f26f23ec6c0584d41935ea3098e942ca3674bb391"
+      url "https://github.com/guilbep/bimble/releases/download/v0.13.1/bimble-0.13.1-aarch64-apple-darwin.tar.gz"
+      sha256 "a362de2d364333b116e5799e12c13a95b6bff3b737c94d2a946f6ce4b2574a3f"
     end
     on_intel do
-      url "https://github.com/guilbep/bimble/releases/download/v0.13.0/bimble-0.13.0-x86_64-apple-darwin.tar.gz"
-      sha256 "37078e1684ca59c65488113e8feee3b89504adbb27a982d9677d51fff34611b7"
+      url "https://github.com/guilbep/bimble/releases/download/v0.13.1/bimble-0.13.1-x86_64-apple-darwin.tar.gz"
+      sha256 "41ab8bb0c9df6fe761934802fad6c8f1dbb6fbd8036c4f60987064c81dd8e23f"
     end
   end
 
   on_linux do
     on_intel do
-      url "https://github.com/guilbep/bimble/releases/download/v0.13.0/bimble-0.13.0-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "26c17154df34e1858eec5a76fbfc7b35487299226d5ebe8879fb83a87cac8c00"
+      url "https://github.com/guilbep/bimble/releases/download/v0.13.1/bimble-0.13.1-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "59418a6c258ccd1ec60cd07991a90e2c32c7e9e7b44fe4d5415cd2b94fa9f978"
     end
   end
 
