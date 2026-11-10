@@ -41,6 +41,7 @@ mod ui_theme;
 mod viewcube;
 mod viewing;
 mod views;
+mod visibility;
 
 const SAMPLES: u32 = 4;
 /// While moving on a slow machine, a far cell's stand-in is drawn when its error spans at most
@@ -917,6 +918,15 @@ struct Viewer {
     about_window: bool,
     /// Manage links (#58).
     links_window: bool,
+    /// Elements added to the selection with Ctrl/Cmd (#54), besides `selected`.
+    also_selected: BTreeSet<usize>,
+    /// Hidden in the active view by GlobalId, or all but these (#54; saved with the view).
+    hidden_ids: BTreeSet<String>,
+    isolated_ids: BTreeSet<String>,
+    /// Hidden or isolated for now (#54).
+    temporary: Option<visibility::Temporary>,
+    /// Reveal hidden: what is hidden by element is drawn, marked, and can be picked (#54).
+    reveal_hidden: bool,
     /// A reference plan being reloaded from another file: its id (the new lines replace it).
     reference_replace: Option<bimble_core::GlobalId>,
     /// A linked model being reloaded from another file: its index (the new one replaces it).
@@ -1054,6 +1064,11 @@ impl Viewer {
             settings_window: false,
             about_window: false,
             links_window: false,
+            also_selected: BTreeSet::new(),
+            hidden_ids: BTreeSet::new(),
+            isolated_ids: BTreeSet::new(),
+            temporary: None,
+            reveal_hidden: false,
             reference_replace: None,
             relink: None,
             report: None,
@@ -1490,8 +1505,9 @@ impl Viewer {
                 self.hidden_classes.clear();
                 self.hidden_storeys.clear();
                 self.hidden_categories.clear();
-                self.selected = None;
-                self.needs_upload = true;
+                self.clear_selection();
+                self.temporary = None;
+                self.reveal_hidden = false;
                 self.fit_pending = true;
                 self.set_hovered(None);
                 // A linked model and a box from the previous model mean nothing for this one.
@@ -1574,6 +1590,8 @@ impl Viewer {
         (l.classes, l.storeys, l.categories) = counts(&l.scene);
         l.bounds = bounds_with_links(&l.scene, &self.links);
         self.selected = keep.and_then(|g| l.scene.elements.iter().position(|e| e.global_id == g));
+        // Indices may have moved: the added ones are dropped (the clicked one is kept by id).
+        self.also_selected.clear();
         self.hovered = None;
         self.hover_gpu = None;
         self.hover_at = None;
@@ -1965,6 +1983,7 @@ impl Viewer {
         !self.hidden_categories.contains(&e.category)
             && !self.hidden_classes.contains(&e.class)
             && !self.hidden_storeys.contains(&e.storey)
+            && (self.reveal_hidden || !self.hidden_element(i))
     }
 
     fn upload(&mut self) {
@@ -2004,11 +2023,16 @@ impl Viewer {
         self.hover_at = None;
         let comparing = compare.is_some();
         let here = compare.map(|c| &self.links[c].matched_here);
+        let selection = self.selection();
         let style = |i: usize, _: &bimble_geom::SceneElement| {
             if !self.visible(i) {
                 Style::Hidden
-            } else if self.selected == Some(i) {
+            } else if selection.contains(&i) {
                 Style::Selected
+            } else if self.reveal_hidden && self.hidden_element(i) {
+                // Revealed: in the comparison's colour (a slot of its own would change the
+                // graphic style's format).
+                Style::OnlyHere
             } else if comparing && here.is_some_and(|m| !m.get(i).copied().unwrap_or(true)) {
                 Style::OnlyHere
             } else {
@@ -2649,8 +2673,14 @@ impl Viewer {
                 (Some(h), None) => (Some(h.element), None),
                 (None, None) => (None, None),
             };
-            if hit != self.selected {
+            // Ctrl/Cmd adds to the selection or takes out of it (#54).
+            if ui_add_to_selection(resp) {
+                if let Some(h) = hit {
+                    self.toggle_selected(h);
+                }
+            } else if hit != self.selected || !self.also_selected.is_empty() {
                 self.selected = hit;
+                self.also_selected.clear();
                 self.needs_upload = true;
             }
             self.select_link_element(link_hit);
@@ -2754,8 +2784,8 @@ impl Viewer {
             self.hover_snap = None;
             handled = true;
         }
-        if !handled && esc && self.selected.take().is_some() {
-            self.needs_upload = true;
+        if !handled && esc && self.selected.is_some() {
+            self.clear_selection();
         }
         if !handled && esc {
             self.select_link_element(None);
@@ -3546,7 +3576,14 @@ impl Viewer {
                 self.hidden_classes.len(),
                 self.hidden_storeys.len(),
                 hidden_links,
+                self.hidden_ids.len(),
+                self.isolated_ids.len(),
             ],
+            temporary: self
+                .temporary
+                .as_ref()
+                .map(|t| (t.isolate, t.elements.len())),
+            revealing: self.reveal_hidden,
             measurements: self.dimensions.len(),
             plan_options_changed: self.plan.template != self.template_baseline,
             model_dirty: ed.is_some_and(|e| e.dirty),
@@ -3576,6 +3613,11 @@ impl Viewer {
             Chip::HatchingOff => self.run_action(ribbon::Action::Hatching, ctx),
             Chip::Orthographic => self.run_action(ribbon::Action::Orthographic, ctx),
             Chip::Hidden => self.show_all_in_view(),
+            Chip::Temporary => {
+                self.temporary = None;
+                self.needs_upload = true;
+            }
+            Chip::Revealing => self.run_action(ribbon::Action::RevealHidden, ctx),
             Chip::Measurements => {
                 self.dimensions.clear();
                 self.measure_first = None;
@@ -4491,8 +4533,7 @@ impl eframe::App for Viewer {
                                 }
                             } else if self.selected.is_some() {
                                 if ui.small_button("Back to the view").clicked() {
-                                    self.selected = None;
-                                    self.needs_upload = true;
+                                    self.clear_selection();
                                 } else {
                                     self.properties(ui);
                                 }
@@ -4640,6 +4681,28 @@ impl eframe::App for Viewer {
                     );
                 }
                 self.handle_view_input(ui, &resp);
+                // Right click (not while measuring or placing): hide, isolate, reveal (#54). An
+                // element right-clicked outside the selection becomes the selection (Revit).
+                let placing = self
+                    .loaded
+                    .as_ref()
+                    .and_then(|l| l.edit.as_ref())
+                    .is_some_and(|e| e.placing.is_some());
+                if !self.measure_on && !placing {
+                    if resp.secondary_clicked()
+                        && let Some(h) = self.hovered
+                        && !self.selection().contains(&h)
+                    {
+                        self.selected = Some(h);
+                        self.also_selected.clear();
+                        self.needs_upload = true;
+                    }
+                    let mut run = None;
+                    resp.context_menu(|ui| self.visibility_menu(ui, &mut run));
+                    if let Some(a) = run {
+                        self.run_action(a, &ctx);
+                    }
+                }
                 if let (true, false, Some(mut b), Some(l)) =
                     (self.section_on, self.in_2d(), self.section_box, &self.loaded)
                 {
@@ -4717,6 +4780,11 @@ impl eframe::App for Viewer {
 /// Today's date (UTC) as YYYY-MM-DD, for title blocks.
 fn today() -> String {
     bimble_drawing::today()
+}
+
+/// A click that adds to the selection, or takes out of it: with Ctrl (Cmd on macOS).
+fn ui_add_to_selection(resp: &egui::Response) -> bool {
+    resp.ctx.input(|i| i.modifiers.command)
 }
 
 #[cfg(test)]

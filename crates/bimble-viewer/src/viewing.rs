@@ -189,6 +189,8 @@ impl Viewer {
         if let Some(cur) = self.active_view {
             self.view_cameras.insert(cur, self.camera);
         }
+        // Hidden for now belongs to the view it was done in (Revit's temporary hide).
+        self.temporary = None;
         let Some(v) = self.views.iter().find(|v| v.id == id).cloned() else {
             return;
         };
@@ -239,9 +241,39 @@ impl Viewer {
         self.hidden_classes = v.hidden_classes.iter().cloned().collect();
         self.hidden_storeys = v.hidden_storeys.iter().cloned().collect();
         self.hidden_links = v.hidden_links.iter().cloned().collect();
+        self.hidden_ids = v.hidden_elements.iter().cloned().collect();
+        self.isolated_ids = v.isolated_elements.iter().cloned().collect();
         if self.selected.is_some_and(|i| !self.visible(i)) {
             self.selected = None;
         }
+        let kept: BTreeSet<usize> = self
+            .also_selected
+            .iter()
+            .copied()
+            .filter(|&i| self.visible(i))
+            .collect();
+        self.also_selected = kept;
+    }
+
+    /// Save what is hidden by element in the active view (#54), like the other visibility.
+    pub(crate) fn save_visibility(&mut self) {
+        let editable =
+            self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) || self.side_views.is_some();
+        if !editable {
+            self.view_message =
+                Some("This view can't be saved here: hidden until the file is opened again".into());
+            return;
+        }
+        let vis = self.current_visibility();
+        if let Some(mut v) = self.active_view().cloned()
+            && v.visibility != vis
+        {
+            v.visibility = vis;
+            if let Err(e) = self.store_view(v) {
+                self.view_message = Some(e);
+            }
+        }
+        self.view_form = None;
     }
 
     /// Show everything in the active view again, and save that with the view (ADR 0028).
@@ -250,6 +282,8 @@ impl Viewer {
         self.hidden_classes.clear();
         self.hidden_storeys.clear();
         self.hidden_links.clear();
+        self.hidden_ids.clear();
+        self.isolated_ids.clear();
         let editable =
             self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) || self.side_views.is_some();
         if editable
@@ -275,6 +309,8 @@ impl Viewer {
             hidden_classes: self.hidden_classes.iter().cloned().collect(),
             hidden_storeys: self.hidden_storeys.iter().cloned().collect(),
             hidden_links: self.hidden_links.iter().cloned().collect(),
+            hidden_elements: self.hidden_ids.iter().cloned().collect(),
+            isolated_elements: self.isolated_ids.iter().cloned().collect(),
         }
     }
 

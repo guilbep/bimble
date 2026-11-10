@@ -86,6 +86,16 @@ pub(crate) enum Action {
     LinkPdf,
     /// Every link, grouped by file type: delete, reload, reload from (#58).
     ManageLinks,
+    /// Hide or isolate the selection for now (#54).
+    HideNow,
+    IsolateNow,
+    /// Hide or isolate the selection in the view, saved with it (#54).
+    HideInView,
+    IsolateInView,
+    /// Show the selected hidden elements again (with Reveal hidden on).
+    Unhide,
+    /// Draw what is hidden by element, marked, to pick and unhide it.
+    RevealHidden,
     Standards,
     Project,
     Materials,
@@ -97,7 +107,7 @@ pub(crate) enum Action {
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 38] = [
+pub(crate) const ALL_ACTIONS: [Action; 44] = [
     Action::Open,
     Action::ImportIfc,
     Action::ConvertOpen,
@@ -131,6 +141,12 @@ pub(crate) const ALL_ACTIONS: [Action; 38] = [
     Action::LinkDxf,
     Action::LinkPdf,
     Action::ManageLinks,
+    Action::HideNow,
+    Action::IsolateNow,
+    Action::HideInView,
+    Action::IsolateInView,
+    Action::Unhide,
+    Action::RevealHidden,
     Action::Standards,
     Action::Project,
     Action::Materials,
@@ -173,6 +189,12 @@ impl Action {
             Action::LinkDxf => "Link DXF…".into(),
             Action::LinkPdf => "Link PDF…".into(),
             Action::ManageLinks => "Manage links…".into(),
+            Action::HideNow => "Hide for now".into(),
+            Action::IsolateNow => "Isolate for now".into(),
+            Action::HideInView => "Hide in view".into(),
+            Action::IsolateInView => "Isolate in view".into(),
+            Action::Unhide => "Unhide in view".into(),
+            Action::RevealHidden => "Reveal hidden".into(),
             Action::Standards => "Graphic standards".into(),
             Action::Project => "Project information".into(),
             Action::Materials => "Materials".into(),
@@ -229,6 +251,12 @@ impl Action {
             | Action::Top => Tab::View,
             Action::OnPaper | Action::NewSheet | Action::CloseSheet => Tab::Sheets,
             Action::Project => Tab::Project,
+            Action::HideNow
+            | Action::IsolateNow
+            | Action::HideInView
+            | Action::IsolateInView
+            | Action::Unhide
+            | Action::RevealHidden => Tab::View,
             Action::LinkModel | Action::LinkDxf | Action::LinkPdf | Action::ManageLinks => {
                 Tab::Collaborate
             }
@@ -349,7 +377,13 @@ impl Viewer {
             Action::BoxToSelection => loaded && !flat && self.section_on,
             Action::SheetTool(_) | Action::CloseSheet => self.layout.is_some(),
             Action::LinkDxf | Action::LinkPdf => loaded && flat,
-            Action::ManageLinks => loaded,
+            Action::ManageLinks | Action::RevealHidden => loaded,
+            Action::HideNow | Action::IsolateNow | Action::HideInView | Action::IsolateInView => {
+                self.selected.is_some()
+            }
+            Action::Unhide => {
+                self.selected.is_some() && self.selection().iter().any(|&i| self.hidden_element(i))
+            }
             _ => loaded,
         }
     }
@@ -381,6 +415,7 @@ impl Viewer {
             Action::History => self.history_window,
             Action::Settings => self.settings_window,
             Action::About => self.about_window,
+            Action::RevealHidden => self.reveal_hidden,
             _ => false,
         }
     }
@@ -493,6 +528,15 @@ impl Viewer {
                 self.files.pick(purpose, ctx);
             }
             Action::ManageLinks => self.links_window = !self.links_window,
+            Action::HideNow
+            | Action::IsolateNow
+            | Action::HideInView
+            | Action::IsolateInView
+            | Action::Unhide => self.hide_or_isolate(a),
+            Action::RevealHidden => {
+                self.reveal_hidden = !self.reveal_hidden;
+                self.needs_upload = true;
+            }
             Action::Standards => self.standards_open = !self.standards_open,
             Action::Project => {
                 if self.project_page.is_some() {
@@ -922,6 +966,19 @@ impl Viewer {
                     ui,
                     "Camera",
                     &[(Action::Fit, "Fit all"), (Action::Top, "Top")],
+                    &mut run,
+                );
+                self.group(
+                    ui,
+                    "Visibility (also on a right click)",
+                    &[
+                        (Action::HideNow, "Hide"),
+                        (Action::IsolateNow, "Isolate"),
+                        (Action::HideInView, "Hide in view"),
+                        (Action::IsolateInView, "Isolate in view"),
+                        (Action::RevealHidden, "Reveal hidden"),
+                        (Action::Unhide, "Unhide"),
+                    ],
                     &mut run,
                 );
             }
