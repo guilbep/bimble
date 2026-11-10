@@ -8,7 +8,7 @@ User manual: https://guilbep.github.io/bimble-docs/
 |---|---|---|
 | macOS, Apple Silicon (M1–M4) | `Bimble_*_aarch64.dmg`, or Homebrew (below) | `bimble-*-aarch64-apple-darwin.tar.gz` |
 | macOS, Intel | `Bimble_*_x64.dmg`, or Homebrew | `bimble-*-x86_64-apple-darwin.tar.gz` |
-| Windows 10/11 | `Bimble_*_x64_en-US.msi` | `bimble-*-x86_64-pc-windows-msvc.zip` |
+| Windows 10/11 | `bimble_*_x64_en-US.msi` | `bimble-*-x86_64-pc-windows-msvc.zip` |
 | Debian, Ubuntu | `bimble_*_amd64.deb`: `sudo apt install ./bimble_*_amd64.deb` | `bimble-*-x86_64-unknown-linux-gnu.tar.gz` |
 | Fedora, Red Hat, openSUSE | `bimble-*.x86_64.rpm`: `sudo dnf install ./bimble-*.x86_64.rpm` | same |
 | Any Linux | `bimble_*_x86_64.AppImage`: `chmod +x`, then run it | same |
