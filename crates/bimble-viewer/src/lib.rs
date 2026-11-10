@@ -637,34 +637,77 @@ impl Loading {
     }
 }
 
-/// The load's bar, 3 px along the top of the 3D view, above it. Without a fraction a segment
-/// sweeps across: something is happening, how much is left is not known.
-fn progress_bar(ctx: &egui::Context, view: egui::Rect, fraction: Option<f32>) {
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::unique("load progress"),
-    ));
-    let track = egui::Rect::from_min_size(view.min, egui::vec2(view.width(), 3.0));
-    painter.rect_filled(track, 0.0, ui_theme::border());
-    let (a, b) = match fraction {
-        Some(f) => (0.0, f.clamp(0.0, 1.0)),
-        None => {
-            let t = ctx.input(|i| i.time) as f32;
-            let x = (t * 0.6).fract() * 1.25 - 0.25;
-            (x.max(0.0), (x + 0.25).min(1.0))
-        }
-    };
-    let fill = egui::Rect::from_x_y_ranges(
-        track.left() + a * track.width()..=track.left() + b * track.width(),
-        track.y_range(),
-    );
-    painter.rect_filled(fill, 0.0, ui_theme::accent());
+/// The load, shown big over the 3D view: a card with the file, the step, how far and how long,
+/// and a bar. Without a fraction a segment sweeps across: something is happening, how much is
+/// left is not known. In a browser the page's one thread reads the file, so the card can't move
+/// while it reads: it says so.
+fn progress_card(ctx: &egui::Context, view: egui::Rect, shown: &LoadShown) {
+    let w = (view.width() - 48.0).clamp(160.0, 520.0);
+    egui::Area::new(egui::Id::unique("load progress"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(egui::pos2(
+            view.center().x - w / 2.0,
+            view.center().y - 60.0,
+        ))
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(ui_theme::panel_bg())
+                .stroke(egui::Stroke::new(1.0, ui_theme::accent()))
+                .corner_radius(8.0)
+                .inner_margin(18.0)
+                .show(ui, |ui| {
+                    ui.set_width(w - 36.0);
+                    ui.label(
+                        egui::RichText::new(&shown.text)
+                            .size(ui_theme::text_body() + 4.0)
+                            .color(ui_theme::text())
+                            .strong(),
+                    );
+                    ui.add_space(10.0);
+                    let (track, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 10.0),
+                        egui::Sense::hover(),
+                    );
+                    let painter = ui.painter();
+                    painter.rect_filled(track, 5.0, ui_theme::border());
+                    let (a, b) = match shown.fraction {
+                        Some(f) => (0.0, f.clamp(0.0, 1.0)),
+                        None => {
+                            let t = ctx.input(|i| i.time) as f32;
+                            let x = (t * 0.6).fract() * 1.25 - 0.25;
+                            (x.max(0.0), (x + 0.25).min(1.0))
+                        }
+                    };
+                    let fill = egui::Rect::from_x_y_ranges(
+                        track.left() + a * track.width()..=track.left() + b * track.width(),
+                        track.y_range(),
+                    );
+                    painter.rect_filled(fill, 5.0, ui_theme::accent());
+                    if cfg!(target_arch = "wasm32") {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "The browser reads the file on this page's one thread: the \
+                                 page holds still until it is done.",
+                            )
+                            .size(ui_theme::text_small())
+                            .color(ui_theme::text_muted()),
+                        );
+                    }
+                });
+        });
 }
 
-/// A load is shown once it takes longer than this: a quick one would only flash.
-const PROGRESS_AFTER: Duration = Duration::from_millis(250);
+/// A load is shown once it takes longer than this: a quick one would only flash. In a browser
+/// at once: the page can't redraw once the file is being read.
+const PROGRESS_AFTER: Duration = if cfg!(target_arch = "wasm32") {
+    Duration::ZERO
+} else {
+    Duration::from_millis(250)
+};
 
-/// A load in progress as shown: a thin bar over the 3D view and a line in the status bar.
+/// A load in progress as shown: a card over the 3D view and a line in the status bar.
 struct LoadShown {
     text: String,
     /// Done, 0 to 1; `None` when the load reports no progress (the bar then sweeps).
@@ -4416,13 +4459,8 @@ impl eframe::App for Viewer {
             self.handle_keys(&ctx, aspect);
 
             // While a model loads, the one shown stays (and can be moved around): the progress
-            // is a thin bar over the view and a line in the status bar.
-            if self.loaded.is_none()
-                && let Some(l) = &self.loading
-            {
-                ui.centered_and_justified(|ui| {
-                    ui.label(format!("Opening {}…", l.path.display()));
-                });
+            // is a card over the view and a line in the status bar.
+            if self.loaded.is_none() && self.loading.is_some() {
                 return;
             }
             if self.loaded.is_none() {
@@ -4541,7 +4579,7 @@ impl eframe::App for Viewer {
             }
         });
         if let Some(shown) = self.load_shown() {
-            progress_bar(&ctx, view.response.rect, shown.fraction);
+            progress_card(&ctx, view.response.rect, &shown);
         }
         self.palette_ui(&ctx);
         #[cfg(target_arch = "wasm32")]
