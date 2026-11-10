@@ -46,6 +46,7 @@ a decision that changes an old one says which one it supersedes.
 | [0038](0038-collaborate-like-git.md) | Collaborate like git: a shared-folder remote, Synchronize = fetch, merge, push; elements borrowed until sync; conflicts kept mine/theirs per element; viewer/modeller/owner | Accepted (server remote, chat proposed) |
 | [0039](0039-open-5-gb-ifc-files.md) | Open 5 GB IFC files: cap 2 → 64 GiB with a 1 GiB statement cap, parse freed on all cores, synthetic repeated test files; 5 and 7 GB open natively; browser needs streaming + a prepared format | Accepted (desktop), browser proposed |
 | [0040](0040-prepared-viewing-format.md) | A prepared viewing format, `.bimbleview`: the scene (codec meshes, shapes once) in gzipped chunks; File → Share for viewing, `bimble pack`; property sets and proxies left out (measured) | Accepted |
+| [0041](0041-themes-and-roboto.md) | Interface themes (Grey default per issue #53, Dark, Light, Solarized, High contrast; all text ≥ 4.5:1, tested), Roboto shipped for the interface and embedded in PDFs; sheet font in the graphic style | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

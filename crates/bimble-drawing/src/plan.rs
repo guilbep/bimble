@@ -1242,7 +1242,8 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         let (w, h) = (b[0] - a[0], b[1] - a[1]);
         let label = format!("{}x{}", cm(w), cm(h));
         let size = t * 0.8;
-        let fits = crate::sheet::text_width_mm(&label, size, false) + 1.0 < q[0] - p[0]
+        let fits = crate::sheet::text_width_mm(&label, size, false, o.style.paper.font) + 1.0
+            < q[0] - p[0]
             && size + 1.0 < p[1] - q[1];
         let pos = if fits {
             [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0 + size * 0.35]
@@ -1473,7 +1474,9 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         for (i, w) in stops.windows(2).enumerate() {
             let value = unit.format((w[1] - w[0]) / k);
             // A text wider than its span goes outside it: before the first span, else after.
-            let (s, anchor) = if text_width_mm(&value, dim_size, false) + 0.6 <= w[1] - w[0] {
+            let (s, anchor) = if text_width_mm(&value, dim_size, false, o.style.paper.font) + 0.6
+                <= w[1] - w[0]
+            {
                 ((w[0] + w[1]) / 2.0, Anchor::Middle)
             } else if i == 0 {
                 // Vertical texts read upwards, towards smaller s.
@@ -1665,7 +1668,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             0.0,
             true,
         ));
-        let tw = text_width_mm(&title, size, true);
+        let tw = text_width_mm(&title, size, true, o.style.paper.font);
         items.push(Item::Lines {
             lines: vec![vec![[x, title_y + 1.0], [x + tw, title_y + 1.0]]],
             pen: thicker(Role::Cut, 0.7),
@@ -1763,6 +1766,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             format!("{} – {title}", o.project)
         },
         items,
+        font: o.style.paper.font,
     };
     Ok((sheet, info))
 }

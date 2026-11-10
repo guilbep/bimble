@@ -1184,12 +1184,13 @@ fn dim_axis_and_offset(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> (bimble_core::v
     (axis, (c[0] - a[0]) * n[0] + (c[1] - a[1]) * n[1])
 }
 
-/// A text's box on paper: its first line from its baseline point, all its lines.
+/// A text's box on paper: its first line from its baseline point, all its lines. Measured in
+/// the default font: a box to click, a few per cent off in a style set to Helvetica.
 fn text_rect(text: &str, at: [f64; 2], size: f64) -> [[f64; 2]; 2] {
     let lines: Vec<&str> = text.split('\n').collect();
     let wmax = lines
         .iter()
-        .map(|l| bimble_drawing::sheet::text_width_mm(l, size, false))
+        .map(|l| bimble_drawing::sheet::text_width_mm(l, size, false, Default::default()))
         .fold(0.0, f64::max);
     [
         [at[0], at[1] - size],

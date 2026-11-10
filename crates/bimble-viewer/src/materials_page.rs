@@ -103,7 +103,7 @@ impl Viewer {
             .as_ref()
             .and_then(|l| l.edit.as_ref()?.message.clone());
         egui::Frame::new()
-            .fill(th::PANEL_BG)
+            .fill(th::panel_bg())
             .inner_margin(egui::Margin::same(th::GAP_L as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());

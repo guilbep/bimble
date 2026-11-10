@@ -180,7 +180,7 @@ impl Viewer {
         let mut export = false;
         let mut show_in_view = false;
         egui::Frame::new()
-            .fill(th::PANEL_BG)
+            .fill(th::panel_bg())
             .inner_margin(egui::Margin::same(th::GAP_L as i8))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -191,7 +191,7 @@ impl Viewer {
                             t.count,
                             if t.count == 1 { "" } else { "s" }
                         ))
-                        .color(th::TEXT_MUTED),
+                        .color(th::text_muted()),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         export = ui

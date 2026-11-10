@@ -517,12 +517,13 @@ dependencies = [
  "bimble-core",
  "bimble-geom",
  "dxf",
- "epaint_default_fonts",
+ "flate2",
  "lopdf",
  "pdf-writer",
  "resvg",
  "serde",
  "serde_json",
+ "skrifa",
 ]
 
 [[package]]

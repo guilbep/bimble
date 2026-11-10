@@ -2,7 +2,7 @@
 //! PDF. Plans (and later sections, rebar drawings) are built as a `Sheet`, so both formats get
 //! the same drawing.
 
-use bimble_core::style::Rgb;
+use bimble_core::style::{Rgb, SheetFont};
 use std::fmt::Write;
 
 /// ISO 216 sizes, landscape (width ≥ height), mm.
@@ -128,8 +128,12 @@ const HELVETICA: [u16; 95] = [
     334, 260, 334, 584, // {..~
 ];
 
-/// Approximate width of `text` in Helvetica (bold ≈ 6 % wider), mm.
-pub fn text_width_mm(text: &str, size_mm: f64, bold: bool) -> f64 {
+/// Width of `text` in `font`, mm: Roboto's own advances; Helvetica's approximately (its AFM
+/// widths for ASCII, bold ≈ 6 % wider).
+pub fn text_width_mm(text: &str, size_mm: f64, bold: bool, font: SheetFont) -> f64 {
+    if font == SheetFont::Roboto {
+        return crate::fonts::Face::roboto(bold).width_em(text) * size_mm;
+    }
     let units: u32 = text
         .chars()
         .map(|c| match c as u32 {
@@ -148,13 +152,14 @@ fn text_start(
     anchor: Anchor,
     angle_deg: f64,
     bold: bool,
+    font: SheetFont,
 ) -> ([f64; 2], [f64; 2]) {
     let a = angle_deg.to_radians();
     let u = [a.cos(), -a.sin()];
     let back = match anchor {
         Anchor::Start => 0.0,
-        Anchor::Middle => text_width_mm(text, size_mm, bold) / 2.0,
-        Anchor::End => text_width_mm(text, size_mm, bold),
+        Anchor::Middle => text_width_mm(text, size_mm, bold, font) / 2.0,
+        Anchor::End => text_width_mm(text, size_mm, bold, font),
     };
     ([pos[0] - u[0] * back, pos[1] - u[1] * back], u)
 }
@@ -165,6 +170,8 @@ pub struct Sheet {
     pub height_mm: f64,
     pub title: String,
     pub items: Vec<Item>,
+    /// The font of its text (the style's).
+    pub font: SheetFont,
 }
 
 fn hex(c: Rgb) -> String {
@@ -334,7 +341,8 @@ impl Sheet {
                     bold,
                 } => {
                     // Positioned from the computed start so SVG and PDF place text alike.
-                    let (p, _) = text_start(*pos, *size_mm, text, *anchor, *angle_deg, *bold);
+                    let (p, _) =
+                        text_start(*pos, *size_mm, text, *anchor, *angle_deg, *bold, self.font);
                     let rot = if *angle_deg != 0.0 {
                         format!(
                             r#" transform="rotate({:.3} {:.3} {:.3})""#,
@@ -344,9 +352,13 @@ impl Sheet {
                         String::new()
                     };
                     let weight = if *bold { r#" font-weight="bold""# } else { "" };
+                    let family = match self.font {
+                        SheetFont::Roboto => "Roboto, Helvetica, Arial, sans-serif",
+                        SheetFont::Helvetica => "Helvetica, Arial, sans-serif",
+                    };
                     let _ = writeln!(
                         s,
-                        r#"<text x="{:.3}" y="{:.3}" font-family="Helvetica, Arial, sans-serif" font-size="{:.3}"{weight} fill="{}"{rot}>{}</text>"#,
+                        r#"<text x="{:.3}" y="{:.3}" font-family="{family}" font-size="{:.3}"{weight} fill="{}"{rot}>{}</text>"#,
                         p[0],
                         p[1],
                         size_mm,
@@ -387,12 +399,35 @@ impl Sheet {
                 .pair(Name(b"F2"), bold_font);
             p.finish();
         }
-        pdf.type1_font(font)
-            .base_font(Name(b"Helvetica"))
-            .encoding_predefined(Name(b"WinAnsiEncoding"));
-        pdf.type1_font(bold_font)
-            .base_font(Name(b"Helvetica-Bold"))
-            .encoding_predefined(Name(b"WinAnsiEncoding"));
+        // Roboto: each weight embedded (ids from 8 on), its text as glyph ids.
+        let mut next = 8;
+        let mut used: [std::collections::BTreeMap<u16, char>; 2] = Default::default();
+        if self.font == SheetFont::Roboto {
+            for item in &self.items {
+                if let Item::Text { text, bold, .. } = item {
+                    let face = crate::fonts::Face::roboto(*bold);
+                    for ch in text.chars() {
+                        used[*bold as usize].entry(face.glyph(ch)).or_insert(ch);
+                    }
+                }
+            }
+            for (id, bold) in [(font, false), (bold_font, true)] {
+                embed_font(
+                    &mut pdf,
+                    id,
+                    crate::fonts::Face::roboto(bold),
+                    &used[bold as usize],
+                    &mut next,
+                );
+            }
+        } else {
+            pdf.type1_font(font)
+                .base_font(Name(b"Helvetica"))
+                .encoding_predefined(Name(b"WinAnsiEncoding"));
+            pdf.type1_font(bold_font)
+                .base_font(Name(b"Helvetica-Bold"))
+                .encoding_predefined(Name(b"WinAnsiEncoding"));
+        }
         pdf.document_info(info)
             .title(pdf_writer::TextStr(&self.title))
             .producer(pdf_writer::TextStr(concat!(
@@ -477,18 +512,99 @@ impl Sheet {
                     c.set_fill_rgb(r, g, b);
                     c.begin_text();
                     c.set_font(Name(if *bold { b"F2" } else { b"F1" }), 1.0);
-                    let (p, u) = text_start(*pos, *size_mm, text, *anchor, *angle_deg, *bold);
+                    let (p, u) =
+                        text_start(*pos, *size_mm, text, *anchor, *angle_deg, *bold, self.font);
                     // Glyph x along the baseline, glyph y "up" on paper (y is down here).
                     let s = *size_mm;
                     let m = [s * u[0], s * u[1], s * u[1], -s * u[0], p[0], p[1]];
                     c.set_text_matrix(m.map(|v| v as f32));
-                    c.show(Str(&win_ansi(text)));
+                    let bytes = match self.font {
+                        SheetFont::Roboto => {
+                            let face = crate::fonts::Face::roboto(*bold);
+                            text.chars()
+                                .flat_map(|ch| face.glyph(ch).to_be_bytes())
+                                .collect()
+                        }
+                        SheetFont::Helvetica => win_ansi(text),
+                    };
+                    c.show(Str(&bytes));
                     c.end_text();
                 }
             }
         }
         pdf.stream(content_id, &c.finish());
         pdf.finish()
+    }
+}
+
+/// Embed `face` as font `id`: a Type 0 font over the whole file (compressed), its text as
+/// 2-byte glyph ids, with the widths and the characters (for search and copy) of the glyphs
+/// `used`. A face no text uses is still declared (the page names it), without its file.
+fn embed_font(
+    pdf: &mut pdf_writer::Pdf,
+    id: pdf_writer::Ref,
+    face: &crate::fonts::Face,
+    used: &std::collections::BTreeMap<u16, char>,
+    next: &mut i32,
+) {
+    use pdf_writer::types::{CidFontType, FontFlags, SystemInfo, UnicodeCmap};
+    use pdf_writer::{Filter, Finish, Name, Rect, Ref, Str};
+    let mut new = || {
+        *next += 1;
+        Ref::new(*next - 1)
+    };
+    let (cid, descriptor, cmap, file) = (new(), new(), new(), new());
+    let name = Name(face.name.as_bytes());
+    let info = SystemInfo {
+        registry: Str(b"Adobe"),
+        ordering: Str(b"Identity"),
+        supplement: 0,
+    };
+    pdf.type0_font(id)
+        .base_font(name)
+        .encoding_predefined(Name(b"Identity-H"))
+        .descendant_font(cid)
+        .to_unicode(cmap);
+    let mut c = pdf.cid_font(cid);
+    c.subtype(CidFontType::Type2)
+        .base_font(name)
+        .system_info(info)
+        .font_descriptor(descriptor)
+        .default_width(0.0)
+        .cid_to_gid_map_predefined(Name(b"Identity"));
+    let advances = face.advances(used.keys().copied());
+    let mut w = c.widths();
+    for (g, a) in used.keys().zip(advances) {
+        w.consecutive(*g, [a]);
+    }
+    w.finish();
+    c.finish();
+    let [x0, y0, x1, y1] = face.bbox;
+    let mut d = pdf.font_descriptor(descriptor);
+    d.name(name)
+        .flags(FontFlags::NON_SYMBOLIC)
+        .bbox(Rect::new(x0, y0, x1, y1))
+        .italic_angle(0.0)
+        .ascent(face.ascent)
+        .descent(face.descent)
+        .cap_height(face.cap_height)
+        .stem_v(80.0);
+    if !used.is_empty() {
+        d.font_file2(file);
+    }
+    d.finish();
+    let mut u = UnicodeCmap::new(Name(b"Bimble-UTF16"), info);
+    for (g, ch) in used {
+        u.pair(*g, *ch);
+    }
+    pdf.cmap(cmap, &u.finish());
+    if !used.is_empty() {
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        let _ = std::io::Write::write_all(&mut z, face.data);
+        let packed = z.finish().unwrap_or_default();
+        pdf.stream(file, &packed)
+            .filter(Filter::FlateDecode)
+            .pair(Name(b"Length1"), face.data.len() as i32);
     }
 }
 
@@ -506,8 +622,7 @@ fn win_ansi(s: &str) -> Vec<u8> {
 }
 
 /// A sheet rasterized to RGBA pixels (from its SVG, so it matches the exported drawing).
-/// Fonts for drawing sheets, loaded once: the system's, or the font egui ships where there are
-/// none (a browser, a bare container).
+/// Fonts for drawing sheets, loaded once: the system's and Bimble's own (Roboto).
 fn svg_options() -> resvg::usvg::Options<'static> {
     use resvg::usvg;
     use std::sync::{Arc, OnceLock};
@@ -515,9 +630,13 @@ fn svg_options() -> resvg::usvg::Options<'static> {
     let db = DB.get_or_init(|| {
         let mut db = usvg::fontdb::Database::new();
         db.load_system_fonts();
-        if db.is_empty() {
-            db.load_font_data(epaint_default_fonts::UBUNTU_LIGHT.to_vec());
-            db.set_sans_serif_family("Ubuntu");
+        let none = db.is_empty();
+        // Ours, so sheets in Roboto look the same everywhere; and the only font where there
+        // are none (a browser, a bare container).
+        db.load_font_data(crate::fonts::ROBOTO_REGULAR.to_vec());
+        db.load_font_data(crate::fonts::ROBOTO_BOLD.to_vec());
+        if none {
+            db.set_sans_serif_family("Roboto");
         }
         Arc::new(db)
     });
@@ -628,6 +747,7 @@ mod tests {
             width_mm: 297.0,
             height_mm: 210.0,
             title: "Test <sheet> é".into(),
+            font: SheetFont::Helvetica,
             items: vec![
                 Item::Area {
                     loops: vec![
@@ -737,7 +857,7 @@ mod tests {
     fn rotated_and_centred_text_is_placed_the_same_in_svg_and_pdf() {
         let s = sample().to_svg();
         // "362" is 3 × 556/1000 × 2.5 × 1.06 mm wide; centred and turned 90° it starts below pos.
-        let w = text_width_mm("362", 2.5, true);
+        let w = text_width_mm("362", 2.5, true, SheetFont::Helvetica);
         assert!((w - 4.4202).abs() < 1e-9, "{w}");
         let y = 100.0 + w / 2.0;
         assert!(
@@ -748,6 +868,47 @@ mod tests {
         );
         let pdf = String::from_utf8_lossy(&sample().to_pdf()).into_owned();
         assert!(pdf.contains("/Helvetica-Bold"));
+    }
+
+    /// In Roboto (the default, issue #53), text is measured with Roboto's widths, named in the
+    /// SVG, and embedded in the PDF: a valid PDF whose text reads back, accents included.
+    #[test]
+    fn roboto_text_is_measured_named_and_embedded() {
+        let mut sheet = Sheet {
+            font: SheetFont::Roboto,
+            ..sample()
+        };
+        let label = "Façade – Niveau 2, épaisseur 250";
+        sheet
+            .items
+            .push(Item::text([20.0, 150.0], 3.5, label, Rgb([0, 0, 0])));
+        let w = text_width_mm("362", 2.5, true, SheetFont::Roboto);
+        let roboto = crate::fonts::Face::roboto(true).width_em("362") * 2.5;
+        assert!(
+            (w - roboto).abs() < 1e-9 && (w - 4.4202).abs() > 0.01,
+            "{w}"
+        );
+        let y = 100.0 + w / 2.0;
+        let svg = sheet.to_svg();
+        assert!(
+            svg.contains(&format!(
+                r##"x="100.000" y="{y:.3}" font-family="Roboto, Helvetica, Arial, sans-serif""##
+            )),
+            "{svg}"
+        );
+        let pdf = sheet.to_pdf();
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/Roboto-Bold") && text.contains("/Identity-H"));
+        assert!(text.contains("/FontFile2") && !text.contains("/Helvetica"));
+        // A full font file per weight used, compressed: well under the two files' 700 KB.
+        assert!(pdf.len() < 500_000, "{} bytes", pdf.len());
+        let doc = lopdf::Document::load_mem(&pdf).unwrap();
+        let read = doc.extract_text(&[1]).unwrap();
+        for item in &sheet.items {
+            if let Item::Text { text, .. } = item {
+                assert!(read.contains(text.as_str()), "{text:?} not in {read:?}");
+            }
+        }
     }
 
     #[test]

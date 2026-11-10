@@ -51,7 +51,7 @@ impl Viewer {
         let mut remove: Option<String> = None;
         let mut add: Option<String> = None;
         egui::Frame::new()
-            .fill(th::PANEL_BG)
+            .fill(th::panel_bg())
             .inner_margin(egui::Margin::same(th::GAP_L as i8))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
@@ -89,7 +89,7 @@ impl Viewer {
                             }
                             let done = r.lost_focus();
                             ui.label(
-                                egui::RichText::new(format!("{{{key}}}")).color(th::TEXT_MUTED),
+                                egui::RichText::new(format!("{{{key}}}")).color(th::text_muted()),
                             )
                             .on_hover_text(
                                 "Write this in a template's title block to show the value",
@@ -143,7 +143,7 @@ impl Viewer {
                                     commit |= r.lost_focus();
                                     ui.label(
                                         egui::RichText::new(format!("{{{k}}}"))
-                                            .color(th::TEXT_MUTED),
+                                            .color(th::text_muted()),
                                     );
                                     ui.end_row();
                                 }

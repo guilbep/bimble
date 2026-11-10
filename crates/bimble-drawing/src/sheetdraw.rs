@@ -217,6 +217,7 @@ pub fn draw(
                 format!("{} – {title}", o.project)
             },
             items,
+            font: o.style.paper.font,
         },
         info,
     ))

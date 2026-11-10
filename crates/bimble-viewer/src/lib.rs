@@ -240,7 +240,7 @@ pub async fn start_web(canvas: web_sys::HtmlCanvasElement) -> Result<(), String>
                     .wgpu_render_state
                     .as_ref()
                     .ok_or("the viewer needs the wgpu renderer")?;
-                ui_theme::apply(&cc.egui_ctx);
+                settings::Settings::load().apply_look(&cc.egui_ctx);
                 state::guard_page_unload();
                 let app = Viewer::new(rs);
                 let backend = format!("{:?}", rs.adapter.get_info().backend);
@@ -379,7 +379,7 @@ pub fn run(
                 .wgpu_render_state
                 .as_ref()
                 .ok_or("the viewer needs the wgpu renderer")?;
-            ui_theme::apply(&cc.egui_ctx);
+            settings::Settings::load().apply_look(&cc.egui_ctx);
             let mut app = Viewer::new(rs);
             app.opts.style = initial_style;
             app.style_baseline = app.opts.style.clone();
@@ -645,7 +645,7 @@ fn progress_bar(ctx: &egui::Context, view: egui::Rect, fraction: Option<f32>) {
         egui::Id::unique("load progress"),
     ));
     let track = egui::Rect::from_min_size(view.min, egui::vec2(view.width(), 3.0));
-    painter.rect_filled(track, 0.0, ui_theme::BORDER);
+    painter.rect_filled(track, 0.0, ui_theme::border());
     let (a, b) = match fraction {
         Some(f) => (0.0, f.clamp(0.0, 1.0)),
         None => {
@@ -658,7 +658,7 @@ fn progress_bar(ctx: &egui::Context, view: egui::Rect, fraction: Option<f32>) {
         track.left() + a * track.width()..=track.left() + b * track.width(),
         track.y_range(),
     );
-    painter.rect_filled(fill, 0.0, ui_theme::ACCENT);
+    painter.rect_filled(fill, 0.0, ui_theme::accent());
 }
 
 /// A load is shown once it takes longer than this: a quick one would only flash.
@@ -3682,6 +3682,45 @@ impl Viewer {
         }
     }
 
+    /// Settings → Appearance: theme, font and text size of the interface (issue #53).
+    fn appearance_ui(&mut self, ui: &mut egui::Ui) {
+        ui.strong("Appearance");
+        egui::Grid::new("appearance").num_columns(2).show(ui, |ui| {
+            ui.label("Theme");
+            egui::ComboBox::from_id_salt("theme")
+                .selected_text(ui_theme::by_id(&self.settings.theme).name)
+                .show_ui(ui, |ui| {
+                    for t in &ui_theme::THEMES {
+                        ui.selectable_value(&mut self.settings.theme, t.id.to_owned(), t.name);
+                    }
+                });
+            ui.end_row();
+            ui.label("Font");
+            ui.horizontal(|ui| {
+                for f in ui_theme::UiFont::ALL {
+                    ui.radio_value(&mut self.settings.ui_font, f.id().to_owned(), f.name());
+                }
+            });
+            ui.end_row();
+            ui.label("Text size");
+            ui.add(
+                egui::Slider::new(&mut self.settings.text_size, ui_theme::TEXT_SIZES)
+                    .step_by(0.5)
+                    .suffix(" pt"),
+            );
+            ui.end_row();
+        });
+        let d = settings::Settings::default();
+        let is_default = self.settings.theme == d.theme
+            && self.settings.ui_font == d.ui_font
+            && self.settings.text_size == d.text_size;
+        if !is_default && ui.button("Default look").clicked() {
+            self.settings.theme = d.theme;
+            self.settings.ui_font = d.ui_font;
+            self.settings.text_size = d.text_size;
+        }
+    }
+
     /// Settings, kept between sessions.
     fn settings_ui(&mut self, ctx: &egui::Context) {
         if !self.settings_window {
@@ -3695,6 +3734,8 @@ impl Viewer {
             .collapsible(false)
             .default_width(380.0)
             .show(ctx, |ui| {
+                self.appearance_ui(ui);
+                ui.add_space(8.0);
                 ui.strong("Memory for one model");
                 if cfg!(target_arch = "wasm32") {
                     ui.label(
@@ -3765,6 +3806,10 @@ impl Viewer {
             });
         if self.settings != before {
             self.settings.save();
+            let look = |s: &settings::Settings| (s.theme.clone(), s.ui_font.clone(), s.text_size);
+            if look(&self.settings) != look(&before) {
+                self.settings.apply_look(ctx);
+            }
         }
         self.settings_window = open;
         #[cfg(not(target_arch = "wasm32"))]
@@ -4136,7 +4181,7 @@ impl Viewer {
         let mut reset = None;
         ui.horizontal(|ui| {
             if let Some(shown) = self.load_shown() {
-                ui.label(egui::RichText::new(shown.text).color(ui_theme::ACCENT));
+                ui.label(egui::RichText::new(shown.text).color(ui_theme::accent()));
                 ui.separator();
             }
             ui.label(self.status_hint());
@@ -4145,7 +4190,7 @@ impl Viewer {
             for (chip, label) in state::chips(&self.snapshot()) {
                 let r = ui.add(
                     egui::Button::new(egui::RichText::new(format!("{label}  ×")).small())
-                        .fill(ui_theme::SELECTED_BG)
+                        .fill(ui_theme::selected_bg())
                         .corner_radius(10.0),
                 );
                 if r.on_hover_text(chip.reset_hint()).clicked() {
@@ -4242,7 +4287,7 @@ impl eframe::App for Viewer {
         };
         // One row: the File menu, the ribbon's tabs, quick access (#51).
         egui::Panel::top("title")
-            .frame(bar(ui_theme::TABS_BG).inner_margin(egui::Margin {
+            .frame(bar(ui_theme::tabs_bg()).inner_margin(egui::Margin {
                 left: ui_theme::GAP_M as i8,
                 right: ui_theme::GAP_M as i8,
                 top: 2,
@@ -4251,7 +4296,7 @@ impl eframe::App for Viewer {
             .show(ui, |ui| self.title_row(ui));
         egui::Panel::top("ribbon")
             .frame(
-                bar(ui_theme::RIBBON_BG)
+                bar(ui_theme::ribbon_bg())
                     .inner_margin(egui::Margin::symmetric(ui_theme::GAP_M as i8, 6)),
             )
             .show(ui, |ui| self.ribbon_panel(ui));
@@ -4354,7 +4399,7 @@ impl eframe::App for Viewer {
             egui::Panel::top("view-tabs")
                 .frame(
                     egui::Frame::new()
-                        .fill(ui_theme::TITLE_BG)
+                        .fill(ui_theme::title_bg())
                         .inner_margin(egui::Margin {
                             left: 6,
                             right: 6,

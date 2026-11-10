@@ -487,7 +487,7 @@ impl Viewer {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let p = ui
                     .add(egui::Button::new(
-                        egui::RichText::new("Command…  Ctrl K").color(th::TEXT_MUTED),
+                        egui::RichText::new("Command…  Ctrl K").color(th::text_muted()),
                     ))
                     .on_hover_text("Find and run any command");
                 if p.clicked() {
@@ -531,7 +531,7 @@ impl Viewer {
                  from their panel",
             );
         }
-        ui.add(egui::Label::new(egui::RichText::new(&name).color(th::TEXT_MUTED)).truncate())
+        ui.add(egui::Label::new(egui::RichText::new(&name).color(th::text_muted())).truncate())
             .on_hover_text(l.path.display().to_string());
     }
 
@@ -574,17 +574,10 @@ impl Viewer {
         };
         let (rect, r) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), sense);
         if enabled && r.hovered() {
-            ui.painter().rect_filled(
-                rect,
-                th::RADIUS as f32,
-                egui::Color32::from_rgb(0x35, 0x35, 0x35),
-            );
+            ui.painter()
+                .rect_filled(rect, th::RADIUS as f32, th::hover_bg());
         }
-        let color = if enabled {
-            th::TEXT
-        } else {
-            egui::Color32::from_gray(0x66)
-        };
+        let color = if enabled { th::text() } else { th::disabled() };
         crate::icons::paint(ui.painter(), rect.shrink(3.0), a, color);
         let r = r.on_hover_text(tip);
         enabled && r.clicked()
@@ -636,13 +629,13 @@ impl Viewer {
             for t in Tab::ALL {
                 let on = self.ribbon_tab == t;
                 let text = egui::RichText::new(t.label()).color(if on {
-                    th::TEXT
+                    th::text()
                 } else {
-                    th::TEXT_MUTED
+                    th::text_muted()
                 });
                 let r = ui.add(
                     egui::Button::new(text)
-                        .fill(if on { th::RIBBON_BG } else { th::TABS_BG })
+                        .fill(if on { th::ribbon_bg() } else { th::tabs_bg() })
                         .stroke(egui::Stroke::NONE)
                         .corner_radius(egui::CornerRadius {
                             nw: th::RADIUS,
@@ -656,7 +649,7 @@ impl Viewer {
                     let rr = r.rect;
                     ui.painter().line_segment(
                         [rr.left_top(), rr.right_top()],
-                        egui::Stroke::new(2.0, th::ACCENT),
+                        egui::Stroke::new(2.0, th::accent()),
                     );
                 }
                 if r.clicked() {
@@ -673,8 +666,8 @@ impl Viewer {
         let enabled = self.action_enabled(a);
         let galley = ui.painter().layout_no_wrap(
             text.to_string(),
-            egui::FontId::proportional(th::TEXT_SMALL + 0.5),
-            th::TEXT,
+            egui::FontId::proportional(th::text_small() + 0.5),
+            th::text(),
         );
         let w = (galley.size().x + 12.0).max(56.0);
         let sense = if enabled {
@@ -684,9 +677,9 @@ impl Viewer {
         };
         let (rect, mut r) = ui.allocate_exact_size(egui::vec2(w, 50.0), sense);
         let fill = if on {
-            th::SELECTED_BG
+            th::selected_bg()
         } else if enabled && r.hovered() {
-            egui::Color32::from_rgb(0x35, 0x35, 0x35)
+            th::hover_bg()
         } else {
             egui::Color32::TRANSPARENT
         };
@@ -696,15 +689,11 @@ impl Viewer {
             p.rect_stroke(
                 rect,
                 th::RADIUS as f32,
-                egui::Stroke::new(1.0, th::ACCENT),
+                egui::Stroke::new(1.0, th::accent()),
                 egui::StrokeKind::Inside,
             );
         }
-        let color = if enabled {
-            th::TEXT
-        } else {
-            egui::Color32::from_gray(0x66)
-        };
+        let color = if enabled { th::text() } else { th::disabled() };
         let icon = egui::Rect::from_center_size(
             egui::pos2(rect.center().x, rect.top() + 16.0),
             egui::vec2(22.0, 22.0),
@@ -745,8 +734,8 @@ impl Viewer {
             });
             ui.label(
                 egui::RichText::new(name)
-                    .size(th::TEXT_SMALL)
-                    .color(th::TEXT_MUTED),
+                    .size(th::text_small())
+                    .color(th::text_muted()),
             );
         });
         ui.separator();
@@ -900,7 +889,7 @@ impl Viewer {
                 ("Text type", &texts, &mut l.text_kind),
             ] {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(label).color(th::TEXT_MUTED));
+                    ui.label(egui::RichText::new(label).color(th::text_muted()));
                     egui::ComboBox::from_id_salt(("ribbon-kind", label))
                         .selected_text(cur.clone().unwrap_or_else(|| "Default".into()))
                         .height(300.0)
@@ -964,12 +953,8 @@ impl Viewer {
                     TabRef::Materials => "Materials".to_string(),
                 };
                 let on = current.as_ref() == Some(&t);
-                let fill = if on { th::CANVAS } else { th::RIBBON_BG };
-                let color = if on {
-                    egui::Color32::from_rgb(0x1a, 0x1a, 0x1a)
-                } else {
-                    th::TEXT
-                };
+                let fill = if on { th::CANVAS } else { th::ribbon_bg() };
+                let color = if on { th::ON_CANVAS } else { th::text() };
                 ui.push_id(k, |ui| {
                     let r = ui.add(
                         egui::Button::new(egui::RichText::new(&name).color(color))
@@ -1200,9 +1185,9 @@ impl Viewer {
                                 for (k, (label, where_, enabled, go)) in found.iter().enumerate() {
                                     let on = k == p.index;
                                     let text = egui::RichText::new(label).color(if *enabled {
-                                        th::TEXT
+                                        th::text()
                                     } else {
-                                        th::TEXT_MUTED
+                                        th::text_muted()
                                     });
                                     let row = ui.add(
                                         egui::Button::selectable(on, text)

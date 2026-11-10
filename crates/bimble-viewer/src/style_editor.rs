@@ -40,6 +40,20 @@ pub fn edit(ui: &mut egui::Ui, s: &mut GraphicStyle, query: &mut String) -> bool
 
     ui.add_space(4.0);
     ui.strong("On paper");
+    if q.is_empty() || hit("font") {
+        ui.horizontal(|ui| {
+            use bimble_core::style::SheetFont;
+            ui.label("Font of all text");
+            for (f, name) in [
+                (SheetFont::Roboto, "Roboto"),
+                (SheetFont::Helvetica, "Helvetica"),
+            ] {
+                changed |= ui.radio_value(&mut s.paper.font, f, name).changed();
+            }
+        })
+        .response
+        .on_hover_text("Roboto is shipped with Bimble and embedded in PDFs: the same everywhere.");
+    }
     if let Some(h) = section("Line weights", "pens", hit("pen")) {
         h.show(ui, |ui| changed |= pens(ui, &mut s.paper.pens));
     }

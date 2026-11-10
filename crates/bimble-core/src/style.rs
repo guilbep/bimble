@@ -217,6 +217,21 @@ pub struct PaperStyle {
     pub hatch_types: Vec<crate::hatches::HatchType>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_hatches: Vec<crate::hatches::MaterialHatch>,
+    /// The font of all text on sheets and plans (ADR 0041). Styles written before it: Roboto.
+    #[serde(default)]
+    pub font: SheetFont,
+}
+
+/// The font of text on paper.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SheetFont {
+    /// Shipped with Bimble and embedded in PDFs: the same on every machine (issue #53).
+    #[default]
+    Roboto,
+    /// The PDF's built-in Helvetica, not embedded (Bimble's until 0.10); Arial where there is
+    /// no Helvetica.
+    Helvetica,
 }
 
 impl PaperStyle {
@@ -343,6 +358,7 @@ impl Default for GraphicStyle {
                 dimension_types: crate::pens::default_dim_types(),
                 hatch_types: crate::hatches::default_hatch_types(),
                 material_hatches: Vec::new(),
+                font: SheetFont::Roboto,
             },
             families: Families {
                 concrete: Fill {
