@@ -3,9 +3,15 @@
 - Status: Accepted (9 Nov 2026) as amended by the office's answers, with conflicts (Q4) and rights (Q5)
   below. Built so far: shared-folder remote, clone, fetch, push (fast-forward only, locked),
   synchronize (with `--prefer ours|theirs` for the whole sync), element borrowing (explicit,
-  `bimble history borrow`). Not built yet: conflict resolution per element, borrowing on first
-  edit, the `people` object and its rights, layers, the UI. Still proposals: the HTTP
-  server remote, a chat.
+  `bimble history borrow`). In the viewer (10 Nov, #55): Collaborate → Shared folder… and
+  Synchronize (saves and commits first), borrowing on an element's first change (a new element
+  too), "<element> belongs to <who>" with Synchronize or Cancel, a chip after 4 h without
+  synchronizing, who you are in Settings → You. Not built yet: conflict resolution per element,
+  the `people` object and its rights, layers. Still proposals: the HTTP server remote, a chat.
+- Amended (10 Nov, Cécile on #51): the rights are three levels, view only / view and annotate /
+  model and annotate, each person setting their own for now; later maybe one admin per project
+  who sets the others' (new people at the lowest). This replaces viewer / modeller / owner below
+  when the `people` object is built.
 - Decided by: the office (#51 answers); Pierre ("let's be inspired by git"; Q4 and Q5: "I trust
   you on that"); Q4, Q5 and the format by Claude
 - Reversal cost: high once offices share models through it (the remote format becomes a contract)

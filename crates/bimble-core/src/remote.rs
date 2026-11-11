@@ -196,6 +196,69 @@ pub fn clone(remote_dir: &Path, model: &Path, branch: &str) -> Result<Model> {
     local.model_at(&tip)
 }
 
+/// How a model joined a shared folder ([`join`]).
+#[derive(Debug, PartialEq)]
+pub enum Joined {
+    /// The folder had no history: it is created, and this model's history goes there first.
+    First,
+    /// The model had no history: it is now a copy of the folder's (the model to write).
+    Copied(Box<Model>),
+    /// The model's history is already the folder's (they share a commit).
+    Linked,
+}
+
+/// Share a model's history through `remote_dir` (the viewer's Shared folder…, ADR 0038), the
+/// right way for each case: the first person creates it; a model without history becomes a
+/// copy of the shared one (as `clone`); a history of its own, unrelated to the shared one, is
+/// refused (merging two unrelated histories would make every element "changed").
+pub fn join(
+    remote_dir: &Path,
+    model: &Path,
+    working: &Model,
+    who: &str,
+    time: i64,
+) -> Result<Joined> {
+    let shared = open_or_init(remote_dir)?;
+    let tip = shared.branch_commit("main")?;
+    let local = match Repo::open(model) {
+        Ok(r) => Some(r),
+        Err(RepoError::NoRepo(_)) => None,
+        Err(e) => return Err(e),
+    };
+    match (local, tip) {
+        (None, Some(_)) => clone(remote_dir, model, "main").map(|m| Joined::Copied(Box::new(m))),
+        (local, None) => {
+            let local = match local {
+                Some(r) => r,
+                None => {
+                    let r = Repo::init(model)?;
+                    r.commit(working, "Start", who, time)?;
+                    r
+                }
+            };
+            set_remote(&local, remote_dir)?;
+            Ok(Joined::First)
+        }
+        (Some(local), Some(tip)) => {
+            fetch(&local, &shared, "main")?;
+            let related = match local.head_commit()? {
+                Some(h) => local.merge_base(&h, &tip)?.is_some(),
+                None => true,
+            };
+            if !related {
+                return Err(RepoError::Bad(
+                    "this model has a history of its own, not the shared folder's: to work on \
+                     the shared model, open a copy of the file without its -history folder and \
+                     choose the shared folder again"
+                        .into(),
+                ));
+            }
+            set_remote(&local, remote_dir)?;
+            Ok(Joined::Linked)
+        }
+    }
+}
+
 // ---------- borrowed elements
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -372,6 +435,28 @@ pub fn sync(
     ))
 }
 
+/// Synchronize the model as it is (the viewer's Synchronize, ADR 0038): what isn't committed
+/// is committed first ("N change(s) before synchronizing"), then [`sync`].
+pub fn sync_working(
+    local: &Repo,
+    remote: &Repo,
+    working: &Model,
+    who: &str,
+    time: i64,
+    prefer: Prefer,
+) -> Result<std::result::Result<(Merged, Model), Vec<Conflict>>> {
+    let changes = local.status(working)?;
+    if !changes.is_empty() {
+        local.commit(
+            working,
+            &format!("{} change(s) before synchronizing", changes.len()),
+            who,
+            time,
+        )?;
+    }
+    sync(local, remote, who, time, prefer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,6 +570,68 @@ mod tests {
             .unwrap();
         assert_eq!(how, Merged::FastForward(tip));
         assert_eq!(back, merged);
+    }
+
+    /// The viewer's Shared folder…: the first person creates it, a second one with a copy of
+    /// the file (no history) gets the shared history and synchronizes with no element
+    /// counted as changed; an unrelated history is refused, and nothing is created by mistake.
+    #[test]
+    fn joining_a_shared_folder() {
+        let d = std::env::temp_dir().join(format!("bimble-join-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for p in ["share", "alice", "bob", "carol"] {
+            std::fs::create_dir_all(d.join(p)).unwrap();
+        }
+        let _t = Tmp(d.clone());
+        let share = d.join("share/house.bimble-history");
+        let m = concrete_frame(&FrameSpec::default());
+        let beam = id_of(&m, IfcClass::IfcBeam);
+        // Alice: a model without history; the folder is created and her history goes there.
+        let alice = d.join("alice/house.bimble");
+        assert_eq!(join(&share, &alice, &m, ALICE, 1).unwrap(), Joined::First);
+        let a = Repo::open(&alice).unwrap();
+        let s = Repo::open_dir(&share).unwrap();
+        sync(&a, &s, ALICE, 2, Prefer::Neither).unwrap().unwrap();
+        borrow(&s, ALICE, &[beam], 3).unwrap();
+        // Bob: his copy of the file, no history: he gets the shared one, and his first
+        // synchronize isn't blocked by Alice's borrowed beam.
+        let bob = d.join("bob/house.bimble");
+        let Joined::Copied(mb) = join(&share, &bob, &m, BOB, 4).unwrap() else {
+            panic!("copied")
+        };
+        assert_eq!(*mb, m);
+        let b = Repo::open(&bob).unwrap();
+        assert!(
+            sync_working(&b, &s, &mb, BOB, 5, Prefer::Neither)
+                .unwrap()
+                .is_ok()
+        );
+        assert_eq!(join(&share, &bob, &mb, BOB, 6).unwrap(), Joined::Linked);
+        // Carol: a history of her own: refused.
+        let carol = d.join("carol/house.bimble");
+        let c = Repo::init(&carol).unwrap();
+        c.commit(&m, "mine", "carol", 7).unwrap();
+        assert!(join(&share, &carol, &m, "carol", 8).is_err());
+    }
+
+    /// The viewer's Synchronize: changes not committed are committed, then synchronized.
+    #[test]
+    fn synchronize_commits_what_is_not_committed() {
+        let (o, m) = office("working");
+        let (a, b) = (Repo::open(&o.alice).unwrap(), Repo::open(&o.bob).unwrap());
+        let share = Repo::open_dir(&o.share).unwrap();
+        let beam = id_of(&m, IfcClass::IfcBeam);
+        let ma = rename(&m, beam, "Alice's beam");
+        assert!(sync(&a, &share, ALICE, 2, Prefer::Neither).is_ok());
+        let (_, got) = sync_working(&a, &share, &ma, ALICE, 3, Prefer::Neither)
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.elements[&beam].name, "Alice's beam");
+        assert!(a.status(&ma).unwrap().is_empty(), "committed");
+        let (_, at_bob) = sync_working(&b, &share, &m, BOB, 4, Prefer::Neither)
+            .unwrap()
+            .unwrap();
+        assert_eq!(at_bob.elements[&beam].name, "Alice's beam");
     }
 
     #[test]

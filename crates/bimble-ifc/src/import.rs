@@ -544,23 +544,31 @@ fn property_sets(file: &StepFile) -> (HashMap<u64, BTreeMap<String, String>>, us
         let Some(pset) = file.deref(rel.arg(5)) else {
             continue;
         };
-        if pset.name != "IFCPROPERTYSET" {
+        // Property sets and quantity sets (Qto_…, #57): both become "Set/Name" → text.
+        let quantities = pset.name == "IFCELEMENTQUANTITY";
+        if pset.name != "IFCPROPERTYSET" && !quantities {
             continue;
         }
         let pset_name = pset.arg(2).as_str().unwrap_or("");
         if pset_name.is_empty() || pset_name == GENERATOR_PSET || pset_name == PROJECT_PSET {
             continue;
         }
-        for prop in pset.arg(4).as_list().unwrap_or(&[]) {
+        let list = if quantities { pset.arg(5) } else { pset.arg(4) };
+        for prop in list.as_list().unwrap_or(&[]) {
             let Some(prop) = file.deref(prop) else {
                 continue;
             };
             let Some(prop_name) = prop.arg(0).as_str() else {
                 continue;
             };
-            let Some(value) = property_value(prop.arg(2), file) else {
-                skipped += 1;
-                continue;
+            let value = match property(prop, file) {
+                Some(Some(v)) => v,
+                // Empty ($): nothing to keep, nothing lost.
+                Some(None) => continue,
+                None => {
+                    skipped += 1;
+                    continue;
+                }
             };
             for host in rel.arg(4).as_list().unwrap_or(&[]) {
                 if let Some(host) = host.as_ref() {
@@ -584,26 +592,62 @@ fn key(pset: &str, prop: &str) -> String {
     }
 }
 
-/// An `IfcValue` select as text: labels, texts, identifiers, booleans, integers, reals.
-fn property_value(v: &Value, file: &StepFile) -> Option<String> {
-    match v {
-        Value::Typed(t) => select_value(t.0.as_str(), &t.1),
-        Value::Ref(_) => {
-            let ent = file.deref(v)?;
-            select_value(ent.name.as_str(), ent.arg(0))
+/// A property or quantity as text (#57): `Some(None)` when it holds nothing ($), `None` when
+/// its kind isn't read. Single values; lists and enumerations joined with "; "; bounded values
+/// as "lower–upper"; quantities (length, area, volume, count, weight, time) as their number.
+/// Measures are the number as written, in the file's units.
+fn property(prop: &crate::step::Entity, file: &StepFile) -> Option<Option<String>> {
+    let joined = |v: &Value| -> Option<Option<String>> {
+        let items: Option<Vec<String>> = v
+            .as_list()?
+            .iter()
+            .map(|x| property_value(x, file))
+            .collect();
+        let items = items?;
+        Some((!items.is_empty()).then(|| items.join("; ")))
+    };
+    match prop.name.as_str() {
+        "IFCPROPERTYSINGLEVALUE" => match prop.arg(2) {
+            Value::Null => Some(None),
+            v => property_value(v, file).map(Some),
+        },
+        "IFCPROPERTYLISTVALUE" | "IFCPROPERTYENUMERATEDVALUE" => joined(prop.arg(2)),
+        "IFCPROPERTYBOUNDEDVALUE" => {
+            let (hi, lo) = (
+                property_value(prop.arg(2), file),
+                property_value(prop.arg(3), file),
+            );
+            Some(match (lo, hi) {
+                (Some(l), Some(h)) => Some(format!("{l}–{h}")),
+                (Some(l), None) => Some(format!("≥ {l}")),
+                (None, Some(h)) => Some(format!("≤ {h}")),
+                (None, None) => None,
+            })
+        }
+        "IFCQUANTITYLENGTH" | "IFCQUANTITYAREA" | "IFCQUANTITYVOLUME" | "IFCQUANTITYCOUNT"
+        | "IFCQUANTITYWEIGHT" | "IFCQUANTITYTIME" => {
+            Some(prop.arg(3).as_f64().map(|x| format!("{x}")))
         }
         _ => None,
     }
 }
 
-fn select_value(name: &str, v: &Value) -> Option<String> {
-    match name {
-        "IFCLABEL" | "IFCTEXT" | "IFCIDENTIFIER" => v.as_str().map(str::to_owned),
-        "IFCBOOLEAN" | "IFCLOGICAL" => v.as_enum().map(str::to_owned),
-        "IFCINTEGER" => v.as_i64().map(|n| n.to_string()),
-        "IFCREAL" => v.as_f64().map(|x| format!("{x}")),
+/// An `IfcValue` select as text: any simple value (labels, texts, booleans, integers, reals,
+/// measures of every kind, dates), whatever its type's name.
+fn property_value(v: &Value, file: &StepFile) -> Option<String> {
+    match v {
+        Value::Typed(t) => simple(&t.1),
+        Value::Ref(_) => simple(file.deref(v)?.arg(0)),
         _ => None,
     }
+}
+
+fn simple(v: &Value) -> Option<String> {
+    v.as_str()
+        .map(str::to_owned)
+        .or_else(|| v.as_enum().map(str::to_owned))
+        .or_else(|| v.as_i64().map(|n| n.to_string()))
+        .or_else(|| v.as_f64().map(|x| format!("{x}")))
 }
 
 fn unit(v: [f64; 3]) -> Option<[f64; 3]> {

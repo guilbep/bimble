@@ -23,7 +23,16 @@ pub struct Settings {
     pub ui_font: String,
     /// Body text size of the interface, points.
     pub text_size: f32,
+    /// Who you are (#52, until there is a server to sign in to): the author of commits, the
+    /// owner of borrowed elements ("this element belongs to …").
+    pub user_name: String,
+    pub user_email: String,
+    /// Files opened last, newest first (the desktop; Home, #52).
+    pub recent: Vec<String>,
 }
+
+/// How many recent files Home lists.
+pub const RECENT: usize = 12;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -35,8 +44,21 @@ impl Default for Settings {
             theme: crate::ui_theme::THEMES[0].id.to_owned(),
             ui_font: crate::ui_theme::UiFont::Roboto.id().to_owned(),
             text_size: crate::ui_theme::TEXT_SIZE,
+            user_name: String::new(),
+            user_email: String::new(),
+            recent: Vec::new(),
         }
     }
+}
+
+/// A short line of text from a JSON value: no line breaks, at most 120 characters.
+fn short_line(v: &serde_json::Value) -> String {
+    v.as_str()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(120)
+        .collect()
 }
 
 impl Settings {
@@ -67,6 +89,20 @@ impl Settings {
                     let r = crate::ui_theme::TEXT_SIZES;
                     (x as f32).clamp(*r.start(), *r.end())
                 }),
+            // Kept short: it is written into every commit and borrow list.
+            user_name: short_line(&v["user_name"]),
+            user_email: short_line(&v["user_email"]),
+            recent: v["recent"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|p| p.as_str())
+                        .filter(|p| !p.is_empty() && p.len() <= 4096)
+                        .take(RECENT)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -79,8 +115,33 @@ impl Settings {
             "theme": self.theme,
             "ui_font": self.ui_font,
             "text_size": self.text_size,
+            "user_name": self.user_name,
+            "user_email": self.user_email,
+            "recent": self.recent,
         })
         .to_string()
+    }
+
+    /// Who you are, as written in commits and borrows: "Name <e-mail>", either one alone, or
+    /// the system's user name when neither is set.
+    pub fn author(&self) -> String {
+        let (n, e) = (self.user_name.trim(), self.user_email.trim());
+        match (n.is_empty(), e.is_empty()) {
+            (false, false) => format!("{n} <{e}>"),
+            (false, true) => n.to_owned(),
+            (true, false) => e.to_owned(),
+            (true, true) => std::env::var("BIMBLE_AUTHOR")
+                .or_else(|_| std::env::var("USER"))
+                .or_else(|_| std::env::var("USERNAME"))
+                .unwrap_or_else(|_| "unknown".into()),
+        }
+    }
+
+    /// A file just opened: first in the recent list, once.
+    pub fn opened(&mut self, path: &str) {
+        self.recent.retain(|p| p != path);
+        self.recent.insert(0, path.to_owned());
+        self.recent.truncate(RECENT);
     }
 
     pub fn load() -> Settings {
@@ -116,6 +177,26 @@ fn path() -> Option<std::path::PathBuf> {
             .join("bimble")
     };
     Some(dir.join("settings.json"))
+}
+
+/// Where Home keeps a file's preview (#52): next to the settings, named by a hash of its path.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn thumbnail(file: &str) -> Option<std::path::PathBuf> {
+    // FNV-1a: stable across Rust versions, unlike the std hasher.
+    let h = file.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
+    });
+    Some(
+        path()?
+            .parent()?
+            .join("previews")
+            .join(format!("{h:016x}.png")),
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn thumbnail(_file: &str) -> Option<std::path::PathBuf> {
+    None
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -167,7 +248,11 @@ mod tests {
             theme: "solarized-light".into(),
             ui_font: "ubuntu".into(),
             text_size: 14.5,
+            user_name: "Ana".into(),
+            user_email: "ana@office.example".into(),
+            recent: vec!["/a/x.ifc".into(), "/b/y.bimble".into()],
         };
+        assert_eq!(s.author(), "Ana <ana@office.example>");
         assert_eq!(Settings::from_json(&s.to_json()), s);
         // An unknown theme or font, a size out of range: the defaults, the nearest size.
         let odd = Settings::from_json(r#"{"theme": "neon", "ui_font": "comic", "text_size": 99}"#);
@@ -185,5 +270,18 @@ mod tests {
             Settings::from_json(r#"{"memory_share": "x"}"#),
             Settings::default()
         );
+    }
+
+    #[test]
+    fn recent_files_newest_first_once_and_bounded() {
+        let mut s = Settings::default();
+        for i in 0..20 {
+            s.opened(&format!("/m/{i}.ifc"));
+        }
+        s.opened("/m/15.ifc");
+        assert_eq!(s.recent.len(), RECENT);
+        assert_eq!(s.recent[0], "/m/15.ifc");
+        assert_eq!(s.recent.iter().filter(|p| *p == "/m/15.ifc").count(), 1);
+        assert_eq!(s.recent[1], "/m/19.ifc");
     }
 }

@@ -188,6 +188,15 @@ pub fn new_section(scene: &Scene, facing: Facing, n: usize) -> View {
     }
 }
 
+/// A reference plan read again (Manage links, #58): the new file's lines, kept where the old
+/// one was placed (offset, rotation, visibility, id: views and sheets refer to it).
+pub(crate) fn reload_reference(old: &mut Reference, new: Reference) {
+    old.name = new.name;
+    old.format = new.format;
+    old.source = new.source.or(old.source.take());
+    old.polylines = new.polylines;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,6 +259,32 @@ mod tests {
     }
 
     #[test]
+    fn a_reloaded_reference_keeps_its_place() {
+        let r = |name: &str, x: f64, source: Option<&str>| Reference {
+            id: GlobalId::new(),
+            name: name.into(),
+            format: "dxf".into(),
+            source: source.map(Into::into),
+            offset_mm: [x, 2.0],
+            rotation_deg: x,
+            visible: x > 0.0,
+            polylines: vec![vec![[x, 0.0], [x, 1.0]]],
+        };
+        let mut old = r("a.dxf", 5.0, Some("/plans/a.dxf"));
+        let (id, kept) = (old.id, old.clone());
+        reload_reference(&mut old, r("b.dxf", -1.0, None));
+        assert_eq!(old.id, id);
+        assert_eq!(
+            (old.offset_mm, old.rotation_deg, old.visible),
+            (kept.offset_mm, kept.rotation_deg, kept.visible)
+        );
+        assert_eq!(old.name, "b.dxf");
+        assert_eq!(old.polylines, vec![vec![[-1.0, 0.0], [-1.0, 1.0]]]);
+        // Read in a browser (no path): where the old one came from is kept.
+        assert_eq!(old.source.as_deref(), Some("/plans/a.dxf"));
+    }
+
+    #[test]
     fn reference_lines_lie_on_the_view_plane() {
         let (s, l) = demo();
         let mut plan = default_views(&l)
@@ -260,6 +295,7 @@ mod tests {
             id: GlobalId::new(),
             name: "a.dxf".into(),
             format: "dxf".into(),
+            source: None,
             offset_mm: [1000.0, 500.0],
             rotation_deg: 0.0,
             visible: true,

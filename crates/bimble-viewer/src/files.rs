@@ -19,6 +19,9 @@ pub enum Purpose {
     Style,
     /// A reference plan (DXF, vector PDF; DWG is refused with a hint to convert it).
     Reference,
+    /// The same, offering DXF (and DWG, for the hint) or PDF only (Collaborate, #58).
+    ReferenceDxf,
+    ReferencePdf,
 }
 
 impl Purpose {
@@ -36,6 +39,8 @@ impl Purpose {
                 "Reference plan",
                 &["dxf", "DXF", "pdf", "PDF", "dwg", "DWG"],
             ),
+            Purpose::ReferenceDxf => ("DXF plan", &["dxf", "DXF", "dwg", "DWG"]),
+            Purpose::ReferencePdf => ("PDF plan", &["pdf", "PDF"]),
         }
     }
 }
@@ -158,8 +163,8 @@ impl Files {
         let _ = self.tx.send(p);
     }
 
-    /// Where files come from outside the viewer (a model named in the page's address).
-    #[cfg(target_arch = "wasm32")]
+    /// Where files come from outside the dialogs (a model named in the page's address, a
+    /// recent file on Home).
     pub fn sender(&self) -> Sender<Picked> {
         self.tx.clone()
     }

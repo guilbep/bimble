@@ -20,11 +20,14 @@ use bimble_ifc::read::Progress;
 use web_time::Instant;
 
 mod big;
+mod collab;
 mod cutlines;
 mod edit;
 mod files;
+mod home;
 mod icons;
 mod layout;
+mod links;
 mod materials_page;
 mod measure;
 mod project_page;
@@ -40,6 +43,7 @@ mod ui_theme;
 mod viewcube;
 mod viewing;
 mod views;
+mod visibility;
 
 const SAMPLES: u32 = 4;
 /// While moving on a slow machine, a far cell's stand-in is drawn when its error spans at most
@@ -914,6 +918,31 @@ struct Viewer {
     settings: settings::Settings,
     settings_window: bool,
     about_window: bool,
+    /// Manage links (#58).
+    links_window: bool,
+    /// Home (#52) over the main view.
+    home_open: bool,
+    /// Recent files' previews, read once (#52); None: none on disk.
+    previews: std::collections::HashMap<String, Option<egui::TextureHandle>>,
+    /// The file whose preview to keep once its first picture is drawn.
+    preview_for: Option<String>,
+    /// When this model last synchronized (or was opened shared): the reminder (ADR 0038).
+    synced_at: Option<Instant>,
+    /// What the last Synchronize or Shared folder… said.
+    collab_message: Option<String>,
+    /// Elements added to the selection with Ctrl/Cmd (#54), besides `selected`.
+    also_selected: BTreeSet<usize>,
+    /// Hidden in the active view by GlobalId, or all but these (#54; saved with the view).
+    hidden_ids: BTreeSet<String>,
+    isolated_ids: BTreeSet<String>,
+    /// Hidden or isolated for now (#54).
+    temporary: Option<visibility::Temporary>,
+    /// Reveal hidden: what is hidden by element is drawn, marked, and can be picked (#54).
+    reveal_hidden: bool,
+    /// A reference plan being reloaded from another file: its id (the new lines replace it).
+    reference_replace: Option<bimble_core::GlobalId>,
+    /// A linked model being reloaded from another file: its index (the new one replaces it).
+    relink: Option<usize>,
     /// What a load had to say (an IFC import's report), shown until closed.
     report: Option<(PathBuf, Vec<String>)>,
     /// Browser: meshing the chosen part, on a later frame (after "Loading…" is drawn).
@@ -1046,6 +1075,19 @@ impl Viewer {
             settings: settings::Settings::load(),
             settings_window: false,
             about_window: false,
+            links_window: false,
+            home_open: false,
+            previews: Default::default(),
+            preview_for: None,
+            synced_at: None,
+            collab_message: None,
+            also_selected: BTreeSet::new(),
+            hidden_ids: BTreeSet::new(),
+            isolated_ids: BTreeSet::new(),
+            temporary: None,
+            reveal_hidden: false,
+            reference_replace: None,
+            relink: None,
             report: None,
             mesh_later: None,
             views: Vec::new(),
@@ -1183,7 +1225,9 @@ impl Viewer {
                 return;
             }
             match p.purpose {
-                files::Purpose::Reference => self.add_reference(p),
+                files::Purpose::Reference
+                | files::Purpose::ReferenceDxf
+                | files::Purpose::ReferencePdf => self.add_reference(p),
                 files::Purpose::Open | files::Purpose::Link => self.open_picked(p, ctx),
                 files::Purpose::ImportIfc => self.import_picked(p, ctx),
                 files::Purpose::PlanTemplate => {
@@ -1369,9 +1413,15 @@ impl Viewer {
                     matched_here,
                     matched_there,
                 };
-                // The same file linked again replaces the old link.
+                // Reloaded from another file: in the old one's place. The same file linked
+                // again replaces the old link.
                 let name = k.name();
-                match self.links.iter().position(|x| x.name() == name) {
+                let at = self
+                    .relink
+                    .take()
+                    .filter(|&i| i < self.links.len())
+                    .or_else(|| self.links.iter().position(|x| x.name() == name));
+                match at {
                     Some(i) => self.links[i] = k,
                     None => self.links.push(k),
                 }
@@ -1469,11 +1519,24 @@ impl Viewer {
                     proxies: None,
                 });
                 self.history_view = None;
+                self.collab_message = None;
+                self.home_open = false;
+                self.start_borrowing();
+                // Home lists it (the desktop: a file on disk).
+                if let Some(l) = &self.loaded
+                    && l.path.is_absolute()
+                    && l.path.exists()
+                {
+                    self.settings.opened(&l.path.display().to_string());
+                    self.settings.save();
+                    self.preview_for = Some(l.path.display().to_string());
+                }
                 self.hidden_classes.clear();
                 self.hidden_storeys.clear();
                 self.hidden_categories.clear();
-                self.selected = None;
-                self.needs_upload = true;
+                self.clear_selection();
+                self.temporary = None;
+                self.reveal_hidden = false;
                 self.fit_pending = true;
                 self.set_hovered(None);
                 // A linked model and a box from the previous model mean nothing for this one.
@@ -1556,6 +1619,8 @@ impl Viewer {
         (l.classes, l.storeys, l.categories) = counts(&l.scene);
         l.bounds = bounds_with_links(&l.scene, &self.links);
         self.selected = keep.and_then(|g| l.scene.elements.iter().position(|e| e.global_id == g));
+        // Indices may have moved: the added ones are dropped (the clicked one is kept by id).
+        self.also_selected.clear();
         self.hovered = None;
         self.hover_gpu = None;
         self.hover_at = None;
@@ -1653,6 +1718,7 @@ impl Viewer {
 
     fn history_panel(&mut self, ui: &mut egui::Ui) {
         use bimble_core::repo::Repo;
+        let author = self.settings.author();
         let Some(l) = self.loaded.as_mut() else {
             return;
         };
@@ -1663,10 +1729,6 @@ impl Viewer {
         let Some(v) = &self.history_view else {
             return;
         };
-        let author = std::env::var("BIMBLE_AUTHOR")
-            .or_else(|_| std::env::var("USER"))
-            .or_else(|_| std::env::var("USERNAME"))
-            .unwrap_or_else(|_| "unknown".into());
         let now = bimble_core::date::now_secs();
         let mut refresh = false;
         let mut reload: Option<bimble_core::Model> = None;
@@ -1947,6 +2009,7 @@ impl Viewer {
         !self.hidden_categories.contains(&e.category)
             && !self.hidden_classes.contains(&e.class)
             && !self.hidden_storeys.contains(&e.storey)
+            && (self.reveal_hidden || !self.hidden_element(i))
     }
 
     fn upload(&mut self) {
@@ -1986,11 +2049,16 @@ impl Viewer {
         self.hover_at = None;
         let comparing = compare.is_some();
         let here = compare.map(|c| &self.links[c].matched_here);
+        let selection = self.selection();
         let style = |i: usize, _: &bimble_geom::SceneElement| {
             if !self.visible(i) {
                 Style::Hidden
-            } else if self.selected == Some(i) {
+            } else if selection.contains(&i) {
                 Style::Selected
+            } else if self.reveal_hidden && self.hidden_element(i) {
+                // Revealed: in the comparison's colour (a slot of its own would change the
+                // graphic style's format).
+                Style::OnlyHere
             } else if comparing && here.is_some_and(|m| !m.get(i).copied().unwrap_or(true)) {
                 Style::OnlyHere
             } else {
@@ -2631,8 +2699,14 @@ impl Viewer {
                 (Some(h), None) => (Some(h.element), None),
                 (None, None) => (None, None),
             };
-            if hit != self.selected {
+            // Ctrl/Cmd adds to the selection or takes out of it (#54).
+            if ui_add_to_selection(resp) {
+                if let Some(h) = hit {
+                    self.toggle_selected(h);
+                }
+            } else if hit != self.selected || !self.also_selected.is_empty() {
                 self.selected = hit;
+                self.also_selected.clear();
                 self.needs_upload = true;
             }
             self.select_link_element(link_hit);
@@ -2666,11 +2740,16 @@ impl Viewer {
             if save {
                 self.save();
             }
-            if del
-                && let (Some(i), Some(l)) = (self.selected, &self.loaded)
-                && let Ok(id) = l.scene.elements[i].global_id.parse()
-            {
-                self.apply_commands(edit::delete(&[id]));
+            // Delete: every selected element.
+            if del && let Some(l) = &self.loaded {
+                let ids: Vec<bimble_core::GlobalId> = self
+                    .selection()
+                    .iter()
+                    .filter_map(|&k| l.scene.elements[k].global_id.parse().ok())
+                    .collect();
+                if !ids.is_empty() {
+                    self.apply_commands(edit::delete(&ids));
+                }
             }
         }
         // An IFC model's views are saved to their side file.
@@ -2736,8 +2815,8 @@ impl Viewer {
             self.hover_snap = None;
             handled = true;
         }
-        if !handled && esc && self.selected.take().is_some() {
-            self.needs_upload = true;
+        if !handled && esc && self.selected.is_some() {
+            self.clear_selection();
         }
         if !handled && esc {
             self.select_link_element(None);
@@ -3528,7 +3607,15 @@ impl Viewer {
                 self.hidden_classes.len(),
                 self.hidden_storeys.len(),
                 hidden_links,
+                self.hidden_ids.len(),
+                self.isolated_ids.len(),
             ],
+            temporary: self
+                .temporary
+                .as_ref()
+                .map(|t| (t.isolate, t.elements.len())),
+            revealing: self.reveal_hidden,
+            sync_due: self.sync_due(),
             measurements: self.dimensions.len(),
             plan_options_changed: self.plan.template != self.template_baseline,
             model_dirty: ed.is_some_and(|e| e.dirty),
@@ -3558,6 +3645,12 @@ impl Viewer {
             Chip::HatchingOff => self.run_action(ribbon::Action::Hatching, ctx),
             Chip::Orthographic => self.run_action(ribbon::Action::Orthographic, ctx),
             Chip::Hidden => self.show_all_in_view(),
+            Chip::Temporary => {
+                self.temporary = None;
+                self.needs_upload = true;
+            }
+            Chip::Revealing => self.run_action(ribbon::Action::RevealHidden, ctx),
+            Chip::SyncDue => self.run_collab(ribbon::Action::Synchronize),
             Chip::Measurements => {
                 self.dimensions.clear();
                 self.measure_first = None;
@@ -3766,6 +3859,24 @@ impl Viewer {
     }
 
     /// Settings → Appearance: theme, font and text size of the interface (issue #53).
+    /// Settings → You (#52): who you are, until there is a server to sign in to.
+    fn you_ui(&mut self, ui: &mut egui::Ui) {
+        ui.strong("You");
+        egui::Grid::new("you").num_columns(2).show(ui, |ui| {
+            ui.label("Name");
+            ui.text_edit_singleline(&mut self.settings.user_name);
+            ui.end_row();
+            ui.label("E-mail");
+            ui.text_edit_singleline(&mut self.settings.user_email);
+            ui.end_row();
+        });
+        ui.weak(format!(
+            "Written as the author of commits and on the elements you borrow: {}",
+            self.settings.author()
+        ));
+        ui.add_space(8.0);
+    }
+
     fn appearance_ui(&mut self, ui: &mut egui::Ui) {
         ui.strong("Appearance");
         egui::Grid::new("appearance").num_columns(2).show(ui, |ui| {
@@ -3865,6 +3976,7 @@ impl Viewer {
             .collapsible(false)
             .default_width(380.0)
             .show(ctx, |ui| {
+                self.you_ui(ui);
                 self.appearance_ui(ui);
                 ui.add_space(8.0);
                 ui.strong("Memory for one model");
@@ -4274,7 +4386,13 @@ impl Viewer {
                 .global_id
                 .parse::<bimble_core::GlobalId>()
         {
-            ed.element_panel(ui, id);
+            let group: Vec<bimble_core::GlobalId> = self
+                .selected
+                .into_iter()
+                .chain(self.also_selected.iter().copied())
+                .filter_map(|k| l.scene.elements[k].global_id.parse().ok())
+                .collect();
+            ed.element_panel(ui, id, &group);
             if let Some(m) = &ed.message {
                 ui.label(m);
             }
@@ -4473,8 +4591,7 @@ impl eframe::App for Viewer {
                                 }
                             } else if self.selected.is_some() {
                                 if ui.small_button("Back to the view").clicked() {
-                                    self.selected = None;
-                                    self.needs_upload = true;
+                                    self.clear_selection();
                                 } else {
                                     self.properties(ui);
                                 }
@@ -4552,13 +4669,9 @@ impl eframe::App for Viewer {
             if self.loaded.is_none() && self.loading.is_some() {
                 return;
             }
-            if self.loaded.is_none() {
-                ui.centered_and_justified(|ui| {
-                    let msg = self.error.clone().unwrap_or_else(|| {
-                        "Open an IFC or .bimble file (button above), or drop one on this window.".into()
-                    });
-                    ui.label(msg);
-                });
+            // Home (#52): when nothing is open, or asked for.
+            if self.loaded.is_none() || self.home_open {
+                self.home_ui(ui);
                 return;
             }
             // The material browser: it takes the main view.
@@ -4601,7 +4714,10 @@ impl eframe::App for Viewer {
                 }
             }
             let ppp = ctx.pixels_per_point();
-            let size_px = ((rect.width() * ppp).round().max(1.0) as u32, (rect.height() * ppp).round().max(1.0) as u32);
+            let size_px = (
+                (rect.width() * ppp).round().max(1.0) as u32,
+                (rect.height() * ppp).round().max(1.0) as u32,
+            );
             self.render_view(size_px, ppp);
             let shown = match (&self.lean, self.lean_shown) {
                 (Some((_, _, id)), true) => Some(*id),
@@ -4622,9 +4738,34 @@ impl eframe::App for Viewer {
                     );
                 }
                 self.handle_view_input(ui, &resp);
-                if let (true, false, Some(mut b), Some(l)) =
-                    (self.section_on, self.in_2d(), self.section_box, &self.loaded)
-                {
+                // Right click (not while measuring or placing): hide, isolate, reveal (#54). An
+                // element right-clicked outside the selection becomes the selection (Revit).
+                let placing = self
+                    .loaded
+                    .as_ref()
+                    .and_then(|l| l.edit.as_ref())
+                    .is_some_and(|e| e.placing.is_some());
+                if !self.measure_on && !placing {
+                    if resp.secondary_clicked()
+                        && let Some(h) = self.hovered
+                        && !self.selection().contains(&h)
+                    {
+                        self.selected = Some(h);
+                        self.also_selected.clear();
+                        self.needs_upload = true;
+                    }
+                    let mut run = None;
+                    resp.context_menu(|ui| self.visibility_menu(ui, &mut run));
+                    if let Some(a) = run {
+                        self.run_action(a, &ctx);
+                    }
+                }
+                if let (true, false, Some(mut b), Some(l)) = (
+                    self.section_on,
+                    self.in_2d(),
+                    self.section_box,
+                    &self.loaded,
+                ) {
                     let vp = self.camera.view_proj(aspect, &l.bounds);
                     let a = self.opts.style.selection.0;
                     let accent = Color32::from_rgb(a[0], a[1], a[2]);
@@ -4691,6 +4832,9 @@ impl eframe::App for Viewer {
         self.ask_ui(&ctx);
         self.settings_ui(&ctx);
         self.about_ui(&ctx);
+        self.links_ui(&ctx);
+        self.belongs_ui(&ctx);
+        self.keep_preview();
         self.report_ui(&ctx);
     }
 }
@@ -4698,6 +4842,11 @@ impl eframe::App for Viewer {
 /// Today's date (UTC) as YYYY-MM-DD, for title blocks.
 fn today() -> String {
     bimble_drawing::today()
+}
+
+/// A click that adds to the selection, or takes out of it: with Ctrl (Cmd on macOS).
+fn ui_add_to_selection(resp: &egui::Response) -> bool {
+    resp.ctx.input(|i| i.modifiers.command)
 }
 
 #[cfg(test)]

@@ -13,8 +13,10 @@ use bimble_core::GlobalId;
 /// The ribbon's tabs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum Tab {
-    /// What the project is and its links (#51); settings are in the File menu.
+    /// What the project is (#51).
     Project,
+    /// Links to other files (IFC, DXF, PDF) and, later, working together (#58, ADR 0038).
+    Collaborate,
     #[default]
     Model,
     Annotate,
@@ -24,8 +26,9 @@ pub(crate) enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [
+    pub const ALL: [Tab; 7] = [
         Tab::Project,
+        Tab::Collaborate,
         Tab::Model,
         Tab::Annotate,
         Tab::View,
@@ -36,6 +39,7 @@ impl Tab {
     pub fn label(self) -> &'static str {
         match self {
             Tab::Project => "Project",
+            Tab::Collaborate => "Collaborate",
             Tab::Model => "Model",
             Tab::Annotate => "Annotate",
             Tab::View => "View",
@@ -76,7 +80,28 @@ pub(crate) enum Action {
     CloseSheet,
     SheetTool(layout::Tool),
     LinkModel,
-    ReferencePlan,
+    /// A reference plan in the open plan or section, from a DXF (#58).
+    LinkDxf,
+    /// The same from a vector PDF.
+    LinkPdf,
+    /// Every link, grouped by file type: delete, reload, reload from (#58).
+    ManageLinks,
+    /// Hide or isolate the selection for now (#54).
+    HideNow,
+    IsolateNow,
+    /// Hide or isolate the selection in the view, saved with it (#54).
+    HideInView,
+    IsolateInView,
+    /// Show the selected hidden elements again (with Reveal hidden on).
+    Unhide,
+    /// Draw what is hidden by element, marked, to pick and unhide it.
+    RevealHidden,
+    /// The folder the history is shared through (ADR 0038).
+    SharedFolder,
+    /// Save, commit, fetch, merge, push, give back the borrowed elements (ADR 0038).
+    Synchronize,
+    /// The start panel (#52): recent files, open, who you are.
+    Home,
     Standards,
     Project,
     Materials,
@@ -88,7 +113,7 @@ pub(crate) enum Action {
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 36] = [
+pub(crate) const ALL_ACTIONS: [Action; 47] = [
     Action::Open,
     Action::ImportIfc,
     Action::ConvertOpen,
@@ -119,7 +144,18 @@ pub(crate) const ALL_ACTIONS: [Action; 36] = [
     Action::NewSheet,
     Action::CloseSheet,
     Action::LinkModel,
-    Action::ReferencePlan,
+    Action::LinkDxf,
+    Action::LinkPdf,
+    Action::ManageLinks,
+    Action::HideNow,
+    Action::IsolateNow,
+    Action::HideInView,
+    Action::IsolateInView,
+    Action::Unhide,
+    Action::RevealHidden,
+    Action::SharedFolder,
+    Action::Synchronize,
+    Action::Home,
     Action::Standards,
     Action::Project,
     Action::Materials,
@@ -158,8 +194,19 @@ impl Action {
                 layout::Tool::Text => "Sheet: text".into(),
                 layout::Tool::Dimension => "Sheet: dimension".into(),
             },
-            Action::LinkModel => "Link a model…".into(),
-            Action::ReferencePlan => "Reference plan (DXF, PDF)…".into(),
+            Action::LinkModel => "Link IFC…".into(),
+            Action::LinkDxf => "Link DXF…".into(),
+            Action::LinkPdf => "Link PDF…".into(),
+            Action::ManageLinks => "Manage links…".into(),
+            Action::HideNow => "Hide for now".into(),
+            Action::IsolateNow => "Isolate for now".into(),
+            Action::HideInView => "Hide in view".into(),
+            Action::IsolateInView => "Isolate in view".into(),
+            Action::Unhide => "Unhide in view".into(),
+            Action::RevealHidden => "Reveal hidden".into(),
+            Action::SharedFolder => "Shared folder…".into(),
+            Action::Synchronize => "Synchronize".into(),
+            Action::Home => "Home".into(),
             Action::Standards => "Graphic standards".into(),
             Action::Project => "Project information".into(),
             Action::Materials => "Materials".into(),
@@ -197,6 +244,7 @@ impl Action {
             | Action::ShareForViewing
             | Action::Settings
             | Action::About
+            | Action::Home
             | Action::Save => {
                 return "File";
             }
@@ -215,7 +263,19 @@ impl Action {
             | Action::Fit
             | Action::Top => Tab::View,
             Action::OnPaper | Action::NewSheet | Action::CloseSheet => Tab::Sheets,
-            Action::Project | Action::LinkModel | Action::ReferencePlan => Tab::Project,
+            Action::Project => Tab::Project,
+            Action::HideNow
+            | Action::IsolateNow
+            | Action::HideInView
+            | Action::IsolateInView
+            | Action::Unhide
+            | Action::RevealHidden => Tab::View,
+            Action::LinkModel
+            | Action::LinkDxf
+            | Action::LinkPdf
+            | Action::ManageLinks
+            | Action::SharedFolder
+            | Action::Synchronize => Tab::Collaborate,
             Action::Standards | Action::Materials | Action::History => Tab::Manage,
         };
         tab.label()
@@ -328,11 +388,23 @@ impl Viewer {
             Action::Undo => self.undo_text(true).is_some(),
             Action::Redo => self.undo_text(false).is_some(),
             Action::Place(_) | Action::History => self.editable(),
-            Action::Settings | Action::About => true,
+            Action::Settings | Action::About | Action::Home => true,
             Action::Orthographic | Action::SectionBox | Action::Top => loaded && !flat,
             Action::BoxToSelection => loaded && !flat && self.section_on,
             Action::SheetTool(_) | Action::CloseSheet => self.layout.is_some(),
-            Action::ReferencePlan => loaded && flat,
+            Action::LinkDxf | Action::LinkPdf => loaded && flat,
+            Action::ManageLinks | Action::RevealHidden => loaded,
+            // The history lives next to the file: the desktop, a .bimble model.
+            Action::SharedFolder | Action::Synchronize => {
+                cfg!(not(target_arch = "wasm32"))
+                    && self.loaded.as_ref().is_some_and(|l| l.edit.is_some())
+            }
+            Action::HideNow | Action::IsolateNow | Action::HideInView | Action::IsolateInView => {
+                self.selected.is_some()
+            }
+            Action::Unhide => {
+                self.selected.is_some() && self.selection().iter().any(|&i| self.hidden_element(i))
+            }
             _ => loaded,
         }
     }
@@ -364,6 +436,8 @@ impl Viewer {
             Action::History => self.history_window,
             Action::Settings => self.settings_window,
             Action::About => self.about_window,
+            Action::RevealHidden => self.reveal_hidden,
+            Action::Home => self.home_open,
             _ => false,
         }
     }
@@ -461,10 +535,34 @@ impl Viewer {
                     l.tool = t;
                 }
             }
-            Action::LinkModel => self.files.pick(files::Purpose::Link, ctx),
-            Action::ReferencePlan => {
+            Action::LinkModel => {
+                self.relink = None;
+                self.files.pick(files::Purpose::Link, ctx);
+            }
+            Action::LinkDxf | Action::LinkPdf => {
                 self.reference_view = self.active_view;
-                self.files.pick(files::Purpose::Reference, ctx);
+                self.reference_replace = None;
+                let purpose = if a == Action::LinkDxf {
+                    files::Purpose::ReferenceDxf
+                } else {
+                    files::Purpose::ReferencePdf
+                };
+                self.files.pick(purpose, ctx);
+            }
+            Action::ManageLinks => self.links_window = !self.links_window,
+            Action::HideNow
+            | Action::IsolateNow
+            | Action::HideInView
+            | Action::IsolateInView
+            | Action::Unhide => self.hide_or_isolate(a),
+            Action::RevealHidden => {
+                self.reveal_hidden = !self.reveal_hidden;
+                self.needs_upload = true;
+            }
+            Action::SharedFolder | Action::Synchronize => self.run_collab(a),
+            Action::Home => {
+                self.close_pages();
+                self.home_open = !self.home_open;
             }
             Action::Standards => self.standards_open = !self.standards_open,
             Action::Project => {
@@ -521,6 +619,9 @@ impl Viewer {
                 .clicked()
             {
                 run = Some(Action::About);
+            }
+            if self.icon_button(ui, Action::Home, "Home: recent files, open, who you are") {
+                run = Some(Action::Home);
             }
             ui.add_space(th::GAP_M);
             self.file_menu(ui, &mut run);
@@ -637,7 +738,12 @@ impl Viewer {
                     Action::Save,
                 ],
                 &[Action::ShareForViewing],
-                &[Action::LinkModel, Action::ReferencePlan],
+                &[
+                    Action::LinkModel,
+                    Action::LinkDxf,
+                    Action::LinkPdf,
+                    Action::ManageLinks,
+                ],
                 &[Action::OnPaper],
                 &[Action::Project, Action::Settings, Action::About],
             ];
@@ -807,19 +913,32 @@ impl Viewer {
                     &[(Action::Project, "Project information")],
                     &mut run,
                 );
+            }
+            Tab::Collaborate => {
                 self.group(
                     ui,
                     "Links",
                     &[
-                        (Action::LinkModel, "Model…"),
-                        (Action::ReferencePlan, "Reference plan…"),
+                        (Action::LinkModel, "Link IFC"),
+                        (Action::LinkDxf, "Link DXF"),
+                        (Action::LinkPdf, "Link PDF"),
+                        (Action::ManageLinks, "Manage links"),
                     ],
                     &mut run,
                 );
-                ui.weak(format!(
-                    "{} linked model(s): display and differences under Links, left",
-                    self.links.len()
-                ));
+                self.group(
+                    ui,
+                    "Work together",
+                    &[
+                        (Action::SharedFolder, "Shared folder"),
+                        (Action::Synchronize, "Synchronize"),
+                    ],
+                    &mut run,
+                );
+                if let Some(m) = &self.collab_message {
+                    let first = m.lines().next().unwrap_or_default();
+                    ui.weak(first).on_hover_text(m);
+                }
             }
             Tab::Model => {
                 let k = |k: edit::Kind| (Action::Place(k), k.label());
@@ -892,6 +1011,19 @@ impl Viewer {
                     &[(Action::Fit, "Fit all"), (Action::Top, "Top")],
                     &mut run,
                 );
+                self.group(
+                    ui,
+                    "Visibility (also on a right click)",
+                    &[
+                        (Action::HideNow, "Hide"),
+                        (Action::IsolateNow, "Isolate"),
+                        (Action::HideInView, "Hide in view"),
+                        (Action::IsolateInView, "Isolate in view"),
+                        (Action::RevealHidden, "Reveal hidden"),
+                        (Action::Unhide, "Unhide"),
+                    ],
+                    &mut run,
+                );
             }
             Tab::Sheets => {
                 self.group(
@@ -916,6 +1048,8 @@ impl Viewer {
                 if cfg!(not(target_arch = "wasm32")) {
                     self.group(ui, "Versions", &[(Action::History, "History")], &mut run);
                 }
+                // Also in the File menu (#58: the office looks for it here).
+                self.group(ui, "Settings", &[(Action::Settings, "Settings")], &mut run);
             }
         });
         if let Some(a) = run {

@@ -82,6 +82,54 @@ ENDSEC;
 END-ISO-10303-21;
 "#;
 
+/// Every kind of property value comes in as text (#57): measures (the number as written),
+/// lists and enumerations, bounded values, quantity sets; empty values are no loss.
+#[test]
+fn every_property_kind_is_imported() {
+    let extra = "\
+#70=IFCPROPERTYSINGLEVALUE('Width',$,IFCLENGTHMEASURE(300.),$);
+#71=IFCPROPERTYSINGLEVALUE('Area',$,IFCAREAMEASURE(12.5),$);
+#72=IFCPROPERTYSINGLEVALUE('Angle',$,IFCPLANEANGLEMEASURE(90.),$);
+#73=IFCPROPERTYSINGLEVALUE('Count',$,IFCCOUNTMEASURE(4),$);
+#74=IFCPROPERTYSINGLEVALUE('Empty',$,$,$);
+#75=IFCPROPERTYLISTVALUE('Layers',$,(IFCLABEL('A'),IFCLABEL('B')),$);
+#76=IFCPROPERTYENUMERATEDVALUE('Status',$,(IFCLABEL('NEW')),$);
+#77=IFCPROPERTYBOUNDEDVALUE('Range',$,IFCLENGTHMEASURE(20.),IFCLENGTHMEASURE(10.),$,$);
+#78=IFCPROPERTYSET('3MrcuFTa90SfJXy$ZbCd1A',$,'Pset_Extra',$,(#70,#71,#72,#73,#74,#75,#76,#77));
+#79=IFCRELDEFINESBYPROPERTIES('3MrcuFTa90SfJXy$ZbCd1B',$,$,$,(#22),#78);
+#80=IFCQUANTITYLENGTH('Length',$,$,4000.,$);
+#81=IFCQUANTITYVOLUME('NetVolume',$,$,2.16,$);
+#82=IFCELEMENTQUANTITY('3MrcuFTa90SfJXy$ZbCd1C',$,'Qto_WallBaseQuantities',$,$,(#80,#81));
+#83=IFCRELDEFINESBYPROPERTIES('3MrcuFTa90SfJXy$ZbCd1D',$,$,$,(#22),#82);
+ENDSEC;";
+    // The data section's ENDSEC (the header has one too).
+    let text = REVIT_STYLE.replace("ENDSEC;\nEND-ISO", &format!("{extra}\nEND-ISO"));
+    let (m, report) = import(&text);
+    let e = m
+        .elements
+        .values()
+        .find(|e| e.properties.contains_key("Mark"))
+        .unwrap();
+    let p = |k: &str| e.properties.get(k).map(String::as_str);
+    assert_eq!(p("Pset_Extra/Width"), Some("300"));
+    assert_eq!(p("Pset_Extra/Area"), Some("12.5"));
+    assert_eq!(p("Pset_Extra/Angle"), Some("90"));
+    assert_eq!(p("Pset_Extra/Count"), Some("4"));
+    assert_eq!(p("Pset_Extra/Empty"), None);
+    assert_eq!(p("Pset_Extra/Layers"), Some("A; B"));
+    assert_eq!(p("Pset_Extra/Status"), Some("NEW"));
+    assert_eq!(p("Pset_Extra/Range"), Some("10–20"));
+    assert_eq!(p("Qto_WallBaseQuantities/Length"), Some("4000"));
+    assert_eq!(p("Qto_WallBaseQuantities/NetVolume"), Some("2.16"));
+    let lines = report.lines();
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains("not imported (unsupported kind)")),
+        "{lines:?}"
+    );
+}
+
 fn import(text: &str) -> (bimble_core::Model, bimble_ifc::import::ImportReport) {
     bimble_ifc::import::import_str(text).expect("import succeeds")
 }

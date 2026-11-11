@@ -363,7 +363,7 @@ pub fn resolve(
 }
 
 /// What is hidden in a view: material families (by label), IFC classes, storeys (by name),
-/// linked models (by file name).
+/// linked models (by file name), elements (by GlobalId), or all but some elements (#54).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Visibility {
@@ -376,6 +376,12 @@ pub struct Visibility {
     /// Linked models hidden in this view, by file name (#39).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hidden_links: Vec<String>,
+    /// Elements hidden in this view, by GlobalId (Hide in view, #54).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden_elements: Vec<String>,
+    /// When not empty, only these elements are shown (Isolate in view, #54).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub isolated_elements: Vec<String>,
 }
 
 impl Visibility {
@@ -384,6 +390,8 @@ impl Visibility {
             && self.hidden_classes.is_empty()
             && self.hidden_storeys.is_empty()
             && self.hidden_links.is_empty()
+            && self.hidden_elements.is_empty()
+            && self.isolated_elements.is_empty()
     }
 }
 
@@ -399,6 +407,9 @@ pub struct Reference {
     pub name: String,
     /// "pdf" or "dxf".
     pub format: String,
+    /// Where it was read from, when known (a desktop path): Manage links reloads it from there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub offset_mm: [f64; 2],
     pub rotation_deg: f64,
     #[serde(default = "yes")]
@@ -684,6 +695,24 @@ mod tests {
         .to_vec()
     }
 
+    /// Hidden and isolated elements (#54) are saved with the view; a view written before them
+    /// reads, and one without any writes no new fields.
+    #[test]
+    fn element_visibility_is_saved_and_old_views_read() {
+        let old = r#"{"hidden_classes":["IfcSlab"]}"#;
+        let v: Visibility = serde_json::from_str(old).unwrap();
+        assert!(v.hidden_elements.is_empty() && v.isolated_elements.is_empty());
+        assert_eq!(serde_json::to_string(&v).unwrap(), old);
+        let v = Visibility {
+            hidden_elements: vec!["0a".into()],
+            isolated_elements: vec!["1b".into(), "2c".into()],
+            ..Default::default()
+        };
+        assert!(!v.is_empty());
+        let back: Visibility = serde_json::from_str(&serde_json::to_string(&v).unwrap()).unwrap();
+        assert_eq!(back, v);
+    }
+
     #[test]
     fn default_ranges_resolve_like_revit() {
         let l = levels();
@@ -803,6 +832,7 @@ mod tests {
             id: GlobalId::new(),
             name: "archi.dxf".into(),
             format: "dxf".into(),
+            source: None,
             offset_mm: [1000.0, 0.0],
             rotation_deg: 90.0,
             visible: true,
