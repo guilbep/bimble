@@ -44,7 +44,7 @@ The installers aren't signed by a paid certificate yet:
 ## Known limits
 
 - `.bimble` files saved by 0.12 and later can't be opened by 0.11 and older: upgrade together, or share `.json`.
-- Models with elements hidden or isolated in a view, or with a reference plan added since 0.13.2, can't be opened by 0.13.1 and older; models with materials hidden in a view, and graphic standards with materials moved to another family, can't be read by 0.13.2 and older: everyone working on a model upgrades together. Since 0.13.3 a model knows its place and project north (ADR 0045): models imported from a placed IFC, their shared-folder histories, and views set to true north can't be read by 0.13.2 and older; a `.bimbleview` still opens there, without its project north.
+- Models with elements hidden or isolated in a view, or with a reference plan added since 0.13.2, can't be opened by 0.13.1 and older; models with materials hidden in a view, and graphic standards with materials moved to another family (0.14), can't be read by 0.13 versions: everyone working on a model upgrades together. Since 0.14 a model knows its place and project north (ADR 0045): models imported from a placed IFC, their shared-folder histories, and views set to true north can't be read by 0.13.2 and older; a `.bimbleview` still opens there, without its project north.
 - Elements of other classes than columns, beams, walls, slabs and footings are moved, not edited by dimensions.
 - Working together (Collaborate → Shared folder, Synchronize): the desktop only; a conflict is settled for all elements at once (from the command line with `--prefer`), not element by element yet. Rights (view / annotate / model) aren't enforced yet.
 - Reference plans: DXF model space and the first page of a vector PDF; no text, hatches or scanned PDFs.
@@ -53,3 +53,20 @@ The installers aren't signed by a paid certificate yet:
 - On a machine whose graphics refuse a drawing step, Bimble turns that step off and says so in red: please report the message with your machine and system.
 
 ## Changes
+
+**Plans like Revit, Swiss coordinates (ADR 0045)**
+- Plans, ceiling plans and sections are drawn in **project north** (along the building), on screen and on paper; a view's **Orientation** can say true north. The building's turn is read from the IFC.
+- The **status bar** gives the coordinates of the point under the pointer in **LV95** (E 2'600'123.45 N 1'200'456.78), or in **WGS84** latitude and longitude (Settings → Coordinates).
+- Panning a plan no longer goes the wrong way; a section's camera turns when its direction changes.
+
+**Tabs and visibility (ADR 0044)**
+- Right-click a tab: Close, Close other tabs, Close all tabs (then Home).
+- Each family in the Visibility panel opens into its materials: hide one, or draw it as another family (saved in the graphic standards). A click on a family's colour opens it in the standards.
+- Sheets and PDFs leave out what a view hides by element or material.
+- Sizes read 12 kB, 99 MB, 3.4 GB.
+
+**Importing IFC (tested on 17 of the office's files, ADR 0010)**
+- Openings in slabs whose geometry is a hair from closed are cut (387 → 4 left in one file).
+- A wall clipped by a broken boundary is no longer 0.6 m too tall; walls whose clipping removed everything are back.
+- The same IFC imported twice gives the same model, byte for byte.
+- `pack` says the geometry warnings; `bimble info` works on a `.bimbleview`; a `.bimbleview` says what it leaves out.
