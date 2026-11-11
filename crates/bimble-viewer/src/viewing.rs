@@ -231,7 +231,9 @@ impl Viewer {
                     self.camera.mirror_x = mirror;
                     self.camera.orthographic = true;
                 } else {
+                    // The usual 3D angle, seen from the building's south-west (project north).
                     self.camera = Camera::default();
+                    self.camera.yaw += georef.plan_turn(false) as f32;
                 }
                 self.fit_pending = true;
             }
@@ -1247,7 +1249,7 @@ impl Viewer {
         let placed = match replacing {
             Some(old) => {
                 crate::views::reload_reference(old, r);
-                false
+                Placed::AsIs
             }
             None => {
                 let placed = self.place_reference(&v, &mut r);
@@ -1261,10 +1263,11 @@ impl Viewer {
                 self.view_note = Some(format!(
                     "Added {}: {notes}{}",
                     p.name,
-                    if placed {
-                        "; moved onto the model (its coordinates were elsewhere)"
-                    } else {
-                        ""
+                    match placed {
+                        Placed::AsIs => "",
+                        Placed::Survey => "; placed by its survey coordinates (LV95)",
+                        Placed::Centred =>
+                            "; its coordinates are elsewhere: centred on the model, upright",
                     }
                 ));
                 self.activate_view(id);
@@ -1273,13 +1276,100 @@ impl Viewer {
         }
     }
 
-    /// Keep a reference where its file puts it when that overlaps the model (shared project
-    /// coordinates); else centre it on the model. Returns whether it was moved.
-    fn place_reference(&self, v: &View, r: &mut Reference) -> bool {
-        let Some(l) = &self.loaded else { return false };
-        let Some(b) = ClipBox::around(&l.scene, |_| true) else {
-            return false;
+    /// Keep a reference where its file puts it when that overlaps the model (the same
+    /// coordinates: an LV95 DXF on a model drawn in LV95); else, in a plan of a model in its own
+    /// coordinates, where its survey coordinates say (IFC4 map conversion); else centre it on the
+    /// model, upright in the view (project north: turned with the building). ADR 0045.
+    fn place_reference(&self, v: &View, r: &mut Reference) -> Placed {
+        let placed = self.place_reference_by_coordinates(v, r);
+        if placed != Placed::Centred {
+            return placed;
+        }
+        // Upright in a turned plan: the file's up is the view's up.
+        if matches!(v.kind, ViewKind::Plan { .. })
+            && let Some(l) = &self.loaded
+        {
+            r.rotation_deg = (v.plan_turn(&l.scene.georef).to_degrees() * 1e6).round() / 1e6 + 0.0;
+        }
+        // Centred again, now turned.
+        if self.place_reference_by_coordinates(v, r) == Placed::AsIs {
+            return Placed::AsIs;
+        }
+        Placed::Centred
+    }
+
+    fn place_reference_by_coordinates(&self, v: &View, r: &mut Reference) -> Placed {
+        // A plan of a model in its own coordinates: try the reference's survey coordinates.
+        if matches!(v.kind, ViewKind::Plan { .. })
+            && let Some(l) = &self.loaded
+            && l.scene.georef.has_map()
+            && r.rotation_deg == 0.0
+            && r.offset_mm == [0.0, 0.0]
+        {
+            let (rot, off) = l.scene.georef.survey_plan_to_world();
+            let mut by_survey = r.clone();
+            by_survey.rotation_deg = rot;
+            by_survey.offset_mm = off;
+            if self.reference_overlaps(v, &by_survey) == Some(true) {
+                *r = by_survey;
+                return Placed::Survey;
+            }
+        }
+        match self.reference_overlaps(v, r) {
+            Some(true) | None => Placed::AsIs,
+            Some(false) => {
+                self.centre_reference(v, r);
+                Placed::Centred
+            }
+        }
+    }
+
+    /// Whether a reference, placed as it is, overlaps the model in the view's plane (None: no
+    /// model or no lines).
+    fn reference_overlaps(&self, v: &View, r: &Reference) -> Option<bool> {
+        let (lo, hi) = self.model_in_view_plane(v)?;
+        let pts: Vec<[f64; 2]> = r.polylines.iter().flatten().map(|p| r.place(*p)).collect();
+        if pts.is_empty() {
+            return None;
+        }
+        let (mut rl, mut rh) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for p in &pts {
+            for k in 0..2 {
+                rl[k] = rl[k].min(p[k]);
+                rh[k] = rh[k].max(p[k]);
+            }
+        }
+        let grow = |a: f64, b: f64| (b - a) * 0.5;
+        Some(
+            (0..2).all(|k| {
+                rl[k] <= hi[k] + grow(lo[k], hi[k]) && rh[k] >= lo[k] - grow(lo[k], hi[k])
+            }),
+        )
+    }
+
+    /// Move a reference so its middle is the model's (in the view's plane), its turn kept.
+    fn centre_reference(&self, v: &View, r: &mut Reference) {
+        let Some((lo, hi)) = self.model_in_view_plane(v) else {
+            return;
         };
+        let pts: Vec<[f64; 2]> = r.polylines.iter().flatten().map(|p| r.place(*p)).collect();
+        let (mut rl, mut rh) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for p in &pts {
+            for k in 0..2 {
+                rl[k] = rl[k].min(p[k]);
+                rh[k] = rh[k].max(p[k]);
+            }
+        }
+        for k in 0..2 {
+            r.offset_mm[k] =
+                (r.offset_mm[k] + (lo[k] + hi[k]) / 2.0 - (rl[k] + rh[k]) / 2.0).round();
+        }
+    }
+
+    /// The model's box in the view's plane (world mm): x, y in a plan; along, up in a section.
+    fn model_in_view_plane(&self, v: &View) -> Option<([f64; 2], [f64; 2])> {
+        let l = self.loaded.as_ref()?;
+        let b = ClipBox::around(&l.scene, |_| true)?;
         let o = l.scene.origin_mm;
         // The model's box in the view's plane (world mm).
         let (lo, hi) = match &v.kind {
@@ -1304,27 +1394,7 @@ impl Viewer {
                 [b.max.x as f64 + o[0], b.max.y as f64 + o[1]],
             ),
         };
-        let pts: Vec<[f64; 2]> = r.polylines.iter().flatten().copied().collect();
-        if pts.is_empty() {
-            return false;
-        }
-        let (mut rl, mut rh) = ([f64::MAX; 2], [f64::MIN; 2]);
-        for p in &pts {
-            for k in 0..2 {
-                rl[k] = rl[k].min(p[k]);
-                rh[k] = rh[k].max(p[k]);
-            }
-        }
-        let grow = |a: f64, b: f64| (b - a) * 0.5;
-        let overlaps = (0..2)
-            .all(|k| rl[k] <= hi[k] + grow(lo[k], hi[k]) && rh[k] >= lo[k] - grow(lo[k], hi[k]));
-        if overlaps {
-            return false;
-        }
-        for k in 0..2 {
-            r.offset_mm[k] = ((lo[k] + hi[k]) / 2.0 - (rl[k] + rh[k]) / 2.0).round();
-        }
-        true
+        Some((lo, hi))
     }
 
     // ---------------------------------------------------------------- references in the view
@@ -1671,4 +1741,15 @@ mod side_file_tests {
             "{w:?}"
         );
     }
+}
+
+/// How a new reference plan was placed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Placed {
+    /// Where its file says: the model's own coordinates.
+    AsIs,
+    /// By its survey coordinates, through the model's map conversion.
+    Survey,
+    /// Its coordinates are elsewhere: centred on the model, upright in the view.
+    Centred,
 }

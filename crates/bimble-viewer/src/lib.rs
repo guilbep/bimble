@@ -3236,15 +3236,18 @@ impl Viewer {
         let accent = Color32::from_rgb(a[0], a[1], a[2]);
         // 2D views are seen square on: no cube, no Home.
         let flat = self.in_2d();
+        // The cube and its compass are the building's (project north, ADR 0045): its FRONT is the
+        // building's south side, as in Revit.
+        let north = self.project_north();
         let action = if flat {
             viewcube::Action::None
         } else {
-            viewcube::show(ui, cube, self.camera.yaw, self.camera.pitch, accent)
+            viewcube::show(ui, cube, self.camera.yaw - north, self.camera.pitch, accent)
         };
         match action {
             viewcube::Action::Look(d) => {
-                let (yaw, pitch) = viewcube::orientation(d, self.camera.yaw);
-                self.turn_to(yaw, pitch);
+                let (yaw, pitch) = viewcube::orientation(d, self.camera.yaw - north);
+                self.turn_to(yaw + north, pitch);
             }
             viewcube::Action::Orbit(d) => {
                 self.turn = None;
@@ -3273,7 +3276,7 @@ impl Viewer {
         };
         if !flat && button(ui, "Home", "Default 3D view of everything visible") {
             let d = Camera::default();
-            self.turn_to(d.yaw, d.pitch);
+            self.turn_to(d.yaw + north, d.pitch);
             self.fit(aspect);
         }
         if button(

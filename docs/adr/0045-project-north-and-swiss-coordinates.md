@@ -1,6 +1,6 @@
 # ADR 0045 — Project north and Swiss coordinates (LV95, WGS84)
 
-- Status: Accepted (11 Nov 2026)
+- Status: Accepted (11 Nov 2026); amended the same day (export, view cube, reference plans)
 - Decided by: Pierre ("do like Revit! it's for a Swiss team, so coordinates should be Swiss based,
   with an option for the most used one in the world"); details by Claude, reviewed by the advisor
 - Reversal cost: medium (an optional field on models, views and view files; plans and sections of
@@ -57,10 +57,23 @@ everyone can read is **WGS84** latitude and longitude (GPS, EPSG:4326).
 - Found while doing it: looking straight down, the camera ignored its yaw ("up" fixed to +Y)
   and panning was reversed in 2D views (its "right" came from a rounding error's sign). Up now
   comes from the yaw, panning uses the view's own axes (tests).
-- Not done: export writes elements in world coordinates and leaves the turn out (an IFC
-  exported by Bimble opens unturned; `IfcMapConversion` could carry it); the view cube's compass
-  still shows true north; reference plans keep world axes in a turned plan; UTM / State Plane
-  not offered (WGS84 covers "anyone can read it").
+- Not done at first (see the amendment): the turn on export, the view cube, reference plans in
+  a turned plan.
+
+## Amendment (Pierre: "fix the not done part, and align DXF/PDF reference plans")
+
+- **Export keeps the place and project north**: the building is placed turned by the building's
+  angle at a whole metre near the model, elements in its frame; IFC4 also gets IfcProjectedCRS and
+  IfcMapConversion. IfcOpenShell reads the elements at the same world positions; re-import gives
+  the same turn and survey system (IFC4 and IFC2x3, ADR 0047). A model with no place exports as
+  before.
+- **The view cube is the building's**: its faces and compass turn with project north (FRONT is the
+  building's south), as Revit's; the first 3D view and Home look from the building's south-west.
+- **Reference plans line up**: a DXF in the model's coordinates (an LV95 DXF on a model drawn in
+  LV95, the office's case) stays where it is, as before; on a model in its own coordinates (IFC4 map
+  conversion) it is placed by its survey coordinates; a plan whose coordinates are elsewhere (a PDF,
+  a local DXF) is centred on the model and turned upright in the project-north plan. The message
+  says which.
 
 ## Alternatives considered
 

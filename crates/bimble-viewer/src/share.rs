@@ -44,6 +44,43 @@ impl Viewer {
     }
 }
 
+impl Viewer {
+    /// File → Export IFC4… / IFC2x3…: the open .bimble model as IFC, in that schema.
+    pub(crate) fn export_ifc(&mut self, schema: bimble_ifc::Schema) {
+        let Some(l) = &self.loaded else { return };
+        let Some(ed) = &l.edit else {
+            self.view_message =
+                Some("Export IFC is for .bimble models: convert this one first".into());
+            return;
+        };
+        let stem = l
+            .path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "model".into());
+        let name = format!("{stem}.ifc");
+        let stamp = bimble_core::date::iso_utc(bimble_core::date::now_secs());
+        let text = bimble_ifc::export_as(&ed.model, &name, &stamp, schema);
+        let label = schema.label();
+        self.view_message = match files::save(
+            &name,
+            &[(&format!("{label} (.ifc)"), &["ifc"])],
+            text.as_bytes(),
+        ) {
+            Ok(Some(to)) => Some(match schema {
+                bimble_ifc::Schema::Ifc4 => format!("Saved {to} ({label})"),
+                bimble_ifc::Schema::Ifc2x3 => format!(
+                    "Saved {to} ({label}): material values (density, strength) and the map \
+                     conversion are not in IFC2x3; the place and project north are kept in \
+                     the building's placement"
+                ),
+            }),
+            Ok(None) => return,
+            Err(e) => Some(e),
+        };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bimble_geom::{Scene, codec::TOLERANCE_MM};

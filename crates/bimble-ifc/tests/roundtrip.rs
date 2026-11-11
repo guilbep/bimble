@@ -448,3 +448,62 @@ fn bare_property_keys_round_trip_unchanged() {
         assert_eq!(model.elements[&id].properties, m.elements[&id].properties);
     }
 }
+
+/// A placed model (ADR 0045): its project north and survey system come back, and every element
+/// is where it was. Before, the turn was dropped on export: a Bimble IFC opened unturned.
+#[test]
+fn place_and_project_north_round_trip() {
+    let mut m = concrete_frame(&Default::default());
+    m.georef = bimble_core::georef::Georef {
+        rotation_deg: 30.0,
+        crs: Some("EPSG:2056".into()),
+        ..Default::default()
+    };
+    let text = export(&m);
+    assert!(text.contains("IFCMAPCONVERSION(") && text.contains("'EPSG:2056'"));
+    let (back, _) = import(&text);
+    assert!(
+        (back.georef.rotation_deg - 30.0).abs() < 1e-6,
+        "{:?}",
+        back.georef
+    );
+    assert_eq!(back.georef.crs.as_deref(), Some("EPSG:2056"));
+    for (id, e) in &m.elements {
+        let b = &back.elements[id].placement;
+        for k in 0..3 {
+            assert!(
+                (b.origin[k] - e.placement.origin[k]).abs() < 1e-6,
+                "{id}: {b:?}"
+            );
+            assert!(
+                (b.x_axis[k] - e.placement.x_axis[k]).abs() < 1e-9,
+                "{id}: {b:?}"
+            );
+        }
+    }
+    // A model with no place exports as before: no map conversion, the building unturned.
+    assert!(!export(&concrete_frame(&Default::default())).contains("IFCMAPCONVERSION("));
+}
+
+/// A hollow section (an outline with a void) keeps its void through IFC, and the IFC is valid:
+/// before, a profile without voids was written as one "with voids" and an empty list (invalid),
+/// and one with voids lost them.
+#[test]
+fn a_void_in_a_profile_round_trips() {
+    let mut m = concrete_frame(&Default::default());
+    let id = *m.elements.keys().next().unwrap();
+    let square = |h: f64| vec![[-h, -h], [h, -h], [h, h], [-h, h]];
+    m.elements.get_mut(&id).unwrap().generator = Generator::ExtrudedPolygon {
+        outline: square(200.0),
+        voids: vec![square(150.0)],
+        height: 3000.0,
+    };
+    let text = export(&m);
+    assert!(text.contains("IFCARBITRARYPROFILEDEFWITHVOIDS("));
+    assert!(!text.contains(",())"), "no empty list of voids");
+    let (back, _) = import(&text);
+    let Generator::ExtrudedPolygon { voids, .. } = &back.elements[&id].generator else {
+        panic!("{:?}", back.elements[&id].generator)
+    };
+    assert_eq!(voids.len(), 1);
+}

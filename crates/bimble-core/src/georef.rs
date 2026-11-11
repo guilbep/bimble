@@ -69,6 +69,24 @@ impl Georef {
         ]
     }
 
+    /// Whether survey coordinates differ from world ones (an IFC4 map conversion).
+    pub fn has_map(&self) -> bool {
+        self.east_m != 0.0 || self.north_m != 0.0 || self.map_rotation_deg != 0.0
+    }
+
+    /// How a plan drawn in survey coordinates (mm, e.g. an LV95 DXF) lies in the world: turn it by
+    /// the returned degrees about its origin, then move it by the returned offset (mm), as a
+    /// reference plan is placed. The inverse of `survey` in plan.
+    pub fn survey_plan_to_world(&self) -> (f64, [f64; 2]) {
+        let a = -self.map_rotation_deg.to_radians();
+        let (s, c) = a.sin_cos();
+        let (e, n) = (self.east_m * 1000.0, self.north_m * 1000.0);
+        (
+            -self.map_rotation_deg,
+            [-(c * e - s * n) + 0.0, -(s * e + c * n) + 0.0],
+        )
+    }
+
     /// Latitude and longitude (degrees, WGS84) of a world point, when the survey system is LV95.
     pub fn wgs84(&self, world_mm: [f64; 3]) -> Option<[f64; 2]> {
         (self.crs.as_deref() == Some(LV95)).then(|| {
@@ -117,6 +135,32 @@ mod tests {
         let dms = |d: f64, m: f64, s: f64| d + m / 60.0 + s / 3600.0;
         assert!((lat - dms(46.0, 2.0, 38.87)).abs() < 1e-4, "{lat}");
         assert!((lon - dms(8.0, 43.0, 49.79)).abs() < 1e-4, "{lon}");
+    }
+
+    /// A model in its own coordinates (IfcMapConversion): a survey point placed by
+    /// `survey_plan_to_world` lands on the world point whose survey coordinates it has.
+    #[test]
+    fn survey_plans_land_where_their_coordinates_say() {
+        let g = Georef {
+            east_m: 2_600_000.0,
+            north_m: 1_200_000.0,
+            map_rotation_deg: 12.5,
+            crs: Some(LV95.into()),
+            ..Default::default()
+        };
+        let (rot, off) = g.survey_plan_to_world();
+        let world = [12_345.0, -6_789.0, 0.0];
+        let s = g.survey(world);
+        let p = [s[0] * 1000.0, s[1] * 1000.0];
+        let (sn, cs) = rot.to_radians().sin_cos();
+        let w = [
+            cs * p[0] - sn * p[1] + off[0],
+            sn * p[0] + cs * p[1] + off[1],
+        ];
+        assert!(
+            (w[0] - world[0]).abs() < 1e-3 && (w[1] - world[1]).abs() < 1e-3,
+            "{w:?}"
+        );
     }
 
     #[test]

@@ -326,7 +326,14 @@ enum Cmd {
         json: bool,
     },
     /// Export to IFC4
-    ExportIfc { file: PathBuf, out: PathBuf },
+    ExportIfc {
+        file: PathBuf,
+        out: PathBuf,
+        /// IFC4 (all of the model) or 2x3 (for tools that read only that: material values and
+        /// the map conversion left out)
+        #[arg(long, default_value = "4", value_parser = ["4", "2x3"])]
+        schema: String,
+    },
     /// Convert an IFC file into an editable .bimble model (ADR 0032)
     ImportIfc { file: PathBuf, out: PathBuf },
     /// Model history: commits, branches, log, diff and merge (kept in <model>-history/)
@@ -589,6 +596,9 @@ fn run(cli: Cli) -> Result<(), String> {
                 *classes.entry(&el.class).or_default() += 1;
                 *cats.entry(el.category.label()).or_default() += 1;
                 storeys.insert(&el.storey);
+            }
+            if !scene.schema.is_empty() {
+                println!("schema    {}", scene.schema);
             }
             println!("elements  {}", scene.elements.len());
             // Where it is and which way project north points (ADR 0045).
@@ -1160,15 +1170,29 @@ fn run(cli: Cli) -> Result<(), String> {
                 json,
             })?;
         }
-        Cmd::ExportIfc { file: path, out } => {
+        Cmd::ExportIfc {
+            file: path,
+            out,
+            schema,
+        } => {
             let m = file::load(&path).map_err(e)?;
             let name = out
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or("model.ifc");
-            let ifc = bimble_ifc::export(&m, name, &now_iso());
+            let schema = if schema == "2x3" {
+                bimble_ifc::Schema::Ifc2x3
+            } else {
+                bimble_ifc::Schema::Ifc4
+            };
+            let ifc = bimble_ifc::export_as(&m, name, &now_iso(), schema);
             std::fs::write(&out, ifc).map_err(|x| x.to_string())?;
-            println!("{} elements → {}", m.elements.len(), out.display());
+            println!(
+                "{} elements → {} ({})",
+                m.elements.len(),
+                out.display(),
+                schema.label()
+            );
         }
         Cmd::ImportIfc { file: path, out } => {
             let text =

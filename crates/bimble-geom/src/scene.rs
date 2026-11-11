@@ -221,6 +221,8 @@ pub struct Scene {
     pub densities: std::collections::BTreeMap<String, f64>,
     /// Where the model is and its project north (ADR 0045).
     pub georef: bimble_core::georef::Georef,
+    /// The IFC schema of the file it was read from ("IFC2X3", "IFC4"…); empty otherwise.
+    pub schema: String,
 }
 
 impl Scene {
@@ -433,6 +435,7 @@ impl SceneBuilder {
         let mut scene = Scene {
             densities: Default::default(),
             georef: Default::default(),
+            schema: String::new(),
             origin_mm: origin,
             elements: self
                 .items

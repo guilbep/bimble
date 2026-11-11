@@ -79,6 +79,10 @@ jobs:
           ./target/release/bimble demo frame.json
           ./target/release/bimble export-ifc frame.json frame.ifc
           python -I scripts/check_ifc.py frame.json frame.ifc
+      - name: IFC4 and IFC2x3 exports valid against their schemas
+        run: |
+          ./target/release/bimble export-ifc frame.json frame-2x3.ifc --schema 2x3
+          python -I scripts/validate_ifc.py frame.ifc frame-2x3.ifc
       - name: Double hop (import → export) checked by IfcOpenShell
         run: |
           ./target/release/bimble import-ifc frame.ifc frame2.json

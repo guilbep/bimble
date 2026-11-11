@@ -27,6 +27,18 @@ pub fn format_utc(secs: i64) -> String {
     format!("{} {:02}:{:02}", civil_date(d), s / 3600, s % 3600 / 60)
 }
 
+/// `YYYY-MM-DDTHH:MM:SS` (UTC, ISO 8601) of a time in seconds since 1970: IFC file headers.
+pub fn iso_utc(secs: i64) -> String {
+    let (d, s) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    format!(
+        "{}T{:02}:{:02}:{:02}",
+        civil_date(d),
+        s / 3600,
+        s % 3600 / 60,
+        s % 60
+    )
+}
+
 /// Calendar date of a day count since 1970-01-01 (H. Hinnant's algorithm).
 pub fn civil_date(days: i64) -> String {
     let z = days + 719_468;

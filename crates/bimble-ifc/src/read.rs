@@ -847,6 +847,7 @@ impl Parsed {
             .collect();
         let mut scene = sb.finish();
         scene.georef = self.georef.clone();
+        scene.schema = self.file.schemas.join(", ");
         (scene, picked.len() - shown)
     }
 

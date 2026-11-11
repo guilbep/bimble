@@ -821,7 +821,13 @@ fn generator_for(
     scale: f64,
 ) -> Option<(Placement, Generator, bool)> {
     let outer = &loops[0];
-    let rect = rectangle(outer);
+    // A rectangle with a hole (a hollow section) is no plain rectangle: kept as a polygon with
+    // its voids, not made a solid parametric one.
+    let rect = if loops.len() == 1 {
+        rectangle(outer)
+    } else {
+        None
+    };
     let z = unit(frame.z)?;
     // The profile's 2D point p maps into the frame as frame.t + frame.x·p0 + frame.y·p1.
     let to_world = |p: [f64; 2]| {
