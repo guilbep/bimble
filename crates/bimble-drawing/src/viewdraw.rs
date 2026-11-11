@@ -486,7 +486,8 @@ mod tests {
                 )
             })
             .unwrap();
-        let boxes = |s: &Scene| -> Vec<[f32; 4]> {
+        // By GlobalId: a plan keeps only what lies within its range.
+        let boxes = |s: &Scene| -> std::collections::BTreeMap<String, [f32; 4]> {
             s.elements
                 .iter()
                 .map(|e| {
@@ -498,15 +499,18 @@ mod tests {
                             hi[k] = hi[k].max(p[k]);
                         }
                     }
-                    [lo[0], lo[1], hi[0], hi[1]]
+                    (e.global_id.clone(), [lo[0], lo[1], hi[0], hi[1]])
                 })
                 .collect()
         };
         let want = boxes(&plain);
-        let near = |a: &[[f32; 4]], b: &[[f32; 4]]| {
-            a.iter()
-                .zip(b)
-                .all(|(x, y)| (0..4).all(|k| (x[k] - y[k]).abs() < 0.05))
+        type Boxes = std::collections::BTreeMap<String, [f32; 4]>;
+        let near = |a: &Boxes, b: &Boxes| {
+            !a.is_empty()
+                && a.iter().all(|(id, x)| {
+                    b.get(id)
+                        .is_some_and(|y| (0..4).all(|k| (x[k] - y[k]).abs() < 0.05))
+                })
         };
         let up = setup(&turned, &plan).unwrap();
         assert_eq!(up.turn, Turn::Plan(a));

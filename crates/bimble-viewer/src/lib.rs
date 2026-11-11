@@ -31,6 +31,7 @@ mod layout;
 mod links;
 mod materials_page;
 mod measure;
+mod paper;
 mod project_page;
 mod ribbon;
 mod schedules;
@@ -63,10 +64,6 @@ struct PlanSettings {
     paper: Option<bimble_drawing::sheet::Paper>,
     cut_mm: f64,
     message: Option<String>,
-    /// Preview: shown or not, zoom (1 = fit the window), and the image with what it was made from.
-    preview: bool,
-    zoom: f32,
-    preview_image: Option<PlanPreview>,
     /// Title block, legend, texts and what is shown; `template_rev` counts its changes.
     template: bimble_drawing::template::PlanTemplate,
     template_path: Option<std::path::PathBuf>,
@@ -74,25 +71,6 @@ struct PlanSettings {
     /// Draw this view (plan with its range, ceiling plan, section) instead of `storey` cut at
     /// `cut_mm`; follows the active 2D view.
     view_id: Option<bimble_core::GlobalId>,
-}
-
-type PreviewKey = (
-    String,
-    u32,
-    Option<bimble_drawing::sheet::Paper>,
-    u64,
-    bimble_core::style::GraphicStyle,
-    u32,
-    u64,
-    String,
-);
-
-/// A rendered plan preview and the settings it shows (recomputed when they change).
-struct PlanPreview {
-    key: PreviewKey,
-    texture: Option<egui::TextureHandle>,
-    error: Option<String>,
-    size_mm: (f64, f64),
 }
 
 /// The project information (ADR 0030): the model's, or an IFC's side file's.
@@ -142,9 +120,6 @@ impl Default for PlanSettings {
             paper: None,
             cut_mm: 1200.0,
             message: None,
-            preview: false,
-            zoom: 1.0,
-            preview_image: None,
             template: Default::default(),
             template_path: None,
             template_rev: 0,
@@ -864,6 +839,9 @@ struct Viewer {
     hover_snap: Option<measure::Snap>,
     /// The point under the pointer (world mm): on what it shows, or on a plan's cut (ADR 0045).
     pointer_world: Option<[f64; 3]>,
+    /// Views shown On paper this session, and the drawing of the one shown (ADR 0046).
+    paper_views: BTreeSet<bimble_core::GlobalId>,
+    paper: Option<paper::PaperView>,
     /// What is typed to find a coordinate system in Settings.
     coords_query: String,
     /// Snap targets while placing (#25), for (scene revision, storey level), and the point the
@@ -1061,6 +1039,8 @@ impl Viewer {
             dimensions: Vec::new(),
             hover_snap: None,
             pointer_world: None,
+            paper_views: BTreeSet::new(),
+            paper: None,
             coords_query: String::new(),
             place_targets: None,
             place_snap: None,
@@ -1591,6 +1571,8 @@ impl Viewer {
                 self.hidden_storeys.clear();
                 self.hidden_categories.clear();
                 self.hidden_materials.clear();
+                self.paper_views.clear();
+                self.paper = None;
                 self.clear_selection();
                 self.temporary = None;
                 self.reveal_hidden = false;
@@ -2842,7 +2824,7 @@ impl Viewer {
         {
             self.save_side_views();
         }
-        let (f, o, e, h, t, esc, b, m) = ctx.input(|i| {
+        let (f, o, e, h, t, esc, b, m, pk) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::F),
                 i.key_pressed(egui::Key::O),
@@ -2852,8 +2834,14 @@ impl Viewer {
                 i.key_pressed(egui::Key::Escape),
                 i.key_pressed(egui::Key::B),
                 i.key_pressed(egui::Key::M),
+                i.key_pressed(egui::Key::P),
             )
         });
+        // P: the view On paper, or the model (ADR 0046).
+        if pk && self.in_2d() {
+            let on = self.on_paper();
+            self.set_on_paper(!on);
+        }
         if m {
             self.measure_on = !self.measure_on;
             self.measure_first = None;
@@ -2866,7 +2854,11 @@ impl Viewer {
             self.toggle_section_box();
         }
         if f {
-            self.fit(aspect);
+            let on_paper = self.on_paper();
+            match &mut self.paper {
+                Some(p) if on_paper => p.fit_next(),
+                _ => self.fit(aspect),
+            }
         }
         if o {
             self.camera.orthographic = !self.camera.orthographic;
@@ -3509,92 +3501,7 @@ impl Viewer {
             ui.label(m);
         }
         ui.separator();
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut p.preview, "Preview");
-            if p.preview {
-                ui.add(
-                    egui::Slider::new(&mut p.zoom, 1.0..=8.0)
-                        .logarithmic(true)
-                        .text("zoom"),
-                );
-            }
-        });
-        if !p.preview {
-            return;
-        }
-        // Width of the image: the window width times the zoom, in screen pixels.
-        let avail = ui.available_width().max(200.0);
-        let ppp = ui.ctx().pixels_per_point();
-        let px_w = (avail * p.zoom * ppp).round() as u32;
-        let key = (
-            p.storey.clone(),
-            p.scale,
-            p.paper,
-            p.cut_mm.to_bits(),
-            self.opts.style.clone(),
-            px_w / 50 * 50,
-            p.template_rev,
-            // The view, and the project information its title block shows.
-            format!(
-                "{}|{}",
-                view.as_ref()
-                    .map(|v| serde_json::to_string(v).unwrap_or_default())
-                    .unwrap_or_default(),
-                serde_json::to_string(&project_of(&self.loaded, &self.side_views))
-                    .unwrap_or_default()
-            ),
-        );
-        if p.preview_image.as_ref().is_none_or(|i| i.key != key) {
-            let opts = plan_options(
-                p,
-                &l.path,
-                self.opts.style.clone(),
-                view.clone(),
-                &self.views,
-                &project_of(&self.loaded, &self.side_views),
-            );
-            let mut img = PlanPreview {
-                key,
-                texture: None,
-                error: None,
-                size_mm: (0.0, 0.0),
-            };
-            match bimble_drawing::plan::plan(&l.scene, &opts) {
-                Err(e) => img.error = Some(e),
-                Ok((sheet, _)) => {
-                    img.size_mm = (sheet.width_mm, sheet.height_mm);
-                    match sheet.rasterize(px_w as f64 / sheet.width_mm) {
-                        Err(e) => img.error = Some(e),
-                        Ok(r) => {
-                            let ci = egui::ColorImage::from_rgba_unmultiplied(
-                                [r.width as usize, r.height as usize],
-                                &r.rgba,
-                            );
-                            img.texture = Some(ui.ctx().load_texture(
-                                "plan-preview",
-                                ci,
-                                egui::TextureOptions::LINEAR,
-                            ));
-                        }
-                    }
-                }
-            }
-            p.preview_image = Some(img);
-        }
-        let Some(img) = &p.preview_image else { return };
-        if let Some(e) = &img.error {
-            ui.colored_label(Color32::from_rgb(220, 80, 60), e);
-            return;
-        }
-        if let Some(t) = &img.texture {
-            let w = avail * p.zoom;
-            let h = w * (img.size_mm.1 / img.size_mm.0) as f32;
-            egui::ScrollArea::both()
-                .max_height(ui.ctx().content_rect().height() * 0.7)
-                .show(ui, |ui| {
-                    ui.add(egui::Image::from_texture((t.id(), Vec2::new(w, h))));
-                });
-        }
+        ui.weak("To see a view as it prints, open it and choose On paper (P) in its tab.");
     }
 
     fn style_panel(&mut self, ui: &mut egui::Ui) {
@@ -4727,7 +4634,7 @@ impl eframe::App for Viewer {
             });
         if self.plan_window {
             let mut open = true;
-            egui::Window::new("On paper")
+            egui::Window::new("Export view")
                 .open(&mut open)
                 .default_width(300.0)
                 .resizable(true)
@@ -4808,6 +4715,11 @@ impl eframe::App for Viewer {
             // A schedule open: it takes the main view.
             if self.schedule.is_some() {
                 self.schedule_ui(ui);
+                return;
+            }
+            // The view On paper: its drawing takes the main view (ADR 0046).
+            if self.on_paper() {
+                self.paper_ui(ui, rect);
                 return;
             }
             // A sheet open: it takes the main view.

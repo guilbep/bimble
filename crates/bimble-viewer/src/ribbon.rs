@@ -189,7 +189,7 @@ impl Action {
             Action::BoxToSelection => "Section box to selection".into(),
             Action::Fit => "Fit all".into(),
             Action::Top => "Top view".into(),
-            Action::OnPaper => "On paper… (export the view)".into(),
+            Action::OnPaper => "Export view… (PDF, SVG, PNG)".into(),
             Action::SectionLabels => "Section labels on plans".into(),
             Action::Openings => "Opening sizes on plans".into(),
             Action::SectionMarks => "Section marks on plans".into(),
@@ -1059,7 +1059,7 @@ impl Viewer {
                     ],
                     &mut run,
                 );
-                self.group(ui, "Export", &[(Action::OnPaper, "On paper…")], &mut run);
+                self.group(ui, "Export", &[(Action::OnPaper, "Export view…")], &mut run);
             }
             Tab::Manage => {
                 self.group(
@@ -1145,7 +1145,55 @@ impl Viewer {
         });
         let mut go: Option<TabRef> = None;
         let mut close: Option<Close> = None;
+        let mut paper_switch: Option<bool> = None;
+        // A plan or section: its two pictures, Model and On paper (ADR 0046), at the row's end.
+        let two_pictures = matches!(current, Some(TabRef::View(_))) && self.in_2d();
+        let on_paper = self.on_paper();
         ui.horizontal(|ui| {
+            if two_pictures {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let tip = "P switches. Model: the model, to edit. On paper: the drawing \
+                               its PDF and sheets are made of, at the view's scale.";
+                    if ui
+                        .selectable_label(on_paper, "On paper")
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        paper_switch = Some(true);
+                    }
+                    if ui
+                        .selectable_label(!on_paper, "Model")
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        paper_switch = Some(false);
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        self.tab_buttons(ui, &current, &sheets, &mut go, &mut close);
+                    });
+                });
+            } else {
+                self.tab_buttons(ui, &current, &sheets, &mut go, &mut close);
+            }
+        });
+        if let Some(on) = paper_switch
+            && on != on_paper
+        {
+            self.set_on_paper(on);
+        }
+        self.after_tab_clicks(current, go, close);
+    }
+
+    /// The tabs' buttons (a click goes to one, × or a middle click closes, right click: menu).
+    fn tab_buttons(
+        &self,
+        ui: &mut egui::Ui,
+        current: &Option<TabRef>,
+        sheets: &[bimble_core::sheet::Sheet],
+        go: &mut Option<TabRef>,
+        close: &mut Option<Close>,
+    ) {
+        {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (k, t) in self.open_tabs.clone().into_iter().enumerate() {
                 let name = match &t {
@@ -1180,14 +1228,14 @@ impl Viewer {
                             }),
                     );
                     if r.clicked() {
-                        go = Some(t.clone());
+                        *go = Some(t.clone());
                     }
                     if r.middle_clicked() {
-                        close = Some(Close::This(t.clone()));
+                        *close = Some(Close::This(t.clone()));
                     }
                     r.context_menu(|ui| {
                         if ui.button("Close").clicked() {
-                            close = Some(Close::This(t.clone()));
+                            *close = Some(Close::This(t.clone()));
                         }
                         if ui
                             .add_enabled(
@@ -1196,10 +1244,10 @@ impl Viewer {
                             )
                             .clicked()
                         {
-                            close = Some(Close::Others(t.clone()));
+                            *close = Some(Close::Others(t.clone()));
                         }
                         if ui.button("Close all tabs").clicked() {
-                            close = Some(Close::All);
+                            *close = Some(Close::All);
                         }
                     });
                     if ui
@@ -1207,11 +1255,20 @@ impl Viewer {
                         .on_hover_text("Close the tab (right-click: close the others, or all)")
                         .clicked()
                     {
-                        close = Some(Close::This(t.clone()));
+                        *close = Some(Close::This(t.clone()));
                     }
                 });
             }
-        });
+        }
+    }
+
+    /// What the tab row's clicks do: go to a tab, close some (none left: Home).
+    fn after_tab_clicks(
+        &mut self,
+        current: Option<TabRef>,
+        mut go: Option<TabRef>,
+        close: Option<Close>,
+    ) {
         let closing = close.is_some();
         match close {
             Some(Close::This(t)) => {
@@ -1314,8 +1371,27 @@ impl Viewer {
                     Esc: drop the first, again to leave"
                 .into();
         }
+        // On paper: which scale, how big on screen, how long it took to draw (ADR 0046).
+        if self.on_paper()
+            && let (Some(v), Some(p)) = (self.active_view(), &self.paper)
+        {
+            let shown = p
+                .shown_scale(v.scale)
+                .map_or(String::new(), |k| format!(" (seen at ≈1:{k:.0})"));
+            let hovered = self
+                .hovered
+                .zip(self.loaded.as_ref())
+                .and_then(|(i, l)| l.scene.elements.get(i))
+                .map_or(String::new(), |e| format!(" · {} {}", e.class, e.name));
+            return format!(
+                "On paper 1:{}{shown} · drawn in {:.0} ms{hovered} · Double-click: the model there \
+                 · P",
+                v.scale, p.drawn_ms
+            );
+        }
         if self.in_2d() {
-            "Drag: pan · Scroll: zoom · Click: select · F: fit · Ctrl K: commands".into()
+            "Drag: pan · Scroll: zoom · Click: select · F: fit · P: on paper · Ctrl K: commands"
+                .into()
         } else {
             "Drag: orbit · Right-drag: pan · Scroll: zoom · Click: select · F: fit · T: top · Ctrl K: commands"
                 .into()
