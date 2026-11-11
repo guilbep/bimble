@@ -863,6 +863,8 @@ struct Viewer {
     hover_snap: Option<measure::Snap>,
     /// The point under the pointer (world mm): on what it shows, or on a plan's cut (ADR 0045).
     pointer_world: Option<[f64; 3]>,
+    /// What is typed to find a coordinate system in Settings.
+    coords_query: String,
     /// Snap targets while placing (#25), for (scene revision, storey level), and the point the
     /// pointer snaps to (model mm) with what it snapped to.
     place_targets: Option<((u64, i64), snap::Targets)>,
@@ -1058,6 +1060,7 @@ impl Viewer {
             dimensions: Vec::new(),
             hover_snap: None,
             pointer_world: None,
+            coords_query: String::new(),
             place_targets: None,
             place_snap: None,
             cut_cache: None,
@@ -3236,15 +3239,18 @@ impl Viewer {
         let accent = Color32::from_rgb(a[0], a[1], a[2]);
         // 2D views are seen square on: no cube, no Home.
         let flat = self.in_2d();
+        // The cube and its compass are the building's (project north, ADR 0045): its FRONT is the
+        // building's south side, as in Revit.
+        let north = self.project_north();
         let action = if flat {
             viewcube::Action::None
         } else {
-            viewcube::show(ui, cube, self.camera.yaw, self.camera.pitch, accent)
+            viewcube::show(ui, cube, self.camera.yaw - north, self.camera.pitch, accent)
         };
         match action {
             viewcube::Action::Look(d) => {
-                let (yaw, pitch) = viewcube::orientation(d, self.camera.yaw);
-                self.turn_to(yaw, pitch);
+                let (yaw, pitch) = viewcube::orientation(d, self.camera.yaw - north);
+                self.turn_to(yaw + north, pitch);
             }
             viewcube::Action::Orbit(d) => {
                 self.turn = None;
@@ -3273,7 +3279,7 @@ impl Viewer {
         };
         if !flat && button(ui, "Home", "Default 3D view of everything visible") {
             let d = Camera::default();
-            self.turn_to(d.yaw, d.pitch);
+            self.turn_to(d.yaw + north, d.pitch);
             self.fit(aspect);
         }
         if button(
@@ -4061,15 +4067,7 @@ impl Viewer {
             .show(ctx, |ui| {
                 self.you_ui(ui);
                 ui.separator();
-                ui.strong("Coordinates");
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.settings.wgs84, false, "Survey system (LV95)");
-                    ui.radio_value(&mut self.settings.wgs84, true, "WGS84 (latitude, longitude)");
-                });
-                ui.weak(
-                    "Shown in the status bar for the point under the pointer. WGS84 is worked \
-                     out from LV95 (swisstopo's formulas, about 1 m).",
-                );
+                self.coordinates_ui(ui);
                 self.appearance_ui(ui);
                 ui.add_space(8.0);
                 ui.strong("Memory for one model");
@@ -4541,8 +4539,8 @@ impl Viewer {
                 .or(self.pointer_world);
             if let (Some(p), Some(l)) = (at, &self.loaded) {
                 ui.separator();
-                ui.label(coords::text(&l.scene.georef, p, self.settings.wgs84))
-                    .on_hover_text("Settings → Coordinates: survey system (LV95) or WGS84");
+                ui.label(coords::text(&l.scene.georef, p, self.settings.coordinate_target()))
+                    .on_hover_text("Settings → Coordinates: the model's survey system (LV95), WGS84, ETRS89 / UTM, US State Plane…");
             }
             ui.separator();
             // Every state that isn't the default, with its way back (ADR 0028).

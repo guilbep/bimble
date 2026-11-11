@@ -323,6 +323,7 @@ pub(crate) fn map_scene(
     Scene {
         densities: scene.densities.clone(),
         georef: scene.georef.clone(),
+        schema: scene.schema.clone(),
         origin_mm: scene.origin_mm,
         elements,
         storeys: scene.storeys.clone(),

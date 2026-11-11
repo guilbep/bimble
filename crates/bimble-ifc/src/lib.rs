@@ -7,6 +7,7 @@
 //! Each element gets explicit SweptSolid geometry (readable by any IFC tool) plus a
 //! `Bimble_Generator` property set holding the generator name, version and parameters.
 
+pub mod ifc2x3;
 pub mod import;
 pub mod read;
 pub mod step;
@@ -68,6 +69,54 @@ fn string(s: &str) -> String {
     flush(&mut wide, &mut out);
     out.push('\'');
     out
+}
+
+/// The building's placement when the model has a place (ADR 0045): turned by project north,
+/// at a whole metre near the model (so its position says which survey system it is in).
+struct BuildingFrame {
+    at: [f64; 3],
+    cos: f64,
+    sin: f64,
+}
+
+impl BuildingFrame {
+    fn of(m: &Model) -> Option<BuildingFrame> {
+        if m.georef.is_default() || m.elements.is_empty() {
+            return None;
+        }
+        let n = m.elements.len() as f64;
+        let (sx, sy) = m.elements.values().fold((0.0, 0.0), |(x, y), e| {
+            (x + e.placement.origin[0], y + e.placement.origin[1])
+        });
+        let at = [
+            (sx / n / 1000.0).round() * 1000.0,
+            (sy / n / 1000.0).round() * 1000.0,
+            0.0,
+        ];
+        let (sin, cos) = m.georef.rotation_deg.to_radians().sin_cos();
+        Some(BuildingFrame {
+            at,
+            cos,
+            sin: sin + 0.0,
+        })
+    }
+
+    /// An element's storey-relative placement (world axes) in the building's frame.
+    fn local(&self, p: &bimble_core::Placement) -> bimble_core::Placement {
+        let turn = |v: [f64; 3]| {
+            [
+                self.cos * v[0] + self.sin * v[1] + 0.0,
+                -self.sin * v[0] + self.cos * v[1] + 0.0,
+                v[2],
+            ]
+        };
+        let o = p.origin;
+        bimble_core::Placement {
+            origin: turn([o[0] - self.at[0], o[1] - self.at[1], o[2]]),
+            z_axis: turn(p.z_axis),
+            x_axis: turn(p.x_axis),
+        }
+    }
 }
 
 fn point3(p: [f64; 3]) -> String {
@@ -145,7 +194,7 @@ fn write_geometry(w: &mut Writer, g: &Generator, world: usize, z: usize) -> (&'s
                     real(*x_dim),
                     real(*y_dim)
                 )),
-                (profile, with_voids) => {
+                (profile, no_voids) => {
                     let mut polyline = |pts: &[[f64; 2]]| {
                         let mut ids: Vec<usize> = pts
                             .iter()
@@ -169,7 +218,7 @@ fn write_geometry(w: &mut Writer, g: &Generator, world: usize, z: usize) -> (&'s
                         Profile::Polygon(pts) => pts.clone(),
                     };
                     let outer = polyline(&outer_pts);
-                    if with_voids {
+                    if !no_voids {
                         let inners = x
                             .voids
                             .iter()
@@ -203,6 +252,35 @@ fn predefined(e: &Element) -> &'static str {
         // Its own class goes in ObjectType (ADR 0042), which USERDEFINED asks for.
         IfcClass::IfcBuildingElementProxy if e.ifc_entity.is_some() => ".USERDEFINED.",
         IfcClass::IfcBuildingElementProxy => ".NOTDEFINED.",
+    }
+}
+
+/// The IFC schema an export is written in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Schema {
+    /// IFC4 ADD2 TC1: Bimble's own, everything kept.
+    #[default]
+    Ifc4,
+    /// IFC2x3 TC1 (Coordination View 2.0), for tools that read only that: material values and
+    /// the map conversion are left out (`ifc2x3`).
+    Ifc2x3,
+}
+
+impl Schema {
+    pub fn label(self) -> &'static str {
+        match self {
+            Schema::Ifc4 => "IFC4",
+            Schema::Ifc2x3 => "IFC2x3",
+        }
+    }
+}
+
+/// Export the model in `schema`.
+pub fn export_as(m: &Model, file_name: &str, timestamp: &str, schema: Schema) -> String {
+    let ifc4 = export(m, file_name, timestamp);
+    match schema {
+        Schema::Ifc4 => ifc4,
+        Schema::Ifc2x3 => ifc2x3::from_ifc4(&ifc4, env!("CARGO_PKG_VERSION")),
     }
 }
 
@@ -285,7 +363,33 @@ pub fn export(m: &Model, file_name: &str, timestamp: &str) -> String {
         "IFCSITE({},$,'Site',$,$,#{site_pl},$,$,.ELEMENT.,$,$,$,$,$)",
         gid("site")
     ));
-    let bldg_pl = w.add(format!("IFCLOCALPLACEMENT(#{site_pl},#{world})"));
+    // The building keeps the model's place and project north (ADR 0045): placed at a point near
+    // the model, turned by the building's angle; elements are placed in its frame, so another
+    // tool (and Bimble again) reads the same world positions and the same project north.
+    let frame = BuildingFrame::of(m);
+    let bldg_axes = match &frame {
+        None => world,
+        Some(f) => {
+            let o = w.add(point3(f.at));
+            let x = w.add(dir3([f.cos, f.sin, 0.0]));
+            w.add(format!("IFCAXIS2PLACEMENT3D(#{o},$,#{x})"))
+        }
+    };
+    let bldg_pl = w.add(format!("IFCLOCALPLACEMENT(#{site_pl},#{bldg_axes})"));
+    // IFC4: the survey system by name, and how the model's coordinates map onto it.
+    if let Some(crs) = &m.georef.crs {
+        let g = &m.georef;
+        let target = w.add(format!("IFCPROJECTEDCRS({},$,$,$,$,$,$)", string(crs)));
+        let a = g.map_rotation_deg.to_radians();
+        w.add(format!(
+            "IFCMAPCONVERSION(#{ctx},#{target},{},{},{},{},{},$)",
+            real(g.east_m),
+            real(g.north_m),
+            real(g.height_m),
+            real(a.cos()),
+            real(a.sin() + 0.0)
+        ));
+    }
     let bldg = w.add(format!(
         "IFCBUILDING({},$,{},$,$,#{bldg_pl},$,$,.ELEMENT.,$,$,$)",
         gid("building"),
@@ -335,7 +439,10 @@ pub fn export(m: &Model, file_name: &str, timestamp: &str) -> String {
 
     for e in m.elements.values() {
         let (_, storey_pl) = storey_ent[&e.storey];
-        let p = &e.placement;
+        let p = match &frame {
+            None => e.placement.clone(),
+            Some(f) => f.local(&e.placement),
+        };
         let o = w.add(point3(p.origin));
         let az = w.add(dir3(p.z_axis));
         let ax = w.add(dir3(p.x_axis));

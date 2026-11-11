@@ -364,6 +364,19 @@ fn parts(a: Action) -> &'static [Part] {
             Line(&[[9.0, 14.0], [20.0, 14.0]]),
             Line(&[[17.5, 11.5], [20.0, 14.0], [17.5, 16.5]]),
         ],
+        // A page and an arrow out: written for another tool.
+        Action::ExportIfc4 | Action::ExportIfc2x3 => &[
+            Poly(&[
+                [5.0, 4.0],
+                [13.0, 4.0],
+                [17.0, 8.0],
+                [17.0, 20.0],
+                [5.0, 20.0],
+                [5.0, 4.0],
+            ]),
+            Line(&[[10.0, 14.0], [21.0, 14.0]]),
+            Line(&[[18.5, 11.5], [21.0, 14.0], [18.5, 16.5]]),
+        ],
         // A page and an eye: shared to be looked at.
         Action::ShareForViewing => &[
             Poly(&[[5.0, 4.0], [13.0, 4.0], [17.0, 8.0], [17.0, 11.0]]),

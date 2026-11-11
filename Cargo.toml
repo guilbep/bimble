@@ -9,6 +9,8 @@ license = "MIT"
 repository = "https://github.com/guilbep/bimble"
 
 [workspace.dependencies]
+# Map projections for coordinates in other survey systems (ADR 0045); pure Rust, browser too.
+proj4rs = "0.3"
 bimble-core = { path = "crates/bimble-core" }
 bimble-geom = { path = "crates/bimble-geom" }
 bimble-ifc = { path = "crates/bimble-ifc" }

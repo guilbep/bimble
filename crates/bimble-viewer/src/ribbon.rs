@@ -59,6 +59,9 @@ pub(crate) enum Action {
     ConvertOpen,
     /// Save the open model as a prepared viewing file (ADR 0040).
     ShareForViewing,
+    /// The model as IFC4 (all of it) or IFC2x3 (for tools that read only that).
+    ExportIfc4,
+    ExportIfc2x3,
     Save,
     Undo,
     Redo,
@@ -113,11 +116,13 @@ pub(crate) enum Action {
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 47] = [
+pub(crate) const ALL_ACTIONS: [Action; 49] = [
     Action::Open,
     Action::ImportIfc,
     Action::ConvertOpen,
     Action::ShareForViewing,
+    Action::ExportIfc4,
+    Action::ExportIfc2x3,
     Action::Save,
     Action::Undo,
     Action::Redo,
@@ -170,6 +175,8 @@ impl Action {
             Action::ImportIfc => "Import IFC…".into(),
             Action::ConvertOpen => "Convert to .bimble (editable)…".into(),
             Action::ShareForViewing => "Share for viewing… (.bimbleview)".into(),
+            Action::ExportIfc4 => "Export IFC4…".into(),
+            Action::ExportIfc2x3 => "Export IFC2x3…".into(),
             Action::Save => "Save".into(),
             Action::Undo => "Undo".into(),
             Action::Redo => "Redo".into(),
@@ -242,6 +249,8 @@ impl Action {
             | Action::ImportIfc
             | Action::ConvertOpen
             | Action::ShareForViewing
+            | Action::ExportIfc4
+            | Action::ExportIfc2x3
             | Action::Settings
             | Action::About
             | Action::Home
@@ -377,6 +386,10 @@ impl Viewer {
             }
             // Not a part of a model too large to show whole: it would be shared as the whole.
             Action::ShareForViewing => self.loaded.as_ref().is_some_and(|l| l.partial.is_none()),
+            // A .bimble model (an IFC open as it is: convert it first, or send the IFC itself).
+            Action::ExportIfc4 | Action::ExportIfc2x3 => {
+                self.loaded.as_ref().is_some_and(|l| l.edit.is_some())
+            }
             Action::Save => {
                 self.side_views_dirty()
                     || self
@@ -456,6 +469,8 @@ impl Viewer {
                 }
             }
             Action::ShareForViewing => self.share_for_viewing(),
+            Action::ExportIfc4 => self.export_ifc(bimble_ifc::Schema::Ifc4),
+            Action::ExportIfc2x3 => self.export_ifc(bimble_ifc::Schema::Ifc2x3),
             Action::Save => {
                 if self.side_views.is_some() {
                     self.save_side_views();
@@ -674,6 +689,11 @@ impl Viewer {
                  from their panel",
             );
         }
+        // Which IFC it is (IFC2X3, IFC4…): exports say theirs (File → Export IFC4… / IFC2x3…).
+        let name = match l.scene.schema.as_str() {
+            "" => name,
+            s => format!("{name} · {s}"),
+        };
         ui.add(egui::Label::new(egui::RichText::new(&name).color(th::text_muted())).truncate())
             .on_hover_text(l.path.display().to_string());
     }
@@ -737,7 +757,11 @@ impl Viewer {
                     Action::ConvertOpen,
                     Action::Save,
                 ],
-                &[Action::ShareForViewing],
+                &[
+                    Action::ShareForViewing,
+                    Action::ExportIfc4,
+                    Action::ExportIfc2x3,
+                ],
                 &[
                     Action::LinkModel,
                     Action::LinkDxf,
