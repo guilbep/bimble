@@ -29,9 +29,9 @@ pub struct Settings {
     pub user_email: String,
     /// Files opened last, newest first (the desktop; Home, #52).
     pub recent: Vec<String>,
-    /// Coordinates read in WGS84 latitude and longitude rather than the survey system (LV95 for
-    /// Swiss models; ADR 0045).
-    pub wgs84: bool,
+    /// The system coordinates are read in (ADR 0045): "survey" (the model's own: LV95 for Swiss
+    /// models), "wgs84", "utm" (ETRS89, the point's zone) or "epsg:N" (LV03, a State Plane zone…).
+    pub coordinates: String,
 }
 
 /// How many recent files Home lists.
@@ -49,7 +49,7 @@ impl Default for Settings {
             text_size: crate::ui_theme::TEXT_SIZE,
             user_name: String::new(),
             user_email: String::new(),
-            wgs84: false,
+            coordinates: "survey".into(),
             recent: Vec::new(),
         }
     }
@@ -96,7 +96,19 @@ impl Settings {
             // Kept short: it is written into every commit and borrow list.
             user_name: short_line(&v["user_name"]),
             user_email: short_line(&v["user_email"]),
-            wgs84: v["wgs84"].as_bool().unwrap_or(false),
+            coordinates: match v["coordinates"].as_str() {
+                Some(c @ ("survey" | "wgs84" | "utm")) => c.to_owned(),
+                Some(c)
+                    if c.strip_prefix("epsg:")
+                        .and_then(|n| n.parse::<u16>().ok())
+                        .is_some_and(|n| bimble_core::georef::system(n).is_some()) =>
+                {
+                    c.to_owned()
+                }
+                // 0.14's setting.
+                _ if v["wgs84"].as_bool() == Some(true) => "wgs84".into(),
+                _ => "survey".into(),
+            },
             recent: v["recent"]
                 .as_array()
                 .map(|a| {
@@ -122,10 +134,23 @@ impl Settings {
             "text_size": self.text_size,
             "user_name": self.user_name,
             "user_email": self.user_email,
-            "wgs84": self.wgs84,
+            "coordinates": self.coordinates,
             "recent": self.recent,
         })
         .to_string()
+    }
+
+    /// The system the status bar says coordinates in (None: the model's own).
+    pub fn coordinate_target(&self) -> Option<bimble_core::georef::Target> {
+        use bimble_core::georef::Target;
+        match self.coordinates.as_str() {
+            "wgs84" => Some(Target::Wgs84),
+            "utm" => Some(Target::Utm),
+            c => c
+                .strip_prefix("epsg:")
+                .and_then(|n| n.parse().ok())
+                .map(Target::Epsg),
+        }
     }
 
     /// Who you are, as written in commits and borrows: "Name <e-mail>", either one alone, or
@@ -257,7 +282,7 @@ mod tests {
             user_name: "Ana".into(),
             user_email: "ana@office.example".into(),
             recent: vec!["/a/x.ifc".into(), "/b/y.bimble".into()],
-            wgs84: true,
+            coordinates: "epsg:2263".into(),
         };
         assert_eq!(s.author(), "Ana <ana@office.example>");
         assert_eq!(Settings::from_json(&s.to_json()), s);

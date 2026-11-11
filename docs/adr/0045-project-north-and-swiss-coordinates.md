@@ -75,12 +75,21 @@ everyone can read is **WGS84** latitude and longitude (GPS, EPSG:4326).
   a local DXF) is centred on the model and turned upright in the project-north plan. The message
   says which.
 
+- **More coordinate systems** (Pierre: "add ETRS89/UTM and the US State Plane"): Settings →
+  Coordinates offers the model's survey system, WGS84, ETRS89 / UTM (the point's zone) and any
+  system of a table generated from the EPSG data (`scripts/gen_crs_table.py`, crs-definitions,
+  CC0): LV03 and the 374 NAD83 State Plane zones, in metres, feet or US survey feet. Converted
+  by proj4rs (pure Rust, browser too), from the model's survey system; tested against PROJ 9:
+  within a millimetre in the same datum, within a metre across datums. WGS84 is now PROJ's, not
+  swisstopo's approximate formulas.
+
 ## Alternatives considered
 
 - Turning the model itself on import: GlobalIds stay, but every coordinate changes, links and
   survey coordinates no longer match the architect's.
-- WGS84 by a library (proj): exact, but a C dependency for a status-bar readout; swisstopo's
-  formulas are a few lines and within a metre.
+- WGS84 by PROJ itself: a C dependency; proj4rs is its pure-Rust port, used since the amendment.
+- The whole EPSG table (crs-definitions, 4.9 MB of source): most of it never offered; the
+  generated table is 76 kB.
 
 ## Revisit when
 

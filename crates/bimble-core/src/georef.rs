@@ -106,6 +106,103 @@ impl Georef {
     }
 }
 
+/// A coordinate system Bimble can say coordinates in (besides the model's own).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// WGS84 latitude and longitude (GPS).
+    Wgs84,
+    /// ETRS89 / UTM, the zone of the point (Europe).
+    Utm,
+    /// A system of the table by EPSG code: LV95, LV03, a UTM zone, a US State Plane zone.
+    Epsg(u16),
+}
+
+/// The systems Bimble offers: (EPSG code, name, PROJ.4 definition).
+pub fn systems() -> &'static [(u16, &'static str, &'static str)] {
+    &crate::crs_table::SYSTEMS
+}
+
+/// A system of the table by its EPSG code.
+pub fn system(code: u16) -> Option<(u16, &'static str, &'static str)> {
+    systems().iter().copied().find(|s| s.0 == code)
+}
+
+/// A point of a system in another: `(x, y)` in the systems' units (degrees for WGS84, as
+/// latitude-free longitude first).
+fn reproject(from: &str, to: &str, p: (f64, f64), to_degrees: bool) -> Option<(f64, f64)> {
+    use proj4rs::proj::Proj;
+    let (a, b) = (
+        Proj::from_proj_string(from).ok()?,
+        Proj::from_proj_string(to).ok()?,
+    );
+    let mut q = (p.0, p.1, 0.0);
+    proj4rs::transform::transform(&a, &b, &mut q).ok()?;
+    let (x, y) = if to_degrees {
+        (q.0.to_degrees(), q.1.to_degrees())
+    } else {
+        (q.0, q.1)
+    };
+    (x.is_finite() && y.is_finite()).then_some((x, y))
+}
+
+const WGS84: &str = "+proj=longlat +datum=WGS84 +no_defs";
+
+/// Metres in one unit of a system (its `+units=`): US survey feet and feet for some State Plane
+/// zones, metres otherwise.
+pub fn unit_m(proj: &str) -> f64 {
+    match proj
+        .split_whitespace()
+        .find_map(|p| p.strip_prefix("+units="))
+    {
+        Some("us-ft") => 1200.0 / 3937.0,
+        Some("ft") => 0.3048,
+        _ => 1.0,
+    }
+}
+
+/// The short name of a system's unit, for the status bar.
+pub fn unit_name(proj: &str) -> &'static str {
+    match proj
+        .split_whitespace()
+        .find_map(|p| p.strip_prefix("+units="))
+    {
+        Some("us-ft") => "ftUS",
+        Some("ft") => "ft",
+        _ => "m",
+    }
+}
+
+impl Georef {
+    /// The model's survey system in the table (its `crs` "EPSG:n").
+    fn source(&self) -> Option<(u16, &'static str, &'static str)> {
+        let code = self.crs.as_deref()?.strip_prefix("EPSG:")?.parse().ok()?;
+        system(code)
+    }
+
+    /// A world point in another system: `(x, y, height)`, x, y in that system's units (WGS84:
+    /// latitude, longitude in degrees), with the system's name. None when the model's system is
+    /// not known or the point is outside the target's area.
+    pub fn in_system(&self, world_mm: [f64; 3], target: Target) -> Option<([f64; 3], String)> {
+        let (_, _, from) = self.source()?;
+        // Survey coordinates are metres; a system in feet takes feet.
+        let s = self.survey(world_mm);
+        let k = unit_m(from);
+        let src = (s[0] / k, s[1] / k);
+        let (lon, lat) = reproject(from, WGS84, src, true)?;
+        let to = match target {
+            Target::Wgs84 => return Some(([lat, lon, s[2]], "WGS84".into())),
+            Target::Utm => {
+                let zone = ((lon + 180.0) / 6.0).floor() as u16 + 1;
+                system(25800 + zone)?
+            }
+            Target::Epsg(code) => system(code)?,
+        };
+        let (x, y) = reproject(from, to.2, src, false)?;
+        // The height in the target's unit too.
+        Some(([x, y, s[2] / unit_m(to.2)], to.1.to_string()))
+    }
+}
+
 /// swisstopo's approximate formulas (LV95 → WGS84, about 1 m): latitude, longitude in degrees.
 pub fn lv95_to_wgs84(east: f64, north: f64) -> [f64; 2] {
     let y = (east - 2_600_000.0) / 1_000_000.0;
@@ -122,6 +219,47 @@ pub fn lv95_to_wgs84(east: f64, north: f64) -> [f64; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Against PROJ 9 (pyproj): the systems Bimble offers give PROJ's coordinates, within a metre
+    /// across datums (PROJ may use finer grids than the published shift) and a millimetre within
+    /// one (State Plane feet and metres).
+    #[test]
+    fn coordinates_in_other_systems_agree_with_proj() {
+        let at = |crs: &str, x: f64, y: f64, unit: f64| {
+            let g = Georef {
+                crs: Some(crs.into()),
+                ..Default::default()
+            };
+            (g, [x * unit * 1000.0, y * unit * 1000.0, 0.0])
+        };
+        let (g, p) = at("EPSG:2056", 2_600_000.0, 1_200_000.0, 1.0);
+        let (w, name) = g.in_system(p, Target::Wgs84).unwrap();
+        assert_eq!(name, "WGS84");
+        assert!((w[0] - 46.9510827718711).abs() < 1e-5 && (w[1] - 7.43863242087181).abs() < 1e-5);
+        let (u, name) = g.in_system(p, Target::Utm).unwrap();
+        assert_eq!(name, "ETRS89 / UTM zone 32N");
+        assert!(
+            (u[0] - 381_188.815).abs() < 2.0 && (u[1] - 5_200_911.299).abs() < 2.0,
+            "{u:?}"
+        );
+        let (l, _) = g.in_system(p, Target::Epsg(21781)).unwrap();
+        assert!(
+            (l[0] - 600_000.0).abs() < 1e-3 && (l[1] - 200_000.0).abs() < 1e-3,
+            "{l:?}"
+        );
+        // New York Long Island, US survey feet, to the same zone in metres.
+        let (g, p) = at("EPSG:2263", 988_000.0, 211_000.0, 1200.0 / 3937.0);
+        let (w, _) = g.in_system(p, Target::Wgs84).unwrap();
+        assert!((w[0] - 40.74582200884687).abs() < 1e-7 && (w[1] + 73.98646650303343).abs() < 1e-7);
+        let (m, name) = g.in_system(p, Target::Epsg(32118)).unwrap();
+        assert!(name.contains("Long Island"), "{name}");
+        assert!(
+            (m[0] - 301_143.002).abs() < 1e-3 && (m[1] - 64_312.929).abs() < 1e-3,
+            "{m:?}"
+        );
+        // A system Bimble doesn't know: nothing said rather than something wrong.
+        assert!(Georef::default().in_system(p, Target::Wgs84).is_none());
+    }
 
     #[test]
     fn lv95_to_wgs84_as_swisstopo() {
