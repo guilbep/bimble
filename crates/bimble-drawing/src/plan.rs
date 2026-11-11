@@ -1673,6 +1673,8 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         filled(&tpl.title)
     };
     let title_y = oy + model.1 * k + PAD + TITLE_BAND - 4.0;
+    // A bare drawing's page reaches the end of its title (a small drawing, a long name).
+    let mut title_end = 0.0f64;
     if !title.is_empty() {
         let size = t * 2.0;
         let x = ox;
@@ -1685,6 +1687,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             true,
         ));
         let tw = text_width_mm(&title, size, true, o.style.paper.font);
+        title_end = x + tw + PAD;
         items.push(Item::Lines {
             lines: vec![vec![[x, title_y + 1.0], [x + tw, title_y + 1.0]]],
             pen: thicker(Role::Cut, 0.7),
@@ -1774,7 +1777,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
         },
     };
     let sheet = Sheet {
-        width_mm: w,
+        width_mm: if o.bare { w.max(title_end) } else { w },
         height_mm: h,
         title: if o.project.is_empty() {
             title
@@ -1909,6 +1912,33 @@ mod tests {
 
     fn demo() -> Scene {
         Scene::from_model(&concrete_frame(&FrameSpec::default()))
+    }
+
+    /// A bare drawing (a view on its own: On paper, on a sheet) whose title is longer than the
+    /// drawing is wide: its page reaches the title's end. It ran off the page before.
+    #[test]
+    fn a_bare_page_holds_its_title() {
+        let scene = demo();
+        let levels = scene.levels();
+        let mut v = bimble_core::view::default_views(&levels)
+            .into_iter()
+            .find(|v| matches!(v.kind, bimble_core::view::ViewKind::Plan { .. }))
+            .unwrap();
+        v.name = "A plan with a long name, as offices write them: level, zone and phase".into();
+        let mut o = opts("", 200, None);
+        o.view = Some(v);
+        o.bare = true;
+        let (sheet, _) = plan(&scene, &o).unwrap();
+        let ends: Vec<f64> = sheet
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Lines { lines, .. } => lines.iter().flatten().map(|p| p[0]).reduce(f64::max),
+                _ => None,
+            })
+            .collect();
+        let right = ends.into_iter().fold(0.0, f64::max);
+        assert!(sheet.width_mm >= right, "{} < {right}", sheet.width_mm);
     }
 
     /// A material given a hatch type is drawn with it where cut (#44): its spacing in paper mm,

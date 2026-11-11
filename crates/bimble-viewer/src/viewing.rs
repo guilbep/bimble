@@ -118,6 +118,37 @@ impl Viewer {
             return;
         };
         v.scale = scale;
+        // A .bimble model: the view and its sheets in one command list, one undo step.
+        let sheets: Vec<_> = self
+            .sheets()
+            .into_iter()
+            .filter(|s| s.placed.iter().any(|p| p.view == id && p.scale != scale))
+            .map(|mut s| {
+                for p in s.placed.iter_mut().filter(|p| p.view == id) {
+                    p.scale = scale;
+                }
+                s
+            })
+            .collect();
+        if let Err(e) = v.validate(&self.levels()) {
+            self.view_message = Some(e);
+            return;
+        }
+        if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
+            let mut cmds = vec![if ed.model.views.contains_key(&v.id) {
+                bimble_core::Command::SetView(v)
+            } else {
+                bimble_core::Command::AddView(v)
+            }];
+            cmds.extend(sheets.into_iter().map(bimble_core::Command::SetSheet));
+            if let Err(e) = ed.apply(cmds) {
+                self.view_message = Some(e);
+            }
+            self.refresh_views();
+            self.needs_upload = true;
+            self.view_form = None;
+            return;
+        }
         if let Err(e) = self.store_view(v) {
             self.view_message = Some(e);
             return;

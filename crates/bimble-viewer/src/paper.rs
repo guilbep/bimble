@@ -180,7 +180,8 @@ impl Viewer {
         bimble_render::pick_hit_bvh(
             &l.scene,
             &l.bvh,
-            |i| self.visible(i),
+            // What the drawing shows: visible, and not a class the template leaves off paper.
+            |i| self.visible(i) && !self.plan.template.hides(&l.scene.elements[i].class),
             start,
             dir,
             clip.as_ref(),
