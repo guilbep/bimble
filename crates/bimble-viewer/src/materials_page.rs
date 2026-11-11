@@ -266,6 +266,16 @@ impl Viewer {
                                     }
                                 }
                                 ui.end_row();
+                                // Moved in the Visibility panel: the standards win.
+                                let drawn = self.opts.style.family(&r.name, r.category);
+                                if drawn != r.category {
+                                    ui.label("");
+                                    ui.weak(format!(
+                                        "Drawn as {} (graphic standards)",
+                                        drawn.label()
+                                    ));
+                                    ui.end_row();
+                                }
                                 ui.label("IFC category");
                                 ui.label(match r.category.ifc_category() {
                                     "" => "(none)",

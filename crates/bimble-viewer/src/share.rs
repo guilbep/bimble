@@ -5,21 +5,30 @@ use super::*;
 
 /// What a `.bimbleview` leaves out (said when sharing, and on what is selected in one).
 pub(crate) const NOT_KEPT: &str = "A .bimbleview keeps each element's shape, class, name, \
-    GlobalId, storey and material, the storeys and the grids. Not kept: property sets and \
+    GlobalId, storey and material (its family as imported, not as your standards draw it), \
+    the storeys and the grids. Not kept: property sets and \
     quantities, types, views, sheets, schedules, annotations, reference plans, linked models \
     and the history.";
 
 impl Viewer {
     /// Save the scene shown as a `.bimbleview` (a download in a browser).
     pub(crate) fn share_for_viewing(&mut self) {
-        let Some(l) = &self.loaded else { return };
+        let Some(l) = &mut self.loaded else { return };
         let stem = l
             .path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "model".into());
         let ext = bimble_geom::viewfile::EXTENSION;
+        // The families as imported: this office's moves (its standards) aren't the reader's.
+        let drawn: Vec<_> = l.scene.elements.iter().map(|e| e.category).collect();
+        for (e, &c) in l.scene.elements.iter_mut().zip(&l.imported) {
+            e.category = c;
+        }
         let bytes = bimble_geom::viewfile::write(&l.scene, true);
+        for (e, c) in l.scene.elements.iter_mut().zip(drawn) {
+            e.category = c;
+        }
         self.view_message = match files::save(
             &format!("{stem}.{ext}"),
             &[("Bimble view (read-only)", &[ext])],

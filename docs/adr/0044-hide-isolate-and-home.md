@@ -47,7 +47,12 @@ visibility only by class, storey and material, and opened to an empty window.
    family is saved in the **graphic standards** (`material_families`, material name → family;
    Pierre: shared by the office, for every model), drawn with that family's colour and hatches
    in the viewer, drawings and schedules; the standards panel lists the moves, each with ×.
-   Putting a material back in the family it came with forgets the move.
+   Putting a material back in the family it came with forgets the move. In a `.bimble` model
+   the Materials page still sets the material's own family (model data); when the standards
+   move it, the page says "Drawn as ‹family› (graphic standards)": the standards win on
+   screen and paper. A shared `.bimbleview` carries the families as imported, not this
+   office's moves. The moves are applied before the upload that loading or an edit makes
+   anyway: no second upload when nothing moves.
 10. **The family's colour opens the standards**: a click on a family's swatch in the Visibility
     panel opens the Standards panel on "‹family› on screen".
 11. **Drawings leave out what a view hides by element and by material**: sheets and PDFs

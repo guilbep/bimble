@@ -775,15 +775,23 @@ impl Loaded {
         if self.families_applied.as_ref() == Some(&style.material_families) {
             return false;
         }
-        if self.imported.len() != self.scene.elements.len() {
-            self.imported = self.scene.elements.iter().map(|e| e.category).collect();
-        }
+        // Elements added since (none yet: a scene is replaced whole) are as imported.
+        let n = self.scene.elements.len();
+        self.imported.truncate(n);
+        let k = self.imported.len();
+        self.imported
+            .extend(self.scene.elements[k..].iter().map(|e| e.category));
+        let mut changed = false;
         for (e, &c) in self.scene.elements.iter_mut().zip(&self.imported) {
-            e.category = style.family(&e.material, c);
+            let f = style.family(&e.material, c);
+            changed |= e.category != f;
+            e.category = f;
         }
-        (self.classes, self.storeys, self.categories, self.materials) = counts(&self.scene);
+        if changed {
+            (self.classes, self.storeys, self.categories, self.materials) = counts(&self.scene);
+        }
         self.families_applied = Some(style.material_families.clone());
-        true
+        changed
     }
 }
 
@@ -1554,6 +1562,10 @@ impl Viewer {
                     }),
                     proxies: None,
                 });
+                // In the families the standards say, before the first upload.
+                if let Some(l) = &mut self.loaded {
+                    l.apply_families(&self.opts.style);
+                }
                 self.history_view = None;
                 self.collab_message = None;
                 self.home_open = false;
@@ -1654,9 +1666,10 @@ impl Viewer {
         l.proxies = None;
         l.bvh = bimble_geom::bvh::Bvh::build(&bimble_geom::bvh::element_boxes(&l.scene));
         (l.classes, l.storeys, l.categories, l.materials) = counts(&l.scene);
-        // Families as read: the standards' moves are applied again at the next frame.
+        // Families as read, then as the standards say (before this rebuild's upload).
         l.imported.clear();
         l.families_applied = None;
+        l.apply_families(&self.opts.style);
         l.bounds = bounds_with_links(&l.scene, &self.links);
         self.selected = keep.and_then(|g| l.scene.elements.iter().position(|e| e.global_id == g));
         // Indices may have moved: the added ones are dropped (the clicked one is kept by id).
@@ -3646,12 +3659,13 @@ impl Viewer {
             hatching: self.opts.hatching,
             orthographic: self.camera.orthographic && !self.in_2d(),
             hidden: [
-                self.hidden_categories.len() + self.hidden_materials.len(),
+                self.hidden_categories.len(),
                 self.hidden_classes.len(),
                 self.hidden_storeys.len(),
                 hidden_links,
                 self.hidden_ids.len(),
                 self.isolated_ids.len(),
+                self.hidden_materials.len(),
             ],
             temporary: self
                 .temporary

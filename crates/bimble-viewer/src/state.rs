@@ -18,8 +18,8 @@ pub struct Snapshot {
     pub hatching: bool,
     pub orthographic: bool,
     /// Hidden in the active view: families, classes, storeys, links, elements; then how many
-    /// elements are isolated (#54).
-    pub hidden: [usize; 6],
+    /// elements are isolated (#54); then materials.
+    pub hidden: [usize; 7],
     /// Hidden or isolated for now (#54): isolating, and how many elements.
     pub temporary: Option<(bool, usize)>,
     /// Reveal hidden is on (#54).
@@ -115,10 +115,11 @@ pub fn chips(s: &Snapshot) -> Vec<(Chip, String)> {
     if s.orthographic {
         v.push((Chip::Orthographic, "Orthographic".into()));
     }
-    let [f, c, st, l, e, iso] = s.hidden;
-    if f + c + st + l + e + iso > 0 {
+    let [f, c, st, l, e, iso, m] = s.hidden;
+    if f + c + st + l + e + iso + m > 0 {
         let parts: Vec<String> = [
             (f, "family", "families"),
+            (m, "material", "materials"),
             (c, "class", "classes"),
             (st, "storey", "storeys"),
             (l, "link", "links"),
@@ -222,7 +223,7 @@ mod tests {
             edges: false,
             hatching: false,
             orthographic: true,
-            hidden: [0, 2, 1, 1, 3, 2],
+            hidden: [0, 2, 1, 1, 3, 2, 0],
             temporary: Some((true, 4)),
             revealing: true,
             sync_due: Some(5),
