@@ -253,7 +253,8 @@ impl Viewer {
                 }
             }
         }
-        if key == lay.key || lay.job.as_ref().is_some_and(|j| j.0 == key) {
+        // One drawing at a time (see `refresh_paper`): the next waits for the one running.
+        if key == lay.key || lay.job.is_some() {
             return;
         }
         let Some(l) = &self.loaded else { return };

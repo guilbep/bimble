@@ -19,9 +19,9 @@ fn draw(scene: &bimble_geom::Scene, opts: &PlanOptions) -> Drawn {
     Ok((sheet.prepare()?, info, size))
 }
 
-/// A drawing being made in the background: for which key, where it arrives, since when.
+/// A drawing being made in the background: where it arrives (with the key it was made for),
+/// since when.
 pub(crate) struct Job {
-    key: u64,
     rx: std::sync::mpsc::Receiver<(u64, Drawn, f64)>,
     since: web_time::Instant,
 }
@@ -137,7 +137,9 @@ impl Viewer {
             *p = PaperView::new(v.id);
         }
         p.receive(key);
-        if p.key == key || p.job.as_ref().is_some_and(|j| j.key == key) {
+        // One drawing at a time: while one runs (even for what has changed since), the next
+        // waits for it — five quick edits of a large model never make five drawings at once.
+        if p.key == key || p.job.is_some() {
             return;
         }
         // Another drawing is needed: in the background on the desktop (the picture shown stays,
@@ -153,7 +155,6 @@ impl Viewer {
                 ctx.request_repaint();
             });
             p.job = Some(Job {
-                key,
                 rx,
                 since: web_time::Instant::now(),
             });
@@ -513,7 +514,6 @@ mod tests {
             let (tx, rx) = std::sync::mpsc::channel();
             tx.send((key, Err("drawn".to_string()), 5.0)).unwrap();
             p.job = Some(Job {
-                key,
                 rx,
                 since: web_time::Instant::now(),
             });
