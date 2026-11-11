@@ -114,6 +114,41 @@ pub fn view_clip(v: &View, scene: &Scene, levels: &[Level]) -> Result<Option<Cli
             b.max[k] = b.max[k].min(hi);
         }
     }
+    // The crop region (ADR 0046): in the view's plane, so the box turns with the view.
+    if let Some(c) = &v.crop {
+        let t = bimble_drawing::viewdraw::Turn::of(v, &scene.georef).apply(o);
+        let (lo, hi) = (
+            [c.min[0] - t[0], c.min[1] - t[1]],
+            [c.max[0] - t[0], c.max[1] - t[1]],
+        );
+        match &v.kind {
+            ViewKind::Plan { .. } => {
+                // The box's frame is the turned scene: x, y are the crop's.
+                let yaw = v.plan_turn(&scene.georef) as f32;
+                let (zmin, zmax) = (b.min.z, b.max.z);
+                b = ClipBox {
+                    min: Vec3::new(lo[0] as f32, lo[1] as f32, zmin),
+                    max: Vec3::new(hi[0] as f32, hi[1] as f32, zmax),
+                    yaw,
+                };
+            }
+            ViewKind::Section { facing, .. } => {
+                // Along the cut: the frame axis the section's right lies on; up: the height.
+                let right = section_right(facing.dir());
+                let k = if right[0] != 0.0 { 0 } else { 1 };
+                let (a, z) = if right[k] > 0.0 {
+                    (lo[0] as f32, hi[0] as f32)
+                } else {
+                    (-(hi[0] as f32), -(lo[0] as f32))
+                };
+                b.min[k] = b.min[k].max(a);
+                b.max[k] = b.max[k].min(z);
+                b.min.z = b.min.z.max(lo[1] as f32);
+                b.max.z = b.max.z.min(hi[1] as f32);
+            }
+            ViewKind::ThreeD => {}
+        }
+    }
     Ok(Some(b))
 }
 
@@ -196,6 +231,7 @@ pub fn new_plan(level: &Level, look: Look) -> View {
         annotations: Vec::new(),
         true_north: false,
         scale: 100,
+        crop: None,
     }
 }
 
@@ -218,6 +254,7 @@ pub fn new_section(scene: &Scene, facing: Facing, n: usize) -> View {
         annotations: Vec::new(),
         true_north: false,
         scale: 100,
+        crop: None,
     }
 }
 
@@ -265,6 +302,7 @@ mod tests {
             annotations: Vec::new(),
             true_north: false,
             scale: 100,
+            crop: None,
         };
         let b = view_clip(&sec, &scene, &scene.levels()).unwrap().unwrap();
         assert!((b.yaw - 30f32.to_radians()).abs() < 1e-6);

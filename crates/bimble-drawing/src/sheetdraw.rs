@@ -281,6 +281,7 @@ mod tests {
             true_north: false,
             // The view's scale decides (ADR 0046), whatever its placement says.
             scale: 50,
+            crop: None,
         };
         views.push(section.clone());
         let plan_view = views

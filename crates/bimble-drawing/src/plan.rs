@@ -859,6 +859,38 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
     // Painter's order: low tops first.
     seen.sort_by(|a, b| a.top_z.total_cmp(&b.top_z));
 
+    // The view's crop region (ADR 0046): its geometry clipped to it, in the turned scene (the crop
+    // is in the view's plane, world mm: less the turned origin).
+    let crop = o.view.as_ref().and_then(|v| v.crop).map(|c| {
+        let t = setup.turn.apply(scene.origin_mm);
+        crate::crop::Rect {
+            lo: [c.min[0] - t[0], c.min[1] - t[1]],
+            hi: [c.max[0] - t[0], c.max[1] - t[1]],
+        }
+    });
+    // Columns' centres, for axes when the model has none: counted before the crop, so a crop
+    // holding one column of a line still shows the line's axis.
+    let column_centres: Vec<P2> = cuts
+        .iter()
+        .filter(|c| c.class.eq_ignore_ascii_case("IfcColumn"))
+        .filter_map(|c| bounds(c.loops.iter().flatten()))
+        .map(|(l, h)| [(l[0] + h[0]) / 2.0, (l[1] + h[1]) / 2.0])
+        .collect();
+    if let Some(r) = &crop {
+        for c in &mut cuts {
+            c.loops = c.loops.iter().filter_map(|l| r.polygon(l)).collect();
+            c.open = c.open.iter().flat_map(|l| r.polyline(l)).collect();
+        }
+        cuts.retain(|c| !c.loops.is_empty() || !c.open.is_empty());
+        for sn in &mut seen {
+            sn.top = sn.top.iter().filter_map(|l| r.polygon(l)).collect();
+            sn.edges = sn.edges.iter().filter_map(|e| r.segment(*e)).collect();
+        }
+        seen.retain(|sn| !sn.top.is_empty() || !sn.edges.is_empty());
+        projection = projection.iter().filter_map(|e| r.segment(*e)).collect();
+        above = above.iter().filter_map(|e| r.segment(*e)).collect();
+        beam_labels.retain(|b| r.contains([(b.a[0] + b.b[0]) / 2.0, (b.a[1] + b.b[1]) / 2.0]));
+    }
     let Some((blo, bhi)) = bounds(
         cuts.iter()
             .flat_map(|c| c.loops.iter().chain(&c.open))
@@ -894,12 +926,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
             .collect();
         model_axes = !axes.is_empty();
         if axes.is_empty() && tpl.axes == Axes::ModelOrColumns {
-            let centres: Vec<P2> = cuts
-                .iter()
-                .filter(|c| c.class.eq_ignore_ascii_case("IfcColumn"))
-                .filter_map(|c| bounds(c.loops.iter().flatten()))
-                .map(|(l, h)| [(l[0] + h[0]) / 2.0, (l[1] + h[1]) / 2.0])
-                .collect();
+            let centres = &column_centres;
             let xs = clusters(centres.iter().map(|p| p[0]).collect(), 50.0);
             let ys = clusters(centres.iter().map(|p| p[1]).collect(), 50.0);
             for (i, x) in xs.iter().enumerate() {
@@ -917,6 +944,16 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
                 });
             }
         }
+    }
+    // Cropped: the axes within the crop too (the drawing already is: its geometry was clipped).
+    if let Some(r) = &crop {
+        axes = axes
+            .into_iter()
+            .filter_map(|a| {
+                let [p, q] = r.segment([a.a, a.b])?;
+                Some(Axis { a: p, b: q, ..a })
+            })
+            .collect();
     }
     let (lo, hi) = bounds(
         [blo, bhi]
@@ -1914,6 +1951,60 @@ mod tests {
         Scene::from_model(&concrete_frame(&FrameSpec::default()))
     }
 
+    /// A view cropped to the left half of the frame (ADR 0046): a narrower page, fewer elements
+    /// cut, and nothing filled outside the crop.
+    #[test]
+    fn a_cropped_view_draws_only_its_crop() {
+        let scene = demo();
+        let levels = scene.levels();
+        let v = bimble_core::view::default_views(&levels)
+            .into_iter()
+            .find(|v| v.name.starts_with("Plan Niveau 1"))
+            .unwrap();
+        let draw = |v: &bimble_core::view::View| {
+            let mut o = opts("", 100, None);
+            o.view = Some(v.clone());
+            o.bare = true;
+            plan(&scene, &o).unwrap()
+        };
+        let (whole, wi) = draw(&v);
+        // The frame spans x 0..18 m: keep x −1..9 m, all of y.
+        let crop = bimble_core::view::Crop {
+            min: [-1_000.0, -1e6],
+            max: [9_000.0, 1e6],
+        };
+        let mut cropped = v.clone();
+        cropped.crop = Some(crop);
+        let (part, pi) = draw(&cropped);
+        assert!(
+            part.width_mm < whole.width_mm,
+            "{} vs {}",
+            part.width_mm,
+            whole.width_mm
+        );
+        assert!(
+            pi.cut_elements < wi.cut_elements,
+            "{} vs {}",
+            pi.cut_elements,
+            wi.cut_elements
+        );
+        // The axes crossing the crop, not the others (their columns counted before cropping).
+        assert!(
+            pi.axes > 0 && pi.axes < wi.axes,
+            "{} vs {}",
+            pi.axes,
+            wi.axes
+        );
+        let right = pi.frame.to_paper([crop.max[0], 0.0, 0.0])[0];
+        for i in &part.items {
+            if let Item::Area { loops, .. } = i {
+                for p in loops.iter().flatten() {
+                    assert!(p[0] <= right + 1e-6, "{p:?} beyond {right}");
+                }
+            }
+        }
+    }
+
     /// A bare drawing (a view on its own: On paper, on a sheet) whose title is longer than the
     /// drawing is wide: its page reaches the title's end. It ran off the page before.
     #[test]
@@ -2396,6 +2487,7 @@ mod tests {
             annotations: Vec::new(),
             true_north: false,
             scale: 100,
+            crop: None,
         };
         let views = vec![section("Coupe S1", 2500.0), section("Far away", 90_000.0)];
         let marks = section_marks(&views);
@@ -2630,6 +2722,7 @@ mod tests {
             annotations: Vec::new(),
             true_north: false,
             scale: 100,
+            crop: None,
         };
         o.view = Some(section);
         let (sheet, info) = plan(&scene, &o).unwrap();

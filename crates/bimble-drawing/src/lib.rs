@@ -1,5 +1,6 @@
 //! Drawings on paper: storey plans at scale, written as SVG and PDF.
 
+pub mod crop;
 pub mod cut;
 pub mod fonts;
 pub mod plan;

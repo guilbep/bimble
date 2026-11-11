@@ -170,6 +170,50 @@ impl Viewer {
         self.view_form = None;
     }
 
+    /// The view's extent in its own plane (world mm, as a crop region): the model's, or what the
+    /// screen shows now when `screen` (the active view only).
+    fn view_extent(&self, v: &View, screen: bool) -> Option<bimble_core::view::Crop> {
+        if v.kind == ViewKind::ThreeD {
+            return None;
+        }
+        let l = self.loaded.as_ref()?;
+        let turn = bimble_drawing::viewdraw::Turn::of(v, &l.scene.georef);
+        let o = l.scene.origin_mm;
+        let corners: Vec<[f64; 3]> = if screen {
+            if self.active_view != Some(v.id) || !self.in_2d() {
+                return None;
+            }
+            [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]
+                .iter()
+                .map(|ndc| {
+                    let (p, _) = self.camera.ray(*ndc, self.last_aspect, &l.bounds);
+                    [p.x as f64 + o[0], p.y as f64 + o[1], p.z as f64 + o[2]]
+                })
+                .collect()
+        } else {
+            let b = ClipBox::around(&l.scene, |_| true)?;
+            (0..8)
+                .map(|k| {
+                    let c = |a: usize| if k >> a & 1 == 0 { b.min[a] } else { b.max[a] };
+                    [c(0) as f64 + o[0], c(1) as f64 + o[1], c(2) as f64 + o[2]]
+                })
+                .collect()
+        };
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for p in corners {
+            let q = turn.apply(p);
+            for k in 0..2 {
+                lo[k] = lo[k].min(q[k]);
+                hi[k] = hi[k].max(q[k]);
+            }
+        }
+        let r = |x: f64| (x / 10.0).round() * 10.0;
+        (lo[0] < hi[0] && lo[1] < hi[1]).then(|| bimble_core::view::Crop {
+            min: [r(lo[0]), r(lo[1])],
+            max: [r(hi[0]), r(hi[1])],
+        })
+    }
+
     /// A plan (or ceiling plan) is shown: its cut is a horizontal plane.
     pub(crate) fn in_plan(&self) -> bool {
         self.active_view()
@@ -760,6 +804,7 @@ impl Viewer {
                                     annotations: Vec::new(),
                                     true_north: false,
                                     scale: 100,
+                                    crop: None,
                                 });
                                 ui.close();
                             }
@@ -906,6 +951,9 @@ impl Viewer {
         let mut families_moved: Option<(String, MaterialCategory)> = None;
         let mut turned = false;
         let mut new_scale: Option<u32> = None;
+        // A crop region from the model's extent or from what the screen shows (ADR 0046).
+        let crop_model = self.view_extent(&active, false);
+        let crop_screen = self.view_extent(&active, true);
         let rotation = self
             .loaded
             .as_ref()
@@ -983,6 +1031,60 @@ impl Viewer {
                         });
                     });
                     ui.end_row();
+                    // The crop region (ADR 0046): what of the view is drawn, in its plane.
+                    ui.label("Crop");
+                    ui.add_enabled_ui(editable, |ui| {
+                        ui.horizontal(|ui| {
+                            let mut on = form.crop.is_some();
+                            if ui
+                                .checkbox(&mut on, "")
+                                .on_hover_text("Draw only part of the view, on screen and on paper")
+                                .changed()
+                            {
+                                form.crop = if on { crop_model } else { None };
+                                commit = true;
+                            }
+                            if ui
+                                .add_enabled(
+                                    crop_screen.is_some(),
+                                    egui::Button::new("To the screen"),
+                                )
+                                .on_hover_text("Crop to what the screen shows now")
+                                .clicked()
+                            {
+                                form.crop = crop_screen;
+                                commit = true;
+                            }
+                        });
+                    });
+                    ui.end_row();
+                    if let Some(c) = &mut form.crop {
+                        // In the view's plane, metres: x along, y across (a section: height).
+                        for (label, k) in [("  x", 0), ("  y", 1)] {
+                            ui.label(label);
+                            ui.add_enabled_ui(editable, |ui| {
+                                ui.horizontal(|ui| {
+                                    for corner in 0..2 {
+                                        if corner == 1 {
+                                            ui.label("to");
+                                        }
+                                        let v = if corner == 0 {
+                                            &mut c.min[k]
+                                        } else {
+                                            &mut c.max[k]
+                                        };
+                                        let mut m = *v / 1000.0;
+                                        let r = ui.add(
+                                            egui::DragValue::new(&mut m).speed(0.1).suffix(" m"),
+                                        );
+                                        *v = m * 1000.0;
+                                        commit |= r.drag_stopped() || r.lost_focus();
+                                    }
+                                });
+                            });
+                            ui.end_row();
+                        }
+                    }
                 }
                 match &mut form.kind {
                     ViewKind::ThreeD => {}

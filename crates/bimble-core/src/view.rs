@@ -35,6 +35,18 @@ pub struct View {
     /// its size on every sheet. 100 when not said (files before 0.15).
     #[serde(default = "hundred", skip_serializing_if = "is_hundred")]
     pub scale: u32,
+    /// What of the view is drawn, in its own plane (ADR 0046): a plan's x, y turned to its
+    /// orientation, a section's along the cut and height; world mm. None: all of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<Crop>,
+}
+
+/// A view's crop region: a rectangle in the view's plane (see `View::crop`), world mm.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Crop {
+    pub min: [f64; 2],
+    pub max: [f64; 2],
 }
 
 fn hundred() -> u32 {
@@ -502,6 +514,19 @@ impl View {
         if self.name.trim().is_empty() {
             return Err(ctx("a view needs a name".into()));
         }
+        if let Some(c) = &self.crop {
+            if self.kind == ViewKind::ThreeD {
+                return Err(ctx("a 3D view has no crop region".into()));
+            }
+            if !(c.min.iter().chain(&c.max).all(|v| v.is_finite())
+                && c.min[0] < c.max[0]
+                && c.min[1] < c.max[1])
+            {
+                return Err(ctx(
+                    "a crop region needs finite corners, the first below the second".into(),
+                ));
+            }
+        }
         if !(1..=5000).contains(&self.scale) {
             return Err(ctx(format!(
                 "scale 1:{}: must be between 1:1 and 1:5000",
@@ -564,6 +589,7 @@ pub fn default_views(levels: &[Level]) -> Vec<View> {
         annotations: Vec::new(),
         true_north: false,
         scale: 100,
+        crop: None,
     }];
     let mut sorted: Vec<&Level> = levels.iter().collect();
     sorted.sort_by(|a, b| a.elevation_mm.total_cmp(&b.elevation_mm));
@@ -601,6 +627,7 @@ pub fn default_views(levels: &[Level]) -> Vec<View> {
                 annotations: Vec::new(),
                 true_north: false,
                 scale: 100,
+                crop: None,
             });
         }
     }
@@ -869,6 +896,7 @@ mod tests {
             annotations: Vec::new(),
             true_north: false,
             scale: 100,
+            crop: None,
         };
         let stored: BTreeMap<_, _> =
             [(changed.id, changed.clone()), (extra.id, extra.clone())].into();
