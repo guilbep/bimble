@@ -44,7 +44,7 @@ The installers aren't signed by a paid certificate yet:
 ## Known limits
 
 - `.bimble` files saved by 0.12 and later can't be opened by 0.11 and older: upgrade together, or share `.json`.
-- Models with elements hidden or isolated in a view, or with a reference plan added since 0.13.2, can't be opened by 0.13.1 and older; models with materials hidden in a view, and graphic standards with materials moved to another family, can't be read by 0.13.2 and older: everyone working on a model upgrades together. A `.bimbleview` made since 0.13.3 opens in older versions without its project north.
+- Models with elements hidden or isolated in a view, or with a reference plan added since 0.13.2, can't be opened by 0.13.1 and older; models with materials hidden in a view, and graphic standards with materials moved to another family, can't be read by 0.13.2 and older: everyone working on a model upgrades together. Since 0.13.3 a model knows its place and project north (ADR 0045): models imported from a placed IFC, their shared-folder histories, and views set to true north can't be read by 0.13.2 and older; a `.bimbleview` still opens there, without its project north.
 - Elements of other classes than columns, beams, walls, slabs and footings are moved, not edited by dimensions.
 - Working together (Collaborate → Shared folder, Synchronize): the desktop only; a conflict is settled for all elements at once (from the command line with `--prefer`), not element by element yet. Rights (view / annotate / model) aren't enforced yet.
 - Reference plans: DXF model space and the first page of a vector PDF; no text, hatches or scanned PDFs.

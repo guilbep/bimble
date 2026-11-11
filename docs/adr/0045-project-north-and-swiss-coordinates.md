@@ -46,6 +46,14 @@ everyone can read is **WGS84** latitude and longitude (GPS, EPSG:4326).
   not turned (`rotation_deg` 0) are drawn exactly as before.
 - Sections saved on a turned model before this cut along the building's axes now, no longer
   the world's.
+- Older versions (0.13.2 and before) can't read a model with a place (every model imported from
+  the office's files), its history, or a view set to true north (strict formats); everyone
+  upgrades together. A `.bimbleview` still opens there, unturned.
+- Paper plans of a turned model draw from a turned copy of the scene: on a 32 766-element model
+  a 1:100 plan took 2.58 s instead of 2.00 s, peak memory 2.15 instead of 1.72 GB. Leaving out
+  elements outside the plan's height range before turning would recover most of it.
+- The IfcMapConversion branch (survey offset, map turn) is read but no file has exercised it
+  yet: check one coordinate against IfcOpenShell on the first IFC4 export that has one.
 - Found while doing it: looking straight down, the camera ignored its yaw ("up" fixed to +Y)
   and panning was reversed in 2D views (its "right" came from a rounding error's sign). Up now
   comes from the yaw, panning uses the view's own axes (tests).

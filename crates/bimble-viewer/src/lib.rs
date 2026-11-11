@@ -2155,7 +2155,9 @@ impl Viewer {
             .or_else(|| ClipBox::around(&l.scene, |_| true));
         let Some(mut b) = b else { return };
         if let Some(c) = self.clip() {
-            let (lo, hi) = (b.min.max(c.min), b.max.min(c.max));
+            // Its scene-axis bounds: a turned section's box is in its own frame.
+            let (cmin, cmax) = c.bounds();
+            let (lo, hi) = (b.min.max(cmin), b.max.min(cmax));
             if lo.cmple(hi).all() {
                 b = ClipBox {
                     min: lo,
@@ -2690,6 +2692,7 @@ impl Viewer {
         if resp.dragged() || pointer.is_none() {
             if pointer.is_none() {
                 self.hover_at = None;
+                self.pointer_world = None;
                 self.set_hovered(None);
             }
         } else if pointer != self.hover_at
@@ -2714,7 +2717,7 @@ impl Viewer {
             // Its coordinates for the status bar: on the element, else (a plan) on the cut.
             let on = match h {
                 Some((_, t)) => Some(o + d * t),
-                None if self.in_2d() && d.z.abs() > 1e-6 => clip.map(|c| {
+                None if self.in_plan() && d.z.abs() > 1e-6 => clip.map(|c| {
                     let t = (c.max.z - o.z) / d.z;
                     o + d * t
                 }),
@@ -2753,10 +2756,11 @@ impl Viewer {
                     k.mode != LinkMode::Hidden && !self.hidden_links.contains(&k.name())
                 })
                 .filter_map(|(n, k)| {
+                    // In the link's coordinates: shifted by its offset, turned as ours.
                     let c = clip.map(|c| ClipBox {
-                        min: c.min - k.offset,
-                        max: c.max - k.offset,
-                        yaw: 0.0,
+                        min: c.min - c.to_frame(k.offset),
+                        max: c.max - c.to_frame(k.offset),
+                        yaw: c.yaw,
                     });
                     bimble_render::pick_hit_bvh(
                         &k.scene,
@@ -2994,9 +2998,9 @@ impl Viewer {
                 return None;
             }
             let clip = clip.map(|c| ClipBox {
-                min: c.min - k.offset,
-                max: c.max - k.offset,
-                yaw: 0.0,
+                min: c.min - c.to_frame(k.offset),
+                max: c.max - c.to_frame(k.offset),
+                yaw: c.yaw,
             });
             let hit = bimble_render::pick_hit_bvh(
                 &k.scene,
@@ -3066,6 +3070,7 @@ impl Viewer {
             for v in clip.min.to_array().into_iter().chain(clip.max.to_array()) {
                 v.to_bits().hash(&mut h);
             }
+            clip.yaw.to_bits().hash(&mut h);
             faces.hash(&mut h);
             for i in 0..l.scene.elements.len() {
                 self.visible(i).hash(&mut h);

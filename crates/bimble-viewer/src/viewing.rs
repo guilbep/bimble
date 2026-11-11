@@ -110,6 +110,13 @@ impl Viewer {
         self.views.iter().find(|v| v.id == id)
     }
 
+    /// A plan (or ceiling plan) is shown: its cut is a horizontal plane.
+    pub(crate) fn in_plan(&self) -> bool {
+        self.active_view()
+            .is_some_and(|v| matches!(v.kind, ViewKind::Plan { .. }))
+            && self.in_2d()
+    }
+
     /// The building's turn (radians): from above, project north up (ADR 0045).
     pub(crate) fn project_north(&self) -> f32 {
         self.loaded
@@ -1168,7 +1175,15 @@ impl Viewer {
                 }
             }
         }
-        // Turned: the camera and the section's box follow at once.
+        // Turned, or a section looking elsewhere: the camera and the box follow at once.
+        let facing = |v: &View| match v.kind {
+            ViewKind::Section { facing, .. } => Some(facing),
+            _ => None,
+        };
+        let turned = turned
+            || self
+                .active_view()
+                .is_some_and(|v| v.id == active.id && facing(v) != facing(&active));
         if turned
             && let Some(v) = self.active_view().cloned()
             && let Some(g) = self.loaded.as_ref().map(|l| l.scene.georef.clone())
