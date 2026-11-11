@@ -711,9 +711,11 @@ impl Viewer {
         if let Some((v, f)) = view_change {
             self.update_view(v, f);
         }
+        // A placed view opens as it is on the sheet: On paper (ADR 0046).
         if let Some(v) = open_view {
             self.close_sheet();
             self.activate_view(v);
+            self.set_on_paper(true);
         }
     }
 
