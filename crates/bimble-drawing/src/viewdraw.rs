@@ -225,8 +225,6 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
         } => {
             // Its facing in project north (or true north): along the building's grid.
             let d = view.facing_dir(*facing, &scene.georef);
-            // Right along the section, up, and towards the viewer: a rotation.
-            let turned = map_scene(scene, &visible, turn, false, false);
             let o = [
                 origin[0] - scene.origin_mm[0],
                 origin[1] - scene.origin_mm[1],
@@ -237,6 +235,26 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
             } else {
                 f64::NEG_INFINITY
             };
+            // What it can show: from the cut on along its facing, to its depth. An element wholly
+            // behind the cut or beyond the depth is left out before the copy (ADR 0046).
+            let within = |e: &SceneElement| {
+                let b = e.bounds();
+                if b.is_empty() {
+                    return true;
+                }
+                let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+                for k in 0..4 {
+                    let x = f64::from(if k & 1 == 0 { b.min[0] } else { b.max[0] });
+                    let y = f64::from(if k & 2 == 0 { b.min[1] } else { b.max[1] });
+                    // Height in the turned scene: towards the viewer.
+                    let z = -(d[0] * x + d[1] * y);
+                    lo = lo.min(z);
+                    hi = hi.max(z);
+                }
+                lo <= cut + 1.0 && hi >= level - 1.0
+            };
+            // Right along the section, up, and towards the viewer: a rotation.
+            let turned = map_scene(scene, &|e| visible(e) && within(e), turn, false, false);
             let (name, elevation) = scene
                 .storeys
                 .first()
