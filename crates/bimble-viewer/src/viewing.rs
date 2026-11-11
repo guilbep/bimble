@@ -58,6 +58,7 @@ impl Viewer {
         self.active_view = None;
         self.layout = None;
         self.refresh_views();
+        self.adopt_view_scales();
         let mut msg = format!("{name}: {n} views, {s} sheets");
         if !warnings.is_empty() {
             msg.push_str(&format!(" ({})", warnings.join("; ")));

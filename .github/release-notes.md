@@ -58,8 +58,8 @@ The installers aren't signed by a paid certificate yet:
 - A plan, ceiling plan or section has two pictures, switched in its tab or with **P**: **Model** (to edit) and **On paper**, exactly the drawing its PDF and sheets are made of, zoomed and panned like a sheet.
 - On paper, a click selects the element drawn there (picked on the model), its outline shown; double-click goes to the model at that place.
 - **Scale is the view's**: set in its properties, the same on screen, on paper and on every sheet. Sheets made before take their views' scales on opening, as a change to save.
-- Drawing a plan is about 5 times faster on large models (it leaves out what lies outside the view's range): 0.27 s instead of 1.35 s for a 32 766-element model.
-- The old "On paper" window is now **Export view…** (PDF, SVG, PNG).
+- Drawing a plan of a turned building (such as the office's) is about 5 times faster: it leaves out what lies outside the view's range; 0.27 s instead of 1.35 s for a 32 766-element model. Unturned plans with nothing hidden were already drawn without a copy.
+- The old "On paper" window is now **Export view…** (PDF, SVG).
 
 **Coordinates and IFC (ADR 0045, 0047)**
 - Coordinates in **ETRS89 / UTM**, **US State Plane** (metres, feet, US survey feet), **LV03** and **WGS84**, besides LV95 (Settings → Coordinates), worked out as PROJ does.

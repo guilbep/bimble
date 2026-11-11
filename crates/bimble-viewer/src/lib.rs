@@ -3479,7 +3479,8 @@ impl Viewer {
                         (sheet.to_pdf(), "pdf")
                     };
                     let what = view.as_ref().map_or(p.storey.as_str(), |v| v.name.as_str());
-                    let name = format!("plan-{what}-1-{}.{ext}", p.scale);
+                    let scale = view.as_ref().map_or(p.scale, |v| v.scale);
+                    let name = format!("plan-{what}-1-{scale}.{ext}");
                     let filter: (&str, &[&str]) = if svg {
                         ("SVG", &["svg"])
                     } else {

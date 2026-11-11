@@ -189,7 +189,7 @@ impl Action {
             Action::BoxToSelection => "Section box to selection".into(),
             Action::Fit => "Fit all".into(),
             Action::Top => "Top view".into(),
-            Action::OnPaper => "Export view… (PDF, SVG, PNG)".into(),
+            Action::OnPaper => "Export view… (PDF, SVG)".into(),
             Action::SectionLabels => "Section labels on plans".into(),
             Action::Openings => "Opening sizes on plans".into(),
             Action::SectionMarks => "Section marks on plans".into(),

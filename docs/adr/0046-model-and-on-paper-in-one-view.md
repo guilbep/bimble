@@ -39,7 +39,8 @@ thread, which is why it is slow on big models.
    file the same); changing it on a sheet changes the view. A file from before, whose sheets show a
    view at another scale, has the view take it on opening, as an edit to save, said in the window.
 5. **Honest on old machines**: the paper picture is a still drawn once per change, leaving out what
-   lies outside the view's range; the 0.15 gate is measured: if that brings the large-model redraw
+   lies outside the view's range (when the scene is copied: a turned building or something hidden;
+   measured on the office's turned 32 766-element model, 1.35 → 0.27 s; sections not yet culled); the 0.15 gate is measured: if that brings the large-model redraw
    under about a second, drawing in the background waits for 0.16; else it comes first.
 6. Crop regions per view (on screen and on paper) follow.
 
