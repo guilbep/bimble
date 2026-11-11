@@ -75,7 +75,8 @@ pub fn draw(
             continue;
         };
         let opts = PlanOptions {
-            scale: p.scale,
+            // The view's scale (ADR 0046): the same on every sheet, as on screen.
+            scale: v.scale,
             paper: Some(paper),
             style: o.style.clone(),
             project: o.project.clone(),
@@ -182,7 +183,7 @@ pub fn draw(
         ("drawing_no", def.number.clone()),
         (
             "scale",
-            scales(def)
+            scales(def, views)
                 .iter()
                 .map(|s| format!("1:{s}"))
                 .collect::<Vec<_>>()
@@ -224,8 +225,12 @@ pub fn draw(
 }
 
 /// The scales of the views on a sheet, each once, largest drawing first.
-fn scales(def: &SheetDef) -> Vec<u32> {
-    let mut s: Vec<u32> = def.placed.iter().map(|p| p.scale).collect();
+fn scales(def: &SheetDef, views: &[View]) -> Vec<u32> {
+    let mut s: Vec<u32> = def
+        .placed
+        .iter()
+        .filter_map(|p| views.iter().find(|v| v.id == p.view).map(|v| v.scale))
+        .collect();
     s.sort_unstable();
     s.dedup();
     s
@@ -274,6 +279,8 @@ mod tests {
                 kind: None,
             }],
             true_north: false,
+            // The view's scale decides (ADR 0046), whatever its placement says.
+            scale: 50,
         };
         views.push(section.clone());
         let plan_view = views
@@ -292,7 +299,7 @@ mod tests {
         def.placed.push(Placed {
             id: GlobalId::new(),
             view: section.id,
-            scale: 50,
+            scale: 100,
             at_mm: [620.0, 220.0],
         });
         def.texts.push(SheetText {

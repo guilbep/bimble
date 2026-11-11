@@ -2364,6 +2364,7 @@ mod tests {
             references: Vec::new(),
             annotations: Vec::new(),
             true_north: false,
+            scale: 100,
         };
         let views = vec![section("Coupe S1", 2500.0), section("Far away", 90_000.0)];
         let marks = section_marks(&views);
@@ -2597,6 +2598,7 @@ mod tests {
             references: Vec::new(),
             annotations: Vec::new(),
             true_north: false,
+            scale: 100,
         };
         o.view = Some(section);
         let (sheet, info) = plan(&scene, &o).unwrap();

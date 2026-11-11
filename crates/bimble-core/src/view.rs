@@ -31,6 +31,18 @@ pub struct View {
     /// Drawn in true north rather than project north (Revit's view Orientation; ADR 0045).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub true_north: bool,
+    /// 1:N, the view's (ADR 0046): its pens, texts and dimensions on paper and on screen, and
+    /// its size on every sheet. 100 when not said (files before 0.15).
+    #[serde(default = "hundred", skip_serializing_if = "is_hundred")]
+    pub scale: u32,
+}
+
+fn hundred() -> u32 {
+    100
+}
+
+fn is_hundred(s: &u32) -> bool {
+    *s == 100
 }
 
 impl View {
@@ -490,6 +502,12 @@ impl View {
         if self.name.trim().is_empty() {
             return Err(ctx("a view needs a name".into()));
         }
+        if !(1..=5000).contains(&self.scale) {
+            return Err(ctx(format!(
+                "scale 1:{}: must be between 1:1 and 1:5000",
+                self.scale
+            )));
+        }
         match &self.kind {
             ViewKind::ThreeD => {
                 if !self.references.is_empty() || !self.annotations.is_empty() {
@@ -545,6 +563,7 @@ pub fn default_views(levels: &[Level]) -> Vec<View> {
         references: Vec::new(),
         annotations: Vec::new(),
         true_north: false,
+        scale: 100,
     }];
     let mut sorted: Vec<&Level> = levels.iter().collect();
     sorted.sort_by(|a, b| a.elevation_mm.total_cmp(&b.elevation_mm));
@@ -581,6 +600,7 @@ pub fn default_views(levels: &[Level]) -> Vec<View> {
                 references: Vec::new(),
                 annotations: Vec::new(),
                 true_north: false,
+                scale: 100,
             });
         }
     }
@@ -848,6 +868,7 @@ mod tests {
             references: Vec::new(),
             annotations: Vec::new(),
             true_north: false,
+            scale: 100,
         };
         let stored: BTreeMap<_, _> =
             [(changed.id, changed.clone()), (extra.id, extra.clone())].into();

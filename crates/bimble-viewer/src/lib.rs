@@ -118,7 +118,8 @@ fn plan_options(
     bimble_drawing::plan::PlanOptions {
         storey: p.storey.clone(),
         cut_above_mm: p.cut_mm,
-        scale: p.scale,
+        // A view is drawn at its own scale (ADR 0046); a storey plan without one at this one.
+        scale: view.as_ref().map_or(p.scale, |v| v.scale),
         paper: p.paper,
         style,
         project: path
@@ -3366,14 +3367,25 @@ impl Viewer {
                     ui.end_row();
                 }
                 ui.label("Scale 1:");
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(&mut p.scale).range(1..=5000));
-                    for s in [50, 100, 200, 500] {
-                        if ui.small_button(format!("{s}")).clicked() {
-                            p.scale = s;
-                        }
+                // A view's scale is the view's: changed in its properties (ADR 0046).
+                match p
+                    .view_id
+                    .and_then(|id| self.views.iter().find(|v| v.id == id))
+                {
+                    Some(v) => {
+                        ui.label(format!("{} (the view's, in its properties)", v.scale));
                     }
-                });
+                    None => {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut p.scale).range(1..=5000));
+                            for s in [50, 100, 200, 500] {
+                                if ui.small_button(format!("{s}")).clicked() {
+                                    p.scale = s;
+                                }
+                            }
+                        });
+                    }
+                }
                 ui.end_row();
                 ui.label("Paper");
                 egui::ComboBox::from_id_salt("plan-paper")

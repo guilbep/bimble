@@ -110,6 +110,34 @@ impl Viewer {
         self.views.iter().find(|v| v.id == id)
     }
 
+    /// A view's scale (ADR 0046), and its placements on sheets with it, so a file read by an
+    /// older version prints the same.
+    pub(crate) fn set_view_scale(&mut self, id: GlobalId, scale: u32) {
+        let Some(mut v) = self.views.iter().find(|v| v.id == id).cloned() else {
+            return;
+        };
+        v.scale = scale;
+        if let Err(e) = self.store_view(v) {
+            self.view_message = Some(e);
+            return;
+        }
+        for mut s in self.sheets() {
+            let mut changed = false;
+            for p in s
+                .placed
+                .iter_mut()
+                .filter(|p| p.view == id && p.scale != scale)
+            {
+                p.scale = scale;
+                changed = true;
+            }
+            if changed && let Err(e) = self.store_sheet(s) {
+                self.view_message = Some(e);
+            }
+        }
+        self.view_form = None;
+    }
+
     /// A plan (or ceiling plan) is shown: its cut is a horizontal plane.
     pub(crate) fn in_plan(&self) -> bool {
         self.active_view()
@@ -191,6 +219,32 @@ impl Viewer {
         }
         self.active_view = None;
         self.refresh_views();
+        self.adopt_view_scales();
+    }
+
+    /// Views placed on sheets at another scale than theirs, in files from before 0.15: they take
+    /// it (ADR 0046), as an edit to save, so the sheets print as before. Said, never silent.
+    fn adopt_view_scales(&mut self) {
+        let adopted = bimble_core::sheet::adopted_scales(&self.views, &self.sheets());
+        if adopted.is_empty() {
+            return;
+        }
+        let mut names = Vec::new();
+        for (id, scale) in adopted {
+            let Some(mut v) = self.views.iter().find(|v| v.id == id).cloned() else {
+                continue;
+            };
+            v.scale = scale;
+            names.push(format!("{} 1:{scale}", v.name));
+            if let Err(e) = self.store_view(v) {
+                self.view_message = Some(e);
+                return;
+            }
+        }
+        self.view_note = Some(format!(
+            "Scales now belong to views: {} (from their sheets; save to keep)",
+            names.join(", ")
+        ));
     }
 
     /// Switch to a view: its camera (remembered per view), clip and visibility.
@@ -673,6 +727,7 @@ impl Viewer {
                                     references: Vec::new(),
                                     annotations: Vec::new(),
                                     true_north: false,
+                                    scale: 100,
                                 });
                                 ui.close();
                             }
@@ -818,6 +873,7 @@ impl Viewer {
         let mut open_standards: Option<String> = None;
         let mut families_moved: Option<(String, MaterialCategory)> = None;
         let mut turned = false;
+        let mut new_scale: Option<u32> = None;
         let rotation = self
             .loaded
             .as_ref()
@@ -874,6 +930,26 @@ impl Viewer {
                         turned = true;
                         commit = true;
                     }
+                    ui.end_row();
+                    // The view's scale (ADR 0046): its pens and texts on paper and on screen, its
+                    // size on every sheet.
+                    ui.label("Scale 1:");
+                    ui.add_enabled_ui(editable, |ui| {
+                        ui.horizontal(|ui| {
+                            let mut sc = form.scale;
+                            let r = ui.add(egui::DragValue::new(&mut sc).range(1..=5000));
+                            if (r.drag_stopped() || r.lost_focus()) && sc != active.scale {
+                                new_scale = Some(sc);
+                            }
+                            form.scale = sc;
+                            for k in [20, 50, 100, 200] {
+                                if ui.small_button(k.to_string()).clicked() && k != active.scale {
+                                    form.scale = k;
+                                    new_scale = Some(k);
+                                }
+                            }
+                        });
+                    });
                     ui.end_row();
                 }
                 match &mut form.kind {
@@ -1177,6 +1253,9 @@ impl Viewer {
                 }
             }
         }
+        if let Some(sc) = new_scale {
+            self.set_view_scale(active.id, sc);
+        }
         // Turned, or a section looking elsewhere: the camera and the box follow at once.
         let facing = |v: &View| match v.kind {
             ViewKind::Section { facing, .. } => Some(facing),
@@ -1458,9 +1537,10 @@ impl Viewer {
         let a = self.opts.style.dimensions.0;
         let col = Color32::from_rgb(a[0], a[1], a[2]);
         let painter = ui.painter_at(rect);
-        // Text sizes as at 1:100, within readable bounds.
+        // Text sizes as on paper at the view's scale (ADR 0046), within readable bounds.
+        let k = f64::from(v.scale);
         let font = |size_mm: f64| {
-            egui::FontId::proportional((size_mm * 100.0 * px_per_mm).clamp(8.0, 40.0) as f32)
+            egui::FontId::proportional((size_mm * k * px_per_mm).clamp(8.0, 40.0) as f32)
         };
         for an in &v.annotations {
             match an {

@@ -383,10 +383,16 @@ impl Viewer {
             let at = to_paper(p);
             let mut s = def.clone();
             let id = GlobalId::new();
+            // At the view's own scale (ADR 0046).
+            let scale = self
+                .views
+                .iter()
+                .find(|v| v.id == d.0)
+                .map_or(100, |v| v.scale);
             s.placed.push(Placed {
                 id,
                 view: d.0,
-                scale: 100,
+                scale,
                 at_mm: [at[0].clamp(0.0, w), at[1].clamp(0.0, h)],
             });
             lay.picked = Some(Picked::Placed(id));
@@ -796,10 +802,13 @@ impl Viewer {
                     .map_or("(missing view)".to_string(), |v| v.name.clone());
                 ui.heading("Placed view");
                 ui.label(&name);
-                let mut scale = p.scale;
+                // The view's scale (ADR 0046): changing it here changes it everywhere it is shown.
+                let view_scale = self.views.iter().find(|v| v.id == p.view).map(|v| v.scale);
+                let mut scale = view_scale.unwrap_or(p.scale);
                 let mut commit = false;
                 ui.horizontal(|ui| {
-                    ui.label("Scale 1:");
+                    ui.label("Scale 1:")
+                        .on_hover_text("The view's scale: the same on every sheet and on screen");
                     let r = ui.add(egui::DragValue::new(&mut scale).range(1..=5000));
                     commit |= r.drag_stopped() || r.lost_focus();
                     for s in [20, 50, 100, 200] {
@@ -815,14 +824,8 @@ impl Viewer {
                     open = ui.button("Open view").clicked();
                     remove = ui.button("Remove from sheet").clicked();
                 });
-                if commit && scale != p.scale {
-                    let mut s = def.clone();
-                    if let Some(q) = s.placed.iter_mut().find(|q| q.id == id) {
-                        q.scale = scale;
-                    }
-                    if let Err(e) = self.store_sheet(s) {
-                        self.view_message = Some(e);
-                    }
+                if commit && Some(scale) != view_scale {
+                    self.set_view_scale(p.view, scale);
                 }
                 if remove {
                     let mut s = def.clone();
