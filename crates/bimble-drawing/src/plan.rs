@@ -728,9 +728,10 @@ fn storey_setup<'a>(
         scene: if turn == crate::viewdraw::Turn::Plan(0.0) {
             std::borrow::Cow::Borrowed(scene)
         } else {
+            // Only what lies between this storey and the next: the rest isn't drawn.
             std::borrow::Cow::Owned(crate::viewdraw::map_scene(
                 scene,
-                &|_| true,
+                &|e| crate::viewdraw::within_heights(e, oz, level + oz, next + oz),
                 turn,
                 false,
                 true,

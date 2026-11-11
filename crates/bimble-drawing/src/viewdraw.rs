@@ -152,7 +152,27 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
             .ok_or_else(|| format!("view {}: no storey {key} in this model", view.name))
     };
     let shown = Shown::of(&view.visibility);
-    let visible = |e: &SceneElement| shown.keeps(e);
+    // What the drawing can show: an element wholly outside the view's heights is left out before
+    // the scene is copied and turned (ADR 0046); its drawing doesn't change.
+    let range = match &view.kind {
+        ViewKind::Plan {
+            storey,
+            look,
+            range,
+        } => resolve(range, *look, storey, &levels)
+            .ok()
+            .map(|r| match look {
+                Look::Down => (r.depth.min(r.cut), r.top.max(r.cut)),
+                Look::Up => {
+                    let (lo, hi) = r.visible(*look);
+                    (lo.min(hi), hi.max(lo))
+                }
+            }),
+        _ => None,
+    };
+    let visible = |e: &SceneElement| {
+        shown.keeps(e) && range.is_none_or(|(lo, hi)| within_heights(e, oz, lo, hi))
+    };
     let turn = Turn::of(view, &scene.georef);
     match &view.kind {
         ViewKind::ThreeD => Err(format!(
@@ -235,6 +255,17 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
             })
         }
     }
+}
+
+/// Whether any of an element lies between the heights `lo` and `hi` (world mm; infinite for an
+/// unlimited side), with a millimetre to spare.
+pub(crate) fn within_heights(e: &SceneElement, oz: f64, lo: f64, hi: f64) -> bool {
+    let b = e.bounds();
+    if b.is_empty() {
+        return true;
+    }
+    let (zl, zh) = (f64::from(b.min[2]) + oz, f64::from(b.max[2]) + oz);
+    zh >= lo - 1.0 && zl <= hi + 1.0
 }
 
 /// What a view shows (its visibility lists), as sets: asked once per element.
@@ -504,6 +535,54 @@ mod tests {
         assert!(
             (d[0] + a.sin()).abs() < 1e-12 && (d[1] - a.cos()).abs() < 1e-12,
             "{d:?}"
+        );
+    }
+
+    /// A turned plan of the lowest storey copies only what lies within its range: the upper
+    /// storey's beams and slab, wholly above, are left out (ADR 0046); before, every element was
+    /// copied and turned.
+    #[test]
+    fn a_plan_leaves_out_what_is_above_its_range() {
+        use bimble_core::demo::{FrameSpec, concrete_frame};
+        use bimble_core::view::default_views;
+        let mut scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        scene.georef.rotation_deg = 30.0;
+        let levels = scene.levels();
+        let low = levels
+            .iter()
+            .min_by(|a, b| a.elevation_mm.total_cmp(&b.elevation_mm))
+            .unwrap();
+        let plan = default_views(&levels)
+            .into_iter()
+            .find(|v| matches!(&v.kind, ViewKind::Plan { storey, look: Look::Down, .. } if *storey == low.key))
+            .unwrap();
+        let ViewKind::Plan {
+            storey,
+            look,
+            range,
+        } = &plan.kind
+        else {
+            unreachable!()
+        };
+        let top = resolve(range, *look, storey, &levels).unwrap().top;
+        let up = setup(&scene, &plan).unwrap();
+        assert!(up.scene.elements.len() < scene.elements.len());
+        let oz = scene.origin_mm[2];
+        let above: Vec<&str> = scene
+            .elements
+            .iter()
+            .filter(|e| f64::from(e.bounds().min[2]) + oz > top + 1.0)
+            .map(|e| e.global_id.as_str())
+            .collect();
+        assert!(
+            !above.is_empty(),
+            "the frame has elements above the lowest plan"
+        );
+        assert!(
+            up.scene
+                .elements
+                .iter()
+                .all(|e| !above.contains(&e.global_id.as_str()))
         );
     }
 
