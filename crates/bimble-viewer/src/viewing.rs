@@ -233,11 +233,32 @@ impl Viewer {
         self.needs_render = true;
     }
 
+    /// A material drawn as another family (the graphic standards, for every model): back to
+    /// the family it came with, the move is forgotten.
+    fn move_material(&mut self, m: String, to: MaterialCategory) {
+        let Some(l) = &self.loaded else { return };
+        let came_with = l
+            .scene
+            .elements
+            .iter()
+            .zip(&l.imported)
+            .find(|(e, _)| e.material == m)
+            .map(|(_, &c)| c);
+        let map = &mut self.opts.style.material_families;
+        if came_with == Some(to) {
+            map.remove(&m);
+        } else {
+            map.insert(m, to);
+        }
+        // Applied at the end of the frame (Loaded::apply_families).
+    }
+
     fn apply_visibility(&mut self, v: &Visibility) {
         self.hidden_categories = MaterialCategory::ALL
             .into_iter()
             .filter(|c| v.hidden_families.iter().any(|f| f == c.label()))
             .collect();
+        self.hidden_materials = v.hidden_materials.iter().cloned().collect();
         self.hidden_classes = v.hidden_classes.iter().cloned().collect();
         self.hidden_storeys = v.hidden_storeys.iter().cloned().collect();
         self.hidden_links = v.hidden_links.iter().cloned().collect();
@@ -279,6 +300,7 @@ impl Viewer {
     /// Show everything in the active view again, and save that with the view (ADR 0028).
     pub(crate) fn show_all_in_view(&mut self) {
         self.hidden_categories.clear();
+        self.hidden_materials.clear();
         self.hidden_classes.clear();
         self.hidden_storeys.clear();
         self.hidden_links.clear();
@@ -306,6 +328,7 @@ impl Viewer {
                 .iter()
                 .map(|c| c.label().to_owned())
                 .collect(),
+            hidden_materials: self.hidden_materials.iter().cloned().collect(),
             hidden_classes: self.hidden_classes.iter().cloned().collect(),
             hidden_storeys: self.hidden_storeys.iter().cloned().collect(),
             hidden_links: self.hidden_links.iter().cloned().collect(),
@@ -770,6 +793,8 @@ impl Viewer {
         let mut commit = false;
         let mut pick_reference = false;
         let mut visibility_changed = false;
+        let mut open_standards: Option<String> = None;
+        let mut families_moved: Option<(String, MaterialCategory)> = None;
         let editable =
             self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) || self.side_views.is_some();
         {
@@ -895,13 +920,30 @@ impl Viewer {
             .default_open(true)
             .show(ui, |ui| {
                 let Some(l) = &self.loaded else { return };
+                // Each family: its colour (a click opens it in the standards), and its
+                // materials, each hidden on its own or moved to another family (saved in the
+                // standards, for every model).
+                let mut move_to: Option<(String, MaterialCategory)> = None;
                 for (cat, n) in &l.categories {
                     let mut on = !self.hidden_categories.contains(cat);
-                    ui.horizontal(|ui| {
+                    let id = ui.make_persistent_id(("vis-family", *cat));
+                    egui::collapsing_header::CollapsingState::load_with_default_open(
+                        ui.ctx(),
+                        id,
+                        false,
+                    )
+                    .show_header(ui, |ui| {
                         let c = self.opts.style.families.get(*cat).color.0;
-                        let (r, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
+                        let (r, swatch) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::click());
                         ui.painter()
                             .rect_filled(r, 2.0, Color32::from_rgb(c[0], c[1], c[2]));
+                        if swatch
+                            .on_hover_text("Colour and hatches: open in the graphic standards")
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            open_standards = Some(format!("{} on screen", cat.label()));
+                        }
                         if ui
                             .checkbox(&mut on, format!("{} ({n})", cat.label()))
                             .changed()
@@ -909,7 +951,46 @@ impl Viewer {
                             toggle(&mut self.hidden_categories, *cat, on);
                             visibility_changed = true;
                         }
+                    })
+                    .body(|ui| {
+                        for ((_, m), k) in l
+                            .materials
+                            .range((*cat, String::new())..)
+                            .take_while(|((c, _), _)| c == cat)
+                        {
+                            ui.horizontal(|ui| {
+                                let mut on = !self.hidden_materials.contains(m);
+                                let label = if m.is_empty() { "(no material)" } else { m };
+                                if ui.checkbox(&mut on, format!("{label} ({k})")).changed() {
+                                    toggle(&mut self.hidden_materials, m.clone(), on);
+                                    visibility_changed = true;
+                                }
+                                if m.is_empty() {
+                                    return;
+                                }
+                                let mut to = *cat;
+                                egui::ComboBox::from_id_salt(("vis-move", m))
+                                    .selected_text(to.label())
+                                    .width(90.0)
+                                    .show_ui(ui, |ui| {
+                                        for c in MaterialCategory::ALL {
+                                            ui.selectable_value(&mut to, c, c.label());
+                                        }
+                                    })
+                                    .response
+                                    .on_hover_text(
+                                        "The family this material is drawn as (saved in the \
+                                         graphic standards)",
+                                    );
+                                if to != *cat {
+                                    move_to = Some((m.clone(), to));
+                                }
+                            });
+                        }
                     });
+                }
+                if let Some((m, to)) = move_to {
+                    families_moved = Some((m, to));
                 }
                 ui.separator();
                 for (class, n) in &l.classes {
@@ -1009,6 +1090,13 @@ impl Viewer {
                 self.moving_ref = None;
             }
             edits.commit = true;
+        }
+        if let Some(q) = open_standards {
+            self.standards_open = true;
+            self.standards_query = q;
+        }
+        if let Some((m, to)) = families_moved {
+            self.move_material(m, to);
         }
         if visibility_changed {
             let vis = self.current_visibility();

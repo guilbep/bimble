@@ -3,6 +3,12 @@
 
 use super::*;
 
+/// What a `.bimbleview` leaves out (said when sharing, and on what is selected in one).
+pub(crate) const NOT_KEPT: &str = "A .bimbleview keeps each element's shape, class, name, \
+    GlobalId, storey and material, the storeys and the grids. Not kept: property sets and \
+    quantities, types, views, sheets, schedules, annotations, reference plans, linked models \
+    and the history.";
+
 impl Viewer {
     /// Save the scene shown as a `.bimbleview` (a download in a browser).
     pub(crate) fn share_for_viewing(&mut self) {
@@ -20,8 +26,8 @@ impl Viewer {
             &bytes,
         ) {
             Ok(Some(to)) => Some(format!(
-                "Saved {to} ({:.1} MB): opens in Bimble, also in a browser, read-only",
-                bytes.len() as f64 / 1e6
+                "Saved {to} ({}): opens in Bimble, also in a browser, read-only. {NOT_KEPT}",
+                big::size(bytes.len() as u64)
             )),
             Ok(None) => return,
             Err(e) => Some(e),

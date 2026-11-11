@@ -1091,7 +1091,8 @@ impl Viewer {
         });
     }
 
-    /// Tabs of the open views, sheets and schedules, over the main view.
+    /// Tabs of the open views, sheets and schedules, over the main view. Right-click on a tab:
+    /// close it, the others, or all of them (then Home shows).
     pub(crate) fn view_tabs(&mut self, ui: &mut egui::Ui) {
         // What the main view shows always has its tab.
         let current = if self.materials_page.is_some() {
@@ -1119,7 +1120,7 @@ impl Viewer {
             TabRef::Project | TabRef::Materials => true,
         });
         let mut go: Option<TabRef> = None;
-        let mut close: Option<TabRef> = None;
+        let mut close: Option<Close> = None;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (k, t) in self.open_tabs.clone().into_iter().enumerate() {
@@ -1158,28 +1159,56 @@ impl Viewer {
                         go = Some(t.clone());
                     }
                     if r.middle_clicked() {
-                        close = Some(t.clone());
+                        close = Some(Close::This(t.clone()));
                     }
-                    if self.open_tabs.len() > 1
-                        && ui
-                            .small_button("×")
-                            .on_hover_text("Close the tab")
+                    r.context_menu(|ui| {
+                        if ui.button("Close").clicked() {
+                            close = Some(Close::This(t.clone()));
+                        }
+                        if ui
+                            .add_enabled(
+                                self.open_tabs.len() > 1,
+                                egui::Button::new("Close other tabs"),
+                            )
                             .clicked()
+                        {
+                            close = Some(Close::Others(t.clone()));
+                        }
+                        if ui.button("Close all tabs").clicked() {
+                            close = Some(Close::All);
+                        }
+                    });
+                    if ui
+                        .small_button("×")
+                        .on_hover_text("Close the tab (right-click: close the others, or all)")
+                        .clicked()
                     {
-                        close = Some(t.clone());
+                        close = Some(Close::This(t.clone()));
                     }
                 });
             }
         });
-        if let Some(t) = close {
-            self.open_tabs.retain(|x| *x != t);
-            if current.as_ref() == Some(&t) {
-                go = self.open_tabs.last().cloned();
-                if go.is_none() {
-                    self.close_pages();
-                    self.close_sheet();
+        let closing = close.is_some();
+        match close {
+            Some(Close::This(t)) => {
+                self.open_tabs.retain(|x| *x != t);
+                if current.as_ref() == Some(&t) {
+                    go = self.open_tabs.last().cloned();
                 }
             }
+            Some(Close::Others(t)) => {
+                self.open_tabs.retain(|x| *x == t);
+                go = Some(t);
+            }
+            Some(Close::All) => self.open_tabs.clear(),
+            None => {}
+        }
+        // Nothing left open: back to Home (Revit's start page), the model kept loaded.
+        if closing && self.open_tabs.is_empty() {
+            self.close_pages();
+            self.close_sheet();
+            self.home_open = true;
+            return;
         }
         if let Some(t) = go {
             self.go_to(t);
@@ -1425,6 +1454,13 @@ impl Viewer {
             self.palette = None;
         }
     }
+}
+
+/// Which tabs to close.
+enum Close {
+    This(TabRef),
+    Others(TabRef),
+    All,
 }
 
 #[cfg(test)]

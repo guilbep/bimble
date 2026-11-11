@@ -372,13 +372,38 @@ pub fn chosen_triangles(census: &[Counted], split: Split, chosen: &[String]) -> 
     )
 }
 
-pub fn gb(bytes: u64) -> String {
-    format!("{:.1} GB", bytes as f64 / 1e9)
+/// A size in bytes as people read it: "1.2 GB", "85 MB", "12 kB" (one decimal below 10).
+pub fn size(bytes: u64) -> String {
+    let b = bytes as f64;
+    let (x, unit) = if b >= 1e9 {
+        (b / 1e9, "GB")
+    } else if b >= 1e6 {
+        (b / 1e6, "MB")
+    } else if b >= 1e3 {
+        (b / 1e3, "kB")
+    } else {
+        return format!("{bytes} B");
+    };
+    if x < 9.95 {
+        format!("{x:.1} {unit}")
+    } else {
+        format!("{x:.0} {unit}")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes_in_the_unit_that_reads() {
+        assert_eq!(size(3_360_000_000), "3.4 GB");
+        assert_eq!(size(99_000_000), "99 MB");
+        assert_eq!(size(980_000_000), "980 MB");
+        assert_eq!(size(4_200_000), "4.2 MB");
+        assert_eq!(size(12_300), "12 kB");
+        assert_eq!(size(512), "512 B");
+    }
     use bimble_core::MaterialCategory;
     use bimble_geom::ElementInfo;
 

@@ -49,7 +49,7 @@ a decision that changes an old one says which one it supersedes.
 | [0041](0041-themes-and-roboto.md) | Interface themes (Grey default per issue #53, Dark, Light, Solarized, High contrast; all text ≥ 4.5:1, tested), Roboto shipped for the interface and embedded in PDFs; sheet font in the graphic style | Accepted |
 | [0042](0042-every-element-and-a-binary-bimble.md) | Convert every element (others as `IfcBuildingElementProxy` keeping their class name, meshes relative to their first point); each shape once (mapped copies share a mesh in memory, file, scene and history; history objects gzipped); `.bimble` v2 = gzip of CBOR, JSON v1 still read | Accepted |
 | [0043](0043-installers-unsigned-for-now.md) | Installers on every system (.dmg, .msi, .deb, .rpm, AppImage) with cargo-packager, unsigned for now (macOS ad hoc); a Homebrew tap in this repository | Accepted |
-| [0044](0044-hide-isolate-and-home.md) | Hide and isolate for now or in a view (by GlobalId), Reveal hidden, Ctrl/Cmd+click selection, right-click menu; Home with recent files; who you are in Settings until a server | Accepted |
+| [0044](0044-hide-isolate-and-home.md) | Hide and isolate for now or in a view (by GlobalId), Reveal hidden, Ctrl/Cmd+click selection, right-click menu; Home with recent files; who you are in Settings until a server; tabs: close others or all (then Home); a family split by material, moves saved in the standards (amended 11 Nov) | Accepted |
 
 Session journals (what happened, in order, with measurements) are in [`docs/journal`](../journal).
 

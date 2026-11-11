@@ -1,6 +1,6 @@
 # ADR 0044 — Hide and isolate; Home and who you are
 
-- Status: Accepted (10 Nov 2026)
+- Status: Accepted (10 Nov 2026); amended 11 Nov 2026 (tabs, materials, drawings)
 - Decided by: the office (issues #54, #52); Pierre ("go ahead"; sign-in: a local name and e-mail
   until there is a server); details by Claude
 - Reversal cost: low (view visibility gains two optional fields; settings gain three)
@@ -35,7 +35,37 @@ visibility only by class, storey and material, and opened to an empty window.
 7. **Who you are = Settings → You** (name, e-mail): the author of commits, the owner of borrowed
    elements. Signing in waits for a server (ADR 0038's HTTP remote).
 
+## Amendment, 11 Nov 2026 (Pierre)
+
+8. **Tabs**: a right click on a tab closes it, the other tabs, or all of them; every tab has its
+   ×, the last one too. Nothing left open shows **Home**, the model still loaded; choosing a
+   view, sheet or schedule leaves Home. On Home there are no tabs: leaving it brings back the
+   view's.
+9. **A family split by material** (the "Other" family is large): in the Visibility panel each
+   family opens into the material names found, each hidden on its own (the view's
+   `hidden_materials`, optional) and each with a family drop-down. A material put in another
+   family is saved in the **graphic standards** (`material_families`, material name → family;
+   Pierre: shared by the office, for every model), drawn with that family's colour and hatches
+   in the viewer, drawings and schedules; the standards panel lists the moves, each with ×.
+   Putting a material back in the family it came with forgets the move.
+10. **The family's colour opens the standards**: a click on a family's swatch in the Visibility
+    panel opens the Standards panel on "‹family› on screen".
+11. **Drawings leave out what a view hides by element and by material**: sheets and PDFs
+    applied only families, classes and storeys; hidden, isolated (#54) and hidden materials
+    were still drawn. One set per list per drawing.
+12. Sizes read in the unit that fits (12 kB, 99 MB, 3.4 GB) instead of always GB.
+13. A `.bimbleview` says what it leaves out (property sets and quantities, types, views,
+    sheets, schedules, annotations, reference plans, linked models, history): when shared, and
+    on the selected element of one (ADR 0040).
+
+Not done: material moves on linked models (they keep their own families); the command line
+(`bimble render --style`) ignores the moves.
+
 ## Alternatives considered
+
+- Other families fixed in Bimble (metal, plaster, membranes…), or families each office
+  defines (name, colour, hatch, matching names): asked, Pierre chose the split by material.
+- Moves saved in the model: each project would choose again; the standards are the office's.
 
 - Isolate in view as "hide all the others": a list as long as the model, and new elements
   would stay hidden; an isolation list keeps new ones out until unhidden, which is Revit's way.

@@ -162,6 +162,10 @@ pub struct GraphicStyle {
     /// Brightness of surfaces cut by the clipping box, relative to their fill (0..1).
     pub cut_shade: f32,
     pub families: Families,
+    /// Materials put in another family than the one their name suggests, by material name
+    /// (e.g. "Aluminium" → steel): they take that family's colour and hatches.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub material_families: std::collections::BTreeMap<String, MaterialCategory>,
     /// Drawings on paper (plans, sections): pens and hatch sizes in mm on the sheet.
     pub paper: PaperStyle,
 }
@@ -338,6 +342,7 @@ impl Default for GraphicStyle {
             hatch_darken: 0.45,
             ambient: 0.62,
             cut_shade: 0.72,
+            material_families: Default::default(),
             paper: PaperStyle {
                 cut_pen_mm: 0.5,
                 projection_pen_mm: 0.18,
@@ -409,6 +414,14 @@ impl Default for GraphicStyle {
 pub const MAX_STYLE_BYTES: usize = 1 << 20;
 
 impl GraphicStyle {
+    /// An element's family: the one its material is put in here, else the one it came with.
+    pub fn family(&self, material: &str, imported: MaterialCategory) -> MaterialCategory {
+        self.material_families
+            .get(material)
+            .copied()
+            .unwrap_or(imported)
+    }
+
     /// Reads a style file: the values it gives, on top of the default.
     pub fn from_json(text: &str) -> Result<GraphicStyle, String> {
         if text.len() > MAX_STYLE_BYTES {
@@ -571,6 +584,27 @@ fn diff(a: &serde_json::Value, b: &serde_json::Value) -> Option<serde_json::Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_material_moved_to_another_family_is_saved_with_the_standards() {
+        let mut s = GraphicStyle::default();
+        assert_eq!(
+            s.family("Aluminium", MaterialCategory::Other),
+            MaterialCategory::Other
+        );
+        s.material_families
+            .insert("Aluminium".into(), MaterialCategory::Steel);
+        assert_eq!(
+            s.family("Aluminium", MaterialCategory::Other),
+            MaterialCategory::Steel
+        );
+        assert_eq!(
+            s.family("C30/37", MaterialCategory::Concrete),
+            MaterialCategory::Concrete
+        );
+        let back = GraphicStyle::from_json(&s.to_json_diff()).unwrap();
+        assert_eq!(back, s);
+    }
 
     #[test]
     fn default_round_trips_through_json() {

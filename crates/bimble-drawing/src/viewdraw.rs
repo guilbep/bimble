@@ -13,6 +13,7 @@
 use bimble_core::view::{Look, View, ViewKind, Visibility, resolve};
 use bimble_geom::{Scene, SceneElement, pack_normal};
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 /// A view ready for the plan drawing.
 pub struct ViewSetup<'a> {
@@ -136,7 +137,8 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
             .cloned()
             .ok_or_else(|| format!("view {}: no storey {key} in this model", view.name))
     };
-    let visible = |e: &SceneElement| keep(&view.visibility, e);
+    let shown = Shown::of(&view.visibility);
+    let visible = |e: &SceneElement| shown.keeps(e);
     match &view.kind {
         ViewKind::ThreeD => Err(format!(
             "view {}: a 3D view has no paper drawing",
@@ -232,11 +234,37 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
     }
 }
 
-/// Whether a view shows an element (its visibility lists).
-fn keep(v: &Visibility, e: &SceneElement) -> bool {
-    !v.hidden_families.iter().any(|f| f == e.category.label())
-        && !v.hidden_classes.iter().any(|c| c == &e.class)
-        && !v.hidden_storeys.iter().any(|s| s == &e.storey)
+/// What a view shows (its visibility lists), as sets: asked once per element.
+struct Shown<'a> {
+    families: HashSet<&'a str>,
+    classes: HashSet<&'a str>,
+    storeys: HashSet<&'a str>,
+    materials: HashSet<&'a str>,
+    elements: HashSet<&'a str>,
+    isolated: HashSet<&'a str>,
+}
+
+impl<'a> Shown<'a> {
+    fn of(v: &'a Visibility) -> Self {
+        let set = |l: &'a [String]| l.iter().map(String::as_str).collect();
+        Shown {
+            families: set(&v.hidden_families),
+            classes: set(&v.hidden_classes),
+            storeys: set(&v.hidden_storeys),
+            materials: set(&v.hidden_materials),
+            elements: set(&v.hidden_elements),
+            isolated: set(&v.isolated_elements),
+        }
+    }
+
+    fn keeps(&self, e: &SceneElement) -> bool {
+        !self.families.contains(e.category.label())
+            && !self.classes.contains(e.class.as_str())
+            && !self.storeys.contains(e.storey.as_str())
+            && !self.materials.contains(e.material.as_str())
+            && !self.elements.contains(e.global_id.as_str())
+            && (self.isolated.is_empty() || self.isolated.contains(e.global_id.as_str()))
+    }
 }
 
 /// The scene with every position (and normal) mapped by the linear map `f`; `reflect` when `f`
@@ -336,6 +364,46 @@ pub fn dimension_on_paper(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_view_leaves_out_what_it_hides() {
+        let e = |id: &str, material: &str| SceneElement {
+            global_id: id.into(),
+            class: "IfcWall".into(),
+            name: String::new(),
+            storey: "L1".into(),
+            material: material.into(),
+            category: bimble_core::MaterialCategory::Other,
+            geometry: bimble_geom::scene::Geometry::Own(Default::default()),
+        };
+        let (a, b) = (e("a", "Plaster"), e("b", "Aluminium"));
+        let shows = |v: &Visibility| {
+            let s = Shown::of(v);
+            [s.keeps(&a), s.keeps(&b)]
+        };
+        assert_eq!(shows(&Visibility::default()), [true, true]);
+        let v = |f: fn(&mut Visibility)| {
+            let mut v = Visibility::default();
+            f(&mut v);
+            v
+        };
+        assert_eq!(
+            shows(&v(|v| v.hidden_materials = vec!["Aluminium".into()])),
+            [true, false]
+        );
+        assert_eq!(
+            shows(&v(|v| v.hidden_elements = vec!["a".into()])),
+            [false, true]
+        );
+        assert_eq!(
+            shows(&v(|v| v.isolated_elements = vec!["a".into()])),
+            [true, false]
+        );
+        assert_eq!(
+            shows(&v(|v| v.hidden_families = vec!["Other".into()])),
+            [false, false]
+        );
+    }
 
     #[test]
     fn turns_invert() {

@@ -83,6 +83,36 @@ pub fn edit(ui: &mut egui::Ui, s: &mut GraphicStyle, query: &mut String) -> bool
     ) {
         h.show(ui, |ui| changed |= material_hatches(ui, &mut s.paper));
     }
+    if !s.material_families.is_empty()
+        && let Some(h) = section(
+            "Materials in another family",
+            "material-families",
+            s.material_families.keys().any(|m| hit(m)),
+        )
+    {
+        h.show(ui, |ui| {
+            ui.weak("Moved in the Visibility panel: drawn with that family's colour and hatches.");
+            let mut gone = None;
+            egui::Grid::new("material-families").show(ui, |ui| {
+                for (m, c) in &s.material_families {
+                    ui.label(m);
+                    ui.label(c.label());
+                    if ui
+                        .small_button("×")
+                        .on_hover_text("Back to its own family")
+                        .clicked()
+                    {
+                        gone = Some(m.clone());
+                    }
+                    ui.end_row();
+                }
+            });
+            if let Some(m) = gone {
+                s.material_families.remove(&m);
+                changed = true;
+            }
+        });
+    }
     ui.add_space(4.0);
     ui.strong("On screen");
     if let Some(h) = section("Colours and light", "style-general", hit("colour")) {

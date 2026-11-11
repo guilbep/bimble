@@ -731,6 +731,12 @@ struct Loaded {
     classes: BTreeMap<String, usize>,
     storeys: BTreeMap<String, usize>,
     categories: BTreeMap<MaterialCategory, usize>,
+    /// Elements per family and material name (the Visibility panel splits a family by these).
+    materials: BTreeMap<(MaterialCategory, String), usize>,
+    /// Each element's family as read, before the standards move materials to another family;
+    /// and the moves applied to `scene` (None: none yet).
+    imported: Vec<MaterialCategory>,
+    families_applied: Option<BTreeMap<String, MaterialCategory>>,
     /// The model of a .bimble file, editable.
     edit: Option<edit::Editor>,
     /// Simplified stand-ins for far cells (ADR 0036 #9), built the first time this machine
@@ -742,6 +748,7 @@ type Counts = (
     BTreeMap<String, usize>,
     BTreeMap<String, usize>,
     BTreeMap<MaterialCategory, usize>,
+    BTreeMap<(MaterialCategory, String), usize>,
 );
 
 /// Elements per IFC class, storey and material family.
@@ -749,12 +756,35 @@ fn counts(scene: &Scene) -> Counts {
     let mut classes = BTreeMap::new();
     let mut storeys = BTreeMap::new();
     let mut categories = BTreeMap::new();
+    let mut materials = BTreeMap::new();
     for e in &scene.elements {
         *classes.entry(e.class.clone()).or_default() += 1;
         *storeys.entry(e.storey.clone()).or_default() += 1;
         *categories.entry(e.category).or_default() += 1;
+        *materials
+            .entry((e.category, e.material.clone()))
+            .or_default() += 1;
     }
-    (classes, storeys, categories)
+    (classes, storeys, categories, materials)
+}
+
+impl Loaded {
+    /// Put the elements in the families the standards say (a material moved to another family),
+    /// when that changed: true if it did (then upload and draw again).
+    fn apply_families(&mut self, style: &GraphicStyle) -> bool {
+        if self.families_applied.as_ref() == Some(&style.material_families) {
+            return false;
+        }
+        if self.imported.len() != self.scene.elements.len() {
+            self.imported = self.scene.elements.iter().map(|e| e.category).collect();
+        }
+        for (e, &c) in self.scene.elements.iter_mut().zip(&self.imported) {
+            e.category = style.family(&e.material, c);
+        }
+        (self.classes, self.storeys, self.categories, self.materials) = counts(&self.scene);
+        self.families_applied = Some(style.material_families.clone());
+        true
+    }
 }
 
 /// What the history window shows, read when it opens and after each history action.
@@ -803,6 +833,8 @@ struct Viewer {
     camera: Camera,
     opts: DrawOptions,
     hidden_categories: BTreeSet<MaterialCategory>,
+    /// Materials hidden, by name (a family split up in the Visibility panel).
+    hidden_materials: BTreeSet<String>,
     hidden_classes: BTreeSet<String>,
     hidden_storeys: BTreeSet<String>,
     selected: Option<usize>,
@@ -1002,6 +1034,7 @@ impl Viewer {
             camera: Camera::default(),
             opts: DrawOptions::default(),
             hidden_categories: BTreeSet::new(),
+            hidden_materials: BTreeSet::new(),
             hidden_classes: BTreeSet::new(),
             hidden_storeys: BTreeSet::new(),
             selected: None,
@@ -1499,7 +1532,7 @@ impl Viewer {
                 for w in scene.warnings.iter().take(50) {
                     log::warn!("{w}");
                 }
-                let (classes, storeys, categories) = counts(&scene);
+                let (classes, storeys, categories, materials) = counts(&scene);
                 let bounds = bimble_render::Sphere::of(&scene);
                 self.loaded = Some(Loaded {
                     path,
@@ -1511,6 +1544,9 @@ impl Viewer {
                     classes,
                     storeys,
                     categories,
+                    materials,
+                    imported: Vec::new(),
+                    families_applied: None,
                     edit: model.map(if imported {
                         edit::Editor::imported
                     } else {
@@ -1534,6 +1570,7 @@ impl Viewer {
                 self.hidden_classes.clear();
                 self.hidden_storeys.clear();
                 self.hidden_categories.clear();
+                self.hidden_materials.clear();
                 self.clear_selection();
                 self.temporary = None;
                 self.reveal_hidden = false;
@@ -1616,7 +1653,10 @@ impl Viewer {
         l.scene = Scene::from_model(&ed.model);
         l.proxies = None;
         l.bvh = bimble_geom::bvh::Bvh::build(&bimble_geom::bvh::element_boxes(&l.scene));
-        (l.classes, l.storeys, l.categories) = counts(&l.scene);
+        (l.classes, l.storeys, l.categories, l.materials) = counts(&l.scene);
+        // Families as read: the standards' moves are applied again at the next frame.
+        l.imported.clear();
+        l.families_applied = None;
         l.bounds = bounds_with_links(&l.scene, &self.links);
         self.selected = keep.and_then(|g| l.scene.elements.iter().position(|e| e.global_id == g));
         // Indices may have moved: the added ones are dropped (the clicked one is kept by id).
@@ -1937,6 +1977,8 @@ impl Viewer {
     pub(crate) fn close_pages(&mut self) {
         // What was typed on a page and not yet stored is stored first, not lost.
         self.commit_pages();
+        // Something else is shown: Home closes too.
+        self.home_open = false;
         self.schedule = None;
         self.project_page = None;
         self.materials_page = None;
@@ -2007,6 +2049,7 @@ impl Viewer {
         let Some(l) = &self.loaded else { return false };
         let e = &l.scene.elements[i];
         !self.hidden_categories.contains(&e.category)
+            && !self.hidden_materials.contains(&e.material)
             && !self.hidden_classes.contains(&e.class)
             && !self.hidden_storeys.contains(&e.storey)
             && (self.reveal_hidden || !self.hidden_element(i))
@@ -3603,7 +3646,7 @@ impl Viewer {
             hatching: self.opts.hatching,
             orthographic: self.camera.orthographic && !self.in_2d(),
             hidden: [
-                self.hidden_categories.len(),
+                self.hidden_categories.len() + self.hidden_materials.len(),
                 self.hidden_classes.len(),
                 self.hidden_storeys.len(),
                 hidden_links,
@@ -3744,8 +3787,8 @@ impl Viewer {
                         "Reading it needs about {}; Bimble keeps under {} on this computer \
                          ({}% of its memory). Reading it anyway may make the computer very slow \
                          or stop Bimble.",
-                        big::gb(cost.read()),
-                        big::gb(*budget),
+                        big::size(cost.read()),
+                        big::size(*budget),
                         (self.settings.memory_share * 100.0).round() as u32,
                     ));
                     ui.add_space(8.0);
@@ -3765,8 +3808,8 @@ impl Viewer {
                         "Showing all of it ({:.1} M triangles) needs about {}; Bimble keeps \
                          under {} on this computer. Choose a part to show:",
                         c.drawn_triangles() as f64 / 1e6,
-                        big::gb(all),
-                        big::gb(c.budget),
+                        big::size(all),
+                        big::size(c.budget),
                     ));
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
@@ -3789,7 +3832,7 @@ impl Viewer {
                                     "{}  ·  {} elements, about {}",
                                     g.name,
                                     g.elements,
-                                    big::gb(alone)
+                                    big::size(alone)
                                 );
                                 let r = ui.add_enabled(
                                     on || alone <= c.budget,
@@ -3810,9 +3853,9 @@ impl Viewer {
                     ui.label(if c.chosen.is_empty() {
                         "Nothing chosen.".to_owned()
                     } else if fits {
-                        format!("Chosen: about {} — fits.", big::gb(need))
+                        format!("Chosen: about {} — fits.", big::size(need))
                     } else {
-                        format!("Chosen: about {} — too much.", big::gb(need))
+                        format!("Chosen: about {} — too much.", big::size(need))
                     });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
@@ -3995,15 +4038,15 @@ impl Viewer {
                             "{} of this computer's {}. A model that needs more asks which part \
                              to show (storeys, IFC classes, materials) before anything is cut. \
                              Used when a model is opened.",
-                            big::gb(limit),
-                            big::gb(total)
+                            big::size(limit),
+                            big::size(total)
                         ));
                         // What it means for the model open now, and a way to apply it.
                         if let Some(l) = &self.loaded {
                             let held = self.held();
                             let mut line = format!(
                                 "The open model holds about {}{}.",
-                                big::gb(held),
+                                big::size(held),
                                 match &l.partial {
                                     Some(p) => format!(", opened in part ({p})"),
                                     None => " (whole)".to_owned(),
@@ -4403,6 +4446,9 @@ impl Viewer {
         }
         let e = &l.scene.elements[i];
         ui.heading(&e.class);
+        if bimble_geom::viewfile::is_named(&l.path.to_string_lossy()) {
+            ui.weak(share::NOT_KEPT);
+        }
         egui::Grid::new("props")
             .num_columns(2)
             .striped(true)
@@ -4470,9 +4516,9 @@ impl Viewer {
                     l.scene.elements.len(),
                     self.gpu_scene.as_ref().map_or(0, |g| g.triangles()),
                     l.load_time,
-                    big::gb(self.held()),
+                    big::size(self.held()),
                     if app > 0 {
-                        format!(" · app {}", big::gb(app))
+                        format!(" · app {}", big::size(app))
                     } else {
                         String::new()
                     },
@@ -4644,7 +4690,8 @@ impl eframe::App for Viewer {
                         .show(ui, |ui| self.style_panel(ui));
                 });
         }
-        if self.loaded.is_some() {
+        // On Home, no tabs: leaving it brings back the view's.
+        if self.loaded.is_some() && !self.home_open {
             egui::Panel::top("view-tabs")
                 .frame(
                     egui::Frame::new()
@@ -4834,6 +4881,15 @@ impl eframe::App for Viewer {
         self.about_ui(&ctx);
         self.links_ui(&ctx);
         self.belongs_ui(&ctx);
+        if let Some(l) = &mut self.loaded
+            && l.apply_families(&self.opts.style)
+        {
+            l.proxies = None;
+            // Drawings and schedules made with the families as they were are made again.
+            self.scene_rev += 1;
+            self.needs_upload = true;
+            self.needs_render = true;
+        }
         self.keep_preview();
         self.report_ui(&ctx);
     }

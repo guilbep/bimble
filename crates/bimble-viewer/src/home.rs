@@ -86,7 +86,7 @@ impl Viewer {
                                     .map(|d| d.display().to_string())
                                     .unwrap_or_default(),
                             );
-                            ui.weak(meta.map_or_else(String::new, |m| crate::big::gb(m.len())));
+                            ui.weak(meta.map_or_else(String::new, |m| crate::big::size(m.len())));
                             ui.end_row();
                         }
                     });

@@ -138,6 +138,7 @@ impl Viewer {
     pub(crate) fn open_schedule(&mut self, name: &str) {
         self.close_sheet();
         self.commit_pages();
+        self.home_open = false;
         self.project_page = None;
         self.materials_page = None;
         if self.schedule.as_ref().is_some_and(|s| s.name == name) {

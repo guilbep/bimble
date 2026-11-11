@@ -376,6 +376,9 @@ pub struct Visibility {
     /// Linked models hidden in this view, by file name (#39).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hidden_links: Vec<String>,
+    /// Materials hidden in this view, by name (the "Other" family split up).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_materials: Vec<String>,
     /// Elements hidden in this view, by GlobalId (Hide in view, #54).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hidden_elements: Vec<String>,
@@ -390,6 +393,7 @@ impl Visibility {
             && self.hidden_classes.is_empty()
             && self.hidden_storeys.is_empty()
             && self.hidden_links.is_empty()
+            && self.hidden_materials.is_empty()
             && self.hidden_elements.is_empty()
             && self.isolated_elements.is_empty()
     }
