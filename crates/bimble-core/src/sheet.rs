@@ -45,10 +45,40 @@ pub struct Sheet {
 pub struct Placed {
     pub id: GlobalId,
     pub view: GlobalId,
-    /// 1:N on this sheet.
+    /// 1:N as written: the view's scale when saved (ADR 0046). The sheet draws the view at the
+    /// view's own scale; this stays so older versions read and print the file the same.
+    #[serde(default = "hundred")]
     pub scale: u32,
     /// Centre of the view's drawing on the paper, mm from the sheet's top-left corner.
     pub at_mm: [f64; 2],
+}
+
+fn hundred() -> u32 {
+    100
+}
+
+/// Views whose scale isn't said (1:100, files before 0.15) placed on sheets at another scale, all
+/// the same: the scale each should take, so the sheet prints as before (ADR 0046). Applied as an
+/// edit, never written without a save.
+pub fn adopted_scales(
+    views: &[crate::view::View],
+    sheets: &[Sheet],
+) -> Vec<(crate::GlobalId, u32)> {
+    let mut out = Vec::new();
+    for v in views.iter().filter(|v| v.scale == 100) {
+        let mut scales = sheets
+            .iter()
+            .flat_map(|s| &s.placed)
+            .filter(|p| p.view == v.id)
+            .map(|p| p.scale);
+        if let Some(first) = scales.next()
+            && first != 100
+            && scales.all(|s| s == first)
+        {
+            out.push((v.id, first));
+        }
+    }
+    out
 }
 
 /// A text on a sheet, mm from the top-left corner.
@@ -193,6 +223,35 @@ pub fn next_number<'a>(numbers: impl Iterator<Item = &'a str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An old sheet's placements at 1:50 make their view 1:50 (once, as an edit); a view placed at
+    /// two scales, or already given one, is left as it is.
+    #[test]
+    fn views_adopt_their_placements_scale_once() {
+        let levels = [crate::view::Level {
+            key: "L1".into(),
+            name: "L1".into(),
+            elevation_mm: 0.0,
+        }];
+        let mut views = crate::view::default_views(&levels);
+        let place = |v: &crate::view::View, scale| Placed {
+            id: GlobalId::new(),
+            view: v.id,
+            scale,
+            at_mm: [0.0, 0.0],
+        };
+        let mut a = Sheet::new("S-1", "a");
+        a.placed.push(place(&views[1], 50));
+        a.placed.push(place(&views[2], 50));
+        let mut b = Sheet::new("S-2", "b");
+        b.placed.push(place(&views[2], 200));
+        assert_eq!(
+            adopted_scales(&views, &[a.clone(), b.clone()]),
+            [(views[1].id, 50)]
+        );
+        views[1].scale = 50;
+        assert!(adopted_scales(&views, &[a, b]).is_empty());
+    }
 
     #[test]
     fn numbers_follow_on() {

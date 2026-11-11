@@ -728,9 +728,10 @@ fn storey_setup<'a>(
         scene: if turn == crate::viewdraw::Turn::Plan(0.0) {
             std::borrow::Cow::Borrowed(scene)
         } else {
+            // Only what lies between this storey and the next: the rest isn't drawn.
             std::borrow::Cow::Owned(crate::viewdraw::map_scene(
                 scene,
-                &|_| true,
+                &|e| crate::viewdraw::within_heights(e, oz, level + oz, next + oz),
                 turn,
                 false,
                 true,
@@ -2364,6 +2365,7 @@ mod tests {
             references: Vec::new(),
             annotations: Vec::new(),
             true_north: false,
+            scale: 100,
         };
         let views = vec![section("Coupe S1", 2500.0), section("Far away", 90_000.0)];
         let marks = section_marks(&views);
@@ -2597,6 +2599,7 @@ mod tests {
             references: Vec::new(),
             annotations: Vec::new(),
             true_north: false,
+            scale: 100,
         };
         o.view = Some(section);
         let (sheet, info) = plan(&scene, &o).unwrap();

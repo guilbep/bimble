@@ -69,4 +69,5 @@ Session journals (what happened, in order, with measurements) are in [`docs/jour
 ## Revisit when
 ```
 | [0045](0045-project-north-and-swiss-coordinates.md) | Project north by default (view Orientation: true north), from the IFC building's turn; coordinates in LV95 the Swiss way or WGS84; turned section boxes; 2D camera up and panning from the yaw | Accepted |
+| [0046](0046-model-and-on-paper-in-one-view.md) | One view, two pictures in its tab: Model (GPU, editing) and On paper (the PDF's items), selection on paper by a ray on the model; scale is the view's | Accepted |
 | [0047](0047-ifc2x3-export-and-schema-shown.md) | IFC2x3 export as Bimble's IFC4 written down (owner history, attributes, left out: material values, map conversion), both validated by IfcOpenShell; the schema shown next to the file name | Accepted |

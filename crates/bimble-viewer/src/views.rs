@@ -195,6 +195,7 @@ pub fn new_plan(level: &Level, look: Look) -> View {
         references: Vec::new(),
         annotations: Vec::new(),
         true_north: false,
+        scale: 100,
     }
 }
 
@@ -216,6 +217,7 @@ pub fn new_section(scene: &Scene, facing: Facing, n: usize) -> View {
         references: Vec::new(),
         annotations: Vec::new(),
         true_north: false,
+        scale: 100,
     }
 }
 
@@ -262,6 +264,7 @@ mod tests {
             references: Vec::new(),
             annotations: Vec::new(),
             true_north: false,
+            scale: 100,
         };
         let b = view_clip(&sec, &scene, &scene.levels()).unwrap().unwrap();
         assert!((b.yaw - 30f32.to_radians()).abs() < 1e-6);
