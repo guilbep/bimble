@@ -1782,16 +1782,28 @@ impl<'a> Reader<'a> {
         // IfcPolygonalBoundedHalfSpace(.., Position, PolygonalBoundary): also inside the boundary
         // prism (extruded along Position's Z).
         let ppos = tf.then(&self.axis_placement(h.arg(2)));
-        let Some(poly) = self.curve(h.arg(3)) else {
-            return Vec::new();
+        // Seen in Revit exports: a composite curve whose lines and arcs are in different places.
+        // A boundary must be closed: one whose end doesn't come back to its start (by 0.1 mm)
+        // is cut by its plane alone, as IfcOpenShell does, not closed by a guessed line.
+        let ends = self
+            .curve3(h.arg(3), 0)
+            .and_then(|p| Some((*p.first()?, *p.last()?)));
+        let closed = ends.is_some_and(|(a, b)| norm(sub(a, b)) * scale < 0.1);
+        let poly = if closed { self.curve(h.arg(3)) } else { None };
+        let Some(poly) = poly else {
+            self.warn("polygonal half-space: boundary not closed; cut by its plane alone");
+            return half;
         };
         let cz = ppos.local([0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0))[2];
         let prism = prism_tris(&poly, &ppos, cz - l, cz + l, scale);
         match boolean::apply(Op::Intersection, &half, &[&prism]) {
             Ok(t) => t,
             Err(err) => {
-                self.warn(format!("polygonal half-space failed ({err}); not cut"));
-                Vec::new()
+                self.warn(format!(
+                    "polygonal half-space: boundary not a closed polygon ({err}); cut by its \
+                     plane alone"
+                ));
+                half
             }
         }
     }

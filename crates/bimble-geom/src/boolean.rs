@@ -109,7 +109,50 @@ pub fn apply(op: Op, a: &[Tri], b: &[&[Tri]]) -> Result<Vec<Tri>, BooleanError> 
     };
     // Coordinates relative to the middle keep full precision with site coordinates.
     let origin = [0, 1, 2].map(|k| ((lo[k] + hi[k]) / 2.0).round());
-    kernel(op, a, &b, origin)
+    match kernel(op, a, &b, origin) {
+        // Solids exported with corners a hair apart (seen in Revit Breps: 0.03–0.07 mm) are
+        // not closed for the kernel: once more with points that close welded together, as
+        // IfcOpenShell sews them. Valid solids never take this path.
+        Err(e) if e.0.starts_with("not a closed solid") => {
+            let a = snap(a, SEW_MM);
+            let b: Vec<Vec<Tri>> = b.iter().map(|s| snap(s, SEW_MM)).collect();
+            let refs: Vec<&[Tri]> = b.iter().map(Vec::as_slice).collect();
+            kernel(op, &a, &refs, origin)
+        }
+        r => r,
+    }
+}
+
+/// How far apart two corners may be and still be one (mm) when a solid isn't closed exactly.
+pub const SEW_MM: f64 = 0.1;
+
+/// Triangles with every point within `tol` (each coordinate) of an earlier one moved onto it;
+/// triangles that collapse are dropped. In order: the same input gives the same output.
+pub fn snap(tris: &[Tri], tol: f64) -> Vec<Tri> {
+    let cell = |c: f64| (c / tol).floor() as i64;
+    let mut grid: std::collections::HashMap<[i64; 3], Vec<[f64; 3]>> = Default::default();
+    let mut at = |p: [f64; 3]| -> [f64; 3] {
+        let k = p.map(cell);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(v) = grid.get(&[k[0] + dx, k[1] + dy, k[2] + dz])
+                        && let Some(q) = v
+                            .iter()
+                            .find(|q| (0..3).all(|i| (q[i] - p[i]).abs() <= tol))
+                    {
+                        return *q;
+                    }
+                }
+            }
+        }
+        grid.entry(k).or_default().push(p);
+        p
+    };
+    tris.iter()
+        .map(|t| t.map(&mut at))
+        .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
+        .collect()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -258,6 +301,32 @@ mod tests {
             "{} vs {want}",
             volume(&r)
         );
+    }
+
+    /// A wall whose top corner is written twice, 0.05 mm apart (as in a Revit Brep): not
+    /// closed for the kernel; sewn within 0.1 mm, its opening is cut. A real gap still fails.
+    #[test]
+    fn corners_a_hair_apart_are_sewn() {
+        let (x, y) = (2_500_000_000.0, 1_100_000_000.0);
+        let top = [x + 6000.0, y + 200.0, 2800.0];
+        let mut wall = cuboid([x, y, 0.0], top);
+        let k = wall.iter().position(|t| t.contains(&top)).unwrap();
+        for p in &mut wall[k] {
+            if *p == top {
+                p[0] += 0.05;
+            }
+        }
+        let door = cuboid([x + 1000.0, y - 10.0, 0.0], [x + 2200.0, y + 210.0, 2100.0]);
+        let r = apply(Op::Difference, &wall, &[&door]).unwrap();
+        let want = 6000.0 * 200.0 * 2800.0 - 1200.0 * 200.0 * 2100.0;
+        // The corner is kept where it was first written: off by 0.05 mm, a few mm³.
+        assert!((volume(&r) - want).abs() / want < 1e-5, "{}", volume(&r));
+        for p in &mut wall[k] {
+            if p[0] == top[0] + 0.05 {
+                p[0] += 5.0;
+            }
+        }
+        assert!(apply(Op::Difference, &wall, &[&door]).is_err());
     }
 
     #[test]

@@ -116,7 +116,10 @@ fn axis2placement_default_x_follows_world_x_for_steep_axes() {
 #[test]
 fn boolean_cuts_and_openings_are_exact() {
     let s = read_str(&fixture("booleans.ifc")).unwrap();
-    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    assert_eq!(
+        s.warnings,
+        ["polygonal half-space: boundary not closed; cut by its plane alone (×2)"],
+    );
     let vol = |name: &str| {
         s.elements
             .iter()
@@ -142,6 +145,11 @@ fn boolean_cuts_and_openings_are_exact() {
         1000.0 * 400.0 * 3000.0 - 500.0 * 200.0 * 500.0,
         1e-9,
     );
+    // A boundary that doesn't close (a Revit composite curve whose lines are far from its
+    // arcs): cut by the plane z = 2500 alone, as IfcOpenShell 0.9 does. It was closed by a
+    // guessed line before, removing only part of the top.
+    close("broken boundary", 1000.0 * 400.0 * 2500.0, 1e-9);
+    close("open polyline", 1000.0 * 400.0 * 2500.0, 1e-9);
     // Ø200 hole through the 400 mm thickness (24-sided circle: within 1.2 % of the hole volume).
     let hole = std::f64::consts::PI * 100.0 * 100.0 * 400.0;
     close(

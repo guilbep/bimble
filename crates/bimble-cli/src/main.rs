@@ -577,7 +577,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 print_elements_json(&scene);
                 return Ok(());
             }
-            if !is_ifc(&path) {
+            if !side_kept(&path) {
                 let m = file::load(&path).map_err(e)?;
                 println!("project   {} [{}]", m.project_name, m.project_id);
                 println!("hash      {}", version::model_hash(&m));
@@ -807,7 +807,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 }
             }
             bimble_core::project::validate(&p)?;
-            if is_ifc(&path) {
+            if side_kept(&path) {
                 let f = read_side(&path)?;
                 let f = bimble_core::view::ViewsFile::new(f.views, f.sheets)
                     .with_project(p)
@@ -1105,6 +1105,10 @@ fn run(cli: Cli) -> Result<(), String> {
             let t = Instant::now();
             let scene = load_scene(&input)?;
             let t_load = t.elapsed();
+            // What the IFC couldn't give exactly, as import-ifc says it (also kept in the file).
+            for w in &scene.warnings {
+                eprintln!("warning: {w}");
+            }
             let t = Instant::now();
             let bytes = bimble_geom::viewfile::write(&scene, !no_gzip);
             let t_write = t.elapsed();
@@ -1177,10 +1181,14 @@ fn run(cli: Cli) -> Result<(), String> {
     Ok(())
 }
 
-fn is_ifc(path: &std::path::Path) -> bool {
-    path.extension()
-        .and_then(|x| x.to_str())
-        .is_some_and(|x| x.eq_ignore_ascii_case("ifc"))
+/// Not a .bimble model: an IFC or a .bimbleview, whose views, sheets, schedules and project
+/// information are kept in a side file next to it.
+fn side_kept(path: &std::path::Path) -> bool {
+    bimble_geom::viewfile::is_named(&path.to_string_lossy())
+        || path
+            .extension()
+            .and_then(|x| x.to_str())
+            .is_some_and(|x| x.eq_ignore_ascii_case("ifc"))
 }
 
 /// Load a .ifc or .bimble file as a render-ready scene.
@@ -1459,7 +1467,7 @@ fn history(cmd: HistoryCmd) -> Result<(), String> {
 fn model_schedules(
     path: &std::path::Path,
 ) -> Result<Vec<bimble_core::schedule::ScheduleDef>, String> {
-    if is_ifc(path) {
+    if side_kept(path) {
         let side = bimble_core::view::side_file(path);
         if !side.exists() {
             return Ok(Vec::new());
@@ -1479,11 +1487,8 @@ fn model_schedules(
 fn model_project(
     path: &std::path::Path,
 ) -> Result<std::collections::BTreeMap<String, String>, String> {
-    let is_ifc = path
-        .extension()
-        .and_then(|x| x.to_str())
-        .is_some_and(|x| x.eq_ignore_ascii_case("ifc"));
-    if is_ifc {
+    let side = side_kept(path);
+    if side {
         let side = bimble_core::view::side_file(path);
         if !side.exists() {
             return Ok(Default::default());
@@ -1504,11 +1509,8 @@ fn model_views(
     scene: &bimble_geom::Scene,
 ) -> Result<Vec<bimble_core::view::View>, String> {
     use bimble_core::view::{ViewsFile, effective, side_file};
-    let is_ifc = path
-        .extension()
-        .and_then(|x| x.to_str())
-        .is_some_and(|x| x.eq_ignore_ascii_case("ifc"));
-    let stored = if is_ifc {
+    let side = side_kept(path);
+    let stored = if side {
         let side = side_file(path);
         if side.exists() {
             let bytes = std::fs::read(&side).map_err(|e| format!("{}: {e}", side.display()))?;
@@ -1528,7 +1530,7 @@ fn model_views(
 
 /// The sheets of a model: in a .bimble, or in the side file of an IFC.
 fn model_sheets(path: &std::path::Path) -> Result<Vec<bimble_core::sheet::Sheet>, String> {
-    let mut v: Vec<_> = if is_ifc(path) {
+    let mut v: Vec<_> = if side_kept(path) {
         read_side(path)?.sheets.into_values().collect()
     } else {
         bimble_core::file::load(path)
@@ -1554,7 +1556,7 @@ fn read_side(path: &std::path::Path) -> Result<bimble_core::view::ViewsFile, Str
 
 /// Add a sheet: a Command in a .bimble model (saved), else in the IFC's side file.
 fn save_sheet(path: &std::path::Path, def: bimble_core::sheet::Sheet) -> Result<(), String> {
-    if is_ifc(path) {
+    if side_kept(path) {
         let scene = load_scene(path)?;
         let ids: std::collections::BTreeSet<GlobalId> =
             model_views(path, &scene)?.iter().map(|v| v.id).collect();

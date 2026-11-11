@@ -1,6 +1,6 @@
 # ADR 0010 — Geometry kernel: manifold3d for mesh booleans; exact B-rep later
 
-- Status: Accepted (5 Nov 2026)
+- Status: Accepted (5 Nov 2026); amended 11 Nov 2026 (sewing, unclosed boundaries)
 - Decided by: Pierre asked to settle the kernel question; candidates and evidence by Claude
 - Reversal cost: low (one module, `bimble-geom::boolean`, with a three-function interface)
 
@@ -44,6 +44,28 @@ and formwork drawings need cut sections of these solids. We need robust results 
 - The build fetches the pinned manifold tag from GitHub at build time. Offline builds can point
   `MANIFOLD_CSG_LIB_DIR` at a prebuilt library.
 - Cross-compiling macOS x86_64 on arm64 runners depends on cmake honouring the target. Watch CI.
+
+## Amendment, 11 Nov 2026 (the office's files; Pierre: "propose fixes")
+
+Running every IFC file of the office through import and pack showed two cases the kernel
+refused:
+
+- **Solids not quite closed.** Revit Breps (slabs with holes in their faces) have corners
+  written twice, 0.03–0.07 mm apart: not closed for manifold, so their openings weren't cut (in
+  the viewer and pack with a warning; in a `.bimble`, silently). When the kernel refuses an
+  operand as not closed, `boolean::apply` **sews** it: points within `SEW_MM` = 0.1 mm of an
+  earlier one are moved onto it (each coordinate, first one kept, in order: deterministic),
+  collapsed triangles dropped, then tries once more. Valid solids never take this path, so
+  results on them don't change. On one file: 387 openings not cut → 4. Most of those openings
+  were also holes in the Brep already: the volumes changed by at most 0.02 m³ per slab.
+  Not sewn: open surface models and faces turned inside out (they need faces reoriented).
+- **Polygonal bounded half-spaces whose boundary doesn't close** (a composite curve whose
+  arcs and lines are hundreds of metres apart; a polyline that doesn't return to its first
+  point): Bimble closed them with a guessed line, or gave up and didn't cut. IfcOpenShell 0.9
+  cuts by the plane alone in every such case tried (a 10 mm gap, a missing side, the broken
+  composite, the open polyline); Bimble now does the same, with a warning. A wall of the
+  office's had been drawn 4.0 m tall instead of 3.4 m (2.47 vs 2.10 m³; IfcOpenShell
+  2.10260, Bimble now 2.102604). Fixture cases 5 and 6 in `booleans.ifc`.
 
 ## Revisit when
 - Exact curved sections, fillets on solids, or exact quantities are needed → B-rep ADR.

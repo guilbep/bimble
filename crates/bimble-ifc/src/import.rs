@@ -124,18 +124,25 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
     let mut storeys: BTreeMap<GlobalId, Storey> = BTreeMap::new();
     let mut storey_gid: HashMap<u64, GlobalId> = HashMap::new();
     let mut storey_ids: HashSet<u64> = HashSet::new();
-    // Storeys placed offset or turned in plan: said once, not once each.
+    // Storeys placed offset or turned in plan from their building: said once, not once each.
+    // Sharing the building's frame (site coordinates, a rotation) is the usual case: not said.
+    let building = file
+        .by_type("IFCBUILDING")
+        .next()
+        .and_then(|(_, b)| b.arg(5).as_ref().map(|pl| r.object_placement(pl, 0)))
+        .unwrap_or(Affine::IDENTITY);
     let mut moved_storeys: Vec<String> = Vec::new();
     for (id, st) in file.by_type("IFCBUILDINGSTOREY") {
         let name = st.arg(2).as_str().unwrap_or("").to_owned();
         let elevation = match st.arg(5).as_ref() {
             Some(pl) => {
                 let f = r.object_placement(pl, 0);
+                let b = &building;
                 let same = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-9);
-                if (f.t[0] * scale).abs() > 1e-6
-                    || (f.t[1] * scale).abs() > 1e-6
-                    || !same(f.x, [1.0, 0.0, 0.0])
-                    || !same(f.y, [0.0, 1.0, 0.0])
+                if ((f.t[0] - b.t[0]) * scale).abs() > 1e-3
+                    || ((f.t[1] - b.t[1]) * scale).abs() > 1e-3
+                    || !same(f.x, b.x)
+                    || !same(f.y, b.y)
                 {
                     moved_storeys.push(name.clone());
                 }
@@ -164,7 +171,7 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
     if !moved_storeys.is_empty() {
         let shown: Vec<&str> = moved_storeys.iter().take(4).map(String::as_str).collect();
         rep.warn(format!(
-            "{} storey(s) placed offset or turned in plan ({}{}): their elements keep their \
+            "{} storey(s) placed offset or turned in plan from their building ({}{}): their elements keep their \
              world position",
             moved_storeys.len(),
             shown.join(", "),
@@ -196,6 +203,13 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
     }
 
     let mut model = Model::new("Imported model");
+    // The project keeps its IfcProject GlobalId: the same file imports to the same model (and
+    // hash) every time, and exports back under the same project.
+    model.project_id = file
+        .by_type("IFCPROJECT")
+        .next()
+        .and_then(|(_, p)| GlobalId::try_from(p.arg(0).as_str()?.to_owned()).ok())
+        .unwrap_or_else(|| GlobalId::derived(b"project/imported"));
     model.storeys = storeys;
     let mut model_materials: BTreeMap<GlobalId, Material> = BTreeMap::new();
     let mut material_id: BTreeMap<(String, MaterialCategory), GlobalId> = BTreeMap::new();
@@ -312,7 +326,26 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
                     r.product_body(e, &mut emit);
                 }
                 if mb.tris.is_empty() {
-                    rep.skip(format!("{}: no usable geometry", class.name()));
+                    // Say why: most often the file gives no 3D body (a door drawn only as its
+                    // footprint, a slab with no shape), which IfcOpenShell can't draw either.
+                    let shown = ifc_entity
+                        .clone()
+                        .unwrap_or_else(|| class.name().to_owned());
+                    let ids: Vec<&str> = file
+                        .deref(e.arg(6))
+                        .and_then(|s| s.arg(2).as_list())
+                        .unwrap_or(&[])
+                        .iter()
+                        .filter_map(|r| file.deref(r)?.arg(1).as_str())
+                        .collect();
+                    let why = if ids.is_empty() {
+                        "no shape in the file".to_owned()
+                    } else if !ids.contains(&"Body") {
+                        format!("no 3D body, only {}", ids.join(", "))
+                    } else {
+                        "a body Bimble can't read yet".to_owned()
+                    };
+                    rep.skip(format!("{shown}: {why}"));
                     continue;
                 }
                 let (mut positions, indices) = mesh_from_tris(&mb.tris, storey_elevation);

@@ -15,7 +15,7 @@ a decision that changes an old one says which one it supersedes.
 | [0007](0007-units-precision-tolerances.md) | Units, precision, tolerances | Accepted |
 | [0008](0008-untrusted-input-and-client-data.md) | Untrusted-input limits; client data stays out of the repo | Accepted |
 | [0009](0009-testing-ci-releases.md) | IfcOpenShell oracle, CI with software GPU, release workflow | Accepted |
-| [0010](0010-geometry-kernel.md) | Geometry kernel: manifold3d for mesh booleans; exact B-rep later | Accepted |
+| [0010](0010-geometry-kernel.md) | Geometry kernel: manifold3d for mesh booleans; exact B-rep later; solids a hair from closed are sewn (0.1 mm) on refusal, unclosed half-space boundaries cut by the plane (amended 11 Nov) | Accepted |
 | [0011](0011-performance-regressions.md) | Performance: geometry budgets fail the build, timing trend warns | Accepted |
 | [0012](0012-parallel-loading.md) | Parallel loading: chunked parse, per-element geometry on all cores, mimalloc | Accepted |
 | [0013](0013-graphic-style.md) | Graphic style: every colour, hatch and light value is data (JSON, `--style`, live editor) | Accepted |

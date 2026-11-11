@@ -480,6 +480,42 @@ fn storey_offset_or_rotation_keeps_world_positions() {
     }
 }
 
+/// The same file imports to the same model every time: the project keeps the IfcProject's
+/// GlobalId (it was a new random one each time, so two imports never had the same hash).
+#[test]
+fn an_import_is_the_same_every_time() {
+    let (a, _) = import(REVIT_STYLE);
+    let (b, _) = import(REVIT_STYLE);
+    assert_eq!(
+        bimble_core::version::model_hash(&a),
+        bimble_core::version::model_hash(&b)
+    );
+    let project = REVIT_STYLE
+        .lines()
+        .find(|l| l.contains("=IFCPROJECT('"))
+        .and_then(|l| l.split('\'').nth(1))
+        .unwrap();
+    assert_eq!(a.project_id.to_string(), project);
+}
+
+/// The building placed in site coordinates and turned, its storeys in the same frame (a usual
+/// Revit export, the office's models): nothing to report, elements still where the IFC says.
+#[test]
+fn storeys_in_their_buildings_frame_are_not_reported() {
+    let text = REVIT_STYLE.replace(
+        "#14=IFCAXIS2PLACEMENT3D(#8,$,$);",
+        "#14=IFCAXIS2PLACEMENT3D(#90,$,#91);\n#90=IFCCARTESIANPOINT((2600000.,1200000.,0.));\n\
+         #91=IFCDIRECTION((0.866025403784,0.5,0.));",
+    );
+    assert_same_place_as_reader(&text);
+    let (_, rep) = import(&text);
+    assert!(
+        !rep.warnings.iter().any(|w| w.contains("storey")),
+        "{:?}",
+        rep.warnings
+    );
+}
+
 /// An element in no storey goes into the first one and keeps its world height (not raised by
 /// that storey's elevation a second time).
 #[test]
