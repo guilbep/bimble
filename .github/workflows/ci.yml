@@ -20,6 +20,7 @@ jobs:
       # A software Vulkan driver, so the renderer tests actually draw instead of skipping.
       - if: runner.os == 'Linux'
         run: scripts/apt-install.sh mesa-vulkan-drivers
+        timeout-minutes: 12
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -33,6 +34,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: scripts/apt-install.sh libegl1 libegl-mesa0 libgl1-mesa-dri libgles2
+        timeout-minutes: 12
       - run: cargo test -p bimble-render
         env:
           WGPU_BACKEND: gl
@@ -72,6 +74,7 @@ jobs:
           python-version: "3.12"
       - run: pip install ifcopenshell
       - run: scripts/apt-install.sh mesa-vulkan-drivers
+        timeout-minutes: 12
       - run: cargo build --release
       # The models as JSON text (.json), which the Python checks read; .bimble is binary (ADR 0042).
       - name: Export checked by IfcOpenShell
@@ -113,6 +116,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: scripts/apt-install.sh mesa-vulkan-drivers
+        timeout-minutes: 12
       - run: cargo build --release -p bimble-cli
       - name: Benchmark (3 runs, best of each metric is compared)
         run: |
