@@ -44,7 +44,7 @@ The installers aren't signed by a paid certificate yet:
 ## Known limits
 
 - `.bimble` files saved by 0.12 and later can't be opened by 0.11 and older: upgrade together, or share `.json`.
-- Models with elements hidden or isolated in a view, or with a reference plan added since 0.13.2, can't be opened by 0.13.1 and older; models with materials hidden in a view, and graphic standards with materials moved to another family (0.14), can't be read by 0.13 versions: everyone working on a model upgrades together. Since 0.14 a model knows its place and project north (ADR 0045): models imported from a placed IFC, their shared-folder histories, and views set to true north can't be read by 0.13.2 and older; a `.bimbleview` still opens there, without its project north. Views given a scale other than 1:100 (0.15) can't be read by 0.14 and older.
+- Models with elements hidden or isolated in a view, or with a reference plan added since 0.13.2, can't be opened by 0.13.1 and older; models with materials hidden in a view, and graphic standards with materials moved to another family (0.14), can't be read by 0.13 versions: everyone working on a model upgrades together. Since 0.14 a model knows its place and project north (ADR 0045): models imported from a placed IFC, their shared-folder histories, and views set to true north can't be read by 0.13.2 and older; a `.bimbleview` still opens there, without its project north. Views given a scale other than 1:100 (0.15) can't be read by 0.14 and older; views with a crop region (0.16) can't be read by 0.15 and older.
 - Elements of other classes than columns, beams, walls, slabs and footings are moved, not edited by dimensions.
 - Working together (Collaborate → Shared folder, Synchronize): the desktop only; a conflict is settled for all elements at once (from the command line with `--prefer`), not element by element yet. Rights (view / annotate / model) aren't enforced yet.
 - Reference plans: DXF model space and the first page of a vector PDF; no text, hatches or scanned PDFs.
@@ -54,15 +54,8 @@ The installers aren't signed by a paid certificate yet:
 
 ## Changes
 
-**Plans and sections On paper, in their tab (ADR 0046)**
-- A plan, ceiling plan or section has two pictures, switched in its tab or with **P**: **Model** (to edit) and **On paper**, exactly the drawing its PDF and sheets are made of, zoomed and panned like a sheet.
-- On paper, a click selects the element drawn there (picked on the model), its outline shown; double-click goes to the model at that place.
-- **Scale is the view's**: set in its properties, the same on screen, on paper and on every sheet. Sheets made before take their views' scales on opening, as a change to save.
-- Drawing a plan of a turned building (such as the office's) is about 5 times faster: it leaves out what lies outside the view's range; 0.27 s instead of 1.35 s for a 32 766-element model. Unturned plans with nothing hidden were already drawn without a copy.
-- The old "On paper" window is now **Export view…** (PDF, SVG).
-
-**Coordinates and IFC (ADR 0045, 0047)**
-- Coordinates in **ETRS89 / UTM**, **US State Plane** (metres, feet, US survey feet), **LV03** and **WGS84**, besides LV95 (Settings → Coordinates), worked out as PROJ does.
-- **File → Export IFC4… / Export IFC2x3…**; both validated by IfcOpenShell. The open file's schema shows next to its name.
-- Exported IFC keeps the model's place and project north; the view cube follows project north; DXF and PDF reference plans line up by their LV95 coordinates, or upright in a turned plan.
-- Fixed: a profile with a hole lost it on export, and was imported as a solid rectangle.
+**Plans and sections (ADR 0046)**
+- **Crop regions**: a view can draw only part of itself — in its properties, **Crop**, then **To the screen** (what the screen shows) or the extent typed in metres. On screen and on paper alike; axes, dimension chains and the page follow.
+- **On paper and sheets are drawn in the background** on the desktop: the window never freezes; the last picture stays, greyed, with "Drawing… n s". A section through a very large model can take several seconds to draw.
+- Changing a view's scale is one undo step, sheets included.
+- On paper, a click no longer selects an element the drawing leaves out; a small drawing's page holds its title.

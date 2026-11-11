@@ -1,6 +1,6 @@
 # ADR 0046 — One view, two pictures: Model and On paper; scale is the view's
 
-- Status: Accepted (11 Nov 2026)
+- Status: Accepted (11 Nov 2026); amended for 0.16 (background drawing, crop, sections)
 - Decided by: Pierre ("we should do like Revit, 2D views editable, zoomable… it's weird to have a
   preview of the PDF in a dialog instead of a full tab"; "be better than Revit, UX-wise and
   philosophically"; agreed to the plan and its recommendations: "do everything"). Review, PRD and
@@ -43,6 +43,26 @@ thread, which is why it is slow on big models.
    measured on the office's turned 32 766-element model, 1.35 → 0.27 s; sections not yet culled); the 0.15 gate is measured: if that brings the large-model redraw
    under about a second, drawing in the background waits for 0.16; else it comes first.
 6. Crop regions per view (on screen and on paper) follow.
+
+## Amendment (0.16)
+
+- **Drawn in the background** on the desktop: the scene is shared (`Arc<Scene>`; a change while a
+  drawing runs makes its own copy), On paper views and sheets are drawn on a thread; the last
+  picture stays, greyed, with "Drawing… n s"; a drawing made for what has changed since is dropped
+  (test). In a browser, at once (no threads there).
+- **Crop regions**: `View.crop`, a rectangle in the view's own plane (a plan's x, y turned to its
+  orientation, a section's along the cut and height; world mm), optional. Set in the view's
+  properties: on (the model's extent), *To the screen* (what the screen shows), or typed in
+  metres. On screen through the clip box turned with the view; on paper by clipping the drawing's
+  geometry before it is laid out (loops ring by ring, lines, beam labels; grid axes clipped, those
+  found from columns counted before cropping), so the page and the chains follow.
+- **Sections leave out** what lies behind their cut or beyond their depth before the copy;
+  drawings byte-identical on two office models. Little gain: a section through the 32 766-element
+  model still takes 6–10 s to draw — the cost is in the section drawing itself, which the
+  background drawing now keeps off the window.
+- A scale change is one undo step with its sheets; On paper selection skips classes the template
+  leaves off paper; a bare drawing's page holds its title.
+- Not measured: the window's frame times while a drawing runs (needs a real desktop window).
 
 ## Consequences
 
