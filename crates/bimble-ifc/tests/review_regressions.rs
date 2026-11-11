@@ -118,7 +118,10 @@ fn boolean_cuts_and_openings_are_exact() {
     let s = read_str(&fixture("booleans.ifc")).unwrap();
     assert_eq!(
         s.warnings,
-        ["polygonal half-space: boundary not closed; cut by its plane alone (×2)"],
+        [
+            "a clipping plane removed the whole solid; drawn unclipped",
+            "polygonal half-space: boundary not closed; cut by its plane alone (×2)"
+        ],
     );
     let vol = |name: &str| {
         s.elements
@@ -150,6 +153,8 @@ fn boolean_cuts_and_openings_are_exact() {
     // guessed line before, removing only part of the top.
     close("broken boundary", 1000.0 * 400.0 * 2500.0, 1e-9);
     close("open polyline", 1000.0 * 400.0 * 2500.0, 1e-9);
+    // A clipping plane that would remove everything: drawn unclipped (IfcOpenShell 0.9 too).
+    close("clipped away", 1000.0 * 400.0 * 3000.0, 1e-9);
     // Ø200 hole through the 400 mm thickness (24-sided circle: within 1.2 % of the hole volume).
     let hole = std::f64::consts::PI * 100.0 * 100.0 * 400.0;
     close(

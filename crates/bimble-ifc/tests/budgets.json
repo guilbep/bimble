@@ -1,9 +1,9 @@
 {
   "booleans.ifc": {
-    "edges": 157,
-    "elements": 6,
-    "gpu_bytes": 14904,
-    "triangles": 232
+    "edges": 169,
+    "elements": 7,
+    "gpu_bytes": 15768,
+    "triangles": 244
   },
   "curves.ifc": {
     "edges": 274,

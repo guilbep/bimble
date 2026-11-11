@@ -66,6 +66,12 @@ refused:
   composite, the open polyline); Bimble now does the same, with a warning. A wall of the
   office's had been drawn 4.0 m tall instead of 3.4 m (2.47 vs 2.10 m³; IfcOpenShell
   2.10260, Bimble now 2.102604). Fixture cases 5 and 6 in `booleans.ifc`.
+- **A clipping half-space that removes the whole solid** (Revit walls whose top plane lies
+  below them): the element was lost. IfcOpenShell 0.9 draws it unclipped; Bimble now too,
+  with a warning (fixture case 7). Three walls of one file came back.
+- Not done: openings in **open surface models** (IfcFaceBasedSurfaceModel slabs with sides
+  missing). IfcOpenShell cuts them (its kernel cuts surfaces); manifold cuts solids only. It
+  would need triangles clipped against the opening solids: 2 slabs in 17 files so far.
 
 ## Revisit when
 - Exact curved sections, fillets on solids, or exact quantities are needed → B-rep ADR.

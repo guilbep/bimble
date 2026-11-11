@@ -1716,19 +1716,27 @@ impl<'a> Reader<'a> {
         if a.is_empty() {
             return;
         }
+        let half = self.get(e.arg(2)).is_some_and(|h| {
+            matches!(
+                h.name.as_str(),
+                "IFCHALFSPACESOLID" | "IFCBOXEDHALFSPACE" | "IFCPOLYGONALBOUNDEDHALFSPACE"
+            )
+        });
         let b = match self.get(e.arg(2)) {
-            Some(h)
-                if matches!(
-                    h.name.as_str(),
-                    "IFCHALFSPACESOLID" | "IFCBOXEDHALFSPACE" | "IFCPOLYGONALBOUNDEDHALFSPACE"
-                ) =>
-            {
-                self.half_space(h, tf, &a, out.scale)
-            }
+            Some(h) if half => self.half_space(h, tf, &a, out.scale),
             Some(_) => self.solid_tris(e.arg(2).as_ref().unwrap(), tf, out, depth + 1),
             None => Vec::new(),
         };
         match boolean::apply(op, &a, &[&b]) {
+            // A clipping half-space that leaves nothing (seen in Revit: a wall's top plane put
+            // below its bottom) is an export error: the element is drawn unclipped, as
+            // IfcOpenShell does, rather than lost.
+            Ok(r) if r.is_empty() && half && op == Op::Difference => {
+                self.warn("a clipping plane removed the whole solid; drawn unclipped");
+                for t in a {
+                    out.triangle_mm(t);
+                }
+            }
             Ok(r) => {
                 for t in r {
                     out.triangle_mm(t);
