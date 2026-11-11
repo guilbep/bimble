@@ -1,6 +1,6 @@
 # ADR 0046 — One view, two pictures: Model and On paper; scale is the view's
 
-- Status: Accepted (11 Nov 2026); amended for 0.16 (background drawing, crop, sections)
+- Status: Accepted (11 Nov 2026); amended the same day (background drawing, crop, sections; all in 0.15)
 - Decided by: Pierre ("we should do like Revit, 2D views editable, zoomable… it's weird to have a
   preview of the PDF in a dialog instead of a full tab"; "be better than Revit, UX-wise and
   philosophically"; agreed to the plan and its recommendations: "do everything"). Review, PRD and
@@ -44,7 +44,7 @@ thread, which is why it is slow on big models.
    under about a second, drawing in the background waits for 0.16; else it comes first.
 6. Crop regions per view (on screen and on paper) follow.
 
-## Amendment (0.16)
+## Amendment (background drawing, crop, sections)
 
 - **Drawn in the background** on the desktop: the scene is shared (`Arc<Scene>`; a change while a
   drawing runs makes its own copy), On paper views and sheets are drawn on a thread; the last
