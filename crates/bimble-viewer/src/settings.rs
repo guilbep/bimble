@@ -29,6 +29,9 @@ pub struct Settings {
     pub user_email: String,
     /// Files opened last, newest first (the desktop; Home, #52).
     pub recent: Vec<String>,
+    /// Coordinates read in WGS84 latitude and longitude rather than the survey system (LV95 for
+    /// Swiss models; ADR 0045).
+    pub wgs84: bool,
 }
 
 /// How many recent files Home lists.
@@ -46,6 +49,7 @@ impl Default for Settings {
             text_size: crate::ui_theme::TEXT_SIZE,
             user_name: String::new(),
             user_email: String::new(),
+            wgs84: false,
             recent: Vec::new(),
         }
     }
@@ -92,6 +96,7 @@ impl Settings {
             // Kept short: it is written into every commit and borrow list.
             user_name: short_line(&v["user_name"]),
             user_email: short_line(&v["user_email"]),
+            wgs84: v["wgs84"].as_bool().unwrap_or(false),
             recent: v["recent"]
                 .as_array()
                 .map(|a| {
@@ -117,6 +122,7 @@ impl Settings {
             "text_size": self.text_size,
             "user_name": self.user_name,
             "user_email": self.user_email,
+            "wgs84": self.wgs84,
             "recent": self.recent,
         })
         .to_string()
@@ -251,6 +257,7 @@ mod tests {
             user_name: "Ana".into(),
             user_email: "ana@office.example".into(),
             recent: vec!["/a/x.ifc".into(), "/b/y.bimble".into()],
+            wgs84: true,
         };
         assert_eq!(s.author(), "Ana <ana@office.example>");
         assert_eq!(Settings::from_json(&s.to_json()), s);

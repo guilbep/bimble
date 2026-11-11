@@ -562,6 +562,9 @@ pub struct Model {
     /// Schedules of this model (ADR 0029): new ones, and built-in ones changed (same name).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub schedules: Vec<crate::schedule::ScheduleDef>,
+    /// Where the model is and its project north (ADR 0045). Absent when unknown.
+    #[serde(default, skip_serializing_if = "crate::georef::Georef::is_default")]
+    pub georef: crate::georef::Georef,
 }
 
 impl Model {

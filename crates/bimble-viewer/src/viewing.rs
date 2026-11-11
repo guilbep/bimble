@@ -110,6 +110,13 @@ impl Viewer {
         self.views.iter().find(|v| v.id == id)
     }
 
+    /// The building's turn (radians): from above, project north up (ADR 0045).
+    pub(crate) fn project_north(&self) -> f32 {
+        self.loaded
+            .as_ref()
+            .map_or(0.0, |l| l.scene.georef.plan_turn(false) as f32)
+    }
+
     pub(crate) fn in_2d(&self) -> bool {
         self.active_view().is_some_and(View::is_2d)
     }
@@ -206,7 +213,12 @@ impl Viewer {
         match self.view_cameras.get(&id) {
             Some(c) => self.camera = *c,
             None => {
-                if let Some((yaw, pitch, mirror)) = views::camera_angles(&v) {
+                let georef = self
+                    .loaded
+                    .as_ref()
+                    .map(|l| l.scene.georef.clone())
+                    .unwrap_or_default();
+                if let Some((yaw, pitch, mirror)) = views::camera_angles(&v, &georef) {
                     self.camera.yaw = yaw;
                     self.camera.pitch = pitch;
                     self.camera.mirror_x = mirror;
@@ -651,6 +663,7 @@ impl Viewer {
                                     visibility: Visibility::default(),
                                     references: Vec::new(),
                                     annotations: Vec::new(),
+                                    true_north: false,
                                 });
                                 ui.close();
                             }
@@ -795,6 +808,11 @@ impl Viewer {
         let mut visibility_changed = false;
         let mut open_standards: Option<String> = None;
         let mut families_moved: Option<(String, MaterialCategory)> = None;
+        let mut turned = false;
+        let rotation = self
+            .loaded
+            .as_ref()
+            .map_or(0.0, |l| l.scene.georef.rotation_deg);
         let editable =
             self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) || self.side_views.is_some();
         {
@@ -822,6 +840,33 @@ impl Viewer {
                     )
                     .lost_focus();
                 ui.end_row();
+                // Revit's view Orientation (ADR 0045): along the building, or true north.
+                if form.kind != ViewKind::ThreeD {
+                    ui.label("Orientation");
+                    let before = form.true_north;
+                    ui.add_enabled_ui(editable, |ui| {
+                        egui::ComboBox::from_id_salt("orientation")
+                            .selected_text(if form.true_north {
+                                "True north"
+                            } else {
+                                "Project north"
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut form.true_north, false, "Project north");
+                                ui.selectable_value(&mut form.true_north, true, "True north");
+                            })
+                            .response
+                            .on_hover_text(format!(
+                                "Project north: along the building (turned {rotation:.2}° from \
+                                 true north in this model). True north: north up."
+                            ));
+                    });
+                    if form.true_north != before {
+                        turned = true;
+                        commit = true;
+                    }
+                    ui.end_row();
+                }
                 match &mut form.kind {
                     ViewKind::ThreeD => {}
                     ViewKind::Plan { storey, .. } => {
@@ -1123,6 +1168,21 @@ impl Viewer {
                 }
             }
         }
+        // Turned: the camera and the section's box follow at once.
+        if turned
+            && let Some(v) = self.active_view().cloned()
+            && let Some(g) = self.loaded.as_ref().map(|l| l.scene.georef.clone())
+        {
+            self.view_cameras.remove(&v.id);
+            if let Some((yaw, pitch, mirror)) = views::camera_angles(&v, &g) {
+                self.camera.yaw = yaw;
+                self.camera.pitch = pitch;
+                self.camera.mirror_x = mirror;
+            }
+            self.fit_pending = true;
+            self.needs_upload = true;
+            self.needs_render = true;
+        }
         if pick_reference {
             self.reference_view = Some(active.id);
             self.reference_replace = None;
@@ -1209,13 +1269,20 @@ impl Viewer {
         // The model's box in the view's plane (world mm).
         let (lo, hi) = match &v.kind {
             ViewKind::Section { facing, .. } => {
-                let rv = views::section_right(*facing);
-                let along = |p: Vec3| (p.x as f64 + o[0]) * rv[0] + (p.y as f64 + o[1]) * rv[1];
-                let (a, c) = (along(b.min), along(b.max));
-                (
-                    [a.min(c), b.min.z as f64 + o[2]],
-                    [a.max(c), b.max.z as f64 + o[2]],
-                )
+                let rv = views::section_right(v.facing_dir(*facing, &l.scene.georef));
+                let along = |x: f32, y: f32| (x as f64 + o[0]) * rv[0] + (y as f64 + o[1]) * rv[1];
+                // Every corner: the section may be turned (project north).
+                let c = [
+                    along(b.min.x, b.min.y),
+                    along(b.max.x, b.max.y),
+                    along(b.min.x, b.max.y),
+                    along(b.max.x, b.min.y),
+                ];
+                let (a, c) = (
+                    c.iter().copied().fold(f64::INFINITY, f64::min),
+                    c.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                );
+                ([a, b.min.z as f64 + o[2]], [c, b.max.z as f64 + o[2]])
             }
             _ => (
                 [b.min.x as f64 + o[0], b.min.y as f64 + o[1]],
@@ -1278,7 +1345,7 @@ impl Viewer {
         let o = l.scene.origin_mm;
         // The view's plane in model mm ("paper" at 1:1), and from there to the screen.
         let frame = ViewFrame {
-            turn: Turn::of(v),
+            turn: Turn::of(v, &l.scene.georef),
             origin: o,
             x0: 0.0,
             y1: 0.0,
@@ -1492,7 +1559,12 @@ impl Viewer {
         let c = rect.center();
         let (a, _) = self.camera.ray(ndc(c), aspect, &l.bounds);
         let (b, _) = self.camera.ray(ndc(c + delta), aspect, &l.bounds);
-        let mv = views::reference_move(&active, b - a);
+        let georef = self
+            .loaded
+            .as_ref()
+            .map(|l| l.scene.georef.clone())
+            .unwrap_or_default();
+        let mv = views::reference_move(&active, &georef, b - a);
         if self.view_form.as_ref().is_none_or(|f| f.id != active.id) {
             self.view_form = Some(active);
         }

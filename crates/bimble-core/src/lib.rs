@@ -4,6 +4,7 @@ mod command;
 pub mod date;
 pub mod demo;
 pub mod file;
+pub mod georef;
 mod guid;
 pub mod hatches;
 pub mod library;

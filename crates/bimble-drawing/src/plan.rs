@@ -69,6 +69,8 @@ pub struct SectionMark {
     pub tag: String,
     pub origin: [f64; 2],
     pub facing: bimble_core::view::Facing,
+    /// The section is drawn in true north (its facing not turned to project north).
+    pub true_north: bool,
 }
 
 /// The marks of the section views among `views`: tagged by the last word of their name when it
@@ -95,6 +97,7 @@ pub fn section_marks(views: &[bimble_core::view::View]) -> Vec<SectionMark> {
                 tag,
                 origin,
                 facing,
+                true_north: v.true_north,
             }
         })
         .collect()
@@ -719,8 +722,20 @@ fn storey_setup<'a>(
         .map(|s| s.elevation_mm - oz)
         .find(|&z| z > level + 1.0)
         .unwrap_or(f64::INFINITY);
+    // In project north (ADR 0045): turned by the building's angle, when it has one.
+    let turn = crate::viewdraw::Turn::Plan(scene.georef.plan_turn(false));
     Ok(crate::viewdraw::ViewSetup {
-        scene: std::borrow::Cow::Borrowed(scene),
+        scene: if turn == crate::viewdraw::Turn::Plan(0.0) {
+            std::borrow::Cow::Borrowed(scene)
+        } else {
+            std::borrow::Cow::Owned(crate::viewdraw::map_scene(
+                scene,
+                &|_| true,
+                turn,
+                false,
+                true,
+            ))
+        },
         level,
         cut: level + cut_above_mm,
         next,
@@ -729,7 +744,7 @@ fn storey_setup<'a>(
         storey_elevation_mm: st.elevation_mm,
         plan_down: true,
         axes: true,
-        turn: crate::viewdraw::Turn::None,
+        turn,
     })
 }
 
@@ -1358,7 +1373,7 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
                 let q = setup.turn.apply([x - so[0], y - so[1], 0.0]);
                 to_paper(&[q[0], q[1]])
             };
-            let f = m.facing.dir();
+            let f = m.facing.dir_turned(scene.georef.plan_turn(m.true_north));
             let c = at(m.origin[0], m.origin[1]);
             let ahead = at(m.origin[0] + f[0], m.origin[1] + f[1]);
             let fd = [ahead[0] - c[0], ahead[1] - c[1]];
@@ -2348,6 +2363,7 @@ mod tests {
             visibility: Default::default(),
             references: Vec::new(),
             annotations: Vec::new(),
+            true_north: false,
         };
         let views = vec![section("Coupe S1", 2500.0), section("Far away", 90_000.0)];
         let marks = section_marks(&views);
@@ -2580,6 +2596,7 @@ mod tests {
             visibility: Default::default(),
             references: Vec::new(),
             annotations: Vec::new(),
+            true_north: false,
         };
         o.view = Some(section);
         let (sheet, info) = plan(&scene, &o).unwrap();

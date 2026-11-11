@@ -101,13 +101,48 @@ struct LineVertex {
 /// `Scene::origin_mm`). Geometry outside is not drawn; solids it cuts show their cut surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClipBox {
+    /// Corners in the box's own frame: the scene's, turned by `yaw` about the vertical through
+    /// the scene origin.
     pub min: Vec3,
     pub max: Vec3,
+    /// The box's turn (radians, counter-clockwise): a section along a building turned in its
+    /// site (ADR 0045). 0 for a box along the scene's axes.
+    pub yaw: f32,
 }
 
 impl ClipBox {
+    /// A scene point in the box's frame.
+    pub fn to_frame(&self, p: Vec3) -> Vec3 {
+        turn_z(p, -self.yaw)
+    }
+
+    /// A point (or direction) of the box's frame in the scene.
+    pub fn from_frame(&self, p: Vec3) -> Vec3 {
+        turn_z(p, self.yaw)
+    }
+
     pub fn contains(&self, p: Vec3) -> bool {
+        let p = self.to_frame(p);
         p.cmpge(self.min).all() && p.cmple(self.max).all()
+    }
+
+    /// The scene-axis box around it (what culling tests against: the GPU clips exactly).
+    pub fn bounds(&self) -> (Vec3, Vec3) {
+        if self.yaw == 0.0 {
+            return (self.min, self.max);
+        }
+        let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+        for i in 0..8 {
+            let c = Vec3::new(
+                if i & 1 == 0 { self.min.x } else { self.max.x },
+                if i & 2 == 0 { self.min.y } else { self.max.y },
+                if i & 4 == 0 { self.min.z } else { self.max.z },
+            );
+            let p = self.from_frame(c);
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+        (lo, hi)
     }
     /// The bounding box of a scene, or of some of its elements.
     pub fn around(scene: &Scene, mut keep: impl FnMut(usize) -> bool) -> Option<ClipBox> {
@@ -127,6 +162,7 @@ impl ClipBox {
         lo.cmple(hi).all().then_some(ClipBox {
             min: lo - m,
             max: hi + m,
+            yaw: 0.0,
         })
     }
 }
@@ -231,7 +267,7 @@ impl Camera {
     pub fn view_proj(&self, aspect: f32, scene: &Sphere) -> Mat4 {
         let eye = self.eye();
         let up = if self.pitch.abs() > 1.55 {
-            Vec3::Y
+            self.plan_up()
         } else {
             Vec3::Z
         };
@@ -285,9 +321,22 @@ impl Camera {
     }
 
     /// Pan by a screen-space fraction of the view height.
+    /// Up on screen when looking straight down or up: away from the eye's side, so the yaw
+    /// turns a plan (+Y at the usual −90°; project north when turned, ADR 0045).
+    pub fn plan_up(&self) -> Vec3 {
+        Vec3::new(-self.yaw.cos(), -self.yaw.sin(), 0.0)
+    }
+
     pub fn pan(&mut self, dx: f32, dy: f32) {
         let fwd = (self.target - self.eye()).normalize();
-        let right = fwd.cross(Vec3::Z).normalize_or(Vec3::X);
+        // The view's own axes (as `view_proj` builds them): straight down, "up" comes from the
+        // yaw, never from the sign of a rounding error.
+        let world_up = if self.pitch.abs() > 1.55 {
+            self.plan_up()
+        } else {
+            Vec3::Z
+        };
+        let right = fwd.cross(world_up).normalize_or(Vec3::X);
         let up = right.cross(fwd);
         let h = 2.0 * self.distance * (self.fov_y / 2.0).tan();
         let dx = if self.mirror_x { -dx } else { dx };
@@ -786,7 +835,7 @@ impl GpuScene {
     pub fn visible_triangles(&self, camera: &Camera, size: (u32, u32), opts: &DrawOptions) -> u64 {
         let aspect = size.0 as f32 / size.1.max(1) as f32;
         let m = camera.view_proj(aspect, &self.bounds);
-        let cull = Cull::new(m, opts.clip.map(|c| (c.min, c.max)), opts)
+        let cull = Cull::new(m, opts.clip.map(|c| c.bounds()), opts)
             .occluding(m, aspect, self, opts)
             .proxied(
                 self,
@@ -881,7 +930,7 @@ impl GpuScene {
     pub fn frame_draws(&self, camera: &Camera, size: (u32, u32), opts: &DrawOptions) -> usize {
         let aspect = size.0 as f32 / size.1.max(1) as f32;
         let m = camera.view_proj(aspect, &self.bounds);
-        let cull = Cull::new(m, opts.clip.map(|c| (c.min, c.max)), opts)
+        let cull = Cull::new(m, opts.clip.map(|c| c.bounds()), opts)
             .occluding(m, aspect, self, opts)
             .proxied(
                 self,
@@ -2370,7 +2419,7 @@ impl Renderer {
         self.render(device, queue, target, scene, camera, opts);
         let cull = Cull::new(
             camera.view_proj(target.size.0 as f32 / target.size.1 as f32, &scene.bounds),
-            opts.clip.map(|c| (c.min, c.max)),
+            opts.clip.map(|c| c.bounds()),
             opts,
         );
         // (triangles, draw): what each query draws.
@@ -2535,17 +2584,18 @@ impl Renderer {
                     st.ambient,
                     st.cut_shade,
                 ],
+                // The box in its own frame, less the offset turned into it; w: on, its turn.
                 clip_min: match opts.clip {
                     Some(c) => {
-                        let m = c.min - off;
+                        let m = c.min - c.to_frame(off);
                         [m.x, m.y, m.z, 1.0]
                     }
                     None => [0.0; 4],
                 },
                 clip_max: match opts.clip {
                     Some(c) => {
-                        let m = c.max - off;
-                        [m.x, m.y, m.z, 0.0]
+                        let m = c.max - c.to_frame(off);
+                        [m.x, m.y, m.z, c.yaw]
                     }
                     None => [0.0; 4],
                 },
@@ -2607,7 +2657,10 @@ impl Renderer {
                 let m = vp * Mat4::from_translation(l.offset);
                 Cull::new(
                     m,
-                    opts.clip.map(|c| (c.min - l.offset, c.max - l.offset)),
+                    opts.clip.map(|c| {
+                        let (lo, hi) = c.bounds();
+                        (lo - l.offset, hi - l.offset)
+                    }),
                     opts,
                 )
                 .occluding(m, aspect, l.scene, opts)
@@ -3110,9 +3163,20 @@ pub fn pick_hit(
     best
 }
 
+/// `p` turned by `a` radians counter-clockwise about the vertical (0: exactly unchanged).
+fn turn_z(p: Vec3, a: f32) -> Vec3 {
+    if a == 0.0 {
+        return p;
+    }
+    let (s, c) = a.sin_cos();
+    Vec3::new(c * p.x - s * p.y, s * p.x + c * p.y, p.z)
+}
+
 /// Where a ray enters the clipping box, and through which face (its normal, towards the ray).
 fn clip_entry(origin: Vec3, dir: Vec3, clip: Option<&ClipBox>) -> Option<(f32, Vec3)> {
     clip.and_then(|c| {
+        // In the box's frame; the face's normal back in the scene's.
+        let (origin, dir) = (c.to_frame(origin), c.to_frame(dir));
         let mut t_in = 0.0f32;
         let mut normal = Vec3::ZERO;
         for k in 0..3 {
@@ -3130,7 +3194,7 @@ fn clip_entry(origin: Vec3, dir: Vec3, clip: Option<&ClipBox>) -> Option<(f32, V
                 normal[k] = -dir[k].signum();
             }
         }
-        (normal != Vec3::ZERO).then_some((t_in, normal))
+        (normal != Vec3::ZERO).then_some((t_in, c.from_frame(normal)))
     })
 }
 
@@ -3504,6 +3568,25 @@ mod tests {
         scene
     }
 
+    /// Looking straight down at a plan turned by `a` (project north, ADR 0045): a drag to the
+    /// right moves the model right along the building's x axis, never the other way.
+    #[test]
+    fn panning_a_plan_follows_its_turn() {
+        for a in [0.0f32, 0.6, -0.4706] {
+            let mut c = Camera {
+                yaw: -std::f32::consts::FRAC_PI_2 + a,
+                pitch: std::f32::consts::FRAC_PI_2,
+                orthographic: true,
+                ..Camera::default()
+            };
+            c.target = Vec3::ZERO;
+            c.pan(0.1, 0.0);
+            let moved = c.target.normalize();
+            let x = Vec3::new(a.cos(), a.sin(), 0.0);
+            assert!((moved + x).length() < 1e-3, "a = {a}: {moved:?}");
+        }
+    }
+
     #[test]
     fn ray_hits_triangle() {
         let t = ray_triangle(
@@ -3593,6 +3676,7 @@ mod tests {
         let half = ClipBox {
             min: b.min,
             max: (b.min + b.max) / 2.0 + Vec3::new(0.0, 0.0, 1000.0),
+            yaw: 0.0,
         };
         let mut hits = 0;
         for clip in [None, Some(&half)] {
@@ -3801,6 +3885,7 @@ mod tests {
         let half = ClipBox {
             min: b.min,
             max: Vec3::new(b.max.x, b.max.y, (b.min.z + b.max.z) / 2.0),
+            yaw: 0.0,
         };
         for clip in [None, Some(half)] {
             let (d1, t1, a) = draw(&inst, clip);
@@ -3918,6 +4003,7 @@ mod tests {
         let half = ClipBox {
             min: b.min,
             max: Vec3::new((b.min.x + b.max.x) / 2.0, b.max.y, b.max.z),
+            yaw: 0.0,
         };
         // Half a model aside: close up, both copies are partly on screen and both cull.
         let link_off = Vec3::new((b.max.x - b.min.x) / 2.0, 0.0, 0.0);
@@ -4871,6 +4957,7 @@ mod tests {
             let clip = ClipBox {
                 min: Vec3::new(-3000.0, -3000.0, -500.0) - o,
                 max: Vec3::new(3000.0, 3000.0, 1200.0) - o,
+                yaw: 0.0,
             };
             let opts = DrawOptions {
                 clip: Some(clip),
@@ -4953,6 +5040,7 @@ mod tests {
         let b0 = ClipBox {
             min: ps.clone().fold(Vec3::INFINITY, Vec3::min),
             max: ps.fold(Vec3::NEG_INFINITY, Vec3::max),
+            yaw: 0.0,
         };
         let mid = (b0.min + b0.max) / 2.0;
         let o = Vec3::new(mid.x, mid.y, b0.max.z + 5000.0);
@@ -4971,6 +5059,7 @@ mod tests {
         let beside = ClipBox {
             min: b0.min + Vec3::new(0.0, 5000.0, 0.0),
             max: b0.max + Vec3::new(0.0, 5000.0, 0.0),
+            yaw: 0.0,
         };
         assert!(pick(&scene, |_| true, o, Vec3::NEG_Z, Some(&beside)).is_none());
     }
@@ -4993,6 +5082,7 @@ mod tests {
         let plan = ClipBox {
             min: Vec3::new(-3000.0, -3000.0, 0.0) - o,
             max: Vec3::new(3000.0, 3000.0, 1200.0) - o,
+            yaw: 0.0,
         };
         let from = Vec3::new(0.0, 0.0, 10_000.0) - o;
         let hit = pick_hit(&scene, |_| true, from, Vec3::NEG_Z, Some(&plan)).unwrap();

@@ -219,6 +219,8 @@ pub struct Scene {
     /// Density (kg/m³) of the materials that state one, by material name: a `.bimble` model's
     /// own values (ADR 0031). Empty for an IFC.
     pub densities: std::collections::BTreeMap<String, f64>,
+    /// Where the model is and its project north (ADR 0045).
+    pub georef: bimble_core::georef::Georef,
 }
 
 impl Scene {
@@ -344,6 +346,7 @@ impl Scene {
             .values()
             .filter_map(|x| Some((x.name.clone(), x.props.density_kg_m3?)))
             .collect();
+        scene.georef = m.georef.clone();
         scene
     }
 }
@@ -429,6 +432,7 @@ impl SceneBuilder {
         };
         let mut scene = Scene {
             densities: Default::default(),
+            georef: Default::default(),
             origin_mm: origin,
             elements: self
                 .items

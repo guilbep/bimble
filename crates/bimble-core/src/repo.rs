@@ -72,6 +72,9 @@ pub struct Tree {
     /// Schedules, inline (small).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub schedules: Vec<crate::schedule::ScheduleDef>,
+    /// Where the model is and its project north (ADR 0045), inline.
+    #[serde(default, skip_serializing_if = "crate::georef::Georef::is_default")]
+    pub georef: crate::georef::Georef,
     /// The mesh arrays the elements refer to by hash (ADR 0042), so copying a tree copies them.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub meshes: std::collections::BTreeSet<Hash>,
@@ -314,6 +317,7 @@ impl Repo {
             sheets: map(self, &m.sheets)?,
             project: m.project.clone(),
             schedules: m.schedules.clone(),
+            georef: m.georef.clone(),
             meshes: Default::default(),
         };
         t.meshes = refs.referenced();
@@ -341,6 +345,7 @@ impl Repo {
             sheets: map::<crate::sheet::Sheet>(self, &t.sheets)?,
             project: t.project,
             schedules: t.schedules,
+            georef: t.georef,
         };
         m.validate()
             .map_err(|e| RepoError::Damaged(hash.into(), format!("invalid model: {e}")))?;
@@ -831,6 +836,12 @@ pub fn merge_models(
         project_id: ours.project_id,
         project,
         schedules,
+        // Whichever side changed it (ours when both did): it is set on import, rarely after.
+        georef: if ours.georef != base.georef {
+            ours.georef.clone()
+        } else {
+            theirs.georef.clone()
+        },
         project_name: project_name.unwrap_or_default(),
         storeys: map(
             "IfcBuildingStorey",
@@ -1061,6 +1072,26 @@ mod tests {
             crate::version::model_hash(&m)
         );
         assert_eq!(diff(&r.model_at(&c1).unwrap(), &back).len(), 1);
+    }
+
+    /// Where the model is and its project north (ADR 0045) go through the history, and count
+    /// in the model's hash.
+    #[test]
+    fn the_georeference_is_kept_in_the_history() {
+        let (_t, path) = tmp("georef");
+        let r = Repo::init(&path).unwrap();
+        let plain = concrete_frame(&FrameSpec::default());
+        let mut m = plain.clone();
+        m.georef = crate::georef::Georef::from_frame(
+            [0.866025403784, 0.5],
+            [2_600_000_000.0, 1_200_000_000.0, 0.0],
+        );
+        assert_ne!(
+            crate::version::model_hash(&m),
+            crate::version::model_hash(&plain)
+        );
+        let c = r.commit(&m, "placed", "pierre", 1_000).unwrap();
+        assert_eq!(r.model_at(&c).unwrap().georef, m.georef);
     }
 
     #[test]

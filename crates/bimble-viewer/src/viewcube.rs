@@ -43,7 +43,11 @@ pub fn camera_axes(yaw: f32, pitch: f32) -> (Vec3, Vec3, Vec3) {
     let (cp, sp) = (pitch.cos(), pitch.sin());
     let back = Vec3::new(cp * yaw.cos(), cp * yaw.sin(), sp);
     // Same "up" choice as Camera::view_proj near the poles.
-    let world_up = if pitch.abs() > 1.55 { Vec3::Y } else { Vec3::Z };
+    let world_up = if pitch.abs() > 1.55 {
+        Vec3::new(-yaw.cos(), -yaw.sin(), 0.0)
+    } else {
+        Vec3::Z
+    };
     let right = world_up.cross(back).normalize_or(Vec3::X);
     let up = back.cross(right);
     (right, up, back)

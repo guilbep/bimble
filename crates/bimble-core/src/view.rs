@@ -28,6 +28,22 @@ pub struct View {
     /// (#33, #34).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<Annotation>,
+    /// Drawn in true north rather than project north (Revit's view Orientation; ADR 0045).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub true_north: bool,
+}
+
+impl View {
+    /// How much this view turns from the world's +Y up (radians, counter-clockwise): the
+    /// building's turn in project north, the map's in true north.
+    pub fn plan_turn(&self, g: &crate::georef::Georef) -> f64 {
+        g.plan_turn(self.true_north)
+    }
+
+    /// The direction (world x, y) a section of this view looks in.
+    pub fn facing_dir(&self, facing: Facing, g: &crate::georef::Georef) -> [f64; 2] {
+        facing.dir_turned(self.plan_turn(g))
+    }
 }
 
 /// Most annotations in one view.
@@ -178,6 +194,14 @@ impl Facing {
             Facing::East => [1.0, 0.0],
             Facing::West => [-1.0, 0.0],
         }
+    }
+
+    /// `dir` turned by `a` radians counter-clockwise: north is project north when a view is
+    /// turned by the building's angle.
+    pub fn dir_turned(self, a: f64) -> [f64; 2] {
+        let [x, y] = self.dir();
+        let (s, c) = a.sin_cos();
+        [c * x - s * y + 0.0, s * x + c * y + 0.0]
     }
 
     pub fn label(self) -> &'static str {
@@ -520,6 +544,7 @@ pub fn default_views(levels: &[Level]) -> Vec<View> {
         visibility: Visibility::default(),
         references: Vec::new(),
         annotations: Vec::new(),
+        true_north: false,
     }];
     let mut sorted: Vec<&Level> = levels.iter().collect();
     sorted.sort_by(|a, b| a.elevation_mm.total_cmp(&b.elevation_mm));
@@ -555,6 +580,7 @@ pub fn default_views(levels: &[Level]) -> Vec<View> {
                 visibility: Visibility::default(),
                 references: Vec::new(),
                 annotations: Vec::new(),
+                true_north: false,
             });
         }
     }
@@ -821,6 +847,7 @@ mod tests {
             visibility: Visibility::default(),
             references: Vec::new(),
             annotations: Vec::new(),
+            true_north: false,
         };
         let stored: BTreeMap<_, _> =
             [(changed.id, changed.clone()), (extra.id, extra.clone())].into();

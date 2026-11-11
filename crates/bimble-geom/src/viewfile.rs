@@ -13,6 +13,7 @@
 //!         grids: varint n, (str tag, f64 × 4 start and end) × n
 //!         densities: varint n, (str material, f64) × n
 //!         warnings: varint n, str × n
+//!   GEOR  str: where the model is and its project north, as JSON (ADR 0045); only when known
 //!   ELEM  (repeated) varint n, (varint length, codec mesh) × n: the shared shapes first used
 //!         here, numbered on from the previous chunks; varint n, elements × n:
 //!         str GlobalId, str name, varint class, storey, material, family (indices into META)
@@ -170,6 +171,15 @@ pub fn write(scene: &Scene, gzip: bool) -> Vec<u8> {
     put(&mut s, scene.warnings.len() as u64);
     scene.warnings.iter().for_each(|w| put_str(&mut s, w));
     section(&mut out, b"META", &s);
+    // Where the model is and its project north (ADR 0045), when known: older readers skip it.
+    if !scene.georef.is_default() {
+        let mut g = Vec::new();
+        put_str(
+            &mut g,
+            &serde_json::to_string(&scene.georef).expect("serializes"),
+        );
+        section(&mut out, b"GEOR", &g);
+    }
 
     // Chunks: the shapes first used in it, then its elements.
     let (mut new_shapes, mut n_shapes, mut elems, mut n_elems) =
@@ -412,6 +422,10 @@ pub fn read(mut r: impl Read) -> Result<Scene, Error> {
                     });
                 }
             }
+            b"GEOR" => {
+                scene.georef = serde_json::from_str(&str(&mut s)?)
+                    .map_err(|e| Error::Invalid(format!("georef: {e}")))?;
+            }
             b"HEAD" | b"META" => return Err(Error::Invalid("section repeated".into())),
             _ => continue, // a later addition: skipped
         }
@@ -475,6 +489,10 @@ mod tests {
     fn scene() -> Scene {
         let mut s = Scene::from_model(&concrete_frame(&FrameSpec::default()));
         s.origin_mm = [2_600_000.0, 1_200_000.0, -0.0];
+        s.georef = bimble_core::georef::Georef::from_frame(
+            [0.866025403784, 0.5],
+            [2_600_000_000.0, 1_200_000_000.0, 0.0],
+        );
         let shape = Arc::new(s.elements[0].world_mesh().into_owned());
         for (k, mirror) in [(0, false), (1, true), (2, false)] {
             let mut e = s.elements[0].clone();
@@ -525,6 +543,8 @@ mod tests {
             assert_eq!(b.grids, a.grids);
             assert_eq!(b.warnings, a.warnings);
             assert_eq!(b.densities, a.densities);
+            assert_eq!(b.georef, a.georef);
+            assert_eq!(b.georef.crs.as_deref(), Some("EPSG:2056"));
             assert_eq!(b.elements.len(), a.elements.len());
             assert_eq!(b.stored_triangles(), a.stored_triangles());
             assert_eq!(b.instance_count(), a.instance_count());

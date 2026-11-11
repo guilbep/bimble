@@ -273,6 +273,7 @@ mod tests {
                 angle_deg: 0.0,
                 kind: None,
             }],
+            true_north: false,
         };
         views.push(section.clone());
         let plan_view = views

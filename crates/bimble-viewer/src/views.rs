@@ -2,6 +2,7 @@
 //! reference plans' lines are, what is new by default. Plain functions, tested without a window.
 
 use bimble_core::GlobalId;
+use bimble_core::georef::Georef;
 use bimble_core::view::{
     Facing, Level, Look, Reference, View, ViewKind, ViewRange, Visibility, resolve,
 };
@@ -10,9 +11,12 @@ use bimble_render::ClipBox;
 use glam::Vec3;
 
 /// Camera yaw and pitch (radians) and mirroring for a 2D view; None for 3D views.
-pub fn camera_angles(v: &View) -> Option<(f32, f32, bool)> {
+/// Turned by the view's angle (project north, ADR 0045): the camera turns with the building, so
+/// the picture is the one an unturned building gives.
+pub fn camera_angles(v: &View, g: &Georef) -> Option<(f32, f32, bool)> {
     let half = std::f32::consts::FRAC_PI_2;
-    match &v.kind {
+    let turn = v.plan_turn(g) as f32;
+    let angles = match &v.kind {
         ViewKind::ThreeD => None,
         // From above, north up. Looking up: from below, mirrored so north stays up and east
         // right (the reflected ceiling plan).
@@ -31,12 +35,12 @@ pub fn camera_angles(v: &View) -> Option<(f32, f32, bool)> {
             0.0,
             false,
         )),
-    }
+    };
+    angles.map(|(yaw, pitch, mirror)| (yaw + turn, pitch, mirror))
 }
 
-/// Screen-right direction (world x, y) of a section looking along `facing`.
-pub fn section_right(facing: Facing) -> [f64; 2] {
-    let d = facing.dir();
+/// Screen-right direction (world x, y) of a section looking along `d` (its facing, turned).
+pub fn section_right(d: [f64; 2]) -> [f64; 2] {
     [d[1], -d[0]]
 }
 
@@ -69,10 +73,35 @@ pub fn view_clip(v: &View, scene: &Scene, levels: &[Level]) -> Result<Option<Cli
             facing,
             depth_mm,
         } => {
-            // Keep what lies beyond the cut, along the facing direction, within the depth.
+            // In the section's frame: the scene turned by its angle (project north), where the
+            // facing is along an axis again. The box keeps that turn.
+            let yaw = v.plan_turn(&scene.georef) as f32;
+            if yaw != 0.0 {
+                let turned = ClipBox { yaw, ..b };
+                let (lo, hi) = (turned.to_frame(b.min), turned.to_frame(b.max));
+                let (mut lo2, mut hi2) = (lo.min(hi), lo.max(hi));
+                for c in [
+                    Vec3::new(b.min.x, b.max.y, 0.0),
+                    Vec3::new(b.max.x, b.min.y, 0.0),
+                ] {
+                    let q = turned.to_frame(c);
+                    lo2 = lo2.min(q);
+                    hi2 = hi2.max(q);
+                }
+                b = ClipBox {
+                    min: Vec3::new(lo2.x, lo2.y, b.min.z),
+                    max: Vec3::new(hi2.x, hi2.y, b.max.z),
+                    yaw,
+                };
+            }
             let d = facing.dir();
             let (k, s) = if d[0] != 0.0 { (0, d[0]) } else { (1, d[1]) };
-            let cut = (origin[k] - o[k]) as f32;
+            let at = b.to_frame(Vec3::new(
+                (origin[0] - o[0]) as f32,
+                (origin[1] - o[1]) as f32,
+                0.0,
+            ));
+            let cut = at[k];
             let far = if *depth_mm > 0.0 {
                 cut + s as f32 * *depth_mm as f32
             } else if s > 0.0 {
@@ -116,7 +145,7 @@ pub fn reference_segments(
             })
         }
         ViewKind::Section { origin, facing, .. } => {
-            let (origin, right) = (*origin, section_right(*facing));
+            let (origin, right) = (*origin, section_right(v.facing_dir(*facing, &scene.georef)));
             Box::new(move |p| {
                 Vec3::new(
                     (origin[0] + p[0] * right[0] - o[0]) as f32,
@@ -136,10 +165,10 @@ pub fn reference_segments(
 }
 
 /// A drag on screen, in world mm, turned into a move of a reference in its own plane.
-pub fn reference_move(v: &View, world: Vec3) -> [f64; 2] {
+pub fn reference_move(v: &View, g: &Georef, world: Vec3) -> [f64; 2] {
     match &v.kind {
         ViewKind::Section { facing, .. } => {
-            let r = section_right(*facing);
+            let r = section_right(v.facing_dir(*facing, g));
             [
                 world.x as f64 * r[0] + world.y as f64 * r[1],
                 world.z as f64,
@@ -165,6 +194,7 @@ pub fn new_plan(level: &Level, look: Look) -> View {
         visibility: Visibility::default(),
         references: Vec::new(),
         annotations: Vec::new(),
+        true_north: false,
     }
 }
 
@@ -185,6 +215,7 @@ pub fn new_section(scene: &Scene, facing: Facing, n: usize) -> View {
         visibility: Visibility::default(),
         references: Vec::new(),
         annotations: Vec::new(),
+        true_north: false,
     }
 }
 
@@ -210,6 +241,39 @@ mod tests {
         (s, l)
     }
 
+    /// A section of a building turned 30° (project north, ADR 0045): its box is turned with
+    /// it, keeping what lies ahead of the cut along the building's north, not behind it.
+    #[test]
+    fn a_turned_section_keeps_what_is_ahead_along_the_building() {
+        let mut scene = Scene::from_model(&bimble_core::demo::concrete_frame(
+            &bimble_core::demo::FrameSpec::default(),
+        ));
+        scene.georef.rotation_deg = 30.0;
+        let o = scene.origin_mm;
+        let sec = View {
+            id: GlobalId::new(),
+            name: "Section A".into(),
+            kind: ViewKind::Section {
+                origin: [o[0], o[1]],
+                facing: Facing::North,
+                depth_mm: 0.0,
+            },
+            visibility: Default::default(),
+            references: Vec::new(),
+            annotations: Vec::new(),
+            true_north: false,
+        };
+        let b = view_clip(&sec, &scene, &scene.levels()).unwrap().unwrap();
+        assert!((b.yaw - 30f32.to_radians()).abs() < 1e-6);
+        let d = sec.facing_dir(Facing::North, &scene.georef);
+        let at = |k: f32| Vec3::new(d[0] as f32 * k, d[1] as f32 * k, 1000.0);
+        assert!(b.contains(at(1000.0)), "ahead");
+        assert!(!b.contains(at(-1000.0)), "behind");
+        // Sideways along the cut, on both sides: still inside (the cut is across the facing).
+        let side = Vec3::new(d[1] as f32, -d[0] as f32, 0.0) * 3000.0;
+        assert!(b.contains(at(10.0) + side) && b.contains(at(10.0) - side));
+    }
+
     #[test]
     fn plan_clip_follows_the_view_range() {
         let (s, l) = demo();
@@ -230,7 +294,10 @@ mod tests {
         let b = view_clip(&up, &s, &l).unwrap().unwrap();
         assert!((b.min.z + oz - 2300.0).abs() < 1e-3, "{}", b.min.z + oz);
         assert!((b.max.z + oz - 3000.0).abs() < 1e-3);
-        assert!(camera_angles(&up).unwrap().2, "mirrored");
+        assert!(
+            camera_angles(&up, &Georef::default()).unwrap().2,
+            "mirrored"
+        );
     }
 
     #[test]
@@ -254,8 +321,8 @@ mod tests {
         assert!((b.max.x as f64 + o[0] - origin[0]).abs() < 1e-3);
         assert!((b.min.x as f64 + o[0] - (origin[0] - 2000.0)).abs() < 1e-3);
         // Screen right looking north is east; looking east it is south.
-        assert_eq!(section_right(Facing::North), [1.0, 0.0]);
-        assert_eq!(section_right(Facing::East), [0.0, -1.0]);
+        assert_eq!(section_right(Facing::North.dir()), [1.0, 0.0]);
+        assert_eq!(section_right(Facing::East.dir()), [0.0, -1.0]);
     }
 
     #[test]
@@ -312,7 +379,7 @@ mod tests {
         // A drag in a section moves along the screen and up.
         let sec = new_section(&s, Facing::East, 1);
         assert_eq!(
-            reference_move(&sec, Vec3::new(0.0, -10.0, 5.0)),
+            reference_move(&sec, &Georef::default(), Vec3::new(0.0, -10.0, 5.0)),
             [10.0, 5.0]
         );
     }

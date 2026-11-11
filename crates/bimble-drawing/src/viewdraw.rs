@@ -40,10 +40,11 @@ pub struct ViewSetup<'a> {
 /// How the scene is turned so the view looks straight down.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Turn {
-    /// A plan looking down: as it is.
-    None,
-    /// A ceiling plan: reflected, z → −z.
-    Reflect,
+    /// A plan looking down, turned by −a (radians) so its north is up: project north turns by
+    /// the building's angle (ADR 0045); 0 leaves the scene as it is.
+    Plan(f64),
+    /// A ceiling plan: turned the same, then reflected, z → −z.
+    Reflect(f64),
     /// A section looking along `[dx, dy]`.
     Section([f64; 2]),
 }
@@ -98,19 +99,20 @@ impl ViewFrame {
 
 impl Turn {
     /// How a view turns the scene (3D views: not at all).
-    pub fn of(v: &View) -> Turn {
+    pub fn of(v: &View, g: &bimble_core::georef::Georef) -> Turn {
+        let a = v.plan_turn(g);
         match &v.kind {
-            ViewKind::Plan { look: Look::Up, .. } => Turn::Reflect,
-            ViewKind::Section { facing, .. } => Turn::Section(facing.dir()),
-            _ => Turn::None,
+            ViewKind::Plan { look: Look::Up, .. } => Turn::Reflect(a),
+            ViewKind::Section { facing, .. } => Turn::Section(facing.dir_turned(a)),
+            _ => Turn::Plan(a),
         }
     }
 
     /// The scene point (relative to its origin) that `apply` turns into `q`.
     pub fn invert(self, q: [f64; 3]) -> [f64; 3] {
         match self {
-            Turn::None => q,
-            Turn::Reflect => [q[0], q[1], -q[2]],
+            Turn::Plan(a) => rotate(q, a),
+            Turn::Reflect(a) => rotate([q[0], q[1], -q[2]], a),
             Turn::Section([dx, dy]) => [q[0] * dy - q[2] * dx, -q[0] * dx - q[2] * dy, q[1]],
         }
     }
@@ -118,11 +120,23 @@ impl Turn {
     /// A point of the scene (mm, relative to its origin) in the turned scene.
     pub fn apply(self, p: [f64; 3]) -> [f64; 3] {
         match self {
-            Turn::None => p,
-            Turn::Reflect => [p[0], p[1], -p[2]],
+            Turn::Plan(a) => rotate(p, -a),
+            Turn::Reflect(a) => {
+                let q = rotate(p, -a);
+                [q[0], q[1], -q[2]]
+            }
             Turn::Section([dx, dy]) => [dy * p[0] - dx * p[1], p[2], -(dx * p[0] + dy * p[1])],
         }
     }
+}
+
+/// `p` turned by `a` radians counter-clockwise about the vertical (0: unchanged, exactly).
+fn rotate(p: [f64; 3], a: f64) -> [f64; 3] {
+    if a == 0.0 {
+        return p;
+    }
+    let (s, c) = a.sin_cos();
+    [c * p[0] - s * p[1], s * p[0] + c * p[1], p[2]]
 }
 
 /// Turn `scene` for `view`. 3D views have no paper drawing.
@@ -139,6 +153,7 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
     };
     let shown = Shown::of(&view.visibility);
     let visible = |e: &SceneElement| shown.keeps(e);
+    let turn = Turn::of(view, &scene.georef);
     match &view.kind {
         ViewKind::ThreeD => Err(format!(
             "view {}: a 3D view has no paper drawing",
@@ -153,10 +168,10 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
             let r = resolve(range, *look, storey, &levels)?;
             match look {
                 Look::Down => Ok(ViewSetup {
-                    scene: if view.visibility.is_empty() {
+                    scene: if view.visibility.is_empty() && turn == Turn::Plan(0.0) {
                         Cow::Borrowed(scene)
                     } else {
-                        Cow::Owned(map_scene(scene, &visible, |p| p, false, true))
+                        Cow::Owned(map_scene(scene, &visible, turn, false, true))
                     },
                     level: r.depth - oz,
                     cut: r.cut - oz,
@@ -166,17 +181,11 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
                     storey_elevation_mm: st.elevation_mm,
                     plan_down: true,
                     axes: true,
-                    turn: Turn::None,
+                    turn,
                 }),
                 Look::Up => Ok(ViewSetup {
                     // Reflected: what is higher is nearer the viewer below.
-                    scene: Cow::Owned(map_scene(
-                        scene,
-                        &visible,
-                        |p| [p[0], p[1], -p[2]],
-                        true,
-                        true,
-                    )),
+                    scene: Cow::Owned(map_scene(scene, &visible, turn, true, true)),
                     level: -(r.depth - oz),
                     cut: -(r.cut - oz),
                     next: -(r.cut - oz),
@@ -185,7 +194,7 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
                     storey_elevation_mm: st.elevation_mm,
                     plan_down: false,
                     axes: true,
-                    turn: Turn::Reflect,
+                    turn,
                 }),
             }
         }
@@ -194,16 +203,10 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
             facing,
             depth_mm,
         } => {
-            let d = facing.dir();
-            let (dx, dy) = (d[0] as f32, d[1] as f32);
+            // Its facing in project north (or true north): along the building's grid.
+            let d = view.facing_dir(*facing, &scene.georef);
             // Right along the section, up, and towards the viewer: a rotation.
-            let turned = map_scene(
-                scene,
-                &visible,
-                |p| [dy * p[0] - dx * p[1], p[2], -(dx * p[0] + dy * p[1])],
-                false,
-                false,
-            );
+            let turned = map_scene(scene, &visible, turn, false, false);
             let o = [
                 origin[0] - scene.origin_mm[0],
                 origin[1] - scene.origin_mm[1],
@@ -228,7 +231,7 @@ pub fn setup<'a>(scene: &'a Scene, view: &View) -> Result<ViewSetup<'a>, String>
                 storey_elevation_mm: elevation,
                 plan_down: false,
                 axes: false,
-                turn: Turn::Section(d),
+                turn,
             })
         }
     }
@@ -269,13 +272,15 @@ impl<'a> Shown<'a> {
 
 /// The scene with every position (and normal) mapped by the linear map `f`; `reflect` when `f`
 /// is a reflection, so triangles keep facing outwards.
-fn map_scene(
+pub(crate) fn map_scene(
     scene: &Scene,
     visible: &dyn Fn(&SceneElement) -> bool,
-    f: impl Fn([f32; 3]) -> [f32; 3],
+    turn: Turn,
     reflect: bool,
     grids: bool,
 ) -> Scene {
+    // Linear (no translation): points relative to the origin and normals alike.
+    let f = |p: [f32; 3]| turn.apply(p.map(f64::from)).map(|c| c as f32);
     let unpack = |n: [i8; 4]| {
         [
             n[0] as f32 / 127.0,
@@ -317,12 +322,27 @@ fn map_scene(
         .collect();
     Scene {
         densities: scene.densities.clone(),
+        georef: scene.georef.clone(),
         origin_mm: scene.origin_mm,
         elements,
         storeys: scene.storeys.clone(),
-        // Grid axes are plan lines: kept for plans (a ceiling plan keeps x and y).
+        // Grid axes are plan lines: kept for plans, turned with them (a ceiling plan keeps x
+        // and y).
         grids: if grids {
-            scene.grids.clone()
+            let o = scene.origin_mm;
+            let at = |p: [f64; 2]| {
+                let q = turn.apply([p[0] - o[0], p[1] - o[1], 0.0]);
+                [q[0] + o[0], q[1] + o[1]]
+            };
+            scene
+                .grids
+                .iter()
+                .map(|g| bimble_geom::GridAxis {
+                    tag: g.tag.clone(),
+                    start_mm: at(g.start_mm),
+                    end_mm: at(g.end_mm),
+                })
+                .collect()
         } else {
             Vec::new()
         },
@@ -405,12 +425,96 @@ mod tests {
         );
     }
 
+    /// A building turned 30° in its site (ADR 0045): its plan in project north is the unturned
+    /// building, element by element and grid axis by grid axis; in true north it stays turned.
+    #[test]
+    fn a_turned_building_is_drawn_along_its_grid() {
+        use bimble_core::demo::{FrameSpec, concrete_frame};
+        use bimble_core::view::default_views;
+        let mut plain = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let o = plain.origin_mm;
+        plain.grids = vec![bimble_geom::GridAxis {
+            tag: "A".into(),
+            start_mm: [o[0] - 5000.0, o[1]],
+            end_mm: [o[0] + 5000.0, o[1]],
+        }];
+        let a = 30f64.to_radians();
+        // The same building turned by 30° (Turn::Plan turns by the opposite of its angle).
+        let mut turned = map_scene(&plain, &|_| true, Turn::Plan(-a), false, true);
+        turned.georef.rotation_deg = 30.0;
+        let plan = default_views(&plain.levels())
+            .into_iter()
+            .find(|v| {
+                matches!(
+                    v.kind,
+                    ViewKind::Plan {
+                        look: Look::Down,
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let boxes = |s: &Scene| -> Vec<[f32; 4]> {
+            s.elements
+                .iter()
+                .map(|e| {
+                    let m = e.world_mesh();
+                    let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+                    for p in &m.positions {
+                        for k in 0..2 {
+                            lo[k] = lo[k].min(p[k]);
+                            hi[k] = hi[k].max(p[k]);
+                        }
+                    }
+                    [lo[0], lo[1], hi[0], hi[1]]
+                })
+                .collect()
+        };
+        let want = boxes(&plain);
+        let near = |a: &[[f32; 4]], b: &[[f32; 4]]| {
+            a.iter()
+                .zip(b)
+                .all(|(x, y)| (0..4).all(|k| (x[k] - y[k]).abs() < 0.05))
+        };
+        let up = setup(&turned, &plan).unwrap();
+        assert_eq!(up.turn, Turn::Plan(a));
+        assert!(
+            near(&boxes(&up.scene), &want),
+            "project north: along the grid"
+        );
+        let g = &up.scene.grids[0];
+        assert!((g.start_mm[1] - o[1]).abs() < 1e-6 && (g.end_mm[1] - o[1]).abs() < 1e-6);
+        let mut true_north = plan.clone();
+        true_north.true_north = true;
+        let tn = setup(&turned, &true_north).unwrap();
+        assert!(!near(&boxes(&tn.scene), &want), "true north: still turned");
+        // A section looking "north" looks along the building's north.
+        let sec = View {
+            kind: ViewKind::Section {
+                origin: [o[0], o[1]],
+                facing: bimble_core::view::Facing::North,
+                depth_mm: 0.0,
+            },
+            ..plan.clone()
+        };
+        let Turn::Section(d) = setup(&turned, &sec).unwrap().turn else {
+            panic!("a section");
+        };
+        assert!(
+            (d[0] + a.sin()).abs() < 1e-12 && (d[1] - a.cos()).abs() < 1e-12,
+            "{d:?}"
+        );
+    }
+
     #[test]
     fn turns_invert() {
         for t in [
-            Turn::None,
-            Turn::Reflect,
+            Turn::Plan(0.0),
+            Turn::Reflect(0.0),
+            Turn::Plan(0.6),
+            Turn::Reflect(-1.2),
             Turn::Section([0.0, 1.0]),
+            Turn::Section([0.866025403784, 0.5]),
             Turn::Section([1.0, 0.0]),
             Turn::Section([0.0, -1.0]),
             Turn::Section([-1.0, 0.0]),

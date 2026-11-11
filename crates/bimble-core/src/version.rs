@@ -104,6 +104,11 @@ pub fn model_hash(m: &Model) -> blake3::Hash {
         h.update(b"project");
         h.update(content_hash(&m.project).as_bytes());
     }
+    // Only when known: older models keep their hash.
+    if !m.georef.is_default() {
+        h.update(b"georef");
+        h.update(content_hash(&m.georef).as_bytes());
+    }
     if !m.sheets.is_empty() {
         h.update(b"sheets");
         for (id, sh) in hash_map(&m.sheets) {

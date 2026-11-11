@@ -498,22 +498,31 @@ fn an_import_is_the_same_every_time() {
     assert_eq!(a.project_id.to_string(), project);
 }
 
-/// The building placed in site coordinates and turned, its storeys in the same frame (a usual
-/// Revit export, the office's models): nothing to report, elements still where the IFC says.
+/// The building placed in site coordinates (LV95, mm) and turned, its storeys in the same frame
+/// (a usual Revit export, the office's models): nothing to report, elements still where the IFC
+/// says; project north is the building's turn.
 #[test]
 fn storeys_in_their_buildings_frame_are_not_reported() {
     let text = REVIT_STYLE.replace(
         "#14=IFCAXIS2PLACEMENT3D(#8,$,$);",
-        "#14=IFCAXIS2PLACEMENT3D(#90,$,#91);\n#90=IFCCARTESIANPOINT((2600000.,1200000.,0.));\n\
+        "#14=IFCAXIS2PLACEMENT3D(#90,$,#91);\n#90=IFCCARTESIANPOINT((2600000000.,1200000000.,0.));\n\
          #91=IFCDIRECTION((0.866025403784,0.5,0.));",
     );
     assert_same_place_as_reader(&text);
-    let (_, rep) = import(&text);
+    let (m, rep) = import(&text);
     assert!(
         !rep.warnings.iter().any(|w| w.contains("storey")),
         "{:?}",
         rep.warnings
     );
+    // Its project north and its place (ADR 0045), in the model and the scene alike.
+    let scene = bimble_ifc::read::read_str(&text).unwrap();
+    for g in [&m.georef, &scene.georef] {
+        assert!((g.rotation_deg - 30.0).abs() < 1e-6, "{g:?}");
+        assert_eq!(g.crs.as_deref(), Some("EPSG:2056"));
+    }
+    // The plain fixture: nothing to say.
+    assert!(import(REVIT_STYLE).0.georef.is_default());
 }
 
 /// An element in no storey goes into the first one and keeps its world height (not raised by

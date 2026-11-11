@@ -68,3 +68,4 @@ Session journals (what happened, in order, with measurements) are in [`docs/jour
 ## Evidence
 ## Revisit when
 ```
+| [0045](0045-project-north-and-swiss-coordinates.md) | Project north by default (view Orientation: true north), from the IFC building's turn; coordinates in LV95 the Swiss way or WGS84; turned section boxes; 2D camera up and panning from the yaw | Accepted |

@@ -211,6 +211,7 @@ pub fn import_str_with_limits(text: &str, limits: Limits) -> Result<(Model, Impo
         .and_then(|(_, p)| GlobalId::try_from(p.arg(0).as_str()?.to_owned()).ok())
         .unwrap_or_else(|| GlobalId::derived(b"project/imported"));
     model.storeys = storeys;
+    model.georef = r.georef(scale);
     let mut model_materials: BTreeMap<GlobalId, Material> = BTreeMap::new();
     let mut material_id: BTreeMap<(String, MaterialCategory), GlobalId> = BTreeMap::new();
     // One budget for the whole file: elements and openings draw from the same caps.

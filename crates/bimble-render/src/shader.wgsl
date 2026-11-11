@@ -184,8 +184,12 @@ struct FaceClipOut {
 };
 
 // True if p is outside the clipping box.
+// The box may be turned about the vertical (clip_max.w, radians): p in its frame first.
 fn clipped(p: vec3<f32>) -> bool {
-    return any(p < u.clip_min.xyz) || any(p > u.clip_max.xyz);
+    let c = cos(u.clip_max.w);
+    let s = sin(u.clip_max.w);
+    let q = vec3<f32>(c * p.x + s * p.y, -s * p.x + c * p.y, p.z);
+    return any(q < u.clip_min.xyz) || any(q > u.clip_max.xyz);
 }
 
 @vertex

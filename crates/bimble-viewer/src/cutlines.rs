@@ -27,9 +27,14 @@ pub fn cut_lines(
             continue;
         }
         let m = e.world_mesh();
+        // In the box's frame (a turned section box: ADR 0045); segments back in the scene's.
+        let at: Vec<Vec3> = m
+            .positions
+            .iter()
+            .map(|p| b.to_frame(Vec3::from_array(*p)))
+            .collect();
         let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
-        for p in &m.positions {
-            let p = Vec3::from_array(*p);
+        for &p in &at {
             lo = lo.min(p);
             hi = hi.max(p);
         }
@@ -45,7 +50,7 @@ pub fn cut_lines(
                 continue;
             }
             for t in m.indices.as_chunks::<3>().0 {
-                let p = t.map(|i| Vec3::from_array(m.positions[i as usize]));
+                let p = t.map(|i| at[i as usize]);
                 let side = p.map(|q| q[a] >= v);
                 let n = side.iter().filter(|&&s| s).count();
                 if n == 0 || n == 3 {
@@ -71,7 +76,7 @@ pub fn cut_lines(
                 if c == 2
                     && let Some(seg) = clip_to_rect(pts, u, w, b)
                 {
-                    out.push(seg);
+                    out.push(seg.map(|q| b.from_frame(q)));
                     if out.len() >= MAX_SEGMENTS {
                         return out;
                     }
@@ -110,6 +115,7 @@ fn clip_to_rect(s: [Vec3; 2], u: usize, w: usize, b: &ClipBox) -> Option<[Vec3; 
 
 /// Which faces of `b` turn towards a viewer at `eye` (scene coordinates).
 pub fn front_faces(b: &ClipBox, eye: Vec3) -> [bool; 6] {
+    let eye = b.to_frame(eye);
     std::array::from_fn(|k| {
         let a = k / 2;
         if k % 2 == 0 {
@@ -153,6 +159,7 @@ mod tests {
         let b = ClipBox {
             min: Vec3::ZERO,
             max: Vec3::splat(10.0),
+            yaw: 0.0,
         };
         let s = [Vec3::new(-5.0, 5.0, 10.0), Vec3::new(15.0, 5.0, 10.0)];
         let c = clip_to_rect(s, 0, 1, &b).unwrap();

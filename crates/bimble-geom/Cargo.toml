@@ -11,6 +11,7 @@ bimble-core.workspace = true
 earcutr.workspace = true
 # Gzip of view files (ADR 0040); pure Rust, already in the tree.
 flate2.workspace = true
+serde_json.workspace = true
 
 # The kernel is C++: linked natively; in a browser its own WebAssembly build is called through
 # JavaScript (ADR 0020).

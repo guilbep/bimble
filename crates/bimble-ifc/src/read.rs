@@ -419,6 +419,7 @@ pub struct Parsed {
     materials: HashMap<u64, (String, MaterialCategory)>,
     storeys: Vec<bimble_geom::StoreyLevel>,
     grids: Vec<bimble_geom::GridAxis>,
+    georef: bimble_core::georef::Georef,
     warnings: BTreeMap<String, usize>,
 }
 
@@ -504,6 +505,7 @@ impl Parsed {
         ids.sort_unstable();
         let storeys = r.storey_levels(scale);
         let grids = r.grid_axes(scale);
+        let georef = r.georef(scale);
         let (arc_tol, angle_scale, warnings) = (r.arc_tol, r.angle_scale, r.warnings);
         Ok(Parsed {
             file,
@@ -517,6 +519,7 @@ impl Parsed {
             materials,
             storeys,
             grids,
+            georef,
             warnings,
         })
     }
@@ -842,7 +845,9 @@ impl Parsed {
             .into_iter()
             .map(|(k, n)| if n > 1 { format!("{k} (×{n})") } else { k })
             .collect();
-        (sb.finish(), picked.len() - shown)
+        let mut scene = sb.finish();
+        scene.georef = self.georef.clone();
+        (scene, picked.len() - shown)
     }
 
     /// The limits this file was parsed with: `max_triangles` is the guard against hostile
@@ -1145,6 +1150,40 @@ impl<'a> Reader<'a> {
     }
 
     // ---------- units ----------
+
+    /// Where the model is and its project north (ADR 0045): the first IfcBuilding's frame turns
+    /// the plans; an IFC4 IfcMapConversion gives the survey offset and the map's turn, else the
+    /// building's position says whether it is in LV95 (Revit exports usually draw in survey
+    /// coordinates).
+    pub(crate) fn georef(&mut self, scale: f64) -> bimble_core::georef::Georef {
+        let building = self
+            .f
+            .by_type("IFCBUILDING")
+            .next()
+            .and_then(|(_, b)| b.arg(5).as_ref().map(|pl| self.object_placement(pl, 0)))
+            .unwrap_or(Affine::IDENTITY);
+        let mut g = bimble_core::georef::Georef::from_frame(
+            [building.x[0], building.x[1]],
+            building.t.map(|c| c * scale),
+        );
+        if let Some((_, m)) = self.f.by_type("IFCMAPCONVERSION").next() {
+            // IfcMapConversion(Source, Target, Eastings, Northings, OrthogonalHeight,
+            // XAxisAbscissa, XAxisOrdinate, Scale), in the map's units (metres).
+            // ponytail: map units other than metres not read; add when a file has them.
+            let num = |k: usize| m.arg(k).as_f64().unwrap_or(0.0);
+            g.east_m = num(2);
+            g.north_m = num(3);
+            g.height_m = num(4);
+            let (a, o) = (m.arg(5).as_f64().unwrap_or(1.0), num(6));
+            g.map_rotation_deg = (o.atan2(a).to_degrees() * 1e6).round() / 1e6 + 0.0;
+            g.crs = self
+                .f
+                .deref(m.arg(1))
+                .and_then(|c| c.arg(0).as_str())
+                .map(str::to_owned);
+        }
+        g
+    }
 
     pub(crate) fn length_scale_to_mm(&mut self) -> f64 {
         let f = self.f;

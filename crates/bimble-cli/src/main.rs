@@ -591,6 +591,15 @@ fn run(cli: Cli) -> Result<(), String> {
                 storeys.insert(&el.storey);
             }
             println!("elements  {}", scene.elements.len());
+            // Where it is and which way project north points (ADR 0045).
+            let g = &scene.georef;
+            if !g.is_default() {
+                println!(
+                    "place     {}, project north turned {:.4}° from true north",
+                    g.crs.as_deref().unwrap_or("survey system unknown"),
+                    g.rotation_deg
+                );
+            }
             println!("storeys   {}", storeys.len());
             for st in &scene.storeys {
                 println!("  {:>10.3} m  {}", st.elevation_mm / 1000.0, st.name);
@@ -1034,6 +1043,7 @@ fn run(cli: Cli) -> Result<(), String> {
                     Some(bimble_render::ClipBox {
                         min: a.min(b),
                         max: a.max(b),
+                        yaw: 0.0,
                     })
                 }
                 Some(_) => return Err("--clip needs six numbers: x0,y0,z0,x1,y1,z1".into()),

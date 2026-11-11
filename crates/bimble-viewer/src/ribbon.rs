@@ -508,7 +508,7 @@ impl Viewer {
             }
             Action::Top => {
                 self.camera.pitch = 1.5;
-                self.camera.yaw = -std::f32::consts::FRAC_PI_2;
+                self.camera.yaw = -std::f32::consts::FRAC_PI_2 + self.project_north();
                 self.needs_render = true;
             }
             Action::OnPaper => self.plan_window = !self.plan_window,

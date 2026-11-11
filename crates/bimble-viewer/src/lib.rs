@@ -21,6 +21,7 @@ use web_time::Instant;
 
 mod big;
 mod collab;
+mod coords;
 mod cutlines;
 mod edit;
 mod files;
@@ -860,6 +861,8 @@ struct Viewer {
     measure_first: Option<measure::Snap>,
     dimensions: Vec<measure::Dimension>,
     hover_snap: Option<measure::Snap>,
+    /// The point under the pointer (world mm): on what it shows, or on a plan's cut (ADR 0045).
+    pointer_world: Option<[f64; 3]>,
     /// Snap targets while placing (#25), for (scene revision, storey level), and the point the
     /// pointer snaps to (model mm) with what it snapped to.
     place_targets: Option<((u64, i64), snap::Targets)>,
@@ -1054,6 +1057,7 @@ impl Viewer {
             measure_first: None,
             dimensions: Vec::new(),
             hover_snap: None,
+            pointer_world: None,
             place_targets: None,
             place_snap: None,
             cut_cache: None,
@@ -2153,7 +2157,11 @@ impl Viewer {
         if let Some(c) = self.clip() {
             let (lo, hi) = (b.min.max(c.min), b.max.min(c.max));
             if lo.cmple(hi).all() {
-                b = ClipBox { min: lo, max: hi };
+                b = ClipBox {
+                    min: lo,
+                    max: hi,
+                    yaw: 0.0,
+                };
             }
         }
         self.camera.fit_box(b.min, b.max, aspect);
@@ -2702,9 +2710,20 @@ impl Viewer {
                 d,
                 clip.as_ref(),
             )
-            .map(|h| (h.element, h.distance))
-            .map(|(i, _)| i);
-            self.set_hovered(h);
+            .map(|h| (h.element, h.distance));
+            // Its coordinates for the status bar: on the element, else (a plan) on the cut.
+            let on = match h {
+                Some((_, t)) => Some(o + d * t),
+                None if self.in_2d() && d.z.abs() > 1e-6 => clip.map(|c| {
+                    let t = (c.max.z - o.z) / d.z;
+                    o + d * t
+                }),
+                None => None,
+            };
+            let so = l.scene.origin_mm;
+            self.pointer_world =
+                on.map(|p| [p.x as f64 + so[0], p.y as f64 + so[1], p.z as f64 + so[2]]);
+            self.set_hovered(h.map(|(i, _)| i));
         }
         if resp.double_clicked() {
             self.fit(aspect);
@@ -2737,6 +2756,7 @@ impl Viewer {
                     let c = clip.map(|c| ClipBox {
                         min: c.min - k.offset,
                         max: c.max - k.offset,
+                        yaw: 0.0,
                     });
                     bimble_render::pick_hit_bvh(
                         &k.scene,
@@ -2854,7 +2874,7 @@ impl Viewer {
         }
         if t {
             self.camera.pitch = 1.5;
-            self.camera.yaw = -std::f32::consts::FRAC_PI_2;
+            self.camera.yaw = -std::f32::consts::FRAC_PI_2 + self.project_north();
             self.needs_render = true;
         }
         // Esc first stops placing, drops a half-made dimension, then the selection.
@@ -2976,6 +2996,7 @@ impl Viewer {
             let clip = clip.map(|c| ClipBox {
                 min: c.min - k.offset,
                 max: c.max - k.offset,
+                yaw: 0.0,
             });
             let hit = bimble_render::pick_hit_bvh(
                 &k.scene,
@@ -4034,6 +4055,16 @@ impl Viewer {
             .default_width(380.0)
             .show(ctx, |ui| {
                 self.you_ui(ui);
+                ui.separator();
+                ui.strong("Coordinates");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut self.settings.wgs84, false, "Survey system (LV95)");
+                    ui.radio_value(&mut self.settings.wgs84, true, "WGS84 (latitude, longitude)");
+                });
+                ui.weak(
+                    "Shown in the status bar for the point under the pointer. WGS84 is worked \
+                     out from LV95 (swisstopo's formulas, about 1 m).",
+                );
                 self.appearance_ui(ui);
                 ui.add_space(8.0);
                 ui.strong("Memory for one model");
@@ -4494,6 +4525,20 @@ impl Viewer {
                 ui.separator();
             }
             ui.label(self.status_hint());
+            // Where the pointer is (or the measured point), in LV95 or WGS84 (ADR 0045).
+            let at = self
+                .hover_snap
+                .zip(self.loaded.as_ref())
+                .map(|(s, l)| {
+                    let o = l.scene.origin_mm;
+                    [s.point.x as f64 + o[0], s.point.y as f64 + o[1], s.point.z as f64 + o[2]]
+                })
+                .or(self.pointer_world);
+            if let (Some(p), Some(l)) = (at, &self.loaded) {
+                ui.separator();
+                ui.label(coords::text(&l.scene.georef, p, self.settings.wgs84))
+                    .on_hover_text("Settings → Coordinates: survey system (LV95) or WGS84");
+            }
             ui.separator();
             // Every state that isn't the default, with its way back (ADR 0028).
             for (chip, label) in state::chips(&self.snapshot()) {

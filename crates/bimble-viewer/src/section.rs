@@ -129,6 +129,7 @@ mod tests {
         let b = ClipBox {
             min: Vec3::new(0.0, 0.0, 0.0),
             max: Vec3::new(10.0, 20.0, 30.0),
+            yaw: 0.0,
         };
         assert_eq!(corner(&b, 0), Vec3::ZERO);
         assert_eq!(corner(&b, 7), Vec3::new(10.0, 20.0, 30.0));
