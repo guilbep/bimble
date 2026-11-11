@@ -697,7 +697,9 @@ struct LoadShown {
 
 struct Loaded {
     path: PathBuf,
-    scene: Scene,
+    /// Shared with a drawing made in the background (ADR 0046): a change while one runs makes
+    /// its own copy (`Arc::make_mut`).
+    scene: std::sync::Arc<Scene>,
     /// Its elements' bounds as a tree (picking, snapping; later culling and clashes). Rebuilt
     /// with the scene: 15 ms for 30 000 elements.
     bvh: bimble_geom::bvh::Bvh,
@@ -758,13 +760,19 @@ impl Loaded {
         let k = self.imported.len();
         self.imported
             .extend(self.scene.elements[k..].iter().map(|e| e.category));
-        let mut changed = false;
-        for (e, &c) in self.scene.elements.iter_mut().zip(&self.imported) {
-            let f = style.family(&e.material, c);
-            changed |= e.category != f;
-            e.category = f;
-        }
+        // Changed only when a family moves: the scene, maybe shared with a drawing, is copied
+        // then and only then.
+        let changed = self
+            .scene
+            .elements
+            .iter()
+            .zip(&self.imported)
+            .any(|(e, &c)| style.family(&e.material, c) != e.category);
         if changed {
+            let scene = std::sync::Arc::make_mut(&mut self.scene);
+            for (e, &c) in scene.elements.iter_mut().zip(&self.imported) {
+                e.category = style.family(&e.material, c);
+            }
             (self.classes, self.storeys, self.categories, self.materials) = counts(&self.scene);
         }
         self.families_applied = Some(style.material_families.clone());
@@ -1533,7 +1541,7 @@ impl Viewer {
                 self.loaded = Some(Loaded {
                     path,
                     bvh: bimble_geom::bvh::Bvh::build(&bimble_geom::bvh::element_boxes(&scene)),
-                    scene,
+                    scene: std::sync::Arc::new(scene),
                     load_time,
                     partial,
                     bounds,
@@ -1652,7 +1660,7 @@ impl Viewer {
                 .and_then(|i| l.scene.elements.get(i))
                 .map(|e| e.global_id.clone())
         });
-        l.scene = Scene::from_model(&ed.model);
+        l.scene = std::sync::Arc::new(Scene::from_model(&ed.model));
         l.proxies = None;
         l.bvh = bimble_geom::bvh::Bvh::build(&bimble_geom::bvh::element_boxes(&l.scene));
         (l.classes, l.storeys, l.categories, l.materials) = counts(&l.scene);

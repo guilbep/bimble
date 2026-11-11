@@ -1383,10 +1383,13 @@ impl Viewer {
                 .zip(self.loaded.as_ref())
                 .and_then(|(i, l)| l.scene.elements.get(i))
                 .map_or(String::new(), |e| format!(" · {} {}", e.class, e.name));
+            let drawn = match p.drawing_for() {
+                Some(secs) => format!("drawing… {secs:.0} s (the picture is the last one)"),
+                None => format!("drawn in {:.0} ms", p.drawn_ms),
+            };
             return format!(
-                "On paper 1:{}{shown} · drawn in {:.0} ms{hovered} · Double-click: the model there \
-                 · P",
-                v.scale, p.drawn_ms
+                "On paper 1:{}{shown} · {drawn}{hovered} · Double-click: the model there · P",
+                v.scale
             );
         }
         if self.in_2d() {

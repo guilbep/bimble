@@ -63,10 +63,22 @@ pub(crate) struct Layout {
     /// The text being edited in the properties, and whether it changed.
     text_form: Option<(Picked, String, f64)>,
     pub last_render_ms: f64,
+    /// The sheet being drawn in the background (ADR 0046): its key, where it arrives, since when.
+    job: Option<SheetJob>,
     /// The text type and dimension type new texts and dimensions get (#43).
     pub text_kind: Option<String>,
     pub dim_kind: Option<String>,
 }
+
+/// A sheet drawn and prepared, with what is where on it.
+type SheetDrawn = Result<(bimble_drawing::sheet::Prepared, SheetInfo), String>;
+
+/// A sheet being drawn: for which key, where it arrives, since when.
+type SheetJob = (
+    u64,
+    std::sync::mpsc::Receiver<(u64, SheetDrawn)>,
+    web_time::Instant,
+);
 
 fn hash_of(parts: &[&[u8]]) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -101,6 +113,7 @@ impl Viewer {
             hover: None,
             text_form: None,
             last_render_ms: 0.0,
+            job: None,
             text_kind: None,
             dim_kind: None,
         });
@@ -192,13 +205,15 @@ impl Viewer {
     }
 
     /// Redraw the sheet when it, its views, the model or the style changed.
-    fn refresh_layout(&mut self) {
+    fn refresh_layout(&mut self, egui_ctx: &egui::Context) {
         let Some(lay) = &self.layout else { return };
         let Some(def) = self.sheet_def(lay.sheet) else {
             self.layout = None;
             return;
         };
-        let Some(l) = &self.loaded else { return };
+        if self.loaded.is_none() {
+            return;
+        }
         let used: Vec<&View> = self
             .views
             .iter()
@@ -216,9 +231,32 @@ impl Viewer {
                 .unwrap_or_default()
                 .as_bytes(),
         ]);
-        if key == lay.key {
+        // A sheet drawn in the background arrived: shown if still the one wanted.
+        let lay = self.layout.as_mut().expect("checked above");
+        if let Some((_, rx, _)) = &lay.job
+            && let Ok((done, drawn)) = rx.try_recv()
+        {
+            lay.job = None;
+            if done == key {
+                lay.key = key;
+                lay.texture = None;
+                match drawn {
+                    Ok((p, info)) => {
+                        lay.prepared = Some(p);
+                        lay.info = info;
+                        lay.error = None;
+                    }
+                    Err(e) => {
+                        lay.prepared = None;
+                        lay.error = Some(e);
+                    }
+                }
+            }
+        }
+        if key == lay.key || lay.job.as_ref().is_some_and(|j| j.0 == key) {
             return;
         }
+        let Some(l) = &self.loaded else { return };
         let o = SheetOptions {
             style: self.opts.style.clone(),
             template: self.plan.template.with_project(&self.project_info()),
@@ -229,26 +267,45 @@ impl Viewer {
                 .unwrap_or_default(),
             date: bimble_drawing::today(),
         };
-        let drawn = bimble_drawing::sheetdraw::draw(&l.scene, &def, &self.views, &o);
+        let (scene, views) = (l.scene.clone(), self.views.clone());
+        let draw = move || -> SheetDrawn {
+            let (sheet, info) = bimble_drawing::sheetdraw::draw(&scene, &def, &views, &o)?;
+            Ok((sheet.prepare()?, info))
+        };
         let lay = self.layout.as_mut().expect("checked above");
-        lay.key = key;
-        lay.texture = None;
-        match drawn.and_then(|(sheet, info)| Ok((sheet.prepare()?, info))) {
-            Ok((p, info)) => {
-                lay.prepared = Some(p);
-                lay.info = info;
-                lay.error = None;
-            }
-            Err(e) => {
-                lay.prepared = None;
-                lay.error = Some(e);
+        // In the background on the desktop (the sheet shown stays), at once in a browser.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = egui_ctx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send((key, draw()));
+                ctx.request_repaint();
+            });
+            lay.job = Some((key, rx, web_time::Instant::now()));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = egui_ctx;
+            lay.key = key;
+            lay.texture = None;
+            match draw() {
+                Ok((p, info)) => {
+                    lay.prepared = Some(p);
+                    lay.info = info;
+                    lay.error = None;
+                }
+                Err(e) => {
+                    lay.prepared = None;
+                    lay.error = Some(e);
+                }
             }
         }
     }
 
     /// The sheet in the main view, and what is done on it.
     pub(crate) fn layout_ui(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
-        self.refresh_layout();
+        self.refresh_layout(&ui.ctx().clone());
         let Some(def) = self.layout.as_ref().and_then(|l| self.sheet_def(l.sheet)) else {
             return;
         };
@@ -318,6 +375,21 @@ impl Viewer {
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 Color32::WHITE,
             );
+        }
+        // A drawing under way: the sheet shown is the last one, greyed, and said so.
+        if let Some((_, _, since)) = &lay.job {
+            if lay.texture.is_some() {
+                painter.rect_filled(rect, 0.0, Color32::from_white_alpha(110));
+            }
+            painter.text(
+                rect.center_top() + egui::vec2(0.0, 16.0),
+                egui::Align2::CENTER_TOP,
+                format!("Drawing… {:.1} s", since.elapsed().as_secs_f64()),
+                egui::FontId::proportional(16.0),
+                Color32::from_gray(60),
+            );
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(250));
         }
         if let Some(e) = &lay.error {
             painter.text(

@@ -21,12 +21,13 @@ impl Viewer {
             .unwrap_or_else(|| "model".into());
         let ext = bimble_geom::viewfile::EXTENSION;
         // The families as imported: this office's moves (its standards) aren't the reader's.
-        let drawn: Vec<_> = l.scene.elements.iter().map(|e| e.category).collect();
-        for (e, &c) in l.scene.elements.iter_mut().zip(&l.imported) {
+        let scene = std::sync::Arc::make_mut(&mut l.scene);
+        let drawn: Vec<_> = scene.elements.iter().map(|e| e.category).collect();
+        for (e, &c) in scene.elements.iter_mut().zip(&l.imported) {
             e.category = c;
         }
-        let bytes = bimble_geom::viewfile::write(&l.scene, true);
-        for (e, c) in l.scene.elements.iter_mut().zip(drawn) {
+        let bytes = bimble_geom::viewfile::write(scene, true);
+        for (e, c) in scene.elements.iter_mut().zip(drawn) {
             e.category = c;
         }
         self.view_message = match files::save(

@@ -9,6 +9,23 @@ use bimble_core::GlobalId;
 use bimble_core::view::{Look, ViewKind};
 use bimble_drawing::plan::{PlanInfo, PlanOptions, plan};
 
+/// A drawing ready to show: prepared, its frame (paper ↔ world), its page size (mm).
+type Drawn = Result<(bimble_drawing::sheet::Prepared, PlanInfo, (f64, f64)), String>;
+
+/// The view's drawing, made from a shared scene.
+fn draw(scene: &bimble_geom::Scene, opts: &PlanOptions) -> Drawn {
+    let (sheet, info) = plan(scene, opts)?;
+    let size = (sheet.width_mm, sheet.height_mm);
+    Ok((sheet.prepare()?, info, size))
+}
+
+/// A drawing being made in the background: for which key, where it arrives, since when.
+pub(crate) struct Job {
+    key: u64,
+    rx: std::sync::mpsc::Receiver<(u64, Drawn, f64)>,
+    since: web_time::Instant,
+}
+
 /// The drawing of the view shown on paper, and the camera on it (paper mm).
 pub(crate) struct PaperView {
     pub view: GlobalId,
@@ -25,6 +42,8 @@ pub(crate) struct PaperView {
     pub drawn_ms: f64,
     /// A world point to bring under the middle once drawn (switching from Model there).
     look_at: Option<[f64; 3]>,
+    /// The drawing being made (the picture shown is then the previous one).
+    job: Option<Job>,
 }
 
 fn hash_of(parts: &[&[u8]]) -> u64 {
@@ -81,7 +100,7 @@ impl Viewer {
     }
 
     /// Draw the active view on paper when it changed (its definition, the model, the standards).
-    fn refresh_paper(&mut self) {
+    fn refresh_paper(&mut self, ctx: &egui::Context) {
         let Some(v) = self.active_view().cloned() else {
             return;
         };
@@ -97,14 +116,7 @@ impl Viewer {
                 .unwrap_or_default()
                 .as_bytes(),
         ]);
-        let p = self.paper.get_or_insert_with(|| PaperView::new(v.id));
-        if p.view != v.id {
-            *p = PaperView::new(v.id);
-        }
-        if p.key == key {
-            return;
-        }
-        let t0 = web_time::Instant::now();
+        let scene = l.scene.clone();
         let opts = PlanOptions {
             scale: v.scale,
             style: self.opts.style.clone(),
@@ -120,29 +132,39 @@ impl Viewer {
             section_marks: bimble_drawing::plan::section_marks(&self.views),
             ..Default::default()
         };
-        let drawn = plan(&l.scene, &opts);
-        let p = self.paper.as_mut().expect("set above");
-        p.key = key;
-        p.texture = None;
-        match drawn.and_then(|(sheet, info)| {
-            let size = (sheet.width_mm, sheet.height_mm);
-            Ok((sheet.prepare()?, info, size))
-        }) {
-            Ok((prepared, info, size)) => {
-                if p.size != size {
-                    p.fit = true;
-                }
-                p.prepared = Some(prepared);
-                p.info = Some(info);
-                p.size = size;
-                p.error = None;
-            }
-            Err(e) => {
-                p.prepared = None;
-                p.error = Some(e);
-            }
+        let p = self.paper.get_or_insert_with(|| PaperView::new(v.id));
+        if p.view != v.id {
+            *p = PaperView::new(v.id);
         }
-        p.drawn_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        p.receive(key);
+        if p.key == key || p.job.as_ref().is_some_and(|j| j.key == key) {
+            return;
+        }
+        // Another drawing is needed: in the background on the desktop (the picture shown stays,
+        // marked stale), at once in a browser.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let t0 = web_time::Instant::now();
+                let drawn = draw(&scene, &opts);
+                let _ = tx.send((key, drawn, t0.elapsed().as_secs_f64() * 1000.0));
+                ctx.request_repaint();
+            });
+            p.job = Some(Job {
+                key,
+                rx,
+                since: web_time::Instant::now(),
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ctx;
+            let t0 = web_time::Instant::now();
+            let drawn = draw(&scene, &opts);
+            p.install(key, drawn, t0.elapsed().as_secs_f64() * 1000.0);
+        }
     }
 
     /// The element drawn at a paper point: picked on the model along the view's look, within
@@ -204,7 +226,7 @@ impl Viewer {
                 Some("Switched to Model: elements are placed and measured on the model".into());
             return;
         }
-        self.refresh_paper();
+        self.refresh_paper(&ui.ctx().clone());
         let resp = ui.allocate_rect(rect, Sense::click_and_drag());
         let ppp = ui.ctx().pixels_per_point() as f64;
         let Some(p) = self.paper.as_mut() else { return };
@@ -271,6 +293,21 @@ impl Viewer {
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 Color32::WHITE,
             );
+        }
+        // A drawing under way: the picture shown is the previous one, greyed, and said so.
+        if let Some(secs) = p.drawing_for() {
+            if p.texture.is_some() {
+                painter.rect_filled(rect, 0.0, Color32::from_white_alpha(110));
+            }
+            painter.text(
+                rect.center_top() + egui::vec2(0.0, 16.0),
+                egui::Align2::CENTER_TOP,
+                format!("Drawing… {secs:.1} s"),
+                egui::FontId::proportional(16.0),
+                Color32::from_gray(60),
+            );
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(250));
         }
         if let Some(e) = &p.error {
             painter.text(
@@ -404,7 +441,48 @@ impl PaperView {
             texture: None,
             drawn_ms: 0.0,
             look_at: None,
+            job: None,
         }
+    }
+
+    /// A drawing finished: shown if it is the one wanted now (`key`), else dropped — the model
+    /// or the view changed while it was made, and another is due.
+    fn receive(&mut self, key: u64) {
+        if let Some(job) = &self.job
+            && let Ok((done, drawn, ms)) = job.rx.try_recv()
+        {
+            self.job = None;
+            if done == key {
+                self.install(key, drawn, ms);
+            }
+        }
+    }
+
+    /// Show a finished drawing.
+    fn install(&mut self, key: u64, drawn: Drawn, ms: f64) {
+        self.key = key;
+        self.texture = None;
+        self.drawn_ms = ms;
+        match drawn {
+            Ok((prepared, info, size)) => {
+                if self.size != size {
+                    self.fit = true;
+                }
+                self.prepared = Some(prepared);
+                self.info = Some(info);
+                self.size = size;
+                self.error = None;
+            }
+            Err(e) => {
+                self.prepared = None;
+                self.error = Some(e);
+            }
+        }
+    }
+
+    /// Seconds a drawing has been under way, when one is (the picture shown is then stale).
+    pub(crate) fn drawing_for(&self) -> Option<f64> {
+        self.job.as_ref().map(|j| j.since.elapsed().as_secs_f64())
     }
 
     /// Fit the drawing in the view at the next frame.
@@ -426,6 +504,32 @@ mod tests {
 
     /// At 1:100 a paper mm is 100 model mm; seen at 2.835 screen points per paper mm (1 mm on
     /// screen, a point being 0.3528 mm), the model is seen at 1:100; twice as zoomed, 1:50.
+    /// A drawing made for what the view was is dropped when it has changed since; the one
+    /// wanted is shown.
+    #[test]
+    fn a_stale_drawing_is_dropped() {
+        let mut p = PaperView::new(GlobalId::new());
+        let job = |p: &mut PaperView, key: u64| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            tx.send((key, Err("drawn".to_string()), 5.0)).unwrap();
+            p.job = Some(Job {
+                key,
+                rx,
+                since: web_time::Instant::now(),
+            });
+        };
+        job(&mut p, 1);
+        p.receive(2);
+        assert!(
+            p.job.is_none() && p.key == 0 && p.error.is_none(),
+            "dropped"
+        );
+        job(&mut p, 2);
+        p.receive(2);
+        assert_eq!((p.key, p.error.as_deref()), (2, Some("drawn")));
+        assert_eq!(p.drawn_ms, 5.0);
+    }
+
     #[test]
     fn the_scale_the_screen_shows() {
         let mut p = PaperView::new(GlobalId::new());
