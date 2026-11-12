@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="packaging/logo-dark.svg">
+    <img src="packaging/logo.svg" alt="Bimble" width="220">
+  </picture>
+</p>
+
 # bimble
 
 Open-source structural BIM (Building Information Modeling), built to stay fast on old machines.

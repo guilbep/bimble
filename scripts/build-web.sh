@@ -26,6 +26,9 @@ if command -v wasm-opt >/dev/null && [ "$PROFILE" = release ]; then
     "$out/bimble_web_bg.wasm" -o "$out/bimble_web_bg.wasm"
 fi
 cp web/index.html web/manifold-bridge.js "$out/"
+# The page's icon: one source each, under packaging/.
+cp packaging/logo-mark.svg "$out/favicon.svg"
+cp packaging/icon-256.png "$out/favicon.png"
 # The geometry kernel for booleans (Apache-2.0), cached in target/.
 deps=target/web-deps/manifold-3d-$MANIFOLD_VERSION
 if [ ! -f "$deps/package/manifold.wasm" ]; then

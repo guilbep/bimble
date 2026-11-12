@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 472 472">
+  <defs>
+    <!-- b: stem, round bowl, round counter opened by a slit to the top of the bowl -->
+    <path id="b" d="M104.4 75H138V152.9A13 13 0 1 0 143 142.65V106.49A46.6 46.6 0 1 1 104.4 152.4Z"/>
+  </defs>
+  <!-- orange disc behind the first b -->
+  <circle cx="106.74" cy="140.05" r="103.59" fill="#C06A41"/>
+  <!-- pink disc behind the e -->
+  <circle cx="354.31" cy="357.18" r="104.93" fill="#D7ACB6"/>
+  <g fill="#000000">
+    <!-- b -->
+    <use href="#b"/>
+    <!-- i -->
+    <path d="M212 108H246V197H212Z M245.4 84.18A16.24 16.24 0 1 0 212.92 84.18A16.24 16.24 0 1 0 245.4 84.18Z"/>
+    <!-- m -->
+    <path d="M266 197V140A34 34 0 0 1 327 119.34A34 34 0 0 1 388 140V197H354.5V144.5A5.75 5.75 0 0 0 343 144.5V197H310V144.5A5.5 5.5 0 0 0 299 144.5V197Z"/>
+    <!-- b (second line) -->
+    <use href="#b" transform="translate(0 211)"/>
+    <!-- l -->
+    <rect x="212" y="286" width="34" height="122"/>
+    <!-- e: disc with bar, counter open to the right, diagonal cut at the lower terminal -->
+    <path d="M353.14 369H301.4V353H319.75A12.5 12.5 0 0 0 295 355.5V368.3A12.5 12.5 0 0 0 317.47 375.84L336.6 399.08A46.54 46.54 0 1 1 353.14 369Z"/>
+  </g>
+</svg>

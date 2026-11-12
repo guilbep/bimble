@@ -4,3 +4,4 @@
 !**/fixtures/*.ifc
 !**/fixtures/*.bimble
 web/dist/
+.DS_Store

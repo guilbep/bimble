@@ -331,6 +331,12 @@ async fn has_webgpu_adapter() -> bool {
     }
 }
 
+/// The window icon: `packaging/icon-256.png`, made by `scripts/make-icons.sh` from `packaging/logo-mark.svg`.
+#[cfg(not(target_arch = "wasm32"))]
+fn window_icon() -> Option<egui::IconData> {
+    eframe::icon_data::from_png_bytes(include_bytes!("../../../packaging/icon-256.png")).ok()
+}
+
 /// Open the viewer window, optionally loading a file and a graphic style. Blocks until the
 /// window is closed.
 #[cfg(not(target_arch = "wasm32"))]
@@ -343,13 +349,17 @@ pub fn run(
         Some(p) => GraphicStyle::load(p)?,
         None => GraphicStyle::default(),
     };
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("Bimble")
+        .with_inner_size([1280.0, 800.0])
+        .with_min_inner_size([480.0, 320.0])
+        .with_drag_and_drop(true);
+    if let Some(icon) = window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Bimble")
-            .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([480.0, 320.0])
-            .with_drag_and_drop(true),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
@@ -4903,6 +4913,20 @@ fn ui_add_to_selection(resp: &egui::Response) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The embedded window icon decodes to the 256 px orange disc on a transparent corner.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_window_icon_is_the_orange_disc() {
+        let icon = window_icon().expect("icon decodes");
+        assert_eq!((icon.width, icon.height), (256, 256));
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
+        assert_eq!(icon.rgba[3], 0);
+        let at = (128 * 256 + 64) * 4;
+        for (got, want) in icon.rgba[at..at + 4].iter().zip([0xC0u8, 0x6A, 0x41, 0xFF]) {
+            assert!(got.abs_diff(want) <= 4, "{:?}", &icon.rgba[at..at + 4]);
+        }
+    }
 
     /// Slow moving frames raise the size threshold, fast ones lower it back to everything, and
     /// a pause changes nothing.
