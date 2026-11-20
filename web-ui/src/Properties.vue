@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { t } from "./i18n";
 import { state, element, rename, type ElementDetail } from "./bimble";
 
 const detail = ref<ElementDetail | null>(null);
@@ -43,14 +44,14 @@ const sizes = computed(() =>
 
 <template>
   <aside class="panel" aria-labelledby="props-title">
-    <h2 id="props-title">Properties</h2>
-    <p v-if="state.selection.length === 0" class="quiet">Click an element in the view.</p>
+    <h2 id="props-title">{{ t('props.title') }}</h2>
+    <p v-if="state.selection.length === 0" class="quiet">{{ t('props.empty') }}</p>
     <p v-else-if="state.selection.length > 1" class="many">
-      <span class="dot" aria-hidden="true" />{{ state.selection.length }} selected
+      <span class="dot" aria-hidden="true" />{{ t('props.selected', { n: state.selection.length }) }}
     </p>
-    <p v-else-if="loadError" class="error" role="alert">Error: {{ loadError }}</p>
+    <p v-else-if="loadError" class="error" role="alert">{{ t('props.error', { msg: loadError }) }}</p>
     <template v-else-if="detail">
-      <label for="el-name">Name</label>
+      <label for="el-name">{{ t('props.name') }}</label>
       <input
         id="el-name"
         v-model="name"
@@ -60,12 +61,12 @@ const sizes = computed(() =>
         @keydown.enter="commit"
         @blur="commit"
       />
-      <p id="el-name-error" role="alert" :class="{ error: renameError }">{{ renameError ? `Error: ${renameError}` : "" }}</p>
+      <p id="el-name-error" role="alert" :class="{ error: renameError }">{{ renameError ? t('props.error', { msg: renameError }) : "" }}</p>
       <dl>
-        <dt>Class</dt><dd>{{ detail.class }}</dd>
-        <dt>Storey</dt><dd>{{ detail.storey_name ?? "—" }}</dd>
-        <dt>Material</dt><dd>{{ detail.material_name ?? "—" }}</dd>
-        <dt>Generator</dt><dd>{{ detail.generator }}</dd>
+        <dt>{{ t('props.class') }}</dt><dd>{{ detail.class }}</dd>
+        <dt>{{ t('props.storey') }}</dt><dd>{{ detail.storey_name ?? "—" }}</dd>
+        <dt>{{ t('props.material') }}</dt><dd>{{ detail.material_name ?? "—" }}</dd>
+        <dt>{{ t('props.generator') }}</dt><dd>{{ detail.generator }}</dd>
         <template v-for="[k, v] in sizes" :key="k">
           <dt>{{ k }}</dt><dd class="mono">{{ v }}</dd>
         </template>

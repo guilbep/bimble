@@ -20,3 +20,4 @@ Vue only shows things. All logic stays in Rust: `src/bimble.ts` is the one typed
 - Components never import the wasm. They call `src/bimble.ts`.
 - Wasm data is never deeply reactive (`shallowRef`).
 - Fonts are self-hosted in `src/brand/` (vendored from the skill, see `src/brand/README.md`), no request to a font service.
+- All copy comes from `src/i18n/fr.ts` and `src/i18n/en.ts` (same keys, checked by the typecheck), through `t(key)`. No literal copy in components.

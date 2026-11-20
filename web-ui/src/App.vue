@@ -1,26 +1,27 @@
 <script setup lang="ts">
 import { state, startError, undo, redo } from "./bimble";
 import Properties from "./Properties.vue";
+import { t } from "./i18n";
 import labIcon from "./brand/bimble-icon-lab.svg";
 </script>
 
 <template>
   <header class="bar">
-    <img class="mark" :src="labIcon" alt="Bimble lab" width="26" height="26" />
+    <img class="mark" :src="labIcon" :alt="t('app.logoAlt')" width="26" height="26" />
     <span class="word">bimble</span>
-    <span class="file">{{ state.file ?? "No file" }}</span>
-    <span v-if="state.unsaved" class="chip chip-ochre">Not saved</span>
-    <span v-else class="chip chip-moss">Saved</span>
+    <span class="file">{{ state.file ?? t('app.noFile') }}</span>
+    <span v-if="state.unsaved" class="chip chip-ochre">{{ t('app.notSaved') }}</span>
+    <span v-else class="chip chip-moss">{{ t('app.saved') }}</span>
     <span class="spacer" />
-    <button class="pill" type="button" aria-label="Undo" @click="undo()">Undo</button>
-    <button class="pill" type="button" aria-label="Redo" @click="redo()">Redo</button>
+    <button class="pill" type="button" :aria-label="t('app.undo')" @click="undo()">{{ t('app.undo') }}</button>
+    <button class="pill" type="button" :aria-label="t('app.redo')" @click="redo()">{{ t('app.redo') }}</button>
   </header>
   <main class="body">
     <Properties />
     <div class="view">
       <!-- Never re-created (no v-if): the viewer binds to it at init(). -->
       <canvas id="bimble" />
-      <p v-if="startError" class="start-error" role="alert">Error: Bimble could not start. {{ startError }}</p>
+      <p v-if="startError" class="start-error" role="alert">{{ t('app.startError', { msg: startError }) }}</p>
     </div>
   </main>
 </template>
