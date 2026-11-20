@@ -4,13 +4,16 @@ import Properties from "../Properties.vue";
 import PlaceSlabSide from "./PlaceSlabSide.vue";
 import { page } from "../pages";
 import { placing } from "../bimble";
+import CollabSide from "./CollabSide.vue";
+import { activeTab } from "./tabs";
 </script>
 
 <template>
-  <!-- A page may export `side`: it replaces the properties while the page is current. Reference: aside.left > nav.nav + .props (fr/View3D.html). -->
+  <!-- Collaborate tab: "Travail partagé" (CollabSide). A page may export `side`: it replaces the properties while the page is current. Reference: aside.left > nav.nav + .props (fr/View3D.html). -->
   <aside class="left" data-bb="left-panel">
     <Navigator />
-    <div class="props" data-bb="properties"><component :is="page()?.side ?? (placing?.active && placing.kind === 'slab' ? PlaceSlabSide : Properties)" /></div>
+    <div class="props" data-bb="properties"><component :is="page()?.side ?? (placing?.active && placing.kind === 'slab' ? PlaceSlabSide
+      : activeTab === 'collaborate' ? CollabSide : Properties)" /></div>
   </aside>
 </template>
 
