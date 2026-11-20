@@ -5,9 +5,9 @@ export const hint = "sharedfolder.hint";
 <script setup lang="ts">
 // Screen C1, Shared folder (wireframes v01 fr/SharedFolder.html, ADR 0038).
 // Rust today: the `shared_folder` action picks a folder and joins it in one step (collab.rs; remote::join
-// decides first person / joining itself), desktop only. The folder, the case and the email have no query yet.
+// decides first person / joining itself), desktop only. The folder: query('collab'); the case has no query yet.
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { actions, runAction, state } from "../bimble";
+import { actions, collab, runAction, state } from "../bimble";
 import { t } from "../i18n";
 import type * as copy from "../i18n/parts/sharedfolder";
 import { currentDialog } from ".";
@@ -15,6 +15,7 @@ import { currentDialog } from ".";
 const tx = (k: keyof typeof copy.fr) => t(k);
 const on = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
 const name = computed(() => state.value.user?.name ?? "");
+const folder = computed(() => (state.value.rev, collab().folder ?? "—"));
 
 function run(action: string) {
   currentDialog.value = null;
@@ -51,7 +52,7 @@ onBeforeUnmount(() => ro?.disconnect());
       <div class="fld">
         <label class="lbl" for="sf-folder">{{ tx('sharedfolder.folder') }}</label>
         <div style="display:flex;gap:8px">
-          <input id="sf-folder" data-bb="shared-folder-path" class="inp mono" style="flex:1" value="" disabled data-missing="query('collab').folder: the shared folder in use (remote path)">
+          <input id="sf-folder" data-bb="shared-folder-path" class="inp mono" style="flex:1" :value="folder" disabled>
           <button class="btn s" type="button" data-bb="shared-folder-browse" disabled data-missing="a folder picker that returns a path + set_shared_folder(path); today shared_folder picks and joins at once">{{ tx('sharedfolder.browse') }}</button>
         </div>
       </div>

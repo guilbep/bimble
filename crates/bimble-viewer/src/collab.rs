@@ -253,3 +253,80 @@ impl Viewer {
         }
     }
 }
+
+/// The `collab` bridge query (#79 T): the shared folder, who, when it last synchronized
+/// (`last_sync`, unix seconds), what is borrowed and the refused change (`belongs`).
+/// `others`: `remote::borrowed` of the folder (element → who). No rights exist yet (`right`
+/// null) and `remote::borrowed` drops the borrow time (`since` null; returning it needs a new
+/// bimble-core accessor). `belongs` keeps the element's id null: `Editor.belongs` holds
+/// "<class> <name> belongs to <who>" strings, parsed back here.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn collab_json(
+    ed: Option<&crate::edit::Editor>,
+    last_sync: Option<i64>,
+    others: &std::collections::BTreeMap<bimble_core::GlobalId, String>,
+) -> serde_json::Value {
+    let b = ed.and_then(|e| e.borrowing.as_ref());
+    let mut by: std::collections::BTreeMap<&str, usize> = Default::default();
+    for (id, who) in others {
+        if b.is_some_and(|b| *who != b.who && !b.mine.contains(id)) {
+            *by.entry(who).or_default() += 1;
+        }
+    }
+    let belongs = ed.and_then(|e| e.belongs.as_ref()).map(|list| {
+        list.iter()
+            .map(|l| {
+                let (what, owner) = l.split_once(" belongs to ").unwrap_or((l, ""));
+                let (class, name) = match what.split_once(' ') {
+                    Some((c, n)) if c.starts_with("Ifc") => (Some(c), n),
+                    _ => (None, what),
+                };
+                serde_json::json!({"element_id": null, "element_name": name, "class": class,
+                    "owner": owner, "since": null})
+            })
+            .collect::<Vec<_>>()
+    });
+    serde_json::json!({
+        "folder": b.map(|b| b.remote.to_string_lossy()),
+        "user": b.map(|b| &b.who),
+        "right": null,
+        "last_sync": b.and(last_sync),
+        "borrowed_by_me": b.map_or(0, |b| b.mine.len()),
+        "borrowed_by_others": by.into_iter().map(|(who, count)| serde_json::json!({"who": who, "count": count})).collect::<Vec<_>>(),
+        "belongs": belongs,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use bimble_core::demo::{FrameSpec, concrete_frame};
+
+    #[test]
+    fn collab_json_one_borrow() {
+        let m = concrete_frame(&FrameSpec::default());
+        let mut ids = m.elements.keys().copied();
+        let (mine, theirs) = (ids.next().unwrap(), ids.next().unwrap());
+        let mut ed = crate::edit::Editor::new(m);
+        let none = super::collab_json(Some(&ed), Some(5), &Default::default());
+        assert_eq!(none["folder"], serde_json::Value::Null);
+        assert_eq!(none["last_sync"], serde_json::Value::Null);
+        assert_eq!(none["belongs"], serde_json::Value::Null);
+        ed.borrowing = Some(crate::edit::Borrowing {
+            remote: "/shared/p".into(),
+            who: "Ben".into(),
+            mine: [mine].into(),
+        });
+        ed.belongs = Some(vec!["IfcBeam B 2 belongs to Ana".into()]);
+        let others = [(mine, "Ben".to_string()), (theirs, "Ana".to_string())].into();
+        let j = super::collab_json(Some(&ed), Some(1_700_000_000), &others);
+        assert_eq!(
+            j,
+            serde_json::json!({
+                "folder": "/shared/p", "user": "Ben", "right": null, "last_sync": 1_700_000_000,
+                "borrowed_by_me": 1, "borrowed_by_others": [{"who": "Ana", "count": 1}],
+                "belongs": [{"element_id": null, "element_name": "B 2", "class": "IfcBeam",
+                    "owner": "Ana", "since": null}],
+            })
+        );
+    }
+}

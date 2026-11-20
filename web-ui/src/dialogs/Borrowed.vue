@@ -6,12 +6,17 @@ export const hint = "borrowed.hint";
 // Screen C2, Borrowed element (wireframes v01 fr/Borrowed.html): the alert egui shows when a change
 // touches an element someone else borrowed (ADR 0038, collab.rs `belongs_ui`). Synchronize or Cancel.
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { actions, runAction } from "../bimble";
+import { actions, collab, dismissBelongs, runAction, state } from "../bimble";
 import { t } from "../i18n";
 import { currentDialog } from ".";
 
-// ponytail: no bridge query gives the element, its owner or the borrow time yet: "—" (data-missing).
-const NONE = { what: "—", who: "—", time: "—" };
+// The first refused element of query('collab').belongs; "—" when missing (the borrow time is null today).
+const NONE = computed(() => {
+  const b = (state.value.rev, collab().belongs?.[0]);
+  const what = b ? [b.class, b.element_name].filter(Boolean).join(" ") : "";
+  const time = b?.since == null ? "—" : new Date(b.since * 1000).toLocaleString();
+  return { what: what || "—", who: b?.owner || "—", time };
+});
 const sync = computed(() => actions.value.find((a) => a.name === "synchronize"));
 // Anchored 20px inside the viewport's bottom right corner, as the reference (it lives in .vp there).
 const at = ref<Record<string, string>>({});
@@ -21,6 +26,11 @@ function place() {
 }
 onMounted(() => { place(); addEventListener("resize", place); });
 onUnmounted(() => removeEventListener("resize", place));
+function cancel() {
+  const err = dismissBelongs();
+  if (err) console.warn(`borrowed cancel: ${err}`);
+  currentDialog.value = null;
+}
 function synchronize() {
   runAction("synchronize");
   currentDialog.value = null;
@@ -29,11 +39,11 @@ function synchronize() {
 
 <template>
   <div class="bb-borrowed" role="alertdialog" :aria-label="t('borrowed.title')" data-bb="borrowed" :style="at">
-    <div class="banner" data-missing="query('belongs'): the element (class, name) and its owner (name, trigram)">{{ t('borrowed.belongs', NONE) }}</div>
-    <p data-missing="query('belongs'): owner and borrow time (remote::Borrows.time)">{{ t('borrowed.text', NONE) }}</p>
+    <div class="banner">{{ t('borrowed.belongs', NONE) }}</div>
+    <p :data-missing="NONE.time === '—' ? 'the borrow time: remote::borrowed drops Borrows.time' : undefined">{{ t('borrowed.text', NONE) }}</p>
     <div class="acts">
-      <!-- Cancel: closes the alert; egui also clears Editor.belongs, no bridge call for that yet. -->
-      <button class="btn s" type="button" data-missing="dismiss call clearing Editor.belongs" @click="currentDialog = null">{{ t('borrowed.cancel') }}</button>
+      <!-- Cancel: closes the alert and clears Editor.belongs, as egui. -->
+      <button class="btn s" type="button" @click="cancel">{{ t('borrowed.cancel') }}</button>
       <button class="btn" :class="sync?.enabled ? 'p' : 'd'" type="button" :disabled="!sync?.enabled" @click="synchronize">{{ t('borrowed.sync') }}</button>
     </div>
   </div>

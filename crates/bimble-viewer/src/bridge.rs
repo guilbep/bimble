@@ -182,6 +182,20 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
         ),
         // The status bar's counts and its text; null without a model.
         "status" => json(v.status()),
+        // Working together (ADR 0038): see `collab::collab_json`. Null fields on the web (no
+        // shared folder there yet).
+        "collab" => {
+            let ed = v.loaded.as_ref().and_then(|l| l.edit.as_ref());
+            let others = ed
+                .and_then(|e| e.borrowing.as_ref())
+                .and_then(|b| bimble_core::repo::Repo::open_dir(&b.remote).ok())
+                .and_then(|r| bimble_core::remote::borrowed(&r).ok())
+                .unwrap_or_default();
+            let last_sync = v
+                .synced_at
+                .map(|t| bimble_core::date::now_secs() - t.elapsed().as_secs() as i64);
+            json(crate::collab::collab_json(ed, last_sync, &others))
+        }
         "visibility" => {
             let t = v.temporary.as_ref();
             let now = |iso: bool| capped(t.filter(|t| t.isolate == iso).map(|t| &t.elements));
@@ -309,6 +323,17 @@ pub fn action(name: &str) -> Result<(), JsValue> {
             return Err(format!("action {name:?} is not enabled now"));
         }
         v.run_action(a, &ctx);
+        Ok(())
+    })
+}
+
+/// Close the "belongs to someone else" alert without synchronizing (its Cancel, as egui's).
+#[wasm_bindgen]
+pub fn dismiss_belongs() -> Result<(), JsValue> {
+    with_viewer(|v| {
+        if let Some(ed) = v.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
+            ed.belongs = None;
+        }
         Ok(())
     })
 }

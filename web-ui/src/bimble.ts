@@ -205,6 +205,7 @@ interface Wasm {
   tab(json: string): void;
   on_change(cb: (json: string) => void): void;
   set_placing(json: string): void;
+  dismiss_belongs(): void;
 }
 
 export const state = shallowRef<State>({ selection: [], rev: 0, unsaved: false, file: null });
@@ -465,3 +466,23 @@ export const rotate = (ids: string[], angle: number, about?: [number, number]) =
 /** Mirror elements in the vertical plane through `axis.point` along `axis.dir` (plan, mm). Returns the Rust error, or null. */
 export const mirror = (ids: string[], axis: { point: [number, number]; dir: [number, number] }) =>
   runVerb("mirror", { ids, axis });
+
+/** Working together (ADR 0038, query "collab"). Desktop only today: on the web every field is null / 0 / []. */
+export interface Collab {
+  folder: string | null;
+  user: string | null;
+  right: string | null;
+  /** Unix seconds. */
+  last_sync: number | null;
+  borrowed_by_me: number;
+  borrowed_by_others: { who: string; count: number }[];
+  /** The refused change: elements someone else borrowed. `element_id` and `since` are null today. */
+  belongs: { element_id: string | null; element_name: string; class: string | null; owner: string; since: number | null }[] | null;
+}
+const NO_COLLAB: Collab = { folder: null, user: null, right: null, last_sync: null, borrowed_by_me: 0, borrowed_by_others: [], belongs: null };
+/** Null fields without an editable model. */
+export const collab = () => tryQuery<Collab>("collab", NO_COLLAB);
+/** Close the "belongs to someone else" alert without synchronizing (clears Editor.belongs). Returns the Rust error, or null. */
+export function dismissBelongs(): string | null {
+  try { wasmOrThrow().dismiss_belongs(); return null; } catch (e) { return message(e); }
+}
