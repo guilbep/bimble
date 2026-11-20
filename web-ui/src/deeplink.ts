@@ -1,10 +1,11 @@
 // Deep links: the address names a state of the lab, read once after the model loaded.
 // ?tab=<TabId>&view=3d|plan:<storey name or index>|<GlobalId>&select=first|first:<IfcClass>|<id,id>
-//  &page=<id>&dialog=<id>&panel=<id>&paper=1&action=<name,name>
+//  &page=<id>&dialog=<id>&panel=<id>&paper=1&action=<name,name>&edit=move-first-beam
+// edit=move-first-beam: one real `move` verb (first IfcBeam, 1 mm in x): unsaved, one undo step.
 // Each wasm step waits for the next state change (or 1 s) before the next one; never called inside on_change.
 // data-bb-ready is set when all steps are done: the design check waits for it.
 import { watch } from "vue";
-import { modelReady, state, storeys, openView, select, runAction, openViews, query, type ViewSummary } from "./bimble";
+import { modelReady, state, storeys, openView, select, runAction, runVerb, openViews, query, type ViewSummary } from "./bimble";
 import { activeTab, isTabId } from "./shell/tabs";
 import { currentPage } from "./pages";
 import { currentDialog } from "./dialogs";
@@ -45,6 +46,10 @@ export async function applyDeepLink(): Promise<void> {
   await modelReady;
   const q = new URLSearchParams(location.search);
   try {
+    if (q.get("edit") === "move-first-beam") {
+      const ids = selection("first:IfcBeam");
+      if (ids.length) await step("edit", () => runVerb("move", { ids, d: [1, 0, 0] }));
+    }
     const tab = q.get("tab");
     if (tab && isTabId(tab)) activeTab.value = tab;
     const view = q.get("view");

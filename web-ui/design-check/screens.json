@@ -9,14 +9,14 @@
   },
   "A2": {
     "ref": "FileMenu.html",
-    "lab": "?url=/frame.bimble&tab=project&dialog=file-menu",
+    "lab": "?url=/frame.bimble&tab=project&dialog=file-menu&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "A3": {
     "ref": "ProjectInfo.html",
-    "lab": "?url=/frame.bimble&tab=project&page=project-info",
+    "lab": "?url=/frame.bimble&tab=project&page=project-info&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
@@ -58,14 +58,14 @@
   },
   "B1": {
     "ref": "PlaceSlab.html",
-    "lab": "?url=/frame.bimble&tab=concrete&view=plan:1&action=place_slab",
+    "lab": "?url=/frame.bimble&tab=concrete&view=plan:1&action=place_slab&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "B2": {
     "ref": "SelectModify.html",
-    "lab": "?url=/frame.bimble&tab=concrete&select=first:IfcBeam",
+    "lab": "?url=/frame.bimble&tab=concrete&select=first:IfcBeam&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
@@ -86,14 +86,14 @@
   },
   "C1": {
     "ref": "SharedFolder.html",
-    "lab": "?url=/frame.bimble&tab=collaborate&dialog=shared-folder",
+    "lab": "?url=/frame.bimble&tab=collaborate&dialog=shared-folder&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "C2": {
     "ref": "Borrowed.html",
-    "lab": "?url=/frame.bimble&tab=collaborate&dialog=borrowed",
+    "lab": "?url=/frame.bimble&tab=collaborate&dialog=borrowed&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
@@ -121,28 +121,28 @@
   },
   "C6": {
     "ref": "History.html",
-    "lab": "?url=/frame.bimble&tab=collaborate&page=history",
+    "lab": "?url=/frame.bimble&tab=collaborate&page=history&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "D1": {
     "ref": "View3D.html",
-    "lab": "?url=/frame.bimble&tab=view&view=3d",
+    "lab": "?url=/frame.bimble&tab=view&view=3d&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "D2": {
     "ref": "PlanOnPaper.html",
-    "lab": "?url=/frame.bimble&tab=annotate&view=plan:1&paper=1",
+    "lab": "?url=/frame.bimble&tab=annotate&view=plan:1&paper=1&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "D3": {
     "ref": "SheetLayout.html",
-    "lab": "?url=/frame.bimble&tab=sheets&page=sheets",
+    "lab": "?url=/frame.bimble&tab=sheets&page=sheets&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
@@ -156,14 +156,14 @@
   },
   "D5": {
     "ref": "Standards.html",
-    "lab": "?url=/frame.bimble&tab=graphics&panel=standards",
+    "lab": "?url=/frame.bimble&tab=graphics&panel=standards&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "D6": {
     "ref": "Quantities.html",
-    "lab": "?url=/frame.bimble&tab=quantities&page=quantities&select=first:IfcSlab",
+    "lab": "?url=/frame.bimble&tab=quantities&page=quantities&select=first:IfcSlab&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
@@ -177,7 +177,7 @@
   },
   "D8": {
     "ref": "Palette.html",
-    "lab": "?url=/frame.bimble&tab=view&dialog=palette",
+    "lab": "?url=/frame.bimble&tab=view&dialog=palette&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
