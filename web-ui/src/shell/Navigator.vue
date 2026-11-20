@@ -38,9 +38,10 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
       <span>{{ t('nav.views') }}</span>
     </a>
     <template v-if="open">
-      <!-- ponytail: switching the active view has no call yet; the row only shows which one is active. -->
+      <!-- Pink is selection only (ADR 0049): the reference does not mark the active view here.
+           Switching the active view has no call yet. -->
       <a
-        v-for="v in groupedViews" :key="v.id" class="ti" :class="{ sel: v.id === activeView?.id }" href="#"
+        v-for="v in groupedViews" :key="v.id" class="ti" href="#"
         style="padding-left:22px" data-missing="activate-view" @click.prevent
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
