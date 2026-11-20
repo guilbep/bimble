@@ -9,8 +9,9 @@ correct architecture?"
 ## Answer
 
 One API: yes. It is principle 7 of the ROADMAP, and the AI goal needs it whatever the UI is.
-Two complete UIs over it: no, not now. Two UIs drift, and ADR 0020 rejected a second code base for
-this reason. The API comes first, because every option below needs it.
+Two complete UIs over it: no, not now. Two UIs drift. ADR 0020 rejected a JavaScript viewer
+because it writes plans, styles and editing twice. A Vue UI over the same wasm core duplicates
+only the UI, which is smaller but still a second UI to keep in step. The API comes first, because every option below needs it.
 
 ## Facts from the code (file:line checked by the orchestrator where marked)
 
@@ -41,8 +42,9 @@ One string changed in `ribbon.rs`, then built:
 | native release | 12 s, 12 s |
 | web release, mtime touch only | 7 s, 7 s |
 
-- Web release wasm: 21 844 110 bytes, 6 813 780 gzipped. wasm-opt is not installed on this machine.
-  ADR 0020 records 14 MB and 4.3 MB gzipped (with wasm-opt, inference). Not reconciled.
+- Web release wasm: 21 844 110 bytes, 6 813 780 gzipped, without wasm-opt (not installed here).
+  ADR 0020 recorded 14 MB and 4.3 MB gzipped on 6 Nov, also without wasm-opt. So the binary grew
+  by about 56 % in two weeks. The cause is not studied.
 - Not measured: the time to restart the app and get back to the state under test, and the same loop
   on an older laptop. Vite's hot reload was not measured either (no Vue page exists).
 - Reading: compile time is not the bottleneck on this machine. The loss is the restart (state is
@@ -72,6 +74,12 @@ Scores 1 (bad) to 5 (good). "Drift" 5 = one UI only. "Old machines" = ROADMAP pr
 | D | Two full UIs (egui and Vue) side by side (the proposal as asked) | 2 | 4 | 1 | 4 | 4 | 1 | 16 |
 | E | Chat first: MCP plus a chat panel in egui, Claude as the second UI | 4 | 2 | 5 | 5 | 5 | 4 | 25 |
 
+- The total weighs the six columns the same. On iteration speed alone (the question asked), the
+  order is C (5), then B and D (4), then A (3), then E (2).
+- Estimates, not measured: "Iteration speed" for B, C and D (no Vite loop exists) and "Old
+  machines" for B and C (Tauri's web view and a DOM shell on an old laptop are not measured).
+- E serves the AI goal, not the UI goal. It is in the table because it competes for the same weeks.
+
 - A. Screens are first drawn on a design canvas (as for ADR 0027), then ported to egui. A flag such
   as `bimble view model.bimble --open-tab sheets --select <GlobalId>` brings the app back to the state
   under test after each 2-3 s build. The cheapest option. Iteration on looks stays slower than in CSS.
@@ -82,7 +90,8 @@ Scores 1 (bad) to 5 (good). "Drift" 5 = one UI only. "Old machines" = ROADMAP pr
 - C. One UI in the end. The cost: about 13.7k lines of egui UI and the in-viewport tools rewritten,
   a new wasm-bindgen viewport (500 to 800 lines for the renderer wrapper alone), and Tauri's web view
   on old Windows machines unmeasured. ROADMAP open decision 3 (native vs Tauri) belongs here.
-- D. Every feature built twice, or one UI lags. The worst for a team of one or two.
+- D. Read as asked: both UIs kept at parity. Every feature is built twice, or one UI lags. If egui
+  is frozen while Vue moves on, the proposal becomes B (web) or C (everywhere). The worst for a team of one or two.
 - E. The fastest route to the AI goal: an agent (Claude Desktop, Claude Code) drives Bimble through
   MCP, the user sees the result in the viewer. Does nothing for visual UX.
 

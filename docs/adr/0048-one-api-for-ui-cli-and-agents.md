@@ -4,8 +4,9 @@
 - Decided by: not yet. Pierre asked for fast UI iteration and an AI-native API. Options, scores and
   measurements by Claude in `docs/research/2026-11-20-ui-architecture.md`.
 - Reversal cost: low for the API (it moves code that exists), medium for a second UI
-- Touches: ADR 0020 (it rejected a second code base for the browser), ROADMAP open decision 3
-  (native window or Tauri + web)
+- Touches: ADR 0020 and ROADMAP open decision 3. ADR 0020 rejected a JavaScript viewer, which writes
+  plans, styles and editing twice. A Vue UI over the same core duplicates only the UI. Open decision 3
+  is a native window or Tauri + web.
 
 ## Context / Problem
 
