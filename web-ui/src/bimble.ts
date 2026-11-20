@@ -419,6 +419,9 @@ export function runVerb(name: string, args: unknown = {}): string | null {
   try { wasmOrThrow().verb(name, JSON.stringify(args)); return null; } catch (e) { return message(e); }
 }
 
+/** Set some of an element's sizes (generator field names, mm) as one undoable step. Returns the Rust error, or null. */
+export const setGenerator = (id: string, params: Record<string, number>) => runVerb("set_generator", { id, params });
+
 /** Select by GlobalId, primary first; `[]` clears. Returns the Rust error, or null. */
 export function select(ids: string[]): string | null {
   try { wasmOrThrow().select(JSON.stringify(ids)); return null; } catch (e) { return message(e); }

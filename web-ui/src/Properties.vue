@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { t } from "./i18n";
 import { viewName } from "./shell/viewName";
-import { state, element, rename, runVerb, materials, openViews, storeys, type ElementDetail, type ViewSummary } from "./bimble";
+import { state, element, rename, runVerb, setGenerator, materials, openViews, storeys, type ElementDetail, type ViewSummary } from "./bimble";
 import { classNoun, parseMm } from "./i18n/parts/modify";
 
 // Rendered inside `.props` (LeftPanel): rows as fr/View3D.html (view) and fr/SelectModify.html (element).
@@ -47,6 +47,16 @@ const sizes = computed(() =>
 );
 const dimLabel = (k: string) => (ORDER.includes(k) ? t(`modify.dim.${k}`) : k);
 const title = computed(() => (detail.value ? `${classNoun(detail.value.class, t).noun} ${detail.value.name}` : ""));
+
+// Sizes: one `set_generator` verb per changed field (Enter or blur).
+const sizeError = ref<string | null>(null);
+function commitSize(k: string, old: number, e: Event): void {
+  const d = detail.value;
+  const v = parseMm((e.target as HTMLInputElement).value);
+  sizeError.value = null;
+  if (!d || v === null || v === old) return;
+  sizeError.value = setGenerator(d.id, { [k]: v });
+}
 
 // Origin Z: one `move` verb by the difference (ADR 0052: applies at once).
 const originZ = computed(() => detail.value?.placement.origin[2] ?? 0);
@@ -139,11 +149,12 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
       <div v-for="[k, v] in sizes" :key="k" class="row">
         <label class="k" :for="`el-${k}`">{{ dimLabel(k) }}</label>
         <span style="display:inline-flex;align-items:center;gap:6px">
-          <!-- ponytail: read-only until a verb sets one generator parameter. -->
-          <input :id="`el-${k}`" class="inp mono" :value="grouped(v)" readonly data-missing="set_generator (Command::SetGenerator has no bimble.ts call)" style="width:96px;text-align:right" />
+          <input :id="`el-${k}`" :key="`${detail.id}:${k}:${v}`" class="inp mono" :value="grouped(v)" style="width:96px;text-align:right"
+                 :aria-invalid="sizeError ? 'true' : 'false'" @keydown.enter="commitSize(k, v, $event)" @blur="commitSize(k, v, $event)" />
           <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
         </span>
       </div>
+      <p v-if="sizeError" role="alert" class="error">{{ t('modify.error', { msg: sizeError }) }}</p>
     </template>
     <div class="row">
       <label class="k" for="el-origin-z">{{ t('modify.originZ') }}</label>

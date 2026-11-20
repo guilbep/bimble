@@ -20,7 +20,7 @@ pub struct VerbInfo {
     pub summary: &'static str,
 }
 
-const VERBS: [VerbInfo; 4] = [
+const VERBS: [VerbInfo; 5] = [
     VerbInfo {
         name: "place",
         summary: "Place a new column, beam, wall or slab on a storey (storey-relative mm).",
@@ -36,6 +36,10 @@ const VERBS: [VerbInfo; 4] = [
     VerbInfo {
         name: "delete",
         summary: "Delete elements.",
+    },
+    VerbInfo {
+        name: "set_generator",
+        summary: "Change an element's sizes (width, height, length, depth, thickness), mm; missing ones are kept.",
     },
 ];
 
@@ -77,6 +81,27 @@ struct IdsArgs {
     ids: Vec<GlobalId>,
 }
 
+/// Arguments of `set_generator`.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SetGeneratorArgs {
+    /// GlobalId of the element.
+    #[schemars(with = "String")]
+    id: GlobalId,
+    /// New sizes, mm, > 0; only the ones the element's generator has.
+    params: GeneratorParams,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GeneratorParams {
+    width: Option<f64>,
+    height: Option<f64>,
+    length: Option<f64>,
+    depth: Option<f64>,
+    thickness: Option<f64>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NoArgs {}
@@ -97,6 +122,7 @@ pub fn describe(name: &str) -> Option<Value> {
         "place" => schemars::schema_for!(PlaceArgs),
         "move" | "copy" => schemars::schema_for!(MoveArgs),
         "delete" => schemars::schema_for!(IdsArgs),
+        "set_generator" => schemars::schema_for!(SetGeneratorArgs),
         _ => return None,
     };
     Some(s.to_value())
@@ -165,8 +191,48 @@ pub fn run(m: &Model, name: &str, args: Value) -> Result<Vec<Command>, String> {
             })
         }
         "delete" => Ok(verbs::delete(&parse::<IdsArgs>(args)?.ids)),
+        "set_generator" => set_generator(m, parse(args)?),
         _ => Err(format!("unknown verb {name:?}; known: {}", names())),
     }
+}
+
+/// One `SetGenerator`: the element's generator with the given sizes replaced, through its
+/// serde form, so the names are the generator's own field names (as `query("element")` shows).
+fn set_generator(m: &Model, a: SetGeneratorArgs) -> Result<Vec<Command>, String> {
+    let e = m
+        .elements
+        .get(&a.id)
+        .ok_or(format!("no element {:?}", a.id))?;
+    let p = a.params;
+    let given = [
+        ("width", p.width),
+        ("height", p.height),
+        ("length", p.length),
+        ("depth", p.depth),
+        ("thickness", p.thickness),
+    ];
+    let mut g = serde_json::to_value(&e.generator).map_err(|e| e.to_string())?;
+    let mut n = 0;
+    for (k, v) in given {
+        let Some(v) = v else { continue };
+        mm(k, &[v])?;
+        if v <= 0.0 {
+            return Err(format!("{k} must be > 0"));
+        }
+        match g.get_mut(k) {
+            Some(x) if x.is_number() => *x = v.into(),
+            _ => return Err(format!("{k}: not a size of this {}", g["kind"])),
+        }
+        n += 1;
+    }
+    if n == 0 {
+        return Err("params: no size given".into());
+    }
+    let generator = serde_json::from_value(g).map_err(|e| e.to_string())?;
+    Ok(vec![Command::SetGenerator {
+        id: a.id,
+        generator,
+    }])
 }
 
 /// Read-only queries by name: "storeys", "materials", "elements" (an `ElementFilter`),
@@ -208,8 +274,8 @@ pub fn query(m: &Model, name: &str, args: Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bimble_core::History;
     use bimble_core::demo::{FrameSpec, concrete_frame};
+    use bimble_core::{Generator, History};
     use serde_json::json;
 
     fn demo() -> (Model, GlobalId) {
@@ -221,7 +287,7 @@ mod tests {
     #[test]
     fn list_and_describe() {
         let n: Vec<_> = list().iter().map(|v| v.name).collect();
-        assert_eq!(n, ["place", "move", "copy", "delete"]);
+        assert_eq!(n, ["place", "move", "copy", "delete", "set_generator"]);
         let s = describe("place").unwrap();
         let p = s["properties"].as_object().unwrap();
         for k in ["kind", "storey", "a", "material"] {
@@ -338,5 +404,70 @@ mod tests {
             assert!(v.is_array(), "{k}: {v}");
         }
         assert!(query(&m, "views", json!({"limit": 1})).is_err());
+    }
+
+    #[test]
+    fn set_generator_changes_one_size() {
+        let (mut m, _) = demo();
+        let beam = m
+            .elements
+            .values()
+            .find(|e| matches!(e.generator, Generator::RectBeam { .. }))
+            .unwrap();
+        let (id, name) = (beam.id, beam.name.clone());
+        let Generator::RectBeam { height, length, .. } = beam.generator else {
+            unreachable!()
+        };
+        let other = m.elements.values().find(|e| e.id != id).unwrap().clone();
+        let cmds = run(
+            &m,
+            "set_generator",
+            json!({"id": id, "params": {"width": 345}}),
+        )
+        .unwrap();
+        assert_eq!(cmds.len(), 1);
+        History::default().apply(&mut m, cmds).unwrap();
+        let e = &m.elements[&id];
+        assert_eq!(
+            e.generator,
+            Generator::RectBeam {
+                width: 345.0,
+                height,
+                length
+            }
+        );
+        assert_eq!((e.id, &e.name), (id, &name), "GlobalId kept");
+        assert_eq!(m.elements[&other.id], other, "other element unchanged");
+    }
+
+    #[test]
+    fn set_generator_refuses_bad_input() {
+        let (m, s) = demo();
+        let id = *m.elements.keys().next().unwrap();
+        let before = m.clone();
+        for args in [
+            json!({"id": s, "params": {"width": 300}}),
+            json!({"id": id, "params": {"width": 0}}),
+            json!({"id": id, "params": {"width": -1}}),
+            json!({"id": id, "params": {"width": MAX_MM * 2.0}}),
+            json!({"id": id, "params": {}}),
+            json!({"id": id, "params": {"radius": 3}}),
+        ] {
+            assert!(run(&m, "set_generator", args.clone()).is_err(), "{args}");
+        }
+        let slab = m
+            .elements
+            .values()
+            .find(|e| matches!(e.generator, Generator::Slab { .. }))
+            .unwrap()
+            .id;
+        let err = run(
+            &m,
+            "set_generator",
+            json!({"id": slab, "params": {"width": 300}}),
+        )
+        .unwrap_err();
+        assert!(err.contains("slab"), "{err}");
+        assert_eq!(m, before, "model unchanged");
     }
 }
