@@ -100,10 +100,7 @@ table.t td { border-bottom: 1px solid var(--bb-sunk); padding: 5px 8px; vertical
 .sw { display: block; width: 48px; height: 32px; border: 1px solid var(--bb-ink); }
 .sw.blank { background: var(--bb-sheet); }
 /* .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:5px 16px;border-radius:999px;font:inherit;font-weight:600;color:#141414;cursor:pointer;text-decoration:none;white-space:nowrap} */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 16px; border-radius: 999px; font: inherit; font-weight: 600; color: var(--bb-ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
 /* .btn.p{background:#C06A41;border:0} .btn.s{background:#FFFFFF;border:1px solid #141414;font-weight:400} */
-.btn.p { background: var(--bb-clay); border: 0; }
-.btn.s { background: var(--bb-sheet); border: 1px solid var(--bb-ink); font-weight: 400; }
 /* Unavailable: .btn.d{background:#EDE7DB;border:0;color:#5C574D;font-weight:400;cursor:default} */
 .btn:disabled { background: var(--bb-sunk); border: 0; color: var(--bb-stone); font-weight: 400; cursor: default; }
 .btn:focus-visible, .inp:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }

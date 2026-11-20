@@ -100,10 +100,7 @@ onBeforeUnmount(() => ro?.disconnect());
 .inp { height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 8px; font: inherit; font-size: 13.5px; color: var(--bb-ink); min-width: 0; }
 .inp.mono { font-family: 'DM Mono', monospace; font-size: 13px; }
 /* .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:5px 16px;border-radius:999px;font:inherit;font-weight:600;color:#141414;cursor:pointer;text-decoration:none;white-space:nowrap} */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 16px; border-radius: 999px; font: inherit; font-weight: 600; color: var(--bb-ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
 /* .btn.p{background:#C06A41;border:0} .btn.s{background:#FFFFFF;border:1px solid #141414;font-weight:400} */
-.btn.p { background: var(--bb-clay); border: 0; }
-.btn.s { background: var(--bb-sheet); border: 1px solid var(--bb-ink); font-weight: 400; }
 /* Unavailable: .btn.d{background:#EDE7DB;border:0;color:#5C574D;font-weight:400;cursor:default} */
 .btn:disabled { background: var(--bb-sunk); border: 0; color: var(--bb-stone); font-weight: 400; cursor: default; }
 .ib:focus-visible, .btn:focus-visible, a:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }

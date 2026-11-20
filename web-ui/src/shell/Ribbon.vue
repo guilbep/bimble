@@ -43,7 +43,6 @@ import RibbonTool from "./RibbonTool.vue";
 /* .lbl{font-size:13px;color:#5C574D} */
 .lbl { font-size: 13px; color: var(--bb-stone); }
 /* .sel-inp{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 6px 0 8px;font-size:13.5px;white-space:nowrap} */
-.sel-inp { display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 6px 0 8px; font-size: 13.5px; white-space: nowrap; }
 /* .mono{font-family:'DM Mono',ui-monospace,Menlo,monospace} */
 .mono { font-family: var(--bb-font-data); }
 /* .gname{font-size:12px;color:#5C574D;text-align:center;padding-top:3px;white-space:nowrap} */

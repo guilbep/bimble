@@ -86,9 +86,6 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
 .mono { font-family: var(--bb-font-data); }
 .schema { color: var(--bb-stone); min-width: 4ch; min-height: 1lh; }
 /* .chip{padding:2px 4px 2px 10px;border-radius:999px;font-size:13px;display:inline-flex;gap:4px;align-items:center;white-space:nowrap;color:#141414;text-decoration:none} .chip.nx{padding-right:10px} */
-.chip { padding: 2px 4px 2px 10px; border-radius: var(--bb-radius-pill); font-size: var(--bb-size-small); display: inline-flex; gap: var(--bb-space-1); align-items: center; white-space: nowrap; color: var(--bb-ink); text-decoration: none; }
-.chip.nx { padding-right: 10px; }
-.c-o { background: var(--bb-ochre); }
 .c-m { background: var(--bb-moss); }
 /* .cmdk{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px;border:1px solid #5C574D;border-radius:999px;color:#5C574D;text-decoration:none;font-size:13.5px;background:#FFFFFF;white-space:nowrap} (an <a> there: font inherited) */
 .cmdk { font: inherit; display: inline-flex; align-items: center; gap: var(--bb-space-2); height: var(--bb-target); padding: 0 12px; border: var(--bb-border-control); border-radius: var(--bb-radius-pill); color: var(--bb-stone); text-decoration: none; font-size: 13.5px; background: var(--bb-sheet); white-space: nowrap; cursor: pointer; }
@@ -99,7 +96,5 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
 /* .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:5px 16px;border-radius:999px;font:inherit;font-weight:600;color:#141414;cursor:pointer;text-decoration:none;white-space:nowrap} */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--bb-target); padding: 5px 16px; border-radius: var(--bb-radius-pill); font: inherit; font-weight: 600; color: var(--bb-ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
 /* .btn.p{background:#C06A41;border:0} */
-.btn.p { background: var(--bb-clay); border: 0; }
 /* .btn.d{background:#EDE7DB;border:0;color:#5C574D;font-weight:400;cursor:default} */
-.btn.d { background: var(--bb-sunk); border: 0; color: var(--bb-stone); font-weight: 400; cursor: default; }
 </style>

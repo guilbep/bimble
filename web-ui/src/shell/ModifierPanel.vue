@@ -161,10 +161,7 @@ function click(tool: Tool): void { if (!tool.off) tool.run?.(); }
 .inp { height: 30px; border: var(--bb-border-control); border-radius: 8px; background: var(--bb-sheet); padding: 0 8px; font: inherit; font-size: 13.5px; color: var(--bb-ink); min-width: 0; }
 .inp.mono { font-family: var(--bb-font-data); font-size: 13px; }
 /* .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:5px 16px;border-radius:999px;font:inherit;font-weight:600;color:#141414;cursor:pointer;text-decoration:none;white-space:nowrap} */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 16px; border-radius: 999px; font: inherit; font-weight: 600; color: var(--bb-ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
 /* .btn.p{background:#C06A41;border:0} .btn.s{background:#FFFFFF;border:1px solid #141414;font-weight:400} */
 .btn.p { background: var(--bb-action); border: 0; }
-.btn.s { background: var(--bb-sheet); border: 1px solid var(--bb-ink); font-weight: 400; }
 /* Error: ink text on an ochre band, with the word "Error". */
-.error { color: var(--bb-ink); background: var(--bb-error); font-size: 13.5px; margin: 0; padding: 2px 8px; overflow-wrap: anywhere; }
 </style>

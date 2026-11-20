@@ -82,18 +82,12 @@ h2 { font-family: 'Sora', sans-serif; margin: 0; }
 .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; min-height: 22px; }
 /* .chip{padding:2px 4px 2px 10px;border-radius:999px;font-size:13px;display:inline-flex;gap:4px;align-items:center;white-space:nowrap;color:#141414} .chip.nx{padding-right:10px} .c-o{background:#D2B347} */
 .chip { padding: 2px 4px 2px 10px; border-radius: var(--bb-radius-pill); font-size: 13px; display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; color: var(--bb-ink); }
-.chip.nx { padding-right: 10px; }
-.c-o { background: var(--bb-ochre); }
 /* Text on a fill is ink (ADR 0049): a disabled chip keeps ink at full opacity (stone or .55 on ochre is under 4.5:1). */
 .chip.off { color: var(--bb-ink); opacity: 1; }
 /* .sel-inp{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 6px 0 8px;font-size:13.5px;white-space:nowrap} */
-.sel-inp { display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 6px 0 8px; font-size: 13.5px; white-space: nowrap; }
 /* .inp{height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 8px;font:inherit;font-size:13.5px;color:#141414;min-width:0} */
 .inp { height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 8px; font: inherit; font-size: 13.5px; color: var(--bb-ink); min-width: 0; }
 /* .btn{...} .btn.p{background:#C06A41;border:0} .btn.s{background:#FFFFFF;border:1px solid #141414;font-weight:400} */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 16px; border-radius: var(--bb-radius-pill); font: inherit; font-weight: 600; color: var(--bb-ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
-.btn.p { background: var(--bb-clay); border: 0; }
-.btn.s { background: var(--bb-sheet); border: 1px solid var(--bb-ink); font-weight: 400; }
 .inp:focus-visible, button:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
 /* Missing in Rust: the reference's .off (color:#5C574D;opacity:.55). */
 .off, button:disabled, input:disabled { color: var(--bb-stone); opacity: .55; cursor: default; }

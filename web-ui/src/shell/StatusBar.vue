@@ -94,8 +94,6 @@ const chips = (): Chip[] => {
 /* Empty slot keeps the reference box: 47 DM Mono cells = "E 2'538'412.50 N 1'152'210.00 · 432.80 m (LV95)", one line high. */
 .coords { min-width: 47ch; min-height: 1lh; }
 /* .chip{padding:2px 4px 2px 10px;border-radius:999px;font-size:13px;display:inline-flex;gap:4px;align-items:center;white-space:nowrap;color:#141414;text-decoration:none} .chip.nx{padding-right:10px} */
-.chip { padding: 2px 4px 2px 10px; border-radius: var(--bb-radius-pill); font-size: var(--bb-size-small); display: inline-flex; gap: var(--bb-space-1); align-items: center; white-space: nowrap; color: var(--bb-ink); text-decoration: none; }
-.chip.nx { padding-right: 10px; }
 .c-n { background: var(--bb-sunk); }
 /* .chip .cx{width:18px;height:18px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center} (a span there; a real button here, reset) */
 .chip .cx { width: 18px; height: 18px; border-radius: var(--bb-radius-pill); display: inline-flex; align-items: center; justify-content: center; border: 0; padding: 0; background: none; color: inherit; font: inherit; cursor: pointer; }

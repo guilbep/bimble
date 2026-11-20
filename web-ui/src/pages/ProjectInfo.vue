@@ -115,8 +115,6 @@ h2 { font-family: 'Sora', sans-serif; margin: 0; }
 .ifc .k { color: var(--bb-stone); }
 .ifc .mono { font-size: 12.5px; }
 /* .btn{...} .btn.s{background:#FFFFFF;border:1px solid #141414;font-weight:400} */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 16px; border-radius: var(--bb-radius-pill); font: inherit; font-weight: 600; color: var(--bb-ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
-.btn.s { background: var(--bb-sheet); border: 1px solid var(--bb-ink); font-weight: 400; }
 /* .qb{display:inline-flex;align-items:center;gap:4px;height:32px;padding:0 12px;border-radius:999px;border:0;background:none;color:#141414;font:inherit;cursor:pointer;...} style="align-self:flex-start;color:#A35A37" */
 .qb { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; border-radius: var(--bb-radius-pill); border: 0; background: none; font: inherit; cursor: pointer; white-space: nowrap; }
 .add { align-self: flex-start; color: var(--bb-clay-text); }

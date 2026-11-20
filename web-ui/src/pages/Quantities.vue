@@ -116,11 +116,8 @@ h2 { font-family: 'Sora', sans-serif; margin: 0; }
 .mono { font-family: 'DM Mono', monospace; }
 .note { font-size: 13px; color: var(--bb-stone); }
 /* .sel-inp{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 6px 0 8px;font-size:13.5px;white-space:nowrap} */
-.sel-inp { display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 6px 0 8px; font-size: 13.5px; white-space: nowrap; box-sizing: border-box; }
+.sel-inp { box-sizing: border-box; } /* rest of .sel-inp in shell.css */
 /* .btn{...} .btn.p{background:#C06A41;border:0} .btn.s{background:#FFFFFF;border:1px solid #141414;font-weight:400} */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 16px; border-radius: var(--bb-radius-pill); font: inherit; font-weight: 600; color: var(--bb-ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
-.btn.p { background: var(--bb-clay); border: 0; }
-.btn.s { background: var(--bb-sheet); border: 1px solid var(--bb-ink); font-weight: 400; }
 .btn:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
 /* Missing in Rust: the reference's .off (color:#5C574D;opacity:.55). */
 .off, button:disabled { color: var(--bb-stone); opacity: .55; cursor: default; }

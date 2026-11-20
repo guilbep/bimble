@@ -85,9 +85,8 @@ h2.disp { font-size: 20px; }
 .lead { margin: 0; font-size: 18px; }
 .acts { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 /* .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:5px 16px;border-radius:999px;font:inherit;font-weight:600;color:#141414;cursor:pointer;text-decoration:none;white-space:nowrap} */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 16px; border-radius: var(--bb-radius-pill); font: inherit; font-weight: 600; color: var(--bb-ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 16px; border-radius: var(--bb-radius-pill); font: inherit; font-weight: 600; color: var(--bb-ink); cursor: pointer; text-decoration: none; white-space: nowrap; } /* kept scoped: the page's link colour rule would beat the global .btn colour */
 .btn.p { background: var(--bb-clay); border: 0; min-height: 40px; padding: 8px 20px; }
-.btn.s { background: var(--bb-sheet); border: 1px solid var(--bb-ink); font-weight: 400; }
 .btn[disabled], .btn[aria-disabled] { cursor: default; opacity: .55; }
 .card { background: var(--bb-sheet); border: 1px solid var(--bb-line); border-radius: 16px; }
 .you { padding: 14px; display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }

@@ -118,7 +118,7 @@ const above = computed(() => {
 /* Disabled = stone on cream, no extra opacity (ADR 0049): .55 drops it under 4.5:1. */
 .off { color: var(--bb-stone); }
 /* .sel-inp{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 6px 0 8px;font-size:13.5px;white-space:nowrap} */
-.sel-inp { display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 6px 0 8px; font-size: 13.5px; white-space: nowrap; position: relative; }
+.sel-inp { position: relative; } /* rest of .sel-inp in shell.css */
 /* The native select covers the drawn field: the reference's look, the platform's list and keyboard. */
 .sel-inp select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; font: inherit; }
 .sel-inp:has(select:focus-visible), .inp:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
@@ -130,5 +130,4 @@ const above = computed(() => {
 /* .sec{font-size:12px;font-family:'DM Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#5C574D;margin-top:6px} */
 .sec { font-size: 12px; font-family: 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
 .note { font-size: 13px; color: var(--bb-stone); }
-.error { color: var(--bb-ink); background: var(--bb-error); font-size: 13.5px; margin: 0; padding: 2px 8px; overflow-wrap: anywhere; }
 </style>
