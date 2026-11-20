@@ -279,5 +279,81 @@
   "view-picture": {
     "ref": ".vtabs > .seg",
     "lab": "[data-bb=\"view-picture\"]"
+  },
+  "file-menu": {
+    "ref": "[role=menu]",
+    "lab": "[data-bb=\"file-menu\"]"
+  },
+  "file-menu-new": {
+    "ref": "[role=menu] > a:nth-of-type(1)",
+    "lab": "[data-bb=\"file-menu-new\"]"
+  },
+  "file-menu-print": {
+    "ref": "[role=menu] > a:nth-of-type(9)",
+    "lab": "[data-bb=\"file-menu-export-screen-D4\"]"
+  },
+  "file-menu-quit": {
+    "ref": "[role=menu] > a:last-child",
+    "lab": "[data-bb=\"file-menu-quit\"]"
+  },
+  "home": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"]",
+    "lab": "[data-bb=\"home\"]"
+  },
+  "home-disc": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div[aria-hidden]",
+    "lab": "[data-bb=\"home-disc\"]"
+  },
+  "home-wordmark": {
+    "ref": null,
+    "lab": "[data-bb=\"home-wordmark\"]"
+  },
+  "home-eyebrow": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > .eyebrow",
+    "lab": "[data-bb=\"home-eyebrow\"]"
+  },
+  "home-title": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > h1",
+    "lab": "[data-bb=\"home-title\"]"
+  },
+  "home-lead": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > p:not(.note)",
+    "lab": "[data-bb=\"home-lead\"]"
+  },
+  "home-open": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) .btn.p",
+    "lab": "[data-bb=\"home-open\"]"
+  },
+  "home-import": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) button:nth-of-type(1)",
+    "lab": "[data-bb=\"home-import\"]"
+  },
+  "home-new": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) button:nth-of-type(2)",
+    "lab": "[data-bb=\"home-new\"]"
+  },
+  "home-you": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > .card",
+    "lab": "[data-bb=\"home-you\"]"
+  },
+  "home-settings": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > .card > a",
+    "lab": "[data-bb=\"home-settings\"]"
+  },
+  "home-drop": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > p.note",
+    "lab": "[data-bb=\"home-drop\"]"
+  },
+  "home-recent-title": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(3) h2",
+    "lab": "[data-bb=\"home-recent-title\"]"
+  },
+  "home-filter": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(3) input",
+    "lab": "[data-bb=\"home-filter\"]"
+  },
+  "home-recent": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(3) > div:nth-child(2)",
+    "lab": "[data-bb=\"home-recent\"]"
   }
 }
