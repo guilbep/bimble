@@ -14,12 +14,13 @@ const undoLabel = computed(() => {
 });
 // A full-window page (Home) has the reference's short header: logo, File, command field, user (fr/Home.html).
 const bare = computed(() => page()?.layout === "full");
-// Ctrl+K / Cmd+K opens the command palette anywhere (D8).
+// Ctrl+K / Cmd+K opens the command palette anywhere (D8). Capture phase, and the event stops here:
+// egui binds Ctrl K to its own palette when the canvas has focus.
 function onKey(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); currentDialog.value = "palette"; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); e.stopImmediatePropagation(); currentDialog.value = "palette"; }
 }
-onMounted(() => window.addEventListener("keydown", onKey));
-onUnmounted(() => window.removeEventListener("keydown", onKey));
+onMounted(() => window.addEventListener("keydown", onKey, true));
+onUnmounted(() => window.removeEventListener("keydown", onKey, true));
 </script>
 
 <template>
