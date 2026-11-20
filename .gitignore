@@ -8,3 +8,4 @@ web/dist/
 web-ui/node_modules/
 web-ui/dist/
 web-ui/public/bimble/
+perf-results/

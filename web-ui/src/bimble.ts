@@ -63,10 +63,19 @@ export async function start(): Promise<void> {
     }
     const w = (await import(/* @vite-ignore */ `${WASM}bimble_web.js`)) as Wasm;
     await w.default();
+    // Timings from navigation start, read by Lighthouse's user-timings audit (make perf-web).
+    performance.mark("bimble:wasm-ready");
+    performance.measure("bimble:wasm-ready", { start: 0, end: "bimble:wasm-ready" });
     wasm = w;
+    let shown = false;
     // The callback runs inside a frame: calls back into the viewer would throw "busy", so defer.
     w.on_change((json) => {
       const s = JSON.parse(json) as State;
+      if (!shown && s.file !== null) {
+        shown = true;
+        performance.mark("bimble:model-shown");
+        performance.measure("bimble:model-shown", { start: 0, end: "bimble:model-shown" });
+      }
       queueMicrotask(() => (state.value = s));
     });
   } catch (e) {

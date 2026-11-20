@@ -6,7 +6,9 @@
     "wasm": "node scripts/copy-wasm.mjs",
     "dev": "vite",
     "typecheck": "vue-tsc --noEmit",
-    "build": "vite build"
+    "build": "vite build",
+    "perf": "node perf/lighthouse.mjs",
+    "perf:check": "node perf/check.mjs ../perf-results/web.txt perf/budgets.txt 0.15"
   },
   "dependencies": {
     "vue": "^3.5.45"
