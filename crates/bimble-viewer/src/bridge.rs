@@ -119,6 +119,10 @@ pub fn on_change(cb: js_sys::Function) {
     ON_CHANGE.with(|c| *c.borrow_mut() = Some(cb));
     // The next frame sends the current state to the new callback.
     LAST_SENT.with(|s| s.borrow_mut().clear());
+    // The viewer draws only on change (ADR 0006): ask for that next frame now.
+    if let Some((_, ctx)) = RUNNER.with(|r| r.borrow().clone()) {
+        ctx.request_repaint();
+    }
 }
 
 /// Called each frame from `Viewer::ui`: tell the page when the state it shows changed.
