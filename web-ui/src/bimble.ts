@@ -120,12 +120,21 @@ export interface ScheduleTable {
   truncated: boolean;
 }
 
-// ponytail: shapes of `open_views` / `schedule_list` are typed loosely until their ticket lands.
-export interface OpenView {
-  id: string;
-  name: string;
-  [field: string]: unknown;
+/** One open tab, as the bridge's `open_views` gives it. */
+export type OpenTab =
+  | { type: "view"; id: string }
+  | { type: "sheet"; id: string }
+  | { type: "schedule"; name: string }
+  | { type: "project" }
+  | { type: "materials" };
+/** `query("open_views")`: the views the viewer shows, the active one and the open tabs in order. */
+export interface OpenViews {
+  views: ViewSummary[];
+  active: string | null;
+  tabs: OpenTab[];
 }
+/** @deprecated use `OpenViews`. */
+export type OpenView = ViewSummary;
 
 /** `query("verbs")` items and `query("describe")`: as bimble-api dispatch gives them. */
 export type VerbInfo = Record<string, unknown>;
@@ -152,7 +161,7 @@ export const historyLabels = shallowRef<History>({ undo: [], redo: [] });
 export const visibility = shallowRef<Visibility | null>(null);
 export const storeys = shallowRef<StoreySummary[]>([]);
 export const materials = shallowRef<MaterialSummary[]>([]);
-export const openViews = shallowRef<OpenView[]>([]);
+export const openViews = shallowRef<OpenViews>({ views: [], active: null, tabs: [] });
 export const project = shallowRef<ProjectSummary | null>(null);
 
 let resolveReady!: () => void;
@@ -258,12 +267,14 @@ function refresh(modelChanged: boolean): void {
   actions.value = tryQuery<ActionState[]>("actions", []);
   historyLabels.value = tryQuery<History>("history", { undo: [], redo: [] });
   visibility.value = tryQuery<Visibility | null>("visibility", null);
-  openViews.value = tryQuery<OpenView[]>("open_views", []);
+  openViews.value = tryQuery<OpenViews>("open_views", { views: [], active: null, tabs: [] });
   if (modelChanged) {
     storeys.value = tryQuery<StoreySummary[]>("storeys", []);
     materials.value = tryQuery<MaterialSummary[]>("materials", []);
     project.value = tryQuery<ProjectSummary | null>("project", null);
   }
+  // The design check waits for this: a model is loaded and its first refresh is done.
+  if (state.value.file !== null && actions.value.length > 0) document.documentElement.dataset.bbReady = "1";
   if (!timed && modelChanged && state.value.file !== null) {
     timed = true;
     console.debug(`bimble: refresh after change ${(performance.now() - t0).toFixed(2)} ms`);

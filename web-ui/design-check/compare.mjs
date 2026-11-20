@@ -51,6 +51,11 @@ const base = `http://127.0.0.1:${server.address().port}/`;
 
 async function capture(page, url, useRef) {
   await page.goto(url, { waitUntil: "load" });
+  // The lab draws real state only after the wasm loaded the model (bimble.ts sets bbReady).
+  if (!url.startsWith(base)) {
+    await page.waitForFunction(() => document.documentElement.dataset.bbReady === "1", null, { timeout: 30000 });
+    await page.waitForTimeout(300);
+  }
   await page.evaluate(() => document.fonts.ready);
   const sel = Object.fromEntries(Object.entries(landmarks).map(([n, l]) => [n, useRef ? l.ref : l.lab]));
   const marks = await page.evaluate(([sel, props]) => {
