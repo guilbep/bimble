@@ -13,3 +13,4 @@ schemars.workspace = true
 
 [dev-dependencies]
 bimble-geom.workspace = true
+bimble-ifc.workspace = true

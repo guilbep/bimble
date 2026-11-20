@@ -62,8 +62,8 @@ onBeforeUnmount(() => ro?.disconnect());
       </fieldset>
       <div class="row" style="font-size:14px">
         <span class="k">{{ tx('sharedfolder.author') }}</span>
-        <!-- Settings → You: the name is in query("state").user; the email is not. -->
-        <span>{{ name }}<span data-missing="query('state').user.email"></span> <a href="#" data-bb="shared-folder-author" @click.prevent="run('settings')">{{ tx('sharedfolder.change') }}</a></span>
+        <!-- Settings → You: name and email from query("state").user. -->
+        <span>{{ name }}<span v-if="state.user?.email" class="mono" data-bb="shared-folder-email"> · {{ state.user.email }}</span> <a href="#" data-bb="shared-folder-author" @click.prevent="run('settings')">{{ tx('sharedfolder.change') }}</a></span>
       </div>
       <div style="display:flex;gap:10px;justify-content:flex-end">
         <!-- ADR 0052: no Cancel (×, Esc, click outside close). Sharing is the egui `shared_folder` action. -->

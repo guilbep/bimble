@@ -13,7 +13,9 @@ export interface State {
   /** `query("state")`: ".bimble", "IFC2X3", "IFC4"…, or null. */
   schema?: string | null;
   /** `query("state")`: Settings → You, null when no name is set. */
-  user?: { name: string; trigram: string } | null;
+  user?: { name: string; trigram: string; email: string | null } | null;
+  /** `query("state")`: the viewer's version, e.g. "0.17.0". */
+  version?: string | null;
 }
 
 /** `query("element")`: crates/bimble-api/src/query.rs ElementDetail (summary flattened). */
@@ -86,6 +88,9 @@ export interface ProjectSummary {
   id: string;
   name: string;
   info: Record<string, string>;
+  /** IfcSite and IfcBuilding GlobalIds, as the IFC export writes them. */
+  site_id: string;
+  building_id: string;
 }
 
 /** `query("views")`: kind fields flattened (`type`: "three_d" | "plan" | "section", ...). */
@@ -270,8 +275,8 @@ export async function start(): Promise<void> {
       queueMicrotask(() => {
         const prev = state.value;
         // schema and user are not in on_change: read them from query("state").
-        const q = tryQuery<Pick<State, "schema" | "user">>("state", {});
-        state.value = { ...s, schema: q.schema ?? null, user: q.user ?? null };
+        const q = tryQuery<Pick<State, "schema" | "user" | "version">>("state", {});
+        state.value = { ...s, schema: q.schema ?? null, user: q.user ?? null, version: q.version ?? null };
         refresh(prev.rev !== s.rev || prev.file !== s.file);
       });
     });

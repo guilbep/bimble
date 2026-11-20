@@ -485,6 +485,7 @@ version = "0.17.0"
 dependencies = [
  "bimble-core",
  "bimble-geom",
+ "bimble-ifc",
  "schemars",
  "serde",
  "serde_json",

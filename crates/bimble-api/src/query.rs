@@ -154,6 +154,9 @@ pub struct ProjectSummary {
     pub name: String,
     /// Project information (ADR 0030): client, number, phase…
     pub info: BTreeMap<String, String>,
+    /// IfcSite and IfcBuilding GlobalIds: the ones the IFC export writes (bimble-ifc `gid`).
+    pub site_id: GlobalId,
+    pub building_id: GlobalId,
 }
 
 /// A view without its drawing content: references and annotations are counted.
@@ -194,6 +197,9 @@ pub fn project(m: &Model) -> ProjectSummary {
         id: m.project_id,
         name: m.project_name.clone(),
         info: m.project.clone(),
+        // ponytail: same seed as bimble-ifc export's `gid`; the test compares with its output.
+        site_id: GlobalId::derived(format!("{}/site", m.project_id).as_bytes()),
+        building_id: GlobalId::derived(format!("{}/building", m.project_id).as_bytes()),
     }
 }
 
@@ -434,6 +440,15 @@ mod tests {
         let p = project(&f.m);
         assert_eq!((p.id, p.name.as_str()), (f.m.project_id, "fixture"));
         assert_eq!(p.info.keys().collect::<Vec<_>>(), ["client", "number"]);
+        // The ids the IFC writer emits for IfcSite and IfcBuilding.
+        let ifc = bimble_ifc::export(&f.m, "f.ifc", "2026-01-01T00:00:00");
+        let id_of = |class: &str| {
+            let at = ifc.find(&format!("={class}('")).unwrap() + class.len() + 3;
+            ifc[at..at + 22].to_string()
+        };
+        assert_eq!(p.site_id.as_str(), id_of("IFCSITE"));
+        assert_eq!(p.building_id.as_str(), id_of("IFCBUILDING"));
+        assert_ne!(p.site_id, p.building_id);
 
         let v = views(&f.m);
         let mut want = vec![plan, three_d];

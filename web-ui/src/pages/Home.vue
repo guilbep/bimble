@@ -22,8 +22,8 @@ const act = (name: string) => { if (on(name)) runAction(name); };
     <div class="left">
       <!-- Pierre (DECISIONS #6): the product's name in the wordmark font, out of flow above the eyebrow. -->
       <div class="wordmark" data-bb="home-wordmark">bimble</div>
-      <!-- No version query on the web: data-missing. -->
-      <div class="eyebrow" data-bb="home-eyebrow" data-missing="version">{{ t('home.eyebrow', { version: '' }) }}</div>
+      <!-- major.minor, as the reference ("Bimble 0.15 · home"). -->
+      <div class="eyebrow" data-bb="home-eyebrow">{{ t('home.eyebrow', { version: (state.version ?? '').split('.').slice(0, 2).join('.') }) }}</div>
       <h1 class="disp" data-bb="home-title">{{ t('home.hello', { name: state.user?.name ?? '' }) }}</h1>
       <p class="lead" data-bb="home-lead">{{ t('home.lead') }}</p>
       <div class="acts">
@@ -34,7 +34,7 @@ const act = (name: string) => { if (on(name)) runAction(name); };
       <div class="card you" data-bb="home-you">
         <div class="eyebrow">{{ t('home.you') }}</div>
         <!-- Settings → You gives the name only: e-mail and shared folder have no Rust source. -->
-        <div class="row"><span>{{ state.user?.name }}</span><span class="mono" style="font-size:12px" data-missing="user-email"></span></div>
+        <div class="row"><span>{{ state.user?.name }}</span><span class="mono" style="font-size:12px" data-bb="home-email">{{ state.user?.email ?? '' }}</span></div>
         <div class="row"><span class="k">{{ t('home.sharedFolder') }}</span><span class="mono" style="font-size:12.5px" data-missing="shared-folder"></span></div>
         <a href="#" class="change" data-bb="home-settings" @click.prevent="act('settings')">{{ t('home.changeYou') }}</a>
       </div>

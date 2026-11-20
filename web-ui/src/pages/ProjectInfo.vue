@@ -43,8 +43,8 @@ function commit(key: string, e: Event) {
       <h2 style="font-size:20px;margin-top:14px">{{ t('projectinfo.ifc') }}</h2>
       <div class="ifc">
         <span class="k">IfcProject</span><span class="mono" data-bb="project-id">{{ project?.id ?? '' }}</span>
-        <span class="k">IfcSite</span><span class="mono off" data-missing="query: IfcSite GlobalId">—</span>
-        <span class="k">IfcBuilding</span><span class="mono off" data-missing="query: IfcBuilding GlobalId">—</span>
+        <span class="k">IfcSite</span><span class="mono" data-bb="project-site-id">{{ project?.site_id ?? '' }}</span>
+        <span class="k">IfcBuilding</span><span class="mono" data-bb="project-building-id">{{ project?.building_id ?? '' }}</span>
         <span class="k">{{ t('projectinfo.schema') }}</span><span class="mono">{{ state.schema ?? '' }}</span>
       </div>
     </section>

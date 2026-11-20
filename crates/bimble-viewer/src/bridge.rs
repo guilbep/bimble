@@ -63,10 +63,12 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
                     Some(l.scene.schema.clone()).filter(|s| !s.is_empty())
                 }
             }),
-            // Settings → You, null when no name is set.
+            "version": env!("CARGO_PKG_VERSION"),
+            // Settings → You, null when no name is set; email null when unset.
             "user": crate::ribbon::trigram(&v.settings.user_name).map(|t| serde_json::json!({
                 "name": v.settings.user_name.trim(),
                 "trigram": t,
+                "email": Some(v.settings.user_email.trim()).filter(|e| !e.is_empty()),
             })),
         })),
         "storeys" => json(query::storeys(model(v)?)),
