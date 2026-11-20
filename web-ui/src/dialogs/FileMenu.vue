@@ -79,7 +79,7 @@ function run(name?: string) {
 /* style="position:absolute;left:62px;top:44px;width:380px;background:#FFFFFF;border:1px solid #5C574D;border-radius:16px;padding:6px 6px 8px;display:flex;flex-direction:column" */
 .fm { position: absolute; left: 62px; top: 44px; width: 380px; padding: 6px 6px 8px; display: flex; flex-direction: column; }
 /* .eyebrow{font-family:'DM Mono',monospace;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#5C574D} style="padding:8px 12px 2px" */
-.eyebrow { font-family: var(--bb-font-data); font-size: var(--bb-size-eyebrow); letter-spacing: var(--bb-tracking-eyebrow); text-transform: uppercase; color: var(--bb-stone); padding: 8px 12px 2px; }
+.eyebrow { font-family: 'DM Mono', monospace; font-size: var(--bb-size-eyebrow); letter-spacing: var(--bb-tracking-eyebrow); text-transform: uppercase; color: var(--bb-stone); padding: 8px 12px 2px; }
 /* .ti{display:flex;gap:6px;align-items:center;padding:2px 6px;border-radius:8px;color:#141414;text-decoration:none;font-size:13.5px;line-height:20px;white-space:nowrap} style="padding:5px 12px;gap:10px" (an <a> there) */
 .ti { display: flex; gap: 10px; align-items: center; padding: 5px 12px; border-radius: var(--bb-radius-sm); color: var(--bb-ink); font: inherit; font-size: 13.5px; line-height: 20px; white-space: nowrap; border: 0; background: none; text-align: left; cursor: pointer; }
 .ti:hover { background: var(--bb-sunk); }
@@ -87,7 +87,7 @@ function run(name?: string) {
 /* Unavailable: .tool.off{color:#5C574D;opacity:.55} */
 .ti:disabled { color: var(--bb-stone); opacity: .55; cursor: default; background: none; }
 /* style="font-size:11.5px;color:#5C574D" */
-.mono { font-family: var(--bb-font-data); font-size: 11.5px; color: var(--bb-stone); }
+.mono { font-family: 'DM Mono', monospace; font-size: 11.5px; color: var(--bb-stone); }
 /* style="border-top:1px solid #EDE7DB;margin:6px 0" */
 .sep { border-top: 1px solid var(--bb-sunk); margin: 6px 0; }
 </style>

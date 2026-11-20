@@ -397,7 +397,12 @@ export function query<T>(name: string, args?: unknown): T {
 }
 
 /** Run one ribbon action by name (see `actions`). Returns the Rust error, or null. */
+/** Actions the lab shows as a Vue screen instead of egui's (App.vue fills it: no import cycle). */
+export const screenRoutes: Record<string, () => void> = {};
+
 export function runAction(name: string): string | null {
+  const route = screenRoutes[name];
+  if (route) { route(); return null; }
   try { wasmOrThrow().action(name); return null; } catch (e) { return message(e); }
 }
 

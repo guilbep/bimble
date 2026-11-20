@@ -52,18 +52,18 @@ const caret = "m6 9 6 6 6-6";
 
 <style scoped>
 /* .pn{font-family:'Sora',sans-serif;font-weight:500;font-size:14px;margin:0 0 4px} */
-.pn { font-family: var(--bb-font-display); font-weight: 500; font-size: 14px; margin: 0 0 4px; }
+.pn { font-family: 'Sora', sans-serif; font-weight: 500; font-size: 14px; margin: 0 0 4px; }
 /* .row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13.5px;min-height:22px} */
 .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; min-height: 22px; }
 .k { color: var(--bb-stone); white-space: nowrap; }
-.mono { font-family: var(--bb-font-data); }
+.mono { font-family: 'DM Mono', monospace; }
 /* .inp{height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 8px;font:inherit;font-size:13.5px;color:#141414;min-width:0} .inp.mono{font-family:'DM Mono',monospace;font-size:13px} */
 .inp { height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 8px; font: inherit; font-size: 13.5px; color: var(--bb-ink); min-width: 0; }
-.inp.mono { font-family: var(--bb-font-data); font-size: 13px; }
+.inp.mono { font-family: 'DM Mono', monospace; font-size: 13px; }
 /* .sel-inp{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 6px 0 8px;font-size:13.5px;white-space:nowrap} */
 .sel-inp { display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 6px 0 8px; font-size: 13.5px; white-space: nowrap; }
 /* .sec{font-size:12px;font-family:'DM Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#5C574D;margin-top:6px} */
-.sec { font-size: 12px; font-family: var(--bb-font-data); letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
+.sec { font-size: 12px; font-family: 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
 /* Missing in Rust: the reference's .off (color:#5C574D;opacity:.55). */
 .off, .inp:disabled { color: var(--bb-stone); opacity: .55; }
 </style>

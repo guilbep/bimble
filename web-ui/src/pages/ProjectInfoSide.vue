@@ -18,11 +18,11 @@ const entries = computed(() => Object.keys(project.value?.info ?? {}).length);
 
 <style scoped>
 /* .pn{font-family:'Sora',sans-serif;font-weight:500;font-size:14px;margin:0 0 4px} */
-.pn { font-family: var(--bb-font-display); font-weight: 500; font-size: 14px; margin: 0 0 4px; }
+.pn { font-family: 'Sora', sans-serif; font-weight: 500; font-size: 14px; margin: 0 0 4px; }
 /* .row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13.5px;min-height:22px} */
 .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; min-height: 22px; }
 .k { color: var(--bb-stone); white-space: nowrap; }
-.mono { font-family: var(--bb-font-data); }
+.mono { font-family: 'DM Mono', monospace; }
 /* .sec{font-size:12px;font-family:'DM Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#5C574D;margin-top:6px} */
 .sec { font-size: 12px; font-family: 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
 .note { font-size: 13px; color: var(--bb-stone); }

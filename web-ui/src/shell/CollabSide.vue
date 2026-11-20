@@ -20,15 +20,15 @@ const rows = ["shell.collab.folder", "shell.collab.you", "shell.collab.right", "
 
 <style scoped>
 /* .pn{font-family:'Sora',sans-serif;font-weight:500;font-size:14px;margin:0 0 4px} */
-.pn { font-family: var(--bb-font-display); font-weight: 500; font-size: 14px; margin: 0 0 4px; }
+.pn { font-family: 'Sora', sans-serif; font-weight: 500; font-size: 14px; margin: 0 0 4px; }
 /* .row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13.5px;min-height:22px} */
 .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; min-height: 22px; }
 /* .k{color:#5C574D;white-space:nowrap} */
 .k { color: var(--bb-stone); white-space: nowrap; }
 /* .mono{font-family:'DM Mono',monospace;font-size:13px} */
-.mono { font-family: var(--bb-font-data); font-size: 13px; }
+.mono { font-family: 'DM Mono', monospace; font-size: 13px; }
 /* .sec{font-size:12px;font-family:'DM Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#5C574D;margin-top:6px} */
-.sec { font-size: 12px; font-family: var(--bb-font-data); letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
+.sec { font-size: 12px; font-family: 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
 /* .dot{width:12px;height:12px;border-radius:50%;border:1px solid #141414;display:inline-block;flex:none} */
 .dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--bb-ink); display: inline-block; flex: none; }
 </style>

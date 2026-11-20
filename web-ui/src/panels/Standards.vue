@@ -1,6 +1,7 @@
 <script lang="ts">
 // The status bar reads `hint` from pages and dialogs only today (StatusBar.vue): ready for when it reads panels.
 export const hint = "standards.hint";
+export const label = "standards.title";
 </script>
 
 <script setup lang="ts">
@@ -56,11 +57,11 @@ const families = computed(() => [...new Set(materials.value.map((m) => m.categor
 /* aside: padding:14px;display:flex;flex-direction:column;gap:10px;overflow:hidden (width, padding, border, ground: .bb-right) */
 .st { display: flex; flex-direction: column; gap: 10px; height: 100%; color: var(--bb-ink); font-size: 14px; line-height: 1.35; }
 /* .pn{font-family:'Sora',sans-serif;font-weight:500;font-size:14px;margin:0 0 4px} */
-.pn { font-family: var(--bb-font-display); font-weight: 500; font-size: 14px; margin: 0 0 4px; }
+.pn { font-family: 'Sora', sans-serif; font-weight: 500; font-size: 14px; margin: 0 0 4px; }
 /* .note{font-size:13px;color:#5C574D} */
 .note { font-size: 13px; color: var(--bb-stone); }
 /* .sec{font-size:12px;font-family:'DM Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#5C574D;margin-top:6px} */
-.sec { font-size: 12px; font-family: var(--bb-font-data); letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
+.sec { font-size: 12px; font-family: 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
 /* .inp{height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 8px;font:inherit;font-size:13.5px;color:#141414;min-width:0} */
 .inp { height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 8px; font: inherit; font-size: 13.5px; color: var(--bb-ink); min-width: 0; }
 /* table.t{border-collapse:collapse;width:100%;font-size:13.5px} */

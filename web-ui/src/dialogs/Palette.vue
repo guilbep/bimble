@@ -144,7 +144,7 @@ onBeforeUnmount(() => ro?.disconnect());
 /* ponytail: the caret shows the focus; the field is borderless in the reference, so no ring. */
 .inp:focus { outline: none; }
 /* .kbd{font-family:'DM Mono',monospace;font-size:11.5px;padding:1px 6px;border-radius:6px;background:#EDE7DB;color:#141414} */
-.kbd { font-family: var(--bb-font-data); font-size: 11.5px; padding: 1px 6px; border-radius: 6px; background: var(--bb-sunk); color: var(--bb-ink); }
+.kbd { font-family: 'DM Mono', monospace; font-size: 11.5px; padding: 1px 6px; border-radius: 6px; background: var(--bb-sunk); color: var(--bb-ink); }
 /* .ti{display:flex;gap:6px;align-items:center;padding:2px 6px;border-radius:8px;color:#141414;text-decoration:none;font-size:13.5px;line-height:20px;white-space:nowrap} .ti:hover{background:#EDE7DB} */
 .ti { display: flex; gap: 6px; align-items: center; padding: 2px 6px; border-radius: 8px; color: var(--bb-ink); text-decoration: none; font-size: 13.5px; line-height: 20px; white-space: nowrap; flex: none; }
 .ti:hover { background: var(--bb-sunk); }

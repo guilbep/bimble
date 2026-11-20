@@ -69,7 +69,7 @@ import { t } from "../i18n";
 .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* .page h2{font-family:'Sora',sans-serif;margin:0} */
 h2 { font-family: 'Sora', sans-serif; margin: 0; }
-.mono { font-family: var(--bb-font-data); }
+.mono { font-family: 'DM Mono', monospace; }
 /* .note{font-size:13px;color:#5C574D} */
 .note { font-size: 13px; color: var(--bb-stone); }
 .versions { display: flex; flex-direction: column; gap: 10px; }
@@ -77,7 +77,7 @@ h2 { font-family: 'Sora', sans-serif; margin: 0; }
 /* .card{background:#FFFFFF;border:1px solid #DDD6C8;border-radius:16px;padding:18px} + style="padding:14px;display:flex;flex-direction:column;gap:8px;margin-top:6px" */
 .card { background: var(--bb-sheet); border: 1px solid var(--bb-line); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
 /* .eyebrow{font-family:'DM Mono',monospace;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#5C574D} */
-.eyebrow { font-family: var(--bb-font-data); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); }
+.eyebrow { font-family: 'DM Mono', monospace; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); }
 /* .row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13.5px;min-height:22px} */
 .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; min-height: 22px; }
 /* .chip{padding:2px 4px 2px 10px;border-radius:999px;font-size:13px;display:inline-flex;gap:4px;align-items:center;white-space:nowrap;color:#141414} .chip.nx{padding-right:10px} .c-o{background:#D2B347} */

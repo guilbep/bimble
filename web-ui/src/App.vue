@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { startError } from "./bimble";
+import { startError, screenRoutes } from "./bimble";
 import { t } from "./i18n";
 import QuickBar from "./shell/QuickBar.vue";
 import TabsBar from "./shell/TabsBar.vue";
@@ -11,6 +11,17 @@ import StatusBar from "./shell/StatusBar.vue";
 import "./shell/shell.css";
 import { computed, onMounted, onUnmounted } from "vue";
 import { pages, currentPage, page } from "./pages";
+// Every caller (quick bar, File menu, palette, ribbon, Home) runs actions through runAction:
+// these open the Vue screen of the same name (a ribbon tool with `page`/`panel` toggles it itself).
+const openPage = (id: string) => () => { currentPage.value = id; };
+// The aside's name: the panel's `label` key (fr/Standards.html: aria-label="Standards graphiques").
+const panelLabel = computed(() => { const l = (panel() as { label?: string } | null)?.label; return l ? t(l) : undefined; });
+Object.assign(screenRoutes, {
+  home: openPage("home"),
+  project: openPage("project-info"),
+  history: openPage("history"),
+  standards: () => { currentPanel.value = "standards"; },
+});
 import { dialogs, currentDialog } from "./dialogs";
 import { panels, currentPanel, panel } from "./panels";
 import { applyDeepLink } from "./deeplink";
@@ -48,12 +59,12 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             <canvas id="bimble" />
             <p v-if="startError" class="start-error" role="alert">{{ t('app.startError', { msg: startError }) }}</p>
           </div>
+          <aside v-if="currentPanel && panels[currentPanel]" class="bb-right" data-bb="right-panel" :aria-label="panelLabel">
+            <component :is="panels[currentPanel]" />
+          </aside>
             </div>
         <ModifierPanel />
       </div>
-      <aside v-if="currentPanel && panels[currentPanel]" class="bb-right" data-bb="right-panel">
-        <component :is="panels[currentPanel]" />
-      </aside>
     </div>
     <div v-if="currentDialog && dialogs[currentDialog]" class="bb-backdrop" @click.self="currentDialog = null">
       <component :is="dialogs[currentDialog]" />

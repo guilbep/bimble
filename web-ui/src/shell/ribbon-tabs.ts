@@ -16,7 +16,7 @@ export interface RibbonGroup { key: RibbonKey; tools: RibbonTool[]; box?: Ribbon
 export const RIBBON: Record<TabId, RibbonGroup[]> = {
   project: [
     { key: "ribbon.project.g1", tools: [
-      { key: "ribbon.project.g1.t1", tag: "a", icon: "<circle cx=\"12\" cy=\"12\" r=\"8.5\"/><path d=\"M12 11v5\"/><path d=\"M12 8h.01\"/>", action: "project" },
+      { key: "ribbon.project.g1.t1", tag: "a", icon: "<circle cx=\"12\" cy=\"12\" r=\"8.5\"/><path d=\"M12 11v5\"/><path d=\"M12 8h.01\"/>", action: "project", page: "project-info" },
       { key: "ribbon.project.g1.t2", tag: "a", icon: "<path d=\"M4 18h4v-4h4v-4h4V6h4\"/><path d=\"M4 21h16\"/>", action: null },
     ] },
     { key: "ribbon.project.g2", tools: [

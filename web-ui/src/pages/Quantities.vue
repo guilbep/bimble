@@ -79,7 +79,7 @@ const family = computed(() => {
 .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* .page h2{font-family:'Sora',sans-serif;margin:0} */
 h2 { font-family: 'Sora', sans-serif; margin: 0; }
-.mono { font-family: var(--bb-font-data); }
+.mono { font-family: 'DM Mono', monospace; }
 .note { font-size: 13px; color: var(--bb-stone); }
 /* .sel-inp{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 6px 0 8px;font-size:13.5px;white-space:nowrap} */
 .sel-inp { display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 6px 0 8px; font-size: 13.5px; white-space: nowrap; box-sizing: border-box; }

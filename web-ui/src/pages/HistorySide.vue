@@ -18,6 +18,6 @@ import { t } from "../i18n";
 /* .row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13.5px;min-height:22px} */
 .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; min-height: 22px; }
 .k { color: var(--bb-stone); white-space: nowrap; }
-.mono { font-family: var(--bb-font-data); }
+.mono { font-family: 'DM Mono', monospace; }
 .off { color: var(--bb-stone); opacity: .55; }
 </style>

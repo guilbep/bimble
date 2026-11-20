@@ -84,15 +84,15 @@ const above = computed(() => {
 
 <style scoped>
 /* .pn{font-family:'Sora',sans-serif;font-weight:500;font-size:14px;margin:0 0 4px} */
-.pn { font-family: var(--bb-font-display); font-weight: 500; font-size: 14px; margin: 0 0 4px; }
+.pn { font-family: 'Sora', sans-serif; font-weight: 500; font-size: 14px; margin: 0 0 4px; }
 /* .row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13.5px;min-height:22px} */
 .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; min-height: 22px; }
 /* .row .k{color:#5C574D;white-space:nowrap} */
 .k { color: var(--bb-stone); white-space: nowrap; }
-.mono { font-family: var(--bb-font-data); }
+.mono { font-family: 'DM Mono', monospace; }
 /* .inp{height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 8px;font:inherit;font-size:13.5px;color:#141414;min-width:0} .inp.mono{font-family:'DM Mono',monospace;font-size:13px} */
 .inp { height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 8px; font: inherit; font-size: 13.5px; color: var(--bb-ink); min-width: 0; }
-.inp.mono { font-family: var(--bb-font-data); font-size: 13px; }
+.inp.mono { font-family: 'DM Mono', monospace; font-size: 13px; }
 /* .off{color:#5C574D;opacity:.55}: no Rust call yet (data-missing). */
 .off { color: var(--bb-stone); opacity: .55; }
 /* .sel-inp{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 6px 0 8px;font-size:13.5px;white-space:nowrap} */
@@ -106,7 +106,7 @@ const above = computed(() => {
 .seg span { padding: 2px 12px; border-radius: 999px; color: var(--bb-stone); font-size: 13px; white-space: nowrap; }
 .seg .on { background: var(--bb-ink); color: var(--bb-on-ink); }
 /* .sec{font-size:12px;font-family:'DM Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#5C574D;margin-top:6px} */
-.sec { font-size: 12px; font-family: var(--bb-font-data); letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
+.sec { font-size: 12px; font-family: 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
 .note { font-size: 13px; color: var(--bb-stone); }
 .error { color: var(--bb-ink); background: var(--bb-error); font-size: 13.5px; margin: 0; padding: 2px 8px; overflow-wrap: anywhere; }
 </style>

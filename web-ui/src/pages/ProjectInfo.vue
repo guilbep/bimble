@@ -81,7 +81,7 @@ function commit(key: string, e: Event) {
 .col { display: flex; flex-direction: column; }
 /* .page h2{font-family:'Sora',sans-serif;margin:0} */
 h2 { font-family: 'Sora', sans-serif; margin: 0; }
-.mono { font-family: var(--bb-font-data); }
+.mono { font-family: 'DM Mono', monospace; }
 /* .note{font-size:13px;color:#5C574D} */
 .note { font-size: 13px; color: var(--bb-stone); }
 /* .banner{padding:10px 16px;font-size:14px;...} .b-o{background:#D2B347} — the error band: ochre with the word "Error". */
