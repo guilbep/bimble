@@ -307,6 +307,16 @@ export function rename(id: string, name: string): string | null {
   }
 }
 
+/** Replace the project information (ADR 0030) as one undoable step: the whole map. Returns the Rust error, or null. */
+export function setProject(project: Record<string, string>): string | null {
+  try {
+    wasmOrThrow().apply(JSON.stringify([{ op: "set_project", project }]));
+    return null;
+  } catch (e) {
+    return message(e);
+  }
+}
+
 export function undo(): string | null {
   try { wasmOrThrow().undo(); return null; } catch (e) { return message(e); }
 }
