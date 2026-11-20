@@ -20,6 +20,20 @@ _5 Nov 2026. Supersedes v0 (Python / IFC-file-as-native). Sources: the Bimble PR
    day 1, not added later.
 6. **The drawing is the product** (formwork, then rebar). Structural concrete first, then steel, then timber.
 7. **Agent- and script-first.** Every action is a command, the same for the UI, the CLI, scripts and MCP.
+8. **The bar is the best, not "good for open source"** (Pierre, 20 Nov 2026). What sets Bimble apart:
+   typed structural verbs, undo, history, and drawings that an agent can produce. Nothing an agent
+   does is unchecked or irreversible (ADR 0048).
+9. **The online viewer stays first-class.** Today Bimble is mostly used to view IFC exports (Tekla,
+   Revit) in the browser. Free viewing removes the barrier to adoption (`.bimbleview`, the web page).
+   Every release keeps the viewer fast: performance budgets in `web-ui/perf/` (the `perf` workflow).
+
+**Ideas, 20 Nov 2026, not planned yet** (Pierre):
+- Markup and edits on the PDF itself, like Bluebeam: change a dimension on the drawing.
+- What an agent sees: a PNG may be too slow or too poor. Candidates: the drawing as SVG text, a
+  structured summary of the scene. Measure before choosing.
+- Sketches and photos to a model through MCP: reported done by someone with Claude and the Revit MCP
+  (source not seen).
+- A printed scale model: `bimble print` (docs/research/2026-11-20-3d-printing.md).
 
 ## 2. Stack
 
