@@ -28,6 +28,13 @@ function commit(size: Size): void {
   apply({ sizes: { [size]: Number((draft[size] ?? "").replace(/[\s']/g, "")) } });
 }
 
+const topOffset = ref("0");
+watch(() => placing.value?.top_offset_mm, (v) => { topOffset.value = String(v ?? 0); }, { immediate: true });
+function commitOffset(): void {
+  if (topOffset.value === String(placing.value?.top_offset_mm)) return;
+  apply({ top_offset_mm: Number(topOffset.value.replace(/[\s']/g, "")) });
+}
+
 const level = (e: number) => `${e >= 0 ? "+" : ""}${(e / 1000).toFixed(2)}`;
 // ponytail: the level above, for the note only (the element's top is at the storey height).
 const above = computed(() => {
@@ -71,8 +78,7 @@ const above = computed(() => {
       <div class="row">
         <label class="k" for="ps-offset">{{ t('placeslab.topOffset') }}</label>
         <span style="display:inline-flex;align-items:center;gap:6px">
-          <!-- The slab's top is at the storey height: 0 until Rust takes an offset. -->
-          <input id="ps-offset" class="inp mono off" value="0" disabled data-missing="set_placing top_offset" style="width:100px;text-align:right" />
+          <input id="ps-offset" v-model="topOffset" class="inp mono" style="width:100px;text-align:right" :aria-invalid="error ? 'true' : 'false'" aria-describedby="ps-error" @keydown.enter="commitOffset" @blur="commitOffset" />
           <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
         </span>
       </div>

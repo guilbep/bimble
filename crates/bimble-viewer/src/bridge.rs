@@ -395,7 +395,8 @@ pub fn standards_action(name: &str) -> Result<(), JsValue> {
 }
 
 /// Change what is placed: `{kind?, storey?, material?, sizes?: {column?, beam_width?,
-/// beam_height?, wall?, slab?}}` (mm, within `bimble_api::verbs::SIZE_MM`). All or nothing.
+/// beam_height?, wall?, slab?}, top_offset_mm?}` (sizes within `bimble_api::verbs::SIZE_MM`;
+/// `top_offset_mm`, a new slab's top relative to the level above, within ±`MAX_MM`). All or nothing.
 /// `kind` while not placing starts placing, as `action("place_<kind>")`; `material` is a model material's name
 /// or a library grade, as the `place` verb's.
 #[wasm_bindgen]

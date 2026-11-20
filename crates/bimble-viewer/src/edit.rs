@@ -102,11 +102,12 @@ pub struct PlacingPatch {
     pub material: Option<String>,
     /// Some of `Sizes`' fields, mm.
     pub sizes: Option<serde_json::Map<String, serde_json::Value>>,
+    pub top_offset_mm: Option<f64>,
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // bridge only
 impl PlacingPatch {
-    /// Parse `{kind?, storey?, material?, sizes?}`; unknown fields and kinds are errors.
+    /// Parse `{kind?, storey?, material?, sizes?, top_offset_mm?}`; unknown fields and kinds are errors.
     pub fn parse(json: &str) -> Result<PlacingPatch, String> {
         let v: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(json).map_err(|e| e.to_string())?;
@@ -118,6 +119,7 @@ impl PlacingPatch {
                 "storey" => p.storey = Some(serde_json::from_value(x).map_err(e)?),
                 "material" => p.material = Some(serde_json::from_value(x).map_err(e)?),
                 "sizes" => p.sizes = Some(serde_json::from_value(x).map_err(e)?),
+                "top_offset_mm" => p.top_offset_mm = Some(serde_json::from_value(x).map_err(e)?),
                 _ => return Err(format!("unknown field: {k}")),
             }
         }
@@ -136,6 +138,8 @@ pub struct Editor {
     pub kind: Kind,
     pub storey: Option<GlobalId>,
     pub sizes: Sizes,
+    /// A new slab's top relative to where it goes today (flush with the level above), mm.
+    pub top_offset_mm: f64,
     /// Material of new elements: a model material's name or a library grade; None: the first
     /// concrete of the model, else C30/37 (`new_element`).
     pub material: Option<String>,
@@ -215,6 +219,7 @@ impl Editor {
             kind: Kind::Column,
             storey,
             sizes: Sizes::default(),
+            top_offset_mm: 0.0,
             material: None,
             placing: None,
             commit_message: String::new(),
@@ -304,15 +309,26 @@ impl Editor {
         let pts = std::mem::take(&mut placing.points);
         let b = *pts.last().unwrap_or(&pts[0]);
         let storey = self.storey?;
-        Some(new_element(
+        let kind = placing.kind;
+        let mut r = new_element(
             &self.model,
-            placing.kind,
+            kind,
             storey,
             pts[0],
             b,
             &self.sizes,
             self.material.as_deref(),
-        ))
+        );
+        if kind == Kind::Slab
+            && let Ok(cmds) = &mut r
+        {
+            for c in cmds {
+                if let Command::AddElement(e) = c {
+                    e.placement.origin[2] += self.top_offset_mm;
+                }
+            }
+        }
+        Some(r)
     }
 
     /// What is placed, for the page (B1): kind, storey, material, sizes, points, hint.
@@ -328,6 +344,7 @@ impl Editor {
             "material": self.material,
             "sizes": self.sizes,
             "offset_mm": self.offset,
+            "top_offset_mm": self.top_offset_mm,
             "points": self.placing.as_ref().map_or(&[][..], |p| &p.points[..]),
             "clicks_needed": kind.clicks(),
             "hint": self.placing.as_ref().map(Placing::hint),
@@ -363,7 +380,18 @@ impl Editor {
                 serde_json::from_value(v).map_err(|e| e.to_string())?
             }
         };
+        if let Some(v) = p.top_offset_mm
+            && (!v.is_finite() || v.abs() > bimble_api::dispatch::MAX_MM)
+        {
+            return Err(format!(
+                "top_offset_mm: {v} is not a finite value within ±{} mm",
+                bimble_api::dispatch::MAX_MM
+            ));
+        }
         self.sizes = sizes;
+        if let Some(v) = p.top_offset_mm {
+            self.top_offset_mm = v + 0.0; // no -0.0
+        }
         if let Some(s) = p.storey {
             self.storey = Some(s);
         }
@@ -557,6 +585,15 @@ impl Editor {
                     Kind::Slab => {
                         ui.label("Thickness");
                         ui.add(mm(&mut s.slab));
+                        ui.end_row();
+                        ui.label("Top offset");
+                        ui.add(
+                            egui::DragValue::new(&mut self.top_offset_mm)
+                                .speed(5.0)
+                                .range(
+                                    -bimble_api::dispatch::MAX_MM..=bimble_api::dispatch::MAX_MM,
+                                ),
+                        );
                     }
                 }
                 ui.end_row();
@@ -686,6 +723,50 @@ mod tests {
                 e.name.starts_with('P') && ed.model.materials[&e.material].name == "C35/45"
             });
         assert!(col.is_some());
+    }
+
+    /// AG: a slab's top offset. 0: the slab as before (top flush with the level above, origin
+    /// z = storey height - thickness, by hand); -50: 50 mm lower; a bad value changes nothing.
+    #[test]
+    fn a_slab_top_offset_moves_the_slab() {
+        let (m, s) = demo();
+        let h = bimble_api::verbs::storey_height(&m, s);
+        let slab_z = |off: Option<f64>| {
+            let mut ed = Editor::new(m.clone());
+            ed.storey = Some(s);
+            if let Some(v) = off {
+                let p = patch(&format!(r#"{{"top_offset_mm": {v}}}"#)).unwrap();
+                ed.set_placing(p).unwrap();
+                assert_eq!(ed.placing_json()["top_offset_mm"], v);
+            }
+            ed.placing = Some(Placing {
+                kind: Kind::Slab,
+                points: vec![],
+            });
+            assert!(ed.click([0.0, 0.0]).is_none());
+            let cmds = ed.click([3000.0, 2000.0]).unwrap().unwrap();
+            let z = cmds.iter().find_map(|c| match c {
+                Command::AddElement(e) => Some(e.placement.origin[2]),
+                _ => None,
+            });
+            (z.unwrap(), ed.sizes.slab)
+        };
+        let (z0, t) = slab_z(None);
+        assert_eq!(z0, h - t, "unchanged at offset 0");
+        assert_eq!(slab_z(Some(0.0)).0, z0);
+        assert_eq!(slab_z(Some(-50.0)).0, z0 - 50.0);
+        let mut ed = Editor::new(m.clone());
+        for bad in ["1e8", "-1e8", "\"a\"", "null"] {
+            let r = patch(&format!(
+                r#"{{"top_offset_mm": {bad}, "sizes": {{"slab": 300}}}}"#
+            ))
+            .and_then(|p| ed.set_placing(p));
+            assert!(r.is_err(), "{bad}");
+        }
+        assert_eq!(
+            (ed.top_offset_mm, ed.sizes.slab),
+            (0.0, Sizes::default().slab)
+        );
     }
 
     /// Several selected (#54): one Delete removes them all, and one undo brings them back.
