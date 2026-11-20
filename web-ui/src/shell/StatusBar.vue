@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { state, visibility, actions, runAction, pointer, status, placing, openViews } from "../bimble";
+import { computed } from "vue";
+import { state, visibility, actions, runAction, pointer, status, placing, openViews, links } from "../bimble";
 import { lang, setLang, t, type Lang } from "../i18n";
 import { page } from "../pages";
 import { dialog } from "../dialogs";
 import { panel, currentPanel } from "../panels";
 
 const langs: Lang[] = ["fr", "en"];
+// Linked models and reference plans shown now; re-read when the model or the views change.
+const shownLinks = computed(() => { void state.value.rev; void openViews.value; return links().filter((k) => k.visible); });
 // Each chip: a view mode read from `query("visibility")`; `undo` is the action its × runs, enabled as `query("actions")` says.
 type Chip = { key: Parameters<typeof t>[0]; n: number; undo: string };
 const enabled = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
@@ -66,8 +69,8 @@ const chips = (): Chip[] => {
     <span v-for="c in chips()" :key="c.key" data-bb="status-chip" class="chip c-n">{{ t(c.key, { n: c.n }) }}<button
         type="button" class="cx" :aria-label="t('status.undoChip')" :disabled="!enabled(c.undo)"
         @click="runAction(c.undo)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span>
-    <!-- ponytail: linked models have no query yet; no chip is drawn rather than a fake one. -->
-    <span hidden data-missing="links"></span>
+    <!-- Reference (B1): `.chip.c-s.nx` "Lié : Architecture", slate = linked models (ADR 0049); one per shown link. -->
+    <span v-for="k in shownLinks" :key="k.id" data-bb="status-chip" class="chip c-s nx">{{ t("status.linked", { name: k.name.replace(/\.[^.]+$/, "") }) }}</span>
     <span class="mono q" style="font-size:12px" data-bb="status-counts">{{ counts() }}</span>
     <span class="seg" role="group" :aria-label="t('status.langGroup')" style="margin-left:4px" data-bb="status-lang">
       <button v-for="l in langs" :key="l" type="button" class="lg" :class="{ on: lang === l }"
@@ -98,6 +101,8 @@ const chips = (): Chip[] => {
 /* disabled: .tool.off{color:#5C574D;opacity:.55} */
 .chip .cx:disabled { color: var(--bb-stone); opacity: .55; cursor: default; }
 .c-p { background: var(--bb-pink); }
+/* .c-s{background:#6E88A3} (slate: linked models, ADR 0049) */
+.c-s { background: var(--bb-slate); }
 /* .seg{display:inline-flex;gap:2px;padding:2px;border-radius:999px;background:#EDE7DB} */
 .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--bb-radius-pill); background: var(--bb-sunk); }
 /* .seg button{padding:2px 12px;border-radius:999px;color:#5C574D;text-decoration:none;font:inherit;font-size:13px;border:0;background:none;cursor:pointer;white-space:nowrap} */

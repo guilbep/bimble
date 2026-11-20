@@ -530,6 +530,7 @@ export type PartKey =
   | "status.langEn"
   | "status.langFr"
   | "status.langGroup"
+  | "status.linked"
   | "status.sectionBox"
   | "status.selected"
   | "status.selectedOne"

@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 import { t } from "../i18n";
 import { viewName } from "./viewName";
 import { currentPage } from "../pages";
-import { actions, openView, openViews, runAction, scheduleList, sheets, state, storeys, type ViewSummary } from "../bimble";
+import { actions, links, measurements, openView, openViews, runAction, scheduleList, sheets, state, storeys, type ViewSummary } from "../bimble";
 
 // `open_views` is `{views, active, tabs}` (bridge.rs); bimble.ts types it loosely until then.
 const ov = computed(() => openViews.value as unknown as { views?: ViewSummary[]; active?: string | null });
@@ -20,6 +20,8 @@ const sheetCount = computed(() => {
   try { return sheets().length; } catch { return null; }
 });
 const scheduleCount = computed(() => { void state.value.rev; void openViews.value; return scheduleList().length; });
+const linkCount = computed(() => { void state.value.rev; void openViews.value; return links().length; });
+const measureCount = computed(() => { void state.value.rev; void openViews.value; return measurements().length; });
 const objects = computed(() => storeys.value.reduce((n, s) => n + s.element_count, 0));
 const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 
@@ -70,13 +72,13 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
       <span>{{ t('nav.subprojects') }}</span><span class="n" />
     </a>
-    <a class="ti h" href="#" style="padding-left:6px" data-missing="links query" @click.prevent>
+    <a class="ti h" href="#" style="padding-left:6px" data-missing="links list (expand)" @click.prevent>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
-      <span>{{ t('nav.links') }}</span><span class="n" />
+      <span>{{ t('nav.links') }}</span><span class="n">{{ linkCount }}</span>
     </a>
-    <a class="ti h" href="#" style="padding-left:6px" data-missing="measurements query" @click.prevent>
+    <a class="ti h" href="#" style="padding-left:6px" data-missing="measurements list (expand)" @click.prevent>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
-      <span>{{ t('nav.measures') }}</span><span class="n" />
+      <span>{{ t('nav.measures') }}</span><span class="n">{{ measureCount }}</span>
     </a>
   </nav>
 </template>

@@ -15,6 +15,7 @@ export const fr = {
   "status.langGroup": "Langue / Language",
   "status.langFr": "Français",
   "status.langEn": "English",
+  "status.linked": "Lié : {name}",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "status.hint": "Drag: orbit · Right-drag: pan · Scroll: zoom · Handles: section box",
@@ -32,4 +33,5 @@ export const en: Record<keyof typeof fr, string> = {
   "status.langGroup": "Langue / Language",
   "status.langFr": "Français",
   "status.langEn": "English",
+  "status.linked": "Linked: {name}",
 };

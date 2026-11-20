@@ -523,3 +523,9 @@ export function standardsAction(name: "revert" | "reset" | "save"): string | nul
 /** Home's recent files, newest first (bridge query "recent_files"); empty when the settings hold none. */
 export type RecentFile = { name: string; path: string; folder: string; opened_unix: number | null; schema: string | null; exists: boolean };
 export const recentFiles = () => tryQuery<RecentFile[]>("recent_files", []);
+/** Linked models and reference plans (bridge query "links"); `kind` is "ifc", "bimble", "dxf", "pdf"… */
+export type Link = { id: string; name: string; kind: string; visible: boolean };
+export const links = () => tryQuery<Link[]>("links", []);
+/** Measurements kept in the viewer (bridge query "measurements"); `label` as the egui panel shows it. */
+export type Measurement = { id: number; label: string; value_mm: number };
+export const measurements = () => tryQuery<Measurement[]>("measurements", []);

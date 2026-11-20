@@ -192,6 +192,46 @@ pub fn guard_page_unload() {
     f.forget();
 }
 
+/// The `links` query (bridge): linked models (`(file name, shown)`) then the views' reference
+/// plans, as the egui Links panel lists them. `kind` is the file extension ("ifc", "bimble") or the
+/// reference's format ("pdf", "dxf"); models have no GlobalId, so their id is the file name.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn links_json(
+    models: &[(String, bool)],
+    refs: &[&bimble_core::view::Reference],
+) -> serde_json::Value {
+    let models = models.iter().map(|(name, visible)| {
+        let kind = std::path::Path::new(name)
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        serde_json::json!({ "id": name, "name": name, "kind": kind, "visible": visible })
+    });
+    let refs = refs.iter().map(|r| {
+        serde_json::json!({
+            "id": r.id.to_string(), "name": r.name, "kind": r.format, "visible": r.visible,
+        })
+    });
+    serde_json::Value::Array(models.chain(refs).collect())
+}
+
+/// The `measurements` query (bridge): `[{id, label, value_mm}]` as the egui Measurements panel
+/// lists them ("1. 2 500 mm", thin space); id is the position, as the panel's delete uses it.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn measurements_json(dims: &[crate::measure::Dimension]) -> serde_json::Value {
+    dims.iter()
+        .enumerate()
+        .map(|(k, d)| {
+            let mm = d.distance();
+            serde_json::json!({
+                "id": k,
+                "label": format!("{}. {}", k + 1, crate::measure::format_mm(mm)),
+                "value_mm": f64::from(mm),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +307,36 @@ mod tests {
             ..default_view()
         };
         assert_eq!(unsaved(&s), ["views"]);
+    }
+
+    #[test]
+    fn links_and_measurements_as_json() {
+        use crate::measure::{Dimension, Snap, SnapKind};
+        let r: bimble_core::view::Reference = serde_json::from_value(serde_json::json!({
+            "id": "0aaaaaaaaaaaaaaaaaaaaa", "name": "ground.dxf", "format": "dxf",
+            "offset_mm": [0.0, 0.0], "rotation_deg": 0.0, "polylines": [],
+        }))
+        .unwrap();
+        assert_eq!(
+            links_json(&[("Architecture.IFC".into(), false)], &[&r]),
+            serde_json::json!([
+                {"id": "Architecture.IFC", "name": "Architecture.IFC", "kind": "ifc", "visible": false},
+                {"id": "0aaaaaaaaaaaaaaaaaaaaa", "name": "ground.dxf", "kind": "dxf", "visible": true},
+            ])
+        );
+        let snap = |x: f32| Snap {
+            point: glam::Vec3::new(x, 0.0, 0.0),
+            kind: SnapKind::Vertex,
+            normal: None,
+            element: 0,
+        };
+        let d = Dimension {
+            a: snap(0.0),
+            b: snap(2500.0),
+        };
+        assert_eq!(
+            measurements_json(&[d]),
+            serde_json::json!([{"id": 0, "label": "1. 2\u{2009}500 mm", "value_mm": 2500.0}])
+        );
     }
 }

@@ -215,6 +215,18 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
                 .and_then(|l| l.edit.as_ref())
                 .map(|ed| ed.placing_json()),
         ),
+        // Linked models and reference plans, as the Links panel lists them: see `state::links_json`.
+        "links" => {
+            let models: Vec<(String, bool)> = v
+                .links
+                .iter()
+                .map(|k| (k.name(), k.mode != crate::LinkMode::Hidden))
+                .collect();
+            let refs: Vec<_> = v.views.iter().flat_map(|w| &w.references).collect();
+            json(state::links_json(&models, &refs))
+        }
+        // `[{id, label, value_mm}]`: see `state::measurements_json`.
+        "measurements" => json(state::measurements_json(&v.dimensions)),
         // The status bar's counts and its text; null without a model.
         "status" => json(v.status()),
         // Working together (ADR 0038): see `collab::collab_json`. Null fields on the web (no
