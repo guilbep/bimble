@@ -170,7 +170,7 @@ pub fn run(m: &Model, name: &str, args: Value) -> Result<Vec<Command>, String> {
 }
 
 /// Read-only queries by name: "storeys", "materials", "elements" (an `ElementFilter`),
-/// "element" (`{"id": ...}`).
+/// "element" (`{"id": ...}`), "project", "views", "sheets", "schedules".
 pub fn query(m: &Model, name: &str, args: Value) -> Result<Value, String> {
     let v = match name {
         "storeys" => {
@@ -182,6 +182,15 @@ pub fn query(m: &Model, name: &str, args: Value) -> Result<Value, String> {
             serde_json::to_value(query::materials(m))
         }
         "elements" => serde_json::to_value(query::elements(m, &parse(args)?)),
+        "project" | "views" | "sheets" | "schedules" => {
+            parse::<NoArgs>(args)?;
+            match name {
+                "project" => serde_json::to_value(query::project(m)),
+                "views" => serde_json::to_value(query::views(m)),
+                "sheets" => serde_json::to_value(query::sheets(m)),
+                _ => serde_json::to_value(query::schedules(m)),
+            }
+        }
         "element" => {
             let id = parse::<IdArgs>(args)?.id;
             let e = query::element(m, id).ok_or(format!("no element {id:?}"))?;
@@ -189,7 +198,7 @@ pub fn query(m: &Model, name: &str, args: Value) -> Result<Value, String> {
         }
         _ => {
             return Err(format!(
-                "unknown query {name:?}; known: storeys, materials, elements, element"
+                "unknown query {name:?}; known: storeys, materials, elements, element, project, views, sheets, schedules"
             ));
         }
     };
@@ -309,6 +318,25 @@ mod tests {
         let v = query(&m, "element", json!({ "id": id })).unwrap();
         assert_eq!(v["id"], json!(id));
         assert!(query(&m, "storeys", json!({"x": 1})).is_err());
-        assert!(query(&m, "nope", json!({})).is_err());
+        let err = query(&m, "nope", json!({})).unwrap_err();
+        for k in [
+            "storeys",
+            "element",
+            "project",
+            "views",
+            "sheets",
+            "schedules",
+        ] {
+            assert!(err.contains(k), "{err}");
+        }
+        assert_eq!(
+            query(&m, "project", json!({})).unwrap()["name"],
+            json!(m.project_name)
+        );
+        for k in ["views", "sheets", "schedules"] {
+            let v = query(&m, k, Value::Null).unwrap();
+            assert!(v.is_array(), "{k}: {v}");
+        }
+        assert!(query(&m, "views", json!({"limit": 1})).is_err());
     }
 }
