@@ -465,6 +465,7 @@ export type PartKey =
   | "sharedfolder.share"
   | "sharedfolder.title"
   | "sharedfolder.youAre"
+  | "sheets.add"
   | "sheets.drawnChecked"
   | "sheets.hint"
   | "sheets.landscape"

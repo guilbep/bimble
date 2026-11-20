@@ -20,7 +20,7 @@ pub struct VerbInfo {
     pub summary: &'static str,
 }
 
-const VERBS: [VerbInfo; 11] = [
+const VERBS: [VerbInfo; 13] = [
     VerbInfo {
         name: "place",
         summary: "Place a new column, beam, wall or slab on a storey (storey-relative mm).",
@@ -65,7 +65,105 @@ const VERBS: [VerbInfo; 11] = [
         name: "mirror",
         summary: "Mirror elements in the vertical plane through axis.point along axis.dir; placements stay right-handed.",
     },
+    VerbInfo {
+        name: "add_sheet",
+        summary: "Add a sheet (default: the next free number, \"New sheet\", A1 landscape) with a new GlobalId.",
+    },
+    VerbInfo {
+        name: "set_sheet",
+        summary: "Change a sheet's number, name, paper (A4..A0), portrait or revision; missing ones are kept, an empty revision removes it.",
+    },
 ];
+
+/// Arguments of `add_sheet`.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AddSheetArgs {
+    /// Drawing number, unique; default: the next free one ("S-101" → "S-102").
+    number: Option<String>,
+    name: Option<String>,
+    /// A4, A3, A2, A1 or A0.
+    paper: Option<String>,
+    portrait: Option<bool>,
+}
+
+/// Arguments of `set_sheet`: the fields to change, others kept.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SetSheetArgs {
+    /// GlobalId of the sheet.
+    #[schemars(with = "String")]
+    id: GlobalId,
+    number: Option<String>,
+    name: Option<String>,
+    paper: Option<String>,
+    portrait: Option<bool>,
+    /// The title block's {revision}; empty: removed.
+    revision: Option<String>,
+}
+
+/// A sheet as `AddSheet` / `SetSheet` check it: valid, its number not used by another sheet.
+fn check_sheet(m: &Model, s: &bimble_core::sheet::Sheet) -> Result<(), String> {
+    let ids = m.view_ids();
+    s.validate(|v| ids.contains(&v))?;
+    if m.sheets
+        .values()
+        .any(|o| o.id != s.id && o.number == s.number)
+    {
+        return Err(format!("sheet number {} is already used", s.number));
+    }
+    Ok(())
+}
+
+/// One `AddSheet`, defaults as the viewer's New sheet (`Sheet::new`, `next_number`).
+fn add_sheet(m: &Model, a: AddSheetArgs) -> Result<Vec<Command>, String> {
+    use bimble_core::sheet::{Sheet, next_number};
+    let number = a
+        .number
+        .unwrap_or_else(|| next_number(m.sheets.values().map(|s| s.number.as_str())));
+    let mut s = Sheet::new(number, a.name.unwrap_or_else(|| "New sheet".into()));
+    if let Some(p) = a.paper {
+        s.paper = p;
+    }
+    if let Some(p) = a.portrait {
+        s.portrait = p;
+    }
+    check_sheet(m, &s)?;
+    Ok(vec![Command::AddSheet(s)])
+}
+
+/// One `SetSheet` with the given fields replaced; unchanged: no command.
+fn set_sheet(m: &Model, a: SetSheetArgs) -> Result<Vec<Command>, String> {
+    let old = m.sheets.get(&a.id).ok_or(format!("no sheet {:?}", a.id))?;
+    let mut s = old.clone();
+    if let Some(n) = a.number {
+        s.number = n;
+    }
+    if let Some(n) = a.name {
+        s.name = n;
+    }
+    if let Some(p) = a.paper {
+        s.paper = p;
+    }
+    if let Some(p) = a.portrait {
+        s.portrait = p;
+    }
+    if let Some(r) = a.revision {
+        if r.chars().count() > 200 {
+            return Err("revision: at most 200 characters".into());
+        }
+        if r.is_empty() {
+            s.fields.remove("revision");
+        } else {
+            s.fields.insert("revision".into(), r);
+        }
+    }
+    if s == *old {
+        return Ok(vec![]);
+    }
+    check_sheet(m, &s)?;
+    Ok(vec![Command::SetSheet(s)])
+}
 
 /// Arguments of `rotate`.
 #[derive(Deserialize, JsonSchema)]
@@ -252,6 +350,8 @@ pub fn describe(name: &str) -> Option<Value> {
         "set_project_field" => schemars::schema_for!(SetProjectFieldArgs),
         "rotate" => schemars::schema_for!(RotateArgs),
         "mirror" => schemars::schema_for!(MirrorArgs),
+        "add_sheet" => schemars::schema_for!(AddSheetArgs),
+        "set_sheet" => schemars::schema_for!(SetSheetArgs),
         _ => return None,
     };
     Some(s.to_value())
@@ -325,6 +425,8 @@ pub fn run(m: &Model, name: &str, args: Value) -> Result<Vec<Command>, String> {
         "set_project_field" => set_project_field(m, parse(args)?),
         "rotate" => rotate(m, parse(args)?),
         "mirror" => mirror(m, parse(args)?),
+        "add_sheet" => add_sheet(m, parse(args)?),
+        "set_sheet" => set_sheet(m, parse(args)?),
         _ => Err(format!("unknown verb {name:?}; known: {}", names())),
     }
 }
@@ -675,7 +777,9 @@ mod tests {
                 "set_material",
                 "set_project_field",
                 "rotate",
-                "mirror"
+                "mirror",
+                "add_sheet",
+                "set_sheet"
             ]
         );
         let s = describe("place").unwrap();
@@ -1188,5 +1292,46 @@ mod tests {
         // JSON has no NaN; the offset goes through `mm`, which refuses it.
         assert!(mm("cut", &[f64::NAN]).is_err());
         assert_eq!(m, before, "model unchanged");
+    }
+
+    /// add_sheet on the demo: "S-101", then "S-102"; the id survives a canonical round trip;
+    /// set_sheet number/paper/revision; unchanged: none; bad id, duplicate number, bad paper:
+    /// refused, model unchanged.
+    #[test]
+    fn add_and_set_sheet() {
+        let (mut m, _) = demo();
+        let mut h = History::default();
+        let cmds = run(&m, "add_sheet", json!({})).unwrap();
+        h.apply(&mut m, cmds).unwrap();
+        let cmds = run(&m, "add_sheet", json!({"name": "Beams"})).unwrap();
+        h.apply(&mut m, cmds).unwrap();
+        let mut nums: Vec<_> = m.sheets.values().map(|s| s.number.clone()).collect();
+        nums.sort();
+        assert_eq!(nums, ["S-101", "S-102"]);
+        let id = m.sheets.values().find(|s| s.number == "S-101").unwrap().id;
+        let json = serde_json::to_string(&m).unwrap();
+        let again: Model = serde_json::from_str(&json).unwrap();
+        assert!(again.sheets.contains_key(&id));
+
+        let set = json!({"id": id, "number": "S-200", "paper": "A3", "revision": "B"});
+        let cmds = run(&m, "set_sheet", set.clone()).unwrap();
+        assert_eq!(cmds.len(), 1);
+        h.apply(&mut m, cmds).unwrap();
+        let s = &m.sheets[&id];
+        assert_eq!((s.number.as_str(), s.paper.as_str()), ("S-200", "A3"));
+        assert_eq!(s.fields["revision"], "B");
+        assert!(run(&m, "set_sheet", set).unwrap().is_empty());
+
+        let before = m.clone();
+        for bad in [
+            json!({"id": GlobalId::new(), "number": "X"}),
+            json!({"id": id, "number": "S-102"}),
+            json!({"id": id, "paper": "B5"}),
+            json!({"id": id, "number": " "}),
+        ] {
+            assert!(run(&m, "set_sheet", bad.clone()).is_err(), "{bad}");
+        }
+        assert!(run(&m, "add_sheet", json!({"number": "S-102"})).is_err());
+        assert_eq!(m, before);
     }
 }

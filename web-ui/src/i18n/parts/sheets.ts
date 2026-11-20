@@ -15,6 +15,7 @@ export const fr = {
   "sheets.selectedView": "Vue sélectionnée",
   "sheets.view": "Vue",
   "sheets.viewScale": "Échelle (de la vue)",
+  "sheets.add": "Nouvelle feuille",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "page.sheets": "Sheets",
@@ -32,4 +33,5 @@ export const en: Record<keyof typeof fr, string> = {
   "sheets.selectedView": "Selected view",
   "sheets.view": "View",
   "sheets.viewScale": "Scale (the view's)",
+  "sheets.add": "New sheet",
 };
