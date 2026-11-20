@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { t } from "./i18n";
-import { state, element, rename, type ElementDetail } from "./bimble";
+import { state, element, rename, materials, openViews, type ElementDetail, type ViewSummary } from "./bimble";
 
+// Rendered inside `.props` (LeftPanel): rows as fr/View3D.html (view) and fr/SelectModify.html (element).
 const detail = ref<ElementDetail | null>(null);
 const loadError = ref<string | null>(null);
 const name = ref("");
@@ -40,60 +41,122 @@ const sizes = computed(() =>
     (e): e is [string, number] => typeof e[1] === "number",
   ),
 );
+
+// `open_views` is `{views, active, tabs}` (bridge.rs); bimble.ts types it loosely until then.
+const view = computed(() => {
+  const ov = openViews.value as unknown as { views?: ViewSummary[]; active?: string | null };
+  return ov.views?.find((v) => v.id === ov.active) ?? null;
+});
+const viewType = computed(() => {
+  const v = view.value;
+  if (!v) return "";
+  if (v.type === "plan") return t(v.look === "up" ? "view.ceiling" : "view.plan");
+  return t(v.type === "section" ? "view.section" : "view.three_d");
+});
+
+// The reference's four families; the other categories count as "other".
+const FAMILIES = [
+  { key: "concrete", swatch: "var(--bb-sheet)" },
+  { key: "steel", swatch: "var(--bb-sunk)" },
+  { key: "timber", swatch: "var(--bb-line)" },
+  { key: "other", swatch: "var(--bb-cream)" },
+] as const;
+const families = computed(() =>
+  FAMILIES.map((f) => ({
+    ...f,
+    count: materials.value
+      .filter((m) => (f.key === "other" ? !["concrete", "steel", "timber"].includes(m.category) : m.category === f.key))
+      .reduce((n, m) => n + m.element_count, 0),
+  })),
+);
+const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 </script>
 
 <template>
-  <aside class="panel" aria-labelledby="props-title">
-    <h2 id="props-title">{{ t('props.title') }}</h2>
-    <p v-if="state.selection.length === 0" class="quiet">{{ t('props.empty') }}</p>
-    <p v-else-if="state.selection.length > 1" class="many">
-      <span class="dot" aria-hidden="true" />{{ t('props.selected', { n: state.selection.length }) }}
-    </p>
-    <p v-else-if="loadError" class="error" role="alert">{{ t('props.error', { msg: loadError }) }}</p>
-    <template v-else-if="detail">
-      <label for="el-name">{{ t('props.name') }}</label>
+  <p v-if="state.selection.length > 1" class="pn" style="display:flex;align-items:center;gap:8px">
+    <span class="dot" style="background:var(--bb-selection)" aria-hidden="true" />{{ t('props.selected', { n: state.selection.length }) }}
+  </p>
+  <p v-else-if="loadError" class="error" role="alert">{{ t('props.error', { msg: loadError }) }}</p>
+  <template v-else-if="detail">
+    <div class="pn" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:var(--bb-selection)" />{{ detail.name }}</div>
+    <div class="row">
+      <label class="k" for="el-name">{{ t('props.name') }}</label>
       <input
         id="el-name"
         v-model="name"
-        type="text"
+        class="inp"
+        style="width:150px"
         :aria-invalid="renameError ? 'true' : 'false'"
         aria-describedby="el-name-error"
         @keydown.enter="commit"
         @blur="commit"
       />
-      <p id="el-name-error" role="alert" :class="{ error: renameError }">{{ renameError ? t('props.error', { msg: renameError }) : "" }}</p>
-      <dl>
-        <dt>{{ t('props.class') }}</dt><dd>{{ detail.class }}</dd>
-        <dt>{{ t('props.storey') }}</dt><dd>{{ detail.storey_name ?? "—" }}</dd>
-        <dt>{{ t('props.material') }}</dt><dd>{{ detail.material_name ?? "—" }}</dd>
-        <dt>{{ t('props.generator') }}</dt><dd>{{ detail.generator }}</dd>
-        <template v-for="[k, v] in sizes" :key="k">
-          <dt>{{ k }}</dt><dd class="mono">{{ v }}</dd>
-        </template>
-      </dl>
+    </div>
+    <p v-if="renameError" id="el-name-error" role="alert" class="error">{{ t('props.error', { msg: renameError }) }}</p>
+    <div class="row"><span class="k">{{ t('props.class') }}</span><span class="mono">{{ detail.class }}</span></div>
+    <div class="row"><span class="k">GlobalId</span><span class="mono"><span style="font-size:11.5px">{{ detail.id }}</span></span></div>
+    <div class="row"><span class="k">{{ t('props.storey') }}</span><span>{{ detail.storey_name ?? "—" }}</span></div>
+    <div class="row">
+      <span class="k">{{ t('props.material') }}</span>
+      <span class="sel-inp" style="width:150px" data-missing="set-material"><span class="ell">{{ detail.material_name ?? "—" }}</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+    </div>
+    <div class="row"><span class="k">{{ t('props.generator') }}</span><span class="mono">{{ detail.generator }}</span></div>
+    <template v-if="sizes.length">
+      <div class="sec">{{ t('el.sizes') }}</div>
+      <div v-for="[k, v] in sizes" :key="k" class="row">
+        <label class="k" :for="`el-${k}`">{{ k }}</label>
+        <span style="display:inline-flex;align-items:center;gap:6px">
+          <!-- ponytail: read-only until a verb sets one generator parameter. -->
+          <input :id="`el-${k}`" class="inp mono" :value="grouped(v)" readonly data-missing="set-generator-param" style="width:96px;text-align:right" />
+          <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
+        </span>
+      </div>
     </template>
-  </aside>
+  </template>
+  <template v-else-if="view">
+    <div class="pn">{{ t('view.props', { name: view.name }) }}</div>
+    <div class="row"><span class="k">{{ t('view.type') }}</span><span>{{ viewType }}</span></div>
+    <div class="row"><span class="k">{{ t('view.scale') }}</span><span class="mono">1:{{ view.scale }}</span></div>
+    <div class="row">
+      <span class="k">{{ t('view.phase') }}</span>
+      <span class="sel-inp" style="width:150px" data-missing="view phase filter"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+    </div>
+    <div class="row">
+      <span class="k">{{ t('view.subprojects') }}</span>
+      <span class="sel-inp" style="width:160px" data-missing="view sub-projects filter"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+    </div>
+    <div class="row"><span class="k">{{ t('view.detail') }}</span><span data-missing="view detail level" /></div>
+    <div class="row"><span class="k">{{ t('view.hidden') }}</span><span class="mono" data-missing="hidden classes in view" /></div>
+    <div class="sec">{{ t('view.families') }}</div>
+    <label v-for="f in families" :key="f.key" class="row" style="padding-left:0px">
+      <span style="display:inline-flex;gap:8px;align-items:center">
+        <input type="checkbox" checked disabled data-missing="family visibility in view"> <span :style="`width:14px;height:14px;border:1px solid var(--bb-ink);background:${f.swatch};display:inline-block`" />{{ t(`fam.${f.key}`) }}</span>
+      <span class="mono" style="font-size:12px;color:var(--bb-stone)">{{ grouped(f.count) }}</span>
+    </label>
+    <div class="sec" data-missing="class counts and class visibility in view">{{ t('view.classes') }}</div>
+  </template>
+  <p v-else class="row k">{{ t('props.empty') }}</p>
 </template>
 
 <style scoped>
-/* Panel: cream ground, 16px padding; line border is decoration only. */
-.panel { flex: 0 0 280px; max-width: 100%; padding: var(--bb-space-4); border-right: var(--bb-border-hairline); background: var(--bb-cream); }
-@media (max-width: 600px) { .panel { flex: 1 1 100%; border-right: 0; border-bottom: var(--bb-border-hairline); } }
-/* Panel title: Sora 500 14px. */
-h2 { font: 500 var(--bb-size-ui) var(--bb-font-display); margin: 0 0 var(--bb-space-3); }
-.quiet { color: var(--bb-stone); margin: 0; }
-.many { display: flex; align-items: center; gap: var(--bb-space-2); margin: 0; }
-/* Status dot: 12px pink disc with a 1px ink outline. */
-.dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bb-selection); border: 1px solid var(--bb-ink); }
-/* Input: label stone 13px above; sheet fill, 1px stone border, 8px radius, 32px, ink text. */
-label { display: block; font-size: var(--bb-size-small); color: var(--bb-stone); margin-bottom: var(--bb-space-1); }
-input { width: 100%; height: var(--bb-target); font: var(--bb-size-body) var(--bb-font-text); color: var(--bb-ink); background: var(--bb-sheet); border: var(--bb-border-control); border-radius: var(--bb-radius-sm); padding: 0 var(--bb-space-2); }
-input:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
-#el-name-error { margin: var(--bb-space-1) 0 0; min-height: 1.2em; }
-/* Error: ink text on an ochre band, with the word "Error". */
-.error { color: var(--bb-ink); background: var(--bb-error); font-size: var(--bb-size-ui); margin: var(--bb-space-1) 0 0; padding: 2px var(--bb-space-2); overflow-wrap: anywhere; }
-dl { display: grid; grid-template-columns: auto 1fr; gap: var(--bb-space-1) var(--bb-space-3); margin: var(--bb-space-3) 0 0; }
-dt { color: var(--bb-stone); }
-dd { margin: 0; overflow-wrap: anywhere; }
+/* .pn{font-family:'Sora',sans-serif;font-weight:500;font-size:14px;margin:0 0 4px} */
+.pn { font-family: var(--bb-font-display); font-weight: 500; font-size: 14px; margin: 0 0 4px; }
+/* .row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13.5px;min-height:22px} */
+.row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; min-height: 22px; }
+.row .k, .k { color: var(--bb-stone); white-space: nowrap; }
+p.row { margin: 0; }
 .mono { font-family: var(--bb-font-data); }
+/* .inp{height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 8px;font:inherit;font-size:13.5px;color:#141414;min-width:0} */
+.inp { height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 8px; font: inherit; font-size: 13.5px; color: var(--bb-ink); min-width: 0; }
+.inp.mono { font-family: 'DM Mono', monospace; font-size: 13px; }
+.inp:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
+/* .sel-inp{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;height:30px;border:1px solid #5C574D;border-radius:8px;background:#FFFFFF;padding:0 6px 0 8px;font-size:13.5px;white-space:nowrap} */
+.sel-inp { display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 6px 0 8px; font-size: 13.5px; white-space: nowrap; }
+.ell { overflow: hidden; text-overflow: ellipsis; }
+/* .sec{font-size:12px;font-family:'DM Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#5C574D;margin-top:6px} */
+.sec { font-size: 12px; font-family: 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
+/* .dot{width:12px;height:12px;border-radius:50%;border:1px solid #141414;display:inline-block;flex:none} */
+.dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--bb-ink); display: inline-block; flex: none; }
+/* Error: ink text on an ochre band, with the word "Error". */
+.error { color: var(--bb-ink); background: var(--bb-error); font-size: 13.5px; margin: 0; padding: 2px 8px; overflow-wrap: anywhere; }
 </style>
