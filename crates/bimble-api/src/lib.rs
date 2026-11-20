@@ -2,3 +2,4 @@
 //! Queries first: small serde summaries, never whole meshes.
 
 pub mod query;
+pub mod verbs;

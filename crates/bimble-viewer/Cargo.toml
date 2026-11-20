@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 bimble-drawing.workspace = true
+bimble-api.workspace = true
 bimble-core.workspace = true
 bimble-geom.workspace = true
 bimble-ifc.workspace = true

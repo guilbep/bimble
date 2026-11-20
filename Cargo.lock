@@ -484,6 +484,7 @@ name = "bimble-api"
 version = "0.15.0"
 dependencies = [
  "bimble-core",
+ "bimble-geom",
  "serde",
  "serde_json",
 ]
@@ -584,6 +585,7 @@ dependencies = [
 name = "bimble-viewer"
 version = "0.15.0"
 dependencies = [
+ "bimble-api",
  "bimble-core",
  "bimble-drawing",
  "bimble-geom",
