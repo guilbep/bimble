@@ -10,12 +10,13 @@ import * as leftpanel from "./parts/leftpanel";
 import * as viewtabs from "./parts/viewtabs";
 import * as statusbar from "./parts/statusbar";
 import * as modifier from "./parts/modifier";
+import * as home from "./parts/home";
 
 export type Lang = "fr" | "en";
 const KEY = "bimble.lang";
-const parts = [quickbar, tabsbar, ribbon, leftpanel, viewtabs, statusbar, modifier] as const;
+const parts = [quickbar, tabsbar, ribbon, leftpanel, viewtabs, statusbar, modifier, home] as const;
 type Key = MessageKey | keyof typeof quickbar.fr | keyof typeof tabsbar.fr | keyof typeof ribbon.fr
-  | keyof typeof leftpanel.fr | keyof typeof viewtabs.fr | keyof typeof statusbar.fr | keyof typeof modifier.fr;
+  | keyof typeof leftpanel.fr | keyof typeof viewtabs.fr | keyof typeof statusbar.fr | keyof typeof modifier.fr | keyof typeof home.fr;
 const merge = (base: Record<string, string>, l: Lang) => Object.assign({}, base, ...parts.map((p) => p[l])) as Record<Key, string>;
 const messages = { fr: merge(fr, "fr"), en: merge(en, "en") };
 

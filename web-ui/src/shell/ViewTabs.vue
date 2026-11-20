@@ -3,16 +3,18 @@ import { computed } from "vue";
 import { openViews, sheets, tabCall, runAction, type OpenTab } from "../bimble";
 import { t } from "../i18n";
 import { viewName } from "./viewName";
+import { currentPage } from "../pages";
 
 // `query("open_views")` (bridge.rs): the open tabs in order; `current` is what the main view shows.
 const same = (a: OpenTab | null, b: OpenTab | null) => JSON.stringify(a) === JSON.stringify(b);
 
 const tabs = computed(() => {
   const o = openViews.value;
+  const page = currentPage.value;
   // Sheet names only when a sheet tab is open (one query per change).
   const sh = o.tabs.some((x) => x.type === "sheet") ? sheets() : [];
   return o.tabs.map((x) => {
-    const on = same(x, o.current);
+    const on = !page && same(x, o.current);
     switch (x.type) {
       case "view": return { tab: x, on, name: ((v) => (v ? viewName(v) : ""))(o.views.find((v) => v.id === x.id)) };
       case "sheet": { const s = sh.find((s) => s.id === x.id); return { tab: x, on, name: s ? `${s.number} · ${s.name}` : "" }; }
@@ -22,6 +24,8 @@ const tabs = computed(() => {
     }
   });
 });
+// An open page is the current tab: its name is the i18n key `page.<id>` from the page's own part (the id when it has none).
+const pageName = (id: string) => { try { return t(`page.${id}` as never); } catch { return id; } };
 const paper = computed(() => openViews.value.paper);
 // The switch is one action: click the side that is not on.
 const picture = (onPaper: boolean) => { if (onPaper !== paper.value.on) runAction("paper_view"); };
@@ -31,10 +35,12 @@ const picture = (onPaper: boolean) => { if (onPaper !== paper.value.on) runActio
   <!-- Reference: .main > .vtabs (fr/View3D.html, fr/PlanOnPaper.html). -->
   <div class="vtabs" data-bb="viewtabs">
     <a v-for="(tab, i) in tabs" :key="i" class="vtab" :class="{ on: tab.on }" href="#"
-       :aria-current="tab.on ? 'page' : undefined" @click.prevent="tabCall('activate', tab.tab)">{{ tab.name }}<span class="xx" role="button" tabindex="0" :aria-label="t('viewtabs.close')"
+       :aria-current="tab.on ? 'page' : undefined" @click.prevent="currentPage = null; tabCall('activate', tab.tab)">{{ tab.name }}<span class="xx" role="button" tabindex="0" :aria-label="t('viewtabs.close')"
        @click.prevent.stop="tabCall('close', tab.tab)" @keydown.enter.prevent.stop="tabCall('close', tab.tab)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span></a>
+    <a v-if="currentPage" class="vtab on" href="#" aria-current="page" data-bb="viewtab-page" @click.prevent>{{ pageName(currentPage) }}<span class="xx" role="button" tabindex="0" :aria-label="t('viewtabs.close')"
+       @click.prevent.stop="currentPage = null" @keydown.enter.prevent.stop="currentPage = null"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span></a>
     <!-- No view open (a model without stored views): an empty pill holds the strip's height. -->
-    <span v-if="!tabs.length" class="vtab" aria-hidden="true" style="visibility:hidden"><span class="xx" /></span>
+    <span v-if="!tabs.length && !currentPage" class="vtab" aria-hidden="true" style="visibility:hidden"><span class="xx" /></span>
     <span style="flex:1"></span>
     <!-- Model / On paper: the "paper_view" action toggles it (pressed = on paper). -->
     <span v-if="paper.offered" class="seg" data-bb="view-picture" role="group" :aria-label="t('viewtabs.picture')"><span
