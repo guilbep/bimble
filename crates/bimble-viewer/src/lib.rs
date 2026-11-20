@@ -955,6 +955,8 @@ struct Viewer {
     /// The ribbon's open tab, the command palette, tabs of open views and sheets.
     ribbon_tab: ribbon::Tab,
     palette: Option<ribbon::Palette>,
+    /// The last actions run (any path), newest first, each once (bridge `recent_actions`).
+    recent_actions: Vec<ribbon::Action>,
     open_tabs: Vec<ribbon::TabRef>,
     /// A schedule open in the main view, and the schedules' row counts per scene revision.
     schedule: Option<schedules::OpenSchedule>,
@@ -1136,6 +1138,7 @@ impl Viewer {
             standards_query: String::new(),
             ribbon_tab: ribbon::Tab::default(),
             palette: None,
+            recent_actions: Vec::new(),
             open_tabs: Vec::new(),
             schedule: None,
             project_page: None,

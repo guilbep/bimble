@@ -464,11 +464,49 @@ pub(crate) struct Palette {
     pub frames: u32,
 }
 
-/// Whether every word of `query` starts a word of `label` (case-insensitive), or the
+/// Lowercase with the Latin accents folded ("Élévation" → "elevation"): both palettes match alike.
+// ponytail: Latin-1 accents only (French, German, Spanish); add a Unicode normalizer if another script needs it.
+fn fold(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => 'a',
+            'ç' => 'c',
+            'è' | 'é' | 'ê' | 'ë' => 'e',
+            'ì' | 'í' | 'î' | 'ï' => 'i',
+            'ñ' => 'n',
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' => 'o',
+            'ù' | 'ú' | 'û' | 'ü' => 'u',
+            'ý' | 'ÿ' => 'y',
+            c => c,
+        })
+        .collect()
+}
+
+/// The indices of `items` that match `query`, in their order: the egui palette's filter, shared
+/// with the web palette (bridge `palette_match`).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn palette_match(items: &[String], query: &str) -> Vec<usize> {
+    (0..items.len())
+        .filter(|&i| matches(&items[i], query))
+        .collect()
+}
+
+/// How many recent actions the viewer keeps (bridge `recent_actions`).
+const RECENT_ACTIONS: usize = 5;
+
+/// Put `a` first in `recent`, once, keeping the last [`RECENT_ACTIONS`].
+fn push_recent(recent: &mut Vec<Action>, a: Action) {
+    recent.retain(|&r| r != a);
+    recent.insert(0, a);
+    recent.truncate(RECENT_ACTIONS);
+}
+
+/// Whether every word of `query` starts a word of `label` (case- and accent-insensitive), or the
 /// query is part of it: "sec box" finds "Section box", "dim" finds "Sheet: dimension".
 pub(crate) fn matches(label: &str, query: &str) -> bool {
-    let l = label.to_lowercase();
-    let q = query.trim().to_lowercase();
+    let l = fold(label);
+    let q = fold(query.trim());
     if q.is_empty() || l.contains(&q) {
         return true;
     }
@@ -613,6 +651,7 @@ impl Viewer {
         if !self.action_enabled(a) {
             return;
         }
+        push_recent(&mut self.recent_actions, a);
         match a {
             Action::New => self.new_model(),
             Action::Open => self.files.pick(files::Purpose::Open, ctx),
@@ -1757,6 +1796,53 @@ enum Close {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hand-checked: the shared matcher keeps the list order, matches word starts, folds accents.
+    #[test]
+    fn palette_match_ranks_and_folds_accents() {
+        let items: Vec<String> = [
+            "Zone de coupe Section box",
+            "Élévation Elevation",
+            "Coupe Section",
+            "Enregistrer Save",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(palette_match(&items, "sec"), vec![0, 2]);
+        assert_eq!(palette_match(&items, "sec box"), vec![0]);
+        // Accent case: "élé" and "ele" find the same row (the old matcher missed "ele" in "Élévation").
+        assert_eq!(palette_match(&items, "elev"), vec![1]);
+        assert_eq!(palette_match(&items, "élé"), vec![1]);
+        assert!(matches("Élévation", "elevation"));
+        assert_eq!(palette_match(&items, ""), vec![0, 1, 2, 3]);
+    }
+
+    /// Newest first, each once, at most five.
+    #[test]
+    fn recent_actions_order_and_dedup() {
+        let mut r = Vec::new();
+        for a in [
+            Action::Save,
+            Action::Undo,
+            Action::Save,
+            Action::Redo,
+            Action::New,
+            Action::Open,
+            Action::Home,
+        ] {
+            push_recent(&mut r, a);
+        }
+        assert_eq!(
+            r,
+            vec![
+                Action::Home,
+                Action::Open,
+                Action::New,
+                Action::Redo,
+                Action::Save
+            ]
+        );
+    }
 
     /// The bridge's tab JSON reads back as the same tab; a bad one is an error, not a panic.
     #[test]

@@ -5,15 +5,16 @@ export const hint = "palette.hint";
 <script setup lang="ts">
 // Screen D8, Command palette (wireframes v01 fr/Palette.html). Lists the ribbon actions (`query("actions")`),
 // the views (`open_views`), the sheets and the schedules; each entry runs its Rust call.
-// Recent commands: Rust keeps none (data-missing, the reference draws none).
+// Recent commands (`recent_actions`, Rust's last 5) come first when the query is empty, without a
+// heading: the reference draws no recent section, so its layout holds.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { actions, openView, openViews, runAction, scheduleList, sheets, state, tabCall, type ScheduleDef } from "../bimble";
+import { actions, openView, openViews, paletteMatch, recentActions, runAction, scheduleList, sheets, state, tabCall, type ScheduleDef } from "../bimble";
 import { t } from "../i18n";
 import { RIBBON, type RibbonTool } from "../shell/ribbon-tabs";
 import { viewName } from "../shell/viewName";
 import { currentDialog } from ".";
 
-interface Item { label: string; /** Also searched: the Rust (English) label. */ also?: string; note: string; kbd: string; icon: string; enabled: boolean; go: () => string | null }
+interface Item { /** The Rust action name, for actions. */ name?: string; label: string; /** Also searched: the Rust (English) label. */ also?: string; note: string; kbd: string; icon: string; enabled: boolean; go: () => string | null }
 
 // Icons copied from the reference (and the navigator's, for plans).
 const CUBE = '<path d="M12 3 20 7v10l-8 4-8-4V7z"/><path d="M4 7l8 4 8-4M12 11v10"/>';
@@ -34,6 +35,7 @@ const items = computed<Item[]>(() => {
   const list: Item[] = actions.value.map((a) => {
     const tool = tools.get(a.name);
     return {
+      name: a.name,
       label: copy(`action.${a.name}`, a.label),
       also: a.label,
       note: a.tab in TAB ? t(TAB[a.tab]!) : copy(`actionTab.${a.tab}`, a.tab),
@@ -54,12 +56,17 @@ const items = computed<Item[]>(() => {
   return list;
 });
 
-// Filtering is UI work: case- and accent-insensitive substring, of the label or the Rust label ("sec" finds "Zone de coupe").
-const fold = (s: string) => s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+// Filtering is Rust's (`palette_match`, egui's word-start matcher, accent-insensitive), on the label
+// joined with the Rust label: "sec" finds "Zone de coupe" through "Section box".
 const text = ref("");
 const shown = computed(() => {
-  const q = fold(text.value.trim());
-  return q ? items.value.filter((i) => fold(`${i.label} ${i.also ?? ""}`).includes(q)) : items.value;
+  const all = items.value;
+  const q = text.value.trim();
+  if (q) return paletteMatch(q, all.map((i) => `${i.label} ${i.also ?? ""}`)).map((k) => all[k]!);
+  let recent: string[] = [];
+  try { recent = recentActions(); } catch { /* no viewer yet */ }
+  const first = recent.map((n) => all.find((i) => i.name === n)).filter((i): i is Item => !!i);
+  return [...first, ...all.filter((i) => !first.includes(i))];
 });
 const index = ref(0);
 watch(text, () => (index.value = 0));

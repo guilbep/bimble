@@ -125,6 +125,18 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
             let d = query::element(model(v)?, a.id).ok_or("no element with this id")?;
             json(d)
         }
+        // The indices of `items` matching `q`, as the egui palette filters (case- and accent-insensitive).
+        "palette_match" => {
+            #[derive(serde::Deserialize)]
+            struct Args {
+                q: String,
+                items: Vec<String>,
+            }
+            let a: Args = serde_json::from_str(args_json).map_err(|e| e.to_string())?;
+            json(crate::ribbon::palette_match(&a.items, &a.q))
+        }
+        // The last 5 actions run (ribbon, palette, keys, bridge), newest first, each once: [name].
+        "recent_actions" => json(v.recent_actions.iter().map(|a| a.name()).collect::<Vec<_>>()),
         // Every ribbon action with its state now, for the page to draw (ADR 0048).
         "actions" => json(
             crate::ribbon::ALL_ACTIONS

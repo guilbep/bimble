@@ -529,3 +529,13 @@ export const links = () => tryQuery<Link[]>("links", []);
 /** Measurements kept in the viewer (bridge query "measurements"); `label` as the egui panel shows it. */
 export type Measurement = { id: number; label: string; value_mm: number };
 export const measurements = () => tryQuery<Measurement[]>("measurements", []);
+
+/** Rust's palette filter (`palette_match`, the egui one): the matching indices of `items`, in order. */
+export function paletteMatch(q: string, items: string[]): number[] {
+  return query<number[]>("palette_match", { q, items });
+}
+
+/** The last 5 actions run through Rust (`recent_actions`), newest first: their names. */
+export function recentActions(): string[] {
+  return query<string[]>("recent_actions");
+}
