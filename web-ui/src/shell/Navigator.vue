@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { t } from "../i18n";
 import { viewName } from "./viewName";
 import { currentPage } from "../pages";
-import { actions, links, measurements, openView, openViews, runAction, scheduleList, sheets, state, storeys, type ViewSummary } from "../bimble";
+import { actions, links, query, select, measurements, openView, openViews, runAction, scheduleList, sheets, state, storeys, type ViewSummary } from "../bimble";
 
 // `open_views` is `{views, active, tabs}` (bridge.rs); bimble.ts types it loosely until then.
 const ov = computed(() => openViews.value as unknown as { views?: ViewSummary[]; active?: string | null });
@@ -24,6 +24,33 @@ const linkCount = computed(() => { void state.value.rev; void openViews.value; r
 const measureCount = computed(() => { void state.value.rev; void openViews.value; return measurements().length; });
 const objects = computed(() => storeys.value.reduce((n, s) => n + s.element_count, 0));
 const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+
+// Object tree (storey → IFC class → elements), lazy: children load when a row opens. Local UI state only.
+type El = { id: string; class: string; name: string };
+const LIMIT = 200;
+const objOpen = ref(false);
+const openKeys = ref(new Set<string>());
+const classes = ref(new Map<string, [string, number][]>());
+const elems = ref(new Map<string, El[]>());
+function toggle(key: string, load: () => void) {
+  const s = new Set(openKeys.value);
+  if (s.delete(key)) { openKeys.value = s; return; }
+  load(); s.add(key); openKeys.value = s;
+}
+function openStorey(id: string) {
+  toggle(id, () => {
+    // ponytail: counts by grouping the storey's elements (MAX_ELEMENTS 10 000); a per-class count query if storeys grow past that.
+    const n = new Map<string, number>();
+    for (const e of query<El[]>("elements", { storey: id, limit: 10000 })) n.set(e.class, (n.get(e.class) ?? 0) + 1);
+    classes.value = new Map(classes.value).set(id, [...n].sort((a, b) => a[0].localeCompare(b[0])));
+  });
+}
+function openClass(storey: string, cls: string) {
+  const key = `${storey}/${cls}`;
+  toggle(key, () => { elems.value = new Map(elems.value).set(key, query<El[]>("elements", { storey, class: cls, limit: LIMIT })); });
+}
+// The model changed: drop loaded children so open rows reload.
+watch(() => state.value.rev, () => { classes.value = new Map(); elems.value = new Map(); openKeys.value = new Set(); });
 
 function icon(v: ViewSummary): "three_d" | "plan" | "section" {
   return v.type === "section" ? "section" : v.type === "plan" ? "plan" : "three_d";
@@ -64,10 +91,33 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
       <span>{{ t('nav.sheets') }}</span><span class="n">{{ sheetCount ?? "" }}</span>
     </a>
-    <a class="ti h" href="#" style="padding-left:6px" data-missing="object-tree" @click.prevent>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+    <a class="ti h" href="#" style="padding-left:6px" :aria-expanded="objOpen" @click.prevent="objOpen = !objOpen">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="objOpen ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
       <span>{{ t('nav.objects') }}</span><span class="n">{{ grouped(objects) }}</span>
     </a>
+    <template v-if="objOpen">
+      <template v-for="s in storeys" :key="s.id">
+        <a class="ti" href="#" style="padding-left:22px" :aria-expanded="openKeys.has(s.id)" @click.prevent="openStorey(s.id)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="openKeys.has(s.id) ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
+          <span>{{ s.name }}</span><span class="n">{{ grouped(s.element_count) }}</span>
+        </a>
+        <template v-if="openKeys.has(s.id)">
+          <template v-for="[c, n] in classes.get(s.id) ?? []" :key="c">
+            <a class="ti" href="#" style="padding-left:38px" :aria-expanded="openKeys.has(`${s.id}/${c}`)" @click.prevent="openClass(s.id, c)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="openKeys.has(`${s.id}/${c}`) ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
+              <span>{{ c }}</span><span class="n">{{ grouped(n) }}</span>
+            </a>
+            <template v-if="openKeys.has(`${s.id}/${c}`)">
+              <a
+                v-for="e in elems.get(`${s.id}/${c}`) ?? []" :key="e.id" class="ti" :class="{ sel: state.selection.includes(e.id) }"
+                href="#" style="padding-left:54px" @click.prevent="select([e.id])"
+              ><span>{{ e.name || e.id }}</span></a>
+              <span v-if="n > LIMIT" class="ti" style="padding-left:54px;color:var(--bb-stone)">{{ t('nav.more', { n: n - LIMIT }) }}</span>
+            </template>
+          </template>
+        </template>
+      </template>
+    </template>
     <a class="ti h" href="#" style="padding-left:6px" data-missing="subprojects query" @click.prevent>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
       <span>{{ t('nav.subprojects') }}</span><span class="n" />

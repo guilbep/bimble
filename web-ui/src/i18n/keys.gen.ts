@@ -164,6 +164,7 @@ export type PartKey =
   | "modify.visibility"
   | "nav.links"
   | "nav.measures"
+  | "nav.more"
   | "nav.newView"
   | "nav.objects"
   | "nav.refs"
