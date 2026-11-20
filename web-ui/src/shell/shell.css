@@ -1,0 +1,10 @@
+/* Window frame (wireframes v01, fr/View3D.html <style>). Values with no --bb-* token cite the reference rule. */
+/* .app{height:900px;display:flex;flex-direction:column;font-size:14px;line-height:1.35;overflow:hidden} — 100vh so the lab fills any window; 900 at the check size. */
+.bb-app { height: 100vh; display: flex; flex-direction: column; background: var(--bb-cream); color: var(--bb-ink); font-family: var(--bb-font-text); font-size: var(--bb-size-ui); line-height: 1.35; overflow: hidden; position: relative; }
+.bb-app *, .bb-app *::before, .bb-app *::after { box-sizing: border-box; }
+/* .work{flex:1;display:flex;min-height:0} */
+.bb-work { flex: 1; display: flex; min-height: 0; }
+/* .main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative} */
+.bb-main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+/* .vp{flex:1;background:#FFFFFF;position:relative;overflow:hidden;min-height:0} */
+.bb-vp { flex: 1; background: var(--bb-sheet); position: relative; overflow: hidden; min-height: 0; }

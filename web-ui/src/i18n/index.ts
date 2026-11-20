@@ -2,10 +2,22 @@
 import { ref } from "vue";
 import { fr, type MessageKey } from "./fr";
 import { en } from "./en";
+// One part per shell component: each ticket adds keys only in its own part (en typed against fr, so a missing key fails typecheck).
+import * as quickbar from "./parts/quickbar";
+import * as tabsbar from "./parts/tabsbar";
+import * as ribbon from "./parts/ribbon";
+import * as leftpanel from "./parts/leftpanel";
+import * as viewtabs from "./parts/viewtabs";
+import * as statusbar from "./parts/statusbar";
+import * as modifier from "./parts/modifier";
 
 export type Lang = "fr" | "en";
 const KEY = "bimble.lang";
-const messages = { fr, en } as const;
+const parts = [quickbar, tabsbar, ribbon, leftpanel, viewtabs, statusbar, modifier] as const;
+type Key = MessageKey | keyof typeof quickbar.fr | keyof typeof tabsbar.fr | keyof typeof ribbon.fr
+  | keyof typeof leftpanel.fr | keyof typeof viewtabs.fr | keyof typeof statusbar.fr | keyof typeof modifier.fr;
+const merge = (base: Record<string, string>, l: Lang) => Object.assign({}, base, ...parts.map((p) => p[l])) as Record<Key, string>;
+const messages = { fr: merge(fr, "fr"), en: merge(en, "en") };
 
 function initial(): Lang {
   try {
@@ -24,7 +36,7 @@ export function setLang(l: Lang): void {
 }
 
 /** The message for `key` in the current language; `{name}` takes vars.name. Reactive: reads `lang`. */
-export function t(key: MessageKey, vars: Record<string, string | number> = {}): string {
+export function t(key: Key, vars: Record<string, string | number> = {}): string {
   return messages[lang.value][key].replace(/\{(\w+)\}/g, (m, k: string) => String(vars[k] ?? m));
 }
 
