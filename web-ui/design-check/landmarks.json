@@ -254,7 +254,7 @@
   },
   "status-chips": {
     "ref": ".status > .chip",
-    "lab": "[data-bb=\"status-chips\"]"
+    "lab": "[data-bb=\"status-chip\"]"
   },
   "status-counts": {
     "ref": ".status > .mono.q ~ .mono.q",
