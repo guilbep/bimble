@@ -21,14 +21,14 @@
 # with a reason written on its line, never to make a slower commit pass.
 #
 # name                  budget   why
-LabSmallFCP             300ms    provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LabSmallWasmReady       8500ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LabSmallModelShown      9000ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LabSmallBytes           10MB     provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LabLargeFCP             300ms    provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LabLargeWasmReady       8500ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LabLargeModelShown      11500ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LabLargeBytes           11MB     provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-ViewerLargeFCP          150ms    provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-ViewerLargeTBT          2500ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-ViewerLargeBytes        10MB     provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LabSmallFCP             390ms    CI median, run 44835622409 (21 Nov 2026, 3 Lighthouse runs, ubuntu-latest): replaces the provisional local value
+LabSmallWasmReady       6100ms   CI median, run 44835622409 (21 Nov 2026, 3 Lighthouse runs, ubuntu-latest): replaces the provisional local value
+LabSmallModelShown      6900ms   CI median, run 44835622409 (21 Nov 2026, 3 Lighthouse runs, ubuntu-latest): replaces the provisional local value
+LabSmallBytes           6.8MB    CI median, run 44835622409 (21 Nov 2026, 3 Lighthouse runs, ubuntu-latest): replaces the provisional local value
+LabLargeFCP             360ms    CI median, run 44835622409 (21 Nov 2026, 3 Lighthouse runs, ubuntu-latest): replaces the provisional local value
+LabLargeWasmReady       6000ms   CI median, run 44835622409 (21 Nov 2026, 3 Lighthouse runs, ubuntu-latest): replaces the provisional local value
+LabLargeModelShown      10000ms  CI median, run 44835622409 (21 Nov 2026, 3 Lighthouse runs, ubuntu-latest): replaces the provisional local value
+LabLargeBytes           7.3MB    CI median, run 44835622409 (21 Nov 2026, 3 Lighthouse runs, ubuntu-latest): replaces the provisional local value
+ViewerLargeFCP          120ms    CI median, run 44835622409 (21 Nov 2026, 3 Lighthouse runs, ubuntu-latest): replaces the provisional local value
+ViewerLargeTBT          4000ms   CI median, run 44835622409 (21 Nov 2026, 3 Lighthouse runs, ubuntu-latest): replaces the provisional local value
+ViewerLargeBytes        6.6MB    CI median, run 44835622409 (21 Nov 2026, 3 Lighthouse runs, ubuntu-latest): replaces the provisional local value
