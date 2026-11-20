@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { state, element, actions, runAction, runVerb } from "../bimble";
+import { state, element, actions, runAction, runVerb, rotate, mirror } from "../bimble";
 import { currentPage } from "../pages";
 import { t } from "../i18n";
 import { classNoun, parseMm } from "../i18n/parts/modify";
@@ -26,14 +26,28 @@ watch(
 );
 
 // Panel state only: which verb the vector button runs, and the vector.
-const mode = ref<"move" | "copy">("move");
+const mode = ref<"move" | "copy" | "rotate" | "mirror">("move");
 const vec = ref(["0", "0", "0"]);
+const angle = ref("90");
+// Mirror axis: point X, Y then direction X, Y.
+const axis = ref(["0", "0", "0", "1"]);
 const error = ref<string | null>(null);
 
 function byVector(): void {
   const d = vec.value.map(parseMm);
   if (d.some((x) => x === null)) { error.value = t("modify.vector"); return; }
   error.value = runVerb(mode.value, { ids: ids.value, d });
+}
+function byAngle(): void {
+  const a = Number(angle.value.replace(",", "."));
+  if (!angle.value.trim() || !Number.isFinite(a)) { error.value = t("modify.angle"); return; }
+  error.value = rotate(ids.value, a);
+}
+function byAxis(): void {
+  const v = axis.value.map(parseMm);
+  if (v.some((x) => x === null)) { error.value = t("modify.axis"); return; }
+  const [px, py, dx, dy] = v as number[];
+  error.value = mirror(ids.value, { point: [px!, py!], dir: [dx!, dy!] });
 }
 function remove(): void { error.value = runVerb("delete", { ids: ids.value }); }
 
@@ -47,8 +61,8 @@ const groups = computed<{ key: string; tools: Tool[] }[]>(() => [
   { key: "modify.transform", tools: [
     { key: "modify.move", icon: '<path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>', on: mode.value === "move", run: () => (mode.value = "move") },
     { key: "modify.copy", icon: '<rect x="8" y="8" width="12" height="12"/><path d="M16 8V4H4v12h4"/>', on: mode.value === "copy", run: () => (mode.value = "copy") },
-    missing("modify.rotate", "rotate verb", '<path d="M20 12a8 8 0 1 1-3-6.2"/><path d="M20 4v5h-5"/>'),
-    missing("modify.mirror", "mirror verb", '<path d="M12 3v18"/><path d="M9 7 3 17h6zM15 7l6 10h-6z"/>'),
+    { key: "modify.rotate", icon: '<path d="M20 12a8 8 0 1 1-3-6.2"/><path d="M20 4v5h-5"/>', on: mode.value === "rotate", run: () => (mode.value = "rotate") },
+    { key: "modify.mirror", icon: '<path d="M12 3v18"/><path d="M9 7 3 17h6zM15 7l6 10h-6z"/>', on: mode.value === "mirror", run: () => (mode.value = "mirror") },
   ] },
   { key: "modify.geometry", tools: [
     missing("modify.align", "align verb", '<path d="M4 4v16"/><rect x="7" y="6" width="10" height="4"/><rect x="7" y="14" width="14" height="4"/>'),
@@ -82,15 +96,32 @@ function click(tool: Tool): void { if (!tool.off) tool.run?.(); }
       <div class="gname">{{ t(g.key) }}</div>
     </div>
     <div class="vec">
-      <span class="lbl">{{ t('modify.vector') }}</span>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <label v-for="(axis, i) in ['X', 'Y', 'Z']" :key="axis" style="display:inline-flex;gap:6px;align-items:center">
-          <span class="mono" style="font-size:12px">{{ axis }}</span>
-          <input v-model="vec[i]" class="inp mono" style="width:86px;text-align:right" @keydown.enter="byVector" />
-        </label>
-      </div>
+      <template v-if="mode === 'rotate'">
+        <label class="lbl" for="mod-angle">{{ t('modify.angle') }}</label>
+        <input id="mod-angle" v-model="angle" class="inp mono" style="width:86px;text-align:right" @keydown.enter="byAngle" />
+      </template>
+      <template v-else-if="mode === 'mirror'">
+        <span class="lbl">{{ t('modify.axis') }}</span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <label v-for="(a, i) in ['X', 'Y', 'dX', 'dY']" :key="a" style="display:inline-flex;gap:6px;align-items:center">
+            <span class="mono" style="font-size:12px">{{ a }}</span>
+            <input v-model="axis[i]" class="inp mono" style="width:70px;text-align:right" @keydown.enter="byAxis" />
+          </label>
+        </div>
+      </template>
+      <template v-else>
+        <span class="lbl">{{ t('modify.vector') }}</span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <label v-for="(a, i) in ['X', 'Y', 'Z']" :key="a" style="display:inline-flex;gap:6px;align-items:center">
+            <span class="mono" style="font-size:12px">{{ a }}</span>
+            <input v-model="vec[i]" class="inp mono" style="width:86px;text-align:right" @keydown.enter="byVector" />
+          </label>
+        </div>
+      </template>
       <div style="display:flex;gap:8px">
-        <button class="btn p" type="button" @click="byVector">{{ t(mode === 'move' ? 'modify.moveBy' : 'modify.copyBy') }}</button>
+        <button v-if="mode === 'rotate'" class="btn p" type="button" @click="byAngle">{{ t('modify.rotateBy') }}</button>
+        <button v-else-if="mode === 'mirror'" class="btn p" type="button" @click="byAxis">{{ t('modify.mirrorBy') }}</button>
+        <button v-else class="btn p" type="button" @click="byVector">{{ t(mode === 'move' ? 'modify.moveBy' : 'modify.copyBy') }}</button>
         <button class="btn s" type="button" @click="remove">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>{{ t('modify.delete') }}
         </button>

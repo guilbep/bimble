@@ -3,7 +3,7 @@
 //! Arguments are untrusted: unknown fields are refused and sizes are bounded.
 
 use crate::{query, verbs};
-use bimble_core::{Command, Generator, GlobalId, Model};
+use bimble_core::{Command, Generator, GlobalId, Model, Placement};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ pub struct VerbInfo {
     pub summary: &'static str,
 }
 
-const VERBS: [VerbInfo; 9] = [
+const VERBS: [VerbInfo; 11] = [
     VerbInfo {
         name: "place",
         summary: "Place a new column, beam, wall or slab on a storey (storey-relative mm).",
@@ -57,7 +57,46 @@ const VERBS: [VerbInfo; 9] = [
         name: "set_project_field",
         summary: "Set one project information field by its label (the key is made from it); an empty value removes it.",
     },
+    VerbInfo {
+        name: "rotate",
+        summary: "Rotate elements by angle_deg about the vertical axis through about = [x, y] mm (default: the centre of their origins).",
+    },
+    VerbInfo {
+        name: "mirror",
+        summary: "Mirror elements in the vertical plane through axis.point along axis.dir; placements stay right-handed.",
+    },
 ];
+
+/// Arguments of `rotate`.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RotateArgs {
+    /// GlobalIds of the elements.
+    #[schemars(with = "Vec<String>")]
+    ids: Vec<GlobalId>,
+    /// Angle, degrees, counter-clockwise seen from above; |angle| ≤ 360.
+    angle_deg: f64,
+    /// Centre [x, y], mm; default: the centre of the elements' placement origins.
+    about: Option<[f64; 2]>,
+}
+
+/// A vertical mirror plane: through `point`, along `dir` (plan, mm).
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct MirrorAxis {
+    point: [f64; 2],
+    dir: [f64; 2],
+}
+
+/// Arguments of `mirror`.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct MirrorArgs {
+    /// GlobalIds of the elements.
+    #[schemars(with = "Vec<String>")]
+    ids: Vec<GlobalId>,
+    axis: MirrorAxis,
+}
 
 /// Arguments of `place`.
 #[derive(Deserialize, JsonSchema)]
@@ -211,6 +250,8 @@ pub fn describe(name: &str) -> Option<Value> {
         "set_schedule" => schemars::schema_for!(SetScheduleArgs),
         "set_material" => schemars::schema_for!(SetMaterialArgs),
         "set_project_field" => schemars::schema_for!(SetProjectFieldArgs),
+        "rotate" => schemars::schema_for!(RotateArgs),
+        "mirror" => schemars::schema_for!(MirrorArgs),
         _ => return None,
     };
     Some(s.to_value())
@@ -282,6 +323,8 @@ pub fn run(m: &Model, name: &str, args: Value) -> Result<Vec<Command>, String> {
         "set_schedule" => set_schedule(m, parse(args)?),
         "set_material" => set_material(m, parse(args)?),
         "set_project_field" => set_project_field(m, parse(args)?),
+        "rotate" => rotate(m, parse(args)?),
+        "mirror" => mirror(m, parse(args)?),
         _ => Err(format!("unknown verb {name:?}; known: {}", names())),
     }
 }
@@ -304,6 +347,109 @@ fn set_project_field(m: &Model, a: SetProjectFieldArgs) -> Result<Vec<Command>, 
     }
     bimble_core::project::validate(&project)?;
     Ok(vec![Command::SetProject { project }])
+}
+
+/// One `SetPlacement` per element, each placement mapped by `f` (plan transforms: z untouched).
+/// Unknown ids are refused; `+ 0.0` turns `-0.0` into `0.0` (canonical).
+fn transform(
+    m: &Model,
+    ids: &[GlobalId],
+    f: impl Fn(&Placement) -> Placement,
+) -> Result<Vec<Command>, String> {
+    let clean = |v: [f64; 3]| v.map(|x| x + 0.0);
+    ids.iter()
+        .map(|id| {
+            let e = m.elements.get(id).ok_or(format!("no element {id:?}"))?;
+            let p = f(&e.placement);
+            Ok(Command::SetPlacement {
+                id: *id,
+                placement: Placement {
+                    origin: clean(p.origin),
+                    z_axis: clean(p.z_axis),
+                    x_axis: clean(p.x_axis),
+                },
+            })
+        })
+        .collect()
+}
+
+/// cos and sin of an angle in degrees, exact for multiples of 90° (no 6e-17 for cos 90°).
+fn cos_sin(deg: f64) -> (f64, f64) {
+    let r = deg.rem_euclid(360.0);
+    match r {
+        0.0 => (1.0, 0.0),
+        90.0 => (0.0, 1.0),
+        180.0 => (-1.0, 0.0),
+        270.0 => (0.0, -1.0),
+        _ => {
+            let (s, c) = r.to_radians().sin_cos();
+            (c, s)
+        }
+    }
+}
+
+/// Placements rotated about the vertical axis through `about` (default: centre of the origins).
+fn rotate(m: &Model, a: RotateArgs) -> Result<Vec<Command>, String> {
+    if !a.angle_deg.is_finite() || a.angle_deg.abs() > 360.0 {
+        return Err(format!("angle_deg: {} is not within ±360", a.angle_deg));
+    }
+    if let Some(c) = a.about {
+        mm("about", &c)?;
+    }
+    let mut sum = [0.0, 0.0];
+    for id in &a.ids {
+        let e = m.elements.get(id).ok_or(format!("no element {id:?}"))?;
+        sum[0] += e.placement.origin[0];
+        sum[1] += e.placement.origin[1];
+    }
+    // A full turn or none: no command, so no empty undo step.
+    if a.angle_deg.rem_euclid(360.0) == 0.0 || a.ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let n = a.ids.len() as f64;
+    let [cx, cy] = a.about.unwrap_or([sum[0] / n, sum[1] / n]);
+    let (c, s) = cos_sin(a.angle_deg);
+    let turn = |v: [f64; 3]| [c * v[0] - s * v[1], s * v[0] + c * v[1], v[2]];
+    transform(m, &a.ids, |p| {
+        let o = turn([p.origin[0] - cx, p.origin[1] - cy, p.origin[2]]);
+        Placement {
+            origin: [o[0] + cx, o[1] + cy, o[2]],
+            z_axis: turn(p.z_axis),
+            x_axis: turn(p.x_axis),
+        }
+    })
+}
+
+/// Placements reflected in a vertical plane. The model stores origin + z and x axes (y = z × x,
+/// IFC Axis2Placement3D), so a placement is always right-handed: a true mirror (left-handed)
+/// cannot be stored. The origin, x and z axes are reflected, so y = z × x points opposite the
+/// reflected y: the element's local y is not mirrored. Elements symmetric in their local y
+/// (rectangular columns and beams, walls on their axis) land exactly where a mirror puts them;
+/// an asymmetric one (an off-axis wall, a slab profile not symmetric about local x) lands
+/// reflected about its own x axis instead.
+fn mirror(m: &Model, a: MirrorArgs) -> Result<Vec<Command>, String> {
+    mm("axis.point", &a.axis.point)?;
+    mm("axis.dir", &a.axis.dir)?;
+    let [dx, dy] = a.axis.dir;
+    let len = dx.hypot(dy);
+    if len == 0.0 {
+        return Err("axis.dir must not be zero".into());
+    }
+    let (ux, uy) = (dx / len, dy / len);
+    let [px, py] = a.axis.point;
+    // Reflection of a plan vector: 2 (v·u) u − v.
+    let refl = |v: [f64; 3]| {
+        let k = 2.0 * (v[0] * ux + v[1] * uy);
+        [k * ux - v[0], k * uy - v[1], v[2]]
+    };
+    transform(m, &a.ids, |p| {
+        let o = refl([p.origin[0] - px, p.origin[1] - py, p.origin[2]]);
+        Placement {
+            origin: [o[0] + px, o[1] + py, o[2]],
+            z_axis: refl(p.z_axis),
+            x_axis: refl(p.x_axis),
+        }
+    })
 }
 
 /// `SetElementMaterial` for each element whose material changes (after an `AddMaterial` for a
@@ -527,7 +673,9 @@ mod tests {
                 "set_view",
                 "set_schedule",
                 "set_material",
-                "set_project_field"
+                "set_project_field",
+                "rotate",
+                "mirror"
             ]
         );
         let s = describe("place").unwrap();
@@ -567,6 +715,116 @@ mod tests {
         History::default().apply(&mut m, cmds).unwrap();
         assert!(!m.project.contains_key("ma_tre_d_ouvrage"));
         assert!(set(&m, "").unwrap().is_empty());
+    }
+
+    fn beam(m: &Model) -> &bimble_core::Element {
+        m.elements
+            .values()
+            .find(|e| e.placement.z_axis == [1.0, 0.0, 0.0] && e.placement.origin[0] > 0.0)
+            .unwrap()
+    }
+
+    fn placement(c: &Command) -> &Placement {
+        match c {
+            Command::SetPlacement { placement, .. } => placement,
+            _ => panic!("{c:?}"),
+        }
+    }
+
+    fn no_neg_zero(p: &Placement) {
+        for v in p.origin.iter().chain(&p.z_axis).chain(&p.x_axis) {
+            assert!(!(*v == 0.0 && v.is_sign_negative()), "-0.0 in {p:?}");
+        }
+    }
+
+    /// 90° about the beam's own origin: axes turned exactly, origin unchanged, no -0.0.
+    #[test]
+    fn rotate_beam_about_its_origin() {
+        let (m, _) = demo();
+        let b = beam(&m);
+        let o = b.placement.origin;
+        let c = run(
+            &m,
+            "rotate",
+            json!({"ids": [b.id], "angle_deg": 90, "about": [o[0], o[1]]}),
+        )
+        .unwrap();
+        assert_eq!(c.len(), 1);
+        let p = placement(&c[0]);
+        assert_eq!(p.origin, o);
+        assert_eq!(p.z_axis, [0.0, 1.0, 0.0]);
+        assert_eq!(p.x_axis, [-1.0, 0.0, 0.0]);
+        no_neg_zero(p);
+        History::default().apply(&mut m.clone(), c).unwrap();
+    }
+
+    /// Two elements, 180° about their centre (the default): they swap origins.
+    #[test]
+    fn rotate_two_about_their_centre() {
+        let (m, _) = demo();
+        let mut cols = m.elements.values().filter(|e| {
+            e.placement.z_axis == [0.0, 0.0, 1.0] && e.placement.x_axis == [1.0, 0.0, 0.0]
+        });
+        let (a, b) = (cols.next().unwrap(), cols.next().unwrap());
+        let c = run(
+            &m,
+            "rotate",
+            json!({"ids": [a.id, b.id], "angle_deg": -180}),
+        )
+        .unwrap();
+        assert_eq!(placement(&c[0]).origin, b.placement.origin);
+        assert_eq!(placement(&c[1]).origin, a.placement.origin);
+        assert_eq!(placement(&c[0]).x_axis, [-1.0, 0.0, 0.0]);
+        no_neg_zero(placement(&c[0]));
+    }
+
+    #[test]
+    fn rotate_zero_and_errors() {
+        let (m, _) = demo();
+        let id = beam(&m).id;
+        assert!(
+            run(&m, "rotate", json!({"ids": [id], "angle_deg": 0}))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            run(&m, "rotate", json!({"ids": [id], "angle_deg": 360}))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(run(&m, "rotate", json!({"ids": [id], "angle_deg": 1e300})).is_err());
+        assert!(run(&m, "rotate", json!({"ids": [id], "angle_deg": 361})).is_err());
+        let gone = GlobalId::new();
+        let e = run(&m, "rotate", json!({"ids": [gone], "angle_deg": 90})).unwrap_err();
+        assert!(e.contains("no element"), "{e}");
+    }
+
+    /// Mirror in the plane x = 0 (dir +Y): origin x negated, the beam's axis reversed, and the
+    /// placement still valid (right-handed).
+    #[test]
+    fn mirror_beam_in_x0() {
+        let (m, _) = demo();
+        let b = beam(&m);
+        let o = b.placement.origin;
+        let c = run(
+            &m,
+            "mirror",
+            json!({"ids": [b.id], "axis": {"point": [0, 0], "dir": [0, 5]}}),
+        )
+        .unwrap();
+        let p = placement(&c[0]);
+        assert_eq!(p.origin, [-o[0], o[1], o[2]]);
+        assert_eq!(p.z_axis, [-1.0, 0.0, 0.0]);
+        assert_eq!(p.x_axis, [0.0, 1.0, 0.0]);
+        no_neg_zero(p);
+        p.validate().unwrap();
+        let e = run(
+            &m,
+            "mirror",
+            json!({"ids": [b.id], "axis": {"point": [0, 0], "dir": [0, 0]}}),
+        )
+        .unwrap_err();
+        assert!(e.contains("dir"), "{e}");
     }
 
     /// Two ids, a library grade (added once), unknown material refused, same material: nothing.

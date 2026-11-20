@@ -458,3 +458,10 @@ export const verbs = () => query<VerbInfo[]>("verbs");
 export const describe = (name: string) => query<VerbInfo>("describe", { name });
 /** Set one project information field by its label; Rust makes the key (`project::key_of`), an empty value removes it. Returns the Rust error, or null. */
 export const setProjectField = (label: string, value: string) => runVerb("set_project_field", { label, value });
+
+/** Rotate elements by `angle` degrees (counter-clockwise from above) about the vertical axis through `about` [x, y] mm (default: the centre of their origins). Returns the Rust error, or null. */
+export const rotate = (ids: string[], angle: number, about?: [number, number]) =>
+  runVerb("rotate", about ? { ids, angle_deg: angle, about } : { ids, angle_deg: angle });
+/** Mirror elements in the vertical plane through `axis.point` along `axis.dir` (plan, mm). Returns the Rust error, or null. */
+export const mirror = (ids: string[], axis: { point: [number, number]; dir: [number, number] }) =>
+  runVerb("mirror", { ids, axis });
