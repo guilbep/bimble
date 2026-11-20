@@ -12,7 +12,7 @@ import "./shell/shell.css";
 import { computed, onMounted, onUnmounted } from "vue";
 import { pages, currentPage, page } from "./pages";
 import { dialogs, currentDialog } from "./dialogs";
-import { panels, currentPanel } from "./panels";
+import { panels, currentPanel, panel } from "./panels";
 import { applyDeepLink } from "./deeplink";
 
 // Esc closes the dialog first, then the page.
@@ -37,15 +37,18 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
       <LeftPanel v-show="!full" />
       <div class="bb-main">
         <ViewTabs v-show="!full" />
-        <section v-if="currentPage && pages[currentPage]" class="bb-page" :class="{ full }" data-bb="page">
-          <component :is="pages[currentPage]" />
-        </section>
-        <!-- Hidden, never removed, under a page. -->
-        <div v-show="!(currentPage && pages[currentPage])" class="bb-vp" data-bb="viewport">
-          <!-- Never re-created (no v-if): the viewer binds to it at init(). -->
-          <canvas id="bimble" />
-          <p v-if="startError" class="start-error" role="alert">{{ t('app.startError', { msg: startError }) }}</p>
-        </div>
+        <!-- Reference (D5): the right panel sits beside the viewport, under the view tabs. -->
+        <div class="bb-row">
+          <section v-if="currentPage && pages[currentPage]" class="bb-page" :class="{ full }" data-bb="page">
+            <component :is="pages[currentPage]" />
+          </section>
+          <!-- Hidden, never removed, under a page. -->
+          <div v-show="!(currentPage && pages[currentPage])" class="bb-vp" data-bb="viewport">
+            <!-- Never re-created (no v-if): the viewer binds to it at init(). -->
+            <canvas id="bimble" />
+            <p v-if="startError" class="start-error" role="alert">{{ t('app.startError', { msg: startError }) }}</p>
+          </div>
+            </div>
         <ModifierPanel />
       </div>
       <aside v-if="currentPanel && panels[currentPanel]" class="bb-right" data-bb="right-panel">
@@ -73,7 +76,10 @@ body { background: var(--bb-cream); }
 .bb-page { flex: 1; min-height: 0; overflow: auto; padding: 24px 32px; background: var(--bb-sheet); }
 /* The reference's body row for a full-window page: cream ground, the page owns its padding. */
 .bb-page.full { padding: 0; background: var(--bb-cream); overflow: hidden; }
-.bb-right { width: 400px; flex: none; box-sizing: border-box; padding: 14px; border-left: 1px solid var(--bb-stone); background: var(--bb-cream); overflow: auto; }
+/* <div style="flex:1;display:flex;min-height:0"> */
+.bb-row { flex: 1; display: flex; min-height: 0; }
+/* aside style="width:400px;flex:none;border-left:1px solid #5C574D;background:#F5F2EB;padding:14px;...;overflow:hidden" */
+.bb-right { width: 400px; flex: none; box-sizing: border-box; padding: 14px; border-left: 1px solid var(--bb-stone); background: var(--bb-cream); overflow: hidden; }
 .bb-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: color-mix(in srgb, var(--bb-ink) 30%, transparent); }
 #bimble { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 /* Error: ink text on an ochre band, with the word "Error". */
