@@ -1,6 +1,12 @@
-// Copy for Place a slab (B1): the left panel while placing. Keys are added here only (one file per ticket).
+// Copy for Place (B1, fr/PlaceSlab.html): the left panel while placing any kind; the column, beam and wall notes follow the slab note's style. Keys are added here only (one file per ticket).
 export const fr = {
-  "placeslab.title": "Placer : dalle",
+  "placeslab.title.column": "Placer : poteau",
+  "placeslab.title.beam": "Placer : poutre",
+  "placeslab.title.wall": "Placer : mur",
+  "placeslab.title.slab": "Placer : dalle",
+  "placeslab.section": "Section",
+  "placeslab.width": "Largeur",
+  "placeslab.height": "Hauteur",
   "placeslab.storey": "Étage",
   "placeslab.thickness": "Épaisseur",
   "placeslab.material": "Matériau",
@@ -12,11 +18,20 @@ export const fr = {
   "placeslab.sloped": "Pente",
   "placeslab.slope": "Pente",
   "placeslab.how": "Comment",
-  "placeslab.howNote": "Deux clics : deux coins opposés. Le dessus de la dalle affleure le niveau {above}. Les clics s'accrochent aux axes, poteaux et coins à 12 px.",
+  "placeslab.howNote.column": "Un clic : le centre du poteau. La section est carrée. Les clics s'accrochent aux axes, poteaux et coins à 12 px.",
+  "placeslab.howNote.beam": "Deux clics : les deux extrémités de la poutre. Les clics s'accrochent aux axes, poteaux et coins à 12 px.",
+  "placeslab.howNote.wall": "Deux clics : les deux extrémités de l'axe du mur. Les clics s'accrochent aux axes, poteaux et coins à 12 px.",
+  "placeslab.howNote.slab": "Deux clics : deux coins opposés. Le dessus de la dalle affleure le niveau {above}. Les clics s'accrochent aux axes, poteaux et coins à 12 px.",
   "placeslab.error": "Erreur : {msg}",
 };
 export const en: Record<keyof typeof fr, string> = {
-  "placeslab.title": "Place: slab",
+  "placeslab.title.column": "Place: column",
+  "placeslab.title.beam": "Place: beam",
+  "placeslab.title.wall": "Place: wall",
+  "placeslab.title.slab": "Place: slab",
+  "placeslab.section": "Section",
+  "placeslab.width": "Width",
+  "placeslab.height": "Height",
   "placeslab.storey": "Storey",
   "placeslab.thickness": "Thickness",
   "placeslab.material": "Material",
@@ -28,6 +43,9 @@ export const en: Record<keyof typeof fr, string> = {
   "placeslab.sloped": "Sloped",
   "placeslab.slope": "Slope",
   "placeslab.how": "How",
-  "placeslab.howNote": "Two clicks: two opposite corners. The slab's top is flush with level {above}. Clicks snap to axes, columns and corners within 12 px.",
+  "placeslab.howNote.column": "One click: the column's centre. The section is square. Clicks snap to axes, columns and corners within 12 px.",
+  "placeslab.howNote.beam": "Two clicks: the two ends of the beam. Clicks snap to axes, columns and corners within 12 px.",
+  "placeslab.howNote.wall": "Two clicks: the two ends of the wall's axis. Clicks snap to axes, columns and corners within 12 px.",
+  "placeslab.howNote.slab": "Two clicks: two opposite corners. The slab's top is flush with level {above}. Clicks snap to axes, columns and corners within 12 px.",
   "placeslab.error": "Error: {msg}",
 };

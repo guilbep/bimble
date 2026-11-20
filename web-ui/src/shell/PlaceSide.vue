@@ -1,22 +1,35 @@
 <script setup lang="ts">
-// B1's left panel properties while a slab is placed (fr/PlaceSlab.html `.props`). Each field applies at once (ADR 0052).
-import { computed, ref, watch } from "vue";
-import { placing, storeys, materials, setPlacing } from "../bimble";
+// The left panel properties while an element is placed (fr/PlaceSlab.html `.props`, B1), for every kind:
+// the size rows follow the kind; slab-only rows stay for the slab. Each field applies at once (ADR 0052).
+import { computed, reactive, ref, watch } from "vue";
+import { placing, storeys, materials, setPlacing, type Placing } from "../bimble";
 import { t } from "../i18n";
 
+type Size = keyof Placing["sizes"];
+// The rows per kind, as the egui panel (edit.rs): a column has one section size (square).
+const ROWS: Record<Placing["kind"], { size: Size; label: "section" | "width" | "height" | "thickness" }[]> = {
+  column: [{ size: "column", label: "section" }],
+  beam: [{ size: "beam_width", label: "width" }, { size: "beam_height", label: "height" }],
+  wall: [{ size: "wall", label: "thickness" }],
+  slab: [{ size: "slab", label: "thickness" }],
+};
+const rows = computed(() => (placing.value ? ROWS[placing.value.kind] : []));
+
 const error = ref<string | null>(null);
-const thickness = ref("");
-watch(() => placing.value?.sizes.slab, (v) => { thickness.value = v === undefined ? "" : String(v); }, { immediate: true });
+const draft = reactive<Partial<Record<Size, string>>>({});
+watch(() => placing.value?.sizes, (v) => {
+  for (const k of Object.keys(v ?? {}) as Size[]) draft[k] = String(v![k]);
+}, { immediate: true });
 
 const apply = (patch: Parameters<typeof setPlacing>[0]) => { error.value = setPlacing(patch); };
-function commitThickness(): void {
-  if (thickness.value === String(placing.value?.sizes.slab)) return;
+function commit(size: Size): void {
+  if (draft[size] === String(placing.value?.sizes[size])) return;
   // Rust validates: a non-number goes as null and comes back as its error.
-  apply({ sizes: { slab: Number(thickness.value.replace(/[\s']/g, "")) } });
+  apply({ sizes: { [size]: Number((draft[size] ?? "").replace(/[\s']/g, "")) } });
 }
 
 const level = (e: number) => `${e >= 0 ? "+" : ""}${(e / 1000).toFixed(2)}`;
-// ponytail: the level above, for the note only (the slab's top is at the storey height).
+// ponytail: the level above, for the note only (the element's top is at the storey height).
 const above = computed(() => {
   const sorted = [...storeys.value].sort((a, b) => a.elevation - b.elevation);
   const i = sorted.findIndex((s) => s.id === placing.value?.storey);
@@ -26,7 +39,7 @@ const above = computed(() => {
 
 <template>
   <template v-if="placing">
-    <div class="pn" data-bb="place-title">{{ t('placeslab.title') }}</div>
+    <div class="pn" data-bb="place-title">{{ t(`placeslab.title.${placing.kind}`) }}</div>
     <div class="row">
       <label class="k" for="ps-storey">{{ t('placeslab.storey') }}</label>
       <span class="sel-inp" style="width:140px" data-bb="place-storey">
@@ -36,10 +49,10 @@ const above = computed(() => {
         </select>
       </span>
     </div>
-    <div class="row">
-      <label class="k" for="ps-thickness">{{ t('placeslab.thickness') }}</label>
+    <div v-for="(r, i) in rows" :key="r.size" class="row">
+      <label class="k" :for="`ps-${r.size}`">{{ t(`placeslab.${r.label}`) }}</label>
       <span style="display:inline-flex;align-items:center;gap:6px">
-        <input id="ps-thickness" data-bb="place-thickness" v-model="thickness" class="inp mono" style="width:100px;text-align:right" :aria-invalid="error ? 'true' : 'false'" aria-describedby="ps-error" @keydown.enter="commitThickness" @blur="commitThickness" />
+        <input :id="`ps-${r.size}`" :data-bb="i === 0 ? 'place-thickness' : undefined" v-model="draft[r.size]" class="inp mono" style="width:100px;text-align:right" :aria-invalid="error ? 'true' : 'false'" aria-describedby="ps-error" @keydown.enter="commit(r.size)" @blur="commit(r.size)" />
         <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
       </span>
     </div>
@@ -54,31 +67,33 @@ const above = computed(() => {
         </select>
       </span>
     </div>
-    <div class="row">
-      <label class="k" for="ps-offset">{{ t('placeslab.topOffset') }}</label>
-      <span style="display:inline-flex;align-items:center;gap:6px">
-        <!-- The slab's top is at the storey height: 0 until Rust takes an offset. -->
-        <input id="ps-offset" class="inp mono off" value="0" disabled data-missing="set_placing top_offset" style="width:100px;text-align:right" />
-        <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
-      </span>
-    </div>
-    <div class="row">
-      <span class="k">{{ t('placeslab.subproject') }}</span>
-      <span class="sel-inp off" style="width:140px" data-missing="sub-projects"><span class="ell" /><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
-    </div>
-    <div class="row">
-      <span class="k">{{ t('placeslab.shape') }}</span>
-      <span class="seg"><span class="on">{{ t('placeslab.rectangle') }}</span><span class="off" data-missing="polygon slab">{{ t('placeslab.polygon') }}</span><span class="off" data-missing="sloped slab">{{ t('placeslab.sloped') }}</span></span>
-    </div>
-    <div class="row">
-      <label class="k" for="ps-slope">{{ t('placeslab.slope') }}</label>
-      <span style="display:inline-flex;align-items:center;gap:6px">
-        <input id="ps-slope" class="inp mono off" value="0.0" disabled data-missing="sloped slab" style="width:100px;text-align:right" />
-        <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">%</span>
-      </span>
-    </div>
+    <template v-if="placing.kind === 'slab'">
+      <div class="row">
+        <label class="k" for="ps-offset">{{ t('placeslab.topOffset') }}</label>
+        <span style="display:inline-flex;align-items:center;gap:6px">
+          <!-- The slab's top is at the storey height: 0 until Rust takes an offset. -->
+          <input id="ps-offset" class="inp mono off" value="0" disabled data-missing="set_placing top_offset" style="width:100px;text-align:right" />
+          <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
+        </span>
+      </div>
+      <div class="row">
+        <span class="k">{{ t('placeslab.subproject') }}</span>
+        <span class="sel-inp off" style="width:140px" data-missing="sub-projects"><span class="ell" /><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+      </div>
+      <div class="row">
+        <span class="k">{{ t('placeslab.shape') }}</span>
+        <span class="seg"><span class="on">{{ t('placeslab.rectangle') }}</span><span class="off" data-missing="polygon slab">{{ t('placeslab.polygon') }}</span><span class="off" data-missing="sloped slab">{{ t('placeslab.sloped') }}</span></span>
+      </div>
+      <div class="row">
+        <label class="k" for="ps-slope">{{ t('placeslab.slope') }}</label>
+        <span style="display:inline-flex;align-items:center;gap:6px">
+          <input id="ps-slope" class="inp mono off" value="0.0" disabled data-missing="sloped slab" style="width:100px;text-align:right" />
+          <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">%</span>
+        </span>
+      </div>
+    </template>
     <div class="sec">{{ t('placeslab.how') }}</div>
-    <p class="note" style="margin:0">{{ t('placeslab.howNote', { above }) }}</p>
+    <p class="note" style="margin:0">{{ t(`placeslab.howNote.${placing.kind}`, { above }) }}</p>
   </template>
 </template>
 
