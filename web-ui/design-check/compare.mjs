@@ -4,6 +4,10 @@
 //   ref:<path>    another reference page as the "lab" (uses reference selectors; proves the check fails)
 //   <base-url>    the Vue lab; screens.json "lab" is appended; landmarks found by [data-bb]
 // Exit 0 when every screen matches exactly, 1 on any difference, 2 on usage error.
+// Each screen also prints "own: boxes N, styles M": only the landmarks whose `only` names it.
+// --baseline <file>  gate instead: exit 0 when every count (boxes, styles, own_boxes, own_styles)
+//                    is <= the file's for that screen and language, 1 when one is higher.
+// --write-baseline   with --baseline: write this run's counts into the file (other entries kept).
 import { createServer } from "node:http";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve, normalize, extname, dirname } from "node:path";
@@ -25,7 +29,10 @@ const VIEW = { width: 1440, height: 900 };
 
 const argv = process.argv.slice(2);
 const args = {};
-for (let i = 0; i < argv.length; i += 2) args[argv[i].replace(/^--/, "")] = argv[i + 1];
+for (let i = 0; i < argv.length; i++) {
+  const v = argv[i + 1];
+  args[argv[i].replace(/^--/, "")] = v === undefined || v.startsWith("--") ? true : (i++, v);
+}
 const lang = args.lang;
 const lab = args.lab;
 const codes = args.screen === "all" ? Object.keys(screens) : (args.screen || "").split(",").filter(Boolean);
@@ -86,6 +93,7 @@ await ctx.addInitScript((l) => { try { localStorage.setItem("bimble.lang", l); }
 const page = await ctx.newPage();
 mkdirSync(outDir, { recursive: true });
 let failed = false;
+const counts = {}; // code -> {boxes, styles, own_boxes, own_styles}
 
 for (const code of codes) {
   const scr = screens[code];
@@ -96,13 +104,15 @@ for (const code of codes) {
   const got = await capture(page, labUrl, labIsRef);
 
   const boxes = [], styles = [], skipped = [];
+  const own = { boxes: 0, styles: 0 };
   for (const name of Object.keys(landmarks)) {
     if (landmarks[name].only && !landmarks[name].only.includes(code)) continue; // a landmark of other screens
     const a = ref.marks[name], b = got.marks[name];
     if (!a && !b) { skipped.push(name); continue; }
-    if (!a || !b) { boxes.push({ name, ref: a?.box ?? null, lab: b?.box ?? null }); continue; }
-    if (a.box.some((v, i) => v !== b.box[i])) boxes.push({ name, ref: a.box, lab: b.box });
-    for (const p of STYLES) if (a.style[p] !== b.style[p]) styles.push({ name, prop: p, ref: a.style[p], lab: b.style[p] });
+    const mine = Boolean(landmarks[name].only);
+    if (!a || !b) { boxes.push({ name, ref: a?.box ?? null, lab: b?.box ?? null }); own.boxes += mine; continue; }
+    if (a.box.some((v, i) => v !== b.box[i])) { boxes.push({ name, ref: a.box, lab: b.box }); own.boxes += mine; }
+    for (const p of STYLES) if (a.style[p] !== b.style[p]) { styles.push({ name, prop: p, ref: a.style[p], lab: b.style[p] }); own.styles += mine; }
   }
 
   for (const m of scr.mask) for (const side of [ref, got]) {
@@ -121,12 +131,14 @@ for (const code of codes) {
   for (const [k, png] of Object.entries({ ref: ref.png, lab: got.png, diff, side })) writeFileSync(`${stem}-${k}.png`, PNG.sync.write(png));
   const pct = (100 * pixels / total).toFixed(3);
   writeFileSync(`${stem}.json`, JSON.stringify({ screen: code, lang, ref: refPath, lab: labUrl.replace(base, "ref:"), viewport: VIEW,
-    masked: scr.mask, skipped, boxes, styles, pixels: { count: pixels, total, percent: Number(pct) } }, null, 2) + "\n");
+    masked: scr.mask, skipped, boxes, styles, own, pixels: { count: pixels, total, percent: Number(pct) } }, null, 2) + "\n");
 
   const bad = boxes.length || styles.length || pixels;
   failed ||= Boolean(bad);
   console.log(`${bad ? "FAIL" : "OK  "} ${code} ${lang}: boxes off ${boxes.length}, styles off ${styles.length}, pixels off ${pixels} (${pct}%)` +
     (skipped.length ? ` · skipped (missing on both): ${skipped.join(", ")}` : ""));
+  console.log(`  own: boxes ${own.boxes}, styles ${own.styles}`);
+  counts[code] = { boxes: boxes.length, styles: styles.length, own_boxes: own.boxes, own_styles: own.styles };
   for (const b of boxes) console.log(`  box ${b.name}: ref ${JSON.stringify(b.ref)} lab ${JSON.stringify(b.lab)}`);
   for (const s of styles.slice(0, 20)) console.log(`  style ${s.name} ${s.prop}: ref ${s.ref} | lab ${s.lab}`);
   if (styles.length > 20) console.log(`  … ${styles.length - 20} more in ${stem}.json`);
@@ -134,4 +146,26 @@ for (const code of codes) {
 
 await browser.close();
 server.close();
+if (args.baseline) {
+  const file = resolve(args.baseline);
+  let bl = {};
+  try { bl = JSON.parse(readFileSync(file, "utf8")); } catch { if (!args["write-baseline"]) { console.error(`baseline: cannot read ${file}`); process.exit(2); } }
+  if (args["write-baseline"]) {
+    bl._doc ??= "Design-check counts that may only go down: per screen and language, boxes and styles off (all landmarks) and own_boxes, own_styles (landmarks whose `only` names the screen). No pixels: fonts render differently on Linux CI. Lower a number when a screen improves: node design-check/compare.mjs --screen all --lang fr|en --lab <url> --baseline design-check/baseline.json --write-baseline";
+    for (const [code, c] of Object.entries(counts)) bl[code] = { ...bl[code], [lang]: c };
+    const sorted = Object.fromEntries(Object.keys(bl).sort((a, b) => (a === "_doc" ? -1 : b === "_doc" ? 1 : a.localeCompare(b))).map((k) => [k, bl[k]]));
+    writeFileSync(file, JSON.stringify(sorted, null, 2) + "\n");
+    console.log(`baseline written: ${file}`);
+    process.exit(0);
+  }
+  const worse = [];
+  for (const [code, c] of Object.entries(counts)) {
+    const b = bl[code]?.[lang];
+    if (!b) { worse.push(`${code} ${lang}: no baseline entry`); continue; }
+    for (const [k, v] of Object.entries(c)) if (v > b[k]) worse.push(`${code} ${lang}: ${k} ${v} > baseline ${b[k]}`);
+  }
+  for (const w of worse) console.log(`WORSE ${w}`);
+  console.log(worse.length ? `baseline: ${worse.length} count(s) above baseline` : "baseline: every count at or below baseline");
+  process.exit(worse.length ? 1 : 0);
+}
 process.exit(failed ? 1 : 0);
