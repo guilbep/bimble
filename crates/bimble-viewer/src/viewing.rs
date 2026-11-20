@@ -448,6 +448,17 @@ impl Viewer {
         self.view_form = None;
     }
 
+    /// Something is hidden or isolated in the active view (what `show_all_in_view` clears).
+    pub(crate) fn hidden_in_view(&self) -> bool {
+        !(self.hidden_categories.is_empty()
+            && self.hidden_materials.is_empty()
+            && self.hidden_classes.is_empty()
+            && self.hidden_storeys.is_empty()
+            && self.hidden_links.is_empty()
+            && self.hidden_ids.is_empty()
+            && self.isolated_ids.is_empty())
+    }
+
     /// Show everything in the active view again, and save that with the view (ADR 0028).
     pub(crate) fn show_all_in_view(&mut self) {
         self.hidden_categories.clear();

@@ -55,6 +55,19 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
             "file": v.loaded.as_ref().and_then(|l| l.path.file_name()).map(|n| n.to_string_lossy()),
             "editable": v.loaded.as_ref().is_some_and(|l| l.edit.is_some()),
             "unsaved": !state::unsaved(&v.snapshot()).is_empty(),
+            // "IFC2X3", "IFC4", "IFC4X3" as the file says, ".bimble", or null.
+            "schema": v.loaded.as_ref().and_then(|l| {
+                if l.path.extension().is_some_and(|e| e == "bimble") {
+                    Some(".bimble".to_string())
+                } else {
+                    Some(l.scene.schema.clone()).filter(|s| !s.is_empty())
+                }
+            }),
+            // Settings → You, null when no name is set.
+            "user": crate::ribbon::trigram(&v.settings.user_name).map(|t| serde_json::json!({
+                "name": v.settings.user_name.trim(),
+                "trigram": t,
+            })),
         })),
         "storeys" => json(query::storeys(model(v)?)),
         "materials" => json(query::materials(model(v)?)),
@@ -114,7 +127,7 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
         // The views the viewer shows (stored over the defaults made on load), not only the
         // model's stored ones; the one shown; the tabs over the main view, in order.
         "open_views" => {
-            use crate::ribbon::TabRef;
+            let current = v.sync_tabs();
             let views: Vec<_> = v
                 .views
                 .iter()
@@ -129,21 +142,15 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
                     annotations: w.annotations.len(),
                 })
                 .collect();
-            let tabs: Vec<_> = v
-                .open_tabs
-                .iter()
-                .map(|t| match t {
-                    TabRef::View(id) => serde_json::json!({"type": "view", "id": id}),
-                    TabRef::Sheet(id) => serde_json::json!({"type": "sheet", "id": id}),
-                    TabRef::Schedule(n) => serde_json::json!({"type": "schedule", "name": n}),
-                    TabRef::Project => serde_json::json!({"type": "project"}),
-                    TabRef::Materials => serde_json::json!({"type": "materials"}),
-                })
-                .collect();
+            let tabs: Vec<_> = v.open_tabs.iter().map(|t| t.to_json()).collect();
             json(serde_json::json!({
                 "views": views,
                 "active": v.active_view,
                 "tabs": tabs,
+                // What the main view shows: one of `tabs`, or null (Home).
+                "current": current.map(|t| t.to_json()),
+                // Model or On paper: offered for a plan or section (ADR 0046).
+                "paper": {"offered": v.two_pictures(), "on": v.on_paper()},
             }))
         }
         // The schedules offered (built-in ones as changed, and the model's own), by name for
@@ -269,6 +276,31 @@ pub fn action(name: &str) -> Result<(), JsValue> {
     })
 }
 
+/// Go to a tab or close it, as the tab row does: `{"op": "activate"|"close", "tab": <a tab of
+/// query("open_views")>}`. Closing the last tab shows Home.
+#[wasm_bindgen]
+pub fn tab(args_json: &str) -> Result<(), JsValue> {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        op: String,
+        tab: serde_json::Value,
+    }
+    let a: Args = serde_json::from_str(args_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let t = crate::ribbon::TabRef::from_json(&a.tab).map_err(|e| JsValue::from_str(&e))?;
+    let close = match a.op.as_str() {
+        "activate" => false,
+        "close" => true,
+        o => return Err(JsValue::from_str(&format!("unknown op {o:?}"))),
+    };
+    with_viewer(|v| {
+        if !close && v.sync_tabs().as_ref() != Some(&t) && !v.open_tabs.contains(&t) {
+            return Err("no such open tab".into());
+        }
+        v.tab_verb(close, t);
+        Ok(())
+    })
+}
+
 /// Apply commands (a JSON array) as one undoable step.
 #[wasm_bindgen]
 pub fn apply(cmds_json: &str) -> Result<(), JsValue> {
@@ -301,7 +333,9 @@ thread_local! {
 }
 
 /// Register the change callback. It gets one argument, a JSON string:
-/// `{"selection": [GlobalId, primary first], "rev": n, "unsaved": bool, "file": name or null}`.
+/// `{"selection": [GlobalId, primary first], "rev": n, "unsaved": bool, "file": name or null,
+/// "view": a signature of what the view shows}`: section box, hidden/isolated counts, On paper,
+/// the current tab and the open tabs' count change it (refresh "visibility", "open_views").
 /// It runs inside a frame: a callback that calls back into an export gets "busy", so defer
 /// such calls (`queueMicrotask`).
 #[wasm_bindgen]
@@ -336,6 +370,17 @@ pub(crate) fn notify(v: &Viewer) {
         "rev": v.scene_rev,
         "unsaved": state::UNSAVED.load(std::sync::atomic::Ordering::Relaxed),
         "file": v.loaded.as_ref().and_then(|l| l.path.file_name()).map(|n| n.to_string_lossy()),
+        "view": [
+            v.section_on as usize,
+            v.temporary.as_ref().map_or(0, |t| t.elements.len()),
+            v.temporary.as_ref().is_some_and(|t| t.isolate) as usize,
+            v.hidden_ids.len(),
+            v.isolated_ids.len(),
+            v.hidden_in_view() as usize,
+            v.on_paper() as usize,
+            v.open_tabs.len(),
+        ],
+        "tab": v.current_tab().map(|t| t.to_json()),
     })
     .to_string();
     if LAST_SENT.with(|s| *s.borrow() == now) {

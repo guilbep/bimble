@@ -4970,7 +4970,11 @@ impl eframe::App for Viewer {
             std::sync::atomic::Ordering::Relaxed,
         );
         #[cfg(target_arch = "wasm32")]
-        bridge::notify(self);
+        {
+            // The tabs are kept whether the egui strip is drawn or not (`?viewport=1`).
+            self.sync_tabs();
+            bridge::notify(self);
+        }
         // Closing with unsaved work asks first (ADR 0028).
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             // A value typed but not yet stored counts too.
