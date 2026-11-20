@@ -91,7 +91,123 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
                 })
                 .collect::<Vec<_>>(),
         ),
-        _ => Err(format!("unknown query {name:?}")),
+        "verbs" => json(bimble_api::dispatch::list()),
+        "describe" => {
+            let a: NameArgs = serde_json::from_str(args_json).map_err(|e| e.to_string())?;
+            json(bimble_api::dispatch::describe(&a.name).ok_or("no verb with this name")?)
+        }
+        // ponytail: History keeps its stacks private; only the top labels are reachable until
+        // bimble-core gives a labels accessor.
+        "history" => {
+            let h = v
+                .loaded
+                .as_ref()
+                .and_then(|l| l.edit.as_ref())
+                .map(|e| &e.history);
+            json(serde_json::json!({
+                "undo": h.and_then(|h| h.undo_label()).into_iter().collect::<Vec<_>>(),
+                "redo": h.and_then(|h| h.redo_label()).into_iter().collect::<Vec<_>>(),
+            }))
+        }
+        "visibility" => {
+            let t = v.temporary.as_ref();
+            let now = |iso: bool| capped(t.filter(|t| t.isolate == iso).map(|t| &t.elements));
+            let origin = v.loaded.as_ref().map(|l| l.scene.origin_mm);
+            json(serde_json::json!({
+                "hidden_now": now(false),
+                "isolated_now": now(true),
+                "hidden_in_view": capped(Some(&v.hidden_ids)),
+                "isolated_in_view": capped(Some(&v.isolated_ids)),
+                "section_box": {
+                    "on": v.section_on,
+                    // mm, relative to the scene origin; `origin_mm` adds back to model mm.
+                    "box": v.section_box.map(|b| serde_json::json!({
+                        "min": b.min.to_array(), "max": b.max.to_array(), "yaw": b.yaw,
+                    })),
+                    "origin_mm": origin,
+                },
+            }))
+        }
+        "schedule_rows" => {
+            let a: NameArgs = serde_json::from_str(args_json).map_err(|e| e.to_string())?;
+            let def = v
+                .schedule_defs()
+                .into_iter()
+                .find(|d| d.name == a.name)
+                .ok_or("no schedule with this name")?;
+            let l = v.loaded.as_ref().ok_or("no model open")?;
+            json(table_json(
+                &bimble_drawing::schedule::schedule(&l.scene, &def),
+                MAX_LIST,
+            ))
+        }
+        _ => {
+            let args = if args_json.trim().is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::from_str(args_json).map_err(|e| e.to_string())?
+            };
+            json(bimble_api::dispatch::query(model(v)?, name, args)?)
+        }
+    })
+}
+
+/// At most this many ids or rows in one answer; the total is given beside.
+const MAX_LIST: usize = 50;
+
+#[derive(serde::Deserialize)]
+struct NameArgs {
+    name: String,
+}
+
+/// `{"ids": first MAX_LIST, "count": total}`.
+fn capped(s: Option<&std::collections::BTreeSet<String>>) -> serde_json::Value {
+    let s = s.into_iter().flatten();
+    serde_json::json!({
+        "ids": s.clone().take(MAX_LIST).collect::<Vec<_>>(),
+        "count": s.count(),
+    })
+}
+
+/// A schedule table as text cells, as the CSV writes them; at most `max` rows in all.
+fn table_json(t: &bimble_drawing::schedule::Table, max: usize) -> serde_json::Value {
+    use bimble_drawing::schedule::Cell;
+    let cells = |c: &[Cell]| c.iter().map(Cell::text).collect::<Vec<_>>();
+    let mut left = max;
+    let groups: Vec<_> = t
+        .groups
+        .iter()
+        .map(|g| {
+            let n = g.rows.len().min(left);
+            left -= n;
+            serde_json::json!({
+                "level": g.level,
+                "rows": g.rows[..n].iter().map(|r| cells(&r.cells)).collect::<Vec<_>>(),
+                "subtotal": cells(&g.subtotal),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "name": t.name,
+        "columns": t.fields.iter().map(|f| f.title()).collect::<Vec<_>>(),
+        "groups": groups,
+        "total": t.total.as_deref().map(cells),
+        "count": t.count,
+        "truncated": t.count > max,
+    })
+}
+
+/// Run an API verb (`query("verbs")`, `query("describe", {"name"})`) as one undoable step.
+#[wasm_bindgen]
+pub fn verb(name: &str, args_json: &str) -> Result<(), JsValue> {
+    let args = if args_json.trim().is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_str(args_json).map_err(|e| JsValue::from_str(&e.to_string()))?
+    };
+    with_viewer(|v| {
+        let cmds = bimble_api::dispatch::run(model(v)?, name, args)?;
+        v.try_apply(cmds)
     })
 }
 
