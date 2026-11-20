@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 import { state, actions, historyLabels, runAction, undo, redo } from "../bimble";
 import { t } from "../i18n";
 import { currentDialog } from "../dialogs";
@@ -14,6 +14,12 @@ const undoLabel = computed(() => {
 });
 // A full-window page (Home) has the reference's short header: logo, File, command field, user (fr/Home.html).
 const bare = computed(() => page()?.layout === "full");
+// Ctrl+K / Cmd+K opens the command palette anywhere (D8).
+function onKey(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); currentDialog.value = "palette"; }
+}
+onMounted(() => window.addEventListener("keydown", onKey));
+onUnmounted(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
@@ -47,8 +53,8 @@ const bare = computed(() => page()?.layout === "full");
       <span class="mono schema" style="font-size:12px" data-bb="quickbar-schema">{{ state.schema ?? '' }}</span>
       <span class="chip nx" :class="state.unsaved ? 'c-o' : 'c-m'" data-bb="state-chip">{{ t(state.unsaved ? 'quick.notSaved' : 'app.saved') }}</span>
     </div>
-    <!-- The palette is egui-only (not in ALL_ACTIONS): the field keeps the reference look, it opens nothing yet. -->
-    <button class="cmdk" type="button" data-bb="command-field" data-missing="palette-query"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg><span>{{ t('quick.search') }}</span><span class="kbd">Ctrl K</span></button>
+    <!-- Opens the command palette (src/dialogs/Palette.vue, D8). -->
+    <button class="cmdk" type="button" data-bb="command-field" aria-haspopup="dialog" @click="currentDialog = 'palette'"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg><span>{{ t('quick.search') }}</span><span class="kbd">Ctrl K</span></button>
     <!-- Settings → You: an empty disc when no name is set. -->
     <span class="user" data-bb="quickbar-user" :title="state.user?.name" :data-missing="state.user ? undefined : 'user-name-unset'">{{ state.user?.trigram }}</span>
     <button v-if="!bare" class="btn" :class="on('save') ? 'p' : 'd'" type="button" :disabled="!on('save')" data-bb="quickbar-primary"
