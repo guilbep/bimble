@@ -64,3 +64,5 @@ marks the decisions he took himself.
 | 56 | Placing hint copy | Rust hint (English) / UI keys by kind and click | UI keys; only the slab second click is from the reference, others follow its pattern | Rust hint is English only |
 | 57 | Sheets with no sheet drawing call | draw title block text in TS / frame, title block box, number and name only | the latter, rest data-missing (`sheet_svg`) | Rust has `Sheet::to_svg`: a Rust ticket (D-R) bridges it |
 | 58 | Sheets page tab name | the sheet number and name / "Feuilles" | "Feuilles" for now | ViewTabs takes a static page name |
+| 59 | Which schedule the Quantities page shows | a picker / open an egui schedule tab / the built-in "All elements" | "All elements" (else the first) | the reference has no picker; it holds the selected slab |
+| 60 | Schedule column titles (Rust, English) | show raw / translate in the UI by title | UI keys, raw as fallback | Rust titles are English |

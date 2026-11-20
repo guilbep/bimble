@@ -622,5 +622,47 @@
     "only": [
       "D3"
     ]
+  },
+  "quantities-title": {
+    "ref": ".page h2",
+    "lab": "[data-bb=\"quantities-title\"]",
+    "only": [
+      "D6"
+    ]
+  },
+  "quantities-group": {
+    "ref": ".page > div > span.sel-inp:nth-of-type(2)",
+    "lab": "[data-bb=\"quantities-group\"]",
+    "only": [
+      "D6"
+    ]
+  },
+  "quantities-filter": {
+    "ref": ".page > div > span.sel-inp:nth-of-type(3)",
+    "lab": "[data-bb=\"quantities-filter\"]",
+    "only": [
+      "D6"
+    ]
+  },
+  "quantities-columns": {
+    "ref": ".page .btn.s",
+    "lab": "[data-bb=\"quantities-columns\"]",
+    "only": [
+      "D6"
+    ]
+  },
+  "quantities-export": {
+    "ref": ".page .btn.p",
+    "lab": "[data-bb=\"quantities-export\"]",
+    "only": [
+      "D6"
+    ]
+  },
+  "quantities-table": {
+    "ref": ".page table.t",
+    "lab": "[data-bb=\"quantities-table\"]",
+    "only": [
+      "D6"
+    ]
   }
 }
