@@ -522,6 +522,39 @@ pub fn family_label(f: Option<MaterialCategory>) -> &'static str {
     f.map_or("Any", |f| f.label())
 }
 
+/// A schedule table as JSON (the web lab's `query("schedule_rows")`): text cells, as the CSV
+/// writes them; at most `max` rows in all. Each group's `ids` gives, beside `rows`, the GlobalId
+/// of each row's element (null if not in the scene).
+pub fn table_json(t: &Table, scene: &Scene, max: usize) -> serde_json::Value {
+    let cells = |c: &[Cell]| c.iter().map(Cell::text).collect::<Vec<_>>();
+    let mut left = max;
+    let groups: Vec<_> = t
+        .groups
+        .iter()
+        .map(|g| {
+            let n = g.rows.len().min(left);
+            left -= n;
+            serde_json::json!({
+                "level": g.level,
+                "rows": g.rows[..n].iter().map(|r| cells(&r.cells)).collect::<Vec<_>>(),
+                "ids": g.rows[..n]
+                    .iter()
+                    .map(|r| scene.elements.get(r.element).map(|e| e.global_id.as_str()))
+                    .collect::<Vec<_>>(),
+                "subtotal": cells(&g.subtotal),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "name": t.name,
+        "columns": t.fields.iter().map(|f| f.title()).collect::<Vec<_>>(),
+        "groups": groups,
+        "total": t.total.as_deref().map(cells),
+        "count": t.count,
+        "truncated": t.count > max,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,5 +689,72 @@ mod tests {
                 assert_eq!(tot[1], Cell::Text(format!("Total ({})", t.count)));
             }
         }
+    }
+
+    /// `ids` give each row's GlobalId, in row order: a model cut to two columns of one storey.
+    #[test]
+    fn table_json_ids_follow_the_rows() {
+        use bimble_core::GlobalId;
+        let mut model = concrete_frame(&FrameSpec::default());
+        // Fixed ids (the demo's are random), P1.10's sorting before P1.00's.
+        let fixed = |name: &str| GlobalId::from_u128(if name == "P1.10" { 1 } else { 2 });
+        model.elements = std::mem::take(&mut model.elements)
+            .into_values()
+            .filter(|e| e.name == "P1.00" || e.name == "P1.10")
+            .map(|mut e| {
+                e.id = fixed(&e.name);
+                (e.id, e)
+            })
+            .collect();
+        let scene = Scene::from_model(&model);
+        let def = default_schedules()
+            .into_iter()
+            .find(|d| d.name == "All elements")
+            .unwrap();
+        let j = table_json(&schedule(&scene, &def), &scene, 50);
+        assert_eq!((&j["count"], &j["truncated"]), (&2.into(), &false.into()));
+        let g = &j["groups"][0];
+        assert_eq!(
+            (g["rows"][0][1].as_str(), g["rows"][1][1].as_str()),
+            (Some("P1.00"), Some("P1.10"))
+        );
+        // Row order (P1.00, P1.10), not GlobalId order.
+        let ids = [fixed("P1.00"), fixed("P1.10")].map(|i| i.as_str().to_owned());
+        assert_eq!(g["ids"], serde_json::json!(ids));
+    }
+
+    /// More than `max` rows: `truncated`, `count` stays the full count, rows and ids are cut
+    /// the same, across groups.
+    #[test]
+    fn table_json_caps_rows_and_ids() {
+        let scene = Scene::from_model(&concrete_frame(&FrameSpec::default()));
+        let def = default_schedules()
+            .into_iter()
+            .find(|d| d.name == "Concrete columns")
+            .unwrap();
+        let t = schedule(&scene, &def);
+        let j = table_json(&t, &scene, 5);
+        assert_eq!(j["count"], t.count);
+        assert!(t.count > 5);
+        assert_eq!(j["truncated"], true);
+        let groups = j["groups"].as_array().unwrap();
+        let rows: usize = groups
+            .iter()
+            .map(|g| g["rows"].as_array().unwrap().len())
+            .sum();
+        let ids: Vec<_> = groups
+            .iter()
+            .flat_map(|g| g["ids"].as_array().unwrap().clone())
+            .collect();
+        assert_eq!((rows, ids.len()), (5, 5));
+        let all: Vec<_> = t
+            .groups
+            .iter()
+            .flat_map(|g| &g.rows)
+            .take(5)
+            .map(|r| scene.elements[r.element].global_id.as_str())
+            .collect();
+        assert_eq!(ids, all);
+        assert_eq!(table_json(&t, &scene, t.count)["truncated"], false);
     }
 }

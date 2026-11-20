@@ -209,7 +209,7 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
                 .find(|d| d.name == a.name)
                 .ok_or("no schedule with this name")?;
             let l = v.loaded.as_ref().ok_or("no model open")?;
-            json(table_json(
+            json(bimble_drawing::schedule::table_json(
                 &bimble_drawing::schedule::schedule(&l.scene, &def),
                 &l.scene,
                 MAX_LIST,
@@ -278,43 +278,6 @@ fn capped(s: Option<&std::collections::BTreeSet<String>>) -> serde_json::Value {
     serde_json::json!({
         "ids": s.clone().take(MAX_LIST).collect::<Vec<_>>(),
         "count": s.count(),
-    })
-}
-
-/// A schedule table as text cells, as the CSV writes them; at most `max` rows in all. Each group's
-/// `ids` gives, beside `rows`, the GlobalId of each row's element (null if not in the scene).
-fn table_json(
-    t: &bimble_drawing::schedule::Table,
-    scene: &bimble_geom::scene::Scene,
-    max: usize,
-) -> serde_json::Value {
-    use bimble_drawing::schedule::Cell;
-    let cells = |c: &[Cell]| c.iter().map(Cell::text).collect::<Vec<_>>();
-    let mut left = max;
-    let groups: Vec<_> = t
-        .groups
-        .iter()
-        .map(|g| {
-            let n = g.rows.len().min(left);
-            left -= n;
-            serde_json::json!({
-                "level": g.level,
-                "rows": g.rows[..n].iter().map(|r| cells(&r.cells)).collect::<Vec<_>>(),
-                "ids": g.rows[..n]
-                    .iter()
-                    .map(|r| scene.elements.get(r.element).map(|e| e.global_id.as_str()))
-                    .collect::<Vec<_>>(),
-                "subtotal": cells(&g.subtotal),
-            })
-        })
-        .collect();
-    serde_json::json!({
-        "name": t.name,
-        "columns": t.fields.iter().map(|f| f.title()).collect::<Vec<_>>(),
-        "groups": groups,
-        "total": t.total.as_deref().map(cells),
-        "count": t.count,
-        "truncated": t.count > max,
     })
 }
 
