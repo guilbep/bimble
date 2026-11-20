@@ -42,9 +42,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
       @click="undo()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 7 5 11l4 4"/><path d="M5 11h9a5 5 0 0 1 0 10h-3"/></svg></button>
     <button v-if="!bare" class="ib" type="button" :disabled="!on('redo')" :aria-label="t('quick.redo')" :title="t('quick.redo')" data-bb="quickbar-redo"
       @click="redo()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 7 4 4-4 4"/><path d="M19 11h-9a5 5 0 0 0 0 10h3"/></svg></button>
-    <!-- Print and export is screen D4 (not built): no Rust call opens it. -->
-    <button v-if="!bare" class="ib a" type="button" disabled :aria-label="t('quick.export')" :title="t('quick.export')" data-bb="quickbar-export"
-      data-missing="export-screen-D4"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1"/><path d="M7 14h10v6H7z"/></svg></button>
+    <!-- Print and export opens screen D4 (dialogs/Export.vue). -->
+    <button v-if="!bare" class="ib a" type="button" :aria-label="t('quick.export')" :title="t('quick.export')" data-bb="quickbar-export"
+      aria-haspopup="dialog" @click="currentDialog = 'export'"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1"/><path d="M7 14h10v6H7z"/></svg></button>
     <button v-if="!bare" class="ib a" type="button" :disabled="!on('synchronize')" :aria-label="t('quick.sync')" :title="t('quick.sync')" data-bb="quickbar-sync"
       @click="runAction('synchronize')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.5-4.5L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.5 4.5L20 16"/><path d="M20 20v-4h-4"/></svg></button>
     <div v-if="bare" style="flex:1"></div>

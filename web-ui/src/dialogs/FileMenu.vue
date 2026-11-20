@@ -17,7 +17,7 @@ const NEW = '<path d="M5 3h10l4 4v14H5z"/><path d="M12 10v6M9 13h6"/>';
 const UP = '<path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 13v8h14v-8"/>';
 const INFO = '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><path d="M12 8h.01"/>';
 
-interface Entry { key: Key; icon: string; kbd?: string; action?: string; missing?: string }
+interface Entry { key: Key; icon: string; kbd?: string; action?: string; missing?: string; dialog?: string }
 const sections: { title: Key; entries: Entry[] }[] = [
   { title: "filemenu.files", entries: [
     { key: "filemenu.new", icon: NEW, kbd: "Ctrl+N", action: "new" },
@@ -32,8 +32,8 @@ const sections: { title: Key; entries: Entry[] }[] = [
     { key: "filemenu.ifc2x3", icon: UP, action: "export_ifc2x3" },
   ] },
   { title: "filemenu.paper", entries: [
-    // Print and export is screen D4 (not built): no Rust call opens it.
-    { key: "filemenu.print", icon: '<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1"/><path d="M7 14h10v6H7z"/>', kbd: "Ctrl+P", missing: "export-screen-D4" },
+    // Print and export opens screen D4 (dialogs/Export.vue).
+    { key: "filemenu.print", icon: '<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1"/><path d="M7 14h10v6H7z"/>', kbd: "Ctrl+P", dialog: "export" },
     // egui "Export view… (PDF, SVG)".
     { key: "filemenu.exportView", icon: UP, action: "on_paper" },
   ] },
@@ -60,8 +60,8 @@ function run(name?: string) {
     <template v-for="s in sections" :key="s.title">
       <div class="eyebrow">{{ tx(s.title) }}</div>
       <button v-for="e in s.entries" :key="e.key" class="ti" type="button" role="menuitem"
-        :disabled="!on(e.action)" :data-missing="e.missing" :data-bb="`file-menu-${e.action ?? e.missing}`"
-        @click="run(e.action)">
+        :disabled="!e.dialog && !on(e.action)" :data-missing="e.missing" :data-bb="`file-menu-${e.action ?? e.dialog ?? e.missing}`"
+        @click="e.dialog ? (currentDialog = e.dialog) : run(e.action)">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="e.icon"></svg>
         <span style="flex:1">{{ tx(e.key) }}</span><span class="mono">{{ e.kbd ?? '' }}</span>
       </button>
