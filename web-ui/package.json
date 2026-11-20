@@ -11,7 +11,8 @@
     "build": "vite build",
     "perf": "node perf/lighthouse.mjs",
     "perf:check": "node perf/check.mjs ../perf-results/web.txt perf/budgets.txt 0.15",
-    "design-check": "node design-check/compare.mjs"
+    "design-check": "node design-check/compare.mjs",
+    "e2e:place": "node e2e/place-slab.mjs --lab"
   },
   "dependencies": {
     "vue": "^3.5.45"

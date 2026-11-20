@@ -30,6 +30,7 @@ The address names a state of the lab (`src/deeplink.ts`, read once after the mod
 `view=plan:N` puts the plan tab first and the 3D tab after it (Rust tab calls: close and re-open 3D), as the references show.
 Each wasm step waits for the next state change. `data-bb-ready` is set after the last step: the design check waits for it.
 `design-check/screens.json` gives the deep link of each screen (`lab`).
+`npm run e2e:place -- http://127.0.0.1:4255/` places a slab with two real mouse clicks on the plan (installed Chrome, headless), checks one new IfcSlab with the first click as a corner, then Undo (`--one-click` must fail).
 
 To add a page, a dialog or a right panel, add one file. Do not edit `App.vue`:
 
