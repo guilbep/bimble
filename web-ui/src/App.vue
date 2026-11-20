@@ -9,8 +9,8 @@ import ViewTabs from "./shell/ViewTabs.vue";
 import ModifierPanel from "./shell/ModifierPanel.vue";
 import StatusBar from "./shell/StatusBar.vue";
 import "./shell/shell.css";
-import { onMounted, onUnmounted } from "vue";
-import { pages, currentPage } from "./pages";
+import { computed, onMounted, onUnmounted } from "vue";
+import { pages, currentPage, page } from "./pages";
 import { dialogs, currentDialog } from "./dialogs";
 import { panels, currentPanel } from "./panels";
 import { applyDeepLink } from "./deeplink";
@@ -21,6 +21,7 @@ function onKey(e: KeyboardEvent) {
   if (currentDialog.value) currentDialog.value = null;
   else if (currentPage.value) currentPage.value = null;
 }
+const full = computed(() => page()?.layout === "full");
 onMounted(() => { window.addEventListener("keydown", onKey); void applyDeepLink(); });
 onUnmounted(() => window.removeEventListener("keydown", onKey));
 </script>
@@ -29,13 +30,14 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   <!-- Window frame of the wireframes v01 (DESIGN-SPEC.md § Window). Each band owns its file. -->
   <div class="bb-app">
     <QuickBar />
-    <TabsBar />
-    <Ribbon />
+    <!-- A full-window page (`layout = "full"`) hides the bands it has no use for; #bimble stays in the DOM. -->
+    <TabsBar v-show="!full" />
+    <Ribbon v-show="!full" />
     <div class="bb-work">
-      <LeftPanel />
+      <LeftPanel v-show="!full" />
       <div class="bb-main">
-        <ViewTabs />
-        <section v-if="currentPage && pages[currentPage]" class="bb-page" data-bb="page">
+        <ViewTabs v-show="!full" />
+        <section v-if="currentPage && pages[currentPage]" class="bb-page" :class="{ full }" data-bb="page">
           <component :is="pages[currentPage]" />
         </section>
         <!-- Hidden, never removed, under a page. -->
@@ -62,11 +64,15 @@ html, body { margin: 0; height: 100%; }
 body { background: var(--bb-cream); }
 /* Dialog and menu framing (DESIGN-SPEC § Components): a dialog component's root takes one of these. */
 .bb-dialog { display: flex; flex-direction: column; gap: 14px; padding: 24px; border-radius: 16px; background: var(--bb-cream); }
+/* Menus have no dimmed backdrop (the reference draws none): the backdrop stays for click-outside, clear. */
+.bb-app > .bb-backdrop:has(> .bb-menu) { background: none; }
 .bb-menu { padding: 6px; border-radius: 16px; border: 1px solid var(--bb-stone); background: var(--bb-sheet); }
 </style>
 
 <style scoped>
 .bb-page { flex: 1; min-height: 0; overflow: auto; padding: 24px 32px; background: var(--bb-sheet); }
+/* The reference's body row for a full-window page: cream ground, the page owns its padding. */
+.bb-page.full { padding: 0; background: var(--bb-cream); overflow: hidden; }
 .bb-right { width: 400px; flex: none; box-sizing: border-box; padding: 14px; border-left: 1px solid var(--bb-stone); background: var(--bb-cream); overflow: auto; }
 .bb-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: color-mix(in srgb, var(--bb-ink) 30%, transparent); }
 #bimble { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }

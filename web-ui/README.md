@@ -32,8 +32,16 @@ Each wasm step waits for the next state change. `data-bb-ready` is set after the
 To add a page, a dialog or a right panel, add one file. Do not edit `App.vue`:
 
 - `src/pages/ProjectInfo.vue` → `?page=project-info`. It replaces the viewport (sheet, padding 24 32). `#bimble` stays in the DOM, hidden. Esc closes it.
-- `src/dialogs/FileMenu.vue` → `?dialog=file-menu`. It shows over everything on an ink 30 % backdrop. Its root takes the class `bb-dialog` (cream card) or `bb-menu` (sheet menu). Esc closes it. No OK/Cancel (ADR 0052).
+- `src/dialogs/FileMenu.vue` → `?dialog=file-menu`. It shows over everything. Its root takes the class `bb-dialog` (cream card, on an ink 30 % backdrop) or `bb-menu` (sheet menu, no backdrop dim). Esc closes it. No OK/Cancel (ADR 0052).
 - `src/panels/Standards.vue` → `?panel=standards`. The 400-wide right panel.
+
+A page or a dialog can export values from a plain `<script lang="ts">` block next to `<script setup>`:
+
+- `hint`: an i18n key. The status bar shows it while the page or dialog is current.
+- `layout = "full"` (pages): the page fills the window under the quick-access row. The tabs row, ribbon, left panel and view tabs are hidden.
+- `side` (pages): a component the left panel shows in place of the properties. Name its file `*Side.vue` (it is not a page).
+
+Copy for a screen goes in a new `src/i18n/parts/<screen>.ts` (`fr`, and `en` typed from `fr`). It registers itself.
 
 The id is the file name in kebab-case. `currentPage`, `currentDialog` and `currentPanel` (in each `index.ts`) open and close them.
 `src/pages/Blank.vue` and `src/dialogs/Blank.vue` are examples.

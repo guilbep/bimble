@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import Navigator from "./Navigator.vue";
 import Properties from "../Properties.vue";
+import { page } from "../pages";
 </script>
 
 <template>
-  <!-- Reference: aside.left > nav.nav + .props (fr/View3D.html). -->
+  <!-- A page may export `side`: it replaces the properties while the page is current. Reference: aside.left > nav.nav + .props (fr/View3D.html). -->
   <aside class="left" data-bb="left-panel">
     <Navigator />
-    <div class="props" data-bb="properties"><Properties /></div>
+    <div class="props" data-bb="properties"><component :is="page()?.side ?? Properties" /></div>
   </aside>
 </template>
 

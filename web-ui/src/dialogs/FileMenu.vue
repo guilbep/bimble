@@ -1,13 +1,16 @@
+<script lang="ts">
+export const hint = "filemenu.hint";
+</script>
+
 <script setup lang="ts">
 // Screen A2, File menu (wireframes v01 fr/FileMenu.html). Each entry runs one egui action by name (`query("actions")`).
 import { actions, runAction } from "../bimble";
-import { lang } from "../i18n";
-import * as copy from "../i18n/parts/filemenu";
+import { t } from "../i18n";
+import type * as copy from "../i18n/parts/filemenu";
 import { currentDialog } from ".";
 
 type Key = keyof typeof copy.fr;
-// ponytail: own lookup instead of a line in i18n/index.ts (parallel tickets edit that file); fold it in when convenient.
-const tx = (k: Key) => copy[lang.value][k];
+const tx = (k: Key) => t(k);
 
 // Icon paths copied from the reference.
 const NEW = '<path d="M5 3h10l4 4v14H5z"/><path d="M12 10v6M9 13h6"/>';
@@ -71,11 +74,6 @@ function run(name?: string) {
     </button>
   </div>
 </template>
-
-<style>
-/* The reference draws a menu with no dimmed backdrop: the registry's backdrop stays (click outside closes), clear. */
-.bb-app > .bb-backdrop:has(> .bb-menu) { background: none; }
-</style>
 
 <style scoped>
 /* style="position:absolute;left:62px;top:44px;width:380px;background:#FFFFFF;border:1px solid #5C574D;border-radius:16px;padding:6px 6px 8px;display:flex;flex-direction:column" */

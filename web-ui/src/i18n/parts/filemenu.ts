@@ -20,6 +20,7 @@ export const fr = {
   "filemenu.settings": "Réglages…",
   "filemenu.about": "À propos de Bimble…",
   "filemenu.quit": "Quitter",
+  "filemenu.hint": "Fichier : choisissez une commande · Échap : fermer",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "filemenu.label": "File",
@@ -42,4 +43,5 @@ export const en: Record<keyof typeof fr, string> = {
   "filemenu.settings": "Settings…",
   "filemenu.about": "About Bimble…",
   "filemenu.quit": "Exit",
+  "filemenu.hint": "File: choose a command · Esc: close",
 };

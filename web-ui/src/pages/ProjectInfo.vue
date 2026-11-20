@@ -1,3 +1,9 @@
+<script lang="ts">
+import ProjectInfoSide from "./ProjectInfoSide.vue";
+export const hint = "projectinfo.hint";
+export const side = ProjectInfoSide;
+</script>
+
 <script setup lang="ts">
 // A3 Project information (wireframes v01 ProjectInfo.html; ADR 0030, 0052). Leaving a field or Enter
 // (the native `change` event) sends one SetProject with the whole map; undo restores it.

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { state, visibility, actions, runAction, pointer, status } from "../bimble";
 import { lang, setLang, t, type Lang } from "../i18n";
+import { page } from "../pages";
+import { dialog } from "../dialogs";
 
 const langs: Lang[] = ["fr", "en"];
 // Each chip: a view mode read from `query("visibility")`; `undo` is the action its × runs, enabled as `query("actions")` says.
@@ -32,7 +34,7 @@ const chips = (): Chip[] => {
 <template>
   <!-- Reference: footer.status (D1). -->
   <footer class="status" data-bb="statusbar">
-    <span class="hint" data-bb="status-hint">{{ t("status.hint") }}</span>
+    <span class="hint" data-bb="status-hint">{{ t(dialog()?.hint ?? page()?.hint ?? "status.hint") }}</span>
     <span class="mono q coords" style="font-size:12px" data-bb="status-coords">{{ pointer?.text ?? "" }}</span>
     <span style="flex:1"></span>
     <!-- Reference: `.status > .chip`, a set of direct children; each carries the landmark, the check reads the first. -->

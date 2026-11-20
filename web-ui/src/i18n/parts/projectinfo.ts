@@ -21,6 +21,13 @@ export const fr = {
   "projectinfo.other": "Autres champs",
   "projectinfo.addField": "Ajouter un champ",
   "projectinfo.error": "Erreur : {msg}",
+  "projectinfo.hint": "Modifiez un champ ; Ctrl+Z annule",
+  "projectinfo.side.title": "Propriétés",
+  "projectinfo.side.page": "Page",
+  "projectinfo.side.entries": "Entrées",
+  "projectinfo.side.stored": "Stockées dans",
+  "projectinfo.side.titleBlocks": "Cartouches",
+  "projectinfo.side.keyNote": "Une clé entre accolades, par ex. {client}, écrit la valeur dans un cartouche.",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "projectinfo.basic": "Basic data",
@@ -44,4 +51,11 @@ export const en: Record<keyof typeof fr, string> = {
   "projectinfo.other": "Other fields",
   "projectinfo.addField": "Add field",
   "projectinfo.error": "Error: {msg}",
+  "projectinfo.hint": "Edit a field; Ctrl+Z undoes",
+  "projectinfo.side.title": "Properties",
+  "projectinfo.side.page": "Page",
+  "projectinfo.side.entries": "Entries",
+  "projectinfo.side.stored": "Stored in",
+  "projectinfo.side.titleBlocks": "Title blocks",
+  "projectinfo.side.keyNote": "A key in braces, e.g. {client}, writes the value in a title block.",
 };

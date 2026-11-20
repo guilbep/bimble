@@ -1,3 +1,7 @@
+<script lang="ts">
+export const layout = "full";
+</script>
+
 <script setup lang="ts">
 // A1 Home (fr/Home.html). Layout only; every button is one runAction (ADR 0048).
 import { state, actions, runAction } from "../bimble";
@@ -46,12 +50,8 @@ const act = (name: string) => { if (on(name)) runAction(name); };
 </template>
 
 <style scoped>
-/* .app's body row: flex:1;position:relative;overflow:hidden;display:flex;gap:40px;padding:48px 56px.
-   ponytail: fixed between the quick-access bar (46) and the status bar (34.546875, the reference's measured height with its
-   13px/1.35 text) so it covers the shell bands Home has no use for; z under the dialog backdrop (100). Measure the bars if they ever change height. */
-.home { position: fixed; left: 0; right: 0; top: 46px; bottom: 34.546875px; z-index: 50; overflow: hidden; display: flex; gap: 40px; padding: 48px 56px; }
-/* The reference's ground is .app's cream behind a transparent row: a layer under the content hides the shell bands. */
-.home::before { content: ""; position: absolute; inset: 0; background: var(--bb-cream); }
+/* .app's body row: flex:1;position:relative;overflow:hidden;display:flex;gap:40px;padding:48px 56px. A full-window page (layout = "full"). */
+.home { position: relative; height: 100%; box-sizing: border-box; overflow: hidden; display: flex; gap: 40px; padding: 48px 56px; }
 /* DESIGN-SPEC § Components: one decorative disc (clay, 420) bled off the bottom-left corner. */
 .disc { position: absolute; left: -160px; bottom: -200px; width: 420px; height: 420px; border-radius: 50%; background: var(--bb-clay); }
 .left { position: relative; width: 360px; flex: none; display: flex; flex-direction: column; gap: 18px; }
