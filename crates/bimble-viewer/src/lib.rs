@@ -204,6 +204,7 @@ pub async fn start_web(canvas: web_sys::HtmlCanvasElement) -> Result<(), String>
             .and_then(|p| p.get(k))
     };
     let open_url = param("url");
+    let viewport_only = param("viewport").is_some();
     let mut options = eframe::WebOptions::default();
     // Browsers can expose WebGPU without an adapter behind it (Chrome on many Linux machines):
     // wgpu would pick WebGPU and fail, so ask for an adapter first and use WebGL2 without one.
@@ -223,7 +224,8 @@ pub async fn start_web(canvas: web_sys::HtmlCanvasElement) -> Result<(), String>
                     .ok_or("the viewer needs the wgpu renderer")?;
                 settings::Settings::load().apply_look(&cc.egui_ctx);
                 state::guard_page_unload();
-                let app = Viewer::new(rs);
+                let mut app = Viewer::new(rs);
+                app.viewport_only = viewport_only;
                 let backend = format!("{:?}", rs.adapter.get_info().backend);
                 tell("started", Some(&backend));
                 if let Some(url) = open_url {
@@ -964,6 +966,9 @@ struct Viewer {
     links_window: bool,
     /// Home (#52) over the main view.
     home_open: bool,
+    /// Only the view and its in-view tools, no egui chrome: a web page owns the panels
+    /// (`?viewport`, ADR 0048).
+    viewport_only: bool,
     /// Recent files' previews, read once (#52); None: none on disk.
     previews: std::collections::HashMap<String, Option<egui::TextureHandle>>,
     /// The file whose preview to keep once its first picture is drawn.
@@ -1124,6 +1129,7 @@ impl Viewer {
             about_window: false,
             links_window: false,
             home_open: false,
+            viewport_only: false,
             previews: Default::default(),
             preview_for: None,
             synced_at: None,
@@ -4581,76 +4587,80 @@ impl eframe::App for Viewer {
                 .fill(fill)
                 .inner_margin(egui::Margin::symmetric(ui_theme::GAP_M as i8, 4))
         };
-        // One row: the File menu, the ribbon's tabs, quick access (#51).
-        egui::Panel::top("title")
-            .frame(bar(ui_theme::tabs_bg()).inner_margin(egui::Margin {
-                left: ui_theme::GAP_M as i8,
-                right: ui_theme::GAP_M as i8,
-                top: 2,
-                bottom: 0,
-            }))
-            .show(ui, |ui| self.title_row(ui));
-        egui::Panel::top("ribbon")
-            .frame(
-                bar(ui_theme::ribbon_bg())
-                    .inner_margin(egui::Margin::symmetric(ui_theme::GAP_M as i8, 6)),
-            )
-            .show(ui, |ui| self.ribbon_panel(ui));
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        // Left: the model navigator above, the properties (of the selected element, else of
-        // the view) below.
-        egui::Panel::left("browser")
-            .resizable(true)
-            .default_size(290.0)
-            .min_size(220.0)
-            .show(ui, |ui| {
-                egui::Panel::top("navigator")
-                    .resizable(true)
-                    .default_size(ui.available_height() * 0.45)
-                    .min_size(120.0)
-                    .show(ui, |ui| self.navigator(ui));
-                egui::CentralPanel::default().show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("properties")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            let placing = self
-                                .loaded
-                                .as_ref()
-                                .and_then(|l| l.edit.as_ref())
-                                .is_some_and(|e| e.placing.is_some());
-                            if placing {
-                                // While placing, what is placed: storey and sizes (ADR 0027).
-                                if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut())
-                                {
-                                    ui.heading("Place");
-                                    ed.place_panel(ui);
-                                    if let Some(m) = &ed.message {
-                                        ui.label(m);
+        // `?viewport`: no chrome, the page around the canvas owns the panels (ADR 0048).
+        if !self.viewport_only {
+            // One row: the File menu, the ribbon's tabs, quick access (#51).
+            egui::Panel::top("title")
+                .frame(bar(ui_theme::tabs_bg()).inner_margin(egui::Margin {
+                    left: ui_theme::GAP_M as i8,
+                    right: ui_theme::GAP_M as i8,
+                    top: 2,
+                    bottom: 0,
+                }))
+                .show(ui, |ui| self.title_row(ui));
+            egui::Panel::top("ribbon")
+                .frame(
+                    bar(ui_theme::ribbon_bg())
+                        .inner_margin(egui::Margin::symmetric(ui_theme::GAP_M as i8, 6)),
+                )
+                .show(ui, |ui| self.ribbon_panel(ui));
+            egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+            // Left: the model navigator above, the properties (of the selected element, else of
+            // the view) below.
+            egui::Panel::left("browser")
+                .resizable(true)
+                .default_size(290.0)
+                .min_size(220.0)
+                .show(ui, |ui| {
+                    egui::Panel::top("navigator")
+                        .resizable(true)
+                        .default_size(ui.available_height() * 0.45)
+                        .min_size(120.0)
+                        .show(ui, |ui| self.navigator(ui));
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("properties")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                let placing = self
+                                    .loaded
+                                    .as_ref()
+                                    .and_then(|l| l.edit.as_ref())
+                                    .is_some_and(|e| e.placing.is_some());
+                                if placing {
+                                    // While placing, what is placed: storey and sizes (ADR 0027).
+                                    if let Some(ed) =
+                                        self.loaded.as_mut().and_then(|l| l.edit.as_mut())
+                                    {
+                                        ui.heading("Place");
+                                        ed.place_panel(ui);
+                                        if let Some(m) = &ed.message {
+                                            ui.label(m);
+                                        }
                                     }
-                                }
-                            } else if self.link_selected.is_some() {
-                                if ui.small_button("Back to the view").clicked() {
-                                    self.select_link_element(None);
+                                } else if self.link_selected.is_some() {
+                                    if ui.small_button("Back to the view").clicked() {
+                                        self.select_link_element(None);
+                                    } else {
+                                        self.link_properties(ui);
+                                    }
+                                } else if self.selected.is_some() {
+                                    if ui.small_button("Back to the view").clicked() {
+                                        self.clear_selection();
+                                    } else {
+                                        self.properties(ui);
+                                    }
+                                } else if self.schedule.is_some() {
+                                    self.schedule_properties(ui);
+                                } else if self.layout.is_some() {
+                                    self.layout_properties(ui);
                                 } else {
-                                    self.link_properties(ui);
+                                    self.view_properties(ui);
                                 }
-                            } else if self.selected.is_some() {
-                                if ui.small_button("Back to the view").clicked() {
-                                    self.clear_selection();
-                                } else {
-                                    self.properties(ui);
-                                }
-                            } else if self.schedule.is_some() {
-                                self.schedule_properties(ui);
-                            } else if self.layout.is_some() {
-                                self.layout_properties(ui);
-                            } else {
-                                self.view_properties(ui);
-                            }
-                        });
+                            });
+                    });
                 });
-            });
+        }
         if self.plan_window {
             let mut open = true;
             egui::Window::new("Export view")
@@ -4669,7 +4679,7 @@ impl eframe::App for Viewer {
             self.history_window = open;
         }
         // Right: the graphic standards, edited live (ADR 0027).
-        if self.standards_open {
+        if self.standards_open && !self.viewport_only {
             egui::Panel::right("standards")
                 .resizable(true)
                 .default_size(400.0)
@@ -4691,7 +4701,7 @@ impl eframe::App for Viewer {
                 });
         }
         // On Home, no tabs: leaving it brings back the view's.
-        if self.loaded.is_some() && !self.home_open {
+        if self.loaded.is_some() && !self.home_open && !self.viewport_only {
             egui::Panel::top("view-tabs")
                 .frame(
                     egui::Frame::new()
@@ -4716,25 +4726,32 @@ impl eframe::App for Viewer {
             if self.loaded.is_none() && self.loading.is_some() {
                 return;
             }
-            // Home (#52): when nothing is open, or asked for.
-            if self.loaded.is_none() || self.home_open {
-                self.home_ui(ui);
+            if self.viewport_only && self.loaded.is_none() {
+                ui.centered_and_justified(|ui| ui.weak("No model open"));
                 return;
             }
-            // The material browser: it takes the main view.
-            if self.materials_page.is_some() {
-                self.materials_ui(ui);
-                return;
-            }
-            // The project information page: it takes the main view.
-            if self.project_page.is_some() {
-                self.project_ui(ui);
-                return;
-            }
-            // A schedule open: it takes the main view.
-            if self.schedule.is_some() {
-                self.schedule_ui(ui);
-                return;
+            // Home and the pages are the egui chrome's: `?viewport` shows only the view.
+            if !self.viewport_only {
+                // Home (#52): when nothing is open, or asked for.
+                if self.loaded.is_none() || self.home_open {
+                    self.home_ui(ui);
+                    return;
+                }
+                // The material browser: it takes the main view.
+                if self.materials_page.is_some() {
+                    self.materials_ui(ui);
+                    return;
+                }
+                // The project information page: it takes the main view.
+                if self.project_page.is_some() {
+                    self.project_ui(ui);
+                    return;
+                }
+                // A schedule open: it takes the main view.
+                if self.schedule.is_some() {
+                    self.schedule_ui(ui);
+                    return;
+                }
             }
             // The view On paper: its drawing takes the main view (ADR 0046).
             if self.on_paper() {

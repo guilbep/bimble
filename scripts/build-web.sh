@@ -25,7 +25,7 @@ if command -v wasm-opt >/dev/null && [ "$PROFILE" = release ]; then
   wasm-opt -O2 --enable-bulk-memory --enable-nontrapping-float-to-int \
     "$out/bimble_web_bg.wasm" -o "$out/bimble_web_bg.wasm"
 fi
-cp web/index.html web/manifold-bridge.js "$out/"
+cp web/index.html web/viewport.html web/manifold-bridge.js "$out/"
 # The page's icon: one source each, under packaging/.
 cp packaging/logo-mark.svg "$out/favicon.svg"
 cp packaging/icon-256.png "$out/favicon.png"
