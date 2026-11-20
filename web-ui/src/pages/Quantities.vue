@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // D6 Quantities (wireframes v01 Quantities.html; ADR 0029). The table is the real schedule from Rust
 // (`schedule_rows`: text cells, subtotals and total as Rust writes them; nothing is summed here).
-// Rows carry no element id in the bridge (bridge.rs table_json drops Row.element): row click and the pink
-// selected row are data-missing. Group, filter, columns and CSV have no Rust call: drawn disabled.
+// Groups carry `ids` (one GlobalId or null per row): a row click selects, the selected element's row is pink
+// (`tr.sl`). Group, filter, columns and CSV have no Rust call: drawn disabled.
 import { computed } from "vue";
-import { scheduleList, scheduleRows, state, type ScheduleDef, type ScheduleTable } from "../bimble";
+import { scheduleList, scheduleRows, select, state, type ScheduleDef, type ScheduleTable } from "../bimble";
 import { t } from "../i18n";
 
 // ponytail: the built-in "All elements" schedule is shown (it mixes classes, as the reference); no schedule
@@ -14,7 +14,9 @@ const def = computed<ScheduleDef | null>(() => {
   const all = scheduleList() as ScheduleDef[];
   return all.find((d) => d.name === "All elements") ?? all[0] ?? null;
 });
-const table = computed<ScheduleTable | null>(() => {
+// ponytail: `ids` is not in bimble.ts's ScheduleTable yet (not this ticket's file); widened here.
+type Table = ScheduleTable & { groups: (ScheduleTable["groups"][number] & { ids?: (string | null)[] })[] };
+const table = computed<Table | null>(() => {
   void state.value.rev;
   if (!def.value) return null;
   try { return scheduleRows(def.value.name); } catch { return null; }
@@ -46,13 +48,13 @@ const family = computed(() => {
     </div>
     <table v-if="table" class="t" data-bb="quantities-table">
       <thead><tr><th v-for="c in table.columns" :key="c" :class="{ r: num(c) }">{{ head(c) }}</th></tr></thead>
-      <tbody data-missing="bridge: element id per schedule row (row click selects, selected row in pink)">
+      <tbody>
         <template v-for="(g, gi) in table.groups" :key="gi">
           <tr v-if="g.level" class="g">
             <td :colspan="span(g.subtotal)">{{ t('quantities.storey', { name: g.level }) }}</td>
             <td v-for="(c, i) in g.subtotal.slice(span(g.subtotal))" :key="i" :class="cls(table.columns[i + span(g.subtotal)])">{{ c }}</td>
           </tr>
-          <tr v-for="(r, ri) in g.rows" :key="ri">
+          <tr v-for="(r, ri) in g.rows" :key="ri" :class="{ sl: !!g.ids?.[ri] && state.selection.includes(g.ids[ri]!) }" @click="g.ids?.[ri] && select([g.ids[ri]!])">
             <td v-for="(c, i) in r" :key="i" :class="cls(table.columns[i])">{{ c }}</td>
           </tr>
         </template>
