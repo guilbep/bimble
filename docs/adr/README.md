@@ -74,3 +74,5 @@ Session journals (what happened, in order, with measurements) are in [`docs/jour
 | [0048](0048-one-api-for-ui-cli-and-agents.md) | One API (`bimble-api`) for the UI, the CLI, wasm and MCP; Vue in the browser as the UI prototyping lab around the egui canvas, egui lags and is redone from stable screens | Accepted (direction) |
 | [0049](0049-brand-two-discs.md) | Brand: two discs (direction C), one job per colour (clay do, pink choose, moss done, ochre look, slate other), Sora, Source Sans 3, DM Mono for the Vue lab | Accepted |
 | [0050](0050-two-web-builds.md) | Two web builds: a small viewer (IFC, .bimble, .bimbleview; no DXF/PDF reference plans) and the full editor; no name section, size profile if it measures smaller | Accepted |
+| [0051](0051-window-frame-two-rows-trade-tabs.md) | Vue lab window frame: two top rows (quick access, then 14 tabs in three groups with trade tabs), from the wireframes v01; amends 0027 and 0037 for the lab | Accepted |
+| [0052](0052-changes-apply-at-once.md) | Changes apply at once: no OK and no Cancel, undo instead; irreversible actions still ask | Accepted |
