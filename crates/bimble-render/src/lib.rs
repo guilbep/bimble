@@ -3509,6 +3509,21 @@ mod tests {
     use super::*;
     use bimble_core::demo::{FrameSpec, concrete_frame};
 
+    /// Held while a test makes, uses or drops a device of its own. Mesa 26 lavapipe crashed
+    /// (SIGSEGV, CI) when test threads made and dropped Vulkan devices at the same time.
+    static GPU_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// One headless device for every test that needs no limits of its own, made once.
+    fn shared_gpu() -> Result<&'static Headless, &'static HeadlessError> {
+        static GPU: std::sync::OnceLock<Result<Headless, HeadlessError>> =
+            std::sync::OnceLock::new();
+        GPU.get_or_init(|| {
+            let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
+            Headless::new()
+        })
+        .as_ref()
+    }
+
     /// Every entry point of the shaders built on GL translates to GLSL, as wgpu-hal does it when it
     /// creates a pipeline there: the render ones for WebGL2 (ES 3.0), the GPU culling for native
     /// GL with compute (ES 3.1). Issue #59: the screen edges read the depth with `textureLoad`,
@@ -3796,16 +3811,18 @@ mod tests {
                 gpu.read_rgba(&target).unwrap(),
             )
         };
-        let (Ok(big), Ok(small)) = (
-            Headless::new(),
+        let (Ok(big), Ok(small)) = (shared_gpu(), {
+            // Its own device, made, used and dropped while no other test makes one.
+            let serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
             // Indexed faces of this frame take ~20 KB (were 41 KB unindexed).
-            Headless::with_max_buffer_size(Some(8_192)),
-        ) else {
+            Headless::with_max_buffer_size(Some(8_192)).map(|h| (h, serial))
+        }) else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
-        let (f1, l1, t1, px1) = draw(&big);
-        let (f2, l2, t2, px2) = draw(&small);
+        let (f1, l1, t1, px1) = draw(big);
+        // `small` drops (device, then lock) at the end of the test.
+        let (f2, l2, t2, px2) = draw(&small.0);
         assert_eq!((f1, l1), (1, 1));
         assert!(
             f2 > 1 && l2 > 1,
@@ -3819,7 +3836,7 @@ mod tests {
     /// one mirrored, with and without a section box (whose passes cull by winding).
     #[test]
     fn instanced_shapes_draw_like_placed_copies() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -3916,7 +3933,7 @@ mod tests {
     /// largest element.
     #[test]
     fn small_elements_are_a_suffix_of_each_cluster() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -3948,7 +3965,7 @@ mod tests {
     /// can't pass).
     #[test]
     fn culling_changes_nothing_on_screen() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -4090,7 +4107,7 @@ mod tests {
     /// it.)
     #[test]
     fn welded_faces_are_shaded_flat() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -4141,7 +4158,7 @@ mod tests {
             return;
         };
         let gpu =
-            Headless::new().expect("WGPU_BACKEND is set but no adapter: nothing would be tested");
+            shared_gpu().expect("WGPU_BACKEND is set but no adapter: nothing would be tested");
         let got = gpu.adapter_info.backend;
         assert!(asked.contains(got.into()), "asked {asked:?}, got {got:?}");
         eprintln!("testing on {got:?}: {}", gpu.adapter_info.name);
@@ -4150,6 +4167,8 @@ mod tests {
     /// A GPU error (here a shader no backend accepts) is caught and kept, not a panic.
     #[test]
     fn gpu_errors_are_caught_not_fatal() {
+        // Its own device: the handler it installs would catch (and hide) other tests' errors.
+        let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         let Ok(gpu) = Headless::new() else {
             eprintln!("no GPU adapter, skipping");
             return;
@@ -4186,7 +4205,7 @@ mod tests {
     }
 
     fn screen_edges_match_lines(adjust: impl Fn(&mut Camera)) {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -4249,7 +4268,7 @@ mod tests {
     /// again until the answers settle, the picture is the exact one, and something is hidden.
     #[test]
     fn gpu_occlusion_settles_on_the_exact_picture() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -4384,7 +4403,7 @@ mod tests {
     /// orthographic, mirrored and with a size threshold.
     #[test]
     fn gpu_culling_draws_what_cpu_culling_does() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -4438,7 +4457,7 @@ mod tests {
     /// close (most pixels within a few levels).
     #[test]
     fn proxies_stand_for_far_cells() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -4509,7 +4528,7 @@ mod tests {
     /// behind a wall of others mostly is.
     #[test]
     fn hidden_share_counts_what_is_behind() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -4538,7 +4557,7 @@ mod tests {
     /// with the model: where the element is hidden, the kept depth hides its edges too.
     #[test]
     fn highlights_drawn_over_the_kept_picture_match() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -4621,7 +4640,7 @@ mod tests {
     /// Renders on whatever adapter exists (a software one in CI containers). Skipped if none.
     #[test]
     fn headless_render_draws_the_frame() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -4739,7 +4758,7 @@ mod tests {
     /// Every colour of the drawing comes from the style ("red lines instead of black").
     #[test]
     fn graphic_style_drives_every_colour() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -4769,7 +4788,7 @@ mod tests {
             style: style.clone(),
             ..Default::default()
         };
-        let px = draw(&gpu, &scene, &opts);
+        let px = draw(gpu, &scene, &opts);
         assert!(
             count(&px, style.background, 0) > 400 * 200 / 4,
             "background"
@@ -4810,7 +4829,7 @@ mod tests {
             style: dense,
             ..opts
         };
-        let px2 = draw(&gpu, &scene, &hatched);
+        let px2 = draw(gpu, &scene, &hatched);
         let faces = px.len() - count(&px, style.background, 0);
         let changed = px.iter().zip(&px2).filter(|(a, b)| a != b).count();
         eprintln!("hatching changed {changed} of {faces} face pixels");
@@ -4842,7 +4861,7 @@ mod tests {
     /// The section box hides what is outside and shows the cut surface of solids it cuts.
     #[test]
     fn clip_box_cuts_solids_and_shows_the_cut() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -4868,9 +4887,9 @@ mod tests {
             edges: false,
             ..Default::default()
         };
-        let whole = draw(&gpu, &scene, &opts);
+        let whole = draw(gpu, &scene, &opts);
         opts.clip = Some(half);
-        let cut = draw(&gpu, &scene, &opts);
+        let cut = draw(gpu, &scene, &opts);
 
         // Cut surface: the fill at `cut_shade` brightness (in linear light), unlit.
         let cut_rgb = Rgb(fill.0.map(|c| {
@@ -4888,7 +4907,7 @@ mod tests {
 
         // A box that contains everything changes nothing.
         opts.clip = Some(all);
-        let same = draw(&gpu, &scene, &opts);
+        let same = draw(gpu, &scene, &opts);
         let differ = whole.iter().zip(&same).filter(|(a, b)| a != b).count();
         assert!(
             differ < 50,
@@ -4939,7 +4958,7 @@ mod tests {
     /// slab's top face under it (the column's bottom, seen from inside, is at the same depth).
     #[test]
     fn cut_surface_wins_over_the_slab_the_column_stands_on() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -4964,7 +4983,7 @@ mod tests {
                 edges: false,
                 ..Default::default()
             };
-            draw_with(&gpu, scene, &opts, |cam| {
+            draw_with(gpu, scene, &opts, |cam| {
                 cam.orthographic = true;
                 cam.yaw = -std::f32::consts::FRAC_PI_2;
                 cam.pitch = std::f32::consts::FRAC_PI_2;
@@ -4995,7 +5014,7 @@ mod tests {
     /// surfaces included: the clip passes use the other winding as front.
     #[test]
     fn mirrored_camera_flips_the_picture_with_cut_surfaces() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -5010,8 +5029,8 @@ mod tests {
             edges: false,
             ..Default::default()
         };
-        let plain = draw(&gpu, &scene, &opts);
-        let mirrored = draw_with(&gpu, &scene, &opts, |c| c.mirror_x = true);
+        let plain = draw(gpu, &scene, &opts);
+        let mirrored = draw_with(gpu, &scene, &opts, |c| c.mirror_x = true);
         let (w, h) = (400usize, 200usize);
         let differ = (0..h)
             .flat_map(|y| (0..w).map(move |x| (x, y)))
@@ -5122,7 +5141,7 @@ mod tests {
     /// A linked model is drawn at its offset, in the reference colours; edges-only shows no fill.
     #[test]
     fn linked_layers_are_drawn_at_their_offset_in_their_colours() {
-        let Ok(gpu) = Headless::new() else {
+        let Ok(gpu) = shared_gpu() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
