@@ -29,3 +29,5 @@ marks the decisions he took himself.
 | 21 | ADR 0053: sub-projects and ADR 0038's "borrow a layer" | keep layer locks / sub-projects never lock | never lock (the draft replaces that 0038 bullet) | the wireframe's decision 3; Pierre to confirm |
 | 22 | ADR 0055 and 0062: the wireframes show Cancel / Save buttons | keep them / follow ADR 0052 | follow ADR 0052: no Cancel or Save; an export keeps one "Export" action | ADR 0052, accepted today |
 | 23 | ADR 0061: three rights View/Edit/Admin vs ADR 0038's three levels | wireframe / 0038 | the wireframe's, flagged | Pierre to confirm |
+| 24 | How each screen state is reached for the check | test-only hooks / deep links in the URL | deep links (`tab`, `view`, `select`, `page`, `dialog`, `panel`, `paper`, `action`) | they are also a real feature: a link opens a precise state |
+| 25 | Where screens live | edit App.vue per screen / `src/pages`, `src/dialogs`, `src/panels` registered by `import.meta.glob` | the folders | screens run in parallel without editing one shared file |
