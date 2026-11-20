@@ -1,8 +1,24 @@
 <script setup lang="ts">
-import { state } from "../bimble";
+import { state, visibility, runAction } from "../bimble";
 import { lang, setLang, t, type Lang } from "../i18n";
 
 const langs: Lang[] = ["fr", "en"];
+// Each chip: a view mode read from `query("visibility")`; `undo` is the action its × runs, null when Rust has no call yet.
+type Chip = { key: Parameters<typeof t>[0]; n: number; undo: string | null; missing?: string };
+const chips = (): Chip[] => {
+  const v = visibility.value;
+  if (!v) return [];
+  const all: Chip[] = [
+    { key: "status.sectionBox", n: v.section_box.on ? 1 : 0, undo: "section_box" },
+    // ponytail: egui clears these through reset_chip (Chip::Temporary / Chip::Hidden), not exposed to the bridge.
+    // reveal_hidden only toggles revealing and unhide needs a hidden element selected: neither undoes the chip.
+    { key: "status.hiddenNow", n: v.hidden_now.count, undo: null, missing: "clear_temporary" },
+    { key: "status.isolatedNow", n: v.isolated_now.count, undo: null, missing: "clear_temporary" },
+    { key: "status.hiddenInView", n: v.hidden_in_view.count, undo: null, missing: "show_all_in_view" },
+    { key: "status.isolatedInView", n: v.isolated_in_view.count, undo: null, missing: "show_all_in_view" },
+  ];
+  return all.filter((c) => c.n > 0);
+};
 </script>
 
 <template>
@@ -12,9 +28,13 @@ const langs: Lang[] = ["fr", "en"];
     <!-- ponytail: the pointer position has no Rust query yet; the slot keeps the reference layout, empty. -->
     <span class="mono q coords" style="font-size:12px" data-bb="status-coords" data-missing="pointer-coordinates"></span>
     <span style="flex:1"></span>
-    <!-- The chips are a set: each carries the landmark, the check reads the first. None can be undone yet: no × disc. -->
-    <span v-if="state.file" data-bb="status-chips" class="chip nx" :class="state.unsaved ? 'c-o' : 'c-m'">{{ t(state.unsaved ? "status.unsaved" : "status.saved") }}</span>
-    <span v-if="state.selection.length" data-bb="status-chips" class="chip nx c-n">{{ t("status.selected", { n: state.selection.length }) }}</span>
+    <!-- Reference: `.status > .chip`, a set of direct children; each carries the landmark, the check reads the first. -->
+    <span v-if="state.selection.length" data-bb="status-chip" class="chip c-p nx">{{ t(state.selection.length === 1 ? "status.selectedOne" : "status.selected", { n: state.selection.length }) }}</span>
+    <span v-for="c in chips()" :key="c.key" data-bb="status-chip" class="chip c-n">{{ t(c.key, { n: c.n }) }}<button
+        type="button" class="cx" :aria-label="t('status.undoChip')" :disabled="!c.undo" :data-missing="c.missing"
+        @click="c.undo && runAction(c.undo)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span>
+    <!-- ponytail: linked models have no query yet; no chip is drawn rather than a fake one. -->
+    <span hidden data-missing="links"></span>
     <!-- ponytail: no element-count query in bimble.ts yet; counts show what State holds. -->
     <span class="mono q" style="font-size:12px" data-bb="status-counts">{{ t("status.counts", { rev: state.rev, n: state.selection.length }) }}</span>
     <span class="seg" role="group" :aria-label="t('status.langGroup')" style="margin-left:4px" data-bb="status-lang">
@@ -41,8 +61,11 @@ const langs: Lang[] = ["fr", "en"];
 .chip { padding: 2px 4px 2px 10px; border-radius: var(--bb-radius-pill); font-size: var(--bb-size-small); display: inline-flex; gap: var(--bb-space-1); align-items: center; white-space: nowrap; color: var(--bb-ink); text-decoration: none; }
 .chip.nx { padding-right: 10px; }
 .c-n { background: var(--bb-sunk); }
-.c-o { background: var(--bb-ochre); }
-.c-m { background: var(--bb-moss); }
+/* .chip .cx{width:18px;height:18px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center} (a span there; a real button here, reset) */
+.chip .cx { width: 18px; height: 18px; border-radius: var(--bb-radius-pill); display: inline-flex; align-items: center; justify-content: center; border: 0; padding: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+/* disabled: .tool.off{color:#5C574D;opacity:.55} */
+.chip .cx:disabled { color: var(--bb-stone); opacity: .55; cursor: default; }
+.c-p { background: var(--bb-pink); }
 /* .seg{display:inline-flex;gap:2px;padding:2px;border-radius:999px;background:#EDE7DB} */
 .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--bb-radius-pill); background: var(--bb-sunk); }
 /* .seg button{padding:2px 12px;border-radius:999px;color:#5C574D;text-decoration:none;font:inherit;font-size:13px;border:0;background:none;cursor:pointer;white-space:nowrap} */
