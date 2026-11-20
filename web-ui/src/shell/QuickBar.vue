@@ -38,13 +38,14 @@ const undoLabel = computed(() => {
       @click="runAction('synchronize')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.5-4.5L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.5 4.5L20 16"/><path d="M20 20v-4h-4"/></svg></button>
     <div class="fname">
       <span data-bb="filename">{{ state.file ?? t('app.noFile') }}</span>
-      <!-- The model's schema is not exposed: the slot keeps the reference box ("IFC4"), empty. -->
-      <span class="mono schema" style="font-size:12px" data-bb="quickbar-schema" data-missing="schema"></span>
+      <!-- `query("state").schema`: ".bimble", "IFC4"… -->
+      <span class="mono schema" style="font-size:12px" data-bb="quickbar-schema">{{ state.schema ?? '' }}</span>
       <span class="chip nx" :class="state.unsaved ? 'c-o' : 'c-m'" data-bb="state-chip">{{ t(state.unsaved ? 'quick.notSaved' : 'app.saved') }}</span>
     </div>
     <!-- The palette is egui-only (not in ALL_ACTIONS): the field keeps the reference look, it opens nothing yet. -->
     <button class="cmdk" type="button" data-bb="command-field" data-missing="palette-query"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg><span>{{ t('quick.search') }}</span><span class="kbd">Ctrl K</span></button>
-    <span class="user" data-bb="quickbar-user" data-missing="user-identity"></span>
+    <!-- Settings → You: an empty disc when no name is set. -->
+    <span class="user" data-bb="quickbar-user" :title="state.user?.name" :data-missing="state.user ? undefined : 'user-name-unset'">{{ state.user?.trigram }}</span>
     <button class="btn" :class="on('save') ? 'p' : 'd'" type="button" :disabled="!on('save')" data-bb="quickbar-primary"
       @click="runAction('save')">{{ t('quick.saveButton') }}</button>
   </header>

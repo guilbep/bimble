@@ -1,49 +1,44 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { openViews, sheets, type ViewSummary } from "../bimble";
+import { openViews, sheets, tabCall, runAction, type OpenTab } from "../bimble";
 import { t } from "../i18n";
 
-// `query("open_views")` (bridge.rs): the viewer's views, the active view and the open tabs.
-// ponytail: bimble.ts types it as OpenView[] for now; read it as the bridge sends it.
-type Tab = { type: "view" | "sheet"; id: string } | { type: "schedule"; name: string } | { type: "project" | "materials" };
-interface Open { views: ViewSummary[]; active: string | null; tabs: Tab[] }
-const open = computed(() => (openViews.value as unknown as Open | null) ?? { views: [], active: null, tabs: [] });
+// `query("open_views")` (bridge.rs): the open tabs in order; `current` is what the main view shows.
+const same = (a: OpenTab | null, b: OpenTab | null) => JSON.stringify(a) === JSON.stringify(b);
 
 const tabs = computed(() => {
-  const o = open.value;
+  const o = openViews.value;
   // Sheet names only when a sheet tab is open (one query per change).
-  const sh = o.tabs?.some((x) => x.type === "sheet") ? sheets() : [];
-  // ponytail: with no chrome (ADR 0048) the viewer never runs view_tabs(), so open_tabs stays empty;
-  // the viewer's rule "what the main view shows always has its tab" belongs in bridge.rs open_views.
-  const list: Tab[] = o.tabs?.length ? o.tabs : o.active ? [{ type: "view", id: o.active }] : [];
-  return list.map((x) => {
+  const sh = o.tabs.some((x) => x.type === "sheet") ? sheets() : [];
+  return o.tabs.map((x) => {
+    const on = same(x, o.current);
     switch (x.type) {
-      case "view": return { name: o.views.find((v) => v.id === x.id)?.name ?? "", on: x.id === o.active };
-      case "sheet": { const s = sh.find((s) => s.id === x.id); return { name: s ? `${s.number} · ${s.name}` : "", on: false }; }
-      case "schedule": return { name: t("viewtabs.schedule", { name: x.name }), on: false };
-      case "project": return { name: t("viewtabs.project"), on: false };
-      case "materials": return { name: t("viewtabs.materials"), on: false };
+      case "view": return { tab: x, on, name: o.views.find((v) => v.id === x.id)?.name ?? "" };
+      case "sheet": { const s = sh.find((s) => s.id === x.id); return { tab: x, on, name: s ? `${s.number} · ${s.name}` : "" }; }
+      case "schedule": return { tab: x, on, name: t("viewtabs.schedule", { name: x.name }) };
+      case "project": return { tab: x, on, name: t("viewtabs.project") };
+      case "materials": return { tab: x, on, name: t("viewtabs.materials") };
     }
   });
 });
-
-// Model / On paper: shown on a plan or section, as the viewer does (ribbon.rs view_tabs: `two_pictures`).
-const twoPictures = computed(() => {
-  const type = open.value.views?.find((v) => v.id === open.value.active)?.type;
-  return type === "plan" || type === "section";
-});
+const paper = computed(() => openViews.value.paper);
+// The switch is one action: click the side that is not on.
+const picture = (onPaper: boolean) => { if (onPaper !== paper.value.on) runAction("paper_view"); };
 </script>
 
 <template>
-  <!-- Reference: .main > .vtabs (fr/View3D.html, fr/PlanOnPaper.html). Switching and closing have no call yet. -->
+  <!-- Reference: .main > .vtabs (fr/View3D.html, fr/PlanOnPaper.html). -->
   <div class="vtabs" data-bb="viewtabs">
-    <a v-for="(tab, i) in tabs" :key="i" class="vtab" :class="{ on: tab.on }" href="#" data-missing="activate-tab"
-       :aria-current="tab.on ? 'page' : undefined" @click.prevent>{{ tab.name }}<span class="xx" :aria-label="t('viewtabs.close')" data-missing="close-tab"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span></a>
+    <a v-for="(tab, i) in tabs" :key="i" class="vtab" :class="{ on: tab.on }" href="#"
+       :aria-current="tab.on ? 'page' : undefined" @click.prevent="tabCall('activate', tab.tab)">{{ tab.name }}<span class="xx" role="button" tabindex="0" :aria-label="t('viewtabs.close')"
+       @click.prevent.stop="tabCall('close', tab.tab)" @keydown.enter.prevent.stop="tabCall('close', tab.tab)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span></a>
     <!-- No view open (a model without stored views): an empty pill holds the strip's height. -->
     <span v-if="!tabs.length" class="vtab" aria-hidden="true" style="visibility:hidden"><span class="xx" /></span>
     <span style="flex:1"></span>
-    <!-- The "on_paper" action is "Export view… (PDF, SVG)" (ribbon.rs), not this switch: no call, no state yet. -->
-    <span v-if="twoPictures" class="seg" data-bb="view-picture" role="group" :aria-label="t('viewtabs.picture')" data-missing="on-paper"><span>{{ t('viewtabs.model') }}</span><span>{{ t('viewtabs.onPaper') }} <span class="kbd">P</span></span></span>
+    <!-- Model / On paper: the "paper_view" action toggles it (pressed = on paper). -->
+    <span v-if="paper.offered" class="seg" data-bb="view-picture" role="group" :aria-label="t('viewtabs.picture')"><span
+        role="button" tabindex="0" :class="{ on: !paper.on }" :aria-pressed="!paper.on" @click="picture(false)" @keydown.enter="picture(false)">{{ t('viewtabs.model') }}</span><span
+        role="button" tabindex="0" :class="{ on: paper.on }" :aria-pressed="paper.on" @click="picture(true)" @keydown.enter="picture(true)">{{ t('viewtabs.onPaper') }} <span class="kbd">P</span></span></span>
   </div>
 </template>
 
@@ -60,7 +55,8 @@ const twoPictures = computed(() => {
 .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--bb-radius-pill); background: var(--bb-sunk); }
 /* .seg span{padding:2px 12px;border-radius:999px;color:#5C574D;text-decoration:none;font:inherit;font-size:13px;border:0;background:none;cursor:pointer;white-space:nowrap} */
 .seg span { padding: 2px 12px; border-radius: var(--bb-radius-pill); color: var(--bb-stone); text-decoration: none; font: inherit; font-size: var(--bb-size-small); border: 0; background: none; cursor: pointer; white-space: nowrap; }
-/* .seg .on{background:#141414;color:#F5F2EB} — no .on: the picture's state is not readable yet. */
+/* .seg .on{background:#141414;color:#F5F2EB} */
+.seg .on { background: var(--bb-ink); color: var(--bb-on-ink); }
 /* (.seg span outranks .kbd, as in the reference.) .kbd{font-family:'DM Mono',monospace;font-size:11.5px;padding:1px 6px;border-radius:6px;background:#EDE7DB;color:#141414} */
 .kbd { font-family: var(--bb-font-data); font-size: 11.5px; padding: 1px 6px; border-radius: 6px; background: var(--bb-sunk); color: var(--bb-ink); }
 </style>

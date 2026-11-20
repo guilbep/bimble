@@ -6,6 +6,14 @@ export interface State {
   rev: number;
   unsaved: boolean;
   file: string | null;
+  /** on_change: a signature of what the view shows (section box, hidden/isolated, On paper, tabs). */
+  view?: number[];
+  /** on_change: the current tab, null on Home. */
+  tab?: OpenTab | null;
+  /** `query("state")`: ".bimble", "IFC2X3", "IFC4"…, or null. */
+  schema?: string | null;
+  /** `query("state")`: Settings → You, null when no name is set. */
+  user?: { name: string; trigram: string } | null;
 }
 
 /** `query("element")`: crates/bimble-api/src/query.rs ElementDetail (summary flattened). */
@@ -132,6 +140,10 @@ export interface OpenViews {
   views: ViewSummary[];
   active: string | null;
   tabs: OpenTab[];
+  /** What the main view shows: one of `tabs`, or null (Home). */
+  current: OpenTab | null;
+  /** Model / On paper switch: offered on a plan or section. */
+  paper: { offered: boolean; on: boolean };
 }
 /** @deprecated use `OpenViews`. */
 export type OpenView = ViewSummary;
@@ -148,6 +160,7 @@ interface Wasm {
   select(idsJson: string): void;
   action(name: string): void;
   verb(name: string, argsJson: string): void;
+  tab(json: string): void;
   on_change(cb: (json: string) => void): void;
 }
 
@@ -161,7 +174,8 @@ export const historyLabels = shallowRef<History>({ undo: [], redo: [] });
 export const visibility = shallowRef<Visibility | null>(null);
 export const storeys = shallowRef<StoreySummary[]>([]);
 export const materials = shallowRef<MaterialSummary[]>([]);
-export const openViews = shallowRef<OpenViews>({ views: [], active: null, tabs: [] });
+const NO_VIEWS: OpenViews = { views: [], active: null, tabs: [], current: null, paper: { offered: false, on: false } };
+export const openViews = shallowRef<OpenViews>(NO_VIEWS);
 export const project = shallowRef<ProjectSummary | null>(null);
 
 let resolveReady!: () => void;
@@ -209,7 +223,9 @@ export async function start(): Promise<void> {
       }
       queueMicrotask(() => {
         const prev = state.value;
-        state.value = s;
+        // schema and user are not in on_change: read them from query("state").
+        const q = tryQuery<Pick<State, "schema" | "user">>("state", {});
+        state.value = { ...s, schema: q.schema ?? null, user: q.user ?? null };
         refresh(prev.rev !== s.rev || prev.file !== s.file);
       });
     });
@@ -267,7 +283,7 @@ function refresh(modelChanged: boolean): void {
   actions.value = tryQuery<ActionState[]>("actions", []);
   historyLabels.value = tryQuery<History>("history", { undo: [], redo: [] });
   visibility.value = tryQuery<Visibility | null>("visibility", null);
-  openViews.value = tryQuery<OpenViews>("open_views", { views: [], active: null, tabs: [] });
+  openViews.value = tryQuery<OpenViews>("open_views", NO_VIEWS);
   if (modelChanged) {
     storeys.value = tryQuery<StoreySummary[]>("storeys", []);
     materials.value = tryQuery<MaterialSummary[]>("materials", []);
@@ -293,6 +309,11 @@ export function query<T>(name: string, args?: unknown): T {
 /** Run one ribbon action by name (see `actions`). Returns the Rust error, or null. */
 export function runAction(name: string): string | null {
   try { wasmOrThrow().action(name); return null; } catch (e) { return message(e); }
+}
+
+/** Activate or close one open tab (`openViews.tabs`). Returns the Rust error, or null. */
+export function tabCall(op: "activate" | "close", tab: OpenTab): string | null {
+  try { wasmOrThrow().tab(JSON.stringify({ op, tab })); return null; } catch (e) { return message(e); }
 }
 
 /** Run one API verb as one undoable step. Returns the Rust error, or null. */

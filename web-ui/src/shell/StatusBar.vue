@@ -1,21 +1,20 @@
 <script setup lang="ts">
-import { state, visibility, runAction } from "../bimble";
+import { state, visibility, actions, runAction } from "../bimble";
 import { lang, setLang, t, type Lang } from "../i18n";
 
 const langs: Lang[] = ["fr", "en"];
-// Each chip: a view mode read from `query("visibility")`; `undo` is the action its × runs, null when Rust has no call yet.
-type Chip = { key: Parameters<typeof t>[0]; n: number; undo: string | null; missing?: string };
+// Each chip: a view mode read from `query("visibility")`; `undo` is the action its × runs, enabled as `query("actions")` says.
+type Chip = { key: Parameters<typeof t>[0]; n: number; undo: string };
+const enabled = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
 const chips = (): Chip[] => {
   const v = visibility.value;
   if (!v) return [];
   const all: Chip[] = [
     { key: "status.sectionBox", n: v.section_box.on ? 1 : 0, undo: "section_box" },
-    // ponytail: egui clears these through reset_chip (Chip::Temporary / Chip::Hidden), not exposed to the bridge.
-    // reveal_hidden only toggles revealing and unhide needs a hidden element selected: neither undoes the chip.
-    { key: "status.hiddenNow", n: v.hidden_now.count, undo: null, missing: "clear_temporary" },
-    { key: "status.isolatedNow", n: v.isolated_now.count, undo: null, missing: "clear_temporary" },
-    { key: "status.hiddenInView", n: v.hidden_in_view.count, undo: null, missing: "show_all_in_view" },
-    { key: "status.isolatedInView", n: v.isolated_in_view.count, undo: null, missing: "show_all_in_view" },
+    { key: "status.hiddenNow", n: v.hidden_now.count, undo: "clear_temporary" },
+    { key: "status.isolatedNow", n: v.isolated_now.count, undo: "clear_temporary" },
+    { key: "status.hiddenInView", n: v.hidden_in_view.count, undo: "show_all_in_view" },
+    { key: "status.isolatedInView", n: v.isolated_in_view.count, undo: "show_all_in_view" },
   ];
   return all.filter((c) => c.n > 0);
 };
@@ -31,8 +30,8 @@ const chips = (): Chip[] => {
     <!-- Reference: `.status > .chip`, a set of direct children; each carries the landmark, the check reads the first. -->
     <span v-if="state.selection.length" data-bb="status-chip" class="chip c-p nx">{{ t(state.selection.length === 1 ? "status.selectedOne" : "status.selected", { n: state.selection.length }) }}</span>
     <span v-for="c in chips()" :key="c.key" data-bb="status-chip" class="chip c-n">{{ t(c.key, { n: c.n }) }}<button
-        type="button" class="cx" :aria-label="t('status.undoChip')" :disabled="!c.undo" :data-missing="c.missing"
-        @click="c.undo && runAction(c.undo)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span>
+        type="button" class="cx" :aria-label="t('status.undoChip')" :disabled="!enabled(c.undo)"
+        @click="runAction(c.undo)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span>
     <!-- ponytail: linked models have no query yet; no chip is drawn rather than a fake one. -->
     <span hidden data-missing="links"></span>
     <!-- ponytail: no element-count query in bimble.ts yet; counts show what State holds. -->
