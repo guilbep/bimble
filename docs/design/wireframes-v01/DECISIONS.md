@@ -43,3 +43,9 @@ marks the decisions he took himself.
 | 35 | An emptied project field | send "" / remove the key | remove the key | as the egui form (ADR 0030) |
 | 36 | Project field keys | the reference's `{address}`, `{city}` / Rust's known keys | Rust's keys | real data; the reference keys are samples |
 | 37 | Error band on Project information | none (reference has none) / the reference's ochre banner style with "Erreur" | the ochre banner | ADR 0049: errors are ink on ochre with the word |
+| 38 | Status bar and left panel per screen | one shell for all / screens export `hint`, `side`, `layout` | exports, read by the shell | each reference screen changes them; no shell edit per screen |
+| 39 | Translation parts | one list in i18n/index.ts / glob of `parts/*.ts` | glob; `t()` then takes any string, a missing key logs in dev | the list made every parallel ticket conflict; each part still types `en` from `fr` |
+| 40 | Home quick-access row | the full row / the reference's short row (logo, File, command field, user) | short row on full-window pages | the reference Home has no save, undo or filename: no model work happens there |
+| 41 | The check and hidden elements | hidden = present at size 0 / hidden = absent | absent (`checkVisibility()`) | a hidden element is not on screen; the self-check still gives 0 |
+| 42 | Home status bar with a model open | the reference's "Aucun modèle ouvert" / the real state | real state, listed | the lab opens a model; the text would be false |
+| 43 | Batch C beside batch B | wait for B / run C dialogs and pages beside B1 | beside B1 (B2 waits for B1) | different files; parts no longer conflict; B1 alone owns bimble.ts |
