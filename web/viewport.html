@@ -25,7 +25,7 @@
     <div id="status">Loading Bimble…</div>
   </div>
   <script type="module">
-    import init, { query, apply, undo, redo } from "./bimble_web.js";
+    import init, { query, apply, undo, redo, on_change, select, open } from "./bimble_web.js";
     import { loadManifold } from "./manifold-bridge.js";
     // The viewer reads its flags from the address: ask for the view only, before init().
     const url = new URL(location.href);
@@ -35,7 +35,11 @@
     }
     try { await loadManifold(); } catch (e) { console.warn("manifold not loaded:", e); }
     // ADR 0048: the page calls the viewer from the console, e.g. bimble.query("storeys", "").
-    init().then(() => { window.bimble = { query, apply, undo, redo }; }).catch((e) => {
+    init().then(() => {
+      window.bimble = { query, apply, undo, redo, on_change, select, open };
+      // The callback runs inside a frame: defer calls back into bimble (queueMicrotask).
+      on_change((s) => console.log("bimble change", s));
+    }).catch((e) => {
       document.getElementById("status").textContent = "Bimble could not start: " + e;
     });
   </script>

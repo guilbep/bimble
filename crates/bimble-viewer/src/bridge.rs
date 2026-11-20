@@ -104,3 +104,103 @@ fn undo_redo(undo: bool) -> Result<(), JsValue> {
         Ok(())
     })
 }
+
+thread_local! {
+    static ON_CHANGE: RefCell<Option<js_sys::Function>> = const { RefCell::new(None) };
+    static LAST_SENT: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// Register the change callback. It gets one argument, a JSON string:
+/// `{"selection": [GlobalId, primary first], "rev": n, "unsaved": bool, "file": name or null}`.
+/// It runs inside a frame: a callback that calls back into an export gets "busy", so defer
+/// such calls (`queueMicrotask`).
+#[wasm_bindgen]
+pub fn on_change(cb: js_sys::Function) {
+    ON_CHANGE.with(|c| *c.borrow_mut() = Some(cb));
+    // The next frame sends the current state to the new callback.
+    LAST_SENT.with(|s| s.borrow_mut().clear());
+}
+
+/// Called each frame from `Viewer::ui`: tell the page when the state it shows changed.
+pub(crate) fn notify(v: &Viewer) {
+    let Some(cb) = ON_CHANGE.with(|c| c.borrow().clone()) else {
+        return;
+    };
+    let ids: Vec<&str> = v
+        .loaded
+        .as_ref()
+        .map(|l| {
+            v.selected
+                .into_iter()
+                .chain(v.also_selected.iter().copied())
+                .filter_map(|i| l.scene.elements.get(i).map(|e| e.global_id.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let now = serde_json::json!({
+        "selection": ids,
+        "rev": v.scene_rev,
+        "unsaved": state::UNSAVED.load(std::sync::atomic::Ordering::Relaxed),
+        "file": v.loaded.as_ref().and_then(|l| l.path.file_name()).map(|n| n.to_string_lossy()),
+    })
+    .to_string();
+    if LAST_SENT.with(|s| *s.borrow() == now) {
+        return;
+    }
+    if let Err(e) = cb.call1(&JsValue::NULL, &JsValue::from_str(&now)) {
+        log::warn!("on_change callback failed: {e:?}");
+    }
+    LAST_SENT.with(|s| *s.borrow_mut() = now);
+}
+
+/// Select elements by GlobalId (a JSON array, primary first); `[]` clears the selection.
+#[wasm_bindgen]
+pub fn select(ids_json: &str) -> Result<(), JsValue> {
+    let ids: Vec<String> =
+        serde_json::from_str(ids_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    with_viewer(|v| {
+        let l = v.loaded.as_ref().ok_or("no model open")?;
+        // ponytail: linear scan per id, a GlobalId index if pages select thousands at once.
+        let found: Vec<Option<usize>> = ids
+            .iter()
+            .map(|g| l.scene.elements.iter().position(|e| e.global_id == *g))
+            .collect();
+        let unknown: Vec<&str> = ids
+            .iter()
+            .zip(&found)
+            .filter(|(_, i)| i.is_none())
+            .map(|(g, _)| g.as_str())
+            .collect();
+        if !unknown.is_empty() {
+            return Err(format!("unknown GlobalIds: {}", unknown.join(", ")));
+        }
+        let mut idx = found.into_iter().flatten();
+        v.clear_selection();
+        v.selected = idx.next();
+        v.also_selected.extend(idx);
+        Ok(())
+    })
+}
+
+/// Open a model from bytes, as if picked (same path as `?url=`). Refuses more than
+/// `bimble_core::file::MAX_FILE_BYTES`.
+#[wasm_bindgen]
+pub fn open(name: String, bytes: Vec<u8>) -> Result<(), JsValue> {
+    if bytes.len() > bimble_core::file::MAX_FILE_BYTES {
+        return Err(JsValue::from_str(&format!(
+            "file too large: {} bytes",
+            bytes.len()
+        )));
+    }
+    with_viewer(|v| {
+        v.files
+            .sender()
+            .send(crate::files::Picked {
+                purpose: crate::files::Purpose::Open,
+                name,
+                path: None,
+                bytes: Some(bytes),
+            })
+            .map_err(|e| e.to_string())
+    })
+}

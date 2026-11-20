@@ -4906,6 +4906,8 @@ impl eframe::App for Viewer {
             !state::unsaved(&self.snapshot()).is_empty(),
             std::sync::atomic::Ordering::Relaxed,
         );
+        #[cfg(target_arch = "wasm32")]
+        bridge::notify(self);
         // Closing with unsaved work asks first (ADR 0028).
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             // A value typed but not yet stored counts too.
