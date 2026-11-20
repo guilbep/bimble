@@ -176,6 +176,9 @@ fn bounds_with_links(scene: &Scene, links: &[Linked]) -> bimble_render::Sphere {
     })
 }
 
+/// The file name of a new model until it is saved (File → New).
+const UNTITLED: &str = "Untitled.bimble";
+
 /// A question the user must answer before Bimble goes on (ADR 0028).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Confirm {
@@ -941,6 +944,8 @@ struct Viewer {
     allow_close: bool,
     /// The file waiting for the answer to `Confirm::Open`.
     pending_open: Option<files::Picked>,
+    /// File → New waiting for the answer to `Confirm::Open` (the same question).
+    pending_new: bool,
     standards_query: String,
     /// The ribbon's open tab, the command palette, tabs of open views and sheets.
     ribbon_tab: ribbon::Tab,
@@ -1116,6 +1121,7 @@ impl Viewer {
             confirm: None,
             allow_close: false,
             pending_open: None,
+            pending_new: false,
             standards_query: String::new(),
             ribbon_tab: ribbon::Tab::default(),
             palette: None,
@@ -1628,6 +1634,36 @@ impl Viewer {
         }
     }
 
+    /// File → New: over unsaved work, the same question as opening another file (ADR 0028).
+    fn new_model(&mut self) {
+        self.commit_pages();
+        let s = self.snapshot();
+        if s.model_dirty || s.views_dirty {
+            self.pending_new = true;
+            self.confirm = Some(Confirm::Open);
+            return;
+        }
+        self.start_new();
+    }
+
+    /// An empty model, editable and not saved, loaded as an imported copy is.
+    fn start_new(&mut self) {
+        let m = bimble_api::verbs::new_model("Untitled");
+        let (tx, rx) = channel();
+        let _ = tx.send(Ok(imported(
+            Scene::from_model(&m),
+            m,
+            Instant::now(),
+            Vec::new(),
+        )));
+        self.loading = Some(Loading::new(PathBuf::from(UNTITLED), rx, true));
+        self.error = None;
+        self.poll_loading();
+        if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
+            ed.message = Some("New model, not saved".into());
+        }
+    }
+
     // ---------- editing
 
     /// Apply commands from the editor as one undoable step, then show the result.
@@ -1741,7 +1777,24 @@ impl Viewer {
             &bimble_core::file::to_bytes(&ed.model),
         );
         #[cfg(not(target_arch = "wasm32"))]
-        let r = bimble_core::file::save(&ed.model, &l.path).map_err(|e| e.to_string());
+        let r = if l.path.as_os_str() != UNTITLED {
+            bimble_core::file::save(&ed.model, &l.path).map_err(|e| e.to_string())
+        } else {
+            // A new model has no file yet (File → New): ask where, as Save As does.
+            let name = l.path.display().to_string();
+            match files::save(
+                &name,
+                &[("Bimble model", &["bimble"])],
+                &bimble_core::file::to_bytes(&ed.model),
+            ) {
+                Ok(Some(to)) => {
+                    l.path = PathBuf::from(to);
+                    Ok(())
+                }
+                Ok(None) => return,
+                Err(e) => Err(e),
+            }
+        };
         match r {
             Ok(()) => {
                 ed.dirty = false;
@@ -2825,6 +2878,9 @@ impl Viewer {
         }
         if self.palette.is_some() || ctx.egui_wants_keyboard_input() {
             return;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::N)) {
+            self.new_model();
         }
         // Editing shortcuts (a .bimble model).
         if self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) {
@@ -4168,7 +4224,11 @@ impl Viewer {
                     });
                 }
                 Confirm::Open => {
-                    let name = self.pending_open.as_ref().map_or("", |p| p.name.as_str());
+                    let name = match &self.pending_open {
+                        _ if self.pending_new => UNTITLED,
+                        Some(p) => p.name.as_str(),
+                        None => "",
+                    };
                     ui.heading(format!("Open {name}?"));
                     ui.label(format!(
                         "Not saved: {}. Opening another file now loses these changes.",
@@ -4254,7 +4314,9 @@ impl Viewer {
             }
             (Confirm::Open, Some(true)) => {
                 self.confirm = None;
-                if let Some(p) = self.pending_open.take() {
+                if std::mem::take(&mut self.pending_new) {
+                    self.start_new();
+                } else if let Some(p) = self.pending_open.take() {
                     self.handle_one(p, ctx);
                 }
             }
@@ -4266,6 +4328,7 @@ impl Viewer {
             (_, Some(false)) => {
                 self.confirm = None;
                 self.pending_open = None;
+                self.pending_new = false;
             }
             _ => {}
         }
@@ -4917,6 +4980,7 @@ impl eframe::App for Viewer {
                 // Another question open (reset the standards…) gives way to this one.
                 self.confirm = Some(Confirm::Close);
                 self.pending_open = None;
+                self.pending_new = false;
             }
         }
         self.confirm_ui(&ctx);

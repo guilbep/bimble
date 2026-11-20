@@ -55,6 +55,8 @@ impl Tab {
 /// Something the user can do from the ribbon or the palette.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
+    /// A new, empty .bimble model: one storey, not saved yet.
+    New,
     Open,
     /// Import an IFC file as an editable .bimble copy (ADR 0032).
     ImportIfc,
@@ -119,7 +121,8 @@ pub(crate) enum Action {
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 49] = [
+pub(crate) const ALL_ACTIONS: [Action; 50] = [
+    Action::New,
     Action::Open,
     Action::ImportIfc,
     Action::ConvertOpen,
@@ -174,6 +177,7 @@ pub(crate) const ALL_ACTIONS: [Action; 49] = [
 impl Action {
     pub fn label(self) -> String {
         match self {
+            Action::New => "New".into(),
             Action::Open => "Open…".into(),
             Action::ImportIfc => "Import IFC…".into(),
             Action::ConvertOpen => "Convert to .bimble (editable)…".into(),
@@ -232,6 +236,7 @@ impl Action {
     /// Its keyboard shortcut, as shown.
     pub fn keys(self) -> &'static str {
         match self {
+            Action::New => "Ctrl N",
             Action::Save => "Ctrl S",
             Action::Undo => "Ctrl Z",
             Action::Redo => "Ctrl Y",
@@ -250,7 +255,8 @@ impl Action {
     /// Where it lives, as the palette shows it: its ribbon tab, the File menu or quick access.
     pub fn home(self) -> &'static str {
         let tab = match self {
-            Action::Open
+            Action::New
+            | Action::Open
             | Action::ImportIfc
             | Action::ConvertOpen
             | Action::ShareForViewing
@@ -376,7 +382,11 @@ impl Viewer {
         let loaded = self.loaded.is_some();
         let flat = self.in_2d();
         match a {
-            Action::Open | Action::ImportIfc | Action::Palette | Action::Standards => true,
+            Action::New
+            | Action::Open
+            | Action::ImportIfc
+            | Action::Palette
+            | Action::Standards => true,
             // An IFC open, read-only, with something the editor keeps (the browser keeps no
             // path to read it again).
             Action::ConvertOpen => {
@@ -466,6 +476,7 @@ impl Viewer {
             return;
         }
         match a {
+            Action::New => self.new_model(),
             Action::Open => self.files.pick(files::Purpose::Open, ctx),
             Action::ImportIfc => self.files.pick(files::Purpose::ImportIfc, ctx),
             Action::ConvertOpen => {
@@ -757,6 +768,7 @@ impl Viewer {
         ui.menu_button("File", |ui| {
             let groups: &[&[Action]] = &[
                 &[
+                    Action::New,
                     Action::Open,
                     Action::ImportIfc,
                     Action::ConvertOpen,

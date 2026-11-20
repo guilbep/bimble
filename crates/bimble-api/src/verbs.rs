@@ -78,6 +78,22 @@ impl Default for Sizes {
 }
 
 /// Height of a storey: up to the next one above it, else 3 m.
+/// A new, empty model (File → New): a fresh project GlobalId and one storey, "Level 0" at 0 mm,
+/// so placing works at once.
+pub fn new_model(name: &str) -> Model {
+    let mut m = Model::new(name);
+    let id = GlobalId::new();
+    m.storeys.insert(
+        id,
+        bimble_core::Storey {
+            id,
+            name: "Level 0".into(),
+            elevation: 0.0,
+        },
+    );
+    m
+}
+
 pub fn storey_height(m: &Model, storey: GlobalId) -> f64 {
     let Some(z) = m.storeys.get(&storey).map(|s| s.elevation) else {
         return 3000.0;
@@ -296,6 +312,23 @@ mod tests {
         let m = concrete_frame(&FrameSpec::default());
         let s = m.storeys.values().find(|s| s.elevation == 0.0).unwrap().id;
         (m, s)
+    }
+
+    #[test]
+    fn new_model_has_one_storey_and_round_trips_canonically() {
+        let m = new_model("Untitled");
+        assert_eq!(m.project_name, "Untitled");
+        assert_eq!(m.storeys.len(), 1);
+        let s = m.storeys.values().next().unwrap();
+        assert_eq!((s.name.as_str(), s.elevation), ("Level 0", 0.0));
+        assert!(m.elements.is_empty() && m.materials.is_empty());
+        m.validate().unwrap();
+        let text = bimble_core::file::to_string(&m);
+        let back = bimble_core::file::from_str(&text).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(bimble_core::file::to_string(&back), text);
+        // A fresh project id each time.
+        assert_ne!(new_model("Untitled").project_id, m.project_id);
     }
 
     #[test]
