@@ -10,6 +10,7 @@ export const side = ProjectInfoSide;
 import { computed, ref } from "vue";
 import { project, state, setProject, setProjectField } from "../bimble";
 import { t } from "../i18n";
+import { currentDialog } from "../dialogs";
 
 // The reference's "Basic data" rows, by Rust key (bimble-core project::KNOWN).
 const BASIC = ["project_number", "project_title", "project_address", "project_city", "phase", "phase_description"] as const;
@@ -63,7 +64,7 @@ function addField() {
       <div style="display:flex;align-items:center">
         <h2 style="font-size:20px">{{ t('projectinfo.team') }}</h2>
         <span style="flex:1" />
-        <button class="btn s" type="button" disabled data-missing="team members (ADR 0055, A4)" data-bb="project-add-member">
+        <button class="btn s" type="button" data-bb="project-add-member" @click="currentDialog = 'team-member'">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>{{ t('projectinfo.addMember') }}
         </button>
       </div>

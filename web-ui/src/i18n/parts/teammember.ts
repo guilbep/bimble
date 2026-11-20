@@ -1,0 +1,31 @@
+// Copy for Team member (A4, ADR 0055): the panel over Project information. Keys are added here only.
+export const fr = {
+  "teammember.title": "Intervenant",
+  "teammember.new": "Nouvel intervenant",
+  "teammember.close": "Fermer",
+  "teammember.company": "Entreprise",
+  "teammember.contact": "Contact",
+  "teammember.address": "Adresse postale",
+  "teammember.postcode": "NPA",
+  "teammember.city": "Localité",
+  "teammember.phone": "Téléphone",
+  "teammember.email": "E-mail",
+  "teammember.mine": "Mon entreprise",
+  "teammember.addInfo": "Ajouter une information",
+  "teammember.hint": "Intervenant : modifiez puis enregistrez · Échap : fermer",
+};
+export const en: Record<keyof typeof fr, string> = {
+  "teammember.title": "Team member",
+  "teammember.new": "New team member",
+  "teammember.close": "Close",
+  "teammember.company": "Company",
+  "teammember.contact": "Contact",
+  "teammember.address": "Postal address",
+  "teammember.postcode": "Postcode",
+  "teammember.city": "City",
+  "teammember.phone": "Phone",
+  "teammember.email": "E-mail",
+  "teammember.mine": "My company",
+  "teammember.addInfo": "Add information",
+  "teammember.hint": "Team member: edit, then save · Esc: close",
+};
