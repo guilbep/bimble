@@ -296,7 +296,7 @@
   },
   "file-menu-print": {
     "ref": "[role=menu] > a:nth-of-type(9)",
-    "lab": "[data-bb=\"file-menu-export-screen-D4\"]",
+    "lab": "[data-bb=\"file-menu-export\"]",
     "only": [
       "A2"
     ]
@@ -929,6 +929,97 @@
     "lab": "[data-bb=\"team-member-add-info\"]",
     "only": [
       "A4"
+    ]
+  },
+  "rebar-side-title": {
+    "ref": ".props .pn",
+    "lab": "[data-bb=\"rebar-side-title\"]",
+    "only": [
+      "B3"
+    ]
+  },
+  "sections": {
+    "ref": ".vp > [role=dialog]",
+    "lab": "[data-bb=\"sections\"]",
+    "only": [
+      "B4"
+    ]
+  },
+  "sections-title": {
+    "ref": ".vp [role=dialog] h2",
+    "lab": "[data-bb=\"sections-title\"]",
+    "only": [
+      "B4"
+    ]
+  },
+  "sections-table": {
+    "ref": ".vp [role=dialog] table.t",
+    "lab": "[data-bb=\"sections-table\"]",
+    "only": [
+      "B4"
+    ]
+  },
+  "steel-side-title": {
+    "ref": ".props > .pn",
+    "lab": "[data-bb=\"steel-side-title\"]",
+    "only": [
+      "B4"
+    ]
+  },
+  "sync-banner": {
+    "ref": ".banner.b-o",
+    "lab": "[data-bb=\"sync-banner\"]",
+    "only": [
+      "C3"
+    ]
+  },
+  "sync-title": {
+    "ref": "h2.disp",
+    "lab": "[data-bb=\"sync-title\"]",
+    "only": [
+      "C3"
+    ]
+  },
+  "users-title": {
+    "ref": ".page h2",
+    "lab": "[data-bb=\"users-title\"]",
+    "only": [
+      "C4"
+    ]
+  },
+  "users-add": {
+    "ref": ".page .btn.p",
+    "lab": "[data-bb=\"users-add\"]",
+    "only": [
+      "C4"
+    ]
+  },
+  "users-table": {
+    "ref": ".page table.t",
+    "lab": "[data-bb=\"users-table\"]",
+    "only": [
+      "C4"
+    ]
+  },
+  "subprojects-title": {
+    "ref": ".page h2",
+    "lab": "[data-bb=\"subprojects-title\"]",
+    "only": [
+      "C5"
+    ]
+  },
+  "subprojects-new": {
+    "ref": ".page .btn.s",
+    "lab": "[data-bb=\"subprojects-new\"]",
+    "only": [
+      "C5"
+    ]
+  },
+  "subprojects-side": {
+    "ref": ".props .pn",
+    "lab": "[data-bb=\"subprojects-side\"]",
+    "only": [
+      "C5"
     ]
   }
 }

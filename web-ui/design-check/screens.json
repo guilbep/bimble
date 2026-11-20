@@ -72,14 +72,14 @@
   },
   "B3": {
     "ref": "Rebar.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=rebar&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "B4": {
     "ref": "Steel.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=steel&dialog=sections&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
@@ -100,21 +100,21 @@
   },
   "C3": {
     "ref": "Conflicts.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=collaborate&page=synchronize&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "C4": {
     "ref": "Users.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=collaborate&page=users&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "C5": {
     "ref": "Subprojects.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=collaborate&page=subprojects&edit=move-first-beam",
     "mask": [
       "viewport"
     ]

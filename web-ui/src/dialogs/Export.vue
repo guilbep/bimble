@@ -94,6 +94,8 @@ h2 { font-family: 'Sora', sans-serif; margin: 0; }
 .seg .on { background: var(--bb-ink); color: var(--bb-cream); }
 .fld { display: flex; flex-direction: column; gap: 3px; }
 .inp { height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 8px; font: inherit; font-size: 13.5px; color: var(--bb-ink); min-width: 0; }
+/* Text on the selected (pink) row is ink, not stone (ADR 0049); !important beats the inline quiet colour. */
+.on > .mono { color: var(--bb-ink) !important; }
 .inp.mono { font-family: 'DM Mono', monospace; font-size: 13px; }
 .note { font-size: 13px; color: var(--bb-stone); }
 button:focus-visible, input:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
