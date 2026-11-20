@@ -94,6 +94,7 @@ impl Placing {
 }
 
 /// A partial change of what is placed (bridge `set_placing`): every field optional.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // bridge only
 #[derive(Debug, Default)]
 pub struct PlacingPatch {
     pub kind: Option<Kind>,
@@ -103,6 +104,7 @@ pub struct PlacingPatch {
     pub sizes: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // bridge only
 impl PlacingPatch {
     /// Parse `{kind?, storey?, material?, sizes?}`; unknown fields and kinds are errors.
     pub fn parse(json: &str) -> Result<PlacingPatch, String> {
@@ -314,6 +316,7 @@ impl Editor {
     }
 
     /// What is placed, for the page (B1): kind, storey, material, sizes, points, hint.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // bridge only
     pub fn placing_json(&self) -> serde_json::Value {
         let kind = self.placing.as_ref().map_or(self.kind, |p| p.kind);
         let storey = self.storey.and_then(|s| self.model.storeys.get(&s));
@@ -333,6 +336,7 @@ impl Editor {
 
     /// Apply a `PlacingPatch`, all or nothing. Returns the kind to start placing when it names
     /// one and nothing is being placed (the caller runs `place_<kind>` as the ribbon does).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // bridge only
     pub fn set_placing(&mut self, p: PlacingPatch) -> Result<Option<Kind>, String> {
         if let Some(s) = p.storey
             && !self.model.storeys.contains_key(&s)
