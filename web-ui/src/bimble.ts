@@ -150,6 +150,20 @@ export interface ScheduleTable {
   truncated: boolean;
 }
 
+/** `query("placing")`: what is placed (edit.rs `Editor::placing_json`). Sizes and offset in mm. */
+export interface Placing {
+  active: boolean;
+  kind: "column" | "beam" | "wall" | "slab";
+  storey: string | null;
+  storey_name: string | null;
+  material: string | null;
+  sizes: { column: number; beam_width: number; beam_height: number; wall: number; slab: number };
+  offset_mm: number[];
+  points: number[][];
+  clicks_needed: number;
+  hint: string | null;
+}
+
 /** One open tab, as the bridge's `open_views` gives it. */
 export type OpenTab =
   | { type: "view"; id: string }
@@ -184,6 +198,7 @@ interface Wasm {
   verb(name: string, argsJson: string): void;
   tab(json: string): void;
   on_change(cb: (json: string) => void): void;
+  set_placing(json: string): void;
 }
 
 export const state = shallowRef<State>({ selection: [], rev: 0, unsaved: false, file: null });
@@ -199,6 +214,8 @@ export const materials = shallowRef<MaterialSummary[]>([]);
 const NO_VIEWS: OpenViews = { views: [], active: null, tabs: [], current: null, paper: { offered: false, on: false } };
 export const openViews = shallowRef<OpenViews>(NO_VIEWS);
 export const project = shallowRef<ProjectSummary | null>(null);
+/** Null without an editable model. */
+export const placing = shallowRef<Placing | null>(null);
 /** Not pushed by on_change: polled while the pointer is over the viewport (`watchPointer`). */
 export const pointer = shallowRef<Pointer | null>(null);
 /** Refreshed on each change, and every second while the viewer draws (not idle). */
@@ -317,6 +334,16 @@ export function setProject(project: Record<string, string>): string | null {
   }
 }
 
+/** Change what is placed: `{kind?, storey?, material?, sizes?}`, all or nothing. Returns the Rust error, or null. */
+export function setPlacing(patch: { kind?: Placing["kind"]; storey?: string; material?: string; sizes?: Partial<Placing["sizes"]> }): string | null {
+  try {
+    wasmOrThrow().set_placing(JSON.stringify(patch));
+    return null;
+  } catch (e) {
+    return message(e);
+  }
+}
+
 export function undo(): string | null {
   try { wasmOrThrow().undo(); return null; } catch (e) { return message(e); }
 }
@@ -343,6 +370,7 @@ function refresh(modelChanged: boolean): void {
   visibility.value = tryQuery<Visibility | null>("visibility", null);
   openViews.value = tryQuery<OpenViews>("open_views", NO_VIEWS);
   status.value = tryQuery<Status | null>("status", null);
+  placing.value = tryQuery<Placing | null>("placing", null);
   if (modelChanged) {
     storeys.value = tryQuery<StoreySummary[]>("storeys", []);
     materials.value = tryQuery<MaterialSummary[]>("materials", []);

@@ -58,7 +58,7 @@
   },
   "B1": {
     "ref": "PlaceSlab.html",
-    "lab": "?url=/frame.bimble&tab=concrete",
+    "lab": "?url=/frame.bimble&tab=concrete&view=plan:1&action=place_slab",
     "mask": [
       "viewport"
     ]

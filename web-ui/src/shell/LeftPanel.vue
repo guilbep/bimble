@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import Navigator from "./Navigator.vue";
 import Properties from "../Properties.vue";
+import PlaceSlabSide from "./PlaceSlabSide.vue";
 import { page } from "../pages";
+import { placing } from "../bimble";
 </script>
 
 <template>
   <!-- A page may export `side`: it replaces the properties while the page is current. Reference: aside.left > nav.nav + .props (fr/View3D.html). -->
   <aside class="left" data-bb="left-panel">
     <Navigator />
-    <div class="props" data-bb="properties"><component :is="page()?.side ?? Properties" /></div>
+    <div class="props" data-bb="properties"><component :is="page()?.side ?? (placing?.active && placing.kind === 'slab' ? PlaceSlabSide : Properties)" /></div>
   </aside>
 </template>
 
