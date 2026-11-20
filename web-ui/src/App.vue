@@ -1,15 +1,13 @@
 <script setup lang="ts">
 import { state, startError, undo, redo } from "./bimble";
 import Properties from "./Properties.vue";
+import labIcon from "./brand/bimble-icon-lab.svg";
 </script>
 
 <template>
   <header class="bar">
-    <!-- Lab mark: logo study 7 (moss disc), ADR 0049. -->
-    <svg class="mark" viewBox="0 0 207.18 207.18" role="img" aria-label="Bimble lab">
-      <circle cx="103.59" cy="103.59" r="103.59" fill="var(--moss)" />
-      <path fill="var(--ink)" d="M101.25 38.54H134.85V116.44A13 13 0 1 0 139.85 106.19V70.03A46.6 46.6 0 1 1 101.25 115.94Z" />
-    </svg>
+    <img class="mark" :src="labIcon" alt="Bimble lab" width="26" height="26" />
+    <span class="word">bimble</span>
     <span class="file">{{ state.file ?? "No file" }}</span>
     <span v-if="state.unsaved" class="chip chip-ochre">Not saved</span>
     <span v-else class="chip chip-moss">Saved</span>
@@ -22,7 +20,7 @@ import Properties from "./Properties.vue";
     <div class="view">
       <!-- Never re-created (no v-if): the viewer binds to it at init(). -->
       <canvas id="bimble" />
-      <p v-if="startError" class="start-error">Bimble could not start: {{ startError }}</p>
+      <p v-if="startError" class="start-error" role="alert">Error: Bimble could not start. {{ startError }}</p>
     </div>
   </main>
 </template>
@@ -30,23 +28,31 @@ import Properties from "./Properties.vue";
 <style>
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
-body { background: var(--cream); color: var(--ink); font: 16px/1.4 var(--font-text); }
+/* Ground, ink, fonts and focus come from the skill's .bb base on <html>. */
+body { background: var(--bb-cream); }
 #app { display: flex; flex-direction: column; min-height: 100vh; }
 </style>
 
 <style scoped>
-.bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.mark { width: 32px; height: 32px; flex: none; }
-.file { font-family: var(--font-heading); font-weight: 500; overflow-wrap: anywhere; }
-.chip { border-radius: 999px; padding: 2px 10px; font-size: 14px; font-weight: 600; color: var(--ink); }
-.chip-ochre { background: var(--ochre); }
-.chip-moss { background: var(--moss); }
+/* Top bar: sheet, sunk bottom border, 10px 14px, 14px text (components.md "Top bar"). */
+.bar { display: flex; align-items: center; gap: var(--bb-space-3); padding: 10px 14px; background: var(--bb-sheet); border-bottom: 1px solid var(--bb-sunk); font-size: var(--bb-size-ui); flex-wrap: wrap; }
+.mark { width: 26px; height: 26px; flex: none; display: block; }
+/* Only the word "bimble" is set in the wordmark font. */
+.word { font-family: var(--bb-font-wordmark); font-size: var(--bb-size-heading); line-height: 1; }
+.file { font-family: var(--bb-font-display); font-weight: 500; overflow-wrap: anywhere; }
+/* Chips: pill, 3px 12px, ink text 14px on a disc fill, state in words. */
+.chip { border-radius: var(--bb-radius-pill); padding: 3px 12px; font-size: var(--bb-size-ui); font-weight: 600; color: var(--bb-ink); }
+.chip-ochre { background: var(--bb-attention); }
+.chip-moss { background: var(--bb-success); }
 .spacer { flex: 1; }
-.pill { font: 600 15px var(--font-text); color: var(--ink); background: var(--sheet); border: 1px solid var(--line); border-radius: 999px; padding: 6px 16px; cursor: pointer; }
-.pill:hover { border-color: var(--stone); }
-.pill:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+/* Secondary button: sheet fill, 1px ink border, ink text, pill, 32px min height. */
+.pill { font: 600 var(--bb-size-ui) var(--bb-font-text); min-height: var(--bb-target); color: var(--bb-ink); background: var(--bb-sheet); border: 1px solid var(--bb-ink); border-radius: var(--bb-radius-pill); padding: 6px 16px; cursor: pointer; }
+.pill:hover { background: var(--bb-sunk); }
+.pill:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
 .body { flex: 1; display: flex; flex-wrap: wrap; min-height: 0; }
-.view { flex: 1 1 320px; position: relative; min-height: 360px; min-width: 0; }
+/* Viewport: square, sheet ground. */
+.view { flex: 1 1 320px; position: relative; min-height: 360px; min-width: 0; background: var(--bb-sheet); border-radius: var(--bb-radius-none); }
 #bimble { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.start-error { position: absolute; inset: auto 16px 16px; margin: 0; padding: 8px 12px; background: var(--ochre); color: var(--ink); }
+/* Error: ink text on an ochre band, with the word "Error". */
+.start-error { position: absolute; inset: auto var(--bb-space-4) var(--bb-space-4); margin: 0; padding: var(--bb-space-2) var(--bb-space-3); background: var(--bb-error); color: var(--bb-ink); }
 </style>

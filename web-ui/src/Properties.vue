@@ -48,7 +48,7 @@ const sizes = computed(() =>
     <p v-else-if="state.selection.length > 1" class="many">
       <span class="dot" aria-hidden="true" />{{ state.selection.length }} selected
     </p>
-    <p v-else-if="loadError" class="error">{{ loadError }}</p>
+    <p v-else-if="loadError" class="error" role="alert">Error: {{ loadError }}</p>
     <template v-else-if="detail">
       <label for="el-name">Name</label>
       <input
@@ -60,7 +60,7 @@ const sizes = computed(() =>
         @keydown.enter="commit"
         @blur="commit"
       />
-      <p id="el-name-error" class="error" role="alert">{{ renameError ?? "" }}</p>
+      <p id="el-name-error" role="alert" :class="{ error: renameError }">{{ renameError ? `Error: ${renameError}` : "" }}</p>
       <dl>
         <dt>Class</dt><dd>{{ detail.class }}</dd>
         <dt>Storey</dt><dd>{{ detail.storey_name ?? "—" }}</dd>
@@ -75,18 +75,24 @@ const sizes = computed(() =>
 </template>
 
 <style scoped>
-.panel { flex: 0 0 280px; max-width: 100%; padding: 16px; border-right: 1px solid var(--line); background: var(--cream); }
-@media (max-width: 600px) { .panel { flex: 1 1 100%; border-right: 0; border-bottom: 1px solid var(--line); } }
-h2 { font: 700 18px var(--font-heading); margin: 0 0 12px; }
-.quiet { color: var(--stone); margin: 0; }
-.many { display: flex; align-items: center; gap: 8px; margin: 0; }
-.dot { width: 12px; height: 12px; border-radius: 50%; background: var(--pink); }
-label { display: block; font-weight: 600; font-size: 14px; color: var(--stone); margin-bottom: 4px; }
-input { width: 100%; font: 16px var(--font-text); color: var(--ink); background: var(--sheet); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
-input:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
-.error { color: var(--ochre-text); font-size: 14px; margin: 4px 0 0; min-height: 1.2em; overflow-wrap: anywhere; }
-dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 12px 0 0; }
-dt { color: var(--stone); }
+/* Panel: cream ground, 16px padding; line border is decoration only. */
+.panel { flex: 0 0 280px; max-width: 100%; padding: var(--bb-space-4); border-right: var(--bb-border-hairline); background: var(--bb-cream); }
+@media (max-width: 600px) { .panel { flex: 1 1 100%; border-right: 0; border-bottom: var(--bb-border-hairline); } }
+/* Panel title: Sora 500 14px. */
+h2 { font: 500 var(--bb-size-ui) var(--bb-font-display); margin: 0 0 var(--bb-space-3); }
+.quiet { color: var(--bb-stone); margin: 0; }
+.many { display: flex; align-items: center; gap: var(--bb-space-2); margin: 0; }
+/* Status dot: 12px pink disc with a 1px ink outline. */
+.dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bb-selection); border: 1px solid var(--bb-ink); }
+/* Input: label stone 13px above; sheet fill, 1px stone border, 8px radius, 32px, ink text. */
+label { display: block; font-size: var(--bb-size-small); color: var(--bb-stone); margin-bottom: var(--bb-space-1); }
+input { width: 100%; height: var(--bb-target); font: var(--bb-size-body) var(--bb-font-text); color: var(--bb-ink); background: var(--bb-sheet); border: var(--bb-border-control); border-radius: var(--bb-radius-sm); padding: 0 var(--bb-space-2); }
+input:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
+#el-name-error { margin: var(--bb-space-1) 0 0; min-height: 1.2em; }
+/* Error: ink text on an ochre band, with the word "Error". */
+.error { color: var(--bb-ink); background: var(--bb-error); font-size: var(--bb-size-ui); margin: var(--bb-space-1) 0 0; padding: 2px var(--bb-space-2); overflow-wrap: anywhere; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: var(--bb-space-1) var(--bb-space-3); margin: var(--bb-space-3) 0 0; }
+dt { color: var(--bb-stone); }
 dd { margin: 0; overflow-wrap: anywhere; }
-.mono { font-family: var(--font-mono); }
+.mono { font-family: var(--bb-font-data); }
 </style>
