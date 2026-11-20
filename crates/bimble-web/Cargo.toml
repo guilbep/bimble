@@ -9,8 +9,12 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# Default: the small viewer. `--features editor`: everything, reference plans included (ADR 0050).
+editor = ["bimble-viewer/reference-plans"]
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-bimble-viewer.workspace = true
+bimble-viewer = { path = "../bimble-viewer", default-features = false }
 eframe.workspace = true
 log.workspace = true
 wasm-bindgen.workspace = true

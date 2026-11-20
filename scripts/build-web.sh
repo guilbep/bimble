@@ -20,25 +20,34 @@ fi
 # PROFILE=dev keeps them for debugging.
 if [ "$PROFILE" = release ]; then flag="--profile web"; dir=web; strip=--remove-name-section
 else flag=; dir=debug; strip=; fi
-cargo build -p bimble-web --target wasm32-unknown-unknown $flag
-out=web/dist
-rm -rf "$out" && mkdir -p "$out"
-wasm-bindgen --target web --no-typescript $strip --out-dir "$out" \
-  "target/wasm32-unknown-unknown/$dir/bimble_web.wasm"
-if command -v wasm-opt >/dev/null && [ "$PROFILE" = release ]; then
-  wasm-opt -O2 --enable-bulk-memory --enable-nontrapping-float-to-int \
-    "$out/bimble_web_bg.wasm" -o "$out/bimble_web_bg.wasm"
-fi
-cp web/index.html web/viewport.html web/manifold-bridge.js "$out/"
-# The page's icon: one source each, under packaging/.
-cp packaging/logo-mark.svg "$out/favicon.svg"
-cp packaging/icon-256.png "$out/favicon.png"
-# The geometry kernel for booleans (Apache-2.0), cached in target/.
+# Two builds (ADR 0050): web/dist is the viewer (no DXF/PDF reference plans), what Pages and the
+# release zip publish; web/dist/editor is the full editor. The viewer is built last into web/dist,
+# so the editor is built first into a temporary folder and moved under it.
 deps=target/web-deps/manifold-3d-$MANIFOLD_VERSION
 if [ ! -f "$deps/package/manifold.wasm" ]; then
   mkdir -p "$deps"
   (cd "$deps" && npm pack --silent "manifold-3d@$MANIFOLD_VERSION" > /dev/null && tar xzf manifold-3d-*.tgz)
 fi
-cp "$deps/package/manifold.js" "$deps/package/manifold.wasm" "$out/"
-cp "$deps/package/LICENSE" "$out/manifold-LICENSE"
-ls -l "$out"
+build() { # build <out dir> [cargo flags...]
+  local out=$1; shift
+  cargo build -p bimble-web --target wasm32-unknown-unknown $flag "$@"
+  rm -rf "$out" && mkdir -p "$out"
+  wasm-bindgen --target web --no-typescript $strip --out-dir "$out" \
+    "target/wasm32-unknown-unknown/$dir/bimble_web.wasm"
+  if command -v wasm-opt >/dev/null && [ "$PROFILE" = release ]; then
+    wasm-opt -O2 --enable-bulk-memory --enable-nontrapping-float-to-int \
+      "$out/bimble_web_bg.wasm" -o "$out/bimble_web_bg.wasm"
+  fi
+  cp web/index.html web/viewport.html web/manifold-bridge.js "$out/"
+  # The page's icon: one source each, under packaging/.
+  cp packaging/logo-mark.svg "$out/favicon.svg"
+  cp packaging/icon-256.png "$out/favicon.png"
+  # The geometry kernel for booleans (Apache-2.0), cached in target/.
+  cp "$deps/package/manifold.js" "$deps/package/manifold.wasm" "$out/"
+  cp "$deps/package/LICENSE" "$out/manifold-LICENSE"
+}
+build target/web-editor --features editor
+build web/dist
+mv target/web-editor web/dist/editor
+out=web/dist
+ls -l "$out" "$out/editor"

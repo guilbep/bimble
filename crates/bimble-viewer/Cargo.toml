@@ -5,8 +5,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["reference-plans"]
+# DXF and PDF reference plans (ADR 0050): off in the web viewer build.
+reference-plans = ["bimble-drawing/reference-plans"]
+
 [dependencies]
-bimble-drawing.workspace = true
+bimble-drawing = { path = "../bimble-drawing", default-features = false }
 bimble-api.workspace = true
 bimble-core.workspace = true
 bimble-geom.workspace = true

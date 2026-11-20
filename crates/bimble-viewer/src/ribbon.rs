@@ -10,6 +10,9 @@ use super::*;
 use crate::ui_theme as th;
 use bimble_core::GlobalId;
 
+/// The DXF and PDF readers: in the desktop app and the web editor, not in the web viewer (ADR 0050).
+pub(crate) const REFERENCE_PLANS: bool = cfg!(feature = "reference-plans");
+
 /// The ribbon's tabs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum Tab {
@@ -202,6 +205,8 @@ impl Action {
                 layout::Tool::Dimension => "Sheet: dimension".into(),
             },
             Action::LinkModel => "Link IFC…".into(),
+            Action::LinkDxf if !REFERENCE_PLANS => "Link DXF… (not in the viewer build)".into(),
+            Action::LinkPdf if !REFERENCE_PLANS => "Link PDF… (not in the viewer build)".into(),
             Action::LinkDxf => "Link DXF…".into(),
             Action::LinkPdf => "Link PDF…".into(),
             Action::ManageLinks => "Manage links…".into(),
@@ -405,7 +410,7 @@ impl Viewer {
             Action::Orthographic | Action::SectionBox | Action::Top => loaded && !flat,
             Action::BoxToSelection => loaded && !flat && self.section_on,
             Action::SheetTool(_) | Action::CloseSheet => self.layout.is_some(),
-            Action::LinkDxf | Action::LinkPdf => loaded && flat,
+            Action::LinkDxf | Action::LinkPdf => REFERENCE_PLANS && loaded && flat,
             Action::ManageLinks | Action::RevealHidden => loaded,
             // The history lives next to the file: the desktop, a .bimble model.
             Action::SharedFolder | Action::Synchronize => {
