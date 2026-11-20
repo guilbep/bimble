@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { t } from "./i18n";
 import { viewName } from "./shell/viewName";
-import { state, element, rename, runVerb, materials, openViews, type ElementDetail, type ViewSummary } from "./bimble";
+import { state, element, rename, runVerb, materials, openViews, storeys, type ElementDetail, type ViewSummary } from "./bimble";
 import { classNoun, parseMm } from "./i18n/parts/modify";
 
 // Rendered inside `.props` (LeftPanel): rows as fr/View3D.html (view) and fr/SelectModify.html (element).
@@ -69,6 +69,18 @@ const viewType = computed(() => {
   if (!v) return "";
   if (v.type === "plan") return t(v.look === "up" ? "view.ceiling" : "view.plan");
   return t(v.type === "section" ? "view.section" : "view.three_d");
+});
+
+// A plan on paper (fr/PlanOnPaper.html): its range planes as stored (`{level, offset_mm}`).
+const onPaper = computed(() => view.value?.type === "plan" && openViews.value.paper.on);
+type Plane = { level: string; offset_mm: number };
+const PLANES = ["top", "cut", "bottom", "depth"] as const;
+const planes = computed(() => {
+  const r = (view.value?.range ?? {}) as Partial<Record<(typeof PLANES)[number], Plane>>;
+  const key = view.value?.storey as string | undefined;
+  const own = storeys.value.find((s) => s.id === key || s.name === key)?.name ?? key ?? "";
+  // ponytail: only "associated" names a storey here; above/below need Rust to resolve the level.
+  return PLANES.map((k) => ({ k, level: r[k]?.level === "associated" ? own : "", offset: r[k]?.offset_mm ?? 0 }));
 });
 
 // The reference's four families; the other categories count as "other".
@@ -142,6 +154,24 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
       </span>
     </div>
     <p v-if="zError" role="alert" class="error">{{ t('modify.error', { msg: zError }) }}</p>
+  </template>
+  <template v-else-if="view && onPaper">
+    <div class="pn">{{ t('view.props', { name: viewName(view) }) }}</div>
+    <div class="row"><span class="k">{{ t('view.scale') }}</span><span class="sel-inp" style="width:100px" data-missing="set view scale (Command::SetView needs the whole View: no bimble.ts call)">1:{{ view.scale }}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
+    <div class="row"><span class="k">{{ t('onpaper.orientation') }}</span><span class="sel-inp" style="width:150px" data-missing="set view true_north (no bimble.ts call)">{{ t(view.true_north ? 'onpaper.trueNorth' : 'onpaper.projectNorth') }}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
+    <div class="row"><span class="k">{{ t('view.phase') }}</span><span class="sel-inp" style="width:150px" data-missing="view phase filter"><span /><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
+    <div class="row"><span class="k">{{ t('onpaper.crop') }}</span><span class="sel-inp" style="width:110px" data-missing="set view crop (no bimble.ts call)">{{ t(view.crop ? 'onpaper.on' : 'onpaper.off') }}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
+    <div class="sec">{{ t('onpaper.range') }}</div>
+    <div v-for="p in planes" :key="p.k" class="row">
+      <label class="k" :for="`range-${p.k}`">{{ t(`onpaper.${p.k}`) }}</label>
+      <span style="display:inline-flex;gap:6px">
+        <span class="sel-inp" style="width:78px" :data-missing="p.level ? 'set view range level (no bimble.ts call)' : 'range plane storey name for above/below/unlimited (resolve in Rust)'"><span class="mono ell">{{ p.level }}</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+        <input :id="`range-${p.k}`" class="inp mono" :value="grouped(p.offset)" readonly data-missing="set view range offset (no bimble.ts call)" style="width:70px;text-align:right">
+      </span>
+    </div>
+    <div class="sec">{{ t('onpaper.refs') }}</div>
+    <div v-if="view.references" class="row" data-missing="reference names in query('views') (only a count today)"><span class="k">{{ t('nav.refs', { n: view.references }) }}</span></div>
+    <div class="row"><span class="k">{{ t('onpaper.display') }}</span><span class="sel-inp" style="width:110px" data-missing="reference display style (no field in View)"><span /><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
   </template>
   <template v-else-if="view">
     <div class="pn">{{ t('view.props', { name: viewName(view) }) }}</div>

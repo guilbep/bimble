@@ -135,7 +135,7 @@
   },
   "D2": {
     "ref": "PlanOnPaper.html",
-    "lab": "?url=/frame.bimble&tab=annotate&view=plan:0&paper=1",
+    "lab": "?url=/frame.bimble&tab=annotate&view=plan:1&paper=1",
     "mask": [
       "viewport"
     ]
