@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { state, actions, historyLabels, runAction, undo, redo } from "../bimble";
 import { t } from "../i18n";
+import { currentDialog } from "../dialogs";
 import labIcon from "../brand/bimble-icon-lab.svg";
 
 /** Whether the ribbon action `name` is enabled now (`query("actions")`). */
@@ -20,8 +21,8 @@ const undoLabel = computed(() => {
       @click.prevent="runAction('home')"><img :src="labIcon" :alt="t('app.logoAlt')" width="26" height="26" /></a>
     <button class="ib a" type="button" :aria-label="t('quick.home')" :title="t('quick.home')" data-bb="quickbar-home"
       @click="runAction('home')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11 12 4l8 7"/><path d="M6 10v10h12V10"/><path d="M10 20v-6h4v6"/></svg></button>
-    <!-- ponytail: the File menu is screen A2; the button is there, it opens nothing yet. -->
-    <button class="qb" type="button" style="font-weight:600" data-bb="quickbar-file" data-missing="file-menu-screen-A2">{{ t('quick.file') }} <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+    <button class="qb" type="button" style="font-weight:600" data-bb="quickbar-file" aria-haspopup="menu" :aria-expanded="currentDialog === 'file-menu'"
+      @click="currentDialog = 'file-menu'">{{ t('quick.file') }} <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
     <span class="tabsep" data-bb="quickbar-sep"></span>
     <button class="ib" type="button" :disabled="!on('open')" :aria-label="t('quick.open')" :title="t('quick.open')" data-bb="quickbar-open"
       @click="runAction('open')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z"/><path d="M3 7V5h6"/></svg></button>
