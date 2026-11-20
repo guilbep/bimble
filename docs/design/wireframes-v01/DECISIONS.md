@@ -49,3 +49,6 @@ marks the decisions he took himself.
 | 41 | The check and hidden elements | hidden = present at size 0 / hidden = absent | absent (`checkVisibility()`) | a hidden element is not on screen; the self-check still gives 0 |
 | 42 | Home status bar with a model open | the reference's "Aucun modèle ouvert" / the real state | real state, listed | the lab opens a model; the text would be false |
 | 43 | Batch C beside batch B | wait for B / run C dialogs and pages beside B1 | beside B1 (B2 waits for B1) | different files; parts no longer conflict; B1 alone owns bimble.ts |
+| 44 | History: where the session's undo list goes | the "New version" card / the changes pane | the changes pane, one row per undo label | it is the real list of changes; no fake element/field cells |
+| 45 | History rows | click undoes up to a row / display only | display only | no Rust call undoes to a given step |
+| 46 | Ribbon "Historique" | opens the egui panel / opens this page | unchanged for now (deep link `?page=history`), ribbon follow-up | Ribbon files were not this ticket's |

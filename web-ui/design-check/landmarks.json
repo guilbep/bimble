@@ -383,5 +383,33 @@
   "project-add-field": {
     "ref": ".page section:last-child > .qb",
     "lab": "[data-bb=\"project-add-field\"]"
+  },
+  "history-title": {
+    "ref": ".page h2",
+    "lab": "[data-bb=\"history-title\"]"
+  },
+  "history-branch": {
+    "ref": ".page .sel-inp",
+    "lab": "[data-bb=\"history-branch\"]"
+  },
+  "history-new-variant": {
+    "ref": ".page .btn.s",
+    "lab": "[data-bb=\"history-new-variant\"]"
+  },
+  "history-new-version": {
+    "ref": ".page .card",
+    "lab": "[data-bb=\"history-new-version\"]"
+  },
+  "history-commit": {
+    "ref": ".page .card .btn.p",
+    "lab": "[data-bb=\"history-commit\"]"
+  },
+  "history-changes": {
+    "ref": ".page table.t",
+    "lab": "[data-bb=\"history-changes\"]"
+  },
+  "history-side-branch": {
+    "ref": ".props > .pn",
+    "lab": "[data-bb=\"history-side-branch\"]"
   }
 }
