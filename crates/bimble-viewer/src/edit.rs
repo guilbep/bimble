@@ -351,12 +351,8 @@ impl Editor {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label("Vector");
-            for k in 0..3 {
-                ui.add(
-                    egui::DragValue::new(&mut self.offset[k])
-                        .speed(10.0)
-                        .range(-1e6..=1e6),
-                );
+            for v in &mut self.offset {
+                ui.add(egui::DragValue::new(v).speed(10.0).range(-1e6..=1e6));
             }
             ui.weak("mm");
         });
