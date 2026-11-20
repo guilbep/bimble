@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { openViews, sheets, tabCall, runAction, type OpenTab } from "../bimble";
 import { t } from "../i18n";
+import { viewName } from "./viewName";
 
 // `query("open_views")` (bridge.rs): the open tabs in order; `current` is what the main view shows.
 const same = (a: OpenTab | null, b: OpenTab | null) => JSON.stringify(a) === JSON.stringify(b);
@@ -13,7 +14,7 @@ const tabs = computed(() => {
   return o.tabs.map((x) => {
     const on = same(x, o.current);
     switch (x.type) {
-      case "view": return { tab: x, on, name: o.views.find((v) => v.id === x.id)?.name ?? "" };
+      case "view": return { tab: x, on, name: ((v) => (v ? viewName(v) : ""))(o.views.find((v) => v.id === x.id)) };
       case "sheet": { const s = sh.find((s) => s.id === x.id); return { tab: x, on, name: s ? `${s.number} · ${s.name}` : "" }; }
       case "schedule": return { tab: x, on, name: t("viewtabs.schedule", { name: x.name }) };
       case "project": return { tab: x, on, name: t("viewtabs.project") };

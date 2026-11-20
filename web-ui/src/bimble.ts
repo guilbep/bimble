@@ -98,7 +98,29 @@ export interface ViewSummary {
   true_north: boolean;
   references: number;
   annotations: number;
+  /** `open_views` only: set while the default name is kept, so the page says it in its language. */
+  auto_name?: { kind: "3d" | "plan" | "ceiling"; storey: string | null } | null;
   [kindField: string]: unknown;
+}
+
+/** `query("pointer")`: where the pointer is over the model; null off the model. */
+export interface Pointer {
+  world_mm: number[];
+  text: string;
+}
+
+/** `query("status")`: the status bar's counts; null without a model. */
+export interface Status {
+  visible: number;
+  total: number;
+  triangles: number;
+  load_ms: number;
+  model_bytes: number;
+  /** 0: not known on this platform. */
+  app_bytes: number;
+  fps: number | null;
+  idle: boolean;
+  text: string;
 }
 
 export interface SheetSummary {
@@ -177,6 +199,10 @@ export const materials = shallowRef<MaterialSummary[]>([]);
 const NO_VIEWS: OpenViews = { views: [], active: null, tabs: [], current: null, paper: { offered: false, on: false } };
 export const openViews = shallowRef<OpenViews>(NO_VIEWS);
 export const project = shallowRef<ProjectSummary | null>(null);
+/** Not pushed by on_change: polled while the pointer is over the viewport (`watchPointer`). */
+export const pointer = shallowRef<Pointer | null>(null);
+/** Refreshed on each change, and every second while the viewer draws (not idle). */
+export const status = shallowRef<Status | null>(null);
 
 let resolveReady!: () => void;
 /** Resolves once the viewer started; `start()` failing leaves it pending (see `startError`). */
@@ -229,11 +255,30 @@ export async function start(): Promise<void> {
         refresh(prev.rev !== s.rev || prev.file !== s.file);
       });
     });
+    watchPointer();
+    // ponytail: one 1 s timer for the whole session; it queries only while the viewer draws.
+    setInterval(() => { if (status.value && !status.value.idle) status.value = tryQuery<Status | null>("status", null); }, 1000);
     resolveReady();
   } catch (e) {
     startError.value = message(e);
     throw e;
   }
+}
+
+/** Poll `query("pointer")` every 100 ms while the pointer is over #bimble, on an animation frame
+ *  (never inside on_change, whose callback runs in the viewer's frame). */
+function watchPointer(): void {
+  const canvas = document.getElementById("bimble");
+  if (!canvas) return;
+  let timer = 0;
+  let queued = false;
+  const poll = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; if (timer) pointer.value = tryQuery<Pointer | null>("pointer", null); });
+  };
+  canvas.addEventListener("mouseenter", () => { if (!timer) timer = window.setInterval(poll, 100); });
+  canvas.addEventListener("mouseleave", () => { clearInterval(timer); timer = 0; pointer.value = null; });
 }
 
 /** Rust errors arrive as strings (JsValue); keep their message. */
@@ -284,6 +329,7 @@ function refresh(modelChanged: boolean): void {
   historyLabels.value = tryQuery<History>("history", { undo: [], redo: [] });
   visibility.value = tryQuery<Visibility | null>("visibility", null);
   openViews.value = tryQuery<OpenViews>("open_views", NO_VIEWS);
+  status.value = tryQuery<Status | null>("status", null);
   if (modelChanged) {
     storeys.value = tryQuery<StoreySummary[]>("storeys", []);
     materials.value = tryQuery<MaterialSummary[]>("materials", []);
@@ -294,6 +340,9 @@ function refresh(modelChanged: boolean): void {
   if (!timed && modelChanged && state.value.file !== null) {
     timed = true;
     console.debug(`bimble: refresh after change ${(performance.now() - t0).toFixed(2)} ms`);
+    const p0 = performance.now();
+    for (let i = 0; i < 100; i++) tryQuery("pointer", null);
+    console.debug(`bimble: 100 pointer polls ${(performance.now() - p0).toFixed(2)} ms`);
   }
 }
 
@@ -312,9 +361,12 @@ export function runAction(name: string): string | null {
 }
 
 /** Activate or close one open tab (`openViews.tabs`). Returns the Rust error, or null. */
-export function tabCall(op: "activate" | "close", tab: OpenTab): string | null {
+export function tabCall(op: "activate" | "close" | "open", tab: OpenTab): string | null {
   try { wasmOrThrow().tab(JSON.stringify({ op, tab })); return null; } catch (e) { return message(e); }
 }
+
+/** Open any view as its current tab (a navigator click). Returns the Rust error, or null. */
+export const openView = (id: string) => tabCall("open", { type: "view", id });
 
 /** Run one API verb as one undoable step. Returns the Rust error, or null. */
 export function runVerb(name: string, args: unknown = {}): string | null {

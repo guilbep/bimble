@@ -1,11 +1,20 @@
 <script setup lang="ts">
-import { state, visibility, actions, runAction } from "../bimble";
+import { state, visibility, actions, runAction, pointer, status } from "../bimble";
 import { lang, setLang, t, type Lang } from "../i18n";
 
 const langs: Lang[] = ["fr", "en"];
 // Each chip: a view mode read from `query("visibility")`; `undo` is the action its × runs, enabled as `query("actions")` says.
 type Chip = { key: Parameters<typeof t>[0]; n: number; undo: string };
 const enabled = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
+// The reference's "1 284 éléments · 0.4 s · 312 MB · au repos": visible elements, load time, memory, idle or fps.
+const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+const counts = (): string => {
+  const s = status.value;
+  if (!s) return "";
+  const mb = Math.round((s.app_bytes || s.model_bytes) / 1048576);
+  const rate = s.idle ? t("status.idle") : t("status.fps", { n: s.fps ?? 0 });
+  return t("status.counts", { n: grouped(s.visible), s: (s.load_ms / 1000).toFixed(1), mb, rate });
+};
 const chips = (): Chip[] => {
   const v = visibility.value;
   if (!v) return [];
@@ -24,8 +33,7 @@ const chips = (): Chip[] => {
   <!-- Reference: footer.status (D1). -->
   <footer class="status" data-bb="statusbar">
     <span class="hint" data-bb="status-hint">{{ t("status.hint") }}</span>
-    <!-- ponytail: the pointer position has no Rust query yet; the slot keeps the reference layout, empty. -->
-    <span class="mono q coords" style="font-size:12px" data-bb="status-coords" data-missing="pointer-coordinates"></span>
+    <span class="mono q coords" style="font-size:12px" data-bb="status-coords">{{ pointer?.text ?? "" }}</span>
     <span style="flex:1"></span>
     <!-- Reference: `.status > .chip`, a set of direct children; each carries the landmark, the check reads the first. -->
     <span v-if="state.selection.length" data-bb="status-chip" class="chip c-p nx">{{ t(state.selection.length === 1 ? "status.selectedOne" : "status.selected", { n: state.selection.length }) }}</span>
@@ -34,8 +42,7 @@ const chips = (): Chip[] => {
         @click="runAction(c.undo)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span>
     <!-- ponytail: linked models have no query yet; no chip is drawn rather than a fake one. -->
     <span hidden data-missing="links"></span>
-    <!-- ponytail: no element-count query in bimble.ts yet; counts show what State holds. -->
-    <span class="mono q" style="font-size:12px" data-bb="status-counts">{{ t("status.counts", { rev: state.rev, n: state.selection.length }) }}</span>
+    <span class="mono q" style="font-size:12px" data-bb="status-counts">{{ counts() }}</span>
     <span class="seg" role="group" :aria-label="t('status.langGroup')" style="margin-left:4px" data-bb="status-lang">
       <button v-for="l in langs" :key="l" type="button" class="lg" :class="{ on: lang === l }"
         :aria-pressed="lang === l" :aria-label="t(l === 'fr' ? 'status.langFr' : 'status.langEn')"

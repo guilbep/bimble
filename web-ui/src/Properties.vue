@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { t } from "./i18n";
+import { viewName } from "./shell/viewName";
 import { state, element, rename, materials, openViews, type ElementDetail, type ViewSummary } from "./bimble";
 
 // Rendered inside `.props` (LeftPanel): rows as fr/View3D.html (view) and fr/SelectModify.html (element).
@@ -114,7 +115,7 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
     </template>
   </template>
   <template v-else-if="view">
-    <div class="pn">{{ t('view.props', { name: view.name }) }}</div>
+    <div class="pn">{{ t('view.props', { name: viewName(view) }) }}</div>
     <div class="row"><span class="k">{{ t('view.type') }}</span><span>{{ viewType }}</span></div>
     <div class="row"><span class="k">{{ t('view.scale') }}</span><span class="mono">1:{{ view.scale }}</span></div>
     <div class="row">

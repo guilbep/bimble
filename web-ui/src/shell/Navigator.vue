@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { t } from "../i18n";
-import { actions, openViews, runAction, scheduleList, sheets, state, storeys, type ViewSummary } from "../bimble";
+import { viewName } from "./viewName";
+import { actions, openView, openViews, runAction, scheduleList, sheets, state, storeys, type ViewSummary } from "../bimble";
 
 // `open_views` is `{views, active, tabs}` (bridge.rs); bimble.ts types it loosely until then.
 const ov = computed(() => openViews.value as unknown as { views?: ViewSummary[]; active?: string | null });
@@ -38,18 +39,17 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
       <span>{{ t('nav.views') }}</span>
     </a>
     <template v-if="open">
-      <!-- Pink is selection only (ADR 0049): the reference does not mark the active view here.
-           Switching the active view has no call yet. -->
+      <!-- Pink is selection only (ADR 0049): the reference does not mark the active view here. -->
       <a
         v-for="v in groupedViews" :key="v.id" class="ti" href="#"
-        style="padding-left:22px" data-missing="activate-view" @click.prevent
+        style="padding-left:22px" @click.prevent="openView(v.id)"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <template v-if="icon(v) === 'three_d'"><path d="M12 3 20 7v10l-8 4-8-4V7z"/><path d="M4 7l8 4 8-4M12 11v10"/></template>
           <template v-else-if="icon(v) === 'plan'"><rect x="4" y="4" width="16" height="16"/><path d="M4 12h9v8M13 4v4"/></template>
           <template v-else><path d="M3 12h18"/><path d="m7 8-4 4 4 4"/><rect x="9" y="5" width="6" height="14" stroke-dasharray="2 2"/></template>
         </svg>
-        <span>{{ v.name }}</span>
+        <span>{{ viewName(v) }}</span>
         <span v-if="v.references > 0" class="n">{{ t('nav.refs', { n: v.references }) }}</span>
       </a>
     </template>
