@@ -298,6 +298,9 @@ mod two_lines {
     }
 }
 
+/// Brand pink, the colour of selection and nothing else (ADR 0049: fill #D7ACB6).
+pub const SELECTION_PINK: Rgb = rgb(0xD7, 0xAC, 0xB6);
+
 const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
     Rgb([r, g, b])
 }
@@ -331,7 +334,7 @@ impl Default for GraphicStyle {
         GraphicStyle {
             background: rgb(247, 247, 245),
             edges: rgb(26, 26, 28),
-            selection: rgb(232, 126, 4),
+            selection: SELECTION_PINK,
             hover: rgb(30, 144, 255),
             dimensions: rgb(20, 110, 220),
             reference: rgb(190, 214, 238),
@@ -584,6 +587,12 @@ fn diff(a: &serde_json::Value, b: &serde_json::Value) -> Option<serde_json::Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selection_is_the_brand_pink() {
+        assert_eq!(GraphicStyle::default().selection, SELECTION_PINK);
+        assert_eq!(SELECTION_PINK, Rgb([0xD7, 0xAC, 0xB6]));
+    }
 
     #[test]
     fn a_material_moved_to_another_family_is_saved_with_the_standards() {
