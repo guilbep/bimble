@@ -73,6 +73,21 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
         })),
         "storeys" => json(query::storeys(model(v)?)),
         "materials" => json(query::materials(model(v)?)),
+        // Graphic standards (D5): see `standards::json`, plus what the three buttons can do now.
+        "standards" => {
+            let source = v
+                .style_path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned());
+            let mut j = crate::standards::json(&v.opts.style, source);
+            j["actions"] = serde_json::json!({
+                "revert": v.opts.style != v.style_baseline,
+                "reset": v.opts.style != bimble_core::style::GraphicStyle::default(),
+                "save": true,
+            });
+            json(j)
+        }
         "elements" => {
             let filter: query::ElementFilter = if args_json.trim().is_empty() {
                 Default::default()
@@ -333,6 +348,26 @@ pub fn dismiss_belongs() -> Result<(), JsValue> {
     with_viewer(|v| {
         if let Some(ed) = v.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
             ed.belongs = None;
+        }
+        Ok(())
+    })
+}
+
+/// The style panel's buttons: "revert" (back to the file as loaded or last saved), "reset" (asks
+/// first, as egui does: ADR 0028), "save" (asks where, writes what differs from the default).
+#[wasm_bindgen]
+pub fn standards_action(name: &str) -> Result<(), JsValue> {
+    with_viewer(|v| {
+        match name {
+            "revert" => {
+                v.opts.style = v.style_baseline.clone();
+                v.needs_render = true;
+            }
+            "reset" => v.confirm = Some(crate::Confirm::ResetStandards),
+            "save" => {
+                v.save_style();
+            }
+            _ => return Err(format!("unknown standards action {name:?}")),
         }
         Ok(())
     })

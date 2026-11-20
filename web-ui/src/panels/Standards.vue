@@ -5,17 +5,34 @@ export const label = "standards.title";
 
 <script setup lang="ts">
 // Screen D5, Graphic standards (wireframes v01 fr/Standards.html): the 400-wide right panel.
-// Rust today: the standards (PenTable in pens.rs, HatchType/MaterialHatch in hatches.rs, the egui style_panel)
-// have no query or verb on the bridge. Only the material families are readable (query "materials").
-// Everything else is drawn as the reference, empty or disabled, with data-missing naming the call.
-import { computed } from "vue";
-import { materials } from "../bimble";
+// Data: query("standards") (crates/bimble-viewer/src/standards.rs); the swatches are SVG drawn in
+// Rust from the real HatchType, shown as <img>. Buttons: standardsAction (the egui style_panel's).
+import { computed, shallowRef, watch } from "vue";
+import { actions, standards, standardsAction } from "../bimble";
 import { t } from "../i18n";
 import type * as copy from "../i18n/parts/standards";
 
 const tx = (k: keyof typeof copy.fr) => t(k);
-// One tile per material family in the model, in query order.
-const families = computed(() => [...new Set(materials.value.map((m) => m.category))]);
+const st = shallowRef(standards());
+// Re-read after every change the viewer reports (actions is refreshed on each one).
+watch(actions, () => { st.value = standards(); });
+const err = shallowRef<string | null>(null);
+function run(name: "revert" | "reset" | "save") {
+  err.value = standardsAction(name);
+  st.value = standards();
+}
+// One row per scale, the pens of the cut, seen and thin (hatch) lines, as the reference.
+const pens = computed(() => {
+  const p = st.value?.pens;
+  if (!p) return [];
+  const mm = (pen: number | null, i: number) => {
+    const v = pen === null ? null : p.rows.find((r) => r.pen === pen)?.mm[i];
+    return v === null || v === undefined ? "—" : v.toFixed(2);
+  };
+  return p.scales.map((s, i) => ({ scale: `1:${s}`, cut: mm(p.roles.cut, i), seen: mm(p.roles.seen, i), thin: mm(p.roles.thin, i) }));
+});
+const img = (svg: string) => "data:image/svg+xml," + encodeURIComponent(svg);
+const fam = (f: string) => t(`standards.fam.${f}`);
 </script>
 
 <template>
@@ -24,30 +41,39 @@ const families = computed(() => [...new Set(materials.value.map((m) => m.categor
       <span class="pn" style="margin:0" data-bb="standards-title">{{ tx('standards.title') }}</span>
       <span style="flex:1"></span>
       <!-- The "Changed, not saved" chip: state::unsaved() knows "standards", the bridge's state.unsaved is one boolean. -->
-      <span data-missing="query('state').unsaved_parts: [&quot;standards&quot;] when the standards are changed (state::unsaved)"></span>
+      <span v-if="st?.actions.revert" class="note">{{ tx('standards.changed') }}</span>
     </div>
-    <div class="note" data-missing="query('standards').source: the file the standards come from (office or model)"></div>
+    <div class="note" data-bb="standards-source">{{ st?.source ? tx('standards.source').replace('{file}', st.source) : tx('standards.default') }}</div>
     <input class="inp" :placeholder="tx('standards.search')" :aria-label="tx('standards.searchLabel')" disabled data-bb="standards-search" data-missing="query('standards', {q}): the style_editor filter, not bridged">
     <div class="sec">{{ tx('standards.pens') }}</div>
-    <table class="t" style="background:var(--bb-sheet)" data-bb="standards-pens" data-missing="query('standards').pens: PenTable::model_mm(pen, scale) per scale + verb set_pen(scale, pen, mm)">
+    <table class="t" style="background:var(--bb-sheet)" data-bb="standards-pens">
       <thead><tr><th>{{ tx('standards.scale') }}</th><th class="r">{{ tx('standards.cut') }}</th><th class="r">{{ tx('standards.seen') }}</th><th class="r">{{ tx('standards.thin') }}</th></tr></thead>
-      <tbody></tbody>
+      <tbody>
+        <tr v-for="r in pens" :key="r.scale"><td>{{ r.scale }}</td><td class="r">{{ r.cut }}</td><td class="r">{{ r.seen }}</td><td class="r">{{ r.thin }}</td></tr>
+      </tbody>
     </table>
     <div class="sec">{{ tx('standards.hatches') }}</div>
     <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px" data-bb="standards-hatches">
-      <div v-for="f in families" :key="f" style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">
-        <!-- No pattern from Rust: a blank swatch (no hatch drawn in TS). -->
-        <svg width="72" height="48" role="img" :aria-label="t(`standards.fam.${f}`)" data-missing="query('standards').hatches: HatchType lines + MaterialHatch (cut, seen) per family (hatches.rs)"><rect x="1" y="1" width="70" height="46" stroke-width="1" style="fill:var(--bb-sheet);stroke:var(--bb-ink)"/></svg>
-        <span style="font-size:12.5px">{{ t(`standards.fam.${f}`) }}</span>
+      <div v-for="h in st?.hatches ?? []" :key="h.family" style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">
+        <div style="display:flex;gap:4px">
+          <img v-if="h.cut" :src="img(h.cut.svg)" width="48" height="32" :alt="`${fam(h.family)}, ${tx('standards.cut')}: ${h.cut.name}`" :title="h.cut.name" class="sw">
+          <img v-if="h.seen" :src="img(h.seen.svg)" width="48" height="32" :alt="`${fam(h.family)}, ${tx('standards.seen')}: ${h.seen.name}`" :title="h.seen.name" class="sw">
+          <!-- A family with no hatch type keeps its own on-screen pattern: nothing to draw from Rust. -->
+          <span v-if="!h.cut && !h.seen" class="sw blank"></span>
+        </div>
+        <span style="font-size:12.5px">{{ fam(h.family) }}</span>
       </div>
     </div>
-    <div class="sec" data-bb="standards-moved" data-missing="query('standards').moved: families moved to another (from → to, element count) + verb to undo one">{{ tx('standards.moved') }}</div>
+    <div class="sec" data-bb="standards-moved">{{ tx('standards.moved') }}</div>
+    <div v-for="m in st?.moved ?? []" :key="m.from + m.to" class="note">{{ fam(m.from) }} → {{ fam(m.to) }} · {{ m.count }}</div>
+    <div v-if="st && !st.moved.length" class="note">{{ tx('standards.noMoved') }}</div>
     <span style="flex:1"></span>
-    <!-- ADR 0052: changes apply at once; these three are file operations of the egui style_panel, not ribbon actions. -->
+    <div v-if="err" class="note" role="alert">{{ err }}</div>
+    <!-- ADR 0052: changes apply at once; these three are the egui style_panel's file operations (Reset asks first, ADR 0028). -->
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn s" type="button" disabled data-bb="standards-revert" data-missing="action revert_standards (egui style_panel only)">{{ tx('standards.revert') }}</button>
-      <button class="btn s" type="button" disabled data-bb="standards-reset" data-missing="action reset_standards (egui style_panel only)">{{ tx('standards.reset') }}</button>
-      <button class="btn p" type="button" disabled data-bb="standards-save" data-missing="action save_standards (egui style_panel only)">{{ tx('standards.save') }}</button>
+      <button class="btn s" type="button" :disabled="!st?.actions.revert" data-bb="standards-revert" @click="run('revert')">{{ tx('standards.revert') }}</button>
+      <button class="btn s" type="button" :disabled="!st?.actions.reset" data-bb="standards-reset" @click="run('reset')">{{ tx('standards.reset') }}</button>
+      <button class="btn p" type="button" :disabled="!st?.actions.save" data-bb="standards-save" @click="run('save')">{{ tx('standards.save') }}</button>
     </div>
   </div>
 </template>
@@ -68,7 +94,11 @@ table.t { border-collapse: collapse; width: 100%; font-size: 13.5px; }
 /* table.t th{text-align:left;font-weight:600;color:#5C574D;border-bottom:1px solid #5C574D;padding:6px 8px;white-space:nowrap;font-size:13px} */
 table.t th { text-align: left; font-weight: 600; color: var(--bb-stone); border-bottom: 1px solid var(--bb-stone); padding: 6px 8px; white-space: nowrap; font-size: 13px; }
 /* table.t td.r,table.t th.r{text-align:right} */
-table.t th.r { text-align: right; }
+table.t th.r, table.t td.r { text-align: right; }
+/* table.t td{border-bottom:1px solid #EDE7DB;padding:5px 8px;vertical-align:middle} */
+table.t td { border-bottom: 1px solid var(--bb-sunk); padding: 5px 8px; vertical-align: middle; }
+.sw { display: block; width: 48px; height: 32px; border: 1px solid var(--bb-ink); }
+.sw.blank { background: var(--bb-sheet); }
 /* .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:5px 16px;border-radius:999px;font:inherit;font-weight:600;color:#141414;cursor:pointer;text-decoration:none;white-space:nowrap} */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 16px; border-radius: 999px; font: inherit; font-weight: 600; color: var(--bb-ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
 /* .btn.p{background:#C06A41;border:0} .btn.s{background:#FFFFFF;border:1px solid #141414;font-weight:400} */

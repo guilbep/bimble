@@ -45,6 +45,7 @@ mod section;
 mod settings;
 mod share;
 mod snap;
+mod standards;
 mod state;
 mod style_editor;
 mod ui_theme;

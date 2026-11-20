@@ -486,3 +486,22 @@ export const collab = () => tryQuery<Collab>("collab", NO_COLLAB);
 export function dismissBelongs(): string | null {
   try { wasmOrThrow().dismiss_belongs(); return null; } catch (e) { return message(e); }
 }
+/** Graphic standards (D5, bridge query "standards"); swatch SVGs are drawn in Rust. */
+export type Swatch = { name: string; svg: string } | null;
+export type Standards = {
+  source: string | null;
+  pens: { scales: number[]; rows: { pen: number; mm: (number | null)[] }[]; roles: { cut: number | null; seen: number | null; thin: number | null } };
+  hatches: { family: string; cut: Swatch; seen: Swatch }[];
+  moved: { from: string; to: string; count: number }[];
+  actions: { revert: boolean; reset: boolean; save: boolean };
+};
+export const standards = () => tryQuery<Standards | null>("standards", null);
+/** The style panel's buttons: "revert", "reset" (egui asks first), "save" (asks where). Returns the Rust error, or null. */
+export function standardsAction(name: "revert" | "reset" | "save"): string | null {
+  try {
+    (wasmOrThrow() as unknown as { standards_action(n: string): void }).standards_action(name);
+    return null;
+  } catch (e) {
+    return message(e);
+  }
+}
