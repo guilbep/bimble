@@ -83,3 +83,4 @@ marks the decisions he took himself.
 | 75 | Reaching Vue screens from egui-named actions | change every caller / one route table in `runAction`, filled by App.vue | route table (`home`, `project`, `history`, `standards`) | every caller goes through `runAction`; one place, no import cycle |
 | 76 | Navigator Sheets and Quantities rows | expand a list (no Rust list yet) / open their pages | open their pages; the lists stay data-missing | the pages were reachable only by deep link |
 | 77 | Font families | the `--bb-font-*` tokens / the reference's literal lists | the reference's literal list, per element | tokens add fallbacks that the check sees as a style difference |
+| 78 | Action labels in the UI language (#79 N) | Rust labels (English) / one lab part keyed by action name | `parts/actions.ts`, 54 actions FR/EN: File menu wording for file actions, ribbon wording where a tool exists, plain French otherwise | Rust stays English until egui follows (ADR 0048) |
