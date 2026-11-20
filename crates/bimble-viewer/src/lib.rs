@@ -1029,6 +1029,12 @@ struct Viewer {
     scene_rev: u64,
 }
 
+/// Ctrl K (Cmd K) opens the palette, except in `?viewport` mode: the host page owns the palette
+/// there, so the key is left alone (#79 Q).
+fn palette_key(i: &mut egui::InputState, viewport_only: bool) -> bool {
+    !viewport_only && i.consume_key(egui::Modifiers::COMMAND, egui::Key::K)
+}
+
 impl Viewer {
     fn new(rs: &egui_wgpu::RenderState) -> Viewer {
         let info = rs.adapter.get_info();
@@ -2871,9 +2877,8 @@ impl Viewer {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context, aspect: f32) {
-        if self.palette.is_none()
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::K))
-        {
+        let viewport_only = self.viewport_only;
+        if self.palette.is_none() && ctx.input_mut(|i| palette_key(i, viewport_only)) {
             self.palette = Some(ribbon::Palette::default());
         }
         if self.palette.is_some() || ctx.egui_wants_keyboard_input() {
@@ -5067,6 +5072,30 @@ fn ui_add_to_selection(resp: &egui::Response) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ctrl K opens egui's palette, except in `?viewport` mode, where the key stays for the
+    /// host page (#79 Q).
+    #[test]
+    fn ctrl_k_is_left_to_the_host_page_in_viewport_mode() {
+        for (viewport_only, opens) in [(false, true), (true, false)] {
+            let ctx = egui::Context::default();
+            let mut raw = egui::RawInput::default();
+            raw.events.push(egui::Event::Key {
+                key: egui::Key::K,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            });
+            let mut got = None;
+            ctx.run_ui(raw, |ui| {
+                got = Some(ui.ctx().input_mut(|i| palette_key(i, viewport_only)));
+            })
+            .textures_delta
+            .clear();
+            assert_eq!(got, Some(opens));
+        }
+    }
 
     /// The embedded window icon decodes to the 256 px orange disc on a transparent corner.
     #[cfg(not(target_arch = "wasm32"))]

@@ -518,11 +518,9 @@ impl Viewer {
         let loaded = self.loaded.is_some();
         let flat = self.in_2d();
         match a {
-            Action::New
-            | Action::Open
-            | Action::ImportIfc
-            | Action::Palette
-            | Action::Standards => true,
+            Action::New | Action::Open | Action::ImportIfc | Action::Standards => true,
+            // `?viewport`: the host page owns the palette (#79 Q).
+            Action::Palette => !self.viewport_only,
             // An IFC open, read-only, with something the editor keeps (the browser keeps no
             // path to read it again).
             Action::ConvertOpen => {
