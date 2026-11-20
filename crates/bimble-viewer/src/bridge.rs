@@ -96,19 +96,59 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
             let a: NameArgs = serde_json::from_str(args_json).map_err(|e| e.to_string())?;
             json(bimble_api::dispatch::describe(&a.name).ok_or("no verb with this name")?)
         }
-        // ponytail: History keeps its stacks private; only the top labels are reachable until
-        // bimble-core gives a labels accessor.
+        // Newest first, at most MAX_LIST each.
         "history" => {
             let h = v
                 .loaded
                 .as_ref()
                 .and_then(|l| l.edit.as_ref())
                 .map(|e| &e.history);
+            let undo: Vec<&str> = h
+                .map(|h| h.undo_labels().take(MAX_LIST).collect())
+                .unwrap_or_default();
+            let redo: Vec<&str> = h
+                .map(|h| h.redo_labels().take(MAX_LIST).collect())
+                .unwrap_or_default();
+            json(serde_json::json!({"undo": undo, "redo": redo}))
+        }
+        // The views the viewer shows (stored over the defaults made on load), not only the
+        // model's stored ones; the one shown; the tabs over the main view, in order.
+        "open_views" => {
+            use crate::ribbon::TabRef;
+            let views: Vec<_> = v
+                .views
+                .iter()
+                .map(|w| query::ViewSummary {
+                    id: w.id,
+                    name: w.name.clone(),
+                    kind: w.kind.clone(),
+                    scale: w.scale,
+                    crop: w.crop,
+                    true_north: w.true_north,
+                    references: w.references.len(),
+                    annotations: w.annotations.len(),
+                })
+                .collect();
+            let tabs: Vec<_> = v
+                .open_tabs
+                .iter()
+                .map(|t| match t {
+                    TabRef::View(id) => serde_json::json!({"type": "view", "id": id}),
+                    TabRef::Sheet(id) => serde_json::json!({"type": "sheet", "id": id}),
+                    TabRef::Schedule(n) => serde_json::json!({"type": "schedule", "name": n}),
+                    TabRef::Project => serde_json::json!({"type": "project"}),
+                    TabRef::Materials => serde_json::json!({"type": "materials"}),
+                })
+                .collect();
             json(serde_json::json!({
-                "undo": h.and_then(|h| h.undo_label()).into_iter().collect::<Vec<_>>(),
-                "redo": h.and_then(|h| h.redo_label()).into_iter().collect::<Vec<_>>(),
+                "views": views,
+                "active": v.active_view,
+                "tabs": tabs,
             }))
         }
+        // The schedules offered (built-in ones as changed, and the model's own), by name for
+        // "schedule_rows".
+        "schedule_list" => json(v.schedule_defs()),
         "visibility" => {
             let t = v.temporary.as_ref();
             let now = |iso: bool| capped(t.filter(|t| t.isolate == iso).map(|t| &t.elements));

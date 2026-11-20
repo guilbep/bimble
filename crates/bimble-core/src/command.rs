@@ -448,6 +448,16 @@ impl History {
         self.redo.last().map(|s| s.label.as_str())
     }
 
+    /// Everything Undo can take back, in words, newest first.
+    pub fn undo_labels(&self) -> impl Iterator<Item = &str> {
+        self.undo.iter().rev().map(|s| s.label.as_str())
+    }
+
+    /// Everything Redo can do again, in words, newest first.
+    pub fn redo_labels(&self) -> impl Iterator<Item = &str> {
+        self.redo.iter().rev().map(|s| s.label.as_str())
+    }
+
     pub fn undo(&mut self, m: &mut Model) -> bool {
         Self::swap(m, &mut self.undo, &mut self.redo)
     }
@@ -533,6 +543,25 @@ mod describe_tests {
             h.undo_label(),
             Some(format!("delete {} and 2 more changes", names[0]).as_str())
         );
+    }
+
+    /// The whole undo and redo lists, newest first: three renames, one undone.
+    #[test]
+    fn history_lists_every_label_newest_first() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        let mut h = History::default();
+        let id = *m.elements.keys().next().unwrap();
+        let old = m.elements[&id].name.clone();
+        for n in ["A", "B", "C"] {
+            let cmd = Command::Rename { id, name: n.into() };
+            h.apply(&mut m, vec![cmd]).unwrap();
+        }
+        assert!(h.undo(&mut m));
+        assert_eq!(
+            h.undo_labels().collect::<Vec<_>>(),
+            ["rename A to B".to_string(), format!("rename {old} to A")]
+        );
+        assert_eq!(h.redo_labels().collect::<Vec<_>>(), ["rename B to C"]);
     }
 
     /// A rename to a blank name is refused and changes nothing; an element imported without a
