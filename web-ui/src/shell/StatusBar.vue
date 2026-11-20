@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { state, visibility, actions, runAction, pointer, status } from "../bimble";
+import { state, visibility, actions, runAction, pointer, status, placing } from "../bimble";
 import { lang, setLang, t, type Lang } from "../i18n";
 import { page } from "../pages";
 import { dialog } from "../dialogs";
@@ -16,6 +16,11 @@ const counts = (): string => {
   const mb = Math.round((s.app_bytes || s.model_bytes) / 1048576);
   const rate = s.idle ? t("status.idle") : t("status.fps", { n: s.fps ?? 0 });
   return t("status.counts", { n: grouped(s.visible), s: (s.load_ms / 1000).toFixed(1), mb, rate });
+};
+// While placing: the hint keyed on kind and click step (Rust's `hint` is English only).
+const placingHint = (): Parameters<typeof t>[0] | undefined => {
+  const p = placing.value;
+  return p?.active ? `placing.${p.kind}.${p.points.length ? 1 : 0}` : undefined;
 };
 const chips = (): Chip[] => {
   const v = visibility.value;
@@ -34,10 +39,14 @@ const chips = (): Chip[] => {
 <template>
   <!-- Reference: footer.status (D1). -->
   <footer class="status" data-bb="statusbar">
-    <span class="hint" data-bb="status-hint">{{ t(dialog()?.hint ?? page()?.hint ?? "status.hint") }}</span>
+    <span class="hint" data-bb="status-hint">{{ t(dialog()?.hint ?? page()?.hint ?? placingHint() ?? "status.hint") }}</span>
     <span class="mono q coords" style="font-size:12px" data-bb="status-coords">{{ pointer?.text ?? "" }}</span>
     <span style="flex:1"></span>
     <!-- Reference: `.status > .chip`, a set of direct children; each carries the landmark, the check reads the first. -->
+    <!-- Reference (B1): `.chip.c-n` "Placement : dalle" with ×; × runs `place_<kind>`, which toggles placing off. -->
+    <span v-if="placing?.active" data-bb="status-chip" class="chip c-n">{{ t("placing.chip", { kind: t(`placing.kind.${placing.kind}`) }) }}<button
+        type="button" class="cx" :aria-label="t('placing.stop')" :disabled="!enabled(`place_${placing.kind}`)"
+        @click="runAction(`place_${placing.kind}`)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span>
     <span v-if="state.selection.length" data-bb="status-chip" class="chip c-p nx">{{ t(state.selection.length === 1 ? "status.selectedOne" : "status.selected", { n: state.selection.length }) }}</span>
     <span v-for="c in chips()" :key="c.key" data-bb="status-chip" class="chip c-n">{{ t(c.key, { n: c.n }) }}<button
         type="button" class="cx" :aria-label="t('status.undoChip')" :disabled="!enabled(c.undo)"
