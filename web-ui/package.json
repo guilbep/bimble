@@ -5,7 +5,9 @@
   "scripts": {
     "wasm": "node scripts/copy-wasm.mjs",
     "dev": "vite",
-    "typecheck": "vue-tsc --noEmit",
+    "i18n-keys": "node scripts/i18n-keys.mjs",
+    "typecheck": "node scripts/i18n-keys.mjs --check && vue-tsc --noEmit",
+    "prebuild": "node scripts/i18n-keys.mjs",
     "build": "vite build",
     "perf": "node perf/lighthouse.mjs",
     "perf:check": "node perf/check.mjs ../perf-results/web.txt perf/budgets.txt 0.15",
