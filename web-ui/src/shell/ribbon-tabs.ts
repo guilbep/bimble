@@ -17,7 +17,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
   project: [
     { key: "ribbon.project.g1", tools: [
       { key: "ribbon.project.g1.t1", tag: "a", icon: "<circle cx=\"12\" cy=\"12\" r=\"8.5\"/><path d=\"M12 11v5\"/><path d=\"M12 8h.01\"/>", action: "project", page: "project-info" },
-      { key: "ribbon.project.g1.t2", tag: "a", icon: "<path d=\"M4 18h4v-4h4v-4h4V6h4\"/><path d=\"M4 21h16\"/>", action: null },
+      { key: "ribbon.project.g1.t2", tag: "a", icon: "<path d=\"M4 18h4v-4h4v-4h4V6h4\"/><path d=\"M4 21h16\"/>", action: null, page: "phases" },
     ] },
     { key: "ribbon.project.g2", tools: [
       { key: "ribbon.project.g2.t1", tag: "button", icon: "<path d=\"M4 7h10M18 7h2M4 17h4M12 17h8\"/><circle cx=\"16\" cy=\"7\" r=\"2\"/><circle cx=\"10\" cy=\"17\" r=\"2\"/>", action: null },
