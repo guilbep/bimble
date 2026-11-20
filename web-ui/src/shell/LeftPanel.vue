@@ -7,6 +7,7 @@ import { placing, state } from "../bimble";
 import CollabSide from "./CollabSide.vue";
 import SettingOutSide from "./SettingOutSide.vue";
 import SiteSide from "./SiteSide.vue";
+import RebarSide from "./RebarSide.vue";
 import { activeTab } from "./tabs";
 </script>
 
@@ -16,7 +17,8 @@ import { activeTab } from "./tabs";
     <Navigator />
     <div class="props" data-bb="properties"><component :is="page()?.side ?? (placing?.active ? PlaceSide
       : activeTab === 'collaborate' ? CollabSide : activeTab === 'settingOut' ? SettingOutSide
-      : activeTab === 'site' && !state.selection.length ? SiteSide : Properties)" /></div>
+      : activeTab === 'site' && !state.selection.length ? SiteSide
+      : activeTab === 'rebar' && !state.selection.length ? RebarSide : Properties)" /></div>
   </aside>
 </template>
 
