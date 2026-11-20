@@ -16,7 +16,7 @@ Vue only shows things. All logic stays in Rust: `src/bimble.ts` is the one typed
 
 ## Rules
 
-- Raw colours live only in `src/css/tokens.css`. Components use `var(--...)`.
+- Raw colours live only in `src/brand/tokens.css`, vendored from the bimble-design skill (see `src/brand/README.md`). Components use its `var(--bb-...)` role variables.
 - Components never import the wasm. They call `src/bimble.ts`.
 - Wasm data is never deeply reactive (`shallowRef`).
-- Fonts are self-hosted (`@fontsource`), no request to a font service.
+- Fonts are self-hosted in `src/brand/` (vendored from the skill, see `src/brand/README.md`), no request to a font service.
