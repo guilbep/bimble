@@ -20,6 +20,8 @@ use bimble_ifc::read::Progress;
 use web_time::Instant;
 
 mod big;
+#[cfg(target_arch = "wasm32")]
+mod bridge;
 mod collab;
 mod coords;
 mod cutlines;
@@ -48,6 +50,8 @@ mod views;
 mod visibility;
 
 const SAMPLES: u32 = 4;
+/// Model queries and edits on a file opened without its model (a plain IFC).
+const READ_ONLY: &str = "this file is read only: import it to edit";
 /// While moving on a slow machine, a far cell's stand-in is drawn when its error spans at most
 /// this many pixels (ADR 0036 #9: the 415 MB model's whole frame 29 → 1.3 ms at 3 px).
 const MOVING_PROXY_PX: f32 = 3.0;
@@ -213,11 +217,14 @@ pub async fn start_web(canvas: web_sys::HtmlCanvasElement) -> Result<(), String>
     {
         c.instance_descriptor.backends = eframe::wgpu::Backends::GL;
     }
-    eframe::WebRunner::new()
+    let runner = eframe::WebRunner::new();
+    let bridge_runner = runner.clone();
+    runner
         .start(
             canvas,
             options,
             Box::new(move |cc| {
+                bridge::set(bridge_runner, cc.egui_ctx.clone());
                 let rs = cc
                     .wgpu_render_state
                     .as_ref()
@@ -1625,18 +1632,25 @@ impl Viewer {
 
     /// Apply commands from the editor as one undoable step, then show the result.
     fn apply_commands(&mut self, cmds: Vec<bimble_core::Command>) {
+        let _ = self.try_apply(cmds);
+    }
+
+    /// `apply_commands`, with the error returned too (the page bridge reports it).
+    fn try_apply(&mut self, cmds: Vec<bimble_core::Command>) -> Result<(), String> {
         let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) else {
-            return;
+            return Err(READ_ONLY.into());
         };
         match ed.apply(cmds) {
             Ok(()) => {
                 ed.message = None;
                 let select = ed.select_after.take();
                 self.rebuild_scene(select.map(|g| g.to_string()));
+                Ok(())
             }
             Err(e) => {
-                ed.message = Some(e);
+                ed.message = Some(e.clone());
                 ed.select_after = None;
+                Err(e)
             }
         }
     }
@@ -4554,6 +4568,12 @@ fn toggle<T: Ord>(set: &mut BTreeSet<T>, item: T, visible: bool) {
 }
 
 impl eframe::App for Viewer {
+    /// Lets the page bridge reach the viewer through `WebRunner::app_mut`.
+    #[cfg(target_arch = "wasm32")]
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(&mut *self)
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         #[cfg(target_arch = "wasm32")]

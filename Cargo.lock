@@ -599,6 +599,7 @@ dependencies = [
  "log",
  "memory-stats",
  "rfd",
+ "serde",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
