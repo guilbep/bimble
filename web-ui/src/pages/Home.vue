@@ -7,12 +7,17 @@ export const hint = () => (st.value.file === null ? { key: "home.noModel" } : ""
 
 <script setup lang="ts">
 // A1 Home (fr/Home.html). Layout only; every button is one runAction (ADR 0048).
-import { state, actions, runAction } from "../bimble";
+import { computed, ref } from "vue";
+import { state, actions, runAction, recentFiles } from "../bimble";
 import { t } from "../i18n";
 
 /** Whether the action `name` is enabled now (`query("actions")`). */
 const on = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
 const act = (name: string) => { if (on(name)) runAction(name); };
+// Re-read when the state changes (a file opened adds itself to the list).
+const recent = computed(() => (state.value, recentFiles()));
+const filter = ref("");
+const shown = computed(() => recent.value.filter((f) => f.name.toLowerCase().includes(filter.value.trim().toLowerCase())));
 </script>
 
 <template>
@@ -44,10 +49,21 @@ const act = (name: string) => { if (on(name)) runAction(name); };
       <div class="head">
         <h2 class="disp" data-bb="home-recent-title">{{ t('home.recent') }}</h2>
         <span style="flex:1"></span>
-        <input class="inp" :placeholder="t('home.filter')" :aria-label="t('home.filter')" disabled data-missing="recent-files" data-bb="home-filter">
+        <input v-model="filter" class="inp" :placeholder="t('home.filter')" :aria-label="t('home.filter')" data-bb="home-filter">
       </div>
-      <!-- ponytail: no recent-files query on the web, so the list is empty (data-missing), never sample rows. -->
-      <div class="grid" data-bb="home-recent" data-missing="recent-files"></div>
+      <div class="grid" data-bb="home-recent">
+        <!-- ponytail: the web bridge cannot open a file by its path (no file system), so each card is drawn but disabled. -->
+        <a v-for="f in shown" :key="f.path" href="#" class="card rc" :class="{ gone: !f.exists }" aria-disabled="true" data-missing="open-by-path" :title="f.path" @click.prevent>
+          <!-- No preview from Rust: the reference's tile, empty. -->
+          <div class="tile" aria-hidden="true"></div>
+          <div class="body">
+            <div class="name">{{ f.name }}</div>
+            <!-- opened_unix is null today: the folder only. -->
+            <div class="mono where">{{ f.folder }}<template v-if="f.opened_unix !== null"> · {{ new Date(f.opened_unix * 1000).toLocaleDateString() }}</template></div>
+            <span class="note" style="font-size:12.5px">{{ f.exists ? (f.schema ?? '') : t('home.notFound') }}</span>
+          </div>
+        </a>
+      </div>
     </div>
   </div>
 </template>
@@ -83,5 +99,11 @@ h2.disp { font-size: 20px; }
 .head { display: flex; align-items: center; gap: 12px; }
 .inp { height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 8px; font: inherit; font-size: 13.5px; color: var(--bb-ink); min-width: 0; width: 240px; }
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.rc { padding: 0; overflow: hidden; text-decoration: none; color: var(--bb-ink); display: flex; flex-direction: column; cursor: default; }
+.rc.gone { opacity: .6; }
+.tile { height: 120px; background: var(--bb-sheet); border-bottom: 1px solid var(--bb-line); }
+.body { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.where { font-size: 11.5px; color: var(--bb-stone); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 :focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
 </style>

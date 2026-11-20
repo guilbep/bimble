@@ -120,6 +120,7 @@ export type PartKey =
   | "home.lead"
   | "home.new"
   | "home.noModel"
+  | "home.notFound"
   | "home.open"
   | "home.recent"
   | "home.sharedFolder"

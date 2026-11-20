@@ -518,3 +518,6 @@ export function standardsAction(name: "revert" | "reset" | "save"): string | nul
     return message(e);
   }
 }
+/** Home's recent files, newest first (bridge query "recent_files"); empty when the settings hold none. */
+export type RecentFile = { name: string; path: string; folder: string; opened_unix: number | null; schema: string | null; exists: boolean };
+export const recentFiles = () => tryQuery<RecentFile[]>("recent_files", []);

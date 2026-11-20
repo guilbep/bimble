@@ -50,7 +50,8 @@ fn json(v: impl serde::Serialize) -> Result<String, String> {
 /// default) or "element" (`{"id": "<GlobalId>"}`).
 #[wasm_bindgen]
 pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
-    with_viewer(|v| match name {
+    with_viewer(|v| {
+        match name {
         "state" => json(serde_json::json!({
             "file": v.loaded.as_ref().and_then(|l| l.path.file_name()).map(|n| n.to_string_lossy()),
             "editable": v.loaded.as_ref().is_some_and(|l| l.edit.is_some()),
@@ -71,6 +72,25 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
                 "email": Some(v.settings.user_email.trim()).filter(|e| !e.is_empty()),
             })),
         })),
+        // Home's recent files, newest first, as egui lists them (settings.recent). The settings
+        // keep paths only: opened_unix is null; schema is ".bimble" by extension, else null.
+        "recent_files" => json(
+            v.settings
+                .recent
+                .iter()
+                .map(|p| {
+                    let path = std::path::Path::new(p);
+                    serde_json::json!({
+                        "name": path.file_name().map_or_else(|| p.clone(), |n| n.to_string_lossy().into_owned()),
+                        "path": p,
+                        "folder": path.parent().map(|d| d.display().to_string()).unwrap_or_default(),
+                        "opened_unix": null,
+                        "schema": path.extension().is_some_and(|e| e == "bimble").then_some(".bimble"),
+                        "exists": std::fs::metadata(path).is_ok(),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ),
         "storeys" => json(query::storeys(model(v)?)),
         "materials" => json(query::materials(model(v)?)),
         // Graphic standards (D5): see `standards::json`, plus what the three buttons can do now.
@@ -290,6 +310,7 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
             };
             json(bimble_api::dispatch::query(model(v)?, name, args)?)
         }
+    }
     })
 }
 

@@ -14,6 +14,7 @@ export const fr = {
   "home.recent": "Fichiers récents",
   "home.filter": "Filtrer les fichiers",
   "home.noModel": "Aucun modèle ouvert",
+  "home.notFound": "Introuvable",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "page.home": "Home",
@@ -30,4 +31,5 @@ export const en: Record<keyof typeof fr, string> = {
   "home.recent": "Recent files",
   "home.filter": "Filter files",
   "home.noModel": "No model open",
+  "home.notFound": "Not found",
 };
