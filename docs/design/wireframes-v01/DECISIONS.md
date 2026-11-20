@@ -79,3 +79,4 @@ marks the decisions he took himself.
 | 71 | On paper fields with no write call | editable / drawn read-only, data-missing | read-only; `SetView` needs the whole view (a `set_view` verb is the Rust step) | never fake an edit |
 | 72 | Demo file | no sheet / one plan view and sheet S01 | sheet S01 (synthetic, fixed ids) | the Sheets screen needs real data; existing demo tests unchanged |
 | 73 | Ribbon boxes with no Rust (Sous-projet actif, Altitude) | leave out / draw as the reference, disabled, empty | draw, disabled, empty | the rule for missing calls; leaving them out changed the EN ribbon height |
+| 74 | Showing the Rust sheet SVG | v-html / an SVG `<image>` with a data URL | `<image>` | model text never runs as markup; same isolation as `<img>` |
