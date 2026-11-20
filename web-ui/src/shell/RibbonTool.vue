@@ -2,19 +2,27 @@
 import { computed } from "vue";
 import { actions, runAction } from "../bimble";
 import { t } from "../i18n";
+import { currentPage } from "../pages";
+import { currentPanel } from "../panels";
 import type { RibbonTool } from "./ribbon-tabs";
 
 const props = defineProps<{ tool: RibbonTool; bb: string }>();
 // Real state from Rust; an action Rust does not list (or no action) is unavailable.
 const state = computed(() => actions.value.find((a) => a.name === props.tool.action));
-const on = computed(() => state.value?.pressed === true);
-const off = computed(() => !state.value?.enabled);
+// A tool that opens a Vue page or panel: always available, pressed while it is open.
+const vue = computed(() => props.tool.page ?? props.tool.panel);
+const on = computed(() => vue.value
+  ? (props.tool.page ? currentPage.value === props.tool.page : currentPanel.value === props.tool.panel)
+  : state.value?.pressed === true);
+const off = computed(() => !vue.value && !state.value?.enabled);
 // Before the first `actions` refresh the list is empty: unavailable, not missing.
-const missing = computed(() =>
+const missing = computed(() => vue.value ? undefined :
   props.tool.action === null ? "action" : state.value || !actions.value.length ? undefined : `action ${props.tool.action}`);
 
 function run(): void {
-  if (props.tool.action && !off.value) runAction(props.tool.action);
+  if (props.tool.page) currentPage.value = on.value ? null : props.tool.page;
+  else if (props.tool.panel) currentPanel.value = on.value ? null : props.tool.panel;
+  else if (props.tool.action && !off.value) runAction(props.tool.action);
 }
 </script>
 

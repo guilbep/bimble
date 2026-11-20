@@ -6,7 +6,8 @@ import type { TabId } from "./tabs";
 import type { fr } from "../i18n/parts/ribbon";
 
 export type RibbonKey = keyof typeof fr;
-export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string; action: string | null }
+// page / panel: the Vue screen the tool opens instead of its egui action (pressed while that screen is open).
+export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string; action: string | null; page?: string; panel?: string }
 export interface RibbonGroup { key: RibbonKey; tools: RibbonTool[] }
 
 export const RIBBON: Record<TabId, RibbonGroup[]> = {
@@ -36,7 +37,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
       { key: "ribbon.collaborate.g3.t1", tag: "a", icon: "<circle cx=\"9\" cy=\"9\" r=\"3\"/><path d=\"M3 20a6 6 0 0 1 12 0\"/><circle cx=\"17\" cy=\"8\" r=\"2.5\"/><path d=\"M16 14a5 5 0 0 1 5 5\"/>", action: null },
     ] },
     { key: "ribbon.collaborate.g4", tools: [
-      { key: "ribbon.collaborate.g4.t1", tag: "a", icon: "<path d=\"M4 12a8 8 0 1 0 2.4-5.7L4 8\"/><path d=\"M4 4v4h4\"/><path d=\"M12 8v4l3 2\"/>", action: "history" },
+      { key: "ribbon.collaborate.g4.t1", tag: "a", icon: "<path d=\"M4 12a8 8 0 1 0 2.4-5.7L4 8\"/><path d=\"M4 4v4h4\"/><path d=\"M12 8v4l3 2\"/>", action: "history", page: "history" },
     ] },
   ],
   settingOut: [
@@ -197,7 +198,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
   ],
   graphics: [
     { key: "ribbon.graphics.g1", tools: [
-      { key: "ribbon.graphics.g1.t1", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"3\"/><path d=\"M8 10h8M8 14h5\"/>", action: "standards" },
+      { key: "ribbon.graphics.g1.t1", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"3\"/><path d=\"M8 10h8M8 14h5\"/>", action: "standards", panel: "standards" },
       { key: "ribbon.graphics.g1.t2", tag: "button", icon: "<circle cx=\"12\" cy=\"12\" r=\"8\"/><path d=\"M6 8c4 3 8 3 12 0M5 13c4 3 10 3 14 0\"/>", action: "materials" },
     ] },
     { key: "ribbon.graphics.g2", tools: [
