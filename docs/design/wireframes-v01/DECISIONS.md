@@ -80,3 +80,6 @@ marks the decisions he took himself.
 | 72 | Demo file | no sheet / one plan view and sheet S01 | sheet S01 (synthetic, fixed ids) | the Sheets screen needs real data; existing demo tests unchanged |
 | 73 | Ribbon boxes with no Rust (Sous-projet actif, Altitude) | leave out / draw as the reference, disabled, empty | draw, disabled, empty | the rule for missing calls; leaving them out changed the EN ribbon height |
 | 74 | Showing the Rust sheet SVG | v-html / an SVG `<image>` with a data URL | `<image>` | model text never runs as markup; same isolation as `<img>` |
+| 75 | Reaching Vue screens from egui-named actions | change every caller / one route table in `runAction`, filled by App.vue | route table (`home`, `project`, `history`, `standards`) | every caller goes through `runAction`; one place, no import cycle |
+| 76 | Navigator Sheets and Quantities rows | expand a list (no Rust list yet) / open their pages | open their pages; the lists stay data-missing | the pages were reachable only by deep link |
+| 77 | Font families | the `--bb-font-*` tokens / the reference's literal lists | the reference's literal list, per element | tokens add fallbacks that the check sees as a style difference |
