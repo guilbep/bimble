@@ -118,6 +118,14 @@ fn material(m: &Model, name: Option<&str>) -> Result<(GlobalId, Option<Command>)
         return Ok((x.id, None));
     }
     let lib = bimble_core::library::lookup(name).ok_or(format!("unknown material: {name}"))?;
+    // "Concrete C35/45 XC4" twice: the second call reuses the C35/45 the first one added.
+    if let Some(x) = m
+        .materials
+        .values()
+        .find(|x| x.name == lib.name && x.category == lib.category)
+    {
+        return Ok((x.id, None));
+    }
     let mat = bimble_core::library::to_material(&lib);
     Ok((mat.id, Some(Command::AddMaterial(mat))))
 }
@@ -417,6 +425,29 @@ mod tests {
         );
         assert_eq!(e.material, mat.id);
         History::default().apply(&mut m, cmds).unwrap();
+    }
+
+    /// A long name finds its grade once: asking again reuses the material added first.
+    #[test]
+    fn a_library_grade_is_added_once() {
+        let (mut m, s) = demo();
+        let name = Some("Concrete C35/45 XC4");
+        let first = slab(&m, s, name).unwrap();
+        let Command::AddMaterial(added) = &first[0] else {
+            panic!("{first:?}");
+        };
+        let id = added.id;
+        History::default().apply(&mut m, first).unwrap();
+        let cmds = slab(&m, s, name).unwrap();
+        let [Command::AddElement(e)] = &cmds[..] else {
+            panic!("{cmds:?}");
+        };
+        assert_eq!(e.material, id);
+        History::default().apply(&mut m, cmds).unwrap();
+        assert_eq!(
+            m.materials.values().filter(|x| x.name == "C35/45").count(),
+            1
+        );
     }
 
     /// A material already in the model is used as is: no second copy.
