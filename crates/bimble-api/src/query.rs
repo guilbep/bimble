@@ -1,6 +1,9 @@
 //! Read-only queries over a [`Model`]. Results are small and JSON-ready: callers include LLM
 //! agents, so element lists are capped and meshes are reduced to counts.
 
+use bimble_core::schedule::ScheduleDef;
+use bimble_core::sheet::Placed;
+use bimble_core::view::{Crop, ViewKind};
 use bimble_core::{Generator, GlobalId, IfcClass, MaterialCategory, Model, Placement};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -145,6 +148,94 @@ pub fn element(m: &Model, id: GlobalId) -> Option<ElementDetail> {
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProjectSummary {
+    pub id: GlobalId,
+    pub name: String,
+    /// Project information (ADR 0030): client, number, phase…
+    pub info: BTreeMap<String, String>,
+}
+
+/// A view without its drawing content: references and annotations are counted.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ViewSummary {
+    pub id: GlobalId,
+    pub name: String,
+    /// `{"type": "three_d"}`, `{"type": "plan", storey, look, range}` or
+    /// `{"type": "section", origin, facing, depth_mm}`, as stored.
+    #[serde(flatten)]
+    pub kind: ViewKind,
+    /// 1:N
+    pub scale: u32,
+    /// World mm in the view's plane; null: all of it.
+    pub crop: Option<Crop>,
+    pub true_north: bool,
+    pub references: usize,
+    pub annotations: usize,
+}
+
+/// A sheet without its drawings: placed views by id.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SheetSummary {
+    pub id: GlobalId,
+    pub number: String,
+    pub name: String,
+    /// "A4" … "A0".
+    pub paper: String,
+    pub portrait: bool,
+    /// Title block values of this sheet.
+    pub fields: BTreeMap<String, String>,
+    pub placed: Vec<Placed>,
+    pub texts: usize,
+}
+
+pub fn project(m: &Model) -> ProjectSummary {
+    ProjectSummary {
+        id: m.project_id,
+        name: m.project_name.clone(),
+        info: m.project.clone(),
+    }
+}
+
+/// Views by GlobalId.
+pub fn views(m: &Model) -> Vec<ViewSummary> {
+    m.views
+        .values()
+        .map(|v| ViewSummary {
+            id: v.id,
+            name: v.name.clone(),
+            kind: v.kind.clone(),
+            scale: v.scale,
+            crop: v.crop,
+            true_north: v.true_north,
+            references: v.references.len(),
+            annotations: v.annotations.len(),
+        })
+        .collect()
+}
+
+/// Sheets by GlobalId; placed views in drawing order.
+pub fn sheets(m: &Model) -> Vec<SheetSummary> {
+    m.sheets
+        .values()
+        .map(|s| SheetSummary {
+            id: s.id,
+            number: s.number.clone(),
+            name: s.name.clone(),
+            paper: s.paper.clone(),
+            portrait: s.portrait,
+            fields: s.fields.clone(),
+            placed: s.placed.clone(),
+            texts: s.texts.len(),
+        })
+        .collect()
+}
+
+/// Schedule definitions as stored (not their rows).
+pub fn schedules(m: &Model) -> &[ScheduleDef] {
+    &m.schedules
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,6 +349,131 @@ mod tests {
             beam,
             proxy,
         }
+    }
+
+    /// The element fixture plus 2 views (a 1:50 plan on Ground, cropped; a 3D view), 1 A3
+    /// sheet placing the plan, 2 project keys, 1 schedule.
+    fn drawings() -> (Fx, GlobalId, GlobalId, GlobalId) {
+        use bimble_core::sheet::Sheet;
+        use bimble_core::view::{Look, View, ViewRange};
+        let mut f = fixture();
+        let (plan, three_d, sheet) = (
+            GlobalId::derived(b"view/plan"),
+            GlobalId::derived(b"view/3d"),
+            GlobalId::derived(b"sheet/1"),
+        );
+        let view = |id, name: &str, kind| View {
+            id,
+            name: name.into(),
+            kind,
+            visibility: Default::default(),
+            references: Vec::new(),
+            annotations: Vec::new(),
+            true_north: false,
+            scale: 100,
+            crop: None,
+        };
+        let mut p = view(
+            plan,
+            "Ground plan",
+            ViewKind::Plan {
+                storey: f.ground.to_string(),
+                look: Look::Down,
+                range: ViewRange::default_for(Look::Down),
+            },
+        );
+        p.scale = 50;
+        p.true_north = true;
+        p.crop = Some(Crop {
+            min: [0.0, 0.0],
+            max: [6000.0, 4000.0],
+        });
+        for v in [p, view(three_d, "3D", ViewKind::ThreeD)] {
+            f.m.views.insert(v.id, v);
+        }
+        f.m.sheets.insert(
+            sheet,
+            Sheet {
+                id: sheet,
+                number: "S-101".into(),
+                name: "Plans".into(),
+                paper: "A3".into(),
+                portrait: false,
+                fields: BTreeMap::new(),
+                placed: vec![Placed {
+                    id: GlobalId::derived(b"placed/1"),
+                    view: plan,
+                    scale: 50,
+                    at_mm: [210.0, 148.5],
+                }],
+                texts: Vec::new(),
+            },
+        );
+        f.m.project = BTreeMap::from([
+            ("client".to_string(), "Acme".to_string()),
+            ("number".to_string(), "P-42".to_string()),
+        ]);
+        f.m.schedules = vec![ScheduleDef {
+            name: "Columns".into(),
+            classes: vec!["IfcColumn".into()],
+            family: Some(MaterialCategory::Concrete),
+            fields: vec![
+                bimble_core::schedule::Field::Level,
+                bimble_core::schedule::Field::Name,
+            ],
+            group_by_level: true,
+            totals: false,
+        }];
+        f.m.validate().unwrap();
+        (f, plan, three_d, sheet)
+    }
+
+    #[test]
+    fn project_views_sheets_schedules() {
+        let (f, plan, three_d, sheet) = drawings();
+        let p = project(&f.m);
+        assert_eq!((p.id, p.name.as_str()), (f.m.project_id, "fixture"));
+        assert_eq!(p.info.keys().collect::<Vec<_>>(), ["client", "number"]);
+
+        let v = views(&f.m);
+        let mut want = vec![plan, three_d];
+        want.sort();
+        assert_eq!(v.iter().map(|v| v.id).collect::<Vec<_>>(), want);
+        let p = v.iter().find(|v| v.id == plan).unwrap();
+        assert_eq!((p.scale, p.true_north), (50, true));
+        let j = serde_json::to_value(p).unwrap();
+        assert_eq!(j["type"], "plan");
+        assert_eq!(j["storey"], f.ground.to_string());
+        assert_eq!(j["look"], "down");
+        assert_eq!(j["crop"]["max"], serde_json::json!([6000.0, 4000.0]));
+        assert!(j["range"]["cut"].is_object(), "{j}");
+        let t = serde_json::to_value(v.iter().find(|v| v.id == three_d).unwrap()).unwrap();
+        assert_eq!(
+            (t["type"].as_str(), t["scale"].as_u64()),
+            (Some("three_d"), Some(100))
+        );
+        assert!(t["crop"].is_null() && t.get("storey").is_none(), "{t}");
+
+        let s = sheets(&f.m);
+        assert_eq!(s.len(), 1);
+        assert_eq!(
+            (s[0].id, s[0].number.as_str(), s[0].paper.as_str()),
+            (sheet, "S-101", "A3")
+        );
+        assert_eq!(
+            s[0].placed.iter().map(|p| p.view).collect::<Vec<_>>(),
+            [plan]
+        );
+
+        assert_eq!(schedules(&f.m), &f.m.schedules[..]);
+        assert_eq!(schedules(&f.m)[0].name, "Columns");
+    }
+
+    #[test]
+    fn empty_model_reads_empty() {
+        let m = Model::new("empty");
+        assert!(project(&m).info.is_empty());
+        assert!(views(&m).is_empty() && sheets(&m).is_empty() && schedules(&m).is_empty());
     }
 
     #[test]

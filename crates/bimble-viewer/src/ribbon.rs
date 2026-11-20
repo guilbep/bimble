@@ -117,11 +117,17 @@ pub(crate) enum Action {
     Settings,
     /// Version, graphics card and links, to say what runs in a bug report.
     About,
+    /// Model or On paper for the active plan or section (ADR 0046), the P switch.
+    PaperView,
+    /// Clear what is hidden or isolated for now (the chip's ×).
+    ClearTemporary,
+    /// Show everything in the active view again (the chip's ×).
+    ShowAllInView,
     Palette,
 }
 
 /// Every action, in palette order.
-pub(crate) const ALL_ACTIONS: [Action; 50] = [
+pub(crate) const ALL_ACTIONS: [Action; 54] = [
     Action::New,
     Action::Open,
     Action::ImportIfc,
@@ -170,8 +176,12 @@ pub(crate) const ALL_ACTIONS: [Action; 50] = [
     Action::Standards,
     Action::Project,
     Action::Materials,
+    Action::History,
     Action::Settings,
     Action::About,
+    Action::PaperView,
+    Action::ClearTemporary,
+    Action::ShowAllInView,
 ];
 
 impl Action {
@@ -229,8 +239,80 @@ impl Action {
             Action::History => "History…".into(),
             Action::Settings => "Settings…".into(),
             Action::About => "About Bimble…".into(),
+            Action::PaperView => "On paper".into(),
+            Action::ClearTemporary => "Show all hidden for now".into(),
+            Action::ShowAllInView => "Show all in view".into(),
             Action::Palette => "Command palette".into(),
         }
+    }
+
+    /// A stable snake_case name, for the page bridge (ADR 0048): "section_box", "place_column".
+    // Used by the page bridge, which only the browser build has.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn name(self) -> String {
+        match self {
+            Action::New => "new".into(),
+            Action::Open => "open".into(),
+            Action::ImportIfc => "import_ifc".into(),
+            Action::ConvertOpen => "convert_open".into(),
+            Action::ShareForViewing => "share_for_viewing".into(),
+            Action::ExportIfc4 => "export_ifc4".into(),
+            Action::ExportIfc2x3 => "export_ifc2x3".into(),
+            Action::Save => "save".into(),
+            Action::Undo => "undo".into(),
+            Action::Redo => "redo".into(),
+            Action::Place(k) => format!("place_{}", k.label().to_lowercase().replace(' ', "_")),
+            Action::Measure => "measure".into(),
+            Action::Edges => "edges".into(),
+            Action::Hatching => "hatching".into(),
+            Action::Orthographic => "orthographic".into(),
+            Action::SectionBox => "section_box".into(),
+            Action::BoxToSelection => "box_to_selection".into(),
+            Action::Fit => "fit".into(),
+            Action::Top => "top".into(),
+            Action::OnPaper => "on_paper".into(),
+            Action::SectionLabels => "section_labels".into(),
+            Action::Openings => "openings".into(),
+            Action::SectionMarks => "section_marks".into(),
+            Action::SlabLevels => "slab_levels".into(),
+            Action::NewSheet => "new_sheet".into(),
+            Action::CloseSheet => "close_sheet".into(),
+            Action::SheetTool(t) => match t {
+                layout::Tool::Select => "sheet_tool_select".into(),
+                layout::Tool::Text => "sheet_tool_text".into(),
+                layout::Tool::Dimension => "sheet_tool_dimension".into(),
+            },
+            Action::LinkModel => "link_model".into(),
+            Action::LinkDxf => "link_dxf".into(),
+            Action::LinkPdf => "link_pdf".into(),
+            Action::ManageLinks => "manage_links".into(),
+            Action::HideNow => "hide_now".into(),
+            Action::IsolateNow => "isolate_now".into(),
+            Action::HideInView => "hide_in_view".into(),
+            Action::IsolateInView => "isolate_in_view".into(),
+            Action::Unhide => "unhide".into(),
+            Action::RevealHidden => "reveal_hidden".into(),
+            Action::SharedFolder => "shared_folder".into(),
+            Action::Synchronize => "synchronize".into(),
+            Action::Home => "home".into(),
+            Action::Standards => "standards".into(),
+            Action::Project => "project".into(),
+            Action::Materials => "materials".into(),
+            Action::History => "history".into(),
+            Action::Settings => "settings".into(),
+            Action::About => "about".into(),
+            Action::PaperView => "paper_view".into(),
+            Action::ClearTemporary => "clear_temporary".into(),
+            Action::ShowAllInView => "show_all_in_view".into(),
+            Action::Palette => "palette".into(),
+        }
+    }
+
+    /// The action of `ALL_ACTIONS` with this `name()`.
+    // Used by the page bridge, which only the browser build has.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn from_name(name: &str) -> Option<Action> {
+        ALL_ACTIONS.into_iter().find(|a| a.name() == name)
     }
 
     /// Its keyboard shortcut, as shown.
@@ -283,12 +365,15 @@ impl Action {
             | Action::Fit
             | Action::Top => Tab::View,
             Action::OnPaper | Action::NewSheet | Action::CloseSheet => Tab::Sheets,
+            Action::PaperView => Tab::View,
             Action::Project => Tab::Project,
             Action::HideNow
             | Action::IsolateNow
             | Action::HideInView
             | Action::IsolateInView
             | Action::Unhide
+            | Action::ClearTemporary
+            | Action::ShowAllInView
             | Action::RevealHidden => Tab::View,
             Action::LinkModel
             | Action::LinkDxf
@@ -310,6 +395,57 @@ pub(crate) enum TabRef {
     Schedule(String),
     Project,
     Materials,
+}
+
+// The page bridge (ADR 0048) speaks tabs as JSON; only the browser build has it.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+impl TabRef {
+    /// `{"type": "view"|"sheet", "id"}`, `{"type": "schedule", "name"}`, `{"type": "project"}`…
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        match self {
+            TabRef::View(id) => serde_json::json!({"type": "view", "id": id}),
+            TabRef::Sheet(id) => serde_json::json!({"type": "sheet", "id": id}),
+            TabRef::Schedule(n) => serde_json::json!({"type": "schedule", "name": n}),
+            TabRef::Project => serde_json::json!({"type": "project"}),
+            TabRef::Materials => serde_json::json!({"type": "materials"}),
+        }
+    }
+
+    /// The inverse of `to_json`.
+    pub(crate) fn from_json(v: &serde_json::Value) -> Result<TabRef, String> {
+        let id = || -> Result<GlobalId, String> {
+            serde_json::from_value(v["id"].clone()).map_err(|e| format!("tab id: {e}"))
+        };
+        Ok(match v["type"].as_str() {
+            Some("view") => TabRef::View(id()?),
+            Some("sheet") => TabRef::Sheet(id()?),
+            Some("schedule") => TabRef::Schedule(
+                v["name"]
+                    .as_str()
+                    .ok_or("a schedule tab needs a name")?
+                    .to_string(),
+            ),
+            Some("project") => TabRef::Project,
+            Some("materials") => TabRef::Materials,
+            t => return Err(format!("unknown tab type {t:?}")),
+        })
+    }
+}
+
+/// Up to three capital letters for a name: "Ada Lovelace" → "AL", "Pierre" → "PIE".
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn trigram(name: &str) -> Option<String> {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    let t: String = match words.as_slice() {
+        [] => return None,
+        [one] => one.chars().take(3).collect(),
+        many => many
+            .iter()
+            .filter_map(|w| w.chars().next())
+            .take(3)
+            .collect(),
+    };
+    Some(t.to_uppercase())
 }
 
 /// What a palette entry does: run an action, or show a view, sheet or schedule.
@@ -422,6 +558,9 @@ impl Viewer {
             Action::SheetTool(_) | Action::CloseSheet => self.layout.is_some(),
             Action::LinkDxf | Action::LinkPdf => REFERENCE_PLANS && loaded && flat,
             Action::ManageLinks | Action::RevealHidden => loaded,
+            Action::PaperView => self.two_pictures(),
+            Action::ClearTemporary => self.temporary.is_some(),
+            Action::ShowAllInView => self.hidden_in_view(),
             // The history lives next to the file: the desktop, a .bimble model.
             Action::SharedFolder | Action::Synchronize => {
                 cfg!(not(target_arch = "wasm32"))
@@ -453,6 +592,7 @@ impl Viewer {
             Action::Orthographic => self.camera.orthographic,
             Action::SectionBox => self.section_on,
             Action::OnPaper => self.plan_window,
+            Action::PaperView => self.on_paper(),
             Action::SectionLabels => t.element_labels,
             Action::Openings => t.opening_dimensions,
             Action::SectionMarks => t.section_markers,
@@ -543,6 +683,12 @@ impl Viewer {
                 self.needs_render = true;
             }
             Action::OnPaper => self.plan_window = !self.plan_window,
+            Action::PaperView => self.set_on_paper(!self.on_paper()),
+            Action::ClearTemporary => {
+                self.temporary = None;
+                self.needs_upload = true;
+            }
+            Action::ShowAllInView => self.show_all_in_view(),
             Action::SectionLabels => {
                 self.plan.template.element_labels ^= true;
                 self.plan.template_rev += 1;
@@ -1135,36 +1281,13 @@ impl Viewer {
     /// Tabs of the open views, sheets and schedules, over the main view. Right-click on a tab:
     /// close it, the others, or all of them (then Home shows).
     pub(crate) fn view_tabs(&mut self, ui: &mut egui::Ui) {
-        // What the main view shows always has its tab.
-        let current = if self.materials_page.is_some() {
-            Some(TabRef::Materials)
-        } else if self.project_page.is_some() {
-            Some(TabRef::Project)
-        } else if let Some(s) = &self.schedule {
-            Some(TabRef::Schedule(s.name.clone()))
-        } else if let Some(l) = &self.layout {
-            Some(TabRef::Sheet(l.sheet))
-        } else {
-            self.active_view.map(TabRef::View)
-        };
-        if let Some(c) = &current
-            && !self.open_tabs.contains(c)
-        {
-            self.open_tabs.push(c.clone());
-        }
+        let current = self.sync_tabs();
         let sheets = self.sheets();
-        let schedules = self.schedule_defs();
-        self.open_tabs.retain(|t| match t {
-            TabRef::View(id) => self.views.iter().any(|v| v.id == *id),
-            TabRef::Sheet(id) => sheets.iter().any(|s| s.id == *id),
-            TabRef::Schedule(n) => schedules.iter().any(|d| d.name == *n),
-            TabRef::Project | TabRef::Materials => true,
-        });
         let mut go: Option<TabRef> = None;
         let mut close: Option<Close> = None;
         let mut paper_switch: Option<bool> = None;
         // A plan or section: its two pictures, Model and On paper (ADR 0046), at the row's end.
-        let two_pictures = matches!(current, Some(TabRef::View(_))) && self.in_2d();
+        let two_pictures = self.two_pictures();
         let on_paper = self.on_paper();
         ui.horizontal(|ui| {
             if two_pictures {
@@ -1276,6 +1399,57 @@ impl Viewer {
                     }
                 });
             }
+        }
+    }
+
+    /// What the main view shows: a page, a schedule, a sheet or a view.
+    pub(crate) fn current_tab(&self) -> Option<TabRef> {
+        if self.materials_page.is_some() {
+            Some(TabRef::Materials)
+        } else if self.project_page.is_some() {
+            Some(TabRef::Project)
+        } else if let Some(s) = &self.schedule {
+            Some(TabRef::Schedule(s.name.clone()))
+        } else if let Some(l) = &self.layout {
+            Some(TabRef::Sheet(l.sheet))
+        } else {
+            self.active_view.map(TabRef::View)
+        }
+    }
+
+    /// Keep the open tabs: what the main view shows always has its tab, gone ones go. Run each
+    /// frame, drawn or not (the page draws them with `?viewport=1`). Returns the current tab.
+    pub(crate) fn sync_tabs(&mut self) -> Option<TabRef> {
+        let current = self.current_tab();
+        if let Some(c) = &current
+            && !self.open_tabs.contains(c)
+        {
+            self.open_tabs.push(c.clone());
+        }
+        let sheets = self.sheets();
+        let schedules = self.schedule_defs();
+        self.open_tabs.retain(|t| match t {
+            TabRef::View(id) => self.views.iter().any(|v| v.id == *id),
+            TabRef::Sheet(id) => sheets.iter().any(|s| s.id == *id),
+            TabRef::Schedule(n) => schedules.iter().any(|d| d.name == *n),
+            TabRef::Project | TabRef::Materials => true,
+        });
+        current
+    }
+
+    /// A plan or section is shown: its two pictures, Model and On paper (ADR 0046).
+    pub(crate) fn two_pictures(&self) -> bool {
+        matches!(self.current_tab(), Some(TabRef::View(_))) && self.in_2d()
+    }
+
+    /// Go to a tab, or close it, as a click on the tab row does (the page bridge).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn tab_verb(&mut self, close: bool, t: TabRef) {
+        let current = self.sync_tabs();
+        if close {
+            self.after_tab_clicks(current, None, Some(Close::This(t)));
+        } else {
+            self.after_tab_clicks(current, Some(t), None);
         }
     }
 
@@ -1424,7 +1598,6 @@ impl Viewer {
     fn palette_entries(&mut self) -> Vec<(String, String, bool, PaletteGo)> {
         let mut v: Vec<(String, String, bool, PaletteGo)> = ALL_ACTIONS
             .iter()
-            .chain([Action::History].iter())
             .map(|a| {
                 let where_ = match a.keys() {
                     "" => a.home().to_string(),
@@ -1587,6 +1760,45 @@ enum Close {
 mod tests {
     use super::*;
 
+    /// The bridge's tab JSON reads back as the same tab; a bad one is an error, not a panic.
+    #[test]
+    fn tab_json_round_trips() {
+        let id: GlobalId = serde_json::from_value(serde_json::json!("0123456789abcdefghijkl"))
+            .expect("a GlobalId");
+        for t in [
+            TabRef::View(id),
+            TabRef::Sheet(id),
+            TabRef::Schedule("Columns".into()),
+            TabRef::Project,
+            TabRef::Materials,
+        ] {
+            assert_eq!(TabRef::from_json(&t.to_json()), Ok(t));
+        }
+        assert!(TabRef::from_json(&serde_json::json!({"type": "view"})).is_err());
+        assert!(TabRef::from_json(&serde_json::json!({"type": "nope"})).is_err());
+    }
+
+    #[test]
+    fn trigrams() {
+        assert_eq!(trigram("Ada Lovelace").as_deref(), Some("AL"));
+        assert_eq!(trigram("jean claude van damme").as_deref(), Some("JCV"));
+        assert_eq!(trigram("pierre").as_deref(), Some("PIE"));
+        assert_eq!(trigram("  "), None);
+    }
+
+    /// The page's switch and chip actions are listed, so `action(name)` finds them.
+    #[test]
+    fn bridge_actions_are_listed() {
+        for n in [
+            "history",
+            "paper_view",
+            "clear_temporary",
+            "show_all_in_view",
+        ] {
+            assert!(Action::from_name(n).is_some(), "{n}");
+        }
+    }
+
     #[test]
     fn palette_matches_word_starts_and_parts() {
         assert!(matches("Section box", "sec box"));
@@ -1597,11 +1809,30 @@ mod tests {
         assert!(!matches("Place: Column", "col wall"));
     }
 
+    #[test]
+    fn action_names_round_trip_unique_snake_case() {
+        let mut names: Vec<String> = ALL_ACTIONS.iter().map(|a| a.name()).collect();
+        for a in ALL_ACTIONS {
+            let n = a.name();
+            assert_eq!(Action::from_name(&n), Some(a), "{n}");
+            assert!(
+                !n.is_empty()
+                    && n.chars().next().unwrap().is_ascii_lowercase()
+                    && n.chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "{n}"
+            );
+        }
+        assert_eq!(Action::from_name("no_such_action"), None);
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), ALL_ACTIONS.len());
+    }
+
     /// Every action has a label, and the palette lists each one once.
     #[test]
     fn actions_are_listed_once() {
         let mut labels: Vec<String> = ALL_ACTIONS.iter().map(|a| a.label()).collect();
-        labels.push(Action::History.label());
         let n = labels.len();
         labels.sort();
         labels.dedup();

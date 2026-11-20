@@ -1,0 +1,787 @@
+{
+  "_doc": "name -> ref: CSS selector in docs/design/wireframes-v01 (first match; null = not found in the reference), lab: selector in the Vue lab. Optional \"only\": [screen codes] limits a screen-specific landmark to its screens.",
+  "quickbar": {
+    "ref": "header.top",
+    "lab": "[data-bb=\"quickbar\"]"
+  },
+  "quickbar-logo": {
+    "ref": "header.top > a.ib",
+    "lab": "[data-bb=\"quickbar-logo\"]"
+  },
+  "quickbar-file": {
+    "ref": ".top > .qb",
+    "lab": "[data-bb=\"quickbar-file\"]"
+  },
+  "filename": {
+    "ref": ".fname > span:first-child",
+    "lab": "[data-bb=\"filename\"]"
+  },
+  "state-chip": {
+    "ref": ".fname > .chip",
+    "lab": "[data-bb=\"state-chip\"]"
+  },
+  "command-field": {
+    "ref": ".top > .cmdk",
+    "lab": "[data-bb=\"command-field\"]"
+  },
+  "quickbar-home": {
+    "ref": ".top > a.ib:nth-of-type(2)",
+    "lab": "[data-bb=\"quickbar-home\"]"
+  },
+  "quickbar-sep": {
+    "ref": ".top > .tabsep",
+    "lab": "[data-bb=\"quickbar-sep\"]"
+  },
+  "quickbar-open": {
+    "ref": ".top > button:nth-of-type(1)",
+    "lab": "[data-bb=\"quickbar-open\"]"
+  },
+  "quickbar-save": {
+    "ref": ".top > button:nth-of-type(2)",
+    "lab": "[data-bb=\"quickbar-save\"]"
+  },
+  "quickbar-undo": {
+    "ref": ".top > button:nth-of-type(3)",
+    "lab": "[data-bb=\"quickbar-undo\"]"
+  },
+  "quickbar-redo": {
+    "ref": ".top > button:nth-of-type(4)",
+    "lab": "[data-bb=\"quickbar-redo\"]"
+  },
+  "quickbar-export": {
+    "ref": ".top > a:nth-of-type(4)",
+    "lab": "[data-bb=\"quickbar-export\"]"
+  },
+  "quickbar-sync": {
+    "ref": ".top > a:nth-of-type(5)",
+    "lab": "[data-bb=\"quickbar-sync\"]"
+  },
+  "quickbar-schema": {
+    "ref": ".fname > .mono",
+    "lab": "[data-bb=\"quickbar-schema\"]"
+  },
+  "quickbar-user": {
+    "ref": ".top > span[title]",
+    "lab": "[data-bb=\"quickbar-user\"]"
+  },
+  "quickbar-primary": {
+    "ref": ".top > .btn.p",
+    "lab": "[data-bb=\"quickbar-primary\"]"
+  },
+  "tabsbar": {
+    "ref": "nav.tabs",
+    "lab": "[data-bb=\"tabsbar\"]"
+  },
+  "tab-1": {
+    "ref": ".tabs > a:nth-of-type(1)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(1)"
+  },
+  "tab-2": {
+    "ref": ".tabs > a:nth-of-type(2)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(2)"
+  },
+  "tab-3": {
+    "ref": ".tabs > a:nth-of-type(3)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(3)"
+  },
+  "tab-4": {
+    "ref": ".tabs > a:nth-of-type(4)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(4)"
+  },
+  "tab-5": {
+    "ref": ".tabs > a:nth-of-type(5)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(5)"
+  },
+  "tab-6": {
+    "ref": ".tabs > a:nth-of-type(6)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(6)"
+  },
+  "tab-7": {
+    "ref": ".tabs > a:nth-of-type(7)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(7)"
+  },
+  "tab-8": {
+    "ref": ".tabs > a:nth-of-type(8)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(8)"
+  },
+  "tab-9": {
+    "ref": ".tabs > a:nth-of-type(9)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(9)"
+  },
+  "tab-10": {
+    "ref": ".tabs > a:nth-of-type(10)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(10)"
+  },
+  "tab-11": {
+    "ref": ".tabs > a:nth-of-type(11)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(11)"
+  },
+  "tab-12": {
+    "ref": ".tabs > a:nth-of-type(12)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(12)"
+  },
+  "tab-13": {
+    "ref": ".tabs > a:nth-of-type(13)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(13)"
+  },
+  "tab-14": {
+    "ref": ".tabs > a:nth-of-type(14)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(14)"
+  },
+  "tab-sep-1": {
+    "ref": ".tabs > span:nth-of-type(1)",
+    "lab": "[data-bb=\"tabsbar\"] > span:nth-of-type(1)"
+  },
+  "tab-sep-2": {
+    "ref": ".tabs > span:nth-of-type(2)",
+    "lab": "[data-bb=\"tabsbar\"] > span:nth-of-type(2)"
+  },
+  "ribbon-grp-1": {
+    "ref": ".ribbon > .grp:nth-of-type(1)",
+    "lab": "[data-bb=\"ribbon-grp-1\"]"
+  },
+  "ribbon-grp-2": {
+    "ref": ".ribbon > .grp:nth-of-type(2)",
+    "lab": "[data-bb=\"ribbon-grp-2\"]"
+  },
+  "ribbon-grp-3": {
+    "ref": ".ribbon > .grp:nth-of-type(3)",
+    "lab": "[data-bb=\"ribbon-grp-3\"]"
+  },
+  "ribbon-grp-4": {
+    "ref": ".ribbon > .grp:nth-of-type(4)",
+    "lab": "[data-bb=\"ribbon-grp-4\"]"
+  },
+  "ribbon-grp-5": {
+    "ref": ".ribbon > .grp:nth-of-type(5)",
+    "lab": "[data-bb=\"ribbon-grp-5\"]"
+  },
+  "ribbon-tool-1-1": {
+    "ref": ".ribbon > .grp:nth-of-type(1) .tool:nth-of-type(1)",
+    "lab": "[data-bb=\"ribbon-tool-1-1\"]"
+  },
+  "ribbon-tool-1-2": {
+    "ref": ".ribbon > .grp:nth-of-type(1) .tool:nth-of-type(2)",
+    "lab": "[data-bb=\"ribbon-tool-1-2\"]"
+  },
+  "ribbon-tool-1-3": {
+    "ref": ".ribbon > .grp:nth-of-type(1) .tool:nth-of-type(3)",
+    "lab": "[data-bb=\"ribbon-tool-1-3\"]"
+  },
+  "ribbon-tool-2-1": {
+    "ref": ".ribbon > .grp:nth-of-type(2) .tool:nth-of-type(1)",
+    "lab": "[data-bb=\"ribbon-tool-2-1\"]"
+  },
+  "ribbon-tool-2-2": {
+    "ref": ".ribbon > .grp:nth-of-type(2) .tool:nth-of-type(2)",
+    "lab": "[data-bb=\"ribbon-tool-2-2\"]"
+  },
+  "ribbon-tool-3-1": {
+    "ref": ".ribbon > .grp:nth-of-type(3) .tool:nth-of-type(1)",
+    "lab": "[data-bb=\"ribbon-tool-3-1\"]"
+  },
+  "ribbon-tool-3-2": {
+    "ref": ".ribbon > .grp:nth-of-type(3) .tool:nth-of-type(2)",
+    "lab": "[data-bb=\"ribbon-tool-3-2\"]"
+  },
+  "ribbon-tool-4-1": {
+    "ref": ".ribbon > .grp:nth-of-type(4) .tool:nth-of-type(1)",
+    "lab": "[data-bb=\"ribbon-tool-4-1\"]"
+  },
+  "ribbon-tool-4-2": {
+    "ref": ".ribbon > .grp:nth-of-type(4) .tool:nth-of-type(2)",
+    "lab": "[data-bb=\"ribbon-tool-4-2\"]"
+  },
+  "ribbon-tool-4-3": {
+    "ref": ".ribbon > .grp:nth-of-type(4) .tool:nth-of-type(3)",
+    "lab": "[data-bb=\"ribbon-tool-4-3\"]"
+  },
+  "ribbon-tool-4-4": {
+    "ref": ".ribbon > .grp:nth-of-type(4) .tool:nth-of-type(4)",
+    "lab": "[data-bb=\"ribbon-tool-4-4\"]"
+  },
+  "ribbon-tool-5-1": {
+    "ref": ".ribbon > .grp:nth-of-type(5) .tool:nth-of-type(1)",
+    "lab": "[data-bb=\"ribbon-tool-5-1\"]"
+  },
+  "ribbon-tool-5-2": {
+    "ref": ".ribbon > .grp:nth-of-type(5) .tool:nth-of-type(2)",
+    "lab": "[data-bb=\"ribbon-tool-5-2\"]"
+  },
+  "ribbon": {
+    "ref": ".ribbon",
+    "lab": "[data-bb=\"ribbon\"]"
+  },
+  "left-panel": {
+    "ref": ".work > aside.left",
+    "lab": "[data-bb=\"left-panel\"]"
+  },
+  "navigator": {
+    "ref": ".left > nav.nav",
+    "lab": "[data-bb=\"navigator\"]"
+  },
+  "properties": {
+    "ref": ".left > .props",
+    "lab": "[data-bb=\"properties\"]"
+  },
+  "viewtabs": {
+    "ref": ".main > .vtabs",
+    "lab": "[data-bb=\"viewtabs\"]"
+  },
+  "view-switch": {
+    "ref": ".vp > div:has(> button.ib)",
+    "lab": "[data-bb=\"view-switch\"]"
+  },
+  "viewport": {
+    "ref": ".main > .vp",
+    "lab": "[data-bb=\"viewport\"]"
+  },
+  "modifier": {
+    "ref": ".vp + section[aria-label]",
+    "lab": "[data-bb=\"modifier\"]"
+  },
+  "statusbar": {
+    "ref": "footer.status",
+    "lab": "[data-bb=\"statusbar\"]"
+  },
+  "status-hint": {
+    "ref": ".status > .hint",
+    "lab": "[data-bb=\"status-hint\"]"
+  },
+  "status-coords": {
+    "ref": ".status > .hint + .mono.q",
+    "lab": "[data-bb=\"status-coords\"]"
+  },
+  "status-chips": {
+    "ref": ".status > .chip",
+    "lab": "[data-bb=\"status-chip\"]"
+  },
+  "status-counts": {
+    "ref": ".status > .mono.q ~ .mono.q",
+    "lab": "[data-bb=\"status-counts\"]"
+  },
+  "status-lang": {
+    "ref": ".status > .seg",
+    "lab": "[data-bb=\"status-lang\"]"
+  },
+  "view-tab-1": {
+    "ref": ".vtabs > a.vtab:nth-of-type(1)",
+    "lab": "[data-bb=\"viewtabs\"] > a.vtab:nth-of-type(1)"
+  },
+  "view-tab-2": {
+    "ref": ".vtabs > a.vtab:nth-of-type(2)",
+    "lab": "[data-bb=\"viewtabs\"] > a.vtab:nth-of-type(2)"
+  },
+  "view-tab-3": {
+    "ref": ".vtabs > a.vtab:nth-of-type(3)",
+    "lab": "[data-bb=\"viewtabs\"] > a.vtab:nth-of-type(3)"
+  },
+  "view-picture": {
+    "ref": ".vtabs > .seg",
+    "lab": "[data-bb=\"view-picture\"]"
+  },
+  "file-menu": {
+    "ref": "[role=menu]",
+    "lab": "[data-bb=\"file-menu\"]",
+    "only": [
+      "A2"
+    ]
+  },
+  "file-menu-new": {
+    "ref": "[role=menu] > a:nth-of-type(1)",
+    "lab": "[data-bb=\"file-menu-new\"]",
+    "only": [
+      "A2"
+    ]
+  },
+  "file-menu-print": {
+    "ref": "[role=menu] > a:nth-of-type(9)",
+    "lab": "[data-bb=\"file-menu-export-screen-D4\"]",
+    "only": [
+      "A2"
+    ]
+  },
+  "file-menu-quit": {
+    "ref": "[role=menu] > a:last-child",
+    "lab": "[data-bb=\"file-menu-quit\"]",
+    "only": [
+      "A2"
+    ]
+  },
+  "home": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"]",
+    "lab": "[data-bb=\"home\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-disc": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div[aria-hidden]",
+    "lab": "[data-bb=\"home-disc\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-wordmark": {
+    "ref": null,
+    "lab": "[data-bb=\"home-wordmark\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-eyebrow": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > .eyebrow",
+    "lab": "[data-bb=\"home-eyebrow\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-title": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > h1",
+    "lab": "[data-bb=\"home-title\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-lead": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > p:not(.note)",
+    "lab": "[data-bb=\"home-lead\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-open": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) .btn.p",
+    "lab": "[data-bb=\"home-open\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-import": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) button:nth-of-type(1)",
+    "lab": "[data-bb=\"home-import\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-new": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) button:nth-of-type(2)",
+    "lab": "[data-bb=\"home-new\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-you": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > .card",
+    "lab": "[data-bb=\"home-you\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-settings": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > .card > a",
+    "lab": "[data-bb=\"home-settings\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-drop": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > p.note",
+    "lab": "[data-bb=\"home-drop\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-recent-title": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(3) h2",
+    "lab": "[data-bb=\"home-recent-title\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-filter": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(3) input",
+    "lab": "[data-bb=\"home-filter\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "home-recent": {
+    "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(3) > div:nth-child(2)",
+    "lab": "[data-bb=\"home-recent\"]",
+    "only": [
+      "A1"
+    ]
+  },
+  "project-basic": {
+    "ref": ".page section:first-child > h2",
+    "lab": "[data-bb=\"project-basic\"]",
+    "only": [
+      "A3"
+    ]
+  },
+  "project-field-1": {
+    "ref": ".page .fld input",
+    "lab": "[data-bb=\"project-field-project_number\"]",
+    "only": [
+      "A3"
+    ]
+  },
+  "project-field-6": {
+    "ref": ".page section:first-child > .fld:nth-of-type(6) input",
+    "lab": "[data-bb=\"project-field-phase_description\"]",
+    "only": [
+      "A3"
+    ]
+  },
+  "project-id": {
+    "ref": ".page section:first-child > div:last-child > span:nth-child(2)",
+    "lab": "[data-bb=\"project-id\"]",
+    "only": [
+      "A3"
+    ]
+  },
+  "project-add-member": {
+    "ref": ".page .btn.s",
+    "lab": "[data-bb=\"project-add-member\"]",
+    "only": [
+      "A3"
+    ]
+  },
+  "project-team": {
+    "ref": ".page table.t",
+    "lab": "[data-bb=\"project-team\"]",
+    "only": [
+      "A3"
+    ]
+  },
+  "project-add-field": {
+    "ref": ".page section:last-child > .qb",
+    "lab": "[data-bb=\"project-add-field\"]",
+    "only": [
+      "A3"
+    ]
+  },
+  "history-title": {
+    "ref": ".page h2",
+    "lab": "[data-bb=\"history-title\"]",
+    "only": [
+      "C6"
+    ]
+  },
+  "history-branch": {
+    "ref": ".page .sel-inp",
+    "lab": "[data-bb=\"history-branch\"]",
+    "only": [
+      "C6"
+    ]
+  },
+  "history-new-variant": {
+    "ref": ".page .btn.s",
+    "lab": "[data-bb=\"history-new-variant\"]",
+    "only": [
+      "C6"
+    ]
+  },
+  "history-new-version": {
+    "ref": ".page .card",
+    "lab": "[data-bb=\"history-new-version\"]",
+    "only": [
+      "C6"
+    ]
+  },
+  "history-commit": {
+    "ref": ".page .card .btn.p",
+    "lab": "[data-bb=\"history-commit\"]",
+    "only": [
+      "C6"
+    ]
+  },
+  "history-changes": {
+    "ref": ".page table.t",
+    "lab": "[data-bb=\"history-changes\"]",
+    "only": [
+      "C6"
+    ]
+  },
+  "history-side-branch": {
+    "ref": ".props > .pn",
+    "lab": "[data-bb=\"history-side-branch\"]",
+    "only": [
+      "C6"
+    ]
+  },
+  "shared-folder": {
+    "ref": ".overlay > .dialog",
+    "lab": "[data-bb=\"shared-folder\"]",
+    "only": [
+      "C1"
+    ]
+  },
+  "shared-folder-title": {
+    "ref": ".dialog h2",
+    "lab": "[data-bb=\"shared-folder-title\"]",
+    "only": [
+      "C1"
+    ]
+  },
+  "shared-folder-path": {
+    "ref": ".dialog .inp",
+    "lab": "[data-bb=\"shared-folder-path\"]",
+    "only": [
+      "C1"
+    ]
+  },
+  "shared-folder-browse": {
+    "ref": ".dialog .btn.s",
+    "lab": "[data-bb=\"shared-folder-browse\"]",
+    "only": [
+      "C1"
+    ]
+  },
+  "shared-folder-case": {
+    "ref": ".dialog fieldset",
+    "lab": "[data-bb=\"shared-folder-case\"]",
+    "only": [
+      "C1"
+    ]
+  },
+  "shared-folder-author": {
+    "ref": ".dialog .row a",
+    "lab": "[data-bb=\"shared-folder-author\"]",
+    "only": [
+      "C1"
+    ]
+  },
+  "shared-folder-share": {
+    "ref": ".dialog .btn.p",
+    "lab": "[data-bb=\"shared-folder-share\"]",
+    "only": [
+      "C1"
+    ]
+  },
+  "place-title": {
+    "ref": ".left .props .pn",
+    "lab": "[data-bb=\"place-title\"]",
+    "only": [
+      "B1"
+    ]
+  },
+  "place-storey": {
+    "ref": ".left .props .row:nth-of-type(2) .sel-inp",
+    "lab": "[data-bb=\"place-storey\"]",
+    "only": [
+      "B1"
+    ]
+  },
+  "place-thickness": {
+    "ref": ".left .props .row:nth-of-type(3) input",
+    "lab": "[data-bb=\"place-thickness\"]",
+    "only": [
+      "B1"
+    ]
+  },
+  "borrowed": {
+    "ref": "[role=alertdialog]",
+    "lab": "[data-bb=\"borrowed\"]",
+    "only": [
+      "C2"
+    ]
+  },
+  "borrowed-banner": {
+    "ref": "[role=alertdialog] > .banner",
+    "lab": "[data-bb=\"borrowed\"] > .banner",
+    "only": [
+      "C2"
+    ]
+  },
+  "sheet": {
+    "ref": ".main > .vp",
+    "lab": "[data-bb=\"sheet\"]",
+    "only": [
+      "D3"
+    ]
+  },
+  "sheet-props-title": {
+    "ref": ".props > .pn",
+    "lab": "[data-bb=\"sheet-props-title\"]",
+    "only": [
+      "D3"
+    ]
+  },
+  "sheet-number": {
+    "ref": ".props input.inp.mono",
+    "lab": "[data-bb=\"sheet-number\"]",
+    "only": [
+      "D3"
+    ]
+  },
+  "sheet-size": {
+    "ref": ".props .row:nth-of-type(3) .sel-inp",
+    "lab": "[data-bb=\"sheet-size\"]",
+    "only": [
+      "D3"
+    ]
+  },
+  "quantities-title": {
+    "ref": ".page h2",
+    "lab": "[data-bb=\"quantities-title\"]",
+    "only": [
+      "D6"
+    ]
+  },
+  "quantities-group": {
+    "ref": ".page > div > span.sel-inp:nth-of-type(2)",
+    "lab": "[data-bb=\"quantities-group\"]",
+    "only": [
+      "D6"
+    ]
+  },
+  "quantities-filter": {
+    "ref": ".page > div > span.sel-inp:nth-of-type(3)",
+    "lab": "[data-bb=\"quantities-filter\"]",
+    "only": [
+      "D6"
+    ]
+  },
+  "quantities-columns": {
+    "ref": ".page .btn.s",
+    "lab": "[data-bb=\"quantities-columns\"]",
+    "only": [
+      "D6"
+    ]
+  },
+  "quantities-export": {
+    "ref": ".page .btn.p",
+    "lab": "[data-bb=\"quantities-export\"]",
+    "only": [
+      "D6"
+    ]
+  },
+  "quantities-table": {
+    "ref": ".page table.t",
+    "lab": "[data-bb=\"quantities-table\"]",
+    "only": [
+      "D6"
+    ]
+  },
+  "palette": {
+    "ref": ".overlay > [role=dialog]",
+    "lab": "[data-bb=\"palette\"]",
+    "only": [
+      "D8"
+    ]
+  },
+  "palette-query": {
+    "ref": "[role=dialog] input.inp",
+    "lab": "[data-bb=\"palette-query\"]",
+    "only": [
+      "D8"
+    ]
+  },
+  "palette-item": {
+    "ref": "[role=dialog] > a.ti",
+    "lab": "[data-bb=\"palette-item\"]",
+    "only": [
+      "D8"
+    ]
+  },
+  "palette-help": {
+    "ref": "[role=dialog] > div.note",
+    "lab": "[data-bb=\"palette-help\"]",
+    "only": [
+      "D8"
+    ]
+  },
+  "modifier-tools": {
+    "ref": ".vp + section > .grp:nth-of-type(2)",
+    "lab": "[data-bb=\"modifier\"] > .grp:nth-of-type(2)",
+    "only": [
+      "B2"
+    ]
+  },
+  "modifier-move": {
+    "ref": ".vp + section .tool.on",
+    "lab": "[data-bb=\"modifier\"] .tool.on",
+    "only": [
+      "B2"
+    ]
+  },
+  "modifier-vector": {
+    "ref": ".vp + section > div:last-child",
+    "lab": "[data-bb=\"modifier\"] > .vec",
+    "only": [
+      "B2"
+    ]
+  },
+  "modifier-move-by": {
+    "ref": ".vp + section .btn.p",
+    "lab": "[data-bb=\"modifier\"] .btn.p",
+    "only": [
+      "B2"
+    ]
+  },
+  "standards": {
+    "ref": ".main aside",
+    "lab": "[data-bb=\"right-panel\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-title": {
+    "ref": ".main aside .pn",
+    "lab": "[data-bb=\"standards-title\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-search": {
+    "ref": ".main aside > input.inp",
+    "lab": "[data-bb=\"standards-search\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-pens": {
+    "ref": ".main aside table.t",
+    "lab": "[data-bb=\"standards-pens\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-hatches": {
+    "ref": ".main aside > div:nth-of-type(5)",
+    "lab": "[data-bb=\"standards-hatches\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-moved": {
+    "ref": ".main aside > div:nth-of-type(6)",
+    "lab": "[data-bb=\"standards-moved\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-revert": {
+    "ref": ".main aside button.btn.s",
+    "lab": "[data-bb=\"standards-revert\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-reset": {
+    "ref": ".main aside button.btn.s + button.btn.s",
+    "lab": "[data-bb=\"standards-reset\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-save": {
+    "ref": ".main aside button.btn.p",
+    "lab": "[data-bb=\"standards-save\"]",
+    "only": [
+      "D5"
+    ]
+  }
+}

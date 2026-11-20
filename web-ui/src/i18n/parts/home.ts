@@ -1,0 +1,31 @@
+// Copy for the Home page (A1, fr/Home.html and en/Home.html). Keys are added here only.
+export const fr = {
+  "page.home": "Accueil",
+  "home.eyebrow": "Bimble {version} · accueil",
+  "home.hello": "Bonjour {name}",
+  "home.lead": "Ouvrez un modèle, ou importez un IFC pour le modifier.",
+  "home.open": "Ouvrir…",
+  "home.importIfc": "Importer un IFC…",
+  "home.new": "Nouveau modèle…",
+  "home.you": "Vous",
+  "home.sharedFolder": "Dossier partagé",
+  "home.changeYou": "Changer dans Réglages › Vous",
+  "home.drop": "Déposez un fichier .ifc, .bimble ou .bimbleview n'importe où sur la fenêtre.",
+  "home.recent": "Fichiers récents",
+  "home.filter": "Filtrer les fichiers",
+} as const;
+export const en: Record<keyof typeof fr, string> = {
+  "page.home": "Home",
+  "home.eyebrow": "Bimble {version} · home",
+  "home.hello": "Hello {name}",
+  "home.lead": "Open a model, or import an IFC to edit it.",
+  "home.open": "Open…",
+  "home.importIfc": "Import an IFC…",
+  "home.new": "New model…",
+  "home.you": "You",
+  "home.sharedFolder": "Shared folder",
+  "home.changeYou": "Change in Settings › You",
+  "home.drop": "Drop an .ifc, .bimble or .bimbleview file anywhere on the window.",
+  "home.recent": "Recent files",
+  "home.filter": "Filter files",
+};

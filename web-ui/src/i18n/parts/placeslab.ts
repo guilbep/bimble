@@ -1,0 +1,33 @@
+// Copy for Place a slab (B1): the left panel while placing. Keys are added here only (one file per ticket).
+export const fr = {
+  "placeslab.title": "Placer : dalle",
+  "placeslab.storey": "Étage",
+  "placeslab.thickness": "Épaisseur",
+  "placeslab.material": "Matériau",
+  "placeslab.topOffset": "Décalage du dessus",
+  "placeslab.subproject": "Sous-projet",
+  "placeslab.shape": "Forme",
+  "placeslab.rectangle": "Rectangle",
+  "placeslab.polygon": "Polygone",
+  "placeslab.sloped": "Pente",
+  "placeslab.slope": "Pente",
+  "placeslab.how": "Comment",
+  "placeslab.howNote": "Deux clics : deux coins opposés. Le dessus de la dalle affleure le niveau {above}. Les clics s'accrochent aux axes, poteaux et coins à 12 px.",
+  "placeslab.error": "Erreur : {msg}",
+};
+export const en: Record<keyof typeof fr, string> = {
+  "placeslab.title": "Place: slab",
+  "placeslab.storey": "Storey",
+  "placeslab.thickness": "Thickness",
+  "placeslab.material": "Material",
+  "placeslab.topOffset": "Top offset",
+  "placeslab.subproject": "Sub-project",
+  "placeslab.shape": "Shape",
+  "placeslab.rectangle": "Rectangle",
+  "placeslab.polygon": "Polygon",
+  "placeslab.sloped": "Sloped",
+  "placeslab.slope": "Slope",
+  "placeslab.how": "How",
+  "placeslab.howNote": "Two clicks: two opposite corners. The slab's top is flush with level {above}. Clicks snap to axes, columns and corners within 12 px.",
+  "placeslab.error": "Error: {msg}",
+};

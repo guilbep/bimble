@@ -141,7 +141,7 @@ fn parts(a: Action) -> &'static [Part] {
             Line(&[[9.0, 7.0], [12.0, 10.0], [15.0, 7.0]]),
             Poly(&[[4.0, 15.0], [12.0, 12.0], [20.0, 15.0], [12.0, 18.0]]),
         ],
-        Action::OnPaper => &[
+        Action::OnPaper | Action::PaperView => &[
             Poly(&[
                 [5.0, 3.0],
                 [15.0, 3.0],
@@ -225,7 +225,7 @@ fn parts(a: Action) -> &'static [Part] {
             ]),
             Circle([12.0, 12.0], 2.5),
         ],
-        Action::Unhide => &[
+        Action::Unhide | Action::ClearTemporary | Action::ShowAllInView => &[
             Line(&[
                 [3.0, 12.0],
                 [7.0, 8.0],
@@ -510,10 +510,7 @@ mod tests {
     /// Every action has an icon (quick access shows only icons, #51), drawn inside its 24 × 24 grid.
     #[test]
     fn ribbon_actions_have_icons_on_the_grid() {
-        for a in crate::ribbon::ALL_ACTIONS
-            .iter()
-            .chain([Action::History].iter())
-        {
+        for a in crate::ribbon::ALL_ACTIONS.iter() {
             assert!(has(*a), "{a:?}");
             for part in parts(*a) {
                 let pts: Vec<[f32; 2]> = match part {
