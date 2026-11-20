@@ -8,6 +8,7 @@ import CollabSide from "./CollabSide.vue";
 import SettingOutSide from "./SettingOutSide.vue";
 import SiteSide from "./SiteSide.vue";
 import RebarSide from "./RebarSide.vue";
+import SteelSide from "./SteelSide.vue";
 import { activeTab } from "./tabs";
 </script>
 
@@ -18,7 +19,8 @@ import { activeTab } from "./tabs";
     <div class="props" data-bb="properties"><component :is="page()?.side ?? (placing?.active ? PlaceSide
       : activeTab === 'collaborate' ? CollabSide : activeTab === 'settingOut' ? SettingOutSide
       : activeTab === 'site' && !state.selection.length ? SiteSide
-      : activeTab === 'rebar' && !state.selection.length ? RebarSide : Properties)" /></div>
+      : activeTab === 'rebar' && !state.selection.length ? RebarSide
+      : (activeTab === 'steel' || activeTab === 'timber') && !state.selection.length ? SteelSide : Properties)" /></div>
   </aside>
 </template>
 
