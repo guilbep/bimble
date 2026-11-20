@@ -34,7 +34,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
       { key: "ribbon.collaborate.g1.t2", tag: "a", icon: "<path d=\"M20 11a8 8 0 0 0-14.5-4.5L4 8\"/><path d=\"M4 4v4h4\"/><path d=\"M4 13a8 8 0 0 0 14.5 4.5L20 16\"/><path d=\"M20 20v-4h-4\"/>", action: "synchronize" },
     ] },
     { key: "ribbon.collaborate.g2", tools: [
-      { key: "ribbon.collaborate.g2.t1", tag: "a", icon: "<path d=\"m12 4 9 5-9 5-9-5z\"/><path d=\"m3 13 9 5 9-5\"/>", action: null },
+      { key: "ribbon.collaborate.g2.t1", tag: "a", icon: "<path d=\"m12 4 9 5-9 5-9-5z\"/><path d=\"m3 13 9 5 9-5\"/>", action: null, page: "subprojects" },
     ], box: { key: "ribbon.collaborate.g2.b1", kind: "sel", missing: "subprojects query (active sub-project)" } },
     { key: "ribbon.collaborate.g3", tools: [
       { key: "ribbon.collaborate.g3.t1", tag: "a", icon: "<circle cx=\"9\" cy=\"9\" r=\"3\"/><path d=\"M3 20a6 6 0 0 1 12 0\"/><circle cx=\"17\" cy=\"8\" r=\"2.5\"/><path d=\"M16 14a5 5 0 0 1 5 5\"/>", action: null, page: "users" },
