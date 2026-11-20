@@ -69,3 +69,9 @@ marks the decisions he took himself.
 | 61 | Palette labels | Rust labels (English) / the ribbon copy for the same action | ribbon copy, Rust label when no ribbon tool (21 stay English: open question) | the ribbon copy is the reference copy |
 | 62 | Palette filter | Rust word-start matcher (not exposed) / substring over the shown and English labels in TS | substring in TS | UI filtering; "sec" must find "Zone de coupe" as the reference |
 | 63 | Palette schedules | stored only / the effective list | effective list (`schedule_list`) | as the egui palette |
+| 64 | Modify: Move and Copy | two buttons / a mode toggle, one vector button | mode toggle; "Copier de ce vecteur" added | the reference shows one vector button |
+| 65 | Modify: vector start | the sample 1 000 / 0 0 0 | 0 0 0 | real state |
+| 66 | Modify: size fields | editable through a new bimble.ts call / read-only, data-missing | read-only now; `SetGenerator` exists in Rust, a verb or wrapper is the next Rust step | bimble.ts was not this ticket's |
+| 67 | Standards: hatch grid | six sample tiles / one tile per real material family, no pattern | real families, no pattern | Rust does not expose patterns yet; never draw guessed hatches |
+| 68 | Standards panel and the egui `standards` action | open both / Vue panel only | Vue panel only; the ribbon tool still opens egui's (shell follow-up) | the egui panel would show the same thing twice |
+| 69 | Ctrl K with the 3D view focused | let egui open its palette / Vue catches it first | Vue (capture phase) | one palette, the reference's |

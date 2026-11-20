@@ -237,7 +237,7 @@
     "lab": "[data-bb=\"viewport\"]"
   },
   "modifier": {
-    "ref": ".vp + div",
+    "ref": ".vp + section[aria-label]",
     "lab": "[data-bb=\"modifier\"]"
   },
   "statusbar": {
@@ -691,6 +691,97 @@
     "lab": "[data-bb=\"palette-help\"]",
     "only": [
       "D8"
+    ]
+  },
+  "modifier-tools": {
+    "ref": ".vp + section > .grp:nth-of-type(2)",
+    "lab": "[data-bb=\"modifier\"] > .grp:nth-of-type(2)",
+    "only": [
+      "B2"
+    ]
+  },
+  "modifier-move": {
+    "ref": ".vp + section .tool.on",
+    "lab": "[data-bb=\"modifier\"] .tool.on",
+    "only": [
+      "B2"
+    ]
+  },
+  "modifier-vector": {
+    "ref": ".vp + section > div:last-child",
+    "lab": "[data-bb=\"modifier\"] > .vec",
+    "only": [
+      "B2"
+    ]
+  },
+  "modifier-move-by": {
+    "ref": ".vp + section .btn.p",
+    "lab": "[data-bb=\"modifier\"] .btn.p",
+    "only": [
+      "B2"
+    ]
+  },
+  "standards": {
+    "ref": ".main aside",
+    "lab": "[data-bb=\"right-panel\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-title": {
+    "ref": ".main aside .pn",
+    "lab": "[data-bb=\"standards-title\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-search": {
+    "ref": ".main aside > input.inp",
+    "lab": "[data-bb=\"standards-search\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-pens": {
+    "ref": ".main aside table.t",
+    "lab": "[data-bb=\"standards-pens\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-hatches": {
+    "ref": ".main aside > div:nth-of-type(5)",
+    "lab": "[data-bb=\"standards-hatches\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-moved": {
+    "ref": ".main aside > div:nth-of-type(6)",
+    "lab": "[data-bb=\"standards-moved\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-revert": {
+    "ref": ".main aside button.btn.s",
+    "lab": "[data-bb=\"standards-revert\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-reset": {
+    "ref": ".main aside button.btn.s + button.btn.s",
+    "lab": "[data-bb=\"standards-reset\"]",
+    "only": [
+      "D5"
+    ]
+  },
+  "standards-save": {
+    "ref": ".main aside button.btn.p",
+    "lab": "[data-bb=\"standards-save\"]",
+    "only": [
+      "D5"
     ]
   }
 }
