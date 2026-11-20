@@ -78,3 +78,4 @@ marks the decisions he took himself.
 | 70 | On paper properties | a new left-panel component / a branch in Properties.vue | Properties.vue branch | no LeftPanel change while another ticket owns it |
 | 71 | On paper fields with no write call | editable / drawn read-only, data-missing | read-only; `SetView` needs the whole view (a `set_view` verb is the Rust step) | never fake an edit |
 | 72 | Demo file | no sheet / one plan view and sheet S01 | sheet S01 (synthetic, fixed ids) | the Sheets screen needs real data; existing demo tests unchanged |
+| 73 | Ribbon boxes with no Rust (Sous-projet actif, Altitude) | leave out / draw as the reference, disabled, empty | draw, disabled, empty | the rule for missing calls; leaving them out changed the EN ribbon height |
