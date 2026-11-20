@@ -355,5 +355,33 @@
   "home-recent": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(3) > div:nth-child(2)",
     "lab": "[data-bb=\"home-recent\"]"
+  },
+  "project-basic": {
+    "ref": ".page section:first-child > h2",
+    "lab": "[data-bb=\"project-basic\"]"
+  },
+  "project-field-1": {
+    "ref": ".page .fld input",
+    "lab": "[data-bb=\"project-field-project_number\"]"
+  },
+  "project-field-6": {
+    "ref": ".page section:first-child > .fld:nth-of-type(6) input",
+    "lab": "[data-bb=\"project-field-phase_description\"]"
+  },
+  "project-id": {
+    "ref": ".page section:first-child > div:last-child > span:nth-child(2)",
+    "lab": "[data-bb=\"project-id\"]"
+  },
+  "project-add-member": {
+    "ref": ".page .btn.s",
+    "lab": "[data-bb=\"project-add-member\"]"
+  },
+  "project-team": {
+    "ref": ".page table.t",
+    "lab": "[data-bb=\"project-team\"]"
+  },
+  "project-add-field": {
+    "ref": ".page section:last-child > .qb",
+    "lab": "[data-bb=\"project-add-field\"]"
   }
 }

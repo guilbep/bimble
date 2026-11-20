@@ -39,3 +39,7 @@ marks the decisions he took himself.
 | 31 | Home wordmark placement | eyebrow word in the font / above the eyebrow / beside the disc / quick-access bar | above the eyebrow, out of flow, 28 px | no reference box moves; the eyebrow is too small to read as a name |
 | 32 | Home title without a user name | sample name / "Bonjour" alone | "Bonjour {name}", empty name when not set | real data; FR then fits one line instead of two |
 | 33 | Home recent files on the web | sample rows / empty list | empty list, `data-missing="recent-files"` | no Rust query lists them; never fake data |
+| 34 | When a project field is sent | blur and Enter handlers / the native `change` event | `change` (once, only when the value changed) | two handlers sent two commands and empty undo steps |
+| 35 | An emptied project field | send "" / remove the key | remove the key | as the egui form (ADR 0030) |
+| 36 | Project field keys | the reference's `{address}`, `{city}` / Rust's known keys | Rust's keys | real data; the reference keys are samples |
+| 37 | Error band on Project information | none (reference has none) / the reference's ochre banner style with "Erreur" | the ochre banner | ADR 0049: errors are ink on ochre with the word |
