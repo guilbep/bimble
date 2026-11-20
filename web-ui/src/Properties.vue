@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { t } from "./i18n";
 import { viewName } from "./shell/viewName";
-import { state, element, rename, runVerb, setGenerator, materials, openViews, storeys, type ElementDetail, type ViewSummary } from "./bimble";
+import { state, element, rename, runVerb, setGenerator, setView, materials, openViews, storeys, type ElementDetail, type ViewSummary } from "./bimble";
 import { classNoun, parseMm } from "./i18n/parts/modify";
 
 // Rendered inside `.props` (LeftPanel): rows as fr/View3D.html (view) and fr/SelectModify.html (element).
@@ -93,6 +93,19 @@ const planes = computed(() => {
   return PLANES.map((k) => ({ k, level: r[k]?.level === "associated" ? own : "", offset: r[k]?.offset_mm ?? 0 }));
 });
 
+// On paper: one `set_view` verb per changed field (change, Enter or blur).
+const SCALES = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
+const scales = computed(() => [...new Set([...SCALES, view.value?.scale ?? 100])].sort((a, b) => a - b));
+const viewError = ref<string | null>(null);
+function patchView(patch: Parameters<typeof setView>[1]): void {
+  viewError.value = view.value ? setView(view.value.id, patch) : null;
+}
+function commitOffset(k: (typeof PLANES)[number], old: number, e: Event): void {
+  const v = parseMm((e.target as HTMLInputElement).value);
+  if (v === null || v === old) return;
+  patchView({ range: { [k]: { offset_mm: v } } });
+}
+
 // The reference's four families; the other categories count as "other".
 const FAMILIES = [
   { key: "concrete", swatch: "var(--bb-sheet)" },
@@ -168,18 +181,19 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
   </template>
   <template v-else-if="view && onPaper">
     <div class="pn">{{ t('view.props', { name: viewName(view) }) }}</div>
-    <div class="row"><span class="k">{{ t('view.scale') }}</span><span class="sel-inp" style="width:100px" data-missing="set view scale (Command::SetView needs the whole View: no bimble.ts call)">1:{{ view.scale }}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
-    <div class="row"><span class="k">{{ t('onpaper.orientation') }}</span><span class="sel-inp" style="width:150px" data-missing="set view true_north (no bimble.ts call)">{{ t(view.true_north ? 'onpaper.trueNorth' : 'onpaper.projectNorth') }}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
+    <div class="row"><label class="k" for="view-scale">{{ t('view.scale') }}</label><select id="view-scale" class="sel-inp" style="width:100px" :value="view.scale" @change="patchView({ scale: Number(($event.target as HTMLSelectElement).value) })"><option v-for="n in scales" :key="n" :value="n">1:{{ n }}</option></select></div>
+    <div class="row"><label class="k" for="view-north">{{ t('onpaper.orientation') }}</label><select id="view-north" class="sel-inp" style="width:150px" :value="view.true_north ? 'true' : 'project'" @change="patchView({ true_north: ($event.target as HTMLSelectElement).value === 'true' })"><option value="project">{{ t('onpaper.projectNorth') }}</option><option value="true">{{ t('onpaper.trueNorth') }}</option></select></div>
     <div class="row"><span class="k">{{ t('view.phase') }}</span><span class="sel-inp" style="width:150px" data-missing="view phase filter"><span /><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
-    <div class="row"><span class="k">{{ t('onpaper.crop') }}</span><span class="sel-inp" style="width:110px" data-missing="set view crop (no bimble.ts call)">{{ t(view.crop ? 'onpaper.on' : 'onpaper.off') }}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
+    <div class="row"><label class="k" for="view-crop">{{ t('onpaper.crop') }}</label><select id="view-crop" class="sel-inp" style="width:110px" :value="view.crop ? 'on' : 'off'" data-missing="draw a crop rectangle (set_view takes one; no tool draws it)" @change="patchView({ crop: null })"><option value="on" :disabled="!view.crop">{{ t('onpaper.on') }}</option><option value="off">{{ t('onpaper.off') }}</option></select></div>
     <div class="sec">{{ t('onpaper.range') }}</div>
     <div v-for="p in planes" :key="p.k" class="row">
       <label class="k" :for="`range-${p.k}`">{{ t(`onpaper.${p.k}`) }}</label>
       <span style="display:inline-flex;gap:6px">
-        <span class="sel-inp" style="width:78px" :data-missing="p.level ? 'set view range level (no bimble.ts call)' : 'range plane storey name for above/below/unlimited (resolve in Rust)'"><span class="mono ell">{{ p.level }}</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
-        <input :id="`range-${p.k}`" class="inp mono" :value="grouped(p.offset)" readonly data-missing="set view range offset (no bimble.ts call)" style="width:70px;text-align:right">
+        <span class="sel-inp" style="width:78px" :data-missing="p.level ? 'set view range level (set_view takes offsets only)' : 'range plane storey name for above/below/unlimited (resolve in Rust)'"><span class="mono ell">{{ p.level }}</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+        <input :id="`range-${p.k}`" class="inp mono" :value="grouped(p.offset)" style="width:70px;text-align:right" @keydown.enter="commitOffset(p.k, p.offset, $event)" @blur="commitOffset(p.k, p.offset, $event)">
       </span>
     </div>
+    <p v-if="viewError" role="alert" class="error">{{ t('modify.error', { msg: viewError }) }}</p>
     <div class="sec">{{ t('onpaper.refs') }}</div>
     <div v-if="view.references" class="row" data-missing="reference names in query('views') (only a count today)"><span class="k">{{ t('nav.refs', { n: view.references }) }}</span></div>
     <div class="row"><span class="k">{{ t('onpaper.display') }}</span><span class="sel-inp" style="width:110px" data-missing="reference display style (no field in View)"><span /><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>

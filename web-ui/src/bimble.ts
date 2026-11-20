@@ -421,6 +421,14 @@ export function runVerb(name: string, args: unknown = {}): string | null {
 
 /** Set some of an element's sizes (generator field names, mm) as one undoable step. Returns the Rust error, or null. */
 export const setGenerator = (id: string, params: Record<string, number>) => runVerb("set_generator", { id, params });
+/** Change only the given fields of a view (`set_view`); `crop: null` removes the crop. */
+export type ViewPatch = {
+  scale?: number;
+  true_north?: boolean;
+  crop?: { min: [number, number]; max: [number, number] } | null;
+  range?: Partial<Record<"top" | "cut" | "bottom" | "depth", { offset_mm?: number }>>;
+};
+export const setView = (id: string, patch: ViewPatch) => runVerb("set_view", { id, ...patch });
 
 /** Select by GlobalId, primary first; `[]` clears. Returns the Rust error, or null. */
 export function select(ids: string[]): string | null {

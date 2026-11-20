@@ -20,7 +20,7 @@ pub struct VerbInfo {
     pub summary: &'static str,
 }
 
-const VERBS: [VerbInfo; 5] = [
+const VERBS: [VerbInfo; 6] = [
     VerbInfo {
         name: "place",
         summary: "Place a new column, beam, wall or slab on a storey (storey-relative mm).",
@@ -40,6 +40,10 @@ const VERBS: [VerbInfo; 5] = [
     VerbInfo {
         name: "set_generator",
         summary: "Change an element's sizes (width, height, length, depth, thickness), mm; missing ones are kept.",
+    },
+    VerbInfo {
+        name: "set_view",
+        summary: "Change a view's scale (1:N), true_north, crop (null: none) or plan range offsets, mm; missing ones are kept.",
     },
 ];
 
@@ -102,6 +106,53 @@ struct GeneratorParams {
     thickness: Option<f64>,
 }
 
+/// Arguments of `set_view`: the `View` fields to change, others kept.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SetViewArgs {
+    /// GlobalId of the view.
+    #[schemars(with = "String")]
+    id: GlobalId,
+    /// 1:N, N from 1 to 5000.
+    scale: Option<u32>,
+    /// Drawn in true north rather than project north.
+    true_north: Option<bool>,
+    /// The crop rectangle in the view's plane, world mm; null: no crop.
+    #[serde(default, deserialize_with = "some")]
+    crop: Option<Option<CropArgs>>,
+    /// A plan's view range: the planes' offsets from their levels, mm.
+    range: Option<RangeArgs>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CropArgs {
+    min: [f64; 2],
+    max: [f64; 2],
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RangeArgs {
+    top: Option<PlaneArgs>,
+    cut: Option<PlaneArgs>,
+    bottom: Option<PlaneArgs>,
+    depth: Option<PlaneArgs>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PlaneArgs {
+    offset_mm: Option<f64>,
+}
+
+/// A present field, even `null`, is `Some`: `crop: null` clears, a missing `crop` keeps.
+fn some<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NoArgs {}
@@ -123,6 +174,7 @@ pub fn describe(name: &str) -> Option<Value> {
         "move" | "copy" => schemars::schema_for!(MoveArgs),
         "delete" => schemars::schema_for!(IdsArgs),
         "set_generator" => schemars::schema_for!(SetGeneratorArgs),
+        "set_view" => schemars::schema_for!(SetViewArgs),
         _ => return None,
     };
     Some(s.to_value())
@@ -192,6 +244,7 @@ pub fn run(m: &Model, name: &str, args: Value) -> Result<Vec<Command>, String> {
         }
         "delete" => Ok(verbs::delete(&parse::<IdsArgs>(args)?.ids)),
         "set_generator" => set_generator(m, parse(args)?),
+        "set_view" => set_view(m, parse(args)?),
         _ => Err(format!("unknown verb {name:?}; known: {}", names())),
     }
 }
@@ -236,6 +289,60 @@ fn set_generator(m: &Model, a: SetGeneratorArgs) -> Result<Vec<Command>, String>
     Ok(vec![Command::SetGenerator {
         id: a.id,
         generator,
+    }])
+}
+
+/// One `SetView` (`AddView` for a default view): the view with the given fields replaced, validated as the command will be.
+fn set_view(m: &Model, a: SetViewArgs) -> Result<Vec<Command>, String> {
+    // A default view not changed yet isn't stored: the first change adds it (as the viewer does).
+    let old = bimble_core::view::effective(&m.views, &m.levels())
+        .into_iter()
+        .find(|v| v.id == a.id)
+        .ok_or(format!("no view {:?}", a.id))?;
+    let mut v = old.clone();
+    if let Some(s) = a.scale {
+        v.scale = s;
+    }
+    if let Some(t) = a.true_north {
+        v.true_north = t;
+    }
+    if let Some(c) = a.crop {
+        v.crop = match c {
+            Some(c) => {
+                mm("crop", &[c.min, c.max].concat())?;
+                Some(bimble_core::view::Crop {
+                    min: c.min,
+                    max: c.max,
+                })
+            }
+            None => None,
+        };
+    }
+    if let Some(r) = a.range {
+        let bimble_core::view::ViewKind::Plan { range, .. } = &mut v.kind else {
+            return Err(format!("view {}: only a plan has a view range", v.name));
+        };
+        for (k, p, plane) in [
+            ("top", r.top, &mut range.top),
+            ("cut", r.cut, &mut range.cut),
+            ("bottom", r.bottom, &mut range.bottom),
+            ("depth", r.depth, &mut range.depth),
+        ] {
+            if let Some(o) = p.and_then(|p| p.offset_mm) {
+                mm(k, &[o])?;
+                plane.offset_mm = o + 0.0; // no -0.0
+            }
+        }
+    }
+    v.validate(&m.levels())?;
+    // The same values again: no command, so no empty undo step.
+    if v == old {
+        return Ok(vec![]);
+    }
+    Ok(vec![if m.views.contains_key(&v.id) {
+        Command::SetView(v)
+    } else {
+        Command::AddView(v)
     }])
 }
 
@@ -291,7 +398,17 @@ mod tests {
     #[test]
     fn list_and_describe() {
         let n: Vec<_> = list().iter().map(|v| v.name).collect();
-        assert_eq!(n, ["place", "move", "copy", "delete", "set_generator"]);
+        assert_eq!(
+            n,
+            [
+                "place",
+                "move",
+                "copy",
+                "delete",
+                "set_generator",
+                "set_view"
+            ]
+        );
         let s = describe("place").unwrap();
         let p = s["properties"].as_object().unwrap();
         for k in ["kind", "storey", "a", "material"] {
@@ -487,6 +604,93 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("slab"), "{err}");
+        assert_eq!(m, before, "model unchanged");
+    }
+
+    fn first_plan(m: &Model) -> bimble_core::view::View {
+        bimble_core::view::effective(&m.views, &m.levels())
+            .into_iter()
+            .find(|v| matches!(v.kind, bimble_core::view::ViewKind::Plan { .. }))
+            .unwrap()
+    }
+
+    #[test]
+    fn set_view_changes_only_the_given_fields() {
+        let (mut m, _) = demo();
+        let old = first_plan(&m);
+        assert_eq!(old.scale, 100);
+        let cmds = run(&m, "set_view", json!({"id": old.id, "scale": 50})).unwrap();
+        assert_eq!(cmds.len(), 1);
+        History::default().apply(&mut m, cmds).unwrap();
+        let mut want = old.clone();
+        want.scale = 50;
+        assert_eq!(m.views[&old.id], want, "only the scale changed");
+        assert_eq!(
+            first_plan(&m),
+            want,
+            "the stored view replaces the default one"
+        );
+
+        let cmds = run(
+            &m,
+            "set_view",
+            json!({"id": old.id, "range": {"cut": {"offset_mm": 300}}}),
+        )
+        .unwrap();
+        History::default().apply(&mut m, cmds).unwrap();
+        let bimble_core::view::ViewKind::Plan { range, .. } = &m.views[&old.id].kind else {
+            unreachable!()
+        };
+        let bimble_core::view::ViewKind::Plan { range: was, .. } = &old.kind else {
+            unreachable!()
+        };
+        assert_eq!(range.cut.offset_mm, 300.0);
+        assert_ne!(was.cut.offset_mm, 300.0);
+        assert_eq!(
+            (range.top, range.bottom, range.depth),
+            (was.top, was.bottom, was.depth)
+        );
+        assert_eq!(range.cut.level, was.cut.level);
+
+        let crop = json!({"id": old.id, "crop": {"min": [0, 0], "max": [1000, 2000]}});
+        let cmds = run(&m, "set_view", crop).unwrap();
+        History::default().apply(&mut m, cmds).unwrap();
+        assert!(m.views[&old.id].crop.is_some());
+        let clear = json!({"id": old.id, "crop": null});
+        let cmds = run(&m, "set_view", clear).unwrap();
+        History::default().apply(&mut m, cmds).unwrap();
+        assert!(m.views[&old.id].crop.is_none());
+    }
+
+    #[test]
+    fn set_view_same_values_is_no_command() {
+        let (m, _) = demo();
+        let v = first_plan(&m);
+        let args = json!({"id": v.id, "scale": v.scale, "true_north": v.true_north});
+        assert!(run(&m, "set_view", args).unwrap().is_empty());
+        assert!(run(&m, "set_view", json!({"id": v.id})).unwrap().is_empty());
+    }
+
+    #[test]
+    fn set_view_refuses_bad_input() {
+        let (m, s) = demo();
+        let id = first_plan(&m).id;
+        let before = m.clone();
+        for args in [
+            json!({"id": s, "scale": 50}),
+            json!({"id": id, "scale": 0}),
+            json!({"id": id, "scale": 5001}),
+            json!({"id": id, "scale": 1.5}),
+            json!({"id": id, "range": {"cut": {"offset_mm": MAX_MM * 2.0}}}),
+            json!({"id": id, "range": {"cut": {"offset_mm": -5000}}}),
+            json!({"id": id, "range": {"cut": {"level": "above"}}}),
+            json!({"id": id, "crop": {"min": [10, 0], "max": [0, 10]}}),
+            json!({"id": id, "name": "x"}),
+        ] {
+            assert!(run(&m, "set_view", args.clone()).is_err(), "{args}");
+        }
+        // JSON has no NaN; the offset goes through `mm`, which refuses it.
+        assert!(mm("cut", &[f64::NAN]).is_err());
         assert_eq!(m, before, "model unchanged");
     }
 }
