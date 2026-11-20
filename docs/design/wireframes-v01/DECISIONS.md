@@ -60,3 +60,5 @@ marks the decisions he took himself.
 | 52 | Borrowed alert copy without data | sample names (Ana, B12) / the reference sentences with "—" and data-missing | "—" + data-missing | never fake data |
 | 53 | Borrowed alert wording is gendered ("elle", "her work") | keep / neutral rewrite | keep now, neutral rewrite when real owners show (open question) | Rust has no such data; Pierre to confirm the wording |
 | 54 | Borrowed alert "Annuler" | remove (ADR 0052) / keep | keep: it cancels the blocked change, not a form | it is a real choice, not a dialog Cancel |
+| 55 | Landmarks of one screen matched on others | generic selectors everywhere / an `only` list per screen-specific landmark | `only` list | `.props .pn` exists on every reference screen; it belongs to B1 only |
+| 56 | Placing hint copy | Rust hint (English) / UI keys by kind and click | UI keys; only the slab second click is from the reference, others follow its pattern | Rust hint is English only |

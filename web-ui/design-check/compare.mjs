@@ -97,6 +97,7 @@ for (const code of codes) {
 
   const boxes = [], styles = [], skipped = [];
   for (const name of Object.keys(landmarks)) {
+    if (landmarks[name].only && !landmarks[name].only.includes(code)) continue; // a landmark of other screens
     const a = ref.marks[name], b = got.marks[name];
     if (!a && !b) { skipped.push(name); continue; }
     if (!a || !b) { boxes.push({ name, ref: a?.box ?? null, lab: b?.box ?? null }); continue; }

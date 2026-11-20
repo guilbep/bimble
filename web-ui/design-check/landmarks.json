@@ -1,5 +1,5 @@
 {
-  "_doc": "name -> ref: CSS selector in docs/design/wireframes-v01 (first match; null = not found in the reference), lab: selector in the Vue lab.",
+  "_doc": "name -> ref: CSS selector in docs/design/wireframes-v01 (first match; null = not found in the reference), lab: selector in the Vue lab. Optional \"only\": [screen codes] limits a screen-specific landmark to its screens.",
   "quickbar": {
     "ref": "header.top",
     "lab": "[data-bb=\"quickbar\"]"
@@ -282,182 +282,317 @@
   },
   "file-menu": {
     "ref": "[role=menu]",
-    "lab": "[data-bb=\"file-menu\"]"
+    "lab": "[data-bb=\"file-menu\"]",
+    "only": [
+      "A2"
+    ]
   },
   "file-menu-new": {
     "ref": "[role=menu] > a:nth-of-type(1)",
-    "lab": "[data-bb=\"file-menu-new\"]"
+    "lab": "[data-bb=\"file-menu-new\"]",
+    "only": [
+      "A2"
+    ]
   },
   "file-menu-print": {
     "ref": "[role=menu] > a:nth-of-type(9)",
-    "lab": "[data-bb=\"file-menu-export-screen-D4\"]"
+    "lab": "[data-bb=\"file-menu-export-screen-D4\"]",
+    "only": [
+      "A2"
+    ]
   },
   "file-menu-quit": {
     "ref": "[role=menu] > a:last-child",
-    "lab": "[data-bb=\"file-menu-quit\"]"
+    "lab": "[data-bb=\"file-menu-quit\"]",
+    "only": [
+      "A2"
+    ]
   },
   "home": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"]",
-    "lab": "[data-bb=\"home\"]"
+    "lab": "[data-bb=\"home\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-disc": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div[aria-hidden]",
-    "lab": "[data-bb=\"home-disc\"]"
+    "lab": "[data-bb=\"home-disc\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-wordmark": {
     "ref": null,
-    "lab": "[data-bb=\"home-wordmark\"]"
+    "lab": "[data-bb=\"home-wordmark\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-eyebrow": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > .eyebrow",
-    "lab": "[data-bb=\"home-eyebrow\"]"
+    "lab": "[data-bb=\"home-eyebrow\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-title": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > h1",
-    "lab": "[data-bb=\"home-title\"]"
+    "lab": "[data-bb=\"home-title\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-lead": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > p:not(.note)",
-    "lab": "[data-bb=\"home-lead\"]"
+    "lab": "[data-bb=\"home-lead\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-open": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) .btn.p",
-    "lab": "[data-bb=\"home-open\"]"
+    "lab": "[data-bb=\"home-open\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-import": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) button:nth-of-type(1)",
-    "lab": "[data-bb=\"home-import\"]"
+    "lab": "[data-bb=\"home-import\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-new": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) button:nth-of-type(2)",
-    "lab": "[data-bb=\"home-new\"]"
+    "lab": "[data-bb=\"home-new\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-you": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > .card",
-    "lab": "[data-bb=\"home-you\"]"
+    "lab": "[data-bb=\"home-you\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-settings": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > .card > a",
-    "lab": "[data-bb=\"home-settings\"]"
+    "lab": "[data-bb=\"home-settings\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-drop": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(2) > p.note",
-    "lab": "[data-bb=\"home-drop\"]"
+    "lab": "[data-bb=\"home-drop\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-recent-title": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(3) h2",
-    "lab": "[data-bb=\"home-recent-title\"]"
+    "lab": "[data-bb=\"home-recent-title\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-filter": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(3) input",
-    "lab": "[data-bb=\"home-filter\"]"
+    "lab": "[data-bb=\"home-filter\"]",
+    "only": [
+      "A1"
+    ]
   },
   "home-recent": {
     "ref": "header.top + div[style*=\"padding:48px 56px\"] > div:nth-child(3) > div:nth-child(2)",
-    "lab": "[data-bb=\"home-recent\"]"
+    "lab": "[data-bb=\"home-recent\"]",
+    "only": [
+      "A1"
+    ]
   },
   "project-basic": {
     "ref": ".page section:first-child > h2",
-    "lab": "[data-bb=\"project-basic\"]"
+    "lab": "[data-bb=\"project-basic\"]",
+    "only": [
+      "A3"
+    ]
   },
   "project-field-1": {
     "ref": ".page .fld input",
-    "lab": "[data-bb=\"project-field-project_number\"]"
+    "lab": "[data-bb=\"project-field-project_number\"]",
+    "only": [
+      "A3"
+    ]
   },
   "project-field-6": {
     "ref": ".page section:first-child > .fld:nth-of-type(6) input",
-    "lab": "[data-bb=\"project-field-phase_description\"]"
+    "lab": "[data-bb=\"project-field-phase_description\"]",
+    "only": [
+      "A3"
+    ]
   },
   "project-id": {
     "ref": ".page section:first-child > div:last-child > span:nth-child(2)",
-    "lab": "[data-bb=\"project-id\"]"
+    "lab": "[data-bb=\"project-id\"]",
+    "only": [
+      "A3"
+    ]
   },
   "project-add-member": {
     "ref": ".page .btn.s",
-    "lab": "[data-bb=\"project-add-member\"]"
+    "lab": "[data-bb=\"project-add-member\"]",
+    "only": [
+      "A3"
+    ]
   },
   "project-team": {
     "ref": ".page table.t",
-    "lab": "[data-bb=\"project-team\"]"
+    "lab": "[data-bb=\"project-team\"]",
+    "only": [
+      "A3"
+    ]
   },
   "project-add-field": {
     "ref": ".page section:last-child > .qb",
-    "lab": "[data-bb=\"project-add-field\"]"
+    "lab": "[data-bb=\"project-add-field\"]",
+    "only": [
+      "A3"
+    ]
   },
   "history-title": {
     "ref": ".page h2",
-    "lab": "[data-bb=\"history-title\"]"
+    "lab": "[data-bb=\"history-title\"]",
+    "only": [
+      "C6"
+    ]
   },
   "history-branch": {
     "ref": ".page .sel-inp",
-    "lab": "[data-bb=\"history-branch\"]"
+    "lab": "[data-bb=\"history-branch\"]",
+    "only": [
+      "C6"
+    ]
   },
   "history-new-variant": {
     "ref": ".page .btn.s",
-    "lab": "[data-bb=\"history-new-variant\"]"
+    "lab": "[data-bb=\"history-new-variant\"]",
+    "only": [
+      "C6"
+    ]
   },
   "history-new-version": {
     "ref": ".page .card",
-    "lab": "[data-bb=\"history-new-version\"]"
+    "lab": "[data-bb=\"history-new-version\"]",
+    "only": [
+      "C6"
+    ]
   },
   "history-commit": {
     "ref": ".page .card .btn.p",
-    "lab": "[data-bb=\"history-commit\"]"
+    "lab": "[data-bb=\"history-commit\"]",
+    "only": [
+      "C6"
+    ]
   },
   "history-changes": {
     "ref": ".page table.t",
-    "lab": "[data-bb=\"history-changes\"]"
+    "lab": "[data-bb=\"history-changes\"]",
+    "only": [
+      "C6"
+    ]
   },
   "history-side-branch": {
     "ref": ".props > .pn",
-    "lab": "[data-bb=\"history-side-branch\"]"
+    "lab": "[data-bb=\"history-side-branch\"]",
+    "only": [
+      "C6"
+    ]
   },
   "shared-folder": {
     "ref": ".overlay > .dialog",
-    "lab": "[data-bb=\"shared-folder\"]"
+    "lab": "[data-bb=\"shared-folder\"]",
+    "only": [
+      "C1"
+    ]
   },
   "shared-folder-title": {
     "ref": ".dialog h2",
-    "lab": "[data-bb=\"shared-folder-title\"]"
+    "lab": "[data-bb=\"shared-folder-title\"]",
+    "only": [
+      "C1"
+    ]
   },
   "shared-folder-path": {
     "ref": ".dialog .inp",
-    "lab": "[data-bb=\"shared-folder-path\"]"
+    "lab": "[data-bb=\"shared-folder-path\"]",
+    "only": [
+      "C1"
+    ]
   },
   "shared-folder-browse": {
     "ref": ".dialog .btn.s",
-    "lab": "[data-bb=\"shared-folder-browse\"]"
+    "lab": "[data-bb=\"shared-folder-browse\"]",
+    "only": [
+      "C1"
+    ]
   },
   "shared-folder-case": {
     "ref": ".dialog fieldset",
-    "lab": "[data-bb=\"shared-folder-case\"]"
+    "lab": "[data-bb=\"shared-folder-case\"]",
+    "only": [
+      "C1"
+    ]
   },
   "shared-folder-author": {
     "ref": ".dialog .row a",
-    "lab": "[data-bb=\"shared-folder-author\"]"
+    "lab": "[data-bb=\"shared-folder-author\"]",
+    "only": [
+      "C1"
+    ]
   },
   "shared-folder-share": {
     "ref": ".dialog .btn.p",
-    "lab": "[data-bb=\"shared-folder-share\"]"
+    "lab": "[data-bb=\"shared-folder-share\"]",
+    "only": [
+      "C1"
+    ]
   },
   "place-title": {
     "ref": ".left .props .pn",
-    "lab": "[data-bb=\"place-title\"]"
+    "lab": "[data-bb=\"place-title\"]",
+    "only": [
+      "B1"
+    ]
   },
   "place-storey": {
     "ref": ".left .props .row:nth-of-type(2) .sel-inp",
-    "lab": "[data-bb=\"place-storey\"]"
+    "lab": "[data-bb=\"place-storey\"]",
+    "only": [
+      "B1"
+    ]
   },
   "place-thickness": {
     "ref": ".left .props .row:nth-of-type(3) input",
-    "lab": "[data-bb=\"place-thickness\"]"
+    "lab": "[data-bb=\"place-thickness\"]",
+    "only": [
+      "B1"
+    ]
   },
   "borrowed": {
     "ref": "[role=alertdialog]",
-    "lab": "[data-bb=\"borrowed\"]"
+    "lab": "[data-bb=\"borrowed\"]",
+    "only": [
+      "C2"
+    ]
   },
   "borrowed-banner": {
     "ref": "[role=alertdialog] > .banner",
-    "lab": "[data-bb=\"borrowed\"] > .banner"
+    "lab": "[data-bb=\"borrowed\"] > .banner",
+    "only": [
+      "C2"
+    ]
   }
 }
