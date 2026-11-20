@@ -209,8 +209,35 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
             let l = v.loaded.as_ref().ok_or("no model open")?;
             json(table_json(
                 &bimble_drawing::schedule::schedule(&l.scene, &def),
+                &l.scene,
                 MAX_LIST,
             ))
+        }
+        "sheet_svg" => {
+            #[derive(serde::Deserialize)]
+            struct Args {
+                id: String,
+            }
+            let a: Args = serde_json::from_str(args_json).map_err(|e| e.to_string())?;
+            let sh = v
+                .sheets()
+                .into_iter()
+                .find(|s| s.id.to_string() == a.id)
+                .ok_or_else(|| format!("no sheet with id {:?}", a.id))?;
+            let l = v.loaded.as_ref().ok_or("no model open")?;
+            // The options the egui sheet export uses (viewing.rs `export_sheet`).
+            let o = bimble_drawing::sheetdraw::SheetOptions {
+                style: v.opts.style.clone(),
+                template: v.plan.template.with_project(&v.project_info()),
+                project: l
+                    .path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                date: bimble_drawing::today(),
+            };
+            let (sheet, _) = bimble_drawing::sheetdraw::draw(&l.scene, &sh, &v.views, &o)?;
+            json(serde_json::json!({ "svg": sheet.to_svg() }))
         }
         _ => {
             let args = if args_json.trim().is_empty() {
@@ -240,8 +267,13 @@ fn capped(s: Option<&std::collections::BTreeSet<String>>) -> serde_json::Value {
     })
 }
 
-/// A schedule table as text cells, as the CSV writes them; at most `max` rows in all.
-fn table_json(t: &bimble_drawing::schedule::Table, max: usize) -> serde_json::Value {
+/// A schedule table as text cells, as the CSV writes them; at most `max` rows in all. Each group's
+/// `ids` gives, beside `rows`, the GlobalId of each row's element (null if not in the scene).
+fn table_json(
+    t: &bimble_drawing::schedule::Table,
+    scene: &bimble_geom::scene::Scene,
+    max: usize,
+) -> serde_json::Value {
     use bimble_drawing::schedule::Cell;
     let cells = |c: &[Cell]| c.iter().map(Cell::text).collect::<Vec<_>>();
     let mut left = max;
@@ -254,6 +286,10 @@ fn table_json(t: &bimble_drawing::schedule::Table, max: usize) -> serde_json::Va
             serde_json::json!({
                 "level": g.level,
                 "rows": g.rows[..n].iter().map(|r| cells(&r.cells)).collect::<Vec<_>>(),
+                "ids": g.rows[..n]
+                    .iter()
+                    .map(|r| scene.elements.get(r.element).map(|e| e.global_id.as_str()))
+                    .collect::<Vec<_>>(),
                 "subtotal": cells(&g.subtotal),
             })
         })

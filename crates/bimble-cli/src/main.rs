@@ -573,7 +573,8 @@ fn run(cli: Cli) -> Result<(), String> {
                 storeys,
                 ..Default::default()
             };
-            let m = demo::concrete_frame(&spec);
+            let mut m = demo::concrete_frame(&spec);
+            demo_sheet(&mut m).map_err(|x| x.to_string())?;
             file::save(&m, &out).map_err(e)?;
             println!("{} elements → {}", m.elements.len(), out.display());
         }
@@ -1727,5 +1728,85 @@ fn main() -> ExitCode {
             eprintln!("error: {msg}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// One sheet "S01" with the ground floor plan placed on it, so the demo shows a sheet.
+/// Ids are derived: the same demo every time.
+fn demo_sheet(m: &mut bimble_core::Model) -> Result<(), bimble_core::CommandError> {
+    use bimble_core::sheet::{Placed, Sheet};
+    use bimble_core::view::{Look, View, ViewKind, ViewRange};
+    let Some(ground) = m
+        .storeys
+        .values()
+        .filter(|s| s.elevation >= 0.0) // the footing storey (-800) is too thin for a 1.2 m cut
+        .min_by(|a, b| a.elevation.total_cmp(&b.elevation))
+        .map(|s| s.id)
+    else {
+        return Ok(());
+    };
+    let view = GlobalId::derived(b"demo/view/ground-plan");
+    let cmds = vec![
+        Command::AddView(View {
+            id: view,
+            name: "Ground floor plan".into(),
+            kind: ViewKind::Plan {
+                storey: ground.to_string(),
+                look: Look::Down,
+                range: ViewRange::default_for(Look::Down),
+            },
+            visibility: Default::default(),
+            references: Vec::new(),
+            annotations: Vec::new(),
+            true_north: false,
+            scale: 100,
+            crop: None,
+        }),
+        Command::AddSheet(Sheet {
+            id: GlobalId::derived(b"demo/sheet/S01"),
+            number: "S01".into(),
+            name: "Ground floor plan".into(),
+            paper: "A3".into(),
+            portrait: false,
+            fields: Default::default(),
+            placed: vec![Placed {
+                id: GlobalId::derived(b"demo/placed/S01"),
+                view,
+                scale: 100,
+                at_mm: [210.0, 148.5],
+            }],
+            texts: Vec::new(),
+        }),
+    ];
+    History::default().apply(m, cmds)
+}
+
+#[cfg(test)]
+mod demo_sheet_tests {
+    /// The demo's sheet draws: an SVG with its number in the title block.
+    #[test]
+    fn demo_sheet_draws_as_svg() {
+        let mut m = bimble_core::demo::concrete_frame(&Default::default());
+        super::demo_sheet(&mut m).unwrap();
+        let sh = m.sheets.values().next().unwrap().clone();
+        assert_eq!(sh.number, "S01");
+        let views: Vec<_> = m.views.values().cloned().collect();
+        let scene = bimble_geom::scene::Scene::from_model(&m);
+        let o = bimble_drawing::sheetdraw::SheetOptions {
+            style: Default::default(),
+            template: Default::default(),
+            project: "demo".into(),
+            date: String::new(),
+        };
+        let (sheet, info) = bimble_drawing::sheetdraw::draw(&scene, &sh, &views, &o).unwrap();
+        let svg = sheet.to_svg();
+        let body = svg.trim_start_matches(r#"<?xml version="1.0" encoding="UTF-8"?>"#);
+        assert!(
+            body.trim_start().starts_with("<svg"),
+            "{}",
+            &svg[..80.min(svg.len())]
+        );
+        assert!(svg.contains("S01"));
+        assert!(info.problems.is_empty(), "{:?}", info.problems);
     }
 }
