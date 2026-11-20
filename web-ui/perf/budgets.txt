@@ -1,0 +1,24 @@
+# The web budgets (make perf-web): the median of each benchmark over the
+# Lighthouse 12.6.1 mobile runs (simulated slow 4G, 4x slower CPU) of the
+# Vue lab page, on `bimble demo` models: Small (defaults, 72 elements) and
+# Large (20 x 20 bays, 10 storeys, 13261 elements). FCP, LCP and TBT are
+# Lighthouse's simulated values; WasmReady and ModelShown are the page's own
+# performance.measure from navigation start (src/bimble.ts), as observed, not
+# simulated. Bytes: total-byte-weight.
+# make perf-web fails when a median is over its budget by more than the
+# tolerance (15%). A budget moves down when the code gets faster; up only
+# with a reason written on its line, never to make a slower commit pass.
+#
+# name               budget  why
+SmallFCP             2500ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+SmallLCP             7500ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+SmallTBT             5ms     provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+SmallWasmReady       200ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+SmallModelShown      350ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+SmallBytes           35MB    provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LargeFCP             2500ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LargeLCP             3000ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LargeTBT             2500ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LargeWasmReady       200ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LargeModelShown      1000ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LargeBytes           36MB    provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
