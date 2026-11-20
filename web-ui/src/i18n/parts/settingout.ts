@@ -1,0 +1,31 @@
+// Copy for the Setting out tab's left panel (A6, fr/Implantation.html .props).
+export const fr = {
+  "settingout.title": "Point de base du projet",
+  "settingout.east": "Est (LV95)",
+  "settingout.north": "Nord (LV95)",
+  "settingout.elevation": "Altitude",
+  "settingout.angle": "Angle vers le nord géo.",
+  "settingout.system": "Système",
+  "settingout.readFrom": "Lu depuis",
+  "settingout.view": "Vue",
+  "settingout.orientation": "Orientation",
+  "settingout.projectNorth": "Nord projet",
+  "settingout.trueNorth": "Nord géo.",
+  "settingout.shown": "Coordonnées affichées",
+  "settingout.move": "Déplacer le point de base…",
+};
+export const en: Record<keyof typeof fr, string> = {
+  "settingout.title": "Project base point",
+  "settingout.east": "East (LV95)",
+  "settingout.north": "North (LV95)",
+  "settingout.elevation": "Elevation",
+  "settingout.angle": "Angle to true north",
+  "settingout.system": "System",
+  "settingout.readFrom": "Read from",
+  "settingout.view": "View",
+  "settingout.orientation": "Orientation",
+  "settingout.projectNorth": "Project north",
+  "settingout.trueNorth": "True north",
+  "settingout.shown": "Coordinates shown",
+  "settingout.move": "Move the base point…",
+};

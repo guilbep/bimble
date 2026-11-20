@@ -5,6 +5,7 @@ import PlaceSide from "./PlaceSide.vue";
 import { page } from "../pages";
 import { placing } from "../bimble";
 import CollabSide from "./CollabSide.vue";
+import SettingOutSide from "./SettingOutSide.vue";
 import { activeTab } from "./tabs";
 </script>
 
@@ -13,7 +14,7 @@ import { activeTab } from "./tabs";
   <aside class="left" data-bb="left-panel">
     <Navigator />
     <div class="props" data-bb="properties"><component :is="page()?.side ?? (placing?.active ? PlaceSide
-      : activeTab === 'collaborate' ? CollabSide : Properties)" /></div>
+      : activeTab === 'collaborate' ? CollabSide : activeTab === 'settingOut' ? SettingOutSide : Properties)" /></div>
   </aside>
 </template>
 
