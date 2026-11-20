@@ -96,7 +96,20 @@ impl Command {
     }
 
     /// Apply to the model. Returns the inverse command. On error the model is unchanged.
+    /// A new name must not be blank; an inverse applied by undo, redo or rollback goes through
+    /// `apply_inverse`, which may restore a blank name that came in with an IFC import.
     pub fn apply(self, m: &mut Model) -> Result<Command, CommandError> {
+        if let Command::Rename { name, .. } = &self
+            && name.trim().is_empty()
+        {
+            return Err(CommandError::Invalid("the name is empty".into()));
+        }
+        self.apply_inverse(m)
+    }
+
+    /// Apply without the checks on user input that a model's own state may not pass (a blank
+    /// name). Only for inverses returned by `apply`.
+    fn apply_inverse(self, m: &mut Model) -> Result<Command, CommandError> {
         use Command::*;
         match self {
             AddStorey(s) => {
@@ -409,7 +422,7 @@ impl History {
                 Ok(inv) => inverses.push(inv),
                 Err(e) => {
                     for inv in inverses.into_iter().rev() {
-                        inv.apply(m)
+                        inv.apply_inverse(m)
                             .expect("rollback of a just-applied command cannot fail");
                     }
                     return Err(e);
@@ -450,7 +463,7 @@ impl History {
         let mut inv: Vec<Command> = step
             .cmds
             .into_iter()
-            .map(|c| c.apply(m).expect("history inverse must apply"))
+            .map(|c| c.apply_inverse(m).expect("history inverse must apply"))
             .collect();
         inv.reverse();
         to.push(Step {
@@ -520,6 +533,47 @@ mod describe_tests {
             h.undo_label(),
             Some(format!("delete {} and 2 more changes", names[0]).as_str())
         );
+    }
+
+    /// A rename to a blank name is refused and changes nothing; an element imported without a
+    /// name can still be renamed, and undo gives back its empty name.
+    #[test]
+    fn rename_refuses_a_blank_name_and_undo_restores_an_empty_one() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        let id = *m.elements.keys().next().unwrap();
+        let old = m.elements[&id].name.clone();
+        let before = m.clone();
+        let mut h = History::default();
+        for blank in ["", "   ", " \t\n"] {
+            let rename = || Command::Rename {
+                id,
+                name: blank.into(),
+            };
+            let e = rename().apply(&mut m).unwrap_err();
+            assert_eq!(e.to_string(), "invalid: the name is empty");
+            let e = h.apply(&mut m, vec![rename()]).unwrap_err();
+            assert_eq!(e.to_string(), "invalid: the name is empty");
+            let json = format!(r#"{{"op":"rename","id":"{id}","name":{blank:?}}}"#);
+            let c: Command = serde_json::from_str(&json).unwrap();
+            assert!(c.apply(&mut m).is_err());
+            assert_eq!(m, before);
+        }
+        let p1 = || Command::Rename {
+            id,
+            name: "P1".into(),
+        };
+        h.apply(&mut m, vec![p1()]).unwrap();
+        assert_eq!(m.elements[&id].name, "P1");
+        assert!(h.undo(&mut m));
+        assert_eq!(m.elements[&id].name, old);
+        // As imported from IFC without a name: renaming works, undo and redo work both ways.
+        m.elements.get_mut(&id).unwrap().name = String::new();
+        h.apply(&mut m, vec![p1()]).unwrap();
+        assert_eq!(m.elements[&id].name, "P1");
+        assert!(h.undo(&mut m));
+        assert_eq!(m.elements[&id].name, "");
+        assert!(h.redo(&mut m));
+        assert_eq!(m.elements[&id].name, "P1");
     }
 
     /// Two materials of one name would be one in every list (materials page, schedules): renaming
