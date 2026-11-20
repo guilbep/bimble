@@ -24,12 +24,121 @@ export interface ElementDetail {
   properties: Record<string, string>;
 }
 
+/** `query("actions")`: one ribbon action and its state now. */
+export interface ActionState {
+  name: string;
+  label: string;
+  tab: string;
+  enabled: boolean;
+  pressed: boolean;
+  shortcut: string | null;
+}
+
+/** `query("history")`: top labels only, for now (bridge.rs). */
+export interface History {
+  undo: string[];
+  redo: string[];
+}
+
+/** First 50 ids and the total. */
+export interface Capped {
+  ids: string[];
+  count: number;
+}
+
+/** `query("visibility")`. Section box in mm relative to the scene origin. */
+export interface Visibility {
+  hidden_now: Capped;
+  isolated_now: Capped;
+  hidden_in_view: Capped;
+  isolated_in_view: Capped;
+  section_box: {
+    on: boolean;
+    box: { min: number[]; max: number[]; yaw: number } | null;
+    origin_mm: number[] | null;
+  };
+}
+
+export interface StoreySummary {
+  id: string;
+  name: string;
+  /** mm */
+  elevation: number;
+  element_count: number;
+}
+
+export interface MaterialSummary {
+  id: string;
+  name: string;
+  category: string;
+  element_count: number;
+}
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  info: Record<string, string>;
+}
+
+/** `query("views")`: kind fields flattened (`type`: "three_d" | "plan" | "section", ...). */
+export interface ViewSummary {
+  id: string;
+  name: string;
+  type: string;
+  scale: number;
+  crop: unknown;
+  true_north: boolean;
+  references: number;
+  annotations: number;
+  [kindField: string]: unknown;
+}
+
+export interface SheetSummary {
+  id: string;
+  number: string;
+  name: string;
+  paper: string;
+  portrait: boolean;
+  fields: Record<string, string>;
+  placed: unknown[];
+  texts: number;
+}
+
+/** `query("schedules")`: definitions as stored (bimble-core ScheduleDef). */
+export interface ScheduleDef {
+  name: string;
+  [field: string]: unknown;
+}
+
+/** `query("schedule_rows")`: text cells, at most 50 rows in all. */
+export interface ScheduleTable {
+  name: string;
+  columns: string[];
+  groups: { level: number; rows: string[][]; subtotal: string[] }[];
+  total: string[] | null;
+  count: number;
+  truncated: boolean;
+}
+
+// ponytail: shapes of `open_views` / `schedule_list` are typed loosely until their ticket lands.
+export interface OpenView {
+  id: string;
+  name: string;
+  [field: string]: unknown;
+}
+
+/** `query("verbs")` items and `query("describe")`: as bimble-api dispatch gives them. */
+export type VerbInfo = Record<string, unknown>;
+
 interface Wasm {
   default: () => Promise<unknown>;
   query(name: string, argsJson: string): string;
   apply(cmdsJson: string): void;
   undo(): void;
   redo(): void;
+  select(idsJson: string): void;
+  action(name: string): void;
+  verb(name: string, argsJson: string): void;
   on_change(cb: (json: string) => void): void;
 }
 
@@ -37,11 +146,24 @@ export const state = shallowRef<State>({ selection: [], rev: 0, unsaved: false, 
 /** Set when the viewer could not start. */
 export const startError = shallowRef<string | null>(null);
 
+// Wasm data: shallow refs, replaced as a whole after each change (never mutated in place).
+export const actions = shallowRef<ActionState[]>([]);
+export const historyLabels = shallowRef<History>({ undo: [], redo: [] });
+export const visibility = shallowRef<Visibility | null>(null);
+export const storeys = shallowRef<StoreySummary[]>([]);
+export const materials = shallowRef<MaterialSummary[]>([]);
+export const openViews = shallowRef<OpenView[]>([]);
+export const project = shallowRef<ProjectSummary | null>(null);
+
+let resolveReady!: () => void;
+/** Resolves once the viewer started; `start()` failing leaves it pending (see `startError`). */
+export const ready: Promise<void> = new Promise((r) => (resolveReady = r));
+
 // Served as is from public/bimble/ (npm run wasm), not bundled.
 const WASM = "/bimble/";
 let wasm: Wasm | null = null;
 
-function ready(): Wasm {
+function wasmOrThrow(): Wasm {
   if (!wasm) throw new Error("Bimble is not started");
   return wasm;
 }
@@ -76,8 +198,13 @@ export async function start(): Promise<void> {
         performance.mark("bimble:model-shown");
         performance.measure("bimble:model-shown", { start: 0, end: "bimble:model-shown" });
       }
-      queueMicrotask(() => (state.value = s));
+      queueMicrotask(() => {
+        const prev = state.value;
+        state.value = s;
+        refresh(prev.rev !== s.rev || prev.file !== s.file);
+      });
     });
+    resolveReady();
   } catch (e) {
     startError.value = message(e);
     throw e;
@@ -91,7 +218,7 @@ function message(e: unknown): string {
 
 export function element(id: string): ElementDetail {
   try {
-    return JSON.parse(ready().query("element", JSON.stringify({ id }))) as ElementDetail;
+    return JSON.parse(wasmOrThrow().query("element", JSON.stringify({ id }))) as ElementDetail;
   } catch (e) {
     throw new Error(message(e));
   }
@@ -100,7 +227,7 @@ export function element(id: string): ElementDetail {
 /** Rename one element as one undoable step. Returns the Rust error, or null. */
 export function rename(id: string, name: string): string | null {
   try {
-    ready().apply(JSON.stringify([{ op: "rename", id, name }]));
+    wasmOrThrow().apply(JSON.stringify([{ op: "rename", id, name }]));
     return null;
   } catch (e) {
     return message(e);
@@ -108,9 +235,70 @@ export function rename(id: string, name: string): string | null {
 }
 
 export function undo(): string | null {
-  try { ready().undo(); return null; } catch (e) { return message(e); }
+  try { wasmOrThrow().undo(); return null; } catch (e) { return message(e); }
 }
 
 export function redo(): string | null {
-  try { ready().redo(); return null; } catch (e) { return message(e); }
+  try { wasmOrThrow().redo(); return null; } catch (e) { return message(e); }
 }
+
+/** A query that may fail (no model yet, query not merged yet): the fallback instead. */
+function tryQuery<T>(name: string, fallback: T, args?: unknown): T {
+  try {
+    return query<T>(name, args);
+  } catch {
+    return fallback;
+  }
+}
+
+let timed = false;
+/** Refresh the shallow refs; model-derived lists only when the model changed. Runs deferred. */
+function refresh(modelChanged: boolean): void {
+  const t0 = performance.now();
+  actions.value = tryQuery<ActionState[]>("actions", []);
+  historyLabels.value = tryQuery<History>("history", { undo: [], redo: [] });
+  visibility.value = tryQuery<Visibility | null>("visibility", null);
+  openViews.value = tryQuery<OpenView[]>("open_views", []);
+  if (modelChanged) {
+    storeys.value = tryQuery<StoreySummary[]>("storeys", []);
+    materials.value = tryQuery<MaterialSummary[]>("materials", []);
+    project.value = tryQuery<ProjectSummary | null>("project", null);
+  }
+  if (!timed && modelChanged && state.value.file !== null) {
+    timed = true;
+    console.debug(`bimble: refresh after change ${(performance.now() - t0).toFixed(2)} ms`);
+  }
+}
+
+/** Typed query by name (bridge.rs, then bimble-api dispatch). Throws with the Rust message. */
+export function query<T>(name: string, args?: unknown): T {
+  try {
+    return JSON.parse(wasmOrThrow().query(name, args === undefined ? "{}" : JSON.stringify(args))) as T;
+  } catch (e) {
+    throw new Error(message(e));
+  }
+}
+
+/** Run one ribbon action by name (see `actions`). Returns the Rust error, or null. */
+export function runAction(name: string): string | null {
+  try { wasmOrThrow().action(name); return null; } catch (e) { return message(e); }
+}
+
+/** Run one API verb as one undoable step. Returns the Rust error, or null. */
+export function runVerb(name: string, args: unknown = {}): string | null {
+  try { wasmOrThrow().verb(name, JSON.stringify(args)); return null; } catch (e) { return message(e); }
+}
+
+/** Select by GlobalId, primary first; `[]` clears. Returns the Rust error, or null. */
+export function select(ids: string[]): string | null {
+  try { wasmOrThrow().select(JSON.stringify(ids)); return null; } catch (e) { return message(e); }
+}
+
+export const scheduleRows = (name: string) => query<ScheduleTable>("schedule_rows", { name });
+export const views = () => query<ViewSummary[]>("views");
+export const sheets = () => query<SheetSummary[]>("sheets");
+export const schedules = () => query<ScheduleDef[]>("schedules");
+/** Empty until the `schedule_list` query is merged. */
+export const scheduleList = () => tryQuery<unknown[]>("schedule_list", []);
+export const verbs = () => query<VerbInfo[]>("verbs");
+export const describe = (name: string) => query<VerbInfo>("describe", { name });
