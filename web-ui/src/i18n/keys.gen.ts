@@ -230,6 +230,7 @@ export type PartKey =
   | "placing.kind.wall"
   | "placing.slab.0"
   | "placing.slab.1"
+  | "placing.slab.polygon"
   | "placing.stop"
   | "placing.wall.0"
   | "placing.wall.1"

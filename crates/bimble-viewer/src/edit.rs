@@ -72,6 +72,9 @@ impl Form {
     }
 }
 
+/// A click this close to a polygon slab's first point closes the outline, mm.
+const CLOSE_MM: f64 = 100.0;
+
 /// Clicks collected for the element being placed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Placing {
@@ -103,6 +106,8 @@ pub struct PlacingPatch {
     /// Some of `Sizes`' fields, mm.
     pub sizes: Option<serde_json::Map<String, serde_json::Value>>,
     pub top_offset_mm: Option<f64>,
+    /// A slab's shape: "rectangle" (two corners) or "polygon" (a clicked outline).
+    pub polygon: Option<bool>,
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // bridge only
@@ -120,6 +125,13 @@ impl PlacingPatch {
                 "material" => p.material = Some(serde_json::from_value(x).map_err(e)?),
                 "sizes" => p.sizes = Some(serde_json::from_value(x).map_err(e)?),
                 "top_offset_mm" => p.top_offset_mm = Some(serde_json::from_value(x).map_err(e)?),
+                "shape" => {
+                    p.polygon = Some(match x.as_str() {
+                        Some("rectangle") => false,
+                        Some("polygon") => true,
+                        _ => return Err(format!("shape: {x} is not \"rectangle\" or \"polygon\"")),
+                    })
+                }
                 _ => return Err(format!("unknown field: {k}")),
             }
         }
@@ -140,6 +152,8 @@ pub struct Editor {
     pub sizes: Sizes,
     /// A new slab's top relative to where it goes today (flush with the level above), mm.
     pub top_offset_mm: f64,
+    /// New slabs from a clicked outline (each click a corner) instead of two corners.
+    pub polygon: bool,
     /// Material of new elements: a model material's name or a library grade; None: the first
     /// concrete of the model, else C30/37 (`new_element`).
     pub material: Option<String>,
@@ -220,6 +234,7 @@ impl Editor {
             storey,
             sizes: Sizes::default(),
             top_offset_mm: 0.0,
+            polygon: false,
             material: None,
             placing: None,
             commit_message: String::new(),
@@ -302,6 +317,16 @@ impl Editor {
     /// complete.
     pub fn click(&mut self, p: [f64; 2]) -> Option<Result<Vec<Command>, String>> {
         let placing = self.placing.as_mut()?;
+        if placing.kind == Kind::Slab && self.polygon {
+            let first = placing.points.first().copied();
+            if placing.points.len() >= 3
+                && first.is_some_and(|f| (f[0] - p[0]).hypot(f[1] - p[1]) <= CLOSE_MM)
+            {
+                return self.close_polygon();
+            }
+            placing.points.push(p);
+            return None;
+        }
         placing.points.push(p);
         if placing.points.len() < placing.kind.clicks() {
             return None;
@@ -331,6 +356,32 @@ impl Editor {
         Some(r)
     }
 
+    /// Close the polygon slab being clicked (Enter, or a click on its first point): one slab
+    /// with that outline. Fewer than 3 points or a crossing outline: an error, the points stay.
+    pub fn close_polygon(&mut self) -> Option<Result<Vec<Command>, String>> {
+        let placing = self.placing.as_mut()?;
+        if placing.kind != Kind::Slab || !self.polygon || placing.points.is_empty() {
+            return None;
+        }
+        let storey = self.storey?;
+        let mut r = bimble_api::verbs::new_slab(
+            &self.model,
+            storey,
+            &placing.points,
+            &self.sizes,
+            self.material.as_deref(),
+        );
+        if let Ok(cmds) = &mut r {
+            placing.points.clear();
+            for c in cmds {
+                if let Command::AddElement(e) = c {
+                    e.placement.origin[2] += self.top_offset_mm;
+                }
+            }
+        }
+        Some(r)
+    }
+
     /// What is placed, for the page (B1): kind, storey, material, sizes, points, hint.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // bridge only
     pub fn placing_json(&self) -> serde_json::Value {
@@ -347,7 +398,12 @@ impl Editor {
             "top_offset_mm": self.top_offset_mm,
             "points": self.placing.as_ref().map_or(&[][..], |p| &p.points[..]),
             "clicks_needed": kind.clicks(),
-            "hint": self.placing.as_ref().map(Placing::hint),
+            "shape": if self.polygon { "polygon" } else { "rectangle" },
+            "hint": self.placing.as_ref().map(|p| match (p.kind, self.polygon) {
+                (Kind::Slab, true) if p.points.len() < 3 => "Click the next corner of the slab.",
+                (Kind::Slab, true) => "Click the next corner; click the first corner or Enter closes.",
+                _ => p.hint(),
+            }),
         })
     }
 
@@ -389,6 +445,14 @@ impl Editor {
             ));
         }
         self.sizes = sizes;
+        if let Some(v) = p.polygon
+            && v != self.polygon
+        {
+            self.polygon = v;
+            if let Some(pl) = &mut self.placing {
+                pl.points.clear();
+            }
+        }
         if let Some(v) = p.top_offset_mm {
             self.top_offset_mm = v + 0.0; // no -0.0
         }
@@ -583,6 +647,20 @@ impl Editor {
                         ui.add(mm(&mut s.wall));
                     }
                     Kind::Slab => {
+                        ui.label("Shape");
+                        ui.horizontal(|ui| {
+                            for (v, l) in [(false, "Rectangle"), (true, "Polygon")] {
+                                if ui.selectable_label(self.polygon == v, l).clicked()
+                                    && self.polygon != v
+                                {
+                                    self.polygon = v;
+                                    if let Some(pl) = &mut self.placing {
+                                        pl.points.clear();
+                                    }
+                                }
+                            }
+                        });
+                        ui.end_row();
                         ui.label("Thickness");
                         ui.add(mm(&mut s.slab));
                         ui.end_row();
@@ -727,6 +805,63 @@ mod tests {
 
     /// AG: a slab's top offset. 0: the slab as before (top flush with the level above, origin
     /// z = storey height - thickness, by hand); -50: 50 mm lower; a bad value changes nothing.
+    #[test]
+    fn a_polygon_slab_from_clicked_corners() {
+        let (m, s) = demo();
+        let h = bimble_api::verbs::storey_height(&m, s);
+        let mut ed = Editor::new(m);
+        ed.storey = Some(s);
+        assert_eq!(ed.placing_json()["shape"], "rectangle");
+        assert!(patch(r#"{"shape": "round"}"#).is_err());
+        ed.set_placing(patch(r#"{"shape": "polygon", "kind": "slab"}"#).unwrap())
+            .unwrap();
+        assert_eq!(ed.placing_json()["shape"], "polygon");
+        ed.placing = Some(Placing {
+            kind: Kind::Slab,
+            points: vec![],
+        });
+        // 5 corners, counter-clockwise; the bounding box starts at (1000, 500).
+        for p in [
+            [1000.0, 500.0],
+            [5000.0, 500.0],
+            [5000.0, 3000.0],
+            [3000.0, 4000.0],
+            [1000.0, 3000.0],
+        ] {
+            assert!(ed.click(p).is_none());
+        }
+        // A click 50 mm from the first corner closes the outline.
+        let cmds = ed.click([1030.0, 540.0]).unwrap().unwrap();
+        let [Command::AddElement(e)] = &cmds[..] else {
+            panic!("one new slab: {cmds:?}")
+        };
+        assert_eq!(e.placement.origin, [1000.0, 500.0, h - ed.sizes.slab]);
+        let Generator::Slab { outline, .. } = &e.generator else {
+            panic!("a slab: {:?}", e.generator)
+        };
+        assert_eq!(
+            outline,
+            &vec![
+                [0.0, 0.0],
+                [4000.0, 0.0],
+                [4000.0, 2500.0],
+                [2000.0, 3500.0],
+                [0.0, 2500.0]
+            ]
+        );
+        assert!(ed.placing.as_ref().unwrap().points.is_empty());
+        // A bow-tie is refused on Enter; its points stay to be fixed.
+        for p in [[0.0, 0.0], [2000.0, 2000.0], [2000.0, 0.0], [0.0, 2000.0]] {
+            assert!(ed.click(p).is_none());
+        }
+        let err = ed.close_polygon().unwrap().unwrap_err();
+        assert!(err.contains("crosses itself"), "{err}");
+        assert_eq!(ed.placing.as_ref().unwrap().points.len(), 4);
+        // Two points: not an outline yet.
+        ed.placing.as_mut().unwrap().points.truncate(2);
+        assert!(ed.close_polygon().unwrap().is_err());
+    }
+
     #[test]
     fn a_slab_top_offset_moves_the_slab() {
         let (m, s) = demo();

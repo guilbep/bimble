@@ -237,20 +237,29 @@ pub fn new_element(
             if x1 - x0 < 10.0 || y1 - y0 < 10.0 {
                 return Err("the slab rectangle is too thin".into());
             }
-            (
-                Placement::at(x0, y0, h - sizes.slab),
-                Generator::Slab {
-                    outline: vec![
-                        [0.0, 0.0],
-                        [x1 - x0, 0.0],
-                        [x1 - x0, y1 - y0],
-                        [0.0, y1 - y0],
-                    ],
-                    thickness: sizes.slab,
-                },
-            )
+            return new_slab(
+                m,
+                storey,
+                &[[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+                sizes,
+                material,
+            );
         }
     };
+    Ok(add_element(
+        m, kind, storey, mat, add_mat, placement, generator,
+    ))
+}
+
+fn add_element(
+    m: &Model,
+    kind: Kind,
+    storey: GlobalId,
+    mat: GlobalId,
+    add_mat: Option<Command>,
+    placement: Placement,
+    generator: Generator,
+) -> Vec<Command> {
     let e = Element {
         id: GlobalId::new(),
         class: kind.class(),
@@ -263,10 +272,114 @@ pub fn new_element(
         properties: Default::default(),
         ifc_entity: None,
     };
-    Ok(add_mat
+    add_mat
         .into_iter()
         .chain([Command::AddElement(e)])
-        .collect())
+        .collect()
+}
+
+/// Commands placing a slab with the outline `pts` (storey-relative mm, at least 3 points, a
+/// simple polygon), hanging from the level above like `new_element`'s. The placement origin is
+/// the outline's lower-left bounding-box corner; the stored outline is relative to it and
+/// counter-clockwise.
+pub fn new_slab(
+    m: &Model,
+    storey: GlobalId,
+    pts: &[[f64; 2]],
+    sizes: &Sizes,
+    material: Option<&str>,
+) -> Result<Vec<Command>, String> {
+    if !m.storeys.contains_key(&storey) {
+        return Err("choose a storey".into());
+    }
+    if pts.len() < 3 {
+        return Err("a slab outline needs at least 3 points".into());
+    }
+    if pts
+        .iter()
+        .flatten()
+        .any(|v| !v.is_finite() || v.abs() > crate::dispatch::MAX_MM)
+    {
+        return Err("a slab outline point is out of range".into());
+    }
+    if !is_simple(pts) {
+        return Err("the slab outline crosses itself".into());
+    }
+    let area2: f64 = (0..pts.len())
+        .map(|i| {
+            let (p, q) = (pts[i], pts[(i + 1) % pts.len()]);
+            p[0] * q[1] - q[0] * p[1]
+        })
+        .sum();
+    if area2.abs() < 2.0 * 100.0 {
+        return Err("the slab outline is too small".into());
+    }
+    let h = storey_height(m, storey);
+    let (mat, add_mat) = self::material(m, material)?;
+    let x0 = pts.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+    let y0 = pts.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+    let mut outline: Vec<[f64; 2]> = pts
+        .iter()
+        .map(|p| [p[0] - x0 + 0.0, p[1] - y0 + 0.0])
+        .collect();
+    if area2 < 0.0 {
+        outline.reverse();
+    }
+    Ok(add_element(
+        m,
+        Kind::Slab,
+        storey,
+        mat,
+        add_mat,
+        Placement::at(x0, y0, h - sizes.slab),
+        Generator::Slab {
+            outline,
+            thickness: sizes.slab,
+        },
+    ))
+}
+
+/// No two edges of the closed polygon touch, except neighbours at their shared corner; no
+/// repeated corner. ponytail: O(n²) over edges, fine for hand-clicked outlines.
+fn is_simple(p: &[[f64; 2]]) -> bool {
+    let n = p.len();
+    let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    };
+    let on = |a: [f64; 2], b: [f64; 2], q: [f64; 2]| {
+        cross(a, b, q) == 0.0
+            && q[0] >= a[0].min(b[0])
+            && q[0] <= a[0].max(b[0])
+            && q[1] >= a[1].min(b[1])
+            && q[1] <= a[1].max(b[1])
+    };
+    let meet = |a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]| {
+        let (d1, d2) = (cross(c, d, a), cross(c, d, b));
+        let (d3, d4) = (cross(a, b, c), cross(a, b, d));
+        (d1 * d2 < 0.0 && d3 * d4 < 0.0) || on(c, d, a) || on(c, d, b) || on(a, b, c) || on(a, b, d)
+    };
+    for i in 0..n {
+        for j in i + 1..n {
+            let (a, b) = (p[i], p[(i + 1) % n]);
+            let (c, d) = (p[j], p[(j + 1) % n]);
+            if j == i + 1 || (i == 0 && j == n - 1) {
+                // Neighbours share one corner: they must not fold back onto each other.
+                let (shared, x, y) = if j == i + 1 { (b, a, d) } else { (a, b, c) };
+                if shared == x
+                    || shared == y
+                    || (cross(shared, x, y) == 0.0 && on(shared, x, y))
+                    || (cross(shared, x, y) == 0.0 && on(shared, y, x))
+                {
+                    return false;
+                }
+                continue;
+            }
+            if meet(a, b, c, d) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Move elements by `d` (mm).

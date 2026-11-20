@@ -88,7 +88,7 @@ const above = computed(() => {
       </div>
       <div class="row">
         <span class="k">{{ t('placeslab.shape') }}</span>
-        <span class="seg"><span class="on">{{ t('placeslab.rectangle') }}</span><span class="off" data-missing="polygon slab">{{ t('placeslab.polygon') }}</span><span class="off" data-missing="sloped slab">{{ t('placeslab.sloped') }}</span></span>
+        <span class="seg"><span v-for="sh in (['rectangle', 'polygon'] as const)" :key="sh" role="button" tabindex="0" :class="{ on: placing.shape === sh }" :aria-pressed="placing.shape === sh" @click="apply({ shape: sh })" @keydown.enter.space.prevent="apply({ shape: sh })">{{ t(`placeslab.${sh}`) }}</span><span class="off" data-missing="sloped slab: the Slab generator has a flat outline and one thickness; a slope needs a slope (%) and a direction in Generator::Slab and a tilted extrusion">{{ t('placeslab.sloped') }}</span></span>
       </div>
       <div class="row">
         <label class="k" for="ps-slope">{{ t('placeslab.slope') }}</label>

@@ -2737,6 +2737,14 @@ impl Viewer {
                     None => {}
                 }
             }
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                let ed = self.loaded.as_mut().and_then(|l| l.edit.as_mut()).unwrap();
+                match ed.close_polygon() {
+                    Some(Ok(cmds)) => self.apply_commands(cmds),
+                    Some(Err(e)) => ed.message = Some(e),
+                    None => {}
+                }
+            }
             return;
         }
         if self.measure_on {

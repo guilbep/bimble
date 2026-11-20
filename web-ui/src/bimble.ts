@@ -167,6 +167,8 @@ export interface Placing {
   offset_mm: number[];
   /** A new slab's top relative to the level above, mm. */
   top_offset_mm: number;
+  /** A new slab's shape: two corners, or a clicked outline (Enter or a click on the first point closes it). */
+  shape: "rectangle" | "polygon";
   points: number[][];
   clicks_needed: number;
   hint: string | null;
@@ -357,7 +359,7 @@ export function setProject(project: Record<string, string>): string | null {
 }
 
 /** Change what is placed: `{kind?, storey?, material?, sizes?}`, all or nothing. Returns the Rust error, or null. */
-export function setPlacing(patch: { kind?: Placing["kind"]; storey?: string; material?: string; sizes?: Partial<Placing["sizes"]>; top_offset_mm?: number }): string | null {
+export function setPlacing(patch: { kind?: Placing["kind"]; storey?: string; material?: string; sizes?: Partial<Placing["sizes"]>; top_offset_mm?: number; shape?: Placing["shape"] }): string | null {
   try {
     wasmOrThrow().set_placing(JSON.stringify(patch));
     return null;
