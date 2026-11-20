@@ -32,5 +32,9 @@
   "viewport":       { "ref": ".main > .vp",                "lab": "[data-bb=\"viewport\"]" },
   "modifier":       { "ref": ".vp + div",            "lab": "[data-bb=\"modifier\"]" },
   "statusbar":      { "ref": "footer.status",              "lab": "[data-bb=\"statusbar\"]" },
-  "status-chips":   { "ref": ".status > .chip",               "lab": "[data-bb=\"status-chips\"]" }
+  "status-hint":    { "ref": ".status > .hint",               "lab": "[data-bb=\"status-hint\"]" },
+  "status-coords":  { "ref": ".status > .hint + .mono.q",     "lab": "[data-bb=\"status-coords\"]" },
+  "status-chips":   { "ref": ".status > .chip",               "lab": "[data-bb=\"status-chips\"]" },
+  "status-counts":  { "ref": ".status > .mono.q ~ .mono.q",   "lab": "[data-bb=\"status-counts\"]" },
+  "status-lang":    { "ref": ".status > .seg",                "lab": "[data-bb=\"status-lang\"]" }
 }
