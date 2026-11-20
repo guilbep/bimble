@@ -451,5 +451,13 @@
   "place-thickness": {
     "ref": ".left .props .row:nth-of-type(3) input",
     "lab": "[data-bb=\"place-thickness\"]"
+  },
+  "borrowed": {
+    "ref": "[role=alertdialog]",
+    "lab": "[data-bb=\"borrowed\"]"
+  },
+  "borrowed-banner": {
+    "ref": "[role=alertdialog] > .banner",
+    "lab": "[data-bb=\"borrowed\"] > .banner"
   }
 }
