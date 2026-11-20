@@ -2,10 +2,11 @@
 // ?tab=<TabId>&view=3d|plan:<storey name or index>|<GlobalId>&select=first|first:<IfcClass>|<id,id>
 //  &page=<id>&dialog=<id>&panel=<id>&paper=1&action=<name,name>&edit=move-first-beam
 // edit=move-first-beam: one real `move` verb (first IfcBeam, 1 mm in x): unsaved, one undo step.
+// view=plan:N opens the plan as the first tab, the 3D view after it (close and re-open 3D).
 // Each wasm step waits for the next state change (or 1 s) before the next one; never called inside on_change.
 // data-bb-ready is set when all steps are done: the design check waits for it.
 import { watch } from "vue";
-import { modelReady, state, storeys, openView, select, runAction, runVerb, openViews, query, type ViewSummary } from "./bimble";
+import { modelReady, state, storeys, openView, select, runAction, runVerb, tabCall, openViews, query, type ViewSummary } from "./bimble";
 import { activeTab, isTabId } from "./shell/tabs";
 import { currentPage } from "./pages";
 import { currentDialog } from "./dialogs";
@@ -56,6 +57,15 @@ export async function applyDeepLink(): Promise<void> {
     if (view) {
       const id = viewId(view);
       if (id) await step("view", () => openView(id)); else console.warn(`deep link view: none for ${view}`);
+      // The 3D tab was open before the plan: close and re-open it so it comes after, then back to the plan.
+      const d3 = viewId("3d");
+      const tabs = openViews.value.tabs;
+      const at = (vid: string | null) => tabs.findIndex((t) => t.type === "view" && t.id === vid);
+      if (id && view.startsWith("plan:") && d3 && at(d3) >= 0 && at(d3) < at(id)) {
+        await step("view 3d close", () => tabCall("close", { type: "view", id: d3 }));
+        await step("view 3d open", () => openView(d3));
+        await step("view plan", () => tabCall("activate", { type: "view", id }));
+      }
     }
     const sel = q.get("select");
     if (sel) await step("select", () => select(selection(sel)));

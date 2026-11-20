@@ -27,6 +27,7 @@ Vue only shows things. All logic stays in Rust: `src/bimble.ts` is the one typed
 The address names a state of the lab (`src/deeplink.ts`, read once after the model loads):
 `?url=/frame.bimble&tab=concrete&view=3d|plan:<storey name or index>|<GlobalId>&select=first|first:IfcBeam|<id,id>&page=<id>&dialog=<id>&panel=<id>&paper=1&action=<name,name>&edit=move-first-beam`.
 `edit=move-first-beam` runs one real `move` verb (the first IfcBeam, 1 mm in x) first: the model is unsaved with one undo step, as the references show.
+`view=plan:N` puts the plan tab first and the 3D tab after it (Rust tab calls: close and re-open 3D), as the references show.
 Each wasm step waits for the next state change. `data-bb-ready` is set after the last step: the design check waits for it.
 `design-check/screens.json` gives the deep link of each screen (`lab`).
 
