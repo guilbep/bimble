@@ -75,6 +75,8 @@ function blank(png, box) {
 
 const browser = await chromium.launch({ channel: "chrome" });
 const ctx = await browser.newContext({ viewport: VIEW, deviceScaleFactor: 1 });
+// The lab reads its language from localStorage (web-ui/src/i18n): set it to the reference's.
+await ctx.addInitScript((l) => { try { localStorage.setItem("bimble.lang", l); } catch {} }, lang);
 const page = await ctx.newPage();
 mkdirSync(outDir, { recursive: true });
 let failed = false;
