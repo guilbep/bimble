@@ -10,6 +10,10 @@ use bimble_render::{
     Camera, ClipBox, DrawOptions, GpuScene, GraphicStyle, Overlay, Renderer, Style, Target,
 };
 use eframe::egui::{self, Color32, PointerButton, Sense, Vec2};
+
+/// Accent of on-canvas controls (view cube, section-box handles): ink.
+/// Pink is selection only (ADR 0049).
+const CONTROL_ACCENT: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
 use eframe::egui_wgpu;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -3327,8 +3331,8 @@ impl Viewer {
         if !rect.contains_rect(cube) {
             return;
         }
-        let a = self.opts.style.selection.0;
-        let accent = Color32::from_rgb(a[0], a[1], a[2]);
+        // Pink is selection only (ADR 0049): the cube's accent is ink.
+        let accent = CONTROL_ACCENT;
         // 2D views are seen square on: no cube, no Home.
         let flat = self.in_2d();
         // The cube and its compass are the building's (project north, ADR 0045): its FRONT is the
@@ -4971,8 +4975,7 @@ impl eframe::App for Viewer {
                     &self.loaded,
                 ) {
                     let vp = self.camera.view_proj(aspect, &l.bounds);
-                    let a = self.opts.style.selection.0;
-                    let accent = Color32::from_rgb(a[0], a[1], a[2]);
+                    let accent = CONTROL_ACCENT;
                     if section::overlay(ui, rect, &vp, &mut b, accent) {
                         self.section_box = Some(b);
                         self.needs_render = true;
