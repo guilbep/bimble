@@ -783,5 +783,152 @@
     "only": [
       "D5"
     ]
+  },
+  "lca": {
+    "ref": ".page",
+    "lab": "[data-bb=\"page\"]",
+    "only": [
+      "D7"
+    ]
+  },
+  "lca-title": {
+    "ref": ".page h2",
+    "lab": "[data-bb=\"lca-title\"]",
+    "only": [
+      "D7"
+    ]
+  },
+  "lca-export": {
+    "ref": ".page .btn.p",
+    "lab": "[data-bb=\"lca-export\"]",
+    "only": [
+      "D7"
+    ]
+  },
+  "settingout-orientation": {
+    "ref": ".props .sel-inp",
+    "lab": "[data-bb=\"settingout-orientation\"]",
+    "only": [
+      "A6"
+    ]
+  },
+  "settingout-move": {
+    "ref": ".props .btn.s",
+    "lab": "[data-bb=\"settingout-move\"]",
+    "only": [
+      "A6"
+    ]
+  },
+  "export": {
+    "ref": ".dialog[role=dialog]",
+    "lab": "[data-bb=\"export\"]",
+    "only": [
+      "D4"
+    ]
+  },
+  "export-sheets": {
+    "ref": ".dialog .card",
+    "lab": "[data-bb=\"export-sheets\"]",
+    "only": [
+      "D4"
+    ]
+  },
+  "export-format": {
+    "ref": ".dialog .seg",
+    "lab": "[data-bb=\"export-format\"]",
+    "only": [
+      "D4"
+    ]
+  },
+  "export-go": {
+    "ref": ".dialog .btn.p",
+    "lab": "[data-bb=\"export-go\"]",
+    "only": [
+      "D4"
+    ]
+  },
+  "site-side-title": {
+    "ref": ".props .pn",
+    "lab": "[data-bb=\"site-side-title\"]",
+    "only": [
+      "A8"
+    ]
+  },
+  "levels-grids": {
+    "ref": ".page",
+    "lab": "[data-bb=\"page\"]",
+    "only": [
+      "A7"
+    ]
+  },
+  "levels-table": {
+    "ref": ".page table.t",
+    "lab": "[data-bb=\"levels-table\"]",
+    "only": [
+      "A7"
+    ]
+  },
+  "phases-title": {
+    "ref": ".page h2",
+    "lab": "[data-bb=\"phases-title\"]",
+    "only": [
+      "A5"
+    ]
+  },
+  "phases-tabs": {
+    "ref": ".page .seg",
+    "lab": "[data-bb=\"phases-tabs\"]",
+    "only": [
+      "A5"
+    ]
+  },
+  "phases-filters": {
+    "ref": ".page table.t",
+    "lab": "[data-bb=\"phases-filters\"]",
+    "only": [
+      "A5"
+    ]
+  },
+  "phases-add-filter": {
+    "ref": ".page button.qb",
+    "lab": "[data-bb=\"phases-add-filter\"]",
+    "only": [
+      "A5"
+    ]
+  },
+  "team-member": {
+    "ref": "aside[aria-label=\"Intervenant\"]",
+    "lab": "[data-bb=\"team-member\"]",
+    "only": [
+      "A4"
+    ]
+  },
+  "team-member-title": {
+    "ref": "aside[aria-label=\"Intervenant\"] h2",
+    "lab": "[data-bb=\"team-member-title\"]",
+    "only": [
+      "A4"
+    ]
+  },
+  "team-member-close": {
+    "ref": "aside[aria-label=\"Intervenant\"] a.ib",
+    "lab": "[data-bb=\"team-member-close\"]",
+    "only": [
+      "A4"
+    ]
+  },
+  "team-member-mine": {
+    "ref": "aside[aria-label=\"Intervenant\"] input[type=checkbox]",
+    "lab": "[data-bb=\"team-member-mine\"]",
+    "only": [
+      "A4"
+    ]
+  },
+  "team-member-add-info": {
+    "ref": "aside[aria-label=\"Intervenant\"] button.qb",
+    "lab": "[data-bb=\"team-member-add-info\"]",
+    "only": [
+      "A4"
+    ]
   }
 }

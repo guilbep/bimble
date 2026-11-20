@@ -42,6 +42,76 @@
       "own_styles": 6
     }
   },
+  "A4": {
+    "fr": {
+      "boxes": 13,
+      "styles": 20,
+      "own_boxes": 1,
+      "own_styles": 8
+    },
+    "en": {
+      "boxes": 17,
+      "styles": 12,
+      "own_boxes": 5,
+      "own_styles": 0
+    }
+  },
+  "A5": {
+    "fr": {
+      "boxes": 10,
+      "styles": 17,
+      "own_boxes": 2,
+      "own_styles": 5
+    },
+    "en": {
+      "boxes": 10,
+      "styles": 17,
+      "own_boxes": 2,
+      "own_styles": 5
+    }
+  },
+  "A6": {
+    "fr": {
+      "boxes": 13,
+      "styles": 23,
+      "own_boxes": 2,
+      "own_styles": 3
+    },
+    "en": {
+      "boxes": 19,
+      "styles": 23,
+      "own_boxes": 2,
+      "own_styles": 3
+    }
+  },
+  "A7": {
+    "fr": {
+      "boxes": 28,
+      "styles": 39,
+      "own_boxes": 1,
+      "own_styles": 0
+    },
+    "en": {
+      "boxes": 28,
+      "styles": 39,
+      "own_boxes": 1,
+      "own_styles": 0
+    }
+  },
+  "A8": {
+    "fr": {
+      "boxes": 12,
+      "styles": 21,
+      "own_boxes": 1,
+      "own_styles": 0
+    },
+    "en": {
+      "boxes": 12,
+      "styles": 21,
+      "own_boxes": 1,
+      "own_styles": 0
+    }
+  },
   "B1": {
     "fr": {
       "boxes": 14,
@@ -154,6 +224,20 @@
       "own_styles": 1
     }
   },
+  "D4": {
+    "fr": {
+      "boxes": 19,
+      "styles": 20,
+      "own_boxes": 4,
+      "own_styles": 0
+    },
+    "en": {
+      "boxes": 19,
+      "styles": 20,
+      "own_boxes": 4,
+      "own_styles": 0
+    }
+  },
   "D5": {
     "fr": {
       "boxes": 22,
@@ -180,6 +264,20 @@
       "styles": 36,
       "own_boxes": 2,
       "own_styles": 8
+    }
+  },
+  "D7": {
+    "fr": {
+      "boxes": 13,
+      "styles": 19,
+      "own_boxes": 0,
+      "own_styles": 0
+    },
+    "en": {
+      "boxes": 14,
+      "styles": 19,
+      "own_boxes": 0,
+      "own_styles": 0
     }
   },
   "D8": {

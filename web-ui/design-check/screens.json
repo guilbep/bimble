@@ -23,35 +23,35 @@
   },
   "A4": {
     "ref": "TeamMember.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=project&page=project-info&dialog=team-member&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "A5": {
     "ref": "Phases.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=project&page=phases&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "A6": {
     "ref": "Implantation.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=settingOut&view=plan:1&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "A7": {
     "ref": "LevelsGrids.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&page=levels-grids&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
   },
   "A8": {
     "ref": "Terrain.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=site&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
@@ -149,7 +149,7 @@
   },
   "D4": {
     "ref": "Export.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=sheets&page=sheets&dialog=export&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
@@ -170,7 +170,7 @@
   },
   "D7": {
     "ref": "LCA.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=lca&page=lca&edit=move-first-beam",
     "mask": [
       "viewport"
     ]
