@@ -1,0 +1,20 @@
+{
+  "_doc": "name -> ref: CSS selector in docs/design/wireframes-v01 (first match; null = not found in the reference), lab: selector in the Vue lab.",
+  "quickbar":       { "ref": "header.top",                 "lab": "[data-bb=\"quickbar\"]" },
+  "quickbar-logo":  { "ref": "header.top > a.ib",          "lab": "[data-bb=\"quickbar-logo\"]" },
+  "quickbar-file":  { "ref": "header.top > a.qb",          "lab": "[data-bb=\"quickbar-file\"]" },
+  "filename":       { "ref": ".fname > span:first-child",  "lab": "[data-bb=\"filename\"]" },
+  "state-chip":     { "ref": ".fname > .chip",             "lab": "[data-bb=\"state-chip\"]" },
+  "command-field":  { "ref": "a.cmdk",                     "lab": "[data-bb=\"command-field\"]" },
+  "tabsbar":        { "ref": "nav.tabs",                   "lab": "[data-bb=\"tabsbar\"]" },
+  "ribbon":         { "ref": ".ribbon",                    "lab": "[data-bb=\"ribbon\"]" },
+  "left-panel":     { "ref": "aside.left",                 "lab": "[data-bb=\"left-panel\"]" },
+  "navigator":      { "ref": "aside.left > nav.nav",       "lab": "[data-bb=\"navigator\"]" },
+  "properties":     { "ref": "aside.left > .props",        "lab": "[data-bb=\"properties\"]" },
+  "viewtabs":       { "ref": ".main > .vtabs",             "lab": "[data-bb=\"viewtabs\"]" },
+  "view-switch":    { "ref": ".vp > div:has(> button.ib)", "lab": "[data-bb=\"view-switch\"]" },
+  "viewport":       { "ref": ".main > .vp",                "lab": "[data-bb=\"viewport\"]" },
+  "modifier":       { "ref": ".main > section",            "lab": "[data-bb=\"modifier\"]" },
+  "statusbar":      { "ref": "footer.status",              "lab": "[data-bb=\"statusbar\"]" },
+  "status-chips":   { "ref": null,                         "lab": "[data-bb=\"status-chips\"]" }
+}

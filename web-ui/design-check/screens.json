@@ -1,0 +1,185 @@
+{
+  "_doc": "code -> ref: file under docs/design/wireframes-v01/<lang>/, lab: path appended to --lab <base-url> (empty until the shell exists), mask: landmarks blanked before the pixel diff.",
+  "A1": {
+    "ref": "Home.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "A2": {
+    "ref": "FileMenu.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "A3": {
+    "ref": "ProjectInfo.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "A4": {
+    "ref": "TeamMember.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "A5": {
+    "ref": "Phases.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "A6": {
+    "ref": "Implantation.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "A7": {
+    "ref": "LevelsGrids.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "A8": {
+    "ref": "Terrain.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "B1": {
+    "ref": "PlaceSlab.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "B2": {
+    "ref": "SelectModify.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "B3": {
+    "ref": "Rebar.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "B4": {
+    "ref": "Steel.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "C1": {
+    "ref": "SharedFolder.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "C2": {
+    "ref": "Borrowed.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "C3": {
+    "ref": "Conflicts.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "C4": {
+    "ref": "Users.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "C5": {
+    "ref": "Subprojects.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "C6": {
+    "ref": "History.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "D1": {
+    "ref": "View3D.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "D2": {
+    "ref": "PlanOnPaper.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "D3": {
+    "ref": "SheetLayout.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "D4": {
+    "ref": "Export.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "D5": {
+    "ref": "Standards.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "D6": {
+    "ref": "Quantities.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "D7": {
+    "ref": "LCA.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  },
+  "D8": {
+    "ref": "Palette.html",
+    "lab": "",
+    "mask": [
+      "viewport"
+    ]
+  }
+}
