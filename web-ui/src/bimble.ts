@@ -283,6 +283,7 @@ export async function start(): Promise<void> {
       });
     });
     watchPointer();
+    labelTextAgent();
     // ponytail: one 1 s timer for the whole session; it queries only while the viewer draws.
     setInterval(() => { if (status.value && !status.value.idle) status.value = tryQuery<Status | null>("status", null); }, 1000);
     resolveReady();
@@ -290,6 +291,18 @@ export async function start(): Promise<void> {
     startError.value = message(e);
     throw e;
   }
+}
+
+/** eframe 0.37 inserts a hidden `<input type=text>` (its IME text agent) right after the canvas,
+ *  with no name and no option to set one; it takes focus, so it needs a label, not aria-hidden.
+ *  ponytail: polls 50 ms until eframe inserted it; stops after 10 s. */
+function labelTextAgent(): void {
+  let tries = 0;
+  const id = window.setInterval(() => {
+    const el = document.querySelector<HTMLInputElement>("#bimble ~ input:not([aria-label])");
+    if (el) el.setAttribute("aria-label", document.documentElement.lang === "fr" ? "Saisie clavier de la vue" : "Viewer keyboard input");
+    if (el || ++tries > 200) clearInterval(id);
+  }, 50);
 }
 
 /** Poll `query("pointer")` every 100 ms while the pointer is over #bimble, on an animation frame

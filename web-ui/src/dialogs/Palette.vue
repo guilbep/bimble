@@ -158,4 +158,6 @@ onBeforeUnmount(() => ro?.disconnect());
 .lab { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* .note{font-size:13px;color:#5C574D} */
 .note { font-size: 13px; color: var(--bb-stone); }
+/* Text on a fill is ink (ADR 0049): stone on pink is under 4.5:1. */
+.ti.sel .note { color: var(--bb-ink); }
 </style>
