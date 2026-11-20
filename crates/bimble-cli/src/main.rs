@@ -1708,15 +1708,17 @@ fn now_iso() -> String {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    init_log(cli.verbose);
-    // Windows gives the main thread 1 MB of stack: `run`'s frame (one arm per command) overflowed
-    // it in a debug build (CI, `bimble mcp` test). Run on a thread with 8 MB, as Linux and macOS
-    // give the main thread.
+    // Windows gives the main thread 1 MB of stack, and a debug build overflowed it (CI, the
+    // `bimble mcp` test) before any command ran. Parse and run everything on a thread with 8 MB,
+    // as Linux and macOS give the main thread; `main` only waits.
     let result = std::thread::Builder::new()
         .name("bimble".into())
         .stack_size(8 << 20)
-        .spawn(move || run(cli))
+        .spawn(|| {
+            let cli = Cli::parse();
+            init_log(cli.verbose);
+            run(cli)
+        })
         .map_err(|e| e.to_string())
         .and_then(|h| h.join().map_err(|_| "a command panicked".to_string())?);
     match result {
