@@ -1,40 +1,167 @@
 {
   "_doc": "name -> ref: CSS selector in docs/design/wireframes-v01 (first match; null = not found in the reference), lab: selector in the Vue lab.",
-  "quickbar":       { "ref": "header.top",                 "lab": "[data-bb=\"quickbar\"]" },
-  "quickbar-logo":  { "ref": "header.top > a.ib",          "lab": "[data-bb=\"quickbar-logo\"]" },
-  "quickbar-file":  { "ref": ".top > .qb",          "lab": "[data-bb=\"quickbar-file\"]" },
-  "filename":       { "ref": ".fname > span:first-child",  "lab": "[data-bb=\"filename\"]" },
-  "state-chip":     { "ref": ".fname > .chip",             "lab": "[data-bb=\"state-chip\"]" },
-  "command-field":  { "ref": ".top > .cmdk",                     "lab": "[data-bb=\"command-field\"]" },
-  "tabsbar":        { "ref": "nav.tabs",                   "lab": "[data-bb=\"tabsbar\"]" },
-  "tab-1":         { "ref": ".tabs > a:nth-of-type(1)",    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(1)" },
-  "tab-2":         { "ref": ".tabs > a:nth-of-type(2)",    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(2)" },
-  "tab-3":         { "ref": ".tabs > a:nth-of-type(3)",    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(3)" },
-  "tab-4":         { "ref": ".tabs > a:nth-of-type(4)",    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(4)" },
-  "tab-5":         { "ref": ".tabs > a:nth-of-type(5)",    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(5)" },
-  "tab-6":         { "ref": ".tabs > a:nth-of-type(6)",    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(6)" },
-  "tab-7":         { "ref": ".tabs > a:nth-of-type(7)",    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(7)" },
-  "tab-8":         { "ref": ".tabs > a:nth-of-type(8)",    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(8)" },
-  "tab-9":         { "ref": ".tabs > a:nth-of-type(9)",    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(9)" },
-  "tab-10":        { "ref": ".tabs > a:nth-of-type(10)",   "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(10)" },
-  "tab-11":        { "ref": ".tabs > a:nth-of-type(11)",   "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(11)" },
-  "tab-12":        { "ref": ".tabs > a:nth-of-type(12)",   "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(12)" },
-  "tab-13":        { "ref": ".tabs > a:nth-of-type(13)",   "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(13)" },
-  "tab-14":        { "ref": ".tabs > a:nth-of-type(14)",   "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(14)" },
-  "tab-sep-1":     { "ref": ".tabs > span:nth-of-type(1)", "lab": "[data-bb=\"tabsbar\"] > span:nth-of-type(1)" },
-  "tab-sep-2":     { "ref": ".tabs > span:nth-of-type(2)", "lab": "[data-bb=\"tabsbar\"] > span:nth-of-type(2)" },
-  "ribbon":         { "ref": ".ribbon",                    "lab": "[data-bb=\"ribbon\"]" },
-  "left-panel":     { "ref": ".work > aside.left",                 "lab": "[data-bb=\"left-panel\"]" },
-  "navigator":      { "ref": ".left > nav.nav",       "lab": "[data-bb=\"navigator\"]" },
-  "properties":     { "ref": ".left > .props",        "lab": "[data-bb=\"properties\"]" },
-  "viewtabs":       { "ref": ".main > .vtabs",             "lab": "[data-bb=\"viewtabs\"]" },
-  "view-switch":    { "ref": ".vp > div:has(> button.ib)", "lab": "[data-bb=\"view-switch\"]" },
-  "viewport":       { "ref": ".main > .vp",                "lab": "[data-bb=\"viewport\"]" },
-  "modifier":       { "ref": ".vp + div",            "lab": "[data-bb=\"modifier\"]" },
-  "statusbar":      { "ref": "footer.status",              "lab": "[data-bb=\"statusbar\"]" },
-  "status-hint":    { "ref": ".status > .hint",               "lab": "[data-bb=\"status-hint\"]" },
-  "status-coords":  { "ref": ".status > .hint + .mono.q",     "lab": "[data-bb=\"status-coords\"]" },
-  "status-chips":   { "ref": ".status > .chip",               "lab": "[data-bb=\"status-chips\"]" },
-  "status-counts":  { "ref": ".status > .mono.q ~ .mono.q",   "lab": "[data-bb=\"status-counts\"]" },
-  "status-lang":    { "ref": ".status > .seg",                "lab": "[data-bb=\"status-lang\"]" }
+  "quickbar": {
+    "ref": "header.top",
+    "lab": "[data-bb=\"quickbar\"]"
+  },
+  "quickbar-logo": {
+    "ref": "header.top > a.ib",
+    "lab": "[data-bb=\"quickbar-logo\"]"
+  },
+  "quickbar-file": {
+    "ref": ".top > .qb",
+    "lab": "[data-bb=\"quickbar-file\"]"
+  },
+  "filename": {
+    "ref": ".fname > span:first-child",
+    "lab": "[data-bb=\"filename\"]"
+  },
+  "state-chip": {
+    "ref": ".fname > .chip",
+    "lab": "[data-bb=\"state-chip\"]"
+  },
+  "command-field": {
+    "ref": ".top > .cmdk",
+    "lab": "[data-bb=\"command-field\"]"
+  },
+  "tabsbar": {
+    "ref": "nav.tabs",
+    "lab": "[data-bb=\"tabsbar\"]"
+  },
+  "tab-1": {
+    "ref": ".tabs > a:nth-of-type(1)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(1)"
+  },
+  "tab-2": {
+    "ref": ".tabs > a:nth-of-type(2)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(2)"
+  },
+  "tab-3": {
+    "ref": ".tabs > a:nth-of-type(3)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(3)"
+  },
+  "tab-4": {
+    "ref": ".tabs > a:nth-of-type(4)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(4)"
+  },
+  "tab-5": {
+    "ref": ".tabs > a:nth-of-type(5)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(5)"
+  },
+  "tab-6": {
+    "ref": ".tabs > a:nth-of-type(6)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(6)"
+  },
+  "tab-7": {
+    "ref": ".tabs > a:nth-of-type(7)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(7)"
+  },
+  "tab-8": {
+    "ref": ".tabs > a:nth-of-type(8)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(8)"
+  },
+  "tab-9": {
+    "ref": ".tabs > a:nth-of-type(9)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(9)"
+  },
+  "tab-10": {
+    "ref": ".tabs > a:nth-of-type(10)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(10)"
+  },
+  "tab-11": {
+    "ref": ".tabs > a:nth-of-type(11)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(11)"
+  },
+  "tab-12": {
+    "ref": ".tabs > a:nth-of-type(12)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(12)"
+  },
+  "tab-13": {
+    "ref": ".tabs > a:nth-of-type(13)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(13)"
+  },
+  "tab-14": {
+    "ref": ".tabs > a:nth-of-type(14)",
+    "lab": "[data-bb=\"tabsbar\"] > a:nth-of-type(14)"
+  },
+  "tab-sep-1": {
+    "ref": ".tabs > span:nth-of-type(1)",
+    "lab": "[data-bb=\"tabsbar\"] > span:nth-of-type(1)"
+  },
+  "tab-sep-2": {
+    "ref": ".tabs > span:nth-of-type(2)",
+    "lab": "[data-bb=\"tabsbar\"] > span:nth-of-type(2)"
+  },
+  "ribbon": {
+    "ref": ".ribbon",
+    "lab": "[data-bb=\"ribbon\"]"
+  },
+  "left-panel": {
+    "ref": ".work > aside.left",
+    "lab": "[data-bb=\"left-panel\"]"
+  },
+  "navigator": {
+    "ref": ".left > nav.nav",
+    "lab": "[data-bb=\"navigator\"]"
+  },
+  "properties": {
+    "ref": ".left > .props",
+    "lab": "[data-bb=\"properties\"]"
+  },
+  "viewtabs": {
+    "ref": ".main > .vtabs",
+    "lab": "[data-bb=\"viewtabs\"]"
+  },
+  "view-switch": {
+    "ref": ".vp > div:has(> button.ib)",
+    "lab": "[data-bb=\"view-switch\"]"
+  },
+  "viewport": {
+    "ref": ".main > .vp",
+    "lab": "[data-bb=\"viewport\"]"
+  },
+  "modifier": {
+    "ref": ".vp + div",
+    "lab": "[data-bb=\"modifier\"]"
+  },
+  "statusbar": {
+    "ref": "footer.status",
+    "lab": "[data-bb=\"statusbar\"]"
+  },
+  "status-hint": {
+    "ref": ".status > .hint",
+    "lab": "[data-bb=\"status-hint\"]"
+  },
+  "status-coords": {
+    "ref": ".status > .hint + .mono.q",
+    "lab": "[data-bb=\"status-coords\"]"
+  },
+  "status-chips": {
+    "ref": ".status > .chip",
+    "lab": "[data-bb=\"status-chips\"]"
+  },
+  "status-counts": {
+    "ref": ".status > .mono.q ~ .mono.q",
+    "lab": "[data-bb=\"status-counts\"]"
+  },
+  "status-lang": {
+    "ref": ".status > .seg",
+    "lab": "[data-bb=\"status-lang\"]"
+  },
+  "view-tab-1": {
+    "ref": ".vtabs > a.vtab:nth-of-type(1)",
+    "lab": "[data-bb=\"viewtabs\"] > a.vtab:nth-of-type(1)"
+  },
+  "view-tab-2": {
+    "ref": ".vtabs > a.vtab:nth-of-type(2)",
+    "lab": "[data-bb=\"viewtabs\"] > a.vtab:nth-of-type(2)"
+  },
+  "view-tab-3": {
+    "ref": ".vtabs > a.vtab:nth-of-type(3)",
+    "lab": "[data-bb=\"viewtabs\"] > a.vtab:nth-of-type(3)"
+  },
+  "view-picture": {
+    "ref": ".vtabs > .seg",
+    "lab": "[data-bb=\"view-picture\"]"
+  }
 }
