@@ -25,3 +25,7 @@ marks the decisions he took himself.
 | 17 | User trigram | a Settings field / derived from the name | derived (first letters, 3 at most) | Settings has no trigram field. No new setting without need |
 | 18 | Clearing "hidden for now" and "hidden in view" from a chip | existing actions / new `clear_temporary`, `show_all_in_view` | new actions | the existing ones did not clear the chip: reveal is a toggle, and unhide needs a selection |
 | 19 | Screens marked "new" | build them / ADR drafts only | ADR drafts 0053-0063, Proposed | the brief says to stop for Pierre's decision before building them |
+| 20 | The 11 ADR drafts (0053-0063) | build the new screens now / draft, then wait | drafted as Proposed, each lists its open questions for Pierre | the brief |
+| 21 | ADR 0053: sub-projects and ADR 0038's "borrow a layer" | keep layer locks / sub-projects never lock | never lock (the draft replaces that 0038 bullet) | the wireframe's decision 3; Pierre to confirm |
+| 22 | ADR 0055 and 0062: the wireframes show Cancel / Save buttons | keep them / follow ADR 0052 | follow ADR 0052: no Cancel or Save; an export keeps one "Export" action | ADR 0052, accepted today |
+| 23 | ADR 0061: three rights View/Edit/Admin vs ADR 0038's three levels | wireframe / 0038 | the wireframe's, flagged | Pierre to confirm |

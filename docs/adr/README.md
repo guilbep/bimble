@@ -76,3 +76,14 @@ Session journals (what happened, in order, with measurements) are in [`docs/jour
 | [0050](0050-two-web-builds.md) | Two web builds: a small viewer (IFC, .bimble, .bimbleview; no DXF/PDF reference plans) and the full editor; no name section, size profile if it measures smaller | Accepted |
 | [0051](0051-window-frame-two-rows-trade-tabs.md) | Vue lab window frame: two top rows (quick access, then 14 tabs in three groups with trade tabs), from the wireframes v01; amends 0027 and 0037 for the lab | Accepted |
 | [0052](0052-changes-apply-at-once.md) | Changes apply at once: no OK and no Cancel, undo instead; irreversible actions still ask | Accepted |
+| [0053](0053-sub-projects.md) | Sub-projects: one per element, visibility and loading, never a lock (borrowing still decides who edits); replaces a bullet of 0038 | Proposed |
+| [0054](0054-project-phases.md) | Project phases: three fixed phases, free phase filters per view; IFC Status plus a Bimble pset | Proposed |
+| [0055](0055-team-members.md) | Team members in the project information (IfcActor), title blocks read them; no OK/Cancel (0052) | Proposed |
+| [0056](0056-levels-and-grids.md) | Levels that are not storeys, project zero, grids editable in the model | Proposed |
+| [0057](0057-site-terrain.md) | Site: one terrain surface from survey points or contours, excavations with cut and fill | Proposed |
+| [0058](0058-rebar.md) | Rebar sets in concrete elements, bar schedule; the rebar code (SIA 262 / EC2) stays open | Proposed |
+| [0059](0059-steel-and-timber-members.md) | Steel and timber members from a section catalogue in the standards | Proposed |
+| [0060](0060-synchronize-with-per-element-conflicts.md) | Synchronize with per-element conflicts, keep mine or theirs, undoable choices | Proposed |
+| [0061](0061-users-and-rights.md) | Users and rights (View, Edit, Admin) in the shared history, advisory without a server | Proposed |
+| [0062](0062-print-and-export-dialog.md) | Print and export dialog: one Export action, no OK/Cancel, background job | Proposed |
+| [0063](0063-carbon-balance-lca.md) | Carbon balance from the Swiss KBOB list, A1-A3 first, cited on every report | Proposed |
