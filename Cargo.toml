@@ -67,3 +67,10 @@ js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = "0.3"
+
+# The browser build only (scripts/build-web.sh, ADR 0050): smaller code, slower to build.
+[profile.web]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1

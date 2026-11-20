@@ -15,11 +15,15 @@ if [ "$want" != "$have" ]; then
   echo "wasm-bindgen-cli $want needed (found: ${have:-none}): cargo install wasm-bindgen-cli --version $want" >&2
   exit 1
 fi
-if [ "$PROFILE" = release ]; then flag=--release; dir=release; else flag=; dir=debug; fi
+# Release uses the size profile [profile.web] (Cargo.toml) and drops the wasm name section
+# (function names, ~4 MB): panics in the browser console lose their symbol names.
+# PROFILE=dev keeps them for debugging.
+if [ "$PROFILE" = release ]; then flag="--profile web"; dir=web; strip=--remove-name-section
+else flag=; dir=debug; strip=; fi
 cargo build -p bimble-web --target wasm32-unknown-unknown $flag
 out=web/dist
 rm -rf "$out" && mkdir -p "$out"
-wasm-bindgen --target web --no-typescript --out-dir "$out" \
+wasm-bindgen --target web --no-typescript $strip --out-dir "$out" \
   "target/wasm32-unknown-unknown/$dir/bimble_web.wasm"
 if command -v wasm-opt >/dev/null && [ "$PROFILE" = release ]; then
   wasm-opt -O2 --enable-bulk-memory --enable-nontrapping-float-to-int \
