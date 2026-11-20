@@ -1,24 +1,34 @@
 # The web budgets (make perf-web): the median of each benchmark over the
-# Lighthouse 12.6.1 mobile runs (simulated slow 4G, 4x slower CPU) of the
-# Vue lab page, on `bimble demo` models: Small (defaults, 72 elements) and
-# Large (20 x 20 bays, 10 storeys, 13261 elements). FCP, LCP and TBT are
-# Lighthouse's simulated values; WasmReady and ModelShown are the page's own
-# performance.measure from navigation start (src/bimble.ts), as observed, not
-# simulated. Bytes: total-byte-weight.
+# Lighthouse 12.6.1 runs (DevTools throttling: 4x slower CPU, 10 Mbit/s down,
+# 5 Mbit/s up, 40 ms RTT) of two pages, served gzipped like GitHub Pages
+# (perf/serve.mjs): the Vue lab (web-ui, editor build), Lab*, on `bimble demo`
+# models Small (defaults, 72 elements) and Large (20 x 20 bays, 10 storeys,
+# 13261 elements), and the plain viewer (web/dist), Viewer*, on Large.
+# WasmReady and ModelShown are the lab's own performance.measure from
+# navigation start (src/bimble.ts). Bytes: total-byte-weight, gzip on the wire.
+#
+# Reported, no budget:
+# - LCP: on a canvas page it says little and flips run to run (with simulated
+#   throttling, about 1.95 s or 4.8 s, measured 20 Nov 2026).
+# - Lab Small TBT: 3-7 ms (simulated, 20 Nov), below what a budget can hold.
+# - Lab Large TBT: 0 ms under DevTools throttling: the main thread is quiet
+#   until the wasm arrives, so Lighthouse's TBT window (FCP to TTI) closes
+#   before the wasm's work. ModelShown holds that work instead.
+# - TTI: reported for reference.
+#
 # make perf-web fails when a median is over its budget by more than the
 # tolerance (15%). A budget moves down when the code gets faster; up only
 # with a reason written on its line, never to make a slower commit pass.
 #
-# name               budget  why
-SmallFCP             2500ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-SmallLCP             7500ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-SmallTBT             5ms     provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-SmallWasmReady       200ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-SmallModelShown      350ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-SmallBytes           35MB    provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LargeFCP             2500ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LargeLCP             3000ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LargeTBT             2500ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LargeWasmReady       200ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LargeModelShown      1000ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
-LargeBytes           36MB    provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+# name                  budget   why
+LabSmallFCP             300ms    provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LabSmallWasmReady       8500ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LabSmallModelShown      9000ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LabSmallBytes           10MB     provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LabLargeFCP             300ms    provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LabLargeWasmReady       8500ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LabLargeModelShown      11500ms  provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+LabLargeBytes           11MB     provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+ViewerLargeFCP          150ms    provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+ViewerLargeTBT          2500ms   provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
+ViewerLargeBytes        10MB     provisional: local Apple M4 Pro, 20 Nov 2026; replace with the first nightly's medians
