@@ -37,15 +37,19 @@ export function median(xs) {
   return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2;
 }
 
-/** Rows { name, median, budget, ratio, ok }; a budgeted benchmark that did not run fails. */
+/** Rows { name, median, budget, ratio, ok }; a budgeted benchmark that did not run fails.
+ *  A benchmark with no budget is reported (budget null) and never fails. */
 export function check(results, budgets, tolerance) {
-  return Object.entries(budgets).map(([name, { budget, text }]) => {
+  const rows = Object.entries(budgets).map(([name, { budget, text }]) => {
     const xs = results[name];
     if (!xs) return { name, median: null, budget: text, ratio: null, ok: false };
     const med = median(xs);
     const ratio = med / budget;
     return { name, median: med, budget: text, ratio, ok: ratio <= 1 + tolerance };
   });
+  for (const [name, xs] of Object.entries(results))
+    if (!(name in budgets)) rows.push({ name, median: median(xs), budget: null, ratio: null, ok: true });
+  return rows;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -63,11 +67,9 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     "| name | median | budget | ratio | result |",
     "|---|---|---|---|---|",
     ...rows.map((r) =>
-      `| ${r.name} | ${r.median === null ? "did not run" : unit(r.name, r.median)} | ${r.budget} | ${r.ratio === null ? "-" : r.ratio.toFixed(2)} | ${r.ok ? "pass" : "FAIL"} |`,
+      `| ${r.name} | ${r.median === null ? "did not run" : unit(r.name, r.median)} | ${r.budget ?? "-"} | ${r.ratio === null ? "-" : r.ratio.toFixed(2)} | ${r.budget === null ? "reported, no budget" : r.ok ? "pass" : "FAIL"} |`,
     ),
   ];
-  const unbudgeted = Object.keys(results).filter((n) => !rows.some((r) => r.name === n));
-  if (unbudgeted.length) lines.push("", `Not budgeted: ${unbudgeted.join(", ")}`);
   writeFileSync(join(dirname(res), "report.md"), lines.join("\n") + "\n");
   console.log(lines.join("\n"));
   process.exit(rows.every((r) => r.ok) ? 0 : 1);

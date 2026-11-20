@@ -28,3 +28,9 @@ test("a budgeted benchmark that did not run fails", () => {
   const rows = check(parseResults("BenchmarkA\t1\t1 ns/op\n"), budgets, 0.15);
   assert.deepEqual(rows.map((x) => x.ok), [true, false]);
 });
+
+test("a benchmark with no budget is reported and does not fail", () => {
+  const r = parseResults("BenchmarkA\t1\t1 ns/op\nBenchmarkB\t1\t1 B/op\nBenchmarkC\t1\t9 ns/op\nBenchmarkC\t1\t3 ns/op\n");
+  const c = check(r, budgets, 0.15).find((x) => x.name === "C");
+  assert.deepEqual(c, { name: "C", median: 6, budget: null, ratio: null, ok: true }); // median of 3 and 9
+});
