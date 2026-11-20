@@ -9,7 +9,9 @@ const props = defineProps<{ tool: RibbonTool; bb: string }>();
 const state = computed(() => actions.value.find((a) => a.name === props.tool.action));
 const on = computed(() => state.value?.pressed === true);
 const off = computed(() => !state.value?.enabled);
-const missing = computed(() => (props.tool.action === null ? "action" : state.value ? undefined : `action ${props.tool.action}`));
+// Before the first `actions` refresh the list is empty: unavailable, not missing.
+const missing = computed(() =>
+  props.tool.action === null ? "action" : state.value || !actions.value.length ? undefined : `action ${props.tool.action}`);
 
 function run(): void {
   if (props.tool.action && !off.value) runAction(props.tool.action);
