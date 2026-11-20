@@ -1,0 +1,199 @@
+{
+  "_doc": "Design-check counts that may only go down: per screen and language, boxes and styles off (all landmarks) and own_boxes, own_styles (landmarks whose `only` names the screen). No pixels: fonts render differently on Linux CI. Lower a number when a screen improves: node design-check/compare.mjs --screen all --lang fr|en --lab <url> --baseline design-check/baseline.json --write-baseline",
+  "A1": {
+    "fr": {
+      "boxes": 14,
+      "styles": 0,
+      "own_boxes": 10,
+      "own_styles": 0
+    },
+    "en": {
+      "boxes": 6,
+      "styles": 0,
+      "own_boxes": 2,
+      "own_styles": 0
+    }
+  },
+  "A2": {
+    "fr": {
+      "boxes": 18,
+      "styles": 45,
+      "own_boxes": 0,
+      "own_styles": 10
+    },
+    "en": {
+      "boxes": 18,
+      "styles": 45,
+      "own_boxes": 0,
+      "own_styles": 10
+    }
+  },
+  "A3": {
+    "fr": {
+      "boxes": 15,
+      "styles": 42,
+      "own_boxes": 2,
+      "own_styles": 6
+    },
+    "en": {
+      "boxes": 15,
+      "styles": 42,
+      "own_boxes": 2,
+      "own_styles": 6
+    }
+  },
+  "B1": {
+    "fr": {
+      "boxes": 17,
+      "styles": 51,
+      "own_boxes": 3,
+      "own_styles": 0
+    },
+    "en": {
+      "boxes": 17,
+      "styles": 51,
+      "own_boxes": 3,
+      "own_styles": 0
+    }
+  },
+  "B2": {
+    "fr": {
+      "boxes": 17,
+      "styles": 32,
+      "own_boxes": 4,
+      "own_styles": 0
+    },
+    "en": {
+      "boxes": 16,
+      "styles": 32,
+      "own_boxes": 4,
+      "own_styles": 0
+    }
+  },
+  "C1": {
+    "fr": {
+      "boxes": 17,
+      "styles": 48,
+      "own_boxes": 7,
+      "own_styles": 13
+    },
+    "en": {
+      "boxes": 17,
+      "styles": 48,
+      "own_boxes": 7,
+      "own_styles": 13
+    }
+  },
+  "C2": {
+    "fr": {
+      "boxes": 13,
+      "styles": 37,
+      "own_boxes": 0,
+      "own_styles": 0
+    },
+    "en": {
+      "boxes": 13,
+      "styles": 37,
+      "own_boxes": 0,
+      "own_styles": 0
+    }
+  },
+  "C6": {
+    "fr": {
+      "boxes": 14,
+      "styles": 37,
+      "own_boxes": 4,
+      "own_styles": 7
+    },
+    "en": {
+      "boxes": 14,
+      "styles": 37,
+      "own_boxes": 4,
+      "own_styles": 7
+    }
+  },
+  "D1": {
+    "fr": {
+      "boxes": 15,
+      "styles": 43,
+      "own_boxes": 0,
+      "own_styles": 0
+    },
+    "en": {
+      "boxes": 15,
+      "styles": 43,
+      "own_boxes": 0,
+      "own_styles": 0
+    }
+  },
+  "D2": {
+    "fr": {
+      "boxes": 14,
+      "styles": 55,
+      "own_boxes": 0,
+      "own_styles": 0
+    },
+    "en": {
+      "boxes": 14,
+      "styles": 55,
+      "own_boxes": 0,
+      "own_styles": 0
+    }
+  },
+  "D3": {
+    "fr": {
+      "boxes": 19,
+      "styles": 44,
+      "own_boxes": 3,
+      "own_styles": 1
+    },
+    "en": {
+      "boxes": 19,
+      "styles": 44,
+      "own_boxes": 3,
+      "own_styles": 1
+    }
+  },
+  "D5": {
+    "fr": {
+      "boxes": 22,
+      "styles": 48,
+      "own_boxes": 8,
+      "own_styles": 19
+    },
+    "en": {
+      "boxes": 22,
+      "styles": 48,
+      "own_boxes": 8,
+      "own_styles": 19
+    }
+  },
+  "D6": {
+    "fr": {
+      "boxes": 16,
+      "styles": 47,
+      "own_boxes": 2,
+      "own_styles": 8
+    },
+    "en": {
+      "boxes": 16,
+      "styles": 47,
+      "own_boxes": 2,
+      "own_styles": 8
+    }
+  },
+  "D8": {
+    "fr": {
+      "boxes": 12,
+      "styles": 38,
+      "own_boxes": 2,
+      "own_styles": 0
+    },
+    "en": {
+      "boxes": 12,
+      "styles": 38,
+      "own_boxes": 2,
+      "own_styles": 0
+    }
+  }
+}

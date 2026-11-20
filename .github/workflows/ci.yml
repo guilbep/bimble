@@ -60,6 +60,27 @@ jobs:
           name: bimble-web
           path: web/dist
           retention-days: 14
+      # Vue lab vs the wireframes: box and style counts may only go down (web-ui/design-check/baseline.json).
+      # compare.mjs launches channel "chrome": Google Chrome is on the ubuntu-latest image.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web-ui/package-lock.json
+      - name: Design check against the baseline (fr, en)
+        working-directory: web-ui
+        run: |
+          npm ci --no-audit --no-fund
+          npm run wasm
+          cargo run --release -p bimble-cli --bin bimble -- demo public/frame.bimble
+          npm run typecheck
+          npm run build
+          npx vite preview --port 4230 --strictPort --host 127.0.0.1 &
+          for i in $(seq 30); do curl -sf http://127.0.0.1:4230/ > /dev/null && break; sleep 1; done
+          screens=$(node -e 'const s=require("./design-check/screens.json");console.log(Object.keys(s).filter(k=>k!=="_doc"&&s[k].lab).join(","))')
+          for lang in fr en; do
+            node design-check/compare.mjs --screen "$screens" --lang $lang --lab http://127.0.0.1:4230/ --baseline design-check/baseline.json
+          done
 
   # Our IFC export must open correctly in a reference implementation, and our IFC reader must
   # agree with it element by element.
