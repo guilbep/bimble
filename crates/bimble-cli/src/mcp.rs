@@ -13,6 +13,20 @@ use std::path::Path;
 const MAX_LINE: usize = 1 << 20;
 
 pub fn run(path: &Path) -> Result<(), String> {
+    // Windows gives the main thread 1 MB of stack, and a debug build overflowed it in CI
+    // (stack overflow in `bimble mcp`, Windows only). Serve on a thread with 8 MB, as Linux
+    // and macOS give the main thread.
+    let path = path.to_path_buf();
+    std::thread::Builder::new()
+        .name("mcp".into())
+        .stack_size(8 << 20)
+        .spawn(move || serve(&path))
+        .map_err(|e| e.to_string())?
+        .join()
+        .map_err(|_| "the mcp thread panicked".to_string())?
+}
+
+fn serve(path: &Path) -> Result<(), String> {
     let mut model = file::load(path).map_err(|e| e.to_string())?;
     let mut history = History::default();
     let stdin = std::io::stdin();
