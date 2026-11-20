@@ -71,7 +71,7 @@ const chips = (): Chip[] => {
     <span class="mono q" style="font-size:12px" data-bb="status-counts">{{ counts() }}</span>
     <span class="seg" role="group" :aria-label="t('status.langGroup')" style="margin-left:4px" data-bb="status-lang">
       <button v-for="l in langs" :key="l" type="button" class="lg" :class="{ on: lang === l }"
-        :aria-pressed="lang === l" :aria-label="t(l === 'fr' ? 'status.langFr' : 'status.langEn')"
+        :aria-pressed="lang === l" :lang="l" :title="t(l === 'fr' ? 'status.langFr' : 'status.langEn')"
         @click="setLang(l)">{{ l.toUpperCase() }}</button>
     </span>
   </footer>

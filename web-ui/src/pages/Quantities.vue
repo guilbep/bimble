@@ -69,10 +69,10 @@ function exportCsv() {
     <div class="head">
       <h2 style="font-size:20px" data-bb="quantities-title">{{ table?.name ?? def?.name ?? '' }}</h2>
       <span style="flex:1" />
-      <select class="sel-inp" style="width:170px" :disabled="!def" :value="def?.group_by_level ? 'level' : 'none'" data-bb="quantities-group" @change="change({ group_by_level: ($event.target as HTMLSelectElement).value === 'level' })">
+      <select class="sel-inp" style="width:170px" :disabled="!def" :value="def?.group_by_level ? 'level' : 'none'" :aria-label="t('quantities.group', { by: '' }).replace(/[\s:]+$/, '')" data-bb="quantities-group" @change="change({ group_by_level: ($event.target as HTMLSelectElement).value === 'level' })">
         <option v-for="b in ['none', 'level']" :key="b" :value="b">{{ t('quantities.group', { by: t(b === 'level' ? 'quantities.group.level' : 'quantities.group.none') }) }}</option>
       </select>
-      <select class="sel-inp" style="width:170px" :disabled="!def" :value="(def?.family as string | undefined) ?? ''" data-bb="quantities-filter" @change="change({ family: ($event.target as HTMLSelectElement).value || null })">
+      <select class="sel-inp" style="width:170px" :disabled="!def" :value="(def?.family as string | undefined) ?? ''" :aria-label="t('quantities.filter', { family: '' }).replace(/[\s:]+$/, '')" data-bb="quantities-filter" @change="change({ family: ($event.target as HTMLSelectElement).value || null })">
         <option value="">{{ t('quantities.filter', { family: t('quantities.family.all') }) }}</option>
         <option v-for="f in families" :key="f" :value="f">{{ t('quantities.filter', { family: famLabel(f) }) }}</option>
       </select>
