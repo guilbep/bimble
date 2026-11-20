@@ -10,3 +10,6 @@ web-ui/dist/
 web-ui/public/bimble/
 perf-results/
 web-ui/design-check/out/
+
+# Playwright MCP session output (browser checks)
+.playwright-mcp/
