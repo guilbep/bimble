@@ -52,3 +52,8 @@ marks the decisions he took himself.
 | 44 | History: where the session's undo list goes | the "New version" card / the changes pane | the changes pane, one row per undo label | it is the real list of changes; no fake element/field cells |
 | 45 | History rows | click undoes up to a row / display only | display only | no Rust call undoes to a given step |
 | 46 | Ribbon "Historique" | opens the egui panel / opens this page | unchanged for now (deep link `?page=history`), ribbon follow-up | Ribbon files were not this ticket's |
+| 47 | History on the web | bridge the version store now / leave it drawn with data-missing | leave it: egui opens the store from the model's folder, the web has no folder | a bridge would still show nothing in the web lab; revisit with a web storage (ADR 0038) |
+| 48 | Shared folder dialog dim | the whole window / the viewport only, as the reference | viewport only (component overlay) | the reference's overlay sits in the viewport |
+| 49 | Shared folder "Annuler" | keep / × close (ADR 0052) | × close | ADR 0052 |
+| 50 | Placing panel place | right panel / left panel properties, as the reference | left panel, slab only for now | the reference |
+| 51 | Deep link `view=plan:N` | stored views / the views the viewer offers | the views the viewer offers | frame.bimble's plans are default views, not stored |

@@ -4,7 +4,7 @@
 // Each wasm step waits for the next state change (or 1 s) before the next one; never called inside on_change.
 // data-bb-ready is set when all steps are done: the design check waits for it.
 import { watch } from "vue";
-import { modelReady, state, storeys, openView, select, runAction, openViews, query, views } from "./bimble";
+import { modelReady, state, storeys, openView, select, runAction, openViews, query, type ViewSummary } from "./bimble";
 import { activeTab, isTabId } from "./shell/tabs";
 import { currentPage } from "./pages";
 import { currentDialog } from "./dialogs";
@@ -27,11 +27,12 @@ async function step(what: string, call: () => string | null): Promise<void> {
 
 function viewId(v: string): string | null {
   if (!v.startsWith("plan:") && v !== "3d") return v; // a GlobalId
-  const all = views();
+  // The views the viewer offers (stored and default ones); `views()` lists stored views only.
+  const all = (openViews.value as unknown as { views?: ViewSummary[] }).views ?? [];
   if (v === "3d") return all.find((x) => x.type === "three_d")?.id ?? null;
   const key = v.slice(5);
   const s = storeys.value.find((x, i) => x.name === key || String(i) === key);
-  return all.find((x) => x.type === "plan" && x.storey === s?.id)?.id ?? null;
+  return all.find((x) => x.type === "plan" && x.look !== "up" && x.storey === s?.id)?.id ?? null;
 }
 
 function selection(v: string): string[] {

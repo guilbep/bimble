@@ -411,5 +411,45 @@
   "history-side-branch": {
     "ref": ".props > .pn",
     "lab": "[data-bb=\"history-side-branch\"]"
+  },
+  "shared-folder": {
+    "ref": ".overlay > .dialog",
+    "lab": "[data-bb=\"shared-folder\"]"
+  },
+  "shared-folder-title": {
+    "ref": ".dialog h2",
+    "lab": "[data-bb=\"shared-folder-title\"]"
+  },
+  "shared-folder-path": {
+    "ref": ".dialog .inp",
+    "lab": "[data-bb=\"shared-folder-path\"]"
+  },
+  "shared-folder-browse": {
+    "ref": ".dialog .btn.s",
+    "lab": "[data-bb=\"shared-folder-browse\"]"
+  },
+  "shared-folder-case": {
+    "ref": ".dialog fieldset",
+    "lab": "[data-bb=\"shared-folder-case\"]"
+  },
+  "shared-folder-author": {
+    "ref": ".dialog .row a",
+    "lab": "[data-bb=\"shared-folder-author\"]"
+  },
+  "shared-folder-share": {
+    "ref": ".dialog .btn.p",
+    "lab": "[data-bb=\"shared-folder-share\"]"
+  },
+  "place-title": {
+    "ref": ".left .props .pn",
+    "lab": "[data-bb=\"place-title\"]"
+  },
+  "place-storey": {
+    "ref": ".left .props .row:nth-of-type(2) .sel-inp",
+    "lab": "[data-bb=\"place-storey\"]"
+  },
+  "place-thickness": {
+    "ref": ".left .props .row:nth-of-type(3) input",
+    "lab": "[data-bb=\"place-thickness\"]"
   }
 }
