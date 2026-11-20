@@ -3,6 +3,7 @@ import { state, visibility, actions, runAction, pointer, status, placing } from 
 import { lang, setLang, t, type Lang } from "../i18n";
 import { page } from "../pages";
 import { dialog } from "../dialogs";
+import { panel, currentPanel } from "../panels";
 
 const langs: Lang[] = ["fr", "en"];
 // Each chip: a view mode read from `query("visibility")`; `undo` is the action its × runs, enabled as `query("actions")` says.
@@ -39,7 +40,8 @@ const chips = (): Chip[] => {
 <template>
   <!-- Reference: footer.status (D1). -->
   <footer class="status" data-bb="statusbar">
-    <span class="hint" data-bb="status-hint">{{ t(dialog()?.hint ?? page()?.hint ?? placingHint() ?? "status.hint") }}</span>
+    <span class="hint" data-bb="status-hint">{{ t((dialog()?.hint ?? page()?.hint ?? panel()?.hint ?? placingHint()
+      ?? (state.selection.length && !page() ? "shell.selectionHint" : "status.hint")) as Parameters<typeof t>[0]) }}</span>
     <span class="mono q coords" style="font-size:12px" data-bb="status-coords">{{ pointer?.text ?? "" }}</span>
     <span style="flex:1"></span>
     <!-- Reference: `.status > .chip`, a set of direct children; each carries the landmark, the check reads the first. -->
@@ -47,6 +49,9 @@ const chips = (): Chip[] => {
     <span v-if="placing?.active" data-bb="status-chip" class="chip c-n">{{ t("placing.chip", { kind: t(`placing.kind.${placing.kind}`) }) }}<button
         type="button" class="cx" :aria-label="t('placing.stop')" :disabled="!enabled(`place_${placing.kind}`)"
         @click="runAction(`place_${placing.kind}`)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span>
+    <!-- Reference (D5): `.chip.c-n` "Standards ouverts" with ×; × closes the panel. -->
+    <span v-if="currentPanel === 'standards'" data-bb="status-chip" class="chip c-n">{{ t("shell.standardsOpen") }}<button
+        type="button" class="cx" :aria-label="t('shell.closePanel')" @click="currentPanel = null"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span>
     <span v-if="state.selection.length" data-bb="status-chip" class="chip c-p nx">{{ t(state.selection.length === 1 ? "status.selectedOne" : "status.selected", { n: state.selection.length }) }}</span>
     <span v-for="c in chips()" :key="c.key" data-bb="status-chip" class="chip c-n">{{ t(c.key, { n: c.n }) }}<button
         type="button" class="cx" :aria-label="t('status.undoChip')" :disabled="!enabled(c.undo)"
