@@ -3,7 +3,7 @@
 //! Arguments are untrusted: unknown fields are refused and sizes are bounded.
 
 use crate::{query, verbs};
-use bimble_core::{Command, GlobalId, Model};
+use bimble_core::{Command, Generator, GlobalId, Model};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -228,7 +228,11 @@ fn set_generator(m: &Model, a: SetGeneratorArgs) -> Result<Vec<Command>, String>
     if n == 0 {
         return Err("params: no size given".into());
     }
-    let generator = serde_json::from_value(g).map_err(|e| e.to_string())?;
+    let generator: Generator = serde_json::from_value(g).map_err(|e| e.to_string())?;
+    // The same sizes again: no command, so no empty undo step.
+    if generator == e.generator {
+        return Ok(vec![]);
+    }
     Ok(vec![Command::SetGenerator {
         id: a.id,
         generator,
@@ -274,8 +278,8 @@ pub fn query(m: &Model, name: &str, args: Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bimble_core::History;
     use bimble_core::demo::{FrameSpec, concrete_frame};
-    use bimble_core::{Generator, History};
     use serde_json::json;
 
     fn demo() -> (Model, GlobalId) {
@@ -438,6 +442,21 @@ mod tests {
         );
         assert_eq!((e.id, &e.name), (id, &name), "GlobalId kept");
         assert_eq!(m.elements[&other.id], other, "other element unchanged");
+    }
+
+    #[test]
+    fn set_generator_same_sizes_is_no_command() {
+        let (m, _) = demo();
+        let beam = m
+            .elements
+            .values()
+            .find(|e| matches!(e.generator, Generator::RectBeam { .. }))
+            .unwrap();
+        let Generator::RectBeam { height, .. } = beam.generator else {
+            unreachable!()
+        };
+        let args = serde_json::json!({"id": beam.id, "params": {"height": height}});
+        assert!(run(&m, "set_generator", args).unwrap().is_empty());
     }
 
     #[test]
