@@ -594,5 +594,33 @@
     "only": [
       "C2"
     ]
+  },
+  "sheet": {
+    "ref": ".main > .vp",
+    "lab": "[data-bb=\"sheet\"]",
+    "only": [
+      "D3"
+    ]
+  },
+  "sheet-props-title": {
+    "ref": ".props > .pn",
+    "lab": "[data-bb=\"sheet-props-title\"]",
+    "only": [
+      "D3"
+    ]
+  },
+  "sheet-number": {
+    "ref": ".props input.inp.mono",
+    "lab": "[data-bb=\"sheet-number\"]",
+    "only": [
+      "D3"
+    ]
+  },
+  "sheet-size": {
+    "ref": ".props .row:nth-of-type(3) .sel-inp",
+    "lab": "[data-bb=\"sheet-size\"]",
+    "only": [
+      "D3"
+    ]
   }
 }
