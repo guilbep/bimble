@@ -1,0 +1,90 @@
+/* Bimble design tokens: direction C (Two discs) with the logo palette.
+   Mirrors tokens.json. Load fonts/fonts.css first.
+   Each colour has one job:
+     clay = do · pink = choose · moss = done · ochre = look · slate = other */
+
+:root {
+  /* Grounds */
+  --bb-cream: #F5F2EB;   /* page and panel ground */
+  --bb-sheet: #FFFFFF;   /* cards, paper, viewport */
+  --bb-sunk:  #EDE7DB;   /* inner dividers, hover on cream */
+
+  /* Ink */
+  --bb-ink:    #141414;  /* text, 16.5:1 on cream */
+  --bb-stone:  #5C574D;  /* quiet text, 6.4:1 on cream */
+  --bb-line:   #DDD6C8;  /* decorative borders only */
+  --bb-on-ink: #F5F2EB;
+
+  /* The five discs: -fill takes ink text; -text is the colour as text */
+  --bb-clay:        #C06A41;  --bb-clay-text:  #A35A37;  /* DO */
+  --bb-pink:        #D7ACB6;  --bb-pink-text:  #80676D;  /* CHOOSE */
+  --bb-moss:        #6A8757;  --bb-moss-text:  #5B744A;  /* DONE */
+  --bb-ochre:       #D2B347;  --bb-ochre-text: #7D6B2A;  /* LOOK */
+  --bb-slate:       #6E88A3;  --bb-slate-text: #5A6F85;  /* OTHER */
+
+  /* Roles: use these in components, not the raw colours */
+  --bb-action:     var(--bb-clay);
+  --bb-link:       var(--bb-clay-text);
+  --bb-selection:  var(--bb-pink);
+  --bb-success:    var(--bb-moss);
+  --bb-attention:  var(--bb-ochre);
+  --bb-error:      var(--bb-ochre);   /* always with the word "Error" */
+  --bb-reference:  var(--bb-slate);
+
+  /* Chart / linked-model series, in order */
+  --bb-series-1: var(--bb-clay);
+  --bb-series-2: var(--bb-slate);
+  --bb-series-3: var(--bb-moss);
+  --bb-series-4: var(--bb-ochre);
+  --bb-series-5: var(--bb-pink);
+
+  /* Type */
+  --bb-font-display: 'Sora', 'Source Sans 3', 'Helvetica Neue', Arial, sans-serif;
+  --bb-font-text:    'Source Sans 3', 'Helvetica Neue', Arial, sans-serif;
+  --bb-font-data:    'DM Mono', ui-monospace, Menlo, monospace;
+  --bb-font-wordmark: 'Bimble Wordmark', 'Sora', sans-serif;  /* the word bimble only */
+  --bb-font-bimble:   'Bimble', 'Sora', sans-serif;           /* brand lines, big words; lowercase only for now */
+
+  --bb-size-display: 52px;  --bb-lh-display: 1.02;
+  --bb-size-title:   38px;  --bb-lh-title:   1.1;
+  --bb-size-heading: 20px;  --bb-lh-heading: 1.25;
+  --bb-size-lead:    18px;
+  --bb-size-body:    16px;
+  --bb-size-ui:      14px;
+  --bb-size-small:   13px;
+  --bb-size-eyebrow: 12px;  --bb-tracking-eyebrow: 0.08em;
+
+  /* Shape: round where you touch, square for drawings */
+  --bb-radius-none: 0;
+  --bb-radius-sm:   8px;
+  --bb-radius-md:   16px;
+  --bb-radius-pill: 999px;
+
+  /* Space, 4px base */
+  --bb-space-1: 4px;  --bb-space-2: 8px;  --bb-space-3: 12px; --bb-space-4: 16px;
+  --bb-space-5: 24px; --bb-space-6: 32px; --bb-space-7: 40px; --bb-space-8: 56px;
+
+  --bb-target: 32px;         /* desktop; 44px on touch */
+  --bb-icon:   20px;         /* stroke icons, 1.5px, ink, on a 24px grid */
+  --bb-border-hairline: 1px solid var(--bb-line);
+  --bb-border-control:  1px solid var(--bb-stone);
+  --bb-focus: 2px solid var(--bb-ink);
+}
+
+/* Minimal base. Opt in with class="bb" on <html> or a root element. */
+.bb {
+  background: var(--bb-cream);
+  color: var(--bb-ink);
+  font-family: var(--bb-font-text);
+  font-size: var(--bb-size-body);
+  line-height: 1.5;
+}
+.bb h1, .bb h2, .bb h3 { font-family: var(--bb-font-display); font-weight: 700; margin: 0; }
+.bb a { color: var(--bb-link); }
+.bb :focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
+.bb ::selection { background: var(--bb-pink); color: var(--bb-ink); }
+.bb code, .bb .bb-data { font-family: var(--bb-font-data); }
+.bb .bb-eyebrow {
+  font-family: var(--bb-font-data); font-size: var(--bb-size-eyebrow);
+  letter-spacing: var(--bb-tracking-eyebrow); text-transform: uppercase; color: var(--bb-stone);
+}

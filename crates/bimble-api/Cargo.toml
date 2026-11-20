@@ -1,0 +1,15 @@
+[package]
+name = "bimble-api"
+description = "One API over the model for the UI, the CLI and agents (ADR 0048): read-only queries first"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bimble-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+bimble-geom.workspace = true

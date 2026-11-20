@@ -1336,8 +1336,16 @@ impl Viewer {
                     }
                     ui.horizontal(|ui| {
                         if ui
-                            .add_enabled(editable, egui::Button::new("Add reference plan…"))
+                            .add_enabled(
+                                editable && crate::ribbon::REFERENCE_PLANS,
+                                egui::Button::new("Add reference plan…"),
+                            )
                             .on_hover_text("DXF or vector PDF (a DWG: convert it to DXF first)")
+                            .on_disabled_hover_text(if crate::ribbon::REFERENCE_PLANS {
+                                "DXF or vector PDF (a DWG: convert it to DXF first)"
+                            } else {
+                                "Not in the viewer build"
+                            })
                             .clicked()
                         {
                             pick_reference = true;

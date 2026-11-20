@@ -4,7 +4,7 @@
 WASM_BINDGEN = $(shell awk '/^name = "wasm-bindgen"$$/ {getline; gsub(/version = |"/, ""); print; exit}' Cargo.lock)
 ORACLE = target/oracle
 
-.PHONY: build run install test check fmt web-setup web serve oracle clean help
+.PHONY: build run install test check fmt web-setup web serve oracle perf-web clean help
 
 build: ## Build the bimble binary (target/release/bimble)
 	cargo build --release -p bimble-cli
@@ -43,6 +43,19 @@ oracle: build ## Compare with IfcOpenShell (pip install ifcopenshell)
 	python3 -I scripts/check_ifc.py $(ORACLE)/frame.bimble $(ORACLE)/frame.ifc
 	target/release/bimble info $(ORACLE)/frame.ifc --elements-json > $(ORACLE)/ours.jsonl
 	python3 -I scripts/compare_ifcopenshell.py $(ORACLE)/frame.ifc $(ORACLE)/ours.jsonl
+
+perf-web: ## Time the Vue lab and the viewer page with Lighthouse (4x CPU, 10 Mbit/s, gzip), held to web-ui/perf/budgets.txt
+	scripts/build-web.sh
+	cargo build --release -p bimble-cli
+	mkdir -p web-ui/public
+	target/release/bimble demo web-ui/public/perf-small.bimble
+	target/release/bimble demo web-ui/public/perf-large.bimble --bays-x 20 --bays-y 20 --storeys 10
+	target/release/bimble info web-ui/public/perf-small.bimble
+	target/release/bimble info web-ui/public/perf-large.bimble
+	cp web-ui/public/perf-large.bimble web/dist/
+	cd web-ui && npm ci && npm run wasm && npm run build
+	cd web-ui && node perf/lighthouse.mjs $(or $(PERF_WEB_RUNS),5)
+	node web-ui/perf/check.mjs perf-results/web.txt web-ui/perf/budgets.txt 0.15
 
 clean: ## Delete build output
 	cargo clean

@@ -351,6 +351,19 @@ fn parts(a: Action) -> &'static [Part] {
             [20.0, 7.0],
             [20.0, 18.0],
         ])],
+        // A blank page with a plus: a new model.
+        Action::New => &[
+            Poly(&[
+                [5.0, 4.0],
+                [13.0, 4.0],
+                [17.0, 8.0],
+                [17.0, 20.0],
+                [5.0, 20.0],
+                [5.0, 4.0],
+            ]),
+            Line(&[[11.0, 10.0], [11.0, 16.0]]),
+            Line(&[[8.0, 13.0], [14.0, 13.0]]),
+        ],
         // A page and an arrow out of it: this file converted.
         Action::ConvertOpen => &[
             Poly(&[

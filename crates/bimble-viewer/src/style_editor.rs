@@ -864,8 +864,8 @@ fn fill(ui: &mut egui::Ui, c: MaterialCategory, f: &mut Fill) -> bool {
             });
             ui.end_row();
         });
-    for k in 0..2 {
-        changed |= line_family(ui, c, k, &mut f.lines[k]);
+    for (k, line) in f.lines.iter_mut().enumerate() {
+        changed |= line_family(ui, c, k, line);
     }
     let mut on = f.stipple.is_some();
     if ui.checkbox(&mut on, "Stipple").changed() {

@@ -5,8 +5,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["reference-plans"]
+# DXF and PDF reference plans (ADR 0050): off in the web viewer build.
+reference-plans = ["bimble-drawing/reference-plans"]
+
 [dependencies]
-bimble-drawing.workspace = true
+bimble-drawing = { path = "../bimble-drawing", default-features = false }
+bimble-api.workspace = true
 bimble-core.workspace = true
 bimble-geom.workspace = true
 bimble-ifc.workspace = true
@@ -29,4 +35,5 @@ windows-sys.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 js-sys.workspace = true
+serde.workspace = true
 web-sys = { workspace = true, features = ["Window", "Storage", "Document", "Element", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "Url", "Navigator", "BeforeUnloadEvent", "Event", "Location", "UrlSearchParams", "Response", "Performance"] }

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bimble viewport</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <!-- Test page (ADR 0048): the egui canvas inside a page layout, with `?viewport=1`. -->
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #f4f4f2; }
+    body { display: flex; }
+    #panels { width: 240px; flex: none; background: #ddd; padding: 12px; box-sizing: border-box;
+              font: 14px system-ui, sans-serif; color: #333; }
+    #view { flex: 1; position: relative; min-width: 0; }
+    canvas#bimble { display: block; width: 100%; height: 100%; outline: none; }
+    #status { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%);
+              font: 15px system-ui, sans-serif; color: #333; text-align: center; }
+    #status:empty { display: none; }
+  </style>
+</head>
+<body>
+  <div id="panels">Vue panels go here</div>
+  <div id="view">
+    <canvas id="bimble"></canvas>
+    <div id="status">Loading Bimble…</div>
+  </div>
+  <script type="module">
+    import init, { query, apply, undo, redo, on_change, select, open } from "./bimble_web.js";
+    import { loadManifold } from "./manifold-bridge.js";
+    // The viewer reads its flags from the address: ask for the view only, before init().
+    const url = new URL(location.href);
+    if (!url.searchParams.has("viewport")) {
+      url.searchParams.set("viewport", "1");
+      history.replaceState(null, "", url);
+    }
+    try { await loadManifold(); } catch (e) { console.warn("manifold not loaded:", e); }
+    // ADR 0048: the page calls the viewer from the console, e.g. bimble.query("storeys", "").
+    init().then(() => {
+      window.bimble = { query, apply, undo, redo, on_change, select, open };
+      // The callback runs inside a frame: defer calls back into bimble (queueMicrotask).
+      on_change((s) => console.log("bimble change", s));
+    }).catch((e) => {
+      document.getElementById("status").textContent = "Bimble could not start: " + e;
+    });
+  </script>
+</body>
+</html>

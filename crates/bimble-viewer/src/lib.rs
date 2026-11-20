@@ -20,6 +20,8 @@ use bimble_ifc::read::Progress;
 use web_time::Instant;
 
 mod big;
+#[cfg(target_arch = "wasm32")]
+mod bridge;
 mod collab;
 mod coords;
 mod cutlines;
@@ -48,6 +50,8 @@ mod views;
 mod visibility;
 
 const SAMPLES: u32 = 4;
+/// Model queries and edits on a file opened without its model (a plain IFC).
+const READ_ONLY: &str = "this file is read only: import it to edit";
 /// While moving on a slow machine, a far cell's stand-in is drawn when its error spans at most
 /// this many pixels (ADR 0036 #9: the 415 MB model's whole frame 29 → 1.3 ms at 3 px).
 const MOVING_PROXY_PX: f32 = 3.0;
@@ -172,6 +176,9 @@ fn bounds_with_links(scene: &Scene, links: &[Linked]) -> bimble_render::Sphere {
     })
 }
 
+/// The file name of a new model until it is saved (File → New).
+const UNTITLED: &str = "Untitled.bimble";
+
 /// A question the user must answer before Bimble goes on (ADR 0028).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Confirm {
@@ -204,6 +211,7 @@ pub async fn start_web(canvas: web_sys::HtmlCanvasElement) -> Result<(), String>
             .and_then(|p| p.get(k))
     };
     let open_url = param("url");
+    let viewport_only = param("viewport").is_some();
     let mut options = eframe::WebOptions::default();
     // Browsers can expose WebGPU without an adapter behind it (Chrome on many Linux machines):
     // wgpu would pick WebGPU and fail, so ask for an adapter first and use WebGL2 without one.
@@ -212,18 +220,22 @@ pub async fn start_web(canvas: web_sys::HtmlCanvasElement) -> Result<(), String>
     {
         c.instance_descriptor.backends = eframe::wgpu::Backends::GL;
     }
-    eframe::WebRunner::new()
+    let runner = eframe::WebRunner::new();
+    let bridge_runner = runner.clone();
+    runner
         .start(
             canvas,
             options,
             Box::new(move |cc| {
+                bridge::set(bridge_runner, cc.egui_ctx.clone());
                 let rs = cc
                     .wgpu_render_state
                     .as_ref()
                     .ok_or("the viewer needs the wgpu renderer")?;
                 settings::Settings::load().apply_look(&cc.egui_ctx);
                 state::guard_page_unload();
-                let app = Viewer::new(rs);
+                let mut app = Viewer::new(rs);
+                app.viewport_only = viewport_only;
                 let backend = format!("{:?}", rs.adapter.get_info().backend);
                 tell("started", Some(&backend));
                 if let Some(url) = open_url {
@@ -932,6 +944,8 @@ struct Viewer {
     allow_close: bool,
     /// The file waiting for the answer to `Confirm::Open`.
     pending_open: Option<files::Picked>,
+    /// File → New waiting for the answer to `Confirm::Open` (the same question).
+    pending_new: bool,
     standards_query: String,
     /// The ribbon's open tab, the command palette, tabs of open views and sheets.
     ribbon_tab: ribbon::Tab,
@@ -964,6 +978,9 @@ struct Viewer {
     links_window: bool,
     /// Home (#52) over the main view.
     home_open: bool,
+    /// Only the view and its in-view tools, no egui chrome: a web page owns the panels
+    /// (`?viewport`, ADR 0048).
+    viewport_only: bool,
     /// Recent files' previews, read once (#52); None: none on disk.
     previews: std::collections::HashMap<String, Option<egui::TextureHandle>>,
     /// The file whose preview to keep once its first picture is drawn.
@@ -1104,6 +1121,7 @@ impl Viewer {
             confirm: None,
             allow_close: false,
             pending_open: None,
+            pending_new: false,
             standards_query: String::new(),
             ribbon_tab: ribbon::Tab::default(),
             palette: None,
@@ -1124,6 +1142,7 @@ impl Viewer {
             about_window: false,
             links_window: false,
             home_open: false,
+            viewport_only: false,
             previews: Default::default(),
             preview_for: None,
             synced_at: None,
@@ -1615,22 +1634,59 @@ impl Viewer {
         }
     }
 
+    /// File → New: over unsaved work, the same question as opening another file (ADR 0028).
+    fn new_model(&mut self) {
+        self.commit_pages();
+        let s = self.snapshot();
+        if s.model_dirty || s.views_dirty {
+            self.pending_new = true;
+            self.confirm = Some(Confirm::Open);
+            return;
+        }
+        self.start_new();
+    }
+
+    /// An empty model, editable and not saved, loaded as an imported copy is.
+    fn start_new(&mut self) {
+        let m = bimble_api::verbs::new_model("Untitled");
+        let (tx, rx) = channel();
+        let _ = tx.send(Ok(imported(
+            Scene::from_model(&m),
+            m,
+            Instant::now(),
+            Vec::new(),
+        )));
+        self.loading = Some(Loading::new(PathBuf::from(UNTITLED), rx, true));
+        self.error = None;
+        self.poll_loading();
+        if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
+            ed.message = Some("New model, not saved".into());
+        }
+    }
+
     // ---------- editing
 
     /// Apply commands from the editor as one undoable step, then show the result.
     fn apply_commands(&mut self, cmds: Vec<bimble_core::Command>) {
+        let _ = self.try_apply(cmds);
+    }
+
+    /// `apply_commands`, with the error returned too (the page bridge reports it).
+    fn try_apply(&mut self, cmds: Vec<bimble_core::Command>) -> Result<(), String> {
         let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) else {
-            return;
+            return Err(READ_ONLY.into());
         };
         match ed.apply(cmds) {
             Ok(()) => {
                 ed.message = None;
                 let select = ed.select_after.take();
                 self.rebuild_scene(select.map(|g| g.to_string()));
+                Ok(())
             }
             Err(e) => {
-                ed.message = Some(e);
+                ed.message = Some(e.clone());
                 ed.select_after = None;
+                Err(e)
             }
         }
     }
@@ -1721,7 +1777,24 @@ impl Viewer {
             &bimble_core::file::to_bytes(&ed.model),
         );
         #[cfg(not(target_arch = "wasm32"))]
-        let r = bimble_core::file::save(&ed.model, &l.path).map_err(|e| e.to_string());
+        let r = if l.path.as_os_str() != UNTITLED {
+            bimble_core::file::save(&ed.model, &l.path).map_err(|e| e.to_string())
+        } else {
+            // A new model has no file yet (File → New): ask where, as Save As does.
+            let name = l.path.display().to_string();
+            match files::save(
+                &name,
+                &[("Bimble model", &["bimble"])],
+                &bimble_core::file::to_bytes(&ed.model),
+            ) {
+                Ok(Some(to)) => {
+                    l.path = PathBuf::from(to);
+                    Ok(())
+                }
+                Ok(None) => return,
+                Err(e) => Err(e),
+            }
+        };
         match r {
             Ok(()) => {
                 ed.dirty = false;
@@ -2805,6 +2878,9 @@ impl Viewer {
         }
         if self.palette.is_some() || ctx.egui_wants_keyboard_input() {
             return;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::N)) {
+            self.new_model();
         }
         // Editing shortcuts (a .bimble model).
         if self.loaded.as_ref().is_some_and(|l| l.edit.is_some()) {
@@ -4148,7 +4224,11 @@ impl Viewer {
                     });
                 }
                 Confirm::Open => {
-                    let name = self.pending_open.as_ref().map_or("", |p| p.name.as_str());
+                    let name = match &self.pending_open {
+                        _ if self.pending_new => UNTITLED,
+                        Some(p) => p.name.as_str(),
+                        None => "",
+                    };
                     ui.heading(format!("Open {name}?"));
                     ui.label(format!(
                         "Not saved: {}. Opening another file now loses these changes.",
@@ -4234,7 +4314,9 @@ impl Viewer {
             }
             (Confirm::Open, Some(true)) => {
                 self.confirm = None;
-                if let Some(p) = self.pending_open.take() {
+                if std::mem::take(&mut self.pending_new) {
+                    self.start_new();
+                } else if let Some(p) = self.pending_open.take() {
                     self.handle_one(p, ctx);
                 }
             }
@@ -4246,6 +4328,7 @@ impl Viewer {
             (_, Some(false)) => {
                 self.confirm = None;
                 self.pending_open = None;
+                self.pending_new = false;
             }
             _ => {}
         }
@@ -4548,6 +4631,12 @@ fn toggle<T: Ord>(set: &mut BTreeSet<T>, item: T, visible: bool) {
 }
 
 impl eframe::App for Viewer {
+    /// Lets the page bridge reach the viewer through `WebRunner::app_mut`.
+    #[cfg(target_arch = "wasm32")]
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(&mut *self)
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         #[cfg(target_arch = "wasm32")]
@@ -4581,76 +4670,80 @@ impl eframe::App for Viewer {
                 .fill(fill)
                 .inner_margin(egui::Margin::symmetric(ui_theme::GAP_M as i8, 4))
         };
-        // One row: the File menu, the ribbon's tabs, quick access (#51).
-        egui::Panel::top("title")
-            .frame(bar(ui_theme::tabs_bg()).inner_margin(egui::Margin {
-                left: ui_theme::GAP_M as i8,
-                right: ui_theme::GAP_M as i8,
-                top: 2,
-                bottom: 0,
-            }))
-            .show(ui, |ui| self.title_row(ui));
-        egui::Panel::top("ribbon")
-            .frame(
-                bar(ui_theme::ribbon_bg())
-                    .inner_margin(egui::Margin::symmetric(ui_theme::GAP_M as i8, 6)),
-            )
-            .show(ui, |ui| self.ribbon_panel(ui));
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        // Left: the model navigator above, the properties (of the selected element, else of
-        // the view) below.
-        egui::Panel::left("browser")
-            .resizable(true)
-            .default_size(290.0)
-            .min_size(220.0)
-            .show(ui, |ui| {
-                egui::Panel::top("navigator")
-                    .resizable(true)
-                    .default_size(ui.available_height() * 0.45)
-                    .min_size(120.0)
-                    .show(ui, |ui| self.navigator(ui));
-                egui::CentralPanel::default().show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("properties")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            let placing = self
-                                .loaded
-                                .as_ref()
-                                .and_then(|l| l.edit.as_ref())
-                                .is_some_and(|e| e.placing.is_some());
-                            if placing {
-                                // While placing, what is placed: storey and sizes (ADR 0027).
-                                if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut())
-                                {
-                                    ui.heading("Place");
-                                    ed.place_panel(ui);
-                                    if let Some(m) = &ed.message {
-                                        ui.label(m);
+        // `?viewport`: no chrome, the page around the canvas owns the panels (ADR 0048).
+        if !self.viewport_only {
+            // One row: the File menu, the ribbon's tabs, quick access (#51).
+            egui::Panel::top("title")
+                .frame(bar(ui_theme::tabs_bg()).inner_margin(egui::Margin {
+                    left: ui_theme::GAP_M as i8,
+                    right: ui_theme::GAP_M as i8,
+                    top: 2,
+                    bottom: 0,
+                }))
+                .show(ui, |ui| self.title_row(ui));
+            egui::Panel::top("ribbon")
+                .frame(
+                    bar(ui_theme::ribbon_bg())
+                        .inner_margin(egui::Margin::symmetric(ui_theme::GAP_M as i8, 6)),
+                )
+                .show(ui, |ui| self.ribbon_panel(ui));
+            egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+            // Left: the model navigator above, the properties (of the selected element, else of
+            // the view) below.
+            egui::Panel::left("browser")
+                .resizable(true)
+                .default_size(290.0)
+                .min_size(220.0)
+                .show(ui, |ui| {
+                    egui::Panel::top("navigator")
+                        .resizable(true)
+                        .default_size(ui.available_height() * 0.45)
+                        .min_size(120.0)
+                        .show(ui, |ui| self.navigator(ui));
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("properties")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                let placing = self
+                                    .loaded
+                                    .as_ref()
+                                    .and_then(|l| l.edit.as_ref())
+                                    .is_some_and(|e| e.placing.is_some());
+                                if placing {
+                                    // While placing, what is placed: storey and sizes (ADR 0027).
+                                    if let Some(ed) =
+                                        self.loaded.as_mut().and_then(|l| l.edit.as_mut())
+                                    {
+                                        ui.heading("Place");
+                                        ed.place_panel(ui);
+                                        if let Some(m) = &ed.message {
+                                            ui.label(m);
+                                        }
                                     }
-                                }
-                            } else if self.link_selected.is_some() {
-                                if ui.small_button("Back to the view").clicked() {
-                                    self.select_link_element(None);
+                                } else if self.link_selected.is_some() {
+                                    if ui.small_button("Back to the view").clicked() {
+                                        self.select_link_element(None);
+                                    } else {
+                                        self.link_properties(ui);
+                                    }
+                                } else if self.selected.is_some() {
+                                    if ui.small_button("Back to the view").clicked() {
+                                        self.clear_selection();
+                                    } else {
+                                        self.properties(ui);
+                                    }
+                                } else if self.schedule.is_some() {
+                                    self.schedule_properties(ui);
+                                } else if self.layout.is_some() {
+                                    self.layout_properties(ui);
                                 } else {
-                                    self.link_properties(ui);
+                                    self.view_properties(ui);
                                 }
-                            } else if self.selected.is_some() {
-                                if ui.small_button("Back to the view").clicked() {
-                                    self.clear_selection();
-                                } else {
-                                    self.properties(ui);
-                                }
-                            } else if self.schedule.is_some() {
-                                self.schedule_properties(ui);
-                            } else if self.layout.is_some() {
-                                self.layout_properties(ui);
-                            } else {
-                                self.view_properties(ui);
-                            }
-                        });
+                            });
+                    });
                 });
-            });
+        }
         if self.plan_window {
             let mut open = true;
             egui::Window::new("Export view")
@@ -4669,7 +4762,7 @@ impl eframe::App for Viewer {
             self.history_window = open;
         }
         // Right: the graphic standards, edited live (ADR 0027).
-        if self.standards_open {
+        if self.standards_open && !self.viewport_only {
             egui::Panel::right("standards")
                 .resizable(true)
                 .default_size(400.0)
@@ -4691,7 +4784,7 @@ impl eframe::App for Viewer {
                 });
         }
         // On Home, no tabs: leaving it brings back the view's.
-        if self.loaded.is_some() && !self.home_open {
+        if self.loaded.is_some() && !self.home_open && !self.viewport_only {
             egui::Panel::top("view-tabs")
                 .frame(
                     egui::Frame::new()
@@ -4716,25 +4809,32 @@ impl eframe::App for Viewer {
             if self.loaded.is_none() && self.loading.is_some() {
                 return;
             }
-            // Home (#52): when nothing is open, or asked for.
-            if self.loaded.is_none() || self.home_open {
-                self.home_ui(ui);
+            if self.viewport_only && self.loaded.is_none() {
+                ui.centered_and_justified(|ui| ui.weak("No model open"));
                 return;
             }
-            // The material browser: it takes the main view.
-            if self.materials_page.is_some() {
-                self.materials_ui(ui);
-                return;
-            }
-            // The project information page: it takes the main view.
-            if self.project_page.is_some() {
-                self.project_ui(ui);
-                return;
-            }
-            // A schedule open: it takes the main view.
-            if self.schedule.is_some() {
-                self.schedule_ui(ui);
-                return;
+            // Home and the pages are the egui chrome's: `?viewport` shows only the view.
+            if !self.viewport_only {
+                // Home (#52): when nothing is open, or asked for.
+                if self.loaded.is_none() || self.home_open {
+                    self.home_ui(ui);
+                    return;
+                }
+                // The material browser: it takes the main view.
+                if self.materials_page.is_some() {
+                    self.materials_ui(ui);
+                    return;
+                }
+                // The project information page: it takes the main view.
+                if self.project_page.is_some() {
+                    self.project_ui(ui);
+                    return;
+                }
+                // A schedule open: it takes the main view.
+                if self.schedule.is_some() {
+                    self.schedule_ui(ui);
+                    return;
+                }
             }
             // The view On paper: its drawing takes the main view (ADR 0046).
             if self.on_paper() {
@@ -4869,6 +4969,8 @@ impl eframe::App for Viewer {
             !state::unsaved(&self.snapshot()).is_empty(),
             std::sync::atomic::Ordering::Relaxed,
         );
+        #[cfg(target_arch = "wasm32")]
+        bridge::notify(self);
         // Closing with unsaved work asks first (ADR 0028).
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             // A value typed but not yet stored counts too.
@@ -4878,6 +4980,7 @@ impl eframe::App for Viewer {
                 // Another question open (reset the standards…) gives way to this one.
                 self.confirm = Some(Confirm::Close);
                 self.pending_open = None;
+                self.pending_new = false;
             }
         }
         self.confirm_ui(&ctx);

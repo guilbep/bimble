@@ -5,3 +5,7 @@
 !**/fixtures/*.bimble
 web/dist/
 .DS_Store
+web-ui/node_modules/
+web-ui/dist/
+web-ui/public/bimble/
+perf-results/

@@ -8,6 +8,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use bimble_core::{Command, Generator, GlobalId, History, demo, file, version};
 mod bench;
 mod codec_bench;
+mod mcp;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -223,6 +224,8 @@ enum Cmd {
         /// Style file to check; without it, the default style is printed
         file: Option<PathBuf>,
     },
+    /// MCP server over stdio, so an LLM agent can read and edit the model (ADR 0048)
+    Mcp { model: PathBuf },
     /// Generate the demo concrete frame (2 storeys, 3×2 bays by default)
     Demo {
         out: PathBuf,
@@ -557,6 +560,7 @@ fn run(cli: Cli) -> Result<(), String> {
             };
             print!("{}", s.to_json());
         }
+        Cmd::Mcp { model } => mcp::run(&model)?,
         Cmd::Demo {
             out,
             bays_x,
@@ -1704,9 +1708,20 @@ fn now_iso() -> String {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    init_log(cli.verbose);
-    match run(cli) {
+    // Windows gives the main thread 1 MB of stack, and a debug build overflowed it (CI, the
+    // `bimble mcp` test) before any command ran. Parse and run everything on a thread with 8 MB,
+    // as Linux and macOS give the main thread; `main` only waits.
+    let result = std::thread::Builder::new()
+        .name("bimble".into())
+        .stack_size(8 << 20)
+        .spawn(|| {
+            let cli = Cli::parse();
+            init_log(cli.verbose);
+            run(cli)
+        })
+        .map_err(|e| e.to_string())
+        .and_then(|h| h.join().map_err(|_| "a command panicked".to_string())?);
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(msg) => {
             eprintln!("error: {msg}");

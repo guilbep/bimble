@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/bimble-core", "crates/bimble-geom", "crates/bimble-ifc", "crates/bimble-render", "crates/bimble-drawing", "crates/bimble-viewer", "crates/bimble-cli", "crates/bimble-web"]
+members = ["crates/bimble-core", "crates/bimble-geom", "crates/bimble-ifc", "crates/bimble-render", "crates/bimble-drawing", "crates/bimble-viewer", "crates/bimble-cli", "crates/bimble-web", "crates/bimble-api"]
 
 [workspace.package]
 version = "0.16.0"
@@ -17,8 +17,11 @@ bimble-ifc = { path = "crates/bimble-ifc" }
 bimble-drawing = { path = "crates/bimble-drawing" }
 bimble-render = { path = "crates/bimble-render" }
 bimble-viewer = { path = "crates/bimble-viewer" }
+bimble-api = { path = "crates/bimble-api" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+# JSON schemas of the API verbs' arguments, for agents (ADR 0048). MIT.
+schemars = "1"
 blake3 = "1"
 uuid = { version = "1", features = ["v4"] }
 earcutr = "0.5"
@@ -64,3 +67,11 @@ js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = "0.3"
+
+# The browser build only (scripts/build-web.sh, ADR 0050): link-time optimized, one codegen unit.
+# opt-level 3, not "s" or "z": models open fastest (z: 1.9x slower to open; Pierre, 20 Nov).
+[profile.web]
+inherits = "release"
+opt-level = 3
+lto = true
+codegen-units = 1

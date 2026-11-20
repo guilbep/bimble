@@ -33,7 +33,7 @@ impl Viewer {
                     }
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
-                        for a in [Action::Open, Action::ImportIfc] {
+                        for a in [Action::New, Action::Open, Action::ImportIfc] {
                             if ui.button(a.label()).clicked() {
                                 run = Some(a);
                             }
