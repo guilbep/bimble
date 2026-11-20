@@ -171,6 +171,13 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
             v.pointer()
                 .map(|(p, text)| serde_json::json!({"world_mm": p, "text": text})),
         ),
+        // What is being placed (B1): `Editor::placing_json`; null without an editable model.
+        "placing" => json(
+            v.loaded
+                .as_ref()
+                .and_then(|l| l.edit.as_ref())
+                .map(|ed| ed.placing_json()),
+        ),
         // The status bar's counts and its text; null without a model.
         "status" => json(v.status()),
         "visibility" => {
@@ -293,6 +300,26 @@ pub fn action(name: &str) -> Result<(), JsValue> {
     })
 }
 
+/// Change what is placed: `{kind?, storey?, material?, sizes?: {column?, beam_width?,
+/// beam_height?, wall?, slab?}}` (mm, finite, > 0, <= 1e7). All or nothing. `kind` while not
+/// placing starts placing, as `action("place_<kind>")`; `material` is a model material's name
+/// or a library grade, as the `place` verb's.
+#[wasm_bindgen]
+pub fn set_placing(args_json: &str) -> Result<(), JsValue> {
+    let patch = crate::edit::PlacingPatch::parse(args_json).map_err(|e| JsValue::from_str(&e))?;
+    let start = with_viewer(|v| {
+        v.loaded
+            .as_mut()
+            .and_then(|l| l.edit.as_mut())
+            .ok_or_else(|| READ_ONLY.to_string())?
+            .set_placing(patch)
+    })?;
+    match start {
+        Some(k) => action(&format!("place_{}", k.label().to_lowercase())),
+        None => Ok(()),
+    }
+}
+
 /// Go to a tab or close it, as the tab row does: `{"op": "activate"|"close", "tab": <a tab of
 /// query("open_views")>}`. Closing the last tab shows Home. `{"op": "open", "tab": {"type":
 /// "view", "id"}}` opens any view (open_views.views), as a navigator row click does.
@@ -407,6 +434,8 @@ pub(crate) fn notify(v: &Viewer) {
             v.open_tabs.len(),
         ],
         "tab": v.current_tab().map(|t| t.to_json()),
+        // A click adds a point, the mode ends, a size changes: refresh query("placing").
+        "placing": v.loaded.as_ref().and_then(|l| l.edit.as_ref()).map(|ed| ed.placing_json()),
     })
     .to_string();
     if LAST_SENT.with(|s| *s.borrow() == now) {

@@ -80,6 +80,49 @@ pub struct Placing {
     pub points: Vec<[f64; 2]>,
 }
 
+impl Placing {
+    /// The status line of the placing mode: what the next click does.
+    pub fn hint(&self) -> &'static str {
+        match (self.kind.clicks(), self.points.len()) {
+            (1, _) => "Click where the column goes (on the storey level). Esc stops.",
+            (_, 0) if self.kind == Kind::Slab => "Click a corner of the slab.",
+            (_, 0) => "Click the start point.",
+            _ if self.kind == Kind::Slab => "Click the opposite corner.",
+            _ => "Click the end point.",
+        }
+    }
+}
+
+/// A partial change of what is placed (bridge `set_placing`): every field optional.
+#[derive(Debug, Default)]
+pub struct PlacingPatch {
+    pub kind: Option<Kind>,
+    pub storey: Option<GlobalId>,
+    pub material: Option<String>,
+    /// Some of `Sizes`' fields, mm.
+    pub sizes: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+impl PlacingPatch {
+    /// Parse `{kind?, storey?, material?, sizes?}`; unknown fields and kinds are errors.
+    pub fn parse(json: &str) -> Result<PlacingPatch, String> {
+        let v: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(json).map_err(|e| e.to_string())?;
+        let mut p = PlacingPatch::default();
+        for (k, x) in v {
+            let e = |e: serde_json::Error| format!("{k}: {e}");
+            match k.as_str() {
+                "kind" => p.kind = Some(serde_json::from_value(x).map_err(e)?),
+                "storey" => p.storey = Some(serde_json::from_value(x).map_err(e)?),
+                "material" => p.material = Some(serde_json::from_value(x).map_err(e)?),
+                "sizes" => p.sizes = Some(serde_json::from_value(x).map_err(e)?),
+                _ => return Err(format!("unknown field: {k}")),
+            }
+        }
+        Ok(p)
+    }
+}
+
 pub struct Editor {
     pub model: Model,
     pub history: History,
@@ -91,6 +134,9 @@ pub struct Editor {
     pub kind: Kind,
     pub storey: Option<GlobalId>,
     pub sizes: Sizes,
+    /// Material of new elements: a model material's name or a library grade; None: the first
+    /// concrete of the model, else C30/37 (`new_element`).
+    pub material: Option<String>,
     pub placing: Option<Placing>,
     pub commit_message: String,
     pub new_branch: String,
@@ -167,6 +213,7 @@ impl Editor {
             kind: Kind::Column,
             storey,
             sizes: Sizes::default(),
+            material: None,
             placing: None,
             commit_message: String::new(),
             new_branch: String::new(),
@@ -262,8 +309,77 @@ impl Editor {
             pts[0],
             b,
             &self.sizes,
-            None,
+            self.material.as_deref(),
         ))
+    }
+
+    /// What is placed, for the page (B1): kind, storey, material, sizes, points, hint.
+    pub fn placing_json(&self) -> serde_json::Value {
+        let kind = self.placing.as_ref().map_or(self.kind, |p| p.kind);
+        let storey = self.storey.and_then(|s| self.model.storeys.get(&s));
+        serde_json::json!({
+            "active": self.placing.is_some(),
+            "kind": kind,
+            "storey": storey.map(|s| s.id),
+            "storey_name": storey.map(|s| s.name.as_str()),
+            "material": self.material,
+            "sizes": self.sizes,
+            "offset_mm": self.offset,
+            "points": self.placing.as_ref().map_or(&[][..], |p| &p.points[..]),
+            "clicks_needed": kind.clicks(),
+            "hint": self.placing.as_ref().map(Placing::hint),
+        })
+    }
+
+    /// Apply a `PlacingPatch`, all or nothing. Returns the kind to start placing when it names
+    /// one and nothing is being placed (the caller runs `place_<kind>` as the ribbon does).
+    pub fn set_placing(&mut self, p: PlacingPatch) -> Result<Option<Kind>, String> {
+        if let Some(s) = p.storey
+            && !self.model.storeys.contains_key(&s)
+        {
+            return Err(format!("unknown storey: {s}"));
+        }
+        if let Some(name) = &p.material {
+            bimble_api::verbs::material(&self.model, Some(name))?;
+        }
+        let sizes = match &p.sizes {
+            None => self.sizes,
+            Some(patch) => {
+                let mut v = serde_json::to_value(self.sizes).map_err(|e| e.to_string())?;
+                for (k, x) in patch {
+                    if v.get(k).is_none() {
+                        return Err(format!("unknown size: {k}"));
+                    }
+                    match x.as_f64() {
+                        Some(mm)
+                            if mm.is_finite() && mm > 0.0 && mm <= bimble_api::dispatch::MAX_MM =>
+                        {
+                            v[k.as_str()] = x.clone()
+                        }
+                        _ => return Err(format!("{k}: {x} is not a size within (0, 1e7] mm")),
+                    }
+                }
+                serde_json::from_value(v).map_err(|e| e.to_string())?
+            }
+        };
+        self.sizes = sizes;
+        if let Some(s) = p.storey {
+            self.storey = Some(s);
+        }
+        if p.material.is_some() {
+            self.material = p.material;
+        }
+        let Some(k) = p.kind else { return Ok(None) };
+        self.kind = k;
+        match &mut self.placing {
+            Some(pl) if pl.kind != k => {
+                pl.kind = k;
+                pl.points.clear();
+                Ok(None)
+            }
+            Some(_) => Ok(None),
+            None => Ok(Some(k)),
+        }
     }
 
     /// The properties form of the selected element; queues commands when a field is left.
@@ -443,13 +559,7 @@ impl Editor {
                 ui.end_row();
             });
         if let Some(p) = &self.placing {
-            ui.weak(match (p.kind.clicks(), p.points.len()) {
-                (1, _) => "Click where the column goes (on the storey level). Esc stops.",
-                (_, 0) if p.kind == Kind::Slab => "Click a corner of the slab.",
-                (_, 0) => "Click the start point.",
-                _ if p.kind == Kind::Slab => "Click the opposite corner.",
-                _ => "Click the end point.",
-            });
+            ui.weak(p.hint());
             ui.weak(
                 "Snaps to axis crossings, column centres, corners, axes and edges. Shift: free.",
             );
@@ -467,6 +577,75 @@ mod tests {
         let m = concrete_frame(&FrameSpec::default());
         let s = m.storeys.values().find(|s| s.elevation == 0.0).unwrap().id;
         (m, s)
+    }
+
+    fn patch(j: &str) -> Result<PlacingPatch, String> {
+        PlacingPatch::parse(j)
+    }
+
+    /// B1: a bad payload changes nothing; a good one merges sizes and starts placing.
+    #[test]
+    fn set_placing_validates_then_applies() {
+        let (m, s) = demo();
+        let mut ed = Editor::new(m);
+        assert!(patch(r#"{"kind": "door"}"#).is_err());
+        assert!(patch(r#"{"colour": 1}"#).is_err());
+        let before = ed.sizes;
+        for bad in [
+            r#"{"slab": 0}"#,
+            r#"{"slab": -5}"#,
+            r#"{"slab": 1e8}"#,
+            r#"{"roof": 200}"#,
+        ] {
+            let p = patch(&format!(r#"{{"sizes": {bad}, "kind": "slab"}}"#)).unwrap();
+            assert!(ed.set_placing(p).is_err(), "{bad}");
+        }
+        let p = patch(r#"{"material": "Unobtainium", "kind": "slab"}"#).unwrap();
+        assert!(ed.set_placing(p).unwrap_err().contains("unknown material"));
+        assert_eq!((ed.sizes, ed.material.as_deref()), (before, None));
+        let p = patch(&format!(
+            r#"{{"kind": "slab", "storey": "{s}", "material": "C35/45", "sizes": {{"slab": 300}}}}"#
+        ))
+        .unwrap();
+        assert_eq!(ed.set_placing(p), Ok(Some(Kind::Slab)));
+        assert_eq!(ed.sizes.slab, 300.0);
+        assert_eq!(ed.sizes.column, before.column);
+        assert_eq!(ed.material.as_deref(), Some("C35/45"));
+        // Placing already: switching kind restarts the points, starts nothing new.
+        ed.placing = Some(Placing {
+            kind: Kind::Slab,
+            points: vec![[0.0, 0.0]],
+        });
+        assert_eq!(ed.placing_json()["hint"], "Click the opposite corner.");
+        let p = patch(r#"{"kind": "beam"}"#).unwrap();
+        assert_eq!(ed.set_placing(p), Ok(None));
+        assert_eq!(
+            ed.placing,
+            Some(Placing {
+                kind: Kind::Beam,
+                points: vec![]
+            })
+        );
+        assert_eq!(ed.placing_json()["clicks_needed"], 2);
+    }
+
+    /// The click path uses the material set for placing (egui and the page agree).
+    #[test]
+    fn a_click_uses_the_placing_material() {
+        let (m, _) = demo();
+        let mut ed = Editor::new(m);
+        ed.material = Some("C35/45".into());
+        ed.placing = Some(Placing {
+            kind: Kind::Column,
+            points: vec![],
+        });
+        let cmds = ed.click([500.0, 500.0]).unwrap().unwrap();
+        ed.apply(cmds).unwrap();
+        let col =
+            ed.model.elements.values().find(|e| {
+                e.name.starts_with('P') && ed.model.materials[&e.material].name == "C35/45"
+            });
+        assert!(col.is_some());
     }
 
     /// Several selected (#54): one Delete removes them all, and one undo brings them back.

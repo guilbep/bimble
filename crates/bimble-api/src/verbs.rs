@@ -108,7 +108,7 @@ pub fn storey_height(m: &Model, storey: GlobalId) -> f64 {
 
 /// The material to use: `name` exactly as in the model, else the library grade it names
 /// (with a command adding it); `None` is the first concrete of the model, else C30/37.
-fn material(m: &Model, name: Option<&str>) -> Result<(GlobalId, Option<Command>), String> {
+pub fn material(m: &Model, name: Option<&str>) -> Result<(GlobalId, Option<Command>), String> {
     let Some(name) = name else {
         if let Some(x) = m
             .materials
