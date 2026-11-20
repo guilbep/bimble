@@ -18,9 +18,10 @@ export const hint = () => {
 // D6 Quantities (wireframes v01 Quantities.html; ADR 0029). The table is the real schedule from Rust
 // (`schedule_rows`: text cells, subtotals and total as Rust writes them; nothing is summed here).
 // Groups carry `ids` (one GlobalId or null per row): a row click selects, the selected element's row is pink
-// (`tr.sl`). Group, filter, columns and CSV have no Rust call: drawn disabled.
-import { computed } from "vue";
-import { scheduleList, scheduleRows, select, state, type ScheduleDef, type ScheduleTable } from "../bimble";
+// (`tr.sl`). Group and filter change the schedule (`set_schedule`, undoable); Export CSV downloads
+// `schedule_csv`. Columns has no picker in the reference: drawn disabled.
+import { computed, ref } from "vue";
+import { materials, scheduleCsv, scheduleList, scheduleRows, select, setSchedule, state, type SchedulePatch, type ScheduleDef, type ScheduleTable } from "../bimble";
 import { t } from "../i18n";
 
 // ponytail: the built-in "All elements" schedule is shown (it mixes classes, as the reference); no schedule
@@ -46,10 +47,22 @@ const num = (c: string) => c.endsWith(")");
 const cls = (c = "") => (num(c) ? "r mono" : ["IFC class", "Material", "GlobalId"].includes(c) ? "mono" : "");
 // A subtotal or total line: its label spans the cells before the first value Rust wrote.
 const span = (cells: string[]) => Math.max(1, cells.findIndex((c) => c !== "") < 0 ? cells.length : cells.findIndex((c) => c !== ""));
-const family = computed(() => {
-  const f = def.value?.family as string | undefined;
-  return f ? tr(`quantities.family.${f}`, f) : t("quantities.family.all");
-});
+const famLabel = (f: string) => tr(`quantities.family.${f}`, f);
+// The model's families, and the schedule's own if no material has it any more.
+const families = computed(() => [...new Set([...materials.value.map((m) => m.category), ...(def.value?.family ? [def.value.family as string] : [])])].sort());
+const err = ref("");
+const change = (patch: SchedulePatch) => { if (def.value) err.value = setSchedule(def.value.name, patch) ?? ""; };
+function exportCsv() {
+  if (!def.value) return;
+  try {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([scheduleCsv(def.value.name)], { type: "text/csv" }));
+    a.download = `${def.value.name}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    err.value = "";
+  } catch (e) { err.value = String(e); }
+}
 </script>
 
 <template>
@@ -57,10 +70,15 @@ const family = computed(() => {
     <div class="head">
       <h2 style="font-size:20px" data-bb="quantities-title">{{ table?.name ?? def?.name ?? '' }}</h2>
       <span style="flex:1" />
-      <span class="sel-inp off" style="width:170px" data-missing="verb: change a schedule's grouping (SetSchedules)" data-bb="quantities-group">{{ t('quantities.group', { by: t(def?.group_by_level ? 'quantities.group.level' : 'quantities.group.none') }) }}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></span>
-      <span class="sel-inp off" style="width:170px" data-missing="verb: change a schedule's filter (SetSchedules)" data-bb="quantities-filter">{{ t('quantities.filter', { family }) }}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></span>
-      <button class="btn s" type="button" disabled data-missing="verb: change a schedule's columns (SetSchedules)" data-bb="quantities-columns">{{ t('quantities.columns') }}</button>
-      <button class="btn p" type="button" disabled data-missing="action: export a schedule as CSV (egui schedules.rs to_csv)" data-bb="quantities-export">{{ t('quantities.exportCsv') }}</button>
+      <select class="sel-inp" style="width:170px" :disabled="!def" :value="def?.group_by_level ? 'level' : 'none'" data-bb="quantities-group" @change="change({ group_by_level: ($event.target as HTMLSelectElement).value === 'level' })">
+        <option v-for="b in ['none', 'level']" :key="b" :value="b">{{ t('quantities.group', { by: t(b === 'level' ? 'quantities.group.level' : 'quantities.group.none') }) }}</option>
+      </select>
+      <select class="sel-inp" style="width:170px" :disabled="!def" :value="(def?.family as string | undefined) ?? ''" data-bb="quantities-filter" @change="change({ family: ($event.target as HTMLSelectElement).value || null })">
+        <option value="">{{ t('quantities.filter', { family: t('quantities.family.all') }) }}</option>
+        <option v-for="f in families" :key="f" :value="f">{{ t('quantities.filter', { family: famLabel(f) }) }}</option>
+      </select>
+      <button class="btn s" type="button" disabled data-missing="UI: a column picker (not in the reference); set_schedule takes columns" data-bb="quantities-columns">{{ t('quantities.columns') }}</button>
+      <button class="btn p" type="button" :disabled="!table" data-bb="quantities-export" @click="exportCsv">{{ t('quantities.exportCsv') }}</button>
     </div>
     <table v-if="table" class="t" data-bb="quantities-table">
       <thead><tr><th v-for="c in table.columns" :key="c" :class="{ r: num(c) }">{{ head(c) }}</th></tr></thead>
@@ -83,6 +101,7 @@ const family = computed(() => {
       </tfoot>
     </table>
     <p v-else class="note" style="margin:0">{{ t('quantities.empty') }}</p>
+    <p v-if="err" class="note" style="margin:0" role="alert" data-bb="quantities-error">{{ err }}</p>
     <p v-if="table?.truncated" class="note" style="margin:0" data-bb="quantities-truncated">{{ t('quantities.truncated', { shown, count: table.count }) }}</p>
     <p class="note" style="margin:0">{{ t('quantities.note') }}</p>
   </div>

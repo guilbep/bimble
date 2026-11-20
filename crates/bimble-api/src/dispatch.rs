@@ -20,7 +20,7 @@ pub struct VerbInfo {
     pub summary: &'static str,
 }
 
-const VERBS: [VerbInfo; 6] = [
+const VERBS: [VerbInfo; 7] = [
     VerbInfo {
         name: "place",
         summary: "Place a new column, beam, wall or slab on a storey (storey-relative mm).",
@@ -44,6 +44,10 @@ const VERBS: [VerbInfo; 6] = [
     VerbInfo {
         name: "set_view",
         summary: "Change a view's scale (1:N), true_north, crop (null: none) or plan range offsets, mm; missing ones are kept.",
+    },
+    VerbInfo {
+        name: "set_schedule",
+        summary: "Change a schedule's grouping by level, family filter (null: every family) or columns (field names); missing ones are kept.",
     },
 ];
 
@@ -175,6 +179,7 @@ pub fn describe(name: &str) -> Option<Value> {
         "delete" => schemars::schema_for!(IdsArgs),
         "set_generator" => schemars::schema_for!(SetGeneratorArgs),
         "set_view" => schemars::schema_for!(SetViewArgs),
+        "set_schedule" => schemars::schema_for!(SetScheduleArgs),
         _ => return None,
     };
     Some(s.to_value())
@@ -245,6 +250,7 @@ pub fn run(m: &Model, name: &str, args: Value) -> Result<Vec<Command>, String> {
         "delete" => Ok(verbs::delete(&parse::<IdsArgs>(args)?.ids)),
         "set_generator" => set_generator(m, parse(args)?),
         "set_view" => set_view(m, parse(args)?),
+        "set_schedule" => set_schedule(m, parse(args)?),
         _ => Err(format!("unknown verb {name:?}; known: {}", names())),
     }
 }
@@ -346,6 +352,53 @@ fn set_view(m: &Model, a: SetViewArgs) -> Result<Vec<Command>, String> {
     }])
 }
 
+/// Arguments of `set_schedule`: the `ScheduleDef` fields to change, others kept.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SetScheduleArgs {
+    /// The schedule's name (built-in or the model's own), case-insensitive.
+    name: String,
+    /// Rows grouped by level, a subtotal under each.
+    group_by_level: Option<bool>,
+    /// Only elements of this material family ("concrete", "steel", ...); null: every family.
+    #[serde(default, deserialize_with = "some")]
+    #[schemars(with = "Option<String>")]
+    family: Option<Option<bimble_core::MaterialCategory>>,
+    /// The columns, in order: field names ("level", "name", "volume", ...).
+    #[schemars(with = "Option<Vec<String>>")]
+    columns: Option<Vec<bimble_core::schedule::Field>>,
+}
+
+/// One `SetSchedules`: the stored list with the named schedule changed (a built-in one not
+/// stored yet is added, as the viewer does).
+fn set_schedule(m: &Model, a: SetScheduleArgs) -> Result<Vec<Command>, String> {
+    let same = |d: &bimble_core::schedule::ScheduleDef| d.name.eq_ignore_ascii_case(&a.name);
+    let old = bimble_core::schedule::effective(&m.schedules)
+        .into_iter()
+        .find(same)
+        .ok_or(format!("no schedule {:?}", a.name))?;
+    let mut d = old.clone();
+    if let Some(g) = a.group_by_level {
+        d.group_by_level = g;
+    }
+    if let Some(f) = a.family {
+        d.family = f;
+    }
+    if let Some(c) = a.columns {
+        d.fields = c;
+    }
+    if d == old {
+        return Ok(vec![]);
+    }
+    let mut v = m.schedules.clone();
+    match v.iter_mut().find(|s| same(s)) {
+        Some(s) => *s = d,
+        None => v.push(d),
+    }
+    bimble_core::schedule::validate_all(&v)?;
+    Ok(vec![Command::SetSchedules { schedules: v }])
+}
+
 /// Read-only queries by name: "storeys", "materials", "elements" (an `ElementFilter`),
 /// "element" (`{"id": ...}`), "project", "views", "sheets", "schedules".
 pub fn query(m: &Model, name: &str, args: Value) -> Result<Value, String> {
@@ -406,7 +459,8 @@ mod tests {
                 "copy",
                 "delete",
                 "set_generator",
-                "set_view"
+                "set_view",
+                "set_schedule"
             ]
         );
         let s = describe("place").unwrap();
@@ -612,6 +666,47 @@ mod tests {
             .into_iter()
             .find(|v| matches!(v.kind, bimble_core::view::ViewKind::Plan { .. }))
             .unwrap()
+    }
+
+    #[test]
+    fn set_schedule_changes_the_named_schedule() {
+        let (mut m, _) = demo();
+        let name = bimble_core::schedule::effective(&m.schedules)[0]
+            .name
+            .clone();
+        let cmds = run(
+            &m,
+            "set_schedule",
+            json!({"name": name.to_uppercase(), "family": "steel", "columns": ["name", "volume"]}),
+        )
+        .unwrap();
+        let [Command::SetSchedules { schedules }] = cmds.as_slice() else {
+            panic!("{cmds:?}");
+        };
+        let d = schedules.iter().find(|d| d.name == name).unwrap();
+        assert_eq!(d.family, Some(bimble_core::MaterialCategory::Steel));
+        assert_eq!(d.fields.len(), 2);
+        History::default().apply(&mut m, cmds).unwrap();
+        // Unchanged: no command; null family clears.
+        assert!(
+            run(&m, "set_schedule", json!({"name": name, "family": "steel"}))
+                .unwrap()
+                .is_empty()
+        );
+        let cmds = run(&m, "set_schedule", json!({"name": name, "family": null})).unwrap();
+        let [Command::SetSchedules { schedules }] = cmds.as_slice() else {
+            panic!("{cmds:?}");
+        };
+        assert_eq!(schedules.len(), 1, "replaced, not added");
+        assert_eq!(schedules[0].family, None);
+        for args in [
+            json!({"name": "nope"}),
+            json!({"name": name, "columns": ["nope"]}),
+            json!({"name": name, "columns": []}),
+            json!({"name": name, "family": "cheese"}),
+        ] {
+            assert!(run(&m, "set_schedule", args.clone()).is_err(), "{args}");
+        }
     }
 
     #[test]

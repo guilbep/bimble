@@ -429,6 +429,9 @@ export type ViewPatch = {
   range?: Partial<Record<"top" | "cut" | "bottom" | "depth", { offset_mm?: number }>>;
 };
 export const setView = (id: string, patch: ViewPatch) => runVerb("set_view", { id, ...patch });
+/** Change only the given fields of a schedule (`set_schedule`); `family: null` lists every family. Columns are field names ("level", "volume"). */
+export type SchedulePatch = { group_by_level?: boolean; family?: string | null; columns?: string[] };
+export const setSchedule = (name: string, patch: SchedulePatch) => runVerb("set_schedule", { name, ...patch });
 
 /** Select by GlobalId, primary first; `[]` clears. Returns the Rust error, or null. */
 export function select(ids: string[]): string | null {
@@ -436,6 +439,8 @@ export function select(ids: string[]): string | null {
 }
 
 export const scheduleRows = (name: string) => query<ScheduleTable>("schedule_rows", { name });
+/** A schedule as CSV, every row (the egui export's `to_csv`). */
+export const scheduleCsv = (name: string) => query<{ csv: string }>("schedule_csv", { name }).csv;
 export const views = () => query<ViewSummary[]>("views");
 export const sheets = () => query<SheetSummary[]>("sheets");
 export const schedules = () => query<ScheduleDef[]>("schedules");

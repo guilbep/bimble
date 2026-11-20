@@ -213,6 +213,18 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
                 MAX_LIST,
             ))
         }
+        // A schedule as CSV (`to_csv`, as the egui export writes it), every row: `{"csv"}`.
+        "schedule_csv" => {
+            let a: NameArgs = serde_json::from_str(args_json).map_err(|e| e.to_string())?;
+            let def = v
+                .schedule_defs()
+                .into_iter()
+                .find(|d| d.name == a.name)
+                .ok_or("no schedule with this name")?;
+            let l = v.loaded.as_ref().ok_or("no model open")?;
+            let t = bimble_drawing::schedule::schedule(&l.scene, &def);
+            json(serde_json::json!({ "csv": bimble_drawing::schedule::to_csv(&t) }))
+        }
         "sheet_svg" => {
             #[derive(serde::Deserialize)]
             struct Args {
