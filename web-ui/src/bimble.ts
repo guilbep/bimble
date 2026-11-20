@@ -149,7 +149,8 @@ export interface ScheduleDef {
 export interface ScheduleTable {
   name: string;
   columns: string[];
-  groups: { level: number; rows: string[][]; subtotal: string[] }[];
+  /** `ids`: one GlobalId (or null) per row, same order as `rows`. */
+  groups: { level: number; rows: string[][]; ids: (string | null)[]; subtotal: string[] }[];
   total: string[] | null;
   count: number;
   truncated: boolean;

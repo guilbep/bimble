@@ -1,5 +1,4 @@
 <script lang="ts">
-// The status bar reads `hint` from pages and dialogs only today (StatusBar.vue): ready for when it reads panels.
 export const hint = "standards.hint";
 export const label = "standards.title";
 </script>

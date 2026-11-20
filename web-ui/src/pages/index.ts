@@ -5,7 +5,9 @@
 import { ref, type Component } from "vue";
 
 /** What a page or dialog module may export. */
-export type ScreenModule = { default: Component; layout?: "full"; hint?: string; side?: Component };
+/** A screen's status bar hint: an i18n key, or a function returning `{ key, params }` or a translated string. */
+export type Hint = string | (() => string | { key: string; params?: Record<string, string | number> });
+export type ScreenModule = { default: Component; layout?: "full"; hint?: Hint; side?: Component };
 
 /** `import.meta.glob` result → { "kebab-id": module }. Shared by pages, dialogs and panels. */
 export function byId<M>(mods: Record<string, M>): Record<string, M> {

@@ -31,8 +31,7 @@ const def = computed<ScheduleDef | null>(() => {
   const all = scheduleList() as ScheduleDef[];
   return all.find((d) => d.name === "All elements") ?? all[0] ?? null;
 });
-// ponytail: `ids` is not in bimble.ts's ScheduleTable yet (not this ticket's file); widened here.
-type Table = ScheduleTable & { groups: (ScheduleTable["groups"][number] & { ids?: (string | null)[] })[] };
+type Table = ScheduleTable;
 const table = computed<Table | null>(() => {
   void state.value.rev;
   if (!def.value) return null;

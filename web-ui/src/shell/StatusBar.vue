@@ -23,11 +23,9 @@ const placingHint = (): Parameters<typeof t>[0] | undefined => {
   const p = placing.value;
   return p?.active ? `placing.${p.kind}.${p.points.length ? 1 : 0}` : undefined;
 };
-// A screen's `hint` export: an i18n key, or a function returning `{ key, params }` or an already translated string.
 type Key = Parameters<typeof t>[0];
-type Hint = string | (() => string | { key: string; params?: Record<string, string | number> });
 const hintText = (): string => {
-  const h = (dialog()?.hint ?? page()?.hint ?? panel()?.hint) as Hint | undefined;
+  const h = dialog()?.hint ?? page()?.hint ?? panel()?.hint;
   if (typeof h === "function") { const r = h(); return typeof r === "string" ? r : t(r.key as Key, r.params); }
   if (h) return t(h as Key);
   const p = placingHint();
