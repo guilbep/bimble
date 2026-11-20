@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/bimble-core", "crates/bimble-geom", "crates/bimble-ifc", "crates/bimble-render", "crates/bimble-drawing", "crates/bimble-viewer", "crates/bimble-cli", "crates/bimble-web"]
+members = ["crates/bimble-core", "crates/bimble-geom", "crates/bimble-ifc", "crates/bimble-render", "crates/bimble-drawing", "crates/bimble-viewer", "crates/bimble-cli", "crates/bimble-web", "crates/bimble-api"]
 
 [workspace.package]
 version = "0.15.0"
@@ -17,6 +17,7 @@ bimble-ifc = { path = "crates/bimble-ifc" }
 bimble-drawing = { path = "crates/bimble-drawing" }
 bimble-render = { path = "crates/bimble-render" }
 bimble-viewer = { path = "crates/bimble-viewer" }
+bimble-api = { path = "crates/bimble-api" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 blake3 = "1"
