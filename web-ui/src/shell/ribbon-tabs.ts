@@ -1,14 +1,17 @@
 // Ribbon content per tab: data copied from the wireframes v01 (the screen where the tab is active).
 // icon: inner SVG of the reference's 22 px icon. action: `query("actions")` name, null = no Rust call yet.
 // The pressed / unavailable state comes from `actions` (the reference draws one sample state).
-// timber: no reference screen. settingOut "Altitude": the reference shows a readout (.rbox), not tools.
+// timber: no reference screen. A group may hold a box (.rbox: label + select or readout) instead of a tool.
 import type { TabId } from "./tabs";
 import type { fr } from "../i18n/parts/ribbon";
 
 export type RibbonKey = keyof typeof fr;
 // page / panel: the Vue screen the tool opens instead of its egui action (pressed while that screen is open).
 export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string; action: string | null; page?: string; panel?: string }
-export interface RibbonGroup { key: RibbonKey; tools: RibbonTool[] }
+// Reference .rbox: a label over a 150 px select (sel) or a mono readout (readout). No Rust call yet: drawn disabled, empty.
+export interface RibbonBox { key: RibbonKey; kind: "sel" | "readout"; missing: string }
+// box: drawn after the tools, in a `.tools` with style="align-items:center" (as the reference).
+export interface RibbonGroup { key: RibbonKey; tools: RibbonTool[]; box?: RibbonBox }
 
 export const RIBBON: Record<TabId, RibbonGroup[]> = {
   project: [
@@ -32,7 +35,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
     ] },
     { key: "ribbon.collaborate.g2", tools: [
       { key: "ribbon.collaborate.g2.t1", tag: "a", icon: "<path d=\"m12 4 9 5-9 5-9-5z\"/><path d=\"m3 13 9 5 9-5\"/>", action: null },
-    ] },
+    ], box: { key: "ribbon.collaborate.g2.b1", kind: "sel", missing: "subprojects query (active sub-project)" } },
     { key: "ribbon.collaborate.g3", tools: [
       { key: "ribbon.collaborate.g3.t1", tag: "a", icon: "<circle cx=\"9\" cy=\"9\" r=\"3\"/><path d=\"M3 20a6 6 0 0 1 12 0\"/><circle cx=\"17\" cy=\"8\" r=\"2.5\"/><path d=\"M16 14a5 5 0 0 1 5 5\"/>", action: null },
     ] },
@@ -47,7 +50,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
       { key: "ribbon.settingOut.g1.t3", tag: "button", icon: "<path d=\"M12 3 7 20l5-4 5 4z\"/>", action: null },
     ] },
     { key: "ribbon.settingOut.g2", tools: [
-    ] },
+    ], box: { key: "ribbon.settingOut.g2.b1", kind: "readout", missing: "project zero elevation (IfcSite.RefElevation query)" } },
     { key: "ribbon.settingOut.g3", tools: [
       { key: "ribbon.settingOut.g3.t1", tag: "a", icon: "<path d=\"M3 7h3M9 7h3M15 7h6\"/><path d=\"M3 17h3M9 17h3M15 17h6\"/><path d=\"m18 4 2 3-2 0\"/>", action: null },
       { key: "ribbon.settingOut.g3.t2", tag: "a", icon: "<path d=\"M8 3v18M16 3v18M3 8h18M3 16h18\"/>", action: null },
