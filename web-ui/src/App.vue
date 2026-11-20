@@ -9,7 +9,8 @@ import ViewTabs from "./shell/ViewTabs.vue";
 import ModifierPanel from "./shell/ModifierPanel.vue";
 import StatusBar from "./shell/StatusBar.vue";
 import "./shell/shell.css";
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { useFocusTrap } from "./shell/focusTrap";
 import { pages, currentPage, page } from "./pages";
 // Every caller (quick bar, File menu, palette, ribbon, Home) runs actions through runAction:
 // these open the Vue screen of the same name (a ribbon tool with `page`/`panel` toggles it itself).
@@ -32,6 +33,9 @@ function onKey(e: KeyboardEvent) {
   if (currentDialog.value) currentDialog.value = null;
   else if (currentPage.value) currentPage.value = null;
 }
+// One focus trap for every dialog and menu (#79 AD).
+const backdrop = ref<HTMLElement | null>(null);
+const trapKey = useFocusTrap(backdrop, currentDialog);
 const full = computed(() => page()?.layout === "full");
 onMounted(() => { window.addEventListener("keydown", onKey); void applyDeepLink(); });
 onUnmounted(() => window.removeEventListener("keydown", onKey));
@@ -66,7 +70,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <ModifierPanel />
       </div>
     </div>
-    <div v-if="currentDialog && dialogs[currentDialog]" class="bb-backdrop" @click.self="currentDialog = null">
+    <div v-if="currentDialog && dialogs[currentDialog]" ref="backdrop" class="bb-backdrop" tabindex="-1" @click.self="currentDialog = null" @keydown="trapKey">
       <component :is="dialogs[currentDialog]" />
     </div>
     <StatusBar />
