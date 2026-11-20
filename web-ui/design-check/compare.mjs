@@ -62,7 +62,8 @@ async function capture(page, url, useRef) {
     const out = {};
     for (const [name, s] of Object.entries(sel)) {
       const el = s && document.querySelector(s);
-      if (!el) continue;
+      // Hidden (display:none, v-show) is not on screen: same as absent.
+      if (!el || !el.checkVisibility()) continue;
       const r = el.getBoundingClientRect();
       const cs = getComputedStyle(el);
       out[name] = { box: [r.x, r.y, r.width, r.height], style: Object.fromEntries(props.map((p) => [p, cs.getPropertyValue(p)])) };

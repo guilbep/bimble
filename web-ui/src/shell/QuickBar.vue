@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { state, actions, historyLabels, runAction, undo, redo } from "../bimble";
 import { t } from "../i18n";
 import { currentDialog } from "../dialogs";
+import { page } from "../pages";
 import labIcon from "../brand/bimble-icon-lab.svg";
 
 /** Whether the ribbon action `name` is enabled now (`query("actions")`). */
@@ -11,6 +12,8 @@ const undoLabel = computed(() => {
   const what = historyLabels.value.undo[0];
   return what ? t("quick.undo", { what }) : t("app.undo");
 });
+// A full-window page (Home) has the reference's short header: logo, File, command field, user (fr/Home.html).
+const bare = computed(() => page()?.layout === "full");
 </script>
 
 <template>
@@ -19,25 +22,26 @@ const undoLabel = computed(() => {
     <!-- Lab mark instead of the logo disc (ADR 0049); same 30 × 32 box as the reference a.ib. -->
     <a href="#" class="ib" :aria-label="t('quick.home')" style="width:auto;padding:0 2px" data-bb="quickbar-logo"
       @click.prevent="runAction('home')"><img :src="labIcon" :alt="t('app.logoAlt')" width="26" height="26" /></a>
-    <button class="ib a" type="button" :aria-label="t('quick.home')" :title="t('quick.home')" data-bb="quickbar-home"
+    <button v-if="!bare" class="ib a" type="button" :aria-label="t('quick.home')" :title="t('quick.home')" data-bb="quickbar-home"
       @click="runAction('home')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11 12 4l8 7"/><path d="M6 10v10h12V10"/><path d="M10 20v-6h4v6"/></svg></button>
     <button class="qb" type="button" style="font-weight:600" data-bb="quickbar-file" aria-haspopup="menu" :aria-expanded="currentDialog === 'file-menu'"
       @click="currentDialog = 'file-menu'">{{ t('quick.file') }} <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
-    <span class="tabsep" data-bb="quickbar-sep"></span>
-    <button class="ib" type="button" :disabled="!on('open')" :aria-label="t('quick.open')" :title="t('quick.open')" data-bb="quickbar-open"
+    <span v-if="!bare" class="tabsep" data-bb="quickbar-sep"></span>
+    <button v-if="!bare" class="ib" type="button" :disabled="!on('open')" :aria-label="t('quick.open')" :title="t('quick.open')" data-bb="quickbar-open"
       @click="runAction('open')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z"/><path d="M3 7V5h6"/></svg></button>
-    <button class="ib" type="button" :disabled="!on('save')" :aria-label="t('quick.save')" :title="t('quick.save')" data-bb="quickbar-save"
+    <button v-if="!bare" class="ib" type="button" :disabled="!on('save')" :aria-label="t('quick.save')" :title="t('quick.save')" data-bb="quickbar-save"
       @click="runAction('save')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><rect x="8" y="13" width="8" height="5"/></svg></button>
-    <button class="ib" type="button" :disabled="!on('undo')" :aria-label="undoLabel" :title="undoLabel" data-bb="quickbar-undo"
+    <button v-if="!bare" class="ib" type="button" :disabled="!on('undo')" :aria-label="undoLabel" :title="undoLabel" data-bb="quickbar-undo"
       @click="undo()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 7 5 11l4 4"/><path d="M5 11h9a5 5 0 0 1 0 10h-3"/></svg></button>
-    <button class="ib" type="button" :disabled="!on('redo')" :aria-label="t('quick.redo')" :title="t('quick.redo')" data-bb="quickbar-redo"
+    <button v-if="!bare" class="ib" type="button" :disabled="!on('redo')" :aria-label="t('quick.redo')" :title="t('quick.redo')" data-bb="quickbar-redo"
       @click="redo()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 7 4 4-4 4"/><path d="M19 11h-9a5 5 0 0 0 0 10h3"/></svg></button>
     <!-- Print and export is screen D4 (not built): no Rust call opens it. -->
-    <button class="ib a" type="button" disabled :aria-label="t('quick.export')" :title="t('quick.export')" data-bb="quickbar-export"
+    <button v-if="!bare" class="ib a" type="button" disabled :aria-label="t('quick.export')" :title="t('quick.export')" data-bb="quickbar-export"
       data-missing="export-screen-D4"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1"/><path d="M7 14h10v6H7z"/></svg></button>
-    <button class="ib a" type="button" :disabled="!on('synchronize')" :aria-label="t('quick.sync')" :title="t('quick.sync')" data-bb="quickbar-sync"
+    <button v-if="!bare" class="ib a" type="button" :disabled="!on('synchronize')" :aria-label="t('quick.sync')" :title="t('quick.sync')" data-bb="quickbar-sync"
       @click="runAction('synchronize')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.5-4.5L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.5 4.5L20 16"/><path d="M20 20v-4h-4"/></svg></button>
-    <div class="fname">
+    <div v-if="bare" style="flex:1"></div>
+    <div v-else class="fname">
       <span data-bb="filename">{{ state.file ?? t('app.noFile') }}</span>
       <!-- `query("state").schema`: ".bimble", "IFC4"… -->
       <span class="mono schema" style="font-size:12px" data-bb="quickbar-schema">{{ state.schema ?? '' }}</span>
@@ -47,7 +51,7 @@ const undoLabel = computed(() => {
     <button class="cmdk" type="button" data-bb="command-field" data-missing="palette-query"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg><span>{{ t('quick.search') }}</span><span class="kbd">Ctrl K</span></button>
     <!-- Settings → You: an empty disc when no name is set. -->
     <span class="user" data-bb="quickbar-user" :title="state.user?.name" :data-missing="state.user ? undefined : 'user-name-unset'">{{ state.user?.trigram }}</span>
-    <button class="btn" :class="on('save') ? 'p' : 'd'" type="button" :disabled="!on('save')" data-bb="quickbar-primary"
+    <button v-if="!bare" class="btn" :class="on('save') ? 'p' : 'd'" type="button" :disabled="!on('save')" data-bb="quickbar-primary"
       @click="runAction('save')">{{ t('quick.saveButton') }}</button>
   </header>
 </template>

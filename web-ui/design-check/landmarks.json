@@ -25,7 +25,7 @@
     "lab": "[data-bb=\"command-field\"]"
   },
   "quickbar-home": {
-    "ref": ".top > a:nth-of-type(2)",
+    "ref": ".top > a.ib:nth-of-type(2)",
     "lab": "[data-bb=\"quickbar-home\"]"
   },
   "quickbar-sep": {
