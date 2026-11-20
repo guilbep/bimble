@@ -6,6 +6,24 @@ use bimble_core::{
 };
 use serde::{Deserialize, Serialize};
 
+/// The one range of an element size (section, thickness, length), mm, for every editor:
+/// egui's fields, `set_placing`, `place` and `set_generator`. Above 100 m it is not a building
+/// element; coordinates keep the wider `dispatch::MAX_MM` sanity bound.
+pub const SIZE_MM: std::ops::RangeInclusive<f64> = 10.0..=100_000.0;
+
+/// `Ok` when `v` is a size in `SIZE_MM`; else the one message every caller shows.
+pub fn size(what: &str, v: f64) -> Result<(), String> {
+    if SIZE_MM.contains(&v) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{what}: {v} is not a size within [{}, {}] mm",
+            SIZE_MM.start(),
+            SIZE_MM.end()
+        ))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {

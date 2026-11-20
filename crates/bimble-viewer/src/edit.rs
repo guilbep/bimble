@@ -355,13 +355,10 @@ impl Editor {
                         return Err(format!("unknown size: {k}"));
                     }
                     match x.as_f64() {
-                        Some(mm)
-                            if mm.is_finite() && mm > 0.0 && mm <= bimble_api::dispatch::MAX_MM =>
-                        {
-                            v[k.as_str()] = x.clone()
-                        }
-                        _ => return Err(format!("{k}: {x} is not a size within (0, 1e7] mm")),
+                        Some(mm) => bimble_api::verbs::size(k, mm)?,
+                        None => return Err(format!("{k}: {x} is not a number")),
                     }
+                    v[k.as_str()] = x.clone();
                 }
                 serde_json::from_value(v).map_err(|e| e.to_string())?
             }
@@ -533,7 +530,9 @@ impl Editor {
                 }
             });
         fn mm(v: &mut f64) -> egui::DragValue<'_> {
-            egui::DragValue::new(v).speed(5.0).range(10.0..=100_000.0)
+            egui::DragValue::new(v)
+                .speed(5.0)
+                .range(bimble_api::verbs::SIZE_MM)
         }
         egui::Grid::new("place-sizes")
             .num_columns(2)
@@ -585,6 +584,43 @@ mod tests {
 
     fn patch(j: &str) -> Result<PlacingPatch, String> {
         PlacingPatch::parse(j)
+    }
+
+    /// AM: one size range. Above it, `set_placing` and `set_generator` refuse with the same
+    /// message (was: up to 1e7 accepted here, later clamped by egui); at the bound, accepted.
+    #[test]
+    fn sizes_have_one_range_for_placing_and_set_generator() {
+        let (m, _) = demo();
+        let beam = m
+            .elements
+            .values()
+            .find(|e| matches!(e.generator, bimble_core::Generator::RectBeam { .. }))
+            .unwrap()
+            .id;
+        let mut ed = Editor::new(m.clone());
+        let set_generator = |w: f64| {
+            let args = serde_json::json!({"id": beam, "params": {"width": w}});
+            bimble_api::dispatch::run(&m, "set_generator", args)
+        };
+        let max = *bimble_api::verbs::SIZE_MM.end();
+        let over = max + 1.0;
+        let placing = ed
+            .set_placing(patch(&format!(r#"{{"sizes": {{"beam_width": {over}}}}}"#)).unwrap())
+            .unwrap_err();
+        let generator = set_generator(over).unwrap_err();
+        assert_eq!(
+            placing.replace("beam_width", "width"),
+            generator,
+            "the same message"
+        );
+        assert_eq!(
+            generator,
+            "width: 100001 is not a size within [10, 100000] mm"
+        );
+        let p = patch(&format!(r#"{{"sizes": {{"beam_width": {max}}}}}"#)).unwrap();
+        assert!(ed.set_placing(p).is_ok());
+        assert_eq!(ed.sizes.beam_width, max);
+        assert_eq!(set_generator(max).unwrap().len(), 1);
     }
 
     /// B1: a bad payload changes nothing; a good one merges sizes and starts placing.

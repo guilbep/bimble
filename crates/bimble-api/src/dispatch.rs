@@ -253,16 +253,14 @@ pub fn run(m: &Model, name: &str, args: Value) -> Result<Vec<Command>, String> {
             let b = p.b.unwrap_or(p.a);
             mm("b", &b)?;
             let sizes = p.sizes.unwrap_or_default();
-            let s = [
+            for x in [
                 sizes.column,
                 sizes.beam_width,
                 sizes.beam_height,
                 sizes.wall,
                 sizes.slab,
-            ];
-            mm("sizes", &s)?;
-            if s.iter().any(|&x| x <= 0.0) {
-                return Err("sizes must be > 0".into());
+            ] {
+                verbs::size("sizes", x)?;
             }
             if p.b.is_none() && p.kind.clicks() == 2 {
                 return Err(format!("{}: b is required", p.kind.label()));
@@ -344,10 +342,7 @@ fn set_generator(m: &Model, a: SetGeneratorArgs) -> Result<Vec<Command>, String>
     let mut n = 0;
     for (k, v) in given {
         let Some(v) = v else { continue };
-        mm(k, &[v])?;
-        if v <= 0.0 {
-            return Err(format!("{k} must be > 0"));
-        }
+        verbs::size(k, v)?;
         match g.get_mut(k) {
             Some(x) if x.is_number() => *x = v.into(),
             _ => return Err(format!("{k}: not a size of this {}", g["kind"])),

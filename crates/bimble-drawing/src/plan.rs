@@ -1702,9 +1702,11 @@ pub fn plan(scene: &Scene, o: &PlanOptions) -> Result<(Sheet, PlanInfo), String>
     ];
     let filled = |s: &str| fill(s, &values, &tpl.fields);
     // Drawing title, bold and underlined, under the drawing at its left.
-    // Ceiling plans and sections are titled by the view's name (the template's title says
-    // "plan"); plans keep the template's.
-    let title = if o.view.is_some() && !setup.plan_down {
+    // A view is titled by its name, the user's name for it (a sheet's "Ground floor plan, 1:100");
+    // a plan without a view, or a view without a name, keeps the template's ("plan" in it is
+    // why ceiling plans and sections never take it).
+    let named = o.view.as_ref().is_some_and(|v| !v.name.trim().is_empty());
+    let title = if o.view.is_some() && (named || !setup.plan_down) {
         filled("{view}, {scale}")
     } else {
         filled(&tpl.title)

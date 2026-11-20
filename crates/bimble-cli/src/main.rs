@@ -1807,6 +1807,8 @@ mod demo_sheet_tests {
             &svg[..80.min(svg.len())]
         );
         assert!(svg.contains("S01"));
+        // AN: the placed view's label is its name, not the storey's plan name.
+        assert!(svg.contains("Ground floor plan, 1:100"), "view label");
         assert!(info.problems.is_empty(), "{:?}", info.problems);
     }
 }
