@@ -75,3 +75,6 @@ marks the decisions he took himself.
 | 67 | Standards: hatch grid | six sample tiles / one tile per real material family, no pattern | real families, no pattern | Rust does not expose patterns yet; never draw guessed hatches |
 | 68 | Standards panel and the egui `standards` action | open both / Vue panel only | Vue panel only; the ribbon tool still opens egui's (shell follow-up) | the egui panel would show the same thing twice |
 | 69 | Ctrl K with the 3D view focused | let egui open its palette / Vue catches it first | Vue (capture phase) | one palette, the reference's |
+| 70 | On paper properties | a new left-panel component / a branch in Properties.vue | Properties.vue branch | no LeftPanel change while another ticket owns it |
+| 71 | On paper fields with no write call | editable / drawn read-only, data-missing | read-only; `SetView` needs the whole view (a `set_view` verb is the Rust step) | never fake an edit |
+| 72 | Demo file | no sheet / one plan view and sheet S01 | sheet S01 (synthetic, fixed ids) | the Sheets screen needs real data; existing demo tests unchanged |
