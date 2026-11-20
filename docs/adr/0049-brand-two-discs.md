@@ -33,8 +33,8 @@ colours: clay, pink, slate, ochre, moss.
   stone #5C574D (quiet text, 6.4:1), line #DDD6C8 (borders).
 - Series order (charts, linked models): clay, slate, moss, ochre, pink. Errors have no logo colour:
   the word "Error" in ink on an ochre band.
-- Marks: study 6 (clay and pink on cream) is the main mark, as in `packaging/logo.svg`. Proposed:
-  study 7 (moss) marks the Vue lab, so a build under test never looks like a release.
+- Marks: study 6 (clay and pink on cream) is the main mark, as in `packaging/logo.svg`. Study 7
+  (moss) marks the Vue lab, so a build under test never looks like a release (Pierre, 20 Nov).
 
 ## Alternatives considered
 
