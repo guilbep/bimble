@@ -2,7 +2,8 @@
 import { computed, ref, watch } from "vue";
 import { t } from "./i18n";
 import { viewName } from "./shell/viewName";
-import { state, element, rename, materials, openViews, type ElementDetail, type ViewSummary } from "./bimble";
+import { state, element, rename, runVerb, materials, openViews, type ElementDetail, type ViewSummary } from "./bimble";
+import { classNoun, parseMm } from "./i18n/parts/modify";
 
 // Rendered inside `.props` (LeftPanel): rows as fr/View3D.html (view) and fr/SelectModify.html (element).
 const detail = ref<ElementDetail | null>(null);
@@ -36,12 +37,27 @@ function commit(): void {
   renameError.value = rename(d.id, name.value);
 }
 
-// Numbers among the generator parameters: the sizes, in mm.
+// Numbers among the generator parameters: the sizes, in mm, in the reference's order (width, height, length).
+const ORDER = ["width", "height", "length", "depth", "thickness"];
+const rank = (k: string) => (ORDER.indexOf(k) + ORDER.length + 1) % (ORDER.length + 1);
 const sizes = computed(() =>
-  Object.entries(detail.value?.generator_params ?? {}).filter(
-    (e): e is [string, number] => typeof e[1] === "number",
-  ),
+  Object.entries(detail.value?.generator_params ?? {})
+    .filter((e): e is [string, number] => typeof e[1] === "number")
+    .sort((a, b) => rank(a[0]) - rank(b[0])),
 );
+const dimLabel = (k: string) => (ORDER.includes(k) ? t(`modify.dim.${k}`) : k);
+const title = computed(() => (detail.value ? `${classNoun(detail.value.class, t).noun} ${detail.value.name}` : ""));
+
+// Origin Z: one `move` verb by the difference (ADR 0052: applies at once).
+const originZ = computed(() => detail.value?.placement.origin[2] ?? 0);
+const zError = ref<string | null>(null);
+function commitZ(e: Event): void {
+  const d = detail.value;
+  const z = parseMm((e.target as HTMLInputElement).value);
+  zError.value = null;
+  if (!d || z === null || z === originZ.value) return;
+  zError.value = runVerb("move", { ids: [d.id], d: [0, 0, z - originZ.value] });
+}
 
 // `open_views` is `{views, active, tabs}` (bridge.rs); bimble.ts types it loosely until then.
 const view = computed(() => {
@@ -70,7 +86,8 @@ const families = computed(() =>
       .reduce((n, m) => n + m.element_count, 0),
   })),
 );
-const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+// The reference writes thousands with a space and minus as U+2212 ("−250").
+const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").replace("-", "\u2212");
 </script>
 
 <template>
@@ -79,7 +96,7 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
   </p>
   <p v-else-if="loadError" class="error" role="alert">{{ t('props.error', { msg: loadError }) }}</p>
   <template v-else-if="detail">
-    <div class="pn" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:var(--bb-selection)" />{{ detail.name }}</div>
+    <div class="pn" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:var(--bb-selection)" />{{ title }}</div>
     <div class="row">
       <label class="k" for="el-name">{{ t('props.name') }}</label>
       <input
@@ -99,20 +116,32 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
     <div class="row"><span class="k">{{ t('props.storey') }}</span><span>{{ detail.storey_name ?? "—" }}</span></div>
     <div class="row">
       <span class="k">{{ t('props.material') }}</span>
-      <span class="sel-inp" style="width:150px" data-missing="set-material"><span class="ell">{{ detail.material_name ?? "—" }}</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+      <span class="sel-inp" style="width:150px" data-missing="set element material (no Command in bimble-core)"><span class="ell">{{ detail.material_name ?? "—" }}</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
     </div>
-    <div class="row"><span class="k">{{ t('props.generator') }}</span><span class="mono">{{ detail.generator }}</span></div>
+    <div class="row">
+      <span class="k">{{ t('modify.phase') }}</span>
+      <span class="sel-inp" style="width:150px" data-missing="element phase (no phase in the model)"><span /><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+    </div>
+    <div class="sec">{{ t('el.sizes') }}</div>
     <template v-if="sizes.length">
-      <div class="sec">{{ t('el.sizes') }}</div>
       <div v-for="[k, v] in sizes" :key="k" class="row">
-        <label class="k" :for="`el-${k}`">{{ k }}</label>
+        <label class="k" :for="`el-${k}`">{{ dimLabel(k) }}</label>
         <span style="display:inline-flex;align-items:center;gap:6px">
           <!-- ponytail: read-only until a verb sets one generator parameter. -->
-          <input :id="`el-${k}`" class="inp mono" :value="grouped(v)" readonly data-missing="set-generator-param" style="width:96px;text-align:right" />
+          <input :id="`el-${k}`" class="inp mono" :value="grouped(v)" readonly data-missing="set_generator (Command::SetGenerator has no bimble.ts call)" style="width:96px;text-align:right" />
           <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
         </span>
       </div>
     </template>
+    <div class="row">
+      <label class="k" for="el-origin-z">{{ t('modify.originZ') }}</label>
+      <span style="display:inline-flex;align-items:center;gap:6px">
+        <input id="el-origin-z" :key="`${detail.id}:${originZ}`" class="inp mono" :value="grouped(originZ)" style="width:96px;text-align:right"
+               :aria-invalid="zError ? 'true' : 'false'" @keydown.enter="commitZ" @blur="commitZ" />
+        <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
+      </span>
+    </div>
+    <p v-if="zError" role="alert" class="error">{{ t('modify.error', { msg: zError }) }}</p>
   </template>
   <template v-else-if="view">
     <div class="pn">{{ t('view.props', { name: viewName(view) }) }}</div>
@@ -141,7 +170,7 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 
 <style scoped>
 /* .pn{font-family:'Sora',sans-serif;font-weight:500;font-size:14px;margin:0 0 4px} */
-.pn { font-family: var(--bb-font-display); font-weight: 500; font-size: 14px; margin: 0 0 4px; }
+.pn { font-family: 'Sora', sans-serif; font-weight: 500; font-size: 14px; margin: 0 0 4px; }
 /* .row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13.5px;min-height:22px} */
 .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; min-height: 22px; }
 .row .k, .k { color: var(--bb-stone); white-space: nowrap; }
