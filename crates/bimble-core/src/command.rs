@@ -32,6 +32,11 @@ pub enum Command {
         id: GlobalId,
         name: String,
     },
+    /// Give an element another material of the model; its id stays.
+    SetElementMaterial {
+        id: GlobalId,
+        material: GlobalId,
+    },
     AddView(crate::view::View),
     RemoveView {
         id: GlobalId,
@@ -77,7 +82,8 @@ impl Command {
             Command::RemoveElement { id }
             | Command::SetGenerator { id, .. }
             | Command::SetPlacement { id, .. }
-            | Command::Rename { id, .. } => Some(*id),
+            | Command::Rename { id, .. }
+            | Command::SetElementMaterial { id, .. } => Some(*id),
             // Listed, not `_`: a new element command must say whether it borrows.
             Command::AddStorey(_)
             | Command::RemoveStorey { .. }
@@ -192,6 +198,14 @@ impl Command {
                 let e = m.elements.get_mut(&id).ok_or(CommandError::NotFound(id))?;
                 let old = std::mem::replace(&mut e.name, name);
                 Ok(Rename { id, name: old })
+            }
+            SetElementMaterial { id, material } => {
+                if !m.materials.contains_key(&material) {
+                    return Err(CommandError::NotFound(material));
+                }
+                let e = m.elements.get_mut(&id).ok_or(CommandError::NotFound(id))?;
+                let old = std::mem::replace(&mut e.material, material);
+                Ok(SetElementMaterial { id, material: old })
             }
             AddView(v) => {
                 if m.views.contains_key(&v.id) {
@@ -342,6 +356,11 @@ impl Command {
             Command::SetGenerator { id, .. } => format!("change the sizes of {}", el(id)),
             Command::SetPlacement { id, .. } => format!("move {}", el(id)),
             Command::Rename { id, name } => format!("rename {} to {name}", el(id)),
+            Command::SetElementMaterial { id, material } => format!(
+                "set the material of {} to {}",
+                el(id),
+                m.materials.get(material).map_or("", |x| x.name.as_str())
+            ),
             Command::AddView(v) => format!("add the view {}", v.name),
             Command::RemoveView { id } => format!("delete {}", view(id)),
             Command::SetView(v) => match m.views.get(&v.id) {
@@ -620,5 +639,47 @@ mod describe_tests {
         bad.props.density_kg_m3 = Some(-1.0);
         assert!(Command::AddMaterial(bad).apply(&mut m).is_err());
         assert!(m.validate().is_ok());
+    }
+
+    /// An element's material: apply and undo on two elements, ids unchanged, the command's JSON
+    /// round trips canonically.
+    #[test]
+    fn set_element_material_applies_and_undoes() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        let s = crate::library::to_material(&crate::library::lookup("S235").unwrap());
+        let sid = s.id;
+        Command::AddMaterial(s).apply(&mut m).unwrap();
+        let ids: Vec<GlobalId> = m.elements.keys().take(2).copied().collect();
+        let before = m.clone();
+        let cmds: Vec<Command> = ids
+            .iter()
+            .map(|&id| Command::SetElementMaterial { id, material: sid })
+            .collect();
+        let json = serde_json::to_string(&cmds[0]).unwrap();
+        assert_eq!(
+            json,
+            format!(
+                r#"{{"op":"set_element_material","id":"{}","material":"{sid}"}}"#,
+                ids[0]
+            )
+        );
+        let back: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cmds[0]);
+        assert_eq!(serde_json::to_string(&canonical(back)).unwrap(), json);
+        let mut h = History::default();
+        h.apply(&mut m, cmds).unwrap();
+        for id in &ids {
+            assert_eq!(m.elements[id].material, sid);
+            assert_eq!(m.elements[id].id, *id);
+        }
+        assert!(h.undo(&mut m));
+        assert_eq!(m, before);
+        // An unknown material is refused, nothing changes.
+        let bad = Command::SetElementMaterial {
+            id: ids[0],
+            material: GlobalId::new(),
+        };
+        assert!(bad.apply(&mut m).is_err());
+        assert_eq!(m, before);
     }
 }

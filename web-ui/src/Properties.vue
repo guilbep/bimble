@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { t } from "./i18n";
 import { viewName } from "./shell/viewName";
-import { state, element, rename, runVerb, setGenerator, setView, materials, openViews, storeys, type ElementDetail, type ViewSummary } from "./bimble";
+import { state, element, rename, runVerb, setGenerator, setMaterial, setView, materials, openViews, storeys, type ElementDetail, type ViewSummary } from "./bimble";
 import { classNoun, parseMm } from "./i18n/parts/modify";
 
 // Rendered inside `.props` (LeftPanel): rows as fr/View3D.html (view) and fr/SelectModify.html (element).
@@ -21,7 +21,7 @@ watch(
     if (!id) { detail.value = null; return; }
     try {
       const d = element(id);
-      if (d.id !== detail.value?.id) renameError.value = null;
+      if (d.id !== detail.value?.id) renameError.value = materialError.value = null;
       detail.value = d;
       name.value = d.name;
     } catch (e) {
@@ -56,6 +56,14 @@ function commitSize(k: string, old: number, e: Event): void {
   sizeError.value = null;
   if (!d || v === null || v === old) return;
   sizeError.value = setGenerator(d.id, { [k]: v });
+}
+
+// Material: one `set_material` verb on change.
+const materialError = ref<string | null>(null);
+function commitMaterial(e: Event): void {
+  const d = detail.value;
+  const v = (e.target as HTMLSelectElement).value;
+  materialError.value = d && v !== d.material_name ? setMaterial([d.id], v) : null;
 }
 
 // Origin Z: one `move` verb by the difference (ADR 0052: applies at once).
@@ -150,9 +158,13 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
     <div class="row"><span class="k">GlobalId</span><span class="mono"><span style="font-size:11.5px">{{ detail.id }}</span></span></div>
     <div class="row"><span class="k">{{ t('props.storey') }}</span><span>{{ detail.storey_name ?? "—" }}</span></div>
     <div class="row">
-      <span class="k">{{ t('props.material') }}</span>
-      <span class="sel-inp" style="width:150px" data-missing="set element material (no Command in bimble-core)"><span class="ell">{{ detail.material_name ?? "—" }}</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+      <label class="k" for="el-material">{{ t('props.material') }}</label>
+      <select id="el-material" class="sel-inp" style="width:150px" :value="detail.material_name ?? ''"
+              :aria-invalid="materialError ? 'true' : 'false'" @change="commitMaterial">
+        <option v-for="x in materials" :key="x.id" :value="x.name">{{ x.name }}</option>
+      </select>
     </div>
+    <p v-if="materialError" role="alert" class="error">{{ t('modify.error', { msg: materialError }) }}</p>
     <div class="row">
       <span class="k">{{ t('modify.phase') }}</span>
       <span class="sel-inp" style="width:150px" data-missing="element phase (no phase in the model)"><span /><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>

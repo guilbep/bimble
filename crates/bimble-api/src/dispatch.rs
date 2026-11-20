@@ -20,7 +20,7 @@ pub struct VerbInfo {
     pub summary: &'static str,
 }
 
-const VERBS: [VerbInfo; 7] = [
+const VERBS: [VerbInfo; 8] = [
     VerbInfo {
         name: "place",
         summary: "Place a new column, beam, wall or slab on a storey (storey-relative mm).",
@@ -48,6 +48,10 @@ const VERBS: [VerbInfo; 7] = [
     VerbInfo {
         name: "set_schedule",
         summary: "Change a schedule's grouping by level, family filter (null: every family) or columns (field names); missing ones are kept.",
+    },
+    VerbInfo {
+        name: "set_material",
+        summary: "Give elements a material: a model material's name or a library grade (\"C35/45\").",
     },
 ];
 
@@ -87,6 +91,17 @@ struct IdsArgs {
     /// GlobalIds of the elements.
     #[schemars(with = "Vec<String>")]
     ids: Vec<GlobalId>,
+}
+
+/// Arguments of `set_material`.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SetMaterialArgs {
+    /// GlobalIds of the elements.
+    #[schemars(with = "Vec<String>")]
+    ids: Vec<GlobalId>,
+    /// A model material's name or a library grade ("C35/45").
+    material: String,
 }
 
 /// Arguments of `set_generator`.
@@ -180,6 +195,7 @@ pub fn describe(name: &str) -> Option<Value> {
         "set_generator" => schemars::schema_for!(SetGeneratorArgs),
         "set_view" => schemars::schema_for!(SetViewArgs),
         "set_schedule" => schemars::schema_for!(SetScheduleArgs),
+        "set_material" => schemars::schema_for!(SetMaterialArgs),
         _ => return None,
     };
     Some(s.to_value())
@@ -251,8 +267,26 @@ pub fn run(m: &Model, name: &str, args: Value) -> Result<Vec<Command>, String> {
         "set_generator" => set_generator(m, parse(args)?),
         "set_view" => set_view(m, parse(args)?),
         "set_schedule" => set_schedule(m, parse(args)?),
+        "set_material" => set_material(m, parse(args)?),
         _ => Err(format!("unknown verb {name:?}; known: {}", names())),
     }
+}
+
+/// `SetElementMaterial` for each element whose material changes (after an `AddMaterial` for a
+/// library grade not in the model yet); none changed: no command, so no empty undo step.
+fn set_material(m: &Model, a: SetMaterialArgs) -> Result<Vec<Command>, String> {
+    let (material, add) = verbs::material(m, Some(&a.material))?;
+    let mut cmds = Vec::new();
+    for id in a.ids {
+        let e = m.elements.get(&id).ok_or(format!("no element {id:?}"))?;
+        if e.material != material {
+            cmds.push(Command::SetElementMaterial { id, material });
+        }
+    }
+    if !cmds.is_empty() {
+        cmds.splice(0..0, add);
+    }
+    Ok(cmds)
 }
 
 /// One `SetGenerator`: the element's generator with the given sizes replaced, through its
@@ -460,7 +494,8 @@ mod tests {
                 "delete",
                 "set_generator",
                 "set_view",
-                "set_schedule"
+                "set_schedule",
+                "set_material"
             ]
         );
         let s = describe("place").unwrap();
@@ -472,6 +507,52 @@ mod tests {
             assert!(describe(v.name).is_some(), "{}", v.name);
         }
         assert!(describe("nope").is_none());
+    }
+
+    /// Two ids, a library grade (added once), unknown material refused, same material: nothing.
+    #[test]
+    fn set_material_by_name() {
+        let (mut m, _) = demo();
+        let ids: Vec<GlobalId> = m.elements.keys().take(2).copied().collect();
+        let before = m.clone();
+        let err = run(
+            &m,
+            "set_material",
+            json!({"ids": ids, "material": "Unobtainium"}),
+        );
+        assert!(err.unwrap_err().contains("unknown material"));
+        assert_eq!(m, before);
+        let cmds = run(
+            &m,
+            "set_material",
+            json!({"ids": ids, "material": "C35/45"}),
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                &cmds[..],
+                [
+                    Command::AddMaterial(_),
+                    Command::SetElementMaterial { .. },
+                    Command::SetElementMaterial { .. }
+                ]
+            ),
+            "{cmds:?}"
+        );
+        let mut h = History::default();
+        h.apply(&mut m, cmds).unwrap();
+        let c35 = m.elements[&ids[0]].material;
+        assert_eq!(m.materials[&c35].name, "C35/45");
+        assert_eq!(m.elements[&ids[1]].material, c35);
+        let again = run(
+            &m,
+            "set_material",
+            json!({"ids": ids, "material": "C35/45"}),
+        )
+        .unwrap();
+        assert!(again.is_empty(), "{again:?}");
+        assert!(h.undo(&mut m));
+        assert_eq!(m, before);
     }
 
     #[test]
