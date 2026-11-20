@@ -66,3 +66,6 @@ marks the decisions he took himself.
 | 58 | Sheets page tab name | the sheet number and name / "Feuilles" | "Feuilles" for now | ViewTabs takes a static page name |
 | 59 | Which schedule the Quantities page shows | a picker / open an egui schedule tab / the built-in "All elements" | "All elements" (else the first) | the reference has no picker; it holds the selected slab |
 | 60 | Schedule column titles (Rust, English) | show raw / translate in the UI by title | UI keys, raw as fallback | Rust titles are English |
+| 61 | Palette labels | Rust labels (English) / the ribbon copy for the same action | ribbon copy, Rust label when no ribbon tool (21 stay English: open question) | the ribbon copy is the reference copy |
+| 62 | Palette filter | Rust word-start matcher (not exposed) / substring over the shown and English labels in TS | substring in TS | UI filtering; "sec" must find "Zone de coupe" as the reference |
+| 63 | Palette schedules | stored only / the effective list | effective list (`schedule_list`) | as the egui palette |

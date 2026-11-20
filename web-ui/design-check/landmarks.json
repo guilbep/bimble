@@ -664,5 +664,33 @@
     "only": [
       "D6"
     ]
+  },
+  "palette": {
+    "ref": ".overlay > [role=dialog]",
+    "lab": "[data-bb=\"palette\"]",
+    "only": [
+      "D8"
+    ]
+  },
+  "palette-query": {
+    "ref": "[role=dialog] input.inp",
+    "lab": "[data-bb=\"palette-query\"]",
+    "only": [
+      "D8"
+    ]
+  },
+  "palette-item": {
+    "ref": "[role=dialog] > a.ti",
+    "lab": "[data-bb=\"palette-item\"]",
+    "only": [
+      "D8"
+    ]
+  },
+  "palette-help": {
+    "ref": "[role=dialog] > div.note",
+    "lab": "[data-bb=\"palette-help\"]",
+    "only": [
+      "D8"
+    ]
   }
 }
