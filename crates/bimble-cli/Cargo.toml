@@ -14,6 +14,7 @@ bimble-drawing.workspace = true
 glam.workspace = true
 mimalloc.workspace = true
 bimble-core.workspace = true
+bimble-api.workspace = true
 bimble-geom.workspace = true
 bimble-ifc.workspace = true
 bimble-render.workspace = true

@@ -494,6 +494,7 @@ dependencies = [
 name = "bimble-cli"
 version = "0.15.0"
 dependencies = [
+ "bimble-api",
  "bimble-core",
  "bimble-drawing",
  "bimble-geom",

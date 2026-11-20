@@ -8,6 +8,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use bimble_core::{Command, Generator, GlobalId, History, demo, file, version};
 mod bench;
 mod codec_bench;
+mod mcp;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -223,6 +224,8 @@ enum Cmd {
         /// Style file to check; without it, the default style is printed
         file: Option<PathBuf>,
     },
+    /// MCP server over stdio, so an LLM agent can read and edit the model (ADR 0048)
+    Mcp { model: PathBuf },
     /// Generate the demo concrete frame (2 storeys, 3×2 bays by default)
     Demo {
         out: PathBuf,
@@ -557,6 +560,7 @@ fn run(cli: Cli) -> Result<(), String> {
             };
             print!("{}", s.to_json());
         }
+        Cmd::Mcp { model } => mcp::run(&model)?,
         Cmd::Demo {
             out,
             bays_x,
