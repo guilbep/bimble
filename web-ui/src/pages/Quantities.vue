@@ -1,3 +1,19 @@
+<script lang="ts">
+import { element, state as st } from "../bimble";
+import { t as tt } from "../i18n";
+import { classNoun } from "../i18n/parts/modify";
+// D6: "1 ligne sélectionnée : dalle D3" for one selected element; the reference has no other hint.
+// ponytail: reads the selection, not whether its row is in the table (the "All elements" schedule lists every element).
+export const hint = () => {
+  const s = st.value.selection;
+  if (s.length !== 1) return "";
+  try {
+    const e = element(s[0]!);
+    return { key: "quantities.hintOne", params: { cls: classNoun(e.class, (k) => tt(k as Parameters<typeof tt>[0])).noun.toLowerCase(), name: e.name } };
+  } catch { return ""; }
+};
+</script>
+
 <script setup lang="ts">
 // D6 Quantities (wireframes v01 Quantities.html; ADR 0029). The table is the real schedule from Rust
 // (`schedule_rows`: text cells, subtotals and total as Rust writes them; nothing is summed here).

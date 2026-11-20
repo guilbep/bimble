@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { state, visibility, actions, runAction, pointer, status, placing } from "../bimble";
+import { state, visibility, actions, runAction, pointer, status, placing, openViews } from "../bimble";
 import { lang, setLang, t, type Lang } from "../i18n";
 import { page } from "../pages";
 import { dialog } from "../dialogs";
@@ -23,6 +23,19 @@ const placingHint = (): Parameters<typeof t>[0] | undefined => {
   const p = placing.value;
   return p?.active ? `placing.${p.kind}.${p.points.length ? 1 : 0}` : undefined;
 };
+// A screen's `hint` export: an i18n key, or a function returning `{ key, params }` or an already translated string.
+type Key = Parameters<typeof t>[0];
+type Hint = string | (() => string | { key: string; params?: Record<string, string | number> });
+const hintText = (): string => {
+  const h = (dialog()?.hint ?? page()?.hint ?? panel()?.hint) as Hint | undefined;
+  if (typeof h === "function") { const r = h(); return typeof r === "string" ? r : t(r.key as Key, r.params); }
+  if (h) return t(h as Key);
+  const p = placingHint();
+  if (p) return t(p);
+  // D2: on paper the reference shows the Dimension tool's hint; Rust has no "sheet tool active" state, so on paper at all.
+  if (openViews.value.paper?.on) return t("onpaper.hint");
+  return t(state.value.selection.length && !page() ? "shell.selectionHint" : "status.hint");
+};
 const chips = (): Chip[] => {
   const v = visibility.value;
   if (!v) return [];
@@ -40,8 +53,7 @@ const chips = (): Chip[] => {
 <template>
   <!-- Reference: footer.status (D1). -->
   <footer class="status" data-bb="statusbar">
-    <span class="hint" data-bb="status-hint">{{ t((dialog()?.hint ?? page()?.hint ?? panel()?.hint ?? placingHint()
-      ?? (state.selection.length && !page() ? "shell.selectionHint" : "status.hint")) as Parameters<typeof t>[0]) }}</span>
+    <span class="hint" data-bb="status-hint">{{ hintText() }}</span>
     <span class="mono q coords" style="font-size:12px" data-bb="status-coords">{{ pointer?.text ?? "" }}</span>
     <span style="flex:1"></span>
     <!-- Reference: `.status > .chip`, a set of direct children; each carries the landmark, the check reads the first. -->

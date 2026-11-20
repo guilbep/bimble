@@ -14,6 +14,7 @@ export const fr = {
   "onpaper.depth": "Profondeur",
   "onpaper.refs": "Plans de référence",
   "onpaper.display": "Affichage",
+  "onpaper.hint": "Clic : premier point de la cote · Sur papier = ce qui s'imprime",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "onpaper.orientation": "Orientation",
@@ -29,4 +30,5 @@ export const en: Record<keyof typeof fr, string> = {
   "onpaper.depth": "View depth",
   "onpaper.refs": "Reference plans",
   "onpaper.display": "Display",
+  "onpaper.hint": "Click: first point of the dimension · On paper = what prints",
 };

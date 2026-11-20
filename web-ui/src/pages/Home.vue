@@ -1,5 +1,8 @@
 <script lang="ts">
 export const layout = "full";
+import { state as st } from "../bimble";
+// A1: "Aucun modèle ouvert" with no model; with a model open, Home shows no hint (a string = already translated).
+export const hint = () => (st.value.file === null ? { key: "home.noModel" } : "");
 </script>
 
 <script setup lang="ts">

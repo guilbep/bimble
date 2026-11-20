@@ -13,6 +13,7 @@ export const fr = {
   "home.drop": "Déposez un fichier .ifc, .bimble ou .bimbleview n'importe où sur la fenêtre.",
   "home.recent": "Fichiers récents",
   "home.filter": "Filtrer les fichiers",
+  "home.noModel": "Aucun modèle ouvert",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "page.home": "Home",
@@ -28,4 +29,5 @@ export const en: Record<keyof typeof fr, string> = {
   "home.drop": "Drop an .ifc, .bimble or .bimbleview file anywhere on the window.",
   "home.recent": "Recent files",
   "home.filter": "Filter files",
+  "home.noModel": "No model open",
 };
