@@ -22,20 +22,21 @@ const SECTION = '<path d="M3 12h18"/><path d="m7 8-4 4 4 4"/><rect x="9" y="5" w
 const SHEET = '<path d="M5 3h10l4 4v14H5z"/><path d="M14 3v5h5"/><rect x="8" y="11" width="8" height="6"/>';
 const LIST = '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="5" cy="6" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="18" r="1"/>';
 
-// The ribbon tool of each action: its copy (the reference's) and icon. Actions with no tool keep the Rust label.
+// The ribbon tool of each action: its icon. Labels: `action.<name>` (i18n/parts/actions.ts), the Rust label if a new action has none.
 const tools = new Map<string, RibbonTool>();
 for (const groups of Object.values(RIBBON)) for (const g of groups) for (const tool of g.tools) if (tool.action && !tools.has(tool.action)) tools.set(tool.action, tool);
-// Rust tab (`ActionState.tab`) → the tab bar's copy; the others ("Model", "Manage", "Quick access") stay English.
+// Rust tab (`ActionState.tab`) → the tab bar's copy, else `actionTab.<tab>` (i18n/parts/actions.ts).
 const TAB: Record<string, string> = { File: "quick.file", Project: "tab.project", Collaborate: "tab.collaborate", Annotate: "tab.annotate", View: "tab.view", Sheets: "tab.sheets" };
+const copy = (key: string, rust: string) => { const s = t(key); return s === key ? rust : s; };
 
 const items = computed<Item[]>(() => {
   void state.value.rev;
   const list: Item[] = actions.value.map((a) => {
     const tool = tools.get(a.name);
     return {
-      label: tool ? t(tool.key) : a.label,
+      label: copy(`action.${a.name}`, a.label),
       also: a.label,
-      note: a.tab in TAB ? t(TAB[a.tab]!) : a.tab,
+      note: a.tab in TAB ? t(TAB[a.tab]!) : copy(`actionTab.${a.tab}`, a.tab),
       kbd: a.shortcut ?? "—",
       icon: tool?.icon ?? "",
       enabled: a.enabled,
