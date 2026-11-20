@@ -20,6 +20,8 @@ bimble-viewer = { path = "crates/bimble-viewer" }
 bimble-api = { path = "crates/bimble-api" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+# JSON schemas of the API verbs' arguments, for agents (ADR 0048). MIT.
+schemars = "1"
 blake3 = "1"
 uuid = { version = "1", features = ["v4"] }
 earcutr = "0.5"
