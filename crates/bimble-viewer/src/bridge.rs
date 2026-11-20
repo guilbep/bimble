@@ -128,18 +128,27 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
         // model's stored ones; the one shown; the tabs over the main view, in order.
         "open_views" => {
             let current = v.sync_tabs();
+            let levels = v.levels();
+            let defaults = bimble_core::view::default_views(&levels);
             let views: Vec<_> = v
                 .views
                 .iter()
-                .map(|w| query::ViewSummary {
-                    id: w.id,
-                    name: w.name.clone(),
-                    kind: w.kind.clone(),
-                    scale: w.scale,
-                    crop: w.crop,
-                    true_north: w.true_north,
-                    references: w.references.len(),
-                    annotations: w.annotations.len(),
+                .map(|w| {
+                    let mut j = serde_json::to_value(query::ViewSummary {
+                        id: w.id,
+                        name: w.name.clone(),
+                        kind: w.kind.clone(),
+                        scale: w.scale,
+                        crop: w.crop,
+                        true_north: w.true_north,
+                        references: w.references.len(),
+                        annotations: w.annotations.len(),
+                    })
+                    .unwrap_or_default();
+                    // Still the default name: what it says, for the page's language.
+                    j["auto_name"] = crate::viewing::auto_name(w, &defaults, &levels)
+                        .unwrap_or(serde_json::Value::Null);
+                    j
                 })
                 .collect();
             let tabs: Vec<_> = v.open_tabs.iter().map(|t| t.to_json()).collect();
@@ -156,6 +165,14 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
         // The schedules offered (built-in ones as changed, and the model's own), by name for
         // "schedule_rows".
         "schedule_list" => json(v.schedule_defs()),
+        // Where the pointer is, as the status bar says it: `{"world_mm": [x, y, z], "text"}`
+        // or null. Cheap (the last hover's result, no picking): poll it, it does not notify.
+        "pointer" => json(
+            v.pointer()
+                .map(|(p, text)| serde_json::json!({"world_mm": p, "text": text})),
+        ),
+        // The status bar's counts and its text; null without a model.
+        "status" => json(v.status()),
         "visibility" => {
             let t = v.temporary.as_ref();
             let now = |iso: bool| capped(t.filter(|t| t.isolate == iso).map(|t| &t.elements));
@@ -277,7 +294,8 @@ pub fn action(name: &str) -> Result<(), JsValue> {
 }
 
 /// Go to a tab or close it, as the tab row does: `{"op": "activate"|"close", "tab": <a tab of
-/// query("open_views")>}`. Closing the last tab shows Home.
+/// query("open_views")>}`. Closing the last tab shows Home. `{"op": "open", "tab": {"type":
+/// "view", "id"}}` opens any view (open_views.views), as a navigator row click does.
 #[wasm_bindgen]
 pub fn tab(args_json: &str) -> Result<(), JsValue> {
     #[derive(serde::Deserialize)]
@@ -288,12 +306,20 @@ pub fn tab(args_json: &str) -> Result<(), JsValue> {
     let a: Args = serde_json::from_str(args_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let t = crate::ribbon::TabRef::from_json(&a.tab).map_err(|e| JsValue::from_str(&e))?;
     let close = match a.op.as_str() {
-        "activate" => false,
+        "activate" | "open" => false,
         "close" => true,
         o => return Err(JsValue::from_str(&format!("unknown op {o:?}"))),
     };
+    let open = a.op == "open";
     with_viewer(|v| {
-        if !close && v.sync_tabs().as_ref() != Some(&t) && !v.open_tabs.contains(&t) {
+        if open {
+            // Any view of query("open_views").views, as a navigator row click: it gets a tab.
+            match &t {
+                crate::ribbon::TabRef::View(id) if v.views.iter().any(|w| w.id == *id) => {}
+                crate::ribbon::TabRef::View(_) => return Err("no such view".into()),
+                _ => return Err("op \"open\" takes a view".into()),
+            }
+        } else if !close && v.sync_tabs().as_ref() != Some(&t) && !v.open_tabs.contains(&t) {
             return Err("no such open tab".into());
         }
         v.tab_verb(close, t);

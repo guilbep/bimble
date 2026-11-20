@@ -10,6 +10,33 @@ use bimble_core::view::{
 };
 use glam::Vec3;
 
+/// A view still named as `default_views` names it, as data the page can say in its own
+/// language: `{"kind": "3d"|"plan"|"ceiling", "storey": the storey's name or null}`. None once
+/// renamed (the stored name is kept as is). `defaults`: `default_views(levels)`.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn auto_name(
+    v: &View,
+    defaults: &[View],
+    levels: &[Level],
+) -> Option<serde_json::Value> {
+    let d = defaults.iter().find(|d| d.id == v.id && d.name == v.name)?;
+    let (kind, storey) = match &d.kind {
+        ViewKind::Plan { storey, look, .. } => (
+            match look {
+                Look::Down => "plan",
+                Look::Up => "ceiling",
+            },
+            levels
+                .iter()
+                .find(|l| l.key == *storey)
+                .map(|l| l.name.clone()),
+        ),
+        ViewKind::ThreeD => ("3d", None),
+        _ => return None,
+    };
+    Some(serde_json::json!({"kind": kind, "storey": storey}))
+}
+
 /// The views of a model that isn't edited (IFC): kept in a side file next to it.
 pub(crate) struct SideViews {
     pub stored: BTreeMap<GlobalId, View>,
@@ -1945,6 +1972,25 @@ pub(crate) fn check_side_file(f: &ViewsFile, levels: &[Level]) -> Result<Vec<Str
 mod side_file_tests {
     use super::*;
     use bimble_core::demo::{FrameSpec, concrete_frame};
+
+    /// The default 3D and ceiling views say their default name as data; a renamed one does not.
+    #[test]
+    fn auto_name_only_while_the_default_name_is_kept() {
+        let l = Scene::from_model(&concrete_frame(&FrameSpec::default())).levels();
+        let d = default_views(&l);
+        let ceiling = d.iter().find(|v| v.name == "Ceiling Niveau 1").unwrap();
+        assert_eq!(
+            auto_name(ceiling, &d, &l),
+            Some(serde_json::json!({"kind": "ceiling", "storey": "Niveau 1"}))
+        );
+        assert_eq!(
+            auto_name(&d[0], &d, &l),
+            Some(serde_json::json!({"kind": "3d", "storey": null}))
+        );
+        let mut renamed = ceiling.clone();
+        renamed.name = "RDC plafond".into();
+        assert_eq!(auto_name(&renamed, &d, &l), None);
+    }
 
     /// A views file of this model is taken; one whose plans are on no storey of it is refused;
     /// one with a plan on a missing storey is taken with a warning.

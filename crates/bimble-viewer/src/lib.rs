@@ -4540,6 +4540,68 @@ impl Viewer {
             });
     }
 
+    /// Where the pointer is (or the measured point), world mm, and as the status bar says it
+    /// in LV95 or WGS84 (ADR 0045). Cheap: no picking, the last hover's result.
+    pub(crate) fn pointer(&self) -> Option<([f64; 3], String)> {
+        let l = self.loaded.as_ref()?;
+        let o = l.scene.origin_mm;
+        let p = self
+            .hover_snap
+            .map(|s| {
+                [
+                    s.point.x as f64 + o[0],
+                    s.point.y as f64 + o[1],
+                    s.point.z as f64 + o[2],
+                ]
+            })
+            .or(self.pointer_world)?;
+        let text = coords::text(&l.scene.georef, p, self.settings.coordinate_target());
+        Some((p, text))
+    }
+
+    /// The status bar's counts (None: no model): visible elements counts every element once.
+    pub(crate) fn status(&self) -> Option<Status> {
+        let l = self.loaded.as_ref()?;
+        let total = l.scene.elements.len();
+        let visible = (0..total).filter(|&i| self.visible(i)).count();
+        // Pictures drawn in the last second; nothing drawn for half a second: idle.
+        let now = Instant::now();
+        let fps = match self.drawn_at.back() {
+            Some(b) if now.duration_since(*b) < Duration::from_millis(500) => Some(
+                self.drawn_at
+                    .iter()
+                    .filter(|t| now.duration_since(**t) <= Duration::from_secs(1))
+                    .count(),
+            ),
+            _ => None,
+        };
+        let rate = fps.map_or_else(|| "idle".to_owned(), |n| format!("{n} fps"));
+        let triangles = self.gpu_scene.as_ref().map_or(0, |g| g.triangles());
+        let model_bytes = self.held();
+        let app_bytes = big::in_use();
+        let text = format!(
+            "{visible}/{total} elements · {triangles} triangles · loaded in {:.0?} · model ≈ {}{} · {rate}",
+            l.load_time,
+            big::size(model_bytes),
+            if app_bytes > 0 {
+                format!(" · app {}", big::size(app_bytes))
+            } else {
+                String::new()
+            },
+        );
+        Some(Status {
+            visible,
+            total,
+            triangles,
+            load_ms: l.load_time.as_secs_f64() * 1000.0,
+            model_bytes,
+            app_bytes,
+            fps,
+            idle: fps.is_none(),
+            text,
+        })
+    }
+
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let mut reset = None;
@@ -4549,18 +4611,9 @@ impl Viewer {
                 ui.separator();
             }
             ui.label(self.status_hint());
-            // Where the pointer is (or the measured point), in LV95 or WGS84 (ADR 0045).
-            let at = self
-                .hover_snap
-                .zip(self.loaded.as_ref())
-                .map(|(s, l)| {
-                    let o = l.scene.origin_mm;
-                    [s.point.x as f64 + o[0], s.point.y as f64 + o[1], s.point.z as f64 + o[2]]
-                })
-                .or(self.pointer_world);
-            if let (Some(p), Some(l)) = (at, &self.loaded) {
+            if let Some((_, text)) = self.pointer() {
                 ui.separator();
-                ui.label(coords::text(&l.scene.georef, p, self.settings.coordinate_target()))
+                ui.label(text)
                     .on_hover_text("Settings → Coordinates: the model's survey system (LV95), WGS84, ETRS89 / UTM, US State Plane…");
             }
             ui.separator();
@@ -4575,37 +4628,12 @@ impl Viewer {
                     reset = Some(chip);
                 }
             }
-            if let Some(l) = &self.loaded {
-                let visible = (0..l.scene.elements.len()).filter(|&i| self.visible(i)).count();
-                // Pictures drawn in the last second; nothing drawn for half a second: idle.
-                let now = Instant::now();
-                let rate = match self.drawn_at.back() {
-                    Some(b) if now.duration_since(*b) < Duration::from_millis(500) => format!(
-                        "{} fps",
-                        self.drawn_at
-                            .iter()
-                            .filter(|t| now.duration_since(**t) <= Duration::from_secs(1))
-                            .count()
-                    ),
-                    _ => "idle".to_owned(),
-                };
-                if rate != "idle" {
+            if let Some(st) = self.status() {
+                if !st.idle {
                     // One more look once drawing stops, to say so.
                     ui.ctx().request_repaint_after(Duration::from_millis(600));
                 }
-                let app = big::in_use();
-                ui.weak(format!(
-                    "{visible}/{} elements · {} triangles · loaded in {:.0?} · model ≈ {}{} · {rate}",
-                    l.scene.elements.len(),
-                    self.gpu_scene.as_ref().map_or(0, |g| g.triangles()),
-                    l.load_time,
-                    big::size(self.held()),
-                    if app > 0 {
-                        format!(" · app {}", big::size(app))
-                    } else {
-                        String::new()
-                    },
-                ))
+                ui.weak(st.text)
                 .on_hover_text(
                     "Model: what its meshes hold, estimated (ADR 0033). App: what Bimble holds in \
                      memory now. fps: pictures drawn in the last second; idle when nothing moves \
@@ -4620,6 +4648,25 @@ impl Viewer {
             self.reset_chip(c, &ctx);
         }
     }
+}
+
+/// The status bar's counts, as numbers and as it writes them (`text`).
+// ponytail: serde is a web-only dependency; natively only `idle` and `text` are read.
+#[cfg_attr(target_arch = "wasm32", derive(serde::Serialize))]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) struct Status {
+    visible: usize,
+    total: usize,
+    triangles: u32,
+    load_ms: f64,
+    /// What the model's meshes hold, estimated (ADR 0033).
+    model_bytes: u64,
+    /// What Bimble holds in memory now (0: not known on this platform).
+    app_bytes: u64,
+    /// Pictures drawn in the last second; None: idle.
+    fps: Option<usize>,
+    idle: bool,
+    text: String,
 }
 
 fn toggle<T: Ord>(set: &mut BTreeSet<T>, item: T, visible: bool) {
