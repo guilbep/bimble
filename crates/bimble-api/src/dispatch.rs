@@ -772,8 +772,10 @@ mod tests {
             json!({"ids": [a.id, b.id], "angle_deg": -180}),
         )
         .unwrap();
-        assert_eq!(placement(&c[0]).origin, b.placement.origin);
-        assert_eq!(placement(&c[1]).origin, a.placement.origin);
+        // Plan origins swap; each keeps its own z.
+        let (oa, ob) = (a.placement.origin, b.placement.origin);
+        assert_eq!(placement(&c[0]).origin, [ob[0], ob[1], oa[2]]);
+        assert_eq!(placement(&c[1]).origin, [oa[0], oa[1], ob[2]]);
         assert_eq!(placement(&c[0]).x_axis, [-1.0, 0.0, 0.0]);
         no_neg_zero(placement(&c[0]));
     }
