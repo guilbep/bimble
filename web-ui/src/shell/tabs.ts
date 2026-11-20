@@ -15,3 +15,6 @@ export type TabId = (typeof TABS)[number]["id"];
 
 /** The active tab. D1 (View3D) shows "view" active. */
 export const activeTab = ref<TabId>("view");
+
+/** A tab id from outside (the address): true when it names a tab. */
+export const isTabId = (s: string): s is TabId => TABS.some((t) => t.id === s);

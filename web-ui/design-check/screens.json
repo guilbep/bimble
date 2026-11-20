@@ -2,21 +2,21 @@
   "_doc": "code -> ref: file under docs/design/wireframes-v01/<lang>/, lab: path appended to --lab <base-url> (empty until the shell exists), mask: landmarks blanked before the pixel diff.",
   "A1": {
     "ref": "Home.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&page=home",
     "mask": [
       "viewport"
     ]
   },
   "A2": {
     "ref": "FileMenu.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=project&dialog=file-menu",
     "mask": [
       "viewport"
     ]
   },
   "A3": {
     "ref": "ProjectInfo.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=project&page=project-info",
     "mask": [
       "viewport"
     ]
@@ -58,14 +58,14 @@
   },
   "B1": {
     "ref": "PlaceSlab.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=concrete",
     "mask": [
       "viewport"
     ]
   },
   "B2": {
     "ref": "SelectModify.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=concrete&select=first:IfcBeam",
     "mask": [
       "viewport"
     ]
@@ -86,14 +86,14 @@
   },
   "C1": {
     "ref": "SharedFolder.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=collaborate&dialog=shared-folder",
     "mask": [
       "viewport"
     ]
   },
   "C2": {
     "ref": "Borrowed.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=collaborate&dialog=borrowed",
     "mask": [
       "viewport"
     ]
@@ -121,28 +121,28 @@
   },
   "C6": {
     "ref": "History.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=collaborate&page=history",
     "mask": [
       "viewport"
     ]
   },
   "D1": {
     "ref": "View3D.html",
-    "lab": "?url=/frame.bimble",
+    "lab": "?url=/frame.bimble&tab=view&view=3d",
     "mask": [
       "viewport"
     ]
   },
   "D2": {
     "ref": "PlanOnPaper.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=annotate&view=plan:0&paper=1",
     "mask": [
       "viewport"
     ]
   },
   "D3": {
     "ref": "SheetLayout.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=sheets&page=sheets",
     "mask": [
       "viewport"
     ]
@@ -156,14 +156,14 @@
   },
   "D5": {
     "ref": "Standards.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=graphics&panel=standards",
     "mask": [
       "viewport"
     ]
   },
   "D6": {
     "ref": "Quantities.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=quantities&page=quantities&select=first:IfcSlab",
     "mask": [
       "viewport"
     ]
@@ -177,7 +177,7 @@
   },
   "D8": {
     "ref": "Palette.html",
-    "lab": "",
+    "lab": "?url=/frame.bimble&tab=view&dialog=palette",
     "mask": [
       "viewport"
     ]

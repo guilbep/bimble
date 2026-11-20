@@ -10,6 +10,7 @@ export const en: Messages = {
   "app.undo": "Undo",
   "app.redo": "Redo",
   "app.startError": "Error: Bimble could not start. {msg}",
+  "example.title": "Example",
   // Properties panel
   "props.title": "Properties",
   "props.empty": "Click an element in the view.",

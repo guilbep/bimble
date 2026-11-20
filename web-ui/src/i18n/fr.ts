@@ -8,6 +8,7 @@ export const fr = {
   "app.undo": "Annuler",
   "app.redo": "Rétablir",
   "app.startError": "Erreur : Bimble n'a pas pu démarrer. {msg}",
+  "example.title": "Exemple",
   // Properties panel
   "props.title": "Propriétés",
   "props.empty": "Cliquez sur un élément dans la vue.",

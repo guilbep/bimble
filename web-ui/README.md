@@ -21,3 +21,19 @@ Vue only shows things. All logic stays in Rust: `src/bimble.ts` is the one typed
 - Wasm data is never deeply reactive (`shallowRef`).
 - Fonts are self-hosted in `src/brand/` (vendored from the skill, see `src/brand/README.md`), no request to a font service.
 - All copy comes from `src/i18n/fr.ts` and `src/i18n/en.ts` (same keys, checked by the typecheck), through `t(key)`. No literal copy in components.
+
+## Deep links, pages, dialogs, panels
+
+The address names a state of the lab (`src/deeplink.ts`, read once after the model loads):
+`?url=/frame.bimble&tab=concrete&view=3d|plan:<storey name or index>|<GlobalId>&select=first|first:IfcBeam|<id,id>&page=<id>&dialog=<id>&panel=<id>&paper=1&action=<name,name>`.
+Each wasm step waits for the next state change. `data-bb-ready` is set after the last step: the design check waits for it.
+`design-check/screens.json` gives the deep link of each screen (`lab`).
+
+To add a page, a dialog or a right panel, add one file. Do not edit `App.vue`:
+
+- `src/pages/ProjectInfo.vue` → `?page=project-info`. It replaces the viewport (sheet, padding 24 32). `#bimble` stays in the DOM, hidden. Esc closes it.
+- `src/dialogs/FileMenu.vue` → `?dialog=file-menu`. It shows over everything on an ink 30 % backdrop. Its root takes the class `bb-dialog` (cream card) or `bb-menu` (sheet menu). Esc closes it. No OK/Cancel (ADR 0052).
+- `src/panels/Standards.vue` → `?panel=standards`. The 400-wide right panel.
+
+The id is the file name in kebab-case. `currentPage`, `currentDialog` and `currentPanel` (in each `index.ts`) open and close them.
+`src/pages/Blank.vue` and `src/dialogs/Blank.vue` are examples.

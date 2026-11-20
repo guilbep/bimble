@@ -207,6 +207,9 @@ export const status = shallowRef<Status | null>(null);
 let resolveReady!: () => void;
 /** Resolves once the viewer started; `start()` failing leaves it pending (see `startError`). */
 export const ready: Promise<void> = new Promise((r) => (resolveReady = r));
+let resolveModel!: () => void;
+/** Resolves after the first refresh with a model loaded. */
+export const modelReady: Promise<void> = new Promise((r) => (resolveModel = r));
 
 // Served as is from public/bimble/ (npm run wasm), not bundled.
 const WASM = "/bimble/";
@@ -335,8 +338,8 @@ function refresh(modelChanged: boolean): void {
     materials.value = tryQuery<MaterialSummary[]>("materials", []);
     project.value = tryQuery<ProjectSummary | null>("project", null);
   }
-  // The design check waits for this: a model is loaded and its first refresh is done.
-  if (state.value.file !== null && actions.value.length > 0) document.documentElement.dataset.bbReady = "1";
+  // A model is loaded and its first refresh is done (deeplink.ts then sets data-bb-ready for the design check).
+  if (state.value.file !== null && actions.value.length > 0) resolveModel();
   if (!timed && modelChanged && state.value.file !== null) {
     timed = true;
     console.debug(`bimble: refresh after change ${(performance.now() - t0).toFixed(2)} ms`);
