@@ -16,42 +16,42 @@
   },
   "A2": {
     "fr": {
-      "boxes": 18,
-      "styles": 45,
+      "boxes": 15,
+      "styles": 27,
       "own_boxes": 0,
       "own_styles": 10
     },
     "en": {
-      "boxes": 18,
-      "styles": 45,
+      "boxes": 15,
+      "styles": 27,
       "own_boxes": 0,
       "own_styles": 10
     }
   },
   "A3": {
     "fr": {
-      "boxes": 15,
-      "styles": 42,
+      "boxes": 12,
+      "styles": 24,
       "own_boxes": 2,
       "own_styles": 6
     },
     "en": {
-      "boxes": 15,
-      "styles": 42,
+      "boxes": 12,
+      "styles": 24,
       "own_boxes": 2,
       "own_styles": 6
     }
   },
   "B1": {
     "fr": {
-      "boxes": 17,
-      "styles": 51,
+      "boxes": 14,
+      "styles": 21,
       "own_boxes": 3,
       "own_styles": 0
     },
     "en": {
-      "boxes": 17,
-      "styles": 51,
+      "boxes": 14,
+      "styles": 21,
       "own_boxes": 3,
       "own_styles": 0
     }
@@ -59,13 +59,13 @@
   "B2": {
     "fr": {
       "boxes": 17,
-      "styles": 32,
+      "styles": 21,
       "own_boxes": 4,
       "own_styles": 0
     },
     "en": {
       "boxes": 16,
-      "styles": 32,
+      "styles": 21,
       "own_boxes": 4,
       "own_styles": 0
     }
@@ -73,13 +73,13 @@
   "C1": {
     "fr": {
       "boxes": 17,
-      "styles": 48,
+      "styles": 37,
       "own_boxes": 7,
       "own_styles": 13
     },
     "en": {
       "boxes": 17,
-      "styles": 48,
+      "styles": 37,
       "own_boxes": 7,
       "own_styles": 13
     }
@@ -87,13 +87,13 @@
   "C2": {
     "fr": {
       "boxes": 13,
-      "styles": 37,
+      "styles": 19,
       "own_boxes": 0,
       "own_styles": 0
     },
     "en": {
       "boxes": 13,
-      "styles": 37,
+      "styles": 19,
       "own_boxes": 0,
       "own_styles": 0
     }
@@ -101,41 +101,41 @@
   "C6": {
     "fr": {
       "boxes": 14,
-      "styles": 37,
+      "styles": 26,
       "own_boxes": 4,
       "own_styles": 7
     },
     "en": {
       "boxes": 14,
-      "styles": 37,
+      "styles": 26,
       "own_boxes": 4,
       "own_styles": 7
     }
   },
   "D1": {
     "fr": {
-      "boxes": 15,
-      "styles": 43,
+      "boxes": 12,
+      "styles": 25,
       "own_boxes": 0,
       "own_styles": 0
     },
     "en": {
-      "boxes": 15,
-      "styles": 43,
+      "boxes": 12,
+      "styles": 25,
       "own_boxes": 0,
       "own_styles": 0
     }
   },
   "D2": {
     "fr": {
-      "boxes": 14,
-      "styles": 55,
+      "boxes": 10,
+      "styles": 25,
       "own_boxes": 0,
       "own_styles": 0
     },
     "en": {
-      "boxes": 14,
-      "styles": 55,
+      "boxes": 10,
+      "styles": 25,
       "own_boxes": 0,
       "own_styles": 0
     }
@@ -143,13 +143,13 @@
   "D3": {
     "fr": {
       "boxes": 19,
-      "styles": 44,
+      "styles": 26,
       "own_boxes": 3,
       "own_styles": 1
     },
     "en": {
       "boxes": 19,
-      "styles": 44,
+      "styles": 26,
       "own_boxes": 3,
       "own_styles": 1
     }
@@ -157,41 +157,41 @@
   "D5": {
     "fr": {
       "boxes": 22,
-      "styles": 48,
+      "styles": 37,
       "own_boxes": 8,
       "own_styles": 19
     },
     "en": {
       "boxes": 22,
-      "styles": 48,
+      "styles": 37,
       "own_boxes": 8,
       "own_styles": 19
     }
   },
   "D6": {
     "fr": {
-      "boxes": 16,
-      "styles": 47,
+      "boxes": 15,
+      "styles": 36,
       "own_boxes": 2,
       "own_styles": 8
     },
     "en": {
-      "boxes": 16,
-      "styles": 47,
+      "boxes": 15,
+      "styles": 36,
       "own_boxes": 2,
       "own_styles": 8
     }
   },
   "D8": {
     "fr": {
-      "boxes": 12,
-      "styles": 38,
+      "boxes": 9,
+      "styles": 20,
       "own_boxes": 2,
       "own_styles": 0
     },
     "en": {
-      "boxes": 12,
-      "styles": 38,
+      "boxes": 9,
+      "styles": 20,
       "own_boxes": 2,
       "own_styles": 0
     }

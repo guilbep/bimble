@@ -97,6 +97,8 @@ const counts = {}; // code -> {boxes, styles, own_boxes, own_styles}
 
 for (const code of codes) {
   const scr = screens[code];
+  // A screen with no lab URL (a new screen, not built) has nothing to compare against the lab.
+  if (!scr.lab && lab !== "none" && !lab.startsWith("ref:")) { console.log(`SKIP ${code} ${lang}: no lab URL`); continue; }
   const refPath = `${lang}/${scr.ref}`;
   const labIsRef = lab === "none" || lab.startsWith("ref:");
   const labUrl = lab === "none" ? base + refPath : lab.startsWith("ref:") ? base + lab.slice(4) : new URL(scr.lab, lab).href;
