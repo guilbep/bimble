@@ -106,3 +106,9 @@ Scores 1 (bad) to 5 (good). "Drift" 5 = one UI only. "Old machines" = ROADMAP pr
 
 The pivot question: which UX do you want to iterate on? Panels, forms, chat, Home: Vue helps.
 Placing, snapping, sections, sheets: these stay in Rust in every option, and Vue does not help.
+
+## Chosen (Pierre, 20 Nov, after this note)
+
+"Have the native UI fall behind and have the Vue UI for fast prototyping, and once the UI is
+stabilized we redo the egui one." This is option B with deliberate drift: egui lags, then follows
+from stable screens. Recorded in ADR 0048.
