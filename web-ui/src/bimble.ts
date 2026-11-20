@@ -456,3 +456,5 @@ export const schedules = () => query<ScheduleDef[]>("schedules");
 export const scheduleList = () => tryQuery<unknown[]>("schedule_list", []);
 export const verbs = () => query<VerbInfo[]>("verbs");
 export const describe = (name: string) => query<VerbInfo>("describe", { name });
+/** Set one project information field by its label; Rust makes the key (`project::key_of`), an empty value removes it. Returns the Rust error, or null. */
+export const setProjectField = (label: string, value: string) => runVerb("set_project_field", { label, value });

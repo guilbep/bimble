@@ -230,6 +230,8 @@ export type PartKey =
   | "projectinfo.ifc"
   | "projectinfo.mine"
   | "projectinfo.mineNote"
+  | "projectinfo.newLabel"
+  | "projectinfo.newValue"
   | "projectinfo.other"
   | "projectinfo.phase"
   | "projectinfo.phase_description"

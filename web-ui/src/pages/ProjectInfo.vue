@@ -8,7 +8,7 @@ export const side = ProjectInfoSide;
 // A3 Project information (wireframes v01 ProjectInfo.html; ADR 0030, 0052). Leaving a field or Enter
 // (the native `change` event) sends one SetProject with the whole map; undo restores it.
 import { computed, ref } from "vue";
-import { project, state, setProject } from "../bimble";
+import { project, state, setProject, setProjectField } from "../bimble";
 import { t } from "../i18n";
 
 // The reference's "Basic data" rows, by Rust key (bimble-core project::KNOWN).
@@ -26,6 +26,17 @@ function commit(key: string, e: Event) {
   if (v.trim() === "") delete next[key];
   else next[key] = v;
   error.value = setProject(next);
+}
+
+// "Add field": a label and a value; Enter on the value sends one `set_project_field` (the key is made in Rust).
+const adding = ref(false);
+const newLabel = ref("");
+const newValue = ref("");
+function addField() {
+  error.value = setProjectField(newLabel.value, newValue.value);
+  if (error.value) return;
+  adding.value = false;
+  newLabel.value = newValue.value = "";
 }
 </script>
 
@@ -68,7 +79,11 @@ function commit(key: string, e: Event) {
         <input :id="`pi-${k}`" class="inp" :value="info[k] ?? ''" :data-bb="`project-field-${k}`" @change="commit(k, $event)">
         <span class="mono key">{{ '{' + k + '}' }}</span>
       </div>
-      <button type="button" class="qb add" disabled data-missing="verb: add a project field (bimble-core project::key_of)" data-bb="project-add-field">
+      <div v-if="adding" class="fld" data-bb="project-new-field">
+        <input v-model="newLabel" class="inp" :aria-label="t('projectinfo.newLabel')" :placeholder="t('projectinfo.newLabel')" data-bb="project-new-label">
+        <input v-model="newValue" class="inp" :aria-label="t('projectinfo.newValue')" :placeholder="t('projectinfo.newValue')" data-bb="project-new-value" @keydown.enter="addField">
+      </div>
+      <button type="button" class="qb add" data-bb="project-add-field" @click="adding = true">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg> {{ t('projectinfo.addField') }}
       </button>
     </section>

@@ -20,7 +20,7 @@ pub struct VerbInfo {
     pub summary: &'static str,
 }
 
-const VERBS: [VerbInfo; 8] = [
+const VERBS: [VerbInfo; 9] = [
     VerbInfo {
         name: "place",
         summary: "Place a new column, beam, wall or slab on a storey (storey-relative mm).",
@@ -52,6 +52,10 @@ const VERBS: [VerbInfo; 8] = [
     VerbInfo {
         name: "set_material",
         summary: "Give elements a material: a model material's name or a library grade (\"C35/45\").",
+    },
+    VerbInfo {
+        name: "set_project_field",
+        summary: "Set one project information field by its label (the key is made from it); an empty value removes it.",
     },
 ];
 
@@ -102,6 +106,16 @@ struct SetMaterialArgs {
     ids: Vec<GlobalId>,
     /// A model material's name or a library grade ("C35/45").
     material: String,
+}
+
+/// Arguments of `set_project_field`.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SetProjectFieldArgs {
+    /// The field's label ("Maître d'ouvrage"); the key is made from it (`project::key_of`).
+    label: String,
+    /// The value; empty removes the field.
+    value: String,
 }
 
 /// Arguments of `set_generator`.
@@ -196,6 +210,7 @@ pub fn describe(name: &str) -> Option<Value> {
         "set_view" => schemars::schema_for!(SetViewArgs),
         "set_schedule" => schemars::schema_for!(SetScheduleArgs),
         "set_material" => schemars::schema_for!(SetMaterialArgs),
+        "set_project_field" => schemars::schema_for!(SetProjectFieldArgs),
         _ => return None,
     };
     Some(s.to_value())
@@ -268,8 +283,29 @@ pub fn run(m: &Model, name: &str, args: Value) -> Result<Vec<Command>, String> {
         "set_view" => set_view(m, parse(args)?),
         "set_schedule" => set_schedule(m, parse(args)?),
         "set_material" => set_material(m, parse(args)?),
+        "set_project_field" => set_project_field(m, parse(args)?),
         _ => Err(format!("unknown verb {name:?}; known: {}", names())),
     }
+}
+
+/// One `SetProject`: the whole map with the label's key set (or removed, for an empty value,
+/// ADR 0030), validated as `SetProject` is. Unchanged: no command, so no empty undo step.
+fn set_project_field(m: &Model, a: SetProjectFieldArgs) -> Result<Vec<Command>, String> {
+    let key = bimble_core::project::key_of(&a.label);
+    if key.is_empty() {
+        return Err(format!("{:?}: a label needs letters or digits", a.label));
+    }
+    let mut project = m.project.clone();
+    if a.value.is_empty() {
+        project.remove(&key);
+    } else {
+        project.insert(key, a.value);
+    }
+    if project == m.project {
+        return Ok(vec![]);
+    }
+    bimble_core::project::validate(&project)?;
+    Ok(vec![Command::SetProject { project }])
 }
 
 /// `SetElementMaterial` for each element whose material changes (after an `AddMaterial` for a
@@ -495,7 +531,8 @@ mod tests {
                 "set_generator",
                 "set_view",
                 "set_schedule",
-                "set_material"
+                "set_material",
+                "set_project_field"
             ]
         );
         let s = describe("place").unwrap();
@@ -507,6 +544,34 @@ mod tests {
             assert!(describe(v.name).is_some(), "{}", v.name);
         }
         assert!(describe("nope").is_none());
+    }
+
+    /// "Maître d'ouvrage" → "ma_tre_d_ouvrage" (key_of: non-ASCII and punctuation become one
+    /// `_`); same again: nothing; too long: refused; empty value: the key removed.
+    #[test]
+    fn set_project_field_by_label() {
+        let (mut m, _) = demo();
+        let set = |m: &Model, value: &str| {
+            run(
+                m,
+                "set_project_field",
+                json!({"label": "Maître d'ouvrage", "value": value}),
+            )
+        };
+        let cmds = set(&m, "Ville de Lausanne").unwrap();
+        assert_eq!(cmds.len(), 1);
+        History::default().apply(&mut m, cmds).unwrap();
+        assert_eq!(m.project["ma_tre_d_ouvrage"], "Ville de Lausanne");
+        assert!(set(&m, "Ville de Lausanne").unwrap().is_empty());
+        let before = m.clone();
+        let long = "x".repeat(bimble_core::project::MAX_VALUE + 1);
+        assert!(set(&m, &long).is_err());
+        assert_eq!(m, before, "model unchanged");
+        assert!(run(&m, "set_project_field", json!({"label": "°", "value": "x"})).is_err());
+        let cmds = set(&m, "").unwrap();
+        History::default().apply(&mut m, cmds).unwrap();
+        assert!(!m.project.contains_key("ma_tre_d_ouvrage"));
+        assert!(set(&m, "").unwrap().is_empty());
     }
 
     /// Two ids, a library grade (added once), unknown material refused, same material: nothing.
