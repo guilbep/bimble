@@ -233,6 +233,72 @@ impl Action {
         }
     }
 
+    /// A stable snake_case name, for the page bridge (ADR 0048): "section_box", "place_column".
+    // Used by the page bridge, which only the browser build has.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn name(self) -> String {
+        match self {
+            Action::New => "new".into(),
+            Action::Open => "open".into(),
+            Action::ImportIfc => "import_ifc".into(),
+            Action::ConvertOpen => "convert_open".into(),
+            Action::ShareForViewing => "share_for_viewing".into(),
+            Action::ExportIfc4 => "export_ifc4".into(),
+            Action::ExportIfc2x3 => "export_ifc2x3".into(),
+            Action::Save => "save".into(),
+            Action::Undo => "undo".into(),
+            Action::Redo => "redo".into(),
+            Action::Place(k) => format!("place_{}", k.label().to_lowercase().replace(' ', "_")),
+            Action::Measure => "measure".into(),
+            Action::Edges => "edges".into(),
+            Action::Hatching => "hatching".into(),
+            Action::Orthographic => "orthographic".into(),
+            Action::SectionBox => "section_box".into(),
+            Action::BoxToSelection => "box_to_selection".into(),
+            Action::Fit => "fit".into(),
+            Action::Top => "top".into(),
+            Action::OnPaper => "on_paper".into(),
+            Action::SectionLabels => "section_labels".into(),
+            Action::Openings => "openings".into(),
+            Action::SectionMarks => "section_marks".into(),
+            Action::SlabLevels => "slab_levels".into(),
+            Action::NewSheet => "new_sheet".into(),
+            Action::CloseSheet => "close_sheet".into(),
+            Action::SheetTool(t) => match t {
+                layout::Tool::Select => "sheet_tool_select".into(),
+                layout::Tool::Text => "sheet_tool_text".into(),
+                layout::Tool::Dimension => "sheet_tool_dimension".into(),
+            },
+            Action::LinkModel => "link_model".into(),
+            Action::LinkDxf => "link_dxf".into(),
+            Action::LinkPdf => "link_pdf".into(),
+            Action::ManageLinks => "manage_links".into(),
+            Action::HideNow => "hide_now".into(),
+            Action::IsolateNow => "isolate_now".into(),
+            Action::HideInView => "hide_in_view".into(),
+            Action::IsolateInView => "isolate_in_view".into(),
+            Action::Unhide => "unhide".into(),
+            Action::RevealHidden => "reveal_hidden".into(),
+            Action::SharedFolder => "shared_folder".into(),
+            Action::Synchronize => "synchronize".into(),
+            Action::Home => "home".into(),
+            Action::Standards => "standards".into(),
+            Action::Project => "project".into(),
+            Action::Materials => "materials".into(),
+            Action::History => "history".into(),
+            Action::Settings => "settings".into(),
+            Action::About => "about".into(),
+            Action::Palette => "palette".into(),
+        }
+    }
+
+    /// The action of `ALL_ACTIONS` with this `name()`.
+    // Used by the page bridge, which only the browser build has.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn from_name(name: &str) -> Option<Action> {
+        ALL_ACTIONS.into_iter().find(|a| a.name() == name)
+    }
+
     /// Its keyboard shortcut, as shown.
     pub fn keys(self) -> &'static str {
         match self {
@@ -1595,6 +1661,26 @@ mod tests {
         assert!(matches("Anything", ""));
         assert!(!matches("Section box", "beam"));
         assert!(!matches("Place: Column", "col wall"));
+    }
+
+    #[test]
+    fn action_names_round_trip_unique_snake_case() {
+        let mut names: Vec<String> = ALL_ACTIONS.iter().map(|a| a.name()).collect();
+        for a in ALL_ACTIONS {
+            let n = a.name();
+            assert_eq!(Action::from_name(&n), Some(a), "{n}");
+            assert!(
+                !n.is_empty()
+                    && n.chars().next().unwrap().is_ascii_lowercase()
+                    && n.chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "{n}"
+            );
+        }
+        assert_eq!(Action::from_name("no_such_action"), None);
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), ALL_ACTIONS.len());
     }
 
     /// Every action has a label, and the palette lists each one once.

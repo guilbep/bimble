@@ -75,7 +75,41 @@ pub fn query(name: &str, args_json: &str) -> Result<String, JsValue> {
             let d = query::element(model(v)?, a.id).ok_or("no element with this id")?;
             json(d)
         }
+        // Every ribbon action with its state now, for the page to draw (ADR 0048).
+        "actions" => json(
+            crate::ribbon::ALL_ACTIONS
+                .iter()
+                .map(|&a| {
+                    serde_json::json!({
+                        "name": a.name(),
+                        "label": a.label(),
+                        "tab": a.home(),
+                        "enabled": v.action_enabled(a),
+                        "pressed": v.action_on(a),
+                        "shortcut": Some(a.keys()).filter(|k| !k.is_empty()),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ),
         _ => Err(format!("unknown query {name:?}")),
+    })
+}
+
+/// Run one ribbon action by its `name()` (see query "actions"), as the ribbon, the palette and
+/// the keys do. Interactive ones (place, measure, sheet tools) start their mode.
+#[wasm_bindgen]
+pub fn action(name: &str) -> Result<(), JsValue> {
+    let a = crate::ribbon::Action::from_name(name)
+        .ok_or_else(|| JsValue::from_str(&format!("unknown action {name:?}")))?;
+    let ctx = RUNNER
+        .with(|r| r.borrow().as_ref().map(|(_, c)| c.clone()))
+        .ok_or_else(|| JsValue::from_str("not started"))?;
+    with_viewer(|v| {
+        if !v.action_enabled(a) {
+            return Err(format!("action {name:?} is not enabled now"));
+        }
+        v.run_action(a, &ctx);
+        Ok(())
     })
 }
 
