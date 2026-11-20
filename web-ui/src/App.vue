@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { startError, screenRoutes } from "./bimble";
+import { startError, screenRoutes, state, collab } from "./bimble";
 import { t } from "./i18n";
 import QuickBar from "./shell/QuickBar.vue";
 import TabsBar from "./shell/TabsBar.vue";
@@ -9,7 +9,7 @@ import ViewTabs from "./shell/ViewTabs.vue";
 import ModifierPanel from "./shell/ModifierPanel.vue";
 import StatusBar from "./shell/StatusBar.vue";
 import "./shell/shell.css";
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useFocusTrap } from "./shell/focusTrap";
 import { pages, currentPage, page } from "./pages";
 // Every caller (quick bar, File menu, palette, ribbon, Home) runs actions through runAction:
@@ -36,6 +36,11 @@ function onKey(e: KeyboardEvent) {
 // One focus trap for every dialog and menu (#79 AD).
 const backdrop = ref<HTMLElement | null>(null);
 const trapKey = useFocusTrap(backdrop, currentDialog);
+// A change refused because someone else borrowed the element (ADR 0038): Rust reports it in
+// `collab.belongs`; the alert (C2) opens by itself, as egui's does.
+watch(() => state.value.rev, () => {
+  if (!currentDialog.value && collab().belongs?.length) currentDialog.value = "borrowed";
+});
 const full = computed(() => page()?.layout === "full");
 onMounted(() => { window.addEventListener("keydown", onKey); void applyDeepLink(); });
 onUnmounted(() => window.removeEventListener("keydown", onKey));
