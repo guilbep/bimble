@@ -3509,19 +3509,41 @@ mod tests {
     use super::*;
     use bimble_core::demo::{FrameSpec, concrete_frame};
 
-    /// Held while a test makes, uses or drops a device of its own. Mesa 26 lavapipe crashed
-    /// (SIGSEGV, CI) when test threads made and dropped Vulkan devices at the same time.
-    static GPU_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Held for the whole of every GPU test: one test on the GPU at a time. Mesa 26 lavapipe
+    /// crashed (SIGSEGV, ubuntu-latest CI) when test threads made and dropped Vulkan devices at
+    /// the same time, and again mid-run (before the 4th of 32 render tests reported) with one
+    /// shared device used by several test threads while another test made its own.
+    // ponytail: one global lock, GPU tests run one after the other (a few seconds on CI); drop
+    // it per test only if Mesa proves safe with concurrent use.
+    static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// One headless device for every test that needs no limits of its own, made once.
-    fn shared_gpu() -> Result<&'static Headless, &'static HeadlessError> {
+    fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
+        GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The shared device, with the GPU lock held until it drops.
+    struct Gpu {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        headless: &'static Headless,
+    }
+
+    impl std::ops::Deref for Gpu {
+        type Target = Headless;
+        fn deref(&self) -> &Headless {
+            self.headless
+        }
+    }
+
+    /// One headless device for every test that needs no limits of its own, made once and never
+    /// dropped (a `static` has no destructor), so no Vulkan teardown races the driver at exit.
+    fn shared_gpu() -> Result<Gpu, &'static HeadlessError> {
         static GPU: std::sync::OnceLock<Result<Headless, HeadlessError>> =
             std::sync::OnceLock::new();
-        GPU.get_or_init(|| {
-            let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
-            Headless::new()
+        let lock = gpu_lock();
+        GPU.get_or_init(Headless::new).as_ref().map(|headless| Gpu {
+            _lock: lock,
+            headless,
         })
-        .as_ref()
     }
 
     /// Every entry point of the shaders built on GL translates to GLSL, as wgpu-hal does it when it
@@ -3811,18 +3833,18 @@ mod tests {
                 gpu.read_rgba(&target).unwrap(),
             )
         };
-        let (Ok(big), Ok(small)) = (shared_gpu(), {
-            // Its own device, made, used and dropped while no other test makes one.
-            let serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
+        // `big` holds the GPU lock: the small device is made, used and dropped under it.
+        let (Ok(big), Ok(small)) = (
+            shared_gpu(),
             // Indexed faces of this frame take ~20 KB (were 41 KB unindexed).
-            Headless::with_max_buffer_size(Some(8_192)).map(|h| (h, serial))
-        }) else {
+            Headless::with_max_buffer_size(Some(8_192)),
+        ) else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
-        let (f1, l1, t1, px1) = draw(big);
-        // `small` drops (device, then lock) at the end of the test.
-        let (f2, l2, t2, px2) = draw(&small.0);
+        let (f1, l1, t1, px1) = draw(&big);
+        // `small` drops (device, then the lock in `big`) at the end of the test.
+        let (f2, l2, t2, px2) = draw(&small);
         assert_eq!((f1, l1), (1, 1));
         assert!(
             f2 > 1 && l2 > 1,
@@ -4168,7 +4190,7 @@ mod tests {
     #[test]
     fn gpu_errors_are_caught_not_fatal() {
         // Its own device: the handler it installs would catch (and hide) other tests' errors.
-        let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = gpu_lock();
         let Ok(gpu) = Headless::new() else {
             eprintln!("no GPU adapter, skipping");
             return;
@@ -4723,7 +4745,7 @@ mod tests {
     }
 
     fn draw(gpu: &Headless, scene: &Scene, opts: &DrawOptions) -> Vec<[u8; 4]> {
-        draw_with(gpu, scene, opts, |_| {})
+        draw_with(&gpu, scene, opts, |_| {})
     }
 
     fn draw_with(
@@ -4788,7 +4810,7 @@ mod tests {
             style: style.clone(),
             ..Default::default()
         };
-        let px = draw(gpu, &scene, &opts);
+        let px = draw(&gpu, &scene, &opts);
         assert!(
             count(&px, style.background, 0) > 400 * 200 / 4,
             "background"
@@ -4829,7 +4851,7 @@ mod tests {
             style: dense,
             ..opts
         };
-        let px2 = draw(gpu, &scene, &hatched);
+        let px2 = draw(&gpu, &scene, &hatched);
         let faces = px.len() - count(&px, style.background, 0);
         let changed = px.iter().zip(&px2).filter(|(a, b)| a != b).count();
         eprintln!("hatching changed {changed} of {faces} face pixels");
@@ -4887,9 +4909,9 @@ mod tests {
             edges: false,
             ..Default::default()
         };
-        let whole = draw(gpu, &scene, &opts);
+        let whole = draw(&gpu, &scene, &opts);
         opts.clip = Some(half);
-        let cut = draw(gpu, &scene, &opts);
+        let cut = draw(&gpu, &scene, &opts);
 
         // Cut surface: the fill at `cut_shade` brightness (in linear light), unlit.
         let cut_rgb = Rgb(fill.0.map(|c| {
@@ -4907,7 +4929,7 @@ mod tests {
 
         // A box that contains everything changes nothing.
         opts.clip = Some(all);
-        let same = draw(gpu, &scene, &opts);
+        let same = draw(&gpu, &scene, &opts);
         let differ = whole.iter().zip(&same).filter(|(a, b)| a != b).count();
         assert!(
             differ < 50,
@@ -4983,7 +5005,7 @@ mod tests {
                 edges: false,
                 ..Default::default()
             };
-            draw_with(gpu, scene, &opts, |cam| {
+            draw_with(&gpu, scene, &opts, |cam| {
                 cam.orthographic = true;
                 cam.yaw = -std::f32::consts::FRAC_PI_2;
                 cam.pitch = std::f32::consts::FRAC_PI_2;
@@ -5029,8 +5051,8 @@ mod tests {
             edges: false,
             ..Default::default()
         };
-        let plain = draw(gpu, &scene, &opts);
-        let mirrored = draw_with(gpu, &scene, &opts, |c| c.mirror_x = true);
+        let plain = draw(&gpu, &scene, &opts);
+        let mirrored = draw_with(&gpu, &scene, &opts, |c| c.mirror_x = true);
         let (w, h) = (400usize, 200usize);
         let differ = (0..h)
             .flat_map(|y| (0..w).map(move |x| (x, y)))
