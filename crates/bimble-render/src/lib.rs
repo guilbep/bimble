@@ -4745,7 +4745,7 @@ mod tests {
     }
 
     fn draw(gpu: &Headless, scene: &Scene, opts: &DrawOptions) -> Vec<[u8; 4]> {
-        draw_with(&gpu, scene, opts, |_| {})
+        draw_with(gpu, scene, opts, |_| {})
     }
 
     fn draw_with(
