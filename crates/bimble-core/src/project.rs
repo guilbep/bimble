@@ -65,17 +65,58 @@ pub fn validate(p: &BTreeMap<String, String>) -> Result<(), String> {
     Ok(())
 }
 
-/// A key typed by a user, made a key: "Project manager" → "project_manager".
+/// A key typed by a user, made a key: "Project manager" → "project_manager",
+/// "Maître d'ouvrage" → "maitre_d_ouvrage" (accented Latin letters folded to their base letter).
+/// Runs only when a new field is made from a label; saved keys are never re-keyed.
 pub fn key_of(label: &str) -> String {
     let mut k = String::new();
-    for c in label.trim().chars() {
+    for c in label
+        .trim()
+        .chars()
+        .flat_map(fold)
+        .flat_map(char::to_lowercase)
+    {
         if c.is_ascii_alphanumeric() {
-            k.push(c.to_ascii_lowercase());
+            k.push(c);
         } else if !k.ends_with('_') && !k.is_empty() {
             k.push('_');
         }
     }
     k.trim_end_matches('_').chars().take(MAX_KEY).collect()
+}
+
+/// An accented Latin letter as its base letter(s): "î" → "i", "Œ" → "OE", "ß" → "ss".
+/// ponytail: Latin-1 + Latin Extended-A French/German set only; other scripts still become `_`.
+fn fold(c: char) -> std::vec::IntoIter<char> {
+    let s: &str = match c {
+        'À'..='Å' | 'Ā' | 'Ă' | 'Ą' => "A",
+        'à'..='å' | 'ā' | 'ă' | 'ą' => "a",
+        'Æ' => "AE",
+        'æ' => "ae",
+        'Ç' | 'Ć' | 'Č' => "C",
+        'ç' | 'ć' | 'č' => "c",
+        'È'..='Ë' | 'Ē' | 'Ė' | 'Ę' | 'Ě' => "E",
+        'è'..='ë' | 'ē' | 'ė' | 'ę' | 'ě' => "e",
+        'Ì'..='Ï' | 'Ī' | 'Į' => "I",
+        'ì'..='ï' | 'ī' | 'į' | 'ı' => "i",
+        'Ñ' | 'Ń' | 'Ň' => "N",
+        'ñ' | 'ń' | 'ň' => "n",
+        'Ò'..='Ö' | 'Ø' | 'Ō' | 'Ő' => "O",
+        'ò'..='ö' | 'ø' | 'ō' | 'ő' => "o",
+        'Œ' => "OE",
+        'œ' => "oe",
+        'Ù'..='Ü' | 'Ū' | 'Ů' | 'Ű' => "U",
+        'ù'..='ü' | 'ū' | 'ů' | 'ű' => "u",
+        'Ý' | 'Ÿ' => "Y",
+        'ý' | 'ÿ' => "y",
+        'ß' => "ss",
+        'Š' => "S",
+        'š' => "s",
+        'Ž' => "Z",
+        'ž' => "z",
+        _ => return vec![c].into_iter(),
+    };
+    s.chars().collect::<Vec<_>>().into_iter()
 }
 
 #[cfg(test)]
@@ -100,5 +141,16 @@ mod tests {
         assert!(validate(&m).is_err());
         assert_eq!(key_of(" Project manager "), "project_manager");
         assert_eq!(key_of("N° SIA-102"), "n_sia_102");
+    }
+
+    /// Requirement change (#79 BA): accented letters fold to their base letter; before, each
+    /// became `_` ("Maître d'ouvrage" → "ma_tre_d_ouvrage").
+    #[test]
+    fn accented_labels_fold_to_base_letters() {
+        assert_eq!(key_of("Maître d'ouvrage"), "maitre_d_ouvrage");
+        assert_eq!(key_of("Œuvre"), "oeuvre");
+        assert_eq!(key_of("Straße"), "strasse");
+        assert_eq!(key_of("Ingénieur béton"), "ingenieur_beton");
+        assert_eq!(key_of("ÉÇÀ"), "eca");
     }
 }

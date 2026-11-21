@@ -793,7 +793,7 @@ mod tests {
         assert!(describe("nope").is_none());
     }
 
-    /// "Maître d'ouvrage" → "ma_tre_d_ouvrage" (key_of: non-ASCII and punctuation become one
+    /// "Maître d'ouvrage" → "maitre_d_ouvrage" (key_of folds accents; punctuation becomes one
     /// `_`); same again: nothing; too long: refused; empty value: the key removed.
     #[test]
     fn set_project_field_by_label() {
@@ -808,7 +808,7 @@ mod tests {
         let cmds = set(&m, "Ville de Lausanne").unwrap();
         assert_eq!(cmds.len(), 1);
         History::default().apply(&mut m, cmds).unwrap();
-        assert_eq!(m.project["ma_tre_d_ouvrage"], "Ville de Lausanne");
+        assert_eq!(m.project["maitre_d_ouvrage"], "Ville de Lausanne");
         assert!(set(&m, "Ville de Lausanne").unwrap().is_empty());
         let before = m.clone();
         let long = "x".repeat(bimble_core::project::MAX_VALUE + 1);
@@ -817,7 +817,7 @@ mod tests {
         assert!(run(&m, "set_project_field", json!({"label": "°", "value": "x"})).is_err());
         let cmds = set(&m, "").unwrap();
         History::default().apply(&mut m, cmds).unwrap();
-        assert!(!m.project.contains_key("ma_tre_d_ouvrage"));
+        assert!(!m.project.contains_key("maitre_d_ouvrage"));
         assert!(set(&m, "").unwrap().is_empty());
     }
 
