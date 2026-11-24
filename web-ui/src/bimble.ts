@@ -239,8 +239,9 @@ let resolveModel!: () => void;
 /** Resolves after the first refresh with a model loaded. */
 export const modelReady: Promise<void> = new Promise((r) => (resolveModel = r));
 
-// Served as is from public/bimble/ (npm run wasm), not bundled.
-const WASM = "/bimble/";
+// Served as is from public/bimble/ (npm run wasm), not bundled. Relative to the page, so the lab
+// also runs under a sub-path (GitHub Pages serves it at /bimble/).
+const WASM = new URL("bimble/", document.baseURI).href;
 let wasm: Wasm | null = null;
 
 function wasmOrThrow(): Wasm {
