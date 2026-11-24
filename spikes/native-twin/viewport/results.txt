@@ -1,0 +1,52 @@
+Viewport spike T4: the streamed 3D view (native headless twin -> lab canvas), measured.
+Script: node web-ui/e2e/native-viewport.mjs (2026-11-25, branch spike/native-viewport at c1fd044 + this script)
+
+Machine: Apple M1 Pro (8 cores, 16 GB) on Asahi Linux (aarch64, kernel 7.2), twin adapter "Apple M1 Pro (G13S C0) (Vulkan)".
+Browser: Chromium 153 headless=new, --use-angle=swiftshader (software GL); 1920x1080 viewport, DPR 1.
+Build: dev profile (target/debug/bimble, the dev loop's real build), linked with mold 3.0.0.
+Canvas: 1624x827 px, so one frame is 1624*827*4 = 5.37 MB of raw RGBA per GET /frame.
+Models: small = `bimble demo` (72 elements); large = `bimble demo --bays-x 30 --bays-y 30 --storeys 7` (20,715 elements).
+
+The clock: latency_ms = from the oldest served pointer event's timeStamp to just after putImageData.
+It includes POST /orbit, GET /frame (twin render + GPU read-back + HTTP transfer), arrayBuffer, putImageData.
+It does NOT include the compositor present (no vsync wait, the pixels are not yet on a screen).
+render_ms / read_ms come from the twin's X-Timing header; fetch_ms is GET /frame to arrayBuffer in the page.
+
+Latency: 5 warm-up drags, then 50 drags (press at canvas centre, one move +40 px, wait <= 2 s for a
+changed sample, release, 100 ms idle). Frame rate: one press, 240 moves 8 ms apart (+2 px), release;
+fps = changed frames / elapsed seconds (Node clock, first move to release).
+
+Thresholds (fixed before measuring): WORKABLE p95 <= 50 ms and >= 20 fps; KEEP-WASM p95 > 100 ms; else MARGINAL.
+
+| model | elements | drags ok / timed out | p50 ms | p95 ms | max ms | render ms | read ms | fetch ms | fps | p95 during fps drag | verdict |
+| small | 72     | 50 / 0 | 45.6 | 57.3 | 62.8 |  3.1 | 2.7 | 29.4 | 25.8 (126 frames / 4.88 s) |  78.6 | MARGINAL |
+| large | 20,715 | 50 / 0 | 64.1 | 86.0 | 91.7 | 17.5 | 4.0 | 48.3 | 19.0 (93 frames / 4.90 s)  | 107.5 | MARGINAL |
+
+A first run (same build, minutes earlier) gave small p50 43.7 / p95 63.6 / max 66.0 ms, 25.8 fps: MARGINAL too.
+
+Where the time goes (small): render + read ~6 ms on the twin; fetch ~29 ms, most of it moving 5.4 MB
+of raw RGBA over loopback HTTP into the page. Large: render grows to 17.5 ms, fetch to 48 ms.
+Raw finding: on the large file, POST /query/elements {} answered "this file is read only: import it to edit"
+(the small file answered a list). Not needed here (the count comes from `bimble demo`); not investigated.
+
+Regression: node web-ui/e2e/native-lab.mjs still prints PASS after this run.
+
+Script output, verbatim (temp dir shown as <tmp>, cargo warnings removed):
+  build: dev profile (target/debug/bimble), RUSTFLAGS="-C link-arg=-fuse-ld=mold", 166 ms
+  machine: unknown x8, 15.2 GiB, node v26.12.0
+  72 elements → <tmp>/small.bimble
+  20715 elements → <tmp>/large.bimble
+  [small] twin listening after 215 ms; elements 72
+  [small] canvas 1624x827 px, centre (1108, 632)
+  [small] latency (50 drags, 0 timed out): p50 45.6 ms, p95 57.3 ms, max 62.8 ms; mean render 3.1 ms, read 2.7 ms, fetch 29.4 ms
+  [small] fps: 126 changed frames (126 frames) in 4.88 s = 25.8 fps; latency during the drag p50 53.7 ms, p95 78.6 ms
+  [small] VERDICT MARGINAL (p95 57.3 ms, 25.8 fps; WORKABLE p95<=50 and >=20 fps, KEEP-WASM p95>100)
+  [large] query elements answered: this file is read only: import it to edit
+  [large] twin listening after 210 ms; elements 20715
+  [large] canvas 1624x827 px, centre (1108, 632)
+  [large] latency (50 drags, 0 timed out): p50 64.1 ms, p95 86.0 ms, max 91.7 ms; mean render 17.5 ms, read 4.0 ms, fetch 48.3 ms
+  [large] fps: 93 changed frames (93 frames) in 4.90 s = 19.0 fps; latency during the drag p50 81.9 ms, p95 107.5 ms
+  [large] VERDICT MARGINAL (p95 86.0 ms, 19.0 fps; WORKABLE p95<=50 and >=20 fps, KEEP-WASM p95>100)
+  summary:
+    small: 72 elements, canvas 1624x827, p50 45.6 / p95 57.3 / max 62.8 ms, 25.8 fps, 0 time-outs -> MARGINAL; /tmp/viewport-lab-small.png
+    large: 20715 elements, canvas 1624x827, p50 64.1 / p95 86.0 / max 91.7 ms, 19.0 fps, 0 time-outs -> MARGINAL; /tmp/viewport-lab-large.png
