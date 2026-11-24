@@ -53,6 +53,8 @@ mod snap;
 mod standards;
 mod state;
 mod style_editor;
+#[cfg(not(target_arch = "wasm32"))]
+mod twin;
 mod ui_theme;
 mod viewcube;
 mod viewing;
@@ -401,6 +403,11 @@ pub fn run(
                 app.open(f, &cc.egui_ctx);
             }
             app.pending_link = link;
+            // Dev-only native twin (BIMBLE_SERVE): the Vue lab owns the panels.
+            app.twin = twin::from_env(&cc.egui_ctx);
+            if app.twin.is_some() {
+                app.viewport_only = true;
+            }
             Ok(Box::new(app))
         }),
     )
@@ -993,6 +1000,9 @@ struct Viewer {
     /// Only the view and its in-view tools, no egui chrome: a web page owns the panels
     /// (`?viewport`, ADR 0048).
     viewport_only: bool,
+    /// The dev-only native twin's server end (`BIMBLE_SERVE`); None: not serving.
+    #[cfg(not(target_arch = "wasm32"))]
+    twin: Option<twin::Twin>,
     /// Recent files' previews, read once (#52); None: none on disk.
     previews: std::collections::HashMap<String, Option<egui::TextureHandle>>,
     /// The file whose preview to keep once its first picture is drawn.
@@ -1162,6 +1172,8 @@ impl Viewer {
             links_window: false,
             home_open: false,
             viewport_only: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            twin: None,
             previews: Default::default(),
             preview_for: None,
             synced_at: None,
@@ -1533,6 +1545,22 @@ impl Viewer {
             l.bounds = bounds_with_links(&l.scene, &self.links);
         }
         self.needs_upload = true;
+    }
+
+    /// Serves the native twin's pending calls, then keeps draining (1 ms waits) so a burst of
+    /// synchronous calls is served in one frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn serve_twin(&mut self, ctx: &egui::Context) {
+        let Some(twin) = self.twin.take() else { return };
+        let mut served = false;
+        while let Some((req, reply)) = twin
+            .next(false)
+            .or_else(|| if served { twin.next(true) } else { None })
+        {
+            let _ = reply.send(self.call(ctx, &req.op, &req.name, &req.body));
+            served = true;
+        }
+        self.twin = Some(twin);
     }
 
     fn poll_loading(&mut self) {
@@ -4713,6 +4741,8 @@ impl eframe::App for Viewer {
         #[cfg(target_arch = "wasm32")]
         self.tell_first_frame(&ctx);
         self.poll_loading();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.serve_twin(&ctx);
         self.after_gpu_error();
         if self.loaded.is_some()
             && let Some(p) = self.pending_link.take()
@@ -5044,6 +5074,13 @@ impl eframe::App for Viewer {
             // The tabs are kept whether the egui strip is drawn or not (`?viewport=1`).
             self.sync_tabs();
             bridge::notify(self);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.twin.is_some() {
+            let json = self.change_json();
+            if let Some(t) = self.twin.as_mut() {
+                t.publish(json);
+            }
         }
         // Closing with unsaved work asks first (ADR 0028).
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {

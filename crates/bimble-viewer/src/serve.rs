@@ -5,9 +5,6 @@
 //! it calls a [`Handler`]. Input is untrusted: bounded reads, no panics, token, Origin and
 //! Host checks before anything else.
 
-// Not wired yet: the next ticket connects it to `Viewer::call` and `change_json`.
-#![allow(dead_code)]
-
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
