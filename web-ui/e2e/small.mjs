@@ -48,6 +48,12 @@ for (const s of SIZES) {
     await page.locator('[data-bb="small-tool-objects"]').click();
     if (!(await page.locator('[data-bb="small-props"]').isVisible())) await page.locator('[data-bb="small-tool-objects"]').click();
     if (shots) await page.screenshot({ path: `${shots}/${s.name}-objects.png` });
+    const pill = await page.locator('[data-bb="small-props"]').boundingBox();
+    const barTop = s.bar === "mbar" ? (await page.locator('[data-bb="small-bar"]').boundingBox()).y : s.h;
+    check(pill.y + pill.height <= barTop && pill.x + pill.width <= s.w, `${s.name}: the Properties button is in view (${Math.round(pill.y + pill.height)} <= ${Math.round(barTop)})`);
+    await page.locator('[data-bb="small-close"]').click();
+    check(!(await page.locator('[data-bb="small-sheet"]').isVisible()), `${s.name}: the close button closes the sheet`);
+    await page.locator('[data-bb="small-tool-objects"]').click();
     await page.locator('[data-bb="small-props"]').click();
     const name = page.locator('[data-bb="small-name"]');
     await name.fill("B12a");

@@ -49,7 +49,9 @@ watch(() => state.value.rev, () => {
   if (!currentDialog.value && collab().belongs?.length) currentDialog.value = "borrowed";
 });
 const full = computed(() => page()?.layout === "full");
-onMounted(() => { window.addEventListener("keydown", onKey); void applyDeepLink(); });
+// Safari's own pinch events: touch-action is not enough on older iOS. Only while the small frame shows.
+const noPageZoom = (e: Event) => { if (small.value) e.preventDefault(); };
+onMounted(() => { window.addEventListener("keydown", onKey); for (const g of ["gesturestart", "gesturechange"]) document.addEventListener(g, noPageZoom, { passive: false }); void applyDeepLink(); });
 onUnmounted(() => window.removeEventListener("keydown", onKey));
 </script>
 
@@ -117,6 +119,10 @@ body { background: var(--bb-cream); }
 .bb-app.small.wide { grid-template: "bar top" auto "bar work" 1fr / auto 1fr; }
 .bb-app.small .bb-work { grid-area: work; min-width: 0; }
 .bb-app.small .bb-page { padding: 12px; }
+/* Touch (found on an iPhone 13 mini, 24 Nov): a pinch or a double tap zoomed the whole page, so the frame was wider
+   than the screen. The frame takes no page zoom and no page scroll; the canvas takes every gesture itself. */
+.bb-app.small { position: fixed; inset: 0; height: auto; touch-action: pan-x pan-y; overscroll-behavior: none; -webkit-text-size-adjust: 100%; padding-top: env(safe-area-inset-top); }
+.bb-app.small #bimble { touch-action: none; }
 #bimble { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 /* Error: ink text on an ochre band, with the word "Error". */
 .start-error { position: absolute; inset: auto var(--bb-space-4) var(--bb-space-4); margin: 0; padding: var(--bb-space-2) var(--bb-space-3); background: var(--bb-error); color: var(--bb-ink); }
