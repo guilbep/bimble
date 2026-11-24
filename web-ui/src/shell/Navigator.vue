@@ -22,6 +22,11 @@ const sheetCount = computed(() => {
 const scheduleCount = computed(() => { void state.value.rev; void openViews.value; return scheduleList().length; });
 const linkCount = computed(() => { void state.value.rev; void openViews.value; return links().length; });
 const measureCount = computed(() => { void state.value.rev; void openViews.value; return measurements().length; });
+// Links and measurements: read-only lists from Rust, shown when their group opens.
+const linkOpen = ref(false);
+const measureOpen = ref(false);
+const linkRows = computed(() => { void state.value.rev; return linkOpen.value ? links() : []; });
+const measureRows = computed(() => { void state.value.rev; return measureOpen.value ? measurements() : []; });
 const objects = computed(() => storeys.value.reduce((n, s) => n + s.element_count, 0));
 const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 
@@ -118,18 +123,21 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
         </template>
       </template>
     </template>
-    <a class="ti h" href="#" style="padding-left:6px" data-missing="subprojects query" @click.prevent>
+    <!-- No sub-project data in Rust yet (ADR 0059 proposed): the group opens the Sub-projects page. -->
+    <a class="ti h" href="#" style="padding-left:6px" data-missing="subprojects query" @click.prevent="currentPage = 'subprojects'">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
       <span>{{ t('nav.subprojects') }}</span><span class="n" />
     </a>
-    <a class="ti h" href="#" style="padding-left:6px" data-missing="links list (expand)" @click.prevent>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+    <a class="ti h" href="#" style="padding-left:6px" :aria-expanded="linkOpen" @click.prevent="linkOpen = !linkOpen">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="linkOpen ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
       <span>{{ t('nav.links') }}</span><span class="n">{{ linkCount }}</span>
     </a>
-    <a class="ti h" href="#" style="padding-left:6px" data-missing="measurements list (expand)" @click.prevent>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+    <span v-for="l in linkRows" :key="l.id" class="ti" style="padding-left:22px"><span>{{ l.name }}</span><span class="n">{{ l.kind }}</span></span>
+    <a class="ti h" href="#" style="padding-left:6px" :aria-expanded="measureOpen" @click.prevent="measureOpen = !measureOpen">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="measureOpen ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
       <span>{{ t('nav.measures') }}</span><span class="n">{{ measureCount }}</span>
     </a>
+    <span v-for="m in measureRows" :key="m.id" class="ti" style="padding-left:22px"><span>{{ m.label }}</span></span>
   </nav>
 </template>
 
