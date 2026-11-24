@@ -1,13 +1,12 @@
 //! The page calls the running viewer (ADR 0048): JSON in, JSON out, edits through the viewer's
 //! own undo history. All logic stays in Rust; a Vue page only calls these exports.
 
-use std::cell::RefCell;
-
 use bimble_api::query;
-use bimble_core::Command;
 use eframe::egui;
+use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 
+use crate::calls::model;
 use crate::{READ_ONLY, Viewer, state};
 
 thread_local! {
@@ -21,6 +20,13 @@ pub fn set(runner: eframe::WebRunner, ctx: egui::Context) {
 
 /// Run `f` on the viewer, then repaint. "busy" when called while the viewer runs a frame.
 fn with_viewer<T>(f: impl FnOnce(&mut Viewer) -> Result<T, String>) -> Result<T, JsValue> {
+    with_viewer_ctx(|v, _| f(v))
+}
+
+/// `with_viewer` with the egui context, for `Viewer::call`.
+fn with_viewer_ctx<T>(
+    f: impl FnOnce(&mut Viewer, &egui::Context) -> Result<T, String>,
+) -> Result<T, JsValue> {
     let (runner, ctx) = RUNNER
         .with(|r| r.borrow().clone())
         .ok_or_else(|| JsValue::from_str("not started"))?;
@@ -28,18 +34,15 @@ fn with_viewer<T>(f: impl FnOnce(&mut Viewer) -> Result<T, String>) -> Result<T,
         let mut app = runner
             .app_mut::<Viewer>()
             .ok_or_else(|| JsValue::from_str("busy"))?;
-        f(&mut app)
+        f(&mut app, &ctx)
     };
     ctx.request_repaint();
     out.map_err(|e| JsValue::from_str(&e))
 }
 
-fn model(v: &Viewer) -> Result<&bimble_core::Model, String> {
-    v.loaded
-        .as_ref()
-        .and_then(|l| l.edit.as_ref())
-        .map(|ed| &ed.model)
-        .ok_or_else(|| READ_ONLY.to_string())
+/// One op through `Viewer::call` (calls.rs).
+fn call(op: &str, name: &str, body: &str) -> Result<String, JsValue> {
+    with_viewer_ctx(|v, ctx| v.call(ctx, op, name, body))
 }
 
 fn json(v: impl serde::Serialize) -> Result<String, String> {
@@ -476,27 +479,17 @@ pub fn tab(args_json: &str) -> Result<(), JsValue> {
 /// Apply commands (a JSON array) as one undoable step.
 #[wasm_bindgen]
 pub fn apply(cmds_json: &str) -> Result<(), JsValue> {
-    let cmds: Vec<Command> =
-        serde_json::from_str(cmds_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    with_viewer(|v| v.try_apply(cmds))
+    call("apply", "", cmds_json).map(drop)
 }
 
 #[wasm_bindgen]
 pub fn undo() -> Result<(), JsValue> {
-    undo_redo(true)
+    call("undo", "", "").map(drop)
 }
 
 #[wasm_bindgen]
 pub fn redo() -> Result<(), JsValue> {
-    undo_redo(false)
-}
-
-fn undo_redo(undo: bool) -> Result<(), JsValue> {
-    with_viewer(|v| {
-        model(v)?;
-        v.undo_redo(undo);
-        Ok(())
-    })
+    call("redo", "", "").map(drop)
 }
 
 thread_local! {
@@ -569,33 +562,8 @@ pub(crate) fn notify(v: &Viewer) {
 /// Select elements by GlobalId (a JSON array, primary first); `[]` clears the selection.
 #[wasm_bindgen]
 pub fn select(ids_json: &str) -> Result<(), JsValue> {
-    let ids: Vec<String> =
-        serde_json::from_str(ids_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    with_viewer(|v| {
-        let l = v.loaded.as_ref().ok_or("no model open")?;
-        // ponytail: linear scan per id, a GlobalId index if pages select thousands at once.
-        let found: Vec<Option<usize>> = ids
-            .iter()
-            .map(|g| l.scene.elements.iter().position(|e| e.global_id == *g))
-            .collect();
-        let unknown: Vec<&str> = ids
-            .iter()
-            .zip(&found)
-            .filter(|(_, i)| i.is_none())
-            .map(|(g, _)| g.as_str())
-            .collect();
-        if !unknown.is_empty() {
-            return Err(format!("unknown GlobalIds: {}", unknown.join(", ")));
-        }
-        let mut idx = found.into_iter().flatten();
-        v.clear_selection();
-        v.selected = idx.next();
-        v.also_selected.extend(idx);
-        Ok(())
-    })
+    call("select", "", ids_json).map(drop)
 }
-
-/// Open a model from bytes, as if picked (same path as `?url=`). Refuses more than
 /// `bimble_core::file::MAX_FILE_BYTES`.
 #[wasm_bindgen]
 pub fn open(name: String, bytes: Vec<u8>) -> Result<(), JsValue> {

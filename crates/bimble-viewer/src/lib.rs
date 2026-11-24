@@ -24,8 +24,11 @@ use bimble_ifc::read::Progress;
 use web_time::Instant;
 
 mod big;
+// The native server (exp2) is not wired yet: on the desktop only tests call it.
 #[cfg(target_arch = "wasm32")]
 mod bridge;
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+mod calls;
 mod collab;
 mod coords;
 mod cutlines;
