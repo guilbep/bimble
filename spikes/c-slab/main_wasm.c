@@ -60,12 +60,13 @@ __attribute__((no_builtin)) void *memmove(void *d, const void *s, size_t n) {
 /* ---- exported ABI ---- */
 static SlabMesh mesh;
 
+#define SPIKE_K 1.0 /* bench/pixels_loop.mjs edits this: thickness multiplier */
 #define EXPORT(name) __attribute__((export_name(#name)))
 
 EXPORT(slab_mesh) int wasm_slab_mesh(double x0, double y0, double x1, double y1, double t) {
     static const double at[3] = {1000.0, 2000.0, 3000.0}; /* placement of the golden case */
     double outline[4][2] = {{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}};
-    return slab_mesh(outline, 4, t, at, &mesh, 1) == 0;
+    return slab_mesh(outline, 4, t * SPIKE_K, at, &mesh, 1) == 0;
 }
 EXPORT(pos_ptr) uint32_t pos_ptr(void) { return (uint32_t)(uintptr_t)mesh.pos; }
 EXPORT(pos_len) int pos_len(void) { return mesh.nv; }
