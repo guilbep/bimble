@@ -26,11 +26,18 @@ Object.assign(screenRoutes, {
 import { dialogs, currentDialog } from "./dialogs";
 import { panels, currentPanel, panel } from "./panels";
 import { applyDeepLink } from "./deeplink";
+// Under 1 024 px wide: the small-screen frame (ADR 0064) instead of the desktop bands.
+import { small, wide, sheet } from "./small/screen";
+import SmallTop from "./small/SmallTop.vue";
+import SmallBar from "./small/SmallBar.vue";
+import SmallSheet from "./small/SmallSheet.vue";
+import SmallFloat from "./small/SmallFloat.vue";
 
 // Esc closes the dialog first, then the page.
 function onKey(e: KeyboardEvent) {
   if (e.key !== "Escape") return;
   if (currentDialog.value) currentDialog.value = null;
+  else if (small.value && sheet.value) sheet.value = null;
   else if (currentPage.value) currentPage.value = null;
 }
 // One focus trap for every dialog and menu (#79 AD).
@@ -48,15 +55,16 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
 <template>
   <!-- Window frame of the wireframes v01 (DESIGN-SPEC.md § Window). Each band owns its file. -->
-  <div class="bb-app">
-    <QuickBar />
+  <div class="bb-app" :class="{ small, wide }">
+    <SmallTop v-if="small" />
+    <QuickBar v-if="!small" />
     <!-- A full-window page (`layout = "full"`) hides the bands it has no use for; #bimble stays in the DOM. -->
-    <TabsBar v-show="!full" />
-    <Ribbon v-show="!full" />
+    <TabsBar v-if="!small" v-show="!full" />
+    <Ribbon v-if="!small" v-show="!full" />
     <div class="bb-work">
-      <LeftPanel v-show="!full" />
+      <LeftPanel v-if="!small" v-show="!full" />
       <div class="bb-main">
-        <ViewTabs v-show="!full" />
+        <ViewTabs v-if="!small" v-show="!full" />
         <!-- Reference (D5): the right panel sits beside the viewport, under the view tabs. -->
         <div class="bb-row">
           <section v-if="currentPage && pages[currentPage]" class="bb-page" :class="{ full }" data-bb="page">
@@ -66,19 +74,22 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           <div v-show="!(currentPage && pages[currentPage])" class="bb-vp" data-bb="viewport">
             <!-- Never re-created (no v-if): the viewer binds to it at init(). -->
             <canvas id="bimble" />
+            <SmallFloat v-if="small" />
             <p v-if="startError" class="start-error" role="alert">{{ t('app.startError', { msg: startError }) }}</p>
           </div>
           <aside v-if="currentPanel && panels[currentPanel]" class="bb-right" data-bb="right-panel" :aria-label="panelLabel">
             <component :is="panels[currentPanel]" />
           </aside>
-            </div>
-        <ModifierPanel />
+          <SmallSheet v-if="small" />
+        </div>
+        <ModifierPanel v-if="!small" />
       </div>
     </div>
     <div v-if="currentDialog && dialogs[currentDialog]" ref="backdrop" class="bb-backdrop" tabindex="-1" @click.self="currentDialog = null" @keydown="trapKey">
       <component :is="dialogs[currentDialog]" />
     </div>
-    <StatusBar />
+    <StatusBar v-if="!small" />
+    <SmallBar v-if="small" />
   </div>
 </template>
 
@@ -101,6 +112,11 @@ body { background: var(--bb-cream); }
 /* aside style="width:400px;flex:none;border-left:1px solid #5C574D;background:#F5F2EB;padding:14px;...;overflow:hidden" */
 .bb-right { width: 400px; flex: none; box-sizing: border-box; padding: 14px; border-left: 1px solid var(--bb-stone); background: var(--bb-cream); overflow: hidden; }
 .bb-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: color-mix(in srgb, var(--bb-ink) 30%, transparent); }
+/* Small screens (ADR 0064): top bar, view, tools; a phone on its side or a tablet has the tools on a rail at the left. */
+.bb-app.small { display: grid; grid-template: "top" auto "work" 1fr "bar" auto / 1fr; height: 100dvh; }
+.bb-app.small.wide { grid-template: "bar top" auto "bar work" 1fr / auto 1fr; }
+.bb-app.small .bb-work { grid-area: work; min-width: 0; }
+.bb-app.small .bb-page { padding: 12px; }
 #bimble { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 /* Error: ink text on an ochre band, with the word "Error". */
 .start-error { position: absolute; inset: auto var(--bb-space-4) var(--bb-space-4); margin: 0; padding: var(--bb-space-2) var(--bb-space-3); background: var(--bb-error); color: var(--bb-ink); }
