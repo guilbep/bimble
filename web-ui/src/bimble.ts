@@ -448,6 +448,10 @@ export function runVerb(name: string, args: unknown = {}): string | null {
 export const setGenerator = (id: string, params: Record<string, number>) => runVerb("set_generator", { id, params });
 /** Give elements a material by name (model material or library grade) as one undoable step. Returns the Rust error, or null. */
 export const setMaterial = (ids: string[], name: string) => runVerb("set_material", { ids, material: name });
+/** Write a one-line note on an element (its "Note" property); an empty text removes it. One undoable step. Returns the Rust error, or null. */
+export const setNote = (id: string, text: string) => runVerb("set_note", { id, text });
+/** The property a note is kept in (bimble-api `NOTE_KEY`). */
+export const NOTE_KEY = "Note";
 /** Change only the given fields of a view (`set_view`); `crop: null` removes the crop. */
 export type ViewPatch = {
   scale?: number;

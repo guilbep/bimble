@@ -37,6 +37,14 @@ pub enum Command {
         id: GlobalId,
         material: GlobalId,
     },
+    /// Set one property of an element ("Pset_Name/Property", or a bare name such as "Note"), or
+    /// remove it when there is no value (ADR 0064). Text only, one line.
+    SetProperty {
+        id: GlobalId,
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<String>,
+    },
     AddView(crate::view::View),
     RemoveView {
         id: GlobalId,
@@ -61,6 +69,29 @@ pub enum Command {
     },
 }
 
+/// Longest property name and value a `SetProperty` accepts, in characters. Files are untrusted
+/// input, and so is what a person types.
+pub const PROPERTY_KEY_MAX: usize = 128;
+pub const PROPERTY_VALUE_MAX: usize = 2000;
+
+/// A property name or value typed by a person: not blank, not padded, one line, bounded.
+fn property_text(what: &str, s: &str, max: usize) -> Result<(), CommandError> {
+    let bad = |why: &str| Err(CommandError::Invalid(format!("{what} {why}")));
+    if s.trim().is_empty() {
+        return bad("is empty");
+    }
+    if s.trim() != s {
+        return bad("starts or ends with a space");
+    }
+    if s.chars().any(char::is_control) {
+        return bad("has a line break or a control character");
+    }
+    if s.chars().count() > max {
+        return bad(&format!("is longer than {max} characters"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum CommandError {
     #[error("no such object: {0}")]
@@ -83,7 +114,8 @@ impl Command {
             | Command::SetGenerator { id, .. }
             | Command::SetPlacement { id, .. }
             | Command::Rename { id, .. }
-            | Command::SetElementMaterial { id, .. } => Some(*id),
+            | Command::SetElementMaterial { id, .. }
+            | Command::SetProperty { id, .. } => Some(*id),
             // Listed, not `_`: a new element command must say whether it borrows.
             Command::AddStorey(_)
             | Command::RemoveStorey { .. }
@@ -109,6 +141,12 @@ impl Command {
             && name.trim().is_empty()
         {
             return Err(CommandError::Invalid("the name is empty".into()));
+        }
+        if let Command::SetProperty { key, value, .. } = &self {
+            property_text("the property name", key, PROPERTY_KEY_MAX)?;
+            if let Some(v) = value {
+                property_text("the value", v, PROPERTY_VALUE_MAX)?;
+            }
         }
         self.apply_inverse(m)
     }
@@ -206,6 +244,18 @@ impl Command {
                 let e = m.elements.get_mut(&id).ok_or(CommandError::NotFound(id))?;
                 let old = std::mem::replace(&mut e.material, material);
                 Ok(SetElementMaterial { id, material: old })
+            }
+            SetProperty { id, key, value } => {
+                let e = m.elements.get_mut(&id).ok_or(CommandError::NotFound(id))?;
+                let old = match value {
+                    Some(v) => e.properties.insert(key.clone(), v),
+                    None => e.properties.remove(&key),
+                };
+                Ok(SetProperty {
+                    id,
+                    key,
+                    value: old,
+                })
             }
             AddView(v) => {
                 if m.views.contains_key(&v.id) {
@@ -361,6 +411,16 @@ impl Command {
                 el(id),
                 m.materials.get(material).map_or("", |x| x.name.as_str())
             ),
+            Command::SetProperty {
+                id,
+                key,
+                value: Some(_),
+            } => format!("set {key} of {}", el(id)),
+            Command::SetProperty {
+                id,
+                key,
+                value: None,
+            } => format!("remove {key} from {}", el(id)),
             Command::AddView(v) => format!("add the view {}", v.name),
             Command::RemoveView { id } => format!("delete {}", view(id)),
             Command::SetView(v) => match m.views.get(&v.id) {
@@ -681,5 +741,68 @@ mod describe_tests {
         };
         assert!(bad.apply(&mut m).is_err());
         assert_eq!(m, before);
+    }
+
+    /// A property of an element (ADR 0064): set, change and remove, each undone to the bytes
+    /// before; the JSON is canonical; bad text is refused and nothing changes.
+    #[test]
+    fn set_property_applies_and_undoes() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        let id = *m.elements.keys().next().unwrap();
+        let before = m.clone();
+        let set = |v: Option<&str>| Command::SetProperty {
+            id,
+            key: "Note".into(),
+            value: v.map(str::to_owned),
+        };
+        let json = serde_json::to_string(&set(Some("check cover"))).unwrap();
+        assert_eq!(
+            json,
+            format!(r#"{{"op":"set_property","id":"{id}","key":"Note","value":"check cover"}}"#)
+        );
+        let back: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&canonical(back)).unwrap(), json);
+        assert_eq!(
+            serde_json::to_string(&set(None)).unwrap(),
+            format!(r#"{{"op":"set_property","id":"{id}","key":"Note"}}"#)
+        );
+        let mut h = History::default();
+        h.apply(&mut m, vec![set(Some("check cover"))]).unwrap();
+        assert_eq!(m.elements[&id].properties["Note"], "check cover");
+        h.apply(&mut m, vec![set(Some("cover 35 mm"))]).unwrap();
+        assert_eq!(m.elements[&id].properties["Note"], "cover 35 mm");
+        h.apply(&mut m, vec![set(None)]).unwrap();
+        assert!(!m.elements[&id].properties.contains_key("Note"));
+        assert_eq!(
+            m, before,
+            "removing the only property leaves the element as it was"
+        );
+        assert!(h.undo(&mut m));
+        assert_eq!(m.elements[&id].properties["Note"], "cover 35 mm");
+        assert!(h.undo(&mut m) && h.undo(&mut m));
+        assert_eq!(m, before);
+        // Refused, and the model is unchanged.
+        let long = "x".repeat(PROPERTY_VALUE_MAX + 1);
+        for (key, value) in [
+            ("Note", Some("")),
+            ("Note", Some(" padded")),
+            ("Note", Some("two\nlines")),
+            ("Note", Some(long.as_str())),
+            ("", Some("x")),
+        ] {
+            let c = Command::SetProperty {
+                id,
+                key: key.into(),
+                value: value.map(str::to_owned),
+            };
+            assert!(c.apply(&mut m).is_err(), "{key:?} = {value:?}");
+            assert_eq!(m, before);
+        }
+        let gone = Command::SetProperty {
+            id: GlobalId::new(),
+            key: "Note".into(),
+            value: None,
+        };
+        assert!(gone.apply(&mut m).is_err());
     }
 }

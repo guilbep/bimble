@@ -20,7 +20,7 @@ pub struct VerbInfo {
     pub summary: &'static str,
 }
 
-const VERBS: [VerbInfo; 13] = [
+const VERBS: [VerbInfo; 14] = [
     VerbInfo {
         name: "place",
         summary: "Place a new column, beam, wall or slab on a storey (storey-relative mm).",
@@ -52,6 +52,10 @@ const VERBS: [VerbInfo; 13] = [
     VerbInfo {
         name: "set_material",
         summary: "Give elements a material: a model material's name or a library grade (\"C35/45\").",
+    },
+    VerbInfo {
+        name: "set_note",
+        summary: "Write a one-line note on an element (the property \"Note\"); an empty text removes it.",
     },
     VerbInfo {
         name: "set_project_field",
@@ -245,6 +249,17 @@ struct SetMaterialArgs {
     material: String,
 }
 
+/// Arguments of `set_note`.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SetNoteArgs {
+    /// GlobalId of the element.
+    #[schemars(with = "String")]
+    id: GlobalId,
+    /// The note, one line. Empty: remove the note.
+    text: String,
+}
+
 /// Arguments of `set_project_field`.
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -347,6 +362,7 @@ pub fn describe(name: &str) -> Option<Value> {
         "set_view" => schemars::schema_for!(SetViewArgs),
         "set_schedule" => schemars::schema_for!(SetScheduleArgs),
         "set_material" => schemars::schema_for!(SetMaterialArgs),
+        "set_note" => schemars::schema_for!(SetNoteArgs),
         "set_project_field" => schemars::schema_for!(SetProjectFieldArgs),
         "rotate" => schemars::schema_for!(RotateArgs),
         "mirror" => schemars::schema_for!(MirrorArgs),
@@ -422,6 +438,7 @@ pub fn run(m: &Model, name: &str, args: Value) -> Result<Vec<Command>, String> {
         "set_view" => set_view(m, parse(args)?),
         "set_schedule" => set_schedule(m, parse(args)?),
         "set_material" => set_material(m, parse(args)?),
+        "set_note" => set_note(m, parse(args)?),
         "set_project_field" => set_project_field(m, parse(args)?),
         "rotate" => rotate(m, parse(args)?),
         "mirror" => mirror(m, parse(args)?),
@@ -552,6 +569,29 @@ fn mirror(m: &Model, a: MirrorArgs) -> Result<Vec<Command>, String> {
             x_axis: refl(p.x_axis),
         }
     })
+}
+
+/// The property a note is kept in. A bare name: the IFC export writes it in `Bimble_Properties`
+/// and the import brings it back under the same name (ADR 0032, ADR 0064).
+pub const NOTE_KEY: &str = "Note";
+
+/// One `SetProperty` on "Note": the trimmed text, or its removal for an empty one. Unchanged: no
+/// command, so no empty undo step.
+fn set_note(m: &Model, a: SetNoteArgs) -> Result<Vec<Command>, String> {
+    let e = m
+        .elements
+        .get(&a.id)
+        .ok_or(format!("no element {:?}", a.id))?;
+    let text = a.text.trim();
+    let value = (!text.is_empty()).then(|| text.to_owned());
+    if e.properties.get(NOTE_KEY) == value.as_ref() {
+        return Ok(Vec::new());
+    }
+    Ok(vec![Command::SetProperty {
+        id: a.id,
+        key: NOTE_KEY.into(),
+        value,
+    }])
 }
 
 /// `SetElementMaterial` for each element whose material changes (after an `AddMaterial` for a
@@ -775,6 +815,7 @@ mod tests {
                 "set_view",
                 "set_schedule",
                 "set_material",
+                "set_note",
                 "set_project_field",
                 "rotate",
                 "mirror",
@@ -903,6 +944,48 @@ mod tests {
         let gone = GlobalId::new();
         let e = run(&m, "rotate", json!({"ids": [gone], "angle_deg": 90})).unwrap_err();
         assert!(e.contains("no element"), "{e}");
+    }
+
+    /// A note is the property "Note": written trimmed, unchanged gives no command, an empty
+    /// text removes it, and a text Rust refuses (a line break) fails when applied.
+    #[test]
+    fn set_note_writes_changes_and_removes() {
+        let (mut m, _) = demo();
+        let id = beam(&m).id;
+        let cmds = run(&m, "set_note", json!({"id": id, "text": "  check cover "})).unwrap();
+        assert_eq!(
+            cmds,
+            vec![Command::SetProperty {
+                id,
+                key: NOTE_KEY.into(),
+                value: Some("check cover".into()),
+            }]
+        );
+        for c in cmds {
+            c.apply(&mut m).unwrap();
+        }
+        assert_eq!(m.elements[&id].properties[NOTE_KEY], "check cover");
+        assert!(
+            run(&m, "set_note", json!({"id": id, "text": "check cover"}))
+                .unwrap()
+                .is_empty()
+        );
+        let cmds = run(&m, "set_note", json!({"id": id, "text": " "})).unwrap();
+        assert_eq!(cmds.len(), 1);
+        for c in cmds {
+            c.apply(&mut m).unwrap();
+        }
+        assert!(!m.elements[&id].properties.contains_key(NOTE_KEY));
+        assert!(
+            run(&m, "set_note", json!({"id": id, "text": ""}))
+                .unwrap()
+                .is_empty()
+        );
+        let two = run(&m, "set_note", json!({"id": id, "text": "a\nb"})).unwrap();
+        assert!(two.into_iter().next().unwrap().apply(&mut m).is_err());
+        let e = run(&m, "set_note", json!({"id": GlobalId::new(), "text": "x"})).unwrap_err();
+        assert!(e.contains("no element"), "{e}");
+        assert!(describe("set_note").is_some());
     }
 
     /// Mirror in the plane x = 0 (dir +Y): origin x negated, the beam's axis reversed, and the
