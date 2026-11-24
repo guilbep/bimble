@@ -49,3 +49,33 @@ Results are appended to `results.txt`.
 | wasm (`wasm:dev`) | 3.75 s | not measured (browser reload) | ≥ 3.75 s | 1267 MB |
 
 All runs are in `results.txt`.
+
+## End to end, in the browser (T8)
+
+`loop_browser.mjs` measures both paths to the same end point: the lab page's own
+`(await import('/src/bimble.ts')).query('state')` returns the new `"spike":N`.
+One Vite, one headless Chromium (raw CDP, flags as in `web-ui/e2e/native-lab.mjs`), one window per page
+(a background tab gets no animation frames, so the wasm viewer would never draw).
+
+- **wasm**: edit; `npm run -s wasm:dev`; `Page.reload` of `/?url=/frame.bimble`; wait for
+  `data-bb-ready` on the new document; poll `query('state')` (20 ms).
+- **native**: edit; `cargo build -p bimble-cli` (mold); restart the headless twin on port 7883;
+  **no page reload**: poll `query('state')` in the page opened once with `?native=1`; a failed
+  sync XHR while the twin restarts is retried.
+
+```
+MOLD_DIR=<mold>/libexec/mold CMAKE_BIN=<cmake>/bin node spikes/native-twin/exp2/loop_browser.mjs [runs]
+```
+
+The script copies the demo frame to `web-ui/public/frame.bimble` (git-ignored) and removes it on exit.
+
+Result (24 Nov 2026, aarch64, 8 cores, rustc 1.100.0, Chromium 153 headless with SwiftShader; 5 runs each, medians):
+
+| loop | build | to the value in the page | total, edit → value |
+|---|---|---|---|
+| native (mold) | 1.57 s | 0.09 s (twin restart, no reload) | **1.66 s** |
+| wasm (`wasm:dev`) | 3.67 s | 0.98 s (reload → `data-bb-ready` 0.98 s) | **4.66 s** |
+
+Ratio wasm / native, total: **2.81**. The reload adds about 1 s to the wasm loop (page load, wasm
+instantiation, model open, first refresh); the twin restart adds 0.09 s. All runs, and what each
+number includes, are in `results_browser.txt`.
