@@ -5,9 +5,12 @@ Vue only shows things. All logic stays in Rust: `src/bimble.ts` is the one typed
 
 ## Run
 
-1. Build the wasm: `scripts/build-web.sh` (from the repository root). It writes `web/dist/`.
-2. In `web-ui/`: `npm install`, then `npm run wasm` (copies the wasm files into `public/bimble/`).
-3. `npm run dev`, then open http://localhost:5173/.
+1. In `web-ui/`: `npm install`, then `npm run wasm:dev`. It builds the editor wasm in the dev
+   profile (`PROFILE=dev LAB=1 scripts/build-web.sh`) and copies it into `public/bimble/`. Run it
+   again after each Rust change (ADR 0065).
+   To check the release build instead: `scripts/build-web.sh` from the repository root (LTO,
+   wasm-opt: slow), then `npm run wasm`.
+2. `npm run dev`, then open http://localhost:5173/.
    To open a model, put it in `web-ui/public/` and open http://localhost:5173/?url=/frame.bimble.
 
 ## Checks

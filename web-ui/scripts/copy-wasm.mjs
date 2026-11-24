@@ -10,7 +10,7 @@ const files = ["bimble_web.js", "bimble_web_bg.wasm", "manifold.js", "manifold.w
 
 const missing = files.filter((f) => !existsSync(join(src, f)));
 if (missing.length) {
-  console.error(`web/dist/editor is missing ${missing.join(", ")}: run scripts/build-web.sh first.`);
+  console.error(`web/dist/editor is missing ${missing.join(", ")}: run "npm run wasm:dev" (or scripts/build-web.sh) first.`);
   process.exit(1);
 }
 mkdirSync(dst, { recursive: true });
