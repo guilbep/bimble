@@ -61,8 +61,11 @@ state restore come on top and are not measured. wasm-bindgen runs on every edit 
 
 ## Not decided here
 
-- The viewport in the page (raw frame streaming). It passed once, on a software GPU in headless
-  Chromium, without pointer input.
+- The viewport in the page (raw frames streamed from the twin; branch `spike/native-viewport`).
+  Measured with drags (pointer → changed pixels, 50 drags, headless Chromium, software GL):
+  full resolution p95 57 ms (72 elements) and 86 ms (20,715); half resolution while dragging
+  p95 41–50 ms at 43–52 fps (72) and 55–56 ms at 29–30 fps (20,715). Workable at the edge for
+  small models, short for large ones; the transfer, not the render, is most of the time.
 - Session resume after a restart.
 - The linker on macOS and Windows: not measured.
 - `bimble serve` as a product (files over 4 GB, an agent and a person on one model).
