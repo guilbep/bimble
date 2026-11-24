@@ -373,6 +373,10 @@ pub fn run(
         Some(p) => GraphicStyle::load(p)?,
         None => GraphicStyle::default(),
     };
+    // Dev-only headless twin (BIMBLE_SERVE + BIMBLE_HEADLESS=1): no window, no frames.
+    if twin::headless_requested() {
+        return twin::run_headless(file, initial_style, style);
+    }
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Bimble")
         .with_inner_size([1280.0, 800.0])

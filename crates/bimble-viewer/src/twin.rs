@@ -72,6 +72,10 @@ fn random_token() -> String {
 
 /// Starts the server when `BIMBLE_SERVE` is set; None (no behaviour change) otherwise.
 pub(crate) fn from_env(ctx: &egui::Context) -> Option<Twin> {
+    start(ctx, "")
+}
+
+fn start(ctx: &egui::Context, note: &str) -> Option<Twin> {
     let port = std::env::var("BIMBLE_SERVE").ok()?;
     let port: u16 = match port.trim().parse() {
         Ok(p) => p,
@@ -98,7 +102,7 @@ pub(crate) fn from_env(ctx: &egui::Context) -> Option<Twin> {
     };
     match serve::start(cfg, Arc::new(side)) {
         Ok(port) => {
-            eprintln!("bimble twin: listening {port} token {token}");
+            eprintln!("bimble twin: listening {port} token {token}{note}");
             Some(Twin {
                 rx,
                 change,
@@ -132,5 +136,84 @@ impl Twin {
         g.1 = json;
         drop(g);
         self.change.1.notify_all();
+    }
+}
+
+/// True when `BIMBLE_SERVE` is set and `BIMBLE_HEADLESS=1`: serve without a window.
+pub(crate) fn headless_requested() -> bool {
+    std::env::var_os("BIMBLE_SERVE").is_some()
+        && std::env::var("BIMBLE_HEADLESS").is_ok_and(|v| v == "1")
+}
+
+/// Runs a future that wgpu resolves without an event loop (native adapter and device requests).
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    let mut f = std::pin::pin!(f);
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    loop {
+        if let std::task::Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+            return v;
+        }
+        std::thread::yield_now();
+    }
+}
+
+/// The twin without a window: no eframe, no frames. A plain loop waits up to 50 ms for a
+/// request, finishes a pending load (`poll_loading`), serves the call and publishes the change.
+/// Edits rebuild the scene inside `call` (`try_apply`, `undo_redo`); GPU uploads are skipped
+/// because nothing is drawn.
+pub(crate) fn run_headless(
+    file: Option<std::path::PathBuf>,
+    style: crate::GraphicStyle,
+    style_path: Option<std::path::PathBuf>,
+) -> Result<(), String> {
+    use eframe::egui_wgpu::{self, wgpu};
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all()),
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        ..Default::default()
+    }))
+    .map_err(|e| format!("no GPU adapter: {e}"))?;
+    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("bimble twin headless"),
+        required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+        ..Default::default()
+    }))
+    .map_err(|e| format!("no GPU device: {e}"))?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let renderer = egui_wgpu::Renderer::new(&device, format, Default::default());
+    let rs = egui_wgpu::RenderState {
+        adapter,
+        available_adapters: Vec::new(),
+        instance,
+        device,
+        queue,
+        target_format: format,
+        renderer: Arc::new(egui::mutex::RwLock::new(renderer)),
+    };
+    let ctx = egui::Context::default();
+    let mut app = crate::Viewer::new(&rs);
+    eprintln!("bimble twin: adapter {}", app.adapter);
+    app.opts.style = style;
+    app.style_baseline = app.opts.style.clone();
+    app.style_path = style_path;
+    app.viewport_only = true;
+    if let Some(f) = file {
+        app.open(f, &ctx);
+    }
+    let mut twin = start(&ctx, " (headless)").ok_or("the twin server did not start")?;
+    loop {
+        let req = twin.rx.recv_timeout(Duration::from_millis(50));
+        app.poll_loading();
+        match req {
+            Ok((req, reply)) => {
+                let _ = reply.send(app.call(&ctx, &req.op, &req.name, &req.body));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        }
+        twin.publish(app.change_json());
     }
 }
