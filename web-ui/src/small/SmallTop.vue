@@ -4,7 +4,7 @@ import { computed } from "vue";
 import { state, openViews } from "../bimble";
 import { t, lang, setLang } from "../i18n";
 import { viewName } from "../shell/viewName";
-import { sheet, wide, phone } from "./screen";
+import { sheet, wide, phone, zoom, debug } from "./screen";
 import labIcon from "../brand/bimble-icon-lab.svg";
 
 const view = computed(() => openViews.value.views.find((v) => v.id === openViews.value.active) ?? null);
@@ -19,6 +19,7 @@ const sub = computed(() => [view.value ? viewName(view.value) : "", state.value.
     <div class="fn">
       <b data-bb="filename">{{ state.file ?? t('app.noFile') }}</b>
       <span>{{ sub }}</span>
+      <span v-if="debug" class="dbg" data-bb="small-debug">{{ zoom.w }}×{{ zoom.h }} · zoom {{ zoom.scale.toFixed(2) }} · {{ zoom.undone }}</span>
     </div>
     <span v-if="state.file !== null" class="mchip" :class="state.unsaved ? 'c-o' : 'c-m'" data-bb="state-chip">{{ t(state.unsaved ? 'small.notSaved' : 'small.saved') }}</span>
     <span class="seg" role="group" :aria-label="t('small.language')">
@@ -36,6 +37,7 @@ const sub = computed(() => [view.value ? viewName(view.value) : "", state.value.
 .tb:focus-visible, .lg:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
 .fn { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
 .fn b { font-weight: 600; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fn .dbg { font-family: var(--bb-font-data); font-size: 11px; }
 .fn span { font-size: 12.5px; color: var(--bb-stone); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 1lh; }
 /* .ph .mchip{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 6px 0 12px;border-radius:999px;font-size:13.5px;white-space:nowrap}; style="padding-right:12px" */
 .mchip { display: inline-flex; align-items: center; min-height: 32px; padding: 0 12px; border-radius: var(--bb-radius-pill); font-size: 13.5px; white-space: nowrap; color: var(--bb-ink); }

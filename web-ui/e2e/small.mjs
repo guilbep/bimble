@@ -86,5 +86,19 @@ for (const s of SIZES) {
   check(errors.length === 0, `${s.name}: no page error ${errors.join(" | ")}`);
   await ctx.close();
 }
+// A zoomed page shows only the left part of the frame (iPhone 13 mini, 24 Nov: zoom about 1.2).
+// The small frame must bring the zoom back to 1. Chrome's mobile emulation stands in for Safari.
+{
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+  const page = await ctx.newPage();
+  await page.goto(`${lab}?url=/frame.bimble`);
+  await page.waitForFunction(() => document.documentElement.dataset.bbReady === "1", null, { timeout: 60000 });
+  const cdp = await ctx.newCDPSession(page);
+  await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1.2 });
+  await page.waitForTimeout(1000);
+  const v = await page.evaluate(() => ({ scale: visualViewport.scale, w: Math.round(visualViewport.width) }));
+  check(v.scale < 1.01 && v.w === 375, `phone: a page zoom of 1.2 is undone (scale ${v.scale.toFixed(2)}, ${v.w} px visible)`);
+  await ctx.close();
+}
 await browser.close();
 process.exit(failed ? 1 : 0);
