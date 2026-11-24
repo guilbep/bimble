@@ -42,14 +42,16 @@ state restore come on top and are not measured. wasm-bindgen runs on every edit 
 | Twin call, p95 (1000 calls) | 1.6–2.0 ms |
 | Edit → new value over HTTP (twin) | 1.72 s, 549 MB peak |
 | Edit → wasm files ready (`wasm:dev`) | 3.75 s, 1267 MB peak; reload not included |
+| **Edit → new value in the lab page, wasm** (build + reload) | **4.66 s** (3.67 + 0.98) |
+| **Edit → new value in the lab page, twin** (build + restart, no reload) | **1.66 s** (1.57 + 0.09): 2.8× shorter |
 | The lab in Chromium against the twin (`e2e:native-lab`) | ready in 0.63–0.75 s; selection and properties shown |
 | Raw 1080p frame, request → pixels | p50 19–22 ms (32–33 ms at CPU ×4), p95 38–50 ms |
 | PNG frame | 45–50 ms |
 
 ## Consequences
 
-- The loop is about 2.2× shorter, and the page does not reload. The build uses less than half
-  the memory.
+- The loop to the value in the lab page is 2.8× shorter (4.66 s → 1.66 s), and the page does not
+  reload. The build uses less than half the memory.
 - The twin has no 3D or paper viewport. Work on the viewport uses the wasm path until frames are
   streamed.
 - Each rebuild restarts the twin. The model is opened again: about 1.0 s for 13,000 elements.
@@ -64,5 +66,6 @@ state restore come on top and are not measured. wasm-bindgen runs on every edit 
 - Session resume after a restart.
 - The linker on macOS and Windows: not measured.
 - `bimble serve` as a product (files over 4 GB, an agent and a person on one model).
-- A small wasm module without wasm-bindgen. A C slice of 284 lines reached 118 ms edit →
-  pixels. The same slice in Rust is not measured.
+- A small wasm module without wasm-bindgen. The same slab slice reached edit → pixels in 118 ms
+  in C and 209 ms in Rust (no wasm-bindgen; Rust library to wasm 73 ms against clang 60 ms). The
+  language is within 1.2–2× at equal scope: module size and wasm-bindgen are the levers, not C.
