@@ -50,3 +50,34 @@ Script output, verbatim (temp dir shown as <tmp>, cargo warnings removed):
   summary:
     small: 72 elements, canvas 1624x827, p50 45.6 / p95 57.3 / max 62.8 ms, 25.8 fps, 0 time-outs -> MARGINAL; /tmp/viewport-lab-small.png
     large: 20715 elements, canvas 1624x827, p50 64.1 / p95 86.0 / max 91.7 ms, 19.0 fps, 0 time-outs -> MARGINAL; /tmp/viewport-lab-large.png
+
+T5: half resolution while dragging (same script, unchanged: web-ui/e2e/native-viewport.mjs)
+  While a pointer is down or a wheel event came in the last 150 ms, streamViewport requests
+  /frame at round(w/2) x round(h/2) (812x414, 1.34 MB instead of 5.37 MB) and scales it up with
+  drawImage (smoothing on). On pointerup/pointercancel or 150 ms after the last wheel: one full frame.
+  Output (verbatim, measurement lines):
+  build: dev profile (target/debug/bimble), RUSTFLAGS="", 96915 ms
+  machine: unknown x8, 15.2 GiB, node v26.12.0
+  [small] twin listening after 215 ms; elements 72
+  [small] canvas 1624x827 px, centre (1108, 632)
+  [small] latency (50 drags, 0 timed out): p50 27.0 ms, p95 41.4 ms, max 43.4 ms; mean render 2.9 ms, read 1.3 ms, fetch 13.6 ms
+  [small] fps: 187 changed frames (187 frames) in 4.33 s = 43.2 fps; latency during the drag p50 24.4 ms, p95 46.5 ms
+  [small] VERDICT WORKABLE (p95 41.4 ms, 43.2 fps; WORKABLE p95<=50 and >=20 fps, KEEP-WASM p95>100)
+  [large] query elements answered: this file is read only: import it to edit
+  [large] twin listening after 209 ms; elements 20715
+  [large] canvas 1624x827 px, centre (1108, 632)
+  [large] latency (50 drags, 0 timed out): p50 39.3 ms, p95 56.2 ms, max 58.4 ms; mean render 13.5 ms, read 2.1 ms, fetch 25.7 ms
+  [large] fps: 135 changed frames (135 frames) in 4.47 s = 30.2 fps; latency during the drag p50 46.3 ms, p95 64.1 ms
+  [large] VERDICT MARGINAL (p95 56.2 ms, 30.2 fps; WORKABLE p95<=50 and >=20 fps, KEEP-WASM p95>100)
+  summary:
+    small: 72 elements, canvas 1624x827, p50 27.0 / p95 41.4 / max 43.4 ms, 43.2 fps, 0 time-outs -> WORKABLE; /tmp/viewport-lab-small.png
+    large: 20715 elements, canvas 1624x827, p50 39.3 / p95 56.2 / max 58.4 ms, 30.2 fps, 0 time-outs -> MARGINAL; /tmp/viewport-lab-large.png
+  Comparison (latency of 50 drags; fps of the long drag):
+    model  T4 p50/p95/max ms    T4 fps  T4 verdict | T5 p50/p95/max ms   T5 fps  T5 verdict
+    small  45.6 / 57.3 / 62.8   25.8    MARGINAL   | 27.0 / 41.4 / 43.4  43.2    WORKABLE
+    large  64.1 / 86.0 / 91.7   19.0    MARGINAL   | 39.3 / 56.2 / 58.4  30.2    MARGINAL
+  Mean fetch: small 29 -> 13.6 ms, large 48.3 -> 25.7 ms. Render: large 17.5 -> 13.5 ms.
+  Large stays MARGINAL on p95 only (56 ms > 50 ms); fps passes. Render (13.5 ms) is now half the fetch.
+  Screenshot /tmp/viewport-lab-*.png: taken after the drags, so it shows the full-resolution frame
+  (crisp 1 px edges). No half-resolution frame was captured; by construction it is the same image
+  upscaled 2x with bilinear smoothing, so edges look soft and about 2 px wide while the user drags.

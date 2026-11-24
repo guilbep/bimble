@@ -336,6 +336,7 @@ interface ViewportSample {
   render_ms: number | null;
   read_ms: number | null;
   fetch_ms: number;
+  half: boolean;
 }
 interface ViewportStats {
   frames: number;
@@ -365,6 +366,12 @@ function streamViewport(base: string, token: string): () => void {
   let oldestInput: number | null = null;
   let lastSum: number | null = null;
   let drag: { pan: boolean; x: number; y: number } | null = null;
+  // T5: while the user drags (or wheeled in the last 150 ms), stream at half resolution.
+  let lastWheel = -Infinity;
+  let wheelTimer: ReturnType<typeof setTimeout> | null = null;
+  const offscreen = document.createElement("canvas");
+  const offCtx = offscreen.getContext("2d");
+  const interacting = () => drag !== null || performance.now() - lastWheel < 150;
   const note = (ts: number) => { if (oldestInput === null) oldestInput = ts; };
   const clamp = (v: number) => Math.min(4096, Math.max(16, Math.round(v)));
   new ResizeObserver(() => {
@@ -392,6 +399,7 @@ function streamViewport(base: string, token: string): () => void {
   });
   const release = (e: PointerEvent) => {
     drag = null;
+    dirty = true; // The interaction ended: the next frame is full resolution.
     if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
   };
   canvas.addEventListener("pointerup", release);
@@ -401,6 +409,9 @@ function streamViewport(base: string, token: string): () => void {
     e.preventDefault();
     scroll += e.deltaY;
     note(e.timeStamp);
+    lastWheel = performance.now();
+    if (wheelTimer !== null) clearTimeout(wheelTimer);
+    wheelTimer = setTimeout(() => { wheelTimer = null; dirty = true; }, 150);
   }, { passive: false });
   const post = async (op: string, body: object): Promise<void> => {
     const r = await fetch(`${base}/${op}/-?t=${t}`, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(body) });
@@ -418,19 +429,31 @@ function streamViewport(base: string, token: string): () => void {
     pan = { dx: 0, dy: 0 };
     scroll = 0;
     dirty = false;
-    const h = canvas.height, w = canvas.width;
+    const h = canvas.height;
+    const half = interacting() && offCtx !== null;
+    const fw = half ? Math.max(16, Math.round(canvas.width / 2)) : canvas.width;
+    const fh = half ? Math.max(1, Math.round(h / 2)) : h;
     try {
       if (o.dx !== 0 || o.dy !== 0) await post("orbit", o);
       if (p.dx !== 0 || p.dy !== 0) await post("pan", { dx: p.dx / h, dy: p.dy / h });
       if (s !== 0) await post("zoom", { scroll: s });
       const f0 = performance.now();
-      const r = await fetch(`${base}/frame?w=${w}&h=${h}&t=${t}`, { cache: "no-store" });
+      const r = await fetch(`${base}/frame?w=${fw}&h=${fh}&t=${t}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`frame: HTTP ${r.status}`);
       const buf = await r.arrayBuffer();
       const fetch_ms = performance.now() - f0;
-      if (buf.byteLength !== w * h * 4) return; // Resized meanwhile: skip; the observer set dirty.
+      if (buf.byteLength !== fw * fh * 4) return; // Bad size: skip; a resize set dirty.
       const px = new Uint8ClampedArray(buf);
-      ctx.putImageData(new ImageData(px, w, h), 0, 0);
+      if (half && offCtx) {
+        if (offscreen.width !== fw) offscreen.width = fw;
+        if (offscreen.height !== fh) offscreen.height = fh;
+        offCtx.putImageData(new ImageData(px, fw, fh), 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+      } else {
+        if (fw !== canvas.width || fh !== canvas.height) return; // Resized meanwhile.
+        ctx.putImageData(new ImageData(px, fw, fh), 0, 0);
+      }
       const latency_ms = served === null ? null : performance.now() - served;
       let sum = 0;
       for (let i = 0; i < px.length; i += 997) sum = (sum * 31 + (px[i] ?? 0)) >>> 0;
@@ -438,7 +461,7 @@ function streamViewport(base: string, token: string): () => void {
       lastSum = sum;
       const xt = r.headers.get("X-Timing");
       stats.frames++;
-      stats.samples.push({ latency_ms, changed, render_ms: timing(xt, "render"), read_ms: timing(xt, "read"), fetch_ms });
+      stats.samples.push({ latency_ms, changed, render_ms: timing(xt, "render"), read_ms: timing(xt, "read"), fetch_ms, half });
       if (stats.samples.length > 1000) stats.samples.splice(0, stats.samples.length - 1000);
     } catch (e) {
       console.warn("native viewport:", e);
