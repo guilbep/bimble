@@ -117,6 +117,58 @@ From top to bottom:
 
 One interface = one name everywhere (ribbon, navigator, view tab, File menu, palette, window title). Use the names above.
 
+## Small screens (row E, ADR 0064, Proposed)
+
+Phone and tablet are a viewer with light edits (rename, material, note). The layout follows the
+window width.
+
+| Width | Layout | Navigation |
+|---|---|---|
+| < 600 px | Phone | bottom bar + sheets |
+| 600 – 1 023 px | Tablet | one toolbar row + navigator + docked properties |
+| ≥ 1 024 px | Desktop | the window above, unchanged |
+
+Phone (375 × 812), from top to bottom:
+
+1. **Top bar**, sheet, min-height 52, padding 6 10, gap 8, 1 px line under it: "b" icon 30 in a
+   44 × 44 target → file name (14.5 / 600) over the view name (12.5, stone), both ellipsised →
+   state chip (pill, min-height 32, 13.5; moss "Enregistré", ochre "Non enregistré : 1").
+2. **Model**, sheet, fills the rest. Floating on it, 10 px from the edges: the view pill top left
+   (44 high, 1 px stone border, cube icon 18, name, chevron) and two round buttons top right
+   (44 × 44, sheet, 1 px stone: 3D home, Fit all). Hints are ink pills with cream text, 13.
+3. **Bottom bar**, sheet, 1 px line over it, padding 6 6 10: five equal items, min-height 50,
+   radius 16, icon 22 over a 12 px label. Active = ink fill, cream text.
+   Vues · Objets · Couper · Mesurer · Plus (Views · Objects · Cut · Measure · More).
+
+Sheets: cream, 1 px stone top border, radius 16 16 0 0, padding 6 16 14, gap 10; a grab handle
+40 × 4 (stone, pill) centred at the top; a header row 44 high with the title in Sora 17 / 500.
+List rows 48 high, radius 12, selected row pink. Key/value rows 44 high, 1 px sunk under each,
+label stone, measures in DM Mono 13.5. Inputs 44 high, 1 px stone, radius 8. Buttons are pills
+44 high; the primary is clay with ink 600 text.
+
+Landscape (812 × 375): the bar becomes a rail on the left (items 56 wide, min-height 48, label
+11), the top bar is 46 high, the sheet becomes a 286 px panel on the right with a 1 px stone edge.
+
+Tablet (820 × 1180): top bar as the phone's; one toolbar row (padding 8 10, pills 44 high, active
+= ink); the model navigator 248 wide on the left; properties docked under the model in two columns.
+
+Touch: targets ≥ 44 × 44 px, nothing on hover. One finger orbits, two fingers zoom and pan, a tap
+selects, a long press opens the element's actions.
+
+| Code | File | Name (FR / EN) | Size |
+|---|---|---|---|
+| E0 | SmallRules | Règles petit écran / Small-screen rules | 880 × 812 |
+| E1 | PhoneViewer | Téléphone : visionneuse / Phone: viewer | 375 × 812 |
+| E2 | PhoneViews | Téléphone : vues / Phone: views | 375 × 812 |
+| E3 | PhoneSelect | Téléphone : sélection / Phone: selection | 375 × 812 |
+| E4 | PhoneProps | Téléphone : propriétés / Phone: properties | 375 × 812 |
+| E5 | PhoneCut | Téléphone : couper / Phone: cut | 375 × 812 |
+| E6 | PhoneMeasure | Téléphone : mesurer / Phone: measure | 375 × 812 |
+| E7 | PhoneMore | Téléphone : plus / Phone: more | 375 × 812 |
+| E8 | PhoneLandscape | Téléphone en paysage / Phone, landscape | 812 × 375 |
+| E9 | Tablet | Tablette / Tablet | 820 × 1180 |
+| E10 | Laptop1280 | Bureau à 1 280 × 720 / Desktop at 1 280 × 720 | 1280 × 720 |
+
 ## Decisions this design makes (each needs an ADR before its screen is built)
 
 1. Two top rows (quick access, then tabs): 14 tabs don't fit one row at 1 280 px. Differs from ADR 0037 (egui's one row).
