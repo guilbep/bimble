@@ -49,6 +49,9 @@ The edit → wasm loop was slow, and it used a lot of RAM and disk. Measured on 
 The "full debug" column is the viewer build (no `editor` feature); the other two are the editor.
 `debug = 0` was also measured: 0.1 s faster, a 43 MB wasm, no file and line in panics. Its 0.1 s
 does not pay for losing the line numbers.
+End to end (edit → the new value in the lab page, wasm build + page reload, 5 runs, 24 Nov night):
+line tables 4.66 s, `debug = 0` 4.60 s; the reload is 0.98 s in both (the served wasm is ~45 MB in
+both after wasm-bindgen). Line numbers cost about 0.05 s.
 
 ## Consequences
 
