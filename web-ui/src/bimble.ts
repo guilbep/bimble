@@ -307,7 +307,9 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
   let epoch: string | undefined;
   for (;;) {
     try {
-      const r = await fetch(`${base}/change?since=${since}&t=${t}`);
+      // The epoch lets a restarted twin answer at once, even when its seq equals ours.
+      const e = epoch === undefined ? "" : `&epoch=${encodeURIComponent(epoch)}`;
+      const r = await fetch(`${base}/change?since=${since}${e}&t=${t}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const m = (await r.json()) as { epoch?: string; seq: number; change: unknown };
       // A new epoch is a restarted twin: its seq began again, so ask for its current change.

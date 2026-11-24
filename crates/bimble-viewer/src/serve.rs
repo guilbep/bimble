@@ -230,7 +230,17 @@ fn serve_connection(stream: TcpStream, port: u16, cfg: &Config, h: &dyn Handler)
             else {
                 return respond(&mut out, 400, &acao, TEXT, "bad since", false);
             };
-            let (seq, change) = h.wait_change(since, POLL_TIMEOUT);
+            // The page sends the epoch it last saw. A different one is a restarted twin: answer
+            // now with the current change and the new epoch, even when its seq equals `since`.
+            let stale = matches!(
+                (query_param(query, "epoch"), h.epoch()),
+                (Some(theirs), Some(ours)) if theirs != ours
+            );
+            let (seq, change) = if stale {
+                h.wait_change(0, Duration::ZERO)
+            } else {
+                h.wait_change(since, POLL_TIMEOUT)
+            };
             let json = match h.epoch() {
                 Some(e) => format!("{{\"epoch\":\"{e}\",\"seq\":{seq},\"change\":{change}}}"),
                 None => format!("{{\"seq\":{seq},\"change\":{change}}}"),
@@ -483,5 +493,69 @@ mod tests {
             one(port, &raw),
             (200, "{\"seq\":5,\"change\":{\"x\":1}}".to_string())
         );
+    }
+
+    /// A twin at seq 5, epoch "E1". Records each `wait_change` timeout; a real wait (non-zero
+    /// timeout with nothing newer) blocks 1.5 s, so a test can tell it from an instant answer.
+    struct EpochHandler {
+        waits: std::sync::Mutex<Vec<Duration>>,
+    }
+
+    impl Handler for EpochHandler {
+        fn call(&self, _req: Request) -> Result<String, String> {
+            Err("unused".into())
+        }
+        fn wait_change(&self, since: u64, timeout: Duration) -> (u64, String) {
+            self.waits.lock().unwrap().push(timeout);
+            if since >= 5 {
+                if !timeout.is_zero() {
+                    std::thread::sleep(Duration::from_millis(1500));
+                }
+                return (5, "null".to_string());
+            }
+            (5, "{\"x\":1}".to_string())
+        }
+        fn epoch(&self) -> Option<&str> {
+            Some("E1")
+        }
+    }
+
+    fn epoch_server() -> (u16, Arc<EpochHandler>) {
+        let cfg = Config {
+            port: 0,
+            token: "T".into(),
+            allowed_origins: vec![ORIGIN.into()],
+        };
+        let h = Arc::new(EpochHandler {
+            waits: std::sync::Mutex::new(Vec::new()),
+        });
+        (start(cfg, h.clone()).expect("start"), h)
+    }
+
+    #[test]
+    fn change_with_stale_epoch_answers_at_once() {
+        let (port, h) = epoch_server();
+        let raw =
+            format!("GET /change?since=5&epoch=E0&t=T HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n");
+        let t0 = std::time::Instant::now();
+        let (status, body) = one(port, &raw);
+        let took = t0.elapsed();
+        assert_eq!(status, 200);
+        assert!(body.contains("\"epoch\":\"E1\""), "{body}");
+        assert!(body.contains("\"seq\":5"), "{body}");
+        assert!(took < Duration::from_secs(1), "took {took:?}: {body}");
+        let waits = h.waits.lock().unwrap().clone();
+        assert!(waits.iter().all(|d| d.is_zero()), "long-polled: {waits:?}");
+    }
+
+    #[test]
+    fn change_with_same_epoch_still_long_polls() {
+        let (port, h) = epoch_server();
+        let raw =
+            format!("GET /change?since=5&epoch=E1&t=T HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n");
+        let (status, body) = one(port, &raw);
+        assert_eq!(status, 200);
+        assert_eq!(body, "{\"epoch\":\"E1\",\"seq\":5,\"change\":null}");
+        assert_eq!(*h.waits.lock().unwrap(), vec![POLL_TIMEOUT]);
     }
 }
