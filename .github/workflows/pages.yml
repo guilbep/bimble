@@ -2,6 +2,10 @@
 # For now (until the Vue lab's UX settles, ADR 0048) the site root is the Vue lab (web-ui) built from
 # the release's tag on the zip's editor wasm; the egui page of the zip stays under egui/.
 #
+# A manual run can also publish one pull request's lab under preview/pr-<number>/ (input
+# `preview_pr`), to open a branch on a phone before it is merged. The next deployment without that
+# input removes it. Only someone who can run workflows here can start it.
+#
 # It runs after the release workflow, not inside it: a workflow started by a tag can't deploy to
 # the `github-pages` environment, which by default accepts deployments from the default branch
 # only. `workflow_run` and manual runs start from the default branch, so no setting is needed.
@@ -14,8 +18,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release to publish, e.g. v0.5.0"
-        required: true
+        description: "Release to publish, e.g. v0.5.0 (empty: the newest release)"
+        required: false
+      preview_pr:
+        description: "Also publish this pull request's lab under preview/pr-<number>/ (a number, optional)"
+        required: false
 
 permissions:
   contents: read
@@ -25,16 +32,73 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The pull request's lab, built without any right to deploy: its code runs here, not in `deploy`.
+  # The wasm is the one its own CI run built (artifact bimble-web), so nothing is compiled twice
+  # except the CLI that writes the demo model.
+  preview:
+    if: github.event_name == 'workflow_dispatch' && inputs.preview_pr != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - name: The pull request's head and the wasm its CI run built
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.preview_pr }}
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "preview_pr must be a number"; exit 1; }
+          SHA=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)
+          RUN=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SHA" --json databaseId --jq '.[0].databaseId')
+          [[ -n "$RUN" ]] || { echo "no ci run for $SHA yet"; exit 1; }
+          echo "PR $PR at $SHA, ci run $RUN"
+          gh run download "$RUN" --repo "$GITHUB_REPOSITORY" --name bimble-web --dir dist
+          test -f dist/editor/bimble_web.js
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+          path: src
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/web-ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+      - name: The lab and a demo model
+        run: |
+          rm -rf src/web/dist && mv dist src/web/dist
+          cd src/web-ui
+          npm ci --no-audit --no-fund
+          npm run wasm
+          npm run build -- --base ./ --outDir ../../preview --emptyOutDir
+          cargo run --release -p bimble-cli --bin bimble -- demo ../../preview/frame.bimble
+          test -f ../../preview/index.html && test -f ../../preview/bimble/bimble_web.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preview
+          path: preview
+          retention-days: 1
+
   deploy:
+    needs: [preview]
     # After a successful release run that can have published: started by a tag push (head_branch
     # is then the tag's name) or by hand (one-button release). Not after pull requests: a branch
     # named "views" once passed a "starts with v" test alone.
+    # `always()`: `preview` is skipped on every run but a manual one that asks for it; a failed
+    # preview stops the deployment.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       (github.event.workflow_run.event == 'workflow_dispatch' ||
-        (github.event.workflow_run.event == 'push' &&
-         startsWith(github.event.workflow_run.head_branch, 'v'))))
+      always() && needs.preview.result != 'failure' && needs.preview.result != 'cancelled' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        (github.event.workflow_run.event == 'workflow_dispatch' ||
+         (github.event.workflow_run.event == 'push' &&
+          startsWith(github.event.workflow_run.head_branch, 'v')))))
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -76,6 +140,12 @@ jobs:
           npm run build -- --base ./ --outDir ../../site --emptyOutDir
           mv ../web/dist ../../site/egui
           test -f ../../site/index.html && test -f ../../site/bimble/bimble_web.js && test -f ../../site/egui/index.html
+      - name: The pull request's lab under preview/pr-<number>/
+        if: needs.preview.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: preview
+          path: site/preview/pr-${{ inputs.preview_pr }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
