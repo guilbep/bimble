@@ -6,6 +6,11 @@
 //   (b) the twin's selection is non-empty (the change JSON from GET /change, over HTTP from Node);
 //   (c) "IfcBeam" appears in the DOM (properties panel);
 //   (d) GET /change?since=0 returns seq >= 1.
+// Edit phase (the page also carries edit=move-first-beam: one real `move` verb, first IfcBeam, +1 mm in x):
+//   (e1) that beam's placement origin x rose by 1 mm (+-1e-6), read from Node over HTTP;
+//   (e2) query/history has undo.length >= 1;  (e3) GET /change says "unsaved": true;
+// then undo() from the page (bimble.ts, over the sync XHR transport):
+//   (u1) origin x is back;  (u2) history.undo is one shorter;  (u3) "unsaved" is false (reported if not).
 // Screenshot: /tmp/native-lab.png. Exit 0 and PASS when all hold; 1 otherwise. Kills all it starts.
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -19,7 +24,7 @@ const BIN = join(ROOT, "target/debug/bimble");
 const PORT = 7882;
 const TOKEN = "labtest";
 const TWIN = `http://127.0.0.1:${PORT}`;
-const PAGE = `http://localhost:5173/?native=1&port=${PORT}&token=${TOKEN}&select=first:IfcBeam`;
+const PAGE = `http://localhost:5173/?native=1&port=${PORT}&token=${TOKEN}&select=first:IfcBeam&edit=move-first-beam`;
 const SHOT = "/tmp/native-lab.png";
 const tmp = mkdtempSync(join(tmpdir(), "bimble-native-lab-"));
 const procs = [];
@@ -110,6 +115,22 @@ async function main() {
   const twin = start("twin", BIN, ["view", file], { env });
   await waitFor("twin 'listening'", 20000, () => twin.out.includes("listening") || (twin.exitCode !== null && Promise.reject(new Error(twin.out))));
 
+  // Before the edit: the first IfcBeam and its origin x, from Node over HTTP.
+  const q = async (name, args) => {
+    const r = await fetch(`${TWIN}/query/${name}?t=${TOKEN}`, { method: "POST", body: JSON.stringify(args ?? {}) });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`query ${name}: ${r.status} ${text}`);
+    return JSON.parse(text);
+  };
+  const lastChange = async () => (await (await fetch(`${TWIN}/change?since=0&t=${TOKEN}`)).json()).change;
+  const beams = await q("elements", { class: "IfcBeam" });
+  const beamId = beams[0]?.id;
+  if (!beamId) throw new Error(`no IfcBeam: ${JSON.stringify(beams).slice(0, 200)}`);
+  const originX = async () => (await q("element", { id: beamId })).placement.origin[0];
+  const x0 = await originX();
+  const undo0 = (await q("history")).undo.length;
+  console.log(`before edit: beam ${beamId} origin x ${x0}, history.undo ${undo0}, unsaved ${(await lastChange()).unsaved}`);
+
   // 3. Vite.
   const vite = start("vite", "npx", ["vite", "--port", "5173", "--strictPort"], { cwd: UI });
   await waitFor("Vite on 5173", 30000, async () => {
@@ -188,6 +209,41 @@ async function main() {
 
   console.log(`(d) /change?since=0 seq: ${ch.seq}`);
   if (!(ch.seq >= 1)) failures.push(`(d) seq ${ch.seq} < 1`);
+
+  // Edit phase: the deep link ran `move` before data-bb-ready.
+  const x1 = await originX();
+  const h1 = (await q("history")).undo;
+  const unsaved1 = (await lastChange()).unsaved;
+  const e1 = Math.abs(x1 - x0 - 1) <= 1e-6;
+  console.log(`(e1) origin x ${x0} -> ${x1} (delta ${x1 - x0}): ${e1 ? "ok" : "FAIL"}`);
+  if (!e1) failures.push(`(e1) origin x ${x0} -> ${x1}, expected +1 mm`);
+  console.log(`(e2) history.undo length ${h1.length} ${JSON.stringify(h1)}: ${h1.length >= 1 ? "ok" : "FAIL"}`);
+  if (!(h1.length >= 1)) failures.push(`(e2) history.undo empty`);
+  console.log(`(e3) /change unsaved: ${unsaved1}: ${unsaved1 === true ? "ok" : "FAIL"}`);
+  if (unsaved1 !== true) failures.push(`(e3) unsaved ${unsaved1}, expected true`);
+
+  // Undo from the page.
+  const undoErr = (await S("Runtime.evaluate", {
+    expression: "(async () => (await import('/src/bimble.ts')).undo())()",
+    awaitPromise: true,
+    returnByValue: true,
+  })).result.value;
+  console.log(`page undo() returned: ${JSON.stringify(undoErr)}`);
+  if (undoErr) failures.push(`(u) page undo() error: ${undoErr}`);
+  await sleep(300);
+  const x2 = await originX();
+  const h2 = (await q("history")).undo;
+  const unsaved2 = (await lastChange()).unsaved;
+  const u1 = x2 === x0;
+  console.log(`(u1) origin x after undo ${x2} (before edit ${x0}): ${u1 ? "ok" : "FAIL"}`);
+  if (!u1) failures.push(`(u1) origin x ${x2}, expected ${x0}`);
+  const u2 = h2.length === h1.length - 1;
+  console.log(`(u2) history.undo length ${h1.length} -> ${h2.length}: ${u2 ? "ok" : "FAIL"}`);
+  if (!u2) failures.push(`(u2) history.undo ${h1.length} -> ${h2.length}, expected one shorter`);
+  console.log(`(u3) /change unsaved after undo: ${unsaved2}${unsaved2 === false ? ": ok" : " (finding: the twin still reports unsaved)"}`);
+  const errorsAfter = consoleLog.filter((m) => /error/.test(m.level) && !IGNORED.some((r) => r.test(m.text)));
+  if (errorsAfter.length > errors.length) failures.push(`(a) console errors after the edit phase:\n    ${errorsAfter.slice(errors.length).map((m) => m.text).join("\n    ")}`);
+  if (exceptions.length) failures.push(`(a) uncaught exceptions (edit phase):\n    ${exceptions.join("\n    ")}`);
 
   console.log(`screenshot: ${SHOT}`);
   cdp.close();
