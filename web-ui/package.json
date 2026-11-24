@@ -16,7 +16,8 @@
     "e2e:place": "node e2e/place-slab.mjs --lab",
     "e2e:a11y": "node e2e/a11y.mjs --lab",
     "e2e:buttons": "node e2e/buttons.mjs --lab",
-    "e2e:small": "node e2e/small.mjs --lab"
+    "e2e:small": "node e2e/small.mjs --lab",
+    "e2e:native": "node e2e/native-place.mjs"
   },
   "dependencies": {
     "vue": "^3.5.45"
