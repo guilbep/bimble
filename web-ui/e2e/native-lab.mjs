@@ -11,6 +11,9 @@
 //   (e2) query/history has undo.length >= 1;  (e3) GET /change says "unsaved": true;
 // then undo() from the page (bimble.ts, over the sync XHR transport):
 //   (u1) origin x is back;  (u2) history.undo is one shorter;  (u3) "unsaved" is false (reported if not).
+// Tab phase: tabCall('open', <first plan view from query open_views>) from the page, then
+// tabCall('activate', <3D view>):  (t1), (t2) the page's state.value.tab and the twin's /change
+// change.tab both name that tab within 5 s.
 // Restart phase (ADR 0066: each rebuild restarts the twin): an in-page recorder watches the lab's
 // `state` (bimble.ts, what on_change updates); the twin is killed and a new one started on the same
 // port, token and file; a `select` of the first IfcSlab is sent from Node over HTTP:
@@ -248,6 +251,41 @@ async function main() {
   const errorsAfter = consoleLog.filter((m) => /error/.test(m.level) && !IGNORED.some((r) => r.test(m.text)));
   if (errorsAfter.length > errors.length) failures.push(`(a) console errors after the edit phase:\n    ${errorsAfter.slice(errors.length).map((m) => m.text).join("\n    ")}`);
   if (exceptions.length) failures.push(`(a) uncaught exceptions (edit phase):\n    ${exceptions.join("\n    ")}`);
+
+  // Tab phase: open a plan tab from the page (bimble.ts tabCall, op `tab` over the transport), then
+  // activate the 3D tab; each time the page's state.value.tab and the twin's /change change.tab must
+  // both name that tab within 5 s. The view ids come from query("open_views"), as deeplink.ts viewId picks them.
+  const ov = await q("open_views");
+  const planView = (ov.views ?? []).find((x) => x.type === "plan" && x.look !== "up");
+  const d3View = (ov.views ?? []).find((x) => x.type === "three_d");
+  if (!planView || !d3View) throw new Error(`no plan or 3D view in open_views: ${JSON.stringify(ov).slice(0, 400)}`);
+  const planTab = { type: "view", id: planView.id };
+  const d3Tab = { type: "view", id: d3View.id };
+  console.log(`tab objects: plan ${JSON.stringify(planTab)} (${planView.name}), 3D ${JSON.stringify(d3Tab)} (${d3View.name})`);
+  const pageEval = async (expr) =>
+    (await S("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true })).result.value;
+  // Sorted keys: Rust's to_json and the JS literal need not list fields in the same order.
+  const canon = (v) => JSON.stringify(v && typeof v === "object" ? Object.fromEntries(Object.entries(v).sort()) : v ?? null);
+  const tabPhase = async (label, op, tab) => {
+    const want = canon(tab);
+    let page = null, twinTab = null;
+    const err = await pageEval(`(async () => (await import('/src/bimble.ts')).tabCall(${JSON.stringify(op)}, ${JSON.stringify(tab)}))()`);
+    if (err) { failures.push(`(${label}) page tabCall('${op}') error: ${err}`); return { page, twinTab }; }
+    try {
+      await waitFor(`${label}: page and twin tab == ${want}`, 5000, async () => {
+        page = canon(await pageEval("(async () => (await import('/src/bimble.ts')).state.value.tab ?? null)()"));
+        twinTab = canon((await lastChange()).tab);
+        return page === want && twinTab === want;
+      });
+    } catch (e) {
+      failures.push(`(${label}) ${e.message}; page ${page}, twin ${twinTab}`);
+    }
+    return { page, twinTab };
+  };
+  const t1 = await tabPhase("t1", "open", planTab);
+  console.log(`(t1) tab after open: ${t1.page} == ${t1.twinTab}`);
+  const t2 = await tabPhase("t2", "activate", d3Tab);
+  console.log(`(t2) tab after activate 3D: ${t2.page} == ${t2.twinTab}`);
 
   // Restart phase.
   await evalJs(`(async () => {
