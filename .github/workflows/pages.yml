@@ -69,7 +69,7 @@ jobs:
           cache-dependency-path: src/web-ui/package-lock.json
       - name: The Vue lab on the release's wasm, egui page under egui/
         run: |
-          mv web src/web
+          mkdir -p src/web && mv web/dist src/web/dist
           cd src/web-ui
           npm ci --no-audit --no-fund
           npm run wasm
