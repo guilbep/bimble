@@ -4675,9 +4675,7 @@ impl Viewer {
 }
 
 /// The status bar's counts, as numbers and as it writes them (`text`).
-// ponytail: serde is a web-only dependency; natively only `idle` and `text` are read.
-#[cfg_attr(target_arch = "wasm32", derive(serde::Serialize))]
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[derive(serde::Serialize)]
 pub(crate) struct Status {
     visible: usize,
     total: usize,

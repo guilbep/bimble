@@ -17,6 +17,10 @@ pub(crate) enum Op {
     Query,
     Action,
     Verb,
+    DismissBelongs,
+    StandardsAction,
+    SetPlacing,
+    Tab,
 }
 
 /// The op for a name, or "unknown op <name>".
@@ -29,12 +33,13 @@ pub(crate) fn dispatch_op(op: &str) -> Result<Op, String> {
         "query" => Op::Query,
         "action" => Op::Action,
         "verb" => Op::Verb,
+        "dismiss_belongs" => Op::DismissBelongs,
+        "standards_action" => Op::StandardsAction,
+        "set_placing" => Op::SetPlacing,
+        "tab" => Op::Tab,
         _ => return Err(format!("unknown op {op}")),
     })
 }
-
-/// What `call("query", "status")` says outside the wasm bridge (see `call_query`).
-pub(crate) const STATUS_WASM_ONLY: &str = "query status is served by the wasm bridge only";
 
 pub(crate) fn json(v: impl serde::Serialize) -> Result<String, String> {
     serde_json::to_string(&v).map_err(|e| e.to_string())
@@ -100,7 +105,130 @@ impl Viewer {
                 self.call_verb(name, body)?;
                 Ok(String::new())
             }
+            Op::DismissBelongs => {
+                // Close the "belongs to someone else" alert without synchronizing (its Cancel).
+                if let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) {
+                    ed.belongs = None;
+                }
+                Ok(String::new())
+            }
+            Op::StandardsAction => {
+                self.call_standards_action(name)?;
+                Ok(String::new())
+            }
+            Op::SetPlacing => {
+                self.call_set_placing(ctx, body)?;
+                Ok(String::new())
+            }
+            Op::Tab => {
+                self.call_tab(body)?;
+                Ok(String::new())
+            }
         }
+    }
+
+    /// What the wasm `on_change` callback gets: `{"selection": [GlobalId, primary first], "rev",
+    /// "unsaved", "file", "view": a signature of what the view shows, "tab", "placing"}`.
+    /// `unsaved` is computed here; on wasm it equals `state::UNSAVED`, which `ui` stores from
+    /// the same expression in the same frame just before `notify`.
+    pub(crate) fn change_json(&self) -> String {
+        let v = self;
+        let ids: Vec<&str> = v
+            .loaded
+            .as_ref()
+            .map(|l| {
+                v.selected
+                    .into_iter()
+                    .chain(v.also_selected.iter().copied())
+                    .filter_map(|i| l.scene.elements.get(i).map(|e| e.global_id.as_str()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        serde_json::json!({
+            "selection": ids,
+            "rev": v.scene_rev,
+            "unsaved": !state::unsaved(&v.snapshot()).is_empty(),
+            "file": v.loaded.as_ref().and_then(|l| l.path.file_name()).map(|n| n.to_string_lossy()),
+            "view": [
+                v.section_on as usize,
+                v.temporary.as_ref().map_or(0, |t| t.elements.len()),
+                v.temporary.as_ref().is_some_and(|t| t.isolate) as usize,
+                v.hidden_ids.len(),
+                v.isolated_ids.len(),
+                v.hidden_in_view() as usize,
+                v.on_paper() as usize,
+                v.open_tabs.len(),
+            ],
+            "tab": v.current_tab().map(|t| t.to_json()),
+            // A click adds a point, the mode ends, a size changes: refresh query("placing").
+            "placing": v.loaded.as_ref().and_then(|l| l.edit.as_ref()).map(|ed| ed.placing_json()),
+        })
+        .to_string()
+    }
+
+    /// The style panel's buttons: "revert" (back to the file as loaded or last saved), "reset"
+    /// (asks first, as egui does: ADR 0028), "save" (asks where, writes what differs from the
+    /// default).
+    fn call_standards_action(&mut self, name: &str) -> Result<(), String> {
+        let v = self;
+        match name {
+            "revert" => {
+                v.opts.style = v.style_baseline.clone();
+                v.needs_render = true;
+            }
+            "reset" => v.confirm = Some(crate::Confirm::ResetStandards),
+            "save" => {
+                v.save_style();
+            }
+            _ => return Err(format!("unknown standards action {name:?}")),
+        }
+        Ok(())
+    }
+
+    /// Change what is placed: see the `set_placing` export (bridge.rs). `kind` while not
+    /// placing starts placing, as `action("place_<kind>")`.
+    fn call_set_placing(&mut self, ctx: &egui::Context, args_json: &str) -> Result<(), String> {
+        let patch = crate::edit::PlacingPatch::parse(args_json)?;
+        let start = self
+            .loaded
+            .as_mut()
+            .and_then(|l| l.edit.as_mut())
+            .ok_or_else(|| READ_ONLY.to_string())?
+            .set_placing(patch)?;
+        match start {
+            Some(k) => self.call_action(ctx, &format!("place_{}", k.label().to_lowercase())),
+            None => Ok(()),
+        }
+    }
+
+    /// Go to a tab or close it, as the tab row does: see the `tab` export (bridge.rs).
+    fn call_tab(&mut self, args_json: &str) -> Result<(), String> {
+        #[derive(serde::Deserialize)]
+        struct Args {
+            op: String,
+            tab: serde_json::Value,
+        }
+        let a: Args = serde_json::from_str(args_json).map_err(|e| e.to_string())?;
+        let t = crate::ribbon::TabRef::from_json(&a.tab)?;
+        let close = match a.op.as_str() {
+            "activate" | "open" => false,
+            "close" => true,
+            o => return Err(format!("unknown op {o:?}")),
+        };
+        let open = a.op == "open";
+        let v = self;
+        if open {
+            // Any view of query("open_views").views, as a navigator row click: it gets a tab.
+            match &t {
+                crate::ribbon::TabRef::View(id) if v.views.iter().any(|w| w.id == *id) => {}
+                crate::ribbon::TabRef::View(_) => return Err("no such view".into()),
+                _ => return Err("op \"open\" takes a view".into()),
+            }
+        } else if !close && v.sync_tabs().as_ref() != Some(&t) && !v.open_tabs.contains(&t) {
+            return Err("no such open tab".into());
+        }
+        v.tab_verb(close, t);
+        Ok(())
     }
 
     /// Read data: "state", "storeys", "materials", "elements" (an `ElementFilter`, "" for the
@@ -295,9 +423,8 @@ impl Viewer {
         }
         // `[{id, label, value_mm}]`: see `state::measurements_json`.
         "measurements" => json(state::measurements_json(&v.dimensions)),
-        // The status bar's counts and its text; null without a model. bridge.rs answers it:
-        // `Status` derives `serde::Serialize` on wasm only (lib.rs), so not here yet.
-        "status" => Err(STATUS_WASM_ONLY.to_string()),
+        // The status bar's counts and its text; null without a model.
+        "status" => json(v.status()),
         // Working together (ADR 0038): see `collab::collab_json`. Null fields on the web (no
         // shared folder there yet).
         "collab" => {
@@ -458,5 +585,29 @@ mod tests {
         assert_eq!(dispatch_op("query"), Ok(Op::Query));
         assert_eq!(dispatch_op("action"), Ok(Op::Action));
         assert_eq!(dispatch_op("verb"), Ok(Op::Verb));
+        assert_eq!(dispatch_op("dismiss_belongs"), Ok(Op::DismissBelongs));
+        assert_eq!(dispatch_op("standards_action"), Ok(Op::StandardsAction));
+        assert_eq!(dispatch_op("set_placing"), Ok(Op::SetPlacing));
+        assert_eq!(dispatch_op("tab"), Ok(Op::Tab));
+    }
+
+    /// Every op string `web-ui/src/bimble.ts` sends has a variant (fixed list, kept by hand).
+    #[test]
+    fn every_bimble_ts_op_dispatches() {
+        for op in [
+            "query",
+            "apply",
+            "undo",
+            "redo",
+            "select",
+            "action",
+            "verb",
+            "tab",
+            "set_placing",
+            "dismiss_belongs",
+            "standards_action",
+        ] {
+            assert!(dispatch_op(op).is_ok(), "{op}");
+        }
     }
 }
