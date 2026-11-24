@@ -66,7 +66,10 @@ const sizes = computed(() =>
     .sort((a, b) => ((ORDER.indexOf(a[0]) + 6) % 6) - ((ORDER.indexOf(b[0]) + 6) % 6)),
 );
 const section = computed(() => {
-  const s = sizes.value.filter(([k]) => k !== "length").map(([, v]) => grouped(v));
+  // The cross-section: not the length, and not a column's height (it has width and depth).
+  const keys = sizes.value.map(([k]) => k);
+  const along = keys.includes("depth") && keys.includes("width") ? ["length", "height"] : ["length"];
+  const s = sizes.value.filter(([k]) => !along.includes(k)).map(([, v]) => grouped(v));
   return s.length ? `${s.join(" × ")} mm` : "";
 });
 function commitName(): void {
@@ -102,7 +105,7 @@ const kept = computed<Measurement[]>(() => { void state.value; return sheet.valu
 
     <!-- Views -->
     <template v-if="sheet === 'views'">
-      <div class="sh"><h2>{{ t('small.views') }}</h2><button class="tb" type="button" :aria-label="t('small.close')" @click="sheet = null"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+      <div class="sh"><h2>{{ t('small.views') }}</h2><button class="tb" type="button" :aria-label="t('small.close')" data-bb="small-close" @click="sheet = null"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
       <span class="mseg" role="group">
         <button type="button" :aria-pressed="list === 'views'" @click="list = 'views'">{{ t('small.views') }}</button>
         <button type="button" :aria-pressed="list === 'sheets'" @click="list = 'sheets'">{{ t('small.sheets') }} · {{ paper.length }}</button>
@@ -134,6 +137,7 @@ const kept = computed<Measurement[]>(() => { void state.value; return sheet.valu
       <div class="sh">
         <button class="tb" type="button" :aria-label="t('small.back')" @click="props = false"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
         <h2>{{ title }}</h2>
+        <button class="tb" type="button" :aria-label="t('small.close')" data-bb="small-close" @click="sheet = null"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
       </div>
       <div class="sech">{{ t('small.editable') }}</div>
       <label class="fld"><span class="k">{{ t('small.name') }}</span>
@@ -158,7 +162,7 @@ const kept = computed<Measurement[]>(() => { void state.value; return sheet.valu
         <span v-if="sel.length" class="dot" aria-hidden="true" />
         <h2>{{ detail ? title : sel.length > 1 ? t('small.selected', { n: sel.length }) : t('small.objects') }}</h2>
         <span v-if="detail" class="mono quiet">{{ detail.class }}</span>
-        <button v-if="wide" class="tb" type="button" :aria-label="t('small.close')" @click="sheet = null"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        <button class="tb" type="button" :aria-label="t('small.close')" data-bb="small-close" @click="sheet = null"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
       </div>
       <p v-if="!sel.length" class="quiet">{{ t('small.tapElement') }}</p>
       <template v-if="detail">
@@ -167,16 +171,16 @@ const kept = computed<Measurement[]>(() => { void state.value; return sheet.valu
         <div class="kv" style="border:0"><span class="k">{{ t('small.material') }}</span><span>{{ detail.material_name ?? '—' }}</span></div>
       </template>
       <div class="pills">
+        <button v-if="detail" class="pill q" type="button" data-bb="small-props" @click="props = true">{{ t('small.properties') }}</button>
         <button v-if="sel.length" class="pill" type="button" :disabled="!on('hide_now')" @click="run('hide_now')">{{ t('small.hide') }}</button>
         <button v-if="sel.length" class="pill" type="button" :disabled="!on('isolate_now')" @click="run('isolate_now')">{{ t('small.isolate') }}</button>
         <button class="pill" type="button" :disabled="!on('clear_temporary')" @click="run('clear_temporary')">{{ t('small.showAll') }}</button>
-        <button v-if="detail" class="pill q" type="button" data-bb="small-props" @click="props = true">{{ t('small.properties') }}</button>
       </div>
     </template>
 
     <!-- Cut -->
     <template v-else-if="sheet === 'cut'">
-      <div class="sh"><h2>{{ t('small.cut') }}</h2></div>
+      <div class="sh"><h2>{{ t('small.cut') }}</h2><button class="tb" type="button" :aria-label="t('small.close')" data-bb="small-close" @click="sheet = null"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
       <div class="kv"><span class="k">{{ t('small.sectionBox') }}</span>
         <button class="pill" :class="{ ink: pressed('section_box') }" type="button" :aria-pressed="pressed('section_box')" :disabled="!on('section_box')" data-bb="small-box" @click="run('section_box')">{{ t(pressed('section_box') ? 'small.boxOn' : 'small.boxOff') }}</button></div>
       <template v-if="box">
@@ -189,7 +193,7 @@ const kept = computed<Measurement[]>(() => { void state.value; return sheet.valu
 
     <!-- Measure -->
     <template v-else-if="sheet === 'measure'">
-      <div class="sh"><h2>{{ t('small.measure') }}</h2></div>
+      <div class="sh"><h2>{{ t('small.measure') }}</h2><button class="tb" type="button" :aria-label="t('small.close')" data-bb="small-close" @click="sheet = null"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
       <p v-if="pressed('measure')" class="quiet">{{ t('small.measureOn') }}</p>
       <div v-for="m in kept" :key="m.id" class="kv"><span class="mono">{{ m.label }}</span></div>
       <p v-if="!kept.length && !pressed('measure')" class="quiet">{{ t('small.noMeasure') }}</p>
@@ -198,7 +202,7 @@ const kept = computed<Measurement[]>(() => { void state.value; return sheet.valu
 
     <!-- More -->
     <template v-else>
-      <div class="sh"><h2>{{ t('small.more') }}</h2><button class="tb" type="button" :aria-label="t('small.close')" @click="sheet = null"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+      <div class="sh"><h2>{{ t('small.more') }}</h2><button class="tb" type="button" :aria-label="t('small.close')" data-bb="small-close" @click="sheet = null"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
       <div class="sech">{{ t('small.file') }}</div>
       <div class="pills">
         <button class="pill" :class="{ p: on('save') }" type="button" :disabled="!on('save')" data-bb="small-save" @click="run('save')">{{ t('small.save') }}</button>
@@ -221,11 +225,11 @@ const kept = computed<Measurement[]>(() => { void state.value; return sheet.valu
 
 <style scoped>
 /* .ph .sheet{position:absolute;left:0;right:0;bottom:0;background:#F5F2EB;border-top:1px solid #5C574D;border-radius:16px 16px 0 0;padding:6px 16px 14px;display:flex;flex-direction:column;gap:10px} */
-.sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; max-height: 62%; overflow-y: auto; background: var(--bb-cream); border-top: 1px solid var(--bb-stone); border-radius: 16px 16px 0 0; padding: 6px 16px 14px; display: flex; flex-direction: column; gap: 10px; font-size: 15px; }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; max-height: 78%; overscroll-behavior: contain; touch-action: pan-y; overflow-y: auto; background: var(--bb-cream); border-top: 1px solid var(--bb-stone); border-radius: 16px 16px 0 0; padding: 6px 16px 14px; display: flex; flex-direction: column; gap: 10px; font-size: 15px; }
 /* fr/PhoneProps.html: the properties sheet covers the view (style="top:64px" from the window's top). */
 .sheet.tall { top: 12px; max-height: none; }
 /* fr/PhoneLandscape.html aside: width:286px;flex:none;border-left:1px solid #5C574D;background:#F5F2EB;padding:8px 14px */
-.sheet.side { position: static; flex: none; width: 320px; max-height: none; border-top: 0; border-left: 1px solid var(--bb-stone); border-radius: 0; padding: 8px 14px; gap: 6px; }
+.sheet.side { position: static; padding-right: calc(14px + env(safe-area-inset-right)); flex: none; width: 320px; max-height: none; border-top: 0; border-left: 1px solid var(--bb-stone); border-radius: 0; padding: 8px 14px; gap: 6px; }
 .sheet.side.narrow { width: 286px; }
 /* .ph .grab{width:40px;height:4px;border-radius:999px;background:#5C574D;align-self:center;margin:4px 0 2px;flex:none} */
 .grab { width: 40px; height: 4px; border-radius: var(--bb-radius-pill); background: var(--bb-stone); align-self: center; margin: 4px 0 2px; flex: none; }
