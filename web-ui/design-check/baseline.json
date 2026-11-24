@@ -30,27 +30,27 @@
   },
   "A3": {
     "fr": {
-      "boxes": 12,
-      "styles": 24,
+      "boxes": 10,
+      "styles": 12,
       "own_boxes": 2,
-      "own_styles": 6
+      "own_styles": 0
     },
     "en": {
-      "boxes": 12,
-      "styles": 24,
+      "boxes": 10,
+      "styles": 12,
       "own_boxes": 2,
-      "own_styles": 6
+      "own_styles": 0
     }
   },
   "A4": {
     "fr": {
-      "boxes": 13,
+      "boxes": 11,
       "styles": 20,
       "own_boxes": 1,
       "own_styles": 8
     },
     "en": {
-      "boxes": 17,
+      "boxes": 15,
       "styles": 12,
       "own_boxes": 5,
       "own_styles": 0
@@ -86,13 +86,13 @@
   },
   "A7": {
     "fr": {
-      "boxes": 28,
+      "boxes": 27,
       "styles": 39,
       "own_boxes": 1,
       "own_styles": 0
     },
     "en": {
-      "boxes": 28,
+      "boxes": 27,
       "styles": 39,
       "own_boxes": 1,
       "own_styles": 0

@@ -1,5 +1,6 @@
 // Copy for Levels and grids (A7, wireframes v01 LevelsGrids.html; ADR 0056).
 export const fr = {
+  "page.levels-grids": "Niveaux et quadrillages",
   "levelsgrids.title": "Niveaux et quadrillages",
   "levelsgrids.levels": "Niveaux",
   "levelsgrids.grids": "Quadrillages",
@@ -24,6 +25,7 @@ export const fr = {
   "levelsgrids.side.ifc": "Classe IFC",
 };
 export const en: Record<keyof typeof fr, string> = {
+  "page.levels-grids": "Levels and grids",
   "levelsgrids.title": "Levels and grids",
   "levelsgrids.levels": "Levels",
   "levelsgrids.grids": "Grids",

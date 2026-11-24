@@ -1,5 +1,6 @@
 // Copy for the Project information page (A3). Keys are added here only (one file per ticket).
 export const fr = {
+  "page.project-info": "Informations sur le projet",
   "projectinfo.basic": "Données de base",
   "projectinfo.basicNote": "Saisies une fois, utilisées par tous les cartouches. Une valeur est enregistrée en quittant le champ.",
   "projectinfo.project_number": "Numéro de projet",
@@ -32,6 +33,7 @@ export const fr = {
   "projectinfo.side.keyNote": "Une clé entre accolades, par ex. {client}, écrit la valeur dans un cartouche.",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
+  "page.project-info": "Project information",
   "projectinfo.basic": "Basic data",
   "projectinfo.basicNote": "Entered once, used by every title block. A value is saved when you leave its field.",
   "projectinfo.project_number": "Project number",

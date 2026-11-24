@@ -25,7 +25,7 @@ const tabs = computed(() => {
   });
 });
 // An open page is the current tab: its name is the i18n key `page.<id>` from the page's own part (the id when it has none).
-const pageName = (id: string) => { try { return t(`page.${id}` as never); } catch { return id; } };
+const pageName = (id: string) => { const s = t(`page.${id}` as never); return s === `page.${id}` ? id : s; };
 const paper = computed(() => openViews.value.paper);
 // The switch is one action: click the side that is not on.
 const picture = (onPaper: boolean) => { if (onPaper !== paper.value.on) runAction("paper_view"); };
