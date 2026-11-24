@@ -27,7 +27,6 @@ mod big;
 // The native server (exp2) is not wired yet: on the desktop only tests call it.
 #[cfg(target_arch = "wasm32")]
 mod bridge;
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod calls;
 mod collab;
 mod coords;
@@ -5081,6 +5080,7 @@ impl eframe::App for Viewer {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.twin.is_some() {
+            self.sync_tabs(); // as the wasm block above: "tab" in change_json stays fresh
             let json = self.change_json();
             if let Some(t) = self.twin.as_mut() {
                 t.publish(json);

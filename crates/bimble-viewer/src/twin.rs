@@ -25,6 +25,8 @@ struct ServerSide {
     tx: Sender<(Request, Reply)>,
     ctx: egui::Context,
     change: Change,
+    /// Random per process: seq starts again at 0 when the twin restarts (ADR 0066 dev loop).
+    epoch: String,
 }
 
 fn lock(c: &Change) -> MutexGuard<'_, (u64, String)> {
@@ -46,6 +48,11 @@ impl Handler for ServerSide {
     fn wait_change(&self, since: u64, timeout: Duration) -> (u64, String) {
         let (_, cv) = &*self.change;
         let guard = lock(&self.change);
+        // since > seq: the client counted another process (a restarted twin). Answer at once
+        // with the current change and the epoch, so it resets rather than waits.
+        if since > guard.0 {
+            return (guard.0, guard.1.clone());
+        }
         let (guard, _) = cv
             .wait_timeout_while(guard, timeout, |(seq, _)| *seq <= since)
             .unwrap_or_else(|e| e.into_inner());
@@ -54,6 +61,10 @@ impl Handler for ServerSide {
         } else {
             (guard.0, "null".to_string())
         }
+    }
+
+    fn epoch(&self) -> Option<&str> {
+        Some(&self.epoch)
     }
 }
 
@@ -94,6 +105,7 @@ fn start(ctx: &egui::Context, note: &str) -> Option<Twin> {
         tx,
         ctx: ctx.clone(),
         change: change.clone(),
+        epoch: random_token(),
     };
     let cfg = serve::Config {
         port,
@@ -214,6 +226,7 @@ pub(crate) fn run_headless(
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         }
+        app.sync_tabs(); // as wasm does before `bridge::notify`: the "tab" field stays fresh
         twin.publish(app.change_json());
     }
 }

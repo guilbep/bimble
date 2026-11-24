@@ -304,11 +304,21 @@ function nativeClient(port: number, token: string): Wasm & { standards_action(na
 /** Long-poll loop for the native client; never rejects, retries every 1 s on error. */
 async function pollChanges(base: string, t: string, cb: (json: string) => void): Promise<void> {
   let since = 0;
+  let epoch: string | undefined;
   for (;;) {
     try {
       const r = await fetch(`${base}/change?since=${since}&t=${t}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const m = (await r.json()) as { seq: number; change: unknown };
+      const m = (await r.json()) as { epoch?: string; seq: number; change: unknown };
+      // A new epoch is a restarted twin: its seq began again, so ask for its current change.
+      if (typeof m.epoch === "string" && m.epoch !== epoch) {
+        const restarted = epoch !== undefined;
+        epoch = m.epoch;
+        if (restarted) {
+          since = 0;
+          continue;
+        }
+      }
       if (typeof m.seq === "number") since = m.seq;
       if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change));
     } catch (e) {

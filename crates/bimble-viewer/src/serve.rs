@@ -28,6 +28,11 @@ pub(crate) trait Handler: Send + Sync + 'static {
     fn call(&self, req: Request) -> Result<String, String>;
     /// Long-poll: block until seq > since or timeout; return (seq, change JSON or "null").
     fn wait_change(&self, since: u64, timeout: Duration) -> (u64, String);
+    /// A per-process id sent with each change: a client that sees it change (the server
+    /// restarted, seq began again) resets `since` to 0. None: the field is left out.
+    fn epoch(&self) -> Option<&str> {
+        None
+    }
 }
 
 pub(crate) struct Config {
@@ -226,7 +231,10 @@ fn serve_connection(stream: TcpStream, port: u16, cfg: &Config, h: &dyn Handler)
                 return respond(&mut out, 400, &acao, TEXT, "bad since", false);
             };
             let (seq, change) = h.wait_change(since, POLL_TIMEOUT);
-            let json = format!("{{\"seq\":{seq},\"change\":{change}}}");
+            let json = match h.epoch() {
+                Some(e) => format!("{{\"epoch\":\"{e}\",\"seq\":{seq},\"change\":{change}}}"),
+                None => format!("{{\"seq\":{seq},\"change\":{change}}}"),
+            };
             respond(&mut out, 200, &acao, "application/json", &json, keep)?;
         } else if head.method == "POST" {
             let mut segs = path.trim_start_matches('/').split('/');

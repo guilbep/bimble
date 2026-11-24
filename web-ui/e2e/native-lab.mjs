@@ -11,6 +11,10 @@
 //   (e2) query/history has undo.length >= 1;  (e3) GET /change says "unsaved": true;
 // then undo() from the page (bimble.ts, over the sync XHR transport):
 //   (u1) origin x is back;  (u2) history.undo is one shorter;  (u3) "unsaved" is false (reported if not).
+// Restart phase (ADR 0066: each rebuild restarts the twin): an in-page recorder watches the lab's
+// `state` (bimble.ts, what on_change updates); the twin is killed and a new one started on the same
+// port, token and file; a `select` of the first IfcSlab is sent from Node over HTTP:
+//   (r1) the page's state.selection shows that slab within 5 s (the change feed recovered).
 // Screenshot: /tmp/native-lab.png. Exit 0 and PASS when all hold; 1 otherwise. Kills all it starts.
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -112,7 +116,7 @@ async function main() {
   const env = { ...process.env, BIMBLE_SERVE: String(PORT), BIMBLE_TOKEN: TOKEN, BIMBLE_HEADLESS: "1" };
   delete env.WAYLAND_DISPLAY;
   delete env.DISPLAY;
-  const twin = start("twin", BIN, ["view", file], { env });
+  let twin = start("twin", BIN, ["view", file], { env });
   await waitFor("twin 'listening'", 20000, () => twin.out.includes("listening") || (twin.exitCode !== null && Promise.reject(new Error(twin.out))));
 
   // Before the edit: the first IfcBeam and its origin x, from Node over HTTP.
@@ -244,6 +248,36 @@ async function main() {
   const errorsAfter = consoleLog.filter((m) => /error/.test(m.level) && !IGNORED.some((r) => r.test(m.text)));
   if (errorsAfter.length > errors.length) failures.push(`(a) console errors after the edit phase:\n    ${errorsAfter.slice(errors.length).map((m) => m.text).join("\n    ")}`);
   if (exceptions.length) failures.push(`(a) uncaught exceptions (edit phase):\n    ${exceptions.join("\n    ")}`);
+
+  // Restart phase.
+  await evalJs(`(async () => {
+    const b = await import('/src/bimble.ts');
+    window.__seen = [];
+    let last = '';
+    setInterval(() => {
+      const j = JSON.stringify(b.state.value.selection);
+      if (j !== last) { last = j; window.__seen.push(b.state.value.selection); }
+    }, 20);
+  })()`);
+  const slabs = await q("elements", { class: "IfcSlab" });
+  const slabId = slabs[0]?.id;
+  if (!slabId) throw new Error(`no IfcSlab: ${JSON.stringify(slabs).slice(0, 200)}`);
+  process.kill(-twin.pid, "SIGKILL");
+  await waitFor("old twin exit", 5000, () => twin.exitCode !== null || twin.signalCode !== null);
+  twin = start("twin2", BIN, ["view", file], { env });
+  await waitFor("new twin 'listening'", 20000, () => twin.out.includes("listening") || (twin.exitCode !== null && Promise.reject(new Error(twin.out))));
+  const tr = Date.now();
+  await waitFor("new twin answers", 5000, async () => (await q("elements", { class: "IfcSlab" })).length > 0);
+  const sr = await fetch(`${TWIN}/select/-?t=${TOKEN}`, { method: "POST", body: JSON.stringify([slabId]) });
+  if (!sr.ok) failures.push(`(r1) POST /select/-: ${sr.status} ${await sr.text()}`);
+  try {
+    await waitFor("page sees the slab selected", 5000, () =>
+      evalJs(`(window.__seen || []).some((s) => s.includes(${JSON.stringify(slabId)}))`));
+    console.log(`(r1) change feed recovered after restart in ${Date.now() - tr} ms`);
+  } catch (e) {
+    const seen = await evalJs("JSON.stringify(window.__seen)");
+    failures.push(`(r1) ${e.message}; page saw selections ${seen}`);
+  }
 
   console.log(`screenshot: ${SHOT}`);
   cdp.close();
