@@ -68,7 +68,7 @@ impl Viewer {
             Ok(r) => Ok(r),
             Err(RepoError::NoRepo(_)) => {
                 bimble_core::file::save(&ed.model, &l.path).map_err(|e| e.to_string())?;
-                ed.dirty = false;
+                ed.mark_saved();
                 let r = Repo::init(&l.path).map_err(|e| e.to_string())?;
                 r.commit(&ed.model, "Start", &author, bimble_core::date::now_secs())
                     .map_err(|e| e.to_string())?;
@@ -94,11 +94,11 @@ impl Viewer {
             return "Working together is for .bimble models.".into();
         };
         // On file first: the history starts from what is saved.
-        if ed.dirty {
+        if ed.dirty() {
             if let Err(e) = bimble_core::file::save(&ed.model, &l.path) {
                 return e.to_string();
             }
-            ed.dirty = false;
+            ed.mark_saved();
         }
         let now = bimble_core::date::now_secs();
         let msg = match remote::join(&dir, &l.path, &ed.model, &who, now) {
@@ -123,8 +123,10 @@ impl Viewer {
                 ed.history = bimble_core::History::default();
                 ed.form = None;
                 if let Err(e) = bimble_core::file::save(&ed.model, &l.path) {
+                    ed.mark_unsaved();
                     return e.to_string();
                 }
+                ed.mark_saved();
                 self.rebuild_scene(None);
                 format!("Now the shared model, from {}.{backup}", dir.display())
             }
@@ -163,11 +165,11 @@ impl Viewer {
             return String::new();
         };
         // Everything on file and in the history first: synchronize works on commits.
-        if ed.dirty {
+        if ed.dirty() {
             if let Err(e) = bimble_core::file::save(&ed.model, &l.path) {
                 return e.to_string();
             }
-            ed.dirty = false;
+            ed.mark_saved();
         }
         // Open, never create (an unmounted share must not become a new, empty history).
         let shared = match Repo::open_dir(&dir) {
@@ -183,6 +185,12 @@ impl Viewer {
                     b.mine.clear();
                 }
                 let saved = bimble_core::file::save(&ed.model, &l.path);
+                // The new history's empty state is on disk only if the write succeeded.
+                if saved.is_ok() {
+                    ed.mark_saved();
+                } else {
+                    ed.mark_unsaved();
+                }
                 self.rebuild_scene(None);
                 // Nothing borrowed now: borrow from here on as who Settings says.
                 self.start_borrowing();

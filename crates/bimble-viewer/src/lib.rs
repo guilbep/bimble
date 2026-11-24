@@ -1847,7 +1847,7 @@ impl Viewer {
         };
         match r {
             Ok(()) => {
-                ed.dirty = false;
+                ed.mark_saved();
                 ed.message = Some(format!("Saved {}", l.path.display()));
             }
             Err(e) => ed.message = Some(format!("{}: {e}", l.path.display())),
@@ -1930,7 +1930,7 @@ impl Viewer {
                 )
                 .clicked()
             {
-                let saved = if ed.dirty {
+                let saved = if ed.dirty() {
                     bimble_core::file::save(&ed.model, &l.path).map_err(|e| e.to_string())
                 } else {
                     Ok(())
@@ -1942,7 +1942,7 @@ impl Viewer {
                             .map_err(|e| e.to_string())
                     }) {
                         Ok(h) => {
-                            ed.dirty = false;
+                            ed.mark_saved();
                             ed.commit_message.clear();
                             format!("Committed {}", &h[..12])
                         }
@@ -1974,7 +1974,7 @@ impl Viewer {
                 .clicked()
             {
                 // Save first, so the file and the history agree.
-                let saved = if ed.dirty {
+                let saved = if ed.dirty() {
                     bimble_core::file::save(&ed.model, &l.path).map_err(|e| e.to_string())
                 } else {
                     Ok(())
@@ -1986,7 +1986,7 @@ impl Viewer {
                             .map_err(|e| e.to_string())
                     }) {
                         Ok(h) => {
-                            ed.dirty = false;
+                            ed.mark_saved();
                             ed.commit_message.clear();
                             format!("Committed {}", &h[..12])
                         }
@@ -2085,9 +2085,13 @@ impl Viewer {
             ed.model = m;
             ed.history = bimble_core::History::default();
             ed.form = None;
+            // The new history's empty state is on disk only if the write succeeds.
             match bimble_core::file::save(&ed.model, &l.path) {
-                Ok(()) => ed.dirty = false,
-                Err(e) => ed.message = Some(e.to_string()),
+                Ok(()) => ed.mark_saved(),
+                Err(e) => {
+                    ed.mark_unsaved();
+                    ed.message = Some(e.to_string());
+                }
             }
             self.rebuild_scene(None);
             refresh = true;
@@ -3778,7 +3782,7 @@ impl Viewer {
             sync_due: self.sync_due(),
             measurements: self.dimensions.len(),
             plan_options_changed: self.plan.template != self.template_baseline,
-            model_dirty: ed.is_some_and(|e| e.dirty),
+            model_dirty: ed.is_some_and(|e| e.dirty()),
             views_dirty: self.side_views_dirty(),
             standards_changed: self.opts.style != self.style_baseline,
             partial: self.loaded.as_ref().and_then(|l| l.partial.clone()),

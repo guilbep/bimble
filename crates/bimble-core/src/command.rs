@@ -476,9 +476,11 @@ fn describe_group(cmds: &[Command], m: &Model) -> String {
 }
 
 /// One step of the history: what it did, in words, and the commands that take it back (or
-/// forward again).
+/// forward again). `id` names the state the step leads to; it lives only in memory (neither
+/// `Step` nor `History` is serialized), so it never touches stored data or hashes.
 #[derive(Debug)]
 struct Step {
+    id: u64,
     label: String,
     cmds: Vec<Command>,
 }
@@ -489,6 +491,8 @@ struct Step {
 pub struct History {
     undo: Vec<Step>,
     redo: Vec<Step>,
+    /// The last step id handed out; ids are never reused within one history.
+    next: u64,
 }
 
 impl History {
@@ -509,12 +513,21 @@ impl History {
             }
         }
         inverses.reverse();
+        self.next += 1;
         self.undo.push(Step {
+            id: self.next,
             label,
             cmds: inverses,
         });
         self.redo.clear();
         Ok(())
+    }
+
+    /// Names the current state: the id of the step on top of the undo stack, 0 when it is empty.
+    /// Undo and Redo bring back the same id; a new edit always gets a fresh one. Use it as a
+    /// save point.
+    pub fn revision(&self) -> u64 {
+        self.undo.last().map_or(0, |s| s.id)
     }
 
     /// What Undo would take back, in words; None when there is nothing to undo.
@@ -556,6 +569,7 @@ impl History {
             .collect();
         inv.reverse();
         to.push(Step {
+            id: step.id,
             label: step.label,
             cmds: inv,
         });
@@ -622,6 +636,33 @@ mod describe_tests {
             h.undo_label(),
             Some(format!("delete {} and 2 more changes", names[0]).as_str())
         );
+    }
+
+    /// The revision names the state: Undo and Redo bring the same id back, a new edit after an
+    /// undo gets a fresh one, and an empty undo stack is 0.
+    #[test]
+    fn revision_follows_undo_and_redo() {
+        let mut m = concrete_frame(&FrameSpec::default());
+        let mut h = History::default();
+        assert_eq!(h.revision(), 0);
+        let id = *m.elements.keys().next().unwrap();
+        let rename = |n: &str| vec![Command::Rename { id, name: n.into() }];
+        h.apply(&mut m, rename("A")).unwrap();
+        let a = h.revision();
+        assert_ne!(a, 0);
+        assert!(h.undo(&mut m));
+        assert_eq!(h.revision(), 0);
+        assert!(h.redo(&mut m));
+        assert_eq!(h.revision(), a, "redo brings the same id back");
+        h.apply(&mut m, rename("B")).unwrap();
+        let b = h.revision();
+        assert_ne!(b, a);
+        assert!(h.undo(&mut m));
+        assert_eq!(h.revision(), a);
+        h.apply(&mut m, rename("C")).unwrap();
+        let c = h.revision();
+        assert!(c != a && c != b, "a new edit never reuses an old id");
+        assert!(!h.redo(&mut m), "a new edit drops the redo stack");
     }
 
     /// The whole undo and redo lists, newest first: three renames, one undone.
