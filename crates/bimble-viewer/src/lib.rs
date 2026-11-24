@@ -45,6 +45,8 @@ mod project_page;
 mod ribbon;
 mod schedules;
 mod section;
+#[cfg(not(target_arch = "wasm32"))]
+mod serve;
 mod settings;
 mod share;
 mod snap;
