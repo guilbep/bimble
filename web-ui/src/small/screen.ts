@@ -34,6 +34,12 @@ export function unzoom(): void {
   undoing = true;
   const old = meta.content;
   meta.content = `${old}, maximum-scale=1`;
+  // The new rule applies when a frame is drawn; an idle view draws none, so ask for one with a style
+  // change (and go back to the top left, where the frame starts).
+  // 1 px of padding on <body>, which the fixed frame covers: Chrome reads the rule only after a
+  // change of layout (a class with 0.01 px did nothing; e2e/small.mjs checks it).
+  document.body.style.paddingBottom = document.body.style.paddingBottom ? "" : "1px";
+  window.scrollTo(0, 0);
   window.setTimeout(() => { meta.content = old; undoing = false; zoom.value = { ...zoom.value, undone: zoom.value.undone + 1 }; }, 300);
 }
 vv?.addEventListener("resize", unzoom);
