@@ -2,8 +2,10 @@
  * mesh_from_tris (local) or Scene::from_model + MeshBuilder::build (scene), and
  * crease_edges_with_normals. No malloc: static arrays, capped at SLAB_MAX_PTS outline points. */
 #include "slab.h"
+#ifndef __wasm__
 #include <math.h>
 #include <string.h>
+#endif
 
 typedef double Tri[3][3];
 
