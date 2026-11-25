@@ -139,21 +139,9 @@ const step = {
     if (!c) return ["select <first IfcColumn>", { status: -1, body: "no element" }];
     return [`select ["${c.id}"]`, await call("select", "-", JSON.stringify([c.id]))];
   },
-  /** A new sheet, shown: Rust's `action new_sheet` (an undoable "add the sheet", then the sheet opens). Where
-   * the host refuses it (the C core), the same by hand: verb add_sheet, then tab activate on the new sheet. */
-  sheet: () => async (log) => {
-    const r = await call("action", "new_sheet");
-    if (r.status === 200) return ["action new_sheet", r];
-    log.push(["action new_sheet", r]);
-    const ids = async () => (parse((await call("query", "sheets")).body) ?? []).map((x) => x.id);
-    const before = await ids();
-    const vb = JSON.stringify({ number: "S-102", name: "New sheet" });
-    log.push([`verb add_sheet ${vb}`, await call("verb", "add_sheet", vb)]);
-    const id = (await ids()).find((x) => !before.includes(x));
-    if (!id) return ["tab activate <the new sheet>", { status: -1, body: "no new sheet" }];
-    const b = JSON.stringify({ op: "activate", tab: { type: "sheet", id } });
-    return [`tab ${b}`, await call("tab", "-", b)];
-  },
+  /** A new sheet, shown: `action new_sheet` (an undoable "add the sheet", then the sheet is shown), on both
+   * sides (the C core since FAKE1). */
+  sheet: () => async () => ["action new_sheet", await call("action", "new_sheet")],
   move: () => async () => {
     const els = parse((await call("query", "elements")).body);
     const c = Array.isArray(els) ? els.find((e) => e.class === "IfcColumn") : null;

@@ -342,8 +342,9 @@ static void session_calls(const char *floats, const char *gdir) {
     Buf ans;
     buf_init(&ans);
     snprintf(body, sizeof body, "{\"path\":\"%s/fixtures/r12.dxf\"}", gdir);
+    /* FAKE1: ribbon.rs:595 `loaded && flat`: refused by the enable rule now (was the 2D views text) */
     check_true("link_dxf in the 3D view: refused", call(s, "action", "link_dxf", body, &ans) == CC_ERR &&
-                                                      strstr(buf_cstr(&ans), "2D views"));
+                                                      strstr(buf_cstr(&ans), "not enabled"));
     call(s, "query", "open_views", "", &ans);
     const char *k = strstr(buf_cstr(&ans), "\"auto_name\":{\"kind\":\"plan\"");
     const char *idp = k ? strstr(k, "\"id\":\"") : NULL;

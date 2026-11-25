@@ -234,7 +234,7 @@ try {
   check("model: query storeys = golden/query.txt first record", sto.status === 200 && sto.body === goldenAnswer("storeys"), sto.body);
   const en = async () => (await mq("actions")).filter((a) => a.enabled).map((a) => a.name).sort().join(",");
   const en0 = await en();
-  check("model: enabled actions, nothing to undo or save", en0 === "edges,export_ifc2x3,export_ifc4,fit,hatching,home,import_ifc,link_dxf,link_model,link_pdf,manage_links,measure,new,open,orthographic,place_beam,place_column,place_slab,place_wall,reveal_hidden,section_box,share_for_viewing,top", en0); // edges, fit, hatching, orthographic, top: ticket Q2 (ribbon.rs:591, :612; the 3D view, not flat); share_for_viewing: ticket A5c (ribbon.rs:575); reveal_hidden, section_box: ticket B3 (ribbon.rs:592, :596); link_model, manage_links: ticket B5 (ribbon.rs:596, :611); measure: ticket T1 (ribbon.rs:612 `_ => loaded`); link_pdf: ticket L1 (an editable model); link_dxf: ticket L2 (the same)
+  check("model: enabled actions, nothing to undo or save", en0 === "edges,export_ifc2x3,export_ifc4,fit,hatching,history,home,import_ifc,link_model,manage_links,measure,new,new_sheet,open,orthographic,place_beam,place_column,place_slab,place_wall,project,reveal_hidden,section_box,share_for_viewing,top", en0); // edges, fit, hatching, orthographic, top: ticket Q2 (ribbon.rs:591, :612; the 3D view, not flat); share_for_viewing: ticket A5c (ribbon.rs:575); reveal_hidden, section_box: ticket B3 (ribbon.rs:592, :596); link_model, manage_links: ticket B5 (ribbon.rs:596, :611); measure: ticket T1 (ribbon.rs:612 `_ => loaded`); FAKE1 (requirement change, Rust's rules): link_pdf, link_dxf off in the 3D view (ribbon.rs:595 `loaded && flat`); history (ribbon.rs:590 editable), project, new_sheet (ribbon.rs:611 `_ => loaded`) on
   const r0 = await rev();
   check("model: rev 1 after load (lib.rs:1679)", r0 === 1, String(r0));
 
@@ -289,7 +289,8 @@ try {
   const hu = await mq("history");
   check("model: history after undo", hu.redo[0] === "add P1", JSON.stringify(hu));
   const re = await mcall("action", "redo");
-  check("model: action redo -> back at the saved step (unsaved false)", re.status === 200 && (await mq("state")).unsaved === false, re.body);
+  // FAKE1 (requirement change): edit.rs:292-308, undo and redo set Rust's `dirty`: back at the saved step is still unsaved, Save on.
+  check("model: action redo -> back at the saved step, still unsaved (Rust's dirty)", re.status === 200 && (await mq("state")).unsaved === true && (await en()).includes("save"), re.body);
 
   // select and element.
   const bad = await mcall("select", "-", JSON.stringify(["0000000000000000000000"]));
@@ -326,6 +327,20 @@ try {
   const le = [];
   for (let i = 0; i < 200; i++) le.push((await mcall("query", "element", JSON.stringify({ id: col }))).ms);
   check("model: 200 verb place, all 200", lp.length === 200);
+
+  // ---- FAKE1: action new_sheet (ribbon.rs:745, layout.rs:185): one add_sheet step, the sheet shown, so
+  // close_sheet on (ribbon.rs:594 layout.is_some()); close_sheet off again; undo the sheet: not shown either.
+  const ns0 = (await mq("sheets")).length;
+  const ns = await mcall("action", "new_sheet");
+  const shs = await mq("sheets");
+  check("model: action new_sheet -> 200, one sheet more named \"New sheet\", close_sheet on",
+    ns.status === 200 && shs.length === ns0 + 1 && shs.some((x) => x.name === "New sheet") && (await en()).includes("close_sheet"), `${ns.body} ${JSON.stringify(shs)}`);
+  const cs = await mcall("action", "close_sheet");
+  check("model: action close_sheet -> 200, close_sheet off", cs.status === 200 && !(await en()).includes("close_sheet"), cs.body);
+  await mcall("action", "new_sheet");
+  await mcall("undo", "-");
+  check("model: the new sheet undone: close_sheet off (layout.rs:181)", !(await en()).includes("close_sheet"));
+  // ---- end FAKE1 ----
   console.log(`verb place latency over 200: p50 ${pct(lp, 0.5).toFixed(3)} ms, p95 ${pct(lp, 0.95).toFixed(3)} ms`);
   console.log(`query element latency over 200: p50 ${pct(le, 0.5).toFixed(3)} ms, p95 ${pct(le, 0.95).toFixed(3)} ms`);
 } catch (e) {

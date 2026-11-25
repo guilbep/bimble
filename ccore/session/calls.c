@@ -221,6 +221,7 @@ static void undo_redo(cc_session *s, int undo) {
         } else if (!undo && s->nredo_ids) {
             if (!push_id(&s->undo_ids, &s->nundo_ids, &s->cap_undo_ids, s->redo_ids[s->nredo_ids - 1])) s->nredo_ids--;
         }
+        s->saved_step = UINT64_MAX; /* FAKE1: edit.rs:292-308, undo and redo set `dirty`: unsaved until saved */
         rebuild(s);
     }
 }
@@ -560,12 +561,21 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
      * Edges, Hatching, Fit `_ => loaded`) ---- */
     if (!strcmp(name, "edges") || !strcmp(name, "hatching") || !strcmp(name, "fit")) return loaded(s);
     if (!strcmp(name, "orthographic") || !strcmp(name, "top")) return loaded(s) && !in_2d(s);
-    /* ---- L1: reference plans (links_ref.h): ribbon.rs `_ => loaded`; stored in a model's view ---- */
-    if (!strcmp(name, "link_pdf")) return s->open;
-    if (!strcmp(name, "link_dxf")) return s->open; /* L2: as link_pdf (links_ref.h) */
-    /* Visibility and the section box (ribbon.rs:592-611; the C core has only the 3D view: never flat). */
-    if (!strcmp(name, "section_box") || !strcmp(name, "reveal_hidden")) return loaded(s);
-    if (!strcmp(name, "box_to_selection")) return loaded(s) && s->vis.section_on;
+    /* ---- L1: reference plans (links_ref.h), stored in a model's view; L2: link_dxf the same.
+     * FAKE1: ribbon.rs:595 `REFERENCE_PLANS && loaded && flat`: a plan or a section shown (an IFC
+     * read as it is has no model view to keep it: not in the C core) ---- */
+    if (!strcmp(name, "link_pdf") || !strcmp(name, "link_dxf")) return s->open && in_2d(s);
+    /* Visibility and the section box (ribbon.rs:592-611). FAKE1: ribbon.rs:592-593 `!flat`. */
+    if (!strcmp(name, "reveal_hidden")) return loaded(s);
+    if (!strcmp(name, "section_box")) return loaded(s) && !in_2d(s);
+    if (!strcmp(name, "box_to_selection")) return loaded(s) && !in_2d(s) && s->vis.section_on;
+    /* ---- FAKE1: pages the lab serves and the sheet verbs. project: ribbon.rs:611 `_ => loaded`,
+     * history: ribbon.rs:590 editable(), new_sheet: ribbon.rs:611 `_ => loaded` (the C core
+     * answers the project query and stores sheets in an editable model only: a read-only IFC
+     * keeps them off), close_sheet: ribbon.rs:594 `layout.is_some()` ---- */
+    if (!strcmp(name, "project") || !strcmp(name, "history") || !strcmp(name, "new_sheet")) return s->open;
+    if (!strcmp(name, "close_sheet")) return loaded(s) && s->sheet_shown && cc_sheet_known(s, &s->sheet);
+    /* ---- end FAKE1 ---- */
     if (!strcmp(name, "clear_temporary")) return loaded(s) && s->vis.has_temp;
     if (!strcmp(name, "show_all_in_view")) return loaded(s) && cc_vis_hidden_in_view(&s->vis);
     if (!strcmp(name, "hide_now") || !strcmp(name, "isolate_now") || !strcmp(name, "hide_in_view") || !strcmp(name, "isolate_in_view"))
@@ -1375,6 +1385,23 @@ end:
     return rc;
 }
 
+/* ---- FAKE1: layout.rs:185 new_sheet: one add_sheet Command (verbs.c: the next number, "New
+ * sheet", A1 landscape), then the sheet is shown (layout.rs:94 open_sheet) ---- */
+static int new_sheet_action(cc_session *s, cc_buf *out) {
+    cc_cmds l;
+    cc_cmds_init(&l);
+    int rc = CC_ERR;
+    if (!cc_verb_run_ex(&s->model, "add_sheet", "{}", 2, 0, -1, s->rev, &l, out)) {
+        cc_gid id;
+        int has = l.n && l.v[0].op == CC_CMD_ADD_SHEET;
+        if (has) id = l.v[0].sheet.id;
+        rc = try_apply(s, l.v, l.n, out);
+        if (rc == CC_OK && has) s->sheet = id, s->sheet_shown = 1;
+    }
+    cc_cmds_free(&l);
+    return rc;
+}
+
 /* Actions the C core runs that the ribbon does not list (above). */
 static const char *const HIDDEN_ACTIONS[] = {"save_as", "close"};
 
@@ -1411,6 +1438,12 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     if (!strcmp(name, "hatching")) return s->hatching = !s->hatching, CC_OK;
     if (!strcmp(name, "orthographic")) return s->orthographic = !s->orthographic, CC_OK;
     if (!strcmp(name, "fit") || !strcmp(name, "top")) return CC_OK;
+    /* ---- FAKE1: ribbon.rs:745-746 new_sheet (layout.rs:185: add_sheet with the next number,
+     * "New sheet", then shown), close_sheet (layout.rs:124); project, history: the page opens ---- */
+    if (!strcmp(name, "new_sheet")) return new_sheet_action(s, out);
+    if (!strcmp(name, "close_sheet")) return s->sheet_shown = 0, CC_OK;
+    if (!strcmp(name, "project") || !strcmp(name, "history")) return CC_OK;
+    /* ---- end FAKE1 ---- */
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return link_action(s, name, body, n, out);
     /* ---- L1: link_pdf, one set_view / add_view Command (links_ref.h); L2: link_dxf the same way ---- */
     if (!strcmp(name, "link_pdf") || !strcmp(name, "link_dxf")) {
@@ -1622,8 +1655,13 @@ static int call_tab(cc_session *s, const char *body, size_t n, cc_buf *out) {
         goto end;
     }
     if (!strcmp(tys, "sheet")) { /* ticket SH1 (sheets.h): the page opens on that sheet, no tab kept */
-        if (cc_sheet_known(s, &tid)) rc = CC_OK;
-        else buf_puts(out, "no such sheet");
+        if (cc_sheet_known(s, &tid)) {
+            rc = CC_OK;
+            /* ---- FAKE1: layout.rs:94 open_sheet, :124 close_sheet ---- */
+            if (!close) s->sheet = tid, s->sheet_shown = 1;
+            else if (s->sheet_shown && !cc_gid_cmp(&s->sheet, &tid)) s->sheet_shown = 0;
+            /* ---- end FAKE1 ---- */
+        } else buf_puts(out, "no such sheet");
         goto end;
     }
     /* calls.rs:220-232 (views.h): any view of open_views opens; activate an open tab only. */
@@ -1655,7 +1693,7 @@ static int call_tab(cc_session *s, const char *body, size_t n, cc_buf *out) {
         goto end;
     }
     if (close) cc_sv_close(s, is_view && loaded(s), &tid); /* ribbon.rs:1484 tab_verb */
-    else cc_sv_go(s, &tid);
+    else cc_sv_go(s, &tid), s->sheet_shown = 0; /* FAKE1: viewing.rs:86, a view shown closes the sheet */
     rc = CC_OK;
 end:
     arena_free(&a);

@@ -241,8 +241,9 @@ static void session(void) {
     cc_session *s = cc_session_new(cc_platform_native());
     expect("link_pdf: nothing open", s, "action", "link_pdf", "{\"path\": \"" G "/fixtures/lines.pdf\"}", CC_ERR, "not enabled");
     expect("open the frame", s, "action", "open", "{\"path\": \"golden/frame.json\", \"discard\": true}", CC_OK, NULL);
+    /* FAKE1: ribbon.rs:595 `loaded && flat`: refused by the enable rule now (was the 2D views text) */
     expect("link_pdf: the 3D view is active", s, "action", "link_pdf", "{\"path\": \"" G "/fixtures/lines.pdf\"}", CC_ERR,
-           "2D views");
+           "not enabled");
     /* the ground plan: the first floor plan of open_views (view.rs effective: 3D, then floor
      * plans by elevation) */
     int st;

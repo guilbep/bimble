@@ -117,6 +117,11 @@ typedef struct cc_session {
     int edges, hatching, orthographic;
     int recent[5];
     int nrecent;
+    /* ---- FAKE1: the sheet shown (layout.rs `layout`: open_sheet, close_sheet), session state;
+     * shown only while it is still a sheet of the open model (layout.rs:181) ---- */
+    int sheet_shown;
+    cc_gid sheet;
+    /* ---- end FAKE1 ---- */
 } cc_session;
 
 /* A new session with no model, on `pf` (kept by pointer). NULL when out of memory. */

@@ -124,8 +124,17 @@ try {
   const enabled = async () => Object.fromEntries((await q("actions")).filter((a) => /link/.test(a.name)).map((a) => [a.name, a.enabled]));
   const en0 = await enabled();
   check("link_model and manage_links enabled with a model (ribbon.rs `loaded`)", en0.link_model === true && en0.manage_links === true, JSON.stringify(en0));
-  // link_pdf: ticket L1 (session/links_ref.h), link_dxf: ticket L2, both enabled with an editable model (ribbon.rs `_ => loaded`).
-  check("link_dxf and link_pdf on with an editable model (tickets L1, L2)", en0.link_dxf === true && en0.link_pdf === true, JSON.stringify(en0));
+  // link_pdf: ticket L1 (session/links_ref.h), link_dxf: ticket L2. FAKE1 (requirement change): Rust's rule, ribbon.rs:595
+  // `REFERENCE_PLANS && loaded && flat`: off in the 3D view, on in a plan of an editable model.
+  check("link_dxf and link_pdf off in the 3D view (ribbon.rs:595)", en0.link_dxf === false && en0.link_pdf === false, JSON.stringify(en0));
+  {
+    const ov = await q("open_views");
+    const plan = ov.views.find((v) => v.type === "plan" || v.auto_name?.kind === "plan");
+    await call("tab", "-", JSON.stringify({ op: "open", tab: { type: "view", id: plan.id } }));
+    const en1 = await enabled();
+    check("link_dxf and link_pdf on in a plan of an editable model (ribbon.rs:595)", en1.link_dxf === true && en1.link_pdf === true, JSON.stringify(en1));
+    await call("tab", "-", JSON.stringify({ op: "open", tab: { type: "view", id: ov.views[0].id } }));
+  }
   const m0 = await mesh();
   const c0 = await change();
   check("no link: /mesh is the single-model BMSH, no trailer", m0.status === 200 && m0.bytes.length === bmshSize(m0.bytes, 0), `${m0.bytes.length} bytes`);
