@@ -41,6 +41,9 @@
 #include "palette.h"   /* Q2 */
 #include "capabilities.h" /* FAKE1 */
 #include "settings_file.h" /* FS1 */
+#include "fmt.h"     /* SEC1: fmt_f64_json */
+#include "georef.h"  /* SEC1: cc_georef_plan_turn */
+#include "ifc_math.h" /* SEC1: cc_sin, cc_cos */
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -193,6 +196,7 @@ static void rebuild(cc_session *s) {
     s->rev++;
     if (s->has_primary && !cc_model_element(&s->model, &s->primary)) s->has_primary = 0;
     s->nalso = 0;
+    cc_sv_vis_load(s); /* ---- SEC1 ---- the view's hides, as the edit, undo or redo left them */
 }
 
 /* lib.rs:1725 `try_apply` through edit.rs:233 `Editor::apply` (no commands: no step, but the
@@ -737,6 +741,67 @@ static void plan_box(const cc_scene *sc, const cc_view *v, const double z[4], cc
     if (hi == hi && hi > -1e300 && hi < 1e300 && (float)(hi - o) < box->max[2]) box->max[2] = (float)(hi - o);
 }
 
+/* ---- SEC1 ---- views.rs view_clip for a section: the scene's bounds in the section's frame
+ * (turned by plan_turn: project north, `yaw`), cut at the section's line, as deep as its depth
+ * (0: to the bounds) along its look, then its crop (along the cut, and up). `dir`: the look
+ * direction, world x y, turned (View::facing_dir). The box is in the turned frame; yaw 0: scene
+ * coordinates. */
+static void sec1_rot(const double p[2], double a, double out[2]) { /* viewdraw.rs rotate */
+    if (a == 0.0) {
+        out[0] = p[0], out[1] = p[1];
+        return;
+    }
+    double sn = cc_sin(a), cs = cc_cos(a);
+    out[0] = cs * p[0] - sn * p[1], out[1] = sn * p[0] + cs * p[1];
+}
+static void sec1_section_box(cc_session *s, const cc_scene *sc, const cc_view *v, cc_vis *box, double dir[2], double *yaw) {
+    box->reveal = 1; /* ClipBox::around(scene, |_| true) */
+    cc_vis_fit(box, sc, NULL);
+    box->reveal = 0;
+    double a = s->open ? cc_georef_plan_turn(&s->model.georef, v->true_north) : 0.0;
+    *yaw = (double)(float)a;
+    static const double D[4][2] = {{0, 1}, {0, -1}, {1, 0}, {-1, 0}}; /* cc_facing: north, south, east, west */
+    const double *d = D[v->facing];
+    sec1_rot(d, a, dir);
+    if (!box->has_box) return;
+    float ya = (float)a;
+    if (ya != 0.0f) { /* the scene's corners in the turned frame */
+        float lo[2] = {1e30f, 1e30f}, hi[2] = {-1e30f, -1e30f};
+        for (int i = 0; i < 4; i++) {
+            double c[2] = {(i & 1) ? box->max[0] : box->min[0], (i & 2) ? box->max[1] : box->min[1]}, q[2];
+            sec1_rot(c, -(double)ya, q);
+            for (int k = 0; k < 2; k++) {
+                if ((float)q[k] < lo[k]) lo[k] = (float)q[k];
+                if ((float)q[k] > hi[k]) hi[k] = (float)q[k];
+            }
+        }
+        for (int k = 0; k < 2; k++) box->min[k] = lo[k], box->max[k] = hi[k];
+    }
+    int k = d[0] != 0.0 ? 0 : 1;
+    double sg = d[0] != 0.0 ? d[0] : d[1];
+    double o[2] = {v->origin[0] - sc->origin[0], v->origin[1] - sc->origin[1]}, at[2];
+    o[0] = (double)(float)o[0], o[1] = (double)(float)o[1];
+    sec1_rot(o, -(double)ya, at);
+    float cut = (float)at[k], inf = 1e30f * 1e30f;
+    float far = v->depth_mm > 0.0 ? cut + (float)sg * (float)v->depth_mm : sg > 0 ? inf : -inf;
+    float lo = sg > 0 ? cut : far, hi = sg > 0 ? far : cut;
+    if (lo > box->min[k]) box->min[k] = lo;
+    if (hi < box->max[k]) box->max[k] = hi;
+    if (v->has_crop) { /* along the cut: the axis the section's right lies on; up: the height */
+        double r[2] = {d[1], -d[0]}, rt[2]; /* section_right of the unturned facing */
+        sec1_rot(r, a, rt);
+        double t0 = rt[0] * sc->origin[0] + rt[1] * sc->origin[1], t1 = sc->origin[2]; /* Turn::apply(o) */
+        double l0 = v->crop_min[0] - t0, l1 = v->crop_min[1] - t1, h0 = v->crop_max[0] - t0, h1 = v->crop_max[1] - t1;
+        int kk = r[0] != 0.0 ? 0 : 1;
+        float lo2 = r[kk] > 0 ? (float)l0 : -(float)h0, hi2 = r[kk] > 0 ? (float)h0 : -(float)l0;
+        if (lo2 > box->min[kk]) box->min[kk] = lo2;
+        if (hi2 < box->max[kk]) box->max[kk] = hi2;
+        if ((float)l1 > box->min[2]) box->min[2] = (float)l1;
+        if ((float)h1 < box->max[2]) box->max[2] = (float)h1;
+    }
+}
+/* ---- end SEC1 ---- */
+
 /* A C addition (views.h, ticket C1): what the viewport draws for the active view.
  *   {"id", "type": "three_d"|"plan"|"section", "look": "down"|"up"|null, "storey": its id or null,
  *    "elevation": the storey's (world mm) or null, "cut": the cut plane (world mm) or null,
@@ -768,6 +833,12 @@ static int q_view_clip(cc_session *s, JsonW *w) {
     cc_vis box;
     cc_vis_init(&box);
     if (plan && sc) plan_box(sc, &v, z, &box);
+    /* ---- SEC1 ---- a section's box (views.rs view_clip), its look and turn */
+    int sec = v.kind == CC_VIEW_SECTION && sc;
+    double dir[2] = {0.0, 0.0}, yaw = 0.0;
+    if (sec) sec1_section_box(s, sc, &v, &box, dir, &yaw);
+    plan = plan || sec;
+    /* ---- end SEC1 ---- */
     if (plan && box.has_box) {
         jw_obj_begin(w);
         jw_key(w, "max"), jw_arr_begin(w);
@@ -782,19 +853,26 @@ static int q_view_clip(cc_session *s, JsonW *w) {
     }
     cc_vis_free(&box);
     jw_key(w, "cut");
-    if (plan) jw_f64(w, z[CC_RANGE_CUT]);
+    if (plan && !sec) jw_f64(w, z[CC_RANGE_CUT]);
     else jw_null(w);
+    if (sec) { /* ---- SEC1 ---- */
+        jw_key(w, "depth_mm"), jw_f64(w, v.depth_mm);
+        jw_key(w, "dir"), jw_arr_begin(w), jw_f64(w, dir[0]), jw_f64(w, dir[1]), jw_arr_end(w);
+    }
     jw_key(w, "elevation");
     if (st) jw_f64(w, elev);
     else jw_null(w);
+    if (sec) jw_key(w, "facing"), jw_str(w, cc_facing_name(v.facing)); /* SEC1 */
     jw_key(w, "id"), jw_str_n(w, v.id.c, 22);
     jw_key(w, "look");
     if (v.kind == CC_VIEW_PLAN) jw_str(w, cc_look_name(v.look));
     else jw_null(w);
+    if (sec) jw_key(w, "origin"), jw_arr_begin(w), jw_f64(w, v.origin[0]), jw_f64(w, v.origin[1]), jw_arr_end(w); /* SEC1 */
     jw_key(w, "storey");
     if (v.kind == CC_VIEW_PLAN) jw_str_n(w, v.storey.p, v.storey.n);
     else jw_null(w);
     jw_key(w, "type"), jw_str(w, cc_view_kind_name(v.kind));
+    if (sec) jw_key(w, "yaw"), jw_f64(w, yaw); /* SEC1 */
     jw_obj_end(w);
     arena_free(&a);
     return done(w);
@@ -1001,6 +1079,30 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     }
     if (!strcmp(name, "open_views")) return q_open_views(s, &w);
     if (!strcmp(name, "view_clip")) return q_view_clip(s, &w);
+    if (!strcmp(name, "view_visibility")) { /* ---- SEC1 ---- the active view's lists (views.h), or null */
+        Arena va;
+        arena_init(&va, 0);
+        cc_view vv;
+        int r = loaded(s) && s->tab_open ? cc_sv_active(s, &va, &vv) : 0;
+        if (r == 1) {
+            static const char *const K[] = {"hidden_classes", "hidden_elements", "hidden_families", "hidden_links",
+                                            "hidden_materials", "hidden_storeys", "isolated_elements"};
+            const cc_strs *L[] = {&vv.visibility.hidden_classes, &vv.visibility.hidden_elements, &vv.visibility.hidden_families,
+                                  &vv.visibility.hidden_links, &vv.visibility.hidden_materials, &vv.visibility.hidden_storeys,
+                                  &vv.visibility.isolated_elements};
+            jw_obj_begin(&w);
+            jw_key(&w, "id"), jw_str_n(&w, vv.id.c, 22);
+            for (int k = 0; k < 7; k++) {
+                jw_key(&w, K[k]), jw_arr_begin(&w);
+                for (size_t i = 0; i < L[k]->n; i++) jw_str_n(&w, L[k]->v[i].p, L[k]->v[i].n);
+                jw_arr_end(&w);
+            }
+            jw_obj_end(&w);
+        } else jw_null(&w);
+        arena_free(&va);
+        if (r < 0) w.b->oom = 1;
+        return done(&w);
+    } /* ---- end SEC1 ---- */
     if (!strcmp(name, "grid_axes")) { /* S1: the grid axes and levels of what is open and its links (views.h) */
         cc_sv_grid_axes_json(s, &w);
         return done(&w);
@@ -1336,6 +1438,44 @@ static cc_gid *selection_ids(const cc_session *s, size_t *n) {
     return v;
 }
 
+/* ---- SEC1 ---- viewing.rs save_visibility / show_all_in_view: the "in view" sets stored in the
+ * active view (verb view_edit, one undo step; nothing changed: no step), read back by rebuild. A
+ * read-only scene (or the viewer build) keeps them in the session. `all`: every list cleared. */
+static int try_apply(cc_session *s, const cc_command *cmds, size_t n, cc_buf *out);
+static int sec1_store_vis(cc_session *s, int all, cc_buf *out) {
+#ifdef CC_VIEW_ONLY
+    (void)s, (void)all, (void)out;
+    return 0;
+#else
+    if (!s->open || !s->has_active) return 0;
+    Buf args;
+    buf_init(&args);
+    buf_puts(&args, "{\"id\":\"");
+    buf_append(&args, s->active.c, 22);
+    buf_puts(&args, "\",\"visibility\":{");
+    const cc_gidset *set[2] = {&s->vis.hidden, &s->vis.isolated};
+    static const char *const K[2] = {"hidden_elements", "isolated_elements"};
+    for (int k = 0; k < 2; k++) {
+        buf_puts(&args, k ? ",\"" : "\""), buf_puts(&args, K[k]), buf_puts(&args, "\":[");
+        for (size_t i = 0; i < set[k]->n; i++)
+            buf_puts(&args, i ? ",\"" : "\""), buf_append(&args, set[k]->v[i].c, 22), buf_putc(&args, '"');
+        buf_putc(&args, ']');
+    }
+    if (all) buf_puts(&args, ",\"hidden_families\":[],\"hidden_classes\":[],\"hidden_storeys\":[],\"hidden_links\":[],\"hidden_materials\":[]");
+    buf_puts(&args, "}}");
+    cc_cmds l;
+    cc_cmds_init(&l);
+    int rc = args.oom ? (buf_puts(out, "out of memory"), CC_ERR)
+             : cc_verb_run(&s->model, "view_edit", args.p, args.len, &l, out) ? CC_ERR
+             : l.n ? try_apply(s, l.v, l.n, out) : CC_OK;
+    cc_cmds_free(&l);
+    buf_free(&args);
+    if (rc != CC_OK) cc_sv_vis_load(s); /* refused: the view's sets again */
+    return rc == CC_OK ? 0 : -1;
+#endif
+}
+/* ---- end SEC1 ---- */
+
 /* ribbon.rs:708-775: the section box and visibility actions. 0 ok (or not one of them), -1 with
  * the error in `out` (out of memory). Session state only: no history step, rev unchanged. */
 static int vis_action(cc_session *s, const char *name, cc_buf *out) {
@@ -1345,8 +1485,10 @@ static int vis_action(cc_session *s, const char *name, cc_buf *out) {
     else if (!strcmp(name, "box_to_selection")) cc_vis_fit(v, scene_now(s), primary);
     else if (!strcmp(name, "reveal_hidden")) v->reveal = !v->reveal;
     else if (!strcmp(name, "clear_temporary")) cc_vis_clear_temporary(v);
-    else if (!strcmp(name, "show_all_in_view")) cc_vis_show_all_in_view(v);
-    else {
+    else if (!strcmp(name, "show_all_in_view")) {
+        cc_vis_show_all_in_view(v);
+        if (sec1_store_vis(s, 1, out)) return -1; /* SEC1: viewing.rs:490, stored with the view */
+    } else {
         static const char *const HIDE[] = {"hide_now", "isolate_now", "hide_in_view", "isolate_in_view", "unhide"};
         int a = -1;
         for (int i = 0; i < 5; i++)
@@ -1360,6 +1502,7 @@ static int vis_action(cc_session *s, const char *name, cc_buf *out) {
             buf_puts(out, "out of memory");
             return -1;
         }
+        if (n && a >= CC_VIS_HIDE_IN_VIEW && sec1_store_vis(s, 0, out)) return -1; /* SEC1 */
         if (n && !v->reveal) s->has_primary = 0, s->nalso = 0; /* visibility.rs:106 clear_selection */
     }
     return 0;
@@ -1818,6 +1961,48 @@ static void jr_write(cc_buf *b, const JrVal *v) {
 /* calls.rs:524-534 call_verb, plus ADR 0068 rule 3 (see calls.h "verb"): the body is the verb's
  * arguments; an object body may also carry the top-level keys "dry_run" (bool) and "if_rev"
  * (a non-negative integer), taken out before the verb reads its arguments. */
+/* ---- SEC1 ---- see call_verb: `*argp` gets an "origin" when it is a section's view_add without
+ * one (a copy in `a`). 0 ok (or nothing to add), -1 with the error in `out`. */
+static int sec1_section_origin(cc_session *s, Arena *a, const char **argp, size_t *argn, cc_buf *out) {
+    JrError je;
+    const JrVal *v = jr_parse(a, *argp, *argn, &je);
+    if (!v || v->type != JR_OBJ || jr_get(v, "origin") || jr_get(v, "from")) return 0;
+    const JrVal *k = jr_get(v, "kind");
+    if (!k || k->type != JR_STR || k->n != 7 || memcmp(k->s, "section", 7)) return 0;
+    const cc_scene *sc = scene_now(s);
+    double c[2] = {0.0, 0.0};
+    if (sc) {
+        cc_vis box;
+        cc_vis_init(&box);
+        box.reveal = 1; /* ClipBox::around(scene, |_| true): every element */
+        cc_vis_fit(&box, sc, NULL);
+        for (int i = 0; i < 2; i++) {
+            float m = box.has_box ? (box.min[i] + box.max[i]) / 2.0f : 0.0f;
+            double w = (double)m + sc->origin[i];
+            double r = (double)(int64_t)w; /* f64::round, half away from zero */
+            if (w - r >= 0.5) r += 1.0;
+            else if (w - r <= -0.5) r -= 1.0;
+            c[i] = r + 0.0;
+        }
+        cc_vis_free(&box);
+    }
+    Buf b;
+    buf_init(&b);
+    buf_append(&b, *argp, *argn);
+    while (b.len && b.p[b.len - 1] != '}') b.len--;
+    if (b.len) b.len--; /* before the closing brace */
+    buf_puts(&b, v->n ? ",\"origin\":[" : "\"origin\":[");
+    fmt_f64_json(&b, c[0]), buf_putc(&b, ','), fmt_f64_json(&b, c[1]);
+    buf_puts(&b, "]}");
+    char *p = b.oom ? NULL : arena_dup(a, b.p, b.len);
+    size_t n = b.len;
+    buf_free(&b);
+    if (!p) return buf_puts(out, "out of memory"), -1;
+    *argp = p, *argn = n;
+    return 0;
+}
+/* ---- end SEC1 ---- */
+
 static int call_verb(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     int blank = 1; /* args_json.trim().is_empty(): null */
     for (size_t i = 0; i < n; i++)
@@ -1883,6 +2068,10 @@ static int call_verb(cc_session *s, const char *name, const char *body, size_t n
         buf_puts(out, READ_ONLY);
         goto done;
     }
+    /* ---- SEC1 ---- view_add of a section without `origin`: views.rs new_section's, the middle
+     * of the scene's bounds (ClipBox::around, f32), world mm rounded. */
+    if (!strcmp(name, "view_add") && argn && sec1_section_origin(s, &a, &argp, &argn, out)) goto done;
+    /* ---- end SEC1 ---- */
     {
         cc_cmds l;
         cc_cmds_init(&l);

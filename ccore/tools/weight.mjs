@@ -38,7 +38,7 @@ const FEATURES = [
   ["IFC import (IFC -> model)", "ifc_in"],
   ["IFC export (model -> IFC)", "ifc_out ifc_out_grid"],
   [".bimble file (read, write, view files)", "file viewfile"],
-  ["verbs (edits by name, verb table)", "verbs verb_table"],
+  ["verbs (edits by name, verb table)", "verbs verb_table verbs_views"],
   ["relations", "relation"],
   ["levels and grids", "grid verbs_levels"],
   ["georef", "georef"],

@@ -45,6 +45,11 @@ typedef struct {
     double drag_t0;
     float drag_min[3], drag_max[3]; /* the box when the drag started */
     float prev_min[3], prev_max[3]; /* the box the drag shows now (committed on release) */
+    /* ---- SEC1 ---- the active view's other lists (families, classes, storeys, materials, links:
+     * views.h cc_sv_vis_load): the elements they hide, and how many entries they have. */
+    cc_gidset by_view;
+    size_t view_lists;
+    /* ---- end SEC1 ---- */
 } cc_vis;
 
 void cc_vis_init(cc_vis *v);
@@ -73,7 +78,7 @@ void cc_vis_toggle(cc_vis *v, const cc_scene *sc, const cc_gid *primary);
 /* `query visibility` (calls.rs:442-460), keys sorted. `origin` NULL: null. */
 void cc_vis_json(const cc_vis *v, JsonW *w, const double *origin);
 /* {"isolate":…} etc.: a C addition for the page, the whole sets (query visibility caps them at
- * 50): {"hidden_in_view":[…],"isolated_in_view":[…],"now":null|{"ids":[…],"isolate":b},"reveal":b}. */
+ * 50): {"by_view":[…] (SEC1: hidden by the view's class, family, storey, material lists),"hidden_in_view":[…],"isolated_in_view":[…],"now":null|{"ids":[…],"isolate":b},"reveal":b}. */
 void cc_vis_sets_json(const cc_vis *v, JsonW *w);
 
 /* The box tool (op tool, names box_press, box_move, box_release, box_cancel, box_set; calls.h).

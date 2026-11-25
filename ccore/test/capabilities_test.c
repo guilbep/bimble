@@ -78,7 +78,7 @@ int main(void) {
     for (const char *const *k = (const char *const[]){"about", "collaboration", "export_pdf", "export_svg", "export_view", "georef", "grids",
                                                       "history", "lca", "levels", "materials", "paper_view", "phases", "plan_annotations",
                                                       "project_info", "quantities", "recent_files", "references", "schedules", "settings",
-                                                      "sheets", "standards", "subprojects", "user", "users", "versions", NULL};
+                                                      "sheets", "standards", "subprojects", "user", "users", "versions", "views", NULL};
          *k; k++) {
         char what[96];
         snprintf(what, sizeof what, "row %s present", *k);
@@ -86,6 +86,7 @@ int main(void) {
     }
     /* The native build: the full core and a file system. */
     check_true("native: quantities, export_pdf, versions true", cap(c0, "quantities") == 1 && cap(c0, "export_pdf") == 1 && cap(c0, "versions") == 1);
+    check_true("SEC1: views true (view_add, view_remove, view_edit)", cap(c0, "views") == 1);
     check_true("G2's pages: levels, grids, georef true", cap(c0, "levels") == 1 && cap(c0, "grids") == 1 && cap(c0, "georef") == 1);
 
     cc_error err;

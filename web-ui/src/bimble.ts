@@ -1091,6 +1091,29 @@ export interface ViewClip {
 }
 export const viewClip = (): ViewClip | null => tryQuery<ViewClip | null>("view_clip", null);
 
+// ---- SEC1 ---- views made, changed and removed by verb (ccore/src/verbs_views.h), a section's
+// frame in `view_clip` (ccore/session/calls.c q_view_clip), what the active view hides.
+/** A section's extra fields in `view_clip`: its look (world x, y, turned), facing, cut line point
+ *  (world mm), depth (0: all) and turn (project north, radians). */
+export interface SectionClip extends ViewClip { dir?: number[]; facing?: string; origin?: number[]; depth_mm?: number; yaw?: number }
+export type ViewAdd = { kind?: "plan" | "ceiling" | "section" | "three_d"; storey?: string; facing?: string; origin?: number[]; from?: string; name?: string };
+/** `view_add`, then the new view's id (the one `open_views` did not list before), or the error. */
+export function viewAdd(args: ViewAdd): { id: string | null; error: string | null } {
+  const ids = (v: unknown) => new Set(((v as { views?: { id: string }[] }).views ?? []).map((x) => x.id));
+  const before = ids(tryQuery<unknown>("open_views", {}));
+  const error = runVerb("view_add", args);
+  if (error) return { id: null, error };
+  const after = [...ids(tryQuery<unknown>("open_views", {}))].filter((id) => !before.has(id));
+  return { id: after[0] ?? null, error: null };
+}
+export type ViewVisibility = { id: string; hidden_classes: string[]; hidden_elements: string[]; hidden_families: string[]; hidden_links: string[]; hidden_materials: string[]; hidden_storeys: string[]; isolated_elements: string[] };
+export type ViewEdit = { name?: string; origin?: number[]; facing?: string; depth_mm?: number; levels?: Record<string, string>; visibility?: Partial<Omit<ViewVisibility, "id">> };
+export const viewEdit = (id: string, patch: ViewEdit) => runVerb("view_edit", { id, ...patch });
+export const viewRemove = (id: string) => runVerb("view_remove", { id });
+/** What the active view hides (`query view_visibility`, C core only); null without a view. */
+export const viewVisibility = (): ViewVisibility | null => tryQuery<ViewVisibility | null>("view_visibility", null);
+// ---- end SEC1 ----
+
 /** Run one API verb as one undoable step. Returns the Rust error, or null. */
 export function runVerb(name: string, args: unknown = {}): string | null {
   const ro = linkedReadOnly(args);

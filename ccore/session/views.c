@@ -9,6 +9,9 @@
 #include "view_io.h"
 #include "view_range.h"
 #include "views.h"
+#ifndef CC_VIEW_ONLY
+#include "draw_style.h" /* SEC1: cc_category_label, the family names a view hides */
+#endif
 
 static int loaded(const struct cc_session *s) { return s->open || s->view; }
 
@@ -79,6 +82,7 @@ void cc_sv_loaded(struct cc_session *s) {
     s->has_active = 1;
     s->tab_open = 1; /* the 3D view is shown on load */
     tabs_push(s, &s->active); /* out of memory: sync adds it again */
+    cc_sv_vis_load(s); /* SEC1: what the 3D view hides, if it is stored */
 }
 
 int cc_sv_sync(struct cc_session *s) {
@@ -136,6 +140,7 @@ void cc_sv_go(struct cc_session *s, const cc_gid *id) {
         if (cc_model_storey(&s->model, &sid)) s->has_storey = 1, s->storey = sid;
     }
     arena_free(&a);
+    cc_sv_vis_load(s); /* SEC1: viewing.rs:378 apply_visibility (out of memory: nothing hidden more) */
 }
 
 void cc_sv_close(struct cc_session *s, int is_view, const cc_gid *id) {
@@ -329,3 +334,61 @@ void cc_sv_grid_axes_json(struct cc_session *s, JsonW *w) {
     jw_arr_end(w);
     jw_obj_end(w);
 }
+
+/* ---- SEC1: what the active view hides (views.h cc_sv_vis_load) ---- */
+
+static int strs_has(const cc_strs *l, const char *p, size_t n) {
+    for (size_t i = 0; i < l->n; i++)
+        if (l->v[i].n == n && (!n || !memcmp(l->v[i].p, p, n))) return 1;
+    return 0;
+}
+
+static int gids_of(cc_gidset *set, const cc_strs *l) {
+    set->n = 0;
+    for (size_t i = 0; i < l->n; i++) {
+        if (l->v[i].n != 22 || !cc_gid_valid(l->v[i].p, 22)) continue;
+        cc_gid g;
+        memcpy(g.c, l->v[i].p, 22);
+        if (cc_gidset_add(set, &g)) return -1;
+    }
+    return 0;
+}
+
+int cc_sv_vis_load(struct cc_session *s) {
+    if (!s->open) return 0; /* a read-only scene: "in view" stays session-wide (no stored views in C) */
+    cc_vis *vis = &s->vis;
+    Arena a;
+    arena_init(&a, 0);
+    cc_view v;
+    int r = cc_sv_active(s, &a, &v), rc = 0;
+    if (r < 0) return arena_free(&a), -1;
+    vis->by_view.n = 0, vis->view_lists = 0;
+    if (!r) {
+        vis->hidden.n = vis->isolated.n = 0;
+        return arena_free(&a), 0;
+    }
+    const cc_visibility *w = &v.visibility;
+    rc = gids_of(&vis->hidden, &w->hidden_elements) || gids_of(&vis->isolated, &w->isolated_elements) ? -1 : 0;
+    vis->view_lists = w->hidden_families.n + w->hidden_classes.n + w->hidden_storeys.n + w->hidden_materials.n +
+                      w->hidden_links.n;
+    const cc_scene *sc = vis->view_lists ? cc_session_scene(s) : NULL;
+    for (size_t k = 0; !rc && sc && k < sc->nelements; k++) { /* viewdraw::Shown, lib.rs `visible` */
+        const cc_scene_element *e = &sc->elements[k];
+        int hide = strs_has(&w->hidden_classes, e->class_name.p, e->class_name.n);
+#ifndef CC_VIEW_ONLY
+        const char *fam = cc_category_label(e->category);
+        hide = hide || strs_has(&w->hidden_families, fam, strlen(fam));
+#endif
+        if (!hide && e->model_index < s->model.nelements) {
+            const cc_element *me = &s->model.elements[e->model_index];
+            const cc_storey *st = cc_model_storey(&s->model, &me->storey);
+            const cc_material *mt = cc_model_material(&s->model, &me->material);
+            hide = (st && strs_has(&w->hidden_storeys, st->name.p, st->name.n)) ||
+                   strs_has(&w->hidden_materials, mt ? mt->name.p : "", mt ? mt->name.n : 0);
+        }
+        if (hide) rc = cc_gidset_add(&vis->by_view, &e->id);
+    }
+    arena_free(&a);
+    return rc;
+}
+/* ---- end SEC1 ---- */

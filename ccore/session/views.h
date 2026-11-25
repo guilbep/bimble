@@ -15,7 +15,11 @@
  *     (scene.rs levels: key the file's GlobalId text, the name when there is none). A read-only
  *     scene's views are the defaults only (derived, never stored: no side views file in C).
  * Deviations:
- *   - "in view" hides stay session-wide (visibility.h): a view's stored visibility is not applied.
+ *   - (SEC1) "in view" hides are the active view's, as Rust (viewing.rs apply_visibility,
+ *     save_visibility): cc_sv_vis_load reads them on a view change and after every edit, undo and
+ *     redo; hide_in_view, isolate_in_view, unhide and show_all_in_view store them in the view
+ *     (verb view_edit, one undo step). A read-only scene keeps them session-wide (no side views
+ *     file in C).
  *   - Home: closing the last tab leaves no current tab (`tab_open` 0) until a view is opened.
  *   - only view tabs open: project, materials, schedule and sheet tabs are never open.
  *   - the camera is the page's (glviewport.ts): no camera remembered per view in C. */
@@ -70,6 +74,11 @@ void cc_sv_summary_json(JsonW *w, const cc_level *lv, size_t nl, const cc_view *
  * order: a read-only scene's as read (file order; levels lowest first, key as cc_sv_levels), a
  * model's from its grids (id order, axes in order) and storeys (id order). */
 void cc_sv_grid_axes_json(struct cc_session *s, JsonW *w);
+/* ---- SEC1 ---- viewing.rs apply_visibility: the session's "in view" sets (visibility.h hidden,
+ * isolated) become the active view's hidden_elements and isolated_elements, by_view the elements
+ * its class, family, storey and material lists hide. An editable model only. 0, -1 out of memory. */
+int cc_sv_vis_load(struct cc_session *s);
+/* ---- end SEC1 ---- */
 /* {"id","type"} of a view tab (ribbon.rs:406), keys sorted. */
 void cc_sv_tab_json(JsonW *w, const cc_gid *id);
 #endif

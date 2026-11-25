@@ -384,6 +384,67 @@ static const char SUMMARY_GEOREF_SET[] =
     "Set the model's georeference: project north, the survey system (LV95) and the map conversion; missing "
     "ones are kept (a C addition, ADR 0045).";
 int cc_vh_georef_set(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+/* ---- SEC1 ---- C additions of ticket SEC1: views, handlers in verbs_views.c. */
+static const char SCHEMA_VIEW_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `view_add`: a new view (kind), or a copy of one (from).\",\"properti"
+    "es\":{\"facing\":{\"description\":\"A section's look direction.\",\"enum\":[\"north\",\"east\","
+    "\"south\",\"west\",null],\"type\":[\"string\",\"null\"]},\"from\":{\"description\":\"GlobalId of"
+    " a view to duplicate (its copy is named \\\"<name> (copy)\\\").\",\"type\":[\"string\",\"null\"]"
+    "},\"kind\":{\"description\":\"plan, ceiling (a ceiling plan looking up), section or three_d.\","
+    "\"enum\":[\"plan\",\"ceiling\",\"section\",\"three_d\",null],\"type\":[\"string\",\"null\"]},\"n"
+    "ame\":{\"description\":\"The view's name; default: as Rust's viewer names a new view.\",\"type\""
+    ":[\"string\",\"null\"]},\"origin\":{\"description\":\"A section's cut: a point it goes through, "
+    "world mm [x, y]; default: the middle of the model.\",\"items\":{\"format\":\"double\",\"type\":"
+    "\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":[\"array\",\"null\"]},\"storey\":{\"descripti"
+    "on\":\"A plan's level: its GlobalId.\",\"type\":[\"string\",\"null\"]}},\"title\":\"ViewAddArgs"
+    "\",\"type\":\"object\"}";
+static const char SUMMARY_VIEW_ADD[] =
+    "Add a view: a plan, a ceiling plan, a section or a 3D view, named as Rust's viewer names it, or a copy of a view (a C addition).";
+static const char SCHEMA_VIEW_REMOVE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `view_remove`.\",\"properties\":{\"id\":{\"description\":\"GlobalId "
+    "of a stored view (a changed default view goes back to its default).\",\"type\":\"string\"}},\"re"
+    "quired\":[\"id\"],\"title\":\"ViewRemoveArgs\",\"type\":\"object\"}";
+static const char SUMMARY_VIEW_REMOVE[] =
+    "Delete a stored view; a changed default view goes back to its default (a C addition).";
+static const char SCHEMA_VIEW_EDIT[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `view_edit`: the fields to change, others kept.\",\"properties\":{\""
+    "depth_mm\":{\"description\":\"A section's depth beyond the cut, mm; 0: all.\",\"format\":\"doubl"
+    "e\",\"type\":[\"number\",\"null\"]},\"facing\":{\"description\":\"A section's look direction.\","
+    "\"enum\":[\"north\",\"east\",\"south\",\"west\",null],\"type\":[\"string\",\"null\"]},\"id\":{\""
+    "description\":\"GlobalId of the view (a default view is stored on its first change).\",\"type\":"
+    "\"string\"},\"levels\":{\"description\":\"A plan's view range: the level each plane refers to (o"
+    "ffsets: set_view).\",\"properties\":{\"bottom\":{\"description\":\"associated, above, below or u"
+    "nlimited.\",\"enum\":[\"associated\",\"above\",\"below\",\"unlimited\",null],\"type\":[\"string"
+    "\",\"null\"]},\"cut\":{\"description\":\"associated, above, below or unlimited.\",\"enum\":[\"as"
+    "sociated\",\"above\",\"below\",\"unlimited\",null],\"type\":[\"string\",\"null\"]},\"depth\":{\""
+    "description\":\"associated, above, below or unlimited.\",\"enum\":[\"associated\",\"above\",\"be"
+    "low\",\"unlimited\",null],\"type\":[\"string\",\"null\"]},\"top\":{\"description\":\"associated,"
+    " above, below or unlimited.\",\"enum\":[\"associated\",\"above\",\"below\",\"unlimited\",null],"
+    "\"type\":[\"string\",\"null\"]}},\"type\":[\"object\",\"null\"]},\"name\":{\"description\":\"The"
+    " new name, not blank.\",\"type\":[\"string\",\"null\"]},\"origin\":{\"description\":\"A section'"
+    "s cut point, world mm [x, y].\",\"items\":{\"format\":\"double\",\"type\":\"number\"},\"maxItems"
+    "\":2,\"minItems\":2,\"type\":[\"array\",\"null\"]},\"visibility\":{\"description\":\"What the vi"
+    "ew hides: each list given replaces the view's (sorted, unique).\",\"properties\":{\"hidden_class"
+    "es\":{\"description\":\"IFC classes, e.g. IfcSlab.\",\"items\":{\"type\":\"string\"},\"type\":["
+    "\"array\",\"null\"]},\"hidden_elements\":{\"description\":\"GlobalIds hidden in the view.\",\"it"
+    "ems\":{\"type\":\"string\"},\"type\":[\"array\",\"null\"]},\"hidden_families\":{\"description\":"
+    "\"Material families.\",\"items\":{\"type\":\"string\"},\"type\":[\"array\",\"null\"]},\"hidden_l"
+    "inks\":{\"description\":\"Linked models by name.\",\"items\":{\"type\":\"string\"},\"type\":[\"a"
+    "rray\",\"null\"]},\"hidden_materials\":{\"description\":\"Material names.\",\"items\":{\"type\":"
+    "\"string\"},\"type\":[\"array\",\"null\"]},\"hidden_storeys\":{\"description\":\"Storey names.\""
+    ",\"items\":{\"type\":\"string\"},\"type\":[\"array\",\"null\"]},\"isolated_elements\":{\"descrip"
+    "tion\":\"GlobalIds isolated in the view.\",\"items\":{\"type\":\"string\"},\"type\":[\"array\","
+    "\"null\"]}},\"type\":[\"object\",\"null\"]}},\"required\":[\"id\"],\"title\":\"ViewEditArgs\",\""
+    "type\":\"object\"}";
+static const char SUMMARY_VIEW_EDIT[] =
+    "Change a view's name, a section's cut (origin, facing, depth), a plan's range levels or what the view hides (a C addition).";
+int cc_vh_view_add(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_view_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_view_edit(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+/* ---- end SEC1 ---- */
 #define V(n, N) {#n, SUMMARY_##N, SCHEMA_##N, cc_vh_##n, 0}
 const cc_verb_def cc_verb_table[] = {
     V(place, PLACE),
@@ -419,6 +480,11 @@ const cc_verb_def cc_verb_c_additions[] = {
     V(sheet_unplace, SHEET_UNPLACE),
     V(sheet_remove, SHEET_REMOVE),
     V(georef_set, GEOREF_SET),
+    /* ---- SEC1 ---- */
+    V(view_add, VIEW_ADD),
+    V(view_remove, VIEW_REMOVE),
+    V(view_edit, VIEW_EDIT),
+    /* ---- end SEC1 ---- */
 };
 #undef V
 const size_t cc_verb_count = sizeof cc_verb_table / sizeof cc_verb_table[0];

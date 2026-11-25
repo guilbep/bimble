@@ -64,22 +64,25 @@ void cc_vis_init(cc_vis *v) {
 
 void cc_vis_free(cc_vis *v) {
     free(v->hidden.v), free(v->isolated.v), free(v->temp.v);
+    free(v->by_view.v); /* SEC1 */
     cc_vis_init(v);
 }
 
 void cc_vis_reset(cc_vis *v) {
     v->hidden.n = v->isolated.n = v->temp.n = 0;
+    v->by_view.n = 0, v->view_lists = 0; /* SEC1 */
     v->has_temp = v->temp_isolate = v->reveal = 0;
     v->section_on = v->has_box = 0;
     v->drag_face = -1;
 }
 
 int cc_vis_hidden(const cc_vis *v, const cc_gid *g) {
-    return cc_gidset_has(&v->hidden, g) || (v->isolated.n && !cc_gidset_has(&v->isolated, g)) ||
+    return cc_gidset_has(&v->hidden, g) || cc_gidset_has(&v->by_view, g) /* SEC1 */ ||
+           (v->isolated.n && !cc_gidset_has(&v->isolated, g)) ||
            (v->has_temp && cc_gidset_has(&v->temp, g) != v->temp_isolate);
 }
 
-int cc_vis_hidden_in_view(const cc_vis *v) { return v->hidden.n || v->isolated.n; }
+int cc_vis_hidden_in_view(const cc_vis *v) { return v->hidden.n || v->isolated.n || v->view_lists /* SEC1 */; }
 
 int cc_vis_hide_or_isolate(cc_vis *v, int a, const cc_gid *sel, size_t n) {
     if (!n) return 0;
@@ -289,6 +292,7 @@ static void ids(JsonW *w, const cc_gidset *s) {
 
 void cc_vis_sets_json(const cc_vis *v, JsonW *w) {
     jw_obj_begin(w);
+    jw_key(w, "by_view"), ids(w, &v->by_view); /* SEC1 */
     jw_key(w, "hidden_in_view"), ids(w, &v->hidden);
     jw_key(w, "isolated_in_view"), ids(w, &v->isolated);
     jw_key(w, "now");

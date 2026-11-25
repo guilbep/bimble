@@ -53,6 +53,7 @@ static const struct {
     {"user", NO},              /* query state: user null (SET1) */
     {"users", NO},
     {"versions", NATIVE},      /* versions.h: the history store next to the file (H1) */
+    {"views", FULL_BUILD},     /* SEC1: verbs view_add, view_remove, view_edit; sections shown live */
 };
 
 int cc_capabilities_json(const cc_session *s, Buf *out) {

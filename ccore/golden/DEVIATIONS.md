@@ -695,3 +695,31 @@ blocks), `web-ui/src/files.ts`; tests `ccore/test/fs_test.mjs`, `ccore/test/lab_
   all pages' glyphs), /Title is the first sheet's. One page is `cc_paper_pdf`'s file byte for byte
   (the `pdf_out` and `sheet_pdf` suites unchanged). The lab names it
   `<first number>-<last number>.pdf` (a C choice: Rust has no such file).
+
+## 21. View verbs, sections in the viewport, what a view hides (ticket SEC1, ADR 0021, 0046)
+
+- **Verbs `view_add`, `view_remove`, `view_edit`** (`src/verbs_views.h`): C additions. Rust has no
+  such verbs in `dispatch.rs`: its viewer makes the `View` (`views.rs new_plan`, `new_section`, the
+  3D view and Duplicate of `viewing.rs:781-840`) and stores it with `Command::AddView`, `SetView`,
+  `RemoveView` (`store_view`, `remove_view`). The verbs make the same `View`, named the same way, and
+  the same one command (one undo step); their transcript is our own golden (`golden/views/verbs.txt`,
+  `golden/views/model.json`, `test/verbs_views_test.c`). What is Rust's byte for byte: the model
+  Rust wrote with sections, a crop and a plan hiding `IfcSlab` (`golden/drawing/model.json`) is read
+  and written back unchanged, removing a view and undoing gives the same bytes, and `view_add` +
+  `view_edit` make Rust's "Section B-B" field for field (but its id).
+- **A section's `origin` when `view_add` gives none** is computed by the session (`calls.c`
+  `sec1_section_origin`): the middle of the scene's bounds, rounded, as `new_section`; the verb
+  itself needs it (a verb sees the model, not the scene).
+- **`view_edit` lists:** each list given replaces the view's, sorted and unique (Rust's form keeps
+  `BTreeSet`s, so its lists are sorted too). The view range's levels are `view_edit`'s; their
+  offsets stay Rust's `set_view`'s.
+- **`query view_clip` of a section** (C addition, ticket C1's query): the box Rust's `view_clip`
+  gives (scene bounds in the section's turned frame, cut at its line, as deep as its depth, cropped)
+  plus `dir`, `facing`, `origin`, `depth_mm`, `yaw` for the page's camera. `cut` stays a plan's (null).
+- **What a view hides is the view's** (Rust `apply_visibility`, `save_visibility`,
+  `show_all_in_view`): the session's "in view" sets are read from the active view on a view change
+  and after every edit, undo and redo; hide, isolate and unhide in view and Show all in view store
+  them with `view_edit` (one undo step; Rust: one `SetView`). The view's class, family, storey and
+  material lists hide their elements on screen (`visibility_sets` `by_view`, a C addition). Rust
+  also keeps them while the view is shown unsaved in a read-only IFC (its side file); the C core
+  has none, so a read-only scene keeps "in view" session-wide as before (DEVIATIONS 16).
