@@ -10,6 +10,8 @@ use std::time::Duration;
 
 type Reply = Sender<Result<String, String>>;
 type Change = Arc<(Mutex<(u64, String)>, Condvar)>;
+/// The last frame's RGBA8 bytes, handed from the UI thread to the server thread.
+type Frame = Arc<Mutex<Vec<u8>>>;
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 const ALLOWED_ORIGINS: [&str; 2] = ["http://localhost:5173", "http://127.0.0.1:5173"];
@@ -18,6 +20,7 @@ const ALLOWED_ORIGINS: [&str; 2] = ["http://localhost:5173", "http://127.0.0.1:5
 pub(crate) struct Twin {
     rx: Receiver<(Request, Reply)>,
     change: Change,
+    frame: Frame,
     last: Option<String>,
 }
 
@@ -25,6 +28,9 @@ struct ServerSide {
     tx: Sender<(Request, Reply)>,
     ctx: egui::Context,
     change: Change,
+    frame: Frame,
+    /// One frame at a time: the bytes in `frame` belong to the request holding this.
+    frame_guard: Mutex<()>,
     /// Random per process: seq starts again at 0 when the twin restarts (ADR 0066 dev loop).
     epoch: String,
 }
@@ -66,6 +72,17 @@ impl Handler for ServerSide {
     fn epoch(&self) -> Option<&str> {
         Some(&self.epoch)
     }
+
+    fn frame(&self, w: u32, h: u32) -> Result<(Vec<u8>, String), String> {
+        let _one = self.frame_guard.lock().unwrap_or_else(|e| e.into_inner());
+        let timing = self.call(Request {
+            op: "frame".into(),
+            name: "-".into(),
+            body: format!("{w},{h}"),
+        })?;
+        let bytes = std::mem::take(&mut *self.frame.lock().unwrap_or_else(|e| e.into_inner()));
+        Ok((bytes, timing))
+    }
 }
 
 fn random_token() -> String {
@@ -101,10 +118,13 @@ fn start(ctx: &egui::Context, note: &str) -> Option<Twin> {
         .unwrap_or_else(random_token);
     let (tx, rx) = channel();
     let change: Change = Arc::new((Mutex::new((0, "null".to_string())), Condvar::new()));
+    let frame: Frame = Arc::default();
     let side = ServerSide {
         tx,
         ctx: ctx.clone(),
         change: change.clone(),
+        frame: frame.clone(),
+        frame_guard: Mutex::new(()),
         epoch: random_token(),
     };
     let cfg = serve::Config {
@@ -118,6 +138,7 @@ fn start(ctx: &egui::Context, note: &str) -> Option<Twin> {
             Some(Twin {
                 rx,
                 change,
+                frame,
                 last: None,
             })
         }
@@ -169,10 +190,11 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
     }
 }
 
-/// The twin without a window: no eframe, no frames. A plain loop waits up to 50 ms for a
-/// request, finishes a pending load (`poll_loading`), serves the call and publishes the change.
-/// Edits rebuild the scene inside `call` (`try_apply`, `undo_redo`); GPU uploads are skipped
-/// because nothing is drawn.
+/// The twin without a window: no eframe. A plain loop waits up to 50 ms for a request,
+/// finishes a pending load (`poll_loading`), serves the call and publishes the change.
+/// Edits rebuild the scene inside `call` (`try_apply`, `undo_redo`). The view ops (`frame`,
+/// `orbit`, `pan`, `zoom`, viewport spike) are served here, not by `call`: `frame` draws the
+/// 3D view offscreen and reads it back, the GPU upload happening on the first frame.
 pub(crate) fn run_headless(
     file: Option<std::path::PathBuf>,
     style: crate::GraphicStyle,
@@ -212,6 +234,8 @@ pub(crate) fn run_headless(
     app.style_baseline = app.opts.style.clone();
     app.style_path = style_path;
     app.viewport_only = true;
+    // Every frame is the whole picture: no lean (simplified) picture while the camera moves.
+    app.settings.moving_fps = 0;
     if let Some(f) = file {
         app.open(f, &ctx);
     }
@@ -221,6 +245,10 @@ pub(crate) fn run_headless(
         app.poll_loading();
         match req {
             Ok((req, reply)) => {
+                if let Some(r) = view_op(&mut app, &twin.frame, &req) {
+                    let _ = reply.send(r);
+                    continue; // the change JSON has no camera: nothing to publish
+                }
                 let _ = reply.send(app.call(&ctx, &req.op, &req.name, &req.body));
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -229,4 +257,67 @@ pub(crate) fn run_headless(
         app.sync_tabs(); // as wasm does before `bridge::notify`: the "tab" field stays fresh
         twin.publish(app.change_json());
     }
+}
+
+/// The view ops of the headless twin; None for every other op (served by `Viewer::call`).
+fn view_op(
+    app: &mut crate::Viewer,
+    frame: &Frame,
+    req: &Request,
+) -> Option<Result<String, String>> {
+    let num = |v: &serde_json::Value, k: &str| -> Result<f32, String> {
+        v.get(k)
+            .and_then(serde_json::Value::as_f64)
+            .filter(|x| x.is_finite())
+            .map(|x| x as f32)
+            .ok_or_else(|| format!("{}: missing number {k:?}", req.op))
+    };
+    let json = || -> Result<serde_json::Value, String> {
+        serde_json::from_str(&req.body).map_err(|e| format!("{}: bad JSON: {e}", req.op))
+    };
+    let r = match req.op.as_str() {
+        "frame" => render_frame(app, frame, &req.body),
+        "orbit" => json().and_then(|v| {
+            app.camera
+                .orbit(num(&v, "dx")? * 0.008, num(&v, "dy")? * 0.008);
+            app.needs_render = true;
+            Ok(String::new())
+        }),
+        "pan" => json().and_then(|v| {
+            app.camera.pan(num(&v, "dx")?, num(&v, "dy")?);
+            app.needs_render = true;
+            Ok(String::new())
+        }),
+        "zoom" => json().and_then(|v| {
+            app.camera.zoom((-num(&v, "scroll")? * 0.0015).exp());
+            app.needs_render = true;
+            Ok(String::new())
+        }),
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// Draws the current 3D view at `w,h` px and puts its RGBA8 rows (top first, no padding) in
+/// `frame`. Replies with the timing: `render=<ms>;read=<ms>`.
+fn render_frame(app: &mut crate::Viewer, frame: &Frame, body: &str) -> Result<String, String> {
+    let size = body
+        .split_once(',')
+        .and_then(|(w, h)| Some((w.trim().parse::<u32>().ok()?, h.trim().parse::<u32>().ok()?)))
+        .filter(|&(w, h)| (1..=4096).contains(&w) && (1..=4096).contains(&h))
+        .ok_or_else(|| format!("frame: bad size {body:?}"))?;
+    if app.fit_pending {
+        app.fit(size.0 as f32 / size.1 as f32);
+        app.fit_pending = false;
+    }
+    let t0 = std::time::Instant::now();
+    app.render_view(size, 1.0);
+    let t1 = std::time::Instant::now();
+    let target = app.target.as_ref().ok_or("frame: no target")?;
+    let bytes = bimble_render::read_texture(&app.device, &app.queue, &target.color)
+        .map_err(|e| format!("frame: readback: {e}"))?;
+    let t2 = std::time::Instant::now();
+    *frame.lock().unwrap_or_else(|e| e.into_inner()) = bytes;
+    let ms = |a: std::time::Instant, b: std::time::Instant| (b - a).as_secs_f64() * 1e3;
+    Ok(format!("render={:.2};read={:.2}", ms(t0, t1), ms(t1, t2)))
 }

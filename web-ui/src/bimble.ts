@@ -330,6 +330,158 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
   }
 }
 
+interface ViewportSample {
+  latency_ms: number | null;
+  changed: boolean;
+  render_ms: number | null;
+  read_ms: number | null;
+  fetch_ms: number;
+  half: boolean;
+}
+interface ViewportStats {
+  frames: number;
+  samples: ViewportSample[];
+}
+declare global {
+  interface Window {
+    __bbViewport?: ViewportStats;
+  }
+}
+
+/** Spike (native mode only): draw RGBA frames streamed from the native twin into #bimble and send
+ *  orbit, pan and zoom back with async fetch. Returns a function that marks the view dirty. */
+function streamViewport(base: string, token: string): () => void {
+  const canvas = document.getElementById("bimble");
+  const ctx = canvas instanceof HTMLCanvasElement ? canvas.getContext("2d") : null;
+  if (!(canvas instanceof HTMLCanvasElement) || !ctx) return () => undefined;
+  const t = encodeURIComponent(token);
+  const stats: ViewportStats = { frames: 0, samples: [] };
+  window.__bbViewport = stats;
+  let dirty = true;
+  let inFlight = false;
+  let backoffUntil = 0;
+  let orbit = { dx: 0, dy: 0 };
+  let pan = { dx: 0, dy: 0 };
+  let scroll = 0;
+  let oldestInput: number | null = null;
+  let lastSum: number | null = null;
+  let drag: { pan: boolean; x: number; y: number } | null = null;
+  // T5: while the user drags (or wheeled in the last 150 ms), stream at half resolution.
+  let lastWheel = -Infinity;
+  let wheelTimer: ReturnType<typeof setTimeout> | null = null;
+  const offscreen = document.createElement("canvas");
+  const offCtx = offscreen.getContext("2d");
+  const interacting = () => drag !== null || performance.now() - lastWheel < 150;
+  const note = (ts: number) => { if (oldestInput === null) oldestInput = ts; };
+  const clamp = (v: number) => Math.min(4096, Math.max(16, Math.round(v)));
+  new ResizeObserver(() => {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = clamp(canvas.clientWidth * dpr);
+    canvas.height = clamp(canvas.clientHeight * dpr);
+    dirty = true;
+  }).observe(canvas);
+  canvas.addEventListener("pointerdown", (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    drag = { pan: e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey), x: e.clientX, y: e.clientY };
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dpr = window.devicePixelRatio || 1;
+    const dx = (e.clientX - drag.x) * dpr;
+    const dy = (e.clientY - drag.y) * dpr;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    if (dx === 0 && dy === 0) return;
+    const acc = drag.pan ? pan : orbit;
+    acc.dx += dx;
+    acc.dy += dy;
+    note(e.timeStamp);
+  });
+  const release = (e: PointerEvent) => {
+    drag = null;
+    dirty = true; // The interaction ended: the next frame is full resolution.
+    if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+  };
+  canvas.addEventListener("pointerup", release);
+  canvas.addEventListener("pointercancel", release);
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    scroll += e.deltaY;
+    note(e.timeStamp);
+    lastWheel = performance.now();
+    if (wheelTimer !== null) clearTimeout(wheelTimer);
+    wheelTimer = setTimeout(() => { wheelTimer = null; dirty = true; }, 150);
+  }, { passive: false });
+  const post = async (op: string, body: object): Promise<void> => {
+    const r = await fetch(`${base}/${op}/-?t=${t}`, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error(`${op}: HTTP ${r.status}`);
+  };
+  const timing = (h: string | null, key: string): number | null => {
+    const m = h?.match(new RegExp(`(?:^|;)\\s*${key}=([0-9.]+)`));
+    return m ? Number(m[1]) : null;
+  };
+  const step = async (): Promise<void> => {
+    const served = oldestInput;
+    oldestInput = null;
+    const o = orbit, p = pan, s = scroll;
+    orbit = { dx: 0, dy: 0 };
+    pan = { dx: 0, dy: 0 };
+    scroll = 0;
+    dirty = false;
+    const h = canvas.height;
+    const half = interacting() && offCtx !== null;
+    const fw = half ? Math.max(16, Math.round(canvas.width / 2)) : canvas.width;
+    const fh = half ? Math.max(1, Math.round(h / 2)) : h;
+    try {
+      if (o.dx !== 0 || o.dy !== 0) await post("orbit", o);
+      if (p.dx !== 0 || p.dy !== 0) await post("pan", { dx: p.dx / h, dy: p.dy / h });
+      if (s !== 0) await post("zoom", { scroll: s });
+      const f0 = performance.now();
+      const r = await fetch(`${base}/frame?w=${fw}&h=${fh}&t=${t}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`frame: HTTP ${r.status}`);
+      const buf = await r.arrayBuffer();
+      const fetch_ms = performance.now() - f0;
+      if (buf.byteLength !== fw * fh * 4) return; // Bad size: skip; a resize set dirty.
+      const px = new Uint8ClampedArray(buf);
+      if (half && offCtx) {
+        if (offscreen.width !== fw) offscreen.width = fw;
+        if (offscreen.height !== fh) offscreen.height = fh;
+        offCtx.putImageData(new ImageData(px, fw, fh), 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+      } else {
+        if (fw !== canvas.width || fh !== canvas.height) return; // Resized meanwhile.
+        ctx.putImageData(new ImageData(px, fw, fh), 0, 0);
+      }
+      const latency_ms = served === null ? null : performance.now() - served;
+      let sum = 0;
+      for (let i = 0; i < px.length; i += 997) sum = (sum * 31 + (px[i] ?? 0)) >>> 0;
+      const changed = lastSum !== sum;
+      lastSum = sum;
+      const xt = r.headers.get("X-Timing");
+      stats.frames++;
+      stats.samples.push({ latency_ms, changed, render_ms: timing(xt, "render"), read_ms: timing(xt, "read"), fetch_ms, half });
+      if (stats.samples.length > 1000) stats.samples.splice(0, stats.samples.length - 1000);
+    } catch (e) {
+      console.warn("native viewport:", e);
+      dirty = true; // The twin may be restarting: retry the frame after a back-off.
+      if (served !== null && oldestInput === null) oldestInput = served;
+      backoffUntil = performance.now() + 500;
+    }
+  };
+  const loop = (now: number) => {
+    const pending = orbit.dx !== 0 || orbit.dy !== 0 || pan.dx !== 0 || pan.dy !== 0 || scroll !== 0;
+    if ((dirty || pending) && !inFlight && now >= backoffUntil) {
+      inFlight = true;
+      void step().finally(() => { inFlight = false; });
+    }
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+  return () => { dirty = true; };
+}
+
 /** Load and start the viewer. The canvas #bimble must be in the DOM. */
 export async function start(): Promise<void> {
   try {
@@ -340,10 +492,12 @@ export async function start(): Promise<void> {
       history.replaceState(null, "", url);
     }
     let w: Wasm;
+    let viewportDirty: (() => void) | null = null;
     const native = url.searchParams.get("native") === "1" ? nativeParams(url.searchParams) : null;
     if (native) {
       // Dev only: no manifold, no wasm; on_change below starts the long-poll loop.
       w = nativeClient(native.port, native.token);
+      viewportDirty = streamViewport(`http://127.0.0.1:${native.port}`, native.token);
     } else {
       try {
         const bridge = (await import(/* @vite-ignore */ `${WASM}manifold-bridge.js`)) as { loadManifold: () => Promise<void> };
@@ -361,6 +515,7 @@ export async function start(): Promise<void> {
     let shown = false;
     // The callback runs inside a frame: calls back into the viewer would throw "busy", so defer.
     w.on_change((json) => {
+      viewportDirty?.();
       const s = JSON.parse(json) as State;
       if (!shown && s.file !== null) {
         shown = true;
