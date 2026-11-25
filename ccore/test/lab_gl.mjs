@@ -2,7 +2,7 @@
 // Starts out/tcc/bimble-ccore (or $HOST_BIN) on 47323 with CCORE_MODEL=golden/frame.json, Vite
 // from web-ui/ on 5193 (needs web-ui/node_modules), headless /usr/bin/chromium over raw CDP; opens
 // /?native=1&gl=1&port=47323&token=… and checks: the page draws a frame from GET /mesh; concrete
-// grey (214,214,210 ±6) covers > 5 % of the canvas and the background (247,247,245 ±2) is the
+// grey as Rust shades a top face (207,207,204 ±6; fill 214,214,210, see below) covers > 5 % of the canvas and the background (247,247,245 ±2) is the
 // rest's main colour; no uncaught page error, no console error but the listed ones; a click on a
 // concrete pixel sends POST /select/- with one 22-character GlobalId (the stub host may answer
 // 400: the request is counted, not the answer); a click on the background sends select([]).
@@ -157,18 +157,22 @@ async function main() {
     g.readPixels(0, 0, w, h, g.RGBA, g.UNSIGNED_BYTE, p);
     const near = (i, r, gg, b, t) => Math.abs(p[i] - r) <= t && Math.abs(p[i + 1] - gg) <= t && Math.abs(p[i + 2] - b) <= t;
     // A grey face pixel (shaded concrete): neither background nor edge, r = g, b just below.
+    // Expected value: Rust shades in linear light (shader.wgsl face_shade: ambient 0.62 + 0.38 *
+    // lambert; light = view dir + (-0.3,-0.2,0.9), lib.rs:2566). Default camera (yaw -55, pitch 28):
+    // a top face gets 0.933, so fill 214 -> linear 0.672 * 0.933 -> sRGB 207.5. The fill colour
+    // itself is never on screen; the ticket had it wrong (orchestrator error, corrected here).
     const face = (i) => !near(i, 247, 247, 245, 2) && p[i] >= 120 && p[i] === p[i + 1] && p[i + 2] <= p[i] && p[i] - p[i + 2] <= 8;
     let concrete = 0, bg = 0, dark = 0, other = 0, cx = -1, cy = -1, bx = -1, by = -1;
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = 4 * (y * w + x);
-      if (near(i, 214, 214, 210, 6)) concrete++;
+      if (near(i, 207, 207, 204, 6)) concrete++;
       // a click target: the centre of a 9x9 block of grey face pixels, nearest the canvas centre
       if (face(i) && x > 4 && y > 4 && x < w - 5 && y < h - 5 && (cx < 0 || Math.hypot(x - w / 2, y - h / 2) < Math.hypot(cx - w / 2, cy - h / 2))) {
         let all = true;
         for (let dy = -4; dy <= 4 && all; dy++) for (let dx = -4; dx <= 4 && all; dx++) all = face(4 * ((y + dy) * w + x + dx));
         if (all) cx = x, cy = y;
       }
-      if (near(i, 214, 214, 210, 6)) {
+      if (near(i, 207, 207, 204, 6)) {
         // counted above
       } else if (near(i, 247, 247, 245, 2)) {
         bg++;
