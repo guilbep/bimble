@@ -13,10 +13,11 @@ import net from "node:net";
 import { gunzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { RUN_TAG, port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = 47311;
+const PORT = port("host_test", 47311);
 const TOKEN = "hosttest-token";
 const HOST = `127.0.0.1:${PORT}`;
 let passed = 0, failed = 0;
@@ -75,7 +76,7 @@ try {
   check("bad Origin -> 403", (await req("POST", `/query/state?t=${TOKEN}`, { headers: { Origin: "http://evil.example" } })).status === 403);
   const good = await req("POST", `/query/state?t=${TOKEN}`, { headers: { Origin: "http://localhost:5173" } });
   check("allowed Origin -> 200 with Access-Control-Allow-Origin", good.status === 200 && good.headers["access-control-allow-origin"] === "http://localhost:5173");
-  check("bad Host -> 403", (await req("POST", `/query/state?t=${TOKEN}`, { headers: { Host: "evil.example:47311" } })).status === 403);
+  check("bad Host -> 403", (await req("POST", `/query/state?t=${TOKEN}`, { headers: { Host: `evil.example:${PORT}` } })).status === 403);
   check("Host localhost:<port> -> 200", (await req("POST", `/query/state?t=${TOKEN}`, { headers: { Host: `localhost:${PORT}` } })).status === 200);
   const pre = await req("OPTIONS", "/query/state", { headers: { Origin: "http://127.0.0.1:5173" } });
   check("OPTIONS without token -> 204 with CORS headers", pre.status === 204 && pre.headers["access-control-allow-methods"] === "GET, POST, OPTIONS");
@@ -180,8 +181,8 @@ try {
 }
 
 // ---- With a model (ticket 9b) ----
-const MPORT = 47331, MPORT2 = 47332;
-const TMP = join(CCORE, "out/t9b-host_test");
+const MPORT = port("host_test_model", 47331), MPORT2 = port("host_test_model2", 47332);
+const TMP = join(CCORE, `out/t9b-host_test${RUN_TAG}`);
 const GOLDEN = join(CCORE, "golden");
 const hosts = [];
 const magent = new http.Agent({ keepAlive: true, maxSockets: 4 });

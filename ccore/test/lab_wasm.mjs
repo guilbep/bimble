@@ -21,10 +21,11 @@ import { gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { vitePort } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
-const VITE = Number(process.env.LAB_WASM_VITE ?? 5201); // LAB_WASM_VITE: another port when 5201 is taken
+const VITE = Number(process.env.LAB_WASM_VITE ?? vitePort("lab_wasm", 5201)); // LAB_WASM_VITE: another port when 5201 is taken
 const PAGE = `http://localhost:${VITE}/?ccore=1&gl=1`;
 const STOREY = "1uAZA0Yfn05f$xRd1k4uPR";
 const tmp = mkdtempSync(join(tmpdir(), "ccore-lab-wasm-"));

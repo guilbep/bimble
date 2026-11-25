@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const G = join(CCORE, "golden");
@@ -424,7 +425,7 @@ suite("memory");
 
 // ---- host: the call layer in the module against the native host ----
 const HOST_BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const HOST_PORT = 47351, HOST_TOKEN = "wasmrun-token";
+const HOST_PORT = port("wasm_run", 47351), HOST_TOKEN = "wasmrun-token";
 /** One call of the module's host layer: {status, text, bytes, value}. */
 const hcall = (op, name = "-", body = "") => call(X.call, [op, name, body]);
 const change = () => call(X.change_json, []).text;

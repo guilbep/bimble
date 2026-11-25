@@ -10,12 +10,13 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { port, vitePort } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = 47312;
-const VITE = 5191;
+const PORT = port("lab_boot", 47312);
+const VITE = vitePort("lab_boot", 5191);
 const TOKEN = "labboot-token";
 const PAGE = `http://localhost:${VITE}/?native=1&port=${PORT}&token=${TOKEN}`;
 const tmp = mkdtempSync(join(tmpdir(), "ccore-lab-boot-"));

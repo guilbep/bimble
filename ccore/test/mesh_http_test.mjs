@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
@@ -58,7 +59,7 @@ function parseBmsh(buf) {
   return h;
 }
 
-const PORT = 47321, NOMODEL = 47322;
+const PORT = port("mesh_http", 47321), NOMODEL = port("mesh_http_nomodel", 47322);
 try {
   const golden = readFileSync(join(CCORE, "golden/mesh/scene.txt"), "utf8").split("\n");
   const gOrigin = golden[0].split(" ").slice(1);

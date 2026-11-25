@@ -43,6 +43,7 @@ import { cpus, loadavg, tmpdir, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { port, vitePort } from "../test/ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
@@ -55,7 +56,7 @@ const LOOP_RUNS = Number(process.env.LOOP_RUNS ?? 5);
 const LOOP_SIZES = (process.env.LOOP_SIZES ?? "20000").split(/\s+/).filter(Boolean).map(Number);
 const RAW = process.env.RAW ?? join(OUT, "t16-large.json");
 const TOKEN = "t16-large";
-const P_HOST = 47384, P_SES = 47385, P_LAB = 47386, VITE = 5207;
+const P_HOST = port("large_host", 47384), P_SES = port("large_session", 47385), P_LAB = port("large_lab", 47386), VITE = vitePort("large", 5207);
 const GL = process.env.GL ?? "swiftshader";
 const GL_FLAGS = GL === "gpu" ? ["--use-angle=gl"] : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
 const MESH_C = join(CCORE, "host/mesh.c");

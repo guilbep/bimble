@@ -20,12 +20,13 @@ import { tmpdir } from "node:os";
 import { gunzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const G = join(CCORE, "golden");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
 const TOKEN = "files-test-token";
-const PORT = 47391, PORT2 = 47392;
+const PORT = port("files_test", 47391), PORT2 = port("files_test2", 47392);
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => {
   if (ok) passed++;

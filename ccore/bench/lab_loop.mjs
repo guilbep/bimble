@@ -36,6 +36,7 @@ import { cpus, tmpdir, totalmem, loadavg } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { port, vitePort } from "../test/ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
@@ -43,8 +44,8 @@ const RUNS = Number(process.env.RUNS ?? 10);
 const MODES = (process.env.MODES ?? "tcc native").split(/\s+/).filter(Boolean);
 const SPECS = [...MODES.map((m) => ({ name: m, mode: m, fast: false })),
   ...(process.env.PROBE === "0" || !MODES.includes("tcc") ? [] : [{ name: "tcc-retry20", mode: "tcc", fast: true }])];
-const PORT = 47342;
-const VITE = 5197;
+const PORT = port("lab_loop", 47342);
+const VITE = vitePort("lab_loop", 5197);
 const TOKEN = "lab-loop";
 const HOST = `http://127.0.0.1:${PORT}`;
 const PAGE = `http://localhost:${VITE}/?native=1&gl=1&port=${PORT}&token=${TOKEN}`;

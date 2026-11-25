@@ -10,10 +10,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { port, vitePort } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 47411;
-const VITE = 5199;
+const PORT = port("dev_test", 47411);
+const VITE = vitePort("dev_test", 5199);
 const EDITED = join(CCORE, "session/calls.c");
 const ORIGINAL = readFileSync(EDITED);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -151,7 +152,7 @@ try {
   await sleep(200);
   const left = tree.filter((t) => alive(t.pid));
   check("no process left (host, Vite, watcher)", pids.length > 0 && left.length === 0, left.map((t) => `${t.pid} ${t.cmd}`).join("; "));
-  check("the host was among them", tree.some((t) => /bimble-ccore (--session )?(--warm )?47411/.test(t.cmd)) && tree.some((t) => /vite/.test(t.cmd)));
+  check("the host was among them", tree.some((t) => new RegExp(`bimble-ccore (--session )?(--warm )?${PORT}`).test(t.cmd)) && tree.some((t) => /vite/.test(t.cmd)));
   // By listening port, not by command line: a pgrep pattern also matched other shells that
   // merely mention it (false positive), and missed the host once it took --session.
   let ls = "";

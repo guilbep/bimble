@@ -12,10 +12,11 @@ import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, utimesSync
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = 47341;
+const PORT = port("session_test", 47341);
 const TOKEN = "session-test";
 const BASE = `http://127.0.0.1:${PORT}`;
 const tmp = mkdtempSync(join(tmpdir(), "ccore-session-"));

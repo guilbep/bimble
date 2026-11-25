@@ -4,18 +4,19 @@
 // out/tcc/bimble-ccore (or $HOST_BIN) on it (47375): it loads (the C loader validates), `query
 // elements` has every row, GET /mesh has one row per element, a rotated wall and a polygon with
 // voids are there, place + undo work. Then runs bench/large.mjs on that size (host part only,
-// RUNS=1, BINS=tcc; ports 47372-47373) and checks its JSON. Prints "N passed, M failed"; exits
+// RUNS=1, BINS=tcc; ports 47384-47385) and checks its JSON. Prints "N passed, M failed"; exits
 // non-zero on a failure. Kills all it starts.
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(CCORE, "out");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
 const N = 300;
-const PORT = 47375;
+const PORT = port("large_test", 47375);
 const TOKEN = "large-test";
 const A = join(OUT, `t16-large-${N}.bimble`), B = join(OUT, `t16-large-${N}-again.bimble`);
 let passed = 0, failed = 0;

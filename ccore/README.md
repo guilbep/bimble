@@ -43,6 +43,12 @@ Run the tests (tcc by default, or any compiler in `CC`). The script exits non-ze
     ccore/test/run.sh fmt json    # named suites
     CC=clang ccore/test/run.sh
 
+The network tests (`test/*.mjs`, `bench/*.mjs`) take their ports from `test/ports.mjs`, one table
+with a fixed default and a unique offset per port. `CCORE_PORT_BASE` unset: the defaults (host
+473xx, Vite 51xx/52xx). `CCORE_PORT_BASE=48000`: base + offset, so worktrees that run the same test at
+once do not collide (give each its own base, 160 ports apart). `CCORE_PORT_BASE=auto`: a free base from
+a hash of the worktree path. `test/host.sh` passes the variable through.
+
 Regenerate the goldens (a standalone Rust crate, not in the workspace; it pins the repo's
 serde_json version). Commit the changed `.txt` files:
 
