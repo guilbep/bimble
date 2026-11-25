@@ -4,6 +4,10 @@ import { t } from "./i18n";
 import { viewName } from "./shell/viewName";
 import { state, element, query, rename, runVerb, setGenerator, setMaterial, setView, materials, openViews, storeys, type ElementDetail, type ViewSummary } from "./bimble";
 import { classNoun, parseMm } from "./i18n/parts/modify";
+// ---- SEC1 ---- view properties made real (verbs view_edit, set_view; query view_visibility)
+import { viewClip, viewEdit, viewVisibility, visibility, type SectionClip, type ViewVisibility } from "./bimble";
+import { editableModel, has } from "./shell/capability";
+// ---- end SEC1 ----
 
 // Rendered inside `.props` (LeftPanel): rows as fr/View3D.html (view) and fr/SelectModify.html (element).
 const detail = ref<ElementDetail | null>(null);
@@ -128,6 +132,93 @@ function commitOffset(k: (typeof PLANES)[number], old: number, e: Event): void {
   patchView({ range: { [k]: { offset_mm: v } } });
 }
 
+// ---- SEC1 ---- the view's own fields (viewing.rs:976-1440): name, a section's cut, the crop by
+// numbers, a plan's range levels, what the view hides by family and IFC class. Each change is one
+// verb (view_edit or set_view), one undo step; the viewport and the paper drawings follow.
+const canEdit = computed(() => { void state.value.rev; return has("views") && editableModel(); });
+const vvis = computed<ViewVisibility | null>(() => { void state.value.rev; void openViews.value; return viewVisibility(); });
+const secError = ref<string | null>(null);
+function edit(patch: Parameters<typeof viewEdit>[1]): void {
+  secError.value = view.value ? viewEdit(view.value.id, patch) : null;
+}
+function commitName(e: Event): void {
+  const v = (e.target as HTMLInputElement).value.trim();
+  if (v && view.value && v !== view.value.name) edit({ name: v });
+}
+const origin = computed(() => (view.value?.origin as number[] | undefined) ?? [0, 0]);
+function commitOrigin(k: 0 | 1, e: Event): void {
+  const v = parseMm((e.target as HTMLInputElement).value);
+  if (v === null || v === origin.value[k]) return;
+  const o = [...origin.value];
+  o[k] = v;
+  edit({ origin: o });
+}
+function commitDepth(e: Event): void {
+  const v = parseMm((e.target as HTMLInputElement).value);
+  if (v !== null && v !== view.value?.depth_mm) edit({ depth_mm: v });
+}
+// The crop (ADR 0046), in the view's plane, world mm; shown and typed in metres as Rust's form.
+type Crop = { min: number[]; max: number[] };
+const crop = computed(() => (view.value?.crop as Crop | null | undefined) ?? null);
+/** A new crop: what the view shows of the model (view_clip's box, back in world mm, in its plane). */
+function cropModel(): Crop | null {
+  const c = viewClip() as SectionClip | null, o = visibility.value?.section_box.origin_mm;
+  if (!c?.clip || !o) return null;
+  const w = (k: number, b: number[]) => (b[k] ?? 0) + (o[k] ?? 0);
+  if (c.type === "section") {
+    const d = c.dir ?? [0, 1], r = [d[1] ?? 0, -(d[0] ?? 0)];
+    const along = [c.clip.min, c.clip.max].flatMap((p) => [c.clip!.min, c.clip!.max].map((q) => (r[0] ?? 0) * w(0, p) + (r[1] ?? 0) * w(1, q)));
+    return { min: [Math.round(Math.min(...along)), Math.round(w(2, c.clip.min))], max: [Math.round(Math.max(...along)), Math.round(w(2, c.clip.max))] };
+  }
+  return { min: [Math.round(w(0, c.clip.min)), Math.round(w(1, c.clip.min))], max: [Math.round(w(0, c.clip.max)), Math.round(w(1, c.clip.max))] };
+}
+function toggleCrop(on: boolean): void {
+  if (!view.value) return;
+  viewError.value = setView(view.value.id, { crop: on ? cropModel() : null } as Parameters<typeof setView>[1]);
+}
+function commitCrop(side: "min" | "max", k: 0 | 1, e: Event): void {
+  const c = crop.value;
+  const m = Number((e.target as HTMLInputElement).value.replace(",", "."));
+  if (!c || !view.value || !Number.isFinite(m) || Math.round(m * 1000) === c[side][k]) return;
+  const next = { min: [...c.min], max: [...c.max] };
+  next[side][k] = Math.round(m * 1000);
+  viewError.value = setView(view.value.id, { crop: next } as Parameters<typeof setView>[1]);
+}
+const LEVELS = ["associated", "above", "below", "unlimited"] as const;
+const rangePlanes = computed(() => {
+  const r = (view.value?.range ?? {}) as Partial<Record<(typeof PLANES)[number], Plane>>;
+  return PLANES.map((k) => ({ k, level: r[k]?.level ?? "associated", offset: r[k]?.offset_mm ?? 0 }));
+});
+// Families as Rust's labels (MaterialCategory::label); "other" is every family but the three.
+const FAMILY_LABELS: Record<string, string[]> = { concrete: ["Concrete"], steel: ["Steel"], timber: ["Timber"], other: ["Masonry", "Insulation", "Earth", "Glass", "Other"] };
+const familyShown = (key: string) => !(FAMILY_LABELS[key] ?? []).some((l) => vvis.value?.hidden_families.includes(l));
+function toggleFamily(key: string, on: boolean): void {
+  const cur = new Set(vvis.value?.hidden_families ?? []);
+  for (const l of FAMILY_LABELS[key] ?? []) on ? cur.delete(l) : cur.add(l);
+  edit({ visibility: { hidden_families: [...cur] } });
+}
+// The model's IFC classes and their counts (query elements, as the navigator's object tree).
+const classes = computed(() => {
+  void state.value.rev;
+  if (!canEdit.value) return [] as [string, number][];
+  const n = new Map<string, number>();
+  try { for (const e of query<{ class: string }[]>("elements", { limit: 100000 })) n.set(e.class, (n.get(e.class) ?? 0) + 1); } catch { /* none */ }
+  return [...n].sort((a, b) => a[0].localeCompare(b[0]));
+});
+function toggleClass(cls: string, on: boolean): void {
+  const cur = new Set(vvis.value?.hidden_classes ?? []);
+  if (on) cur.delete(cls); else cur.add(cls);
+  edit({ visibility: { hidden_classes: [...cur] } });
+}
+const hiddenText = computed(() => {
+  const v = vvis.value;
+  if (!v) return "";
+  const all = [...v.hidden_classes, ...v.hidden_families, ...v.hidden_storeys, ...v.hidden_materials];
+  const n = v.hidden_elements.length + v.isolated_elements.length;
+  return all.length || n ? [...all, ...(n ? [`${n} el.`] : [])].join(", ") : t("sec1.hiddenNone");
+});
+// ---- end SEC1 ----
+
 // The reference's four families; the other categories count as "other".
 const FAMILIES = [
   { key: "concrete", swatch: "var(--bb-sheet)" },
@@ -231,8 +322,36 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
   </template>
   <template v-else-if="view">
     <div class="pn">{{ t('view.props', { name: viewName(view) }) }}</div>
+    <!-- SEC1: name, scale, a section's cut, the crop, a plan's range, what the view hides (one verb each) -->
+    <div class="row"><label class="k" for="view-name">{{ t('sec1.name') }}</label><input id="view-name" :key="`${view.id}:${view.name}`" class="inp" :value="view.name" style="width:150px" :disabled="!canEdit" data-bb="view-name" @keydown.enter="commitName" @blur="commitName"></div>
     <div class="row"><span class="k">{{ t('view.type') }}</span><span>{{ viewType }}</span></div>
-    <div class="row"><span class="k">{{ t('view.scale') }}</span><span class="mono">1:{{ view.scale }}</span></div>
+    <div class="row"><label class="k" for="view-scale3">{{ t('view.scale') }}</label><select id="view-scale3" class="sel-inp" style="width:100px" :value="view.scale" :disabled="!canEdit" @change="patchView({ scale: Number(($event.target as HTMLSelectElement).value) })"><option v-for="n in scales" :key="n" :value="n">1:{{ n }}</option></select></div>
+    <template v-if="view.type === 'section'">
+      <div class="row"><label class="k" for="view-facing">{{ t('sec1.looking') }}</label><select id="view-facing" class="sel-inp" style="width:100px" :value="view.facing" :disabled="!canEdit" data-bb="view-facing" @change="edit({ facing: ($event.target as HTMLSelectElement).value })"><option v-for="f in ['north', 'east', 'south', 'west']" :key="f" :value="f">{{ t(`sec1.${f}`) }}</option></select></div>
+      <div class="row"><span class="k">{{ t('sec1.through') }}</span><span style="display:inline-flex;gap:4px">
+        <input :key="`ox${origin[0]}`" class="inp mono" :value="grouped(origin[0] ?? 0)" style="width:76px;text-align:right" :disabled="!canEdit" aria-label="X" data-bb="view-origin-x" @keydown.enter="commitOrigin(0, $event)" @blur="commitOrigin(0, $event)">
+        <input :key="`oy${origin[1]}`" class="inp mono" :value="grouped(origin[1] ?? 0)" style="width:76px;text-align:right" :disabled="!canEdit" aria-label="Y" data-bb="view-origin-y" @keydown.enter="commitOrigin(1, $event)" @blur="commitOrigin(1, $event)"></span></div>
+      <div class="row"><label class="k" for="view-depth">{{ t('sec1.depth') }}</label><input id="view-depth" :key="`d${view.depth_mm}`" class="inp mono" :value="grouped(Number(view.depth_mm ?? 0))" style="width:96px;text-align:right" :disabled="!canEdit" data-bb="view-depth" @keydown.enter="commitDepth" @blur="commitDepth"></div>
+    </template>
+    <template v-if="view.type !== 'three_d'">
+      <div class="row"><label class="k" for="view-crop3">{{ t('sec1.crop') }}</label><input id="view-crop3" type="checkbox" :checked="crop !== null" :disabled="!canEdit" data-bb="view-crop" @change="toggleCrop(($event.target as HTMLInputElement).checked)"></div>
+      <template v-if="crop">
+        <div v-for="(lab, k) in ['sec1.cropX', 'sec1.cropY']" :key="lab" class="row"><span class="k">{{ t(lab) }}</span><span style="display:inline-flex;gap:4px">
+          <input :key="`c${k}${crop.min[k]}`" class="inp mono" :value="((crop.min[k] ?? 0) / 1000).toFixed(2)" style="width:70px;text-align:right" :disabled="!canEdit" @keydown.enter="commitCrop('min', k as 0 | 1, $event)" @blur="commitCrop('min', k as 0 | 1, $event)">
+          <input :key="`C${k}${crop.max[k]}`" class="inp mono" :value="((crop.max[k] ?? 0) / 1000).toFixed(2)" style="width:70px;text-align:right" :disabled="!canEdit" @keydown.enter="commitCrop('max', k as 0 | 1, $event)" @blur="commitCrop('max', k as 0 | 1, $event)"></span></div>
+      </template>
+    </template>
+    <template v-if="view.type === 'plan'">
+      <div class="sec">{{ t('sec1.range') }}</div>
+      <div v-for="p in rangePlanes" :key="p.k" class="row">
+        <span class="k">{{ t(`sec1.${p.k === 'depth' ? 'viewDepth' : p.k}`) }}</span>
+        <span style="display:inline-flex;gap:4px">
+          <select class="sel-inp" style="width:120px" :value="p.level" :disabled="!canEdit" :aria-label="t(`sec1.${p.k === 'depth' ? 'viewDepth' : p.k}`)" @change="edit({ levels: { [p.k]: ($event.target as HTMLSelectElement).value } })"><option v-for="l in LEVELS" :key="l" :value="l">{{ t(`sec1.${l}`) }}</option></select>
+          <input :key="`${p.k}${p.offset}`" class="inp mono" :value="grouped(p.offset)" style="width:64px;text-align:right" :disabled="!canEdit || p.level === 'unlimited'" @keydown.enter="commitOffset(p.k, p.offset, $event)" @blur="commitOffset(p.k, p.offset, $event)">
+        </span>
+      </div>
+    </template>
+    <p v-if="secError || viewError" role="alert" class="error">{{ t('modify.error', { msg: secError ?? viewError ?? '' }) }}</p>
     <div class="row">
       <span class="k">{{ t('view.phase') }}</span>
       <span class="sel-inp" style="width:150px" data-missing="view phase filter"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
@@ -242,14 +361,19 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
       <span class="sel-inp" style="width:160px" data-missing="view sub-projects filter"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
     </div>
     <div class="row"><span class="k">{{ t('view.detail') }}</span><span data-missing="view detail level" /></div>
-    <div class="row"><span class="k">{{ t('view.hidden') }}</span><span class="mono" data-missing="hidden classes in view" /></div>
+    <div class="row"><span class="k">{{ t('view.hidden') }}</span><span class="mono ell" style="max-width:170px" data-bb="view-hidden">{{ hiddenText }}</span></div>
     <div class="sec">{{ t('view.families') }}</div>
     <label v-for="f in families" :key="f.key" class="row" style="padding-left:0px">
       <span style="display:inline-flex;gap:8px;align-items:center">
-        <input type="checkbox" checked disabled data-missing="family visibility in view"> <span :style="`width:14px;height:14px;border:1px solid var(--bb-ink);background:${f.swatch};display:inline-block`" />{{ t(`fam.${f.key}`) }}</span>
+        <input type="checkbox" :checked="familyShown(f.key)" :disabled="!canEdit" @change="toggleFamily(f.key, ($event.target as HTMLInputElement).checked)"> <span :style="`width:14px;height:14px;border:1px solid var(--bb-ink);background:${f.swatch};display:inline-block`" />{{ t(`fam.${f.key}`) }}</span>
       <span class="mono" style="font-size:12px;color:var(--bb-stone)">{{ grouped(f.count) }}</span>
     </label>
-    <div class="sec" data-missing="class counts and class visibility in view">{{ t('view.classes') }}</div>
+    <div class="sec">{{ t('view.classes') }}</div>
+    <label v-for="[c, n] in classes" :key="c" class="row" style="padding-left:0px">
+      <span style="display:inline-flex;gap:8px;align-items:center"><input type="checkbox" :checked="!vvis?.hidden_classes.includes(c)" :disabled="!canEdit" :data-class="c" @change="toggleClass(c, ($event.target as HTMLInputElement).checked)">{{ c }}</span>
+      <span class="mono" style="font-size:12px;color:var(--bb-stone)">{{ grouped(n) }}</span>
+    </label>
+    <!-- end SEC1 -->
   </template>
   <p v-else class="row k">{{ t('props.empty') }}</p>
 </template>
