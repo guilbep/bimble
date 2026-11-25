@@ -173,7 +173,7 @@ fn check(dir: &Path, files: &Files) -> Vec<String> {
             && !rel.starts_with(OTHER_TICKET_DIR)
             && !C_OWN.iter().any(|p| rel.starts_with(p))
             && !is_golden_fixture(&rel)
-            && !rel.starts_with(DXF_FIXTURES) // L2
+            && !rel.starts_with(DXF_FIXTURES)
         {
             bad.push(format!("{rel} (not produced any more)"));
         }
