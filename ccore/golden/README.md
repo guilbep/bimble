@@ -515,3 +515,16 @@ section marks of all views (the effective views as the session lists them, `cc_s
 for byte: `cc_sheet_draw` of each sheet of `model.json` with the dumper's `sheet_options` and Rust's
 version; and the session's `sheet_svg` of `S-101` against `S-101.svg` (the file named `frame.json`, a
 clock at 2026-01-01, the version notes cut out: DEVIATIONS.md 11).
+
+## ifc/views/ (views of a read-only scene, ticket S1)
+
+`ifc/views/<name>.txt` (`ccore_golden` `ifc_views_files`): the views the viewer offers for a scene
+opened read-only, on `Scene::levels`, for `ifc/frame.ifc`, `ifc/frame2.ifc`,
+`ifc/fixtures/same_level.ifc` (eight storeys at one level), `ifc/fixtures/ishape_beam.ifc`,
+`ifc/views/fixtures/storeys_grid.ifc` (hand-written: a storey without a GlobalId keyed by its name,
+one placed by its Elevation only, an IfcGrid of three axes) and `view/frame2.bimbleview`. Lines:
+`views <json>` (open_views' `views`: ViewSummary + auto_name, keys sorted), `grid_axes <json>`
+(the C query `grid_axes` with no link: `Scene::grids` and the levels), and per plan
+`plan <id> cut <f64> elevation <f64>` (`resolve`'s cut and the storey's elevation, the C query
+`view_clip`'s). Read by `ccore/test/views_test.mjs` over HTTP (action `open`, read-only). The
+fixture is an input: the dumper puts it back as it is, so `--check` knows it. DEVIATIONS.md 16.

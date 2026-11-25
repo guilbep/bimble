@@ -16,6 +16,19 @@ cc_gid cc_view_derived_id(const char *pre, const cc_gid *storey) {
     return out;
 }
 
+int cc_levels_of_model(const cc_model *m, Arena *a, cc_level **out, size_t *n) {
+    size_t k = m ? m->nstoreys : 0;
+    cc_level *lv = arena_alloc(a, (k ? k : 1) * sizeof *lv, sizeof(double));
+    *out = lv, *n = k;
+    if (!lv) return -1;
+    for (size_t i = 0; i < k; i++) {
+        lv[i].key.p = m->storeys[i].id.c, lv[i].key.n = 22;
+        lv[i].name = m->storeys[i].name;
+        lv[i].elevation = m->storeys[i].elevation;
+    }
+    return 0;
+}
+
 static int64_t tkey(double x) { /* f64::total_cmp */
     int64_t k;
     memcpy(&k, &x, 8);
@@ -32,15 +45,14 @@ static double round_(double x) { /* f64::round: half away from zero */
     return t == 0.0 ? x * 0.0 : t;
 }
 
-/* The storeys by elevation (a stable sort of the id-ordered storeys, total_cmp): indices. */
-static size_t *sorted_storeys(const cc_model *m, Arena *a) {
-    size_t n = m->nstoreys;
+/* The levels by elevation (a stable sort in their order, total_cmp): indices. */
+static size_t *sorted_levels(const cc_level *lv, size_t n, Arena *a) {
     size_t *o = arena_alloc(a, (n ? n : 1) * sizeof *o, sizeof(size_t));
     if (!o) return NULL;
     for (size_t i = 0; i < n; i++) {
         size_t j = i;
-        int64_t k = tkey(m->storeys[i].elevation);
-        while (j > 0 && tkey(m->storeys[o[j - 1]].elevation) > k) o[j] = o[j - 1], j--;
+        int64_t k = tkey(lv[i].elevation);
+        while (j > 0 && tkey(lv[o[j - 1]].elevation) > k) o[j] = o[j - 1], j--;
         o[j] = i;
     }
     return o;
@@ -59,7 +71,13 @@ static cc_str cat2(Arena *a, const char *pre, cc_str s) {
 }
 
 int cc_views_default(const cc_model *m, Arena *a, cc_view *out) {
-    size_t n = m ? m->nstoreys : 0, k = 0;
+    cc_level *lv;
+    size_t n;
+    return cc_levels_of_model(m, a, &lv, &n) ? -1 : cc_views_default_lv(lv, n, a, out);
+}
+
+int cc_views_default_lv(const cc_level *lv, size_t n, Arena *a, cc_view *out) {
+    size_t k = 0;
     memset(&out[k], 0, sizeof out[k]);
     out[k].id = cc_view_derived_id("bimble view 3d", NULL);
     out[k].name.p = "3D", out[k].name.n = 2;
@@ -67,15 +85,15 @@ int cc_views_default(const cc_model *m, Arena *a, cc_view *out) {
     out[k].scale = 100;
     k++;
     if (!n) return 0;
-    size_t *o = sorted_storeys(m, a);
+    size_t *o = sorted_levels(lv, n, a);
     if (!o) return -1;
     for (int look = 0; look < 2; look++)
         for (size_t i = 0; i < n; i++) {
-            const cc_storey *s = &m->storeys[o[i]];
+            const cc_level *s = &lv[o[i]];
             int any = 0;
             double h = 0.0;
             for (size_t j = i + 1; j < n; j++) { /* the first storey above more than 1 mm higher */
-                double d = m->storeys[o[j]].elevation - s->elevation;
+                double d = lv[o[j]].elevation - s->elevation;
                 if (d > 1.0) {
                     any = 1, h = d;
                     break;
@@ -83,12 +101,15 @@ int cc_views_default(const cc_model *m, Arena *a, cc_view *out) {
             }
             cc_view *v = &out[k++];
             memset(v, 0, sizeof *v);
-            v->id = cc_view_derived_id(look ? "bimble view plan up " : "bimble view plan down ", &s->id);
+            /* GlobalId::derived("bimble view plan down|up <key>"): the key is any text (a name) */
+            cc_str seed = cat2(a, look ? "bimble view plan up " : "bimble view plan down ", s->key);
             v->name = cat2(a, look ? "Ceiling " : "Plan ", s->name);
-            char *sid = arena_dup(a, s->id.c, 22);
-            if (!v->name.p || !sid) return -1;
+            char *sid = arena_dup(a, s->key.n ? s->key.p : "", s->key.n ? s->key.n : 1);
+            if (!seed.p || !v->name.p || !sid) return -1;
+            cc_guid g = cc_guid_derived(seed.p, seed.n);
+            memcpy(v->id.c, g.c, 22);
             v->kind = CC_VIEW_PLAN;
-            v->storey.p = sid, v->storey.n = 22;
+            v->storey.p = sid, v->storey.n = s->key.n;
             v->look = look ? CC_LOOK_UP : CC_LOOK_DOWN;
             cc_range_plane top = {CC_LEVEL_ABOVE, 0.0}, cut = {CC_LEVEL_ASSOCIATED, look ? 2300.0 : 1200.0},
                            bottom = {CC_LEVEL_ASSOCIATED, 0.0}, depth = {look ? CC_LEVEL_ABOVE : CC_LEVEL_ASSOCIATED, 0.0};
@@ -101,10 +122,17 @@ int cc_views_default(const cc_model *m, Arena *a, cc_view *out) {
 }
 
 int cc_views_effective(const cc_model *m, Arena *a, cc_view **out, size_t *n) {
+    cc_level *lv;
+    size_t nl;
     *out = NULL, *n = 0;
-    size_t nd = 1 + (m ? 2 * m->nstoreys : 0), ns = m ? m->nviews : 0;
+    return cc_levels_of_model(m, a, &lv, &nl) ? -1 : cc_views_effective_lv(m, lv, nl, a, out, n);
+}
+
+int cc_views_effective_lv(const cc_model *m, const cc_level *lv, size_t nl, Arena *a, cc_view **out, size_t *n) {
+    *out = NULL, *n = 0;
+    size_t nd = 1 + 2 * nl, ns = m ? m->nviews : 0;
     cc_view *v = arena_alloc(a, (nd + ns) * sizeof *v, sizeof(double));
-    if (!v || cc_views_default(m, a, v)) return -1;
+    if (!v || cc_views_default_lv(lv, nl, a, v)) return -1;
     size_t k = nd;
     for (size_t i = 0; i < nd; i++) { /* stored over the defaults */
         const cc_view *st = m ? cc_model_view(m, &v[i].id) : NULL;

@@ -19,7 +19,7 @@
 // ribbon.rs:1443-1530, viewing.rs:17-38, :354-410, crates/bimble-core/src/view.rs:296-635.
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills what it starts.
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -181,6 +181,70 @@ try {
   const vcu = JSON.parse(await q("view_clip"));
   check("ceiling plan: look up, z from the cut (2300) up to the level above (3000)",
     vcu.look === "up" && vcu.cut === 2300 && vcu.clip && vcu.clip.min[2] === Math.fround(2300 - origin[2]) && vcu.clip.max[2] === Math.fround(3000 - origin[2]), JSON.stringify(vcu));
+
+  // ---- S1: a read-only scene (an IFC opened as it is, a .bimbleview): its storeys' views ----
+  // golden/ifc/views/<name>.txt (ccore_golden.rs ifc_views_files: Rust's default_views on
+  // Scene::levels, open_views' summaries, resolve per plan). Opened with the action "open"
+  // (File -> Open: read-only), each compared byte for byte.
+  const GOLD = join(CCORE, "golden");
+  const S1_IN = [["frame", "ifc/frame.ifc"], ["frame2", "ifc/frame2.ifc"], ["same_level", "ifc/fixtures/same_level.ifc"],
+    ["ishape_beam", "ifc/fixtures/ishape_beam.ifc"], ["storeys_grid", "ifc/views/fixtures/storeys_grid.ifc"],
+    ["frame2.bimbleview", "view/frame2.bimbleview"]];
+  const s1Views = {};
+  for (const [name, rel] of S1_IN) {
+    const lines = readFileSync(join(GOLD, `ifc/views/${name}.txt`), "utf8").split("\n").filter((l) => l);
+    const f = join(tmp, rel.split("/").pop());
+    copyFileSync(join(GOLD, rel), f);
+    const r = await call("action", "open", JSON.stringify({ path: f, discard: true }));
+    check(`S1 ${name}: open read-only -> 200`, r.status === 200, r.text);
+    check(`S1 ${name}: read-only`, JSON.parse(await q("state")).editable === false);
+    const ov = await q("open_views");
+    const got = ov.slice(ov.indexOf(',"views":') + 9, -1);
+    const want = lines.find((l) => l.startsWith("views ")).slice(6);
+    check(`S1 ${name}: open_views views = Rust's (golden/ifc/views/${name}.txt)`, got === want, `\n  got  ${got}\n  want ${want}`);
+    const ga = await q("grid_axes");
+    const wantGa = lines.find((l) => l.startsWith("grid_axes ")).slice(10);
+    check(`S1 ${name}: grid_axes = Rust's grids and levels`, ga === wantGa, `\n  got  ${ga}\n  want ${wantGa}`);
+    const ovj = JSON.parse(ov);
+    check(`S1 ${name}: on open the 3D view is current, one tab`, ovj.active === V3D && ovj.current?.id === V3D && ovj.tabs.length === 1, JSON.stringify(ovj.tabs));
+    let plans = 0, clipOk = 0;
+    const bad = [];
+    for (const l of lines.filter((x) => x.startsWith("plan "))) {
+      const [, id, what, a, , b] = l.split(" ");
+      const t = await tab("open", vtab(id));
+      const vcText = await q("view_clip");
+      const vc = JSON.parse(vcText);
+      plans++;
+      const m = /"cut":([^,]*),"elevation":([^,]*),/.exec(vcText);
+      const ok = t.status === 200 && vc.id === id && what === "cut" && m && m[1] === a && m[2] === b;
+      if (!ok) bad.push(`${l} -> ${t.status} ${vcText}`);
+      if (vc.clip && vc.clip.min.length === 3 && vc.clip.max.length === 3) clipOk++; // may be empty (z min > max): views.rs view_clip
+    }
+    check(`S1 ${name}: each plan opens; view_clip cut and elevation = Rust's resolve (${plans} plans)`, bad.length === 0, bad.join("\n  "));
+    check(`S1 ${name}: each plan has a clip box (the scene's bounds cut to its range)`, clipOk === plans, `${clipOk} of ${plans}`);
+    s1Views[name] = ovj.views;
+  }
+  // The read-only scene's views are derived, never stored: no edit, the placing state stays null.
+  const svRo = await call("verb", "set_view", JSON.stringify({ id: s1Views.storeys_grid[1].id, scale: 50 }));
+  check("S1: a view of a read-only scene is not stored (set_view refused: read only)", svRo.status !== 200 && /read only/.test(svRo.text), `${svRo.status} ${svRo.text}`);
+  check("S1: placing stays null on a plan of a read-only scene", (await q("placing")) === "null");
+  const sgNames = s1Views.storeys_grid.map((v) => v.name);
+  check("S1 storeys_grid: levels by elevation, the storey without a GlobalId keyed by its name",
+    JSON.stringify(sgNames) === JSON.stringify(["3D", "Plan Basement", "Plan Ground", "Plan First", "Plan Roof", "Ceiling Basement", "Ceiling Ground", "Ceiling First", "Ceiling Roof"]) &&
+    s1Views.storeys_grid[3].storey === "First", JSON.stringify(s1Views.storeys_grid.map((v) => [v.name, v.storey])));
+  check("S1 storeys_grid: Plan Basement cut at half the 800 mm to Ground", s1Views.storeys_grid[1].range.cut.offset_mm === 400);
+  // Close the read-only scene: no views, grid_axes null.
+  await call("action", "close", JSON.stringify({ discard: true }));
+  check("S1: nothing open: grid_axes null", (await q("grid_axes")) === "null");
+  // A linked IFC: its grids and levels follow the open model's (an editable one: none of either).
+  const lk = join(tmp, "storeys_grid.ifc");
+  check("S1: reopen frame.bimble", (await call("action", "open", JSON.stringify({ path: model, discard: true }))).status === 200);
+  check("S1: link storeys_grid.ifc -> 200", (await call("action", "link_model", JSON.stringify({ path: lk }))).status === 200);
+  const gal = JSON.parse(await q("grid_axes"));
+  const sgGa = JSON.parse(readFileSync(join(GOLD, "ifc/views/storeys_grid.txt"), "utf8").split("\n").find((l) => l.startsWith("grid_axes ")).slice(10));
+  check("S1: grid_axes of an editable model: its levels, then the link's axes and levels",
+    gal.axes.length === 0 && gal.levels.length === 3 && gal.links.length === 1 && gal.links[0].name === "storeys_grid.ifc" && gal.links[0].visible === true &&
+    JSON.stringify(gal.links[0].axes) === JSON.stringify(sgGa.axes) && JSON.stringify(gal.links[0].levels) === JSON.stringify(sgGa.levels), JSON.stringify(gal));
 
   // ---- a new model: the 3D view only, current ----
   await call("action", "new", JSON.stringify({ discard: true }));

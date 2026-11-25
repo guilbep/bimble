@@ -219,6 +219,7 @@ fn derive(dir: &Path) -> Files {
     // ---- L1: reference plans (`reference/`), at the end of the list: see `reference_files`.
     reference_files(dir, &mut files);
     dxf_files(dir, &mut files); // L2
+    ifc_views_files(dir, &mut files); // S1
     files
 }
 
@@ -3789,5 +3790,125 @@ fn dxf_files(dir: &Path, files: &mut Files) {
             Err(e) => writeln!(s, "error {e}").unwrap(),
         }
         files.insert(format!("dxf/{name}.txt"), s.into_bytes());
+    }
+}
+
+// ---------------------------------------------------------------- S1: views of a read-only scene
+
+/// Input of `ifc_views_files` written by hand (ticket S1), committed: put back in `files` as is,
+/// so `--check` knows it.
+const S1_FIXTURE: &str = "ifc/views/fixtures/storeys_grid.ifc";
+
+/// `ifc/views/<name>.txt`: the views the viewer offers for a scene opened read-only (an IFC read
+/// by `read_str`, a `.bimbleview` read by `viewfile::read`), on its levels (`Scene::levels`:
+/// key the storey's GlobalId, or its name without one), as viewing.rs `refresh_views` (no side
+/// file: `effective` of no stored view) and calls.rs `open_views` give them. Lines:
+///   `views <json>`: open_views' `views` (ViewSummary + auto_name, keys sorted);
+///   `grid_axes <json>`: `{"axes": scene.grids, "levels": the levels, "links": []}`, the C
+///     core's query `grid_axes` with no link;
+///   `plan <id> cut <f64> elevation <f64>` for each plan: `resolve` of its range, its cut, and
+///     its storey's elevation (what the C query `view_clip` says), or `plan <id> error <text>`.
+fn ifc_views_files(dir: &Path, files: &mut Files) {
+    use bimble_core::view::{Look, ViewKind, default_views, effective, resolve};
+    use bimble_geom::viewfile;
+    let fixture = std::fs::read(dir.join(S1_FIXTURE)).expect("read the S1 fixture");
+    files.insert(S1_FIXTURE.into(), fixture);
+    let inputs = [
+        ("frame", "ifc/frame.ifc"),
+        ("frame2", "ifc/frame2.ifc"),
+        ("same_level", "ifc/fixtures/same_level.ifc"),
+        ("ishape_beam", "ifc/fixtures/ishape_beam.ifc"),
+        ("storeys_grid", S1_FIXTURE),
+        ("frame2.bimbleview", "view/frame2.bimbleview"),
+    ];
+    for (name, rel) in inputs {
+        let bytes = std::fs::read(dir.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        let scene: Scene = if rel.ends_with(".bimbleview") {
+            viewfile::read_bytes(&bytes).unwrap_or_else(|e| panic!("{rel}: {e}"))
+        } else {
+            bimble_ifc::read::read_str(std::str::from_utf8(&bytes).expect("utf-8"))
+                .unwrap_or_else(|e| panic!("{rel}: {e}"))
+        };
+        let levels = scene.levels();
+        let defaults = default_views(&levels);
+        let views = effective(&BTreeMap::new(), &levels);
+        let auto_name = |v: &bimble_core::view::View| -> Value {
+            let Some(d) = defaults.iter().find(|d| d.id == v.id && d.name == v.name) else {
+                return Value::Null;
+            };
+            let (kind, storey) = match &d.kind {
+                ViewKind::Plan { storey, look, .. } => (
+                    match look {
+                        Look::Down => "plan",
+                        Look::Up => "ceiling",
+                    },
+                    levels
+                        .iter()
+                        .find(|l| l.key == *storey)
+                        .map(|l| l.name.clone()),
+                ),
+                ViewKind::ThreeD => ("3d", None),
+                _ => return Value::Null,
+            };
+            json!({"kind": kind, "storey": storey})
+        };
+        let summaries: Vec<Value> = views
+            .iter()
+            .map(|w| {
+                let mut j = serde_json::to_value(bimble_api::query::ViewSummary {
+                    id: w.id,
+                    name: w.name.clone(),
+                    kind: w.kind.clone(),
+                    scale: w.scale,
+                    crop: w.crop,
+                    true_north: w.true_north,
+                    references: w.references.len(),
+                    annotations: w.annotations.len(),
+                })
+                .unwrap();
+                j["auto_name"] = auto_name(w);
+                j
+            })
+            .collect();
+        let mut s = String::new();
+        writeln!(s, "views {}", serde_json::to_string(&summaries).unwrap()).unwrap();
+        let axes: Vec<Value> = scene
+            .grids
+            .iter()
+            .map(|g| json!({"end_mm": g.end_mm, "start_mm": g.start_mm, "tag": g.tag}))
+            .collect();
+        let lv: Vec<Value> = levels
+            .iter()
+            .map(|l| json!({"elevation_mm": l.elevation_mm, "key": l.key, "name": l.name}))
+            .collect();
+        let g = json!({"axes": axes, "levels": lv, "links": []});
+        writeln!(s, "grid_axes {}", serde_json::to_string(&g).unwrap()).unwrap();
+        for v in &views {
+            let ViewKind::Plan {
+                storey,
+                look,
+                range,
+            } = &v.kind
+            else {
+                continue;
+            };
+            match resolve(range, *look, storey, &levels) {
+                Ok(r) => {
+                    let mut sorted: Vec<_> = levels.iter().collect();
+                    sorted.sort_by(|a, b| a.elevation_mm.total_cmp(&b.elevation_mm));
+                    let e = sorted.iter().find(|l| l.key == *storey).unwrap().elevation_mm;
+                    writeln!(
+                        s,
+                        "plan {} cut {} elevation {}",
+                        v.id,
+                        Value::from(r.cut),
+                        Value::from(e)
+                    )
+                    .unwrap();
+                }
+                Err(e) => writeln!(s, "plan {} error {e}", v.id).unwrap(),
+            }
+        }
+        files.insert(format!("ifc/views/{name}.txt"), s.into_bytes());
     }
 }

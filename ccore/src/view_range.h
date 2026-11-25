@@ -5,6 +5,7 @@
 #define CCORE_VIEW_RANGE_H
 #include "buf.h"
 #include "model.h"
+#include "view_effective.h"
 
 /* view.rs resolve of the plan `v` on the model's storeys: its planes in world mm, top, cut,
  * bottom, depth as CC_RANGE_* (+-infinity where unlimited: top and cut up, bottom down, depth
@@ -12,4 +13,7 @@
  * level and the planes' order. 0 ok; 1 not valid, with Rust's text appended to `err` (may be
  * NULL); -1 out of memory. A view that is not a plan is "unknown storey". */
 int cc_view_resolve(const cc_model *m, const cc_view *v, double out[4], Buf *err);
+/* The same on the levels `lv` (view_effective.h; any order), the plan's storey a level's key
+ * (ticket S1: a read-only scene's levels). */
+int cc_view_resolve_lv(const cc_level *lv, size_t n, const cc_view *v, double out[4], Buf *err);
 #endif

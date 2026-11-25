@@ -16,21 +16,30 @@ static int fail(Buf *err, const char *s) {
 }
 
 int cc_view_resolve(const cc_model *m, const cc_view *v, double out[4], Buf *err) {
+    Arena a;
+    arena_init(&a, 0);
+    cc_level *lv;
+    size_t n;
+    int rc = cc_levels_of_model(m, &a, &lv, &n) ? -1 : cc_view_resolve_lv(lv, n, v, out, err);
+    arena_free(&a);
+    return rc;
+}
+
+int cc_view_resolve_lv(const cc_level *lv, size_t n, const cc_view *v, double out[4], Buf *err) {
     const double inf = 1.0 / 0.0;
-    size_t n = m ? m->nstoreys : 0;
     size_t *o = malloc((n ? n : 1) * sizeof *o);
     if (!o) return -1;
     /* The levels by elevation (a stable sort, total_cmp). */
     for (size_t i = 0; i < n; i++) {
         size_t j = i;
-        int64_t k = tkey(m->storeys[i].elevation);
-        while (j > 0 && tkey(m->storeys[o[j - 1]].elevation) > k) o[j] = o[j - 1], j--;
+        int64_t k = tkey(lv[i].elevation);
+        while (j > 0 && tkey(lv[o[j - 1]].elevation) > k) o[j] = o[j - 1], j--;
         o[j] = i;
     }
     size_t i = n;
-    if (v->kind == CC_VIEW_PLAN && v->storey.n == 22)
+    if (v->kind == CC_VIEW_PLAN)
         for (size_t k = 0; k < n && i == n; k++)
-            if (!memcmp(m->storeys[o[k]].id.c, v->storey.p, 22)) i = k;
+            if (lv[o[k]].key.n == v->storey.n && (!v->storey.n || !memcmp(lv[o[k]].key.p, v->storey.p, v->storey.n))) i = k;
     if (i == n) {
         free(o);
         if (err) {
@@ -39,7 +48,7 @@ int cc_view_resolve(const cc_model *m, const cc_view *v, double out[4], Buf *err
         }
         return 1;
     }
-    double here = m->storeys[o[i]].elevation;
+    double here = lv[o[i]].elevation;
     for (int p = 0; p < 4; p++) {
         const cc_range_plane *r = &v->range[p];
         int unl = 0;
@@ -49,15 +58,15 @@ int cc_view_resolve(const cc_model *m, const cc_view *v, double out[4], Buf *err
         case CC_LEVEL_ABOVE: /* the first level more than 1 mm higher; none: unlimited */
             unl = 1;
             for (size_t k = i + 1; k < n; k++)
-                if (m->storeys[o[k]].elevation > here + 1.0) {
-                    base = m->storeys[o[k]].elevation, unl = 0;
+                if (lv[o[k]].elevation > here + 1.0) {
+                    base = lv[o[k]].elevation, unl = 0;
                     break;
                 }
             break;
         case CC_LEVEL_BELOW: /* the first level more than 1 mm lower; none: this one */
             for (size_t k = i; k-- > 0;)
-                if (m->storeys[o[k]].elevation < here - 1.0) {
-                    base = m->storeys[o[k]].elevation;
+                if (lv[o[k]].elevation < here - 1.0) {
+                    base = lv[o[k]].elevation;
                     break;
                 }
             break;

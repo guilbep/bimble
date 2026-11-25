@@ -568,3 +568,31 @@ With the fonts, the file is D6's Roboto file (deviation 12).
 
 **Where.** `ccore/session/sheet_svg.c` (`cc_paper_pdf_query`), `ccore/host/fonts.c`,
 `ccore/src/wasm_api.c` (`host_fonts`); tests `ccore/test/sheet_pdf_test.c`, `ccore/test/lab_export.mjs`.
+
+## 16. Views of a read-only scene (ticket S1, ADR 0021)
+
+An IFC opened as it is, or a `.bimbleview`, now offers Rust's views: the 3D view, then a plan and
+a ceiling plan per storey (viewing.rs `refresh_views` on `Scene::levels`: key the storey's
+GlobalId text, or its name when it has none). `open_views`, the plan tabs and `view_clip` match
+Rust's `default_views`, `auto_name` and `resolve` byte for byte (`golden/ifc/views/`, from
+`ccore_golden`; `ccore/test/views_test.mjs`). What differs:
+
+- **No side views file.** Rust keeps the views of an IFC in a side file (`open_side_file`,
+  `ViewsFile`): stored views and sheets over the defaults. The C core has none: the views of a
+  read-only scene are derived from its storeys, never stored; `set_view` on one is refused as
+  every edit of a read-only scene ("this file is read only: import it to edit").
+- **The query `grid_axes` is new** (`session/views.h`, `cc_sv_grid_axes_json`), for G2 to draw:
+  `{"axes": [{"end_mm", "start_mm", "tag"}], "levels": [{"elevation_mm", "key", "name"}],
+  "links": [{"axes", "levels", "name", "visible"}]}`, null with nothing open. A read-only scene's
+  axes are `Scene::grids` as read and its levels `Scene::levels` (the golden's `grid_axes` line);
+  an editable model's axes are its grids' (ADR 0056, G1; id order, axes in order) and its levels
+  its storeys (id order); then each linked model's, in link order. Rust has no such query.
+- **`view_clip`** (already a C addition, ticket C1) works on a read-only scene: `cut` from
+  `resolve` and `elevation` the plan's level as `resolve` finds it (the lowest with that key).
+- Code: the levels are `cc_level` (`src/view_effective.h`): `cc_views_default_lv`,
+  `cc_views_effective_lv`, `cc_view_resolve_lv` (`src/view_range.h`); the model functions are
+  these on the model's storeys, so every model golden keeps its bytes. The session takes the
+  levels of what is open (`session/views.c` `cc_sv_levels`).
+
+**What Rust sees.** Nothing new on a file: no model field, no stored view. A Rust viewer opening
+the same IFC offers the same views with the same ids.

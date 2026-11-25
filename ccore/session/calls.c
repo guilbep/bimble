@@ -629,8 +629,14 @@ static int q_open_views(cc_session *s, JsonW *w) {
     jw_key(w, "tabs"), jw_arr_begin(w);
     for (size_t i = 0; loaded(s) && i < s->ntabs; i++) cc_sv_tab_json(w, &s->tabs[i]);
     jw_arr_end(w);
+    cc_level *lv; /* S1: the levels of what is open (a read-only scene's too) */
+    size_t nl;
+    if (cc_sv_levels(s, &a, &lv, &nl)) {
+        arena_free(&a);
+        return w->b->oom = 1, CC_ERR;
+    }
     jw_key(w, "views"), jw_arr_begin(w);
-    for (size_t i = 0; i < n; i++) cc_sv_summary_json(w, s->open ? &s->model : NULL, &v[i]);
+    for (size_t i = 0; i < n; i++) cc_sv_summary_json(w, lv, nl, &v[i]);
     jw_arr_end(w);
     jw_obj_end(w);
     arena_free(&a);
@@ -651,6 +657,7 @@ static void plan_box(const cc_scene *sc, const cc_view *v, const double z[4], cc
 /* A C addition (views.h, ticket C1): what the viewport draws for the active view.
  *   {"id", "type": "three_d"|"plan"|"section", "look": "down"|"up"|null, "storey": its id or null,
  *    "elevation": the storey's (world mm) or null, "cut": the cut plane (world mm) or null,
+ *    (S1: on the levels of what is open, a read-only scene's too: views.h cc_sv_levels)
  *    "clip": {"min":[x,y,z],"max":[x,y,z]} (scene coordinates, f32 as ClipBox) or null}
  * clip: views.rs view_clip for a plan: the model's bounds (all elements, ClipBox::around), z cut
  * to what the plan shows (ResolvedRange::visible: depth to cut looking down, cut to depth looking
@@ -669,16 +676,10 @@ static int q_view_clip(cc_session *s, JsonW *w) {
         jw_null(w);
         return done(w);
     }
-    const cc_model *m = s->open ? &s->model : NULL;
-    double z[4];
-    int plan = v.kind == CC_VIEW_PLAN && !cc_sv_resolve(m, &v, z);
+    double z[4], elev = 0.0; /* S1: on the session's levels (a read-only scene's too) */
+    int plan = v.kind == CC_VIEW_PLAN && !cc_sv_plan_range(s, &v, z);
     const cc_scene *sc = scene_now(s);
-    const cc_storey *st = NULL;
-    if (v.kind == CC_VIEW_PLAN && v.storey.n == 22 && m) {
-        cc_gid sid;
-        memcpy(sid.c, v.storey.p, 22);
-        st = cc_model_storey(m, &sid);
-    }
+    int st = v.kind == CC_VIEW_PLAN && cc_sv_level(s, v.storey, &elev);
     jw_obj_begin(w);
     jw_key(w, "clip");
     cc_vis box;
@@ -701,7 +702,7 @@ static int q_view_clip(cc_session *s, JsonW *w) {
     if (plan) jw_f64(w, z[CC_RANGE_CUT]);
     else jw_null(w);
     jw_key(w, "elevation");
-    if (st) jw_f64(w, st->elevation);
+    if (st) jw_f64(w, elev);
     else jw_null(w);
     jw_key(w, "id"), jw_str_n(w, v.id.c, 22);
     jw_key(w, "look");
@@ -916,6 +917,10 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     }
     if (!strcmp(name, "open_views")) return q_open_views(s, &w);
     if (!strcmp(name, "view_clip")) return q_view_clip(s, &w);
+    if (!strcmp(name, "grid_axes")) { /* S1: the grid axes and levels of what is open and its links (views.h) */
+        cc_sv_grid_axes_json(s, &w);
+        return done(&w);
+    }
     if (!strcmp(name, "view_annotations")) return q_view_annotations(s, body, n, &w);
     if (!strcmp(name, "annotate")) { /* the annotate tool's state (calls.h "annotate") */
         if (!s->open) {
@@ -2229,7 +2234,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
         arena_init(&a, 0);
         cc_view v;
         double z[4];
-        if (s->tab_open && cc_sv_active(s, &a, &v) == 1 && v.kind == CC_VIEW_PLAN && !cc_sv_resolve(s->open ? &s->model : NULL, &v, z)) {
+        if (s->tab_open && cc_sv_active(s, &a, &v) == 1 && v.kind == CC_VIEW_PLAN && !cc_sv_plan_range(s, &v, z)) {
             cc_vis box;
             cc_vis_init(&box);
             plan_box(sc, &v, z, &box);

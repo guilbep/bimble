@@ -10,9 +10,11 @@
  *     sets the placing storey; the temporary hide goes), `auto_name`.
  *   ribbon.rs `sync_tabs`, `tab_verb`, `after_tab_clicks`: the open tabs, in order.
  *   views.rs `view_clip`: the box a plan shows (scene coordinates), unlimited sides at the bounds.
+ *   viewing.rs `levels` (ticket S1): the views are made on the levels of what is open: the
+ *     model's storeys, or a read-only scene's (an IFC opened as it is, a .bimbleview) as read
+ *     (scene.rs levels: key the file's GlobalId text, the name when there is none). A read-only
+ *     scene's views are the defaults only (derived, never stored: no side views file in C).
  * Deviations:
- *   - a read-only scene (an IFC opened as it is, a .bimbleview) lists the 3D view only (Rust reads
- *     its storeys from the scene; the C read-only scenes keep none).
  *   - "in view" hides stay session-wide (visibility.h): a view's stored visibility is not applied.
  *   - Home: closing the last tab leaves no current tab (`tab_open` 0) until a view is opened.
  *   - only view tabs open: project, materials, schedule and sheet tabs are never open.
@@ -23,9 +25,16 @@
 #include "arena.h"
 #include "json_w.h"
 #include "model.h"
+#include "view_effective.h"
 
 struct cc_session;
 
+/* The levels of what is open (viewing.rs levels; view_effective.h), in `a`: the model's storeys
+ * or the read-only scene's; none when nothing is loaded. 0 ok, -1 out of memory. */
+int cc_sv_levels(const struct cc_session *s, Arena *a, cc_level **out, size_t *n);
+/* scene.rs levels of a read-only scene: `kind` CC_VIEW_IFC (`scene` a cc_ifc_scene) or
+ * CC_VIEW_FILE (a cc_viewfile); others: none. Keys and names borrow from the scene. */
+int cc_sv_scene_levels(int kind, const void *scene, Arena *a, cc_level **out, size_t *n);
 /* The views shown (view.rs effective), built in `a` (stored views are shallow copies of the
  * model's). 0 ok, -1 out of memory. Nothing loaded: none. */
 int cc_sv_list(struct cc_session *s, Arena *a, cc_view **out, size_t *n);
@@ -47,9 +56,20 @@ int cc_sv_tab_open(const struct cc_session *s, const cc_gid *id);
 /* view.rs resolve: the plan `v`'s planes, world mm (top, cut, bottom, depth as CC_RANGE_*;
  * +-HUGE_VAL where unlimited), on the model's storeys. 0 ok, -1 not a plan or not valid. */
 int cc_sv_resolve(const cc_model *m, const cc_view *v, double out[4]);
+/* The same on the session's levels (an editable model or a read-only scene, ticket S1). */
+int cc_sv_plan_range(const struct cc_session *s, const cc_view *v, double out[4]);
+/* The elevation (world mm) of the level `key` as resolve finds it: 1 found, 0 none. */
+int cc_sv_level(const struct cc_session *s, cc_str key, double *elevation);
 
-/* The ViewSummary of `v` plus auto_name (calls.rs:368-385), keys sorted. */
-void cc_sv_summary_json(JsonW *w, const cc_model *m, const cc_view *v);
+/* The ViewSummary of `v` plus auto_name (calls.rs:368-385) on the levels `lv`, keys sorted. */
+void cc_sv_summary_json(JsonW *w, const cc_level *lv, size_t nl, const cc_view *v);
+/* S1, the query grid_axes (a C addition; G2 draws the axes): null when nothing is loaded, else
+ *   {"axes": [{"end_mm":[x,y],"start_mm":[x,y],"tag"}], "levels": [{"elevation_mm","key","name"}],
+ *    "links": [{"axes","levels","name","visible"}]}
+ * the grid axes (plan, world mm) and levels of what is open, then of each linked model in link
+ * order: a read-only scene's as read (file order; levels lowest first, key as cc_sv_levels), a
+ * model's from its grids (id order, axes in order) and storeys (id order). */
+void cc_sv_grid_axes_json(struct cc_session *s, JsonW *w);
 /* {"id","type"} of a view tab (ribbon.rs:406), keys sorted. */
 void cc_sv_tab_json(JsonW *w, const cc_gid *id);
 #endif
