@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The dev loop for the C core behind the Vue lab: ccore/dev.sh [model]
-#   Builds the host with `build.sh host` (one tcc call), starts Vite (web-ui/, --strictPort) and the native host, prints
+#   Builds the host with `build.sh host` (tcc for changed files, clang -O2 for the rest), starts Vite (web-ui/, --strictPort) and the native host, prints
 #   the lab URL, then watches src/ and host/ (*.c, *.h). On every save: rebuild with tcc and, when
 #   the build passes, restart the host on the same port, token and model. The open lab page sees
 #   the new epoch in the change feed and re-syncs by itself. When the build fails, the compiler
