@@ -2,6 +2,8 @@
 *.ifc
 *.bimble
 !**/fixtures/*.ifc
+# C core goldens: synthetic, exported from the demo frame by crates/bimble-api/examples/ccore_golden.rs.
+!ccore/golden/ifc/*.ifc
 !**/fixtures/*.bimble
 web/dist/
 .DS_Store

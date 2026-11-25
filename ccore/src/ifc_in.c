@@ -79,7 +79,6 @@ double cc_sqrt_soft(double x) {
 }
 
 /* The integer version everywhere: no libm to link (tcc, clang's errno fallback, wasm32). */
-double cc_sqrt(double x) { return cc_sqrt_soft(x); }
 
 /* f64::hypot. Exact when one side is 0 (all of Bimble's own axis-aligned rectangles);
  * otherwise sqrt(a²+b²), which can differ from libm's hypot in the last bit. */

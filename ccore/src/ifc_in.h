@@ -15,6 +15,7 @@
 #define CCORE_IFC_IN_H
 #include "buf.h"
 #include "model.h"
+#include "scene.h"
 #include "step.h"
 
 typedef struct {
@@ -33,6 +34,6 @@ void cc_ifc_report_free(cc_ifc_report *rep);
 /* MaterialCategory::classify (ASCII and Latin-1 case folding). */
 cc_category cc_material_classify(const char *name, size_t n);
 /* Correctly rounded square root (no libm: tcc and wasm32). */
-double cc_sqrt(double x); /* == cc_sqrt_soft */
+/* cc_sqrt: the one in scene.h (both are correctly rounded; one definition). */
 double cc_sqrt_soft(double x); /* the integer version cc_sqrt uses under tcc, for tests */
 #endif
