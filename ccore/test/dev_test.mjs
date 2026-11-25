@@ -152,9 +152,11 @@ try {
   const left = tree.filter((t) => alive(t.pid));
   check("no process left (host, Vite, watcher)", pids.length > 0 && left.length === 0, left.map((t) => `${t.pid} ${t.cmd}`).join("; "));
   check("the host was among them", tree.some((t) => /bimble-ccore (--session )?47411/.test(t.cmd)) && tree.some((t) => /vite/.test(t.cmd)));
-  let ps = "";
-  try { ps = execFileSync("pgrep", ["-af", `bimble-ccore ${PORT}|vite --port ${VITE}`], { encoding: "utf8" }); } catch {}
-  check("no bimble-ccore on 47411 or vite on 5199 runs", ps.trim() === "", ps.trim());
+  // By listening port, not by command line: a pgrep pattern also matched other shells that
+  // merely mention it (false positive), and missed the host once it took --session.
+  let ls = "";
+  try { ls = execFileSync("ss", ["-ltnpH", `( sport = :${PORT} or sport = :${VITE} )`], { encoding: "utf8" }); } catch {}
+  check(`nothing listens on ${PORT} or ${VITE}`, ls.trim() === "", ls.trim());
   for (const t of left) try { process.kill(t.pid, "SIGKILL"); } catch {}
   try { process.kill(-dev.pid, "SIGKILL"); } catch {}
   check("host/calls.c restored byte for byte", readFileSync(EDITED).equals(ORIGINAL));
