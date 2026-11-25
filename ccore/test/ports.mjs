@@ -82,7 +82,7 @@ const TABLE = [
   ["vite", "lab_refs_dxf", 5223, 156], // L2
   ["vite", "lab_export", 5196, 134], // D7
   ["vite", "lab_ifc_plan", 5210, 148], // S1
-  ["vite", "lab_quantities", 5208, 146], // Q2
+  ["vite", "lab_quantities", 5212, 150], // Q2 (150: 146 is lab_ifc_plan's host offset)
 ];
 export const SPAN = 160; // offsets 0..SPAN-1
 const AUTO_LO = 20000, AUTO_SLOTS = Math.floor((32000 - AUTO_LO) / SPAN);
