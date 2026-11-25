@@ -50,6 +50,7 @@ SESSION=(session/*.c)
 VIEW_DENY=(src/verbs.c src/verb_table.c src/verbs_sheets.c src/ifc_in.c src/ifc_out.c)
 VIEW_DENY+=(src/draw_cut.c src/paper.c src/draw_style.c src/draw_plan.c src/draw_annot.c src/draw_view.c) # drawings on paper (D1-D4): not in the viewer
 VIEW_DENY+=(src/draw_sheet.c) # sheets on paper (D5)
+VIEW_DENY+=(src/pdf_out.c) # the PDF writer (D6): not in the viewer
 VIEW_OPT=-Os
 VIEW_MAX=400000
 HOST=(host/*.c)

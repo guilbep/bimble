@@ -361,3 +361,33 @@ scene's volume and bounding box against numbers computed by hand from the fixtur
 
 **Where.** `ccore/src/ifc_read.c`, `ccore/src/ifc_geom.h`, test `ccore/test/ifc_read_test.c`
 (`own_goldens`).
+
+## 12. The PDF's font files are packed by the C core's own deflate (ticket D6)
+
+**What.** Rust's `Sheet::to_pdf` (pdf-writer) embeds each Roboto file it uses as a FontFile2
+stream packed with flate2 (zlib, level 6, miniz_oxide). The C writer (`ccore/src/pdf_out.c`)
+packs the same file with the C core's deflate (`cc_gzip` of `inflate.h`: LZ77 and fixed Huffman
+codes in one block) in a zlib wrapper (head `78 01`, the same Adler-32). So in a Roboto PDF these
+two streams differ, with their `/Length` and every offset after them (the cross-reference table,
+`startxref`). Every other byte is Rust's: the content stream, the font dictionaries, the widths,
+the ToUnicode maps, the information dictionary, the order of the objects and the free list. A
+Helvetica PDF has no packed stream: it is Rust's file byte for byte.
+
+**Why.** Byte equality would need a port of miniz_oxide's compressor (its hash chains, lazy
+matching and dynamic Huffman trees), for no gain to a reader: any inflater gives the same font
+file. Sizes (`pdf_out` suite): Roboto-Regular 349 400 bytes packs to 232 017 (Rust 203 917),
+Roboto-Bold 351 108 to 235 223 (Rust 206 258); a Roboto sheet using both weights is about 57 KB
+larger than Rust's.
+
+**What Rust sees.** `pdf/*-helvetica.pdf` and every `.content` are the same bytes
+(`pdf_out_test`). `pdf/sample-roboto.pdf`: the same objects in the same order, each the same
+bytes but the two FontFile2 streams, whose dictionaries match but `/Length` and which both
+inflate (Rust's and the C core's) to the shipped font file.
+
+**Also.** The writer takes the font files from its caller (`cc_pdf_options.roboto`, 350 KB each:
+not in the wasm) and refuses any other file (`CC_PDF_ERR_FONT`): its glyph ids and metrics are
+the table of `roboto_widths.inc`, so a character outside it (U+0020–U+024F and 20 punctuation
+marks) is glyph 0, where Rust reads the whole `cmap`. A pen of negative or NaN width is
+`CC_PDF_ERR_PEN` where Rust's pdf-writer asserts (a panic).
+
+**Where.** `ccore/src/pdf_out.c` (`zlib`, `embed_font`), `ccore/test/pdf_out_test.c`.
