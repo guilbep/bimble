@@ -5,7 +5,7 @@ use bimble_api::query;
 use bimble_core::Command;
 use eframe::egui;
 
-use crate::{READ_ONLY, Viewer, state};
+use crate::{Viewer, state};
 
 /// The ops `Viewer::call` serves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +67,7 @@ pub(crate) fn model(v: &Viewer) -> Result<&bimble_core::Model, String> {
         .as_ref()
         .and_then(|l| l.edit.as_ref())
         .map(|ed| &ed.model)
-        .ok_or_else(|| READ_ONLY.to_string())
+        .ok_or_else(|| v.edit_unavailable())
 }
 
 impl Viewer {
@@ -189,11 +189,12 @@ impl Viewer {
     /// placing starts placing, as `action("place_<kind>")`.
     fn call_set_placing(&mut self, ctx: &egui::Context, args_json: &str) -> Result<(), String> {
         let patch = crate::edit::PlacingPatch::parse(args_json)?;
+        let why = self.edit_unavailable();
         let start = self
             .loaded
             .as_mut()
             .and_then(|l| l.edit.as_mut())
-            .ok_or_else(|| READ_ONLY.to_string())?
+            .ok_or(why)?
             .set_placing(patch)?;
         match start {
             Some(k) => self.call_action(ctx, &format!("place_{}", k.label().to_lowercase())),

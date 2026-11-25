@@ -63,6 +63,23 @@ mod visibility;
 const SAMPLES: u32 = 4;
 /// Model queries and edits on a file opened without its model (a plain IFC).
 const READ_ONLY: &str = "this file is read only: import it to edit";
+/// Model queries and edits with nothing loaded and nothing loading.
+const NO_MODEL: &str = "no model is open";
+/// Model queries and edits while a file loads (followed by its name when known).
+const LOADING: &str = "still loading";
+/// What the viewer shows when the loading thread ended without an answer (it panicked).
+const LOADER_STOPPED: &str = "loading failed: the loader stopped";
+
+/// Why the model cannot be queried or edited: a load in progress (`loading`, with the file name
+/// when known), nothing open, or a file opened without its model (`READ_ONLY`).
+fn edit_unavailable_message(loaded: bool, loading: Option<Option<&str>>) -> String {
+    match (loading, loaded) {
+        (Some(Some(name)), _) => format!("{LOADING} {name}"),
+        (Some(None), _) => LOADING.to_string(),
+        (None, true) => READ_ONLY.to_string(),
+        (None, false) => NO_MODEL.to_string(),
+    }
+}
 /// While moving on a slow machine, a far cell's stand-in is drawn when its error spans at most
 /// this many pixels (ADR 0036 #9: the 415 MB model's whole frame 29 → 1.3 ms at 3 px).
 const MOVING_PROXY_PX: f32 = 3.0;
@@ -600,6 +617,16 @@ impl Loading {
             progress: Default::default(),
             started: Instant::now(),
             steps: Vec::new(),
+        }
+    }
+
+    /// The answer of the loading thread, if it has come. A thread that ended without one (it
+    /// panicked) is a failed load, not one still running.
+    fn poll(&self) -> Option<LoadResult> {
+        match self.rx.try_recv() {
+            Ok(r) => Some(r),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(LOADER_STOPPED.into())),
         }
     }
 
@@ -1478,7 +1505,7 @@ impl Viewer {
 
     fn poll_linking(&mut self) {
         let Some(l) = &self.linking else { return };
-        let Ok(result) = l.rx.try_recv() else { return };
+        let Some(result) = l.poll() else { return };
         let l = self.linking.take().unwrap();
         match &result {
             Ok(big::Outcome::Ready { scene, .. }) => log::info!(
@@ -1568,7 +1595,7 @@ impl Viewer {
 
     fn poll_loading(&mut self) {
         let Some(l) = &self.loading else { return };
-        let Ok(result) = l.rx.try_recv() else { return };
+        let Some(result) = l.poll() else { return };
         let l = self.loading.take().unwrap();
         let timing = l.timing();
         let Loading { path, imported, .. } = l;
@@ -1684,6 +1711,14 @@ impl Viewer {
         }
     }
 
+    /// Why the model cannot be queried or edited now (it is not loaded yet, none is open, or the
+    /// file is read only).
+    fn edit_unavailable(&self) -> String {
+        let name = |l: &Loading| l.path.file_name().map(|n| n.to_string_lossy().into_owned());
+        let name = self.loading.as_ref().map(name);
+        edit_unavailable_message(self.loaded.is_some(), name.as_ref().map(|n| n.as_deref()))
+    }
+
     /// File → New: over unsaved work, the same question as opening another file (ADR 0028).
     fn new_model(&mut self) {
         self.commit_pages();
@@ -1724,7 +1759,7 @@ impl Viewer {
     /// `apply_commands`, with the error returned too (the page bridge reports it).
     fn try_apply(&mut self, cmds: Vec<bimble_core::Command>) -> Result<(), String> {
         let Some(ed) = self.loaded.as_mut().and_then(|l| l.edit.as_mut()) else {
-            return Err(READ_ONLY.into());
+            return Err(self.edit_unavailable());
         };
         match ed.apply(cmds) {
             Ok(()) => {
@@ -5278,5 +5313,40 @@ mod tests {
             dir.join("house (imported 2).bimble")
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A query 210 ms after start, while the file loads, said "read only" (a wrong bug report).
+    /// `Viewer` needs a GPU: its decision is tested as the free function it calls.
+    #[test]
+    fn edit_unavailable_says_loading_while_loading() {
+        let m = edit_unavailable_message(false, Some(Some("tower.bimble")));
+        assert_eq!(m, "still loading tower.bimble");
+        assert_eq!(edit_unavailable_message(false, Some(None)), "still loading");
+        assert_ne!(m, READ_ONLY);
+    }
+
+    #[test]
+    fn edit_unavailable_says_no_model_when_nothing_is_open() {
+        assert_eq!(edit_unavailable_message(false, None), "no model is open");
+    }
+
+    /// Unchanged: a loaded file without its model (a plain IFC, a `.bimbleview`) is read only.
+    #[test]
+    fn edit_unavailable_is_read_only_for_a_loaded_view_only_file() {
+        assert_eq!(edit_unavailable_message(true, None), READ_ONLY);
+    }
+
+    /// A loading thread that panicked drops its sender: that is a failed load, not one that
+    /// goes on forever.
+    #[test]
+    fn a_dead_loader_is_an_error_not_endless_loading() {
+        let (tx, rx) = channel();
+        let l = Loading::new(PathBuf::from("tower.bimble"), rx, false);
+        assert!(l.poll().is_none(), "still running while the sender lives");
+        drop(tx);
+        match l.poll() {
+            Some(Err(e)) => assert_eq!(e, LOADER_STOPPED),
+            _ => panic!("a dead loader must be reported as an error"),
+        }
     }
 }
