@@ -1703,7 +1703,14 @@ static void tube(P3 *p, double r, size_t n, Emit *out) {
     if (closed) p->n--;
     size_t m = p->n;
     double(*rings)[3] = malloc(m * n * sizeof *rings);
-    if (!rings) { out->mb->oom = 1; return; }
+    /* The ring's cos and sin, once per tube rather than once per point: the same n angles for
+     * every ring (ticket IFC2: half the read of a rebar shape went to cc_sin/cc_cos). */
+    double(*cs)[2] = malloc(n * sizeof *cs);
+    if (!rings || !cs) { out->mb->oom = 1; free(rings); free(cs); return; }
+    for (size_t j = 0; j < n; j++) {
+        double a = (double)j / (double)n * TAU;
+        cs[j][0] = cc_cos(a), cs[j][1] = cc_sin(a);
+    }
     double prev_n[3];
     int has_prev = 0;
     for (size_t i = 0; i < m; i++) {
@@ -1721,13 +1728,13 @@ static void tube(P3 *p, double r, size_t n, Emit *out) {
             if (!ht) memcpy(t, dout, sizeof t), ht = 1;
         } else if (hin) memcpy(t, din, sizeof t), ht = 1;
         else if (hout) memcpy(t, dout, sizeof t), ht = 1;
-        if (!ht) { free(rings); return; }
+        if (!ht) { free(rings); free(cs); return; }
         double seed[3];
         if (has_prev) memcpy(seed, prev_n, sizeof seed);
         else if ((t[2] < 0 ? -t[2] : t[2]) < 0.9) seed[0] = 0, seed[1] = 0, seed[2] = 1;
         else seed[0] = 1, seed[1] = 0, seed[2] = 0;
         double ds = dot(seed, t), w[3] = {seed[0] - t[0] * ds, seed[1] - t[1] * ds, seed[2] - t[2] * ds}, nrm[3];
-        if (!normalize(w, nrm)) { free(rings); return; }
+        if (!normalize(w, nrm)) { free(rings); free(cs); return; }
         memcpy(prev_n, nrm, sizeof nrm), has_prev = 1;
         double bin[3], bd[3], stretch = 1.0;
         cross(t, nrm, bin);
@@ -1742,8 +1749,7 @@ static void tube(P3 *p, double r, size_t n, Emit *out) {
             stretch = 1.0 / c;
         }
         for (size_t j = 0; j < n; j++) {
-            double a = (double)j / (double)n * TAU;
-            double ca = cc_cos(a), sa = cc_sin(a), off[3];
+            double ca = cs[j][0], sa = cs[j][1], off[3];
             for (int k = 0; k < 3; k++) off[k] = r * (ca * nrm[k] + sa * bin[k]);
             if (hb) {
                 double extra = dot(off, bd) * (stretch - 1.0);
@@ -1763,13 +1769,14 @@ static void tube(P3 *p, double r, size_t n, Emit *out) {
     }
     if (!closed) {
         double(*start)[3] = malloc(n * sizeof *start);
-        if (!start) { out->mb->oom = 1; free(rings); return; }
+        if (!start) { out->mb->oom = 1; free(rings); free(cs); return; }
         for (size_t j = 0; j < n; j++) memcpy(start[j], rings[n - 1 - j], sizeof start[j]);
         emit_polygon(out, (const double(*)[3])start, n, NULL, 0);
         emit_polygon(out, (const double(*)[3])(rings + (m - 1) * n), n, NULL, 0);
         free(start);
     }
     free(rings);
+    free(cs);
 }
 
 static void swept_disk(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {

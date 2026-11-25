@@ -10,8 +10,28 @@
 static uint64_t bits64(double x) { uint64_t u; memcpy(&u, &x, 8); return u; }
 static double from64(uint64_t u) { double x; memcpy(&x, &u, 8); return x; }
 
-/* Correctly rounded square root: digit by digit on the 108-bit radicand m << 54. */
+/* Correctly rounded square root: digit by digit on the 108-bit radicand m << 54. IEEE 754 sqrt
+ * is correctly rounded too, so with clang or GCC on aarch64 and x86-64 the instruction gives the
+ * same bits, about 20 times faster (ticket IFC2: a third of a rebar shape's read; ifc_in_test
+ * compares the two on 200k random values, the digit version runs under tcc and wasm). */
+static double sqrt_digits(double x);
 double cc_sqrt(double x) {
+#if (defined(__clang__) || (defined(__GNUC__) && !defined(__TINYC__))) && defined(__aarch64__)
+    if (x >= 0.0) {
+        double r;
+        __asm__("fsqrt %d0, %d1" : "=w"(r) : "w"(x));
+        return r;
+    }
+#elif (defined(__clang__) || (defined(__GNUC__) && !defined(__TINYC__))) && defined(__x86_64__)
+    if (x >= 0.0) {
+        double r;
+        __asm__("sqrtsd %1, %0" : "=x"(r) : "x"(x));
+        return r;
+    }
+#endif
+    return sqrt_digits(x);
+}
+static double sqrt_digits(double x) {
     uint64_t u = bits64(x);
     if (x != x) return x;
     if (x == 0.0 || x == 1.0 / 0.0) return x; /* ±0, +inf */
