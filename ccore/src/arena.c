@@ -65,3 +65,15 @@ void arena_free(Arena *a) {
     }
     a->head = NULL;
 }
+
+void arena_adopt(Arena *dst, Arena *src) {
+    ArenaBlock *first = src->head;
+    if (!first) return;
+    ArenaBlock *last = first;
+    while (last->next) last = last->next;
+    if (dst->head) {
+        last->next = dst->head->next;
+        dst->head->next = first;
+    } else dst->head = first;
+    src->head = NULL;
+}

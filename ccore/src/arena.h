@@ -15,4 +15,7 @@ void *arena_alloc(Arena *a, size_t size, size_t align);
 void *arena_dup(Arena *a, const void *src, size_t size);
 void arena_reset(Arena *a); /* keeps the newest block, drops the rest */
 void arena_free(Arena *a);
+/* Moves every block of `src` into `dst` (freed with it; `dst` keeps its current block), and
+ * empties `src`. For per-thread arenas whose results outlive the job. */
+void arena_adopt(Arena *dst, Arena *src);
 #endif

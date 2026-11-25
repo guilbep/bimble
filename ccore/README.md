@@ -15,11 +15,14 @@ f64 formatters on top of vendored Ryu (`vendor/ryu`, see `SOURCE`): `fmt_f64_jso
 ADR 0068 sets seven layers (`docs/research/core-architecture.md` §5). A file includes only its
 own layer and lower ones. L0–L3 have no files, clock, threads or globals; platform code lives only
 in the carriers (L6), which hand the session a `cc_platform` (`session/platform.h`: read file,
-write file atomically, exists, now, wall clock, random bytes, log).
+write file atomically, exists, now, wall clock, random bytes, log). One exception, from §5
+("parallel pure functions on a frozen model, one scratch arena per thread"): `src/jobs` (L0) runs
+independent tasks on pthreads natively (serial in wasm), with one global, the thread count
+(`CC_THREADS`, else the online cores). The IFC display reader and the STEP parser use it.
 
 | Layer | What | Files today |
 |---|---|---|
-| L0 base | arena, buffers, JSON, CBOR, inflate, number formatting and parsing, GlobalIds, maths | `src/arena`, `buf`, `json_r`, `json_w`, `cbor`, `inflate`, `fmt`, `strtod`, `guid`, `math`, `src/freestanding/` |
+| L0 base | arena, buffers, JSON, CBOR, inflate, number formatting and parsing, GlobalIds, maths, parallel jobs | `src/arena`, `buf`, `json_r`, `json_w`, `cbor`, `inflate`, `fmt`, `strtod`, `guid`, `math`, `jobs`, `src/freestanding/` |
 | L1 model | model, validate, canonical, Commands, History | `src/model`, `command`, `history`, `library` |
 | L2 io / geom | file (v1, v2), STEP, IFC in and out; scene | `src/file`, `step`, `ifc_in`, `ifc_out`, `scene`, `earcut` |
 | L3 api | verbs, query | `src/verbs`, `query` |

@@ -50,7 +50,7 @@ typedef struct {
 
 typedef struct {
     Arena arena;
-    cc_step_entity *ents; /* sorted by id, unique (a later duplicate id wins, as in Rust) */
+    cc_step_entity *ents; /* sorted by id, unique (a later duplicate id wins, as in Rust); malloc'd */
     size_t n;
     const char **schemas; /* FILE_SCHEMA names, upper case, in Rust's order */
     size_t nschemas;
@@ -60,6 +60,11 @@ typedef struct {
 /* Parses `text`. Always initializes `f` (free with cc_step_free). 0 ok; -1 with `err`:
  * "line N: msg" (Rust's ParseError text), offset set. */
 int cc_step_parse(cc_step_file *f, const char *text, size_t n, cc_error *err);
+/* step.rs parse_skipping: the instances of the entity types in `skip` (upper case) are stepped
+ * over, never parsed nor stored, nor counted as skipped (only simple instances: a complex one is
+ * always kept). Chunks are parsed in parallel (cc_jobs), merged in file order. */
+int cc_step_parse_skipping(cc_step_file *f, const char *text, size_t n, const char *const *skip, size_t nskip,
+                           cc_error *err);
 void cc_step_free(cc_step_file *f);
 
 const cc_step_entity *cc_step_get(const cc_step_file *f, uint64_t id);

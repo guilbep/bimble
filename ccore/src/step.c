@@ -1,7 +1,21 @@
-/* STEP parser, a port of crates/bimble-ifc/src/step.rs (serial, same chunk split). See step.h. */
+/* STEP parser, a port of crates/bimble-ifc/src/step.rs (same chunk split, chunks parsed in
+ * parallel with cc_jobs and merged in file order). See step.h. */
 #include "step.h"
 #include <stdlib.h>
 #include <string.h>
+#include "jobs.h"
+#ifdef CC_IFC_PROFILE
+#include <stdio.h>
+#include <time.h>
+static double sp_now(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1e3 + t.tv_nsec / 1e6;
+}
+#define SPROF(what, t0) fprintf(stderr, "PROF    step %-14s %8.1f ms\n", what, sp_now() - t0)
+#else
+#define SPROF(what, t0) ((void)0)
+#endif
 
 /* arena_dup aligned to 8 (arena_dup is byte-aligned). */
 static void *st_dup8(Arena *a, const void *src, size_t n) {
@@ -191,6 +205,14 @@ void cc_step_decode_string(const char *raw, size_t n, Buf *out) {
 
 /* ------------------------------------------------------------------ parser */
 
+/* Upper-case keywords (entity, type and enum names) interned per parser: one copy each. */
+typedef struct {
+    const char *p;
+    size_t n;
+    uint64_t h;
+} Name;
+#define NAMES_MAX 8192 /* distinct names kept; past it, copied each time */
+
 typedef struct {
     const char *s;
     size_t n, i, line;
@@ -198,6 +220,8 @@ typedef struct {
     cc_sv *stk; /* scratch stack of list items */
     size_t nstk, capstk;
     Buf tmp, dec;
+    Name *names; /* open addressing, 2 * NAMES_MAX slots (NULL: no interning) */
+    size_t nnames;
     int oom;
     char msg[160];
 } P;
@@ -261,9 +285,26 @@ static int keyword_is(P *p, const char *w) {
 }
 
 static const char *upper_dup(P *p, size_t st, size_t en) {
-    char *d = arena_alloc(p->a, en - st + 1, 1);
+    size_t n = en - st;
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (size_t j = st; j < en; j++) h = (h ^ (unsigned char)up(p->s[j])) * 0x100000001b3ull;
+    size_t mask = 2 * NAMES_MAX - 1, k = (size_t)h & mask;
+    if (p->names) {
+        for (; p->names[k].p; k = (k + 1) & mask) {
+            const Name *x = &p->names[k];
+            if (x->h != h || x->n != n) continue;
+            size_t j = 0;
+            while (j < n && x->p[j] == up(p->s[st + j])) j++;
+            if (j == n) return x->p;
+        }
+    }
+    char *d = arena_alloc(p->a, n + 1, 1);
     if (!d) { p->oom = 1; return ""; }
     for (size_t j = st; j < en; j++) d[j - st] = up(p->s[j]);
+    if (p->names && p->nnames < NAMES_MAX) {
+        p->names[k].p = d, p->names[k].n = n, p->names[k].h = h;
+        p->nnames++;
+    }
     return d;
 }
 
@@ -430,15 +471,40 @@ static int items(P *p, size_t depth, cc_sv **out, size_t *nout) {
     }
 }
 
-/* To just after the next ';' outside strings. */
+#ifdef __wasm__
+static const char *st_memchr(const char *s, int c, size_t n) {
+    for (size_t i = 0; i < n; i++)
+        if (s[i] == (char)c) return s + i;
+    return NULL;
+}
+#else
+static const char *st_memchr(const char *s, int c, size_t n) { return memchr(s, c, n); }
+#endif
+
+static size_t count_nl(const char *s, size_t n) {
+    size_t k = 0;
+    for (const char *e = s + n; (s = st_memchr(s, '\n', (size_t)(e - s))) != NULL; s++) k++;
+    return k;
+}
+
+/* To just after the next ';' outside strings (newlines inside strings are not counted). By
+ * memchr: the ';', a quote before it, and the newlines before that. */
 static void skip_statement(P *p) {
     while (p->i < p->n) {
-        char c = p->s[p->i++];
-        if (c == '\'') {
-            while (p->i < p->n)
-                if (p->s[p->i++] == '\'') break;
-        } else if (c == '\n') p->line++;
-        else if (c == ';') return;
+        const char *s = p->s + p->i;
+        size_t rem = p->n - p->i;
+        const char *semi = st_memchr(s, ';', rem);
+        size_t lim = semi ? (size_t)(semi - s) : rem;
+        const char *q = st_memchr(s, '\'', lim);
+        size_t upto = q ? (size_t)(q - s) : lim;
+        p->line += count_nl(s, upto);
+        if (!q) {
+            p->i += semi ? lim + 1 : rem;
+            return;
+        }
+        p->i += upto + 1; /* a string: to just after its closing quote */
+        const char *e = st_memchr(p->s + p->i, '\'', p->n - p->i);
+        p->i = e ? (size_t)(e - p->s) + 1 : p->n;
     }
 }
 
@@ -467,7 +533,18 @@ static int ent_push(EntVec *ev, const cc_step_entity *e) {
     return 0;
 }
 
-static void parse_chunk(P *p, size_t start, size_t line, size_t stop, EntVec *ev, size_t *skipped) {
+typedef struct {
+    const char *const *skip; /* entity types not stored (upper case) */
+    size_t nskip;
+} Skip;
+
+static int skipped_type(const Skip *sk, const char *name) {
+    for (size_t k = 0; k < sk->nskip; k++)
+        if (strcmp(sk->skip[k], name) == 0) return 1;
+    return 0;
+}
+
+static void parse_chunk(P *p, size_t start, size_t line, size_t stop, const Skip *sk, EntVec *ev, size_t *skipped) {
     p->i = start;
     p->line = line;
     for (;;) {
@@ -482,7 +559,7 @@ static void parse_chunk(P *p, size_t start, size_t line, size_t stop, EntVec *ev
         cc_step_entity e;
         memset(&e, 0, sizeof e);
         cc_sv idv;
-        int bad = value(p, 0, &idv);
+        int bad = value(p, 0, &idv), skip = 0;
         if (!bad && idv.kind != CC_SV_REF) bad = perr(p, "expected entity id");
         if (!bad) bad = expect(p, '=');
         if (!bad) {
@@ -501,11 +578,16 @@ static void parse_chunk(P *p, size_t start, size_t line, size_t stop, EntVec *ev
                 if (st == en) bad = perr(p, "expected entity name");
                 else {
                     e.name = upper_dup(p, st, en);
-                    bad = expect(p, '(') || items(p, 1, &e.args, &e.nargs) || expect(p, ';');
+                    /* step.rs parse_chunk: a skipped type is stepped over, never parsed. */
+                    if (sk->nskip && skipped_type(sk, e.name)) {
+                        skip_statement(p);
+                        skip = 1;
+                    } else bad = expect(p, '(') || items(p, 1, &e.args, &e.nargs) || expect(p, ';');
                 }
             }
         }
         if (p->oom) return;
+        if (skip) continue;
         if (!bad) {
             if (ent_push(ev, &e)) { p->oom = 1; return; }
         } else {
@@ -544,17 +626,58 @@ static int fail(cc_error *err, size_t line, size_t off, const char *msg) {
     return -1;
 }
 
+/* One chunk of the DATA section per task; one parser (scratch and arena) per worker. */
+typedef struct {
+    const char *text;
+    size_t n;
+    size_t (*starts)[2]; /* chunk start offset and line */
+    size_t nst, end;
+    Skip sk;
+    P *ps;        /* per worker */
+    Arena *arenas; /* per worker */
+    EntVec *out;  /* per chunk */
+    size_t *skipped; /* per chunk */
+} Chunks;
+
+static void chunk_job(void *ctx, size_t k, size_t w) {
+    Chunks *c = ctx;
+    P *p = &c->ps[w];
+    if (p->oom) return;
+    parse_chunk(p, c->starts[k][0], c->starts[k][1], k + 1 < c->nst ? c->starts[k + 1][0] : c->end, &c->sk,
+                &c->out[k], &c->skipped[k]);
+}
+
+static void p_init(P *p, const char *text, size_t n, Arena *a) {
+    memset(p, 0, sizeof *p);
+    p->s = text, p->n = n, p->line = 1, p->a = a;
+    buf_init(&p->tmp);
+    buf_init(&p->dec);
+    p->names = calloc(2 * NAMES_MAX, sizeof *p->names); /* NULL: names copied each time */
+}
+
+static void p_free(P *p) {
+    free(p->stk);
+    free(p->names);
+    buf_free(&p->tmp);
+    buf_free(&p->dec);
+}
+
 int cc_step_parse(cc_step_file *f, const char *text, size_t n, cc_error *err) {
+    return cc_step_parse_skipping(f, text, n, NULL, 0, err);
+}
+
+int cc_step_parse_skipping(cc_step_file *f, const char *text, size_t n, const char *const *skip, size_t nskip,
+                           cc_error *err) {
     memset(f, 0, sizeof *f);
     arena_init(&f->arena, 0);
     if ((uint64_t)n > CC_STEP_MAX_BYTES) return fail(err, 0, 0, "file too large for the C core");
     P p;
-    memset(&p, 0, sizeof p);
-    p.s = text, p.n = n, p.line = 1, p.a = &f->arena;
-    buf_init(&p.tmp);
-    buf_init(&p.dec);
+    p_init(&p, text, n, &f->arena);
     int rc = 0;
     EntVec ev = {0};
+    Chunks c;
+    memset(&c, 0, sizeof c);
+    size_t nw = 0;
     const unsigned char *u = (const unsigned char *)text;
 
     skip_ws(&p);
@@ -610,6 +733,9 @@ int cc_step_parse(cc_step_file *f, const char *text, size_t n, cc_error *err) {
     const unsigned char *d5 = find(u + data_pos, n - data_pos, "DATA;");
     size_t data = data_pos + (d5 ? (size_t)(d5 - (u + data_pos)) : 0) + 5;
 
+#ifdef CC_IFC_PROFILE
+    double t0 = sp_now();
+#endif
     /* data_chunks: statement starts beginning a chunk, and the end (ENDSEC or end of text). */
     size_t (*starts_v)[2] = NULL, nst = 0, cst = 0, end;
     p.i = data, p.line = line;
@@ -635,35 +761,77 @@ int cc_step_parse(cc_step_file *f, const char *text, size_t n, cc_error *err) {
         skip_statement(&p);
     }
     end = p.i;
-    for (size_t k = 0; k < nst && !p.oom; k++)
-        parse_chunk(&p, starts_v[k][0], starts_v[k][1], k + 1 < nst ? starts_v[k + 1][0] : end, &ev, &f->skipped);
-    free(starts_v);
-    if (p.oom) { rc = fail(err, p.line, p.i, "out of memory"); goto done; }
+    SPROF("split", t0);
 
-    /* Sort by id; a later duplicate wins. */
+    /* The chunks on all workers, each into its own vector; merged in file order. */
+    c.text = text, c.n = n, c.starts = starts_v, c.nst = nst, c.end = end;
+    c.sk.skip = skip, c.sk.nskip = skip ? nskip : 0;
+    nw = cc_jobs_workers(nst);
+    c.ps = calloc(nw, sizeof *c.ps);
+    c.arenas = calloc(nw, sizeof *c.arenas);
+    c.out = calloc(nst ? nst : 1, sizeof *c.out);
+    c.skipped = calloc(nst ? nst : 1, sizeof *c.skipped);
+    if (!c.ps || !c.arenas || !c.out || !c.skipped) { free(starts_v); rc = fail(err, 0, 0, "out of memory"); goto done; }
+    for (size_t w = 0; w < nw; w++) {
+        arena_init(&c.arenas[w], (size_t)1 << 20);
+        p_init(&c.ps[w], text, n, &c.arenas[w]);
+    }
+    cc_jobs_run(nst, chunk_job, &c);
+    SPROF("chunks", t0);
+    free(starts_v);
+    int oom = 0;
+    size_t total = 0;
+    for (size_t w = 0; w < nw; w++) {
+        oom |= c.ps[w].oom;
+        arena_adopt(&f->arena, &c.arenas[w]);
+    }
+    for (size_t k = 0; k < nst; k++) total += c.out[k].n, f->skipped += c.skipped[k];
+    if (oom) { rc = fail(err, 0, 0, "out of memory"); goto done; }
+    ev.v = malloc((total ? total : 1) * sizeof *ev.v);
+    if (!ev.v) { rc = fail(err, 0, 0, "out of memory"); goto done; }
+    for (size_t k = 0; k < nst; k++) {
+        if (c.out[k].n) memcpy(ev.v + ev.n, c.out[k].v, c.out[k].n * sizeof *ev.v);
+        ev.n += c.out[k].n;
+        free(c.out[k].v);
+        c.out[k].v = NULL;
+    }
+
+    SPROF("merge", t0);
+    /* Sort by id (stable; usually already sorted); a later duplicate wins. */
     if (ev.n) {
-        cc_step_entity *tmp = malloc(ev.n * sizeof *tmp);
-        if (!tmp) { rc = fail(err, 0, 0, "out of memory"); goto done; }
-        sort_ents(ev.v, tmp, ev.n);
-        free(tmp);
-        size_t w = 0;
-        for (size_t k = 0; k < ev.n; k++) {
-            if (w && ev.v[w - 1].id == ev.v[k].id) ev.v[w - 1] = ev.v[k];
-            else ev.v[w++] = ev.v[k];
+        int sorted = 1;
+        for (size_t k = 1; k < ev.n && sorted; k++) sorted = ev.v[k - 1].id < ev.v[k].id;
+        size_t w = ev.n;
+        if (!sorted) {
+            cc_step_entity *tmp = malloc(ev.n * sizeof *tmp);
+            if (!tmp) { rc = fail(err, 0, 0, "out of memory"); goto done; }
+            sort_ents(ev.v, tmp, ev.n);
+            free(tmp);
+            w = 0;
+            for (size_t k = 0; k < ev.n; k++) {
+                if (w && ev.v[w - 1].id == ev.v[k].id) ev.v[w - 1] = ev.v[k];
+                else ev.v[w++] = ev.v[k];
+            }
         }
-        f->ents = st_dup8(&f->arena, ev.v, w * sizeof *ev.v);
-        if (!f->ents) { rc = fail(err, 0, 0, "out of memory"); goto done; }
+        f->ents = ev.v; /* owned (cc_step_free) */
         f->n = w;
+        ev.v = NULL;
     }
 done:
+    for (size_t w = 0; c.ps && w < nw; w++) p_free(&c.ps[w]);
+    for (size_t w = 0; c.arenas && w < nw; w++) arena_free(&c.arenas[w]);
+    for (size_t k = 0; c.out && k < c.nst; k++) free(c.out[k].v);
+    free(c.ps);
+    free(c.arenas);
+    free(c.out);
+    free(c.skipped);
     free(ev.v);
-    free(p.stk);
-    buf_free(&p.tmp);
-    buf_free(&p.dec);
+    p_free(&p);
     return rc;
 }
 
 void cc_step_free(cc_step_file *f) {
+    free(f->ents);
     arena_free(&f->arena);
     memset(f, 0, sizeof *f);
 }
