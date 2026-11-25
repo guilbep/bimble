@@ -114,6 +114,11 @@ jobs:
           persist-credentials: false
       - run: src/scripts/apt-install.sh clang lld
         timeout-minutes: 12
+      # wasm-opt: build.sh wasm-view needs it (the view wasm's 400 KB budget); pinned by the C branch.
+      - name: binaryen (wasm-opt)
+        run: |
+          src/ccore/ci/binaryen.sh "$HOME/.local/binaryen"
+          echo "$HOME/.local/binaryen/bin" >> "$GITHUB_PATH"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
