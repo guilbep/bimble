@@ -341,9 +341,12 @@ cmake, node, Chrome's file version, the checkout's line ends per golden file), t
 failed suites, then a probe of the kernel (`deps.sh` with cmake and Ninja; `test/run.sh` with it),
 which does not fail the steps above. Logs: artifact `ccore-windows-logs`.
 
-Expected failures, from reading the tests (not the C core): `host_test.mjs` checks "SIGTERM ->
-exits 0", but Node on Windows kills with `TerminateProcess` (exit code 1, no handler runs);
-`lab_boot.mjs` stops Vite and Chrome by process group (`process.kill(-pid)`), which Windows does
-not have. Both are for the owner of `test/*.mjs`.
+Two test-side blockers, fixed for win32 only (round 1b): `host_test.mjs` checks "SIGTERM -> exits
+0", but Node on Windows kills with `TerminateProcess` (exit code 1, no handler runs): on win32 the
+check is skipped with a printed `skip ... (win32: no SIGTERM)` line. `lab_boot.mjs` stopped Vite
+and Chrome by process group (`process.kill(-pid)`), which Windows does not have: on win32
+`taskkill /pid <pid> /T /F`. Since H1, `platform_win.c` also has `list_dir` (FindFirstFileW; a
+reparse point is an "f", as a symbolic link under lstat). The zig check after the rebase on L1:
+110 of 110 files compile, 36 of 36 binaries link (`ifc_read_test.c` needed `mkdir(path)` too).
 
 Measured on Windows: nothing yet. The first push gives the rows.

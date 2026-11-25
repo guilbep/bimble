@@ -22,6 +22,10 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#include <io.h>
+#define mkdir(path, mode) mkdir(path) /* WIN1: no mode argument there */
+#endif
 #include "../src/boolean.h"
 #include "../src/ifc_read.h"
 #include "../src/jobs.h"

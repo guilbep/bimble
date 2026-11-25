@@ -173,7 +173,9 @@ try {
   agent.destroy();
   host.kill("SIGTERM");
   const ex = await Promise.race([exited, sleep(3000).then(() => null)]);
-  check("SIGTERM -> exits 0", ex && ex.code === 0, JSON.stringify(ex));
+  // Windows (ticket WIN1): Node kills with TerminateProcess there, no handler runs (exit code 1).
+  if (process.platform === "win32") console.log("skip SIGTERM -> exits 0 (win32: no SIGTERM)");
+  else check("SIGTERM -> exits 0", ex && ex.code === 0, JSON.stringify(ex));
 } catch (e) {
   check("no exception in the test", false, e.stack ?? String(e));
 } finally {

@@ -5,7 +5,7 @@
 // and checks: no uncaught page error; no console error but the listed ones; startError is null;
 // the ribbon renders with tools; the page holds the host's 54 actions. Prints
 // "N passed, M failed"; exits non-zero on a failure. Kills all it starts.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -41,7 +41,12 @@ function start(name, cmd, args, opts) {
 
 async function cleanup() {
   for (const sig of ["SIGTERM", "SIGKILL"]) {
-    for (const p of procs) if (p.exitCode === null && p.signalCode === null) try { process.kill(-p.pid, sig); } catch {}
+    for (const p of procs) {
+      if (p.exitCode !== null || p.signalCode !== null) continue;
+      // Windows (ticket WIN1): no process groups; taskkill /T ends the tree (Vite's, Chrome's).
+      if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(p.pid), "/T", "/F"], { stdio: "ignore" });
+      else try { process.kill(-p.pid, sig); } catch {}
+    }
     await sleep(300);
   }
   rmSync(tmp, { recursive: true, force: true });

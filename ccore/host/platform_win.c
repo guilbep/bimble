@@ -197,8 +197,58 @@ static void wp_log(void *ctx, const char *line, size_t n) {
     fputc('\n', stderr);
 }
 
+/* platform.h list_dir (ticket H1): FindFirstFileW / FindNextFileW, "d" for a folder, "f" for
+ * anything else; a reparse point (symbolic link, junction) is an "f", as lstat's link on POSIX:
+ * a history walk never follows one. Names as UTF-8, in the system's order (no sort, as readdir). */
+static int wp_list_dir(void *ctx, const char *path, size_t max, char **names, size_t *n) {
+    (void)ctx;
+    *names = NULL, *n = 0;
+    size_t pn = strlen(path);
+    char *pat = malloc(pn + 3);
+    if (!pat) return CC_PF_NO_MEMORY;
+    snprintf(pat, pn + 3, "%s%s", path, pn && (path[pn - 1] == '/' || path[pn - 1] == '\\') ? "*" : "/*");
+    wchar_t *w = cc_win_wide(pat);
+    free(pat);
+    if (!w) return CC_PF_NOT_FOUND;
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(w, &fd);
+    free(w);
+    if (h == INVALID_HANDLE_VALUE) return CC_PF_NOT_FOUND; /* a folder always holds "." and ".." */
+    size_t cap = 256, len = 0;
+    char *p = malloc(cap);
+    if (!p) return FindClose(h), CC_PF_NO_MEMORY;
+    int st = CC_PF_OK;
+    do {
+        char *nm = cc_win_utf8(fd.cFileName);
+        if (!nm) continue; /* not valid UTF-16: no name the core could ask for */
+        if (!strcmp(nm, ".") || !strcmp(nm, "..")) {
+            free(nm);
+            continue;
+        }
+        size_t k = strlen(nm);
+        int dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
+        if (len + k + 2 > max) st = CC_PF_TOO_LARGE;
+        else if (len + k + 2 > cap) {
+            while (len + k + 2 > cap) cap *= 2;
+            char *q = realloc(p, cap);
+            if (!q) st = CC_PF_NO_MEMORY;
+            else p = q;
+        }
+        if (st == CC_PF_OK) {
+            p[len++] = dir ? 'd' : 'f';
+            memcpy(p + len, nm, k + 1);
+            len += k + 1;
+        }
+        free(nm);
+    } while (st == CC_PF_OK && FindNextFileW(h, &fd));
+    FindClose(h);
+    if (st != CC_PF_OK) return free(p), st;
+    *names = p, *n = len;
+    return CC_PF_OK;
+}
+
 static const cc_platform NATIVE = {
-    NULL, 1, wp_read_file, wp_exists, wp_write_file, wp_now_ms, wp_unix_s, wp_random, wp_log,
+    NULL, 1, wp_read_file, wp_exists, wp_write_file, wp_now_ms, wp_unix_s, wp_random, wp_log, wp_list_dir,
 };
 
 const cc_platform *cc_platform_native(void) { return &NATIVE; }
