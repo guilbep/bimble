@@ -117,7 +117,7 @@ async function host(op, name, body = "") {
 
 async function levels(mode, S, evalJs) {
   const B = (body) => evalJs(`(async () => { const b = await import('/src/bimble.ts'); ${body} })()`);
-  const P = (body) => evalJs(`(async () => { const p = await import('/src/pages/index.ts'); ${body} })()`);
+  const P = (body) => evalJs(`(async () => { const p = await import('/src/pages/index.ts'); const m = await import('/src/shell/send.ts'); ${body} })()`);
   const raf2 = () => evalJs("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))");
   const frames = () => evalJs("window.__bbGl ? window.__bbGl.frames : 0");
   const settle = async () => { const f0 = await frames(); await waitFor("a new frame", 3000, async () => (await frames()) > f0).catch(() => {}); for (let i = 0; i < 3; i++) await raf2(); };
@@ -140,7 +140,12 @@ async function levels(mode, S, evalJs) {
     return n; })()`);
   const toScreen = (x, y, z = 0) => evalJs(`JSON.stringify(window.__bbGl.toScreen(${x}, ${y}, ${z}))`).then((t) => JSON.parse(t));
   const grids = () => evalJs("JSON.stringify(window.__bbGrids ?? null)").then((t) => JSON.parse(t));
-  const page = async (id) => { await P(`p.currentPage.value = ${JSON.stringify(id)};`); await settle(); };
+  /** Shows a page, or the view (null), through the shell (UX1: shell/send.ts); fails the run when the shell refuses. */
+  const page = async (id) => {
+    const ok = await P(`return m.send(${JSON.stringify(id === null ? { do: "showView" } : { do: "showPage", page: id })}) && p.currentPage.value === ${JSON.stringify(id)};`);
+    if (!ok) throw new Error(`${mode}: the shell did not show ${id ?? "the view"}`);
+    await settle();
+  };
 
   await S("Page.navigate", { url: PAGES[mode] });
   await waitFor(`${mode}: data-bb-ready`, 30000, () => evalJs("document.documentElement.dataset.bbReady === '1'"));
