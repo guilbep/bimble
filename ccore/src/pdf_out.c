@@ -47,6 +47,12 @@ static int32_t sat_i32(float f) {
 static void f32_digits(float f, char d[10], int *n, int *e) {
     uint32_t bits;
     memcpy(&bits, &f, 4);
+    /* Ryu's f2d takes neither zero nor NaN nor infinity (its table index leaves the table): num()
+     * filters them, and so does this function, for any other caller. They give the digit 0. */
+    if ((bits & 0x7fffffffu) == 0 || ((bits >> FLOAT_MANTISSA_BITS) & 0xffu) == 0xffu) {
+        d[0] = '0', *n = 1, *e = 0;
+        return;
+    }
     floating_decimal_32 v = f2d(bits & ((1u << FLOAT_MANTISSA_BITS) - 1), (bits >> FLOAT_MANTISSA_BITS) & 0xffu);
     char t[10];
     int k = 0;
