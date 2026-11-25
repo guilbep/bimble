@@ -61,6 +61,7 @@
 import {
   actions, viewActions, // Q2: the view switches (edges, orthographic, fit, top)
   viewportKeys, // KEY1: Esc and Delete in the viewport (shell/keys.ts)
+  pointer, coordinates, // KEY1: the status bar's pointer coordinates
   annotate, annotateCall, boxTool, deleteAnnotation, moveAnnotation, openViews, placing, select, selectLinked, state, toolCall,
   viewAnnotations, viewClip, visibility, visibilitySets, measure, measureCall, type MeasureState,
   type AnnotateState, type ToolPointer, type ToolState, type ViewAnnotation, type ViewAnnotations, type ViewClip, type Visibility,
@@ -374,6 +375,8 @@ interface GlStats {
   turnLog?: { n: number; frames: { ms: number; yaw: number; pitch: number; done: boolean }[] };
   /** Test hook: the turns' clock runs at this rate (1: real time; 0.1: ten times slower). */
   clockScale?: number;
+  /** KEY1: `coordinates` queries for the status bar's pointer readout (one per frame at most, the pointer moved). */
+  pointerQueries: number;
   /** The view cube (viewcube.ts): shown, hovered target, clicks and drags. */
   viewCube?: CubeStats;
   /** Test hooks: a cube target's cell centre, a compass letter (client px), the target under client (x, y). */
@@ -419,7 +422,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null, links: [], linkTris: 0,
     annotations: null, overlayTexts: [], selectedAnnotation: null, annotate: null, annotateCalls: 0, annotError: null, annotAdded: null,
     measure: null, measureCalls: 0, measureError: null,
-    nav: { picks: 0, zoomPivot: null, zoomFrom: null, orbitPivot: null, orbitFrom: null, fits: 0 } };
+    nav: { picks: 0, zoomPivot: null, zoomFrom: null, orbitPivot: null, orbitFrom: null, fits: 0 }, pointerQueries: 0 };
   window.__bbGl = stats;
   if (!(canvas instanceof HTMLCanvasElement)) return () => undefined;
   const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
@@ -1558,6 +1561,35 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     dirty = true;
     return true;
   };
+  // ---- KEY1 ---- the status bar's pointer coordinates (lib.rs:2826-2864 pointer_world, :4603
+  // `pointer`): the point under the pointer on an element (the pick), else in a plan on its cut
+  // plane (the range's top), else none; as `coordinates` says it (the model's georeference: survey
+  // E/N and height, or x y without one). One query per frame at most, none while the pointer is still.
+  let ptrAt: [number, number] | null = null, ptrDone = "";
+  canvas.addEventListener("pointermove", (e) => { const r = canvas.getBoundingClientRect(); ptrAt = [e.clientX - r.left, e.clientY - r.top]; });
+  canvas.addEventListener("pointerleave", () => { ptrAt = null; ptrDone = ""; pointer.value = null; });
+  const pointerWorld = (x: number, y: number): [number, number, number] | null => {
+    const h = pickHit(x, y);
+    let p: V3 | null = h ? h.point : null;
+    const box = plan ? clipBox() : null;
+    if (!p && box) {
+      const r = rayAt(x, y), dz = r[5] ?? 0, z = box.max[2] ?? 0;
+      if (Math.abs(dz) > 1e-9) { const t = (z - (r[2] ?? 0)) / dz; p = [(r[0] ?? 0) + (r[3] ?? 0) * t, (r[1] ?? 0) + (r[4] ?? 0) * t, z]; }
+    }
+    if (!p) return null;
+    const w = toWorld(p);
+    return [w[0] ?? 0, w[1] ?? 0, w[2] ?? 0];
+  };
+  const pointerFrame = () => {
+    if (!ptrAt || !mesh) return;
+    const key = `${ptrAt[0]},${ptrAt[1]}`;
+    if (key === ptrDone) return;
+    ptrDone = key;
+    stats.pointerQueries++;
+    const w = pointerWorld(ptrAt[0], ptrAt[1]);
+    const c = w ? coordinates(w) : null;
+    pointer.value = w && c ? { world_mm: w, text: c.text } : null;
+  };
   // ---- end KEY1 ----
   const wheel = (e: WheelEvent) => {
     if (plan) { // about the pointer: the plan point under it stays put
@@ -1625,6 +1657,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       switchView(vc, cur?.type === "view" ? cur.id : null);
     }
     if (actions.value !== seenActions) { seenActions = actions.value; dirty = true; } // Q2: a switch turned
+    pointerFrame(); // KEY1: the status bar's coordinates, once a frame at most
     if (turn) { // a view-cube turn: one step per frame (lib.rs `animate`)
       const ms = performance.now() - turn.start;
       const k = turnAt(turn, turn.start + ms * (stats.clockScale ?? 1));

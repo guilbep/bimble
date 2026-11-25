@@ -17,8 +17,14 @@
 //   Every row fired at least once but the inert ones (P), counted by window.__bbKeys.
 //   Labels: the ribbon's Edges tooltip "… (E)", the File menu's New "Ctrl N", Save "Ctrl S", Open
 //     none (Rust has no Ctrl O), the palette's Edges row "E", the command field "Ctrl K".
+//   The status bar's pointer coordinates (glviewport.ts, lib.rs:2826-2864 and coords.rs): in the
+//     column's plan, zoomed in to under 1 mm a pixel, the pointer over the column's corner reads
+//     "x … y … · … m" within 1 mm of it (no georeference); one `coordinates` query for one move,
+//     none while still; with LV95 (EPSG:2056, E 2 600 000, N 1 200 000) "E … N … · … m (LV95)", the
+//     corner's survey point to the cm shown.
 // Before KEY1 the lab had no handler for 13 of the 16 rows (parity.md): the E, Delete-of-elements,
-// Ctrl S, Ctrl Z checks fail on the old code, and window.__bbKeys does not exist.
+// Ctrl S, Ctrl Z checks fail on the old code, window.__bbKeys does not exist, and the status bar's
+// readout stayed empty on the C core (query pointer answers null).
 // No uncaught page error; no console error or warning but the sync-XHR deprecation and the favicon
 // 404. Prints "N passed, M failed"; exits non-zero on a failure. Kills all it starts.
 import { spawn, execFileSync } from "node:child_process";
@@ -328,6 +334,58 @@ async function keys(mode, S, evalJs) {
     const inert = table.filter((r) => r.action === "paper_view").map((r) => r.keys);
     const missing = table.filter((r) => !inert.includes(r.keys) && r.keys !== "Ctrl N" && !h[r.keys]).map((r) => r.keys);
     check(`${mode}: every row ran but Ctrl N (last) and the inert ${inert.join(", ")} (${Object.keys(h).length} rows)`, missing.length === 0, `not run: ${missing.join(", ")}`);
+  }
+  // ---- the status bar's pointer coordinates (lib.rs:2826-2864, coords.rs text) ----
+  {
+    const readout = () => evalJs("document.querySelector('[data-bb=status-coords]')?.textContent.trim() ?? ''");
+    const num = (t) => Number(t.replace(/['\u2019]/g, ""));
+    const col = (await B("return b.query('elements');")).find((e) => e.class === "IfcColumn");
+    const el = await B(`return b.element(${JSON.stringify(col.id)});`);
+    const o = el.placement.origin, w = el.generator_params.width ?? el.generator_params.size ?? 300, d = el.generator_params.depth ?? w;
+    const plan = (await B("return b.openViews.value;")).views.find((v) => v.type === "plan" && v.look === "down" && v.storey === el.storey) ??
+      (await B("return b.openViews.value;")).views.find((v) => v.type === "plan");
+    await B(`return b.openView(${JSON.stringify(plan.id)});`);
+    await waitFor(`${mode}: the plan`, 5000, async () => (await cam())?.mode === "plan");
+    await press("F");
+    // A corner of the column (its box's min x, min y: the placement origin is its centre), 2 mm inside.
+    const corner = [o[0] - w / 2 + 2, o[1] - d / 2 + 2];
+    const at = async () => JSON.parse(await evalJs(`JSON.stringify(window.__bbGl.toScreen(${corner[0]}, ${corner[1]}, ${o[2] + 1000}))`));
+    // Zoomed in about the corner until a pixel is under 1 mm (the wheel zooms about the pointer).
+    for (let i = 0; i < 40 && (await cam()).half * 2 / 800 > 0.8; i++) {
+      const p = await at();
+      await S("Input.dispatchMouseEvent", { type: "mouseWheel", x: p[0], y: p[1], deltaX: 0, deltaY: -500 });
+      await raf2();
+    }
+    const mmPx = (await cam()).half * 2 / 800;
+    const q0 = await evalJs("window.__bbGl.pointerQueries");
+    const p = await at();
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p[0], y: p[1], button: "none" });
+    await waitFor(`${mode}: the readout`, 3000, async () => (await readout()) !== "").catch(() => {});
+    const t0 = await readout();
+    const m = /^x (\S+) y (\S+) · (\S+) m$/.exec(t0);
+    const got = m ? [num(m[1]) * 1000, num(m[2]) * 1000] : null;
+    check(`${mode}: the status bar over a column corner (no georeference): "x … y … · … m" within 1 mm (${mmPx.toFixed(2)} mm a pixel)`,
+      got && Math.abs(got[0] - corner[0]) <= 1 + mmPx / 2 && Math.abs(got[1] - corner[1]) <= 1 + mmPx / 2, `${t0} vs ${corner}`);
+    // Still pointer: no more query; moved: one more at most a frame.
+    for (let i = 0; i < 5; i++) await raf2();
+    const q1 = await evalJs("window.__bbGl.pointerQueries");
+    check(`${mode}: the pointer still: no query (${q1 - q0} for the one move)`, q1 - q0 === 1, `${q1 - q0}`);
+    // With a georeference (LV95, as G2's): "E … N … · … m (LV95)", east and north offset by the corner.
+    await B("return b.georefSet({ crs: 'EPSG:2056', east_m: 2600000, north_m: 1200000, height_m: 432.1, rotation_deg: 0 });");
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p[0] + 1, y: p[1], button: "none" });
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p[0], y: p[1], button: "none" });
+    await waitFor(`${mode}: the survey readout`, 3000, async () => /\(LV95\)$/.test(await readout())).catch(() => {});
+    const t1 = await readout();
+    console.log(`${mode}: readout over the corner (${corner}): "${t0}"; with LV95: "${t1}"`);
+    const g = /^E (\S+) N (\S+) · (\S+) m \(LV95\)$/.exec(t1);
+    const gv = g ? [num(g[1]), num(g[2])] : null;
+    check(`${mode}: with a georeference: "E … N … · … m (LV95)", the corner's survey point to the cm shown`,
+      gv && Math.abs(gv[0] - (2600000 + corner[0] / 1000)) <= 0.006 + mmPx / 2000 && Math.abs(gv[1] - (1200000 + corner[1] / 1000)) <= 0.006 + mmPx / 2000, `${t1} vs ${corner}`);
+    await B("return b.undo();"); // the georeference off again
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: 5, y: 5, button: "none" });
+    const three = (await B("return b.openViews.value;")).views.find((v) => v.type === "three_d");
+    await B(`return b.openView(${JSON.stringify(three.id)});`);
+    await waitFor(`${mode}: 3D again (coords)`, 5000, async () => (await cam())?.mode === "3d");
   }
   // Ctrl N: a new model (the model is saved: no question); not from a field.
   {

@@ -603,7 +603,7 @@ function labelTextAgent(): void {
  *  (never inside on_change, whose callback runs in the viewer's frame). */
 function watchPointer(): void {
   const canvas = document.getElementById("bimble");
-  if (!canvas) return;
+  if (!canvas || backend !== "rust") return; // KEY1: the C core's page computes it (glviewport.ts)
   let timer = 0;
   let queued = false;
   const poll = () => {
