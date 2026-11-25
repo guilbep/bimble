@@ -249,3 +249,126 @@ Checked after each fix: `test/run.sh`, `CC=clang test/run.sh`, `test/host.sh`,
 - The page: pick is a JS scan over every triangle (26 ms at 20k, 62 ms at 60k warm; 80–215 ms
   cold); drawing has no culling. Neither was changed.
 - A GPU: all page numbers are SwiftShader.
+
+## After T18 (25 Nov 2026): session log, cached -O2 objects, `--warm`, GPU
+
+**Result: edit → pixels at 20k is 0.46 s median (p95 0.47 s) on the GPU: under the 0.6 s target.**
+On SwiftShader it is 0.81 s. 2k: 0.13 s GPU / 0.16 s SwiftShader; 60k: 1.30 s / 2.03 s.
+Before (T16, SwiftShader, pure tcc host, full-rewrite session): 0.39 / 2.09 / 5.96 s.
+
+What changed (each its own commit on `cc/t18`):
+
+1. **Session file = append-only log** (`host/session.c`, commit `3883e75`). Line 1 is a snapshot
+   (no model text while the model is the model file; the text only after edits force a new
+   snapshot); then one JSON line per change (`apply` with the commands and the inverses, `undo`,
+   `redo`, `state`), written with one `write(2)` before the call answers. Restore replays the
+   lines through the history code (commands applied, inverses compared, ids and selection checked);
+   a bad or truncated line keeps the lines before it, and the log says why. A snapshot with model
+   text is loaded instead of the model file (the file is not read). A new snapshot is written after
+   a Save, after 2,000 lines, or when the lines pass 4× the snapshot bytes.
+   Regression test: `test/session_log_test.mjs` (9 checks; fails on the old code: format 1, one
+   object). `session_test.mjs` passes unchanged. One behaviour change: a truncated file now keeps
+   its valid prefix. The test's "truncated" case cuts the file in half, which lands in the first
+   entry line, so the prefix is the bare snapshot and the expected "rev 1, 72 elements" still
+   holds.
+2. **`build.sh host` links cached clang -O2 objects** (`build.sh`, commit `46d0941`). Every
+   source with a clang -O2 object cached for its exact content (key: sha1 of the file, of all
+   headers and the vendored ryu sources, and of the flags) is linked from that object. The other
+   files go through `tcc -c`, then tcc links everything. After the link, the -O2 objects of the
+   tcc-compiled files are built in the background. Both compilers use `-DRYU_ONLY_64_BIT_OPS`,
+   and clang uses `-ffp-contract=off` (no FMA, so the floats match tcc). tcc links the clang
+   objects without trouble on aarch64. All suites pass on the mixed binary (`host_test`,
+   `mesh_http_test` with BMSH bytes, `session*`, `large_test`, `wasm_run`, the lab tests).
+   `HOST_MIX=0` gives the old single tcc call.
+3. **`--warm`** (commit `2bf70e3`, used by `dev.sh` and the bench loop): when the poll loop is
+   idle and the rev is new, the host builds the scene and the BMSH bytes. The page then finds
+   `/mesh` cached after its own restart handling. This was not in the ticket. It was added
+   because 1 + 2 gave 0.67–0.77 s at 20k on GPU.
+4. **Pick: per-element box test before the triangles** (`web-ui/src/glviewport.ts`, commit
+   `6a42f68`). The boxes come from the BMSH rows at upload. The ray–box slab test pads each box
+   by 1 mm + 1e-4. An element is skipped when the ray misses its box or enters it behind the best
+   hit, so the same element is picked. Frustum culling was **not** done: the bench's orbit shows
+   the whole model, so culling would not change those numbers. It needs a zoomed-in benchmark first.
+
+Raw results: `out/t18-gpu.json` (host tables + lab with fix 1+2, GPU, no warm, old pick),
+`out/t18-gpu-nowarm.json` (loop 20k, GPU, `WARM=0`), `out/t18-gpu-lab.json` and
+`out/t18-sw-lab.json` (lab + loop at all sizes, with `--warm` and the box pick). Load average
+during the runs was 6–11 (other agents were building). `node bench/large.mjs` now takes `GL=gpu`
+and `WARM=0`, and logs the renderer. Ports are 47384–47386 and Vite 5207.
+
+### GPU in headless Chromium
+
+`--headless=new --use-angle=gl` (in place of `--use-angle=swiftshader --enable-unsafe-swiftshader`)
+renders on the M1 Pro. `SystemInfo.getInfo` reports glRenderer `ANGLE (Mesa, AGX G13/G14, OpenGL ES
+3.2 Mesa 26.3.0-devel)`, `glImplementationParts (gl=egl-angle,angle=opengl)`, and webgl and
+gpu_compositing `enabled`. Rendering only needs `/dev/dri/renderD128` (mode 0666); no display is
+needed. `--use-angle=vulkan` also works (Mesa "Borealis", about the same speed). `--use-gl=egl`
+fails: the GPU process exits. With no flag at all, Chromium falls back to SwiftShader. On a
+synthetic test page (1M triangles, 1024², readPixels each frame) a frame takes 14 ms on the GPU
+and 324 ms on SwiftShader. The GPU process ran unsandboxed in every try.
+
+### Before / after: session (fix 1), host tables, `out/t16-large-final.json` → `out/t18-gpu.json`
+
+| ms unless noted | 20k before (clang / tcc) | 20k after (clang / tcc / mixed) | 60k before | 60k after |
+|---|---|---|---|---|
+| session write per change (call with `--session` minus without) | 100 / 260 | below the noise (≤ ~2 ms; the estimates are negative) | 314 / 799 | below the noise |
+| session file after a place + undo | 16.7 MB | 3.9 KB | 50.1 MB | 3.9 KB |
+| restart with restore (spawn → listening) | 285 / 658 | 88 / 165 / 146 | 882 / 2,264 | 320 / 523 / 320 |
+| plain start, same run | 77 / 158 | 186 / 183 / 103 | 235 / 466 | 340 / 516 / 374 |
+
+The restore now costs about a plain start: load the model file and replay a few lines. Before, it
+parsed the 16.7 MB session JSON and loaded the model twice. A restore from a snapshot *with*
+model text (after 2,000 changes) parses that JSON and loads once. It was not timed at 20k/60k.
+The session tests prove it works.
+
+### Before / after: cached -O2 objects (fix 2), `out/t18-gpu.json`, same run
+
+"tcc" is `build.sh tcc` (pure tcc -g); "mixed" is the new `build.sh host` with no file changed.
+
+| ms | 20k native / tcc / mixed | 60k native / tcc / mixed |
+|---|---|---|
+| first query status (builds the scene) | 175 / 600 / 223 | 505 / 1,862 / 511 |
+| /mesh rebuild after a place | 238 / 741 / 246 | 709 / 2,230 / 729 |
+| /mesh build (BMSH only) | 63 / 174 / 79 | 245 / 536 / 189 |
+
+`build.sh host`: 7–20 ms with nothing changed (sha1 of 25 files plus the tcc link). With one file
+changed it takes 23–35 ms in the loop (`mesh.c` through tcc), against ~60–80 ms for the old single
+tcc call. In the loop, the edited file (`mesh.c`, BMSH serialization) runs as tcc code until the
+next build. Everything else runs at -O2.
+
+### Lab: GPU vs SwiftShader (with `--warm` and the box pick; `t18-gpu-lab.json`, `t18-sw-lab.json`)
+
+| | 2k GPU | 2k SwiftShader | 20k GPU | 20k SwiftShader | 60k GPU | 60k SwiftShader |
+|---|---|---|---|---|---|---|
+| orbit: move → finished frame, in page p50 / p95 | 18 / 25 | 30 / 41 | 18 / 22 | 152 / 171 | 19 / 27 | 409 / 450 |
+| orbit: Node (CDP) p50 / p95 | 32 / 39 | 38 / 57 | 32 / 37 | 163 / 186 | 33 / 42 | 419 / 463 |
+| orbit: drawn-frame interval p50 (frames in 3 s) | 16.7 (178) | 33.3 (105) | 16.7 (179) | 133 (22) | 16.7 (179) | 433 (8) |
+| click-pick handler median (pick + select) | 3.3 | 3.2 | 3.5 | 7.4 | 18.5 | 10.1 |
+| click → recoloured frame | 34 | 84 | 117 | 440 | 217 | 1,185 |
+| edit → pixels: build / stop / spawn (median) | 29 / 1 / 15 | 25 / 1 / 11 | 28 / 3 / 79 | 23 / 3 / 77 | 32 / 9 / 249 | 26 / 7 / 239 |
+| edit → pixels: build end → pixels, median | 105 | 138 | 430 | 780 | 1,266 | 1,994 |
+| **edit → pixels total, median / p95** | **131** / 161 | **163** / 211 | **461** / 469 | **810** / 854 | **1,299** / 1,331 | **2,026** / 2,061 |
+
+On the GPU, orbit runs at 60 fps (the rAF rate) at every size. In T16 it was 135 ms per frame at
+20k and 437 ms at 60k on SwiftShader. The ~32 ms Node figure is the CDP round trip plus two rAFs,
+not the GPU.
+
+`--warm` at 20k, GPU, same flags otherwise: total median 671 ms (p95 763) with `WARM=0`
+(`t18-gpu-nowarm.json`) and 461 ms (p95 469) with it. Without `--warm`, the first fix-1+2 GPU run
+(`t18-gpu.json`, load average 10–11) gave 770 ms.
+
+Pick (warm median of 5; the box test against the T16 all-triangle scan): 20k 26 → 3.5 ms (GPU
+run) / 7.4 ms (SwiftShader run); 60k 62 → 10–19 ms. The first picks were 79–215 ms in T16 and
+are 4–30 ms now. The pick result is the same element by construction. `lab_gl.mjs` checks the
+selection colour, and the bench reports `pick_hit` true.
+
+### What is left
+
+- 60k edit → pixels is 1.3 s on the GPU. That time goes to the restart's load (250 ms) and the
+  scene + BMSH (~730 ms at -O2, part of it hidden by `--warm`), then 43 MB fetched and uploaded.
+  The next steps would be an incremental scene (only the changed elements), or keeping the scene
+  across a restart.
+- Frustum culling: not done (see above).
+- The mixed build trusts that tcc and clang lay out structs the same way (AAPCS64; they share
+  every header and define). The suites pass on the mixed binary, but nothing checks the layout
+  explicitly.

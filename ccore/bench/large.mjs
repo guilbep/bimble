@@ -1,7 +1,9 @@
 // The C core on large synthetic models (ticket T16): node ccore/bench/large.mjs
-//   SIZES="2000 20000 60000" BINS="native tcc" RUNS=5 LAB=1 LOOP_RUNS=5 LOOP_SIZES=20000
+//   SIZES="2000 20000 60000" BINS="native tcc" RUNS=5 LAB=1 LOOP_RUNS=5 LOOP_SIZES=20000 GL=swiftshader
+//   GL=gpu: Chromium on the real GPU (ANGLE on the system's OpenGL: --use-angle=gl; ticket T18);
+//   the renderer string (SystemInfo.getInfo glRenderer) is kept in the raw results either way.
 // Needs: out/native/bimble-ccore and out/tcc/bimble-ccore (build.sh native, build.sh tcc), python3,
-// for LAB=1 also web-ui/node_modules, /usr/bin/chromium and tcc. Ports: hosts 47372-47374, Vite 5205.
+// for LAB=1 also web-ui/node_modules, /usr/bin/chromium and tcc. Ports: hosts 47384-47386, Vite 5207.
 // Models: bench/large_model.py <size> out/t16-large-<size>.bimble (synthetic, deterministic; made
 // when missing). Raw results: out/t16-large.json. Kills all it starts; restores host/mesh.c.
 //
@@ -53,7 +55,9 @@ const LOOP_RUNS = Number(process.env.LOOP_RUNS ?? 5);
 const LOOP_SIZES = (process.env.LOOP_SIZES ?? "20000").split(/\s+/).filter(Boolean).map(Number);
 const RAW = process.env.RAW ?? join(OUT, "t16-large.json");
 const TOKEN = "t16-large";
-const P_HOST = 47372, P_SES = 47373, P_LAB = 47374, VITE = 5205;
+const P_HOST = 47384, P_SES = 47385, P_LAB = 47386, VITE = 5207;
+const GL = process.env.GL ?? "swiftshader";
+const GL_FLAGS = GL === "gpu" ? ["--use-angle=gl"] : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
 const MESH_C = join(CCORE, "host/mesh.c");
 const PX_ANCHOR = "buf_putc(out, (char)(unsigned char)e->category);";
 const ORIG_MESH = readFileSync(MESH_C, "utf8");
@@ -387,18 +391,19 @@ async function labBench(model, size) {
     await evalJs("requestAnimationFrame(window.__t16.watch)");
     await sleep(500);
     const runs = [];
+    const nonce = Date.now(); // each edit is new content: build.sh host has no -O2 object for it
     for (let k = 0; k <= LOOP_RUNS; k++) {
       const cat = 1 + (k % 6);
       const pxBefore = await evalJs("window.__t16.px.at(-1)?.hash ?? null");
       const nPx = await evalJs("window.__t16.px.length");
       const t0 = Date.now();
-      writeFileSync(MESH_C, ORIG_MESH.replace(PX_ANCHOR, `buf_putc(out, (char)(unsigned char)${cat}); /* t16 edit */`));
+      writeFileSync(MESH_C, ORIG_MESH.replace(PX_ANCHOR, `buf_putc(out, (char)(unsigned char)${cat}); /* t16 edit ${nonce} ${k} */`));
       const b = await build("host");
       const t1 = Date.now();
       const ts = now();
       await stopProc(host);
       const stop = now() - ts;
-      const s = await startHost(join(OUT, "tcc/bimble-ccore"), P_LAB, { flags: ["--session"], model: lm }, `loop-host-${size}`);
+      const s = await startHost(join(OUT, "tcc/bimble-ccore"), P_LAB, { flags: ["--session", ...(process.env.WARM === "0" ? [] : ["--warm"])], model: lm }, `loop-host-${size}`);
       host = s.h;
       if (!/session restored/.test(host.out)) throw new Error(`loop: no session restore: ${host.out}`);
       const px = await waitFor("new pixels", 120000, async () => {
@@ -445,11 +450,15 @@ async function main() {
     const vite = start("vite", "npx", ["vite", "--port", String(VITE), "--strictPort"], { cwd: UI });
     await waitFor(`Vite on ${VITE}`, 30000, async () => { if (!alive(vite)) throw new Error(vite.out); return (await fetch(`http://localhost:${VITE}/`)).ok; }, 200);
     chrome = start("chromium", "/usr/bin/chromium", [
-      "--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--remote-debugging-port=0",
+      "--headless=new", ...GL_FLAGS, "--remote-debugging-port=0",
       `--user-data-dir=${join(tmp, "chromium")}`, "--no-first-run", "--no-default-browser-check", "about:blank",
     ]);
     const wsUrl = await waitFor("DevTools line", 15000, () => chrome.out.match(/DevTools listening on (ws:\/\/\S+)/)?.[1], 100);
     cdp = await cdpConnect(wsUrl);
+    const gi = await cdp.send("SystemInfo.getInfo");
+    machine.gl = GL;
+    machine.gl_renderer = gi.gpu?.auxAttributes?.glRenderer ?? "?";
+    log(`chromium GL ${GL}: ${machine.gl_renderer}`);
     for (const n of SIZES) {
       const model = ensureModel(n);
       result.sizes[n].lab = await labBench(model, n);

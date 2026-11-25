@@ -151,7 +151,7 @@ try {
   await sleep(200);
   const left = tree.filter((t) => alive(t.pid));
   check("no process left (host, Vite, watcher)", pids.length > 0 && left.length === 0, left.map((t) => `${t.pid} ${t.cmd}`).join("; "));
-  check("the host was among them", tree.some((t) => /bimble-ccore (--session )?47411/.test(t.cmd)) && tree.some((t) => /vite/.test(t.cmd)));
+  check("the host was among them", tree.some((t) => /bimble-ccore (--session )?(--warm )?47411/.test(t.cmd)) && tree.some((t) => /vite/.test(t.cmd)));
   // By listening port, not by command line: a pgrep pattern also matched other shells that
   // merely mention it (false positive), and missed the host once it took --session.
   let ls = "";
