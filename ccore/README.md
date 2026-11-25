@@ -28,7 +28,7 @@ independent tasks on pthreads natively (serial in wasm), with one global, the th
 | L3 api | verbs, query | `src/verbs`, `query` |
 | L4 store | journal, repo, remote | (none yet) |
 | L5 session | call router, sessions (handles: `cc_session *`), selection, placing, scene and /mesh caches, session file, platform interface | `session/calls`, `session`, `mesh`, `mesh_model`, `platform` |
-| L6 carriers | wasm module, HTTP host (native platform, `main`), later mcp and cli | `src/wasm_api.c` (+ `wasm_stub.c`), `host/server.c`, `host/platform_native.c`, `host/main.c` |
+| L6 carriers | wasm module, HTTP host (native platform, `main`), MCP over stdio, later cli | `src/wasm_api.c` (+ `wasm_stub.c`), `host/server.c`, `host/platform_native.c`, `host/main.c`, `host/mcp.c` |
 
 A process holds any number of sessions (`cc_session_new(platform)`); the native host serves one
 (`main.c` creates it and passes it to `server.c` in `cc_host_config`), the wasm module's `host_*`
@@ -75,6 +75,17 @@ Regenerate the goldens (a standalone Rust crate, not in the workspace; it pins t
 serde_json version). Commit the changed `.txt` files:
 
     cd ccore/golden/floats && CARGO_TARGET_DIR=../../out/cargo cargo run -j 2
+
+## MCP over stdio
+
+`out/tcc/bimble-ccore mcp [--read-only] model.bimble` is an MCP server for agents (ADR 0048, ADR
+0068 rule 5), the twin of Rust's `bimble mcp`: JSON-RPC 2.0, one message per line on stdin (at
+most 1 MiB), answers on stdout, logs on stderr. Tools `list_verbs`, `describe_verb`, `run_verb`,
+`query`, `undo`, `redo`, `save`, from the verb table and the model queries, on the server's own
+model and history; nothing is written until `save`. `run_verb` also takes `dry_run` and `if_rev`,
+and `--read-only` refuses every change (`golden/DEVIATIONS.md` §3). Test: `node
+test/mcp_test.mjs` (Rust's transcript in `golden/mcp/`, made by `tools/mcp_golden.sh`). For
+Claude Code: `claude mcp add bimble -- <repo>/ccore/out/tcc/bimble-ccore mcp <model>`.
 
 ## Comparing with Rust on any IFC file
 

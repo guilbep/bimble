@@ -1,6 +1,7 @@
 /* bimble-ccore: the C core's native host. Serves the twin protocol of
  * crates/bimble-viewer/src/serve.rs on 127.0.0.1 for the Vue lab (`?native=1&port=&token=`).
  *   bimble-ccore [--session[=file]] [--warm] [port] [model]
+ *   bimble-ccore mcp [--read-only] <model>   an MCP server over stdio instead (mcp.h)
  *                             --warm: when idle after a load or a change, build the scene and the
  *                             /mesh bytes of the new rev before the page asks (dev.sh uses it)
  *                             --session: keep the session (model edits, undo steps, selection,
@@ -24,6 +25,7 @@
 #include <unistd.h>
 
 #include "host.h"
+#include "mcp.h"
 #include "session.h"
 
 /* 32 hex digits, as twin.rs `random_token` (twin.rs:88-99): /dev/urandom, else the clock. */
@@ -59,6 +61,7 @@ static int parse_port(const char *s, unsigned *out) {
 }
 
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "mcp")) return cc_mcp_main(argc - 1, argv + 1);
     /* Flags first, then the positional port and model. */
     const char *session = getenv("CCORE_SESSION");
     int want_session = session && *session, warm = 0;

@@ -41,8 +41,9 @@ const IFC_TIMESTAMP: &str = "2026-01-01T00:00:00";
 /// Files in `ccore/golden/` this program does not produce (input, docs, another ticket's).
 const NOT_PRODUCED: [&str; 3] = ["frame.json", "frame2.json", "README.md"];
 const OTHER_TICKET_DIR: &str = "floats/";
-/// The C core's own goldens, where Rust has no such behaviour (`ccore/golden/DEVIATIONS.md`).
-const C_OWN: [&str; 2] = ["DEVIATIONS.md", "relations/"];
+/// The C core's own goldens, where Rust has no such behaviour (`ccore/golden/DEVIATIONS.md`), and
+/// `mcp/`, which `ccore/tools/mcp_golden.sh` makes from `bimble mcp` (not this dumper).
+const C_OWN: [&str; 3] = ["DEVIATIONS.md", "relations/", "mcp/"];
 
 type Files = BTreeMap<String, Vec<u8>>;
 

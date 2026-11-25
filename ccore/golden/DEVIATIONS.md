@@ -71,3 +71,41 @@ drop).
 
 **Where.** `ccore/src/relation.{h,c}` (table, rules, read, write), `ccore/src/model.{h,c}`,
 `ccore/src/command.{h,c}`, `ccore/src/file.c`, test `ccore/test/relation_test.c`.
+
+## 3. The MCP server's additions (ticket M1, ADR 0068 rules 3 and 5)
+
+**What.** `bimble-ccore mcp <model>` (`ccore/host/mcp.c`) answers Rust's transcript byte for byte
+(`golden/mcp/responses.jsonl`, the server version masked). Beyond it:
+
+- `run_verb` and `describe_verb` know the C additions of the verb table (`rename`,
+  `add_dimension`, `add_text`, `move_annotation`, `delete_annotation`); Rust answers
+  `unknown verb`. `list_verbs` and the `unknown verb` text stay Rust's 14, as the session's
+  `verbs` query does.
+- `run_verb`'s `args` may carry `"dry_run": true` and `"if_rev": N`, taken out before the verb
+  reads its arguments, as the session's `verb` call does (`session/calls.h`). A dry run answers
+  `{"commands":[…],"rev":N}` (the commands as serde JSON, and the server's rev) and changes
+  nothing. `if_rev` runs the verb only when N is the server's rev, else the session's text
+  "conflict: the model changed (rev R, expected N)". The rev is 1 after the load and + 1 for each
+  step applied, undone or redone. Rust refuses both keys ("unknown field `dry_run`").
+- `--read-only`: `run_verb` (but a dry run), `undo`, `redo` and `save` answer an error ("read
+  only: the server was started with --read-only"); Rust has no such mode. `propose` is a later
+  ticket.
+- `serverInfo.version` is the C core's own (`CC_IFC_VERSION`, as the host's `state.version`).
+- JSON that does not parse: the code (-32700) and serde's texts and columns are Rust's (the
+  reader's errors are mapped to serde's, `parse_error_text`), except two cases where the text
+  differs: nesting deeper than 64 levels (the C reader's budget; serde allows 128, so Rust
+  answers such a line and C refuses it) and bad UTF-8 (the C reader checks the whole line first:
+  "invalid UTF-8", where serde names the first syntax error or "invalid unicode code point").
+
+**Why.** ADR 0068 rule 5: agents reach the model through the same verbs as the UI, with the
+same dry run and conflict check (rule 3).
+
+**What Rust sees.** Nothing: the server writes the model only on `save`, in Rust's form (the v1
+text for `.json`, else v2), and Rust's transcript is unchanged.
+
+**Goldens.** `golden/mcp/additions_requests.jsonl` and `additions_responses.jsonl`, written by
+`tools/mcp_golden.sh additions` from the C server and checked by `test/mcp_test.mjs`.
+`ccore_golden --check` skips `mcp/` (`C_OWN`): `tools/mcp_golden.sh` makes it, not the dumper.
+
+**Where.** `ccore/host/mcp.{h,c}`, `ccore/host/main.c` (the sub-command), test
+`ccore/test/mcp_test.mjs`.

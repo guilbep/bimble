@@ -386,3 +386,30 @@ summed so no label, no total). The IFC fixtures get only these two.
 
 Cells are written as Rust's `format!("{:.N}")` writes them: exact digits, ties to even on the
 binary value, the sign of `-0.0` kept (`cc_fmt_fixed`). Sums run in row order, as Rust's.
+
+## mcp/ (the MCP server's transcripts)
+
+Made by `ccore/tools/mcp_golden.sh` (not by the dumper; `--check` skips `mcp/`), which builds
+`bimble` and runs `node test/mcp_test.mjs --generate rust <bimble>`. The server runs as
+`bimble mcp model.json` on a fresh copy of `frame.json` in a temporary folder.
+
+- `requests.jsonl`: the request lines, one per line, sent at once. A line `#bytes N` is sent as
+  N bytes of `x`; `#ping ID N` as a ping with that id, padded to exactly N bytes (the 1 MiB
+  limit is 1048576 bytes). Covered: initialize, a notification, ping, tools/list, list_verbs,
+  describe_verb (two verbs and an unknown one), undo and redo with nothing to do, each of the 8
+  queries, query errors (unknown id, bad id, unknown argument, unknown query), `move` a frame
+  column, `delete` a frame beam, `place` a column, `delete` of no ids (a "nothing" step), verb
+  errors (missing `b`, a value out of range, unknown verb, no name), undo and redo through all of
+  it, an unknown tool, arguments that are not an object, unknown arguments, an unknown method,
+  no method, ids of every JSON type (duplicate keys: the last one), lines that are not a request
+  (no answer), JSON that does not parse, lines over the limit and one exactly at it, then `save`.
+- `responses.jsonl`: Rust's answer lines, in order. New GlobalIds masked as above, except that the
+  known ids are every GlobalId of `frame.json` and `query.txt` (the project's derived building
+  and site ids), one numbering for the file; `serverInfo.version` becomes `<version>`.
+- `saved.json`: the model file after `save` (the new column is undone first, so it holds only
+  the frame's ids): `file::to_string`, Rust's bytes.
+- `additions_requests.jsonl`, `additions_responses.jsonl`: the C additions (`rename`, `dry_run`,
+  `if_rev`), answered by the C server (`tools/mcp_golden.sh additions`); `DEVIATIONS.md` §3.
+
+`node test/mcp_test.mjs` runs `out/tcc/bimble-ccore mcp` (`CCORE_SEED=1`) on both and compares
+every answer line, masked the same way, and the saved file.

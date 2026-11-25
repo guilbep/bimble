@@ -1,0 +1,25 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_verbs","arguments":{}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"describe_verb","arguments":{"name":"rename"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"describe_verb","arguments":{"name":"add_text"}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"rename","args":{"id":"004z1Cm4z4hgNOg0ez4Id1","name":"P2.00 renamed"}}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"query","arguments":{"name":"element","args":{"id":"004z1Cm4z4hgNOg0ez4Id1"}}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"rename","args":{"id":"004z1Cm4z4hgNOg0ez4Id1","name":"  "}}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"place","args":{"kind":"column","storey":"1uAZA0Yfn05f$xRd1k4uPR","a":[1500.0,1500.0],"dry_run":true}}}}
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"query","arguments":{"name":"elements","args":{"class":"IfcColumn","storey":"1uAZA0Yfn05f$xRd1k4uPR","limit":1000}}}}
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"place","args":{"kind":"column","storey":"1uAZA0Yfn05f$xRd1k4uPR","a":[1500.0,1500.0],"if_rev":1}}}}
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"place","args":{"kind":"column","storey":"1uAZA0Yfn05f$xRd1k4uPR","a":[1500.0,1500.0],"if_rev":2}}}}
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"move","args":{"ids":["004z1Cm4z4hgNOg0ez4Id1"],"d":[100.0,0.0,0.0],"dry_run":false,"if_rev":3}}}}
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"move","args":{"ids":["004z1Cm4z4hgNOg0ez4Id1"],"d":[1.0,0.0,0.0],"dry_run":"yes"}}}}
+{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"move","args":{"ids":["004z1Cm4z4hgNOg0ez4Id1"],"d":[1.0,0.0,0.0],"if_rev":-1}}}}
+{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"move","args":{"ids":["004z1Cm4z4hgNOg0ez4Id1"],"d":[1.0,0.0,0.0],"if_rev":1.5}}}}
+{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"rename","args":{"id":"004z1Cm4z4hgNOg0ez4Id1","name":"dry","dry_run":true}}}}
+{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"fly","args":{"dry_run":true}}}}
+{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"undo","arguments":{}}}
+{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"undo","arguments":{}}}
+{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"undo","arguments":{}}}
+{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"undo","arguments":{}}}
+{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"query","arguments":{"name":"element","args":{"id":"004z1Cm4z4hgNOg0ez4Id1"}}}}
+{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"move","args":{"ids":["004z1Cm4z4hgNOg0ez4Id1"],"d":[0.0,0.0,0.0],"if_rev":7}}}}
+{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"query","arguments":{"name":"verbs"}}}
+{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"describe_verb","arguments":{"name":"fly"}}}

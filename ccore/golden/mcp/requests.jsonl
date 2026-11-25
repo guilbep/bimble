@@ -1,0 +1,68 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"golden","version":"1"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":3,"method":"ping"}
+{"jsonrpc":"2.0","id":4,"method":"tools/list"}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_verbs","arguments":{}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"describe_verb","arguments":{"name":"place"}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"describe_verb","arguments":{"name":"move"}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"describe_verb","arguments":{"name":"fly"}}}
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"undo","arguments":{}}}
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"redo","arguments":{}}}
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"query","arguments":{"name":"storeys"}}}
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"query","arguments":{"name":"materials"}}}
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"query","arguments":{"name":"project"}}}
+{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"query","arguments":{"name":"views"}}}
+{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"query","arguments":{"name":"sheets"}}}
+{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"query","arguments":{"name":"schedules"}}}
+{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"query","arguments":{"name":"elements","args":{"limit":3}}}}
+{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"query","arguments":{"name":"elements","args":{"class":"IfcBeam","storey":"1uAZA0Yfn05f$xRd1k4uPR","limit":2}}}}
+{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"query","arguments":{"name":"element","args":{"id":"004z1Cm4z4hgNOg0ez4Id1"}}}}
+{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"query","arguments":{"name":"element","args":{"id":"1khkLES9P8rPMAGC5wqOCk"}}}}
+{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"query","arguments":{"name":"element","args":{"id":"0000000000000000000000"}}}}
+{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"query","arguments":{"name":"element","args":{"id":"bad"}}}}
+{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"query","arguments":{"name":"storeys","args":{"x":1}}}}
+{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"query","arguments":{"name":"nope"}}}
+{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"move","args":{"ids":["004z1Cm4z4hgNOg0ez4Id1"],"d":[100.0,-50.0,0.0]}}}}
+{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"query","arguments":{"name":"element","args":{"id":"004z1Cm4z4hgNOg0ez4Id1"}}}}
+{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"delete","args":{"ids":["01KnL9d95C2OMpOLdTJDE_"]}}}}
+{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"query","arguments":{"name":"element","args":{"id":"01KnL9d95C2OMpOLdTJDE_"}}}}
+{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"place","args":{"kind":"column","storey":"1uAZA0Yfn05f$xRd1k4uPR","a":[1500.0,1500.0]}}}}
+{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"query","arguments":{"name":"storeys"}}}
+{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"delete","args":{"ids":[]}}}}
+{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"place","args":{"kind":"beam","storey":"1uAZA0Yfn05f$xRd1k4uPR","a":[0.0,0.0]}}}}
+{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"place","args":{"kind":"column","storey":"1uAZA0Yfn05f$xRd1k4uPR","a":[1e+300,0]}}}}
+{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"run_verb","arguments":{"name":"fly"}}}
+{"jsonrpc":"2.0","id":35,"method":"tools/call","params":{"name":"run_verb","arguments":{"args":{}}}}
+{"jsonrpc":"2.0","id":37,"method":"tools/call","params":{"name":"undo","arguments":{}}}
+{"jsonrpc":"2.0","id":38,"method":"tools/call","params":{"name":"undo","arguments":{}}}
+{"jsonrpc":"2.0","id":39,"method":"tools/call","params":{"name":"redo","arguments":{}}}
+{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"undo","arguments":{}}}
+{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"redo","arguments":{}}}
+{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"redo","arguments":{}}}
+{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"undo","arguments":{}}}
+{"jsonrpc":"2.0","id":143,"method":"tools/call","params":{"name":"undo","arguments":{}}}
+{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"query","arguments":{"name":"storeys"}}}
+{"jsonrpc":"2.0","id":45,"method":"tools/call","params":{"name":"fly","arguments":{}}}
+{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"list_verbs"}}
+{"jsonrpc":"2.0","id":47,"method":"tools/call","params":{"name":"list_verbs","arguments":[]}}
+{"jsonrpc":"2.0","id":48,"method":"tools/call","params":{"name":"undo","arguments":{"x":1}}}
+{"jsonrpc":"2.0","id":49,"method":"tools/call","params":{"name":"query","arguments":{"name":"storeys","zz":1,"aa":2}}}
+{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"query","arguments":{"args":{}}}}
+{"jsonrpc":"2.0","id":"s-1","method":"resources/list"}
+{"jsonrpc":"2.0","id":{"b":[1,2.50],"a":null},"method":"ping"}
+{"jsonrpc":"2.0","id":7,"id":8,"method":"ping"}
+{"jsonrpc":"2.0","id":9}
+{"jsonrpc":"2.0","method":"ping"}
+[{"jsonrpc":"2.0","id":10,"method":"ping"}]
+
+   
+not json
+{"jsonrpc":"2.0","id":11,
+{"jsonrpc":"2.0","id":12 "method":"ping"}
+{"jsonrpc":"2.0","id":13,"method":"ping"} x
+{"jsonrpc":"2.0","id":"\ud800","method":"ping"}
+#bytes 1048577
+#ping 14 1048576
+#bytes 3000000
+{"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"save","arguments":{}}}
+{"jsonrpc":"2.0","id":102,"method":"ping"}
