@@ -24,7 +24,8 @@
 //   `manage_links` with a body ({op, name}) goes to the module (`action_with`). Reload reads the file
 //   again: the module keeps no path, so it answers an error (link the file again: it replaces).
 // - Reference plans (ticket L1, ccore/session/links_ref.h): the action `link_pdf` shows a PDF picker
-//   and adds the picked file's bytes to the active 2D view (`ccoreLinkPdf`; host_open flag 8).
+//   and adds the picked file's bytes to the active 2D view (`ccoreLinkPdf`; host_open flag 8);
+//   `link_dxf` the same with a DXF picker (ticket L2: `ccoreLinkDxf`; host_open flag 16).
 
 interface Exports {
   memory: WebAssembly.Memory;
@@ -173,6 +174,17 @@ export function ccoreLinkPdf(name: string, bytes: Uint8Array, scale = 0): void {
   if (r.status !== 200) throw dec.decode(r.bytes) || `ccore link_pdf: ${r.status}`;
 }
 
+/** L2: adds a DXF's bytes to the active 2D view as a reference plan (`action link_dxf`, host_open
+ *  flag 16). Throws the C core's error text. */
+export function ccoreLinkDxf(name: string, bytes: Uint8Array): void {
+  if (!module) throw new Error("ccore: not loaded");
+  const { X } = module;
+  const r = run(X.host_open.bind(X), [enc.encode(name), bytes], [16]);
+  hostLog();
+  emitChange?.();
+  if (r.status !== 200) throw dec.decode(r.bytes) || `ccore link_dxf: ${r.status}`;
+}
+
 /** The bytes the module wrote last and their file name (host_saved, host_saved_path). */
 function lastWritten(): { name: string; bytes: Uint8Array } {
   if (!module) throw new Error("ccore: not loaded");
@@ -254,17 +266,21 @@ function pickAndLink(): void {
   input.click();
 }
 
-/** L1: the file picker of `link_pdf`. */
-function pickAndLinkPdf(): void {
+/** L1: the file picker of `link_pdf`; L2: of `link_dxf` (dxf true). */
+function pickAndLinkPdf(dxf = false): void {
   const input = document.createElement("input");
   input.type = "file";
-  input.accept = ".pdf";
-  input.dataset.bb = "ccore-link-pdf";
+  input.accept = dxf ? ".dxf" : ".pdf";
+  input.dataset.bb = dxf ? "ccore-link-dxf" : "ccore-link-pdf";
   input.style.display = "none";
   input.addEventListener("change", () => {
     const f = input.files?.[0];
     input.remove();
-    if (f) void f.arrayBuffer().then((b) => ccoreLinkPdf(f.name, new Uint8Array(b))).catch((e) => console.error(`ccore: link ${f.name}: ${String(e)}`));
+    if (f)
+      void f
+        .arrayBuffer()
+        .then((b) => (dxf ? ccoreLinkDxf : ccoreLinkPdf)(f.name, new Uint8Array(b)))
+        .catch((e) => console.error(`ccore: link ${f.name}: ${String(e)}`));
   });
   input.addEventListener("cancel", () => input.remove());
   document.body.appendChild(input);
@@ -290,6 +306,11 @@ function fileAction(name: string): boolean {
       if (!(JSON.parse(callHost("query", "actions", "{}")) as { name: string; enabled: boolean }[]).find((a) => a.name === "link_pdf")?.enabled)
         callHost("action", "link_pdf"); // nothing editable open: throws "not enabled", as the native host answers
       pickAndLinkPdf();
+      return true;
+    case "link_dxf": // L2
+      if (!(JSON.parse(callHost("query", "actions", "{}")) as { name: string; enabled: boolean }[]).find((a) => a.name === "link_dxf")?.enabled)
+        callHost("action", "link_dxf"); // nothing editable open: throws "not enabled", as the native host answers
+      pickAndLinkPdf(true);
       return true;
     case "new":
       if (unsavedNow() && !window.confirm("Discard the unsaved changes?")) return true;

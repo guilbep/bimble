@@ -722,6 +722,22 @@ export function linkPdf(path: string, scale?: number, place?: { offset_mm?: [num
   try { actionWith("link_pdf", { path, ...(scale ? { scale } : {}), ...(place ?? {}) }); return null; } catch (e) { return message(e); }
 }
 
+// ---- L2: DXF reference plans and managing a reference (session/links_dxf.h; C core only) ----
+/** Add a DXF to the active 2D view (`link_dxf {path}`; native host: a path it can read). Returns the error, or null. */
+export function linkDxf(path: string, place?: { offset_mm?: [number, number]; rotation_deg?: number }): string | null {
+  try { actionWith("link_dxf", { path, ...(place ?? {}) }); return null; } catch (e) { return message(e); }
+}
+/** A reference plan's change, by its id (`query links`), PDF or DXF: one undo step each. */
+export type ReferenceOp =
+  | { op: "move"; offset_mm: [number, number] }
+  | { op: "rotate"; rotation_deg: number }
+  | { op: "show" | "hide" | "remove" }
+  | { op: "reload"; path?: string };
+/** `manage_links {op, id, …}` on a reference plan. Returns the error, or null. */
+export function manageReference(id: string, o: ReferenceOp): string | null {
+  try { actionWith("manage_links", { ...o, id }); return null; } catch (e) { return message(e); }
+}
+
 /** The annotate tool's state (op `tool` "annotate", then pointer / click / cancel while it is on). */
 export interface AnnotateState {
   active: boolean;
