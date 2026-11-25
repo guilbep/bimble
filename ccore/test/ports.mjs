@@ -58,6 +58,7 @@ const TABLE = [
   ["host", "lab_refs_dxf", 47438, 138], // L2
   ["host", "lab_export", 47306, 6], // D7
   ["host", "lab_ifc_plan", 47446, 146], // S1
+  ["host", "parity", 47440, 140], // PAR2 (tools/parity.mjs: one host at a time, Rust twin then C)
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_gl", 5193, 131],
   ["vite", "lab_place", 5195, 133],

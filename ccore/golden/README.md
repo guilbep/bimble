@@ -528,3 +528,23 @@ one placed by its Elevation only, an IfcGrid of three axes) and `view/frame2.bim
 `plan <id> cut <f64> elevation <f64>` (`resolve`'s cut and the storey's elevation, the C query
 `view_clip`'s). Read by `ccore/test/views_test.mjs` over HTTP (action `open`, read-only). The
 fixture is an input: the dumper puts it back as it is, so `--check` knows it. DEVIATIONS.md 16.
+## parity/ (ticket PAR2)
+
+Rust's answers to the calls of the Vue lab, in 13 scenarios (`empty`, `new`, `frame`, `frame_plan`,
+`frame_selected`, `frame_selected_plan`, `frame_sheet`, `ifc_readonly`, `placing`, `measuring`,
+`section_box_on`, `dirty`, `after_undo`). `node ccore/tools/parity.mjs --rust` makes them: it runs
+the headless native twin (`bimble view`, `BIMBLE_SERVE` + `BIMBLE_HEADLESS=1`, ADR 0066) with no
+user settings, and asks it over HTTP. Not this dumper's output: `parity/` is in `C_OWN`.
+
+- `<scenario>/actions.json`: `query actions`, one action a line, with `ribbon` (where the egui
+  ribbon, File menu and title row put it). `state.json`: `query state`. `steps.txt`: how the
+  scenario was reached. `queries.txt`: every query name either dispatcher knows, with its
+  arguments (GlobalIds masked as `<id>`), the status and the JSON shape of the answer
+  (`{key:type}`, arrays `[first item]*count`) or the error text.
+- `ops.txt`, `tools.txt`: each op probed with an empty body; the C core's `tool` names (Rust: none).
+- `settings.json`, `shortcuts.json`, `ribbon.json`, `names.json`: read from the Rust sources
+  (`settings.rs`, `lib.rs` handle_keys, `ribbon.rs`, `calls.rs`).
+- `meta.json`: the commit and the Rust version measured.
+
+`node ccore/tools/parity.mjs --write` asks the C host the same things and writes
+`ccore/results/parity.md`.
