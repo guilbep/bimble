@@ -11,6 +11,7 @@
 #include "buf.h"
 #include "history.h"
 #include "ifc_read.h"
+#include "measure.h"
 #include "model.h"
 #include "platform.h"
 #include "scene.h"
@@ -73,6 +74,7 @@ typedef struct cc_session {
     cc_gid *tabs;
     size_t ntabs, captabs;
     cc_vis vis;   /* hidden, isolated, the section box (visibility.h): session state, not model */
+    cc_measure measure; /* the measure tool (measure.h, ticket T1): session state, not model */
     /* The scene of the current rev (calls.c), built once per rev, shared by query status and
      * GET /mesh. scene_rev 0: none built. */
     cc_scene scene;

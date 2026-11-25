@@ -467,3 +467,11 @@ template is the default one with axes `off`, every annotation switch off and no 
 
 `ccore/test/draw_test.c` (suite `draw`) checks `cut/`, `svg/`, `plan/*/cut.svg`, `roboto.txt` (against
 the table `tools/roboto_table.sh` generates from it) and `fmt.txt` byte for byte.
+
+## measure.txt
+
+The measure tool's text (ticket T1; `bimble_api::measure`, the viewer's `format_mm` and
+`measurements_json`). Tab-separated lines: `format_mm <x> <text>` for 34 fixed f32 lengths (ties,
+the 100 mm switch, thousands, signs, saturation, infinities, NaN; `x` as Rust's `{:?}`); `pair <a>
+<b> <distance>` for three point pairs (f32, the distance as glam's `Vec3::length` of b - a);
+`measurements <json>`: the `measurements` query for those pairs. Read by `ccore/test/measure_test.c`.

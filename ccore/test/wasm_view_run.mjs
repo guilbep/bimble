@@ -160,6 +160,18 @@ for (const [i, [name, content]] of files.entries()) {
   fmesh();
   both("action", "section_box", "");
   both("action", "show_all_in_view", "");
+  // The measure tool (ticket T1, session/measure.h): the viewer measures.
+  both("action", "measure", "");
+  const mr = (x, y, z) => JSON.stringify({ ray: [x, y, z, 0.8320502943378437, 0, -0.5547001962252291], ray_tol: [x, y + 24, z, 0.8320502943378437, 0, -0.5547001962252291] });
+  const mp = both("tool", "measure_pointer", mr(-5000, 3000, 9000));
+  check(`${name}: view build: measure_pointer answers 200`, mp.status === 200, `${mp.status} ${mp.text.slice(0, 120)}`);
+  both("tool", "measure_click", mr(-5000, 3000, 9000));
+  both("tool", "measure_click", mr(-5000, 2000, 9500));
+  both("query", "measurements", "{}");
+  both("query", "measure", "{}");
+  both("tool", "measure_clear", "");
+  both("tool", "measure_cancel", "");
+  both("action", "measure", "");
   // Plans: every view's tab, its clip and annotations (session/views.h).
   const ov = both("query", "open_views", "{}");
   const views = ov.status === 200 ? JSON.parse(ov.text).views : [];

@@ -227,3 +227,29 @@ status bar's six-decimal text byte for byte on the 36 points of `golden/geo/*.co
 
 **Where.** `ccore/src/georef.{h,c}`, `ccore/src/command.{h,c}`, `ccore/src/query.{h,c}`,
 `ccore/src/verb_table.c`, test `ccore/test/georef_test.c`.
+
+## 7. The measure tool's pointer (ticket T1, ADR 0068 rule 2)
+
+**What.** Rust's measure tool (`crates/bimble-viewer/src/measure.rs`, `lib.rs` `snap_at`) runs in
+the egui viewer: it projects corners and edge points with the camera and compares screen pixels.
+The C core has no camera, so the page sends the pointer ray and `ray_tol`, the ray `tol_px` (12)
+pixels beside it (`tool measure_pointer`, `measure_click`, `measure_cancel`, `measure_clear`, a C
+addition, as the place and box tools): a point's pixel distance is its distance to the ray over the
+gap between the two rays at its depth. Rust's limits stay (10 px for a corner, 8 for an edge,
+corners and edges behind the surface under the cursor are not snapped). Two departures: the
+corners and edges snapped to are those of every element the ray meets within that visible depth,
+not only the nearest one's (a column standing on a footing meets the ray at the same depth: either
+could be "the" hit, and the corner under the cursor was lost); and a corner or edge point outside
+the section box (or a plan's range) is not snapped (Rust snaps it when it lies in front of the
+hit, a point in the empty space the box removed). Reference plans (DXF, PDF) are not in the C
+core: nothing snaps on them.
+
+**What Rust sees.** Nothing: measurements are session state, never in a file or the history. The
+label and the list are Rust's: `format_mm` and `measurements_json` were moved from the viewer to
+`bimble_api::measure` (the viewer calls them there), and `ccore_golden` writes
+`golden/measure.txt` from them; the distance is f32 as the viewer's `Dimension::distance`.
+`query measure` (the tool's state for the page) is a C addition.
+
+**Where.** `ccore/session/measure.{h,c}`, `ccore/session/calls.c` (`measure_tool`, the action
+`measure`, `query measurements` and `measure`), tests `ccore/test/measure_test.c`,
+`ccore/test/lab_measure.mjs`; the page: `web-ui/src/gl/measure.ts`, `web-ui/src/glviewport.ts`.

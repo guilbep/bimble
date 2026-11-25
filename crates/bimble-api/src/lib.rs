@@ -2,5 +2,6 @@
 //! Queries first: small serde summaries, never whole meshes.
 
 pub mod dispatch;
+pub mod measure;
 pub mod query;
 pub mod verbs;

@@ -31,6 +31,7 @@
 #include "sheets.h" /* ticket SH1 */
 #include "view_only.h"
 #include "annot.h"
+#include "measure.h" /* ticket T1 */
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -537,6 +538,7 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "home")) return 1;
     /* Links (ticket B5, links.h): ribbon.rs:596 ManageLinks `loaded`, LinkModel `_ => loaded`. */
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return loaded(s);
+    if (!strcmp(name, "measure")) return loaded(s); /* ribbon.rs:612 `_ => loaded` (ticket T1) */
     /* Visibility and the section box (ribbon.rs:592-611; the C core has only the 3D view: never flat). */
     if (!strcmp(name, "section_box") || !strcmp(name, "reveal_hidden")) return loaded(s);
     if (!strcmp(name, "box_to_selection")) return loaded(s) && s->vis.section_on;
@@ -558,6 +560,7 @@ static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strncmp(a->name, "place_", 6)) return s->open && s->placing && !strcmp(a->name + 6, KIND_NAME[s->placing_kind]);
     if (!strcmp(a->name, "section_box")) return s->vis.section_on; /* ribbon.rs:629 */
     if (!strcmp(a->name, "reveal_hidden")) return s->vis.reveal;   /* ribbon.rs:643 */
+    if (!strcmp(a->name, "measure")) return loaded(s) && s->measure.on; /* ribbon.rs:625 (ticket T1) */
     return a->pressed;
 }
 
@@ -627,6 +630,17 @@ static int q_open_views(cc_session *s, JsonW *w) {
     return done(w);
 }
 
+/* The box a plan shows (views.rs view_clip): the scene's bounds, z cut to the plan's range. */
+static void plan_box(const cc_scene *sc, const cc_view *v, const double z[4], cc_vis *box) {
+    cc_vis_fit(box, sc, NULL);
+    if (!box->has_box) return;
+    double o = sc->origin[2];
+    double lo = v->look == CC_LOOK_DOWN ? z[CC_RANGE_DEPTH] : z[CC_RANGE_CUT];
+    double hi = v->look == CC_LOOK_DOWN ? z[CC_RANGE_CUT] : z[CC_RANGE_DEPTH];
+    if (lo == lo && lo > -1e300 && lo < 1e300 && (float)(lo - o) > box->min[2]) box->min[2] = (float)(lo - o);
+    if (hi == hi && hi > -1e300 && hi < 1e300 && (float)(hi - o) < box->max[2]) box->max[2] = (float)(hi - o);
+}
+
 /* A C addition (views.h, ticket C1): what the viewport draws for the active view.
  *   {"id", "type": "three_d"|"plan"|"section", "look": "down"|"up"|null, "storey": its id or null,
  *    "elevation": the storey's (world mm) or null, "cut": the cut plane (world mm) or null,
@@ -662,13 +676,8 @@ static int q_view_clip(cc_session *s, JsonW *w) {
     jw_key(w, "clip");
     cc_vis box;
     cc_vis_init(&box);
-    if (plan && sc) cc_vis_fit(&box, sc, NULL);
+    if (plan && sc) plan_box(sc, &v, z, &box);
     if (plan && box.has_box) {
-        double o = sc->origin[2];
-        double lo = v.look == CC_LOOK_DOWN ? z[CC_RANGE_DEPTH] : z[CC_RANGE_CUT];
-        double hi = v.look == CC_LOOK_DOWN ? z[CC_RANGE_CUT] : z[CC_RANGE_DEPTH];
-        if (lo == lo && lo > -1e300 && lo < 1e300 && (float)(lo - o) > box.min[2]) box.min[2] = (float)(lo - o);
-        if (hi == hi && hi > -1e300 && hi < 1e300 && (float)(hi - o) < box.max[2]) box.max[2] = (float)(hi - o);
         jw_obj_begin(w);
         jw_key(w, "max"), jw_arr_begin(w);
         for (int k = 0; k < 3; k++) jw_f64(w, (double)box.max[k]);
@@ -944,7 +953,15 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         arena_free(&a);
         if (rc != -2) return rc ? CC_ERR : CC_OK;
     }
-    static const char *const EMPTY[] = {"recent_files", "measurements", "schedule_list", "recent_actions"};
+    if (!strcmp(name, "measurements")) { /* calls.rs:425, state.rs measurements_json (ticket T1) */
+        cc_measurements_json(&w, s->measure.dims, s->measure.n);
+        return done(&w);
+    }
+    if (!strcmp(name, "measure")) { /* a C addition: the measure tool's state (calls.h "measure_*") */
+        cc_measure_json(&s->measure, &w);
+        return done(&w);
+    }
+    static const char *const EMPTY[] = {"recent_files", "schedule_list", "recent_actions"};
     for (size_t i = 0; i < sizeof EMPTY / sizeof EMPTY[0]; i++)
         if (!strcmp(name, EMPTY[i])) { /* spec §1: stub [] */
             buf_puts(out, "[]");
@@ -1332,7 +1349,9 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     else if (!strncmp(name, "place_", 6)) {
         for (int k = 0; k < 4; k++)
             if (!strcmp(name + 6, KIND_NAME[k])) place_action(s, (cc_kind)k);
-    } else if (vis_action(s, name, out)) return CC_ERR;
+        if (s->placing) s->measure.on = 0, s->measure.has_first = s->measure.has_hover = 0; /* ribbon.rs:687 */
+    } else if (!strcmp(name, "measure")) cc_measure_toggle(&s->measure); /* ribbon.rs:691 (ticket T1) */
+    else if (vis_action(s, name, out)) return CC_ERR;
     /* home: the lab shows its own Home */
     return CC_OK;
 }
@@ -2150,8 +2169,45 @@ static int annot_call(cc_session *s, int pointer, int cancel, const ToolArgs *ta
     return annot_json(s, has_id ? &id : NULL, out);
 }
 
+/* The measure tool (ticket T1, measure.h): the shown scene and its visible links, the box that
+ * cuts (a plan's range, else the section box when on). */
+static int measure_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
+    const cc_scene *sc = loaded(s) ? scene_now(s) : NULL;
+    cc_mlayer layers[1 + CC_MAX_LINKS];
+    size_t nl = 0;
+    float mn[3], mx[3];
+    int has_box = 0;
+    if (sc) {
+        layers[nl].sc = sc, layers[nl].vis = &s->vis, memset(layers[nl].off, 0, sizeof layers[nl].off), nl++;
+        for (size_t i = 0; i < s->nlinks && nl < 1 + CC_MAX_LINKS; i++) { /* lib.rs snap_at `theirs` */
+            const cc_scene *ls = s->links[i].visible ? cc_link_scene(&s->links[i]) : NULL;
+            if (!ls) continue;
+            layers[nl].sc = ls, layers[nl].vis = NULL;
+            for (int k = 0; k < 3; k++) layers[nl].off[k] = (float)(ls->origin[k] - sc->origin[k]); /* lib.rs:1499 */
+            nl++;
+        }
+        Arena a;
+        arena_init(&a, 0);
+        cc_view v;
+        double z[4];
+        if (s->tab_open && cc_sv_active(s, &a, &v) == 1 && v.kind == CC_VIEW_PLAN && !cc_sv_resolve(s->open ? &s->model : NULL, &v, z)) {
+            cc_vis box;
+            cc_vis_init(&box);
+            plan_box(sc, &v, z, &box);
+            if (box.has_box) has_box = 1, memcpy(mn, box.min, sizeof mn), memcpy(mx, box.max, sizeof mx);
+            cc_vis_free(&box);
+        } else if (s->vis.section_on && s->vis.has_box) {
+            has_box = 1, memcpy(mn, s->vis.min, sizeof mn), memcpy(mx, s->vis.max, sizeof mx);
+        }
+        arena_free(&a);
+    }
+    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL};
+    return cc_measure_call(&s->measure, name, body, n, sc ? &mv : NULL, out) == 200 ? CC_OK : CC_ERR;
+}
+
 /* op "tool" (calls.h). */
 static int call_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
+    if (cc_measure_name(name)) return measure_tool(s, name, body, n, out); /* ticket T1 */
     if (cc_vis_tool_name(name)) { /* the section box's face drag (visibility.h): any scene shown */
         if (!loaded(s)) {
             buf_puts(out, NO_MODEL);

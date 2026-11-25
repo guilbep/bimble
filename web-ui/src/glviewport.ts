@@ -45,12 +45,19 @@
 // (a click on it never picks); a click on a face, edge or corner turns the camera there in 0.3 s, a
 // drag orbits, Home and Fit all under it; it follows project north (viewcube.ts projectNorth). In a
 // plan the cube and Home are off, Fit all stays (ADR 0021).
+// The measure tool (ticket T1, ccore/session/measure.h, gl/measure.ts): while it is on (action
+// `measure`), pointer moves and clicks go to the C core (op tool measure_pointer / measure_click:
+// the ray, the ray 12 px beside it; Alt: no snap, Shift: along an axis, Ctrl: go on from there),
+// which picks, snaps to a corner, an edge or a face and keeps the measurements (session state);
+// the overlay draws them, the rubber line and the snap marker, in 3D and in a plan. Esc: the first
+// point goes, then the tool.
 import {
   annotate, annotateCall, boxTool, deleteAnnotation, moveAnnotation, openViews, placing, select, selectLinked, state, toolCall,
-  viewAnnotations, viewClip, visibility, visibilitySets,
+  viewAnnotations, viewClip, visibility, visibilitySets, measure, measureCall, type MeasureState,
   type AnnotateState, type ToolPointer, type ToolState, type ViewAnnotation, type ViewAnnotations, type ViewClip, type Visibility,
   type VisibilitySets,
 } from "./bimble";
+import { drawMeasure } from "./gl/measure";
 import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
 
 // Palette, sRGB (bimble-core style.rs:302, :335-410), by MaterialCategory index.
@@ -354,6 +361,10 @@ interface GlStats {
   cubeCellAt?: (d: Dir) => [number, number] | null;
   cubeLetterAt?: (t: "N" | "E" | "S" | "W") => [number, number] | null;
   cubeHitAt?: (x: number, y: number) => Dir | null;
+  /** The measure tool (ticket T1): its state as last answered, calls made, the last error. */
+  measure: MeasureState | null;
+  measureCalls: number;
+  measureError: string | null;
 }
 declare global {
   interface Window {
@@ -377,7 +388,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const stats: GlStats = { firstFrameMs: null, meshBytes: 0, meshFetchMs: 0, meshRev: null, frames: 0, picks: 0, error: null,
     toolCalls: 0, ghostTris: 0, hover: null, toolError: null, placed: null,
     hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null, links: [], linkTris: 0,
-    annotations: null, overlayTexts: [], selectedAnnotation: null, annotate: null, annotateCalls: 0, annotError: null, annotAdded: null };
+    annotations: null, overlayTexts: [], selectedAnnotation: null, annotate: null, annotateCalls: 0, annotError: null, annotAdded: null,
+    measure: null, measureCalls: 0, measureError: null };
   window.__bbGl = stats;
   if (!(canvas instanceof HTMLCanvasElement)) return () => undefined;
   const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
@@ -1070,6 +1082,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         }
       }
     }
+    // ---- the measure tool (ticket T1): its measurements and pointer, in 3D and in a plan ----
+    if (mesh && stats.measure) {
+      const b = canvas.getBoundingClientRect();
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawMeasure(ctx, stats.measure, (x, y, z) => {
+        const p = stats.toScreen?.(x, y, z);
+        return p ? [p[0] - b.left, p[1] - b.top] : null;
+      }, texts);
+    }
     stats.overlayTexts = texts;
   };
   /** The annotations of the view shown, again when the model or the view changed. */
@@ -1128,6 +1149,22 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (error) console.warn(`gl viewport: tool ${name}:`, error);
     if (t?.placed) stats.placed = t.placed;
     showTool(t);
+  };
+  // ---- the measure tool (ticket T1) ----
+  const measuringNow = () => measure.value?.active === true && mesh !== null && !placingNow();
+  /** One measure tool call for the pointer at client (x, y); the answer is drawn. */
+  const measureAt = (name: "measure_pointer" | "measure_click", cx: number, cy: number,
+    mods: { shiftKey: boolean; altKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
+    const r = canvas.getBoundingClientRect();
+    const x = cx - r.left, y = cy - r.top;
+    stats.measureCalls++;
+    const { state: st, error } = measureCall(name, {
+      ray: rayAt(x, y), ray_tol: rayAt(x + SNAP_PX, y), tol_px: SNAP_PX, free: mods.altKey, ortho: mods.shiftKey, chain: mods.ctrlKey || mods.metaKey,
+    });
+    stats.measureError = error;
+    if (error) console.warn(`gl viewport: ${name}:`, error);
+    stats.measure = st;
+    dirty = true;
   };
   // Pointer moves while placing: at most one tool call per frame (the latest position).
   let pendingMove: PointerEvent | null = null;
@@ -1242,10 +1279,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   canvas.addEventListener("pointerdown", (e) => {
     canvas.setPointerCapture(e.pointerId);
     // A left press on a handle of the section box: the box tool holds that face (no orbit).
-    const onHandle = e.button === 0 && !e.shiftKey && !placingNow() && !plan && clipBox() !== null && boxAt("box_press", e.clientX, e.clientY)?.active === true;
+    const onHandle = e.button === 0 && !e.shiftKey && !placingNow() && !measuringNow() && !plan && clipBox() !== null && boxAt("box_press", e.clientX, e.clientY)?.active === true;
     drag = { pan: e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey), box: onHandle, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
     // A left press on a dimension or a text of the plan: it is held (a click selects it, a drag moves it).
-    if (plan && e.button === 0 && !e.shiftKey && !placingNow() && !annotatingNow()) {
+    if (plan && e.button === 0 && !e.shiftKey && !placingNow() && !annotatingNow() && !measuringNow()) {
       const r = canvas.getBoundingClientRect();
       const id = annotationAt(e.clientX - r.left, e.clientY - r.top);
       if (id) drag.annot = id;
@@ -1253,7 +1290,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!drag) {
-      if (placingNow() || annotatingNow()) pendingMove = e;
+      if (placingNow() || annotatingNow() || measuringNow()) pendingMove = e;
       return;
     }
     if (drag.annot) { // the held annotation follows the pointer (world mm: the orthographic rays' offset)
@@ -1321,6 +1358,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       annotAt("click", e.clientX, e.clientY, e);
       return;
     }
+    if (measuringNow()) { // a click while measuring goes to the measure tool (ticket T1)
+      pendingMove = null;
+      measureAt("measure_click", e.clientX, e.clientY, e);
+      return;
+    }
     if (selAnn) { selAnn = stats.selectedAnnotation = null; dirty = true; } // a click elsewhere: the annotation is let go
     if (d.pan) return;
     if (plan && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > CLICK_PX) return;
@@ -1340,6 +1382,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const el = e.target as HTMLElement | null;
     const typing = el !== null && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
     if (!typing && e.key === "Escape" && annotate.value?.active === true) { annotCancel(); return; }
+    if (!typing && e.key === "Escape" && measuringNow()) { // the first point, then the tool (ticket T1)
+      stats.measureCalls++;
+      const { state: st, error } = measureCall("measure_cancel");
+      stats.measureError = error;
+      stats.measure = st;
+      dirty = true;
+      return;
+    }
     if (!typing && (e.key === "Delete" || e.key === "Backspace") && selAnn && anns && plan) { // the selected annotation goes
       const err = deleteAnnotation(anns.view, selAnn);
       stats.annotError = err;
@@ -1441,7 +1491,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       pendingMove = null;
       if (placingNow()) toolAt("pointer", e.clientX, e.clientY, e);
       else if (annotatingNow()) annotAt("pointer", e.clientX, e.clientY, e);
+      else if (measuringNow()) measureAt("measure_pointer", e.clientX, e.clientY, e);
     }
+    if (measure.value !== stats.measure) { stats.measure = measure.value; dirty = true; } // the action, a clear, another model
     if (annotate.value !== seenAnnot) { // started or stopped (bimble.ts startDimension, startText)
       seenAnnot = annotate.value;
       stats.annotate = seenAnnot;

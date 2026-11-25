@@ -824,6 +824,7 @@ function refresh(modelChanged: boolean): void {
   openViews.value = tryQuery<OpenViews>("open_views", NO_VIEWS);
   status.value = tryQuery<Status | null>("status", null);
   placing.value = tryQuery<Placing | null>("placing", null);
+  if (modelChanged) setMeasure(tryQuery<MeasureState | null>("measure", null)); // another model: none kept
   if (modelChanged) {
     storeys.value = tryQuery<StoreySummary[]>("storeys", []);
     materials.value = tryQuery<MaterialSummary[]>("materials", []);
@@ -858,6 +859,11 @@ export function runAction(name: string): string | null {
   if (route) { route(); return null; }
   try {
     wasmOrThrow().action(name);
+    // Measuring is session state, not in the change JSON: its state and pressed button here (ticket T1).
+    if (name === "measure" || name.startsWith("place_")) {
+      setMeasure(tryQuery<MeasureState | null>("measure", null));
+      actions.value = tryQuery<ActionState[]>("actions", []);
+    }
     // The box moves without a change event (its geometry is not in the change signature, calls.rs:152).
     if (name === "box_to_selection") visibility.value = tryQuery<Visibility | null>("visibility", null);
     return null;
@@ -1068,7 +1074,50 @@ export function manageLink(op: "remove" | "reload" | "show" | "hide", name: stri
 }
 /** Measurements kept in the viewer (bridge query "measurements"); `label` as the egui panel shows it. */
 export type Measurement = { id: number; label: string; value_mm: number };
-export const measurements = () => tryQuery<Measurement[]>("measurements", []);
+export const measurements = () => { void measureKept.value; return tryQuery<Measurement[]>("measurements", []); };
+
+// ---- The measure tool (ticket T1, ccore/session/measure.h; C core only) ----
+
+/** The measure tool's state (op `tool` measure_*, `query measure`). Points in world mm. */
+export interface MeasureState {
+  active: boolean;
+  /** The first point of the measurement being made. */
+  first: [number, number, number] | null;
+  /** Where the next click measures to: a corner, an edge point or a face point. */
+  hover: { at: [number, number, number]; snap: "corner" | "edge" | "face" } | null;
+  /** The measurements kept: `label` as the list shows it, `text` as the view draws it. */
+  items: { a: [number, number, number]; b: [number, number, number]; id: number; label: string; text: string; value_mm: number }[];
+  /** From the first point to the hover. */
+  preview: { text: string; value_mm: number } | null;
+}
+/** The measure tool's state as the last call left it (the viewport draws it; the lists read it). */
+export const measure = shallowRef<MeasureState | null>(null);
+/** The kept measurements' labels: changes only when one is added or removed, so the lists that
+ *  read `measurements()` follow the tool without a query per pointer move. */
+const measureKept = shallowRef("");
+const setMeasure = (st: MeasureState | null) => {
+  measure.value = st;
+  measureKept.value = st ? st.items.map((i) => i.label).join("\n") : "";
+};
+/** A pointer for the measure tool: the ray in scene coordinates and the ray `tol_px` pixels beside
+ *  it; `free`: no snap (Alt), `ortho`: along an axis from the first point (Shift), `chain`: the
+ *  next measurement starts where this one ends (Ctrl). */
+export interface MeasurePointer { ray?: number[]; ray_tol?: number[]; tol_px?: number; free?: boolean; ortho?: boolean; chain?: boolean }
+/** One call of the measure tool: the state, or the error text. No history step, no rev change. */
+export function measureCall(name: "measure_pointer" | "measure_click" | "measure_cancel" | "measure_clear", args: MeasurePointer = {}): { state: MeasureState | null; error: string | null } {
+  try {
+    const w = wasmOrThrow();
+    if (!w.tool) return { state: null, error: "the measure tool needs the C core" };
+    const st = JSON.parse(w.tool(name, JSON.stringify(args))) as MeasureState;
+    setMeasure(st);
+    if (name === "measure_cancel" && !st.active) actions.value = tryQuery<ActionState[]>("actions", []); // its pressed state
+    return { state: st, error: null };
+  } catch (e) {
+    return { state: null, error: message(e) };
+  }
+}
+/** Drop every measurement. Returns the error, or null. */
+export const clearMeasurements = (): string | null => measureCall("measure_clear").error;
 
 /** Rust's palette filter (`palette_match`, the egui one): the matching indices of `items`, in order. */
 export function paletteMatch(q: string, items: string[]): number[] {

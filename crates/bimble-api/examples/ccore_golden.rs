@@ -25,6 +25,9 @@
 //! Georeference (`geo/`, ADR 0045): three synthetic models made from the frame (a map conversion,
 //! a turn only, a model drawn in LV95), their files, IFC exports, imports, display reads, view
 //! files and coordinate tables.
+//!
+//! The measure tool (`measure.txt`, ticket T1): `bimble_api::measure` (the viewer's) on fixed
+//! lengths and point pairs.
 
 use bimble_api::dispatch;
 use bimble_core::demo::{FrameSpec, concrete_frame};
@@ -203,7 +206,78 @@ fn derive(dir: &Path) -> Files {
     schedule_files(dir, &m, &mut files);
     geo_files(&m, &mut files);
     drawing_files(dir, &m, &mut files);
+    files.insert("measure.txt".into(), measure_txt().into_bytes());
     files
+}
+
+// ---------------------------------------------------------------- measure (ticket T1)
+
+/// `measure.txt`: tab-separated lines the C test reads (`ccore/test/measure_test.c`):
+///   `format_mm <x as f32 {:?}> <text>` for fixed lengths, edge cases included;
+///   `pair <ax ay az> <bx by bz> <distance {:?}>`: the viewer's `Dimension::distance` (glam
+///     `Vec3::length` of b - a: f32, x*x + y*y + z*z, then sqrt);
+///   `measurements <json>`: the `measurements` query for those pairs, in order.
+fn measure_txt() -> String {
+    use bimble_api::measure::{format_mm, measurements_json};
+    let mut s = String::new();
+    let lengths: [f32; 34] = [
+        0.0,
+        -0.0,
+        0.04,
+        -0.04,
+        0.05,
+        0.25,
+        0.35,
+        0.4,
+        0.75,
+        2.25,
+        12.345,
+        99.94,
+        99.95,
+        99.96,
+        99.99,
+        100.0,
+        100.4,
+        100.5,
+        999.5,
+        1000.5,
+        2500.0,
+        2500.5,
+        -4500.0,
+        12345.6,
+        123456.7,
+        1e6,
+        1234567.0,
+        16777217.0,
+        1e10,
+        -1e10,
+        3.4e38,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+    ];
+    for x in lengths {
+        writeln!(s, "format_mm\t{x:?}\t{}", format_mm(x)).unwrap();
+    }
+    let pairs: [([f32; 3], [f32; 3]); 3] = [
+        ([-150.0, -150.0, 3000.0], [5850.0, -150.0, 3000.0]),
+        ([0.0, 0.0, 0.0], [3000.0, 4000.0, 250.0]),
+        ([100.5, 200.25, -12.75], [100.5, 200.25, -0.4]),
+    ];
+    let mut distances = Vec::new();
+    for (a, b) in pairs {
+        let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let mm = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        distances.push(mm);
+        writeln!(
+            s,
+            "pair\t{:?} {:?} {:?}\t{:?} {:?} {:?}\t{mm:?}",
+            a[0], a[1], a[2], b[0], b[1], b[2]
+        )
+        .unwrap();
+    }
+    writeln!(s, "measurements\t{}", measurements_json(&distances)).unwrap();
+    s
 }
 
 // ---------------------------------------------------------------- GlobalId

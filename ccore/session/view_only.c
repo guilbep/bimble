@@ -2,6 +2,7 @@
 #include "view_only.h"
 #include <string.h>
 
+#include "measure.h"
 #include "visibility.h"
 
 #ifdef CC_VIEW_ONLY
@@ -14,7 +15,7 @@ static const char *const REFUSED_ACTIONS[] = {
 static int refused(const char *op, const char *name) {
     for (size_t i = 0; i < sizeof REFUSED_OPS / sizeof *REFUSED_OPS; i++)
         if (!strcmp(op, REFUSED_OPS[i])) return 1;
-    if (!strcmp(op, "tool")) return !cc_vis_tool_name(name); /* the section box stays */
+    if (!strcmp(op, "tool")) return !cc_vis_tool_name(name) && !cc_measure_name(name); /* the section box and measuring stay */
     if (strcmp(op, "action")) return 0;
     if (!strncmp(name, "place_", 6)) return 1;
     for (size_t i = 0; i < sizeof REFUSED_ACTIONS / sizeof *REFUSED_ACTIONS; i++)

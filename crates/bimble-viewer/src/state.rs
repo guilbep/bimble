@@ -219,17 +219,8 @@ pub fn links_json(
 /// lists them ("1. 2 500 mm", thin space); id is the position, as the panel's delete uses it.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub fn measurements_json(dims: &[crate::measure::Dimension]) -> serde_json::Value {
-    dims.iter()
-        .enumerate()
-        .map(|(k, d)| {
-            let mm = d.distance();
-            serde_json::json!({
-                "id": k,
-                "label": format!("{}. {}", k + 1, crate::measure::format_mm(mm)),
-                "value_mm": f64::from(mm),
-            })
-        })
-        .collect()
+    let mm: Vec<f32> = dims.iter().map(|d| d.distance()).collect();
+    bimble_api::measure::measurements_json(&mm)
 }
 
 #[cfg(test)]

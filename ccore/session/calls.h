@@ -60,6 +60,23 @@ enum { CC_OK = 200, CC_ERR = 400 };
  *               relative to the scene origin, as query visibility), at least 10 mm per axis.
  * Each answers {"active":bool,"box":null|{"max":[…],"min":[…],"yaw":0.0},"face":null|0..5,"on":bool}
  * (face k: axis k/2, its min side for even k); box: the preview while active.
+ * The measure tool (op "tool", ticket T1, session/measure.h), on and off with action `measure`
+ * (enabled with any scene shown, pressed while on). Session state: no history step, no rev change.
+ *   measure_pointer  {"ray":[…], "ray_tol":[…], "tol_px"?: 12, "free"?, "ortho"?, "chain"?: bool}
+ *                    (scene coordinates; ray_tol is the ray tol_px pixels beside it): the hover,
+ *                    a corner, else an edge point, else the face point the ray meets first (the
+ *                    shown scene's visible elements and the visible links, inside the section box
+ *                    or the plan's range). free: no snap (Alt); ortho: along x, y or z from the
+ *                    first point (Shift). While off: 200, inactive.
+ *   measure_click    the same body (empty: where the pointer was): the hover becomes the first
+ *                    point, or with a first point one measurement (chain: it stays the first).
+ *                    400 while off.
+ *   measure_cancel   Esc: the first point goes; without one the tool goes off.
+ *   measure_clear    every measurement goes.
+ * Each answers {"active":bool,"first":null|[x,y,z],"hover":null|{"at":[x,y,z],"snap":"corner"|
+ * "edge"|"face"},"items":[{"a","b","id","label","text","value_mm"}],"preview":null|{"text",
+ * "value_mm"}} (world mm); query "measure" answers the same, query "measurements" Rust's
+ * [{"id","label","value_mm"}].
  * query "visibility_sets" (a C addition): the whole sets the page draws from (query visibility
  * caps its lists at 50): {"hidden_in_view":[…],"isolated_in_view":[…],"now":null|{"ids":[…],
  * "isolate":bool},"reveal":bool}.

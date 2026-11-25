@@ -164,30 +164,8 @@ impl Dimension {
     }
 }
 
-/// A length in mm for display: whole mm from 100 mm, one decimal below. Thousands separated by
-/// a thin space, as on drawings.
-pub fn format_mm(x: f32) -> String {
-    let s = if x.abs() >= 100.0 {
-        format!("{}", x.round() as i64)
-    } else {
-        format!("{x:.1}")
-    };
-    let (int, frac) = s
-        .split_once('.')
-        .map_or((s.as_str(), None), |(i, f)| (i, Some(f)));
-    let (sign, digits) = int.strip_prefix('-').map_or(("", int), |d| ("-", d));
-    let mut grouped = String::new();
-    for (k, c) in digits.chars().enumerate() {
-        if k > 0 && (digits.len() - k).is_multiple_of(3) {
-            grouped.push('\u{2009}');
-        }
-        grouped.push(c);
-    }
-    match frac {
-        Some(f) => format!("{sign}{grouped}.{f} mm"),
-        None => format!("{sign}{grouped} mm"),
-    }
-}
+/// A length in mm for display (`bimble_api::measure`: the C core's golden is made from it).
+pub use bimble_api::measure::format_mm;
 
 #[cfg(test)]
 mod tests {
