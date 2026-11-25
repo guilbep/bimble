@@ -10,18 +10,30 @@
 #include <stdint.h>
 #include "buf.h"
 #include "history.h"
+#include "ifc_read.h"
 #include "model.h"
 #include "platform.h"
 #include "scene.h"
+#include "viewfile.h"
 
 typedef enum { CC_KIND_COLUMN, CC_KIND_BEAM, CC_KIND_WALL, CC_KIND_SLAB } cc_kind; /* verbs.rs:29 */
+
+enum { CC_VIEW_NONE, CC_VIEW_IFC, CC_VIEW_FILE };
 
 typedef struct cc_persist cc_persist; /* the session file (session.c), NULL when off */
 
 typedef struct cc_session {
     const cc_platform *pf; /* the carrier's, outlives the session */
-    int open;            /* a model is loaded (always editable: the C core imports IFC, spec §1) */
+    int open;            /* an editable model is loaded (`model`) */
     cc_model model;
+    /* Or a read-only scene, no model (lib.rs:494-498 load_bytes, calls.rs:65-71 `model(v)` fails):
+     * an IFC opened as it is (ifc_read.h) or a .bimbleview (viewfile.h). At most one of `open`
+     * and `view` is set. `vscene` is the cc_scene over `vf` (its own arena holds the element
+     * rows; the shapes and meshes are vf's). */
+    int view;            /* CC_VIEW_NONE, CC_VIEW_IFC, CC_VIEW_FILE */
+    cc_ifc_scene *ifc;   /* malloc'd while view == CC_VIEW_IFC */
+    cc_viewfile *vf;     /* malloc'd while view == CC_VIEW_FILE */
+    cc_scene vscene;
     cc_history hist;
     char path[4096];     /* where Save writes (lib.rs:1830 `l.path`) */
     const char *file;    /* the file name of `path` (calls.rs:150 `file_name`) */
@@ -80,13 +92,21 @@ void cc_session_free(cc_session *s);
  * 0 ok; -1 with `err` (the open model, if any, is kept). */
 int cc_session_open(cc_session *s, const char *path, cc_error *err);
 
+/* File -> Open as the Rust viewer opens (lib.rs:466-498 load_any): a path ending in .ifc (any
+ * case) is read for display (cc_ifc_read), read-only; .bimbleview (any case) is read as a view
+ * file, read-only; anything else is cc_session_open. A read-only scene has no model: state
+ * `editable` false, the edit calls answer "this file is read only: import it to edit", /mesh
+ * draws the scene. Replaces what is open only when the new file loaded; rev + 1; the session file
+ * pauses (nothing to keep). 0 ok; -1 with `err`. */
+int cc_session_open_file(cc_session *s, const char *path, cc_error *err);
+
 /* File -> New (lib.rs:1688-1712 start_new, verbs.rs:101 new_model): project "Untitled" with a new
  * GlobalId, one storey "Level 0" at 0 mm, path CC_UNTITLED, editable and unsaved (as an imported
  * copy). Replaces an open model; the session file pauses until a save gives the model a file.
  * 0 ok; -1 with `err` (out of memory). */
 int cc_session_new_model(cc_session *s, cc_error *err);
 
-/* Closes the open model (no model after: the viewer's empty state); rev + 1. The session file
+/* Closes the open model or read-only scene (nothing after: the viewer's empty state); rev + 1. The session file
  * pauses. Writes nothing. */
 void cc_session_close(cc_session *s);
 
@@ -105,8 +125,8 @@ int cc_session_unsaved(const cc_session *s);
 const cc_model *cc_session_model(const cc_session *s);
 uint32_t cc_session_rev(const cc_session *s);
 
-/* The scene of the open model at its rev, built once per rev (calls.c) and shared by query
- * status and GET /mesh; NULL when there is no model or the build failed. */
+/* The scene shown: the open model's at its rev, built once per rev (calls.c) and shared by query
+ * status and GET /mesh, or the read-only scene; NULL when nothing is open or the build failed. */
 const cc_scene *cc_session_scene(cc_session *s);
 
 /* The session file (tickets T12, T18): the state a restart of the host must keep, so the lab

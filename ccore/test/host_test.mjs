@@ -231,7 +231,7 @@ try {
   check("model: query storeys = golden/query.txt first record", sto.status === 200 && sto.body === goldenAnswer("storeys"), sto.body);
   const en = async () => (await mq("actions")).filter((a) => a.enabled).map((a) => a.name).sort().join(",");
   const en0 = await en();
-  check("model: enabled actions, nothing to undo or save", en0 === "export_ifc2x3,export_ifc4,home,import_ifc,new,open,place_beam,place_column,place_slab,place_wall", en0);
+  check("model: enabled actions, nothing to undo or save", en0 === "export_ifc2x3,export_ifc4,home,import_ifc,new,open,place_beam,place_column,place_slab,place_wall,share_for_viewing", en0); // share_for_viewing: ticket A5c (ribbon.rs:575)
   const r0 = await rev();
   check("model: rev 1 after load (lib.rs:1679)", r0 === 1, String(r0));
 

@@ -1,10 +1,12 @@
 /* The calls of the native host, answered from the open model (session.h): `Viewer::call` of
  * crates/bimble-viewer/src/calls.rs. Without a model (the host started without a file) the
- * answers are those of a viewer with nothing loaded.
+ * answers are those of a viewer with nothing loaded. With a read-only scene (an IFC or a
+ * .bimbleview opened as it is, session.h `view`) they are a read-only file's: the scene is shown
+ * and selectable, and every call that needs the model answers READ_ONLY (calls.rs:65 `model`).
  *
  * Key order: every object here is a `serde_json::json!` map in Rust, and preserve_order is off
  * (spec §3, "Canonical JSON"), so keys are written in byte order. Each producer is cited.
- * Deviations from Rust: docs/research/c-core-spec.md §1 (version, IFC always imported) and the
+ * Deviations from Rust: docs/research/c-core-spec.md §1 (version) and the
  * ones marked "Deviation" below. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +24,7 @@
 #include "scene.h"
 #include "session.h"
 #include "verbs.h"
+#include "viewfile.h"
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -48,8 +51,8 @@ int cc_known_op(const char *op) {
  * and hatching on (bimble-render/src/lib.rs:1431-1432), the four plan annotations on
  * (bimble-drawing/src/template.rs:222-226), place_<kind> while placing that kind, else off.
  * `enabled`: action_enabled (ribbon.rs:555-612) for the actions the C core runs (new, open,
- * import_ifc, save, undo, redo, place_*, home, export_ifc4, export_ifc2x3); every other one is
- * off (spec §1). */
+ * import_ifc, convert_open, share_for_viewing, save, undo, redo, place_*, home, export_ifc4,
+ * export_ifc2x3); every other one is off (spec §1). */
 typedef struct {
     const char *name, *label, *tab, *shortcut;
     char pressed;
@@ -125,7 +128,8 @@ static int done(JsonW *w) {
 /* Rust `{:?}` of a str, for the error texts. */
 static void debug_str(cc_buf *out, const char *s) { cc_buf_debug_str(out, s, strlen(s)); }
 
-static int has_model(const cc_session *s) { return s->open; }
+/* Something is shown: an editable model or a read-only scene (Rust's `loaded.is_some()`). */
+static int loaded(const cc_session *s) { return s->open || s->view; }
 
 /* ---- the 3D view (core/view.rs:584) ---- */
 
@@ -142,6 +146,8 @@ static void tab_json(JsonW *w) { /* ribbon.rs:406 json!({"type": "view", "id": i
 /* ---- the scene, built once per rev (status counts, visibility origin) ---- */
 
 static const cc_scene *scene_now(cc_session *s) {
+    if (s->view == CC_VIEW_IFC) return &s->ifc->scene;
+    if (s->view == CC_VIEW_FILE) return &s->vscene;
     if (!s->open) return NULL;
     if (s->scene_rev != s->rev) {
         if (s->scene_rev) cc_scene_free(&s->scene);
@@ -494,11 +500,12 @@ static int q_state(cc_session *s, JsonW *w) { /* calls.rs:239-258 */
     jw_obj_begin(w);
     jw_key(w, "editable"), jw_bool(w, s->open);
     jw_key(w, "file");
-    if (s->open) jw_str(w, s->file);
+    if (loaded(s)) jw_str(w, s->file);
     else jw_null(w);
     jw_key(w, "schema");
     if (s->open && s->schema_bimble) jw_str(w, ".bimble");
-    else jw_null(w); /* a model's scene has no IFC schema */
+    else if (s->view == CC_VIEW_IFC && s->ifc->schema.n) jw_str_n(w, s->ifc->schema.p, s->ifc->schema.n);
+    else jw_null(w); /* a model's scene and a view file's have no IFC schema */
     jw_key(w, "unsaved"), jw_bool(w, cc_session_unsaved(s));
     jw_key(w, "user"), jw_null(w);
     jw_key(w, "version"), jw_str(w, CC_VERSION);
@@ -508,7 +515,14 @@ static int q_state(cc_session *s, JsonW *w) { /* calls.rs:239-258 */
 
 static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-612, the C core's subset */
     if (!strcmp(name, "new") || !strcmp(name, "open") || !strcmp(name, "import_ifc")) return 1; /* ribbon.rs:559 */
-    if (!strcmp(name, "save_as") || !strcmp(name, "close")) return s->open; /* not ribbon actions (file_action) */
+    if (!strcmp(name, "save_as")) return s->open; /* not ribbon actions (file_action) */
+    if (!strcmp(name, "close")) return loaded(s);
+    /* ribbon.rs:575: Rust shares any scene shown. Deviation: the C writer (viewfile.h) takes a
+     * model, so a read-only scene cannot be shared yet. */
+    if (!strcmp(name, "share_for_viewing")) return s->open;
+    /* ribbon.rs:564-572: an IFC open read-only, natively (the browser keeps no path to read it
+     * again), with something to edit (Deviation: any element, not structural_count). */
+    if (!strcmp(name, "convert_open")) return s->view == CC_VIEW_IFC && s->pf->files && s->ifc->scene.nelements > 0;
     if (!strcmp(name, "save")) return cc_session_unsaved(s);
     if (!strcmp(name, "undo")) return s->open && s->hist.nundo > 0;
     if (!strcmp(name, "redo")) return s->open && s->hist.nredo > 0;
@@ -575,11 +589,11 @@ static int q_visibility(cc_session *s, JsonW *w) { /* calls.rs:442-460: nothing 
  * while `tab_open` (spec §1: no plans). A ViewSummary through to_value is a sorted map
  * (api/query.rs:164-178, `type` flattened), plus `auto_name` (viewing.rs:17-38). */
 static int q_open_views(cc_session *s, JsonW *w) {
-    int tab = s->open && s->tab_open;
+    int tab = loaded(s) && s->tab_open;
     cc_guid g = view3d();
     jw_obj_begin(w);
     jw_key(w, "active");
-    if (s->open) jw_str_n(w, g.c, 22);
+    if (loaded(s)) jw_str_n(w, g.c, 22);
     else jw_null(w);
     jw_key(w, "current");
     if (tab) tab_json(w);
@@ -593,7 +607,7 @@ static int q_open_views(cc_session *s, JsonW *w) {
     if (tab) tab_json(w);
     jw_arr_end(w);
     jw_key(w, "views"), jw_arr_begin(w);
-    if (s->open) {
+    if (loaded(s)) {
         jw_obj_begin(w);
         jw_key(w, "annotations"), jw_u64(w, 0);
         jw_key(w, "auto_name"), jw_obj_begin(w);
@@ -664,7 +678,7 @@ static void size_text(cc_buf *out, uint64_t bytes) { /* big.rs:376-392 */
  * scene's triangles, each element counted (Deviation: Rust counts the GPU scene's). model_bytes:
  * big.rs:215 held = 225 per stored triangle (scene.rs:235 stored_triangles). */
 static int q_status(cc_session *s, JsonW *w, cc_buf *out) {
-    if (!s->open) {
+    if (!loaded(s)) {
         buf_puts(out, "null");
         return CC_OK;
     }
@@ -848,18 +862,24 @@ static int fail(cc_buf *out, const char *msg) {
 /* export IFC (share.rs:50-85 export_ifc): Rust asks where to save, proposing "<stem>.ifc"; the
  * host writes `path`, else that name next to the model (never over the open file). The
  * timestamp is now, UTC (date::iso_utc; the module's clock is the page's, wasm_api.h). */
+/* `path`, else "<stem>.<ext>" next to the open file ("model.<ext>" without a stem). */
+static void sibling(const cc_session *s, const char *path, const char *ext, char *to, size_t cap) {
+    if (path) {
+        snprintf(to, cap, "%s", path);
+        return;
+    }
+    const char *slash = strrchr(s->path, '/');
+    const char *name = slash ? slash + 1 : s->path;
+    const char *dot = strrchr(name, '.');
+    size_t dir = (size_t)(name - s->path), stem = dot && dot != name ? (size_t)(dot - name) : strlen(name);
+    if (stem == 0) snprintf(to, cap, "%.*smodel.%s", (int)dir, s->path, ext);
+    else snprintf(to, cap, "%.*s%.*s.%s", (int)dir, s->path, (int)stem, name, ext);
+}
+
 static void export_ifc(cc_session *s, cc_ifc_schema schema, const char *path) {
     const char *label = schema == CC_IFC4 ? "IFC4" : "IFC2x3";
     char to[4096 + 16];
-    if (path) snprintf(to, sizeof to, "%s", path);
-    else {
-        const char *slash = strrchr(s->path, '/');
-        const char *name = slash ? slash + 1 : s->path;
-        const char *dot = strrchr(name, '.');
-        size_t dir = (size_t)(name - s->path), stem = dot && dot != name ? (size_t)(dot - name) : strlen(name);
-        if (stem == 0) snprintf(to, sizeof to, "%.*smodel.ifc", (int)dir, s->path);
-        else snprintf(to, sizeof to, "%.*s%.*s.ifc", (int)dir, s->path, (int)stem, name);
-    }
+    sibling(s, path, "ifc", to, sizeof to);
     if (!strcmp(to, s->path)) {
         cc_log(s->pf, "bimble-ccore: %s: export would overwrite the open file", to);
         return;
@@ -882,6 +902,40 @@ static void export_ifc(cc_session *s, cc_ifc_schema schema, const char *path) {
     else cc_log(s->pf, "bimble-ccore: %s: cannot write", to);
 }
 
+/* share.rs:7-11 NOT_KEPT */
+static const char NOT_KEPT[] =
+    "A .bimbleview keeps each element's shape, class, name, GlobalId, storey and material (its family as imported, "
+    "not as your standards draw it), the storeys and the grids. Not kept: property sets and quantities, types, views, "
+    "sheets, schedules, annotations, reference plans, linked models and the history.";
+
+/* File -> Share for viewing (share.rs:15-45): the scene shown as a gzipped .bimbleview
+ * (viewfile.h, the raw stream byte for byte with Rust's). Rust asks where, proposing
+ * "<stem>.bimbleview"; the host writes `path`, else that name next to the model (never over the
+ * open file). Like export IFC, the call answers Ok and logs the outcome. */
+static void share_for_viewing(cc_session *s, const char *path) {
+    char to[4096 + 16];
+    sibling(s, path, "bimbleview", to, sizeof to);
+    if (!strcmp(to, s->path)) {
+        cc_log(s->pf, "bimble-ccore: %s: the view file would overwrite the open file", to);
+        return;
+    }
+    const cc_scene *sc = scene_now(s);
+    if (!sc) {
+        cc_log(s->pf, "bimble-ccore: %s: the scene cannot be built", to);
+        return;
+    }
+    Buf b, msg;
+    buf_init(&b), buf_init(&msg);
+    int ok = cc_viewfile_write(&s->model, sc, 1, &b) == 0 && !b.oom;
+    if (ok) ok = s->pf->write_file(s->pf->ctx, to, b.p, b.len) == 0;
+    if (ok) {
+        size_text(&msg, b.len);
+        cc_log(s->pf, "bimble-ccore: Saved %s (%s): opens in Bimble, also in a browser, read-only. %s", to,
+               buf_cstr(&msg), NOT_KEPT);
+    } else cc_log(s->pf, "bimble-ccore: %s: cannot write", to);
+    buf_free(&b), buf_free(&msg);
+}
+
 static const char UNSAVED[] = "unsaved changes: save them first, or send {\"discard\": true}";
 
 /* The file actions; -1: `name` is not one of them. */
@@ -892,7 +946,12 @@ static int file_action(cc_session *s, const char *name, const FileArgs *fa, cc_b
         if (opening && !fa->path) return fail(out, "open: the C core has no file dialog: send {\"path\": \"<file>\"}");
         if (cc_session_unsaved(s) && !fa->discard) return fail(out, UNSAVED);
         if (!strcmp(name, "close")) return cc_session_close(s), CC_OK;
-        if (opening ? cc_session_open(s, fa->path, &err) : cc_session_new_model(s, &err)) return fail(out, err.msg);
+        /* open: as the Rust viewer, an IFC or a .bimbleview read-only (cc_session_open_file);
+         * import_ifc: an editable copy (lib.rs:1403 import_ifc). */
+        int rc = !opening                  ? cc_session_new_model(s, &err)
+                 : !strcmp(name, "open") ? cc_session_open_file(s, fa->path, &err)
+                                         : cc_session_open(s, fa->path, &err);
+        if (rc) return fail(out, err.msg);
         if (!opening) cc_log(s->pf, "bimble-ccore: New model, not saved"); /* lib.rs:1709 */
         return CC_OK;
     }
@@ -909,6 +968,16 @@ static int file_action(cc_session *s, const char *name, const FileArgs *fa, cc_b
     }
     if (!strcmp(name, "export_ifc4") || !strcmp(name, "export_ifc2x3")) {
         export_ifc(s, !strcmp(name, "export_ifc4") ? CC_IFC4 : CC_IFC2X3, fa->path);
+        return CC_OK;
+    }
+    if (!strcmp(name, "share_for_viewing")) {
+        share_for_viewing(s, fa->path);
+        return CC_OK;
+    }
+    if (!strcmp(name, "convert_open")) { /* ribbon.rs:659-663: import the open IFC */
+        char ifc[sizeof s->path];
+        memcpy(ifc, s->path, sizeof ifc);
+        if (cc_session_open(s, ifc, &err)) return fail(out, err.msg);
         return CC_OK;
     }
     return -1;
@@ -954,6 +1023,15 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
 
 static int gid_cmp(const void *a, const void *b) { return cc_gid_cmp(a, b); }
 
+/* A read-only scene's element by GlobalId (calls.rs:552-556: the scene's ids; an id the file
+ * holds that is not 22 bytes long cannot be selected here). */
+static int scene_has(cc_session *s, const cc_gid *id) {
+    const cc_scene *sc = scene_now(s);
+    for (size_t k = 0; sc && k < sc->nelements; k++)
+        if (sc->elements[k].id.c[0] && !memcmp(sc->elements[k].id.c, id->c, 22)) return 1;
+    return 0;
+}
+
 static int call_select(cc_session *s, const char *body, size_t n, cc_buf *out) {
     Arena a;
     arena_init(&a, 0);
@@ -973,7 +1051,7 @@ static int call_select(cc_session *s, const char *body, size_t n, cc_buf *out) {
             buf_puts(out, "invalid type: "), buf_puts(out, type_word(&v->items[i])), buf_puts(out, ", expected a string");
             goto end;
         }
-    if (!s->open) {
+    if (!loaded(s)) {
         buf_puts(out, NO_MODEL);
         goto end;
     }
@@ -988,7 +1066,7 @@ static int call_select(cc_session *s, const char *body, size_t n, cc_buf *out) {
         int found = 0;
         if (x->n == 22) {
             memcpy(ids[i].c, x->s, 22);
-            found = cc_model_element(&s->model, &ids[i]) != NULL;
+            found = s->open ? cc_model_element(&s->model, &ids[i]) != NULL : scene_has(s, &ids[i]);
         }
         if (!found) {
             buf_puts(out, unknown++ ? ", " : "unknown GlobalIds: ");
@@ -1081,7 +1159,7 @@ static int call_tab(cc_session *s, const char *body, size_t n, cc_buf *out) {
         buf_puts(out, "unknown op "), debug_str(out, op->s);
         goto end;
     }
-    int has3d = s->open && is_3d; /* the only view (spec §1) */
+    int has3d = loaded(s) && is_3d; /* the only view (spec §1) */
     if (!strcmp(op->s, "open")) {
         if (!is_view) {
             buf_puts(out, "op \"open\" takes a view");
@@ -1165,23 +1243,23 @@ void cc_change_json(cc_session *s, cc_buf *out) { /* calls.rs:134-167 (json!, so
     jw_init(&w, out, 0);
     jw_obj_begin(&w);
     jw_key(&w, "file");
-    if (s->open) jw_str(&w, s->file);
+    if (loaded(s)) jw_str(&w, s->file);
     else jw_null(&w);
     jw_key(&w, "placing");
     if (s->open) placing_json(s, &w);
     else jw_null(&w);
     jw_key(&w, "rev"), jw_u64(&w, s->rev);
     jw_key(&w, "selection"), jw_arr_begin(&w);
-    if (s->open && s->has_primary) jw_str_n(&w, s->primary.c, 22);
-    for (size_t i = 0; s->open && i < s->nalso; i++) jw_str_n(&w, s->also[i].c, 22);
+    if (loaded(s) && s->has_primary) jw_str_n(&w, s->primary.c, 22);
+    for (size_t i = 0; loaded(s) && i < s->nalso; i++) jw_str_n(&w, s->also[i].c, 22);
     jw_arr_end(&w);
     jw_key(&w, "tab");
-    if (s->open && s->tab_open) tab_json(&w);
+    if (loaded(s) && s->tab_open) tab_json(&w);
     else jw_null(&w);
     jw_key(&w, "unsaved"), jw_bool(&w, cc_session_unsaved(s));
     jw_key(&w, "view"), jw_arr_begin(&w);
     for (int i = 0; i < 7; i++) jw_u64(&w, 0); /* nothing hidden, no section box, not on paper */
-    jw_u64(&w, s->open && s->tab_open ? 1 : 0); /* open_tabs.len() */
+    jw_u64(&w, loaded(s) && s->tab_open ? 1 : 0); /* open_tabs.len() */
     jw_arr_end(&w);
     jw_obj_end(&w);
     jw_finish(&w);

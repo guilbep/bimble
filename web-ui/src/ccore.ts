@@ -8,11 +8,14 @@
 // - on_change: the change JSON is read after every call and the callback runs when it changed.
 // - Files (ticket A5; the module has no files, ccore/session/calls.c file_action): the actions
 //   `open` and `import_ifc` show a file picker (`<input type=file>`) and open the picked file's
-//   bytes (`ccoreOpenFile`: .bimble v1 or v2, .json, .ifc imported as an editable copy); `new`
-//   starts an Untitled model; `save` and `export_ifc4`/`export_ifc2x3` download what the module
-//   wrote (Blob + `<a download>`, as the Rust viewer's wasm Save downloads). With unsaved changes,
-//   new and open ask first (window.confirm). `ccoreSaveBytes()` and `ccoreExportIfc(schema)` give
-//   the bytes without a download. The module's clock is the page's (host_clock, for IFC stamps).
+//   bytes (`ccoreOpenFile`: .bimble v1 or v2 and .json editable; .ifc and .bimbleview read-only,
+//   as the Rust viewer opens them (ticket A5c); `import_ifc`: the .ifc imported as an editable
+//   copy); `new` starts an Untitled model; `save`, `export_ifc4`/`export_ifc2x3` and
+//   `share_for_viewing` (the .bimbleview viewer file) download what the module wrote (Blob +
+//   `<a download>`, as the Rust viewer's wasm Save downloads). With unsaved changes, new and open
+//   ask first (window.confirm). `ccoreSaveBytes()`, `ccoreExportIfc(schema)` and
+//   `ccoreShareForViewing()` give the bytes without a download. The module's clock is the page's
+//   (host_clock, for IFC stamps).
 // - `window.ccoreSave()` saves (when there are unsaved changes) and returns the last saved text,
 //   and logs its size (a .json name: the v1 text).
 // - The mesh for the WebGL2 viewport: `ccoreMesh()`, the BMSH bytes of GET /mesh (glviewport.ts).
@@ -28,7 +31,7 @@ interface Exports {
   host_mesh(flags: number, res: number): number;
   host_saved(res: number): number;
   host_saved_path(res: number): number;
-  host_open(discard: number, np: number, nn: number, bp: number, bn: number, res: number): number;
+  host_open(flags: number, np: number, nn: number, bp: number, bn: number, res: number): number;
   host_clock(unixS: number): void;
   host_log(res: number): number;
 }
@@ -119,10 +122,11 @@ function unsavedNow(): boolean {
   return (JSON.parse(callHost("query", "state", "{}")) as { unsaved?: boolean }).unsaved === true;
 }
 
-/** Opens a file's bytes as the session's model (.bimble v1/v2, .json, .ifc imported). With
- *  unsaved changes, asks first (or `discard`); false when the user kept them. Throws the C core's
- *  error text when the file does not open. */
-export async function ccoreOpenFile(file: Blob & { name?: string }, discard = false): Promise<boolean> {
+/** Opens a file's bytes in the session: .bimble v1/v2 and .json as an editable model, .ifc and
+ *  .bimbleview read-only (no model: the scene only), or with `importIfc` an .ifc imported as an
+ *  editable copy. With unsaved changes, asks first (or `discard`); false when the user kept them.
+ *  Throws the C core's error text when the file does not open. */
+export async function ccoreOpenFile(file: Blob & { name?: string }, discard = false, importIfc = false): Promise<boolean> {
   if (!module) throw new Error("ccore: not loaded");
   const { X } = module;
   if (!discard && unsavedNow()) {
@@ -131,7 +135,7 @@ export async function ccoreOpenFile(file: Blob & { name?: string }, discard = fa
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   const name = file.name || "model.bimble";
-  const r = run(X.host_open.bind(X), [enc.encode(name), bytes], [discard ? 1 : 0]);
+  const r = run(X.host_open.bind(X), [enc.encode(name), bytes], [(discard ? 1 : 0) | (importIfc ? 2 : 0)]);
   hostLog();
   emitChange?.();
   if (r.status !== 200) throw dec.decode(r.bytes) || `ccore open: ${r.status}`;
@@ -164,6 +168,14 @@ export function ccoreExportIfc(schema: "ifc4" | "ifc2x3" = "ifc4"): { name: stri
   return { name: w.name, text: dec.decode(w.bytes) };
 }
 
+/** The viewer file of the open model (`share_for_viewing`): the gzipped .bimbleview bytes and
+ *  their file name ("<stem>.bimbleview"). */
+export function ccoreShareForViewing(): { name: string; bytes: Uint8Array } {
+  if (!callHost) throw new Error("ccore: not loaded");
+  callHost("action", "share_for_viewing", "{}");
+  return lastWritten();
+}
+
 /** Hands bytes to the user as a file download (lab only: Blob + `<a download>`). */
 export function ccoreDownload(name: string, data: Uint8Array | string, type = "application/octet-stream"): void {
   const blob = new Blob([typeof data === "string" ? data : (data.slice().buffer as ArrayBuffer)], { type });
@@ -178,7 +190,7 @@ export function ccoreDownload(name: string, data: Uint8Array | string, type = "a
 }
 
 /** The file picker of `open` / `import_ifc`. */
-function pickAndOpen(accept: string): void {
+function pickAndOpen(accept: string, importIfc = false): void {
   const input = document.createElement("input");
   input.type = "file";
   input.accept = accept;
@@ -187,7 +199,7 @@ function pickAndOpen(accept: string): void {
   input.addEventListener("change", () => {
     const f = input.files?.[0];
     input.remove();
-    if (f) ccoreOpenFile(f).catch((e) => console.error(`ccore: ${f.name}: ${String(e)}`));
+    if (f) ccoreOpenFile(f, false, importIfc).catch((e) => console.error(`ccore: ${f.name}: ${String(e)}`));
   });
   input.addEventListener("cancel", () => input.remove());
   document.body.appendChild(input);
@@ -199,10 +211,10 @@ function fileAction(name: string): boolean {
   if (!callHost) return false;
   switch (name) {
     case "open":
-      pickAndOpen(".bimble,.json,.ifc");
+      pickAndOpen(".bimble,.json,.ifc,.bimbleview");
       return true;
     case "import_ifc":
-      pickAndOpen(".ifc");
+      pickAndOpen(".ifc", true);
       return true;
     case "new":
       if (unsavedNow() && !window.confirm("Discard the unsaved changes?")) return true;
@@ -218,6 +230,11 @@ function fileAction(name: string): boolean {
     case "export_ifc2x3": {
       const e = ccoreExportIfc(name === "export_ifc4" ? "ifc4" : "ifc2x3");
       ccoreDownload(e.name, e.text, "application/x-step");
+      return true;
+    }
+    case "share_for_viewing": {
+      const v = ccoreShareForViewing();
+      ccoreDownload(v.name, v.bytes, "application/gzip");
       return true;
     }
   }

@@ -22,9 +22,12 @@ cc_session *cc_session_new(const cc_platform *pf) {
 
 static void persist_free(cc_session *s);
 
+static void drop_view(cc_session *s);
+
 void cc_session_free(cc_session *s) {
     if (!s) return;
     if (s->open) cc_history_free(&s->hist), cc_model_free(&s->model);
+    drop_view(s);
     free(s->undo_ids), free(s->redo_ids), free(s->also), free(s->material);
     if (s->scene_rev) cc_scene_free(&s->scene);
     buf_free(&s->mesh);
@@ -97,9 +100,18 @@ static void set_path(cc_session *s, const char *path) {
     s->schema_bimble = ends_with(s->file, ".bimble") && strlen(s->file) > 7; /* calls.rs:244 */
 }
 
-/* Drops what belongs to the open model: model, history, selection, placing, the caches. */
+/* Drops the read-only scene, if any. */
+static void drop_view(cc_session *s) {
+    if (s->ifc) cc_ifc_scene_free(s->ifc), free(s->ifc), s->ifc = NULL;
+    if (s->vf) cc_scene_free(&s->vscene), cc_viewfile_free(s->vf), free(s->vf), s->vf = NULL;
+    s->view = CC_VIEW_NONE;
+}
+
+/* Drops what belongs to the open model (or read-only scene): model, history, selection,
+ * placing, the caches. */
 static void drop_model(cc_session *s) {
     if (s->open) cc_history_free(&s->hist), cc_model_free(&s->model);
+    drop_view(s);
     persist_drop_cmds(s); /* after the history that borrows from them */
     if (s->scene_rev) cc_scene_free(&s->scene);
     s->scene_rev = 0, s->scene_ok = 0, s->mesh_status = 0, s->mesh_model = NULL;
@@ -221,8 +233,83 @@ int cc_session_new_model(cc_session *s, cc_error *err) {
     return 0;
 }
 
+/* The cc_scene over a view file (session.h `vscene`): element rows in its own arena, the meshes
+ * and shapes borrowed from `v`. The GlobalId is the file's text when it has 22 bytes, else
+ * zeros. 0 ok, -1 out of memory. */
+static int view_scene(cc_scene *sc, const cc_viewfile *v, cc_error *err) {
+    memset(sc, 0, sizeof *sc);
+    arena_init(&sc->arena, 0);
+    memcpy(sc->origin, v->origin, sizeof sc->origin);
+    sc->shapes = v->shapes, sc->nshapes = v->nshapes;
+    sc->warnings = v->warnings, sc->nwarnings = v->nwarnings;
+    if (v->nelements) {
+        sc->elements = arena_alloc(&sc->arena, v->nelements * sizeof *sc->elements, 8);
+        if (!sc->elements) {
+            snprintf(err->msg, sizeof err->msg, "out of memory");
+            return -1;
+        }
+    }
+    for (size_t k = 0; k < v->nelements; k++) {
+        const cc_view_element *x = &v->elements[k];
+        cc_scene_element *e = &sc->elements[k];
+        memset(e, 0, sizeof *e);
+        if (x->global_id.n == 22) memcpy(e->id.c, x->global_id.p, 22);
+        e->cls = CC_IFC_PROXY; /* not drawn from: class_name holds the file's class */
+        e->class_name = x->class_name;
+        e->category = x->category;
+        e->model_index = k;
+        e->shape = x->shape;
+        e->mesh = x->mesh;
+        e->to_scene = x->to_scene;
+    }
+    sc->nelements = v->nelements;
+    return 0;
+}
+
+int cc_session_open_file(cc_session *s, const char *path, cc_error *err) {
+    int ifc = ends_with_ci(path, ".ifc"), vw = ends_with_ci(path, ".bimbleview");
+    if (!ifc && !vw) return cc_session_open(s, path, err);
+    err->offset = CC_NO_OFFSET;
+    err->msg[0] = 0;
+    if (strlen(path) >= sizeof s->path) {
+        snprintf(err->msg, sizeof err->msg, "%s: path too long", path);
+        return -1;
+    }
+    double t0 = s->pf->now_ms(s->pf->ctx);
+    size_t n = 0;
+    char *text = read_all(s, path, &n, err);
+    if (!text) return -1;
+    cc_ifc_scene *is = NULL;
+    cc_viewfile *vf = NULL;
+    cc_scene vs;
+    memset(&vs, 0, sizeof vs);
+    int rc = -1;
+    if (ifc ? !(is = malloc(sizeof *is)) : !(vf = malloc(sizeof *vf))) snprintf(err->msg, sizeof err->msg, "out of memory");
+    else if (ifc) rc = cc_ifc_read(text, n, is, err); /* always initializes */
+    else {
+        rc = cc_viewfile_read((const uint8_t *)text, n, vf, err);
+        if (!rc) rc = view_scene(&vs, vf, err);
+    }
+    free(text);
+    if (rc) {
+        if (is) cc_ifc_scene_free(is), free(is);
+        if (vf) cc_scene_free(&vs), cc_viewfile_free(vf), free(vf);
+        return -1;
+    }
+    drop_model(s);
+    set_path(s, path);
+    s->view = ifc ? CC_VIEW_IFC : CC_VIEW_FILE;
+    s->ifc = is, s->vf = vf, s->vscene = vs;
+    s->rev++;
+    s->next_step = 1, s->saved_step = 0;
+    s->tab_open = 1; /* the 3D view is shown on load */
+    s->load_ms = s->pf->now_ms(s->pf->ctx) - t0;
+    persist_follow(s, NULL, 1); /* nothing to keep: no edits */
+    return 0;
+}
+
 void cc_session_close(cc_session *s) {
-    if (!s->open) return;
+    if (!s->open && !s->view) return;
     drop_model(s);
     s->rev++; /* the view changed: nothing to show */
     persist_follow(s, NULL, 1);

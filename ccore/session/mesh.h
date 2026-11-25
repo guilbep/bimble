@@ -19,8 +19,10 @@ int cc_mesh_bmsh(const cc_model *m, uint32_t rev, Buf *out, cc_error *err);
  * `err` when there is none. */
 const cc_model *cc_mesh_model(const cc_session *s, uint32_t *rev, cc_error *err);
 
-/* The /mesh answer, built once per (model, rev) and cached in the session. Returns the HTTP status: 200 with
- * the BMSH bytes, 404 (no model) or 500 (the scene cannot be built) with a UTF-8 text. `*p`
+/* The /mesh answer, built once per (model, rev) and cached in the session: the model's scene,
+ * or the read-only scene (an IFC's through cc_ifc_scene_bmsh, a view file's through the same
+ * writer as a model's). Returns the HTTP status: 200 with
+ * the BMSH bytes, 404 (nothing open) or 500 (the scene cannot be built) with a UTF-8 text. `*p`
  * stays valid until the next call on `s`. `*build_ms` is the build time, 0 when served from cache. */
 int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double *build_ms);
 #endif

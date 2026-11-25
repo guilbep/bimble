@@ -498,6 +498,23 @@ int snprintf(char *out, size_t cap, const char *fmt, ...) {
     return n;
 }
 
+/* ---- compiler support ----
+ * __multi3: the 128-bit multiply clang calls for __builtin_mul_overflow on 64-bit values and
+ * 64x64->128 products (viewfile.c, meshcodec.c), which the freestanding link has no runtime for.
+ * Schoolbook on 32-bit halves: only 64-bit multiplies, shifts and adds (no recursion into
+ * itself). */
+typedef unsigned __int128 cc_u128;
+cc_u128 __multi3(cc_u128 a, cc_u128 b);
+cc_u128 __multi3(cc_u128 a, cc_u128 b) {
+    uint64_t al = (uint64_t)a, ah = (uint64_t)(a >> 64), bl = (uint64_t)b, bh = (uint64_t)(b >> 64);
+    uint64_t a0 = al & 0xffffffffu, a1 = al >> 32, b0 = bl & 0xffffffffu, b1 = bl >> 32;
+    uint64_t p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+    uint64_t mid = (p00 >> 32) + (p01 & 0xffffffffu) + (p10 & 0xffffffffu);
+    uint64_t lo = (mid << 32) | (p00 & 0xffffffffu);
+    uint64_t hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32) + al * bh + ah * bl;
+    return ((cc_u128)hi << 64) | lo;
+}
+
 /* ---- the session layer (session/: calls.c, session.c, mesh.c) on the module's platform ---- */
 
 /* The module's platform (session/platform.h): no files. Opening reads the bytes the page handed
@@ -618,7 +635,7 @@ EXPORT("change_json") int wa_change_json(cc_wasm_res *r) {
 EXPORT("host_mesh") int wa_host_mesh(int flags, cc_wasm_res *r) {
     cc_session *s = host_session();
     if (!s) return r->value = 0, text(r, 500, "out of memory");
-    if (flags & 1) { /* the local form: the walk above, on the session's model */
+    if (flags & 1) { /* the local form: the walk above, on the session's model (a read-only scene: 404) */
         const cc_model *m = cc_session_model(s);
         r->value = cc_session_rev(s);
         if (!m) return text(r, 404, "no model open");
@@ -675,13 +692,13 @@ EXPORT("host_open") int wa_host_open(int discard, const char *name, size_t nn, c
     JsonW w; /* the action's body (calls.c file_action): {"discard": …, "path": name} */
     jw_init(&w, &body, 0);
     jw_obj_begin(&w);
-    jw_key(&w, "discard"), jw_bool(&w, discard != 0);
+    jw_key(&w, "discard"), jw_bool(&w, (discard & 1) != 0);
     jw_key(&w, "path"), jw_str(&w, nn ? z : "model.bimble");
     jw_obj_end(&w);
     free(z);
     if (jw_finish(&w) != JW_OK || body.oom) return buf_free(&body), text(r, 500, "out of memory");
     wasm_pf_state.text = p, wasm_pf_state.n = n;
-    int st = cc_call(s, "action", "open", buf_cstr(&body), body.len, &b);
+    int st = cc_call(s, "action", discard & 2 ? "import_ifc" : "open", buf_cstr(&body), body.len, &b);
     wasm_pf_state.text = NULL, wasm_pf_state.n = 0;
     buf_free(&body);
     r->value = cc_session_rev(s);

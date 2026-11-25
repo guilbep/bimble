@@ -9,7 +9,9 @@
 // file actions (ticket A5): ccoreOpenFile(Blob of golden/bin/frame2.bimble) -> 2 storeys and a new
 // mesh, ccoreExportIfc and ccoreSaveBytes, ribbon `new` -> 1 storey, ribbon `open` -> the picker
 // (intercepted: Page.fileChooserOpened) filled through DOM.setFileInputFiles (a copy of
-// frame.json) -> 3 storeys; no request
+// frame.json) -> 3 storeys; ticket A5c: ccoreOpenFile(Blob of golden/view/frame2.bimbleview,
+// Rust's gzip) -> read-only (state editable false), the viewport draws its mesh (pixel hash
+// changes) and the Concrete tab's ribbon shows Place: Column disabled (aria-disabled); no request
 // to a host, no page error, no console error. Prints the
 // wasm transfer size, navigation -> first frame and place -> pixels times, "N passed, M failed";
 // exits non-zero on a failure. Kills all it starts.
@@ -22,7 +24,7 @@ import { fileURLToPath } from "node:url";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
-const VITE = 5201;
+const VITE = Number(process.env.LAB_WASM_VITE ?? 5201); // LAB_WASM_VITE: another port when 5201 is taken
 const PAGE = `http://localhost:${VITE}/?ccore=1&gl=1`;
 const STOREY = "1uAZA0Yfn05f$xRd1k4uPR";
 const tmp = mkdtempSync(join(tmpdir(), "ccore-lab-wasm-"));
@@ -319,6 +321,32 @@ async function main() {
     return s.storeys.length === 3 ? s : null;
   }).catch(() => null);
   check("ribbon action open: the file picker, then the picked frame.json's 3 storeys", oerr === null && !!nodeId && st4?.file === "picked.json", `${oerr} node ${nodeId} ${JSON.stringify(st4)}`);
+
+  // A .bimbleview (ticket A5c): read-only, drawn, edit actions off in the ribbon.
+  const ribbonCol = `(async () => { const t = await import('/src/shell/tabs.ts'); t.activeTab.value = 'concrete';
+    for (let k = 0; k < 10; k++) await new Promise((r) => requestAnimationFrame(r));
+    const el = document.querySelector('[data-bb=ribbon] [data-bb=ribbon-tool-1-1]');
+    return el ? String(el.getAttribute('aria-disabled')) : 'none'; })()`;
+  const colBefore = await evalJs(ribbonCol);
+  await sleep(300);
+  const hv0 = await evalJs(hash), revV0 = await bb("b.state.value.rev");
+  const fv = readFileSync(join(CCORE, "golden/view/frame2.bimbleview")).toString("base64");
+  const vOpened = await ccx(`(async () => {
+    const bytes = Uint8Array.from(atob(${JSON.stringify(fv)}), (ch) => ch.charCodeAt(0));
+    try { return await c.ccoreOpenFile(new File([bytes], 'frame2.bimbleview'), true); } catch (e) { return String(e); }
+  })()`);
+  const stv = await waitFor("the view file open", 5000, async () => {
+    const s = JSON.parse(await bb("JSON.stringify({ file: b.state.value.file, rev: b.state.value.rev })"));
+    const g = JSON.parse(await evalJs("JSON.stringify(window.__bbGl)"));
+    return s.file === "frame2.bimbleview" && g.meshRev === s.rev && s.rev > revV0 ? s : null;
+  }).catch(() => null);
+  await sleep(300);
+  const hv1 = await evalJs(hash);
+  const vState = JSON.parse(await bb("JSON.stringify(b.query('state', {}))"));
+  check("ccoreOpenFile(frame2.bimbleview) -> read-only, its mesh drawn (the picture changed)",
+    vOpened === true && stv !== null && vState.editable === false && hv1 !== hv0, `${vOpened} ${JSON.stringify(stv)} ${JSON.stringify(vState)} hash ${hv0} -> ${hv1}`);
+  const colAfter = await evalJs(ribbonCol);
+  check("the ribbon: Place: Column enabled on frame.json, disabled (aria-disabled) on the view file", colBefore === "null" && colAfter === "true", `${colBefore} -> ${colAfter}`);
 
   check("no request to a host (127.0.0.1)", hostRequests === 0, String(hostRequests));
   const bad = failedResponses.filter((r) => !/^404 http:\/\/localhost:\d+\/favicon\.ico$/.test(r));

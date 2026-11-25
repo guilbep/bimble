@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ifc_read.h"
 #include "mesh.h"
 #include "scene.h"
 #include "session.h"
@@ -108,7 +109,7 @@ int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double 
     *build_ms = 0;
     Buf *cache = &s->mesh;
     const cc_model *m = cc_mesh_model(s, rev, &err);
-    if (!m) {
+    if (!m && !s->view) {
         buf_clear(cache);
         s->mesh_status = 0; /* not cached: a later model is picked up */
         buf_puts(cache, err.msg);
@@ -122,7 +123,10 @@ int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double 
         /* The session's scene of this rev (calls.c builds it once per rev for query status),
          * not a second build; when it has none (or it failed), a build here gives the error. */
         const cc_scene *sc = cc_session_scene(s);
-        if ((sc ? bmsh_of(sc, *rev, cache, &err) : cc_mesh_bmsh(m, *rev, cache, &err)) != 0) {
+        int rc;
+        if (s->view == CC_VIEW_IFC) rc = cc_ifc_scene_bmsh(s->ifc, *rev, cache, &err); /* the file's id text */
+        else rc = sc ? bmsh_of(sc, *rev, cache, &err) : cc_mesh_bmsh(m, *rev, cache, &err);
+        if (rc != 0) {
             buf_clear(cache);
             cache->oom = 0;
             buf_puts(cache, err.msg);

@@ -16,9 +16,13 @@
 //            history, undo, redo, action save…): every answer, status and change JSON byte for
 //            byte, the saved text = the native host's saved file, host_mesh = GET /mesh
 //   files    the file actions in a fresh module (ticket A5): new, place, save (v2), save as,
-//            host_open of the saved bytes (the same elements), of golden/ifc/frame.ifc (the import
-//            golden's count) and of frame.json; export IFC4 with host_clock = golden/ifc/frame.ifc;
-//            save as y.json = the v1 text; save as f.bimble = gzip of golden/bin/frame.cbor; close
+//            host_open of the saved bytes (the same elements), host_open import of golden/ifc/
+//            frame.ifc (the import golden's count) and of frame.json; export IFC4 with host_clock =
+//            golden/ifc/frame.ifc; save as y.json = the v1 text; save as f.bimble = gzip of
+//            golden/bin/frame.cbor; read-only files (ticket A5c): host_open of golden/ifc/fixtures/
+//            mapped_item.ifc (host_mesh count = golden/ifc/read/mapped_item/scene.txt's, editable
+//            false, verb place refused with Rust's text), share_for_viewing of frame.json
+//            (inflated = golden/view/frame.bimbleview.raw) and host_open of it; close
 // Prints per-suite "N passed, M failed", the module size and timings; exits non-zero on a failure.
 // No dependencies.
 import { spawn } from "node:child_process";
@@ -579,10 +583,11 @@ suite("files");
   check("host_open x.bimble (v2 bytes) -> 200, the same elements, rev + 1", o1.status === 200 && e1.length === 1 && ids(e1) === ids(e2) && o1.value === r1 + 1,
     `${o1.status} ${o1.text} ${e1.length} ${e2.length} rev ${r1} -> ${o1.value}`);
 
-  const o2 = open("frame.ifc", read("ifc/frame.ifc"));
+  // Ticket A5c: an IFC opens read-only (as the Rust viewer); flags 2 = action import_ifc.
+  const o2 = open("frame.ifc", read("ifc/frame.ifc"), 2);
   const s2 = q("state");
   const golden = Object.keys(JSON.parse(read("ifc/frame_reimport.json")).model.elements).length;
-  check("host_open frame.ifc -> 200: the copy frame.bimble, unsaved, elements = the import golden's",
+  check("host_open import frame.ifc -> 200: the copy frame.bimble, unsaved, elements = the import golden's",
     o2.status === 200 && s2.file === "frame.bimble" && s2.unsaved && q("elements", { limit: 10000 }).length === golden, `${o2.text} ${JSON.stringify(s2)}`);
 
   const o3 = open("frame.json", read("frame.json"), 1);
@@ -599,6 +604,40 @@ suite("files");
   const fb = saved().bytes;
   check("save_as f.bimble: v2, gzip of golden/bin/frame.cbor", sb.status === 200 && isV2(fb) &&
     Buffer.compare(gunzipSync(fb.subarray(7)), readFileSync(join(G, "bin/frame.cbor"))) === 0);
+  // Read-only files (ticket A5c).
+  const READ_ONLY = "this file is read only: import it to edit";
+  const meshOf = () => {
+    const m = ycall(Y.host_mesh, [], 0);
+    const dv = new DataView(m.bytes.buffer, m.bytes.byteOffset, m.bytes.byteLength);
+    return { status: m.status, elements: m.bytes.length >= 24 ? dv.getUint32(12, true) : -1, triangles: m.bytes.length >= 24 ? dv.getUint32(20, true) / 3 : -1 };
+  };
+  const fm = meshOf();
+  const sh = act("share_for_viewing");
+  let raw = new Uint8Array(0);
+  try { raw = gunzipSync(saved().bytes); } catch {}
+  check("share_for_viewing of f.bimble -> 200: f.bimbleview, inflated = golden/view/frame.bimbleview.raw",
+    sh.status === 200 && savedPath() === "f.bimbleview" && Buffer.compare(raw, readFileSync(join(G, "view/frame.bimbleview.raw"))) === 0, `${sh.text} ${savedPath()} ${raw.length}`);
+  const view = saved().bytes;
+  const ov = open("f.bimbleview", view);
+  const svw = q("state");
+  const vm = meshOf();
+  check("host_open f.bimbleview -> 200, read-only, mesh elements and triangles = frame's",
+    ov.status === 200 && svw.editable === false && svw.file === "f.bimbleview" && vm.status === 200 && vm.elements === fm.elements && fm.elements === 72 && vm.triangles === fm.triangles,
+    `${ov.text} ${JSON.stringify(svw)} ${JSON.stringify(vm)} vs ${JSON.stringify(fm)}`);
+  const mi = open("mapped_item.ifc", read("ifc/fixtures/mapped_item.ifc"));
+  const sm = q("state");
+  const [, gEls, gTris] = /^elements (\d+) triangles (\d+)/m.exec(read("ifc/read/mapped_item/scene.txt")).map(Number);
+  const mm = meshOf();
+  check("host_open mapped_item.ifc -> 200, read-only, schema IFC4; mesh = golden/ifc/read/mapped_item/scene.txt's counts",
+    mi.status === 200 && sm.editable === false && sm.schema === "IFC4" && mm.status === 200 && mm.elements === gEls && gEls === 5 && mm.triangles === gTris,
+    `${mi.text} ${JSON.stringify(sm)} ${JSON.stringify(mm)} vs ${gEls} ${gTris}`);
+  const vp = ycall(Y.call, ["verb", "place", JSON.stringify({ a: [0, 0], kind: "column" })]);
+  check("read-only: verb place -> 400 Rust's read-only text", vp.status === 400 && vp.text === READ_ONLY, vp.text);
+  const acts = Object.fromEntries(q("actions").map((a) => [a.name, a.enabled]));
+  check("read-only in the module: place, save, export off; convert_open off (no files)", !acts.place_column && !acts.save && !acts.export_ifc4 && !acts.convert_open && acts.open, JSON.stringify(acts));
+  const im = open("mapped_item.ifc", read("ifc/fixtures/mapped_item.ifc"), 2);
+  check("host_open import mapped_item.ifc -> editable copy", im.status === 200 && q("state").editable === true && q("state").file === "mapped_item.bimble", im.text);
+  open("f.bimble", fb, 1);
   const bad = open("bad.bimble", "not a model", 1);
   check("host_open of a broken file -> 400, the open model kept", bad.status === 400 && q("state").file === "f.bimble", bad.text);
   const cl = act("close");

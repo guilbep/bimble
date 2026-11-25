@@ -67,18 +67,22 @@
  *                                           native GET /mesh bytes; flags bit 0 = the local form
  *                                           above); value = rev
  *   host_saved(res) -> status               the bytes of the last write (the module has no files:
- *                                           `action save`, `save_as`, `export_ifc4`/`export_ifc2x3`
- *                                           keep them here: a .bimble is v2 binary, a .json the
- *                                           v1 text, an export the STEP text); 404 before any
+ *                                           `action save`, `save_as`, `export_ifc4`/`export_ifc2x3`,
+ *                                           `share_for_viewing` keep them here: a .bimble is v2
+ *                                           binary, a .json the v1 text, an export the STEP text,
+ *                                           a view file gzip); 404 before any
  *   host_saved_path(res) -> status          the file name of that write (the session's file name,
- *                                           the {"path"} given, or "<stem>.ifc"); 404 before any
- *   host_open(discard, name, name_len, bytes, len, res) -> status
+ *                                           the {"path"} given, or "<stem>.ifc" / ".bimbleview");
+ *                                           404 before any
+ *   host_open(flags, name, name_len, bytes, len, res) -> status
  *                                           `action open {"path": name, "discard": …}` on the
  *                                           page's bytes (ticket A5; calls.c file_action): .bimble
- *                                           v1 or v2, .json, .ifc imported as an editable copy;
- *                                           replaces the open model (400 with unsaved changes
- *                                           unless discard is 1; 400 when it does not load, the
- *                                           open model kept); value = rev
+ *                                           v1 or v2, .json editable; .ifc and .bimbleview
+ *                                           read-only (ticket A5c, as the Rust viewer). flags bit
+ *                                           1 (2): `action import_ifc` instead (.ifc imported as
+ *                                           an editable copy). Replaces what is open (400 with
+ *                                           unsaved changes unless flags bit 0 (1, discard); 400
+ *                                           when it does not load, the open file kept); value = rev
  *   host_clock(unix_s: f64)                 the wall clock for the session (IFC export stamps);
  *                                           0 until set (1970-01-01T00:00:00)
  *   host_log(res) -> status                 what the host layer wrote on stderr since the last
