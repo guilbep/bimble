@@ -29,6 +29,8 @@ export const fr = {
   "na.screen.site": "Terrain",
   "na.screen.settingOut": "Implantation",
   "na.screen.you": "Vous",
+  "na.screen.settings": "Réglages", // SET1
+  "na.screen.about": "À propos de Bimble", // SET1
   "na.screen.collab": "Travail partagé",
   "na.screen.team": "Équipe",
   "na.screen.recent": "Fichiers récents",
@@ -68,6 +70,8 @@ export const en: typeof fr = {
   "na.screen.site": "Site",
   "na.screen.settingOut": "Setting out",
   "na.screen.you": "You",
+  "na.screen.settings": "Settings", // SET1
+  "na.screen.about": "About Bimble", // SET1
   "na.screen.collab": "Shared work",
   "na.screen.team": "Team",
   "na.screen.recent": "Recent files",

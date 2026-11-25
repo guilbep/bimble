@@ -590,8 +590,12 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "close")) return loaded(s);
     if (!strcmp(name, "recent_remove")) return 1; /* FS1 */
     /* ---- SET1: ribbon.rs:591 `Settings | About | Home => true`; set_settings, settings_load (settings.h) ---- */
-    if (!strcmp(name, "settings") || !strcmp(name, "about")) return 1;
-    if (!strcmp(name, "set_settings") || !strcmp(name, "settings_load")) return 1;
+    if (!strcmp(name, "about")) return 1;
+#ifdef CC_VIEW_ONLY
+    if (!strcmp(name, "settings") || !strcmp(name, "set_settings") || !strcmp(name, "settings_load")) return 0; /* no settings in this build */
+#else
+    if (!strcmp(name, "settings") || !strcmp(name, "set_settings") || !strcmp(name, "settings_load")) return 1;
+#endif
     /* ---- end SET1 ---- */
     /* ribbon.rs:575: Rust shares any scene shown: a model's, an IFC read as it is, a view file. */
     if (!strcmp(name, "share_for_viewing")) return s->open || s->view != CC_VIEW_NONE;
