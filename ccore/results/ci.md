@@ -1,10 +1,143 @@
-# CI for the C core (ticket K1)
+# CI for the C core (tickets K1, K3)
 
-One script holds the checks, `ccore/ci/run.sh [fast|full]`. Builders and CI run the same script.
-`.github/workflows/ccore.yml` runs `full` on Linux (`ccore-linux`). It also runs `test/run.sh` on
-macOS as a probe (`ccore-macos`, `continue-on-error`). The probe log shows what a port needs.
+One script holds the checks, `ccore/ci/run.sh [fast|full|unit|san|lab]`. Builders and CI run the
+same script. `.github/workflows/ccore.yml` runs its three parts on Linux as three parallel jobs:
+`ccore-linux` (`unit`), `ccore-san` (`san`), `ccore-lab` (`lab`); `full` is the three in one run. It
+also runs `test/run.sh` on macOS as a probe (`ccore-macos`, `continue-on-error`). The probe log
+shows what a port needs.
 
-## Times on the dev machine
+## K3: a faster CI (25 Nov 2026)
+
+GitHub run 45662558516 (`ci/run.sh full`, one job): 1264 s, of which `run-clang-asan` 929 s.
+
+### What dominated
+
+Not the checks: the compile. The old `test/run.sh` built each suite with one command line that
+held the whole library (`src/*.c`, `session/*.c`, `host/platform_native.c`: 54 files, 31,000
+lines). So it compiled the library 26 times, one suite after the other. With tcc that costs little
+(0.3 s for the library). With clang `-O1` and ASan+UBSan, it costs 25 s each time, about 650 of the
+789 s of the old sanitizer run. The suites themselves run 55 s under the sanitizers, one by one.
+
+`test/run.sh` now compiles the library once, one object per file, in parallel. Then it compiles,
+links and runs each suite as a job of its own, as many at once as there are CPUs, longest first
+(the times of the last run, in `out/run-<cc>/times`). Each suite writes its own log. The roll-up
+prints the logs whole, in name order, each with a line `time <suite> compile X s run Y s`, then
+one total line. A suite fails on a FAIL check, a non-zero exit, a signal or a compile error. Every
+suite runs, and the exit code is 1 if one fails. `CCORE_TEST_JOBS=1` runs one suite at a time.
+
+No sample knob: the suites that the ticket suspected (`strtod`, `fmt`, `draw`) are not the long
+ones (3.4, 0.01 and 2.4 s under ASan). The long ones are `ifc_read` and `ifc_in` (18 s each under
+ASan). They import every golden IFC file twice and compare it in full, so a sample would drop
+golden comparisons. Every suite runs every check in every mode: 1,288,845 checks with tcc and
+with ASan.
+
+### Per suite, one at a time (`CCORE_TEST_JOBS=1`)
+
+Dev machine: 16 GB aarch64, 8 cores, tcc 0.9.28rc (b39cbc70), clang 23.1.3. Other builders were
+busy: load average 5 to 6 at the start of each run. Seconds. "compile" is the suite's own file
+and the link; the library is compiled once before (tcc 0.4 s, clang 8.2 s, clang+ASan 25.4 s, one
+file at a time). Sorted by the ASan run time.
+
+| Suite | tcc compile | tcc run | clang compile | clang run | ASan compile | ASan run |
+|---|---:|---:|---:|---:|---:|---:|
+| ifc_read | 0.01 | 11.20 | 0.19 | 5.65 | 0.38 | 18.33 |
+| ifc_in | 0.01 | 6.84 | 0.25 | 2.94 | 0.55 | 17.75 |
+| viewsheet | 0.01 | 2.78 | 0.22 | 1.42 | 0.42 | 5.71 |
+| strtod | 0.02 | 7.38 | 0.20 | 2.22 | 0.38 | 3.39 |
+| file2 | 0.01 | 2.29 | 0.18 | 1.13 | 0.41 | 3.31 |
+| draw | 0.01 | 2.56 | 0.22 | 1.68 | 0.64 | 2.38 |
+| viewfile | 0.01 | 0.72 | 0.24 | 0.26 | 0.57 | 1.66 |
+| step | 0.01 | 0.66 | 0.17 | 0.19 | 0.35 | 0.74 |
+| file | 0.01 | 0.30 | 0.20 | 0.17 | 0.41 | 0.67 |
+| mesh | 0.02 | 0.44 | 0.24 | 0.14 | 0.51 | 0.38 |
+| sheets | 0.02 | 0.41 | 0.18 | 0.03 | 0.36 | 0.20 |
+| georef | 0.01 | 0.12 | 0.29 | 0.04 | 0.54 | 0.19 |
+| ifc_out | 0.01 | 0.12 | 0.19 | 0.05 | 0.54 | 0.16 |
+| relation | 0.01 | 0.08 | 0.19 | 0.05 | 0.39 | 0.13 |
+| grid | 0.01 | 0.07 | 0.26 | 0.02 | 0.56 | 0.10 |
+| verbs | 0.01 | 0.01 | 0.27 | 0.00 | 0.43 | 0.06 |
+| quantity | 0.01 | 0.02 | 0.19 | 0.01 | 0.39 | 0.05 |
+| boolean | 0.02 | 0.00 | 0.18 | 0.00 | 0.39 | 0.04 |
+| query | 0.01 | 0.01 | 0.14 | 0.00 | 0.37 | 0.04 |
+| verbs_all | 0.01 | 0.02 | 0.18 | 0.01 | 0.39 | 0.04 |
+| tool | 0.01 | 0.01 | 0.21 | 0.00 | 0.40 | 0.03 |
+| annotation | 0.01 | 0.00 | 0.16 | 0.00 | 0.35 | 0.01 |
+| fmt | 0.02 | 0.01 | 0.16 | 0.00 | 0.32 | 0.01 |
+| json | 0.01 | 0.00 | 0.14 | 0.00 | 0.32 | 0.01 |
+| two_sessions | 0.01 | 0.00 | 0.15 | 0.00 | 0.31 | 0.01 |
+| guid | 0.01 | 0.00 | 0.21 | 0.00 | 0.40 | 0.00 |
+| **sum** | 0.31 | 36.05 | 5.21 | 16.01 | 11.08 | 55.40 |
+
+The slowest library files under clang+ASan: `guid.c` 4.1 s, `ifc_in.c` 2.7 s, `ifc_read.c` 2.5 s,
+then about 1 s each. In parallel the library takes 6.6 s.
+
+### Before and after, same machine, same session
+
+| Run | Before (old `test/run.sh`, serial) | After (8 jobs) | Load at start (before / after) |
+|---|---:|---:|---|
+| `test/run.sh` (tcc) | 39.3 s | 11.9 s (twice: 11.87, 11.85) | 3.9 / 9.0 |
+| `CC=clang test/run.sh` | 240.1 s | 8.5 s | 4.5 / 4.7 |
+| clang + ASan + UBSan | 789.5 s (13 min 10 s) | 29.1 s | 3.8 to 8.8 / 8.4 |
+
+The tcc run is bound by its longest suite: `ifc_read`, 11.2 s alone. Targets: tcc under 15 s
+(reached: 11.9 s), sanitizers under 3 min (reached: 29 s).
+
+### The lab suites: a settle that always timed out
+
+`lab_dims`, `lab_viewcube`, `lab_section` and `lab_plan` each had a `settle()` that waited for one
+more frame: `waitFor("a new frame", 5000 /* 3000 in lab_viewcube */).catch(() => {})`, then 100 ms.
+The viewport draws only when something changes. Each call came after the change had been drawn,
+so no frame came: every call waited the full timeout. Traced with a log line in `waitFor` (one run
+each): 9 timeouts of 5 s in `lab_dims`, 15 of 3 s in `lab_viewcube`, 6 of 5 s in `lab_section` and
+in `lab_plan`.
+
+`settle()` now returns when no new frame came for 400 ms (at most the old timeout). No check
+changed. One wait was not waste. In `lab_viewcube`, the Top turn must show in-between angles. When
+the turn starts less than about 2 s after the column selection, its first frame takes about
+400 ms (headless Chromium, SwiftShader): the turn ends in one frame, 0 in-between angles, in 6 of 9
+runs (quiet window 400 ms, or a 1 s wait). A wait of 2 s or more passed 3 of 3. The old settle
+waited 3.1 s there, so that one site keeps it (`sleep(2600)` after the settle). Then 4 more runs of
+`lab_viewcube` and 1 of each other suite: all passed.
+
+| Lab suite | Before (s) | After (s) | GitHub before (s) |
+|---|---:|---:|---:|
+| lab_dims | over 51.4 | 9 to 10 | 51.9 |
+| lab_viewcube | over 54.2 | 17 to 19 | 51.5 |
+| lab_section | over 37.8 | 10 to 11 | 36.8 |
+| lab_plan | over 37.1 | 9 to 10.5 | 36.3 |
+
+"Before" is the time of the last timeout in the traced run (the suite ended soon after). "After" is
+the range of the runs since the change (`ci/run.sh full` and the repeats above).
+
+`lab_pages` (20 s) has no such wait: 14.5 s of it is `npm run build:ccore`, the Vite build that it
+checks. The lab suites still run one after the other. Each one starts its own Vite and Chromium, and
+their pixel and animation checks depend on the CPU. One shared Vite would save about 2 s a suite, but
+the change would touch every lab file. Not done: the lab now runs in its own job, beside the others.
+
+### `ci/run.sh full` after K3, dev machine
+
+`ccore/ci/run.sh full`, 19:02, load average 5.3 at the start: 33 suites, 0 failed, **197 s** in all.
+build-tcc 0.9, run-tcc 13.7 (1,288,845 checks), run-clang-asan 27.6 (1,288,845), build-wasm 7.2,
+wasm_run 2.6, host 4.9, the 11 lab suites 98.3 (lab_pages 19.6, lab_viewcube 17.4), build-wasm-view
+5.3, build-release 3.5, the other .mjs suites 27.4 (session_log_test 13.0, wasm_view_run 12.0),
+dev_test 6.1. The same run before K3 was 633 s (K1, below) and would be about 1100 s now, from
+the parts measured above.
+
+### The jobs on GitHub (expected; the first run gives the real times)
+
+`ubuntu-latest` has 4 vCPUs. The old run there was 1.2 to 2 times slower than the dev machine.
+
+| Job | Mode | What | Expected |
+|---|---|---|---|
+| `ccore-linux` | `unit` | apt, tcc, binaryen, manifold, npm ci; builds; C suites with tcc (bound by `ifc_read`); wasm, host, release, the .mjs suites | 1.5 to 2 min of steps after 1.5 to 2 min of setup: about 4 min |
+| `ccore-san` | `san` | apt (clang, cmake), manifold; the C suites under ASan+UBSan | library about 10 s, suites about 25 to 40 s: about 2 to 3 min with setup |
+| `ccore-lab` | `lab` | as `ccore-linux` without inotify; build tcc and wasm; 11 Chromium suites | about 1.5 to 2 min of suites (225 s before): about 4 min |
+
+The jobs run side by side, so the workflow takes as long as the slowest: about 4 minutes instead of
+about 23. `ccore-prerelease` waits for all three and `ccore-release`. On a cache miss each job builds
+manifold itself (the three caches have the same key; the first to finish saves it).
+
+## Times on the dev machine (K1, before K3)
 
 `ccore/ci/run.sh full`, 25 Nov 2026, 16 GB aarch64, tcc 0.9.28rc (b39cbc70), clang 23.1.3, Node 26,
 Chromium of the distribution. Other builders were busy (load average 5.0 at the start). One run, in

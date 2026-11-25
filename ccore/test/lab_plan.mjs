@@ -210,7 +210,17 @@ async function main() {
   const cutPx = () => evalJs(`(() => { const c = document.getElementById('bimble'), g = c.getContext('webgl2'), cuts = ${JSON.stringify(CUTS)};
     const p = new Uint8Array(c.width * c.height * 4); g.readPixels(0, 0, c.width, c.height, g.RGBA, g.UNSIGNED_BYTE, p);
     let n = 0; for (let i = 0; i < p.length; i += 4) if (cuts.some((k) => Math.abs(p[i] - k[0]) <= 1 && Math.abs(p[i + 1] - k[1]) <= 1 && Math.abs(p[i + 2] - k[2]) <= 1)) n++; return n; })()`);
-  const settle = async () => { const f0 = await frames(); await waitFor("a new frame", 5000, async () => (await frames()) > f0).catch(() => {}); await sleep(100); };
+  // Settled: no new frame for 400 ms (at most 5000 ms). It waited for one more frame, and none ever came:
+  // the frame of the change was drawn already, so each call waited the full 5000 ms (K3: 6 to 15 calls a suite).
+  const settle = async () => {
+    const until = Date.now() + 5000;
+    let f = await frames(), since = Date.now();
+    while (Date.now() - since < 400 && Date.now() < until) {
+      await sleep(50);
+      const g = await frames();
+      if (g !== f) (f = g), (since = Date.now());
+    }
+  };
   const vis = () => B("return b.query('visibility');");
   const sel = () => B("return b.state.value.selection;");
   const mouseClick = async ([x, y]) => {

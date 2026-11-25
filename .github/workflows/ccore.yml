@@ -1,6 +1,7 @@
 name: ccore
-# The C core's suites (ticket K1): the same script builders run, ccore/ci/run.sh full. Linux is the
-# check; macOS only measures what is missing (ccore/results/ci.md) and may fail.
+# The C core's suites (tickets K1, K3): the same script builders run, ccore/ci/run.sh, its three parts
+# (unit, san, lab) as three Linux jobs side by side. Linux is the check; macOS only measures what is
+# missing (ccore/results/ci.md) and may fail.
 # The release archives of bimble-ccore (ticket R1): job ccore-release on a manual run and on a tag
 # ccore-v<VERSION>; on a tag, ccore-prerelease attaches them to a GitHub prerelease. Never a tag v*:
 # that prefix starts the Rust release, the Pages deployment and the brew formula (release.yml).
@@ -26,13 +27,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Three jobs side by side (ticket K3), each one mode of the same script, ccore/ci/run.sh:
+  # ccore-linux runs `unit` (the builds, the C suites with tcc at the full sample, wasm, host,
+  # release, every .mjs suite but the lab's), ccore-san `san` (the C suites under ASan and UBSan, in
+  # parallel, a sample of the generated inputs), ccore-lab `lab` (the Chromium suites). `full` runs
+  # all three, one after the other, on a builder's machine.
   ccore-linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      # clang and lld: the ASan suites and the wasm32 build (wasm-ld); cmake: manifold (deps.sh);
-      # inotify-tools: dev.sh's watcher (test/dev_test.mjs). tcc comes from source below.
+      # clang and lld: the wasm32 build (wasm-ld); cmake: manifold (deps.sh); inotify-tools: dev.sh's
+      # watcher (test/dev_test.mjs). tcc comes from source below.
       - run: scripts/apt-install.sh clang lld cmake inotify-tools
         timeout-minutes: 12
       - name: Versions and keys
@@ -43,6 +49,7 @@ jobs:
           echo "binaryen=$(ccore/ci/binaryen.sh --version)" >> "$GITHUB_OUTPUT"
           clang --version | head -n 1
           cmake --version | head -n 1
+          nproc
       # Ubuntu's tcc (Aug 2020) has no stdatomic.h nor __atomic builtins: the pinned one of ci/tcc.sh.
       - name: tcc (cache)
         id: tcc
@@ -94,12 +101,120 @@ jobs:
           [ -x /usr/bin/chromium ] || sudo ln -s "$(command -v google-chrome)" /usr/bin/chromium
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           /usr/bin/chromium --version
-      - name: ccore/ci/run.sh full
-        run: ccore/ci/run.sh full
+      - name: ccore/ci/run.sh unit
+        run: ccore/ci/run.sh unit
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ccore-ci-logs
+          name: ccore-ci-logs-unit
+          path: ccore/out/ci/
+          retention-days: 14
+
+  ccore-san:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # clang: the sanitizer build; cmake: manifold (deps.sh), linked into every suite.
+      - run: scripts/apt-install.sh clang cmake
+        timeout-minutes: 12
+      - name: Versions and keys
+        id: keys
+        run: |
+          echo "manifold=$(sed -n 's/^MANIFOLD_TAG=\([^ ]*\).*/\1/p' ccore/deps.sh)" >> "$GITHUB_OUTPUT"
+          clang --version | head -n 1
+          cmake --version | head -n 1
+          nproc
+      # The boolean kernel: manifold's C binding, built by deps.sh into ccore/out/deps/manifold.
+      - name: manifold (cache)
+        id: manifold
+        uses: actions/cache@v4
+        with:
+          path: ccore/out/deps/manifold
+          key: manifold-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh') }}
+      - if: steps.manifold.outputs.cache-hit != 'true'
+        run: JOBS=4 ccore/deps.sh
+      - name: ccore/ci/run.sh san
+        run: ccore/ci/run.sh san
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccore-ci-logs-san
+          path: ccore/out/ci/
+          retention-days: 14
+
+  ccore-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # clang and lld: build.sh wasm (lab_wasm, lab_pages); cmake: manifold (deps.sh), in the host.
+      - run: scripts/apt-install.sh clang lld cmake
+        timeout-minutes: 12
+      - name: Versions and keys
+        id: keys
+        run: |
+          echo "manifold=$(sed -n 's/^MANIFOLD_TAG=\([^ ]*\).*/\1/p' ccore/deps.sh)" >> "$GITHUB_OUTPUT"
+          echo "tcc=$(ccore/ci/tcc.sh --commit)" >> "$GITHUB_OUTPUT"
+          echo "binaryen=$(ccore/ci/binaryen.sh --version)" >> "$GITHUB_OUTPUT"
+          clang --version | head -n 1
+          cmake --version | head -n 1
+          nproc
+      # Ubuntu's tcc (Aug 2020) has no stdatomic.h nor __atomic builtins: the pinned one of ci/tcc.sh.
+      - name: tcc (cache)
+        id: tcc
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/tcc
+          key: tcc-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.tcc }}
+      - if: steps.tcc.outputs.cache-hit != 'true'
+        run: ccore/ci/tcc.sh "$HOME/.local/tcc"
+      - run: |
+          echo "$HOME/.local/tcc/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/tcc/bin/tcc" -v
+      # binaryen as in ccore-linux: clang runs wasm-opt after `build.sh wasm` when it is on PATH, so
+      # the lab loads the same ccore.wasm as wasm_run there.
+      - name: binaryen (cache)
+        id: binaryen
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/binaryen
+          key: binaryen-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.binaryen }}
+      - if: steps.binaryen.outputs.cache-hit != 'true'
+        run: ccore/ci/binaryen.sh "$HOME/.local/binaryen"
+      - run: |
+          echo "$HOME/.local/binaryen/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/binaryen/bin/wasm-opt" --version
+      # The boolean kernel: manifold's C binding, built by deps.sh into ccore/out/deps/manifold.
+      - name: manifold (cache)
+        id: manifold
+        uses: actions/cache@v4
+        with:
+          path: ccore/out/deps/manifold
+          key: manifold-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh') }}
+      - if: steps.manifold.outputs.cache-hit != 'true'
+        run: JOBS=4 ccore/deps.sh
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web-ui/package-lock.json
+      - working-directory: web-ui
+        run: npm ci --no-audit --no-fund
+      # The lab tests start /usr/bin/chromium (no shared variable for it in ccore/test): the image's
+      # Google Chrome at that path. Chrome's sandbox needs unprivileged user namespaces, which
+      # Ubuntu 24.04's AppArmor restricts by default.
+      - name: Chromium at /usr/bin/chromium
+        run: |
+          [ -x /usr/bin/chromium ] || sudo ln -s "$(command -v google-chrome)" /usr/bin/chromium
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          /usr/bin/chromium --version
+      - name: ccore/ci/run.sh lab
+        run: ccore/ci/run.sh lab
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccore-ci-logs-lab
           path: ccore/out/ci/
           retention-days: 14
 
@@ -181,7 +296,7 @@ jobs:
   # On a tag ccore-v*: both archives on one GitHub prerelease, once the full suites passed too.
   ccore-prerelease:
     if: startsWith(github.ref, 'refs/tags/ccore-v')
-    needs: [ccore-linux, ccore-release]
+    needs: [ccore-linux, ccore-san, ccore-lab, ccore-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write

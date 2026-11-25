@@ -156,7 +156,17 @@ async function main() {
   const gl = async () => JSON.parse(await evalJs("JSON.stringify(window.__bbGl)"));
   const camera = async () => (await gl()).camera;
   const frames = () => evalJs("window.__bbGl.frames");
-  const settle = async () => { const f0 = await frames(); await waitFor("a new frame", 3000, async () => (await frames()) > f0).catch(() => {}); await sleep(100); };
+  // Settled: no new frame for 400 ms (at most 3000 ms). It waited for one more frame, and none ever came:
+  // the frame of the change was drawn already, so each call waited the full 3000 ms (K3: 6 to 15 calls a suite).
+  const settle = async () => {
+    const until = Date.now() + 3000;
+    let f = await frames(), since = Date.now();
+    while (Date.now() - since < 400 && Date.now() < until) {
+      await sleep(50);
+      const g = await frames();
+      if (g !== f) (f = g), (since = Date.now());
+    }
+  };
   const sel = () => B("return b.state.value.selection;");
   // SHOTS=<dir>: a screenshot of the cube's corner at a few steps (for a look, not checked).
   const shot = async (name) => {
@@ -255,6 +265,10 @@ async function main() {
   check("pick: a click on a column selects it", (await gl()).picks === pk0 + 1 && JSON.stringify(await sel()) === JSON.stringify([col]), JSON.stringify(await sel()));
   await sleep(300); // the selection opens a panel: the canvas may resize
   await settle();
+  // The Top turn below must show in-between angles. Started within 1 to 2 s of the selection, it
+  // drew a single frame in its 300 ms (headless Chromium with SwiftShader; K3: 0 in-between angles
+  // in 6 of 9 runs 0.4 to 1 s after it, none failed at 2 s). The old settle waited 3 s here: kept.
+  await sleep(2600);
 
   // ---- clicks on the cube ----
   const picks1 = (await gl()).picks, selects1 = selects.length;

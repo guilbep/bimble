@@ -57,6 +57,14 @@ Run the tests (tcc by default, or any compiler in `CC`). The script exits non-ze
     ccore/test/run.sh             # all suites
     ccore/test/run.sh fmt json    # named suites
     CC=clang ccore/test/run.sh
+    CC=clang CFLAGS="-fsanitize=address,undefined" ccore/test/run.sh
+
+`test/run.sh` compiles the library once (one object per file, in parallel), then compiles, links
+and runs each suite as a job of its own, as many at once as there are CPUs (`CCORE_TEST_JOBS=1`:
+one by one). Each suite's output is printed whole, in name order, with its compile and run seconds;
+the last line gives the totals. Every suite runs, even after a failure, and any failure (a FAIL
+check, a crash, a sanitizer report, a compile error) makes the exit code 1. On the dev machine: all
+26 suites in 12 s with tcc, 29 s with ASan+UBSan (`results/ci.md`).
 
 The network tests (`test/*.mjs`, `bench/*.mjs`) take their ports from `test/ports.mjs`, one table
 with a fixed default and a unique offset per port. `CCORE_PORT_BASE` unset: the defaults (host
@@ -66,11 +74,14 @@ a hash of the worktree path. `test/host.sh` passes the variable through.
 
 CI: `ccore/ci/run.sh fast` is the gate every ticket passes (build.sh tcc, test/run.sh with tcc and
 with clang ASan+UBSan, build.sh wasm, wasm_run, host.sh); `ccore/ci/run.sh full` adds the Chromium
-lab tests and every other `test/*.mjs` suite. One line per suite, logs in `out/ci/`, a last line
-`ci: N suites, M failed`, exit 1 on a failure; `CCORE_PORT_BASE` defaults to `auto`. GitHub runs
-`full` on Linux (`.github/workflows/ccore.yml`, job `ccore-linux`: tcc built from source by
-`ci/tcc.sh`, manifold by `deps.sh`, both cached) and `test/run.sh` on macOS as a feasibility probe
-that may fail (`ccore-macos`). Times and what blocks macOS and Windows: `results/ci.md`.
+lab tests and every other `test/*.mjs` suite. `unit`, `san` and `lab` are the three parts of `full`:
+`unit` all but the sanitizers and the lab, `san` the C suites under ASan+UBSan, `lab` the Chromium
+suites. One line per suite, logs in `out/ci/`, a last line `ci: N suites, M failed`, exit 1 on a
+failure; `CCORE_PORT_BASE` defaults to `auto`. GitHub runs the three parts on Linux as three jobs
+side by side (`.github/workflows/ccore.yml`: `ccore-linux`, `ccore-san`, `ccore-lab`; tcc built
+from source by `ci/tcc.sh`, manifold by `deps.sh`, both cached) and `test/run.sh` on macOS as a
+feasibility probe that may fail (`ccore-macos`). Times and what blocks macOS and Windows:
+`results/ci.md`.
 
 Regenerate the goldens (a standalone Rust crate, not in the workspace; it pins the repo's
 serde_json version). Commit the changed `.txt` files:
