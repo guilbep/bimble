@@ -220,6 +220,9 @@ static int dump_import(const char *in, const char *out, const char *export_path)
 
 int main(int argc, char **argv) {
     if (argc >= 4 && (!strcmp(argv[1], "read") || !strcmp(argv[1], "import"))) {
+#ifdef _WIN32
+#define mkdir(path, mode) mkdir(path) /* WIN1: no mode argument there */
+#endif
         if (mkdir(argv[3], 0755) && errno != EEXIST) { fprintf(stderr, "%s: %s\n", argv[3], strerror(errno)); return 2; }
         if (!strcmp(argv[1], "read") && argc == 4) return dump_read(argv[2], argv[3]);
         if (!strcmp(argv[1], "import") && argc <= 5) return dump_import(argv[2], argv[3], argc == 5 ? argv[4] : NULL);

@@ -95,10 +95,11 @@ lib_and_tests() { # <dir> <cc> <flags...>
     else step "archive libccore.a" "$AR" rcs "$dir/libccore.a" "${objs[@]}"; fi
     # The session layer (L5) and the native platform: an archive the suites and the host link.
     local sobjs=()
-    for f in "${SESSION[@]}" host/platform_native.c; do sobjs+=("$dir/$(basename "${f%.c}").o"); done
+    # WIN1: host/platform_win.c is the Windows one (empty elsewhere), platform_native.c the POSIX one.
+    for f in "${SESSION[@]}" host/platform_native.c host/platform_win.c; do sobjs+=("$dir/$(basename "${f%.c}").o"); done
     compile_session() {
         local i=0
-        for f in "${SESSION[@]}" host/platform_native.c; do
+        for f in "${SESSION[@]}" host/platform_native.c host/platform_win.c; do
             "$cc" "$@" "${INC[@]}" -Ihost -c "$f" -o "${sobjs[$i]}"
             i=$((i + 1))
         done
@@ -117,7 +118,8 @@ lib_and_tests() { # <dir> <cc> <flags...>
         step "tool $tn" "$cc" "$@" "${INC[@]}" "$f" "$dir/libccore.a" ${klink[@]+"${klink[@]}"} -o "$dir/$tn"
     done
     # The native host (not in wasm): every host/*.c on top of session/ and the library.
-    step "host bimble-ccore" "$cc" "$@" "$VDEF" "${INC[@]}" -Ihost "${HOST[@]}" "${SESSION[@]}" "$dir/libccore.a" ${klink[@]+"${klink[@]}"} -o "$dir/bimble-ccore"
+    step "host bimble-ccore" "$cc" "$@" "$VDEF" "${INC[@]}" -Ihost "${HOST[@]}" "${SESSION[@]}" "$dir/libccore.a" ${klink[@]+"${klink[@]}"} \
+        ${PLATFORM_LIBS[@]+"${PLATFORM_LIBS[@]}"} -o "$dir/bimble-ccore" # WIN1: Winsock on Windows
 }
 
 # build.sh host (see the header). Cache keys: sha1 of the file, of every header (and the vendored

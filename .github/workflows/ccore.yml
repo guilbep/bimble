@@ -1,7 +1,7 @@
 name: ccore
 # The C core's suites (tickets K1, K3): the same script builders run, ccore/ci/run.sh, its three parts
 # (unit, san, lab) as three Linux jobs side by side, and ccore/ci/run.sh clang on macOS (ticket
-# MAC1; no tcc, no wasm there).
+# MAC1; no tcc, no wasm there) and on Windows (ticket WIN1, MSYS2 CLANG64; a probe until green).
 # The release archives of bimble-ccore (tickets R1, MAC1): job ccore-release on a manual run, on a
 # tag ccore-v<VERSION> and on a push whose head commit message holds [ccore-release]; on a tag,
 # ccore-prerelease attaches them to a GitHub prerelease. Never a tag v*:
@@ -297,6 +297,137 @@ jobs:
           path: |
             ccore/out/ci/
             ccore/out/t9b-*.log
+          retention-days: 14
+
+  # Windows (ticket WIN1): MSYS2 CLANG64 (clang for x86_64-w64-mingw32, UCRT, winpthreads, lld)
+  # and its bash, so build.sh, test/run.sh and ci/run.sh run as they are (portable.sh: CC_OS=Windows,
+  # -pthread, -lws2_32 for the host). Diagnostics first, for the round trips of a port tried only
+  # here: versions, the checkout's line ends, a compile check of each C file alone (every error of
+  # every file), then ci/run.sh clang without the kernel (test/run.sh with clang; test/host.sh with
+  # HOST_BUILD=native: host_test and lab_boot in the runner's Chrome), the logs of failed suites,
+  # then a probe of the boolean kernel (deps.sh, the suites with it). continue-on-error until it is
+  # green; not yet in ccore-prerelease's needs.
+  ccore-windows:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    continue-on-error: true
+    defaults:
+      run:
+        shell: msys2 {0}
+    env:
+      CCORE_PORT_BASE: auto
+      CHROMIUM: C:\Program Files\Google\Chrome\Application\chrome.exe
+    steps:
+      # The goldens are compared byte for byte: no LF -> CRLF at checkout (the runner's git has
+      # core.autocrlf true).
+      - name: No line-end conversion at checkout
+        shell: pwsh
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: false
+          path-type: inherit # node and Chrome from the runner
+          install: >-
+            git
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web-ui/package-lock.json
+      - name: npm ci
+        shell: pwsh
+        working-directory: web-ui
+        run: npm ci --no-audit --no-fund
+      - name: Versions
+        run: |
+          echo "uname -a: $(uname -a)"
+          echo "MSYSTEM=$MSYSTEM bash $BASH_VERSION"
+          ( cd ccore && source ./portable.sh && echo "portable.sh: CC_OS=$CC_OS PLATFORM_CFLAGS=${PLATFORM_CFLAGS[*]} PLATFORM_LIBS=${PLATFORM_LIBS[*]}" )
+          for t in clang clang++ llvm-ar cmake ninja node git getconf timeout sha1sum cksum perl; do
+            printf '%-9s %s\n' "$t" "$(command -v "$t" || echo -)"
+          done
+          clang --version
+          cmake --version | head -n 1
+          node --version
+          echo "nproc $(nproc), getconf $(getconf _NPROCESSORS_ONLN 2>&1)"
+          # chrome.exe --version opens a window on Windows: the file's version instead.
+          echo "Chrome: $(powershell -NoProfile -Command "(Get-Item '$CHROMIUM').VersionInfo.ProductVersion" 2>&1)"
+          echo "core.autocrlf=$(git config --get core.autocrlf)"
+          echo "line ends of ccore/golden (index, working tree):"
+          git ls-files --eol ccore/golden | awk '{print $1, $2}' | sort | uniq -c
+      # Every C file alone with the suites' flags (-Werror), every error of every file, then the count.
+      - name: Compile check (clang x86_64-w64-mingw32, each file)
+        working-directory: ccore
+        run: |
+          fails=0 files=0
+          for f in src/*.c session/*.c host/*.c tools/*.c test/*_test.c; do
+            [[ $f == src/wasm_stub.c ]] && continue
+            files=$((files + 1))
+            if ! clang -std=c11 -fsyntax-only -ferror-limit=0 -Wall -Wextra -Werror -Wno-unused-function \
+                -DRYU_ONLY_64_BIT_OPS -pthread -Isrc -Ivendor/ryu -Isession -Ihost "$f"; then
+              echo "::error file=ccore/$f::does not compile with clang for Windows"
+              fails=$((fails + 1))
+            fi
+          done
+          echo "compile check: $files files, $fails failed"
+          ((fails == 0))
+      - name: ccore/ci/run.sh clang (no kernel)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 25
+        env:
+          CC_NO_KERNEL: "1"
+          CCORE_CI_TIMEOUT: "480" # per suite: a lab_boot whose Chrome is never stopped ends here
+        run: ccore/ci/run.sh clang
+      - name: Logs of the failed suites
+        if: ${{ !cancelled() }}
+        run: |
+          for f in ccore/out/ci/*.log ccore/out/t9b-*.log; do
+            [[ -f $f ]] || continue
+            grep -qE '^FAIL|FAIL | [1-9][0-9]* failed|error' "$f" || continue
+            echo "::group::$f"
+            grep -nE 'FAIL|error|Error|passed, ' "$f" | head -n 80 || true
+            echo "--- last 80 lines"
+            tail -n 80 "$f"
+            echo "::endgroup::"
+          done
+          ls -l ccore/out/run-clang/ ccore/out/native/ 2> /dev/null | head -n 60 || true
+      # The boolean kernel, a probe: manifold by deps.sh (cmake, Ninja, clang++), then every C suite
+      # with it. Its failure does not fail the job's steps above.
+      - name: manifold (probe)
+        id: kernel
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          CC: clang
+          CXX: clang++
+          CMAKE_GENERATOR: Ninja
+        run: JOBS=4 ccore/deps.sh && ls -l ccore/out/deps/manifold/lib
+      - name: test/run.sh with the kernel (probe)
+        if: ${{ !cancelled() && steps.kernel.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 15
+        working-directory: ccore
+        # CFLAGS: its own out/run-clang-<n>/, beside the run without the kernel.
+        run: |
+          mkdir -p out/ci
+          rc=0
+          CC=clang CFLAGS=-DWIN1_KERNEL_PROBE test/run.sh > out/ci/win1-kernel-run.log 2>&1 || rc=$?
+          grep -E '^FAIL|passed, [0-9]+ failed|^run.sh' out/ci/win1-kernel-run.log
+          exit $rc
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccore-windows-logs
+          path: |
+            ccore/out/ci/
+            ccore/out/t9b-*.log
+            ccore/out/run-clang/log/
           retention-days: 14
 
   # The release archives (ticket R1, ADR 0069 rule 2; macOS: ticket MAC1): ccore/build.sh release

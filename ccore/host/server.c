@@ -6,19 +6,13 @@
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
 #define _DARWIN_C_SOURCE /* macOS hides SO_NOSIGPIPE and MSG_DONTWAIT under _POSIX_C_SOURCE alone */
 #endif
-#include <arpa/inet.h>
+#include "net.h" /* the sockets: POSIX, or Winsock (ticket WIN1); first, before windows.h */
 #include <errno.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <time.h>
-#include <unistd.h>
 
 #include "calls.h"
 #include "host.h"
@@ -38,18 +32,14 @@
 #define DRAIN_MS 1000
 #define DRAIN_MAX (4u << 20)
 
-/* A write to a closed peer: EPIPE, never SIGPIPE (also ignored in cc_host_run). macOS has no
- * MSG_NOSIGNAL: SO_NOSIGPIPE on each accepted socket instead. */
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0
-#endif
+/* A write to a closed peer: EPIPE, never SIGPIPE: MSG_NOSIGNAL, SO_NOSIGPIPE (net.h). */
 
 static const char TEXT[] = "text/plain; charset=utf-8";
 
 enum { C_FREE = 0, C_READ, C_WAIT, C_WRITE, C_DRAIN };
 
 typedef struct {
-    int fd;
+    cc_sock fd;
     int st;
     Buf in;          /* bytes read, not yet consumed by a request */
     Buf out;         /* the answer being written */
@@ -100,11 +90,11 @@ static const char *reason(int status) { /* serve.rs:306-316 */
 }
 
 static void conn_close(Conn *c) {
-    if (c->fd >= 0) close(c->fd);
+    if (c->fd != CC_NO_SOCK) net_close(c->fd);
     buf_free(&c->in);
     buf_free(&c->out);
     memset(c, 0, sizeof *c);
-    c->fd = -1;
+    c->fd = CC_NO_SOCK;
     c->st = C_FREE;
 }
 
@@ -118,13 +108,13 @@ static void start_drain(Conn *c) {
 /* Writes what is pending; then reads the next request, or drains and closes. */
 static void flush_out(Conn *c) {
     while (c->out_off < c->out.len) {
-        ssize_t k = send(c->fd, c->out.p + c->out_off, c->out.len - c->out_off, MSG_NOSIGNAL);
+        long k = net_send(c->fd, c->out.p + c->out_off, c->out.len - c->out_off, MSG_NOSIGNAL);
         if (k > 0) {
             c->out_off += (size_t)k;
             continue;
         }
-        if (k < 0 && errno == EINTR) continue;
-        if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        if (k < 0 && net_interrupted()) continue;
+        if (k < 0 && net_would_block()) {
             c->st = C_WRITE;
             return;
         }
@@ -604,7 +594,7 @@ static int read_some(Conn *c) {
             conn_close(c);
             return 0;
         }
-        ssize_t k = recv(c->fd, tmp, sizeof tmp, 0);
+        long k = net_recv(c->fd, tmp, sizeof tmp);
         if (k > 0) {
             if (c->st == C_DRAIN) {
                 c->drained += (size_t)k;
@@ -616,8 +606,8 @@ static int read_some(Conn *c) {
             c->deadline = c->st == C_READ ? now_ms() + IDLE_MS : c->deadline;
             continue;
         }
-        if (k < 0 && errno == EINTR) continue;
-        if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 1;
+        if (k < 0 && net_interrupted()) continue;
+        if (k < 0 && net_would_block()) return 1;
         /* EOF or error. A partial request at EOF is malformed (serve.rs:113-118). */
         if (k == 0 && c->st == C_READ && c->in.len) {
             Head h;
@@ -632,37 +622,25 @@ static int read_some(Conn *c) {
     }
 }
 
-static int set_nonblock(int fd) {
-    int fl = fcntl(fd, F_GETFL, 0);
-    return fl < 0 ? -1 : fcntl(fd, F_SETFL, fl | O_NONBLOCK);
-}
-
 int cc_host_run(const cc_host_config *config) {
     cfg = config;
-    for (int i = 0; i < MAX_CONNECTIONS; i++) conns[i].fd = -1;
+    for (int i = 0; i < MAX_CONNECTIONS; i++) conns[i].fd = CC_NO_SOCK;
     buf_init(&change);
     buf_puts(&change, "null"); /* twin.rs:120: the feed starts at (0, "null") */
 
-    struct sigaction sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_handler = on_signal;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGTERM, &sa, NULL);
-    sigaction(SIGINT, &sa, NULL);
-    signal(SIGPIPE, SIG_IGN);
+    net_signals(on_signal); /* SIGTERM, SIGINT; SIGPIPE ignored */
 
-    int lfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (lfd < 0) { perror("bimble-ccore: socket"); return 1; }
-    int one = 1;
-    setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    cc_sock lfd = net_init() ? CC_NO_SOCK : socket(AF_INET, SOCK_STREAM, 0);
+    if (lfd == CC_NO_SOCK) { fprintf(stderr, "bimble-ccore: socket: %s\n", net_error()); return 1; }
+    net_listen_opts(lfd); /* SO_REUSEADDR (Windows: SO_EXCLUSIVEADDRUSE) */
     struct sockaddr_in a;
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
     a.sin_port = htons(cfg->port);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (bind(lfd, (struct sockaddr *)&a, sizeof a) < 0 || listen(lfd, 64) < 0 || set_nonblock(lfd) < 0) {
-        fprintf(stderr, "bimble-ccore: cannot listen on %u: %s\n", (unsigned)cfg->port, strerror(errno));
-        close(lfd);
+    if (bind(lfd, (struct sockaddr *)&a, sizeof a) < 0 || listen(lfd, 64) < 0 || net_nonblock(lfd) < 0) {
+        fprintf(stderr, "bimble-ccore: cannot listen on %u: %s\n", (unsigned)cfg->port, net_error());
+        net_close(lfd);
         return 1;
     }
     socklen_t al = sizeof a;
@@ -699,7 +677,7 @@ int cc_host_run(const cc_host_config *config) {
         static uint32_t warmed;
         int want_warm = cfg->warm && cc_session_model(cfg->session) && cc_session_rev(cfg->session) != warmed;
         if (want_warm) timeout = 0;
-        int r = poll(pfd, (nfds_t)n, timeout);
+        int r = net_poll(pfd, n, timeout);
         if (want_warm && r == 0) {
             const char *mp;
             size_t mn;
@@ -710,14 +688,14 @@ int cc_host_run(const cc_host_config *config) {
             fprintf(stderr, "bimble-ccore: warm: mesh rev %u built in %.3f ms (scene included)\n", (unsigned)rev, ms);
             continue;
         }
-        if (r < 0 && errno != EINTR) { perror("bimble-ccore: poll"); break; }
+        if (r < 0 && !net_interrupted()) { fprintf(stderr, "bimble-ccore: poll: %s\n", net_error()); break; }
         if (r > 0) {
             if (pfd[0].revents & POLLIN) {
                 for (;;) {
-                    int fd = accept(lfd, NULL, NULL);
-                    if (fd < 0) break;
+                    cc_sock fd = accept(lfd, NULL, NULL);
+                    if (fd == CC_NO_SOCK) break;
 #ifdef SO_NOSIGPIPE
-                    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+                    net_setopt(fd, SOL_SOCKET, SO_NOSIGPIPE, 1);
 #endif
                     int slot = -1;
                     for (int i = 0; i < MAX_CONNECTIONS; i++)
@@ -725,13 +703,13 @@ int cc_host_run(const cc_host_config *config) {
                     if (slot < 0) { /* serve.rs:59-70 */
                         static const char busy[] = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; "
                                                    "charset=utf-8\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbusy";
-                        ssize_t k = send(fd, busy, sizeof busy - 1, MSG_NOSIGNAL | MSG_DONTWAIT);
+                        long k = net_send(fd, busy, sizeof busy - 1, MSG_NOSIGNAL | MSG_DONTWAIT);
                         (void)k;
-                        close(fd);
+                        net_close(fd);
                         continue;
                     }
-                    set_nonblock(fd);
-                    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+                    net_nonblock(fd);
+                    net_setopt(fd, IPPROTO_TCP, TCP_NODELAY, 1);
                     Conn *c = &conns[slot];
                     memset(c, 0, sizeof *c);
                     c->fd = fd;
@@ -769,7 +747,7 @@ int cc_host_run(const cc_host_config *config) {
     }
     for (int i = 0; i < MAX_CONNECTIONS; i++)
         if (conns[i].st != C_FREE) conn_close(&conns[i]);
-    close(lfd);
+    net_close(lfd);
     buf_free(&change);
     fprintf(stderr, "bimble-ccore: stopped\n");
     return 0;

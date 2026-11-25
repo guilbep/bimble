@@ -36,8 +36,9 @@ deps_import() {
     mkdir -p "$d/lib" "$d/include/manifold"
     cp "${libs[@]}" "$d/lib/"
     cp "$s"/bindings/c/include/manifold/*.h "$d/include/manifold/"
-    # One shared library for tcc (the static ones were built with -fPIC).
-    if [[ $CC_OS != Darwin ]]; then
+    # One shared library for tcc (the static ones were built with -fPIC). Not on macOS nor
+    # Windows (WIN1): no tcc there.
+    if [[ $CC_OS != Darwin && $CC_OS != Windows ]]; then
         clang++ -shared -o "$d/lib/libmanifoldc.so" -Wl,--whole-archive "$d/lib/libmanifoldc.a" -Wl,--no-whole-archive \
             "$d/lib/libmanifold.a" "$d/lib/libClipper2.a" -lm
     fi
@@ -64,13 +65,13 @@ kernel_setup() {
     fi
     local d=$DEPS_OUT
     [[ -f $d/lib/libmanifoldc.a && -f $d/include/manifold/manifoldc.h ]] || return 0
-    [[ $CC_OS == Darwin || -f $d/lib/libmanifoldc.so ]] || return 0
+    [[ $CC_OS == Darwin || $CC_OS == Windows || -f $d/lib/libmanifoldc.so ]] || return 0
     local abs cxx=-lstdc++
     abs=$(cd "$d" && pwd)
-    [[ $CC_OS == Darwin ]] && cxx=-lc++
+    [[ $CC_OS == Darwin || $CC_OS == Windows ]] && cxx=-lc++ # WIN1: MSYS2 CLANG64's C++ library is libc++
     KFLAGS=(-DCC_HAVE_MANIFOLD -isystem "$abs/include") HAVE_KERNEL=1
     KLINK_CLANG=("$abs/lib/libmanifoldc.a" "$abs/lib/libmanifold.a" "$abs/lib/libClipper2.a" "$cxx" -lm)
-    [[ $CC_OS == Darwin ]] || KLINK_TCC=("-L$abs/lib" -lmanifoldc "-Wl,-rpath=$abs/lib")
+    [[ $CC_OS == Darwin || $CC_OS == Windows ]] || KLINK_TCC=("-L$abs/lib" -lmanifoldc "-Wl,-rpath=$abs/lib")
 }
 
 deps_main() {

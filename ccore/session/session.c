@@ -432,6 +432,15 @@ static void persist_drop_cmds(cc_session *s) { (void)s; }
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef _WIN32
+/* Windows (ticket WIN1): the file calls below through host/platform_win.c (session/platform.h):
+ * UTF-8 paths, binary mode (no "\n" -> "\r\n" in the session file), a rename that replaces. */
+#define CC_WIN_FLAGS(flags, ...) flags /* the mode (0644) is the system's default there */
+#define open(path, ...) cc_win_open(path, CC_WIN_FLAGS(__VA_ARGS__, 0))
+#define rename(from, to) cc_win_rename(from, to)
+#define unlink(path) cc_win_unlink(path)
+#define access(path, mode) (cc_win_exists(path) ? 0 : -1)
+#endif
 
 /* Format 3 (ticket J1): the snapshot's model, when it is not the model file, is in a side file
  * `<session>.model-a` or `-b` (the .bimble v2 binary, gzip in stored blocks: Rust reads it), named
@@ -489,6 +498,9 @@ static void persist_free(cc_session *s) {
 
 /* The model file's size and mtime (ns): Save rewrites it, an outside edit too. */
 static int file_stamp(const char *path, uint64_t *size, uint64_t *mtime_ns) {
+#ifdef _WIN32
+    return cc_win_stamp(path, size, mtime_ns);
+#else
     struct stat st;
     if (stat(path, &st) != 0) return -1;
     *size = (uint64_t)st.st_size;
@@ -498,6 +510,7 @@ static int file_stamp(const char *path, uint64_t *size, uint64_t *mtime_ns) {
     *mtime_ns = (uint64_t)st.st_mtim.tv_sec * 1000000000ull + (uint64_t)st.st_mtim.tv_nsec;
 #endif
     return 0;
+#endif
 }
 
 static int copy_u64s(uint64_t **dst, size_t *n, size_t *cap, const uint64_t *src, size_t k) {

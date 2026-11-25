@@ -5,6 +5,10 @@
 #define _POSIX_C_SOURCE 200809L
 #include "mcp.h"
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h> /* _setmode (ticket WIN1) */
+#endif
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -750,7 +754,14 @@ int cc_mcp_main(int argc, char **argv) {
     }
     cc_history_init(&s.hist);
     s.rev = 1;
+#ifdef _WIN32
+    /* Windows (ticket WIN1): no SIGPIPE (a closed pipe is a write error already); stdio in binary
+     * mode, so a line ends with "\n" as everywhere, not "\r\n". */
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#else
     signal(SIGPIPE, SIG_IGN); /* a closed stdout is a write error, as in Rust */
+#endif
     fprintf(stderr, "bimble-ccore mcp: serving %s%s\n", s.path, s.read_only ? " (read only)" : "");
 
     static Reader r;

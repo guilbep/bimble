@@ -10,7 +10,11 @@ static size_t g_threads; /* 0: default */
 
 static size_t default_threads(void) {
     const char *e = getenv("CC_THREADS");
+#ifdef _WIN32
+    long n = e && *e ? strtol(e, NULL, 10) : pthread_num_processors_np(); /* WIN1: no sysconf (winpthreads) */
+#else
     long n = e && *e ? strtol(e, NULL, 10) : sysconf(_SC_NPROCESSORS_ONLN);
+#endif
     if (n < 1) n = 1;
     if (n > CC_JOBS_MAX) n = CC_JOBS_MAX;
     return (size_t)n;

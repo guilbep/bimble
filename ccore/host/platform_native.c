@@ -1,4 +1,6 @@
-/* The native cc_platform (session/platform.h): POSIX files, clocks, /dev/urandom, stderr. */
+/* The native cc_platform (session/platform.h): POSIX files, clocks, /dev/urandom, stderr.
+ * Windows: host/platform_win.c (ticket WIN1); this file is empty there. */
+#ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #include "host.h"
 #include <dirent.h>
@@ -145,3 +147,6 @@ static const cc_platform NATIVE = {
 };
 
 const cc_platform *cc_platform_native(void) { return &NATIVE; }
+#else
+typedef int cc_platform_native_empty; /* Windows: platform_win.c */
+#endif

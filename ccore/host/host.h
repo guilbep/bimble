@@ -38,6 +38,15 @@ int cc_host_run(const cc_host_config *cfg);
 void cc_host_publish_change(const char *json, size_t n);
 
 /* The native cc_platform (platform_native.c): POSIX files, CLOCK_MONOTONIC, time(), /dev/urandom,
- * stderr. Static, never freed. */
+ * stderr. Static, never freed. On Windows platform_win.c (ticket WIN1). */
 const cc_platform *cc_platform_native(void);
+
+#ifdef _WIN32
+#include <stdio.h>
+/* platform_win.c: UTF-8 <-> UTF-16 (malloc'd, NULL on an invalid string or out of memory), and
+ * fopen of a UTF-8 path. */
+wchar_t *cc_win_wide(const char *s);
+char *cc_win_utf8(const wchar_t *w);
+FILE *cc_win_fopen(const char *path, const char *mode);
+#endif
 #endif

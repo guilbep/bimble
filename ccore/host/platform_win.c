@@ -1,0 +1,207 @@
+/* The native cc_platform on Windows (ticket WIN1; platform_native.c is the POSIX one, the same
+ * cc_platform_native()): files through the wide-character API (paths are UTF-8, as everywhere in
+ * the core), binary mode, a write that replaces its target (MoveFileExW: rename() does not
+ * replace on Windows), QueryPerformanceCounter, rand_s (RtlGenRandom), stderr. Also the few POSIX
+ * file calls of session.c (cc_win_*, session/platform.h) and the UTF-8 <-> UTF-16 helpers the
+ * host uses (main.c, static.c). Empty on every other system: build.sh and test/run.sh compile it
+ * everywhere. Built with clang for x86_64-w64-mingw32 (MSYS2 CLANG64, UCRT). */
+#ifdef _WIN32
+#ifndef _CRT_RAND_S
+#define _CRT_RAND_S /* rand_s, before the first stdlib.h */
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+#include <errno.h>
+#include <fcntl.h>
+#include <io.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include "host.h"
+
+wchar_t *cc_win_wide(const char *s) {
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, NULL, 0);
+    if (n <= 0) return NULL;
+    wchar_t *w = malloc((size_t)n * sizeof *w);
+    if (w && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, w, n) != n) {
+        free(w);
+        return NULL;
+    }
+    return w;
+}
+
+char *cc_win_utf8(const wchar_t *w) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    if (n <= 0) return NULL;
+    char *s = malloc((size_t)n);
+    if (s && WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, NULL, NULL) != n) {
+        free(s);
+        return NULL;
+    }
+    return s;
+}
+
+FILE *cc_win_fopen(const char *path, const char *mode) {
+    wchar_t *w = cc_win_wide(path), wm[8];
+    size_t i = 0;
+    for (; mode[i] && i < 7; i++) wm[i] = (wchar_t)(unsigned char)mode[i];
+    wm[i] = 0;
+    FILE *f = w ? _wfopen(w, wm) : NULL;
+    free(w);
+    return f;
+}
+
+/* open(2) for session.c: O_WRONLY | O_CREAT | O_TRUNC or O_WRONLY | O_APPEND, always binary.
+ * CreateFileW with FILE_SHARE_DELETE, so the session file stays replaceable (cc_win_rename) while
+ * its append handle is open, as on POSIX. */
+int cc_win_open(const char *path, int flags) {
+    wchar_t *w = cc_win_wide(path);
+    if (!w) {
+        errno = ENOENT;
+        return -1;
+    }
+    DWORD disp = (flags & O_CREAT) ? ((flags & O_TRUNC) ? CREATE_ALWAYS : OPEN_ALWAYS)
+                                   : ((flags & O_TRUNC) ? TRUNCATE_EXISTING : OPEN_EXISTING);
+    HANDLE h = CreateFileW(w, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, disp,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    free(w);
+    if (h == INVALID_HANDLE_VALUE) {
+        errno = EACCES;
+        return -1;
+    }
+    int fd = _open_osfhandle((intptr_t)h, _O_BINARY | (flags & O_APPEND ? _O_APPEND : 0));
+    if (fd < 0) CloseHandle(h);
+    return fd;
+}
+
+/* rename(2) that replaces `to`. A scanner (Windows Defender) or an indexer may hold the target a
+ * moment: a sharing or access error is tried again, 10 times 20 ms at most. */
+int cc_win_rename(const char *from, const char *to) {
+    wchar_t *a = cc_win_wide(from), *b = cc_win_wide(to);
+    int ok = 0;
+    for (int i = 0; a && b && i < 10; i++) {
+        if ((ok = MoveFileExW(a, b, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0)) break;
+        DWORD e = GetLastError();
+        if (e != ERROR_SHARING_VIOLATION && e != ERROR_ACCESS_DENIED) break;
+        Sleep(20);
+    }
+    free(a), free(b);
+    return ok ? 0 : -1;
+}
+
+int cc_win_unlink(const char *path) {
+    wchar_t *w = cc_win_wide(path);
+    int ok = w && DeleteFileW(w);
+    free(w);
+    return ok ? 0 : -1;
+}
+
+int cc_win_exists(const char *path) {
+    wchar_t *w = cc_win_wide(path);
+    int ok = w && GetFileAttributesW(w) != INVALID_FILE_ATTRIBUTES;
+    free(w);
+    return ok;
+}
+
+/* Size and last write time (ns since 1970-01-01 UTC, 100 ns steps) of a file. */
+int cc_win_stamp(const char *path, uint64_t *size, uint64_t *mtime_ns) {
+    wchar_t *w = cc_win_wide(path);
+    WIN32_FILE_ATTRIBUTE_DATA a;
+    int ok = w && GetFileAttributesExW(w, GetFileExInfoStandard, &a);
+    free(w);
+    if (!ok) return -1;
+    *size = (uint64_t)a.nFileSizeHigh << 32 | a.nFileSizeLow;
+    uint64_t t = (uint64_t)a.ftLastWriteTime.dwHighDateTime << 32 | a.ftLastWriteTime.dwLowDateTime;
+    const uint64_t EPOCH = 116444736000000000ull; /* 1601 to 1970 in 100 ns */
+    *mtime_ns = t > EPOCH ? (t - EPOCH) * 100 : 0;
+    return 0;
+}
+
+int cc_win_random(void *p, size_t n) {
+    unsigned char *b = p;
+    for (size_t i = 0; i < n; i += 4) {
+        unsigned int r;
+        if (rand_s(&r) != 0) return -1;
+        for (size_t j = 0; j < 4 && i + j < n; j++) b[i + j] = (unsigned char)(r >> (8 * j));
+    }
+    return 0;
+}
+
+static int wp_read_file(void *ctx, const char *path, size_t max, char **out, size_t *n) {
+    (void)ctx;
+    *out = NULL;
+    FILE *f = cc_win_fopen(path, "rb");
+    if (!f) return CC_PF_NOT_FOUND;
+    size_t cap = 1 << 16, len = 0;
+    char *p = malloc(cap + 1);
+    while (p) {
+        if (len == cap) {
+            if (cap >= max) {
+                free(p);
+                fclose(f);
+                return CC_PF_TOO_LARGE;
+            }
+            char *q = realloc(p, 2 * cap + 1);
+            if (!q) break;
+            p = q, cap *= 2;
+        }
+        size_t k = fread(p + len, 1, cap - len, f);
+        len += k;
+        if (k == 0) break;
+    }
+    int bad = ferror(f);
+    fclose(f);
+    if (!p || bad) {
+        free(p);
+        return bad ? CC_PF_IO : CC_PF_NO_MEMORY;
+    }
+    p[len] = 0;
+    *out = p, *n = len;
+    return CC_PF_OK;
+}
+
+static int wp_exists(void *ctx, const char *path) { return (void)ctx, cc_win_exists(path); }
+
+static int wp_write_file(void *ctx, const char *path, const char *p, size_t n) {
+    (void)ctx;
+    size_t k = strlen(path);
+    char *tmp = malloc(k + 5);
+    if (!tmp) return -1;
+    snprintf(tmp, k + 5, "%s.tmp", path);
+    FILE *f = cc_win_fopen(tmp, "wb");
+    int ok = f && fwrite(p, 1, n, f) == n;
+    if (f && fclose(f)) ok = 0;
+    if (ok) ok = cc_win_rename(tmp, path) == 0;
+    if (!ok) cc_win_unlink(tmp);
+    free(tmp);
+    return ok ? 0 : -1;
+}
+
+static double wp_now_ms(void *ctx) {
+    (void)ctx;
+    LARGE_INTEGER f, c;
+    if (!QueryPerformanceFrequency(&f) || !QueryPerformanceCounter(&c) || f.QuadPart <= 0) return 0;
+    return (double)c.QuadPart * 1e3 / (double)f.QuadPart;
+}
+
+static int64_t wp_unix_s(void *ctx) { return (void)ctx, (int64_t)time(NULL); }
+
+static int wp_random(void *ctx, void *p, size_t n) { return (void)ctx, cc_win_random(p, n); }
+
+static void wp_log(void *ctx, const char *line, size_t n) {
+    (void)ctx;
+    fwrite(line, 1, n, stderr);
+    fputc('\n', stderr);
+}
+
+static const cc_platform NATIVE = {
+    NULL, 1, wp_read_file, wp_exists, wp_write_file, wp_now_ms, wp_unix_s, wp_random, wp_log,
+};
+
+const cc_platform *cc_platform_native(void) { return &NATIVE; }
+#else
+typedef int cc_platform_win_empty; /* ISO C wants a declaration in every translation unit */
+#endif

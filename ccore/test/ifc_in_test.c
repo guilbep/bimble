@@ -17,7 +17,12 @@
 #define _POSIX_C_SOURCE 199309L
 #define _DEFAULT_SOURCE /* MAP_ANONYMOUS */
 #include <stdint.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h> /* WIN1: VirtualAlloc for the 1 GiB text (reserved and committed, zero pages) */
+#else
 #include <sys/mman.h>
+#endif
 #include <string.h>
 #include <time.h>
 #include "../src/boolean.h"
@@ -187,8 +192,13 @@ static void over_1gib(void) {
 #if SIZE_MAX > 0xffffffffu
     const char *t = "ISO-10303-21;\nHEADER;FILE_SCHEMA(('IFC4'));ENDSEC;\nDATA;\n#1=IFCX(1);\nENDSEC;\n";
     size_t n = ((size_t)1 << 30) + 4096;
+#ifdef _WIN32
+    char *m = VirtualAlloc(NULL, n, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!m) { check_true("over 1 GiB: mmap", 0); return; }
+#else
     char *m = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m == MAP_FAILED) { check_true("over 1 GiB: mmap", 0); return; }
+#endif
     memcpy(m, t, strlen(t));
     cc_step_file f;
     cc_error err;
@@ -196,7 +206,11 @@ static void over_1gib(void) {
     if (rc) printf("over 1 GiB: %s\n", err.msg);
     check_true("a text over 1 GiB parses", rc == 0 && f.n == 1);
     cc_step_free(&f);
+#ifdef _WIN32
+    VirtualFree(m, 0, MEM_RELEASE);
+#else
     munmap(m, n);
+#endif
 #endif
 }
 

@@ -27,13 +27,22 @@
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
 #define _DARWIN_C_SOURCE /* realpath and the dyld header beside _POSIX_C_SOURCE */
 #endif
+#ifdef _WIN32
+/* Windows (ticket WIN1): ShellExecuteW opens the browser, GetModuleFileNameW finds the program,
+ * the arguments come as UTF-8 from GetCommandLineW. */
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <shellapi.h>
+#endif
 #include <fcntl.h>
 #include <stdint.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 
@@ -56,9 +65,13 @@
 /* 32 hex digits, as twin.rs `random_token` (twin.rs:88-99): /dev/urandom, else the clock. */
 static void random_hex(char out[33]) {
     unsigned char b[16];
+#ifdef _WIN32
+    ssize_t k = cc_win_random(b, sizeof b) == 0 ? (ssize_t)sizeof b : -1; /* rand_s */
+#else
     int fd = open("/dev/urandom", O_RDONLY);
     ssize_t k = fd >= 0 ? read(fd, b, sizeof b) : -1;
     if (fd >= 0) close(fd);
+#endif
     if (k != (ssize_t)sizeof b) {
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
@@ -115,6 +128,15 @@ static void on_listen(uint16_t port, void *ctx) {
     const char *u = buf_cstr(&url);
     printf("%s\n", u);
     fflush(stdout);
+#ifdef _WIN32
+    if (o->browser && !url.oom) {
+        wchar_t *w = cc_win_wide(u);
+        /* ShellExecuteW: the default browser, not our child; > 32 is success. */
+        if (!w || (INT_PTR)ShellExecuteW(NULL, L"open", w, NULL, NULL, SW_SHOWNORMAL) <= 32)
+            fprintf(stderr, "bimble-ccore: cannot start the browser: open the address above\n");
+        free(w);
+    }
+#else
     if (o->browser && !url.oom) {
         /* Two forks: the browser opener is not our child, so no zombie and no wait. */
         pid_t p = fork();
@@ -134,6 +156,7 @@ static void on_listen(uint16_t port, void *ctx) {
         if (p > 0) waitpid(p, NULL, 0);
         else fprintf(stderr, "bimble-ccore: cannot start " BROWSER_OPENER ": open the address above\n");
     }
+#endif
     buf_free(&url);
 }
 
@@ -141,7 +164,16 @@ static void on_listen(uint16_t port, void *ctx) {
  * 0 when it does not fit. */
 static int default_web(const char *argv0, char *out, size_t n) {
     char exe[PATH_MAX];
-#ifdef __APPLE__
+#if defined(_WIN32)
+    ssize_t k = -1;
+    wchar_t wexe[32768];
+    DWORD wn = GetModuleFileNameW(NULL, wexe, sizeof wexe / sizeof wexe[0]);
+    if (wn > 0 && wn < sizeof wexe / sizeof wexe[0]) {
+        char *u = cc_win_utf8(wexe);
+        if (u && strlen(u) < sizeof exe) strcpy(exe, u), k = (ssize_t)strlen(exe);
+        free(u);
+    }
+#elif defined(__APPLE__)
     char path[PATH_MAX];
     uint32_t pn = sizeof path;
     ssize_t k = -1;
@@ -155,6 +187,10 @@ static int default_web(const char *argv0, char *out, size_t n) {
         strcpy(exe, argv0);
     }
     char *slash = strrchr(exe, '/');
+#ifdef _WIN32
+    char *bs = strrchr(exe, '\\');
+    if (bs && (!slash || bs > slash)) slash = bs;
+#endif
     int w = slash ? snprintf(out, n, "%.*s/web", (int)(slash - exe), exe) : snprintf(out, n, "web");
     return w > 0 && (size_t)w < n;
 }
@@ -288,7 +324,29 @@ static int open_main(const char *argv0, int argc, char **argv) {
     return rc;
 }
 
+#ifdef _WIN32
+/* The arguments as UTF-8 (main's argv is in the ANSI code page): from GetCommandLineW. NULL on
+ * a failure (then main's argv as is). Never freed: they live as long as the process. */
+static char **utf8_argv(int *argc) {
+    int n;
+    wchar_t **w = CommandLineToArgvW(GetCommandLineW(), &n);
+    if (!w) return NULL;
+    char **a = calloc((size_t)n + 1, sizeof *a);
+    for (int i = 0; a && i < n; i++)
+        if (!(a[i] = cc_win_utf8(w[i]))) a = NULL; /* leaked: once, at start */
+    LocalFree(w);
+    if (a) *argc = n;
+    return a;
+}
+#endif
+
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    {
+        char **u = utf8_argv(&argc);
+        if (u) argv = u;
+    }
+#endif
     if (argc > 1 && !strcmp(argv[1], "mcp")) return cc_mcp_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "--version")) {
         printf("bimble-ccore %s\n", CC_RELEASE_VERSION);

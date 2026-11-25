@@ -4,10 +4,12 @@
 # bash 3.2 rules for every script that sources this: no `wait -n`, no $BASHPID, no
 # $EPOCHREALTIME without a fallback, and an array that may be empty is expanded as
 # ${a[@]+"${a[@]}"} (bash before 4.4 calls "${a[@]}" of an empty array unbound under set -u).
-#   CC_OS             Linux, Darwin... (uname -s)
+#   CC_OS             Linux, Darwin... (uname -s); Windows under MSYS2 (ticket WIN1)
 #   PLATFORM_CFLAGS   C flags of this OS for every native compile: on macOS -D_DARWIN_C_SOURCE,
 #                     because a file that defines _POSIX_C_SOURCE otherwise loses MAP_ANONYMOUS,
-#                     SO_NOSIGPIPE, st_mtimespec... (the glibc build needs no flag)
+#                     SO_NOSIGPIPE, st_mtimespec... (the glibc build needs no flag); -pthread on
+#                     Windows (winpthreads)
+#   PLATFORM_LIBS     libraries of this OS for the host's link: -lws2_32 on Windows, else none
 #   ms_now            milliseconds since the epoch (GNU date %N, else bash 5's EPOCHREALTIME,
 #                     else perl, else whole seconds)
 #   us_now            microseconds since the epoch (EPOCHREALTIME without a fork, else as ms_now)
@@ -18,8 +20,14 @@
 #   file_sig <f...>   "<name> <mtime s> <size>" per file (GNU stat -c, BSD stat -f)
 
 CC_OS=$(uname -s)
-PLATFORM_CFLAGS=()
+PLATFORM_CFLAGS=() PLATFORM_LIBS=()
 [[ $CC_OS == Darwin ]] && PLATFORM_CFLAGS=(-D_DARWIN_C_SOURCE)
+# WIN1: Windows under MSYS2 (uname -s: MINGW64_NT-..., CLANG64_NT-..., UCRT64_NT-..., MSYS_NT-...)
+# is CC_OS=Windows. clang for x86_64-w64-mingw32: -pthread links winpthreads (jobs.c, and
+# clock_gettime); PLATFORM_LIBS: Winsock, for the host's link only (server.c).
+case $CC_OS in MINGW* | MSYS* | CLANG* | UCRT* | CYGWIN* | Windows*)
+    CC_OS=Windows PLATFORM_CFLAGS=(-pthread) PLATFORM_LIBS=(-lws2_32) ;;
+esac
 
 if [[ $(date +%N 2> /dev/null) =~ ^[0-9]+$ ]]; then
     ms_now() { local t; t=$(date +%s%N); echo "${t:0:13}"; }

@@ -420,7 +420,11 @@ static void test_session(void) {
     size_t n;
     char *json = slurp(G, "model.json", &n);
     const char *copy = "out/test-draw_sheet/frame.json";
+#ifdef _WIN32
+    mkdir("out/test-draw_sheet"); /* WIN1: no mode argument there */
+#else
     mkdir("out/test-draw_sheet", 0755);
+#endif
     FILE *f = fopen(copy, "wb");
     check_true("copy model.json", f && fwrite(json, 1, n, f) == n);
     if (f) fclose(f);

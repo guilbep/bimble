@@ -51,7 +51,7 @@ secs() { printf '%d.%02d' $(($1 / 1000000)) $(($1 % 1000000 / 10000)); }
 # The library: every src/*.c but the wasm stub, as build.sh compiles it, the session layer and
 # the native platform. Each suite links all the objects, as the one command line of before did.
 SRC=(); for f in src/*.c; do [[ $f == src/wasm_stub.c ]] || SRC+=("$f"); done
-SRC+=(session/*.c host/platform_native.c)
+SRC+=(session/*.c host/platform_native.c host/platform_win.c) # WIN1: platform_win.c is empty but on Windows
 OBJ=()
 jobs_reset
 for f in "${SRC[@]}"; do

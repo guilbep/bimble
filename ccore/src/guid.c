@@ -1,3 +1,6 @@
+#if defined(_WIN32) && !defined(_CRT_RAND_S)
+#define _CRT_RAND_S /* WIN1: rand_s (RtlGenRandom) from stdlib.h; before its first include */
+#endif
 #include "guid.h"
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +24,7 @@
 #pragma clang diagnostic pop
 #endif
 
-#ifndef __wasm__
+#if !defined(__wasm__) && !defined(_WIN32)
 #include <errno.h>
 #include <sys/random.h> /* getrandom (Linux), getentropy (macOS) */
 #endif
@@ -287,7 +290,17 @@ void cc_guid_entropy(const void *data, size_t n) {
     (void)n;
 }
 
-#ifdef __APPLE__
+#if defined(_WIN32)
+/* Windows (ticket WIN1): rand_s, the system's generator (RtlGenRandom), 4 bytes a call; no extra
+ * library to link. */
+static void random_bytes(uint8_t *b, size_t n) {
+    for (size_t i = 0; i < n; i += 4) {
+        unsigned int r;
+        if (rand_s(&r) != 0) abort(); /* no entropy: refuse to make ids that could collide */
+        for (size_t j = 0; j < 4 && i + j < n; j++) b[i + j] = (uint8_t)(r >> (8 * j));
+    }
+}
+#elif defined(__APPLE__)
 /* macOS has no getrandom(): getentropy(), at most 256 bytes a call, all or nothing. */
 static void random_bytes(uint8_t *b, size_t n) {
     for (size_t got = 0; got < n;) {

@@ -279,7 +279,7 @@ does not (`int64_t` is `long long` on macOS, `long` on glibc: a `%ld` or a `uint
 
 ## Windows: what blocks
 
-Nothing has been tried. These estimates are from reading the code.
+The estimates before ticket WIN1, from reading the code. WIN1's changes are in the next section.
 
 | What blocks | Where | Cost |
 |---|---|---|
@@ -296,3 +296,54 @@ Nothing has been tried. These estimates are from reading the code.
 The order of cost: macOS first, with small changes in the build scripts and one `#ifdef`. On
 Windows the HTTP server is the large item. The wasm build does not need a native port: it runs in
 any browser now.
+
+## Windows (ticket WIN1)
+
+Route: MSYS2 CLANG64 on `windows-latest` (clang for `x86_64-w64-mingw32`, UCRT, winpthreads, lld)
+and MSYS2's bash. So `build.sh`, `test/run.sh` and `ci/run.sh` run without a Windows branch of
+their own: `portable.sh` names the OS (`CC_OS=Windows`) and gives `-pthread` (winpthreads: the
+threads of `jobs.c`, `clock_gettime`) and `-lws2_32` (the host's link only). No MSVC: the
+`__atomic_*` builtins, pthreads and the scripts work as they are. Every C change is behind
+`_WIN32`, or is a rename that gives the same code on POSIX (the socket calls of `server.c`).
+
+### What WIN1 changed
+
+| What blocks | Where | Fix |
+|---|---|---|
+| `getrandom()`, `sys/random.h` | `src/guid.c` | `rand_s` (RtlGenRandom; `_CRT_RAND_S` before the first `stdlib.h`): no library to link |
+| `sysconf(_SC_NPROCESSORS_ONLN)` | `src/jobs.c` | `pthread_num_processors_np()` (winpthreads) |
+| BSD sockets, `poll`, `fcntl(O_NONBLOCK)`, `sigaction`, `SIGPIPE`, `errno` of sockets | `host/server.c` | `host/net.h`, header only: `cc_sock`, `net_init` (`WSAStartup`), `net_close` (`closesocket`), `net_nonblock` (`ioctlsocket FIONBIO`), `net_poll` (`WSAPoll`), `net_send`/`net_recv`, `net_interrupted`/`net_would_block` (`WSAGetLastError`), `net_signals` (`signal(SIGINT, SIGTERM)`); on POSIX each is the call of before. Windows: `SO_EXCLUSIVEADDRUSE`, not `SO_REUSEADDR` (there it lets another process bind the port) |
+| `/dev/urandom`, `rename` does not replace, ANSI paths | `host/platform_native.c` | `host/platform_win.c`, the same `cc_platform_native()`: `_wfopen` of UTF-8 paths, `MoveFileExW(REPLACE_EXISTING)` (tried again 10 x 20 ms on a sharing error: a scanner), `QueryPerformanceCounter`, `rand_s`. Each file is empty on the other system; `test/run.sh` and `build.sh` compile both |
+| `open`/`rename`/`unlink`/`access`/`stat` (`st_mtim`) of the session file | `session/session.c` | under `_WIN32` the same calls through `cc_win_open` (CreateFileW with `FILE_SHARE_DELETE`, so the file is replaced while its append handle is open, as on POSIX; always binary), `cc_win_rename`, `cc_win_unlink`, `cc_win_exists`, `cc_win_stamp` (size, mtime in ns since 1970) of `platform_win.c`, declared in `session/platform.h` |
+| `openat`, `fdopendir`, `fstatat`, `O_NOFOLLOW` | `host/static.c` | `FindFirstFileW`/`FindNextFileW`; a reparse point (link, junction) below the root is skipped, as `O_NOFOLLOW` |
+| `fork`/`execlp` of `xdg-open`, `/proc/self/exe`, `sys/wait.h`, ANSI `argv` | `host/main.c` | `ShellExecuteW`, `GetModuleFileNameW` (`<exe dir>\web`), `CommandLineToArgvW` as UTF-8, `rand_s` for the token |
+| `SIGPIPE`; text-mode stdio (`\n` -> `\r\n`) | `host/mcp.c` | `_setmode(_O_BINARY)` on stdin and stdout |
+| `mmap(MAP_ANONYMOUS)` | `test/ifc_in_test.c` | `VirtualAlloc` |
+| `mkdir(path, mode)` | `test/draw_sheet_test.c`, `tools/ifc_dump.c` | `mkdir(path)` |
+| the kernel's `.so`, `-lstdc++` | `deps.sh` | no shared library on Windows (no tcc there), `-lc++` (CLANG64's C++ library) |
+| CRLF at checkout (the runner's git: `core.autocrlf true`) | the goldens | `git config --global core.autocrlf false` before the checkout (no `.gitattributes` exists; none added) |
+
+### Checked before the push (dev machine, no Windows)
+
+zig 0.17.1's clang with its mingw-w64 headers and libraries (`zig cc -target x86_64-windows-gnu`,
+already installed; no system package added): every C file alone with `-Wall -Wextra -Werror`
+(the old code: 10 of 99 files fail; now 100 of 100 compile), then every suite, `ifc_dump` and
+the host linked as PE32+ executables (33 of 33; the host imports `WS2_32.dll`, `SHELL32.dll`,
+`KERNEL32.dll` and the UCRT). Nothing ran: no Windows, no Wine. Linux: `ci/run.sh full` and
+`ci/run.sh clang`.
+
+### The job `ccore-windows`
+
+`continue-on-error: true`, not in `ccore-prerelease`'s `needs`. Steps: versions (uname, clang,
+cmake, node, Chrome's file version, the checkout's line ends per golden file), the compile check
+(`compile check: N files, M failed`), `CC_NO_KERNEL=1 ci/run.sh clang` (`run-clang`: test/run.sh;
+`host`: test/host.sh with `HOST_BUILD=native`, host_test and lab_boot in Chrome), the logs of the
+failed suites, then a probe of the kernel (`deps.sh` with cmake and Ninja; `test/run.sh` with it),
+which does not fail the steps above. Logs: artifact `ccore-windows-logs`.
+
+Expected failures, from reading the tests (not the C core): `host_test.mjs` checks "SIGTERM ->
+exits 0", but Node on Windows kills with `TerminateProcess` (exit code 1, no handler runs);
+`lab_boot.mjs` stops Vite and Chrome by process group (`process.kill(-pid)`), which Windows does
+not have. Both are for the owner of `test/*.mjs`.
+
+Measured on Windows: nothing yet. The first push gives the rows.

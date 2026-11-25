@@ -4,7 +4,16 @@
 #define _POSIX_C_SOURCE 200809L
 #include "static.h"
 
+#ifdef _WIN32
+/* Windows (ticket WIN1): FindFirstFileW / FindNextFileW; a reparse point (symbolic link,
+ * junction) below the root is never followed, as O_NOFOLLOW above. */
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <io.h>
+#include "host.h" /* cc_win_wide, cc_win_utf8 */
+#else
 #include <dirent.h>
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -110,6 +119,88 @@ static int add_file(cc_static *s, int fd, off_t size, const char *path, char *er
     return 0;
 }
 
+#ifdef _WIN32
+/* Walks the directory `dir`, whose served path is `prefix` ("" for the root). */
+static int walk(cc_static *s, const wchar_t *dir, const char *prefix, int depth, char *err, size_t errn) {
+    size_t dn = wcslen(dir);
+    wchar_t *pat = malloc((dn + 3) * sizeof *pat);
+    if (!pat) {
+        fail(err, errn, "out of memory");
+        return -1;
+    }
+    memcpy(pat, dir, dn * sizeof *pat);
+    pat[dn] = L'\\', pat[dn + 1] = L'*', pat[dn + 2] = 0;
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pat, &fd);
+    free(pat);
+    if (h == INVALID_HANDLE_VALUE) {
+        fail(err, errn, "%s/: cannot read the folder (error %lu)", prefix, (unsigned long)GetLastError());
+        return -1;
+    }
+    int rc = 0;
+    char path[CC_STATIC_MAX_PATH];
+    do {
+        char *name = cc_win_utf8(fd.cFileName);
+        if (!name) {
+            fail(err, errn, "%s/: a name that is not valid UTF-16", prefix);
+            rc = -1;
+            break;
+        }
+        int ok = name_ok(name);
+        int pn = ok ? snprintf(path, sizeof path, "%s/%s", prefix, name) : 0;
+        free(name);
+        if (!ok) continue;
+        if (pn < 0 || (size_t)pn >= sizeof path) {
+            fail(err, errn, "a path longer than %d bytes under %s/", CC_STATIC_MAX_PATH - 1, prefix);
+            rc = -1;
+            break;
+        }
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue; /* links: not served */
+        size_t fn = wcslen(fd.cFileName);
+        wchar_t *full = malloc((dn + fn + 2) * sizeof *full);
+        if (!full) {
+            fail(err, errn, "out of memory");
+            rc = -1;
+            break;
+        }
+        memcpy(full, dir, dn * sizeof *full);
+        full[dn] = L'\\';
+        memcpy(full + dn + 1, fd.cFileName, (fn + 1) * sizeof *full);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (depth >= CC_STATIC_MAX_DEPTH) {
+                fail(err, errn, "%s/: deeper than %d directories", path, CC_STATIC_MAX_DEPTH);
+                rc = -1;
+            } else {
+                rc = walk(s, full, path, depth + 1, err, errn);
+            }
+        } else if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DEVICE)) {
+            HANDLE fh = CreateFileW(full, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+            LARGE_INTEGER sz;
+            if (fh != INVALID_HANDLE_VALUE && GetFileSizeEx(fh, &sz)) {
+                int cfd = _open_osfhandle((intptr_t)fh, _O_RDONLY | _O_BINARY);
+                if (cfd >= 0) {
+                    /* off_t is 32 bits here: anything over the limit is "over the limit". */
+                    off_t size = sz.QuadPart > (LONGLONG)CC_STATIC_MAX_BYTES ? (off_t)CC_STATIC_MAX_BYTES + 1 : (off_t)sz.QuadPart;
+                    rc = add_file(s, cfd, size, path, err, errn);
+                    _close(cfd);
+                } else {
+                    CloseHandle(fh);
+                }
+            } else if (fh != INVALID_HANDLE_VALUE) {
+                CloseHandle(fh);
+            }
+        }
+        free(full);
+    } while (rc == 0 && FindNextFileW(h, &fd));
+    if (rc == 0 && GetLastError() != ERROR_NO_MORE_FILES) {
+        fail(err, errn, "%s/: cannot read the folder (error %lu)", prefix, (unsigned long)GetLastError());
+        rc = -1;
+    }
+    FindClose(h);
+    return rc;
+}
+#else
 /* Walks the directory `dfd` (closed here), whose served path is `prefix` ("" for the root). */
 static int walk(cc_static *s, int dfd, const char *prefix, int depth, char *err, size_t errn) {
     DIR *d = fdopendir(dfd);
@@ -156,6 +247,7 @@ static int walk(cc_static *s, int dfd, const char *prefix, int depth, char *err,
     closedir(d);
     return rc;
 }
+#endif
 
 static int by_path(const void *a, const void *b) {
     return strcmp(((const cc_static_file *)a)->path, ((const cc_static_file *)b)->path);
@@ -169,6 +261,18 @@ cc_static *cc_static_load(const char *dir, char *err, size_t errn) {
         return NULL;
     }
     /* The root itself may be a link (an installed tree); nothing below it is followed. */
+#ifdef _WIN32
+    wchar_t *wdir = cc_win_wide(dir);
+    DWORD at = wdir ? GetFileAttributesW(wdir) : INVALID_FILE_ATTRIBUTES;
+    if (at == INVALID_FILE_ATTRIBUTES || !(at & FILE_ATTRIBUTE_DIRECTORY)) {
+        fail(err, errn, "%s: not a folder", dir);
+        free(wdir), free(s);
+        return NULL;
+    }
+    int wrc = walk(s, wdir, "", 0, err, errn);
+    free(wdir);
+    if (wrc < 0) {
+#else
     int dfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (dfd < 0) {
         fail(err, errn, "%s: %s", dir, strerror(errno));
@@ -176,6 +280,7 @@ cc_static *cc_static_load(const char *dir, char *err, size_t errn) {
         return NULL;
     }
     if (walk(s, dfd, "", 0, err, errn) < 0) {
+#endif
         cc_static_free(s);
         return NULL;
     }

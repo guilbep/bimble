@@ -1,7 +1,8 @@
 /* cc_platform: what the session layer (L5) needs from the world, passed in by the carrier (L6)
  * that creates the session (docs/research/core-architecture.md §5). The session code calls
  * only these for files, time, randomness and logging; it has no #ifdef per platform.
- *   native: host/platform_native.c (cc_platform_native: POSIX files, clocks, /dev/urandom, stderr)
+ *   native: host/platform_native.c (cc_platform_native: POSIX files, clocks, /dev/urandom, stderr);
+ *           on Windows host/platform_win.c (ticket WIN1: wide-character files, rand_s)
  *   wasm:   src/wasm_api.c (no files: the page stages the bytes an open reads, and the module
  *           keeps the last file written (Save, Save as, Export IFC) for the page to download;
  *           the wall clock is the page's (host_clock); the log is read back through host_log)
@@ -42,6 +43,20 @@ typedef struct cc_platform {
      * carrier written before it) reads as no folders too. */
     int (*list_dir)(void *ctx, const char *path, size_t max, char **names, size_t *n);
 } cc_platform;
+
+#ifdef _WIN32
+/* Windows (ticket WIN1, host/platform_win.c): the POSIX file calls the session file makes
+ * (session.c), over the wide-character API: UTF-8 paths, binary mode, a rename that replaces its
+ * target (also while an append handle of it is open). Same results as open, rename, unlink,
+ * access(F_OK) == 0; cc_win_stamp: size and mtime in ns since 1970, 0 or -1. Not in the wasm
+ * build. TODO(round 2): behind cc_platform members, so L5 calls no system function at all. */
+int cc_win_open(const char *path, int flags);
+int cc_win_rename(const char *from, const char *to);
+int cc_win_unlink(const char *path);
+int cc_win_exists(const char *path);
+int cc_win_stamp(const char *path, uint64_t *size, uint64_t *mtime_ns);
+int cc_win_random(void *p, size_t n);
+#endif
 
 /* printf-style log line through pf->log ("bimble-ccore: …"). At most 8 KiB, cut beyond. */
 void cc_log(const cc_platform *pf, const char *fmt, ...)
