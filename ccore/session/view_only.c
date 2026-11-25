@@ -11,6 +11,7 @@ static const char *const REFUSED_ACTIONS[] = {
     "new", "import_ifc", "convert_open", "save", "save_as", "export_ifc4", "export_ifc2x3",
     "share_for_viewing", "undo", "redo", "link_pdf", /* L1 */
     "link_dxf", /* L2 */
+    "paper_view", "on_paper", /* PAPER1: no drawing on paper in this build */
 };
 
 static int refused(const char *op, const char *name) {

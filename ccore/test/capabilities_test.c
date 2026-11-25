@@ -108,7 +108,15 @@ int main(void) {
     check_true("about false <=> action about off", (cap(c1, "about") == 0) == !enabled(s, "about"));
     check_true("materials false <=> action materials off", (cap(c1, "materials") == 0) == !enabled(s, "materials"));
     check_true("collaboration false <=> action shared_folder off", (cap(c1, "collaboration") == 0) == !enabled(s, "shared_folder"));
-    check_true("export_view false <=> action on_paper off", (cap(c1, "export_view") == 0) == !enabled(s, "on_paper"));
+    /* PAPER1: export_view and paper_view are served now: Export view is enabled with a model, and
+     * view_svg draws a view (false before PAPER1). */
+    check_true("export_view true <=> action on_paper on", cap(c1, "export_view") == 1 && enabled(s, "on_paper"));
+    {
+        char *vs = ask(s, "query", "view_svg", "{\"view\":\"nope\"}", &st);
+        check_true("paper_view true <=> query view_svg is served (an unknown view's error)",
+                   cap(c1, "paper_view") == 1 && st == CC_ERR && !strncmp(vs, "no view with id", 15));
+        free(vs);
+    }
     check_true("plan_annotations false <=> action section_labels off", (cap(c1, "plan_annotations") == 0) == !enabled(s, "section_labels"));
     /* True rows: they answer. */
     char *sl = ask(s, "query", "schedule_list", "", &st);

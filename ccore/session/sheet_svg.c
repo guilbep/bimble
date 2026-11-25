@@ -93,6 +93,13 @@ int cc_paper_sheet_pdf(struct cc_session *s, const cc_scene *sc, const cc_sheet 
     buf_puts(err, CC_VIEW_ONLY_TEXT);
     return -1;
 }
+/* ---- PAPER1: the viewer build draws nothing on paper ---- */
+int cc_paper_view_svg(struct cc_session *s, const cc_scene *sc, const char *body, size_t n, Buf *out) {
+    (void)s, (void)sc, (void)body, (void)n;
+    buf_puts(out, CC_VIEW_ONLY_TEXT);
+    return CC_ERR;
+}
+/* ---- end PAPER1 ---- */
 #else
 /* Path::file_stem of the session's path: the file name without its last extension (a name that
  * starts with its only dot keeps it). */
@@ -327,9 +334,21 @@ int cc_paper_fonts_query(struct cc_session *s, Buf *out) {
     return jw_finish(&w) == JW_OK && !out->oom ? CC_OK : CC_ERR;
 }
 
-/* The sheet or the view on paper with `font`, into `a`. 0 ok; else -1 with the text in `err`. */
+/* The sheet or the view on paper with `font`, into `a`. 0 ok; else -1 with the text in `err`.
+ * PAPER1: `bare` (a view only: paper.rs refresh_paper's On paper picture), `pinfo` (a view's
+ * PlanInfo, or NULL). Note for KEY1: Rust draws with the viewer's plan template (self.plan.template,
+ * which the actions section_labels, openings, section_marks, slab_levels toggle); this takes the
+ * default one, so once the session keeps those toggles they belong here too. */
+static int draw_paper_ex(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, const cc_view *v,
+                         const cc_view *views, size_t nv, cc_sheet_font font, int bare, cc_plan_info *pinfo_out,
+                         Arena *a, cc_paper *paper, Buf *err);
 static int draw_paper(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, const cc_view *v,
                       const cc_view *views, size_t nv, cc_sheet_font font, Arena *a, cc_paper *paper, Buf *err) {
+    return draw_paper_ex(s, sc, sh, v, views, nv, font, 0, NULL, a, paper, err);
+}
+static int draw_paper_ex(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, const cc_view *v,
+                         const cc_view *views, size_t nv, cc_sheet_font font, int bare, cc_plan_info *pinfo_out,
+                         Arena *a, cc_paper *paper, Buf *err) {
     char date[32];
     cc_iso_utc(s->pf->unix_s ? s->pf->unix_s(s->pf->ctx) : 0, date);
     date[10] = 0; /* YYYY-MM-DD */
@@ -365,8 +384,10 @@ static int draw_paper(struct cc_session *s, const cc_scene *sc, const cc_sheet *
         po.view = v;
         po.section_marks = marks;
         po.nsection_marks = nm;
+        po.bare = bare; /* PAPER1 */
         cc_plan_info pinfo;
         r = cc_plan(sc, &s->model, &po, a, paper, &pinfo, &derr);
+        if (!r && pinfo_out) *pinfo_out = pinfo;
     }
     if (r) {
         if (r < 0 || derr.oom) buf_puts(err, "out of memory");
@@ -494,4 +515,89 @@ end:
     arena_free(&a);
     return rc;
 }
+/* ---- PAPER1: view_svg (a view's paper as SVG) ---- */
+
+/* "font": absent or null -> `dflt`, "roboto" or "helvetica"; else -1 with the error in `out`. */
+static int font_of(const JrVal *v, int dflt, Buf *out) {
+    const JrVal *fv = v && v->type == JR_OBJ ? jr_get(v, "font") : NULL;
+    if (!fv || fv->type == JR_NULL) return dflt;
+    if (fv->type == JR_STR && fv->n == 6 && !memcmp(fv->s, "roboto", 6)) return 1;
+    if (fv->type == JR_STR && fv->n == 9 && !memcmp(fv->s, "helvetica", 9)) return 0;
+    buf_puts(out, "font: \"helvetica\" or \"roboto\"");
+    return -1;
+}
+
+int cc_paper_view_svg(struct cc_session *s, const cc_scene *sc, const char *body, size_t n, Buf *out) {
+    Arena a;
+    arena_init(&a, 0);
+    int rc = CC_ERR;
+    Buf svg;
+    buf_init(&svg);
+    JrError je;
+    const JrVal *v = jr_parse(&a, body, n, &je);
+    const JrVal *idv = v && v->type == JR_OBJ ? jr_get(v, "view") : NULL;
+    const JrVal *bv = v && v->type == JR_OBJ ? jr_get(v, "bare") : NULL;
+    if (!v) {
+        buf_puts(out, je.msg);
+        goto end;
+    }
+    if (!idv || idv->type != JR_STR) {
+        buf_puts(out, idv ? "view: a string" : "missing field `view`");
+        goto end;
+    }
+    if (bv && bv->type != JR_BOOL && bv->type != JR_NULL) {
+        buf_puts(out, "bare: true or false");
+        goto end;
+    }
+    int roboto = font_of(v, 1, out); /* the SVG names its font: the style's (Roboto) by default */
+    if (roboto < 0) goto end;
+    const cc_view *vw = NULL;
+    cc_view *views = NULL;
+    size_t nv = 0;
+    if (s->open && idv->n == 22) {
+        cc_gid id;
+        memcpy(id.c, idv->s, 22);
+        if (cc_views_effective(&s->model, &a, &views, &nv)) {
+            buf_puts(out, "out of memory");
+            goto end;
+        }
+        for (size_t k = 0; k < nv && !vw; k++)
+            if (!cc_gid_cmp(&views[k].id, &id)) vw = &views[k];
+    }
+    if (!vw) {
+        buf_puts(out, "no view with id ");
+        debug_str(out, idv->s, idv->n);
+        goto end;
+    }
+    if (!sc) {
+        buf_puts(out, "no model open");
+        goto end;
+    }
+    cc_paper paper;
+    cc_plan_info info;
+    if (draw_paper_ex(s, sc, NULL, vw, views, nv, roboto ? CC_FONT_ROBOTO : CC_FONT_HELVETICA,
+                      bv && bv->type == JR_BOOL && bv->b, &info, &a, &paper, out))
+        goto end;
+    if (cc_paper_svg(&paper, &svg)) {
+        buf_puts(out, "out of memory");
+        goto end;
+    }
+    JsonW w;
+    jw_init(&w, out, 0);
+    jw_obj_begin(&w);
+    jw_key(&w, "height_mm"), jw_f64(&w, paper.height_mm);
+    jw_key(&w, "paper"), jw_str(&w, cc_paper_size_name(info.paper));
+    jw_key(&w, "portrait"), jw_bool(&w, info.portrait);
+    jw_key(&w, "scale"), jw_u64(&w, vw->scale);
+    jw_key(&w, "svg"), jw_str_n(&w, svg.p, svg.len);
+    jw_key(&w, "width_mm"), jw_f64(&w, paper.width_mm);
+    jw_obj_end(&w);
+    rc = jw_finish(&w) == JW_OK && !out->oom ? CC_OK : CC_ERR;
+end:
+    buf_free(&svg);
+    arena_free(&a);
+    return rc;
+}
+
+/* ---- end PAPER1 ---- */
 #endif

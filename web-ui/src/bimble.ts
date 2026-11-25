@@ -976,6 +976,12 @@ export async function viewPdf(id: string): Promise<Uint8Array> {
 export const sheetPdfName = (s: { number: string; name: string }) => `${s.number} ${s.name}.pdf`;
 export const viewPdfName = (v: { name: string; scale: number }) => `plan-${v.name}-1-${v.scale}.pdf`;
 // ---- end D7 ----
+// ---- PAPER1: a view On paper and Export view as SVG (`view_svg`) ----
+/** `query view_svg`: the view's paper as SVG, its paper and scale. `bare`: the On paper picture (paper.rs). */
+export interface ViewSvg { svg: string; paper: string; portrait: boolean; scale: number; width_mm: number; height_mm: number }
+export const viewSvg = (id: string, bare = false, font?: PdfFont): ViewSvg =>
+  query<ViewSvg>("view_svg", { view: id, ...(bare ? { bare } : {}), ...(font ? { font } : {}) });
+// ---- end PAPER1 ----
 
 /** Run one ribbon action by name (see `actions`). Returns the Rust error, or null. */
 /** Actions the lab shows as a Vue screen instead of egui's (App.vue fills it: no import cycle). */

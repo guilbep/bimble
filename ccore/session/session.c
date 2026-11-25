@@ -43,6 +43,7 @@ void cc_session_free(cc_session *s) {
     cc_links_clear(s);
     free(s->links);
     free(s->tabs);
+    free(s->paper_views); /* PAPER1 */
     free(s->undo_ids), free(s->redo_ids), free(s->also), free(s->material);
     if (s->scene_rev) cc_scene_free(&s->scene);
     buf_free(&s->mesh);
@@ -148,6 +149,7 @@ static void drop_model(cc_session *s) {
     free(s->material), s->material = NULL;
     s->open = 0, s->untitled = 0;
     s->ntabs = 0, s->has_active = 0, s->tab_open = 0;
+    s->npaper_views = 0; /* PAPER1: lib.rs:1661 paper_views.clear() */
 }
 
 /* Makes `m` (loaded, validated) the session's model at `path`: a fresh history and editor (as

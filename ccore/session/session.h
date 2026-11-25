@@ -131,6 +131,13 @@ typedef struct cc_session {
     /* ---- KEY1: the plan annotation toggles (toggles.h), bit i set = off; 0 (all on) as new ---- */
     unsigned plan_off;
     /* ---- end KEY1 ---- */
+    /* ---- PAPER1: paper.rs paper_views, the views shown On paper (by id, unsorted, unique;
+     * cleared with the model, lib.rs:1661); plan_window: the Export view window (ribbon.rs:722
+     * Action::OnPaper toggles it, :630 drawn pressed) ---- */
+    cc_gid *paper_views;
+    size_t npaper_views, cappaper_views;
+    int plan_window;
+    /* ---- end PAPER1 ---- */
 } cc_session;
 
 /* A new session with no model, on `pf` (kept by pointer). NULL when out of memory. */

@@ -23,7 +23,7 @@ static const struct {
     {"export_ifc", FULL_BUILD},
     {"export_pdf", FULL_BUILD}, /* sheet_svg.h sheet_pdf, view_pdf (D7) */
     {"export_svg", FULL_BUILD}, /* sheet_svg.h sheet_svg (D5) */
-    {"export_view", NO},       /* action on_paper (PAPER1) */
+    {"export_view", FULL_BUILD}, /* action on_paper: Export view (view_pdf, view_svg; PAPER1) */
     {"georef", YES},           /* query north, coordinates (ADR 0045); G2's setting-out panel */
     {"grids", YES},            /* query grids, grid_axes (S1); G2 */
     {"history", YES},          /* query history: the undo list (calls.rs:346) */
@@ -33,7 +33,7 @@ static const struct {
     {"materials", NO},         /* the materials browser (MAT1); the query materials is a list only */
     {"measure", YES},          /* the measure tool (T1) */
     {"palette", YES},          /* query palette_match (Q2) */
-    {"paper_view", NO},        /* action paper_view, the On paper switch (PAPER1) */
+    {"paper_view", FULL_BUILD}, /* action paper_view, the On paper switch (view_svg; PAPER1) */
     {"phases", NO},
     {"plan_annotations", YES},  /* actions section_labels, openings, section_marks, slab_levels (KEY1) */
     {"project_info", YES},     /* query project, verb set_project_field */

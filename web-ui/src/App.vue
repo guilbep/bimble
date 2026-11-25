@@ -41,6 +41,11 @@ import SmallTop from "./small/SmallTop.vue";
 import SmallBar from "./small/SmallBar.vue";
 import SmallSheet from "./small/SmallSheet.vue";
 import SmallFloat from "./small/SmallFloat.vue";
+// ---- PAPER1: the active plan or section On paper, over the viewport (kept alive, its canvas hidden) ----
+import PaperView from "./shell/PaperView.vue";
+import { openViews } from "./bimble";
+const paperOn = computed(() => openViews.value.paper.on);
+// ---- end PAPER1 ----
 
 // ---- KEY1 ---- every shortcut, Esc's layers too (dialog, sheet, question, tool, selection, page): shell/keys.ts
 import { installKeys } from "./shell/keys";
@@ -78,7 +83,8 @@ onMounted(() => { installKeys(); void applyDeepLink(); });
           <!-- Hidden, never removed, under a page. -->
           <div v-show="!(currentPage && pages[currentPage])" class="bb-vp" data-bb="viewport">
             <!-- Never re-created (no v-if): the viewer binds to it at init(). -->
-            <canvas id="bimble" />
+            <canvas id="bimble" :style="paperOn ? { visibility: 'hidden' } : undefined" />
+            <PaperView v-if="paperOn" /><!-- PAPER1 -->
             <SmallFloat v-if="small" />
             <p v-if="startError" class="start-error" role="alert">{{ t('app.startError', { msg: startError }) }}</p>
           </div>

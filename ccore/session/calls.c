@@ -542,6 +542,43 @@ static int in_2d(cc_session *s) {
     return flat;
 }
 
+/* ---- PAPER1: On paper (paper.rs). Rust's on_paper(): no sheet shown (layout.is_none()), a 2D
+ * view shown, and that view in paper_views. paper.rs:217-227: placing and measuring are done on
+ * the model, so either switches the active view back to Model (Rust does it at the next frame;
+ * here when asked). The drawing reads the model: a read-only scene has no On paper (DEVIATIONS 22). */
+static int sheet_now(cc_session *s) { return s->sheet_shown && cc_sheet_known(s, &s->sheet); }
+static int two_pictures(cc_session *s) { return s->open && in_2d(s) && !sheet_now(s); } /* ribbon.rs:1478 */
+static long paper_find(const cc_session *s) {
+    for (size_t i = 0; s->has_active && i < s->npaper_views; i++)
+        if (!cc_gid_cmp(&s->paper_views[i], &s->active)) return (long)i;
+    return -1;
+}
+static int on_paper(cc_session *s) {
+    long i = paper_find(s);
+    if (i >= 0 && s->open && (s->placing || s->measure.on)) {
+        s->paper_views[i] = s->paper_views[--s->npaper_views];
+        cc_log(s->pf, "bimble-ccore: Switched to Model: elements are placed and measured on the model");
+        return 0;
+    }
+    return i >= 0 && two_pictures(s);
+}
+static int set_on_paper(cc_session *s, int on) { /* paper.rs:70 (the camera stays the page's) */
+    if (!two_pictures(s)) return CC_OK;
+    long i = paper_find(s);
+    if (!on && i >= 0) s->paper_views[i] = s->paper_views[--s->npaper_views];
+    if (on && i < 0) {
+        if (s->npaper_views == s->cappaper_views) {
+            size_t c = s->cappaper_views ? 2 * s->cappaper_views : 4;
+            cc_gid *p = realloc(s->paper_views, c * sizeof *p);
+            if (!p) return CC_ERR;
+            s->paper_views = p, s->cappaper_views = c;
+        }
+        s->paper_views[s->npaper_views++] = s->active;
+    }
+    return CC_OK;
+}
+/* ---- end PAPER1 ---- */
+
 static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-612, the C core's subset */
     if (!strcmp(name, "new") || !strcmp(name, "open") || !strcmp(name, "import_ifc")) return 1; /* ribbon.rs:559 */
     if (!strcmp(name, "save_as")) return s->open; /* not ribbon actions (file_action) */
@@ -583,6 +620,11 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "project") || !strcmp(name, "history") || !strcmp(name, "new_sheet")) return s->open;
     if (!strcmp(name, "close_sheet")) return loaded(s) && s->sheet_shown && cc_sheet_known(s, &s->sheet);
     /* ---- end FAKE1 ---- */
+    /* ---- PAPER1: ribbon.rs:597 PaperView two_pictures(); OnPaper (Export view) `_ => loaded`
+     * (the C core draws a model's views only: s->open) ---- */
+    if (!strcmp(name, "paper_view")) return two_pictures(s);
+    if (!strcmp(name, "on_paper")) return s->open;
+    /* ---- end PAPER1 ---- */
     if (!strcmp(name, "clear_temporary")) return loaded(s) && s->vis.has_temp;
     if (!strcmp(name, "show_all_in_view")) return loaded(s) && cc_vis_hidden_in_view(&s->vis);
     if (!strcmp(name, "hide_now") || !strcmp(name, "isolate_now") || !strcmp(name, "hide_in_view") || !strcmp(name, "isolate_in_view"))
@@ -606,6 +648,8 @@ static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strcmp(a->name, "hatching")) return s->hatching;         /* Q2: ribbon.rs:627 opts.hatching */
     if (!strcmp(a->name, "orthographic")) return s->orthographic; /* Q2: ribbon.rs:628 camera.orthographic */
     if (cc_toggle_index(a->name) >= 0) return cc_toggle_on(s, cc_toggle_index(a->name)); /* KEY1: ribbon.rs:631-634 */
+    if (!strcmp(a->name, "paper_view")) return on_paper(s);         /* PAPER1: ribbon.rs:631 */
+    if (!strcmp(a->name, "on_paper")) return s->open && s->plan_window; /* PAPER1: ribbon.rs:630 */
     return a->pressed;
 }
 
@@ -637,8 +681,8 @@ static int q_visibility(cc_session *s, JsonW *w) { /* calls.rs:442-460 (visibili
 /* calls.rs:362-397 (views.h): the views shown (the defaults made from the storeys, stored ones
  * over them), the active one, the open tabs in order, the current one (null: Home). A ViewSummary
  * through to_value is a sorted map (api/query.rs:164-178, `type` flattened), plus `auto_name`
- * (viewing.rs:17-38). paper: offered for a plan or section shown (ribbon.rs:1478 two_pictures);
- * never on (the C core has no On paper picture). */
+ * (viewing.rs:17-38). paper: offered for a plan or section shown (ribbon.rs:1478 two_pictures),
+ * on while that view is shown On paper (PAPER1, paper.rs:60). */
 static int q_open_views(cc_session *s, JsonW *w) {
     if (cc_sv_sync(s)) return w->b->oom = 1, CC_ERR;
     Arena a;
@@ -661,8 +705,9 @@ static int q_open_views(cc_session *s, JsonW *w) {
     else jw_null(w);
     jw_key(w, "paper");
     jw_obj_begin(w);
-    jw_key(w, "offered"), jw_bool(w, twod);
-    jw_key(w, "on"), jw_bool(w, 0);
+    (void)twod;
+    jw_key(w, "offered"), jw_bool(w, two_pictures(s)); /* PAPER1: no sheet shown, a model's view */
+    jw_key(w, "on"), jw_bool(w, on_paper(s));
     jw_obj_end(w);
     jw_key(w, "tabs"), jw_arr_begin(w);
     for (size_t i = 0; loaded(s) && i < s->ntabs; i++) cc_sv_tab_json(w, &s->tabs[i]);
@@ -1047,6 +1092,9 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "sheet_pdf") || !strcmp(name, "view_pdf"))
         return cc_paper_pdf_query(s, s->open ? scene_now(s) : NULL, name[0] == 'v', body, n, out);
     if (!strcmp(name, "pdf_fonts")) return cc_paper_fonts_query(s, out); /* SIZE1: the export's font choice */
+    /* ---- PAPER1: a view's paper as SVG (sheet_svg.h) ---- */
+    if (!strcmp(name, "view_svg")) return cc_paper_view_svg(s, s->open ? scene_now(s) : NULL, body, n, out);
+    /* ---- end PAPER1 ---- */
     if (s->open) return model_query(s, name, body, n, out); /* calls.rs:276-309 and :519-527 */
     if (!strcmp(name, "north") || !strcmp(name, "coordinates")) { /* ADR 0045, query.h: null without a model */
         buf_puts(out, "null");
@@ -1458,6 +1506,10 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     if (!strcmp(name, "hatching")) return s->hatching = !s->hatching, CC_OK;
     if (!strcmp(name, "orthographic")) return s->orthographic = !s->orthographic, CC_OK;
     if (!strcmp(name, "fit") || !strcmp(name, "top")) return CC_OK;
+    /* ---- PAPER1: ribbon.rs:722-723 ---- */
+    if (!strcmp(name, "paper_view")) return set_on_paper(s, !on_paper(s)) != CC_OK ? (buf_puts(out, "out of memory"), CC_ERR) : CC_OK;
+    if (!strcmp(name, "on_paper")) return s->plan_window = !s->plan_window, CC_OK;
+    /* ---- end PAPER1 ---- */
     /* ---- FAKE1: ribbon.rs:745-746 new_sheet (layout.rs:185: add_sheet with the next number,
      * "New sheet", then shown), close_sheet (layout.rs:124); project, history: the page opens ---- */
     if (!strcmp(name, "new_sheet")) return new_sheet_action(s, out);
@@ -2495,7 +2547,7 @@ void cc_change_json(cc_session *s, cc_buf *out) { /* calls.rs:134-167 (json!, so
         jw_u64(&w, l ? v->hidden.n : 0);
         jw_u64(&w, l ? v->isolated.n : 0);
         jw_u64(&w, l && cc_vis_hidden_in_view(v));
-        jw_u64(&w, 0); /* on_paper: the C core has no On paper picture */
+        jw_u64(&w, l && on_paper(s)); /* PAPER1: paper.rs:60 */
     }
     jw_u64(&w, loaded(s) ? s->ntabs : 0); /* open_tabs.len() */
     jw_arr_end(&w);
