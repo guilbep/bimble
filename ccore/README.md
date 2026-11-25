@@ -53,3 +53,12 @@ Test: `node ccore/test/dev_test.mjs` (host 47411, Vite 5199) edits `host/calls.c
 breaks and reverts it, and restores it byte for byte. Measured on the 16 GB aarch64 dev machine,
 three runs of 5 cycles: rebuild 190-283 ms (all of `build.sh tcc`: library, the test binaries and the host),
 host up 9-26 ms.
+
+## The lab on the wasm module (no server)
+
+`npm run ccore:wasm` in `web-ui/` builds `ccore.wasm` and copies it and the demo frame into
+`web-ui/public/ccore/`. Then open the lab with `?ccore=1&gl=1`: the page loads the module (244 KB,
+112 KB gzip) and runs the same call code as the native host (`host/calls.c`, `session.c`,
+`mesh.c` compiled in). `?model=<url>` opens another `.bimble` text file; `window.ccoreSave()`
+returns the saved text. Checked by `node test/lab_wasm.mjs`; native and wasm answers are compared
+byte for byte by `node test/wasm_run.mjs` (suite `host`).
