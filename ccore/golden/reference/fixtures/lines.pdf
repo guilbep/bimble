@@ -1,0 +1,77 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 /Resources << /XObject << /Fm1 6 0 R /Im1 7 0 R >> >> >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents [4 0 R 5 0 R] >>
+endobj
+4 0 obj
+<<  /Length 570 >>
+stream
+% a comment line, then an indented one
+   q 1 0 0 1 10 20 cm 0 0 100 50 re S Q
+0 0 m 72 0 l S
+q 0.5 0 0 0.5 0 0 cm
+  100 100 m 200 100 l 200 150 l h S
+Q
+10 300 m 20 340 60 340 70 300 c S
+10 400 m 30 440 70 400 v 90 360 100 400 y s
+/GS1 gs 0.1 0.2 0.3 RG .5 w -.25 +3 m 1. 0.1 l 7 8 l S
+BT /F1 12 Tf 100 700 Td (a (nested) \) string) Tj [(T) -120 (J)] TJ <414243> Tj ET
+300 300 50 50 re W n
+q 2 0 0 2 300 500 cm /Fm1 Do Q
+/Im1 Do
+1 0 0 1 0 0 cm 400 100 m 450 100 l 450 150 l f
+400 200 m 450 200 l 450 250 l b
+500 10 m 500 20 l
+510 10 m S
+true false null /N 1 2 m 3 4 l S
+
+endstream
+endobj
+5 0 obj
+<<  /Length 37 >>
+stream
+q 1 0 0 1 0 600 cm
+0 0 m 0 100 l S Q
+
+endstream
+endobj
+6 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Matrix [1 0 0 1 3 4] /Resources << /XObject << /Fm2 8 0 R >> >> /Length 51 >>
+stream
+0 0 m 10 0 l 10 10 l h S 5 5 m 0 0 2 2 re f /Fm2 Do
+endstream
+endobj
+7 0 obj
+<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /Length 1 >>
+stream
+Ä
+endstream
+endobj
+8 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 2 2] /Matrix [0 1 -1 0 0 0] /Length 13 >>
+stream
+0 0 m 1 1 l S
+endstream
+endobj
+xref
+0 9
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000175 00000 n 
+0000000270 00000 n 
+0000000892 00000 n 
+0000000980 00000 n 
+0000001194 00000 n 
+0000001338 00000 n 
+trailer
+<< /Size 9 /Root 1 0 R >>
+startxref
+1470
+%%EOF

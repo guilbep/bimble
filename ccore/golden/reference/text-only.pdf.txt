@@ -1,0 +1,3 @@
+note PDF page 1 of 2, read at 1:100
+note no vector lines found (a scanned PDF has none)
+polylines 0 points 0

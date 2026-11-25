@@ -20,6 +20,7 @@
 #include "json_w.h"
 #include "library.h"
 #include "links.h"
+#include "links_ref.h" /* L1 */
 #include "mesh.h"
 #include "sheet_svg.h"
 #include "query.h"
@@ -541,6 +542,8 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     /* Links (ticket B5, links.h): ribbon.rs:596 ManageLinks `loaded`, LinkModel `_ => loaded`. */
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return loaded(s);
     if (!strcmp(name, "measure")) return loaded(s); /* ribbon.rs:612 `_ => loaded` (ticket T1) */
+    /* ---- L1: reference plans (links_ref.h): ribbon.rs `_ => loaded`; stored in a model's view ---- */
+    if (!strcmp(name, "link_pdf")) return s->open;
     /* Visibility and the section box (ribbon.rs:592-611; the C core has only the 3D view: never flat). */
     if (!strcmp(name, "section_box") || !strcmp(name, "reveal_hidden")) return loaded(s);
     if (!strcmp(name, "box_to_selection")) return loaded(s) && s->vis.section_on;
@@ -943,8 +946,12 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     }
     if (!strcmp(name, "links")) { /* links.h: [] without links (spec §1's stub) */
         cc_links_json(s, &w);
-        return done(&w);
+        int lrc = done(&w);
+        if (lrc == CC_OK) cc_refs_links_append(s, out); /* L1: then the views' reference plans */
+        return lrc;
     }
+    /* ---- L1: a view's reference plans, placed (links_ref.h) ---- */
+    if (!strcmp(name, "view_references")) return cc_refs_view_references(s, body, n, out) ? CC_ERR : CC_OK;
     if (!strcmp(name, "element")) { /* {"id", "link"}: an element of a linked model (links.h) */
         Arena a;
         arena_init(&a, 0);
@@ -1346,6 +1353,17 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
         return CC_ERR;
     }
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return link_action(s, name, body, n, out);
+    /* ---- L1: link_pdf, one set_view / add_view Command (links_ref.h) ---- */
+    if (!strcmp(name, "link_pdf")) {
+        Arena ra;
+        arena_init(&ra, 0);
+        cc_cmds l;
+        cc_cmds_init(&l);
+        int lrc = cc_refs_link(s, "pdf", body, n, scene_now(s), &ra, &l, out) ? CC_ERR : try_apply(s, l.v, l.n, out);
+        cc_cmds_free(&l);
+        arena_free(&ra);
+        return lrc;
+    }
     FileArgs fa;
     if (file_args(body, n, &fa, out)) return CC_ERR;
     int rc = file_action(s, name, &fa, out);

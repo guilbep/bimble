@@ -17,6 +17,11 @@ uint32_t cc_crc32(uint32_t crc, const void *p, size_t n);
  * its output would pass `max_out` bytes. */
 int cc_gunzip(const unsigned char *in, size_t n, size_t max_out, Buf *out, const char **why);
 
+/* Inflates a zlib stream (RFC 1950; also a raw deflate stream) and appends it to `out`, for PDF
+ * FlateDecode (ticket L1). The checksum and bytes after the last block are not checked. 0 ok;
+ * -1 with *why set (static), when the data is damaged or would pass `max_out` bytes. */
+int cc_zinflate(const unsigned char *in, size_t n, size_t max_out, Buf *out, const char **why);
+
 /* Appends a gzip member of `in` to `out`. 0 ok, -1 out of memory. */
 int cc_gzip(const unsigned char *in, size_t n, Buf *out);
 /* The same in stored blocks (no compression): fast to write and to read, n + ~5/64 KiB + 18 bytes. */

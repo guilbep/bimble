@@ -1,0 +1,40 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 /Resources << /XObject << /Fm1 6 0 R /Im1 7 0 R >> >> >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents [4 0 R 5 0 R] >>
+endobj
+4 0 obj
+<<  /Length 570 >>
+stream
+% a comment line, then an indented one
+   q 1 0 0 1 10 20 cm 0 0 100 50 re S Q
+0 0 m 72 0 l S
+q 0.5 0 0 0.5 0 0 cm
+  100 100 m 200 100 l 200 150 l h S
+Q
+10 300 m 20 340 60 340 70 300 c S
+10 400 m 30 440 70 400 v 90 360 100 400 y s
+/GS1 gs 0.1 0.2 0.3 RG .5 w -.25 +3 m 1. 0.1 l 7 8 l S
+BT /F1 12 Tf 100 700 Td (a (nested) \) string) Tj [(T) -120 (J)] TJ <414243> Tj ET
+300 300 50 50 re W n
+q 2 0 0 2 300 500 cm /Fm1 Do Q
+/Im1 Do
+1 0 0 1 0 0 cm 400 100 m 450 100 l 450 150 l f
+400 200 m 450 200 l 450 250 l b
+500 10 m 500 20 l
+510 10 m S
+true false null /N 1 2 m 3 4 l S
+
+endstream
+endobj
+5 0 obj
+<<  /Length 37 >>
+stream
+q 1 0 0 1 0 600 cm
+0 0 

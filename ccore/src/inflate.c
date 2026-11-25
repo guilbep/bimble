@@ -324,6 +324,34 @@ int cc_gunzip(const unsigned char *in, size_t n, size_t max_out, Buf *out, const
     return rc;
 }
 
+/* zlib (RFC 1950) for PDF FlateDecode streams (pdf_in.c, ticket L1): the 2-byte header (a raw
+ * deflate stream without one is read too), the blocks, then anything after (the Adler-32 sum,
+ * padding) ignored, as PDF readers do. */
+int cc_zinflate(const unsigned char *in, size_t n, size_t max_out, Buf *out, const char **why) {
+    *why = NULL;
+    size_t p = 0;
+    if (n >= 2 && (in[0] & 15) == 8 && (((unsigned)in[0] << 8) | in[1]) % 31 == 0) p = (in[1] & 0x20) ? 6 : 2;
+    if (p > n) return *why = "zlib: unexpected end of data", -1;
+    Inf s = {in, n, p, 0, 0, out, out->len, max_out, NULL};
+    Huff *h = malloc(2 * sizeof(Huff));
+    if (!h) return *why = "zlib: out of memory", -1;
+    int rc = 0;
+    uint32_t last = 0, type;
+    while (!rc && !last) {
+        if (getbits(&s, 1, &last) || getbits(&s, 2, &type)) rc = -1;
+        else if (type == 0) rc = stored(&s);
+        else if (type == 1) rc = fixed(&s, &h[0], &h[1]);
+        else if (type == 2) rc = dynamic(&s, &h[0], &h[1]);
+        else rc = fail(&s, "zlib: invalid block type");
+    }
+    free(h);
+    if (rc) {
+        out->len = s.start;
+        *why = s.why ? s.why : "zlib: damaged data";
+    }
+    return rc;
+}
+
 /* ---- deflate: greedy LZ77, fixed Huffman codes, one block ---- */
 
 typedef struct {

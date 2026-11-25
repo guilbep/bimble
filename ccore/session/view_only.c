@@ -9,7 +9,7 @@
 static const char *const REFUSED_OPS[] = {"apply", "undo", "redo", "verb", "set_placing"};
 static const char *const REFUSED_ACTIONS[] = {
     "new", "import_ifc", "convert_open", "save", "save_as", "export_ifc4", "export_ifc2x3",
-    "share_for_viewing", "undo", "redo",
+    "share_for_viewing", "undo", "redo", "link_pdf", /* L1 */
 };
 
 static int refused(const char *op, const char *name) {

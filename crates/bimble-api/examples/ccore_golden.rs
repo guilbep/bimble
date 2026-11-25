@@ -215,6 +215,8 @@ fn derive(dir: &Path) -> Files {
     drawing_files(dir, &m, &mut files);
     files.insert("measure.txt".into(), measure_txt().into_bytes());
     history_files(&m, &mut files);
+    // ---- L1: reference plans (`reference/`), at the end of the list: see `reference_files`.
+    reference_files(dir, &mut files);
     files
 }
 
@@ -3638,4 +3640,105 @@ fn copy_dir(from: &Path, to: &Path) {
             std::fs::copy(&p, to.join(e.file_name())).unwrap();
         }
     }
+// ---------------------------------------------------------------- reference plans (ticket L1)
+
+/// `reference/`: `bimble_drawing::reference::read` (ADR 0021) of every file of
+/// `reference/fixtures/` (hand-written inputs, kept as they are: `ccore/tools/ref_fixtures.py`)
+/// and of D1's `drawing/pdf/*.pdf`, at 1:100, as `reference/<file>.txt`:
+///   `error <text>`, or `note <text>` lines, `polylines <n> points <m>`, then one polyline per
+///   line as `{:?}` (`[[x, y], …]`, mm). When those lines pass 256 KiB: `fnv <hex> bytes <n>`
+///   of them (`fnv64`) and their first 20 lines.
+/// `reference/scales.txt`: `lines.pdf` at other scales (`scale <{:?}>`, then the same text).
+/// `reference/names.txt`: the dispatch by file name (`name <name>`, then the same text).
+fn reference_files(dir: &Path, files: &mut Files) {
+    use bimble_drawing::reference::read;
+    let fixtures = dir.join("reference/fixtures");
+    let mut names: Vec<String> = std::fs::read_dir(&fixtures)
+        .map(|d| {
+            d.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    let mut inputs: Vec<(String, Vec<u8>)> = Vec::new();
+    for n in names {
+        let bytes = std::fs::read(fixtures.join(&n)).unwrap_or_else(|e| panic!("{n}: {e}"));
+        files.insert(format!("reference/fixtures/{n}"), bytes.clone());
+        inputs.push((n, bytes));
+    }
+    for (rel, bytes) in files.iter() {
+        if let Some(n) = rel.strip_prefix("drawing/pdf/")
+            && n.ends_with(".pdf")
+        {
+            inputs.push((n.to_string(), bytes.clone()));
+        }
+    }
+    for (n, bytes) in &inputs {
+        files.insert(
+            format!("reference/{n}.txt"),
+            reference_text(&read(n, bytes, 100.0)).into_bytes(),
+        );
+    }
+    let lines = inputs
+        .iter()
+        .find(|(n, _)| n == "lines.pdf")
+        .map(|(_, b)| b.clone())
+        .unwrap_or_default();
+    let mut s = String::new();
+    for scale in [
+        1.0,
+        0.5,
+        50.0,
+        333.3,
+        100_000.0,
+        1e-7,
+        0.0,
+        -1.0,
+        100_000.5,
+        f64::NAN,
+        f64::INFINITY,
+    ] {
+        writeln!(s, "scale {scale:?}").unwrap();
+        s += &reference_text(&read("lines.pdf", &lines, scale));
+    }
+    files.insert("reference/scales.txt".into(), s.into_bytes());
+    let mut s = String::new();
+    for (name, bytes) in [
+        ("PLAN.PDF", lines.as_slice()),
+        ("plan.Pdf", b"%PDF-1.4 garbage".as_slice()),
+        ("plan.dwg", b"AC1032".as_slice()),
+        ("plan.txt", b"".as_slice()),
+        ("plan", b"".as_slice()),
+    ] {
+        writeln!(s, "name {name}").unwrap();
+        s += &reference_text(&read(name, bytes, 100.0));
+    }
+    files.insert("reference/names.txt".into(), s.into_bytes());
+}
+
+fn reference_text(r: &Result<bimble_drawing::reference::Read, String>) -> String {
+    let r = match r {
+        Ok(r) => r,
+        Err(e) => return format!("error {e}\n"),
+    };
+    let mut s = String::new();
+    for n in &r.notes {
+        writeln!(s, "note {n}").unwrap();
+    }
+    let points: usize = r.polylines.iter().map(Vec::len).sum();
+    writeln!(s, "polylines {} points {points}", r.polylines.len()).unwrap();
+    let mut body = String::new();
+    for p in &r.polylines {
+        writeln!(body, "{p:?}").unwrap();
+    }
+    if body.len() > 256 * 1024 {
+        writeln!(s, "fnv {:016x} bytes {}", fnv64(body.as_bytes()), body.len()).unwrap();
+        for l in body.lines().take(20) {
+            writeln!(s, "{l}").unwrap();
+        }
+    } else {
+        s += &body;
+    }
+    s
 }
