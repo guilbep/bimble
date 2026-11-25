@@ -31,7 +31,7 @@
 #include "check.h"
 
 #define G "golden/drawing"
-#define FONTS "../crates/bimble-drawing/fonts"
+#define FONTS "fonts"
 #define RUST_VERSION "0.18.1" /* the goldens' producer (pdf_out_test.c) */
 #define DIR "out/test-sheet_pdf"
 

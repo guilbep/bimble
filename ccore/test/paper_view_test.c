@@ -293,7 +293,7 @@ static void test_sheets_pdf(cc_session *ses) {
     free(file);
     remove(DIR "/two.pdf");
     /* Roboto (the shipped files from the folder): one subset of both pages' glyphs per weight. */
-    check_true("font dir", cc_paper_set_font_dir(ses, "../crates/bimble-drawing/fonts") == 0);
+    check_true("font dir", cc_paper_set_font_dir(ses, "fonts") == 0);
     snprintf(body, sizeof body, "{\"sheets\":[\"%.22s\",\"%.22s\"],\"font\":\"roboto\"}", s1->id.c, s2->id.c);
     rc = call(ses, "query", "sheets_pdf", body, &ans);
     check_true("roboto: two pages, two embedded faces", rc == CC_OK && find(ans.p, ans.len, "/Count 2") &&

@@ -30,7 +30,7 @@
 #include "check.h"
 
 #define G "golden/drawing"
-#define FONTS "../crates/bimble-drawing/fonts"
+#define FONTS "fonts"
 #define RUST_VERSION "0.18.1" /* Cargo.toml's, which made the goldens */
 
 static double D(const char *s) { return strtod(s, NULL); } /* glibc: correctly rounded */

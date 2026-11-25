@@ -1,24 +1,23 @@
-/target
 *.ifc
 *.bimble
 !**/fixtures/*.ifc
-# C core goldens: synthetic, exported from the demo frame by crates/bimble-api/examples/ccore_golden.rs.
+# C core goldens: synthetic, exported from the demo frame by the Rust dumper (branch oracle/rust).
 !ccore/golden/ifc/*.ifc
 !ccore/golden/grids/*.ifc
 !ccore/golden/geo/*.ifc
 !ccore/golden/geo/*.bimble
 !**/fixtures/*.bimble
-web/dist/
 .DS_Store
 web-ui/node_modules/
 web-ui/dist/
-web-ui/public/bimble/
 web-ui/public/ccore/
-perf-results/
 web-ui/design-check/out/
 # ccore/tools/compile_commands.sh (absolute paths: per machine)
 ccore/compile_commands.json
 __pycache__/
+# Left by a checkout of the branch oracle/rust or the tag v0.19.0 (cargo, the Rust wasm copy).
+/target
+web-ui/public/bimble/
 
 # Playwright MCP session output (browser checks)
 .playwright-mcp/

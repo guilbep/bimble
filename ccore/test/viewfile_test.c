@@ -590,7 +590,7 @@ static void share_read_only(void) {
     share_ifc("mapped_item", "ifc/fixtures/mapped_item.ifc", 5, 1);
     share_ifc("frame.ifc", "ifc/frame.ifc", 72, 0);
     share_ifc("triangulated", "ifc/fixtures/triangulated.ifc", 1, 0);
-    share_ifc("chain18", "../../crates/bimble-ifc/tests/fixtures/chain18.ifc", 0, 0);
+    share_ifc("chain18", "../test/fixtures/chain18.ifc", 0, 0);
 }
 
 int main(int argc, char **argv) {

@@ -227,7 +227,7 @@ try {
   if (plan) {
     const fonts = join(tmp, "userfonts");
     mkdirSync(fonts);
-    for (const f of ["Roboto-Regular.ttf", "Roboto-Bold.ttf"]) cpSync(join(CCORE, "../crates/bimble-drawing/fonts", f), join(fonts, f));
+    for (const f of ["Roboto-Regular.ttf", "Roboto-Bold.ttf"]) cpSync(join(CCORE, "fonts", f), join(fonts, f));
     host = start(bin, ["open", "--no-browser", "frame.json"], work, { BIMBLE_FONTS: fonts });
     const mu = /port=(\d+)&token=([0-9a-f]{32})$/.exec(await waitUrl(host));
     const pf2 = mu ? await post(Number(mu[1]), `/query/pdf_fonts?t=${mu[2]}`) : null;

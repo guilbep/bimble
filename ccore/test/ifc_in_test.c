@@ -1,8 +1,8 @@
 /* Suite ifc_in: STEP parsing and IFC import of the subset Bimble exports, against Rust.
  * - frame.ifc (golden/ifc, made by the golden dumper) imported, saved, ids masked: the bytes of
  *   golden/ifc/frame_reimport.json (bimble_ifc::import::import_str).
- * - the six synthetic fixtures of crates/bimble-ifc/tests/fixtures: parsed, dumped in the
- *   format of the compile-speed spike's step_dump and compared with its expected dumps (by
+ * - the six synthetic fixtures of test/fixtures (Rust's crates/bimble-ifc/tests/fixtures): parsed,
+ *   dumped in the format of the compile-speed spike's step_dump and compared with its expected dumps (by
  *   length and a BLAKE3 fingerprint, the dumps themselves live on that branch); imported, the
  *   report printed (what is outside the subset is reported, not failed).
  * - ifc/import goldens: the 17 inputs of golden/ifc/import imported (seeded ids), saved, masked
@@ -34,7 +34,7 @@
 #include "../src/step.h"
 #include "check.h"
 
-static const char *FIXTURES = "../crates/bimble-ifc/tests/fixtures";
+static const char *FIXTURES = "test/fixtures";
 
 static int is_id_char(char c) { return c != 0 && strchr(cc_gid_alphabet, c) != NULL; }
 
@@ -549,7 +549,7 @@ int main(int argc, char **argv) {
     snprintf(path, sizeof path, "%s/ifc/frame.ifc", golden);
     FILE *probe = fopen(path, "rb");
     if (!probe) {
-        printf("missing %s: it is not committed (*.ifc is ignored); make it with\n"
+        printf("missing %s: it is not committed (*.ifc is ignored); make it on the branch oracle/rust with\n"
                "  cargo run -p bimble-api --example ccore_golden\n", path);
         return 1;
     }
@@ -612,12 +612,12 @@ int main(int argc, char **argv) {
         static const struct {
             const char *name, *dir, *file;
         } G[] = {
-            {"booleans", "../crates/bimble-ifc/tests/fixtures", "booleans.ifc"},
-            {"chain18", "../crates/bimble-ifc/tests/fixtures", "chain18.ifc"},
-            {"curves", "../crates/bimble-ifc/tests/fixtures", "curves.ifc"},
-            {"cyclic_map", "../crates/bimble-ifc/tests/fixtures", "cyclic_map.ifc"},
-            {"mirror", "../crates/bimble-ifc/tests/fixtures", "mirror.ifc"},
-            {"tilt", "../crates/bimble-ifc/tests/fixtures", "tilt.ifc"},
+            {"booleans", "test/fixtures", "booleans.ifc"},
+            {"chain18", "test/fixtures", "chain18.ifc"},
+            {"curves", "test/fixtures", "curves.ifc"},
+            {"cyclic_map", "test/fixtures", "cyclic_map.ifc"},
+            {"mirror", "test/fixtures", "mirror.ifc"},
+            {"tilt", "test/fixtures", "tilt.ifc"},
             {"ishape_beam", "golden/ifc/fixtures", "ishape_beam.ifc"},
             {"circle_column", "golden/ifc/fixtures", "circle_column.ifc"},
             {"rect_hollow", "golden/ifc/fixtures", "rect_hollow.ifc"},
@@ -776,7 +776,7 @@ int main(int argc, char **argv) {
         cc_model_free(&dm);
         cc_ifc_report_free(&dr);
         free(t);
-        t = slurp("../crates/bimble-ifc/tests/fixtures", "tilt.ifc", &tn);
+        t = slurp("test/fixtures", "tilt.ifc", &tn);
         rc = cc_ifc_import(&dm, &dr, t, tn, &err);
         want = cc_guid_derived("storey/synthetic", 16);
         check_true("tilt: synthetic storey id = derived(\"storey/synthetic\")",

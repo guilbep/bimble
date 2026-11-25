@@ -557,7 +557,7 @@ three places:
   the file is Rust's Helvetica file, with nothing embedded. No Roboto file is shipped (not in the
   program, the wasm, the release archive nor the web build: 0.7 MB saved). Roboto is optional: the
   body asks `"font": "roboto"`, and the carrier must have the two shipped files (the native host:
-  `$BIMBLE_FONTS`, else the repository's `crates/bimble-drawing/fonts/` in a dev build, else
+  `$BIMBLE_FONTS`, else the repository's `ccore/fonts/` in a dev build, else
   `<config dir>/bimble/fonts`; the page hands none over). `query pdf_fonts` says
   `{"helvetica":true,"roboto":bool}`; the Export dialog offers Roboto only when it is true. Asked
   for without the files, or with other files, the sheet is drawn in Helvetica and a note goes to

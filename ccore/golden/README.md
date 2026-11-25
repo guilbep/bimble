@@ -1,7 +1,9 @@
 # C core golden files
 
 Rust is the oracle: each C slice must print these bytes (`docs/research/c-core-spec.md` §4).
-Producer: `crates/bimble-api/examples/ccore_golden.rs`. `floats/` belongs to another ticket and is
+Producer: `crates/bimble-api/examples/ccore_golden.rs`, on the branch `oracle/rust` (Rust is not on
+`main`, ADR 0072): run the commands below in a worktree of that branch and commit the changed files
+here. `floats/` belongs to another ticket and is
 not made or checked here.
 
 ## Regenerate and check
@@ -195,7 +197,7 @@ in `frame.ifc`. In IFC2x3 the version is also in `IFCAPPLICATION(#n,'<version>',
 ## ifc/fixtures/
 
 Nine small hand-written IFC4 files, synthetic, for what the six crate fixtures
-(`crates/bimble-ifc/tests/fixtures/`) do not cover. Each has a project, site, building and one
+(`ccore/test/fixtures/`, from Rust's `crates/bimble-ifc/tests/fixtures/`) do not cover. Each has a project, site, building and one
 storey (`IfcRelAggregates`, `same_level`: eight), its elements contained in it, one `IfcMaterial`; GlobalIds are
 `2T2c<Tag>…<NN>`. They are inputs: edit one, run the dumper, commit both.
 

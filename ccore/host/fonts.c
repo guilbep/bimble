@@ -4,7 +4,7 @@
  * wasm nor the release archive. The host only names a folder; the session reads it when Roboto is
  * asked for (`pdf_fonts`, `sheet_pdf {"font":"roboto"}`), and finding nothing never fails:
  *   - $BIMBLE_FONTS when set (and nothing else: tests point it at a folder of their own);
- *   - else the repository's crates/bimble-drawing/fonts when it holds Roboto-Regular.ttf (a dev
+ *   - else the repository's ccore/fonts when it holds Roboto-Regular.ttf (a dev
  *     build: the program is ccore/out/<mode>/bimble-ccore, three folders down);
  *   - else the user's folder <config dir>/bimble/fonts: $XDG_CONFIG_HOME or ~/.config on Linux,
  *     ~/Library/Application Support on macOS, %APPDATA% on Windows (named even when it does not
@@ -90,7 +90,7 @@ void cc_host_fonts(cc_session *s, const cc_static *web) {
         return;
     }
     char dir[PATH_MAX], cand[PATH_MAX + 64];
-    if (exe_dir(dir, sizeof dir) && snprintf(cand, sizeof cand, "%s/../../../crates/bimble-drawing/fonts", dir) < (int)sizeof cand &&
+    if (exe_dir(dir, sizeof dir) && snprintf(cand, sizeof cand, "%s/../../fonts", dir) < (int)sizeof cand &&
         has_regular(cand)) {
         cc_paper_set_font_dir(s, cand);
         return;

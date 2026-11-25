@@ -1,30 +1,20 @@
 # web-ui: the Vue lab
 
-A Vite + Vue + TypeScript page around the egui canvas (ADR 0048), with the brand of ADR 0049.
-Vue only shows things. All logic stays in Rust: `src/bimble.ts` is the one typed client of the wasm exports.
+A Vite + Vue + TypeScript page (ADR 0048), with the brand of ADR 0049. Vue only shows things. All
+logic stays in the C core (`ccore/`): `src/bimble.ts` is the one typed client of its calls, on the
+native host over HTTP (`?native=1`) or on the wasm module in the page (`?ccore=1`, `src/ccore.ts`).
 
 ## Run
 
-1. In `web-ui/`: `npm install`, then `npm run wasm:dev`. It builds the editor wasm in the dev
-   profile (`PROFILE=dev LAB=1 scripts/build-web.sh`) and copies it into `public/bimble/`. Run it
-   again after each Rust change (ADR 0065).
-   To check the release build instead: `scripts/build-web.sh` from the repository root (LTO,
-   wasm-opt: slow), then `npm run wasm`.
-2. `npm run dev`, then open http://localhost:5173/.
-   To open a model, put it in `web-ui/public/` and open http://localhost:5173/?url=/frame.bimble.
+- `npm run dev` (= `../ccore/dev.sh`): the native C host and Vite, rebuilt and restarted on every
+  save of a C file; it prints the lab address. The guide is `../DEV.md`.
+- `npm run dev:wasm`: the C core's wasm module in the page, no server (as GitHub Pages under `/c/`);
+  open http://localhost:5173/. `npm run ccore:wasm` again after a C change.
+- `npm run build`: the lab for the native host (what `ccore/build.sh release` puts in the archive);
+  `npm run build:ccore`: the lab on the C wasm (GitHub Pages).
 
-### Against the native twin (ADR 0066, Linux)
-
-`npm run twin:dev` (or `scripts/twin-dev.sh [model]` from the repository root) is the faster
-loop: no wasm build and no page reload. It builds `bimble-cli` (dev profile), starts a headless
-native Bimble (the twin) on the demo frame and Vite, and prints the lab address
-(`/?native=1&port=&token=`). On every save of a `.rs` file under `crates/` it rebuilds and
-restarts the twin on the same port and token; the open page re-syncs by itself. A build error
-is printed and the old twin keeps running. It links with mold (found with `mise where mold` or
-on PATH), else lld, else the default linker, for the native target only; nothing else needs
-mold. Needs `inotifywait` (inotify-tools). Ctrl-C stops everything.
-The twin has no wasm: check the wasm path (`npm run wasm:dev`) before a pull request.
-`npm run e2e:twin-loop` measures edit → value, text and pixels in the page.
+The Rust wasm path (`npm run wasm`, `wasm:dev`, `twin:dev`) left with the Rust sources (ADR 0072):
+it is on the tag `v0.19.0` and the branch `oracle/rust`.
 
 ## Checks
 

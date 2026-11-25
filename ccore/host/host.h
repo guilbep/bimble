@@ -50,7 +50,7 @@ char *cc_win_utf8(const wchar_t *w);
 FILE *cc_win_fopen(const char *path, const char *mode);
 #endif
 /* D7, SIZE1 (fonts.c): names the folder of the PDF export's optional Roboto files to session `s`:
- * $BIMBLE_FONTS, else the repository's crates/bimble-drawing/fonts, else <config dir>/bimble/fonts.
+ * $BIMBLE_FONTS, else the repository's ccore/fonts, else <config dir>/bimble/fonts.
  * `web` is not used (no font is shipped). */
 void cc_host_fonts(cc_session *s, const cc_static *web);
 #endif

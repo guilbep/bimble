@@ -9,8 +9,9 @@
 #   ccore/bench/corpus.sh report    markdown tables on stdout
 #
 # BIMBLE_IFC_CORPUS: the corpus folder (default ~/.cache/bimble-ifc-corpus), never inside the repo.
-# RUST_DUMP: the ccore_golden example (cargo build --release -p bimble-api --example ccore_golden);
-# unset: <repo>/target/release/examples/ccore_golden when it exists, else Rust is not run.
+# RUST_DUMP: the ccore_golden example (cargo build --release -p bimble-api --example ccore_golden,
+# on the branch oracle/rust: Rust is not on main, ADR 0072); unset: <repo>/target/release/examples/
+# ccore_golden when it exists, else Rust is not run (the C and ASan columns only).
 # Results: $BIMBLE_IFC_CORPUS/_runs/$CORPUS_TAG-results.jsonl (CORPUS_TAG default ifc1; delete it,
 # or `run --fresh`, to start over). Each C record has "hash": scene.txt and meshes.txt, for
 # before/after comparisons.

@@ -1,19 +1,19 @@
-# The browser version on GitHub Pages (ADR 0020): the web zip of the latest release.
-# For now (until the Vue lab's UX settles, ADR 0048) the site root is the Vue lab (web-ui) built from
-# the release's tag on the zip's editor wasm; the egui page of the zip stays under egui/.
+# GitHub Pages (ADR 0020, ADR 0072). Two labs in one site:
+#   - the site root: the last Rust release (v0.19.0, the frozen oracle of ADR 0067), as it was: the
+#     Vue lab (web-ui) of the release's tag on the editor wasm of the release's web zip, the egui
+#     page of the zip under egui/. Nothing is compiled: the wasm comes from the release assets, the
+#     page from the tag's web-ui sources (main has no Rust since ADR 0072);
+#   - c/: the C core's lab (ticket PG1, ccore/README.md), web-ui on the C wasm (`npm run
+#     build:ccore`), from main (a push) or the input `ccore_ref` (a manual run, default main).
+# The site is one artifact per deployment, so a lab not built here disappears at the next one. A
+# failed C build leaves the root published without c/.
 #
-# A manual run can also publish one pull request's lab under preview/pr-<number>/ (input
+# A manual run can also publish one pull request's C lab under preview/pr-<number>/ (input
 # `preview_pr`), to open a branch on a phone before it is merged. The next deployment without that
 # input removes it. Only someone who can run workflows here can start it.
 #
-# Every deployment also publishes the C core's lab under c/ (ticket PG1, ccore/README.md): web-ui
-# built on the C wasm (`npm run build:ccore`) from the branch rewrite/c-core, or the input
-# `ccore_ref`. The site is one artifact per deployment, so a lab not built here disappears at the
-# next one. A failed C build leaves the Rust site published without c/.
-#
-# It runs after the release workflow, not inside it: a workflow started by a tag can't deploy to
-# the `github-pages` environment, which by default accepts deployments from the default branch
-# only. `workflow_run` and manual runs start from the default branch, so no setting is needed.
+# Runs on a push to main that changes the lab, and by hand. Both start from the default branch,
+# which the `github-pages` environment accepts by default (a tag push would not).
 #
 # The site root is the newest release whose tag is v<digits>… (the Rust releases), never a C
 # prerelease ccore-v* (it has no *-web.zip). The input `tag` overrides it.
@@ -30,19 +30,22 @@
 name: pages
 
 on:
-  workflow_run:
-    workflows: [release]
-    types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - "ccore/**"
+      - "web-ui/**"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
     inputs:
       tag:
         description: "Release to publish, e.g. v0.5.0 (empty: the newest release tagged v<digits>, not ccore-v*)"
         required: false
       preview_pr:
-        description: "Also publish this pull request's lab under preview/pr-<number>/ (a number, optional)"
+        description: "Also publish this pull request's C lab under preview/pr-<number>/ (a number, optional)"
         required: false
       ccore_ref:
-        description: "Branch, tag or commit of the C lab published under c/ (empty: rewrite/c-core)"
+        description: "Branch, tag or commit of the C lab published under c/ (empty: main)"
         required: false
 
 permissions:
@@ -53,68 +56,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The pull request's lab, built without any right to deploy: its code runs here, not in `deploy`.
-  # The wasm is the one its own CI run built (artifact bimble-web), so nothing is compiled twice
-  # except the CLI that writes the demo model.
+  # The pull request's C lab, built without any right to deploy: its code runs here, not in
+  # `deploy`. As `ccore_lab` below, on the pull request's head commit.
   preview:
     if: github.event_name == 'workflow_dispatch' && inputs.preview_pr != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
-      actions: read
       pull-requests: read
     steps:
-      - name: The pull request's head and the wasm its CI run built
+      - name: The pull request's head
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ inputs.preview_pr }}
         run: |
           [[ "$PR" =~ ^[0-9]+$ ]] || { echo "preview_pr must be a number"; exit 1; }
           SHA=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)
-          RUN=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SHA" --json databaseId --jq '.[0].databaseId')
-          [[ -n "$RUN" ]] || { echo "no ci run for $SHA yet"; exit 1; }
-          echo "PR $PR at $SHA, ci run $RUN"
-          gh run download "$RUN" --repo "$GITHUB_REPOSITORY" --name bimble-web --dir dist
-          test -f dist/editor/bimble_web.js
+          echo "PR $PR at $SHA"
           echo "SHA=$SHA" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.SHA }}
           path: src
           persist-credentials: false
+      - run: src/scripts/apt-install.sh clang lld
+        timeout-minutes: 12
+      - name: binaryen (wasm-opt)
+        run: |
+          src/ccore/ci/binaryen.sh "$HOME/.local/binaryen"
+          echo "$HOME/.local/binaryen/bin" >> "$GITHUB_PATH"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: src/web-ui/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src
-      - name: The lab and a demo model
+      - name: The pull request's C lab
         run: |
-          rm -rf src/web/dist && mv dist src/web/dist
           cd src/web-ui
           npm ci --no-audit --no-fund
-          npm run wasm
-          npm run build -- --base ./ --outDir ../../preview --emptyOutDir
-          cargo run --release -p bimble-cli --bin bimble -- demo ../../preview/frame.bimble
-          test -f ../../preview/index.html && test -f ../../preview/bimble/bimble_web.js
+          npm run build:ccore -- --outDir ../../preview --emptyOutDir
+          test -f ../../preview/index.html && test -f ../../preview/ccore/ccore.wasm
       - uses: actions/upload-artifact@v4
         with:
           name: preview
           path: preview
           retention-days: 1
 
-  # The C core's lab (ticket PG1), built without any right to deploy, on the same runs as `deploy`.
-  # The C wasm needs clang and lld (wasm-ld); no Rust.
+  # The C core's lab (ticket PG1), built without any right to deploy, on every run.
+  # The C wasm needs clang and lld (wasm-ld).
   ccore_lab:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       (github.event.workflow_run.event == 'workflow_dispatch' ||
-        (github.event.workflow_run.event == 'push' &&
-         startsWith(github.event.workflow_run.head_branch, 'v'))))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -122,12 +113,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ccore_ref || 'rewrite/c-core' }}
+          ref: ${{ inputs.ccore_ref || (github.event_name == 'push' && github.sha) || 'main' }}
           path: src
           persist-credentials: false
       - run: src/scripts/apt-install.sh clang lld
         timeout-minutes: 12
-      # wasm-opt: build.sh wasm-view needs it (the view wasm's 400 KB budget); pinned by the C branch.
+      # wasm-opt: build.sh wasm-view needs it (the view wasm's size budget, ADR 0069); pinned version.
       - name: binaryen (wasm-opt)
         run: |
           src/ccore/ci/binaryen.sh "$HOME/.local/binaryen"
@@ -152,19 +143,10 @@ jobs:
   # The site, built and uploaded as the artifact github-pages. No right to deploy here.
   site:
     needs: [preview, ccore_lab]
-    # After a successful release run that can have published: started by a tag push (head_branch
-    # is then the tag's name) or by hand (one-button release). Not after pull requests: a branch
-    # named "views" once passed a "starts with v" test alone.
     # `always()`: `preview` is skipped on every run but a manual one that asks for it; a failed
     # preview stops the deployment. `ccore_lab` is not tested here: a failed C lab does not stop the
-    # Rust site (the C lab is then missing from c/ until the next deployment).
-    if: >-
-      always() && needs.preview.result != 'failure' && needs.preview.result != 'cancelled' &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event.workflow_run.conclusion == 'success' &&
-        (github.event.workflow_run.event == 'workflow_dispatch' ||
-         (github.event.workflow_run.event == 'push' &&
-          startsWith(github.event.workflow_run.head_branch, 'v')))))
+    # root (the C lab is then missing from c/ until the next deployment).
+    if: always() && needs.preview.result != 'failure' && needs.preview.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -172,9 +154,7 @@ jobs:
       - name: The release's web zip
         env:
           GH_TOKEN: ${{ github.token }}
-          # A tag push names its release; after a manual release run, the newest release (its
-          # version isn't in the event).
-          TAG: ${{ inputs.tag || (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch) || '' }}
+          TAG: ${{ inputs.tag || '' }}
         run: |
           # The newest release tagged v<digits>: `gh release list` is newest first, and the C
           # prereleases (ccore-v*) have no *-web.zip.
@@ -206,7 +186,7 @@ jobs:
           npm run build -- --base ./ --outDir ../../site --emptyOutDir
           mv ../web/dist ../../site/egui
           test -f ../../site/index.html && test -f ../../site/bimble/bimble_web.js && test -f ../../site/egui/index.html
-      - name: The pull request's lab under preview/pr-<number>/
+      - name: The pull request's C lab under preview/pr-<number>/
         if: needs.preview.result == 'success'
         uses: actions/download-artifact@v4
         with:

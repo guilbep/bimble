@@ -41,12 +41,12 @@ static double now_ms(void) {
 static const struct {
     const char *name, *dir, *file;
 } G[] = {
-    {"booleans", "../crates/bimble-ifc/tests/fixtures", "booleans.ifc"},
-    {"chain18", "../crates/bimble-ifc/tests/fixtures", "chain18.ifc"},
-    {"curves", "../crates/bimble-ifc/tests/fixtures", "curves.ifc"},
-    {"cyclic_map", "../crates/bimble-ifc/tests/fixtures", "cyclic_map.ifc"},
-    {"mirror", "../crates/bimble-ifc/tests/fixtures", "mirror.ifc"},
-    {"tilt", "../crates/bimble-ifc/tests/fixtures", "tilt.ifc"},
+    {"booleans", "test/fixtures", "booleans.ifc"},
+    {"chain18", "test/fixtures", "chain18.ifc"},
+    {"curves", "test/fixtures", "curves.ifc"},
+    {"cyclic_map", "test/fixtures", "cyclic_map.ifc"},
+    {"mirror", "test/fixtures", "mirror.ifc"},
+    {"tilt", "test/fixtures", "tilt.ifc"},
     {"ishape_beam", "golden/ifc/fixtures", "ishape_beam.ifc"},
     {"circle_column", "golden/ifc/fixtures", "circle_column.ifc"},
     {"rect_hollow", "golden/ifc/fixtures", "rect_hollow.ifc"},
@@ -616,7 +616,7 @@ int main(void) {
     }
     robustness("golden/ifc", "frame.ifc", 12345);
     robustness("golden/ifc/fixtures", "mapped_item.ifc", 777);
-    robustness("../crates/bimble-ifc/tests/fixtures", "curves.ifc", 4242);
+    robustness("test/fixtures", "curves.ifc", 4242);
     own_goldens();
     robustness("golden/ifc_c/fixtures", "lshape_fillet.ifc", 99);
     return report("ifc_read");

@@ -11,6 +11,8 @@
 //                                         settings.json, shortcuts.json, ribbon.json from the Rust
 //                                         sources; meta.json). Needs a built `bimble`: $RUST_BIN, else
 //                                         $CARGO_TARGET_DIR/debug/bimble, else target/debug/bimble.
+//                                         Rust is not on main (ADR 0072): run it in a worktree of the
+//                                         branch oracle/rust, then copy golden/parity/ back.
 //   node ccore/tools/parity.mjs           runs the C host (out/tcc/bimble-ccore or $HOST_BIN) on the
 //                                         same scenarios (answers in out/parity/c/), parses web-ui/src,
 //                                         prints the counts
@@ -86,7 +88,7 @@ async function startHost(side, model) {
     cmd = HOST_BIN;
     args = model ? [String(PORT), model] : [String(PORT)];
   }
-  if (!existsSync(cmd)) throw new Error(`parity: ${cmd} not found (${side === "rust" ? "cargo build -p bimble-cli, or RUST_BIN" : "ccore/build.sh tcc, or HOST_BIN"})`);
+  if (!existsSync(cmd)) throw new Error(`parity: ${cmd} not found (${side === "rust" ? "cargo build -p bimble-cli on the branch oracle/rust, or RUST_BIN" : "ccore/build.sh tcc, or HOST_BIN"})`);
   const proc = spawn(cmd, args, { env, stdio: ["ignore", "ignore", "pipe"] });
   let log = "", code = null;
   proc.stderr.on("data", (d) => (log += d));
@@ -828,7 +830,20 @@ function git(...a) {
 
 // ---------------------------------------------------------------- main
 
-const rn = rustNames(), cn = cNames();
+// Without the Rust tree (main, ADR 0072): --rust stops with where it lives; the other modes take the
+// Rust names from the committed golden/parity/names.json (written by --rust from the same sources).
+if (!existsSync(RS)) {
+  if (MODE === "rust") {
+    console.error("parity --rust: no Rust sources here (crates/ is not on main, ADR 0072). Run it in a worktree of the branch oracle/rust (git worktree add ../bimble-rust oracle/rust), then copy ccore/golden/parity/ back.");
+    process.exit(2);
+  }
+  if (!existsSync(join(GOLD, "names.json"))) {
+    console.error("parity: no golden/parity/names.json and no Rust sources: run parity --rust on the branch oracle/rust");
+    process.exit(2);
+  }
+}
+const rnG = existsSync(RS) ? null : JSON.parse(read(join(GOLD, "names.json")));
+const rn = rnG ? { ops: rnG.ops, viewOps: rnG.view_ops, queries: rnG.queries } : rustNames(), cn = cNames();
 const names = { queries: [...new Set([...rn.queries, ...cn.queries])], ops: [...new Set([...rn.ops, ...cn.ops, ...rn.viewOps.filter((o) => o !== "frame")])], tools: cn.tools };
 const qNames = Object.assign([...names.queries], { ops: names.ops, tools: names.tools });
 
