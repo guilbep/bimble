@@ -403,12 +403,15 @@ int cc_paper_pdf_content(const cc_paper *p, Buf *c) {
 
 /* ---- the file ---- */
 
-#define NOBJ 16 /* ids 1..15: 1-7 fixed, 8-11 Roboto regular, 12-15 bold */
+/* Ids 1..15 of one page: 1-7 fixed, 8-11 Roboto regular, 12-15 bold. PAPER1: page k >= 1 of
+ * several (cc_paper_pdf_pages) takes the two ids after those: its page, then its content. */
+#define NOBJ 16
 
 typedef struct {
     Buf *b;
-    size_t base;        /* where the file starts in b */
-    size_t off[NOBJ];   /* offset + 1 of each object written (0: none) */
+    size_t base;   /* where the file starts in b */
+    size_t *off;   /* offset + 1 of each object written (0: none), nobj of them */
+    int nobj;
 } Pdf;
 
 static void obj_begin(Pdf *w, int id) {
@@ -612,43 +615,69 @@ static int embed_font(Pdf *w, int id, int bold, const uint32_t *first, const cc_
     return rc;
 }
 
-int cc_paper_pdf(const cc_paper *p, const cc_pdf_options *o, Buf *b) {
+int cc_paper_pdf(const cc_paper *p, const cc_pdf_options *o, Buf *b) { return cc_paper_pdf_pages(&p, 1, o, b); }
+
+/* A page object: its paper's size, its content `content`, the two shared fonts. */
+static void page_obj(Pdf *w, int id, const cc_paper *p, int content) {
+    Buf *b = w->b;
+    float wh[2] = {to_f32(p->width_mm * PT), to_f32(p->height_mm * PT)};
+    obj_begin(w, id);
+    buf_puts(b, "<<\n  /Type /Page\n  /MediaBox [0 0 ");
+    num(b, wh[0]);
+    buf_putc(b, ' ');
+    num(b, wh[1]);
+    buf_puts(b, "]\n  /Parent 2 0 R\n");
+    key_ref(b, "  /Contents ", content);
+    buf_puts(b, "\n  /Resources <<\n    /Font <<\n      /F1 5 0 R\n"
+                "      /F2 7 0 R\n    >>\n  >>\n>>");
+    obj_end(w);
+}
+
+int cc_paper_pdf_pages(const cc_paper *const *pages, size_t n, const cc_pdf_options *o, Buf *b) {
+    if (!n || n > CC_PDF_MAX_PAGES) return CC_PDF_ERR_OOM;
+    const cc_paper *p = pages[0];
+    for (size_t k = 1; k < n; k++)
+        if (pages[k]->font != p->font) return CC_PDF_ERR_FONT; /* one pair of fonts for the file */
+    int extra = p->font == CC_FONT_ROBOTO ? NOBJ : 8; /* the first id after page 1's objects */
     Pdf w;
     memset(&w, 0, sizeof w);
     w.b = b;
     w.base = b->len;
-    /* The content first: a bad pen fails before anything is written. */
-    Buf content;
-    buf_init(&content);
-    int rc = cc_paper_pdf_content(p, &content);
-    if (rc) {
-        buf_free(&content);
-        return rc;
-    }
-    float wh[2] = {to_f32(p->width_mm * PT), to_f32(p->height_mm * PT)};
+    w.nobj = extra + 2 * (int)(n - 1);
+    if (w.nobj < NOBJ) w.nobj = NOBJ;
+    w.off = calloc((size_t)w.nobj, sizeof *w.off);
+    Buf *content = calloc(n, sizeof *content);
+    if (!w.off || !content) return free(w.off), free(content), CC_PDF_ERR_OOM;
+    /* page k's ids: 3 and 4 for the first, then two each from `extra` on */
+#define PAGE_ID(k) ((k) ? extra + 2 * (int)((k) - 1) : 3)
+    /* The contents first: a bad pen fails before anything is written. */
+    int rc = 0;
+    for (size_t k = 0; k < n && !rc; k++) buf_init(&content[k]), rc = cc_paper_pdf_content(pages[k], &content[k]);
+    if (rc) goto done;
     buf_append(b, "%PDF-1.7\n%\x80\x80\x80\x80\n\n", 16);
     obj_begin(&w, 1);
     buf_puts(b, "<<\n  /Type /Catalog\n  /Pages 2 0 R\n>>");
     obj_end(&w);
     obj_begin(&w, 2);
-    buf_puts(b, "<<\n  /Type /Pages\n  /Kids [3 0 R]\n  /Count 1\n>>");
+    buf_puts(b, "<<\n  /Type /Pages\n  /Kids [");
+    for (size_t k = 0; k < n; k++) {
+        if (k) buf_putc(b, ' ');
+        ref(b, PAGE_ID(k));
+    }
+    buf_puts(b, "]\n  /Count ");
+    buf_i64(b, (int64_t)n);
+    buf_puts(b, "\n>>");
     obj_end(&w);
-    obj_begin(&w, 3);
-    buf_puts(b, "<<\n  /Type /Page\n  /MediaBox [0 0 ");
-    num(b, wh[0]);
-    buf_putc(b, ' ');
-    num(b, wh[1]);
-    buf_puts(b, "]\n  /Parent 2 0 R\n  /Contents 4 0 R\n  /Resources <<\n    /Font <<\n      /F1 5 0 R\n"
-                 "      /F2 7 0 R\n    >>\n  >>\n>>");
-    obj_end(&w);
+    for (size_t k = 0; k < n; k++) page_obj(&w, PAGE_ID(k), pages[k], PAGE_ID(k) + 1);
     if (p->font == CC_FONT_ROBOTO) {
         /* The glyphs each weight's texts use, each with its first character. */
         uint32_t *first = malloc(2 * 65536 * sizeof *first);
         if (!first) rc = CC_PDF_ERR_OOM;
         else {
             memset(first, 0xff, 2 * 65536 * sizeof *first);
-            for (size_t i = 0; i < p->nitems; i++) {
-                const cc_item *t = &p->items[i];
+            for (size_t pk = 0; pk < n; pk++)
+            for (size_t i = 0; i < pages[pk]->nitems; i++) {
+                const cc_item *t = &pages[pk]->items[i];
                 if (t->kind != CC_ITEM_TEXT) continue;
                 for (size_t k = 0; k < t->text_len;) {
                     uint32_t cp = utf8_next(t->text, t->text_len, &k);
@@ -671,10 +700,7 @@ int cc_paper_pdf(const cc_paper *p, const cc_pdf_options *o, Buf *b) {
         buf_puts(b, "<<\n  /Type /Font\n  /Subtype /Type1\n  /BaseFont /Helvetica-Bold\n  /Encoding /WinAnsiEncoding\n>>");
         obj_end(&w);
     }
-    if (rc) {
-        buf_free(&content);
-        return rc;
-    }
+    if (rc) goto done;
     obj_begin(&w, 6);
     buf_puts(b, "<<\n  /Title ");
     text_str(b, p->title, p->title_len);
@@ -690,12 +716,12 @@ int cc_paper_pdf(const cc_paper *p, const cc_pdf_options *o, Buf *b) {
     }
     buf_puts(b, "\n>>");
     obj_end(&w);
-    stream_obj(&w, 4, content.p, content.len, "");
-    buf_free(&content);
+    for (size_t k = 0; k < n; k++) stream_obj(&w, PAGE_ID(k) + 1, content[k].p, content[k].len, "");
+#undef PAGE_ID
     /* The cross-reference table: a free entry points to the next free id (0 after the last). */
     size_t xref = b->len - w.base;
     int size = 1;
-    for (int id = 1; id < NOBJ; id++)
+    for (int id = 1; id < w.nobj; id++)
         if (w.off[id]) size = id + 1;
     buf_puts(b, "xref\n0 ");
     buf_i64(b, size);
@@ -723,5 +749,8 @@ int cc_paper_pdf(const cc_paper *p, const cc_pdf_options *o, Buf *b) {
     buf_i64(b, (int64_t)xref);
     buf_puts(b, "\n%%EOF");
     if (!rc && b->oom) rc = CC_PDF_ERR_OOM;
+done:
+    for (size_t k = 0; k < n; k++) buf_free(&content[k]);
+    free(content), free(w.off);
     return rc;
 }

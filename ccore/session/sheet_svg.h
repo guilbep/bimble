@@ -74,15 +74,20 @@ int cc_paper_set_font_dir(struct cc_session *s, const char *dir);
 /* The version the PDF export names (the frame's note, the producer); NULL: the C core's
  * (CC_IFC_VERSION). For tests that compare with Rust's goldens. 0 ok, -1 out of memory. */
 int cc_paper_set_version(struct cc_session *s, const char *version);
-/* ---- PAPER1: a view's paper as SVG ----
+/* ---- PAPER1: a view's paper as SVG, several sheets as one PDF ----
  * `query view_svg {"view": id, "bare"?: bool, "font"?: "roboto"|"helvetica"}`: the 2D view drawn as
  * view_pdf draws it (lib.rs plan_options: its scale, the smallest paper it fits on, the section
  * marks of every view, the same style, template, project, date and version), as SVG
  * (Sheet::to_svg). Answer {"height_mm", "paper": "A3", "portrait", "scale", "svg", "width_mm"}.
  * `bare` true: paper.rs refresh_paper's On paper picture (no frame, title block, legend; the page
  * is the drawing's size). The font: the style's (Roboto: an SVG only names it) unless asked.
+ * `query sheets_pdf {"sheets": [id, ...], "path"?: file, "font"?}`: the sheets drawn as sheet_pdf
+ * draws each, one page each in that order, one file (cc_paper_pdf_pages); the answer as
+ * cc_paper_pdf_query's ({"bytes", "pages", "path"} with a path). Errors as view_pdf / sheet_pdf's,
+ * plus "missing field `sheets`", "sheets: an array of sheet ids", "sheets: at least one sheet".
  * The viewer build: "this build is view-only". */
 int cc_paper_view_svg(struct cc_session *s, const cc_scene *sc, const char *body, size_t n, Buf *out);
+int cc_paper_sheets_pdf(struct cc_session *s, const cc_scene *sc, const char *body, size_t n, Buf *out);
 /* ---- end PAPER1 ---- */
 /* Frees the fonts, the folder and the version (cc_session_free). */
 void cc_paper_fonts_free(struct cc_session *s);

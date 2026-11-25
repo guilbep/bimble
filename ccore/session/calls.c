@@ -1092,8 +1092,9 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "sheet_pdf") || !strcmp(name, "view_pdf"))
         return cc_paper_pdf_query(s, s->open ? scene_now(s) : NULL, name[0] == 'v', body, n, out);
     if (!strcmp(name, "pdf_fonts")) return cc_paper_fonts_query(s, out); /* SIZE1: the export's font choice */
-    /* ---- PAPER1: a view's paper as SVG (sheet_svg.h) ---- */
+    /* ---- PAPER1: a view's paper as SVG; several sheets as one PDF (sheet_svg.h) ---- */
     if (!strcmp(name, "view_svg")) return cc_paper_view_svg(s, s->open ? scene_now(s) : NULL, body, n, out);
+    if (!strcmp(name, "sheets_pdf")) return cc_paper_sheets_pdf(s, s->open ? scene_now(s) : NULL, body, n, out);
     /* ---- end PAPER1 ---- */
     if (s->open) return model_query(s, name, body, n, out); /* calls.rs:276-309 and :519-527 */
     if (!strcmp(name, "north") || !strcmp(name, "coordinates")) { /* ADR 0045, query.h: null without a model */

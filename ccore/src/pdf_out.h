@@ -41,6 +41,15 @@ int cc_paper_pdf_content(const cc_paper *p, Buf *out);
 /* Sheet::to_pdf(), appended to `out`. 0, or a CC_PDF_ERR_ (then `out` holds a partial file). */
 int cc_paper_pdf(const cc_paper *p, const cc_pdf_options *o, Buf *out);
 
+/* ---- PAPER1: several papers as one PDF (no Rust oracle: DEVIATIONS 22) ----
+ * The pages in order, written as cc_paper_pdf writes one: n = 1 is cc_paper_pdf's file byte for
+ * byte. Page k >= 1 takes ids after the first page's objects (8 with Helvetica, 16 with Roboto):
+ * its page, then its content. The two fonts are shared by every page (Roboto: one subset of the
+ * glyphs of all pages); /Title is the first paper's. Every paper has the same font, else
+ * CC_PDF_ERR_FONT. At most CC_PDF_MAX_PAGES pages (else CC_PDF_ERR_OOM). */
+#define CC_PDF_MAX_PAGES 1000
+int cc_paper_pdf_pages(const cc_paper *const *pages, size_t n, const cc_pdf_options *o, Buf *b);
+
 /* 1 if `data` is the shipped Roboto file of that weight (its size and the checkSumAdjustment of
  * its `head` table), the file whose glyphs and metrics roboto_widths.inc holds. */
 int cc_pdf_roboto_is_shipped(const unsigned char *data, size_t n, int bold);

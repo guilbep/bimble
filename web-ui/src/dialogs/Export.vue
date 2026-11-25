@@ -20,7 +20,7 @@ screenRoutes.on_paper = () => { exportWhat.value = "view"; dialogNow.value = "ex
 // when the core has its files (`pdf_fonts`); otherwise shown disabled with where to put them.
 import { computed, onUnmounted, ref } from "vue";
 import { type PdfFont, pdfFonts, query, sheetPdf, sheetPdfName, sheets, state } from "../bimble";
-import { openViews, viewPdf, viewPdfName, viewSvg, viewSvgName } from "../bimble"; // PAPER1
+import { openViews, sheetsPdf, sheetsPdfName, viewPdf, viewPdfName, viewSvg, viewSvgName } from "../bimble"; // PAPER1
 import { viewName } from "../shell/viewName"; // PAPER1
 import { t } from "../i18n";
 import { currentDialog } from ".";
@@ -47,10 +47,11 @@ function download(name: string, blob: Blob) {
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
 
-// ---- PAPER1: "This view" (lib.rs plan_panel: a 2D view, the active one first) ----
+// ---- PAPER1: "This view" (lib.rs plan_panel: a 2D view, the active one first) and "One PDF" ----
 const views2d = computed(() => openViews.value.views.filter((v) => v.type === "plan" || v.type === "section"));
 const viewId = ref<string | null>(null);
 const theView = computed(() => views2d.value.find((v) => v.id === viewId.value) ?? views2d.value.find((v) => v.id === openViews.value.active) ?? views2d.value[0] ?? null);
+const onePdf = ref(false);
 const what = exportWhat;
 onUnmounted(() => { exportWhat.value = "sheets"; }); // the next Print and export opens on the sheets
 const ready = computed(() => (what.value === "view" ? !!theView.value : n.value > 0));
@@ -65,7 +66,10 @@ async function exportAll() {
   busy.value = true;
   try {
     if (what.value === "view") await exportView();
-    else await exportSheets();
+    else if (onePdf.value && format.value === "pdf") {
+      const chosen = list.value.filter((x) => picked.value.has(x.id));
+      download(sheetsPdfName(chosen), new Blob([(await sheetsPdf(chosen.map((x) => x.id), font.value)).slice().buffer as ArrayBuffer], { type: "application/pdf" }));
+    } else await exportSheets();
   } catch (e) {
     failed.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -144,9 +148,9 @@ async function exportSheets() {
           </span>
           <span v-if="!roboto" class="note" data-bb="export-font-note">{{ t('export.fontRobotoMissing') }}</span></div>
         <div v-if="what === 'sheets'" class="fld"><span class="lbl">{{ t('export.files') }}</span>
-          <span class="seg" style="align-self:flex-start">
-            <button type="button" class="on">{{ t('export.perSheet') }}</button>
-            <button type="button" disabled data-missing="sheet_pdf: a multi-sheet PDF export">{{ t('export.onePdf') }}</button>
+          <span class="seg" style="align-self:flex-start" data-bb="export-files"><!-- PAPER1: One PDF (sheets_pdf) -->
+            <button type="button" :class="{ on: !onePdf || format !== 'pdf' }" :aria-pressed="!onePdf || format !== 'pdf'" data-bb="export-per-sheet" @click="onePdf = false">{{ t('export.perSheet') }}</button>
+            <button type="button" :class="{ on: onePdf && format === 'pdf' }" :aria-pressed="onePdf && format === 'pdf'" :disabled="format !== 'pdf'" data-bb="export-one-pdf" @click="onePdf = true">{{ t('export.onePdf') }}</button>
           </span></div>
         <div class="fld"><label class="lbl" for="ex-names">{{ t('export.names') }}</label>
           <input id="ex-names" class="inp mono" value="{project_number}-{level}-{sheet_number}-{revision}-{sheet_name}" disabled data-missing="export_name_template: a file-name template in Rust"></div>

@@ -99,6 +99,11 @@ int cc_paper_view_svg(struct cc_session *s, const cc_scene *sc, const char *body
     buf_puts(out, CC_VIEW_ONLY_TEXT);
     return CC_ERR;
 }
+int cc_paper_sheets_pdf(struct cc_session *s, const cc_scene *sc, const char *body, size_t n, Buf *out) {
+    (void)s, (void)sc, (void)body, (void)n;
+    buf_puts(out, CC_VIEW_ONLY_TEXT);
+    return CC_ERR;
+}
 /* ---- end PAPER1 ---- */
 #else
 /* Path::file_stem of the session's path: the file name without its last extension (a name that
@@ -515,7 +520,7 @@ end:
     arena_free(&a);
     return rc;
 }
-/* ---- PAPER1: view_svg (a view's paper as SVG) ---- */
+/* ---- PAPER1: view_svg (a view's paper as SVG) and sheets_pdf (several sheets, one PDF) ---- */
 
 /* "font": absent or null -> `dflt`, "roboto" or "helvetica"; else -1 with the error in `out`. */
 static int font_of(const JrVal *v, int dflt, Buf *out) {
@@ -599,5 +604,121 @@ end:
     return rc;
 }
 
+int cc_paper_sheets_pdf(struct cc_session *s, const cc_scene *sc, const char *body, size_t n, Buf *out) {
+    Arena a;
+    arena_init(&a, 0);
+    int rc = CC_ERR;
+    Buf pdf;
+    buf_init(&pdf);
+    const cc_sheet **sh = NULL;
+    cc_paper *papers = NULL;
+    const cc_paper **pp = NULL;
+    JrError je;
+    const JrVal *v = jr_parse(&a, body, n, &je);
+    const JrVal *lv = v && v->type == JR_OBJ ? jr_get(v, "sheets") : NULL;
+    const JrVal *pv = v && v->type == JR_OBJ ? jr_get(v, "path") : NULL;
+    if (!v) {
+        buf_puts(out, je.msg);
+        goto end;
+    }
+    if (!lv || lv->type != JR_ARR) {
+        buf_puts(out, lv ? "sheets: an array of sheet ids" : "missing field `sheets`");
+        goto end;
+    }
+    if (!lv->n || lv->n > CC_PDF_MAX_PAGES) {
+        buf_puts(out, lv->n ? "sheets: at most 1000" : "sheets: at least one sheet");
+        goto end;
+    }
+    if (pv && pv->type != JR_STR && pv->type != JR_NULL) {
+        buf_puts(out, "path: a string");
+        goto end;
+    }
+    int want_roboto = font_of(v, 0, out); /* the PDF: Helvetica by default (SIZE1) */
+    if (want_roboto < 0) goto end;
+    const char *path = pv && pv->type == JR_STR ? pv->s : NULL;
+    if (path && (!pv->n || strlen(path) < pv->n)) {
+        buf_puts(out, "path: empty or with a NUL");
+        goto end;
+    }
+    size_t ns = lv->n;
+    sh = calloc(ns, sizeof *sh);
+    papers = calloc(ns, sizeof *papers);
+    pp = calloc(ns, sizeof *pp);
+    if (!sh || !papers || !pp) {
+        buf_puts(out, "out of memory");
+        goto end;
+    }
+    for (size_t k = 0; k < ns; k++) {
+        const JrVal *x = &lv->items[k];
+        if (x->type != JR_STR) {
+            buf_puts(out, "sheets: an array of sheet ids");
+            goto end;
+        }
+        if (s->open && x->n == 22) {
+            cc_gid id;
+            memcpy(id.c, x->s, 22);
+            sh[k] = cc_model_sheet(&s->model, &id);
+        }
+        if (!sh[k]) {
+            buf_puts(out, "no sheet with id ");
+            debug_str(out, x->s, x->n);
+            goto end;
+        }
+        pp[k] = &papers[k];
+    }
+    if (!sc) {
+        buf_puts(out, "no model open");
+        goto end;
+    }
+    if (want_roboto) read_fonts(s);
+    cc_pdf_options po;
+    memset(&po, 0, sizeof po);
+    po.version = s->paper_version ? s->paper_version : CC_IFC_VERSION;
+    po.version_len = strlen(po.version);
+    for (int k = 0; k < 2; k++) po.roboto[k] = s->pdf_font[k], po.roboto_len[k] = s->pdf_font_n[k];
+    int r = CC_PDF_ERR_FONT; /* as cc_paper_pdf_query: Roboto when asked for and there, else Helvetica */
+    for (int pass = want_roboto && s->pdf_font[0] && s->pdf_font[1] ? 0 : 1; pass < 2 && r == CC_PDF_ERR_FONT; pass++) {
+        if (pass == 1 && want_roboto)
+            cc_log(s->pf, "bimble-ccore: PDF: the Roboto font files (Roboto-Regular.ttf, Roboto-Bold.ttf) are missing "
+                          "or not the shipped ones: the text is set in Helvetica");
+        buf_clear(&pdf);
+        pdf.oom = 0;
+        for (size_t k = 0; k < ns; k++)
+            if (draw_paper(s, sc, sh[k], NULL, NULL, 0, pass ? CC_FONT_HELVETICA : CC_FONT_ROBOTO, &a, &papers[k], out))
+                goto end;
+        r = cc_paper_pdf_pages(pp, ns, &po, &pdf);
+    }
+    if (r == CC_PDF_ERR_PEN) {
+        buf_puts(out, "a pen of negative width");
+        goto end;
+    }
+    if (r || pdf.oom) {
+        buf_puts(out, "out of memory");
+        goto end;
+    }
+    if (path && s->pf->files) {
+        if (s->pf->write_file(s->pf->ctx, path, pdf.p, pdf.len)) {
+            buf_puts(out, path), buf_puts(out, ": cannot write");
+            goto end;
+        }
+        cc_log(s->pf, "bimble-ccore: Saved %s", path);
+        JsonW w;
+        jw_init(&w, out, 0);
+        jw_obj_begin(&w);
+        jw_key(&w, "bytes"), jw_u64(&w, pdf.len);
+        jw_key(&w, "pages"), jw_u64(&w, ns);
+        jw_key(&w, "path"), jw_str(&w, path);
+        jw_obj_end(&w);
+        rc = jw_finish(&w) == JW_OK && !out->oom ? CC_OK : CC_ERR;
+        goto end;
+    }
+    buf_append(out, pdf.p, pdf.len);
+    rc = out->oom ? CC_ERR : CC_OK;
+end:
+    free(sh), free(papers), free(pp);
+    buf_free(&pdf);
+    arena_free(&a);
+    return rc;
+}
 /* ---- end PAPER1 ---- */
 #endif

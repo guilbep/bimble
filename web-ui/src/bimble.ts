@@ -977,13 +977,23 @@ export async function viewPdf(id: string, font: PdfFont = "helvetica"): Promise<
 export const sheetPdfName = (s: { number: string; name: string }) => `${s.number} ${s.name}.pdf`;
 export const viewPdfName = (v: { name: string; scale: number }) => `plan-${v.name}-1-${v.scale}.pdf`;
 // ---- end D7 ----
-// ---- PAPER1: a view On paper and Export view as SVG (`view_svg`) ----
+// ---- PAPER1: a view On paper and Export view as SVG (`view_svg`), several sheets as one PDF (`sheets_pdf`) ----
 /** `query view_svg`: the view's paper as SVG, its paper and scale. `bare`: the On paper picture (paper.rs). */
 export interface ViewSvg { svg: string; paper: string; portrait: boolean; scale: number; width_mm: number; height_mm: number }
 export const viewSvg = (id: string, bare = false, font?: PdfFont): ViewSvg =>
   query<ViewSvg>("view_svg", { view: id, ...(bare ? { bare } : {}), ...(font ? { font } : {}) });
 /** Rust's view export name (lib.rs plan_panel): "plan-<view>-1-<scale>.svg". */
 export const viewSvgName = (v: { name: string; scale: number }) => `plan-${v.name}-1-${v.scale}.svg`;
+/** Several sheets as one PDF, one page each in that order (C core only; Rust has no such file). */
+export async function sheetsPdf(ids: string[], font: PdfFont = "helvetica"): Promise<Uint8Array> {
+  const w = wasmOrThrow();
+  if (!w.bytes) throw new Error("PDF export: the C core only");
+  const body = font === "roboto" ? { sheets: ids, font } : { sheets: ids };
+  try { return await w.bytes("query", "sheets_pdf", JSON.stringify(body)); } catch (e) { throw new Error(message(e)); }
+}
+/** The one-PDF name (a C choice, DEVIATIONS 22): "<first number>-<last number>.pdf", "<number>.pdf" for one. */
+export const sheetsPdfName = (s: { number: string }[]) =>
+  `${[...new Set([s[0]?.number ?? "sheets", s[s.length - 1]?.number ?? "sheets"])].join("-")}.pdf`;
 // ---- end PAPER1 ----
 
 /** Run one ribbon action by name (see `actions`). Returns the Rust error, or null. */
