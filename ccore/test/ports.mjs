@@ -99,7 +99,7 @@ const TABLE = [
   ["vite", "lab_files", 5194, 132], // FS1
   ["vite", "lab_keys", 5214, 152], // KEY1
   ["vite", "lab_paper", 5130, 68], // PAPER1
-  ["vite", "lab_section_view", 5214, 152], // SEC1
+  ["vite", "lab_section_view", 5131, 69], // SEC1
 ];
 export const SPAN = 160; // offsets 0..SPAN-1
 const AUTO_LO = 20000, AUTO_SLOTS = Math.floor((32000 - AUTO_LO) / SPAN);
