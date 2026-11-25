@@ -6,6 +6,7 @@
 #include "json_w.h"
 #include "paper.h"
 #include "session.h"
+#include "sheet_svg.h"
 #include "view_io.h"
 #include "views.h"
 #include "visibility.h"
