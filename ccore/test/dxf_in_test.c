@@ -251,6 +251,50 @@ static void hostile(void) {
     buf_free(&err);
 }
 
+/* Fills a large stretch of the stack below the caller with 0xA5, so a struct the reader frees
+ * before initialising it holds 0xA5A5... pointers (a certain crash), not what an earlier call left. */
+static void __attribute__((noinline)) poison_stack(void) {
+    volatile unsigned char buf[1 << 16];
+    for (size_t i = 0; i < sizeof buf; i++) buf[i] = 0xA5;
+}
+
+static int __attribute__((noinline)) read_poisoned(const uint8_t *b, size_t n) {
+    cc_dxf d;
+    Buf err;
+    buf_init(&err);
+    poison_stack();
+    int rc = cc_dxf_read(b, n, &d, &err);
+    if (rc == 0) cc_dxf_free(&d);
+    buf_free(&err);
+    return rc;
+}
+
+/* An entity list whose first entity fails before any field is read (the 20:14 crash: an Ent freed
+ * uninitialised), then every prefix of the fixtures, each read on a poisoned stack. */
+static void poisoned(const char *gdir) {
+    static const char *const T[] = {
+        "0\nSECTION\n2\nENTITIES\n8\nX\n0\nENDSEC\n0\nEOF\n",
+        "0\nSECTION\n2\nENTITIES\n0\nLINE\n10\nabc\n0\nENDSEC\n0\nEOF\n",
+        "0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n2\nB\n8\n0\n0\nENDBLK\n0\nENDSEC\n0\nEOF\n",
+        "0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n2\nB\n0\n5\n0\nENDBLK\n0\nENDSEC\n0\nEOF\n",
+        "0\nSECTION\n2\nENTITIES\n0\nLWPOLYLINE\n20\n1\n0\nENDSEC\n0\nEOF\n",
+        "0\nSECTION\n2\nENTITIES\n0\nPOLYLINE\n0\nVERTEX\n10\nx\n0\nENDSEC\n0\nEOF\n",
+        "0\nSECTION\n2\nENTITIES\n0\nINSERT\n66\n1\n2\nB\n0\nATTRIB\n10\n?\n",
+        "0\nSECTION\n2\nENTITIES\n0\nLINE\n"};
+    size_t runs = 0;
+    for (size_t i = 0; i < sizeof T / sizeof T[0]; i++) read_poisoned((const uint8_t *)T[i], strlen(T[i])), runs++;
+    static const char *const F[] = {"plan_m.dxf", "blocks_in.dxf", "r12.dxf", "self_insert.dxf", "truncated.dxf"};
+    char fdir[4096];
+    snprintf(fdir, sizeof fdir, "%s/fixtures", gdir);
+    for (size_t f = 0; f < sizeof F / sizeof F[0]; f++) {
+        size_t n;
+        uint8_t *b = file_bytes(fdir, F[f], &n);
+        for (size_t k = 0; k <= n; k++) read_poisoned(b, k), runs++;
+        free(b);
+    }
+    check_true("every prefix read on a poisoned stack", runs > 3000);
+}
+
 /* Every prefix (one in 7 bytes) and a flipped byte at every position of each fixture: an answer
  * or an error, never a crash (ASan, UBSan). */
 static void mangled(const char *gdir) {
@@ -414,6 +458,7 @@ int main(int argc, char **argv) {
     extras(gdir);
     hostile();
     mangled(gdir);
+    poisoned(gdir);
     session_calls(floats, gdir);
     return report("dxf_in");
 }
