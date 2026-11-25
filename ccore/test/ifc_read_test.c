@@ -362,6 +362,16 @@ static const struct {
     {"revolved", 1, 14137166.9, 3e-3, {0, -100, -500}, {500, 100, 0}, 1e-3, NULL},
     /* A whole turn: 2 pi * 20000 * 450 = 56548667.8, box +-500 (within 1 mm: chords) */
     {"revolved_full", 1, 56548667.8, 3e-3, {-500, -100, -500}, {500, 100, 500}, 1.0, NULL},
+    /* IfcExtrudedAreaSolidTapered 200x200 to 100x100 over 1000, a frustum:
+     * h/3 (A1 + A2 + sqrt(A1 A2)) = 1000/3 (40000 + 10000 + 20000) = 23333333.3 */
+    {"tapered", 1, 23333333.3, 1e-6, {-100, -100, 0}, {100, 100, 1000}, 1e-3, NULL},
+    /* IfcCsgSolid(IfcBlock 1000x500x200) = 1e8, and an IfcRectangularPyramid 400x300x600 at
+     * x 2000: 400*300*600/3 = 2.4e7; 1.24e8 */
+    {"csg_block", 1, 1.24e8, 1e-6, {0, 0, 0}, {2400, 500, 600}, 1e-3, NULL},
+    /* IfcSphere r 100: 4/3 pi 1e6 = 4188790.2; IfcRightCircularCylinder r 100 h 1000 at x 500:
+     * pi 1e7 = 31415926.5; IfcRightCircularCone r 100 h 300 at x 1000: pi 1e4 * 100 = 3141592.7;
+     * 38746309.4; chords within 1.5 %, the box within 1 mm */
+    {"csg_round", 1, 38746309.4, 1.5e-2, {-100, -100, -100}, {1100, 100, 1000}, 1.0, NULL},
 };
 
 static void own_goldens(void) {
@@ -528,6 +538,13 @@ int main(void) {
         const char *notifc = "ISO-10303-21;\nHEADER;FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));ENDSEC;\nDATA;\nENDSEC;\n";
         int rc = cc_ifc_read(notifc, strlen(notifc), &s, &err);
         check_true("not IFC", rc != 0 && !strcmp(err.msg, "not an IFC file (schema \"CONFIG_CONTROL_DESIGN\")"));
+        cc_ifc_scene_free(&s);
+        rc = cc_ifc_read("PK\x03\x04\x14\x00", 6, &s, &err);
+        check_true("ifcZIP: said so", rc != 0 && !strncmp(err.msg, "unsupported format: ifcZIP", 26));
+        cc_ifc_scene_free(&s);
+        const char *xml = "\xef\xbb\xbf<?xml version=\"1.0\"?><ifcXML/>";
+        rc = cc_ifc_read(xml, strlen(xml), &s, &err);
+        check_true("ifcXML: said so", rc != 0 && !strncmp(err.msg, "unsupported format: ifcXML", 26));
         cc_ifc_scene_free(&s);
         rc = cc_ifc_read("hello", 5, &s, &err);
         check_true("not STEP", rc != 0 && !strncmp(err.msg, "parse: line 1: ", 15));

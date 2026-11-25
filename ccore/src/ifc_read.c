@@ -1113,6 +1113,15 @@ int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
         set_err(err, "parse: ", msg);
         err->offset = off;
         cc_step_free(&f);
+        /* The other IFC encodings, by their first bytes (ticket IFC2): say which. */
+        size_t k = n >= 3 && !memcmp(text, "\xef\xbb\xbf", 3) ? 3 : 0;
+        while (k < n && k < 4096 && (text[k] == ' ' || text[k] == '\t' || text[k] == '\r' || text[k] == '\n')) k++;
+        if (n >= 4 && !memcmp(text, "PK\x03\x04", 4))
+            set_err(err, "unsupported format: ifcZIP (a zip archive; unzip it and open the .ifc inside)", 0);
+        else if (k < n && text[k] == '<')
+            set_err(err, "unsupported format: ifcXML (only IFC-SPF, ISO 10303-21 text, is read)", 0);
+        else if (k < n && (text[k] == '{' || text[k] == '['))
+            set_err(err, "unsupported format: ifcJSON (only IFC-SPF, ISO 10303-21 text, is read)", 0);
         return -1;
     }
     PROF("step parse");

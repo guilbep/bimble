@@ -1526,6 +1526,170 @@ out:
     loops_free(&ls);
 }
 
+/* ---- IfcExtrudedAreaSolidTapered, CSG primitives (ticket IFC2; Rust skips them) */
+
+/* A local prism: the CCW loop l from z0 to z1 (extrusion()'s faces). */
+static void loc_prism(Tris *t, const Loop *l, double z0, double z1) {
+    size_t n = l->n;
+    P3 bot = {0}, top = {0};
+    for (size_t i = 0; i < n && !t->oom; i++) {
+        double b[3] = {l->p[n - 1 - i][0], l->p[n - 1 - i][1], z0}, u[3] = {l->p[i][0], l->p[i][1], z1};
+        if (p3_push(&bot, b) || p3_push(&top, u)) t->oom = 1;
+    }
+    if (!t->oom) {
+        add_polygon(t, (const double(*)[3])bot.p, bot.n, NULL, 0);
+        add_polygon(t, (const double(*)[3])top.p, top.n, NULL, 0);
+    }
+    for (size_t i = 0; i < n && !t->oom; i++) {
+        size_t j = (i + 1) % n;
+        double bi[3] = {l->p[i][0], l->p[i][1], z0}, bj[3] = {l->p[j][0], l->p[j][1], z0};
+        double ti[3] = {l->p[i][0], l->p[i][1], z1}, tj[3] = {l->p[j][0], l->p[j][1], z1};
+        tri_local(t, bi, bj, tj);
+        tri_local(t, bi, tj, ti);
+    }
+    p3_free(&bot), p3_free(&top);
+}
+/* A local cone: the CCW loop l at z = 0 to the apex. */
+static void loc_cone(Tris *t, const Loop *l, const double *apex) {
+    size_t n = l->n;
+    P3 bot = {0};
+    for (size_t i = 0; i < n && !t->oom; i++) {
+        double b[3] = {l->p[n - 1 - i][0], l->p[n - 1 - i][1], 0.0};
+        if (p3_push(&bot, b)) t->oom = 1;
+    }
+    if (!t->oom) add_polygon(t, (const double(*)[3])bot.p, bot.n, NULL, 0);
+    for (size_t i = 0; i < n && !t->oom; i++) {
+        size_t j = (i + 1) % n;
+        double bi[3] = {l->p[i][0], l->p[i][1], 0.0}, bj[3] = {l->p[j][0], l->p[j][1], 0.0};
+        tri_local(t, bi, bj, apex);
+    }
+    p3_free(&bot);
+}
+
+/* IfcBlock, IfcRectangularPyramid, IfcRightCircularCylinder, IfcRightCircularCone, IfcSphere
+ * (Position, dimensions): the shapes of the specification (block and pyramid from Position's
+ * origin into +X +Y +Z, cylinder and cone from z = 0 up, sphere about the origin). 1 handled. */
+static int csg_primitive(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {
+    double v[3] = {0};
+    Tris t = {0};
+    Loop l = {0};
+    int bad = 0;
+    if (is(e, "IFCBLOCK")) {
+        bad = !num(e, 1, &v[0]) || !num(e, 2, &v[1]) || !num(e, 3, &v[2]) || !(v[0] > 0 && v[1] > 0 && v[2] > 0);
+        if (!bad && (loop_push(&l, 0, 0) || loop_push(&l, v[0], 0) || loop_push(&l, v[0], v[1]) || loop_push(&l, 0, v[1])))
+            t.oom = 1;
+        if (!bad && !t.oom) loc_prism(&t, &l, 0.0, v[2]);
+    } else if (is(e, "IFCRECTANGULARPYRAMID")) {
+        bad = !num(e, 1, &v[0]) || !num(e, 2, &v[1]) || !num(e, 3, &v[2]) || !(v[0] > 0 && v[1] > 0 && v[2] > 0);
+        if (!bad && (loop_push(&l, 0, 0) || loop_push(&l, v[0], 0) || loop_push(&l, v[0], v[1]) || loop_push(&l, 0, v[1])))
+            t.oom = 1;
+        double apex[3] = {v[0] / 2.0, v[1] / 2.0, v[2]};
+        if (!bad && !t.oom) loc_cone(&t, &l, apex);
+    } else if (is(e, "IFCRIGHTCIRCULARCYLINDER") || is(e, "IFCRIGHTCIRCULARCONE")) {
+        /* Cylinder (Position, Height, Radius); cone (Position, Height, BottomRadius). */
+        bad = !num(e, 1, &v[0]) || !num(e, 2, &v[1]) || !(v[0] > 0 && v[1] > 0);
+        if (!bad && ring(&l, v[1], arc_segments(v[1], TAU, r->arc_tol))) t.oom = 1;
+        double apex[3] = {0, 0, v[0]};
+        if (!bad && !t.oom) {
+            if (is(e, "IFCRIGHTCIRCULARCONE")) loc_cone(&t, &l, apex);
+            else loc_prism(&t, &l, 0.0, v[0]);
+        }
+    } else if (is(e, "IFCSPHERE")) {
+        bad = !num(e, 1, &v[0]) || !(v[0] > 0);
+        size_t nl = bad ? 0 : arc_segments(v[0], TAU, r->arc_tol), nb = nl / 2 < 4 ? 4 : nl / 2;
+        /* Rings from the north pole down; each pole one point. */
+        for (size_t k = 0; !bad && k < nb && !t.oom && local_room(&t, out); k++) {
+            double f0 = TAU / 2.0 * (double)k / (double)nb, f1 = TAU / 2.0 * (double)(k + 1) / (double)nb;
+            double s0 = cc_sin(f0), c0 = cc_cos(f0), s1 = cc_sin(f1), c1 = cc_cos(f1);
+            for (size_t j = 0; j < nl; j++) {
+                double a0 = TAU * (double)j / (double)nl, a1 = TAU * (double)(j + 1) / (double)nl;
+                double ca0 = cc_cos(a0), sa0 = cc_sin(a0), ca1 = cc_cos(a1), sa1 = cc_sin(a1);
+                double ti[3] = {v[0] * s0 * ca0, v[0] * s0 * sa0, v[0] * c0}, tj[3] = {v[0] * s0 * ca1, v[0] * s0 * sa1, v[0] * c0};
+                double bi[3] = {v[0] * s1 * ca0, v[0] * s1 * sa0, v[0] * c1}, bj[3] = {v[0] * s1 * ca1, v[0] * s1 * sa1, v[0] * c1};
+                if (k == 0) ti[0] = ti[1] = tj[0] = tj[1] = 0.0, ti[2] = tj[2] = v[0];
+                if (k + 1 == nb) bi[0] = bi[1] = bj[0] = bj[1] = 0.0, bi[2] = bj[2] = -v[0];
+                tri_local(&t, bi, bj, tj);
+                tri_local(&t, bi, tj, ti);
+            }
+        }
+    } else
+        return 0;
+    if (bad) warn(r, "invalid ", e->name, " (skipped)");
+    else if (t.oom) out->mb->oom = 1;
+    else {
+        Aff ap = axis_placement(r, arg(e, 0));
+        Aff pos = aff_then(tf, &ap);
+        emit_local(&t, &pos, out);
+    }
+    free(l.p);
+    tris_free(&t);
+    return 1;
+}
+
+/* IfcExtrudedAreaSolidTapered (SweptArea, Position, ExtrudedDirection, Depth, EndSweptArea): the
+ * start profile at 0, the end one at Depth, point to point. Profiles of other point counts (a
+ * circle of another radius gets other segments): drawn as the start profile, warned. */
+static void tapered(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {
+    Loops ls, le;
+    if (!profile(r, arg(e, 0), 0, &ls)) return;
+    if (!profile(r, arg(e, 4), 0, &le)) le.n = 0;
+    int same = le.n == ls.n;
+    for (size_t i = 0; same && i < ls.n; i++) same = le.v[i].n == ls.v[i].n;
+    if (!same) {
+        loops_free(&ls), loops_free(&le);
+        warn(r, "tapered extrusion: the end profile does not match the start (drawn untapered)", 0, 0);
+        extrusion(r, e, tf, out);
+        return;
+    }
+    Aff ap = axis_placement(r, arg(e, 1));
+    Aff pos = aff_then(tf, &ap);
+    double dir[3], depth;
+    Tris t = {0};
+    if (!direction(r, arg(e, 2), dir) || !num(e, 3, &depth) || !(depth > 0.0)) goto out;
+    double d[3] = {dir[0] * depth, dir[1] * depth, dir[2] * depth};
+    for (size_t i = 0; i < ls.n; i++) {
+        int ccw = signed_area(&ls.v[i]) > 0.0;
+        if (ccw == (i > 0)) loop_reverse(&ls.v[i]), loop_reverse(&le.v[i]);
+    }
+    {
+        P3 *bot = calloc(ls.n, sizeof *bot), *top = calloc(ls.n, sizeof *top);
+        int bad = !bot || !top;
+        for (size_t i = 0; !bad && i < ls.n; i++)
+            for (size_t j = 0; !bad && j < ls.v[i].n; j++) {
+                size_t jb = i ? j : ls.v[i].n - 1 - j; /* the outer loop reversed at the bottom */
+                double b[3] = {ls.v[i].p[jb][0], ls.v[i].p[jb][1], 0.0};
+                double u[3] = {le.v[i].p[j][0] + d[0], le.v[i].p[j][1] + d[1], d[2]};
+                bad = p3_push(&bot[i], b) || p3_push(&top[i], u);
+            }
+        if (bad) t.oom = 1;
+        else {
+            add_polygon(&t, (const double(*)[3])bot[0].p, bot[0].n, bot + 1, ls.n - 1);
+            add_polygon(&t, (const double(*)[3])top[0].p, top[0].n, top + 1, ls.n - 1);
+        }
+        for (size_t i = 0; i < ls.n; i++) {
+            if (bot) p3_free(&bot[i]);
+            if (top) p3_free(&top[i]);
+        }
+        free(bot), free(top);
+    }
+    for (size_t l = 0; l < ls.n && local_room(&t, out); l++) {
+        size_t n = ls.v[l].n;
+        for (size_t i = 0; i < n; i++) {
+            size_t j = (i + 1) % n;
+            double bi[3] = {ls.v[l].p[i][0], ls.v[l].p[i][1], 0.0}, bj[3] = {ls.v[l].p[j][0], ls.v[l].p[j][1], 0.0};
+            double ti[3] = {le.v[l].p[i][0] + d[0], le.v[l].p[i][1] + d[1], d[2]};
+            double tj[3] = {le.v[l].p[j][0] + d[0], le.v[l].p[j][1] + d[1], d[2]};
+            tri_local(&t, bi, bj, tj);
+            tri_local(&t, bi, tj, ti);
+        }
+    }
+    if (t.oom) out->mb->oom = 1;
+    else emit_local(&t, &pos, out);
+out:
+    tris_free(&t);
+    loops_free(&ls), loops_free(&le);
+}
+
 /* point_list_3d: coordinates with three values each. */
 static int point_list_3d(R *r, const cc_sv *v, P3 *out, const Aff *tf) {
     memset(out, 0, sizeof *out);
@@ -1998,6 +2162,12 @@ static void item(R *r, uint64_t id, const Aff *tf, Emit *out, int depth) {
     if (!e) return;
     if (is(e, "IFCEXTRUDEDAREASOLID")) extrusion(r, e, tf, out);
     else if (is(e, "IFCREVOLVEDAREASOLID")) revolved(r, e, tf, out);
+    else if (is(e, "IFCEXTRUDEDAREASOLIDTAPERED")) tapered(r, e, tf, out);
+    else if (is(e, "IFCCSGSOLID")) {
+        uint64_t root;
+        if (cc_sv_as_ref(arg(e, 0), &root)) item(r, root, tf, out, depth + 1);
+    } else if (csg_primitive(r, e, tf, out)) {
+    }
     else if (is(e, "IFCPOLYGONALFACESET")) polygonal_face_set(r, e, tf, out);
     else if (is(e, "IFCTRIANGULATEDFACESET") || is(e, "IFCTRIANGULATEDIRREGULARNETWORK"))
         triangulated_face_set(r, e, tf, out);

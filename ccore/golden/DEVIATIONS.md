@@ -335,6 +335,16 @@ byte for byte once both version notes are cut out.
   rings at the reader's arc segmentation for the profile's largest radius, with end caps unless
   the turn is whole; oriented outward by its signed volume. Rust: `unsupported geometry
   IFCREVOLVEDAREASOLID (skipped)`.
+- `IfcExtrudedAreaSolidTapered`: the start profile at 0, the end profile at Depth, joined point to
+  point; an end profile of another point count is drawn untapered, with the warning `tapered
+  extrusion: the end profile does not match the start (drawn untapered)`.
+- `IfcCsgSolid` (its tree root drawn as any item, booleans included) and the primitives
+  `IfcBlock`, `IfcRectangularPyramid`, `IfcRightCircularCylinder`, `IfcRightCircularCone`,
+  `IfcSphere` (latitude and longitude rings at the reader's arc segmentation), as items and as
+  boolean operands. Invalid dimensions: `invalid <TYPE> (skipped)`.
+- A file that is not STEP but an ifcZIP archive (`PK\3\4`), ifcXML (`<`) or ifcJSON (`{`, `[`)
+  is refused with `unsupported format: ifcZIP (...)` (ifcXML, ifcJSON) instead of `parse: line 1:
+  not a STEP file (missing ISO-10303-21 header)`.
 
 **Why.** ADR 0068 rule 10 (full IFC compatibility); the public corpus run (ticket IFC1,
 `ccore/results/ifc_corpus.md`) ranked these gaps. The reference is IfcOpenShell and the IFC
