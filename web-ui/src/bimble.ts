@@ -804,6 +804,8 @@ export const deleteAnnotation = (view: string, id: string) => runVerb("delete_an
 
 /** `query("visibility_sets")` (C core only, ccore/session/calls.h): the whole sets `query("visibility")` caps at 50. */
 export interface VisibilitySets {
+  /** SEC1: what the view's class, family, storey and material lists hide (C core only). */
+  by_view?: string[];
   hidden_in_view: string[];
   isolated_in_view: string[];
   now: { ids: string[]; isolate: boolean } | null;

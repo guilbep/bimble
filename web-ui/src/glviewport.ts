@@ -58,6 +58,14 @@
 // rad/px, a marker at the pivot while it turns); the distance stays within 10 mm .. 1e8 mm; the clip
 // planes come from the model's sphere seen from the eye; a double-click fits all (a plan: fits the
 // plan). Plans keep their pan and zoom about the pointer.
+// Sections (ticket SEC1, gl/section.ts): a section tab takes the plan's path with its own frame:
+// `view_clip` gives the box (the model's bounds cut at the section's line, as deep as its depth,
+// cropped) and the look `dir`; the camera is orthographic, looking along it from the near side of
+// the cut, z up, screen right = the section's right (views.rs camera_angles, section_right). Cut
+// solids show filled at the cut shade (B3's passes, no hatching), pan and zoom as a plan, pick and
+// select work (rays along the look). The plan overlays (annotations, references, grid axes) stay
+// plans'. What the view hides by class, family, storey or material (visibility_sets `by_view`) is
+// not drawn. A building turned in its site (yaw != 0): the box is not turned here (see the report).
 import {
   actions, viewActions, // Q2: the view switches (edges, orthographic, fit, top)
   viewportKeys, // KEY1: Esc and Delete in the viewport (shell/keys.ts)
@@ -69,6 +77,7 @@ import {
 } from "./bimble";
 import { drawMeasure } from "./gl/measure";
 import { referenceLayer } from "./gl/reference"; // L1: reference plans
+import { sectionMatrices, sectionFit, isSection } from "./gl/section"; // SEC1
 import { gridLayer } from "./gl/grids"; // ---- G2: grid axes in plans ---- / ---- end G2 ----
 import { clipPlanes, onTargetPlane, orbitAbout, ORBIT_RAD_PER_PX, sameCam, wheelFactor, zoomAt, type OrbitCam } from "./gl/nav";
 import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
@@ -578,6 +587,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const matrices = () => {
     const aspect = Math.max(1e-3, canvas.width / Math.max(1, canvas.height));
     const r = bounds?.radius ?? distance;
+    if (isSection(plan)) return sectionMatrices(plan, target, r, half, aspect); // SEC1
     if (plan) { // orthographic, straight down (up: from below, mirrored), north up
       const h = 4 * r + 1000, up: V3 = [0, 1, 0];
       const e = add(target, [0, 0, plan.look === "up" ? -h : h]);
@@ -605,6 +615,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const fitPlan = () => {
     const c = plan?.clip;
     if (!c) { if (bounds) target = [...bounds.center], half = bounds.radius; return; }
+    if (isSection(plan)) { ({ target, half } = sectionFit(plan, c, Math.max(1e-3, canvas.width / Math.max(1, canvas.height)))); return; } // SEC1
     const aspect = Math.max(1e-3, canvas.width / Math.max(1, canvas.height));
     target = [((c.min[0] ?? 0) + (c.max[0] ?? 0)) / 2, ((c.min[1] ?? 0) + (c.max[1] ?? 0)) / 2, ((c.min[2] ?? 0) + (c.max[2] ?? 0)) / 2];
     half = 1.05 * Math.max(((c.max[1] ?? 0) - (c.min[1] ?? 0)) / 2, ((c.max[0] ?? 0) - (c.min[0] ?? 0)) / 2 / aspect, 100);
@@ -612,14 +623,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** The view shown changed (a tab): keep the camera of the one left, take the new one's. */
   const switchView = (vc: ViewClip | null, id: string | null) => {
     if (id === viewId) {
-      plan = vc?.type === "plan" ? vc : null; // the same view, its range or the model changed
+      plan = vc?.type === "plan" || vc?.type === "section" ? vc : null; // the same view, its range or the model changed (SEC1: a section too)
       dirty = true;
       return;
     }
     turn = null;
     if (viewId !== null) cams.set(viewId, { yaw, pitch, distance, target: [...target], half });
     viewId = id;
-    plan = vc?.type === "plan" ? vc : null;
+    plan = vc?.type === "plan" || vc?.type === "section" ? vc : null; // SEC1: a section too
     const c = id === null ? undefined : cams.get(id);
     if (c) ({ yaw, pitch, distance, half } = c), (target = [...c.target]);
     else if (plan) fitPlan();
@@ -733,9 +744,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const hiddenTest = () => {
     const st = sets;
     if (!st) return () => false;
+    const byView = new Set(st.by_view ?? []); // SEC1: the view's class, family, storey, material lists
     const hid = new Set(st.hidden_in_view), iso = new Set(st.isolated_in_view), now = st.now ? new Set(st.now.ids) : null;
     const isolateNow = st.now?.isolate === true;
-    return (id: string) => hid.has(id) || (iso.size > 0 && !iso.has(id)) || (now !== null && now.has(id) !== isolateNow);
+    return (id: string) => hid.has(id) || byView.has(id) || (iso.size > 0 && !iso.has(id)) || (now !== null && now.has(id) !== isolateNow);
   };
   /** The draw lists: the triangles and edge segments of the elements shown. */
   const drawLists = () => {
@@ -1112,7 +1124,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // keep it on screen after the whole-canvas clear above when nothing else was drawn.
     if (navMark) ctx.clearRect((navMark[0] - 8) * dpr, (navMark[1] - 8) * dpr, 16 * dpr, 16 * dpr), (navMark = null);
     const texts: string[] = [];
-    if (plan && mesh) {
+    if (plan && !isSection(plan) && mesh) { // SEC1: the plan overlays are plans'
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       refLayer.draw(ctx, toLocal); // L1
       gridAxesLayer.draw(ctx, toLocal); // ---- G2 ---- / ---- end G2 ----
@@ -1177,7 +1189,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const key = plan ? `${state.value.rev}|${viewId}` : "";
     if (key === annKey) return;
     annKey = key;
-    anns = plan ? viewAnnotations() : null;
+    anns = plan && !isSection(plan) ? viewAnnotations() : null; // SEC1: a section's are not drawn here
     stats.annotations = anns;
     if (selAnn && !anns?.items.some((a) => a.id === selAnn)) selAnn = stats.selectedAnnotation = null;
     dirty = true;
@@ -1597,7 +1609,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const a = rayAt(x, y);
       half = Math.min(1e7, Math.max(10, half * wheelFactor(e)));
       const b = rayAt(x, y);
-      target = [target[0] + (a[0] ?? 0) - (b[0] ?? 0), target[1] + (a[1] ?? 0) - (b[1] ?? 0), target[2]];
+      target = [target[0] + (a[0] ?? 0) - (b[0] ?? 0), target[1] + (a[1] ?? 0) - (b[1] ?? 0), target[2] + (isSection(plan) ? (a[2] ?? 0) - (b[2] ?? 0) : 0)]; // SEC1: a section's screen holds z
     } else zoom3d(e); // NAV1: about the geometry under the cursor
     dirty = true;
   };
@@ -1713,9 +1725,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     if (annotate.value?.active === true && !plan) annotCancel(); // the plan was left
     refreshAnnotations();
-    if (refLayer.refresh(`${state.value.rev}|${viewId}`, plan !== null)) dirty = true; // L1
+    if (refLayer.refresh(`${state.value.rev}|${viewId}`, plan !== null && !isSection(plan))) dirty = true; // L1 (SEC1: plans)
     // ---- G2: grid axes, again when the model, its links or the view change ----
-    if (gridAxesLayer.refresh(`${state.value.rev}|${state.value.file}|${state.value.links ?? 0}|${viewId}`, plan !== null)) dirty = true;
+    if (gridAxesLayer.refresh(`${state.value.rev}|${state.value.file}|${state.value.links ?? 0}|${viewId}`, plan !== null && !isSection(plan))) dirty = true; // SEC1: plans
     // ---- end G2 ----
     if (tool && placing.value?.active !== true) showTool(null); // placing stopped elsewhere
     const key = mesh ? `${state.value.selection.join(",")}|${state.value.linked?.link ?? ""}` : "";
