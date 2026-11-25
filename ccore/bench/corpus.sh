@@ -11,14 +11,17 @@
 # BIMBLE_IFC_CORPUS: the corpus folder (default ~/.cache/bimble-ifc-corpus), never inside the repo.
 # RUST_DUMP: the ccore_golden example (cargo build --release -p bimble-api --example ccore_golden);
 # unset: <repo>/target/release/examples/ccore_golden when it exists, else Rust is not run.
-# Results: $BIMBLE_IFC_CORPUS/_runs/ifc1-results.jsonl (delete it, or `run --fresh`, to start over).
+# Results: $BIMBLE_IFC_CORPUS/_runs/$CORPUS_TAG-results.jsonl (CORPUS_TAG default ifc1; delete it,
+# or `run --fresh`, to start over). Each C record has "hash": scene.txt and meshes.txt, for
+# before/after comparisons.
 # Files are untrusted data: never executed; one at a time, 120 s and 6 GB each (bench/corpus.py).
 # git-lfs pointers are fetched only when git-lfs is installed; else they are counted and skipped.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 CORPUS=${BIMBLE_IFC_CORPUS:-$HOME/.cache/bimble-ifc-corpus}
-RESULTS=$CORPUS/_runs/ifc1-results.jsonl
-IOS=$CORPUS/_runs/ifc1-ios.jsonl
+TAG=${CORPUS_TAG:-ifc1} # the results' name prefix: one per ticket (IFC2: CORPUS_TAG=ifc2-after ...)
+RESULTS=$CORPUS/_runs/$TAG-results.jsonl
+IOS=$CORPUS/_runs/$TAG-ios.jsonl
 
 # name | URL | pinned commit | sparse path (empty: all). Licence as stated by the repo, in results/ifc_corpus.md.
 CORPORA=(
@@ -86,10 +89,10 @@ case $cmd in
     asan) asan ;;
     run)
         mkdir -p "$CORPUS/_runs"
-        exec 9> "$CORPUS/_runs/ifc1.lock"
-        flock -n 9 || { echo "corpus.sh: another run holds $CORPUS/_runs/ifc1.lock" >&2; exit 1; }
-        [[ -x $here/out/native/ifc_dump ]] || "$here/build.sh" native
-        args=(--c "$here/out/native/ifc_dump")
+        exec 9> "$CORPUS/_runs/$TAG.lock"
+        flock -n 9 || { echo "corpus.sh: another run holds $CORPUS/_runs/$TAG.lock" >&2; exit 1; }
+        [[ -n ${C_DUMP:-} || -x $here/out/native/ifc_dump ]] || "$here/build.sh" native
+        args=(--c "${C_DUMP:-$here/out/native/ifc_dump}") # C_DUMP: another build (a before/after run)
         rb=$(rust_bin || true)
         [[ -n $rb ]] && args+=(--rust "$rb")
         [[ -x $here/out/corpus-asan/ifc_dump ]] && args+=(--asan "$here/out/corpus-asan/ifc_dump")

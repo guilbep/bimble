@@ -168,6 +168,11 @@ def scene_stats(d):
         if m:
             r[k] = int(m.group(1))
     r["empty"] = {m.group(1): int(m.group(2)) for m in re.finditer(r"^empty (\w+) (\d+)$", c, re.M)}
+    # The scene's identity: scene.txt and every element's mesh hash (ticket IFC2: before/after).
+    h = hashlib.sha1()
+    for n in ("scene.txt", "meshes.txt"):
+        h.update((read_text(os.path.join(d, n)) or "").encode())
+    r["hash"] = h.hexdigest()[:16]
     return r
 
 
