@@ -147,6 +147,48 @@ static void tally_sort(Tallies *t) { /* insertion sort: small, bounded by MAX_TA
     }
 }
 
+/* ------------------------------------------------------------------ sparse side tables */
+
+/* Entity index -> value (open addressing; key ix + 1, 0 empty). Side tables of the few entities
+ * a relation names (containers, materials), instead of one slot per entity of the file. */
+typedef struct {
+    size_t *key, *val;
+    size_t cap, n;
+} IxMap;
+
+static size_t ixmap_slot(size_t ix, size_t cap) { return (size_t)(((uint64_t)ix * 0x9E3779B97F4A7C15ull) >> 24) & (cap - 1); }
+static const size_t *ixmap_get(const IxMap *m, size_t ix) {
+    if (!m->cap) return NULL;
+    for (size_t k = ixmap_slot(ix, m->cap);; k = (k + 1) & (m->cap - 1)) {
+        if (!m->key[k]) return NULL;
+        if (m->key[k] == ix + 1) return &m->val[k];
+    }
+}
+static int ixmap_put(IxMap *m, size_t ix, size_t val) { /* 0 ok, -1 out of memory */
+    if (2 * (m->n + 1) > m->cap) {
+        size_t cap = m->cap ? m->cap * 2 : 256;
+        size_t *k2 = calloc(cap, sizeof *k2), *v2 = malloc(cap * sizeof *v2);
+        if (!k2 || !v2) { free(k2), free(v2); return -1; }
+        for (size_t i = 0; i < m->cap; i++) {
+            if (!m->key[i]) continue;
+            size_t k = ixmap_slot(m->key[i] - 1, cap);
+            while (k2[k]) k = (k + 1) & (cap - 1);
+            k2[k] = m->key[i], v2[k] = m->val[i];
+        }
+        free(m->key), free(m->val);
+        m->key = k2, m->val = v2, m->cap = cap;
+    }
+    size_t k = ixmap_slot(ix, m->cap);
+    while (m->key[k] && m->key[k] != ix + 1) k = (k + 1) & (m->cap - 1);
+    if (!m->key[k]) m->n++;
+    m->key[k] = ix + 1, m->val[k] = val;
+    return 0;
+}
+static void ixmap_free(IxMap *m) {
+    free(m->key), free(m->val);
+    memset(m, 0, sizeof *m);
+}
+
 /* ------------------------------------------------------------------ reader */
 
 #define MAX_NESTING 32
@@ -1825,15 +1867,45 @@ static void material_names(R *r, const cc_step_entity *m, int depth, MatNames *o
 #undef SUBS
 }
 
-/* Per entity index: material display name (malloc) and category; set when known. */
+/* Material display name (malloc) and category of an entity; set when known. */
 typedef struct {
     char *name;
     size_t n;
     cc_category cat;
     int set;
 } ElMat;
+/* Per entity index, only those that have one. */
+typedef struct {
+    IxMap at;
+    ElMat *v;
+    size_t n, cap;
+} ElMats;
 
-static void materials(R *r, ElMat *em) {
+static const ElMat *elmat_get(const ElMats *m, size_t ix) {
+    const size_t *k = ixmap_get(&m->at, ix);
+    return k ? &m->v[*k] : NULL;
+}
+static ElMat *elmat_make(ElMats *m, size_t ix) { /* NULL: out of memory */
+    const size_t *k = ixmap_get(&m->at, ix);
+    if (k) return &m->v[*k];
+    if (m->n == m->cap) {
+        size_t cap = m->cap ? m->cap * 2 : 64;
+        ElMat *v = realloc(m->v, cap * sizeof *v);
+        if (!v) return NULL;
+        m->v = v, m->cap = cap;
+    }
+    if (ixmap_put(&m->at, ix, m->n)) return NULL;
+    memset(&m->v[m->n], 0, sizeof *m->v);
+    return &m->v[m->n++];
+}
+static void elmats_free(ElMats *m) {
+    for (size_t i = 0; i < m->n; i++) free(m->v[i].name);
+    free(m->v);
+    ixmap_free(&m->at);
+    memset(m, 0, sizeof *m);
+}
+
+static void materials(R *r, ElMats *em) {
     const cc_step_file *f = r->f;
     Buf b;
     buf_init(&b);
@@ -1866,7 +1938,8 @@ static void materials(R *r, ElMat *em) {
         for (size_t k = 0; k < no; k++) {
             const cc_step_entity *o = get(r, &os[k]);
             if (!o) continue; /* only entities of the file can be elements */
-            ElMat *x = &em[cc_step_index(f, o)];
+            ElMat *x = elmat_make(em, cc_step_index(f, o));
+            if (!x) continue;
             free(x->name);
             x->name = malloc(b.len + 1);
             x->n = x->name ? b.len : 0;
@@ -1882,16 +1955,19 @@ static void materials(R *r, ElMat *em) {
         if (!is(rel, "IFCRELDEFINESBYTYPE")) continue;
         const cc_step_entity *t = get(r, arg(rel, 5));
         if (!t) continue;
-        ElMat *tm = &em[cc_step_index(f, t)];
-        if (tm->set != 2) continue;
+        const ElMat *tp = elmat_get(em, cc_step_index(f, t));
+        if (!tp || tp->set != 2) continue;
+        ElMat tmv = *tp, *tm = &tmv; /* a copy: em may grow below */
         const cc_sv *os;
         size_t no;
         if (!cc_sv_as_list(arg(rel, 4), &os, &no)) continue;
         for (size_t k = 0; k < no; k++) {
             const cc_step_entity *o = get(r, &os[k]);
             if (!o) continue;
-            ElMat *x = &em[cc_step_index(f, o)];
-            if (x->set) continue;
+            const ElMat *xo = elmat_get(em, cc_step_index(f, o));
+            if (xo && xo->set) continue;
+            ElMat *x = elmat_make(em, cc_step_index(f, o));
+            if (!x) continue;
             x->name = malloc(tm->n + 1);
             x->n = x->name ? tm->n : 0;
             if (x->name && tm->n) memcpy(x->name, tm->name, tm->n);

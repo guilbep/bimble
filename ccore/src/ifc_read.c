@@ -105,17 +105,44 @@ static int ends_with(const char *s, const char *suf) {
 
 /* ---- Parsed::new parts */
 
-/* containers(): entity index -> container name (an index into names), or -1. */
+/* containers(): entity index -> container name, for the entities a relation names. */
 typedef struct {
     int has_direct, has_parent;
-    size_t direct;   /* entity index of the spatial structure whose name it takes */
     uint64_t parent; /* aggregation parent id */
     const char *name;
     size_t nn;
     int has_name;
 } Cont;
+typedef struct {
+    IxMap at;
+    Cont *v;
+    size_t n, cap;
+    int oom;
+} Conts;
 
-static void containers(R *r, Cont *c) {
+static const Cont *cont_get(const Conts *c, size_t ix) {
+    const size_t *k = ixmap_get(&c->at, ix);
+    return k ? &c->v[*k] : NULL;
+}
+static Cont *cont_make(Conts *c, size_t ix) { /* NULL (and oom): out of memory */
+    const size_t *k = ixmap_get(&c->at, ix);
+    if (k) return &c->v[*k];
+    if (c->n == c->cap) {
+        size_t cap = c->cap ? c->cap * 2 : 64;
+        Cont *v = realloc(c->v, cap * sizeof *v);
+        if (!v) { c->oom = 1; return NULL; }
+        c->v = v, c->cap = cap;
+    }
+    if (ixmap_put(&c->at, ix, c->n)) { c->oom = 1; return NULL; }
+    memset(&c->v[c->n], 0, sizeof *c->v);
+    return &c->v[c->n++];
+}
+static void conts_free(Conts *c) {
+    free(c->v);
+    ixmap_free(&c->at);
+}
+
+static void containers(R *r, Conts *c) {
     const cc_step_file *f = r->f;
     for (size_t i = 0; i < f->n; i++) {
         const cc_step_entity *rel = &f->ents[i];
@@ -130,7 +157,8 @@ static void containers(R *r, Cont *c) {
         for (size_t k = 0; k < n; k++) {
             const cc_step_entity *e = get(r, &l[k]);
             if (!e) continue; /* only entities of the file are elements */
-            Cont *x = &c[cc_step_index(f, e)];
+            Cont *x = cont_make(c, cc_step_index(f, e));
+            if (!x) return;
             x->has_direct = 1, x->name = nm, x->nn = nn;
         }
     }
@@ -144,13 +172,14 @@ static void containers(R *r, Cont *c) {
         for (size_t k = 0; k < n; k++) {
             const cc_step_entity *e = get(r, &l[k]);
             if (!e) continue;
-            Cont *x = &c[cc_step_index(f, e)];
+            Cont *x = cont_make(c, cc_step_index(f, e));
+            if (!x) return;
             x->has_parent = 1, x->parent = p;
         }
     }
     /* out = direct, then each child takes the first direct container up its parents (8 steps). */
-    for (size_t i = 0; i < f->n; i++) {
-        Cont *x = &c[i];
+    for (size_t i = 0; i < c->n; i++) {
+        Cont *x = &c->v[i];
         if (x->has_direct) { x->has_name = 1; continue; }
         if (!x->has_parent) continue;
         const Cont *cur = x;
@@ -161,8 +190,7 @@ static void containers(R *r, Cont *c) {
             }
             if (!cur->has_parent) break;
             const cc_step_entity *pe = cc_step_get(r->f, cur->parent);
-            if (!pe) break;
-            cur = &c[cc_step_index(f, pe)];
+            if (!pe || !(cur = cont_get(c, cc_step_index(f, pe)))) break;
         }
     }
 }
@@ -380,17 +408,57 @@ static long shape_find(const Shape *v, size_t n, uint64_t id) {
 typedef struct {
     const cc_step_file *f;
     double scale, arc_tol, angle_scale;
-    const size_t *nvoids;   /* per entity index: openings (IfcRelVoidsElement) */
-    const size_t *void_at;  /* their ids: void_ids[void_at[i] .. void_at[i + 1]) */
+    /* Openings (IfcRelVoidsElement): (host entity index, opening id) pairs sorted by host, then
+     * opening id. */
+    const size_t *void_host;
     const uint64_t *void_ids;
+    size_t nvoid;
     Shape *shapes;
     size_t nshapes;
     Tallies cut_warnings; /* C only: openings and booleans left uncut (the pieces' `cut`) */
 } Ctx;
 
+/* The openings of host `ent`: void_ids[*at .. *at + count). */
+static size_t voids_of(const Ctx *c, size_t ent, size_t *at) {
+    size_t lo = 0, hi = c->nvoid;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (c->void_host[mid] < ent) lo = mid + 1;
+        else hi = mid;
+    }
+    size_t e = lo;
+    while (e < c->nvoid && c->void_host[e] == ent) e++;
+    *at = lo;
+    return e - lo;
+}
+
+typedef struct {
+    size_t host;
+    uint64_t id;
+} VoidPair;
+
+/* Sorts by host, then opening id (bottom-up merge sort: no libc qsort in the wasm build). */
+static int sort_voids(VoidPair *v, size_t n) {
+    VoidPair *t = malloc((n ? n : 1) * sizeof *t);
+    if (!t) return -1;
+    for (size_t w = 1; w < n; w *= 2) {
+        for (size_t lo = 0; lo < n; lo += 2 * w) {
+            size_t mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n, i = lo, j = mid, k = lo;
+            while (i < mid && j < hi)
+                t[k++] = v[j].host < v[i].host || (v[j].host == v[i].host && v[j].id < v[i].id) ? v[j++] : v[i++];
+            while (i < mid) t[k++] = v[i++];
+            while (j < hi) t[k++] = v[j++];
+        }
+        memcpy(v, t, n * sizeof *v);
+    }
+    free(t);
+    return 0;
+}
+
 /* Parsed::mapped_item */
 static const cc_step_entity *mapped_item(const Ctx *c, R *r, const cc_step_entity *e) {
-    if (c->nvoids[cc_step_index(c->f, e)]) return NULL;
+    size_t at;
+    if (voids_of(c, cc_step_index(c->f, e), &at)) return NULL;
     return mapped_item_of(r, e);
 }
 
@@ -455,7 +523,7 @@ static int piece(Ctx *c, R *w, size_t ent, Budget *budget, Piece *out) {
     Emit em = {&out->tris, c->scale, budget};
     size_t unsup0 = w->unsup_n;
     product_body(w, e, &em);
-    size_t nv = c->nvoids[ent];
+    size_t vat, nv = voids_of(c, ent, &vat);
     if (nv && out->tris.n) {
         /* Openings (IfcRelVoidsElement): each opening's body meshed (same budget), then subtracted
          * from the host (Reader::cut). Without a kernel the host is drawn uncut (C only warning). */
@@ -463,7 +531,7 @@ static int piece(Ctx *c, R *w, size_t ent, Budget *budget, Piece *out) {
         size_t cutters = 0;
         if (!ob) out->tris.oom = 1;
         for (size_t k = 0; ob && k < nv; k++) {
-            const cc_step_entity *oe = cc_step_get(f, c->void_ids[c->void_at[ent] + k]);
+            const cc_step_entity *oe = cc_step_get(f, c->void_ids[vat + k]);
             if (!oe) continue;
             Emit eo = {&ob[cutters], c->scale, budget};
             product_body(w, oe, &eo);
@@ -496,9 +564,10 @@ static int piece(Ctx *c, R *w, size_t ent, Budget *budget, Piece *out) {
 }
 
 static void category_of(const cc_step_entity *e, const ElMat *m, cc_category *cat, cc_str *mat) {
-    *cat = m->set ? m->cat : CC_CAT_OTHER;
-    mat->p = m->set && m->name ? m->name : "";
-    mat->n = m->set ? m->n : 0;
+    int set = m && m->set;
+    *cat = set ? m->cat : CC_CAT_OTHER;
+    mat->p = set && m->name ? m->name : "";
+    mat->n = set ? m->n : 0;
     if (!mat->n && is(e, "IFCGEOGRAPHICELEMENT")) *cat = CC_CAT_EARTH;
 }
 
@@ -628,9 +697,10 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     memset(&c, 0, sizeof c);
     c.f = f;
     r_init(&r, f, 0.5, 1.0);
-    Cont *cont = calloc(ne, sizeof *cont);
-    ElMat *em = calloc(ne, sizeof *em);
-    size_t *nvoids = calloc(ne, sizeof *nvoids), *void_at = calloc(ne + 1, sizeof *void_at);
+    Conts cont = {0};
+    ElMats em = {0};
+    VoidPair *vp = NULL;
+    size_t *void_host = NULL;
     uint64_t *void_ids = NULL;
     size_t *ids = NULL, nids = 0;
     Piece *res = NULL;
@@ -649,7 +719,7 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
         arena_init(&warena[w], 0);
         arena_init(&wscratch[w], 0);
     }
-    if (!r_ok(&r) || !cont || !em || !nvoids || !void_at) goto oom;
+    if (!r_ok(&r)) goto oom;
 
     /* Parsed::new */
     if (f->skipped) {
@@ -664,11 +734,11 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     r.arc_tol = 0.5 / scale; /* ARC_TOLERANCE_MM / scale */
     r.angle_scale = plane_angle_to_radians(&r);
     c.scale = scale, c.arc_tol = r.arc_tol, c.angle_scale = r.angle_scale;
-    containers(&r, cont);
+    containers(&r, &cont);
+    if (cont.oom) goto oom;
     PROF("  containers");
-    for (int pass = 0; pass < 2; pass++) { /* voids(): per host, opening ids sorted */
-        size_t *fill = pass ? calloc(ne, sizeof *fill) : NULL;
-        if (pass && !fill) goto oom;
+    { /* voids(): per host, opening ids sorted */
+        size_t nv = 0, cv = 0;
         for (size_t i = 0; i < f->n; i++) {
             const cc_step_entity *rv = &f->ents[i];
             uint64_t h, o;
@@ -676,23 +746,21 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
                 continue;
             const cc_step_entity *he = cc_step_get(f, h);
             if (!he) continue;
-            size_t hi = cc_step_index(f, he);
-            if (!pass) { nvoids[hi]++; continue; }
-            uint64_t *v = void_ids + void_at[hi];
-            size_t j = fill[hi]++;
-            while (j && v[j - 1] > o) v[j] = v[j - 1], j--;
-            v[j] = o;
+            if (nv == cv && grow((void **)&vp, &cv, nv + 1, sizeof *vp)) goto oom;
+            vp[nv].host = cc_step_index(f, he), vp[nv].id = o;
+            nv++;
         }
-        if (!pass) {
-            for (size_t i = 0; i < f->n; i++) void_at[i + 1] = void_at[i] + nvoids[i];
-            void_ids = malloc((void_at[f->n] ? void_at[f->n] : 1) * sizeof *void_ids);
-            if (!void_ids) goto oom;
-        }
-        free(fill);
+        if (sort_voids(vp, nv)) goto oom;
+        void_host = malloc((nv ? nv : 1) * sizeof *void_host);
+        void_ids = malloc((nv ? nv : 1) * sizeof *void_ids);
+        if (!void_host || !void_ids) goto oom;
+        for (size_t k = 0; k < nv; k++) void_host[k] = vp[k].host, void_ids[k] = vp[k].id;
+        free(vp);
+        vp = NULL;
+        c.void_host = void_host, c.void_ids = void_ids, c.nvoid = nv;
     }
-    c.nvoids = nvoids, c.void_at = void_at, c.void_ids = void_ids;
     PROF("  voids");
-    materials(&r, em);
+    materials(&r, &em);
     PROF("  materials");
     ids = malloc(ne * sizeof *ids);
     if (!ids) goto oom;
@@ -913,10 +981,10 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
         oom |= cls.oom;
         if (!cc_sv_as_str(arg(e, 2), &t, &tn)) t = "", tn = 0;
         in->name = a_str(a, t, tn, &oom);
-        const Cont *ct = &cont[it->ent];
-        in->storey = ct->has_name ? a_str(a, ct->name, ct->nn, &oom) : (cc_str){"", 0};
+        const Cont *ct = cont_get(&cont, it->ent);
+        in->storey = ct && ct->has_name ? a_str(a, ct->name, ct->nn, &oom) : (cc_str){"", 0};
         cc_str mat;
-        category_of(e, &em[it->ent], &se->category, &mat);
+        category_of(e, elmat_get(&em, it->ent), &se->category, &mat);
         in->material = a_str(a, mat.p, mat.n, &oom);
         se->class_name = in->class_name;
         se->cls = class_enum(e->name);
@@ -985,11 +1053,10 @@ done:
     free(rs);
     free(warena);
     free(wscratch);
-    free(cont);
-    for (size_t i = 0; em && i < f->n; i++) free(em[i].name);
-    free(em);
-    free(nvoids);
-    free(void_at);
+    conts_free(&cont);
+    elmats_free(&em);
+    free(vp);
+    free(void_host);
     free(void_ids);
     free(ids);
     return rc;

@@ -714,7 +714,7 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
     Buf b;
     buf_init(&b);
     size_t ne = f.n ? f.n : 1;
-    ElMat *em = calloc(ne, sizeof *em);
+    ElMats em = {0};
     Props props = {0};
     Pending *els = NULL;
     size_t nels = 0;
@@ -731,7 +731,6 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
     int storeys_in_arena = 0;
     Cont *cont = calloc(ne, sizeof *cont);
     if (!cont) goto oom;
-    if (!em) goto oom;
 
     if (f.skipped) {
         buf_clear(&b);
@@ -832,7 +831,7 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
     if (sort_by_gid(m->storeys, m->nstoreys, sizeof *m->storeys)) goto oom;
     cc_gid fallback = m->storeys[0].id;
 
-    materials(&r, em);
+    materials(&r, &em);
     size_t psets_skipped = property_sets(&r, &props);
     if (props.n) {
         Prop *tmp = malloc(props.n * sizeof *tmp);
@@ -1151,9 +1150,10 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
             }
         }
         /* Material: name -> derived id, category from the grade (first one wins). */
-        const char *mn = em[i].set && em[i].n ? em[i].name : "Undefined";
-        size_t mnn = em[i].set && em[i].n ? em[i].n : 9;
-        cc_category cat = em[i].set ? em[i].cat : CC_CAT_OTHER;
+        const ElMat *mi = elmat_get(&em, i);
+        const char *mn = mi && mi->set && mi->n ? mi->name : "Undefined";
+        size_t mnn = mi && mi->set && mi->n ? mi->n : 9;
+        cc_category cat = mi && mi->set ? mi->cat : CC_CAT_OTHER;
         buf_clear(&b);
         buf_puts(&b, "material/");
         buf_append(&b, mn, mnn);
@@ -1298,8 +1298,7 @@ done:
         m->elements = NULL, m->nelements = 0, m->cap_elements = 0;
         m->materials = NULL, m->nmaterials = 0;
     }
-    for (size_t i = 0; em && i < ne; i++) free(em[i].name);
-    free(em);
+    elmats_free(&em);
     for (size_t i = 0; i < props.n; i++) free(props.v[i].key), free(props.v[i].val);
     free(props.v);
     free(els);
