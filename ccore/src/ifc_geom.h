@@ -7,6 +7,7 @@
 #define CCORE_IFC_GEOM_H
 #include <stdlib.h>
 #include <string.h>
+#include "boolean.h"
 #include "buf.h"
 #include "earcut.h"
 #include "ifc_in.h"
@@ -1401,21 +1402,195 @@ static void swept_disk(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) 
     p3_free(&path);
 }
 
-/* IfcBooleanResult: no boolean kernel in the C core (Rust: manifold3d). An operand that is
- * empty is handled as boolean::apply does; otherwise the first operand is drawn uncut and the
- * report says so. */
+/* Reader::solid_tris: triangles (mm, world) of one representation item, evaluated on its own. */
+static void solid_tris(R *r, uint64_t id, const Aff *tf, Emit *out, int depth, Tris *mb) {
+    Emit tmp = {mb, out->scale, out->budget};
+    item(r, id, tf, &tmp, depth);
+}
+
+/* prism_tris: closed prism (mm), a 2D loop in pos's XY plane from z0 to z1 along its Z. */
+static void prism_tris(const Loop *loop2d, const Aff *pos, double z0, double z1, double scale, Tris *mb) {
+    Loop l = {0};
+    if (grow((void **)&l.p, &l.cap, loop2d->n + 1, sizeof *l.p)) { mb->oom = 1; return; }
+    memcpy(l.p, loop2d->p, loop2d->n * sizeof *l.p);
+    l.n = loop2d->n;
+    if (signed_area(&l) < 0.0) loop_reverse(&l);
+    size_t n = l.n;
+    double (*bottom)[3] = malloc((n + 1) * sizeof *bottom), (*top)[3] = malloc((n + 1) * sizeof *top);
+    if (!bottom || !top) {
+        mb->oom = 1;
+        goto out;
+    }
+#define PRISM_P(q_, z_, o_) do { double v_[3] = {(q_)[0], (q_)[1], (z_)}; aff_apply(pos, v_, (o_)); \
+        for (int k_ = 0; k_ < 3; k_++) (o_)[k_] *= scale; } while (0)
+    for (size_t i = 0; i < n; i++) {
+        PRISM_P(l.p[n - 1 - i], z0, bottom[i]);
+        PRISM_P(l.p[i], z1, top[i]);
+    }
+    size_t first = mb->n;
+    add_polygon(mb, (const double(*)[3])bottom, n, NULL, 0);
+    add_polygon(mb, (const double(*)[3])top, n, NULL, 0);
+    for (size_t i = 0; i < n; i++) {
+        size_t j = (i + 1) % n;
+        double bi[3], bj[3], ti[3], tj[3];
+        PRISM_P(l.p[i], z0, bi);
+        PRISM_P(l.p[j], z0, bj);
+        PRISM_P(l.p[i], z1, ti);
+        PRISM_P(l.p[j], z1, tj);
+        double t1[3][3], t2[3][3];
+        memcpy(t1[0], bi, 24), memcpy(t1[1], bj, 24), memcpy(t1[2], tj, 24);
+        memcpy(t2[0], bi, 24), memcpy(t2[1], tj, 24), memcpy(t2[2], ti, 24);
+        tris_add(mb, (const double(*)[3])t1);
+        tris_add(mb, (const double(*)[3])t2);
+    }
+#undef PRISM_P
+    if (aff_det(pos) < 0.0) /* a mirroring placement turns the solid inside out */
+        for (size_t t = first; t < mb->n; t++)
+            for (int k = 0; k < 3; k++) {
+                double s = mb->t[t][3 + k];
+                mb->t[t][3 + k] = mb->t[t][6 + k];
+                mb->t[t][6 + k] = s;
+            }
+out:
+    free(bottom);
+    free(top);
+    free(l.p);
+}
+
+static cc_tri_set tri_set(const Tris *m) {
+    cc_tri_set s = {(const double(*)[9])m->t, m->n};
+    return s;
+}
+/* boolean::apply into a Tris (replacing it on success). Returns CC_BOOL_*, -1 out of memory;
+ * err (CC_BOOL_ERR bytes) gets the text. */
+static int tris_apply(cc_bool_op op, const Tris *a, const cc_tri_set *b, size_t nb, Tris *res, char *err) {
+    double (*o)[9];
+    size_t no;
+    int rc = cc_boolean_apply(op, tri_set(a), b, nb, &o, &no, err);
+    if (rc) return rc;
+    memset(res, 0, sizeof *res);
+    res->t = o, res->n = no, res->cap = no;
+    return 0;
+}
+
+/* Reader::half_space: a half-space as a finite solid (mm, world), large enough to contain
+ * `operand`. With AgreementFlag TRUE the material is on the -normal side of the plane. */
+static void half_space(R *r, const cc_step_entity *h, const Aff *tf, const Tris *operand, double scale, Tris *res) {
+    memset(res, 0, sizeof *res);
+    const cc_step_entity *plane = get(r, arg(h, 0));
+    if (!is(plane, "IFCPLANE")) {
+        warn(r, "", h->name, ": unsupported base surface (not cut)");
+        return;
+    }
+    Aff ap = axis_placement(r, arg(plane, 0));
+    Aff pos = aff_then(tf, &ap);
+    int material_below = !enum_is(arg(h, 1), "F");
+    double lo[3] = {1.0 / 0.0, 1.0 / 0.0, 1.0 / 0.0}, hi[3] = {-1.0 / 0.0, -1.0 / 0.0, -1.0 / 0.0};
+    for (size_t t = 0; t < operand->n; t++)
+        for (int c = 0; c < 3; c++)
+            for (int k = 0; k < 3; k++) {
+                double v = operand->t[t][3 * c + k] / scale;
+                lo[k] = fmin_rs(lo[k], v), hi[k] = fmax_rs(hi[k], v);
+            }
+    double d[3] = {hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]};
+    double l = 2.0 * norm3(d) + 1.0;
+    double mid[3] = {(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0}, c[3];
+    aff_local(&pos, mid, c);
+    Loop rect = {0};
+    if (loop_push(&rect, c[0] - l, c[1] - l) || loop_push(&rect, c[0] + l, c[1] - l) ||
+        loop_push(&rect, c[0] + l, c[1] + l) || loop_push(&rect, c[0] - l, c[1] + l)) {
+        free(rect.p);
+        res->oom = 1;
+        return;
+    }
+    double z0, z1;
+    if (material_below) z0 = -l + fmin_rs(c[2], 0.0), z1 = 0.0;
+    else z0 = 0.0, z1 = l + fmax_rs(c[2], 0.0);
+    prism_tris(&rect, &pos, z0, z1, scale, res);
+    free(rect.p);
+    if (!is(h, "IFCPOLYGONALBOUNDEDHALFSPACE")) return;
+    /* IfcPolygonalBoundedHalfSpace(.., Position, PolygonalBoundary): also inside the boundary prism
+     * (extruded along Position's Z). A boundary whose end does not come back to its start (by
+     * 0.1 mm) is cut by its plane alone, as IfcOpenShell does. */
+    Aff pp = axis_placement(r, arg(h, 2));
+    Aff ppos = aff_then(tf, &pp);
+    P3 ends;
+    int closed = 0;
+    if (curve3(r, arg(h, 3), 0, &ends) == 1) {
+        if (ends.n) {
+            const double *a = ends.p[0], *b = ends.p[ends.n - 1];
+            double dd[3] = {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+            closed = norm3(dd) * scale < 0.1;
+        }
+        p3_free(&ends);
+    }
+    Loop poly = {0};
+    int have = closed && curve(r, arg(h, 3), &poly);
+    if (!have) {
+        warn(r, "polygonal half-space: boundary not closed; cut by its plane alone", 0, 0);
+        return;
+    }
+    double lc[3];
+    aff_local(&ppos, mid, lc);
+    double cz = lc[2];
+    Tris prism = {0};
+    prism_tris(&poly, &ppos, cz - l, cz + l, scale, &prism);
+    free(poly.p);
+    if (prism.oom) res->oom = 1;
+    cc_tri_set b = tri_set(&prism);
+    Tris cut;
+    char err[CC_BOOL_ERR];
+    int rc = tris_apply(CC_BOOL_INTERSECTION, res, &b, 1, &cut, err);
+    if (rc == 0) {
+        tris_free(res);
+        *res = cut;
+    } else if (rc < 0) res->oom = 1;
+    else warn(r, "polygonal half-space: boundary not a closed polygon (", err, "); cut by its plane alone");
+    tris_free(&prism);
+}
+
+/* IfcBooleanResult / IfcBooleanClippingResult (Operator, FirstOperand, SecondOperand): read.rs
+ * Reader::boolean, through cc_boolean_apply. Without a kernel (cc_boolean_kernel() NULL: wasm,
+ * a build without manifold) the first operand is drawn uncut and the report says so. */
 static void boolean_result(R *r, const cc_step_entity *e, const Aff *tf, Emit *out, int depth) {
-    int inter = enum_is(arg(e, 0), "INTERSECTION");
+    cc_bool_op op = enum_is(arg(e, 0), "UNION")          ? CC_BOOL_UNION
+                    : enum_is(arg(e, 0), "INTERSECTION") ? CC_BOOL_INTERSECTION
+                                                         : CC_BOOL_DIFFERENCE;
     uint64_t first;
-    if (!cc_sv_as_ref(arg(e, 0 + 1), &first)) return;
+    if (!cc_sv_as_ref(arg(e, 1), &first)) return;
     Tris a = {0};
-    Emit ea = {&a, out->scale, out->budget};
-    item(r, first, tf, &ea, depth + 1);
+    solid_tris(r, first, tf, out, depth + 1, &a);
+    if (a.oom) out->mb->oom = 1;
     if (!a.n) { tris_free(&a); return; }
-    (void)inter;
-    r->unsup_n++;
-    for (size_t i = 0; i < a.n; i++) emit_triangle_mm(out, (const double(*)[3])a.t[i]);
+    if (!cc_boolean_kernel()) {
+        r->unsup_n++;
+        for (size_t i = 0; i < a.n; i++) emit_triangle_mm(out, (const double(*)[3])a.t[i]);
+        tris_free(&a);
+        return;
+    }
+    const cc_step_entity *h = get(r, arg(e, 2));
+    int half = h && (is(h, "IFCHALFSPACESOLID") || is(h, "IFCBOXEDHALFSPACE") || is(h, "IFCPOLYGONALBOUNDEDHALFSPACE"));
+    Tris b = {0};
+    uint64_t second;
+    if (h && half) half_space(r, h, tf, &a, out->scale, &b);
+    else if (h && cc_sv_as_ref(arg(e, 2), &second)) solid_tris(r, second, tf, out, depth + 1, &b);
+    if (b.oom) out->mb->oom = 1;
+    cc_tri_set bs = tri_set(&b);
+    Tris res;
+    char err[CC_BOOL_ERR];
+    int rc = tris_apply(op, &a, &bs, 1, &res, err);
+    const Tris *draw = &a;
+    if (rc < 0) out->mb->oom = 1;
+    else if (rc == 0 && !res.n && half && op == CC_BOOL_DIFFERENCE)
+        /* A clipping half-space that leaves nothing (Revit: a wall's top plane put below its
+         * bottom) is an export error: drawn unclipped, as IfcOpenShell does, rather than lost. */
+        warn(r, "a clipping plane removed the whole solid; drawn unclipped", 0, 0);
+    else if (rc == 0) draw = &res;
+    else warn(r, "boolean cut failed, drawn uncut (", err, ")");
+    for (size_t i = 0; i < draw->n; i++) emit_triangle_mm(out, (const double(*)[3])draw->t[i]);
+    if (rc == 0) tris_free(&res);
     tris_free(&a);
+    tris_free(&b);
 }
 
 static int map_on_stack(R *r, uint64_t id) {

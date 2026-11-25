@@ -13,6 +13,7 @@
 #include "scene_build.h"
 #include <string.h>
 #include "math.h"
+#include "boolean.h"
 #include "buf.h"
 #include "earcut.h"
 #include <stdlib.h>
@@ -441,10 +442,9 @@ static int corner_loop(const double (*src)[2], size_t n, Arena *a, Loop *out) {
     return 0;
 }
 
-/* The element's local mesh (mesh_from_tris positions and indices; its edges are not used by
- * the scene). 0 ok, -1 out of memory, WARN with `why` (Rust's GeomError text), LIMIT. */
-static int local_mesh(const cc_element *e, Arena *a, cc_mesh *out, Buf *why) {
-    const cc_generator *g = &e->generator;
+/* A generator's triangles (element_tris / opening_tris before the openings, local mm) in `a`.
+ * 0 ok, -1 out of memory, WARN with `why` (Rust's GeomError text), LIMIT. */
+static int gen_tris(const cc_generator *g, Arena *a, double (**out)[3][3], size_t *nout, Buf *why) {
     double (*tris)[3][3] = NULL;
     size_t m = 0;
     if (g->kind == CC_GEN_MESH) {
@@ -508,6 +508,72 @@ static int local_mesh(const cc_element *e, Arena *a, cc_mesh *out, Buf *why) {
         int rc = extrude_tris(all, nvoids + 1, depth, a, &tris, &m, why);
         if (rc) return rc;
     }
+    *out = tris, *nout = m;
+    return 0;
+}
+
+/* element_tris: the openings subtracted (each through placement_matrix(o.placement, 0) into
+ * element coordinates). An opening that cannot be meshed is skipped; a boolean that fails leaves
+ * the element uncut, as Rust. Without a kernel the element is drawn uncut and *uncut counts the
+ * openings that were not cut. 0 ok, -1 out of memory. */
+static int cut_openings(const cc_element *e, Arena *a, double (**tris)[3][3], size_t *m, size_t *uncut) {
+    *uncut = 0;
+    if (!e->nopenings) return 0;
+    cc_tri_set *cut = arena_alloc(a, e->nopenings * sizeof *cut, 8);
+    if (!cut) return -1;
+    size_t nc = 0;
+    for (size_t i = 0; i < e->nopenings; i++) {
+        const cc_opening *o = &e->openings[i];
+        double (*ot)[3][3];
+        size_t on;
+        Buf why;
+        buf_init(&why);
+        int rc = gen_tris(&o->generator, a, &ot, &on, &why);
+        int oom = why.oom;
+        buf_free(&why);
+        if (rc < 0 || oom) return -1;
+        if (rc) continue; /* opening_tris(o).ok(): skipped */
+        const double *x = o->placement.x_axis, *z = o->placement.z_axis, *org = o->placement.origin;
+        double y[3] = {z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]};
+        double t[4][3] = {{x[0], x[1], x[2]}, {y[0], y[1], y[2]}, {z[0], z[1], z[2]}, {org[0], org[1], org[2] + 0.0}};
+        for (size_t k = 0; k < on; k++)
+            for (int c = 0; c < 3; c++) {
+                double p[3] = {ot[k][c][0], ot[k][c][1], ot[k][c][2]};
+                for (int r = 0; r < 3; r++) ot[k][c][r] = t[0][r] * p[0] + t[1][r] * p[1] + t[2][r] * p[2] + t[3][r];
+            }
+        cut[nc].t = (const double(*)[9])ot, cut[nc].n = on;
+        nc++;
+    }
+    if (!nc) return 0;
+    if (!cc_boolean_kernel()) {
+        *uncut = nc;
+        return 0;
+    }
+    cc_tri_set as = {(const double(*)[9])*tris, *m};
+    double (*r)[9];
+    size_t nr;
+    int rc = cc_boolean_apply(CC_BOOL_DIFFERENCE, as, cut, nc, &r, &nr, NULL);
+    if (rc < 0) return -1;
+    if (rc) return 0; /* a boolean that fails (not closed solids) leaves the element uncut */
+    double (*d)[3][3] = arena_alloc(a, (nr + 1) * sizeof *d, 8);
+    if (!d) {
+        free(r);
+        return -1;
+    }
+    if (nr) memcpy(d, r, nr * sizeof *d);
+    free(r);
+    *tris = d, *m = nr;
+    return 0;
+}
+
+/* The element's local mesh (mesh_from_tris positions and indices; its edges are not used by
+ * the scene). 0 ok, -1 out of memory, WARN with `why` (Rust's GeomError text), LIMIT. */
+static int local_mesh(const cc_element *e, Arena *a, cc_mesh *out, Buf *why, size_t *uncut) {
+    double (*tris)[3][3] = NULL;
+    size_t m = 0;
+    int rc = gen_tris(&e->generator, a, &tris, &m, why);
+    if (rc) return rc;
+    if (cut_openings(e, a, &tris, &m, uncut)) return -1;
     /* mesh_from_tris: weld by f64 bits after + 0.0 (-0.0 becomes 0.0), positions to f32. */
     if (3 * m > 0x7fffffffu) return LIMIT;
     double (*wp)[3] = arena_alloc(a, (3 * m + 1) * sizeof wp[0], 8);
@@ -1004,7 +1070,8 @@ static int scene_build(cc_scene *s, const cc_model *m, cc_error *err, Arena *scr
         Buf why;
         buf_init(&why);
         arena_reset(scratch);
-        int rc = local_mesh(e, scratch, &l, &why);
+        size_t uncut = 0;
+        int rc = local_mesh(e, scratch, &l, &why, &uncut);
         if (rc == LIMIT) {
             buf_free(&why);
             Buf t;
@@ -1040,6 +1107,22 @@ static int scene_build(cc_scene *s, const cc_model *m, cc_error *err, Arena *scr
             continue;
         }
         buf_free(&why);
+        if (uncut) { /* no boolean kernel (wasm, a build without manifold): drawn uncut, said so */
+            Buf t;
+            buf_init(&t);
+            put_class_name(&t, e);
+            buf_putc(&t, ' ');
+            buf_append(&t, e->name.p, e->name.n);
+            buf_puts(&t, ": ");
+            buf_u64(&t, uncut);
+            buf_puts(&t, " opening(s) not cut (no boolean kernel in the C core)");
+            char *c = arena_dup(a, t.p, t.len);
+            int oom = t.oom || !c;
+            s->warnings[s->nwarnings].p = c;
+            s->warnings[s->nwarnings++].n = t.len;
+            buf_free(&t);
+            if (oom) return fail(err, "out of memory", "", "");
+        }
         if (to_world(&l, &e->placement, st->elevation, wa, &w[i])) return fail(err, "out of memory", "", "");
     }
     /* SceneBuilder::finish: the origin is the middle of the world box, rounded to mm. */

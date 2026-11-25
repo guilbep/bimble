@@ -14,6 +14,12 @@ case "$CC" in
 esac
 # Extra flags, e.g. CC=clang CFLAGS="-fsanitize=address,undefined -g" test/run.sh file
 if [[ -n ${CFLAGS:-} ]]; then read -r -a extra <<< "$CFLAGS"; FLAGS+=("${extra[@]}"); fi
+# The boolean kernel when found (build.sh, deps.sh): clang links it static, tcc shared.
+source ./deps.sh
+kernel_setup
+FLAGS+=("${KFLAGS[@]}")
+LINK=("${KLINK_CLANG[@]}")
+[[ $(basename "$CC") == tcc ]] && LINK=("${KLINK_TCC[@]}")
 out="out/run-$(basename "$CC")"
 mkdir -p "$out"
 # Every src/*.c but the wasm stub, as build.sh compiles the library, then the session layer
@@ -24,7 +30,7 @@ status=0
 for s in "${suites[@]}"; do
     if [[ ! -f "test/${s}_test.c" ]]; then echo "unknown suite: $s" >&2; status=1; continue; fi
     "$CC" "${FLAGS[@]}" -Isrc -Ivendor/ryu -Isession -Ihost "${SRC[@]}" \
-        "test/${s}_test.c" -o "$out/test_$s"
+        "test/${s}_test.c" "${LINK[@]}" -o "$out/test_$s"
     if ! "$out/test_$s" golden/floats; then status=1; fi
 done
 exit $status

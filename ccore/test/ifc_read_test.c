@@ -1,8 +1,10 @@
 /* Suite ifc_read: the IFC display reader (src/ifc_read.h) against Rust's read_str.
  * - golden/ifc/read/<name>/: scene.txt and every <k>.txt byte for byte, for the 18 inputs (the
  *   six crate fixtures, the eight ifc/fixtures, frame.ifc, frame2.ifc and their IFC2x3 forms).
- *   Known differences, which must still differ: booleans (Rust cuts with the manifold3d kernel,
- *   the C core has none) and opening (the same: Rust subtracts the opening from its wall).
+ *   With the boolean kernel (manifold, CC_HAVE_MANIFOLD) all 18 must match, booleans and opening
+ *   included (ticket C6: was a known difference). Without it (cc_boolean_set(NULL), or a build
+ *   without manifold) booleans and opening must still differ (drawn uncut) and say so in a
+ *   warning: a build with the kernel checks both paths.
  * - each input read twice: the same text; the BMSH of each scene has the layout's size.
  * - robustness: truncations and byte mutations of frame.ifc, mapped_item.ifc and curves.ifc:
  *   a scene or an error, no crash (run it under ASan/UBSan too); not IFC, empty, not STEP.
@@ -11,6 +13,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include "../src/boolean.h"
 #include "../src/ifc_read.h"
 #include "check.h"
 
@@ -42,8 +45,8 @@ static const struct {
     {"frame2", "golden/ifc", "frame2.ifc"},
     {"frame2.ifc2x3", "golden/ifc", "frame2.ifc2x3.ifc"},
 };
-/* No boolean kernel in the C core (Rust: manifold3d): booleans are drawn as their first
- * operand, openings are not cut. */
+/* Without a boolean kernel (Rust: manifold3d): booleans are drawn as their first operand,
+ * openings are not cut. With the kernel they match. */
 static const char *KNOWN_DIFFERENT[] = {"booleans", "opening"};
 
 static int file_exists(const char *dir, const char *name) {
@@ -170,6 +173,7 @@ int main(void) {
         int known = 0;
         for (size_t k = 0; k < sizeof KNOWN_DIFFERENT / sizeof *KNOWN_DIFFERENT; k++)
             known |= !strcmp(KNOWN_DIFFERENT[k], G[g].name);
+        known &= !cc_boolean_kernel();
         /* Twice: the same text. */
         int rc2 = cc_ifc_read(t, tn, &s2, &err2);
         Buf a, b;
@@ -202,6 +206,39 @@ int main(void) {
     }
     printf("ifc/read: %zu of %zu goldens match (* = known difference: no boolean kernel)\n", matched,
            sizeof G / sizeof *G);
+    printf("ifc/read: boolean kernel %s\n", cc_boolean_kernel() ? "manifold" : "none (uncut)");
+
+    /* The uncut path in a build with the kernel: turned off, booleans and opening differ again
+     * and the scene says why. */
+    if (cc_boolean_kernel()) {
+        const cc_boolean *k = cc_boolean_kernel();
+        cc_boolean_set(NULL);
+        for (size_t g = 0; g < sizeof G / sizeof *G; g++) {
+            int known = 0;
+            for (size_t j = 0; j < sizeof KNOWN_DIFFERENT / sizeof *KNOWN_DIFFERENT; j++)
+                known |= !strcmp(KNOWN_DIFFERENT[j], G[g].name);
+            if (!known) continue;
+            size_t tn;
+            char *t = slurp(G[g].dir, G[g].file, &tn);
+            cc_ifc_scene s;
+            cc_error err;
+            int rc = cc_ifc_read(t, tn, &s, &err);
+            char why[256] = "";
+            int ok = compare(G[g].name, &s, rc, &err, why, sizeof why);
+            Buf a;
+            buf_init(&a);
+            if (!rc) cc_ifc_scene_txt(&a, &s);
+            int said = !rc && strstr(buf_cstr(&a), "(no boolean kernel in the C core)") != NULL;
+            printf("%-14s no kernel: %s, %s\n", G[g].name, ok ? "MATCHES" : "differs (uncut)",
+                   said ? "warned" : "NOT WARNED");
+            check_true("no kernel: differs", !ok);
+            check_true("no kernel: warned", said);
+            buf_free(&a);
+            cc_ifc_scene_free(&s);
+            free(t);
+        }
+        cc_boolean_set(k);
+    }
 
     /* Errors. */
     {

@@ -365,6 +365,41 @@ static const cc_step_entity *mapped_item(const Ctx *c, R *r, const cc_step_entit
     return mapped_item_of(r, e);
 }
 
+/* Reader::cut: subtract cutters from `tris` (mm). If the whole set fails (e.g. one opening is not
+ * a closed solid), retry one cutter at a time and keep the ones that work. 0 ok, -1 out of memory. */
+static int cut(R *w, Tris *tris, const Tris *cutters, size_t n, const char *what) {
+    cc_tri_set *refs = malloc(n * sizeof *refs);
+    if (!refs) return -1;
+    for (size_t i = 0; i < n; i++) refs[i] = tri_set(&cutters[i]);
+    Tris res;
+    int rc = tris_apply(CC_BOOL_DIFFERENCE, tris, refs, n, &res, NULL);
+    if (rc == 0) {
+        tris_free(tris);
+        *tris = res;
+    } else if (rc > 0) {
+        size_t failed = 0;
+        for (size_t i = 0; i < n && rc >= 0; i++) {
+            rc = tris_apply(CC_BOOL_DIFFERENCE, tris, &refs[i], 1, &res, NULL);
+            if (rc == 0) {
+                tris_free(tris);
+                *tris = res;
+            } else if (rc > 0) failed++;
+        }
+        if (failed && rc >= 0) {
+            Buf b;
+            buf_init(&b);
+            buf_puts(&b, what);
+            buf_puts(&b, ": ");
+            buf_u64(&b, failed);
+            buf_puts(&b, " opening(s) not cut (geometry not a closed solid)");
+            tally_buf(&w->warnings, &b, 0);
+            buf_free(&b);
+        }
+    }
+    free(refs);
+    return rc < 0 ? -1 : 0;
+}
+
 /* Parsed::piece. 0 ok, -1 out of memory. */
 static int piece(Ctx *c, R *w, size_t ent, Budget *budget, Piece *out) {
     const cc_step_file *f = c->f;
@@ -393,29 +428,33 @@ static int piece(Ctx *c, R *w, size_t ent, Budget *budget, Piece *out) {
     product_body(w, e, &em);
     size_t nv = c->nvoids[ent];
     if (nv && out->tris.n) {
-        /* Rust meshes each opening's body and subtracts them (manifold3d). The C core has no
-         * boolean kernel: the bodies are meshed as Rust does (same budget), the host drawn uncut. */
+        /* Openings (IfcRelVoidsElement): each opening's body meshed (same budget), then subtracted
+         * from the host (Reader::cut). Without a kernel the host is drawn uncut (C only warning). */
+        Tris *ob = calloc(nv, sizeof *ob);
         size_t cutters = 0;
-        for (size_t k = 0; k < nv; k++) {
+        if (!ob) out->tris.oom = 1;
+        for (size_t k = 0; ob && k < nv; k++) {
             const cc_step_entity *oe = cc_step_get(f, c->void_ids[c->void_at[ent] + k]);
             if (!oe) continue;
-            Tris ob = {0};
-            Emit eo = {&ob, c->scale, budget};
+            Emit eo = {&ob[cutters], c->scale, budget};
             product_body(w, oe, &eo);
-            cutters += ob.n > 0;
-            if (ob.oom) out->tris.oom = 1;
-            tris_free(&ob);
+            if (ob[cutters].oom) out->tris.oom = 1;
+            if (ob[cutters].n) cutters++;
+            else tris_free(&ob[cutters]);
         }
-        if (cutters) {
-            Buf b;
-            buf_init(&b);
-            class_name(e->name, &b);
+        Buf b;
+        buf_init(&b);
+        class_name(e->name, &b);
+        if (cutters && !cc_boolean_kernel()) {
             buf_puts(&b, ": ");
             buf_u64(&b, cutters);
             buf_puts(&b, " opening(s) not cut (no boolean kernel in the C core)");
             tally_buf(&c->cut_warnings, &b, 0);
-            buf_free(&b);
-        }
+        } else if (cutters && cut(w, &out->tris, ob, cutters, buf_cstr(&b)))
+            out->tris.oom = 1;
+        buf_free(&b);
+        for (size_t k = 0; ob && k < cutters; k++) tris_free(&ob[k]);
+        free(ob);
     }
     if (w->unsup_n > unsup0)
         for (size_t k = unsup0; k < w->unsup_n; k++)

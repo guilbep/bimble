@@ -7,14 +7,17 @@
  *   report printed (what is outside the subset is reported, not failed).
  * - ifc/import goldens: the 16 inputs of golden/ifc/import imported (seeded ids), saved, masked
  *   and compared byte for byte with Rust's model and report (chain18: its size summary); each
- *   imported twice to check the ids are stable; time per fixture printed. booleans is a known
- *   difference (Rust cuts with the manifold3d kernel; the C core has no boolean kernel).
+ *   imported twice to check the ids are stable; time per fixture printed. With the boolean kernel
+ *   (manifold, CC_HAVE_MANIFOLD) all 16 must match, booleans included (ticket C6: was a known
+ *   difference). Without it (cc_boolean_set(NULL), or a build without manifold) booleans must still
+ *   differ (drawn uncut, counted as unsupported): a build with the kernel checks both paths.
  * - robustness: truncations and byte mutations of frame.ifc (run it under ASan/UBSan too).
  * - timing: parse + import of frame.ifc. */
 #define _POSIX_C_SOURCE 199309L
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include "../src/boolean.h"
 #include "../src/file.h"
 #include "../src/guid.h"
 #include "../src/ifc_in.h"
@@ -411,10 +414,18 @@ int main(int argc, char **argv) {
             {"frame2", "golden/ifc", "frame2.ifc"},
             {"frame2.ifc2x3", "golden/ifc", "frame2.ifc2x3.ifc"},
         };
-        /* booleans: Rust cuts with the manifold3d kernel, the C core has none (drawn uncut). */
+        /* booleans: Rust cuts with the manifold3d kernel; without a kernel it is drawn uncut. */
         static const char *KNOWN_DIFFERENT[] = {"booleans"};
+        const cc_boolean *kernel = cc_boolean_kernel();
+        printf("ifc/import: boolean kernel %s\n", kernel ? "manifold" : "none (uncut)");
+        for (int pass = 0; pass < (kernel ? 2 : 1); pass++) {
+        if (pass) cc_boolean_set(NULL); /* the uncut path, in a build with the kernel */
         size_t matched = 0, total = 0;
         for (size_t g = 0; g < sizeof G / sizeof *G; g++) {
+            int listed = 0;
+            for (size_t k = 0; k < sizeof KNOWN_DIFFERENT / sizeof *KNOWN_DIFFERENT; k++)
+                listed |= !strcmp(KNOWN_DIFFERENT[k], G[g].name);
+            if (pass && !listed) continue;
             char wn_[128];
             size_t tn, rn;
             char *t = slurp(G[g].dir, G[g].file, &tn);
@@ -435,9 +446,7 @@ int main(int argc, char **argv) {
             cc_guid_seed(1);
             int rc2 = import_mask(t, tn, &kk, &a2, &rp, &err);
             cc_ifc_report_free(&rp);
-            int known_diff = 0;
-            for (size_t k = 0; k < sizeof KNOWN_DIFFERENT / sizeof *KNOWN_DIFFERENT; k++)
-                known_diff |= !strcmp(KNOWN_DIFFERENT[k], G[g].name);
+            int known_diff = listed && !cc_boolean_kernel();
             snprintf(wn_, sizeof wn_, "ifc/import/%s.report.txt", G[g].name);
             char *wr = slurp(golden, wn_, &rn);
             int rep_ok = rc1 == 0 && lines.len == rn && !memcmp(lines.p, wr, rn);
@@ -518,6 +527,7 @@ int main(int argc, char **argv) {
                    rep_ok ? "ok" : "differs", unsup, stable ? "identical" : "DIFFER", ms, detail);
             if (!rep_ok && !known_diff) printf("%.*s---- want\n%.*s", (int)lines.len, lines.p, (int)rn, wr);
             check_true(G[g].name, known_diff ? !ok : ok);
+            if (known_diff) check_true("no kernel: uncut boolean counted as unsupported", unsup > 0);
             check_true("import twice: identical", stable);
             free(wr);
             free(t);
@@ -526,7 +536,10 @@ int main(int argc, char **argv) {
             buf_free(&a2);
             buf_free(&lines);
         }
-        printf("ifc/import: %zu of %zu goldens match (* = known difference)\n", matched, total);
+        printf("ifc/import%s: %zu of %zu goldens match (* = known difference)\n", pass ? " (no kernel)" : "", matched,
+               total);
+        }
+        cc_boolean_set(kernel);
     }
 
     /* Derived ids, unmasked (masked in the goldens): import.rs derives material ids as

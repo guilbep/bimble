@@ -13,6 +13,9 @@
 #   wasm   clang freestanding wasm32 of src/ (no libc) and the session layer (session/*.c: the
 #          native host's call code, without the host's HTTP server, platform and main), ccore.wasm
 #          exporting the API of src/wasm_api.h (test: node test/wasm_run.mjs, test/lab_wasm.mjs)
+# Boolean kernel (ADR 0068, 0069): manifold's C binding from $MANIFOLD_DIR or out/deps/manifold
+# (deps.sh). Found: -DCC_HAVE_MANIFOLD, clang links the static libraries (+ libstdc++), tcc the
+# shared one (it cannot link C++ archives). Not found, or CC_NO_KERNEL=1, or wasm: no kernel.
 # Layers (README "Layers"): src/ is L0-L3 (and the wasm carrier, wasm_api.c), session/ is L5, host/
 # is the native carrier (L6). Test suites link the library, session/ and host/platform_native.c.
 set -euo pipefail
@@ -23,6 +26,8 @@ TESTS=(); for f in test/*_test.c; do t=${f#test/}; TESTS+=("${t%_test.c}"); done
 INC=(-Isrc -Ivendor/ryu -Isession)
 SESSION=(session/*.c)
 HOST=(host/*.c)
+source ./deps.sh
+kernel_setup
 
 ms() { date +%s%N | cut -b1-13; }
 step() { # step <label> <command...>
@@ -36,6 +41,9 @@ step() { # step <label> <command...>
 lib_and_tests() { # <dir> <cc> <flags...>
     local dir=$1 cc=$2
     shift 2
+    set -- "$@" "${KFLAGS[@]}"
+    local klink=("${KLINK_CLANG[@]}")
+    [[ $cc == tcc ]] && klink=("${KLINK_TCC[@]}")
     mkdir -p "$dir"
     local objs=()
     for f in "${LIB[@]}"; do objs+=("$dir/$(basename "${f%.c}").o"); done
@@ -63,17 +71,17 @@ lib_and_tests() { # <dir> <cc> <flags...>
     if [[ $cc == tcc ]]; then step "archive libccore_session.a" tcc -ar rcs "$dir/libccore_session.a" "${sobjs[@]}"
     else step "archive libccore_session.a" llvm-ar rcs "$dir/libccore_session.a" "${sobjs[@]}"; fi
     for t in "${TESTS[@]}"; do
-        step "test binary $t" "$cc" "$@" "${INC[@]}" -Ihost "test/${t}_test.c" "$dir/libccore_session.a" "$dir/libccore.a" -o "$dir/test_$t"
+        step "test binary $t" "$cc" "$@" "${INC[@]}" -Ihost "test/${t}_test.c" "$dir/libccore_session.a" "$dir/libccore.a" "${klink[@]}" -o "$dir/test_$t"
     done
     # The native host (not in wasm): every host/*.c on top of session/ and the library.
-    step "host bimble-ccore" "$cc" "$@" "${INC[@]}" -Ihost "${HOST[@]}" "${SESSION[@]}" "$dir/libccore.a" -o "$dir/bimble-ccore"
+    step "host bimble-ccore" "$cc" "$@" "${INC[@]}" -Ihost "${HOST[@]}" "${SESSION[@]}" "$dir/libccore.a" "${klink[@]}" -o "$dir/bimble-ccore"
 }
 
 # build.sh host (see the header). Cache keys: sha1 of the file, of every header (and the vendored
 # ryu sources, included by fmt.c) and of the flags; objects out/hostmix/o2/<name>.<key>.o.
 HOST_SRCS=("${LIB[@]}" "${SESSION[@]}" "${HOST[@]}")
-TCC_FLAGS=(-g -Wall -DRYU_ONLY_64_BIT_OPS)
-O2_FLAGS=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function)
+TCC_FLAGS=(-g -Wall -DRYU_ONLY_64_BIT_OPS "${KFLAGS[@]}")
+O2_FLAGS=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function "${KFLAGS[@]}")
 host_keys() { # prints "<key> <file>" per source
     local hh
     hh=$( { printf '%s\n' "${O2_FLAGS[*]}" "${TCC_FLAGS[*]}"; cat src/*.h session/*.h host/*.h vendor/ryu/ryu/*; } | sha1sum | cut -c1-16)
@@ -83,7 +91,7 @@ host_keys() { # prints "<key> <file>" per source
 host_mixed() {
     if [[ ${HOST_MIX:-1} == 0 ]]; then
         mkdir -p out/tcc
-        step "host bimble-ccore (tcc, one call)" tcc "${TCC_FLAGS[@]}" "${INC[@]}" -Ihost "${HOST_SRCS[@]}" -o out/tcc/bimble-ccore
+        step "host bimble-ccore (tcc, one call)" tcc "${TCC_FLAGS[@]}" "${INC[@]}" -Ihost "${HOST_SRCS[@]}" "${KLINK_TCC[@]}" -o out/tcc/bimble-ccore
         return
     fi
     local M=out/hostmix t0 t1 key f b objs=() changed=()
@@ -99,7 +107,7 @@ host_mixed() {
     done < <(host_keys)
     t1=$(ms)
     printf '  %-28s %5d ms\n' "tcc: ${#changed[@]} of ${#HOST_SRCS[@]} files" $((t1 - t0))
-    step "link (tcc; others clang -O2)" tcc -o out/tcc/bimble-ccore "${objs[@]}" -lm
+    step "link (tcc; others clang -O2)" tcc -o out/tcc/bimble-ccore "${objs[@]}" -lm "${KLINK_TCC[@]}"
     ((${#changed[@]})) || return 0
     # The -O2 objects of the changed files, in the background: each keyed by the content it was
     # compiled from (checked again after the compile: a file saved meanwhile is not cached).
@@ -124,6 +132,9 @@ host_mixed() {
 }
 
 t_start=$(ms)
+if [[ ${1:-} == wasm ]]; then echo "  boolean kernel: none in wasm (openings and boolean results drawn uncut)"
+elif ((${#KFLAGS[@]})); then echo "  boolean kernel: manifold (out/deps/manifold)"
+else echo "  boolean kernel: none (openings and boolean results drawn uncut)"; fi
 case "${1:-}" in
   tcc)
     echo "build.sh tcc -> out/tcc"

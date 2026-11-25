@@ -9,6 +9,8 @@
 #include "../src/file.h"
 #include "../src/scene.h"
 #include "../src/earcut.h"
+#include "../src/boolean.h"
+#include "../src/ifc_in.h"
 #include "check.h"
 
 static const char *golden;
@@ -282,6 +284,118 @@ static int has_element(const cc_scene *s, uint32_t nv, uint32_t ntri) {
     return 0;
 }
 
+/* A model element with an opening (ticket C6): golden/ifc/fixtures/opening.ifc imported (the
+ * opening kept as a Mesh on the wall, as import.rs), then Scene::from_model, which cuts it
+ * (element_tris). No model-level Rust golden holds this mesh: it is compared with the read golden
+ * of the same IFC (golden/ifc/read/opening, Rust's read_str cut): the same triangle and vertex
+ * counts and the same world points within 0.01 mm. Without a kernel: uncut (12 triangles), with
+ * the scene warning. */
+static int hexval(const char *p, int n, uint64_t *out) {
+    uint64_t v = 0;
+    for (int i = 0; i < n; i++) {
+        char c = p[i];
+        int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+        if (d < 0) return 0;
+        v = v << 4 | (uint64_t)d;
+    }
+    *out = v;
+    return 1;
+}
+static double f64_of(uint64_t u) {
+    double d;
+    memcpy(&d, &u, 8);
+    return d;
+}
+static float f32_of(uint32_t u) {
+    float f;
+    memcpy(&f, &u, 4);
+    return f;
+}
+static int has_text(const char *p, size_t n, const char *t) {
+    size_t m = strlen(t);
+    for (size_t i = 0; i + m <= n; i++)
+        if (!memcmp(p + i, t, m)) return 1;
+    return 0;
+}
+static void opening_checks(void) {
+    size_t tn, sn, mn;
+    char *ifc = slurp(golden, "ifc/fixtures/opening.ifc", &tn);
+    char *st = slurp(golden, "ifc/read/opening/scene.txt", &sn);
+    char *mt = slurp(golden, "ifc/read/opening/000.txt", &mn);
+    /* The read golden's world points: origin + f32 position. */
+    double org[3] = {0, 0, 0}, want[64][3];
+    size_t nw = 0;
+    const char *o = strstr(st, "origin ");
+    for (int k = 0; o && k < 3; k++) {
+        uint64_t u;
+        if (hexval(o + 7 + 17 * k, 16, &u)) org[k] = f64_of(u);
+    }
+    for (const char *p = mt; p && *p && nw < 64; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+        if (p[0] != 'v' || p[1] != ' ') continue;
+        uint64_t u;
+        for (int k = 0; k < 3; k++) want[nw][k] = hexval(p + 2 + 9 * k, 8, &u) ? org[k] + f32_of((uint32_t)u) : 0.0;
+        nw++;
+    }
+    check_true("opening: read golden has 16 points", nw == 16);
+    const cc_boolean *kernel = cc_boolean_kernel();
+    for (int pass = 0; pass < (kernel ? 2 : 1); pass++) {
+        if (pass) cc_boolean_set(NULL);
+        int cut = cc_boolean_kernel() != NULL;
+        cc_model m;
+        cc_ifc_report rep;
+        cc_error err;
+        int rc = cc_ifc_import(&m, &rep, ifc, tn, &err);
+        check_true("opening: imports", rc == 0);
+        check_true("opening: one element with one opening", !rc && m.nelements == 1 && m.elements[0].nopenings == 1);
+        cc_scene s;
+        rc = rc ? rc : cc_scene_build(&s, &m, &err);
+        check_true("opening: scene builds", rc == 0);
+        if (!rc) {
+            Arena a;
+            arena_init(&a, 0);
+            cc_mesh w;
+            int ok = s.nelements == 1 && !cc_scene_world_mesh(&s, 0, &a, &w);
+            printf("opening model scene (%s): %u triangles, %u vertices, %zu warning(s)\n",
+                   cut ? "kernel" : "no kernel", ok ? w.ni / 3 : 0, ok ? w.nv : 0, s.nwarnings);
+            if (cut) {
+                check_true("opening: cut like Rust (32 triangles, 16 vertices)", ok && w.ni == 96 && w.nv == 16);
+                check_true("opening: no warning", s.nwarnings == 0);
+                /* Every point of each side has one of the other within 0.01 mm. */
+                double worst = 0;
+                for (int dir = 0; ok && dir < 2; dir++) {
+                    size_t na = dir ? nw : w.nv, nb = dir ? w.nv : nw;
+                    for (size_t i = 0; i < na; i++) {
+                        double best = 1e300;
+                        for (size_t j = 0; j < nb; j++) {
+                            double d = 0;
+                            for (int k = 0; k < 3; k++) {
+                                double pa = dir ? want[i][k] : s.origin[k] + w.pos[i][k];
+                                double pb = dir ? s.origin[k] + w.pos[j][k] : want[j][k];
+                                double e = pa - pb;
+                                d = d > (e < 0 ? -e : e) ? d : (e < 0 ? -e : e);
+                            }
+                            best = best < d ? best : d;
+                        }
+                        worst = worst > best ? worst : best;
+                    }
+                }
+                printf("opening model scene vs read golden: worst point distance %.3g mm\n", worst);
+                check_true("opening: same points as Rust's read (0.01 mm)", ok && worst <= 0.01);
+            } else {
+                check_true("opening: uncut without a kernel (12 triangles)", ok && w.ni == 36);
+                check_true("opening: warned without a kernel",
+                           s.nwarnings == 1 && has_text(s.warnings[0].p, s.warnings[0].n, "opening(s) not cut (no boolean kernel"));
+            }
+            arena_free(&a);
+            cc_scene_free(&s);
+        }
+        cc_model_free(&m);
+        cc_ifc_report_free(&rep);
+    }
+    cc_boolean_set(kernel);
+    free(ifc), free(st), free(mt);
+}
+
 int main(int argc, char **argv) {
     static char dir[4096];
     snprintf(dir, sizeof dir, "%s/..", argc > 1 ? argv[1] : "ccore/golden/floats");
@@ -437,6 +551,7 @@ int main(int argc, char **argv) {
     }
 
     earcut_checks();
+    opening_checks();
 
     /* frame2: rotated wall, L slab, slab with a void, a plate with z_axis -y, a tetrahedron mesh */
     {
