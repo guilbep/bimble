@@ -1,11 +1,14 @@
-# ADR 0067 — A C core for the lab's dev loop; Rust stays the product and the oracle
+# ADR 0067 — Bimble moves to a C core; one final Rust release becomes the frozen oracle
 
-- Status: Proposed
-- Decided by: to be decided by Pierre. Proposed by Claude on Pierre's request ("start working on
-  the C core slab rewrite… tcc in dev, clang for release… build on our work of this night"),
-  25 Nov 2026. Code by builder agents on branch `rewrite/c-core`; each number checked from its log.
-- Reversal cost: low for the lab (one `?gl=1` branch and one transport in `bimble.ts`; delete
-  `ccore/`). The cost grows with every feature ported to C.
+- Status: Accepted (amended), 25 Nov 2026
+- Decided by: Pierre, 25 Nov 2026: "I'm sold on the 'C' port … We don't [want] to maintain 2
+  cores, so we'll just go full in the C port once [the main release branch and fixes are
+  finished] and do a final RUST release before we move completely to C." Proposed by Claude on
+  Pierre's request ("start working on the C core slab rewrite… tcc in dev, clang for release");
+  the first proposal kept Rust as the product (below, "Decision as first proposed"). Code by
+  builder agents on branch `rewrite/c-core`; each number checked from its log.
+- Reversal cost: high once the port starts. Until then the final Rust release remains a working
+  product, and the lab keeps its wasm path.
 - Extends: ADR 0065 (fast dev builds), ADR 0066 (headless native twin), ADR 0048 (Vue lab)
 
 ## Context / Problem
@@ -24,7 +27,27 @@ of Bimble. Pierre chose to try a C core for the lab anyway. The question: can a 
 built with tcc, sit behind the unchanged Vue lab, match Rust byte for byte, and make the loop
 much shorter?
 
-## Decision (proposed)
+## Decision
+
+1. Bimble moves fully to C. No two cores are maintained: once the port starts, new features are
+   written in C only.
+2. Before the move, one final Rust release ships from `main` (the release branch and the pending
+   fixes first). Its tag is the **frozen oracle**: goldens are dumped from that tag, and CI keeps
+   its binary to compare against while a feature has not been ported yet.
+3. **The golden rule** holds during the port: a Rust capability enters C only with its golden
+   from the frozen oracle, and C must match it byte for byte. Where C must differ on purpose (a
+   fix, a new feature), the golden changes in a commit that says so.
+4. CI runs `ccore/test/run.sh` (tcc and clang), the host and lab suites, and `build.sh wasm` with
+   `wasm_run.mjs` on every pull request.
+5. Dev builds use tcc (`ccore/build.sh host` and `ccore/dev.sh`). Release and wasm32 builds use
+   clang.
+6. The project rules hold in C: IFC names, Commands, canonical output, stable GlobalIds, files as
+   untrusted input, no performance claim without a benchmark.
+7. The port order, the desktop shell (for example Electron or a system webview around web-ui with
+   the C core) and the product split (a small web viewer, a full web editor, a desktop app) are
+   studied in `docs/research/future-architecture.md` and decided in their own ADRs.
+
+## Decision as first proposed (superseded by Pierre's decision above)
 
 1. A C core in `ccore/` serves the Vue lab in dev. It is the lab's native host (`?native=1`) and
    draws through a WebGL2 viewport (`?gl=1`). It may later back a small online viewer
@@ -124,8 +147,8 @@ What the numbers do **not** show:
 
 ## Not decided here
 
-- Replacing the Rust core with C: no. Rust stays the product and the oracle.
-- An online viewer on the 220 KB wasm module: a separate experiment, with its own ADR.
+- The port order and its milestones (own ADR, from `docs/research/future-architecture.md`).
+- The desktop shell and the product split (web viewer, web editor, desktop app): own ADRs.
 - Merging the `bimble.ts` reconnect fix and the `?gl=1` viewport to `main`: separate pull
   requests, each on its own merit.
 - Which features may enter C after the lab surface. Each needs a golden first (rule 3).

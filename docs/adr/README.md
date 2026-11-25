@@ -90,4 +90,4 @@ Session journals (what happened, in order, with measurements) are in [`docs/jour
 | [0064](0064-small-screens-viewer-with-light-edits.md) | Small screens: viewer with light edits below 1 024 px; bottom bar and sheets on a phone; a note is a property (`SetProperty`) | Accepted |
 | [0065](0065-fast-dev-builds.md) | Fast dev builds: line tables only, dependencies at opt-level "s", `npm run wasm:dev` for the lab (≈ 40 s → 3.3–4.4 s per edit) | Accepted |
 | [0066](0066-headless-native-twin-for-the-dev-loop.md) | A headless native twin behind `bimble.ts` for the dev loop (p95 2 ms; edit → value 1.72 s against 3.75 s for wasm); mold for native dev builds | Proposed |
-| [0067](0067-c-core-for-the-lab-loop.md) | A C core (tcc in dev) behind the Vue lab: edit → pixels 233 ms median (p95 277); Rust stays the product and the oracle; a feature enters C only after Rust dumps its golden | Proposed |
+| [0067](0067-c-core-for-the-lab-loop.md) | Bimble moves to a C core (tcc in dev, clang for release; lab edit → pixels 233 ms median); one final Rust release becomes the frozen oracle; a feature enters C only with its golden | Accepted |
