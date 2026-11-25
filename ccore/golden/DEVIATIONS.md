@@ -636,3 +636,31 @@ the same IFC offers the same views with the same ids.
   is read only", so it keeps both off for a read-only file (the 2 actions `parity.md` still shows as
   differing in `ifc_readonly`); the page does not ask those queries of a read-only file.
   Every other enable rule ACT1 changed is Rust's own (`results/parity.md`).
+## 18. Files from the page: the dialog, the recent files, a dropped file (ticket FS1)
+
+**What.** Rust asks where with the system's dialog (`rfd`, `files.rs`); a browser page cannot show
+one for the native host, so the page draws its own (`web-ui/src/dialogs/FileBrowser.vue`) over the
+host's queries `fs_roots`, `fs_home`, `fs_list` (`ccore/host/fs.h`, the path rule). Rust has no
+such queries. The recent files keep Rust's rule and file (`settings.rs` `recent`, `RECENT` 12,
+`opened`; the same `settings.json`), with these differences:
+- The C core writes the field `recent` only: the file is read, that field replaced, the whole
+  written back with sorted keys and each number as its text in the file (Rust writes every field
+  from its struct: what it does not know is dropped there, kept here). A missing file is created
+  with `recent` only; Rust reads it with its defaults for the rest. A file that is not a JSON
+  object is left alone (Rust would overwrite it with its defaults on its next save).
+- The list is read again from the file before each change, so the two apps running at once do not
+  drop each other's entries (Rust reads it once at start).
+- `query recent_files` adds `kind` (by extension) and `mtime` (the file's, seconds; null when
+  missing) to Rust's `{exists, folder, name, opened_unix, path, schema}`; `opened_unix` stays null
+  as in Rust. A hidden action `recent_remove {path}` (Home's remove) has no Rust counterpart.
+- The host writes the settings file only when it knows the folder: `--config-dir`,
+  `BIMBLE_CONFIG_DIR`, or Rust's folder for `bimble-ccore open` (the desktop). The plain host
+  (`bimble-ccore <port>`: tests, `dev.sh`) keeps the list in memory.
+- A file dropped on the page: Rust gets its path from the window; a browser gives bytes only, so
+  the native page sends them to `POST /stage` (the host's own temp folder, 256 MB at most, removed
+  when the host stops) and opens that copy with `{dropped: true}`: under its name, no recent file,
+  Save asks where (as a new model's). A dropped PDF or DXF is refused there (a reference plan keeps
+  its file's path; Rust links the dropped file where it is).
+
+**Where.** `ccore/host/fs.c`, `ccore/session/settings_file.c`, `ccore/session/calls.c` (FS1
+blocks), `web-ui/src/files.ts`; tests `ccore/test/fs_test.mjs`, `ccore/test/lab_files.mjs`.

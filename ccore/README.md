@@ -27,8 +27,8 @@ independent tasks on pthreads natively (serial in wasm), with one global, the th
 | L2 io / geom | file (v1, v2), STEP, IFC in and out; scene | `src/file`, `step`, `ifc_in`, `ifc_out`, `scene`, `earcut` |
 | L3 api | verbs, query | `src/verbs`, `query` |
 | L4 store | journal, repo, remote | `src/repo` (the history store, read only: ticket H1), `diff` (`version::diff`) |
-| L5 session | call router, sessions (handles: `cc_session *`), selection, placing, scene and /mesh caches, session file, platform interface | `session/calls`, `session`, `mesh`, `mesh_model`, `platform`, `versions` (the history queries) |
-| L6 carriers | wasm module, HTTP host (native platform, `main`), MCP over stdio, later cli | `src/wasm_api.c` (+ `wasm_stub.c`), `host/server.c`, `host/static.c`, `host/platform_native.c`, `host/main.c`, `host/mcp.c` |
+| L5 session | call router, sessions (handles: `cc_session *`), selection, placing, scene and /mesh caches, session file, platform interface | `session/calls`, `session`, `mesh`, `mesh_model`, `platform`, `versions` (the history queries), `settings_file` (the recent files, FS1) |
+| L6 carriers | wasm module, HTTP host (native platform, `main`), MCP over stdio, later cli | `src/wasm_api.c` (+ `wasm_stub.c`), `host/server.c`, `host/static.c`, `host/platform_native.c`, `host/main.c`, `host/mcp.c`, `host/fs.c` (the page's file dialog, `POST /stage`: FS1) |
 
 A process holds any number of sessions (`cc_session_new(platform)`); the native host serves one
 (`main.c` creates it and passes it to `server.c` in `cc_host_config`), the wasm module's `host_*`

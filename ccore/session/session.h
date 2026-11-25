@@ -122,6 +122,12 @@ typedef struct cc_session {
     int sheet_shown;
     cc_gid sheet;
     /* ---- end FAKE1 ---- */
+    /* ---- FS1: the recent files (settings_file.h), newest first, malloc'd; the settings file
+     * they are kept in (malloc'd), NULL: in memory only ---- */
+    char *recent_files[12];
+    size_t nrecent_files;
+    char *settings_file;
+    /* ---- end FS1 ---- */
 } cc_session;
 
 /* A new session with no model, on `pf` (kept by pointer). NULL when out of memory. */

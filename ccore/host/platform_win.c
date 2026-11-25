@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <wchar.h>
 
 #include "host.h"
 
@@ -247,8 +248,86 @@ static int wp_list_dir(void *ctx, const char *path, size_t max, char **names, si
     return CC_PF_OK;
 }
 
+/* ---- FS1: stat, the final path, mkdir (platform.h), over the wide-character API ---- */
+static int64_t wp_unix_of(FILETIME ft) {
+    uint64_t t = (uint64_t)ft.dwHighDateTime << 32 | ft.dwLowDateTime;
+    const uint64_t EPOCH = 116444736000000000ull; /* 1601 to 1970 in 100 ns */
+    return t > EPOCH ? (int64_t)((t - EPOCH) / 10000000ull) : 0;
+}
+
+/* A reparse point (symbolic link, junction) is CC_PF_LINK when not following, as lstat. */
+static int wp_stat_path(void *ctx, const char *path, int follow, cc_pf_stat *st) {
+    (void)ctx;
+    wchar_t *w = cc_win_wide(path);
+    if (!w) return CC_PF_NOT_FOUND;
+    WIN32_FILE_ATTRIBUTE_DATA a;
+    int ok = GetFileAttributesExW(w, GetFileExInfoStandard, &a) != 0;
+    if (ok && follow && (a.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        /* the target's attributes: open it (links followed) and ask the handle */
+        HANDLE h = CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                               FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        BY_HANDLE_FILE_INFORMATION bi;
+        ok = h != INVALID_HANDLE_VALUE && GetFileInformationByHandle(h, &bi);
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        if (ok) {
+            a.dwFileAttributes = bi.dwFileAttributes & ~(DWORD)FILE_ATTRIBUTE_REPARSE_POINT;
+            a.nFileSizeHigh = bi.nFileSizeHigh, a.nFileSizeLow = bi.nFileSizeLow;
+            a.ftLastWriteTime = bi.ftLastWriteTime;
+        }
+    }
+    free(w);
+    if (!ok) return CC_PF_NOT_FOUND;
+    DWORD at = a.dwFileAttributes;
+    st->kind = (at & FILE_ATTRIBUTE_REPARSE_POINT) ? CC_PF_LINK : (at & FILE_ATTRIBUTE_DIRECTORY) ? CC_PF_DIR : CC_PF_FILE;
+    st->size = st->kind == CC_PF_FILE ? (uint64_t)a.nFileSizeHigh << 32 | a.nFileSizeLow : 0;
+    st->mtime_s = wp_unix_of(a.ftLastWriteTime);
+    return CC_PF_OK;
+}
+
+/* GetFinalPathNameByHandleW: links resolved, "\\?\" dropped, '/' separators. */
+static int wp_real_path(void *ctx, const char *path, char *out, size_t n) {
+    (void)ctx;
+    wchar_t *w = cc_win_wide(path);
+    if (!w) return -1;
+    HANDLE h = CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    free(w);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    wchar_t fin[32768];
+    DWORD k = GetFinalPathNameByHandleW(h, fin, sizeof fin / sizeof fin[0], FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    CloseHandle(h);
+    if (k == 0 || k >= sizeof fin / sizeof fin[0]) return -1;
+    const wchar_t *f = fin;
+    if (!wcsncmp(f, L"\\\\?\\UNC\\", 8)) f += 6, fin[6] = L'\\'; /* \\?\UNC\srv -> \\srv */
+    else if (!wcsncmp(f, L"\\\\?\\", 4)) f += 4;
+    char *u = cc_win_utf8(f);
+    if (!u) return -1;
+    size_t un = strlen(u);
+    int rc = un < n ? 0 : -1;
+    if (!rc) {
+        for (size_t i = 0; i <= un; i++) out[i] = u[i] == '\\' ? '/' : u[i];
+    }
+    free(u);
+    return rc;
+}
+
+static int wp_make_dir(void *ctx, const char *path) {
+    (void)ctx;
+    wchar_t *w = cc_win_wide(path);
+    if (!w) return -1;
+    int ok = CreateDirectoryW(w, NULL) != 0;
+    if (!ok && GetLastError() == ERROR_ALREADY_EXISTS) {
+        DWORD at = GetFileAttributesW(w);
+        ok = at != INVALID_FILE_ATTRIBUTES && (at & FILE_ATTRIBUTE_DIRECTORY);
+    }
+    free(w);
+    return ok ? 0 : -1;
+}
+/* ---- end FS1 ---- */
+
 static const cc_platform NATIVE = {
     NULL, 1, wp_read_file, wp_exists, wp_write_file, wp_now_ms, wp_unix_s, wp_random, wp_log, wp_list_dir,
+    wp_stat_path, wp_real_path, wp_make_dir, /* FS1 */
 };
 
 const cc_platform *cc_platform_native(void) { return &NATIVE; }

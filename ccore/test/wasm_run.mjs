@@ -467,6 +467,10 @@ suite("host");
 
     // Boot: no model yet (the page asks before it opens one).
     check("boot: change_json without a model", JSON.parse(change()).file === null, change());
+    // FS1: the file dialog's queries are the native host's; the module has no folder, no recent files.
+    const fsl = hcall("query", "fs_list", JSON.stringify({ dir: "/" }));
+    check("FS1: query fs_list in the module -> 400 no folder in the browser", fsl.status === 400 && fsl.text === "fs_list: no folder in the browser", `${fsl.status} ${fsl.text}`);
+    check("FS1: query recent_files in the module -> []", hcall("query", "recent_files", "{}").text === "[]");
     const st0 = hcall("query", "state", "{}");
     check("boot: query state -> 200, no file", st0.status === 200 && JSON.parse(st0.text).file === null, st0.text);
     const ac0 = hcall("query", "actions", "{}");

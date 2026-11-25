@@ -4,7 +4,7 @@ export const hint = "filemenu.hint";
 
 <script setup lang="ts">
 // Screen A2, File menu (wireframes v01 fr/FileMenu.html). Each entry runs one egui action by name (`query("actions")`).
-import { actions } from "../bimble";
+import { actions, query, state } from "../bimble";
 import { act, can } from "../shell/send";
 import { t } from "../i18n";
 import type * as copy from "../i18n/parts/filemenu";
@@ -27,6 +27,9 @@ const sections: { title: Key; entries: Entry[] }[] = [
     { key: "filemenu.importIfc", icon: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 13v8h14v-8"/>', action: "import_ifc" },
     { key: "filemenu.convert", icon: NEW, action: "convert_open" },
     { key: "filemenu.save", icon: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><rect x="8" y="13" width="8" height="5"/>', kbd: "Ctrl+S", action: "save" },
+    // ---- FS1: Save as (not a ribbon action: enabled with an editable model, calls.c action_enabled) ----
+    { key: "filemenu.saveAs", icon: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><path d="M12 13v5M9.5 15.5h5"/>', kbd: "Ctrl+Shift+S", action: "save_as" },
+    // ---- end FS1 ----
   ] },
   { title: "filemenu.share", entries: [
     { key: "filemenu.shareView", icon: '<circle cx="6" cy="12" r="2.2"/><circle cx="17" cy="6" r="2.2"/><circle cx="17" cy="18" r="2.2"/><path d="m8 11 7-4M8 13l7 4"/>', action: "share_for_viewing" },
@@ -51,11 +54,16 @@ const sections: { title: Key; entries: Entry[] }[] = [
 const SCREENS: Record<string, string> = { project: "project-info", history: "history" };
 // FAKE1: the core enables project and history now (ACT1): a screen entry needs its action too (not for a read-only file).
 const enabledNow = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
-const on = (name?: string) => !!name && (name in SCREENS ? can({ do: "showPage", page: SCREENS[name]! }) && enabledNow(name) : enabledNow(name));
+const on = (name?: string) => !!name && (name === "save_as" ? editable() /* FS1 */ : name in SCREENS ? can({ do: "showPage", page: SCREENS[name]! }) && enabledNow(name) : enabledNow(name));
 // ---- FAKE1: an entry whose action this core does not serve (shell/capability.ts): greyed with a "not yet" tooltip ----
 const notYet = (e: Entry) => !!e.action && notYetAction(e.action);
 // ---- end FAKE1 ----
 // A refusal of the session is shown (the shell's error state), not only logged.
+// FS1: save_as is not in `query("actions")`; an editable model has it (calls.c action_enabled).
+function editable(): boolean {
+  void state.value;
+  try { return query<{ editable?: boolean }>("state").editable === true; } catch { return false; }
+}
 function run(name?: string) {
   currentDialog.value = null;
   if (name) act(name);

@@ -15,6 +15,15 @@
 /* read_file's status */
 enum { CC_PF_OK = 0, CC_PF_NOT_FOUND, CC_PF_TOO_LARGE, CC_PF_IO, CC_PF_NO_MEMORY };
 
+/* ---- FS1: stat_path's answer ---- */
+enum { CC_PF_FILE = 1, CC_PF_DIR, CC_PF_LINK, CC_PF_OTHER };
+typedef struct {
+    int kind;        /* CC_PF_FILE, CC_PF_DIR, CC_PF_LINK (only when not following), CC_PF_OTHER */
+    uint64_t size;   /* bytes (a file), else 0 */
+    int64_t mtime_s; /* last change, seconds since 1970-01-01 UTC */
+} cc_pf_stat;
+/* ---- end FS1 ---- */
+
 typedef struct cc_platform {
     void *ctx;
     /* 1: paths name files of a file system; 0: none (the wasm module): a path is a file name for
@@ -42,6 +51,17 @@ typedef struct cc_platform {
      * when there is no such folder. The wasm module has no folders: NOT_FOUND always. NULL (a
      * carrier written before it) reads as no folders too. */
     int (*list_dir)(void *ctx, const char *path, size_t max, char **names, size_t *n);
+    /* ---- FS1 (the file dialog in the page, recent files; NULL in a carrier without folders,
+     * and in one written before them: callers check) ---- */
+    /* What `path` is: lstat (follow 0: a symbolic link, a junction is CC_PF_LINK) or stat
+     * (follow 1). CC_PF_OK, else CC_PF_NOT_FOUND. */
+    int (*stat_path)(void *ctx, const char *path, int follow, cc_pf_stat *st);
+    /* The absolute path of `path` with every link resolved (realpath; on Windows the final path,
+     * with '/' separators), into out[0..n). 0 ok, -1 (no such path, too long). */
+    int (*real_path)(void *ctx, const char *path, char *out, size_t n);
+    /* Creates the folder `path` (one level). 0 when it was made or already is a folder, -1. */
+    int (*make_dir)(void *ctx, const char *path);
+    /* ---- end FS1 ---- */
 } cc_platform;
 
 #ifdef _WIN32

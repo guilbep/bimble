@@ -2,7 +2,14 @@
  * Windows: host/platform_win.c (ticket WIN1); this file is empty there. */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE /* realpath beside _POSIX_C_SOURCE (FS1) */
+#elif !defined(__APPLE__)
+#define _XOPEN_SOURCE 700 /* realpath (FS1): XSI */
+#endif
 #include "host.h"
+#include <errno.h>
+#include <limits.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <string.h>
@@ -142,8 +149,36 @@ static int np_list_dir(void *ctx, const char *path, size_t max, char **names, si
     return CC_PF_OK;
 }
 
+/* ---- FS1: stat, realpath, mkdir (platform.h) ---- */
+static int np_stat_path(void *ctx, const char *path, int follow, cc_pf_stat *st) {
+    (void)ctx;
+    struct stat sb;
+    if ((follow ? stat(path, &sb) : lstat(path, &sb)) != 0) return CC_PF_NOT_FOUND;
+    st->kind = S_ISLNK(sb.st_mode) ? CC_PF_LINK : S_ISDIR(sb.st_mode) ? CC_PF_DIR : S_ISREG(sb.st_mode) ? CC_PF_FILE : CC_PF_OTHER;
+    st->size = S_ISREG(sb.st_mode) ? (uint64_t)sb.st_size : 0;
+    st->mtime_s = (int64_t)sb.st_mtime;
+    return CC_PF_OK;
+}
+
+static int np_real_path(void *ctx, const char *path, char *out, size_t n) {
+    (void)ctx;
+    char buf[PATH_MAX];
+    if (!realpath(path, buf) || strlen(buf) >= n) return -1;
+    strcpy(out, buf);
+    return 0;
+}
+
+static int np_make_dir(void *ctx, const char *path) {
+    (void)ctx;
+    struct stat sb;
+    if (mkdir(path, 0700) == 0) return 0;
+    return errno == EEXIST && stat(path, &sb) == 0 && S_ISDIR(sb.st_mode) ? 0 : -1;
+}
+/* ---- end FS1 ---- */
+
 static const cc_platform NATIVE = {
     NULL, 1, np_read_file, np_exists, np_write_file, np_now_ms, np_unix_s, np_random, np_log, np_list_dir,
+    np_stat_path, np_real_path, np_make_dir, /* FS1 */
 };
 
 const cc_platform *cc_platform_native(void) { return &NATIVE; }

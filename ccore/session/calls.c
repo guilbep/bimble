@@ -39,6 +39,7 @@
 #include "schedules.h" /* Q2 */
 #include "palette.h"   /* Q2 */
 #include "capabilities.h" /* FAKE1 */
+#include "settings_file.h" /* FS1 */
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -544,6 +545,7 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "new") || !strcmp(name, "open") || !strcmp(name, "import_ifc")) return 1; /* ribbon.rs:559 */
     if (!strcmp(name, "save_as")) return s->open; /* not ribbon actions (file_action) */
     if (!strcmp(name, "close")) return loaded(s);
+    if (!strcmp(name, "recent_remove")) return 1; /* FS1 */
     /* ribbon.rs:575: Rust shares any scene shown: a model's, an IFC read as it is, a view file. */
     if (!strcmp(name, "share_for_viewing")) return s->open || s->view != CC_VIEW_NONE;
     /* ribbon.rs:564-572: an IFC open read-only, natively (the browser keeps no path to read it
@@ -1024,6 +1026,9 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         jw_arr_end(&w);
         return done(&w);
     }
+    /* ---- FS1: the recent files of the settings file (settings_file.h) ---- */
+    if (!strcmp(name, "recent_files")) return cc_recent_json(s, out), out->oom ? CC_ERR : CC_OK;
+    /* ---- end FS1 ---- */
     static const char *const EMPTY[] = {"recent_files"};
     for (size_t i = 0; i < sizeof EMPTY / sizeof EMPTY[0]; i++)
         if (!strcmp(name, EMPTY[i])) { /* spec §1: stub [] */
@@ -1082,6 +1087,7 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
 typedef struct {
     char *path; /* malloc'd; NULL: none */
     int discard;
+    int dropped; /* FS1: a file dropped on the page, staged by the host (host/fs.h): Save asks where */
 } FileArgs;
 
 /* Parses the optional body. 0 ok; -1 with the error text in `out`. */
@@ -1106,6 +1112,8 @@ static int file_args(const char *body, size_t n, FileArgs *fa, cc_buf *out) {
         else {
             rc = 0;
             fa->discard = d && d->type == JR_BOOL && d->b;
+            const JrVal *dr = jr_get(v, "dropped"); /* FS1 */
+            fa->dropped = dr && dr->type == JR_BOOL && dr->b;
             if (p && p->type == JR_STR) {
                 fa->path = malloc(p->n + 1);
                 if (!fa->path) rc = -1, buf_puts(out, "out of memory");
@@ -1222,6 +1230,10 @@ static int file_action(cc_session *s, const char *name, const FileArgs *fa, cc_b
                                          : cc_session_open(s, fa->path, &err);
         if (rc) return fail(out, err.msg);
         if (!opening) cc_log(s->pf, "bimble-ccore: New model, not saved"); /* lib.rs:1709 */
+        /* FS1: settings.rs `opened` (lib.rs:1653); a dropped file has no path of its own: no recent
+         * file, and Save asks where (as a new model's) */
+        if (opening && fa->dropped && s->open) s->untitled = 1;
+        else if (opening && !fa->dropped) cc_recent_opened(s, fa->path);
         return CC_OK;
     }
     if (!strcmp(name, "save") || !strcmp(name, "save_as")) {
@@ -1233,6 +1245,7 @@ static int file_action(cc_session *s, const char *name, const FileArgs *fa, cc_b
         else if (s->untitled && s->pf->files) /* lib.rs:1832: a new model has no file yet: Rust asks where */
             return fail(out, "a new model has no file yet: action save_as with {\"path\": \"<file>\"}");
         if (cc_session_save(s, to, &err)) return fail(out, err.msg);
+        if (!s->untitled) cc_recent_opened(s, s->path); /* FS1: a saved file is a recent one */
         return CC_OK;
     }
     if (!strcmp(name, "export_ifc4") || !strcmp(name, "export_ifc2x3")) {
@@ -1405,7 +1418,7 @@ static int new_sheet_action(cc_session *s, cc_buf *out) {
 }
 
 /* Actions the C core runs that the ribbon does not list (above). */
-static const char *const HIDDEN_ACTIONS[] = {"save_as", "close"};
+static const char *const HIDDEN_ACTIONS[] = {"save_as", "close", "recent_remove" /* FS1 */};
 
 /* calls.rs:538-547 call_action, ribbon.rs:650 run_action. */
 static int call_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
@@ -1447,6 +1460,15 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     if (!strcmp(name, "project") || !strcmp(name, "history")) return CC_OK;
     /* ---- end FAKE1 ---- */
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return link_action(s, name, body, n, out);
+    /* ---- FS1: recent_remove {path} (Home's remove; settings_file.h) ---- */
+    if (!strcmp(name, "recent_remove")) {
+        FileArgs ra;
+        if (file_args(body, n, &ra, out)) return CC_ERR;
+        int rr = ra.path && !cc_recent_remove(s, ra.path);
+        free(ra.path);
+        return rr ? CC_OK : fail(out, "recent_remove: {\"path\": a path of query recent_files}");
+    }
+    /* ---- end FS1 ---- */
     /* ---- L1: link_pdf, one set_view / add_view Command (links_ref.h); L2: link_dxf the same way ---- */
     if (!strcmp(name, "link_pdf") || !strcmp(name, "link_dxf")) {
         Arena ra;

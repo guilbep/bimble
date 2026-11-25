@@ -15,6 +15,7 @@
 #include <time.h>
 
 #include "calls.h"
+#include "fs.h" /* FS1 */
 #include "host.h"
 #include "mesh.h"
 #include "session.h"
@@ -50,6 +51,7 @@ typedef struct {
     char acao[256];  /* the allowed Origin of the waiting request, "" for none */
     size_t drained;
     int pending;     /* C_READ with bytes already read: parse them without waiting for input */
+    int big;         /* FS1: the request read is a POST /stage with the token: up to FS_STAGE_MAX */
 } Conn;
 
 static Conn conns[MAX_CONNECTIONS];
@@ -430,7 +432,10 @@ static void route_post(Conn *c, Str path, const char *body, size_t n, int keep) 
         buf_puts(&out, opz);
         status = CC_ERR;
     } else {
-        status = cc_call(cfg->session, opz, namez, bz, n, &out);
+        /* ---- FS1: the file dialog's queries, the native host's own (fs.h) ---- */
+        int fs = !strcmp(opz, "query") ? cc_host_fs_query(namez, bz, n, &out) : -1;
+        /* ---- end FS1 ---- */
+        status = fs >= 0 ? fs : cc_call(cfg->session, opz, namez, bz, n, &out);
         cc_session_persist_now(cfg->session); /* the session file has the change before the call answers */
     }
     if (out.oom) status = 500, buf_clear(&out), out.oom = 0;
@@ -491,8 +496,9 @@ static void handle_one(Conn *c, int *again) {
         return;
     }
     size_t len = h.has_len ? h.content_length : 0;
-    if (len > MAX_BODY) {
-        respond_s(c, 413, "body too large", 0);
+    int stage = str_eq(h.method, "POST") && str_eq(path, "/stage"); /* FS1: a dropped file's bytes */
+    if (len > (stage ? FS_STAGE_MAX : MAX_BODY)) {
+        respond_s(c, 413, stage ? "stage: the file is too large to drop: use File, Open" : "body too large", 0);
         return;
     }
     if (c->in.len - h.head_len < len) return; /* the body is not all here yet */
@@ -515,6 +521,7 @@ static void handle_one(Conn *c, int *again) {
     }
     memmove(c->in.p, c->in.p + used, c->in.len - used);
     c->in.len -= used;
+    c->big = 0; /* FS1 */
     /* path and query now point into tgt */
     qm = memchr(tgt.p, '?', tgt.len);
     path = (Str){tgt.p, qm ? (size_t)(qm - tgt.p) : tgt.len};
@@ -568,6 +575,18 @@ static void handle_one(Conn *c, int *again) {
             respond_x(c, 200, f->ctype, "X-Content-Type-Options: nosniff\r\nCache-Control: no-cache\r\n", f->data,
                       f->n, keep);
         else respond_s(c, 404, "not found", keep);
+    } else if (!strcmp(m, "POST") && str_eq(path, "/stage")) {
+        /* ---- FS1: POST /stage?name=<file name>&t=…: a file dropped on the page (fs.h) ---- */
+        Str nm;
+        Buf name, out;
+        buf_init(&name), buf_init(&out);
+        int st = query_param(query, "name", &nm) && percent_decode(nm, &name)
+                     ? cc_host_stage(buf_cstr(&name), body.p ? body.p : "", body.len, &out)
+                     : (buf_puts(&out, "stage: ?name=<the file's name>"), CC_ERR);
+        if (out.oom) st = 500, buf_clear(&out);
+        respond(c, st == CC_OK ? 200 : st == CC_ERR ? 400 : 500, TEXT, out.p ? out.p : "", out.len, keep);
+        buf_free(&name), buf_free(&out);
+        /* ---- end FS1 ---- */
     } else if (!strcmp(m, "POST")) {
         route_post(c, path, body.p ? body.p : "", body.len, keep);
     } else {
@@ -577,6 +596,23 @@ static void handle_one(Conn *c, int *again) {
     buf_free(&tgt);
     *again = 1;
 }
+
+/* ---- FS1: the head read is a POST /stage that may send FS_STAGE_MAX bytes: the token, the Host
+ * and the Origin as handle_one checks them ---- */
+static int stage_head(Conn *c) {
+    Head h;
+    if (parse_head(c->in.p, c->in.len, &h) != H_OK || !str_eq(h.method, "POST")) return 0;
+    const char *qm = memchr(h.target.p, '?', h.target.n);
+    Str path = {h.target.p, qm ? (size_t)(qm - h.target.p) : h.target.n};
+    Str query = qm ? (Str){qm + 1, h.target.n - path.n - 1} : (Str){"", 0}, t;
+    char want1[32], want2[32];
+    snprintf(want1, sizeof want1, "127.0.0.1:%u", (unsigned)bound_port);
+    snprintf(want2, sizeof want2, "localhost:%u", (unsigned)bound_port);
+    return str_eq(path, "/stage") && query_param(query, "t", &t) && str_eq(t, cfg->token) && h.has_host &&
+           (str_eq(h.host, want1) || str_eq(h.host, want2)) && (!h.has_origin || origin_allowed(h.origin)) &&
+           h.has_len && h.content_length <= FS_STAGE_MAX;
+}
+/* ---- end FS1 ---- */
 
 static void handle_input(Conn *c) {
     int again = 1;
@@ -590,7 +626,8 @@ static int read_some(Conn *c) {
     for (;;) {
         /* Never hold more than one request's worth (the head limit plus the body limit): only a
          * client pipelining megabytes behind a long-poll gets there; drop it. */
-        if (c->in.len > MAX_HEADER + MAX_BODY && c->st != C_DRAIN) {
+        if (c->in.len > MAX_HEADER + MAX_BODY && c->st != C_DRAIN && !c->big) c->big = stage_head(c); /* FS1 */
+        if (c->in.len > MAX_HEADER + (c->big ? FS_STAGE_MAX : MAX_BODY) && c->st != C_DRAIN) {
             conn_close(c);
             return 0;
         }

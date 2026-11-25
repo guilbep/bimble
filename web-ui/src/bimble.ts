@@ -986,9 +986,16 @@ const VIEW_SWITCHES = ["edges", "hatching", "orthographic", "fit", "top"];
 /** Q2: what the viewport does after a view switch ran (glviewport.ts fills it: fit, top). */
 export const viewActions: Record<string, () => void> = {};
 
+// ---- FS1: the file actions of the native host go to files.ts (its dialogs; set there, no import cycle) ----
+export const fileRoutes: { run?: (name: string) => boolean } = {};
+/** An action with a JSON body (`{path, discard}`): throws the error text. */
+export function actionBody(name: string, body: unknown): void { actionWith(name, body); }
+// ---- end FS1 ----
+
 export function runAction(name: string): string | null {
   const route = screenRoutes[name];
   if (route) { route(); return null; }
+  if (fileRoutes.run?.(name)) return null; // FS1
   try {
     wasmOrThrow().action(name);
     // Measuring is session state, not in the change JSON: its state and pressed button here (ticket T1).
@@ -1181,7 +1188,9 @@ export function standardsAction(name: "revert" | "reset" | "save"): string | nul
   }
 }
 /** Home's recent files, newest first (bridge query "recent_files"); empty when the settings hold none. */
-export type RecentFile = { name: string; path: string; folder: string; opened_unix: number | null; schema: string | null; exists: boolean };
+export type RecentFile = { name: string; path: string; folder: string; opened_unix: number | null; schema: string | null; exists: boolean;
+  /** FS1 (C core): "bimble", "ifc", "bimbleview", "json", "pdf", "dxf" or "other", by extension; the file's mtime (s), null when missing. */
+  kind?: string; mtime?: number | null };
 export const recentFiles = () => tryQuery<RecentFile[]>("recent_files", []);
 /** Linked models and reference plans (bridge query "links"); `kind` is "ifc", "bimble", "dxf", "pdf"… */
 export type Link = { id: string; name: string; kind: string; visible: boolean };

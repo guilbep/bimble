@@ -20,6 +20,12 @@
  *                             (`open` on macOS)
  *                             on it (not with --no-browser). Always --warm.
  *   bimble-ccore --version    prints ccore/VERSION (build.sh passes it as CC_RELEASE_VERSION)
+ *   FS1, in both modes:      --root <dir> (repeatable): a folder the page's file dialog may list
+ *                             beside the home folder and the model's folder (fs.h, the path rule);
+ *                             --config-dir <dir>: the folder of settings.json (the recent files,
+ *                             session/settings_file.h); else BIMBLE_CONFIG_DIR; else, for `open`
+ *                             only, Rust's folder (settings.rs `path`); else none: the recent files
+ *                             live in memory (the tests and dev.sh never touch the user's file)
  *   BIMBLE_TOKEN              the token; random when unset or empty (twin.rs:115-118)
  *   BIMBLE_ORIGINS            extra allowed Origins, comma separated, beside the twin's two
  *                             (twin.rs:17), e.g. a Vite dev server on another port */
@@ -50,6 +56,8 @@
 #include "mcp.h"
 #include "session.h"
 #include "static.h"
+#include "fs.h"            /* FS1 */
+#include "settings_file.h" /* FS1 */
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h> /* _NSGetExecutablePath: macOS has no /proc/self/exe */
@@ -200,7 +208,82 @@ typedef struct {
     int want_session, warm;
     const cc_static *web;
     OpenCtx *open;
+    /* ---- FS1 ---- */
+    const char *roots[FS_MAX_ROOTS];
+    int nroots;
+    const char *config_dir; /* --config-dir */
+    int default_config;     /* `open`: Rust's settings folder when nothing else is given */
+    /* ---- end FS1 ---- */
 } Serve;
+
+/* ---- FS1: the settings folder (settings.rs `path`) and the dialog's roots ---- */
+static const char *settings_dir(const Serve *sv, char *buf, size_t n) {
+    if (sv->config_dir && *sv->config_dir) return sv->config_dir;
+    const char *e = getenv("BIMBLE_CONFIG_DIR");
+    if (e && *e) return e;
+    if (!sv->default_config) return NULL;
+    const char *home = getenv("HOME");
+    int w;
+#if defined(__APPLE__)
+    if (!home || !*home) return NULL;
+    w = snprintf(buf, n, "%s/Library/Application Support/Bimble", home);
+#elif defined(_WIN32)
+    const char *ad = getenv("APPDATA");
+    if (!ad || !*ad) return NULL;
+    (void)home;
+    w = snprintf(buf, n, "%s/Bimble", ad);
+#else
+    const char *x = getenv("XDG_CONFIG_HOME");
+    if (x && *x) w = snprintf(buf, n, "%s/bimble", x);
+    else if (home && *home) w = snprintf(buf, n, "%s/.config/bimble", home);
+    else return NULL;
+#endif
+    return w > 0 && (size_t)w < n ? buf : NULL;
+}
+
+static void files_setup(cc_session *ses, const Serve *sv) {
+    cc_host_fs_init();
+    for (int i = 0; i < sv->nroots; i++)
+        if (cc_host_fs_add_root(sv->roots[i])) fprintf(stderr, "bimble-ccore: --root %s: not a folder\n", sv->roots[i]);
+    char dbuf[4200], abs[4200];
+    const char *dir = settings_dir(sv, dbuf, sizeof dbuf);
+    if (dir) {
+        char f[4300];
+        snprintf(f, sizeof f, "%s/settings.json", dir);
+        cc_recent_setup(ses, f);
+    }
+    const cc_platform *pf = cc_platform_native();
+    if (sv->model && *sv->model && !pf->real_path(pf->ctx, sv->model, abs, sizeof abs)) {
+        cc_recent_opened(ses, abs); /* settings.rs `opened`: the model given at start too */
+        char *sl = strrchr(abs, '/');
+        if (sl) {
+            if (sl == abs) sl[1] = 0;
+            else *sl = 0;
+            cc_host_fs_add_root(abs); /* the model's folder */
+        }
+    }
+}
+
+/* "--root <dir>" / "--config-dir <dir>" at argv[*i]: 1 when taken (*i on its value), 0 not one,
+ * -1 an error (printed). */
+static int files_flag(Serve *sv, int argc, char **argv, int *i) {
+    const char *a = argv[*i];
+    int root = !strcmp(a, "--root"), conf = !strcmp(a, "--config-dir");
+    if (!root && !conf) return 0;
+    if (*i + 1 >= argc || !*argv[*i + 1]) {
+        fprintf(stderr, "bimble-ccore: %s needs a folder\n", a);
+        return -1;
+    }
+    const char *v = argv[++*i];
+    if (conf) sv->config_dir = v;
+    else if (sv->nroots < FS_MAX_ROOTS) sv->roots[sv->nroots++] = v;
+    else {
+        fprintf(stderr, "bimble-ccore: at most %d --root\n", FS_MAX_ROOTS);
+        return -1;
+    }
+    return 1;
+}
+/* ---- end FS1 ---- */
 
 /* Opens the model (if any) and serves until SIGTERM or SIGINT. */
 static int serve(unsigned port, Serve *sv) {
@@ -229,6 +312,7 @@ static int serve(unsigned port, Serve *sv) {
         return 2;
     }
     cc_host_fonts(ses, sv->web); /* D7: the PDF export's Roboto files (fonts.c) */
+    files_setup(ses, sv);         /* FS1 */
     static char token[33], epoch[33];
     const char *t = getenv("BIMBLE_TOKEN");
     if (!t || !*t) {
@@ -260,25 +344,30 @@ static int serve(unsigned port, Serve *sv) {
             if (*tok && strlen(tok) < 256) cfg.origins[cfg.n_origins++] = tok;
     }
     int rc = cc_host_run(&cfg);
+    cc_host_stage_cleanup(); /* FS1: the dropped files' copies */
     cc_session_persist_now(ses); /* SIGTERM or SIGINT: the last change, if not written yet */
     cc_session_free(ses);
     return rc;
 }
 
 static const char OPEN_USAGE[] =
-    "usage: bimble-ccore open [--port N] [--no-browser] [--web dir] [--session[=file]] [model]\n";
+    "usage: bimble-ccore open [--port N] [--no-browser] [--web dir] [--session[=file]] [--root dir]... [--config-dir dir] [model]\n";
 
 /* bimble-ccore open ... (see the header). argv[0] is "open". */
 static int open_main(const char *argv0, int argc, char **argv) {
     Serve sv;
     memset(&sv, 0, sizeof sv);
     sv.warm = 1;
+    sv.default_config = 1; /* FS1: the desktop keeps Rust's settings file */
     OpenCtx oc = {NULL, 1};
     unsigned port = 0;
     const char *web = NULL;
     int i = 1;
     for (; i < argc && !strncmp(argv[i], "--", 2); i++) {
         const char *a = argv[i];
+        int ff = files_flag(&sv, argc, argv, &i); /* FS1 */
+        if (ff < 0) return 2;
+        if (ff) continue;
         if (!strcmp(a, "--no-browser")) oc.browser = 0;
         else if (!strcmp(a, "--session")) sv.want_session = 1;
         else if (!strncmp(a, "--session=", 10) && a[10]) sv.want_session = 1, sv.session = a + 10;
@@ -361,6 +450,12 @@ int main(int argc, char **argv) {
     sv.want_session = session && *session;
     sv.session = sv.want_session ? session : NULL;
     while (argc > 1 && !strncmp(argv[1], "--", 2)) {
+        int fi = 1, ff = files_flag(&sv, argc, argv, &fi); /* FS1: --root, --config-dir and a value */
+        if (ff < 0) return 2;
+        if (ff) {
+            argv[2] = argv[0], argv += 2, argc -= 2;
+            continue;
+        }
         if (!strcmp(argv[1], "--session")) sv.want_session = 1;
         else if (!strcmp(argv[1], "--warm")) sv.warm = 1;
         else if (!strncmp(argv[1], "--session=", 10) && argv[1][10]) sv.want_session = 1, sv.session = argv[1] + 10;

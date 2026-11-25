@@ -19,6 +19,7 @@
 #include "sheet_svg.h"
 #include "views.h"
 #include "schedules.h" /* Q2 */
+#include "settings_file.h" /* FS1 */
 
 cc_session *cc_session_new(const cc_platform *pf) {
     cc_session *s = calloc(1, sizeof *s);
@@ -48,6 +49,7 @@ void cc_session_free(cc_session *s) {
     cc_paper_cache_free(s);
     cc_paper_fonts_free(s); /* D7 */
     cc_schedules_cache_free(s); /* Q2 */
+    cc_recent_free(s);      /* FS1 */
     cc_tool_free(&s->tool);
     cc_vis_free(&s->vis);
     cc_measure_free(&s->measure);

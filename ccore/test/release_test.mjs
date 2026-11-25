@@ -81,8 +81,8 @@ const freePort = () => new Promise((res, rej) => {
 
 /** Starts the unpacked host: {proc, out (stdout), log (stderr), exited}. */
 function start(bin, args, cwd, env = {}) {
-  // SIZE1: the font folder and the config dir are the test's (never the user's ~/.config/bimble).
-  const proc = spawn(bin, args, { cwd, env: { ...process.env, BIMBLE_TOKEN: "", BIMBLE_FONTS: join(tmp, "nofonts"), XDG_CONFIG_HOME: join(tmp, "config"), ...env }, stdio: ["ignore", "pipe", "pipe"] });
+  // SIZE1: the font folder and the config dir are the test's (never the user's ~/.config/bimble); FS1: BIMBLE_CONFIG_DIR too.
+  const proc = spawn(bin, args, { cwd, env: { ...process.env, BIMBLE_TOKEN: "", BIMBLE_FONTS: join(tmp, "nofonts"), XDG_CONFIG_HOME: join(tmp, "config"), BIMBLE_CONFIG_DIR: join(tmp, "config", "bimble"), ...env }, stdio: ["ignore", "pipe", "pipe"] });
   const st = { proc, out: "", log: "" };
   proc.stdout.on("data", (d) => (st.out += d));
   proc.stderr.on("data", (d) => (st.log += d));
@@ -155,6 +155,10 @@ try {
   if (!m) throw new Error("no URL");
   const port = Number(m[1]), token = m[3];
   check("stderr names the files served", /serving \d+ files/.test(host.log), host.log.trim());
+  // FS1: the desktop keeps the model given at start in Rust's settings file (here BIMBLE_CONFIG_DIR).
+  const sj = join(tmp, "config", "bimble", "settings.json");
+  const recent = existsSync(sj) ? JSON.parse(readFileSync(sj, "utf8")).recent : null;
+  check("FS1: open adds the model to settings.json's recent files", Array.isArray(recent) && recent.length === 1 && recent[0].endsWith("/work/frame.json"), JSON.stringify(recent));
 
   const index = readFileSync(join(web, "index.html"));
   const root1 = await get(port, "/");

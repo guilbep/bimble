@@ -8,7 +8,8 @@ export const hint = () => (st.value.file === null ? { key: "home.noModel" } : ""
 <script setup lang="ts">
 // A1 Home (fr/Home.html). Layout only; every button is one runAction (ADR 0048).
 import { computed, ref } from "vue";
-import { state, actions, recentFiles } from "../bimble";
+import { state, actions, recentFiles, actionBody, type RecentFile } from "../bimble";
+import { isNative, openPath } from "../files"; // FS1
 import { t } from "../i18n";
 import { act as run, send, shown as control } from "../shell/send";
 import NotAvailable from "../shell/NotAvailable.vue"; // FAKE1
@@ -19,13 +20,19 @@ const on = (name: string) => actions.value.some((a) => a.name === name && a.enab
 // New, Open and Import go to the shell (shell/send.ts screenRoutes); a refusal is shown, not dropped.
 const act = (name: string) => { if (on(name)) run(name); };
 // Re-read when the state changes (a file opened adds itself to the list).
-const recent = computed(() => (state.value, hasRecent.value ? recentFiles() : [])); // FAKE1: not asked when not served
+const bump = ref(0); // FS1: re-read after a remove (no change event: the list is not in the model)
+const recent = computed(() => (state.value, bump.value, hasRecent.value ? recentFiles() : [])); // FAKE1: not asked when not served
 const filter = ref("");
 const shown = computed(() => recent.value.filter((f) => f.name.toLowerCase().includes(filter.value.trim().toLowerCase())));
 // ---- FAKE1: the user line and the recent files only where the core serves them (capabilities
 // `user`, `recent_files`: FS1 and SET1 turn them on in the core, and these light up by themselves) ----
 const hasUser = useCapability("user"), hasRecent = useCapability("recent_files");
 // ---- end FAKE1 ----
+// ---- FS1: a recent file opens on click (the native host reads paths; files.ts asks before dropping changes) ----
+const byPath = isNative();
+const openRecent = (f: RecentFile) => { if (byPath && f.exists) void openPath(f.path); };
+const removeRecent = (f: RecentFile) => { try { actionBody("recent_remove", { path: f.path }); } catch (e) { console.warn(e); } bump.value++; };
+// ---- end FS1 ----
 </script>
 
 <template>
@@ -64,8 +71,11 @@ const hasUser = useCapability("user"), hasRecent = useCapability("recent_files")
       </div>
       <NotAvailable v-if="!hasRecent" compact :what="t('na.screen.recent')" :instead="t(INSTEAD.recent!)" /><!-- FAKE1 -->
       <div v-else class="grid" data-bb="home-recent">
-        <!-- ponytail: the web bridge cannot open a file by its path (no file system), so each card is drawn but disabled. -->
-        <a v-for="f in shown" :key="f.path" href="#" class="card rc" :class="{ gone: !f.exists }" aria-disabled="true" data-missing="open-by-path" :title="f.path" @click.prevent>
+        <!-- ---- FS1: the native host opens a recent file by its path; the web bridge cannot (no file system): drawn, disabled. ---- -->
+        <a v-for="f in shown" :key="f.path" href="#" class="card rc" :class="{ gone: !f.exists, live: byPath && f.exists }" :aria-disabled="!byPath || !f.exists || undefined"
+          :data-missing="byPath ? undefined : 'open-by-path'" :title="f.path" data-bb="home-recent-file" :data-path="f.path" @click.prevent="openRecent(f)">
+          <button class="rm" type="button" :aria-label="t('files.recent.remove')" :title="t('files.recent.remove')" data-bb="home-recent-remove" @click.prevent.stop="removeRecent(f)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        <!-- ---- end FS1 ---- -->
           <!-- No preview from Rust: the reference's tile, empty. -->
           <div class="tile" aria-hidden="true"></div>
           <div class="body">
@@ -113,6 +123,12 @@ h2.disp { font-size: 20px; }
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .rc { padding: 0; overflow: hidden; text-decoration: none; color: var(--bb-ink); display: flex; flex-direction: column; cursor: default; }
 .rc.gone { opacity: .6; }
+/* FS1: a recent file that opens; its remove button */
+.rc { position: relative; }
+.rc.live { cursor: pointer; }
+.rc.live:hover { border-color: var(--bb-stone); }
+.rm { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; border: 0; background: var(--bb-sheet); color: var(--bb-stone); cursor: pointer; opacity: 0; }
+.rc:hover .rm, .rm:focus-visible { opacity: 1; }
 .tile { height: 120px; background: var(--bb-sheet); border-bottom: 1px solid var(--bb-line); }
 .body { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
 .name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -591,6 +591,7 @@ static int wp_list_dir(void *ctx, const char *path, size_t max, char **names, si
 static WasmPlatform wasm_pf_state;
 static const cc_platform wasm_pf = {
     &wasm_pf_state, 0, wp_read_file, wp_exists, wp_write_file, wp_now_ms, wp_unix_s, wp_random, wp_log, wp_list_dir,
+    NULL, NULL, NULL, /* FS1: stat_path, real_path, make_dir: no folder in the browser */
 };
 
 /* The module's default session: the one the host_* exports and `call` work on (created on first
@@ -640,6 +641,8 @@ EXPORT("call") int wa_call(const char *op, size_t on, const char *name, size_t n
     buf_init(&b);
     if (!s || !zop || !zname || !zbody) st = 500, buf_puts(&b, "out of memory");
     else if (!cc_known_op(zop)) st = 404, buf_puts(&b, "unknown call"); /* server.c: not a route */
+    else if (!strcmp(zop, "query") && !strncmp(zname, "fs_", 3)) /* FS1: the native host's (host/fs.h) */
+        st = 400, buf_puts(&b, zname), buf_puts(&b, ": no folder in the browser");
     else st = cc_call(s, zop, zname, zbody, bn, &b);
     free(zop), free(zname), free(zbody);
     return answer(r, &b, st);
