@@ -17,8 +17,9 @@
 # CARGO_TARGET_<host triple>_RUSTFLAGS (the wasm target, CI and release builds do not change).
 # mold is found with `mise where mold` (its libexec/mold/ld, passed with -B), else on PATH
 # (-fuse-ld=mold); lld when `ld.lld` is on PATH (-fuse-ld=lld). A value of that variable already
-# set in the environment is kept. Note: cargo rebuilds when these flags change, so a `cargo build`
-# without them (clippy, tests) and this script rebuild each other's artefacts.
+# set in the environment is kept. Note: the flags change the unit hashes, so the builds with and
+# without them (clippy, tests) sit side by side in target/ and do not rebuild each other. The first
+# build with the flags costs one cold build of the dependencies, once (docs/research/agent-loop.md).
 #
 # Ctrl-C or SIGTERM stops Vite, the twin and the watcher. Needs cargo, inotifywait
 # (inotify-tools), and web-ui/node_modules (`npm ci` in web-ui/). Logs go to target/twin-dev/.
