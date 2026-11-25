@@ -13,6 +13,7 @@
 #include "draw_sheet.h"
 #include "draw_style.h"
 #include "ifc_out.h" /* cc_iso_utc, CC_IFC_VERSION */
+#include "pdf_out.h"
 #endif
 
 void cc_paper_cache_free(struct cc_session *s) {
@@ -32,6 +33,12 @@ int cc_paper_placed_box(struct cc_session *s, const cc_scene *sc, const cc_sheet
                         double out[4]) {
     (void)s, (void)sc, (void)sh, (void)placed, (void)out;
     return 0;
+}
+int cc_paper_sheet_pdf(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, const unsigned char *const fonts[2],
+                       const size_t font_len[2], Buf *pdf, Buf *err) {
+    (void)s, (void)sc, (void)sh, (void)fonts, (void)font_len, (void)pdf;
+    buf_puts(err, CC_VIEW_ONLY_TEXT);
+    return -1;
 }
 #else
 /* Path::file_stem of the session's path: the file name without its last extension (a name that
@@ -172,6 +179,50 @@ int cc_paper_sheet_svg(struct cc_session *s, const cc_scene *sc, const char *bod
     buf_append(out, s->paper_svg.p, s->paper_svg.len);
     rc = out->oom ? CC_ERR : CC_OK;
 end:
+    arena_free(&a);
+    return rc;
+}
+/* The PDF: the drawing of ensure() (its options), not kept; written by cc_paper_pdf. */
+int cc_paper_sheet_pdf(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, const unsigned char *const fonts[2],
+                       const size_t font_len[2], Buf *pdf, Buf *err) {
+    if (!s->open || !sc) return buf_puts(err, "no model open"), -1;
+    char date[32];
+    cc_iso_utc(s->pf->unix_s ? s->pf->unix_s(s->pf->ctx) : 0, date);
+    date[10] = 0; /* YYYY-MM-DD */
+    Arena a;
+    arena_init(&a, 0);
+    int rc = -1;
+    cc_style style;
+    cc_plan_template tpl;
+    Buf derr;
+    buf_init(&derr);
+    if (cc_style_default(&style, &a) || cc_plan_template_default(&tpl, &a) ||
+        cc_plan_template_with_project(&tpl, s->model.project, s->model.nproject, &a)) {
+        buf_puts(err, "out of memory");
+        goto end;
+    }
+    cc_sheet_options o = {&style, &tpl, file_stem(s->path), {date, strlen(date)},
+                          {CC_IFC_VERSION, strlen(CC_IFC_VERSION)}};
+    cc_paper paper;
+    cc_sheet_info info;
+    int r = cc_sheet_draw(sc, &s->model, sh, &o, &a, &paper, &info, &derr);
+    if (r) {
+        if (r < 0 || derr.oom) buf_puts(err, "out of memory");
+        else buf_append(err, derr.p, derr.len);
+        goto end;
+    }
+    cc_pdf_options po;
+    memset(&po, 0, sizeof po);
+    po.version = CC_IFC_VERSION;
+    po.version_len = strlen(CC_IFC_VERSION);
+    for (int k = 0; k < 2 && fonts; k++) po.roboto[k] = fonts[k], po.roboto_len[k] = font_len[k];
+    r = cc_paper_pdf(&paper, &po, pdf);
+    if (r == CC_PDF_ERR_FONT) buf_puts(err, "the Roboto font files are needed (Roboto-Regular.ttf, Roboto-Bold.ttf)");
+    else if (r == CC_PDF_ERR_PEN) buf_puts(err, "a pen of negative width");
+    else if (r) buf_puts(err, "out of memory");
+    else rc = 0;
+end:
+    buf_free(&derr);
     arena_free(&a);
     return rc;
 }

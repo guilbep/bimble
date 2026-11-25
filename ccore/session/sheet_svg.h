@@ -28,6 +28,14 @@ int cc_paper_sheet_svg(struct cc_session *s, const cc_scene *sc, const char *bod
  * draw, the viewer build, out of memory). */
 int cc_paper_placed_box(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, const cc_gid *placed,
                         double out[4]);
+/* Sheet::to_pdf of sheet `sh` (ticket D6, pdf_out.h), drawn as sheet_svg draws it (not kept:
+ * drawn again), appended to `pdf`. `fonts`: Roboto-Regular and -Bold (the style's font is Roboto),
+ * which the carrier hands over (350 KB each, not in the wasm); NULL or a missing weight the text
+ * uses is an error. The producer is "Bimble <the C core's version>". 0 ok; else -1 with the text
+ * in `err` (the drawing's error, "the Roboto font files are needed", out of memory; the viewer
+ * build: "this build is view-only"). */
+int cc_paper_sheet_pdf(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, const unsigned char *const fonts[2],
+                       const size_t font_len[2], Buf *pdf, Buf *err);
 /* Frees what is kept (cc_session_free). */
 void cc_paper_cache_free(struct cc_session *s);
 #endif

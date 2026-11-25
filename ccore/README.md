@@ -52,6 +52,12 @@ line at the top of `cc_call`; `VIEW_ONLY` in `src/wasm_api.c`). Sizes per file a
 out: `results/wasm-size.md` (`build.sh wasm-size [view]` prints the table). In the lab: `npm run
 ccore:wasm-view` in `web-ui/` copies it to `public/ccore/ccore-view.wasm`.
 
+Drawings on paper go out as SVG (`src/paper.c`) and as a one-page vector PDF (`src/pdf_out.c`,
+ticket D6; not `pdf_in`, the reader of links): the same paper items, Rust's `Sheet::to_pdf` byte
+for byte but the packed Roboto files (`golden/DEVIATIONS.md` 12). A Roboto PDF embeds the two
+font files, which the caller hands over (`cc_pdf_options.roboto`, `cc_paper_sheet_pdf` of
+`session/sheet_svg.h`; 350 KB each, not in the wasm); Helvetica needs none. Suite `pdf_out`.
+
 Run the tests (tcc by default, or any compiler in `CC`). The script exits non-zero on a failure:
 
     ccore/test/run.sh             # all suites

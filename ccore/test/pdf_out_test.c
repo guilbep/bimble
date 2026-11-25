@@ -8,13 +8,17 @@
  *   there the dictionaries match but /Length, and both streams inflate to the shipped font file
  *   (same Adler-32); the cross-reference table has the same entries, each at its own offset.
  * Sheets: the dumper's sample sheet (drawing_sample_sheet, as test/draw_test.c builds it) and the
- * frame's full plan (as test/draw_annot_test.c). S-101 is a composed sheet: it waits for D5
- * (sheet composition, draw_sheet.h); its three goldens are listed and reported as waiting.
+ * frame's full plan (as test/draw_annot_test.c) and sheet S-101 of model.json (D5's
+ * cc_sheet_draw, as test/draw_sheet_test.c).
  * Then the writer's own cases: numbers as pdf-writer prints f32, strings, an unused bold face
  * (a free id in the cross-reference table), the font checks and a bad pen. */
 #include <stdint.h>
 #include <string.h>
+#include "../host/host.h" /* cc_platform_native */
+#include "../session/session.h"
+#include "../session/sheet_svg.h"
 #include "../src/arena.h"
+#include "../src/draw_sheet.h"
 #include "../src/draw_plan.h"
 #include "../src/draw_style.h"
 #include "../src/file.h"
@@ -442,14 +446,66 @@ static void test_frame_full(cc_sheet_font font) {
     cc_model_free(&m);
 }
 
-/* ---- goldens waiting for D5 (sheet composition) ---- */
+/* ---- sheet S-101 (D5's sheet composition) ---- */
 
-static void test_waiting(void) {
-    /* S-101 of golden/drawing/model.json, drawn by sheetdraw::draw (D5's draw_sheet.h) with
-     * sheet_options(dm, font): once D5 is merged, build that cc_paper and call
-     * check_sheet("S-101", &sheet) for each font, as test_frame_full does. */
-    static const char *const WAIT[3] = {"pdf/S-101-helvetica.content", "pdf/S-101-helvetica.pdf", "pdf/S-101-roboto.content"};
-    for (int i = 0; i < 3; i++) printf("  WAIT %s: needs D5 (sheet composition, draw_sheet.h)\n", WAIT[i]);
+/* S-101 of golden/drawing/model.json, sheetdraw::draw with the dumper's sheet_options(dm, font)
+ * (as test/draw_sheet_test.c's options, the font set). */
+static void test_s101(cc_sheet_font font) {
+    cc_session *ses = cc_session_new(cc_platform_native());
+    cc_error e;
+    if (!ses || cc_session_open(ses, G "/model.json", &e)) {
+        check_true("model.json opens", 0);
+        if (ses) cc_session_free(ses);
+        return;
+    }
+    const cc_model *m = cc_session_model(ses);
+    const cc_scene *sc = cc_session_scene(ses);
+    const cc_sheet *def = NULL;
+    for (size_t i = 0; m && i < m->nsheets; i++)
+        if (m->sheets[i].number.n == 5 && !memcmp(m->sheets[i].number.p, "S-101", 5)) def = &m->sheets[i];
+    check_true("S-101 found", sc && def);
+    Arena a;
+    arena_init(&a, 0);
+    cc_style style;
+    cc_plan_template tpl;
+    int rc = def && sc ? cc_style_default(&style, &a) || cc_plan_template_default(&tpl, &a) ||
+                             cc_plan_template_with_project(&tpl, m->project, m->nproject, &a)
+                       : -1;
+    if (rc == 0) {
+        style.paper.font = font;
+        cc_sheet_options o;
+        memset(&o, 0, sizeof o);
+        o.style = &style;
+        o.tpl = &tpl;
+        o.project = S("frame");
+        o.date = S("2026-01-01");
+        o.version = S(RUST_VERSION);
+        cc_paper paper;
+        cc_sheet_info info;
+        Buf err;
+        buf_init(&err);
+        rc = cc_sheet_draw(sc, m, def, &o, &a, &paper, &info, &err);
+        check_true("S-101 draws", rc == 0);
+        if (rc == 0) check_sheet("S-101", &paper);
+        buf_free(&err);
+    }
+    if (def && sc && font == CC_FONT_ROBOTO) { /* the session's export (today, its own version) */
+        const unsigned char *fonts[2] = {ttf[0], ttf[1]};
+        size_t lens[2] = {ttf_n[0], ttf_n[1]};
+        Buf pdf, err;
+        buf_init(&pdf), buf_init(&err);
+        rc = cc_paper_sheet_pdf(ses, sc, def, fonts, lens, &pdf, &err);
+        Objs objs;
+        check_true("session: S-101 as PDF", rc == 0 && pdf.len > 16 && !memcmp(pdf.p, "%PDF-1.7\n", 9) &&
+                                                split(pdf.p, pdf.len, &objs) == 0 && objs.n == 15);
+        if (rc) printf("  %.*s\n", (int)err.len, err.p);
+        buf_clear(&pdf), buf_clear(&err);
+        rc = cc_paper_sheet_pdf(ses, sc, def, NULL, NULL, &pdf, &err);
+        check_true("session: no fonts, no PDF", rc == -1 && err.len && !memcmp(err.p, "the Roboto font files", 21));
+        buf_free(&pdf), buf_free(&err);
+    }
+    arena_free(&a);
+    cc_session_free(ses);
 }
 
 /* ---- the writer's own cases ---- */
@@ -634,7 +690,8 @@ int main(void) {
     test_sample(CC_FONT_ROBOTO);
     test_frame_full(CC_FONT_HELVETICA);
     test_frame_full(CC_FONT_ROBOTO);
-    test_waiting();
+    test_s101(CC_FONT_HELVETICA);
+    test_s101(CC_FONT_ROBOTO);
     test_numbers();
     test_strings();
     test_roboto_unused();
