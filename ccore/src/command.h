@@ -1,7 +1,6 @@
 /* Model mutations (crates/bimble-core/src/command.rs). Every change to a model is a command:
  * applying one validates it first, makes it canonical (-0.0 to 0.0), mutates the model and
- * returns its inverse. The 12 commands the C core holds (docs/research/c-core-spec.md §3);
- * views, sheets, schedules and set_material are not in the C core. */
+ * returns its inverse. Every command of Rust but set_material (docs/research/c-core-spec.md §3). */
 #ifndef CCORE_COMMAND_H
 #define CCORE_COMMAND_H
 #include <stddef.h>
@@ -24,6 +23,13 @@ typedef enum { /* serde tag "op" */
     CC_CMD_SET_ELEMENT_MATERIAL,
     CC_CMD_SET_PROPERTY,
     CC_CMD_SET_PROJECT,
+    CC_CMD_ADD_VIEW,
+    CC_CMD_REMOVE_VIEW,
+    CC_CMD_SET_VIEW,
+    CC_CMD_ADD_SHEET,
+    CC_CMD_REMOVE_SHEET,
+    CC_CMD_SET_SHEET,
+    CC_CMD_SET_SCHEDULES,
     CC_CMD_COUNT
 } cc_cmd_op;
 
@@ -33,6 +39,8 @@ typedef enum { /* serde tag "op" */
  *   set_generator: id, generator          set_placement: id, placement
  *   rename: id, name            set_element_material: id, material_id
  *   set_property: id, key, value if has_value     set_project: project[nproject] (sorted keys)
+ *   add_view, set_view: view    remove_view, remove_sheet: id
+ *   add_sheet, set_sheet: sheet set_schedules: schedules[nschedules]
  * Strings and arrays are borrowed: from the cc_cmds arena that made the command, or from the
  * model's arena for the inverses that apply returns. */
 typedef struct {
@@ -49,6 +57,10 @@ typedef struct {
     int has_value;
     cc_kv *project;
     size_t nproject;
+    cc_view view;
+    cc_sheet sheet;
+    cc_schedule *schedules;
+    size_t nschedules;
 } cc_command;
 
 /* A list of commands with an arena for their strings and arrays. */

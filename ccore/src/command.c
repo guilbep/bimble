@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "file.h"
+#include "view_io.h"
 
 #ifndef __TINYC__ /* tcc never contracts and warns on the pragma */
 #pragma STDC FP_CONTRACT OFF /* a*b+c rounds twice, as in Rust */
@@ -42,7 +43,9 @@ cc_command *cc_cmds_push(cc_cmds *l, cc_cmd_op op) {
 
 static const char *const OPS[] = {"add_storey",     "remove_storey",  "add_material",  "remove_material",
                                   "add_element",    "remove_element", "set_generator", "set_placement",
-                                  "rename",         "set_element_material", "set_property", "set_project"};
+                                  "rename",         "set_element_material", "set_property", "set_project",
+                                  "add_view",       "remove_view",    "set_view",      "add_sheet",
+                                  "remove_sheet",   "set_sheet",      "set_schedules"};
 
 const char *cc_cmd_op_name(cc_cmd_op op) { return (unsigned)op < CC_CMD_COUNT ? OPS[op] : "?"; }
 
@@ -485,6 +488,11 @@ static int dup_command(Arena *a, cc_command *c) {
     case CC_CMD_RENAME: return dup_str(a, &c->name);
     case CC_CMD_SET_PROPERTY: return dup_str(a, &c->key) || (c->has_value && dup_str(a, &c->value)) ? -1 : 0;
     case CC_CMD_SET_PROJECT: return dup_kvs(a, &c->project, c->nproject);
+    case CC_CMD_ADD_VIEW:
+    case CC_CMD_SET_VIEW: return cc_view_dup(a, &c->view);
+    case CC_CMD_ADD_SHEET:
+    case CC_CMD_SET_SHEET: return cc_sheet_dup(a, &c->sheet);
+    case CC_CMD_SET_SCHEDULES: return cc_schedules_dup(a, &c->schedules, c->nschedules);
     default: return 0;
     }
 }
@@ -554,6 +562,10 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
         return 0;
     }
     case CC_CMD_REMOVE_STOREY: {
+        for (size_t i = 0; i < m->nviews; i++)
+            if (m->views[i].kind == CC_VIEW_PLAN && m->views[i].storey.n == 22 &&
+                !memcmp(m->views[i].storey.p, c->id.c, 22))
+                return in_use(err, &c->id);
         for (size_t i = 0; i < m->nelements; i++)
             if (!cc_gid_cmp(&m->elements[i].storey, &c->id)) return in_use(err, &c->id);
         const cc_storey *s = cc_model_storey(m, &c->id);
@@ -672,6 +684,93 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
         m->nproject = c->nproject;
         return 0;
     }
+    case CC_CMD_ADD_VIEW: {
+        const cc_view *v = &c->view;
+        if (cc_model_view(m, &v->id)) return exists(err, &v->id);
+        if (cc_view_validate(m, v, &why)) return invalid_buf(err, &why);
+        buf_free(&why);
+        size_t at = lower_bound(m->views, m->nviews, sizeof *v, &v->id);
+        cc_view *p = arr_insert(a, m->views, m->nviews, sizeof *v, at, v);
+        if (!p) return oom(err);
+        m->views = p;
+        m->nviews++;
+        inv_init(inv, CC_CMD_REMOVE_VIEW);
+        inv->id = v->id;
+        return 0;
+    }
+    case CC_CMD_REMOVE_VIEW: {
+        /* A view placed on a sheet stays (a default view is reset, not removed: it keeps its id,
+         * so it stays placed). */
+        if (!cc_view_is_default(m, &c->id))
+            for (size_t i = 0; i < m->nsheets; i++)
+                for (size_t k = 0; k < m->sheets[i].nplaced; k++)
+                    if (!cc_gid_cmp(&m->sheets[i].placed[k].view, &c->id)) return in_use(err, &c->id);
+        const cc_view *v = cc_model_view(m, &c->id);
+        if (!v) return not_found(err, &c->id);
+        inv_init(inv, CC_CMD_ADD_VIEW);
+        inv->view = *v;
+        arr_remove(m->views, m->nviews--, sizeof *v, (size_t)(v - m->views));
+        return 0;
+    }
+    case CC_CMD_SET_VIEW: {
+        cc_view *v = (cc_view *)cc_model_view(m, &c->view.id);
+        if (!v) return not_found(err, &c->view.id);
+        if (cc_view_validate(m, &c->view, &why)) return invalid_buf(err, &why);
+        buf_free(&why);
+        inv_init(inv, CC_CMD_SET_VIEW);
+        inv->view = *v;
+        *v = c->view;
+        return 0;
+    }
+    case CC_CMD_ADD_SHEET:
+    case CC_CMD_SET_SHEET: {
+        const cc_sheet *s = &c->sheet;
+        cc_sheet *old = (cc_sheet *)cc_model_sheet(m, &s->id);
+        if (c->op == CC_CMD_ADD_SHEET && old) return exists(err, &s->id);
+        if (c->op == CC_CMD_SET_SHEET && !old) return not_found(err, &s->id);
+        /* check_sheet: valid on its own, placing views of the model, its own number */
+        if (cc_sheet_validate(m, s, &why)) return invalid_buf(err, &why);
+        for (size_t i = 0; i < m->nsheets; i++)
+            if (cc_gid_cmp(&m->sheets[i].id, &s->id) && str_eq(m->sheets[i].number, s->number)) {
+                buf_puts(&why, "sheet number ");
+                buf_append(&why, s->number.p, s->number.n);
+                buf_puts(&why, " is already used");
+                return invalid_buf(err, &why);
+            }
+        buf_free(&why);
+        if (old) {
+            inv_init(inv, CC_CMD_SET_SHEET);
+            inv->sheet = *old;
+            *old = *s;
+            return 0;
+        }
+        size_t at = lower_bound(m->sheets, m->nsheets, sizeof *s, &s->id);
+        cc_sheet *p = arr_insert(a, m->sheets, m->nsheets, sizeof *s, at, s);
+        if (!p) return oom(err);
+        m->sheets = p;
+        m->nsheets++;
+        inv_init(inv, CC_CMD_REMOVE_SHEET);
+        inv->id = s->id;
+        return 0;
+    }
+    case CC_CMD_REMOVE_SHEET: {
+        const cc_sheet *s = cc_model_sheet(m, &c->id);
+        if (!s) return not_found(err, &c->id);
+        inv_init(inv, CC_CMD_ADD_SHEET);
+        inv->sheet = *s;
+        arr_remove(m->sheets, m->nsheets--, sizeof *s, (size_t)(s - m->sheets));
+        return 0;
+    }
+    case CC_CMD_SET_SCHEDULES: {
+        if (cc_schedules_validate(c->schedules, c->nschedules, &why)) return invalid_buf(err, &why);
+        buf_free(&why);
+        inv_init(inv, CC_CMD_SET_SCHEDULES);
+        inv->schedules = m->schedules;
+        inv->nschedules = m->nschedules;
+        m->schedules = c->schedules;
+        m->nschedules = c->nschedules;
+        return 0;
+    }
     default: return invalid(err, "unknown command", 15);
     }
 }
@@ -738,6 +837,60 @@ void cc_command_describe(const cc_command *c, const cc_model *m, Buf *b) {
         }
         break;
     case CC_CMD_SET_PROJECT: buf_puts(b, "change the project information"); break;
+    case CC_CMD_ADD_VIEW: buf_puts(b, "add the view "), put_str(b, c->view.name); break;
+    case CC_CMD_REMOVE_VIEW: {
+        const cc_view *v = cc_model_view(m, &c->id);
+        buf_puts(b, "delete ");
+        if (v) buf_puts(b, "the view "), put_str(b, v->name);
+        else buf_puts(b, "a view");
+        break;
+    }
+    case CC_CMD_SET_VIEW: {
+        const cc_view *old = cc_model_view(m, &c->view.id);
+        if (old && !str_eq(old->name, c->view.name)) {
+            buf_puts(b, "rename the view "), put_str(b, old->name);
+            buf_puts(b, " to "), put_str(b, c->view.name);
+        } else buf_puts(b, "change the view "), put_str(b, c->view.name);
+        break;
+    }
+    case CC_CMD_ADD_SHEET: buf_puts(b, "add the sheet "), put_str(b, c->sheet.number); break;
+    case CC_CMD_REMOVE_SHEET: {
+        const cc_sheet *s = cc_model_sheet(m, &c->id);
+        buf_puts(b, "delete ");
+        if (s) buf_puts(b, "the sheet "), put_str(b, s->number);
+        else buf_puts(b, "a sheet");
+        break;
+    }
+    case CC_CMD_SET_SHEET: buf_puts(b, "change the sheet "), put_str(b, c->sheet.number); break;
+    case CC_CMD_SET_SCHEDULES: {
+        const cc_str *added = NULL, *removed = NULL;
+        for (size_t i = 0; !added && i < c->nschedules; i++) {
+            int in_old = 0;
+            for (size_t k = 0; k < m->nschedules; k++) in_old |= str_eq(c->schedules[i].name, m->schedules[k].name);
+            if (!in_old) added = &c->schedules[i].name;
+        }
+        for (size_t k = 0; !removed && k < m->nschedules; k++) {
+            int in_new = 0;
+            for (size_t i = 0; i < c->nschedules; i++) in_new |= str_eq(c->schedules[i].name, m->schedules[k].name);
+            if (!in_new) removed = &m->schedules[k].name;
+        }
+        if (added && !removed) buf_puts(b, "add the schedule "), put_str(b, *added);
+        else if (!added && removed) buf_puts(b, "delete the schedule "), put_str(b, *removed);
+        else if (added) {
+            buf_puts(b, "rename the schedule "), put_str(b, *removed);
+            buf_puts(b, " to "), put_str(b, *added);
+        } else {
+            const cc_schedule *changed = NULL;
+            for (size_t i = 0; !changed && i < c->nschedules; i++) {
+                int same = 0;
+                for (size_t k = 0; k < m->nschedules; k++) same |= cc_schedule_eq(&c->schedules[i], &m->schedules[k]);
+                if (!same) changed = &c->schedules[i];
+            }
+            if (changed) buf_puts(b, "change the schedule "), put_str(b, changed->name);
+            else buf_puts(b, "change the schedules");
+        }
+        break;
+    }
     default: break;
     }
 }
@@ -840,6 +993,15 @@ static void w_placement(JsonW *w, const cc_placement *p) {
 }
 
 void cc_command_write(JsonW *w, const cc_command *c) {
+    cc_em em = {w, NULL};
+    if (c->op == CC_CMD_ADD_VIEW || c->op == CC_CMD_SET_VIEW) {
+        cc_em_view(&em, &c->view, cc_cmd_op_name(c->op));
+        return;
+    }
+    if (c->op == CC_CMD_ADD_SHEET || c->op == CC_CMD_SET_SHEET) {
+        cc_em_sheet(&em, &c->sheet, cc_cmd_op_name(c->op));
+        return;
+    }
     jw_obj_begin(w);
     jw_key(w, "op"), jw_str(w, cc_cmd_op_name(c->op));
     switch (c->op) {
@@ -880,7 +1042,10 @@ void cc_command_write(JsonW *w, const cc_command *c) {
     }
     case CC_CMD_REMOVE_STOREY:
     case CC_CMD_REMOVE_MATERIAL:
-    case CC_CMD_REMOVE_ELEMENT: jw_key(w, "id"), w_gid(w, &c->id); break;
+    case CC_CMD_REMOVE_ELEMENT:
+    case CC_CMD_REMOVE_VIEW:
+    case CC_CMD_REMOVE_SHEET: jw_key(w, "id"), w_gid(w, &c->id); break;
+    case CC_CMD_SET_SCHEDULES: jw_key(w, "schedules"), cc_em_schedules(&em, c->schedules, c->nschedules); break;
     case CC_CMD_SET_GENERATOR:
         jw_key(w, "id"), w_gid(w, &c->id);
         jw_key(w, "generator"), w_generator(w, &c->generator);
@@ -1402,15 +1567,14 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
     for (op = 0; op < CC_CMD_COUNT; op++)
         if (strlen(op_name_i(op)) == tag->n && memcmp(op_name_i(op), tag->s, tag->n) == 0) break;
     if (op == CC_CMD_COUNT) {
-        static const char *const RUST_ONLY[] = {"add_view", "remove_view", "set_view", "add_sheet",
-                                                "remove_sheet", "set_sheet", "set_material", "set_schedules"};
-        for (size_t k = 0; k < sizeof RUST_ONLY / sizeof RUST_ONLY[0]; k++)
-            if (strlen(RUST_ONLY[k]) == tag->n && memcmp(RUST_ONLY[k], tag->s, tag->n) == 0)
-                return dfail(d, tag->off, "unsupported by the C core: the command ", RUST_ONLY[k], 0);
+        if (tag->n == 12 && memcmp("set_material", tag->s, 12) == 0)
+            return dfail(d, tag->off, "unsupported by the C core: the command set_material", 0, 0);
+        /* Rust's variants, in its order. */
         return d_enum(d, tag, op_name_i, CC_CMD_COUNT,
                       "`add_storey`, `remove_storey`, `add_material`, `remove_material`, `add_element`, "
                       "`remove_element`, `set_generator`, `set_placement`, `rename`, `set_element_material`, "
-                      "`set_property`, `set_project`",
+                      "`set_property`, `add_view`, `remove_view`, `set_view`, `add_sheet`, `remove_sheet`, "
+                      "`set_sheet`, `set_material`, `set_schedules`, `set_project`",
                       &op);
     }
     memset(c, 0, sizeof *c);
@@ -1419,13 +1583,43 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
     case CC_CMD_ADD_STOREY: return d_storey(d, v, &c->storey);
     case CC_CMD_ADD_MATERIAL: return d_material(d, v, &c->material);
     case CC_CMD_ADD_ELEMENT: return d_element(d, v, &c->element);
+    case CC_CMD_ADD_VIEW:
+    case CC_CMD_SET_VIEW:
+    case CC_CMD_ADD_SHEET:
+    case CC_CMD_SET_SHEET: {
+        cc_vd vd;
+        cc_vd_init(&vd, d->a);
+        int rc = c->op == CC_CMD_ADD_VIEW || c->op == CC_CMD_SET_VIEW ? cc_vd_view(&vd, v, "op", &c->view)
+                                                                     : cc_vd_sheet(&vd, v, "op", &c->sheet);
+        if (rc) {
+            buf_clear(&d->msg);
+            buf_append(&d->msg, vd.msg.p, vd.msg.oom ? 0 : vd.msg.len);
+            fail_buf(d, vd.off);
+        }
+        cc_vd_free(&vd);
+        return rc ? -1 : 0;
+    }
     default: break;
     }
-    static const char *const F[] = {"id", "generator", "placement", "name", "material", "key", "value", "project"};
-    const JrVal *f[8];
+    static const char *const F[] = {"id", "generator", "placement", "name", "material", "key", "value", "project",
+                                    "schedules"};
+    const JrVal *f[9];
     /* Only the variant's own fields count; others are ignored, as serde does without
      * deny_unknown_fields ("op" among them). */
-    if (d_fields(d, v, F, 8, f, "struct variant", 0)) return -1;
+    if (d_fields(d, v, F, 9, f, "struct variant", 0)) return -1;
+    if (c->op == CC_CMD_SET_SCHEDULES) {
+        if (need(d, v, f[8], "schedules")) return -1;
+        cc_vd vd;
+        cc_vd_init(&vd, d->a);
+        int rc = cc_vd_schedules(&vd, f[8], &c->schedules, &c->nschedules);
+        if (rc) {
+            buf_clear(&d->msg);
+            buf_append(&d->msg, vd.msg.p, vd.msg.oom ? 0 : vd.msg.len);
+            fail_buf(d, vd.off);
+        }
+        cc_vd_free(&vd);
+        return rc ? -1 : 0;
+    }
     if (c->op != CC_CMD_SET_PROJECT && (need(d, v, f[0], "id") || d_gid(d, f[0], &c->id))) return -1;
     switch (c->op) {
     case CC_CMD_SET_GENERATOR: return need(d, v, f[1], "generator") || d_generator(d, f[1], &c->generator) ? -1 : 0;

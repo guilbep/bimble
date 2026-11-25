@@ -355,8 +355,10 @@ int main(int argc, char **argv) {
     expect_error(frame, fn, "\"version\": 1", "\"version\": 2", "unsupported bimble format version 2 (this build reads 1 and 2)");
     expect_error(frame, fn, "\"version\": 1", "\"version\": 1.0", "invalid type: floating point `1.0`, expected u32");
     expect_error(frame, fn, "\"format\": \"bimble\"", "\"format\": \"ifc\"", "not a bimble file (format = \"ifc\")");
-    expect_error(frame, fn, "\"project_name\"", "\"views\": {\"x\": 1}, \"project_name\"", "unsupported by the C core: views");
-    expect_error(frame, fn, "\"project_name\"", "\"schedules\": [1], \"project_name\"", "unsupported by the C core: schedules");
+    /* Views, sheets and schedules are held since A6a: a bad one is a parse error (it was
+     * "unsupported by the C core" before). */
+    expect_error(frame, fn, "\"project_name\"", "\"views\": {\"x\": 1}, \"project_name\"", "parse: invalid IFC GlobalId: \"x\"");
+    expect_error(frame, fn, "\"project_name\"", "\"schedules\": [1], \"project_name\"", "invalid type: integer `1`, expected struct ScheduleDef");
     expect_error(frame, fn, "\"project_name\"", "\"georef\": {\"x\": 1}, \"project_name\"", "unsupported by the C core: georef");
     expect_error(frame, fn, "\"generator\": {", "\"openings\": [{}], \"generator\": {", "missing field `placement`");
     expect_error(frame, fn, "\"strength_mpa\": 30.0,", "\"strength_mpa\": 30.0, \"colour\": 1,", "unknown field `colour`");

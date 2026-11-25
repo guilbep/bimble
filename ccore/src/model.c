@@ -2,6 +2,7 @@
 #include "model.h"
 #include <string.h>
 #include "fmt.h"
+#include "view_io.h"
 
 const char cc_gid_alphabet[65] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
 
@@ -284,7 +285,7 @@ static int key_char_ok(char c) {
 }
 
 int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid *mkeys,
-                           const cc_gid *ekeys, cc_error *err) {
+                           const cc_gid *ekeys, const cc_gid *vkeys, const cc_gid *shkeys, cc_error *err) {
     Buf b;
     buf_init(&b);
     /* project::validate */
@@ -309,6 +310,7 @@ int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid 
             return set_err(err, &b);
         }
     }
+    if (cc_schedules_validate(m->schedules, m->nschedules, &b)) return set_err(err, &b);
     for (size_t i = 0; i < m->nstoreys; i++) {
         const cc_storey *s = &m->storeys[i];
         const cc_gid *k = skeys ? &skeys[i] : &s->id;
@@ -394,12 +396,41 @@ int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid 
             }
         buf_clear(&b);
     }
+    for (size_t i = 0; i < m->nviews; i++) {
+        const cc_view *v = &m->views[i];
+        const cc_gid *k = vkeys ? &vkeys[i] : &v->id;
+        if (cc_gid_cmp(k, &v->id)) {
+            buf_puts(&b, "view ");
+            cc_buf_gid(&b, k);
+            buf_puts(&b, ": key does not match id");
+            return set_err(err, &b);
+        }
+        if (cc_view_validate(m, v, &b)) return set_err(err, &b);
+    }
+    for (size_t i = 0; i < m->nsheets; i++) {
+        const cc_sheet *s = &m->sheets[i];
+        const cc_gid *k = shkeys ? &shkeys[i] : &s->id;
+        if (cc_gid_cmp(k, &s->id)) {
+            buf_puts(&b, "sheet ");
+            cc_buf_gid(&b, k);
+            buf_puts(&b, ": key does not match id");
+            return set_err(err, &b);
+        }
+        if (cc_sheet_validate(m, s, &b)) return set_err(err, &b);
+        for (size_t j = 0; j < i; j++) /* BTreeSet of numbers: the first repeat, in id order */
+            if (m->sheets[j].number.n == s->number.n &&
+                (s->number.n == 0 || !memcmp(m->sheets[j].number.p, s->number.p, s->number.n))) {
+                buf_puts(&b, "two sheets are numbered ");
+                buf_append(&b, s->number.p, s->number.n);
+                return set_err(err, &b);
+            }
+    }
     buf_free(&b);
     return 0;
 }
 
 int cc_model_validate(const cc_model *m, cc_error *err) {
-    return cc_model_validate_keys(m, NULL, NULL, NULL, err);
+    return cc_model_validate_keys(m, NULL, NULL, NULL, NULL, NULL, err);
 }
 
 /* ---- canonical: x + 0.0 turns -0.0 into 0.0 and keeps every other value ---- */
@@ -458,4 +489,6 @@ void cc_model_canonical(cc_model *m) {
             canon_generator(&e->openings[j].generator);
         }
     }
+    for (size_t i = 0; i < m->nviews; i++) cc_view_canonical(&m->views[i]);
+    for (size_t i = 0; i < m->nsheets; i++) cc_sheet_canonical(&m->sheets[i]);
 }

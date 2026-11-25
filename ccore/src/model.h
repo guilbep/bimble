@@ -118,6 +118,8 @@ typedef struct {
     cc_str ifc_entity;
 } cc_element;
 
+#include "view.h"
+
 typedef struct {
     Arena arena;
     cc_gid project_id;
@@ -130,6 +132,12 @@ typedef struct {
     size_t nelements;
     cc_kv *project; /* project information, sorted by key bytes */
     size_t nproject;
+    cc_view *views; /* stored views (changed defaults and others), sorted by id */
+    size_t nviews;
+    cc_sheet *sheets; /* sorted by id */
+    size_t nsheets;
+    cc_schedule *schedules; /* the model's schedules, in their order */
+    size_t nschedules;
 } cc_model;
 
 /* An error with a message (UTF-8, NUL-terminated, truncated to fit). `offset` is the input
@@ -159,7 +167,8 @@ const cc_element *cc_model_element(const cc_model *m, const cc_gid *id);
 int cc_model_validate(const cc_model *m, cc_error *err);
 /* The same, with the map keys the file gave (Rust checks key == id); NULL means the ids. */
 int cc_model_validate_keys(const cc_model *m, const cc_gid *storey_keys, const cc_gid *material_keys,
-                           const cc_gid *element_keys, cc_error *err);
+                           const cc_gid *element_keys, const cc_gid *view_keys, const cc_gid *sheet_keys,
+                           cc_error *err);
 /* version::canonical_model: every -0.0 becomes 0.0. */
 void cc_model_canonical(cc_model *m);
 

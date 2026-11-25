@@ -4,9 +4,9 @@
  *   them; ignored fields are lost on save, as in Rust;
  * - a duplicate struct field is an error ("duplicate field `x`"); a duplicate map key keeps the
  *   last value (BTreeMap insert);
- * - sections Rust knows and the C core does not hold (views, sheets, schedules, georef,
- *   mesh arrays by hash) are refused when non-empty, never dropped. Openings are kept (data
- *   only: the C scene does not cut them yet).
+ * - sections Rust knows and the C core does not hold (georef, mesh arrays by hash) are refused
+ *   when non-empty, never dropped. Openings are kept (data only: the C scene does not cut them
+ *   yet). Views, sheets and schedules are held (view.h).
  * The binary form (version 2) is the same serde model in CBOR, read into the same DOM
  * (cbor.h), with each mesh array once in the top-level tables `positions` / `indices` and
  * elements referring to them by index (shared again in memory, as Rust shares its Arcs). */
@@ -18,6 +18,7 @@
 #include "inflate.h"
 #include "json_r.h"
 #include "json_w.h"
+#include "view_io.h"
 
 typedef struct {
     Arena *a; /* the model's arena */
@@ -573,6 +574,27 @@ static int fn_storey(D *d, const JrVal *v, void *o) { return d_storey(d, v, o); 
 static int fn_material(D *d, const JrVal *v, void *o) { return d_material(d, v, o); }
 static int fn_element(D *d, const JrVal *v, void *o) { return d_element(d, v, o); }
 
+/* Views, sheets, schedules: view.c's decoders, their error made this one's. */
+static int vd_done(D *d, cc_vd *vd, int rc) {
+    if (rc && !d->failed) {
+        buf_clear(&d->msg);
+        buf_append(&d->msg, vd->msg.p, vd->msg.oom ? 0 : vd->msg.len);
+        fail_buf(d, vd->off);
+    }
+    cc_vd_free(vd);
+    return rc ? -1 : 0;
+}
+static int fn_view(D *d, const JrVal *v, void *o) {
+    cc_vd vd;
+    cc_vd_init(&vd, d->a);
+    return vd_done(d, &vd, cc_vd_view(&vd, v, NULL, o));
+}
+static int fn_sheet(D *d, const JrVal *v, void *o) {
+    cc_vd vd;
+    cc_vd_init(&vd, d->a);
+    return vd_done(d, &vd, cc_vd_sheet(&vd, v, NULL, o));
+}
+
 static int unsupported_if(D *d, const JrVal *v, int is_obj, const char *what) {
     if (!v) return 0;
     if (v->type != (is_obj ? JR_OBJ : JR_ARR)) return type_err(d, v, is_obj ? "a map" : "a sequence");
@@ -581,7 +603,7 @@ static int unsupported_if(D *d, const JrVal *v, int is_obj, const char *what) {
 }
 
 typedef struct {
-    cc_gid *skeys, *mkeys, *ekeys;
+    cc_gid *skeys, *mkeys, *ekeys, *vkeys, *shkeys;
 } Keys;
 
 static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
@@ -599,9 +621,21 @@ static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
     m->materials = p;
     if (d_idmap(d, f[4], "a map", sizeof(cc_element), fn_element, &p, &m->nelements, &keys->ekeys)) return -1;
     m->elements = p;
-    if (unsupported_if(d, f[5], 1, "views") || unsupported_if(d, f[6], 1, "sheets")) return -1;
+    if (f[5]) {
+        if (d_idmap(d, f[5], "a map", sizeof(cc_view), fn_view, &p, &m->nviews, &keys->vkeys)) return -1;
+        m->views = p;
+    }
+    if (f[6]) {
+        if (d_idmap(d, f[6], "a map", sizeof(cc_sheet), fn_sheet, &p, &m->nsheets, &keys->shkeys)) return -1;
+        m->sheets = p;
+    }
     if (f[7] && d_strmap(d, f[7], &m->project, &m->nproject)) return -1;
-    if (unsupported_if(d, f[8], 0, "schedules") || unsupported_if(d, f[9], 1, "georef")) return -1;
+    if (f[8]) {
+        cc_vd vd;
+        cc_vd_init(&vd, d->a);
+        if (vd_done(d, &vd, cc_vd_schedules(&vd, f[8], &m->schedules, &m->nschedules))) return -1;
+    }
+    if (unsupported_if(d, f[9], 1, "georef")) return -1;
     return 0;
 }
 
@@ -723,7 +757,7 @@ int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) {
         rc = -1;
     } else {
         cc_error verr;
-        if (cc_model_validate_keys(m, keys.skeys, keys.mkeys, keys.ekeys, &verr)) {
+        if (cc_model_validate_keys(m, keys.skeys, keys.mkeys, keys.ekeys, keys.vkeys, keys.shkeys, &verr)) {
             rc = dfail(&d, CC_NO_OFFSET, "invalid model: ", verr.msg, 0);
         } else {
             cc_model_canonical(m);
@@ -897,7 +931,21 @@ int cc_model_save(const cc_model *m, Buf *b) {
         jw_obj_end(&w);
     }
     jw_obj_end(&w);
+    cc_em em = {&w, NULL};
+    if (m->nviews) {
+        jw_key(&w, "views");
+        jw_obj_begin(&w);
+        for (size_t i = 0; i < m->nviews; i++) jw_key_n(&w, m->views[i].id.c, 22), cc_em_view(&em, &m->views[i], NULL);
+        jw_obj_end(&w);
+    }
+    if (m->nsheets) {
+        jw_key(&w, "sheets");
+        jw_obj_begin(&w);
+        for (size_t i = 0; i < m->nsheets; i++) jw_key_n(&w, m->sheets[i].id.c, 22), cc_em_sheet(&em, &m->sheets[i], NULL);
+        jw_obj_end(&w);
+    }
     if (m->nproject) jw_key(&w, "project"), w_kvs(&w, m->project, m->nproject);
+    if (m->nschedules) jw_key(&w, "schedules"), cc_em_schedules(&em, m->schedules, m->nschedules);
     jw_obj_end(&w);
     jw_obj_end(&w);
     return jw_finish(&w) == JW_OK && !b->oom ? 0 : -1;
@@ -1064,7 +1112,8 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
             for (size_t j = 0; j < pi.counts[i]; j++) cb_head(b, CB_UINT, x[j]);
         }
         c_key(b, "model");
-        cb_head(b, CB_MAP, 5 + (m->nproject ? 1 : 0));
+        cb_head(b, CB_MAP, 5 + (m->nviews ? 1 : 0) + (m->nsheets ? 1 : 0) + (m->nproject ? 1 : 0) +
+                               (m->nschedules ? 1 : 0));
         c_key(b, "project_id"), c_gid(b, &m->project_id);
         c_key(b, "project_name"), c_str(b, m->project_name);
         c_key(b, "storeys");
@@ -1140,7 +1189,19 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
             if (e->nproperties) c_key(b, "properties"), c_kvs(b, e->properties, e->nproperties);
             if (e->has_ifc_entity) c_key(b, "ifc_entity"), c_str(b, e->ifc_entity);
         }
+        cc_em em = {NULL, b};
+        if (m->nviews) {
+            c_key(b, "views");
+            cb_head(b, CB_MAP, m->nviews);
+            for (size_t i = 0; i < m->nviews; i++) c_gid(b, &m->views[i].id), cc_em_view(&em, &m->views[i], NULL);
+        }
+        if (m->nsheets) {
+            c_key(b, "sheets");
+            cb_head(b, CB_MAP, m->nsheets);
+            for (size_t i = 0; i < m->nsheets; i++) c_gid(b, &m->sheets[i].id), cc_em_sheet(&em, &m->sheets[i], NULL);
+        }
         if (m->nproject) c_key(b, "project"), c_kvs(b, m->project, m->nproject);
+        if (m->nschedules) c_key(b, "schedules"), cc_em_schedules(&em, m->schedules, m->nschedules);
     }
     pool_free(&pp);
     pool_free(&pi);
