@@ -1,0 +1,776 @@
+{
+  "format": "bimble",
+  "version": 1,
+  "model": {
+    "project_id": "21Mh7KP3zBjRllySRNfwpf",
+    "project_name": "Synthetic \"frame 2\" \\ golden",
+    "storeys": {
+      "1gZ1R3uyTBO80cC4$nvoxB": {
+        "id": "1gZ1R3uyTBO80cC4$nvoxB",
+        "name": "Étage \"1\"",
+        "elevation": 3150.5
+      },
+      "1vIjA4wIz6huLvC8B1gv4M": {
+        "id": "1vIjA4wIz6huLvC8B1gv4M",
+        "name": "Rez-de-chaussée",
+        "elevation": 0.0
+      }
+    },
+    "materials": {
+      "09TM5shL90ruo$N1V6tpqq": {
+        "id": "09TM5shL90ruo$N1V6tpqq",
+        "name": "S355",
+        "category": "steel",
+        "props": {
+          "density_kg_m3": 7850.0,
+          "e_mpa": 210000.0,
+          "strength_mpa": 355.0,
+          "source": "EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"
+        }
+      },
+      "1mkwj1Nm95IQysWJ$GMN4N": {
+        "id": "1mkwj1Nm95IQysWJ$GMN4N",
+        "name": "C30/37",
+        "category": "concrete",
+        "props": {
+          "density_kg_m3": 2500.0,
+          "e_mpa": 33000.0,
+          "strength_mpa": 30.0,
+          "source": "EN 1992-1-1 Table 3.1; 25 kN/m³ reinforced (EN 1991-1-1)"
+        }
+      },
+      "2fQGV0aS95yO$ugIXpqVCc": {
+        "id": "2fQGV0aS95yO$ugIXpqVCc",
+        "name": "Bois \"local\" \\ épicéa",
+        "category": "timber",
+        "props": {
+          "density_kg_m3": 450.0,
+          "strength_mpa": 22.5
+        }
+      }
+    },
+    "elements": {
+      "0X4VVrRkf1B9lE_0jARt46": {
+        "id": "0X4VVrRkf1B9lE_0jARt46",
+        "class": "IfcSlab",
+        "name": "D2 (L)",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "1mkwj1Nm95IQysWJ$GMN4N",
+        "placement": {
+          "origin": [
+            8000.0,
+            0.0,
+            -200.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              6000.0,
+              0.0
+            ],
+            [
+              6000.0,
+              2000.0
+            ],
+            [
+              2000.0,
+              2000.0
+            ],
+            [
+              2000.0,
+              5000.0
+            ],
+            [
+              0.0,
+              5000.0
+            ]
+          ],
+          "height": 200.0
+        }
+      },
+      "0uTOdmIsz6iAjMnb$AZIG3": {
+        "id": "0uTOdmIsz6iAjMnb$AZIG3",
+        "class": "IfcColumn",
+        "name": "C1",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "1mkwj1Nm95IQysWJ$GMN4N",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 400.0,
+          "height": 2899.9
+        },
+        "properties": {
+          "Chemin\\Clé": "C:\\temp\\x",
+          "Note": "a / b",
+          "Pset_ColumnCommon/Reference": "C-1",
+          "Pset_ConcreteElementGeneral/StrengthClass": "C30/37",
+          "Remarque \"chantier\"": "Béton \"apparent\" — vérifier",
+          "日本語/名前": "柱 🏗️"
+        }
+      },
+      "1WQ4saTef14QR$c82u9pxW": {
+        "id": "1WQ4saTef14QR$c82u9pxW",
+        "class": "IfcColumn",
+        "name": "HEB \"200\"",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            6000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 200.0,
+          "depth": 200.0,
+          "height": 2899.9
+        }
+      },
+      "25mfqCdS50juHEIq4vPK9f": {
+        "id": "25mfqCdS50juHEIq4vPK9f",
+        "class": "IfcSlab",
+        "name": "D3 trémie",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "1mkwj1Nm95IQysWJ$GMN4N",
+        "placement": {
+          "origin": [
+            0.0,
+            4000.0,
+            -200.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              4000.0,
+              0.0
+            ],
+            [
+              4000.0,
+              3000.0
+            ],
+            [
+              0.0,
+              3000.0
+            ]
+          ],
+          "voids": [
+            [
+              [
+                1000.0,
+                1000.0
+              ],
+              [
+                1000.0,
+                2200.0
+              ],
+              [
+                2500.5,
+                2200.0
+              ],
+              [
+                2500.5,
+                1000.0
+              ]
+            ]
+          ],
+          "height": 200.0
+        }
+      },
+      "2FgB3PCsHFafKWKmIHC4zx": {
+        "id": "2FgB3PCsHFafKWKmIHC4zx",
+        "class": "IfcSlab",
+        "name": "D1",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "1mkwj1Nm95IQysWJ$GMN4N",
+        "placement": {
+          "origin": [
+            0.0,
+            -1000.0,
+            -250.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "slab",
+          "outline": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              6000.0,
+              0.0
+            ],
+            [
+              6000.0,
+              4000.0
+            ],
+            [
+              0.0,
+              4000.0
+            ]
+          ],
+          "thickness": 250.0
+        }
+      },
+      "2NwTA_MnbD$O1tovNVwcdv": {
+        "id": "2NwTA_MnbD$O1tovNVwcdv",
+        "class": "IfcFooting",
+        "name": "F1",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "1mkwj1Nm95IQysWJ$GMN4N",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            -600.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1500.0,
+          "depth": 1500.0,
+          "height": 600.0
+        }
+      },
+      "2XB9jAbxPCKAXC_kVMr$h5": {
+        "id": "2XB9jAbxPCKAXC_kVMr$h5",
+        "class": "IfcWall",
+        "name": "W1",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "1mkwj1Nm95IQysWJ$GMN4N",
+        "placement": {
+          "origin": [
+            0.0,
+            -1000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "wall",
+          "length": 6000.0,
+          "thickness": 200.0,
+          "height": 2900.0
+        }
+      },
+      "2Xi2EcNOvB3wSWg3M1CB5f": {
+        "id": "2Xi2EcNOvB3wSWg3M1CB5f",
+        "class": "IfcBuildingElementProxy",
+        "name": "Gousset",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            6000.0,
+            0.0,
+            500.0
+          ],
+          "z_axis": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              300.0,
+              0.0
+            ],
+            [
+              0.0,
+              300.0
+            ]
+          ],
+          "height": 15.0
+        },
+        "ifc_entity": "IfcPlate"
+      },
+      "2lIeeldDb7IPfCbvTRpHDc": {
+        "id": "2lIeeldDb7IPfCbvTRpHDc",
+        "class": "IfcWall",
+        "name": "W2\trotated 30°",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "1mkwj1Nm95IQysWJ$GMN4N",
+        "placement": {
+          "origin": [
+            6000.0,
+            -1000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            0.8660254037844387,
+            0.49999999999999994,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "wall",
+          "length": 3500.0,
+          "thickness": 180.0,
+          "height": 2900.0
+        },
+        "properties": {
+          "Pset_WallCommon/FireRating": "EI 60",
+          "Pset_WallCommon/IsExternal": "true"
+        }
+      },
+      "3QaNBTGrj1jwCHQxXT6adX": {
+        "id": "3QaNBTGrj1jwCHQxXT6adX",
+        "class": "IfcBeam",
+        "name": "Poutre \\ \"B1\" bois",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "2fQGV0aS95yO$ugIXpqVCc",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            2650.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 160.0,
+          "height": 400.0,
+          "length": 6000.0
+        }
+      },
+      "3guiHznOL0jAR4d3gsLWHw": {
+        "id": "3guiHznOL0jAR4d3gsLWHw",
+        "class": "IfcBuildingElementProxy",
+        "name": "Garde-corps",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            1000.0,
+            1000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "mesh",
+          "positions": [
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              1000.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1000.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1100.0
+            ]
+          ],
+          "indices": [
+            0,
+            2,
+            1,
+            0,
+            1,
+            3,
+            0,
+            3,
+            2,
+            1,
+            2,
+            3
+          ]
+        },
+        "properties": {
+          "Pset_RailingCommon/Height": "1100"
+        },
+        "ifc_entity": "IfcRailing"
+      }
+    },
+    "views": {
+      "06bbYdqnUIivUb3ybSfqfB": {
+        "id": "06bbYdqnUIivUb3ybSfqfB",
+        "name": "Section A",
+        "kind": {
+          "type": "section",
+          "origin": [
+            3000.0,
+            2000.0
+          ],
+          "facing": "north",
+          "depth_mm": 0.0
+        },
+        "scale": 50
+      },
+      "0PZJCCgGlT33NuptFi63$1": {
+        "id": "0PZJCCgGlT33NuptFi63$1",
+        "name": "Plan Etage cropped",
+        "kind": {
+          "type": "plan",
+          "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+          "look": "down",
+          "range": {
+            "top": {
+              "level": "above",
+              "offset_mm": 0.0
+            },
+            "cut": {
+              "level": "associated",
+              "offset_mm": 1200.0
+            },
+            "bottom": {
+              "level": "associated",
+              "offset_mm": 0.0
+            },
+            "depth": {
+              "level": "associated",
+              "offset_mm": 0.0
+            }
+          }
+        },
+        "crop": {
+          "min": [
+            -500.0,
+            -1500.0
+          ],
+          "max": [
+            4500.0,
+            2500.0
+          ]
+        }
+      },
+      "0f113RIy92z6BEInlm$OcF": {
+        "id": "0f113RIy92z6BEInlm$OcF",
+        "name": "Plan RDC range",
+        "kind": {
+          "type": "plan",
+          "storey": "1vIjA4wIz6huLvC8B1gv4M",
+          "look": "down",
+          "range": {
+            "top": {
+              "level": "above",
+              "offset_mm": -100.0
+            },
+            "cut": {
+              "level": "associated",
+              "offset_mm": 900.0
+            },
+            "bottom": {
+              "level": "associated",
+              "offset_mm": -100.0
+            },
+            "depth": {
+              "level": "associated",
+              "offset_mm": -700.0
+            }
+          }
+        },
+        "annotations": [
+          {
+            "type": "dimension",
+            "id": "20AOUWKP7q80OdEoKpHmO4",
+            "a": {
+              "at": [
+                0.0,
+                0.0,
+                900.0
+              ]
+            },
+            "b": {
+              "at": [
+                6000.0,
+                0.0,
+                900.0
+              ]
+            },
+            "offset_mm": 800.0
+          },
+          {
+            "type": "text",
+            "id": "1vZQsyOSoI_4$q9yYoAI9k",
+            "text": "Note <RDC> & \"é\"",
+            "at": [
+              3000.0,
+              -2500.0,
+              900.0
+            ],
+            "size_mm": 3.5,
+            "angle_deg": 15.0
+          }
+        ]
+      },
+      "1vK4FtqH5CsYhxI0mc40tX": {
+        "id": "1vK4FtqH5CsYhxI0mc40tX",
+        "name": "Section B-B",
+        "kind": {
+          "type": "section",
+          "origin": [
+            3000.0,
+            2000.0
+          ],
+          "facing": "east",
+          "depth_mm": 5000.0
+        }
+      },
+      "2V2nN3Ua3KapkoErwgbJIo": {
+        "id": "2V2nN3Ua3KapkoErwgbJIo",
+        "name": "Ceiling RDC",
+        "kind": {
+          "type": "plan",
+          "storey": "1vIjA4wIz6huLvC8B1gv4M",
+          "look": "up",
+          "range": {
+            "top": {
+              "level": "above",
+              "offset_mm": 0.0
+            },
+            "cut": {
+              "level": "associated",
+              "offset_mm": 2300.0
+            },
+            "bottom": {
+              "level": "associated",
+              "offset_mm": 0.0
+            },
+            "depth": {
+              "level": "above",
+              "offset_mm": 0.0
+            }
+          }
+        }
+      },
+      "3O416Txdpi3pt8krMWaKtg": {
+        "id": "3O416Txdpi3pt8krMWaKtg",
+        "name": "Plan RDC no slabs",
+        "kind": {
+          "type": "plan",
+          "storey": "1vIjA4wIz6huLvC8B1gv4M",
+          "look": "down",
+          "range": {
+            "top": {
+              "level": "above",
+              "offset_mm": 0.0
+            },
+            "cut": {
+              "level": "associated",
+              "offset_mm": 1200.0
+            },
+            "bottom": {
+              "level": "associated",
+              "offset_mm": 0.0
+            },
+            "depth": {
+              "level": "associated",
+              "offset_mm": 0.0
+            }
+          }
+        },
+        "visibility": {
+          "hidden_classes": [
+            "IfcSlab"
+          ]
+        }
+      }
+    },
+    "sheets": {
+      "0xkJ_u7b0NVtJ2WVJDQnWS": {
+        "id": "0xkJ_u7b0NVtJ2WVJDQnWS",
+        "number": "S-101",
+        "name": "Plan and section",
+        "paper": "A3",
+        "fields": {
+          "revision": "B"
+        },
+        "placed": [
+          {
+            "id": "2G6kwLq_ICELq0yGfYMpfY",
+            "view": "0f113RIy92z6BEInlm$OcF",
+            "scale": 100,
+            "at_mm": [
+              130.0,
+              140.0
+            ]
+          },
+          {
+            "id": "1UZg4kLteD6WgWdgwtsnI$",
+            "view": "06bbYdqnUIivUb3ybSfqfB",
+            "scale": 50,
+            "at_mm": [
+              320.0,
+              120.0
+            ]
+          }
+        ],
+        "texts": [
+          {
+            "id": "06Z3i5ARciqVJw58y2wyQ0",
+            "text": "Sheet note: see <S-102> & \"détails\"",
+            "at_mm": [
+              20.0,
+              25.0
+            ],
+            "size_mm": 5.0
+          }
+        ]
+      },
+      "2opNnAhnUUg6EQ407zPO4e": {
+        "id": "2opNnAhnUUg6EQ407zPO4e",
+        "number": "S-102",
+        "name": "3D placed",
+        "paper": "A4",
+        "portrait": true,
+        "placed": [
+          {
+            "id": "2gZ7X8KHOZAAo7NsepWJyp",
+            "view": "1v7Vtm2FfafmYPKIQEXnlY",
+            "scale": 100,
+            "at_mm": [
+              105.0,
+              140.0
+            ]
+          }
+        ]
+      }
+    },
+    "project": {
+      "client": "Maître d'ouvrage — Ville",
+      "custom_note_2": "back\\slash\ttab 日本",
+      "phase": "51",
+      "project_address": "Rue du \"Lac\" 1\n1000 Ville",
+      "project_number": "2026-T2b",
+      "project_title": "Synthetic \"frame 2\""
+    }
+  }
+}

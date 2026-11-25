@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="108.26088867187501mm" height="40.279423828125005mm" viewBox="0 0 108.26088867187501 40.279423828125005">
+<title>frame – Plan Rez-de-chaussée, 1:100</title>
+<rect x="0" y="0" width="108.26088867187501" height="40.279423828125005" fill="#ffffff"/>
+<path d="M5.000 20.779L20.000 20.779M5.000 5.779L5.000 20.779M20.000 20.779L20.000 5.779M20.000 5.779L5.000 5.779" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M5.000 20.779L20.000 20.779L20.000 5.779L5.000 5.779Z" fill="#efefed" fill-rule="evenodd"/>
+<path d="M5.000 20.779L20.000 20.779L20.000 5.779L5.000 5.779Z" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M11.000 15.279L14.000 15.279M11.000 11.279L11.000 15.279M14.000 15.279L14.000 11.279M14.000 11.279L11.000 11.279M71.500 14.279L73.500 14.279M71.500 12.279L71.500 14.279M73.500 14.279L73.500 12.279M73.500 12.279L71.500 12.279M12.500 24.279L72.500 24.279M12.500 22.279L12.500 24.279M72.500 24.279L72.500 22.279M72.500 22.279L12.500 22.279M72.950 24.059L103.261 6.559M72.050 22.500L72.950 24.059M103.261 6.559L102.361 5.000M102.361 5.000L72.050 22.500M72.500 14.079L12.500 14.079M72.500 14.079L72.500 12.479M12.500 14.079L72.500 14.079M12.500 14.079L12.500 12.479M12.500 12.479L12.500 14.079M12.500 12.479L72.500 12.479M12.500 12.479L72.500 12.479M72.500 12.479L72.500 14.079" fill="none" stroke="#000000" stroke-width="0.100" stroke-linejoin="round" stroke-linecap="butt" stroke-dasharray="2.000 1.000"/>
+<path d="M14.000 15.279L12.241 15.279L11.000 15.279L11.000 12.935L11.000 11.279L12.759 11.279L14.000 11.279L14.000 13.624Z" fill="#d6d6d2" fill-rule="evenodd"/>
+<path d="M73.500 14.279L72.328 14.279L71.500 14.279L71.500 13.107L71.500 12.279L72.672 12.279L73.500 12.279L73.500 13.452Z" fill="#96aac4" fill-rule="evenodd"/>
+<clipPath id="c1"><path d="M73.500 14.279L72.328 14.279L71.500 14.279L71.500 13.107L71.500 12.279L72.672 12.279L73.500 12.279L73.500 13.452Z" clip-rule="evenodd"/></clipPath><g clip-path="url(#c1)">
+<path d="M72.765 15.015L70.765 13.015M73.640 14.140L71.640 12.140" fill="none" stroke="#535e6c" stroke-width="0.100" stroke-linejoin="round" stroke-linecap="butt"/>
+</g>
+<path d="M72.500 24.279L37.328 24.279L12.500 24.279L12.500 23.107L12.500 22.279L47.672 22.279L72.500 22.279L72.500 23.452Z" fill="#d6d6d2" fill-rule="evenodd"/>
+<path d="M103.261 6.559L85.492 16.817L72.950 24.059L72.422 23.145L72.050 22.500L89.818 12.241L102.361 5.000L102.888 5.914Z" fill="#d6d6d2" fill-rule="evenodd"/>
+<path d="M14.000 15.279L12.241 15.279L11.000 15.279L11.000 12.935L11.000 11.279L12.759 11.279L14.000 11.279L14.000 13.624Z" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M73.500 14.279L72.328 14.279L71.500 14.279L71.500 13.107L71.500 12.279L72.672 12.279L73.500 12.279L73.500 13.452Z" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M72.500 24.279L37.328 24.279L12.500 24.279L12.500 23.107L12.500 22.279L47.672 22.279L72.500 22.279L72.500 23.452Z" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M103.261 6.559L85.492 16.817L72.950 24.059L72.422 23.145L72.050 22.500L89.818 12.241L102.361 5.000L102.888 5.914Z" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<text x="5.000" y="36.279" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="5.000" font-weight="bold" fill="#1a1a1c">Plan Rez-de-chaussée, 1:100</text>
+<path d="M5.000 37.279L70.920 37.279" fill="none" stroke="#000000" stroke-width="0.350" stroke-linejoin="round" stroke-linecap="butt"/>
+</svg>

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="297mm" height="210mm" viewBox="0 0 297 210">
+<title>frame – Plan RDC range, 1:100</title>
+<rect x="0" y="0" width="297" height="210" fill="#ffffff"/>
+<path d="M99.370 91.640L114.370 91.640M99.370 76.640L99.370 91.640M114.370 91.640L114.370 76.640M114.370 76.640L99.370 76.640" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M99.370 91.640L114.370 91.640L114.370 76.640L99.370 76.640Z" fill="#efefed" fill-rule="evenodd"/>
+<path d="M99.370 91.640L114.370 91.640L114.370 76.640L99.370 76.640Z" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M105.370 86.140L108.370 86.140M105.370 82.140L105.370 86.140M108.370 86.140L108.370 82.140M108.370 82.140L105.370 82.140M165.870 85.140L167.870 85.140M165.870 83.140L165.870 85.140M167.870 85.140L167.870 83.140M167.870 83.140L165.870 83.140M106.870 95.140L166.870 95.140M106.870 93.140L106.870 95.140M166.870 95.140L166.870 93.140M166.870 93.140L106.870 93.140M167.320 94.919L197.630 77.419M166.420 93.360L167.320 94.919M197.630 77.419L196.730 75.860M196.730 75.860L166.420 93.360M166.870 84.940L106.870 84.940M166.870 84.940L166.870 83.340M106.870 84.940L166.870 84.940M106.870 84.940L106.870 83.340M106.870 83.340L106.870 84.940M106.870 83.340L166.870 83.340M106.870 83.340L166.870 83.340M166.870 83.340L166.870 84.940" fill="none" stroke="#000000" stroke-width="0.100" stroke-linejoin="round" stroke-linecap="butt" stroke-dasharray="2.000 1.000"/>
+<path d="M108.370 86.140L106.301 86.140L105.370 86.140L105.370 83.381L105.370 82.140L107.438 82.140L108.370 82.140L108.370 84.898Z" fill="#d6d6d2" fill-rule="evenodd"/>
+<path d="M167.870 85.140L166.490 85.140L165.870 85.140L165.870 83.760L165.870 83.140L167.249 83.140L167.870 83.140L167.870 84.519Z" fill="#96aac4" fill-rule="evenodd"/>
+<clipPath id="c1"><path d="M167.870 85.140L166.490 85.140L165.870 85.140L165.870 83.760L165.870 83.140L167.249 83.140L167.870 83.140L167.870 84.519Z" clip-rule="evenodd"/></clipPath><g clip-path="url(#c1)">
+<path d="M167.630 85.380L165.630 83.380M168.505 84.505L166.505 82.505" fill="none" stroke="#535e6c" stroke-width="0.100" stroke-linejoin="round" stroke-linecap="butt"/>
+</g>
+<path d="M166.870 95.140L125.490 95.140L106.870 95.140L106.870 93.760L106.870 93.140L148.249 93.140L166.870 93.140L166.870 94.519Z" fill="#d6d6d2" fill-rule="evenodd"/>
+<path d="M197.630 77.419L176.726 89.488L167.320 94.919L166.699 93.844L166.420 93.360L187.324 81.291L196.730 75.860L197.351 76.935Z" fill="#d6d6d2" fill-rule="evenodd"/>
+<path d="M108.370 86.140L106.301 86.140L105.370 86.140L105.370 83.381L105.370 82.140L107.438 82.140L108.370 82.140L108.370 84.898Z" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M167.870 85.140L166.490 85.140L165.870 85.140L165.870 83.760L165.870 83.140L167.249 83.140L167.870 83.140L167.870 84.519Z" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M166.870 95.140L125.490 95.140L106.870 95.140L106.870 93.760L106.870 93.140L148.249 93.140L166.870 93.140L166.870 94.519Z" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M197.630 77.419L176.726 89.488L167.320 94.919L166.699 93.844L166.420 93.360L187.324 81.291L196.730 75.860L197.351 76.935Z" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M106.870 83.140L106.870 74.640M166.870 83.140L166.870 74.640M106.870 76.140L166.870 76.140" fill="none" stroke="#000000" stroke-width="0.100" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M105.970 75.240L107.770 77.040M165.970 75.240L167.770 77.040" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<text x="134.973" y="75.340" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.250" fill="#1a1a1c">600</text>
+<text x="136.870" y="109.140" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="3.500" fill="#1a1a1c" transform="rotate(-15.000 136.870 109.140)">Note &lt;RDC&gt; &amp; &quot;é&quot;</text>
+<text x="99.370" y="107.140" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="5.000" font-weight="bold" fill="#1a1a1c">Plan RDC range, 1:100</text>
+<path d="M99.370 108.140L149.831 108.140" fill="none" stroke="#000000" stroke-width="0.350" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M232.000 105.140L244.500 105.140L244.500 107.140L232.000 107.140Z" fill="#1a1a1c" fill-rule="evenodd"/>
+<path d="M232.000 105.140L244.500 105.140L244.500 107.140L232.000 107.140Z" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M244.500 105.140L257.000 105.140L257.000 107.140L244.500 107.140Z" fill="#ffffff" fill-rule="evenodd"/>
+<path d="M244.500 105.140L257.000 105.140L257.000 107.140L244.500 107.140Z" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M257.000 105.140L269.500 105.140L269.500 107.140L257.000 107.140Z" fill="#1a1a1c" fill-rule="evenodd"/>
+<path d="M257.000 105.140L269.500 105.140L269.500 107.140L257.000 107.140Z" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M269.500 105.140L282.000 105.140L282.000 107.140L269.500 107.140Z" fill="#ffffff" fill-rule="evenodd"/>
+<path d="M269.500 105.140L282.000 105.140L282.000 107.140L269.500 107.140Z" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<text x="232.000" y="103.640" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.000" fill="#1a1a1c">0</text>
+<text x="278.626" y="103.640" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.000" fill="#1a1a1c">5 m</text>
+<text x="255.711" y="169.500" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.250" fill="#1a1a1c">Rez-de-chaussée: +0.00 m</text>
+<path d="M10.000 10.000L287.000 10.000L287.000 200.000L10.000 200.000L10.000 10.000" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<text x="12.500" y="176.750" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.750" font-weight="bold" fill="#1a1a1c">PROJECT</text>
+<text x="12.500" y="181.125" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.500" fill="#1a1a1c">frame 2026-T2b</text>
+<text x="12.500" y="190.750" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.750" font-weight="bold" fill="#1a1a1c">CLIENT</text>
+<text x="12.500" y="195.125" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.500" fill="#1a1a1c">Maître d'ouvrage — Ville</text>
+<text x="105.500" y="176.750" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.750" font-weight="bold" fill="#1a1a1c">DRAWING</text>
+<text x="105.500" y="181.125" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.500" fill="#1a1a1c">Plan RDC range</text>
+<text x="165.500" y="176.750" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.750" font-weight="bold" fill="#1a1a1c">SCALE</text>
+<text x="165.500" y="181.125" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.500" fill="#1a1a1c">1:100</text>
+<text x="165.500" y="190.750" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.750" font-weight="bold" fill="#1a1a1c">FORMAT</text>
+<text x="165.500" y="195.125" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.500" fill="#1a1a1c">A4</text>
+<text x="195.500" y="176.750" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.750" font-weight="bold" fill="#1a1a1c">DATE</text>
+<text x="195.500" y="181.125" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.500" fill="#1a1a1c">2026-01-01</text>
+<text x="195.500" y="190.750" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.750" font-weight="bold" fill="#1a1a1c">REVISION</text>
+<text x="195.500" y="195.125" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.500" fill="#1a1a1c"></text>
+<text x="225.500" y="176.750" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.750" font-weight="bold" fill="#1a1a1c">DRAWN</text>
+<text x="225.500" y="181.125" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.500" fill="#1a1a1c"></text>
+<text x="225.500" y="190.750" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.750" font-weight="bold" fill="#1a1a1c">CHECKED</text>
+<text x="225.500" y="195.125" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.500" fill="#1a1a1c"></text>
+<text x="249.500" y="176.750" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.750" font-weight="bold" fill="#1a1a1c">DRAWING N°</text>
+<text x="249.500" y="181.125" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.500" fill="#1a1a1c"></text>
+<path d="M10.000 172.000L287.000 172.000M103.000 172.000L103.000 200.000M163.000 172.000L163.000 200.000M193.000 172.000L193.000 200.000M223.000 172.000L223.000 200.000M247.000 172.000L247.000 200.000" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<text x="274.797" y="203.500" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.000" fill="#1a1a1c">Bimble 0.18.1</text>
+</svg>

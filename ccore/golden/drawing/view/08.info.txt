@@ -1,0 +1,56 @@
+PlanInfo {
+    paper: A4,
+    portrait: false,
+    cut_elements: 4,
+    seen_elements: 4,
+    projection_lines: 18,
+    above_lines: 0,
+    axes: 0,
+    model_axes: false,
+    hidden_elements: 0,
+    legend: [
+        (
+            "Concrete, cut",
+            Cut(
+                Concrete,
+            ),
+        ),
+        (
+            "Timber, cut",
+            Cut(
+                Timber,
+            ),
+        ),
+        (
+            "Concrete, seen",
+            Seen(
+                Concrete,
+            ),
+        ),
+        (
+            "Steel, seen",
+            Seen(
+                Steel,
+            ),
+        ),
+    ],
+    frame: ViewFrame {
+        turn: Section(
+            [
+                1.0,
+                0.0,
+            ],
+        ),
+        origin: [
+            6625.0,
+            2950.0,
+            1825.0,
+        ],
+        x0: -4050.0,
+        y1: 2125.5,
+        k: 0.01,
+        ox: 111.5,
+        oy: 49.74749938964844,
+        cut: 3625.0,
+    },
+}

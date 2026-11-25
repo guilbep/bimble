@@ -441,3 +441,28 @@ Made by `ccore/tools/mcp_golden.sh` (not by the dumper; `--check` skips `mcp/`),
 
 `node test/mcp_test.mjs` runs `out/tcc/bimble-ccore mcp` (`CCORE_SEED=1`) on both and compares
 every answer line, masked the same way, and the saved file.
+
+## drawing/ (drawings on paper, round 3 tickets D1–D6)
+
+Made in one Rust build so D2–D6 need none. Fixed inputs everywhere: project `"frame"`, date
+`"2026-01-01"`, the template with the model's project information (`with_project`, as the CLI).
+The ground plan of `frame` is storey `Niveau 1`, of `frame2` `Rez-de-chaussée`; the minimal
+template is the default one with axes `off`, every annotation switch off and no legend.
+
+| File | What | Ticket |
+|---|---|---|
+| `cut/<model>.txt` | `storey`, scene `origin`, `level`, `cut` (scene mm, storey level + 1200), then per scene element `element <id> <class> loops L open O up U` and one line per `cut::section` loop, open chain and `facing_up_region` loop: `loop\|open\|up <n> x y x y …`, `{:?}` | D1 |
+| `svg/sample.svg`, `sample-roboto.svg` | `to_svg()` of a sheet built in the dumper (`drawing_sample_sheet`): holes, fills, hatches (0°, 90°, ±angles, offsets, NaN offset, zero spacing), an empty area, dashes, numbers that round at the third decimal, the three anchors, turned and bold text, text to escape; Helvetica and Roboto | D1 |
+| `roboto.txt` | per face: `face`, `ascent`, `descent`, `cap_height`, `bbox`, `missing` (advance of glyph 0), `chars N`, then `<hex code point> <glyph id> <advance>` for U+0020–U+024F and 20 punctuation marks; f32 `{:?}`, 1/1000 em | D1, D6 |
+| `plan/<model>/cut.svg`, `frame.txt` | a sheet of the minimal plan's size: per scene element one `Area` of its section loops through `PlanInfo.frame.to_paper(scene + origin, z = cut)`, pen 0.35 black, no fill or hatch; its open chains as `Lines` (pen 0.18 red, dash 1 0.5). `frame.txt`: sheet size and the `ViewFrame` fields, `{:?}` | D1 |
+| `style/default.json`, `pens.txt`, `template.json` | `GraphicStyle::default().to_json()`; `role_pen` of each role at each of `STANDARD_SCALES`; `PlanTemplate::default().to_json()` | D2 |
+| `plan/<model>/min.svg`, `min.info.txt` | `plan()` of the ground storey, `bare`, minimal template; the `PlanInfo` as `{:#?}` | D2 |
+| `plan/<model>/full.svg`, `bare.svg`, `a1_50.svg`, `*.info.txt`, `errors.txt` | default template: auto paper at 1:100, `bare`, A1 at 1:50; error texts (scale 0, unknown storey, A4 at 1:1) | D3 |
+| `model.json` | `frame2.json` plus, by Commands, a plan with its own view range and one dimension and one text, a ceiling plan, sections north (1:50) and east (depth 5 m), a cropped plan, a plan hiding `IfcSlab`, sheet `S-101` (A3: the ranged plan 1:100, the section 1:50, a text, field `revision`) and `S-102` (A4 portrait placing the 3D view: a note). Fixed ids `GlobalId::derived("ccore drawing <name>")` | D4, D5 |
+| `view/<nn>.min.svg`, `<nn>.svg`, `.info.txt`, `index.txt` | each effective view of `model.json` (number = its place), minimal and default template, `section_marks` of all views; `index.txt`: number, id, name, and the error of a view with no drawing (3D, an empty ceiling plan) | D4 |
+| `sheet/<number>.svg`, `.info.txt` | `sheetdraw::draw` of each sheet; `SheetInfo` as `{:#?}` | D5 |
+| `pdf/<name>-<font>.pdf`, `.content` | `to_pdf()` of the sample, the frame's full plan and `S-101`, in Roboto and Helvetica; `.content` is the page's content stream (object 4). The producer's version is masked by as many `x` (same length, offsets stay right). Roboto PDFs embed both font files (about 410 KB): only `sample-roboto.pdf` is kept whole | D6, L1 |
+| `fmt.txt` | f64 bits (hex), then Rust's `{}`, `{:.1}` and `{:.3}`: fixed values (ties, -0, extremes) and 1500 pseudo-random ones | D1 |
+
+`ccore/test/draw_test.c` (suite `draw`) checks `cut/`, `svg/` and `plan/*/cut.svg` byte for byte,
+and `fmt.txt`.

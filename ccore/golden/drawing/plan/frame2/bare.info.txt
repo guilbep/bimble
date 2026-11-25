@@ -1,0 +1,51 @@
+PlanInfo {
+    paper: A4,
+    portrait: false,
+    cut_elements: 4,
+    seen_elements: 1,
+    projection_lines: 4,
+    above_lines: 24,
+    axes: 1,
+    model_axes: false,
+    hidden_elements: 0,
+    legend: [
+        (
+            "Concrete, cut",
+            Cut(
+                Concrete,
+            ),
+        ),
+        (
+            "Steel, cut",
+            Cut(
+                Steel,
+            ),
+        ),
+        (
+            "Concrete, seen",
+            Seen(
+                Concrete,
+            ),
+        ),
+        (
+            "Above the cut",
+            Above,
+        ),
+    ],
+    frame: ViewFrame {
+        turn: Plan(
+            0.0,
+        ),
+        origin: [
+            6625.0,
+            2950.0,
+            1825.0,
+        ],
+        x0: -7375.0,
+        y1: -2122.0576171875,
+        k: 0.01,
+        ox: 31.0,
+        oy: 12.0,
+        cut: -625.0,
+    },
+}

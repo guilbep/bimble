@@ -202,6 +202,7 @@ fn derive(dir: &Path) -> Files {
     view_files(dir, &m, &mut files);
     schedule_files(dir, &m, &mut files);
     geo_files(&m, &mut files);
+    drawing_files(dir, &m, &mut files);
     files
 }
 
@@ -2252,5 +2253,939 @@ fn geo_files(frame: &Model, files: &mut Files) {
             format!("geo/{name}.coords.txt"),
             geo_coords(&m, at).into_bytes(),
         );
+    }
+}
+
+// ---------------------------------------------------------------- drawings (round 3, D1–D6)
+
+/// Fixed title block inputs of every drawing golden.
+const DRAWING_PROJECT: &str = "frame";
+const DRAWING_DATE: &str = "2026-01-01";
+
+/// The ground plan's storey of each frame.
+fn ground_storey(name: &str) -> &'static str {
+    if name == "frame" {
+        "Niveau 1"
+    } else {
+        "Rez-de-chaussée"
+    }
+}
+
+/// Points as `{:?}` pairs: "x y x y …".
+fn dbg_points(pts: &[[f64; 2]]) -> String {
+    let v: Vec<String> = pts
+        .iter()
+        .map(|p| format!("{:?} {:?}", p[0], p[1]))
+        .collect();
+    v.join(" ")
+}
+
+/// The template of the minimal plan (D2): no axes, no annotation, no legend.
+fn min_template() -> bimble_drawing::template::PlanTemplate {
+    use bimble_drawing::template::{Axes, PlanTemplate};
+    let mut t = PlanTemplate {
+        axes: Axes::Off,
+        dimensions: false,
+        slab_levels: false,
+        opening_crosses: false,
+        opening_dimensions: false,
+        element_labels: false,
+        section_markers: false,
+        ..Default::default()
+    };
+    t.legend.show = false;
+    t
+}
+
+fn plan_options(
+    m: &Model,
+    storey: &str,
+    template: bimble_drawing::template::PlanTemplate,
+) -> bimble_drawing::plan::PlanOptions {
+    bimble_drawing::plan::PlanOptions {
+        storey: storey.into(),
+        project: DRAWING_PROJECT.into(),
+        date: DRAWING_DATE.into(),
+        template: template.with_project(&m.project),
+        ..Default::default()
+    }
+}
+
+/// `drawing/`: every golden of the drawing tickets (D1–D6), made in one Rust build. Formats:
+/// `ccore/golden/README.md` "Drawings".
+fn drawing_files(dir: &Path, frame: &Model, files: &mut Files) {
+    let text = std::fs::read_to_string(dir.join("frame2.json")).expect("frame2.json");
+    let m2 = file::from_str(&text).expect("frame2.json loads");
+    for (name, m) in [("frame", frame), ("frame2", &m2)] {
+        let scene = Scene::from_model(m);
+        drawing_cut(name, &scene, files);
+        drawing_plans(name, m, &scene, files);
+    }
+    drawing_sample(files);
+    drawing_roboto(files);
+    drawing_style(files);
+    drawing_fmt(files);
+    let model = drawing_model(&m2);
+    let model_text = file::to_string(&model);
+    files.insert("drawing/model.json".into(), model_text.clone().into_bytes());
+    let back = file::from_str(&model_text).expect("drawing/model.json loads");
+    assert_eq!(
+        file::to_string(&back),
+        model_text,
+        "drawing/model.json round trip"
+    );
+    drawing_views(&back, files);
+    drawing_sheets(&back, files);
+    drawing_pdfs(frame, &back, files);
+}
+
+/// `cut/<model>.txt`: what the ground plan's cut plane gives for each scene element.
+fn drawing_cut(name: &str, scene: &Scene, files: &mut Files) {
+    use bimble_drawing::cut::{facing_up_region, section};
+    let storey = ground_storey(name);
+    let st = scene
+        .storeys
+        .iter()
+        .find(|s| s.name == storey)
+        .expect("ground storey");
+    let oz = scene.origin_mm[2];
+    let level = st.elevation_mm - oz;
+    let cut = level + 1200.0;
+    let mut s = String::new();
+    writeln!(s, "storey {}", json_str(storey)).unwrap();
+    writeln!(
+        s,
+        "origin {:?} {:?} {:?}",
+        scene.origin_mm[0], scene.origin_mm[1], scene.origin_mm[2]
+    )
+    .unwrap();
+    writeln!(s, "level {level:?}").unwrap();
+    writeln!(s, "cut {cut:?}").unwrap();
+    for e in &scene.elements {
+        let m = e.world_mesh();
+        let sec = section(&m, cut);
+        let up = facing_up_region(&m);
+        writeln!(
+            s,
+            "element {} {} loops {} open {} up {}",
+            e.global_id,
+            e.class,
+            sec.loops.len(),
+            sec.open.len(),
+            up.len()
+        )
+        .unwrap();
+        for l in &sec.loops {
+            writeln!(s, "loop {} {}", l.len(), dbg_points(l)).unwrap();
+        }
+        for l in &sec.open {
+            writeln!(s, "open {} {}", l.len(), dbg_points(l)).unwrap();
+        }
+        for l in &up {
+            writeln!(s, "up {} {}", l.len(), dbg_points(l)).unwrap();
+        }
+    }
+    files.insert(format!("drawing/cut/{name}.txt"), s.into_bytes());
+}
+
+fn frame_text(
+    sheet: &bimble_drawing::sheet::Sheet,
+    f: &bimble_drawing::viewdraw::ViewFrame,
+) -> String {
+    let mut s = String::new();
+    writeln!(s, "sheet {:?} {:?}", sheet.width_mm, sheet.height_mm).unwrap();
+    writeln!(s, "turn {:?}", f.turn).unwrap();
+    writeln!(
+        s,
+        "origin {:?} {:?} {:?}",
+        f.origin[0], f.origin[1], f.origin[2]
+    )
+    .unwrap();
+    writeln!(s, "x0 {:?}", f.x0).unwrap();
+    writeln!(s, "y1 {:?}", f.y1).unwrap();
+    writeln!(s, "k {:?}", f.k).unwrap();
+    writeln!(s, "ox {:?}", f.ox).unwrap();
+    writeln!(s, "oy {:?}", f.oy).unwrap();
+    writeln!(s, "cut {:?}", f.cut).unwrap();
+    s
+}
+
+/// `plan/<model>/`: the cut alone on the minimal plan's paper (D1), the minimal plan (D2), the
+/// default template's plans and its errors (D3).
+fn drawing_plans(name: &str, m: &Model, scene: &Scene, files: &mut Files) {
+    use bimble_core::style::Rgb;
+    use bimble_drawing::cut::section;
+    use bimble_drawing::plan::plan;
+    use bimble_drawing::sheet::{Item, Paper, Pen, Sheet};
+    use bimble_drawing::template::PlanTemplate;
+    let storey = ground_storey(name);
+    let dirp = format!("drawing/plan/{name}");
+    let mut o = plan_options(m, storey, min_template());
+    o.bare = true;
+    let (min, info) = plan(scene, &o).expect("minimal plan");
+    files.insert(format!("{dirp}/min.svg"), min.to_svg().into_bytes());
+    files.insert(
+        format!("{dirp}/min.info.txt"),
+        format!("{info:#?}\n").into_bytes(),
+    );
+    // The cut alone: one area per element through the frame, one pen, no fill or hatch.
+    let f = info.frame;
+    let o3 = scene.origin_mm;
+    let to_paper = |p: &[f64; 2]| f.to_paper([p[0] + o3[0], p[1] + o3[1], f.cut + o3[2]]);
+    let pen = Pen {
+        width_mm: 0.35,
+        color: Rgb([0, 0, 0]),
+        dash: Vec::new(),
+    };
+    let thin = Pen {
+        width_mm: 0.18,
+        color: Rgb([200, 30, 30]),
+        dash: vec![1.0, 0.5],
+    };
+    let mut items = Vec::new();
+    for e in &scene.elements {
+        let s = section(&e.world_mesh(), f.cut);
+        if !s.loops.is_empty() {
+            items.push(Item::Area {
+                loops: s
+                    .loops
+                    .iter()
+                    .map(|l| l.iter().map(to_paper).collect())
+                    .collect(),
+                fill: None,
+                hatches: Vec::new(),
+                outline: Some(pen.clone()),
+            });
+        }
+        if !s.open.is_empty() {
+            items.push(Item::Lines {
+                lines: s
+                    .open
+                    .iter()
+                    .map(|l| l.iter().map(to_paper).collect())
+                    .collect(),
+                pen: thin.clone(),
+            });
+        }
+    }
+    let cut_sheet = Sheet {
+        width_mm: min.width_mm,
+        height_mm: min.height_mm,
+        title: format!("Cut {storey}"),
+        items,
+        font: min.font,
+    };
+    files.insert(format!("{dirp}/cut.svg"), cut_sheet.to_svg().into_bytes());
+    files.insert(
+        format!("{dirp}/frame.txt"),
+        frame_text(&min, &f).into_bytes(),
+    );
+    // The default template: auto paper at 1:100, bare, A1 at 1:50.
+    let full = plan_options(m, storey, PlanTemplate::default());
+    let mut bare = full.clone();
+    bare.bare = true;
+    let mut a1 = full.clone();
+    a1.scale = 50;
+    a1.paper = Some(Paper::A1);
+    for (file, opts) in [("full", &full), ("bare", &bare), ("a1_50", &a1)] {
+        let (sheet, info) = plan(scene, opts).expect("plan");
+        files.insert(format!("{dirp}/{file}.svg"), sheet.to_svg().into_bytes());
+        files.insert(
+            format!("{dirp}/{file}.info.txt"),
+            format!("{info:#?}\n").into_bytes(),
+        );
+    }
+    let mut errors = String::new();
+    let mut zero = full.clone();
+    zero.scale = 0;
+    let mut nope = full.clone();
+    nope.storey = "No such storey".into();
+    let mut small = full.clone();
+    small.scale = 1;
+    small.paper = Some(Paper::A4);
+    for (what, opts) in [
+        ("scale 0", &zero),
+        ("unknown storey", &nope),
+        ("A4 at 1:1", &small),
+    ] {
+        let Err(e) = plan(scene, opts) else {
+            panic!("{what}: an error expected");
+        };
+        writeln!(errors, "{what}: {e}").unwrap();
+    }
+    files.insert(format!("{dirp}/errors.txt"), errors.into_bytes());
+}
+
+/// `svg/sample.svg` (Helvetica) and `svg/sample-roboto.svg`: a sheet with each kind of item.
+fn drawing_sample_sheet(font: bimble_core::style::SheetFont) -> bimble_drawing::sheet::Sheet {
+    use bimble_core::style::Rgb;
+    use bimble_drawing::sheet::{Anchor, Hatch, Item, Pen, Sheet};
+    let black = Rgb([0, 0, 0]);
+    let red = Rgb([200, 30, 30]);
+    let pen = |w: f64, dash: Vec<f64>| Pen {
+        width_mm: w,
+        color: black,
+        dash,
+    };
+    let text =
+        |pos: [f64; 2], size: f64, t: &str, anchor: Anchor, angle: f64, bold: bool| Item::Text {
+            pos,
+            size_mm: size,
+            text: t.into(),
+            color: if bold { red } else { black },
+            anchor,
+            angle_deg: angle,
+            bold,
+        };
+    let mut items = vec![
+        // A square with a hole: fill, two hatches, outline.
+        Item::Area {
+            loops: vec![
+                vec![[10.0, 10.0], [60.0, 10.0], [60.0, 60.0], [10.0, 60.0]],
+                vec![[20.0, 20.0], [50.0, 20.0], [50.0, 50.0], [20.0, 50.0]],
+            ],
+            fill: Some(Rgb([214, 214, 210])),
+            hatches: vec![
+                Hatch {
+                    angle_deg: 45.0,
+                    spacing_mm: 2.0,
+                    offset_mm: 0.0,
+                    pen: pen(0.13, Vec::new()),
+                },
+                Hatch {
+                    angle_deg: -30.0,
+                    spacing_mm: 3.3,
+                    offset_mm: 0.7,
+                    pen: pen(0.1, vec![0.8, 0.4]),
+                },
+            ],
+            outline: Some(pen(0.5, Vec::new())),
+        },
+        // A triangle, hatched at 0° and 90°, not filled, not outlined.
+        Item::Area {
+            loops: vec![vec![[70.0, 60.0], [110.33333333333333, 12.5], [95.0, 60.0]]],
+            fill: None,
+            hatches: vec![
+                Hatch {
+                    angle_deg: 0.0,
+                    spacing_mm: 1.5,
+                    offset_mm: 0.25,
+                    pen: pen(0.1, Vec::new()),
+                },
+                Hatch {
+                    angle_deg: 90.0,
+                    spacing_mm: 1.5,
+                    offset_mm: f64::NAN,
+                    pen: pen(0.1, Vec::new()),
+                },
+            ],
+            outline: None,
+        },
+        // A filled area with a hatch of no spacing (no lines), and an empty area.
+        Item::Area {
+            loops: vec![vec![[120.0, 10.0], [140.0, 10.0], [130.0, 30.0]]],
+            fill: Some(Rgb([255, 255, 255])),
+            hatches: vec![Hatch {
+                angle_deg: 15.0,
+                spacing_mm: 0.0,
+                offset_mm: 0.0,
+                pen: pen(0.1, Vec::new()),
+            }],
+            outline: Some(pen(0.25, vec![2.0, 1.0, 0.25, 1.0])),
+        },
+        Item::Area {
+            loops: Vec::new(),
+            fill: None,
+            hatches: vec![Hatch {
+                angle_deg: 45.0,
+                spacing_mm: 1.0,
+                offset_mm: 0.0,
+                pen: pen(0.1, Vec::new()),
+            }],
+            outline: Some(pen(0.25, Vec::new())),
+        },
+        // Lines: two polylines, dashed; numbers that round at the third decimal.
+        Item::Lines {
+            lines: vec![
+                vec![[0.0625, 0.1875], [1.0005, 2.0004999], [-0.0004, -0.0]],
+                vec![[150.123456, 70.98765], [290.9999, 200.00049999999]],
+            ],
+            pen: Pen {
+                width_mm: 0.0625,
+                color: Rgb([1, 2, 254]),
+                dash: vec![5.0, 1.25, 0.3333, 1.25],
+            },
+        },
+        Item::Lines {
+            lines: vec![vec![[1e-7, 123456789.0], [-1e21, 3.0]]],
+            pen: pen(0.18, Vec::new()),
+        },
+    ];
+    // Texts: the three anchors, turned, bold, escaped, accents.
+    let mut y = 80.0;
+    for (i, anchor) in [Anchor::Start, Anchor::Middle, Anchor::End]
+        .into_iter()
+        .enumerate()
+    {
+        for (j, angle) in [0.0, 90.0, -33.5].into_iter().enumerate() {
+            items.push(text(
+                [150.0, y],
+                2.5 + i as f64 * 0.5,
+                "Plan Niveau 1, 1:100",
+                anchor,
+                angle,
+                j == 1,
+            ));
+            y += 9.0;
+        }
+    }
+    items.push(text(
+        [20.0, 100.0],
+        3.5,
+        "<b> & \"q\" 'a' — Étage \"1\" Rez-de-chaussée ±0.00 × 2 µ",
+        Anchor::Start,
+        0.0,
+        false,
+    ));
+    items.push(text(
+        [20.0, 110.0],
+        3.5,
+        "Bold: Ÿ ÿ Œ œ ĳ ł ő ș ț 50 × 30 cm",
+        Anchor::Middle,
+        0.0,
+        true,
+    ));
+    items.push(text([20.0, 120.0], 2.0, "", Anchor::End, 12.0, false));
+    items.push(text(
+        [280.0, 200.0],
+        5.0,
+        "0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz {|}~",
+        Anchor::End,
+        0.0,
+        false,
+    ));
+    items.push(text(
+        [20.0, 130.0],
+        3.0,
+        "日本 ĀŻ ǅ ɏ \u{2009}\u{2013}\u{2014}\u{2019}",
+        Anchor::Middle,
+        180.0,
+        false,
+    ));
+    Sheet {
+        width_mm: 297.0,
+        height_mm: 210.0,
+        title: "Sample <sheet> & \"é\"".into(),
+        items,
+        font,
+    }
+}
+
+fn drawing_sample(files: &mut Files) {
+    use bimble_core::style::SheetFont;
+    files.insert(
+        "drawing/svg/sample.svg".into(),
+        drawing_sample_sheet(SheetFont::Helvetica)
+            .to_svg()
+            .into_bytes(),
+    );
+    files.insert(
+        "drawing/svg/sample-roboto.svg".into(),
+        drawing_sample_sheet(SheetFont::Roboto)
+            .to_svg()
+            .into_bytes(),
+    );
+}
+
+/// Characters `roboto.txt` lists: U+0020–U+024F and the punctuation plans use.
+fn roboto_chars() -> Vec<char> {
+    let mut v: Vec<char> = (0x20u32..=0x24f).filter_map(char::from_u32).collect();
+    v.extend(
+        [
+            0x2009u32, 0x2013, 0x2014, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2026, 0x2032,
+            0x2033, 0x20ac, 0x2122, 0x2190, 0x2191, 0x2192, 0x2193, 0x2212, 0x2264, 0x2265,
+        ]
+        .iter()
+        .filter_map(|&c| char::from_u32(c)),
+    );
+    v
+}
+
+/// `roboto.txt`: per face its metrics (1/1000 em, f32 `{:?}`), the advance of the missing
+/// glyph, then one line per character: code point, glyph id, advance.
+fn drawing_roboto(files: &mut Files) {
+    use bimble_drawing::fonts::Face;
+    let mut s = String::new();
+    for bold in [false, true] {
+        let f = Face::roboto(bold);
+        writeln!(s, "face {}", f.name).unwrap();
+        writeln!(s, "ascent {:?}", f.ascent).unwrap();
+        writeln!(s, "descent {:?}", f.descent).unwrap();
+        writeln!(s, "cap_height {:?}", f.cap_height).unwrap();
+        writeln!(
+            s,
+            "bbox {:?} {:?} {:?} {:?}",
+            f.bbox[0], f.bbox[1], f.bbox[2], f.bbox[3]
+        )
+        .unwrap();
+        writeln!(s, "missing {:?}", f.advances([0u16])[0]).unwrap();
+        let chars = roboto_chars();
+        writeln!(s, "chars {}", chars.len()).unwrap();
+        for c in chars {
+            let g = f.glyph(c);
+            writeln!(s, "{:04x} {} {:?}", c as u32, g, f.advances([g])[0]).unwrap();
+        }
+    }
+    files.insert("drawing/roboto.txt".into(), s.into_bytes());
+}
+
+/// `style/`: the default graphic style, the pen of each line role at each standard scale, the
+/// default plan template.
+fn drawing_style(files: &mut Files) {
+    use bimble_core::style::GraphicStyle;
+    use bimble_drawing::plan::{Role, STANDARD_SCALES, role_pen};
+    let style = GraphicStyle::default();
+    files.insert(
+        "drawing/style/default.json".into(),
+        style.to_json().into_bytes(),
+    );
+    let mut s = String::new();
+    for role in [
+        Role::Cut,
+        Role::Seen,
+        Role::Above,
+        Role::Hatch,
+        Role::Axis,
+        Role::Dimension,
+        Role::Frame,
+    ] {
+        for n in STANDARD_SCALES {
+            let p = role_pen(&style, role, n);
+            writeln!(
+                s,
+                "{role:?} 1:{n} width {:?} color {} dash {:?}",
+                p.width_mm,
+                p.color.to_hex(),
+                p.dash
+            )
+            .unwrap();
+        }
+    }
+    files.insert("drawing/style/pens.txt".into(), s.into_bytes());
+    files.insert(
+        "drawing/style/template.json".into(),
+        (bimble_drawing::template::PlanTemplate::default().to_json() + "\n").into_bytes(),
+    );
+}
+
+/// `fmt.txt`: f64 bits (hex), then `{}`, `{:.1}`, `{:.3}` of the value, one per line.
+fn drawing_fmt(files: &mut Files) {
+    let mut vals: Vec<f64> = vec![
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        0.5,
+        1.5,
+        2.5,
+        -2.5,
+        0.25,
+        0.0625,
+        0.1875,
+        1.0005,
+        2.0005,
+        0.0005,
+        -0.0005,
+        0.00049999999999999,
+        0.0004,
+        -0.0004,
+        9.9995,
+        99.9995,
+        999.9995,
+        0.125,
+        0.375,
+        1e-7,
+        1e-300,
+        5e-324,
+        1e15,
+        1e16,
+        1e21,
+        1e22,
+        123456789.0,
+        1.7976931348623157e308,
+        0.1,
+        0.2,
+        0.3,
+        297.0,
+        210.0,
+        841.0,
+        594.0,
+        1189.0,
+        0.35,
+        0.18,
+        0.13,
+        2.675,
+        1.005,
+    ];
+    for k in -20..=20 {
+        vals.push(k as f64 * 0.0005);
+        vals.push(k as f64 * 0.05);
+        vals.push(k as f64 / 3.0);
+    }
+    // A fixed pseudo-random spread (xorshift), paper-sized and any size.
+    let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+    for i in 0..1500 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        let v = if i % 5 != 0 {
+            (x >> 11) as f64 / (1u64 << 53) as f64 * 2000.0 - 1000.0
+        } else {
+            f64::from_bits(x)
+        };
+        if v.is_finite() {
+            vals.push(v);
+        }
+    }
+    let mut s = String::new();
+    for v in vals {
+        writeln!(s, "{:016x} {} {:.1} {:.3}", v.to_bits(), v, v, v).unwrap();
+    }
+    files.insert("drawing/fmt.txt".into(), s.into_bytes());
+}
+
+/// A fixed GlobalId for the drawing model's views, sheets and annotations.
+fn dgid(seed: &str) -> GlobalId {
+    GlobalId::derived(format!("ccore drawing {seed}").as_bytes())
+}
+
+/// `model.json`: `frame2.json` with views and sheets, added by Commands.
+fn drawing_model(m2: &Model) -> Model {
+    use bimble_core::sheet::{Placed, Sheet as SheetDef, SheetText};
+    use bimble_core::view::{
+        Anchor, Annotation, Crop, DimAxis, Facing, LevelRef, Look, RangePlane, View, ViewKind,
+        ViewRange, Visibility,
+    };
+    let mut m = m2.clone();
+    let levels = m.levels();
+    let key = |name: &str| {
+        levels
+            .iter()
+            .find(|l| l.name == name)
+            .expect("storey")
+            .key
+            .clone()
+    };
+    let ground = key("Rez-de-chaussée");
+    let upper = key("Étage \"1\"");
+    let view = |seed: &str, name: &str, kind: ViewKind| View {
+        id: dgid(seed),
+        name: name.into(),
+        kind,
+        visibility: Visibility::default(),
+        references: Vec::new(),
+        annotations: Vec::new(),
+        true_north: false,
+        scale: 100,
+        crop: None,
+    };
+    let plane = |level: LevelRef, offset_mm: f64| RangePlane { level, offset_mm };
+    let mut ranged = view(
+        "ranged",
+        "Plan RDC range",
+        ViewKind::Plan {
+            storey: ground.clone(),
+            look: Look::Down,
+            range: ViewRange {
+                top: plane(LevelRef::Above, -100.0),
+                cut: plane(LevelRef::Associated, 900.0),
+                bottom: plane(LevelRef::Associated, -100.0),
+                depth: plane(LevelRef::Associated, -700.0),
+            },
+        },
+    );
+    ranged.annotations = vec![
+        Annotation::Dimension {
+            id: dgid("dimension"),
+            a: Anchor {
+                at: [0.0, 0.0, 900.0],
+                element: None,
+            },
+            b: Anchor {
+                at: [6000.0, 0.0, 900.0],
+                element: None,
+            },
+            offset_mm: 800.0,
+            axis: DimAxis::Aligned,
+            kind: None,
+        },
+        Annotation::Text {
+            id: dgid("text"),
+            text: "Note <RDC> & \"é\"".into(),
+            at: [3000.0, -2500.0, 900.0],
+            size_mm: 3.5,
+            angle_deg: 15.0,
+            kind: None,
+        },
+    ];
+    let ceiling = view(
+        "ceiling",
+        "Ceiling RDC",
+        ViewKind::Plan {
+            storey: ground.clone(),
+            look: Look::Up,
+            range: ViewRange::default_for(Look::Up),
+        },
+    );
+    let mut north = view(
+        "north",
+        "Section A",
+        ViewKind::Section {
+            origin: [3000.0, 2000.0],
+            facing: Facing::North,
+            depth_mm: 0.0,
+        },
+    );
+    north.scale = 50;
+    let east = view(
+        "east",
+        "Section B-B",
+        ViewKind::Section {
+            origin: [3000.0, 2000.0],
+            facing: Facing::East,
+            depth_mm: 5000.0,
+        },
+    );
+    let mut cropped = view(
+        "cropped",
+        "Plan Etage cropped",
+        ViewKind::Plan {
+            storey: upper.clone(),
+            look: Look::Down,
+            range: ViewRange::default_for(Look::Down),
+        },
+    );
+    cropped.crop = Some(Crop {
+        min: [-500.0, -1500.0],
+        max: [4500.0, 2500.0],
+    });
+    let mut hiding = view(
+        "hiding",
+        "Plan RDC no slabs",
+        ViewKind::Plan {
+            storey: ground.clone(),
+            look: Look::Down,
+            range: ViewRange::default_for(Look::Down),
+        },
+    );
+    hiding.visibility.hidden_classes = vec!["IfcSlab".into()];
+    let mut cmds: Vec<Command> = [ranged, ceiling, north, east, cropped, hiding]
+        .into_iter()
+        .map(Command::AddView)
+        .collect();
+    let mut s1 = SheetDef::new("S-101", "Plan and section");
+    s1.id = dgid("sheet S-101");
+    s1.paper = "A3".into();
+    s1.placed = vec![
+        Placed {
+            id: dgid("placed plan"),
+            view: dgid("ranged"),
+            scale: 100,
+            at_mm: [130.0, 140.0],
+        },
+        Placed {
+            id: dgid("placed section"),
+            view: dgid("north"),
+            scale: 50,
+            at_mm: [320.0, 120.0],
+        },
+    ];
+    s1.texts = vec![SheetText {
+        id: dgid("sheet text"),
+        text: "Sheet note: see <S-102> & \"détails\"".into(),
+        at_mm: [20.0, 25.0],
+        size_mm: 5.0,
+        angle_deg: 0.0,
+        kind: None,
+    }];
+    s1.fields.insert("revision".into(), "B".into());
+    let mut s2 = SheetDef::new("S-102", "3D placed");
+    s2.id = dgid("sheet S-102");
+    s2.paper = "A4".into();
+    s2.portrait = true;
+    s2.placed = vec![Placed {
+        id: dgid("placed 3d"),
+        view: GlobalId::derived(b"bimble view 3d"),
+        scale: 100,
+        at_mm: [105.0, 140.0],
+    }];
+    cmds.push(Command::AddSheet(s1));
+    cmds.push(Command::AddSheet(s2));
+    for c in cmds {
+        c.apply(&mut m).expect("drawing model command");
+    }
+    m
+}
+
+/// A file name for a view: its place in the effective views, two digits.
+fn view_slug(i: usize) -> String {
+    format!("{i:02}")
+}
+
+/// `view/`: each effective view of `model.json`, minimal template (`<n>.min.svg`) and default
+/// template (`<n>.svg`), with its `PlanInfo` (`<n>.info.txt`); `index.txt` names them; a view
+/// that cannot be drawn (3D) gives its error there.
+fn drawing_views(m: &Model, files: &mut Files) {
+    use bimble_drawing::plan::{PlanOptions, plan, section_marks};
+    use bimble_drawing::template::PlanTemplate;
+    let scene = Scene::from_model(m);
+    let views = bimble_core::view::effective(&m.views, &scene.levels());
+    let marks = section_marks(&views);
+    let mut index = String::new();
+    for (i, v) in views.iter().enumerate() {
+        let n = view_slug(i);
+        writeln!(index, "{n} {} {}", v.id, json_str(&v.name)).unwrap();
+        for (suffix, tpl) in [("min.", min_template()), ("", PlanTemplate::default())] {
+            let o = PlanOptions {
+                scale: v.scale,
+                project: DRAWING_PROJECT.into(),
+                date: DRAWING_DATE.into(),
+                template: tpl.with_project(&m.project),
+                view: Some(v.clone()),
+                section_marks: marks.clone(),
+                ..Default::default()
+            };
+            match plan(&scene, &o) {
+                Ok((sheet, info)) => {
+                    files.insert(
+                        format!("drawing/view/{n}.{suffix}svg"),
+                        sheet.to_svg().into_bytes(),
+                    );
+                    files.insert(
+                        format!("drawing/view/{n}.{suffix}info.txt"),
+                        format!("{info:#?}\n").into_bytes(),
+                    );
+                }
+                Err(e) => writeln!(index, "{n} {suffix}error: {e}").unwrap(),
+            }
+        }
+    }
+    files.insert("drawing/view/index.txt".into(), index.into_bytes());
+}
+
+fn sheet_options(
+    m: &Model,
+    font: bimble_core::style::SheetFont,
+) -> bimble_drawing::sheetdraw::SheetOptions {
+    let mut style = bimble_core::style::GraphicStyle::default();
+    style.paper.font = font;
+    bimble_drawing::sheetdraw::SheetOptions {
+        style,
+        template: bimble_drawing::template::PlanTemplate::default().with_project(&m.project),
+        project: DRAWING_PROJECT.into(),
+        date: DRAWING_DATE.into(),
+    }
+}
+
+/// `sheet/<number>.svg` and `.info.txt`: `sheetdraw::draw` of each sheet of `model.json`.
+fn drawing_sheets(m: &Model, files: &mut Files) {
+    use bimble_core::style::SheetFont;
+    let scene = Scene::from_model(m);
+    let views = bimble_core::view::effective(&m.views, &scene.levels());
+    for def in m.sheets.values() {
+        let (sheet, info) = bimble_drawing::sheetdraw::draw(
+            &scene,
+            def,
+            &views,
+            &sheet_options(m, SheetFont::Roboto),
+        )
+        .expect("sheet draws");
+        files.insert(
+            format!("drawing/sheet/{}.svg", def.number),
+            sheet.to_svg().into_bytes(),
+        );
+        files.insert(
+            format!("drawing/sheet/{}.info.txt", def.number),
+            format!("{info:#?}\n").into_bytes(),
+        );
+    }
+}
+
+/// The page's content stream of a PDF `to_pdf` wrote (object 4), inflated if compressed.
+fn pdf_content(pdf: &[u8]) -> Vec<u8> {
+    use std::io::Read as _;
+    let find = |hay: &[u8], needle: &[u8], from: usize| {
+        hay[from..]
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .map(|i| i + from)
+    };
+    let obj = find(pdf, b"\n4 0 obj", 0).expect("content object");
+    let start = find(pdf, b"stream\n", obj).expect("stream") + 7;
+    let end = find(pdf, b"\nendstream", start).expect("endstream");
+    let dict = &pdf[obj..start];
+    let body = &pdf[start..end];
+    if find(dict, b"/FlateDecode", 0).is_some() {
+        let mut out = Vec::new();
+        flate2::read::ZlibDecoder::new(body)
+            .read_to_end(&mut out)
+            .expect("content inflates");
+        out
+    } else {
+        body.to_vec()
+    }
+}
+
+/// The Rust build's version in a PDF's producer, replaced by as many `x` (same length, so the
+/// offsets stay right).
+fn mask_pdf_version(mut pdf: Vec<u8>) -> Vec<u8> {
+    let v = format!("(Bimble {})", env!("CARGO_PKG_VERSION"));
+    let masked = format!("(Bimble {})", "x".repeat(env!("CARGO_PKG_VERSION").len()));
+    if let Some(i) = pdf.windows(v.len()).position(|w| w == v.as_bytes()) {
+        pdf[i..i + v.len()].copy_from_slice(masked.as_bytes());
+    }
+    pdf
+}
+
+/// `pdf/<name>-<font>.pdf` and `.content`: `to_pdf` of the sample, the frame's full plan and
+/// sheet S-101, in Roboto and in Helvetica (Roboto `.pdf`: the sample's only).
+fn drawing_pdfs(frame: &Model, dm: &Model, files: &mut Files) {
+    use bimble_core::style::SheetFont;
+    use bimble_drawing::plan::plan;
+    use bimble_drawing::template::PlanTemplate;
+    let fscene = Scene::from_model(frame);
+    let dscene = Scene::from_model(dm);
+    let views = bimble_core::view::effective(&dm.views, &dscene.levels());
+    let s101 = dm
+        .sheets
+        .values()
+        .find(|s| s.number == "S-101")
+        .expect("S-101");
+    for (font, tag) in [
+        (SheetFont::Roboto, "roboto"),
+        (SheetFont::Helvetica, "helvetica"),
+    ] {
+        let mut o = plan_options(frame, ground_storey("frame"), PlanTemplate::default());
+        o.style.paper.font = font;
+        let (full, _) = plan(&fscene, &o).expect("full plan");
+        let (sheet, _) =
+            bimble_drawing::sheetdraw::draw(&dscene, s101, &views, &sheet_options(dm, font))
+                .expect("sheet draws");
+        for (name, s) in [
+            ("sample", drawing_sample_sheet(font)),
+            ("frame-full", full),
+            ("S-101", sheet),
+        ] {
+            let pdf = mask_pdf_version(s.to_pdf());
+            files.insert(
+                format!("drawing/pdf/{name}-{tag}.content"),
+                pdf_content(&pdf),
+            );
+            // A Roboto PDF embeds both font files (about 410 KB): the sample's is kept whole,
+            // the others only by their content stream.
+            if font == SheetFont::Helvetica || name == "sample" {
+                files.insert(format!("drawing/pdf/{name}-{tag}.pdf"), pdf);
+            }
+        }
     }
 }
