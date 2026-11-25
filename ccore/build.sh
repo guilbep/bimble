@@ -90,6 +90,9 @@ lib_and_tests() { # <dir> <cc> <flags...>
 HOST_SRCS=("${LIB[@]}" "${SESSION[@]}" "${HOST[@]}")
 TCC_FLAGS=(-g -Wall -DRYU_ONLY_64_BIT_OPS "${KFLAGS[@]}")
 O2_FLAGS=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function "${KFLAGS[@]}")
+# clang on aarch64 makes atomics (src/jobs.h) calls to libgcc's outline helpers
+# (__aarch64_cas8_relax...), which the tcc link has not: inline them.
+[[ $(uname -m) == aarch64 ]] && O2_FLAGS+=(-mno-outline-atomics)
 host_keys() { # prints "<key> <file>" per source
     local hh
     hh=$( { printf '%s\n' "${O2_FLAGS[*]}" "${TCC_FLAGS[*]}"; cat src/*.h session/*.h host/*.h vendor/ryu/ryu/*; } | sha1sum | cut -c1-16)
