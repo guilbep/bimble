@@ -3733,7 +3733,13 @@ fn reference_text(r: &Result<bimble_drawing::reference::Read, String>) -> String
         writeln!(body, "{p:?}").unwrap();
     }
     if body.len() > 256 * 1024 {
-        writeln!(s, "fnv {:016x} bytes {}", fnv64(body.as_bytes()), body.len()).unwrap();
+        writeln!(
+            s,
+            "fnv {:016x} bytes {}",
+            fnv64(body.as_bytes()),
+            body.len()
+        )
+        .unwrap();
         for l in body.lines().take(20) {
             writeln!(s, "{l}").unwrap();
         }
