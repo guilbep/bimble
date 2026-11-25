@@ -12,7 +12,11 @@
 // frame.json) -> 3 storeys; ticket A5c: ccoreOpenFile(Blob of golden/view/frame2.bimbleview,
 // Rust's gzip) -> read-only (state editable false), the viewport draws its mesh (pixel hash
 // changes) and the Concrete tab's ribbon shows Place: Column disabled (aria-disabled); no request
-// to a host, no page error, no console error. Prints the
+// to a host, no page error, no console error. Ticket BUG1: each picture is read once the viewport
+// drew the state the action left (__bbGl.loops, __bbGl.drawn: no fixed sleep), and with the page's
+// frames held for 300 ms after a deselect, a place, undo, redo, undo and a wall's ghost then Escape,
+// the pixels 300 ms later are the old picture and the settled ones the state's; no frame is drawn at
+// a buffer size other than the canvas's layout size (the properties panel changes it). Prints the
 // wasm transfer size, navigation -> first frame and place -> pixels times, "N passed, M failed";
 // exits non-zero on a failure. Kills all it starts.
 import { spawn, execFileSync } from "node:child_process";
@@ -235,10 +239,20 @@ async function main() {
     }
   }
 
+  // BUG1: the picture of the state an action leaves: a frame loop of the viewport that began after the
+  // action (__bbGl.loops > l0), the state's rev drawn (__bbGl.drawn), at the canvas's layout size. A
+  // fixed 300 ms sleep raced it: under load no frame came for > 300 ms after the deselect, and the
+  // reference picture was the old one (the slab still selected, the canvas still 356 px high).
+  const loops = () => evalJs("window.__bbGl.loops ?? -1");
+  const settled = (what, l0) => waitFor(what, 10000, () => evalJs(`(async () => { const b = await import('/src/bimble.ts');
+    const c = document.getElementById('bimble'), g = window.__bbGl, d = g.drawn, dpr = window.devicePixelRatio || 1;
+    return g.loops > ${l0} && !!d && d.rev === b.state.value.rev && d.w === c.width && d.h === c.height
+      && c.width === Math.max(1, Math.round(c.clientWidth * dpr)) && c.height === Math.max(1, Math.round(c.clientHeight * dpr)); })()`));
+
   // Place through the client: one more element, the mesh of the new rev drawn, the picture changes;
   // undo: the old rev's picture again. Times: the call to the first frame drawn with the new mesh.
   await bb("b.select([])");
-  await sleep(300);
+  await settled("the picture without the selection", await loops());
   const hash = `(() => { const c = document.getElementById('bimble'), g = c.getContext('webgl2');
     const p = new Uint8Array(c.width * c.height * 4); g.readPixels(0, 0, c.width, c.height, g.RGBA, g.UNSIGNED_BYTE, p);
     let s = 0; for (let i = 0; i < p.length; i += 3) s = (s * 31 + p[i]) >>> 0; return s; })()`;
@@ -260,7 +274,7 @@ async function main() {
   })()`);
   const h0 = await evalJs(hash), count0 = await bb("b.query('elements', {}).length"), rev0 = await bb("b.state.value.rev");
   const placeMs = await timed(`b.runVerb('place', { a: [0.0, -2000.0], b: [6000.0, -2000.0], kind: 'wall', storey: ${JSON.stringify(STOREY)} })`);
-  await sleep(200);
+  await settled("the picture of the place", await loops());
   const h1 = await evalJs(hash), count1 = await bb("b.query('elements', {}).length"), rev1 = await bb("b.state.value.rev");
   const gl1 = JSON.parse(await evalJs("JSON.stringify(window.__bbGl)"));
   console.log(`place (wall): ${typeof placeMs === "number" ? placeMs.toFixed(1) + " ms from the call to the frame with the new mesh" : placeMs}; ` +
@@ -271,12 +285,88 @@ async function main() {
   const saved = JSON.parse(await evalJs("(() => { try { const t = window.ccoreSave(); return JSON.stringify({ n: t.length, wall: t.includes('\"IfcWall\"') }); } catch (e) { return JSON.stringify({ e: String(e) }); } })()"));
   check("ccoreSave() returns the saved text with the placed wall, state saved", saved.n > 1000 && saved.wall && (await bb("b.state.value.unsaved")) === false, JSON.stringify(saved));
   const undoMs = await timed("b.undo()");
-  // The redraw after the undo: wait for the picture to be the one before the place (at most 5 s; a
-  // fixed 200 ms raced it on a loaded machine), then check it.
-  for (const until = Date.now() + 5000; Date.now() < until && (await evalJs(hash)) !== h0; ) await sleep(100);
+  await settled("the picture of the undo", await loops()).catch(() => null); // BUG1: then one read, no retry
   const h2 = await evalJs(hash), count2 = await bb("b.query('elements', {}).length");
   console.log(`undo: ${typeof undoMs === "number" ? undoMs.toFixed(1) + " ms to the frame" : undoMs}`);
   check("undo restores the element count and the picture", count2 === count0 && h2 === h0, `${count2} elements, hash ${h2} (before the place ${h0})`);
+
+  // BUG1, deterministic. Each clear of #bimble records the buffer's size against the canvas's layout
+  // size. The selection opens and closes the properties panel (the canvas changes height). With frames
+  // on time, the frame after a layout change runs before the resize observer (HTML: rAF callbacks, then
+  // layout, then observers): no frame may be drawn at the old size. Then each action runs with the
+  // page's frames held (requestAnimationFrame queued: a loaded machine that draws no frame for 300 ms,
+  // forced): 300 ms after it the pixels are not the state's (the race the old fixed sleep lost, every
+  // time); the frames let go, the settled picture is the state's: deselect, place, undo, redo, a place
+  // tool's ghost then Escape.
+  await evalJs(`(() => { const B = window.__bug1 = { hold: false, held: [], stale: [], clears: 0 }, raf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (cb) => B.hold ? (B.held.push(cb), 0) : raf(cb);
+    B.release = () => { B.hold = false; for (const cb of B.held.splice(0)) raf(cb); };
+    const p = WebGL2RenderingContext.prototype, clear = p.clear;
+    p.clear = function (m) { const c = this.canvas; if (c && c.id === 'bimble') { const dpr = window.devicePixelRatio || 1;
+      const w = Math.max(1, Math.round(c.clientWidth * dpr)), h = Math.max(1, Math.round(c.clientHeight * dpr)); B.clears++;
+      if (c.width !== w || c.height !== h) B.stale.push(c.width + 'x' + c.height + ' drawn, ' + w + 'x' + h + ' laid out'); }
+      return clear.call(this, m); };
+    return 1; })()`);
+  const slab = await bb("b.query('elements', { limit: 500 }).find((e) => e.class === 'IfcSlab')?.id ?? null");
+  await bb(`b.select([${JSON.stringify(slab)}])`);
+  await settled("the slab selected", await loops());
+  const hSel = await evalJs(hash), hgtSel = await evalJs("document.getElementById('bimble').clientHeight");
+  await bb("b.select([])");
+  await settled("the deselect", await loops());
+  const onTime = JSON.parse(await evalJs("JSON.stringify(window.__bug1)"));
+  check("BUG1: frames on time: select then deselect (the canvas's height changes twice) -> no frame drawn at a buffer size other than the layout's",
+    onTime.clears >= 2 && onTime.stale.length === 0, `${onTime.clears} clears, stale: ${onTime.stale.slice(0, 3).join("; ")}`);
+  // `act` (an expression, or an async function) with the frames held: the pixels 300 ms later, then the settled ones.
+  // The hold waits for one loop: the frame it asked before the hold runs; the next one is held.
+  const held = async (what, act) => {
+    const lh = await evalJs("(window.__bug1.hold = true, window.__bbGl.loops)");
+    await waitFor("the frame loop held", 5000, async () => (await loops()) > lh); // its next frame was asked before the hold
+    const r = typeof act === "string" ? await bb(act) : await act();
+    await sleep(300);
+    const slept = await evalJs(hash), l0 = await loops();
+    await evalJs("window.__bug1.release()");
+    await settled(`${what} (frames held)`, l0);
+    return { r, slept, now: await evalJs(hash) };
+  };
+  await bb(`b.select([${JSON.stringify(slab)}])`);
+  await settled("the slab selected", await loops());
+  const desel = await held("the deselect", "b.select([])");
+  const hgt = await evalJs("document.getElementById('bimble').clientHeight");
+  console.log(`BUG1: canvas ${hgtSel} px high with the slab selected, ${hgt} px without; 300 ms after the deselect (frames held) the pixels are ` +
+    `${desel.slept === hSel ? "the selected picture" : desel.slept === 0 ? "cleared (resized, not drawn yet)" : desel.slept}`);
+  check("BUG1: frames held: deselect -> 300 ms later not the state's picture, settled the picture before",
+    slab !== null && hSel !== h0 && desel.slept !== h0 && desel.now === h0, `slab ${slab}, selected ${hSel}, slept ${desel.slept}, settled ${desel.now}, before ${h0}`);
+  const place = await held("the place", `b.runVerb('place', { a: [0.0, -2000.0], b: [6000.0, -2000.0], kind: 'wall', storey: ${JSON.stringify(STOREY)} })`);
+  const undo = await held("the undo", "b.undo()");
+  const redo = await held("the redo", "b.redo()");
+  const undo2 = await held("the second undo", "b.undo()");
+  const seq = [place, undo, redo, undo2], want = [h1, h0, h1, h0];
+  check("BUG1: frames held: place, undo, redo, undo -> 300 ms later the previous picture each time; settled the place's, the before, the place's, the before",
+    place.r === null && seq.every((x, k) => x.slept === want[(k + 3) % 4] && x.now === want[k]),
+    seq.map((x, k) => `${["place", "undo", "redo", "undo"][k]} slept ${x.slept} settled ${x.now}`).join(", ") + ` (place ${h1}, before ${h0})`);
+  // A wall's first point (the hover cross, then the ghost to the pointer), then Escape: the picture before.
+  const crect = JSON.parse(await evalJs("JSON.stringify(document.getElementById('bimble').getBoundingClientRect())"));
+  const at = (fx, fy) => ({ x: crect.left + fx * crect.width, y: crect.top + fy * crect.height });
+  const revG = await bb("b.state.value.rev"), serr = await bb("b.setPlacing({ kind: 'wall' })");
+  await waitFor("placing a wall", 5000, () => bb("b.placing.value?.active === true && b.placing.value.kind === 'wall'"));
+  const p1 = at(0.4, 0.6), p2 = at(0.6, 0.6);
+  await S("Input.dispatchMouseEvent", { type: "mouseMoved", ...p1, button: "none", buttons: 0 });
+  for (const type of ["mousePressed", "mouseReleased"]) await S("Input.dispatchMouseEvent", { type, ...p1, button: "left", buttons: type === "mousePressed" ? 1 : 0, clickCount: 1 });
+  await waitFor("one wall point", 5000, () => bb("b.placing.value?.points.length === 1"));
+  await S("Input.dispatchMouseEvent", { type: "mouseMoved", ...p2, button: "none", buttons: 0 });
+  await waitFor("the ghost", 5000, () => evalJs("window.__bbGl.ghostTris > 0"));
+  await settled("the ghost", await loops());
+  const hG = await evalJs(hash);
+  const esc = await held("Escape", async () => {
+    for (const type of ["keyDown", "keyUp"]) await S("Input.dispatchKeyEvent", { type, key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    return waitFor("placing off", 5000, () => bb("b.placing.value?.active === false"));
+  });
+  const revE = await bb("b.state.value.rev");
+  check("BUG1: frames held: a wall's first point and its ghost, then Escape -> 300 ms later the ghost; settled the picture before",
+    serr === null && hG !== h0 && esc.slept === hG && esc.now === h0 && revE === revG, `${serr} ghost ${hG} slept ${esc.slept} settled ${esc.now} before ${h0} rev ${revG} -> ${revE}`);
+  const bug1 = JSON.parse(await evalJs("(() => { window.__bug1.release(); return JSON.stringify(window.__bug1); })()"));
+  check("BUG1: frames held: no frame drawn at a buffer size other than the layout's", bug1.clears > onTime.clears && bug1.stale.length === 0,
+    `${bug1.clears} clears, stale: ${bug1.stale.slice(0, 3).join("; ")}`);
 
   // Files (ticket A5): ccoreOpenFile with a Blob (golden/bin/frame2.bimble, v2: 2 storeys), the
   // storeys and the mesh change; Export IFC4 and Save bytes; the ribbon's `new` (1 storey); the

@@ -406,6 +406,11 @@ interface GlStats {
   elementBox?: (id: string) => { min: number[]; max: number[] } | null;
   /** Q2: the ribbon's switches as drawn: edges on, the 3D camera orthographic, edge segments drawn last frame. */
   q2?: { edges: boolean; ortho: boolean; edgeSegs: number };
+  /** BUG1: frame loops run (each one takes the page's state and draws it when it changed), and what the last
+   *  draw drew: its frame number, the mesh's rev, the buffer size. A test reads the pixels after a loop that
+   *  began after its action, with the state's rev drawn at the canvas's layout size (no fixed sleep). */
+  loops?: number;
+  drawn?: { frame: number; rev: number | null; w: number; h: number };
 }
 declare global {
   interface Window {
@@ -1412,12 +1417,20 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   // ---- end of navigation ----
 
-  new ResizeObserver(() => {
+  // ---- BUG1: the drawing buffer takes the canvas's layout size at the frame, before the draw. A resize
+  // observer alone runs after the frame's rAF callbacks: the first frame after a layout change (the
+  // properties panel shown or gone with the selection) was drawn at the old size, stretched, then the
+  // observer's resize cleared it until the next frame. Assigned only on a change (a write clears). ----
+  const fitCanvas = (): void => {
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.max(1, Math.round(canvas.clientWidth * dpr));
-    canvas.height = Math.max(1, Math.round(canvas.clientHeight * dpr));
+    const w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+    if (canvas.width === w && canvas.height === h) return;
+    canvas.width = w;
+    canvas.height = h;
     dirty = true;
-  }).observe(canvas);
+  };
+  new ResizeObserver(fitCanvas).observe(canvas);
+  // ---- end BUG1 ----
 
   /** A press held on the canvas; `orbit`: the pivot of an orbit drag (NAV1), picked when it starts (null: the target). */
   let drag: { pan: boolean; box: boolean; annot?: string; x: number; y: number; x0: number; y0: number; moved: boolean; orbit?: V3 | null } | null = null;
@@ -1737,10 +1750,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       gl.bufferData(gl.ARRAY_BUFFER, colours(), gl.DYNAMIC_DRAW);
       dirty = true;
     }
+    fitCanvas(); // BUG1
     if (dirty) {
       dirty = false;
       draw();
+      stats.drawn = { frame: stats.frames, rev: mesh?.rev ?? null, w: canvas.width, h: canvas.height }; // BUG1
     }
+    stats.loops = (stats.loops ?? 0) + 1; // BUG1
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
