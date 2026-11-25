@@ -865,6 +865,7 @@ function refresh(modelChanged: boolean): void {
     storeys.value = tryQuery<StoreySummary[]>("storeys", []);
     materials.value = tryQuery<MaterialSummary[]>("materials", []);
     project.value = tryQuery<ProjectSummary | null>("project", null);
+    refreshNorth(); // G2: project north (viewcube.ts projectNorth) and the setting-out panel
   }
   // A model is loaded and its first refresh is done (deeplink.ts then sets data-bb-ready for the design check).
   if (state.value.file !== null && actions.value.length > 0) resolveModel();
@@ -1259,3 +1260,47 @@ export function paletteMatch(q: string, items: string[]): number[] {
 export function recentActions(): string[] {
   return query<string[]>("recent_actions");
 }
+
+// ---- G2: levels, grids and the georeference (ccore/src/verbs_levels.c, src/georef.c, query.c
+// `grids`, `north`, `coordinates`; session/views.h `grid_axes`). C additions (ADR 0045, 0056):
+// Rust's bridge has none of them, so every read falls back to empty and every verb answers its
+// "unknown verb" text there. ----
+
+/** `query("storeys")` when the model uses levels or grids: is_storey and height_mm (query.c q_storeys). */
+export type LevelSummary = StoreySummary & { is_storey?: boolean; height_mm?: number | null };
+export interface GridAxisSummary { id: string; tag: string; start_mm: [number, number]; end_mm: [number, number] }
+/** `query("grids")`: the model's grids by id, axes in order. */
+export interface GridSummary { id: string; name: string; axes: GridAxisSummary[] }
+export const grids = () => tryQuery<GridSummary[]>("grids", []);
+/** `query("grid_axes")`: the axes (plan, world mm) and levels of what is open, then of each link. */
+export interface GridAxesScene {
+  axes: { tag: string; start_mm: [number, number]; end_mm: [number, number] }[];
+  levels: { elevation_mm: number; key: string; name: string }[];
+}
+export type GridAxes = GridAxesScene & { links: (GridAxesScene & { name: string; visible: boolean })[] };
+export const gridAxes = () => tryQuery<GridAxes | null>("grid_axes", null);
+/** `query("state").editable`: an editable model is open (false for a read-only IFC or viewer file). */
+export const editableNow = () => tryQuery<{ editable?: boolean }>("state", {}).editable === true;
+
+export const levelAdd = (name: string, level_mm: number, storey?: boolean) =>
+  runVerb("level_add", storey === undefined ? { name, level_mm } : { name, level_mm, storey });
+export const levelSet = (id: string, patch: { name?: string; level_mm?: number; storey?: boolean }) => runVerb("level_set", { id, ...patch });
+export const levelRemove = (id: string) => runVerb("level_remove", { id });
+/** A rectangular grid: axes at `x` (numbered 1, 2…) and at `y` (lettered A, B…), as the verb tags them. */
+export const gridAdd = (name: string, x: number[], y: number[], tags?: string[]) =>
+  runVerb("grid_add", tags ? { name, x, y, tags } : { name, x, y });
+export const gridAxisSet = (grid: string, axis: string, patch: { tag?: string; start?: [number, number]; end?: [number, number] }) =>
+  runVerb("grid_axis_set", { grid, axis, ...patch });
+export const gridRemove = (id: string) => runVerb("grid_remove", { id });
+
+/** `query("north")`: the georeference as the viewport turns by it; null without an editable model. */
+export interface NorthInfo { crs: string | null; has_map: boolean; map_rotation_deg: number; plan_turn_project: number; plan_turn_true: number; rotation_deg: number }
+export const northInfo = shallowRef<NorthInfo | null>(null);
+export const refreshNorth = () => (northInfo.value = tryQuery<NorthInfo | null>("north", null));
+/** `query("coordinates")`: a world point (mm) in the survey system (m) and its status bar text. */
+export interface Coordinates { survey: [number, number, number]; text: string; wgs84: [number, number] | null; world_mm: [number, number, number] }
+export const coordinates = (at: [number, number, number], system?: string) =>
+  tryQuery<Coordinates | null>("coordinates", null, system ? { at, system } : { at });
+export type GeorefPatch = { crs?: string; east_m?: number; north_m?: number; height_m?: number; rotation_deg?: number; map_rotation_deg?: number; clear?: boolean };
+export const georefSet = (patch: GeorefPatch) => runVerb("georef_set", patch);
+// ---- end G2 ----

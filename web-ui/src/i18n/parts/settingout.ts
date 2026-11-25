@@ -1,8 +1,8 @@
 // Copy for the Setting out tab's left panel (A6, fr/Implantation.html .props).
 export const fr = {
   "settingout.title": "Point de base du projet",
-  "settingout.east": "Est (LV95)",
-  "settingout.north": "Nord (LV95)",
+  "settingout.east": "Est",
+  "settingout.north": "Nord",
   "settingout.elevation": "Altitude",
   "settingout.angle": "Angle vers le nord géo.",
   "settingout.system": "Système",
@@ -13,11 +13,15 @@ export const fr = {
   "settingout.trueNorth": "Nord géo.",
   "settingout.shown": "Coordonnées affichées",
   "settingout.move": "Déplacer le point de base…",
+  "settingout.mapAngle": "Rotation de la carte",
+  "settingout.badNumber": "Un nombre est attendu",
+  "settingout.basePoint": "Point de base",
+  "settingout.noModel": "Pas de modèle modifiable ouvert : le géoréférencement se règle sur un .bimble.",
 };
 export const en: Record<keyof typeof fr, string> = {
   "settingout.title": "Project base point",
-  "settingout.east": "East (LV95)",
-  "settingout.north": "North (LV95)",
+  "settingout.east": "East",
+  "settingout.north": "North",
   "settingout.elevation": "Elevation",
   "settingout.angle": "Angle to true north",
   "settingout.system": "System",
@@ -28,4 +32,8 @@ export const en: Record<keyof typeof fr, string> = {
   "settingout.trueNorth": "True north",
   "settingout.shown": "Coordinates shown",
   "settingout.move": "Move the base point…",
+  "settingout.mapAngle": "Map rotation",
+  "settingout.badNumber": "A number is expected",
+  "settingout.basePoint": "Base point",
+  "settingout.noModel": "No editable model open: the georeference is set on a .bimble.",
 };
