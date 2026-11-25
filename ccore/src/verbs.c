@@ -33,41 +33,7 @@ static double of_bits(uint64_t u) {
     return x;
 }
 
-double cc_sqrt(double x) {
-    uint64_t u = bits_of(x);
-    int e = (int)((u >> 52) & 0x7FF);
-    uint64_t m = u & 0xFFFFFFFFFFFFFull;
-    if (x != x || x == 0.0) return x;     /* NaN, +-0 */
-    if (u >> 63) return (x - x) / (x - x); /* negative: NaN */
-    if (e == 0x7FF) return x;              /* +inf */
-    if (e == 0) {                          /* subnormal: normalize */
-        e = 1;
-        while (!(m & (1ull << 52))) m <<= 1, e--;
-    } else {
-        m |= 1ull << 52;
-    }
-    int E = e - 1023 - 52; /* x = m * 2^E, m in [2^52, 2^53) */
-    if (E & 1) m <<= 1, E -= 1;
-    /* q = floor(sqrt(m * 2^54)), 54 bits, bit by bit over the 108-bit radicand hi:lo. */
-    uint64_t hi = m >> 10, lo = m << 54;
-    uint64_t q = 0, r = 0;
-    for (int k = 53; k >= 0; k--) {
-        int b = 2 * k; /* bit index of the low bit of this pair */
-        uint64_t pair = b >= 64 ? (hi >> (b - 64)) & 3 : (lo >> b) & 3;
-        r = (r << 2) | pair;
-        uint64_t t = (q << 2) | 1;
-        q <<= 1;
-        if (r >= t) r -= t, q |= 1;
-    }
-    /* sqrt(x) = q' * 2^(E/2 - 27); round the last bit away (a tie is impossible for sqrt). */
-    uint64_t round = q & 1;
-    q >>= 1;
-    if (round) q++;
-    int k2 = E / 2 - 26;
-    if (q == (1ull << 53)) q >>= 1, k2++;
-    int be = k2 + 52 + 1023;
-    return of_bits(((uint64_t)be << 52) | (q & 0xFFFFFFFFFFFFFull));
-}
+/* cc_sqrt: the one in scene.c (correctly rounded; one definition for the whole core). */
 
 /* a*b = p + *e exactly (Veltkamp split, Dekker product; no overflow in hypot's range). */
 static double two_prod(double a, double b, double *e) {

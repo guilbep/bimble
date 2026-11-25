@@ -21,5 +21,5 @@ int cc_verb_run(const cc_model *m, const char *name, const char *args, size_t n,
 
 /* f64::hypot. Natively the C core links no libm, so this is the C core's own; see verbs.c. */
 double cc_hypot(double x, double y);
-double cc_sqrt(double x); /* correctly rounded, as IEEE sqrt */
+#include "scene.h" /* cc_sqrt */
 #endif
