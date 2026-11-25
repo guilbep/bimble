@@ -12,8 +12,9 @@
 //           `query elements` (the default 1000 rows, and limit 10000: the hard cap, as Rust's
 //           dispatch), `query element` (one id): median / p95 of RUNS calls,
 //           response bytes; `verb place` (a column) then `POST /undo/-`: median of RUNS pairs.
-//  mesh     first GET /mesh (scene build: the host's log line "built in N ms", bytes), then a
-//           cached GET (same rev: no build), median of RUNS.
+//  mesh     the first `query status` (builds the scene), then the first GET /mesh (the host's log
+//           line "built in N ms": serialization, plus the scene when not shared), bytes; then a
+//           cached GET (same rev: no build), median of RUNS; after each place, GET /mesh again.
 //  session  the host with --session on a fresh copy: place + undo pairs; per change, the call
 //           time with --session minus the same call without (the median difference is the file
 //           write); the file's size; then SIGTERM and restart: spawn -> "listening" with the
@@ -153,7 +154,11 @@ async function hostBench(bin, model) {
   r.start_ms = { median: r1(median(starts)), p95: r1(p95(starts)), runs: starts.map(r1) };
   r.after_load = rss(h.pid);
   const A = api(P_HOST);
-  const st = await A.q("status");
+  // The first `query status` after the load builds the scene (calls.c scene_now; since the T16
+  // scene-sharing fix, GET /mesh then reuses it): time it, with the first /mesh below.
+  const stc = await A.call("query", "status");
+  const st = JSON.parse(stc.text);
+  r.status_first_ms = r1(stc.ms);
   r.status_load_ms = r1(st.load_ms);
   // query elements / element
   // `query elements`: the default limit (1000 rows) and the hard cap (limit 10000), as Rust.
