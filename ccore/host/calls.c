@@ -21,6 +21,7 @@
 #include "json_r.h"
 #include "json_w.h"
 #include "library.h"
+#include "mesh.h"
 #include "query.h"
 #include "scene.h"
 #include "session.h"
@@ -166,6 +167,8 @@ static const cc_scene *scene_now(void) {
     }
     return g_scene_ok ? &g_scene : NULL;
 }
+
+const cc_scene *cc_host_scene(void) { return scene_now(); }
 
 /* ---- history step ids and selection (lib.rs:1725-1805) ---- */
 

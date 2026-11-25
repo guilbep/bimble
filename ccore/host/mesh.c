@@ -43,12 +43,12 @@ static int fail(cc_error *err, const char *msg) {
     return -1;
 }
 
-int cc_mesh_bmsh(const cc_model *m, uint32_t rev, Buf *out, cc_error *err) {
-    cc_scene s;
+/* BMSH of a built scene. */
+static int bmsh_of(const cc_scene *sp, uint32_t rev, Buf *out, cc_error *err) {
+    const cc_scene s = *sp;
     int rc = -1;
     Arena tmp;
     arena_init(&tmp, 0);
-    if (cc_scene_build(&s, m, err) != 0) goto done;
     size_t ne = s.nelements;
     cc_mesh *w = ne ? arena_alloc(&tmp, ne * sizeof *w, 16) : NULL;
     if (ne && !w) { fail(err, "out of memory"); goto done; }
@@ -95,8 +95,14 @@ int cc_mesh_bmsh(const cc_model *m, uint32_t rev, Buf *out, cc_error *err) {
     if (out->oom) { fail(err, "out of memory"); goto done; }
     rc = 0;
 done:
-    cc_scene_free(&s);
     arena_free(&tmp);
+    return rc;
+}
+
+int cc_mesh_bmsh(const cc_model *m, uint32_t rev, Buf *out, cc_error *err) {
+    cc_scene s;
+    int rc = cc_scene_build(&s, m, err) != 0 ? -1 : bmsh_of(&s, rev, out, err);
+    cc_scene_free(&s);
     return rc;
 }
 
@@ -132,7 +138,10 @@ int cc_mesh_get(const char **p, size_t *n, uint32_t *rev, double *build_ms) {
         double t0 = now_ms();
         buf_clear(&cache);
         cache.oom = 0;
-        if (cc_mesh_bmsh(m, *rev, &cache, &err) != 0) {
+        /* The session's scene of this rev (calls.c builds it once per rev for query status),
+         * not a second build; when it has none (or it failed), a build here gives the error. */
+        const cc_scene *sc = cc_host_scene();
+        if ((sc ? bmsh_of(sc, *rev, &cache, &err) : cc_mesh_bmsh(m, *rev, &cache, &err)) != 0) {
             buf_clear(&cache);
             cache.oom = 0;
             buf_puts(&cache, err.msg);

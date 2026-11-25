@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "buf.h"
 #include "model.h"
+#include "scene.h"
 
 #define CC_BMSH_VERSION 1u
 
@@ -21,4 +22,9 @@ const cc_model *cc_mesh_model(uint32_t *rev, cc_error *err);
  * the BMSH bytes, 404 (no model) or 500 (the scene cannot be built) with a UTF-8 text. `*p`
  * stays valid until the next call. `*build_ms` is the build time, 0 when served from cache. */
 int cc_mesh_get(const char **p, size_t *n, uint32_t *rev, double *build_ms);
+
+/* calls.c: the scene of the model cc_mesh_model() returns, at its revision, built once per
+ * revision and shared by query status and GET /mesh; NULL when there is no model or the build
+ * failed. */
+const cc_scene *cc_host_scene(void);
 #endif
