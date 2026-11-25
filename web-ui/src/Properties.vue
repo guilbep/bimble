@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { t } from "./i18n";
 import { viewName } from "./shell/viewName";
-import { state, element, rename, runVerb, setGenerator, setMaterial, setView, materials, openViews, storeys, type ElementDetail, type ViewSummary } from "./bimble";
+import { state, element, query, rename, runVerb, setGenerator, setMaterial, setView, materials, openViews, storeys, type ElementDetail, type ViewSummary } from "./bimble";
 import { classNoun, parseMm } from "./i18n/parts/modify";
 
 // Rendered inside `.props` (LeftPanel): rows as fr/View3D.html (view) and fr/SelectModify.html (element).
@@ -12,6 +12,20 @@ const name = ref("");
 const renameError = ref<string | null>(null);
 
 const one = computed(() => (state.value.selection.length === 1 ? state.value.selection[0] ?? null : null));
+
+// Read-only: the selected element is in a linked model (on_change `linked`), or the file is open as it is
+// (an IFC, a .bimbleview: `query("state").editable` false, and every model query answers "read only").
+const linkedName = computed(() => {
+  const lk = state.value.linked;
+  return lk && lk.id === one.value ? lk.link.replace(/\.[^.]+$/, "") : null;
+});
+const fileReadOnly = computed(() => {
+  if (!state.value.file) return false;
+  try { return query<{ editable?: boolean }>("state").editable === false; } catch { return false; }
+});
+const readOnly = computed(() =>
+  linkedName.value !== null ? { kind: "linked", text: t("props.linkedReadOnly", { name: linkedName.value }) }
+  : fileReadOnly.value ? { kind: "file", text: t("props.fileReadOnly") } : null);
 
 // Reload on selection or model change (rev). The watcher runs after the frame, so the viewer is free.
 watch(
@@ -137,9 +151,13 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
   <p v-if="state.selection.length > 1" class="pn" style="display:flex;align-items:center;gap:8px">
     <span class="dot" style="background:var(--bb-selection)" aria-hidden="true" />{{ t('props.selected', { n: state.selection.length }) }}
   </p>
+  <!-- A file open as it is has no element detail (the core answers "read only"): the line, not an error. -->
+  <p v-else-if="loadError && readOnly" class="ro" data-bb="props-readonly"><span class="dot" aria-hidden="true" />{{ readOnly.text }}</p>
   <p v-else-if="loadError" class="error" role="alert">{{ t('props.error', { msg: loadError }) }}</p>
   <template v-else-if="detail">
     <div class="pn" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:var(--bb-selection)" />{{ title }}</div>
+    <!-- Slate is "other": a linked model (bimble-design colour jobs). -->
+    <p v-if="readOnly" class="ro" data-bb="props-readonly"><span class="dot" :class="{ linked: readOnly.kind === 'linked' }" aria-hidden="true" />{{ readOnly.text }}</p>
     <div class="row">
       <label class="k" for="el-name">{{ t('props.name') }}</label>
       <input
@@ -147,6 +165,7 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
         v-model="name"
         class="inp"
         style="width:150px"
+        :disabled="readOnly !== null"
         :aria-invalid="renameError ? 'true' : 'false'"
         aria-describedby="el-name-error"
         @keydown.enter="commit"
@@ -159,7 +178,7 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
     <div class="row"><span class="k">{{ t('props.storey') }}</span><span>{{ detail.storey_name ?? "—" }}</span></div>
     <div class="row">
       <label class="k" for="el-material">{{ t('props.material') }}</label>
-      <select id="el-material" class="sel-inp" style="width:150px" :value="detail.material_name ?? ''"
+      <select id="el-material" class="sel-inp" style="width:150px" :value="detail.material_name ?? ''" :disabled="readOnly !== null"
               :aria-invalid="materialError ? 'true' : 'false'" @change="commitMaterial">
         <option v-for="x in materials" :key="x.id" :value="x.name">{{ x.name }}</option>
       </select>
@@ -174,7 +193,7 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
       <div v-for="[k, v] in sizes" :key="k" class="row">
         <label class="k" :for="`el-${k}`">{{ dimLabel(k) }}</label>
         <span style="display:inline-flex;align-items:center;gap:6px">
-          <input :id="`el-${k}`" :key="`${detail.id}:${k}:${v}`" class="inp mono" :value="grouped(v)" style="width:96px;text-align:right"
+          <input :id="`el-${k}`" :key="`${detail.id}:${k}:${v}`" class="inp mono" :value="grouped(v)" style="width:96px;text-align:right" :disabled="readOnly !== null"
                  :aria-invalid="sizeError ? 'true' : 'false'" @keydown.enter="commitSize(k, v, $event)" @blur="commitSize(k, v, $event)" />
           <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
         </span>
@@ -184,7 +203,7 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
     <div class="row">
       <label class="k" for="el-origin-z">{{ t('modify.originZ') }}</label>
       <span style="display:inline-flex;align-items:center;gap:6px">
-        <input id="el-origin-z" :key="`${detail.id}:${originZ}`" class="inp mono" :value="grouped(originZ)" style="width:96px;text-align:right"
+        <input id="el-origin-z" :key="`${detail.id}:${originZ}`" class="inp mono" :value="grouped(originZ)" style="width:96px;text-align:right" :disabled="readOnly !== null"
                :aria-invalid="zError ? 'true' : 'false'" @keydown.enter="commitZ" @blur="commitZ" />
         <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
       </span>
@@ -253,5 +272,10 @@ p.row { margin: 0; }
 .sec { font-size: 12px; font-family: 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--bb-stone); margin-top: 6px; }
 /* .dot{width:12px;height:12px;border-radius:50%;border:1px solid #141414;display:inline-block;flex:none} */
 .dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--bb-ink); display: inline-block; flex: none; }
+/* The read-only line: ink text, a disc with a 1px ink outline (slate for a linked model, sunk for a file). */
+.ro { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; font-size: 13.5px; color: var(--bb-ink); }
+.ro .dot { background: var(--bb-sunk); }
+.ro .dot.linked { background: var(--bb-slate); }
+.inp:disabled, .sel-inp:disabled { color: var(--bb-stone); background: var(--bb-sunk); cursor: default; }
 /* Error: ink text on an ochre band, with the word "Error". */
 </style>

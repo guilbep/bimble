@@ -13,7 +13,9 @@
 //     changes the scale and keeps the point under the pointer;
 //   place: placing a column, the pointer 40 mm off a column centre snaps to it (hover); a Shift
 //     click on a free plan point places an IfcColumn there on Niveau 1 (one history step);
-//   back to 3D: the 3D tab restores the 3D camera (yaw, pitch as before); a drag orbits again.
+//   back to 3D: the 3D tab restores the 3D camera (yaw, pitch as before); a drag orbits again;
+//   the status bar's hint: "Drag: orbit…" (status.hint) in 3D, "Drag: pan · Scroll: zoom"
+//     (status.hintPlan) in the plan, the 3D one again back in 3D (nothing selected each time).
 // No uncaught page error; no console error but the sync-XHR deprecation and the favicon 404.
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills all it starts.
 import { spawn } from "node:child_process";
@@ -220,12 +222,21 @@ async function main() {
   };
 
   const camera = async () => (await gl()).camera;
+  /** The status bar's hint once it is the text of `key` (3 s), else the hint shown. */
+  const hintIs = async (key) => {
+    const want = await evalJs(`(async () => (await import('/src/i18n/index.ts')).t('${key}'))()`);
+    const now = () => evalJs(`document.querySelector('[data-bb="status-hint"]')?.textContent ?? null`);
+    const got = await waitFor(`the hint ${key}`, 3000, async () => ((await now()) === want ? want : null)).catch(() => now());
+    return { ok: got === want, detail: `${JSON.stringify(got)}, want ${JSON.stringify(want)}` };
+  };
   const N1 = "1uAZA0Yfn05f$xRd1k4uPR";
   const ov = await B("return b.openViews.value;");
   check("open_views: 3D and the 6 default plans", ov.views.length === 7 && ov.views[0].type === "three_d" && ov.views.filter((v) => v.type === "plan").length === 6, JSON.stringify(ov.views.map((v) => v.name)));
   const plan1 = ov.views.find((v) => v.type === "plan" && v.look === "down" && v.storey === N1);
   const cam3d = await camera();
   check("3D on load: the 3D camera", cam3d.mode === "3d" && cam3d.view === ov.views[0].id, JSON.stringify(cam3d));
+  const h3d = await hintIs("status.hint");
+  check("3D on load: the status bar's hint is the orbit one", h3d.ok && (await B("return b.state.value.selection.length;")) === 0, h3d.detail);
 
   // ---- 3D control: the beam B1.x00 (0, 0) -> (6000, 0) at z 2530..3030 is drawn ----
   const beam = (await B("return b.query('elements', { class: 'IfcBeam' }).map((e) => [e.id, e.name]);")).find((e) => e[1] === "B1.x00")[0];
@@ -262,6 +273,8 @@ async function main() {
   await settle();
   const camP = await camera();
   check("plan: orthographic top-down camera, looking down", camP.mode === "plan" && camP.view === plan1.id && camP.look === "down", JSON.stringify(camP));
+  const hPlan = await hintIs("status.hintPlan");
+  check("plan: the status bar's hint is pan and zoom, no orbit", hPlan.ok && (await B("return b.state.value.selection.length;")) === 0, hPlan.detail);
   await shot("plan");
 
   // ---- the cut: a column as a filled square at the cut shade ----
@@ -345,6 +358,10 @@ async function main() {
   await waitFor("the 3D camera", 5000, async () => (await camera()).mode === "3d");
   const cam3 = await camera();
   check("3D: the 3D camera back (yaw, pitch as before the plan)", cam3.view === ov.views[0].id && cam3.yaw === cam3d.yaw && cam3.pitch === cam3d.pitch, JSON.stringify(cam3));
+  await B("return b.select([]);"); // the placed column may be selected: the selection's hint comes first
+  await waitFor("nothing selected", 5000, async () => (await B("return b.state.value.selection.length;")) === 0);
+  const hBack = await hintIs("status.hint");
+  check("3D again: the status bar's hint is the orbit one again", hBack.ok, hBack.detail);
   const cx = await evalJs("(() => { const r = document.getElementById('bimble').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()");
   await S("Input.dispatchMouseEvent", { type: "mousePressed", x: cx[0], y: cx[1], button: "left", buttons: 1, clickCount: 1 });
   for (let k = 1; k <= 5; k++) await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx[0] + 10 * k, y: cx[1], button: "left", buttons: 1 });

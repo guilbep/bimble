@@ -36,7 +36,13 @@ const hintText = (): string => {
   if (p) return t(p);
   // D2: on paper the reference shows the Dimension tool's hint; Rust has no "sheet tool active" state, so on paper at all.
   if (openViews.value.paper?.on) return t("onpaper.hint");
-  return t(state.value.selection.length && !page() ? "shell.selectionHint" : "status.hint");
+  if (state.value.selection.length && !page()) return t("shell.selectionHint");
+  return t(planShown() ? "status.hintPlan" : "status.hint");
+};
+// The main view shows a plan (or a ceiling plan): a drag pans, there is no orbit (glviewport.ts, plan views).
+const planShown = (): boolean => {
+  const cur = openViews.value.current;
+  return cur?.type === "view" && openViews.value.views.some((v) => v.id === cur.id && v.type === "plan");
 };
 const chips = (): Chip[] => {
   const v = visibility.value;

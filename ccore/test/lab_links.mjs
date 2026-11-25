@@ -7,9 +7,11 @@
 // tint, style.rs 190,214,238 shaded, and its edges in 52,110,180); a click on a linked element sends
 // POST /select/- {link, ids}, the change feed's `linked` names it, the properties panel shows its
 // name and GlobalId; editing its name is refused (an error shown, nothing changed: rev, the
-// linked element's name); hiding the link (manage_links hide) removes its pixels; no uncaught page
-// error, no console error but the listed ones. Prints pixel counts, "N passed, M failed"; exits
-// non-zero on a failure. Kills all it starts.
+// linked element's name); the panel says "Linked model, read-only" with the link's name above the
+// fields, and the name field is disabled; hiding the link (manage_links hide) removes its pixels; no
+// uncaught page error, no console error but the listed ones. Every pixel read waits for a frame drawn
+// after the change it tests (`drawnAfter`, lab_section's `settle`). Prints pixel counts,
+// "N passed, M failed"; exits non-zero on a failure. Kills all it starts.
 import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -149,6 +151,21 @@ async function main() {
   const evalJs = async (expr) => (await S("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result.value;
   await waitFor("the first drawn frame", 30000, () => evalJs("window.__bbGl && window.__bbGl.firstFrameMs"));
   await sleep(500);
+  const frames = () => evalJs("window.__bbGl.frames");
+  /** The canvas shows a change: `cond` holds (the change reached the page), a frame was counted since
+   *  `f0` (the count taken before the change) and the viewport's loop turned after `cond` was seen
+   *  (two animation frames: its draw of the change is in that turn or before). False on a timeout. */
+  const drawnAfter = async (f0, what, cond) => {
+    try {
+      await waitFor(what, 10000, cond);
+      await evalJs("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))");
+      await waitFor(`a frame drawn after: ${what}`, 5000, async () => (await frames()) > f0);
+      return true;
+    } catch (e) {
+      console.log(`not drawn: ${e.message}`);
+      return false;
+    }
+  };
 
   // Pixels: the link's faces (reference blue, shaded: b > g > r, b - r >= 25, not the steel or
   // glass fills of the open model: those are counted before the link) and its edges (52,110,180).
@@ -171,12 +188,14 @@ async function main() {
   check("before: no link in the mesh", st0.links.length === 0 && st0.linkTris === 0, JSON.stringify(st0.links));
 
   // Link through the client (bimble.ts linkModel -> action link_model {path}).
+  const fLink = await frames();
   const err = await evalJs(`(async () => (await import('/src/bimble.ts')).linkModel(${JSON.stringify(LINK)}))()`);
   check("linkModel(path) through the client -> no error", err === null, String(err));
   const st1 = await waitFor("the viewport's mesh with the link", 10000, async () => {
     const s = JSON.parse(await evalJs("JSON.stringify(window.__bbGl)"));
     return s.links.length === 1 && s.linkTris > 0 ? s : null;
   });
+  await drawnAfter(fLink, "the link drawn", async () => true);
   console.log(`after the link: mesh ${st1.meshBytes} bytes, links ${JSON.stringify(st1.links)}, link triangles drawn ${st1.linkTris}`);
   check("the viewport refetched /mesh with the link", st1.meshBytes > st0.meshBytes && st1.links[0].name === "mapped_item.ifc" && st1.links[0].elements === 5,
     JSON.stringify(st1.links));
@@ -200,7 +219,7 @@ async function main() {
   })()`));
   check("a linked element under some pixel (pick)", target !== null && target.link === "mapped_item.ifc", JSON.stringify(target));
   if (target) {
-    const before = selects.length;
+    const before = selects.length, fClick = await frames();
     for (const type of ["mouseMoved", "mousePressed", "mouseReleased"])
       await S("Input.dispatchMouseEvent", { type, x: target.x, y: target.y, button: type === "mouseMoved" ? "none" : "left", buttons: type === "mousePressed" ? 1 : 0, clickCount: 1 });
     await waitFor("POST /select/-", 5000, () => selects.length > before).catch(() => {});
@@ -215,11 +234,25 @@ async function main() {
       `document.body.innerText.includes(${JSON.stringify(target.id)}) && document.body.innerText.includes(${JSON.stringify(el.name)}) ? document.getElementById('el-name')?.value ?? '' : null`)).catch(() => null);
     console.log(`properties: name field ${JSON.stringify(shown)}, element ${JSON.stringify(el)}`);
     check("the properties panel shows the linked element (its GlobalId and name)", shown === el.name, String(shown));
+    // The selection colour: read once the page has the selection and a frame is drawn after it.
+    const selDrawn = await drawnAfter(fClick, "the linked element selected in the page", () => evalJs(`(async () => {
+      const b = await import('/src/bimble.ts'); const l = b.state.value.linked;
+      return l?.id === ${JSON.stringify(target.id)} && l.link === 'mapped_item.ifc'; })()`));
     const pink = await evalJs(`(() => { const c = document.getElementById('bimble'), g = c.getContext('webgl2');
       const p = new Uint8Array(c.width * c.height * 4); g.readPixels(0, 0, c.width, c.height, g.RGBA, g.UNSIGNED_BYTE, p);
       let n = 0; for (let i = 0; i < p.length; i += 4) if (p[i] - p[i + 1] > 20 && p[i + 2] > p[i + 1] && p[i] > 120) n++; return n; })()`);
-    check("the selected linked element is drawn in the selection colour", pink > 50, `${pink} px`);
-    // Cannot edit: type a new name, Enter.
+    check("the selected linked element is drawn in the selection colour", selDrawn && pink > 50, `${pink} px${selDrawn ? "" : ", no frame drawn after the selection"}`);
+    // Read-only: the line above the fields names the link; the name field is disabled.
+    const ro = JSON.parse(await evalJs(`(async () => {
+      const { t } = await import('/src/i18n/index.ts');
+      const line = document.querySelector('[data-bb="props-readonly"]'), name = document.getElementById('el-name');
+      return JSON.stringify({ line: line?.textContent.trim() ?? null, want: t('props.linkedReadOnly', { name: 'mapped_item' }),
+        above: !!(line && name && (line.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING)), disabled: name?.disabled ?? null });
+    })()`));
+    console.log(`read-only line ${JSON.stringify(ro.line)}, name field disabled ${ro.disabled}`);
+    check("the read-only line names the link, above the fields", ro.line === ro.want && ro.above, JSON.stringify(ro));
+    check("the linked element's name field is disabled", ro.disabled === true, String(ro.disabled));
+    // Cannot edit: force a new name into the (disabled) field, Enter: nothing changes.
     const rev0 = c.rev;
     const edit = await evalJs(`(async () => {
       const i = document.getElementById('el-name');
@@ -233,24 +266,25 @@ async function main() {
     const el2 = JSON.parse((await hq("element", { id: target.id, link: "mapped_item.ifc" })).text);
     const c2 = await hchange();
     console.log(`edit attempt: alert ${JSON.stringify(edit)}`);
-    check("editing the linked element's name is refused (an error shown)", /read only/.test(edit), edit);
     check("nothing changed: rev, the linked element's name, still selected", c2.rev === rev0 && el2.name === el.name && c2.linked?.id === target.id,
       `rev ${rev0} -> ${c2.rev}, name ${el2.name}`);
   }
 
   // Hide the link (Manage links): its pixels go.
+  const fHide = await frames();
   const herr = await evalJs(`(async () => (await import('/src/bimble.ts')).manageLink('hide', 'mapped_item.ifc'))()`);
-  await waitFor("the link hidden in the viewport", 10000, async () => {
+  const hidden = await drawnAfter(fHide, "the link hidden in the viewport", async () => {
     const s = JSON.parse(await evalJs("JSON.stringify(window.__bbGl)"));
     return s.links.length === 1 && s.links[0].visible === false && s.linkTris === 0;
-  }).catch(() => {});
+  });
   const p2 = await pixels();
   console.log(`after hide: tint ${p2.tint} px, link edges ${p2.edge} px`);
-  check("hide: no error, the link's pixels gone", herr === null && p2.tint <= p0.tint + 50 && p2.edge <= p0.edge + 10, `${herr} tint ${p2.tint}, edges ${p2.edge}`);
+  check("hide: no error, the link's pixels gone", hidden && herr === null && p2.tint <= p0.tint + 50 && p2.edge <= p0.edge + 10, `${herr} tint ${p2.tint}, edges ${p2.edge}`);
+  const fShow = await frames();
   const serr = await evalJs(`(async () => (await import('/src/bimble.ts')).manageLink('show', 'mapped_item.ifc'))()`);
-  await waitFor("the link shown again", 10000, async () => JSON.parse(await evalJs("JSON.stringify(window.__bbGl)")).linkTris > 0).catch(() => {});
+  const shownAgain = await drawnAfter(fShow, "the link shown again", async () => JSON.parse(await evalJs("JSON.stringify(window.__bbGl)")).linkTris > 0);
   const p3 = await pixels();
-  check("show: the link drawn again", serr === null && p3.tint > p0.tint + 200, `${serr} tint ${p3.tint}`);
+  check("show: the link drawn again", shownAgain && serr === null && p3.tint > p0.tint + 200, `${serr} tint ${p3.tint}`);
 
   const IGNORED = [
     /Synchronous XMLHttpRequest on the main thread is deprecated/,
