@@ -961,6 +961,51 @@ static int fillet_r(const double (*poly)[2], size_t n, const double *rad, double
     return 0;
 }
 
+/* fillet_g: corner i replaced with an arc of radius rad[i] (0: sharp) at any corner angle (ticket
+ * IFC3: the sloped profiles' corners are not right angles). The arc is tangent to both edges at
+ * rad / tan(half the corner angle) from the corner; a radius whose tangent points pass an edge's
+ * length, or a straight or folded-back corner, leaves the corner sharp. */
+static int fillet_g(const double (*poly)[2], size_t n, const double *rad, double tol, Loop *out) {
+    for (size_t i = 0; i < n; i++) {
+        const double *c = poly[i], *p = poly[(i + n - 1) % n], *q = poly[(i + 1) % n];
+        double r = rad[i];
+        double l1 = cc_sqrt((p[0] - c[0]) * (p[0] - c[0]) + (p[1] - c[1]) * (p[1] - c[1]));
+        double l2 = cc_sqrt((q[0] - c[0]) * (q[0] - c[0]) + (q[1] - c[1]) * (q[1] - c[1]));
+        double u1[2] = {0, 0}, u2[2] = {0, 0}, cs = 1.0, sn = 0.0;
+        if (l1 > 0.0 && l2 > 0.0) {
+            u1[0] = (p[0] - c[0]) / l1, u1[1] = (p[1] - c[1]) / l1;
+            u2[0] = (q[0] - c[0]) / l2, u2[1] = (q[1] - c[1]) / l2;
+            cs = u1[0] * u2[0] + u1[1] * u2[1];
+            sn = u1[0] * u2[1] - u1[1] * u2[0];
+            sn = sn < 0 ? -sn : sn;
+        }
+        /* tan(phi / 2) = sin phi / (1 + cos phi); sin(phi / 2) = sqrt((1 - cos phi) / 2) */
+        double th = 1.0 + cs > 1e-12 ? sn / (1.0 + cs) : 0.0, d = th > 1e-9 ? r / th : 0.0;
+        if (!(r > 0.0) || !(th > 1e-9) || sn < 1e-9 || d >= l1 || d >= l2) {
+            if (loop_push(out, c[0], c[1])) return -1;
+            continue;
+        }
+        double hs = cc_sqrt((1.0 - cs) / 2.0), b[2] = {u1[0] + u2[0], u1[1] + u2[1]};
+        double bl = cc_sqrt(b[0] * b[0] + b[1] * b[1]);
+        double center[2] = {c[0] + b[0] / bl * (r / hs), c[1] + b[1] / bl * (r / hs)};
+        double t1[2] = {c[0] + u1[0] * d, c[1] + u1[1] * d}, t2[2] = {c[0] + u2[0] * d, c[1] + u2[1] * d};
+        double mid[2] = {center[0] - b[0] / bl * r, center[1] - b[1] / bl * r};
+        if (arc2(t1, mid, t2, tol, out)) return -1;
+    }
+    return 0;
+}
+
+/* slope_tan: the tangent of the optional slope angle at attribute i (FlangeSlope, WebSlope,
+ * LegSlope: IfcPlaneAngleMeasure, in the file's angle unit); 0 when absent, not a number, not
+ * > 0 or not under 45 degrees. */
+static double slope_tan(R *r, const cc_step_entity *e, size_t i) {
+    double a;
+    if (!cc_sv_as_f64(arg(e, i), &a) || !finite(a)) return 0.0;
+    a *= r->angle_scale;
+    if (!(a > 0.0) || !(a < 3.141592653589793 / 4.0)) return 0.0;
+    return cc_sin(a) / cc_cos(a);
+}
+
 /* Attribute i: 1 when it is a finite number. */
 static int num(const cc_step_entity *e, size_t i, double *o) { return cc_sv_as_f64(arg(e, i), o) && finite(*o); }
 /* An optional radius: the value when a finite number > 0, else 0 (sharp). */
@@ -976,7 +1021,7 @@ static int param_profile(R *r, const cc_step_entity *e, Loops *out) {
     double c[PP_MAX][2], rad[PP_MAX] = {0};
     size_t n = 0;
     double v[8] = {0};
-    int ok = 1;
+    int ok = 1, sloped = 0;
     if (is(e, "IFCLSHAPEPROFILEDEF")) {
         /* Depth, Width (IFC2X3: optional, then Depth), Thickness, FilletRadius, EdgeRadius. */
         ok = num(e, 3, &v[0]) && num(e, 5, &v[2]);
@@ -984,6 +1029,16 @@ static int param_profile(R *r, const cc_step_entity *e, Loops *out) {
         double y = v[0] / 2.0, x = v[1] / 2.0, d = v[2];
         ok = ok && y > 0 && x > 0 && d > 0 && d < 2 * x && d < 2 * y;
         double p[6][2] = {{-x, -y}, {x, -y}, {x, -y + d}, {-x + d, -y + d}, {-x + d, y}, {-x, y}};
+        /* LegSlope (8): each leg's inner face turned by the slope, the thickness kept at the
+         * box's centre lines (x = 0, y = 0, as IfcOpenShell 0.8 draws it), thinner toward the
+         * toes; the inner corner where the two faces meet. */
+        double t = slope_tan(r, e, 8);
+        if (ok && t > 0.0) {
+            double X = (-x + d + t * (y - d)) / (1.0 - t * t), Y = -y + d - X * t;
+            p[2][1] = -y + d - x * t, p[3][0] = X, p[3][1] = Y, p[4][0] = -x + d - y * t;
+            ok = p[2][1] > -y && p[4][0] > -x && X > -x && X < x && Y > -y && Y < y;
+            sloped = 1;
+        }
         memcpy(c, p, sizeof p), n = 6;
         rad[3] = opt_r(e, 6), rad[2] = rad[4] = opt_r(e, 7);
     } else if (is(e, "IFCTSHAPEPROFILEDEF")) {
@@ -993,6 +1048,21 @@ static int param_profile(R *r, const cc_step_entity *e, Loops *out) {
         double y = v[0] / 2.0, x = v[1] / 2.0, tw = v[2] / 2.0, tf = v[3];
         ok = ok && y > 0 && x > 0 && tw > 0 && tf > 0 && tw < x && tf < 2 * y;
         double p[8][2] = {{tw, -y}, {tw, y - tf}, {x, y - tf}, {x, y}, {-x, y}, {-x, y - tf}, {-tw, y - tf}, {-tw, -y}};
+        /* WebSlope (10), FlangeSlope (11): the web's faces turned by the web slope, its
+         * thickness kept at mid-depth (y = 0), thinner toward the toe; the flange's underside
+         * turned by the flange slope, its thickness kept at a quarter of FlangeWidth from the
+         * centre (IfcOpenShell 0.8 keeps it there at the tip; at the web it uses x/2 - WebThickness
+         * where x/2 - WebThickness/2 keeps the slope: see DEVIATIONS.md section 10); the corners
+         * where web and flange meet. */
+        double sw = slope_tan(r, e, 10), sf = slope_tan(r, e, 11);
+        if (ok && (sw > 0.0 || sf > 0.0)) {
+            double yj = (y - tf - x / 2.0 * sf + sf * tw) / (1.0 - sf * sw), xj = tw + yj * sw, xb = tw - y * sw,
+                   yt = y - tf + x / 2.0 * sf;
+            double q[8][2] = {{xb, -y}, {xj, yj}, {x, yt}, {x, y}, {-x, y}, {-x, yt}, {-xj, yj}, {-xb, -y}};
+            memcpy(p, q, sizeof q);
+            ok = xb > 0 && yt < y && yj > -y && yj <= yt && xj < x;
+            sloped = 1;
+        }
         memcpy(c, p, sizeof p), n = 8;
         rad[1] = rad[6] = opt_r(e, 7), rad[2] = rad[5] = opt_r(e, 8), rad[0] = rad[7] = opt_r(e, 9);
     } else if (is(e, "IFCUSHAPEPROFILEDEF")) {
@@ -1003,6 +1073,16 @@ static int param_profile(R *r, const cc_step_entity *e, Loops *out) {
         ok = ok && y > 0 && x > 0 && tw > 0 && tf > 0 && tw < 2 * x && 2 * tf < 2 * y;
         double p[8][2] = {{-x, -y}, {x, -y}, {x, -y + tf}, {-x + tw, -y + tf},
                           {-x + tw, y - tf}, {x, y - tf}, {x, y}, {-x, y}};
+        /* FlangeSlope (9): the flanges' inner faces turned by the slope, the thickness kept at
+         * half FlangeWidth from the web's back (x = 0, as IfcOpenShell 0.8), thinner toward the
+         * toes. */
+        double t = slope_tan(r, e, 9);
+        if (ok && t > 0.0) {
+            double dy2 = x * t, dy1 = (x - tw) * t;
+            p[2][1] = -y + tf - dy2, p[3][1] = -y + tf + dy1, p[4][1] = y - tf - dy1, p[5][1] = y - tf + dy2;
+            ok = p[2][1] > -y && p[3][1] < p[4][1];
+            sloped = 1;
+        }
         memcpy(c, p, sizeof p), n = 8;
         rad[3] = rad[4] = opt_r(e, 7), rad[2] = rad[5] = opt_r(e, 8);
     } else if (is(e, "IFCCSHAPEPROFILEDEF")) {
@@ -1082,7 +1162,7 @@ static int param_profile(R *r, const cc_step_entity *e, Loops *out) {
         return 0;
     }
     Loop l = {0};
-    if (fillet_r((const double(*)[2])c, n, rad, r->arc_tol, &l) || loops_push(out, l)) {
+    if ((sloped ? fillet_g : fillet_r)((const double(*)[2])c, n, rad, r->arc_tol, &l) || loops_push(out, l)) {
         free(l.p);
         return -1;
     }
@@ -1143,7 +1223,17 @@ static int profile(R *r, const cc_sv *v, int depth, Loops *out) {
         double c[12][2] = {{-w, -h}, {w, -h},     {w, -h + tf},  {tw, -h + tf},  {tw, h - tf},   {w, h - tf},
                            {w, h},   {-w, h},     {-w, h - tf},  {-tw, h - tf},  {-tw, -h + tf}, {-w, -h + tf}};
         Loop l = {0};
-        if (cc_sv_as_f64(arg(e, 7), &rad) && finite(rad) && rad > 0.0) {
+        /* FlangeSlope (IFC4, 9; ticket IFC3, beyond Rust's reader): the flanges' inner faces
+         * turned by the slope, the thickness kept at the flange's edge (as IfcOpenShell 0.8
+         * draws it), thicker toward the web. */
+        double t = slope_tan(r, e, 9), dy = (w - tw) * t;
+        if (t > 0.0 && !(-h + tf + dy < h - tf - dy)) warn(r, "invalid profile ", e->name, " slope (drawn without it)");
+        if (t > 0.0 && -h + tf + dy < h - tf - dy) {
+            c[3][1] = c[10][1] = -h + tf + dy, c[4][1] = c[9][1] = h - tf - dy;
+            double rr[12] = {0};
+            if (cc_sv_as_f64(arg(e, 7), &rad) && finite(rad) && rad > 0.0) rr[3] = rr[4] = rr[9] = rr[10] = rad;
+            if (fillet_g((const double(*)[2])c, 12, rr, r->arc_tol, &l)) bad = 1;
+        } else if (cc_sv_as_f64(arg(e, 7), &rad) && finite(rad) && rad > 0.0) {
             static const size_t corners[4] = {3, 4, 9, 10};
             if (fillet((const double(*)[2])c, 12, corners, 4, rad, r->arc_tol, &l)) bad = 1;
         } else

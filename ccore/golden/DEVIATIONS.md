@@ -374,6 +374,21 @@ scene's volume and bounding box against numbers computed by hand from the fixtur
   cycle, drawn as nothing, and does not count). Rust (`import.rs extruded_solid`) takes the first
   extrusion it meets and drops the other items without a word; C imports such a product as a mesh
   of its whole Body (every item the display reader draws).
+- Profile slopes are drawn: `FlangeSlope` of `IfcIShapeProfileDef` (IFC4) and
+  `IfcUShapeProfileDef`, `WebSlope` and `FlangeSlope` of `IfcTShapeProfileDef`, `LegSlope` of
+  `IfcLShapeProfileDef` (in the file's plane angle unit; a slope not > 0 or not under 45 degrees
+  is ignored). The inner face is turned by the slope about a reference point where the nominal
+  thickness holds, taken from IfcOpenShell's source (v0.8.0, `src/ifcgeom/mapping/I/U/T/
+  LShapeProfileDef.cpp`; the spec's figures do not dimension it): I at the flange's edge, U at
+  half FlangeWidth from the web's back, L at the box's centre lines, T's web at mid-depth and
+  T's flange at a quarter FlangeWidth from the centre. Corners where two sloped faces meet are
+  their intersection; fillets and edge radii at those corners are arcs tangent to both faces
+  (any angle). One difference from IfcOpenShell: its T flange line ends at x = WebThickness/2
+  with x/2 - WebThickness (not x/2 - WebThickness/2) as the run, so its underside is a little
+  less steep than FlangeSlope; C keeps the slope exact (`tshape_slope`: C 3998.77 mm^2, IfcOpenShell
+  3965.28, 0.84 %; the corpus file `files/IfcTShapeProfileDef.ifc`: 0.21-0.22 %). Not drawn:
+  the slopes of `IfcAsymmetricIShapeProfileDef` (IFC4 BottomFlangeSlope, TopFlangeSlope) and the
+  I-shape's FlangeEdgeRadius (as before).
 - Import goldens of the C's own: `golden/ifc_c/import/<name>.json` and `<name>.report.txt` for
   every `golden/ifc_c/fixtures/*.ifc` (ids masked as in `golden/ifc/import/`; the report with its
   C-only `unsupported: ` lines), `CCORE_WRITE_GOLDEN=1 test/run.sh ifc_in` writes them again;

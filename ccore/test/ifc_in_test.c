@@ -406,6 +406,12 @@ static const struct {
     {"trapezium", 1, "extruded_polygon", 25e6, 1e-9},
     {"ellipse", 1, "extruded_polygon", 62831853.1, 5e-3},
     {"rounded_rect", 1, "extruded_polygon", 77853981.6, 2e-3},
+    /* The sloped profiles (ticket IFC3): the reader's hand areas x 1000 */
+    {"ishape_slope", 1, "extruded_polygon", 13411040.8, 1e-6},
+    {"ushape_slope", 1, "extruded_polygon", 3270207.2, 1e-6},
+    {"ushape_slope_fillet", 1, "extruded_polygon", 3295600.4, 2e-3},
+    {"tshape_slope", 1, "extruded_polygon", 3998768.5, 1e-6},
+    {"lshape_slope", 1, "extruded_polygon", 1795060.3, 1e-6},
     /* The solids the importer cannot parametrise: meshes (the reader's triangles) */
     {"revolved", 1, "mesh", 14137166.9, 3e-3},
     {"revolved_full", 1, "mesh", 56548667.8, 3e-3},

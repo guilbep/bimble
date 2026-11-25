@@ -1,0 +1,87 @@
+{
+  "format": "bimble",
+  "version": 1,
+  "model": {
+    "project_id": "2T2cUshapeSlope0000001",
+    "project_name": "Imported model",
+    "storeys": {
+      "2T2cUshapeSlope0000004": {
+        "id": "2T2cUshapeSlope0000004",
+        "name": "Level 0",
+        "elevation": 0.0
+      }
+    },
+    "materials": {
+      "<new-1>": {
+        "id": "<new-1>",
+        "name": "Undefined",
+        "category": "other"
+      }
+    },
+    "elements": {
+      "2T2cUshapeSlope0000010": {
+        "id": "2T2cUshapeSlope0000010",
+        "class": "IfcBuildingElementProxy",
+        "name": "ushape_slope",
+        "storey": "2T2cUshapeSlope0000004",
+        "material": "<new-1>",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              -40.0,
+              -100.0
+            ],
+            [
+              40.0,
+              -100.0
+            ],
+            [
+              40.0,
+              -92.01338688341802
+            ],
+            [
+              -32.0,
+              -84.78929049326558
+            ],
+            [
+              -32.0,
+              84.78929049326558
+            ],
+            [
+              40.0,
+              92.01338688341802
+            ],
+            [
+              40.0,
+              100.0
+            ],
+            [
+              -40.0,
+              100.0
+            ]
+          ],
+          "height": 1000.0
+        },
+        "ifc_entity": "IfcMember"
+      }
+    }
+  }
+}

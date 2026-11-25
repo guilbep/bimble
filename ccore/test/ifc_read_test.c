@@ -366,6 +366,28 @@ static const struct {
     {"ellipse", 1, 62831853.1, 5e-3, {-200, -100, 0}, {200, 100, 1000}, 1.0, NULL},
     /* rounded rectangle 400x200, r 50: 80000 - (4 - pi) 50^2 = 77853.98; chords within 0.2 % */
     {"rounded_rect", 1, 77853981.6, 2e-3, {-200, -100, 0}, {200, 100, 1000}, 1e-3, NULL},
+    /* Slopes (ticket IFC3; t = tan 0.1 rad = 0.1003346721): the reference points as IfcOpenShell
+     * 0.8's source keeps them. I 200 x 400, web 10, flanges 20, thickness at the flange edge,
+     * dy = 95 t at the web: 80000 - 2 * 95 (360 - dy) = 11600 + 190 dy = 13411.0408 */
+    {"ishape_slope", 1, 13411040.8, 1e-6, {-100, -200, 0}, {100, 200, 1000}, 1e-3, NULL},
+    /* U 200 x 80, web 8, flanges 12, thickness at x = 0: 16000 - 72 (352 + 16 t) / 2 =
+     * 3328 - 576 t = 3270.2072 */
+    {"ushape_slope", 1, 3270207.2, 1e-6, {-40, -100, 0}, {40, 100, 1000}, 1e-3, NULL},
+    /* + fillets 10 at the two inner corners (+ r^2 (cot(phi/2) - (pi - phi)/2) each, phi the
+     * corner's angle: +16.9288) and edge radii 5 at the toes (-4.2322 each): 3295.6004; arcs as
+     * chords: within 0.2 % */
+    {"ushape_slope_fillet", 1, 3295600.4, 2e-3, {-40, -100, 0}, {40, 100, 1000}, 1e-3, NULL},
+    /* T 200 deep, flange 150 x 15, web 10, WebSlope 0.02 (s = tan 0.02), FlangeSlope 0.1: the web
+     * half-width 5 + y s (thickness at y = 0), 5 - 100 s = 2.99973 at the toe; the flange's
+     * underside y = 85 + (x - 37.5) t (thickness at x = +-37.5), 88.76255 at the tips; they meet at
+     * y = (85 - 37.5 t + 5 t) / (1 - s t) = 81.90350, x = 6.63829. Shoelace of the 8 corners:
+     * 3998.7685 (IfcOpenShell 3965.28: its web-side point is at x 5 with x/2 - 10, see
+     * DEVIATIONS.md section 10) */
+    {"tshape_slope", 1, 3998768.5, 1e-6, {-75, -100, 0}, {75, 100, 1000}, 1e-3, NULL},
+    /* L 100 x 100 x 10, LegSlope 0.1, thickness at the box's centre lines: the faces
+     * y = -40 - x t and x = -40 - y t meet at x = y = (-40 + 40 t) / (1 - t^2) = -36.35258;
+     * shoelace of the 6 corners: 1795.0603 */
+    {"lshape_slope", 1, 1795060.3, 1e-6, {-50, -50, 0}, {50, 50, 1000}, 1e-3, NULL},
     /* IfcRevolvedAreaSolid: a 100x200 rectangle, x 400..500, turned about the Y axis
      * (right-handed: +X goes to -Z). Pappus: angle * area * centroid radius; chords within 0.3 %.
      * A quarter turn: pi/2 * 20000 * 450 = 14137166.9, box x 0..500, z -500..0 */
