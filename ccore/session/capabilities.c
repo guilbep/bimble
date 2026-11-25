@@ -35,7 +35,7 @@ static const struct {
     {"palette", YES},          /* query palette_match (Q2) */
     {"paper_view", NO},        /* action paper_view, the On paper switch (PAPER1) */
     {"phases", NO},
-    {"plan_annotations", NO},  /* actions section_labels, openings, section_marks, slab_levels (KEY1) */
+    {"plan_annotations", YES},  /* actions section_labels, openings, section_marks, slab_levels (KEY1) */
     {"project_info", YES},     /* query project, verb set_project_field */
     {"quantities", FULL_BUILD}, /* schedules.h schedule_rows, schedule_csv (Q2) */
     {"rebar", NO},
