@@ -23,7 +23,7 @@
 
 #ifndef __wasm__
 #include <errno.h>
-#include <sys/random.h>
+#include <sys/random.h> /* getrandom (Linux), getentropy (macOS) */
 #endif
 
 static const char ALPHABET[65] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
@@ -287,6 +287,16 @@ void cc_guid_entropy(const void *data, size_t n) {
     (void)n;
 }
 
+#ifdef __APPLE__
+/* macOS has no getrandom(): getentropy(), at most 256 bytes a call, all or nothing. */
+static void random_bytes(uint8_t *b, size_t n) {
+    for (size_t got = 0; got < n;) {
+        size_t k = n - got < 256 ? n - got : 256;
+        if (getentropy(b + got, k) != 0) abort(); /* no entropy: refuse to make ids that could collide */
+        got += k;
+    }
+}
+#else
 static void random_bytes(uint8_t *b, size_t n) {
     size_t got = 0;
     while (got < n) {
@@ -298,6 +308,7 @@ static void random_bytes(uint8_t *b, size_t n) {
         got += (size_t)r;
     }
 }
+#endif
 #endif
 
 cc_guid cc_guid_new(void) {

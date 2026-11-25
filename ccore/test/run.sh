@@ -11,27 +11,29 @@
 #   CCORE_TEST_JOBS   suites at once (default: the number of CPUs; 1 runs them one by one)
 #   CC, CFLAGS        the compiler and extra flags, e.g.
 #                     CC=clang CFLAGS="-fsanitize=address,undefined" test/run.sh file
+# Portable (ticket MAC1): macOS's /bin/bash 3.2 and BSD tools. portable.sh (via deps.sh) gives the
+# clock (us_now), the job limit without `wait -n` (jobs_throttle) and -D_DARWIN_C_SOURCE on macOS;
+# an array that may be empty is expanded as ${a[@]+"${a[@]}"}; no mapfile.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 ALL=(); for f in test/*_test.c; do t=${f#test/}; ALL+=("${t%_test.c}"); done
-suites=("$@")
-[[ ${#suites[@]} -eq 0 ]] && suites=("${ALL[@]}")
+if (($#)); then suites=("$@"); else suites=("${ALL[@]}"); fi
 CC=${CC:-tcc}
 case "$CC" in
   tcc) FLAGS=(-g -Wall -DRYU_ONLY_64_BIT_OPS) ;;
   *)   FLAGS=(-std=c11 -O1 -g -Wall -Wextra -Werror -Wno-unused-function) ;;
 esac
-if [[ -n ${CFLAGS:-} ]]; then read -r -a extra <<< "$CFLAGS"; FLAGS+=("${extra[@]}"); fi
+if [[ -n ${CFLAGS:-} ]]; then read -r -a extra <<< "$CFLAGS"; FLAGS+=(${extra[@]+"${extra[@]}"}); fi
 # A sanitizer report fails the suite (UBSan only prints by default: a report once passed unseen).
 export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1${UBSAN_OPTIONS:+:$UBSAN_OPTIONS}"
 JOBS=${CCORE_TEST_JOBS:-$(getconf _NPROCESSORS_ONLN 2> /dev/null || echo 2)}
 # The boolean kernel when found (build.sh, deps.sh): clang links it static, tcc shared.
 source ./deps.sh
 kernel_setup
-FLAGS+=("${KFLAGS[@]}")
-LINK=("${KLINK_CLANG[@]}")
-[[ $(basename "$CC") == tcc ]] && LINK=("${KLINK_TCC[@]}")
+FLAGS+=(${KFLAGS[@]+"${KFLAGS[@]}"} ${PLATFORM_CFLAGS[@]+"${PLATFORM_CFLAGS[@]}"})
+LINK=(${KLINK_CLANG[@]+"${KLINK_CLANG[@]}"})
+[[ $(basename "$CC") == tcc ]] && LINK=(${KLINK_TCC[@]+"${KLINK_TCC[@]}"})
 # One directory per compiler and flags: a clang run and a clang+ASan run never share objects.
 tag=$(basename "$CC")
 [[ -n ${CFLAGS:-} ]] && tag+=-$(printf '%s' "$CFLAGS" | cksum | cut -d' ' -f1)
@@ -39,10 +41,10 @@ out="out/run-$tag"
 rm -rf "$out/obj" "$out/log"
 mkdir -p "$out/obj" "$out/log"
 INC=(-Isrc -Ivendor/ryu -Isession -Ihost)
-t_all=$EPOCHREALTIME
+t_all=$(us_now)
 
-# us <start> <end>: the microseconds between two $EPOCHREALTIME values.
-us() { local a=${1/[.,]/} b=${2/[.,]/}; echo $((10#$b - 10#$a)); }
+# us <start> <end>: the microseconds between two us_now values.
+us() { echo $(($2 - $1)); }
 # secs <microseconds>: "12.34".
 secs() { printf '%d.%02d' $(($1 / 1000000)) $(($1 % 1000000 / 10000)); }
 
@@ -51,15 +53,15 @@ secs() { printf '%d.%02d' $(($1 / 1000000)) $(($1 % 1000000 / 10000)); }
 SRC=(); for f in src/*.c; do [[ $f == src/wasm_stub.c ]] || SRC+=("$f"); done
 SRC+=(session/*.c host/platform_native.c)
 OBJ=()
-running=0
+jobs_reset
 for f in "${SRC[@]}"; do
     o="$out/obj/$(basename "$(dirname "$f")")_$(basename "${f%.c}").o"
     OBJ+=("$o")
     { "$CC" "${FLAGS[@]}" "${INC[@]}" -c "$f" -o "$o" > "$o.log" 2>&1 || echo "$f $o" >> "$out/obj/failed"; } &
-    if ((++running >= JOBS)); then wait -n || true; running=$((running - 1)); fi
+    jobs_throttle "$JOBS"
 done
 wait
-t_lib=$EPOCHREALTIME
+t_lib=$(us_now)
 # Warnings (tcc's -Wall prints and goes on), once for the library.
 cat "$out"/obj/*.o.log
 if [[ -f $out/obj/failed ]]; then
@@ -71,34 +73,35 @@ fi
 # in log/<suite>.rc (exit 98: the compile failed, 99: no such suite).
 one() {
     local s=$1 log="$out/log/$1" t0 t1 t2 rc=0
-    t0=$EPOCHREALTIME
+    t0=$(us_now)
     if [[ ! -f "test/${s}_test.c" ]]; then
         echo "unknown suite: $s" > "$log"
         echo "99 0 0" > "$log.rc"
         return
     fi
-    if ! "$CC" "${FLAGS[@]}" "${INC[@]}" "${OBJ[@]}" "test/${s}_test.c" "${LINK[@]}" -o "$out/test_$s" > "$log" 2>&1; then
-        echo "98 $(us "$t0" "$EPOCHREALTIME") 0" > "$log.rc"
+    if ! "$CC" "${FLAGS[@]}" "${INC[@]}" "${OBJ[@]}" "test/${s}_test.c" ${LINK[@]+"${LINK[@]}"} -o "$out/test_$s" > "$log" 2>&1; then
+        echo "98 $(us "$t0" "$(us_now)") 0" > "$log.rc"
         return
     fi
-    t1=$EPOCHREALTIME
+    t1=$(us_now)
     "$out/test_$s" golden/floats >> "$log" 2>&1 < /dev/null || rc=$?
-    t2=$EPOCHREALTIME
+    t2=$(us_now)
     echo "$rc $(us "$t0" "$t1") $(us "$t1" "$t2")" > "$log.rc"
 }
 
 # Longest first (by the times of the last run, if any): a long suite never starts last.
 order=("${suites[@]}")
 if [[ -f $out/times ]]; then
-    mapfile -t order < <(for s in "${suites[@]}"; do
+    order=()
+    while read -r s; do order+=("$s"); done < <(for s in "${suites[@]}"; do
         printf '%s %s\n' "$(awk -v s="$s" '$1 == s { t = $2 } END { print t + 0 }' "$out/times")" "$s"
     done | sort -k1,1nr | awk '{ print $2 }')
 fi
-running=0
+jobs_reset
 for s in "${order[@]}"; do
     # The job's stderr to the log too: bash's own line for a signal ("Aborted") lands there.
     one "$s" 2>> "$out/log/$s" &
-    if ((++running >= JOBS)); then wait -n || true; running=$((running - 1)); fi
+    jobs_throttle "$JOBS"
 done
 wait
 
@@ -127,5 +130,5 @@ done
 mv "$out/times.new" "$out/times"
 printf 'run.sh: %d suites (%s%s), %d failing; library %s s, %s s in all, %s s of suite time on %d jobs\n' \
     "${#suites[@]}" "$CC" "${CFLAGS:+ $CFLAGS}" "$nfail" \
-    "$(secs "$(us "$t_all" "$t_lib")")" "$(secs "$(us "$t_all" "$EPOCHREALTIME")")" "$(secs "$sum")" "$JOBS"
+    "$(secs "$(us "$t_all" "$t_lib")")" "$(secs "$(us "$t_all" "$(us_now)")")" "$(secs "$sum")" "$JOBS"
 exit $status

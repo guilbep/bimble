@@ -36,7 +36,7 @@ import { cpus, tmpdir, totalmem, loadavg } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { port, vitePort } from "../test/ports.mjs";
+import { CHROMIUM, port, vitePort } from "../test/ports.mjs";
 
 /** Write a source file atomically (temp + rename): a background compile reading the old file must
  *  never see it truncated (clang mmaps sources; an in-place rewrite gave it SIGBUS). */
@@ -191,7 +191,7 @@ async function main() {
     cpu: `${cpus().length} x ${cpus()[0]?.model ?? "?"}`, mem_gib: (totalmem() / 2 ** 30).toFixed(1),
     node: process.version, loadavg_start: loadavg().map((x) => x.toFixed(2)).join(" "),
     tcc: execFileSync("tcc", ["-v"]).toString().trim(), clang: execFileSync("clang", ["--version"]).toString().split("\n")[0],
-    chromium: execFileSync("/usr/bin/chromium", ["--version"]).toString().trim(),
+    chromium: execFileSync(CHROMIUM, ["--version"]).toString().trim(),
   };
   console.log(`machine: ${JSON.stringify(machine)}`);
 
@@ -202,7 +202,7 @@ async function main() {
     if (!alive(vite)) throw new Error(vite.out);
     return (await fetch(`http://localhost:${VITE}/`)).ok;
   }, 200);
-  const chrome = start("chromium", "/usr/bin/chromium", [
+  const chrome = start("chromium", CHROMIUM, [
     "--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--remote-debugging-port=0",
     `--user-data-dir=${join(tmp, "chromium")}`, "--no-first-run", "--no-default-browser-check", "about:blank",
   ]);

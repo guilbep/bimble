@@ -1,10 +1,10 @@
 # CI for the C core (tickets K1, K3)
 
-One script holds the checks, `ccore/ci/run.sh [fast|full|unit|san|lab]`. Builders and CI run the
-same script. `.github/workflows/ccore.yml` runs its three parts on Linux as three parallel jobs:
-`ccore-linux` (`unit`), `ccore-san` (`san`), `ccore-lab` (`lab`); `full` is the three in one run. It
-also runs `test/run.sh` on macOS as a probe (`ccore-macos`, `continue-on-error`). The probe log
-shows what a port needs.
+One script holds the checks, `ccore/ci/run.sh [fast|full|unit|san|lab|clang]`. Builders and CI run
+the same script. `.github/workflows/ccore.yml` runs its three parts on Linux as three parallel jobs:
+`ccore-linux` (`unit`), `ccore-san` (`san`), `ccore-lab` (`lab`); `full` is the three in one run.
+It runs `clang` on macOS (`ccore-macos`, ticket MAC1; it was a probe with `continue-on-error`
+before).
 
 ## K3: a faster CI (25 Nov 2026)
 
@@ -226,29 +226,56 @@ sleeps 0.8 s before each call: the restore's build takes about 850 ms): the same
 and the revert's epoch equals the syntax error's, as on the runner. The new check "revert: one
 build, one restart since the syntax error" counts 2 restarts on the old synchronisation.
 
-## macOS: what blocks
+## macOS (ticket MAC1)
 
-`ccore-macos` runs `test/run.sh` with Apple clang and `CC_NO_KERNEL=1`. When `/bin/bash` is 3.2,
-the job installs a newer bash first. Its log is the evidence. The costs below are estimates from
-the code; the job has not run yet.
+### What the probe measured
 
-| What blocks | Where | Cost |
+The probe (`test/run.sh`, Apple clang, `CC_NO_KERNEL=1`, Homebrew bash 5.3) failed on every run.
+Run 45662558516 (25 Nov 2026, `macos-latest`: macOS 26.7.2 arm64, Apple clang 21.0.0
+clang-2100.1.1.101, `/bin/bash` 3.2.57) stopped at the first suite's compile with three errors in
+two files, and nothing else was reached:
+
+| Error (the log) | Where | Fix |
 |---|---|---|
-| `getrandom()` is Linux only (`getentropy()` on macOS, same header) | `src/guid.c` | small: one `#ifdef` |
-| bash 3.2: an empty array under `set -u` is an error (`"${KFLAGS[@]}"` without a kernel) | `test/run.sh`, `build.sh` | small: Homebrew bash, or guard the expansions |
-| `stat -c`, `sha1sum` (BSD `stat -f`, `shasum`) | `deps.sh` (`deps_import`) | small |
-| `-Wl,--whole-archive`, `.so`, `-Wl,-rpath=` (ld64: `-force_load`, `.dylib`, `-rpath,`) | `deps.sh` (`deps_import`, `kernel_setup`) | moderate: a second link path for the kernel |
-| `date +%s%N` (BSD date has no `%N`), `llvm-ar`, `sha1sum` | `build.sh` | small, but `step` times and the host cache key use them |
-| wasm32: Apple clang has no `wasm-ld` | `build.sh wasm` | small: Homebrew `llvm` and `lld` |
-| `MSG_NOSIGNAL` (macOS: `SO_NOSIGPIPE`; SIGPIPE is already ignored) | `host/server.c` | small |
-| `inotifywait`, `setsid` | `dev.sh` | moderate: `fswatch` or kqueue, another way to detach |
-| GNU `timeout`, `date +%s%N` | `ci/run.sh` | small: coreutils from Homebrew |
-| `/usr/bin/chromium` | the lab tests | small: one shared variable |
-| tcc on macOS arm64: tinycc has Mach-O arm64 code (`tccmacho.c`), but it has never been built here | `ci/tcc.sh`, the edit loop | unknown: build it on a runner first |
+| `call to undeclared function 'getrandom'` | `src/guid.c:293` | `getentropy()` under `__APPLE__`, 256 bytes a call |
+| `no member named 'st_mtim' in 'struct stat'` (twice) | `session/session.c:487` | `st_mtimespec` under `__APPLE__` (with `_DARWIN_C_SOURCE`: under `_POSIX_C_SOURCE` alone macOS names the fields `st_mtime`, `st_mtimensec`) |
 
-POSIX threads, `sysconf`, `clock_gettime`, `open`/`rename` and the BSD sockets exist on macOS.
-`jobs.c`, `platform_native.c`, `session.c` and most of `server.c` should compile as they are. The
-probe log confirms this or shows what fails.
+`st_mtim` was not in the estimates below. The estimates are kept for what the probe could not reach.
+
+### What MAC1 changed (each row: the estimate, then the fix)
+
+| What blocks | Where | Fix |
+|---|---|---|
+| `getrandom()` | `src/guid.c` | measured, above |
+| `st_mtim` | `session/session.c` | measured, above |
+| `_POSIX_C_SOURCE` hides BSD names on macOS (`MAP_ANONYMOUS` in `ifc_in_test.c`, `SO_NOSIGPIPE`, `MSG_DONTWAIT`, `st_mtimespec`, `realpath`) | every native compile | `PLATFORM_CFLAGS=-D_DARWIN_C_SOURCE` (`portable.sh`) on macOS in `build.sh` and `test/run.sh`; `session.c`, `server.c`, `main.c` also define it under `__APPLE__` |
+| bash 3.2: `"${a[@]}"` of an empty array under `set -u`; `wait -n`; `$EPOCHREALTIME` | `build.sh`, `test/run.sh`, `deps.sh`, `ci/run.sh` | `${a[@]+"${a[@]}"}` for every array that may be empty, `HAVE_KERNEL` instead of `${#KFLAGS[@]}`, a FIFO of pids instead of `wait -n` (`build.sh release`). The job no longer installs Homebrew bash: `/bin/bash` 3.2 runs the scripts |
+| `stat -c`, `sha1sum` | `deps.sh` (`deps_import`), `build.sh` (host cache key) | `file_sig`, `sha1_16`, `sha1_each` in `portable.sh` (`stat -f`, `shasum -a 1` when the GNU ones are missing); same stamp as before on Linux, so no re-import |
+| `-Wl,--whole-archive`, `.so`, `-Wl,-rpath=`, `-lstdc++` | `deps.sh` | no shared library on macOS (only tcc needs it), `KLINK_TCC` empty there, `-lc++`; `CMAKE_OSX_ARCHITECTURES` passed to cmake |
+| `date +%s%N`, `llvm-ar` | `build.sh` | `ms_now` (`portable.sh`: GNU date, else `$EPOCHREALTIME`, else perl), `AR` = `llvm-ar` when found, else `ar` |
+| `-Wl,-Bstatic -lstdc++ -static-libgcc`, `-s`, GNU `tar --sort --owner` | `build.sh release` | macOS: `-lc++` (the system's), `strip` then `codesign --sign -` (stripping breaks the linker's ad hoc signature, which arm64 needs), `-arch`, BSD tar with `COPYFILE_DISABLE=1`; archive `bimble-ccore-<v>-<arch>-macos.tar.gz` |
+| `MSG_NOSIGNAL` | `host/server.c` | `0` when undefined, `SO_NOSIGPIPE` on each accepted socket |
+| `xdg-open`, `/proc/self/exe` | `host/main.c` | `open`; `_NSGetExecutablePath` and `realpath` for `<exe dir>/web` |
+| GNU `timeout`, `date +%s%N` | `ci/run.sh` | `timeout` when there is one, else a shell watchdog (TERM at the limit, KILL 15 s later, exit 124); `ms_now` |
+| `/usr/bin/chromium` | 12 lab tests, 2 benches | `CHROMIUM` from `test/ports.mjs` (env, else `/usr/bin/chromium`, on macOS Google Chrome's binary) |
+| `ldd`, `/proc/<pid>/fd`, `xdg-open` | `test/release_test.mjs` | macOS: `otool -L`, `lsof -F t`, a stand-in named `open`; `RELEASE_ARCH` for the x86_64 archive on an arm64 runner |
+| a compile error stopped `test/run.sh` at the first suite | `test/run.sh` | K3's runner already lists every library file that fails and goes on after a suite's (`FAIL <suite>: compile`) |
+| K3's parallel runner: `$EPOCHREALTIME`, `wait -n`, `mapfile` (bash 5, 4.3, 4) | `test/run.sh` | `us_now`, `jobs_throttle` (`wait -n` where bash has it, else wait for the oldest job), a `while read` loop (`portable.sh`); `getconf _NPROCESSORS_ONLN`, `cksum`, `sort -k1,1nr` exist on macOS |
+| wasm32: no `wasm-ld` in Apple clang | `build.sh wasm` | not ported: the wasm is built on Linux |
+| `inotifywait`, `setsid` | `dev.sh` | not ported (README) |
+| tcc on macOS arm64 | the edit loop | not ported: clang only on macOS |
+
+The job `ccore-macos` (no `continue-on-error` now): manifold by `deps.sh` (cached), a compile
+check of each C file alone (`-fsyntax-only -Werror`, every error of every file in one run), then
+`ci/run.sh clang`: `test/run.sh` with clang and the kernel, and `test/host.sh` with
+`HOST_BUILD=native` (host_test, lab_boot in Google Chrome). The logs of failed suites are printed
+and uploaded. `ccore-release` adds `macos-15` arm64 and x86_64 (cross: `CMAKE_OSX_ARCHITECTURES`,
+`MACOSX_DEPLOYMENT_TARGET=11.0`; Rosetta 2 runs the x86_64 test).
+
+Measured on macOS: nothing yet on this branch. The first push of MAC1 gives the rows: times of
+`run-clang` and `host`, the check counts, and whether `-Werror` finds warnings that Linux clang
+does not (`int64_t` is `long long` on macOS, `long` on glibc: a `%ld` or a `uint64_t *` passed as
+`size_t *` is the likely kind).
 
 ## Windows: what blocks
 

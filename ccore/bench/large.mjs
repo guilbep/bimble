@@ -43,7 +43,7 @@ import { cpus, loadavg, tmpdir, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { port, vitePort } from "../test/ports.mjs";
+import { CHROMIUM, port, vitePort } from "../test/ports.mjs";
 
 /** Write a source file atomically (temp + rename): a background compile reading the old file must
  *  never see it truncated (clang mmaps sources; an in-place rewrite gave it SIGBUS). */
@@ -455,10 +455,10 @@ async function main() {
   }
   if (LAB) {
     if (!existsSync(join(UI, "node_modules"))) throw new Error(`no ${UI}/node_modules: run npm ci in web-ui/`);
-    machine.chromium = execFileSync("/usr/bin/chromium", ["--version"]).toString().trim();
+    machine.chromium = execFileSync(CHROMIUM, ["--version"]).toString().trim();
     const vite = start("vite", "npx", ["vite", "--port", String(VITE), "--strictPort"], { cwd: UI });
     await waitFor(`Vite on ${VITE}`, 30000, async () => { if (!alive(vite)) throw new Error(vite.out); return (await fetch(`http://localhost:${VITE}/`)).ok; }, 200);
-    chrome = start("chromium", "/usr/bin/chromium", [
+    chrome = start("chromium", CHROMIUM, [
       "--headless=new", ...GL_FLAGS, "--remote-debugging-port=0",
       `--user-data-dir=${join(tmp, "chromium")}`, "--no-first-run", "--no-default-browser-check", "about:blank",
     ]);

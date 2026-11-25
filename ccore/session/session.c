@@ -1,5 +1,8 @@
 /* A session: see session.h. */
 #define _POSIX_C_SOURCE 200809L
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE /* macOS hides st_mtimespec under _POSIX_C_SOURCE alone */
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -486,7 +489,11 @@ static int file_stamp(const char *path, uint64_t *size, uint64_t *mtime_ns) {
     struct stat st;
     if (stat(path, &st) != 0) return -1;
     *size = (uint64_t)st.st_size;
+#ifdef __APPLE__
+    *mtime_ns = (uint64_t)st.st_mtimespec.tv_sec * 1000000000ull + (uint64_t)st.st_mtimespec.tv_nsec;
+#else
     *mtime_ns = (uint64_t)st.st_mtim.tv_sec * 1000000000ull + (uint64_t)st.st_mtim.tv_nsec;
+#endif
     return 0;
 }
 

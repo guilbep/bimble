@@ -13,7 +13,7 @@ import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RUN_TAG, port, vitePort } from "./ports.mjs";
+import { CHROMIUM, RUN_TAG, port, vitePort } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
@@ -115,7 +115,7 @@ async function lab() {
     if (vite.exitCode !== null) throw new Error(vite.out);
     return (await fetch(`http://localhost:${VITE}/`)).ok;
   });
-  const chrome = start("chromium", "/usr/bin/chromium", [
+  const chrome = start("chromium", CHROMIUM, [
     "--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--remote-debugging-port=0",
     `--user-data-dir=${join(TMP, "chromium")}`, "--no-first-run", "--no-default-browser-check", "about:blank",
   ]);

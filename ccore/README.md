@@ -76,12 +76,18 @@ CI: `ccore/ci/run.sh fast` is the gate every ticket passes (build.sh tcc, test/r
 with clang ASan+UBSan, build.sh wasm, wasm_run, host.sh); `ccore/ci/run.sh full` adds the Chromium
 lab tests and every other `test/*.mjs` suite. `unit`, `san` and `lab` are the three parts of `full`:
 `unit` all but the sanitizers and the lab, `san` the C suites under ASan+UBSan, `lab` the Chromium
-suites. One line per suite, logs in `out/ci/`, a last line `ci: N suites, M failed`, exit 1 on a
-failure; `CCORE_PORT_BASE` defaults to `auto`. GitHub runs the three parts on Linux as three jobs
+suites; `clang` is macOS's (ticket MAC1: test/run.sh with clang and the kernel, test/host.sh on the
+clang host). One line per suite, logs in `out/ci/`, a last line `ci: N suites, M failed`, exit 1 on
+a failure; `CCORE_PORT_BASE` defaults to `auto`. GitHub runs the three parts on Linux as three jobs
 side by side (`.github/workflows/ccore.yml`: `ccore-linux`, `ccore-san`, `ccore-lab`; tcc built
-from source by `ci/tcc.sh`, manifold by `deps.sh`, both cached) and `test/run.sh` on macOS as a
-feasibility probe that may fail (`ccore-macos`). Times and what blocks macOS and Windows:
-`results/ci.md`.
+from source by `ci/tcc.sh`, manifold by `deps.sh`, both cached) and `clang` on macOS
+(`ccore-macos`). Times and what blocks macOS and Windows: `results/ci.md`.
+
+macOS (ticket MAC1): clang only. The scripts run under macOS's own bash 3.2 and BSD tools
+(`portable.sh`). `build.sh native` and `release`, `deps.sh`, `test/run.sh`, `test/host.sh`
+(`HOST_BUILD=native`) and `ci/run.sh clang` work there; tcc, `build.sh tcc|host|wasm*` (Apple clang
+has no `wasm-ld`) and `dev.sh` (`inotifywait`, `setsid`) are not ported: the edit loop and the wasm
+builds stay on Linux. The lab tests take their browser from `CHROMIUM` (`test/ports.mjs`).
 
 Regenerate the goldens (a standalone Rust crate, not in the workspace; it pins the repo's
 serde_json version). Commit the changed `.txt` files:
@@ -94,8 +100,10 @@ The desktop is the user's browser and a local C server (ADR 0069 rule 2, ticket 
 `ccore/build.sh release` builds the host with clang `-O2`, with manifold and libstdc++ linked
 static (it fails without the kernel: run `deps.sh` first), builds the lab with Vite (`web-ui/`,
 needs `node_modules`; what is in `web-ui/public/` goes in too), and writes
-`out/release/bimble-ccore-<VERSION>-<arch>-linux.tar.gz`: `bimble-ccore`, `web/`, `LICENSE` and
-`README.txt` in one folder. `node test/release_test.mjs` unpacks it in a temp folder and checks it
+`out/release/bimble-ccore-<VERSION>-<arch>-<os>.tar.gz`: `bimble-ccore`, `web/`, `LICENSE` and
+`README.txt` in one folder. `<os>` is `linux`, or `macos` (libc++ is the system's; stripped, then
+signed ad hoc; `MACOSX_DEPLOYMENT_TARGET`, default 11.0; `CMAKE_OSX_ARCHITECTURES=x86_64` for
+`deps.sh` and `build.sh release` makes the Intel archive on an arm64 Mac). `node test/release_test.mjs` unpacks it in a temp folder and checks it
 (`ci/run.sh full` builds and runs both).
 
     ./bimble-ccore open [--port N] [--no-browser] [--web dir] [--session[=file]] [model]
@@ -104,7 +112,8 @@ needs `node_modules`; what is in `web-ui/public/` goes in too), and writes
 `open` reads the files under `<exe dir>/web/` (or `--web`) once at start (`host/static.c`: regular
 files only, no symbolic link, no hidden name, at most 4096 files and 64 MiB in all, a content type
 by extension). It listens on a free port of 127.0.0.1 (or N), prints
-`http://127.0.0.1:<port>/?native=1&gl=1&port=<port>&token=<t>` and starts `xdg-open` on it. A GET
+`http://127.0.0.1:<port>/?native=1&gl=1&port=<port>&token=<t>` and starts `xdg-open` on it
+(`open` on macOS). A GET
 of any path but `/change`, `/frame` and `/mesh` is a file of that list or 404, without the token: a
 request path is matched against the list, never joined to a file path. The calls, `/change` and
 `/mesh` keep the token; the Host and Origin checks hold for every request, and the host's own
@@ -113,9 +122,13 @@ origin is allowed beside the others. The old form (`bimble-ccore <port> [model]`
 `ccore/VERSION` is the archive's version (`--version`); the IFC writer's `CC_IFC_VERSION` and the
 `version` of `query state` stay as they are (the goldens hold them). GitHub (`ccore.yml`): job
 `ccore-release` builds and checks the archives on Ubuntu 22.04 (glibc 2.35), x86_64 and aarch64,
-on a manual run and on a tag `ccore-v<VERSION>`; on such a tag `ccore-prerelease` attaches them to
-a GitHub prerelease. Never a tag `v*`: that prefix starts the Rust release, the Pages deployment
-and the brew formula.
+and on macOS 15, arm64 and x86_64 (Rosetta 2 runs the Intel one's test), on a manual run, on a tag
+`ccore-v<VERSION>` and on a push whose head commit message holds `[ccore-release]`; on such a tag
+`ccore-prerelease` attaches them and their `SHA256SUMS` to a GitHub prerelease and prints the
+Homebrew formula of that release (`ci/formula.sh <version> SHA256SUMS`), to commit on `main` as
+`Formula/bimble-ccore.rb` (`brew tap guilbep/bimble https://github.com/guilbep/bimble && brew
+install bimble-ccore`). Never a tag `v*`: that prefix starts the Rust release, the Pages
+deployment and `Formula/bimble.rb`.
 
 ## MCP over stdio
 

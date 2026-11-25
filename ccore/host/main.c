@@ -17,13 +17,18 @@
  *                             the desktop (ADR 0069 rule 2, ticket R1): also serves the built lab
  *                             from <exe dir>/web/ (or --web; static.h), on a free port of
  *                             127.0.0.1 (or N), prints the lab's URL on stdout and starts xdg-open
+ *                             (`open` on macOS)
  *                             on it (not with --no-browser). Always --warm.
  *   bimble-ccore --version    prints ccore/VERSION (build.sh passes it as CC_RELEASE_VERSION)
  *   BIMBLE_TOKEN              the token; random when unset or empty (twin.rs:115-118)
  *   BIMBLE_ORIGINS            extra allowed Origins, comma separated, beside the twin's two
  *                             (twin.rs:17), e.g. a Vite dev server on another port */
 #define _POSIX_C_SOURCE 200809L
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE /* realpath and the dyld header beside _POSIX_C_SOURCE */
+#endif
 #include <fcntl.h>
+#include <stdint.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,6 +41,13 @@
 #include "mcp.h"
 #include "session.h"
 #include "static.h"
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h> /* _NSGetExecutablePath: macOS has no /proc/self/exe */
+#define BROWSER_OPENER "open"
+#else
+#define BROWSER_OPENER "xdg-open"
+#endif
 
 #ifndef CC_RELEASE_VERSION
 #define CC_RELEASE_VERSION "dev" /* build.sh passes ccore/VERSION */
@@ -114,24 +126,34 @@ static void on_listen(uint16_t port, void *ctx) {
                 /* The listening socket and the rest are not the browser's: a browser started
                  * by xdg-open would keep the port after the host stopped. */
                 for (int fd = 3; fd < 1024; fd++) close(fd);
-                execlp("xdg-open", "xdg-open", u, (char *)NULL);
+                execlp(BROWSER_OPENER, BROWSER_OPENER, u, (char *)NULL);
                 _exit(127);
             }
             _exit(0);
         }
         if (p > 0) waitpid(p, NULL, 0);
-        else fprintf(stderr, "bimble-ccore: cannot start xdg-open: open the address above\n");
+        else fprintf(stderr, "bimble-ccore: cannot start " BROWSER_OPENER ": open the address above\n");
     }
     buf_free(&url);
 }
 
-/* <exe dir>/web, from /proc/self/exe (else argv[0]); 0 when it does not fit. */
+/* <exe dir>/web, from /proc/self/exe (macOS: _NSGetExecutablePath, links resolved; else argv[0]);
+ * 0 when it does not fit. */
 static int default_web(const char *argv0, char *out, size_t n) {
     char exe[PATH_MAX];
+#ifdef __APPLE__
+    char path[PATH_MAX];
+    uint32_t pn = sizeof path;
+    ssize_t k = -1;
+    if (_NSGetExecutablePath(path, &pn) == 0 && realpath(path, exe)) k = (ssize_t)strlen(exe);
+#else
     ssize_t k = readlink("/proc/self/exe", exe, sizeof exe - 1);
     if (k > 0) exe[k] = 0;
-    else if (strlen(argv0) < sizeof exe) strcpy(exe, argv0);
-    else return 0;
+#endif
+    if (k <= 0) {
+        if (strlen(argv0) >= sizeof exe) return 0;
+        strcpy(exe, argv0);
+    }
     char *slash = strrchr(exe, '/');
     int w = slash ? snprintf(out, n, "%.*s/web", (int)(slash - exe), exe) : snprintf(out, n, "web");
     return w > 0 && (size_t)w < n;

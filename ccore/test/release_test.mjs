@@ -12,6 +12,9 @@
 //   - without --no-browser, xdg-open (a stand-in first on PATH) gets the URL and no socket.
 // The ports: the system's free ones (open picks one; --port gets one from node), not test/ports.mjs.
 // Prints "N passed, M failed"; exits non-zero on a failure. Needs tar and ldd.
+// macOS (ticket MAC1): bimble-ccore-<VERSION>-<arch>-macos.tar.gz (RELEASE_ARCH=x86_64: the Intel
+// one on an arm64 Mac, run by Rosetta 2), otool -L for ldd (libc++ is the system's), the stand-in
+// is named `open`, and it lists its files with lsof (no /proc).
 import { execFileSync, spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import net from "node:net";
@@ -21,8 +24,10 @@ import { fileURLToPath } from "node:url";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = readFileSync(join(CCORE, "VERSION"), "utf8").trim();
-const ARCH = execFileSync("uname", ["-m"], { encoding: "utf8" }).trim();
-const NAME = `bimble-ccore-${VERSION}-${ARCH}-linux`;
+const MAC = process.platform === "darwin";
+const ARCH = process.env.RELEASE_ARCH || execFileSync("uname", ["-m"], { encoding: "utf8" }).trim();
+const NAME = `bimble-ccore-${VERSION}-${ARCH}-${MAC ? "macos" : "linux"}`;
+const OPENER = MAC ? "open" : "xdg-open";
 const ARCHIVE = process.env.RELEASE_ARCHIVE ?? join(CCORE, "out/release", `${NAME}.tar.gz`);
 
 let passed = 0, failed = 0;
@@ -119,8 +124,8 @@ try {
   check("README.txt has at most ten lines", readme.length <= 10, `${readme.length} lines`);
   const ver = execFileSync(bin, ["--version"], { encoding: "utf8" }).trim();
   check("--version prints ccore/VERSION", ver === `bimble-ccore ${VERSION}`, ver);
-  const ldd = execFileSync("ldd", [bin], { encoding: "utf8" });
-  check("ldd names no libmanifold", !/manifold/i.test(ldd) && /libc\.so/.test(ldd), ldd.replace(/\s+/g, " ").trim());
+  const ldd = execFileSync(MAC ? "otool" : "ldd", MAC ? ["-L", bin] : [bin], { encoding: "utf8" });
+  check("ldd names no libmanifold", !/manifold/i.test(ldd) && (MAC ? /libSystem/ : /libc\.so/).test(ldd), ldd.replace(/\s+/g, " ").trim());
   check("ldd names no libstdc++ (static)", !/libstdc\+\+/.test(ldd));
 
   // Untrusted web/ content added after unpacking: a link out of the tree and a hidden file.
@@ -211,13 +216,16 @@ try {
   // starts would keep the port). A stand-in records its argument and open files.
   const fake = join(tmp, "fakebin"), rec = join(tmp, "xdg-open.txt");
   mkdirSync(fake);
-  writeFileSync(join(fake, "xdg-open"), `#!/bin/sh\n{ printf '%s\\n' "$1"; for f in /proc/$$/fd/*; do readlink "$f"; done; } > "${rec}.tmp"\nmv "${rec}.tmp" "${rec}"\n`, { mode: 0o755 });
+  // Its open files, one line each: /proc's link targets ("socket:[n]" for a socket), or lsof's
+  // file types on macOS ("tIPv4" for a TCP socket), after the URL.
+  const fds = MAC ? `/usr/sbin/lsof -a -p $$ -d 0-1023 -F t | grep '^t'` : `for f in /proc/$$/fd/*; do readlink "$f"; done`;
+  writeFileSync(join(fake, OPENER), `#!/bin/sh\n{ printf '%s\\n' "$1"; ${fds}; } > "${rec}.tmp"\nmv "${rec}.tmp" "${rec}"\n`, { mode: 0o755 });
   host = start(bin, ["open", "frame.json"], work, { PATH: `${fake}:${process.env.PATH}` });
   const url3 = await waitUrl(host);
-  for (let i = 0; i < 400 && !existsSync(rec); i++) await sleep(5);
+  for (let i = 0; i < 1000 && !existsSync(rec); i++) await sleep(5); // lsof (macOS) takes longer than /proc
   const got = existsSync(rec) ? readFileSync(rec, "utf8").split("\n").filter(Boolean) : [];
   check("xdg-open gets the printed URL", url3.startsWith("http://127.0.0.1:") && got[0] === url3, `${url3} | ${got[0]}`);
-  check("xdg-open holds no socket of the host", got.length > 1 && !got.slice(1).some((l) => l.startsWith("socket:")), got.slice(1).join(" "));
+  check("xdg-open holds no socket of the host", got.length > 1 && !got.slice(1).some((l) => /^(socket:|tIPv[46]$|tunix$)/.test(l)), got.slice(1).join(" "));
   await stop(host);
   host = null;
 

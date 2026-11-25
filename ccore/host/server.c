@@ -3,6 +3,9 @@
  * Same limits, checks, status codes and headers as serve.rs; each is cited. Input is untrusted:
  * bounded buffers, no recursion, every parse error is an answer or a closed connection. */
 #define _POSIX_C_SOURCE 200809L
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE /* macOS hides SO_NOSIGPIPE and MSG_DONTWAIT under _POSIX_C_SOURCE alone */
+#endif
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -34,6 +37,12 @@
  * client may lose the answer (a 413 sent before a 1 MiB body was read). */
 #define DRAIN_MS 1000
 #define DRAIN_MAX (4u << 20)
+
+/* A write to a closed peer: EPIPE, never SIGPIPE (also ignored in cc_host_run). macOS has no
+ * MSG_NOSIGNAL: SO_NOSIGPIPE on each accepted socket instead. */
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
 
 static const char TEXT[] = "text/plain; charset=utf-8";
 
@@ -707,6 +716,9 @@ int cc_host_run(const cc_host_config *config) {
                 for (;;) {
                     int fd = accept(lfd, NULL, NULL);
                     if (fd < 0) break;
+#ifdef SO_NOSIGPIPE
+                    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#endif
                     int slot = -1;
                     for (int i = 0; i < MAX_CONNECTIONS; i++)
                         if (conns[i].st == C_FREE) { slot = i; break; }

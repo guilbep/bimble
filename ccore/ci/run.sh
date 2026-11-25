@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The C core's checks in one script, for CI and for builders alike (tickets K1, K3):
-#   ccore/ci/run.sh [fast|full|unit|san|lab]          (default fast)
+#   ccore/ci/run.sh [fast|full|unit|san|lab|clang]    (default fast)
 #   fast  the gate of every ticket: build.sh tcc, test/run.sh (tcc), test/run.sh (clang with
 #         ASan and UBSan), build.sh wasm, test/wasm_run.mjs, test/host.sh (host_test, lab_boot).
 #   unit  all but the sanitizers and the Chromium lab suites (the job ccore-linux): the gate's
@@ -11,6 +11,9 @@
 #   lab   build.sh tcc and wasm, then every test/lab_*.mjs but lab_boot (host.sh runs it): the
 #         Chromium suites (the job ccore-lab).
 #   full  fast, the lab suites, then the rest of unit: every suite once.
+#   clang for a machine with neither tcc nor wasm-ld (macOS, ticket MAC1, the job ccore-macos):
+#         test/run.sh with clang (the kernel when deps.sh built it), then test/host.sh on the host
+#         built by build.sh native (clang -O2 -Werror, every suite and tool too).
 # Prints one line per suite (ok or FAIL, seconds, the "N passed, M failed" sums of its log) and a
 # last line "ci: N suites, M failed". A suite fails on a non-zero exit, a line that starts with
 # FAIL, or a "failed" count above 0. Every suite runs, even after a failure. Exits 1 on a failure.
@@ -18,16 +21,50 @@
 # worktrees never share a port. CCORE_CI_TIMEOUT: seconds per suite (default 900).
 # The lab tests need web-ui/node_modules (npm ci in web-ui/) and /usr/bin/chromium; dev_test
 # needs inotifywait (inotify-tools); build-wasm-view needs wasm-opt (binaryen, ci/binaryen.sh).
+# Portable (ticket MAC1): macOS's /bin/bash 3.2; no GNU `timeout` there, so a shell watchdog
+# (below); the clock of portable.sh.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+source ./portable.sh
 mode=${1:-fast}
-case "$mode" in fast | full | unit | san | lab) ;; *) echo "usage: $0 [fast|full|unit|san|lab]" >&2; exit 2 ;; esac
+case "$mode" in fast | full | unit | san | lab | clang) ;; *) echo "usage: $0 [fast|full|unit|san|lab|clang]" >&2; exit 2 ;; esac
 export CCORE_PORT_BASE=${CCORE_PORT_BASE:-auto}
 LIMIT=${CCORE_CI_TIMEOUT:-900}
 LOGS=out/ci
 mkdir -p "$LOGS"
 
-n=0 failed=0 t_all=$(date +%s%N)
+n=0 failed=0 t_all=$(ms_now)
+# limit <seconds> <command...>: GNU timeout -k 15 where there is one; else the command in the
+# background and a watchdog that sends TERM at the limit, KILL 15 s later. Exit 124 on a timeout.
+if command -v timeout > /dev/null 2>&1; then
+    limit() { timeout -k 15 "$@"; }
+else
+    limit() {
+        local secs=$1 pid dog rc flag
+        shift
+        flag=$(mktemp "${TMPDIR:-/tmp}/ccore-ci.XXXXXX")
+        rm -f "$flag"
+        "$@" &
+        pid=$!
+        (
+            trap 'kill "$s" 2> /dev/null; exit 0' TERM
+            sleep "$secs" & s=$!
+            wait "$s"
+            : > "$flag"
+            kill -TERM "$pid" 2> /dev/null
+            sleep 15 & s=$!
+            wait "$s"
+            kill -KILL "$pid" 2> /dev/null
+        ) &
+        dog=$!
+        wait "$pid"
+        rc=$?
+        kill -TERM "$dog" 2> /dev/null
+        wait "$dog" 2> /dev/null
+        if [[ -e $flag ]]; then rc=124; rm -f "$flag"; fi
+        return $rc
+    }
+fi
 done_=" "
 # suite <name> <command...>: runs the command with its output in out/ci/<name>.log, once a run.
 suite() {
@@ -35,10 +72,10 @@ suite() {
     shift
     [[ $done_ == *" $name "* ]] && return 0
     done_+="$name "
-    t0=$(date +%s%N)
-    timeout -k 15 "$LIMIT" "$@" > "$log" 2>&1 < /dev/null
+    t0=$(ms_now)
+    limit "$LIMIT" "$@" > "$log" 2>&1 < /dev/null
     rc=$?
-    t1=$(date +%s%N)
+    t1=$(ms_now)
     # The checks of the log: the sum of its "N passed, M failed" lines (one per C suite), or its
     # last such line when that one is the total of the others (wasm_run's sub-suites).
     sums=$(grep -oE '[0-9]+ passed, [0-9]+ failed' "$log" | awk '
@@ -55,9 +92,9 @@ suite() {
     n=$((n + 1))
     if ((bad)); then
         failed=$((failed + 1))
-        printf 'FAIL  %-20s %7.1f s  %s (exit %d, log ccore/%s)\n' "$name" "$(((t1 - t0) / 1000000))e-3" "${sums:-}" "$rc" "$log"
+        printf 'FAIL  %-20s %7.1f s  %s (exit %d, log ccore/%s)\n' "$name" "$((t1 - t0))e-3" "${sums:-}" "$rc" "$log"
     else
-        printf 'ok    %-20s %7.1f s  %s\n' "$name" "$(((t1 - t0) / 1000000))e-3" "${sums:-}"
+        printf 'ok    %-20s %7.1f s  %s\n' "$name" "$((t1 - t0))e-3" "${sums:-}"
     fi
 }
 
@@ -99,8 +136,9 @@ case "$mode" in
     san) san ;;
     lab) labs ;;
     full) suite build-tcc ./build.sh tcc; unit_c; san; gate_rest; labs; unit_rest ;;
+    clang) suite run-clang env CC=clang test/run.sh; suite host env HOST_BUILD=native test/host.sh ;;
 esac
 
-printf 'ci: %s, %d s in all, logs in ccore/%s\n' "$mode" $((($(date +%s%N) - t_all) / 1000000000)) "$LOGS"
+printf 'ci: %s, %d s in all, logs in ccore/%s\n' "$mode" $((($(ms_now) - t_all) / 1000)) "$LOGS"
 printf 'ci: %d suites, %d failed\n' "$n" "$failed"
 ((failed == 0))

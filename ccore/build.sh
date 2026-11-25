@@ -22,15 +22,21 @@
 #          finds one, and says nothing: the size depended on what was installed (426 KB on the first
 #          CI runner, 352 KB on the dev machine, ticket K2). So the link asks clang not to
 #          (--no-wasm-opt, clang 20 and later) and the step is explicit, timed and versioned.
-#   release  the Linux release archive (ticket R1, ADR 0069 rule 2): the host with clang -O2 and
+#   release  the release archive (ticket R1, ADR 0069 rule 2): the host with clang -O2 and
 #          the boolean kernel static (fails without it), the lab built by Vite (web-ui/, needs
-#          node_modules), then out/release/bimble-ccore-<VERSION>-<arch>-linux.tar.gz holding
-#          bimble-ccore, web/, LICENSE and README.txt (test: node test/release_test.mjs)
+#          node_modules), then out/release/bimble-ccore-<VERSION>-<arch>-<os>.tar.gz holding
+#          bimble-ccore, web/, LICENSE and README.txt (test: node test/release_test.mjs). <os> is
+#          linux (libstdc++ static) or macos (ticket MAC1: libc++ is the system's, stripped then
+#          signed ad hoc; CMAKE_OSX_ARCHITECTURES=x86_64 builds the Intel one on an arm64 Mac, with
+#          deps.sh run under the same variable; MACOSX_DEPLOYMENT_TARGET sets the oldest macOS)
 #   wasm-size [view]  bytes per object file in ccore.wasm (or ccore-view.wasm), from a link map
 #          (out/wsize/): code and data, largest first (results/wasm-size.md)
 # Boolean kernel (ADR 0068, 0069): manifold's C binding from $MANIFOLD_DIR or out/deps/manifold
-# (deps.sh). Found: -DCC_HAVE_MANIFOLD, clang links the static libraries (+ libstdc++), tcc the
-# shared one (it cannot link C++ archives). Not found, or CC_NO_KERNEL=1, or wasm: no kernel.
+# (deps.sh). Found: -DCC_HAVE_MANIFOLD, clang links the static libraries (+ libstdc++, libc++ on
+# macOS), tcc the shared one (it cannot link C++ archives; none on macOS, where tcc is not used).
+# Not found, or CC_NO_KERNEL=1, or wasm: no kernel.
+# Portability (ticket MAC1, portable.sh): runs under macOS's /bin/bash 3.2 and BSD tools for
+# native, release and the suites (not tcc, host, wasm: no tcc and no wasm-ld on a Mac).
 # Layers (README "Layers"): src/ is L0-L3 (and the wasm carrier, wasm_api.c), session/ is L5, host/
 # is the native carrier (L6). Test suites link the library, session/ and host/platform_native.c.
 set -euo pipefail
@@ -52,8 +58,10 @@ CC_VER=$(< VERSION)
 VDEF="-DCC_RELEASE_VERSION=\"$CC_VER\""
 source ./deps.sh
 kernel_setup
+# The archiver of clang's objects: llvm-ar where clang comes from LLVM, else the system's ar (macOS).
+AR=${AR:-$(command -v llvm-ar || echo ar)}
 
-ms() { date +%s%N | cut -b1-13; }
+ms() { ms_now; }
 step() { # step <label> <command...>
     local t0 t1
     t0=$(ms)
@@ -65,9 +73,9 @@ step() { # step <label> <command...>
 lib_and_tests() { # <dir> <cc> <flags...>
     local dir=$1 cc=$2
     shift 2
-    set -- "$@" "${KFLAGS[@]}"
-    local klink=("${KLINK_CLANG[@]}")
-    [[ $cc == tcc ]] && klink=("${KLINK_TCC[@]}")
+    set -- "$@" ${KFLAGS[@]+"${KFLAGS[@]}"} ${PLATFORM_CFLAGS[@]+"${PLATFORM_CFLAGS[@]}"}
+    local klink=(${KLINK_CLANG[@]+"${KLINK_CLANG[@]}"})
+    [[ $cc == tcc ]] && klink=(${KLINK_TCC[@]+"${KLINK_TCC[@]}"})
     mkdir -p "$dir"
     local objs=()
     for f in "${LIB[@]}"; do objs+=("$dir/$(basename "${f%.c}").o"); done
@@ -80,7 +88,7 @@ lib_and_tests() { # <dir> <cc> <flags...>
     }
     step "compile library ($cc)" compile_lib "$@"
     if [[ $cc == tcc ]]; then step "archive libccore.a" tcc -ar rcs "$dir/libccore.a" "${objs[@]}"
-    else step "archive libccore.a" llvm-ar rcs "$dir/libccore.a" "${objs[@]}"; fi
+    else step "archive libccore.a" "$AR" rcs "$dir/libccore.a" "${objs[@]}"; fi
     # The session layer (L5) and the native platform: an archive the suites and the host link.
     local sobjs=()
     for f in "${SESSION[@]}" host/platform_native.c; do sobjs+=("$dir/$(basename "${f%.c}").o"); done
@@ -93,39 +101,39 @@ lib_and_tests() { # <dir> <cc> <flags...>
     }
     step "compile session ($cc)" compile_session "$@"
     if [[ $cc == tcc ]]; then step "archive libccore_session.a" tcc -ar rcs "$dir/libccore_session.a" "${sobjs[@]}"
-    else step "archive libccore_session.a" llvm-ar rcs "$dir/libccore_session.a" "${sobjs[@]}"; fi
+    else step "archive libccore_session.a" "$AR" rcs "$dir/libccore_session.a" "${sobjs[@]}"; fi
     for t in "${TESTS[@]}"; do
-        step "test binary $t" "$cc" "$@" "${INC[@]}" -Ihost "test/${t}_test.c" "$dir/libccore_session.a" "$dir/libccore.a" "${klink[@]}" -o "$dir/test_$t"
+        step "test binary $t" "$cc" "$@" "${INC[@]}" -Ihost "test/${t}_test.c" "$dir/libccore_session.a" "$dir/libccore.a" ${klink[@]+"${klink[@]}"} -o "$dir/test_$t"
     done
     # Tools (tools/*.c, one binary each): on the library only.
     for f in tools/*.c; do
         [[ -e $f ]] || continue
         local tn
         tn=$(basename "${f%.c}")
-        step "tool $tn" "$cc" "$@" "${INC[@]}" "$f" "$dir/libccore.a" "${klink[@]}" -o "$dir/$tn"
+        step "tool $tn" "$cc" "$@" "${INC[@]}" "$f" "$dir/libccore.a" ${klink[@]+"${klink[@]}"} -o "$dir/$tn"
     done
     # The native host (not in wasm): every host/*.c on top of session/ and the library.
-    step "host bimble-ccore" "$cc" "$@" "$VDEF" "${INC[@]}" -Ihost "${HOST[@]}" "${SESSION[@]}" "$dir/libccore.a" "${klink[@]}" -o "$dir/bimble-ccore"
+    step "host bimble-ccore" "$cc" "$@" "$VDEF" "${INC[@]}" -Ihost "${HOST[@]}" "${SESSION[@]}" "$dir/libccore.a" ${klink[@]+"${klink[@]}"} -o "$dir/bimble-ccore"
 }
 
 # build.sh host (see the header). Cache keys: sha1 of the file, of every header (and the vendored
 # ryu sources, included by fmt.c) and of the flags; objects out/hostmix/o2/<name>.<key>.o.
 HOST_SRCS=("${LIB[@]}" "${SESSION[@]}" "${HOST[@]}")
-TCC_FLAGS=(-g -Wall -DRYU_ONLY_64_BIT_OPS "$VDEF" "${KFLAGS[@]}")
-O2_FLAGS=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function "$VDEF" "${KFLAGS[@]}")
+TCC_FLAGS=(-g -Wall -DRYU_ONLY_64_BIT_OPS "$VDEF" ${KFLAGS[@]+"${KFLAGS[@]}"})
+O2_FLAGS=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function "$VDEF" ${KFLAGS[@]+"${KFLAGS[@]}"})
 # clang on aarch64 makes atomics (src/jobs.h) calls to libgcc's outline helpers
 # (__aarch64_cas8_relax...), which the tcc link has not: inline them.
 [[ $(uname -m) == aarch64 ]] && O2_FLAGS+=(-mno-outline-atomics)
 host_keys() { # prints "<key> <file>" per source
     local hh
-    hh=$( { printf '%s\n' "${O2_FLAGS[*]}" "${TCC_FLAGS[*]}"; cat src/*.h session/*.h host/*.h vendor/ryu/ryu/*; } | sha1sum | cut -c1-16)
+    hh=$( { printf '%s\n' "${O2_FLAGS[*]}" "${TCC_FLAGS[*]}"; cat src/*.h session/*.h host/*.h vendor/ryu/ryu/*; } | sha1_16)
     local sum f
-    while read -r sum f; do echo "${sum:0:16}$hh $f"; done < <(sha1sum "${HOST_SRCS[@]}")
+    while read -r sum f; do echo "${sum:0:16}$hh $f"; done < <(sha1_each "${HOST_SRCS[@]}")
 }
 host_mixed() {
     if [[ ${HOST_MIX:-1} == 0 ]]; then
         mkdir -p out/tcc
-        step "host bimble-ccore (tcc, one call)" tcc "${TCC_FLAGS[@]}" "${INC[@]}" -Ihost "${HOST_SRCS[@]}" "${KLINK_TCC[@]}" -o out/tcc/bimble-ccore
+        step "host bimble-ccore (tcc, one call)" tcc "${TCC_FLAGS[@]}" "${INC[@]}" -Ihost "${HOST_SRCS[@]}" ${KLINK_TCC[@]+"${KLINK_TCC[@]}"} -o out/tcc/bimble-ccore
         return
     fi
     local M=out/hostmix t0 t1 key f b objs=() changed=()
@@ -141,7 +149,7 @@ host_mixed() {
     done < <(host_keys)
     t1=$(ms)
     printf '  %-28s %5d ms\n' "tcc: ${#changed[@]} of ${#HOST_SRCS[@]} files" $((t1 - t0))
-    step "link (tcc; others clang -O2)" tcc -o out/tcc/bimble-ccore "${objs[@]}" -lm "${KLINK_TCC[@]}"
+    step "link (tcc; others clang -O2)" tcc -o out/tcc/bimble-ccore "${objs[@]}" -lm ${KLINK_TCC[@]+"${KLINK_TCC[@]}"}
     ((${#changed[@]})) || return 0
     # The -O2 objects of the changed files, in the background: each keyed by the content it was
     # compiled from (checked again after the compile: a file saved meanwhile is not cached).
@@ -162,7 +170,7 @@ host_mixed() {
                 if [[ $k1 == "$k2" ]]; then mv "$M/o2/$b.tmp.$$.$BASHPID.o" "$M/o2/$b.$k1.o"
                 else rm -f "$M/o2/$b.tmp.$$.$BASHPID.o"; fi
                 # Keep the 4 newest objects per file.
-                ls -t "$M/o2/$b".*.o 2> /dev/null | grep -v '\.tmp\.' | tail -n +5 | xargs -r rm -f
+                ls -t "$M/o2/$b".*.o 2> /dev/null | grep -v '\.tmp\.' | tail -n +5 | while read -r old; do rm -f "$old"; done
             ) &
         done
         wait
@@ -196,7 +204,7 @@ wasm_size_table() {
     rm -rf "$d" && mkdir -p "$d"
     for f in "${files[@]}" src/wasm_stub.c "${SESSION[@]}"; do
         o="$d/$(basename "${f%.c}").o"
-        clang "${WASM_FLAGS[@]}" "$opt" "${defs[@]}" -c "$f" -o "$o" &
+        clang "${WASM_FLAGS[@]}" "$opt" ${defs[@]+"${defs[@]}"} -c "$f" -o "$o" &
         objs+=("$o")
     done
     wait
@@ -215,41 +223,72 @@ wasm_size_table() {
 # build.sh release (see the header). The objects in parallel (at most $JOBS clang at once, default 4:
 # the dev machine has 16 GB), one link with the kernel's archives and libstdc++ static, stripped.
 release() {
-    if ((${#KFLAGS[@]} == 0)); then
+    if ((HAVE_KERNEL == 0)); then
         echo "FAIL build.sh release needs the boolean kernel: run ccore/deps.sh (or MANIFOLD_DIR=... ccore/deps.sh)" >&2
         exit 1
     fi
-    local arch name R=out/release
+    local arch os=linux osname=Linux archf=() R=out/release
     arch=$(uname -m)
-    name="bimble-ccore-$CC_VER-$arch-linux"
+    if [[ $CC_OS == Darwin ]]; then
+        os=macos osname=macOS
+        if [[ -n ${CMAKE_OSX_ARCHITECTURES:-} ]]; then
+            [[ $CMAKE_OSX_ARCHITECTURES =~ ^(arm64|x86_64)$ ]] || {
+                echo "FAIL build.sh release: CMAKE_OSX_ARCHITECTURES=$CMAKE_OSX_ARCHITECTURES: one of arm64, x86_64" >&2
+                exit 1
+            }
+            arch=$CMAKE_OSX_ARCHITECTURES
+        fi
+        archf=(-arch "$arch")
+        export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-11.0}
+    fi
+    local name="bimble-ccore-$CC_VER-$arch-$os"
     local stage="$R/stage/$name" obj="$R/obj"
     rm -rf "$R/stage" "$obj" "$R/$name.tar.gz"
     mkdir -p "$stage" "$obj"
     local flags=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function -pthread
-        "$VDEF" "${KFLAGS[@]}" "${INC[@]}" -Ihost)
-    compile_release() {
-        local f o pids=() rc=0 pid
+        "$VDEF" ${KFLAGS[@]+"${KFLAGS[@]}"} ${PLATFORM_CFLAGS[@]+"${PLATFORM_CFLAGS[@]}"} ${archf[@]+"${archf[@]}"}
+        "${INC[@]}" -Ihost)
+    compile_release() { # at most $JOBS at once: wait for the oldest (bash 3.2 has no `wait -n`)
+        local f o q=() rc=0 pid
         for f in "${LIB[@]}" "${SESSION[@]}" "${HOST[@]}"; do
-            while (($(jobs -rp | wc -l) >= ${JOBS:-4})); do wait -n || rc=1; done
+            if ((${#q[@]} >= ${JOBS:-4})); then
+                wait "${q[0]}" || rc=1
+                q=("${q[@]:1}")
+            fi
             o="$obj/$(basename "${f%.c}").o"
             clang "${flags[@]}" -c "$f" -o "$o" &
-            pids+=($!)
+            q+=($!)
         done
-        for pid in "${pids[@]}"; do wait "$pid" || rc=1; done
+        for pid in "${q[@]}"; do wait "$pid" || rc=1; done
         return $rc
     }
     step "compile (clang -O2)" compile_release
-    local kd
+    local kd bin="$stage/bimble-ccore"
     kd=$(dirname "${KLINK_CLANG[0]}")
-    step "link bimble-ccore (kernel static)" clang -pthread -s "$obj"/*.o "$kd/libmanifoldc.a" "$kd/libmanifold.a" \
-        "$kd/libClipper2.a" -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc -lm -o "$stage/bimble-ccore"
+    if [[ $CC_OS == Darwin ]]; then
+        # libc++ is part of macOS (no static one to link); ld64 has no -Bstatic. Stripping breaks
+        # the linker's ad hoc signature, which arm64 needs to run: sign again, ad hoc.
+        step "link bimble-ccore (kernel static)" clang -pthread "${archf[@]}" "$obj"/*.o "$kd/libmanifoldc.a" \
+            "$kd/libmanifold.a" "$kd/libClipper2.a" -lc++ -lm -o "$bin"
+        step "strip, sign ad hoc" bash -c 'strip "$1" && codesign --force --sign - "$1"' _ "$bin"
+        printf '  %-28s %s, macOS %s or newer\n' "arch" "$(lipo -archs "$bin")" "$MACOSX_DEPLOYMENT_TARGET"
+    else
+        step "link bimble-ccore (kernel static)" clang -pthread -s "$obj"/*.o "$kd/libmanifoldc.a" "$kd/libmanifold.a" \
+            "$kd/libClipper2.a" -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc -lm -o "$bin"
+    fi
     local web
     web=$(cd "$stage" && pwd)/web
     # The lab: web-ui's own build script (prebuild included), into the archive's web/.
     step "web-ui build (vite)" bash -c 'cd ../web-ui && npm run --silent build -- --outDir "$1" --emptyOutDir --logLevel warn' _ "$web"
     cp ../LICENSE "$stage/LICENSE"
+    local needs="Linux with glibc 2.35 or newer and a browser with WebGL2. Nothing is installed."
+    local last=""
+    if [[ $CC_OS == Darwin ]]; then
+        needs="macOS $MACOSX_DEPLOYMENT_TARGET or newer and a browser with WebGL2. Nothing is installed."
+        last="Signed: ad hoc only. Unpacked from a browser download: xattr -dr com.apple.quarantine ."
+    fi
     cat > "$stage/README.txt" << EOF
-bimble-ccore $CC_VER ($arch, Linux): the C core of Bimble and its lab, a preview build.
+bimble-ccore $CC_VER ($arch, $osname): the C core of Bimble and its lab, a preview build.
 Bimble is open-source structural BIM (MIT licence, see LICENSE): https://github.com/guilbep/bimble
 
 Run:    ./bimble-ccore open model.ifc       (also .bimble or .json; no model: an empty lab)
@@ -257,15 +296,22 @@ Run:    ./bimble-ccore open model.ifc       (also .bimble or .json; no model: an
         --no-browser: only print the address. --port N: this port, not a free one.
 Stop:   Ctrl-C.
 Files:  bimble-ccore (the program) and web/ (the lab; keep it next to the program).
-Needs:  Linux with glibc 2.35 or newer and a browser with WebGL2. Nothing is installed.
+Needs:  $needs
 EOF
-    step "archive" tar -C "$R/stage" --sort=name --owner=0 --group=0 --numeric-owner -czf "$R/$name.tar.gz" "$name"
+    [[ -z $last ]] || echo "$last" >> "$stage/README.txt"
+    # GNU tar: sorted, owner 0. BSD tar (macOS) has neither option; COPYFILE_DISABLE keeps
+    # macOS's ._ metadata files out.
+    if [[ $(tar --version 2> /dev/null) == *"GNU tar"* ]]; then
+        step "archive" tar -C "$R/stage" --sort=name --owner=0 --group=0 --numeric-owner -czf "$R/$name.tar.gz" "$name"
+    else
+        step "archive" env COPYFILE_DISABLE=1 tar -C "$R/stage" -czf "$R/$name.tar.gz" "$name"
+    fi
     printf '  %-28s %s, %d bytes\n' "archive" "$R/$name.tar.gz" "$(wc -c < "$R/$name.tar.gz")"
 }
 
 t_start=$(ms)
 if [[ ${1:-} == wasm* ]]; then echo "  boolean kernel: none in wasm (openings and boolean results drawn uncut)"
-elif ((${#KFLAGS[@]})); then echo "  boolean kernel: manifold (out/deps/manifold)"
+elif ((HAVE_KERNEL)); then echo "  boolean kernel: manifold (out/deps/manifold)"
 else echo "  boolean kernel: none (openings and boolean results drawn uncut)"; fi
 case "${1:-}" in
   tcc)
@@ -294,7 +340,7 @@ case "${1:-}" in
     # wasm-opt reads the features the code uses (bulk memory...) instead of assuming none.
     nowo=()
     clang --target=wasm32 --no-wasm-opt -fsyntax-only -x c /dev/null 2> /dev/null && nowo=(--no-wasm-opt)
-    wasm_build ccore-view.wasm "$VIEW_OPT" "${nowo[@]}" -Wl,--keep-section=target_features \
+    wasm_build ccore-view.wasm "$VIEW_OPT" ${nowo[@]+"${nowo[@]}"} -Wl,--keep-section=target_features \
         -DCC_VIEW_ONLY "${VIEW_LIB[@]}"
     step "wasm-opt $VIEW_OPT" "$wopt" "$VIEW_OPT" out/wasm/ccore-view.wasm -o out/wasm/ccore-view.wasm
     wasm_sizes ccore-view.wasm

@@ -10,6 +10,7 @@
 //            The resolved number is written back to process.env, so child processes (a bench run
 //            by a test, dev.sh) use the same base.
 // Every name in the suite has its own offset (checked at load): no two ports collide in a base.
+// Also CHROMIUM, the browser every lab test starts (below).
 // Host offset = default - 47300; Vite offset = 128 + default - 5190. Never 47400 or 5173 (dev.sh).
 import net from "node:net";
 import { dirname, resolve } from "node:path";
@@ -112,6 +113,11 @@ if (env !== undefined && env !== "") {
   }
 }
 export const PORT_BASE = BASE;
+
+// The browser of the lab tests (headless, over CDP): $CHROMIUM when set, else /usr/bin/chromium on
+// Linux and Google Chrome's binary on macOS (ticket MAC1; the GitHub macOS image has Chrome).
+export const CHROMIUM = process.env.CHROMIUM ||
+  (process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "/usr/bin/chromium");
 // A suffix for fixed scratch paths under out/ ("" without a base): two runs in one tree, two dirs.
 export const RUN_TAG = BASE === null ? "" : `-${BASE}`;
 

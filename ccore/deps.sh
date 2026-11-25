@@ -11,29 +11,36 @@
 #                      manifold-src/ inside), or a manifold source tree with its cmake build in
 #                      <dir>/build.
 # Sourced (build.sh, test/run.sh): defines kernel_setup, which imports $MANIFOLD_DIR when set (as
-# above, only when it changed) and sets KFLAGS (compile), KLINK_CLANG and KLINK_TCC (link) when
-# out/deps/manifold is usable; else the arrays stay empty and the core builds without a kernel
+# above, only when it changed) and sets KFLAGS (compile), KLINK_CLANG and KLINK_TCC (link) and
+# HAVE_KERNEL=1 when out/deps/manifold is usable; else the arrays stay empty (HAVE_KERNEL=0) and the core builds without a kernel
 # (openings and boolean results drawn uncut, with a warning). CC_NO_KERNEL=1 forces that.
+# macOS (ticket MAC1): no shared library (only tcc needs it, and macOS builds with clang), so
+# KLINK_TCC stays empty there; clang links libc++, not libstdc++. CMAKE_OSX_ARCHITECTURES (cmake
+# reads it from the environment) builds manifold for another arch, as release.yml does.
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/portable.sh"
 
 MANIFOLD_TAG=v3.5.3 # manifold-csg-sys 3.5.105 (build.rs MANIFOLD_VERSION)
 MANIFOLD_URL=https://github.com/elalish/manifold.git
 DEPS_OUT=out/deps/manifold
 
-# deps_import <cmake build dir> <source tree>: copy the libraries and the header, make the .so.
+# deps_import <cmake build dir> <source tree>: copy the libraries and the header, make the .so
+# (not on macOS: see the header).
 deps_import() {
     local b=$1 s=$2 d=$DEPS_OUT
     local libs=("$b/bindings/c/libmanifoldc.a" "$b/src/libmanifold.a" "$b/_deps/clipper2-build/libClipper2.a")
     local stamp
-    stamp=$(stat -c '%n %Y %s' "${libs[@]}" "$s/bindings/c/include/manifold/manifoldc.h" | sha1sum | cut -c1-16)
+    stamp=$(file_sig "${libs[@]}" "$s/bindings/c/include/manifold/manifoldc.h" | sha1_16)
     [[ -f $d/stamp && $(cat "$d/stamp") == "$stamp" ]] && return 0
     rm -rf "$d"
     mkdir -p "$d/lib" "$d/include/manifold"
     cp "${libs[@]}" "$d/lib/"
     cp "$s"/bindings/c/include/manifold/*.h "$d/include/manifold/"
     # One shared library for tcc (the static ones were built with -fPIC).
-    clang++ -shared -o "$d/lib/libmanifoldc.so" -Wl,--whole-archive "$d/lib/libmanifoldc.a" -Wl,--no-whole-archive \
-        "$d/lib/libmanifold.a" "$d/lib/libClipper2.a" -lm
+    if [[ $CC_OS != Darwin ]]; then
+        clang++ -shared -o "$d/lib/libmanifoldc.so" -Wl,--whole-archive "$d/lib/libmanifoldc.a" -Wl,--no-whole-archive \
+            "$d/lib/libmanifold.a" "$d/lib/libClipper2.a" -lm
+    fi
     echo "$stamp" > "$d/stamp"
 }
 
@@ -50,18 +57,20 @@ deps_from_dir() {
 }
 
 kernel_setup() {
-    KFLAGS=() KLINK_CLANG=() KLINK_TCC=()
+    KFLAGS=() KLINK_CLANG=() KLINK_TCC=() HAVE_KERNEL=0
     [[ ${CC_NO_KERNEL:-0} == 1 ]] && return 0
     if [[ -n ${MANIFOLD_DIR:-} ]] && ! deps_from_dir "$MANIFOLD_DIR"; then
         echo "  MANIFOLD_DIR=$MANIFOLD_DIR holds no manifold C binding build (ignored)" >&2
     fi
     local d=$DEPS_OUT
-    [[ -f $d/lib/libmanifoldc.a && -f $d/lib/libmanifoldc.so && -f $d/include/manifold/manifoldc.h ]] || return 0
-    local abs
+    [[ -f $d/lib/libmanifoldc.a && -f $d/include/manifold/manifoldc.h ]] || return 0
+    [[ $CC_OS == Darwin || -f $d/lib/libmanifoldc.so ]] || return 0
+    local abs cxx=-lstdc++
     abs=$(cd "$d" && pwd)
-    KFLAGS=(-DCC_HAVE_MANIFOLD -isystem "$abs/include")
-    KLINK_CLANG=("$abs/lib/libmanifoldc.a" "$abs/lib/libmanifold.a" "$abs/lib/libClipper2.a" -lstdc++ -lm)
-    KLINK_TCC=("-L$abs/lib" -lmanifoldc "-Wl,-rpath=$abs/lib")
+    [[ $CC_OS == Darwin ]] && cxx=-lc++
+    KFLAGS=(-DCC_HAVE_MANIFOLD -isystem "$abs/include") HAVE_KERNEL=1
+    KLINK_CLANG=("$abs/lib/libmanifoldc.a" "$abs/lib/libmanifold.a" "$abs/lib/libClipper2.a" "$cxx" -lm)
+    [[ $CC_OS == Darwin ]] || KLINK_TCC=("-L$abs/lib" -lmanifoldc "-Wl,-rpath=$abs/lib")
 }
 
 deps_main() {
@@ -75,7 +84,8 @@ deps_main() {
     [[ -d $src/.git ]] || git clone --depth 1 --branch "$MANIFOLD_TAG" "$MANIFOLD_URL" "$src"
     cmake -S "$src" -B "$bld" -DCMAKE_BUILD_TYPE=Release -DMANIFOLD_TEST=OFF -DMANIFOLD_PYBIND=OFF \
         -DMANIFOLD_JSBIND=OFF -DMANIFOLD_CBIND=ON -DMANIFOLD_CROSS_SECTION=ON -DMANIFOLD_USE_BUILTIN_CLIPPER2=ON \
-        -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DMANIFOLD_PAR=OFF
+        -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DMANIFOLD_PAR=OFF \
+        ${CMAKE_OSX_ARCHITECTURES:+"-DCMAKE_OSX_ARCHITECTURES=$CMAKE_OSX_ARCHITECTURES"}
     cmake --build "$bld" -j "${JOBS:-2}"
     deps_import "$bld" "$src"
     echo "manifold $MANIFOLD_TAG built into $DEPS_OUT"

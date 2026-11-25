@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { port } from "./ports.mjs";
+import { CHROMIUM, port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
@@ -142,7 +142,7 @@ async function main() {
   writeFileSync(join(SITE, "index.html"), "<!doctype html><title>root</title>");
   await serve();
 
-  const chrome = start("chromium", "/usr/bin/chromium", [
+  const chrome = start("chromium", CHROMIUM, [
     "--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--remote-debugging-port=0",
     `--user-data-dir=${join(tmp, "chromium")}`, "--no-first-run", "--no-default-browser-check", "about:blank",
   ]);

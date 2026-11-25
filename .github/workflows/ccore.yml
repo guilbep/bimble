@@ -1,9 +1,10 @@
 name: ccore
 # The C core's suites (tickets K1, K3): the same script builders run, ccore/ci/run.sh, its three parts
-# (unit, san, lab) as three Linux jobs side by side. Linux is the check; macOS only measures what is
-# missing (ccore/results/ci.md) and may fail.
-# The release archives of bimble-ccore (ticket R1): job ccore-release on a manual run and on a tag
-# ccore-v<VERSION>; on a tag, ccore-prerelease attaches them to a GitHub prerelease. Never a tag v*:
+# (unit, san, lab) as three Linux jobs side by side, and ccore/ci/run.sh clang on macOS (ticket
+# MAC1; no tcc, no wasm there).
+# The release archives of bimble-ccore (tickets R1, MAC1): job ccore-release on a manual run, on a
+# tag ccore-v<VERSION> and on a push whose head commit message holds [ccore-release]; on a tag,
+# ccore-prerelease attaches them to a GitHub prerelease. Never a tag v*:
 # that prefix starts the Rust release, the Pages deployment and the brew formula (release.yml).
 on:
   push:
@@ -218,39 +219,108 @@ jobs:
           path: ccore/out/ci/
           retention-days: 14
 
-  # Feasibility only (ccore/results/ci.md): the C suites with Apple clang, no boolean kernel. Its
-  # log is the evidence of what a macOS port needs; a failure does not fail the workflow.
+  # The C core on macOS (ticket MAC1, ccore/results/ci.md): Apple clang, the boolean kernel
+  # (manifold through deps.sh, cached), the scripts under macOS's own /bin/bash 3.2 (no Homebrew
+  # bash). ci/run.sh clang: test/run.sh with clang, then test/host.sh on the clang host (host_test,
+  # lab_boot in the image's Google Chrome). No tcc and no wasm-ld on macOS: the edit loop and the
+  # wasm builds stay on Linux. The first steps print what the port depends on, and a compile check
+  # of every file shows all the compile errors of one run at once.
   ccore-macos:
     runs-on: macos-latest
-    continue-on-error: true
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      # macOS's /bin/bash is 3.2: an empty array under `set -u` ("${KFLAGS[@]}" without a kernel,
-      # test/run.sh) is an error there. A newer bash first, so the log reaches the C code.
-      - run: |
+      - name: Versions and keys
+        id: keys
+        run: |
+          echo "manifold=$(sed -n 's/^MANIFOLD_TAG=\([^ ]*\).*/\1/p' ccore/deps.sh)" >> "$GITHUB_OUTPUT"
           sw_vers
+          uname -m
           clang --version | head -n 1
-          bash --version | head -n 1
-          if [ "$(bash -c 'echo ${BASH_VERSINFO[0]}')" -lt 5 ]; then brew install bash; fi
-          bash --version | head -n 1
-      - name: test/run.sh (clang, no kernel)
-        run: ccore/test/run.sh
-        env:
-          CC: clang
-          CC_NO_KERNEL: "1"
+          cmake --version | head -n 1
+          echo "bash on PATH (#!/usr/bin/env bash): $(command -v bash), $(bash -c 'echo $BASH_VERSION')"
+          for t in timeout gtimeout perl shasum sha1sum llvm-ar ar lsof codesign; do
+            printf '%-9s %s\n' "$t" "$(command -v "$t" || echo -)"
+          done
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version || echo "no Google Chrome"
+      - name: manifold (cache)
+        id: manifold
+        uses: actions/cache@v4
+        with:
+          path: ccore/out/deps/manifold
+          key: manifold-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh', 'ccore/portable.sh') }}
+      - if: steps.manifold.outputs.cache-hit != 'true'
+        run: JOBS=3 ccore/deps.sh
+      - run: ls -l ccore/out/deps/manifold/lib
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web-ui/package-lock.json
+      - working-directory: web-ui
+        run: npm ci --no-audit --no-fund
+      # Diagnostics: every C file alone with the suites' flags (-Werror), every error of every file.
+      - name: Compile check (Apple clang, each file)
+        working-directory: ccore
+        run: |
+          fails=0 files=0
+          for f in src/*.c session/*.c host/*.c tools/*.c test/*_test.c; do
+            [[ $f == src/wasm_stub.c ]] && continue
+            files=$((files + 1))
+            if ! clang -std=c11 -fsyntax-only -ferror-limit=0 -Wall -Wextra -Werror -Wno-unused-function \
+                -DRYU_ONLY_64_BIT_OPS -D_DARWIN_C_SOURCE -DCC_HAVE_MANIFOLD -isystem out/deps/manifold/include \
+                -Isrc -Ivendor/ryu -Isession -Ihost "$f"; then
+              echo "::error file=ccore/$f::does not compile with Apple clang"
+              fails=$((fails + 1))
+            fi
+          done
+          echo "compile check: $files files, $fails failed"
+          ((fails == 0))
+      - name: ccore/ci/run.sh clang
+        if: ${{ !cancelled() }}
+        run: ccore/ci/run.sh clang
+      - name: Logs of the failed suites
+        if: failure()
+        run: |
+          for f in ccore/out/ci/*.log ccore/out/t9b-*.log; do
+            [[ -f $f ]] || continue
+            echo "::group::$f"
+            grep -nE 'FAIL|error|Error|passed, ' "$f" | head -n 60 || true
+            echo "--- last 80 lines"
+            tail -n 80 "$f"
+            echo "::endgroup::"
+          done
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccore-macos-logs
+          path: |
+            ccore/out/ci/
+            ccore/out/t9b-*.log
+          retention-days: 14
 
-  # The Linux release archive (ticket R1, ADR 0069 rule 2): ccore/build.sh release (clang -O2,
-  # manifold static, the lab built by Vite), checked by test/release_test.mjs on the unpacked archive.
-  # ubuntu-22.04: a low glibc (2.35), so the binary runs on more distributions (as release.yml).
+  # The release archives (ticket R1, ADR 0069 rule 2; macOS: ticket MAC1): ccore/build.sh release
+  # (clang -O2, manifold static, the lab built by Vite), checked by test/release_test.mjs on the
+  # unpacked archive. Linux on ubuntu-22.04: a low glibc (2.35), so the binary runs on more
+  # distributions (as release.yml). macOS on macos-15 (as release.yml): arm64 natively, x86_64 with
+  # CMAKE_OSX_ARCHITECTURES (manifold and the core), run under Rosetta 2 for the test; both for
+  # macOS 11 and newer. Also on a push whose head commit message holds [ccore-release]: a branch
+  # can show its archives before a tag (workflow_dispatch needs this file on the default branch).
   ccore-release:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/ccore-v')
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/ccore-v') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[ccore-release]'))
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-22.04-arm]
+        include:
+          - { os: ubuntu-22.04, name: ubuntu-22.04 }
+          - { os: ubuntu-22.04-arm, name: ubuntu-22.04-arm }
+          - { os: macos-15, name: macos-arm64, mac_arch: arm64 }
+          - { os: macos-15, name: macos-x86_64, mac_arch: x86_64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
+    env:
+      CMAKE_OSX_ARCHITECTURES: ${{ matrix.mac_arch }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.mac_arch && '11.0' || '' }}
     steps:
       - uses: actions/checkout@v4
       - name: The tag names ccore/VERSION
@@ -261,20 +331,22 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match ccore/VERSION $v: the tag must be ccore-v$v"
             exit 1
           fi
-      - run: scripts/apt-install.sh clang cmake
+      - if: runner.os == 'Linux'
+        run: scripts/apt-install.sh clang cmake
         timeout-minutes: 12
       - name: Versions and keys
         id: keys
         run: |
           echo "manifold=$(sed -n 's/^MANIFOLD_TAG=\([^ ]*\).*/\1/p' ccore/deps.sh)" >> "$GITHUB_OUTPUT"
           clang --version | head -n 1
-          ldd --version | head -n 1
+          if [[ $RUNNER_OS == Linux ]]; then ldd --version | head -n 1; else sw_vers; fi
+          echo "CMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES:-} MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-}"
       - name: manifold (cache)
         id: manifold
         uses: actions/cache@v4
         with:
           path: ccore/out/deps/manifold
-          key: manifold-${{ matrix.os }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh') }}
+          key: manifold-${{ matrix.name }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh', 'ccore/portable.sh') }}
       - if: steps.manifold.outputs.cache-hit != 'true'
         run: JOBS=4 ccore/deps.sh
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -285,27 +357,48 @@ jobs:
       - working-directory: web-ui
         run: npm ci --no-audit --no-fund
       - run: ccore/build.sh release
-      - run: node ccore/test/release_test.mjs
+      # x86_64 on the arm64 runner: the test runs the binary under Rosetta 2 (installed if missing).
+      - name: test/release_test.mjs
+        run: |
+          if [[ "${{ matrix.mac_arch }}" == x86_64 && $(uname -m) == arm64 ]]; then
+            arch -x86_64 /usr/bin/true 2> /dev/null || sudo softwareupdate --install-rosetta --agree-to-license
+            export RELEASE_ARCH=x86_64
+          fi
+          node ccore/test/release_test.mjs
       - uses: actions/upload-artifact@v4
         with:
-          name: ccore-release-${{ matrix.os }}
+          name: ccore-release-${{ matrix.name }}
           path: ccore/out/release/*.tar.gz
           if-no-files-found: error
           retention-days: 30
 
-  # On a tag ccore-v*: both archives on one GitHub prerelease, once the full suites passed too.
+  # On a tag ccore-v*: the four archives and their SHA256SUMS on one GitHub prerelease, once the
+  # full suites passed on Linux and on macOS too. The Homebrew formula of that release
+  # (ccore/ci/formula.sh) is printed and kept as an artifact: committing it to main as
+  # Formula/bimble-ccore.rb is a person's step (never Formula/bimble.rb, which release.yml owns).
   ccore-prerelease:
     if: startsWith(github.ref, 'refs/tags/ccore-v')
-    needs: [ccore-linux, ccore-san, ccore-lab, ccore-release]
+    needs: [ccore-linux, ccore-san, ccore-lab, ccore-macos, ccore-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: ccore-release-*
           path: dist
           merge-multiple: true
+      - name: SHA256SUMS and the Homebrew formula
+        run: |
+          (cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS)
+          ccore/ci/formula.sh "${GITHUB_REF_NAME#ccore-v}" dist/SHA256SUMS > bimble-ccore.rb
+          cat bimble-ccore.rb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccore-formula
+          path: bimble-ccore.rb
+          retention-days: 90
       - name: Prerelease ${{ github.ref_name }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -315,6 +408,6 @@ jobs:
           v=${GITHUB_REF_NAME#ccore-v}
           if ! gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --verify-tag --prerelease --title "bimble-ccore $v (preview)" \
-              --notes "The C core of Bimble with its lab, for Linux (x86_64, aarch64). Unpack, then run \`./bimble-ccore open model.ifc\`: the lab opens in your browser. See README.txt in the archive."
+              --notes "The C core of Bimble with its lab, for Linux (x86_64, aarch64) and macOS (arm64, x86_64; 11 or newer, signed ad hoc). Unpack, then run \`./bimble-ccore open model.ifc\`: the lab opens in your browser. See README.txt in the archive."
           fi
-          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --clobber
