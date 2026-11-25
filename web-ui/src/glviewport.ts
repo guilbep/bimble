@@ -32,9 +32,20 @@
 // passes: cut solids show filled at the cut shade, what lies below the cut in projection with its
 // edges. Rays are orthographic (straight down from the pointer), so the place tool and picking work
 // as in 3D. Each view keeps its camera; back to the 3D tab, the 3D camera comes back.
+// Dimensions and texts (ticket C4, ccore/src/annot.h): in a plan, the view's annotations (`query
+// view_annotations`, resolved in C: anchors on element features follow their element) are drawn on
+// a 2D canvas over the scene: extension lines, the dimension line, 45° ticks, the value; texts at
+// their point. Their size is Rust's paper size (2.25 mm for a dimension's value, the text's
+// size_mm) times the view's scale, within 8..40 px (viewing.rs draw_annotations). A click on one
+// selects it (not an element), Delete removes it (verb delete_annotation), a drag moves it
+// (move_annotation: a text by the drag, a dimension's line across itself). While the annotate tool
+// is on (bimble.ts startDimension / startText), pointer moves and clicks go to it (op tool, as the
+// place tool) and its preview is drawn dashed; Esc stops it.
 import {
-  boxTool, openViews, placing, select, selectLinked, state, toolCall, viewClip, visibility, visibilitySets,
-  type ToolPointer, type ToolState, type ViewClip, type Visibility, type VisibilitySets,
+  annotate, annotateCall, boxTool, deleteAnnotation, moveAnnotation, openViews, placing, select, selectLinked, state, toolCall,
+  viewAnnotations, viewClip, visibility, visibilitySets,
+  type AnnotateState, type ToolPointer, type ToolState, type ViewAnnotation, type ViewAnnotations, type ViewClip, type Visibility,
+  type VisibilitySets,
 } from "./bimble";
 
 // Palette, sRGB (bimble-core style.rs:302, :335-410), by MaterialCategory index.
@@ -70,6 +81,12 @@ const AMBIENT = 0.62;
 // Camera defaults (bimble-render lib.rs Camera::default): yaw -55°, pitch 28°, vertical fov 35°.
 const FOV_Y = (35 * Math.PI) / 180;
 const CLICK_PX = 4;
+// Annotations (viewing.rs draw_annotations): the dimension colour, the selected one's, the preview's.
+const ANNOT_CSS = "rgb(32, 70, 150)";
+const ANNOT_SEL_CSS = "rgb(200, 60, 90)";
+const ANNOT_PREVIEW_CSS = "rgba(32, 70, 150, 0.7)";
+const DIM_TEXT_MM = 2.25; // a dimension's value without a dimension type (paper mm)
+const ANNOT_PICK_PX = 6;
 
 interface Bmsh {
   rev: number;
@@ -308,6 +325,19 @@ interface GlStats {
   linkTris: number;
   /** Test hook: a world point (mm) -> CSS px in the viewport (clientX, clientY), or null. */
   toScreen?: (x: number, y: number, z: number) => [number, number] | null;
+  /** Dimensions and texts (ticket C4): the view's annotations as last fetched, the strings the
+   *  overlay drew in its last frame, the selected annotation, the annotate tool's state and calls,
+   *  the last annotation error. */
+  annotations: ViewAnnotations | null;
+  overlayTexts: string[];
+  selectedAnnotation: string | null;
+  annotate: AnnotateState | null;
+  annotateCalls: number;
+  annotError: string | null;
+  /** The GlobalId the annotate tool's last click added. */
+  annotAdded: string | null;
+  /** Test hook: where an annotation is drawn (client px): a dimension's line middle, a text's point. */
+  annotationScreen?: (id: string) => [number, number] | null;
   /** The camera: "3d" (orbit, perspective) or "plan" (orthographic, top-down), the view shown, the
    *  plan's half height in mm, and the camera's yaw and pitch (radians). */
   camera?: { mode: "3d" | "plan"; view: string | null; look: string | null; half: number; yaw: number; pitch: number; target: number[] };
@@ -333,7 +363,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const canvas = document.getElementById("bimble");
   const stats: GlStats = { firstFrameMs: null, meshBytes: 0, meshFetchMs: 0, meshRev: null, frames: 0, picks: 0, error: null,
     toolCalls: 0, ghostTris: 0, hover: null, toolError: null, placed: null,
-    hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null, links: [], linkTris: 0 };
+    hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null, links: [], linkTris: 0,
+    annotations: null, overlayTexts: [], selectedAnnotation: null, annotate: null, annotateCalls: 0, annotError: null, annotAdded: null };
   window.__bbGl = stats;
   if (!(canvas instanceof HTMLCanvasElement)) return () => undefined;
   const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
@@ -343,6 +374,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     return () => undefined;
   }
   const t = encodeURIComponent(token);
+  // The 2D overlay for dimensions and texts: a canvas over #bimble, not hit by the pointer.
+  const overlay = document.createElement("canvas");
+  overlay.setAttribute("aria-hidden", "true");
+  overlay.dataset.bbOverlay = "annotations";
+  overlay.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:block";
+  canvas.insertAdjacentElement("afterend", overlay);
+  const octx = overlay.getContext("2d");
   const source: MeshSource = typeof base !== "string" ? base : {
     epoch: async () => {
       const r = await fetch(`${base}/change?since=0&t=${t}`, { cache: "no-store" });
@@ -689,7 +727,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     const m = mesh;
-    if (!m) return;
+    if (!m) { drawOverlay(); return; }
     const { e, mvp } = matrices();
     const light = norm(add(norm(sub(e, target)), [-0.3, -0.2, 0.9]));
     const box = clipBox();
@@ -764,6 +802,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.uniform1i(uClip, 0);
     if (box && !plan) drawBox(box);
     drawGhost();
+    drawOverlay();
     stats.frames++;
     if (stats.firstFrameMs === null) stats.firstFrameMs = performance.now();
   };
@@ -878,6 +917,173 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindBuffer(gl.ARRAY_BUFFER, markBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lines), gl.DYNAMIC_DRAW);
     markN = lines.length / 3;
+    dirty = true;
+  };
+
+  // ---- dimensions and texts (ticket C4) ----
+  let anns: ViewAnnotations | null = null;
+  let annKey = "";
+  let selAnn: string | null = null;
+  /** A drag of an annotation: its id, the start (client px) and the drag so far (world mm). */
+  let annDrag: { id: string; x0: number; y0: number; by: [number, number] } | null = null;
+  /** A world plan point (mm) -> overlay CSS px, or null. */
+  const toLocal = (x: number, y: number): [number, number] | null => {
+    const m = mesh;
+    if (!m) return null;
+    const { mvp } = matrices();
+    const z = (plan?.elevation ?? 0) - m.origin[2];
+    const p = [x - m.origin[0], y - m.origin[1], z, 1];
+    const c = [0, 1, 3].map((r) => (mvp[r] ?? 0) * p[0]! + (mvp[4 + r] ?? 0) * p[1]! + (mvp[8 + r] ?? 0) * p[2]! + (mvp[12 + r] ?? 0) * p[3]!);
+    if ((c[2] ?? 0) <= 0) return null;
+    return [((c[0]! / c[2]! + 1) / 2) * canvas.clientWidth, ((1 - c[1]! / c[2]!) / 2) * canvas.clientHeight];
+  };
+  const pxPerMm = () => canvas.clientHeight / Math.max(1e-9, 2 * half);
+  const fontPx = (sizeMm: number) => Math.min(40, Math.max(8, sizeMm * (anns?.scale ?? 100) * pxPerMm()));
+  /** What the overlay draws of one annotation, in CSS px: segments, the text, its anchor and angle. */
+  interface Shape { segs: [number, number, number, number][]; text: string; at: [number, number]; angle: number; px: number; base: "dim" | "text" }
+  const shapeOf = (a: ViewAnnotation, by: [number, number] = [0, 0]): Shape | null => {
+    const L = (p: [number, number]) => toLocal(p[0] + by[0], p[1] + by[1]);
+    if (a.type === "text") {
+      const at = L(a.at);
+      return at ? { segs: [], text: a.text, at, angle: (-a.angle_deg * Math.PI) / 180, px: fontPx(a.size_mm), base: "text" } : null;
+    }
+    if (!a.qa || !a.qb || !a.mid || !a.dir) return null;
+    const pa = L(a.a), pb = L(a.b), qa = L(a.qa), qb = L(a.qb), mid = L(a.mid), d2 = L([a.mid[0] + a.dir[0], a.mid[1] + a.dir[1]]);
+    if (!pa || !pb || !qa || !qb || !mid || !d2) return null;
+    let angle = Math.atan2(d2[1] - mid[1], d2[0] - mid[0]);
+    if (Math.abs(angle) > Math.PI / 2 + 1e-9) angle += Math.PI; // upright (a ceiling plan is mirrored)
+    const t = 4, c = Math.cos(angle), s = Math.sin(angle);
+    // 45° ticks across the line at its ends (screen px).
+    const tick = (p: [number, number]): [number, number, number, number] => {
+      const k = [(c - s) * t, (s + c) * t];
+      return [p[0] - k[0]!, p[1] - k[1]!, p[0] + k[0]!, p[1] + k[1]!];
+    };
+    return { segs: [[pa[0], pa[1], qa[0], qa[1]], [pb[0], pb[1], qb[0], qb[1]], [qa[0], qa[1], qb[0], qb[1]], tick(qa), tick(qb)],
+      text: a.text, at: mid, angle, px: fontPx(DIM_TEXT_MM), base: "dim" };
+  };
+  const stroke = (ctx: CanvasRenderingContext2D, sh: Shape, css: string, dash: number[] = []) => {
+    ctx.strokeStyle = css;
+    ctx.fillStyle = css;
+    ctx.lineWidth = 1;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    for (const g of sh.segs) { ctx.moveTo(g[0], g[1]); ctx.lineTo(g[2], g[3]); }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (!sh.text) return;
+    ctx.save();
+    ctx.translate(sh.at[0], sh.at[1]);
+    ctx.rotate(sh.angle);
+    ctx.font = `${sh.px.toFixed(1)}px sans-serif`;
+    if (sh.base === "dim") { ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillText(sh.text, 0, -2); }
+    else {
+      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      sh.text.split("\n").forEach((line, i) => ctx.fillText(line, 0, i * sh.px * 1.25));
+    }
+    ctx.restore();
+  };
+  /** The annotation under overlay px (x, y), the last drawn first, or null. */
+  const annotationAt = (x: number, y: number): string | null => {
+    if (!plan || !anns || !octx) return null;
+    for (const a of [...anns.items].reverse()) {
+      const sh = shapeOf(a);
+      if (!sh) continue;
+      const segs = sh.base === "dim" ? sh.segs.slice(2, 3) : [];
+      for (const g of segs) {
+        const dx = g[2] - g[0], dy = g[3] - g[1], l2 = dx * dx + dy * dy;
+        const u = l2 > 0 ? Math.min(1, Math.max(0, ((x - g[0]) * dx + (y - g[1]) * dy) / l2)) : 0;
+        if (Math.hypot(x - g[0] - u * dx, y - g[1] - u * dy) <= ANNOT_PICK_PX) return a.id;
+      }
+      // the text's box, in its own axes
+      octx.font = `${sh.px.toFixed(1)}px sans-serif`;
+      const lines = sh.text.split("\n");
+      const w = Math.max(sh.px, ...lines.map((l) => octx.measureText(l).width));
+      const c = Math.cos(-sh.angle), s = Math.sin(-sh.angle), rx = x - sh.at[0], ry = y - sh.at[1];
+      const lx = rx * c - ry * s, ly = rx * s + ry * c;
+      const [x0, x1] = sh.base === "dim" ? [-w / 2, w / 2] : [0, w];
+      const [y0, y1] = sh.base === "dim" ? [-sh.px - 2, 0] : [-sh.px, (lines.length - 1) * sh.px * 1.25 + 0.3 * sh.px];
+      const p = ANNOT_PICK_PX / 2;
+      if (lx >= x0 - p && lx <= x1 + p && ly >= y0 - p && ly <= y1 + p) return a.id;
+    }
+    return null;
+  };
+  stats.annotationScreen = (id) => {
+    const a = anns?.items.find((x) => x.id === id);
+    const sh = a ? shapeOf(a) : null;
+    if (!a || !sh) return null;
+    const r = canvas.getBoundingClientRect();
+    if (a.type === "dimension" && a.qa && a.qb) {
+      const qa = toLocal(...a.qa), qb = toLocal(...a.qb);
+      if (qa && qb) return [r.left + (qa[0] + qb[0]) / 2, r.top + (qa[1] + qb[1]) / 2];
+    }
+    return [r.left + sh.at[0] + 2, r.top + sh.at[1] - sh.px / 3];
+  };
+  const drawOverlay = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+    if (overlay.width !== w || overlay.height !== h) { overlay.width = w; overlay.height = h; }
+    const ctx = octx;
+    if (!ctx) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    const texts: string[] = [];
+    if (plan && mesh) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      for (const a of anns?.items ?? []) {
+        const moving = annDrag?.id === a.id;
+        const sh = shapeOf(a, moving ? annDrag!.by : [0, 0]);
+        if (!sh) continue;
+        stroke(ctx, sh, a.id === selAnn ? ANNOT_SEL_CSS : ANNOT_CSS);
+        if (sh.text) texts.push(sh.text);
+      }
+      const st = stats.annotate;
+      if (st?.active && st.preview) {
+        const p = st.preview;
+        const sh = shapeOf({ ...p, type: "dimension", id: "", kind: null, axis: "aligned", anchors: [] as never } as ViewAnnotation);
+        if (sh) stroke(ctx, sh, ANNOT_PREVIEW_CSS, [4, 3]);
+        if (sh?.text) texts.push(sh.text);
+      }
+      if (st?.active && st.hover) { // the pointer: a cross, a circle when on an element's feature
+        const q = toLocal(...st.hover.at);
+        if (q) {
+          ctx.strokeStyle = ANNOT_CSS;
+          ctx.beginPath();
+          ctx.moveTo(q[0] - 6, q[1]); ctx.lineTo(q[0] + 6, q[1]); ctx.moveTo(q[0], q[1] - 6); ctx.lineTo(q[0], q[1] + 6);
+          if (st.anchor) { ctx.moveTo(q[0] + 5, q[1]); ctx.arc(q[0], q[1], 5, 0, 2 * Math.PI); }
+          ctx.stroke();
+        }
+      }
+    }
+    stats.overlayTexts = texts;
+  };
+  /** The annotations of the view shown, again when the model or the view changed. */
+  const refreshAnnotations = () => {
+    const key = plan ? `${state.value.rev}|${viewId}` : "";
+    if (key === annKey) return;
+    annKey = key;
+    anns = plan ? viewAnnotations() : null;
+    stats.annotations = anns;
+    if (selAnn && !anns?.items.some((a) => a.id === selAnn)) selAnn = stats.selectedAnnotation = null;
+    dirty = true;
+  };
+  const annotatingNow = () => annotate.value?.active === true && plan !== null && mesh !== null;
+  /** One annotate tool call for the pointer at client (x, y). */
+  const annotAt = (name: "pointer" | "click", cx: number, cy: number, mods: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
+    const r = canvas.getBoundingClientRect();
+    const x = cx - r.left, y = cy - r.top;
+    stats.annotateCalls++;
+    const { state: st, error } = annotateCall(name, { ray: rayAt(x, y), ray_tol: rayAt(x + SNAP_PX, y), free: mods.shiftKey, ortho: mods.ctrlKey || mods.metaKey });
+    stats.annotError = error;
+    if (error) console.warn(`gl viewport: annotate ${name}:`, error);
+    stats.annotate = st;
+    if (st?.added) { selAnn = stats.selectedAnnotation = stats.annotAdded = st.added; annKey = ""; }
+    dirty = true;
+  };
+  const annotCancel = () => {
+    stats.annotateCalls++;
+    const { state: st, error } = annotateCall("cancel");
+    stats.annotError = error;
+    stats.annotate = st;
     dirty = true;
   };
 
@@ -1002,7 +1208,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     dirty = true;
   }).observe(canvas);
 
-  let drag: { pan: boolean; box: boolean; x: number; y: number; x0: number; y0: number; moved: boolean } | null = null;
+  let drag: { pan: boolean; box: boolean; annot?: string; x: number; y: number; x0: number; y0: number; moved: boolean } | null = null;
   /** One call of the C core's box tool for the pointer at client (x, y). */
   const boxAt = (name: "box_press" | "box_move" | "box_release", cx: number, cy: number) => {
     const r = canvas.getBoundingClientRect();
@@ -1022,10 +1228,25 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // A left press on a handle of the section box: the box tool holds that face (no orbit).
     const onHandle = e.button === 0 && !e.shiftKey && !placingNow() && !plan && clipBox() !== null && boxAt("box_press", e.clientX, e.clientY)?.active === true;
     drag = { pan: e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey), box: onHandle, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
+    // A left press on a dimension or a text of the plan: it is held (a click selects it, a drag moves it).
+    if (plan && e.button === 0 && !e.shiftKey && !placingNow() && !annotatingNow()) {
+      const r = canvas.getBoundingClientRect();
+      const id = annotationAt(e.clientX - r.left, e.clientY - r.top);
+      if (id) drag.annot = id;
+    }
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!drag) {
-      if (placingNow()) pendingMove = e;
+      if (placingNow() || annotatingNow()) pendingMove = e;
+      return;
+    }
+    if (drag.annot) { // the held annotation follows the pointer (world mm: the orthographic rays' offset)
+      if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > CLICK_PX) drag.moved = true;
+      if (!drag.moved) return;
+      const r = canvas.getBoundingClientRect();
+      const a = rayAt(drag.x0 - r.left, drag.y0 - r.top), b = rayAt(e.clientX - r.left, e.clientY - r.top);
+      annDrag = { id: drag.annot, x0: drag.x0, y0: drag.y0, by: [(b[0] ?? 0) - (a[0] ?? 0), (b[1] ?? 0) - (a[1] ?? 0)] };
+      dirty = true;
       return;
     }
     if (drag.box) {
@@ -1060,12 +1281,30 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       else { stats.boxCalls++; boxTool("box_cancel"); preview = null; stats.boxFace = null; dirty = true; }
       return;
     }
+    if (d?.annot) { // a held annotation: a click selects it, a drag moves it (one verb)
+      const by = annDrag?.by;
+      annDrag = null;
+      selAnn = stats.selectedAnnotation = d.annot;
+      dirty = true;
+      if (e.type === "pointerup" && d.moved && by && anns && (by[0] !== 0 || by[1] !== 0)) {
+        const err = moveAnnotation(anns.view, d.annot, [Math.round(by[0]), Math.round(by[1])]);
+        stats.annotError = err;
+        if (err) console.warn("gl viewport: move_annotation:", err);
+      }
+      return;
+    }
     if (e.type !== "pointerup" || !d || d.moved || e.button !== 0) return;
     if (placingNow()) { // a click while placing goes to the tool (Shift: free, no pan)
       pendingMove = null;
       toolAt("click", e.clientX, e.clientY, e);
       return;
     }
+    if (annotatingNow()) { // a click while annotating goes to the annotate tool
+      pendingMove = null;
+      annotAt("click", e.clientX, e.clientY, e);
+      return;
+    }
+    if (selAnn) { selAnn = stats.selectedAnnotation = null; dirty = true; } // a click elsewhere: the annotation is let go
     if (d.pan) return;
     if (plan && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > CLICK_PX) return;
     const r = canvas.getBoundingClientRect();
@@ -1081,9 +1320,19 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   // Esc while placing: the tool cancels (stops placing, drops the points), as Rust's Esc.
   window.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || placing.value?.active !== true) return;
     const el = e.target as HTMLElement | null;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+    const typing = el !== null && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+    if (!typing && e.key === "Escape" && annotate.value?.active === true) { annotCancel(); return; }
+    if (!typing && (e.key === "Delete" || e.key === "Backspace") && selAnn && anns && plan) { // the selected annotation goes
+      const err = deleteAnnotation(anns.view, selAnn);
+      stats.annotError = err;
+      if (err) console.warn("gl viewport: delete_annotation:", err);
+      else selAnn = stats.selectedAnnotation = null;
+      dirty = true;
+      return;
+    }
+    if (e.key !== "Escape" || placing.value?.active !== true) return;
+    if (typing) return;
     stats.toolCalls++;
     const { state: t, error } = toolCall("cancel");
     stats.toolError = error;
@@ -1101,6 +1350,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     dirty = true;
   }, { passive: false });
 
+  let seenAnnot: AnnotateState | null = null;
   const loop = () => {
     if (openViews.value !== seenViews) { // a tab, a view or the model changed: the view shown
       seenViews = openViews.value;
@@ -1142,7 +1392,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const e = pendingMove;
       pendingMove = null;
       if (placingNow()) toolAt("pointer", e.clientX, e.clientY, e);
+      else if (annotatingNow()) annotAt("pointer", e.clientX, e.clientY, e);
     }
+    if (annotate.value !== seenAnnot) { // started or stopped (bimble.ts startDimension, startText)
+      seenAnnot = annotate.value;
+      stats.annotate = seenAnnot;
+      dirty = true;
+    }
+    if (annotate.value?.active === true && !plan) annotCancel(); // the plan was left
+    refreshAnnotations();
     if (tool && placing.value?.active !== true) showTool(null); // placing stopped elsewhere
     const key = mesh ? `${state.value.selection.join(",")}|${state.value.linked?.link ?? ""}` : "";
     if (mesh && key !== selKey) {

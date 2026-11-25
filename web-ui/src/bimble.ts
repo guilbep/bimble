@@ -693,6 +693,70 @@ export function toolCall(name: "pointer" | "click" | "cancel", args: ToolPointer
   }
 }
 
+// ---- Dimensions and texts in a plan (ticket C4, ccore/src/annot.h; C core only) ----
+
+/** An end of a dimension as `view_annotations` gives it: the element feature it follows, if any. */
+export interface AnnotationAnchor { element: string | null; feature: string | null; follows: boolean }
+/** `query("view_annotations")` items: resolved for drawing, world plan mm. */
+export type ViewAnnotation =
+  | { type: "dimension"; id: string; a: [number, number]; b: [number, number]; qa: [number, number] | null; qb: [number, number] | null;
+      mid: [number, number] | null; dir: [number, number] | null; offset_mm: number; axis: "aligned" | "horizontal" | "vertical";
+      value_mm: number; text: string; kind: string | null; anchors: [AnnotationAnchor, AnnotationAnchor] }
+  | { type: "text"; id: string; at: [number, number]; text: string; size_mm: number; angle_deg: number; kind: string | null };
+export interface ViewAnnotations { view: string; scale: number; unit: "mm" | "cm" | "m"; items: ViewAnnotation[] }
+/** The dimensions and texts of a view (default: the view shown), or null (none shown, or not the C core). */
+export const viewAnnotations = (view?: string, unit?: "mm" | "cm" | "m") =>
+  tryQuery<ViewAnnotations | null>("view_annotations", null, { ...(view ? { view } : {}), ...(unit ? { unit } : {}) });
+
+/** The annotate tool's state (op `tool` "annotate", then pointer / click / cancel while it is on). */
+export interface AnnotateState {
+  active: boolean;
+  mode: "dimension" | "text" | null;
+  /** The GlobalId the last click added. */
+  added: string | null;
+  /** The element feature under the pointer, as a click would anchor it. */
+  anchor: { element: string; feature: string } | null;
+  anchors: ({ element: string; feature: string } | null)[];
+  hover: { at: [number, number]; snap: string | null; z: number } | null;
+  points: [number, number][];
+  /** The dimension the next click makes (as a view_annotations dimension, without id and anchors). */
+  preview: { a: [number, number]; b: [number, number]; qa: [number, number]; qb: [number, number]; mid: [number, number];
+    dir: [number, number]; offset_mm: number; axis: string; text: string; value_mm: number } | null;
+  text: string | null;
+  view: string | null;
+}
+/** The annotate tool's state as the last call left it (the viewport draws it and sends it the pointer). */
+export const annotate = shallowRef<AnnotateState | null>(null);
+/** One call of the annotate tool: the state, or the error text. */
+export function annotateCall(name: "annotate" | "pointer" | "click" | "cancel", args: unknown = {}): { state: AnnotateState | null; error: string | null } {
+  try {
+    const w = wasmOrThrow();
+    if (!w.tool) return { state: null, error: "dimensions need the C core" };
+    const st = JSON.parse(w.tool(name, JSON.stringify(args))) as AnnotateState;
+    annotate.value = st.active ? st : null;
+    return { state: st, error: null };
+  } catch (e) {
+    return { state: null, error: message(e) };
+  }
+}
+/** The Annotate tab's Dimension: in the plan shown, two clicks (snapped, anchored on element corners)
+ *  and a third for the line. Esc stops. Returns the error, or null. */
+export const startDimension = (): string | null => annotateCall("annotate", { mode: "dimension" }).error;
+/** The Annotate tab's Text: one click in the plan shown places `text`. Returns the error, or null. */
+export const startText = (text: string, sizeMm?: number): string | null =>
+  annotateCall("annotate", sizeMm === undefined ? { mode: "text", text } : { mode: "text", text, size_mm: sizeMm }).error;
+/** Stop the annotate tool. */
+export const stopAnnotate = (): string | null => annotateCall("cancel").error;
+/** A dimension between two points or element features (`{element, feature}`), `offset` mm to the left of a->b. One undoable step. */
+export const addDimension = (view: string, a: [number, number] | { element: string; feature: string }, b: [number, number] | { element: string; feature: string }, offset: number) =>
+  runVerb("add_dimension", { view, a, b, offset });
+/** A text at a plan point. One undoable step. */
+export const addText = (view: string, at: [number, number], text: string) => runVerb("add_text", { view, at, text });
+/** Move a text by `by` (mm), or a dimension's line across itself. One undoable step. */
+export const moveAnnotation = (view: string, id: string, by: [number, number]) => runVerb("move_annotation", { view, id, by });
+/** Delete a dimension or a text. One undoable step. */
+export const deleteAnnotation = (view: string, id: string) => runVerb("delete_annotation", { view, id });
+
 /** `query("visibility_sets")` (C core only, ccore/session/calls.h): the whole sets `query("visibility")` caps at 50. */
 export interface VisibilitySets {
   hidden_in_view: string[];
