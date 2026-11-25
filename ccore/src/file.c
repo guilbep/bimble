@@ -620,7 +620,7 @@ static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
     if (d_idmap(d, f[3], "a map", sizeof(cc_material), fn_material, &p, &m->nmaterials, &keys->mkeys)) return -1;
     m->materials = p;
     if (d_idmap(d, f[4], "a map", sizeof(cc_element), fn_element, &p, &m->nelements, &keys->ekeys)) return -1;
-    m->elements = p;
+    m->elements = p, m->cap_elements = 0;
     if (f[5]) {
         if (d_idmap(d, f[5], "a map", sizeof(cc_view), fn_view, &p, &m->nviews, &keys->vkeys)) return -1;
         m->views = p;

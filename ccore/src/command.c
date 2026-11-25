@@ -333,6 +333,26 @@ static void *arr_insert(Arena *a, const void *arr, size_t n, size_t size, size_t
     return p;
 }
 
+/* The same into a growing array (ticket J1): in place while `*cap` has room, else a new array
+ * with twice the room. A copy per insert made an add O(n) in time and in arena bytes that are
+ * never given back (60k elements: 16 MB per place). *cap 0 means exactly n (a loaded model). */
+static void *arr_insert_grow(Arena *a, void *arr, size_t n, size_t *cap, size_t size, size_t at, const void *item) {
+    char *p = arr;
+    if (n + 1 > *cap) {
+        size_t c = n < 8 ? 16 : n * 2;
+        if (c > SIZE_MAX / size) return NULL;
+        p = arena_alloc(a, c * size, 16);
+        if (!p) return NULL;
+        if (at) memcpy(p, arr, at * size);
+        if (n > at) memcpy(p + (at + 1) * size, (const char *)arr + at * size, (n - at) * size);
+        *cap = c;
+    } else if (n > at) {
+        memmove(p + (at + 1) * size, p + at * size, (n - at) * size);
+    }
+    memcpy(p + at * size, item, size);
+    return p;
+}
+
 static void arr_remove(void *arr, size_t n, size_t size, size_t at) {
     char *p = arr;
     if (at + 1 < n) memmove(p + at * size, p + (at + 1) * size, (n - at - 1) * size);
@@ -606,7 +626,7 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
         if (gen_validate(&why, &e->generator) || placement_validate(&why, &e->placement))
             return invalid_buf(err, &why);
         size_t at = lower_bound(m->elements, m->nelements, sizeof *e, &e->id);
-        cc_element *p = arr_insert(a, m->elements, m->nelements, sizeof *e, at, e);
+        cc_element *p = arr_insert_grow(a, m->elements, m->nelements, &m->cap_elements, sizeof *e, at, e);
         if (!p) return oom(err);
         m->elements = p;
         m->nelements++;

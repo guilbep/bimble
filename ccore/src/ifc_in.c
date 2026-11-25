@@ -1273,7 +1273,7 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
         if (!ev) goto oom;
         for (size_t i = 0; i < nels; i++) ev[i] = els[i].el;
         if (sort_by_gid(ev, nels, sizeof *ev) || sort_by_gid(mats, nmats, sizeof *mats)) goto oom;
-        m->elements = ev, m->nelements = nels;
+        m->elements = ev, m->nelements = nels, m->cap_elements = 0;
         cc_material *mv = ii_dup8(&m->arena, mats, nmats * sizeof *mats);
         cc_storey *sv = ii_dup8(&m->arena, m->storeys, m->nstoreys * sizeof *sv);
         if (!mv || !sv) goto oom;
@@ -1297,7 +1297,7 @@ done:
     if (!storeys_in_arena) free(m->storeys);
     if (rc) { /* an empty model on error */
         m->storeys = NULL, m->nstoreys = 0;
-        m->elements = NULL, m->nelements = 0;
+        m->elements = NULL, m->nelements = 0, m->cap_elements = 0;
         m->materials = NULL, m->nmaterials = 0;
     }
     for (size_t i = 0; em && i < ne; i++) free(em[i].name);

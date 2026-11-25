@@ -430,6 +430,61 @@ static void hand(void) {
     buf_free(&err), buf_free(&b), buf_free(&before);
 }
 
+/* Ticket J1: add_element grows the element array (twice the room when full) instead of copying
+ * it into the arena on every add. 300 adds at shuffled positions: the array moves a few times,
+ * not 300; every element is found, the order stays sorted; undoing them all gives back the
+ * model's exact text. */
+static void grow(void) {
+    size_t fn;
+    char *frame = slurp(golden, "frame.json", &fn);
+    cc_model m;
+    cc_error e;
+    if (!frame || cc_model_load(&m, frame, fn, &e)) {
+        check_true("grow: frame.json loads", 0);
+        free(frame);
+        return;
+    }
+    Buf before, after, err, cmd;
+    buf_init(&before), buf_init(&after), buf_init(&err), buf_init(&cmd);
+    cc_model_save(&m, &before);
+    cc_history h;
+    cc_history_init(&h);
+    size_t moves = 0, n0 = m.nelements;
+    int bad = 0;
+    for (int i = 0; i < 300; i++) {
+        const cc_element *old = m.elements;
+        char id[23];
+        int k = (i * 7919) % 300; /* shuffled: inserts land everywhere in the order */
+        snprintf(id, sizeof id, "%c%s%03d", "0123"[k % 4], "J1grow000000000000", k);
+        buf_clear(&cmd);
+        buf_puts(&cmd, "[{\"op\":\"add_element\",\"id\":\"");
+        buf_puts(&cmd, id);
+        buf_puts(&cmd, "\",\"class\":\"IfcColumn\",\"name\":\"G\",\"storey\":\"");
+        buf_append(&cmd, m.storeys[0].id.c, 22);
+        buf_puts(&cmd, "\",\"material\":\"");
+        buf_append(&cmd, m.materials[0].id.c, 22);
+        buf_puts(&cmd, "\",\"placement\":{\"origin\":[1.0,2.0,0.0],\"z_axis\":[0.0,0.0,1.0],\"x_axis\":[1.0,0.0,0.0]},"
+                       "\"generator\":{\"kind\":\"rect_column\",\"width\":300.0,\"depth\":300.0,\"height\":3000.0}}]");
+        apply_json(&h, &m, buf_cstr(&cmd), &err);
+        if (err.len) bad++;
+        if (m.elements != old) moves++;
+        cc_gid g;
+        memcpy(g.c, id, 22);
+        if (!cc_model_element(&m, &g)) bad++;
+    }
+    for (size_t i = 1; i < m.nelements; i++)
+        if (cc_gid_cmp(&m.elements[i - 1].id, &m.elements[i].id) >= 0) bad++;
+    check_true("grow: 300 adds applied, found, sorted", !bad && m.nelements == n0 + 300);
+    check_true("grow: the array moved at most 8 times in 300 adds", moves <= 8);
+    while (cc_history_undo(&h, &m)) {}
+    cc_model_save(&m, &after);
+    check_eq("grow: undo all gives the model back", after.p, after.len, before.p, before.len);
+    cc_history_free(&h);
+    cc_model_free(&m);
+    buf_free(&before), buf_free(&after), buf_free(&err), buf_free(&cmd);
+    free(frame);
+}
+
 int main(int argc, char **argv) {
     golden = argc > 1 ? argv[1] : "golden/floats";
     /* run.sh passes golden/floats: the verbs goldens are one level up. */
@@ -438,5 +493,6 @@ int main(int argc, char **argv) {
     golden = dir;
     transcript();
     hand();
+    grow();
     return report("verbs");
 }

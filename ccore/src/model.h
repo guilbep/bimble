@@ -130,6 +130,9 @@ typedef struct {
     size_t nmaterials;
     cc_element *elements;
     size_t nelements;
+    /* Room in `elements` (0: exactly nelements, as a loader leaves it). Only command.c's insert
+     * sets it; code that replaces `elements` leaves it 0 (cc_model_init) or sets it back to 0. */
+    size_t cap_elements;
     cc_kv *project; /* project information, sorted by key bytes */
     size_t nproject;
     cc_view *views; /* stored views (changed defaults and others), sorted by id */
