@@ -77,3 +77,11 @@ void arena_adopt(Arena *dst, Arena *src) {
     } else dst->head = first;
     src->head = NULL;
 }
+
+void arena_trim(Arena *a, size_t keep) {
+    arena_reset(a);
+    if (a->head && a->head->cap > keep) {
+        free(a->head);
+        a->head = NULL;
+    }
+}

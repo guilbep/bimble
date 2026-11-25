@@ -615,6 +615,8 @@ static void prod_job(void *ctx, size_t k, size_t w) {
     }
 }
 
+#define SCRATCH_KEEP ((size_t)1 << 20) /* a worker's scratch past a job: at most one 1 MiB block */
+
 typedef struct {
     Ctx *c;
     R *rs;          /* per worker */
@@ -643,6 +645,7 @@ static void shape_job(void *ctx, size_t k, size_t w) {
     j->bad[k] = mb.oom || cc_scene_mesh_build((double(*)[3][3])mb.t, (uint32_t)mb.n, zero, &j->arenas[w],
                                               &j->scratch[w], &c->shapes[k].mesh);
     tris_free(&mb);
+    arena_trim(&j->scratch[w], SCRATCH_KEEP);
 }
 
 typedef struct {
@@ -683,6 +686,7 @@ static void mesh_job(void *ctx, size_t k, size_t w) {
     it->bad = cc_scene_mesh_build((double(*)[3][3])it->tris.t, (uint32_t)it->tris.n, j->origin, &j->arenas[w],
                                   &j->scratch[w], &it->mesh);
     tris_free(&it->tris);
+    arena_trim(&j->scratch[w], SCRATCH_KEEP);
 }
 
 /* ---- read */
