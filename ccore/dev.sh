@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The dev loop for the C core behind the Vue lab: ccore/dev.sh [model]
-#   Builds once with `build.sh tcc`, starts Vite (web-ui/, --strictPort) and the native host, prints
+#   Builds the host with `build.sh host` (one tcc call), starts Vite (web-ui/, --strictPort) and the native host, prints
 #   the lab URL, then watches src/ and host/ (*.c, *.h). On every save: rebuild with tcc and, when
 #   the build passes, restart the host on the same port, token and model. The open lab page sees
 #   the new epoch in the change feed and re-syncs by itself. When the build fails, the compiler
@@ -65,7 +65,7 @@ BIN=$CCORE/out/tcc/bimble-ccore
 RUN=$DEV/bimble-ccore
 
 build() { # prints the build output on failure; returns build.sh's status
-    "$CCORE/build.sh" tcc > "$DEV/build.log" 2>&1 && return 0
+    "$CCORE/build.sh" host > "$DEV/build.log" 2>&1 && return 0
     echo "dev.sh: build failed, the old host keeps running:"
     grep -v '^  .* ms$' "$DEV/build.log"
     return 1
