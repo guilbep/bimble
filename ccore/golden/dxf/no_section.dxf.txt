@@ -1,0 +1,1 @@
+error not a readable DXF: the code pair '[@1]0/FOO' was not expected at this time: expected 0/SECTION at line/offset 1

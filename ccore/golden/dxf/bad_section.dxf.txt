@@ -1,0 +1,1 @@
+error not a readable DXF: the code pair '[@3]5/HEADER' was not expected at this time: expected 2/<section-name> at line/offset 3

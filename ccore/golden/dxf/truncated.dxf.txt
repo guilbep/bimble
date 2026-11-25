@@ -1,0 +1,1 @@
+error not a readable DXF: the input unexpectedly ended before the drawing was completely loaded
