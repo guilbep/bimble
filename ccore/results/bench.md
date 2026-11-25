@@ -115,3 +115,25 @@ Checked by `test/session_test.mjs` (SIGTERM and SIGKILL restarts, undo after res
 corruptions, a model file changed since). Because rev is restored, the lab's WebGL viewport now
 also refetches `/mesh` on a new host epoch; with the old `glviewport.ts` this benchmark times out
 (no new pixels), checked once by hand.
+
+## After the reconnect fix and the host-only build (25 Nov, later the same day)
+
+Two changes, then the same benchmark (`RUNS=10 MODES="host tcc" PROBE=0 bench/lab_loop.sh`, real page,
+no probe, 10 runs per loop after a warm-up, ms):
+
+- `web-ui/src/bimble.ts` `pollChanges`: after an error it retries in 20 ms, doubling up to 1 s, instead
+  of a fixed 1 s. The fixed wait was most of the text and pixel times above. The Rust twin uses the
+  same loop, so it gains the same way (not measured).
+- `build.sh host`: one tcc call over every source, host only (what `dev.sh` runs). The `tcc` row is
+  still the full `build.sh tcc` (library, nine test binaries, host).
+
+| loop | build | stop | spawn | page query / text / pixels | **total query / text / pixels** |
+|---|---|---|---|---|---|
+| host (dev.sh) median | 73 | 3 | 10 | 33 / 95 / 166 | **106 / 166 / 233** |
+| host p95 | 84 | 4 | 21 | 36 / 127 / 190 | 121 / 214 / 277 |
+| tcc median | 220 | 4 | 13 | 34 / 112 / 186 | **258 / 334 / 414** |
+| tcc p95 | 247 | 5 | 17 | 49 / 156 / 215 | 287 / 370 / 453 |
+
+Edit → pixels in the lab, median: 40 s (release wasm) → 4.66 s (dev wasm, ADR 0065) → 1.66 s (Rust
+twin, value only, ADR 0066) → **0.23 s** (C core, dev.sh). Pixels are SwiftShader (CPU) in headless
+Chromium; a GPU would draw faster. Raw runs: `out/t12-lab_loop.json` (not committed).

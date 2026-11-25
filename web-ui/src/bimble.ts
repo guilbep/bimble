@@ -301,10 +301,13 @@ function nativeClient(port: number, token: string): Wasm & { standards_action(na
   };
 }
 
-/** Long-poll loop for the native client; never rejects, retries every 1 s on error. */
+/** Long-poll loop for the native client; never rejects. On an error it retries after 20 ms,
+ *  doubling up to 1 s: a dev rebuild restarts the engine in tens of ms (ccore/results/bench.md:
+ *  the fixed 1 s wait was most of the C core's edit -> visible time). */
 async function pollChanges(base: string, t: string, cb: (json: string) => void): Promise<void> {
   let since = 0;
   let epoch: string | undefined;
+  let wait = 20;
   for (;;) {
     try {
       // The epoch lets a restarted twin answer at once, even when its seq equals ours.
@@ -312,6 +315,7 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
       const r = await fetch(`${base}/change?since=${since}${e}&t=${t}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const m = (await r.json()) as { epoch?: string; seq: number; change: unknown };
+      wait = 20;
       // A new epoch is a restarted twin: its seq began again, so ask for its current change.
       if (typeof m.epoch === "string" && m.epoch !== epoch) {
         const restarted = epoch !== undefined;
@@ -324,8 +328,9 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
       if (typeof m.seq === "number") since = m.seq;
       if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change));
     } catch (e) {
-      console.warn("native change poll:", e);
-      await new Promise((res) => setTimeout(res, 1000));
+      if (wait >= 1000) console.warn("native change poll:", e);
+      await new Promise((res) => setTimeout(res, wait));
+      wait = Math.min(1000, wait * 2);
     }
   }
 }

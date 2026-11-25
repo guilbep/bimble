@@ -1,6 +1,6 @@
 // The C core's dev loop in the real Vue lab (ticket T12): edit a constant in C -> build.sh ->
 // restart the host on the same port, token and session -> the lab page shows the change.
-//   RUNS=10 MODES="tcc native" node ccore/bench/lab_loop.mjs     (or bench/lab_loop.sh)
+//   RUNS=10 MODES="tcc native" node ccore/bench/lab_loop.mjs   (MODES may add "host": build.sh host, dev.sh's build)     (or bench/lab_loop.sh)
 // Needs web-ui/node_modules, /usr/bin/chromium, tcc, clang. Ports: host 47342, Vite 5197.
 //
 // Method (after spikes/native-twin/exp2/loop_browser.mjs, the 1.66 s / 4.66 s baselines):
@@ -145,7 +145,7 @@ function build(mode) {
 let host = null;
 async function startHost(mode) {
   const t = now();
-  host = start(`host-${mode}`, join(CCORE, `out/${mode}/bimble-ccore`), ["--session", String(PORT), MODEL], {
+  host = start(`host-${mode}`, join(CCORE, `out/${mode === "host" ? "tcc" : mode}/bimble-ccore`), ["--session", String(PORT), MODEL], {
     env: { ...process.env, BIMBLE_TOKEN: TOKEN, BIMBLE_ORIGINS: `http://localhost:${VITE},http://127.0.0.1:${VITE}` },
   });
   await waitFor("host 'listening'", 5000, () => host.out.includes("listening") || (!alive(host) && Promise.reject(new Error(host.out))), 1);
@@ -172,8 +172,8 @@ function restoreSource() {
 
 async function main() {
   if (!existsSync(join(UI, "node_modules"))) throw new Error(`no ${UI}/node_modules: run npm ci in web-ui/`);
-  for (const m of MODES) if (!["tcc", "native"].includes(m)) throw new Error(`unknown mode ${m}`);
-  for (const m of ["tcc", "native"]) writeFileSync(join(OUT, `t12-build-${m}.log`), "");
+  for (const m of MODES) if (!["tcc", "host", "native"].includes(m)) throw new Error(`unknown mode ${m}`);
+  for (const m of ["tcc", "host", "native"]) writeFileSync(join(OUT, `t12-build-${m}.log`), "");
   copyFileSync(join(CCORE, "golden/frame.json"), MODEL);
   // Every mode's host exists before the first restart.
   for (const m of MODES) await build(m);

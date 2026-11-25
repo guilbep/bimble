@@ -73,7 +73,7 @@ build() { # prints the build output on failure; returns build.sh's status
 
 start_host() { # spawns the host and waits for "listening"; returns non-zero if it exits first
     cp "$BIN" "$RUN.tmp" && mv -f "$RUN.tmp" "$RUN"
-    "$RUN" "$PORT" "$MODEL" > "$DEV/host.log" 2>&1 &
+    "$RUN" --session "$PORT" "$MODEL" > "$DEV/host.log" 2>&1 &
     host_pid=$!
     local i
     for i in $(seq 2000); do
