@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Runs ccore test suites: test/run.sh [suite...] (default: all). Builds with tcc, or with $CC.
+# Exits non-zero if any check fails.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+ALL=(fmt json)
+suites=("$@")
+[[ ${#suites[@]} -eq 0 ]] && suites=("${ALL[@]}")
+CC=${CC:-tcc}
+case "$CC" in
+  tcc) FLAGS=(-g -Wall -DRYU_ONLY_64_BIT_OPS) ;;
+  *)   FLAGS=(-std=c11 -O1 -g -Wall -Wextra -Werror -Wno-unused-function) ;;
+esac
+out="out/run-$(basename "$CC")"
+mkdir -p "$out"
+status=0
+for s in "${suites[@]}"; do
+    if [[ ! -f "test/${s}_test.c" ]]; then echo "unknown suite: $s" >&2; status=1; continue; fi
+    "$CC" "${FLAGS[@]}" -Isrc -Ivendor/ryu src/arena.c src/buf.c src/fmt.c src/json_w.c \
+        "test/${s}_test.c" -o "$out/test_$s"
+    if ! "$out/test_$s" golden/floats; then status=1; fi
+done
+exit $status
