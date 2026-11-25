@@ -53,6 +53,7 @@ const TABLE = [
   ["host", "lab_pages", 47365, 65],
   ["host", "lab_measure", 47428, 128],
   ["host", "lab_nav", 47417, 117],
+  ["host", "versions_test", 47318, 18], // ticket H1
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_gl", 5193, 131],
   ["vite", "lab_place", 5195, 133],

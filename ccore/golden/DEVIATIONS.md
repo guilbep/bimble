@@ -391,3 +391,33 @@ marks) is glyph 0, where Rust reads the whole `cmap`. A pen of negative or NaN w
 `CC_PDF_ERR_PEN` where Rust's pdf-writer asserts (a panic).
 
 **Where.** `ccore/src/pdf_out.c` (`zlib`, `embed_font`), `ccore/test/pdf_out_test.c`.
+## 15. The history store's texts and queries (ticket H1, ADR 0017)
+
+**What.** The C history store (`ccore/src/repo.c`, `diff.c`) reads a Rust-written history folder
+and gives Rust's texts byte for byte where `golden/history/` holds them (log, branches, revisions,
+`model_at`, `version::diff`, status, the damaged, missing, unknown-revision, format and no-history
+errors). It differs from Rust in these places:
+- A history object that does not parse (a commit or tree with a missing, unknown or mistyped
+  field, broken JSON, a broken gzip stream) gives `damaged history: object <hash> ` then the C
+  reader's own words, not serde's or flate2's (`missing field `tree``, `unknown field `x``,
+  `gzip: …`). The prefix, the hash and the refusal are Rust's.
+- An I/O failure Rust prints from the OS (`io: … (os error N)`) prints `io: No such file or
+  directory (os error 2)` for a missing file and `io: input/output error` for the others.
+- A history without `refs/heads/` (Rust's `init` always makes it) has no branches; Rust's
+  `read_dir` fails there.
+- A commit whose first parent is not 64 bytes long is reported at once (`… is not a hash`), where
+  Rust carries it one step further before the same refusal.
+- The session queries `versions`, `branches`, `version_changes` and `pending`
+  (`ccore/session/versions.h`) have no Rust twin: the egui History panel reads `bimble_core::repo`
+  directly. Their JSON is the C core's; the values in it are Rust's (`Repo::log`, `branches`,
+  `version::diff` in serde's form, `Repo::status`).
+
+**Why.** Files are untrusted input (CLAUDE.md): the C reader refuses the same objects, with the
+same first words; matching serde's and flate2's error texts word for word would mean porting
+them. The queries are what the lab's History page needs (ADR 0038).
+
+**What Rust sees.** Nothing: the store is read only (writing is ticket H2), and every intact
+folder Rust writes reads the same.
+
+**Where.** `ccore/src/repo.c`, `ccore/session/versions.c`; tests `ccore/test/repo_test.c`,
+`ccore/test/versions_test.mjs`.

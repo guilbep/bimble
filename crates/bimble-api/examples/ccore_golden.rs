@@ -214,6 +214,7 @@ fn derive(dir: &Path) -> Files {
     geo_files(&m, &mut files);
     drawing_files(dir, &m, &mut files);
     files.insert("measure.txt".into(), measure_txt().into_bytes());
+    history_files(&m, &mut files);
     files
 }
 
@@ -3317,6 +3318,324 @@ fn drawing_pdfs(frame: &Model, dm: &Model, files: &mut Files) {
             if font == SheetFont::Helvetica || name == "sample" {
                 files.insert(format!("drawing/pdf/{name}-{tag}.pdf"), pdf);
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- history (ticket H1)
+
+/// `history/`: a history folder written by `bimble_core::repo` from the frame, and what Rust
+/// reads from it (`ccore/golden/README.md`, "history/"). Fixed authors and times.
+fn history_files(frame: &Model, files: &mut Files) {
+    use bimble_core::repo::{Merged, Prefer, Repo};
+    use bimble_core::version::diff;
+    const T0: i64 = 1_767_225_600; // 2026-01-01T00:00:00Z
+    const ALICE: &str = "alice@example.org";
+    const BOB: &str = "bob@example.org";
+    let tmp = std::env::temp_dir().join(format!("ccore-golden-h1-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let hdir = tmp.join("frame.bimble-history");
+    let r = Repo::init_dir(&hdir).expect("history init");
+    let first_of = |m: &Model, class: IfcClass| {
+        *m.elements
+            .iter()
+            .find(|(_, e)| e.class == class)
+            .expect("the frame has this class")
+            .0
+    };
+    let m1 = frame.clone();
+    let c1 = r.commit(&m1, "first version", ALICE, T0).expect("c1");
+    let mut m2 = m1.clone();
+    let beam = first_of(&m2, IfcClass::IfcBeam);
+    m2.elements.get_mut(&beam).unwrap().name = "Poutre \"P1\" — renommée".into();
+    let c2 = r.commit(&m2, "rename a beam", BOB, T0 + 3600).expect("c2");
+    let mut m3 = m2.clone();
+    let column = first_of(&m3, IfcClass::IfcColumn);
+    m3.elements.get_mut(&column).unwrap().placement.origin[0] += 250.0;
+    let c3 = r
+        .commit(&m3, "move a column", ALICE, T0 + 7200)
+        .expect("c3");
+    let mut m4 = m3.clone();
+    let mut sheet = bimble_core::sheet::Sheet::new("S-101", "Plan niveau 1");
+    sheet.id = GlobalId::derived(b"h1 sheet");
+    m4.sheets.insert(sheet.id, sheet);
+    let c4 = r.commit(&m4, "add a sheet", BOB, T0 + 10800).expect("c4");
+    // The variant: from the moved column, placed on the map, two copies of one mesh (ADR 0042:
+    // stored once, referred to by hash).
+    r.create_branch("variant", Some(&c3)).expect("branch");
+    let mut m5 = r.switch("variant").expect("switch variant");
+    m5.georef = bimble_core::georef::Georef::from_frame(
+        [0.866025403784, 0.5],
+        [2_600_000_000.0, 1_200_000_000.0, 0.0],
+    );
+    m5.project
+        .insert("address".into(), "Rue du Test 1, Lausanne".into());
+    let shape = Generator::Mesh {
+        positions: std::sync::Arc::new(vec![
+            [0.0, 0.0, 0.0],
+            [1000.0, 0.0, 0.0],
+            [0.0, 1000.0, 0.0],
+            [0.0, 0.0, 1100.0],
+        ]),
+        indices: std::sync::Arc::new(vec![0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3]),
+    };
+    for (k, x) in [(1u8, 1000.0), (2, 3000.0)] {
+        let mut e = m5.elements[&column].clone();
+        e.id = GlobalId::derived(&[b'h', b'1', k]);
+        e.class = IfcClass::IfcBuildingElementProxy;
+        e.ifc_entity = Some("IfcRailing".into());
+        e.name = format!("Garde-corps {k}");
+        e.placement = Placement::at(x, 1000.0, 0.0);
+        e.generator = shape.clone();
+        e.openings.clear();
+        m5.elements.insert(e.id, e);
+    }
+    let c5 = r
+        .commit(&m5, "place on the map", ALICE, T0 + 14400)
+        .expect("c5");
+    r.switch("main").expect("switch main");
+    let c6 = match r.merge("variant", Prefer::Neither, BOB, T0 + 18000) {
+        Ok(Ok((Merged::Commit(h), _))) => h,
+        other => panic!("merge: {:?}", other.map(|x| x.map(|(m, _)| m))),
+    };
+    let commits = [&c1, &c2, &c3, &c4, &c5, &c6];
+
+    // The folder itself, every file.
+    let mut on_disk = Vec::new();
+    list(&hdir, "", &mut on_disk);
+    on_disk.sort();
+    for rel in &on_disk {
+        let bytes = std::fs::read(hdir.join(rel)).expect("read history file");
+        files.insert(format!("history/frame.bimble-history/{rel}"), bytes);
+    }
+
+    // log.txt: `log <rev>`, then per commit `<hash> <time> <author> <parents or -> <message>`.
+    let mut log = String::new();
+    for rev in ["HEAD", "variant", "HEAD~2", "main~1"] {
+        writeln!(log, "log {rev}").unwrap();
+        for (h, c) in r.log(rev, 100).expect("log") {
+            let parents = if c.parents.is_empty() {
+                "-".to_string()
+            } else {
+                c.parents.join(",")
+            };
+            writeln!(log, "{h} {} {} {parents} {}", c.time, c.author, c.message).unwrap();
+        }
+    }
+    writeln!(log, "log HEAD limit 2").unwrap();
+    for (h, c) in r.log("HEAD", 2).expect("log") {
+        writeln!(log, "{h} {}", c.message).unwrap();
+    }
+    files.insert("history/log.txt".into(), log.into_bytes());
+
+    // branches.txt: HEAD, then each branch and its commit.
+    let mut br = String::new();
+    match r.head().expect("head") {
+        bimble_core::repo::Head::Branch(b) => writeln!(br, "HEAD ref: {b}").unwrap(),
+        bimble_core::repo::Head::Detached(h) => writeln!(br, "HEAD {h}").unwrap(),
+    }
+    for (name, h) in r.branches().expect("branches") {
+        writeln!(br, "{name} {h}").unwrap();
+    }
+    files.insert("history/branches.txt".into(), br.into_bytes());
+
+    // resolve.txt: `<rev> -> <hash>` or `<rev> error <text>`.
+    let tree1 = r.commit_info(&c1).expect("c1").tree;
+    let mut res = String::new();
+    let revs: Vec<String> = vec![
+        "HEAD".into(),
+        "".into(),
+        "main".into(),
+        "variant".into(),
+        "HEAD~".into(),
+        "HEAD~1".into(),
+        "HEAD~3".into(),
+        "HEAD~4".into(),
+        "variant~2".into(),
+        c2.clone(),
+        c2[..4].into(),
+        c2[..12].to_uppercase(),
+        format!("{}~1", &c4[..8]),
+        tree1[..10].into(),
+        "nope".into(),
+        "abc".into(),
+        "HEAD~x".into(),
+        "main~-1".into(),
+        "../main".into(),
+    ];
+    for rev in &revs {
+        match r.resolve(rev) {
+            Ok(h) => writeln!(res, "{rev} -> {h}").unwrap(),
+            Err(e) => writeln!(res, "{rev} error {e}").unwrap(),
+        }
+    }
+    files.insert("history/resolve.txt".into(), res.into_bytes());
+
+    // model_at_<n>.json and diff_<a>_<b>.txt (`version::diff`, one Change per Display).
+    let models: Vec<Model> = commits
+        .iter()
+        .map(|h| r.model_at(h).expect("model_at"))
+        .collect();
+    for (i, m) in models.iter().enumerate() {
+        files.insert(
+            format!("history/model_at_{}.json", i + 1),
+            file::to_string(m).into_bytes(),
+        );
+    }
+    let changes_text = |changes: &[bimble_core::version::Change]| {
+        let mut s = String::new();
+        for c in changes {
+            writeln!(s, "{c}").unwrap();
+        }
+        s
+    };
+    for (a, b) in [
+        (1, 2),
+        (2, 3),
+        (3, 4),
+        (4, 6),
+        (3, 5),
+        (5, 6),
+        (1, 6),
+        (6, 1),
+        (2, 2),
+    ] {
+        let d = diff(&models[a - 1], &models[b - 1]);
+        files.insert(
+            format!("history/diff_{a}_{b}.txt"),
+            changes_text(&d).into_bytes(),
+        );
+    }
+    // diff_6_extra.txt: values that are objects and arrays (a generator of another kind, a mesh
+    // point, the schedules, a sheet's paper); `extra.json` is the second model.
+    let mut extra = models[5].clone();
+    let rail1 = GlobalId::derived(&[b'h', b'1', 1]);
+    let rail2 = GlobalId::derived(&[b'h', b'1', 2]);
+    extra.elements.get_mut(&rail1).unwrap().generator = extra.elements[&column].generator.clone();
+    if let Generator::Mesh { positions, .. } =
+        &mut extra.elements.get_mut(&rail2).unwrap().generator
+    {
+        let mut p = (**positions).clone();
+        p[1] = [1000.0, 0.5, -2.0];
+        *positions = std::sync::Arc::new(p);
+    }
+    extra.schedules = golden_schedules(&extra);
+    let sid = GlobalId::derived(b"h1 sheet");
+    extra.sheets.get_mut(&sid).unwrap().paper = "A1".into();
+    extra.sheets.get_mut(&sid).unwrap().portrait = true;
+    files.insert(
+        "history/diff_6_extra.txt".into(),
+        changes_text(&diff(&models[5], &extra)).into_bytes(),
+    );
+    files.insert(
+        "history/extra.json".into(),
+        file::to_string(&extra).into_bytes(),
+    );
+    // status.txt: the working model against HEAD (a renamed storey and project, a removed
+    // element, a changed schedule-free project field).
+    let mut working = models[5].clone();
+    working.project_name = "Concrete frame (working)".into();
+    let storey = *working.storeys.keys().next().unwrap();
+    working.storeys.get_mut(&storey).unwrap().name = "Sous-sol".into();
+    working.elements.remove(&beam);
+    working.project.remove("address");
+    working
+        .project
+        .insert("client".into(), "Synthetic SA".into());
+    let st = r.status(&working).expect("status");
+    files.insert("history/status.txt".into(), changes_text(&st).into_bytes());
+    // working.json: that working model, for the C side's status.
+    files.insert(
+        "history/working.json".into(),
+        file::to_string(&working).into_bytes(),
+    );
+
+    // errors.txt: `<case> <Rust's text>`; the history folder path reads `<dir>`.
+    let mut err = String::new();
+    let masked = |e: &dyn std::fmt::Display, d: &Path| {
+        e.to_string().replace(&d.display().to_string(), "<dir>")
+    };
+    // A damaged object: c2's object as plain JSON with byte 10 flipped (xor 1).
+    let copy = tmp.join("damaged.bimble-history");
+    copy_dir(&hdir, &copy);
+    let rd = Repo::open_dir(&copy).expect("open copy");
+    let obj = |d: &Path, h: &str| d.join("objects").join(&h[..2]).join(&h[2..]);
+    let plain = {
+        use std::io::Read;
+        let gz = std::fs::read(obj(&copy, &c2)).unwrap();
+        let mut p = Vec::new();
+        flate2::read::GzDecoder::new(&gz[..])
+            .read_to_end(&mut p)
+            .unwrap();
+        p
+    };
+    let mut flipped = plain.clone();
+    flipped[10] ^= 1;
+    std::fs::write(obj(&copy, &c2), &flipped).unwrap();
+    writeln!(
+        err,
+        "damaged_commit {}",
+        masked(&rd.commit_info(&c2).unwrap_err(), &copy)
+    )
+    .unwrap();
+    writeln!(
+        err,
+        "damaged_log {}",
+        masked(&rd.log("HEAD", 100).unwrap_err(), &copy)
+    )
+    .unwrap();
+    // The same object plain and intact (an older history): read as it is.
+    std::fs::write(obj(&copy, &c2), &plain).unwrap();
+    writeln!(err, "plain_commit {}", rd.commit_info(&c2).unwrap().message).unwrap();
+    // A missing element object.
+    let beam_obj = r.tree(&r.commit_info(&c6).unwrap().tree).unwrap().elements[&beam].clone();
+    std::fs::remove_file(obj(&copy, &beam_obj)).unwrap();
+    writeln!(
+        err,
+        "missing {}",
+        masked(&rd.model_at("HEAD").unwrap_err(), &copy)
+    )
+    .unwrap();
+    for rev in ["nope", "HEAD~9"] {
+        writeln!(
+            err,
+            "unknown {}",
+            masked(&r.resolve(rev).unwrap_err(), &hdir)
+        )
+        .unwrap();
+    }
+    writeln!(
+        err,
+        "not_a_hash {}",
+        masked(&r.commit_info("abc").unwrap_err(), &hdir)
+    )
+    .unwrap();
+    std::fs::write(copy.join("format"), "bimble-history 2\n").unwrap();
+    writeln!(
+        err,
+        "format {}",
+        masked(&Repo::open_dir(&copy).err().unwrap(), &copy)
+    )
+    .unwrap();
+    let none = tmp.join("none.bimble-history");
+    writeln!(
+        err,
+        "no_repo {}",
+        masked(&Repo::open_dir(&none).err().unwrap(), &none)
+    )
+    .unwrap();
+    files.insert("history/errors.txt".into(), err.into_bytes());
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            copy_dir(&p, &to.join(e.file_name()));
+        } else {
+            std::fs::copy(&p, to.join(e.file_name())).unwrap();
         }
     }
 }

@@ -1,0 +1,9 @@
+damaged_commit damaged history: object 903b5b5fc1b762fe8ed0537a818193b18aaf4ab5663297dfcbe86a8564eb4192 does not match its hash
+damaged_log damaged history: object 903b5b5fc1b762fe8ed0537a818193b18aaf4ab5663297dfcbe86a8564eb4192 does not match its hash
+plain_commit rename a beam
+missing damaged history: object b9de659cd811949de331483bd63aa07a5a7903df67dfe408002ac48ab092eccc is missing
+unknown unknown revision "nope"
+unknown unknown revision "HEAD~9"
+not_a_hash damaged history: object abc is not a hash
+format <dir>: unsupported history format "bimble-history 2" (this build reads "bimble-history 1")
+no_repo no history next to <dir> (run `bimble history init`)

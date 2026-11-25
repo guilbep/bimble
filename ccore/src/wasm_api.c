@@ -580,9 +580,16 @@ static void wp_log(void *ctx, const char *line, size_t n) {
     buf_putc(&w->log, '\n');
 }
 
+/* platform.h list_dir: no folders in the browser (ticket H1: "no history folder"). */
+static int wp_list_dir(void *ctx, const char *path, size_t max, char **names, size_t *n) {
+    (void)ctx, (void)path, (void)max;
+    *names = NULL, *n = 0;
+    return CC_PF_NOT_FOUND;
+}
+
 static WasmPlatform wasm_pf_state;
 static const cc_platform wasm_pf = {
-    &wasm_pf_state, 0, wp_read_file, wp_exists, wp_write_file, wp_now_ms, wp_unix_s, wp_random, wp_log,
+    &wasm_pf_state, 0, wp_read_file, wp_exists, wp_write_file, wp_now_ms, wp_unix_s, wp_random, wp_log, wp_list_dir,
 };
 
 /* The module's default session: the one the host_* exports and `call` work on (created on first

@@ -33,6 +33,7 @@
 #include "view_only.h"
 #include "annot.h"
 #include "measure.h" /* ticket T1 */
+#include "versions.h" /* ticket H1 */
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -898,6 +899,10 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         }
         buf_puts(out, "{\"redo\":[],\"undo\":[]}");
         return CC_OK;
+    }
+    { /* H1: the history store's queries (versions.h: versions, branches, version_changes, pending) */
+        int rc = cc_versions_query(s, name, body, n, out);
+        if (rc >= 0) return rc;
     }
     if (!strcmp(name, "visibility")) return q_visibility(s, &w);
     if (!strcmp(name, "visibility_sets")) { /* a C addition (visibility.h): the page draws from these */

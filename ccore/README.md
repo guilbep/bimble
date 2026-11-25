@@ -15,7 +15,7 @@ f64 formatters on top of vendored Ryu (`vendor/ryu`, see `SOURCE`): `fmt_f64_jso
 ADR 0068 sets seven layers (`docs/research/core-architecture.md` §5). A file includes only its
 own layer and lower ones. L0–L3 have no files, clock, threads or globals; platform code lives only
 in the carriers (L6), which hand the session a `cc_platform` (`session/platform.h`: read file,
-write file atomically, exists, now, wall clock, random bytes, log). One exception, from §5
+write file atomically, exists, now, wall clock, random bytes, log, list a folder). One exception, from §5
 ("parallel pure functions on a frozen model, one scratch arena per thread"): `src/jobs` (L0) runs
 independent tasks on pthreads natively (serial in wasm), with one global, the thread count
 (`CC_THREADS`, else the online cores). The IFC display reader and the STEP parser use it.
@@ -26,8 +26,8 @@ independent tasks on pthreads natively (serial in wasm), with one global, the th
 | L1 model | model, validate, canonical, Commands, History | `src/model`, `command`, `history`, `library` |
 | L2 io / geom | file (v1, v2), STEP, IFC in and out; scene | `src/file`, `step`, `ifc_in`, `ifc_out`, `scene`, `earcut` |
 | L3 api | verbs, query | `src/verbs`, `query` |
-| L4 store | journal, repo, remote | (none yet) |
-| L5 session | call router, sessions (handles: `cc_session *`), selection, placing, scene and /mesh caches, session file, platform interface | `session/calls`, `session`, `mesh`, `mesh_model`, `platform` |
+| L4 store | journal, repo, remote | `src/repo` (the history store, read only: ticket H1), `diff` (`version::diff`) |
+| L5 session | call router, sessions (handles: `cc_session *`), selection, placing, scene and /mesh caches, session file, platform interface | `session/calls`, `session`, `mesh`, `mesh_model`, `platform`, `versions` (the history queries) |
 | L6 carriers | wasm module, HTTP host (native platform, `main`), MCP over stdio, later cli | `src/wasm_api.c` (+ `wasm_stub.c`), `host/server.c`, `host/static.c`, `host/platform_native.c`, `host/main.c`, `host/mcp.c` |
 
 A process holds any number of sessions (`cc_session_new(platform)`); the native host serves one

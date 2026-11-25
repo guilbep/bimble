@@ -35,6 +35,12 @@ typedef struct cc_platform {
     int (*random)(void *ctx, void *p, size_t n);
     /* One log line (text without the final newline; the platform adds it). */
     void (*log)(void *ctx, const char *line, size_t n);
+    /* The entries of the folder at `path` (ticket H1, the history store): malloc'd, each one
+     * "d<name>\0" (a folder) or "f<name>\0" (anything else), `*n` bytes in all, at most `max`
+     * (else CC_PF_TOO_LARGE); "." and ".." left out, in no particular order. CC_PF_NOT_FOUND
+     * when there is no such folder. The wasm module has no folders: NOT_FOUND always. NULL (a
+     * carrier written before it) reads as no folders too. */
+    int (*list_dir)(void *ctx, const char *path, size_t max, char **names, size_t *n);
 } cc_platform;
 
 /* printf-style log line through pf->log ("bimble-ccore: …"). At most 8 KiB, cut beyond. */

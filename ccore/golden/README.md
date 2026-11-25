@@ -468,6 +468,34 @@ template is the default one with axes `off`, every annotation switch off and no 
 `ccore/test/draw_test.c` (suite `draw`) checks `cut/`, `svg/`, `plan/*/cut.svg`, `roboto.txt` (against
 the table `tools/roboto_table.sh` generates from it) and `fmt.txt` byte for byte.
 
+## history/ (the history store, ticket H1, ADR 0017)
+
+`ccore_golden` builds a history with `bimble_core::repo` from `frame.json` in a temp folder, with
+fixed authors (`alice@example.org`, `bob@example.org`) and times (2026-01-01 + n hours): on `main`
+"first version", "rename a beam", "move a column", "add a sheet"; a branch `variant` from "move a
+column" with "place on the map" (a georeference, a project field, two copies of one mesh: stored
+once, referred to by hash, ADR 0042); then `main` merges `variant` ("Merge variant"). Commits are
+numbered 1–6 in that order (5 is `variant`, 6 the merge).
+
+- `frame.bimble-history/`: the folder as Rust wrote it, every file (objects gzipped, so binary).
+- `log.txt`: `log <rev>` then `<hash> <time> <author> <parents, comma-separated, or -> <message>`
+  per commit of `Repo::log(rev, 100)`, for `HEAD`, `variant`, `HEAD~2`, `main~1`; then `log HEAD
+  limit 2`: `<hash> <message>`.
+- `branches.txt`: `HEAD ref: <branch>`, then `<name> <hash>` per branch (`Repo::branches`).
+- `resolve.txt`: `<rev> -> <hash>` or `<rev> error <RepoError>` (`Repo::resolve`): HEAD, empty,
+  branches, `~`, `~n`, full hashes, prefixes (upper case too), a tree's prefix (not a commit),
+  unknown names, bad counts.
+- `model_at_<n>.json`: `file::to_string(Repo::model_at(commit n))`.
+- `diff_<a>_<b>.txt`: `version::diff(model a, model b)`, one `Change` (its `Display`) per line
+  group; `diff_6_extra.txt`: model 6 against `extra.json` (a generator of another kind, a mesh
+  point, the schedules, a sheet field).
+- `status.txt`: `Repo::status(working.json)` (`working.json` is model 6 with a renamed project and
+  storey, a removed beam, a changed project field).
+- `errors.txt`: `<case> <text>`: commit 2 as plain JSON with byte 10 flipped (`commit_info`, `log`),
+  the same object plain and intact (read: an older history), a missing element object
+  (`model_at HEAD`), unknown revisions, a non-hash, a format line `bimble-history 2`, no history.
+  The temp folder's path reads `<dir>`.
+
 ## measure.txt
 
 The measure tool's text (ticket T1; `bimble_api::measure`, the viewer's `format_mm` and

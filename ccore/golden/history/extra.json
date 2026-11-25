@@ -1,0 +1,2560 @@
+{
+  "format": "bimble",
+  "version": 1,
+  "model": {
+    "project_id": "1ECFGZP4n20ADaVDzRQc6J",
+    "project_name": "Concrete frame 3x2x2",
+    "storeys": {
+      "04Aobkc8v6$94cGl_9HNVX": {
+        "id": "04Aobkc8v6$94cGl_9HNVX",
+        "name": "Fondations",
+        "elevation": -800.0
+      },
+      "1jLno3kWj4Hfl6pUGBDd7E": {
+        "id": "1jLno3kWj4Hfl6pUGBDd7E",
+        "name": "Niveau 2",
+        "elevation": 3000.0
+      },
+      "1uAZA0Yfn05f$xRd1k4uPR": {
+        "id": "1uAZA0Yfn05f$xRd1k4uPR",
+        "name": "Niveau 1",
+        "elevation": 0.0
+      }
+    },
+    "materials": {
+      "0aEm4Mq4nC8emERFhb_kvJ": {
+        "id": "0aEm4Mq4nC8emERFhb_kvJ",
+        "name": "C30/37",
+        "category": "concrete",
+        "props": {
+          "density_kg_m3": 2500.0,
+          "e_mpa": 33000.0,
+          "strength_mpa": 30.0,
+          "source": "EN 1992-1-1 Table 3.1; 25 kN/m³ reinforced (EN 1991-1-1)"
+        }
+      }
+    },
+    "elements": {
+      "004z1Cm4z4hgNOg0ez4Id1": {
+        "id": "004z1Cm4z4hgNOg0ez4Id1",
+        "class": "IfcColumn",
+        "name": "P2.00",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            250.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "01KnL9d95C2OMpOLdTJDE_": {
+        "id": "01KnL9d95C2OMpOLdTJDE_",
+        "class": "IfcBeam",
+        "name": "Poutre \"P1\" — renommée",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "03dpTFfU58oAzh8$WYDhNY": {
+        "id": "03dpTFfU58oAzh8$WYDhNY",
+        "class": "IfcFooting",
+        "name": "S32",
+        "storey": "04Aobkc8v6$94cGl_9HNVX",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            10000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1200.0,
+          "depth": 1200.0,
+          "height": 800.0
+        }
+      },
+      "04GjQfkFb3h8veozsv3JE_": {
+        "id": "04GjQfkFb3h8veozsv3JE_",
+        "class": "IfcBeam",
+        "name": "B2.y10",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "08Bn0kkKjBp90qLHF1eSQc": {
+        "id": "08Bn0kkKjBp90qLHF1eSQc",
+        "class": "IfcColumn",
+        "name": "P2.30",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "0AqhSZ_rv2fhNcA0EZAQ6S": {
+        "id": "0AqhSZ_rv2fhNcA0EZAQ6S",
+        "class": "IfcBeam",
+        "name": "B1.x02",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            10000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "0C098WdN9FcBpYxj5ZWGa2": {
+        "id": "0C098WdN9FcBpYxj5ZWGa2",
+        "class": "IfcFooting",
+        "name": "S22",
+        "storey": "04Aobkc8v6$94cGl_9HNVX",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            10000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1200.0,
+          "depth": 1200.0,
+          "height": 800.0
+        }
+      },
+      "0H4mYjB_D99xumo9xVHSea": {
+        "id": "0H4mYjB_D99xumo9xVHSea",
+        "class": "IfcColumn",
+        "name": "P2.01",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "0KPKhOr2fDjABMoFJCcEA0": {
+        "id": "0KPKhOr2fDjABMoFJCcEA0",
+        "class": "IfcColumn",
+        "name": "P2.32",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            10000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "0LubHshd5AZBBPSzoRwV4a": {
+        "id": "0LubHshd5AZBBPSzoRwV4a",
+        "class": "IfcColumn",
+        "name": "P2.21",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "0MftFucJzFOf0Ll16YdkZ2": {
+        "id": "0MftFucJzFOf0Ll16YdkZ2",
+        "class": "IfcBeam",
+        "name": "B2.x11",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "0Zz4pWNAXBZw6qkIP8aYH0": {
+        "id": "0Zz4pWNAXBZw6qkIP8aYH0",
+        "class": "IfcFooting",
+        "name": "S21",
+        "storey": "04Aobkc8v6$94cGl_9HNVX",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1200.0,
+          "depth": 1200.0,
+          "height": 800.0
+        }
+      },
+      "0fhn_jEKnENxLHR0gLeOWr": {
+        "id": "0fhn_jEKnENxLHR0gLeOWr",
+        "class": "IfcBeam",
+        "name": "B2.y31",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "0imkvtOTj70hSKyT$2ZSsA": {
+        "id": "0imkvtOTj70hSKyT$2ZSsA",
+        "class": "IfcColumn",
+        "name": "P1.20",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "0lNDFWRrL6GPJC8NF_Noq3": {
+        "id": "0lNDFWRrL6GPJC8NF_Noq3",
+        "class": "IfcColumn",
+        "name": "P2.11",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "0rA3PE9OT0NOleE1Zsi9z0": {
+        "id": "0rA3PE9OT0NOleE1Zsi9z0",
+        "class": "IfcColumn",
+        "name": "P1.32",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            10000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "0rorAoZjL2hRF6io9zYXuh": {
+        "id": "0rorAoZjL2hRF6io9zYXuh",
+        "class": "IfcColumn",
+        "name": "P2.12",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            10000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "0svT5hRin94BdWGBOHxd1z": {
+        "id": "0svT5hRin94BdWGBOHxd1z",
+        "class": "IfcColumn",
+        "name": "P1.01",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "104mIS_sD4MAvW2HIST5UX": {
+        "id": "104mIS_sD4MAvW2HIST5UX",
+        "class": "IfcBeam",
+        "name": "B1.y31",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "14Qng5vbL03h9K3hB$XhB7": {
+        "id": "14Qng5vbL03h9K3hB$XhB7",
+        "class": "IfcBeam",
+        "name": "B1.y10",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "14_uAyiRbEQx0FlnPBBep1": {
+        "id": "14_uAyiRbEQx0FlnPBBep1",
+        "class": "IfcBeam",
+        "name": "B1.y20",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "18esouV1LAruTpIaFsNPD6": {
+        "id": "18esouV1LAruTpIaFsNPD6",
+        "class": "IfcBeam",
+        "name": "B2.y21",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "1F3AgtJyb629MqLZVKGVrg": {
+        "id": "1F3AgtJyb629MqLZVKGVrg",
+        "class": "IfcBeam",
+        "name": "B2.x21",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "1RzLs_zaz6mPNyur8WUhu0": {
+        "id": "1RzLs_zaz6mPNyur8WUhu0",
+        "class": "IfcBeam",
+        "name": "B2.x02",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            10000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "1khkLES9P8rPMAGC5wqOCk": {
+        "id": "1khkLES9P8rPMAGC5wqOCk",
+        "class": "IfcSlab",
+        "name": "D2",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            2780.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "slab",
+          "outline": [
+            [
+              -150.0,
+              -150.0
+            ],
+            [
+              18150.0,
+              -150.0
+            ],
+            [
+              18150.0,
+              10150.0
+            ],
+            [
+              -150.0,
+              10150.0
+            ]
+          ],
+          "thickness": 220.0
+        }
+      },
+      "1mA0kqAsv9vx8yhS9GSj4A": {
+        "id": "1mA0kqAsv9vx8yhS9GSj4A",
+        "class": "IfcBeam",
+        "name": "B2.x10",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "1q56j9fRrCNgQFJmV994BY": {
+        "id": "1q56j9fRrCNgQFJmV994BY",
+        "class": "IfcBeam",
+        "name": "B2.x20",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "1qS_JeYy127ekf6aiouTzt": {
+        "id": "1qS_JeYy127ekf6aiouTzt",
+        "class": "IfcColumn",
+        "name": "P1.11",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "1r_vqXAa12jxwFerLctZd$": {
+        "id": "1r_vqXAa12jxwFerLctZd$",
+        "class": "IfcBeam",
+        "name": "B1.x10",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "1svNqCCy1F2vWSAfqDeGDq": {
+        "id": "1svNqCCy1F2vWSAfqDeGDq",
+        "class": "IfcBeam",
+        "name": "B2.y11",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "1uaPcwbZD9MwggyIJIqSuS": {
+        "id": "1uaPcwbZD9MwggyIJIqSuS",
+        "class": "IfcBeam",
+        "name": "B2.y00",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "1y2GnPShPBHP8rWGcbyUzK": {
+        "id": "1y2GnPShPBHP8rWGcbyUzK",
+        "class": "IfcSlab",
+        "name": "D1",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            2780.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "slab",
+          "outline": [
+            [
+              -150.0,
+              -150.0
+            ],
+            [
+              18150.0,
+              -150.0
+            ],
+            [
+              18150.0,
+              10150.0
+            ],
+            [
+              -150.0,
+              10150.0
+            ]
+          ],
+          "thickness": 220.0
+        }
+      },
+      "286nabgUT7Nuyn4CLVqVwT": {
+        "id": "286nabgUT7Nuyn4CLVqVwT",
+        "class": "IfcFooting",
+        "name": "S02",
+        "storey": "04Aobkc8v6$94cGl_9HNVX",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            10000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1200.0,
+          "depth": 1200.0,
+          "height": 800.0
+        }
+      },
+      "28TlFFXnvFogatqKNeLpnW": {
+        "id": "28TlFFXnvFogatqKNeLpnW",
+        "class": "IfcBeam",
+        "name": "B1.x22",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            10000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "2ACLY95MP9b9XUFGZemdDR": {
+        "id": "2ACLY95MP9b9XUFGZemdDR",
+        "class": "IfcBeam",
+        "name": "B1.x20",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "2Aj0XLfLvCBgTekipZDkmF": {
+        "id": "2Aj0XLfLvCBgTekipZDkmF",
+        "class": "IfcFooting",
+        "name": "S30",
+        "storey": "04Aobkc8v6$94cGl_9HNVX",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1200.0,
+          "depth": 1200.0,
+          "height": 800.0
+        }
+      },
+      "2Bzd0$uS9ABu4n5nKJQA6s": {
+        "id": "2Bzd0$uS9ABu4n5nKJQA6s",
+        "class": "IfcColumn",
+        "name": "P1.12",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            10000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "2C8feZAGHEuh6I5RT_ELQl": {
+        "id": "2C8feZAGHEuh6I5RT_ELQl",
+        "class": "IfcBeam",
+        "name": "B1.y01",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "2HHopVL3L1y8iVhHmYpqEM": {
+        "id": "2HHopVL3L1y8iVhHmYpqEM",
+        "class": "IfcColumn",
+        "name": "P1.22",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            10000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "2IwHl6Kj13iAwpmJ49akBf": {
+        "id": "2IwHl6Kj13iAwpmJ49akBf",
+        "class": "IfcFooting",
+        "name": "S01",
+        "storey": "04Aobkc8v6$94cGl_9HNVX",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1200.0,
+          "depth": 1200.0,
+          "height": 800.0
+        }
+      },
+      "2K3bp9KK18oBDEJdJ7vSDv": {
+        "id": "2K3bp9KK18oBDEJdJ7vSDv",
+        "class": "IfcBeam",
+        "name": "B1.x12",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            10000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "2KPN30lhPFjgLXUssHOgTR": {
+        "id": "2KPN30lhPFjgLXUssHOgTR",
+        "class": "IfcColumn",
+        "name": "P1.30",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "2KmXk9zn1FAPxjTPfLpwLP": {
+        "id": "2KmXk9zn1FAPxjTPfLpwLP",
+        "class": "IfcColumn",
+        "name": "P1.10",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "2LPVdACbb1PRfgNh6ZAfri": {
+        "id": "2LPVdACbb1PRfgNh6ZAfri",
+        "class": "IfcFooting",
+        "name": "S10",
+        "storey": "04Aobkc8v6$94cGl_9HNVX",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1200.0,
+          "depth": 1200.0,
+          "height": 800.0
+        }
+      },
+      "2NkRtlYjr5Uxf6lKwHiSH1": {
+        "id": "2NkRtlYjr5Uxf6lKwHiSH1",
+        "class": "IfcBeam",
+        "name": "B2.x12",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            10000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "2P97ZHH3v3XutfaphHA_Tu": {
+        "id": "2P97ZHH3v3XutfaphHA_Tu",
+        "class": "IfcColumn",
+        "name": "P1.00",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "2UMzCG3Hb6wP0s0jPOMeXv": {
+        "id": "2UMzCG3Hb6wP0s0jPOMeXv",
+        "class": "IfcColumn",
+        "name": "P1.21",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "2esHHUTNnFxuJGGgPziI6j": {
+        "id": "2esHHUTNnFxuJGGgPziI6j",
+        "class": "IfcBeam",
+        "name": "B2.y30",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "2ezlYa6hf2SPNC0gakg4p3": {
+        "id": "2ezlYa6hf2SPNC0gakg4p3",
+        "class": "IfcBeam",
+        "name": "B1.x21",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "2hkoIHps5FOe7Ov6gkrkCw": {
+        "id": "2hkoIHps5FOe7Ov6gkrkCw",
+        "class": "IfcColumn",
+        "name": "P2.10",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "2obkjxoQvBt9rHcfSmv2Az": {
+        "id": "2obkjxoQvBt9rHcfSmv2Az",
+        "class": "IfcColumn",
+        "name": "P1.31",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "2xBlQZnv10pBqWh02IrM06": {
+        "id": "2xBlQZnv10pBqWh02IrM06",
+        "class": "IfcColumn",
+        "name": "P2.22",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            10000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "2yd4SNLtf2mgwwEAv9gEzo": {
+        "id": "2yd4SNLtf2mgwwEAv9gEzo",
+        "class": "IfcColumn",
+        "name": "P2.02",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            10000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "3$M7JmKuL3Fvtr372XZKyV": {
+        "id": "3$M7JmKuL3Fvtr372XZKyV",
+        "class": "IfcFooting",
+        "name": "S12",
+        "storey": "04Aobkc8v6$94cGl_9HNVX",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            10000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1200.0,
+          "depth": 1200.0,
+          "height": 800.0
+        }
+      },
+      "30SgMeqZb8Avk1ZalP4QtE": {
+        "id": "30SgMeqZb8Avk1ZalP4QtE",
+        "class": "IfcBeam",
+        "name": "B2.y01",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "31EiYzIDP2fPDBN9aDg360": {
+        "id": "31EiYzIDP2fPDBN9aDg360",
+        "class": "IfcBeam",
+        "name": "B1.x01",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "31sRikne5C1Rc_wwf4Uk_U": {
+        "id": "31sRikne5C1Rc_wwf4Uk_U",
+        "class": "IfcFooting",
+        "name": "S11",
+        "storey": "04Aobkc8v6$94cGl_9HNVX",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1200.0,
+          "depth": 1200.0,
+          "height": 800.0
+        }
+      },
+      "35k8Ek8Nj9WAS$A4hSpXIc": {
+        "id": "35k8Ek8Nj9WAS$A4hSpXIc",
+        "class": "IfcColumn",
+        "name": "P2.31",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "39nr4aNJj0phDQygwRqg9C": {
+        "id": "39nr4aNJj0phDQygwRqg9C",
+        "class": "IfcFooting",
+        "name": "S31",
+        "storey": "04Aobkc8v6$94cGl_9HNVX",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1200.0,
+          "depth": 1200.0,
+          "height": 800.0
+        }
+      },
+      "3HRNkQyjj1MAhofyxUdYVC": {
+        "id": "3HRNkQyjj1MAhofyxUdYVC",
+        "class": "IfcBeam",
+        "name": "B2.x00",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "3MXGLKfpHFCwzC2p$C4Rly": {
+        "id": "3MXGLKfpHFCwzC2p$C4Rly",
+        "class": "IfcFooting",
+        "name": "S20",
+        "storey": "04Aobkc8v6$94cGl_9HNVX",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1200.0,
+          "depth": 1200.0,
+          "height": 800.0
+        }
+      },
+      "3RlBFhszfFwRWRF8jDx_EW": {
+        "id": "3RlBFhszfFwRWRF8jDx_EW",
+        "class": "IfcBeam",
+        "name": "B1.x11",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "3S0JzTJXbDrB3zYqolRI4X": {
+        "id": "3S0JzTJXbDrB3zYqolRI4X",
+        "class": "IfcBeam",
+        "name": "B1.y30",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            18000.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "3SuwoMo4X3Qwe7RKv$viJu": {
+        "id": "3SuwoMo4X3Qwe7RKv$viJu",
+        "class": "IfcBeam",
+        "name": "B1.x00",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "3Tkw_brBr7WQNFvXSKNZpR": {
+        "id": "3Tkw_brBr7WQNFvXSKNZpR",
+        "class": "IfcBeam",
+        "name": "B1.y00",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "3VqgXcUKvCSfkAEJq96gu2": {
+        "id": "3VqgXcUKvCSfkAEJq96gu2",
+        "class": "IfcBeam",
+        "name": "B2.y20",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            0.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "3YvzaJHUT7FAdbBljy9CYp": {
+        "id": "3YvzaJHUT7FAdbBljy9CYp",
+        "class": "IfcBeam",
+        "name": "B1.y11",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            6000.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "3e7cWy5xP91RLcSoXABE6J": {
+        "id": "3e7cWy5xP91RLcSoXABE6J",
+        "class": "IfcBeam",
+        "name": "B2.x22",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            10000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 6000.0
+        }
+      },
+      "3eOzAXsMn87QrJ0T9Zrb6x": {
+        "id": "3eOzAXsMn87QrJ0T9Zrb6x",
+        "class": "IfcColumn",
+        "name": "P2.20",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "3mHa9qXV958hP5Cyhml971": {
+        "id": "3mHa9qXV958hP5Cyhml971",
+        "class": "IfcFooting",
+        "name": "S00",
+        "storey": "04Aobkc8v6$94cGl_9HNVX",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1200.0,
+          "depth": 1200.0,
+          "height": 800.0
+        }
+      },
+      "3mj8$HiJ5q_3XkRMdd9B6r": {
+        "id": "3mj8$HiJ5q_3XkRMdd9B6r",
+        "class": "IfcBuildingElementProxy",
+        "name": "Garde-corps 1",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            1000.0,
+            1000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        },
+        "ifc_entity": "IfcRailing"
+      },
+      "3sPGuYxEoXVy1HvS5iElQp": {
+        "id": "3sPGuYxEoXVy1HvS5iElQp",
+        "class": "IfcBuildingElementProxy",
+        "name": "Garde-corps 2",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            3000.0,
+            1000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "mesh",
+          "positions": [
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              1000.0,
+              0.5,
+              -2.0
+            ],
+            [
+              0.0,
+              1000.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1100.0
+            ]
+          ],
+          "indices": [
+            0,
+            2,
+            1,
+            0,
+            1,
+            3,
+            0,
+            3,
+            2,
+            1,
+            2,
+            3
+          ]
+        },
+        "ifc_entity": "IfcRailing"
+      },
+      "3vYvxgpuf3eevkXl4OoNRU": {
+        "id": "3vYvxgpuf3eevkXl4OoNRU",
+        "class": "IfcBeam",
+        "name": "B1.y21",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            12000.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "x_axis": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 250.0,
+          "height": 500.0,
+          "length": 5000.0
+        }
+      },
+      "3xel6VtpTBI9Dje_G0dY4p": {
+        "id": "3xel6VtpTBI9Dje_G0dY4p",
+        "class": "IfcColumn",
+        "name": "P1.02",
+        "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            10000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      }
+    },
+    "sheets": {
+      "0cuEwYZj71jAtX9$Hp1V94": {
+        "id": "0cuEwYZj71jAtX9$Hp1V94",
+        "number": "S-101",
+        "name": "Plan niveau 1",
+        "paper": "A1",
+        "portrait": true
+      }
+    },
+    "project": {
+      "address": "Rue du Test 1, Lausanne"
+    },
+    "schedules": [
+      {
+        "name": "Concrete columns",
+        "classes": [
+          "IfcColumn"
+        ],
+        "family": "concrete",
+        "fields": [
+          "level",
+          "location",
+          "name",
+          "material",
+          "section",
+          "length",
+          "volume"
+        ],
+        "group_by_level": true,
+        "totals": true
+      },
+      {
+        "name": "Steel columns",
+        "classes": [
+          "IfcColumn"
+        ],
+        "family": "steel",
+        "fields": [
+          "level",
+          "location",
+          "name",
+          "material",
+          "section",
+          "length",
+          "volume",
+          "mass"
+        ],
+        "group_by_level": true,
+        "totals": true
+      },
+      {
+        "name": "Timber columns",
+        "classes": [
+          "IfcColumn"
+        ],
+        "family": "timber",
+        "fields": [
+          "level",
+          "location",
+          "name",
+          "material",
+          "section",
+          "length",
+          "volume"
+        ],
+        "group_by_level": true,
+        "totals": true
+      },
+      {
+        "name": "Concrete beams",
+        "classes": [
+          "IfcBeam"
+        ],
+        "family": "concrete",
+        "fields": [
+          "level",
+          "name",
+          "material",
+          "section",
+          "length",
+          "width",
+          "height",
+          "volume"
+        ],
+        "group_by_level": true,
+        "totals": true
+      },
+      {
+        "name": "Steel beams",
+        "classes": [
+          "IfcBeam"
+        ],
+        "family": "steel",
+        "fields": [
+          "level",
+          "name",
+          "material",
+          "section",
+          "length",
+          "width",
+          "height",
+          "volume",
+          "mass"
+        ],
+        "group_by_level": true,
+        "totals": true
+      },
+      {
+        "name": "Timber beams",
+        "classes": [
+          "IfcBeam"
+        ],
+        "family": "timber",
+        "fields": [
+          "level",
+          "name",
+          "material",
+          "section",
+          "length",
+          "width",
+          "height",
+          "volume"
+        ],
+        "group_by_level": true,
+        "totals": true
+      },
+      {
+        "name": "Slabs",
+        "classes": [
+          "IfcSlab"
+        ],
+        "fields": [
+          "level",
+          "name",
+          "material",
+          "height",
+          "area",
+          "volume"
+        ],
+        "group_by_level": true,
+        "totals": true
+      },
+      {
+        "name": "Walls",
+        "classes": [
+          "IfcWall",
+          "IfcWallStandardCase"
+        ],
+        "fields": [
+          "level",
+          "name",
+          "material",
+          "width",
+          "length",
+          "height",
+          "area",
+          "volume"
+        ],
+        "group_by_level": true,
+        "totals": true
+      },
+      {
+        "name": "Footings",
+        "classes": [
+          "IfcFooting"
+        ],
+        "fields": [
+          "level",
+          "location",
+          "name",
+          "material",
+          "section",
+          "height",
+          "volume"
+        ],
+        "group_by_level": true,
+        "totals": true
+      },
+      {
+        "name": "All elements",
+        "classes": [],
+        "fields": [
+          "level",
+          "name",
+          "class",
+          "material",
+          "volume",
+          "mass"
+        ],
+        "group_by_level": true,
+        "totals": true
+      },
+      {
+        "name": "Every field",
+        "classes": [],
+        "fields": [
+          "level",
+          "location",
+          "name",
+          "class",
+          "material",
+          "section",
+          "length",
+          "width",
+          "height",
+          "area",
+          "volume",
+          "mass",
+          "global_id"
+        ],
+        "group_by_level": false,
+        "totals": true
+      },
+      {
+        "name": "Sums only",
+        "classes": [
+          "IfcColumn",
+          "ifcbeam"
+        ],
+        "fields": [
+          "volume",
+          "area",
+          "mass",
+          "length"
+        ],
+        "group_by_level": true,
+        "totals": false
+      }
+    ],
+    "georef": {
+      "rotation_deg": 30.0,
+      "crs": "EPSG:2056"
+    }
+  }
+}

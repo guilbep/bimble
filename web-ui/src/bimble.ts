@@ -841,6 +841,44 @@ function refresh(modelChanged: boolean): void {
   }
 }
 
+// ---- H1: the model's history, read only (ccore/session/versions.h). The Rust viewer has no
+// such queries: the fallback says so. Writing (commit, switch, merge) is ticket H2.
+export interface VersionInfo { hash: string; parents: string[]; author: string; time: number; message: string }
+export interface HistoryHead { branch: string | null; commit: string | null }
+export interface VersionField { path: string; before: unknown; after: unknown }
+/** version::Change in serde's form. */
+export interface VersionChange { change: "added" | "removed" | "modified"; kind: string; id: string; name: string; fields?: VersionField[] }
+/** A history answer, or why there is none ("no history next to …", "no history folder in the browser"). */
+export type HistoryAnswer<T> = ({ history: true } & T) | { history: false; reason: string };
+export interface RepoHistory {
+  versions: HistoryAnswer<{ head: HistoryHead; versions: VersionInfo[] }>;
+  branches: HistoryAnswer<{ head: HistoryHead; branches: { name: string; commit: string }[] }>;
+  pending: HistoryAnswer<{ base: string | null; changes: VersionChange[] }>;
+}
+export const repoHistory = shallowRef<RepoHistory | null>(null);
+
+function historyQuery<T>(name: string, args?: unknown): HistoryAnswer<T> {
+  try {
+    return query<HistoryAnswer<T>>(name, args);
+  } catch (e) {
+    return { history: false, reason: message(e) };
+  }
+}
+
+/** Reads versions, branches and pending changes; the History page calls it when shown and on each change. */
+export function loadRepoHistory(): void {
+  repoHistory.value = {
+    versions: historyQuery("versions"),
+    branches: historyQuery("branches"),
+    pending: historyQuery("pending"),
+  };
+}
+
+/** What changed from version `a` to version `b` (version::diff). */
+export function versionChanges(a: string, b: string): HistoryAnswer<{ a: string; b: string; changes: VersionChange[] }> {
+  return historyQuery("version_changes", { a, b });
+}
+
 /** Typed query by name (bridge.rs, then bimble-api dispatch). Throws with the Rust message. */
 export function query<T>(name: string, args?: unknown): T {
   try {

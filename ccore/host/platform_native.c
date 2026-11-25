@@ -1,7 +1,10 @@
 /* The native cc_platform (session/platform.h): POSIX files, clocks, /dev/urandom, stderr. */
 #define _POSIX_C_SOURCE 200809L
 #include "host.h"
+#include <dirent.h>
 #include <fcntl.h>
+#include <string.h>
+#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -87,8 +90,58 @@ static void np_log(void *ctx, const char *line, size_t n) {
     fputc('\n', stderr);
 }
 
+/* platform.h list_dir: readdir, "d"/"f" by the entry's type (lstat when the file system does
+ * not say; a symbolic link is an "f": a history walk never follows one). */
+static int np_list_dir(void *ctx, const char *path, size_t max, char **names, size_t *n) {
+    (void)ctx;
+    *names = NULL, *n = 0;
+    DIR *d = opendir(path);
+    if (!d) return CC_PF_NOT_FOUND;
+    size_t cap = 256, len = 0;
+    char *p = malloc(cap);
+    if (!p) return closedir(d), CC_PF_NO_MEMORY;
+    struct dirent *e;
+    int st = CC_PF_OK;
+    while ((e = readdir(d))) {
+        const char *nm = e->d_name;
+        if (!strcmp(nm, ".") || !strcmp(nm, "..")) continue;
+        size_t k = strlen(nm);
+        int dir = 0;
+#ifdef DT_DIR
+        if (e->d_type == DT_DIR) dir = 1;
+        else if (e->d_type == DT_UNKNOWN)
+#endif
+        {
+            char full[4096];
+            struct stat sb;
+            if ((size_t)snprintf(full, sizeof full, "%s/%s", path, nm) < sizeof full && !lstat(full, &sb))
+                dir = S_ISDIR(sb.st_mode);
+        }
+        if (len + k + 2 > max) {
+            st = CC_PF_TOO_LARGE;
+            break;
+        }
+        if (len + k + 2 > cap) {
+            while (len + k + 2 > cap) cap *= 2;
+            char *q = realloc(p, cap);
+            if (!q) {
+                st = CC_PF_NO_MEMORY;
+                break;
+            }
+            p = q;
+        }
+        p[len++] = dir ? 'd' : 'f';
+        memcpy(p + len, nm, k + 1);
+        len += k + 1;
+    }
+    closedir(d);
+    if (st != CC_PF_OK) return free(p), st;
+    *names = p, *n = len;
+    return CC_PF_OK;
+}
+
 static const cc_platform NATIVE = {
-    NULL, 1, np_read_file, np_exists, np_write_file, np_now_ms, np_unix_s, np_random, np_log,
+    NULL, 1, np_read_file, np_exists, np_write_file, np_now_ms, np_unix_s, np_random, np_log, np_list_dir,
 };
 
 const cc_platform *cc_platform_native(void) { return &NATIVE; }
