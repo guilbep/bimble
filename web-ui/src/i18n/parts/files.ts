@@ -1,4 +1,4 @@
-// Copy for the file dialog and the unsaved-changes question (ticket FS1: dialogs/FileBrowser.vue, ConfirmDiscard.vue).
+// Copy for the file dialog and the recent files (ticket FS1: dialogs/FileBrowser.vue; the unsaved question is the shell's, shellstate.*).
 export const fr = {
   "files.title.open": "Ouvrir",
   "files.title.import_ifc": "Importer un IFC",
@@ -27,11 +27,6 @@ export const fr = {
   "files.go.import": "Importer",
   "files.go.export": "Exporter",
   "files.hint": "Choisissez un fichier",
-  "files.discard.title": "Abandonner les modifications ?",
-  "files.discard.body": "Les modifications de {file} ne sont pas enregistrées.",
-  "files.discard.yes": "Abandonner les modifications",
-  "files.discard.no": "Continuer à modifier",
-  "files.discard.hint": "Des modifications ne sont pas enregistrées",
   "files.recent.open": "Ouvrir {name}",
   "files.recent.remove": "Retirer de la liste",
 } as const;
@@ -63,11 +58,6 @@ export const en: Record<keyof typeof fr, string> = {
   "files.go.import": "Import",
   "files.go.export": "Export",
   "files.hint": "Choose a file",
-  "files.discard.title": "Discard the changes?",
-  "files.discard.body": "The changes to {file} are not saved.",
-  "files.discard.yes": "Discard the changes",
-  "files.discard.no": "Keep editing",
-  "files.discard.hint": "Some changes are not saved",
   "files.recent.open": "Open {name}",
   "files.recent.remove": "Remove from the list",
 };

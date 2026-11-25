@@ -8,9 +8,10 @@
 //   the .txt filtered out); a click on frame.bimble and Open: the model shows (its elements, the mesh);
 //   File → Save as proposes "frame.bimble", typed "saved" writes work/saved.bimble (the v2 magic), the
 //   state names it; after a reload Home lists saved.bimble first (recent files) and settings.json has it;
-//   an edit, then Home → New: the in-page question appears; "Keep editing" keeps the model and its change,
-//   New again and "Discard" makes an Untitled model; an edit, then a click on a recent file asks, "Discard"
-//   opens it; a recent entry removed from Home leaves the list and the file; the page's beforeunload
+//   an edit, then Home → New: the shell's one question (ShellNotice) appears; Cancel keeps the model and its
+//   change on Home, New again and Discard makes an Untitled model and leaves Home; an edit, then a click on a
+//   recent file asks, Discard opens it and leaves Home; a recent file that no longer opens shows the shell's
+//   error, Back -> Home; a recent entry removed from Home leaves the list and the file; the page's beforeunload
 //   asks before leaving with changes (Page.javascriptDialogOpening, dismissed: the page stays); a PDF
 //   dropped on the native page is refused with a message (a reference plan keeps a path); a .json dropped
 //   asks (changes), then opens under its name (POST /stage), is no recent file, and its Save is Save as.
@@ -234,31 +235,50 @@ async function native(cdp) {
   const pl = await place();
   check("an edit (verb place)", pl.status === 200, pl.text);
   await waitFor("unsaved", 5000, () => B("return b.state.value.unsaved;"));
+  // The one question: the shell's (shell/ShellNotice.vue, confirmClose).
   await click("[data-bb=home-new]");
-  await waitFor("the question", 5000, () => has("[data-bb=confirm-discard]"));
-  check("New with changes: the in-page question (no window.confirm)", P.dialogs.length === 0);
-  await click("[data-bb=confirm-discard-no]");
+  await waitFor("the question", 5000, () => has("[data-bb=shell-confirm]"));
+  check("New with changes: the shell's question (no window.confirm), one dialog", P.dialogs.length === 0 && (await P.evalJs("document.querySelectorAll('[role=alertdialog]').length")) === 1);
+  await click("[data-bb=shell-confirm-cancel]");
   await sleep(300);
-  check("Keep editing: the model and its change stay", (await file()) === "saved.bimble" && (await B("return b.state.value.unsaved;")) && !(await has("[data-bb=confirm-discard]")));
+  check("Cancel: Home, the model and its change stay", (await file()) === "saved.bimble" && (await B("return b.state.value.unsaved;")) && !(await has("[data-bb=shell-confirm]")) && (await has("[data-bb=home]")));
   await click("[data-bb=home-new]");
-  await waitFor("the question again", 5000, () => has("[data-bb=confirm-discard]"));
-  await click("[data-bb=confirm-discard-yes]");
+  await waitFor("the question again", 5000, () => has("[data-bb=shell-confirm]"));
+  await click("[data-bb=shell-confirm-discard]");
   await waitFor("Untitled", 5000, async () => (await file()) === "Untitled.bimble");
-  check("Discard: a new Untitled model", true);
+  check("Discard: a new Untitled model, Home left for its view", !(await has("[data-bb=home]")));
 
   // ---- A recent file with changes: asks, then opens ----
   await place();
   await waitFor("unsaved", 5000, () => B("return b.state.value.unsaved;"));
+  await click("[data-bb=quickbar-logo]");
+  await waitFor("Home", 5000, () => has("[data-bb=home-recent-file]"));
   await click(`[data-bb=home-recent-file][data-path=${JSON.stringify(saved)}]`);
-  await waitFor("the question", 5000, () => has("[data-bb=confirm-discard]"));
-  await click("[data-bb=confirm-discard-yes]");
+  await waitFor("the question", 5000, () => has("[data-bb=shell-confirm]"));
+  await click("[data-bb=shell-confirm-discard]");
   await waitFor("saved.bimble open", 5000, async () => (await file()) === "saved.bimble");
-  check("a recent file with changes: asked, then opened", true);
+  await sleep(300);
+  check("a recent file with changes: asked (the shell), then opened, Home left for the view", !(await has("[data-bb=home]")));
+  // A recent file that is not a model any more: the shell's error, Back -> Home.
+  await click("[data-bb=quickbar-logo]");
+  await waitFor("Home", 5000, () => has("[data-bb=home-recent-file]"));
+  const fj = join(work, "frame.json");
+  const fjText = readFileSync(fj, "utf8");
+  writeFileSync(fj, "not a model any more\n");
+  const before400 = P.consoleLog.length;
+  await click(`[data-bb=home-recent-file][data-path=${JSON.stringify(fj)}]`);
+  await waitFor("the error", 5000, () => has("[data-bb=shell-error]"));
+  // The host's 400 for the refused open is the error shown (one log line).
+  P.consoleLog.push(...P.consoleLog.splice(before400).filter((m) => !/status of 400/.test(m.text)));
+  await click("[data-bb=shell-error-back]");
+  await sleep(300);
+  check("a recent file that does not open: the shell's error, Back -> Home, the model kept", (await has("[data-bb=home]")) && !(await has("[data-bb=shell-error]")) && (await file()) === "saved.bimble");
+  writeFileSync(fj, fjText);
 
   // ---- beforeunload: leaving with changes asks (the browser's own question) ----
   await place();
   await waitFor("unsaved", 5000, () => B("return b.state.value.unsaved;"));
-  await P.realClick("[data-bb=home-filter]"); // a user activation: Chromium asks only then
+  await P.realClick("[data-bb=home-filter]"); // a user activation (Home shows): Chromium asks only then
   await P.S("Page.navigate", { url: "about:blank" }).catch(() => null);
   await waitFor("the beforeunload question", 5000, () => P.dialogs.includes("beforeunload"));
   await sleep(200);
@@ -281,8 +301,8 @@ async function native(cdp) {
   check("a PDF dropped on the native page: refused with a message (a reference plan keeps a path)", (err ?? "").includes("Link PDF"), err);
   check("... and the model stays", (await file()) === "saved.bimble");
   await P.drop("dropped.json", readFileSync(join(CCORE, "golden/frame.json"), "utf8"));
-  await waitFor("the question (the model has a change)", 5000, () => has("[data-bb=confirm-discard]"));
-  await click("[data-bb=confirm-discard-yes]");
+  await waitFor("the question (the model has a change)", 5000, () => has("[data-bb=shell-confirm]"));
+  await click("[data-bb=shell-confirm-discard]");
   await waitFor("dropped.json open", 10000, async () => (await file()) === "dropped.json");
   check("a .json dropped on the native page: asked, then open under its name", (await B("return b.query('elements', { limit: 10000 }).length;")) === els);
   check("... no recent file for it", !(await B("return b.recentFiles().map((f) => f.name);")).includes("dropped.json"));

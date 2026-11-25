@@ -5,12 +5,13 @@
 import { computed } from "vue";
 import { t } from "../i18n";
 import { here, send, shown } from "./send";
+import { fileRequest } from "../files"; // FS1: the page's own file dialog has its own close
 
 const s = computed(() => here.value);
 </script>
 
 <template>
-  <div v-if="s.at === 'opening' || s.at === 'confirmClose' || s.at === 'error'" class="shell-backdrop">
+  <div v-if="(s.at === 'opening' && !fileRequest) || s.at === 'confirmClose' || s.at === 'error'" class="shell-backdrop">
     <div v-if="s.at === 'opening'" class="bb-dialog shell-card" role="status" data-bb="shell-opening">
       <p class="msg">{{ t(`shellstate.opening.${s.what}`) }}</p>
       <div class="acts">

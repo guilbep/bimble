@@ -1031,7 +1031,7 @@ export let backend: "native" | "ccore" | "rust" = "rust";
 export const shellHooks: { viewShown?: () => void } = {};
 /** A file action (new, open, import_ifc, close) with its body {path, discard}, never through
  *  `screenRoutes`. Returns the session's error text, or null. */
-export function fileCall(name: string, body: { path?: string; discard?: boolean }): string | null {
+export function fileCall(name: string, body: { path?: string; discard?: boolean; dropped?: boolean /* FS1 */ }): string | null {
   try {
     const w = wasmOrThrow();
     if (w.action_with) w.action_with(name, JSON.stringify(body));

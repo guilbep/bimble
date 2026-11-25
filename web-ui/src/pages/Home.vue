@@ -28,7 +28,7 @@ const shown = computed(() => recent.value.filter((f) => f.name.toLowerCase().inc
 // `user`, `recent_files`: FS1 and SET1 turn them on in the core, and these light up by themselves) ----
 const hasUser = useCapability("user"), hasRecent = useCapability("recent_files");
 // ---- end FAKE1 ----
-// ---- FS1: a recent file opens on click (the native host reads paths; files.ts asks before dropping changes) ----
+// ---- FS1: a recent file opens on click (the native host reads paths): the shell's open {path} (it asks first) ----
 const byPath = isNative();
 const openRecent = (f: RecentFile) => { if (byPath && f.exists) void openPath(f.path); };
 const removeRecent = (f: RecentFile) => { try { actionBody("recent_remove", { path: f.path }); } catch (e) { console.warn(e); } bump.value++; };

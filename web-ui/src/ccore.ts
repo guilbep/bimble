@@ -13,7 +13,7 @@
 //   copy); `new` starts an Untitled model; `save`, `export_ifc4`/`export_ifc2x3` and
 //   `share_for_viewing` (the .bimbleview viewer file) download what the module wrote (Blob +
 //   `<a download>`, as the Rust viewer's wasm Save downloads). With unsaved changes, new and open
-//   ask first (FS1: files.ts confirmDiscard, the page's own dialog; the pickers are files.ts pickFile). `ccoreSaveBytes()`, `ccoreExportIfc(schema)` and
+//   ask first (UX1: the shell's question; FS1: the pickers are files.ts pickFile). `ccoreSaveBytes()`, `ccoreExportIfc(schema)` and
 //   `ccoreShareForViewing()` give the bytes without a download. The module's clock is the page's
 //   (host_clock, for IFC stamps).
 // - `window.ccoreSave()` saves (when there are unsaved changes) and returns the last saved text,
@@ -31,7 +31,7 @@
 //   page that hands Roboto files over, and `query pdf_fonts` says whether it did.
 
 // ---- FS1: one code path for pickers and the unsaved question (files.ts) ----
-import { confirmDiscard, pickFile } from "./files";
+import { pickFile } from "./files";
 // ---- end FS1 ----
 
 interface Exports {
@@ -136,22 +136,15 @@ export function ccoreMesh(): { bytes: ArrayBuffer; rev: number } {
   return { bytes: r.bytes.buffer as ArrayBuffer, rev: r.value };
 }
 
-function unsavedNow(): boolean {
-  if (!callHost) return false;
-  return (JSON.parse(callHost("query", "state", "{}")) as { unsaved?: boolean }).unsaved === true;
-}
-
 /** Opens a file's bytes in the session: .bimble v1/v2 and .json as an editable model, .ifc and
  *  .bimbleview read-only (no model: the scene only), or with `importIfc` an .ifc imported as an
- *  editable copy. With unsaved changes, asks first (or `discard`); false when the user kept them.
+ *  editable copy. With unsaved changes and no `discard`, refused (the shell asks first: UX1).
  *  Throws the C core's error text when the file does not open. */
 export async function ccoreOpenFile(file: Blob & { name?: string }, discard = false, importIfc = false): Promise<boolean> {
   if (!module) throw new Error("ccore: not loaded");
   const { X } = module;
-  if (!discard && unsavedNow()) {
-    if (!(await confirmDiscard())) return false; // FS1: the page's dialog
-    discard = true;
-  }
+  // FS1: the question is the shell's (confirmClose, shell/ShellNotice.vue): without `discard`, a model
+  // with unsaved changes is refused by the module, as the native host refuses it.
   const bytes = new Uint8Array(await file.arrayBuffer());
   const name = file.name || "model.bimble";
   const r = run(X.host_open.bind(X), [enc.encode(name), bytes], [(discard ? 1 : 0) | (importIfc ? 2 : 0)]);
@@ -244,14 +237,6 @@ export function ccoreDownload(name: string, data: Uint8Array | string, type = "a
 
 // ---- SIZE1: no font fetch (D7 fetched ccore/fonts/ on the first export; the files are not shipped) ----
 
-/** The file picker of `open` / `import_ifc` (FS1: files.ts pickFile, the browser's picker in wasm). */
-function pickAndOpen(importIfc = false): void {
-  void pickFile(importIfc ? "import_ifc" : "open").then((r) => {
-    const f = r?.file;
-    if (f) ccoreOpenFile(f, false, importIfc).catch((e) => console.error(`ccore: ${f.name}: ${String(e)}`));
-  });
-}
-
 /** The file picker of `link_model`; L1: of `link_pdf`; L2: of `link_dxf` (FS1: files.ts pickFile). */
 function pickAndLink(purpose: "link_model" | "link_pdf" | "link_dxf"): void {
   void pickFile(purpose).then((r) => {
@@ -266,12 +251,6 @@ function pickAndLink(purpose: "link_model" | "link_pdf" | "link_dxf"): void {
 function fileAction(name: string): boolean {
   if (!callHost) return false;
   switch (name) {
-    case "open":
-      pickAndOpen();
-      return true;
-    case "import_ifc":
-      pickAndOpen(true);
-      return true;
     case "link_model":
       if (!(JSON.parse(callHost("query", "actions", "{}")) as { name: string; enabled: boolean }[]).find((a) => a.name === "link_model")?.enabled)
         callHost("action", "link_model"); // nothing open: throws "not enabled", as the native host answers
@@ -286,10 +265,6 @@ function fileAction(name: string): boolean {
       if (!(JSON.parse(callHost("query", "actions", "{}")) as { name: string; enabled: boolean }[]).find((a) => a.name === "link_dxf")?.enabled)
         callHost("action", "link_dxf"); // nothing editable open: throws "not enabled", as the native host answers
       pickAndLink("link_dxf");
-      return true;
-    case "new": // FS1: the page's dialog
-    case "close":
-      void confirmDiscard().then((go) => go && callHost?.("action", name, JSON.stringify({ discard: true })));
       return true;
     case "save_as": // FS1: Save as in the browser: a download under the current name
       { const w = ccoreSaveBytes(); ccoreDownload(w.name, w.bytes); }

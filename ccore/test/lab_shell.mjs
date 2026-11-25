@@ -7,7 +7,8 @@
 //   N1 boot with nothing open: Home;
 //   N2 Home -> New: the model view;
 //   N3 unsaved changes, Home -> New: the question; Cancel -> Home, unchanged; New, Discard -> the view;
-//   N4 Home -> Open with no path: the core's refusal shown, Back -> Home;
+//   N4 Home -> Open (FS1): asked (unsaved), then the page's own file dialog; closed: Home, the model kept;
+//      again, a bad file picked in it: the error, Back -> Home;
 //   N5 an agent opens a file (POST /action/open) while Home shows: the model view;
 //   N6 open of a bad file (send open with a path): the error, Back -> where it was;
 //   N7 model -> Home -> "Back to the model": the view;
@@ -127,7 +128,7 @@ const SHOWS = `(() => {
     viewport: shown(vp), error: q('[data-bb=shell-error]')?.textContent ?? null,
     errorBack: shown(q('[data-bb=shell-error-back]')), confirm: shown(q('[data-bb=shell-confirm]')),
     opening: shown(q('[data-bb=shell-opening]')), tabs: document.querySelectorAll('[data-bb=viewtabs] .vtab:not([data-bb=viewtab-page]):not([aria-hidden])').length,
-    shell: q('.bb-app')?.dataset.bbShell ?? null,
+    shell: q('.bb-app')?.dataset.bbShell ?? null, fileDialog: shown(q('[data-bb=file-browser]')),
   });
 })()`;
 
@@ -179,7 +180,7 @@ async function session(cdp, url, { files = false } = {}) {
 }
 
 const isView = (v) => !v.home && v.page === null && v.viewport && v.error === null && !v.confirm && !v.opening;
-const isHome = (v) => v.home && v.error === null && !v.confirm && !v.opening;
+const isHome = (v) => v.home && v.error === null && !v.confirm && !v.opening && !v.fileDialog;
 const brief = (v) => JSON.stringify(v);
 // Reaches Home the way a user does: the quick bar's logo.
 const toHome = async (P) => { await P.click("[data-bb=quickbar-logo]"); return P.until(isHome); };
@@ -218,18 +219,33 @@ async function nativePaths(cdp) {
     placed.status === 200 && before === 1 && asked && isHome(afterCancel) && stillUnsaved === true && isView(v) && after === 0,
     `place ${placed.status} ${placed.text}; ${before} element(s); asked ${asked}; after cancel ${brief(afterCancel)} unsaved ${stillUnsaved}; after discard ${brief(v)}, ${after} element(s)`);
 
-  // N4: Home -> Open on the native host with no path: the refusal shown, and a way back.
-  // (A new model is unsaved: Open asks first; Discard, then the core's answer.)
+  // N4 (FS1): Home -> Open on the native host: the page's own file dialog (a new model is unsaved:
+  // asked first). Closed: back where it was, the model kept. Again, a bad file picked: the error, Back.
+  const broken = join(tmp, "broken.bimble");
+  writeFileSync(broken, "this is not a model either\n");
   v = await toHome(P);
   await P.click("[data-bb=home-open]");
-  v = await P.until((x) => x.confirm || x.error !== null);
+  v = await P.until((x) => x.confirm || x.fileDialog || x.error !== null);
   const askedOpen = v.confirm;
   if (askedOpen) await P.click("[data-bb=shell-confirm-discard]");
+  const dlg = await P.until((x) => x.fileDialog);
+  await P.click("[data-bb=file-browser-close]");
+  const closed = await P.until(isHome);
+  const kept = await P.bb("b.state.value.file");
+  check("N4 native Home -> Open: asked (unsaved), the page's file dialog; closed -> Home, the model kept",
+    askedOpen && dlg.fileDialog && !dlg.opening && isHome(closed) && kept === "Untitled.bimble", `${brief(dlg)} then ${brief(closed)} file ${kept}`);
+  await P.click("[data-bb=home-open]");
+  v = await P.until((x) => x.confirm);
+  await P.click("[data-bb=shell-confirm-discard]");
+  await P.until((x) => x.fileDialog);
+  await waitFor("broken.bimble listed", 5000, () => P.evalJs("!!document.querySelector('[data-bb=file-browser-entry][data-name=\"broken.bimble\"]')"));
+  await P.click('[data-bb=file-browser-entry][data-name="broken.bimble"]');
+  await P.click("[data-bb=file-browser-go]");
   v = await P.until((x) => x.error !== null);
   const err = v;
   await P.click("[data-bb=shell-error-back]");
   v = await P.until(isHome);
-  check("N4 native Home -> Open (no file dialog): asked (unsaved), the core's answer shown; Back -> Home", askedOpen && err.error !== null && /file dialog/.test(err.error) && err.errorBack && isHome(v),
+  check("N4 native Home -> Open a bad file in the dialog: the core's answer shown; Back -> Home", err.error !== null && /broken\.bimble|not|bimble/i.test(err.error) && err.errorBack && isHome(v),
     `${brief(err)} then ${brief(v)}`);
 
   // N5: an agent opens a file while Home shows.
@@ -378,7 +394,8 @@ async function main() {
   execFileSync("node", [join(UI, "scripts/copy-ccore.mjs")], { stdio: "inherit" });
   execFileSync("node", [join(UI, "scripts/copy-ccore.mjs"), "--view"], { stdio: "inherit" });
   const h = start("host", BIN, [String(PORT)], {
-    cwd: tmp, env: { ...process.env, BIMBLE_TOKEN: TOKEN, BIMBLE_ORIGINS: `http://localhost:${VITE},http://127.0.0.1:${VITE}` },
+    // FS1: HOME is the test's folder (the file dialog lists it), never the user's.
+    cwd: tmp, env: { ...process.env, HOME: tmp, BIMBLE_CONFIG_DIR: join(tmp, "config"), BIMBLE_TOKEN: TOKEN, BIMBLE_ORIGINS: `http://localhost:${VITE},http://127.0.0.1:${VITE}` },
   });
   await waitFor("host 'listening'", 5000, () => h.out.includes("listening") || (h.exitCode !== null && Promise.reject(new Error(h.out))));
   const vite = start("vite", "npx", ["vite", "--port", String(VITE), "--strictPort"], { cwd: UI });

@@ -147,6 +147,9 @@ export const CONTROLS: readonly Control[] = [
   { id: "home-open", event: { do: "open" }, shown: k("home") },
   { id: "home-import", event: { do: "import" }, shown: k("home") },
   { id: "home-back", event: { do: "showView" }, shown: (s, c) => kind(s) === "home" && c.file !== null },
+  // FS1: a recent file (Home's list: files.ts openPath) and a file dropped on the page (files.ts dropFile).
+  { id: "home-recent-file", event: { do: "open", path: "/recent/file.bimble" }, shown: k("home") },
+  { id: "page-drop", event: { do: "open" }, shown: k("home", "model.view", "model.page", "model.sheet") },
   { id: "quickbar-logo", event: { do: "home" }, shown: k("home", "model.view", "model.page", "model.sheet") },
   { id: "quickbar-home", event: { do: "home" }, shown: inModel },
   { id: "quickbar-open", event: { do: "open" }, shown: inModel },

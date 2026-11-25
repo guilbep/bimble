@@ -73,7 +73,7 @@ function runFile(o: Extract<Shell, { at: "opening" }>): void {
     send(err ? { do: "failed", message: err } : { do: o.what === "close" ? "closed" : "opened" });
   };
   const name = o.what === "import" ? "import_ifc" : o.what;
-  if ((o.what === "open" || o.what === "import") && o.path === undefined && backend === "ccore") return pick(o, finish);
+  if ((o.what === "open" || o.what === "import") && o.path === undefined && backend !== "rust") return pick(o, finish); // FS1: native too
   const body = o.path === undefined ? { discard: o.discard } : { path: o.path, discard: o.discard };
   const err = fileCall(name, body);
   // The Rust wasm opens its own dialog: the change brings the file (`opened` below), if any.
@@ -81,27 +81,32 @@ function runFile(o: Extract<Shell, { at: "opening" }>): void {
   finish(err);
 }
 
-// The browser's file picker for the C core's wasm (no file system: the picked file's bytes). The
-// picker may never say it was cancelled: the `opening` state keeps a Cancel button.
+// ---- FS1: the one picker (files.ts pickFile): the page's own dialog on the native host (a path), the
+// browser's picker in the wasm (the file's bytes), or a file dropped on the page. Its answer is the
+// next event: `opened`, `failed`, or `cancel` (the picker closed). The browser's picker may never say it
+// was cancelled: the `opening` state keeps a Cancel button (ShellNotice; hidden while the page's own
+// dialog shows, which has its own).
 function pick(o: Extract<Shell, { at: "opening" }>, finish: (err: string | null) => void): void {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = o.what === "import" ? ".ifc" : ".bimble,.json,.ifc,.bimbleview";
-  input.dataset.bb = "shell-open-input";
-  input.style.display = "none";
-  input.addEventListener("change", () => {
-    const f = input.files?.[0];
-    input.remove();
-    if (!f) { if (shell.value === o) send({ do: "cancel" }); return; }
-    import("../ccore")
-      .then((cc) => cc.ccoreOpenFile(f, o.discard, o.what === "import"))
-      .then((ok) => (ok ? finish(null) : shell.value === o && send({ do: "cancel" })))
-      .catch((e: unknown) => finish(`${f.name}: ${e instanceof Error ? e.message : String(e)}`));
-  });
-  input.addEventListener("cancel", () => { input.remove(); if (shell.value === o) send({ do: "cancel" }); });
-  document.body.appendChild(input);
-  input.click();
+  const name = o.what === "import" ? "import_ifc" : "open";
+  // A dynamic import: files.ts imports the dialogs and the pages, which import this file.
+  import("../files")
+    .then((m) => m.pickFile(name))
+    .then(async (r) => {
+      if (shell.value !== o) return; // cancelled meanwhile
+      if (!r) return void send({ do: "cancel" });
+      if (r.path !== undefined) return finish(fileCall(name, { path: r.path, discard: o.discard, ...(r.dropped ? { dropped: true } : {}) }));
+      const f = r.file!;
+      const cc = await import("../ccore");
+      try {
+        await cc.ccoreOpenFile(f, o.discard, o.what === "import");
+        finish(null);
+      } catch (e) {
+        finish(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    })
+    .catch((e: unknown) => finish(e instanceof Error ? e.message : String(e)));
 }
+// ---- end FS1 ----
 
 // The session's changes: `opened` when another file is loaded, then `core` (the guard: model
 // states need a model, the view a tab).
