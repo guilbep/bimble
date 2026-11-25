@@ -1,6 +1,8 @@
 /* bimble-ccore: the C core's native host. Serves the twin protocol of
  * crates/bimble-viewer/src/serve.rs on 127.0.0.1 for the Vue lab (`?native=1&port=&token=`).
- *   bimble-ccore [--session[=file]] [port] [model]
+ *   bimble-ccore [--session[=file]] [--warm] [port] [model]
+ *                             --warm: when idle after a load or a change, build the scene and the
+ *                             /mesh bytes of the new rev before the page asks (dev.sh uses it)
  *                             --session: keep the session (model edits, undo steps, selection,
  *                             rev) in a file across restarts (session.h): <model>.ccore-session,
  *                             or `file`; also on when CCORE_SESSION names a file
@@ -56,10 +58,11 @@ static int parse_port(const char *s, unsigned *out) {
 int main(int argc, char **argv) {
     /* Flags first, then the positional port and model. */
     const char *session = getenv("CCORE_SESSION");
-    int want_session = session && *session;
+    int want_session = session && *session, warm = 0;
     if (!want_session) session = NULL;
     while (argc > 1 && !strncmp(argv[1], "--", 2)) {
         if (!strcmp(argv[1], "--session")) want_session = 1;
+        else if (!strcmp(argv[1], "--warm")) warm = 1;
         else if (!strncmp(argv[1], "--session=", 10) && argv[1][10]) want_session = 1, session = argv[1] + 10;
         else {
             fprintf(stderr, "bimble-ccore: unknown flag %s\n", argv[1]);
@@ -104,6 +107,7 @@ int main(int argc, char **argv) {
     cc_host_config cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.port = (uint16_t)port;
+    cfg.warm = warm;
     cfg.token = t;
     cfg.epoch = epoch;
     cfg.origins[cfg.n_origins++] = "http://localhost:5173";

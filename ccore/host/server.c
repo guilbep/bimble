@@ -669,7 +669,22 @@ int cc_host_run(const cc_host_config *config) {
             long long left = c->deadline - now;
             if (c->st != C_WRITE && left < timeout) timeout = left < 0 ? 0 : (int)left;
         }
+        /* --warm: a new rev (load, a change) and nothing to read: build its scene and BMSH now,
+         * while the page is still reacting to the change, so /mesh finds them cached. */
+        static uint32_t warmed;
+        int want_warm = cfg->warm && cc_host_model() && cc_host_rev() != warmed;
+        if (want_warm) timeout = 0;
         int r = poll(pfd, (nfds_t)n, timeout);
+        if (want_warm && r == 0) {
+            const char *mp;
+            size_t mn;
+            uint32_t rev;
+            double ms;
+            cc_mesh_get(&mp, &mn, &rev, &ms);
+            warmed = rev;
+            fprintf(stderr, "bimble-ccore: warm: mesh rev %u built in %.3f ms (scene included)\n", (unsigned)rev, ms);
+            continue;
+        }
         if (r < 0 && errno != EINTR) { perror("bimble-ccore: poll"); break; }
         if (r > 0) {
             if (pfd[0].revents & POLLIN) {

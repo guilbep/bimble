@@ -12,6 +12,7 @@ typedef struct {
     const char *epoch;  /* per process, sent with each change (twin.rs:121, `random_token`) */
     const char *origins[CC_HOST_MAX_ORIGINS]; /* allowed `Origin` values */
     int n_origins;
+    int warm;           /* when idle, build the scene and /mesh of a new rev before they are asked for */
 } cc_host_config;
 
 /* Binds 127.0.0.1:port, prints "bimble-ccore: listening <port> token <token>" on stderr,
