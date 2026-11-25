@@ -475,3 +475,8 @@ The measure tool's text (ticket T1; `bimble_api::measure`, the viewer's `format_
 the 100 mm switch, thousands, signs, saturation, infinities, NaN; `x` as Rust's `{:?}`); `pair <a>
 <b> <distance>` for three point pairs (f32, the distance as glam's `Vec3::length` of b - a);
 `measurements <json>`: the `measurements` query for those pairs. Read by `ccore/test/measure_test.c`.
+
+`ccore/test/draw_annot_test.c` (suite `draw_annot`) checks `plan/<model>/full.svg`, `bare.svg`,
+`a1_50.svg`, their `.info.txt` and `errors.txt` byte for byte. The frame's note says
+`Bimble 0.18.1` (Rust's version): the test gives the plan that version (`cc_plan_options.version`,
+an input like the project and the date; the C core's own is `CC_IFC_VERSION`).

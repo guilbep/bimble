@@ -253,3 +253,24 @@ label and the list are Rust's: `format_mm` and `measurements_json` were moved fr
 **Where.** `ccore/session/measure.{h,c}`, `ccore/session/calls.c` (`measure_tool`, the action
 `measure`, `query measurements` and `measure`), tests `ccore/test/measure_test.c`,
 `ccore/test/lab_measure.mjs`; the page: `web-ui/src/gl/measure.ts`, `web-ui/src/glviewport.ts`.
+
+## 8. A plan on paper draws the model's grids (ticket D3)
+
+**What.** Rust's `plan()` takes its grid axes from `Scene::grids`, which only the IFC reader fills
+(`read.rs` `grid_axes`); `Scene::from_model` has none, so Rust draws a `.bimble` model's plan with
+axes through its columns. The C plan (`cc_plan_axes`, `ccore/src/draw_annot.c`) takes the model's
+own grids (deviation 4) when it has some, in the order Rust's reader gives the same grids from
+their IFC export: grids by id, each grid's U axes then its V axes, an axis repeated with the same
+tag and ends once, scene mm (world less the scene origin). `PlanInfo.model_axes` is then true.
+
+**Why.** ADR 0056: a model's grids are its axes; the drawing must show them. With them, the C plan
+of a model draws what Rust draws for that model's IFC export (checked by hand: the 13 axes of
+`golden/grids/model.json` against the `IfcGridAxis` polylines of `golden/grids/grid.ifc`, same tags,
+same order, same ends).
+
+**What Rust sees.** A model without grids (every Rust golden) draws the same bytes
+(`draw_annot_test`: `plan/<model>/*.svg`). A model with grids differs from Rust's plan of the same
+`.bimble` (Rust ignores the `grids` key), not from Rust's plan of its IFC.
+
+**Where.** `ccore/src/draw_annot.c` (`cc_plan_axes`), one call in `ccore/src/draw_plan.c`, test
+`ccore/test/draw_annot_test.c` (`test_grid_axes`).

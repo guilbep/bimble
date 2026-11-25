@@ -3,9 +3,11 @@
 #include "draw_plan.h"
 #include <stdlib.h>
 #include <string.h>
+#include "draw_annot.h"
 #include "draw_cut.h"
 #include "fmt.h"
 #include "georef.h"
+#include "ifc_out.h" /* CC_IFC_VERSION */
 #include "json_w.h"
 #include "math.h"
 
@@ -374,6 +376,7 @@ void cc_plan_options_init(cc_plan_options *o) {
     o->cut_above_mm = 1200.0;
     o->scale = 100;
     o->paper = CC_PAPER_A4;
+    o->version = cstr(CC_IFC_VERSION);
 }
 
 /* f64::total_cmp. */
@@ -457,7 +460,7 @@ typedef double Seg[2][2];
 /* What the plane cuts out of one element. */
 typedef struct {
     cc_category cat;
-    cc_str cls;
+    cc_str cls, material;
     cc_ring *loops, *open;
     size_t nloops, nopen;
 } Cut;
@@ -530,7 +533,7 @@ typedef struct {
     const cc_plan_template *tpl;
     Arena *a;
     double ox, oy, k, lo[2], hi[2];
-    Vec items; /* cc_item */
+    cc_item_list items;
 } Plan;
 
 static void to_paper(const Plan *P, const double p[2], double out[2]) {
@@ -538,10 +541,13 @@ static void to_paper(const Plan *P, const double p[2], double out[2]) {
     out[1] = P->oy + (P->hi[1] - p[1]) * P->k;
 }
 
-static cc_item *push_item(Plan *P) {
-    cc_item *it = vec_push(&P->items, sizeof(cc_item));
-    if (it) memset(it, 0, sizeof *it);
-    return it;
+static cc_item *push_item(Plan *P) { return cc_item_list_push(&P->items); }
+
+/* The scene element's material name (SceneElement::material). */
+static cc_str element_material(const Plan *P, const cc_scene_element *e) {
+    const cc_material *mt = cc_model_material(P->m, &P->m->elements[e->model_index].material);
+    cc_str none = {"", 0};
+    return mt ? mt->name : none;
 }
 
 /* Item::Lines of segments on paper. */
@@ -616,6 +622,7 @@ typedef struct {
     cc_str storey; /* the storey whose elements are drawn dashed above the cut */
     double storey_elevation_mm;
     int plan_down, axes;
+    cc_turn turn;
 } Setup;
 
 static int storey_setup(const cc_scene *s, const cc_model *m, cc_str storey, double cut_above, Setup *out, Buf *err) {
@@ -678,6 +685,8 @@ static int storey_setup(const cc_scene *s, const cc_model *m, cc_str storey, dou
     out->storey_elevation_mm = st->elevation;
     out->plan_down = 1;
     out->axes = 1;
+    out->turn.kind = CC_TURN_PLAN;
+    out->turn.a = 0.0;
     return 0;
 }
 
@@ -688,7 +697,7 @@ static int long_enough(const Seg s) { return cc_hypot(s[1][0] - s[0][0], s[1][1]
 
 /* The model geometry of one element (plan.rs, the loop over scene elements). */
 static int element_geometry(Plan *P, size_t k, const Setup *su, Arena *tmp, Vec *cuts, Vec *seen, Vec *projection,
-                            Vec *above, Vec *edges) {
+                            Vec *above, Vec *edges, Vec *beams) {
     const cc_scene_element *e = &P->s->elements[k];
     cc_mesh m;
     if (cc_scene_world_mesh(P->s, k, tmp, &m)) return -1;
@@ -707,6 +716,7 @@ static int element_geometry(Plan *P, size_t k, const Setup *su, Arena *tmp, Vec 
             if (!c) return -1;
             c->cat = e->category;
             c->cls = e->class_name;
+            c->material = element_material(P, e);
             c->nloops = sec.nloops;
             c->nopen = sec.nopen;
             c->loops = copy_rings(P->a, sec.loops, sec.nloops);
@@ -751,7 +761,16 @@ static int element_geometry(Plan *P, size_t k, const Setup *su, Arena *tmp, Vec 
             }
         }
     }
-    /* D3: the beams above the cut, for their labels (element_labels, plans looking down). */
+    /* The beams above the cut, for their labels (plans looking down). */
+    if (P->tpl->element_labels && su->plan_down && zmin > cut && zmin < next &&
+        e->class_name.n == 7 && eq_ignore_ascii_case(e->class_name.p, 7, "IfcBeam", 7)) {
+        cc_beam_label l;
+        int got = cc_beam_label_of(&m, e->category, element_material(P, e), P->a, &l);
+        if (got < 0) return -1;
+        cc_beam_label *d = got ? vec_push(beams, sizeof l) : NULL;
+        if (got && !d) return -1;
+        if (d) *d = l;
+    }
     const cc_element *me = &P->m->elements[e->model_index];
     const cc_storey *st = cc_model_storey(P->m, &me->storey);
     if (st && str_eq(st->name, su->storey) && zmax > cut) {
@@ -847,7 +866,7 @@ static int choose_paper(const cc_plan_options *o, double margin, double tb_h, do
 }
 
 static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, Buf *err, Vec *cuts, Vec *seen,
-                     Vec *projection, Vec *above, Vec *edges) {
+                     Vec *projection, Vec *above, Vec *edges, Vec *beams, Vec *scratch) {
     const cc_plan_options *o = P->o;
     const cc_plan_template *tpl = P->tpl;
     const cc_style *style = P->style;
@@ -882,7 +901,7 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
             continue;
         }
         arena_reset(tmp);
-        if (element_geometry(P, k, &su, tmp, cuts, seen, projection, above, edges)) return -1;
+        if (element_geometry(P, k, &su, tmp, cuts, seen, projection, above, edges, beams)) return -1;
     }
     (void)level;
     /* Painter's order: low tops first. */
@@ -890,8 +909,20 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     Cut *cv = cuts->p;
     Seen *sv = seen->p;
     Seg *pv = projection->p, *av = above->p;
-    /* D4: the view's crop region (ADR 0046) clips the geometry here. D3: the columns' centres,
-     * for axes when the model has none, are taken before the crop. */
+    /* Columns' centres, for axes when the model has none: counted before the crop (D4), so a
+     * crop holding one column of a line still shows the line's axis. */
+    for (size_t i = 0; i < cuts->n; i++) {
+        if (!eq_ignore_ascii_case(cv[i].cls.p, cv[i].cls.n, "IfcColumn", 9)) continue;
+        Bounds cb = bounds_init();
+        for (size_t j = 0; j < cv[i].nloops; j++)
+            for (size_t q = 0; q < cv[i].loops[j].n; q++) bound(&cb, cv[i].loops[j].p[q]);
+        if (!bounds_ok(&cb)) continue;
+        double *c = vec_push(scratch, 2 * sizeof(double));
+        if (!c) return -1;
+        c[0] = (cb.lo[0] + cb.hi[0]) / 2.0;
+        c[1] = (cb.lo[1] + cb.hi[1]) / 2.0;
+    }
+    /* D4: the view's crop region (ADR 0046) clips the geometry here. */
     Bounds bb = bounds_init();
     for (size_t i = 0; i < cuts->n; i++) {
         for (size_t j = 0; j < cv[i].nloops; j++)
@@ -916,18 +947,26 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     }
     double blo[2] = {bb.lo[0], bb.lo[1]}, bhi[2] = {bb.hi[0], bb.hi[1]};
 
-    /* ---- grid axes (scene mm). D3: the model's grids, or axes through the columns, when
-     * tpl->axes != CC_AXES_OFF && su.axes; cropped (D4); their ends widen the bounds. */
+    /* ---- grid axes (scene mm): the model's grids, or axes through the columns. D4: cropped. */
+    cc_plan_axis *axes = NULL;
     size_t naxes = 0;
     int model_axes = 0;
+    if (su.axes && cc_plan_axes(P->m, s->origin, tpl->axes, (const double(*)[2])scratch->p, scratch->n, blo, bhi, a,
+                                &axes, &naxes, &model_axes))
+        return -1;
     Bounds lh = bounds_init();
     bound(&lh, blo);
     bound(&lh, bhi);
+    for (size_t i = 0; i < naxes; i++) bound(&lh, axes[i].a), bound(&lh, axes[i].b);
     P->lo[0] = lh.lo[0];
     P->lo[1] = lh.lo[1];
     P->hi[0] = lh.hi[0];
     P->hi[1] = lh.hi[1];
     int any_v = 0, any_h = 0; /* axes running up the sheet, and across */
+    for (size_t i = 0; i < naxes; i++) {
+        if (cc_plan_axis_vertical(&axes[i])) any_v = 1;
+        else any_h = 1;
+    }
 
     /* ---- legend entries */
     Vec legend = {0};
@@ -1005,6 +1044,8 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
         cc_role_pen(style, CC_ROLE_CUT, o->scale, a, &cut_pen))
         return -1;
     double t = (double)style->paper.text_mm;
+    cc_annot_ctx ac = {a, &P->items, style, tpl, o->scale, ox, oy, k, {P->lo[0], P->lo[1]}, {P->hi[0], P->hi[1]}};
+    Vec openings = {0}; /* (lo x, lo y, hi x, hi y) of the slabs' rectangular openings */
 
     /* ---- items, back to front */
     if (projection->n && seg_lines(P, pv, projection->n, &proj_pen)) return -1;
@@ -1052,7 +1093,11 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
                         cross[ncross].p = c + 2;
                         cross[ncross++].n = 2;
                     }
-                    /* D3: tpl->opening_dimensions keeps (lb.lo, lb.hi) for the openings' sizes. */
+                    if (tpl->opening_dimensions) {
+                        double *op = vec_push(&openings, 4 * sizeof(double));
+                        if (!op) goto oom;
+                        op[0] = lb.lo[0], op[1] = lb.lo[1], op[2] = lb.hi[0], op[3] = lb.hi[1];
+                    }
                 }
             }
             if (ncross) {
@@ -1107,10 +1152,12 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     }
     free(labels.p);
     labels.p = NULL;
-    if (above->n && seg_lines(P, av, above->n, &above_pen)) return -1;
+    if (above->n && seg_lines(P, av, above->n, &above_pen)) goto oom;
 
-    /* D3: grid axes under what is cut (lines with the axis pen), their bubbles' places and where
-     * they cross the drawing's top and left edges, for the dimension chains. */
+    /* Grid axes, under what is cut; their bubbles' places and where they cross the drawing's
+     * top and left edges, for the dimension chains. */
+    cc_axes_drawn drawn;
+    if (cc_annot_axis_lines(&ac, axes, naxes, chains_v, chains_h, &drawn)) goto oom;
 
     /* Fills and hatches of all cut elements first, then all outlines on top: touching elements
      * (a column against a wall) keep both outlines. */
@@ -1119,15 +1166,15 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
         cc_area_look look;
         if (cc_cut_look(style, cv[i].cat, o->scale, a, &look) ||
             area_item(P, paper_loops(P, cv[i].loops, cv[i].nloops), cv[i].nloops, &look, NULL))
-            return -1;
+            goto oom;
     }
     for (size_t i = 0; i < cuts->n; i++) {
         if (cv[i].nloops && area_item(P, paper_loops(P, cv[i].loops, cv[i].nloops), cv[i].nloops, NULL, &cut_pen))
-            return -1;
+            goto oom;
         if (cv[i].nopen) {
             cc_ring *r = paper_loops(P, cv[i].open, cv[i].nopen);
             cc_item *it = r ? push_item(P) : NULL;
-            if (!it) return -1;
+            if (!it) goto oom;
             it->kind = CC_ITEM_LINES;
             it->rings = r;
             it->nrings = cv[i].nopen;
@@ -1136,9 +1183,28 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
         }
     }
 
-    /* D3: the openings' sizes and positions (#24); section labels beside what is cut and along
-     * the beams above (#24); section marks (#24); the grid bubbles over everything; the
-     * dimension chains along the axes, then overall. D4: the view's own dimensions and texts. */
+    /* Openings (#24): their size inside, their position from the nearest axis. */
+    for (size_t i = 0; i < openings.n; i++) {
+        const double *op = (const double *)openings.p + 4 * i;
+        if (cc_annot_opening(&ac, op, op + 2, axes, naxes)) goto oom;
+    }
+    free(openings.p);
+    openings.p = NULL;
+    /* Section labels (#24): beside what is cut, along the beams above. */
+    if (tpl->element_labels) {
+        for (size_t i = 0; i < cuts->n; i++)
+            if (cc_annot_cut_label(&ac, cv[i].cls, cv[i].cat, cv[i].material, cv[i].loops, cv[i].nloops)) return -1;
+        for (size_t i = 0; i < beams->n; i++)
+            if (cc_annot_beam_label(&ac, (const cc_beam_label *)beams->p + i)) return -1;
+    }
+    /* Section marks (#24), on plans only. */
+    if (tpl->section_markers && su.turn.kind != CC_TURN_SECTION &&
+        cc_annot_section_marks(&ac, o->section_marks, o->nsection_marks, &su.turn, s->origin, &P->m->georef, blo, bhi))
+        return -1;
+    /* Bubbles over everything, then the dimension chains along the axes and overall. */
+    if (cc_annot_bubbles(&ac, &drawn) || cc_annot_chains(&ac, &drawn, blo, bhi, any_v, any_h)) return -1;
+    /* D4: the view's own dimensions and texts (#33): cc_annot_view(&ac, P->m, view, &su.turn,
+     * s->origin) when o has a view. */
 
     /* ---- texts */
     Buf nb, level_s, drawing, scale_s, paper_s, title;
@@ -1165,8 +1231,8 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
         {cstr("drawing_no"), drawing_no},
         {cstr("paper"), {paper_s.p, paper_s.len}},
         {cstr("date"), o->date},
-        /* env!("CARGO_PKG_VERSION"): the C core has no release of its own yet. */
-        {cstr("bimble"), cstr("")},
+        /* env!("CARGO_PKG_VERSION") in Rust. */
+        {cstr("bimble"), o->version},
     };
     /* A plan without a view keeps the template's title. D4: a view's "{view}, {scale}". */
     cc_template_fill(&title, tpl->title.p, tpl->title.n, values, 11, tpl->fields, tpl->nfields);
@@ -1200,8 +1266,14 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
             bad = 1;
         }
     }
-    /* D3: whole sheets only (!o->bare): the scale bar at the right of the title line, the level
-     * note above the title block, the legend box, the frame and the title block (values above). */
+    /* Scale bar, level note, legend, frame and title block: whole sheets only. */
+    if (!bad && !o->bare) {
+        cc_fill_values fv = {values, 11, tpl->fields, tpl->nfields};
+        bad = cc_annot_scale_bar(&ac, w, title_y) || cc_annot_level_note(&ac, w, h, &fv) ||
+              /* the legend, above the title block at the left */
+              cc_draw_legend(&ac, MARGIN, h - MARGIN - tb_h, info->legend, info->nlegend) ||
+              cc_frame_and_title_block(&ac, w, h, &fv, o->version);
+    }
     char *sheet_title = NULL;
     size_t sheet_title_n = 0;
     if (!bad) {
@@ -1230,7 +1302,7 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     info->seen_elements = seen_elements;
     info->projection_lines = projection->n + seen_lines;
     info->above_lines = above->n;
-    info->axes = naxes;
+    info->axes = drawn.nbubbles;
     info->model_axes = model_axes;
     info->hidden_elements = hidden;
     info->frame.turn.kind = CC_TURN_PLAN;
@@ -1255,6 +1327,7 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     return 0;
 oom:
     free(labels.p);
+    free(openings.p);
     return -1;
 }
 
@@ -1272,9 +1345,10 @@ int cc_plan(const cc_scene *s, const cc_model *m, const cc_plan_options *o, Aren
     P.a = a;
     Arena tmp;
     arena_init(&tmp, 0);
-    Vec cuts = {0}, seen = {0}, projection = {0}, above = {0}, edges = {0};
-    int rc = plan_body(&P, &tmp, sheet, info, err, &cuts, &seen, &projection, &above, &edges);
+    Vec cuts = {0}, seen = {0}, projection = {0}, above = {0}, edges = {0}, beams = {0}, scratch = {0};
+    int rc = plan_body(&P, &tmp, sheet, info, err, &cuts, &seen, &projection, &above, &edges, &beams, &scratch);
     free(cuts.p), free(seen.p), free(projection.p), free(above.p), free(edges.p), free(P.items.p);
+    free(beams.p), free(scratch.p);
     arena_free(&tmp);
     return rc;
 }

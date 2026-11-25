@@ -4,13 +4,13 @@
  * the level (its tops filled lighter, low to high, with its edges), and the storey's edges above
  * the cut (dashed). The drawing goes on paper at 1:N with its title.
  *
- * Ported so far (D2): the checks, the storey setup (a plan turned to project north is refused
- * for now), the model geometry, the paper (auto paper and "suggest a scale"), the items back to
- * front (projection, seen tops and edges, slab opening crosses and levels, lines above, cut fills
- * then outlines), the title, the legend entries. Not yet (D3/D4, empty call sites in draw_plan.c):
- * grid axes and bubbles, dimension chains, opening dimensions, element labels, section marks,
- * a view's own setup, crop and annotations, the scale bar, level note, legend box, frame and
- * title block of a whole sheet.
+ * Ported (D2): the checks, the storey setup (a plan turned to project north is refused for now),
+ * the model geometry, the paper (auto paper and "suggest a scale"), the items back to front
+ * (projection, seen tops and edges, slab opening crosses and levels, lines above, cut fills then
+ * outlines), the title, the legend entries. D3 (draw_annot.c): grid axes and bubbles, dimension
+ * chains, opening dimensions, element labels, section marks, the scale bar, level note, legend
+ * box, frame and title block of a whole sheet. Not yet (D4, empty call sites in draw_plan.c): a
+ * view's own setup, crop and annotations (draw_annot.c has cc_annot_view for them).
  *
  * Template strings are UTF-8 cc_str; a template's arrays live in the arena it was made in. */
 #ifndef CCORE_DRAW_PLAN_H
@@ -120,7 +120,10 @@ typedef struct {
     cc_view_frame frame;
 } cc_plan_info;
 
-/* plan::PlanOptions (D2: no view, no section marks). `style` and `tpl` are borrowed. */
+/* plan::SectionMark (draw_annot.h). */
+typedef struct cc_section_mark cc_section_mark;
+
+/* plan::PlanOptions (no view yet: D4). `style`, `tpl` and `section_marks` are borrowed. */
 typedef struct {
     cc_str storey;
     double cut_above_mm; /* 1200 */
@@ -131,6 +134,12 @@ typedef struct {
     cc_str project, date;
     const cc_plan_template *tpl;
     int bare;
+    /* Sections marked on plans (#24): where they cut and which way they look. */
+    const cc_section_mark *section_marks;
+    size_t nsection_marks;
+    /* env!("CARGO_PKG_VERSION") of Rust's plan: the `{bimble}` placeholder and the frame's
+     * "Bimble <version>" note. cc_plan_options_init sets the C core's own (CC_IFC_VERSION). */
+    cc_str version;
 } cc_plan_options;
 
 /* PlanOptions::default() but `style` and `tpl`, which the caller sets. */
