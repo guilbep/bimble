@@ -480,3 +480,6 @@ the 100 mm switch, thousands, signs, saturation, infinities, NaN; `x` as Rust's 
 `a1_50.svg`, their `.info.txt` and `errors.txt` byte for byte. The frame's note says
 `Bimble 0.18.1` (Rust's version): the test gives the plan that version (`cc_plan_options.version`,
 an input like the project and the date; the C core's own is `CC_IFC_VERSION`).
+`ccore/test/draw_view_test.c` (suite `draw_view`) checks every `view/<nn>.min.svg`, `<nn>.svg`, their
+`.info.txt` and `index.txt` byte for byte: `plan()` of each effective view of `model.json` with the
+section marks of all views (the effective views as the session lists them, `cc_sv_list`).

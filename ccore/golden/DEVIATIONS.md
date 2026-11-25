@@ -274,3 +274,22 @@ same order, same ends).
 
 **Where.** `ccore/src/draw_annot.c` (`cc_plan_axes`), one call in `ccore/src/draw_plan.c`, test
 `ccore/test/draw_annot_test.c` (`test_grid_axes`).
+
+## 9. A view turns the model's grids with it (ticket D4)
+
+**What.** Rust's `viewdraw::map_scene` turns `Scene::grids` with a plan's scene (a building turned
+in its site, drawn in project north; a ceiling plan, reflected) and drops them for a section. A
+`.bimble` scene has no grids in Rust (deviation 8), so Rust draws such a view with axes through
+its columns. The C drawing takes the model's own grids (deviation 8) and turns them the same way
+(`cc_view_turn_axes`, `ccore/src/draw_view.c`: each end turned, plus the scene origin, less the
+origin, as `map_scene` computes it); a section has no axes, as in Rust.
+
+**Why.** ADR 0056 and deviation 8: a model's grids are its axes, on every plan of it. Turned with
+the plan, they stay on the columns they were set out on, as Rust's plan of the model's IFC export
+draws them.
+
+**What Rust sees.** A model without grids (every Rust golden, `view/*.svg`) draws the same bytes
+(`draw_view_test`). A model with grids differs from Rust's plan of the same `.bimble`, not from
+Rust's plan of its IFC.
+
+**Where.** `ccore/src/draw_view.c` (`cc_view_turn_axes`), one call in `ccore/src/draw_plan.c`.

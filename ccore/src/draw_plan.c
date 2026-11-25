@@ -5,6 +5,7 @@
 #include <string.h>
 #include "draw_annot.h"
 #include "draw_cut.h"
+#include "draw_view.h"
 #include "fmt.h"
 #include "georef.h"
 #include "ifc_out.h" /* CC_IFC_VERSION */
@@ -365,8 +366,8 @@ void cc_template_fill(Buf *out, const char *text, size_t n, const cc_str (*value
 /* ---- small helpers ---- */
 
 void cc_view_frame_to_paper(const cc_view_frame *f, const double world[3], double out[2]) {
-    /* Turn::Plan(0) leaves the point as it is (D2 draws no other turn). */
-    double q[3] = {world[0] - f->origin[0], world[1] - f->origin[1], world[2] - f->origin[2]};
+    double p[3] = {world[0] - f->origin[0], world[1] - f->origin[1], world[2] - f->origin[2]}, q[3];
+    cc_turn_apply_point(&f->turn, p, q);
     out[0] = f->ox + (q[0] - f->x0) * f->k;
     out[1] = f->oy + (f->y1 - q[1]) * f->k;
 }
@@ -528,6 +529,7 @@ static int inside(const double p[2], const cc_ring *l) {
 typedef struct {
     const cc_scene *s;
     const cc_model *m;
+    cc_view_setup *su; /* the scene as seen from above (draw_view.h); cc_plan frees it */
     const cc_plan_options *o;
     const cc_style *style;
     const cc_plan_template *tpl;
@@ -617,13 +619,7 @@ static int text_item(Plan *P, const double pos[2], double size, const char *s, s
 }
 
 /* plan::storey_setup (viewdraw::ViewSetup for a storey plan). */
-typedef struct {
-    double level, cut, next;
-    cc_str storey; /* the storey whose elements are drawn dashed above the cut */
-    double storey_elevation_mm;
-    int plan_down, axes;
-    cc_turn turn;
-} Setup;
+typedef cc_view_setup Setup;
 
 static int storey_setup(const cc_scene *s, const cc_model *m, cc_str storey, double cut_above, Setup *out, Buf *err) {
     /* Scene storeys: the model's (by id), sorted by elevation (stable). */
@@ -672,21 +668,21 @@ static int storey_setup(const cc_scene *s, const cc_model *m, cc_str storey, dou
         }
     }
     free(ord);
-    /* In project north (ADR 0045): turned by the building's angle. viewdraw::map_scene is not
-     * ported yet (D4): such a plan is refused rather than drawn in true north. */
-    if (cc_georef_plan_turn(&m->georef, 0) != 0.0) {
-        buf_puts(err, "a plan turned to project north is not drawn by the C core yet");
-        return 1;
-    }
+    out->scene = s;
     out->level = level;
     out->cut = level + cut_above;
     out->next = next;
+    out->has_storey = 1;
     out->storey = st->name;
+    out->storey_name = st->name;
     out->storey_elevation_mm = st->elevation;
     out->plan_down = 1;
     out->axes = 1;
     out->turn.kind = CC_TURN_PLAN;
-    out->turn.a = 0.0;
+    /* In project north (ADR 0045): turned by the building's angle, when it has one; only what
+     * lies between this storey and the next is copied. */
+    out->turn.a = cc_georef_plan_turn(&m->georef, 0);
+    if (out->turn.a != 0.0) return cc_view_storey_turned(s, level + oz, next + oz, out);
     return 0;
 }
 
@@ -773,7 +769,7 @@ static int element_geometry(Plan *P, size_t k, const Setup *su, Arena *tmp, Vec 
     }
     const cc_element *me = &P->m->elements[e->model_index];
     const cc_storey *st = cc_model_storey(P->m, &me->storey);
-    if (st && str_eq(st->name, su->storey) && zmax > cut) {
+    if (su->has_storey && st && str_eq(st->name, su->storey) && zmax > cut) {
         for (uint32_t i = 0; i < m.ne; i++) {
             double pa[3] = {m.edges[i][0], m.edges[i][1], m.edges[i][2]}, pb[3] = {m.edges[i][3], m.edges[i][4], m.edges[i][5]};
             Seg c;
@@ -865,6 +861,88 @@ static int choose_paper(const cc_plan_options *o, double margin, double tb_h, do
     return 1;
 }
 
+/* plan.rs, the view's crop (ADR 0046): what is cut, seen, projected and above clipped to the
+ * rectangle `r` (turned scene mm), what is left out of it dropped, the beam labels whose middle
+ * lies outside it too. In place; new rings in the plan's arena. */
+static size_t crop_segs(const cc_crop_rect *r, Seg *v, size_t n) {
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) {
+        Seg c;
+        if (cc_crop_segment(r, (const double(*)[2])v[i], c)) memcpy(v[k++], c, sizeof c);
+    }
+    return k;
+}
+
+static int crop_geometry(Plan *P, const cc_crop_rect *r, Vec *cuts, Vec *seen, Vec *projection, Vec *above,
+                         Vec *beams) {
+    Arena *a = P->a;
+    Cut *cv = cuts->p;
+    size_t kc = 0;
+    for (size_t i = 0; i < cuts->n; i++) {
+        Cut c = cv[i];
+        cc_ring *loops = arena_alloc(a, (c.nloops ? c.nloops : 1) * sizeof *loops, _Alignof(cc_ring));
+        if (!loops) return -1;
+        size_t nl = 0;
+        for (size_t j = 0; j < c.nloops; j++) {
+            if (cc_crop_polygon(r, &c.loops[j], a, &loops[nl])) return -1;
+            if (loops[nl].n) nl++;
+        }
+        Vec open = {0};
+        for (size_t j = 0; j < c.nopen; j++) {
+            cc_ring *pieces;
+            size_t np;
+            if (cc_crop_polyline(r, &c.open[j], a, &pieces, &np)) {
+                free(open.p);
+                return -1;
+            }
+            for (size_t q = 0; q < np; q++) {
+                cc_ring *d = vec_push(&open, sizeof *d);
+                if (!d) {
+                    free(open.p);
+                    return -1;
+                }
+                *d = pieces[q];
+            }
+        }
+        c.loops = loops;
+        c.nloops = nl;
+        c.nopen = open.n;
+        c.open = arena_alloc(a, (open.n ? open.n : 1) * sizeof *c.open, _Alignof(cc_ring));
+        if (c.open && open.n) memcpy(c.open, open.p, open.n * sizeof *c.open);
+        free(open.p);
+        if (!c.open) return -1;
+        if (c.nloops || c.nopen) cv[kc++] = c;
+    }
+    cuts->n = kc;
+    Seen *sv = seen->p;
+    size_t ks = 0;
+    for (size_t i = 0; i < seen->n; i++) {
+        Seen sn = sv[i];
+        cc_ring *top = arena_alloc(a, (sn.ntop ? sn.ntop : 1) * sizeof *top, _Alignof(cc_ring));
+        if (!top) return -1;
+        size_t nt = 0;
+        for (size_t j = 0; j < sn.ntop; j++) {
+            if (cc_crop_polygon(r, &sn.top[j], a, &top[nt])) return -1;
+            if (top[nt].n) nt++;
+        }
+        sn.top = top;
+        sn.ntop = nt;
+        sn.nedges = crop_segs(r, sn.edges, sn.nedges); /* the edges are the plan's own copy */
+        if (sn.ntop || sn.nedges) sv[ks++] = sn;
+    }
+    seen->n = ks;
+    projection->n = crop_segs(r, projection->p, projection->n);
+    above->n = crop_segs(r, above->p, above->n);
+    cc_beam_label *bv = beams->p;
+    size_t kb = 0;
+    for (size_t i = 0; i < beams->n; i++) {
+        double mid[2] = {(bv[i].a[0] + bv[i].b[0]) / 2.0, (bv[i].a[1] + bv[i].b[1]) / 2.0};
+        if (cc_crop_contains(r, mid)) bv[kb++] = bv[i];
+    }
+    beams->n = kb;
+    return 0;
+}
+
 static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, Buf *err, Vec *cuts, Vec *seen,
                      Vec *projection, Vec *above, Vec *edges, Vec *beams, Vec *scratch) {
     const cc_plan_options *o = P->o;
@@ -885,11 +963,12 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     }
     int rc = cc_plan_template_check(tpl, err);
     if (rc) return rc;
-    /* What is drawn: the scene as seen from above, the heights that matter, the storey.
-     * D4: a view's setup (viewdraw::setup) goes here. */
-    Setup su;
-    rc = storey_setup(s, P->m, o->storey, o->cut_above_mm, &su, err);
+    /* What is drawn: the scene as seen from above, the heights that matter, the storey. */
+    rc = o->view ? cc_view_prepare(s, P->m, o->view, P->su, err)
+                 : storey_setup(s, P->m, o->storey, o->cut_above_mm, P->su, err);
     if (rc) return rc;
+    Setup su = *P->su;
+    s = P->s = su.scene;
     double oz = s->origin[2], level = su.level, cut = su.cut;
 
     /* ---- model geometry (scene mm) */
@@ -909,7 +988,7 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     Cut *cv = cuts->p;
     Seen *sv = seen->p;
     Seg *pv = projection->p, *av = above->p;
-    /* Columns' centres, for axes when the model has none: counted before the crop (D4), so a
+    /* Columns' centres, for axes when the model has none: counted before the crop, so a
      * crop holding one column of a line still shows the line's axis. */
     for (size_t i = 0; i < cuts->n; i++) {
         if (!eq_ignore_ascii_case(cv[i].cls.p, cv[i].cls.n, "IfcColumn", 9)) continue;
@@ -922,7 +1001,13 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
         c[0] = (cb.lo[0] + cb.hi[0]) / 2.0;
         c[1] = (cb.lo[1] + cb.hi[1]) / 2.0;
     }
-    /* D4: the view's crop region (ADR 0046) clips the geometry here. */
+    /* The view's crop region (ADR 0046): its geometry clipped to it, in the turned scene. */
+    cc_crop_rect crop;
+    int cropped = cc_view_crop_rect(o->view, &su.turn, s->origin, &crop);
+    if (cropped && crop_geometry(P, &crop, cuts, seen, projection, above, beams)) return -1;
+    cv = cuts->p;
+    sv = seen->p;
+    pv = projection->p, av = above->p;
     Bounds bb = bounds_init();
     for (size_t i = 0; i < cuts->n; i++) {
         for (size_t j = 0; j < cv[i].nloops; j++)
@@ -937,6 +1022,11 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
         for (size_t j = 0; j < sv[i].nedges; j++) bound(&bb, sv[i].edges[j][0]), bound(&bb, sv[i].edges[j][1]);
     for (size_t i = 0; i < projection->n; i++) bound(&bb, pv[i][0]), bound(&bb, pv[i][1]);
     for (size_t i = 0; i < above->n; i++) bound(&bb, av[i][0]), bound(&bb, av[i][1]);
+    if (!bounds_ok(&bb) && o->view) {
+        buf_puts(err, "nothing to draw in view ");
+        buf_append(err, o->view->name.p, o->view->name.n);
+        return 1;
+    }
     if (!bounds_ok(&bb)) {
         buf_puts(err, "nothing to draw at storey ");
         buf_append(err, su.storey.p, su.storey.n);
@@ -947,13 +1037,27 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     }
     double blo[2] = {bb.lo[0], bb.lo[1]}, bhi[2] = {bb.hi[0], bb.hi[1]};
 
-    /* ---- grid axes (scene mm): the model's grids, or axes through the columns. D4: cropped. */
+    /* ---- grid axes (scene mm): the model's grids (turned with the scene), or axes through the
+     * columns; cropped, the axes within the crop. */
     cc_plan_axis *axes = NULL;
     size_t naxes = 0;
     int model_axes = 0;
     if (su.axes && cc_plan_axes(P->m, s->origin, tpl->axes, (const double(*)[2])scratch->p, scratch->n, blo, bhi, a,
                                 &axes, &naxes, &model_axes))
         return -1;
+    if (model_axes) cc_view_turn_axes(&su, axes, naxes);
+    if (cropped) {
+        size_t kept = 0;
+        for (size_t i = 0; i < naxes; i++) {
+            double sg[2][2] = {{axes[i].a[0], axes[i].a[1]}, {axes[i].b[0], axes[i].b[1]}}, c[2][2];
+            if (!cc_crop_segment(&crop, (const double(*)[2])sg, c)) continue;
+            axes[kept] = axes[i];
+            memcpy(axes[kept].a, c[0], sizeof c[0]);
+            memcpy(axes[kept].b, c[1], sizeof c[1]);
+            kept++;
+        }
+        naxes = kept;
+    }
     Bounds lh = bounds_init();
     bound(&lh, blo);
     bound(&lh, bhi);
@@ -1203,16 +1307,21 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
         return -1;
     /* Bubbles over everything, then the dimension chains along the axes and overall. */
     if (cc_annot_bubbles(&ac, &drawn) || cc_annot_chains(&ac, &drawn, blo, bhi, any_v, any_h)) return -1;
-    /* D4: the view's own dimensions and texts (#33): cc_annot_view(&ac, P->m, view, &su.turn,
-     * s->origin) when o has a view. */
+    /* The view's own dimensions and texts (#33). */
+    if (o->view && cc_annot_view(&ac, P->m, o->view, &su.turn, s->origin)) return -1;
 
     /* ---- texts */
     Buf nb, level_s, drawing, scale_s, paper_s, title;
     buf_init(&nb), buf_init(&level_s), buf_init(&drawing), buf_init(&scale_s), buf_init(&paper_s), buf_init(&title);
     buf_u64(&nb, o->scale);
     fmt_signed(&level_s, su.storey_elevation_mm / 1000.0 + 0.0, 2);
-    buf_puts(&drawing, "Plan ");
-    buf_append(&drawing, su.storey.p, su.storey.n);
+    /* What the drawing is: the view's name, else "Plan <storey>". */
+    if (o->view) {
+        buf_append(&drawing, o->view->name.p, o->view->name.n);
+    } else {
+        buf_puts(&drawing, "Plan ");
+        buf_append(&drawing, su.storey_name.p, su.storey_name.n);
+    }
     buf_puts(&scale_s, "1:");
     buf_append(&scale_s, nb.p, nb.len);
     buf_puts(&paper_s, cc_paper_size_name(sh.paper));
@@ -1222,9 +1331,9 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
         if (str_eq(tpl->fields[i].key, cstr("drawing_no"))) drawing_no = tpl->fields[i].value;
     const cc_str values[11][2] = {
         {cstr("project"), o->project},
-        {cstr("storey"), su.storey},
+        {cstr("storey"), su.storey_name},
         {cstr("level"), {level_s.p, level_s.len}},
-        {cstr("view"), {"", 0}},
+        {cstr("view"), o->view ? o->view->name : cstr("")},
         {cstr("drawing"), {drawing.p, drawing.len}},
         {cstr("scale"), {scale_s.p, scale_s.len}},
         {cstr("n"), {nb.p, nb.len}},
@@ -1234,8 +1343,13 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
         /* env!("CARGO_PKG_VERSION") in Rust. */
         {cstr("bimble"), o->version},
     };
-    /* A plan without a view keeps the template's title. D4: a view's "{view}, {scale}". */
-    cc_template_fill(&title, tpl->title.p, tpl->title.n, values, 11, tpl->fields, tpl->nfields);
+    /* A view is titled by its name (a sheet's "Ground floor plan, 1:100"); a plan without a view,
+     * or a plan looking down whose view has no name, keeps the template's ("plan" in it is why
+     * ceiling plans and sections never take it). */
+    if (o->view && (!cc_view_name_blank(o->view->name) || !su.plan_down))
+        cc_template_fill(&title, "{view}, {scale}", 15, values, 11, tpl->fields, tpl->nfields);
+    else
+        cc_template_fill(&title, tpl->title.p, tpl->title.n, values, 11, tpl->fields, tpl->nfields);
     double title_y = oy + sh.model[1] * k + PAD + TITLE_BAND - 4.0;
     /* A bare drawing's page reaches the end of its title (a small drawing, a long name). */
     double title_end = 0.0;
@@ -1305,8 +1419,7 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     info->axes = drawn.nbubbles;
     info->model_axes = model_axes;
     info->hidden_elements = hidden;
-    info->frame.turn.kind = CC_TURN_PLAN;
-    info->frame.turn.a = 0.0;
+    info->frame.turn = su.turn;
     memcpy(info->frame.origin, s->origin, sizeof s->origin);
     info->frame.x0 = P->lo[0];
     info->frame.y1 = P->hi[1];
@@ -1337,6 +1450,9 @@ int cc_plan(const cc_scene *s, const cc_model *m, const cc_plan_options *o, Aren
     memset(info, 0, sizeof *info);
     Plan P;
     memset(&P, 0, sizeof P);
+    cc_view_setup su;
+    memset(&su, 0, sizeof su);
+    P.su = &su;
     P.s = s;
     P.m = m;
     P.o = o;
@@ -1349,6 +1465,7 @@ int cc_plan(const cc_scene *s, const cc_model *m, const cc_plan_options *o, Aren
     int rc = plan_body(&P, &tmp, sheet, info, err, &cuts, &seen, &projection, &above, &edges, &beams, &scratch);
     free(cuts.p), free(seen.p), free(projection.p), free(above.p), free(edges.p), free(P.items.p);
     free(beams.p), free(scratch.p);
+    cc_view_setup_free(&su);
     arena_free(&tmp);
     return rc;
 }

@@ -4,13 +4,13 @@
  * the level (its tops filled lighter, low to high, with its edges), and the storey's edges above
  * the cut (dashed). The drawing goes on paper at 1:N with its title.
  *
- * Ported (D2): the checks, the storey setup (a plan turned to project north is refused for now),
+ * Ported (D2): the checks, the storey setup,
  * the model geometry, the paper (auto paper and "suggest a scale"), the items back to front
  * (projection, seen tops and edges, slab opening crosses and levels, lines above, cut fills then
  * outlines), the title, the legend entries. D3 (draw_annot.c): grid axes and bubbles, dimension
  * chains, opening dimensions, element labels, section marks, the scale bar, level note, legend
- * box, frame and title block of a whole sheet. Not yet (D4, empty call sites in draw_plan.c): a
- * view's own setup, crop and annotations (draw_annot.c has cc_annot_view for them).
+ * box, frame and title block of a whole sheet. D4 (draw_view.c): a view's own setup (turned,
+ * reflected, laid down), crop and annotations; a storey plan of a turned building in project north.
  *
  * Template strings are UTF-8 cc_str; a template's arrays live in the arena it was made in. */
 #ifndef CCORE_DRAW_PLAN_H
@@ -84,7 +84,7 @@ void cc_template_fill(Buf *out, const char *text, size_t n, const cc_str (*value
 
 /* ---- plan.rs ---- */
 
-/* viewdraw::Turn (D2: plans looking down; the angle is radians). */
+/* viewdraw::Turn (the angle is radians; draw_view.h). */
 typedef enum { CC_TURN_PLAN, CC_TURN_REFLECT, CC_TURN_SECTION } cc_turn_kind;
 typedef struct {
     cc_turn_kind kind;
@@ -97,7 +97,7 @@ typedef struct {
     cc_turn turn;
     double origin[3], x0, y1, k, ox, oy, cut;
 } cc_view_frame;
-/* ViewFrame::to_paper of a world point (D2: turn Plan(0) only). */
+/* ViewFrame::to_paper of a world point. */
 void cc_view_frame_to_paper(const cc_view_frame *f, const double world[3], double out[2]);
 
 /* plan::Swatch of a legend entry. */
@@ -123,7 +123,7 @@ typedef struct {
 /* plan::SectionMark (draw_annot.h). */
 typedef struct cc_section_mark cc_section_mark;
 
-/* plan::PlanOptions (no view yet: D4). `style`, `tpl` and `section_marks` are borrowed. */
+/* plan::PlanOptions. `style`, `tpl`, `view` and `section_marks` are borrowed. */
 typedef struct {
     cc_str storey;
     double cut_above_mm; /* 1200 */
@@ -134,6 +134,9 @@ typedef struct {
     cc_str project, date;
     const cc_plan_template *tpl;
     int bare;
+    /* Draw this view (a plan with its view range, a ceiling plan, a section; draw_view.h) instead
+     * of `storey`: its setup, crop, own dimensions and texts, and its name in the title. */
+    const cc_view *view;
     /* Sections marked on plans (#24): where they cut and which way they look. */
     const cc_section_mark *section_marks;
     size_t nsection_marks;

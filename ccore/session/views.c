@@ -5,6 +5,7 @@
 #include "guid.h"
 #include "session.h"
 #include "view_io.h"
+#include "view_range.h"
 #include "views.h"
 
 static int loaded(const struct cc_session *s) { return s->open || s->view; }
@@ -236,54 +237,8 @@ void cc_sv_close(struct cc_session *s, int is_view, const cc_gid *id) {
 }
 
 int cc_sv_resolve(const cc_model *m, const cc_view *v, double out[4]) {
-    const double inf = 1e308 * 10.0;
-    if (!m || v->kind != CC_VIEW_PLAN || v->storey.n != 22) return -1;
-    Arena a;
-    arena_init(&a, 0);
-    size_t n = m->nstoreys, *o = sorted_storeys(m, &a), i = n;
-    for (size_t k = 0; o && k < n; k++)
-        if (!memcmp(m->storeys[o[k]].id.c, v->storey.p, 22)) {
-            i = k;
-            break;
-        }
-    int rc = -1;
-    if (i == n) goto end;
-    double here = m->storeys[o[i]].elevation;
-    for (int p = 0; p < 4; p++) {
-        const cc_range_plane *r = &v->range[p];
-        int unl = 0;
-        double base = here;
-        switch (r->level) {
-        case CC_LEVEL_ASSOCIATED: break;
-        case CC_LEVEL_ABOVE:
-            unl = 1;
-            for (size_t k = i + 1; k < n; k++)
-                if (m->storeys[o[k]].elevation > here + 1.0) {
-                    base = m->storeys[o[k]].elevation, unl = 0;
-                    break;
-                }
-            break;
-        case CC_LEVEL_BELOW:
-            for (size_t k = i; k-- > 0;)
-                if (m->storeys[o[k]].elevation < here - 1.0) {
-                    base = m->storeys[o[k]].elevation;
-                    break;
-                }
-            break;
-        default: unl = 1;
-        }
-        /* unlimited: +inf for top and cut, -inf for bottom; depth -inf down, +inf up */
-        double u = (p == CC_RANGE_BOTTOM || (p == CC_RANGE_DEPTH && v->look == CC_LOOK_DOWN)) ? -inf : inf;
-        out[p] = unl ? u : base + r->offset_mm;
-        if (!(r->offset_mm == r->offset_mm) || r->offset_mm > 1.0e6 || r->offset_mm < -1.0e6) goto end;
-    }
-    if (v->range[CC_RANGE_CUT].level == CC_LEVEL_UNLIMITED) goto end;
-    double t = out[CC_RANGE_TOP], c = out[CC_RANGE_CUT], b = out[CC_RANGE_BOTTOM], d = out[CC_RANGE_DEPTH];
-    int ok = v->look == CC_LOOK_DOWN ? (d <= b && b <= c && c <= t) : (b <= c && c <= t && t <= d);
-    rc = ok ? 0 : -1;
-end:
-    arena_free(&a);
-    return rc;
+    if (!m || v->kind != CC_VIEW_PLAN) return -1;
+    return cc_view_resolve(m, v, out, NULL) ? -1 : 0; /* view_range.c, shared with the drawing */
 }
 
 void cc_sv_tab_json(JsonW *w, const cc_gid *id) {
