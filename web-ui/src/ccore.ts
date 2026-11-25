@@ -348,7 +348,10 @@ export async function ccoreClient(params: URLSearchParams): Promise<CcoreClient>
     if (kept !== null) call("action", "settings_load", JSON.stringify({ text: kept }));
   } catch (e) { console.info(`ccore: settings not loaded: ${String(e)}`); }
   const keepSettings = () => {
-    try { localStorage.setItem(SETTINGS_KEY, call("query", "settings_text", "{}")); } catch (e) { console.warn(`ccore: settings not kept: ${String(e)}`); }
+    try {
+      const text = JSON.parse(call("query", "settings_text", "{}")) as string | null;
+      if (text !== null) localStorage.setItem(SETTINGS_KEY, text);
+    } catch (e) { console.warn(`ccore: settings not kept: ${String(e)}`); }
   };
   // ---- end SET1 ----
   window.ccoreSave = () => {

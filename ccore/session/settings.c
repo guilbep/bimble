@@ -487,7 +487,8 @@ int cc_settings_query(cc_session *s, Buf *out) {
 int cc_settings_text_query(cc_session *s, Buf *out) {
     Now c;
     if (now_read(s, &c)) return out->oom = 1, -1;
-    if (c.text) buf_append(out, c.text, c.n);
+    if (c.text) json_escape(out, c.text, c.n); /* the text as a JSON string: the answer stays JSON */
+    else buf_puts(out, "null");
     now_free(&c);
     return out->oom ? -1 : 0;
 }

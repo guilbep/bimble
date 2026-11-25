@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin } from "vite";
 import vue from "@vitejs/plugin-vue";
+import { execFileSync } from "node:child_process";
 
 // PERF1: the C lab's build (`npm run build:ccore`, VITE_CCORE=1) starts fetching its wasm and model
 // from index.html, while index.js loads, instead of after index.js ran and Vue mounted. ccore.ts
@@ -24,4 +25,8 @@ const ccorePreload: Plugin = {
   transformIndexHtml: (html) => (ccoreBuild ? html.replace(/(<meta name="viewport"[^>]*>)/, `$1\n  <script>${CCORE_PRELOAD}</script>`) : html),
 };
 
-export default defineConfig({ plugins: [vue(), ccorePreload], server: { port: 5173 } });
+// SET1: About shows the commit the page was built from ("" without git).
+let commit = "";
+try { commit = execFileSync("git", ["rev-parse", "--short=12", "HEAD"], { encoding: "utf8" }).trim(); } catch { /* no git */ }
+
+export default defineConfig({ plugins: [vue(), ccorePreload], server: { port: 5173 }, define: { __BB_COMMIT__: JSON.stringify(commit) } });

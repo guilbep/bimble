@@ -8,7 +8,8 @@
  *                           values: the 11 fields, Rust's JSON names and defaults (to_json);
  *                           applies: whether this build uses each field; needs: what a field that
  *                           does not apply would need; note: why the file did not read (or null)
- *   query settings_text     the file's text as it is stored now (the wasm page keeps it)
+ *   query settings_text     the file's text as it is stored now, as a JSON string (null: none);
+ *                           the wasm page keeps it
  *   action set_settings {field: value, ...}
  *                           validated as a whole first (Rust's ranges and ids; an unknown field,
  *                           `recent` included, refused), then written: every field Rust writes,

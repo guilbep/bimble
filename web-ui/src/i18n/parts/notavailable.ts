@@ -35,7 +35,7 @@ export const fr = {
   "na.instead.collab": "le fichier .bimble se partage tel quel ; Historique liste les versions lues",
   "na.instead.lca": "Quantités donne les volumes par matériau",
   "na.instead.quantities": "la page Quantités du bureau",
-  "na.instead.you": "rien encore : les réglages viennent avec SET1",
+  "na.instead.you": "Réglages › Vous, dans le cœur qui les sert",
   "na.instead.recent": "Ouvrir… dans la barre ou le menu Fichier",
   "na.chip.readOnly": "Lecture seule",
 };
@@ -74,7 +74,7 @@ export const en: typeof fr = {
   "na.instead.collab": "the .bimble file is shared as it is; History lists the versions read",
   "na.instead.lca": "Quantities gives the volumes per material",
   "na.instead.quantities": "the desktop's Quantities page",
-  "na.instead.you": "nothing yet: settings come with SET1",
+  "na.instead.you": "Settings › You, in a core that serves them",
   "na.instead.recent": "Open… in the bar or the File menu",
   "na.chip.readOnly": "Read only",
 };

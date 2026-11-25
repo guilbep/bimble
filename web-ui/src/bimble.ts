@@ -1,5 +1,6 @@
 // The one typed client of the wasm viewer (ADR 0048). Components never touch the wasm directly.
 import { shallowRef } from "vue";
+import { applyLook } from "./shell/theme"; // SET1
 
 export interface State {
   selection: string[];
@@ -573,6 +574,7 @@ export async function start(): Promise<void> {
         const q = tryQuery<Pick<State, "schema" | "user" | "version" | "editable">>("state", {});
         state.value = { ...s, schema: q.schema ?? null, user: q.user ?? null, version: q.version ?? null, editable: q.editable ?? true };
         loadCapabilities(q.version ?? null); // FAKE1
+        if (!settingsAsked) loadSettings(); // SET1: the look and the readout's system, once at start
         refresh(prev.rev !== s.rev || prev.file !== s.file);
       });
     });
@@ -871,6 +873,46 @@ function loadCapabilities(version: string | null): void {
   capabilities.value = c && typeof c === "object" ? c : null;
 }
 // ---- end FAKE1 ----
+
+// ---- SET1: the user's settings (ccore/session/settings.h `query settings`, `action set_settings`): the
+// same file as the Rust viewer (settings.rs). Read once at start (the look applied: shell/theme.ts) and
+// after each change; `state.user` follows (query state). null: not served (the Rust wasm, the viewer-only
+// build). ----
+/** settings.rs `Settings` as to_json writes it. */
+export interface SettingsValues {
+  coordinates: string; gpu_cull: boolean; memory_share: number; moving_fps: number; moving_proxies: boolean;
+  recent: string[]; text_size: number; theme: string; ui_font: string; user_email: string; user_name: string;
+}
+/** `query settings`. */
+export interface UserSettings {
+  applies: Record<keyof SettingsValues, boolean>; file: string | null; fonts: string[]; needs: Partial<Record<keyof SettingsValues, string>>;
+  note: string | null; text_sizes: [number, number]; themes: string[]; values: SettingsValues;
+}
+export const userSettings = shallowRef<UserSettings | null>(null);
+let settingsAsked = false;
+/** Reads the settings (the file may have changed: the Rust app shares it) and applies the look. */
+export function loadSettings(): void {
+  settingsAsked = true;
+  const s = capabilities.value === null || capabilities.value["settings"] ? tryQuery<UserSettings | null>("settings", null) : null;
+  userSettings.value = s && typeof s === "object" && s.values ? s : null;
+  if (userSettings.value) applyLook(userSettings.value.values);
+}
+/** Changes settings (`{field: value}`, settings.rs names): validated by the core as a whole. Returns
+ *  the core's error text, or null; the settings and `state.user` are read again. */
+export function setSettings(patch: Partial<SettingsValues>): string | null {
+  try { actionWith("set_settings", patch); } catch (e) { return message(e); }
+  loadSettings();
+  const q = tryQuery<Pick<State, "user">>("state", {});
+  state.value = { ...state.value, user: q.user ?? null };
+  return null;
+}
+/** The readout's coordinate system (settings.rs coordinates; coords.rs:57), "survey" by default. */
+export const readoutSystem = (): string => userSettings.value?.values.coordinates ?? "survey";
+/** `query about` (lib.rs:4081): the page gives its WebGL renderer and its build's commit. */
+export interface AboutInfo { build: string; commit: string | null; graphics: string | null; platform: string; text: string; version: string }
+export const aboutInfo = (graphics: string | null, commit: string | null): AboutInfo | null =>
+  tryQuery<AboutInfo | null>("about", null, { ...(graphics ? { graphics } : {}), ...(commit ? { commit } : {}) });
+// ---- end SET1 ----
 
 let timed = false;
 /** Refresh the shallow refs; model-derived lists only when the model changed. Runs deferred. */
@@ -1389,8 +1431,8 @@ export const northInfo = shallowRef<NorthInfo | null>(null);
 export const refreshNorth = () => (northInfo.value = tryQuery<NorthInfo | null>("north", null));
 /** `query("coordinates")`: a world point (mm) in the survey system (m) and its status bar text. */
 export interface Coordinates { survey: [number, number, number]; text: string; wgs84: [number, number] | null; world_mm: [number, number, number] }
-export const coordinates = (at: [number, number, number], system?: string) =>
-  tryQuery<Coordinates | null>("coordinates", null, system ? { at, system } : { at });
+export const coordinates = (at: [number, number, number], system: string | undefined = readoutSystem()) => // SET1: the setting's system
+  tryQuery<Coordinates | null>("coordinates", null, system && system !== "survey" ? { at, system } : { at });
 export type GeorefPatch = { crs?: string; east_m?: number; north_m?: number; height_m?: number; rotation_deg?: number; map_rotation_deg?: number; clear?: boolean };
 export const georefSet = (patch: GeorefPatch) => runVerb("georef_set", patch);
 // ---- end G2 ----

@@ -33,6 +33,9 @@ const panelLabel = computed(() => { const l = (panel() as { label?: string } | n
 Object.assign(screenRoutes, { standards: () => { currentPanel.value = "standards"; } });
 const shellName = computed(() => { const s = here.value; return s.at === "model" ? `model.${s.show}` : s.at; });
 import { dialogs, currentDialog, dialog } from "./dialogs";
+// ---- SET1: File › Settings, Home's "change", the ribbon's About: dialogs, not screens of the shell ----
+Object.assign(screenRoutes, { settings: () => { currentDialog.value = "settings"; }, about: () => { currentDialog.value = "about"; } });
+// ---- end SET1 ----
 import { panels, currentPanel, panel } from "./panels";
 import { applyDeepLink } from "./deeplink";
 // Under 1 024 px wide: the small-screen frame (ADR 0064) instead of the desktop bands.

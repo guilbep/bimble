@@ -192,7 +192,7 @@ host_mixed() {
 VIEW_LIB=()
 for f in "${LIB[@]}"; do [[ " ${VIEW_DENY[*]} " == *" $f "* ]] || VIEW_LIB+=("$f"); done
 WASM_FLAGS=(--target=wasm32 -std=c11 -ffreestanding -nostdlib -Wall -Werror -Wno-unused-function
-    -DRYU_ONLY_64_BIT_OPS -isystem src/freestanding "${INC[@]}")
+    -DRYU_ONLY_64_BIT_OPS -isystem src/freestanding "${INC[@]}" "$VDEF") # SET1: $VDEF, query about's build
 wasm_build() { # <out name> <opt> [-D...] <library files...>: one clang call, the session layer added
     local out=$1 opt=$2
     shift 2
