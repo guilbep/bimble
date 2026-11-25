@@ -249,6 +249,87 @@ function wasmOrThrow(): Wasm {
   return wasm;
 }
 
+// Native twin, experiment 2 (ADR 0065 follow-up). Dev only: with `?native=1&port=<p>&token=<t>`
+// the lab talks to a native Bimble process on 127.0.0.1 instead of the wasm module.
+// Protocol:
+// - A call is `POST http://127.0.0.1:<port>/<op>/<name>?t=<token>`, `Content-Type: text/plain`,
+//   body = the JSON args string (or empty). A CORS simple request: no preflight.
+//   <op>: query, apply, undo, redo, select, action, verb, tab, set_placing, dismiss_belongs,
+//   standards_action. <name>: the name argument of query, verb, action, standards_action, else `-`.
+// - 200: the text body is what wasm returns (empty for void). Any other status: wasm would throw;
+//   the body is the error text, thrown as a string (as wasm does).
+// - Calls are synchronous (sync XMLHttpRequest): every Wasm function but default() is sync.
+// - Changes: long-poll `GET /change?since=<seq>&t=<token>` -> `{"seq":n,"change":<on_change JSON>}`,
+//   then poll again with since=n. On a network error, wait 1 s and retry.
+
+function nativeParams(p: URLSearchParams): { port: number; token: string } {
+  const port = Number(p.get("port"));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("native=1 needs a valid port=<p>");
+  return { port, token: p.get("token") ?? "" };
+}
+
+/** A `Wasm` on top of synchronous XHR to a native Bimble process (dev only, see above). */
+function nativeClient(port: number, token: string): Wasm & { standards_action(name: string): void } {
+  const base = `http://127.0.0.1:${port}`;
+  const t = encodeURIComponent(token);
+  const call = (op: string, name: string | null, body?: string): string => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${base}/${op}/${name === null ? "-" : encodeURIComponent(name)}?t=${t}`, false);
+    xhr.setRequestHeader("Content-Type", "text/plain");
+    try {
+      xhr.send(body ?? "");
+    } catch (e) {
+      throw `native ${op}: ${message(e)}`;
+    }
+    if (xhr.status !== 200) throw xhr.responseText || `native ${op}: HTTP ${xhr.status}`;
+    return xhr.responseText;
+  };
+  return {
+    default: async () => undefined,
+    query: (name, argsJson) => call("query", name, argsJson),
+    apply: (cmdsJson) => void call("apply", null, cmdsJson),
+    undo: () => void call("undo", null),
+    redo: () => void call("redo", null),
+    select: (idsJson) => void call("select", null, idsJson),
+    action: (name) => void call("action", name),
+    verb: (name, argsJson) => void call("verb", name, argsJson),
+    tab: (json) => void call("tab", null, json),
+    set_placing: (json) => void call("set_placing", null, json),
+    dismiss_belongs: () => void call("dismiss_belongs", null),
+    standards_action: (name) => void call("standards_action", name),
+    on_change: (cb) => void pollChanges(base, t, cb),
+  };
+}
+
+/** Long-poll loop for the native client; never rejects, retries every 1 s on error. */
+async function pollChanges(base: string, t: string, cb: (json: string) => void): Promise<void> {
+  let since = 0;
+  let epoch: string | undefined;
+  for (;;) {
+    try {
+      // The epoch lets a restarted twin answer at once, even when its seq equals ours.
+      const e = epoch === undefined ? "" : `&epoch=${encodeURIComponent(epoch)}`;
+      const r = await fetch(`${base}/change?since=${since}${e}&t=${t}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const m = (await r.json()) as { epoch?: string; seq: number; change: unknown };
+      // A new epoch is a restarted twin: its seq began again, so ask for its current change.
+      if (typeof m.epoch === "string" && m.epoch !== epoch) {
+        const restarted = epoch !== undefined;
+        epoch = m.epoch;
+        if (restarted) {
+          since = 0;
+          continue;
+        }
+      }
+      if (typeof m.seq === "number") since = m.seq;
+      if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change));
+    } catch (e) {
+      console.warn("native change poll:", e);
+      await new Promise((res) => setTimeout(res, 1000));
+    }
+  }
+}
+
 /** Load and start the viewer. The canvas #bimble must be in the DOM. */
 export async function start(): Promise<void> {
   try {
@@ -258,14 +339,21 @@ export async function start(): Promise<void> {
       url.searchParams.set("viewport", "1");
       history.replaceState(null, "", url);
     }
-    try {
-      const bridge = (await import(/* @vite-ignore */ `${WASM}manifold-bridge.js`)) as { loadManifold: () => Promise<void> };
-      await bridge.loadManifold();
-    } catch (e) {
-      console.warn("manifold not loaded:", e);
+    let w: Wasm;
+    const native = url.searchParams.get("native") === "1" ? nativeParams(url.searchParams) : null;
+    if (native) {
+      // Dev only: no manifold, no wasm; on_change below starts the long-poll loop.
+      w = nativeClient(native.port, native.token);
+    } else {
+      try {
+        const bridge = (await import(/* @vite-ignore */ `${WASM}manifold-bridge.js`)) as { loadManifold: () => Promise<void> };
+        await bridge.loadManifold();
+      } catch (e) {
+        console.warn("manifold not loaded:", e);
+      }
+      w = (await import(/* @vite-ignore */ `${WASM}bimble_web.js`)) as Wasm;
+      await w.default();
     }
-    const w = (await import(/* @vite-ignore */ `${WASM}bimble_web.js`)) as Wasm;
-    await w.default();
     // Timings from navigation start, read by Lighthouse's user-timings audit (make perf-web).
     performance.mark("bimble:wasm-ready");
     performance.measure("bimble:wasm-ready", { start: 0, end: "bimble:wasm-ready" });
