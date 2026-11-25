@@ -863,7 +863,10 @@ export function runAction(name: string): string | null {
 
 /** Activate or close one open tab (`openViews.tabs`). Returns the Rust error, or null. */
 export function tabCall(op: "activate" | "close" | "open", tab: OpenTab): string | null {
-  try { wasmOrThrow().tab(JSON.stringify({ op, tab })); return null; } catch (e) { return message(e); }
+  try { wasmOrThrow().tab(JSON.stringify({ op, tab })); } catch (e) { return message(e); }
+  // A sheet tab opens the Sheets page on that sheet (SheetsSide.vue watches it).
+  if (tab.type === "sheet") sheetTab.value = op === "close" ? null : { id: tab.id };
+  return null;
 }
 
 /** Open any view as its current tab (a navigator click). Returns the Rust error, or null. */
@@ -921,6 +924,44 @@ export const scheduleRows = (name: string) => query<ScheduleTable>("schedule_row
 export const scheduleCsv = (name: string) => query<{ csv: string }>("schedule_csv", { name }).csv;
 export const views = () => query<ViewSummary[]>("views");
 export const sheets = () => query<SheetSummary[]>("sheets");
+/** One view placed on a sheet, as `sheet_layout` gives it (C core, ccore/session/sheets.h). Paper mm from the
+ *  sheet's top-left corner; `box: "estimate"` until the drawing is made (D5): the view's crop, else the model's box,
+ *  divided by the scale. */
+export interface PlacedLayout {
+  id: string;
+  view: string;
+  view_name: string | null;
+  kind: "three_d" | "plan" | "section" | null;
+  /** 1:N the view is drawn at (ADR 0046: the view's own). */
+  scale: number;
+  at_mm: [number, number];
+  box_mm: [number, number, number, number];
+  box: "estimate" | "drawing";
+}
+/** `query("sheet_layout", { id })`: the paper in the sheet's orientation and its placed views (C core only). */
+export interface SheetLayout {
+  id: string;
+  number: string;
+  name: string;
+  paper: string;
+  portrait: boolean;
+  width_mm: number;
+  height_mm: number;
+  placed: PlacedLayout[];
+}
+export const sheetLayout = (id: string) => query<SheetLayout>("sheet_layout", { id });
+/** Place a view on a sheet at `at` (paper mm); the scale is the view's (`scale` only for the first placement of a
+ *  view whose scale is not said). One undoable step. Returns the error, or null. */
+export const sheetPlace = (sheet: string, view: string, at: [number, number], scale?: number) =>
+  runVerb("sheet_place", scale === undefined ? { sheet, view, at_mm: at } : { sheet, view, at_mm: at, scale });
+/** Move a placed view to `at` (paper mm). One undoable step. Returns the error, or null. */
+export const sheetMove = (sheet: string, placed: string, at: [number, number]) => runVerb("sheet_move", { sheet, placed, at_mm: at });
+/** Take a placed view off its sheet (the view stays). One undoable step. Returns the error, or null. */
+export const sheetUnplace = (sheet: string, placed: string) => runVerb("sheet_unplace", { sheet, placed });
+/** Delete a sheet (its views stay). One undoable step. Returns the error, or null. */
+export const sheetRemove = (id: string) => runVerb("sheet_remove", { id });
+/** The sheet a sheet tab opened last (`tabCall` with type "sheet"), a new object per call: the Sheets page shows it. */
+export const sheetTab = shallowRef<{ id: string } | null>(null);
 export const schedules = () => query<ScheduleDef[]>("schedules");
 /** Empty until the `schedule_list` query is merged. */
 export const scheduleList = () => tryQuery<unknown[]>("schedule_list", []);

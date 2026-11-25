@@ -325,6 +325,47 @@ int cc_vh_grid_add(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err)
 int cc_vh_grid_axis_set(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 int cc_vh_grid_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 
+/* C additions of ticket SH1: views placed on sheets, handlers in verbs_sheets.c. */
+static const char SCHEMA_SHEET_PLACE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `sheet_place`.\",\"properties\":{\"at_mm\":{\"description\":\"Centre"
+    " of the view's drawing on the paper, mm from the sheet's top-left corner.\",\"items\":{\"format\""
+    ":\"double\",\"type\":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":\"array\"},\"scale\":{\"d"
+    "escription\":\"1:N; default: the view's. Only the first placement of a view whose scale is not s"
+    "aid may give another.\",\"format\":\"uint32\",\"minimum\":0,\"type\":[\"integer\",\"null\"]},\"s"
+    "heet\":{\"description\":\"GlobalId of the sheet.\",\"type\":\"string\"},\"view\":{\"description\""
+    ":\"GlobalId of the view.\",\"type\":\"string\"}},\"required\":[\"sheet\",\"view\",\"at_mm\"],\"ti"
+    "tle\":\"SheetPlaceArgs\",\"type\":\"object\"}";
+static const char SUMMARY_SHEET_PLACE[] =
+    "Place a view on a sheet at at_mm (paper mm from the top-left corner), with a new GlobalId (a C a"
+    "ddition).";
+static const char SCHEMA_SHEET_MOVE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `sheet_move`.\",\"properties\":{\"at_mm\":{\"description\":\"The new"
+    " centre on the paper, mm from the sheet's top-left corner.\",\"items\":{\"format\":\"double\",\"t"
+    "ype\":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":\"array\"},\"placed\":{\"description\":\""
+    "GlobalId of the placed view.\",\"type\":\"string\"},\"sheet\":{\"description\":\"GlobalId of the "
+    "sheet.\",\"type\":\"string\"}},\"required\":[\"sheet\",\"placed\",\"at_mm\"],\"title\":\"SheetMov"
+    "eArgs\",\"type\":\"object\"}";
+static const char SUMMARY_SHEET_MOVE[] = "Move a placed view on its sheet to at_mm (a C addition).";
+static const char SCHEMA_SHEET_UNPLACE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `sheet_unplace`.\",\"properties\":{\"placed\":{\"description\":\"Glo"
+    "balId of the placed view.\",\"type\":\"string\"},\"sheet\":{\"description\":\"GlobalId of the she"
+    "et.\",\"type\":\"string\"}},\"required\":[\"sheet\",\"placed\"],\"title\":\"SheetUnplaceArgs\",\"t"
+    "ype\":\"object\"}";
+static const char SUMMARY_SHEET_UNPLACE[] = "Take a placed view off its sheet; the view stays (a C addition).";
+static const char SCHEMA_SHEET_REMOVE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `sheet_remove`.\",\"properties\":{\"id\":{\"description\":\"GlobalId "
+    "of the sheet.\",\"type\":\"string\"}},\"required\":[\"id\"],\"title\":\"SheetRemoveArgs\",\"type\""
+    ":\"object\"}";
+static const char SUMMARY_SHEET_REMOVE[] = "Delete a sheet; its views stay (a C addition).";
+int cc_vh_sheet_place(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_sheet_move(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_sheet_unplace(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_sheet_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+
 #define V(n, N) {#n, SUMMARY_##N, SCHEMA_##N, cc_vh_##n, 0}
 const cc_verb_def cc_verb_table[] = {
     V(place, PLACE),
@@ -354,6 +395,11 @@ const cc_verb_def cc_verb_c_additions[] = {
     V(grid_add, GRID_ADD),
     V(grid_axis_set, GRID_AXIS_SET),
     V(grid_remove, GRID_REMOVE),
+    /* ticket SH1 */
+    V(sheet_place, SHEET_PLACE),
+    V(sheet_move, SHEET_MOVE),
+    V(sheet_unplace, SHEET_UNPLACE),
+    V(sheet_remove, SHEET_REMOVE),
 };
 #undef V
 const size_t cc_verb_count = sizeof cc_verb_table / sizeof cc_verb_table[0];

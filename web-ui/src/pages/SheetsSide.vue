@@ -1,27 +1,52 @@
 <script lang="ts">
-import { computed } from "vue";
-import { openViews, sheets, state, type SheetSummary } from "../bimble";
+import { computed, ref, watch } from "vue";
+import { openViews, sheetLayout, sheetTab, sheets, state, type PlacedLayout, type SheetSummary } from "../bimble";
+import { currentPage } from "./index";
 
-/** The sheet the page shows: the current sheet tab, else the first sheet; null without sheets. */
+/** The sheet the page shows: the sheet a tab opened last, else Rust's current sheet tab, else the first sheet; null
+ *  without sheets. */
 export const currentSheet = computed<SheetSummary | null>(() => {
   void state.value.rev;
   let all: SheetSummary[] = [];
   try { all = sheets(); } catch { /* no model yet */ }
   const cur = openViews.value.current;
-  return (cur?.type === "sheet" && all.find((s) => s.id === cur.id)) || all[0] || null;
+  return all.find((s) => s.id === sheetTab.value?.id) || (cur?.type === "sheet" && all.find((s) => s.id === cur.id)) || all[0] || null;
+});
+/** The placed view selected on the sheet (its `placed` id), shared by the page and this panel. */
+export const selectedPlaced = ref<string | null>(null);
+/** The last verb error of the page or this panel. */
+export const sheetsError = ref<string | null>(null);
+
+// A sheet tab (tabCall type "sheet": the palette, the sheet list, the small sheet) opens this page on that sheet.
+watch(sheetTab, (t) => {
+  if (!t) return;
+  selectedPlaced.value = null;
+  currentPage.value = "sheets";
+});
+
+/** The selected placed view as the layout gives it (C core `sheet_layout`), null otherwise. */
+export const selectedLayout = computed<PlacedLayout | null>(() => {
+  void state.value.rev;
+  const s = currentSheet.value, id = selectedPlaced.value;
+  if (!s || !id) return null;
+  try { return sheetLayout(s.id).placed.find((p) => p.id === id) ?? null; } catch { return null; }
 });
 </script>
 
 <script setup lang="ts">
 // D3's left panel (fr/SheetLayout.html `.nav` sheet list, `.props`). Real: the sheets (number, name, revision),
-// "+" (add_sheet, then opened), number, name, paper and orientation, revision (set_sheet, one per blur/Enter).
-import { ref } from "vue";
-import { runVerb, tabCall } from "../bimble";
+// "+" (add_sheet, then opened), number, name, paper and orientation, revision (set_sheet, one per blur/Enter),
+// delete (sheet_remove), "place view" (sheet_place at the paper's centre), the placed view selected on the sheet
+// (its view and scale) and "take off the sheet" (sheet_unplace).
+import { runVerb, sheetPlace, sheetRemove, sheetUnplace, tabCall } from "../bimble";
+import { viewName } from "../shell/viewName";
 import { t } from "../i18n";
 
 const caret = "m6 9 6 6 6-6";
 const PAPERS = ["A4", "A3", "A2", "A1", "A0"];
-const error = ref<string | null>(null);
+/** sheet.rs size_mm: landscape width and height, mm. */
+const SIZE: Record<string, [number, number]> = { A4: [297, 210], A3: [420, 297], A2: [594, 420], A1: [841, 594], A0: [1189, 841] };
+const error = sheetsError;
 const allSheets = computed<SheetSummary[]>(() => {
   void state.value.rev;
   try { return [...sheets()].sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true })); } catch { return []; }
@@ -50,14 +75,50 @@ function setSize(e: Event) {
   setSheet(e, { paper, portrait: portrait === "true" });
 }
 const val = (e: Event) => (e.target as HTMLInputElement).value;
+const openSheet = (id: string) => { error.value = tabCall("open", { type: "sheet", id }); };
+
+function removeSheet() {
+  const s = currentSheet.value;
+  if (!s) return;
+  error.value = sheetRemove(s.id);
+  if (!error.value) selectedPlaced.value = null;
+}
+
+// ---- place a view: the views the session shows, at the paper's centre ----
+const toPlace = ref("");
+const viewList = computed(() => openViews.value.views.map((v) => ({ id: v.id, name: viewName(v) })));
+function placeView() {
+  const s = currentSheet.value;
+  if (!s || !toPlace.value) return;
+  const [w, h] = SIZE[s.paper] ?? [841, 594];
+  const at: [number, number] = s.portrait ? [h / 2, w / 2] : [w / 2, h / 2];
+  let before = new Set<string>();
+  try { before = new Set(sheetLayout(s.id).placed.map((p) => p.id)); } catch { /* the Rust bridge: no layout */ }
+  error.value = sheetPlace(s.id, toPlace.value, at);
+  if (error.value) return;
+  try { selectedPlaced.value = sheetLayout(s.id).placed.find((p) => !before.has(p.id))?.id ?? null; } catch { /* idem */ }
+}
+/** The selected placed view's name: the page's language for a default view (`viewName`). */
+const selectedName = computed(() => {
+  const p = selectedLayout.value;
+  if (!p) return null;
+  const v = openViews.value.views.find((x) => x.id === p.view);
+  return v ? viewName(v) : (p.view_name ?? p.view);
+});
+function unplace() {
+  const s = currentSheet.value, p = selectedLayout.value;
+  if (!s || !p) return;
+  error.value = sheetUnplace(s.id, p.id);
+  if (!error.value) selectedPlaced.value = null;
+}
 </script>
 
 <template>
   <nav class="nav" :aria-label="t('page.sheets')" data-bb="sheet-list">
     <div class="pn" style="display:flex;align-items:center;justify-content:space-between">{{ t('page.sheets') }}<button class="ib" type="button" :aria-label="t('sheets.add')" :title="t('sheets.add')" style="width:26px;height:26px" data-bb="sheet-add" @click="addSheet"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button></div>
-    <a v-for="s in allSheets" :key="s.id" class="ti" :class="{ cur: s.id === currentSheet?.id }" href="#" :aria-current="s.id === currentSheet?.id ? 'page' : undefined" @click.prevent="error = tabCall('open', { type: 'sheet', id: s.id })"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h10l4 4v14H5z" /><path d="M14 3v5h5" /><rect x="8" y="11" width="8" height="6" /></svg><span class="mono" style="font-size:12px;min-width:30px">{{ s.number }}</span><span>{{ s.name }}</span><span class="n">{{ s.fields.revision ?? '' }}</span></a>
+    <a v-for="s in allSheets" :key="s.id" class="ti" :class="{ cur: s.id === currentSheet?.id }" href="#" :aria-current="s.id === currentSheet?.id ? 'page' : undefined" @click.prevent="openSheet(s.id)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h10l4 4v14H5z" /><path d="M14 3v5h5" /><rect x="8" y="11" width="8" height="6" /></svg><span class="mono" style="font-size:12px;min-width:30px">{{ s.number }}</span><span>{{ s.name }}</span><span class="n">{{ s.fields.revision ?? '' }}</span></a>
   </nav>
-  <div v-if="error" class="err" role="alert">{{ error }}</div>
+  <div v-if="error" class="err" role="alert" data-bb="sheet-side-error">{{ error }}</div>
   <template v-if="currentSheet">
   <div class="pn" data-bb="sheet-props-title">{{ t('sheets.sheet', { n: currentSheet?.number ?? '' }) }}</div>
   <div class="row">
@@ -83,9 +144,20 @@ const val = (e: Event) => (e.target as HTMLInputElement).value;
     <input id="sheet-revision" class="inp mono" :value="currentSheet.fields.revision ?? ''" style="width:80px" data-bb="sheet-revision" @change="setSheet($event, { revision: val($event) })" @keydown.enter="($event.target as HTMLInputElement).blur()">
   </div>
   <div class="row"><span class="k">{{ t('sheets.drawnChecked') }}</span><span class="mono off" data-missing="query: drawn / checked (team members, ADR 0055)">—</span></div>
+  <div class="row"><span /><button type="button" class="qb" data-bb="sheet-remove" @click="removeSheet">{{ t('sheets.remove') }}</button></div>
+  <div class="sec">{{ t('sheets.placeView') }}</div>
+  <div class="row">
+    <label class="k" for="sheet-place-view">{{ t('sheets.view') }}</label>
+    <select id="sheet-place-view" v-model="toPlace" class="inp" style="width:140px" data-bb="sheet-place-view">
+      <option value="" disabled>{{ t('sheets.chooseView') }}</option>
+      <option v-for="v in viewList" :key="v.id" :value="v.id">{{ v.name }}</option>
+    </select>
+  </div>
+  <div class="row"><span /><button type="button" class="qb" :disabled="!toPlace" data-bb="sheet-place" @click="placeView">{{ t('sheets.place') }}</button></div>
   <div class="sec">{{ t('sheets.selectedView') }}</div>
-  <div class="row"><span class="k">{{ t('sheets.view') }}</span><span class="off" data-missing="query: the placed view selected on the sheet">—</span></div>
-  <div class="row"><span class="k">{{ t('sheets.viewScale') }}</span><span class="mono off" data-missing="query: the placed view selected on the sheet">—</span></div>
+  <div class="row"><span class="k">{{ t('sheets.view') }}</span><span :class="{ off: !selectedLayout }" data-bb="sheet-selected-view">{{ selectedName ?? '—' }}</span></div>
+  <div class="row"><span class="k">{{ t('sheets.viewScale') }}</span><span class="mono" :class="{ off: !selectedLayout }" data-bb="sheet-selected-scale">{{ selectedLayout ? `1:${selectedLayout.scale}` : '—' }}</span></div>
+  <div v-if="selectedLayout" class="row"><span /><button type="button" class="qb" data-bb="sheet-unplace" @click="unplace">{{ t('sheets.unplace') }}</button></div>
   </template>
 </template>
 
@@ -110,6 +182,10 @@ const val = (e: Event) => (e.target as HTMLInputElement).value;
 .ti .n { margin-left: auto; color: var(--bb-stone); font-family: 'DM Mono', monospace; font-size: 12px; }
 .ib { display: inline-flex; align-items: center; justify-content: center; border: 0; background: none; border-radius: 8px; color: var(--bb-ink); cursor: pointer; }
 .ib:hover { background: var(--bb-sunk); }
+/* The page's quiet text buttons (LevelsGrids.vue .qb), clay text: an action (do). */
+.qb { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 12px; border-radius: var(--bb-radius-pill); border: 0; background: none; font: inherit; font-size: 13.5px; color: var(--bb-clay-text); cursor: pointer; white-space: nowrap; }
+.qb:hover { background: var(--bb-sunk); }
+.qb:disabled { opacity: .55; cursor: default; }
 .err { color: var(--bb-ink); border-left: 3px solid var(--bb-attention); padding-left: 6px; font-size: 13px; }
 /* Missing in Rust: the reference's .off (color:#5C574D;opacity:.55). */
 .off, .inp:disabled { color: var(--bb-stone); opacity: .55; }

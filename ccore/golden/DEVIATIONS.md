@@ -155,3 +155,43 @@ not imported into `grids` (the reader keeps reading them for drawing, as before)
 **Where.** `ccore/src/grid.{h,c}` (rules, read, write), `ccore/src/verbs_levels.c` (the verbs),
 `ccore/src/ifc_out_grid.{h,c}` (the export, one call in `ifc_out.c`), `ccore/src/model.{h,c}`,
 `ccore/src/command.{h,c}`, `ccore/src/file.c`, `ccore/src/query.c`, test `ccore/test/grid_test.c`.
+
+## 5. Views placed on sheets (ticket SH1)
+
+**What.** Four verbs Rust's dispatch has not (C additions, `ccore/src/verb_table.c`), each one
+`set_sheet` command (`sheet_remove`: one `remove_sheet`), one history step:
+- `sheet_place {sheet, view, at_mm, scale?}`: a new placed view (new GlobalId) at `at_mm`, paper mm
+  from the sheet's top-left corner. Its scale is the view's (ADR 0046). `scale` may differ only on
+  the first placement of a view whose scale is not said (100): that placement then gives the view
+  its scale, as `sheet.rs` `adopted_scales` does when Rust opens the file. Otherwise another scale
+  is refused ("the view … is drawn at 1:N: a view has one scale on every sheet").
+- `sheet_move {sheet, placed, at_mm}` (the same point: no command), `sheet_unplace {sheet, placed}`,
+  `sheet_remove {id}`.
+The sheet is checked as `Command::SetSheet` checks it (`sheet.rs` `validate`: at most 200 placed,
+on the paper, 1:1 to 1:5000, the view in the model), with Rust's texts after the verb's name.
+Rust's own UI places a view by a drag from the navigator, at the view's scale (`layout.rs:449`).
+
+The query `sheet_layout {id}` (`ccore/session/sheets.h`) is new: the paper's width and height in
+its orientation, and per placed view its id, view, name, kind, the scale it is drawn at (the
+view's own, or the one its placements share: `adopted_scales` applied when read), `at_mm` and a
+`box_mm`: the view's crop, else the model's box (a plan: x and y; a section: its width and
+height), divided by the scale, rounded to 0.001 mm, with `"box": "estimate"`. Rust answers
+`sheet_svg` instead (the whole drawing); the C core still refuses `sheet_svg` until D5. A sheet
+tab (`tab`, type `sheet`) answers 200 for a sheet of the model ("no such sheet" otherwise) and
+keeps no tab: the page opens on that sheet (`open_views` lists view tabs only, views.h).
+
+**Why.** Pierre's priority after measure: sheets usable before the drawings exist (round 3, SH1).
+Rust never had these verbs: there is no oracle.
+
+**What Rust sees.** Nothing new: the file a sheet makes is a plain `Sheet` with `Placed` entries
+(`id`, `view`, `scale`, `at_mm`), which Rust reads and writes. A model without sheets keeps its
+bytes (`sheets_test` undoes every step back to `frame.json`'s bytes).
+
+**Goldens.** `golden/sheets/verbs.txt` (56 steps: each verb, each refusal, undo and redo, the
+history labels, the queries `sheet_layout` and `sheets`, on `frame.json` opened in a session, with
+seeded ids) and `model.json` (the model at its end), written by `ccore/test/sheets_test.c`
+(`CCORE_WRITE_GOLDEN=1` writes them again). `ccore_golden --check` skips `sheets/` (`C_OWN`).
+
+**Where.** `ccore/src/verbs_sheets.c` (the verbs, in `VIEW_DENY`), `ccore/src/verb_table.c` (rows),
+`ccore/session/sheets.{h,c}` (the query, the tab check), two hooks in `ccore/session/calls.c`,
+tests `ccore/test/sheets_test.c` and `ccore/test/lab_sheets.mjs`.

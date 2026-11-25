@@ -33,7 +33,7 @@ TESTS=(); for f in test/*_test.c; do t=${f#test/}; TESTS+=("${t%_test.c}"); done
 INC=(-Isrc -Ivendor/ryu -Isession)
 SESSION=(session/*.c)
 # The viewer-only wasm: the files it leaves out, its optimisation and its budget (bytes).
-VIEW_DENY=(src/verbs.c src/verb_table.c src/ifc_in.c src/ifc_out.c)
+VIEW_DENY=(src/verbs.c src/verb_table.c src/verbs_sheets.c src/ifc_in.c src/ifc_out.c)
 VIEW_OPT=-Os
 VIEW_MAX=400000
 HOST=(host/*.c)

@@ -28,6 +28,7 @@
 #include "verbs.h"
 #include "viewfile.h"
 #include "views.h"
+#include "sheets.h" /* ticket SH1 */
 #include "view_only.h"
 #include "annot.h"
 
@@ -950,6 +951,7 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
             return CC_OK;
         }
     if (!strcmp(name, "verbs") || !strcmp(name, "describe")) return verb_query(s, name, body, n, out);
+    if (!strcmp(name, "sheet_layout")) return cc_sheet_layout(s, scene_now(s), body, n, out); /* SH1, sheets.h */
     static const char *const CUT[] = {"palette_match", "schedule_rows", "schedule_csv", "sheet_svg"};
     for (size_t i = 0; i < sizeof CUT / sizeof CUT[0]; i++)
         if (!strcmp(name, CUT[i])) {
@@ -1510,6 +1512,11 @@ static int call_tab(cc_session *s, const char *body, size_t n, cc_buf *out) {
     else if (!strcmp(op->s, "close")) close = 1;
     else {
         buf_puts(out, "unknown op "), debug_str(out, op->s);
+        goto end;
+    }
+    if (!strcmp(tys, "sheet")) { /* ticket SH1 (sheets.h): the page opens on that sheet, no tab kept */
+        if (cc_sheet_known(s, &tid)) rc = CC_OK;
+        else buf_puts(out, "no such sheet");
         goto end;
     }
     /* calls.rs:220-232 (views.h): any view of open_views opens; activate an open tab only. */
