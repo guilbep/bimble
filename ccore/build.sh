@@ -42,7 +42,7 @@ INC=(-Isrc -Ivendor/ryu -Isession)
 SESSION=(session/*.c)
 # The viewer-only wasm: the files it leaves out, its optimisation and its budget (bytes).
 VIEW_DENY=(src/verbs.c src/verb_table.c src/verbs_sheets.c src/ifc_in.c src/ifc_out.c)
-VIEW_DENY+=(src/draw_cut.c src/paper.c) # drawings on paper (D1): not in the viewer
+VIEW_DENY+=(src/draw_cut.c src/paper.c src/draw_style.c src/draw_plan.c) # drawings on paper (D1, D2): not in the viewer
 VIEW_OPT=-Os
 VIEW_MAX=400000
 HOST=(host/*.c)
