@@ -6,6 +6,11 @@
 # `preview_pr`), to open a branch on a phone before it is merged. The next deployment without that
 # input removes it. Only someone who can run workflows here can start it.
 #
+# Every deployment also publishes the C core's lab under c/ (ticket PG1, ccore/README.md): web-ui
+# built on the C wasm (`npm run build:ccore`) from the branch rewrite/c-core, or the input
+# `ccore_ref`. The site is one artifact per deployment, so a lab not built here disappears at the
+# next one. A failed C build leaves the Rust site published without c/.
+#
 # It runs after the release workflow, not inside it: a workflow started by a tag can't deploy to
 # the `github-pages` environment, which by default accepts deployments from the default branch
 # only. `workflow_run` and manual runs start from the default branch, so no setting is needed.
@@ -22,6 +27,9 @@ on:
         required: false
       preview_pr:
         description: "Also publish this pull request's lab under preview/pr-<number>/ (a number, optional)"
+        required: false
+      ccore_ref:
+        description: "Branch, tag or commit of the C lab published under c/ (empty: rewrite/c-core)"
         required: false
 
 permissions:
@@ -85,13 +93,57 @@ jobs:
           path: preview
           retention-days: 1
 
+  # The C core's lab (ticket PG1), built without any right to deploy, on the same runs as `deploy`.
+  # The C wasm needs clang and lld (wasm-ld); no Rust.
+  ccore_lab:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.event == 'workflow_dispatch' ||
+        (github.event.workflow_run.event == 'push' &&
+         startsWith(github.event.workflow_run.head_branch, 'v'))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ccore_ref || 'rewrite/c-core' }}
+          path: src
+          persist-credentials: false
+      - run: src/scripts/apt-install.sh clang lld
+        timeout-minutes: 12
+      # wasm-opt: build.sh wasm-view needs it (the view wasm's 400 KB budget); pinned by the C branch.
+      - name: binaryen (wasm-opt)
+        run: |
+          src/ccore/ci/binaryen.sh "$HOME/.local/binaryen"
+          echo "$HOME/.local/binaryen/bin" >> "$GITHUB_PATH"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/web-ui/package-lock.json
+      - name: The Vue lab on the C wasm (ccore.wasm and ccore-view.wasm)
+        run: |
+          cd src/web-ui
+          npm ci --no-audit --no-fund
+          npm run build:ccore -- --outDir ../../ccore-lab --emptyOutDir
+          test -f ../../ccore-lab/index.html && test -f ../../ccore-lab/ccore/ccore.wasm && test -f ../../ccore-lab/ccore/ccore-view.wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccore-lab
+          path: ccore-lab
+          retention-days: 1
+
   deploy:
-    needs: [preview]
+    needs: [preview, ccore_lab]
     # After a successful release run that can have published: started by a tag push (head_branch
     # is then the tag's name) or by hand (one-button release). Not after pull requests: a branch
     # named "views" once passed a "starts with v" test alone.
     # `always()`: `preview` is skipped on every run but a manual one that asks for it; a failed
-    # preview stops the deployment.
+    # preview stops the deployment. `ccore_lab` is not tested here: a failed C lab does not stop the
+    # Rust site (the C lab is then missing from c/ until the next deployment).
     if: >-
       always() && needs.preview.result != 'failure' && needs.preview.result != 'cancelled' &&
       (github.event_name == 'workflow_dispatch' ||
@@ -146,6 +198,18 @@ jobs:
         with:
           name: preview
           path: site/preview/pr-${{ inputs.preview_pr }}
+      - name: The C lab under c/
+        if: needs.ccore_lab.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: ccore-lab
+          path: site/c
+      - name: No C lab this time
+        if: needs.ccore_lab.result != 'success'
+        env:
+          RESULT: ${{ needs.ccore_lab.result }}
+        run: |
+          echo "::warning::ccore_lab $RESULT: the site is published without c/"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
