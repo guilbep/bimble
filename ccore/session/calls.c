@@ -741,6 +741,33 @@ static void plan_box(const cc_scene *sc, const cc_view *v, const double z[4], cc
     if (hi == hi && hi > -1e300 && hi < 1e300 && (float)(hi - o) < box->max[2]) box->max[2] = (float)(hi - o);
 }
 
+/* ---- SEC1 ---- query view_visibility: the active view's lists (views.h), keys sorted, or null. */
+static int sec1_view_visibility(cc_session *s, JsonW *w) {
+        Arena va;
+        arena_init(&va, 0);
+        cc_view vv;
+        int r = loaded(s) && s->tab_open ? cc_sv_active(s, &va, &vv) : 0;
+        if (r == 1) {
+            static const char *const K[] = {"hidden_classes", "hidden_elements", "hidden_families", "hidden_links",
+                                            "hidden_materials", "hidden_storeys", "isolated_elements"};
+            const cc_strs *L[] = {&vv.visibility.hidden_classes, &vv.visibility.hidden_elements, &vv.visibility.hidden_families,
+                                  &vv.visibility.hidden_links, &vv.visibility.hidden_materials, &vv.visibility.hidden_storeys,
+                                  &vv.visibility.isolated_elements};
+            jw_obj_begin(w);
+            jw_key(w, "id"), jw_str_n(w, vv.id.c, 22);
+            for (int k = 0; k < 7; k++) {
+                jw_key(w, K[k]), jw_arr_begin(w);
+                for (size_t i = 0; i < L[k]->n; i++) jw_str_n(w, L[k]->v[i].p, L[k]->v[i].n);
+                jw_arr_end(w);
+            }
+            jw_obj_end(w);
+        } else jw_null(w);
+        arena_free(&va);
+        if (r < 0) w->b->oom = 1;
+        return done(w);
+}
+/* ---- end SEC1 ---- */
+
 /* ---- SEC1 ---- views.rs view_clip for a section: the scene's bounds in the section's frame
  * (turned by plan_turn: project north, `yaw`), cut at the section's line, as deep as its depth
  * (0: to the bounds) along its look, then its crop (along the cut, and up). `dir`: the look
@@ -1079,30 +1106,7 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     }
     if (!strcmp(name, "open_views")) return q_open_views(s, &w);
     if (!strcmp(name, "view_clip")) return q_view_clip(s, &w);
-    if (!strcmp(name, "view_visibility")) { /* ---- SEC1 ---- the active view's lists (views.h), or null */
-        Arena va;
-        arena_init(&va, 0);
-        cc_view vv;
-        int r = loaded(s) && s->tab_open ? cc_sv_active(s, &va, &vv) : 0;
-        if (r == 1) {
-            static const char *const K[] = {"hidden_classes", "hidden_elements", "hidden_families", "hidden_links",
-                                            "hidden_materials", "hidden_storeys", "isolated_elements"};
-            const cc_strs *L[] = {&vv.visibility.hidden_classes, &vv.visibility.hidden_elements, &vv.visibility.hidden_families,
-                                  &vv.visibility.hidden_links, &vv.visibility.hidden_materials, &vv.visibility.hidden_storeys,
-                                  &vv.visibility.isolated_elements};
-            jw_obj_begin(&w);
-            jw_key(&w, "id"), jw_str_n(&w, vv.id.c, 22);
-            for (int k = 0; k < 7; k++) {
-                jw_key(&w, K[k]), jw_arr_begin(&w);
-                for (size_t i = 0; i < L[k]->n; i++) jw_str_n(&w, L[k]->v[i].p, L[k]->v[i].n);
-                jw_arr_end(&w);
-            }
-            jw_obj_end(&w);
-        } else jw_null(&w);
-        arena_free(&va);
-        if (r < 0) w.b->oom = 1;
-        return done(&w);
-    } /* ---- end SEC1 ---- */
+    if (!strcmp(name, "view_visibility")) return sec1_view_visibility(s, &w); /* SEC1 */
     if (!strcmp(name, "grid_axes")) { /* S1: the grid axes and levels of what is open and its links (views.h) */
         cc_sv_grid_axes_json(s, &w);
         return done(&w);
