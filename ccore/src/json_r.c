@@ -4,38 +4,10 @@
 #include <string.h>
 
 #ifdef __wasm__
-/* Freestanding wasm has no strtod. This fallback is NOT correctly rounded (it can be off by an
- * ulp or so for long or extreme inputs); the wasm slice (ticket 13) must bring a correct one
- * (e.g. a vendored Eisel-Lemire + fallback) before wasm output is compared with Rust. */
-static double jr_strtod(const char *s, size_t n) {
-    size_t i = 0;
-    int neg = 0, digits = 0;
-    uint64_t mant = 0;
-    long exp10 = 0;
-    if (i < n && s[i] == '-') neg = 1, i++;
-    for (; i < n && s[i] >= '0' && s[i] <= '9'; i++) {
-        if (digits < 19) mant = mant * 10 + (uint64_t)(s[i] - '0'), digits += mant != 0;
-        else exp10++;
-    }
-    if (i < n && s[i] == '.')
-        for (i++; i < n && s[i] >= '0' && s[i] <= '9'; i++)
-            if (digits < 19) mant = mant * 10 + (uint64_t)(s[i] - '0'), digits += mant != 0, exp10--;
-    if (i < n && (s[i] == 'e' || s[i] == 'E')) {
-        int eneg = 0;
-        long e = 0;
-        i++;
-        if (i < n && (s[i] == '+' || s[i] == '-')) eneg = s[i] == '-', i++;
-        for (; i < n && s[i] >= '0' && s[i] <= '9'; i++)
-            if (e < 100000) e = e * 10 + (s[i] - '0');
-        exp10 += eneg ? -e : e;
-    }
-    double x = (double)mant;
-    if (mant == 0) return neg ? -0.0 : 0.0;
-    while (exp10 > 0 && x < 1e308 * 10) x *= 10, exp10--;
-    while (exp10 < 0 && x > 0) x /= 10, exp10++;
-    if (exp10 > 0) x = x * 1e308 * 1e308;
-    return neg ? -x : x;
-}
+/* Freestanding wasm has no strtod: the C core's own, correctly rounded and bit-equal to glibc
+ * (src/strtod.c, test/strtod_test.c). Overflow gives +-inf, as strtod. */
+#include "strtod.h"
+static double jr_strtod(const char *s, size_t n) { return cc_strtod(s, n); }
 #else
 /* glibc's strtod is correctly rounded, as serde_json with float_roundtrip. */
 static double jr_strtod(const char *s, size_t n) {

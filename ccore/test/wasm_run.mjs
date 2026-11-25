@@ -1,0 +1,422 @@
+// The C core as wasm32 (ticket 13): node ccore/test/wasm_run.mjs
+// Instantiates out/wasm/ccore.wasm (build.sh wasm; no imports) and replays the goldens through its
+// exports (src/wasm_api.h), byte for byte, like the native suites:
+//   floats   golden/floats/floats.txt: fmt_f64 in both formats, parse_f64 of both texts (bits)
+//   query    golden/query.txt and golden/frame2/query.txt
+//   verbs    golden/verbs.txt, verbs_after_undo.json, verbs_after.json (masking as verbs_test.c)
+//   file     frame.json and frame2.json: open_text then save gives the same bytes
+//   ifc      golden/ifc/frame.ifc -> golden/ifc/frame_reimport.json (masking as ifc_in_test.c)
+//   mesh     mesh(local) of frame and frame2 against <k>.txt and scene.txt; mesh(world) against
+//            the local meshes placed in JS with f32 arithmetic (scene.c cc_scene_world_mesh)
+//   memory   1000 x (open, mesh, close) and 100 x open_ifc: no growth after the first round
+// Prints per-suite "N passed, M failed", the module size and timings; exits non-zero on a failure.
+// No dependencies.
+import { readFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const G = join(CCORE, "golden");
+const WASM = process.env.CCORE_WASM ?? join(CCORE, "out/wasm/ccore.wasm");
+const read = (p) => readFileSync(join(G, p), "utf8");
+const enc = new TextEncoder(), dec = new TextDecoder("utf-8", { fatal: true });
+
+// ---- the module ----
+const bytes = readFileSync(WASM);
+let t0 = performance.now();
+const { instance } = await WebAssembly.instantiate(bytes, {});
+const instantiateMs = performance.now() - t0;
+const X = instance.exports;
+const mem = () => new Uint8Array(X.memory.buffer);
+const res = X.cc_alloc(12);
+
+/** Copies bytes (or a string as UTF-8) into the module; returns [ptr, len]. */
+function put(data) {
+  const b = typeof data === "string" ? enc.encode(data) : data;
+  const p = X.cc_alloc(b.length);
+  if (!p) throw new Error("cc_alloc failed");
+  mem().set(b, p);
+  return [p, b.length];
+}
+/** Runs f(...rest, ...ptr,len pairs of args, res); returns {status, bytes, text, value}; frees everything. */
+function call(f, args, ...rest) {
+  const ins = args.map(put);
+  const status = f(...rest, ...ins.flat(), res);
+  for (const [p] of ins) X.cc_free(p);
+  const dv = new DataView(X.memory.buffer);
+  const ptr = dv.getUint32(res, true), len = dv.getUint32(res + 4, true), value = dv.getUint32(res + 8, true);
+  const out = mem().slice(ptr, ptr + len);
+  X.cc_free(ptr);
+  return { status, bytes: out, get text() { return dec.decode(out); }, value };
+}
+const openText = (t) => call(X.open_text, [t]);
+const openIfc = (t) => call(X.open_ifc, [t]);
+const save = (h) => call(X.save, [], h).text;
+
+// ---- checks ----
+const suites = [];
+let cur;
+function suite(name) {
+  cur = { name, passed: 0, failed: 0, shown: 0 };
+  suites.push(cur);
+}
+function check(what, ok, detail = "") {
+  if (ok) return void cur.passed++;
+  cur.failed++;
+  if (cur.shown++ < 20) console.log(`FAIL ${cur.name}: ${what}${detail ? `\n  ${detail}` : ""}`);
+}
+function firstDiff(a, b) {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return `first difference at ${i}:\n  got:  ${JSON.stringify(a.slice(i, i + 160))}\n  want: ${JSON.stringify(b.slice(i, i + 160))}`;
+}
+const eq = (what, got, want) => check(what, got === want, got === want ? "" : firstDiff(got, want));
+const end = () => console.log(`${cur.name}: ${cur.passed} passed, ${cur.failed} failed`);
+
+// ---- floats ----
+suite("floats");
+{
+  const f64 = new Float64Array(1), u64 = new BigUint64Array(f64.buffer);
+  const hex = (x) => (f64[0] = x, u64[0].toString(16).padStart(16, "0"));
+  let lines = 0;
+  for (const line of read("floats/floats.txt").split("\n")) {
+    if (!line) continue;
+    const [bits, json, debug] = line.split(" ");
+    u64[0] = BigInt("0x" + bits);
+    const x = f64[0];
+    eq(`json ${bits}`, call(X.fmt_f64, [], x, 0).text, json);
+    eq(`debug ${bits}`, call(X.fmt_f64, [], x, 1).text, debug);
+    for (const t of [json, debug]) {
+      const [p, n] = put(t);
+      eq(`parse_f64 ${t}`, hex(X.parse_f64(p, n)), bits);
+      X.cc_free(p);
+    }
+    lines++;
+  }
+  check("6247 lines", lines === 6247, String(lines));
+  for (const x of [NaN, Infinity, -Infinity]) check(`fmt_f64 ${x} is 400`, call(X.fmt_f64, [], x, 0).status === 400);
+  // overflow and underflow as glibc strtod (the callers expect inf and 0)
+  const parse = (t) => { const [p, n] = put(t); const x = X.parse_f64(p, n); X.cc_free(p); return x; };
+  check("1e309 -> inf", parse("1e309") === Infinity && parse("-1e400") === -Infinity);
+  check("1e-400 -> 0", Object.is(parse("1e-400"), 0) && Object.is(parse("-1e-400"), -0));
+  check("long input", parse("0." + "0".repeat(400) + "1" + "e401") === 1);
+  end();
+}
+
+// ---- query ----
+function replayQueries(modelFile, goldenFile) {
+  const want = read(goldenFile);
+  const o = openText(read(modelFile));
+  check(`${modelFile} opens`, o.status === 200, o.text);
+  let got = "";
+  for (const line of want.split("\n")) {
+    const m = line.match(/^>>> query (\S+) (.*)$/);
+    if (!m) continue;
+    const r = call(X.query, [m[1], m[2]], o.value);
+    got += `${line}\n${r.status} ${r.text}\n\n`;
+  }
+  eq(goldenFile, got, want);
+  X.close(o.value);
+}
+suite("query");
+replayQueries("frame.json", "query.txt");
+replayQueries("frame2.json", "frame2/query.txt");
+end();
+
+// ---- masking (golden/README.md; ports of verbs_test.c and ifc_in_test.c) ----
+const ALPHA = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
+const fromU128 = (k) => "0".repeat(21) + ALPHA[k]; // k < 64
+const validGid = (s) => s.length === 22 && s[0] >= "0" && s[0] <= "3";
+const TOKEN = /[0-9A-Za-z_$]+/g;
+const frame = JSON.parse(read("frame.json")).model;
+const known = new Set([frame.project_id, ...Object.keys(frame.storeys), ...Object.keys(frame.materials), ...Object.keys(frame.elements)]);
+
+class Masker {
+  constructor() { this.news = []; }
+  number(t) { // N of a new id (numbered on first sight), 0 otherwise
+    if (!validGid(t) || known.has(t) || t === "0".repeat(22)) return 0;
+    const i = this.news.indexOf(t);
+    if (i >= 0) return i + 1;
+    this.news.push(t);
+    return this.news.length;
+  }
+  mask(s, mode) { return s.replace(TOKEN, (t) => { const k = this.number(t); return !k ? t : mode === 0 ? `<new-${k}>` : fromU128(k); }); }
+  remask(s) {
+    return s.replace(TOKEN, (t) => {
+      for (let k = 1; t.length === 22 && k <= this.news.length; k++) if (t === fromU128(k)) return `<new-${k}>`;
+      return t;
+    });
+  }
+  unmask(s) { return s.replace(/<new-(\d+)>/g, (m, v) => (v >= 1 && v <= this.news.length ? this.news[v - 1] : m)); }
+  // the dumper's model_text: renumber new ids from_u128(N), load and save (sorted), then mask
+  modelText(h) {
+    const r = this.mask(save(h), 1);
+    const o = openText(r);
+    if (o.status !== 200) return `renumbered model does not load: ${o.text}`;
+    const s = save(o.value);
+    X.close(o.value);
+    return this.remask(s);
+  }
+}
+
+// ---- verbs ----
+suite("verbs");
+{
+  const want = read("verbs.txt"), wantUndo = read("verbs_after_undo.json"), wantAfter = read("verbs_after.json");
+  X.guid_seed(1n);
+  const o = openText(read("frame.json"));
+  const h = o.value;
+  const M = new Masker();
+  let got = "", afterUndo = "", undos = 0, steps = 0;
+  const labels = () => {
+    const t = call(X.history, [], h).text; // {"redo":[…],"undo":[…]}
+    const k = t.indexOf('],"undo":[');
+    return `undo ${t.slice(k + 9, -1)}\nredo ${t.slice(8, k + 1)}\n`;
+  };
+  const elements = () => JSON.parse(call(X.query, ["elements", '{"limit":10000}'], h).text).length;
+  t0 = performance.now();
+  for (const line of want.split("\n")) {
+    const m = line.match(/^>>> (\S+) (\S+) (.*)$/);
+    if (!m) continue;
+    const [, op, name, a] = m;
+    const args = M.unmask(a);
+    let ok = true, ans;
+    if (op === "verb") {
+      const r = call(X.verb, [name, args], h);
+      ok = r.status === 200;
+      ans = ok ? M.mask(r.text, 0) : r.text;
+    } else {
+      ans = call(op === "redo" ? X.redo : X.undo, [], h).text;
+    }
+    got += `>>> ${op} ${name} ${M.mask(args, 0)}\n${ok ? 200 : 400} ${ans}\n${labels()}elements ${elements()}\n\n`;
+    steps++;
+    if (op === "undo" && ++undos === 3) afterUndo = M.modelText(h);
+  }
+  const replayMs = performance.now() - t0;
+  const after = M.modelText(h);
+  check("transcript has 18 steps", steps === 18, String(steps));
+  eq("verbs.txt", got, want);
+  eq("verbs_after_undo.json", afterUndo, wantUndo);
+  eq("verbs_after.json", after, wantAfter);
+  // undo everything: the file's bytes again; redo everything: the end model again
+  while (call(X.undo, [], h).value) {}
+  eq("undo all = frame.json", save(h), read("frame.json"));
+  while (call(X.redo, [], h).value) {}
+  eq("redo all = verbs_after.json", M.modelText(h), wantAfter);
+  // apply: a command list as one step, its errors, and the history
+  const r1 = call(X.apply, ['[{"op":"rename","id":"004z1Cm4z4hgNOg0ez4Id1","name":"P-01"}]'], h);
+  check("apply rename -> 200, empty", r1.status === 200 && r1.text === "", `${r1.status} ${r1.text}`);
+  check("history has the rename", /"undo":\["rename [^"]* to P-01"/.test(call(X.history, [], h).text), call(X.history, [], h).text);
+  const r2 = call(X.apply, ['[{"op":"rename","id":"0000000000000000000000","name":"X"}]'], h);
+  eq("apply unknown id -> 400", `${r2.status} ${r2.text}`, "400 no such object: 0000000000000000000000");
+  const r3 = call(X.apply, ["[{"], h);
+  check("apply bad JSON -> 400", r3.status === 400, `${r3.status} ${r3.text}`);
+  eq("verb fly -> 400", ((r) => `${r.status} ${r.text}`)(call(X.verb, ["fly", "{}"], h)), want.match(/>>> verb fly \{\}\n(.*)\n/)[1]);
+  check("bad handle -> 404", call(X.save, [], 999).status === 404 && X.close(999) === 404);
+  X.close(h);
+  X.guid_seed(0n);
+  console.log(`verbs: ${steps} steps replayed in ${replayMs.toFixed(2)} ms`);
+  end();
+}
+
+// ---- file round trip ----
+suite("file");
+for (const f of ["frame.json", "frame2.json"]) {
+  const text = read(f);
+  const o = openText(text);
+  check(`${f} opens`, o.status === 200, o.text);
+  eq(`${f}: open then save`, save(o.value), text);
+  X.close(o.value);
+}
+{
+  const bad = openText(read("frame.json").replace(/"version": 1,/, "\"version\": 99,"));
+  check("unsupported version -> 400", bad.status === 400 && /version/.test(bad.text), bad.text);
+  const bad2 = openText("{");
+  check("parse error -> 400", bad2.status === 400 && bad2.text.startsWith("parse"), bad2.text);
+}
+end();
+
+// ---- ifc ----
+suite("ifc");
+{
+  X.guid_seed(1n);
+  const o = openIfc(read("ifc/frame.ifc"));
+  check("frame.ifc imports", o.status === 200, o.text);
+  // to_u128 (own numbering, known = frame.json ids), reload and save, remask
+  const M = new Masker();
+  const renum = M.mask(save(o.value), 1);
+  const back = openText(renum);
+  check("renumbered model loads", back.status === 200, back.text);
+  eq("frame_reimport.json", M.remask(save(back.value)), read("ifc/frame_reimport.json"));
+  X.close(back.value), X.close(o.value);
+  X.guid_seed(0n);
+  const bad = openIfc("ISO-10303-21;\nHEADER;\nENDSEC;\n");
+  check("not an IFC file -> 400", bad.status === 400, `${bad.status} ${bad.text}`);
+  end();
+}
+
+// ---- mesh ----
+const CAT = ["Concrete", "Steel", "Timber", "Masonry", "Insulation", "Earth", "Glass", "Other"];
+function parseBmsh(b) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const u32 = (o) => dv.getUint32(o, true);
+  const h = { magic: dec.decode(b.subarray(0, 4)), version: u32(4), rev: u32(8), nE: u32(12), nV: u32(16), nI: u32(20), nS: u32(24) };
+  h.origin = [0, 1, 2].map((k) => dv.getBigUint64(28 + 8 * k, true).toString(16).padStart(16, "0"));
+  h.rows = [];
+  let o = 52;
+  for (let e = 0; e < h.nE; e++, o += 48)
+    h.rows.push({ id: dec.decode(b.subarray(o, o + 22)), cat: b[o + 22], pad: b[o + 23], v0: u32(o + 24), nv: u32(o + 28), i0: u32(o + 32), ni: u32(o + 36), s0: u32(o + 40), ns: u32(o + 44) });
+  const f32 = (n) => { const a = new Float32Array(n); for (let i = 0; i < n; i++, o += 4) a[i] = dv.getFloat32(o, true); return a; };
+  h.pos = f32(3 * h.nV);
+  h.idx = new Uint32Array(h.nI); for (let i = 0; i < h.nI; i++, o += 4) h.idx[i] = u32(o);
+  h.edges = f32(6 * h.nS);
+  h.normals = new Int8Array(b.buffer.slice(b.byteOffset + o, b.byteOffset + o + 8 * h.nS)); o += 8 * h.nS;
+  if (h.version === 2) {
+    h.place = [];
+    for (let e = 0; e < h.nE; e++) { const inst = u32(o); o += 4; h.place.push({ inst, cols: f32(12) }); }
+  }
+  h.end = o;
+  return h;
+}
+const f32hex = (x) => { const v = new DataView(new ArrayBuffer(4)); v.setFloat32(0, x); return v.getUint32(0).toString(16).padStart(8, "0"); };
+/** golden/mesh/<k>.txt of element k of a local BMSH */
+function elementText(h, k) {
+  const r = h.rows[k], p = h.place[k];
+  let s = "";
+  if (p.inst) s += "t " + [...p.cols].map(f32hex).join(" ") + "\n";
+  for (let i = r.v0; i < r.v0 + r.nv; i++) s += "v " + [...h.pos.subarray(3 * i, 3 * i + 3)].map(f32hex).join(" ") + "\n";
+  for (let i = r.i0; i + 2 < r.i0 + r.ni; i += 3) s += `i ${h.idx[i] - r.v0} ${h.idx[i + 1] - r.v0} ${h.idx[i + 2] - r.v0}\n`;
+  for (let i = r.s0; i < r.s0 + r.ns; i++) s += "e " + [...h.edges.subarray(6 * i, 6 * i + 6)].map(f32hex).join(" ") + "\n";
+  for (let i = r.s0; i < r.s0 + r.ns; i++) s += "n " + [...h.normals.subarray(8 * i, 8 * i + 8)].join(" ") + "\n";
+  return s;
+}
+// cc_scene_world_mesh in f32 (Math.fround after each operation, no fused multiply-add)
+const F = Math.fround;
+function placeLocal(h, k) {
+  const r = h.rows[k], p = h.place[k];
+  const pos = [...h.pos.subarray(3 * r.v0, 3 * (r.v0 + r.nv))], edges = [...h.edges.subarray(6 * r.s0, 6 * (r.s0 + r.ns))];
+  const idx = [...h.idx.subarray(r.i0, r.i0 + r.ni)], normals = [...h.normals.subarray(8 * r.s0, 8 * (r.s0 + r.ns))];
+  if (!p.inst) return { pos, idx, edges, normals };
+  const c = p.cols, x = [c[0], c[1], c[2]], y = [c[3], c[4], c[5]], z = [c[6], c[7], c[8]], t = [c[9], c[10], c[11]];
+  const cr = [F(F(y[1] * z[2]) - F(y[2] * z[1])), F(F(y[2] * z[0]) - F(y[0] * z[2])), F(F(y[0] * z[1]) - F(y[1] * z[0]))];
+  const mirrors = F(F(F(x[0] * cr[0]) + F(x[1] * cr[1])) + F(x[2] * cr[2])) < 0;
+  if (mirrors) for (let i = 0; i + 2 < idx.length; i += 3) [idx[i + 1], idx[i + 2]] = [idx[i + 2], idx[i + 1]];
+  const xf = (a, o) => { const q = [a[o], a[o + 1], a[o + 2]]; for (let j = 0; j < 3; j++) a[o + j] = F(F(F(F(x[j] * q[0]) + F(y[j] * q[1])) + F(z[j] * q[2])) + t[j]); };
+  for (let i = 0; i < pos.length; i += 3) xf(pos, i);
+  for (let i = 0; i < edges.length; i += 3) xf(edges, i);
+  const q8 = (v) => { const a = F(Math.min(1, Math.max(-1, v)) * 127); const r = Math.abs(a) < 8388608 ? Math.sign(a) * Math.floor(Math.abs(a) + 0.5) : a; return r | 0; };
+  for (let i = 0; i < normals.length; i += 4) {
+    const nq = normals.slice(i, i + 4);
+    if (!nq[0] && !nq[1] && !nq[2] && !nq[3]) continue;
+    const u = [F(nq[0] / 127), F(nq[1] / 127), F(nq[2] / 127)];
+    const v = [0, 1, 2].map((j) => F(F(F(x[j] * u[0]) + F(y[j] * u[1])) + F(z[j] * u[2])));
+    let l = F(Math.sqrt(F(F(F(v[0] * v[0]) + F(v[1] * v[1])) + F(v[2] * v[2]))));
+    l = Math.max(l, F(1e-12));
+    for (let j = 0; j < 3; j++) normals[i + j] = q8(F(v[j] / l));
+    normals[i + 3] = 0;
+  }
+  return { pos, idx, edges, normals };
+}
+function meshSuite(modelFile, dir) {
+  const o = openText(read(modelFile));
+  const model = JSON.parse(save(o.value)).model;
+  const loc = call(X.mesh, [], o.value, 1), wor = call(X.mesh, [], o.value, 0);
+  check(`${modelFile}: mesh -> 200`, loc.status === 200 && wor.status === 200, `${loc.status} ${wor.status}`);
+  const L = parseBmsh(loc.bytes), W = parseBmsh(wor.bytes);
+  check("local: BMSH version 2, length = layout", L.magic === "BMSH" && L.version === 2 && L.end === loc.bytes.length);
+  check("world: BMSH version 1, length = layout", W.magic === "BMSH" && W.version === 1 && W.end === wor.bytes.length);
+  // scene.txt
+  let scene = `origin ${L.origin.join(" ")}\nelements ${L.nE}\n`;
+  L.rows.forEach((r, k) => {
+    const e = model.elements[r.id];
+    scene += `${String(k).padStart(3, "0")} ${r.id} ${e.ifc_entity ?? e.class} ${r.cat} ${CAT[r.cat]} v=${r.nv} i=${r.ni / 3} e=${r.ns} n=${r.ns}\n`;
+  });
+  eq(`${dir}/scene.txt`, scene, read(`${dir}/scene.txt`));
+  for (let k = 0; k < L.nE; k++) eq(`${dir}/${String(k).padStart(3, "0")}.txt`, elementText(L, k), read(`${dir}/${String(k).padStart(3, "0")}.txt`));
+  // world = local placed (positions, indices, edges, normals: bits)
+  check("world header = local header", ["rev", "nE", "nV", "nI", "nS"].every((f) => W[f] === L[f]) && W.origin.join() === L.origin.join());
+  check("world rows = local rows", JSON.stringify(W.rows) === JSON.stringify(L.rows));
+  let bad = "";
+  for (let k = 0; k < L.nE && !bad; k++) {
+    const want = placeLocal(L, k), r = W.rows[k];
+    const got = {
+      pos: [...W.pos.subarray(3 * r.v0, 3 * (r.v0 + r.nv))], idx: [...W.idx.subarray(r.i0, r.i0 + r.ni)],
+      edges: [...W.edges.subarray(6 * r.s0, 6 * (r.s0 + r.ns))], normals: [...W.normals.subarray(8 * r.s0, 8 * (r.s0 + r.ns))],
+    };
+    for (const f of ["pos", "idx", "edges", "normals"])
+      if (got[f].some((v, i) => !Object.is(v, want[f][i]))) bad ||= `element ${k} ${f}: ${got[f].slice(0, 6)} vs ${want[f].slice(0, 6)}`;
+  }
+  check(`${modelFile}: world mesh = local meshes placed`, !bad, bad);
+  X.close(o.value);
+}
+suite("mesh");
+meshSuite("frame.json", "mesh");
+meshSuite("frame2.json", "frame2/mesh");
+end();
+
+// ---- memory: no growth when a model is loaded and freed again and again ----
+suite("memory");
+{
+  const frameText = put(read("frame.json")), ifcText = put(read("ifc/frame.ifc"));
+  // one round: open, mesh, a verb, undo, close; every input and answer freed
+  const roundClean = () => {
+    const a = put("place"), b = put('{"kind":"column","storey":"1uAZA0Yfn05f$xRd1k4uPR","a":[0,0]}');
+    X.open_text(frameText[0], frameText[1], res);
+    const dv = () => new DataView(X.memory.buffer);
+    const h = dv().getUint32(res + 8, true);
+    X.cc_free(dv().getUint32(res, true));
+    X.mesh(h, 0, res);
+    X.cc_free(dv().getUint32(res, true));
+    X.verb(h, a[0], a[1], b[0], b[1], res);
+    X.cc_free(dv().getUint32(res, true));
+    X.undo(h, res);
+    X.cc_free(dv().getUint32(res, true));
+    X.close(h);
+    X.cc_free(a[0]), X.cc_free(b[0]);
+  };
+  for (let i = 0; i < 3; i++) roundClean();
+  const pages0 = X.memory.buffer.byteLength / 65536, heap0 = X.cc_heap_used();
+  t0 = performance.now();
+  for (let i = 0; i < 1000; i++) roundClean();
+  const loopMs = performance.now() - t0;
+  const pages1 = X.memory.buffer.byteLength / 65536, heap1 = X.cc_heap_used();
+  check("1000 x (open, mesh, verb, undo, close): no new pages", pages1 === pages0, `${pages0} -> ${pages1}`);
+  check("1000 x (open, mesh, verb, undo, close): heap unchanged", heap1 === heap0, `${heap0} -> ${heap1}`);
+  const ifcRound = () => {
+    X.open_ifc(ifcText[0], ifcText[1], res);
+    const dv = new DataView(X.memory.buffer);
+    const h = dv.getUint32(res + 8, true);
+    X.cc_free(dv.getUint32(res, true));
+    X.close(h);
+  };
+  for (let i = 0; i < 2; i++) ifcRound();
+  const heap2 = X.cc_heap_used();
+  for (let i = 0; i < 100; i++) ifcRound();
+  check("100 x open_ifc + close: heap unchanged", X.cc_heap_used() === heap2, `${heap2} -> ${X.cc_heap_used()}`);
+  console.log(`memory: ${pages1} pages (${(pages1 / 16).toFixed(1)} MiB), heap ${heap1} bytes; 1000 rounds in ${loopMs.toFixed(0)} ms`);
+  end();
+}
+
+// ---- numbers ----
+{
+  const frameText = read("frame.json");
+  const runs = [];
+  for (let i = 0; i < 30; i++) {
+    const a = performance.now();
+    const o = openText(frameText);
+    const b = performance.now();
+    const m = call(X.mesh, [], o.value, 0);
+    const c = performance.now();
+    X.close(o.value);
+    runs.push([b - a, c - b, m.bytes.length]);
+  }
+  const med = (j) => runs.map((r) => r[j]).sort((x, y) => x - y)[runs.length >> 1];
+  console.log(`ccore.wasm: ${bytes.length} bytes, ${gzipSync(bytes, { level: 9 }).length} gzip -9; instantiate ${instantiateMs.toFixed(2)} ms`);
+  console.log(`frame.json (${frameText.length} bytes): first open ${runs[0][0].toFixed(2)} ms + scene+mesh ${runs[0][1].toFixed(2)} ms; ` +
+    `median of 30: open ${med(0).toFixed(3)} ms, scene+mesh ${med(1).toFixed(3)} ms (BMSH ${runs[0][2]} bytes)`);
+}
+
+const failed = suites.reduce((a, s) => a + s.failed, 0), passed = suites.reduce((a, s) => a + s.passed, 0);
+console.log(`wasm_run: ${passed} passed, ${failed} failed`);
+process.exit(failed ? 1 : 0);

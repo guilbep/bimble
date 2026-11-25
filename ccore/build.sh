@@ -2,7 +2,8 @@
 # Builds ccore: build.sh tcc | native | wasm. Output in ccore/out/<mode>/. Prints ms per step.
 #   tcc    debug library (libccore.a), test binaries and the host (bimble-ccore), for the edit loop
 #   native clang -O2, same outputs
-#   wasm   clang freestanding wasm32 of src/ (no libc), ccore.wasm with a dummy export
+#   wasm   clang freestanding wasm32 of src/ (no libc), ccore.wasm exporting the API of
+#          src/wasm_api.h (test: node test/wasm_run.mjs)
 set -euo pipefail
 cd "$(dirname "$0")"
 # Every src/*.c is the library (wasm_stub.c only in the wasm build); every test/<name>_test.c is a suite.
@@ -56,7 +57,8 @@ case "${1:-}" in
     step "clang wasm32 link" clang --target=wasm32 -std=c11 -ffreestanding -nostdlib -O2 \
         -Wall -Werror -Wno-unused-function -DRYU_ONLY_64_BIT_OPS -isystem src/freestanding "${INC[@]}" \
         -Wl,--no-entry "${LIB[@]}" src/wasm_stub.c -o out/wasm/ccore.wasm
-    printf '  %-28s %5d bytes\n' "ccore.wasm" "$(wc -c < out/wasm/ccore.wasm)" ;;
+    printf '  %-28s %5d bytes\n' "ccore.wasm" "$(wc -c < out/wasm/ccore.wasm)"
+    printf '  %-28s %5d bytes\n' "ccore.wasm gzip -9" "$(gzip -9 -c out/wasm/ccore.wasm | wc -c)" ;;
   *) echo "usage: $0 tcc|native|wasm" >&2; exit 2 ;;
 esac
 printf '  %-28s %5d ms\n' "total" $(($(ms) - t_start))

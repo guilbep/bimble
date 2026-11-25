@@ -1,0 +1,67 @@
+/* The C core's wasm32 API (build.sh wasm; compiled only for __wasm__). C ABI, all integers are
+ * wasm i32 (pointers and sizes are byte offsets in the module's linear memory) unless noted.
+ *
+ * Memory protocol
+ *   - Inputs: the host allocates with cc_alloc(n), writes the bytes (UTF-8 text, no NUL needed),
+ *     passes (ptr, len) and frees with cc_free(ptr) when the call returned.
+ *   - Results: every call that answers takes `res`, a pointer to 12 bytes the host owns:
+ *       res[0] u32 ptr   the answer bytes (malloc'd by the module; 0 when empty)
+ *       res[1] u32 len   their length
+ *       res[2] u32 value a number: the model handle (open_*), 1/0 (undo, redo), the model
+ *                        revision (mesh), else 0
+ *     The host reads ptr[0..len) then calls cc_free(ptr). The answer is the result (status 200)
+ *     or the error text (any other status), UTF-8, except mesh's 200 answer (BMSH bytes).
+ *   - Status codes, as the native host: 200 ok, 400 the call failed (bad input; the text says
+ *     why, Rust's text), 404 no model with that handle, 500 out of memory or a scene that cannot
+ *     be built.
+ *   - Models are handles 1..64 (open_text / open_ifc), each with its own undo history; close
+ *     frees one. All calls are synchronous; the module is single-threaded.
+ *
+ * Exports (export name: signature)
+ *   cc_alloc(n) -> ptr                      malloc; 0 when out of memory
+ *   cc_free(ptr)                            free (0 is fine)
+ *   cc_heap_used() -> bytes                 heap carved so far (blocks in use or free)
+ *   open_text(ptr, len, res) -> status      .bimble JSON text (file::from_str); value = handle
+ *   open_ifc(ptr, len, res) -> status       IFC STEP text (import_str); answer = the report
+ *                                           lines; value = handle
+ *   close(h) -> status                      frees the model and its history
+ *   query(h, name, name_len, args, args_len, res) -> status
+ *                                           dispatch::query: compact JSON (args: JSON, empty = {})
+ *   apply(h, cmds, len, res) -> status      a JSON array of Commands as one History step
+ *                                           (answer empty)
+ *   verb(h, name, name_len, args, args_len, res) -> status
+ *                                           dispatch::run then History::apply; answer = the
+ *                                           commands as compact JSON
+ *   undo(h, res), redo(h, res) -> status    answer "true"/"false", value 1/0
+ *   history(h, res) -> status               {"redo":[…],"undo":[…]}, newest first, at most 50
+ *   save(h, res) -> status                  file::to_string (pretty JSON, no final newline)
+ *   mesh(h, flags, res) -> status           the scene as BMSH (layout below); flags bit 0 = local
+ *   guid_seed(k)                            k: i64 (a BigInt in JS). k > 0: new ids are
+ *                                           from_u128(k), from_u128(k+1)… ; 0: random
+ *   guid_entropy(ptr, len)                  mixes host random bytes (crypto.getRandomValues)
+ *                                           into the id generator; call once at start
+ *   fmt_f64(x: f64, debug, res) -> status   serde_json (debug 0) or Rust {:?} (1) text of x;
+ *                                           400 for NaN and inf
+ *   parse_f64(ptr, len) -> f64              the exact decimal parser of JSON and STEP numbers
+ *
+ * BMSH (flags 0): exactly host/mesh.c's version 1 (rev = the model revision, bumped by every
+ * change: apply, verb, undo, redo that did something): world positions relative to origin_mm.
+ * BMSH local (flags 1): the same header with version 2, the same rows and blocks, but each
+ * element's mesh is its local mesh (SceneElement::local_mesh: a shared shape in its own
+ * coordinates; indices still absolute), then one more block of nE x 52 bytes:
+ *   u32 instanced (1: the element is a placed shape, 0: own mesh), f32[12] Placement32 columns
+ *   x, y, z, t (zeros when not instanced).
+ * The local form is what golden/mesh/<k>.txt holds; the world form is what a viewer draws. */
+#ifndef CCORE_WASM_API_H
+#define CCORE_WASM_API_H
+#include <stddef.h>
+#include <stdint.h>
+
+#define CC_WASM_MAX_MODELS 64
+#define CC_BMSH_LOCAL_VERSION 2u
+
+typedef struct {
+    uint32_t ptr, len, value;
+} cc_wasm_res;
+
+#endif

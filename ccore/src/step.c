@@ -13,37 +13,10 @@ static void *st_dup8(Arena *a, const void *src, size_t n) {
 /* ------------------------------------------------------------------ reals */
 
 #ifdef __wasm__
-/* Freestanding wasm has no strtod. NOT correctly rounded (same caveat as json_r.c; the wasm
- * slice must bring an exact one before wasm output is compared with Rust). */
-static double st_strtod(const char *s, size_t n) {
-    size_t i = 0;
-    int neg = 0, digits = 0;
-    uint64_t mant = 0;
-    long exp10 = 0;
-    if (i < n && (s[i] == '-' || s[i] == '+')) neg = s[i] == '-', i++;
-    for (; i < n && s[i] >= '0' && s[i] <= '9'; i++) {
-        if (digits < 19) mant = mant * 10 + (uint64_t)(s[i] - '0'), digits += mant != 0;
-        else exp10++;
-    }
-    if (i < n && s[i] == '.')
-        for (i++; i < n && s[i] >= '0' && s[i] <= '9'; i++)
-            if (digits < 19) mant = mant * 10 + (uint64_t)(s[i] - '0'), digits += mant != 0, exp10--;
-    if (i < n && (s[i] == 'e' || s[i] == 'E')) {
-        int eneg = 0;
-        long e = 0;
-        i++;
-        if (i < n && (s[i] == '+' || s[i] == '-')) eneg = s[i] == '-', i++;
-        for (; i < n && s[i] >= '0' && s[i] <= '9'; i++)
-            if (e < 100000) e = e * 10 + (s[i] - '0');
-        exp10 += eneg ? -e : e;
-    }
-    double x = (double)mant;
-    if (mant == 0) return neg ? -0.0 : 0.0;
-    while (exp10 > 0 && x < 1e308 * 10) x *= 10, exp10--;
-    while (exp10 < 0 && x > 0) x /= 10, exp10++;
-    if (exp10 > 0) x = x * 1e308 * 1e308;
-    return neg ? -x : x;
-}
+/* Freestanding wasm has no strtod: the C core's own, correctly rounded and bit-equal to glibc
+ * (src/strtod.c, test/strtod_test.c). Overflow gives +-inf, as strtod. */
+#include "strtod.h"
+static double st_strtod(const char *s, size_t n) { return cc_strtod(s, n); }
 #else
 static double st_strtod(const char *s, size_t n) {
     char small[128];

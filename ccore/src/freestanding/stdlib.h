@@ -5,4 +5,5 @@
 void *malloc(size_t n);
 void *realloc(void *p, size_t n);
 void free(void *p);
+void *calloc(size_t k, size_t n);
 #endif

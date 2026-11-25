@@ -1,10 +1,17 @@
-/* Freestanding wasm32 support for build.sh wasm: the few libc functions src/ uses, a simple
- * allocator on memory.grow, and one exported function that proves the library links. */
+/* Freestanding wasm32 support for build.sh wasm: the few libc functions src/ uses and an
+ * allocator on memory.grow. The exported API is in wasm_api.c.
+ *
+ * Allocator: segregated free lists of size classes. Block sizes (16-byte header included) are
+ * 32, 48, then 4 steps per power of two: 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, …
+ * (at most 25 % waste), up to 2^31. malloc pops the class's free list, or carves a new block
+ * from the top of the heap (growing memory by whole 64 KiB pages as needed); free pushes the
+ * block back on its class's list. Blocks are never split or merged: a workload that repeats
+ * (open a model, close it, again) reuses the same blocks and memory stops growing after the
+ * first round (test/wasm_run.mjs measures it). Single-threaded, like the wasm module. */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include "ccore.h"
 
 __attribute__((no_builtin)) void *memcpy(void *restrict d, const void *restrict s, size_t n) {
     unsigned char *p = d;
@@ -36,49 +43,81 @@ size_t strlen(const char *s) {
     return n;
 }
 
-/* Bump allocator with a size header; free() only returns the last block. Enough for a lab. */
-extern unsigned char __heap_base;
-static uintptr_t heap_top, heap_end;
+/* ---- allocator ---- */
 
-void *malloc(size_t n) {
-    if (!heap_top) heap_top = heap_end = ((uintptr_t)&__heap_base + 15) & ~(uintptr_t)15;
-    if (n > 0x7fff0000u) return NULL;
-    size_t need = (n + 16 + 15) & ~(size_t)15;
-    while (heap_end - heap_top < need) {
-        if (__builtin_wasm_memory_grow(0, (need >> 16) + 1) == (size_t)-1) return NULL;
-        heap_end = __builtin_wasm_memory_size(0) << 16;
-    }
-    size_t *h = (size_t *)heap_top;
-    *h = n;
-    heap_top += need;
-    return (unsigned char *)h + 16;
+#define HDR 16u
+#define NCLASS 104
+extern unsigned char __heap_base;
+static uintptr_t heap_base, heap_top, heap_end;
+static size_t class_size[NCLASS]; /* block bytes, header included; 0 past the last class */
+static void *free_list[NCLASS];
+
+static void classes_init(void) {
+    int c = 0;
+    class_size[c++] = 32;
+    class_size[c++] = 48;
+    for (int k = 4; k <= 28; k++)
+        for (int j = 0; j < 4; j++) class_size[c++] = (size_t)(4 + j) << k; /* up to 1.75 GiB */
+    class_size[c++] = (size_t)1 << 31;
+    heap_base = heap_top = heap_end = ((uintptr_t)&__heap_base + 15) & ~(uintptr_t)15;
 }
+
+static int class_of(size_t total) {
+    for (int c = 0; c < NCLASS && class_size[c]; c++)
+        if (class_size[c] >= total) return c;
+    return -1;
+}
+
+/* The header holds the class index; the payload follows at +16 (16-aligned). */
+void *malloc(size_t n) {
+    if (!heap_top) classes_init();
+    if (n > 0x7ff00000u) return NULL;
+    int c = class_of(n + HDR);
+    if (c < 0) return NULL;
+    unsigned char *b;
+    if (free_list[c]) {
+        b = (unsigned char *)free_list[c] - HDR;
+        free_list[c] = *(void **)free_list[c];
+    } else {
+        size_t need = class_size[c];
+        if (heap_end - heap_top < need) {
+            size_t pages = (need - (heap_end - heap_top) + 65535) >> 16;
+            if (__builtin_wasm_memory_grow(0, pages) == (size_t)-1) return NULL;
+            heap_end = __builtin_wasm_memory_size(0) << 16;
+        }
+        b = (unsigned char *)heap_top;
+        heap_top += need;
+    }
+    *(uint32_t *)b = (uint32_t)c;
+    return b + HDR;
+}
+
 void free(void *p) {
     if (!p) return;
-    size_t *h = (size_t *)((unsigned char *)p - 16);
-    if ((uintptr_t)h + ((*h + 16 + 15) & ~(size_t)15) == heap_top) heap_top = (uintptr_t)h;
+    uint32_t c = *(uint32_t *)((unsigned char *)p - HDR);
+    *(void **)p = free_list[c];
+    free_list[c] = p;
 }
+
 void *realloc(void *p, size_t n) {
     if (!p) return malloc(n);
-    size_t old = *(size_t *)((unsigned char *)p - 16);
-    if (n <= old) return p;
+    uint32_t c = *(uint32_t *)((unsigned char *)p - HDR);
+    size_t cap = class_size[c] - HDR;
+    if (n <= cap) return p;
     void *q = malloc(n);
     if (q) {
-        memcpy(q, p, old);
+        memcpy(q, p, cap);
         free(p);
     }
     return q;
 }
 
-/* Dummy export: formats x as serde_json and as {:?} into a static buffer, returns its length. */
-static char out[64];
-__attribute__((export_name("ccore_fmt_f64"))) int ccore_fmt_f64(double x, int debug) {
-    Buf b;
-    buf_init(&b);
-    int r = debug ? fmt_f64_debug(&b, x) : fmt_f64_json(&b, x);
-    int n = r ? -1 : (int)(b.len < sizeof out ? b.len : sizeof out);
-    if (n > 0) memcpy(out, b.p, (size_t)n);
-    buf_free(&b);
-    return n;
+void *calloc(size_t k, size_t n) {
+    if (n && k > (size_t)-1 / n) return NULL;
+    void *p = malloc(k * n);
+    if (p) memset(p, 0, k * n);
+    return p;
 }
-__attribute__((export_name("ccore_out"))) char *ccore_out(void) { return out; }
+
+/* Bytes of the heap carved so far (blocks in use or on a free list); wasm_api.c exports it. */
+size_t cc_wasm_heap_used(void) { return heap_top - heap_base; }
