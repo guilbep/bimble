@@ -1,6 +1,14 @@
 <script lang="ts">
 export const hint = "export.hint";
 export const capability = "export_svg"; // FAKE1: the sheets drawn (sheet_svg)
+// ---- PAPER1: File → Export view (egui "Export view… (PDF, SVG)", action on_paper) opens this dialog on "This view" ----
+import { ref as vref } from "vue";
+import { screenRoutes } from "../bimble";
+import { currentDialog as dialogNow } from ".";
+/** What the dialog exports: the sheets (Print and export) or one 2D view (Export view). */
+export const exportWhat = vref<"sheets" | "view">("sheets");
+screenRoutes.on_paper = () => { exportWhat.value = "view"; dialogNow.value = "export"; };
+// ---- end PAPER1 ----
 </script>
 
 <script setup lang="ts">
@@ -10,8 +18,10 @@ export const capability = "export_svg"; // FAKE1: the sheets drawn (sheet_svg)
 // (`sheet_svg`). ADR 0052: no Cancel, one Export action; the close button closes.
 // SIZE1: the PDF's font: Helvetica (the default, built into every PDF reader) or Roboto, offered only
 // when the core has its files (`pdf_fonts`); otherwise shown disabled with where to put them.
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref } from "vue";
 import { type PdfFont, pdfFonts, query, sheetPdf, sheetPdfName, sheets, state } from "../bimble";
+import { openViews, viewPdf, viewPdfName, viewSvg, viewSvgName } from "../bimble"; // PAPER1
+import { viewName } from "../shell/viewName"; // PAPER1
 import { t } from "../i18n";
 import { currentDialog } from ".";
 
@@ -36,6 +46,33 @@ function download(name: string, blob: Blob) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
+
+// ---- PAPER1: "This view" (lib.rs plan_panel: a 2D view, the active one first) ----
+const views2d = computed(() => openViews.value.views.filter((v) => v.type === "plan" || v.type === "section"));
+const viewId = ref<string | null>(null);
+const theView = computed(() => views2d.value.find((v) => v.id === viewId.value) ?? views2d.value.find((v) => v.id === openViews.value.active) ?? views2d.value[0] ?? null);
+const what = exportWhat;
+onUnmounted(() => { exportWhat.value = "sheets"; }); // the next Print and export opens on the sheets
+const ready = computed(() => (what.value === "view" ? !!theView.value : n.value > 0));
+async function exportView() {
+  const v = theView.value;
+  if (!v) return;
+  if (format.value === "pdf") download(viewPdfName(v), new Blob([(await viewPdf(v.id, font.value)).slice().buffer as ArrayBuffer], { type: "application/pdf" }));
+  else download(viewSvgName(v), new Blob([viewSvg(v.id).svg], { type: "image/svg+xml" }));
+}
+async function exportAll() {
+  failed.value = null;
+  busy.value = true;
+  try {
+    if (what.value === "view") await exportView();
+    else await exportSheets();
+  } catch (e) {
+    failed.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    busy.value = false;
+  }
+}
+// ---- end PAPER1 ----
 
 async function exportSheets() {
   failed.value = null;
@@ -64,8 +101,22 @@ async function exportSheets() {
       <h2 style="font-size:22px">{{ t('export.title') }}</h2><span style="flex:1"></span>
       <button class="ib" type="button" :aria-label="t('export.close')" data-bb="export-close" @click="currentDialog = null"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
+    <!-- PAPER1: the sheets, or one view (File → Export view) -->
+    <span class="seg" style="align-self:flex-start" data-bb="export-what">
+      <button type="button" :class="{ on: what === 'sheets' }" :aria-pressed="what === 'sheets'" data-bb="export-what-sheets" @click="what = 'sheets'">{{ t('export.whatSheets') }}</button>
+      <button type="button" :class="{ on: what === 'view' }" :aria-pressed="what === 'view'" data-bb="export-what-view" @click="what = 'view'">{{ t('export.whatView') }}</button>
+    </span>
     <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:20px">
-      <div style="display:flex;flex-direction:column;gap:6px">
+      <div v-if="what === 'view'" class="fld" data-bb="export-view">
+        <label class="lbl" for="ex-view">{{ t('export.view') }}</label>
+        <select id="ex-view" class="inp" :value="theView?.id ?? ''" data-bb="export-view-select" @change="viewId = ($event.target as HTMLSelectElement).value">
+          <option v-for="v in views2d" :key="v.id" :value="v.id">{{ viewName(v) }} · 1:{{ v.scale }}</option>
+        </select>
+        <span v-if="!views2d.length" class="note" data-bb="export-view-none">{{ t('export.noView') }}</span>
+        <span v-else class="note">{{ t('export.viewNote') }}</span>
+        <span class="note" data-missing="plan_panel: the storey plan without a view, the paper and template choices">{{ t('export.storeyPlan') }}</span>
+      </div>
+      <div v-else style="display:flex;flex-direction:column;gap:6px">
         <div class="lbl">{{ t('export.sheets', { n, total: list.length }) }}</div>
         <div class="card" style="padding:8px;display:flex;flex-direction:column;gap:2px" data-bb="export-sheets">
           <label v-for="s in list" :key="s.id" class="row" style="padding:4px 6px;border-radius:8px" :class="{ on: picked.has(s.id) }">
@@ -92,7 +143,7 @@ async function exportSheets() {
             <button type="button" :class="{ on: font === 'roboto' }" :aria-pressed="font === 'roboto'" :disabled="!roboto" data-bb="export-font-roboto" @click="font = 'roboto'">Roboto</button>
           </span>
           <span v-if="!roboto" class="note" data-bb="export-font-note">{{ t('export.fontRobotoMissing') }}</span></div>
-        <div class="fld"><span class="lbl">{{ t('export.files') }}</span>
+        <div v-if="what === 'sheets'" class="fld"><span class="lbl">{{ t('export.files') }}</span>
           <span class="seg" style="align-self:flex-start">
             <button type="button" class="on">{{ t('export.perSheet') }}</button>
             <button type="button" disabled data-missing="sheet_pdf: a multi-sheet PDF export">{{ t('export.onePdf') }}</button>
@@ -109,7 +160,7 @@ async function exportSheets() {
     <div style="display:flex;gap:10px;align-items:center;justify-content:flex-end">
       <span v-if="failed" class="note err" role="alert" data-bb="export-failed">{{ t('export.failed', { e: failed }) }}</span>
       <span v-else class="note">{{ t('export.background') }}</span>
-      <button class="btn" :class="n ? 'p' : 'd'" type="button" :disabled="!n || busy" data-bb="export-go" @click="exportSheets">{{ t('export.go', { n }) }}</button>
+      <button class="btn" :class="ready ? 'p' : 'd'" type="button" :disabled="!ready || busy" data-bb="export-go" @click="exportAll">{{ what === 'view' ? t('export.goView') : t('export.go', { n }) }}</button>
     </div>
   </div>
 </template>

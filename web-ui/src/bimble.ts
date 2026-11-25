@@ -967,10 +967,11 @@ export function pdfFonts(): { helvetica: boolean; roboto: boolean } {
 }
 // ---- end SIZE1 ----
 /** A 2D view as PDF (the plan panel's "Export PDF…": its scale, the smallest paper it fits on). */
-export async function viewPdf(id: string): Promise<Uint8Array> {
+export async function viewPdf(id: string, font: PdfFont = "helvetica"): Promise<Uint8Array> { // PAPER1: the font
   const w = wasmOrThrow();
   if (!w.bytes) throw new Error("PDF export: the C core only");
-  try { return await w.bytes("query", "view_pdf", JSON.stringify({ view: id })); } catch (e) { throw new Error(message(e)); }
+  const body = font === "roboto" ? { view: id, font } : { view: id };
+  try { return await w.bytes("query", "view_pdf", JSON.stringify(body)); } catch (e) { throw new Error(message(e)); }
 }
 /** Rust's file names: "<number> <name>.pdf" for a sheet (viewing.rs export_sheet), "plan-<view>-1-<scale>.pdf" for a view (lib.rs). */
 export const sheetPdfName = (s: { number: string; name: string }) => `${s.number} ${s.name}.pdf`;
@@ -981,6 +982,8 @@ export const viewPdfName = (v: { name: string; scale: number }) => `plan-${v.nam
 export interface ViewSvg { svg: string; paper: string; portrait: boolean; scale: number; width_mm: number; height_mm: number }
 export const viewSvg = (id: string, bare = false, font?: PdfFont): ViewSvg =>
   query<ViewSvg>("view_svg", { view: id, ...(bare ? { bare } : {}), ...(font ? { font } : {}) });
+/** Rust's view export name (lib.rs plan_panel): "plan-<view>-1-<scale>.svg". */
+export const viewSvgName = (v: { name: string; scale: number }) => `plan-${v.name}-1-${v.scale}.svg`;
 // ---- end PAPER1 ----
 
 /** Run one ribbon action by name (see `actions`). Returns the Rust error, or null. */

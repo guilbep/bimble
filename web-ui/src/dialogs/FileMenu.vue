@@ -60,6 +60,8 @@ const on = (name?: string) => !!name && (name === "save_as" ? editable() /* FS1 
 // ---- FAKE1: an entry whose action this core does not serve (shell/capability.ts): greyed with a "not yet" tooltip ----
 const notYet = (e: Entry) => !!e.action && notYetAction(e.action);
 // ---- end FAKE1 ----
+// PAPER1: a "not yet" entry is greyed even when the core enables its action (the viewer-only wasm keeps Rust's
+// enable rules and refuses the run: on_paper).
 // A refusal of the session is shown (the shell's error state), not only logged.
 // FS1: save_as is not in `query("actions")`; an editable model has it (calls.c action_enabled).
 function editable(): boolean {
@@ -77,7 +79,7 @@ function run(name?: string) {
     <template v-for="s in sections" :key="s.title">
       <div class="eyebrow">{{ tx(s.title) }}</div>
       <button v-for="e in s.entries.filter((x) => !(HIDE_NOT_AVAILABLE && notYet(x)))" :key="e.key" class="ti" type="button" role="menuitem"
-        :disabled="!e.dialog && !on(e.action)" :data-missing="e.missing" :data-bb="`file-menu-${e.action ?? e.dialog ?? e.missing}`"
+        :disabled="!e.dialog && (!on(e.action) || notYet(e))" :data-missing="e.missing" :data-bb="`file-menu-${e.action ?? e.dialog ?? e.missing}`"
         :data-not-yet="notYet(e) ? '' : undefined" :title="notYet(e) ? t('na.tooltip', { name: tx(e.key) }) : undefined"
         @click="e.dialog ? (currentDialog = e.dialog) : run(e.action)">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="e.icon"></svg>

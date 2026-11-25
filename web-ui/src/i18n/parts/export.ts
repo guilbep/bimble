@@ -23,6 +23,13 @@ export const fr = {
   "export.hint": "Choisissez les feuilles, puis exportez",
   "export.failed": "L’export n’a pas abouti : {e}",
   "export.font": "Police",
+  "export.whatSheets": "Feuilles",
+  "export.whatView": "Cette vue",
+  "export.view": "Vue",
+  "export.noView": "Aucune vue en plan ou en coupe : ouvrez-en une",
+  "export.viewNote": "À l’échelle de la vue, sur le plus petit format où elle tient",
+  "export.storeyPlan": "Plan d’étage sans vue, format et gabarit : pas encore",
+  "export.goView": "Exporter la vue",
   "export.fontRobotoMissing": "Roboto : placez Roboto-Regular.ttf et Roboto-Bold.ttf dans ~/.config/bimble/fonts (ou $BIMBLE_FONTS), application de bureau seulement",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
@@ -49,5 +56,12 @@ export const en: Record<keyof typeof fr, string> = {
   "export.hint": "Choose the sheets, then export",
   "export.failed": "The export failed: {e}",
   "export.font": "Font",
+  "export.whatSheets": "Sheets",
+  "export.whatView": "This view",
+  "export.view": "View",
+  "export.noView": "No plan or section view: open one",
+  "export.viewNote": "At the view's scale, on the smallest paper it fits on",
+  "export.storeyPlan": "Storey plan without a view, paper and template: not yet",
+  "export.goView": "Export the view",
   "export.fontRobotoMissing": "Roboto: put Roboto-Regular.ttf and Roboto-Bold.ttf in ~/.config/bimble/fonts (or $BIMBLE_FONTS), desktop app only",
 };
