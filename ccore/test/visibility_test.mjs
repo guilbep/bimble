@@ -7,7 +7,9 @@
 //     element (bounds of GET /mesh plus ClipBox::around's margin, f32), printed as serde prints f32;
 //   the box tool (op tool): box_set, box_press/box_move/box_release/box_cancel (a face follows the
 //     pointer ray, 10 mm minimum; the session's box changes only on release);
-//   session state only: rev and history never change; a new model resets it all.
+//   session state only: rev and history never change, but for the "in view" calls: since SEC1 they
+//     store what the view hides in the view, one history step each, as Rust's save_visibility and
+//     show_all_in_view (viewing.rs:452-500: store_view, a SetView / AddView); a new model resets it all.
 // The Rust twin is not available here: the expected shapes are written from
 // crates/bimble-viewer/src/calls.rs:442-460 (query visibility), :134-167 (change_json "view"),
 // ribbon.rs:555-643 (enabled, pressed), visibility.rs (hide_or_isolate), lib.rs:2156-2190 and
@@ -142,6 +144,8 @@ try {
   await same("clear_temporary", vis({}));
   check("clear_temporary: view back to [0,0,0,0,0,0,0,1]", (await view()) === "[0,0,0,0,0,0,0,1]", await view());
 
+  check("the for-now calls: rev and history unchanged", (await change()).rev === rev0 && (await q("history")) === hist0);
+
   // ---- in the view ----
   await call("select", "-", JSON.stringify([a]));
   await act("hide_in_view");
@@ -157,6 +161,13 @@ try {
   await act("show_all_in_view");
   await same("show_all_in_view", vis({}));
   check("show_all_in_view: disabled again", !(await enabled("show_all_in_view")));
+  // SEC1 (Rust viewing.rs save_visibility, show_all_in_view): each "in view" call is one history
+  // step storing the 3D view's visibility (the first adds the default view, then sets it).
+  const histIn = JSON.parse(await q("history")).undo;
+  check("in view: one history step each, stored in the view (SEC1)",
+    JSON.stringify(histIn) === JSON.stringify(["change the view 3D", "change the view 3D", "change the view 3D", "add the view 3D"]) &&
+    (await change()).rev === rev0 + 4, JSON.stringify(histIn));
+  const rev1 = (await change()).rev, hist1 = await q("history");
 
   // ---- reveal hidden: the selection stays ----
   await act("reveal_hidden");
@@ -165,7 +176,7 @@ try {
   await act("hide_now");
   check("revealing: hide_now keeps the selection", (await sel()) === JSON.stringify([a]), await sel());
   const sets = JSON.parse(await q("visibility_sets"));
-  check("query visibility_sets: the whole sets", JSON.stringify(sets) === JSON.stringify({ hidden_in_view: [], isolated_in_view: [], now: { ids: [a], isolate: false }, reveal: true }), JSON.stringify(sets));
+  check("query visibility_sets: the whole sets", JSON.stringify(sets) === JSON.stringify({ by_view: [], hidden_in_view: [], isolated_in_view: [], now: { ids: [a], isolate: false }, reveal: true }), JSON.stringify(sets));
   await act("reveal_hidden");
   await act("clear_temporary");
   check("reveal_hidden off", !(await pressed("reveal_hidden")));
@@ -228,15 +239,15 @@ try {
   check("box off: box_press grabs nothing", offPress.active === false && offPress.on === false, JSON.stringify(offPress));
 
   // ---- session state only ----
-  check("rev unchanged by every visibility call", (await change()).rev === rev0, `${rev0} -> ${(await change()).rev}`);
-  check("no history step", (await q("history")) === hist0, await q("history"));
+  check("rev unchanged by every other visibility call", (await change()).rev === rev1, `${rev1} -> ${(await change()).rev}`);
+  check("no other history step", (await q("history")) === hist1, await q("history"));
 
   // ---- a new model: all reset ----
   await call("select", "-", JSON.stringify([a]));
   await act("hide_in_view");
   await act("section_box");
   check("before new: hidden and on", (await view()).startsWith("[1,0,0,1,"), await view());
-  await act("new");
+  await call("action", "new", JSON.stringify({ discard: true })); // SEC1: hide_in_view is an edit, unsaved
   const vNew = JSON.parse(await q("visibility"));
   check("new model: nothing hidden, no box (lib.rs:1657-1676)",
     vNew.hidden_in_view.count === 0 && vNew.section_box.on === false && vNew.section_box.box === null, JSON.stringify(vNew));
