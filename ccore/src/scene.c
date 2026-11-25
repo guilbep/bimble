@@ -1,5 +1,5 @@
 /* Scene::from_model in C (see scene.h). Ports, in the order Rust runs them:
- *   lib.rs     profile_points, corners_only, extrude_tris (earcut: convex CCW quads only),
+ *   lib.rs     profile_points, corners_only, extrude_tris (earcut.c: the earcutr port),
  *              mesh_from_tris (weld by f64 bits), placement_matrix
  *   scene.rs   from_model, SceneBuilder::finish (origin), MeshBuilder::build (weld by f32 bits),
  *              crease_edges_with_normals (20 degrees), Placement32::mesh
@@ -12,6 +12,8 @@
 #include "scene.h"
 #include <string.h>
 #include "buf.h"
+#include "earcut.h"
+#include <stdlib.h>
 
 typedef double V[3];
 
@@ -287,7 +289,8 @@ static int crease_edges(cc_mesh *m, Arena *a) {
 
 /* ---- element_mesh (lib.rs): profile, extrusion, weld ---- */
 
-#define NOT_YET 1 /* local_mesh: unsupported generator */
+#define WARN 2  /* local_mesh: Rust skips the element with a warning (text in `why`) */
+#define LIMIT 3 /* local_mesh: earcut limits (a C core guard Rust does not have) */
 
 typedef struct {
     double (*tris)[3][3]; /* world mm, f64 */
@@ -321,107 +324,243 @@ static void set3(double *p, const double *q, double z) {
     p[2] = z;
 }
 
-/* The element's local mesh (mesh_from_tris positions and indices; its edges are not used by
- * the scene). 0 ok, NOT_YET with `why`, -1 out of memory, 2 Rust's "fewer than 3 corners". */
-static int local_mesh(const cc_element *e, Arena *a, cc_mesh *out, const char **why) {
-    double pts[4][2];
-    const cc_loop *outline = NULL;
-    double depth;
-    const cc_generator *g = &e->generator;
-    switch (g->kind) {
-    case CC_GEN_RECT_COLUMN:
-    case CC_GEN_PAD_FOOTING:
-    case CC_GEN_RECT_BEAM: {
-        double xd = g->kind == CC_GEN_RECT_BEAM ? g->u.beam.width : g->u.col.width;
-        double yd = g->kind == CC_GEN_RECT_BEAM ? g->u.beam.height : g->u.col.depth;
-        depth = g->kind == CC_GEN_RECT_BEAM ? g->u.beam.length : g->u.col.height;
-        double x = xd / 2.0, y = yd / 2.0;
-        double r[4][2] = {{-x, -y}, {x, -y}, {x, y}, {-x, y}};
-        memcpy(pts, r, sizeof r);
-        break;
+/* format!("{:.0}", x): round half to even, exact digits for any finite x, "-0" kept. */
+static void fmt_fixed0(Buf *b, double x) {
+    if (x != x) {
+        buf_puts(b, "NaN");
+        return;
     }
-    case CC_GEN_WALL: {
-        double t = g->u.wall.thickness;
-        double r[4][2] = {{0.0, -t / 2.0}, {g->u.wall.length, -t / 2.0}, {g->u.wall.length, t / 2.0}, {0.0, t / 2.0}};
-        memcpy(pts, r, sizeof r);
-        depth = g->u.wall.height;
-        break;
+    if (bits64(x) >> 63) buf_putc(b, '-');
+    x = f64abs(x);
+    if (x == 1.0 / 0.0) {
+        buf_puts(b, "inf");
+        return;
     }
-    case CC_GEN_SLAB:
-        outline = &g->u.slab.outline;
-        depth = g->u.slab.thickness;
-        break;
-    case CC_GEN_EXTRUDED_POLYGON:
-        *why = "extruded_polygon needs earcut";
-        return NOT_YET;
-    default:
-        *why = "mesh generator";
-        return NOT_YET;
+    if (x < 4503599627370496.0) { /* 2^52: a fraction may remain */
+        uint64_t t = (uint64_t)x;
+        double f = x - (double)t;
+        if (f > 0.5 || (f == 0.5 && (t & 1))) t++;
+        buf_u64(b, t);
+        return;
     }
-    double (*p)[2] = pts;
-    size_t n = 4;
-    if (outline) {
-        p = arena_alloc(a, (outline->n + 1) * sizeof p[0], 8);
-        if (!p) return -1;
-        memcpy(p, outline->pts, outline->n * sizeof p[0]);
-        n = outline->n;
+    /* An integer: mantissa << shift, in base 1e9 limbs. */
+    uint64_t u = bits64(x);
+    uint64_t m = (u & ((1ull << 52) - 1)) | (1ull << 52);
+    int shift = (int)(u >> 52) - 1075;
+    uint32_t limb[40]; /* 2^1024 < 1e309: 35 limbs */
+    int nl = 0;
+    while (m) limb[nl++] = (uint32_t)(m % 1000000000u), m /= 1000000000u;
+    for (int s = 0; s < shift; s++) {
+        uint32_t carry = 0;
+        for (int i = 0; i < nl; i++) {
+            uint64_t v = (uint64_t)limb[i] * 2 + carry;
+            limb[i] = (uint32_t)(v % 1000000000u);
+            carry = (uint32_t)(v / 1000000000u);
+        }
+        if (carry) limb[nl++] = carry;
     }
-    n = corners_only(p, n);
-    if (n < 3) return 2;
-    /* earcutr gives [2,3,0, 0,1,2] for a convex counter-clockwise quad (spike c-slab). */
-    int convex = n == 4;
-    for (size_t i = 0; i < n && convex; i++) {
-        const double *u = p[i], *v = p[(i + 1) % n], *w = p[(i + 2) % n];
-        convex = (v[0] - u[0]) * (w[1] - v[1]) - (v[1] - u[1]) * (w[0] - v[0]) > 0.0;
+    buf_u64(b, limb[nl - 1]);
+    for (int i = nl - 2; i >= 0; i--) {
+        char d[10];
+        uint32_t v = limb[i];
+        for (int k = 8; k >= 0; k--) d[k] = (char)('0' + v % 10), v /= 10;
+        buf_append(b, d, 9);
     }
-    if (!convex) {
-        *why = "slab outline that is not a convex counter-clockwise quad needs earcut";
-        return NOT_YET;
+}
+
+/* lib.rs shoelace closure: |sum of cross products| / 2 (Sum starts at -0.0). */
+static double shoelace(double (*l)[2], size_t n) {
+    double s = -0.0;
+    for (size_t i = 0; i < n; i++) {
+        const double *a = l[i], *b = l[(i + 1) % n];
+        s = s + (a[0] * b[1] - b[0] * a[1]);
     }
-    static const int cap[6] = {2, 3, 0, 0, 1, 2};
-    double tris[12][3][3];
-    int m = 0;
+    return f64abs(s) / 2.0;
+}
+
+typedef struct {
+    double (*p)[2];
+    size_t n;
+} Loop;
+
+/* extrude_tris: caps from earcut, then one quad per loop edge. *tris is arena memory.
+ * 0 ok, -1 out of memory, WARN with `why`, LIMIT. */
+static int extrude_tris(Loop *all, size_t nloops, double depth, Arena *a, double (**tris)[3][3], size_t *ntris,
+                        Buf *why) {
+    size_t total = 0;
+    for (size_t l = 0; l < nloops; l++) total += all[l].n;
+    double (*flat)[2] = arena_alloc(a, (total + 1) * sizeof flat[0], 8);
+    size_t *holes = arena_alloc(a, nloops * sizeof(size_t), 8);
+    if (!flat || !holes) return -1;
+    size_t k = 0;
+    for (size_t l = 0; l < nloops; l++) {
+        if (l) holes[l - 1] = k;
+        memcpy(flat[k], all[l].p, all[l].n * sizeof flat[0]);
+        k += all[l].n;
+    }
+    uint32_t *t;
+    size_t nt;
+    int rc = cc_earcut(&flat[0][0], 2 * total, holes, nloops - 1, &t, &nt);
+    if (rc == CC_EARCUT_OOM) return -1;
+    if (rc == CC_EARCUT_LIMIT) return LIMIT;
+    if (rc) {
+        buf_puts(why, "Unknown");
+        return WARN;
+    }
+    size_t expected = total - 2 + 2 * (nloops - 1);
+    if (nt / 3 != expected) {
+        double want = shoelace(all[0].p, all[0].n), vs = -0.0, got = -0.0;
+        for (size_t l = 1; l < nloops; l++) vs = vs + shoelace(all[l].p, all[l].n);
+        want = want - vs;
+        for (size_t i = 0; i + 2 < nt; i += 3) {
+            const double *p = flat[t[i]], *q = flat[t[i + 1]], *r = flat[t[i + 2]];
+            got = got + f64abs((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])) / 2.0;
+        }
+        if (!(want > 0.0 && f64abs(got - want) <= want * 1e-3)) {
+            buf_puts(why, "expected ");
+            buf_u64(why, expected);
+            buf_puts(why, " triangles, got ");
+            buf_u64(why, nt / 3);
+            buf_puts(why, " covering ");
+            fmt_fixed0(why, got);
+            buf_puts(why, " of ");
+            fmt_fixed0(why, want);
+            buf_puts(why, " mm\xc2\xb2");
+            free(t);
+            return WARN;
+        }
+    }
+    size_t m = 0, cap = 2 * (nt / 3) + 2 * total;
+    double (*o)[3][3] = arena_alloc(a, (cap + 1) * sizeof o[0], 8);
+    if (!o) {
+        free(t);
+        return -1;
+    }
     for (int pass = 0; pass < 2; pass++) { /* bottom cap reversed, top cap */
         double z = pass ? depth : 0.0;
-        for (int t = 0; t < 2; t++) {
-            int i0 = cap[3 * t], i1 = cap[3 * t + 1], i2 = cap[3 * t + 2];
+        for (size_t i = 0; i + 2 < nt; i += 3) {
+            uint32_t i0 = t[i], i1 = t[i + 1], i2 = t[i + 2];
             if (!pass) {
-                int s = i1;
+                uint32_t s = i1;
                 i1 = i2;
                 i2 = s;
             }
-            set3(tris[m][0], p[i0], z);
-            set3(tris[m][1], p[i1], z);
-            set3(tris[m][2], p[i2], z);
+            set3(o[m][0], flat[i0], z);
+            set3(o[m][1], flat[i1], z);
+            set3(o[m][2], flat[i2], z);
             m++;
         }
     }
-    for (size_t i = 0; i < 4; i++) { /* sides */
-        size_t j = (i + 1) % 4;
-        set3(tris[m][0], p[i], 0.0);
-        set3(tris[m][1], p[j], 0.0);
-        set3(tris[m][2], p[j], depth);
-        m++;
-        set3(tris[m][0], p[i], 0.0);
-        set3(tris[m][1], p[j], depth);
-        set3(tris[m][2], p[i], depth);
-        m++;
+    free(t);
+    for (size_t l = 0; l < nloops; l++) /* sides, void edges included */
+        for (size_t i = 0; i < all[l].n; i++) {
+            const double *p = all[l].p[i], *q = all[l].p[(i + 1) % all[l].n];
+            set3(o[m][0], p, 0.0);
+            set3(o[m][1], q, 0.0);
+            set3(o[m][2], q, depth);
+            m++;
+            set3(o[m][0], p, 0.0);
+            set3(o[m][1], q, depth);
+            set3(o[m][2], p, depth);
+            m++;
+        }
+    *tris = o;
+    *ntris = m;
+    return 0;
+}
+
+/* A copy of a loop without repeated or collinear points. */
+static int corner_loop(const double (*src)[2], size_t n, Arena *a, Loop *out) {
+    out->p = arena_alloc(a, (n + 1) * sizeof out->p[0], 8);
+    if (!out->p) return -1;
+    if (n) memcpy(out->p, src, n * sizeof out->p[0]);
+    out->n = corners_only(out->p, n);
+    return 0;
+}
+
+/* The element's local mesh (mesh_from_tris positions and indices; its edges are not used by
+ * the scene). 0 ok, -1 out of memory, WARN with `why` (Rust's GeomError text), LIMIT. */
+static int local_mesh(const cc_element *e, Arena *a, cc_mesh *out, Buf *why) {
+    const cc_generator *g = &e->generator;
+    double (*tris)[3][3] = NULL;
+    size_t m = 0;
+    if (g->kind == CC_GEN_MESH) {
+        if (g->u.mesh.nindices % 3) {
+            buf_puts(why, "index count not a multiple of 3");
+            return WARN;
+        }
+        m = g->u.mesh.nindices / 3;
+        tris = arena_alloc(a, (m + 1) * sizeof tris[0], 8);
+        if (!tris) return -1;
+        for (size_t t = 0; t < m; t++)
+            for (int k = 0; k < 3; k++) memcpy(tris[t][k], g->u.mesh.positions[g->u.mesh.indices[3 * t + k]], 24);
+    } else {
+        double r[4][2], depth;
+        const cc_loop *outline = NULL, *voids = NULL;
+        size_t nvoids = 0;
+        switch (g->kind) {
+        case CC_GEN_RECT_COLUMN:
+        case CC_GEN_PAD_FOOTING:
+        case CC_GEN_RECT_BEAM: {
+            double xd = g->kind == CC_GEN_RECT_BEAM ? g->u.beam.width : g->u.col.width;
+            double yd = g->kind == CC_GEN_RECT_BEAM ? g->u.beam.height : g->u.col.depth;
+            depth = g->kind == CC_GEN_RECT_BEAM ? g->u.beam.length : g->u.col.height;
+            double x = xd / 2.0, y = yd / 2.0;
+            double q[4][2] = {{-x, -y}, {x, -y}, {x, y}, {-x, y}};
+            memcpy(r, q, sizeof r);
+            break;
+        }
+        case CC_GEN_WALL: {
+            double t = g->u.wall.thickness;
+            double q[4][2] = {{0.0, -t / 2.0}, {g->u.wall.length, -t / 2.0}, {g->u.wall.length, t / 2.0}, {0.0, t / 2.0}};
+            memcpy(r, q, sizeof r);
+            depth = g->u.wall.height;
+            break;
+        }
+        case CC_GEN_SLAB:
+            outline = &g->u.slab.outline;
+            depth = g->u.slab.thickness;
+            break;
+        case CC_GEN_EXTRUDED_POLYGON:
+            outline = &g->u.poly.outline;
+            voids = g->u.poly.voids;
+            nvoids = g->u.poly.nvoids;
+            depth = g->u.poly.height;
+            break;
+        default:
+            buf_puts(why, "no extrusion");
+            return WARN;
+        }
+        Loop *all = arena_alloc(a, (nvoids + 1) * sizeof *all, 8);
+        if (!all) return -1;
+        if (corner_loop(outline ? (const double (*)[2])outline->pts : (const double (*)[2])r, outline ? outline->n : 4, a,
+                        &all[0]))
+            return -1;
+        for (size_t v = 0; v < nvoids; v++)
+            if (corner_loop((const double (*)[2])voids[v].pts, voids[v].n, a, &all[v + 1])) return -1;
+        if (all[0].n < 3) {
+            buf_puts(why, "profile has fewer than 3 corners");
+            return WARN;
+        }
+        int rc = extrude_tris(all, nvoids + 1, depth, a, &tris, &m, why);
+        if (rc) return rc;
     }
     /* mesh_from_tris: weld by f64 bits after + 0.0 (-0.0 becomes 0.0), positions to f32. */
-    double wp[36][3];
+    if (3 * m > 0x7fffffffu) return LIMIT;
+    double (*wp)[3] = arena_alloc(a, (3 * m + 1) * sizeof wp[0], 8);
     Tab tab;
-    if (tab_init(&tab, a, 36)) return -1;
-    out->idx = arena_alloc(a, 36 * sizeof(uint32_t), 4);
-    out->pos = arena_alloc(a, 36 * sizeof out->pos[0], 4);
-    if (!out->idx || !out->pos) return -1;
+    out->idx = arena_alloc(a, (3 * m + 1) * sizeof(uint32_t), 4);
+    if (!wp || !out->idx || tab_init(&tab, a, 3 * m)) return -1;
     uint32_t nv = 0;
-    for (int t = 0; t < m; t++)
+    for (size_t t = 0; t < m; t++)
         for (int k = 0; k < 3; k++) {
             double q[3] = {tris[t][k][0] + 0.0, tris[t][k][1] + 0.0, tris[t][k][2] + 0.0};
             int32_t at = tab_find(&tab, q, 24, wp, sizeof wp[0], (int32_t)nv);
             if ((uint32_t)at == nv) memcpy(wp[nv++], q, 24);
             out->idx[3 * t + k] = (uint32_t)at;
         }
+    out->pos = arena_alloc(a, ((size_t)nv + 1) * sizeof out->pos[0], 4);
+    if (!out->pos) return -1;
     for (uint32_t i = 0; i < nv; i++)
         for (int k = 0; k < 3; k++) out->pos[i][k] = (float)wp[i][k];
     out->nv = nv;
@@ -847,6 +986,12 @@ static int share_copies(cc_scene *s) {
 
 /* ---- Scene::from_model ---- */
 
+/* Element::class_name: the IFC entity when there is one. */
+static void put_class_name(Buf *b, const cc_element *e) {
+    if (e->has_ifc_entity) buf_append(b, e->ifc_entity.p, e->ifc_entity.n);
+    else buf_puts(b, cc_ifc_class_name(e->cls));
+}
+
 static int fail(cc_error *err, const char *a, const char *b, const char *c) {
     Buf t;
     buf_init(&t);
@@ -878,29 +1023,35 @@ int cc_scene_build(cc_scene *s, const cc_model *m, cc_error *err) {
         const cc_material *mat = cc_model_material(m, &e->material);
         if (!st || !mat) return fail(err, "invalid model: element without its storey or material", "", "");
         cc_mesh l;
-        const char *why = "";
         memset(&l, 0, sizeof l);
+        Buf why;
+        buf_init(&why);
         int rc = local_mesh(e, a, &l, &why);
-        if (rc == NOT_YET) {
+        if (rc == LIMIT) {
+            buf_free(&why);
             Buf t;
             buf_init(&t);
-            buf_puts(&t, cc_ifc_class_name(e->cls));
+            put_class_name(&t, e);
             buf_putc(&t, ' ');
             buf_append(&t, e->name.p, e->name.n);
-            int r = fail(err, buf_cstr(&t), ": not in the C core yet (", why);
-            size_t k = strlen(err->msg);
-            if (k + 1 < sizeof err->msg) err->msg[k] = ')', err->msg[k + 1] = 0;
+            int r = fail(err, buf_cstr(&t), ": outline too complex (triangulation limits exceeded)", "");
             buf_free(&t);
             return r;
         }
-        if (rc < 0) return fail(err, "out of memory", "", "");
-        if (rc == 2) { /* Rust: a warning, the element is left out */
+        if (rc < 0 || why.oom) {
+            buf_free(&why);
+            return fail(err, "out of memory", "", "");
+        }
+        if (rc == WARN) { /* Rust: a warning, the element is left out */
             Buf t;
             buf_init(&t);
-            buf_puts(&t, cc_ifc_class_name(e->cls));
+            put_class_name(&t, e);
             buf_putc(&t, ' ');
             buf_append(&t, e->name.p, e->name.n);
-            buf_puts(&t, ": could not mesh (Triangulation(\"profile has fewer than 3 corners\"))");
+            buf_puts(&t, ": could not mesh (Triangulation(\"");
+            buf_append(&t, why.p, why.len);
+            buf_puts(&t, "\"))");
+            buf_free(&why);
             char *c = arena_dup(a, t.p, t.len);
             int oom = t.oom || !c;
             s->warnings[s->nwarnings].p = c;
@@ -910,6 +1061,7 @@ int cc_scene_build(cc_scene *s, const cc_model *m, cc_error *err) {
             w[i].ntris = 0;
             continue;
         }
+        buf_free(&why);
         if (to_world(&l, &e->placement, st->elevation, a, &w[i])) return fail(err, "out of memory", "", "");
     }
     /* SceneBuilder::finish: the origin is the middle of the world box, rounded to mm. */
@@ -927,6 +1079,8 @@ int cc_scene_build(cc_scene *s, const cc_model *m, cc_error *err) {
         if (!se->mesh.ni) continue; /* all degenerate */
         se->id = e->id;
         se->cls = e->cls;
+        se->class_name.p = e->has_ifc_entity ? e->ifc_entity.p : cc_ifc_class_name(e->cls);
+        se->class_name.n = e->has_ifc_entity ? e->ifc_entity.n : strlen(se->class_name.p);
         se->category = cc_model_material(m, &e->material)->category;
         se->model_index = i;
         se->shape = -1;

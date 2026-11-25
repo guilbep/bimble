@@ -13,11 +13,14 @@
  *     if e->shape >= 0: e->to_scene places m in the scene (columns x, y, z, translation t);
  *                       cc_scene_world_mesh() gives the placed copy.
  *
- * Generators in the C core: rect_column, pad_footing, rect_beam, wall, and slab whose outline is
- * a convex counter-clockwise quad (after dropping repeated and collinear points). Other
- * outlines, extruded_polygon and mesh need earcut: cc_scene_build fails with "not in the C core
- * yet". All memory lives in the scene's arena. No libm: sqrt is exact in software, and the
- * 20 degree crease cosine is glibc's cosf value (ticket 13 must recheck it on wasm). */
+ * Generators: all of them (rect_column, pad_footing, rect_beam, wall, slab, extruded_polygon with
+ * voids, mesh). Profiles are triangulated by earcut.c, a faithful port of the earcutr crate. An
+ * element Rust cannot mesh is left out with Rust's warning text in `warnings`. Mesh generators are
+ * always own meshes here: Rust shares one only when several elements hold the same Arc, which the
+ * JSON text form never gives (each element parses its own positions); share_copies still applies.
+ * Openings are not in the C model. All memory lives in the scene's arena. No libm: sqrt is exact
+ * in software, and the 20 degree crease cosine is glibc's cosf value (ticket 13 must recheck it
+ * on wasm). */
 #ifndef CCORE_SCENE_H
 #define CCORE_SCENE_H
 #include <stddef.h>
@@ -46,6 +49,7 @@ typedef struct {
 typedef struct {
     cc_gid id;
     cc_ifc_class cls;
+    cc_str class_name;  /* Element::class_name: the IFC entity, or the class name */
     cc_category category;
     size_t model_index; /* index in cc_model.elements */
     int32_t shape;      /* index in cc_scene.shapes, or -1: own mesh in `mesh` */
@@ -65,7 +69,8 @@ typedef struct {
 } cc_scene;
 
 /* Builds the scene. Always initializes `s` (free it with cc_scene_free either way).
- * 0 ok, -1 with `err` (unsupported generator, out of memory). */
+ * 0 ok, -1 with `err` (out of memory, or an outline past the triangulation limits, see
+ * earcut.h; Rust has no such limit). */
 int cc_scene_build(cc_scene *s, const cc_model *m, cc_error *err);
 void cc_scene_free(cc_scene *s);
 
