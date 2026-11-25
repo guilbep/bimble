@@ -486,6 +486,7 @@ dependencies = [
  "bimble-core",
  "bimble-geom",
  "bimble-ifc",
+ "flate2",
  "schemars",
  "serde",
  "serde_json",

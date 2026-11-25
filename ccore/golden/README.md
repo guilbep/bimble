@@ -127,6 +127,21 @@ end. Both as `file::to_string`, masked as above.
   then `file::to_string`, masked as above. The import keeps element and storey ids, makes a new
   material id (`<new-1>`), drops the material's values and names the project "Imported model".
 
+## bin/ (binary .bimble, version 2)
+
+From `frame.json` and `frame2.json` (loaded with Rust's loader):
+
+- `bin/frame.bimble`, `bin/frame2.bimble`: `bimble_core::file::to_bytes`, what Rust's `save`
+  writes (ADR 0042): the magic `bimble\0`, then gzip (flate2, fast level) of the CBOR.
+- `bin/frame.cbor`, `bin/frame2.cbor`: that gzip inflated: the CBOR (ciborium) of the file
+  struct: `format`, `version` (2), `positions` and `indices` (each mesh array once), `model`
+  (meshes as indices into those tables).
+
+The C core must load the `.bimble` files to the same model (its v1 text equals the `.json`)
+and write the `.cbor` bytes exactly (`cc_model_to_cbor`). Its gzip stream may differ from
+flate2's: compare after inflating. The dumper asserts that `to_bytes` loads back to the same
+model. Suite: `test/file2_test.c`.
+
 ## frame2.json
 
 A second synthetic model, for what `frame.json` lacks. Built through `Command`s and

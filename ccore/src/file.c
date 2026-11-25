@@ -5,10 +5,16 @@
  * - a duplicate struct field is an error ("duplicate field `x`"); a duplicate map key keeps the
  *   last value (BTreeMap insert);
  * - sections Rust knows and the C core does not hold (views, sheets, schedules, georef,
- *   openings, mesh arrays by index or hash) are refused when non-empty, never dropped. */
+ *   openings, mesh arrays by hash) are refused when non-empty, never dropped.
+ * The binary form (version 2) is the same serde model in CBOR, read into the same DOM
+ * (cbor.h), with each mesh array once in the top-level tables `positions` / `indices` and
+ * elements referring to them by index (shared again in memory, as Rust shares its Arcs). */
 #include "file.h"
 #include <stdlib.h>
 #include <string.h>
+#include "cbor.h"
+#include "fmt.h"
+#include "inflate.h"
 #include "json_r.h"
 #include "json_w.h"
 
@@ -17,6 +23,11 @@ typedef struct {
     cc_error *err;
     int failed;
     Buf msg;
+    uint32_t version; /* the version this form must carry: 1 text, 2 binary */
+    /* binary: the tables, decoded (pointer, count) */
+    double (**tpos)[3];
+    uint32_t **tidx;
+    size_t *tpos_n, *tidx_n, ntpos, ntidx;
 } D;
 
 static int f_finite(double x) { return x - x == 0.0; }
@@ -49,6 +60,18 @@ static int dfail(D *d, size_t off, const char *a, const char *b, const char *c) 
     return fail_buf(d, off);
 }
 
+/* A number as its token: the JSON text, or (CBOR has none) its value. */
+static void num_token(Buf *b, const JrVal *v) {
+    if (v->s) {
+        buf_append(b, v->s, v->n < 64 ? v->n : 64);
+    } else if (v->num_int && v->num >= -9.2e18 && v->num <= 1.8e19) {
+        if (v->num_neg) buf_i64(b, (int64_t)v->num);
+        else buf_u64(b, (uint64_t)v->num);
+    } else if (fmt_f64_json(b, v->num)) {
+        buf_puts(b, v->num != v->num ? "NaN" : v->num > 0 ? "inf" : "-inf");
+    }
+}
+
 /* serde's "invalid type: <unexpected>, expected <what>". */
 static int type_err(D *d, const JrVal *v, const char *expected) {
     if (d->failed) return -1;
@@ -59,7 +82,7 @@ static int type_err(D *d, const JrVal *v, const char *expected) {
     case JR_BOOL: buf_puts(&d->msg, v->b ? "boolean `true`" : "boolean `false`"); break;
     case JR_NUM:
         buf_puts(&d->msg, v->num_int ? "integer `" : "floating point `");
-        buf_append(&d->msg, v->s, v->n < 64 ? v->n : 64);
+        num_token(&d->msg, v);
         buf_putc(&d->msg, '`');
         break;
     case JR_STR:
@@ -86,7 +109,7 @@ static int d_u32(D *d, const JrVal *v, uint32_t *out) {
     if (v->num_neg || v->num > 4294967295.0) {
         buf_clear(&d->msg);
         buf_puts(&d->msg, "invalid value: integer `");
-        buf_append(&d->msg, v->s, v->n < 64 ? v->n : 64);
+        num_token(&d->msg, v);
         buf_puts(&d->msg, "`, expected u32");
         return fail_buf(d, v->off);
     }
@@ -277,21 +300,49 @@ static int d_generator(D *d, const JrVal *v, cc_generator *g) {
         const JrVal *f[2];
         if (d_fields(d, v, F, 2, f, "struct variant Generator::Mesh", 0)) return -1;
         if (need(d, v, f[0], F[0]) || need(d, v, f[1], F[1])) return -1;
+        int by_index = 0;
         for (int i = 0; i < 2; i++)
-            if (f[i]->type == JR_NUM || f[i]->type == JR_STR)
+            if (d->version != CC_BINARY_VERSION && (f[i]->type == JR_NUM || f[i]->type == JR_STR))
                 return dfail(d, f[i]->off, "unsupported by the C core: mesh arrays by index or hash", 0, 0);
+            else if (f[i]->type == JR_NUM && f[i]->num_int && !f[i]->num_neg) {
+                size_t nt = i ? d->ntidx : d->ntpos;
+                if (f[i]->num >= (double)nt) {
+                    buf_clear(&d->msg);
+                    buf_puts(&d->msg, "mesh ");
+                    num_token(&d->msg, f[i]);
+                    buf_puts(&d->msg, " not in the file's table");
+                    return fail_buf(d, f[i]->off);
+                }
+                by_index |= 1 << i;
+            } else if (f[i]->type == JR_STR)
+                return dfail(d, f[i]->off, "unsupported by the C core: mesh arrays by hash", 0, 0);
             else if (f[i]->type != JR_ARR)
                 return type_err(d, f[i], "a mesh array, its index in the file or its hash");
-        g->u.mesh.npositions = f[0]->n;
-        g->u.mesh.positions = alloc_n(d, f[0]->n, sizeof *g->u.mesh.positions, f[0]->off);
-        if (f[0]->n && !g->u.mesh.positions) return -1;
-        for (size_t i = 0; i < f[0]->n; i++)
-            if (d_vec(d, &f[0]->items[i], g->u.mesh.positions[i], 3)) return -1;
-        g->u.mesh.nindices = f[1]->n;
-        g->u.mesh.indices = alloc_n(d, f[1]->n, sizeof(uint32_t), f[1]->off);
-        if (f[1]->n && !g->u.mesh.indices) return -1;
-        for (size_t i = 0; i < f[1]->n; i++)
-            if (d_u32(d, &f[1]->items[i], &g->u.mesh.indices[i])) return -1;
+        if (by_index & 1) {
+            size_t k = (size_t)f[0]->num;
+            g->u.mesh.positions = d->tpos[k];
+            g->u.mesh.npositions = d->tpos_n[k];
+        }
+        if (by_index & 2) {
+            size_t k = (size_t)f[1]->num;
+            g->u.mesh.indices = d->tidx[k];
+            g->u.mesh.nindices = d->tidx_n[k];
+        }
+        if (by_index == 3) return 0;
+        if (!(by_index & 1)) {
+            g->u.mesh.npositions = f[0]->n;
+            g->u.mesh.positions = alloc_n(d, f[0]->n, sizeof *g->u.mesh.positions, f[0]->off);
+            if (f[0]->n && !g->u.mesh.positions) return -1;
+            for (size_t i = 0; i < f[0]->n; i++)
+                if (d_vec(d, &f[0]->items[i], g->u.mesh.positions[i], 3)) return -1;
+        }
+        if (!(by_index & 2)) {
+            g->u.mesh.nindices = f[1]->n;
+            g->u.mesh.indices = alloc_n(d, f[1]->n, sizeof(uint32_t), f[1]->off);
+            if (f[1]->n && !g->u.mesh.indices) return -1;
+            for (size_t i = 0; i < f[1]->n; i++)
+                if (d_u32(d, &f[1]->items[i], &g->u.mesh.indices[i])) return -1;
+        }
         return 0;
     }
     default: return -1;
@@ -534,17 +585,45 @@ static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
     return 0;
 }
 
-/* The binary tables `positions` / `indices` of the top level: read and dropped, as Rust does
- * outside a binary read. */
+/* The binary tables `positions` / `indices` of the top level: every entry decoded (as Rust's
+ * read_table does), kept for the elements' indices in a binary read; in a text read only
+ * checked and dropped, as Rust does outside a binary read. */
 static int d_table(D *d, const JrVal *v, int positions) {
     if (v->type != JR_ARR) return type_err(d, v, "a sequence");
+    int keep = d->version == CC_BINARY_VERSION;
+    size_t *cnt = NULL;
+    if (keep && v->n) {
+        cnt = alloc_n(d, v->n, sizeof(size_t), v->off);
+        if (!cnt) return -1;
+        if (positions) {
+            if (!(d->tpos = alloc_n(d, v->n, sizeof *d->tpos, v->off))) return -1;
+            d->tpos_n = cnt, d->ntpos = v->n;
+        } else {
+            if (!(d->tidx = alloc_n(d, v->n, sizeof *d->tidx, v->off))) return -1;
+            d->tidx_n = cnt, d->ntidx = v->n;
+        }
+    }
     for (size_t i = 0; i < v->n; i++) {
         const JrVal *a = &v->items[i];
         if (a->type != JR_ARR) return type_err(d, a, "a sequence");
+        double(*pos)[3] = NULL;
+        uint32_t *idx = NULL;
+        if (keep && a->n) {
+            if (positions) pos = alloc_n(d, a->n, sizeof *pos, a->off);
+            else idx = alloc_n(d, a->n, sizeof *idx, a->off);
+            if (!pos && !idx) return -1;
+        }
         for (size_t j = 0; j < a->n; j++) {
             double t[3];
             uint32_t u;
-            if (positions ? d_vec(d, &a->items[j], t, 3) : d_u32(d, &a->items[j], &u)) return -1;
+            if (positions ? d_vec(d, &a->items[j], pos ? pos[j] : t, 3)
+                          : d_u32(d, &a->items[j], idx ? &idx[j] : &u))
+                return -1;
+        }
+        if (keep) {
+            if (positions) d->tpos[i] = pos;
+            else d->tidx[i] = idx;
+            cnt[i] = a->n;
         }
     }
     return 0;
@@ -568,7 +647,7 @@ static int d_file(D *d, const JrVal *root, cc_model *m, Keys *keys) {
         buf_putc(&d->msg, ')');
         return fail_buf(d, CC_NO_OFFSET);
     }
-    if (version != CC_FORMAT_VERSION) {
+    if (version != d->version) {
         buf_clear(&d->msg);
         buf_puts(&d->msg, "unsupported bimble format version ");
         buf_u64(&d->msg, version);
@@ -582,11 +661,12 @@ int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) {
     cc_error dummy;
     if (!err) err = &dummy;
     cc_model_init(m);
-    D d = {&m->arena, err, 0, {0}};
+    D d = {&m->arena, err, 0, {0}, CC_FORMAT_VERSION, NULL, NULL, NULL, NULL, 0, 0};
     buf_init(&d.msg);
     err->offset = CC_NO_OFFSET;
     err->msg[0] = 0;
-    if (n > CC_MAX_FILE_BYTES) {
+    int binary = n >= CC_MAGIC_LEN && memcmp(text, CC_MAGIC, CC_MAGIC_LEN) == 0;
+    if (n > (binary ? CC_MAX_BINARY_FILE_BYTES : CC_MAX_FILE_BYTES)) {
         buf_puts(&d.msg, "file too large: ");
         buf_u64(&d.msg, n);
         buf_puts(&d.msg, " bytes");
@@ -601,9 +681,24 @@ int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) {
     JrError je;
     Keys keys = {0};
     int rc = 0;
-    const JrVal *root = jr_parse(&dom, text, n, &je);
-    if (!root) {
+    const JrVal *root = NULL;
+    if (binary) {
+        /* Untrusted: what decompresses is capped too, not only the file. */
+        Buf body;
+        const char *why;
+        buf_init(&body);
+        d.version = CC_BINARY_VERSION;
+        if (cc_gunzip((const unsigned char *)text + CC_MAGIC_LEN, n - CC_MAGIC_LEN, CC_MAX_INFLATED_BYTES,
+                      &body, &why)) {
+            rc = dfail(&d, CC_NO_OFFSET, "parse: ", why, 0);
+        } else if (!(root = cbor_parse(&dom, (const unsigned char *)body.p, body.len, &je))) {
+            rc = dfail(&d, je.offset, je.msg, 0, 0);
+        }
+        buf_free(&body);
+    } else if (!(root = jr_parse(&dom, text, n, &je))) {
         rc = dfail(&d, je.offset, je.msg, 0, 0);
+    }
+    if (rc) {
     } else if (d_file(&d, root, m, &keys)) {
         rc = -1;
     } else {
@@ -770,4 +865,237 @@ int cc_model_save(const cc_model *m, Buf *b) {
     jw_obj_end(&w);
     jw_obj_end(&w);
     return jw_finish(&w) == JW_OK && !b->oom ? 0 : -1;
+}
+
+/* ---- save, binary (version 2) ---- */
+
+/* Distinct mesh arrays by address, in the order first met (Rust's shared::Pool). */
+typedef struct {
+    const void **items;
+    size_t *counts;
+    size_t n, cap;
+    const void **slot; /* open addressing: address -> index + 1 kept in `at` */
+    size_t *at;
+    size_t mask;
+} Pool;
+
+static size_t ptr_hash(const void *p) {
+    uint64_t x = (uint64_t)(uintptr_t)p;
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdull;
+    x ^= x >> 33;
+    return (size_t)x;
+}
+
+/* Index of `p` in the pool, added if new. An empty array (NULL) is never shared. -1 on out of
+ * memory. */
+static long long pool_add(Pool *pl, const void *p, size_t count) {
+    if (p) {
+        for (size_t h = ptr_hash(p) & pl->mask;; h = (h + 1) & pl->mask) {
+            if (!pl->slot[h]) {
+                pl->slot[h] = p;
+                pl->at[h] = pl->n;
+                break;
+            }
+            if (pl->slot[h] == p) return (long long)pl->at[h];
+        }
+    }
+    if (pl->n == pl->cap) return -1; /* sized for every mesh up front */
+    pl->items[pl->n] = p;
+    pl->counts[pl->n] = count;
+    return (long long)pl->n++;
+}
+
+static int pool_init(Pool *pl, size_t meshes) {
+    memset(pl, 0, sizeof *pl);
+    size_t tab = 16;
+    while (tab < 2 * meshes) tab *= 2;
+    pl->cap = meshes;
+    pl->mask = tab - 1;
+    pl->items = calloc(meshes ? meshes : 1, sizeof *pl->items);
+    pl->counts = calloc(meshes ? meshes : 1, sizeof *pl->counts);
+    pl->slot = calloc(tab, sizeof *pl->slot);
+    pl->at = calloc(tab, sizeof *pl->at);
+    return pl->items && pl->counts && pl->slot && pl->at ? 0 : -1;
+}
+
+static void pool_free(Pool *pl) {
+    free(pl->items);
+    free(pl->counts);
+    free(pl->slot);
+    free(pl->at);
+}
+
+static void c_str(Buf *b, cc_str s) { cb_text(b, s.n ? s.p : "", s.n); }
+static void c_key(Buf *b, const char *k) { cb_text(b, k, strlen(k)); }
+static void c_gid(Buf *b, const cc_gid *g) { cb_text(b, g->c, 22); }
+
+static void c_vec(Buf *b, const double *v, int n) {
+    cb_head(b, CB_ARRAY, (uint64_t)n);
+    for (int i = 0; i < n; i++) cb_f64(b, v[i]);
+}
+
+static void c_loop(Buf *b, const cc_loop *l) {
+    cb_head(b, CB_ARRAY, l->n);
+    for (size_t i = 0; i < l->n; i++) c_vec(b, l->pts[i], 2);
+}
+
+static void c_kvs(Buf *b, const cc_kv *kv, size_t n) {
+    cb_head(b, CB_MAP, n);
+    for (size_t i = 0; i < n; i++) c_str(b, kv[i].key), c_str(b, kv[i].value);
+}
+
+static void c_generator(Buf *b, const cc_generator *g, uint64_t pos_i, uint64_t idx_i) {
+    int fields = 4;
+    if (g->kind == CC_GEN_SLAB || g->kind == CC_GEN_MESH) fields = 3;
+    if (g->kind == CC_GEN_EXTRUDED_POLYGON) fields = g->u.poly.nvoids ? 4 : 3;
+    cb_head(b, CB_MAP, (uint64_t)fields);
+    c_key(b, "kind"), c_key(b, cc_gen_kind_name(g->kind));
+    switch (g->kind) {
+    case CC_GEN_RECT_COLUMN:
+    case CC_GEN_PAD_FOOTING:
+        c_key(b, "width"), cb_f64(b, g->u.col.width);
+        c_key(b, "depth"), cb_f64(b, g->u.col.depth);
+        c_key(b, "height"), cb_f64(b, g->u.col.height);
+        break;
+    case CC_GEN_RECT_BEAM:
+        c_key(b, "width"), cb_f64(b, g->u.beam.width);
+        c_key(b, "height"), cb_f64(b, g->u.beam.height);
+        c_key(b, "length"), cb_f64(b, g->u.beam.length);
+        break;
+    case CC_GEN_WALL:
+        c_key(b, "length"), cb_f64(b, g->u.wall.length);
+        c_key(b, "thickness"), cb_f64(b, g->u.wall.thickness);
+        c_key(b, "height"), cb_f64(b, g->u.wall.height);
+        break;
+    case CC_GEN_SLAB:
+        c_key(b, "outline"), c_loop(b, &g->u.slab.outline);
+        c_key(b, "thickness"), cb_f64(b, g->u.slab.thickness);
+        break;
+    case CC_GEN_EXTRUDED_POLYGON:
+        c_key(b, "outline"), c_loop(b, &g->u.poly.outline);
+        if (g->u.poly.nvoids) {
+            c_key(b, "voids");
+            cb_head(b, CB_ARRAY, g->u.poly.nvoids);
+            for (size_t i = 0; i < g->u.poly.nvoids; i++) c_loop(b, &g->u.poly.voids[i]);
+        }
+        c_key(b, "height"), cb_f64(b, g->u.poly.height);
+        break;
+    case CC_GEN_MESH:
+        c_key(b, "positions"), cb_head(b, CB_UINT, pos_i);
+        c_key(b, "indices"), cb_head(b, CB_UINT, idx_i);
+        break;
+    default: break;
+    }
+}
+
+int cc_model_to_cbor(const cc_model *m, Buf *b) {
+    size_t meshes = 0;
+    for (size_t i = 0; i < m->nelements; i++) meshes += m->elements[i].generator.kind == CC_GEN_MESH;
+    Pool pp, pi;
+    long long *refs = calloc(2 * (meshes ? meshes : 1), sizeof *refs);
+    int rc = pool_init(&pp, meshes) | pool_init(&pi, meshes) | (refs ? 0 : -1);
+    /* Every mesh array once, in model order; then the model, its meshes as indices. */
+    for (size_t i = 0, k = 0; !rc && i < m->nelements; i++) {
+        const cc_generator *g = &m->elements[i].generator;
+        if (g->kind != CC_GEN_MESH) continue;
+        refs[2 * k] = pool_add(&pp, g->u.mesh.positions, g->u.mesh.npositions);
+        refs[2 * k + 1] = pool_add(&pi, g->u.mesh.indices, g->u.mesh.nindices);
+        if (refs[2 * k] < 0 || refs[2 * k + 1] < 0) rc = -1;
+        k++;
+    }
+    if (!rc) {
+        cb_head(b, CB_MAP, 5);
+        c_key(b, "format"), c_key(b, "bimble");
+        c_key(b, "version"), cb_head(b, CB_UINT, CC_BINARY_VERSION);
+        c_key(b, "positions");
+        cb_head(b, CB_ARRAY, pp.n);
+        for (size_t i = 0; i < pp.n; i++) {
+            const double(*p)[3] = pp.items[i];
+            cb_head(b, CB_ARRAY, pp.counts[i]);
+            for (size_t j = 0; j < pp.counts[i]; j++) c_vec(b, p[j], 3);
+        }
+        c_key(b, "indices");
+        cb_head(b, CB_ARRAY, pi.n);
+        for (size_t i = 0; i < pi.n; i++) {
+            const uint32_t *x = pi.items[i];
+            cb_head(b, CB_ARRAY, pi.counts[i]);
+            for (size_t j = 0; j < pi.counts[i]; j++) cb_head(b, CB_UINT, x[j]);
+        }
+        c_key(b, "model");
+        cb_head(b, CB_MAP, 5 + (m->nproject ? 1 : 0));
+        c_key(b, "project_id"), c_gid(b, &m->project_id);
+        c_key(b, "project_name"), c_str(b, m->project_name);
+        c_key(b, "storeys");
+        cb_head(b, CB_MAP, m->nstoreys);
+        for (size_t i = 0; i < m->nstoreys; i++) {
+            const cc_storey *s = &m->storeys[i];
+            c_gid(b, &s->id);
+            cb_head(b, CB_MAP, 3);
+            c_key(b, "id"), c_gid(b, &s->id);
+            c_key(b, "name"), c_str(b, s->name);
+            c_key(b, "elevation"), cb_f64(b, s->elevation);
+        }
+        c_key(b, "materials");
+        cb_head(b, CB_MAP, m->nmaterials);
+        for (size_t i = 0; i < m->nmaterials; i++) {
+            const cc_material *mt = &m->materials[i];
+            const cc_material_props *p = &mt->props;
+            int np = p->has_density + p->has_e + p->has_strength + (p->source.n ? 1 : 0);
+            c_gid(b, &mt->id);
+            cb_head(b, CB_MAP, 3 + (np ? 1 : 0));
+            c_key(b, "id"), c_gid(b, &mt->id);
+            c_key(b, "name"), c_str(b, mt->name);
+            c_key(b, "category"), c_key(b, cc_category_name(mt->category));
+            if (np) {
+                c_key(b, "props");
+                cb_head(b, CB_MAP, (uint64_t)np);
+                if (p->has_density) c_key(b, "density_kg_m3"), cb_f64(b, p->density_kg_m3);
+                if (p->has_e) c_key(b, "e_mpa"), cb_f64(b, p->e_mpa);
+                if (p->has_strength) c_key(b, "strength_mpa"), cb_f64(b, p->strength_mpa);
+                if (p->source.n) c_key(b, "source"), c_str(b, p->source);
+            }
+        }
+        c_key(b, "elements");
+        cb_head(b, CB_MAP, m->nelements);
+        for (size_t i = 0, k = 0; i < m->nelements; i++) {
+            const cc_element *e = &m->elements[i];
+            c_gid(b, &e->id);
+            cb_head(b, CB_MAP, 7 + (e->nproperties ? 1 : 0) + (e->has_ifc_entity ? 1 : 0));
+            c_key(b, "id"), c_gid(b, &e->id);
+            c_key(b, "class"), c_key(b, cc_ifc_class_name(e->cls));
+            c_key(b, "name"), c_str(b, e->name);
+            c_key(b, "storey"), c_gid(b, &e->storey);
+            c_key(b, "material"), c_gid(b, &e->material);
+            c_key(b, "placement");
+            cb_head(b, CB_MAP, 3);
+            c_key(b, "origin"), c_vec(b, e->placement.origin, 3);
+            c_key(b, "z_axis"), c_vec(b, e->placement.z_axis, 3);
+            c_key(b, "x_axis"), c_vec(b, e->placement.x_axis, 3);
+            c_key(b, "generator");
+            if (e->generator.kind == CC_GEN_MESH) {
+                c_generator(b, &e->generator, (uint64_t)refs[2 * k], (uint64_t)refs[2 * k + 1]);
+                k++;
+            } else c_generator(b, &e->generator, 0, 0);
+            if (e->nproperties) c_key(b, "properties"), c_kvs(b, e->properties, e->nproperties);
+            if (e->has_ifc_entity) c_key(b, "ifc_entity"), c_str(b, e->ifc_entity);
+        }
+        if (m->nproject) c_key(b, "project"), c_kvs(b, m->project, m->nproject);
+    }
+    pool_free(&pp);
+    pool_free(&pi);
+    free(refs);
+    return !rc && !b->oom ? 0 : -1;
+}
+
+int cc_model_save_v2(const cc_model *m, Buf *b) {
+    Buf cbor;
+    buf_init(&cbor);
+    int rc = cc_model_to_cbor(m, &cbor);
+    if (!rc) {
+        buf_append(b, CC_MAGIC, CC_MAGIC_LEN);
+        rc = cc_gzip((const unsigned char *)cbor.p, cbor.len, b);
+    }
+    buf_free(&cbor);
+    return !rc && !b->oom ? 0 : -1;
 }

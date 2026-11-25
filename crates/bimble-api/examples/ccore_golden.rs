@@ -160,6 +160,7 @@ fn derive(dir: &Path) -> Files {
     let mut files = Files::new();
     files.insert("guid.txt".into(), guid_txt(&m).into_bytes());
     mesh_files(&m, "mesh/", &mut files);
+    bin_files(&m, "frame", &mut files);
     files.insert("query.txt".into(), query_txt(&m).into_bytes());
     verbs_files(&m, &known, &mut files);
     ifc_files(&m, &known, &mut files);
@@ -1001,7 +1002,28 @@ fn frame2_files(dir: &Path, files: &mut Files) {
         "frame2.json: load + save must give identical bytes"
     );
     mesh_files(&m, "frame2/mesh/", files);
+    bin_files(&m, "frame2", files);
     files.insert("frame2/query.txt".into(), frame2_query_txt(&m).into_bytes());
+}
+
+/// `bin/<name>.bimble`: the binary file Rust's `save` writes (`file::to_bytes`, version 2), and
+/// `bin/<name>.cbor`: its body inflated (the CBOR the C core must write byte for byte).
+fn bin_files(m: &Model, name: &str, files: &mut Files) {
+    use std::io::Read as _;
+    let bytes = file::to_bytes(m);
+    let body = &bytes[file::MAGIC.len()..];
+    let mut cbor = Vec::new();
+    flate2::read::GzDecoder::new(body)
+        .read_to_end(&mut cbor)
+        .expect("to_bytes gives gzip");
+    let back = file::from_bytes(&bytes).expect("to_bytes loads");
+    assert_eq!(
+        file::to_string(&back),
+        file::to_string(m),
+        "{name}: binary save + load must give the same model"
+    );
+    files.insert(format!("bin/{name}.bimble"), bytes);
+    files.insert(format!("bin/{name}.cbor"), cbor);
 }
 
 // ---------------------------------------------------------------- IFC import, export, display
