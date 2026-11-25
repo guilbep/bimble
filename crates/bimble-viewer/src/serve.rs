@@ -16,6 +16,8 @@ const MAX_HEADER: usize = 16 << 10;
 const MAX_CONNECTIONS: usize = 32;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_TIMEOUT: Duration = Duration::from_secs(25);
+const FRAME_MIN_W: u32 = 16;
+const FRAME_MAX: u32 = 4096;
 
 pub(crate) struct Request {
     pub op: String,
@@ -32,6 +34,11 @@ pub(crate) trait Handler: Send + Sync + 'static {
     /// restarted, seq began again) resets `since` to 0. None: the field is left out.
     fn epoch(&self) -> Option<&str> {
         None
+    }
+    /// One rendered frame of `w` x `h` pixels: (raw bytes, timing text for `X-Timing`).
+    /// Err = 500 with the text. The default has no renderer.
+    fn frame(&self, _w: u32, _h: u32) -> Result<(Vec<u8>, String), String> {
+        Err("no frames".into())
     }
 }
 
@@ -246,6 +253,21 @@ fn serve_connection(stream: TcpStream, port: u16, cfg: &Config, h: &dyn Handler)
                 None => format!("{{\"seq\":{seq},\"change\":{change}}}"),
             };
             respond(&mut out, 200, &acao, "application/json", &json, keep)?;
+        } else if head.method == "GET" && path == "/frame" {
+            // w in 16..=4096; h in 1..=4096 (a 16x2 strip is a valid frame).
+            let size = |key, min| {
+                query_param(query, key)
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .filter(|n| (min..=FRAME_MAX).contains(n))
+            };
+            let (Some(w), Some(h_px)) = (size("w", FRAME_MIN_W), size("h", 1)) else {
+                respond(&mut out, 400, &acao, TEXT, "bad frame size", keep)?;
+                continue;
+            };
+            match h.frame(w, h_px) {
+                Ok((bytes, timing)) => respond_bytes(&mut out, &acao, &bytes, &timing, keep)?,
+                Err(text) => respond(&mut out, 500, &acao, TEXT, &text, keep)?,
+            }
         } else if head.method == "POST" {
             let mut segs = path.trim_start_matches('/').split('/');
             let (Some(op), Some(name), None) = (segs.next(), segs.next(), segs.next()) else {
@@ -291,6 +313,7 @@ fn respond(
         404 => "Not Found",
         413 => "Payload Too Large",
         431 => "Request Header Fields Too Large",
+        500 => "Internal Server Error",
         _ => "Service Unavailable",
     };
     let mut head = format!("HTTP/1.1 {status} {reason}\r\n");
@@ -314,6 +337,34 @@ fn respond(
     let mut buf = head.into_bytes();
     buf.extend_from_slice(body.as_bytes());
     out.write_all(&buf)?;
+    out.flush()
+}
+
+/// 200 with raw bytes (a frame) and the handler's timing in `X-Timing`, exposed to the page.
+fn respond_bytes(
+    out: &mut TcpStream,
+    acao: &str,
+    body: &[u8],
+    timing: &str,
+    keep: bool,
+) -> io::Result<()> {
+    let mut head = String::from("HTTP/1.1 200 OK\r\n");
+    if !acao.is_empty() {
+        head.push_str(&format!(
+            "Access-Control-Allow-Origin: {acao}\r\nVary: Origin\r\n"
+        ));
+    }
+    // The timing text comes from the handler: no CR or LF may reach the header block.
+    let timing: String = timing.chars().filter(|c| !c.is_control()).collect();
+    let conn = if keep { "keep-alive" } else { "close" };
+    head.push_str(&format!(
+        "Content-Type: application/octet-stream\r\nContent-Length: {}\r\n\
+         X-Timing: {timing}\r\nAccess-Control-Expose-Headers: X-Timing\r\n\
+         Cache-Control: no-store\r\nConnection: {conn}\r\n\r\n",
+        body.len()
+    ));
+    out.write_all(head.as_bytes())?;
+    out.write_all(body)?;
     out.flush()
 }
 
@@ -557,5 +608,121 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(body, "{\"epoch\":\"E1\",\"seq\":5,\"change\":null}");
         assert_eq!(*h.waits.lock().unwrap(), vec![POLL_TIMEOUT]);
+    }
+
+    /// Answers each frame with `w*h*4` bytes of 7 and a fixed timing.
+    struct FrameHandler;
+
+    impl Handler for FrameHandler {
+        fn call(&self, _req: Request) -> Result<String, String> {
+            Err("unused".into())
+        }
+        fn wait_change(&self, since: u64, _timeout: Duration) -> (u64, String) {
+            (since, "null".to_string())
+        }
+        fn frame(&self, w: u32, h: u32) -> Result<(Vec<u8>, String), String> {
+            Ok((
+                vec![7u8; (w * h * 4) as usize],
+                "render=1.0;read=2.0".to_string(),
+            ))
+        }
+    }
+
+    fn frame_server() -> u16 {
+        let cfg = Config {
+            port: 0,
+            token: "T".into(),
+            allowed_origins: vec![ORIGIN.into()],
+        };
+        start(cfg, Arc::new(FrameHandler)).expect("start")
+    }
+
+    /// Reads one response; returns (status, lower-case header names with values, raw body).
+    fn read_raw(r: &mut BufReader<TcpStream>) -> (u16, Vec<(String, String)>, Vec<u8>) {
+        let mut line = String::new();
+        r.read_line(&mut line).expect("status line");
+        let status: u16 = line.split(' ').nth(1).expect("status").parse().unwrap();
+        let mut headers = Vec::new();
+        loop {
+            let mut h = String::new();
+            r.read_line(&mut h).expect("header");
+            let h = h.trim_end();
+            if h.is_empty() {
+                break;
+            }
+            let (k, v) = h.split_once(':').expect("header line");
+            headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
+        }
+        let len: usize = headers
+            .iter()
+            .find(|(k, _)| k == "content-length")
+            .map(|(_, v)| v.parse().unwrap())
+            .unwrap_or(0);
+        let mut body = vec![0u8; len];
+        r.read_exact(&mut body).expect("body");
+        (status, headers, body)
+    }
+
+    fn get_frame(port: u16, query: &str) -> (u16, Vec<(String, String)>, Vec<u8>) {
+        let mut c = connect(port);
+        send(
+            &mut c,
+            &format!(
+                "GET /frame?{query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: {ORIGIN}\r\n\r\n"
+            ),
+        );
+        read_raw(&mut c)
+    }
+
+    fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        headers
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn frame_returns_bytes_and_timing() {
+        let port = frame_server();
+        let (status, headers, body) = get_frame(port, "w=16&h=2&t=T");
+        assert_eq!(status, 200);
+        assert_eq!(header(&headers, "content-length"), Some("128"));
+        assert_eq!(
+            header(&headers, "content-type"),
+            Some("application/octet-stream")
+        );
+        assert_eq!(header(&headers, "x-timing"), Some("render=1.0;read=2.0"));
+        assert_eq!(
+            header(&headers, "access-control-expose-headers"),
+            Some("X-Timing")
+        );
+        assert_eq!(
+            header(&headers, "access-control-allow-origin"),
+            Some(ORIGIN)
+        );
+        assert_eq!(header(&headers, "cache-control"), Some("no-store"));
+        assert_eq!(body.len(), 128);
+        assert!(body.iter().all(|&b| b == 7));
+    }
+
+    #[test]
+    fn frame_without_token_is_403() {
+        let port = frame_server();
+        assert_eq!(get_frame(port, "w=16&h=2").0, 403);
+    }
+
+    #[test]
+    fn frame_bad_size_is_400() {
+        let port = frame_server();
+        for q in ["w=0&h=16&t=T", "w=5000&h=16&t=T", "w=abc&h=16&t=T"] {
+            assert_eq!(get_frame(port, q).0, 400, "{q}");
+        }
+    }
+
+    #[test]
+    fn frame_default_handler_is_500() {
+        let port = server();
+        let (status, _, body) = get_frame(port, "w=16&h=16&t=T");
+        assert_eq!((status, body.as_slice()), (500, b"no frames".as_slice()));
     }
 }
