@@ -142,8 +142,9 @@ impl PlacingPatch {
 pub struct Editor {
     pub model: Model,
     pub history: History,
-    /// Changed since loaded or saved.
-    pub dirty: bool,
+    /// The history revision that is on disk; None when no state of this history is (an import
+    /// not yet saved, or a file write that failed). See `dirty`.
+    saved: Option<u64>,
     pub form: Option<Form>,
     /// Move/copy vector, mm.
     pub offset: [f64; 3],
@@ -227,7 +228,7 @@ impl Editor {
         Editor {
             model,
             history: History::default(),
-            dirty: false,
+            saved: Some(0),
             form: None,
             offset: [1000.0, 0.0, 0.0],
             kind: Kind::Column,
@@ -251,9 +252,25 @@ impl Editor {
     /// Save is enabled and closing or opening another file asks first.
     pub fn imported(model: Model) -> Editor {
         Editor {
-            dirty: true,
+            saved: None,
             ..Editor::new(model)
         }
+    }
+
+    /// Changed since loaded or saved: the current state is not the one on disk. Undo back to
+    /// the saved state is clean again; a new edit never is.
+    pub fn dirty(&self) -> bool {
+        self.saved != Some(self.history.revision())
+    }
+
+    /// The current state is now on disk.
+    pub fn mark_saved(&mut self) {
+        self.saved = Some(self.history.revision());
+    }
+
+    /// No state of this history is on disk (a write failed, or the history was replaced).
+    pub fn mark_unsaved(&mut self) {
+        self.saved = None;
     }
 
     /// Apply a group of commands as one undoable step.
@@ -284,7 +301,6 @@ impl Editor {
         self.history
             .apply(&mut self.model, cmds)
             .map_err(|e| e.to_string())?;
-        self.dirty = true;
         self.form = None;
         Ok(())
     }
@@ -292,7 +308,6 @@ impl Editor {
     pub fn undo(&mut self) -> bool {
         let r = self.history.undo(&mut self.model);
         if r {
-            self.dirty = true;
             self.form = None;
         }
         r
@@ -301,7 +316,6 @@ impl Editor {
     pub fn redo(&mut self) -> bool {
         let r = self.history.redo(&mut self.model);
         if r {
-            self.dirty = true;
             self.form = None;
         }
         r
@@ -968,7 +982,7 @@ mod tests {
         let refused = ben.apply(move_by(&ben.model, &beams[..1], [0.0, 0.0, 50.0]));
         assert!(refused.unwrap_err().ends_with("belongs to Ana"));
         assert_eq!(ben.belongs.as_ref().map(Vec::len), Some(1));
-        assert!(!ben.dirty, "nothing changed");
+        assert!(!ben.dirty(), "nothing changed");
         // Another beam is free.
         ben.apply(move_by(&ben.model, &beams[1..2], [0.0, 0.0, 50.0]))
             .unwrap();
@@ -980,8 +994,64 @@ mod tests {
     #[test]
     fn imported_model_starts_unsaved() {
         let (m, _) = demo();
-        assert!(!Editor::new(m.clone()).dirty);
-        assert!(Editor::imported(m).dirty);
+        assert!(!Editor::new(m.clone()).dirty());
+        let mut ed = Editor::imported(m);
+        assert!(ed.dirty());
+        // Undo back to the imported state is still unsaved: it was never on disk.
+        let id = *ed.model.elements.keys().next().unwrap();
+        ed.apply(move_by(&ed.model, &[id], [100.0, 0.0, 0.0]))
+            .unwrap();
+        assert!(ed.undo());
+        assert!(ed.dirty(), "an imported model stays unsaved after undo");
+    }
+
+    /// One small edit, as one undoable step.
+    fn nudge(ed: &mut Editor, dx: f64) {
+        let id = *ed.model.elements.keys().next().unwrap();
+        ed.apply(move_by(&ed.model, &[id], [dx, 0.0, 0.0])).unwrap();
+    }
+
+    /// Undo back to the state on disk is not "unsaved"; Redo leaves it again.
+    #[test]
+    fn undo_back_to_the_saved_state_is_not_unsaved() {
+        let mut ed = Editor::new(demo().0);
+        nudge(&mut ed, 100.0);
+        assert!(ed.dirty());
+        assert!(ed.undo());
+        assert!(!ed.dirty(), "undo back to the saved state");
+        assert!(ed.redo());
+        assert!(ed.dirty());
+        assert!(ed.undo());
+        assert!(!ed.dirty());
+    }
+
+    /// The save point follows a save: undo leaves it, redo comes back to it.
+    #[test]
+    fn undo_after_a_save_is_unsaved_and_redo_is_saved_again() {
+        let mut ed = Editor::new(demo().0);
+        nudge(&mut ed, 100.0);
+        ed.mark_saved();
+        assert!(!ed.dirty());
+        assert!(ed.undo());
+        assert!(ed.dirty(), "the state before the save is not on disk");
+        assert!(ed.redo());
+        assert!(!ed.dirty(), "redo comes back to the saved state");
+    }
+
+    /// A new edit after an undo is a new state, even at the same depth as the save point.
+    #[test]
+    fn a_new_edit_after_undo_never_matches_an_old_save_point() {
+        let mut ed = Editor::new(demo().0);
+        nudge(&mut ed, 10.0);
+        assert!(ed.undo());
+        assert!(!ed.dirty(), "undo back to the saved state");
+        nudge(&mut ed, 100.0); // A
+        ed.mark_saved();
+        assert!(ed.undo());
+        nudge(&mut ed, 200.0); // B, at the depth of A
+        assert!(ed.dirty(), "B is not the saved A");
+        assert!(ed.undo());
+        assert!(ed.dirty(), "the state before A was never saved");
     }
 
     #[test]

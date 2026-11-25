@@ -583,7 +583,7 @@ impl Viewer {
                         .loaded
                         .as_ref()
                         .and_then(|l| l.edit.as_ref())
-                        .is_some_and(|e| e.dirty)
+                        .is_some_and(|e| e.dirty())
             }
             Action::Undo => self.undo_text(true).is_some(),
             Action::Redo => self.undo_text(false).is_some(),
