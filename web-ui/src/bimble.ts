@@ -16,6 +16,10 @@ export interface State {
   user?: { name: string; trigram: string; email: string | null } | null;
   /** `query("state")`: the viewer's version, e.g. "0.17.0". */
   version?: string | null;
+  /** on_change (C core, ccore/session/links.h): a counter of changes to the linked models; absent before any. */
+  links?: number;
+  /** on_change (C core): the selected element of a linked model (its id is then `selection`), absent otherwise. */
+  linked?: { id: string; link: string } | null;
 }
 
 /** `query("element")`: crates/bimble-api/src/query.rs ElementDetail (summary flattened). */
@@ -212,6 +216,8 @@ interface Wasm {
   dismiss_belongs(): void;
   /** The place tool (C core only, op `tool`): pointer, click, cancel. Answers the tool's state JSON. */
   tool?(name: string, json: string): string;
+  /** An action with a JSON body (C core only: link_model {path}, manage_links {op, name}). Answers its text. */
+  action_with?(name: string, json: string): string;
 }
 
 export const state = shallowRef<State>({ selection: [], rev: 0, unsaved: false, file: null });
@@ -300,6 +306,7 @@ function nativeClient(port: number, token: string): Wasm & { standards_action(na
     dismiss_belongs: () => void call("dismiss_belongs", null),
     standards_action: (name) => void call("standards_action", name),
     tool: (name, json) => call("tool", name, json),
+    action_with: (name, json) => call("action", name, json),
     on_change: (cb) => void pollChanges(base, t, cb),
   };
 }
@@ -597,7 +604,10 @@ function message(e: unknown): string {
 
 export function element(id: string): ElementDetail {
   try {
-    return JSON.parse(wasmOrThrow().query("element", JSON.stringify({ id }))) as ElementDetail;
+    // A linked element selected (C core, links.h): its read-only detail from its link.
+    const lk = state.value.linked;
+    const args = lk && lk.id === id ? { id, link: lk.link } : { id };
+    return JSON.parse(wasmOrThrow().query("element", JSON.stringify(args))) as ElementDetail;
   } catch (e) {
     throw new Error(message(e));
   }
@@ -607,6 +617,8 @@ export function element(id: string): ElementDetail {
  * addition, Rust's dispatch has none). On Rust's wasm module ("unknown verb") the raw Command is
  * applied instead, until Rust has the verb. Returns the error, or null. */
 export function rename(id: string, name: string): string | null {
+  const ro = linkedReadOnly({ id });
+  if (ro) return ro;
   const err = runVerb("rename", { id, name });
   if (err === null || !err.startsWith("unknown verb")) return err;
   try {
@@ -795,6 +807,8 @@ export const openView = (id: string) => tabCall("open", { type: "view", id });
 
 /** Run one API verb as one undoable step. Returns the Rust error, or null. */
 export function runVerb(name: string, args: unknown = {}): string | null {
+  const ro = linkedReadOnly(args);
+  if (ro) return ro;
   try { wasmOrThrow().verb(name, JSON.stringify(args)); return null; } catch (e) { return message(e); }
 }
 
@@ -887,6 +901,48 @@ export const recentFiles = () => tryQuery<RecentFile[]>("recent_files", []);
 /** Linked models and reference plans (bridge query "links"); `kind` is "ifc", "bimble", "dxf", "pdf"… */
 export type Link = { id: string; name: string; kind: string; visible: boolean };
 export const links = () => tryQuery<Link[]>("links", []);
+
+// ---- Linked models (ticket B5, C core: ccore/session/links.h) ----
+
+/** `query("element", {id, link})`: an element of a linked model, read-only (ElementDetail's shape plus these). */
+export interface LinkedElementDetail extends ElementDetail {
+  link: string;
+  read_only: true;
+  family: string;
+  volume_m3: number;
+}
+
+/** A linked element is read-only: the edit verbs naming the selected linked id are refused here (its
+ *  GlobalId may also be one of the open model's, e.g. a link of an exported copy). */
+function linkedReadOnly(args: unknown): string | null {
+  const lk = state.value.linked;
+  if (!lk || typeof args !== "object" || args === null) return null;
+  const a = args as { id?: unknown; ids?: unknown };
+  const named = a.id === lk.id || (Array.isArray(a.ids) && a.ids.includes(lk.id));
+  return named ? `${lk.id} is in the linked model ${lk.link}: read only` : null;
+}
+
+/** Select one element of a linked model (`id` as the link's mesh gives it); `null` clears. Returns the error, or null. */
+export function selectLinked(link: string, id: string | null): string | null {
+  try { wasmOrThrow().select(JSON.stringify({ link, ids: id === null ? [] : [id] })); return null; } catch (e) { return message(e); }
+}
+
+/** An action with a JSON body (C core). Throws the error text. */
+function actionWith(name: string, args: unknown): string {
+  const w = wasmOrThrow();
+  if (!w.action_with) throw new Error(`${name}: not in this viewer`);
+  return w.action_with(name, JSON.stringify(args));
+}
+
+/** Link a model read-only beside the open one (`link_model {path}`; native host: a path it can read). Returns the error, or null. */
+export function linkModel(path: string): string | null {
+  try { actionWith("link_model", { path }); return null; } catch (e) { return message(e); }
+}
+
+/** Manage links: remove, reload, show or hide one by its file name (`links()` ids). Returns the error, or null. */
+export function manageLink(op: "remove" | "reload" | "show" | "hide", name: string): string | null {
+  try { actionWith("manage_links", { op, name }); return null; } catch (e) { return message(e); }
+}
 /** Measurements kept in the viewer (bridge query "measurements"); `label` as the egui panel shows it. */
 export type Measurement = { id: number; label: string; value_mm: number };
 export const measurements = () => tryQuery<Measurement[]>("measurements", []);

@@ -698,7 +698,7 @@ EXPORT("host_open") int wa_host_open(int discard, const char *name, size_t nn, c
     free(z);
     if (jw_finish(&w) != JW_OK || body.oom) return buf_free(&body), text(r, 500, "out of memory");
     wasm_pf_state.text = p, wasm_pf_state.n = n;
-    int st = cc_call(s, "action", discard & 2 ? "import_ifc" : "open", buf_cstr(&body), body.len, &b);
+    int st = cc_call(s, "action", discard & 4 ? "link_model" : discard & 2 ? "import_ifc" : "open", buf_cstr(&body), body.len, &b);
     wasm_pf_state.text = NULL, wasm_pf_state.n = 0;
     buf_free(&body);
     r->value = cc_session_rev(s);

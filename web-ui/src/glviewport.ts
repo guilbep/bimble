@@ -19,8 +19,13 @@
 // normals) is not drawn, as Rust hides back edges in sections. Picking ignores hits outside the box.
 // Six handles (face centres) and the box's edges are drawn; a left press on a handle is the C core's
 // box tool (op tool box_press / box_move / box_release: drag state in C, one session change on release).
+// Linked models (ticket B5, ccore/session/links.h): /mesh may end with the LNKS trailer, one BMSH per
+// link. They are merged after the open model's elements, moved by (their origin - ours) computed in
+// f64 (one scene origin, lib.rs:1499), drawn in Rust's reference colours (style.rs `reference`,
+// `reference_edges`), not drawn when hidden (Manage links), never touched by the open model's
+// visibility; a click on one selects it as `{link, ids}` (the properties show it read-only).
 import {
-  boxTool, placing, select, state, toolCall, visibility, visibilitySets,
+  boxTool, placing, select, selectLinked, state, toolCall, visibility, visibilitySets,
   type ToolPointer, type ToolState, type Visibility, type VisibilitySets,
 } from "./bimble";
 
@@ -38,6 +43,9 @@ const CATEGORY_SRGB: [number, number, number][] = [
 const BACKGROUND_SRGB = [247, 247, 245];
 const EDGE_SRGB = [26, 26, 28];
 const SELECTION_SRGB: [number, number, number] = [215, 172, 182];
+// Linked (reference) models: bimble-core style.rs:340-341 `reference`, `reference_edges`.
+const REFERENCE_SRGB: [number, number, number] = [190, 214, 238];
+const REFERENCE_EDGE_SRGB: [number, number, number] = [52, 110, 180];
 // Revealed hidden elements (Reveal hidden): the comparison colour, as Rust's Style::OnlyHere.
 const REVEALED_SRGB: [number, number, number] = [232, 150, 64];
 // bimble-render Style::cut_shade: the brightness of cut surfaces (ADR 0014).
@@ -72,22 +80,29 @@ interface Bmsh {
   edges: Float32Array;
   /** Per segment: the two face normals, snorm8 xyzw xyzw (0: unknown). */
   normals: Int8Array;
+  /** Bytes of this BMSH block. */
+  size: number;
+  /** Per element: 0 the open model, k + 1 the link k (merged meshes only). */
+  model?: Uint8Array;
+  /** The links of a merged mesh, in link order. */
+  links?: { name: string; visible: boolean; elements: number }[];
 }
 
-/** Parses BMSH version 1 (ccore/session/mesh.c). Throws on a malformed buffer. */
-export function parseBmsh(ab: ArrayBuffer): Bmsh {
+/** Parses BMSH version 1 (ccore/session/mesh.c) at byte `at`; `exact`: it must end the buffer.
+ *  Throws on a malformed buffer. */
+export function parseBmsh(ab: ArrayBuffer, at = 0, exact = true): Bmsh {
   const dv = new DataView(ab);
-  if (ab.byteLength < 52 || dv.getUint32(0, true) !== 0x48534d42) throw new Error("not BMSH");
-  if (dv.getUint32(4, true) !== 1) throw new Error(`BMSH version ${dv.getUint32(4, true)}`);
-  const u = (o: number) => dv.getUint32(o, true);
+  if (ab.byteLength < at + 52 || dv.getUint32(at, true) !== 0x48534d42) throw new Error("not BMSH");
+  if (dv.getUint32(at + 4, true) !== 1) throw new Error(`BMSH version ${dv.getUint32(at + 4, true)}`);
+  const u = (o: number) => dv.getUint32(at + o, true);
   const rev = u(8), nE = u(12), nV = u(16), nI = u(20), nS = u(24);
   const size = 52 + 48 * nE + 12 * nV + 4 * nI + 32 * nS;
-  if (size !== ab.byteLength) throw new Error(`BMSH size ${ab.byteLength}, expected ${size}`);
-  const origin: [number, number, number] = [dv.getFloat64(28, true), dv.getFloat64(36, true), dv.getFloat64(44, true)];
+  if (exact ? size !== ab.byteLength - at : size > ab.byteLength - at) throw new Error(`BMSH size ${ab.byteLength - at}, expected ${size}`);
+  const origin: [number, number, number] = [dv.getFloat64(at + 28, true), dv.getFloat64(at + 36, true), dv.getFloat64(at + 44, true)];
   const ids: string[] = [];
   const cats = new Uint8Array(nE), v0 = new Uint32Array(nE), nv = new Uint32Array(nE), i0 = new Uint32Array(nE), ni = new Uint32Array(nE);
   const s0 = new Uint32Array(nE), ns = new Uint32Array(nE);
-  const bytes = new Uint8Array(ab);
+  const bytes = new Uint8Array(ab, at);
   for (let e = 0, o = 52; e < nE; e++, o += 48) {
     ids.push(String.fromCharCode(...bytes.subarray(o, o + 22)));
     cats[e] = bytes[o + 22] ?? 7;
@@ -98,7 +113,7 @@ export function parseBmsh(ab: ArrayBuffer): Bmsh {
     s0[e] = u(o + 40);
     ns[e] = u(o + 44);
   }
-  let o = 52 + 48 * nE;
+  let o = at + 52 + 48 * nE;
   const pos = new Float32Array(ab, o, 3 * nV);
   o += 12 * nV;
   const idx = new Uint32Array(ab, o, nI);
@@ -109,7 +124,65 @@ export function parseBmsh(ab: ArrayBuffer): Bmsh {
   for (let i = 0; i < nI; i++) if ((idx[i] ?? 0) >= nV) throw new Error("BMSH index out of range");
   for (let e = 0; e < nE; e++)
     if ((i0[e] ?? 0) + (ni[e] ?? 0) > nI || (v0[e] ?? 0) + (nv[e] ?? 0) > nV || (s0[e] ?? 0) + (ns[e] ?? 0) > nS) throw new Error("BMSH row out of range");
-  return { rev, origin, ids, cats, v0, nv, i0, ni, s0, ns, pos, idx, edges, normals };
+  return { rev, origin, ids, cats, v0, nv, i0, ni, s0, ns, pos, idx, edges, normals, size };
+}
+
+/** GET /mesh: the open model's BMSH, then (with links) the LNKS trailer of ccore/session/links.h,
+ *  merged into one mesh: the links' elements after ours (`model` k + 1), moved by their origin minus
+ *  ours (f64, then f32). Without a trailer: the BMSH as parseBmsh gives it. */
+export function parseMesh(ab: ArrayBuffer): Bmsh {
+  const main = parseBmsh(ab, 0, false);
+  if (main.size === ab.byteLength) return main;
+  const dv = new DataView(ab);
+  let o = main.size;
+  if (ab.byteLength < o + 12 || dv.getUint32(o, true) !== 0x534b4e4c) throw new Error("BMSH: trailing bytes, not LNKS");
+  if (dv.getUint32(o + 4, true) !== 1) throw new Error(`LNKS version ${dv.getUint32(o + 4, true)}`);
+  const n = dv.getUint32(o + 8, true);
+  o += 12;
+  const parts: { name: string; visible: boolean; m: Bmsh }[] = [];
+  const dec = new TextDecoder();
+  for (let k = 0; k < n; k++) {
+    if (ab.byteLength < o + 4) throw new Error("LNKS truncated");
+    const L = dv.getUint32(o, true);
+    if (ab.byteLength < o + 12 + L) throw new Error("LNKS truncated");
+    const name = dec.decode(new Uint8Array(ab, o + 4, L));
+    o += 4 + L + ((4 - (L % 4)) % 4);
+    const flags = dv.getUint32(o, true), B = dv.getUint32(o + 4, true);
+    o += 8;
+    if (ab.byteLength < o + B) throw new Error("LNKS truncated");
+    const m = parseBmsh(ab, o, false);
+    if (m.size !== B) throw new Error(`LNKS ${name}: BMSH size ${B}, expected ${m.size}`);
+    o += B;
+    parts.push({ name, visible: (flags & 1) === 1, m });
+  }
+  if (o !== ab.byteLength) throw new Error(`LNKS: ${ab.byteLength - o} trailing bytes`);
+  const all = [main, ...parts.map((p) => p.m)];
+  const sum = (f: (m: Bmsh) => number) => all.reduce((a, m) => a + f(m), 0);
+  const nE = sum((m) => m.ids.length), nV = sum((m) => m.pos.length / 3), nI = sum((m) => m.idx.length), nS = sum((m) => m.edges.length / 6);
+  const out: Bmsh = {
+    rev: main.rev, origin: main.origin, ids: [], cats: new Uint8Array(nE), v0: new Uint32Array(nE), nv: new Uint32Array(nE),
+    i0: new Uint32Array(nE), ni: new Uint32Array(nE), s0: new Uint32Array(nE), ns: new Uint32Array(nE),
+    pos: new Float32Array(3 * nV), idx: new Uint32Array(nI), edges: new Float32Array(6 * nS), normals: new Int8Array(8 * nS),
+    size: ab.byteLength, model: new Uint8Array(nE), links: parts.map((p) => ({ name: p.name, visible: p.visible, elements: p.m.ids.length })),
+  };
+  let e0 = 0, v0 = 0, i0 = 0, s0 = 0;
+  all.forEach((m, k) => {
+    const d = [m.origin[0] - main.origin[0], m.origin[1] - main.origin[1], m.origin[2] - main.origin[2]];
+    for (let e = 0; e < m.ids.length; e++) {
+      out.ids.push(m.ids[e] ?? "");
+      out.cats[e0 + e] = m.cats[e] ?? 7;
+      out.v0[e0 + e] = (m.v0[e] ?? 0) + v0, out.nv[e0 + e] = m.nv[e] ?? 0;
+      out.i0[e0 + e] = (m.i0[e] ?? 0) + i0, out.ni[e0 + e] = m.ni[e] ?? 0;
+      out.s0[e0 + e] = (m.s0[e] ?? 0) + s0, out.ns[e0 + e] = m.ns[e] ?? 0;
+      out.model![e0 + e] = k;
+    }
+    for (let i = 0; i < m.pos.length; i++) out.pos[3 * v0 + i] = (m.pos[i] ?? 0) + (d[i % 3] ?? 0);
+    for (let i = 0; i < m.idx.length; i++) out.idx[i0 + i] = (m.idx[i] ?? 0) + v0;
+    for (let i = 0; i < m.edges.length; i++) out.edges[6 * s0 + i] = (m.edges[i] ?? 0) + (d[i % 3] ?? 0);
+    out.normals.set(m.normals, 8 * s0);
+    e0 += m.ids.length, v0 += m.pos.length / 3, i0 += m.idx.length, s0 += m.edges.length / 6;
+  });
+  return out;
 }
 
 // ---- small vector / matrix helpers (column-major mat4, as WebGL) ----
@@ -217,6 +290,11 @@ interface GlStats {
   boxError: string | null;
   /** Test hook: the GlobalId a click at client (x, y) would pick, or null (selects nothing). */
   pickAt?: (x: number, y: number) => string | null;
+  /** Test hook: what a click at client (x, y) would pick: its id and its link (null: the open model). */
+  pickInfoAt?: (x: number, y: number) => { id: string; link: string | null } | null;
+  /** Linked models in the mesh (ccore/session/links.h): their names, elements and triangles drawn. */
+  links: { name: string; visible: boolean; elements: number }[];
+  linkTris: number;
   /** Test hook: a world point (mm) -> CSS px in the viewport (clientX, clientY), or null. */
   toScreen?: (x: number, y: number, z: number) => [number, number] | null;
 }
@@ -241,7 +319,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const canvas = document.getElementById("bimble");
   const stats: GlStats = { firstFrameMs: null, meshBytes: 0, meshFetchMs: 0, meshRev: null, frames: 0, picks: 0, error: null,
     toolCalls: 0, ghostTris: 0, hover: null, toolError: null, placed: null,
-    hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null };
+    hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null, links: [], linkTris: 0 };
   window.__bbGl = stats;
   if (!(canvas instanceof HTMLCanvasElement)) return () => undefined;
   const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
@@ -309,7 +387,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   gl.enableVertexAttribArray(3);
   gl.vertexAttribPointer(3, 4, gl.BYTE, true, 8, 4);
   gl.bindVertexArray(null);
-  let faceN = 0, edgeN = 0;
+  let faceN = 0, faceMainN = 0, edgeN = 0, edgeMainN = 0;
   // Visibility (query visibility and visibility_sets) and the box drag's preview.
   let vis: Visibility | null = null;
   let sets: VisibilitySets | null = null;
@@ -336,7 +414,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   let target: V3 = [0, 0, 0];
   let dirty = true;
   let loading = false;
-  let wantRev: number | null = null;
+  // What the mesh shows: the model's rev and the links' counter (change JSON `links`).
+  const meshKey = () => `${state.value.rev}/${state.value.links ?? 0}`;
+  let wantRev: string | null = null;
   // The host process the mesh came from (`epoch` of GET /change). A restarted host may restore
   // its session and answer the same rev with a new build's mesh: a new epoch also refetches.
   let epoch: string | null = null;
@@ -385,10 +465,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const colours = (): Uint8Array => {
     const m = mesh;
     if (!m) return new Uint8Array(0);
-    const sel = new Set(state.value.selection);
+    const linked = state.value.linked ?? null;
+    // A linked element selected: its id is the selection; the open model's same id is not selected.
+    const sel = new Set(linked ? [] : state.value.selection);
     const out = new Uint8Array(m.pos.length);
     for (let e = 0; e < m.ids.length; e++) {
-      const c = sel.has(m.ids[e] ?? "") ? SELECTION_SRGB : shown[e] === 2 ? REVEALED_SRGB
+      const k = m.model?.[e] ?? 0;
+      const c = k > 0
+        ? (linked && linked.id === m.ids[e] && linked.link === m.links?.[k - 1]?.name ? SELECTION_SRGB : REFERENCE_SRGB)
+        : sel.has(m.ids[e] ?? "") ? SELECTION_SRGB : shown[e] === 2 ? REVEALED_SRGB
         : (CATEGORY_SRGB[m.cats[e] ?? 7] ?? CATEGORY_SRGB[7] ?? SELECTION_SRGB);
       const a = m.v0[e] ?? 0, n = m.nv[e] ?? 0;
       for (let v = a; v < a + n; v++) out.set(c, 3 * v);
@@ -455,8 +540,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const ab = await source.mesh();
       stats.meshFetchMs = performance.now() - t0;
       stats.meshBytes = ab.byteLength;
-      const m = parseBmsh(ab);
+      const m = parseMesh(ab);
       stats.meshRev = m.rev;
+      stats.links = m.links ?? [];
       stats.error = null;
       upload(m);
     } catch (e) {
@@ -483,8 +569,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (!m) return;
     const hidden = hiddenTest(), reveal = sets?.reveal === true;
     shown = new Uint8Array(m.ids.length);
-    let nf = 0, ne = 0, nh = 0;
+    let nf = 0, ne = 0, nh = 0, lf = 0;
     for (let e = 0; e < m.ids.length; e++) {
+      const lk = m.model?.[e] ?? 0;
+      if (lk > 0) { // a linked element: its link shown or not; the open model's visibility is not its
+        shown[e] = m.links?.[lk - 1]?.visible ? 1 : 0;
+        if (shown[e]) nf += m.ni[e] ?? 0, ne += m.ns[e] ?? 0, lf += m.ni[e] ?? 0;
+        continue;
+      }
       const h = hidden(m.ids[e] ?? "");
       shown[e] = !h ? 1 : reveal ? 2 : 0;
       if (shown[e]) nf += m.ni[e] ?? 0, ne += m.ns[e] ?? 0;
@@ -492,14 +584,19 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     const fi = new Uint32Array(nf), ei = new Uint32Array(2 * ne);
     let f = 0, k = 0;
-    for (let e = 0; e < m.ids.length; e++) {
-      if (!shown[e]) continue;
-      const i0 = m.i0[e] ?? 0, n = m.ni[e] ?? 0;
-      fi.set(m.idx.subarray(i0, i0 + n), f);
-      f += n;
-      const s0 = m.s0[e] ?? 0, ns = m.ns[e] ?? 0;
-      for (let q = s0; q < s0 + ns; q++) ei[k++] = 2 * q, ei[k++] = 2 * q + 1;
+    // Edges: the open model's first, then the links' (drawn in their own colour).
+    for (const links of [false, true]) {
+      for (let e = 0; e < m.ids.length; e++) {
+        if (!shown[e] || ((m.model?.[e] ?? 0) > 0) !== links) continue;
+        const i0 = m.i0[e] ?? 0, n = m.ni[e] ?? 0;
+        fi.set(m.idx.subarray(i0, i0 + n), f);
+        f += n;
+        const s0 = m.s0[e] ?? 0, ns = m.ns[e] ?? 0;
+        for (let q = s0; q < s0 + ns; q++) ei[k++] = 2 * q, ei[k++] = 2 * q + 1;
+      }
+      if (!links) edgeMainN = k, faceMainN = f;
     }
+    stats.linkTris = lf / 3;
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, fi, gl.DYNAMIC_DRAW);
@@ -554,7 +651,6 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindVertexArray(vao);
     // Faces, pushed back so the edges on them win the depth test.
     gl.enable(gl.POLYGON_OFFSET_FILL);
-    gl.polygonOffset(1.5, 2);
     gl.uniform1f(uAmbient, AMBIENT);
     gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
     gl.enableVertexAttribArray(0);
@@ -562,16 +658,23 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 3, gl.UNSIGNED_BYTE, true, 0, 0);
-    if (!box) gl.drawElements(gl.TRIANGLES, faceN, gl.UNSIGNED_INT, 0);
+    // The open model's faces, then the links' pushed a hair behind (bimble-render LINKED_DEPTH_PUSH:
+    // where both have a face, the model's wins).
+    const faces = (push: number) => {
+      gl.polygonOffset(1.5 + push, 2 + 2.4 * push); // (1.5, 2), and (4, 8) for the inward pass, as before
+      gl.drawElements(gl.TRIANGLES, faceMainN, gl.UNSIGNED_INT, 0);
+      gl.polygonOffset(2.5 + push, 16 + 2.4 * push);
+      if (faceN > faceMainN) gl.drawElements(gl.TRIANGLES, faceN - faceMainN, gl.UNSIGNED_INT, 4 * faceMainN);
+    };
+    if (!box) faces(0);
     else {
       // ADR 0014: outward faces lit, then inward faces (seen only through the cut) unlit at the cut
       // shade, pushed back so silhouette corners keep the outward face.
       gl.enable(gl.CULL_FACE);
       gl.cullFace(gl.BACK);
-      gl.drawElements(gl.TRIANGLES, faceN, gl.UNSIGNED_INT, 0);
+      faces(0);
       gl.cullFace(gl.FRONT);
-      gl.polygonOffset(4, 8);
-      gl.drawElements(gl.TRIANGLES, faceN, gl.UNSIGNED_INT, 0);
+      faces(2.5);
       gl.disable(gl.CULL_FACE);
     }
     gl.disable(gl.POLYGON_OFFSET_FILL);
@@ -580,7 +683,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindVertexArray(edgeVao);
     gl.vertexAttrib3f(1, EDGE_SRGB[0]! / 255, EDGE_SRGB[1]! / 255, EDGE_SRGB[2]! / 255);
     gl.depthMask(false);
-    gl.drawElements(gl.LINES, edgeN, gl.UNSIGNED_INT, 0);
+    gl.drawElements(gl.LINES, edgeMainN, gl.UNSIGNED_INT, 0);
+    if (edgeN > edgeMainN) { // linked models: their edges in the reference edge colour
+      gl.vertexAttrib3f(1, REFERENCE_EDGE_SRGB[0] / 255, REFERENCE_EDGE_SRGB[1] / 255, REFERENCE_EDGE_SRGB[2] / 255);
+      gl.drawElements(gl.LINES, edgeN - edgeMainN, gl.UNSIGNED_INT, 4 * edgeMainN);
+    }
     gl.depthMask(true);
     gl.bindVertexArray(null);
     gl.uniform1i(uClip, 0);
@@ -805,6 +912,16 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const k = pick(cx - r.left, cy - r.top);
     return k >= 0 ? mesh?.ids[k] ?? null : null;
   };
+  const linkOf = (k: number): string | null => {
+    const lk = mesh?.model?.[k] ?? 0;
+    return lk > 0 ? mesh?.links?.[lk - 1]?.name ?? null : null;
+  };
+  stats.pickInfoAt = (cx, cy) => {
+    const r = canvas.getBoundingClientRect();
+    const k = pick(cx - r.left, cy - r.top);
+    const id = k >= 0 ? mesh?.ids[k] : undefined;
+    return id === undefined ? null : { id, link: linkOf(k) };
+  };
 
   new ResizeObserver(() => {
     const dpr = window.devicePixelRatio || 1;
@@ -881,7 +998,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const k = pick(e.clientX - r.left, e.clientY - r.top);
     stats.picks++;
     const id = k >= 0 ? mesh?.ids[k] : undefined;
-    const err = select(id ? [id] : []);
+    const link = k >= 0 ? linkOf(k) : null;
+    const err = id && link !== null ? selectLinked(link, id) : select(id ? [id] : []);
     if (err) console.warn("gl viewport: select:", err);
   };
   canvas.addEventListener("pointerup", release);
@@ -904,7 +1022,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   }, { passive: false });
 
   const loop = () => {
-    const rev = state.value.rev;
+    const rev = meshKey();
     if (state.value !== seenState) {
       seenState = state.value;
       if (!loading && !checking && wantRev === rev) void checkEpoch();
@@ -939,7 +1057,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (placingNow()) toolAt("pointer", e.clientX, e.clientY, e);
     }
     if (tool && placing.value?.active !== true) showTool(null); // placing stopped elsewhere
-    const key = mesh ? state.value.selection.join(",") : "";
+    const key = mesh ? `${state.value.selection.join(",")}|${state.value.linked?.link ?? ""}` : "";
     if (mesh && key !== selKey) {
       selKey = key;
       gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);

@@ -22,11 +22,14 @@
  *   then i8[8] x nS    the two face normals of each segment (snorm8 xyz w, xyz w; 0 = unknown)
  * The positions block starts at 52 + 48 nE, a multiple of 4: a reader may view the positions,
  * indices and edges as Float32Array / Uint32Array over the same buffer.
- * The host is little-endian (x86-64, aarch64); the bytes are written with memcpy. */
+ * The host is little-endian (x86-64, aarch64); the bytes are written with memcpy.
+ * With linked models (links.h), the LNKS trailer follows: one BMSH per link. Without, nothing
+ * follows (the bytes above, unchanged). */
 #include <stdio.h>
 #include <string.h>
 
 #include "ifc_read.h"
+#include "links.h"
 #include "mesh.h"
 #include "scene.h"
 #include "session.h"
@@ -102,6 +105,34 @@ int cc_mesh_bmsh(const cc_model *m, uint32_t rev, Buf *out, cc_error *err) {
     return rc;
 }
 
+/* links.h: the LNKS trailer. */
+int cc_links_bmsh(cc_session *s, uint32_t rev, Buf *out, cc_error *err) {
+    if (!s->nlinks) return 0;
+    buf_append(out, "LNKS", 4);
+    put_u32(out, 1);
+    put_u32(out, (uint32_t)s->nlinks);
+    Buf one;
+    buf_init(&one);
+    int rc = 0;
+    for (size_t i = 0; i < s->nlinks && !rc; i++) {
+        const cc_link *k = &s->links[i];
+        size_t L = strlen(k->name);
+        put_u32(out, (uint32_t)L);
+        buf_append(out, k->name, L);
+        static const char zero[4];
+        buf_append(out, zero, (4 - L % 4) % 4);
+        put_u32(out, k->visible ? 1u : 0u);
+        buf_clear(&one);
+        one.oom = 0;
+        rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(&k->scene, rev, &one, err);
+        if (!rc && (one.oom || one.len > UINT32_MAX)) rc = fail(err, "out of memory");
+        if (!rc) put_u32(out, (uint32_t)one.len), buf_append(out, one.p, one.len);
+    }
+    buf_free(&one);
+    if (!rc && out->oom) rc = fail(err, "out of memory");
+    return rc;
+}
+
 /* ---- the cached answer (in the session) ---- */
 
 int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double *build_ms) {
@@ -116,7 +147,7 @@ int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double 
         *p = buf_cstr(cache), *n = cache->len;
         return 404;
     }
-    if (!s->mesh_status || s->mesh_model != m || s->mesh_rev != *rev) {
+    if (!s->mesh_status || s->mesh_model != m || s->mesh_rev != *rev || s->mesh_links_gen != s->links_gen) {
         double t0 = s->pf->now_ms(s->pf->ctx);
         buf_clear(cache);
         cache->oom = 0;
@@ -126,6 +157,7 @@ int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double 
         int rc;
         if (s->view == CC_VIEW_IFC) rc = cc_ifc_scene_bmsh(s->ifc, *rev, cache, &err); /* the file's id text */
         else rc = sc ? bmsh_of(sc, *rev, cache, &err) : cc_mesh_bmsh(m, *rev, cache, &err);
+        if (rc == 0) rc = cc_links_bmsh(s, *rev, cache, &err); /* nothing without links */
         if (rc != 0) {
             buf_clear(cache);
             cache->oom = 0;
@@ -134,7 +166,7 @@ int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double 
         } else {
             s->mesh_status = 200;
         }
-        s->mesh_model = m, s->mesh_rev = *rev;
+        s->mesh_model = m, s->mesh_rev = *rev, s->mesh_links_gen = s->links_gen;
         *build_ms = s->pf->now_ms(s->pf->ctx) - t0;
     }
     *p = cache->p ? cache->p : "", *n = cache->len;

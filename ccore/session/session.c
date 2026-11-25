@@ -12,6 +12,7 @@
 #include "inflate.h"
 #include "json_w.h"
 #include "session.h"
+#include "links.h"
 
 cc_session *cc_session_new(const cc_platform *pf) {
     cc_session *s = calloc(1, sizeof *s);
@@ -19,6 +20,7 @@ cc_session *cc_session_new(const cc_platform *pf) {
     s->pf = pf;
     buf_init(&s->mesh);
     cc_vis_init(&s->vis);
+    s->link_sel = -1;
     return s;
 }
 
@@ -30,6 +32,8 @@ void cc_session_free(cc_session *s) {
     if (!s) return;
     if (s->open) cc_history_free(&s->hist), cc_model_free(&s->model);
     drop_view(s);
+    cc_links_clear(s);
+    free(s->links);
     free(s->undo_ids), free(s->redo_ids), free(s->also), free(s->material);
     if (s->scene_rev) cc_scene_free(&s->scene);
     buf_free(&s->mesh);
@@ -116,6 +120,7 @@ static void drop_view(cc_session *s) {
 static void drop_model(cc_session *s) {
     if (s->open) cc_history_free(&s->hist), cc_model_free(&s->model);
     drop_view(s);
+    cc_links_clear(s); /* lib.rs:1668: a linked model means nothing for another model */
     persist_drop_cmds(s); /* after the history that borrows from them */
     if (s->scene_rev) cc_scene_free(&s->scene);
     s->scene_rev = 0, s->scene_ok = 0, s->mesh_status = 0, s->mesh_model = NULL;
@@ -269,6 +274,51 @@ static int view_scene(cc_scene *sc, const cc_viewfile *v, cc_error *err) {
         e->to_scene = x->to_scene;
     }
     sc->nelements = v->nelements;
+    return 0;
+}
+
+/* links.h: a file read as a link: an IFC as it is, a view file, else a .bimble / .json model's
+ * scene (lib.rs:1454 link: load_scene_progress reads any of them). */
+int cc_link_load(cc_session *s, const char *path, cc_link *k, cc_error *err) {
+    err->offset = CC_NO_OFFSET;
+    err->msg[0] = 0;
+    int ifc = ends_with_ci(path, ".ifc"), vw = ends_with_ci(path, ".bimbleview");
+    double t0 = s->pf->now_ms(s->pf->ctx);
+    size_t n = 0;
+    char *text = read_all(s, path, &n, err);
+    if (!text) return -1;
+    cc_link l;
+    memset(&l, 0, sizeof l);
+    int rc = -1;
+    l.kind = ifc ? CC_LINK_IFC : vw ? CC_LINK_VIEW : CC_LINK_MODEL;
+    l.path = malloc(strlen(path) + 1);
+    if (!l.path) snprintf(err->msg, sizeof err->msg, "out of memory");
+    else if (ifc) {
+        if (!(l.ifc = malloc(sizeof *l.ifc))) snprintf(err->msg, sizeof err->msg, "out of memory");
+        else if (cc_ifc_read(text, n, l.ifc, err) != 0) cc_ifc_scene_free(l.ifc), free(l.ifc), l.ifc = NULL;
+        else rc = 0;
+    } else if (vw) {
+        if (!(l.vf = malloc(sizeof *l.vf))) snprintf(err->msg, sizeof err->msg, "out of memory");
+        else if (cc_viewfile_read((const uint8_t *)text, n, l.vf, err) != 0) cc_viewfile_free(l.vf), free(l.vf), l.vf = NULL;
+        else if (view_scene(&l.scene, l.vf, err) != 0) cc_scene_free(&l.scene), cc_viewfile_free(l.vf), free(l.vf), l.vf = NULL;
+        else rc = 0;
+    } else {
+        if (!(l.model = malloc(sizeof *l.model))) snprintf(err->msg, sizeof err->msg, "out of memory");
+        else if (cc_model_load(l.model, text, n, err) != 0) cc_model_free(l.model), free(l.model), l.model = NULL;
+        else if (cc_scene_build(&l.scene, l.model, err) != 0) cc_scene_free(&l.scene), cc_model_free(l.model), free(l.model), l.model = NULL;
+        else rc = 0;
+    }
+    free(text);
+    if (rc) {
+        free(l.path);
+        return -1;
+    }
+    strcpy(l.path, path);
+    const char *slash = strrchr(l.path, '/');
+    l.name = slash ? slash + 1 : l.path;
+    l.visible = 1;
+    l.load_ms = s->pf->now_ms(s->pf->ctx) - t0;
+    *k = l;
     return 0;
 }
 

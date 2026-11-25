@@ -23,6 +23,7 @@ typedef enum { CC_KIND_COLUMN, CC_KIND_BEAM, CC_KIND_WALL, CC_KIND_SLAB } cc_kin
 enum { CC_VIEW_NONE, CC_VIEW_IFC, CC_VIEW_FILE };
 
 typedef struct cc_persist cc_persist; /* the session file (session.c), NULL when off */
+typedef struct cc_link cc_link;       /* a linked model (links.h) */
 
 typedef struct cc_session {
     const cc_platform *pf; /* the carrier's, outlives the session */
@@ -78,6 +79,16 @@ typedef struct cc_session {
     const cc_model *mesh_model;
     uint32_t mesh_rev;
     cc_persist *persist;
+    /* Linked models (ticket B5, links.h): read-only scenes drawn with the open one, in link
+     * order; dropped with the open model (lib.rs:1668). links_gen + 1 on every change to them
+     * (add, reload, remove, show, hide): the /mesh cache and the change JSON follow it. */
+    cc_link *links;
+    size_t nlinks, caplinks;
+    uint64_t links_gen, mesh_links_gen;
+    /* An element of a linked model selected (lib.rs:945 link_selected): its link (-1: none) and
+     * its id text as the link's BMSH rows give it. The open model's selection is then empty. */
+    int link_sel;
+    char link_sel_id[22];
 } cc_session;
 
 /* A new session with no model, on `pf` (kept by pointer). NULL when out of memory. */

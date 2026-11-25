@@ -18,7 +18,9 @@
 //            query verbs (= golden/verbs_list.json) and describe, verb with dry_run and if_rev, rename;
 //            ticket B4: the place tool (tool pointer/click/cancel, query ghost) on both, byte for byte;
 //            ticket B3: the visibility actions, query visibility(_sets), the box tool (box_set, box_press,
-//            box_move, box_release, box_cancel) on both, byte for byte, rev unchanged
+//            box_move, box_release, box_cancel) on both, byte for byte, rev unchanged; ticket B5:
+//            linked models (link_model by path natively, host_open flag 4 in the module; links,
+//            select/element of a linked element, manage_links, /mesh with the LNKS trailer) on both
 //   files    the file actions in a fresh module (ticket A5): new, place, save (v2), save as,
 //            host_open of the saved bytes (the same elements), host_open import of golden/ifc/
 //            frame.ifc (the import golden's count) and of frame.json; export IFC4 with host_clock =
@@ -553,6 +555,58 @@ suite("host");
     }
     check("the place happened", placedRev === 2, String(placedRev));
     check("the tool placed a column and a beam", toolPlaced === 2, String(toolPlaced));
+    // ticket B5: linked models (session/links.h). The native host links a path, the module the
+    // page's bytes (host_open flag 4) under the same name; then the same calls on both: every
+    // answer, the change JSON and /mesh (with the LNKS trailer) byte for byte.
+    {
+      const LINKS = [["mapped_item.ifc", "ifc/fixtures/mapped_item.ifc"], ["frame2.bimbleview", "view/frame2.bimbleview"]];
+      for (const [name, src] of LINKS) {
+        copyFileSync(join(G, src), join(tmpd, name));
+        const n = await ncall("action", "link_model", JSON.stringify({ path: join(tmpd, name) }));
+        const w = call(X.host_open, [name, readFileSync(join(G, src))], 4);
+        check(`link_model ${name}: native and host_open flag 4 -> 200`, n.status === 200 && w.status === 200, `${n.status} ${n.text} / ${w.status} ${w.text}`);
+        eq(`change after link_model ${name}`, JSON.stringify(JSON.parse(change())), await nchange());
+      }
+      const wm = call(X.host_mesh, [], 0).bytes, nm = await nmesh();
+      check("links: host_mesh = GET /mesh (with the LNKS trailer)", wm.length === nm.length && wm.every((b, i) => b === nm[i]), `${wm.length} vs ${nm.length} bytes`);
+      // The linked ids from the trailer: the first element of each link.
+      const dv = new DataView(nm.buffer, nm.byteOffset, nm.byteLength);
+      const size = (o) => 52 + 48 * dv.getUint32(o + 12, true) + 12 * dv.getUint32(o + 16, true) + 4 * dv.getUint32(o + 20, true) + 32 * dv.getUint32(o + 24, true);
+      let o = size(0);
+      check("links: the trailer is LNKS with 2 links", dec.decode(nm.subarray(o, o + 4)) === "LNKS" && dv.getUint32(o + 8, true) === 2);
+      o += 12;
+      const first = [];
+      for (let k = 0; k < 2; k++) {
+        const L = dv.getUint32(o, true);
+        o += 4 + L + ((4 - (L % 4)) % 4) + 8;
+        first.push(dec.decode(nm.subarray(o + 52, o + 74)));
+        o += dv.getUint32(o - 4, true);
+      }
+      const lsteps = [
+        ["query", "links", "{}"], ["query", "actions", "{}"],
+        ["select", "-", JSON.stringify({ link: "mapped_item.ifc", ids: [first[0]] })],
+        ["query", "element", JSON.stringify({ id: first[0], link: "mapped_item.ifc" })],
+        ["select", "-", JSON.stringify({ link: "frame2.bimbleview", ids: [first[1]] })],
+        ["query", "element", JSON.stringify({ id: first[1], link: "frame2.bimbleview" })],
+        ["verb", "rename", JSON.stringify({ id: first[1], name: "x" })],
+        ["select", "-", JSON.stringify({ link: "nope", ids: [first[1]] })], ["select", "-", "[]"],
+        ["action", "manage_links", JSON.stringify({ op: "hide", name: "mapped_item.ifc" })], ["action", "manage_links", ""], "mesh",
+        ["action", "manage_links", JSON.stringify({ op: "show", name: "mapped_item.ifc" })],
+        ["action", "manage_links", JSON.stringify({ op: "remove", name: "frame2.bimbleview" })], "mesh", ["query", "links", "{}"],
+        ["action", "manage_links", JSON.stringify({ op: "remove", name: "mapped_item.ifc" })], "mesh", ["query", "links", "{}"],
+      ];
+      for (const s of lsteps) {
+        if (s === "mesh") {
+          const w = call(X.host_mesh, [], 0).bytes, n = await nmesh();
+          check("links: host_mesh = GET /mesh", w.length === n.length && w.every((b, i) => b === n[i]), `${w.length} vs ${n.length} bytes`);
+          continue;
+        }
+        const [op, name, body] = s;
+        const w = hcall(op, name, body), n = await ncall(op, name, body);
+        eq(`links: ${op} ${name} ${body}`, `${w.status} ${w.text}`, `${n.status} ${n.text}`);
+        eq(`links: change after ${op} ${name}`, JSON.stringify(JSON.parse(change())), await nchange());
+      }
+    }
     const vl = hcall("query", "verbs", "");
     check("query verbs in the module = golden/verbs_list.json", vl.status === 200 && vl.text === JSON.stringify(JSON.parse(read("verbs_list.json"))), vl.text.slice(0, 120));
     const lg = call(X.host_log, []).text;

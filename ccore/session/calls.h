@@ -65,7 +65,10 @@ enum { CC_OK = 200, CC_ERR = 400 };
  * "isolate":bool},"reveal":bool}.
  * The visibility actions (hide_now, isolate_now, hide_in_view, isolate_in_view, unhide,
  * reveal_hidden, clear_temporary, show_all_in_view, section_box, box_to_selection) run as
- * ribbon.rs run_action; the change JSON's "view" carries their signature (calls.rs:152-161). */
+ * ribbon.rs run_action; the change JSON's "view" carries their signature (calls.rs:152-161).
+ * Linked models (ticket B5): action link_model {"path"}, action manage_links {"op","name"},
+ * query links, select {"link","ids"}, query element {"id","link"}, the change JSON's "linked" and
+ * "links", and the /mesh LNKS trailer: session/links.h. */
 int cc_call(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out);
 
 /* The change JSON (`Viewer::change_json`, calls.rs:134-167) for the state now. The host

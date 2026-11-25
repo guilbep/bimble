@@ -19,6 +19,10 @@
 // - `window.ccoreSave()` saves (when there are unsaved changes) and returns the last saved text,
 //   and logs its size (a .json name: the v1 text).
 // - The mesh for the WebGL2 viewport: `ccoreMesh()`, the BMSH bytes of GET /mesh (glviewport.ts).
+// - Linked models (ticket B5, ccore/session/links.h): the action `link_model` shows a file picker and
+//   links the picked file's bytes read-only beside the open model (`ccoreLinkFile`; host_open flag 4);
+//   `manage_links` with a body ({op, name}) goes to the module (`action_with`). Reload reads the file
+//   again: the module keeps no path, so it answers an error (link the file again: it replaces).
 
 interface Exports {
   memory: WebAssembly.Memory;
@@ -68,6 +72,7 @@ export interface CcoreClient {
   dismiss_belongs(): void;
   standards_action(name: string): void;
   tool(name: string, json: string): string;
+  action_with(name: string, json: string): string;
   on_change(cb: (json: string) => void): void;
   default: () => Promise<unknown>;
 }
@@ -143,6 +148,18 @@ export async function ccoreOpenFile(file: Blob & { name?: string }, discard = fa
   return true;
 }
 
+/** Links a file's bytes read-only beside the open model (`action link_model`, host_open flag 4): an
+ *  .ifc, a .bimbleview, a .bimble or .json. The same file name again replaces that link. Throws the
+ *  C core's error text when it does not load. */
+export function ccoreLinkFile(name: string, bytes: Uint8Array): void {
+  if (!module) throw new Error("ccore: not loaded");
+  const { X } = module;
+  const r = run(X.host_open.bind(X), [enc.encode(name), bytes], [4]);
+  hostLog();
+  emitChange?.();
+  if (r.status !== 200) throw dec.decode(r.bytes) || `ccore link: ${r.status}`;
+}
+
 /** The bytes the module wrote last and their file name (host_saved, host_saved_path). */
 function lastWritten(): { name: string; bytes: Uint8Array } {
   if (!module) throw new Error("ccore: not loaded");
@@ -207,6 +224,23 @@ function pickAndOpen(accept: string, importIfc = false): void {
   input.click();
 }
 
+/** The file picker of `link_model`. */
+function pickAndLink(): void {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".ifc,.bimbleview,.bimble,.json";
+  input.dataset.bb = "ccore-link";
+  input.style.display = "none";
+  input.addEventListener("change", () => {
+    const f = input.files?.[0];
+    input.remove();
+    if (f) void f.arrayBuffer().then((b) => ccoreLinkFile(f.name, new Uint8Array(b))).catch((e) => console.error(`ccore: link ${f.name}: ${String(e)}`));
+  });
+  input.addEventListener("cancel", () => input.remove());
+  document.body.appendChild(input);
+  input.click();
+}
+
 /** The file actions in the page (the rest go to the module as they are). */
 function fileAction(name: string): boolean {
   if (!callHost) return false;
@@ -216,6 +250,11 @@ function fileAction(name: string): boolean {
       return true;
     case "import_ifc":
       pickAndOpen(".ifc", true);
+      return true;
+    case "link_model":
+      if (!(JSON.parse(callHost("query", "actions", "{}")) as { name: string; enabled: boolean }[]).find((a) => a.name === "link_model")?.enabled)
+        callHost("action", "link_model"); // nothing open: throws "not enabled", as the native host answers
+      pickAndLink();
       return true;
     case "new":
       if (unsavedNow() && !window.confirm("Discard the unsaved changes?")) return true;
@@ -308,6 +347,7 @@ export async function ccoreClient(params: URLSearchParams): Promise<CcoreClient>
     dismiss_belongs: () => void call("dismiss_belongs", null),
     standards_action: (n) => void call("standards_action", n),
     tool: (n, json) => call("tool", n, json),
+    action_with: (n, json) => call("action", n, json),
     on_change: (cb) => {
       listener = cb;
       last = "";

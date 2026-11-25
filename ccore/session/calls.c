@@ -19,6 +19,7 @@
 #include "json_r.h"
 #include "json_w.h"
 #include "library.h"
+#include "links.h"
 #include "mesh.h"
 #include "query.h"
 #include "scene.h"
@@ -535,6 +536,8 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strncmp(name, "place_", 6)) return s->open;
     if (!strcmp(name, "export_ifc4") || !strcmp(name, "export_ifc2x3")) return s->open; /* ribbon.rs:577 */
     if (!strcmp(name, "home")) return 1;
+    /* Links (ticket B5, links.h): ribbon.rs:596 ManageLinks `loaded`, LinkModel `_ => loaded`. */
+    if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return loaded(s);
     /* Visibility and the section box (ribbon.rs:592-611; the C core has only the 3D view: never flat). */
     if (!strcmp(name, "section_box") || !strcmp(name, "reveal_hidden")) return loaded(s);
     if (!strcmp(name, "box_to_selection")) return loaded(s) && s->vis.section_on;
@@ -798,7 +801,25 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         buf_puts(out, "null");
         return CC_OK;
     }
-    static const char *const EMPTY[] = {"recent_files", "links", "measurements", "schedule_list", "recent_actions"};
+    if (!strcmp(name, "links")) { /* links.h: [] without links (spec §1's stub) */
+        cc_links_json(s, &w);
+        return done(&w);
+    }
+    if (!strcmp(name, "element")) { /* {"id", "link"}: an element of a linked model (links.h) */
+        Arena a;
+        arena_init(&a, 0);
+        JrError je;
+        const JrVal *v = jr_parse(&a, body, n, &je);
+        const JrVal *lk = v && v->type == JR_OBJ ? jr_get(v, "link") : NULL, *id = lk ? jr_get(v, "id") : NULL;
+        int rc = -2;
+        if (lk && lk->type == JR_STR) {
+            if (!id || id->type != JR_STR) buf_puts(out, "id: a string"), rc = -1;
+            else rc = cc_link_element_json(s, lk->s, lk->n, id->s, id->n, out);
+        }
+        arena_free(&a);
+        if (rc != -2) return rc ? CC_ERR : CC_OK;
+    }
+    static const char *const EMPTY[] = {"recent_files", "measurements", "schedule_list", "recent_actions"};
     for (size_t i = 0; i < sizeof EMPTY / sizeof EMPTY[0]; i++)
         if (!strcmp(name, EMPTY[i])) { /* spec §1: stub [] */
             buf_puts(out, "[]");
@@ -1068,6 +1089,86 @@ static int vis_action(cc_session *s, const char *name, cc_buf *out) {
     return 0;
 }
 
+/* link_model and manage_links (links.h). */
+static int link_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    int rc = CC_ERR;
+    size_t i = 0;
+    while (i < n && (body[i] == ' ' || body[i] == '\t' || body[i] == '\n' || body[i] == '\r')) i++;
+    const JrVal *v = i < n ? jr_parse(&a, body, n, &je) : NULL;
+    if (i < n && !v) {
+        buf_puts(out, je.msg);
+        goto end;
+    }
+    if (v && v->type == JR_NULL) v = NULL;
+    if (v && v->type != JR_OBJ) {
+        buf_puts(out, !strcmp(name, "link_model") ? "the action's body is {\"path\": string}"
+                                                  : "the action's body is {\"op\": string, \"name\": string}");
+        goto end;
+    }
+    if (!strcmp(name, "link_model")) {
+        const JrVal *p = v ? jr_get(v, "path") : NULL;
+        if (!p || p->type != JR_STR) {
+            buf_puts(out, "link_model: the C core has no file dialog: send {\"path\": \"<file>\"}");
+            goto end;
+        }
+        if (!p->n || strlen(p->s) < p->n) {
+            buf_puts(out, "path: empty or with a NUL");
+            goto end;
+        }
+        cc_error err;
+        if (cc_links_add(s, p->s, &err)) {
+            buf_puts(out, err.msg);
+            goto end;
+        }
+        rc = CC_OK;
+        goto end;
+    }
+    const JrVal *op = v ? jr_get(v, "op") : NULL, *nm = v ? jr_get(v, "name") : NULL;
+    if (op && op->type != JR_STR) {
+        buf_puts(out, "op: a string");
+        goto end;
+    }
+    if (!op || (op->n == 4 && !memcmp(op->s, "list", 4))) {
+        JsonW w;
+        jw_init(&w, out, 0);
+        cc_links_json(s, &w);
+        rc = done(&w);
+        goto end;
+    }
+    static const char *const OPS_L[] = {"remove", "reload", "show", "hide"};
+    int o = -1;
+    for (int q = 0; q < 4; q++)
+        if (op->n == strlen(OPS_L[q]) && !memcmp(op->s, OPS_L[q], op->n)) o = q;
+    if (o < 0) {
+        buf_puts(out, "op: one of list, remove, reload, show, hide");
+        goto end;
+    }
+    if (!nm || nm->type != JR_STR) {
+        buf_puts(out, "name: the linked file's name (query links)");
+        goto end;
+    }
+    int li = cc_links_find(s, nm->s, nm->n);
+    if (li < 0) {
+        buf_puts(out, "no linked model "), buf_append(out, nm->s, nm->n);
+        goto end;
+    }
+    if (o == 0) cc_links_remove(s, li);
+    else if (o == 1) {
+        cc_error err;
+        if (cc_links_reload(s, li, &err)) {
+            buf_puts(out, err.msg);
+            goto end;
+        }
+    } else cc_links_set_visible(s, li, o == 2);
+    rc = CC_OK;
+end:
+    arena_free(&a);
+    return rc;
+}
+
 /* Actions the C core runs that the ribbon does not list (above). */
 static const char *const HIDDEN_ACTIONS[] = {"save_as", "close"};
 
@@ -1090,6 +1191,7 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
         buf_puts(out, " is not enabled now");
         return CC_ERR;
     }
+    if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return link_action(s, name, body, n, out);
     FileArgs fa;
     if (file_args(body, n, &fa, out)) return CC_ERR;
     int rc = file_action(s, name, &fa, out);
@@ -1128,6 +1230,45 @@ static int call_select(cc_session *s, const char *body, size_t n, cc_buf *out) {
         buf_puts(out, je.msg);
         goto end;
     }
+    if (v->type == JR_OBJ && jr_get(v, "link")) { /* an element of a linked model (links.h) */
+        const JrVal *lk = jr_get(v, "link"), *ids = jr_get(v, "ids");
+        if (lk->type != JR_STR) {
+            buf_puts(out, "link: a string");
+            goto end;
+        }
+        if (!ids || ids->type != JR_ARR || ids->n > 1 || (ids->n && ids->items[0].type != JR_STR)) {
+            buf_puts(out, "ids: [] or one GlobalId (one linked element at a time)");
+            goto end;
+        }
+        if (!loaded(s)) {
+            buf_puts(out, NO_MODEL);
+            goto end;
+        }
+        int li = cc_links_find(s, lk->s, lk->n);
+        if (li < 0) {
+            buf_puts(out, "no linked model "), buf_append(out, lk->s, lk->n);
+            goto end;
+        }
+        if (!ids->n) {
+            s->link_sel = -1;
+            rc = CC_OK;
+            goto end;
+        }
+        const JrVal *x = &ids->items[0];
+        if (x->n != 22 || cc_link_find(&s->links[li], x->s) < 0) {
+            buf_puts(out, "unknown GlobalIds: "), buf_append(out, x->s, x->n);
+            goto end;
+        }
+        if (!s->links[li].visible) {
+            buf_puts(out, "the linked model "), buf_append(out, lk->s, lk->n), buf_puts(out, " is hidden");
+            goto end;
+        }
+        s->link_sel = li;
+        memcpy(s->link_sel_id, x->s, 22);
+        s->has_primary = 0, s->nalso = 0; /* one selection: theirs or ours (lib.rs:2100) */
+        rc = CC_OK;
+        goto end;
+    }
     if (v->type != JR_ARR) {
         buf_puts(out, "invalid type: "), buf_puts(out, type_word(v)), buf_puts(out, ", expected a sequence");
         goto end;
@@ -1160,6 +1301,7 @@ static int call_select(cc_session *s, const char *body, size_t n, cc_buf *out) {
         }
     }
     if (unknown) goto end;
+    s->link_sel = -1; /* a selection in the open model drops the linked one */
     s->has_primary = v->n > 0;
     if (v->n) s->primary = ids[0];
     s->nalso = 0;
@@ -1684,11 +1826,20 @@ void cc_change_json(cc_session *s, cc_buf *out) { /* calls.rs:134-167 (json!, so
     jw_key(&w, "file");
     if (loaded(s)) jw_str(&w, s->file);
     else jw_null(&w);
+    int linked = loaded(s) && s->link_sel >= 0 && (size_t)s->link_sel < s->nlinks;
+    if (linked) { /* links.h: only while a linked element is selected */
+        jw_key(&w, "linked"), jw_obj_begin(&w);
+        jw_key(&w, "id"), jw_str_n(&w, s->link_sel_id, 22);
+        jw_key(&w, "link"), jw_str(&w, s->links[s->link_sel].name);
+        jw_obj_end(&w);
+    }
+    if (s->links_gen) jw_key(&w, "links"), jw_u64(&w, s->links_gen); /* links.h: once links changed */
     jw_key(&w, "placing");
     if (s->open) placing_json(s, &w);
     else jw_null(&w);
     jw_key(&w, "rev"), jw_u64(&w, s->rev);
     jw_key(&w, "selection"), jw_arr_begin(&w);
+    if (linked) jw_str_n(&w, s->link_sel_id, 22);
     if (loaded(s) && s->has_primary) jw_str_n(&w, s->primary.c, 22);
     for (size_t i = 0; loaded(s) && i < s->nalso; i++) jw_str_n(&w, s->also[i].c, 22);
     jw_arr_end(&w);
