@@ -10,7 +10,8 @@
 #         edit here; dev_test last: it rebuilds out/tcc/bimble-ccore through dev.sh).
 #   san   test/run.sh with clang, ASan and UBSan (the job ccore-san).
 #   lab   build.sh tcc and wasm, then every test/lab_*.mjs but lab_boot (host.sh runs it): the
-#         Chromium suites (the job ccore-lab).
+#         Chromium suites (the job ccore-lab); then the performance report (tools/perf.mjs,
+#         ticket PERF1: out/ci/perf.md and its change against results/perf.md).
 #   full  fast, the lab suites, then the rest of unit: every suite once.
 #   clang for a machine with neither tcc nor wasm-ld (macOS, ticket MAC1, the job ccore-macos):
 #         test/run.sh with clang (the kernel when deps.sh built it), then test/host.sh on the host
@@ -115,6 +116,12 @@ labs() {
         [[ $t == lab_boot ]] && continue # host.sh
         suite "$t" node "$f"
     done
+    # PERF1: the lab's performance (tools/perf.mjs, short mode: 1 Lighthouse run per page and preset,
+    # the sample model, no network) into out/ci/perf.md (uploaded with the logs); the change against
+    # the committed results/perf.md is printed. Fails only when a page does not load or the tool
+    # crashes, never on a slower number (runner noise). `node tools/perf.mjs --full` on a dev machine.
+    suite perf node tools/perf.mjs --prebuilt --out "$LOGS/perf.md"
+    grep '^perf: ' "$LOGS/perf.log" | sed 's/^/      /'
 }
 unit_rest() {
     # The viewer-only wasm and its 400 KB budget (ADR 0069), for test/wasm_view_run.mjs below.

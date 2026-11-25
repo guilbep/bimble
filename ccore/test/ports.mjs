@@ -64,6 +64,7 @@ const TABLE = [
   ["host", "palette_test", 47359, 59], // Q2
   ["host", "lab_shell", 47307, 7], // UX1
   ["host", "lab_levels", 47366, 66], // G2
+  ["host", "perf", 47366, 66], // PERF1 (tools/perf.mjs: the static server of the built lab)
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_gl", 5193, 131],
   ["vite", "lab_place", 5195, 133],
