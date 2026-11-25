@@ -10,6 +10,7 @@ import { t } from "../i18n";
 import type * as copy from "../i18n/parts/filemenu";
 import { currentDialog } from ".";
 import { HIDE_NOT_AVAILABLE, notYetAction } from "../shell/capability"; // FAKE1
+import { shortcutFor } from "../shell/keys";
 
 type Key = keyof typeof copy.fr;
 const tx = (k: Key) => t(k);
@@ -19,16 +20,17 @@ const NEW = '<path d="M5 3h10l4 4v14H5z"/><path d="M12 10v6M9 13h6"/>';
 const UP = '<path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 13v8h14v-8"/>';
 const INFO = '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><path d="M12 8h.01"/>';
 
-interface Entry { key: Key; icon: string; kbd?: string; action?: string; missing?: string; dialog?: string }
+// KEY1: the shortcut shown is the key table's (shell/keys.ts, Rust's): none for Open, Print, Settings (Rust has none).
+interface Entry { key: Key; icon: string; action?: string; missing?: string; dialog?: string }
 const sections: { title: Key; entries: Entry[] }[] = [
   { title: "filemenu.files", entries: [
-    { key: "filemenu.new", icon: NEW, kbd: "Ctrl+N", action: "new" },
-    { key: "filemenu.open", icon: '<path d="M3 7h6l2 2h10v10H3z"/><path d="M3 7V5h6"/>', kbd: "Ctrl+O", action: "open" },
+    { key: "filemenu.new", icon: NEW, action: "new" },
+    { key: "filemenu.open", icon: '<path d="M3 7h6l2 2h10v10H3z"/><path d="M3 7V5h6"/>', action: "open" },
     { key: "filemenu.importIfc", icon: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 13v8h14v-8"/>', action: "import_ifc" },
     { key: "filemenu.convert", icon: NEW, action: "convert_open" },
-    { key: "filemenu.save", icon: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><rect x="8" y="13" width="8" height="5"/>', kbd: "Ctrl+S", action: "save" },
+    { key: "filemenu.save", icon: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><rect x="8" y="13" width="8" height="5"/>', action: "save" },
     // ---- FS1: Save as (not a ribbon action: enabled with an editable model, calls.c action_enabled) ----
-    { key: "filemenu.saveAs", icon: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><path d="M12 13v5M9.5 15.5h5"/>', kbd: "Ctrl+Shift+S", action: "save_as" },
+    { key: "filemenu.saveAs", icon: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><path d="M12 13v5M9.5 15.5h5"/>', action: "save_as" },
     // ---- end FS1 ----
   ] },
   { title: "filemenu.share", entries: [
@@ -38,14 +40,14 @@ const sections: { title: Key; entries: Entry[] }[] = [
   ] },
   { title: "filemenu.paper", entries: [
     // Print and export opens screen D4 (dialogs/Export.vue).
-    { key: "filemenu.print", icon: '<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1"/><path d="M7 14h10v6H7z"/>', kbd: "Ctrl+P", dialog: "export" },
+    { key: "filemenu.print", icon: '<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1"/><path d="M7 14h10v6H7z"/>', dialog: "export" },
     // egui "Export view… (PDF, SVG)".
     { key: "filemenu.exportView", icon: UP, action: "on_paper" },
   ] },
   { title: "filemenu.project", entries: [
     { key: "filemenu.projectInfo", icon: INFO, action: "project" },
     { key: "filemenu.history", icon: '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/>', action: "history" },
-    { key: "filemenu.settings", icon: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>', kbd: "Ctrl+,", action: "settings" },
+    { key: "filemenu.settings", icon: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>', action: "settings" },
     { key: "filemenu.about", icon: INFO, action: "about" },
   ] },
 ];
@@ -79,7 +81,7 @@ function run(name?: string) {
         :data-not-yet="notYet(e) ? '' : undefined" :title="notYet(e) ? t('na.tooltip', { name: tx(e.key) }) : undefined"
         @click="e.dialog ? (currentDialog = e.dialog) : run(e.action)">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="e.icon"></svg>
-        <span style="flex:1">{{ tx(e.key) }}</span><span class="mono">{{ e.kbd ?? '' }}</span>
+        <span style="flex:1">{{ tx(e.key) }}</span><span class="mono" data-bb="file-menu-kbd">{{ shortcutFor(e.action) }}</span>
       </button>
     </template>
     <div class="sep"></div>

@@ -69,6 +69,7 @@ const TABLE = [
   ["host", "fs_test", 47300, 0], // FS1
   ["host", "fs_test2", 47301, 1], // FS1
   ["host", "lab_files", 47302, 2], // FS1
+  ["host", "lab_keys", 47404, 104], // KEY1
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_gl", 5193, 131],
   ["vite", "lab_place", 5195, 133],
@@ -94,6 +95,7 @@ const TABLE = [
   ["vite", "lab_levels", 5216, 154], // G2
   ["vite", "lab_routes", 5198, 136], // FAKE1
   ["vite", "lab_files", 5194, 132], // FS1
+  ["vite", "lab_keys", 5214, 152], // KEY1
 ];
 export const SPAN = 160; // offsets 0..SPAN-1
 const AUTO_LO = 20000, AUTO_SLOTS = Math.floor((32000 - AUTO_LO) / SPAN);

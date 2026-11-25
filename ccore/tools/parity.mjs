@@ -521,13 +521,22 @@ function vueScan(actionNames, queryNames, settings) {
   const app = read(join(UI, "App.vue"));
   for (const m of app.matchAll(/^\s+(\w+): (?:openPage\("([\w-]+)"\)|\(\) => \{ currentPanel\.value = "([\w-]+)"; \})/gm)) routes[m[1]] = m[2] ? `page ${m[2]}` : `panel ${m[3]}`;
   const keys = []; // key handlers: {key, ctrl, at, text}
+  const table = []; // KEY1: the rows of web-ui/src/shell/keys.ts KEYS: {keys, action, effect, context, at}
   const shown = []; // shortcut texts shown (kbd) without being a handler
   const settingsHits = {};
   let palette = null; // the palette lists every action of query("actions")
   for (const f of files) {
     if (f === ribF) continue;
     const lines = read(f).split("\n");
+    const keyTable = /\/shell\/keys\.ts$/.test(f);
     lines.forEach((l, i) => {
+      // KEY1: a row of the key table (shell/keys.ts): the shortcut and what it runs.
+      const kr = keyTable && /^\s*\{ keys: "([^"]+)", key: "[^"]+",.*? action: (null|"([a-z_0-9]+)")(?:, effect: "(\w+)")?, context: "(\w+)"/.exec(l);
+      if (kr) {
+        table.push({ keys: kr[1], action: kr[3] ?? null, effect: kr[4] ?? null, context: kr[5], at: at(f, i) });
+        if (kr[3]) addA(kr[3], at(f, i), `shortcut ${kr[1]}`);
+        return;
+      }
       // Action names as string literals in an action context.
       // Not the transports (bimble.ts, ccore.ts): they pass names on, a control of the UI calls them.
       const transport = /\/(bimble|ccore)\.ts$/.test(f);
@@ -555,7 +564,7 @@ function vueScan(actionNames, queryNames, settings) {
     });
   }
   const list = (d) => readdirSync(join(UI, d)).filter((f) => f.endsWith(".vue")).map((f) => f.replace(/\.vue$/, "").replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase());
-  return { actions, queries, ribbon, routes, keys, shown, settingsHits, unresolved, palette,
+  return { actions, queries, ribbon, routes, keys, table, shown, settingsHits, unresolved, palette,
     pages: list("pages").filter((p) => !p.endsWith("-side")), panels: list("panels"), dialogs: list("dialogs"), files: files.length };
 }
 
@@ -679,7 +688,8 @@ function report(R, C, rib, settings, shortcuts, vue, cmp, meta) {
   const setReach = settings.fields.filter((s) => vue.settingsHits[s.field]?.length).length;
   L.push(`| Settings (Rust ${settings.fields.length} fields, ${settings.themes.length} themes) | named somewhere in web-ui/src ${setReach} · not named ${settings.fields.length - setReach} · C \`settings\` action enabled in ${A.find((a) => a.name === "settings")?.cEver ? "some" : "no"} scenario |`);
   const keyRows = shortcutRows(shortcuts, vue);
-  L.push(`| Shortcuts (Rust ${shortcuts.length}) | handled in the lab ${keyRows.filter((k) => k.handled).length} · shown only ${keyRows.filter((k) => !k.handled && k.shown).length} · absent ${keyRows.filter((k) => !k.handled && !k.shown).length} |`);
+  const labOnlyKeys = (vue.table ?? []).filter((t) => !shortcuts.some((s) => s.keys === t.keys));
+  L.push(`| Shortcuts (Rust ${shortcuts.length}) | handled in the lab ${keyRows.filter((k) => k.handled).length} · shown only ${keyRows.filter((k) => !k.handled && k.shown).length} · absent ${keyRows.filter((k) => !k.handled && !k.shown).length} · runs another action than Rust's ${keyRows.filter((k) => k.differs).length} · lab-only ${labOnlyKeys.length} |`);
   const reach = A.filter((a) => a.rust);
   const noPlace = reach.filter((a) => !a.vue.length && !a.vueRoute);
   L.push(`| Rust actions with a place in the Vue UI besides the palette | ${reach.length - noPlace.length} of ${reach.length} (no place: ${noPlace.map((a) => `\`${a.name}\``).join(", ") || "none"}). The palette (${vue.palette ?? "not found"}) lists every action of \`actions\`. |`);
@@ -740,9 +750,10 @@ function report(R, C, rib, settings, shortcuts, vue, cmp, meta) {
   for (const s of settings.fields) L.push(`| \`${s.field}\` | \`${esc(s.type)}\` | \`${esc(s.default)}\` | ${(vue.settingsHits[s.field] ?? []).slice(0, 2).join("<br>") || "**no place in the new UI**"} |`);
   L.push("");
   L.push("## Keyboard shortcuts (Rust `lib.rs` handle_keys, palette_key; `Action::keys`)", "");
+  L.push("The lab's key table is `web-ui/src/shell/keys.ts` (ticket KEY1): one row per shortcut, one listener; the ribbon tooltips, the File menu and the palette rows show the label of the same row. A row runs only when its action is enabled (`actions`): an action the C core never enables (`paper_view`) leaves its key inert.", "");
   L.push("| Keys | Rust action / effect | Rust source | Lab handler | Shown in the lab |", "|---|---|---|---|---|");
-  for (const k of keyRows) L.push(`| ${k.keys} | ${k.action ? `\`${k.action}\`` : ""}${k.effect ? ` ${esc(k.effect)}` : ""} | ${k.source} | ${k.handled ? k.handled : "**none**"} | ${k.shown || "—"} |`);
-  L.push("");
+  for (const k of keyRows) L.push(`| ${k.keys} | ${k.action ? `\`${k.action}\`` : ""}${k.effect ? ` ${esc(k.effect)}` : ""} | ${k.source} | ${k.handled ? k.handled : "**none**"}${k.differs ? ` **runs another action: ${esc(k.differs)}**` : ""} | ${k.shown || "—"} |`);
+  L.push("", `Lab-only rows (not in Rust): ${labOnlyKeys.map((t) => `${t.keys} (${t.at})`).join(", ") || "none"}.`, "");
 
   L.push("## Fake UI", "", "Vue controls that look live but cannot work on the C core today: the action is never enabled by the C core in any scenario, or the query is a stub or missing.", "");
   L.push(fake.length ? fake.map((f) => `- ${f}`).join("\n") : "None.", "");
@@ -777,7 +788,13 @@ function shortcutRows(shortcuts, vue) {
     const key = parts.at(-1), ctrl = parts.includes("Ctrl");
     const h = vue.keys.filter((k) => !k.neg && norm(k.key) === norm(key === "Escape" ? "Escape" : key) && k.ctrl === ctrl);
     const shown = vue.shown.filter((x) => norm(x.text.replace("+", " ")) === norm(s.keys));
-    return { ...s, handled: h.slice(0, 2).map((x) => `${x.at} \`${esc(x.code)}\``).join("<br>"), shown: shown.map((x) => `${x.text} (${x.at})`).join("<br>") };
+    // KEY1: the key table's row of these keys (exact spelling): handled; another action than Rust's: differs.
+    const t = (vue.table ?? []).find((r) => r.keys === s.keys);
+    const want = s.action ?? (s.keys === "Ctrl Shift Z" ? "redo" : null);
+    const differs = t && want && t.action !== want ? `${t.action ?? t.effect} for ${want}` : null;
+    const handled = t ? [`${t.at} \`${t.action ?? t.effect}\` (${t.context})`] : h.slice(0, 2).map((x) => `${x.at} \`${esc(x.code)}\``);
+    if (t?.action) shown.push({ text: s.keys, at: "the key table's label (ribbon tooltip, File menu, palette)" });
+    return { ...s, handled: handled.join("<br>"), differs, shown: shown.map((x) => `${x.text} (${x.at})`).join("<br>") };
   });
 }
 

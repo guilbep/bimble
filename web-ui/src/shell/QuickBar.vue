@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed } from "vue";
 import { state, actions, historyLabels, undo, redo } from "../bimble";
 import { act as runAction } from "./send";
 import { t } from "../i18n";
 import { currentDialog } from "../dialogs";
 import { page } from "../pages";
 import labIcon from "../brand/bimble-icon-lab.svg";
+// KEY1: Ctrl K / Cmd K opens the command palette (D8) in shell/keys.ts, as every shortcut; its label from there.
+import { shortcutFor } from "./keys";
 
 /** Whether the ribbon action `name` is enabled now (`query("actions")`). */
 const on = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
@@ -21,13 +23,6 @@ const undoLabel = computed(() => {
 });
 // A full-window page (Home) has the reference's short header: logo, File, command field, user (fr/Home.html).
 const bare = computed(() => page()?.layout === "full");
-// Ctrl+K / Cmd+K opens the command palette anywhere (D8). Capture phase, and the event stops here:
-// egui binds Ctrl K to its own palette when the canvas has focus.
-function onKey(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); e.stopImmediatePropagation(); currentDialog.value = "palette"; }
-}
-onMounted(() => window.addEventListener("keydown", onKey, true));
-onUnmounted(() => window.removeEventListener("keydown", onKey, true));
 </script>
 
 <template>
@@ -63,7 +58,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
       <span v-else class="chip nx" :class="state.unsaved ? 'c-o' : 'c-m'" data-bb="state-chip">{{ t(state.unsaved ? 'quick.notSaved' : 'app.saved') }}</span>
     </div>
     <!-- Opens the command palette (src/dialogs/Palette.vue, D8). -->
-    <button class="cmdk" type="button" data-bb="command-field" aria-haspopup="dialog" @click="currentDialog = 'palette'"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg><span>{{ t('quick.search') }}</span><span class="kbd">Ctrl K</span></button>
+    <button class="cmdk" type="button" data-bb="command-field" aria-haspopup="dialog" @click="currentDialog = 'palette'"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg><span>{{ t('quick.search') }}</span><span class="kbd" data-bb="command-field-kbd">{{ shortcutFor('palette') }}</span></button>
     <!-- Settings → You: an empty disc when no name is set. -->
     <span v-if="has('user') || state.user" class="user" data-bb="quickbar-user" :title="state.user?.name" :data-missing="state.user ? undefined : 'user-name-unset'">{{ state.user?.trigram }}</span>
     <button v-if="!bare" class="btn" :class="canSave ? 'p' : 'd'" type="button" :disabled="!canSave" data-bb="quickbar-primary"

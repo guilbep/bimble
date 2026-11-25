@@ -60,6 +60,7 @@
 // plan). Plans keep their pan and zoom about the pointer.
 import {
   actions, viewActions, // Q2: the view switches (edges, orthographic, fit, top)
+  viewportKeys, // KEY1: Esc and Delete in the viewport (shell/keys.ts)
   annotate, annotateCall, boxTool, deleteAnnotation, moveAnnotation, openViews, placing, select, selectLinked, state, toolCall,
   viewAnnotations, viewClip, visibility, visibilitySets, measure, measureCall, type MeasureState,
   type AnnotateState, type ToolPointer, type ToolState, type ViewAnnotation, type ViewAnnotations, type ViewClip, type Visibility,
@@ -1514,34 +1515,40 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   canvas.addEventListener("pointerup", release);
   canvas.addEventListener("pointercancel", release);
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-  // Esc while placing: the tool cancels (stops placing, drops the points), as Rust's Esc.
-  window.addEventListener("keydown", (e) => {
-    const el = e.target as HTMLElement | null;
-    const typing = el !== null && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-    if (!typing && e.key === "Escape" && annotate.value?.active === true) { annotCancel(); return; }
-    if (!typing && e.key === "Escape" && measuringNow()) { // the first point, then the tool (ticket T1)
+  // ---- KEY1 ---- the keys' viewport part (shell/keys.ts owns the one keydown listener and the order)
+  // Esc (lib.rs:3031-3044): the annotate tool, then placing (stops, drops the points), then the
+  // measure tool (its first point, then the tool: ticket T1).
+  viewportKeys.cancelTool = () => {
+    if (annotate.value?.active === true) { annotCancel(); return true; }
+    if (placing.value?.active === true) {
+      stats.toolCalls++;
+      const { state: t, error } = toolCall("cancel");
+      stats.toolError = error;
+      showTool(t);
+      return true;
+    }
+    if (measuringNow()) {
       stats.measureCalls++;
       const { state: st, error } = measureCall("measure_cancel");
       stats.measureError = error;
       stats.measure = st;
       dirty = true;
-      return;
+      return true;
     }
-    if (!typing && (e.key === "Delete" || e.key === "Backspace") && selAnn && anns && plan) { // the selected annotation goes
-      const err = deleteAnnotation(anns.view, selAnn);
-      stats.annotError = err;
-      if (err) console.warn("gl viewport: delete_annotation:", err);
-      else selAnn = stats.selectedAnnotation = null;
-      dirty = true;
-      return;
-    }
-    if (e.key !== "Escape" || placing.value?.active !== true) return;
-    if (typing) return;
-    stats.toolCalls++;
-    const { state: t, error } = toolCall("cancel");
-    stats.toolError = error;
-    showTool(t);
-  });
+    return false;
+  };
+  viewportKeys.selectedAnnotation = () => (plan && anns ? selAnn : null);
+  viewportKeys.dropAnnotation = () => { selAnn = stats.selectedAnnotation = null; dirty = true; };
+  viewportKeys.deleteAnnotation = () => { // Delete: the selected annotation goes
+    if (!selAnn || !anns || !plan) return false;
+    const err = deleteAnnotation(anns.view, selAnn);
+    stats.annotError = err;
+    if (err) console.warn("gl viewport: delete_annotation:", err);
+    else selAnn = stats.selectedAnnotation = null;
+    dirty = true;
+    return true;
+  };
+  // ---- end KEY1 ----
   const wheel = (e: WheelEvent) => {
     if (plan) { // about the pointer: the plan point under it stays put
       const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;

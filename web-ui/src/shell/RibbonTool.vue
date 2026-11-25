@@ -8,6 +8,7 @@ import { currentPanel } from "../panels";
 import { currentDialog } from "../dialogs";
 import type { RibbonTool } from "./ribbon-tabs";
 import { HIDE_NOT_AVAILABLE, toolNotYet } from "./capability";
+import { shortcutFor } from "./keys"; // KEY1
 
 const props = defineProps<{ tool: RibbonTool; bb: string }>();
 // Real state from Rust; an action Rust does not list (or no action) is unavailable.
@@ -29,6 +30,10 @@ const missing = computed(() => vue.value ? undefined :
   props.tool.action === null ? "action" : state.value || !actions.value.length ? undefined : `action ${props.tool.action}`);
 const title = computed(() => (notYet.value ? t("na.tooltip", { name: t(props.tool.key) }) : undefined));
 
+// ---- KEY1 ---- the tooltip: the tool's name and its key (the key table's, Rust's), when it has one.
+const keyTip = computed(() => { const k = shortcutFor(props.tool.action); return k ? `${t(props.tool.key)} (${k})` : undefined; });
+// ---- end KEY1 ----
+
 function run(): void {
   if (notYet.value) { // the tooltip, shown on a click too (a touch screen has no hover)
     tip.value = true;
@@ -48,7 +53,7 @@ function run(): void {
   <component :is="tool.tag" v-if="!(notYet && HIDE_NOT_AVAILABLE)" class="tool" :class="{ on, off, ny: notYet }" :type="tool.tag === 'button' ? 'button' : undefined"
              :href="tool.tag === 'a' ? '#' : undefined" :role="tool.tag === 'a' ? 'button' : undefined" :aria-pressed="on ? 'true' : undefined"
              :aria-disabled="off || notYet ? 'true' : undefined" :data-missing="missing" :data-bb="bb" :data-not-yet="notYet ? '' : undefined"
-             :title="title" @click.prevent="run" @keydown.space.prevent="run">
+             :title="title ?? keyTip" @click.prevent="run" @keydown.space.prevent="run">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
          stroke-linejoin="round" aria-hidden="true" v-html="tool.icon" />
     <span>{{ t(tool.key) }}</span>

@@ -985,6 +985,18 @@ export const screenRoutes: Record<string, () => void> = {};
 const VIEW_SWITCHES = ["edges", "hatching", "orthographic", "fit", "top"];
 /** Q2: what the viewport does after a view switch ran (glviewport.ts fills it: fit, top). */
 export const viewActions: Record<string, () => void> = {};
+// ---- KEY1 ---- what the viewport does for a key (shell/keys.ts calls it; glviewport.ts fills it)
+export const viewportKeys: {
+  /** Esc: stops the tool running (annotate, place, measure: its first point, then the tool). True if one ran. */
+  cancelTool?: () => boolean;
+  /** The annotation selected in the plan (a click on it), or null. */
+  selectedAnnotation?: () => string | null;
+  /** Delete: the selected annotation goes (delete_annotation). True if one was selected. */
+  deleteAnnotation?: () => boolean;
+  /** Esc: the selected annotation is let go. */
+  dropAnnotation?: () => void;
+} = {};
+// ---- end KEY1 ----
 
 // ---- FS1: the file actions of the native host go to files.ts (its dialogs; set there, no import cycle) ----
 export const fileRoutes: { run?: (name: string) => boolean } = {};

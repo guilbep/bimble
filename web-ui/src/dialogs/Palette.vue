@@ -12,6 +12,7 @@ import { actions, openView, openViews, paletteMatch, recentActions, runAction, s
 import { t } from "../i18n";
 import { RIBBON, type RibbonTool } from "../shell/ribbon-tabs";
 import { viewName } from "../shell/viewName";
+import { shortcutFor } from "../shell/keys"; // KEY1: the shortcut shown is the one the key table runs
 import { currentDialog } from ".";
 
 interface Item { /** The Rust action name, for actions. */ name?: string; label: string; /** Also searched: the Rust (English) label. */ also?: string; note: string; kbd: string; icon: string; enabled: boolean; go: () => string | null }
@@ -39,7 +40,7 @@ const items = computed<Item[]>(() => {
       label: copy(`action.${a.name}`, a.label),
       also: a.label,
       note: a.tab in TAB ? t(TAB[a.tab]!) : copy(`actionTab.${a.tab}`, a.tab),
-      kbd: a.shortcut ?? "—",
+      kbd: shortcutFor(a.name) || "—",
       icon: tool?.icon ?? "",
       enabled: a.enabled,
       go: () => runAction(a.name),

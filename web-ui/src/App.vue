@@ -9,12 +9,12 @@ import ViewTabs from "./shell/ViewTabs.vue";
 import ModifierPanel from "./shell/ModifierPanel.vue";
 import StatusBar from "./shell/StatusBar.vue";
 import "./shell/shell.css";
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useFocusTrap } from "./shell/focusTrap";
 import { pages, currentPage, page } from "./pages";
 // The shell's state (ticket UX1): Home, the model's view or a page, moved only by `send`
 // (shell/send.ts routes the actions home, project, history, new, open, import_ifc and close).
-import { here, send, can } from "./shell/send";
+import { here } from "./shell/send";
 import ShellNotice from "./shell/ShellNotice.vue";
 // ---- FAKE1: a screen the core does not serve shows NotAvailable instead (shell/capability.ts) ----
 import NotAvailable from "./shell/NotAvailable.vue";
@@ -36,20 +36,15 @@ import { dialogs, currentDialog, dialog } from "./dialogs";
 import { panels, currentPanel, panel } from "./panels";
 import { applyDeepLink } from "./deeplink";
 // Under 1 024 px wide: the small-screen frame (ADR 0064) instead of the desktop bands.
-import { small, wide, sheet } from "./small/screen";
+import { small, wide } from "./small/screen";
 import SmallTop from "./small/SmallTop.vue";
 import SmallBar from "./small/SmallBar.vue";
 import SmallSheet from "./small/SmallSheet.vue";
 import SmallFloat from "./small/SmallFloat.vue";
 
-// Esc closes the dialog first, then the question or the error, then the page.
-function onKey(e: KeyboardEvent) {
-  if (e.key !== "Escape") return;
-  if (currentDialog.value) currentDialog.value = null;
-  else if (small.value && sheet.value) sheet.value = null;
-  else if (can({ do: "cancel" })) send({ do: "cancel" });
-  else if (can({ do: "back" })) send({ do: "back" });
-}
+// ---- KEY1 ---- every shortcut, Esc's layers too (dialog, sheet, question, tool, selection, page): shell/keys.ts
+import { installKeys } from "./shell/keys";
+// ---- end KEY1 ----
 // One focus trap for every dialog and menu (#79 AD).
 const backdrop = ref<HTMLElement | null>(null);
 const trapKey = useFocusTrap(backdrop, currentDialog);
@@ -59,8 +54,7 @@ watch(() => state.value.rev, () => {
   if (!currentDialog.value && collab().belongs?.length) currentDialog.value = "borrowed";
 });
 const full = computed(() => page()?.layout === "full");
-onMounted(() => { window.addEventListener("keydown", onKey); void applyDeepLink(); });
-onUnmounted(() => window.removeEventListener("keydown", onKey));
+onMounted(() => { installKeys(); void applyDeepLink(); });
 </script>
 
 <template>
