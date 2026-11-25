@@ -58,21 +58,31 @@ int cc_session_unsaved(const cc_session *s);
 const cc_model *cc_host_model(void);
 uint32_t cc_host_rev(void);
 
-/* The session file (ticket T12): the state a restart of the host must keep, so the lab page
- * keeps its model edits, undo steps and selection across an edit -> rebuild -> restart loop.
- * One JSON object (format 1): the model path it belongs to, the size and mtime of that file when
- * written, the model text, history steps (id, label, inverse commands; oldest first), the step
- * counters, rev and the selection. Written through `<path>.tmp` + rename (no fsync: it survives
- * the host process, not a power loss).
+/* The session file (tickets T12, T18): the state a restart of the host must keep, so the lab
+ * page keeps its model edits, undo steps and selection across an edit -> rebuild -> restart loop.
+ * Lines of JSON (format 2). Line 1, the snapshot: the model path it belongs to, the size and
+ * mtime of that file when written, the model text (null while the model is the file's content),
+ * history steps (id, label, inverse commands; oldest first), the step counters, rev and the
+ * selection. Then one entry line per change, appended (no fsync: it survives the host process,
+ * not a power loss): `apply` (the commands as given, the inverses kept, label, step id), `undo`,
+ * `redo` (the step id), `state` (selection or rev only); each with the counters, rev and
+ * selection after it. A new snapshot (through `<path>.tmp` + rename) at the start, after a Save,
+ * when a call made more than one history change, and when the entries pass 2,000 or 4x the
+ * snapshot's bytes (with the model file's when the text is null).
  *
- * cc_session_persist_start: when `session_path` exists, belongs to `model_path` and the model
- * file has the same size and mtime as when it was written, replaces the open session by it.
- * The file is untrusted input: on any error it is ignored, the reason logged on stderr, and the
- * session stays as cc_session_open made it. Then turns persistence on. Returns 1 when restored.
+ * cc_session_open_persisted: opens the model with its session file. When `session_path` exists,
+ * belongs to `model_path` and the model file has the same size and mtime as in the snapshot, the
+ * session is the snapshot (its model text loaded instead of the model file) with the entries
+ * replayed through the history code (each validated: commands applied, the inverses compared, ids
+ * and selection checked). A bad snapshot: the session file is ignored, the reason logged, and the
+ * model opened as cc_session_open does. A bad or truncated entry: the replay stops there, logged,
+ * the lines before are kept. Then persistence is on. 0 ok; -1 with `err` (the model file).
  *
- * Writes: cc_session_get (every call and the change feed go through it, so after each call)
- * writes the file when the persisted fields changed since the last write and the history is
- * consistent (step ids beside steps); cc_session_persist_now writes now if changed (at exit). */
-int cc_session_persist_start(const char *session_path, const char *model_path);
+ * cc_session_persist_now: after each call (server.c, before the answer) and at exit: appends the
+ * entry for what the call changed, if anything. cc_session_note_apply: calls.c hands the commands
+ * of the step it just pushed. */
+#include "command.h"
+int cc_session_open_persisted(const char *model_path, const char *session_path, cc_error *err);
 void cc_session_persist_now(void);
+void cc_session_note_apply(const cc_command *cmds, size_t n);
 #endif

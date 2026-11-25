@@ -80,17 +80,14 @@ int main(int argc, char **argv) {
     const char *model = argc > 2 ? argv[2] : getenv("CCORE_MODEL");
     if (model && *model) {
         cc_error err;
-        if (cc_session_open(model, &err)) {
+        static char def[4200];
+        if (want_session && !session) {
+            snprintf(def, sizeof def, "%s.ccore-session", model);
+            session = def;
+        }
+        if (want_session ? cc_session_open_persisted(model, session, &err) : cc_session_open(model, &err)) {
             fprintf(stderr, "bimble-ccore: %s: %s\n", model, err.msg);
             return 1;
-        }
-        if (want_session) {
-            static char def[4200];
-            if (!session) {
-                snprintf(def, sizeof def, "%s.ccore-session", model);
-                session = def;
-            }
-            cc_session_persist_start(session, model);
         }
     } else if (want_session) {
         fprintf(stderr, "bimble-ccore: --session needs a model\n");

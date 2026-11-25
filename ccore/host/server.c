@@ -20,6 +20,7 @@
 #include "calls.h"
 #include "host.h"
 #include "mesh.h"
+#include "session.h"
 
 #define MAX_BODY (1u << 20)        /* serve.rs:14 */
 #define MAX_HEADER (16u << 10)     /* serve.rs:15 */
@@ -431,6 +432,7 @@ static void route_post(Conn *c, Str path, const char *body, size_t n, int keep) 
         status = CC_ERR;
     } else {
         status = cc_call(opz, namez, bz, n, &out);
+        cc_session_persist_now(); /* the session file has the change before the call answers */
     }
     if (out.oom) status = 500, buf_clear(&out), out.oom = 0;
     /* The twin publishes the change after serving each call (twin.rs `run_headless`); the

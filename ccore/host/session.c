@@ -21,13 +21,7 @@
 
 static cc_session S;
 
-static void persist_if_changed(void);
-static int persist_on, persist_busy;
-
-cc_session *cc_session_get(void) {
-    if (persist_on && !persist_busy) persist_if_changed();
-    return &S;
-}
+cc_session *cc_session_get(void) { return &S; }
 
 const cc_model *cc_host_model(void) { return S.open ? &S.model : NULL; }
 uint32_t cc_host_rev(void) { return (uint32_t)S.rev; }
@@ -152,17 +146,29 @@ static int editable_copy_path(const char *ifc, char *out, size_t cap) {
     return -1;
 }
 
-int cc_session_open(const char *path, cc_error *err) {
+/* Opens `path` (cc_session_open); with `model_text`, the model is that .bimble text instead of
+ * the file's content (a session snapshot: the file is not read), the rest as for the file. */
+static int open_impl(const char *path, const char *model_text, size_t model_n, cc_error *err) {
     err->offset = CC_NO_OFFSET;
     err->msg[0] = 0;
     double t0 = now_ms();
     size_t n = 0;
-    char *text = read_all(path, &n, err);
-    if (!text) return -1;
+    char *text = NULL;
+    if (!model_text) {
+        text = read_all(path, &n, err);
+        if (!text) return -1;
+    }
     int ifc = ends_with_ci(path, ".ifc");
     cc_model_init(&S.model);
     int rc;
-    if (ifc) {
+    if (model_text) {
+        cc_model_free(&S.model);
+        rc = cc_model_load(&S.model, model_text, model_n, err);
+        if (rc == 0 && (ifc ? editable_copy_path(path, S.path, sizeof S.path) != 0 : strlen(path) >= sizeof S.path)) {
+            snprintf(err->msg, sizeof err->msg, "%s: path too long", path);
+            rc = -1;
+        } else if (rc == 0 && !ifc) strcpy(S.path, path);
+    } else if (ifc) {
         cc_ifc_report rep;
         cc_model_free(&S.model);
         rc = cc_ifc_import(&S.model, &rep, text, n, err);
@@ -224,31 +230,52 @@ int cc_session_open(const char *path, cc_error *err) {
     return 0;
 }
 
-/* ---- the session file (session.h, ticket T12) ---- */
+int cc_session_open(const char *path, cc_error *err) { return open_impl(path, NULL, 0, err); }
+
+/* ---- the session file (session.h, tickets T12, T18) ---- */
 
 #ifdef __wasm__
 /* No files in the module: persistence is never on. */
-static void persist_if_changed(void) {}
-int cc_session_persist_start(const char *session_path, const char *model_path) {
-    (void)session_path, (void)model_path;
-    return 0;
+int cc_session_open_persisted(const char *model_path, const char *session_path, cc_error *err) {
+    (void)session_path;
+    return cc_session_open(model_path, err);
 }
 void cc_session_persist_now(void) {}
+void cc_session_note_apply(const cc_command *cmds, size_t n) { (void)cmds, (void)n; }
 #else
+#include <fcntl.h>
 
-#define SESSION_FORMAT 1
+#define SESSION_FORMAT 2
 #define SESSION_MAX_LABEL 4096
+#define SESSION_MAX_ENTRIES 2000   /* entries after the snapshot before a new snapshot */
+#define SESSION_LOG_FACTOR 4       /* or entry bytes above 4x the snapshot (model text or file) */
+#define SESSION_MAX_LINES 1000000  /* replay bound (untrusted file) */
 
 static char sess_path[4096], sess_model[4096];
-static uint64_t sess_fp;
-static int sess_has_fp;
-static cc_cmds sess_cmds; /* the restored steps' commands: they live as long as the model */
+static int persist_on, sess_fd = -1;
+static void close_session(void);
+static cc_cmds sess_cmds; /* the snapshot's steps' commands: they live as long as the model */
 
-static uint64_t fnv(uint64_t h, const void *p, size_t n) {
-    const unsigned char *b = p;
-    for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 1099511628211ull;
-    return h;
-}
+/* What the file says now (the state after its last line), to tell what a call changed. */
+static struct {
+    uint64_t size, mtime; /* the model file's stamp in the snapshot */
+    uint64_t rev, next_step, saved_step;
+    uint64_t *undo, *redo;
+    size_t nundo, nredo, capundo, capredo;
+    int has_primary;
+    cc_gid primary;
+    cc_gid *also;
+    size_t nalso, capalso;
+} W;
+static int model_is_file; /* the open model is the model file's content (no change since it was read) */
+static size_t snap_bytes, log_bytes, log_entries; /* the file: snapshot line, then entry lines */
+static uint64_t model_file_bytes;
+static int snap_null; /* the snapshot line has no model text (it stands for the model file) */
+
+/* The forward commands of the step the current call pushed (cc_session_note_apply). */
+static Buf pend_cmds;
+static uint64_t pend_id;
+static int pend_ok;
 
 /* The model file's size and mtime (ns): Save rewrites it, an outside edit too. */
 static int file_stamp(const char *path, uint64_t *size, uint64_t *mtime_ns) {
@@ -259,21 +286,58 @@ static int file_stamp(const char *path, uint64_t *size, uint64_t *mtime_ns) {
     return 0;
 }
 
-/* Everything the file holds that can change, hashed (the model text changes only with rev). */
-static uint64_t fingerprint(void) {
-    uint64_t h = 1469598103934665603ull, size = 0, mt = 0;
-    file_stamp(sess_model, &size, &mt);
-    h = fnv(h, &size, sizeof size), h = fnv(h, &mt, sizeof mt);
-    h = fnv(h, &S.open, sizeof S.open), h = fnv(h, &S.rev, sizeof S.rev);
-    h = fnv(h, &S.next_step, sizeof S.next_step), h = fnv(h, &S.saved_step, sizeof S.saved_step);
-    h = fnv(h, &S.nundo_ids, sizeof S.nundo_ids), h = fnv(h, &S.nredo_ids, sizeof S.nredo_ids);
-    if (S.nundo_ids) h = fnv(h, S.undo_ids, S.nundo_ids * sizeof *S.undo_ids);
-    if (S.nredo_ids) h = fnv(h, S.redo_ids, S.nredo_ids * sizeof *S.redo_ids);
-    h = fnv(h, &S.has_primary, sizeof S.has_primary);
-    if (S.has_primary) h = fnv(h, S.primary.c, 22);
-    h = fnv(h, &S.nalso, sizeof S.nalso);
-    if (S.nalso) h = fnv(h, S.also, S.nalso * sizeof *S.also);
-    return h;
+static int copy_u64s(uint64_t **dst, size_t *n, size_t *cap, const uint64_t *src, size_t k) {
+    if (k > *cap) {
+        uint64_t *p = realloc(*dst, k * sizeof *p);
+        if (!p) return -1;
+        *dst = p, *cap = k;
+    }
+    if (k) memcpy(*dst, src, k * sizeof *src);
+    *n = k;
+    return 0;
+}
+
+/* W := the session now. -1 out of memory (W then forces a snapshot next time: nundo = SIZE_MAX). */
+static int remember(void) {
+    W.rev = S.rev, W.next_step = S.next_step, W.saved_step = S.saved_step;
+    W.has_primary = S.has_primary;
+    if (S.has_primary) W.primary = S.primary;
+    int bad = copy_u64s(&W.undo, &W.nundo, &W.capundo, S.undo_ids, S.nundo_ids);
+    bad |= copy_u64s(&W.redo, &W.nredo, &W.capredo, S.redo_ids, S.nredo_ids);
+    if (!bad && S.nalso > W.capalso) {
+        cc_gid *p = realloc(W.also, S.nalso * sizeof *p);
+        if (!p) bad = 1;
+        else W.also = p, W.capalso = S.nalso;
+    }
+    if (!bad) {
+        if (S.nalso) memcpy(W.also, S.also, S.nalso * sizeof *S.also);
+        W.nalso = S.nalso;
+    }
+    if (bad) W.nundo = SIZE_MAX;
+    return bad ? -1 : 0;
+}
+
+static int same_ids(const uint64_t *a, size_t na, const uint64_t *b, size_t nb) {
+    return na == nb && (!na || !memcmp(a, b, na * sizeof *a));
+}
+
+static void write_sel(JsonW *w) {
+    jw_key(w, "also"), jw_arr_begin(w);
+    for (size_t i = 0; i < S.nalso; i++) jw_str_n(w, S.also[i].c, 22);
+    jw_arr_end(w);
+}
+static void write_counters(JsonW *w, int with_primary) {
+    jw_key(w, "next_step"), jw_u64(w, S.next_step);
+    if (with_primary) {
+        jw_key(w, "primary");
+        if (S.has_primary) jw_str_n(w, S.primary.c, 22);
+        else jw_null(w);
+    }
+}
+static void write_saved(JsonW *w) {
+    jw_key(w, "saved_step");
+    if (S.saved_step == UINT64_MAX) jw_null(w);
+    else jw_u64(w, S.saved_step);
 }
 
 static void write_steps(JsonW *w, const cc_step *st, const uint64_t *ids, size_t n) {
@@ -293,8 +357,20 @@ static void write_steps(JsonW *w, const cc_step *st, const uint64_t *ids, size_t
     jw_arr_end(w);
 }
 
-/* 0 written; -1 with the reason logged. */
-static int write_session(void) {
+static int write_all(int fd, const char *p, size_t n) {
+    while (n) {
+        ssize_t k = write(fd, p, n);
+        if (k < 0 && errno == EINTR) continue;
+        if (k <= 0) return -1;
+        p += k, n -= (size_t)k;
+    }
+    return 0;
+}
+
+/* A new file: the snapshot line (format 2), through `<path>.tmp` + rename; the entries start
+ * after it. The model text is left out (null) while the model is the model file's content.
+ * 0 written; -1 with the reason logged. */
+static int write_snapshot(void) {
     uint64_t size = 0, mt = 0;
     if (file_stamp(sess_model, &size, &mt)) {
         fprintf(stderr, "bimble-ccore: session not written: %s: cannot stat\n", sess_model);
@@ -302,64 +378,153 @@ static int write_session(void) {
     }
     Buf model, b;
     buf_init(&model), buf_init(&b);
-    int rc = -1;
-    if (cc_model_save(&S.model, &model) != 0 || model.oom) goto end;
+    int rc = -1, fd = -1;
+    if (!model_is_file && (cc_model_save(&S.model, &model) != 0 || model.oom)) goto end;
     JsonW w;
     jw_init(&w, &b, 0);
     jw_obj_begin(&w);
-    jw_key(&w, "also"), jw_arr_begin(&w);
-    for (size_t i = 0; i < S.nalso; i++) jw_str_n(&w, S.also[i].c, 22);
-    jw_arr_end(&w);
+    write_sel(&w);
     char mts[24];
     snprintf(mts, sizeof mts, "%llu", (unsigned long long)mt);
     jw_key(&w, "file_mtime_ns"), jw_str(&w, mts); /* a string: above 2^53 */
     jw_key(&w, "file_size"), jw_u64(&w, size);
     jw_key(&w, "format"), jw_u64(&w, SESSION_FORMAT);
-    jw_key(&w, "model"), jw_str_n(&w, model.p, model.len);
+    jw_key(&w, "model");
+    if (model_is_file) jw_null(&w);
+    else jw_str_n(&w, model.p, model.len);
     jw_key(&w, "model_path"), jw_str(&w, sess_model);
-    jw_key(&w, "next_step"), jw_u64(&w, S.next_step);
-    jw_key(&w, "primary");
-    if (S.has_primary) jw_str_n(&w, S.primary.c, 22);
-    else jw_null(&w);
+    write_counters(&w, 1);
     jw_key(&w, "redo"), write_steps(&w, S.hist.redo, S.redo_ids, S.nredo_ids);
     jw_key(&w, "rev"), jw_u64(&w, S.rev);
-    jw_key(&w, "saved_step");
-    if (S.saved_step == UINT64_MAX) jw_null(&w);
-    else jw_u64(&w, S.saved_step);
+    write_saved(&w);
     jw_key(&w, "undo"), write_steps(&w, S.hist.undo, S.undo_ids, S.nundo_ids);
     jw_obj_end(&w);
     if (jw_finish(&w) != JW_OK || b.oom) goto end;
+    buf_putc(&b, '\n');
+    if (b.oom) goto end;
     char tmp[sizeof sess_path + 8];
     snprintf(tmp, sizeof tmp, "%s.tmp", sess_path);
-    FILE *f = fopen(tmp, "wb");
-    if (!f) goto end;
-    int bad = fwrite(b.p, 1, b.len, f) != b.len;
-    bad |= fclose(f) != 0;
+    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) goto end;
+    int bad = write_all(fd, b.p, b.len);
+    bad |= close(fd) != 0;
+    fd = -1;
     if (bad || rename(tmp, sess_path) != 0) {
         unlink(tmp);
         goto end;
     }
-    rc = 0;
+    if (sess_fd >= 0) close(sess_fd);
+    sess_fd = open(sess_path, O_WRONLY | O_APPEND);
+    if (sess_fd < 0) goto end;
+    snap_bytes = b.len, log_bytes = 0, log_entries = 0, snap_null = model_is_file;
+    W.size = size, W.mtime = mt, model_file_bytes = size;
+    rc = remember();
 end:
     if (rc) fprintf(stderr, "bimble-ccore: session not written to %s\n", sess_path);
     buf_free(&model), buf_free(&b);
     return rc;
 }
 
-static void persist_if_changed(void) {
-    if (!S.open) return;
-    /* Mid-call (a step pushed, its id not yet): wait for the next look. */
-    if (S.nundo_ids != S.hist.nundo || S.nredo_ids != S.hist.nredo) return;
-    uint64_t fp = fingerprint();
-    if (sess_has_fp && fp == sess_fp) return;
-    persist_busy = 1;
-    if (write_session() == 0) sess_fp = fp, sess_has_fp = 1;
-    persist_busy = 0;
+/* One entry line after the snapshot: `op` apply / undo / redo / state, then the state fields.
+ * apply: the forward commands (as given to the call), the inverses the history keeps, label, id;
+ * undo / redo: the id of the step moved. Written with one write(2) before the call answers. */
+static int append_entry(const char *op) {
+    Buf b, inv;
+    buf_init(&b), buf_init(&inv);
+    JsonW w;
+    jw_init(&w, &b, 0);
+    jw_obj_begin(&w);
+    write_sel(&w);
+    const cc_step *top = S.hist.nundo ? &S.hist.undo[S.hist.nundo - 1] : NULL;
+    if (!strcmp(op, "apply")) {
+        cc_commands_json(top->cmds, top->n, &inv);
+        jw_key(&w, "cmds"), jw_str_n(&w, pend_cmds.p ? pend_cmds.p : "[]", pend_cmds.p ? pend_cmds.len : 2);
+        jw_key(&w, "id"), jw_u64(&w, S.undo_ids[S.nundo_ids - 1]);
+        jw_key(&w, "inv"), jw_str_n(&w, inv.p ? inv.p : "[]", inv.p ? inv.len : 2);
+        jw_key(&w, "label"), jw_str(&w, top->label ? top->label : "");
+    } else if (!strcmp(op, "undo")) {
+        jw_key(&w, "id"), jw_u64(&w, S.redo_ids[S.nredo_ids - 1]);
+    } else if (!strcmp(op, "redo")) {
+        jw_key(&w, "id"), jw_u64(&w, S.undo_ids[S.nundo_ids - 1]);
+    }
+    write_counters(&w, 0);
+    jw_key(&w, "op"), jw_str(&w, op);
+    jw_key(&w, "primary");
+    if (S.has_primary) jw_str_n(&w, S.primary.c, 22);
+    else jw_null(&w);
+    jw_key(&w, "rev"), jw_u64(&w, S.rev);
+    write_saved(&w);
+    jw_obj_end(&w);
+    int rc = -1;
+    if (jw_finish(&w) == JW_OK && !b.oom && !inv.oom) {
+        buf_putc(&b, '\n');
+        if (!b.oom && sess_fd >= 0 && write_all(sess_fd, b.p, b.len) == 0) {
+            log_bytes += b.len, log_entries++;
+            rc = remember();
+        }
+    }
+    buf_free(&b), buf_free(&inv);
+    return rc;
+}
+
+void cc_session_note_apply(const cc_command *cmds, size_t n) {
+    if (!persist_on) return;
+    buf_clear(&pend_cmds);
+    pend_cmds.oom = 0;
+    cc_commands_json(cmds, n, &pend_cmds);
+    pend_ok = !pend_cmds.oom;
+    pend_id = S.nundo_ids ? S.undo_ids[S.nundo_ids - 1] : 0;
 }
 
 void cc_session_persist_now(void) {
-    if (persist_on && !persist_busy) persist_if_changed();
+    if (!persist_on || !S.open) return;
+    /* Mid-call (a step pushed, its id not yet): wait for the next look. */
+    if (S.nundo_ids != S.hist.nundo || S.nredo_ids != S.hist.nredo) return;
+    uint64_t size = 0, mt = 0;
+    file_stamp(sess_model, &size, &mt);
+    int stack_same = same_ids(S.undo_ids, S.nundo_ids, W.undo, W.nundo) && same_ids(S.redo_ids, S.nredo_ids, W.redo, W.nredo);
+    const char *op = NULL;
+    if (size != W.size || mt != W.mtime || sess_fd < 0) {
+        /* Saved (or changed by another program): a new snapshot. After a Save to the model file
+         * itself, the model is that file again: no model text. */
+        (void)stack_same;
+        model_is_file = S.saved_step != W.saved_step && !strcmp(S.path, sess_model) && cc_session_step(&S) == S.saved_step;
+        write_snapshot();
+        pend_ok = 0;
+        return;
+    }
+    if (stack_same) {
+        if (S.rev == W.rev && S.next_step == W.next_step && S.saved_step == W.saved_step &&
+            S.has_primary == W.has_primary && (!S.has_primary || !cc_gid_cmp(&S.primary, &W.primary)) &&
+            S.nalso == W.nalso && (!S.nalso || !memcmp(S.also, W.also, S.nalso * sizeof *S.also)))
+            return; /* nothing changed */
+        op = "state";
+    } else if (W.nundo != SIZE_MAX && S.nundo_ids == W.nundo + 1 && same_ids(S.undo_ids, W.nundo, W.undo, W.nundo) &&
+               S.nredo_ids == 0 && pend_ok && pend_id == S.undo_ids[W.nundo])
+        op = "apply";
+    else if (W.nundo != SIZE_MAX && W.nundo && S.nundo_ids == W.nundo - 1 && same_ids(S.undo_ids, S.nundo_ids, W.undo, S.nundo_ids) &&
+             S.nredo_ids == W.nredo + 1 && same_ids(S.redo_ids, W.nredo, W.redo, W.nredo) &&
+             S.redo_ids[W.nredo] == W.undo[W.nundo - 1])
+        op = "undo";
+    else if (W.nundo != SIZE_MAX && W.nredo && S.nredo_ids == W.nredo - 1 && same_ids(S.redo_ids, S.nredo_ids, W.redo, S.nredo_ids) &&
+             S.nundo_ids == W.nundo + 1 && same_ids(S.undo_ids, W.nundo, W.undo, W.nundo) &&
+             S.undo_ids[W.nundo] == W.redo[W.nredo - 1])
+        op = "redo";
+    pend_ok = 0;
+    if (op && strcmp(op, "state")) model_is_file = 0;
+    size_t base = snap_bytes + (snap_null ? (size_t)model_file_bytes : 0);
+    if (!op || log_entries >= SESSION_MAX_ENTRIES || log_bytes > SESSION_LOG_FACTOR * base) {
+        if (!op) model_is_file = 0; /* more than one change in a call: no telling */
+        write_snapshot();
+        return;
+    }
+    if (append_entry(op)) {
+        fprintf(stderr, "bimble-ccore: session entry not written to %s; writing a snapshot\n", sess_path);
+        write_snapshot();
+    }
 }
+
+/* ---- restore ---- */
 
 /* An integer in [lo, hi] (JSON number without fraction or exponent). */
 static int get_u64(const JrVal *o, const char *key, uint64_t lo, uint64_t hi, uint64_t *out) {
@@ -378,6 +543,38 @@ static int get_gid(const JrVal *v, const cc_model *m, cc_gid *out) {
 }
 
 static int gid_sort(const void *a, const void *b) { return cc_gid_cmp(a, b); }
+
+/* The selection of a snapshot or entry, checked against the open model: S's on success. */
+static int read_selection(const JrVal *root, const char **why) {
+    cc_gid primary, *also = NULL;
+    int has_primary = 0;
+    size_t nalso = 0;
+    const JrVal *pv = jr_get(root, "primary");
+    if (!pv) return *why = "no primary", -1;
+    if (pv->type != JR_NULL) {
+        if (get_gid(pv, &S.model, &primary)) return *why = "primary: not an element", -1;
+        has_primary = 1;
+    }
+    const JrVal *av = jr_get(root, "also");
+    if (!av || av->type != JR_ARR || (av->n && !has_primary)) return *why = "bad also", -1;
+    if (av->n) {
+        also = malloc(av->n * sizeof *also);
+        if (!also) return *why = "out of memory", -1;
+        for (size_t i = 0; i < av->n; i++)
+            if (get_gid(&av->items[i], &S.model, &also[i])) {
+                free(also);
+                return *why = "also: not an element", -1;
+            }
+        qsort(also, av->n, sizeof *also, gid_sort);
+        for (size_t i = 0; i < av->n; i++)
+            if (!nalso || cc_gid_cmp(&also[nalso - 1], &also[i])) also[nalso++] = also[i];
+    }
+    S.has_primary = has_primary;
+    if (has_primary) S.primary = primary;
+    free(S.also);
+    S.also = also, S.nalso = nalso, S.capalso = nalso;
+    return 0;
+}
 
 /* Steps of one stack into `st`/`ids` (malloc'd, `n` of them); commands into sess_cmds. */
 static int read_steps(const JrVal *arr, uint64_t next_step, cc_step **st, uint64_t **ids, size_t *n,
@@ -423,10 +620,132 @@ static void free_steps(cc_step *st, size_t n) {
     free(st);
 }
 
-/* 1 restored, 0 not (no file, or ignored with the reason logged). */
-static int restore(void) {
+static int push_u64(uint64_t **v, size_t *n, size_t *cap, uint64_t x) {
+    if (*n == *cap) {
+        size_t c = *cap ? 2 * *cap : 16;
+        uint64_t *p = realloc(*v, c * sizeof *p);
+        if (!p) return -1;
+        *v = p, *cap = c;
+    }
+    (*v)[(*n)++] = x;
+    return 0;
+}
+
+/* Replays one entry line on the open session through the same history code as the calls.
+ * 0 ok; -1 with `why` (the session keeps the lines before; a failed apply changed nothing). */
+static int replay_entry(const char *line, size_t n, const char **why) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    int rc = -1;
+    cc_cmds cmds;
+    cc_cmds_init(&cmds);
+    Buf err, inv;
+    buf_init(&err), buf_init(&inv);
+    const JrVal *o = jr_parse(&a, line, n, &je);
+    const JrVal *opv = o && o->type == JR_OBJ ? jr_get(o, "op") : NULL;
+    uint64_t id = 0, rev, next_step, saved_step = UINT64_MAX;
+    if (!opv || opv->type != JR_STR) { *why = "not an entry"; goto end; }
+    if (get_u64(o, "rev", 1, 1ull << 52, &rev) || get_u64(o, "next_step", 1, 1ull << 52, &next_step)) {
+        *why = "bad rev or next_step";
+        goto end;
+    }
+    const JrVal *sv = jr_get(o, "saved_step");
+    if (!sv || (sv->type != JR_NULL && get_u64(o, "saved_step", 0, next_step - 1, &saved_step))) {
+        *why = "bad saved_step";
+        goto end;
+    }
+    const char *op = opv->s;
+    if (!strcmp(op, "apply")) {
+        const JrVal *c = jr_get(o, "cmds"), *iv = jr_get(o, "inv"), *label = jr_get(o, "label");
+        if (get_u64(o, "id", 1, 1ull << 52, &id) || id != S.next_step || next_step != id + 1) { *why = "apply: bad id"; goto end; }
+        if (!c || c->type != JR_STR || !iv || iv->type != JR_STR) { *why = "apply: bad cmds"; goto end; }
+        if (!label || label->type != JR_STR || label->n > SESSION_MAX_LABEL || memchr(label->s, 0, label->n)) {
+            *why = "apply: bad label";
+            goto end;
+        }
+        if (cc_commands_parse(c->s, c->n, &cmds, &err)) { *why = "apply: commands do not parse"; goto end; }
+        if (push_u64(&S.undo_ids, &S.nundo_ids, &S.cap_undo_ids, id)) { *why = "out of memory"; goto end; }
+        if (cc_history_apply(&S.hist, &S.model, cmds.v, cmds.n, &err)) {
+            S.nundo_ids--;
+            *why = "apply: the commands fail on the model";
+            goto end;
+        }
+        S.nredo_ids = 0;
+        S.next_step = id + 1;
+        cc_step *top = &S.hist.undo[S.hist.nundo - 1];
+        cc_commands_json(top->cmds, top->n, &inv);
+        char *l = malloc(label->n + 1);
+        if (inv.oom || inv.len != iv->n || memcmp(inv.p, iv->s, iv->n) || !l) {
+            /* Not the step that was logged: take it back (the redo stack was cleared by it). */
+            free(l);
+            cc_history_undo(&S.hist, &S.model);
+            if (S.hist.nredo) {
+                cc_step *r = &S.hist.redo[--S.hist.nredo];
+                free(r->label), free(r->cmds);
+            }
+            S.nundo_ids--, S.next_step = id;
+            *why = "apply: the inverse differs from the logged one";
+            goto end;
+        }
+        memcpy(l, label->s, label->n), l[label->n] = 0;
+        free(top->label), top->label = l;
+    } else if (!strcmp(op, "undo") || !strcmp(op, "redo")) {
+        int undo = op[0] == 'u';
+        uint64_t *from = undo ? S.undo_ids : S.redo_ids;
+        size_t nfrom = undo ? S.nundo_ids : S.nredo_ids;
+        if (get_u64(o, "id", 1, 1ull << 52, &id) || !nfrom || from[nfrom - 1] != id || next_step != S.next_step) {
+            *why = "undo/redo: bad id";
+            goto end;
+        }
+        if (undo ? push_u64(&S.redo_ids, &S.nredo_ids, &S.cap_redo_ids, id) : push_u64(&S.undo_ids, &S.nundo_ids, &S.cap_undo_ids, id)) {
+            *why = "out of memory";
+            goto end;
+        }
+        if (!(undo ? cc_history_undo(&S.hist, &S.model) : cc_history_redo(&S.hist, &S.model))) {
+            if (undo) S.nredo_ids--;
+            else S.nundo_ids--;
+            *why = "undo/redo: nothing to take";
+            goto end;
+        }
+        if (undo) S.nundo_ids--;
+        else S.nredo_ids--;
+    } else if (!strcmp(op, "state")) {
+        if (next_step != S.next_step) { *why = "state: bad next_step"; goto end; }
+    } else {
+        *why = "unknown op";
+        goto end;
+    }
+    if (strcmp(op, "state")) model_is_file = 0;
+    S.rev = rev, S.saved_step = saved_step;
+    if (read_selection(o, why)) {
+        S.has_primary = 0, S.nalso = 0; /* the op is kept; the selection is not */
+        goto end;
+    }
+    rc = 0;
+end:
+    cc_cmds_free(&cmds);
+    buf_free(&err), buf_free(&inv);
+    arena_free(&a);
+    return rc;
+}
+
+static void close_session(void) {
+    if (!S.open) return;
+    cc_history_free(&S.hist);
+    cc_model_free(&S.model);
+    S.nundo_ids = S.nredo_ids = 0;
+    S.has_primary = 0, S.nalso = 0;
+    S.open = 0;
+}
+
+/* Opens the session from the session file. 1 restored (S open; *keep: bytes of the file that are
+ * valid, *rewrite: the file needs a new snapshot), 0 not (no file, or ignored with the reason
+ * logged: S closed). */
+static int restore(size_t *keep, int *rewrite) {
     cc_error err;
     size_t n = 0;
+    *keep = 0, *rewrite = 0;
     if (access(sess_path, F_OK) != 0) return 0;
     char *text = read_all(sess_path, &n, &err);
     if (!text) {
@@ -436,18 +755,15 @@ static int restore(void) {
     const char *why = NULL;
     Arena a;
     arena_init(&a, 0);
-    cc_model tmp;
-    int tmp_live = 0;
     cc_step *undo = NULL, *redo = NULL;
     uint64_t *uids = NULL, *rids = NULL;
     size_t nu = 0, nr = 0;
-    cc_gid primary, *also = NULL;
-    int has_primary = 0;
-    size_t nalso = 0;
     uint64_t fmt, size, mt, fsize, rev, next_step, saved_step = UINT64_MAX;
     cc_cmds_init(&sess_cmds);
+    const char *nl = memchr(text, '\n', n);
+    size_t first = nl ? (size_t)(nl - text) : n;
     JrError je;
-    const JrVal *root = jr_parse(&a, text, n, &je);
+    const JrVal *root = nl ? jr_parse(&a, text, first, &je) : NULL;
     if (!root) { why = "not JSON"; goto fail; }
     if (root->type != JR_OBJ) { why = "not an object"; goto fail; }
     if (get_u64(root, "format", 0, UINT64_MAX, &fmt) || fmt != SESSION_FORMAT) { why = "unknown format"; goto fail; }
@@ -476,81 +792,90 @@ static int restore(void) {
     if (!sv) { why = "no saved_step"; goto fail; }
     if (sv->type != JR_NULL && get_u64(root, "saved_step", 0, next_step - 1, &saved_step)) { why = "bad saved_step"; goto fail; }
     const JrVal *mt_text = jr_get(root, "model");
-    if (!mt_text || mt_text->type != JR_STR) { why = "no model text"; goto fail; }
-    tmp_live = 1;
-    if (cc_model_load(&tmp, mt_text->s, mt_text->n, &err)) { why = "the model text does not load"; goto fail; }
-    const JrVal *pv = jr_get(root, "primary");
-    if (!pv) { why = "no primary"; goto fail; }
-    if (pv->type != JR_NULL) {
-        if (get_gid(pv, &tmp, &primary)) { why = "primary: not an element"; goto fail; }
-        has_primary = 1;
-    }
-    const JrVal *av = jr_get(root, "also");
-    if (!av || av->type != JR_ARR || (av->n && !has_primary)) { why = "bad also"; goto fail; }
-    if (av->n) {
-        also = malloc(av->n * sizeof *also);
-        if (!also) { why = "out of memory"; goto fail; }
-        for (size_t i = 0; i < av->n; i++)
-            if (get_gid(&av->items[i], &tmp, &also[i])) { why = "also: not an element"; goto fail; }
-        qsort(also, av->n, sizeof *also, gid_sort);
-        for (size_t i = 0; i < av->n; i++)
-            if (!nalso || cc_gid_cmp(&also[nalso - 1], &also[i])) also[nalso++] = also[i];
-    }
+    if (!mt_text || (mt_text->type != JR_STR && mt_text->type != JR_NULL)) { why = "no model text"; goto fail; }
     if (read_steps(jr_get(root, "undo"), next_step, &undo, &uids, &nu, &why)) goto fail;
     if (read_steps(jr_get(root, "redo"), next_step, &redo, &rids, &nr, &why)) goto fail;
     for (size_t i = 1; i < nu; i++)
         if (uids[i] <= uids[i - 1]) { why = "undo ids not increasing"; goto fail; }
     for (size_t i = 1; i < nr; i++)
         if (rids[i] >= rids[i - 1]) { why = "redo ids not decreasing"; goto fail; }
-
-    /* All checked: replace the session's model (loaded again in place: same text, same result). */
-    cc_model_free(&tmp);
-    tmp_live = 0;
-    cc_history_free(&S.hist);
-    cc_model_free(&S.model);
-    if (cc_model_load(&S.model, mt_text->s, mt_text->n, &err)) { /* cannot happen: it loaded above */
-        S.open = 0;
-        why = "the model text does not load twice";
+    /* The model: the snapshot's text (the model file is not read), or the model file itself. */
+    model_is_file = snap_null = mt_text->type == JR_NULL;
+    if (model_is_file ? cc_session_open(sess_model, &err) : open_impl(sess_model, mt_text->s, mt_text->n, &err)) {
+        why = model_is_file ? "the model file does not load" : "the model text does not load";
         goto fail;
     }
+    if (read_selection(root, &why)) goto fail;
+    cc_history_free(&S.hist);
     cc_history_init(&S.hist);
     S.hist.undo = undo, S.hist.nundo = S.hist.capundo = nu;
     S.hist.redo = redo, S.hist.nredo = S.hist.capredo = nr;
+    undo = redo = NULL;
     free(S.undo_ids), free(S.redo_ids);
     S.undo_ids = uids, S.nundo_ids = S.cap_undo_ids = nu;
     S.redo_ids = rids, S.nredo_ids = S.cap_redo_ids = nr;
+    uids = rids = NULL;
     S.rev = rev, S.next_step = next_step, S.saved_step = saved_step;
-    S.has_primary = has_primary;
-    if (has_primary) S.primary = primary;
-    free(S.also);
-    S.also = also, S.nalso = nalso, S.capalso = nalso;
-    fprintf(stderr, "bimble-ccore: session restored from %s (rev %llu, %zu undo, %zu redo, %zu selected)\n", sess_path,
-            (unsigned long long)rev, nu, nr, (size_t)has_primary + nalso);
+    snap_bytes = first + 1, model_file_bytes = size;
+    W.size = size, W.mtime = mt;
+
+    /* The entries: each replayed; a bad one ends the replay, the lines before are kept. */
+    size_t at = first + 1, ok = 0;
+    while (at < n) {
+        const char *e = memchr(text + at, '\n', n - at);
+        if (!e) {
+            why = "a truncated last line";
+            break;
+        }
+        size_t len = (size_t)(e - (text + at));
+        if (ok >= SESSION_MAX_LINES) { why = "too many lines"; *rewrite = 1; break; }
+        if (replay_entry(text + at, len, &why)) { *rewrite = 1; break; }
+        at += len + 1, ok++;
+    }
+    *keep = at;
+    log_bytes = at - snap_bytes, log_entries = ok;
+    if (at < n)
+        fprintf(stderr, "bimble-ccore: session %s ignored: from line %zu: %s; kept the snapshot and %zu entries\n",
+                sess_path, ok + 2, why, ok);
+    fprintf(stderr, "bimble-ccore: session restored from %s (rev %llu, %zu undo, %zu redo, %zu selected, %zu entries replayed)\n",
+            sess_path, (unsigned long long)S.rev, S.nundo_ids, S.nredo_ids, (size_t)S.has_primary + S.nalso, log_entries);
     arena_free(&a);
     free(text);
     return 1;
 fail:
     fprintf(stderr, "bimble-ccore: session %s ignored: %s; starting from %s\n", sess_path, why ? why : "invalid",
             sess_model);
-    if (tmp_live) cc_model_free(&tmp);
+    close_session();
     free_steps(undo, nu), free_steps(redo, nr);
-    free(uids), free(rids), free(also);
+    free(uids), free(rids);
     cc_cmds_free(&sess_cmds);
     arena_free(&a);
     free(text);
     return 0;
 }
 
-int cc_session_persist_start(const char *session_path, const char *model_path) {
-    if (!S.open || strlen(session_path) >= sizeof sess_path || strlen(model_path) >= sizeof sess_model) {
-        fprintf(stderr, "bimble-ccore: no session file (no model, or a path too long)\n");
-        return 0;
+int cc_session_open_persisted(const char *model_path, const char *session_path, cc_error *err) {
+    if (strlen(session_path) >= sizeof sess_path || strlen(model_path) >= sizeof sess_model) {
+        fprintf(stderr, "bimble-ccore: no session file (a path too long)\n");
+        return cc_session_open(model_path, err);
     }
     strcpy(sess_path, session_path);
     strcpy(sess_model, model_path);
-    int restored = restore();
+    size_t keep = 0;
+    int rewrite = 0;
+    if (restore(&keep, &rewrite)) {
+        persist_on = 1;
+        if (!rewrite) {
+            sess_fd = open(sess_path, O_WRONLY | O_APPEND);
+            if (sess_fd >= 0 && ftruncate(sess_fd, (off_t)keep) == 0 && remember() == 0) return 0;
+        }
+        write_snapshot();
+        return 0;
+    }
+    if (cc_session_open(model_path, err)) return -1;
     persist_on = 1;
-    sess_has_fp = 0; /* the first look writes the file (a corrupt one is replaced at once) */
-    return restored;
+    model_is_file = 1;
+    write_snapshot(); /* no model text: cheap */
+    return 0;
 }
 #endif

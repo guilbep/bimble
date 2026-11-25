@@ -208,6 +208,7 @@ static int try_apply(const cc_command *cmds, size_t n, cc_buf *out) {
             return CC_ERR;
         }
         s->nredo_ids = 0;
+        cc_session_note_apply(cmds, n); /* the session file logs the step with these */
     }
     rebuild();
     return CC_OK;
