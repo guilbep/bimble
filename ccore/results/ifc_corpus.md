@@ -6,6 +6,9 @@ sample and certification file we can find? What does it refuse, crash on, or ski
 
 ## Result in short (25 Nov 2026)
 
+**Update, ticket IFC2 (same day): the C reader now reads 7 of these gaps that Rust (frozen) still
+has; see "After IFC2" below.** The numbers in this section and the tables are IFC1's.
+
 - **617 STEP files (IFC2X3 283, IFC4 83, IFC4X3 249, other 2), 1.24 GB, 19.2 M entities: the C
   reader reads all 617 (ok), Rust reads all 617.** No refusal, no crash, no timeout, no file over
   the memory cap.
@@ -131,6 +134,169 @@ Ranked by files, then by items. "Files" and "items" are from the warnings of thi
 Out of scope of this count: IfcAnnotation, IfcGrid, spaces and openings (skipped classes by
 design), IfcTextLiteralWithExtent (text, 1 file), IFC4X3 alignments (no body: IfcAlignment* are
 1,407 of the 2,940 products drawn empty).
+
+## After IFC2 (25 Nov 2026): the first gaps closed, C past Rust
+
+Ticket IFC2 closed the cheapest gaps of the to-do list in the C reader (`ccore/src/ifc_geom.h`,
+`ccore/src/ifc_read.c`); Rust is frozen at v0.19.0 and still has them. The reference is
+IfcOpenShell and the specification. What the C reader draws that Rust does not is recorded in
+`ccore/golden/DEVIATIONS.md` section 10; each new type has a synthetic fixture in
+`ccore/golden/ifc_c/` and a hand-computed volume and box in `ccore/test/ifc_read_test.c`.
+
+| item | to-do # | done |
+|---|---|---|
+| plain `IfcProductRepresentation` read like `IfcProductDefinitionShape` | 8 | yes |
+| parametric profiles L, T, U, C, Z, asymmetric I, trapezium, ellipse, rounded rectangle (fillets and edge radii as arcs; slopes not drawn) | 7 | yes (not: composite, centre line) |
+| `IfcRevolvedAreaSolid` | 4 | yes |
+| swept-disk rebar speed | 15 | yes: 3.6x, the same bytes |
+| `IfcExtrudedAreaSolidTapered` | 10 | yes |
+| `IfcCsgSolid`, `IfcBlock`, `IfcRectangularPyramid`, `IfcRightCircularCylinder`, `IfcRightCircularCone`, `IfcSphere` | 11 | yes |
+| "unsupported format: ifcZIP / ifcXML / ifcJSON" instead of "not a STEP file" | 14 | yes (the message; reading them is not done) |
+
+### Before and after, file by file (C, `CORPUS_TAG=ifc2-before` / `ifc2-after`)
+
+Both runs: `bench/corpus.sh run` with the scene hash (scene.txt and every element's mesh hash)
+that IFC2 added to each record; "before" is the IFC1 commit's `ifc_dump` (`C_DUMP=`).
+
+- **828 files; 591 STEP files give the same scene, byte for byte.** 26 STEP files changed, and
+  each of them contains a newly supported type (checked by the script: a STEP file that changed
+  without one would be listed; none is). 37 non-STEP files changed only in their refusal
+  message: 34 ifcZIP (`unsupported format: ifcZIP (a zip archive; unzip it and open the .ifc
+  inside)`), 3 ifcXML. The 38th non-STEP file (neither zip nor XML) keeps `not a STEP file`.
+- The 26 (elements before -> after, the type that explains it):
+
+  | file | elements | triangles | new type(s) in the file |
+  |---|---|---|---|
+  | `IFC4.x-specification-models/models/advanced-geometric-shape/bath-csg-solid/bath-csg-solid.ifc` | 0 -> 1 | 0 -> 220 | IFCROUNDEDRECTANGLEPROFILEDEF, IFCCSGSOLID, IFCBLOCK |
+  | `IFC4.x-specification-models/models/basic-geometric-shape/csg-primitive/csg-primitive.ifc` | 0 -> 1 | 0 -> 12 | IFCCSGSOLID, IFCBLOCK |
+  | `IFC4.x-specification-models/models/building-elements/beam-parametric-cross-section/beam-parametric-cross-section.ifc` | 9 -> 18 | 1548 -> 2376 | IFCTSHAPEPROFILEDEF |
+  | `IFC4.x-specification-models/models/building-elements/beam-revolved-solid/beam-revolved-solid.ifc` | 0 -> 1 | 0 -> 5892 | IFCREVOLVEDAREASOLID |
+  | `IFC4.x-specification-models/models/building-elements/beam-varying-extrusion-paths/beam-varying-extrusion-paths.ifc` | 1 -> 2 | 172 -> 1576 | IFCREVOLVEDAREASOLID |
+  | `engine_web-ifc/tests/ifcfiles/public/ISSUE_021_Mini Project.ifc` | 2524 -> 2636 | 156946 -> 167546 | IFCLSHAPEPROFILEDEF, IFCROUNDEDRECTANGLEPROFILEDEF, IFCREVOLVEDAREASOLID |
+  | `files/1030--proxy--no-geometry--accept-errors.ifc` | 0 -> 1 | 0 -> 4154 | IFCREVOLVEDAREASOLID |
+  | `files/10336--buildingElementProxy--wrong-geometry.ifc` | 0 -> 0 | 0 -> 0 | IFCREVOLVEDAREASOLID |
+  | `files/598--discreteAccessory--segfault--augmented.ifc` | 0 -> 1 | 0 -> 76 | IFCLSHAPEPROFILEDEF |
+  | `files/IfcCShapeProfileDef.ifc` | 0 -> 2 | 0 -> 344 | IFCCSHAPEPROFILEDEF |
+  | `files/IfcCsgPrimitive.ifc` | 0 -> 1 | 0 -> 9356 | IFCBLOCK, IFCSPHERE, IFCRIGHTCIRCULARCYLINDER, IFCRIGHTCIRCULARCONE, IFCRECTANGULARPYRAMID |
+  | `files/IfcEllipseProfileDef.ifc` | 0 -> 2 | 0 -> 184 | IFCELLIPSEPROFILEDEF |
+  | `files/IfcIShapeProfileDef.ifc` | 2 -> 3 | 216 -> 388 | IFCASYMMETRICISHAPEPROFILEDEF |
+  | `files/IfcLShapeProfileDef.ifc` | 0 -> 4 | 0 -> 272 | IFCLSHAPEPROFILEDEF |
+  | `files/IfcRectangleProfileDef.ifc` | 3 -> 4 | 76 -> 216 | IFCROUNDEDRECTANGLEPROFILEDEF |
+  | `files/IfcTShapeProfileDef.ifc` | 0 -> 4 | 0 -> 496 | IFCTSHAPEPROFILEDEF |
+  | `files/IfcTrapeziumProfileDef.ifc` | 0 -> 3 | 0 -> 36 | IFCTRAPEZIUMPROFILEDEF |
+  | `files/IfcUShapeProfileDef.ifc` | 0 -> 4 | 0 -> 368 | IFCUSHAPEPROFILEDEF |
+  | `files/IfcZShapeProfileDef.ifc` | 0 -> 2 | 0 -> 184 | IFCZSHAPEPROFILEDEF |
+  | `files/acad2010_objects.ifc` | 0 -> 52 | 0 -> 8522 | IFCPRODUCTREPRESENTATION |
+  | `files/acad2010_walls.ifc` | 0 -> 8 | 0 -> 168 | IFCPRODUCTREPRESENTATION |
+  | `files/basic_shape_CSG.ifc` | 0 -> 1 | 0 -> 12 | IFCCSGSOLID, IFCBLOCK |
+  | `files/building_service_element_air-terminal.ifc` | 1 -> 2 | 312 -> 344 | IFCEXTRUDEDAREASOLIDTAPERED |
+  | `files/ellipses.ifc` | 0 -> 4 | 0 -> 1408 | IFCELLIPSEPROFILEDEF |
+  | `files/nested_mapped_item.ifc` | 0 -> 53 | 0 -> 9402 | IFCPRODUCTREPRESENTATION |
+  | `files/standard_case_element_beam.ifc` | 9 -> 18 | 1548 -> 2376 | IFCTSHAPEPROFILEDEF |
+
+- `files/10336--…`: still drawn empty: its revolved solids sweep an `IfcCenterLineProfileDef`
+  (not supported), so the warning moved from "unsupported geometry IFCREVOLVEDAREASOLID" to
+  "unsupported profile IFCCENTERLINEPROFILEDEF" (×2 -> ×6).
+- Products with a body drawn: **125,538 -> 125,817** of 128,591 (before: 128,478) (the 52 + 8 + 53 products of
+  the three `IfcProductRepresentation` files now count as products with a body).
+
+### IfcOpenShell agreement
+
+- **The 40-file sample (products with geometry): IfcOpenShell 15,679; C 15,409 -> 15,414; equal
+  files 32 -> 34.** Fixed: `files/IfcLShapeProfileDef.ifc` (0 -> 4 of 4) and
+  `beam-varying-extrusion-paths` (1 -> 2 of 2: a revolved solid). Still fewer: the two
+  "representation nesting too deep" files, `files/338--…` (IfcAdvancedBrep) and Viadotto Acerno
+  (IfcSectionedSolidHorizontal, IfcLinearPlacement).
+- `ISSUE_021_Mini Project.ifc` (L, rounded rectangle, revolved; not in the sample): IfcOpenShell
+  2,636 products with geometry; C 2,524 -> 2,636.
+- **Per product, volume (1 %) and box (1 mm), C against IfcOpenShell 0.9** (`files/` and the
+  specification models that use the new types; per-element meshes, so files under 20,000
+  triangles): equal on L, T, U, C, Z, asymmetric I, trapezium, ellipse (2 files), rounded
+  rectangle, `IfcProductRepresentation` (acad2010 objects 52/52, walls 8/8, nested mapped item
+  51/51 drawn by both), `standard_case_element_beam` 18/18, `beam-parametric-cross-section`
+  18/18, `beam-revolved-solid`, `beam-varying-extrusion-paths`, `bath-csg-solid`,
+  `csg-primitive`, `basic_shape_CSG`. Differences, each explained:
+  - L, T, U files: 2 of 4 products each, 1.7–3 % more volume in C: those have a leg, web or
+    flange slope, which IfcOpenShell draws and C does not (documented; the I-shape ignores its
+    slope too). Boxes equal.
+  - `IfcRectangleProfileDef.ifc`: one `IfcRectangleHollowProfileDef` with radii (Rust's
+    behaviour, unchanged: drawn sharp). The rounded rectangle itself agrees (24,561 / 24,558).
+  - `IfcCsgPrimitive.ifc`: boxes equal (0.2 mm); volume C 40.9e9, IfcOpenShell 36.1e9 mm³. By
+    subtree: the hollow block (24.83e9) and sphere ∩ block (3.790e9 / 3.791e9) agree;
+    IfcOpenShell draws nothing for the union of four `IfcRightCircularCone`s (C 4.49e9) and
+    its roof (pyramid ∪ cylinder minus pyramid minus cylinder ∩ block) has an exact-rational
+    volume (7.4773e9) that no cylinder could give: it leaves the cylinders out.
+  - `building_service_element_air-terminal.ifc`: the tapered air terminal is drawn by C only
+    (IfcOpenShell: none); its volume is the hand value: a 24×24 in, 2 in wall hollow square to
+    12×12, 1 in wall, over 4 in: 4/3 (576 + 144 + 288) − 4/3 (400 + 100 + 200) = 410.67 in³ =
+    6,729,621 mm³ (C 6,729,621).
+  - `files/1030--proxy--no-geometry--accept-errors.ifc` (a revolved solid): C draws it,
+    IfcOpenShell does not.
+- The synthetic fixtures: IfcOpenShell agrees with the hand numbers on every profile (exact on
+  the sharp ones), on both revolved solids (box to 0.001 mm), on `csg_block`; on `tapered` it
+  puts the end profile at twice the depth (its 2D operator gets a z), on `csg_round` it draws
+  the sphere alone.
+
+### Swept-disk rebar: 3.6x faster, the same bytes
+
+Profiled with gprof (`clang -O2 -pg`, one thread): half of `files/468--…`'s read went to
+`cc_sin`/`cc_cos` (the exact double-double ones), called once per ring point of `tube()` for
+the same n angles on every ring (498,388 calls); then a third of the rest to `cc_sqrt` (a
+digit-by-digit square root, 1.08 M calls). Fixes: the ring's cos/sin once per tube (the same
+values, so the same bits); `cc_sqrt` uses the IEEE 754 instruction (`fsqrt`, `sqrtsd`, correctly
+rounded like the digit version) under clang and GCC on aarch64 and x86-64; tcc and wasm keep the
+digit version. Read call, mean of 3 runs (`ifc_dump read`, 8 threads):
+
+| file | before | after | Rust (IFC1) |
+|---|---|---|---|
+| `files/468--reinforcingBar--segfault--augmented.ifc` | 1,410 ms | 390 ms | 373 ms |
+| `files/424--reinforcingBar--segfault--augmented.ifc` | 760 ms | 190 ms | 190 ms |
+| all 617 STEP files (read calls, sum) | 16.5 s | 13.2 s | |
+
+`scene.txt` and every mesh hash identical before and after on both files (and on the 591
+unchanged files above). What is left is the shared mesh builder (`cc_scene_mesh_build`: the
+weld hash and crease edges), which Rust also pays.
+
+### ASan+UBSan
+
+`bench/corpus.sh asan` then `CORPUS_TAG=ifc2-asan bench/corpus.sh run` (clang -O1 -g,
+ASan+UBSan+LeakSanitizer, `halt_on_error`) on the IFC2 sources: 655 files (617 STEP, 38 not
+STEP), **no report**; every outcome equal to the -O2 build's (617 ok, 38 refused). That run's C
+scenes are the "after" of the file list above (it includes the trapezium centring, made after the
+first "after" run). The sum of the read calls varies with the machine's load (other builders):
+13.2 s and 15.9 s in the two "after" runs, 16.5 s before.
+
+### Not in IFC2: approach and size for the three large gaps
+
+- **IfcAdvancedBrep** (9 files, 2,119 items; DigitalHub doors and windows). Faces are
+  `IfcAdvancedFace` on `IfcBSplineSurfaceWithKnots` (rational too), `IfcPlane`,
+  `IfcCylindricalSurface`, bounded by `IfcEdgeLoop`s of `IfcOrientedEdge` / `IfcEdgeCurve` over
+  B-spline curves, polylines and circles. Approach: evaluate curves and surfaces with de Boor
+  (rational weights); per face, the boundary in the surface's (u, v) space (point inversion by
+  Newton on the B-spline, closed form on planes and cylinders), a (u, v) grid at the arc
+  tolerance clipped by that boundary and triangulated (earcut has no interior points: a
+  grid-and-clip or a small constrained Delaunay), then lifted to 3D; planar faces through
+  `add_polygon`. Size: about 900 lines (curves and surfaces 300, inversion and trimming 300,
+  triangulation 300) plus fixtures; 3–4 builder days. Check per face area against IfcOpenShell
+  (OpenCascade).
+- **IfcLinearPlacement and alignment geometry** (8 files, 6,252 placements). An
+  `IfcAxis2PlacementLinear` is a point at a distance along an alignment curve
+  (`IfcPointByDistanceExpression`: distance along, lateral, vertical, longitudinal offsets) plus
+  an orientation. Approach: one evaluator "position and frame at distance s" for
+  `IfcCompositeCurve` / `IfcGradientCurve` / `IfcSegmentedReferenceCurve` made of
+  `IfcCurveSegment`s: lines and circles in closed form, clothoids by the Fresnel series, the
+  IFC4X3 polynomial and trigonometric spirals (cubic, Bloss, Helmert, cosine, sine, Viennese
+  bend) by Gauss–Legendre integration of their curvature; the vertical as a second curve over
+  the horizontal length, cant as a roll. Size: 700–900 lines; 3–4 days; the bSI rail unit
+  tests (`IFC-Rail-Sample-Files/1_Alignment with Cant`) and IfcOpenShell 0.8+ as references.
+- **IfcSectionedSolidHorizontal** (5 files, 697 items; Viadotto Acerno: 634 products). Needs the
+  evaluator above for its directrix; then the cross sections (often `IfcOpenCrossProfileDef`:
+  widths and slopes to a polyline, to add) at their `IfcAxis2PlacementLinear` stations, sampled
+  along the directrix at the arc tolerance, profiles interpolated point to point between
+  stations, each section kept vertical (horizontal frame: no tilt with the gradient), rings
+  joined like the revolved solid, caps at the ends. Size: 300–400 lines after the evaluator;
+  1–2 days. The same evaluator also gives `IfcFixedReferenceSweptAreaSolid`,
+  `IfcDirectrixCurveSweptAreaSolid` and `IfcInclinedReferenceSweptAreaSolid`.
 
 ## Tables (generated: `ccore/bench/corpus.sh report`)
 

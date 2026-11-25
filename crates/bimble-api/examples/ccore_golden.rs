@@ -50,7 +50,14 @@ const NOT_PRODUCED: [&str; 3] = ["frame.json", "frame2.json", "README.md"];
 const OTHER_TICKET_DIR: &str = "floats/";
 /// The C core's own goldens, where Rust has no such behaviour (`ccore/golden/DEVIATIONS.md`), and
 /// `mcp/`, which `ccore/tools/mcp_golden.sh` makes from `bimble mcp` (not this dumper).
-const C_OWN: [&str; 6] = ["DEVIATIONS.md", "relations/", "mcp/", "grids/", "sheets/", "ifc_c/"];
+const C_OWN: [&str; 6] = [
+    "DEVIATIONS.md",
+    "relations/",
+    "mcp/",
+    "grids/",
+    "sheets/",
+    "ifc_c/",
+];
 
 type Files = BTreeMap<String, Vec<u8>>;
 
