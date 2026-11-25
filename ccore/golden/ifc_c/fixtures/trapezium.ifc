@@ -1,6 +1,6 @@
 ISO-10303-21;
 HEADER;
-FILE_DESCRIPTION(('synthetic: an IfcTrapeziumProfileDef 300/200 x 100, top offset 20, extruded 1000'),'2;1');
+FILE_DESCRIPTION(('synthetic: an IfcTrapeziumProfileDef 300/200 x 100, top offset -50, extruded 1000'),'2;1');
 FILE_NAME('trapezium','2026-01-01T00:00:00',(''),(''),'hand-written','bimble golden','');
 FILE_SCHEMA(('IFC4'));
 ENDSEC;
@@ -19,7 +19,7 @@ DATA;
 #20=IFCDIRECTION((0.,1.,0.));
 #21=IFCCARTESIANPOINT((0.,0.));
 #22=IFCAXIS2PLACEMENT2D(#21,$);
-#30=IFCTRAPEZIUMPROFILEDEF(.AREA.,$,#22,300.,200.,100.,20.);
+#30=IFCTRAPEZIUMPROFILEDEF(.AREA.,$,#22,300.,200.,100.,-50.);
 #31=IFCEXTRUDEDAREASOLID(#30,#5,#18,1000.0);
 #32=IFCSHAPEREPRESENTATION(#6,'Body','SweptSolid',(#31));
 #33=IFCPRODUCTDEFINITIONSHAPE($,$,(#32));

@@ -350,8 +350,9 @@ static const struct {
     {"zshape", 1, 3.424e6, 1e-6, {-80, -100, 0}, {80, 100, 1000}, 1e-3, NULL},
     /* asymmetric I 400 deep, bottom 200x20, top 150x15, web 10: 4000 + 2250 + 365*10 = 9900 */
     {"asym_ishape", 1, 9.9e6, 1e-6, {-100, -200, 0}, {100, 200, 1000}, 1e-3, NULL},
-    /* trapezium bottom 300, top 200 from x = -150 + 20, height 100: (300 + 200) / 2 * 100 = 25000 */
-    {"trapezium", 1, 25e6, 1e-6, {-150, -50, 0}, {150, 50, 1000}, 1e-3, NULL},
+    /* trapezium bottom 300, top 200 from the bottom's left end - 50, height 100:
+     * (300 + 200) / 2 * 100 = 25000; x from -50 to 300 centred: -175..175 */
+    {"trapezium", 1, 25e6, 1e-6, {-175, -50, 0}, {175, 50, 1000}, 1e-3, NULL},
     /* ellipse 200 x 100: pi * 200 * 100 = 62831.85; chords within 0.5 %, the box within 1 mm */
     {"ellipse", 1, 62831853.1, 5e-3, {-200, -100, 0}, {200, 100, 1000}, 1.0, NULL},
     /* rounded rectangle 400x200, r 50: 80000 - (4 - pi) 50^2 = 77853.98; chords within 0.2 % */

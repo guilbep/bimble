@@ -1041,12 +1041,13 @@ static int param_profile(R *r, const cc_step_entity *e, Loops *out) {
         double rb = opt_r(e, 7), rt = cc_sv_as_f64(arg(e, 10), &v[6]) ? opt_r(e, 10) : rb;
         rad[3] = rad[10] = rb, rad[4] = rad[9] = rt;
     } else if (is(e, "IFCTRAPEZIUMPROFILEDEF")) {
-        /* BottomXDim, TopXDim, YDim, TopXOffset: the bottom edge centred, the top edge from
-         * -BottomXDim/2 + TopXOffset. */
+        /* BottomXDim, TopXDim, YDim, TopXOffset: the top edge from the bottom's left end +
+         * TopXOffset, the whole centred on its bounding box (IfcOpenShell 0.9 too). */
         ok = num(e, 3, &v[0]) && num(e, 4, &v[1]) && num(e, 5, &v[2]) && num(e, 6, &v[3]);
-        double x = v[0] / 2.0, w = v[1], y = v[2] / 2.0, dx = v[3];
-        ok = ok && x > 0 && w > 0 && y > 0;
-        double p[4][2] = {{-x, -y}, {x, -y}, {-x + dx + w, y}, {-x + dx, y}};
+        double b = v[0], w = v[1], y = v[2] / 2.0, dx = v[3];
+        ok = ok && b > 0 && w > 0 && y > 0;
+        double x0 = fmin_rs(0.0, dx), x1 = fmax_rs(b, dx + w), m = (x0 + x1) / 2.0;
+        double p[4][2] = {{-m, -y}, {b - m, -y}, {dx + w - m, y}, {dx - m, y}};
         memcpy(c, p, sizeof p), n = 4;
     } else if (is(e, "IFCROUNDEDRECTANGLEPROFILEDEF")) {
         /* XDim, YDim, RoundingRadius (at most half the smaller side). */
