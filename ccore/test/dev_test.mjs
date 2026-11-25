@@ -6,11 +6,19 @@
 // leave no process behind. The edited file is restored byte for byte. Needs tcc, inotifywait and
 // web-ui/node_modules. Prints the cycle times and "N passed, M failed"; exits non-zero on a failure.
 import { execFileSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import http from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port, vitePort } from "./ports.mjs";
+
+/** Write a source file atomically (temp + rename): a background compile reading the old file must
+ *  never see it truncated (clang mmaps sources; an in-place rewrite gave it SIGBUS). */
+function writeAtomic(p, data) {
+  const t = `${p}.tmp${process.pid}`;
+  writeFileSync(t, data);
+  renameSync(t, p);
+}
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = port("dev_test", 47411);
@@ -105,7 +113,7 @@ try {
   check("first epoch", /^[0-9a-f]{32}$/.test(epoch ?? ""), String(epoch));
   for (let i = 0; i < 5; i++) {
     const n = count(/rebuilt in \d+ ms/g);
-    writeFileSync(EDITED, i % 2 === 0 ? Buffer.concat([ORIGINAL, Buffer.from("/* dev_test */\n")]) : ORIGINAL);
+    writeAtomic(EDITED, i % 2 === 0 ? Buffer.concat([ORIGINAL, Buffer.from("/* dev_test */\n")]) : ORIGINAL);
     await waitFor(`rebuilt line ${i + 1}`, 15000, () => count(/rebuilt in \d+ ms/g) > n);
     const m = [...out.matchAll(/rebuilt in (\d+) ms, host up in (\d+) ms/g)].at(-1);
     times.push([+m[1], +m[2]]);
@@ -113,7 +121,7 @@ try {
     check(`cycle ${i + 1}: host answers with a new epoch`, e !== null && e !== epoch, `${epoch} -> ${e}`);
     epoch = e;
   }
-  writeFileSync(EDITED, ORIGINAL);
+  writeAtomic(EDITED, ORIGINAL);
   await sleep(300); // the last write of the loop above left an odd state: let a possible rebuild settle
   await waitFor("quiet", 15000, async () => { const a = count(/rebuilt in/g); await sleep(300); return count(/rebuilt in/g) === a; });
   epoch = await epochOf(token);
@@ -121,7 +129,7 @@ try {
   // A syntax error: compiler output, no restart, the old host still answers.
   const fails = count(/build failed/g);
   const rebuilt = count(/rebuilt in \d+ ms/g);
-  writeFileSync(EDITED, Buffer.concat([ORIGINAL, Buffer.from("int dev_test_broken( {\n")]));
+  writeAtomic(EDITED, Buffer.concat([ORIGINAL, Buffer.from("int dev_test_broken( {\n")]));
   await waitFor("build failed", 15000, () => count(/build failed/g) > fails);
   await sleep(100);
   check("syntax error: dev.sh prints the compiler output", /calls\.c:\d+/.test(out.slice(out.lastIndexOf("build failed"))),
@@ -132,7 +140,7 @@ try {
   check("syntax error: the old host still answers, same epoch", st2.status === 200 && eOld === epoch, `${st2.status} ${epoch} -> ${eOld}`);
 
   // Revert: the build passes again and the host restarts.
-  writeFileSync(EDITED, ORIGINAL);
+  writeAtomic(EDITED, ORIGINAL);
   await waitFor("rebuilt after the revert", 15000, () => count(/rebuilt in \d+ ms/g) > rebuilt);
   const eNew = await epochOf(token);
   check("revert: rebuild OK, new epoch", eNew !== null && eNew !== epoch, `${epoch} -> ${eNew}`);
@@ -143,7 +151,7 @@ try {
   check("dev loop", false, e.message);
   console.log(out);
 } finally {
-  writeFileSync(EDITED, ORIGINAL);
+  writeAtomic(EDITED, ORIGINAL);
   tree = [...tree, ...descendants(dev.pid)];
   const pids = [...new Set(tree.map((t) => t.pid))];
   process.kill(dev.pid, "SIGTERM");

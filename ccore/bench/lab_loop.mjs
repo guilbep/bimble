@@ -31,12 +31,20 @@
 // take if bimble.ts pollChanges retried at once after the host went away. Not the lab as it is.
 // Raw runs: out/t12-lab_loop.json; build logs out/t12-build-<mode>.log. Kills all it starts.
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync, renameSync } from "node:fs";
 import { cpus, tmpdir, totalmem, loadavg } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { port, vitePort } from "../test/ports.mjs";
+
+/** Write a source file atomically (temp + rename): a background compile reading the old file must
+ *  never see it truncated (clang mmaps sources; an in-place rewrite gave it SIGBUS). */
+function writeAtomic(p, data) {
+  const t = `${p}.tmp${process.pid}`;
+  writeFileSync(t, data);
+  renameSync(t, p);
+}
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
@@ -167,8 +175,8 @@ const median = (v) => { const s = [...v].sort((a, b) => a - b); const n = s.leng
 const p95 = (v) => { const s = [...v].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.ceil(0.95 * s.length) - 1)]; };
 
 function restoreSource() {
-  writeFileSync(MESH_C, ORIG_MESH);
-  writeFileSync(CALLS_C, ORIG_CALLS);
+  writeAtomic(MESH_C, ORIG_MESH);
+  writeAtomic(CALLS_C, ORIG_CALLS);
 }
 
 async function main() {
@@ -285,8 +293,8 @@ async function main() {
     const pxBefore = (await evalJs("window.__t12.px.at(-1)?.hash")) ?? null;
     const nPx = await evalJs("window.__t12.px.length"), nText = await evalJs("window.__t12.text.length");
     const t0 = now();
-    writeFileSync(MESH_C, ORIG_MESH.replace(PX_ANCHOR, `buf_putc(out, (char)(unsigned char)${cat}); /* lab_loop edit */`));
-    writeFileSync(CALLS_C, ORIG_CALLS.replace(TX_ANCHOR, `(uint64_t)(${c} * (double)stored)`));
+    writeAtomic(MESH_C, ORIG_MESH.replace(PX_ANCHOR, `buf_putc(out, (char)(unsigned char)${cat}); /* lab_loop edit */`));
+    writeAtomic(CALLS_C, ORIG_CALLS.replace(TX_ANCHOR, `(uint64_t)(${c} * (double)stored)`));
     const b = await build(mode);
     const t1 = now();
     await evalJs(`window.__t12.arm(${mb})`);

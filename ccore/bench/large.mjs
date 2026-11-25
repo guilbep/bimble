@@ -38,12 +38,20 @@
 //           (bench/lab_loop.mjs's method). LOOP_RUNS runs after one warm-up; build / stop / spawn /
 //           pixels and total = edit written -> new pixels.
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync, renameSync } from "node:fs";
 import { cpus, loadavg, tmpdir, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { port, vitePort } from "../test/ports.mjs";
+
+/** Write a source file atomically (temp + rename): a background compile reading the old file must
+ *  never see it truncated (clang mmaps sources; an in-place rewrite gave it SIGBUS). */
+function writeAtomic(p, data) {
+  const t = `${p}.tmp${process.pid}`;
+  writeFileSync(t, data);
+  renameSync(t, p);
+}
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
@@ -398,7 +406,7 @@ async function labBench(model, size) {
       const pxBefore = await evalJs("window.__t16.px.at(-1)?.hash ?? null");
       const nPx = await evalJs("window.__t16.px.length");
       const t0 = Date.now();
-      writeFileSync(MESH_C, ORIG_MESH.replace(PX_ANCHOR, `buf_putc(out, (char)(unsigned char)${cat}); /* t16 edit ${nonce} ${k} */`));
+      writeAtomic(MESH_C, ORIG_MESH.replace(PX_ANCHOR, `buf_putc(out, (char)(unsigned char)${cat}); /* t16 edit ${nonce} ${k} */`));
       const b = await build("host");
       const t1 = Date.now();
       const ts = now();
@@ -411,7 +419,7 @@ async function labBench(model, size) {
         const all = await evalJs(`window.__t16.px.slice(${nPx})`);
         return all.find((e) => e.hash !== pxBefore && e.t >= t1);
       }, 10);
-      writeFileSync(MESH_C, ORIG_MESH);
+      writeAtomic(MESH_C, ORIG_MESH);
       const run = { build: r1(b), stop: r1(stop), spawn: r1(s.ms), page_pixels: px.t - t1, total_pixels: px.t - t0 };
       log(`  loop ${size} ${k === 0 ? "warmup" : `run ${k}`}: ${JSON.stringify(run)}`);
       if (k > 0) runs.push(run);
@@ -481,7 +489,7 @@ try {
   for (const p of procs) log(`--- ${p.label} ---\n${p.out.slice(-1500)}`);
 } finally {
   if (readFileSync(MESH_C, "utf8") !== ORIG_MESH) {
-    writeFileSync(MESH_C, ORIG_MESH);
+    writeAtomic(MESH_C, ORIG_MESH);
     await build("host").catch((e) => log(`FAIL: rebuild host: ${e.message}`));
   }
   for (const p of procs) await stopProc(p);

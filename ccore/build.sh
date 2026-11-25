@@ -117,7 +117,13 @@ host_mixed() {
             (
                 b=$(basename "${f%.c}")
                 k1=$(host_keys | awk -v f="$f" '$2 == f {print $1}')
-                clang "${O2_FLAGS[@]}" "${INC[@]}" -Ihost -c "$f" -o "$M/o2/$b.tmp.$$.$BASHPID.o" || exit 0
+                # Compile a snapshot, not $f: clang maps its input, and a file truncated in place
+                # meanwhile (an editor or a test saving it) made clang die with SIGBUS.
+                snap="$M/o2/$b.src.$$.$BASHPID.c"
+                cp "$f" "$snap" || exit 0
+                clang "${O2_FLAGS[@]}" -iquote "$(dirname "$f")" "${INC[@]}" -Ihost -c "$snap" \
+                    -o "$M/o2/$b.tmp.$$.$BASHPID.o" || { rm -f "$snap"; exit 0; }
+                rm -f "$snap"
                 k2=$(host_keys | awk -v f="$f" '$2 == f {print $1}')
                 if [[ $k1 == "$k2" ]]; then mv "$M/o2/$b.tmp.$$.$BASHPID.o" "$M/o2/$b.$k1.o"
                 else rm -f "$M/o2/$b.tmp.$$.$BASHPID.o"; fi
