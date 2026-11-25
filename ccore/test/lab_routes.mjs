@@ -119,8 +119,10 @@ async function session(cdp) {
     const p = msg.params;
     if (msg.method === "Runtime.exceptionThrown") errors.push(`exception: ${p.exceptionDetails.exception?.description ?? p.exceptionDetails.text}`);
     if (msg.method === "Runtime.consoleAPICalled" && p.type === "error") errors.push(`console.error: ${p.args.map((a) => a.value ?? a.description).join(" ")}`);
-    if (msg.method === "Log.entryAdded" && p.entry.level === "error") errors.push(`log: ${p.entry.text} ${p.entry.url ?? ""}`);
-    if (msg.method === "Network.responseReceived" && p.response.status >= 400) errors.push(`HTTP ${p.response.status} ${p.response.url}`);
+    // The browser's own favicon request (the lab has none) is not the page's.
+    const fav = (u) => /\/favicon\.ico$/.test(u ?? "");
+    if (msg.method === "Network.responseReceived" && p.response.status >= 400 && !fav(p.response.url)) errors.push(`HTTP ${p.response.status} ${p.response.url}`);
+    if (msg.method === "Log.entryAdded" && p.entry.level === "error" && !fav(p.entry.url)) errors.push(`log: ${p.entry.text} ${p.entry.url ?? ""}`);
   });
   await S("Runtime.enable");
   await S("Page.enable");
@@ -150,7 +152,7 @@ async function session(cdp) {
     await sleep(150);
     return true;
   };
-  return { S, evalJs, js, go, click, errors, close: () => cdp.send("Target.closeTarget", { targetId }) };
+  return { S, evalJs, js, go, click, errors, seen: 0, close: () => cdp.send("Target.closeTarget", { targetId }) };
 }
 
 // What a screen shows, from the DOM: NotAvailable, or data (text, no empty table), or empty.
@@ -168,7 +170,7 @@ const SCREEN = (sel) => `(() => {
 /** One walk: every page, dialog, panel, ribbon tab; the File menu, the quick bar, the shell controls. */
 async function walk(P, label, { model }) {
   const set = (route, st) => { if (!routes.has(route)) routes.set(route, {}); routes.get(route)[label] = st; };
-  const before = P.errors.length;
+  const before = P.seen; // since the last walk's check: the file's opening counts too
   const ids = JSON.parse(await P.js("return JSON.stringify({ pages: Object.keys(pg.pages), dialogs: Object.keys(dl.dialogs), panels: Object.keys(pn.panels), tabs: tb.TABS.map((t) => t.id) })"));
   // Pages: through the shell (a model is needed for any page but Home).
   for (const id of ids.pages) {
@@ -235,6 +237,7 @@ async function walk(P, label, { model }) {
     const errs = P.errors.slice(before).filter((e) => !/(404|Not Found).*\/mesh\?/.test(e));
     if (errs.length !== P.errors.length - before) console.log(`note ${label}: GET /mesh 404 with no model (glviewport.ts), ${P.errors.length - before - errs.length} line(s), not counted`);
     check(`${label}: no console error, no 4xx/5xx during the walk`, errs.length === 0, errs.join(" | "));
+    P.seen = P.errors.length;
     return;
   }
   const seen = [...ids.pages.map((i) => `page ${i}`), ...ids.dialogs.map((i) => `dialog ${i}`), ...ids.panels.map((i) => `panel ${i}`)].filter((r) => routes.get(r)?.[label] !== undefined);
@@ -296,7 +299,8 @@ async function walk(P, label, { model }) {
     check(`${label}: read only: the header says read only, not "Saved", and no Save is enabled`,
       q.ro && !q.qb.some((x) => x.act === "save" && x.enabled), JSON.stringify(q));
   }
-  check(`${label}: no console error, no 4xx/5xx during the walk`, P.errors.length === before, P.errors.slice(before).join(" | "));
+  check(`${label}: no console error, no 4xx/5xx since the file opened, nor during the walk`, P.errors.length === before, P.errors.slice(before).join(" | "));
+  P.seen = P.errors.length;
 }
 
 async function main() {

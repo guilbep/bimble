@@ -214,6 +214,9 @@ suite("refused");
   }
   const fr = F.call(F.X.call, ["verb", "rename", JSON.stringify({ id: firstId, name: "x" })]);
   check("editor: verb rename -> 200", fr.status === 200, `${fr.status} ${fr.text}`);
+  // FAKE1 (requirement change): undo and redo keep Rust's `dirty` (edit.rs:292-308), so the editor's undo/redo
+  // above leave it unsaved even back at the saved step: saved again, its state is compared with the view's.
+  check("editor: action save -> 200", F.call(F.X.call, ["action", "save", ""]).status === 200);
   same("frame.json after the refused calls: query state", F.call(F.X.call, ["query", "state", "{}"]), V.call(V.X.call, ["query", "state", "{}"]));
   // The handle API.
   const hv = V.call(V.X.open_text, [text]).value;

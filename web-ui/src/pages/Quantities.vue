@@ -4,7 +4,7 @@ import { t as tt } from "../i18n";
 import { classNoun } from "../i18n/parts/modify";
 // D6: "1 ligne sélectionnée : dalle D3" for one selected element; the reference has no other hint.
 // ponytail: reads the selection, not whether its row is in the table (the "All elements" schedule lists every element).
-export const capability = "quantities", editable = true; // FAKE1: the schedules of an editable model
+export const capability = "quantities"; // FAKE1 (a read-only file has its schedules too: DEVIATIONS 17)
 export const hint = () => {
   const s = st.value.selection;
   if (s.length !== 1 || st.value.editable === false) return ""; // FAKE1: query element refuses a read-only file

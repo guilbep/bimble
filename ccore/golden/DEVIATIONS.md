@@ -632,6 +632,7 @@ the same IFC offers the same views with the same ids.
   to a stub answer or an action never enabled, and each true row to an answer.
 - **`project` and `new_sheet` on an IFC opened as it is:** Rust enables both with any file loaded
   (`ribbon.rs:611 _ => loaded`): its project data and its sheets live in the side file next to the
-  IFC. The C core reads no side file and answers `project` "this file is read only", so it keeps both
-  off for a read-only file (the 2 actions `parity.md` still shows as differing in `ifc_readonly`).
+  IFC. The C core reads no side file and answers `project` (and `storeys`, `materials`) "this file
+  is read only", so it keeps both off for a read-only file (the 2 actions `parity.md` still shows as
+  differing in `ifc_readonly`); the page does not ask those queries of a read-only file.
   Every other enable rule ACT1 changed is Rust's own (`results/parity.md`).

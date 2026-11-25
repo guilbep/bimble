@@ -31,5 +31,7 @@ const preview = (id: keyof typeof RIBBON) => RIBBON[id].every((g) => g.tools.eve
 /* .tabsep{width:1px;height:18px;background:#DDD6C8;margin:0 6px} */
 .tabsep { width: 1px; height: 18px; background: var(--bb-line); margin: 0 6px; }
 /* FAKE1: the "preview" mark of a tab with no working tool yet */
-.pv { margin-left: 6px; padding: 0 6px; border: 1px dashed currentColor; border-radius: var(--bb-radius-pill); font-family: var(--bb-font-data); font-size: 11px; letter-spacing: var(--bb-tracking-eyebrow); text-transform: uppercase; }
+/* over the tab's top right corner, out of flow: the tabs keep their widths (no wrap, the viewport does not move) */
+.tab { position: relative; }
+.pv { position: absolute; top: -5px; right: -4px; padding: 0 4px; border: 1px dashed currentColor; border-radius: var(--bb-radius-pill); background: var(--bb-sheet); color: var(--bb-stone); font-family: var(--bb-font-data); font-size: 9px; line-height: 12px; letter-spacing: var(--bb-tracking-eyebrow); text-transform: uppercase; pointer-events: none; }
 </style>

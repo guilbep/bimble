@@ -573,7 +573,7 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     /* ---- FAKE1: pages the lab serves and the sheet verbs. project: ribbon.rs:611 `_ => loaded`,
      * history: ribbon.rs:590 editable(), new_sheet: ribbon.rs:611 `_ => loaded` (the C core
      * answers the project query and stores sheets in an editable model only: a read-only IFC
-     * keeps them off), close_sheet: ribbon.rs:594 `layout.is_some()` ---- */
+     * keeps them off, DEVIATIONS 19), close_sheet: ribbon.rs:594 `layout.is_some()` ---- */
     if (!strcmp(name, "project") || !strcmp(name, "history") || !strcmp(name, "new_sheet")) return s->open;
     if (!strcmp(name, "close_sheet")) return loaded(s) && s->sheet_shown && cc_sheet_known(s, &s->sheet);
     /* ---- end FAKE1 ---- */

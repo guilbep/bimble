@@ -882,7 +882,8 @@ function refresh(modelChanged: boolean): void {
   placing.value = tryQuery<Placing | null>("placing", null);
   if (modelChanged) setMeasure(tryQuery<MeasureState | null>("measure", null)); // another model: none kept
   if (modelChanged) {
-    // ---- FAKE1: a read-only file answers these "this file is read only" (400): not asked ----
+    // ---- FAKE1: a file open read only (an IFC as it is, a .bimbleview) and no file answer these
+    // "this file is read only" (400, calls.c MODEL): not asked ----
     const editable = state.value.file !== null && state.value.editable !== false;
     storeys.value = editable ? tryQuery<StoreySummary[]>("storeys", []) : [];
     materials.value = editable ? tryQuery<MaterialSummary[]>("materials", []) : [];
