@@ -34,7 +34,7 @@ tcc, `inotifywait` from inotify-tools, and `npm ci` once in `web-ui/`):
 
     ccore/dev.sh [model]          # or, in web-ui/: npm run ccore:dev
 
-It builds with `build.sh tcc`, starts Vite (`web-ui/`, port 5173) and the host (port 47400) and
+It builds the host with `build.sh host` (one tcc call, 50–90 ms), starts Vite (`web-ui/`, port 5173) and the host (port 47400) and
 prints the lab URL (`lab: http://localhost:5173/?native=1&gl=1&port=47400&token=…`). Open it once.
 Then every save of a `*.c` or `*.h` file in `src/` or `host/` rebuilds (50 ms debounce) and
 restarts the host on the same port, token and model; the open page sees the new epoch in the
