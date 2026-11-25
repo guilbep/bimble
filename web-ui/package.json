@@ -6,6 +6,7 @@
     "wasm": "node scripts/copy-wasm.mjs",
     "wasm:dev": "PROFILE=dev LAB=1 ../scripts/build-web.sh && node scripts/copy-wasm.mjs",
     "dev": "vite",
+    "twin:dev": "../scripts/twin-dev.sh",
     "i18n-keys": "node scripts/i18n-keys.mjs",
     "typecheck": "node scripts/i18n-keys.mjs --check && vue-tsc --noEmit",
     "prebuild": "node scripts/i18n-keys.mjs",
@@ -16,7 +17,10 @@
     "e2e:place": "node e2e/place-slab.mjs --lab",
     "e2e:a11y": "node e2e/a11y.mjs --lab",
     "e2e:buttons": "node e2e/buttons.mjs --lab",
-    "e2e:small": "node e2e/small.mjs --lab"
+    "e2e:small": "node e2e/small.mjs --lab",
+    "e2e:native": "node e2e/native-place.mjs",
+    "e2e:native-lab": "node e2e/native-lab.mjs",
+    "e2e:twin-loop": "node e2e/twin_loop.mjs"
   },
   "dependencies": {
     "vue": "^3.5.45"

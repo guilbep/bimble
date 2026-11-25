@@ -1,0 +1,66 @@
+=== exp2/T8 dev loop in the browser  2026-11-24T22:04:21.715Z
+machine: arm64, 8 cores (unknown), 15.2 GiB, rustc 1.100.0 (0ef1bc386 2026-11-09), node v26.12.0, Chromium 153.0.8010.36 Arch Linux ARM
+native: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-B<mold>; headless Chromium (swiftshader), one Vite, 5 runs each after one untimed warm-up, alternating
+includes:
+  wasm build_s    = edit of calls.rs + npm run -s wasm:dev (cargo wasm build, wasm-bindgen, copy to public/bimble/)
+  wasm ready_s    = Page.reload -> data-bb-ready on the new document (page load, wasm fetch + instantiate, model fetch + open, first refresh, deep link)
+  wasm value_s    = Page.reload -> in-page query('state').spike === N (ready_s + the poll, 20 ms steps)
+  wasm total_s    = edit -> value (build_s + value_s)
+  native build_s  = edit of calls.rs + cargo build -p bimble-cli (mold)
+  native value_s  = kill old twin + start headless twin (open frame.bimble) + in-page query('state').spike === N over sync XHR, no page reload (20 ms steps, failed XHR retried)
+  native total_s  = edit -> value (build_s + value_s)
+  all times: wall clock from Node (performance.now); CDP round trips (~ms) included
+wasm   run 1: build_s 3.593  ready_s 1.153  value_s 1.185  total_s 4.778
+native run 1: build_s 1.524  value_s 0.086  total_s 1.610
+wasm   run 2: build_s 3.690  ready_s 0.965  value_s 0.967  total_s 4.657
+native run 2: build_s 1.574  value_s 0.082  total_s 1.657
+wasm   run 3: build_s 3.666  ready_s 0.977  value_s 0.980  total_s 4.645
+native run 3: build_s 1.580  value_s 0.101  total_s 1.681
+wasm   run 4: build_s 3.698  ready_s 0.859  value_s 0.862  total_s 4.560
+native run 4: build_s 1.612  value_s 0.100  total_s 1.713
+wasm   run 5: build_s 3.604  ready_s 1.048  value_s 1.051  total_s 4.655
+native run 5: build_s 1.532  value_s 0.093  total_s 1.625
+median wasm:   build 3.666 s, reload->ready 0.977 s, reload->value 0.980 s, total 4.655 s
+median native: build 1.574 s, restart->value 0.093 s, total 1.657 s
+ratio wasm/native total (medians): 2.81
+=== TW1 twin dev loop in the lab (web-ui/e2e/twin_loop.mjs)  2026-11-25T08:23:00.956Z
+machine: arm64, 8 cores, 15.2 GiB, rustc 1.100.0 (0ef1bc386 2026-11-09), node v26.12.0, Chromium 153.0.8010.36 Arch Linux ARM, load 5.33 3.96 2.32
+method: lab opened once at /?native=1 (no reload), headless Chromium (SwiftShader) 1280x800, twin on bimble demo; edit = status() app_bytes (status bar "M MB") + draw_options() background (every frame); 10 runs per linker after one untimed warm-up; bimble.ts pollChanges with the reconnect back-off (20 ms doubling to 1 s)
+phases (ms): build = edit -> cargo build -p bimble-cli exits; restart = stop (SIGTERM -> exit) + spawn (-> 'listening');
+  value/text/pixels = end of build -> in-page query('status') / status bar text / first changed canvas frame; total_* = edit -> that
+mold run 1: build 1645, stop 12, spawn 47, restart 59, value 105, text 89, pixels 176, total_value 1752, total_text 1736, total_pixels 1823
+mold run 2: build 1658, stop 10, spawn 40, restart 50, value 67, text 104, pixels 125, total_value 1727, total_text 1764, total_pixels 1785
+mold run 3: build 1755, stop 23, spawn 48, restart 71, value 141, text 125, pixels 179, total_value 1897, total_text 1881, total_pixels 1935
+mold run 4: build 1903, stop 14, spawn 58, restart 72, value 90, text 179, pixels 209, total_value 1997, total_text 2086, total_pixels 2116
+mold run 5: build 1708, stop 20, spawn 43, restart 63, value 90, text 111, pixels 141, total_value 1801, total_text 1822, total_pixels 1852
+mold run 6: build 1723, stop 13, spawn 42, restart 55, value 66, text 88, pixels 113, total_value 1791, total_text 1813, total_pixels 1838
+mold run 7: build 1611, stop 12, spawn 45, restart 57, value 68, text 95, pixels 126, total_value 1681, total_text 1708, total_pixels 1739
+mold run 8: build 1632, stop 13, spawn 45, restart 58, value 110, text 95, pixels 144, total_value 1744, total_text 1729, total_pixels 1778
+mold run 9: build 1658, stop 34, spawn 45, restart 79, value 106, text 184, pixels 212, total_value 1766, total_text 1844, total_pixels 1872
+mold run 10: build 1662, stop 30, spawn 45, restart 75, value 107, text 175, pixels 205, total_value 1773, total_text 1841, total_pixels 1871
+median mold: build 1660, stop 13.5, spawn 45, restart 61, value 97.5, text 107.5, pixels 160, total_value 1769.5, total_text 1817.5, total_pixels 1845 ms
+p95    mold: build 1903, stop 34, spawn 58, restart 79, value 141, text 184, pixels 212, total_value 1997, total_text 2086, total_pixels 2116 ms
+lld run 1: build 1905, stop 30, spawn 42, restart 72, value 87, text 180, pixels 207, total_value 1994, total_text 2087, total_pixels 2114
+lld run 2: build 1923, stop 14, spawn 44, restart 58, value 110, text 97, pixels 151, total_value 2035, total_text 2022, total_pixels 2076
+lld run 3: build 1856, stop 49, spawn 43, restart 92, value 107, text 211, pixels 240, total_value 1967, total_text 2071, total_pixels 2100
+lld run 4: build 1904, stop 45, spawn 50, restart 95, value 127, text 257, pixels 296, total_value 2034, total_text 2164, total_pixels 2203
+lld run 5: build 1828, stop 18, spawn 40, restart 58, value 106, text 93, pixels 145, total_value 1938, total_text 1925, total_pixels 1977
+lld run 6: build 1962, stop 13, spawn 45, restart 58, value 116, text 103, pixels 175, total_value 2079, total_text 2066, total_pixels 2138
+lld run 7: build 1918, stop 11, spawn 39, restart 50, value 67, text 86, pixels 101, total_value 1987, total_text 2006, total_pixels 2021
+lld run 8: build 1875, stop 14, spawn 45, restart 59, value 111, text 98, pixels 150, total_value 1988, total_text 1975, total_pixels 2027
+lld run 9: build 1926, stop 12, spawn 54, restart 66, value 90, text 109, pixels 126, total_value 2018, total_text 2037, total_pixels 2054
+lld run 10: build 1908, stop 12, spawn 39, restart 51, value 67, text 91, pixels 119, total_value 1977, total_text 2001, total_pixels 2029
+median lld: build 1906.5, stop 14, spawn 43.5, restart 58.5, value 106.5, text 100.5, pixels 150.5, total_value 1991, total_text 2029.5, total_pixels 2065 ms
+p95    lld: build 1962, stop 49, spawn 54, restart 95, value 127, text 257, pixels 296, total_value 2079, total_text 2164, total_pixels 2203 ms
+default run 1: build 6080, stop 11, spawn 47, restart 58, value 116, text 101, pixels 170, total_value 6199, total_text 6184, total_pixels 6253
+default run 2: build 6126, stop 23, spawn 61, restart 84, value 108, text 186, pixels 209, total_value 6236, total_text 6314, total_pixels 6337
+default run 3: build 6275, stop 30, spawn 62, restart 92, value 129, text 191, pixels 214, total_value 6406, total_text 6468, total_pixels 6491
+default run 4: build 6123, stop 12, spawn 39, restart 51, value 66, text 83, pixels 104, total_value 6191, total_text 6208, total_pixels 6229
+default run 5: build 6337, stop 35, spawn 46, restart 81, value 107, text 132, pixels 157, total_value 6447, total_text 6472, total_pixels 6497
+default run 6: build 6304, stop 50, spawn 50, restart 100, value 127, text 270, pixels 314, total_value 6433, total_text 6576, total_pixels 6620
+default run 7: build 6149, stop 36, spawn 47, restart 83, value 106, text 217, pixels 263, total_value 6260, total_text 6371, total_pixels 6417
+default run 8: build 6185, stop 16, spawn 45, restart 61, value 112, text 96, pixels 163, total_value 6301, total_text 6285, total_pixels 6352
+default run 9: build 6198, stop 17, spawn 48, restart 65, value 86, text 105, pixels 132, total_value 6285, total_text 6304, total_pixels 6331
+default run 10: build 6146, stop 14, spawn 45, restart 59, value 123, text 106, pixels 176, total_value 6272, total_text 6255, total_pixels 6325
+median default: build 6167, stop 20, spawn 47, restart 73, value 110, text 119, pixels 173, total_value 6278.5, total_text 6309, total_pixels 6344.5 ms
+p95    default: build 6337, stop 50, spawn 62, restart 100, value 129, text 270, pixels 314, total_value 6447, total_text 6576, total_pixels 6620 ms
