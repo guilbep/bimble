@@ -522,10 +522,13 @@ export async function start(): Promise<void> {
     const native = url.searchParams.get("native") === "1" ? nativeParams(url.searchParams) : null;
     if (url.searchParams.get("ccore") === "1") {
       // The C core's wasm module in the page (ticket T13b): no server, no Rust. `&gl=1` draws its mesh.
+      // PERF1: the viewport's chunk is fetched while the wasm and the model load, not after them.
+      const glChunk = url.searchParams.get("gl") === "1" ? import("./glviewport") : null;
+      glChunk?.catch(() => undefined); // awaited below; no unhandled rejection if ccoreClient throws first
       const cc = await import("./ccore");
       w = await cc.ccoreClient(url.searchParams);
-      if (url.searchParams.get("gl") === "1") {
-        viewportDirty = (await import("./glviewport")).glViewport({
+      if (glChunk) {
+        viewportDirty = (await glChunk).glViewport({
           mesh: async () => cc.ccoreMesh().bytes,
           epoch: async () => null,
         });
