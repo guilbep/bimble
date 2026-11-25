@@ -399,6 +399,10 @@ static const struct {
     {"composite", 1, 4e7, 1e-9, {-400, -50, 0}, {400, 50, 1000}, 1e-3, NULL},
     /* IfcMirroredProfileDef: the 200 x 100 rectangle at x 500 mirrored about y: x -600..-400 */
     {"mirrored", 1, 2e7, 1e-9, {-600, -50, 0}, {-400, 50, 1000}, 1e-3, NULL},
+    /* Curves in a body (ticket IFC3): the curves-only proxy draws nothing (and is no element),
+     * the member its 200 x 100 x 1000 extrusion: 2e7; the curves counted as "no body by design",
+     * not "unsupported" */
+    {"geometric_set", 1, 2e7, 1e-9, {-100, -50, 0}, {100, 50, 1000}, 1e-3, "IFCGEOMETRIC"},
     /* IfcRevolvedAreaSolid: a 100x200 rectangle, x 400..500, turned about the Y axis
      * (right-handed: +X goes to -Z). Pappus: angle * area * centroid radius; chords within 0.3 %.
      * A quarter turn: pi/2 * 20000 * 450 = 14137166.9, box x 0..500, z -500..0 */

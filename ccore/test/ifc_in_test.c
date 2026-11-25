@@ -386,6 +386,7 @@ static const struct {
     size_t elements;
     const char *kind;
     double volume, rel_tol;
+    const char *skipped; /* the one "skipped" report line expected, or NULL */
 } OWN_IMPORT[] = {
     /* IfcColumn 300 x 300 x 3000 under an IfcProductRepresentation: parametric */
     {"product_rep", 1, "rect_column", 270e6, 1e-9},
@@ -418,6 +419,9 @@ static const struct {
     {"mirrored", 1, "extruded_polygon", 2e7, 1e-9},
     /* A composite of two profiles is two regions: a mesh */
     {"composite", 1, "mesh", 4e7, 1e-9},
+    /* Curves in a body: the member is a mesh of its extrusion (2e7), the curves-only proxy is
+     * skipped with a named line */
+    {"geometric_set", 1, "mesh", 2e7, 1e-9, "skipped: IfcBuildingElementProxy: a body Bimble can't read yet"},
     /* The solids the importer cannot parametrise: meshes (the reader's triangles) */
     {"revolved", 1, "mesh", 14137166.9, 3e-3},
     {"revolved_full", 1, "mesh", 56548667.8, 3e-3},
@@ -494,9 +498,12 @@ static void own_imports(void) {
         check_true(m, nel == OWN_IMPORT[g].elements && !strcmp(kind, OWN_IMPORT[g].kind));
         snprintf(m, sizeof m, "import ifc_c/%s: volume within %g of the hand value", nm, OWN_IMPORT[g].rel_tol);
         check_true(m, (rel < 0 ? -rel : rel) <= OWN_IMPORT[g].rel_tol);
-        snprintf(m, sizeof m, "import ifc_c/%s: nothing skipped or unsupported", nm);
-        check_true(m, !rc3 && unsup == 0 && rq.elements == nel && !strstr(buf_cstr(&lines), "skipped") &&
-                          !strstr(buf_cstr(&lines), "can't read"));
+        const char *sk = OWN_IMPORT[g].skipped;
+        snprintf(m, sizeof m, "import ifc_c/%s: %s", nm, sk ? sk : "nothing skipped or unsupported");
+        if (sk) check_true(m, !rc3 && unsup == 0 && rq.elements == nel && strstr(buf_cstr(&lines), sk));
+        else
+            check_true(m, !rc3 && unsup == 0 && rq.elements == nel && !strstr(buf_cstr(&lines), "skipped") &&
+                              !strstr(buf_cstr(&lines), "can't read"));
         if (!rc3) cc_model_free(&cm);
         cc_ifc_report_free(&rq);
         free(wj), free(wr), free(t), free(kk.v);

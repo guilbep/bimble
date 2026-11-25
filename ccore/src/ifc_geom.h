@@ -2382,6 +2382,21 @@ static int map_on_stack(R *r, uint64_t id) {
     return 0;
 }
 
+/* no_body: curves, points and texts: a body representation may hold them (IfcGeometricSet,
+ * Revit's IfcIndexedPolyCurve), but they bound no volume and IfcOpenShell draws no faces for them
+ * either; the scene has no edge-only element, so they are counted, not drawn (ticket IFC3). */
+static int no_body(const char *n) {
+    static const char *T[] = {"IFCPOLYLINE", "IFCINDEXEDPOLYCURVE", "IFCCOMPOSITECURVE", "IFCTRIMMEDCURVE",
+                              "IFCCIRCLE", "IFCELLIPSE", "IFCLINE", "IFCBSPLINECURVE", "IFCBSPLINECURVEWITHKNOTS",
+                              "IFCRATIONALBSPLINECURVEWITHKNOTS", "IFCOFFSETCURVE2D", "IFCOFFSETCURVE3D",
+                              "IFCOFFSETCURVE", "IFCPCURVE", "IFCCOMPOSITECURVEONSURFACE", "IFCPOLYLOOP",
+                              "IFCCARTESIANPOINT", "IFCPOINTONCURVE", "IFCPOINTONSURFACE", "IFCCARTESIANPOINTLIST2D",
+                              "IFCCARTESIANPOINTLIST3D", "IFCTEXTLITERAL", "IFCTEXTLITERALWITHEXTENT"};
+    for (size_t k = 0; k < sizeof T / sizeof *T; k++)
+        if (!strcmp(n, T[k])) return 1;
+    return 0;
+}
+
 static void item(R *r, uint64_t id, const Aff *tf, Emit *out, int depth) {
     if (depth > MAX_NESTING) {
         warn(r, "representation nesting too deep", 0, 0);
@@ -2439,7 +2454,19 @@ static void item(R *r, uint64_t id, const Aff *tf, Emit *out, int depth) {
     } else if (is(e, "IFCBOOLEANCLIPPINGRESULT") || is(e, "IFCBOOLEANRESULT")) boolean_result(r, e, tf, out, depth);
     else if (is(e, "IFCSWEPTDISKSOLID") || is(e, "IFCSWEPTDISKSOLIDPOLYGONAL")) swept_disk(r, e, tf, out);
     else if (is(e, "IFCSTYLEDITEM")) {
-    } else warn(r, "unsupported geometry ", e->name, " (skipped)");
+    } else if (is(e, "IFCGEOMETRICSET") || is(e, "IFCGEOMETRICCURVESET")) {
+        /* (ticket IFC3) its elements, each as an item: the surfaces and solids drawn (or warned
+         * by their own type), the curves and points counted as no body (below). */
+        const cc_sv *l;
+        size_t n;
+        if (!cc_sv_as_list(arg(e, 0), &l, &n)) n = 0;
+        for (size_t i = 0; i < n; i++) {
+            uint64_t it;
+            if (cc_sv_as_ref(&l[i], &it)) item(r, it, tf, out, depth + 1);
+        }
+    } else if (no_body(e->name))
+        warn(r, "no body by design: ", e->name, " (a curve, point or text in a body: nothing to draw)");
+    else warn(r, "unsupported geometry ", e->name, " (skipped)");
 }
 
 /* map_shape: a representation map's items in the map's own coordinates. */

@@ -403,6 +403,14 @@ scene's volume and bounding box against numbers computed by hand from the fixtur
   axis (the derived Operator, applied as `IfcDerivedProfileDef`'s operator is: after the
   parent's Position, Rust's order). IfcOpenShell 0.9 mirrors inside the parent's Position (a
   parent placed at x 500 stays at x 400..600 there; C draws it at -600..-400).
+- `IfcGeometricSet` and `IfcGeometricCurveSet` in a body: their elements are read as items (a
+  surface or solid drawn, or warned under its own type). Curves, points and texts in a body
+  (`IfcPolyline`, `IfcIndexedPolyCurve`, `IfcCompositeCurve`, `IfcTrimmedCurve`, conics,
+  B-splines, offset curves, `IfcCartesianPoint`, point lists, text literals) bound no volume:
+  the scene has no edge-only element, so they are not drawn, and the warning is
+  `no body by design: <TYPE> (a curve, point or text in a body: nothing to draw)` instead of
+  Rust's `unsupported geometry <TYPE> (skipped)`. IfcOpenShell 0.9's iterator draws no faces for
+  them either (`geometric_set`; `files/452--line-segment-straight.ifc`: 0 products).
 - Import goldens of the C's own: `golden/ifc_c/import/<name>.json` and `<name>.report.txt` for
   every `golden/ifc_c/fixtures/*.ifc` (ids masked as in `golden/ifc/import/`; the report with its
   C-only `unsupported: ` lines), `CCORE_WRITE_GOLDEN=1 test/run.sh ifc_in` writes them again;
