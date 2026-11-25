@@ -143,8 +143,18 @@ declare global {
   }
 }
 
-/** Draws the host's `/mesh` into #bimble with WebGL2. Returns a function that marks the view dirty. */
-export function glViewport(base: string, token: string): () => void {
+/** Where the mesh comes from: the native host over HTTP (`glViewport(base, token)`), or a function
+ *  (the C core's wasm module in the page, `?ccore=1`) returning the BMSH bytes, with no process
+ *  epoch (one module per page). */
+export interface MeshSource {
+  /** The BMSH bytes now (GET /mesh). */
+  mesh(): Promise<ArrayBuffer>;
+  /** The process the mesh came from (GET /change `epoch`); null when there is none. */
+  epoch(): Promise<string | null>;
+}
+
+/** Draws the host's `/mesh` (or `source`'s) into #bimble with WebGL2. Returns a function that marks the view dirty. */
+export function glViewport(base: string | MeshSource, token = ""): () => void {
   const canvas = document.getElementById("bimble");
   const stats: GlStats = { firstFrameMs: null, meshBytes: 0, meshFetchMs: 0, meshRev: null, frames: 0, picks: 0, error: null };
   window.__bbGl = stats;
@@ -156,6 +166,18 @@ export function glViewport(base: string, token: string): () => void {
     return () => undefined;
   }
   const t = encodeURIComponent(token);
+  const source: MeshSource = typeof base !== "string" ? base : {
+    epoch: async () => {
+      const r = await fetch(`${base}/change?since=0&t=${t}`, { cache: "no-store" });
+      const m = (await r.json()) as { epoch?: unknown };
+      return typeof m.epoch === "string" ? m.epoch : null;
+    },
+    mesh: async () => {
+      const r = await fetch(`${base}/mesh?t=${t}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`mesh: HTTP ${r.status} ${await r.text()}`);
+      return r.arrayBuffer();
+    },
+  };
 
   const compile = (type: number, src: string): WebGLShader => {
     const s = gl.createShader(type);
@@ -196,11 +218,7 @@ export function glViewport(base: string, token: string): () => void {
   let epoch: string | null = null;
   let seenState = state.value;
   let checking = false;
-  const hostEpoch = async (): Promise<string | null> => {
-    const r = await fetch(`${base}/change?since=0&t=${t}`, { cache: "no-store" });
-    const m = (await r.json()) as { epoch?: unknown };
-    return typeof m.epoch === "string" ? m.epoch : null;
-  };
+  const hostEpoch = (): Promise<string | null> => source.epoch();
   const checkEpoch = async (): Promise<void> => {
     checking = true;
     try {
@@ -283,9 +301,7 @@ export function glViewport(base: string, token: string): () => void {
     try {
       const t0 = performance.now();
       epoch = await hostEpoch().catch(() => null);
-      const r = await fetch(`${base}/mesh?t=${t}`, { cache: "no-store" });
-      if (!r.ok) throw new Error(`mesh: HTTP ${r.status} ${await r.text()}`);
-      const ab = await r.arrayBuffer();
+      const ab = await source.mesh();
       stats.meshFetchMs = performance.now() - t0;
       stats.meshBytes = ab.byteLength;
       const m = parseBmsh(ab);

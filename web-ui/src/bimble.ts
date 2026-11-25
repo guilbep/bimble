@@ -499,7 +499,17 @@ export async function start(): Promise<void> {
     let w: Wasm;
     let viewportDirty: (() => void) | null = null;
     const native = url.searchParams.get("native") === "1" ? nativeParams(url.searchParams) : null;
-    if (native) {
+    if (url.searchParams.get("ccore") === "1") {
+      // The C core's wasm module in the page (ticket T13b): no server, no Rust. `&gl=1` draws its mesh.
+      const cc = await import("./ccore");
+      w = await cc.ccoreClient(url.searchParams);
+      if (url.searchParams.get("gl") === "1") {
+        viewportDirty = (await import("./glviewport")).glViewport({
+          mesh: async () => cc.ccoreMesh().bytes,
+          epoch: async () => null,
+        });
+      }
+    } else if (native) {
       // Dev only: no manifold, no wasm; on_change below starts the long-poll loop.
       w = nativeClient(native.port, native.token);
       // `&gl=1`: draw the host's /mesh with WebGL2 (the C host, spec §2) instead of /frame.

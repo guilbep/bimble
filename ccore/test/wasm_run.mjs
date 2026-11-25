@@ -9,9 +9,17 @@
 //   mesh     mesh(local) of frame and frame2 against <k>.txt and scene.txt; mesh(world) against
 //            the local meshes placed in JS with f32 arithmetic (scene.c cc_scene_world_mesh)
 //   memory   1000 x (open, mesh, close) and 100 x open_ifc: no growth after the first round
+//   host     the host call layer in the module (call, change_json, host_open_text, host_mesh,
+//            host_saved; ticket T13b) against the native host (out/tcc/bimble-ccore or $HOST_BIN,
+//            port 47351, CCORE_SEED=1 and guid_seed(1) on both): boot without a model (state,
+//            actions: 54 rows), open frame.json, the same calls on both (select, verb place,
+//            history, undo, redo, action save…): every answer, status and change JSON byte for
+//            byte, the saved text = the native host's saved file, host_mesh = GET /mesh
 // Prints per-suite "N passed, M failed", the module size and timings; exits non-zero on a failure.
 // No dependencies.
-import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { gzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -395,6 +403,111 @@ suite("memory");
   for (let i = 0; i < 100; i++) ifcRound();
   check("100 x open_ifc + close: heap unchanged", X.cc_heap_used() === heap2, `${heap2} -> ${X.cc_heap_used()}`);
   console.log(`memory: ${pages1} pages (${(pages1 / 16).toFixed(1)} MiB), heap ${heap1} bytes; 1000 rounds in ${loopMs.toFixed(0)} ms`);
+  end();
+}
+
+// ---- host: the call layer in the module against the native host ----
+const HOST_BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
+const HOST_PORT = 47351, HOST_TOKEN = "wasmrun-token";
+/** One call of the module's host layer: {status, text, bytes, value}. */
+const hcall = (op, name = "-", body = "") => call(X.call, [op, name, body]);
+const change = () => call(X.change_json, []).text;
+suite("host");
+{
+  const tmpd = mkdtempSync(join(tmpdir(), "ccore-wasm-run-"));
+  const model = join(tmpd, "frame.json");
+  copyFileSync(join(G, "frame.json"), model);
+  const host = spawn(HOST_BIN, [String(HOST_PORT), model], {
+    env: { ...process.env, BIMBLE_TOKEN: HOST_TOKEN, CCORE_SEED: "1" }, stdio: ["ignore", "ignore", "pipe"],
+  });
+  let hostErr = "";
+  host.stderr.on("data", (d) => (hostErr += d));
+  try {
+    const base = `http://127.0.0.1:${HOST_PORT}`;
+    const until = Date.now() + 5000;
+    while (!hostErr.includes("listening")) {
+      if (Date.now() > until || host.exitCode !== null) throw new Error(`native host did not start: ${hostErr}`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const ncall = async (op, name = "-", body = "") => {
+      const r = await fetch(`${base}/${op}/${encodeURIComponent(name)}?t=${HOST_TOKEN}`,
+        { method: "POST", body, headers: { "Content-Type": "text/plain" } });
+      return { status: r.status, text: await r.text() };
+    };
+    const nchange = async () => JSON.stringify((await (await fetch(`${base}/change?since=0&t=${HOST_TOKEN}`)).json()).change);
+    const nmesh = async () => new Uint8Array(await (await fetch(`${base}/mesh?t=${HOST_TOKEN}`)).arrayBuffer());
+
+    // Boot: no model yet (the page asks before it opens one).
+    check("boot: change_json without a model", JSON.parse(change()).file === null, change());
+    const st0 = hcall("query", "state", "{}");
+    check("boot: query state -> 200, no file", st0.status === 200 && JSON.parse(st0.text).file === null, st0.text);
+    const ac0 = hcall("query", "actions", "{}");
+    check("boot: query actions -> 54 rows", ac0.status === 200 && JSON.parse(ac0.text).length === 54, ac0.text.slice(0, 200));
+    check("unknown op -> 404", hcall("nope").status === 404);
+    check("host_saved before a save -> 404", call(X.host_saved, []).status === 404);
+
+    const frameText = read("frame.json");
+    X.guid_seed(1n);
+    const op = call(X.host_open_text, ["frame.json", frameText]);
+    check("host_open_text frame.json -> 200, rev 1", op.status === 200 && op.value === 1, `${op.status} ${op.text} ${op.value}`);
+    check("a second host_open_text -> 400", call(X.host_open_text, ["frame.json", frameText]).status === 400);
+
+    const STOREY = "1uAZA0Yfn05f$xRd1k4uPR";
+    const firstId = Object.keys(frame.elements).sort()[0];
+    const steps = [
+      ["query", "state", "{}"], ["query", "actions", "{}"], ["query", "storeys", "{}"], ["query", "status", "null"],
+      ["query", "open_views", "{}"], ["query", "visibility", "{}"], ["query", "placing", "{}"],
+      ["select", "-", JSON.stringify([firstId])], ["query", "element", JSON.stringify({ id: firstId })],
+      ["set_placing", "-", JSON.stringify({ kind: "beam" })], ["query", "placing", "{}"],
+      ["verb", "place", JSON.stringify({ a: [1500.0, 1500.0], kind: "column", storey: STOREY })],
+      ["query", "history", "{}"], ["query", "state", "{}"], "mesh", ["action", "save", ""], "saved",
+      ["undo", "-", ""], ["query", "history", "{}"], ["query", "state", "{}"], ["action", "save", ""], "saved", "saved=open",
+      ["query", "state", "{}"], ["redo", "-", ""], "mesh", ["action", "undo", ""], ["action", "redo", ""],
+      ["apply", "-", "not json"], ["verb", "nope", "{}"], ["query", "nope", "{}"], ["action", "nope", ""],
+      ["tab", "-", JSON.stringify({ op: "activate", id: "x" })], ["dismiss_belongs", "-", ""], ["query", "status", "null"],
+    ];
+    let rev = 1, placedRev = 0;
+    for (const s of steps) {
+      if (s === "mesh") {
+        const w = call(X.host_mesh, [], 0), n = await nmesh();
+        check(`host_mesh = GET /mesh at rev ${w.value}`, w.status === 200 && w.bytes.length === n.length && w.bytes.every((b, i) => b === n[i]),
+          `${w.status} ${w.bytes.length} vs ${n.length} bytes`);
+        continue;
+      }
+      if (s === "saved=open") { // place, undo, save: the text cc_model_save gives frame.json (export save)
+        const h = openText(frameText);
+        eq("saved after undo = save of frame.json as opened", call(X.host_saved, []).text, save(h.value));
+        X.close(h.value);
+        continue;
+      }
+      if (s === "saved") {
+        const w = call(X.host_saved, []);
+        eq("action save: host_saved = the native host's saved file", w.status === 200 ? w.text : `${w.status}`, readFileSync(model, "utf8"));
+        continue;
+      }
+      const [o, name, body] = s;
+      const w = hcall(o, name, body), n = await ncall(o, name, body);
+      // The load time is a clock reading (the module has none: 0): masked in query status.
+      const mask = (t) => o === "query" && name === "status" ? t.replace(/"load_ms":[0-9.e+-]+/, '"load_ms":_').replace(/loaded in [^·]*·/, "loaded in _ ·") : t;
+      eq(`${o} ${name} ${body}`, mask(`${w.status} ${w.text}`), mask(`${n.status} ${n.text}`));
+      const wc = change();
+      eq(`change after ${o} ${name}`, JSON.stringify(JSON.parse(wc)), await nchange());
+      const r = JSON.parse(wc).rev;
+      if (o === "verb" && name === "place") placedRev = r, check("verb place: rev + 1", r === rev + 1, `${rev} -> ${r}`);
+      rev = r;
+    }
+    check("the place happened", placedRev === 2, String(placedRev));
+    const lg = call(X.host_log, []).text;
+    check("host_log has the Saved lines", (lg.match(/bimble-ccore: Saved frame\.json/g) ?? []).length === 2, JSON.stringify(lg));
+    const local = call(X.host_mesh, [], 1);
+    check("host_mesh local -> BMSH version 2", local.status === 200 && new DataView(local.bytes.buffer).getUint32(4, true) === 2);
+  } catch (e) {
+    check("no exception", false, e.stack ?? String(e));
+  } finally {
+    X.guid_seed(0n);
+    host.kill("SIGKILL");
+    rmSync(tmpd, { recursive: true, force: true });
+  }
   end();
 }
 

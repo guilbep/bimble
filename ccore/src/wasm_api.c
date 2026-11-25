@@ -16,6 +16,9 @@
 #include "scene.h"
 #include "strtod.h"
 #include "verbs.h"
+#include "calls.h"   /* host/, -Ihost */
+#include "mesh.h"
+#include "session.h"
 
 #define EXPORT(name) __attribute__((export_name(name)))
 
@@ -324,4 +327,241 @@ EXPORT("fmt_f64") int wa_fmt_f64(double x, int debug, cc_wasm_res *r) {
 }
 
 EXPORT("parse_f64") double wa_parse_f64(const char *p, size_t n) { return cc_strtod(p, n); }
+
+/* ---- the libc of the host call layer (wasm_api.h) ---- */
+
+int strcmp(const char *a, const char *b) {
+    while (*a && *a == *b) a++, b++;
+    return (unsigned char)*a - (unsigned char)*b;
+}
+int strncmp(const char *a, const char *b, size_t n) {
+    for (; n; n--, a++, b++) {
+        if (*a != *b) return (unsigned char)*a - (unsigned char)*b;
+        if (!*a) return 0;
+    }
+    return 0;
+}
+char *strrchr(const char *s, int c) {
+    const char *r = NULL;
+    for (;; s++) {
+        if (*s == (char)c) r = s;
+        if (!*s) return (char *)r;
+    }
+}
+char *strcpy(char *d, const char *s) {
+    char *r = d;
+    while ((*d++ = *s++)) {}
+    return r;
+}
+
+/* Stable merge sort (glibc's qsort is a merge sort too when it can allocate; the host's
+ * comparators never tie anyway). Falls back to insertion sort without memory. */
+void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *)) {
+    unsigned char *a = base;
+    if (n < 2 || !size) return;
+    unsigned char *t = malloc(n * size);
+    if (!t) {
+        unsigned char tmp[64];
+        for (size_t i = 1; i < n; i++)
+            for (size_t j = i; j > 0 && cmp(a + (j - 1) * size, a + j * size) > 0; j--)
+                for (size_t k = 0; k < size; k += sizeof tmp) {
+                    size_t m = size - k < sizeof tmp ? size - k : sizeof tmp;
+                    memcpy(tmp, a + (j - 1) * size + k, m);
+                    memcpy(a + (j - 1) * size + k, a + j * size + k, m);
+                    memcpy(a + j * size + k, tmp, m);
+                }
+        return;
+    }
+    for (size_t w = 1; w < n; w *= 2) {
+        for (size_t lo = 0; lo < n; lo += 2 * w) {
+            size_t mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n;
+            size_t i = lo, j = mid, k = lo;
+            while (i < mid && j < hi) {
+                if (cmp(a + j * size, a + i * size) < 0) memcpy(t + k++ * size, a + j++ * size, size);
+                else memcpy(t + k++ * size, a + i++ * size, size);
+            }
+            while (i < mid) memcpy(t + k++ * size, a + i++ * size, size);
+            while (j < hi) memcpy(t + k++ * size, a + j++ * size, size);
+        }
+        memcpy(a, t, n * size);
+    }
+    free(t);
+}
+
+/* %.<p>f of x as glibc prints it for the host's values (sizes, |x| < 2^63): the decimal digits
+ * of x * 10^p rounded half to even. */
+static void put_fixed(Buf *b, double x, int prec) {
+    if (x != x) return buf_puts(b, "nan");
+    if (x < 0) buf_putc(b, '-'), x = -x;
+    if (x > 9.2e18) return buf_puts(b, "inf");
+    double sc = 1;
+    for (int i = 0; i < prec; i++) sc *= 10;
+    double v = x * sc, f = __builtin_floor(v), d = v - f;
+    uint64_t q = (uint64_t)f;
+    if (d > 0.5 || (d == 0.5 && (q & 1))) q++;
+    uint64_t ip = q, fp = 0, m = 1;
+    for (int i = 0; i < prec; i++) m *= 10;
+    ip = q / m, fp = q % m;
+    buf_u64(b, ip);
+    if (prec > 0) {
+        buf_putc(b, '.');
+        char dig[24];
+        for (int i = prec - 1; i >= 0; i--) dig[i] = (char)('0' + fp % 10), fp /= 10;
+        buf_append(b, dig, (size_t)prec);
+    }
+}
+
+static void vformat(Buf *b, const char *f, va_list ap) {
+    for (; *f; f++) {
+        if (*f != '%') {
+            buf_putc(b, *f);
+            continue;
+        }
+        f++;
+        int prec = -1;
+        if (*f == '.') {
+            f++;
+            if (*f == '*') prec = va_arg(ap, int), f++;
+            else for (prec = 0; *f >= '0' && *f <= '9'; f++) prec = prec * 10 + (*f - '0');
+        }
+        if (*f == 's') {
+            const char *s = va_arg(ap, const char *);
+            size_t n = strlen(s);
+            if (prec >= 0 && (size_t)prec < n) n = (size_t)prec;
+            buf_append(b, s, n);
+        } else if (*f == 'd') {
+            int v = va_arg(ap, int);
+            if (v < 0) buf_putc(b, '-'), buf_u64(b, (uint64_t)0 - (uint64_t)(int64_t)v);
+            else buf_u64(b, (uint64_t)v);
+        } else if (*f == 'u') buf_u64(b, va_arg(ap, unsigned));
+        else if (f[0] == 'z' && f[1] == 'u') buf_u64(b, va_arg(ap, size_t)), f++;
+        else if (f[0] == 'l' && f[1] == 'l' && f[2] == 'u') buf_u64(b, va_arg(ap, unsigned long long)), f += 2;
+        else if (*f == 'f') put_fixed(b, va_arg(ap, double), prec < 0 ? 6 : prec);
+        else if (*f == '%') buf_putc(b, '%');
+        else return; /* not used by the host: stop */
+    }
+}
+
+int snprintf(char *out, size_t cap, const char *fmt, ...) {
+    Buf b;
+    buf_init(&b);
+    va_list ap;
+    va_start(ap, fmt);
+    vformat(&b, fmt, ap);
+    va_end(ap);
+    if (b.oom) {
+        buf_free(&b);
+        if (cap) out[0] = 0;
+        return -1;
+    }
+    if (cap) {
+        size_t k = b.len < cap - 1 ? b.len : cap - 1;
+        if (k) memcpy(out, b.p, k);
+        out[k] = 0;
+    }
+    int n = (int)b.len;
+    buf_free(&b);
+    return n;
+}
+
+static Buf host_log_buf;
+int fprintf(cc_wasm_file *f, const char *fmt, ...) {
+    (void)f;
+    size_t before = host_log_buf.len;
+    va_list ap;
+    va_start(ap, fmt);
+    if (host_log_buf.len < (1u << 20)) vformat(&host_log_buf, fmt, ap); /* bounded */
+    va_end(ap);
+    return (int)(host_log_buf.len - before);
+}
+
+/* ---- the host call layer (host/calls.c, session.c, mesh.c) ---- */
+
+Buf cc_wasm_saved;
+int cc_wasm_has_saved;
+
+/* Copies (p, n) into a NUL-terminated malloc'd string; NULL when out of memory. */
+static char *zdup(const char *p, size_t n) {
+    char *z = malloc(n + 1);
+    if (!z) return NULL;
+    if (n) memcpy(z, p, n);
+    z[n] = 0;
+    return z;
+}
+
+EXPORT("host_open_text") int wa_host_open_text(const char *name, size_t nn, const char *p, size_t n, cc_wasm_res *r) {
+    r->value = 0;
+    char *z = zdup(name, nn);
+    if (!z) return text(r, 500, "out of memory");
+    cc_error err;
+    int rc = cc_session_open_text(nn ? z : "model.bimble", p, n, &err);
+    free(z);
+    if (rc) return text(r, 400, err.msg);
+    r->value = cc_host_rev();
+    return text(r, 200, "");
+}
+
+EXPORT("call") int wa_call(const char *op, size_t on, const char *name, size_t nn, const char *body, size_t bn,
+                           cc_wasm_res *r) {
+    r->value = 0;
+    char *zop = zdup(op, on), *zname = zdup(name, nn), *zbody = zdup(body, bn);
+    int st;
+    Buf b;
+    buf_init(&b);
+    if (!zop || !zname || !zbody) st = 500, buf_puts(&b, "out of memory");
+    else if (!cc_known_op(zop)) st = 404, buf_puts(&b, "unknown call"); /* server.c: not a route */
+    else st = cc_call(zop, zname, zbody, bn, &b);
+    free(zop), free(zname), free(zbody);
+    return answer(r, &b, st);
+}
+
+EXPORT("change_json") int wa_change_json(cc_wasm_res *r) {
+    r->value = cc_host_rev();
+    Buf b;
+    buf_init(&b);
+    cc_change_json(&b);
+    return answer(r, &b, 200);
+}
+
+EXPORT("host_mesh") int wa_host_mesh(int flags, cc_wasm_res *r) {
+    if (flags & 1) { /* the local form: the walk above, on the session's model */
+        const cc_model *m = cc_host_model();
+        r->value = cc_host_rev();
+        if (!m) return text(r, 404, "no model open");
+        Buf b;
+        buf_init(&b);
+        cc_error err;
+        if (bmsh(m, cc_host_rev(), 1, &b, &err)) {
+            buf_free(&b);
+            return text(r, 500, err.msg);
+        }
+        return answer(r, &b, 200);
+    }
+    const char *p;
+    size_t n;
+    uint32_t rev;
+    double ms;
+    int st = cc_mesh_get(&p, &n, &rev, &ms);
+    r->value = rev;
+    Buf b;
+    buf_init(&b);
+    buf_append(&b, p, n);
+    return answer(r, &b, st);
+}
+
+EXPORT("host_saved") int wa_host_saved(cc_wasm_res *r) {
+    r->value = 0;
+    if (!cc_wasm_has_saved) return text(r, 404, "not saved yet");
+    Buf b;
+    buf_init(&b);
+    buf_append(&b, cc_wasm_saved.p, cc_wasm_saved.len);
+    return answer(r, &b, 200);
+}
+
+EXPORT("host_log") int wa_host_log(cc_wasm_res *r) {
+    r->value = 0;
+    Buf b = host_log_buf;
+    buf_init(&host_log_buf);
+    return answer(r, &b, 200);
+}
 #endif

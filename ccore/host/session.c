@@ -1,12 +1,16 @@
 /* The native host's session: see session.h. */
 #define _POSIX_C_SOURCE 200809L
+#ifdef __wasm__
+#include "wasm_api.h" /* snprintf, strcmp…, freestanding; no files, no clock */
+#else
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#endif
+#include <stdlib.h>
+#include <string.h>
 
 #include "command.h"
 #include "file.h"
@@ -31,6 +35,45 @@ uint32_t cc_host_rev(void) { return (uint32_t)S.rev; }
 uint64_t cc_session_step(const cc_session *s) { return s->nundo_ids ? s->undo_ids[s->nundo_ids - 1] : 0; }
 int cc_session_unsaved(const cc_session *s) { return s->open && cc_session_step(s) != s->saved_step; }
 
+#ifdef __wasm__
+static double now_ms(void) { return 0; } /* no clock in the module: load_ms reads 0 */
+
+/* No files in the module: cc_session_open_text hands the text, read_all copies it. */
+static const char *wasm_text;
+static size_t wasm_n;
+
+static char *read_all(const char *path, size_t *n, cc_error *err) {
+    if (!wasm_text) {
+        snprintf(err->msg, sizeof err->msg, "%s: cannot open", path);
+        return NULL;
+    }
+    if (wasm_n > CC_MAX_FILE_BYTES) {
+        snprintf(err->msg, sizeof err->msg, "%s: larger than %zu bytes", path, (size_t)CC_MAX_FILE_BYTES);
+        return NULL;
+    }
+    char *p = malloc(wasm_n + 1);
+    if (!p) {
+        snprintf(err->msg, sizeof err->msg, "%s: %s", path, "out of memory");
+        return NULL;
+    }
+    memcpy(p, wasm_text, wasm_n);
+    p[wasm_n] = 0;
+    *n = wasm_n;
+    return p;
+}
+
+int cc_session_open_text(const char *name, const char *text, size_t n, cc_error *err) {
+    err->offset = CC_NO_OFFSET;
+    if (S.open) { /* mesh.c and calls.c cache per (model, rev): one model per instance */
+        snprintf(err->msg, sizeof err->msg, "a model is already open");
+        return -1;
+    }
+    wasm_text = text, wasm_n = n;
+    int rc = cc_session_open(name, err);
+    wasm_text = NULL, wasm_n = 0;
+    return rc;
+}
+#else
 static double now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -73,6 +116,7 @@ static char *read_all(const char *path, size_t *n, cc_error *err) {
     *n = len;
     return p;
 }
+#endif
 
 static int ends_with_ci(const char *s, const char *suffix) {
     size_t n = strlen(s), k = strlen(suffix);
@@ -99,7 +143,11 @@ static int editable_copy_path(const char *ifc, char *out, size_t cap) {
         else if (k == 1) w = snprintf(out, cap, "%.*s%.*s (imported).bimble", (int)dir, ifc, (int)stem, name);
         else w = snprintf(out, cap, "%.*s%.*s (imported %u).bimble", (int)dir, ifc, (int)stem, name, k);
         if (w < 0 || (size_t)w >= cap) return -1;
+#ifdef __wasm__
+        return 0; /* no files: the first name is free */
+#else
         if (access(out, F_OK) != 0) return 0;
+#endif
     }
     return -1;
 }
@@ -177,6 +225,16 @@ int cc_session_open(const char *path, cc_error *err) {
 }
 
 /* ---- the session file (session.h, ticket T12) ---- */
+
+#ifdef __wasm__
+/* No files in the module: persistence is never on. */
+static void persist_if_changed(void) {}
+int cc_session_persist_start(const char *session_path, const char *model_path) {
+    (void)session_path, (void)model_path;
+    return 0;
+}
+void cc_session_persist_now(void) {}
+#else
 
 #define SESSION_FORMAT 1
 #define SESSION_MAX_LABEL 4096
@@ -495,3 +553,4 @@ int cc_session_persist_start(const char *session_path, const char *model_path) {
     sess_has_fp = 0; /* the first look writes the file (a corrupt one is replaced at once) */
     return restored;
 }
+#endif

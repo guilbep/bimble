@@ -10,6 +10,7 @@ web/dist/
 web-ui/node_modules/
 web-ui/dist/
 web-ui/public/bimble/
+web-ui/public/ccore/
 perf-results/
 web-ui/design-check/out/
 

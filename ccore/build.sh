@@ -3,14 +3,16 @@
 #   tcc    debug library (libccore.a), test binaries and the host (bimble-ccore), for the edit loop
 #   host   only the host, one tcc call over every source (no archive, no tests): dev.sh's loop
 #   native clang -O2, same outputs
-#   wasm   clang freestanding wasm32 of src/ (no libc), ccore.wasm exporting the API of
-#          src/wasm_api.h (test: node test/wasm_run.mjs)
+#   wasm   clang freestanding wasm32 of src/ (no libc) and the host's call layer (HOST_CALLS:
+#          the native host's call code, without its HTTP server and main), ccore.wasm exporting
+#          the API of src/wasm_api.h (test: node test/wasm_run.mjs, test/lab_wasm.mjs)
 set -euo pipefail
 cd "$(dirname "$0")"
 # Every src/*.c is the library (wasm_stub.c only in the wasm build); every test/<name>_test.c is a suite.
 LIB=(); for f in src/*.c; do [[ $f == src/wasm_stub.c ]] || LIB+=("$f"); done
 TESTS=(); for f in test/*_test.c; do t=${f#test/}; TESTS+=("${t%_test.c}"); done
 INC=(-Isrc -Ivendor/ryu)
+HOST_CALLS=(host/calls.c host/session.c host/mesh.c host/mesh_model.c)
 
 ms() { date +%s%N | cut -b1-13; }
 step() { # step <label> <command...>
@@ -62,7 +64,7 @@ case "${1:-}" in
     mkdir -p out/wasm
     step "clang wasm32 link" clang --target=wasm32 -std=c11 -ffreestanding -nostdlib -O2 \
         -Wall -Werror -Wno-unused-function -DRYU_ONLY_64_BIT_OPS -isystem src/freestanding "${INC[@]}" \
-        -Wl,--no-entry "${LIB[@]}" src/wasm_stub.c -o out/wasm/ccore.wasm
+        -Ihost -Wl,--no-entry "${LIB[@]}" src/wasm_stub.c "${HOST_CALLS[@]}" -o out/wasm/ccore.wasm
     printf '  %-28s %5d bytes\n' "ccore.wasm" "$(wc -c < out/wasm/ccore.wasm)"
     printf '  %-28s %5d bytes\n' "ccore.wasm gzip -9" "$(gzip -9 -c out/wasm/ccore.wasm | wc -c)" ;;
   *) echo "usage: $0 tcc|host|native|wasm" >&2; exit 2 ;;

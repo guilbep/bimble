@@ -7,7 +7,11 @@
  * Deviations from Rust: docs/research/c-core-spec.md §1 (version, IFC always imported) and the
  * ones marked "Deviation" below. */
 #define _POSIX_C_SOURCE 200809L
+#ifdef __wasm__
+#include "wasm_api.h" /* the few libc functions below, freestanding */
+#else
 #include <stdio.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -807,6 +811,16 @@ static void save(void) {
     Buf b;
     buf_init(&b);
     int ok = cc_model_save(&s->model, &b) == 0 && !b.oom;
+#ifdef __wasm__
+    /* No files in the module: the saved text is kept for the page (export host_saved). */
+    if (ok) {
+        buf_clear(&cc_wasm_saved);
+        cc_wasm_saved.oom = 0;
+        buf_append(&cc_wasm_saved, b.p, b.len);
+        ok = !cc_wasm_saved.oom;
+        cc_wasm_has_saved = ok;
+    }
+#else
     if (ok) {
         char tmp[4096 + 16];
         snprintf(tmp, sizeof tmp, "%s.tmp", s->path);
@@ -816,6 +830,7 @@ static void save(void) {
         if (ok) ok = rename(tmp, s->path) == 0;
         else remove(tmp);
     }
+#endif
     buf_free(&b);
     /* Rust shows the outcome in the editor's message, the call itself succeeds. */
     if (ok) s->saved_step = cc_session_step(s), fprintf(stderr, "bimble-ccore: Saved %s\n", s->path);

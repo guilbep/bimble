@@ -1,6 +1,10 @@
 /* The model GET /mesh draws: the session's open model and its revision (session.c), so the mesh
  * follows every edit, undo and redo. mesh.c caches the BMSH bytes per revision. */
+#ifdef __wasm__
+#include "wasm_api.h" /* snprintf, freestanding */
+#else
 #include <stdio.h>
+#endif
 
 #include "mesh.h"
 #include "session.h"

@@ -24,9 +24,13 @@
  * indices and edges as Float32Array / Uint32Array over the same buffer.
  * The host is little-endian (x86-64, aarch64); the bytes are written with memcpy. */
 #define _POSIX_C_SOURCE 200809L
+#ifdef __wasm__
+#include "wasm_api.h" /* snprintf, freestanding */
+#else
 #include <stdio.h>
-#include <string.h>
 #include <time.h>
+#endif
+#include <string.h>
 
 #include "mesh.h"
 #include "scene.h"
@@ -103,11 +107,15 @@ static int cache_status;  /* 0: nothing cached */
 static const cc_model *cache_model;
 static uint32_t cache_rev;
 
+#ifdef __wasm__
+static double now_ms(void) { return 0; } /* no clock in the module: build_ms reads 0 */
+#else
 static double now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec * 1e3 + (double)ts.tv_nsec / 1e6;
 }
+#endif
 
 int cc_mesh_get(const char **p, size_t *n, uint32_t *rev, double *build_ms) {
     cc_error err;
