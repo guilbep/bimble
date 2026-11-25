@@ -369,6 +369,11 @@ interface GlStats {
    *  view-cube turn is running. */
   camera?: { mode: "3d" | "plan"; view: string | null; look: string | null; half: number; yaw: number; pitch: number; target: number[];
     distance: number; turning: boolean };
+  /** The last view-cube turn as drawn: one entry per frame (ms since the turn started, angles,
+   *  arrived); `n` counts the turns started. Read in the page, for the tests (KEY1). */
+  turnLog?: { n: number; frames: { ms: number; yaw: number; pitch: number; done: boolean }[] };
+  /** Test hook: the turns' clock runs at this rate (1: real time; 0.1: ten times slower). */
+  clockScale?: number;
   /** The view cube (viewcube.ts): shown, hovered target, clicks and drags. */
   viewCube?: CubeStats;
   /** Test hooks: a cube target's cell centre, a compass letter (client px), the target under client (x, y). */
@@ -530,6 +535,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   let yaw = HOME_YAW + projectNorth(), pitch = HOME_PITCH, distance = 10000;
   /** A view-cube turn in progress (lib.rs `turn`). */
   let turn: Turn | null = null;
+  // KEY1: each turn started is logged frame by frame (stats.turnLog); its clock is stats.clockScale's.
+  const turnTo = (y: number, p: number): Turn => {
+    stats.turnLog = { n: (stats.turnLog?.n ?? 0) + 1, frames: [] };
+    return startTurn(yaw, pitch, y, p, performance.now());
+  };
   let target: V3 = [0, 0, 0];
   let dirty = true;
   let loading = false;
@@ -1574,7 +1584,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
 
   // The view cube, Home and Fit all (viewcube.ts): the camera stays here, the cube asks.
   const cube = viewCube(canvas, {
-    look: (y, p) => { turn = startTurn(yaw, pitch, y, p, performance.now()); dirty = true; },
+    look: (y, p) => { turn = turnTo(y, p); dirty = true; },
     orbit: (dx, dy) => {
       turn = null;
       yaw -= dx;
@@ -1583,7 +1593,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     },
     home: () => { // lib.rs `navigation` Home: turn to the default view (project north), fit all
       if (plan) return;
-      turn = startTurn(yaw, pitch, HOME_YAW + projectNorth(), HOME_PITCH, performance.now());
+      turn = turnTo(HOME_YAW + projectNorth(), HOME_PITCH);
       fit();
       dirty = true;
     },
@@ -1616,9 +1626,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     if (actions.value !== seenActions) { seenActions = actions.value; dirty = true; } // Q2: a switch turned
     if (turn) { // a view-cube turn: one step per frame (lib.rs `animate`)
-      const k = turnAt(turn, performance.now());
+      const ms = performance.now() - turn.start;
+      const k = turnAt(turn, turn.start + ms * (stats.clockScale ?? 1));
       yaw = k.yaw;
       pitch = k.pitch;
+      stats.turnLog?.frames.push({ ms, yaw, pitch, done: k.done });
       if (k.done) turn = null;
       dirty = true;
     }

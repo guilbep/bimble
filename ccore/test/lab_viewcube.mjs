@@ -9,8 +9,10 @@
 //   hover: the target under the pointer is filled with ink (the control accent, ADR 0049);
 //   pick: a click on a column selects it; a click on the cube never selects (no pick, no select
 //     request, the selection kept);
-//   clicks: Top looks straight down, north up (yaw -90°, pitch 1.57), animated (in-between angles
-//     seen) and the cube's middle is then TOP; the front-top edge (45° down), Front (level, the cube's
+//   clicks: Top looks straight down, north up (yaw -90°, pitch 1.57) in 300 ms (the page's frame
+//     log: every frame on the way strictly between, one way; the arrival at 300 ms or later), the
+//     path animated (a turn on a clock slowed 10 x draws in-between angles: KEY1, robust under load)
+//     and the cube's middle is then TOP; the front-top edge (45° down), Front (level, the cube's
 //     middle FRONT), a corner (isometric: yaw -45°, pitch 35.26°);
 //   drags: on the cube, orbit (0.008 rad/px: yaw by the drag, no select); on the compass ring (the S),
 //     a turn about the vertical (pitch kept); the wheel over the cube zooms the view;
@@ -189,15 +191,33 @@ async function main() {
     await mouse("mouseReleased", x + dx, y + dy);
     await settle();
   };
-  /** Clicks `at` and follows the camera until the turn ends: the angles seen on the way. */
-  const clickTurn = async (at) => {
-    const c0 = await camera();
+  /** Clicks `at` and waits for the turn's end. `log`: the page's own record of the turn, one entry
+   *  per frame drawn (glviewport.ts turnLog: the time since the turn started and the angles), read
+   *  in the page, not polled over CDP (KEY1: polling saw 0 in-between angles under load).
+   *  `slow`: the turn's clock runs that much slower (window.__bbGl.clockScale, a test hook). */
+  const clickTurn = async (at, slow = 1) => {
+    await evalJs(`window.__bbGl.clockScale = ${slow}; true`);
+    const c0 = await camera(), n0 = await evalJs("window.__bbGl.turnLog?.n ?? 0");
     await click(at);
-    const seen = [];
-    await waitFor("a turn", 3000, async () => { const c = await camera(); seen.push(c); return c.turning || c.yaw !== c0.yaw || c.pitch !== c0.pitch; }).catch(() => {});
-    const end = await waitFor("the turn's end", 5000, async () => { const c = await camera(); seen.push(c); return c.turning ? null : c; });
+    await waitFor("a turn", 3000, () => evalJs(`(window.__bbGl.turnLog?.n ?? 0) > ${n0}`)).catch(() => {});
+    // The end: the log's last frame arrived (the camera's own state is written by the next frame).
+    await waitFor("the turn's end", 5000 / slow, () => evalJs(`window.__bbGl.turnLog.n > ${n0} && window.__bbGl.turnLog.frames.at(-1)?.done === true`)).catch(() => {});
+    const end = await waitFor("the camera at rest", 3000, async () => { const c = await camera(); return c.turning ? null : c; });
+    const log = await evalJs("JSON.parse(JSON.stringify(window.__bbGl.turnLog ?? null))");
+    await evalJs("window.__bbGl.clockScale = 1; true");
     await settle();
-    return { c0, end, seen };
+    return { c0, end, log };
+  };
+  /** The turn's frames: every frame's pitch moves one way (from the start toward the end), the
+   *  frames drawn before the arrival strictly between start and end, the arrival exact and last. */
+  const turnPath = (t, coord) => {
+    const f = t.log?.frames ?? [], from = t.c0[coord], to = t.end[coord], sgn = Math.sign(to - from);
+    const mid = f.filter((x) => !x.done);
+    const oneWay = f.every((x, i) => i === 0 || sgn * (x[coord] - f[i - 1][coord]) >= -1e-9) && sgn * (f[0]?.[coord] - from) >= -1e-9;
+    const between = mid.filter((x) => sgn * (x[coord] - from) > 0 && sgn * (to - x[coord]) > 0);
+    const arrived = f.length > 0 && f.at(-1).done && Math.abs(f.at(-1)[coord] - to) < 1e-9 && f.filter((x) => x.done).length === 1;
+    return { n: f.length, mid: mid.length, between: between.length, oneWay, arrived,
+      lastMidMs: mid.length ? Math.max(...mid.map((x) => x.ms)) : null, arriveMs: f.at(-1)?.ms ?? null };
   };
   /** The cube's own pixels (its 2D canvas): counts by colour, the corner's alpha, the pixel at a client point. */
   const cubePx = (at = null) => evalJs(`(() => {
@@ -265,18 +285,23 @@ async function main() {
   check("pick: a click on a column selects it", (await gl()).picks === pk0 + 1 && JSON.stringify(await sel()) === JSON.stringify([col]), JSON.stringify(await sel()));
   await sleep(300); // the selection opens a panel: the canvas may resize
   await settle();
-  // The Top turn below must show in-between angles. Started within 1 to 2 s of the selection, it
-  // drew a single frame in its 300 ms (headless Chromium with SwiftShader; K3: 0 in-between angles
-  // in 6 of 9 runs 0.4 to 1 s after it, none failed at 2 s). The old settle waited 3 s here: kept.
+  // A pause after the selection (K3: the Top turn started 0.4 to 1 s after it drew a single frame
+  // in its 300 ms). Since KEY1 the path is proven by the page's frame log and a slowed turn, not by
+  // this pause; it stays for the panel's resize.
   await sleep(2600);
 
   // ---- clicks on the cube ----
   const picks1 = (await gl()).picks, selects1 = selects.length;
   const top = await clickTurn(await cellAt([0, 0, 1]));
-  console.log(`Top: ${fmt(top.end)}; ${top.seen.length} samples on the way`);
+  console.log(`Top: ${fmt(top.end)}`);
   check("Top: straight down, north up (yaw -90°, pitch 1.57)", angEq(top.end.yaw, -Math.PI / 2) && Math.abs(top.end.pitch - 1.57) < 1e-3, fmt(top.end));
-  const between = top.seen.filter((c) => c.turning && c.pitch > top.c0.pitch + 0.01 && c.pitch < 1.56);
-  check("Top: the turn is animated (in-between angles seen)", between.length > 0, `${between.length} in-between of ${top.seen.length}`);
+  // The turn as drawn, from the page's own frame log (KEY1: headless SwiftShader under load may draw
+  // a single frame in 300 ms; then the arrival is the only frame, and the slowed turn below shows the path).
+  const tp = turnPath(top, "pitch");
+  console.log(`Top: ${tp.n} frames drawn, ${tp.mid} before the arrival (last at ${tp.lastMidMs?.toFixed(0)} ms), arrival at ${tp.arriveMs?.toFixed(0)} ms`);
+  check("Top: the turn takes 300 ms (frames before the arrival under 300 ms, the arrival at 300 ms or later)",
+    tp.arrived && tp.arriveMs >= 300 && (tp.lastMidMs === null || tp.lastMidMs < 300), JSON.stringify(tp));
+  check("Top: every frame drawn on the way is strictly between start and end, one way", tp.oneWay && tp.between === tp.mid, JSON.stringify(tp));
   const cr2 = await rectOf('[data-bb="viewcube"]'), mid = [cr2.left + 60, cr2.top + 60 - 120 * 0.08];
   await shot("2-top");
   const pxTop = await cubePx();
@@ -286,7 +311,12 @@ async function main() {
     (await gl()).picks === picks1 && selects.length === selects1 && JSON.stringify(await sel()) === JSON.stringify([col]),
     `picks ${picks1} -> ${(await gl()).picks}, selects ${selects1} -> ${selects.length}, selection ${JSON.stringify(await sel())}`);
 
-  const edge = await clickTurn(await cellAt([0, -1, 1]));
+  // A slowed clock (10 x: 3 s): many frames even on a loaded machine; the path is animated.
+  const edge = await clickTurn(await cellAt([0, -1, 1]), 0.1);
+  const ep = turnPath(edge, "pitch");
+  console.log(`edge (slowed clock): ${ep.n} frames drawn, ${ep.between} in between, arrival at ${ep.arriveMs?.toFixed(0)} ms`);
+  check("the turn is animated: a slowed turn (clock / 10) draws in-between angles, one way, then arrives at 3000 ms",
+    ep.between >= 1 && ep.between === ep.mid && ep.oneWay && ep.arrived && ep.arriveMs >= 3000 && (ep.lastMidMs === null || ep.lastMidMs < 3000), JSON.stringify(ep));
   check("the front-top edge: 45° down from the front (yaw -90°, pitch 45°)", angEq(edge.end.yaw, -Math.PI / 2) && Math.abs(edge.end.pitch - Math.PI / 4) < 1e-3, fmt(edge.end));
   const front = await clickTurn(await cellAt([0, -1, 0]));
   check("Front: level, from the south (yaw -90°, pitch 0)", angEq(front.end.yaw, -Math.PI / 2) && Math.abs(front.end.pitch) < 1e-3, fmt(front.end));
