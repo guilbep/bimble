@@ -13,6 +13,19 @@ Vue only shows things. All logic stays in Rust: `src/bimble.ts` is the one typed
 2. `npm run dev`, then open http://localhost:5173/.
    To open a model, put it in `web-ui/public/` and open http://localhost:5173/?url=/frame.bimble.
 
+### Against the native twin (ADR 0066, Linux)
+
+`npm run twin:dev` (or `scripts/twin-dev.sh [model]` from the repository root) is the faster
+loop: no wasm build and no page reload. It builds `bimble-cli` (dev profile), starts a headless
+native Bimble (the twin) on the demo frame and Vite, and prints the lab address
+(`/?native=1&port=&token=`). On every save of a `.rs` file under `crates/` it rebuilds and
+restarts the twin on the same port and token; the open page re-syncs by itself. A build error
+is printed and the old twin keeps running. It links with mold (found with `mise where mold` or
+on PATH), else lld, else the default linker, for the native target only; nothing else needs
+mold. Needs `inotifywait` (inotify-tools). Ctrl-C stops everything.
+The twin has no wasm: check the wasm path (`npm run wasm:dev`) before a pull request.
+`npm run e2e:twin-loop` measures edit → value, text and pixels in the page.
+
 ## Checks
 
 `npm run typecheck` (vue-tsc) and `npm run build` (vite).

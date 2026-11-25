@@ -16,6 +16,33 @@ type Frame = Arc<Mutex<Vec<u8>>>;
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 const ALLOWED_ORIGINS: [&str; 2] = ["http://localhost:5173", "http://127.0.0.1:5173"];
 
+/// The default origins (Vite on 5173) and those of `BIMBLE_ORIGINS` (comma-separated, as the
+/// C core's host): a Vite on another port (`scripts/twin-dev.sh`, the e2e). Loopback `http`
+/// origins only; any other entry is ignored with a message.
+fn allowed_origins(extra: Option<&str>) -> Vec<String> {
+    let mut v: Vec<String> = ALLOWED_ORIGINS.iter().map(|s| s.to_string()).collect();
+    for o in extra
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|o| !o.is_empty())
+    {
+        let port = o
+            .strip_prefix("http://localhost:")
+            .or_else(|| o.strip_prefix("http://127.0.0.1:"));
+        if port.is_some_and(|p| p.parse::<u16>().is_ok()) {
+            if !v.iter().any(|a| a == o) {
+                v.push(o.to_string());
+            }
+        } else {
+            eprintln!(
+                "bimble twin: BIMBLE_ORIGINS: {o:?} is not http://localhost:<port> or http://127.0.0.1:<port>; ignored"
+            );
+        }
+    }
+    v
+}
+
 /// The UI-thread end: pending requests and the last published change.
 pub(crate) struct Twin {
     rx: Receiver<(Request, Reply)>,
@@ -130,7 +157,7 @@ fn start(ctx: &egui::Context, note: &str) -> Option<Twin> {
     let cfg = serve::Config {
         port,
         token: token.clone(),
-        allowed_origins: ALLOWED_ORIGINS.iter().map(|s| s.to_string()).collect(),
+        allowed_origins: allowed_origins(std::env::var("BIMBLE_ORIGINS").ok().as_deref()),
     };
     match serve::start(cfg, Arc::new(side)) {
         Ok(port) => {
@@ -320,4 +347,29 @@ fn render_frame(app: &mut crate::Viewer, frame: &Frame, body: &str) -> Result<St
     *frame.lock().unwrap_or_else(|e| e.into_inner()) = bytes;
     let ms = |a: std::time::Instant, b: std::time::Instant| (b - a).as_secs_f64() * 1e3;
     Ok(format!("render={:.2};read={:.2}", ms(t0, t1), ms(t1, t2)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::allowed_origins;
+
+    #[test]
+    fn origins_default_and_loopback_extras_only() {
+        assert_eq!(
+            allowed_origins(None),
+            ["http://localhost:5173", "http://127.0.0.1:5173"]
+        );
+        let v = allowed_origins(Some(
+            " http://localhost:5203,http://127.0.0.1:5203,http://evil.example:5203,https://localhost:1,http://localhost:x,http://localhost:5173,",
+        ));
+        assert_eq!(
+            v,
+            [
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "http://localhost:5203",
+                "http://127.0.0.1:5203"
+            ]
+        );
+    }
 }
