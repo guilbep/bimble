@@ -1,6 +1,6 @@
 /* The calls the native host serves: one function per call, as `Viewer::call` in
  * crates/bimble-viewer/src/calls.rs. The host (server.c) owns the transport and the change feed;
- * an implementation of this file owns the model. calls_stub.c is the no-model implementation;
+ * an implementation of this file owns the model. calls.c implements it on the session (session.c);
  * model-backed calls replace it later, with the same interface. */
 #ifndef CCORE_HOST_CALLS_H
 #define CCORE_HOST_CALLS_H

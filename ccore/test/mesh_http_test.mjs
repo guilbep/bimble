@@ -74,7 +74,8 @@ try {
   const firstMs = performance.now() - t0;
   check("GET /mesh -> 200", r.status === 200, String(r.status));
   check("Content-Type application/octet-stream", r.headers.get("content-type") === "application/octet-stream", r.headers.get("content-type"));
-  check("X-Rev header is 0", r.headers.get("x-rev") === "0", r.headers.get("x-rev"));
+  // The session model: rev 1 after load, as the Rust viewer (crates/bimble-viewer/src/lib.rs:1679).
+  check("X-Rev header is 1 (session rev after load)", r.headers.get("x-rev") === "1", r.headers.get("x-rev"));
   const m = parseBmsh(body);
   check("magic BMSH, version 1", m.magic === "BMSH" && m.version === 1, `${m.magic} ${m.version}`);
   check("rev in body = X-Rev", String(m.rev) === r.headers.get("x-rev"));
@@ -117,6 +118,17 @@ try {
   const good = await fetch(url, { headers: { Origin: "http://localhost:5173" } });
   check("allowed Origin: ACAO and exposes X-Rev", good.status === 200 && good.headers.get("access-control-allow-origin") === "http://localhost:5173" &&
     /X-Rev/.test(good.headers.get("access-control-expose-headers") ?? ""));
+  // The mesh follows the session: place a column (golden/verbs.txt first step), then undo.
+  const post = (op, name, b) => fetch(`http://127.0.0.1:${PORT}/${op}/${name}?t=${TOKEN}`, { method: "POST", body: b, headers: { "Content-Type": "text/plain" } });
+  const placed = await post("verb", "place", '{"a":[1500.0,1500.0],"kind":"column","storey":"1uAZA0Yfn05f$xRd1k4uPR"}');
+  check("verb place -> 200", placed.status === 200, `${placed.status} ${await placed.text()}`);
+  const r3 = await fetch(url);
+  const m3 = parseBmsh(Buffer.from(await r3.arrayBuffer()));
+  check("after place: X-Rev 2, 73 elements", r3.headers.get("x-rev") === "2" && m3.nE === 73, `${r3.headers.get("x-rev")} ${m3.nE}`);
+  await post("undo", "-", "");
+  const r4 = await fetch(url);
+  const body4 = Buffer.from(await r4.arrayBuffer());
+  check("after undo: X-Rev 3, 72 elements, same geometry as at load", r4.headers.get("x-rev") === "3" && parseBmsh(body4).nE === 72 && body4.subarray(32).equals(body.subarray(32)), r4.headers.get("x-rev"));
   console.log(`mesh: ${body.length} bytes; host build ${buildLine?.[1]} ms; first fetch ${firstMs.toFixed(2)} ms, cached fetch ${secondMs.toFixed(2)} ms`);
 
   await startHost(NOMODEL, { CCORE_MODEL: "" });

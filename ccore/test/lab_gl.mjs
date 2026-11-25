@@ -146,7 +146,7 @@ async function main() {
   console.log(`first drawn frame: ${firstMs.toFixed(1)} ms after navigation start (performance.now), ${wallMs} ms wall from Page.navigate`);
   console.log(`viewport stats: ${gl}`);
   const st = JSON.parse(gl);
-  check("mesh loaded from the host", st.meshBytes > 0 && st.error === null && st.meshRev === 0, gl);
+  check("mesh loaded from the host", st.meshBytes > 0 && st.error === null && st.meshRev === 1, gl); // session rev after load (lib.rs:1679)
   await sleep(500);
 
   // Pixels: read the WebGL2 drawing buffer (preserveDrawingBuffer) of #bimble.
@@ -208,7 +208,16 @@ async function main() {
   };
   const bodyOf = async (s) => s.postData ?? (await S("Network.getRequestPostData", { requestId: s.requestId }).catch(() => ({}))).postData;
   check("a grey face pixel to click", px.click !== null, JSON.stringify(px.click));
-  if (px.click) {
+  // Background first: a successful select opens the properties panel and resizes the canvas,
+  // so a point measured before it may no longer be on the canvas.
+  if (px.empty) {
+    const before = selects.length;
+    await clickAt(...px.empty);
+    await waitFor("POST /select/-", 5000, () => selects.length > before).catch(() => {});
+    const got = selects.slice(before);
+    const body = got.length ? await bodyOf(got[0]) : undefined;
+    check("click on the background -> POST /select/- with []", got.length === 1 && body === "[]", `${got.length} request(s), body ${body}`);
+  }  if (px.click) {
     const before = selects.length;
     const onCanvas = await clickAt(...px.click);
     check("the click point is on the canvas", onCanvas);
@@ -220,14 +229,7 @@ async function main() {
     check("click on a grey face -> one POST /select/- with a 22-char GlobalId", got.length === 1 && Array.isArray(ids) && ids.length === 1 &&
       /^[0-3][0-9A-Za-z_$]{21}$/.test(ids[0]), `${got.length} request(s), body ${body}`);
   }
-  if (px.empty) {
-    const before = selects.length;
-    await clickAt(...px.empty);
-    await waitFor("POST /select/-", 5000, () => selects.length > before).catch(() => {});
-    const got = selects.slice(before);
-    const body = got.length ? await bodyOf(got[0]) : undefined;
-    check("click on the background -> POST /select/- with []", got.length === 1 && body === "[]", `${got.length} request(s), body ${body}`);
-  }
+
   // Orbit (left drag) and zoom (wheel) redraw a different picture and send no select.
   const sum = () => evalJs(`(() => { const c = document.getElementById('bimble'), g = c.getContext('webgl2');
     const p = new Uint8Array(c.width * c.height * 4); g.readPixels(0, 0, c.width, c.height, g.RGBA, g.UNSIGNED_BYTE, p);
