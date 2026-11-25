@@ -508,6 +508,9 @@ export async function start(): Promise<void> {
     }
     let w: Wasm;
     let viewportDirty: (() => void) | null = null;
+    // The C lab's build (`npm run build:ccore`, ticket PG1): `ccore=1&gl=1` without parameters; `?view=1`: the viewer-only wasm.
+    if (import.meta.env.VITE_CCORE === "1" && !url.searchParams.has("ccore")) { url.searchParams.set("ccore", "1"); url.searchParams.set("gl", "1"); }
+    if (import.meta.env.VITE_CCORE === "1" && url.searchParams.get("view") === "1" && !url.searchParams.has("ccore_wasm")) url.searchParams.set("ccore_wasm", "ccore/ccore-view.wasm");
     const native = url.searchParams.get("native") === "1" ? nativeParams(url.searchParams) : null;
     if (url.searchParams.get("ccore") === "1") {
       // The C core's wasm module in the page (ticket T13b): no server, no Rust. `&gl=1` draws its mesh.

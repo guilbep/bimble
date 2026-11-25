@@ -136,3 +136,13 @@ host up 9-26 ms.
 `mesh.c` compiled in). `?model=<url>` opens another `.bimble` text file; `window.ccoreSave()`
 returns the saved text. Checked by `node test/lab_wasm.mjs`; native and wasm answers are compared
 byte for byte by `node test/wasm_run.mjs` (suite `host`).
+
+The same lab is on GitHub Pages at https://guilbep.github.io/bimble/c/ (ticket PG1), beside the Rust
+lab at the site root. `npm run build:ccore` in `web-ui/` builds both wasm modules, copies them and
+the demo frame, and runs `vite build --base ./` with `VITE_CCORE=1`: the page starts on the C core
+without parameters (`ccore=1&gl=1`), `?view=1` loads `ccore-view.wasm` (a verb answers "this build is
+view-only"), and the status bar shows "Preview, C core <commit>". The wasm has no boolean kernel, so
+openings are drawn uncut. `pages.yml` (on `main`) builds it in every deployment, from the branch
+`rewrite/c-core` unless the input `ccore_ref` names another; a failed C build leaves the Rust site
+published without `c/`. Checked by `node test/lab_pages.mjs`: the build served from a sub-path, place
+and undo, the viewer-only build, and no request outside `/c/`.

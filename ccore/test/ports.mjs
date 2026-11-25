@@ -49,6 +49,7 @@ const TABLE = [
   ["host", "lab_dims", 47413, 113],
   ["host", "lab_viewcube", 47426, 126],
   ["host", "lab_sheets", 47427, 127],
+  ["host", "lab_pages", 47365, 65],
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_gl", 5193, 131],
   ["vite", "lab_place", 5195, 133],

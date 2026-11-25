@@ -9,6 +9,7 @@
     "ccore:dev": "../ccore/dev.sh",
     "ccore:wasm": "../ccore/build.sh wasm && node scripts/copy-ccore.mjs",
     "ccore:wasm-view": "../ccore/build.sh wasm-view && node scripts/copy-ccore.mjs --view",
+    "build:ccore": "../ccore/build.sh wasm && ../ccore/build.sh wasm-view && node scripts/copy-ccore.mjs && node scripts/copy-ccore.mjs --view && VITE_CCORE=1 VITE_CCORE_REV=${VITE_CCORE_REV:-$(git rev-parse --short HEAD)} vite build --base ./",
     "twin:dev": "../scripts/twin-dev.sh",
     "i18n-keys": "node scripts/i18n-keys.mjs",
     "typecheck": "node scripts/i18n-keys.mjs --check && vue-tsc --noEmit",
