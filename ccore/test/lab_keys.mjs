@@ -412,7 +412,12 @@ async function keys(mode, S, evalJs) {
     check(`${mode}: Ctrl N in a text field: the same file`, (await B("return b.state.value.file;")) === f0);
     await blur();
     await press("Ctrl N");
-    await waitFor(`${mode}: a new model`, 8000, async () => (await B("return b.state.value.file;")) !== f0).catch(() => {});
+    // The model has unsaved changes here (Rust's dirty flag stays set after an undo: ACT1), so the
+    // shell asks first (UX1's confirmClose): answer Discard, as a user would.
+    await waitFor(`${mode}: a new model`, 8000, async () => {
+      await evalJs("document.querySelector('[data-bb=shell-confirm-discard]')?.click()");
+      return (await B("return b.state.value.file;")) !== f0;
+    }).catch(() => {});
     check(`${mode}: Ctrl N starts a new model, the browser's default prevented`, (await B("return b.state.value.file;")) !== f0 && (await lastPrevented()) === true, `${f0} -> ${await B("return b.state.value.file;")}`);
   }
 }
