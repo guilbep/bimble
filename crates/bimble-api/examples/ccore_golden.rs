@@ -3640,6 +3640,8 @@ fn copy_dir(from: &Path, to: &Path) {
             std::fs::copy(&p, to.join(e.file_name())).unwrap();
         }
     }
+}
+
 // ---------------------------------------------------------------- reference plans (ticket L1)
 
 /// `reference/`: `bimble_drawing::reference::read` (ADR 0021) of every file of
