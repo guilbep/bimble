@@ -664,3 +664,34 @@ such queries. The recent files keep Rust's rule and file (`settings.rs` `recent`
 
 **Where.** `ccore/host/fs.c`, `ccore/session/settings_file.c`, `ccore/session/calls.c` (FS1
 blocks), `web-ui/src/files.ts`; tests `ccore/test/fs_test.mjs`, `ccore/test/lab_files.mjs`.
+
+## 22. On paper, Export view and several sheets as one PDF (ticket PAPER1)
+
+- **`query view_svg`** (`session/sheet_svg.h`): a C addition next to `sheet_svg`. Without `bare` it
+  is the drawing of `view_pdf` (lib.rs `plan_options`) as `Sheet::to_svg()`, equal byte for byte to
+  D4's `golden/drawing/view/<nn>.svg` (`test/paper_view_test.c`). With `bare: true` it is the
+  drawing paper.rs `refresh_paper` shows On paper; Rust shows it as a raster of the prepared sheet
+  (egui texture), the lab as the SVG itself (pan and zoom of the picture). The answer adds the
+  paper's name, orientation, size and the view's scale.
+- **On paper of a read-only scene:** Rust draws the views of any loaded scene, an IFC opened as it
+  is too (`ribbon.rs:597 two_pictures`, `:611 _ => loaded` for Export view). The C core's drawing
+  reads the model (`cc_plan` takes a `cc_model`), so `paper_view` and `on_paper` are enabled with a
+  model open for editing only, and `open_views.paper.offered` is false on a read-only scene: no
+  switch that does nothing. `parity.md` shows them as differing in `ifc_readonly`.
+- **Placing and measuring switch to Model:** Rust does it when it paints the paper (paper.rs:217,
+  each frame); the C core when it is next asked (`actions`, `open_views`, the change JSON) after
+  measuring or placing started. The note Rust shows goes to the log.
+- **The Export view window** (`on_paper`, pressed while open: ribbon.rs:722) is the lab's Export
+  dialog on "This view". The lab opens it without running the action (as Project information and
+  History), so the core's pressed state stays false in the lab; the action toggles it for any other
+  caller. The dialog draws the active 2D view (else the first) and lists the 2D views; Rust's
+  "Storey plan" choice (a storey and a cut height without a view), its paper choice and its
+  template check boxes are not offered. File names are Rust's: `plan-<view>-1-<scale>.pdf` / `.svg`.
+- **`query sheets_pdf` and `cc_paper_pdf_pages`:** Rust has no multi-page PDF (`Sheet::to_pdf` writes
+  one page; the egui app exports one file per sheet). C-own golden
+  `golden/paper_c/S-101+S-102-helvetica.pdf` (checked with `qpdf --check` and `pdftotext`: 2 pages,
+  both sheet numbers). The file is the one-page file's layout: page 1 keeps ids 3 and 4, each further
+  page takes two ids after the fonts (page, content), the two fonts are shared (Roboto: one subset of
+  all pages' glyphs), /Title is the first sheet's. One page is `cc_paper_pdf`'s file byte for byte
+  (the `pdf_out` and `sheet_pdf` suites unchanged). The lab names it
+  `<first number>-<last number>.pdf` (a C choice: Rust has no such file).
