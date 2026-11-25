@@ -41,6 +41,8 @@ const IFC_TIMESTAMP: &str = "2026-01-01T00:00:00";
 /// Files in `ccore/golden/` this program does not produce (input, docs, another ticket's).
 const NOT_PRODUCED: [&str; 3] = ["frame.json", "frame2.json", "README.md"];
 const OTHER_TICKET_DIR: &str = "floats/";
+/// The C core's own goldens, where Rust has no such behaviour (`ccore/golden/DEVIATIONS.md`).
+const C_OWN: [&str; 2] = ["DEVIATIONS.md", "relations/"];
 
 type Files = BTreeMap<String, Vec<u8>>;
 
@@ -154,6 +156,7 @@ fn check(dir: &Path, files: &Files) -> Vec<String> {
         if !files.contains_key(&rel)
             && !NOT_PRODUCED.contains(&rel.as_str())
             && !rel.starts_with(OTHER_TICKET_DIR)
+            && !C_OWN.iter().any(|p| rel.starts_with(p))
             && !is_golden_fixture(&rel)
         {
             bad.push(format!("{rel} (not produced any more)"));

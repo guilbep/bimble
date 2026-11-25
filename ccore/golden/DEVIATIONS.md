@@ -37,3 +37,37 @@ edit records the whole view.
 (the `feature` key: read, write, copy, validation), `ccore/src/verbs.c` (the verbs),
 `ccore/session/calls.c` (`query view_annotations`, the annotate tool), tests
 `ccore/test/annotation_test.c`, `annotations_test.mjs`, `lab_dims.mjs`.
+
+## 2. Relations and assemblies (ticket X1, ADR 0070)
+
+**What.** The C model has a relation table that Rust's `Model` does not have: key `relations`
+in the model, after `schedules`, a map GlobalId → `{id, kind, relating, related, realizing?,
+properties?}`, in v1 (JSON) and v2 (CBOR). `kind` is an IFC class name from a table
+(`IfcRelAggregates`, `IfcRelConnectsElements`, `IfcRelConnectsWithRealizingElements`;
+`IfcRelDefinesByType` is reserved and refused until the model holds type objects). The element
+class `IfcElementAssembly` is new too: such an element has no `generator` key (its shape is its
+parts). Commands `add_relation`, `remove_relation`, `set_relation` are the C core's own, and
+`remove_element` of an element that a relation names is refused ("`<id>` is still used by the
+relation `<relation id>` (`<kind>`)"); Rust has no such case. The serde error texts that list the
+classes and the command tags name the new ones too.
+
+**Why.** ADR 0068 rule 10 (full IFC compatibility): assemblies and typed connections as objects
+with GlobalIds, cheap before files hold them.
+
+**What Rust sees.** A model without relations and without assemblies is unchanged: same keys,
+same bytes, same hash (`relation_test` reloads `golden/frame*.json` and `golden/bin/frame*.bimble`).
+A model with relations loads in Rust without them (`Model` ignores unknown keys) and Rust's save
+drops them. A model with an `IfcElementAssembly` is refused by Rust ("unknown variant
+`IfcElementAssembly`", and "missing field `generator`").
+
+**Goldens.** `golden/relations/assembly.json` and `assembly.bimble`: `golden/frame2.json` plus one
+assembly of three parts and one connection with a realizing element and properties, built by
+`ccore/test/relation_test.c` through Commands (`CCORE_WRITE_GOLDEN=1` writes them again).
+`ccore_golden --check` skips `relations/` and this file (`C_OWN`): Rust does not produce them.
+
+**Until X2.** No verb makes a relation, the scene draws nothing for an assembly and warns once
+("could not mesh"), and the IFC export refuses a model with an assembly (an error, never a silent
+drop).
+
+**Where.** `ccore/src/relation.{h,c}` (table, rules, read, write), `ccore/src/model.{h,c}`,
+`ccore/src/command.{h,c}`, `ccore/src/file.c`, test `ccore/test/relation_test.c`.

@@ -840,7 +840,8 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
         }
         int bad = cc_relations_validate(m, t, n, NULL, &why);
         free(t);
-        if (bad) return why.oom ? oom(err) : invalid_buf(err, &why);
+        if (bad && why.oom) return buf_free(&why), oom(err);
+        if (bad) return invalid_buf(err, &why);
         buf_free(&why);
         if (old) {
             inv_init(inv, CC_CMD_SET_RELATION);
