@@ -5,8 +5,9 @@
 #   wasm   clang freestanding wasm32 of src/ (no libc), ccore.wasm with a dummy export
 set -euo pipefail
 cd "$(dirname "$0")"
-LIB=(src/arena.c src/buf.c src/fmt.c src/json_w.c)
-TESTS=(fmt json)
+# Every src/*.c is the library (wasm_stub.c only in the wasm build); every test/<name>_test.c is a suite.
+LIB=(); for f in src/*.c; do [[ $f == src/wasm_stub.c ]] || LIB+=("$f"); done
+TESTS=(); for f in test/*_test.c; do t=${f#test/}; TESTS+=("${t%_test.c}"); done
 INC=(-Isrc -Ivendor/ryu)
 
 ms() { date +%s%N | cut -b1-13; }

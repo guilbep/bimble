@@ -4,7 +4,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-ALL=(fmt json)
+ALL=(); for f in test/*_test.c; do t=${f#test/}; ALL+=("${t%_test.c}"); done
 suites=("$@")
 [[ ${#suites[@]} -eq 0 ]] && suites=("${ALL[@]}")
 CC=${CC:-tcc}
