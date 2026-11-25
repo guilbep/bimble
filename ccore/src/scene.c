@@ -10,6 +10,7 @@
 #pragma clang fp contract(off)
 #endif
 #include "scene.h"
+#include "scene_build.h"
 #include <string.h>
 #include "math.h"
 #include "buf.h"
@@ -881,7 +882,9 @@ static int share_copies(cc_scene *s) {
         for (int k = 0; k < nsh; k++)
             if (dd[shapes[k]].copy_next >= 0) order[ns++] = shapes[k];
     }
-    s->shapes = arena_alloc(a, ((size_t)ns + 1) * sizeof *s->shapes, 8);
+    cc_mesh *had = s->shapes; /* shapes already there (the IFC reader's maps) are kept */
+    s->shapes = arena_alloc(a, (s->nshapes + (size_t)ns + 1) * sizeof *s->shapes, 8);
+    if (s->shapes && s->nshapes) memcpy(s->shapes, had, s->nshapes * sizeof *had);
     cc_placement32 *pls = arena_alloc(a, n * sizeof *pls, 4);
     int8_t *placed = arena_alloc(a, n, 1);
     if (!s->shapes || !pls || !placed) return -1;
@@ -948,6 +951,14 @@ static int share_copies(cc_scene *s) {
         if (s->elements[i].shape >= 0) memset(&s->elements[i].mesh, 0, sizeof(cc_mesh));
     return 0;
 }
+
+int cc_scene_mesh_build(double (*tris)[3][3], uint32_t ntris, const double origin[3], Arena *a, Arena *scratch,
+                        cc_mesh *m) {
+    World w = {tris, ntris};
+    return build_mesh(&w, origin, a, scratch, m);
+}
+
+int cc_scene_share_copies(cc_scene *s) { return share_copies(s); }
 
 /* ---- Scene::from_model ---- */
 

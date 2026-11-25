@@ -1,0 +1,1045 @@
+/* The IFC display reader: read.rs read_str in C (see ifc_read.h). Ports, in Rust's order:
+ *   read.rs   Parsed::new (units, containers, voids, materials, products, storey levels, grid
+ *             axes, georef), Parsed::shapes, Parsed::piece, Parsed::scene_progress (batches,
+ *             the cap, the warning of what is not shown)
+ *   scene.rs  SceneBuilder::push / push_instance / finish (origin, build, share_copies)
+ * The geometry (Reader, Emit, Budget) is ifc_geom.h, shared with the import. */
+#include "ifc_read.h"
+#include "ifc_geom.h"
+#include "fmt.h"
+#include "json_w.h"
+#include "scene_build.h"
+
+#define ELEMENT_MAX_TRIANGLES ((size_t)50000000) /* read.rs */
+#define BATCH 1024
+
+/* ---- small helpers */
+
+static size_t sat_add(size_t a, size_t b) { return a > (size_t)-1 - b ? (size_t)-1 : a + b; }
+static size_t min_z(size_t a, size_t b) { return a < b ? a : b; }
+
+static cc_str a_str(Arena *a, const char *s, size_t n, int *oom) {
+    cc_str r = {"", 0};
+    if (!n) return r;
+    char *d = arena_alloc(a, n + 1, 1);
+    if (!d) { *oom = 1; return r; }
+    memcpy(d, s, n);
+    r.p = d, r.n = n;
+    return r;
+}
+
+static void r_init(R *r, const cc_step_file *f, double arc_tol, double angle_scale) {
+    memset(r, 0, sizeof *r);
+    r->f = f;
+    size_t ne = f->n ? f->n : 1;
+    r->pl = malloc(ne * sizeof *r->pl);
+    r->has_pl = calloc(ne, 1);
+    r->arc_tol = arc_tol;
+    r->angle_scale = angle_scale;
+    buf_init(&r->tmp);
+}
+static int r_ok(const R *r) { return r->pl && r->has_pl; }
+static void r_free(R *r) {
+    free(r->pl);
+    free(r->has_pl);
+    tally_free(&r->warnings);
+    tally_free(&r->unsup);
+    buf_free(&r->tmp);
+}
+
+/* Adds every warning of `from` (with its count) to `to`, and empties `from`. */
+static void tally_merge(Tallies *to, Tallies *from) {
+    for (size_t i = 0; i < from->n; i++) {
+        size_t before = to->n, j;
+        for (j = 0; j < to->n; j++)
+            if (to->v[j].n == from->v[i].n && !memcmp(to->v[j].s, from->v[i].s, from->v[i].n)) break;
+        if (j == to->n) {
+            tally_add(to, from->v[i].s, from->v[i].n, 1);
+            if (to->n == before) continue; /* out of memory or past MAX_TALLY: dropped */
+            to->v[j].count = from->v[i].count;
+        } else to->v[j].count += from->v[i].count;
+    }
+    tally_free(from);
+}
+
+/* f64::total_cmp(a, b) < 0 */
+static int total_less(double a, double b) {
+    int64_t x, y;
+    memcpy(&x, &a, 8);
+    memcpy(&y, &b, 8);
+    x ^= (int64_t)((uint64_t)(x >> 63) >> 1);
+    y ^= (int64_t)((uint64_t)(y >> 63) >> 1);
+    return x < y;
+}
+
+static int ends_with(const char *s, const char *suf) {
+    size_t a = strlen(s), b = strlen(suf);
+    return a >= b && !memcmp(s + a - b, suf, b);
+}
+
+/* ---- Parsed::new parts */
+
+/* containers(): entity index -> container name (an index into names), or -1. */
+typedef struct {
+    int has_direct, has_parent;
+    size_t direct;   /* entity index of the spatial structure whose name it takes */
+    uint64_t parent; /* aggregation parent id */
+    const char *name;
+    size_t nn;
+    int has_name;
+} Cont;
+
+static void containers(R *r, Cont *c) {
+    const cc_step_file *f = r->f;
+    for (size_t i = 0; i < f->n; i++) {
+        const cc_step_entity *rel = &f->ents[i];
+        if (!is(rel, "IFCRELCONTAINEDINSPATIALSTRUCTURE")) continue;
+        const char *nm = "";
+        size_t nn = 0;
+        const cc_step_entity *s = get(r, arg(rel, 5));
+        if (s && !cc_sv_as_str(arg(s, 2), &nm, &nn)) nm = "", nn = 0;
+        const cc_sv *l;
+        size_t n;
+        if (!cc_sv_as_list(arg(rel, 4), &l, &n)) n = 0;
+        for (size_t k = 0; k < n; k++) {
+            const cc_step_entity *e = get(r, &l[k]);
+            if (!e) continue; /* only entities of the file are elements */
+            Cont *x = &c[cc_step_index(f, e)];
+            x->has_direct = 1, x->name = nm, x->nn = nn;
+        }
+    }
+    for (size_t i = 0; i < f->n; i++) {
+        const cc_step_entity *rel = &f->ents[i];
+        uint64_t p;
+        const cc_sv *l;
+        size_t n;
+        if (!is(rel, "IFCRELAGGREGATES") || !cc_sv_as_ref(arg(rel, 4), &p) || !cc_sv_as_list(arg(rel, 5), &l, &n))
+            continue;
+        for (size_t k = 0; k < n; k++) {
+            const cc_step_entity *e = get(r, &l[k]);
+            if (!e) continue;
+            Cont *x = &c[cc_step_index(f, e)];
+            x->has_parent = 1, x->parent = p;
+        }
+    }
+    /* out = direct, then each child takes the first direct container up its parents (8 steps). */
+    for (size_t i = 0; i < f->n; i++) {
+        Cont *x = &c[i];
+        if (x->has_direct) { x->has_name = 1; continue; }
+        if (!x->has_parent) continue;
+        const Cont *cur = x;
+        for (int s = 0; s < 8; s++) {
+            if (cur->has_direct) {
+                x->has_name = 1, x->name = cur->name, x->nn = cur->nn;
+                break;
+            }
+            if (!cur->has_parent) break;
+            const cc_step_entity *pe = cc_step_get(r->f, cur->parent);
+            if (!pe) break;
+            cur = &c[cc_step_index(f, pe)];
+        }
+    }
+}
+
+/* storey_levels() */
+static int storey_levels(R *r, double scale, Arena *a, cc_ifc_storey **out, size_t *nout) {
+    const cc_step_file *f = r->f;
+    size_t n = 0, cap = 0;
+    cc_ifc_storey *v = NULL;
+    int oom = 0;
+    for (size_t i = 0; i < f->n; i++) {
+        const cc_step_entity *st = &f->ents[i];
+        if (!is(st, "IFCBUILDINGSTOREY")) continue;
+        const char *nm = "", *id = "";
+        size_t nn = 0, ni = 0;
+        if (!cc_sv_as_str(arg(st, 2), &nm, &nn)) nm = "", nn = 0;
+        uint64_t pl;
+        double z;
+        int has;
+        if (cc_sv_as_ref(arg(st, 5), &pl)) z = object_placement(r, pl, 0).t[2], has = 1;
+        else has = cc_sv_as_f64(arg(st, 9), &z);
+        if (!has || !finite(z)) continue;
+        if (!cc_sv_as_str(arg(st, 0), &id, &ni)) id = "", ni = 0;
+        if (n == cap && grow((void **)&v, &cap, n + 1, sizeof *v)) { free(v); return -1; }
+        v[n].name = a_str(a, nm, nn, &oom);
+        v[n].elevation_mm = z * scale;
+        v[n].id = a_str(a, id, ni, &oom);
+        n++;
+    }
+    /* SceneBuilder::finish: sort_by total_cmp of the elevation (stable). */
+    for (size_t i = 1; i < n; i++) {
+        cc_ifc_storey x = v[i];
+        size_t j = i;
+        while (j && total_less(x.elevation_mm, v[j - 1].elevation_mm)) v[j] = v[j - 1], j--;
+        v[j] = x;
+    }
+    *out = n ? ii_dup8(a, v, n * sizeof *v) : NULL;
+    *nout = n;
+    free(v);
+    return oom || (n && !*out) ? -1 : 0;
+}
+
+/* grid_axes() */
+static int grid_axes(R *r, double scale, Arena *a, cc_ifc_grid **out, size_t *nout) {
+    const size_t MAX_AXES = 10000;
+    const cc_step_file *f = r->f;
+    size_t n = 0, cap = 0;
+    cc_ifc_grid *v = NULL;
+    int oom = 0;
+    for (size_t i = 0; i < f->n && n < MAX_AXES; i++) {
+        const cc_step_entity *g = &f->ents[i];
+        if (!is(g, "IFCGRID")) continue;
+        uint64_t pl;
+        Aff place = cc_sv_as_ref(arg(g, 5), &pl) ? object_placement(r, pl, 0) : IDENT;
+        for (int li = 7; li <= 9; li++) {
+            const cc_sv *l;
+            size_t nl;
+            if (!cc_sv_as_list(arg(g, (size_t)li), &l, &nl)) nl = 0;
+            for (size_t k = 0; k < nl; k++) {
+                if (n >= MAX_AXES) goto done;
+                const cc_step_entity *ax = get(r, &l[k]);
+                if (!ax) continue;
+                const char *tag = "";
+                size_t tn = 0;
+                if (!cc_sv_as_str(arg(ax, 0), &tag, &tn)) tag = "", tn = 0;
+                const cc_step_entity *curve = get(r, arg(ax, 1));
+                if (!curve) continue;
+                double pa[3], pb[3];
+                int has_a = 0, has_b = 0;
+                if (is(curve, "IFCPOLYLINE")) {
+                    const cc_sv *ps;
+                    size_t np;
+                    if (!cc_sv_as_list(arg(curve, 0), &ps, &np)) np = 0;
+                    for (size_t q = 0; q < np; q++) {
+                        double p[3];
+                        if (!point(r, &ps[q], p)) continue;
+                        if (!has_a) memcpy(pa, p, sizeof p), has_a = 1;
+                        memcpy(pb, p, sizeof p), has_b = 1;
+                    }
+                } else if (is(curve, "IFCINDEXEDPOLYCURVE")) {
+                    const cc_step_entity *pl2 = get(r, arg(curve, 0));
+                    const cc_sv *cs;
+                    size_t nc;
+                    if (pl2 && cc_sv_as_list(arg(pl2, 0), &cs, &nc) && nc) {
+                        const cc_sv *ends[2] = {&cs[0], &cs[nc - 1]};
+                        double got[2][3];
+                        int ok[2] = {0, 0}, m = 0;
+                        for (int e = 0; e < 2; e++) {
+                            const cc_sv *c;
+                            size_t cn;
+                            if (!cc_sv_as_list(ends[e], &c, &cn) || cn < 2) continue;
+                            if (!cc_sv_as_f64(&c[0], &got[e][0]) || !cc_sv_as_f64(&c[1], &got[e][1])) continue;
+                            if (cn < 3 || !cc_sv_as_f64(&c[2], &got[e][2])) got[e][2] = 0.0;
+                            ok[e] = 1;
+                        }
+                        /* [first, last].filter_map(at): the points that parse, in order. */
+                        for (int e = 0; e < 2; e++)
+                            if (ok[e]) {
+                                if (!m) memcpy(pa, got[e], sizeof pa);
+                                memcpy(pb, got[e], sizeof pb);
+                                m++;
+                            }
+                        has_a = has_b = m > 0;
+                    }
+                }
+                if (!has_a || !has_b) continue;
+                double wa[3], wb[3];
+                aff_apply(&place, pa, wa);
+                aff_apply(&place, pb, wb);
+                double A[2] = {wa[0] * scale, wa[1] * scale}, B[2] = {wb[0] * scale, wb[1] * scale};
+                int dup = 0;
+                for (size_t q = 0; q < n && !dup; q++)
+                    dup = v[q].tag.n == tn && (!tn || !memcmp(v[q].tag.p, tag, tn)) && v[q].start_mm[0] == A[0] &&
+                          v[q].start_mm[1] == A[1] && v[q].end_mm[0] == B[0] && v[q].end_mm[1] == B[1];
+                int same = A[0] == B[0] && A[1] == B[1];
+                if (dup || same || !finite(A[0]) || !finite(A[1]) || !finite(B[0]) || !finite(B[1])) continue;
+                if (n == cap && grow((void **)&v, &cap, n + 1, sizeof *v)) { free(v); return -1; }
+                v[n].tag = a_str(a, tag, tn, &oom);
+                memcpy(v[n].start_mm, A, sizeof A);
+                memcpy(v[n].end_mm, B, sizeof B);
+                n++;
+            }
+        }
+    }
+done:
+    *out = n ? ii_dup8(a, v, n * sizeof *v) : NULL;
+    *nout = n;
+    free(v);
+    return oom || (n && !*out) ? -1 : 0;
+}
+
+static double to_degrees(double x) { return x * 57.2957795130823208767981548141051703; }
+
+/* georef() with Georef::from_frame */
+static void georef(R *r, double scale, Arena *a, cc_ifc_georef *g, int *oom) {
+    memset(g, 0, sizeof *g);
+    const cc_step_entity *b = first_of(r->f, "IFCBUILDING");
+    uint64_t pl;
+    Aff bf = b && cc_sv_as_ref(arg(b, 5), &pl) ? object_placement(r, pl, 0) : IDENT;
+    double rot = to_degrees(cc_atan2(bf.x[1], bf.x[0]));
+    g->rotation_deg = round_rs(rot * 1e6) / 1e6 + 0.0;
+    double e = bf.t[0] * scale / 1000.0, n = bf.t[1] * scale / 1000.0;
+    if (e >= 2480000.0 && e <= 2840000.0 && n >= 1070000.0 && n <= 1300000.0) {
+        g->has_crs = 1;
+        g->crs = a_str(a, "EPSG:2056", 9, oom);
+    }
+    const cc_step_entity *m = first_of(r->f, "IFCMAPCONVERSION");
+    if (!m) return;
+    double v;
+    g->east_m = cc_sv_as_f64(arg(m, 2), &v) ? v : 0.0;
+    g->north_m = cc_sv_as_f64(arg(m, 3), &v) ? v : 0.0;
+    g->height_m = cc_sv_as_f64(arg(m, 4), &v) ? v : 0.0;
+    double ax = cc_sv_as_f64(arg(m, 5), &v) ? v : 1.0, o = cc_sv_as_f64(arg(m, 6), &v) ? v : 0.0;
+    g->map_rotation_deg = round_rs(to_degrees(cc_atan2(o, ax)) * 1e6) / 1e6 + 0.0;
+    const cc_step_entity *crs = get(r, arg(m, 1));
+    const char *s;
+    size_t sn;
+    g->has_crs = 0;
+    g->crs.p = "", g->crs.n = 0;
+    if (crs && cc_sv_as_str(arg(crs, 0), &s, &sn)) g->has_crs = 1, g->crs = a_str(a, s, sn, oom);
+}
+
+/* ---- meshing */
+
+typedef struct {
+    uint64_t id;  /* map entity id */
+    cc_mesh mesh; /* in its own coordinates (built at origin 0) */
+    int seen;     /* counted once in the stored triangles */
+} Shape;
+
+typedef struct {
+    size_t ent;         /* entity index of the product */
+    int instance;       /* 1: shape `shape` placed by `tf` (f64 world mm) */
+    size_t shape;
+    Aff tf;
+    Tris tris;          /* own triangles (world mm) */
+    size_t triangles;   /* Piece::triangles */
+    Tallies warnings;
+} Piece;
+
+static void piece_free(Piece *p) {
+    tris_free(&p->tris);
+    tally_free(&p->warnings);
+}
+
+/* Sorts map ids (bottom-up merge sort, no libc qsort in the wasm build). */
+static int sort_ids(uint64_t *v, size_t n) {
+    uint64_t *t = malloc((n ? n : 1) * sizeof *t);
+    if (!t) return -1;
+    for (size_t w = 1; w < n; w *= 2) {
+        for (size_t lo = 0; lo < n; lo += 2 * w) {
+            size_t mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n, i = lo, j = mid, k = lo;
+            while (i < mid && j < hi) t[k++] = v[j] < v[i] ? v[j++] : v[i++];
+            while (i < mid) t[k++] = v[i++];
+            while (j < hi) t[k++] = v[j++];
+        }
+        memcpy(v, t, n * sizeof *v);
+    }
+    free(t);
+    return 0;
+}
+static long shape_find(const Shape *v, size_t n, uint64_t id) {
+    size_t lo = 0, hi = n;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (v[mid].id < id) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo < n && v[lo].id == id ? (long)lo : -1;
+}
+
+typedef struct {
+    const cc_step_file *f;
+    double scale, arc_tol, angle_scale;
+    const size_t *nvoids;   /* per entity index: openings (IfcRelVoidsElement) */
+    const size_t *void_at;  /* their ids: void_ids[void_at[i] .. void_at[i + 1]) */
+    const uint64_t *void_ids;
+    Shape *shapes;
+    size_t nshapes;
+    Tallies cut_warnings; /* C only: openings and booleans left uncut */
+} Ctx;
+
+/* Parsed::mapped_item */
+static const cc_step_entity *mapped_item(const Ctx *c, R *r, const cc_step_entity *e) {
+    if (c->nvoids[cc_step_index(c->f, e)]) return NULL;
+    return mapped_item_of(r, e);
+}
+
+/* Parsed::piece. 0 ok, -1 out of memory. */
+static int piece(Ctx *c, R *w, size_t ent, Budget *budget, Piece *out) {
+    const cc_step_file *f = c->f;
+    const cc_step_entity *e = &f->ents[ent];
+    memset(out, 0, sizeof *out);
+    out->ent = ent;
+    const cc_step_entity *mi = mapped_item(c, w, e);
+    uint64_t mid, pl;
+    long sh;
+    if (mi && cc_sv_as_ref(arg(mi, 0), &mid) && (sh = shape_find(c->shapes, c->nshapes, mid)) >= 0 &&
+        cc_sv_as_ref(arg(e, 5), &pl)) {
+        Aff p = object_placement(w, pl, 0);
+        Aff op = transform_operator(w, arg(mi, 1));
+        Aff t = aff_then(&p, &op);
+        for (int k = 0; k < 3; k++) t.t[k] = t.t[k] * c->scale;
+        out->instance = 1;
+        out->shape = (size_t)sh;
+        out->tf = t;
+        out->triangles = c->shapes[sh].mesh.ni / 3;
+        out->warnings = w->warnings;
+        memset(&w->warnings, 0, sizeof w->warnings);
+        return 0;
+    }
+    Emit em = {&out->tris, c->scale, budget};
+    size_t unsup0 = w->unsup_n;
+    product_body(w, e, &em);
+    size_t nv = c->nvoids[ent];
+    if (nv && out->tris.n) {
+        /* Rust meshes each opening's body and subtracts them (manifold3d). The C core has no
+         * boolean kernel: the bodies are meshed as Rust does (same budget), the host drawn uncut. */
+        size_t cutters = 0;
+        for (size_t k = 0; k < nv; k++) {
+            const cc_step_entity *oe = cc_step_get(f, c->void_ids[c->void_at[ent] + k]);
+            if (!oe) continue;
+            Tris ob = {0};
+            Emit eo = {&ob, c->scale, budget};
+            product_body(w, oe, &eo);
+            cutters += ob.n > 0;
+            if (ob.oom) out->tris.oom = 1;
+            tris_free(&ob);
+        }
+        if (cutters) {
+            Buf b;
+            buf_init(&b);
+            class_name(e->name, &b);
+            buf_puts(&b, ": ");
+            buf_u64(&b, cutters);
+            buf_puts(&b, " opening(s) not cut (no boolean kernel in the C core)");
+            tally_buf(&c->cut_warnings, &b, 0);
+            buf_free(&b);
+        }
+    }
+    if (w->unsup_n > unsup0)
+        for (size_t k = unsup0; k < w->unsup_n; k++)
+            tally_add(&c->cut_warnings, "boolean result drawn as its first operand (no boolean kernel in the C core)",
+                      75, 0);
+    out->triangles = out->tris.n;
+    out->warnings = w->warnings;
+    memset(&w->warnings, 0, sizeof w->warnings);
+    return out->tris.oom ? -1 : 0;
+}
+
+static void category_of(const cc_step_entity *e, const ElMat *m, cc_category *cat, cc_str *mat) {
+    *cat = m->set ? m->cat : CC_CAT_OTHER;
+    mat->p = m->set && m->name ? m->name : "";
+    mat->n = m->set ? m->n : 0;
+    if (!mat->n && is(e, "IFCGEOGRAPHICELEMENT")) *cat = CC_CAT_EARTH;
+}
+
+static cc_ifc_class class_enum(const char *n) {
+    if (!strcmp(n, "IFCCOLUMN")) return CC_IFC_COLUMN;
+    if (!strcmp(n, "IFCBEAM")) return CC_IFC_BEAM;
+    if (!strcmp(n, "IFCSLAB")) return CC_IFC_SLAB;
+    if (!strcmp(n, "IFCWALL") || !strcmp(n, "IFCWALLSTANDARDCASE")) return CC_IFC_WALL;
+    if (!strcmp(n, "IFCFOOTING")) return CC_IFC_FOOTING;
+    return CC_IFC_PROXY;
+}
+
+static int set_err(cc_error *err, const char *a, const char *b) {
+    size_t n = 0;
+    for (const char *p = a; *p && n + 1 < sizeof err->msg; p++) err->msg[n++] = *p;
+    for (const char *p = b; p && *p && n + 1 < sizeof err->msg; p++) err->msg[n++] = *p;
+    err->msg[n] = 0;
+    err->offset = CC_NO_OFFSET;
+    return -1;
+}
+
+/* Box of the f32 positions (Aabb::of_points): f32::min / max. */
+static float fmin32(float a, float b) { return a != a ? b : b != b ? a : a < b ? a : b; }
+static float fmax32(float a, float b) { return a != a ? b : b != b ? a : a > b ? a : b; }
+
+/* ---- read */
+
+static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
+    cc_scene *s = &out->scene;
+    Arena *a = &s->arena;
+    int rc = -1, oom = 0;
+    size_t ne = f->n ? f->n : 1;
+    R r;
+    Ctx c;
+    memset(&c, 0, sizeof c);
+    c.f = f;
+    r_init(&r, f, 0.5, 1.0);
+    Cont *cont = calloc(ne, sizeof *cont);
+    ElMat *em = calloc(ne, sizeof *em);
+    size_t *nvoids = calloc(ne, sizeof *nvoids), *void_at = calloc(ne + 1, sizeof *void_at);
+    uint64_t *void_ids = NULL;
+    size_t *ids = NULL, nids = 0;
+    Piece *res = NULL;
+    size_t nres = 0;
+    Tallies warnings = {0};
+    Arena scratch;
+    arena_init(&scratch, 0);
+    typedef struct {
+        size_t ent;
+        int instance;
+        size_t shape;
+        Aff tf;
+        Tris tris;
+    } Item;
+    Item *items = NULL;
+    size_t nitems = 0;
+    if (!r_ok(&r) || !cont || !em || !nvoids || !void_at) goto oom;
+
+    /* Parsed::new */
+    if (f->skipped) {
+        Buf b;
+        buf_init(&b);
+        buf_u64(&b, f->skipped);
+        buf_puts(&b, " malformed entity instance(s) skipped");
+        tally_buf(&r.warnings, &b, 0);
+        buf_free(&b);
+    }
+    double scale = length_scale_to_mm(&r);
+    r.arc_tol = 0.5 / scale; /* ARC_TOLERANCE_MM / scale */
+    r.angle_scale = plane_angle_to_radians(&r);
+    c.scale = scale, c.arc_tol = r.arc_tol, c.angle_scale = r.angle_scale;
+    containers(&r, cont);
+    for (int pass = 0; pass < 2; pass++) { /* voids(): per host, opening ids sorted */
+        size_t *fill = pass ? calloc(ne, sizeof *fill) : NULL;
+        if (pass && !fill) goto oom;
+        for (size_t i = 0; i < f->n; i++) {
+            const cc_step_entity *rv = &f->ents[i];
+            uint64_t h, o;
+            if (!is(rv, "IFCRELVOIDSELEMENT") || !cc_sv_as_ref(arg(rv, 4), &h) || !cc_sv_as_ref(arg(rv, 5), &o))
+                continue;
+            const cc_step_entity *he = cc_step_get(f, h);
+            if (!he) continue;
+            size_t hi = cc_step_index(f, he);
+            if (!pass) { nvoids[hi]++; continue; }
+            uint64_t *v = void_ids + void_at[hi];
+            size_t j = fill[hi]++;
+            while (j && v[j - 1] > o) v[j] = v[j - 1], j--;
+            v[j] = o;
+        }
+        if (!pass) {
+            for (size_t i = 0; i < f->n; i++) void_at[i + 1] = void_at[i] + nvoids[i];
+            void_ids = malloc((void_at[f->n] ? void_at[f->n] : 1) * sizeof *void_ids);
+            if (!void_ids) goto oom;
+        }
+        free(fill);
+    }
+    c.nvoids = nvoids, c.void_at = void_at, c.void_ids = void_ids;
+    materials(&r, em);
+    ids = malloc(ne * sizeof *ids);
+    if (!ids) goto oom;
+    for (size_t i = 0; i < f->n; i++) { /* products with a body, in id order */
+        const cc_step_entity *e = &f->ents[i];
+        int skip = 0;
+        for (size_t k = 0; k < sizeof SKIP_CLASSES / sizeof *SKIP_CLASSES && !skip; k++)
+            skip = !strcmp(e->name, SKIP_CLASSES[k]);
+        if (skip) continue;
+        const cc_step_entity *sh = get(&r, arg(e, 6)), *pl = get(&r, arg(e, 5));
+        if (sh && is(sh, "IFCPRODUCTDEFINITIONSHAPE") && pl && ends_with(pl->name, "PLACEMENT")) ids[nids++] = i;
+    }
+    if (storey_levels(&r, scale, a, &out->storeys, &out->nstoreys)) goto oom;
+    if (grid_axes(&r, scale, a, &out->grids, &out->ngrids)) goto oom;
+    georef(&r, scale, a, &out->georef, &oom);
+    warnings = r.warnings;
+    memset(&r.warnings, 0, sizeof r.warnings);
+    r_free(&r);
+    r_init(&r, f, c.arc_tol, c.angle_scale);
+    if (!r_ok(&r)) goto oom;
+
+    /* Limits::for_text */
+    uint64_t db = displayed_bytes(text, n);
+    uint64_t mt64 = db > UINT64_MAX / 10 ? UINT64_MAX : db * 10;
+    size_t max_triangles = mt64 > (uint64_t)(size_t)-1 ? (size_t)-1 : (size_t)mt64;
+    if (max_triangles < 1000000) max_triangles = 1000000;
+    size_t max_visits = db / 10 < 5000000 ? 5000000 : (size_t)(db / 10);
+    size_t cap = max_triangles;
+    size_t element_max = sat_add(min_z(cap, ELEMENT_MAX_TRIANGLES), 1);
+
+    /* Parsed::shapes: each map that an element is meshed once (map id order). */
+    {
+        size_t nm = 0;
+        c.shapes = calloc(nids ? nids : 1, sizeof *c.shapes);
+        uint64_t *mids = malloc((nids ? nids : 1) * sizeof *mids);
+        if (!c.shapes || !mids) { free(mids); goto oom; }
+        for (size_t k = 0; k < nids; k++) {
+            const cc_step_entity *mi = mapped_item(&c, &r, &f->ents[ids[k]]);
+            uint64_t m;
+            if (mi && cc_sv_as_ref(arg(mi, 0), &m)) mids[nm++] = m;
+        }
+        if (sort_ids(mids, nm)) { free(mids); goto oom; }
+        size_t u = 0;
+        for (size_t k = 0; k < nm; k++)
+            if (!u || c.shapes[u - 1].id != mids[k]) c.shapes[u++].id = mids[k];
+        free(mids);
+        c.nshapes = u;
+        Budget sb = {(size_t)-1, max_visits, 0, element_max};
+        for (size_t k = 0; k < c.nshapes; k++) {
+            Tris mb = {0};
+            const cc_step_entity *map = cc_step_get(f, c.shapes[k].id);
+            if (map) {
+                Emit e = {&mb, scale, &sb};
+                map_shape(&r, c.shapes[k].id, map, &e);
+            }
+            double zero[3] = {0, 0, 0};
+            arena_reset(&scratch);
+            int bad = mb.oom || cc_scene_mesh_build((double(*)[3][3])mb.t, (uint32_t)mb.n, zero, a, &scratch,
+                                                    &c.shapes[k].mesh);
+            tris_free(&mb);
+            if (bad) goto oom;
+        }
+        tally_merge(&warnings, &r.warnings);
+    }
+
+    /* Parsed::scene_progress: batches in file order, the cap applied in order. */
+    size_t total = 0, shown = 0, drawn = 0, visits_left = max_visits;
+    int visits_exhausted = 0;
+    items = calloc(nids ? nids : 1, sizeof *items);
+    res = calloc(BATCH, sizeof *res);
+    if (!items || !res) goto oom;
+    for (size_t b0 = 0; b0 < nids; b0 += BATCH) {
+        size_t bn = min_z(BATCH, nids - b0);
+        r_free(&r);
+        r_init(&r, f, c.arc_tol, c.angle_scale);
+        if (!r_ok(&r)) goto oom;
+        Budget g = {sat_add(sat_add(cap - total, cap), 1), visits_left, 0, element_max};
+        for (size_t k = 0; k < bn; k++, nres++)
+            if (piece(&c, &r, ids[b0 + k], &g, &res[k])) { nres++; goto oom; }
+        Budget used = g;
+        if (g.exhausted) { /* meshed again in order, stopping past the cap */
+            for (size_t k = 0; k < nres; k++) piece_free(&res[k]);
+            nres = 0;
+            r_free(&r);
+            r_init(&r, f, c.arc_tol, c.angle_scale);
+            if (!r_ok(&r)) goto oom;
+            Budget g2 = {sat_add(sat_add(cap - total, cap), 1), visits_left, 0, element_max};
+            size_t sum = total;
+            for (size_t k = 0; k < bn; k++) {
+                int prc = piece(&c, &r, ids[b0 + k], &g2, &res[k]);
+                nres++;
+                if (prc) goto oom;
+                sum += res[k].triangles;
+                if (sum > cap) break;
+            }
+            used = g2;
+        }
+        visits_left = used.visits_left;
+        if (!visits_left) visits_exhausted = 1;
+        int stop = 0;
+        for (size_t k = 0; k < nres && !stop; k++) {
+            Piece *p = &res[k];
+            tally_merge(&warnings, &p->warnings);
+            size_t nadd, drawn_n = p->triangles;
+            if (!p->instance) nadd = p->tris.n;
+            else if (!c.shapes[p->shape].seen) nadd = 1 + p->triangles;
+            else nadd = 1;
+            if (p->instance) c.shapes[p->shape].seen = 1;
+            if (sat_add(total, nadd) > cap || sat_add(drawn, drawn_n) > max_triangles) {
+                stop = 1;
+                break;
+            }
+            total += nadd, drawn += drawn_n, shown++;
+            /* SceneBuilder::push / push_instance: empty bodies are not kept. */
+            if (p->instance ? c.shapes[p->shape].mesh.ni > 0 : p->tris.n > 0) {
+                Item *it = &items[nitems++];
+                it->ent = p->ent, it->instance = p->instance, it->shape = p->shape, it->tf = p->tf;
+                it->tris = p->tris;
+                memset(&p->tris, 0, sizeof p->tris);
+            }
+        }
+        for (size_t k = 0; k < nres; k++) piece_free(&res[k]);
+        nres = 0;
+        if (stop || visits_exhausted) break;
+    }
+    tally_merge(&warnings, &c.cut_warnings);
+    if (shown < nids || visits_exhausted) {
+        Buf b;
+        buf_init(&b);
+        buf_puts(&b, "model too large or nested too deeply: ");
+        buf_u64(&b, nids - shown);
+        buf_puts(&b, " element(s) not shown after ");
+        buf_u64(&b, total);
+        buf_puts(&b, " triangles / ");
+        buf_u64(&b, max_visits - visits_left);
+        buf_puts(&b, " items");
+        size_t j;
+        for (j = 0; j < warnings.n; j++)
+            if (warnings.v[j].n == b.len && !memcmp(warnings.v[j].s, b.p, b.len)) break;
+        if (j < warnings.n) warnings.v[j].count = 1;
+        else tally_buf(&warnings, &b, 1);
+        buf_free(&b);
+    }
+
+    /* SceneBuilder::finish: the origin is the middle of the world box, rounded to mm. */
+    double lo[3] = {1.0 / 0.0, 1.0 / 0.0, 1.0 / 0.0}, hi[3] = {-1.0 / 0.0, -1.0 / 0.0, -1.0 / 0.0};
+    for (size_t i = 0; i < nitems; i++) {
+        const Item *it = &items[i];
+        if (!it->instance) {
+            for (size_t t = 0; t < it->tris.n; t++)
+                for (int k = 0; k < 9; k++) lo[k % 3] = fmin_rs(lo[k % 3], it->tris.t[t][k]), hi[k % 3] = fmax_rs(hi[k % 3], it->tris.t[t][k]);
+            continue;
+        }
+        const cc_mesh *m = &c.shapes[it->shape].mesh;
+        float bl[3] = {1.0f / 0.0f, 1.0f / 0.0f, 1.0f / 0.0f}, bh[3] = {-1.0f / 0.0f, -1.0f / 0.0f, -1.0f / 0.0f};
+        for (uint32_t v = 0; v < m->nv; v++)
+            for (int k = 0; k < 3; k++) bl[k] = fmin32(bl[k], m->pos[v][k]), bh[k] = fmax32(bh[k], m->pos[v][k]);
+        for (int corner = 0; corner < 8; corner++) {
+            double cc[3], w3[3];
+            for (int k = 0; k < 3; k++) cc[k] = (double)((corner >> k & 1) == 0 ? bl[k] : bh[k]);
+            aff_apply(&it->tf, cc, w3);
+            for (int k = 0; k < 3; k++) lo[k] = fmin_rs(lo[k], w3[k]), hi[k] = fmax_rs(hi[k], w3[k]);
+        }
+    }
+    for (int k = 0; k < 3; k++) s->origin[k] = finite(lo[0]) ? round_rs((lo[k] + hi[k]) / 2.0) : 0.0;
+    s->shapes = arena_alloc(a, (c.nshapes + 1) * sizeof *s->shapes, 8);
+    s->elements = arena_alloc(a, (nitems + 1) * sizeof *s->elements, 8);
+    out->info = arena_alloc(a, (nitems + 1) * sizeof *out->info, 8);
+    if (!s->shapes || !s->elements || !out->info) goto oom;
+    for (size_t k = 0; k < c.nshapes; k++) s->shapes[k] = c.shapes[k].mesh;
+    s->nshapes = c.nshapes;
+    Buf cls;
+    buf_init(&cls);
+    for (size_t i = 0; i < nitems; i++) {
+        Item *it = &items[i];
+        cc_scene_element *se = &s->elements[s->nelements];
+        memset(se, 0, sizeof *se);
+        if (it->instance) {
+            se->shape = (int32_t)it->shape;
+            for (int k = 0; k < 3; k++) {
+                se->to_scene.x[k] = (float)it->tf.x[k];
+                se->to_scene.y[k] = (float)it->tf.y[k];
+                se->to_scene.z[k] = (float)it->tf.z[k];
+                se->to_scene.t[k] = (float)(it->tf.t[k] - s->origin[k]);
+            }
+        } else {
+            se->shape = -1;
+            arena_reset(&scratch);
+            if (cc_scene_mesh_build((double(*)[3][3])it->tris.t, (uint32_t)it->tris.n, s->origin, a, &scratch,
+                                    &se->mesh)) { buf_free(&cls); goto oom; }
+            tris_free(&it->tris);
+            if (!se->mesh.ni) continue; /* all degenerate: dropped */
+        }
+        /* Parsed::info */
+        const cc_step_entity *e = &f->ents[it->ent];
+        cc_ifc_info *in = &out->info[s->nelements];
+        const char *t;
+        size_t tn;
+        if (!cc_sv_as_str(arg(e, 0), &t, &tn)) t = "", tn = 0;
+        in->global_id = a_str(a, t, tn, &oom);
+        if (cc_gid_valid(t, tn)) memcpy(se->id.c, t, 22);
+        buf_clear(&cls);
+        class_name(e->name, &cls);
+        in->class_name = a_str(a, cls.p ? cls.p : "", cls.len, &oom);
+        oom |= cls.oom;
+        if (!cc_sv_as_str(arg(e, 2), &t, &tn)) t = "", tn = 0;
+        in->name = a_str(a, t, tn, &oom);
+        const Cont *ct = &cont[it->ent];
+        in->storey = ct->has_name ? a_str(a, ct->name, ct->nn, &oom) : (cc_str){"", 0};
+        cc_str mat;
+        category_of(e, &em[it->ent], &se->category, &mat);
+        in->material = a_str(a, mat.p, mat.n, &oom);
+        se->class_name = in->class_name;
+        se->cls = class_enum(e->name);
+        se->model_index = s->nelements;
+        s->nelements++;
+    }
+    buf_free(&cls);
+    if (oom || cc_scene_share_copies(s)) goto oom;
+    for (size_t k = 0; k < s->nelements; k++) out->triangles += cc_scene_local_mesh(s, k)->ni / 3;
+
+    /* Warnings, sorted, "(×N)" when repeated. */
+    tally_sort(&warnings);
+    s->warnings = arena_alloc(a, (warnings.n + 1) * sizeof *s->warnings, 8);
+    if (!s->warnings) goto oom;
+    {
+        Buf b;
+        buf_init(&b);
+        for (size_t k = 0; k < warnings.n; k++) {
+            buf_clear(&b);
+            buf_append(&b, warnings.v[k].s, warnings.v[k].n);
+            if (warnings.v[k].count > 1) {
+                buf_puts(&b, " (\xc3\x97");
+                buf_u64(&b, warnings.v[k].count);
+                buf_putc(&b, ')');
+            }
+            s->warnings[s->nwarnings++] = a_str(a, b.p ? b.p : "", b.len, &oom);
+        }
+        oom |= b.oom;
+        buf_free(&b);
+    }
+    {
+        Buf b;
+        buf_init(&b);
+        for (size_t k = 0; k < f->nschemas; k++) {
+            if (k) buf_puts(&b, ", ");
+            buf_puts(&b, f->schemas[k]);
+        }
+        out->schema = a_str(a, b.p ? b.p : "", b.len, &oom);
+        oom |= b.oom;
+        buf_free(&b);
+    }
+    if (oom) goto oom;
+    rc = 0;
+    goto done;
+oom:
+    set_err(err, "out of memory", "");
+done:
+    for (size_t k = 0; k < nres; k++) piece_free(&res[k]);
+    for (size_t k = 0; items && k < nitems; k++) tris_free(&items[k].tris);
+    free(res);
+    free(items);
+    r_free(&r);
+    tally_free(&warnings);
+    tally_free(&c.cut_warnings);
+    free(c.shapes);
+    free(cont);
+    for (size_t i = 0; em && i < f->n; i++) free(em[i].name);
+    free(em);
+    free(nvoids);
+    free(void_at);
+    free(void_ids);
+    free(ids);
+    arena_free(&scratch);
+    return rc;
+}
+
+int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
+    memset(out, 0, sizeof *out);
+    arena_init(&out->scene.arena, 0);
+    out->schema.p = "";
+    cc_step_file f;
+    if (cc_step_parse(&f, text, n, err)) {
+        char msg[sizeof err->msg];
+        memcpy(msg, err->msg, sizeof msg);
+        msg[sizeof msg - 1] = 0;
+        size_t off = err->offset;
+        set_err(err, "parse: ", msg);
+        err->offset = off;
+        cc_step_free(&f);
+        return -1;
+    }
+    int ifc = 0;
+    for (size_t i = 0; i < f.nschemas; i++) ifc |= strncmp(f.schemas[i], "IFC", 3) == 0;
+    if (!ifc) {
+        Buf b, j;
+        buf_init(&b), buf_init(&j);
+        buf_puts(&b, "not an IFC file (schema ");
+        for (size_t i = 0; i < f.nschemas; i++) {
+            if (i) buf_putc(&j, ',');
+            buf_puts(&j, f.schemas[i]);
+        }
+        cc_buf_debug_str(&b, j.p ? j.p : "", j.len);
+        buf_putc(&b, ')');
+        set_err(err, buf_cstr(&b), "");
+        buf_free(&b), buf_free(&j);
+        cc_step_free(&f);
+        return -1;
+    }
+    int rc = read_parsed(&f, text, n, out, err);
+    cc_step_free(&f);
+    return rc;
+}
+
+void cc_ifc_scene_free(cc_ifc_scene *s) {
+    cc_scene_free(&s->scene);
+    memset(s, 0, sizeof *s);
+}
+
+/* ---- text */
+
+static void hex_n(Buf *b, uint64_t u, int digits) {
+    static const char H[] = "0123456789abcdef";
+    for (int k = digits - 1; k >= 0; k--) buf_putc(b, H[(u >> (4 * k)) & 15]);
+}
+static void hex64(Buf *b, double x) {
+    uint64_t u;
+    memcpy(&u, &x, 8);
+    hex_n(b, u, 16);
+}
+static void hex32(Buf *b, float x) {
+    uint32_t u;
+    memcpy(&u, &x, 4);
+    hex_n(b, u, 8);
+}
+static void jstr(Buf *b, cc_str s) { json_escape(b, s.p ? s.p : "", s.n); }
+
+void cc_ifc_georef_json(Buf *b, const cc_ifc_georef *g) {
+    int first = 1;
+    buf_putc(b, '{');
+#define KEY(k) (buf_puts(b, first ? "\"" k "\":" : ",\"" k "\":"), first = 0)
+    if (g->rotation_deg != 0.0) KEY("rotation_deg"), fmt_f64_json(b, g->rotation_deg);
+    if (g->has_crs) KEY("crs"), jstr(b, g->crs);
+    if (g->east_m != 0.0) KEY("east_m"), fmt_f64_json(b, g->east_m);
+    if (g->north_m != 0.0) KEY("north_m"), fmt_f64_json(b, g->north_m);
+    if (g->height_m != 0.0) KEY("height_m"), fmt_f64_json(b, g->height_m);
+    if (g->map_rotation_deg != 0.0) KEY("map_rotation_deg"), fmt_f64_json(b, g->map_rotation_deg);
+#undef KEY
+    buf_putc(b, '}');
+}
+
+static void put_k(Buf *b, size_t k) { /* {k:03} */
+    if (k < 100) buf_putc(b, '0');
+    if (k < 10) buf_putc(b, '0');
+    buf_u64(b, k);
+}
+
+void cc_ifc_scene_txt(Buf *b, const cc_ifc_scene *s) {
+    const cc_scene *sc = &s->scene;
+    buf_puts(b, "schema ");
+    jstr(b, s->schema);
+    buf_puts(b, "\norigin");
+    for (int k = 0; k < 3; k++) buf_putc(b, ' '), hex64(b, sc->origin[k]);
+    buf_puts(b, "\ngeoref ");
+    cc_ifc_georef_json(b, &s->georef);
+    buf_puts(b, "\nstoreys ");
+    buf_u64(b, s->nstoreys);
+    buf_putc(b, '\n');
+    for (size_t k = 0; k < s->nstoreys; k++) {
+        buf_puts(b, "storey ");
+        hex64(b, s->storeys[k].elevation_mm);
+        buf_putc(b, ' ');
+        jstr(b, s->storeys[k].id);
+        buf_putc(b, ' ');
+        jstr(b, s->storeys[k].name);
+        buf_putc(b, '\n');
+    }
+    buf_puts(b, "grids ");
+    buf_u64(b, s->ngrids);
+    buf_putc(b, '\n');
+    for (size_t k = 0; k < s->ngrids; k++) {
+        const cc_ifc_grid *g = &s->grids[k];
+        buf_puts(b, "grid ");
+        hex64(b, g->start_mm[0]), buf_putc(b, ' '), hex64(b, g->start_mm[1]), buf_putc(b, ' ');
+        hex64(b, g->end_mm[0]), buf_putc(b, ' '), hex64(b, g->end_mm[1]), buf_putc(b, ' ');
+        jstr(b, g->tag);
+        buf_putc(b, '\n');
+    }
+    buf_puts(b, "elements ");
+    buf_u64(b, sc->nelements);
+    buf_puts(b, " triangles ");
+    buf_u64(b, s->triangles);
+    buf_puts(b, s->triangles <= 20000 ? " meshes yes\n" : " meshes no\n");
+    for (size_t k = 0; k < sc->nelements; k++) {
+        const cc_scene_element *e = &sc->elements[k];
+        const cc_ifc_info *in = &s->info[e->model_index];
+        const cc_mesh *m = cc_scene_local_mesh(sc, k);
+        const char *cat = cc_category_name(e->category);
+        put_k(b, k);
+        buf_putc(b, ' ');
+        buf_append(b, in->global_id.p, in->global_id.n);
+        buf_putc(b, ' ');
+        buf_append(b, in->class_name.p, in->class_name.n);
+        buf_putc(b, ' ');
+        buf_u64(b, (uint64_t)e->category);
+        buf_putc(b, ' ');
+        buf_putc(b, (char)(cat[0] - 'a' + 'A'));
+        buf_puts(b, cat + 1);
+        buf_puts(b, " v="), buf_u64(b, m->nv);
+        buf_puts(b, " i="), buf_u64(b, m->ni / 3);
+        buf_puts(b, " e="), buf_u64(b, m->ne);
+        buf_puts(b, " n="), buf_u64(b, m->nn);
+        buf_puts(b, " name="), jstr(b, in->name);
+        buf_puts(b, " storey="), jstr(b, in->storey);
+        buf_puts(b, " material="), jstr(b, in->material);
+        buf_putc(b, '\n');
+    }
+    for (size_t k = 0; k < sc->nwarnings; k++) {
+        buf_puts(b, "warning ");
+        buf_append(b, sc->warnings[k].p, sc->warnings[k].n);
+        buf_putc(b, '\n');
+    }
+}
+
+void cc_ifc_mesh_txt(Buf *b, const cc_ifc_scene *s, size_t k) {
+    const cc_scene_element *e = &s->scene.elements[k];
+    const cc_mesh *m = cc_scene_local_mesh(&s->scene, k);
+    if (e->shape >= 0) {
+        const float *cols[4] = {e->to_scene.x, e->to_scene.y, e->to_scene.z, e->to_scene.t};
+        buf_putc(b, 't');
+        for (int c = 0; c < 4; c++)
+            for (int i = 0; i < 3; i++) buf_putc(b, ' '), hex32(b, cols[c][i]);
+        buf_putc(b, '\n');
+    }
+    for (uint32_t i = 0; i < m->nv; i++) {
+        buf_putc(b, 'v');
+        for (int j = 0; j < 3; j++) buf_putc(b, ' '), hex32(b, m->pos[i][j]);
+        buf_putc(b, '\n');
+    }
+    for (uint32_t i = 0; i + 2 < m->ni; i += 3) {
+        buf_putc(b, 'i');
+        for (int j = 0; j < 3; j++) buf_putc(b, ' '), buf_u64(b, m->idx[i + j]);
+        buf_putc(b, '\n');
+    }
+    for (uint32_t i = 0; i < m->ne; i++) {
+        buf_putc(b, 'e');
+        for (int j = 0; j < 6; j++) buf_putc(b, ' '), hex32(b, m->edges[i][j]);
+        buf_putc(b, '\n');
+    }
+    for (uint32_t i = 0; i < m->nn; i++) {
+        buf_putc(b, 'n');
+        for (int j = 0; j < 8; j++) buf_putc(b, ' '), buf_i64(b, m->normals[i][j]);
+        buf_putc(b, '\n');
+    }
+}
+
+void cc_ifc_error_txt(Buf *b, const cc_error *err) {
+    buf_puts(b, "error ");
+    buf_puts(b, err->msg);
+    buf_putc(b, '\n');
+}
+
+/* ---- BMSH (host/mesh.c's layout, version 1) */
+
+static void put_u32(Buf *b, uint32_t v) { buf_append(b, &v, 4); }
+
+int cc_ifc_scene_bmsh(const cc_ifc_scene *is, uint32_t rev, Buf *out, cc_error *err) {
+    const cc_scene *s = &is->scene;
+    int rc = -1;
+    Arena tmp;
+    arena_init(&tmp, 0);
+    size_t ne = s->nelements;
+    cc_mesh *w = arena_alloc(&tmp, (ne + 1) * sizeof *w, 16);
+    if (!w) { set_err(err, "out of memory", ""); goto done; }
+    uint64_t nv = 0, ni = 0, ns = 0;
+    for (size_t k = 0; k < ne; k++) {
+        if (cc_scene_world_mesh(s, k, &tmp, &w[k])) { set_err(err, "out of memory", ""); goto done; }
+        nv += w[k].nv, ni += w[k].ni, ns += w[k].ne;
+    }
+    if (ne > UINT32_MAX || nv > UINT32_MAX || ni > UINT32_MAX || ns > UINT32_MAX) {
+        set_err(err, "scene too large for BMSH", "");
+        goto done;
+    }
+    buf_append(out, "BMSH", 4);
+    put_u32(out, 1);
+    put_u32(out, rev);
+    put_u32(out, (uint32_t)ne), put_u32(out, (uint32_t)nv), put_u32(out, (uint32_t)ni), put_u32(out, (uint32_t)ns);
+    buf_append(out, s->origin, 24);
+    uint32_t fv = 0, fi = 0, fs = 0;
+    for (size_t k = 0; k < ne; k++) {
+        const cc_scene_element *e = &s->elements[k];
+        cc_str id = is->info[e->model_index].global_id;
+        for (size_t i = 0; i < 22; i++) buf_putc(out, i < id.n ? id.p[i] : '0');
+        buf_putc(out, (char)(unsigned char)e->category);
+        buf_putc(out, 0);
+        put_u32(out, fv), put_u32(out, w[k].nv), put_u32(out, fi), put_u32(out, w[k].ni);
+        put_u32(out, fs), put_u32(out, w[k].ne);
+        fv += w[k].nv, fi += w[k].ni, fs += w[k].ne;
+    }
+    for (size_t k = 0; k < ne; k++) buf_append(out, w[k].pos, (size_t)w[k].nv * 12);
+    fv = 0;
+    for (size_t k = 0; k < ne; k++) {
+        for (uint32_t i = 0; i < w[k].ni; i++) put_u32(out, fv + w[k].idx[i]);
+        fv += w[k].nv;
+    }
+    for (size_t k = 0; k < ne; k++) buf_append(out, w[k].edges, (size_t)w[k].ne * 24);
+    static const int8_t zero[8];
+    for (size_t k = 0; k < ne; k++)
+        for (uint32_t i = 0; i < w[k].ne; i++) buf_append(out, i < w[k].nn ? w[k].normals[i] : zero, 8);
+    if (out->oom) { set_err(err, "out of memory", ""); goto done; }
+    rc = 0;
+done:
+    arena_free(&tmp);
+    return rc;
+}
