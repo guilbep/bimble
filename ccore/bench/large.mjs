@@ -462,7 +462,7 @@ async function main() {
       "--headless=new", ...GL_FLAGS, "--remote-debugging-port=0",
       `--user-data-dir=${join(tmp, "chromium")}`, "--no-first-run", "--no-default-browser-check", "about:blank",
     ]);
-    const wsUrl = await waitFor("DevTools line", 15000, () => chrome.out.match(/DevTools listening on (ws:\/\/\S+)/)?.[1], 100);
+    const wsUrl = await waitFor("DevTools line", 60000, () => chrome.out.match(/DevTools listening on (ws:\/\/\S+)/)?.[1], 100);
     cdp = await cdpConnect(wsUrl);
     const gi = await cdp.send("SystemInfo.getInfo");
     machine.gl = GL;
