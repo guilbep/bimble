@@ -150,7 +150,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # clang and lld: build.sh wasm (lab_wasm, lab_pages); cmake: manifold (deps.sh), in the host.
-      - run: scripts/apt-install.sh clang lld cmake
+      - run: scripts/apt-install.sh clang lld cmake poppler-utils # pdftotext: lab_export reads the exported PDF
         timeout-minutes: 12
       - name: Versions and keys
         id: keys
