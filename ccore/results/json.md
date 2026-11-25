@@ -75,3 +75,63 @@ ms, median of 5. 2k = 1,982 elements, 20k = 20,026, 60k = 59,832.
 4. **The protocol is not a cost.** A 1,000-row `query elements` is 0.24 ms to build and 0.5–0.8 ms
    to `JSON.parse`; the change JSON and `query element` are under 10 µs. The 10,000-row cap is
    2.6 + 5–7 ms. Journal entries cost 5–400 µs to write.
+
+## What was changed (one commit each, numbers from the same bench, same machine)
+
+1. **CRC-32 slicing-by-8** (`src/inflate.c`): gunzip and gzip both pay the CRC. Test: the
+   check value and every length and offset against the byte-at-a-time definition (`file2`).
+2. **`add_element` grows the element array** (`src/command.c`, `cap_elements` in `cc_model`):
+   twice the room when full, an in-place `memmove` otherwise, instead of a new arena copy per
+   add. Test (`verbs`, fails on the old code): 300 shuffled adds move the array at most 8 times,
+   stay sorted and found, and undoing them all gives the exact model text back.
+3. **Session format 3** (`session/session.c`): when the snapshot must hold the model, it goes to a
+   side file `<session>.model-a|b`, which is the open `.bimble` v2 binary (Rust's CBOR byte for
+   byte, gzip in stored blocks: `cc_model_save_v2_stored`, Rust and any gzip reader load it). The
+   line names its slot, size and BLAKE3. The two slots alternate, so a crash between the side file
+   and the line leaves the old line with its own complete side file. If the size or BLAKE3 does
+   not match, or the file is missing, the session file is ignored, the reason is logged and the
+   model file is opened (the existing fallback). Format 2 (the model as JSON text in the line)
+   still restores. Tests: `session_log_test.mjs` (side file present, magic + gzip, one slot only,
+   one byte changed → falls back, missing → falls back, restore does not read the model file, an
+   old format-2 file restores) and `file2` (stored v2 inflates to Rust's golden CBOR, loads back
+   to the same v1 text; stored blocks at 0, 1, 65,535, 65,536 and 200,000 bytes).
+
+## After
+
+| stage | 2k before → after | 20k before → after | 60k before → after |
+|---|---:|---:|---:|
+| open v2 total | 4.1 → 3.0 | 44.7 → 35.4 | 157.7 → 128.7 |
+| — gunzip | 2.1 → 1.0 | 22.3 → 11.2 | 67.6 → 34.0 |
+| save v2: gzip | 3.7 → 2.6 | 37.2 → 26.2 | 113.2 → 79.3 |
+| verb place (the call) | 0.022 → 0.010 | 0.61 → 0.07 | 2.11 → 0.71 |
+| replay of 1,000 entries | 14.2 → 4.1 | 228.5 → 50.1 | 1,105 → 235 |
+| restore with 1,000 entries | 18.5 → 7.3 | 278.1 → 90.7 | 1,273 → 371 |
+| snapshot with the model: write | 5.7 → 1.9 | 59.6 → 20.0 | 184.1 → 59.3 |
+| — its size (MB, line + side file) | 1.6 → 0.5 | 16.7 → 5.3 | 50.1 → 16.0 |
+| — its restore | 8.2 → 3.1 | 94.2 → 43.4 | 306.6 → 142.3 |
+| open v1, CBOR → DOM, protocol | unchanged (noise) | | |
+
+The same ±5 % run-to-run noise shows up on unchanged rows (open v1 at 60k: 179.9 and 182.7).
+Between the `before` run and the `after` run, nothing changed except these three commits.
+
+## What was not changed, and why
+
+- **A direct CBOR → model decoder (no DOM).** At most CBOR → DOM (27 ms of 129 at 60k, 21 %) plus
+  part of DOM → model. It would mean a second decoder of every model and view type (`file.c`,
+  `view_io`) that must refuse the same inputs with the same messages as the one used for v1. It
+  is worth doing only after the gunzip (34 ms) and DOM → model (63 ms) work, and only if
+  open-time is the target. The writer is already direct (model → CBOR, no DOM).
+- **A flat arena image `.ccore-snap`.** The side file already makes a snapshot restore cost
+  about the same as opening the v2 file (142 vs 136 ms at 60k), and it stays in the open
+  format. An image with pointer fix-up would cut that further, but it needs a serializer for
+  every pointer in `cc_model` and views, plus its own versioning. The journal replay (235 ms per
+  1,000 entries at 60k) now costs more than the load.
+- **Binary journal entries.** An entry costs 5–100 µs to write and ~2 ms per 1,000 to parse. The
+  replay time is in applying the commands. CBOR entries would save nothing measurable.
+- **Protocol.** A 1,000-row answer is 0.23 ms to build and 0.5 ms to parse. A binary form would
+  save under a millisecond per query and change every caller.
+- **What is left to speed up (not JSON):** (a) place and delete at 60k are still a `memmove` of
+  about 8 MB (0.6–0.7 ms), and each entry replayed pays that cost. A non-contiguous element
+  store would remove it. (b) DOM → model at 63 ms. (c) The deflate at 79 ms on Save. (d) Side
+  files of a session file that moves with its model (Save as) stay behind, as the old
+  `.ccore-session` already did.
