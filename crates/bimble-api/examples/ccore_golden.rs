@@ -14,6 +14,10 @@
 //! reader `read_str` (`ifc/read/`) on the crate fixtures, the hand-written `ifc/fixtures/` and the
 //! exports.
 //!
+//! `ccore_golden --dump-read <in.ifc> <outdir>`, `--dump-import <in.ifc> <outdir>`: the same
+//! formats for any IFC file, into `<outdir>` (for comparing the C core on files that are not
+//! goldens; `ccore/tools/ifc_dump.c` is the C side). Nothing is masked.
+//!
 //! Every verb (`verbs_all.txt`, `frame2/verbs_all.txt`), the verbs' JSON schemas
 //! (`verbs_schema/`, `verbs_list.json`) and the viewer export (`view/*.bimbleview`).
 
@@ -86,8 +90,23 @@ fn main() {
                 }
             }
         }
+        "--dump-read" | "--dump-import" => {
+            let a: Vec<String> = std::env::args().skip(2).collect();
+            let [input, out] = a.as_slice() else {
+                eprintln!("usage: ccore_golden {mode} <in.ifc> <outdir>");
+                std::process::exit(2);
+            };
+            if mode == "--dump-read" {
+                dump_read(input, out);
+            } else {
+                dump_import(input, out);
+            }
+        }
         _ => {
-            eprintln!("usage: ccore_golden [--generate-frame | --generate-frame2 | --check]");
+            eprintln!(
+                "usage: ccore_golden [--generate-frame | --generate-frame2 | --check | \
+                 --dump-read <in.ifc> <outdir> | --dump-import <in.ifc> <outdir>]"
+            );
             std::process::exit(2);
         }
     }
@@ -1044,7 +1063,7 @@ const CRATE_FIXTURES: [&str; 6] = [
     "tilt",
 ];
 /// The hand-written fixtures of `ccore/golden/ifc/fixtures/`.
-const GOLDEN_FIXTURES: [&str; 8] = [
+const GOLDEN_FIXTURES: [&str; 9] = [
     "circle_column",
     "faceted_brep",
     "indexed_arc",
@@ -1052,6 +1071,7 @@ const GOLDEN_FIXTURES: [&str; 8] = [
     "mapped_item",
     "opening",
     "rect_hollow",
+    "same_level",
     "triangulated",
 ];
 /// Imported models whose text is larger than this keep `<name>.size.txt` instead of the text.
@@ -1176,16 +1196,22 @@ fn json_str(s: &str) -> String {
 /// `ifc/read/<name>/scene.txt` and `<k>.txt`: what `bimble_ifc::read::read_str` gives the viewer.
 fn read_files(name: &str, text: &str, files: &mut Files) {
     let prefix = format!("ifc/read/{name}/");
-    let scene = match bimble_ifc::read::read_str(text) {
-        Ok(s) => s,
+    match bimble_ifc::read::read_str(text) {
+        Ok(scene) => scene_files(&scene, &prefix, false, files),
         Err(e) => {
             files.insert(
                 format!("{prefix}scene.txt"),
                 format!("error {e}\n").into_bytes(),
             );
-            return;
         }
-    };
+    }
+}
+
+/// The `ifc/read/` files of a read scene under `prefix`. `hashes`: also `meshes.txt`, one line
+/// per element `<k> <bytes> <FNV-1a 64 hex>` of its `<k>.txt` text, written whatever the
+/// triangle count (the dump modes: a large file's meshes compared without writing them all).
+fn scene_files(scene: &Scene, prefix: &str, hashes: bool, files: &mut Files) {
+    let mut hash_lines = String::new();
     let o = scene.origin_mm;
     let mut s = String::new();
     writeln!(s, "schema {}", json_str(&scene.schema)).unwrap();
@@ -1248,7 +1274,7 @@ fn read_files(name: &str, text: &str, files: &mut Files) {
             json_str(&e.material)
         )
         .unwrap();
-        if meshes {
+        if meshes || hashes {
             let mut t = String::new();
             if let Geometry::Instance { to_scene: p, .. } = &e.geometry {
                 let h: Vec<String> = [p.x, p.y, p.z, p.t]
@@ -1259,13 +1285,127 @@ fn read_files(name: &str, text: &str, files: &mut Files) {
                 writeln!(t, "t {}", h.join(" ")).unwrap();
             }
             t.push_str(&mesh_text(mesh));
-            files.insert(format!("{prefix}{k:03}.txt"), t.into_bytes());
+            if hashes {
+                writeln!(
+                    hash_lines,
+                    "{k:03} {} {:016x}",
+                    t.len(),
+                    fnv64(t.as_bytes())
+                )
+                .unwrap();
+            }
+            if meshes {
+                files.insert(format!("{prefix}{k:03}.txt"), t.into_bytes());
+            }
         }
     }
     for w in &scene.warnings {
         writeln!(s, "warning {w}").unwrap();
     }
     files.insert(format!("{prefix}scene.txt"), s.into_bytes());
+    if hashes {
+        files.insert(format!("{prefix}meshes.txt"), hash_lines.into_bytes());
+    }
+}
+
+/// FNV-1a, 64 bits: the dump modes' fingerprint of a text (the C driver computes the same).
+fn fnv64(b: &[u8]) -> u64 {
+    b.iter().fold(0xcbf2_9ce4_8422_2325, |h, &c| {
+        (h ^ u64::from(c)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+// ---------------------------------------------------------------- dump modes
+
+/// Model text kept whole by `--dump-import` up to this size; over it only `model.size.txt`.
+const DUMP_MODEL_MAX_BYTES: usize = 1 << 30;
+
+fn dump_input(path: &str) -> String {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+fn dump_write(out: &str, files: &Files) {
+    std::fs::create_dir_all(out).unwrap_or_else(|e| panic!("{out}: {e}"));
+    write_all(Path::new(out), files);
+}
+
+/// `--dump-read <in.ifc> <outdir>`: the `ifc/read/` files of any IFC file, plus `meshes.txt`
+/// (see `scene_files`) and `time.txt` (`read_ms <ms>`: `read_str` alone).
+fn dump_read(input: &str, out: &str) {
+    let text = dump_input(input);
+    let t = std::time::Instant::now();
+    let r = bimble_ifc::read::read_str(&text);
+    let ms = t.elapsed().as_secs_f64() * 1e3;
+    drop(text);
+    let mut files = Files::new();
+    match r {
+        Ok(scene) => scene_files(&scene, "", true, &mut files),
+        Err(e) => {
+            files.insert("scene.txt".into(), format!("error {e}\n").into_bytes());
+        }
+    }
+    files.insert("time.txt".into(), format!("read_ms {ms:.1}\n").into_bytes());
+    dump_write(out, &files);
+}
+
+/// `--dump-import <in.ifc> <outdir>`: `import_str` of any IFC file. `report.txt` (the report's
+/// lines, or `error <text>`); `model.size.txt`: `bytes` and `fnv` of the model text, and when the
+/// model has a georeference `fnv_without_georef` and `georef <json>`, then `elements`, then per
+/// element in id order `<id> <IfcClass> <generator kind> v=<positions> i=<triangles>`;
+/// `model.json`: the model text without its georeference (the C model has none), when at most
+/// 1 GiB; `time.txt` (`import_ms`). Ids are not masked: what the import derives
+/// (`GlobalId::derived`) is deterministic, the C core derives the same.
+fn dump_import(input: &str, out: &str) {
+    let text = dump_input(input);
+    let t = std::time::Instant::now();
+    let r = bimble_ifc::import::import_str(&text);
+    let ms = t.elapsed().as_secs_f64() * 1e3;
+    drop(text);
+    let mut files = Files::new();
+    match r {
+        Ok((mut m, rep)) => {
+            let text = file::to_string(&m);
+            let mut s = String::new();
+            writeln!(s, "bytes {}", text.len()).unwrap();
+            writeln!(s, "fnv {:016x}", fnv64(text.as_bytes())).unwrap();
+            // The C model keeps no georeference: the text without it, for comparison.
+            let mut text = text;
+            if !m.georef.is_default() {
+                let georef = std::mem::take(&mut m.georef);
+                text = file::to_string(&m);
+                writeln!(s, "fnv_without_georef {:016x}", fnv64(text.as_bytes())).unwrap();
+                writeln!(s, "georef {}", serde_json::to_string(&georef).unwrap()).unwrap();
+                m.georef = georef;
+            }
+            writeln!(s, "elements {}", m.elements.len()).unwrap();
+            for e in m.elements.values() {
+                let (v, i) = match &e.generator {
+                    Generator::Mesh { positions, indices } => (positions.len(), indices.len() / 3),
+                    _ => (0, 0),
+                };
+                let kind = e.generator.name();
+                writeln!(s, "{} {} {kind} v={v} i={i}", e.id, e.class_name()).unwrap();
+            }
+            files.insert("model.size.txt".into(), s.into_bytes());
+            if text.len() <= DUMP_MODEL_MAX_BYTES {
+                files.insert("model.json".into(), text.into_bytes());
+            }
+            let mut r = String::new();
+            for l in rep.lines() {
+                writeln!(r, "{l}").unwrap();
+            }
+            files.insert("report.txt".into(), r.into_bytes());
+        }
+        Err(e) => {
+            files.insert("report.txt".into(), format!("error {e}\n").into_bytes());
+        }
+    }
+    files.insert(
+        "time.txt".into(),
+        format!("import_ms {ms:.1}\n").into_bytes(),
+    );
+    dump_write(out, &files);
 }
 
 // ---------------------------------------------------------------- every verb

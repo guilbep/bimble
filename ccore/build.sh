@@ -10,6 +10,7 @@
 #          clang with -ffp-contract=off (no fused multiply-add: the same floats as tcc). HOST_MIX=0:
 #          one tcc call over every source (the build before ticket T18).
 #   native clang -O2, same outputs
+#   (tcc and native also build tools/*.c, e.g. ifc_dump: README "Comparing with Rust")
 #   wasm   clang freestanding wasm32 of src/ (no libc) and the session layer (session/*.c: the
 #          native host's call code, without the host's HTTP server, platform and main), ccore.wasm
 #          exporting the API of src/wasm_api.h (test: node test/wasm_run.mjs, test/lab_wasm.mjs)
@@ -72,6 +73,13 @@ lib_and_tests() { # <dir> <cc> <flags...>
     else step "archive libccore_session.a" llvm-ar rcs "$dir/libccore_session.a" "${sobjs[@]}"; fi
     for t in "${TESTS[@]}"; do
         step "test binary $t" "$cc" "$@" "${INC[@]}" -Ihost "test/${t}_test.c" "$dir/libccore_session.a" "$dir/libccore.a" "${klink[@]}" -o "$dir/test_$t"
+    done
+    # Tools (tools/*.c, one binary each): on the library only.
+    for f in tools/*.c; do
+        [[ -e $f ]] || continue
+        local tn
+        tn=$(basename "${f%.c}")
+        step "tool $tn" "$cc" "$@" "${INC[@]}" "$f" "$dir/libccore.a" "${klink[@]}" -o "$dir/$tn"
     done
     # The native host (not in wasm): every host/*.c on top of session/ and the library.
     step "host bimble-ccore" "$cc" "$@" "${INC[@]}" -Ihost "${HOST[@]}" "${SESSION[@]}" "$dir/libccore.a" "${klink[@]}" -o "$dir/bimble-ccore"

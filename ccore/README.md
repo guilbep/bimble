@@ -54,6 +54,20 @@ serde_json version). Commit the changed `.txt` files:
 
     cd ccore/golden/floats && CARGO_TARGET_DIR=../../out/cargo cargo run -j 2
 
+## Comparing with Rust on any IFC file
+
+`build.sh native` (and `tcc`) also builds `out/<mode>/ifc_dump` (`tools/ifc_dump.c`), the C twin of
+the golden dumper's dump modes. Same files in both output folders, nothing masked:
+
+    cargo run --release -p bimble-api --example ccore_golden -- --dump-read <in.ifc> <rust-dir>
+    ccore/out/native/ifc_dump read <in.ifc> <c-dir>          # scene.txt, meshes.txt, time.txt
+    cargo run --release -p bimble-api --example ccore_golden -- --dump-import <in.ifc> <rust-dir>
+    ccore/out/native/ifc_dump import <in.ifc> <c-dir> [<export.ifc>]   # report, model, export
+
+`meshes.txt` holds one FNV-1a hash per element mesh, so a large file is compared without writing
+every mesh. Rust's `model.json` leaves out the georeference (the C model has none). Never commit
+the outputs of a client file.
+
 ## Dev loop
 
 One command runs the C core behind the unchanged Vue lab and restarts it on every save (needs
