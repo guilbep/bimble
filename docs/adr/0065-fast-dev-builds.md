@@ -61,6 +61,10 @@ both after wasm-bindgen). Line numbers cost about 0.05 s.
   It happens once per toolchain or dependency update.
 - Native dev builds and `cargo test` also use these settings. Tests run on optimized
   dependencies. A debugger shows no local variables unless `CARGO_PROFILE_DEV_DEBUG=2` is set.
+- CI's cache key (Swatinem/rust-cache) is made from the toolchain and `Cargo.lock`, not from the
+  profiles. The `rust`, `gl` and `web` jobs add the hash of the root `Cargo.toml` to it. Without it,
+  the PR's CI restored the old cache, rebuilt every dependency and saved nothing: the ubuntu `rust`
+  job took 6–7 min against 1.5 min, on two runs.
 - The lab no longer checks the release wasm. Performance numbers come from the release build only
   (ADR 0011, `web-ui/perf/`), never from the dev wasm.
 
