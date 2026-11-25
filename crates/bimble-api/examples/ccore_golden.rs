@@ -3896,7 +3896,11 @@ fn ifc_views_files(dir: &Path, files: &mut Files) {
                 Ok(r) => {
                     let mut sorted: Vec<_> = levels.iter().collect();
                     sorted.sort_by(|a, b| a.elevation_mm.total_cmp(&b.elevation_mm));
-                    let e = sorted.iter().find(|l| l.key == *storey).unwrap().elevation_mm;
+                    let e = sorted
+                        .iter()
+                        .find(|l| l.key == *storey)
+                        .unwrap()
+                        .elevation_mm;
                     writeln!(
                         s,
                         "plan {} cut {} elevation {}",
