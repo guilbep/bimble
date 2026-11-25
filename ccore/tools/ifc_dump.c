@@ -5,7 +5,9 @@
  *   ifc_dump read <in.ifc> <outdir>
  *       cc_ifc_read: scene.txt, meshes.txt (per element "<k> <bytes> <FNV-1a 64 hex>" of its
  *       <k>.txt text), <k>.txt when the scene has at most 20000 triangles (the golden rule),
- *       time.txt ("read_ms <ms>": the read alone).
+ *       time.txt ("read_ms <ms>": the read alone), counts.txt (products with a body, entities
+ *       parsed, elements drawn, triangles, "empty <ENTITY> <n>" per class of the products drawn
+ *       empty: C only, for bench/corpus.sh).
  *   ifc_dump import <in.ifc> <outdir> [<export.ifc>]
  *       cc_ifc_import: report.txt (the report's lines, the C-only "unsupported: " lines
  *       included, or "error <text>"), model.size.txt, model.json (at most 1 GiB), time.txt.
@@ -112,6 +114,23 @@ static int dump_read(const char *in, const char *out) {
         put(out, "meshes.txt", lines.p, lines.len);
     }
     put_time(out, "read_ms", ms);
+    if (!rc) { /* counts for corpus reports (bench/corpus.sh); no Rust twin */
+        char t[160];
+        int tn = snprintf(t, sizeof t, "products %zu\nentities %zu\nelements %zu\ntriangles %zu\n", s.products,
+                          s.entities, s.scene.nelements, s.triangles);
+        Buf cb;
+        buf_init(&cb);
+        buf_append(&cb, t, (size_t)tn);
+        for (size_t i = 0; i < s.empty_classes.n;) { /* "empty <ENTITY> <count>" lines */
+            const char *nl = memchr(s.empty_classes.p + i, '\n', s.empty_classes.n - i);
+            size_t e = nl ? (size_t)(nl - s.empty_classes.p) + 1 : s.empty_classes.n;
+            buf_puts(&cb, "empty ");
+            buf_append(&cb, s.empty_classes.p + i, e - i);
+            i = e;
+        }
+        put(out, "counts.txt", cb.p, cb.len);
+        buf_free(&cb);
+    }
     buf_free(&b);
     buf_free(&m);
     buf_free(&lines);

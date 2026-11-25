@@ -155,6 +155,12 @@ the golden dumper's dump modes. Same files in both output folders, nothing maske
 every mesh. Rust's `model.json` leaves out the georeference (the C model has none). Never commit
 the outputs of a client file.
 
+The public IFC corpora (buildingSMART certification and sample files, IfcOpenShell's test files and
+others; ticket IFC1, `results/ifc_corpus.md`): `bench/corpus.sh fetch` clones them at pinned commits
+into `$BIMBLE_IFC_CORPUS` (default `~/.cache/bimble-ifc-corpus`, never the repo), `asan` builds an
+ASan+UBSan `ifc_dump`, `run` reads every file with C, Rust (`$RUST_DUMP`) and ASan (120 s, 6 GB
+each), `ios` compares with IfcOpenShell on a sample, `report` prints the tables.
+
 ## Dev loop
 
 One command runs the C core behind the unchanged Vue lab and restarts it on every save (needs

@@ -954,6 +954,8 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     }
     Buf cls;
     buf_init(&cls);
+    size_t *drawn_ent = malloc((nitems + 1) * sizeof *drawn_ent); /* out->empty_classes */
+    if (!drawn_ent) { buf_free(&cls); goto oom; }
     for (size_t i = 0; i < nitems; i++) {
         Item *it = &items[i];
         cc_scene_element *se = &s->elements[s->nelements];
@@ -968,7 +970,7 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
             }
         } else {
             se->shape = -1;
-            if (it->bad) { buf_free(&cls); goto oom; }
+            if (it->bad) { buf_free(&cls); free(drawn_ent); goto oom; }
             se->mesh = it->mesh;
             if (!se->mesh.ni) continue; /* all degenerate: dropped */
         }
@@ -994,13 +996,38 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
         se->class_name = in->class_name;
         se->cls = class_enum(e->name);
         se->model_index = s->nelements;
+        drawn_ent[s->nelements] = it->ent;
         s->nelements++;
     }
     buf_free(&cls);
+    { /* out->empty_classes: the shown products not drawn (ids and drawn_ent are both in id order) */
+        Tallies em0 = {0};
+        Buf eb;
+        buf_init(&eb);
+        for (size_t k = 0, d = 0; k < shown && k < nids; k++) {
+            if (d < s->nelements && drawn_ent[d] == ids[k]) { d++; continue; }
+            const char *nm = f->ents[ids[k]].name;
+            tally_add(&em0, nm, strlen(nm), 0);
+        }
+        tally_sort(&em0);
+        for (size_t k = 0; k < em0.n; k++) {
+            buf_append(&eb, em0.v[k].s, em0.v[k].n);
+            buf_putc(&eb, ' ');
+            buf_u64(&eb, em0.v[k].count);
+            buf_putc(&eb, '\n');
+        }
+        out->empty_classes = a_str(a, eb.p ? eb.p : "", eb.len, &oom);
+        oom |= eb.oom;
+        buf_free(&eb);
+        tally_free(&em0);
+        free(drawn_ent);
+    }
     PROF("mesh build");
     if (oom || cc_scene_share_copies(s)) goto oom;
     PROF("share_copies");
     for (size_t k = 0; k < s->nelements; k++) out->triangles += cc_scene_local_mesh(s, k)->ni / 3;
+    out->products = nids;
+    out->entities = f->n;
 
     /* Warnings, sorted, "(×N)" when repeated. */
     tally_sort(&warnings);

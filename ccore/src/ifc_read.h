@@ -63,6 +63,11 @@ typedef struct {
     cc_ifc_georef georef;
     cc_str schema; /* FILE_SCHEMA names joined by ", " ("IFC4", "IFC2X3") */
     size_t triangles; /* Scene::triangle_count: local meshes' triangles */
+    /* Counts for reports (not in the golden text, no Rust twin): the products with a body
+     * (IfcProductDefinitionShape and a placement, the scene's candidates; those drawn empty are
+     * dropped from the scene) and the STEP entities parsed. */
+    size_t products, entities;
+    cc_str empty_classes; /* the products with a body drawn empty: "<ENTITY> <count>\n" lines */
 } cc_ifc_scene;
 
 /* Reads STEP text for display. Always initializes `out` (free it with cc_ifc_scene_free).
