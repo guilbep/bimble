@@ -16,6 +16,7 @@
 #include "json_w.h"
 #include "session.h"
 #include "links.h"
+#include "sheet_svg.h"
 #include "views.h"
 
 cc_session *cc_session_new(const cc_platform *pf) {
@@ -42,6 +43,7 @@ void cc_session_free(cc_session *s) {
     free(s->undo_ids), free(s->redo_ids), free(s->also), free(s->material);
     if (s->scene_rev) cc_scene_free(&s->scene);
     buf_free(&s->mesh);
+    cc_paper_cache_free(s);
     cc_tool_free(&s->tool);
     cc_vis_free(&s->vis);
     cc_measure_free(&s->measure);
@@ -130,6 +132,7 @@ static void drop_model(cc_session *s) {
     persist_drop_cmds(s); /* after the history that borrows from them */
     if (s->scene_rev) cc_scene_free(&s->scene);
     s->scene_rev = 0, s->scene_ok = 0, s->mesh_status = 0, s->mesh_model = NULL;
+    cc_paper_cache_free(s); /* the last sheet drawn is the old model's */
     s->nundo_ids = s->nredo_ids = 0;
     s->has_primary = 0, s->nalso = 0;
     s->placing = 0, s->has_storey = 0, s->polygon = 0, s->top_offset_mm = 0;

@@ -483,3 +483,7 @@ an input like the project and the date; the C core's own is `CC_IFC_VERSION`).
 `ccore/test/draw_view_test.c` (suite `draw_view`) checks every `view/<nn>.min.svg`, `<nn>.svg`, their
 `.info.txt` and `index.txt` byte for byte: `plan()` of each effective view of `model.json` with the
 section marks of all views (the effective views as the session lists them, `cc_sv_list`).
+`ccore/test/draw_sheet_test.c` (suite `draw_sheet`) checks `sheet/<number>.svg` and `.info.txt` byte
+for byte: `cc_sheet_draw` of each sheet of `model.json` with the dumper's `sheet_options` and Rust's
+version; and the session's `sheet_svg` of `S-101` against `S-101.svg` (the file named `frame.json`, a
+clock at 2026-01-01, the version notes cut out: DEVIATIONS.md 11).

@@ -7,9 +7,9 @@ export const side = SheetsSide;
 <script setup lang="ts">
 // D3 Sheets (wireframes v01 SheetLayout.html, `.vp` with the paper). Two sources, the first that answers:
 //  - `sheet_layout` (the C core, ticket SH1): the paper drawn here, white at its proportion, each placed view as a
-//    labelled outline (its box is an estimate until D5 draws the view). Drag an outline: `sheet_move`.
-//  - `sheet_svg` (Rust's drawing of the sheet, the egui sheet export) in an SVG <image>: it holds user text, so it
-//    is never put in the DOM (an image runs no script and loads nothing). With both (D5: a box "drawing"), the
+//    labelled outline (dashed while its box is an estimate). Drag an outline: `sheet_move`.
+//  - `sheet_svg` (the sheet's drawing, the egui sheet export; the C core draws it since D5) in an SVG <image>: it
+//    holds user text, so it is never put in the DOM (an image runs no script and loads nothing). With both, the
 //    outlines are handles over it.
 // The view box is paper mm (the sheet's top-left corner at 0, 0), with a margin around the paper.
 import { computed, ref } from "vue";
@@ -22,13 +22,10 @@ const layout = computed<SheetLayout | { error: string } | null>(() => {
   if (!currentSheet.value) return null;
   try { return sheetLayout(currentSheet.value.id); } catch (e) { return { error: (e as Error).message }; }
 });
-/** Rust's drawing: asked where the layout failed (the Rust bridge) or says its views are drawn ("box": "drawing",
- *  D5); while every box is an estimate the C core has no drawing to give (and a refused query is a 400 logged). */
+/** The sheet's drawing (Rust's, or the C core's since D5), asked again at each rev. */
 const svg = computed<{ src: string } | { error: string } | null>(() => {
   void state.value.rev;
   if (!currentSheet.value) return null;
-  const l = layout.value;
-  if (l && "placed" in l && !l.placed.some((p) => p.box === "drawing")) return null;
   try {
     const { svg } = query<{ svg: string }>("sheet_svg", { id: currentSheet.value.id });
     return { src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` };

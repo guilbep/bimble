@@ -96,6 +96,12 @@ typedef struct cc_session {
      * its id text as the link's BMSH rows give it. The open model's selection is then empty. */
     int link_sel;
     char link_sel_id[22];
+    /* The last sheet drawn (sheet_svg.h): what it was made for (rev, sheet, date, path), the
+     * sheet_svg answer, and each drawn placed view's box (sheet_layout). */
+    Buf paper_svg, paper_key;
+    cc_gid *paper_ids;
+    double (*paper_rects)[4];
+    size_t npaper;
 } cc_session;
 
 /* A new session with no model, on `pf` (kept by pointer). NULL when out of memory. */

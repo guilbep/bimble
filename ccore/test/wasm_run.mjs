@@ -25,7 +25,8 @@
 //            tool with an orthographic ray in a plan) on both, byte for byte
 //   files    the file actions in a fresh module (ticket A5): new, place, save (v2), save as,
 //            host_open of the saved bytes (the same elements), host_open import of golden/ifc/
-//            frame.ifc (the import golden's count) and of frame.json; export IFC4 with host_clock =
+//            frame.ifc (the import golden's count) and of frame.json; sheet_svg of drawing/model.json
+//            (ticket D5) = golden/drawing/sheet/S-101.svg; export IFC4 with host_clock =
 //            golden/ifc/frame.ifc; save as y.json = the v1 text; save as f.bimble = gzip of
 //            golden/bin/frame.cbor; read-only files (ticket A5c): host_open of golden/ifc/fixtures/
 //            mapped_item.ifc (host_mesh count = golden/ifc/read/mapped_item/scene.txt's, editable
@@ -733,6 +734,17 @@ suite("files");
   check("host_open import frame.ifc -> 200: the copy frame.bimble, unsaved, elements = the import golden's",
     o2.status === 200 && s2.file === "frame.bimble" && s2.unsaved && q("elements", { limit: 10000 }).length === golden, `${o2.text} ${JSON.stringify(s2)}`);
 
+  // Ticket D5: sheet_svg in the module = the golden sheet/S-101.svg once the file is named frame.json
+  // (the project), the clock is 2026-01-01 (the date) and the frame's version notes are cut out
+  // (the C core's own version; the note's place follows its width). The native answer is checked by
+  // the suite draw_sheet.
+  Y.host_clock(Date.UTC(2026, 0, 1) / 1000);
+  const od = open("frame.json", read("drawing/model.json"), 1);
+  const s101 = od.status === 200 ? q("sheets").find((x) => x.number === "S-101") : null;
+  const cutNote = (t) => t.replace(/<text [^>]*>Bimble [^<]*<\/text>\n/, "");
+  const ss = s101 ? ycall(Y.call, ["query", "sheet_svg", JSON.stringify({ id: s101.id })]) : { status: 0, text: od.text };
+  eq("sheet_svg S-101 (frame.json, clock 2026-01-01) = golden/drawing/sheet/S-101.svg (version note cut)",
+    ss.status === 200 ? cutNote(JSON.parse(ss.text).svg) : `${ss.status} ${ss.text}`, cutNote(read("drawing/sheet/S-101.svg")));
   const o3 = open("frame.json", read("frame.json"), 1);
   check("host_open frame.json, discard -> 200", o3.status === 200 && q("state").file === "frame.json", o3.text);
   Y.host_clock(Date.UTC(2026, 0, 1) / 1000);

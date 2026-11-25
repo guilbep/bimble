@@ -9,6 +9,9 @@
 //     view selected and its scale 1:100;
 //   a drag of the outline with real mouse events (sheet_move): sheet_layout gives the new at_mm,
 //     the drag's distance in paper mm; one history step;
+//   the paper image (ticket D5, sheet_svg drawn by the C core, session/paper.h): an <image> over the
+//     paper, an SVG of 841 x 594 mm holding the placed view's title "Plan Niveau 1, 1:100" and the title
+//     block's sheet number; the drag changes it (the drawing follows the view);
 //   undo twice: the outline back at the centre, then gone;
 //   the Rust verb goldens still match: `verbs` == golden/verbs_list.json, `describe add_sheet` ==
 //     golden/verbs_schema/add_sheet.json.
@@ -182,6 +185,16 @@ async function main() {
 
   await shot("sheet-placed");
 
+  // ---- the paper image: the sheet's drawing (D5) ----
+  const imgOf = () => evalJs("document.querySelector('[data-bb=sheet-paper]')?.getAttribute('href') ?? ''");
+  const svgOf = (href) => (href.startsWith("data:image/svg+xml;charset=utf-8,") ? decodeURIComponent(href.slice(33)) : "");
+  const img0 = await waitFor("the paper image", 5000, async () => { const h = await imgOf(); return svgOf(h).includes("Plan Niveau 1, 1:100") ? h : null; }).catch(() => "");
+  const svg0 = svgOf(img0);
+  check("the paper image: the sheet drawn, A1", svg0.includes('width="841mm" height="594mm"'), svg0.slice(0, 200));
+  check("…with the placed view's title and the sheet number", svg0.includes(">Plan Niveau 1, 1:100<") && svg0.includes(">S-201<"));
+  const drawnBox = await evalJs("(() => { const r = document.querySelector('[data-bb=sheet-paper]').getBoundingClientRect(); return [r.width, r.height]; })()");
+  check("…shown over the paper", drawnBox[0] > 100 && Math.abs(drawnBox[0] / drawnBox[1] - 841 / 594) < 0.01, JSON.stringify(drawnBox));
+
   // ---- drag it ----
   const r = await evalJs("(() => { const g = document.querySelector('[data-bb=sheet-placed] rect').getBoundingClientRect(); const s = document.querySelector('[data-bb=sheet] svg'); const m = s.getScreenCTM(); return [g.left + g.width / 2, g.top + g.height / 2, m.a]; })()");
   const [x0, y0, pxPerMm] = r, DX = 120, DY = 45;
@@ -196,6 +209,8 @@ async function main() {
   const moved = await evalJs("(() => { const g = document.querySelector('[data-bb=sheet-placed] rect').getBoundingClientRect(); return [g.left + g.width / 2, g.top + g.height / 2]; })()");
   check("the outline drawn where it was dropped", Math.abs(moved[0] - (x0 + DX)) < 2 && Math.abs(moved[1] - (y0 + DY)) < 2, JSON.stringify({ moved, to: [x0 + DX, y0 + DY] }));
 
+  const img1 = await waitFor("the paper image redrawn", 5000, async () => { const h = await imgOf(); return h && h !== img0 ? h : null; }).catch(() => "");
+  check("the drag redraws the paper image", img1 !== "" && svgOf(img1).includes(">Plan Niveau 1, 1:100<"));
   await shot("sheet-moved");
 
   // ---- undo twice ----

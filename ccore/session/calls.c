@@ -21,6 +21,7 @@
 #include "library.h"
 #include "links.h"
 #include "mesh.h"
+#include "sheet_svg.h"
 #include "query.h"
 #include "scene.h"
 #include "session.h"
@@ -969,7 +970,8 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         }
     if (!strcmp(name, "verbs") || !strcmp(name, "describe")) return verb_query(s, name, body, n, out);
     if (!strcmp(name, "sheet_layout")) return cc_sheet_layout(s, scene_now(s), body, n, out); /* SH1, sheets.h */
-    static const char *const CUT[] = {"palette_match", "schedule_rows", "schedule_csv", "sheet_svg"};
+    if (!strcmp(name, "sheet_svg")) return cc_paper_sheet_svg(s, s->open ? scene_now(s) : NULL, body, n, out); /* D5, sheet_svg.h */
+    static const char *const CUT[] = {"palette_match", "schedule_rows", "schedule_csv"};
     for (size_t i = 0; i < sizeof CUT / sizeof CUT[0]; i++)
         if (!strcmp(name, CUT[i])) {
             buf_puts(out, "query "), buf_puts(out, name), buf_puts(out, " is not in the C core");

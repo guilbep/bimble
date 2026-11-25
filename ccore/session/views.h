@@ -1,9 +1,10 @@
 /* The views a session shows and its tabs (ticket C1, the first step of the dynamic 2D view).
  *
  * Ported from the Rust desktop (crates/bimble-viewer, crates/bimble-core/src/view.rs):
- *   view.rs `default_views` and `effective`: the 3D view, then a floor plan per storey (by
- *     elevation), then a ceiling plan per storey; a stored view replaces the default with its id,
- *     the other stored views follow in id order.
+ *   view.rs `default_views` and `effective` (src/view_effective.c, shared with the sheet
+ *     drawing): the 3D view, then a floor plan per storey (by elevation), then a ceiling plan per
+ *     storey; a stored view replaces the default with its id, the other stored views follow in id
+ *     order.
  *   view.rs `resolve` and `ResolvedRange::visible`: a plan's range planes in world mm.
  *   viewing.rs `refresh_views` (the active view falls back to the first), `activate_view` (a plan
  *     sets the placing storey; the temporary hide goes), `auto_name`.

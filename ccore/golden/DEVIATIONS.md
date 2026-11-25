@@ -293,3 +293,23 @@ draws them.
 Rust's plan of its IFC.
 
 **Where.** `ccore/src/draw_view.c` (`cc_view_turn_axes`), one call in `ccore/src/draw_plan.c`.
+
+## 11. A sheet drawn by the session (ticket D5)
+
+**What.** The query `sheet_svg {id}` draws the sheet as Rust's (`calls.rs` `sheet_svg`,
+`sheetdraw::draw`), with three differences in its options. The frame's note says the C core's
+version (`Bimble 0.1.0-ccore`, `CC_IFC_VERSION`), not Rust's `CARGO_PKG_VERSION`; the note is
+placed by its width, so its `x` differs too. The graphic style and the plan template are the
+defaults (with the model's project information): the C session keeps no style or template of its
+own, where Rust takes the viewer's (the defaults until the user edits them). The viewer-only
+wasm has no drawing code: `sheet_svg` answers "this build is view-only".
+
+**Why.** The version names the program that drew the sheet (as the IFC header, deviation 3's
+`serverInfo.version`). The C core has no style or template editor yet.
+
+**What Rust sees.** `ccore/test/draw_sheet_test.c` draws every sheet of `golden/drawing/model.json`
+through the library with Rust's version: `sheet/*.svg` and `.info.txt` byte for byte. Through the
+session (`sheet_svg`, natively and in the wasm module, `wasm_run.mjs`), `S-101.svg` is the golden
+byte for byte once both version notes are cut out.
+
+**Where.** `ccore/session/sheet_svg.c`; the library is `ccore/src/draw_sheet.c`.
