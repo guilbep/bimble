@@ -40,7 +40,7 @@ Build (from the repo root; output goes to `ccore/out/`, which git ignores):
     ccore/build.sh native   # clang -O2
     ccore/build.sh release  # the Linux release archive (see "Release")
     ccore/build.sh wasm     # clang freestanding wasm32, no libc
-    ccore/build.sh wasm-view  # the viewer-only wasm32 (ADR 0069), fails over 400,000 bytes
+    ccore/build.sh wasm-view  # the viewer-only wasm32 (ADR 0069), fails over 1,000,000 bytes
 
 The viewer-only wasm (`out/wasm/ccore-view.wasm`, ticket W1) is the wasm build without the files in
 `VIEW_DENY` (build.sh: verbs, the verb table, the IFC import and writer), with `-DCC_VIEW_ONLY` and

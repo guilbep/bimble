@@ -56,7 +56,7 @@ VIEW_DENY+=(src/repo.c src/diff.c) # the history store (H1): no history folder i
 VIEW_DENY+=(src/pdf_in.c src/ref_read.c) # L1: reading a PDF is link_pdf, an edit (view_only.c): the viewer shows the stored references only
 VIEW_DENY+=(src/dxf_in.c) # L2: reading a DXF is link_dxf, an edit, as link_pdf
 VIEW_OPT=-Os
-VIEW_MAX=400000
+VIEW_MAX=1000000 # Pierre, 25 Nov 2026: up to 1-2 MB is acceptable for the viewer; watch performance (Lighthouse), not bytes
 HOST=(host/*.c)
 # The version (`bimble-ccore --version`, the release archive's name): ccore/VERSION, one line.
 CC_VER=$(< VERSION)

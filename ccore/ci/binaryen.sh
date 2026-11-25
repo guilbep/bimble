@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs binaryen (wasm-opt) at a pinned release into <prefix>: ccore/ci/binaryen.sh <prefix>
 # ccore/ci/binaryen.sh --version prints the pinned version (the workflow's cache key).
-# Why (ticket K2): `build.sh wasm-view` runs wasm-opt after the link, and the 400,000-byte budget of
+# Why (ticket K2): `build.sh wasm-view` runs wasm-opt after the link, and the byte budget (first 400,000, now 1,000,000) of
 # ccore-view.wasm (ADR 0069) holds only with it: 426,434 bytes without it, 353,477 with it (clang
 # 21.1, results/wasm-size.md). The first CI run had no wasm-opt (426,448 bytes, FAIL); the dev
 # machine had one that clang ran without saying so. Ubuntu 26.04 ships binaryen 120; the pin is the

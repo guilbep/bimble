@@ -32,3 +32,10 @@
 
 - `crates/` is deleted at M4, after desktop parity (`future-architecture.md` section 5).
 - The final Rust release (ADR 0067) is still due before the port's first C-only feature.
+
+## Amendment, 25 November 2026: the viewer budget
+
+Pierre: a viewer wasm of 394 KB is fine, and 1 or 2 MB would be acceptable. What matters is
+performance, measured (Lighthouse on the deployed page, time to first pixels, frame time), not the
+byte count alone. The build limit of `ccore/build.sh wasm-view` moves from 400,000 to 1,000,000
+bytes. Features that belong in the viewer (plan views of an opened IFC, reference plans) go in it.
