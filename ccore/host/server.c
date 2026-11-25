@@ -450,6 +450,12 @@ done:
 static int origin_allowed(Str o) {
     for (int i = 0; i < cfg->n_origins; i++)
         if (str_eq(o, cfg->origins[i])) return 1;
+    if (cfg->web) { /* the page this host serves itself (host.h `web`) */
+        char self1[40], self2[40];
+        snprintf(self1, sizeof self1, "http://127.0.0.1:%u", (unsigned)bound_port);
+        snprintf(self2, sizeof self2, "http://localhost:%u", (unsigned)bound_port);
+        if (str_eq(o, self1) || str_eq(o, self2)) return 1;
+    }
     return 0;
 }
 
@@ -478,7 +484,10 @@ static void handle_one(Conn *c, int *again) {
     snprintf(want2, sizeof want2, "localhost:%u", (unsigned)bound_port);
     int host_ok = h.has_host && (str_eq(h.host, want1) || str_eq(h.host, want2));
     int is_options = str_eq(h.method, "OPTIONS");
-    if (!origin_ok || !host_ok || (!token_ok && !is_options)) {
+    /* The built lab (host.h `web`): a GET of a path that is not the API needs no token. */
+    int is_static = cfg->web && str_eq(h.method, "GET") && !str_eq(path, "/change") && !str_eq(path, "/frame") &&
+                    !str_eq(path, "/mesh");
+    if (!origin_ok || !host_ok || (!token_ok && !is_options && !is_static)) {
         respond_s(c, 403, "forbidden", 0);
         return;
     }
@@ -554,6 +563,12 @@ static void handle_one(Conn *c, int *again) {
         char xrev[80];
         snprintf(xrev, sizeof xrev, "X-Rev: %u\r\nAccess-Control-Expose-Headers: X-Rev\r\n", (unsigned)rev);
         respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, st == 200 ? xrev : NULL, mp, mn, keep);
+    } else if (is_static) {
+        const cc_static_file *f = cc_static_find(cfg->web, path.p, path.n);
+        if (f)
+            respond_x(c, 200, f->ctype, "X-Content-Type-Options: nosniff\r\nCache-Control: no-cache\r\n", f->data,
+                      f->n, keep);
+        else respond_s(c, 404, "not found", keep);
     } else if (!strcmp(m, "POST")) {
         route_post(c, path, body.p ? body.p : "", body.len, keep);
     } else {
@@ -653,6 +668,7 @@ int cc_host_run(const cc_host_config *config) {
 
     fprintf(stderr, "bimble-ccore: listening %u token %s\n", (unsigned)bound_port, cfg->token);
     fflush(stderr);
+    if (cfg->on_listen) cfg->on_listen(bound_port, cfg->on_listen_ctx);
 
     struct pollfd pfd[MAX_CONNECTIONS + 1];
     int idx[MAX_CONNECTIONS + 1];

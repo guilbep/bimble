@@ -1,8 +1,13 @@
 name: ccore
 # The C core's suites (ticket K1): the same script builders run, ccore/ci/run.sh full. Linux is the
 # check; macOS only measures what is missing (ccore/results/ci.md) and may fail.
+# The release archives of bimble-ccore (ticket R1): job ccore-release on a manual run and on a tag
+# ccore-v<VERSION>; on a tag, ccore-prerelease attaches them to a GitHub prerelease. Never a tag v*:
+# that prefix starts the Rust release, the Pages deployment and the brew formula (release.yml).
 on:
   push:
+    branches: ["**"]
+    tags: ["ccore-v*"] # path filters are not evaluated for tags
     paths:
       - "ccore/**"
       - "web-ui/**"
@@ -103,3 +108,82 @@ jobs:
         env:
           CC: clang
           CC_NO_KERNEL: "1"
+
+  # The Linux release archive (ticket R1, ADR 0069 rule 2): ccore/build.sh release (clang -O2,
+  # manifold static, the lab built by Vite), checked by test/release_test.mjs on the unpacked archive.
+  # ubuntu-22.04: a low glibc (2.35), so the binary runs on more distributions (as release.yml).
+  ccore-release:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/ccore-v')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag names ccore/VERSION
+        if: startsWith(github.ref, 'refs/tags/ccore-v')
+        run: |
+          v=$(cat ccore/VERSION)
+          if [[ "$GITHUB_REF_NAME" != "ccore-v$v" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match ccore/VERSION $v: the tag must be ccore-v$v"
+            exit 1
+          fi
+      - run: scripts/apt-install.sh clang cmake
+        timeout-minutes: 12
+      - name: Versions and keys
+        id: keys
+        run: |
+          echo "manifold=$(sed -n 's/^MANIFOLD_TAG=\([^ ]*\).*/\1/p' ccore/deps.sh)" >> "$GITHUB_OUTPUT"
+          clang --version | head -n 1
+          ldd --version | head -n 1
+      - name: manifold (cache)
+        id: manifold
+        uses: actions/cache@v4
+        with:
+          path: ccore/out/deps/manifold
+          key: manifold-${{ matrix.os }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh') }}
+      - if: steps.manifold.outputs.cache-hit != 'true'
+        run: JOBS=4 ccore/deps.sh
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web-ui/package-lock.json
+      - working-directory: web-ui
+        run: npm ci --no-audit --no-fund
+      - run: ccore/build.sh release
+      - run: node ccore/test/release_test.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccore-release-${{ matrix.os }}
+          path: ccore/out/release/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+  # On a tag ccore-v*: both archives on one GitHub prerelease, once the full suites passed too.
+  ccore-prerelease:
+    if: startsWith(github.ref, 'refs/tags/ccore-v')
+    needs: [ccore-linux, ccore-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ccore-release-*
+          path: dist
+          merge-multiple: true
+      - name: Prerelease ${{ github.ref_name }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -l dist
+          v=${GITHUB_REF_NAME#ccore-v}
+          if ! gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --prerelease --title "bimble-ccore $v (preview)" \
+              --notes "The C core of Bimble with its lab, for Linux (x86_64, aarch64). Unpack, then run \`./bimble-ccore open model.ifc\`: the lab opens in your browser. See README.txt in the archive."
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz --clobber

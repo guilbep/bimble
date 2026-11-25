@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds ccore: build.sh tcc | host | native | wasm. Output in ccore/out/<mode>/. Prints ms per step.
+# Builds ccore: build.sh tcc | host | native | wasm | release. Output in ccore/out/<mode>/. Prints ms per step.
 #   tcc    debug library (libccore.a), test binaries and the host (bimble-ccore), for the edit loop
 #   host   only the host (no archive, no tests): dev.sh's loop. Every source whose clang -O2 object
 #          for its exact content (and the headers') is cached in out/hostmix/ is linked from it; the
@@ -18,6 +18,10 @@
 #          wasm build without VIEW_DENY (verbs, the verb table, the IFC import and writer), with
 #          -DCC_VIEW_ONLY (session/view_only.c, wasm_api.c VIEW_ONLY, wasm_stub.c's stubs) and
 #          VIEW_OPT; fails over VIEW_MAX bytes (test: node test/wasm_view_run.mjs)
+#   release  the Linux release archive (ticket R1, ADR 0069 rule 2): the host with clang -O2 and
+#          the boolean kernel static (fails without it), the lab built by Vite (web-ui/, needs
+#          node_modules), then out/release/bimble-ccore-<VERSION>-<arch>-linux.tar.gz holding
+#          bimble-ccore, web/, LICENSE and README.txt (test: node test/release_test.mjs)
 #   wasm-size [view]  bytes per object file in ccore.wasm (or ccore-view.wasm), from a link map
 #          (out/wsize/): code and data, largest first (results/wasm-size.md)
 # Boolean kernel (ADR 0068, 0069): manifold's C binding from $MANIFOLD_DIR or out/deps/manifold
@@ -37,6 +41,10 @@ VIEW_DENY=(src/verbs.c src/verb_table.c src/verbs_sheets.c src/ifc_in.c src/ifc_
 VIEW_OPT=-Os
 VIEW_MAX=400000
 HOST=(host/*.c)
+# The version (`bimble-ccore --version`, the release archive's name): ccore/VERSION, one line.
+CC_VER=$(< VERSION)
+[[ $CC_VER =~ ^[0-9A-Za-z.+-]+$ ]] || { echo "build.sh: ccore/VERSION is not a version: \"$CC_VER\"" >&2; exit 2; }
+VDEF="-DCC_RELEASE_VERSION=\"$CC_VER\""
 source ./deps.sh
 kernel_setup
 
@@ -92,14 +100,14 @@ lib_and_tests() { # <dir> <cc> <flags...>
         step "tool $tn" "$cc" "$@" "${INC[@]}" "$f" "$dir/libccore.a" "${klink[@]}" -o "$dir/$tn"
     done
     # The native host (not in wasm): every host/*.c on top of session/ and the library.
-    step "host bimble-ccore" "$cc" "$@" "${INC[@]}" -Ihost "${HOST[@]}" "${SESSION[@]}" "$dir/libccore.a" "${klink[@]}" -o "$dir/bimble-ccore"
+    step "host bimble-ccore" "$cc" "$@" "$VDEF" "${INC[@]}" -Ihost "${HOST[@]}" "${SESSION[@]}" "$dir/libccore.a" "${klink[@]}" -o "$dir/bimble-ccore"
 }
 
 # build.sh host (see the header). Cache keys: sha1 of the file, of every header (and the vendored
 # ryu sources, included by fmt.c) and of the flags; objects out/hostmix/o2/<name>.<key>.o.
 HOST_SRCS=("${LIB[@]}" "${SESSION[@]}" "${HOST[@]}")
-TCC_FLAGS=(-g -Wall -DRYU_ONLY_64_BIT_OPS "${KFLAGS[@]}")
-O2_FLAGS=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function "${KFLAGS[@]}")
+TCC_FLAGS=(-g -Wall -DRYU_ONLY_64_BIT_OPS "$VDEF" "${KFLAGS[@]}")
+O2_FLAGS=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function "$VDEF" "${KFLAGS[@]}")
 # clang on aarch64 makes atomics (src/jobs.h) calls to libgcc's outline helpers
 # (__aarch64_cas8_relax...), which the tcc link has not: inline them.
 [[ $(uname -m) == aarch64 ]] && O2_FLAGS+=(-mno-outline-atomics)
@@ -199,6 +207,57 @@ wasm_size_table() {
         sort -t'|' -k3 -rn
 }
 
+# build.sh release (see the header). The objects in parallel (at most $JOBS clang at once, default 4:
+# the dev machine has 16 GB), one link with the kernel's archives and libstdc++ static, stripped.
+release() {
+    if ((${#KFLAGS[@]} == 0)); then
+        echo "FAIL build.sh release needs the boolean kernel: run ccore/deps.sh (or MANIFOLD_DIR=... ccore/deps.sh)" >&2
+        exit 1
+    fi
+    local arch name R=out/release
+    arch=$(uname -m)
+    name="bimble-ccore-$CC_VER-$arch-linux"
+    local stage="$R/stage/$name" obj="$R/obj"
+    rm -rf "$R/stage" "$obj" "$R/$name.tar.gz"
+    mkdir -p "$stage" "$obj"
+    local flags=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function -pthread
+        "$VDEF" "${KFLAGS[@]}" "${INC[@]}" -Ihost)
+    compile_release() {
+        local f o pids=() rc=0 pid
+        for f in "${LIB[@]}" "${SESSION[@]}" "${HOST[@]}"; do
+            while (($(jobs -rp | wc -l) >= ${JOBS:-4})); do wait -n || rc=1; done
+            o="$obj/$(basename "${f%.c}").o"
+            clang "${flags[@]}" -c "$f" -o "$o" &
+            pids+=($!)
+        done
+        for pid in "${pids[@]}"; do wait "$pid" || rc=1; done
+        return $rc
+    }
+    step "compile (clang -O2)" compile_release
+    local kd
+    kd=$(dirname "${KLINK_CLANG[0]}")
+    step "link bimble-ccore (kernel static)" clang -pthread -s "$obj"/*.o "$kd/libmanifoldc.a" "$kd/libmanifold.a" \
+        "$kd/libClipper2.a" -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc -lm -o "$stage/bimble-ccore"
+    local web
+    web=$(cd "$stage" && pwd)/web
+    # The lab: web-ui's own build script (prebuild included), into the archive's web/.
+    step "web-ui build (vite)" bash -c 'cd ../web-ui && npm run --silent build -- --outDir "$1" --emptyOutDir --logLevel warn' _ "$web"
+    cp ../LICENSE "$stage/LICENSE"
+    cat > "$stage/README.txt" << EOF
+bimble-ccore $CC_VER ($arch, Linux): the C core of Bimble and its lab, a preview build.
+Bimble is open-source structural BIM (MIT licence, see LICENSE): https://github.com/guilbep/bimble
+
+Run:    ./bimble-ccore open model.ifc       (also .bimble or .json; no model: an empty lab)
+        It serves the lab on 127.0.0.1 only, prints its address and opens it in your browser.
+        --no-browser: only print the address. --port N: this port, not a free one.
+Stop:   Ctrl-C.
+Files:  bimble-ccore (the program) and web/ (the lab; keep it next to the program).
+Needs:  Linux with glibc 2.35 or newer and a browser with WebGL2. Nothing is installed.
+EOF
+    step "archive" tar -C "$R/stage" --sort=name --owner=0 --group=0 --numeric-owner -czf "$R/$name.tar.gz" "$name"
+    printf '  %-28s %s, %d bytes\n' "archive" "$R/$name.tar.gz" "$(wc -c < "$R/$name.tar.gz")"
+}
+
 t_start=$(ms)
 if [[ ${1:-} == wasm* ]]; then echo "  boolean kernel: none in wasm (openings and boolean results drawn uncut)"
 elif ((${#KFLAGS[@]})); then echo "  boolean kernel: manifold (out/deps/manifold)"
@@ -228,6 +287,9 @@ case "${1:-}" in
     fi ;;
   wasm-size)
     wasm_size_table "${2:-}" ;;
-  *) echo "usage: $0 tcc|host|native|wasm|wasm-view|wasm-size [view]" >&2; exit 2 ;;
+  release)
+    echo "build.sh release -> out/release/"
+    release ;;
+  *) echo "usage: $0 tcc|host|native|wasm|wasm-view|wasm-size [view]|release" >&2; exit 2 ;;
 esac
 printf '  %-28s %5d ms\n' "total" $(($(ms) - t_start))

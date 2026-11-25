@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "platform.h"
 #include "session.h"
+#include "static.h"
 
 #define CC_HOST_MAX_ORIGINS 8
 
@@ -17,6 +18,14 @@ typedef struct {
     int n_origins;
     int warm;           /* when idle, build the scene and /mesh of a new rev before they are asked for */
     cc_session *session; /* the session the calls and /mesh serve (main.c's default session) */
+    /* `bimble-ccore open` (ticket R1): the built lab, or NULL. When set, a GET of any path but
+     * /change, /frame and /mesh is a file of this list (200) or 404, without the token (the page
+     * and its assets are public; the calls still need it), and the host's own origins
+     * (http://127.0.0.1:<port>, http://localhost:<port>) are allowed beside `origins`. */
+    const cc_static *web;
+    /* Called once the socket listens, with the bound port (open prints the URL then), or NULL. */
+    void (*on_listen)(uint16_t port, void *ctx);
+    void *on_listen_ctx;
 } cc_host_config;
 
 /* Binds 127.0.0.1:port, prints "bimble-ccore: listening <port> token <token>" on stderr,

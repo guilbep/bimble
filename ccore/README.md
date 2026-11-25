@@ -28,7 +28,7 @@ independent tasks on pthreads natively (serial in wasm), with one global, the th
 | L3 api | verbs, query | `src/verbs`, `query` |
 | L4 store | journal, repo, remote | (none yet) |
 | L5 session | call router, sessions (handles: `cc_session *`), selection, placing, scene and /mesh caches, session file, platform interface | `session/calls`, `session`, `mesh`, `mesh_model`, `platform` |
-| L6 carriers | wasm module, HTTP host (native platform, `main`), MCP over stdio, later cli | `src/wasm_api.c` (+ `wasm_stub.c`), `host/server.c`, `host/platform_native.c`, `host/main.c`, `host/mcp.c` |
+| L6 carriers | wasm module, HTTP host (native platform, `main`), MCP over stdio, later cli | `src/wasm_api.c` (+ `wasm_stub.c`), `host/server.c`, `host/static.c`, `host/platform_native.c`, `host/main.c`, `host/mcp.c` |
 
 A process holds any number of sessions (`cc_session_new(platform)`); the native host serves one
 (`main.c` creates it and passes it to `server.c` in `cc_host_config`), the wasm module's `host_*`
@@ -38,6 +38,7 @@ Build (from the repo root; output goes to `ccore/out/`, which git ignores):
 
     ccore/build.sh tcc      # debug library and test binaries, needs tcc
     ccore/build.sh native   # clang -O2
+    ccore/build.sh release  # the Linux release archive (see "Release")
     ccore/build.sh wasm     # clang freestanding wasm32, no libc
     ccore/build.sh wasm-view  # the viewer-only wasm32 (ADR 0069), fails over 400,000 bytes
 
@@ -75,6 +76,35 @@ Regenerate the goldens (a standalone Rust crate, not in the workspace; it pins t
 serde_json version). Commit the changed `.txt` files:
 
     cd ccore/golden/floats && CARGO_TARGET_DIR=../../out/cargo cargo run -j 2
+
+## Release
+
+The desktop is the user's browser and a local C server (ADR 0069 rule 2, ticket R1).
+`ccore/build.sh release` builds the host with clang `-O2`, with manifold and libstdc++ linked
+static (it fails without the kernel: run `deps.sh` first), builds the lab with Vite (`web-ui/`,
+needs `node_modules`; what is in `web-ui/public/` goes in too), and writes
+`out/release/bimble-ccore-<VERSION>-<arch>-linux.tar.gz`: `bimble-ccore`, `web/`, `LICENSE` and
+`README.txt` in one folder. `node test/release_test.mjs` unpacks it in a temp folder and checks it
+(`ci/run.sh full` builds and runs both).
+
+    ./bimble-ccore open [--port N] [--no-browser] [--web dir] [--session[=file]] [model]
+    ./bimble-ccore --version
+
+`open` reads the files under `<exe dir>/web/` (or `--web`) once at start (`host/static.c`: regular
+files only, no symbolic link, no hidden name, at most 4096 files and 64 MiB in all, a content type
+by extension). It listens on a free port of 127.0.0.1 (or N), prints
+`http://127.0.0.1:<port>/?native=1&gl=1&port=<port>&token=<t>` and starts `xdg-open` on it. A GET
+of any path but `/change`, `/frame` and `/mesh` is a file of that list or 404, without the token: a
+request path is matched against the list, never joined to a file path. The calls, `/change` and
+`/mesh` keep the token; the Host and Origin checks hold for every request, and the host's own
+origin is allowed beside the others. The old form (`bimble-ccore <port> [model]`) serves no files.
+
+`ccore/VERSION` is the archive's version (`--version`); the IFC writer's `CC_IFC_VERSION` and the
+`version` of `query state` stay as they are (the goldens hold them). GitHub (`ccore.yml`): job
+`ccore-release` builds and checks the archives on Ubuntu 22.04 (glibc 2.35), x86_64 and aarch64,
+on a manual run and on a tag `ccore-v<VERSION>`; on such a tag `ccore-prerelease` attaches them to
+a GitHub prerelease. Never a tag `v*`: that prefix starts the Rust release, the Pages deployment
+and the brew formula.
 
 ## MCP over stdio
 
