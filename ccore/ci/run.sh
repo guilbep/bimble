@@ -12,7 +12,7 @@
 # Logs: ccore/out/ci/<suite>.log. CCORE_PORT_BASE defaults to auto (test/ports.mjs), so runs in two
 # worktrees never share a port. CCORE_CI_TIMEOUT: seconds per suite (default 900).
 # The lab tests need web-ui/node_modules (npm ci in web-ui/) and /usr/bin/chromium; dev_test
-# needs inotifywait (inotify-tools).
+# needs inotifywait (inotify-tools); build-wasm-view needs wasm-opt (binaryen, ci/binaryen.sh).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 mode=${1:-fast}

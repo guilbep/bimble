@@ -4,7 +4,11 @@
 #   the lab URL, then watches src/, session/ and host/ (*.c, *.h). On every save: rebuild with tcc and, when
 #   the build passes, restart the host on the same port, token and model. The open lab page sees
 #   the new epoch in the change feed and re-syncs by itself. When the build fails, the compiler
-#   output is printed and the old host keeps running.
+#   output is printed and the old host keeps running. Every cycle prints one line when it starts
+#   ("dev.sh: <file> changed, building") and one when it ends ("rebuilt in ...", "dev.sh: build
+#   failed ..." or "dev.sh: the host did not start"): as many ends as starts means idle. A save
+#   during a build is a cycle of its own, after that one (ticket K2: test/dev_test.mjs waited for a
+#   fixed 600 ms of quiet, took a slow build for an idle loop, and saw its restart as the next one's).
 #   model           default: a scratch copy of golden/frame.json in out/dev/ (the golden is never written)
 #   CCORE_DEV_PORT  host port, default 47400
 #   CCORE_DEV_VITE  Vite port, default 5173 (the host allows the two :5173 origins without config)
@@ -119,6 +123,7 @@ while true; do
     [[ $path == *.c || $path == *.h ]] || continue
     # Debounce: an editor's save is often several events; wait for 50 ms of quiet.
     while read -r -t 0.05 -u 3 _; do :; done
+    echo "dev.sh: ${path#"$CCORE"/} changed, building"
     t0=$(now_ms)
     build || continue
     t1=$(now_ms)

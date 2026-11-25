@@ -40,6 +40,7 @@ jobs:
         run: |
           echo "manifold=$(sed -n 's/^MANIFOLD_TAG=\([^ ]*\).*/\1/p' ccore/deps.sh)" >> "$GITHUB_OUTPUT"
           echo "tcc=$(ccore/ci/tcc.sh --commit)" >> "$GITHUB_OUTPUT"
+          echo "binaryen=$(ccore/ci/binaryen.sh --version)" >> "$GITHUB_OUTPUT"
           clang --version | head -n 1
           cmake --version | head -n 1
       # Ubuntu's tcc (Aug 2020) has no stdatomic.h nor __atomic builtins: the pinned one of ci/tcc.sh.
@@ -54,6 +55,21 @@ jobs:
       - run: |
           echo "$HOME/.local/tcc/bin" >> "$GITHUB_PATH"
           "$HOME/.local/tcc/bin/tcc" -v
+      # wasm-opt for build.sh wasm-view (ticket K2): the view wasm's 400 KB budget (ADR 0069) holds
+      # only after it (426 KB before, 353 KB after, clang 21). Ubuntu's binaryen is 120: the dev
+      # machine's 130 from its release tarball (sha256 checked), as tcc above. On PATH, clang also
+      # runs it after `build.sh wasm` (-O2), as on the dev machine.
+      - name: binaryen (cache)
+        id: binaryen
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/binaryen
+          key: binaryen-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.binaryen }}
+      - if: steps.binaryen.outputs.cache-hit != 'true'
+        run: ccore/ci/binaryen.sh "$HOME/.local/binaryen"
+      - run: |
+          echo "$HOME/.local/binaryen/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/binaryen/bin/wasm-opt" --version
       # The boolean kernel: manifold's C binding, built by deps.sh into ccore/out/deps/manifold.
       - name: manifold (cache)
         id: manifold

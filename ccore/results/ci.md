@@ -35,7 +35,7 @@ seconds. Each suite has `CCORE_PORT_BASE=auto`.
 | verbs_session_test | | 0.4 | 30 |
 | views_test | | 0.1 | 41 |
 | visibility_test | | 0.1 | 65 |
-| dev_test | | 2.3 | 18 |
+| dev_test | | 2.3 | 18 (20 since K2) |
 | **full** | 23 suites, 0 failed | **633** | |
 
 The ASan run is 91 % of the gate (469 of 518 s). An earlier run gave the same order: 488 of
@@ -68,10 +68,30 @@ under that commit. The ticket asked for apt `tcc`. This is the one change from i
   for the owner of `test/*.mjs`.
 - `kernel.apparmor_restrict_unprivileged_userns=0`, so Chrome's sandbox can start on Ubuntu 24.04.
   The tests do not pass `--no-sandbox`.
-- clang 18 from apt: test/run.sh compiles with `-Wall -Wextra -Werror`, and the dev machine has clang
-  23. A warning that only clang 18 gives would fail the job.
+- clang from apt: `ubuntu-latest` is Ubuntu 26.04 since November 2026 (image `ubuntu-26.04`,
+  20261116), so Ubuntu clang 21.1.8 and lld 21.1.6, not clang 18. test/run.sh compiles with
+  `-Wall -Wextra -Werror`, and the dev machine has clang 23. A warning that only clang 21 gives
+  would fail the job (none did in the first run).
+- binaryen 130 (`wasm-opt`) from `ci/binaryen.sh`, cached like tcc: `build.sh wasm-view` needs it
+  for the 400 KB budget (ticket K2, `results/wasm-size.md`). Ubuntu 26.04's own is 120.
 - `lld` gives `wasm-ld` for `build.sh wasm`. `inotify-tools` is for `dev_test` (`dev.sh` watches
   with `inotifywait`).
+
+## The first run on GitHub (ticket K2)
+
+Run of `942f316` (25 Nov 2026, `ubuntu-26.04` image, x86_64): 28 suites, 3 failed, 1175 s in all.
+build-tcc 1.1 s, run-tcc 40.6 s, the lab suites 5 to 53 s.
+
+| Suite | Failure | Cause | Fix |
+|---|---|---|---|
+| run-clang-asan | timed out at 900 s | the sanitizer run is longer on a runner | its own limit, 2700 s (`c77bae2`) |
+| build-wasm-view | 426,448 bytes, over 400,000 | no `wasm-opt` on the runner. On the dev machine clang ran `/usr/bin/wasm-opt -Os` after the link without saying so (344 KB). Not the clang version: clang 21 here gives 426,434 without wasm-opt, 353,477 with it | `build.sh wasm-view` runs wasm-opt as an explicit step and fails without it; the workflow installs binaryen 130 (`ci/binaryen.sh`, cached) |
+| dev_test | "syntax error: no restart", "the old host still answers, same epoch" | the test, not dev.sh. After cycle 5 it restored `calls.c` and waited for 300 + 300 ms without a new "rebuilt in" line. On the runner a rebuild took 700 to 920 ms, so the restore's build was still running: the test wrote the syntax error, then saw the restore's restart (new epoch) and took it for the syntax error's. The revert check passed only by the same mistake (its epoch was the restore's) | `dev.sh` prints a line when a cycle starts ("dev.sh: session/calls.c changed, building"); every cycle ends with one line, so as many ends as starts is idle. The test waits for the cycle of each save, checks one build per save, and checks the revert gives exactly one restart after the syntax error |
+
+The dev_test failure is reproduced on the old code by a slower tcc (a `tcc` first in `PATH` that
+sleeps 0.8 s before each call: the restore's build takes about 850 ms): the same two FAIL lines,
+and the revert's epoch equals the syntax error's, as on the runner. The new check "revert: one
+build, one restart since the syntax error" counts 2 restarts on the old synchronisation.
 
 ## macOS: what blocks
 

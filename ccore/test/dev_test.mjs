@@ -2,8 +2,11 @@
 // Starts dev.sh on test ports (host 47411, Vite 5199), waits for the lab URL, checks the host
 // answers; then edits session/calls.c (a trailing comment, then without it) five times and checks
 // each save gives one "rebuilt in" line and a host with a new epoch; a syntax error prints the
-// compiler output while the old host still answers; the revert rebuilds. SIGTERM to dev.sh must
-// leave no process behind. The edited file is restored byte for byte. Needs tcc, inotifywait and
+// compiler output while the old host still answers; the revert rebuilds. Every save is waited for
+// by dev.sh's cycle lines (one "changed, building", then one end: rebuilt, build failed, or the host
+// did not start), not by a time of quiet: with a build slower than that time (920 ms on a GitHub
+// runner) the restart of one save was seen as the next one's (ticket K2). Each save must give
+// exactly one cycle. SIGTERM to dev.sh must leave no process behind. The edited file is restored byte for byte. Needs tcc, inotifywait and
 // web-ui/node_modules. Prints the cycle times and "N passed, M failed"; exits non-zero on a failure.
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
@@ -88,6 +91,25 @@ dev.stdout.on("data", (d) => (out += d));
 dev.stderr.on("data", (d) => (out += d));
 const exited = new Promise((r) => dev.on("exit", (code, sig) => r({ code, sig })));
 const count = (re) => (out.match(re) ?? []).length;
+// dev.sh's cycles: started, ended (rebuilt, build failed, or the host did not start), restarts.
+const REBUILT = /^rebuilt in \d+ ms/gm;
+const starts = () => count(/^dev\.sh: \S+ changed, building$/gm);
+const restarts = () => count(REBUILT);
+const ends = () => restarts() + count(/^dev\.sh: build failed/gm) + count(/^dev\.sh: the host did not start/gm);
+/** Write `data` to the edited file and wait until dev.sh has started a cycle for it and every cycle
+ *  has ended, then 300 ms more (six debounces) without a new one. Returns the number of cycles the
+ *  write gave (the caller checks it is 1). */
+async function save(what, data) {
+  const s0 = starts();
+  writeAtomic(EDITED, data);
+  await waitFor(`the cycle of ${what}`, 30000, async () => {
+    if (starts() <= s0 || ends() !== starts()) return false;
+    const n = starts();
+    await sleep(300);
+    return starts() === n && ends() === n;
+  });
+  return starts() - s0;
+}
 
 let tree = [];
 try {
@@ -112,38 +134,43 @@ try {
   let epoch = await epochOf(token);
   check("first epoch", /^[0-9a-f]{32}$/.test(epoch ?? ""), String(epoch));
   for (let i = 0; i < 5; i++) {
-    const n = count(/rebuilt in \d+ ms/g);
-    writeAtomic(EDITED, i % 2 === 0 ? Buffer.concat([ORIGINAL, Buffer.from("/* dev_test */\n")]) : ORIGINAL);
-    await waitFor(`rebuilt line ${i + 1}`, 15000, () => count(/rebuilt in \d+ ms/g) > n);
+    const n = restarts();
+    const c = await save(`edit ${i + 1}`, i % 2 === 0 ? Buffer.concat([ORIGINAL, Buffer.from("/* dev_test */\n")]) : ORIGINAL);
     const m = [...out.matchAll(/rebuilt in (\d+) ms, host up in (\d+) ms/g)].at(-1);
-    times.push([+m[1], +m[2]]);
+    if (m) times.push([+m[1], +m[2]]);
     const e = await epochOf(token);
-    check(`cycle ${i + 1}: host answers with a new epoch`, e !== null && e !== epoch, `${epoch} -> ${e}`);
+    check(`cycle ${i + 1}: one build, one restart, a new epoch`, c === 1 && restarts() === n + 1 && e !== null && e !== epoch,
+      `${c} build(s), ${restarts() - n} restart(s), ${epoch} -> ${e}`);
     epoch = e;
   }
-  writeAtomic(EDITED, ORIGINAL);
-  await sleep(300); // the last write of the loop above left an odd state: let a possible rebuild settle
-  await waitFor("quiet", 15000, async () => { const a = count(/rebuilt in/g); await sleep(300); return count(/rebuilt in/g) === a; });
-  epoch = await epochOf(token);
+  // Back to the original (the loop ended on the comment): a cycle of its own, ended before the
+  // syntax error below is written.
+  {
+    const n = restarts();
+    const c = await save("the restore", ORIGINAL);
+    const e = await epochOf(token);
+    check("restore: one build, one restart, a new epoch, before the next save", c === 1 && restarts() === n + 1 && e !== null && e !== epoch,
+      `${c} build(s), ${restarts() - n} restart(s), ${epoch} -> ${e}`);
+    epoch = e;
+  }
 
   // A syntax error: compiler output, no restart, the old host still answers.
-  const fails = count(/build failed/g);
-  const rebuilt = count(/rebuilt in \d+ ms/g);
-  writeAtomic(EDITED, Buffer.concat([ORIGINAL, Buffer.from("int dev_test_broken( {\n")]));
-  await waitFor("build failed", 15000, () => count(/build failed/g) > fails);
-  await sleep(100);
-  check("syntax error: dev.sh prints the compiler output", /calls\.c:\d+/.test(out.slice(out.lastIndexOf("build failed"))),
-    out.slice(out.lastIndexOf("build failed")).split("\n").slice(0, 3).join(" | "));
-  check("syntax error: no restart", count(/rebuilt in \d+ ms/g) === rebuilt);
+  const rebuilt = restarts();
+  const c1 = await save("the syntax error", Buffer.concat([ORIGINAL, Buffer.from("int dev_test_broken( {\n")]));
+  const failOut = out.slice(out.lastIndexOf("dev.sh: build failed"));
+  check("syntax error: dev.sh prints the compiler output", c1 === 1 && out.includes("dev.sh: build failed") && /calls\.c:\d+/.test(failOut),
+    `${c1} build(s): ${failOut.split("\n").slice(0, 3).join(" | ")}`);
+  check("syntax error: no restart", restarts() === rebuilt, `${restarts() - rebuilt} restart(s)`);
   const eOld = await epochOf(token);
   const st2 = await req("POST", "/query/state", token);
   check("syntax error: the old host still answers, same epoch", st2.status === 200 && eOld === epoch, `${st2.status} ${epoch} -> ${eOld}`);
 
-  // Revert: the build passes again and the host restarts.
-  writeAtomic(EDITED, ORIGINAL);
-  await waitFor("rebuilt after the revert", 15000, () => count(/rebuilt in \d+ ms/g) > rebuilt);
+  // Revert: the build passes again and the host restarts, once: the restart is the revert's own.
+  const c2 = await save("the revert", ORIGINAL);
   const eNew = await epochOf(token);
   check("revert: rebuild OK, new epoch", eNew !== null && eNew !== epoch, `${epoch} -> ${eNew}`);
+  check("revert: one build, one restart since the syntax error", c2 === 1 && restarts() === rebuilt + 1,
+    `${c2} build(s), ${restarts() - rebuilt} restart(s)`);
 
   console.log("cycle  rebuild ms  host up ms");
   times.forEach(([b, h], i) => console.log(`${String(i + 1).padStart(5)}  ${String(b).padStart(10)}  ${String(h).padStart(10)}`));

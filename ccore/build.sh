@@ -17,7 +17,11 @@
 #   wasm-view  the viewer-only wasm (ADR 0069 rule 3, ticket W1): out/wasm/ccore-view.wasm, the
 #          wasm build without VIEW_DENY (verbs, the verb table, the IFC import and writer), with
 #          -DCC_VIEW_ONLY (session/view_only.c, wasm_api.c VIEW_ONLY, wasm_stub.c's stubs) and
-#          VIEW_OPT; fails over VIEW_MAX bytes (test: node test/wasm_view_run.mjs)
+#          VIEW_OPT; then wasm-opt VIEW_OPT (binaryen, required: $WASM_OPT or wasm-opt); fails over
+#          VIEW_MAX bytes (test: node test/wasm_view_run.mjs). Clang runs wasm-opt by itself when it
+#          finds one, and says nothing: the size depended on what was installed (426 KB on the first
+#          CI runner, 352 KB on the dev machine, ticket K2). So the link asks clang not to
+#          (--no-wasm-opt, clang 20 and later) and the step is explicit, timed and versioned.
 #   release  the Linux release archive (ticket R1, ADR 0069 rule 2): the host with clang -O2 and
 #          the boolean kernel static (fails without it), the lab built by Vite (web-ui/, needs
 #          node_modules), then out/release/bimble-ccore-<VERSION>-<arch>-linux.tar.gz holding
@@ -278,7 +282,20 @@ case "${1:-}" in
     wasm_sizes ccore.wasm ;;
   wasm-view)
     echo "build.sh wasm-view -> out/wasm/ccore-view.wasm"
-    wasm_build ccore-view.wasm "$VIEW_OPT" -DCC_VIEW_ONLY "${VIEW_LIB[@]}"
+    wopt=${WASM_OPT:-wasm-opt}
+    if ! command -v "$wopt" > /dev/null; then
+        echo "FAIL $wopt (binaryen) not found: ccore-view.wasm needs it for its budget (ADR 0069;" \
+            "ci/binaryen.sh installs the pinned one, or set WASM_OPT)" >&2
+        exit 1
+    fi
+    echo "  $(clang --version | head -n 1); $("$wopt" --version)"
+    # clang's own wasm-opt run off (when it knows the flag); the target_features section kept, so
+    # wasm-opt reads the features the code uses (bulk memory...) instead of assuming none.
+    nowo=()
+    clang --target=wasm32 --no-wasm-opt -fsyntax-only -x c /dev/null 2> /dev/null && nowo=(--no-wasm-opt)
+    wasm_build ccore-view.wasm "$VIEW_OPT" "${nowo[@]}" -Wl,--keep-section=target_features \
+        -DCC_VIEW_ONLY "${VIEW_LIB[@]}"
+    step "wasm-opt $VIEW_OPT" "$wopt" "$VIEW_OPT" out/wasm/ccore-view.wasm -o out/wasm/ccore-view.wasm
     wasm_sizes ccore-view.wasm
     bytes=$(wc -c < out/wasm/ccore-view.wasm)
     if ((bytes > VIEW_MAX)); then

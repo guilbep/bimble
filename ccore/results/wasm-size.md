@@ -5,7 +5,10 @@ ADR 0069 rule 3: a viewer wasm of at most 400 KB, selected by files. `build.sh w
 
 ## Measured
 
-25 Nov 2026, 16 GB aarch64, clang 23.1.3, no wasm-opt. Bytes of the file; gzip is `gzip -9`.
+25 Nov 2026, 16 GB aarch64, clang 23.1.3. Bytes of the file; gzip is `gzip -9`. These sizes are
+after wasm-opt: clang ran the dev machine's `/usr/bin/wasm-opt` (binaryen 130) after each link
+without saying so (found by ticket K2, see "Per compiler" below). The W1 note said "no wasm-opt":
+that was wrong.
 
 | Build | Files | Opt | Raw bytes | Gzip bytes |
 |---|---|---|---:|---:|
@@ -25,6 +28,44 @@ The editor grew by 119 bytes: `session/view_only.c` (the guard, empty outside th
 The kept files still reference a few denied symbols; `wasm_stub.c` defines them under
 `CC_VIEW_ONLY` (an empty verb table, refusals). `session/view_only.c` answers "this build is
 view-only" to the calls that need them, before they run.
+
+### Per compiler, with and without wasm-opt (ticket K2)
+
+The first CI run (GitHub `ubuntu-latest`, which is Ubuntu 26.04: Ubuntu clang 21.1.8, lld 21.1.6,
+no binaryen) made a view wasm of 426,448 bytes and failed the budget. The dev machine made 344,455
+from the same sources. The compiler version is not the cause: clang's wasm32 driver runs
+`wasm-opt -O<n>` after the link when it finds a `wasm-opt` (its own directory, then `PATH`), and
+the dev machine has one. The runner had none. `clang -###` shows the step:
+`"/usr/bin/wasm-opt" "<out>" "-Os" "-o" "<out>"`.
+
+Since K2, `build.sh wasm-view` makes the step explicit: the link has `--no-wasm-opt` (clang 20 and
+later; clang 18 and 19 do not know it and run their own pass first, which changes nothing but
+time), keeps the `target_features` section for it, then runs `wasm-opt -Os` as a timed step and
+prints both versions. No `wasm-opt` (or `$WASM_OPT`) is an error with a message, not a quiet
+426 KB. CI installs binaryen 130 (`ci/binaryen.sh`, the release tarball, sha256 checked, cached).
+
+25 Nov 2026, sources of `afd8844`, dev machine. Clang 23 is the system one; 18, 20, 21 and 22 are
+the clang that zig bundles (zig 0.13, 0.15.2, 0.16, 0.17.1), with their own resource headers and
+`wasm-ld`. `--no-wasm-opt` sizes: `clang ... -Os --no-wasm-opt` (the link without the pass).
+`build.sh wasm-view`: the shipped build (link, then binaryen 130 `wasm-opt -Os`).
+
+| clang | -Os, no wasm-opt | -Oz, no wasm-opt | **`build.sh wasm-view`** (-Os + wasm-opt -Os) | gzip -9 | -Oz + wasm-opt -Oz |
+|---|---:|---:|---:|---:|---:|
+| 18.1.6 | | | 361,455 | 172,145 | |
+| 20.1.2 | | | 353,714 | 169,549 | |
+| 21.1.0 | 426,434 | 400,842 | **353,477** | 169,353 | 330,045 |
+| 21.1.8 (CI runner, run of `942f316`) | 426,448 | | | | |
+| 22.1.8 | | | 351,673 | 168,949 | |
+| 23.1.3 | 422,728 | 397,640 | **351,575** | 168,958 | 328,364 |
+
+All are under 400,000 with wasm-opt, and none is at -Os without it. -Oz alone (no wasm-opt) is
+not a fix: 400,842 bytes with clang 21, over the budget; 397,640 with clang 23, 0.6 % under it.
+A newer clang is not a fix either (422,728 with 23). So the kept fix is wasm-opt, required and
+pinned; the flags stay -Os, so the speed below (measured with wasm-opt, as it turns out) holds.
+
+Clang 21.1.0 without wasm-opt gives 426,434 bytes; the runner's 21.1.8 gave 426,448: the cause is
+reproduced to 14 bytes. The runner's editor wasm (`build.sh wasm`, -O2) was 726,390 bytes for the
+same reason (585 KB here). With binaryen on the runner's `PATH`, clang's own pass now runs there too.
 
 ### Speed of -Os
 
