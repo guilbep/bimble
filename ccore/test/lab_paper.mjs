@@ -30,7 +30,7 @@ const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
 const PORT = port("lab_paper", 47309);
-const VITE = vitePort("lab_paper", 5214);
+const VITE = vitePort("lab_paper", 5130);
 const TOKEN = "labpaper-token";
 const MODEL_PUBLIC = join(UI, "public/ccore/paper1-model.json");
 const WASM = `http://localhost:${VITE}/?ccore=1&gl=1&model=ccore/paper1-model.json`;
