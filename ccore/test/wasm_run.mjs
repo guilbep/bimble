@@ -14,7 +14,8 @@
 //            port 47351, CCORE_SEED=1 and guid_seed(1) on both): boot without a model (state,
 //            actions: 54 rows), open frame.json, the same calls on both (select, verb place,
 //            history, undo, redo, action save…): every answer, status and change JSON byte for
-//            byte, the saved text = the native host's saved file, host_mesh = GET /mesh
+//            byte, the saved text = the native host's saved file, host_mesh = GET /mesh; ticket E1:
+//            query verbs (= golden/verbs_list.json) and describe, verb with dry_run and if_rev, rename
 //   files    the file actions in a fresh module (ticket A5): new, place, save (v2), save as,
 //            host_open of the saved bytes (the same elements), host_open import of golden/ifc/
 //            frame.ifc (the import golden's count) and of frame.json; export IFC4 with host_clock =
@@ -484,6 +485,12 @@ suite("host");
       ["query", "state", "{}"], ["redo", "-", ""], "mesh", ["action", "undo", ""], ["action", "redo", ""],
       ["apply", "-", "not json"], ["verb", "nope", "{}"], ["query", "nope", "{}"], ["action", "nope", ""],
       ["tab", "-", JSON.stringify({ op: "activate", id: "x" })], ["dismiss_belongs", "-", ""], ["query", "status", "null"],
+      // ticket E1: verbs first (ADR 0068): the verb table's queries, dry_run, if_rev, rename
+      ["query", "verbs", ""], ["query", "describe", JSON.stringify({ name: "rotate" })], ["query", "describe", JSON.stringify({ name: "rename" })],
+      ["verb", "copy", JSON.stringify({ d: [7000.0, 0.0, 0.0], ids: [firstId], dry_run: true })],
+      ["verb", "rename", JSON.stringify({ id: firstId, name: "P-x", dry_run: true })], ["query", "history", "{}"],
+      ["verb", "rename", JSON.stringify({ id: firstId, name: "P-x", if_rev: 999 })],
+      ["verb", "rename", JSON.stringify({ if_rev: "REV", id: firstId, name: "P-x" })], ["query", "history", "{}"], ["undo", "-", ""],
     ];
     let rev = 1, placedRev = 0;
     for (const s of steps) {
@@ -504,7 +511,7 @@ suite("host");
         eq("action save: host_saved = the native host's saved file", w.status === 200 ? w.text : `${w.status}`, readFileSync(model, "utf8"));
         continue;
       }
-      const [o, name, body] = s;
+      const [o, name] = s, body = s[2].replace('"if_rev":"REV"', `"if_rev":${rev}`); // the rev now
       const w = hcall(o, name, body), n = await ncall(o, name, body);
       // The load time is a clock reading (the module has none: 0): masked in query status.
       const mask = (t) => o === "query" && name === "status" ? t.replace(/"load_ms":[0-9.e+-]+/, '"load_ms":_').replace(/loaded in [^·]*·/, "loaded in _ ·") : t;
@@ -513,9 +520,15 @@ suite("host");
       eq(`change after ${o} ${name}`, JSON.stringify(JSON.parse(wc)), await nchange());
       const r = JSON.parse(wc).rev;
       if (o === "verb" && name === "place") placedRev = r, check("verb place: rev + 1", r === rev + 1, `${rev} -> ${r}`);
+      if (o === "verb" && name === "rename") { // E1: dry run and conflict change nothing; if_rev = rev runs
+        const real = !body.includes("dry_run") && !body.includes("999");
+        check(`verb rename ${body}: ${real ? "200, rev + 1" : "no change"}`, real ? w.status === 200 && r === rev + 1 : r === rev && (w.status === 200) === body.includes("dry_run"), `${w.status} ${w.text}, rev ${rev} -> ${r}`);
+      }
       rev = r;
     }
     check("the place happened", placedRev === 2, String(placedRev));
+    const vl = hcall("query", "verbs", "");
+    check("query verbs in the module = golden/verbs_list.json", vl.status === 200 && vl.text === JSON.stringify(JSON.parse(read("verbs_list.json"))), vl.text.slice(0, 120));
     const lg = call(X.host_log, []).text;
     check("host_log has the Saved lines", (lg.match(/bimble-ccore: Saved frame\.json/g) ?? []).length === 2, JSON.stringify(lg));
     const local = call(X.host_mesh, [], 1);

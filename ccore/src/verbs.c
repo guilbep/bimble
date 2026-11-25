@@ -780,6 +780,23 @@ int cc_vh_set_note(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
     return 0;
 }
 
+/* A C addition (verb_table.h): Command::Rename of one element; the same name is no step. The
+ * blank name check is Command::apply's ("the name is empty"), run by the history. */
+int cc_vh_rename(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
+    static const char *const F[] = {"id", "name"};
+    static const int REQ[] = {1, 1};
+    NoteArgs a; /* {id, a string} */
+    memset(&a, 0, sizeof a);
+    if (d_struct(err, args, "RenameArgs", F, 2, REQ, 1, note_field, &a)) return -1;
+    const cc_element *e = cc_model_element(m, &a.id);
+    if (!e) return no_element(err, &a.id);
+    if (str_eq(e->name, a.text)) return 0;
+    cc_command *c = cc_cmds_push(l, CC_CMD_RENAME);
+    if (!c) return fail(err, "out of memory");
+    c->id = a.id;
+    c->name = a.text;
+    return 0;
+}
 
 /* ---- more argument decoding ---- */
 

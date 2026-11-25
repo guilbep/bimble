@@ -16,6 +16,17 @@ enum { CC_OK = 200, CC_ERR = 400 };
 /* One call. `op` is one of cc_known_op (the router checked it), `name` is the decoded name
  * segment ("" for "-"), `body` holds `n` bytes of UTF-8 (NUL-terminated after n). Writes the
  * answer or the error text into `out` (empty on entry) and returns CC_OK or CC_ERR. */
+/* op "verb" (ADR 0068 rule 3): `name` is the verb (Rust's 14 or a C addition, verb_table.h), the
+ * body Rust's: the verb's argument object (empty or "null": {}). An object body may also carry two
+ * top-level keys, taken out before the verb reads its arguments (no verb has fields of these names):
+ *   "dry_run": true  -> 200 with the commands the verb makes (serde JSON array, maybe []); nothing
+ *                       applied: no history step, rev unchanged. Command::apply's own checks (a
+ *                       blank name) are not run by a dry run.
+ *   "if_rev": N      -> runs only if N is the session's rev (the change feed's "rev"); else 400
+ *                       with "conflict: the model changed (rev <rev>, expected N)". A 400, not 409:
+ *                       the carriers (HTTP host, wasm) know 200 and 400 only; the text tells.
+ * A body without them is passed through unchanged (old bodies work as before). A real run answers
+ * 200 with an empty text, as Rust's. */
 int cc_call(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out);
 
 /* The change JSON (`Viewer::change_json`, calls.rs:134-167) for the state now. The host

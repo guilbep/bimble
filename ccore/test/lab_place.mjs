@@ -5,7 +5,9 @@
 //    web-ui/node_modules: `npm ci` there) and headless /usr/bin/chromium over raw CDP; opens
 //    /?native=1&port=47334&token=… and checks: data-bb-ready is set (modelReady resolved), the
 //    navigator lists the 3 storeys, selecting an element through the client shows its properties
-//    (the element query's answer), no uncaught page error.
+//    (the element query's answer); ticket E1: renaming it in the properties panel goes through the
+//    verb `rename` and a project field through `set_project_field` (the lab POSTs no /apply),
+//    two undos restore both; no uncaught page error.
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills all it starts.
 import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
@@ -180,6 +182,41 @@ async function lab() {
   }).catch((e) => e.message);
   check("properties show the selected element (GlobalId and name)", props.includes(id) && props.includes(detail.name), props.replace(/\s+/g, " ").slice(0, 200));
   check("page selection = [id]", await bb(`JSON.stringify(b.state.value.selection) === ${JSON.stringify(JSON.stringify([id]))}`));
+
+  // Ticket E1 (ADR 0068 rule 1): the properties panel's name field renames through the verb
+  // `rename`, the project page's fields through `set_project_field`; no raw `apply` from the lab.
+  const posts = [];
+  cdp.on((msg) => {
+    if (msg.sessionId === sessionId && msg.method === "Network.requestWillBeSent" && msg.params.request.method === "POST") {
+      const u = new URL(msg.params.request.url);
+      if (u.port === String(LAB_PORT)) posts.push(u.pathname);
+    }
+  });
+  await S("Network.enable");
+  const newName = "B-renamed by the lab";
+  const typed = await evalJs(`(() => {
+    const i = document.querySelector('[data-bb=properties] #el-name');
+    if (!i) return false;
+    i.value = ${JSON.stringify(newName)};
+    i.dispatchEvent(new Event('input', { bubbles: true }));
+    i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    return true;
+  })()`);
+  check("properties panel: the name field takes the new name", typed === true);
+  const renamed = await waitFor("the element's new name", 5000, async () => (await bb(`b.element(${JSON.stringify(id)}).name`)) === newName).catch(() => false);
+  check("rename through the properties panel -> the element's name", renamed, await bb(`b.element(${JSON.stringify(id)}).name`));
+  const renameLabel = await bb("b.query('history', {}).undo[0]");
+  check("rename is one undo step", typeof renameLabel === "string" && renameLabel.startsWith("rename "), String(renameLabel));
+  const pfErr = await bb("b.setProject({ ...(b.project.value?.info ?? {}), project_number: 'P-42' })");
+  const pnum = await waitFor("project_number", 5000, async () => (await bb("b.project.value?.info?.project_number ?? null")) === "P-42").catch(() => false);
+  check("project field through the client (setProject) -> set", pfErr === null && pnum, String(pfErr));
+  await bb("b.undo()");
+  await bb("b.undo()");
+  const back = await waitFor("undo of the rename", 5000, async () => (await bb(`b.element(${JSON.stringify(id)}).name`)) === detail.name).catch(() => false);
+  check("two undos: name and project as before", back && (await bb("b.project.value?.info?.project_number ?? null")) === null, await bb(`b.element(${JSON.stringify(id)}).name`));
+  console.log(`  lab POSTs during the edits: ${[...new Set(posts)].join(", ")}`);
+  check("the lab sent verb/rename and verb/set_project_field", posts.includes("/verb/rename") && posts.includes("/verb/set_project_field"), [...new Set(posts)].join(", "));
+  check("the lab sent no raw apply", !posts.some((p) => p.startsWith("/apply")), [...new Set(posts)].join(", "));
   check("no uncaught page error", exceptions.length === 0, exceptions.join(" | "));
   cdp.close();
 }

@@ -36,6 +36,7 @@ const TABLE = [
   ["host", "large_lab", 47386, 86],
   ["host", "files_test", 47391, 91],
   ["host", "files_test2", 47392, 92],
+  ["host", "verbs_session", 47393, 93],
   ["host", "dev_test", 47411, 111],
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_gl", 5193, 131],

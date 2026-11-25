@@ -180,6 +180,14 @@ static const char SUMMARY_SET_SHEET[] =
     "Change a sheet's number, name, paper (A4..A0), portrait or revision; missing ones are kept, an empty"
     " revision removes it.";
 
+/* C additions (verb_table.h), in schemars' shape. */
+static const char SCHEMA_RENAME[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"descr"
+    "iption\":\"Arguments of `rename`.\",\"properties\":{\"id\":{\"description\":\"GlobalId of the elem"
+    "ent.\",\"type\":\"string\"},\"name\":{\"description\":\"The new name, not blank.\",\"type\":\"st"
+    "ring\"}},\"required\":[\"id\",\"name\"],\"title\":\"RenameArgs\",\"type\":\"object\"}";
+static const char SUMMARY_RENAME[] = "Rename an element (a C addition: Rust's dispatch has no rename verb).";
+
 #define V(n, N) {#n, SUMMARY_##N, SCHEMA_##N, cc_vh_##n, 0}
 const cc_verb_def cc_verb_table[] = {
     V(place, PLACE),
@@ -197,8 +205,12 @@ const cc_verb_def cc_verb_table[] = {
     V(add_sheet, ADD_SHEET),
     V(set_sheet, SET_SHEET),
 };
+const cc_verb_def cc_verb_c_additions[] = {
+    V(rename, RENAME),
+};
 #undef V
 const size_t cc_verb_count = sizeof cc_verb_table / sizeof cc_verb_table[0];
+const size_t cc_verb_c_addition_count = sizeof cc_verb_c_additions / sizeof cc_verb_c_additions[0];
 
 /* strcmp(a, b) == 0 (freestanding wasm has no strcmp). */
 static int streq(const char *a, const char *b) {
@@ -209,6 +221,8 @@ static int streq(const char *a, const char *b) {
 const cc_verb_def *cc_verb_find(const char *name) {
     for (size_t i = 0; i < cc_verb_count; i++)
         if (streq(cc_verb_table[i].name, name)) return &cc_verb_table[i];
+    for (size_t i = 0; i < cc_verb_c_addition_count; i++)
+        if (streq(cc_verb_c_additions[i].name, name)) return &cc_verb_c_additions[i];
     return NULL;
 }
 

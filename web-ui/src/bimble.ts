@@ -600,8 +600,12 @@ export function element(id: string): ElementDetail {
   }
 }
 
-/** Rename one element as one undoable step. Returns the Rust error, or null. */
+/** Rename one element as one undoable step: the verb `rename` (ADR 0068 rule 1; a C core
+ * addition, Rust's dispatch has none). On Rust's wasm module ("unknown verb") the raw Command is
+ * applied instead, until Rust has the verb. Returns the error, or null. */
 export function rename(id: string, name: string): string | null {
+  const err = runVerb("rename", { id, name });
+  if (err === null || !err.startsWith("unknown verb")) return err;
   try {
     wasmOrThrow().apply(JSON.stringify([{ op: "rename", id, name }]));
     return null;
@@ -610,14 +614,22 @@ export function rename(id: string, name: string): string | null {
   }
 }
 
-/** Replace the project information (ADR 0030) as one undoable step: the whole map. Returns the Rust error, or null. */
-export function setProject(project: Record<string, string>): string | null {
-  try {
-    wasmOrThrow().apply(JSON.stringify([{ op: "set_project", project }]));
-    return null;
-  } catch (e) {
-    return message(e);
+/** A project key `set_project_field` gives back unchanged when used as the label (Rust `project::key_of`). */
+const STABLE_KEY = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
+
+/** Change the project information (ADR 0030) to `project`: one `set_project_field` verb per changed
+ * key (ADR 0068 rule 1), an empty value for a removed key. The project page changes one field at a
+ * time, so that is one undoable step. A key the verb cannot address (not letters, digits and `_`,
+ * or longer than 64) is refused. Returns the error, or null. */
+export function setProject(next: Record<string, string>): string | null {
+  const cur = project.value?.info ?? {};
+  const keys = [...new Set([...Object.keys(cur), ...Object.keys(next)])].filter((k) => (cur[k] ?? "") !== (next[k] ?? ""));
+  for (const k of keys) {
+    if (!STABLE_KEY.test(k) || k.length > 64) return `the field ${JSON.stringify(k)} cannot be changed here`;
+    const err = setProjectField(k, next[k] ?? "");
+    if (err) return err;
   }
+  return null;
 }
 
 /** Change what is placed: `{kind?, storey?, material?, sizes?}`, all or nothing. Returns the Rust error, or null. */

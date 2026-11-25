@@ -26,7 +26,14 @@ typedef struct {
 extern const cc_verb_def cc_verb_table[];
 extern const size_t cc_verb_count;
 
-/* The entry named `name` (NUL-terminated), NULL when none. */
+/* C additions (ADR 0068 rule 1: the lab's raw `apply` edits become verbs): verbs Rust's dispatch
+ * has not, outside cc_verb_table so that the `verbs` list, the unknown verb text and the 14
+ * schemas stay Rust's byte for byte. cc_verb_find finds them; the session's `describe` answers
+ * their schema. Today: rename {id, name} (Command::Rename). */
+extern const cc_verb_def cc_verb_c_additions[];
+extern const size_t cc_verb_c_addition_count;
+
+/* The entry named `name` (NUL-terminated), Rust's or a C addition, NULL when none. */
 const cc_verb_def *cc_verb_find(const char *name);
 /* dispatch::list as serde_json::to_string prints it: [{"name":…,"summary":…},…]. Appends. */
 void cc_verbs_list_json(Buf *out);
@@ -46,4 +53,5 @@ int cc_vh_rotate(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 int cc_vh_mirror(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 int cc_vh_add_sheet(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 int cc_vh_set_sheet(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_rename(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err); /* C addition */
 #endif

@@ -23,6 +23,7 @@
 #include "query.h"
 #include "scene.h"
 #include "session.h"
+#include "verb_table.h"
 #include "verbs.h"
 #include "viewfile.h"
 
@@ -734,6 +735,29 @@ static int model_query(cc_session *s, const char *name, const char *body, size_t
     return CC_ERR;
 }
 
+/* calls.rs:340-344 `verbs` and `describe`: the verb table (cc_query), no model needed. A C addition's
+ * schema (verb_table.h: rename) is answered too, where Rust says "no verb with this name". */
+static int verb_query(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
+    if (cc_query(&s->model, name, body, n, out) == 200) return CC_OK;
+    static const char NONE[] = "no verb with this name";
+    if (out->len == sizeof NONE - 1 && !memcmp(out->p, NONE, out->len)) {
+        Arena a;
+        arena_init(&a, 0);
+        JrError je;
+        const JrVal *v = jr_parse(&a, body, n, &je);
+        const JrVal *nm = v && v->type == JR_OBJ ? jr_get(v, "name") : NULL;
+        for (size_t i = 0; nm && nm->type == JR_STR && i < cc_verb_c_addition_count; i++)
+            if (strlen(cc_verb_c_additions[i].name) == nm->n && !memcmp(cc_verb_c_additions[i].name, nm->s, nm->n)) {
+                buf_clear(out);
+                buf_puts(out, cc_verb_c_additions[i].schema);
+                arena_free(&a);
+                return CC_OK;
+            }
+        arena_free(&a);
+    }
+    return CC_ERR;
+}
+
 static int call_query(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     JsonW w;
     jw_init(&w, out, 0);
@@ -770,8 +794,8 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
             buf_puts(out, "[]");
             return CC_OK;
         }
-    static const char *const CUT[] = {"palette_match", "verbs", "describe", "schedule_rows", "schedule_csv",
-                                      "sheet_svg"};
+    if (!strcmp(name, "verbs") || !strcmp(name, "describe")) return verb_query(s, name, body, n, out);
+    static const char *const CUT[] = {"palette_match", "schedule_rows", "schedule_csv", "sheet_svg"};
     for (size_t i = 0; i < sizeof CUT / sizeof CUT[0]; i++)
         if (!strcmp(name, CUT[i])) {
             buf_puts(out, "query "), buf_puts(out, name), buf_puts(out, " is not in the C core");
@@ -1187,6 +1211,118 @@ end:
 
 /* ---- the dispatcher (calls.rs:74-130) ---- */
 
+/* A parsed value back to compact JSON text: numbers as their own token (exact), strings
+ * re-escaped, members in the document's order. Depth is bounded by the reader (JR_MAX_DEPTH). */
+static void jr_write(cc_buf *b, const JrVal *v) {
+    switch (v->type) {
+    case JR_NULL: buf_puts(b, "null"); break;
+    case JR_BOOL: buf_puts(b, v->b ? "true" : "false"); break;
+    case JR_NUM: buf_append(b, v->s, v->n); break;
+    case JR_STR: json_escape(b, v->s, v->n); break;
+    case JR_ARR:
+        buf_putc(b, '[');
+        for (size_t i = 0; i < v->n; i++) {
+            if (i) buf_putc(b, ',');
+            jr_write(b, &v->items[i]);
+        }
+        buf_putc(b, ']');
+        break;
+    default:
+        buf_putc(b, '{');
+        for (size_t i = 0; i < v->n; i++) {
+            if (i) buf_putc(b, ',');
+            json_escape(b, v->members[i].key, v->members[i].key_n);
+            buf_putc(b, ':');
+            jr_write(b, &v->members[i].val);
+        }
+        buf_putc(b, '}');
+    }
+}
+
+/* calls.rs:524-534 call_verb, plus ADR 0068 rule 3 (see calls.h "verb"): the body is the verb's
+ * arguments; an object body may also carry the top-level keys "dry_run" (bool) and "if_rev"
+ * (a non-negative integer), taken out before the verb reads its arguments. */
+static int call_verb(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
+    int blank = 1; /* args_json.trim().is_empty(): null */
+    for (size_t i = 0; i < n; i++)
+        if (body[i] != ' ' && body[i] != '\t' && body[i] != '\n' && body[i] != '\r') blank = 0;
+    int dry_run = 0, rc = CC_ERR;
+    int64_t if_rev = -1;
+    Arena a;
+    arena_init(&a, 0);
+    cc_buf args; /* the arguments without dry_run and if_rev, when the body had them */
+    buf_init(&args);
+    const char *argp = body;
+    size_t argn = blank ? 0 : n;
+    if (!blank) { /* serde_json::from_str first: a body that does not parse fails before the model */
+        JrError je;
+        const JrVal *v = jr_parse(&a, body, n, &je);
+        if (!v) {
+            buf_puts(out, je.msg);
+            goto done;
+        }
+        if (v->type == JR_OBJ) {
+            int strip = 0;
+            for (size_t i = 0; i < v->n; i++) {
+                const JrMember *mb = &v->members[i];
+                const JrVal *x = &mb->val;
+                if (jr_key_is(mb, "dry_run")) {
+                    if (x->type != JR_BOOL) {
+                        buf_puts(out, "bad arguments: dry_run: expected a boolean");
+                        goto done;
+                    }
+                    dry_run = x->b, strip = 1;
+                } else if (jr_key_is(mb, "if_rev")) {
+                    if (x->type != JR_NUM || !x->num_int || x->num_neg || x->n > 18) {
+                        buf_puts(out, "bad arguments: if_rev: expected a non-negative integer");
+                        goto done;
+                    }
+                    if_rev = 0;
+                    for (size_t k = 0; k < x->n; k++) if_rev = if_rev * 10 + (x->s[k] - '0');
+                    strip = 1;
+                }
+            }
+            if (strip) {
+                buf_putc(&args, '{');
+                int first = 1;
+                for (size_t i = 0; i < v->n; i++) {
+                    const JrMember *mb = &v->members[i];
+                    if (jr_key_is(mb, "dry_run") || jr_key_is(mb, "if_rev")) continue;
+                    if (!first) buf_putc(&args, ',');
+                    first = 0;
+                    json_escape(&args, mb->key, mb->key_n);
+                    buf_putc(&args, ':');
+                    jr_write(&args, &mb->val);
+                }
+                buf_putc(&args, '}');
+                if (args.oom) {
+                    buf_puts(out, "out of memory");
+                    goto done;
+                }
+                argp = args.p, argn = args.len;
+            }
+        }
+    }
+    if (!s->open) {
+        buf_puts(out, READ_ONLY);
+        goto done;
+    }
+    {
+        cc_cmds l;
+        cc_cmds_init(&l);
+        /* CC_VERB_CONFLICT (if_rev is not s->rev) is a 400 too: the carriers know 200 and 400 only;
+         * its text starts with "conflict: ". */
+        if (cc_verb_run_ex(&s->model, name, argp, argn, dry_run, if_rev, s->rev, &l, out)) rc = CC_ERR;
+        else if (dry_run) cc_commands_json(l.v, l.n, out), rc = out->oom ? CC_ERR : CC_OK;
+        else rc = try_apply(s, l.v, l.n, out);
+        cc_cmds_free(&l);
+    }
+done:
+    buf_free(&args);
+    arena_free(&a);
+    return rc;
+}
+
 int cc_call(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out) {
     if (!strcmp(op, "query")) return call_query(s, name, body, n, out);
     if (!strcmp(op, "action")) return call_action(s, name, body, n, out);
@@ -1215,29 +1351,7 @@ int cc_call(cc_session *s, const char *op, const char *name, const char *body, s
         cc_cmds_free(&l);
         return rc;
     }
-    if (!strcmp(op, "verb")) { /* calls.rs:512-522 call_verb */
-        int blank = 1; /* args_json.trim().is_empty(): null */
-        for (size_t i = 0; i < n; i++)
-            if (body[i] != ' ' && body[i] != '\t' && body[i] != '\n' && body[i] != '\r') blank = 0;
-        if (!blank) { /* serde_json::from_str first: a body that does not parse fails before the model */
-            Arena a;
-            arena_init(&a, 0);
-            JrError je;
-            int ok = jr_parse(&a, body, n, &je) != NULL;
-            if (!ok) buf_puts(out, je.msg);
-            arena_free(&a);
-            if (!ok) return CC_ERR;
-        }
-        if (!s->open) {
-            buf_puts(out, READ_ONLY);
-            return CC_ERR;
-        }
-        cc_cmds l;
-        cc_cmds_init(&l);
-        int rc = cc_verb_run(&s->model, name, body, blank ? 0 : n, &l, out) ? CC_ERR : try_apply(s, l.v, l.n, out);
-        cc_cmds_free(&l);
-        return rc;
-    }
+    if (!strcmp(op, "verb")) return call_verb(s, name, body, n, out);
     buf_puts(out, "unknown op "); /* the router checked cc_known_op */
     buf_puts(out, op);
     return CC_ERR;
