@@ -4,7 +4,9 @@
 # and lib/libmanifoldc.so for tcc, which cannot link C++ static archives). Nothing is committed:
 # vendor/manifold/SOURCE records the pinned version and the licence.
 #   deps.sh            clone the pinned tag and build it with cmake (the options of the
-#                      manifold-csg-sys crate Rust uses: no TBB, static, C binding on). Minutes.
+#                      manifold-csg-sys crate Rust uses: no TBB, static, C binding on; SIZE1: one
+#                      section per function, so build.sh release's --gc-sections drops the unused
+#                      ones: the kernel 1.13 MB -> 0.41 MB in the program). Minutes.
 #   MANIFOLD_DIR=<dir> deps.sh
 #                      no build: take the libraries of an existing build. <dir> is the `out`
 #                      directory of the manifold-csg-sys crate's cargo build (build/ and
@@ -86,6 +88,7 @@ deps_main() {
     cmake -S "$src" -B "$bld" -DCMAKE_BUILD_TYPE=Release -DMANIFOLD_TEST=OFF -DMANIFOLD_PYBIND=OFF \
         -DMANIFOLD_JSBIND=OFF -DMANIFOLD_CBIND=ON -DMANIFOLD_CROSS_SECTION=ON -DMANIFOLD_USE_BUILTIN_CLIPPER2=ON \
         -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DMANIFOLD_PAR=OFF \
+        "-DCMAKE_C_FLAGS=-ffunction-sections -fdata-sections" "-DCMAKE_CXX_FLAGS=-ffunction-sections -fdata-sections" \
         ${CMAKE_OSX_ARCHITECTURES:+"-DCMAKE_OSX_ARCHITECTURES=$CMAKE_OSX_ARCHITECTURES"}
     cmake --build "$bld" -j "${JOBS:-2}"
     deps_import "$bld" "$src"

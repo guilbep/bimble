@@ -256,6 +256,10 @@ release() {
     local flags=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function -pthread
         "$VDEF" ${KFLAGS[@]+"${KFLAGS[@]}"} ${PLATFORM_CFLAGS[@]+"${PLATFORM_CFLAGS[@]}"} ${archf[@]+"${archf[@]}"}
         "${INC[@]}" -Ihost)
+    # SIZE1: one section per function and datum, and the link drops the unused ones (--gc-sections;
+    # deps.sh builds manifold the same way): 3,674,408 -> 2,232,352 bytes on aarch64 Linux, the
+    # read benchmark unchanged (results/native-size.md). Linux only: macOS's -dead_strip is not measured.
+    [[ $CC_OS == Darwin ]] || flags+=(-ffunction-sections -fdata-sections)
     compile_release() { # at most $JOBS at once: wait for the oldest (bash 3.2 has no `wait -n`)
         local f o q=() rc=0 pid
         for f in "${LIB[@]}" "${SESSION[@]}" "${HOST[@]}"; do
@@ -283,7 +287,7 @@ release() {
     else
         # SIZE1: the link map (out/release/bimble-ccore.map) gives tools/weight.mjs the bytes per object.
         step "link bimble-ccore (kernel static)" clang -pthread -s "$obj"/*.o "$kd/libmanifoldc.a" "$kd/libmanifold.a" \
-            "$kd/libClipper2.a" -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc -lm -Wl,-Map="$R/bimble-ccore.map" -o "$bin"
+            "$kd/libClipper2.a" -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc -lm -Wl,--gc-sections -Wl,-Map="$R/bimble-ccore.map" -o "$bin"
     fi
     local web
     web=$(cd "$stage" && pwd)/web
