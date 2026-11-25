@@ -35,6 +35,10 @@
  *   undo(h, res), redo(h, res) -> status    answer "true"/"false", value 1/0
  *   history(h, res) -> status               {"redo":[…],"undo":[…]}, newest first, at most 50
  *   save(h, res) -> status                  file::to_string (pretty JSON, no final newline)
+ *   export_ifc(h, schema, name, name_len, stamp, stamp_len, res) -> status
+ *                                           bimble_ifc::export_as (ifc_out.h): schema 0 IFC4,
+ *                                           1 IFC2x3; name and stamp go in FILE_NAME; answer =
+ *                                           the STEP text
  *   mesh(h, flags, res) -> status           the scene as BMSH (layout below); flags bit 0 = local
  *   guid_seed(k)                            k: i64 (a BigInt in JS). k > 0: new ids are
  *                                           from_u128(k), from_u128(k+1)… ; 0: random

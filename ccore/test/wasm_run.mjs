@@ -259,6 +259,14 @@ suite("ifc");
   eq("frame_reimport.json", M.remask(save(back.value)), read("ifc/frame_reimport.json"));
   X.close(back.value), X.close(o.value);
   X.guid_seed(0n);
+  // export_ifc: frame.json as IFC4 = golden/ifc/frame.ifc (the version masked, golden/README.md)
+  const f = openText(read("frame.json"));
+  const ex = call(X.export_ifc, ["frame.ifc", "2026-01-01T00:00:00"], f.value, 0);
+  check("export_ifc IFC4 -> 200", ex.status === 200, ex.text.slice(0, 200));
+  eq("export_ifc IFC4 = golden/ifc/frame.ifc", ex.text.replace("'bimble 0.1.0-ccore'", "'bimble <version>'"), read("ifc/frame.ifc"));
+  const ex3 = call(X.export_ifc, ["frame.ifc", "2026-01-01T00:00:00"], f.value, 1);
+  check("export_ifc IFC2x3 -> 200", ex3.status === 200 && ex3.text.includes("FILE_SCHEMA(('IFC2X3'));"), ex3.text.slice(0, 200));
+  X.close(f.value);
   const bad = openIfc("ISO-10303-21;\nHEADER;\nENDSEC;\n");
   check("not an IFC file -> 400", bad.status === 400, `${bad.status} ${bad.text}`);
   end();

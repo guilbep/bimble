@@ -11,6 +11,7 @@
 #include "wasm_api.h" /* the few libc functions below, freestanding */
 #else
 #include <stdio.h>
+#include <time.h>
 #endif
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,7 @@
 #include "calls.h"
 #include "file.h"
 #include "guid.h"
+#include "ifc_out.h"
 #include "json_r.h"
 #include "json_w.h"
 #include "library.h"
@@ -52,8 +54,7 @@ int cc_known_op(const char *op) {
  * and hatching on (bimble-render/src/lib.rs:1431-1432), the four plan annotations on
  * (bimble-drawing/src/template.rs:222-226), place_<kind> while placing that kind, else off.
  * `enabled`: action_enabled (ribbon.rs:555-612) for the actions the C core runs (save, undo, redo,
- * place_*, home); every other one is off (spec §1). Deviation: export_ifc4 is off, the C core has
- * no IFC writer yet. */
+ * place_*, home, export_ifc4, export_ifc2x3); every other one is off (spec §1). */
 typedef struct {
     const char *name, *label, *tab, *shortcut;
     char pressed;
@@ -533,6 +534,7 @@ static int action_enabled(const char *name) { /* ribbon.rs:555-612, the C core's
     if (!strcmp(name, "undo")) return s->open && s->hist.nundo > 0;
     if (!strcmp(name, "redo")) return s->open && s->hist.nredo > 0;
     if (!strncmp(name, "place_", 6)) return s->open;
+    if (!strcmp(name, "export_ifc4") || !strcmp(name, "export_ifc2x3")) return s->open; /* ribbon.rs:577 */
     if (!strcmp(name, "home")) return 1;
     return 0;
 }
@@ -840,6 +842,56 @@ static void save(void) {
     else fprintf(stderr, "bimble-ccore: %s: cannot write\n", s->path);
 }
 
+/* ---- export IFC (share.rs:50-85 export_ifc) ----
+ * Rust asks where to save, proposing "<stem>.ifc"; the host has no dialog and writes that name
+ * next to the model (never over the open file). The timestamp is now, UTC (date::iso_utc).
+ * Deviation, wasm: the module has no files and no clock; the page calls the export export_ifc
+ * (wasm_api.h) and the action only logs. */
+
+static void export_ifc(cc_ifc_schema schema) {
+    cc_session *s = ses();
+    const char *label = schema == CC_IFC4 ? "IFC4" : "IFC2x3";
+#ifdef __wasm__
+    (void)s;
+    fprintf(stderr, "bimble-ccore: Export %s: the page calls export_ifc\n", label);
+#else
+    const char *slash = strrchr(s->path, '/');
+    const char *name = slash ? slash + 1 : s->path;
+    const char *dot = strrchr(name, '.');
+    size_t dir = (size_t)(name - s->path), stem = dot && dot != name ? (size_t)(dot - name) : strlen(name);
+    char to[4096 + 16], file[4096 + 8];
+    if (stem == 0) snprintf(file, sizeof file, "model.ifc");
+    else snprintf(file, sizeof file, "%.*s.ifc", (int)stem, name);
+    snprintf(to, sizeof to, "%.*s%s", (int)dir, s->path, file);
+    if (!strcmp(to, s->path)) {
+        fprintf(stderr, "bimble-ccore: %s: export would overwrite the open file\n", to);
+        return;
+    }
+    char stamp[32];
+    cc_iso_utc((int64_t)time(NULL), stamp);
+    Buf b;
+    buf_init(&b);
+    int ok = cc_ifc_export(&s->model, file, stamp, schema, &b) == 0 && !b.oom;
+    if (ok) {
+        char tmp[4096 + 32];
+        snprintf(tmp, sizeof tmp, "%s.tmp", to);
+        FILE *f = fopen(tmp, "wb");
+        ok = f && fwrite(b.p, 1, b.len, f) == b.len;
+        if (f && fclose(f)) ok = 0;
+        if (ok) ok = rename(tmp, to) == 0;
+        else remove(tmp);
+    }
+    buf_free(&b);
+    /* share.rs:68-77: the outcome goes in the view message; the call itself succeeds. */
+    if (ok && schema == CC_IFC4) fprintf(stderr, "bimble-ccore: Saved %s (%s)\n", to, label);
+    else if (ok)
+        fprintf(stderr, "bimble-ccore: Saved %s (%s): material values (density, strength) and the map conversion "
+                        "are not in IFC2x3; the place and project north are kept in the building's placement\n",
+                to, label);
+    else fprintf(stderr, "bimble-ccore: %s: cannot write\n", to);
+#endif
+}
+
 /* calls.rs:538-547 call_action, ribbon.rs:650 run_action. */
 static int call_action(const char *name, cc_buf *out) {
     const ActionRow *a = NULL;
@@ -857,6 +909,8 @@ static int call_action(const char *name, cc_buf *out) {
         return CC_ERR;
     }
     if (!strcmp(name, "save")) save();
+    else if (!strcmp(name, "export_ifc4")) export_ifc(CC_IFC4);
+    else if (!strcmp(name, "export_ifc2x3")) export_ifc(CC_IFC2X3);
     else if (!strcmp(name, "undo")) undo_redo(1);
     else if (!strcmp(name, "redo")) undo_redo(0);
     else if (!strncmp(name, "place_", 6)) {

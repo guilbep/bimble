@@ -102,7 +102,7 @@ try {
   check("query actions key order (calls.rs:325, json! sorted)", actions.length > 0 && actions.every((a) => JSON.stringify(Object.keys(a)) === ORDER));
   check("query actions: unique names", new Set(actions.map((a) => a.name)).size === 54);
   const enabled = actions.filter((a) => a.enabled).map((a) => a.name).sort().join(",");
-  // No model: save, undo, redo and place_* need one (ribbon.rs:580-590); export_ifc4 is not in the C core.
+  // No model: save, undo, redo, place_* and export_ifc* need one (ribbon.rs:577-590).
   check("query actions: enabled set without a model (ribbon.rs:555)", enabled === "home", enabled);
   const hi = await call("query", "history");
   check("query history -> {redo:[],undo:[]}", hi.status === 200 && hi.body === '{"redo":[],"undo":[]}', hi.body);
@@ -229,7 +229,7 @@ try {
   check("model: query storeys = golden/query.txt first record", sto.status === 200 && sto.body === goldenAnswer("storeys"), sto.body);
   const en = async () => (await mq("actions")).filter((a) => a.enabled).map((a) => a.name).sort().join(",");
   const en0 = await en();
-  check("model: enabled actions, nothing to undo or save", en0 === "home,place_beam,place_column,place_slab,place_wall", en0);
+  check("model: enabled actions, nothing to undo or save", en0 === "export_ifc2x3,export_ifc4,home,place_beam,place_column,place_slab,place_wall", en0);
   const r0 = await rev();
   check("model: rev 1 after load (lib.rs:1679)", r0 === 1, String(r0));
 
@@ -244,6 +244,18 @@ try {
   check("model: action save -> 200", sv0.status === 200, sv0.body);
   check("model: saved bytes = cc_model_save (= frame.json)", Buffer.compare(readFileSync(model), frameBytes) === 0);
   check("model: saved -> unsaved false, save disabled", (await mq("state")).unsaved === false && !(await en()).includes("save"));
+
+  // action export_ifc4 writes frame.ifc next to the model (share.rs:50): ifc_out's bytes, which the
+  // ifc_out suite checks against golden/ifc/frame.ifc; here the version and the timestamp (now) masked.
+  const ex = await mcall("action", "export_ifc4");
+  const ifcPath = join(TMP, "frame.ifc");
+  let ifc = "";
+  try { ifc = readFileSync(ifcPath, "utf8"); } catch {}
+  const stamp = /^FILE_NAME\('frame\.ifc','(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)'/m.exec(ifc);
+  const age = stamp ? Math.abs(Date.now() - Date.parse(`${stamp[1]}Z`)) : NaN;
+  const masked = ifc.replace(/^(FILE_NAME\('frame\.ifc',)'[^']*'/m, "$1'2026-01-01T00:00:00'").replace("'bimble 0.1.0-ccore'", "'bimble <version>'");
+  check("model: action export_ifc4 writes frame.ifc = golden/ifc/frame.ifc (timestamp now, UTC)",
+    ex.status === 200 && age < 120000 && masked === readFileSync(join(GOLDEN, "ifc/frame.ifc"), "utf8"), `${ex.status} ${ex.body} age ${age} ms, ${ifc.length} bytes`);
 
   // verb place: rev + 1, the history label of golden/verbs.txt.
   const r1 = await rev();

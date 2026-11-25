@@ -11,6 +11,7 @@
 #include "guid.h"
 #include "history.h"
 #include "ifc_in.h"
+#include "ifc_out.h"
 #include "model.h"
 #include "query.h"
 #include "scene.h"
@@ -211,6 +212,30 @@ EXPORT("save") int wa_save(int h, cc_wasm_res *r) {
     if (cc_model_save(&d->m, &b)) {
         buf_free(&b);
         return text(r, 500, "the model cannot be saved (a non-finite value or out of memory)");
+    }
+    return answer(r, &b, 200);
+}
+
+/* bimble_ifc::export_as. The name and the timestamp are copied to NUL-terminated strings. */
+EXPORT("export_ifc") int wa_export_ifc(int h, int schema, const char *name, size_t nn, const char *stamp, size_t sn,
+                                       cc_wasm_res *r) {
+    Doc *d = doc(h, r);
+    if (!d) return 404;
+    r->value = 0;
+    if (schema != CC_IFC4 && schema != CC_IFC2X3) return text(r, 400, "unknown IFC schema (0: IFC4, 1: IFC2x3)");
+    char *n0 = malloc(nn + 1), *s0 = malloc(sn + 1);
+    Buf b;
+    buf_init(&b);
+    int rc = -1;
+    if (n0 && s0) {
+        memcpy(n0, name, nn), n0[nn] = 0;
+        memcpy(s0, stamp, sn), s0[sn] = 0;
+        rc = cc_ifc_export(&d->m, n0, s0, (cc_ifc_schema)schema, &b);
+    }
+    free(n0), free(s0);
+    if (rc || b.oom) {
+        buf_free(&b);
+        return text(r, 500, "the model cannot be exported (a non-finite value or out of memory)");
     }
     return answer(r, &b, 200);
 }
