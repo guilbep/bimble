@@ -1,0 +1,25 @@
+=== exp2/T8 dev loop in the browser  2026-11-24T22:04:21.715Z
+machine: arm64, 8 cores (unknown), 15.2 GiB, rustc 1.100.0 (0ef1bc386 2026-11-09), node v26.12.0, Chromium 153.0.8010.36 Arch Linux ARM
+native: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-B<mold>; headless Chromium (swiftshader), one Vite, 5 runs each after one untimed warm-up, alternating
+includes:
+  wasm build_s    = edit of calls.rs + npm run -s wasm:dev (cargo wasm build, wasm-bindgen, copy to public/bimble/)
+  wasm ready_s    = Page.reload -> data-bb-ready on the new document (page load, wasm fetch + instantiate, model fetch + open, first refresh, deep link)
+  wasm value_s    = Page.reload -> in-page query('state').spike === N (ready_s + the poll, 20 ms steps)
+  wasm total_s    = edit -> value (build_s + value_s)
+  native build_s  = edit of calls.rs + cargo build -p bimble-cli (mold)
+  native value_s  = kill old twin + start headless twin (open frame.bimble) + in-page query('state').spike === N over sync XHR, no page reload (20 ms steps, failed XHR retried)
+  native total_s  = edit -> value (build_s + value_s)
+  all times: wall clock from Node (performance.now); CDP round trips (~ms) included
+wasm   run 1: build_s 3.593  ready_s 1.153  value_s 1.185  total_s 4.778
+native run 1: build_s 1.524  value_s 0.086  total_s 1.610
+wasm   run 2: build_s 3.690  ready_s 0.965  value_s 0.967  total_s 4.657
+native run 2: build_s 1.574  value_s 0.082  total_s 1.657
+wasm   run 3: build_s 3.666  ready_s 0.977  value_s 0.980  total_s 4.645
+native run 3: build_s 1.580  value_s 0.101  total_s 1.681
+wasm   run 4: build_s 3.698  ready_s 0.859  value_s 0.862  total_s 4.560
+native run 4: build_s 1.612  value_s 0.100  total_s 1.713
+wasm   run 5: build_s 3.604  ready_s 1.048  value_s 1.051  total_s 4.655
+native run 5: build_s 1.532  value_s 0.093  total_s 1.625
+median wasm:   build 3.666 s, reload->ready 0.977 s, reload->value 0.980 s, total 4.655 s
+median native: build 1.574 s, restart->value 0.093 s, total 1.657 s
+ratio wasm/native total (medians): 2.81
