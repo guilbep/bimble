@@ -494,6 +494,22 @@ int main(int argc, char **argv) {
                 free(wj);
             }
             int stable = rc1 == rc2 && a.len == a2.len && !memcmp(a.p, a2.p, a.len);
+            /* The imported model through the binary form (v2) and back: the same text. */
+            if (strcmp(G[g].name, "chain18")) {
+                cc_model bm, bm2;
+                cc_ifc_report rq;
+                cc_guid_seed(1);
+                int rc = cc_ifc_import(&bm, &rq, t, tn, &err);
+                cc_ifc_report_free(&rq);
+                Buf bin, t1, t2;
+                buf_init(&bin), buf_init(&t1), buf_init(&t2);
+                int ok2 = !rc && !cc_model_save(&bm, &t1) && !cc_model_save_v2(&bm, &bin) &&
+                          !cc_model_load(&bm2, bin.p, bin.len, &err);
+                if (ok2) ok2 = !cc_model_save(&bm2, &t2) && t1.len == t2.len && !memcmp(t1.p, t2.p, t1.len), cc_model_free(&bm2);
+                check_true("imported model: binary save and load give the same model", ok2);
+                cc_model_free(&bm);
+                buf_free(&bin), buf_free(&t1), buf_free(&t2);
+            }
             int ok = model_ok && rep_ok;
             total++;
             matched += ok;
