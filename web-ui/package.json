@@ -6,6 +6,7 @@
     "wasm": "node scripts/copy-wasm.mjs",
     "wasm:dev": "PROFILE=dev LAB=1 ../scripts/build-web.sh && node scripts/copy-wasm.mjs",
     "dev": "vite",
+    "ccore:dev": "../ccore/dev.sh",
     "i18n-keys": "node scripts/i18n-keys.mjs",
     "typecheck": "node scripts/i18n-keys.mjs --check && vue-tsc --noEmit",
     "prebuild": "node scripts/i18n-keys.mjs",

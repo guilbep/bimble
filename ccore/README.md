@@ -26,3 +26,30 @@ Regenerate the goldens (a standalone Rust crate, not in the workspace; it pins t
 serde_json version). Commit the changed `.txt` files:
 
     cd ccore/golden/floats && CARGO_TARGET_DIR=../../out/cargo cargo run -j 2
+
+## Dev loop
+
+One command runs the C core behind the unchanged Vue lab and restarts it on every save (needs
+tcc, `inotifywait` from inotify-tools, and `npm ci` once in `web-ui/`):
+
+    ccore/dev.sh [model]          # or, in web-ui/: npm run ccore:dev
+
+It builds with `build.sh tcc`, starts Vite (`web-ui/`, port 5173) and the host (port 47400) and
+prints the lab URL (`lab: http://localhost:5173/?native=1&gl=1&port=47400&token=…`). Open it once.
+Then every save of a `*.c` or `*.h` file in `src/` or `host/` rebuilds (50 ms debounce) and
+restarts the host on the same port, token and model; the open page sees the new epoch in the
+change feed and re-syncs by itself. Each cycle prints `rebuilt in N ms, host up in M ms` (host up:
+from the stop of the old host to "listening" of the new one). A build error prints the compiler
+output and keeps the old host running. Ctrl-C stops Vite, the host and the watcher.
+
+- model: default, a fresh copy of `golden/frame.json` in `out/dev/` per run (the golden is never
+  written). The host log is `out/dev/host.log`, Vite's is `out/dev/vite.log`.
+- `CCORE_DEV_PORT` (host, default 47400), `CCORE_DEV_VITE` (Vite, default 5173; other ports are
+  passed to the host in `BIMBLE_ORIGINS`), `BIMBLE_TOKEN` (default: random, one per run).
+- The host runs from a copy of the binary (`out/dev/bimble-ccore`), so a build never writes the
+  file of the running host.
+
+Test: `node ccore/test/dev_test.mjs` (host 47411, Vite 5199) edits `host/calls.c` five times, then
+breaks and reverts it, and restores it byte for byte. Measured on the 16 GB aarch64 dev machine,
+three runs of 5 cycles: rebuild 190-283 ms (all of `build.sh tcc`: library, the test binaries and the host),
+host up 9-26 ms.
