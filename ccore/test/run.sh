@@ -12,6 +12,8 @@ case "$CC" in
   tcc) FLAGS=(-g -Wall -DRYU_ONLY_64_BIT_OPS) ;;
   *)   FLAGS=(-std=c11 -O1 -g -Wall -Wextra -Werror -Wno-unused-function) ;;
 esac
+# Extra flags, e.g. CC=clang CFLAGS="-fsanitize=address,undefined -g" test/run.sh file
+if [[ -n ${CFLAGS:-} ]]; then read -r -a extra <<< "$CFLAGS"; FLAGS+=("${extra[@]}"); fi
 out="out/run-$(basename "$CC")"
 mkdir -p "$out"
 status=0

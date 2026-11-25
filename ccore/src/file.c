@@ -1,0 +1,773 @@
+/* .bimble JSON text form: decode the DOM like serde derive does for model.rs, encode like
+ * serde_json::to_string_pretty. Rust behaviours copied (see file.h and the notes below):
+ * - unknown fields are ignored (no deny_unknown_fields), except in MaterialProps which denies
+ *   them; ignored fields are lost on save, as in Rust;
+ * - a duplicate struct field is an error ("duplicate field `x`"); a duplicate map key keeps the
+ *   last value (BTreeMap insert);
+ * - sections Rust knows and the C core does not hold (views, sheets, schedules, georef,
+ *   openings, mesh arrays by index or hash) are refused when non-empty, never dropped. */
+#include "file.h"
+#include <stdlib.h>
+#include <string.h>
+#include "json_r.h"
+#include "json_w.h"
+
+typedef struct {
+    Arena *a; /* the model's arena */
+    cc_error *err;
+    int failed;
+    Buf msg;
+} D;
+
+static int f_finite(double x) { return x - x == 0.0; }
+
+static int fail_buf(D *d, size_t off) {
+    if (!d->failed) {
+        d->failed = 1;
+        const char *pre = "parse: ";
+        size_t pn = strlen(pre), n = d->msg.oom ? 0 : d->msg.len;
+        if (off == CC_NO_OFFSET) pn = 0;
+        size_t cap = sizeof d->err->msg - 1 - pn;
+        if (n > cap) {
+            n = cap;
+            while (n && ((unsigned char)d->msg.p[n] & 0xC0) == 0x80) n--;
+        }
+        memcpy(d->err->msg, pre, pn);
+        if (n) memcpy(d->err->msg + pn, d->msg.p, n);
+        d->err->msg[pn + n] = 0;
+        d->err->offset = off;
+    }
+    return -1;
+}
+
+static int dfail(D *d, size_t off, const char *a, const char *b, const char *c) {
+    if (d->failed) return -1;
+    buf_clear(&d->msg);
+    if (a) buf_puts(&d->msg, a);
+    if (b) buf_puts(&d->msg, b);
+    if (c) buf_puts(&d->msg, c);
+    return fail_buf(d, off);
+}
+
+/* serde's "invalid type: <unexpected>, expected <what>". */
+static int type_err(D *d, const JrVal *v, const char *expected) {
+    if (d->failed) return -1;
+    buf_clear(&d->msg);
+    buf_puts(&d->msg, "invalid type: ");
+    switch (v->type) {
+    case JR_NULL: buf_puts(&d->msg, "null"); break;
+    case JR_BOOL: buf_puts(&d->msg, v->b ? "boolean `true`" : "boolean `false`"); break;
+    case JR_NUM:
+        buf_puts(&d->msg, v->num_int ? "integer `" : "floating point `");
+        buf_append(&d->msg, v->s, v->n < 64 ? v->n : 64);
+        buf_putc(&d->msg, '`');
+        break;
+    case JR_STR:
+        buf_puts(&d->msg, "string ");
+        cc_buf_debug_str(&d->msg, v->s, v->n < 200 ? v->n : 200);
+        break;
+    case JR_ARR: buf_puts(&d->msg, "sequence"); break;
+    default: buf_puts(&d->msg, "map"); break;
+    }
+    buf_puts(&d->msg, ", expected ");
+    buf_puts(&d->msg, expected);
+    return fail_buf(d, v->off);
+}
+
+static int d_f64(D *d, const JrVal *v, double *out) {
+    if (v->type != JR_NUM) return type_err(d, v, "f64");
+    if (!f_finite(v->num)) return dfail(d, v->off, "number out of range", 0, 0);
+    *out = v->num;
+    return 0;
+}
+
+static int d_u32(D *d, const JrVal *v, uint32_t *out) {
+    if (v->type != JR_NUM || !v->num_int) return type_err(d, v, "u32");
+    if (v->num_neg || v->num > 4294967295.0) {
+        buf_clear(&d->msg);
+        buf_puts(&d->msg, "invalid value: integer `");
+        buf_append(&d->msg, v->s, v->n < 64 ? v->n : 64);
+        buf_puts(&d->msg, "`, expected u32");
+        return fail_buf(d, v->off);
+    }
+    *out = (uint32_t)v->num;
+    return 0;
+}
+
+static int d_str(D *d, const JrVal *v, cc_str *out) {
+    if (v->type != JR_STR) return type_err(d, v, "a string");
+    char *p = v->n ? arena_dup(d->a, v->s, v->n) : NULL;
+    if (v->n && !p) return dfail(d, v->off, "out of memory", 0, 0);
+    out->p = p;
+    out->n = v->n;
+    return 0;
+}
+
+static int gid_from(D *d, const char *s, size_t n, size_t off, cc_gid *out) {
+    if (!cc_gid_valid(s, n)) {
+        buf_clear(&d->msg);
+        buf_puts(&d->msg, "invalid IFC GlobalId: ");
+        cc_buf_debug_str(&d->msg, s, n < 200 ? n : 200);
+        return fail_buf(d, off);
+    }
+    memcpy(out->c, s, 22);
+    return 0;
+}
+
+static int d_gid(D *d, const JrVal *v, cc_gid *out) {
+    if (v->type != JR_STR) return type_err(d, v, "a string");
+    return gid_from(d, v->s, v->n, v->off, out);
+}
+
+/* Struct fields by name: out[i] = the member's value or NULL. Duplicates are errors; unknown
+ * members are ignored, or refused when `deny_unknown`. */
+static int d_fields(D *d, const JrVal *obj, const char *const *names, int nn, const JrVal **out,
+                    const char *what, int deny_unknown) {
+    if (obj->type != JR_OBJ) return type_err(d, obj, what);
+    for (int i = 0; i < nn; i++) out[i] = NULL;
+    for (size_t j = 0; j < obj->n; j++) {
+        const JrMember *m = &obj->members[j];
+        int i = 0;
+        while (i < nn && !jr_key_is(m, names[i])) i++;
+        if (i == nn) {
+            if (!deny_unknown) continue;
+            buf_clear(&d->msg);
+            buf_puts(&d->msg, "unknown field `");
+            buf_append(&d->msg, m->key, m->key_n < 200 ? m->key_n : 200);
+            buf_puts(&d->msg, "`, expected one of ");
+            for (int k = 0; k < nn; k++) {
+                if (k) buf_puts(&d->msg, ", ");
+                buf_putc(&d->msg, '`');
+                buf_puts(&d->msg, names[k]);
+                buf_putc(&d->msg, '`');
+            }
+            return fail_buf(d, m->val.off);
+        }
+        if (out[i]) return dfail(d, m->val.off, "duplicate field `", names[i], "`");
+        out[i] = &m->val;
+    }
+    return 0;
+}
+
+static int need(D *d, const JrVal *obj, const JrVal *f, const char *name) {
+    if (f) return 0;
+    return dfail(d, obj->off, "missing field `", name, "`");
+}
+
+static int d_vec(D *d, const JrVal *v, double *out, size_t n) {
+    if (v->type != JR_ARR) return type_err(d, v, n == 2 ? "an array of length 2" : "an array of length 3");
+    if (v->n != n) {
+        buf_clear(&d->msg);
+        buf_puts(&d->msg, "invalid length ");
+        buf_u64(&d->msg, v->n);
+        buf_puts(&d->msg, n == 2 ? ", expected an array of length 2" : ", expected an array of length 3");
+        return fail_buf(d, v->off);
+    }
+    for (size_t i = 0; i < n; i++)
+        if (d_f64(d, &v->items[i], &out[i])) return -1;
+    return 0;
+}
+
+static void *alloc_n(D *d, size_t n, size_t sz, size_t off) {
+    if (n == 0) return NULL;
+    if (n > ((size_t)-1) / sz) { dfail(d, off, "out of memory", 0, 0); return NULL; }
+    void *p = arena_alloc(d->a, n * sz, 8);
+    if (!p) dfail(d, off, "out of memory", 0, 0);
+    return p;
+}
+
+static int d_loop(D *d, const JrVal *v, cc_loop *out) {
+    if (v->type != JR_ARR) return type_err(d, v, "a sequence");
+    out->n = v->n;
+    out->pts = alloc_n(d, v->n, sizeof *out->pts, v->off);
+    if (v->n && !out->pts) return -1;
+    for (size_t i = 0; i < v->n; i++)
+        if (d_vec(d, &v->items[i], out->pts[i], 2)) return -1;
+    return 0;
+}
+
+static int d_placement(D *d, const JrVal *v, cc_placement *p) {
+    static const char *const F[] = {"origin", "z_axis", "x_axis"};
+    const JrVal *f[3];
+    if (d_fields(d, v, F, 3, f, "struct Placement", 0)) return -1;
+    for (int i = 0; i < 3; i++)
+        if (need(d, v, f[i], F[i])) return -1;
+    if (d_vec(d, f[0], p->origin, 3) || d_vec(d, f[1], p->z_axis, 3) || d_vec(d, f[2], p->x_axis, 3))
+        return -1;
+    return 0;
+}
+
+/* Three f64 fields in order (the rectangle generators and the wall). */
+static int d_three(D *d, const JrVal *v, const char *a, const char *b, const char *c, double *out) {
+    const char *names[3] = {a, b, c};
+    const JrVal *f[3];
+    if (d_fields(d, v, names, 3, f, "struct variant", 0)) return -1;
+    for (int i = 0; i < 3; i++)
+        if (need(d, v, f[i], names[i]) || d_f64(d, f[i], &out[i])) return -1;
+    return 0;
+}
+
+static int d_generator(D *d, const JrVal *v, cc_generator *g) {
+    if (v->type != JR_OBJ) return type_err(d, v, "internally tagged enum Generator");
+    const JrVal *kind = NULL;
+    for (size_t j = 0; j < v->n; j++)
+        if (jr_key_is(&v->members[j], "kind")) {
+            if (kind) return dfail(d, v->members[j].val.off, "duplicate field `kind`", 0, 0);
+            kind = &v->members[j].val;
+        }
+    if (!kind) return dfail(d, v->off, "missing field `kind`", 0, 0);
+    if (kind->type != JR_STR) return type_err(d, kind, "variant identifier");
+    int k = 0;
+    while (k < CC_GEN_COUNT && !(strlen(cc_gen_kind_name((cc_gen_kind)k)) == kind->n &&
+                                 memcmp(cc_gen_kind_name((cc_gen_kind)k), kind->s, kind->n) == 0))
+        k++;
+    if (k == CC_GEN_COUNT) {
+        buf_clear(&d->msg);
+        buf_puts(&d->msg, "unknown variant ");
+        buf_putc(&d->msg, '`');
+        buf_append(&d->msg, kind->s, kind->n < 200 ? kind->n : 200);
+        buf_puts(&d->msg, "`, expected one of `rect_column`, `rect_beam`, `slab`, `wall`, "
+                          "`pad_footing`, `extruded_polygon`, `mesh`");
+        return fail_buf(d, kind->off);
+    }
+    g->kind = (cc_gen_kind)k;
+    double t[3];
+    switch (g->kind) {
+    case CC_GEN_RECT_COLUMN:
+    case CC_GEN_PAD_FOOTING:
+        if (d_three(d, v, "width", "depth", "height", t)) return -1;
+        g->u.col.width = t[0], g->u.col.depth = t[1], g->u.col.height = t[2];
+        return 0;
+    case CC_GEN_RECT_BEAM:
+        if (d_three(d, v, "width", "height", "length", t)) return -1;
+        g->u.beam.width = t[0], g->u.beam.height = t[1], g->u.beam.length = t[2];
+        return 0;
+    case CC_GEN_WALL:
+        if (d_three(d, v, "length", "thickness", "height", t)) return -1;
+        g->u.wall.length = t[0], g->u.wall.thickness = t[1], g->u.wall.height = t[2];
+        return 0;
+    case CC_GEN_SLAB: {
+        static const char *const F[] = {"outline", "thickness"};
+        const JrVal *f[2];
+        if (d_fields(d, v, F, 2, f, "struct variant Generator::Slab", 0)) return -1;
+        if (need(d, v, f[0], F[0]) || need(d, v, f[1], F[1])) return -1;
+        if (d_loop(d, f[0], &g->u.slab.outline) || d_f64(d, f[1], &g->u.slab.thickness)) return -1;
+        return 0;
+    }
+    case CC_GEN_EXTRUDED_POLYGON: {
+        static const char *const F[] = {"outline", "voids", "height"};
+        const JrVal *f[3];
+        if (d_fields(d, v, F, 3, f, "struct variant Generator::ExtrudedPolygon", 0)) return -1;
+        if (need(d, v, f[0], F[0]) || need(d, v, f[2], F[2])) return -1;
+        if (d_loop(d, f[0], &g->u.poly.outline)) return -1;
+        g->u.poly.voids = NULL;
+        g->u.poly.nvoids = 0;
+        if (f[1]) {
+            if (f[1]->type != JR_ARR) return type_err(d, f[1], "a sequence");
+            g->u.poly.nvoids = f[1]->n;
+            g->u.poly.voids = alloc_n(d, f[1]->n, sizeof(cc_loop), f[1]->off);
+            if (f[1]->n && !g->u.poly.voids) return -1;
+            for (size_t i = 0; i < f[1]->n; i++)
+                if (d_loop(d, &f[1]->items[i], &g->u.poly.voids[i])) return -1;
+        }
+        return d_f64(d, f[2], &g->u.poly.height);
+    }
+    case CC_GEN_MESH: {
+        static const char *const F[] = {"positions", "indices"};
+        const JrVal *f[2];
+        if (d_fields(d, v, F, 2, f, "struct variant Generator::Mesh", 0)) return -1;
+        if (need(d, v, f[0], F[0]) || need(d, v, f[1], F[1])) return -1;
+        for (int i = 0; i < 2; i++)
+            if (f[i]->type == JR_NUM || f[i]->type == JR_STR)
+                return dfail(d, f[i]->off, "unsupported by the C core: mesh arrays by index or hash", 0, 0);
+            else if (f[i]->type != JR_ARR)
+                return type_err(d, f[i], "a mesh array, its index in the file or its hash");
+        g->u.mesh.npositions = f[0]->n;
+        g->u.mesh.positions = alloc_n(d, f[0]->n, sizeof *g->u.mesh.positions, f[0]->off);
+        if (f[0]->n && !g->u.mesh.positions) return -1;
+        for (size_t i = 0; i < f[0]->n; i++)
+            if (d_vec(d, &f[0]->items[i], g->u.mesh.positions[i], 3)) return -1;
+        g->u.mesh.nindices = f[1]->n;
+        g->u.mesh.indices = alloc_n(d, f[1]->n, sizeof(uint32_t), f[1]->off);
+        if (f[1]->n && !g->u.mesh.indices) return -1;
+        for (size_t i = 0; i < f[1]->n; i++)
+            if (d_u32(d, &f[1]->items[i], &g->u.mesh.indices[i])) return -1;
+        return 0;
+    }
+    default: return -1;
+    }
+}
+
+static int d_enum(D *d, const JrVal *v, const char *(*name)(int), int count, const char *expected,
+                  int *out) {
+    if (v->type != JR_STR) return type_err(d, v, "variant identifier");
+    for (int k = 0; k < count; k++) {
+        const char *s = name(k);
+        if (strlen(s) == v->n && memcmp(s, v->s, v->n) == 0) {
+            *out = k;
+            return 0;
+        }
+    }
+    buf_clear(&d->msg);
+    buf_puts(&d->msg, "unknown variant `");
+    buf_append(&d->msg, v->s, v->n < 200 ? v->n : 200);
+    buf_puts(&d->msg, "`, expected one of ");
+    buf_puts(&d->msg, expected);
+    return fail_buf(d, v->off);
+}
+
+static const char *class_name_i(int k) { return cc_ifc_class_name((cc_ifc_class)k); }
+static const char *cat_name_i(int k) { return cc_category_name((cc_category)k); }
+
+/* ---- sorted maps ---- */
+
+typedef struct {
+    const char *key;
+    size_t key_n;
+    size_t idx; /* member index in the object */
+} Ent;
+
+static int ent_cmp(const Ent *a, const Ent *b) {
+    size_t n = a->key_n < b->key_n ? a->key_n : b->key_n;
+    int c = memcmp(a->key, b->key, n);
+    if (c) return c;
+    return a->key_n < b->key_n ? -1 : a->key_n > b->key_n;
+}
+
+/* Stable merge sort, then keep the last of equal keys (BTreeMap insert). Returns the count. */
+static size_t sort_dedupe(Ent *e, size_t n, Ent *tmp) {
+    for (size_t w = 1; w < n; w *= 2) {
+        for (size_t lo = 0; lo < n; lo += 2 * w) {
+            size_t mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n;
+            size_t i = lo, j = mid, k = lo;
+            while (i < mid && j < hi) tmp[k++] = ent_cmp(&e[j], &e[i]) < 0 ? e[j++] : e[i++];
+            while (i < mid) tmp[k++] = e[i++];
+            while (j < hi) tmp[k++] = e[j++];
+        }
+        memcpy(e, tmp, n * sizeof *e);
+    }
+    size_t out = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (out && ent_cmp(&e[out - 1], &e[i]) == 0) e[out - 1] = e[i];
+        else e[out++] = e[i];
+    }
+    return out;
+}
+
+/* The object's members sorted by key, duplicates resolved. *ents is malloc'd (caller frees). */
+static int map_entries(D *d, const JrVal *v, const char *expected, Ent **ents, size_t *count) {
+    *ents = NULL;
+    *count = 0;
+    if (v->type != JR_OBJ) return type_err(d, v, expected);
+    if (!v->n) return 0;
+    Ent *e = malloc(2 * v->n * sizeof *e);
+    if (!e) return dfail(d, v->off, "out of memory", 0, 0);
+    for (size_t i = 0; i < v->n; i++) {
+        e[i].key = v->members[i].key;
+        e[i].key_n = v->members[i].key_n;
+        e[i].idx = i;
+    }
+    *count = sort_dedupe(e, v->n, e + v->n);
+    *ents = e;
+    return 0;
+}
+
+/* BTreeMap<String, String>. */
+static int d_strmap(D *d, const JrVal *v, cc_kv **out, size_t *n) {
+    Ent *e;
+    size_t c;
+    *out = NULL;
+    *n = 0;
+    if (v->type == JR_OBJ)
+        for (size_t i = 0; i < v->n; i++)
+            if (v->members[i].val.type != JR_STR) return type_err(d, &v->members[i].val, "a string");
+    if (map_entries(d, v, "a map", &e, &c)) return -1;
+    cc_kv *kv = alloc_n(d, c, sizeof *kv, v->off);
+    int rc = c && !kv ? -1 : 0;
+    for (size_t i = 0; !rc && i < c; i++) {
+        const JrMember *m = &v->members[e[i].idx];
+        kv[i].key.n = m->key_n;
+        kv[i].key.p = m->key_n ? arena_dup(d->a, m->key, m->key_n) : NULL;
+        if (m->key_n && !kv[i].key.p) rc = dfail(d, v->off, "out of memory", 0, 0);
+        else rc = d_str(d, &m->val, &kv[i].value);
+    }
+    free(e);
+    if (rc) return -1;
+    *out = kv;
+    *n = c;
+    return 0;
+}
+
+static int d_storey(D *d, const JrVal *v, cc_storey *s) {
+    static const char *const F[] = {"id", "name", "elevation"};
+    const JrVal *f[3];
+    if (d_fields(d, v, F, 3, f, "struct Storey", 0)) return -1;
+    for (int i = 0; i < 3; i++)
+        if (need(d, v, f[i], F[i])) return -1;
+    return d_gid(d, f[0], &s->id) || d_str(d, f[1], &s->name) || d_f64(d, f[2], &s->elevation) ? -1 : 0;
+}
+
+static int d_props(D *d, const JrVal *v, cc_material_props *p) {
+    static const char *const F[] = {"density_kg_m3", "e_mpa", "strength_mpa", "source"};
+    const JrVal *f[4];
+    if (d_fields(d, v, F, 4, f, "struct MaterialProps", 1)) return -1;
+    int *has[3] = {&p->has_density, &p->has_e, &p->has_strength};
+    double *val[3] = {&p->density_kg_m3, &p->e_mpa, &p->strength_mpa};
+    for (int i = 0; i < 3; i++)
+        if (f[i] && f[i]->type != JR_NULL) {
+            if (d_f64(d, f[i], val[i])) return -1;
+            *has[i] = 1;
+        }
+    if (f[3] && d_str(d, f[3], &p->source)) return -1;
+    return 0;
+}
+
+static int d_material(D *d, const JrVal *v, cc_material *m) {
+    static const char *const F[] = {"id", "name", "category", "props"};
+    const JrVal *f[4];
+    if (d_fields(d, v, F, 4, f, "struct Material", 0)) return -1;
+    for (int i = 0; i < 3; i++)
+        if (need(d, v, f[i], F[i])) return -1;
+    int cat = 0;
+    if (d_gid(d, f[0], &m->id) || d_str(d, f[1], &m->name) ||
+        d_enum(d, f[2], cat_name_i, CC_CAT_COUNT,
+               "`concrete`, `steel`, `timber`, `masonry`, `insulation`, `earth`, `glass`, `other`", &cat))
+        return -1;
+    m->category = (cc_category)cat;
+    if (f[3] && d_props(d, f[3], &m->props)) return -1;
+    return 0;
+}
+
+static int d_element(D *d, const JrVal *v, cc_element *e) {
+    static const char *const F[] = {"id", "class", "name", "storey", "material", "placement",
+                                    "generator", "openings", "properties", "ifc_entity"};
+    const JrVal *f[10];
+    if (d_fields(d, v, F, 10, f, "struct Element", 0)) return -1;
+    for (int i = 0; i < 7; i++)
+        if (need(d, v, f[i], F[i])) return -1;
+    int cls = 0;
+    if (d_gid(d, f[0], &e->id) ||
+        d_enum(d, f[1], class_name_i, CC_IFC_CLASS_COUNT,
+               "`IfcColumn`, `IfcBeam`, `IfcSlab`, `IfcWall`, `IfcFooting`, `IfcBuildingElementProxy`", &cls) ||
+        d_str(d, f[2], &e->name) || d_gid(d, f[3], &e->storey) || d_gid(d, f[4], &e->material) ||
+        d_placement(d, f[5], &e->placement) || d_generator(d, f[6], &e->generator))
+        return -1;
+    e->cls = (cc_ifc_class)cls;
+    if (f[7]) {
+        if (f[7]->type != JR_ARR) return type_err(d, f[7], "a sequence");
+        if (f[7]->n) return dfail(d, f[7]->off, "unsupported by the C core: element openings", 0, 0);
+    }
+    if (f[8] && d_strmap(d, f[8], &e->properties, &e->nproperties)) return -1;
+    if (f[9] && f[9]->type != JR_NULL) {
+        if (d_str(d, f[9], &e->ifc_entity)) return -1;
+        e->has_ifc_entity = 1;
+    }
+    return 0;
+}
+
+/* BTreeMap<GlobalId, T>: keys parsed, sorted, last duplicate kept. `keys` gets the map keys. */
+typedef int (*DecodeFn)(D *, const JrVal *, void *);
+static int d_idmap(D *d, const JrVal *v, const char *expected, size_t sz, DecodeFn fn, void **out,
+                   size_t *n, cc_gid **keys) {
+    Ent *e;
+    size_t c;
+    *out = NULL;
+    *n = 0;
+    *keys = NULL;
+    if (v->type == JR_OBJ)
+        for (size_t i = 0; i < v->n; i++) {
+            cc_gid g;
+            if (gid_from(d, v->members[i].key, v->members[i].key_n, v->members[i].val.off, &g)) return -1;
+        }
+    if (map_entries(d, v, expected, &e, &c)) return -1;
+    /* Only the kept values are decoded: an error inside a value shadowed by a later duplicate key
+     * goes unreported here, where serde reports it. */
+    char *arr = alloc_n(d, c, sz, v->off);
+    cc_gid *k = alloc_n(d, c, sizeof *k, v->off);
+    int rc = c && (!arr || !k) ? -1 : 0;
+    for (size_t i = 0; !rc && i < c; i++) {
+        const JrMember *m = &v->members[e[i].idx];
+        memcpy(k[i].c, m->key, 22);
+        rc = fn(d, &m->val, arr + i * sz);
+    }
+    free(e);
+    if (rc) return -1;
+    *out = arr;
+    *n = c;
+    *keys = k;
+    return 0;
+}
+
+static int fn_storey(D *d, const JrVal *v, void *o) { return d_storey(d, v, o); }
+static int fn_material(D *d, const JrVal *v, void *o) { return d_material(d, v, o); }
+static int fn_element(D *d, const JrVal *v, void *o) { return d_element(d, v, o); }
+
+static int unsupported_if(D *d, const JrVal *v, int is_obj, const char *what) {
+    if (!v) return 0;
+    if (v->type != (is_obj ? JR_OBJ : JR_ARR)) return type_err(d, v, is_obj ? "a map" : "a sequence");
+    if (v->n) return dfail(d, v->off, "unsupported by the C core: ", what, " (use the Rust core)");
+    return 0;
+}
+
+typedef struct {
+    cc_gid *skeys, *mkeys, *ekeys;
+} Keys;
+
+static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
+    static const char *const F[] = {"project_id", "project_name", "storeys", "materials", "elements",
+                                    "views", "sheets", "project", "schedules", "georef"};
+    const JrVal *f[10];
+    if (d_fields(d, v, F, 10, f, "struct Model", 0)) return -1;
+    for (int i = 0; i < 5; i++)
+        if (need(d, v, f[i], F[i])) return -1;
+    void *p;
+    if (d_gid(d, f[0], &m->project_id) || d_str(d, f[1], &m->project_name)) return -1;
+    if (d_idmap(d, f[2], "a map", sizeof(cc_storey), fn_storey, &p, &m->nstoreys, &keys->skeys)) return -1;
+    m->storeys = p;
+    if (d_idmap(d, f[3], "a map", sizeof(cc_material), fn_material, &p, &m->nmaterials, &keys->mkeys)) return -1;
+    m->materials = p;
+    if (d_idmap(d, f[4], "a map", sizeof(cc_element), fn_element, &p, &m->nelements, &keys->ekeys)) return -1;
+    m->elements = p;
+    if (unsupported_if(d, f[5], 1, "views") || unsupported_if(d, f[6], 1, "sheets")) return -1;
+    if (f[7] && d_strmap(d, f[7], &m->project, &m->nproject)) return -1;
+    if (unsupported_if(d, f[8], 0, "schedules") || unsupported_if(d, f[9], 1, "georef")) return -1;
+    return 0;
+}
+
+/* The binary tables `positions` / `indices` of the top level: read and dropped, as Rust does
+ * outside a binary read. */
+static int d_table(D *d, const JrVal *v, int positions) {
+    if (v->type != JR_ARR) return type_err(d, v, "a sequence");
+    for (size_t i = 0; i < v->n; i++) {
+        const JrVal *a = &v->items[i];
+        if (a->type != JR_ARR) return type_err(d, a, "a sequence");
+        for (size_t j = 0; j < a->n; j++) {
+            double t[3];
+            uint32_t u;
+            if (positions ? d_vec(d, &a->items[j], t, 3) : d_u32(d, &a->items[j], &u)) return -1;
+        }
+    }
+    return 0;
+}
+
+static int d_file(D *d, const JrVal *root, cc_model *m, Keys *keys) {
+    static const char *const F[] = {"format", "positions", "indices", "version", "model"};
+    const JrVal *f[5];
+    cc_str format;
+    uint32_t version = 0;
+    if (d_fields(d, root, F, 5, f, "struct In", 0)) return -1;
+    if (need(d, root, f[0], F[0]) || d_str(d, f[0], &format)) return -1;
+    if (f[1] && d_table(d, f[1], 1)) return -1;
+    if (f[2] && d_table(d, f[2], 0)) return -1;
+    if (need(d, root, f[3], F[3]) || d_u32(d, f[3], &version)) return -1;
+    if (need(d, root, f[4], F[4]) || d_model(d, f[4], m, keys)) return -1;
+    if (format.n != 6 || memcmp(format.p, "bimble", 6) != 0) {
+        buf_clear(&d->msg);
+        buf_puts(&d->msg, "not a bimble file (format = ");
+        cc_buf_debug_str(&d->msg, format.p, format.n < 200 ? format.n : 200);
+        buf_putc(&d->msg, ')');
+        return fail_buf(d, CC_NO_OFFSET);
+    }
+    if (version != CC_FORMAT_VERSION) {
+        buf_clear(&d->msg);
+        buf_puts(&d->msg, "unsupported bimble format version ");
+        buf_u64(&d->msg, version);
+        buf_puts(&d->msg, " (this build reads 1 and 2)");
+        return fail_buf(d, CC_NO_OFFSET);
+    }
+    return 0;
+}
+
+int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) {
+    cc_error dummy;
+    if (!err) err = &dummy;
+    cc_model_init(m);
+    D d = {&m->arena, err, 0, {0}};
+    buf_init(&d.msg);
+    err->offset = CC_NO_OFFSET;
+    err->msg[0] = 0;
+    if (n > CC_MAX_FILE_BYTES) {
+        buf_puts(&d.msg, "file too large: ");
+        buf_u64(&d.msg, n);
+        buf_puts(&d.msg, " bytes");
+        fail_buf(&d, CC_NO_OFFSET);
+        buf_free(&d.msg);
+        cc_model_free(m);
+        cc_model_init(m);
+        return -1;
+    }
+    Arena dom;
+    arena_init(&dom, 0);
+    JrError je;
+    Keys keys = {0};
+    int rc = 0;
+    const JrVal *root = jr_parse(&dom, text, n, &je);
+    if (!root) {
+        rc = dfail(&d, je.offset, je.msg, 0, 0);
+    } else if (d_file(&d, root, m, &keys)) {
+        rc = -1;
+    } else {
+        cc_error verr;
+        if (cc_model_validate_keys(m, keys.skeys, keys.mkeys, keys.ekeys, &verr)) {
+            rc = dfail(&d, CC_NO_OFFSET, "invalid model: ", verr.msg, 0);
+        } else {
+            cc_model_canonical(m);
+        }
+    }
+    arena_free(&dom);
+    buf_free(&d.msg);
+    if (rc) {
+        cc_model_free(m);
+        cc_model_init(m);
+    }
+    return rc;
+}
+
+/* ---- save ---- */
+
+static void w_str(JsonW *w, cc_str s) { jw_str_n(w, s.n ? s.p : "", s.n); }
+static void w_gid(JsonW *w, const cc_gid *g) { jw_str_n(w, g->c, 22); }
+
+static void w_vec(JsonW *w, const double *v, int n) {
+    jw_arr_begin(w);
+    for (int i = 0; i < n; i++) jw_f64(w, v[i]);
+    jw_arr_end(w);
+}
+
+static void w_loop(JsonW *w, const cc_loop *l) {
+    jw_arr_begin(w);
+    for (size_t i = 0; i < l->n; i++) w_vec(w, l->pts[i], 2);
+    jw_arr_end(w);
+}
+
+static void w_kvs(JsonW *w, const cc_kv *kv, size_t n) {
+    jw_obj_begin(w);
+    for (size_t i = 0; i < n; i++) {
+        jw_key_n(w, kv[i].key.n ? kv[i].key.p : "", kv[i].key.n);
+        w_str(w, kv[i].value);
+    }
+    jw_obj_end(w);
+}
+
+static void w_generator(JsonW *w, const cc_generator *g) {
+    jw_obj_begin(w);
+    jw_key(w, "kind");
+    jw_str(w, cc_gen_kind_name(g->kind));
+    switch (g->kind) {
+    case CC_GEN_RECT_COLUMN:
+    case CC_GEN_PAD_FOOTING:
+        jw_key(w, "width"), jw_f64(w, g->u.col.width);
+        jw_key(w, "depth"), jw_f64(w, g->u.col.depth);
+        jw_key(w, "height"), jw_f64(w, g->u.col.height);
+        break;
+    case CC_GEN_RECT_BEAM:
+        jw_key(w, "width"), jw_f64(w, g->u.beam.width);
+        jw_key(w, "height"), jw_f64(w, g->u.beam.height);
+        jw_key(w, "length"), jw_f64(w, g->u.beam.length);
+        break;
+    case CC_GEN_WALL:
+        jw_key(w, "length"), jw_f64(w, g->u.wall.length);
+        jw_key(w, "thickness"), jw_f64(w, g->u.wall.thickness);
+        jw_key(w, "height"), jw_f64(w, g->u.wall.height);
+        break;
+    case CC_GEN_SLAB:
+        jw_key(w, "outline"), w_loop(w, &g->u.slab.outline);
+        jw_key(w, "thickness"), jw_f64(w, g->u.slab.thickness);
+        break;
+    case CC_GEN_EXTRUDED_POLYGON:
+        jw_key(w, "outline"), w_loop(w, &g->u.poly.outline);
+        if (g->u.poly.nvoids) {
+            jw_key(w, "voids");
+            jw_arr_begin(w);
+            for (size_t i = 0; i < g->u.poly.nvoids; i++) w_loop(w, &g->u.poly.voids[i]);
+            jw_arr_end(w);
+        }
+        jw_key(w, "height"), jw_f64(w, g->u.poly.height);
+        break;
+    case CC_GEN_MESH:
+        jw_key(w, "positions");
+        jw_arr_begin(w);
+        for (size_t i = 0; i < g->u.mesh.npositions; i++) w_vec(w, g->u.mesh.positions[i], 3);
+        jw_arr_end(w);
+        jw_key(w, "indices");
+        jw_arr_begin(w);
+        for (size_t i = 0; i < g->u.mesh.nindices; i++) jw_u64(w, g->u.mesh.indices[i]);
+        jw_arr_end(w);
+        break;
+    default: break;
+    }
+    jw_obj_end(w);
+}
+
+int cc_model_save(const cc_model *m, Buf *b) {
+    JsonW w;
+    jw_init(&w, b, 1);
+    jw_obj_begin(&w);
+    jw_key(&w, "format"), jw_str(&w, "bimble");
+    jw_key(&w, "version"), jw_u64(&w, CC_FORMAT_VERSION);
+    jw_key(&w, "model");
+    jw_obj_begin(&w);
+    jw_key(&w, "project_id"), w_gid(&w, &m->project_id);
+    jw_key(&w, "project_name"), w_str(&w, m->project_name);
+    jw_key(&w, "storeys");
+    jw_obj_begin(&w);
+    for (size_t i = 0; i < m->nstoreys; i++) {
+        const cc_storey *s = &m->storeys[i];
+        jw_key_n(&w, s->id.c, 22);
+        jw_obj_begin(&w);
+        jw_key(&w, "id"), w_gid(&w, &s->id);
+        jw_key(&w, "name"), w_str(&w, s->name);
+        jw_key(&w, "elevation"), jw_f64(&w, s->elevation);
+        jw_obj_end(&w);
+    }
+    jw_obj_end(&w);
+    jw_key(&w, "materials");
+    jw_obj_begin(&w);
+    for (size_t i = 0; i < m->nmaterials; i++) {
+        const cc_material *mt = &m->materials[i];
+        const cc_material_props *p = &mt->props;
+        jw_key_n(&w, mt->id.c, 22);
+        jw_obj_begin(&w);
+        jw_key(&w, "id"), w_gid(&w, &mt->id);
+        jw_key(&w, "name"), w_str(&w, mt->name);
+        jw_key(&w, "category"), jw_str(&w, cc_category_name(mt->category));
+        if (p->has_density || p->has_e || p->has_strength || p->source.n) {
+            jw_key(&w, "props");
+            jw_obj_begin(&w);
+            if (p->has_density) jw_key(&w, "density_kg_m3"), jw_f64(&w, p->density_kg_m3);
+            if (p->has_e) jw_key(&w, "e_mpa"), jw_f64(&w, p->e_mpa);
+            if (p->has_strength) jw_key(&w, "strength_mpa"), jw_f64(&w, p->strength_mpa);
+            if (p->source.n) jw_key(&w, "source"), w_str(&w, p->source);
+            jw_obj_end(&w);
+        }
+        jw_obj_end(&w);
+    }
+    jw_obj_end(&w);
+    jw_key(&w, "elements");
+    jw_obj_begin(&w);
+    for (size_t i = 0; i < m->nelements; i++) {
+        const cc_element *e = &m->elements[i];
+        jw_key_n(&w, e->id.c, 22);
+        jw_obj_begin(&w);
+        jw_key(&w, "id"), w_gid(&w, &e->id);
+        jw_key(&w, "class"), jw_str(&w, cc_ifc_class_name(e->cls));
+        jw_key(&w, "name"), w_str(&w, e->name);
+        jw_key(&w, "storey"), w_gid(&w, &e->storey);
+        jw_key(&w, "material"), w_gid(&w, &e->material);
+        jw_key(&w, "placement");
+        jw_obj_begin(&w);
+        jw_key(&w, "origin"), w_vec(&w, e->placement.origin, 3);
+        jw_key(&w, "z_axis"), w_vec(&w, e->placement.z_axis, 3);
+        jw_key(&w, "x_axis"), w_vec(&w, e->placement.x_axis, 3);
+        jw_obj_end(&w);
+        jw_key(&w, "generator"), w_generator(&w, &e->generator);
+        if (e->nproperties) jw_key(&w, "properties"), w_kvs(&w, e->properties, e->nproperties);
+        if (e->has_ifc_entity) jw_key(&w, "ifc_entity"), w_str(&w, e->ifc_entity);
+        jw_obj_end(&w);
+    }
+    jw_obj_end(&w);
+    if (m->nproject) jw_key(&w, "project"), w_kvs(&w, m->project, m->nproject);
+    jw_obj_end(&w);
+    jw_obj_end(&w);
+    return jw_finish(&w) == JW_OK && !b->oom ? 0 : -1;
+}
