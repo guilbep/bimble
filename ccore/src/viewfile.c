@@ -1,0 +1,618 @@
+/* The .bimbleview writer and reader, see viewfile.h. A port of crates/bimble-geom/src/viewfile.rs. */
+#include "viewfile.h"
+#include <stdlib.h>
+#include <string.h>
+#include "inflate.h"
+#include "json_r.h"
+#include "meshcodec.h"
+
+static const char MAGIC[8] = {'B', 'I', 'M', 'B', 'L', 'E', 'V', 'W'};
+#define MAX_SECTION ((uint64_t)1 << 30)
+#define MAX_EXPANSION 64u
+
+/* MaterialCategory::label(), in MaterialCategory::ALL order. */
+static const char *const FAMILY[CC_CAT_COUNT] = {"Concrete", "Steel", "Timber", "Masonry",
+                                                 "Insulation", "Earth", "Glass", "Other"};
+
+int cc_viewfile_sniff(const uint8_t *p, size_t n) {
+    return (n >= 8 && memcmp(p, MAGIC, 8) == 0) || (n >= 2 && p[0] == 0x1f && p[1] == 0x8b);
+}
+
+/* ---- writing ---- */
+
+static void put_u64le(Buf *b, uint64_t v) {
+    char t[8];
+    for (int i = 0; i < 8; i++) t[i] = (char)(v >> (8 * i));
+    buf_append(b, t, 8);
+}
+
+static void put_f64(Buf *b, double v) {
+    uint64_t u;
+    if (v == 0.0) v = 0.0; /* no -0.0 */
+    memcpy(&u, &v, 8);
+    put_u64le(b, u);
+}
+
+static void put_f32(Buf *b, float v) {
+    uint32_t u;
+    char t[4];
+    if (v == 0.0f) v = 0.0f;
+    memcpy(&u, &v, 4);
+    for (int i = 0; i < 4; i++) t[i] = (char)(u >> (8 * i));
+    buf_append(b, t, 4);
+}
+
+static void put_str(Buf *b, const char *p, size_t n) {
+    cc_put_varint(b, n);
+    buf_append(b, p, n);
+}
+
+static void section(Buf *out, const char kind[4], const Buf *payload) {
+    buf_append(out, kind, 4);
+    put_u64le(out, payload->len);
+    buf_append(out, payload->p, payload->len);
+}
+
+static int str_cmp(const cc_str *a, const cc_str *b) {
+    size_t n = a->n < b->n ? a->n : b->n;
+    int c = n ? memcmp(a->p, b->p, n) : 0;
+    if (c) return c;
+    return a->n < b->n ? -1 : a->n > b->n;
+}
+
+static int str_qcmp(const void *a, const void *b) { return str_cmp(a, b); }
+
+/* f64::total_cmp as a signed key. */
+static int64_t total_key(double x) {
+    uint64_t u;
+    memcpy(&u, &x, 8);
+    int64_t k = (int64_t)u;
+    return k ^ (int64_t)((uint64_t)(k >> 63) >> 1);
+}
+
+typedef struct {
+    const cc_storey *s;
+    size_t order;
+} StoreyRef;
+
+static int storey_qcmp(const void *a, const void *b) {
+    const StoreyRef *x = a, *y = b;
+    int64_t kx = total_key(x->s->elevation), ky = total_key(y->s->elevation);
+    if (kx != ky) return kx < ky ? -1 : 1;
+    return x->order < y->order ? -1 : x->order > y->order; /* stable */
+}
+
+typedef struct {
+    cc_str name;
+    double density;
+    size_t order;
+} DensityRef;
+
+static int density_qcmp(const void *a, const void *b) {
+    const DensityRef *x = a, *y = b;
+    int c = str_cmp(&x->name, &y->name);
+    if (c) return c;
+    return x->order < y->order ? -1 : x->order > y->order;
+}
+
+/* The four META strings of scene element k: class, storey, material, family. */
+static int element_strings(const cc_model *m, const cc_scene *s, size_t k, cc_str out[4]) {
+    const cc_scene_element *e = &s->elements[k];
+    if (e->model_index >= m->nelements) return -1;
+    const cc_element *me = &m->elements[e->model_index];
+    const cc_storey *st = cc_model_storey(m, &me->storey);
+    const cc_material *mat = cc_model_material(m, &me->material);
+    if (!st || !mat || (unsigned)e->category >= CC_CAT_COUNT) return -1;
+    out[0] = e->class_name;
+    out[1] = st->name;
+    out[2] = mat->name;
+    out[3].p = FAMILY[e->category];
+    out[3].n = strlen(FAMILY[e->category]);
+    return 0;
+}
+
+static uint64_t table_index(const cc_str *table, size_t n, const cc_str *key) {
+    size_t lo = 0, hi = n;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        int c = str_cmp(&table[mid], key);
+        if (c == 0) return mid;
+        if (c < 0) lo = mid + 1;
+        else hi = mid;
+    }
+    return 0; /* not reached: every key is in the table */
+}
+
+static void flush_chunk(Buf *out, Buf *shapes, uint64_t *nshapes, Buf *elems, uint64_t *nelems) {
+    Buf head;
+    buf_init(&head);
+    cc_put_varint(&head, *nshapes);
+    Buf mid;
+    buf_init(&mid);
+    cc_put_varint(&mid, *nelems);
+    uint64_t len = head.len + shapes->len + mid.len + elems->len;
+    buf_append(out, "ELEM", 4);
+    put_u64le(out, len);
+    buf_append(out, head.p, head.len);
+    buf_append(out, shapes->p, shapes->len);
+    buf_append(out, mid.p, mid.len);
+    buf_append(out, elems->p, elems->len);
+    if (head.oom || mid.oom) out->oom = 1;
+    buf_free(&head), buf_free(&mid);
+    buf_clear(shapes), buf_clear(elems);
+    *nshapes = *nelems = 0;
+}
+
+static int write_raw(const cc_model *m, const cc_scene *s, Buf *out) {
+    int rc = -1;
+    size_t ne = s->nelements;
+    cc_str *table = malloc((4 * ne + 1) * sizeof *table);
+    int64_t *shape_id = malloc((s->nshapes + 1) * sizeof *shape_id);
+    StoreyRef *storeys = malloc((m->nstoreys + 1) * sizeof *storeys);
+    DensityRef *dens = malloc((m->nmaterials + 1) * sizeof *dens);
+    Buf p, ns, es;
+    buf_init(&p), buf_init(&ns), buf_init(&es);
+    if (!table || !shape_id || !storeys || !dens) goto done;
+
+    buf_append(out, MAGIC, 8);
+    char ver[4] = {(char)CC_VIEWFILE_VERSION, 0, 0, 0};
+    buf_append(out, ver, 4);
+
+    /* HEAD. Shapes are numbered by the first element that uses them. */
+    for (size_t i = 0; i < s->nshapes; i++) shape_id[i] = -1;
+    uint64_t nused = 0, stored = 0;
+    for (size_t k = 0; k < ne; k++) {
+        const cc_scene_element *e = &s->elements[k];
+        if (e->shape < 0) {
+            stored += e->mesh.ni / 3;
+            continue;
+        }
+        if ((size_t)e->shape >= s->nshapes) goto done;
+        if (shape_id[e->shape] < 0) {
+            shape_id[e->shape] = (int64_t)nused++;
+            stored += 1 + s->shapes[e->shape].ni / 3;
+        } else {
+            stored += 1;
+        }
+    }
+    cc_put_varint(&p, ne);
+    cc_put_varint(&p, nused);
+    cc_put_varint(&p, stored);
+    for (int k = 0; k < 3; k++) put_f64(&p, s->origin[k]);
+    section(out, "HEAD", &p);
+
+    /* META */
+    size_t nt = 0;
+    for (size_t k = 0; k < ne; k++) {
+        if (element_strings(m, s, k, &table[nt])) goto done;
+        nt += 4;
+    }
+    if (nt) qsort(table, nt, sizeof *table, str_qcmp);
+    size_t nu = 0;
+    for (size_t i = 0; i < nt; i++)
+        if (nu == 0 || str_cmp(&table[nu - 1], &table[i]) != 0) table[nu++] = table[i];
+    buf_clear(&p);
+    cc_put_varint(&p, nu);
+    for (size_t i = 0; i < nu; i++) put_str(&p, table[i].p, table[i].n);
+    for (size_t i = 0; i < m->nstoreys; i++) storeys[i].s = &m->storeys[i], storeys[i].order = i;
+    if (m->nstoreys) qsort(storeys, m->nstoreys, sizeof *storeys, storey_qcmp);
+    cc_put_varint(&p, m->nstoreys);
+    for (size_t i = 0; i < m->nstoreys; i++) {
+        const cc_storey *st = storeys[i].s;
+        put_str(&p, st->name.p, st->name.n);
+        put_f64(&p, st->elevation);
+        put_str(&p, st->id.c, 22);
+    }
+    cc_put_varint(&p, 0); /* grids: Scene::from_model has none */
+    size_t nd = 0;
+    for (size_t i = 0; i < m->nmaterials; i++)
+        if (m->materials[i].props.has_density) {
+            dens[nd].name = m->materials[i].name;
+            dens[nd].density = m->materials[i].props.density_kg_m3;
+            dens[nd].order = i;
+            nd++;
+        }
+    if (nd) qsort(dens, nd, sizeof *dens, density_qcmp);
+    size_t ndu = 0; /* BTreeMap: one per name, the last one inserted (model order) wins */
+    for (size_t i = 0; i < nd; i++) {
+        if (ndu && str_cmp(&dens[ndu - 1].name, &dens[i].name) == 0) dens[ndu - 1] = dens[i];
+        else dens[ndu++] = dens[i];
+    }
+    cc_put_varint(&p, ndu);
+    for (size_t i = 0; i < ndu; i++) {
+        put_str(&p, dens[i].name.p, dens[i].name.n);
+        put_f64(&p, dens[i].density);
+    }
+    cc_put_varint(&p, s->nwarnings);
+    for (size_t i = 0; i < s->nwarnings; i++) put_str(&p, s->warnings[i].p, s->warnings[i].n);
+    section(out, "META", &p);
+    /* GEOR: the C model has no georeference (the default), so none. */
+
+    /* ELEM chunks */
+    uint64_t n_shapes = 0, n_elems = 0;
+    int64_t written = 0;
+    for (size_t k = 0; k < ne; k++) {
+        const cc_scene_element *e = &s->elements[k];
+        cc_str str[4];
+        char gid[22];
+        element_strings(m, s, k, str);
+        memcpy(gid, e->id.c, 22);
+        put_str(&es, gid, 22);
+        const cc_element *me = &m->elements[e->model_index];
+        put_str(&es, me->name.p, me->name.n);
+        for (int j = 0; j < 4; j++) cc_put_varint(&es, table_index(table, nu, &str[j]));
+        if (e->shape < 0) {
+            buf_putc(&es, 0);
+            buf_clear(&p);
+            if (cc_meshcodec_encode(&e->mesh, &p)) goto done;
+            cc_put_varint(&es, p.len);
+            buf_append(&es, p.p, p.len);
+        } else {
+            int64_t id = shape_id[e->shape];
+            if (id == written) {
+                buf_clear(&p);
+                if (cc_meshcodec_encode(&s->shapes[e->shape], &p)) goto done;
+                cc_put_varint(&ns, p.len);
+                buf_append(&ns, p.p, p.len);
+                n_shapes++;
+                written++;
+            }
+            buf_putc(&es, 1);
+            cc_put_varint(&es, (uint64_t)id);
+            const cc_placement32 *t = &e->to_scene;
+            const float *cols[4] = {t->x, t->y, t->z, t->t};
+            for (int c = 0; c < 4; c++)
+                for (int i = 0; i < 3; i++) put_f32(&es, cols[c][i]);
+        }
+        n_elems++;
+        if (ns.len + es.len >= CC_VIEWFILE_CHUNK_BYTES) flush_chunk(out, &ns, &n_shapes, &es, &n_elems);
+    }
+    if (n_elems > 0) flush_chunk(out, &ns, &n_shapes, &es, &n_elems);
+    rc = (p.oom || ns.oom || es.oom || out->oom) ? -1 : 0;
+done:
+    buf_free(&p), buf_free(&ns), buf_free(&es);
+    free(table), free(shape_id), free(storeys), free(dens);
+    return rc;
+}
+
+int cc_viewfile_write(const cc_model *m, const cc_scene *s, int gzip, Buf *out) {
+    if (!gzip) return write_raw(m, s, out);
+    Buf raw;
+    buf_init(&raw);
+    int rc = write_raw(m, s, &raw);
+    if (rc == 0) rc = cc_gzip((const unsigned char *)raw.p, raw.len, out);
+    buf_free(&raw);
+    return rc;
+}
+
+/* ---- reading ---- */
+
+enum { E_NOT = 1, E_VERSION, E_TRUNC, E_INVALID, E_OOM };
+
+typedef struct {
+    const uint8_t *p;
+    size_t n;
+} Rd;
+
+typedef struct {
+    int kind;
+    uint32_t version;
+    const char *why; /* E_INVALID */
+    const char *why2; /* a codec reason, appended */
+} Err;
+
+static int fail(Err *e, int kind, const char *why) {
+    e->kind = kind;
+    e->why = why;
+    return -1;
+}
+
+static int take(Rd *r, size_t n, const uint8_t **out, Err *e) {
+    if (n > r->n) return fail(e, E_TRUNC, NULL);
+    *out = r->p;
+    r->p += n, r->n -= n;
+    return 0;
+}
+
+static int varint(Rd *r, uint64_t *v, Err *e) {
+    *v = 0;
+    for (int shift = 0; shift < 64; shift += 7) {
+        if (!r->n) return fail(e, E_TRUNC, NULL);
+        uint8_t b = *r->p++;
+        r->n--;
+        *v |= (uint64_t)(b & 0x7f) << shift;
+        if (b < 0x80) return 0;
+    }
+    return fail(e, E_INVALID, "invalid mesh bytes: varint too long");
+}
+
+static int rd_str(Rd *r, cc_str *s, Err *e) {
+    uint64_t n;
+    const uint8_t *p;
+    if (varint(r, &n, e)) return -1;
+    if (n > r->n) return fail(e, E_TRUNC, NULL);
+    if (take(r, (size_t)n, &p, e)) return -1;
+    if (jr_utf8_check((const char *)p, (size_t)n) != -1) return fail(e, E_INVALID, "text not UTF-8");
+    s->p = (const char *)p;
+    s->n = (size_t)n;
+    return 0;
+}
+
+static int rd_f64(Rd *r, double *v, Err *e) {
+    const uint8_t *p;
+    if (take(r, 8, &p, e)) return -1;
+    uint64_t u = 0;
+    for (int i = 0; i < 8; i++) u |= (uint64_t)p[i] << (8 * i);
+    if ((u & 0x7ff0000000000000ull) == 0x7ff0000000000000ull) return fail(e, E_INVALID, "number not finite");
+    memcpy(v, &u, 8);
+    return 0;
+}
+
+/* A count of items each at least `min` bytes long, checked against what is left. */
+static int count(Rd *r, size_t min, size_t *n, Err *e) {
+    uint64_t v;
+    if (varint(r, &v, e)) return -1;
+    uint64_t need = v > UINT64_MAX / min ? UINT64_MAX : v * min;
+    if (need > r->n) return fail(e, E_TRUNC, NULL);
+    *n = (size_t)v;
+    return 0;
+}
+
+static int index_of(Rd *r, size_t ntable, uint64_t *i, Err *e) {
+    if (varint(r, i, e)) return -1;
+    if (*i >= ntable) return fail(e, E_INVALID, "string index");
+    return 0;
+}
+
+static int mesh(Rd *r, Arena *a, cc_mesh *m, Err *e) {
+    size_t len;
+    const uint8_t *p;
+    const char *why;
+    if (count(r, 1, &len, e) || take(r, len, &p, e)) return -1;
+    switch (cc_meshcodec_decode(p, len, a, m, &why)) {
+    case CC_MC_OK: return 0;
+    case CC_MC_TRUNCATED: return fail(e, E_TRUNC, NULL);
+    case CC_MC_BAD_MAGIC: return fail(e, E_INVALID, "not Bimble mesh bytes");
+    case CC_MC_OOM: return fail(e, E_OOM, NULL);
+    default: e->why2 = why; return fail(e, E_INVALID, "invalid mesh bytes: ");
+    }
+}
+
+/* Arrays of the arena, sized by counts already checked against the bytes. */
+static void *alloc_n(Arena *a, size_t n, size_t size, Err *e) {
+    void *p = arena_alloc(a, (n + 1) * size, 8);
+    if (!p) fail(e, E_OOM, NULL);
+    return p;
+}
+
+static int grow(void **p, size_t *cap, size_t need, size_t size, Err *e) {
+    if (need <= *cap) return 0;
+    size_t c = *cap ? *cap : 16;
+    while (c < need) c *= 2;
+    void *q = realloc(*p, c * size);
+    if (!q) return fail(e, E_OOM, NULL);
+    *p = q;
+    *cap = c;
+    return 0;
+}
+
+static int read_meta(Rd *s, cc_viewfile *v, Err *e) {
+    size_t n;
+    if (count(s, 1, &n, e)) return -1;
+    if (!(v->table = alloc_n(&v->arena, n, sizeof *v->table, e))) return -1;
+    for (size_t i = 0; i < n; i++)
+        if (rd_str(s, &v->table[i], e)) return -1;
+    v->ntable = n;
+    if (count(s, 10, &n, e)) return -1;
+    if (!(v->storeys = alloc_n(&v->arena, n, sizeof *v->storeys, e))) return -1;
+    for (size_t i = 0; i < n; i++) {
+        cc_view_storey *st = &v->storeys[i];
+        if (rd_str(s, &st->name, e) || rd_f64(s, &st->elevation, e) || rd_str(s, &st->id, e)) return -1;
+        v->nstoreys = i + 1;
+    }
+    if (count(s, 33, &n, e)) return -1;
+    if (!(v->grids = alloc_n(&v->arena, n, sizeof *v->grids, e))) return -1;
+    for (size_t i = 0; i < n; i++) {
+        cc_view_grid *g = &v->grids[i];
+        if (rd_str(s, &g->tag, e) || rd_f64(s, &g->start[0], e) || rd_f64(s, &g->start[1], e) ||
+            rd_f64(s, &g->end[0], e) || rd_f64(s, &g->end[1], e))
+            return -1;
+        v->ngrids = i + 1;
+    }
+    if (count(s, 9, &n, e)) return -1;
+    if (!(v->densities = alloc_n(&v->arena, n, sizeof *v->densities, e))) return -1;
+    for (size_t i = 0; i < n; i++) {
+        if (rd_str(s, &v->densities[i].material, e) || rd_f64(s, &v->densities[i].density, e)) return -1;
+        v->ndensities = i + 1;
+    }
+    if (count(s, 1, &n, e)) return -1;
+    if (!(v->warnings = alloc_n(&v->arena, n, sizeof *v->warnings, e))) return -1;
+    for (size_t i = 0; i < n; i++) {
+        if (rd_str(s, &v->warnings[i], e)) return -1;
+        v->nwarnings = i + 1;
+    }
+    return 0;
+}
+
+static int read_elem(Rd *s, cc_viewfile *v, size_t *shape_cap, size_t *elem_cap, Err *e) {
+    size_t n;
+    if (count(s, 1, &n, e)) return -1;
+    if (grow((void **)&v->shapes, shape_cap, v->nshapes + n, sizeof *v->shapes, e)) return -1;
+    for (size_t i = 0; i < n; i++) {
+        if (mesh(s, &v->arena, &v->shapes[v->nshapes], e)) return -1;
+        v->nshapes++;
+    }
+    if (count(s, 7, &n, e)) return -1;
+    if (grow((void **)&v->elements, elem_cap, v->nelements + n, sizeof *v->elements, e)) return -1;
+    for (size_t i = 0; i < n; i++) {
+        cc_view_element *x = &v->elements[v->nelements];
+        memset(x, 0, sizeof *x);
+        uint64_t t[4];
+        if (rd_str(s, &x->global_id, e) || rd_str(s, &x->name, e)) return -1;
+        for (int j = 0; j < 4; j++)
+            if (index_of(s, v->ntable, &t[j], e)) return -1;
+        x->class_name = v->table[t[0]];
+        x->storey = v->table[t[1]];
+        x->material = v->table[t[2]];
+        x->family = v->table[t[3]];
+        x->category = CC_CAT_OTHER;
+        for (int c = 0; c < CC_CAT_COUNT; c++)
+            if (x->family.n == strlen(FAMILY[c]) && memcmp(x->family.p, FAMILY[c], x->family.n) == 0)
+                x->category = (cc_category)c;
+        const uint8_t *kind;
+        if (take(s, 1, &kind, e)) return -1;
+        if (*kind == 0) {
+            x->shape = -1;
+            if (mesh(s, &v->arena, &x->mesh, e)) return -1;
+        } else if (*kind == 1) {
+            uint64_t k;
+            if (varint(s, &k, e)) return -1;
+            if (k >= v->nshapes) return fail(e, E_INVALID, "shape index");
+            x->shape = (int32_t)k;
+            float f[12];
+            for (int j = 0; j < 12; j++) {
+                const uint8_t *b;
+                if (take(s, 4, &b, e)) return -1;
+                uint32_t u = (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
+                if ((u & 0x7f800000u) == 0x7f800000u) return fail(e, E_INVALID, "placement not finite");
+                memcpy(&f[j], &u, 4);
+            }
+            memcpy(x->to_scene.x, f, 12);
+            memcpy(x->to_scene.y, f + 3, 12);
+            memcpy(x->to_scene.z, f + 6, 12);
+            memcpy(x->to_scene.t, f + 9, 12);
+        } else {
+            return fail(e, E_INVALID, "geometry kind");
+        }
+        v->nelements++;
+    }
+    return 0;
+}
+
+static int read_raw(const uint8_t *p, size_t n, cc_viewfile *v, Err *e) {
+    if (n < 12 || memcmp(p, MAGIC, 8) != 0) return fail(e, E_NOT, NULL);
+    uint32_t version = (uint32_t)p[8] | (uint32_t)p[9] << 8 | (uint32_t)p[10] << 16 | (uint32_t)p[11] << 24;
+    if (version != CC_VIEWFILE_VERSION) {
+        e->version = version;
+        return fail(e, E_VERSION, NULL);
+    }
+    Rd r = {p + 12, n - 12};
+    int has_header = 0, has_table = 0;
+    uint64_t want_elems = 0, want_shapes = 0;
+    size_t shape_cap = 0, elem_cap = 0;
+    while (r.n) {
+        if (r.n < 12) return fail(e, E_TRUNC, NULL);
+        const uint8_t *kind = r.p;
+        uint64_t len = 0;
+        for (int i = 0; i < 8; i++) len |= (uint64_t)r.p[4 + i] << (8 * i);
+        r.p += 12, r.n -= 12;
+        if (len > MAX_SECTION) return fail(e, E_INVALID, "section too large");
+        if (len > r.n) return fail(e, E_TRUNC, NULL);
+        Rd s = {r.p, (size_t)len};
+        r.p += len, r.n -= (size_t)len;
+        if (memcmp(kind, "HEAD", 4) == 0 && !has_header) {
+            uint64_t stored;
+            if (varint(&s, &want_elems, e) || varint(&s, &want_shapes, e) || varint(&s, &stored, e)) return -1;
+            for (int k = 0; k < 3; k++)
+                if (rd_f64(&s, &v->origin[k], e)) return -1;
+            v->stored_triangles = stored;
+            has_header = 1;
+        } else if (!has_header) {
+            return fail(e, E_INVALID, "no header first");
+        } else if (memcmp(kind, "META", 4) == 0 && !has_table) {
+            if (read_meta(&s, v, e)) return -1;
+            has_table = 1;
+        } else if (memcmp(kind, "ELEM", 4) == 0) {
+            if (!has_table) return fail(e, E_INVALID, "elements before the string table");
+            if (read_elem(&s, v, &shape_cap, &elem_cap, e)) return -1;
+        } else if (memcmp(kind, "GEOR", 4) == 0) {
+            cc_str g;
+            if (rd_str(&s, &g, e)) return -1;
+            Arena scratch;
+            arena_init(&scratch, 0);
+            JrError je;
+            int ok = jr_parse(&scratch, g.p, g.n, &je) != NULL;
+            arena_free(&scratch);
+            if (!ok) return fail(e, E_INVALID, "georef: not JSON");
+            v->georef = g;
+            v->has_georef = 1;
+        } else if (memcmp(kind, "HEAD", 4) == 0 || memcmp(kind, "META", 4) == 0) {
+            return fail(e, E_INVALID, "section repeated");
+        } else {
+            continue; /* a later addition: skipped */
+        }
+        if (s.n) return fail(e, E_INVALID, "bytes left in a section");
+    }
+    if (!has_header) return fail(e, E_NOT, NULL);
+    if (want_elems != v->nelements || want_shapes != v->nshapes) return fail(e, E_TRUNC, NULL);
+    return 0;
+}
+
+static void set_msg(cc_error *err, const Err *e) {
+    Buf b;
+    buf_init(&b);
+    switch (e->kind) {
+    case E_NOT: buf_puts(&b, "not a .bimbleview file"); break;
+    case E_VERSION:
+        buf_puts(&b, "a .bimbleview file of format version ");
+        buf_u64(&b, e->version);
+        buf_puts(&b, "; this Bimble reads version 1 (a newer Bimble made it: update Bimble)");
+        break;
+    case E_TRUNC: buf_puts(&b, "the .bimbleview file is cut short"); break;
+    case E_OOM: buf_puts(&b, "out of memory"); break;
+    default:
+        buf_puts(&b, "damaged .bimbleview file: ");
+        buf_puts(&b, e->why ? e->why : "");
+        if (e->why2) buf_puts(&b, e->why2);
+    }
+    const char *t = buf_cstr(&b);
+    size_t n = strlen(t);
+    if (n >= sizeof err->msg) n = sizeof err->msg - 1;
+    memcpy(err->msg, t, n);
+    err->msg[n] = 0;
+    err->offset = CC_NO_OFFSET;
+    buf_free(&b);
+}
+
+int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err) {
+    memset(out, 0, sizeof *out);
+    arena_init(&out->arena, 0);
+    Err e = {0, 0, NULL, NULL};
+    int rc;
+    if (n >= 2 && p[0] == 0x1f && p[1] == 0x8b) {
+        size_t limit = n > SIZE_MAX / MAX_EXPANSION ? SIZE_MAX : n * MAX_EXPANSION;
+        if (limit < ((size_t)1 << 26)) limit = (size_t)1 << 26;
+        Buf raw;
+        buf_init(&raw);
+        const char *why = NULL;
+        if (cc_gunzip(p, n, limit, &raw, &why)) {
+            buf_free(&raw);
+            e.kind = E_INVALID;
+            e.why = why ? why : "gzip";
+            set_msg(err, &e);
+            return -1;
+        }
+        /* Strings point into the stream: keep it in the arena. */
+        uint8_t *copy = arena_dup(&out->arena, raw.p, raw.len);
+        size_t len = raw.len;
+        buf_free(&raw);
+        rc = copy ? read_raw(copy, len, out, &e) : fail(&e, E_OOM, NULL);
+    } else {
+        uint8_t *copy = arena_dup(&out->arena, p, n);
+        rc = copy ? read_raw(copy, n, out, &e) : fail(&e, E_OOM, NULL);
+    }
+    if (rc) set_msg(err, &e);
+    return rc;
+}
+
+void cc_viewfile_free(cc_viewfile *v) {
+    free(v->shapes);
+    free(v->elements);
+    arena_free(&v->arena);
+    memset(v, 0, sizeof *v);
+}
+
+const cc_mesh *cc_viewfile_local_mesh(const cc_viewfile *v, size_t k) {
+    const cc_view_element *e = &v->elements[k];
+    return e->shape >= 0 ? &v->shapes[e->shape] : &e->mesh;
+}
