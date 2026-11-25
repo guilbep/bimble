@@ -11,9 +11,11 @@
 #ifndef CC_VIEW_ONLY
 #include "draw_plan.h"
 #include "draw_sheet.h"
+#include "draw_annot.h" /* cc_section_marks (D7) */
 #include "draw_style.h"
 #include "ifc_out.h" /* cc_iso_utc, CC_IFC_VERSION */
 #include "pdf_out.h"
+#include "view_effective.h" /* D7 */
 #endif
 
 void cc_paper_cache_free(struct cc_session *s) {
@@ -23,7 +25,52 @@ void cc_paper_cache_free(struct cc_session *s) {
     s->paper_ids = NULL, s->paper_rects = NULL, s->npaper = 0;
 }
 
+/* ---- D7: the fonts and the version of the PDF export (both builds: the carriers call them) ---- */
+void cc_paper_fonts_free(struct cc_session *s) {
+    for (int k = 0; k < 2; k++) free(s->pdf_font[k]), s->pdf_font[k] = NULL, s->pdf_font_n[k] = 0;
+    free(s->pdf_font_dir), s->pdf_font_dir = NULL;
+    free(s->paper_version), s->paper_version = NULL;
+}
+
+static char *zcopy(const char *p, size_t n) {
+    char *z = malloc(n + 1);
+    if (z) memcpy(z, p, n), z[n] = 0;
+    return z;
+}
+
+int cc_paper_set_fonts(struct cc_session *s, const unsigned char *regular, size_t nr, const unsigned char *bold,
+                       size_t nb) {
+    const unsigned char *f[2] = {regular, bold};
+    size_t n[2] = {nr, nb};
+    int rc = 0;
+    for (int k = 0; k < 2; k++) {
+        free(s->pdf_font[k]), s->pdf_font[k] = NULL, s->pdf_font_n[k] = 0;
+        if (!f[k] || !n[k]) continue;
+        s->pdf_font[k] = (unsigned char *)zcopy((const char *)f[k], n[k]);
+        if (s->pdf_font[k]) s->pdf_font_n[k] = n[k];
+        else rc = -1;
+    }
+    return rc;
+}
+
+int cc_paper_set_font_dir(struct cc_session *s, const char *dir) {
+    free(s->pdf_font_dir), s->pdf_font_dir = NULL;
+    if (dir && !(s->pdf_font_dir = zcopy(dir, strlen(dir)))) return -1;
+    return 0;
+}
+
+int cc_paper_set_version(struct cc_session *s, const char *version) {
+    free(s->paper_version), s->paper_version = NULL;
+    if (version && !(s->paper_version = zcopy(version, strlen(version)))) return -1;
+    return 0;
+}
+
 #ifdef CC_VIEW_ONLY
+int cc_paper_pdf_query(struct cc_session *s, const cc_scene *sc, int view, const char *body, size_t n, Buf *out) {
+    (void)s, (void)sc, (void)view, (void)body, (void)n;
+    buf_puts(out, CC_VIEW_ONLY_TEXT);
+    return CC_ERR;
+}
 int cc_paper_sheet_svg(struct cc_session *s, const cc_scene *sc, const char *body, size_t n, Buf *out) {
     (void)s, (void)sc, (void)body, (void)n;
     buf_puts(out, CC_VIEW_ONLY_TEXT);
@@ -223,6 +270,190 @@ int cc_paper_sheet_pdf(struct cc_session *s, const cc_scene *sc, const cc_sheet 
     else rc = 0;
 end:
     buf_free(&derr);
+    arena_free(&a);
+    return rc;
+}
+
+/* ---- D7: sheet_pdf and view_pdf (sheet_svg.h cc_paper_pdf_query) ---- */
+
+#define FONT_MAX (4u << 20) /* a font file read from the folder: the shipped ones are 350 KB */
+
+/* The fonts on the first export without files handed over: read from the folder, kept only when
+ * each is the shipped file of its weight (else the writer would refuse it anyway). */
+static void read_fonts(struct cc_session *s) {
+    static const char *const NAMES[2] = {"Roboto-Regular.ttf", "Roboto-Bold.ttf"};
+    if (!s->pdf_font_dir || (s->pdf_font[0] && s->pdf_font[1])) return;
+    for (int k = 0; k < 2; k++) {
+        if (s->pdf_font[k]) continue;
+        Buf path;
+        buf_init(&path);
+        buf_puts(&path, s->pdf_font_dir);
+        buf_putc(&path, '/');
+        buf_puts(&path, NAMES[k]);
+        char *p = NULL;
+        size_t n = 0;
+        if (!path.oom && s->pf->read_file(s->pf->ctx, buf_cstr(&path), FONT_MAX, &p, &n) == CC_PF_OK) {
+            if (cc_pdf_roboto_is_shipped((const unsigned char *)p, n, k))
+                s->pdf_font[k] = (unsigned char *)p, s->pdf_font_n[k] = n;
+            else free(p), cc_log(s->pf, "bimble-ccore: %s is not the shipped Roboto file", buf_cstr(&path));
+        }
+        buf_free(&path);
+    }
+    if (s->pdf_font[0] && s->pdf_font[1]) return;
+    free(s->pdf_font_dir), s->pdf_font_dir = NULL; /* tried once */
+}
+
+/* The sheet or the view on paper with `font`, into `a`. 0 ok; else -1 with the text in `err`. */
+static int draw_paper(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, const cc_view *v,
+                      const cc_view *views, size_t nv, cc_sheet_font font, Arena *a, cc_paper *paper, Buf *err) {
+    char date[32];
+    cc_iso_utc(s->pf->unix_s ? s->pf->unix_s(s->pf->ctx) : 0, date);
+    date[10] = 0; /* YYYY-MM-DD */
+    const char *ver = s->paper_version ? s->paper_version : CC_IFC_VERSION;
+    cc_style *style = arena_alloc(a, sizeof *style, _Alignof(cc_style));
+    cc_plan_template *tpl = arena_alloc(a, sizeof *tpl, _Alignof(cc_plan_template));
+    char *d = arena_alloc(a, sizeof date, 1);
+    if (!style || !tpl || !d || cc_style_default(style, a) || cc_plan_template_default(tpl, a) ||
+        cc_plan_template_with_project(tpl, s->model.project, s->model.nproject, a))
+        return buf_puts(err, "out of memory"), -1;
+    memcpy(d, date, sizeof date);
+    style->paper.font = font;
+    Buf derr;
+    buf_init(&derr);
+    int r;
+    if (sh) {
+        cc_sheet_options o = {style, tpl, file_stem(s->path), {d, strlen(d)}, {ver, strlen(ver)}};
+        cc_sheet_info info;
+        r = cc_sheet_draw(sc, &s->model, sh, &o, a, paper, &info, &derr);
+    } else {
+        cc_section_mark *marks;
+        size_t nm;
+        if (cc_section_marks(views, nv, a, &marks, &nm)) return buf_free(&derr), buf_puts(err, "out of memory"), -1;
+        cc_plan_options po; /* lib.rs plan_options with the view */
+        cc_plan_options_init(&po);
+        po.scale = v->scale;
+        po.style = style;
+        po.tpl = tpl;
+        po.project = file_stem(s->path);
+        po.date = (cc_str){d, strlen(d)};
+        po.version = (cc_str){ver, strlen(ver)};
+        po.view = v;
+        po.section_marks = marks;
+        po.nsection_marks = nm;
+        cc_plan_info pinfo;
+        r = cc_plan(sc, &s->model, &po, a, paper, &pinfo, &derr);
+    }
+    if (r) {
+        if (r < 0 || derr.oom) buf_puts(err, "out of memory");
+        else buf_append(err, derr.p, derr.len);
+    }
+    buf_free(&derr);
+    return r ? -1 : 0;
+}
+
+int cc_paper_pdf_query(struct cc_session *s, const cc_scene *sc, int view, const char *body, size_t n, Buf *out) {
+    const char *key = view ? "view" : "sheet";
+    Arena a;
+    arena_init(&a, 0);
+    int rc = CC_ERR;
+    Buf pdf;
+    buf_init(&pdf);
+    JrError je;
+    const JrVal *v = jr_parse(&a, body, n, &je);
+    const JrVal *idv = v && v->type == JR_OBJ ? jr_get(v, key) : NULL;
+    const JrVal *pv = v && v->type == JR_OBJ ? jr_get(v, "path") : NULL;
+    if (!v) {
+        buf_puts(out, je.msg);
+        goto end;
+    }
+    if (!idv || idv->type != JR_STR) {
+        buf_puts(out, idv ? "" : "missing field `"), buf_puts(out, key), buf_puts(out, idv ? ": a string" : "`");
+        goto end;
+    }
+    if (pv && pv->type != JR_STR && pv->type != JR_NULL) {
+        buf_puts(out, "path: a string");
+        goto end;
+    }
+    const char *path = pv && pv->type == JR_STR ? pv->s : NULL;
+    if (path && (!pv->n || strlen(path) < pv->n)) {
+        buf_puts(out, "path: empty or with a NUL");
+        goto end;
+    }
+    const cc_sheet *sh = NULL;
+    const cc_view *vw = NULL;
+    cc_view *views = NULL;
+    size_t nv = 0;
+    if (s->open && idv->n == 22) {
+        cc_gid id;
+        memcpy(id.c, idv->s, 22);
+        if (!view) sh = cc_model_sheet(&s->model, &id);
+        else {
+            if (cc_views_effective(&s->model, &a, &views, &nv)) {
+                buf_puts(out, "out of memory");
+                goto end;
+            }
+            for (size_t k = 0; k < nv && !vw; k++)
+                if (!cc_gid_cmp(&views[k].id, &id)) vw = &views[k];
+        }
+    }
+    if (!sh && !vw) {
+        buf_puts(out, view ? "no view with id " : "no sheet with id ");
+        debug_str(out, idv->s, idv->n);
+        goto end;
+    }
+    if (!sc) {
+        buf_puts(out, "no model open");
+        goto end;
+    }
+    read_fonts(s);
+    cc_pdf_options po;
+    memset(&po, 0, sizeof po);
+    po.version = s->paper_version ? s->paper_version : CC_IFC_VERSION;
+    po.version_len = strlen(po.version);
+    for (int k = 0; k < 2; k++) po.roboto[k] = s->pdf_font[k], po.roboto_len[k] = s->pdf_font_n[k];
+    /* Roboto when both files are there; else, or when the writer refuses them, Helvetica. */
+    int r = CC_PDF_ERR_FONT;
+    if (s->pdf_font[0] && s->pdf_font[1]) {
+        cc_paper paper;
+        if (draw_paper(s, sc, sh, vw, views, nv, CC_FONT_ROBOTO, &a, &paper, out)) goto end;
+        r = cc_paper_pdf(&paper, &po, &pdf);
+    }
+    if (r == CC_PDF_ERR_FONT) {
+        cc_log(s->pf, "bimble-ccore: PDF: the Roboto font files (Roboto-Regular.ttf, Roboto-Bold.ttf) are missing "
+                      "or not the shipped ones: the text is set in Helvetica");
+        buf_clear(&pdf);
+        pdf.oom = 0;
+        cc_paper paper;
+        if (draw_paper(s, sc, sh, vw, views, nv, CC_FONT_HELVETICA, &a, &paper, out)) goto end;
+        r = cc_paper_pdf(&paper, &po, &pdf);
+    }
+    if (r == CC_PDF_ERR_PEN) {
+        buf_puts(out, "a pen of negative width");
+        goto end;
+    }
+    if (r || pdf.oom) {
+        buf_puts(out, "out of memory");
+        goto end;
+    }
+    if (path && s->pf->files) {
+        if (s->pf->write_file(s->pf->ctx, path, pdf.p, pdf.len)) {
+            buf_puts(out, path), buf_puts(out, ": cannot write");
+            goto end;
+        }
+        cc_log(s->pf, "bimble-ccore: Saved %s", path);
+        JsonW w;
+        jw_init(&w, out, 0);
+        jw_obj_begin(&w);
+        jw_key(&w, "bytes"), jw_u64(&w, pdf.len);
+        jw_key(&w, "path"), jw_str(&w, path);
+        jw_obj_end(&w);
+        rc = jw_finish(&w) == JW_OK && !out->oom ? CC_OK : CC_ERR;
+        goto end;
+    }
+    buf_append(out, pdf.p, pdf.len);
+    rc = out->oom ? CC_ERR : CC_OK;
+end:
+    buf_free(&pdf);
     arena_free(&a);
     return rc;
 }

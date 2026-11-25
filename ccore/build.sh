@@ -25,7 +25,8 @@
 #   release  the release archive (ticket R1, ADR 0069 rule 2): the host with clang -O2 and
 #          the boolean kernel static (fails without it), the lab built by Vite (web-ui/, needs
 #          node_modules), then out/release/bimble-ccore-<VERSION>-<arch>-<os>.tar.gz holding
-#          bimble-ccore, web/, LICENSE and README.txt (test: node test/release_test.mjs). <os> is
+#          bimble-ccore, web/ (with web/fonts/, the PDF export's Roboto), LICENSE and README.txt
+#          (test: node test/release_test.mjs). <os> is
 #          linux (libstdc++ static) or macos (ticket MAC1: libc++ is the system's, stripped then
 #          signed ad hoc; CMAKE_OSX_ARCHITECTURES=x86_64 builds the Intel one on an arm64 Mac, with
 #          deps.sh run under the same variable; MACOSX_DEPLOYMENT_TARGET sets the oldest macOS)
@@ -287,6 +288,11 @@ release() {
     web=$(cd "$stage" && pwd)/web
     # The lab: web-ui's own build script (prebuild included), into the archive's web/.
     step "web-ui build (vite)" bash -c 'cd ../web-ui && npm run --silent build -- --outDir "$1" --emptyOutDir --logLevel warn' _ "$web"
+    # D7: the PDF export's Roboto files (350 KB each, not in the program): the host reads web/fonts/.
+    # (a copy-ccore.mjs leftover in public/ccore/fonts/ would ship them twice)
+    rm -rf "$web/ccore/fonts"
+    mkdir -p "$web/fonts"
+    cp ../crates/bimble-drawing/fonts/{Roboto-Regular.ttf,Roboto-Bold.ttf,LICENSE-Roboto} "$web/fonts/"
     cp ../LICENSE "$stage/LICENSE"
     local needs="Linux with glibc 2.35 or newer and a browser with WebGL2. Nothing is installed."
     local last=""

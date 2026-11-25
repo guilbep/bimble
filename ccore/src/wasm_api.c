@@ -24,6 +24,7 @@
 #include "mesh.h"
 #include "platform.h"
 #include "session.h"
+#include "sheet_svg.h" /* D7: host_fonts */
 #include "view_only.h"
 
 #define EXPORT(name) __attribute__((export_name(name)))
@@ -734,5 +735,14 @@ EXPORT("host_log") int wa_host_log(cc_wasm_res *r) {
     Buf b = wasm_pf_state.log;
     buf_init(&wasm_pf_state.log);
     return answer(r, &b, 200);
+}
+
+/* D7: the Roboto files of the PDF export (sheet_svg.h), fetched by the page on the first export. */
+EXPORT("host_fonts") int wa_host_fonts(const char *rp, size_t rn, const char *bp, size_t bn, cc_wasm_res *r) {
+    r->value = 0;
+    cc_session *s = host_session();
+    if (!s || cc_paper_set_fonts(s, (const unsigned char *)rp, rn, (const unsigned char *)bp, bn))
+        return text(r, 500, "out of memory");
+    return text(r, 200, "");
 }
 #endif

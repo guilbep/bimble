@@ -56,6 +56,7 @@ const TABLE = [
   ["host", "versions_test", 47318, 18], // ticket H1
   ["host", "lab_refs", 47418, 118], // L1
   ["host", "lab_refs_dxf", 47438, 138], // L2
+  ["host", "lab_export", 47306, 6], // D7
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_gl", 5193, 131],
   ["vite", "lab_place", 5195, 133],
@@ -74,6 +75,7 @@ const TABLE = [
   ["vite", "lab_nav", 5205, 143],
   ["vite", "lab_refs", 5203, 141], // L1
   ["vite", "lab_refs_dxf", 5223, 156], // L2
+  ["vite", "lab_export", 5196, 134], // D7
 ];
 export const SPAN = 160; // offsets 0..SPAN-1
 const AUTO_LO = 20000, AUTO_SLOTS = Math.floor((32000 - AUTO_LO) / SPAN);

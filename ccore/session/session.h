@@ -102,6 +102,13 @@ typedef struct cc_session {
     cc_gid *paper_ids;
     double (*paper_rects)[4];
     size_t npaper;
+    /* D7: the PDF export (sheet_svg.h cc_paper_pdf_query): the Roboto files the carrier handed over
+     * or the folder to read them from on the first export (malloc'd), and the version the drawing
+     * names (NULL: the C core's; set by tests to compare with Rust's goldens). */
+    unsigned char *pdf_font[2];
+    size_t pdf_font_n[2];
+    char *pdf_font_dir;
+    char *paper_version;
 } cc_session;
 
 /* A new session with no model, on `pf` (kept by pointer). NULL when out of memory. */

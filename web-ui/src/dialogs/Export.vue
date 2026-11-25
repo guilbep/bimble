@@ -4,10 +4,11 @@ export const hint = "export.hint";
 
 <script setup lang="ts">
 // Screen D4, Print and export (wireframes v01 fr/Export.html, ADR 0062). Lists the real sheets (`sheets`);
-// Export downloads each checked sheet as SVG (`sheet_svg`, the egui sheet export) through a Blob: the web has
-// no Rust file IO. ADR 0052: no Cancel, one Export action; the close button closes.
+// Export downloads each checked sheet through a Blob (the web has no Rust file IO) as PDF (`sheet_pdf`, the
+// C core's Sheet::to_pdf, ticket D7; named "<number> <name>.pdf" as the egui sheet export) or as SVG
+// (`sheet_svg`). ADR 0052: no Cancel, one Export action; the close button closes.
 import { computed, ref } from "vue";
-import { query, sheets, state } from "../bimble";
+import { query, sheetPdf, sheetPdfName, sheets, state } from "../bimble";
 import { t } from "../i18n";
 import { currentDialog } from ".";
 
@@ -17,15 +18,36 @@ const picked = ref(new Set(list.value.map((s) => s.id)));
 const toggle = (id: string) => { const p = new Set(picked.value); p.has(id) ? p.delete(id) : p.add(id); picked.value = p; };
 const all = () => { picked.value = new Set(list.value.map((s) => s.id)); };
 const n = computed(() => list.value.filter((s) => picked.value.has(s.id)).length);
+// D7: PDF (the egui export's format) or SVG.
+const format = ref<"pdf" | "svg">("pdf");
+const failed = ref<string | null>(null);
+const busy = ref(false);
 
-function exportSheets() {
-  for (const s of list.value.filter((x) => picked.value.has(x.id))) {
-    const { svg } = query<{ svg: string }>("sheet_svg", { id: s.id });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
-    a.download = `${s.number}-${s.name}.svg`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+function download(name: string, blob: Blob) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+async function exportSheets() {
+  failed.value = null;
+  busy.value = true;
+  try {
+    for (const s of list.value.filter((x) => picked.value.has(x.id))) {
+      if (format.value === "pdf") {
+        const pdf = await sheetPdf(s.id);
+        download(sheetPdfName(s), new Blob([pdf.slice().buffer as ArrayBuffer], { type: "application/pdf" }));
+      } else {
+        const { svg } = query<{ svg: string }>("sheet_svg", { id: s.id });
+        download(`${s.number}-${s.name}.svg`, new Blob([svg], { type: "image/svg+xml" }));
+      }
+    }
+  } catch (e) {
+    failed.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    busy.value = false;
   }
 }
 </script>
@@ -53,8 +75,8 @@ function exportSheets() {
       <div style="display:flex;flex-direction:column;gap:10px">
         <div class="fld"><span class="lbl">{{ t('export.format') }}</span>
           <span class="seg" style="align-self:flex-start" data-bb="export-format">
-            <button type="button" disabled data-missing="sheet_pdf: a PDF sheet export query">PDF</button>
-            <button type="button" class="on">SVG</button>
+            <button type="button" :class="{ on: format === 'pdf' }" :aria-pressed="format === 'pdf'" data-bb="export-pdf" @click="format = 'pdf'">PDF</button>
+            <button type="button" :class="{ on: format === 'svg' }" :aria-pressed="format === 'svg'" data-bb="export-svg" @click="format = 'svg'">SVG</button>
             <button type="button" disabled data-missing="sheet_dxf: a DXF sheet export query">DXF</button>
             <button type="button" disabled data-missing="print: no printer on the web">{{ t('export.printer') }}</button>
           </span></div>
@@ -73,8 +95,9 @@ function exportSheets() {
       </div>
     </div>
     <div style="display:flex;gap:10px;align-items:center;justify-content:flex-end">
-      <span class="note">{{ t('export.background') }}</span>
-      <button class="btn" :class="n ? 'p' : 'd'" type="button" :disabled="!n" data-bb="export-go" @click="exportSheets">{{ t('export.go', { n }) }}</button>
+      <span v-if="failed" class="note err" role="alert" data-bb="export-failed">{{ t('export.failed', { e: failed }) }}</span>
+      <span v-else class="note">{{ t('export.background') }}</span>
+      <button class="btn" :class="n ? 'p' : 'd'" type="button" :disabled="!n || busy" data-bb="export-go" @click="exportSheets">{{ t('export.go', { n }) }}</button>
     </div>
   </div>
 </template>
@@ -98,5 +121,6 @@ h2 { font-family: 'Sora', sans-serif; margin: 0; }
 .on > .mono { color: var(--bb-ink) !important; }
 .inp.mono { font-family: 'DM Mono', monospace; font-size: 13px; }
 .note { font-size: 13px; color: var(--bb-stone); }
+.note.err { color: var(--bb-error); }
 button:focus-visible, input:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
 </style>

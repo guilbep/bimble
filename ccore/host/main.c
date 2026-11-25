@@ -228,6 +228,7 @@ static int serve(unsigned port, Serve *sv) {
         fprintf(stderr, "bimble-ccore: --session needs a model\n");
         return 2;
     }
+    cc_host_fonts(ses, sv->web); /* D7: the PDF export's Roboto files (fonts.c) */
     static char token[33], epoch[33];
     const char *t = getenv("BIMBLE_TOKEN");
     if (!t || !*t) {

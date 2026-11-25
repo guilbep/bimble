@@ -985,6 +985,9 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "verbs") || !strcmp(name, "describe")) return verb_query(s, name, body, n, out);
     if (!strcmp(name, "sheet_layout")) return cc_sheet_layout(s, scene_now(s), body, n, out); /* SH1, sheets.h */
     if (!strcmp(name, "sheet_svg")) return cc_paper_sheet_svg(s, s->open ? scene_now(s) : NULL, body, n, out); /* D5, sheet_svg.h */
+    /* D7: the PDF export, sheet_svg.h cc_paper_pdf_query (the answer is the PDF's bytes, or {path, bytes}) */
+    if (!strcmp(name, "sheet_pdf") || !strcmp(name, "view_pdf"))
+        return cc_paper_pdf_query(s, s->open ? scene_now(s) : NULL, name[0] == 'v', body, n, out);
     static const char *const CUT[] = {"palette_match", "schedule_rows", "schedule_csv"};
     for (size_t i = 0; i < sizeof CUT / sizeof CUT[0]; i++)
         if (!strcmp(name, CUT[i])) {

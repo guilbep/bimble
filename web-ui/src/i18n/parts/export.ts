@@ -21,6 +21,7 @@ export const fr = {
   "export.background": "Dessiné en arrière-plan ; la fenêtre reste utilisable",
   "export.go": "Exporter {n} feuilles",
   "export.hint": "Choisissez les feuilles, puis exportez",
+  "export.failed": "L’export n’a pas abouti : {e}",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "export.title": "Print and export",
@@ -44,4 +45,5 @@ export const en: Record<keyof typeof fr, string> = {
   "export.background": "Drawn in the background; the window stays usable",
   "export.go": "Export {n} sheets",
   "export.hint": "Choose the sheets, then export",
+  "export.failed": "The export failed: {e}",
 };

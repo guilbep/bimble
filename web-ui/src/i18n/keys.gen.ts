@@ -71,6 +71,7 @@ export type PartKey =
   | "export.colour"
   | "export.colourValue"
   | "export.example"
+  | "export.failed"
   | "export.files"
   | "export.folder"
   | "export.format"

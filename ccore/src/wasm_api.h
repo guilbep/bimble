@@ -10,7 +10,8 @@
  *       res[2] u32 value a number: the model handle (open_*), 1/0 (undo, redo), the model
  *                        revision (mesh), else 0
  *     The host reads ptr[0..len) then calls cc_free(ptr). The answer is the result (status 200)
- *     or the error text (any other status), UTF-8, except mesh's 200 answer (BMSH bytes).
+ *     or the error text (any other status), UTF-8, except mesh's 200 answer (BMSH bytes) and the
+ *     200 answer of `call query sheet_pdf` / `view_pdf` (PDF bytes, D7).
  *   - Status codes, as the native host: 200 ok, 400 the call failed (bad input; the text says
  *     why, Rust's text), 404 no model with that handle, 500 out of memory or a scene that cannot
  *     be built.
@@ -97,6 +98,11 @@
  *                                           0 until set (1970-01-01T00:00:00)
  *   host_log(res) -> status                 what the host layer wrote on stderr since the last
  *                                           host_log ("bimble-ccore: Saved …"), then cleared
+ *   host_fonts(reg, reg_len, bold, bold_len, res) -> status
+ *                                           D7: Roboto-Regular.ttf and Roboto-Bold.ttf for the PDF
+ *                                           export (session/sheet_svg.h; copied; empty: none, the
+ *                                           export is then Helvetica). `call query sheet_pdf` /
+ *                                           `view_pdf` answer the PDF's bytes (status 200)
  *
  * BMSH (flags 0): exactly session/mesh.c's version 1 (rev = the model revision, bumped by every
  * change: apply, verb, undo, redo that did something): world positions relative to origin_mm.

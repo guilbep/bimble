@@ -8,7 +8,8 @@
 //            read-only): select, query element, the visibility actions, the section box tool, plan
 //            tabs and their clip, change_json: byte for byte
 //   refused  the view build answers "this build is view-only" (400) to verb, apply, undo, redo,
-//            set_placing, the place tool, the edit and file-writing actions, and the handle API's
+//            set_placing, the place tool, the edit and file-writing actions, the PDF export (D7:
+//            query sheet_pdf, view_pdf), and the handle API's
 //            open_ifc, apply, verb, undo, redo, save, export_ifc; the editor build does not
 //   time     a synthetic 3072-element model (made with the editor's verbs) as .json and IFC4: opened
 //            and meshed on both, byte for byte, and timed (the view build is -Os, the editor -O2)
@@ -204,6 +205,7 @@ suite("refused");
     ["tool", "click", "{}"], ["tool", "cancel", ""], ["tool", "annotate", JSON.stringify({ mode: "dimension" })],
     ...["new", "import_ifc", "convert_open", "save", "save_as", "export_ifc4", "export_ifc2x3", "share_for_viewing",
       "undo", "redo", "place_column", "place_beam", "place_wall", "place_slab"].map((a) => ["action", a, ""]),
+    ["query", "sheet_pdf", JSON.stringify({ sheet: "x" })], ["query", "view_pdf", JSON.stringify({ view: "x" })], // D7
   ];
   for (const [op, nm, body] of edits) {
     refused(`view: ${op} ${nm}`, V.call(V.X.call, [op, nm, body]));

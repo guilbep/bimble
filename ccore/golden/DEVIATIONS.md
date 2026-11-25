@@ -482,3 +482,28 @@ from `reference::read_dxf` over the `dxf` crate 0.6.2:
   reload, remove) is a C addition for agents and tests: Rust's Manage links window has Reload,
   Reload from… and Delete, and moves a reference by dragging it (`views.rs:203`), turns it in the
   view form.
+## 16. The PDF export in the app (ticket D7)
+
+**What.** The queries `sheet_pdf {sheet, path?}` and `view_pdf {view, path?}`
+(`ccore/session/sheet_svg.h`) are the C core's carriers of Rust's `export_sheet`
+(`viewing.rs`, the sheet as `Sheet::to_pdf`) and of the plan panel's "Export PDF…" (`lib.rs`,
+`plan_options` with the view: its scale, the smallest paper, not bare). They differ from Rust in
+three places:
+- Rust compiles the Roboto files into the program (`include_bytes!`), so its PDF always embeds
+  Roboto. The C core keeps them out of the program and the wasm (DEVIATIONS 12): the carrier hands
+  them over (the native host reads `web/fonts/` or the repository's `crates/bimble-drawing/fonts/`,
+  the page fetches `ccore/fonts/` on the first export). Without them, or with other files, the
+  sheet is drawn again in Helvetica (the style's other font, `SheetFont::Helvetica`), not embedded,
+  and a note goes to the log: the export does not fail.
+- Rust asks where to save (`files::save`). Without `path`, and always in the wasm module, the call
+  answers the PDF's bytes themselves (status 200), the one query whose answer is not JSON; the page
+  downloads them as `"<number> <name>.pdf"` (a view: `"plan-<name>-1-<scale>.pdf"`), Rust's names.
+- The version in the frame's note and the producer is the C core's (deviation 11).
+
+**What Rust sees.** With no fonts, the test clock (2026-01-01), the file named `frame.json` and
+Rust's version (`cc_paper_set_version`, tests only), `sheet_pdf` of S-101 is
+`golden/drawing/pdf/S-101-helvetica.pdf` byte for byte, the producer masked (`test/sheet_pdf_test.c`).
+With the fonts, the file is D6's Roboto file (deviation 12).
+
+**Where.** `ccore/session/sheet_svg.c` (`cc_paper_pdf_query`), `ccore/host/fonts.c`,
+`ccore/src/wasm_api.c` (`host_fonts`); tests `ccore/test/sheet_pdf_test.c`, `ccore/test/lab_export.mjs`.

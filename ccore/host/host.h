@@ -49,4 +49,7 @@ wchar_t *cc_win_wide(const char *s);
 char *cc_win_utf8(const wchar_t *w);
 FILE *cc_win_fopen(const char *path, const char *mode);
 #endif
+/* D7 (fonts.c): hands the Roboto files of the PDF export to session `s`: from the lab's files `web`
+ * (`open`), else the folder <exe dir>/web/fonts or the repository's crates/bimble-drawing/fonts. */
+void cc_host_fonts(cc_session *s, const cc_static *web);
 #endif

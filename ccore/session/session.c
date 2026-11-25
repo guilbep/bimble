@@ -44,6 +44,7 @@ void cc_session_free(cc_session *s) {
     if (s->scene_rev) cc_scene_free(&s->scene);
     buf_free(&s->mesh);
     cc_paper_cache_free(s);
+    cc_paper_fonts_free(s); /* D7 */
     cc_tool_free(&s->tool);
     cc_vis_free(&s->vis);
     cc_measure_free(&s->measure);

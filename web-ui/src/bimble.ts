@@ -218,6 +218,8 @@ interface Wasm {
   tool?(name: string, json: string): string;
   /** An action with a JSON body (C core only: link_model {path}, manage_links {op, name}). Answers its text. */
   action_with?(name: string, json: string): string;
+  /** D7: a call whose answer is bytes (C core only: `query sheet_pdf` / `view_pdf`, the PDF itself). */
+  bytes?(op: string, name: string, body: string): Promise<Uint8Array>;
 }
 
 export const state = shallowRef<State>({ selection: [], rev: 0, unsaved: false, file: null });
@@ -307,6 +309,12 @@ function nativeClient(port: number, token: string): Wasm & { standards_action(na
     standards_action: (name) => void call("standards_action", name),
     tool: (name, json) => call("tool", name, json),
     action_with: (name, json) => call("action", name, json),
+    // D7: the answer's bytes (a PDF): an async fetch, since a sync XHR cannot read binary.
+    bytes: async (op, name, body) => {
+      const r = await fetch(`${base}/${op}/${encodeURIComponent(name)}?t=${t}`, { method: "POST", headers: { "Content-Type": "text/plain" }, body });
+      if (!r.ok) throw (await r.text()) || `native ${op}: HTTP ${r.status}`;
+      return new Uint8Array(await r.arrayBuffer());
+    },
     on_change: (cb) => void pollChanges(base, t, cb),
   };
 }
@@ -914,6 +922,25 @@ export function query<T>(name: string, args?: unknown): T {
     throw new Error(message(e));
   }
 }
+
+// ---- D7: the PDF export (C core: ccore/session/sheet_svg.h `sheet_pdf`, `view_pdf`) ----
+/** A sheet as PDF (the sheet export of the Rust viewer, `Sheet::to_pdf`): the file's bytes. Throws the
+ *  C core's error text (also "this build is view-only", and outside the C core). */
+export async function sheetPdf(id: string): Promise<Uint8Array> {
+  const w = wasmOrThrow();
+  if (!w.bytes) throw new Error("PDF export: the C core only");
+  try { return await w.bytes("query", "sheet_pdf", JSON.stringify({ sheet: id })); } catch (e) { throw new Error(message(e)); }
+}
+/** A 2D view as PDF (the plan panel's "Export PDF…": its scale, the smallest paper it fits on). */
+export async function viewPdf(id: string): Promise<Uint8Array> {
+  const w = wasmOrThrow();
+  if (!w.bytes) throw new Error("PDF export: the C core only");
+  try { return await w.bytes("query", "view_pdf", JSON.stringify({ view: id })); } catch (e) { throw new Error(message(e)); }
+}
+/** Rust's file names: "<number> <name>.pdf" for a sheet (viewing.rs export_sheet), "plan-<view>-1-<scale>.pdf" for a view (lib.rs). */
+export const sheetPdfName = (s: { number: string; name: string }) => `${s.number} ${s.name}.pdf`;
+export const viewPdfName = (v: { name: string; scale: number }) => `plan-${v.name}-1-${v.scale}.pdf`;
+// ---- end D7 ----
 
 /** Run one ribbon action by name (see `actions`). Returns the Rust error, or null. */
 /** Actions the lab shows as a Vue screen instead of egui's (App.vue fills it: no import cycle). */

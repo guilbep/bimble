@@ -8,6 +8,8 @@
 //   - path traversal, an unknown path, a symbolic link and a hidden file in web/ are 404; a wrong
 //     Host or a foreign Origin is 403; the calls and /change still need the token;
 //   - a query answers (the model is loaded), from the page's own origin too; SIGTERM exits 0;
+//   - ticket D7: web/fonts/ holds the two Roboto files and their licence; `query view_pdf` of a plan
+//     answers a PDF that embeds Roboto (the host found web/fonts/: no Helvetica fallback);
 //   - `--port N` serves on N; a web/ without index.html or over 64 MiB refuses to start;
 //   - without --no-browser, xdg-open (a stand-in first on PATH) gets the URL and no socket.
 // The ports: the system's free ones (open picks one; --port gets one from node), not test/ports.mjs.
@@ -103,7 +105,7 @@ function files(dir, pre = "") {
   }
   return out.sort();
 }
-const CTYPE = { html: "text/html", js: "text/javascript", css: "text/css", woff2: "font/woff2", json: "application/json", svg: "image/svg+xml", png: "image/png", wasm: "application/wasm" };
+const CTYPE = { html: "text/html", js: "text/javascript", css: "text/css", woff2: "font/woff2", json: "application/json", svg: "image/svg+xml", png: "image/png", wasm: "application/wasm", ttf: "font/ttf" };
 
 const tmp = mkdtempSync(join(tmpdir(), "ccore-release-"));
 let host = null;
@@ -113,7 +115,7 @@ try {
   const list = execFileSync("tar", ["tzf", ARCHIVE], { encoding: "utf8" }).split("\n").filter(Boolean);
   const top = new Set(list.map((p) => p.split("/")[0]));
   check("one top folder named after the version and arch", top.size === 1 && top.has(NAME), [...top].join(" "));
-  for (const f of ["bimble-ccore", "web/index.html", "LICENSE", "README.txt"])
+  for (const f of ["bimble-ccore", "web/index.html", "LICENSE", "README.txt", "web/fonts/Roboto-Regular.ttf", "web/fonts/Roboto-Bold.ttf", "web/fonts/LICENSE-Roboto"])
     check(`archive holds ${f}`, list.includes(`${NAME}/${f}`));
   const rest = list.filter((p) => !/^[^/]+\/(bimble-ccore|LICENSE|README\.txt|web\/.*)?$/.test(p));
   check("nothing else in the archive", rest.length === 0, rest.join(" "));
@@ -188,6 +190,12 @@ try {
   check("a call from the page's own origin -> 200 with Access-Control-Allow-Origin", qs.status === 200 && header(qs.head, "Access-Control-Allow-Origin") === self, `${qs.status}`);
   check("Origin http://localhost:<port> -> 200", (await post(port, `/query/state?t=${token}`, "", { Origin: `http://localhost:${port}`, Host: `localhost:${port}` })).status === 200);
   check("GET /change with the token -> 200", (await get(port, `/change?since=0&t=${token}`)).status === 200);
+  // D7: the PDF export reads web/fonts/ (Roboto embedded, not the Helvetica fallback).
+  let plan = null;
+  try { plan = JSON.parse((await post(port, `/query/open_views?t=${token}`)).body.toString()).views.find((v) => v.auto_name?.kind === "plan"); } catch { /* checked below */ }
+  const pdf = plan ? await post(port, `/query/view_pdf?t=${token}`, JSON.stringify({ view: plan.id })) : null;
+  check("view_pdf of a plan: a PDF with Roboto embedded (web/fonts/)", pdf && pdf.status === 200 && pdf.body.subarray(0, 5).toString() === "%PDF-" &&
+    pdf.body.subarray(-5).toString() === "%%EOF" && pdf.body.includes("/FontFile2") && pdf.body.includes("/BaseFont /Roboto"), pdf ? `${pdf.status} ${pdf.body.length} bytes` : "no plan view");
   const mesh = await get(port, `/mesh?t=${token}`);
   check("GET /mesh with the token -> 200 BMSH", mesh.status === 200 && mesh.body.subarray(0, 4).toString() === "BMSH", `${mesh.status}`);
 
