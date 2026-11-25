@@ -4,23 +4,18 @@ name: ccore
 # MAC1; no tcc, no wasm there) and on Windows (ticket WIN1, MSYS2 CLANG64; a probe until green).
 # The release archives of bimble-ccore (tickets R1, MAC1): job ccore-release on a manual run, on a
 # tag ccore-v<VERSION> and on a push whose head commit message holds [ccore-release]; on a tag,
-# ccore-prerelease attaches them to a GitHub prerelease. Never a tag v*:
-# that prefix starts the Rust release, the Pages deployment and the brew formula (release.yml).
+# ccore-prerelease attaches them to a GitHub prerelease. Never a tag v*: that prefix is the Rust
+# releases' (v0.19.0, the frozen oracle; the site root of pages.yml and Formula/bimble.rb).
+# Since ADR 0072 main is the C core: this is main's CI. It runs on every push to main, every pull
+# request to main (no path filter: a required check must report on every pull request), the tags
+# ccore-v*, and by hand. The jobs' names are the required checks of main's branch protection:
+# ccore-linux, ccore-san, ccore-lab, ccore-macos (ccore-windows is allowed to fail).
 on:
   push:
-    branches: ["**"]
-    tags: ["ccore-v*"] # path filters are not evaluated for tags
-    paths:
-      - "ccore/**"
-      - "web-ui/**"
-      - "scripts/apt-install.sh"
-      - ".github/workflows/ccore.yml"
+    branches: [main]
+    tags: ["ccore-v*"]
   pull_request:
-    paths:
-      - "ccore/**"
-      - "web-ui/**"
-      - "scripts/apt-install.sh"
-      - ".github/workflows/ccore.yml"
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -433,10 +428,10 @@ jobs:
   # The release archives (ticket R1, ADR 0069 rule 2; macOS: ticket MAC1): ccore/build.sh release
   # (clang -O2, manifold static, the lab built by Vite), checked by test/release_test.mjs on the
   # unpacked archive. Linux on ubuntu-22.04: a low glibc (2.35), so the binary runs on more
-  # distributions (as release.yml). macOS on macos-15 (as release.yml): arm64 natively, x86_64 with
+  # distributions (as the Rust release did). macOS on macos-15 (likewise): arm64 natively, x86_64 with
   # CMAKE_OSX_ARCHITECTURES (manifold and the core), run under Rosetta 2 for the test; both for
-  # macOS 11 and newer. Also on a push whose head commit message holds [ccore-release]: a branch
-  # can show its archives before a tag (workflow_dispatch needs this file on the default branch).
+  # macOS 11 and newer. Also on a push to main whose head commit message holds [ccore-release]; a
+  # branch shows its archives before a tag through a manual run on it (gh workflow run ccore.yml --ref <branch>).
   ccore-release:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/ccore-v') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[ccore-release]'))
     strategy:
@@ -506,7 +501,7 @@ jobs:
   # On a tag ccore-v*: the four archives and their SHA256SUMS on one GitHub prerelease, once the
   # full suites passed on Linux and on macOS too. The Homebrew formula of that release
   # (ccore/ci/formula.sh) is printed and kept as an artifact: committing it to main as
-  # Formula/bimble-ccore.rb is a person's step (never Formula/bimble.rb, which release.yml owns).
+  # Formula/bimble-ccore.rb is a person's step (never Formula/bimble.rb: it installs v0.19.0).
   ccore-prerelease:
     if: startsWith(github.ref, 'refs/tags/ccore-v')
     needs: [ccore-linux, ccore-san, ccore-lab, ccore-macos, ccore-release]
