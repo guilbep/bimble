@@ -428,3 +428,23 @@ int cc_gzip(const unsigned char *in, size_t n, Buf *out) {
     buf_append(out, tail, 8);
     return out->oom ? -1 : 0;
 }
+
+/* Stored blocks (no compression, ticket J1): any gzip reader inflates it; a memcpy and the CRC. */
+int cc_gzip_stored(const unsigned char *in, size_t n, Buf *out) {
+    static const unsigned char head[10] = {0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 0xFF};
+    buf_append(out, head, sizeof head);
+    size_t i = 0;
+    do {
+        size_t k = n - i < 65535 ? n - i : 65535;
+        unsigned char h[5] = {(unsigned char)(i + k == n), (unsigned char)k, (unsigned char)(k >> 8),
+                              (unsigned char)~k, (unsigned char)(~k >> 8)};
+        buf_append(out, h, 5);
+        if (k) buf_append(out, in + i, k);
+        i += k;
+    } while (i < n);
+    uint32_t crc = cc_crc32(0, in, n), size = (uint32_t)n;
+    unsigned char tail[8];
+    for (int k = 0; k < 4; k++) tail[k] = (unsigned char)(crc >> 8 * k), tail[4 + k] = (unsigned char)(size >> 8 * k);
+    buf_append(out, tail, 8);
+    return out->oom ? -1 : 0;
+}

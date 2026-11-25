@@ -29,6 +29,8 @@ cc_guid cc_guid_from_bytes(const cc_guid_raw *raw);
 cc_guid cc_guid_from_u128(uint64_t hi, uint64_t lo);
 
 /* GlobalId::derived: the first 16 bytes of blake3(data), big-endian. */
+/* BLAKE3 (vendor/blake3, portable) of `n` bytes: the 32-byte hash. */
+void cc_blake3(const void *data, size_t n, unsigned char out[32]);
 cc_guid cc_guid_derived(const void *data, size_t n);
 
 /* GlobalId::new: a random UUID v4 (version 4, variant 10).

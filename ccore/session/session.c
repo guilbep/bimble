@@ -9,6 +9,7 @@
 #include "ifc_in.h"
 #include "json_r.h"
 #include "guid.h"
+#include "inflate.h"
 #include "json_w.h"
 #include "session.h"
 
@@ -371,7 +372,13 @@ static void persist_drop_cmds(cc_session *s) { (void)s; }
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define SESSION_FORMAT 2
+/* Format 3 (ticket J1): the snapshot's model, when it is not the model file, is in a side file
+ * `<session>.model-a` or `-b` (the .bimble v2 binary, gzip in stored blocks: Rust reads it), named
+ * in the line with its size and BLAKE3; the slots alternate, so the line a crash leaves always
+ * names a complete side file. Format 2 (the model as v1 JSON text inside the line) still
+ * restores. */
+#define SESSION_FORMAT 3
+#define SESSION_FORMAT_TEXT 2
 #define SESSION_MAX_LABEL 4096
 #define SESSION_MAX_ENTRIES 2000   /* entries after the snapshot before a new snapshot */
 #define SESSION_LOG_FACTOR 4       /* or entry bytes above 4x the snapshot (model text or file) */
@@ -397,6 +404,8 @@ struct cc_persist {
     size_t snap_bytes, log_bytes, log_entries; /* the file: snapshot line, then entry lines */
     uint64_t model_file_bytes;
     int snap_null; /* the snapshot line has no model text (it stands for the model file) */
+    size_t side_bytes; /* the snapshot's side file (format 3), 0 without one */
+    char side_slot;    /* 'a' or 'b': the side file the line names, 0 none */
     /* The forward commands of the step the current call pushed (cc_session_note_apply). */
     Buf pend_cmds;
     uint64_t pend_id;
@@ -521,7 +530,27 @@ static int write_snapshot(cc_session *s) {
     Buf model, b;
     buf_init(&model), buf_init(&b);
     int rc = -1, fd = -1;
-    if (!P->model_is_file && (cc_model_save(&s->model, &model) != 0 || model.oom)) goto end;
+    char slot = 0, hex[65];
+    if (!P->model_is_file) {
+        /* The side file first (tmp + rename), in the slot the current line does not name. */
+        slot = P->side_slot == 'a' ? 'b' : 'a';
+        if (cc_model_save_v2_stored(&s->model, &model) != 0 || model.oom) goto end;
+        unsigned char h[32];
+        cc_blake3(model.p, model.len, h);
+        for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", h[i]);
+        char side[sizeof P->sess_path + 16], stmp[sizeof side + 8];
+        snprintf(side, sizeof side, "%s.model-%c", P->sess_path, slot);
+        snprintf(stmp, sizeof stmp, "%s.tmp", side);
+        fd = open(stmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) goto end;
+        int sbad = write_all(fd, model.p, model.len);
+        sbad |= close(fd) != 0;
+        fd = -1;
+        if (sbad || rename(stmp, side) != 0) {
+            unlink(stmp);
+            goto end;
+        }
+    }
     JsonW w;
     jw_init(&w, &b, 0);
     jw_obj_begin(&w);
@@ -533,7 +562,14 @@ static int write_snapshot(cc_session *s) {
     jw_key(&w, "format"), jw_u64(&w, SESSION_FORMAT);
     jw_key(&w, "model");
     if (P->model_is_file) jw_null(&w);
-    else jw_str_n(&w, model.p, model.len);
+    else {
+        char sl[2] = {slot, 0};
+        jw_obj_begin(&w);
+        jw_key(&w, "blake3"), jw_str(&w, hex);
+        jw_key(&w, "bytes"), jw_u64(&w, model.len);
+        jw_key(&w, "slot"), jw_str(&w, sl);
+        jw_obj_end(&w);
+    }
     jw_key(&w, "model_path"), jw_str(&w, P->sess_model);
     write_counters(s, &w, 1);
     jw_key(&w, "redo"), write_steps(&w, s->hist.redo, s->redo_ids, s->nredo_ids);
@@ -559,6 +595,16 @@ static int write_snapshot(cc_session *s) {
     P->sess_fd = open(P->sess_path, O_WRONLY | O_APPEND);
     if (P->sess_fd < 0) goto end;
     P->snap_bytes = b.len, P->log_bytes = 0, P->log_entries = 0, P->snap_null = P->model_is_file;
+    {
+        /* The line now names `slot` (or none): the other side file is dead. */
+        P->side_slot = slot, P->side_bytes = slot ? model.len : 0;
+        for (char k = 'a'; k <= 'b'; k++)
+            if (k != slot) {
+                char side[sizeof P->sess_path + 16];
+                snprintf(side, sizeof side, "%s.model-%c", P->sess_path, k);
+                unlink(side);
+            }
+    }
     P->W.size = size, P->W.mtime = mt, P->model_file_bytes = size;
     rc = remember(s);
 end:
@@ -657,7 +703,7 @@ void cc_session_persist_now(cc_session *s) {
         op = "redo";
     P->pend_ok = 0;
     if (op && strcmp(op, "state")) P->model_is_file = 0;
-    size_t base = P->snap_bytes + (P->snap_null ? (size_t)P->model_file_bytes : 0);
+    size_t base = P->snap_bytes + P->side_bytes + (P->snap_null ? (size_t)P->model_file_bytes : 0);
     if (!op || P->log_entries >= SESSION_MAX_ENTRIES || P->log_bytes > SESSION_LOG_FACTOR * base) {
         if (!op) P->model_is_file = 0; /* more than one change in a call: no telling */
         write_snapshot(s);
@@ -932,6 +978,9 @@ static int restore(cc_session *s, size_t *keep, int *rewrite) {
     uint64_t *uids = NULL, *rids = NULL;
     size_t nu = 0, nr = 0;
     uint64_t fmt, size, mt, fsize, rev, next_step, saved_step = UINT64_MAX;
+    char *side = NULL; /* format 3: the model side file's bytes */
+    size_t side_n = 0;
+    char slot = 0;
     cc_cmds_init(&P->sess_cmds);
     const char *nl = memchr(text, '\n', n);
     size_t first = nl ? (size_t)(nl - text) : n;
@@ -939,7 +988,10 @@ static int restore(cc_session *s, size_t *keep, int *rewrite) {
     const JrVal *root = nl ? jr_parse(&a, text, first, &je) : NULL;
     if (!root) { why = "not JSON"; goto fail; }
     if (root->type != JR_OBJ) { why = "not an object"; goto fail; }
-    if (get_u64(root, "format", 0, UINT64_MAX, &fmt) || fmt != SESSION_FORMAT) { why = "unknown format"; goto fail; }
+    if (get_u64(root, "format", 0, UINT64_MAX, &fmt) || (fmt != SESSION_FORMAT && fmt != SESSION_FORMAT_TEXT)) {
+        why = "unknown format";
+        goto fail;
+    }
     const JrVal *mp = jr_get(root, "model_path");
     if (!mp || mp->type != JR_STR || strlen(P->sess_model) != mp->n || memcmp(mp->s, P->sess_model, mp->n)) {
         why = "written for another model path";
@@ -965,7 +1017,34 @@ static int restore(cc_session *s, size_t *keep, int *rewrite) {
     if (!sv) { why = "no saved_step"; goto fail; }
     if (sv->type != JR_NULL && get_u64(root, "saved_step", 0, next_step - 1, &saved_step)) { why = "bad saved_step"; goto fail; }
     const JrVal *mt_text = jr_get(root, "model");
-    if (!mt_text || (mt_text->type != JR_STR && mt_text->type != JR_NULL)) { why = "no model text"; goto fail; }
+    if (!mt_text || (mt_text->type != (fmt == SESSION_FORMAT ? JR_OBJ : JR_STR) && mt_text->type != JR_NULL)) {
+        why = "no model text";
+        goto fail;
+    }
+    /* Format 3: the side file, checked against the line (size, BLAKE3) before it is parsed. */
+    if (mt_text->type == JR_OBJ) {
+        const JrVal *hv = jr_get(mt_text, "blake3"), *sv2 = jr_get(mt_text, "slot");
+        uint64_t want_n;
+        if (!hv || hv->type != JR_STR || hv->n != 64 || !sv2 || sv2->type != JR_STR || sv2->n != 1 ||
+            (sv2->s[0] != 'a' && sv2->s[0] != 'b') || get_u64(mt_text, "bytes", 0, CC_MAX_BINARY_FILE_BYTES, &want_n)) {
+            why = "bad model side file entry";
+            goto fail;
+        }
+        slot = sv2->s[0];
+        char path[sizeof P->sess_path + 16];
+        snprintf(path, sizeof path, "%s.model-%c", P->sess_path, slot);
+        cc_error se;
+        side = read_all(s, path, &side_n, &se);
+        if (!side) { why = "the model side file cannot be read"; goto fail; }
+        unsigned char h[32];
+        char hex[65];
+        cc_blake3(side, side_n, h);
+        for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", h[i]);
+        if (side_n != want_n || memcmp(hex, hv->s, 64)) {
+            why = "the model side file does not match the snapshot (size or BLAKE3)";
+            goto fail;
+        }
+    }
     if (read_steps(P, jr_get(root, "undo"), next_step, &undo, &uids, &nu, &why)) goto fail;
     if (read_steps(P, jr_get(root, "redo"), next_step, &redo, &rids, &nr, &why)) goto fail;
     for (size_t i = 1; i < nu; i++)
@@ -974,10 +1053,18 @@ static int restore(cc_session *s, size_t *keep, int *rewrite) {
         if (rids[i] >= rids[i - 1]) { why = "redo ids not decreasing"; goto fail; }
     /* The model: the snapshot's text (the model file is not read), or the model file itself. */
     P->model_is_file = P->snap_null = mt_text->type == JR_NULL;
-    if (P->model_is_file ? cc_session_open(s, P->sess_model, &err) : open_impl(s, P->sess_model, mt_text->s, mt_text->n, &err)) {
-        why = P->model_is_file ? "the model file does not load" : "the model text does not load";
-        goto fail;
+    {
+        int bad = P->model_is_file ? cc_session_open(s, P->sess_model, &err)
+                  : side         ? open_impl(s, P->sess_model, side, side_n, &err)
+                                 : open_impl(s, P->sess_model, mt_text->s, mt_text->n, &err);
+        free(side);
+        side = NULL;
+        if (bad) {
+            why = P->model_is_file ? "the model file does not load" : "the model text does not load";
+            goto fail;
+        }
     }
+    P->side_slot = slot, P->side_bytes = slot ? side_n : 0;
     if (read_selection(s, root, &why)) goto fail;
     cc_history_free(&s->hist);
     cc_history_init(&s->hist);
@@ -1019,6 +1106,7 @@ fail:
     cc_log(s->pf, "bimble-ccore: session %s ignored: %s; starting from %s", P->sess_path, why ? why : "invalid",
             P->sess_model);
     close_session(s);
+    free(side);
     free_steps(undo, nu), free_steps(redo, nr);
     free(uids), free(rids);
     cc_cmds_free(&P->sess_cmds);

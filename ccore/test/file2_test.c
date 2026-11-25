@@ -427,6 +427,53 @@ static void crc32_cases(void) {
     check_true("crc32 = byte-at-a-time, every length and offset", !bad);
 }
 
+/* Ticket J1: the session's side file form (cc_model_save_v2_stored): the magic, a gzip of stored
+ * blocks whose content is Rust's CBOR byte for byte; it loads back to the same v1 text. Also a
+ * model bigger than one stored block (65,535 bytes) and the empty input. */
+static void stored_case(const char *name) {
+    char path[256];
+    size_t jn, cn;
+    snprintf(path, sizeof path, "%s.json", name);
+    char *json = slurp(golden, path, &jn);
+    strip_nl(json, &jn);
+    snprintf(path, sizeof path, "bin/%s.cbor", name);
+    char *cbor = slurp(golden, path, &cn);
+    cc_model m;
+    cc_error err;
+    Buf st, in, txt;
+    buf_init(&st), buf_init(&in), buf_init(&txt);
+    char what[128];
+    int rc = cc_model_load(&m, json, jn, &err) || cc_model_save_v2_stored(&m, &st);
+    const char *why = NULL;
+    rc = rc || st.len < CC_MAGIC_LEN || memcmp(st.p, CC_MAGIC, CC_MAGIC_LEN) ||
+         cc_gunzip((const unsigned char *)st.p + CC_MAGIC_LEN, st.len - CC_MAGIC_LEN, (size_t)1 << 30, &in, &why);
+    snprintf(what, sizeof what, "%s: stored v2 inflates to Rust's CBOR", name);
+    check_eq(what, rc ? "" : in.p, rc ? 0 : in.len, cbor, cn);
+    cc_model back;
+    rc = rc || cc_model_load(&back, st.p, st.len, &err) || cc_model_save(&back, &txt);
+    snprintf(what, sizeof what, "%s: stored v2 loads back to the same v1 text", name);
+    check_eq(what, rc ? "" : txt.p, rc ? 0 : txt.len, json, jn);
+    cc_model_free(&m), cc_model_free(&back);
+    buf_free(&st), buf_free(&in), buf_free(&txt);
+    free(json), free(cbor);
+}
+static void stored_blocks(void) {
+    static unsigned char big[200000];
+    for (size_t i = 0; i < sizeof big; i++) big[i] = (unsigned char)(i * 131 + (i >> 9));
+    size_t sizes[] = {0, 1, 65535, 65536, sizeof big};
+    int bad = 0;
+    for (size_t k = 0; k < sizeof sizes / sizeof *sizes; k++) {
+        Buf z, o;
+        buf_init(&z), buf_init(&o);
+        const char *why = NULL;
+        if (cc_gzip_stored(big, sizes[k], &z) || cc_gunzip((const unsigned char *)z.p, z.len, sizes[k] + 1, &o, &why) ||
+            o.len != sizes[k] || (sizes[k] && memcmp(o.p, big, sizes[k])))
+            bad++;
+        buf_free(&z), buf_free(&o);
+    }
+    check_true("gzip stored blocks: 0, 1, 65535, 65536, 200000 bytes round trip", !bad);
+}
+
 int main(int argc, char **argv) {
     static char dir[4096];
     snprintf(dir, sizeof dir, "%s/..", argc > 1 ? argv[1] : "ccore/golden/floats");
@@ -437,5 +484,8 @@ int main(int argc, char **argv) {
     robustness();
     large();
     crc32_cases();
+    stored_case("frame");
+    stored_case("frame2");
+    stored_blocks();
     return report("file2");
 }

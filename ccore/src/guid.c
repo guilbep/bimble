@@ -87,6 +87,13 @@ void cc_guid_to_bytes(const cc_guid *g, cc_guid_raw *out) {
     u128_to_raw(hi, lo, out);
 }
 
+void cc_blake3(const void *data, size_t n, unsigned char out[32]) {
+    blake3_hasher h;
+    blake3_hasher_init(&h);
+    blake3_hasher_update(&h, data, n);
+    blake3_hasher_finalize(&h, out, 32);
+}
+
 cc_guid cc_guid_derived(const void *data, size_t n) {
     blake3_hasher h;
     blake3_hasher_init(&h);

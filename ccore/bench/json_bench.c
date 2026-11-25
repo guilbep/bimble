@@ -230,7 +230,10 @@ int main(int argc, char **argv) {
         cc_session_persist_now(s);
         double t = now_ms() - t0;
         cc_session_free(s);
+        char side[4200];
         long sb = fsize(spath);
+        snprintf(side, sizeof side, "%s.model-a", spath), sb += fsize(side); /* format 3: the side file */
+        snprintf(side, sizeof side, "%s.model-b", spath), sb += fsize(side);
         double v[RUNS_MAX];
         for (int r = 0; r < RUNS; r++) {
             cc_session *u = cc_session_new(cc_platform_native());

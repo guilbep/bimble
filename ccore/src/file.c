@@ -1220,3 +1220,15 @@ int cc_model_save_v2(const cc_model *m, Buf *b) {
     buf_free(&cbor);
     return !rc && !b->oom ? 0 : -1;
 }
+
+int cc_model_save_v2_stored(const cc_model *m, Buf *b) {
+    Buf cbor;
+    buf_init(&cbor);
+    int rc = cc_model_to_cbor(m, &cbor);
+    if (!rc) {
+        buf_append(b, CC_MAGIC, CC_MAGIC_LEN);
+        rc = cc_gzip_stored((const unsigned char *)cbor.p, cbor.len, b);
+    }
+    buf_free(&cbor);
+    return !rc && !b->oom ? 0 : -1;
+}

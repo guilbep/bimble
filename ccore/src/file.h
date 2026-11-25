@@ -34,6 +34,10 @@ int cc_model_save(const cc_model *m, Buf *b);
 /* Appends file::to_bytes(m): the magic, then gzip of the CBOR. 0 ok, -1 out of memory. */
 int cc_model_save_v2(const cc_model *m, Buf *b);
 
+/* The same form with the gzip in stored blocks (no compression; ticket J1, the session's model
+ * side file): any reader, Rust's too, loads it; ~6x larger, written and read with a memcpy. */
+int cc_model_save_v2_stored(const cc_model *m, Buf *b);
+
 /* Appends the CBOR body of the binary form (what Rust's to_bytes compresses), byte for byte as
  * ciborium writes it. 0 ok, -1 out of memory. */
 int cc_model_to_cbor(const cc_model *m, Buf *b);

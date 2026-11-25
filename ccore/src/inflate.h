@@ -19,4 +19,6 @@ int cc_gunzip(const unsigned char *in, size_t n, size_t max_out, Buf *out, const
 
 /* Appends a gzip member of `in` to `out`. 0 ok, -1 out of memory. */
 int cc_gzip(const unsigned char *in, size_t n, Buf *out);
+/* The same in stored blocks (no compression): fast to write and to read, n + ~5/64 KiB + 18 bytes. */
+int cc_gzip_stored(const unsigned char *in, size_t n, Buf *out);
 #endif
