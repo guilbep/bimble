@@ -791,9 +791,9 @@ function shortcutRows(shortcuts, vue) {
     // KEY1: the key table's row of these keys (exact spelling): handled; another action than Rust's: differs.
     const t = (vue.table ?? []).find((r) => r.keys === s.keys);
     const want = s.action ?? (s.keys === "Ctrl Shift Z" ? "redo" : null);
-    const differs = t && want && t.action !== want ? `${t.action ?? t.effect} for ${want}` : null;
+    const differs = t && want && (t.action ?? t.effect) !== want ? `${t.action ?? t.effect} for ${want}` : null;
     const handled = t ? [`${t.at} \`${t.action ?? t.effect}\` (${t.context})`] : h.slice(0, 2).map((x) => `${x.at} \`${esc(x.code)}\``);
-    if (t?.action) shown.push({ text: s.keys, at: "the key table's label (ribbon tooltip, File menu, palette)" });
+    if (t?.action || t?.effect === "palette") shown.push({ text: s.keys, at: t.action ? "the key table's label (ribbon tooltip, File menu, palette)" : "the key table's label (the command field)" });
     return { ...s, handled: handled.join("<br>"), differs, shown: shown.map((x) => `${x.text} (${x.at})`).join("<br>") };
   });
 }
