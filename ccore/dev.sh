@@ -48,13 +48,20 @@ cleanup() {
     [[ -n $watch_pid ]] && kill "$watch_pid" 2> /dev/null
     [[ -n $host_pid ]] && kill "$host_pid" 2> /dev/null
     [[ -n $vite_pid ]] && kill -TERM -- "-$vite_pid" 2> /dev/null # Vite runs in its own process group
-    local i
+    # Every child, not only the recorded ones: a stop signal can arrive between `host &` and
+    # `host_pid=$!` in start_host (a rebuild under way), and that host was left listening.
+    local i kids
+    kids=$(jobs -p)
+    for i in $kids; do kill "$i" 2> /dev/null; done
     for i in $(seq 50); do
-        kill -0 "$host_pid" 2> /dev/null || kill -0 -- "-$vite_pid" 2> /dev/null || break
+        local alive=0 k
+        for k in $kids; do kill -0 "$k" 2> /dev/null && alive=1; done
+        kill -0 "$host_pid" 2> /dev/null || kill -0 -- "-$vite_pid" 2> /dev/null || ((alive)) || break
         sleep 0.05
     done
     [[ -n $host_pid ]] && kill -KILL "$host_pid" 2> /dev/null
     [[ -n $vite_pid ]] && kill -KILL -- "-$vite_pid" 2> /dev/null
+    for i in $kids; do kill -KILL "$i" 2> /dev/null; done
     wait 2> /dev/null
     rm -f "$FIFO"
     echo "dev.sh: stopped"
