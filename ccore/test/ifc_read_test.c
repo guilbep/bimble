@@ -11,9 +11,15 @@
  * - threads (cc_jobs): every golden read on 1 thread and on 8 gives the same text; so does a
  *   synthetic model of 3000 products (several 1 MiB parse chunks, several batches of 1024,
  *   shared maps, openings, an unsupported placement shared by many products).
- * - timing per input (mean of runs). */
-#define _POSIX_C_SOURCE 199309L
+ * - timing per input (mean of runs).
+ * - C-own goldens (ticket IFC2, golden/DEVIATIONS.md section 10): golden/ifc_c/fixtures/, types
+ *   Rust's reader skips (Rust frozen at v0.19.0). golden/ifc_c/read/<name>/ is the C reader's own
+ *   output (CCORE_WRITE_GOLDEN=1 writes it again), and each scene's volume and bounding box are
+ *   checked against numbers computed by hand from the fixture's dimensions. */
+#define _POSIX_C_SOURCE 200809L
 #include <stdint.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 #include <string.h>
 #include <time.h>
 #include "../src/boolean.h"
@@ -64,9 +70,10 @@ static int file_exists(const char *dir, const char *name) {
 }
 
 /* Every file of the folder matches: 1, else 0 with the first difference in `why`. */
-static int compare(const char *name, const cc_ifc_scene *s, int rc, const cc_error *err, char *why, size_t wn) {
+static int compare_in(const char *root, const char *name, const cc_ifc_scene *s, int rc, const cc_error *err,
+                      char *why, size_t wn) {
     char dir[256];
-    snprintf(dir, sizeof dir, "golden/ifc/read/%s", name);
+    snprintf(dir, sizeof dir, "%s/%s", root, name);
     Buf b;
     buf_init(&b);
     if (rc) cc_ifc_error_txt(&b, err);
@@ -110,6 +117,10 @@ static int compare(const char *name, const cc_ifc_scene *s, int rc, const cc_err
     }
     buf_free(&b);
     return ok;
+}
+
+static int compare(const char *name, const cc_ifc_scene *s, int rc, const cc_error *err, char *why, size_t wn) {
+    return compare_in("golden/ifc/read", name, s, rc, err, why, wn);
 }
 
 /* The whole read as text: scene.txt and every element's mesh text, or the error. */
@@ -257,6 +268,123 @@ static void robustness(const char *dir, const char *file, uint64_t seed) {
     free(t);
 }
 
+/* ---- C-own goldens (ticket IFC2): types past Rust's reader, checked against hand numbers */
+
+/* Volume (mm^3, signed: outward triangles give > 0) and box (world mm) of every element. */
+static void scene_measure(const cc_ifc_scene *s, double *vol, double *lo, double *hi) {
+    *vol = 0;
+    for (int k = 0; k < 3; k++) lo[k] = 1e300, hi[k] = -1e300;
+    for (size_t e = 0; e < s->scene.nelements; e++) {
+        const cc_scene_element *el = &s->scene.elements[e];
+        const cc_mesh *m = cc_scene_local_mesh(&s->scene, e);
+        for (uint32_t t = 0; t + 2 < m->ni; t += 3) {
+            double p[3][3];
+            for (int c = 0; c < 3; c++) {
+                const float *q = m->pos[m->idx[t + c]];
+                for (int k = 0; k < 3; k++)
+                    p[c][k] = el->shape < 0 ? q[k]
+                                            : (double)el->to_scene.x[k] * q[0] + (double)el->to_scene.y[k] * q[1] +
+                                                  (double)el->to_scene.z[k] * q[2] + el->to_scene.t[k];
+            }
+            *vol += (p[0][0] * (p[1][1] * p[2][2] - p[1][2] * p[2][1]) - p[0][1] * (p[1][0] * p[2][2] - p[1][2] * p[2][0]) +
+                     p[0][2] * (p[1][0] * p[2][1] - p[1][1] * p[2][0])) / 6.0;
+            for (int c = 0; c < 3; c++)
+                for (int k = 0; k < 3; k++) {
+                    double w = p[c][k] + s->scene.origin[k];
+                    lo[k] = w < lo[k] ? w : lo[k], hi[k] = w > hi[k] ? w : hi[k];
+                }
+        }
+    }
+}
+
+static void write_own(const char *name, const cc_ifc_scene *s, int rc, const cc_error *err) {
+    char dir[256], path[320];
+    snprintf(dir, sizeof dir, "golden/ifc_c/read/%s", name);
+    mkdir("golden/ifc_c/read", 0777);
+    mkdir(dir, 0777);
+    for (size_t k = 0;; k++) { /* stale element files */
+        snprintf(path, sizeof path, "%s/%03zu.txt", dir, k);
+        if (remove(path)) break;
+    }
+    Buf b;
+    buf_init(&b);
+    if (rc) cc_ifc_error_txt(&b, err);
+    else cc_ifc_scene_txt(&b, s);
+    snprintf(path, sizeof path, "%s/scene.txt", dir);
+    FILE *f = fopen(path, "wb");
+    if (f) fwrite(b.p, 1, b.len, f), fclose(f);
+    for (size_t k = 0; !rc && s->triangles <= 20000 && k < s->scene.nelements; k++) {
+        buf_clear(&b);
+        cc_ifc_mesh_txt(&b, s, k);
+        snprintf(path, sizeof path, "%s/%03zu.txt", dir, k);
+        f = fopen(path, "wb");
+        if (f) fwrite(b.p, 1, b.len, f), fclose(f);
+    }
+    buf_free(&b);
+}
+
+/* Expected by hand: elements, volume (mm^3) within rel_tol, the box within box_tol (mm), and a
+ * warning the scene must not have (the type's old "unsupported" one). */
+static const struct {
+    const char *name;
+    size_t elements;
+    double volume, rel_tol, lo[3], hi[3], box_tol;
+    const char *gone;
+} OWN[] = {
+    /* 300 x 300 x 3000 at (1000, 2000): 270,000,000 */
+    {"product_rep", 1, 270e6, 1e-6, {850, 1850, 0}, {1150, 2150, 3000}, 1e-3, NULL},
+};
+
+static void own_goldens(void) {
+    int write = getenv("CCORE_WRITE_GOLDEN") != NULL;
+    for (size_t g = 0; g < sizeof OWN / sizeof *OWN; g++) {
+        char file[128];
+        snprintf(file, sizeof file, "%s.ifc", OWN[g].name);
+        size_t tn;
+        char *t = slurp("golden/ifc_c/fixtures", file, &tn);
+        cc_ifc_scene s;
+        cc_error err;
+        int rc = cc_ifc_read(t, tn, &s, &err);
+        if (write) write_own(OWN[g].name, &s, rc, &err);
+        char why[256] = "", m[256];
+        int ok = compare_in("golden/ifc_c/read", OWN[g].name, &s, rc, &err, why, sizeof why);
+        double vol = 0, lo[3] = {0}, hi[3] = {0};
+        if (!rc) scene_measure(&s, &vol, lo, hi);
+        double rel = (vol - OWN[g].volume) / OWN[g].volume;
+        double box = 0;
+        for (int k = 0; k < 3; k++) {
+            double a = lo[k] - OWN[g].lo[k], b = hi[k] - OWN[g].hi[k];
+            a = a < 0 ? -a : a, b = b < 0 ? -b : b;
+            box = a > box ? a : box, box = b > box ? b : box;
+        }
+        Buf b;
+        buf_init(&b);
+        if (!rc) cc_ifc_scene_txt(&b, &s);
+        int clean = !rc && !strstr(buf_cstr(&b), "unsupported") && !strstr(buf_cstr(&b), "invalid profile");
+        printf("%-16s %-8s elements %zu volume %.6g (hand %.6g, %+.2e) box [%.3f %.3f %.3f]-[%.3f %.3f %.3f] %s%s\n",
+               OWN[g].name, ok ? "MATCHES" : "DIFFERS", rc ? 0 : s.scene.nelements, vol, OWN[g].volume, rel, lo[0],
+               lo[1], lo[2], hi[0], hi[1], hi[2], clean ? "" : "WARNED ", ok ? "" : why);
+        snprintf(m, sizeof m, "ifc_c/%s: matches its C-own golden", OWN[g].name);
+        check_true(m, ok);
+        snprintf(m, sizeof m, "ifc_c/%s: %zu element(s)", OWN[g].name, OWN[g].elements);
+        check_true(m, !rc && s.scene.nelements == OWN[g].elements);
+        snprintf(m, sizeof m, "ifc_c/%s: volume within %g of the hand value", OWN[g].name, OWN[g].rel_tol);
+        check_true(m, (rel < 0 ? -rel : rel) <= OWN[g].rel_tol);
+        snprintf(m, sizeof m, "ifc_c/%s: box within %g mm", OWN[g].name, OWN[g].box_tol);
+        check_true(m, box <= OWN[g].box_tol);
+        snprintf(m, sizeof m, "ifc_c/%s: no unsupported or invalid warning", OWN[g].name);
+        check_true(m, clean);
+        if (OWN[g].gone) {
+            snprintf(m, sizeof m, "ifc_c/%s: no \"%s\"", OWN[g].name, OWN[g].gone);
+            check_true(m, !strstr(buf_cstr(&b), OWN[g].gone));
+        }
+        buf_free(&b);
+        threads_same(OWN[g].name, t, tn);
+        cc_ifc_scene_free(&s);
+        free(t);
+    }
+}
+
 int main(void) {
     size_t matched = 0;
     printf("%-14s %-9s %8s %9s  %s\n", "input", "result", "elements", "ms", "note");
@@ -386,5 +514,6 @@ int main(void) {
     robustness("golden/ifc", "frame.ifc", 12345);
     robustness("golden/ifc/fixtures", "mapped_item.ifc", 777);
     robustness("../crates/bimble-ifc/tests/fixtures", "curves.ifc", 4242);
+    own_goldens();
     return report("ifc_read");
 }

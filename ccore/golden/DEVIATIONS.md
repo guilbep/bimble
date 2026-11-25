@@ -313,3 +313,27 @@ session (`sheet_svg`, natively and in the wasm module, `wasm_run.mjs`), `S-101.s
 byte for byte once both version notes are cut out.
 
 **Where.** `ccore/session/sheet_svg.c`; the library is `ccore/src/draw_sheet.c`.
+## 10. The IFC display reader past Rust's (ticket IFC2)
+
+**What.** The C display reader (`cc_ifc_read`, and the import through the shared
+`ccore/src/ifc_geom.h`) reads IFC content that Rust's `read_str` (frozen at v0.19.0) skips:
+
+- A product whose `Representation` is a plain `IfcProductRepresentation` (IFC2X3 allows the
+  supertype of `IfcProductDefinitionShape`) is read like an `IfcProductDefinitionShape` (same
+  attributes). Rust skips such a product without a warning.
+
+**Why.** ADR 0068 rule 10 (full IFC compatibility); the public corpus run (ticket IFC1,
+`ccore/results/ifc_corpus.md`) ranked these gaps. The reference is IfcOpenShell and the IFC
+specification, not Rust.
+
+**What Rust sees.** A file without these types gives the same scene, byte for byte, as before
+(the corpus run before and after: `ccore/results/ifc_corpus.md`, "After IFC2"). A file with them
+gives more elements, or more triangles, than Rust, and no "unsupported" warning for them.
+
+**Goldens.** `golden/ifc_c/fixtures/*.ifc` (hand-written, synthetic) and
+`golden/ifc_c/read/<name>/` (the C reader's output, `CCORE_WRITE_GOLDEN=1 test/run.sh ifc_read`
+writes it again). `ccore_golden --check` skips `ifc_c/` (`C_OWN`). The suite also checks each
+scene's volume and bounding box against numbers computed by hand from the fixture.
+
+**Where.** `ccore/src/ifc_read.c`, `ccore/src/ifc_geom.h`, test `ccore/test/ifc_read_test.c`
+(`own_goldens`).

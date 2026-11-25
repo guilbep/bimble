@@ -612,7 +612,10 @@ static void prod_job(void *ctx, size_t k, size_t w) {
         for (size_t q = 0; q < sizeof SKIP_CLASSES / sizeof *SKIP_CLASSES && !skip; q++)
             skip = !strcmp(e->name, SKIP_CLASSES[q]);
         const cc_step_entity *sh = skip ? NULL : cc_step_deref(f, arg(e, 6)), *pl = sh ? cc_step_deref(f, arg(e, 5)) : NULL;
-        j->isp[i] = sh && is(sh, "IFCPRODUCTDEFINITIONSHAPE") && pl && ends_with(pl->name, "PLACEMENT");
+        /* IFC2X3 allows the supertype IfcProductRepresentation (same attributes: Name,
+         * Description, Representations): read alike (ticket IFC2, DEVIATIONS.md section 10). */
+        j->isp[i] = sh && (is(sh, "IFCPRODUCTDEFINITIONSHAPE") || is(sh, "IFCPRODUCTREPRESENTATION")) && pl &&
+                    ends_with(pl->name, "PLACEMENT");
     }
 }
 
