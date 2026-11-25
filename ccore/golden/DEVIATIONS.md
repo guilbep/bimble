@@ -368,6 +368,12 @@ scene's volume and bounding box against numbers computed by hand from the fixtur
   a plain `IfcProductRepresentation` too, for every class (before: only the five classes it
   parametrises, IfcColumn, IfcBeam, IfcSlab, IfcWall, IfcFooting; the others, IfcMember and
   IfcBuildingElementProxy among them, were dropped without a word, as Rust's `import_str` does).
+- The importer parametrises a product's `IfcExtrudedAreaSolid` (wall, column, beam, slab,
+  footing, extruded polygon) only when that extrusion is all its Body holds (one item, through
+  mapped items of one item each; a mapped item that maps a map already on the way down is a
+  cycle, drawn as nothing, and does not count). Rust (`import.rs extruded_solid`) takes the first
+  extrusion it meets and drops the other items without a word; C imports such a product as a mesh
+  of its whole Body (every item the display reader draws).
 - Import goldens of the C's own: `golden/ifc_c/import/<name>.json` and `<name>.report.txt` for
   every `golden/ifc_c/fixtures/*.ifc` (ids masked as in `golden/ifc/import/`; the report with its
   C-only `unsupported: ` lines), `CCORE_WRITE_GOLDEN=1 test/run.sh ifc_in` writes them again;

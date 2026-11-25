@@ -340,6 +340,8 @@ static const struct {
     /* IfcMember 200 x 100 x 2000 at x 500, IfcBuildingElementProxy 1000^3 at x 2000, both under
      * an IfcProductRepresentation (ticket IFC3: the importer took neither): 4e7 + 1e9 */
     {"product_rep_member", 2, 1.04e9, 1e-9, {400, -500, 0}, {2500, 500, 2000}, 1e-3, NULL},
+    /* Two extrusions in one Body: 200 x 200 x 1000 + 100 x 100 x 500 at x 1000 = 4.5e7 */
+    {"multi_item", 1, 4.5e7, 1e-9, {-100, -100, 0}, {1050, 100, 1000}, 1e-3, NULL},
     /* Parametric profiles, each extruded 1000 along +Z, centred on the bounding box; areas:
      * L 100x100x10: 100*10 + 90*10 = 1900 */
     {"lshape", 1, 1.9e6, 1e-6, {-50, -50, 0}, {50, 50, 1000}, 1e-3, NULL},

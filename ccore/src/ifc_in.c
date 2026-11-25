@@ -360,6 +360,52 @@ static const cc_step_entity *extruded_solid(R *r, const cc_step_entity *e) {
     return NULL;
 }
 
+/* only_item: 1 when `solid` is all the product's Body draws: one item in its body
+ * representations, through mapped items with one item each (an item that maps a map already on
+ * the way down is a cycle: the reader draws nothing for it, so it does not count) (ticket IFC3).
+ * extruded_solid takes the first extrusion it meets (as import.rs does), so a Body of an
+ * extrusion and anything else (a second extrusion, a brep, a revolved solid) lost the rest
+ * without a word; such a product is now a mesh of its whole body. */
+static int only_item(R *r, const cc_step_entity *e, const cc_step_entity *solid) {
+    const cc_step_entity *shape = get(r, arg(e, 6));
+    const cc_sv *reps, *its, *first = NULL;
+    size_t nr, ni, count = 0;
+    if (!shape || !cc_sv_as_list(arg(shape, 2), &reps, &nr)) return 0;
+    for (size_t i = 0; i < nr && count < 2; i++) {
+        const cc_step_entity *rep = get(r, &reps[i]);
+        if (!rep || !is_body(rep) || !cc_sv_as_list(arg(rep, 3), &its, &ni)) continue;
+        if (ni && !first) first = &its[0];
+        count += ni;
+    }
+    if (count != 1) return 0;
+    const cc_step_entity *cur = get(r, first), *maps[4];
+    for (int k = 0; cur && k < 4; k++) {
+        if (cur == solid) return 1;
+        if (!is(cur, "IFCMAPPEDITEM")) return 0;
+        const cc_step_entity *map = get(r, arg(cur, 0)), *mrep = map ? get(r, arg(map, 1)) : NULL;
+        const cc_sv *l;
+        size_t nl;
+        if (!mrep || !cc_sv_as_list(arg(mrep, 3), &l, &nl)) return 0;
+        maps[k] = map;
+        const cc_step_entity *next = NULL;
+        size_t live = 0;
+        for (size_t j = 0; j < nl && live < 2; j++) {
+            const cc_step_entity *it = get(r, &l[j]);
+            if (!it) continue;
+            if (is(it, "IFCMAPPEDITEM")) {
+                const cc_step_entity *m2 = get(r, arg(it, 0));
+                int cyc = 0;
+                for (int q = 0; q <= k; q++) cyc |= m2 == maps[q];
+                if (cyc) continue;
+            }
+            if (!live++) next = it;
+        }
+        if (live != 1) return 0;
+        cur = next;
+    }
+    return cur == solid;
+}
+
 /* extruded_element: 0 none, 1 parametric, 2 polygon. */
 static int extruded_element(R *r, Arena *ar, const cc_step_entity *solid, const Aff *rel, cc_ifc_class cls,
                             double scale, cc_placement *pl, cc_generator *g) {
@@ -977,6 +1023,7 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
         Pending *pe = &els[nels];
         memset(pe, 0, sizeof *pe);
         const cc_step_entity *solid = extruded_solid(&r, e);
+        if (solid && !only_item(&r, e, solid)) solid = NULL;
         int kind = solid ? extruded_element(&r, &m->arena, solid, &rel, cls, scale, &pe->el.placement, &pe->el.generator) : 0;
         int mc = 0;
         if (kind == 1) rep->parametric++;

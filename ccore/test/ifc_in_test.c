@@ -392,6 +392,9 @@ static const struct {
     /* IfcMember 200 x 100 x 2000 + IfcBuildingElementProxy 1000^3, both under an
      * IfcProductRepresentation (skipped before IFC3): 4e7 + 1e9 */
     {"product_rep_member", 2, "extruded_polygon", 1.04e9, 1e-9},
+    /* IfcMember whose Body is two extrusions, 200 x 200 x 1000 and 100 x 100 x 500 at x 1000:
+     * 4e7 + 5e6 (before IFC3 the importer kept the first, 4e7, without a word): a mesh */
+    {"multi_item", 1, "mesh", 4.5e7, 1e-9},
     /* The profiles: extruded polygons, the reader's hand areas x 1000 */
     {"lshape", 1, "extruded_polygon", 1.9e6, 1e-9},
     {"lshape_fillet", 1, "extruded_polygon", 1910730.1, 2e-3},
