@@ -11,9 +11,14 @@
 //   Palette: Ctrl+K opens it (the query field focused), "section box" typed lists fewer items (the
 //     C core's palette_match), Enter runs the first one: Section box, its pressed state turns
 //     (query and the page's `actions`), recent_actions starts with it, an empty query lists it first.
+//   View switches (glviewport.ts Q2 blocks): Edges off draws no edge (the dark pixels go) and on
+//     again; Fit all after a wheel zoom gives the fitted camera back; Orthographic projects a line
+//     of sight to one point; Top view sets pitch 1.5 and yaw -π/2; a click from that view picks
+//     the top slab (parallel rays).
 // Before Q2 the C core answered schedule_list [] and refused schedule_rows: the page showed its
 // empty note ("quantities.empty"), which fails every check above; palette_match was refused (the
-// palette threw from its computed list) and recent_actions was [].
+// palette threw from its computed list), recent_actions was [] and the five switches were never
+// enabled (runAction answered "action … is not enabled now").
 // No uncaught page error; no console error or warning but the sync-XHR deprecation and the favicon
 // 404. Prints "N passed, M failed"; exits non-zero on a failure. Kills all it starts.
 import { spawn, execFileSync } from "node:child_process";
@@ -208,6 +213,83 @@ async function palette(mode, S, evalJs) {
   const boxLabel = await evalJs("[...document.querySelectorAll('[data-bb=palette-item]')].find((a) => a.querySelector('.kbd')?.textContent === 'B')?.querySelector('.lab')?.textContent ?? null");
   check(`${mode}: an empty query lists the recent action first`, first !== "" && first === boxLabel, `${first} vs ${boxLabel}`);
   await key("Escape", "Escape", 27);
+  await B("return b.runAction('section_box');"); // off again (the native host keeps it across pages)
+}
+
+/** The view switches on one client: Edges off and on (no edge drawn, the dark pixels go), Fit all
+ *  after a wheel zoom, Orthographic (parallel projection: two points on a line of sight meet on
+ *  screen), Top view (pitch 1.5, yaw -π/2 + north), and a click from the top picks the top slab. */
+async function switches(mode, S, evalJs) {
+  const B = (body) => evalJs(`(async () => { const b = await import('/src/bimble.ts'); ${body} })()`);
+  await S("Page.navigate", { url: PAGES[mode].replace("&page=quantities", "") });
+  await waitFor(`${mode}: the first frame`, 30000, () => evalJs("window.__bbGl && window.__bbGl.firstFrameMs && window.__bbGl.q2 && window.__bbGl.meshRev !== null"));
+  await waitFor(`${mode}: data-bb-ready`, 30000, () => evalJs("document.documentElement.dataset.bbReady === '1'"));
+  const gl = async () => JSON.parse(await evalJs("JSON.stringify(window.__bbGl)"));
+  const frames = () => evalJs("window.__bbGl.frames");
+  const settle = async () => { const f0 = await frames(); await waitFor("a new frame", 5000, async () => (await frames()) > f0).catch(() => {}); await sleep(100); };
+  const dark = () => evalJs(`(() => { const c = document.getElementById('bimble'); const o = new OffscreenCanvas(c.width, c.height);
+    const x = o.getContext('2d'); x.drawImage(c, 0, 0); const d = x.getImageData(0, 0, c.width, c.height).data; let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] < 70 && d[i + 1] < 70 && d[i + 2] < 70) n++; return n; })()`);
+  const run = (name) => B(`return b.runAction(${JSON.stringify(name)});`);
+  await B("return b.select([]);"); // the native host keeps the Quantities page's selection
+  await waitFor(`${mode}: drawn`, 10000, async () => (await gl()).drawnTris > 0);
+  await settle();
+  const g0 = await gl();
+  const d0 = await dark();
+  check(`${mode}: edges drawn by default (${g0.q2.edgeSegs} segments, ${d0} dark pixels)`, g0.q2.edges === true && g0.q2.edgeSegs > 0 && d0 > 500, JSON.stringify(g0.q2));
+  check(`${mode}: action edges -> null`, (await run("edges")) === null);
+  await waitFor(`${mode}: edges off`, 3000, async () => (await gl()).q2.edges === false).catch(() => {});
+  await settle();
+  const d1 = await dark(), g1 = await gl();
+  check(`${mode}: edges off: none drawn, the dark pixels gone (${d0} -> ${d1})`, g1.q2.edges === false && g1.q2.edgeSegs === 0 && d1 < d0 / 10, `${JSON.stringify(g1.q2)} ${d1}`);
+  check(`${mode}: the Edges button not pressed`, (await B("return b.actions.value.find((a) => a.name === 'edges').pressed;")) === false);
+  await run("edges");
+  await waitFor(`${mode}: edges on`, 3000, async () => (await gl()).q2.edges === true).catch(() => {});
+  await settle();
+  check(`${mode}: edges on again`, (await dark()) > d0 / 2);
+
+  // Fit all after a wheel zoom.
+  const c0 = g0.camera;
+  const r = JSON.parse(await evalJs("JSON.stringify((() => { const r = document.getElementById('bimble').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })())"));
+  await S("Input.dispatchMouseEvent", { type: "mouseWheel", x: r[0], y: r[1], deltaX: 0, deltaY: -600 });
+  await settle();
+  const c1 = (await gl()).camera;
+  check(`${mode}: the wheel zoomed in`, c1.distance < c0.distance * 0.95, `${c0.distance} -> ${c1.distance}`);
+  check(`${mode}: action fit -> null`, (await run("fit")) === null);
+  await settle();
+  const c2 = (await gl()).camera;
+  const near = (a, b) => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b));
+  check(`${mode}: Fit all: the fitted distance and target again`, near(c2.distance, c0.distance) && c2.target.every((v, k) => near(v, c0.target[k])),
+    `${c2.distance} vs ${c0.distance}; ${c2.target} vs ${c0.target}`);
+
+  // Orthographic: two points on a line of sight project to one point.
+  const apart = () => evalJs(`(() => { const g = window.__bbGl, e = g.navEye(), c = g.camera, n = c.distance;
+    const d = [-Math.cos(c.pitch) * Math.cos(c.yaw), -Math.cos(c.pitch) * Math.sin(c.yaw), -Math.sin(c.pitch)];
+    const t = [0, 1, 2].map((k) => e[k] + n * d[k]); // the target, world mm
+    const side = [-d[1], d[0], 0], A = [0, 1, 2].map((k) => t[k] + 3000 * side[k]), B = [0, 1, 2].map((k) => A[k] + 0.3 * n * d[k]);
+    const a = g.toScreen(...A), b = g.toScreen(...B); return Math.hypot(a[0] - b[0], a[1] - b[1]); })()`);
+  const p0 = await apart();
+  check(`${mode}: action orthographic -> null`, (await run("orthographic")) === null);
+  await waitFor(`${mode}: orthographic`, 3000, async () => (await gl()).q2.ortho === true).catch(() => {});
+  await settle();
+  const p1 = await apart();
+  check(`${mode}: orthographic: a line of sight is one point on screen (${p0.toFixed(1)} px -> ${p1.toFixed(3)} px)`, p0 > 5 && p1 < 0.5);
+  check(`${mode}: the Orthographic button pressed`, (await B("return b.actions.value.find((a) => a.name === 'orthographic').pressed;")) === true);
+
+  // Top view, then a click picks the top slab (parallel rays straight down).
+  check(`${mode}: action top -> null`, (await run("top")) === null);
+  await settle();
+  const c3 = (await gl()).camera;
+  const twoPi = 2 * Math.PI, yawWant = -Math.PI / 2;
+  check(`${mode}: Top view: pitch 1.5, yaw -π/2 (no project north)`, Math.abs(c3.pitch - 1.5) < 1e-9 && Math.abs((((c3.yaw - yawWant) % twoPi) + twoPi) % twoPi) < 1e-9, `${c3.pitch} ${c3.yaw}`);
+  const D2 = "1khkLES9P8rPMAGC5wqOCk";
+  const xy = JSON.parse(await evalJs(`JSON.stringify((() => { const b = window.__bbGl.elementBox('${D2}'); return window.__bbGl.toScreen((b.min[0] + b.max[0]) / 2 + 700, (b.min[1] + b.max[1]) / 2 + 700, b.max[2]); })())`));
+  await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: xy[0], y: xy[1], button: "none", buttons: 0 });
+  await S("Input.dispatchMouseEvent", { type: "mousePressed", x: xy[0], y: xy[1], button: "left", buttons: 1, clickCount: 1 });
+  await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: xy[0], y: xy[1], button: "left", buttons: 0, clickCount: 1 });
+  const sel = await waitFor(`${mode}: a selection`, 5000, async () => { const v = await B("return b.state.value.selection;"); return v.length ? v : null; }).catch(() => []);
+  check(`${mode}: orthographic top view: a click picks the top slab D2`, JSON.stringify(sel) === JSON.stringify([D2]), JSON.stringify(sel));
+  await run("orthographic");
 }
 
 async function main() {
@@ -255,6 +337,7 @@ async function main() {
   for (const mode of ["native", "wasm"]) {
     await quantities(mode, S, evalJs);
     await palette(mode, S, evalJs);
+    await switches(mode, S, evalJs);
   }
 
   const IGNORED = [

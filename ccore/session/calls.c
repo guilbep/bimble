@@ -527,6 +527,17 @@ static int q_state(cc_session *s, JsonW *w) { /* calls.rs:239-258 */
     return done(w);
 }
 
+/* ---- Q2: viewing.rs:258 in_2d: the active view shown is a plan or a section ---- */
+static int in_2d(cc_session *s) {
+    if (!loaded(s) || !s->tab_open || !s->has_active) return 0;
+    Arena a;
+    arena_init(&a, 0);
+    cc_view v;
+    int flat = cc_sv_active(s, &a, &v) == 1 && v.kind != CC_VIEW_THREE_D;
+    arena_free(&a);
+    return flat;
+}
+
 static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-612, the C core's subset */
     if (!strcmp(name, "new") || !strcmp(name, "open") || !strcmp(name, "import_ifc")) return 1; /* ribbon.rs:559 */
     if (!strcmp(name, "save_as")) return s->open; /* not ribbon actions (file_action) */
@@ -545,6 +556,10 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     /* Links (ticket B5, links.h): ribbon.rs:596 ManageLinks `loaded`, LinkModel `_ => loaded`. */
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return loaded(s);
     if (!strcmp(name, "measure")) return loaded(s); /* ribbon.rs:612 `_ => loaded` (ticket T1) */
+    /* ---- Q2: the view switches the page draws (ribbon.rs:591 Orthographic, Top `loaded && !flat`;
+     * Edges, Hatching, Fit `_ => loaded`) ---- */
+    if (!strcmp(name, "edges") || !strcmp(name, "hatching") || !strcmp(name, "fit")) return loaded(s);
+    if (!strcmp(name, "orthographic") || !strcmp(name, "top")) return loaded(s) && !in_2d(s);
     /* ---- L1: reference plans (links_ref.h): ribbon.rs `_ => loaded`; stored in a model's view ---- */
     if (!strcmp(name, "link_pdf")) return s->open;
     if (!strcmp(name, "link_dxf")) return s->open; /* L2: as link_pdf (links_ref.h) */
@@ -570,6 +585,9 @@ static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strcmp(a->name, "section_box")) return s->vis.section_on; /* ribbon.rs:629 */
     if (!strcmp(a->name, "reveal_hidden")) return s->vis.reveal;   /* ribbon.rs:643 */
     if (!strcmp(a->name, "measure")) return loaded(s) && s->measure.on; /* ribbon.rs:625 (ticket T1) */
+    if (!strcmp(a->name, "edges")) return s->edges;               /* Q2: ribbon.rs:626 opts.edges */
+    if (!strcmp(a->name, "hatching")) return s->hatching;         /* Q2: ribbon.rs:627 opts.hatching */
+    if (!strcmp(a->name, "orthographic")) return s->orthographic; /* Q2: ribbon.rs:628 camera.orthographic */
     return a->pressed;
 }
 
@@ -1386,6 +1404,12 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
         memmove(s->recent + 1, s->recent, (size_t)j * sizeof s->recent[0]);
         s->recent[0] = k, s->nrecent = j + 1;
     }
+    /* ---- Q2: ribbon.rs:695-723: switches (session state, no history step, rev unchanged); fit
+     * and top move the page's camera (glviewport.ts), nothing here ---- */
+    if (!strcmp(name, "edges")) return s->edges = !s->edges, CC_OK;
+    if (!strcmp(name, "hatching")) return s->hatching = !s->hatching, CC_OK;
+    if (!strcmp(name, "orthographic")) return s->orthographic = !s->orthographic, CC_OK;
+    if (!strcmp(name, "fit") || !strcmp(name, "top")) return CC_OK;
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return link_action(s, name, body, n, out);
     /* ---- L1: link_pdf, one set_view / add_view Command (links_ref.h); L2: link_dxf the same way ---- */
     if (!strcmp(name, "link_pdf") || !strcmp(name, "link_dxf")) {

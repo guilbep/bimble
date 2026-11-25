@@ -6,8 +6,13 @@
 //     palette_matches_word_starts_and_parts), plus upper-case and padded queries and the ribbon's
 //     own labels; bad arguments answer 400;
 //   query recent_actions: newest first, each once, at most five (ribbon.rs:1822
-//     recent_actions_order_and_dedup, on actions the C core runs); a refused action is not kept.
-// Before Q2: palette_match answered "query palette_match is not in the C core" and recent_actions [].
+//     recent_actions_order_and_dedup, on actions the C core runs); a refused action is not kept;
+//   the view switches (ribbon.rs:591, :612, :626-628, :695-723): edges and hatching pressed by
+//     default, edges, hatching, orthographic toggle their pressed state (no history step, rev
+//     unchanged), fit and top answer ok; in a plan orthographic and top are off, edges and fit on;
+//     without a model all five are off.
+// Before Q2: palette_match answered "query palette_match is not in the C core", recent_actions []
+// and the five switches were never enabled.
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills what it starts.
 import { spawn } from "node:child_process";
 import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
@@ -33,6 +38,8 @@ const call = async (op, name = "-", body = "") => {
   return { status: r.status, text: await r.text() };
 };
 const q = (name, args) => call("query", name, args === undefined ? "" : JSON.stringify(args));
+const actions = async () => Object.fromEntries(JSON.parse((await q("actions")).text).map((a) => [a.name, a]));
+const SWITCHES = ["edges", "hatching", "orthographic", "fit", "top"];
 const match = async (query, items) => {
   const r = await q("palette_match", { q: query, items });
   return r.status === 200 ? r.text : `${r.status} ${r.text}`;
@@ -84,12 +91,39 @@ try {
   const ru = await call("action", "undo");
   check("undo with no history: refused", ru.status === 400 && ru.text === 'action "undo" is not enabled now', `${ru.status} ${ru.text}`);
   check("a refused action is not kept", (await q("recent_actions")).text === rec, (await q("recent_actions")).text);
-  // ---- Q2 view switches (below) ----
+  // ---- the view switches (ribbon.rs:591, :612, :626-628, :695-723) ----
+  const a0 = await actions();
+  check("with a model: edges, hatching, orthographic, fit, top enabled", SWITCHES.every((n) => a0[n].enabled), JSON.stringify(SWITCHES.map((n) => a0[n])));
+  check("defaults: edges and hatching pressed, orthographic not", a0.edges.pressed && a0.hatching.pressed && !a0.orthographic.pressed && !a0.fit.pressed && !a0.top.pressed);
+  for (const n of ["edges", "hatching", "edges", "orthographic", "fit", "top"]) {
+    const r = await call("action", n);
+    check(`action ${n}: 200`, r.status === 200, r.text);
+  }
+  const a1 = await actions();
+  check("after edges twice, hatching and orthographic once: edges on, hatching off, orthographic on",
+    a1.edges.pressed && !a1.hatching.pressed && a1.orthographic.pressed, JSON.stringify([a1.edges, a1.hatching, a1.orthographic]));
+  // ribbon.rs:1822: the last five; the oldest ones are dropped.
+  const rec2 = (await q("recent_actions")).text;
+  check("recent_actions: the last five, newest first, each once", rec2 === '["top","fit","orthographic","edges","hatching"]', rec2);
+  const ch1 = await (await fetch(`${base}/change?since=0&t=${TOKEN}`)).json();
+  check("switches: no history step, rev unchanged", ch1.change?.rev === ch0.change?.rev && JSON.parse((await q("history")).text).undo.length === 0, JSON.stringify([ch0.change?.rev, ch1.change?.rev]));
+  const ov = JSON.parse((await q("open_views")).text);
+  const plan = ov.views.find((v) => v.type === "plan");
+  const t = await call("tab", "-", JSON.stringify({ op: "open", tab: { type: "view", id: plan.id } }));
+  check("open a plan tab", t.status === 200, t.text);
+  const a2 = await actions();
+  check("in a plan: orthographic and top disabled, edges, hatching and fit enabled",
+    !a2.orthographic.enabled && !a2.top.enabled && a2.edges.enabled && a2.hatching.enabled && a2.fit.enabled, JSON.stringify(SWITCHES.map((n) => a2[n].enabled)));
+  const rt = await call("action", "top");
+  check("in a plan: action top refused", rt.status === 400 && rt.text === 'action "top" is not enabled now', `${rt.status} ${rt.text}`);
+  check("in a plan: orthographic keeps its pressed state", a2.orthographic.pressed === true);
+  const rec3 = (await q("recent_actions")).text;
 
   // ---- nothing open ----
   await call("action", "close", JSON.stringify({ discard: true }));
-  check("close (not a ribbon action) is not kept in recent_actions", (await q("recent_actions")).text === rec, (await q("recent_actions")).text);
-  void ch0;
+  check("close (not a ribbon action) is not kept in recent_actions", (await q("recent_actions")).text === rec3, (await q("recent_actions")).text);
+  const a3 = await actions();
+  check("no model: the five switches disabled", SWITCHES.every((n) => !a3[n].enabled), JSON.stringify(SWITCHES.map((n) => a3[n].enabled)));
 } catch (e) {
   check("no exception", false, e.stack ?? String(e));
 } finally {

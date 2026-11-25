@@ -59,6 +59,7 @@
 // planes come from the model's sphere seen from the eye; a double-click fits all (a plan: fits the
 // plan). Plans keep their pan and zoom about the pointer.
 import {
+  actions, viewActions, // Q2: the view switches (edges, orthographic, fit, top)
   annotate, annotateCall, boxTool, deleteAnnotation, moveAnnotation, openViews, placing, select, selectLinked, state, toolCall,
   viewAnnotations, viewClip, visibility, visibilitySets, measure, measureCall, type MeasureState,
   type AnnotateState, type ToolPointer, type ToolState, type ViewAnnotation, type ViewAnnotations, type ViewClip, type Visibility,
@@ -384,6 +385,8 @@ interface GlStats {
   /** Test hooks (NAV1): the eye (world mm, 3D), an element's box (world mm) by GlobalId (the open model). */
   navEye?: () => number[] | null;
   elementBox?: (id: string) => { min: number[]; max: number[] } | null;
+  /** Q2: the ribbon's switches as drawn: edges on, the 3D camera orthographic, edge segments drawn last frame. */
+  q2?: { edges: boolean; ortho: boolean; edgeSegs: number };
 }
 declare global {
   interface Window {
@@ -515,6 +518,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** Each view's camera, kept while another is shown (viewing.rs view_cameras). */
   const cams = new Map<string, { yaw: number; pitch: number; distance: number; target: V3; half: number }>();
   const mirror = () => plan?.look === "up";
+  // ---- Q2: the ribbon's view switches (session state in the C core, `actions` pressed) ----
+  const pressed = (name: string, dflt: boolean) => actions.value.find((a) => a.name === name)?.pressed ?? dflt;
+  const ortho3d = () => !plan && pressed("orthographic", false);
+  let seenActions: unknown;
+  // ---- end Q2 ----
   let selKey = "";
   // Camera (bimble-render Camera): orbit around `target` at `distance`, z up.
   let yaw = HOME_YAW + projectNorth(), pitch = HOME_PITCH, distance = 10000;
@@ -568,6 +576,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const e = eye();
     const up: V3 = Math.abs(pitch) > 1.55 ? [-Math.cos(yaw), -Math.sin(yaw), 0] : [0, 0, 1];
     const view = lookAt(e, target, up);
+    if (ortho3d()) { // Q2: bimble-render lib.rs:281-284: h = distance tan(fov/2), depth d ± r (near may be behind the eye)
+      const h = distance * Math.tan(FOV_Y / 2), w = h * aspect, rr = r * 1.01;
+      const d = dot(sub(bounds?.center ?? target, e), norm(sub(target, e)));
+      const n = d - rr, f = Math.max(d + rr, 1);
+      const proj = new Float32Array([1 / w, 0, 0, 0, 0, 1 / h, 0, 0, 0, 0, -2 / (f - n), 0, 0, 0, -(f + n) / (f - n), 1]);
+      return { e, view, proj, mvp: mul(proj, view), aspect, up };
+    }
     const proj = perspective(FOV_Y, aspect, near, far);
     return { e, view, proj, mvp: mul(proj, view), aspect, up };
   };
@@ -784,8 +799,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.uniformMatrix4fv(uMvp, false, mvp);
     gl.uniform3fv(uLight, light);
     // A plan's eye is at infinity: the back-edge test takes its direction (a vertical side's edges stay).
-    gl.uniform3fv(uEye, plan ? norm(sub(e, target)) : e);
-    gl.uniform1f(uEyeDir, plan ? 1 : 0);
+    gl.uniform3fv(uEye, plan || ortho3d() ? norm(sub(e, target)) : e); // Q2: an orthographic 3D eye is at infinity too
+    gl.uniform1f(uEyeDir, plan || ortho3d() ? 1 : 0);
     gl.uniform1f(uPoint, 1);
     gl.uniform1f(uAlpha, 1);
     gl.uniform1i(uClip, box ? 1 : 0);
@@ -839,8 +854,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.depthMask(false);
     // A plan: edges 2 mm ahead, so the outline of a cut drawn where it stands on something stays.
     if (plan) gl.uniform1f(uZbias, (2 * 2) / (2 * (4 * (bounds?.radius ?? distance) + 1000) - 1));
-    gl.drawElements(gl.LINES, edgeMainN, gl.UNSIGNED_INT, 0);
-    if (edgeN > edgeMainN) { // linked models: their edges in the reference edge colour
+    const edgesOn = pressed("edges", true); // Q2: ribbon.rs:695 Edges (opts.edges): no edge drawn when off
+    stats.q2 = { edges: edgesOn, ortho: ortho3d(), edgeSegs: edgesOn ? edgeN / 2 : 0 };
+    if (edgesOn) gl.drawElements(gl.LINES, edgeMainN, gl.UNSIGNED_INT, 0);
+    if (edgesOn && edgeN > edgeMainN) { // linked models: their edges in the reference edge colour
       gl.vertexAttrib3f(1, REFERENCE_EDGE_SRGB[0] / 255, REFERENCE_EDGE_SRGB[1] / 255, REFERENCE_EDGE_SRGB[2] / 255);
       gl.drawElements(gl.LINES, edgeN - edgeMainN, gl.UNSIGNED_INT, 4 * edgeMainN);
     }
@@ -1177,6 +1194,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (plan) { // orthographic: parallel rays from the eye's plane, straight down (up)
       const o = add(e, add(scale(s, (mirror() ? -1 : 1) * ndcX * half * aspect), scale(u, ndcY * half)));
       return [...o, ...f];
+    }
+    if (ortho3d()) { // Q2: the orthographic 3D camera: parallel rays from the eye's plane
+      const h = distance * Math.tan(FOV_Y / 2);
+      return [...add(e, add(scale(s, ndcX * h * aspect), scale(u, ndcY * h))), ...f];
     }
     const th = Math.tan(FOV_Y / 2);
     const dir = norm(add(f, add(scale(s, ndcX * th * aspect), scale(u, ndcY * th))));
@@ -1564,6 +1585,17 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   stats.cubeLetterAt = (t) => cube.letterAt(t);
   stats.cubeHitAt = (x, y) => cube.hitAt(x, y);
 
+  // ---- Q2: Fit all and Top view from the ribbon or the palette (ribbon.rs:707-718) ----
+  viewActions.fit = () => { turn = null; if (plan) fitPlan(); else fit(); dirty = true; };
+  viewActions.top = () => {
+    if (plan) return;
+    turn = null;
+    pitch = 1.5;
+    yaw = -Math.PI / 2 + projectNorth();
+    dirty = true;
+  };
+  // ---- end Q2 ----
+
   let seenAnnot: AnnotateState | null = null;
   const loop = () => {
     if (openViews.value !== seenViews) { // a tab, a view or the model changed: the view shown
@@ -1572,6 +1604,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const vc = cur?.type === "view" ? viewClip() : null;
       switchView(vc, cur?.type === "view" ? cur.id : null);
     }
+    if (actions.value !== seenActions) { seenActions = actions.value; dirty = true; } // Q2: a switch turned
     if (turn) { // a view-cube turn: one step per frame (lib.rs `animate`)
       const k = turnAt(turn, performance.now());
       yaw = k.yaw;

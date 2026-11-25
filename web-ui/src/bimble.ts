@@ -946,6 +946,11 @@ export const viewPdfName = (v: { name: string; scale: number }) => `plan-${v.nam
 /** Actions the lab shows as a Vue screen instead of egui's (App.vue fills it: no import cycle). */
 export const screenRoutes: Record<string, () => void> = {};
 
+/** Q2: the ribbon's view switches (ribbon.rs:695-723), run by the C core then drawn by the page. */
+const VIEW_SWITCHES = ["edges", "hatching", "orthographic", "fit", "top"];
+/** Q2: what the viewport does after a view switch ran (glviewport.ts fills it: fit, top). */
+export const viewActions: Record<string, () => void> = {};
+
 export function runAction(name: string): string | null {
   const route = screenRoutes[name];
   if (route) { route(); return null; }
@@ -958,6 +963,12 @@ export function runAction(name: string): string | null {
     }
     // The box moves without a change event (its geometry is not in the change signature, calls.rs:152).
     if (name === "box_to_selection") visibility.value = tryQuery<Visibility | null>("visibility", null);
+    // ---- Q2: the view switches are session state, not in the change JSON: their pressed state
+    // here; fit and top move the page's camera (glviewport.ts registers `viewActions`). ----
+    if (VIEW_SWITCHES.includes(name)) {
+      actions.value = tryQuery<ActionState[]>("actions", []);
+      viewActions[name]?.();
+    }
     return null;
   } catch (e) { return message(e); }
 }

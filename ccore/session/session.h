@@ -111,7 +111,10 @@ typedef struct cc_session {
     char *paper_version;
     /* ---- Q2: the last schedule table asked (schedules.h), NULL: none ---- */
     struct cc_sched_cache *sched;
-    /* ---- Q2: the last actions run, newest first (ribbon.rs:495-503), as calls.c ACTIONS indices ---- */
+    /* ---- Q2: the ribbon's view switches (ribbon.rs:625-627 action_on): session state, not model;
+     * the page draws them (edges on, hatching on, orthographic off: bimble-render lib.rs:1431-1432,
+     * :236). recent: the last actions run, newest first (ribbon.rs:495-503), as ACTIONS indices. */
+    int edges, hatching, orthographic;
     int recent[5];
     int nrecent;
 } cc_session;

@@ -27,6 +27,7 @@ cc_session *cc_session_new(const cc_platform *pf) {
     buf_init(&s->mesh);
     cc_vis_init(&s->vis);
     s->link_sel = -1;
+    s->edges = s->hatching = 1; /* Q2: bimble-render lib.rs:1431-1432 defaults */
     return s;
 }
 
