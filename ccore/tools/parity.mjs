@@ -686,7 +686,8 @@ function report(R, C, rib, settings, shortcuts, vue, cmp, meta) {
   const opsR = Object.keys(R.ops).filter((o) => !/unknown op/.test(R.ops[o])), opsC = Object.keys(C.ops).filter((o) => !/unknown op/.test(C.ops[o]));
   L.push(`| Ops (Rust ${opsR.length}, C ${opsC.length}) | both ${opsR.filter((o) => opsC.includes(o)).length} · Rust-only ${opsR.filter((o) => !opsC.includes(o)).join(", ") || "none"} · C-only ${opsC.filter((o) => !opsR.includes(o)).join(", ") || "none"} |`);
   const setReach = settings.fields.filter((s) => vue.settingsHits[s.field]?.length).length;
-  L.push(`| Settings (Rust ${settings.fields.length} fields, ${settings.themes.length} themes) | named somewhere in web-ui/src ${setReach} · not named ${settings.fields.length - setReach} · C \`settings\` action enabled in ${A.find((a) => a.name === "settings")?.cEver ? "some" : "no"} scenario |`);
+  const setDialog = existsSync(join(UI, "dialogs/Settings.vue")) ? new Set([...read(join(UI, "dialogs/Settings.vue")).matchAll(/data-setting="(\w+)"/g)].map((m) => m[1])).size : 0; // SET1
+  L.push(`| Settings (Rust ${settings.fields.length} fields, ${settings.themes.length} themes) | named somewhere in web-ui/src ${setReach} · not named ${settings.fields.length - setReach} · in the lab's Settings dialog ${setDialog} · C \`settings\` action enabled in ${A.find((a) => a.name === "settings")?.cEver ? "some" : "no"} scenario |`);
   const keyRows = shortcutRows(shortcuts, vue);
   const labOnlyKeys = (vue.table ?? []).filter((t) => !shortcuts.some((s) => s.keys === t.keys));
   L.push(`| Shortcuts (Rust ${shortcuts.length}) | handled in the lab ${keyRows.filter((k) => k.handled).length} · shown only ${keyRows.filter((k) => !k.handled && k.shown).length} · absent ${keyRows.filter((k) => !k.handled && !k.shown).length} · runs another action than Rust's ${keyRows.filter((k) => k.differs).length} · lab-only ${labOnlyKeys.length} |`);
@@ -745,9 +746,21 @@ function report(R, C, rib, settings, shortcuts, vue, cmp, meta) {
   for (const [a, v] of Object.entries(C.fileActions ?? {})) L.push(`- \`${a}\`: ${esc(v)}`);
   L.push("");
   L.push("## Settings (Rust `settings.rs`)", "");
-  L.push(`Rust opens them with the \`settings\` action (File menu, Manage › Settings, Home's "change"). The C core never enables \`settings\`, so no Settings dialog opens in the lab. Themes: ${settings.themes.map((t) => `\`${t}\``).join(", ")}.`, "");
-  L.push("| Field | Type | Default | Vue: where the word appears (grep; may be another meaning) |", "|---|---|---|---|");
-  for (const s of settings.fields) L.push(`| \`${s.field}\` | \`${esc(s.type)}\` | \`${esc(s.default)}\` | ${(vue.settingsHits[s.field] ?? []).slice(0, 2).join("<br>") || "**no place in the new UI**"} |`);
+  // SET1: the lab's Settings dialog (its `data-setting` fields) and the C core's `query settings`
+  // (a field it lists under `needs` does not apply in this build).
+  const cSet = C.scenarios.empty?.queries.settings ?? "";
+  const cServes = cSet.startsWith("200 ");
+  const needs = new Set((/needs:\{([^}]*)\}/.exec(cSet)?.[1] ?? "").split(",").map((x) => x.split(":")[0]).filter(Boolean));
+  const dlgF = join(UI, "dialogs/Settings.vue");
+  const dialog = existsSync(dlgF) ? new Set([...read(dlgF).matchAll(/data-setting="(\w+)"/g)].map((m) => m[1])) : new Set();
+  const cOn = A.find((a) => a.name === "settings")?.cEver;
+  L.push(`Rust opens them with the \`settings\` action (File menu, Manage › Settings, Home's "change"). ${cOn ? "The C core enables `settings` (ribbon.rs:591); the lab opens its Settings dialog (web-ui/src/dialogs/Settings.vue)." : "The C core never enables `settings`, so no Settings dialog opens in the lab."} C \`query settings\`: ${cServes ? "answers (ccore/session/settings.h; the same file as Rust)" : "**not served**"}. Themes: ${settings.themes.map((t) => `\`${t}\``).join(", ")}.`, "");
+  L.push("| Field | Type | Default | C core (`query settings`) | Lab's Settings dialog | Vue: where the word appears (grep; may be another meaning) |", "|---|---|---|---|---|---|");
+  for (const s of settings.fields) {
+    const c = !cServes ? "**not served**" : needs.has(s.field) ? "stored, does not apply here" : "stored, applies";
+    const d = dialog.has(s.field) ? "shown" : s.field === "recent" ? "Home's list (FS1)" : needs.has(s.field) ? "kept, not shown" : "**not shown**";
+    L.push(`| \`${s.field}\` | \`${esc(s.type)}\` | \`${esc(s.default)}\` | ${c} | ${d} | ${(vue.settingsHits[s.field] ?? []).slice(0, 2).join("<br>") || "**no place in the new UI**"} |`);
+  }
   L.push("");
   L.push("## Keyboard shortcuts (Rust `lib.rs` handle_keys, palette_key; `Action::keys`)", "");
   L.push("The lab's key table is `web-ui/src/shell/keys.ts` (ticket KEY1): one row per shortcut, one listener; the ribbon tooltips, the File menu and the palette rows show the label of the same row. A row runs only when its action is enabled (`actions`): an action the C core never enables (`paper_view`) leaves its key inert.", "");

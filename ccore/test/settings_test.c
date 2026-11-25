@@ -417,7 +417,7 @@ int main(void) {
         check_true("no folder: file null", !strcmp(file, "null"));
         free(q);
         char *t0 = ask(s, "query", "settings_text", "", &st);
-        check_true("no folder, nothing stored: settings_text empty", st == CC_OK && !t0[0]);
+        check_true("no folder, nothing stored: settings_text null", st == CC_OK && !strcmp(t0, "null"));
         free(t0);
         free(ask(s, "action", "settings_load", "{\"text\":\"{\\\"user_name\\\":\\\"Zoé\\\",\\\"x_future\\\":[1]}\"}", &st));
         check_true("settings_load -> ok", st == CC_OK);
@@ -427,8 +427,9 @@ int main(void) {
         free(ask(s, "action", "set_settings", "{\"text_size\":14}", &st));
         char *t1 = ask(s, "query", "settings_text", "", &st);
         check_true("in memory: Rust's eleven fields, the unknown member kept",
-                   !strcmp(t1, "{\"coordinates\":\"survey\",\"gpu_cull\":false,\"memory_share\":0.8,\"moving_fps\":30,\"moving_proxies\":true,\"recent\":[],"
-                               "\"text_size\":14.0,\"theme\":\"grey\",\"ui_font\":\"roboto\",\"user_email\":\"\",\"user_name\":\"Zoé\",\"x_future\":[1]}"));
+                   !strcmp(t1, "\"{\\\"coordinates\\\":\\\"survey\\\",\\\"gpu_cull\\\":false,\\\"memory_share\\\":0.8,\\\"moving_fps\\\":30,\\\"moving_proxies\\\":true,"
+                               "\\\"recent\\\":[],\\\"text_size\\\":14.0,\\\"theme\\\":\\\"grey\\\",\\\"ui_font\\\":\\\"roboto\\\",\\\"user_email\\\":\\\"\\\","
+                               "\\\"user_name\\\":\\\"Zoé\\\",\\\"x_future\\\":[1]}\""));
         free(t1);
         free(ask(s, "action", "settings_load", "{\"text\":5}", &st));
         check_true("settings_load {text: 5} refused", st != CC_OK);
