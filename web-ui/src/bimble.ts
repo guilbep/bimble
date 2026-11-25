@@ -711,6 +711,17 @@ export interface ViewAnnotations { view: string; scale: number; unit: "mm" | "cm
 export const viewAnnotations = (view?: string, unit?: "mm" | "cm" | "m") =>
   tryQuery<ViewAnnotations | null>("view_annotations", null, { ...(view ? { view } : {}), ...(unit ? { unit } : {}) });
 
+// ---- L1: reference plans in a 2D view (ccore/session/links_ref.h; C core only) ----
+/** `query("view_references")`: a view's reference plans, placed, world plan mm (flat x, y pairs). */
+export interface ViewReference { id: string; name: string; polylines: number[][]; segments: number; visible: boolean }
+export interface ViewReferences { view: string; references: ViewReference[]; segments: number; shown: number }
+/** The reference plans of a view (default: the view shown), or null (none shown, or not the C core). */
+export const viewReferences = (view?: string) => tryQuery<ViewReferences | null>("view_references", null, view ? { view } : {});
+/** Add a PDF to the active 2D view (`link_pdf {path, scale?}`; native host: a path it can read). Returns the error, or null. */
+export function linkPdf(path: string, scale?: number, place?: { offset_mm?: [number, number]; rotation_deg?: number }): string | null {
+  try { actionWith("link_pdf", { path, ...(scale ? { scale } : {}), ...(place ?? {}) }); return null; } catch (e) { return message(e); }
+}
+
 /** The annotate tool's state (op `tool` "annotate", then pointer / click / cancel while it is on). */
 export interface AnnotateState {
   active: boolean;

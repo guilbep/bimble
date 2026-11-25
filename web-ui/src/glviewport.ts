@@ -65,6 +65,7 @@ import {
   type VisibilitySets,
 } from "./bimble";
 import { drawMeasure } from "./gl/measure";
+import { referenceLayer } from "./gl/reference"; // L1: reference plans
 import { clipPlanes, onTargetPlane, orbitAbout, ORBIT_RAD_PER_PX, sameCam, wheelFactor, zoomAt, type OrbitCam } from "./gl/nav";
 import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
 
@@ -967,6 +968,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     dirty = true;
   };
 
+  const refLayer = referenceLayer(); // L1: a 2D view's reference plans, under the annotations
   // ---- dimensions and texts (ticket C4) ----
   let anns: ViewAnnotations | null = null;
   let annKey = "";
@@ -1079,6 +1081,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const texts: string[] = [];
     if (plan && mesh) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      refLayer.draw(ctx, toLocal); // L1
       for (const a of anns?.items ?? []) {
         const moving = annDrag?.id === a.id;
         const sh = shapeOf(a, moving ? annDrag!.by : [0, 0]);
@@ -1622,6 +1625,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     if (annotate.value?.active === true && !plan) annotCancel(); // the plan was left
     refreshAnnotations();
+    if (refLayer.refresh(`${state.value.rev}|${viewId}`, plan !== null)) dirty = true; // L1
     if (tool && placing.value?.active !== true) showTool(null); // placing stopped elsewhere
     const key = mesh ? `${state.value.selection.join(",")}|${state.value.linked?.link ?? ""}` : "";
     if (mesh && key !== selKey) {

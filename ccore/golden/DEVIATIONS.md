@@ -421,3 +421,31 @@ folder Rust writes reads the same.
 
 **Where.** `ccore/src/repo.c`, `ccore/session/versions.c`; tests `ccore/test/repo_test.c`,
 `ccore/test/versions_test.mjs`.
+## 13. Reference plans read from PDFs (ticket L1, ADR 0021)
+
+The C reader (`src/pdf_in.c`) gives Rust's polylines and notes byte for byte on every golden of
+`reference/` (`bimble_drawing::reference::read` over lopdf 0.47: the hand-written fixtures and D1's
+plan PDFs, compressed or not, 30,000 segments included), with one exception and these differences
+on files the goldens do not hold:
+
+- **Encrypted PDFs are refused** with "the PDF is encrypted: …". lopdf decrypts a PDF whose user
+  password is empty; `encrypted.pdf` (a fake standard security handler) gives "the PDF has no page"
+  in Rust. Decryption (RC4, AES) is not in the C core: a plan from an architect is rarely
+  encrypted, and the text says what to do. `test/ref_test.c` checks both texts.
+- **Filters**: only FlateDecode (with PNG predictors) is decoded. lopdf also decodes LZW,
+  ASCII85, ASCIIHex and RunLength: such a page content is read raw in C (no lines, or fewer).
+- **Inline images** end at the first white space + `EI` + white space; lopdf counts the bytes from
+  the image's size first. Only data holding " EI " differs.
+- **Error texts** of damaged files: "not a readable PDF: couldn't parse input" (lopdf's most common,
+  the one of every bad golden) for any file whose header, cross-reference data and rebuilt table
+  all fail; lopdf has other texts for rarer cases. "page 1: the page's content passes 256 MB" for
+  lopdf's MemoryLimitExceeded text.
+- **Reals** are parsed to the nearest double, then rounded to f32 (lopdf: `f32::from_str`). The two
+  differ only for a decimal text within 2^-53 of a halfway point between two f32 (more than about
+  15 significant digits); no golden has one.
+
+In the session (`session/links_ref.c`): `link_pdf` takes `offset_mm` and `rotation_deg` beside
+`path` and `scale` (a C addition, so agents and tests can place a plan exactly; without them the
+placement is Rust's, viewing.rs place_reference). A reference in a section view is placed as it is
+(Rust also centres it on the model along the section). The default scale is the view's (Rust: the
+"Add reference plan" form's 1:N, default 100).

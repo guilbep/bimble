@@ -73,7 +73,9 @@ typedef struct {
 static const PObj NULL_OBJ = {O_NULL, 0, 0, NULL, 0, NULL, NULL, 0, 0, NULL, 0};
 
 static int is_ws(unsigned c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 0 || c == 0x0C; }
-static int is_delim(unsigned c) { return c && strchr("()<>[]{}/%", (int)c) != NULL; }
+static int is_delim(unsigned c) {
+    return c == '(' || c == ')' || c == '<' || c == '>' || c == '[' || c == ']' || c == '{' || c == '}' || c == '/' || c == '%';
+}
 static int is_regular(unsigned c) { return !is_ws(c) && !is_delim(c); }
 static int is_digit(unsigned c) { return c >= '0' && c <= '9'; }
 
@@ -501,7 +503,7 @@ static int stream_decode(const Doc *d, const PObj *s, size_t limit, Buf *out) {
         const char *why;
         buf_clear(&next);
         if (cc_zinflate((const unsigned char *)cur.p, cur.len, limit, &next, &why)) {
-            rc = why && strstr(why, "too large") ? -2 : -1;
+            rc = why && !strcmp(why, "gzip: decompressed data too large") ? -2 : -1; /* inflate.c put_room */
             break;
         }
         int64_t pred = pk && pk->t == O_DICT ? int_or(d, pk, "Predictor", 1) : 1;
