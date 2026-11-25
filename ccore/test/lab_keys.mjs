@@ -17,6 +17,7 @@
 //   Every row fired at least once but the inert ones (P), counted by window.__bbKeys.
 //   Labels: the ribbon's Edges tooltip "… (E)", the File menu's New "Ctrl N", Save "Ctrl S", Open
 //     none (Rust has no Ctrl O), the palette's Edges row "E", the command field "Ctrl K".
+//   The plan annotation toggles: enabled, pressed, each off and on (the page's actions follow).
 //   The status bar's pointer coordinates (glviewport.ts, lib.rs:2826-2864 and coords.rs): in the
 //     column's plan, zoomed in to under 1 mm a pixel, the pointer over the column's corner reads
 //     "x … y … · … m" within 1 mm of it (no georeference); one `coordinates` query for one move,
@@ -386,6 +387,21 @@ async function keys(mode, S, evalJs) {
     const three = (await B("return b.openViews.value;")).views.find((v) => v.type === "three_d");
     await B(`return b.openView(${JSON.stringify(three.id)});`);
     await waitFor(`${mode}: 3D again (coords)`, 5000, async () => (await cam())?.mode === "3d");
+  }
+  // The plan annotation toggles (Annotate › On plans; C: session/toggles.h, toggles_test.c draws them):
+  // enabled with a model, pressed by default, each turns off and on, the page's actions follow.
+  {
+    const names = ["section_labels", "openings", "section_marks", "slab_levels"];
+    const st = await B(`return b.query('actions').filter((a) => ${JSON.stringify(names)}.includes(a.name)).map((a) => [a.enabled, a.pressed]);`);
+    check(`${mode}: the four plan annotation toggles enabled and pressed`, JSON.stringify(st) === JSON.stringify(names.map(() => [true, true])), JSON.stringify(st));
+    const off = [];
+    for (const n of names) {
+      await B(`return b.runAction(${JSON.stringify(n)});`);
+      off.push(await B(`return b.actions.value.find((a) => a.name === ${JSON.stringify(n)}).pressed;`));
+      await B(`return b.runAction(${JSON.stringify(n)});`);
+    }
+    check(`${mode}: each toggle turns off (the page's actions follow) and on again`, off.every((x) => x === false) &&
+      (await B(`return b.actions.value.filter((a) => ${JSON.stringify(names)}.includes(a.name)).every((a) => a.pressed);`)), JSON.stringify(off));
   }
   // Ctrl N: a new model (the model is saved: no question); not from a field.
   {

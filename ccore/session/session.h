@@ -128,6 +128,9 @@ typedef struct cc_session {
     size_t nrecent_files;
     char *settings_file;
     /* ---- end FS1 ---- */
+    /* ---- KEY1: the plan annotation toggles (toggles.h), bit i set = off; 0 (all on) as new ---- */
+    unsigned plan_off;
+    /* ---- end KEY1 ---- */
 } cc_session;
 
 /* A new session with no model, on `pf` (kept by pointer). NULL when out of memory. */

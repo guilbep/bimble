@@ -15,7 +15,7 @@ export const capability = "sheets", editable = true; // FAKE1: the C core keeps 
 // The view box is paper mm (the sheet's top-left corner at 0, 0), with a margin around the paper.
 import { computed, ref } from "vue";
 import { currentSheet, selectedPlaced, sheetsError } from "./SheetsSide.vue";
-import { query, sheetLayout, sheetMove, state, type PlacedLayout, type SheetLayout } from "../bimble";
+import { actions, query, sheetLayout, sheetMove, state, type PlacedLayout, type SheetLayout } from "../bimble";
 import { t } from "../i18n";
 
 const layout = computed<SheetLayout | { error: string } | null>(() => {
@@ -26,6 +26,7 @@ const layout = computed<SheetLayout | { error: string } | null>(() => {
 /** The sheet's drawing (Rust's, or the C core's since D5), asked again at each rev. */
 const svg = computed<{ src: string } | { error: string } | null>(() => {
   void state.value.rev;
+  void actions.value; // KEY1: a plan annotation toggle (session state, no rev) redraws it; the C core's cache answers the rest
   if (!currentSheet.value) return null;
   try {
     const { svg } = query<{ svg: string }>("sheet_svg", { id: currentSheet.value.id });

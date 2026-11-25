@@ -1,5 +1,6 @@
 /* Sheets on paper in the session: see sheet_svg.h. */
 #include "sheet_svg.h"
+#include "toggles.h" /* KEY1 */
 #include <stdlib.h>
 #include <string.h>
 #include "calls.h"
@@ -129,6 +130,8 @@ static int ensure(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, 
     buf_puts(&key, date);
     buf_putc(&key, ' ');
     buf_puts(&key, s->path);
+    buf_putc(&key, ' '); /* KEY1: the plan annotation toggles drawn */
+    buf_u64(&key, s->plan_off);
     if (key.oom) return buf_free(&key), buf_puts(err, "out of memory"), -1;
     if (s->paper_svg.len && key.len == s->paper_key.len && !memcmp(key.p, s->paper_key.p, key.len))
         return buf_free(&key), 0;
@@ -145,6 +148,7 @@ static int ensure(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, 
         buf_puts(err, "out of memory");
         goto end;
     }
+    cc_toggles_apply(s, &tpl); /* KEY1: the plan annotation toggles (toggles.h) */
     cc_sheet_options o = {&style, &tpl, file_stem(s->path), {date, strlen(date)},
                           {CC_IFC_VERSION, strlen(CC_IFC_VERSION)}};
     cc_paper paper;
@@ -253,6 +257,7 @@ int cc_paper_sheet_pdf(struct cc_session *s, const cc_scene *sc, const cc_sheet 
         buf_puts(err, "out of memory");
         goto end;
     }
+    cc_toggles_apply(s, &tpl); /* KEY1: the plan annotation toggles (toggles.h) */
     cc_sheet_options o = {&style, &tpl, file_stem(s->path), {date, strlen(date)},
                           {CC_IFC_VERSION, strlen(CC_IFC_VERSION)}};
     cc_paper paper;
@@ -335,6 +340,7 @@ static int draw_paper(struct cc_session *s, const cc_scene *sc, const cc_sheet *
     if (!style || !tpl || !d || cc_style_default(style, a) || cc_plan_template_default(tpl, a) ||
         cc_plan_template_with_project(tpl, s->model.project, s->model.nproject, a))
         return buf_puts(err, "out of memory"), -1;
+    cc_toggles_apply(s, tpl); /* KEY1: the plan annotation toggles (toggles.h) */
     memcpy(d, date, sizeof date);
     style->paper.font = font;
     Buf derr;

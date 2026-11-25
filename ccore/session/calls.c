@@ -23,6 +23,7 @@
 #include "links_ref.h" /* L1 */
 #include "mesh.h"
 #include "sheet_svg.h"
+#include "toggles.h" /* KEY1 */
 #include "query.h"
 #include "scene.h"
 #include "session.h"
@@ -560,6 +561,9 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     /* Links (ticket B5, links.h): ribbon.rs:596 ManageLinks `loaded`, LinkModel `_ => loaded`. */
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return loaded(s);
     if (!strcmp(name, "measure")) return loaded(s); /* ribbon.rs:612 `_ => loaded` (ticket T1) */
+    /* ---- KEY1: the plan annotation toggles (toggles.h): ribbon.rs:612 `_ => loaded` ---- */
+    if (cc_toggle_index(name) >= 0) return loaded(s);
+    /* ---- end KEY1 ---- */
     /* ---- Q2: the view switches the page draws (ribbon.rs:591 Orthographic, Top `loaded && !flat`;
      * Edges, Hatching, Fit `_ => loaded`) ---- */
     if (!strcmp(name, "edges") || !strcmp(name, "hatching") || !strcmp(name, "fit")) return loaded(s);
@@ -601,6 +605,7 @@ static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strcmp(a->name, "edges")) return s->edges;               /* Q2: ribbon.rs:626 opts.edges */
     if (!strcmp(a->name, "hatching")) return s->hatching;         /* Q2: ribbon.rs:627 opts.hatching */
     if (!strcmp(a->name, "orthographic")) return s->orthographic; /* Q2: ribbon.rs:628 camera.orthographic */
+    if (cc_toggle_index(a->name) >= 0) return cc_toggle_on(s, cc_toggle_index(a->name)); /* KEY1: ribbon.rs:631-634 */
     return a->pressed;
 }
 
@@ -1459,6 +1464,9 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     if (!strcmp(name, "close_sheet")) return s->sheet_shown = 0, CC_OK;
     if (!strcmp(name, "project") || !strcmp(name, "history")) return CC_OK;
     /* ---- end FAKE1 ---- */
+    /* ---- KEY1: ribbon.rs:729-744, the plan template's flag (no history step, rev unchanged) ---- */
+    if (cc_toggle_index(name) >= 0) return cc_toggle_flip(s, cc_toggle_index(name)), CC_OK;
+    /* ---- end KEY1 ---- */
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return link_action(s, name, body, n, out);
     /* ---- FS1: recent_remove {path} (Home's remove; settings_file.h) ---- */
     if (!strcmp(name, "recent_remove")) {

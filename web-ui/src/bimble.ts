@@ -982,7 +982,8 @@ export const viewPdfName = (v: { name: string; scale: number }) => `plan-${v.nam
 export const screenRoutes: Record<string, () => void> = {};
 
 /** Q2: the ribbon's view switches (ribbon.rs:695-723), run by the C core then drawn by the page. */
-const VIEW_SWITCHES = ["edges", "hatching", "orthographic", "fit", "top"];
+const VIEW_SWITCHES = ["edges", "hatching", "orthographic", "fit", "top",
+  "section_labels", "openings", "section_marks", "slab_levels"]; // KEY1: the plan annotation toggles (pressed state)
 /** Q2: what the viewport does after a view switch ran (glviewport.ts fills it: fit, top). */
 export const viewActions: Record<string, () => void> = {};
 // ---- KEY1 ---- what the viewport does for a key (shell/keys.ts calls it; glviewport.ts fills it)
