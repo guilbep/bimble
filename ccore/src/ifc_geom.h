@@ -929,12 +929,172 @@ static int push_rect(Loops *ls, double a, double b) {
     return 0;
 }
 
+/* ---- parametric profiles (ticket IFC2: beyond Rust's reader, DEVIATIONS.md section 10)
+ *
+ * Outlines in the profile's own coordinates, centred on the bounding box as the IFC
+ * specification and IfcOpenShell place them, then put through Position. Fillet and edge radii
+ * are drawn as arcs, as the I-shape's fillets are (fillet_r: fillet() with one radius per corner,
+ * every corner a right angle); flange, web and leg slopes are not drawn (the I-shape ignores its
+ * slope too). */
+
+/* fillet_r: corner i replaced with an arc of radius rad[i] (0: sharp); fillet()'s arithmetic. */
+static int fillet_r(const double (*poly)[2], size_t n, const double *rad, double tol, Loop *out) {
+    for (size_t i = 0; i < n; i++) {
+        const double *c = poly[i];
+        double r = rad[i];
+        const double *p = poly[(i + n - 1) % n], *q = poly[(i + 1) % n];
+        double l1 = cc_sqrt((c[0] - p[0]) * (c[0] - p[0]) + (c[1] - p[1]) * (c[1] - p[1]));
+        double l2 = cc_sqrt((q[0] - c[0]) * (q[0] - c[0]) + (q[1] - c[1]) * (q[1] - c[1]));
+        if (!(r > 0.0) || r >= l1 || r >= l2 || l1 == 0.0 || l2 == 0.0) {
+            if (loop_push(out, c[0], c[1])) return -1;
+            continue;
+        }
+        double d1[2] = {(c[0] - p[0]) / l1, (c[1] - p[1]) / l1};
+        double d2[2] = {(q[0] - c[0]) / l2, (q[1] - c[1]) / l2};
+        double t1[2] = {c[0] - d1[0] * r, c[1] - d1[1] * r};
+        double t2[2] = {c[0] + d2[0] * r, c[1] + d2[1] * r};
+        double center[2] = {t1[0] + d2[0] * r, t1[1] + d2[1] * r};
+        double k = cc_sqrt((c[0] - center[0]) * (c[0] - center[0]) + (c[1] - center[1]) * (c[1] - center[1]));
+        double mid[2] = {center[0] + (c[0] - center[0]) / k * r, center[1] + (c[1] - center[1]) / k * r};
+        if (arc2(t1, mid, t2, tol, out)) return -1;
+    }
+    return 0;
+}
+
+/* Attribute i: 1 when it is a finite number. */
+static int num(const cc_step_entity *e, size_t i, double *o) { return cc_sv_as_f64(arg(e, i), o) && finite(*o); }
+/* An optional radius: the value when a finite number > 0, else 0 (sharp). */
+static double opt_r(const cc_step_entity *e, size_t i) {
+    double v;
+    return num(e, i, &v) && v > 0.0 ? v : 0.0;
+}
+
+#define PP_MAX 12
+/* param_profile: the parametric profiles past Rust's set. 1 ok (out has the outer loop),
+ * 0 degenerate or invalid (warned), -1 out of memory, 2 not one of them. */
+static int param_profile(R *r, const cc_step_entity *e, Loops *out) {
+    double c[PP_MAX][2], rad[PP_MAX] = {0};
+    size_t n = 0;
+    double v[8] = {0};
+    int ok = 1;
+    if (is(e, "IFCLSHAPEPROFILEDEF")) {
+        /* Depth, Width (IFC2X3: optional, then Depth), Thickness, FilletRadius, EdgeRadius. */
+        ok = num(e, 3, &v[0]) && num(e, 5, &v[2]);
+        if (ok && !num(e, 4, &v[1])) v[1] = v[0];
+        double y = v[0] / 2.0, x = v[1] / 2.0, d = v[2];
+        ok = ok && y > 0 && x > 0 && d > 0 && d < 2 * x && d < 2 * y;
+        double p[6][2] = {{-x, -y}, {x, -y}, {x, -y + d}, {-x + d, -y + d}, {-x + d, y}, {-x, y}};
+        memcpy(c, p, sizeof p), n = 6;
+        rad[3] = opt_r(e, 6), rad[2] = rad[4] = opt_r(e, 7);
+    } else if (is(e, "IFCTSHAPEPROFILEDEF")) {
+        /* Depth, FlangeWidth, WebThickness, FlangeThickness, FilletRadius, FlangeEdgeRadius,
+         * WebEdgeRadius; the flange on top (+y). */
+        ok = num(e, 3, &v[0]) && num(e, 4, &v[1]) && num(e, 5, &v[2]) && num(e, 6, &v[3]);
+        double y = v[0] / 2.0, x = v[1] / 2.0, tw = v[2] / 2.0, tf = v[3];
+        ok = ok && y > 0 && x > 0 && tw > 0 && tf > 0 && tw < x && tf < 2 * y;
+        double p[8][2] = {{tw, -y}, {tw, y - tf}, {x, y - tf}, {x, y}, {-x, y}, {-x, y - tf}, {-tw, y - tf}, {-tw, -y}};
+        memcpy(c, p, sizeof p), n = 8;
+        rad[1] = rad[6] = opt_r(e, 7), rad[2] = rad[5] = opt_r(e, 8), rad[0] = rad[7] = opt_r(e, 9);
+    } else if (is(e, "IFCUSHAPEPROFILEDEF")) {
+        /* Depth, FlangeWidth, WebThickness, FlangeThickness, FilletRadius, EdgeRadius; the web
+         * on the left (-x), the flanges toward +x. */
+        ok = num(e, 3, &v[0]) && num(e, 4, &v[1]) && num(e, 5, &v[2]) && num(e, 6, &v[3]);
+        double y = v[0] / 2.0, x = v[1] / 2.0, tw = v[2], tf = v[3];
+        ok = ok && y > 0 && x > 0 && tw > 0 && tf > 0 && tw < 2 * x && 2 * tf < 2 * y;
+        double p[8][2] = {{-x, -y}, {x, -y}, {x, -y + tf}, {-x + tw, -y + tf},
+                          {-x + tw, y - tf}, {x, y - tf}, {x, y}, {-x, y}};
+        memcpy(c, p, sizeof p), n = 8;
+        rad[3] = rad[4] = opt_r(e, 7), rad[2] = rad[5] = opt_r(e, 8);
+    } else if (is(e, "IFCCSHAPEPROFILEDEF")) {
+        /* Depth, Width, WallThickness, Girth, InternalFilletRadius (outer corners: + the wall). */
+        ok = num(e, 3, &v[0]) && num(e, 4, &v[1]) && num(e, 5, &v[2]) && num(e, 6, &v[3]);
+        double y = v[0] / 2.0, x = v[1] / 2.0, t = v[2], g = v[3];
+        ok = ok && y > 0 && x > 0 && t > 0 && g > t && 2 * t < 2 * x && 2 * g < 2 * y;
+        double p[12][2] = {{-x, -y},    {x, -y},        {x, -y + g},     {x - t, -y + g}, {x - t, -y + t}, {-x + t, -y + t},
+                           {-x + t, y - t}, {x - t, y - t}, {x - t, y - g}, {x, y - g},      {x, y},          {-x, y}};
+        memcpy(c, p, sizeof p), n = 12;
+        double ri = opt_r(e, 7), ro = ri > 0.0 ? ri + t : 0.0;
+        rad[0] = rad[1] = rad[10] = rad[11] = ro;
+        rad[4] = rad[5] = rad[6] = rad[7] = ri;
+    } else if (is(e, "IFCZSHAPEPROFILEDEF")) {
+        /* Depth, FlangeWidth, WebThickness, FlangeThickness, FilletRadius, EdgeRadius; the web
+         * centred, the bottom flange toward +x, the top one toward -x, each FlangeWidth from the
+         * web's centre line (as IfcOpenShell 0.9 draws it: the box is 2 FlangeWidth wide). */
+        ok = num(e, 3, &v[0]) && num(e, 4, &v[1]) && num(e, 5, &v[2]) && num(e, 6, &v[3]);
+        double y = v[0] / 2.0, w = v[1], tw = v[2] / 2.0, tf = v[3];
+        ok = ok && y > 0 && w > tw && tw > 0 && tf > 0 && 2 * tf < 2 * y;
+        double p[8][2] = {{-tw, -y}, {w, -y}, {w, -y + tf}, {tw, -y + tf},
+                          {tw, y},   {-w, y}, {-w, y - tf}, {-tw, y - tf}};
+        memcpy(c, p, sizeof p), n = 8;
+        rad[3] = rad[7] = opt_r(e, 7), rad[2] = rad[6] = opt_r(e, 8);
+    } else if (is(e, "IFCASYMMETRICISHAPEPROFILEDEF")) {
+        /* BottomFlangeWidth (IFC2X3 OverallWidth), OverallDepth, WebThickness, BottomFlangeThickness,
+         * BottomFlangeFilletRadius, TopFlangeWidth, TopFlangeThickness, TopFlangeFilletRadius
+         * (IFC2X3: the last two optional, then the bottom flange's). */
+        ok = num(e, 3, &v[0]) && num(e, 4, &v[1]) && num(e, 5, &v[2]) && num(e, 6, &v[3]) && num(e, 8, &v[4]);
+        if (ok && !num(e, 9, &v[5])) v[5] = v[3];
+        double bx = v[0] / 2.0, y = v[1] / 2.0, tw = v[2] / 2.0, bf = v[3], tx = v[4] / 2.0, tf = v[5];
+        ok = ok && bx > tw && tx > tw && tw > 0 && y > 0 && bf > 0 && tf > 0 && bf + tf < 2 * y;
+        double p[12][2] = {{-bx, -y},     {bx, -y},     {bx, -y + bf},  {tw, -y + bf},  {tw, y - tf},   {tx, y - tf},
+                           {tx, y},       {-tx, y},     {-tx, y - tf},  {-tw, y - tf},  {-tw, -y + bf}, {-bx, -y + bf}};
+        memcpy(c, p, sizeof p), n = 12;
+        double rb = opt_r(e, 7), rt = cc_sv_as_f64(arg(e, 10), &v[6]) ? opt_r(e, 10) : rb;
+        rad[3] = rad[10] = rb, rad[4] = rad[9] = rt;
+    } else if (is(e, "IFCTRAPEZIUMPROFILEDEF")) {
+        /* BottomXDim, TopXDim, YDim, TopXOffset: the bottom edge centred, the top edge from
+         * -BottomXDim/2 + TopXOffset. */
+        ok = num(e, 3, &v[0]) && num(e, 4, &v[1]) && num(e, 5, &v[2]) && num(e, 6, &v[3]);
+        double x = v[0] / 2.0, w = v[1], y = v[2] / 2.0, dx = v[3];
+        ok = ok && x > 0 && w > 0 && y > 0;
+        double p[4][2] = {{-x, -y}, {x, -y}, {-x + dx + w, y}, {-x + dx, y}};
+        memcpy(c, p, sizeof p), n = 4;
+    } else if (is(e, "IFCROUNDEDRECTANGLEPROFILEDEF")) {
+        /* XDim, YDim, RoundingRadius (at most half the smaller side). */
+        ok = num(e, 3, &v[0]) && num(e, 4, &v[1]);
+        double x = v[0] / 2.0, y = v[1] / 2.0, rr = opt_r(e, 5);
+        ok = ok && x > 0 && y > 0;
+        /* A radius of half a side (a stadium) would make two tangent points one: just under it. */
+        double lim = fmin_rs(x, y) * (1.0 - 1e-9);
+        if (rr > lim) rr = lim;
+        double p[4][2] = {{-x, -y}, {x, -y}, {x, y}, {-x, y}};
+        memcpy(c, p, sizeof p), n = 4;
+        rad[0] = rad[1] = rad[2] = rad[3] = rr;
+    } else if (is(e, "IFCELLIPSEPROFILEDEF")) {
+        /* SemiAxis1 (along x), SemiAxis2 (along y): as the reader draws an IfcEllipse. */
+        ok = num(e, 3, &v[0]) && num(e, 4, &v[1]) && v[0] > 0 && v[1] > 0;
+        if (!ok) {
+            warn(r, "invalid profile ", e->name, " (skipped)");
+            return 0;
+        }
+        size_t m = arc_segments(fmax_rs(v[0], v[1]), TAU, r->arc_tol);
+        Loop l = {0};
+        for (size_t i = 0; i < m; i++) {
+            double a = (double)i / (double)m * TAU;
+            if (loop_push(&l, v[0] * cc_cos(a), v[1] * cc_sin(a))) { free(l.p); return -1; }
+        }
+        if (loops_push(out, l)) { free(l.p); return -1; }
+        return 1;
+    } else
+        return 2;
+    if (!ok) {
+        warn(r, "invalid profile ", e->name, " (skipped)");
+        return 0;
+    }
+    Loop l = {0};
+    if (fillet_r((const double(*)[2])c, n, rad, r->arc_tol, &l) || loops_push(out, l)) {
+        free(l.p);
+        return -1;
+    }
+    return 1;
+}
+
 /* Reader::profile: loops in profile coordinates (outer first, then holes). 1 ok, 0 none. */
 static int profile(R *r, const cc_sv *v, int depth, Loops *out) {
     memset(out, 0, sizeof *out);
     const cc_step_entity *e = get(r, v);
     if (!e) return 0;
     int bad = 0; /* out of memory or a `?` that failed */
+    int pc;
     if (is(e, "IFCARBITRARYCLOSEDPROFILEDEF") || is(e, "IFCARBITRARYPROFILEDEFWITHVOIDS")) {
         Loop l;
         if (!curve(r, arg(e, 2), &l)) return 0;
@@ -989,6 +1149,9 @@ static int profile(R *r, const cc_sv *v, int depth, Loops *out) {
             for (int k = 0; k < 12 && !bad; k++) bad = loop_push(&l, c[k][0], c[k][1]);
         if (bad || loops_push(out, l)) free(l.p), bad = 1;
         if (!bad) loops_place(r, out, arg(e, 2));
+    } else if ((pc = param_profile(r, e, out)) != 2) {
+        if (pc != 1) bad = 1;
+        else loops_place(r, out, arg(e, 2));
     } else if (is(e, "IFCDERIVEDPROFILEDEF") && depth < 4) {
         if (!profile(r, arg(e, 2), depth + 1, out)) return 0;
         Aff op = transform_operator_2d(r, arg(e, 3));

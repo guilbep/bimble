@@ -333,6 +333,29 @@ static const struct {
 } OWN[] = {
     /* 300 x 300 x 3000 at (1000, 2000): 270,000,000 */
     {"product_rep", 1, 270e6, 1e-6, {850, 1850, 0}, {1150, 2150, 3000}, 1e-3, NULL},
+    /* Parametric profiles, each extruded 1000 along +Z, centred on the bounding box; areas:
+     * L 100x100x10: 100*10 + 90*10 = 1900 */
+    {"lshape", 1, 1.9e6, 1e-6, {-50, -50, 0}, {50, 50, 1000}, 1e-3, NULL},
+    /* + fillet 10 (adds (1 - pi/4) 10^2), - 2 edge radii 5 (2 (1 - pi/4) 5^2): 1910.73; arcs as
+     * chords: within 0.2 % */
+    {"lshape_fillet", 1, 1910730.1, 2e-3, {-50, -50, 0}, {50, 50, 1000}, 1e-3, NULL},
+    /* T 200 deep, flange 150x15, web 10: 150*15 + 185*10 = 4100 */
+    {"tshape", 1, 4.1e6, 1e-6, {-75, -100, 0}, {75, 100, 1000}, 1e-3, NULL},
+    /* U 200x80, web 8, flanges 12: 2*80*12 + 176*8 = 3328 */
+    {"ushape", 1, 3.328e6, 1e-6, {-40, -100, 0}, {40, 100, 1000}, 1e-3, NULL},
+    /* C 200x80, wall 3, girth 20: web 200*3 + flanges 2*77*3 + lips 2*17*3 = 1164 */
+    {"cshape", 1, 1.164e6, 1e-6, {-40, -100, 0}, {40, 100, 1000}, 1e-3, NULL},
+    /* Z 200, flanges 80 from the web's centre line x 12, web 8: 2*(80 + 4)*12 + 176*8 = 3424;
+     * x from -80 to 80 (IfcOpenShell: the same) */
+    {"zshape", 1, 3.424e6, 1e-6, {-80, -100, 0}, {80, 100, 1000}, 1e-3, NULL},
+    /* asymmetric I 400 deep, bottom 200x20, top 150x15, web 10: 4000 + 2250 + 365*10 = 9900 */
+    {"asym_ishape", 1, 9.9e6, 1e-6, {-100, -200, 0}, {100, 200, 1000}, 1e-3, NULL},
+    /* trapezium bottom 300, top 200 from x = -150 + 20, height 100: (300 + 200) / 2 * 100 = 25000 */
+    {"trapezium", 1, 25e6, 1e-6, {-150, -50, 0}, {150, 50, 1000}, 1e-3, NULL},
+    /* ellipse 200 x 100: pi * 200 * 100 = 62831.85; chords within 0.5 %, the box within 1 mm */
+    {"ellipse", 1, 62831853.1, 5e-3, {-200, -100, 0}, {200, 100, 1000}, 1.0, NULL},
+    /* rounded rectangle 400x200, r 50: 80000 - (4 - pi) 50^2 = 77853.98; chords within 0.2 % */
+    {"rounded_rect", 1, 77853981.6, 2e-3, {-200, -100, 0}, {200, 100, 1000}, 1e-3, NULL},
 };
 
 static void own_goldens(void) {
@@ -515,5 +538,6 @@ int main(void) {
     robustness("golden/ifc/fixtures", "mapped_item.ifc", 777);
     robustness("../crates/bimble-ifc/tests/fixtures", "curves.ifc", 4242);
     own_goldens();
+    robustness("golden/ifc_c/fixtures", "lshape_fillet.ifc", 99);
     return report("ifc_read");
 }

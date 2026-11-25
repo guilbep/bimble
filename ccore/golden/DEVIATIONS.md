@@ -321,6 +321,16 @@ byte for byte once both version notes are cut out.
 - A product whose `Representation` is a plain `IfcProductRepresentation` (IFC2X3 allows the
   supertype of `IfcProductDefinitionShape`) is read like an `IfcProductDefinitionShape` (same
   attributes). Rust skips such a product without a warning.
+- Parametric profiles of `IfcExtrudedAreaSolid` (and of every swept area that takes a profile):
+  `IfcLShapeProfileDef`, `IfcTShapeProfileDef`, `IfcUShapeProfileDef`, `IfcCShapeProfileDef`,
+  `IfcZShapeProfileDef`, `IfcAsymmetricIShapeProfileDef`, `IfcTrapeziumProfileDef`,
+  `IfcEllipseProfileDef`, `IfcRoundedRectangleProfileDef`. Centred on the bounding box, as the
+  specification and IfcOpenShell 0.9 place them. Fillet and edge radii are drawn as arcs with the
+  reader's arc segmentation (as the I-shape's fillets are); C-shape outer corners get the
+  internal radius plus the wall. Slopes (flange, web, leg) are not drawn (the I-shape ignores its
+  slope too). The Z-shape's FlangeWidth runs from the web's centre line, as IfcOpenShell draws it.
+  Invalid dimensions (not a number, not > 0, a thickness past the depth): warning
+  `invalid profile <TYPE> (skipped)`. Rust: `unsupported profile <TYPE> (skipped)`.
 
 **Why.** ADR 0068 rule 10 (full IFC compatibility); the public corpus run (ticket IFC1,
 `ccore/results/ifc_corpus.md`) ranked these gaps. The reference is IfcOpenShell and the IFC
