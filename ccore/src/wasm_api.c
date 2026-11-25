@@ -14,6 +14,7 @@
 #include "history.h"
 #include "ifc_in.h"
 #include "ifc_out.h"
+#include "json_w.h"
 #include "model.h"
 #include "query.h"
 #include "scene.h"
@@ -499,14 +500,17 @@ int snprintf(char *out, size_t cap, const char *fmt, ...) {
 
 /* ---- the session layer (session/: calls.c, session.c, mesh.c) on the module's platform ---- */
 
-/* The module's platform (session/platform.h): no files, no clock. Opening reads the text the
- * page handed in (host_open_text), whatever the path; Save keeps the text for host_saved; the
- * log is kept for host_log. */
+/* The module's platform (session/platform.h): no files. Opening reads the bytes the page handed
+ * in (host_open_text, host_open), whatever the path; a write (Save, Save as, Export IFC) keeps
+ * the bytes and the path for host_saved and host_saved_path; the wall clock is the page's
+ * (host_clock), there is no monotonic clock; the log is kept for host_log. */
 typedef struct {
-    const char *text; /* the model text of the open in progress, NULL otherwise */
+    const char *text; /* the file bytes of the open in progress, NULL otherwise */
     size_t n;
-    Buf saved;        /* what the last `action save` wrote */
+    Buf saved;        /* what the last write wrote, and where */
+    Buf saved_path;
     int has_saved;
+    int64_t unix_s;   /* host_clock; 0 until the page sets it */
     Buf log;
 } WasmPlatform;
 
@@ -527,14 +531,15 @@ static int wp_exists(void *ctx, const char *path) { return (void)ctx, (void)path
 static int wp_write_file(void *ctx, const char *path, const char *p, size_t n) {
     WasmPlatform *w = ctx;
     (void)path;
-    buf_clear(&w->saved);
-    w->saved.oom = 0;
+    buf_clear(&w->saved), buf_clear(&w->saved_path);
+    w->saved.oom = w->saved_path.oom = 0;
     buf_append(&w->saved, p, n);
-    w->has_saved = !w->saved.oom;
+    buf_puts(&w->saved_path, path);
+    w->has_saved = !w->saved.oom && !w->saved_path.oom;
     return w->has_saved ? 0 : -1;
 }
 static double wp_now_ms(void *ctx) { return (void)ctx, 0; } /* no clock: load_ms and build_ms read 0 */
-static int64_t wp_unix_s(void *ctx) { return (void)ctx, 0; }
+static int64_t wp_unix_s(void *ctx) { return ((WasmPlatform *)ctx)->unix_s; }
 static int wp_random(void *ctx, void *p, size_t n) { return (void)ctx, (void)p, (void)n, -1; }
 static void wp_log(void *ctx, const char *line, size_t n) {
     WasmPlatform *w = ctx;
@@ -645,6 +650,42 @@ EXPORT("host_saved") int wa_host_saved(cc_wasm_res *r) {
     buf_init(&b);
     buf_append(&b, wasm_pf_state.saved.p, wasm_pf_state.saved.len);
     return answer(r, &b, 200);
+}
+
+EXPORT("host_saved_path") int wa_host_saved_path(cc_wasm_res *r) {
+    r->value = 0;
+    if (!wasm_pf_state.has_saved) return text(r, 404, "not saved yet");
+    Buf b;
+    buf_init(&b);
+    buf_append(&b, wasm_pf_state.saved_path.p, wasm_pf_state.saved_path.len);
+    return answer(r, &b, 200);
+}
+
+EXPORT("host_clock") void wa_host_clock(double unix_s) {
+    wasm_pf_state.unix_s = unix_s > 0 && unix_s < 1e13 ? (int64_t)unix_s : 0;
+}
+
+EXPORT("host_open") int wa_host_open(int discard, const char *name, size_t nn, const char *p, size_t n, cc_wasm_res *r) {
+    r->value = 0;
+    cc_session *s = host_session();
+    char *z = zdup(name, nn);
+    Buf body, b;
+    buf_init(&body), buf_init(&b);
+    if (!s || !z) return free(z), text(r, 500, "out of memory");
+    JsonW w; /* the action's body (calls.c file_action): {"discard": …, "path": name} */
+    jw_init(&w, &body, 0);
+    jw_obj_begin(&w);
+    jw_key(&w, "discard"), jw_bool(&w, discard != 0);
+    jw_key(&w, "path"), jw_str(&w, nn ? z : "model.bimble");
+    jw_obj_end(&w);
+    free(z);
+    if (jw_finish(&w) != JW_OK || body.oom) return buf_free(&body), text(r, 500, "out of memory");
+    wasm_pf_state.text = p, wasm_pf_state.n = n;
+    int st = cc_call(s, "action", "open", buf_cstr(&body), body.len, &b);
+    wasm_pf_state.text = NULL, wasm_pf_state.n = 0;
+    buf_free(&body);
+    r->value = cc_session_rev(s);
+    return answer(r, &b, st);
 }
 
 EXPORT("host_log") int wa_host_log(cc_wasm_res *r) {

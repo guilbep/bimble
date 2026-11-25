@@ -47,8 +47,9 @@ int cc_known_op(const char *op) {
  * shortcut (`keys`, ribbon.rs:319). `pressed`: `action_on` (ribbon.rs:616) with the defaults: edges
  * and hatching on (bimble-render/src/lib.rs:1431-1432), the four plan annotations on
  * (bimble-drawing/src/template.rs:222-226), place_<kind> while placing that kind, else off.
- * `enabled`: action_enabled (ribbon.rs:555-612) for the actions the C core runs (save, undo, redo,
- * place_*, home, export_ifc4, export_ifc2x3); every other one is off (spec §1). */
+ * `enabled`: action_enabled (ribbon.rs:555-612) for the actions the C core runs (new, open,
+ * import_ifc, save, undo, redo, place_*, home, export_ifc4, export_ifc2x3); every other one is
+ * off (spec §1). */
 typedef struct {
     const char *name, *label, *tab, *shortcut;
     char pressed;
@@ -506,6 +507,8 @@ static int q_state(cc_session *s, JsonW *w) { /* calls.rs:239-258 */
 }
 
 static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-612, the C core's subset */
+    if (!strcmp(name, "new") || !strcmp(name, "open") || !strcmp(name, "import_ifc")) return 1; /* ribbon.rs:559 */
+    if (!strcmp(name, "save_as") || !strcmp(name, "close")) return s->open; /* not ribbon actions (file_action) */
     if (!strcmp(name, "save")) return cc_session_unsaved(s);
     if (!strcmp(name, "undo")) return s->open && s->hist.nundo > 0;
     if (!strcmp(name, "redo")) return s->open && s->hist.nredo > 0;
@@ -781,45 +784,88 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     return CC_ERR;
 }
 
-/* ---- save (lib.rs:1810-1857) ---- */
+/* ---- the file actions (ticket A5): new, open, save, save as, export IFC, close ----
+ * Rust's ribbon runs `new`, `open`, `import_ifc`, `save`, `export_ifc4`, `export_ifc2x3`
+ * (ribbon.rs:656-671) and asks the user through dialogs: where to open from, where to save a new
+ * model, whether to drop unsaved changes (lib.rs:1688 new_model, Confirm::Open). The C core has
+ * no dialog, so these actions take an optional JSON body instead (Rust's actions take none):
+ *   {"path": "<file>", "discard": true|false}
+ * - path: the file to open (open, import_ifc: required), to save to (save_as: required with
+ *   files), to export to (export_ifc4/2x3: optional, else "<stem>.ifc" next to the model). In
+ *   the wasm module (no files) a path is a file name: open reads the bytes the page staged,
+ *   writes go to the page (wasm_api.h host_saved).
+ * - discard: new, open, import_ifc and close refuse while there are unsaved changes (Rust asks
+ *   first) unless it is true.
+ * Two actions the ribbon does not have (not listed by query actions; enabled with a model):
+ * `save_as` (Rust's Save of a new model asks where, lib.rs:1832-1846) and `close`.
+ * Deviations: Rust's call answers Ok and shows a failure in the editor's message; here a refused
+ * or failed open, new, close, save or save as answers 400 with the reason (an agent needs it).
+ * An export still answers Ok and logs its outcome (share.rs:68-77). */
 
-static void save(cc_session *s) {
-    Buf b;
-    buf_init(&b);
-    int ok = cc_model_save(&s->model, &b) == 0 && !b.oom;
-    /* Through the platform: a file natively; in the module, the text kept for the page
-     * (export host_saved). */
-    if (ok) ok = s->pf->write_file(s->pf->ctx, s->path, b.p, b.len) == 0;
-    buf_free(&b);
-    /* Rust shows the outcome in the editor's message, the call itself succeeds. */
-    if (ok) s->saved_step = cc_session_step(s), cc_log(s->pf, "bimble-ccore: Saved %s", s->path);
-    else cc_log(s->pf, "bimble-ccore: %s: cannot write", s->path);
+typedef struct {
+    char *path; /* malloc'd; NULL: none */
+    int discard;
+} FileArgs;
+
+/* Parses the optional body. 0 ok; -1 with the error text in `out`. */
+static int file_args(const char *body, size_t n, FileArgs *fa, cc_buf *out) {
+    memset(fa, 0, sizeof *fa);
+    size_t i = 0;
+    while (i < n && (body[i] == ' ' || body[i] == '\t' || body[i] == '\n' || body[i] == '\r')) i++;
+    if (i == n) return 0; /* no body: Rust's action */
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jr_parse(&a, body, n, &je);
+    int rc = -1;
+    if (!v) buf_puts(out, je.msg);
+    else if (v->type == JR_NULL) rc = 0;
+    else if (v->type != JR_OBJ) buf_puts(out, "the action's body is {\"path\": string, \"discard\": bool}");
+    else {
+        const JrVal *p = jr_get(v, "path"), *d = jr_get(v, "discard");
+        if (p && p->type != JR_STR && p->type != JR_NULL) buf_puts(out, "path: a string");
+        else if (d && d->type != JR_BOOL && d->type != JR_NULL) buf_puts(out, "discard: a bool");
+        else if (p && p->type == JR_STR && (!p->n || strlen(p->s) < p->n)) buf_puts(out, "path: empty or with a NUL");
+        else {
+            rc = 0;
+            fa->discard = d && d->type == JR_BOOL && d->b;
+            if (p && p->type == JR_STR) {
+                fa->path = malloc(p->n + 1);
+                if (!fa->path) rc = -1, buf_puts(out, "out of memory");
+                else memcpy(fa->path, p->s, p->n), fa->path[p->n] = 0;
+            }
+        }
+    }
+    arena_free(&a);
+    return rc;
 }
 
-/* ---- export IFC (share.rs:50-85 export_ifc) ----
- * Rust asks where to save, proposing "<stem>.ifc"; the host has no dialog and writes that name
- * next to the model (never over the open file). The timestamp is now, UTC (date::iso_utc).
- * Deviation, wasm: the module has no files and no clock; the page calls the export export_ifc
- * (wasm_api.h) and the action only logs. */
+static int fail(cc_buf *out, const char *msg) {
+    buf_puts(out, msg);
+    return CC_ERR;
+}
 
-static void export_ifc(cc_session *s, cc_ifc_schema schema) {
+/* export IFC (share.rs:50-85 export_ifc): Rust asks where to save, proposing "<stem>.ifc"; the
+ * host writes `path`, else that name next to the model (never over the open file). The
+ * timestamp is now, UTC (date::iso_utc; the module's clock is the page's, wasm_api.h). */
+static void export_ifc(cc_session *s, cc_ifc_schema schema, const char *path) {
     const char *label = schema == CC_IFC4 ? "IFC4" : "IFC2x3";
-    if (!s->pf->files) { /* the module: the page calls the export itself */
-        cc_log(s->pf, "bimble-ccore: Export %s: the page calls export_ifc", label);
-        return;
+    char to[4096 + 16];
+    if (path) snprintf(to, sizeof to, "%s", path);
+    else {
+        const char *slash = strrchr(s->path, '/');
+        const char *name = slash ? slash + 1 : s->path;
+        const char *dot = strrchr(name, '.');
+        size_t dir = (size_t)(name - s->path), stem = dot && dot != name ? (size_t)(dot - name) : strlen(name);
+        if (stem == 0) snprintf(to, sizeof to, "%.*smodel.ifc", (int)dir, s->path);
+        else snprintf(to, sizeof to, "%.*s%.*s.ifc", (int)dir, s->path, (int)stem, name);
     }
-    const char *slash = strrchr(s->path, '/');
-    const char *name = slash ? slash + 1 : s->path;
-    const char *dot = strrchr(name, '.');
-    size_t dir = (size_t)(name - s->path), stem = dot && dot != name ? (size_t)(dot - name) : strlen(name);
-    char to[4096 + 16], file[4096 + 8];
-    if (stem == 0) snprintf(file, sizeof file, "model.ifc");
-    else snprintf(file, sizeof file, "%.*s.ifc", (int)stem, name);
-    snprintf(to, sizeof to, "%.*s%s", (int)dir, s->path, file);
     if (!strcmp(to, s->path)) {
         cc_log(s->pf, "bimble-ccore: %s: export would overwrite the open file", to);
         return;
     }
+    const char *file = strrchr(to, '/'); /* FILE_NAME holds the file name */
+    file = file ? file + 1 : to;
     char stamp[32];
     cc_iso_utc(s->pf->unix_s(s->pf->ctx), stamp);
     Buf b;
@@ -836,12 +882,50 @@ static void export_ifc(cc_session *s, cc_ifc_schema schema) {
     else cc_log(s->pf, "bimble-ccore: %s: cannot write", to);
 }
 
+static const char UNSAVED[] = "unsaved changes: save them first, or send {\"discard\": true}";
+
+/* The file actions; -1: `name` is not one of them. */
+static int file_action(cc_session *s, const char *name, const FileArgs *fa, cc_buf *out) {
+    cc_error err;
+    int opening = !strcmp(name, "open") || !strcmp(name, "import_ifc");
+    if (opening || !strcmp(name, "new") || !strcmp(name, "close")) {
+        if (opening && !fa->path) return fail(out, "open: the C core has no file dialog: send {\"path\": \"<file>\"}");
+        if (cc_session_unsaved(s) && !fa->discard) return fail(out, UNSAVED);
+        if (!strcmp(name, "close")) return cc_session_close(s), CC_OK;
+        if (opening ? cc_session_open(s, fa->path, &err) : cc_session_new_model(s, &err)) return fail(out, err.msg);
+        if (!opening) cc_log(s->pf, "bimble-ccore: New model, not saved"); /* lib.rs:1709 */
+        return CC_OK;
+    }
+    if (!strcmp(name, "save") || !strcmp(name, "save_as")) {
+        const char *to = NULL;
+        if (!strcmp(name, "save_as")) {
+            to = fa->path;
+            if (!to && s->pf->files) return fail(out, "save_as: the C core has no file dialog: send {\"path\": \"<file>\"}");
+        } else if (fa->path) return fail(out, "save takes no path: use save_as");
+        else if (s->untitled && s->pf->files) /* lib.rs:1832: a new model has no file yet: Rust asks where */
+            return fail(out, "a new model has no file yet: action save_as with {\"path\": \"<file>\"}");
+        if (cc_session_save(s, to, &err)) return fail(out, err.msg);
+        return CC_OK;
+    }
+    if (!strcmp(name, "export_ifc4") || !strcmp(name, "export_ifc2x3")) {
+        export_ifc(s, !strcmp(name, "export_ifc4") ? CC_IFC4 : CC_IFC2X3, fa->path);
+        return CC_OK;
+    }
+    return -1;
+}
+
+/* Actions the C core runs that the ribbon does not list (above). */
+static const char *const HIDDEN_ACTIONS[] = {"save_as", "close"};
+
 /* calls.rs:538-547 call_action, ribbon.rs:650 run_action. */
-static int call_action(cc_session *s, const char *name, cc_buf *out) {
+static int call_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     const ActionRow *a = NULL;
+    int hidden = 0;
     for (size_t i = 0; i < sizeof ACTIONS / sizeof ACTIONS[0]; i++)
         if (!strcmp(ACTIONS[i].name, name)) a = &ACTIONS[i];
-    if (!a) {
+    for (size_t i = 0; i < sizeof HIDDEN_ACTIONS / sizeof HIDDEN_ACTIONS[0]; i++)
+        if (!strcmp(HIDDEN_ACTIONS[i], name)) hidden = 1;
+    if (!a && !hidden) {
         buf_puts(out, "unknown action ");
         debug_str(out, name);
         return CC_ERR;
@@ -852,10 +936,12 @@ static int call_action(cc_session *s, const char *name, cc_buf *out) {
         buf_puts(out, " is not enabled now");
         return CC_ERR;
     }
-    if (!strcmp(name, "save")) save(s);
-    else if (!strcmp(name, "export_ifc4")) export_ifc(s, CC_IFC4);
-    else if (!strcmp(name, "export_ifc2x3")) export_ifc(s, CC_IFC2X3);
-    else if (!strcmp(name, "undo")) undo_redo(s, 1);
+    FileArgs fa;
+    if (file_args(body, n, &fa, out)) return CC_ERR;
+    int rc = file_action(s, name, &fa, out);
+    free(fa.path);
+    if (rc != -1) return rc;
+    if (!strcmp(name, "undo")) undo_redo(s, 1);
     else if (!strcmp(name, "redo")) undo_redo(s, 0);
     else if (!strncmp(name, "place_", 6)) {
         for (int k = 0; k < 4; k++)
@@ -1020,7 +1106,7 @@ end:
 
 int cc_call(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out) {
     if (!strcmp(op, "query")) return call_query(s, name, body, n, out);
-    if (!strcmp(op, "action")) return call_action(s, name, out);
+    if (!strcmp(op, "action")) return call_action(s, name, body, n, out);
     if (!strcmp(op, "select")) return call_select(s, body, n, out);
     if (!strcmp(op, "tab")) return call_tab(s, body, n, out);
     if (!strcmp(op, "set_placing")) return call_set_placing(s, body, n, out);

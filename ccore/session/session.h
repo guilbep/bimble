@@ -26,6 +26,7 @@ typedef struct cc_session {
     char path[4096];     /* where Save writes (lib.rs:1830 `l.path`) */
     const char *file;    /* the file name of `path` (calls.rs:150 `file_name`) */
     int schema_bimble;   /* path ends in .bimble (calls.rs:244) */
+    int untitled;        /* a new model (File -> New) that has no file yet: path is CC_UNTITLED */
     uint64_t rev;        /* lib.rs:1054 scene_rev: 1 after load (lib.rs:1679), +1 per rebuild */
     double load_ms;
     /* Unsaved: the current step differs from the saved one. Each history step gets an id (1, 2,
@@ -68,10 +69,33 @@ cc_session *cc_session_new(const cc_platform *pf);
 /* Frees the model, history, caches and the session file state (writes nothing). NULL is fine. */
 void cc_session_free(cc_session *s);
 
+/* lib.rs:191: the path of a new model until it is saved somewhere. */
+#define CC_UNTITLED "Untitled.bimble"
+
 /* Opens `path`: .ifc (any case) is imported (lib.rs:526-538: project named after the file stem,
- * Save writes `editable_copy_path`, starts unsaved), anything else is read as the .bimble JSON
- * text form. 0 ok; -1 with `err`. */
+ * Save writes `editable_copy_path`, starts unsaved), anything else is read as a .bimble file
+ * (file.h: the v1 JSON text or the v2 binary, the magic tells). A model already open is replaced
+ * only when the new one loaded (its history, selection and placing go; rev goes on: +1, as
+ * lib.rs:1679 `scene_rev += 1`). With the session file on, it follows (cc_session_open_persisted).
+ * 0 ok; -1 with `err` (the open model, if any, is kept). */
 int cc_session_open(cc_session *s, const char *path, cc_error *err);
+
+/* File -> New (lib.rs:1688-1712 start_new, verbs.rs:101 new_model): project "Untitled" with a new
+ * GlobalId, one storey "Level 0" at 0 mm, path CC_UNTITLED, editable and unsaved (as an imported
+ * copy). Replaces an open model; the session file pauses until a save gives the model a file.
+ * 0 ok; -1 with `err` (out of memory). */
+int cc_session_new_model(cc_session *s, cc_error *err);
+
+/* Closes the open model (no model after: the viewer's empty state); rev + 1. The session file
+ * pauses. Writes nothing. */
+void cc_session_close(cc_session *s);
+
+/* Save (lib.rs:1810-1857) and Save as: writes the model to `path` (NULL: the session's path)
+ * through the platform, file::save's form (bimble-core/src/file.rs:143-151): the v1 JSON text
+ * when the path ends in ".json", else the v2 binary. Then the session's path is `path` (Save as:
+ * file name and schema follow, no longer untitled), the current step is the saved one, and the
+ * session file follows the saved path. 0 ok; -1 with `err` ("<path>: cannot write"). */
+int cc_session_save(cc_session *s, const char *path, cc_error *err);
 
 /* The current history step id (0: none). */
 uint64_t cc_session_step(const cc_session *s);
@@ -104,6 +128,13 @@ const cc_scene *cc_session_scene(cc_session *s);
  * and selection checked). A bad snapshot: the session file is ignored, the reason logged, and the
  * model opened as cc_session_open does. A bad or truncated entry: the replay stops there, logged,
  * the lines before are kept. Then persistence is on. 0 ok; -1 with `err` (the model file).
+ *
+ * The session file follows the file actions (ticket A5): after cc_session_open of another file,
+ * and after a save to another path (Save as, or the first Save of an imported IFC's copy), the
+ * session belongs to that file (a new snapshot; the model file's content, so no model text). When
+ * `session_path` was the default `<model_path>.ccore-session` it moves to `<new>.ccore-session`;
+ * a session file named explicitly keeps its name. A new model (no file yet) or a close pauses it
+ * until the next open or save.
  *
  * cc_session_persist_now: after each call (server.c, before the answer) and at exit: appends the
  * entry for what the call changed, if anything. cc_session_note_apply: calls.c hands the commands

@@ -15,12 +15,16 @@
 //            actions: 54 rows), open frame.json, the same calls on both (select, verb place,
 //            history, undo, redo, action save…): every answer, status and change JSON byte for
 //            byte, the saved text = the native host's saved file, host_mesh = GET /mesh
+//   files    the file actions in a fresh module (ticket A5): new, place, save (v2), save as,
+//            host_open of the saved bytes (the same elements), of golden/ifc/frame.ifc (the import
+//            golden's count) and of frame.json; export IFC4 with host_clock = golden/ifc/frame.ifc;
+//            save as y.json = the v1 text; save as f.bimble = gzip of golden/bin/frame.cbor; close
 // Prints per-suite "N passed, M failed", the module size and timings; exits non-zero on a failure.
 // No dependencies.
 import { spawn } from "node:child_process";
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -516,6 +520,91 @@ suite("host");
     host.kill("SIGKILL");
     rmSync(tmpd, { recursive: true, force: true });
   }
+  end();
+}
+
+// ---- files (ticket A5): the file actions through a fresh module ----
+suite("files");
+{
+  const { instance: I2 } = await WebAssembly.instantiate(bytes, {});
+  const Y = I2.exports;
+  const yres = Y.cc_alloc(12);
+  const yput = (data) => {
+    const b = typeof data === "string" ? enc.encode(data) : data;
+    const p = Y.cc_alloc(b.length || 1);
+    new Uint8Array(Y.memory.buffer).set(b, p);
+    return [p, b.length];
+  };
+  const ycall = (f, args, ...rest) => {
+    const ins = args.map(yput);
+    const status = f(...rest, ...ins.flat(), yres);
+    for (const [p] of ins) Y.cc_free(p);
+    const dv = new DataView(Y.memory.buffer);
+    const ptr = dv.getUint32(yres, true), len = dv.getUint32(yres + 4, true), value = dv.getUint32(yres + 8, true);
+    const out = new Uint8Array(Y.memory.buffer).slice(ptr, ptr + len);
+    Y.cc_free(ptr);
+    return { status, bytes: out, get text() { return new TextDecoder().decode(out); }, value };
+  };
+  const act = (name, body) => ycall(Y.call, ["action", name, body === undefined ? "" : JSON.stringify(body)]);
+  const q = (name, args = {}) => JSON.parse(ycall(Y.call, ["query", name, JSON.stringify(args)]).text);
+  const saved = () => ycall(Y.host_saved, []);
+  const savedPath = () => ycall(Y.host_saved_path, []).text;
+  const open = (name, data, discard = 0) => ycall(Y.host_open, [name, data], discard);
+  const ids = (els) => JSON.stringify(els.map((e) => e.id).sort());
+  const isV2 = (b) => dec.decode(b.subarray(0, 7)) === "bimble\0";
+  const UNSAVED = 'unsaved changes: save them first, or send {"discard": true}';
+  Y.guid_seed(1n);
+
+  const nw = act("new");
+  const s1 = q("state");
+  check("new -> 200: Untitled.bimble, unsaved", nw.status === 200 && s1.file === "Untitled.bimble" && s1.unsaved, `${nw.text} ${JSON.stringify(s1)}`);
+  const sto = q("storeys");
+  check("new: one storey 'Level 0' at 0", sto.length === 1 && sto[0].name === "Level 0" && sto[0].elevation === 0, JSON.stringify(sto));
+  const pl = ycall(Y.call, ["verb", "place", JSON.stringify({ a: [0, 0], kind: "column", storey: sto[0].id })]);
+  check("place -> 200", pl.status === 200, pl.text);
+  const un = open("x.bimble", new Uint8Array(0));
+  check("host_open with unsaved changes -> 400", un.status === 400 && un.text === UNSAVED, un.text);
+  // Save: in the module a new model's Save writes under its name (Rust's wasm Save downloads).
+  const sv = act("save");
+  const b1 = saved().bytes;
+  check("save of the new model -> 200: v2 bytes named Untitled.bimble", sv.status === 200 && isV2(b1) && savedPath() === "Untitled.bimble", `${sv.text} ${savedPath()}`);
+  const sa = act("save_as", { path: "x.bimble" });
+  const b2 = saved().bytes;
+  check("save_as x.bimble -> 200: v2, the same bytes, state file x.bimble", sa.status === 200 && isV2(b2) && savedPath() === "x.bimble" &&
+    b2.length === b1.length && b2.every((b, i) => b === b1[i]) && q("state").file === "x.bimble", sa.text);
+  const e1 = q("elements", { limit: 10000 });
+  const r1 = JSON.parse(ycall(Y.change_json, []).text).rev;
+  const o1 = open("x.bimble", b2);
+  const e2 = q("elements", { limit: 10000 });
+  check("host_open x.bimble (v2 bytes) -> 200, the same elements, rev + 1", o1.status === 200 && e1.length === 1 && ids(e1) === ids(e2) && o1.value === r1 + 1,
+    `${o1.status} ${o1.text} ${e1.length} ${e2.length} rev ${r1} -> ${o1.value}`);
+
+  const o2 = open("frame.ifc", read("ifc/frame.ifc"));
+  const s2 = q("state");
+  const golden = Object.keys(JSON.parse(read("ifc/frame_reimport.json")).model.elements).length;
+  check("host_open frame.ifc -> 200: the copy frame.bimble, unsaved, elements = the import golden's",
+    o2.status === 200 && s2.file === "frame.bimble" && s2.unsaved && q("elements", { limit: 10000 }).length === golden, `${o2.text} ${JSON.stringify(s2)}`);
+
+  const o3 = open("frame.json", read("frame.json"), 1);
+  check("host_open frame.json, discard -> 200", o3.status === 200 && q("state").file === "frame.json", o3.text);
+  Y.host_clock(Date.UTC(2026, 0, 1) / 1000);
+  const ex = act("export_ifc4");
+  eq("export_ifc4 (clock 2026-01-01) = golden/ifc/frame.ifc (version masked)", dec.decode(saved().bytes).replace("'bimble 0.1.0-ccore'", "'bimble <version>'"), read("ifc/frame.ifc"));
+  check("export_ifc4 -> 200, named frame.ifc", ex.status === 200 && savedPath() === "frame.ifc", `${ex.text} ${savedPath()}`);
+  const ex3 = act("export_ifc2x3", { path: "f3.ifc" });
+  check("export_ifc2x3 {path} -> IFC2X3 text named f3.ifc", ex3.status === 200 && savedPath() === "f3.ifc" && dec.decode(saved().bytes).includes("FILE_SCHEMA(('IFC2X3'));"));
+  const sj = act("save_as", { path: "y.json" });
+  eq("save_as y.json: the v1 text (= frame.json)", sj.status === 200 ? dec.decode(saved().bytes) : `${sj.status} ${sj.text}`, read("frame.json"));
+  const sb = act("save_as", { path: "f.bimble" });
+  const fb = saved().bytes;
+  check("save_as f.bimble: v2, gzip of golden/bin/frame.cbor", sb.status === 200 && isV2(fb) &&
+    Buffer.compare(gunzipSync(fb.subarray(7)), readFileSync(join(G, "bin/frame.cbor"))) === 0);
+  const bad = open("bad.bimble", "not a model", 1);
+  check("host_open of a broken file -> 400, the open model kept", bad.status === 400 && q("state").file === "f.bimble", bad.text);
+  const cl = act("close");
+  const s3 = q("state");
+  check("close -> 200, no model", cl.status === 200 && s3.file === null, `${cl.text} ${JSON.stringify(s3)}`);
+  Y.guid_seed(0n);
   end();
 }
 

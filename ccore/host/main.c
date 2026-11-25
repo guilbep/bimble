@@ -7,8 +7,11 @@
  *                             rev) in a file across restarts (session.h): <model>.ccore-session,
  *                             or `file`; also on when CCORE_SESSION names a file
  *                             port: argv[1], else BIMBLE_SERVE (as twin.rs:106-114)
- *                             model: argv[2], else CCORE_MODEL; a .bimble/.json text form, or an
- *                             .ifc (imported); none: the host answers as a viewer with no model
+ *                             model: argv[2], else CCORE_MODEL; a .bimble (v1 text or v2 binary),
+ *                             a .json, or an .ifc (imported); none: the host answers as a viewer
+ *                             with no model. The calls open, create, save and close models later
+ *                             (`action new|open|save|save_as|export_ifc4|export_ifc2x3|close`,
+ *                             session/calls.c file_action); the session file follows them
  *   BIMBLE_TOKEN              the token; random when unset or empty (twin.rs:115-118)
  *   BIMBLE_ORIGINS            extra allowed Origins, comma separated, beside the twin's two
  *                             (twin.rs:17), e.g. a Vite dev server on another port */

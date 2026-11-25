@@ -56,8 +56,8 @@
  *                                           opens the session's model from .bimble JSON text
  *                                           (session.c cc_session_open; `name` is the file name
  *                                           the viewer shows and Save "writes"); value = rev.
- *                                           Open once per instance: a second open replaces the
- *                                           session as cc_session_open does natively
+ *                                           Once per instance (400 after a model is open): later
+ *                                           opens go through host_open
  *   call(op, op_len, name, name_len, body, body_len, res) -> status
  *                                           session/calls.c cc_call: exactly the native host's
  *                                           POST /<op>/<name> (status 200 or 400, the answer or
@@ -66,8 +66,21 @@
  *   host_mesh(flags, res) -> status         the session's scene as BMSH (mesh.c cc_mesh_get: the
  *                                           native GET /mesh bytes; flags bit 0 = the local form
  *                                           above); value = rev
- *   host_saved(res) -> status               the text the last `action save` wrote (the module has
- *                                           no files: Save keeps it here); 404 before any save
+ *   host_saved(res) -> status               the bytes of the last write (the module has no files:
+ *                                           `action save`, `save_as`, `export_ifc4`/`export_ifc2x3`
+ *                                           keep them here: a .bimble is v2 binary, a .json the
+ *                                           v1 text, an export the STEP text); 404 before any
+ *   host_saved_path(res) -> status          the file name of that write (the session's file name,
+ *                                           the {"path"} given, or "<stem>.ifc"); 404 before any
+ *   host_open(discard, name, name_len, bytes, len, res) -> status
+ *                                           `action open {"path": name, "discard": …}` on the
+ *                                           page's bytes (ticket A5; calls.c file_action): .bimble
+ *                                           v1 or v2, .json, .ifc imported as an editable copy;
+ *                                           replaces the open model (400 with unsaved changes
+ *                                           unless discard is 1; 400 when it does not load, the
+ *                                           open model kept); value = rev
+ *   host_clock(unix_s: f64)                 the wall clock for the session (IFC export stamps);
+ *                                           0 until set (1970-01-01T00:00:00)
  *   host_log(res) -> status                 what the host layer wrote on stderr since the last
  *                                           host_log ("bimble-ccore: Saved …"), then cleared
  *

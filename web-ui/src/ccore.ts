@@ -4,10 +4,17 @@
 // `call(op, name, body)`, exactly a `POST /<op>/<name>` of the host, with no server at all.
 // - Loads `ccore/ccore.wasm` (relative to the page; `npm run ccore:wasm` puts it in public/ccore/)
 //   or `?ccore_wasm=<url>`, and seeds the id generator from crypto.getRandomValues.
-// - Opens `?model=<url>` (a .bimble JSON text form) or the built-in demo `ccore/frame.json`.
+// - Opens `?model=<url>` (a .bimble, v1 text or v2 binary) or the built-in demo `ccore/frame.json`.
 // - on_change: the change JSON is read after every call and the callback runs when it changed.
-// - Save: the module has no files; `action save` keeps the text in the module. `window.ccoreSave()`
-//   saves (when there are unsaved changes) and returns the last saved text, and logs its size.
+// - Files (ticket A5; the module has no files, ccore/session/calls.c file_action): the actions
+//   `open` and `import_ifc` show a file picker (`<input type=file>`) and open the picked file's
+//   bytes (`ccoreOpenFile`: .bimble v1 or v2, .json, .ifc imported as an editable copy); `new`
+//   starts an Untitled model; `save` and `export_ifc4`/`export_ifc2x3` download what the module
+//   wrote (Blob + `<a download>`, as the Rust viewer's wasm Save downloads). With unsaved changes,
+//   new and open ask first (window.confirm). `ccoreSaveBytes()` and `ccoreExportIfc(schema)` give
+//   the bytes without a download. The module's clock is the page's (host_clock, for IFC stamps).
+// - `window.ccoreSave()` saves (when there are unsaved changes) and returns the last saved text,
+//   and logs its size (a .json name: the v1 text).
 // - The mesh for the WebGL2 viewport: `ccoreMesh()`, the BMSH bytes of GET /mesh (glviewport.ts).
 
 interface Exports {
@@ -20,6 +27,9 @@ interface Exports {
   change_json(res: number): number;
   host_mesh(flags: number, res: number): number;
   host_saved(res: number): number;
+  host_saved_path(res: number): number;
+  host_open(discard: number, np: number, nn: number, bp: number, bn: number, res: number): number;
+  host_clock(unixS: number): void;
   host_log(res: number): number;
 }
 
@@ -59,6 +69,10 @@ export interface CcoreClient {
 }
 
 let module: { X: Exports; res: number } | null = null;
+/** The client's call (log, change feed, throws the error text); set by ccoreClient. */
+let callHost: ((op: string, name: string | null, body?: string) => string) | null = null;
+/** Reads the change feed and runs the listener when it changed; set by ccoreClient. */
+let emitChange: (() => void) | null = null;
 
 /** Copies `data` into the module; returns [ptr, len]. */
 function put(X: Exports, data: Uint8Array): [number, number] {
@@ -100,6 +114,116 @@ export function ccoreMesh(): { bytes: ArrayBuffer; rev: number } {
   return { bytes: r.bytes.buffer as ArrayBuffer, rev: r.value };
 }
 
+function unsavedNow(): boolean {
+  if (!callHost) return false;
+  return (JSON.parse(callHost("query", "state", "{}")) as { unsaved?: boolean }).unsaved === true;
+}
+
+/** Opens a file's bytes as the session's model (.bimble v1/v2, .json, .ifc imported). With
+ *  unsaved changes, asks first (or `discard`); false when the user kept them. Throws the C core's
+ *  error text when the file does not open. */
+export async function ccoreOpenFile(file: Blob & { name?: string }, discard = false): Promise<boolean> {
+  if (!module) throw new Error("ccore: not loaded");
+  const { X } = module;
+  if (!discard && unsavedNow()) {
+    if (!window.confirm("Discard the unsaved changes?")) return false;
+    discard = true;
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const name = file.name || "model.bimble";
+  const r = run(X.host_open.bind(X), [enc.encode(name), bytes], [discard ? 1 : 0]);
+  hostLog();
+  emitChange?.();
+  if (r.status !== 200) throw dec.decode(r.bytes) || `ccore open: ${r.status}`;
+  return true;
+}
+
+/** The bytes the module wrote last and their file name (host_saved, host_saved_path). */
+function lastWritten(): { name: string; bytes: Uint8Array } {
+  if (!module) throw new Error("ccore: not loaded");
+  const { X } = module;
+  const b = run(X.host_saved.bind(X), []);
+  if (b.status !== 200) throw new Error("ccore: nothing written");
+  const path = dec.decode(run(X.host_saved_path.bind(X), []).bytes);
+  return { name: path.split("/").pop() || "model.bimble", bytes: b.bytes };
+}
+
+/** Save as under the current name (the module has no paths): the file's bytes (v2, or the v1
+ *  text for a .json name) and its name. The model is saved after. */
+export function ccoreSaveBytes(): { name: string; bytes: Uint8Array } {
+  if (!callHost) throw new Error("ccore: not loaded");
+  callHost("action", "save_as", "{}");
+  return lastWritten();
+}
+
+/** The model as IFC (`export_ifc4` / `export_ifc2x3`): the STEP text and its file name. */
+export function ccoreExportIfc(schema: "ifc4" | "ifc2x3" = "ifc4"): { name: string; text: string } {
+  if (!callHost) throw new Error("ccore: not loaded");
+  callHost("action", `export_${schema}`, "{}");
+  const w = lastWritten();
+  return { name: w.name, text: dec.decode(w.bytes) };
+}
+
+/** Hands bytes to the user as a file download (lab only: Blob + `<a download>`). */
+export function ccoreDownload(name: string, data: Uint8Array | string, type = "application/octet-stream"): void {
+  const blob = new Blob([typeof data === "string" ? data : (data.slice().buffer as ArrayBuffer)], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+/** The file picker of `open` / `import_ifc`. */
+function pickAndOpen(accept: string): void {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = accept;
+  input.dataset.bb = "ccore-open";
+  input.style.display = "none";
+  input.addEventListener("change", () => {
+    const f = input.files?.[0];
+    input.remove();
+    if (f) ccoreOpenFile(f).catch((e) => console.error(`ccore: ${f.name}: ${String(e)}`));
+  });
+  input.addEventListener("cancel", () => input.remove());
+  document.body.appendChild(input);
+  input.click();
+}
+
+/** The file actions in the page (the rest go to the module as they are). */
+function fileAction(name: string): boolean {
+  if (!callHost) return false;
+  switch (name) {
+    case "open":
+      pickAndOpen(".bimble,.json,.ifc");
+      return true;
+    case "import_ifc":
+      pickAndOpen(".ifc");
+      return true;
+    case "new":
+      if (unsavedNow() && !window.confirm("Discard the unsaved changes?")) return true;
+      callHost("action", "new", JSON.stringify({ discard: true }));
+      return true;
+    case "save": {
+      callHost("action", "save"); // throws when not enabled, as the native host answers
+      const w = lastWritten();
+      ccoreDownload(w.name, w.bytes);
+      return true;
+    }
+    case "export_ifc4":
+    case "export_ifc2x3": {
+      const e = ccoreExportIfc(name === "export_ifc4" ? "ifc4" : "ifc2x3");
+      ccoreDownload(e.name, e.text, "application/x-step");
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Loads the module, opens the model and returns a `Wasm` for bimble.ts. */
 export async function ccoreClient(params: URLSearchParams): Promise<CcoreClient> {
   const base = document.baseURI;
@@ -134,6 +258,7 @@ export async function ccoreClient(params: URLSearchParams): Promise<CcoreClient>
     }
   };
   const call = (op: string, name: string | null, body?: string): string => {
+    X.host_clock(Date.now() / 1000); // the module's wall clock (IFC export stamps)
     const r = run(X.call.bind(X), [enc.encode(op), enc.encode(name ?? "-"), enc.encode(body ?? "")]);
     hostLog();
     emit();
@@ -141,12 +266,14 @@ export async function ccoreClient(params: URLSearchParams): Promise<CcoreClient>
     if (r.status !== 200) throw t || `ccore ${op}: ${r.status}`; // as wasm: the error text as a string
     return t;
   };
+  callHost = call;
+  emitChange = emit;
   window.ccoreSave = () => {
     // Save is enabled only with unsaved changes (as the native host): else the last saved text.
     if ((JSON.parse(last || "{}") as { unsaved?: boolean }).unsaved) call("action", "save");
     const r = run(X.host_saved.bind(X), []);
     if (r.status !== 200) throw new Error("ccore: nothing saved yet (no change since the model was opened)");
-    console.info(`ccore: saved ${name}, ${r.bytes.length} bytes (ccoreSave() returns the text)`);
+    console.info(`ccore: saved ${dec.decode(run(X.host_saved_path.bind(X), []).bytes)}, ${r.bytes.length} bytes (ccoreSave() returns the text)`);
     return dec.decode(r.bytes);
   };
   return {
@@ -156,7 +283,7 @@ export async function ccoreClient(params: URLSearchParams): Promise<CcoreClient>
     undo: () => void call("undo", null),
     redo: () => void call("redo", null),
     select: (idsJson) => void call("select", null, idsJson),
-    action: (n) => void call("action", n),
+    action: (n) => void (fileAction(n) || call("action", n)),
     verb: (n, argsJson) => void call("verb", n, argsJson),
     tab: (json) => void call("tab", null, json),
     set_placing: (json) => void call("set_placing", null, json),

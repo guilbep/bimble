@@ -2,8 +2,9 @@
  * that creates the session (docs/research/core-architecture.md §5). The session code calls
  * only these for files, time, randomness and logging; it has no #ifdef per platform.
  *   native: host/platform_native.c (cc_platform_native: POSIX files, clocks, /dev/urandom, stderr)
- *   wasm:   src/wasm_api.c (no files: the model text is handed in and Save keeps the text; no
- *           clock; the log is read back by the page through the export host_log)
+ *   wasm:   src/wasm_api.c (no files: the page stages the bytes an open reads, and the module
+ *           keeps the last file written (Save, Save as, Export IFC) for the page to download;
+ *           the wall clock is the page's (host_clock); the log is read back through host_log)
  * Every function takes the platform's own `ctx` first. */
 #ifndef CCORE_SESSION_PLATFORM_H
 #define CCORE_SESSION_PLATFORM_H
@@ -15,8 +16,9 @@ enum { CC_PF_OK = 0, CC_PF_NOT_FOUND, CC_PF_TOO_LARGE, CC_PF_IO, CC_PF_NO_MEMORY
 
 typedef struct cc_platform {
     void *ctx;
-    /* 1: paths name files of a file system; 0: none (the wasm module). Without files, exporting
-     * IFC from an action only logs (the page calls the export itself). */
+    /* 1: paths name files of a file system; 0: none (the wasm module): a path is a file name for
+     * the page, and the actions that would ask where (Save of a new model, Save as without a
+     * path) write under the current name instead of refusing. */
     int files;
     /* The whole file at `path`, malloc'd and NUL-terminated (`*n` bytes before the NUL), at most
      * `max` bytes. Returns CC_PF_OK, or a status with *p NULL. */

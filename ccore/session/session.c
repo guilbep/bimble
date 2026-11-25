@@ -8,6 +8,7 @@
 #include "file.h"
 #include "ifc_in.h"
 #include "json_r.h"
+#include "guid.h"
 #include "json_w.h"
 #include "session.h"
 
@@ -79,75 +80,47 @@ static int editable_copy_path(const cc_session *s, const char *ifc, char *out, s
     return -1;
 }
 
-/* Opens `path` (cc_session_open); with `model_text`, the model is that .bimble text instead of
- * the file's content (a session snapshot: the file is not read), the rest as for the file. */
-static int open_impl(cc_session *s, const char *path, const char *model_text, size_t model_n, cc_error *err) {
-    err->offset = CC_NO_OFFSET;
-    err->msg[0] = 0;
-    double t0 = s->pf->now_ms(s->pf->ctx);
-    if (s->scene_rev) cc_scene_free(&s->scene); /* the caches are per rev: a new model starts at 1 */
-    s->scene_rev = 0, s->mesh_status = 0;
-    size_t n = 0;
-    char *text = NULL;
-    if (!model_text) {
-        text = read_all(s, path, &n, err);
-        if (!text) return -1;
-    }
-    int ifc = ends_with_ci(path, ".ifc");
-    cc_model_init(&s->model);
-    int rc;
-    if (model_text) {
-        cc_model_free(&s->model);
-        rc = cc_model_load(&s->model, model_text, model_n, err);
-        if (rc == 0 && (ifc ? editable_copy_path(s, path, s->path, sizeof s->path) != 0 : strlen(path) >= sizeof s->path)) {
-            snprintf(err->msg, sizeof err->msg, "%s: path too long", path);
-            rc = -1;
-        } else if (rc == 0 && !ifc) strcpy(s->path, path);
-    } else if (ifc) {
-        cc_ifc_report rep;
-        cc_model_free(&s->model);
-        rc = cc_ifc_import(&s->model, &rep, text, n, err);
-        cc_ifc_report_free(&rep);
-        if (rc == 0) { /* lib.rs:529-536: the project takes the file stem, then validate */
-            const char *name = strrchr(path, '/');
-            name = name ? name + 1 : path;
-            const char *dot = strrchr(name, '.');
-            size_t k = dot && dot != name ? (size_t)(dot - name) : strlen(name);
-            char *p = arena_dup(&s->model.arena, name, k ? k : 1);
-            if (p && k) s->model.project_name = (cc_str){p, k};
-            cc_error ve;
-            if (cc_model_validate(&s->model, &ve)) {
-                snprintf(err->msg, sizeof err->msg, "imported model invalid: %s", ve.msg);
-                rc = -1;
-            }
-        }
-        if (rc == 0 && editable_copy_path(s, path, s->path, sizeof s->path)) {
-            snprintf(err->msg, sizeof err->msg, "%s: no name for the editable copy", path);
-            rc = -1;
-        }
-    } else {
-        cc_model_free(&s->model);
-        rc = cc_model_load(&s->model, text, n, err);
-        if (rc == 0) {
-            if (strlen(path) >= sizeof s->path) {
-                snprintf(err->msg, sizeof err->msg, "path too long");
-                rc = -1;
-            } else strcpy(s->path, path);
-        }
-    }
-    free(text);
-    if (rc) {
-        cc_model_free(&s->model);
-        return -1;
-    }
-    cc_history_init(&s->hist);
+static int ends_with(const char *s, const char *suffix) {
+    size_t n = strlen(s), k = strlen(suffix);
+    return n >= k && !strcmp(s + n - k, suffix);
+}
+
+/* The session file's side of the file actions (below, per platform). */
+static void persist_follow(cc_session *s, const char *model_file, int again);
+static void persist_drop_cmds(cc_session *s);
+
+/* s->path := path (it fits: the callers checked), with the file name and the schema. */
+static void set_path(cc_session *s, const char *path) {
+    if (s->path != path) memmove(s->path, path, strlen(path) + 1);
     const char *slash = strrchr(s->path, '/');
     s->file = slash ? slash + 1 : s->path;
-    s->schema_bimble = strlen(s->file) > 7 && !strcmp(s->file + strlen(s->file) - 7, ".bimble");
+    s->schema_bimble = ends_with(s->file, ".bimble") && strlen(s->file) > 7; /* calls.rs:244 */
+}
+
+/* Drops what belongs to the open model: model, history, selection, placing, the caches. */
+static void drop_model(cc_session *s) {
+    if (s->open) cc_history_free(&s->hist), cc_model_free(&s->model);
+    persist_drop_cmds(s); /* after the history that borrows from them */
+    if (s->scene_rev) cc_scene_free(&s->scene);
+    s->scene_rev = 0, s->scene_ok = 0, s->mesh_status = 0, s->mesh_model = NULL;
+    s->nundo_ids = s->nredo_ids = 0;
+    s->has_primary = 0, s->nalso = 0;
+    s->placing = 0, s->has_storey = 0, s->polygon = 0, s->top_offset_mm = 0;
+    free(s->material), s->material = NULL;
+    s->open = 0, s->untitled = 0;
+}
+
+/* Makes `m` (loaded, validated) the session's model at `path`: a fresh history and editor (as
+ * a load does), rev + 1 (lib.rs:1679 `scene_rev += 1`: 1 after the first load). */
+static void install(cc_session *s, cc_model *m, const char *path, uint64_t saved_step, double t0) {
+    drop_model(s);
+    s->model = *m;
+    cc_history_init(&s->hist);
+    set_path(s, path);
     s->open = 1;
-    s->rev = 1;            /* lib.rs:1679 */
+    s->rev++;
     s->next_step = 1;
-    s->saved_step = ifc ? UINT64_MAX : 0; /* edit.rs `Editor::imported`: starts dirty */
+    s->saved_step = saved_step; /* UINT64_MAX: edit.rs `Editor::imported`, starts dirty */
     /* edit.rs `Editor::new`: the lowest storey at or above -1 mm, else the first one. */
     const cc_storey *best = NULL;
     for (size_t i = 0; i < s->model.nstoreys; i++) {
@@ -162,10 +135,130 @@ static int open_impl(cc_session *s, const char *path, const char *model_text, si
     s->offset[0] = 1000.0, s->offset[1] = 0.0, s->offset[2] = 0.0;
     s->tab_open = 1; /* the 3D view is shown on load */
     s->load_ms = s->pf->now_ms(s->pf->ctx) - t0;
+}
+
+/* Opens `path` (cc_session_open); with `model_text`, the model is that .bimble text instead of
+ * the file's content (a session snapshot: the file is not read), the rest as for the file.
+ * The open model is replaced only once the new one loaded. */
+static int open_impl(cc_session *s, const char *path, const char *model_text, size_t model_n, cc_error *err) {
+    err->offset = CC_NO_OFFSET;
+    err->msg[0] = 0;
+    double t0 = s->pf->now_ms(s->pf->ctx);
+    int ifc = ends_with_ci(path, ".ifc");
+    char to[sizeof s->path];
+    if (ifc ? editable_copy_path(s, path, to, sizeof to) != 0 : strlen(path) >= sizeof to) {
+        snprintf(err->msg, sizeof err->msg, "%s: path too long", path);
+        return -1;
+    }
+    if (!ifc) strcpy(to, path);
+    cc_model m;
+    int rc;
+    if (model_text) rc = cc_model_load(&m, model_text, model_n, err);
+    else {
+        size_t n = 0;
+        char *text = read_all(s, path, &n, err);
+        if (!text) return -1;
+        if (ifc) {
+            cc_ifc_report rep;
+            rc = cc_ifc_import(&m, &rep, text, n, err);
+            cc_ifc_report_free(&rep);
+            if (rc == 0) { /* lib.rs:529-536: the project takes the file stem, then validate */
+                const char *name = strrchr(path, '/');
+                name = name ? name + 1 : path;
+                const char *dot = strrchr(name, '.');
+                size_t k = dot && dot != name ? (size_t)(dot - name) : strlen(name);
+                char *p = arena_dup(&m.arena, name, k ? k : 1);
+                if (p && k) m.project_name = (cc_str){p, k};
+                cc_error ve;
+                if (cc_model_validate(&m, &ve)) {
+                    snprintf(err->msg, sizeof err->msg, "imported model invalid: %s", ve.msg);
+                    rc = -1;
+                }
+            }
+        } else rc = cc_model_load(&m, text, n, err);
+        free(text);
+    }
+    if (rc) {
+        cc_model_free(&m);
+        return -1;
+    }
+    install(s, &m, to, ifc ? UINT64_MAX : 0, t0);
     return 0;
 }
 
-int cc_session_open(cc_session *s, const char *path, cc_error *err) { return open_impl(s, path, NULL, 0, err); }
+int cc_session_open(cc_session *s, const char *path, cc_error *err) {
+    if (open_impl(s, path, NULL, 0, err)) return -1;
+    persist_follow(s, path, 1); /* the model is the file's content (an IFC: its import) */
+    return 0;
+}
+
+int cc_session_new_model(cc_session *s, cc_error *err) {
+    err->offset = CC_NO_OFFSET;
+    double t0 = s->pf->now_ms(s->pf->ctx);
+    cc_model m;
+    cc_model_init(&m);
+    cc_guid pid = cc_guid_new(), sid = cc_guid_new(); /* verbs.rs:102-103: Model::new, then the storey */
+    cc_storey *st = arena_alloc(&m.arena, sizeof *st, 8);
+    char *name = arena_dup(&m.arena, "Untitled", 8), *level = arena_dup(&m.arena, "Level 0", 7);
+    if (!st || !name || !level) {
+        cc_model_free(&m);
+        snprintf(err->msg, sizeof err->msg, "out of memory");
+        return -1;
+    }
+    memcpy(m.project_id.c, pid.c, 22);
+    m.project_name = (cc_str){name, 8};
+    memcpy(st->id.c, sid.c, 22);
+    st->name = (cc_str){level, 7};
+    st->elevation = 0.0;
+    m.storeys = st, m.nstoreys = 1;
+    if (cc_model_validate(&m, err)) {
+        cc_model_free(&m);
+        return -1;
+    }
+    install(s, &m, CC_UNTITLED, UINT64_MAX, t0); /* lib.rs:1701: loaded as an imported copy: unsaved */
+    s->untitled = 1;
+    persist_follow(s, NULL, 1);
+    return 0;
+}
+
+void cc_session_close(cc_session *s) {
+    if (!s->open) return;
+    drop_model(s);
+    s->rev++; /* the view changed: nothing to show */
+    persist_follow(s, NULL, 1);
+}
+
+int cc_session_save(cc_session *s, const char *path, cc_error *err) {
+    err->offset = CC_NO_OFFSET;
+    err->msg[0] = 0;
+    if (!s->open) {
+        snprintf(err->msg, sizeof err->msg, "no model open");
+        return -1;
+    }
+    const char *to = path ? path : s->path;
+    if (strlen(to) >= sizeof s->path || !*to) {
+        snprintf(err->msg, sizeof err->msg, "%s: %s", to, *to ? "path too long" : "no path");
+        return -1;
+    }
+    Buf b;
+    buf_init(&b);
+    /* file.rs:145: the extension "json" (exactly) gives the text form, anything else the binary. */
+    int ok = (ends_with(to, ".json") ? cc_model_save(&s->model, &b) : cc_model_save_v2(&s->model, &b)) == 0 && !b.oom;
+    /* Through the platform: a file natively; in the module, the bytes kept for the page. */
+    if (ok) ok = s->pf->write_file(s->pf->ctx, to, b.p, b.len) == 0;
+    buf_free(&b);
+    if (!ok) {
+        snprintf(err->msg, sizeof err->msg, "%s: cannot write", to);
+        cc_log(s->pf, "bimble-ccore: %s", err->msg);
+        return -1;
+    }
+    int moved = strcmp(to, s->path) != 0;
+    if (moved) set_path(s, to), s->untitled = 0;
+    s->saved_step = cc_session_step(s);
+    cc_log(s->pf, "bimble-ccore: Saved %s", s->path);
+    persist_follow(s, s->path, 0); /* a no-op when the session file is already the saved path's */
+    return 0;
+}
 
 /* ---- the session file (session.h, tickets T12, T18) ---- */
 
@@ -178,6 +271,8 @@ int cc_session_open_persisted(cc_session *s, const char *model_path, const char 
 void cc_session_persist_now(cc_session *s) { (void)s; }
 void cc_session_note_apply(cc_session *s, const cc_command *cmds, size_t n) { (void)s, (void)cmds, (void)n; }
 static void persist_free(cc_session *s) { (void)s; }
+static void persist_follow(cc_session *s, const char *model_file, int again) { (void)s, (void)model_file, (void)again; }
+static void persist_drop_cmds(cc_session *s) { (void)s; }
 #else
 #include <errno.h>
 #include <fcntl.h>
@@ -214,6 +309,8 @@ struct cc_persist {
     Buf pend_cmds;
     uint64_t pend_id;
     int pend_ok;
+    int follow;    /* set up (cc_session_open_persisted returned): the file actions move it */
+    int auto_name; /* sess_path is "<sess_model>.ccore-session": it moves with the model */
 };
 static void close_session(cc_session *s);
 
@@ -687,13 +784,39 @@ end:
     return rc;
 }
 
-static void close_session(cc_session *s) {
-    if (!s->open) return;
-    cc_history_free(&s->hist);
-    cc_model_free(&s->model);
-    s->nundo_ids = s->nredo_ids = 0;
-    s->has_primary = 0, s->nalso = 0;
-    s->open = 0;
+static void close_session(cc_session *s) { /* a restore that failed: as if never opened */
+    drop_model(s);
+    s->rev = 0;
+}
+
+static void persist_drop_cmds(cc_session *s) {
+    cc_persist *P = s->persist;
+    if (!P || !P->follow) return; /* a restore in progress fills them before the model opens */
+    cc_cmds_free(&P->sess_cmds);
+    cc_cmds_init(&P->sess_cmds);
+}
+
+/* The session file follows the file actions (session.h): `model_file` is the file the open model
+ * now is (just opened or saved); NULL: none (a new model, a close) and the session file pauses.
+ * `again` 0: nothing to do when the session file is already that file's (a Save in place: the
+ * next cc_session_persist_now sees the new stamp). */
+static void persist_follow(cc_session *s, const char *model_file, int again) {
+    cc_persist *P = s->persist;
+    if (!P || !P->follow) return;
+    if (!again && model_file && s->open && P->on && !strcmp(model_file, P->sess_model) && P->sess_fd >= 0) return; /* the same file */
+    if (P->sess_fd >= 0) close(P->sess_fd);
+    P->sess_fd = -1, P->on = 0, P->pend_ok = 0;
+    if (!model_file || !s->open) return;
+    size_t k = strlen(model_file);
+    if (k >= sizeof P->sess_model || (P->auto_name && k + 15 >= sizeof P->sess_path)) {
+        cc_log(s->pf, "bimble-ccore: no session file for %s (a path too long)", model_file);
+        return;
+    }
+    strcpy(P->sess_model, model_file);
+    if (P->auto_name) snprintf(P->sess_path, sizeof P->sess_path, "%s.ccore-session", model_file);
+    P->on = 1;
+    P->model_is_file = 1; /* just read or just written: the file's content */
+    if (write_snapshot(s) == 0) cc_log(s->pf, "bimble-ccore: session file %s", P->sess_path);
 }
 
 /* Opens the session from the session file. 1 restored (S open; *keep: bytes of the file that are
@@ -830,15 +953,20 @@ int cc_session_open_persisted(cc_session *s, const char *model_path, const char 
     }
     strcpy(P->sess_path, session_path);
     strcpy(P->sess_model, model_path);
+    {
+        size_t k = strlen(model_path);
+        P->auto_name = !strncmp(session_path, model_path, k) && !strcmp(session_path + k, ".ccore-session");
+    }
     size_t keep = 0;
     int rewrite = 0;
     if (restore(s, &keep, &rewrite)) {
         P->on = 1;
         if (!rewrite) {
             P->sess_fd = open(P->sess_path, O_WRONLY | O_APPEND);
-            if (P->sess_fd >= 0 && ftruncate(P->sess_fd, (off_t)keep) == 0 && remember(s) == 0) return 0;
+            if (P->sess_fd >= 0 && ftruncate(P->sess_fd, (off_t)keep) == 0 && remember(s) == 0) return P->follow = 1, 0;
         }
         write_snapshot(s);
+        P->follow = 1;
         return 0;
     }
     if (cc_session_open(s, model_path, err)) {
@@ -848,6 +976,7 @@ int cc_session_open_persisted(cc_session *s, const char *model_path, const char 
     P->on = 1;
     P->model_is_file = 1;
     write_snapshot(s); /* no model text: cheap */
+    P->follow = 1;
     return 0;
 }
 #endif

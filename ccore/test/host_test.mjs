@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
+import { gunzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -102,8 +103,9 @@ try {
   check("query actions key order (calls.rs:325, json! sorted)", actions.length > 0 && actions.every((a) => JSON.stringify(Object.keys(a)) === ORDER));
   check("query actions: unique names", new Set(actions.map((a) => a.name)).size === 54);
   const enabled = actions.filter((a) => a.enabled).map((a) => a.name).sort().join(",");
-  // No model: save, undo, redo, place_* and export_ifc* need one (ribbon.rs:577-590).
-  check("query actions: enabled set without a model (ribbon.rs:555)", enabled === "home", enabled);
+  // No model: save, undo, redo, place_* and export_ifc* need one (ribbon.rs:577-590); new, open
+  // and import_ifc are always on (ribbon.rs:559; the C core runs them since ticket A5).
+  check("query actions: enabled set without a model (ribbon.rs:555)", enabled === "home,import_ifc,new,open", enabled);
   const hi = await call("query", "history");
   check("query history -> {redo:[],undo:[]}", hi.status === 200 && hi.body === '{"redo":[],"undo":[]}', hi.body);
   for (const [name, want] of [["status", "null"], ["placing", "null"], ["pointer", "null"], ["views", "[]"], ["sheets", "[]"],
@@ -229,12 +231,13 @@ try {
   check("model: query storeys = golden/query.txt first record", sto.status === 200 && sto.body === goldenAnswer("storeys"), sto.body);
   const en = async () => (await mq("actions")).filter((a) => a.enabled).map((a) => a.name).sort().join(",");
   const en0 = await en();
-  check("model: enabled actions, nothing to undo or save", en0 === "export_ifc2x3,export_ifc4,home,place_beam,place_column,place_slab,place_wall", en0);
+  check("model: enabled actions, nothing to undo or save", en0 === "export_ifc2x3,export_ifc4,home,import_ifc,new,open,place_beam,place_column,place_slab,place_wall", en0);
   const r0 = await rev();
   check("model: rev 1 after load (lib.rs:1679)", r0 === 1, String(r0));
 
-  // Save writes cc_model_save's bytes: a model equal to the loaded one (an element moved there and
-  // back) saves as frame.json, which cc_model_save reproduces byte for byte (file_test golden round trip).
+  // Save writes file::save's form (file.rs:143): a .bimble path gets the binary v2 (ADR 0042). A
+  // model equal to the loaded one (an element moved there and back) saves as the magic + gzip of
+  // golden/bin/frame.cbor, Rust's CBOR of frame.json (file2_test checks the same bytes).
   const col = (await mq("elements", { class: "IfcColumn", limit: 1 }))[0].id;
   const mv1 = await mcall("verb", "move", JSON.stringify({ ids: [col], d: [1, 0, 0] }));
   const mv2 = await mcall("verb", "move", JSON.stringify({ ids: [col], d: [-1, 0, 0] }));
@@ -242,7 +245,9 @@ try {
   check("model: unsaved after edits", (await mq("state")).unsaved === true);
   const sv0 = await mcall("action", "save");
   check("model: action save -> 200", sv0.status === 200, sv0.body);
-  check("model: saved bytes = cc_model_save (= frame.json)", Buffer.compare(readFileSync(model), frameBytes) === 0);
+  const v2 = (b) => b.subarray(0, 7).toString("latin1") === "bimble\0" ? gunzipSync(b.subarray(7)) : Buffer.alloc(0);
+  check("model: saved bytes = v2 of frame.json (magic, gzip of golden/bin/frame.cbor)",
+    Buffer.compare(v2(readFileSync(model)), readFileSync(join(GOLDEN, "bin/frame.cbor"))) === 0);
   check("model: saved -> unsaved false, save disabled", (await mq("state")).unsaved === false && !(await en()).includes("save"));
 
   // action export_ifc4 writes frame.ifc next to the model (share.rs:50): ifc_out's bytes, which the
@@ -270,8 +275,8 @@ try {
   check("model: 73 elements after place", els.length === 73, String(els.length));
   const sv1 = await mcall("action", "save");
   const saved1 = readFileSync(model);
-  check("model: save after place writes the new column", sv1.status === 200 && Buffer.compare(saved1, frameBytes) !== 0 &&
-    Object.values(JSON.parse(saved1.toString()).model.elements).some((e) => e.name === "P1"));
+  check("model: save after place writes the new column (the CBOR text \"P1\")", sv1.status === 200 && Buffer.compare(saved1, frameBytes) !== 0 &&
+    v2(saved1).includes(Buffer.from([0x62, 0x50, 0x31])));
 
   // undo: the model changes, the file does not; unsaved again; redo back to the saved step.
   const un = await mcall("undo", "-");

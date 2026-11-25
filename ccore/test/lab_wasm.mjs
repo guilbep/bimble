@@ -5,12 +5,16 @@
 // module (data-bb-ready), the navigator lists the 3 storeys, the canvas shows shaded concrete
 // (207,207,204 ±6) on > 5 %, a click on a grey face selects one element (page state.selection) and
 // the properties panel shows it, a place through the client adds an element and the mesh redraws
-// (pixel hash changes), ccoreSave() returns the saved text, undo restores the picture; no request
+// (pixel hash changes), ccoreSave() returns the saved text, undo restores the picture; then the
+// file actions (ticket A5): ccoreOpenFile(Blob of golden/bin/frame2.bimble) -> 2 storeys and a new
+// mesh, ccoreExportIfc and ccoreSaveBytes, ribbon `new` -> 1 storey, ribbon `open` -> the picker
+// (intercepted: Page.fileChooserOpened) filled through DOM.setFileInputFiles (a copy of
+// frame.json) -> 3 storeys; no request
 // to a host, no page error, no console error. Prints the
 // wasm transfer size, navigation -> first frame and place -> pixels times, "N passed, M failed";
 // exits non-zero on a failure. Kills all it starts.
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -268,6 +272,53 @@ async function main() {
   const h2 = await evalJs(hash), count2 = await bb("b.query('elements', {}).length");
   console.log(`undo: ${typeof undoMs === "number" ? undoMs.toFixed(1) + " ms to the frame" : undoMs}`);
   check("undo restores the element count and the picture", count2 === count0 && h2 === h0, `${count2} elements, hash ${h2} (before the place ${h0})`);
+
+  // Files (ticket A5): ccoreOpenFile with a Blob (golden/bin/frame2.bimble, v2: 2 storeys), the
+  // storeys and the mesh change; Export IFC4 and Save bytes; the ribbon's `new` (1 storey); the
+  // ribbon's `open`: the file picker it opens, filled through CDP DOM.setFileInputFiles (frame.json).
+  const ccx = (expr) => evalJs(`(async () => { const c = await import('/src/ccore.ts'); const b = await import('/src/bimble.ts'); return ${expr}; })()`);
+  const f2 = readFileSync(join(CCORE, "golden/bin/frame2.bimble")).toString("base64");
+  const revBefore = await bb("b.state.value.rev");
+  const opened = await ccx(`(async () => {
+    const bytes = Uint8Array.from(atob(${JSON.stringify(f2)}), (ch) => ch.charCodeAt(0));
+    try { return await c.ccoreOpenFile(new File([bytes], 'frame2.bimble'), true); } catch (e) { return String(e); }
+  })()`);
+  const st2 = await waitFor("storeys of frame2.bimble", 5000, async () => {
+    const s = JSON.parse(await bb("JSON.stringify({ file: b.state.value.file, rev: b.state.value.rev, storeys: b.storeys.value.map((s) => s.name) })"));
+    return s.storeys.length === 2 ? s : null;
+  }).catch(() => null);
+  check("ccoreOpenFile(frame2.bimble, v2) -> the page holds its 2 storeys", opened === true && st2?.file === "frame2.bimble", `${opened} ${JSON.stringify(st2)}`);
+  const meshOk = await waitFor("the mesh of the opened file", 5000, async () => {
+    const g = JSON.parse(await evalJs("JSON.stringify(window.__bbGl)"));
+    return g.meshRev === st2?.rev && g.meshRev > revBefore ? g : null;
+  }).catch(() => null);
+  check("the viewport draws the opened file's mesh (a new rev)", meshOk !== null, `rev ${revBefore} -> ${st2?.rev}`);
+  const exp = JSON.parse(await ccx("JSON.stringify((() => { const e = c.ccoreExportIfc('ifc4'); return { name: e.name, n: e.text.length, cols: e.text.includes('IFCCOLUMN') }; })())"));
+  check("ccoreExportIfc('ifc4') -> frame2.ifc text", exp.name === "frame2.ifc" && exp.n > 1000 && exp.cols, JSON.stringify(exp));
+  const sb = JSON.parse(await ccx("JSON.stringify((() => { const s = c.ccoreSaveBytes(); return { name: s.name, magic: new TextDecoder().decode(s.bytes.subarray(0, 6)), n: s.bytes.length }; })())"));
+  check("ccoreSaveBytes() -> v2 bytes named frame2.bimble", sb.name === "frame2.bimble" && sb.magic === "bimble" && sb.n > 500, JSON.stringify(sb));
+  const nerr = await bb("b.runAction('new')");
+  const st3 = await waitFor("the new model's storey", 5000, async () => {
+    const s = JSON.parse(await bb("JSON.stringify({ file: b.state.value.file, storeys: b.storeys.value.map((s) => s.name) })"));
+    return s.storeys.length === 1 ? s : null;
+  }).catch(() => null);
+  check("ribbon action new -> Untitled.bimble with 'Level 0'", nerr === null && st3?.file === "Untitled.bimble" && st3.storeys[0] === "Level 0", `${nerr} ${JSON.stringify(st3)}`);
+  await evalJs("window.confirm = () => true, 1"); // the new model is unsaved: open asks first
+  // The picker as a click opens it (a user gesture), intercepted: CDP hands over its <input>.
+  let chooser = null;
+  cdp.on((msg) => { if (msg.sessionId === sessionId && msg.method === "Page.fileChooserOpened") chooser = msg.params; });
+  await S("Page.setInterceptFileChooserDialog", { enabled: true });
+  const oerr = (await S("Runtime.evaluate", { expression: "(async () => { const b = await import('/src/bimble.ts'); return b.runAction('open'); })()",
+    returnByValue: true, awaitPromise: true, userGesture: true })).result.value;
+  const nodeId = (await waitFor("Page.fileChooserOpened", 5000, () => chooser).catch(() => null))?.backendNodeId ?? 0;
+  const pick = join(tmp, "picked.json");
+  copyFileSync(join(CCORE, "golden/frame.json"), pick);
+  if (nodeId) await S("DOM.setFileInputFiles", { files: [pick], backendNodeId: nodeId });
+  const st4 = await waitFor("storeys of the picked file", 5000, async () => {
+    const s = JSON.parse(await bb("JSON.stringify({ file: b.state.value.file, storeys: b.storeys.value.map((s) => s.name) })"));
+    return s.storeys.length === 3 ? s : null;
+  }).catch(() => null);
+  check("ribbon action open: the file picker, then the picked frame.json's 3 storeys", oerr === null && !!nodeId && st4?.file === "picked.json", `${oerr} node ${nodeId} ${JSON.stringify(st4)}`);
 
   check("no request to a host (127.0.0.1)", hostRequests === 0, String(hostRequests));
   const bad = failedResponses.filter((r) => !/^404 http:\/\/localhost:\d+\/favicon\.ico$/.test(r));
