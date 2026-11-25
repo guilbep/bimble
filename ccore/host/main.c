@@ -1,6 +1,9 @@
 /* bimble-ccore: the C core's native host. Serves the twin protocol of
  * crates/bimble-viewer/src/serve.rs on 127.0.0.1 for the Vue lab (`?native=1&port=&token=`).
- *   bimble-ccore [port] [model]
+ *   bimble-ccore [--session[=file]] [port] [model]
+ *                             --session: keep the session (model edits, undo steps, selection,
+ *                             rev) in a file across restarts (session.h): <model>.ccore-session,
+ *                             or `file`; also on when CCORE_SESSION names a file
  *                             port: argv[1], else BIMBLE_SERVE (as twin.rs:106-114)
  *                             model: argv[2], else CCORE_MODEL; a .bimble/.json text form, or an
  *                             .ifc (imported); none: the host answers as a viewer with no model
@@ -51,6 +54,19 @@ static int parse_port(const char *s, unsigned *out) {
 }
 
 int main(int argc, char **argv) {
+    /* Flags first, then the positional port and model. */
+    const char *session = getenv("CCORE_SESSION");
+    int want_session = session && *session;
+    if (!want_session) session = NULL;
+    while (argc > 1 && !strncmp(argv[1], "--", 2)) {
+        if (!strcmp(argv[1], "--session")) want_session = 1;
+        else if (!strncmp(argv[1], "--session=", 10) && argv[1][10]) want_session = 1, session = argv[1] + 10;
+        else {
+            fprintf(stderr, "bimble-ccore: unknown flag %s\n", argv[1]);
+            return 2;
+        }
+        argv[1] = argv[0], argv++, argc--;
+    }
     const char *ps = argc > 1 ? argv[1] : getenv("BIMBLE_SERVE");
     unsigned port;
     if (!ps) {
@@ -68,6 +84,17 @@ int main(int argc, char **argv) {
             fprintf(stderr, "bimble-ccore: %s: %s\n", model, err.msg);
             return 1;
         }
+        if (want_session) {
+            static char def[4200];
+            if (!session) {
+                snprintf(def, sizeof def, "%s.ccore-session", model);
+                session = def;
+            }
+            cc_session_persist_start(session, model);
+        }
+    } else if (want_session) {
+        fprintf(stderr, "bimble-ccore: --session needs a model\n");
+        return 2;
     }
     static char token[33], epoch[33];
     const char *t = getenv("BIMBLE_TOKEN");
@@ -91,5 +118,7 @@ int main(int argc, char **argv) {
         for (char *tok = strtok(extra, ","); tok && cfg.n_origins < CC_HOST_MAX_ORIGINS; tok = strtok(NULL, ","))
             if (*tok && strlen(tok) < 256) cfg.origins[cfg.n_origins++] = tok;
     }
-    return cc_host_run(&cfg);
+    int rc = cc_host_run(&cfg);
+    cc_session_persist_now(); /* SIGTERM or SIGINT: the last change, if not written yet */
+    return rc;
 }

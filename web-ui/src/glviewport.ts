@@ -191,6 +191,30 @@ export function glViewport(base: string, token: string): () => void {
   let dirty = true;
   let loading = false;
   let wantRev: number | null = null;
+  // The host process the mesh came from (`epoch` of GET /change). A restarted host may restore
+  // its session and answer the same rev with a new build's mesh: a new epoch also refetches.
+  let epoch: string | null = null;
+  let seenState = state.value;
+  let checking = false;
+  const hostEpoch = async (): Promise<string | null> => {
+    const r = await fetch(`${base}/change?since=0&t=${t}`, { cache: "no-store" });
+    const m = (await r.json()) as { epoch?: unknown };
+    return typeof m.epoch === "string" ? m.epoch : null;
+  };
+  const checkEpoch = async (): Promise<void> => {
+    checking = true;
+    try {
+      const e = await hostEpoch();
+      if (e !== null && e !== epoch) {
+        if (epoch !== null) wantRev = null; // same rev, another process: load again
+        epoch = e;
+      }
+    } catch {
+      // the host may be restarting: its next change checks again
+    } finally {
+      checking = false;
+    }
+  };
   let fitted = false;
 
   const eye = (): V3 => {
@@ -258,6 +282,7 @@ export function glViewport(base: string, token: string): () => void {
     loading = true;
     try {
       const t0 = performance.now();
+      epoch = await hostEpoch().catch(() => null);
       const r = await fetch(`${base}/mesh?t=${t}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`mesh: HTTP ${r.status} ${await r.text()}`);
       const ab = await r.arrayBuffer();
@@ -411,6 +436,10 @@ export function glViewport(base: string, token: string): () => void {
 
   const loop = () => {
     const rev = state.value.rev;
+    if (state.value !== seenState) {
+      seenState = state.value;
+      if (!loading && !checking && wantRev === rev) void checkEpoch();
+    }
     if (!loading && wantRev !== rev) {
       wantRev = rev;
       void load();

@@ -57,4 +57,22 @@ int cc_session_unsaved(const cc_session *s);
 /* The open model, NULL without one; the rev of the scene it gives (for the /mesh endpoint). */
 const cc_model *cc_host_model(void);
 uint32_t cc_host_rev(void);
+
+/* The session file (ticket T12): the state a restart of the host must keep, so the lab page
+ * keeps its model edits, undo steps and selection across an edit -> rebuild -> restart loop.
+ * One JSON object (format 1): the model path it belongs to, the size and mtime of that file when
+ * written, the model text, history steps (id, label, inverse commands; oldest first), the step
+ * counters, rev and the selection. Written through `<path>.tmp` + rename (no fsync: it survives
+ * the host process, not a power loss).
+ *
+ * cc_session_persist_start: when `session_path` exists, belongs to `model_path` and the model
+ * file has the same size and mtime as when it was written, replaces the open session by it.
+ * The file is untrusted input: on any error it is ignored, the reason logged on stderr, and the
+ * session stays as cc_session_open made it. Then turns persistence on. Returns 1 when restored.
+ *
+ * Writes: cc_session_get (every call and the change feed go through it, so after each call)
+ * writes the file when the persisted fields changed since the last write and the history is
+ * consistent (step ids beside steps); cc_session_persist_now writes now if changed (at exit). */
+int cc_session_persist_start(const char *session_path, const char *model_path);
+void cc_session_persist_now(void);
 #endif
