@@ -5,7 +5,8 @@
 #         ASan and UBSan), build.sh wasm, test/wasm_run.mjs, test/host.sh (host_test, lab_boot).
 #   unit  all but the sanitizers and the Chromium lab suites (the job ccore-linux): the gate's
 #         builds, test/run.sh with tcc, wasm_run, host.sh, build.sh wasm-view and
-#         release, every test/*.mjs suite but lab_* (a new test/<name>.mjs is picked up without an
+#         release, the weight table (tools/weight.mjs, ticket SIZE1), every test/*.mjs suite but
+#         lab_* (a new test/<name>.mjs is picked up without an
 #         edit here; dev_test last: it rebuilds out/tcc/bimble-ccore through dev.sh).
 #   san   test/run.sh with clang, ASan and UBSan (the job ccore-san).
 #   lab   build.sh tcc and wasm, then every test/lab_*.mjs but lab_boot (host.sh runs it): the
@@ -120,6 +121,10 @@ unit_rest() {
     suite build-wasm-view ./build.sh wasm-view
     # The release archive (ticket R1), for test/release_test.mjs below.
     suite build-release ./build.sh release
+    # SIZE1: the weight table (results/weight.md) from the builds above; its change is printed.
+    # Fails only on an object no feature claims (tools/weight.mjs FEATURES), never on growth.
+    suite weight node tools/weight.mjs
+    grep '^weight: ' "$LOGS/weight.log" | sed 's/^/      /'
     # Run already (host.sh: host_test, lab_boot; wasm_run), the lab suites, or not a suite (ports).
     local skip=" ports host_test lab_boot wasm_run dev_test "
     for f in test/*.mjs; do

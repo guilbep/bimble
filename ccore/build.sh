@@ -281,8 +281,9 @@ release() {
         step "strip, sign ad hoc" bash -c 'strip "$1" && codesign --force --sign - "$1"' _ "$bin"
         printf '  %-28s %s, macOS %s or newer\n' "arch" "$(lipo -archs "$bin")" "$MACOSX_DEPLOYMENT_TARGET"
     else
+        # SIZE1: the link map (out/release/bimble-ccore.map) gives tools/weight.mjs the bytes per object.
         step "link bimble-ccore (kernel static)" clang -pthread -s "$obj"/*.o "$kd/libmanifoldc.a" "$kd/libmanifold.a" \
-            "$kd/libClipper2.a" -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc -lm -o "$bin"
+            "$kd/libClipper2.a" -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc -lm -Wl,-Map="$R/bimble-ccore.map" -o "$bin"
     fi
     local web
     web=$(cd "$stage" && pwd)/web
