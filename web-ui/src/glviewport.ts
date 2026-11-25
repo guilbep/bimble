@@ -36,6 +36,7 @@ interface Bmsh {
   v0: Uint32Array;
   nv: Uint32Array;
   i0: Uint32Array;
+  ni: Uint32Array;
   pos: Float32Array;
   idx: Uint32Array;
   edges: Float32Array;
@@ -52,7 +53,7 @@ export function parseBmsh(ab: ArrayBuffer): Bmsh {
   if (size !== ab.byteLength) throw new Error(`BMSH size ${ab.byteLength}, expected ${size}`);
   const origin: [number, number, number] = [dv.getFloat64(28, true), dv.getFloat64(36, true), dv.getFloat64(44, true)];
   const ids: string[] = [];
-  const cats = new Uint8Array(nE), v0 = new Uint32Array(nE), nv = new Uint32Array(nE), i0 = new Uint32Array(nE);
+  const cats = new Uint8Array(nE), v0 = new Uint32Array(nE), nv = new Uint32Array(nE), i0 = new Uint32Array(nE), ni = new Uint32Array(nE);
   const bytes = new Uint8Array(ab);
   for (let e = 0, o = 52; e < nE; e++, o += 48) {
     ids.push(String.fromCharCode(...bytes.subarray(o, o + 22)));
@@ -60,6 +61,7 @@ export function parseBmsh(ab: ArrayBuffer): Bmsh {
     v0[e] = u(o + 24);
     nv[e] = u(o + 28);
     i0[e] = u(o + 32);
+    ni[e] = u(o + 36);
   }
   let o = 52 + 48 * nE;
   const pos = new Float32Array(ab, o, 3 * nV);
@@ -68,7 +70,9 @@ export function parseBmsh(ab: ArrayBuffer): Bmsh {
   o += 4 * nI;
   const edges = new Float32Array(ab, o, 6 * nS);
   for (let i = 0; i < nI; i++) if ((idx[i] ?? 0) >= nV) throw new Error("BMSH index out of range");
-  return { rev, origin, ids, cats, v0, nv, i0, pos, idx, edges };
+  for (let e = 0; e < nE; e++)
+    if ((i0[e] ?? 0) + (ni[e] ?? 0) > nI || (v0[e] ?? 0) + (nv[e] ?? 0) > nV) throw new Error("BMSH row out of range");
+  return { rev, origin, ids, cats, v0, nv, i0, ni, pos, idx, edges };
 }
 
 // ---- small vector / matrix helpers (column-major mat4, as WebGL) ----
@@ -271,8 +275,25 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     return out;
   };
 
+  /** Per element: its vertices' box (min xyz, max xyz), for the pick's ray-box test. */
+  let boxes = new Float32Array(0);
   const upload = (m: Bmsh) => {
     mesh = m;
+    boxes = new Float32Array(6 * m.ids.length);
+    for (let e = 0; e < m.ids.length; e++) {
+      let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+      const a = m.v0[e] ?? 0, n = m.nv[e] ?? 0, P = m.pos;
+      for (let v = 3 * a; v < 3 * (a + n); v += 3) {
+        const x = P[v] ?? 0, y = P[v + 1] ?? 0, z = P[v + 2] ?? 0;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+        if (z < z0) z0 = z;
+        if (z > z1) z1 = z;
+      }
+      boxes.set([x0, y0, z0, x1, y1, z1], 6 * e);
+    }
     const min: V3 = [Infinity, Infinity, Infinity], max: V3 = [-Infinity, -Infinity, -Infinity];
     for (let i = 0; i < m.pos.length; i++) {
       const a = i % 3, v = m.pos[i] ?? 0;
@@ -373,30 +394,44 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     let best = Infinity, hit = -1;
     const P = m.pos, I = m.idx;
     const vtx = (i: number): V3 => [P[3 * i] ?? 0, P[3 * i + 1] ?? 0, P[3 * i + 2] ?? 0];
-    for (let k = 0; k + 2 < I.length; k += 3) {
-      // Möller–Trumbore, two-sided.
-      const a = vtx(I[k] ?? 0), b = vtx(I[k + 1] ?? 0), c = vtx(I[k + 2] ?? 0);
-      const e1 = sub(b, a), e2 = sub(c, a), p = cross(dir, e2), det = dot(e1, p);
-      if (Math.abs(det) < 1e-12) continue;
-      const inv = 1 / det, tv = sub(e, a), uu = dot(tv, p) * inv;
-      if (uu < 0 || uu > 1) continue;
-      const q = cross(tv, e1), vv = dot(dir, q) * inv;
-      if (vv < 0 || uu + vv > 1) continue;
-      const d = dot(e2, q) * inv;
-      if (d > 0 && d < best) {
-        best = d;
-        hit = k;
+    // Per element: the ray against its box first (slabs, padded by 1e-4 of the box size and 1 mm
+    // against f32 rounding); only the triangles of an element whose box the ray enters before the
+    // best hit so far. Same result as testing every triangle (elements in index order, a strictly
+    // nearer hit replaces).
+    const inv0 = 1 / dir[0], inv1 = 1 / dir[1], inv2 = 1 / dir[2];
+    let hitE = -1;
+    for (let el = 0; el < m.ids.length; el++) {
+      const o = 6 * el;
+      let tn = -Infinity, tf = Infinity;
+      for (let ax = 0; ax < 3; ax++) {
+        const lo = boxes[o + ax] ?? 0, hi = boxes[o + 3 + ax] ?? 0, pad = 1 + 1e-4 * (hi - lo);
+        const inv = ax === 0 ? inv0 : ax === 1 ? inv1 : inv2;
+        let t1 = (lo - pad - e[ax]!) * inv, t2 = (hi + pad - e[ax]!) * inv;
+        if (Number.isNaN(t1) || Number.isNaN(t2)) { t1 = -Infinity; t2 = Infinity; } // parallel, on the slab edge
+        if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+        if (t1 > tn) tn = t1;
+        if (t2 < tf) tf = t2;
+      }
+      if (tn > tf || tf <= 0 || tn >= best) continue;
+      const k0 = m.i0[el] ?? 0, k1 = k0 + (m.ni[el] ?? 0);
+      for (let k = k0; k + 2 < k1; k += 3) {
+        // Möller–Trumbore, two-sided.
+        const a = vtx(I[k] ?? 0), b = vtx(I[k + 1] ?? 0), c = vtx(I[k + 2] ?? 0);
+        const e1 = sub(b, a), e2 = sub(c, a), p = cross(dir, e2), det = dot(e1, p);
+        if (Math.abs(det) < 1e-12) continue;
+        const inv = 1 / det, tv = sub(e, a), uu = dot(tv, p) * inv;
+        if (uu < 0 || uu > 1) continue;
+        const q = cross(tv, e1), vv = dot(dir, q) * inv;
+        if (vv < 0 || uu + vv > 1) continue;
+        const d = dot(e2, q) * inv;
+        if (d > 0 && d < best) {
+          best = d;
+          hit = k;
+          hitE = el;
+        }
       }
     }
-    if (hit < 0) return -1;
-    // The element whose index range holds the triangle (rows are in index order).
-    let lo = 0, hi = m.ids.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if ((m.i0[mid] ?? 0) <= hit) lo = mid;
-      else hi = mid - 1;
-    }
-    return lo;
+    return hit < 0 ? -1 : hitE;
   };
 
   new ResizeObserver(() => {
