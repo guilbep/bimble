@@ -5,6 +5,10 @@
  *   format of the compile-speed spike's step_dump and compared with its expected dumps (by
  *   length and a BLAKE3 fingerprint, the dumps themselves live on that branch); imported, the
  *   report printed (what is outside the subset is reported, not failed).
+ * - ifc/import goldens: the 16 inputs of golden/ifc/import imported (seeded ids), saved, masked
+ *   and compared byte for byte with Rust's model and report (chain18: its size summary); each
+ *   imported twice to check the ids are stable; time per fixture printed. booleans is a known
+ *   difference (Rust cuts with the manifold3d kernel; the C core has no boolean kernel).
  * - robustness: truncations and byte mutations of frame.ifc (run it under ASan/UBSan too).
  * - timing: parse + import of frame.ifc. */
 #define _POSIX_C_SOURCE 199309L
@@ -260,6 +264,38 @@ static int import_mask(const char *text, size_t n, const Known *known, Buf *out,
     return rc;
 }
 
+/* Known ids for ifc/import: every token of the source IFC text that is a valid GlobalId. */
+static void known_from_text(const char *t, size_t n, Known *k) {
+    k->n = 0;
+    k->v = NULL;
+    size_t cap = 0;
+    for (size_t i = 0; i < n;) {
+        if (!is_id_char(t[i])) { i++; continue; }
+        size_t j = i;
+        while (j < n && is_id_char(t[j])) j++;
+        if (j - i == 22 && cc_gid_valid(t + i, 22)) {
+            if (k->n == cap) {
+                cap = cap ? cap * 2 : 64;
+                k->v = realloc(k->v, cap * sizeof *k->v);
+            }
+            memcpy(k->v[k->n++].c, t + i, 22);
+        }
+        i = j;
+    }
+}
+
+/* Report lines with ids masked by the model's numbering is not needed: no report line of
+ * these goldens holds a new id. The C-only "unsupported: " lines are not Rust's. */
+static void rust_lines(const Buf *l, Buf *out) {
+    buf_clear(out);
+    for (size_t i = 0; i < l->len;) {
+        size_t j = i;
+        while (j < l->len && l->p[j] != '\n') j++;
+        if (!(j - i >= 13 && !memcmp(l->p + i, "unsupported: ", 13))) buf_append(out, l->p + i, j + 1 - i);
+        i = j + 1;
+    }
+}
+
 static double now(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -350,6 +386,156 @@ int main(int argc, char **argv) {
         }
         cc_model_free(&m);
         cc_ifc_report_free(&rep);
+        free(t);
+    }
+
+    /* ifc/import goldens (Rust's import_str), byte for byte; and stable over two runs. */
+    {
+        static const struct {
+            const char *name, *dir, *file;
+        } G[] = {
+            {"booleans", "../crates/bimble-ifc/tests/fixtures", "booleans.ifc"},
+            {"chain18", "../crates/bimble-ifc/tests/fixtures", "chain18.ifc"},
+            {"curves", "../crates/bimble-ifc/tests/fixtures", "curves.ifc"},
+            {"cyclic_map", "../crates/bimble-ifc/tests/fixtures", "cyclic_map.ifc"},
+            {"mirror", "../crates/bimble-ifc/tests/fixtures", "mirror.ifc"},
+            {"tilt", "../crates/bimble-ifc/tests/fixtures", "tilt.ifc"},
+            {"ishape_beam", "golden/ifc/fixtures", "ishape_beam.ifc"},
+            {"circle_column", "golden/ifc/fixtures", "circle_column.ifc"},
+            {"rect_hollow", "golden/ifc/fixtures", "rect_hollow.ifc"},
+            {"triangulated", "golden/ifc/fixtures", "triangulated.ifc"},
+            {"faceted_brep", "golden/ifc/fixtures", "faceted_brep.ifc"},
+            {"mapped_item", "golden/ifc/fixtures", "mapped_item.ifc"},
+            {"indexed_arc", "golden/ifc/fixtures", "indexed_arc.ifc"},
+            {"opening", "golden/ifc/fixtures", "opening.ifc"},
+            {"frame2", "golden/ifc", "frame2.ifc"},
+            {"frame2.ifc2x3", "golden/ifc", "frame2.ifc2x3.ifc"},
+        };
+        /* booleans: Rust cuts with the manifold3d kernel, the C core has none (drawn uncut). */
+        static const char *KNOWN_DIFFERENT[] = {"booleans"};
+        size_t matched = 0, total = 0;
+        for (size_t g = 0; g < sizeof G / sizeof *G; g++) {
+            char wn_[128];
+            size_t tn, rn;
+            char *t = slurp(G[g].dir, G[g].file, &tn);
+            Known kk;
+            known_from_text(t, tn, &kk);
+            Buf a, a2, lines;
+            buf_init(&a);
+            buf_init(&a2);
+            buf_init(&lines);
+            cc_ifc_report rp;
+            cc_guid_seed(1);
+            double t0 = now();
+            int rc1 = import_mask(t, tn, &kk, &a, &rp, &err);
+            double ms = (now() - t0) * 1e3;
+            rust_lines(&rp.lines, &lines);
+            size_t unsup = rp.unsupported;
+            cc_ifc_report_free(&rp);
+            cc_guid_seed(1);
+            int rc2 = import_mask(t, tn, &kk, &a2, &rp, &err);
+            cc_ifc_report_free(&rp);
+            int known_diff = 0;
+            for (size_t k = 0; k < sizeof KNOWN_DIFFERENT / sizeof *KNOWN_DIFFERENT; k++)
+                known_diff |= !strcmp(KNOWN_DIFFERENT[k], G[g].name);
+            snprintf(wn_, sizeof wn_, "ifc/import/%s.report.txt", G[g].name);
+            char *wr = slurp(golden, wn_, &rn);
+            int rep_ok = rc1 == 0 && lines.len == rn && !memcmp(lines.p, wr, rn);
+            int model_ok;
+            char detail[160] = "";
+            if (!strcmp(G[g].name, "chain18")) {
+                /* chain18.size.txt: bytes, elements, one line per element */
+                Buf z;
+                buf_init(&z);
+                cc_model cm;
+                cc_guid_seed(1);
+                cc_ifc_report rq;
+                int rc = cc_ifc_import(&cm, &rq, t, tn, &err);
+                cc_ifc_report_free(&rq);
+                buf_puts(&z, "bytes ");
+                buf_u64(&z, a.len);
+                buf_puts(&z, "\nelements ");
+                buf_u64(&z, rc ? 0 : cm.nelements);
+                buf_putc(&z, '\n');
+                for (size_t k = 0; !rc && k < cm.nelements; k++) {
+                    const cc_element *el = &cm.elements[k];
+                    buf_append(&z, el->id.c, 22);
+                    buf_putc(&z, ' ');
+                    buf_puts(&z, el->has_ifc_entity ? "" : cc_ifc_class_name(el->cls));
+                    if (el->has_ifc_entity) buf_append(&z, el->ifc_entity.p, el->ifc_entity.n);
+                    buf_putc(&z, ' ');
+                    buf_puts(&z, cc_gen_kind_name(el->generator.kind));
+                    int mesh = el->generator.kind == CC_GEN_MESH;
+                    buf_puts(&z, " v=");
+                    buf_u64(&z, mesh ? el->generator.u.mesh.npositions : 0);
+                    buf_puts(&z, " i=");
+                    buf_u64(&z, mesh ? el->generator.u.mesh.nindices / 3 : 0);
+                    buf_putc(&z, '\n');
+                }
+                cc_model_free(&cm);
+                size_t sn;
+                char *ws = slurp(golden, "ifc/import/chain18.size.txt", &sn);
+                model_ok = rc1 == 0 && z.len == sn && !memcmp(z.p, ws, sn);
+                if (!model_ok) snprintf(detail, sizeof detail, " (got %.*s)", (int)(z.len < 120 ? z.len : 120), z.p);
+                free(ws);
+                buf_free(&z);
+            } else {
+                size_t jn;
+                snprintf(wn_, sizeof wn_, "ifc/import/%s.json", G[g].name);
+                char *wj = slurp(golden, wn_, &jn);
+                model_ok = rc1 == 0 && a.len == jn && !memcmp(a.p, wj, jn);
+                if (!model_ok && rc1 == 0) {
+                    size_t k = 0;
+                    while (k < a.len && k < jn && a.p[k] == wj[k]) k++;
+                    size_t line = 1;
+                    for (size_t q = 0; q < k; q++) line += wj[q] == '\n';
+                    snprintf(detail, sizeof detail, " (first difference at byte %zu, line %zu)", k, line);
+                } else if (rc1) snprintf(detail, sizeof detail, " (%s)", err.msg);
+                free(wj);
+            }
+            int stable = rc1 == rc2 && a.len == a2.len && !memcmp(a.p, a2.p, a.len);
+            int ok = model_ok && rep_ok;
+            total++;
+            matched += ok;
+            printf("import %-14s %-9s model %s, report %s, %zu unsupported, two runs %s, %.3f ms%s\n", G[g].name,
+                   ok ? "MATCHES" : known_diff ? "differs*" : "DIFFERS", model_ok ? "ok" : "differs",
+                   rep_ok ? "ok" : "differs", unsup, stable ? "identical" : "DIFFER", ms, detail);
+            if (!rep_ok && !known_diff) printf("%.*s---- want\n%.*s", (int)lines.len, lines.p, (int)rn, wr);
+            check_true(G[g].name, known_diff ? !ok : ok);
+            check_true("import twice: identical", stable);
+            free(wr);
+            free(t);
+            free(kk.v);
+            buf_free(&a);
+            buf_free(&a2);
+            buf_free(&lines);
+        }
+        printf("ifc/import: %zu of %zu goldens match (* = known difference)\n", matched, total);
+    }
+
+    /* Derived ids, unmasked (masked in the goldens): import.rs derives material ids as
+     * GlobalId::derived("material/<name>") and the synthetic storey as derived("storey/synthetic");
+     * cc_guid_derived itself is checked against Rust in the guid suite (golden/guid.txt). */
+    {
+        size_t tn;
+        char *t = slurp("golden/ifc/fixtures", "opening.ifc", &tn);
+        cc_model dm;
+        cc_ifc_report dr;
+        int rc = cc_ifc_import(&dm, &dr, t, tn, &err);
+        cc_guid want = cc_guid_derived("material/C30/37", 15);
+        check_true("opening: material id = derived(\"material/C30/37\")",
+                   !rc && dm.nmaterials == 1 && !memcmp(dm.materials[0].id.c, want.c, 22));
+        printf("derived: material/C30/37 -> %.22s\n", rc ? "?" : dm.materials[0].id.c);
+        cc_model_free(&dm);
+        cc_ifc_report_free(&dr);
+        free(t);
+        t = slurp("../crates/bimble-ifc/tests/fixtures", "tilt.ifc", &tn);
+        rc = cc_ifc_import(&dm, &dr, t, tn, &err);
+        want = cc_guid_derived("storey/synthetic", 16);
+        check_true("tilt: synthetic storey id = derived(\"storey/synthetic\")",
+                   !rc && dm.nstoreys == 1 && !memcmp(dm.storeys[0].id.c, want.c, 22));
+        cc_model_free(&dm);
+        cc_ifc_report_free(&dr);
         free(t);
     }
 

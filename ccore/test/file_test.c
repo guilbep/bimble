@@ -358,7 +358,7 @@ int main(int argc, char **argv) {
     expect_error(frame, fn, "\"project_name\"", "\"views\": {\"x\": 1}, \"project_name\"", "unsupported by the C core: views");
     expect_error(frame, fn, "\"project_name\"", "\"schedules\": [1], \"project_name\"", "unsupported by the C core: schedules");
     expect_error(frame, fn, "\"project_name\"", "\"georef\": {\"x\": 1}, \"project_name\"", "unsupported by the C core: georef");
-    expect_error(frame, fn, "\"generator\": {", "\"openings\": [{}], \"generator\": {", "unsupported by the C core: element openings");
+    expect_error(frame, fn, "\"generator\": {", "\"openings\": [{}], \"generator\": {", "missing field `placement`");
     expect_error(frame, fn, "\"strength_mpa\": 30.0,", "\"strength_mpa\": 30.0, \"colour\": 1,", "unknown field `colour`");
     expect_error(frame, fn, "\"kind\": \"rect_column\"", "\"kind\": \"cylinder\"", "unknown variant `cylinder`");
     expect_error(frame, fn, "{", "\xef\xbb\xbf{", "parse: ");

@@ -96,6 +96,13 @@ typedef struct {
     } u;
 } cc_generator;
 
+typedef struct { /* model.rs Opening: a solid cut out of its element (element-local mm) */
+    int has_id; /* id: Option<GlobalId> */
+    cc_gid id;
+    cc_placement placement;
+    cc_generator generator;
+} cc_opening;
+
 typedef struct {
     cc_gid id;
     cc_ifc_class cls;
@@ -103,6 +110,8 @@ typedef struct {
     cc_gid storey, material;
     cc_placement placement;
     cc_generator generator;
+    cc_opening *openings; /* in file order; geometry is not cut by the C core (data only) */
+    size_t nopenings;
     cc_kv *properties; /* sorted by key bytes */
     size_t nproperties;
     int has_ifc_entity;

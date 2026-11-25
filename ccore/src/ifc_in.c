@@ -3,7 +3,10 @@
 #include "ifc_in.h"
 #include <stdlib.h>
 #include <string.h>
+#include "earcut.h"
 #include "guid.h"
+#include "ifc_math.h"
+#include "verbs.h"
 
 /* The freestanding wasm32 shim has no strcmp, strncmp, memchr or calloc: local ones. */
 static int s_cmp(const char *a, const char *b) {
@@ -79,16 +82,6 @@ double cc_sqrt_soft(double x) {
 }
 
 /* The integer version everywhere: no libm to link (tcc, clang's errno fallback, wasm32). */
-
-/* f64::hypot. Exact when one side is 0 (all of Bimble's own axis-aligned rectangles);
- * otherwise sqrt(a²+b²), which can differ from libm's hypot in the last bit. */
-static double hyp(double a, double b) {
-    if (a < 0) a = -a;
-    if (b < 0) b = -b;
-    if (a == 0) return b;
-    if (b == 0) return a;
-    return cc_sqrt(a * a + b * b);
-}
 
 typedef double V3[3];
 typedef struct {
@@ -183,13 +176,19 @@ static void tally_sort(Tallies *t) { /* insertion sort: small, bounded by MAX_TA
 
 /* ------------------------------------------------------------------ reader */
 
+#define MAX_NESTING 32
+
 typedef struct {
     const cc_step_file *f;
     Aff *pl;          /* placement cache, by entity index */
     unsigned char *has_pl;
     Tallies warnings; /* Reader warnings (BTreeMap with counts) */
     Tallies unsup;    /* outside the C subset */
-    const char *unsup_why; /* set by profile/curve when they meet something not ported */
+    double arc_tol;     /* arc tessellation tolerance, file units */
+    double angle_scale; /* plane angle unit -> radians */
+    uint64_t stack[MAX_NESTING + 8]; /* representation maps being expanded */
+    size_t nstack;
+    size_t unsup_n; /* booleans drawn uncut (no kernel) */
     Buf tmp;
 } R;
 
@@ -256,6 +255,25 @@ static double length_scale_to_mm(R *r) {
         if (u && length_unit_mm(r, u, 0, &s)) return s;
     }
     warn(r, "no length unit in project; assuming millimetres", 0, 0);
+    return 1.0;
+}
+
+static double plane_angle_to_radians(R *r) {
+    const cc_step_entity *p = first_of(r->f, "IFCPROJECT");
+    const cc_step_entity *a = p ? get(r, arg(p, 8)) : NULL;
+    const cc_sv *us;
+    size_t n = 0;
+    if (!a || !cc_sv_as_list(arg(a, 0), &us, &n)) n = 0;
+    for (size_t i = 0; i < n; i++) {
+        const cc_step_entity *u = get(r, &us[i]);
+        if (!u || !enum_is(arg(u, 1), "PLANEANGLEUNIT")) continue;
+        if (is(u, "IFCSIUNIT")) return 1.0;
+        if (is(u, "IFCCONVERSIONBASEDUNIT")) {
+            const cc_step_entity *m = get(r, arg(u, 3));
+            double f;
+            if (m && cc_sv_as_f64(arg(m, 0), &f)) return f;
+        }
+    }
     return 1.0;
 }
 
@@ -328,7 +346,7 @@ static Aff object_placement(R *r, uint64_t id, int depth) {
     return a;
 }
 
-/* ---- profiles: loops of 2D points (growable, malloc) */
+/* ---- growable arrays: 2D loops, 3D point lists, triangles (malloc) */
 
 typedef struct {
     double (*p)[2];
@@ -338,25 +356,39 @@ typedef struct {
     Loop *v;
     size_t n, cap;
 } Loops;
+typedef struct {
+    double (*p)[3];
+    size_t n, cap;
+} P3;
+typedef struct { /* bimble_geom::MeshBuilder: world triangles (mm) */
+    double (*t)[9];
+    size_t n, cap;
+    int oom;
+} Tris;
 
-static int loop_push(Loop *l, double x, double y) {
-    if (l->n == l->cap) {
-        size_t cap = l->cap ? l->cap * 2 : 8;
-        void *p = realloc(l->p, cap * sizeof *l->p);
-        if (!p) return -1;
-        l->p = p, l->cap = cap;
+static double signed_area(const Loop *l);
+static void loop_reverse(Loop *l);
+
+static int grow(void **p, size_t *cap, size_t need, size_t sz) {
+    if (need <= *cap) return 0;
+    size_t c = *cap ? *cap : 8;
+    while (c < need) {
+        if (c > ((size_t)-1) / 2 / sz) return -1;
+        c *= 2;
     }
+    void *q = realloc(*p, c * sz);
+    if (!q) return -1;
+    *p = q, *cap = c;
+    return 0;
+}
+static int loop_push(Loop *l, double x, double y) {
+    if (grow((void **)&l->p, &l->cap, l->n + 1, sizeof *l->p)) return -1;
     l->p[l->n][0] = x, l->p[l->n][1] = y;
     l->n++;
     return 0;
 }
 static int loops_push(Loops *ls, Loop l) {
-    if (ls->n == ls->cap) {
-        size_t cap = ls->cap ? ls->cap * 2 : 4;
-        void *p = realloc(ls->v, cap * sizeof *ls->v);
-        if (!p) return -1;
-        ls->v = p, ls->cap = cap;
-    }
+    if (grow((void **)&ls->v, &ls->cap, ls->n + 1, sizeof *ls->v)) return -1;
     ls->v[ls->n++] = l;
     return 0;
 }
@@ -365,60 +397,485 @@ static void loops_free(Loops *ls) {
     free(ls->v);
     memset(ls, 0, sizeof *ls);
 }
+static int p3_push(P3 *l, const double *q) {
+    if (grow((void **)&l->p, &l->cap, l->n + 1, sizeof *l->p)) return -1;
+    memcpy(l->p[l->n++], q, 3 * sizeof(double));
+    return 0;
+}
+static void p3_free(P3 *l) {
+    free(l->p);
+    memset(l, 0, sizeof *l);
+}
 static double dist2(const double *a, const double *b) {
     double dx = a[0] - b[0], dy = a[1] - b[1];
     return dx * dx + dy * dy;
 }
+static double norm3(const double *v) { return cc_sqrt(dot(v, v)); }
+static double dist3(const double *a, const double *b) {
+    double d[3] = {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+    return norm3(d);
+}
+/* Vec::dedup_by(|a, b| norm(sub(a, b)) < 1e-9): drop points within 1e-9 of the last kept. */
+static void p3_dedup(P3 *l) {
+    size_t w = 0;
+    for (size_t i = 0; i < l->n; i++) {
+        if (w && dist3(l->p[i], l->p[w - 1]) < 1e-9) continue;
+        if (w != i) memcpy(l->p[w], l->p[i], sizeof l->p[0]);
+        w++;
+    }
+    l->n = w;
+}
+static void p3_reverse(P3 *l) {
+    for (size_t i = 0, j = l->n ? l->n - 1 : 0; i < j; i++, j--) {
+        double t[3];
+        memcpy(t, l->p[i], sizeof t);
+        memcpy(l->p[i], l->p[j], sizeof t);
+        memcpy(l->p[j], t, sizeof t);
+    }
+}
 
-/* Closed 2D curve -> points without the repeated first (Reader::curve). IfcPolyline only. */
-static int curve(R *r, const cc_sv *v, Loop *out) {
-    memset(out, 0, sizeof *out);
-    const cc_step_entity *e = get(r, v);
-    if (!e) return 0;
-    if (!is(e, "IFCPOLYLINE")) {
-        if (is(e, "IFCINDEXEDPOLYCURVE") || is(e, "IFCCOMPOSITECURVE") || is(e, "IFCTRIMMEDCURVE") ||
-            is(e, "IFCCIRCLE") || is(e, "IFCELLIPSE") || is(e, "IFCLINE"))
-            r->unsup_why = e->name;
-        else warn(r, "unsupported curve ", e->name, " (skipped)");
+/* f64::min / f64::max (a NaN side is ignored). */
+static double fmin_rs(double a, double b) { return a != a ? b : b != b ? a : a < b ? a : b; }
+static double fmax_rs(double a, double b) { return a != a ? b : b != b ? a : a > b ? a : b; }
+/* f64::rem_euclid */
+static double rem_euclid(double a, double b) {
+    double r = cc_fmod(a, b);
+    return r < 0.0 ? r + (b < 0 ? -b : b) : r;
+}
+/* f64::round: half away from zero. */
+static double round_rs(double x) {
+    double ax = x < 0 ? -x : x;
+    if (!(ax < 4503599627370496.0)) return x; /* 2^52: already an integer (or NaN, inf) */
+    double t = (double)(int64_t)x;
+    double d = x - t;
+    if (d >= 0.5) t += 1.0;
+    else if (d <= -0.5) t -= 1.0;
+    if (t == 0.0) return x < 0 || (x == 0 && 1.0 / x < 0) ? -0.0 : 0.0;
+    return t;
+}
+
+static const double TAU = 6.283185307179586;
+
+/* ---- arcs */
+
+/* arc_segments: chords within tol of a circle of radius r over sweep, at most 15° each. */
+static size_t arc_segments(double r, double sweep, double tol) {
+    const double MAX_STEP = 3.141592653589793 / 12.0;
+    double step = tol > 0.0 && tol < r ? fmin_rs(2.0 * cc_acos(1.0 - tol / r), MAX_STEP) : MAX_STEP;
+    double q = (sweep < 0 ? -sweep : sweep) / fmax_rs(step, 1e-3);
+    /* .ceil() as usize, saturating; NaN -> 0; then clamp(8, 1024) */
+    size_t n;
+    if (!(q > 0)) n = 0;
+    else if (q >= 1e18) n = (size_t)-1;
+    else {
+        uint64_t t = (uint64_t)q;
+        n = (size_t)((double)t < q ? t + 1 : t);
+    }
+    return n < 8 ? 8 : n > 1024 ? 1024 : n;
+}
+
+/* arc: points from a through b to c (inclusive), within tol. Appends to out. */
+static int arc2(const double *a, const double *b, const double *c, double tol, Loop *out) {
+    double d = 2.0 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+    if ((d < 0 ? -d : d) < 1e-12) {
+        if (loop_push(out, a[0], a[1]) || loop_push(out, b[0], b[1]) || loop_push(out, c[0], c[1])) return -1;
         return 0;
     }
-    const cc_sv *ps;
-    size_t n;
-    if (!cc_sv_as_list(arg(e, 0), &ps, &n)) return 0;
-    /* curve3: 3D points, consecutive duplicates (|a-b| < 1e-9) dropped, at least 2. */
-    double (*p3)[3] = malloc((n ? n : 1) * sizeof *p3);
-    size_t m = 0;
-    if (!p3) return 0;
-    for (size_t i = 0; i < n; i++) {
-        double q[3];
-        if (!point(r, &ps[i], q)) continue;
-        if (m) {
-            double d[3] = {q[0] - p3[m - 1][0], q[1] - p3[m - 1][1], q[2] - p3[m - 1][2]};
-            if (cc_sqrt(dot(d, d)) < 1e-9) continue;
-        }
-        memcpy(p3[m++], q, sizeof q);
+    double sa = a[0] * a[0] + a[1] * a[1], sb = b[0] * b[0] + b[1] * b[1], sc = c[0] * c[0] + c[1] * c[1];
+    double ux = (sa * (b[1] - c[1]) + sb * (c[1] - a[1]) + sc * (a[1] - b[1])) / d;
+    double uy = (sa * (c[0] - b[0]) + sb * (a[0] - c[0]) + sc * (b[0] - a[0])) / d;
+    double r = cc_sqrt((a[0] - ux) * (a[0] - ux) + (a[1] - uy) * (a[1] - uy));
+    double angA = cc_atan2(a[1] - uy, a[0] - ux), angB = cc_atan2(b[1] - uy, b[0] - ux),
+           angC = cc_atan2(c[1] - uy, c[0] - ux);
+    double a0 = angA, ab = rem_euclid(angB - angA, TAU), ac = rem_euclid(angC - angA, TAU);
+    double sweep = ab < ac ? ac : ac - TAU;
+    size_t n = arc_segments(r, sweep, tol);
+    size_t start = out->n;
+    for (size_t i = 0; i <= n; i++) {
+        double t = a0 + sweep * (double)i / (double)n;
+        if (loop_push(out, ux + r * cc_cos(t), uy + r * cc_sin(t))) return -1;
     }
-    int ok = m >= 2;
-    if (ok && m > 1) {
-        double a[2] = {p3[0][0], p3[0][1]}, b[2] = {p3[m - 1][0], p3[m - 1][1]};
+    out->p[start][0] = a[0], out->p[start][1] = a[1];
+    out->p[start + n][0] = c[0], out->p[start + n][1] = c[1];
+    return 0;
+}
+
+/* arc3: the arc through three 3D points, in its own plane. Appends to out, skipping the first
+ * `skip` points. */
+static int arc3(const double *a, const double *b, const double *c, double tol, size_t skip, P3 *out) {
+    double ba[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]}, ca[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+    double nn[3], e1[3], n[3], e2[3];
+    cross(ba, ca, nn);
+    if (!normalize(ba, e1) || !normalize(nn, n)) {
+        const double *v[3] = {a, b, c};
+        for (size_t k = skip; k < 3; k++)
+            if (p3_push(out, v[k])) return -1;
+        return 0;
+    }
+    cross(n, e1, e2);
+    double q[3][2];
+    const double *v[3] = {a, b, c};
+    for (int k = 0; k < 3; k++) {
+        double d[3] = {v[k][0] - a[0], v[k][1] - a[1], v[k][2] - a[2]};
+        q[k][0] = dot(d, e1), q[k][1] = dot(d, e2);
+    }
+    Loop l = {0};
+    if (arc2(q[0], q[1], q[2], tol, &l)) { free(l.p); return -1; }
+    for (size_t i = skip; i < l.n; i++) {
+        double p[3];
+        for (int k = 0; k < 3; k++) p[k] = a[k] + e1[k] * l.p[i][0] + e2[k] * l.p[i][1];
+        if (p3_push(out, p)) { free(l.p); return -1; }
+    }
+    free(l.p);
+    return 0;
+}
+
+/* fillet: the given corners replaced with arcs of radius r. */
+static int fillet(const double (*poly)[2], size_t n, const size_t *corners, size_t nc, double r, double tol,
+                  Loop *out) {
+    for (size_t i = 0; i < n; i++) {
+        const double *c = poly[i];
+        int is_c = 0;
+        for (size_t k = 0; k < nc; k++) is_c |= corners[k] == i;
+        if (!is_c) {
+            if (loop_push(out, c[0], c[1])) return -1;
+            continue;
+        }
+        const double *p = poly[(i + n - 1) % n], *q = poly[(i + 1) % n];
+        double l1 = cc_sqrt((c[0] - p[0]) * (c[0] - p[0]) + (c[1] - p[1]) * (c[1] - p[1]));
+        double l2 = cc_sqrt((q[0] - c[0]) * (q[0] - c[0]) + (q[1] - c[1]) * (q[1] - c[1]));
+        if (r >= l1 || r >= l2 || l1 == 0.0 || l2 == 0.0) {
+            if (loop_push(out, c[0], c[1])) return -1;
+            continue;
+        }
+        double d1[2] = {(c[0] - p[0]) / l1, (c[1] - p[1]) / l1};
+        double d2[2] = {(q[0] - c[0]) / l2, (q[1] - c[1]) / l2};
+        double t1[2] = {c[0] - d1[0] * r, c[1] - d1[1] * r};
+        double t2[2] = {c[0] + d2[0] * r, c[1] + d2[1] * r};
+        double center[2] = {t1[0] + d2[0] * r, t1[1] + d2[1] * r};
+        double k = cc_sqrt((c[0] - center[0]) * (c[0] - center[0]) + (c[1] - center[1]) * (c[1] - center[1]));
+        double mid[2] = {center[0] + (c[0] - center[0]) / k * r, center[1] + (c[1] - center[1]) / k * r};
+        if (arc2(t1, mid, t2, tol, out)) return -1;
+    }
+    return 0;
+}
+
+/* ---- transforms */
+
+/* IfcCartesianTransformationOperator3D (+ NonUniform) -> Affine. */
+static Aff transform_operator(R *r, const cc_sv *v) {
+    const cc_step_entity *e = get(r, v);
+    if (!e) return IDENT;
+    double a1[3], a2[3], a3[3], t[3], s, s2, s3;
+    int h1 = direction(r, arg(e, 0), a1), h2 = direction(r, arg(e, 1), a2);
+    if (!point(r, arg(e, 2), t)) t[0] = t[1] = t[2] = 0;
+    if (!cc_sv_as_f64(arg(e, 3), &s)) s = 1.0;
+    int h3 = direction(r, arg(e, 4), a3);
+    s2 = s3 = s;
+    if (is(e, "IFCCARTESIANTRANSFORMATIONOPERATOR3DNONUNIFORM")) {
+        if (!cc_sv_as_f64(arg(e, 5), &s2)) s2 = s;
+        if (!cc_sv_as_f64(arg(e, 6), &s3)) s3 = s;
+    }
+    double z[3] = {0, 0, 1}, x[3], y[3];
+    if (h3) memcpy(z, a3, sizeof z);
+    int ok = 0;
+    if (h1) {
+        double d = dot(a1, z), w[3] = {a1[0] - z[0] * d, a1[1] - z[1] * d, a1[2] - z[2] * d};
+        ok = normalize(w, x);
+    }
+    if (!ok) {
+        double w[3] = {1.0 - z[0] * z[0], 0.0 - z[1] * z[0], 0.0 - z[2] * z[0]};
+        ok = normalize(w, x);
+    }
+    if (!ok) x[0] = 0, x[1] = 1, x[2] = 0;
+    double yy[3] = {0, 1, 0};
+    const double *yv = h2 ? a2 : yy;
+    {
+        double dz = dot(yv, z), dx = dot(yv, x);
+        double w1[3] = {yv[0] - z[0] * dz, yv[1] - z[1] * dz, yv[2] - z[2] * dz};
+        double w[3] = {w1[0] - x[0] * dx, w1[1] - x[1] * dx, w1[2] - x[2] * dx};
+        if (!normalize(w, y)) cross(z, x, y);
+    }
+    Aff a;
+    for (int k = 0; k < 3; k++) a.x[k] = x[k] * s, a.y[k] = y[k] * s2, a.z[k] = z[k] * s3, a.t[k] = t[k];
+    return a;
+}
+
+static Aff transform_operator_2d(R *r, const cc_sv *v) {
+    const cc_step_entity *e = get(r, v);
+    if (!e) return IDENT;
+    double x[3], t[3], s, y[3];
+    if (!direction(r, arg(e, 0), x)) x[0] = 1, x[1] = 0, x[2] = 0;
+    if (!point(r, arg(e, 2), t)) t[0] = t[1] = t[2] = 0;
+    if (!cc_sv_as_f64(arg(e, 3), &s)) s = 1.0;
+    double zz[3] = {0, 0, 1};
+    cross(zz, x, y);
+    Aff a;
+    for (int k = 0; k < 3; k++) a.x[k] = x[k] * s, a.y[k] = y[k] * s, a.z[k] = zz[k], a.t[k] = t[k];
+    return a;
+}
+
+static double aff_det(const Aff *a) {
+    double c[3];
+    cross(a->y, a->z, c);
+    return dot(a->x, c);
+}
+
+/* Affine::local: world point -> local coordinates (orthogonal axes). */
+static void aff_local(const Aff *a, const double *p, double *o) {
+    double d[3] = {p[0] - a->t[0], p[1] - a->t[1], p[2] - a->t[2]};
+    const double *ax[3] = {a->x, a->y, a->z};
+    double r[3];
+    for (int k = 0; k < 3; k++) r[k] = dot(d, ax[k]) / fmax_rs(dot(ax[k], ax[k]), 1e-300);
+    memcpy(o, r, sizeof r);
+}
+
+/* ---- curves */
+
+static int curve3(R *r, const cc_sv *v, int depth, P3 *out);
+
+static int pick_param(const cc_sv *v, R *r, int *has_pt, double *pt, int *has_par, double *par) {
+    const cc_sv *l;
+    size_t n;
+    *has_pt = *has_par = 0;
+    if (!cc_sv_as_list(v, &l, &n)) return 0;
+    for (size_t i = 0; i < n; i++) {
+        const cc_sv *x = &l[i];
+        if (x->kind == CC_SV_TYPED && !strcmp(x->u.typed.name, "IFCPARAMETERVALUE"))
+            *has_par = cc_sv_as_f64(x->u.typed.inner, par);
+        else if (x->kind == CC_SV_REF) *has_pt = point(r, x, pt);
+    }
+    return 0;
+}
+
+/* IfcTrimmedCurve on a line, circle or ellipse. */
+static int trimmed_curve(R *r, const cc_step_entity *e, int depth, P3 *out) {
+    const cc_step_entity *basis = get(r, arg(e, 0));
+    if (!basis) return 0;
+    int sense = !enum_is(arg(e, 3), "F");
+    int prefer = enum_is(arg(e, 4), "PARAMETER");
+    int hp[2], hq[2];
+    double pt[2][3], par[2];
+    pick_param(arg(e, 1), r, &hp[0], pt[0], &hq[0], &par[0]);
+    pick_param(arg(e, 2), r, &hp[1], pt[1], &hq[1], &par[1]);
+    if (is(basis, "IFCLINE")) {
+        double p0[3], d[3], m;
+        const cc_step_entity *vec;
+        if (!point(r, arg(basis, 0), p0) || !(vec = get(r, arg(basis, 1))) || !direction(r, arg(vec, 0), d)) return 0;
+        if (!cc_sv_as_f64(arg(vec, 1), &m)) m = 1.0;
+        double res[2][3];
+        for (int k = 0; k < 2; k++) {
+            if ((prefer && hq[k]) || (!prefer && !hp[k] && hq[k])) {
+                for (int c = 0; c < 3; c++) res[k][c] = p0[c] + d[c] * m * par[k];
+            } else if (hp[k]) memcpy(res[k], pt[k], sizeof res[k]);
+            else return 0;
+        }
+        return p3_push(out, res[0]) || p3_push(out, res[1]) ? -1 : 1;
+    }
+    if (is(basis, "IFCCIRCLE") || is(basis, "IFCELLIPSE")) {
+        Aff pos = axis_placement(r, arg(basis, 0));
+        double r1, r2;
+        if (!cc_sv_as_f64(arg(basis, 1), &r1)) return 0;
+        if (is(basis, "IFCELLIPSE")) {
+            if (!cc_sv_as_f64(arg(basis, 2), &r2)) return 0;
+        } else r2 = r1;
+        double ang[2];
+        for (int k = 0; k < 2; k++) {
+            if ((prefer && hq[k]) || (!prefer && !hp[k] && hq[k])) ang[k] = par[k] * r->angle_scale;
+            else if (hp[k]) {
+                double d[3] = {pt[k][0] - pos.t[0], pt[k][1] - pos.t[1], pt[k][2] - pos.t[2]};
+                ang[k] = cc_atan2(dot(d, pos.y) / r2, dot(d, pos.x) / r1);
+            } else return 0;
+        }
+        double a1 = ang[0], a2 = ang[1], sweep;
+        if (sense) {
+            double s = rem_euclid(a2 - a1, TAU);
+            sweep = s < 1e-12 ? TAU : s;
+        } else {
+            double s = rem_euclid(a1 - a2, TAU);
+            sweep = -(s < 1e-12 ? TAU : s);
+        }
+        size_t n = arc_segments(fmax_rs(r1, r2), sweep, r->arc_tol);
+        size_t start = out->n;
+        for (size_t i = 0; i <= n; i++) {
+            double a = a1 + sweep * (double)i / (double)n;
+            double p[3] = {r1 * cc_cos(a), r2 * cc_sin(a), 0.0}, q[3];
+            aff_apply(&pos, p, q);
+            if (p3_push(out, q)) return -1;
+        }
+        if (hp[0] && !prefer) memcpy(out->p[start], pt[0], sizeof pt[0]);
+        if (hp[1] && !prefer) memcpy(out->p[start + n], pt[1], sizeof pt[1]);
+        return 1;
+    }
+    warn(r, "trimmed ", basis->name, " drawn untrimmed");
+    return curve3(r, arg(e, 0), depth + 1, out);
+}
+
+/* Reader::curve3: any bounded curve -> points (2D curves get z = 0), consecutive duplicates
+ * removed, at least 2. 1 ok, 0 none (out empty), -1 out of memory. */
+static int curve3(R *r, const cc_sv *v, int depth, P3 *out) {
+    memset(out, 0, sizeof *out);
+    if (depth > 16) {
+        warn(r, "curve nesting too deep", 0, 0);
+        return 0;
+    }
+    const cc_step_entity *e = get(r, v);
+    if (!e) return 0;
+    int rc = 1;
+    if (is(e, "IFCPOLYLINE")) {
+        const cc_sv *ps;
+        size_t n;
+        if (!cc_sv_as_list(arg(e, 0), &ps, &n)) return 0;
+        for (size_t i = 0; i < n && rc == 1; i++) {
+            double q[3];
+            if (point(r, &ps[i], q) && p3_push(out, q)) rc = -1;
+        }
+    } else if (is(e, "IFCINDEXEDPOLYCURVE")) {
+        const cc_step_entity *pl = get(r, arg(e, 0));
+        const cc_sv *cl, *segs;
+        size_t ncl, nseg;
+        if (!pl || !cc_sv_as_list(arg(pl, 0), &cl, &ncl)) return 0;
+        P3 coords = {0};
+        for (size_t i = 0; i < ncl && rc == 1; i++) {
+            const cc_sv *c;
+            size_t nc;
+            double q[3];
+            if (!cc_sv_as_list(&cl[i], &c, &nc) || nc < 2 || !cc_sv_as_f64(&c[0], &q[0]) || !cc_sv_as_f64(&c[1], &q[1]))
+                continue;
+            if (nc < 3 || !cc_sv_as_f64(&c[2], &q[2])) q[2] = 0.0;
+            if (p3_push(&coords, q)) rc = -1;
+        }
+        if (rc == 1 && !cc_sv_as_list(arg(e, 1), &segs, &nseg)) {
+            for (size_t i = 0; i < coords.n && rc == 1; i++)
+                if (p3_push(out, coords.p[i])) rc = -1;
+        } else
+            for (size_t s = 0; rc == 1 && s < nseg; s++) {
+                if (segs[s].kind != CC_SV_TYPED) continue;
+                const cc_sv *idx;
+                size_t ni;
+                if (!cc_sv_as_list(segs[s].u.typed.inner, &idx, &ni)) ni = 0;
+                if (!ni || ni > 3 * 1024 * 1024) continue;
+                size_t *at = malloc(ni * sizeof *at);
+                if (!at) { rc = -1; break; }
+                size_t ok = 0;
+                for (size_t k = 0; k < ni; k++) {
+                    int64_t ix;
+                    if (cc_sv_as_i64(&idx[k], &ix) && ix >= 1 && (uint64_t)(ix - 1) < coords.n) at[ok++] = (size_t)(ix - 1);
+                }
+                if (ok == ni) {
+                    if (!out->n && p3_push(out, coords.p[at[0]])) rc = -1;
+                    if (rc == 1 && !strcmp(segs[s].u.typed.name, "IFCARCINDEX") && ni == 3) {
+                        if (arc3(coords.p[at[0]], coords.p[at[1]], coords.p[at[2]], r->arc_tol, 1, out)) rc = -1;
+                    } else
+                        for (size_t k = 1; rc == 1 && k < ni; k++)
+                            if (p3_push(out, coords.p[at[k]])) rc = -1;
+                }
+                free(at);
+            }
+        p3_free(&coords);
+    } else if (is(e, "IFCCOMPOSITECURVE") || is(e, "IFCCOMPOSITECURVEONSURFACE")) {
+        const cc_sv *segs;
+        size_t ns;
+        if (!cc_sv_as_list(arg(e, 0), &segs, &ns)) return 0;
+        for (size_t i = 0; i < ns && rc == 1; i++) {
+            const cc_step_entity *s = get(r, &segs[i]);
+            P3 p;
+            int c = s ? curve3(r, arg(s, 2), depth + 1, &p) : 0;
+            if (c != 1) { rc = c; break; }
+            if (enum_is(arg(s, 1), "F")) p3_reverse(&p);
+            size_t from = 0;
+            if (out->n && p.n && dist3(out->p[out->n - 1], p.p[0]) < 1e-9) from = 1;
+            for (size_t k = from; k < p.n && rc == 1; k++)
+                if (p3_push(out, p.p[k])) rc = -1;
+            p3_free(&p);
+        }
+    } else if (is(e, "IFCTRIMMEDCURVE")) {
+        rc = trimmed_curve(r, e, depth, out);
+    } else if (is(e, "IFCCIRCLE") || is(e, "IFCELLIPSE")) {
+        Aff pos = axis_placement(r, arg(e, 0));
+        double r1, r2;
+        if (!cc_sv_as_f64(arg(e, 1), &r1)) return 0;
+        if (is(e, "IFCELLIPSE")) {
+            if (!cc_sv_as_f64(arg(e, 2), &r2)) return 0;
+        } else r2 = r1;
+        size_t n = arc_segments(fmax_rs(r1, r2), TAU, r->arc_tol);
+        for (size_t i = 0; i < n && rc == 1; i++) {
+            double a = (double)i / (double)n * TAU;
+            double p[3] = {r1 * cc_cos(a), r2 * cc_sin(a), 0.0}, q[3];
+            aff_apply(&pos, p, q);
+            if (p3_push(out, q)) rc = -1;
+        }
+    } else {
+        warn(r, "unsupported curve ", e->name, " (skipped)");
+        return 0;
+    }
+    if (rc == 1) {
+        p3_dedup(out);
+        if (out->n >= 2) return 1;
+        rc = 0;
+    }
+    p3_free(out);
+    return rc;
+}
+
+/* Reader::curve: closed 2D curve -> points without the repeated first, at least 3. */
+static int curve(R *r, const cc_sv *v, Loop *out) {
+    memset(out, 0, sizeof *out);
+    P3 p;
+    int c = curve3(r, v, 0, &p);
+    if (c != 1) return 0;
+    size_t m = p.n;
+    if (m > 1) {
+        double a[2] = {p.p[0][0], p.p[0][1]}, b[2] = {p.p[m - 1][0], p.p[m - 1][1]};
         if (dist2(a, b) < 1e-18) m--;
     }
+    int ok = 1;
     for (size_t i = 0; ok && i < m; i++) {
-        double q[2] = {p3[i][0], p3[i][1]};
-        if (out->n && dist2(out->p[out->n - 1], q) < 1e-18) continue;
+        double q[2] = {p.p[i][0], p.p[i][1]};
+        if (out->n && dist2(q, out->p[out->n - 1]) < 1e-18) continue;
         if (loop_push(out, q[0], q[1])) ok = 0;
     }
-    free(p3);
+    p3_free(&p);
     if (ok && out->n >= 3) return 1;
     free(out->p);
     memset(out, 0, sizeof *out);
     return 0;
 }
 
-static int profile(R *r, const cc_sv *v, Loops *out) {
+/* ---- profiles */
+
+static void loops_place(R *r, Loops *ls, const cc_sv *pos) {
+    Aff a = axis_placement(r, pos);
+    for (size_t i = 0; i < ls->n; i++)
+        for (size_t j = 0; j < ls->v[i].n; j++) {
+            double p[3] = {ls->v[i].p[j][0], ls->v[i].p[j][1], 0.0}, q[3];
+            aff_apply(&a, p, q);
+            ls->v[i].p[j][0] = q[0], ls->v[i].p[j][1] = q[1];
+        }
+}
+static int ring(Loop *l, double rad, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        double a = (double)i / (double)n * TAU;
+        if (loop_push(l, rad * cc_cos(a), rad * cc_sin(a))) return -1;
+    }
+    return 0;
+}
+static int push_rect(Loops *ls, double a, double b) {
+    Loop l = {0};
+    if (loop_push(&l, -a, -b) || loop_push(&l, a, -b) || loop_push(&l, a, b) || loop_push(&l, -a, b) ||
+        loops_push(ls, l)) {
+        free(l.p);
+        return -1;
+    }
+    return 0;
+}
+
+/* Reader::profile: loops in profile coordinates (outer first, then holes). 1 ok, 0 none. */
+static int profile(R *r, const cc_sv *v, int depth, Loops *out) {
     memset(out, 0, sizeof *out);
     const cc_step_entity *e = get(r, v);
     if (!e) return 0;
+    int bad = 0; /* out of memory or a `?` that failed */
     if (is(e, "IFCARBITRARYCLOSEDPROFILEDEF") || is(e, "IFCARBITRARYPROFILEDEFWITHVOIDS")) {
         Loop l;
         if (!curve(r, arg(e, 2), &l)) return 0;
@@ -431,23 +888,63 @@ static int profile(R *r, const cc_sv *v, Loops *out) {
     } else if (is(e, "IFCRECTANGLEPROFILEDEF")) {
         double x, y;
         if (!cc_sv_as_f64(arg(e, 3), &x) || !cc_sv_as_f64(arg(e, 4), &y)) return 0;
-        x = x / 2.0, y = y / 2.0;
-        Aff a = axis_placement(r, arg(e, 2));
-        double pts[4][2] = {{-x, -y}, {x, -y}, {x, y}, {-x, y}};
+        bad = push_rect(out, x / 2.0, y / 2.0);
+        if (!bad) loops_place(r, out, arg(e, 2));
+    } else if (is(e, "IFCCIRCLEPROFILEDEF")) {
+        double rad;
+        if (!cc_sv_as_f64(arg(e, 3), &rad)) return 0;
         Loop l = {0};
-        for (int k = 0; k < 4; k++) {
-            double p[3] = {pts[k][0], pts[k][1], 0.0}, q[3];
-            aff_apply(&a, p, q);
-            if (loop_push(&l, q[0], q[1])) { free(l.p); return 0; }
+        if (ring(&l, rad, arc_segments(rad, TAU, r->arc_tol)) || loops_push(out, l)) free(l.p), bad = 1;
+        if (!bad) loops_place(r, out, arg(e, 2));
+    } else if (is(e, "IFCCIRCLEHOLLOWPROFILEDEF")) {
+        double rad, t;
+        if (!cc_sv_as_f64(arg(e, 3), &rad) || !cc_sv_as_f64(arg(e, 4), &t)) return 0;
+        size_t n = arc_segments(rad, TAU, r->arc_tol);
+        Loop l = {0};
+        if (ring(&l, rad, n) || loops_push(out, l)) free(l.p), bad = 1;
+        if (!bad && t > 0.0 && t < rad) {
+            Loop h = {0};
+            if (ring(&h, rad - t, n) || loops_push(out, h)) free(h.p), bad = 1;
         }
-        if (loops_push(out, l)) { free(l.p); return 0; }
+        if (!bad) loops_place(r, out, arg(e, 2));
+    } else if (is(e, "IFCRECTANGLEHOLLOWPROFILEDEF")) {
+        double x, y, t;
+        if (!cc_sv_as_f64(arg(e, 3), &x) || !cc_sv_as_f64(arg(e, 4), &y) || !cc_sv_as_f64(arg(e, 5), &t)) return 0;
+        x = x / 2.0, y = y / 2.0;
+        bad = push_rect(out, x, y);
+        if (!bad && t > 0.0 && t < fmin_rs(x, y)) bad = push_rect(out, x - t, y - t);
+        if (!bad) loops_place(r, out, arg(e, 2));
+    } else if (is(e, "IFCISHAPEPROFILEDEF")) {
+        double w, h, tw, tf, rad;
+        if (!cc_sv_as_f64(arg(e, 3), &w) || !cc_sv_as_f64(arg(e, 4), &h) || !cc_sv_as_f64(arg(e, 5), &tw) ||
+            !cc_sv_as_f64(arg(e, 6), &tf))
+            return 0;
+        w = w / 2.0, h = h / 2.0, tw = tw / 2.0;
+        double c[12][2] = {{-w, -h}, {w, -h},     {w, -h + tf},  {tw, -h + tf},  {tw, h - tf},   {w, h - tf},
+                           {w, h},   {-w, h},     {-w, h - tf},  {-tw, h - tf},  {-tw, -h + tf}, {-w, -h + tf}};
+        Loop l = {0};
+        if (cc_sv_as_f64(arg(e, 7), &rad) && finite(rad) && rad > 0.0) {
+            static const size_t corners[4] = {3, 4, 9, 10};
+            if (fillet((const double(*)[2])c, 12, corners, 4, rad, r->arc_tol, &l)) bad = 1;
+        } else
+            for (int k = 0; k < 12 && !bad; k++) bad = loop_push(&l, c[k][0], c[k][1]);
+        if (bad || loops_push(out, l)) free(l.p), bad = 1;
+        if (!bad) loops_place(r, out, arg(e, 2));
+    } else if (is(e, "IFCDERIVEDPROFILEDEF") && depth < 4) {
+        if (!profile(r, arg(e, 2), depth + 1, out)) return 0;
+        Aff op = transform_operator_2d(r, arg(e, 3));
+        for (size_t i = 0; i < out->n; i++)
+            for (size_t j = 0; j < out->v[i].n; j++) {
+                double p[3] = {out->v[i].p[j][0], out->v[i].p[j][1], 0.0}, q[3];
+                aff_apply(&op, p, q);
+                out->v[i].p[j][0] = q[0], out->v[i].p[j][1] = q[1];
+            }
     } else {
-        static const char *rust_has[] = {"IFCCIRCLEPROFILEDEF", "IFCCIRCLEHOLLOWPROFILEDEF",
-                                         "IFCRECTANGLEHOLLOWPROFILEDEF", "IFCISHAPEPROFILEDEF",
-                                         "IFCDERIVEDPROFILEDEF"};
-        for (size_t k = 0; k < sizeof rust_has / sizeof *rust_has; k++)
-            if (is(e, rust_has[k])) { r->unsup_why = e->name; return 0; }
         warn(r, "unsupported profile ", e->name, " (skipped)");
+        return 0;
+    }
+    if (bad) {
+        loops_free(out);
         return 0;
     }
     size_t w = 0;
@@ -459,6 +956,616 @@ static int profile(R *r, const cc_sv *v, Loops *out) {
     if (w) return 1;
     loops_free(out);
     return 0;
+}
+
+/* ---- meshes: MeshBuilder, the triangle budget, Emit */
+
+static void tris_add(Tris *m, const double (*t)[3]) { /* MeshBuilder::add_triangle */
+    for (int k = 0; k < 9; k++)
+        if (!finite(t[k / 3][k % 3])) return;
+    if (grow((void **)&m->t, &m->cap, m->n + 1, sizeof *m->t)) { m->oom = 1; return; }
+    for (int k = 0; k < 9; k++) m->t[m->n][k] = t[k / 3][k % 3];
+    m->n++;
+}
+static void tris_free(Tris *m) {
+    free(m->t);
+    memset(m, 0, sizeof *m);
+}
+
+/* MeshBuilder::add_polygon: a planar polygon (outer + holes), triangulated in its own plane by
+ * earcut after dropping the dominant axis of the Newell normal; winding follows the outer loop. */
+static void add_polygon(Tris *m, const double (*outer)[3], size_t no, const P3 *holes, size_t nh) {
+    if (no < 3) return;
+    double nv[3] = {0, 0, 0};
+    for (size_t i = 0; i < no; i++) {
+        const double *a = outer[i], *b = outer[(i + 1) % no];
+        nv[0] += (a[1] - b[1]) * (a[2] + b[2]);
+        nv[1] += (a[2] - b[2]) * (a[0] + b[0]);
+        nv[2] += (a[0] - b[0]) * (a[1] + b[1]);
+    }
+    double len = norm3(nv);
+    if (len != len || len <= 1e-12) return;
+    double n[3] = {nv[0] / len, nv[1] / len, nv[2] / len};
+    /* max_by(total_cmp) of |n[k]|: the last of equal maxima. */
+    int ax = 0;
+    uint64_t best = 0;
+    for (int k = 0; k < 3; k++) {
+        double a = n[k] < 0 ? -n[k] : n[k];
+        uint64_t bits;
+        memcpy(&bits, &a, 8);
+        bits &= ~(1ull << 63);
+        if (k == 0 || bits >= best) best = bits, ax = k;
+    }
+    int u = ax == 0 ? 1 : ax == 1 ? 2 : 0, v = ax == 0 ? 2 : ax == 1 ? 0 : 1;
+    size_t np = no;
+    for (size_t h = 0; h < nh; h++)
+        if (holes[h].n >= 3) np += holes[h].n;
+    double (*pts)[3] = malloc(np * sizeof *pts);
+    double *flat = malloc(np * 2 * sizeof *flat);
+    size_t *hidx = malloc((nh ? nh : 1) * sizeof *hidx), nhi = 0;
+    if (!pts || !flat || !hidx) {
+        m->oom = 1;
+        goto out;
+    }
+    size_t k = 0;
+    for (size_t i = 0; i < no; i++, k++) memcpy(pts[k], outer[i], sizeof pts[k]);
+    for (size_t h = 0; h < nh; h++) {
+        if (holes[h].n < 3) continue;
+        hidx[nhi++] = k;
+        for (size_t i = 0; i < holes[h].n; i++, k++) memcpy(pts[k], holes[h].p[i], sizeof pts[k]);
+    }
+    for (size_t i = 0; i < np; i++) flat[2 * i] = pts[i][u], flat[2 * i + 1] = pts[i][v];
+    uint32_t *idx = NULL;
+    size_t ni = 0;
+    if (cc_earcut(flat, np * 2, hidx, nhi, &idx, &ni)) goto out;
+    for (size_t t = 0; t + 2 < ni + 0 || t + 3 <= ni; t += 3) {
+        double tri[3][3];
+        memcpy(tri[0], pts[idx[t]], sizeof tri[0]);
+        memcpy(tri[1], pts[idx[t + 1]], sizeof tri[1]);
+        memcpy(tri[2], pts[idx[t + 2]], sizeof tri[2]);
+        double e1[3] = {tri[1][0] - tri[0][0], tri[1][1] - tri[0][1], tri[1][2] - tri[0][2]};
+        double e2[3] = {tri[2][0] - tri[0][0], tri[2][1] - tri[0][1], tri[2][2] - tri[0][2]};
+        double c[3];
+        cross(e1, e2, c);
+        if (dot(c, n) < 0.0) {
+            double s[3];
+            memcpy(s, tri[1], sizeof s);
+            memcpy(tri[1], tri[2], sizeof s);
+            memcpy(tri[2], s, sizeof s);
+        }
+        tris_add(m, (const double(*)[3])tri);
+    }
+    free(idx);
+out:
+    free(pts);
+    free(flat);
+    free(hidx);
+}
+
+typedef struct { /* read.rs Budget, single-threaded */
+    size_t triangles_left, visits_left;
+    int exhausted;
+} Budget;
+
+typedef struct {
+    Tris *mb;
+    double scale;
+    Budget *budget;
+} Emit;
+
+static int has_budget(Emit *o) {
+    if (o->budget->triangles_left == 0) o->budget->exhausted = 1;
+    return !o->budget->exhausted && !o->mb->oom;
+}
+static void charge(Emit *o, size_t before) {
+    size_t used = o->mb->n > before ? o->mb->n - before : 0;
+    o->budget->triangles_left = o->budget->triangles_left > used ? o->budget->triangles_left - used : 0;
+}
+static int visit(Budget *b) {
+    int ok = !b->exhausted && b->visits_left > 0;
+    if (ok) b->visits_left--;
+    else b->exhausted = 1;
+    return ok;
+}
+/* Emit::polygon: file units -> mm, then add_polygon. */
+static void emit_polygon(Emit *o, const double (*outer)[3], size_t no, const P3 *holes, size_t nh) {
+    if (!has_budget(o)) return;
+    size_t before = o->mb->n;
+    double s = o->scale;
+    P3 so = {0};
+    P3 *sh = calloc(nh ? nh : 1, sizeof *sh);
+    int bad = !sh;
+    for (size_t i = 0; !bad && i < no; i++) {
+        double q[3] = {outer[i][0] * s, outer[i][1] * s, outer[i][2] * s};
+        bad = p3_push(&so, q);
+    }
+    for (size_t h = 0; !bad && h < nh; h++)
+        for (size_t i = 0; !bad && i < holes[h].n; i++) {
+            double q[3] = {holes[h].p[i][0] * s, holes[h].p[i][1] * s, holes[h].p[i][2] * s};
+            bad = p3_push(&sh[h], q);
+        }
+    if (bad) o->mb->oom = 1;
+    else add_polygon(o->mb, (const double(*)[3])so.p, so.n, sh, nh);
+    p3_free(&so);
+    for (size_t h = 0; sh && h < nh; h++) p3_free(&sh[h]);
+    free(sh);
+    charge(o, before);
+}
+static void emit_triangle_mm(Emit *o, const double (*t)[3]) {
+    if (!has_budget(o)) return;
+    size_t before = o->mb->n;
+    tris_add(o->mb, t);
+    charge(o, before);
+}
+static void emit_triangle(Emit *o, const double *a, const double *b, const double *c) {
+    double s = o->scale;
+    double t[3][3] = {{a[0] * s, a[1] * s, a[2] * s}, {b[0] * s, b[1] * s, b[2] * s}, {c[0] * s, c[1] * s, c[2] * s}};
+    emit_triangle_mm(o, (const double(*)[3])t);
+}
+
+/* ---- representation items */
+
+static int is_body(const cc_step_entity *rep) {
+    const char *id = "", *ty = "";
+    size_t ni = 0, nt = 0;
+    cc_sv_as_str(arg(rep, 1), &id, &ni);
+    cc_sv_as_str(arg(rep, 2), &ty, &nt);
+    if ((ni == 4 && !memcmp(id, "Body", 4)) || (ni == 10 && !memcmp(id, "Facetation", 10))) return 1;
+    if (ni) return 0;
+    static const char *NOT[] = {"Curve2D", "Curve3D", "GeometricCurveSet", "Annotation2D", "BoundingBox", "Point"};
+    for (size_t k = 0; k < sizeof NOT / sizeof *NOT; k++)
+        if (strlen(NOT[k]) == nt && !memcmp(NOT[k], ty, nt)) return 0;
+    return 1;
+}
+
+static void item(R *r, uint64_t id, const Aff *tf, Emit *out, int depth);
+
+static void extrusion(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {
+    Loops ls;
+    if (!profile(r, arg(e, 0), 0, &ls)) return;
+    Aff ap = axis_placement(r, arg(e, 1));
+    Aff pos = aff_then(tf, &ap);
+    double dir[3], depth;
+    P3 *bottom = NULL, *top = NULL;
+    if (!direction(r, arg(e, 2), dir) || !cc_sv_as_f64(arg(e, 3), &depth) || !finite(depth) || !(depth > 0.0))
+        goto out;
+    double d[3] = {dir[0] * depth, dir[1] * depth, dir[2] * depth};
+    int flip = (d[2] < 0.0) != (aff_det(&pos) < 0.0);
+    for (size_t i = 0; i < ls.n; i++) {
+        int ccw = signed_area(&ls.v[i]) > 0.0;
+        if (ccw == (i > 0)) loop_reverse(&ls.v[i]);
+        if (flip) loop_reverse(&ls.v[i]);
+    }
+    bottom = calloc(ls.n, sizeof *bottom);
+    top = calloc(ls.n, sizeof *top);
+    if (!bottom || !top) goto out;
+    for (size_t i = 0; i < ls.n; i++)
+        for (size_t j = 0; j < ls.v[i].n; j++) {
+            const double *p = ls.v[i].p[j];
+            double b[3] = {p[0], p[1], 0.0}, t[3] = {p[0] + d[0], p[1] + d[1], d[2]}, q[3];
+            aff_apply(&pos, b, q);
+            if (p3_push(&bottom[i], q)) goto out;
+            aff_apply(&pos, t, q);
+            if (p3_push(&top[i], q)) goto out;
+        }
+    {
+        P3 rev = {0};
+        for (size_t j = bottom[0].n; j-- > 0;)
+            if (p3_push(&rev, bottom[0].p[j])) { p3_free(&rev); goto out; }
+        emit_polygon(out, (const double(*)[3])rev.p, rev.n, bottom + 1, ls.n - 1);
+        p3_free(&rev);
+    }
+    emit_polygon(out, (const double(*)[3])top[0].p, top[0].n, top + 1, ls.n - 1);
+    for (size_t l = 0; l < ls.n; l++) {
+        size_t n = bottom[l].n;
+        for (size_t i = 0; i < n; i++) {
+            size_t j = (i + 1) % n;
+            emit_triangle(out, bottom[l].p[i], bottom[l].p[j], top[l].p[j]);
+            emit_triangle(out, bottom[l].p[i], top[l].p[j], top[l].p[i]);
+        }
+    }
+out:
+    for (size_t i = 0; i < ls.n; i++) {
+        if (bottom) p3_free(&bottom[i]);
+        if (top) p3_free(&top[i]);
+    }
+    free(bottom);
+    free(top);
+    loops_free(&ls);
+}
+
+/* point_list_3d: coordinates with three values each. */
+static int point_list_3d(R *r, const cc_sv *v, P3 *out, const Aff *tf) {
+    memset(out, 0, sizeof *out);
+    const cc_step_entity *e = get(r, v);
+    const cc_sv *l;
+    size_t n;
+    if (!e || !cc_sv_as_list(arg(e, 0), &l, &n)) return 0;
+    for (size_t i = 0; i < n; i++) {
+        const cc_sv *c;
+        size_t nc;
+        double p[3], q[3];
+        if (!cc_sv_as_list(&l[i], &c, &nc) || nc < 3 || !cc_sv_as_f64(&c[0], &p[0]) || !cc_sv_as_f64(&c[1], &p[1]) ||
+            !cc_sv_as_f64(&c[2], &p[2]))
+            continue;
+        aff_apply(tf, p, q);
+        if (p3_push(out, q)) return -1;
+    }
+    return 0;
+}
+
+/* PnIndex: the integers of a list (filter_map as_i64), or none. */
+typedef struct {
+    int has;
+    int64_t *v;
+    size_t n;
+} Pn;
+static int pn_read(const cc_sv *v, Pn *pn) {
+    const cc_sv *l;
+    size_t n;
+    memset(pn, 0, sizeof *pn);
+    if (!cc_sv_as_list(v, &l, &n)) return 0;
+    pn->has = 1;
+    pn->v = malloc((n ? n : 1) * sizeof *pn->v);
+    if (!pn->v) return -1;
+    for (size_t i = 0; i < n; i++)
+        if (cc_sv_as_i64(&l[i], &pn->v[pn->n])) pn->n++;
+    return 0;
+}
+static const double *resolve(const P3 *coords, const Pn *pn, int64_t k) {
+    if (pn->has) {
+        if (k < 1 || (uint64_t)(k - 1) >= pn->n) return NULL;
+        k = pn->v[k - 1];
+    }
+    if (k < 1 || (uint64_t)(k - 1) >= coords->n) return NULL;
+    return coords->p[k - 1];
+}
+static int loop_of(const cc_sv *v, const P3 *coords, const Pn *pn, P3 *out) {
+    const cc_sv *l;
+    size_t n;
+    memset(out, 0, sizeof *out);
+    if (!cc_sv_as_list(v, &l, &n)) return 0;
+    for (size_t i = 0; i < n; i++) {
+        int64_t k;
+        const double *p = cc_sv_as_i64(&l[i], &k) ? resolve(coords, pn, k) : NULL;
+        if (!p || p3_push(out, p)) {
+            p3_free(out);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void polygonal_face_set(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {
+    P3 coords;
+    Pn pn;
+    if (point_list_3d(r, arg(e, 0), &coords, tf) || pn_read(arg(e, 3), &pn)) {
+        out->mb->oom = 1;
+        p3_free(&coords);
+        return;
+    }
+    const cc_sv *fs;
+    size_t nf;
+    if (!cc_sv_as_list(arg(e, 2), &fs, &nf)) nf = 0;
+    for (size_t i = 0; i < nf; i++) {
+        const cc_step_entity *face = get(r, &fs[i]);
+        P3 outer;
+        if (!face || !loop_of(arg(face, 0), &coords, &pn, &outer)) continue;
+        P3 *holes = NULL;
+        size_t nh = 0;
+        const cc_sv *hl;
+        size_t nhl;
+        if (is(face, "IFCINDEXEDPOLYGONALFACEWITHVOIDS") && cc_sv_as_list(arg(face, 1), &hl, &nhl) && nhl) {
+            holes = calloc(nhl, sizeof *holes);
+            for (size_t h = 0; holes && h < nhl; h++)
+                if (loop_of(&hl[h], &coords, &pn, &holes[nh])) nh++;
+        }
+        emit_polygon(out, (const double(*)[3])outer.p, outer.n, holes, nh);
+        for (size_t h = 0; h < nh; h++) p3_free(&holes[h]);
+        free(holes);
+        p3_free(&outer);
+    }
+    free(pn.v);
+    p3_free(&coords);
+}
+
+static void triangulated_face_set(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {
+    P3 coords;
+    Pn pn;
+    if (point_list_3d(r, arg(e, 0), &coords, tf) || pn_read(arg(e, 4), &pn)) {
+        out->mb->oom = 1;
+        p3_free(&coords);
+        return;
+    }
+    const cc_sv *ts;
+    size_t nt;
+    if (!cc_sv_as_list(arg(e, 3), &ts, &nt)) nt = 0;
+    for (size_t i = 0; i < nt; i++) {
+        const cc_sv *t;
+        size_t n;
+        if (!cc_sv_as_list(&ts[i], &t, &n) || n != 3) continue;
+        const double *p[3];
+        int ok = 1;
+        for (int k = 0; k < 3 && ok; k++) {
+            int64_t ix;
+            p[k] = cc_sv_as_i64(&t[k], &ix) ? resolve(&coords, &pn, ix) : NULL;
+            ok = p[k] != NULL;
+        }
+        if (ok) emit_triangle(out, p[0], p[1], p[2]);
+    }
+    free(pn.v);
+    p3_free(&coords);
+}
+
+/* IfcFace list (faceted B-rep, shells). */
+static void faces(R *r, const cc_sv *list, const Aff *tf, Emit *out) {
+    const cc_sv *fs;
+    size_t nf;
+    if (!cc_sv_as_list(list, &fs, &nf)) return;
+    for (size_t i = 0; i < nf; i++) {
+        const cc_step_entity *face = get(r, &fs[i]);
+        if (!face) continue;
+        const cc_sv *bs;
+        size_t nb;
+        if (!cc_sv_as_list(arg(face, 0), &bs, &nb)) nb = 0;
+        P3 outer = {0};
+        int has_outer = 0;
+        P3 *holes = calloc(nb ? nb : 1, sizeof *holes);
+        size_t nh = 0;
+        if (!holes) { out->mb->oom = 1; return; }
+        for (size_t j = 0; j < nb; j++) {
+            const cc_step_entity *bound = get(r, &bs[j]), *lp;
+            if (!bound || !(lp = get(r, arg(bound, 0)))) continue;
+            if (!is(lp, "IFCPOLYLOOP")) {
+                warn(r, "unsupported face loop ", lp->name, " (skipped)");
+                continue;
+            }
+            P3 pts = {0};
+            const cc_sv *ps;
+            size_t np;
+            if (!cc_sv_as_list(arg(lp, 0), &ps, &np)) np = 0;
+            for (size_t k = 0; k < np; k++) {
+                double q[3], w[3];
+                if (!point(r, &ps[k], q)) continue;
+                aff_apply(tf, q, w);
+                if (p3_push(&pts, w)) out->mb->oom = 1;
+            }
+            if (enum_is(arg(bound, 1), "F")) p3_reverse(&pts);
+            if (is(bound, "IFCFACEOUTERBOUND") && !has_outer) outer = pts, has_outer = 1;
+            else holes[nh++] = pts;
+        }
+        size_t h0 = 0;
+        if (!has_outer && nh) outer = holes[0], has_outer = 1, h0 = 1;
+        if (has_outer) emit_polygon(out, (const double(*)[3])outer.p, outer.n, holes + h0, nh - h0);
+        p3_free(&outer);
+        for (size_t h = h0; h < nh; h++) p3_free(&holes[h]);
+        free(holes);
+    }
+}
+
+/* tube: a tube of radius r with n sides along a polyline (IfcSweptDiskSolid). */
+static void tube(P3 *p, double r, size_t n, Emit *out) {
+    p3_dedup(p);
+    if (p->n < 2) return;
+    int closed = dist3(p->p[0], p->p[p->n - 1]) < 1e-9;
+    if (closed) p->n--;
+    size_t m = p->n;
+    double(*rings)[3] = malloc(m * n * sizeof *rings);
+    if (!rings) { out->mb->oom = 1; return; }
+    double prev_n[3];
+    int has_prev = 0;
+    for (size_t i = 0; i < m; i++) {
+        const double *pi = p->p[i];
+        double din[3], dout[3], t[3];
+        int hin = 0, hout = 0, ht = 0;
+#define SEG(i_, o_) do { size_t a_ = (i_), b_ = (a_ + 1) % m; double s_[3] = {p->p[b_][0] - p->p[a_][0], p->p[b_][1] - p->p[a_][1], p->p[b_][2] - p->p[a_][2]}; h_ = normalize(s_, (o_)); } while (0)
+        int h_;
+        if (i > 0 || closed) { SEG((i + m - 1) % m, din); hin = h_; }
+        if (i + 1 < m || closed) { SEG(i, dout); hout = h_; }
+#undef SEG
+        if (hin && hout) {
+            double s[3] = {din[0] + dout[0], din[1] + dout[1], din[2] + dout[2]};
+            ht = normalize(s, t);
+            if (!ht) memcpy(t, dout, sizeof t), ht = 1;
+        } else if (hin) memcpy(t, din, sizeof t), ht = 1;
+        else if (hout) memcpy(t, dout, sizeof t), ht = 1;
+        if (!ht) { free(rings); return; }
+        double seed[3];
+        if (has_prev) memcpy(seed, prev_n, sizeof seed);
+        else if ((t[2] < 0 ? -t[2] : t[2]) < 0.9) seed[0] = 0, seed[1] = 0, seed[2] = 1;
+        else seed[0] = 1, seed[1] = 0, seed[2] = 0;
+        double ds = dot(seed, t), w[3] = {seed[0] - t[0] * ds, seed[1] - t[1] * ds, seed[2] - t[2] * ds}, nrm[3];
+        if (!normalize(w, nrm)) { free(rings); return; }
+        memcpy(prev_n, nrm, sizeof nrm), has_prev = 1;
+        double bin[3], bd[3], stretch = 1.0;
+        cross(t, nrm, bin);
+        int hb = 0;
+        if (hin && hout) {
+            double c = dot(din, t);
+            c = c != c ? c : c < 0.3 ? 0.3 : c > 1.0 ? 1.0 : c;
+            double ab[3], tab[3];
+            cross(din, dout, ab);
+            cross(t, ab, tab);
+            hb = normalize(tab, bd);
+            stretch = 1.0 / c;
+        }
+        for (size_t j = 0; j < n; j++) {
+            double a = (double)j / (double)n * TAU;
+            double ca = cc_cos(a), sa = cc_sin(a), off[3];
+            for (int k = 0; k < 3; k++) off[k] = r * (ca * nrm[k] + sa * bin[k]);
+            if (hb) {
+                double extra = dot(off, bd) * (stretch - 1.0);
+                for (int k = 0; k < 3; k++) off[k] = off[k] + extra * bd[k];
+            }
+            for (int k = 0; k < 3; k++) rings[i * n + j][k] = pi[k] + off[k];
+        }
+    }
+    size_t pairs = closed ? m : m - 1;
+    for (size_t i = 0; i < pairs; i++) {
+        const double(*a)[3] = rings + i * n, (*b)[3] = rings + ((i + 1) % m) * n;
+        for (size_t j = 0; j < n; j++) {
+            size_t k = (j + 1) % n;
+            emit_triangle(out, a[j], b[k], b[j]);
+            emit_triangle(out, a[j], a[k], b[k]);
+        }
+    }
+    if (!closed) {
+        double(*start)[3] = malloc(n * sizeof *start);
+        if (!start) { out->mb->oom = 1; free(rings); return; }
+        for (size_t j = 0; j < n; j++) memcpy(start[j], rings[n - 1 - j], sizeof start[j]);
+        emit_polygon(out, (const double(*)[3])start, n, NULL, 0);
+        emit_polygon(out, (const double(*)[3])(rings + (m - 1) * n), n, NULL, 0);
+        free(start);
+    }
+    free(rings);
+}
+
+static void swept_disk(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {
+    P3 path;
+    if (curve3(r, arg(e, 0), 0, &path) != 1) return;
+    double rad, ri;
+    if (!cc_sv_as_f64(arg(e, 1), &rad) || !finite(rad) || !(rad > 0)) { p3_free(&path); return; }
+    if (cc_sv_as_f64(arg(e, 2), &ri) && ri > 0) warn(r, "hollow swept disk drawn solid (inner radius ignored)", 0, 0);
+    for (size_t i = 0; i < path.n; i++) aff_apply(tf, path.p[i], path.p[i]);
+    tube(&path, rad, arc_segments(rad, TAU, r->arc_tol), out);
+    p3_free(&path);
+}
+
+/* IfcBooleanResult: no boolean kernel in the C core (Rust: manifold3d). An operand that is
+ * empty is handled as boolean::apply does; otherwise the first operand is drawn uncut and the
+ * report says so. */
+static void boolean_result(R *r, const cc_step_entity *e, const Aff *tf, Emit *out, int depth) {
+    int inter = enum_is(arg(e, 0), "INTERSECTION");
+    uint64_t first;
+    if (!cc_sv_as_ref(arg(e, 0 + 1), &first)) return;
+    Tris a = {0};
+    Emit ea = {&a, out->scale, out->budget};
+    item(r, first, tf, &ea, depth + 1);
+    if (!a.n) { tris_free(&a); return; }
+    (void)inter;
+    r->unsup_n++;
+    for (size_t i = 0; i < a.n; i++) emit_triangle_mm(out, (const double(*)[3])a.t[i]);
+    tris_free(&a);
+}
+
+static int map_on_stack(R *r, uint64_t id) {
+    for (size_t i = 0; i < r->nstack; i++)
+        if (r->stack[i] == id) return 1;
+    return 0;
+}
+
+static void item(R *r, uint64_t id, const Aff *tf, Emit *out, int depth) {
+    if (depth > MAX_NESTING) {
+        warn(r, "representation nesting too deep", 0, 0);
+        return;
+    }
+    if (!visit(out->budget)) return;
+    const cc_step_entity *e = cc_step_get(r->f, id);
+    if (!e) return;
+    if (is(e, "IFCEXTRUDEDAREASOLID")) extrusion(r, e, tf, out);
+    else if (is(e, "IFCPOLYGONALFACESET")) polygonal_face_set(r, e, tf, out);
+    else if (is(e, "IFCTRIANGULATEDFACESET") || is(e, "IFCTRIANGULATEDIRREGULARNETWORK"))
+        triangulated_face_set(r, e, tf, out);
+    else if (is(e, "IFCFACETEDBREP") || is(e, "IFCFACETEDBREPWITHVOIDS")) {
+        const cc_step_entity *shell = get(r, arg(e, 0));
+        if (shell) faces(r, arg(shell, 0), tf, out);
+    } else if (is(e, "IFCSHELLBASEDSURFACEMODEL") || is(e, "IFCFACEBASEDSURFACEMODEL")) {
+        const cc_sv *l;
+        size_t n;
+        if (!cc_sv_as_list(arg(e, 0), &l, &n)) n = 0;
+        for (size_t i = 0; i < n; i++) {
+            const cc_step_entity *shell = get(r, &l[i]);
+            if (shell) faces(r, arg(shell, 0), tf, out);
+        }
+    } else if (is(e, "IFCMAPPEDITEM")) {
+        uint64_t map_id;
+        const cc_step_entity *map, *rep;
+        if (!cc_sv_as_ref(arg(e, 0), &map_id) || !(map = cc_step_get(r->f, map_id))) return;
+        if (map_on_stack(r, map_id)) {
+            warn(r, "representation map contains itself (cycle skipped)", 0, 0);
+            return;
+        }
+        Aff origin = axis_placement(r, arg(map, 0));
+        Aff target = transform_operator(r, arg(e, 1));
+        Aff t1 = aff_then(tf, &target);
+        Aff t = aff_then(&t1, &origin);
+        if (!(rep = get(r, arg(map, 1)))) return;
+        if (r->nstack >= sizeof r->stack / sizeof *r->stack) return; /* bounded by MAX_NESTING */
+        r->stack[r->nstack++] = map_id;
+        const cc_sv *l;
+        size_t n;
+        if (!cc_sv_as_list(arg(rep, 3), &l, &n)) n = 0;
+        for (size_t i = 0; i < n; i++) {
+            uint64_t it;
+            if (cc_sv_as_ref(&l[i], &it)) item(r, it, &t, out, depth + 1);
+        }
+        r->nstack--;
+    } else if (is(e, "IFCBOOLEANCLIPPINGRESULT") || is(e, "IFCBOOLEANRESULT")) boolean_result(r, e, tf, out, depth);
+    else if (is(e, "IFCSWEPTDISKSOLID") || is(e, "IFCSWEPTDISKSOLIDPOLYGONAL")) swept_disk(r, e, tf, out);
+    else if (is(e, "IFCSTYLEDITEM")) {
+    } else warn(r, "unsupported geometry ", e->name, " (skipped)");
+}
+
+/* map_shape: a representation map's items in the map's own coordinates. */
+static void map_shape(R *r, uint64_t map_id, const cc_step_entity *map, Emit *out) {
+    Aff origin = axis_placement(r, arg(map, 0));
+    const cc_step_entity *rep = get(r, arg(map, 1));
+    if (!rep) return;
+    r->stack[r->nstack++] = map_id;
+    const cc_sv *l;
+    size_t n;
+    if (!cc_sv_as_list(arg(rep, 3), &l, &n)) n = 0;
+    for (size_t i = 0; i < n; i++) {
+        uint64_t it;
+        if (cc_sv_as_ref(&l[i], &it)) item(r, it, &origin, out, 1);
+    }
+    r->nstack--;
+}
+
+/* product_body: the Body representation of a product, placed in the world. */
+static void product_body(R *r, const cc_step_entity *e, Emit *out) {
+    uint64_t pl;
+    const cc_step_entity *shape = get(r, arg(e, 6));
+    if (!cc_sv_as_ref(arg(e, 5), &pl) || !shape) return;
+    Aff placement = object_placement(r, pl, 0);
+    const cc_sv *reps;
+    size_t nr;
+    if (!cc_sv_as_list(arg(shape, 2), &reps, &nr)) nr = 0;
+    for (size_t i = 0; i < nr; i++) {
+        const cc_step_entity *rep = get(r, &reps[i]);
+        if (!rep || !is_body(rep)) continue;
+        const cc_sv *its;
+        size_t ni;
+        if (!cc_sv_as_list(arg(rep, 3), &its, &ni)) ni = 0;
+        for (size_t j = 0; j < ni; j++) {
+            uint64_t it;
+            if (cc_sv_as_ref(&its[j], &it)) item(r, it, &placement, out, 0);
+        }
+    }
+}
+
+/* mapped_item_of: the single IfcMappedItem the element's Body is, when that is all it is. */
+static const cc_step_entity *mapped_item_of(R *r, const cc_step_entity *e) {
+    const cc_step_entity *shape = get(r, arg(e, 6));
+    const cc_sv *reps;
+    size_t nr;
+    if (!shape || !cc_sv_as_list(arg(shape, 2), &reps, &nr)) return NULL;
+    const cc_sv *first = NULL;
+    size_t count = 0;
+    for (size_t i = 0; i < nr && count < 2; i++) {
+        const cc_step_entity *rep = get(r, &reps[i]);
+        if (!rep || !is_body(rep)) continue;
+        const cc_sv *its;
+        size_t ni;
+        if (!cc_sv_as_list(arg(rep, 3), &its, &ni)) ni = 0;
+        for (size_t j = 0; j < ni && count < 2; j++) {
+            if (!count) first = &its[j];
+            count++;
+        }
+    }
+    if (!first) return NULL;
+    const cc_step_entity *only = get(r, first);
+    return only && count == 1 && is(only, "IFCMAPPEDITEM") ? only : NULL;
 }
 
 /* ------------------------------------------------------------------ materials */
@@ -849,18 +1956,18 @@ static int rectangle(const Loop *l, Rect *rc) {
     }
     for (int i = 0; i < 4; i++) {
         const double *a = e[i], *b = e[(i + 1) % 4];
-        double la = hyp(a[0], a[1]), lb = hyp(b[0], b[1]);
+        double la = cc_hypot(a[0], a[1]), lb = cc_hypot(b[0], b[1]);
         double c = (a[0] * b[0] + a[1] * b[1]) / (la * lb);
         if (la < 1e-9 || lb < 1e-9 || (c < 0 ? -c : c) > 1e-6) return 0;
     }
     for (int i = 0; i < 2; i++) {
-        double la = hyp(e[i][0], e[i][1]), lb = hyp(e[i + 2][0], e[i + 2][1]);
+        double la = cc_hypot(e[i][0], e[i][1]), lb = cc_hypot(e[i + 2][0], e[i + 2][1]);
         double d = la - lb;
         if ((d < 0 ? -d : d) > 1e-6 * (la > lb ? la : lb)) return 0;
     }
     rc->centre[0] = (((l->p[0][0] + l->p[1][0]) + l->p[2][0]) + l->p[3][0]) / 4.0;
     rc->centre[1] = (((l->p[0][1] + l->p[1][1]) + l->p[2][1]) + l->p[3][1]) / 4.0;
-    double la = hyp(e[0][0], e[0][1]), lb = hyp(e[1][0], e[1][1]);
+    double la = cc_hypot(e[0][0], e[0][1]), lb = cc_hypot(e[1][0], e[1][1]);
     double da[2] = {e[0][0] / la, e[0][1] / la}, db[2] = {e[1][0] / lb, e[1][1] / lb};
     toward_x(da);
     toward_x(db);
@@ -975,7 +2082,7 @@ static const cc_step_entity *extruded_solid(R *r, const cc_step_entity *e) {
 static int extruded_element(R *r, Arena *ar, const cc_step_entity *solid, const Aff *rel, cc_ifc_class cls,
                             double scale, cc_placement *pl, cc_generator *g) {
     Loops ls;
-    if (!profile(r, arg(solid, 0), &ls)) return 0;
+    if (!profile(r, arg(solid, 0), 0, &ls)) return 0;
     int rc = 0;
     if (!ls.n || ls.v[0].n < 3) goto out;
     Aff sp = axis_placement(r, arg(solid, 1));
@@ -988,7 +2095,7 @@ static int extruded_element(R *r, Arena *ar, const cc_step_entity *solid, const 
         double la = cc_sqrt(dot(pairs[k][0], pairs[k][0])), lb = cc_sqrt(dot(pairs[k][1], pairs[k][1]));
         if (la < 1e-12 || lb < 1e-12 || dot(pairs[k][0], pairs[k][1]) / (la * lb) > 1e-6) goto out;
     }
-    if (hyp(dir[0], dir[1]) > 1e-6) goto out;
+    if (cc_hypot(dir[0], dir[1]) > 1e-6) goto out;
     int flip = dir[2] < 0.0;
     Aff fr = full;
     if (flip) {
@@ -1004,6 +2111,144 @@ static int extruded_element(R *r, Arena *ar, const cc_step_entity *solid, const 
 out:
     loops_free(&ls);
     return rc;
+}
+
+
+/* ---- mesh generators */
+
+/* mesh_from_tris: world triangles (mm) -> positions (deduplicated by bits, first-use order,
+ * storey-relative) and indices, in the arena. 0 ok, -1 out of memory or too large. */
+static int mesh_from_tris(Arena *ar, const Tris *t, double elev, cc_generator *g) {
+    size_t nv = t->n * 3;
+    if (t->n > ((size_t)UINT32_MAX) / 3) return -1;
+    size_t cap = 16;
+    while (cap < nv * 2) cap *= 2;
+    uint32_t *tab = malloc(cap * sizeof *tab); /* index + 1, 0 empty */
+    double(*pos)[3] = arena_alloc(ar, (nv ? nv : 1) * sizeof *pos, 8);
+    uint32_t *idx = arena_alloc(ar, (nv ? nv : 1) * sizeof *idx, 4);
+    if (!tab || !pos || !idx) { free(tab); return -1; }
+    memset(tab, 0, cap * sizeof *tab);
+    size_t np = 0;
+    for (size_t i = 0; i < nv; i++) {
+        const double *p = &t->t[i / 3][(i % 3) * 3];
+        double q[3] = {p[0] + 0.0, p[1] + 0.0, p[2] - elev + 0.0};
+        uint64_t b[3];
+        memcpy(b, q, sizeof b);
+        uint64_t h = (b[0] * 0x9E3779B97F4A7C15ull) ^ (b[1] * 0xC2B2AE3D27D4EB4Full) ^ (b[2] * 0x165667B19E3779F9ull);
+        h ^= h >> 29;
+        size_t k = (size_t)h & (cap - 1);
+        uint32_t found = 0;
+        while (tab[k]) {
+            if (!memcmp(pos[tab[k] - 1], q, sizeof q)) { found = tab[k]; break; }
+            k = (k + 1) & (cap - 1);
+        }
+        if (!found) {
+            memcpy(pos[np], q, sizeof q);
+            tab[k] = (uint32_t)(++np);
+            found = tab[k];
+        }
+        idx[i] = found - 1;
+    }
+    free(tab);
+    g->kind = CC_GEN_MESH;
+    g->u.mesh.positions = pos;
+    g->u.mesh.npositions = np;
+    g->u.mesh.indices = idx;
+    g->u.mesh.nindices = nv;
+    return 0;
+}
+
+static void placement_at(cc_placement *p, double x, double y, double z) {
+    p->origin[0] = x, p->origin[1] = y, p->origin[2] = z;
+    p->z_axis[0] = 0, p->z_axis[1] = 0, p->z_axis[2] = 1;
+    p->x_axis[0] = 1, p->x_axis[1] = 0, p->x_axis[2] = 0;
+}
+
+/* Meshes of representation maps, by entity index: 0 not met, 1 empty, 2 the mesh. */
+typedef struct {
+    unsigned char *state;
+    cc_generator *mesh;
+} Shapes;
+
+/* mapped_copy: the element as a placed copy of its map's shared mesh, when its body is one
+ * IfcMappedItem, nothing cuts it and the copy is only moved and turned. 1 yes, 0 no, -1 oom. */
+static int mapped_copy(R *r, Arena *ar, const cc_step_entity *e, int has_openings, const Aff *rel, double scale,
+                       Budget *budget, Shapes *shapes, cc_placement *pl, cc_generator *g) {
+    if (has_openings) return 0;
+    const cc_step_entity *mi = mapped_item_of(r, e);
+    uint64_t map_id;
+    if (!mi || !cc_sv_as_ref(arg(mi, 0), &map_id)) return 0;
+    Aff op = transform_operator(r, arg(mi, 1));
+    Aff t = aff_then(rel, &op);
+    for (int k = 0; k < 3; k++) pl->origin[k] = t.t[k] * scale, pl->z_axis[k] = t.z[k], pl->x_axis[k] = t.x[k];
+    double y[3];
+    cross(pl->z_axis, pl->x_axis, y);
+#define NEAR(a, b) (((a) - (b)) < 0 ? -((a) - (b)) < 1e-9 : ((a) - (b)) < 1e-9)
+    int rigid = NEAR(dot(t.x, t.x), 1.0) && NEAR(dot(t.z, t.z), 1.0) && NEAR(dot(t.x, t.z), 0.0);
+    for (int k = 0; k < 3; k++) rigid = rigid && NEAR(y[k], t.y[k]);
+#undef NEAR
+    if (!rigid) return 0;
+    const cc_step_entity *map = cc_step_get(r->f, map_id);
+    size_t ix = map ? cc_step_index(r->f, map) : 0;
+    if (!map) return 0; /* Rust caches None under the id; same outcome */
+    if (!shapes->state[ix]) {
+        Tris mb = {0};
+        Emit em = {&mb, scale, budget};
+        map_shape(r, map_id, map, &em);
+        shapes->state[ix] = 1;
+        if (mb.oom) { tris_free(&mb); return -1; }
+        if (mb.n) {
+            if (mesh_from_tris(ar, &mb, 0.0, &shapes->mesh[ix])) { tris_free(&mb); return -1; }
+            shapes->state[ix] = 2;
+        }
+        tris_free(&mb);
+    }
+    if (shapes->state[ix] != 2) return 0;
+    *g = shapes->mesh[ix];
+    return 1;
+}
+
+/* displayed_bytes: bytes of the instances the display parses (all but property sets and
+ * quantities), for Limits::for_text. */
+static uint64_t displayed_bytes(const char *t, size_t n) {
+    static const char *NOT_DISPLAYED[] = {
+        "IFCPROPERTYSINGLEVALUE", "IFCPROPERTYENUMERATEDVALUE", "IFCPROPERTYLISTVALUE", "IFCPROPERTYBOUNDEDVALUE",
+        "IFCPROPERTYTABLEVALUE", "IFCPROPERTYREFERENCEVALUE", "IFCCOMPLEXPROPERTY", "IFCPROPERTYSET",
+        "IFCRELDEFINESBYPROPERTIES", "IFCELEMENTQUANTITY", "IFCQUANTITYLENGTH", "IFCQUANTITYAREA",
+        "IFCQUANTITYVOLUME", "IFCQUANTITYCOUNT", "IFCQUANTITYWEIGHT", "IFCQUANTITYTIME"};
+    uint64_t skipped = 0;
+    int in_skipped = 0;
+    size_t i = 0;
+    for (;;) {
+        size_t j = i;
+        while (j < n && t[j] != '\n') j++;
+        const char *line = t + i;
+        size_t len = j - i;
+        if (len && line[0] == '#') {
+            size_t k = 0;
+            while (k < len && line[k] != '=') k++;
+            const char *rest = k < len ? line + k + 1 : line + len;
+            size_t rn = k < len ? len - k - 1 : 0;
+            while (rn && (*rest == ' ' || *rest == '\t' || *rest == '\r' || *rest == '\f' || *rest == '\n'))
+                rest++, rn--;
+            size_t e = 0;
+            while (e < rn && ((rest[e] >= '0' && rest[e] <= '9') || (rest[e] >= 'a' && rest[e] <= 'z') ||
+                              (rest[e] >= 'A' && rest[e] <= 'Z') || rest[e] == '_'))
+                e++;
+            in_skipped = 0;
+            for (size_t q = 0; q < sizeof NOT_DISPLAYED / sizeof *NOT_DISPLAYED && !in_skipped; q++) {
+                const char *nd = NOT_DISPLAYED[q];
+                if (strlen(nd) != e) continue;
+                size_t c = 0;
+                while (c < e && (rest[c] >= 'a' && rest[c] <= 'z' ? rest[c] - 32 : rest[c]) == nd[c]) c++;
+                in_skipped = c == e;
+            }
+        }
+        if (in_skipped) skipped += len + 1;
+        if (j >= n) break;
+        i = j + 1;
+    }
+    return (uint64_t)n > skipped ? (uint64_t)n - skipped : 0;
 }
 
 /* ------------------------------------------------------------------ classes */
@@ -1224,7 +2469,11 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
     size_t *st_ent = NULL; /* storey entity indices -> storey gid */
     cc_gid *st_gid = NULL;
     size_t nst = 0;
-    GSet seen = {0};
+    GSet seen = {0}, opening_seen = {0};
+    Budget budget = {0, 0, 0};
+    Shapes shapes = {0};
+    size_t *open_at = NULL;
+    uint64_t *open_ids = NULL;
     int storeys_in_arena = 0;
     Cont *cont = calloc(ne, sizeof *cont);
     if (!cont) goto oom;
@@ -1237,6 +2486,8 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
         tally_buf(&warnings, &b, 1);
     }
     double scale = length_scale_to_mm(&r);
+    r.arc_tol = 0.5 / scale; /* read.rs ARC_TOLERANCE_MM */
+    r.angle_scale = plane_angle_to_radians(&r);
 
     /* Storeys. */
     const cc_step_entity *bld = first_of(&f, "IFCBUILDING");
@@ -1351,6 +2602,26 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
         const cc_step_entity *he = cc_step_get(&f, h);
         if (he) nopen[cc_step_index(&f, he)]++;
     }
+    /* Their ids, per host in id order (read.rs voids). */
+    open_at = calloc(ne + 1, sizeof *open_at);
+    if (!open_at) { free(nopen); goto oom; }
+    for (size_t i = 0; i < f.n; i++) open_at[i + 1] = open_at[i] + nopen[i];
+    open_ids = malloc((open_at[f.n] ? open_at[f.n] : 1) * sizeof *open_ids);
+    size_t *fill = calloc(ne, sizeof *fill);
+    if (!open_ids || !fill) { free(fill); free(nopen); goto oom; }
+    for (size_t i = 0; i < f.n; i++) {
+        const cc_step_entity *rv = &f.ents[i];
+        uint64_t h, o;
+        if (!is(rv, "IFCRELVOIDSELEMENT") || !cc_sv_as_ref(arg(rv, 4), &h) || !cc_sv_as_ref(arg(rv, 5), &o)) continue;
+        const cc_step_entity *he = cc_step_get(&f, h);
+        if (!he) continue;
+        size_t hi = cc_step_index(&f, he);
+        uint64_t *v = open_ids + open_at[hi];
+        size_t j = fill[hi]++;
+        while (j && v[j - 1] > o) v[j] = v[j - 1], j--;
+        v[j] = o;
+    }
+    free(fill);
 
     for (size_t i = 0; i < f.n; i++) { /* HashMap inserts: a later relation overwrites */
         const cc_step_entity *rl = &f.ents[i];
@@ -1381,7 +2652,22 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
     seen.v = malloc(seen.cap * sizeof *seen.v);
     seen.used = calloc(seen.cap, 1);
     els = malloc(ne * sizeof *els);
-    if (!seen.v || !seen.used || !els) { free(nopen); goto oom; }
+    opening_seen.cap = seen.cap;
+    opening_seen.v = malloc(seen.cap * sizeof *opening_seen.v);
+    opening_seen.used = calloc(seen.cap, 1);
+    shapes.state = calloc(ne, 1);
+    shapes.mesh = calloc(ne, sizeof *shapes.mesh);
+    if (!seen.v || !seen.used || !els || !opening_seen.v || !opening_seen.used || !shapes.state || !shapes.mesh) {
+        free(nopen);
+        goto oom;
+    }
+    {
+        /* Limits::for_text: 10 triangles per displayed byte (at least 1 M), visits / 10 (5 M). */
+        uint64_t db = displayed_bytes(text, n);
+        uint64_t mt = db > UINT64_MAX / 10 ? UINT64_MAX : db * 10;
+        budget.triangles_left = mt < 1000000 ? 1000000 : mt > (uint64_t)(size_t)-1 ? (size_t)-1 : (size_t)mt;
+        budget.visits_left = db / 10 < 5000000 ? 5000000 : (size_t)(db / 10);
+    }
 
     for (size_t i = 0; i < f.n; i++) {
         const cc_step_entity *e = &f.ents[i];
@@ -1465,21 +2751,115 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
         Pending *pe = &els[nels];
         memset(pe, 0, sizeof *pe);
         const cc_step_entity *solid = extruded_solid(&r, e);
-        r.unsup_why = NULL;
         int kind = solid ? extruded_element(&r, &m->arena, solid, &rel, cls, scale, &pe->el.placement, &pe->el.generator) : 0;
-        if (!kind) {
-            const char *shown = has_ent ? buf_cstr(&ent) : cname;
-            if (r.unsup_why) unsup(&r, shown, ": body uses ", r.unsup_why);
-            else unsup(&r, shown, ": body is not an extruded profile of the C subset (Rust: a mesh)", 0);
-            rep->unsupported++;
-            buf_free(&ent);
-            continue;
-        }
+        int mc = 0;
         if (kind == 1) rep->parametric++;
-        else rep->extruded++;
+        else if (kind == 2) rep->extruded++;
+        else if ((mc = mapped_copy(&r, &m->arena, e, nopen[i] > 0, &rel, scale, &budget, &shapes, &pe->el.placement,
+                                   &pe->el.generator)) != 0) {
+            if (mc < 0) { buf_free(&ent); goto oom_loop; }
+            rep->meshes++;
+        } else {
+            Tris mb = {0};
+            Emit em = {&mb, scale, &budget};
+            product_body(&r, e, &em);
+            if (mb.oom) { tris_free(&mb); buf_free(&ent); goto oom_loop; }
+            if (!mb.n) {
+                tris_free(&mb);
+                /* Why: no shape, no 3D body, or a body not read. */
+                const cc_step_entity *sh = get(&r, arg(e, 6));
+                const cc_sv *reps;
+                size_t nr = 0;
+                if (!sh || !cc_sv_as_list(arg(sh, 2), &reps, &nr)) nr = 0;
+                Buf ids;
+                buf_init(&ids);
+                size_t nids = 0;
+                int body = 0;
+                for (size_t k = 0; k < nr; k++) {
+                    const cc_step_entity *rp = get(&r, &reps[k]);
+                    const char *id;
+                    size_t idn;
+                    if (!rp || !cc_sv_as_str(arg(rp, 1), &id, &idn)) continue;
+                    if (nids++) buf_puts(&ids, ", ");
+                    buf_append(&ids, id, idn);
+                    body |= idn == 4 && !memcmp(id, "Body", 4);
+                }
+                buf_clear(&b);
+                if (has_ent) buf_append(&b, ent.p, ent.len);
+                else buf_puts(&b, cname);
+                if (!nids) buf_puts(&b, ": no shape in the file");
+                else if (!body) buf_puts(&b, ": no 3D body, only "), buf_append(&b, ids.p, ids.len);
+                else buf_puts(&b, ": a body Bimble can't read yet");
+                tally_buf(&skipped, &b, 0);
+                buf_free(&ids);
+                buf_free(&ent);
+                continue;
+            }
+            if (mesh_from_tris(&m->arena, &mb, selev, &pe->el.generator)) { tris_free(&mb); buf_free(&ent); goto oom_loop; }
+            tris_free(&mb);
+            double(*ps)[3] = pe->el.generator.u.mesh.positions;
+            double o[3] = {round_rs(ps[0][0]), round_rs(ps[0][1]), round_rs(ps[0][2])};
+            for (size_t k = 0; k < pe->el.generator.u.mesh.npositions; k++)
+                for (int c = 0; c < 3; c++) ps[k][c] = ps[k][c] - o[c];
+            placement_at(&pe->el.placement, o[0], o[1], o[2]);
+            rep->meshes++;
+        }
         if (nopen[i]) {
-            unsup(&r, cname, ": openings not cut (Rust keeps them as meshes)", 0);
-            rep->unsupported += nopen[i];
+            /* element_openings: each opening's body in world mm, into element-local mm. */
+            cc_opening *ov = arena_alloc(&m->arena, nopen[i] * sizeof *ov, 8);
+            if (!ov) { buf_free(&ent); goto oom_loop; }
+            size_t no = 0;
+            const cc_placement *hp = &pe->el.placement;
+            Aff fr;
+            memcpy(fr.x, hp->x_axis, sizeof fr.x);
+            cross(hp->z_axis, hp->x_axis, fr.y);
+            memcpy(fr.z, hp->z_axis, sizeof fr.z);
+            memcpy(fr.t, hp->origin, sizeof fr.t);
+            for (size_t k = 0; k < nopen[i]; k++) {
+                const cc_step_entity *op = cc_step_get(&f, open_ids[open_at[i] + k]);
+                if (!op) continue;
+                Tris mb = {0};
+                Emit em = {&mb, scale, &budget};
+                product_body(&r, op, &em);
+                if (mb.oom) { tris_free(&mb); buf_free(&ent); goto oom_loop; }
+                if (!mb.n) {
+                    tris_free(&mb);
+                    buf_clear(&b);
+                    buf_puts(&b, cname);
+                    buf_putc(&b, ' ');
+                    buf_append(&b, nm, nn);
+                    buf_puts(&b, ": opening without usable geometry");
+                    tally_buf(&skipped, &b, 0);
+                    continue;
+                }
+                for (size_t t = 0; t < mb.n; t++)
+                    for (int c = 0; c < 3; c++) {
+                        double *p = &mb.t[t][c * 3], q[3] = {p[0], p[1], p[2] - selev};
+                        aff_local(&fr, q, p);
+                    }
+                cc_opening *o = &ov[no];
+                memset(o, 0, sizeof *o);
+                if (mesh_from_tris(&m->arena, &mb, 0.0, &o->generator)) { tris_free(&mb); buf_free(&ent); goto oom_loop; }
+                tris_free(&mb);
+                placement_at(&o->placement, 0.0, 0.0, 0.0);
+                cc_gid og;
+                if (gid_from_sv(arg(op, 0), &og)) {
+                    if (!gset_insert(&opening_seen, &og)) {
+                        buf_clear(&b);
+                        buf_puts(&b, cname);
+                        buf_putc(&b, ' ');
+                        buf_append(&b, nm, nn);
+                        buf_puts(&b, ": opening GlobalId ");
+                        cc_buf_gid(&b, &og);
+                        buf_puts(&b, " already used; a new one is derived on export");
+                        tally_buf(&warnings, &b, 1);
+                    } else o->has_id = 1, o->id = og;
+                }
+                no++;
+            }
+            pe->el.openings = no ? ov : NULL;
+            pe->el.nopenings = no;
+            rep->openings += no;
         }
         gset_insert(&seen, &gid);
         pe->el.id = gid;
@@ -1547,6 +2927,25 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
         buf_free(&ent);
     }
     free(nopen);
+    nopen = NULL;
+    if (0) {
+    oom_loop:
+        free(nopen);
+        goto oom;
+    }
+    if (budget.exhausted)
+        tally_add(&warnings,
+                  "model too large or nested too deeply: geometry stopped at the import limits; what was left is "
+                  "skipped",
+                  strlen("model too large or nested too deeply: geometry stopped at the import limits; what was "
+                         "left is skipped"),
+                  1);
+    if (r.unsup_n) {
+        buf_clear(&b);
+        buf_puts(&b, "boolean result drawn uncut: no boolean kernel in the C core (Rust cuts it)");
+        for (size_t k = 0; k < r.unsup_n; k++) tally_buf(&r.unsup, &b, 0);
+        rep->unsupported += r.unsup_n;
+    }
 
     tally_sort(&r.warnings);
     for (size_t i = 0; i < r.warnings.n; i++) {
@@ -1564,7 +2963,9 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
         buf_u64(L, rep->parametric);
         buf_puts(L, " parametric, ");
         buf_u64(L, rep->extruded);
-        buf_puts(L, " extruded polygons, 0 meshes)\n");
+        buf_puts(L, " extruded polygons, ");
+        buf_u64(L, rep->meshes);
+        buf_puts(L, " meshes)\n");
         tally_sort(&by_class);
         for (size_t i = 0; i < by_class.n; i++) {
             buf_puts(L, "  ");
@@ -1572,6 +2973,11 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
             buf_puts(L, ": ");
             buf_u64(L, by_class.v[i].count);
             buf_putc(L, '\n');
+        }
+        if (rep->openings) {
+            buf_puts(L, "openings: ");
+            buf_u64(L, rep->openings);
+            buf_puts(L, " cut on import (as meshes, subtracted at draw time)\n");
         }
         if (rep->properties) {
             buf_puts(L, "property values: ");
@@ -1649,6 +3055,12 @@ done:
     free(st_gid);
     free(seen.v);
     free(seen.used);
+    free(opening_seen.v);
+    free(opening_seen.used);
+    free(shapes.state);
+    free(shapes.mesh);
+    free(open_at);
+    free(open_ids);
     free(r.pl);
     free(r.has_pl);
     tally_free(&r.warnings);

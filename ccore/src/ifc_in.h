@@ -1,16 +1,20 @@
-/* IFC import of the subset Bimble exports, the C twin of bimble_ifc::import::import_str
- * (crates/bimble-ifc/src/import.rs). Covered: units (SI and conversion-based length units),
- * project id, storeys (placement z or Elevation), containment and aggregation, materials
- * (IfcMaterial and the layer/profile/constituent sets, by type too), property sets and
- * quantity sets as text, and elements of IfcColumn/Beam/Slab/Wall/Footing (and any other
- * product with a shape, as IfcBuildingElementProxy) whose body is an IfcExtrudedAreaSolid
- * (through IfcMappedItem too) of an IfcRectangleProfileDef, IfcArbitraryClosedProfileDef or
- * IfcArbitraryProfileDefWithVoids on IfcPolyline curves, placed by IfcLocalPlacement chains.
- * Like Rust: the project is named "Imported model", materials get derived ids
- * (GlobalId::derived("material/<name>")) and no values.
+/* IFC import, the C twin of bimble_ifc::import::import_str (crates/bimble-ifc/src/import.rs and
+ * the parts of read.rs it uses). Covered as in Rust: units (length and plane angle), project id,
+ * storeys, containment and aggregation, materials, property and quantity sets as text; elements
+ * of IfcColumn/Beam/Slab/Wall/Footing (and any other product with a shape, as
+ * IfcBuildingElementProxy) whose body is an IfcExtrudedAreaSolid become rectangle generators,
+ * slabs or extruded polygons (profiles: rectangle, circle, hollow circle and rectangle, I-shape
+ * with root fillets, derived, arbitrary with voids; curves: polyline, indexed polycurve with
+ * arcs, composite, trimmed line/circle/ellipse, circle, ellipse); other bodies are tessellated
+ * into meshes (face sets, faceted breps, shells, swept disks, mapped items, a single mapped
+ * item as a shared placed mesh); openings (IfcRelVoidsElement) are kept as mesh openings. The
+ * geometry budget is Limits::for_text. Like Rust: the project is named "Imported model",
+ * materials get derived ids (GlobalId::derived("material/<name>")) and no values.
  *
- * Outside the subset (Rust makes a mesh, cuts openings or keeps a georeference): the C core
- * says so in the report ("unsupported: …" lines) and leaves it out; it never drops silently. */
+ * Not done: boolean results (IfcBooleanResult, clipping) are drawn uncut, the C core has no
+ * boolean kernel (Rust: manifold3d); the georeference (building frame, IfcMapConversion) is
+ * not kept (the C model has none). Both are reported in "unsupported: …" lines, never silent.
+ * Trigonometry is correctly rounded (ifc_math.h); glibc's, which Rust uses, is not always. */
 #ifndef CCORE_IFC_IN_H
 #define CCORE_IFC_IN_H
 #include "buf.h"
@@ -19,7 +23,7 @@
 #include "step.h"
 
 typedef struct {
-    size_t elements, parametric, extruded, properties;
+    size_t elements, parametric, extruded, meshes, openings, properties;
     size_t unsupported; /* things Rust imports that the C core left out (elements, openings…) */
     size_t entities, malformed; /* STEP instances parsed, and skipped as malformed */
     Buf lines;          /* ImportReport::lines(), then the "unsupported: …" lines; '\n' each */

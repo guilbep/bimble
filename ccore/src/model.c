@@ -374,6 +374,19 @@ int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid 
         }
         if (placement_validate(&b, &e->placement)) return set_err(err, &b);
         if (gen_validate(&b, &e->generator)) return set_err(err, &b);
+        for (size_t j = 0; j < e->nopenings; j++) {
+            /* "{class_name} {name} (opening {j}): {msg}" */
+            buf_clear(&b);
+            if (e->has_ifc_entity) buf_append(&b, e->ifc_entity.p, e->ifc_entity.n);
+            else buf_puts(&b, cc_ifc_class_name(e->cls));
+            buf_putc(&b, ' ');
+            buf_append(&b, e->name.p, e->name.n);
+            buf_puts(&b, " (opening ");
+            buf_u64(&b, j);
+            buf_puts(&b, "): ");
+            if (placement_validate(&b, &e->openings[j].placement)) return set_err(err, &b);
+            if (gen_validate(&b, &e->openings[j].generator)) return set_err(err, &b);
+        }
         for (size_t j = 0; j < e->nproperties; j++)
             if (e->properties[j].key.n == 0) {
                 buf_puts(&b, "empty property key");
@@ -399,6 +412,35 @@ static void canon_loop(cc_loop *l) {
     if (l->n) canon(l->pts[0], 2 * l->n);
 }
 
+static void canon_placement(cc_placement *p) {
+    canon(p->origin, 3);
+    canon(p->z_axis, 3);
+    canon(p->x_axis, 3);
+}
+
+static void canon_generator(cc_generator *g) {
+    switch (g->kind) {
+    case CC_GEN_RECT_COLUMN:
+    case CC_GEN_PAD_FOOTING: canon(&g->u.col.width, 1); canon(&g->u.col.depth, 1); canon(&g->u.col.height, 1); break;
+    case CC_GEN_RECT_BEAM: canon(&g->u.beam.width, 1); canon(&g->u.beam.height, 1); canon(&g->u.beam.length, 1); break;
+    case CC_GEN_WALL: canon(&g->u.wall.length, 1); canon(&g->u.wall.thickness, 1); canon(&g->u.wall.height, 1); break;
+    case CC_GEN_SLAB:
+        canon(&g->u.slab.thickness, 1);
+        canon_loop(&g->u.slab.outline);
+        break;
+    case CC_GEN_EXTRUDED_POLYGON:
+        canon(&g->u.poly.height, 1);
+        canon_loop(&g->u.poly.outline);
+        for (size_t j = 0; j < g->u.poly.nvoids; j++)
+            canon_loop(&g->u.poly.voids[j]);
+        break;
+    case CC_GEN_MESH:
+        if (g->u.mesh.npositions) canon(g->u.mesh.positions[0], 3 * g->u.mesh.npositions);
+        break;
+    default: break;
+    }
+}
+
 void cc_model_canonical(cc_model *m) {
     for (size_t i = 0; i < m->nstoreys; i++) canon(&m->storeys[i].elevation, 1);
     for (size_t i = 0; i < m->nmaterials; i++) {
@@ -409,29 +451,11 @@ void cc_model_canonical(cc_model *m) {
     }
     for (size_t i = 0; i < m->nelements; i++) {
         cc_element *e = &m->elements[i];
-        canon(e->placement.origin, 3);
-        canon(e->placement.z_axis, 3);
-        canon(e->placement.x_axis, 3);
-        cc_generator *g = &e->generator;
-        switch (g->kind) {
-        case CC_GEN_RECT_COLUMN:
-        case CC_GEN_PAD_FOOTING: canon(&g->u.col.width, 1); canon(&g->u.col.depth, 1); canon(&g->u.col.height, 1); break;
-        case CC_GEN_RECT_BEAM: canon(&g->u.beam.width, 1); canon(&g->u.beam.height, 1); canon(&g->u.beam.length, 1); break;
-        case CC_GEN_WALL: canon(&g->u.wall.length, 1); canon(&g->u.wall.thickness, 1); canon(&g->u.wall.height, 1); break;
-        case CC_GEN_SLAB:
-            canon(&g->u.slab.thickness, 1);
-            canon_loop(&g->u.slab.outline);
-            break;
-        case CC_GEN_EXTRUDED_POLYGON:
-            canon(&g->u.poly.height, 1);
-            canon_loop(&g->u.poly.outline);
-            for (size_t j = 0; j < g->u.poly.nvoids; j++)
-                canon_loop(&g->u.poly.voids[j]);
-            break;
-        case CC_GEN_MESH:
-            if (g->u.mesh.npositions) canon(g->u.mesh.positions[0], 3 * g->u.mesh.npositions);
-            break;
-        default: break;
+        canon_placement(&e->placement);
+        canon_generator(&e->generator);
+        for (size_t j = 0; j < e->nopenings; j++) {
+            canon_placement(&e->openings[j].placement);
+            canon_generator(&e->openings[j].generator);
         }
     }
 }

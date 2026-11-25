@@ -5,7 +5,8 @@
  * - a duplicate struct field is an error ("duplicate field `x`"); a duplicate map key keeps the
  *   last value (BTreeMap insert);
  * - sections Rust knows and the C core does not hold (views, sheets, schedules, georef,
- *   openings, mesh arrays by hash) are refused when non-empty, never dropped.
+ *   mesh arrays by hash) are refused when non-empty, never dropped. Openings are kept (data
+ *   only: the C scene does not cut them yet).
  * The binary form (version 2) is the same serde model in CBOR, read into the same DOM
  * (cbor.h), with each mesh array once in the top-level tables `positions` / `indices` and
  * elements referring to them by index (shared again in memory, as Rust shares its Arcs). */
@@ -489,6 +490,21 @@ static int d_material(D *d, const JrVal *v, cc_material *m) {
     return 0;
 }
 
+/* model.rs Opening: { id?: GlobalId, placement, generator }. */
+static int d_opening(D *d, const JrVal *v, cc_opening *o) {
+    static const char *const F[] = {"id", "placement", "generator"};
+    const JrVal *f[3];
+    memset(o, 0, sizeof *o);
+    if (d_fields(d, v, F, 3, f, "struct Opening", 0)) return -1;
+    for (int i = 1; i < 3; i++)
+        if (need(d, v, f[i], F[i])) return -1;
+    if (f[0] && f[0]->type != JR_NULL) {
+        if (d_gid(d, f[0], &o->id)) return -1;
+        o->has_id = 1;
+    }
+    return d_placement(d, f[1], &o->placement) || d_generator(d, f[2], &o->generator) ? -1 : 0;
+}
+
 static int d_element(D *d, const JrVal *v, cc_element *e) {
     static const char *const F[] = {"id", "class", "name", "storey", "material", "placement",
                                     "generator", "openings", "properties", "ifc_entity"};
@@ -506,7 +522,11 @@ static int d_element(D *d, const JrVal *v, cc_element *e) {
     e->cls = (cc_ifc_class)cls;
     if (f[7]) {
         if (f[7]->type != JR_ARR) return type_err(d, f[7], "a sequence");
-        if (f[7]->n) return dfail(d, f[7]->off, "unsupported by the C core: element openings", 0, 0);
+        e->nopenings = f[7]->n;
+        e->openings = alloc_n(d, f[7]->n, sizeof *e->openings, f[7]->off);
+        if (f[7]->n && !e->openings) return -1;
+        for (size_t i = 0; i < f[7]->n; i++)
+            if (d_opening(d, &f[7]->items[i], &e->openings[i])) return -1;
     }
     if (f[8] && d_strmap(d, f[8], &e->properties, &e->nproperties)) return -1;
     if (f[9] && f[9]->type != JR_NULL) {
@@ -794,6 +814,14 @@ static void w_generator(JsonW *w, const cc_generator *g) {
     jw_obj_end(w);
 }
 
+static void w_placement(JsonW *w, const cc_placement *p) {
+    jw_obj_begin(w);
+    jw_key(w, "origin"), w_vec(w, p->origin, 3);
+    jw_key(w, "z_axis"), w_vec(w, p->z_axis, 3);
+    jw_key(w, "x_axis"), w_vec(w, p->x_axis, 3);
+    jw_obj_end(w);
+}
+
 int cc_model_save(const cc_model *m, Buf *b) {
     JsonW w;
     jw_init(&w, b, 1);
@@ -849,13 +877,21 @@ int cc_model_save(const cc_model *m, Buf *b) {
         jw_key(&w, "name"), w_str(&w, e->name);
         jw_key(&w, "storey"), w_gid(&w, &e->storey);
         jw_key(&w, "material"), w_gid(&w, &e->material);
-        jw_key(&w, "placement");
-        jw_obj_begin(&w);
-        jw_key(&w, "origin"), w_vec(&w, e->placement.origin, 3);
-        jw_key(&w, "z_axis"), w_vec(&w, e->placement.z_axis, 3);
-        jw_key(&w, "x_axis"), w_vec(&w, e->placement.x_axis, 3);
-        jw_obj_end(&w);
+        jw_key(&w, "placement"), w_placement(&w, &e->placement);
         jw_key(&w, "generator"), w_generator(&w, &e->generator);
+        if (e->nopenings) {
+            jw_key(&w, "openings");
+            jw_arr_begin(&w);
+            for (size_t j = 0; j < e->nopenings; j++) {
+                const cc_opening *o = &e->openings[j];
+                jw_obj_begin(&w);
+                if (o->has_id) jw_key(&w, "id"), w_gid(&w, &o->id);
+                jw_key(&w, "placement"), w_placement(&w, &o->placement);
+                jw_key(&w, "generator"), w_generator(&w, &o->generator);
+                jw_obj_end(&w);
+            }
+            jw_arr_end(&w);
+        }
         if (e->nproperties) jw_key(&w, "properties"), w_kvs(&w, e->properties, e->nproperties);
         if (e->has_ifc_entity) jw_key(&w, "ifc_entity"), w_str(&w, e->ifc_entity);
         jw_obj_end(&w);
@@ -991,19 +1027,24 @@ static void c_generator(Buf *b, const cc_generator *g, uint64_t pos_i, uint64_t 
 
 int cc_model_to_cbor(const cc_model *m, Buf *b) {
     size_t meshes = 0;
-    for (size_t i = 0; i < m->nelements; i++) meshes += m->elements[i].generator.kind == CC_GEN_MESH;
+    for (size_t i = 0; i < m->nelements; i++) {
+        meshes += m->elements[i].generator.kind == CC_GEN_MESH;
+        for (size_t j = 0; j < m->elements[i].nopenings; j++) meshes += m->elements[i].openings[j].generator.kind == CC_GEN_MESH;
+    }
     Pool pp, pi;
     long long *refs = calloc(2 * (meshes ? meshes : 1), sizeof *refs);
     int rc = pool_init(&pp, meshes) | pool_init(&pi, meshes) | (refs ? 0 : -1);
-    /* Every mesh array once, in model order; then the model, its meshes as indices. */
-    for (size_t i = 0, k = 0; !rc && i < m->nelements; i++) {
-        const cc_generator *g = &m->elements[i].generator;
-        if (g->kind != CC_GEN_MESH) continue;
-        refs[2 * k] = pool_add(&pp, g->u.mesh.positions, g->u.mesh.npositions);
-        refs[2 * k + 1] = pool_add(&pi, g->u.mesh.indices, g->u.mesh.nindices);
-        if (refs[2 * k] < 0 || refs[2 * k + 1] < 0) rc = -1;
-        k++;
-    }
+    /* Every mesh array once, in model order (an element's generator, then its openings'); then
+     * the model, its meshes as indices. */
+    for (size_t i = 0, k = 0; !rc && i < m->nelements; i++)
+        for (size_t j = 0; !rc && j <= m->elements[i].nopenings; j++) {
+            const cc_generator *g = j ? &m->elements[i].openings[j - 1].generator : &m->elements[i].generator;
+            if (g->kind != CC_GEN_MESH) continue;
+            refs[2 * k] = pool_add(&pp, g->u.mesh.positions, g->u.mesh.npositions);
+            refs[2 * k + 1] = pool_add(&pi, g->u.mesh.indices, g->u.mesh.nindices);
+            if (refs[2 * k] < 0 || refs[2 * k + 1] < 0) rc = -1;
+            k++;
+        }
     if (!rc) {
         cb_head(b, CB_MAP, 5);
         c_key(b, "format"), c_key(b, "bimble");
@@ -1061,7 +1102,7 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
         for (size_t i = 0, k = 0; i < m->nelements; i++) {
             const cc_element *e = &m->elements[i];
             c_gid(b, &e->id);
-            cb_head(b, CB_MAP, 7 + (e->nproperties ? 1 : 0) + (e->has_ifc_entity ? 1 : 0));
+            cb_head(b, CB_MAP, 7 + (e->nopenings ? 1 : 0) + (e->nproperties ? 1 : 0) + (e->has_ifc_entity ? 1 : 0));
             c_key(b, "id"), c_gid(b, &e->id);
             c_key(b, "class"), c_key(b, cc_ifc_class_name(e->cls));
             c_key(b, "name"), c_str(b, e->name);
@@ -1077,6 +1118,25 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
                 c_generator(b, &e->generator, (uint64_t)refs[2 * k], (uint64_t)refs[2 * k + 1]);
                 k++;
             } else c_generator(b, &e->generator, 0, 0);
+            if (e->nopenings) {
+                c_key(b, "openings");
+                cb_head(b, CB_ARRAY, e->nopenings);
+                for (size_t j = 0; j < e->nopenings; j++) {
+                    const cc_opening *o = &e->openings[j];
+                    cb_head(b, CB_MAP, 2 + (o->has_id ? 1 : 0));
+                    if (o->has_id) c_key(b, "id"), c_gid(b, &o->id);
+                    c_key(b, "placement");
+                    cb_head(b, CB_MAP, 3);
+                    c_key(b, "origin"), c_vec(b, o->placement.origin, 3);
+                    c_key(b, "z_axis"), c_vec(b, o->placement.z_axis, 3);
+                    c_key(b, "x_axis"), c_vec(b, o->placement.x_axis, 3);
+                    c_key(b, "generator");
+                    if (o->generator.kind == CC_GEN_MESH) {
+                        c_generator(b, &o->generator, (uint64_t)refs[2 * k], (uint64_t)refs[2 * k + 1]);
+                        k++;
+                    } else c_generator(b, &o->generator, 0, 0);
+                }
+            }
             if (e->nproperties) c_key(b, "properties"), c_kvs(b, e->properties, e->nproperties);
             if (e->has_ifc_entity) c_key(b, "ifc_entity"), c_str(b, e->ifc_entity);
         }

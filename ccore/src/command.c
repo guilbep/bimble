@@ -460,6 +460,17 @@ static int dup_element(Arena *a, cc_element *e) {
         dup_kvs(a, &e->properties, e->nproperties))
         return -1;
     if (e->has_ifc_entity && dup_str(a, &e->ifc_entity)) return -1;
+    if (!e->nopenings) {
+        e->openings = NULL;
+        return 0;
+    }
+    cc_opening *o = dup_arr(a, e->openings, e->nopenings * sizeof *o);
+    if (!o) return -1;
+    e->openings = o;
+    for (size_t i = 0; i < e->nopenings; i++) {
+        canon_placement(&o[i].placement);
+        if (dup_generator(a, &o[i].generator)) return -1;
+    }
     return 0;
 }
 
