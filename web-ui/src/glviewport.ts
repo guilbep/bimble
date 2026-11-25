@@ -24,9 +24,17 @@
 // f64 (one scene origin, lib.rs:1499), drawn in Rust's reference colours (style.rs `reference`,
 // `reference_edges`), not drawn when hidden (Manage links), never touched by the open model's
 // visibility; a click on one selects it as `{link, ids}` (the properties show it read-only).
+// Plan views (ticket C1, ccore/session/views.h, ADR 0068 rule 9): when the current tab is a plan
+// (`open_views`, then the C core's `query view_clip`), the camera is orthographic, straight down
+// (a ceiling plan: straight up, mirrored so east stays right, as Rust's reflected ceiling plan),
+// north up; drags pan, the wheel zooms about the pointer, no orbit. What the plan shows is the
+// clip box C gives (the model's bounds cut from the view depth to the cut plane), drawn with B3's
+// passes: cut solids show filled at the cut shade, what lies below the cut in projection with its
+// edges. Rays are orthographic (straight down from the pointer), so the place tool and picking work
+// as in 3D. Each view keeps its camera; back to the 3D tab, the 3D camera comes back.
 import {
-  boxTool, placing, select, selectLinked, state, toolCall, visibility, visibilitySets,
-  type ToolPointer, type ToolState, type Visibility, type VisibilitySets,
+  boxTool, openViews, placing, select, selectLinked, state, toolCall, viewClip, visibility, visibilitySets,
+  type ToolPointer, type ToolState, type ViewClip, type Visibility, type VisibilitySets,
 } from "./bimble";
 
 // Palette, sRGB (bimble-core style.rs:302, :335-410), by MaterialCategory index.
@@ -223,16 +231,19 @@ layout(location = 2) in vec4 a_n1; // an edge's two face normals (snorm8); 0 or 
 layout(location = 3) in vec4 a_n2;
 uniform mat4 u_mvp;
 uniform vec3 u_eye;
+uniform float u_eye_dir; // 1: u_eye is the direction to the eye (an orthographic plan camera)
 uniform float u_point;
+uniform float u_zbias; // NDC depth pulled toward the eye (a plan's edges: over a coplanar cut face)
 out vec3 v_pos;
 out vec3 v_col;
 flat out float v_back;
 void main() {
   v_pos = a_pos; v_col = a_col;
-  vec3 to_eye = u_eye - a_pos;
+  vec3 to_eye = u_eye_dir > 0.5 ? u_eye : u_eye - a_pos;
   v_back = (dot(a_n1.xyz, to_eye) < 0.0 && dot(a_n2.xyz, to_eye) < 0.0) ? 1.0 : 0.0;
   gl_PointSize = u_point;
   gl_Position = u_mvp * vec4(a_pos, 1.0);
+  gl_Position.z -= u_zbias * gl_Position.w;
 }`;
 const FS = `#version 300 es
 precision highp float;
@@ -297,6 +308,9 @@ interface GlStats {
   linkTris: number;
   /** Test hook: a world point (mm) -> CSS px in the viewport (clientX, clientY), or null. */
   toScreen?: (x: number, y: number, z: number) => [number, number] | null;
+  /** The camera: "3d" (orbit, perspective) or "plan" (orthographic, top-down), the view shown, the
+   *  plan's half height in mm, and the camera's yaw and pitch (radians). */
+  camera?: { mode: "3d" | "plan"; view: string | null; look: string | null; half: number; yaw: number; pitch: number; target: number[] };
 }
 declare global {
   interface Window {
@@ -360,11 +374,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const uAmbient = gl.getUniformLocation(prog, "u_ambient");
   const uAlpha = gl.getUniformLocation(prog, "u_alpha");
   const uEye = gl.getUniformLocation(prog, "u_eye");
+  const uEyeDir = gl.getUniformLocation(prog, "u_eye_dir");
   const uPoint = gl.getUniformLocation(prog, "u_point");
   const uClip = gl.getUniformLocation(prog, "u_clip");
   const uClipMin = gl.getUniformLocation(prog, "u_clip_min");
   const uClipMax = gl.getUniformLocation(prog, "u_clip_max");
   const uCut = gl.getUniformLocation(prog, "u_cut");
+  const uZbias = gl.getUniformLocation(prog, "u_zbias");
 
   // One VAO: positions (location 0), per-vertex sRGB colour (location 1, u8 normalized), indices.
   // Edges reuse it: location 0 points at the edge buffer, location 1 is a constant.
@@ -408,6 +424,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
 
   let mesh: Bmsh | null = null;
   let bounds: { center: V3; radius: number } | null = null;
+  // The view shown (open_views current, view_clip): a plan makes the camera orthographic.
+  let plan: ViewClip | null = null;
+  let viewId: string | null = null;
+  let seenViews: unknown;
+  let half = 5000; // a plan's half height on screen, mm
+  /** Each view's camera, kept while another is shown (viewing.rs view_cameras). */
+  const cams = new Map<string, { yaw: number; pitch: number; distance: number; target: V3; half: number }>();
+  const mirror = () => plan?.look === "up";
   let selKey = "";
   // Camera (bimble-render Camera): orbit around `target` at `distance`, z up.
   let yaw = (-55 * Math.PI) / 180, pitch = (28 * Math.PI) / 180, distance = 10000;
@@ -446,6 +470,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const matrices = () => {
     const aspect = Math.max(1e-3, canvas.width / Math.max(1, canvas.height));
     const r = bounds?.radius ?? distance;
+    if (plan) { // orthographic, straight down (up: from below, mirrored), north up
+      const h = 4 * r + 1000, up: V3 = [0, 1, 0];
+      const e = add(target, [0, 0, plan.look === "up" ? -h : h]);
+      const view = lookAt(e, target, up);
+      const near = 1, far = 2 * h, w = half * aspect, m = mirror() ? -1 : 1;
+      const proj = new Float32Array([m / w, 0, 0, 0, 0, 1 / half, 0, 0, 0, 0, -2 / (far - near), 0, 0, 0, -(far + near) / (far - near), 1]);
+      return { e, view, proj, mvp: mul(proj, view), aspect, up };
+    }
     const far = distance + 2 * r + 1;
     const near = Math.max(1, Math.min(distance - 1.5 * r, far / 1000), far / 100000);
     const e = eye();
@@ -453,6 +485,31 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const view = lookAt(e, target, up);
     const proj = perspective(FOV_Y, aspect, near, far);
     return { e, view, proj, mvp: mul(proj, view), aspect, up };
+  };
+  /** A plan fitted: the clip's x, y on screen (the model's bounds), its middle height as target. */
+  const fitPlan = () => {
+    const c = plan?.clip;
+    if (!c) { if (bounds) target = [...bounds.center], half = bounds.radius; return; }
+    const aspect = Math.max(1e-3, canvas.width / Math.max(1, canvas.height));
+    target = [((c.min[0] ?? 0) + (c.max[0] ?? 0)) / 2, ((c.min[1] ?? 0) + (c.max[1] ?? 0)) / 2, ((c.min[2] ?? 0) + (c.max[2] ?? 0)) / 2];
+    half = 1.05 * Math.max(((c.max[1] ?? 0) - (c.min[1] ?? 0)) / 2, ((c.max[0] ?? 0) - (c.min[0] ?? 0)) / 2 / aspect, 100);
+  };
+  /** The view shown changed (a tab): keep the camera of the one left, take the new one's. */
+  const switchView = (vc: ViewClip | null, id: string | null) => {
+    if (id === viewId) {
+      plan = vc?.type === "plan" ? vc : null; // the same view, its range or the model changed
+      dirty = true;
+      return;
+    }
+    if (viewId !== null) cams.set(viewId, { yaw, pitch, distance, target: [...target], half });
+    viewId = id;
+    plan = vc?.type === "plan" ? vc : null;
+    const c = id === null ? undefined : cams.get(id);
+    if (c) ({ yaw, pitch, distance, half } = c), (target = [...c.target]);
+    else if (plan) fitPlan();
+    else if (fitted) { yaw = (-55 * Math.PI) / 180; pitch = (28 * Math.PI) / 180; fit(); }
+    preview = null;
+    dirty = true;
   };
   const fit = () => {
     if (!bounds) return;
@@ -526,7 +583,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     selKey = "\u0000"; // recolour on the next frame
     if (tool) showTool(tool); // the ghost against the new mesh's origin
     if (!fitted && bounds) {
-      fit();
+      if (plan) fitPlan();
+      else fit();
       fitted = true;
     }
     dirty = true;
@@ -613,6 +671,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   /** The box that cuts now: the drag's preview, else the session's box when it is on. */
   const clipBox = (): { min: number[]; max: number[] } | null => {
+    if (plan) return plan.clip; // a plan: what its range shows (the section box is the 3D view's)
     if (preview) return preview;
     const sb = vis?.section_box;
     return sb?.on && sb.box ? { min: sb.box.min, max: sb.box.max } : null;
@@ -638,13 +697,16 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.useProgram(prog);
     gl.uniformMatrix4fv(uMvp, false, mvp);
     gl.uniform3fv(uLight, light);
-    gl.uniform3fv(uEye, e);
+    // A plan's eye is at infinity: the back-edge test takes its direction (a vertical side's edges stay).
+    gl.uniform3fv(uEye, plan ? norm(sub(e, target)) : e);
+    gl.uniform1f(uEyeDir, plan ? 1 : 0);
     gl.uniform1f(uPoint, 1);
     gl.uniform1f(uAlpha, 1);
     gl.uniform1i(uClip, box ? 1 : 0);
     gl.uniform3fv(uClipMin, box ? box.min : [0, 0, 0]);
     gl.uniform3fv(uClipMax, box ? box.max : [0, 0, 0]);
     gl.uniform1f(uCut, CUT_SHADE);
+    gl.uniform1f(uZbias, 0);
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
     gl.disable(gl.CULL_FACE);
@@ -670,11 +732,17 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     else {
       // ADR 0014: outward faces lit, then inward faces (seen only through the cut) unlit at the cut
       // shade, pushed back so silhouette corners keep the outward face.
+      // A mirrored camera (a ceiling plan) turns the winding: the faces seen from outside are then
+      // the back-facing ones.
       gl.enable(gl.CULL_FACE);
+      gl.frontFace(mirror() ? gl.CW : gl.CCW);
       gl.cullFace(gl.BACK);
       faces(0);
       gl.cullFace(gl.FRONT);
-      faces(2.5);
+      // In a plan the cut faces are pulled ahead instead: a column cut above its footing shows its
+      // cut where it stands on the footing's top (coplanar), as a plan draws a cut over what lies below.
+      faces(plan ? -3 : 2.5);
+      gl.frontFace(gl.CCW);
       gl.disable(gl.CULL_FACE);
     }
     gl.disable(gl.POLYGON_OFFSET_FILL);
@@ -683,15 +751,18 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindVertexArray(edgeVao);
     gl.vertexAttrib3f(1, EDGE_SRGB[0]! / 255, EDGE_SRGB[1]! / 255, EDGE_SRGB[2]! / 255);
     gl.depthMask(false);
+    // A plan: edges 2 mm ahead, so the outline of a cut drawn where it stands on something stays.
+    if (plan) gl.uniform1f(uZbias, (2 * 2) / (2 * (4 * (bounds?.radius ?? distance) + 1000) - 1));
     gl.drawElements(gl.LINES, edgeMainN, gl.UNSIGNED_INT, 0);
     if (edgeN > edgeMainN) { // linked models: their edges in the reference edge colour
       gl.vertexAttrib3f(1, REFERENCE_EDGE_SRGB[0] / 255, REFERENCE_EDGE_SRGB[1] / 255, REFERENCE_EDGE_SRGB[2] / 255);
       gl.drawElements(gl.LINES, edgeN - edgeMainN, gl.UNSIGNED_INT, 4 * edgeMainN);
     }
+    gl.uniform1f(uZbias, 0);
     gl.depthMask(true);
     gl.bindVertexArray(null);
     gl.uniform1i(uClip, 0);
-    if (box) drawBox(box);
+    if (box && !plan) drawBox(box);
     drawGhost();
     stats.frames++;
     if (stats.firstFrameMs === null) stats.firstFrameMs = performance.now();
@@ -815,6 +886,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const { e, aspect, up } = matrices();
     const f = norm(sub(target, e)), s = norm(cross(f, up)), u = cross(s, f);
     const ndcX = (2 * x) / canvas.clientWidth - 1, ndcY = 1 - (2 * y) / canvas.clientHeight;
+    if (plan) { // orthographic: parallel rays from the eye's plane, straight down (up)
+      const o = add(e, add(scale(s, (mirror() ? -1 : 1) * ndcX * half * aspect), scale(u, ndcY * half)));
+      return [...o, ...f];
+    }
     const th = Math.tan(FOV_Y / 2);
     const dir = norm(add(f, add(scale(s, ndcX * th * aspect), scale(u, ndcY * th))));
     return [...e, ...dir];
@@ -849,11 +924,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const pick = (x: number, y: number): number => {
     const m = mesh;
     if (!m) return -1;
-    const { e, aspect, up } = matrices();
-    const f = norm(sub(target, e)), s = norm(cross(f, up)), u = cross(s, f);
-    const ndcX = (2 * x) / canvas.clientWidth - 1, ndcY = 1 - (2 * y) / canvas.clientHeight;
-    const th = Math.tan(FOV_Y / 2);
-    const dir = norm(add(f, add(scale(s, ndcX * th * aspect), scale(u, ndcY * th))));
+    const r = rayAt(x, y);
+    const e: V3 = [r[0] ?? 0, r[1] ?? 0, r[2] ?? 0], dir: V3 = [r[3] ?? 0, r[4] ?? 0, r[5] ?? 0];
     let best = Infinity, hit = -1;
     const P = m.pos, I = m.idx;
     const vtx = (i: number): V3 => [P[3 * i] ?? 0, P[3 * i + 1] ?? 0, P[3 * i + 2] ?? 0];
@@ -948,7 +1020,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   canvas.addEventListener("pointerdown", (e) => {
     canvas.setPointerCapture(e.pointerId);
     // A left press on a handle of the section box: the box tool holds that face (no orbit).
-    const onHandle = e.button === 0 && !e.shiftKey && !placingNow() && clipBox() !== null && boxAt("box_press", e.clientX, e.clientY)?.active === true;
+    const onHandle = e.button === 0 && !e.shiftKey && !placingNow() && !plan && clipBox() !== null && boxAt("box_press", e.clientX, e.clientY)?.active === true;
     drag = { pan: e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey), box: onHandle, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
   });
   canvas.addEventListener("pointermove", (e) => {
@@ -966,11 +1038,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     drag.y = e.clientY;
     if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > CLICK_PX) drag.moved = true;
     if (!drag.moved || (dx === 0 && dy === 0)) return;
-    if (drag.pan) {
+    if (drag.pan || plan) { // a plan has no orbit: any drag pans
       const { e: ey, up } = matrices();
       const f = norm(sub(target, ey)), s = norm(cross(f, up)), u = cross(s, f);
-      const k = (2 * distance * Math.tan(FOV_Y / 2)) / Math.max(1, canvas.clientHeight);
-      target = add(target, add(scale(s, -dx * k), scale(u, dy * k)));
+      const k = plan ? (2 * half) / Math.max(1, canvas.clientHeight) : (2 * distance * Math.tan(FOV_Y / 2)) / Math.max(1, canvas.clientHeight);
+      const sr = plan && mirror() ? scale(s, -1) : s;
+      target = add(target, add(scale(sr, -dx * k), scale(u, dy * k)));
     } else {
       yaw -= dx * 0.01;
       pitch = Math.min(1.57, Math.max(-1.57, pitch + dy * 0.01));
@@ -994,6 +1067,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       return;
     }
     if (d.pan) return;
+    if (plan && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > CLICK_PX) return;
     const r = canvas.getBoundingClientRect();
     const k = pick(e.clientX - r.left, e.clientY - r.top);
     stats.picks++;
@@ -1017,11 +1091,24 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
-    distance = Math.max(1, distance * Math.exp(e.deltaY * 0.001));
+    if (plan) { // about the pointer: the plan point under it stays put
+      const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+      const a = rayAt(x, y);
+      half = Math.min(1e7, Math.max(10, half * Math.exp(e.deltaY * 0.001)));
+      const b = rayAt(x, y);
+      target = [target[0] + (a[0] ?? 0) - (b[0] ?? 0), target[1] + (a[1] ?? 0) - (b[1] ?? 0), target[2]];
+    } else distance = Math.max(1, distance * Math.exp(e.deltaY * 0.001));
     dirty = true;
   }, { passive: false });
 
   const loop = () => {
+    if (openViews.value !== seenViews) { // a tab, a view or the model changed: the view shown
+      seenViews = openViews.value;
+      const cur = openViews.value.current;
+      const vc = cur?.type === "view" ? viewClip() : null;
+      switchView(vc, cur?.type === "view" ? cur.id : null);
+    }
+    stats.camera = { mode: plan ? "plan" : "3d", view: viewId, look: plan?.look ?? null, half, yaw, pitch, target: [...target] };
     const rev = meshKey();
     if (state.value !== seenState) {
       seenState = state.value;

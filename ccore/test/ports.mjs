@@ -43,6 +43,8 @@ const TABLE = [
   ["host", "lab_section", 47395, 95],
   ["host", "links_test", 47396, 96],
   ["host", "lab_links", 47397, 97],
+  ["host", "views_test", 47398, 98],
+  ["host", "lab_plan", 47399, 99],
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_gl", 5193, 131],
   ["vite", "lab_place", 5195, 133],
@@ -53,6 +55,7 @@ const TABLE = [
   ["vite", "lab_tool", 5209, 147],
   ["vite", "lab_section", 5211, 149],
   ["vite", "lab_links", 5213, 151],
+  ["vite", "lab_plan", 5215, 153],
 ];
 export const SPAN = 160; // offsets 0..SPAN-1
 const AUTO_LO = 20000, AUTO_SLOTS = Math.floor((32000 - AUTO_LO) / SPAN);

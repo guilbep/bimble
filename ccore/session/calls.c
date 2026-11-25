@@ -27,6 +27,7 @@
 #include "verb_table.h"
 #include "verbs.h"
 #include "viewfile.h"
+#include "views.h"
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -135,16 +136,10 @@ static void debug_str(cc_buf *out, const char *s) { cc_buf_debug_str(out, s, str
 static int loaded(const cc_session *s) { return s->open || s->view; }
 static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out); /* the place tool, below */
 
-/* ---- the 3D view (core/view.rs:584) ---- */
+/* ---- views and tabs (views.h) ---- */
 
-static cc_guid view3d(void) { return cc_guid_derived("bimble view 3d", 14); }
-
-static void tab_json(JsonW *w) { /* ribbon.rs:406 json!({"type": "view", "id": id}), sorted */
-    cc_guid g = view3d();
-    jw_obj_begin(w);
-    jw_key(w, "id"), jw_str_n(w, g.c, 22);
-    jw_key(w, "type"), jw_str(w, "view");
-    jw_obj_end(w);
+static void tab_json(JsonW *w, const cc_session *s) { /* the current tab (ribbon.rs:406) */
+    cc_sv_tab_json(w, &s->active);
 }
 
 /* ---- the scene, built once per rev (status counts, visibility origin) ---- */
@@ -587,46 +582,117 @@ static int q_visibility(cc_session *s, JsonW *w) { /* calls.rs:442-460 (visibili
     return done(w);
 }
 
-/* calls.rs:362-397. One view, the default 3D one (core/view.rs:584-594), its tab open and current
- * while `tab_open` (spec §1: no plans). A ViewSummary through to_value is a sorted map
- * (api/query.rs:164-178, `type` flattened), plus `auto_name` (viewing.rs:17-38). */
+/* calls.rs:362-397 (views.h): the views shown (the defaults made from the storeys, stored ones
+ * over them), the active one, the open tabs in order, the current one (null: Home). A ViewSummary
+ * through to_value is a sorted map (api/query.rs:164-178, `type` flattened), plus `auto_name`
+ * (viewing.rs:17-38). paper: offered for a plan or section shown (ribbon.rs:1478 two_pictures);
+ * never on (the C core has no On paper picture). */
 static int q_open_views(cc_session *s, JsonW *w) {
-    int tab = loaded(s) && s->tab_open;
-    cc_guid g = view3d();
+    if (cc_sv_sync(s)) return w->b->oom = 1, CC_ERR;
+    Arena a;
+    arena_init(&a, 0);
+    cc_view *v = NULL;
+    size_t n = 0;
+    if (cc_sv_list(s, &a, &v, &n)) {
+        arena_free(&a);
+        return w->b->oom = 1, CC_ERR;
+    }
+    int tab = loaded(s) && s->tab_open && s->has_active, twod = 0;
+    for (size_t i = 0; tab && i < n; i++)
+        if (!cc_gid_cmp(&v[i].id, &s->active)) twod = v[i].kind != CC_VIEW_THREE_D;
     jw_obj_begin(w);
     jw_key(w, "active");
-    if (loaded(s)) jw_str_n(w, g.c, 22);
+    if (loaded(s) && s->has_active) jw_str_n(w, s->active.c, 22);
     else jw_null(w);
     jw_key(w, "current");
-    if (tab) tab_json(w);
+    if (tab) tab_json(w, s);
     else jw_null(w);
     jw_key(w, "paper");
     jw_obj_begin(w);
-    jw_key(w, "offered"), jw_bool(w, 0);
+    jw_key(w, "offered"), jw_bool(w, twod);
     jw_key(w, "on"), jw_bool(w, 0);
     jw_obj_end(w);
     jw_key(w, "tabs"), jw_arr_begin(w);
-    if (tab) tab_json(w);
+    for (size_t i = 0; loaded(s) && i < s->ntabs; i++) cc_sv_tab_json(w, &s->tabs[i]);
     jw_arr_end(w);
     jw_key(w, "views"), jw_arr_begin(w);
-    if (loaded(s)) {
-        jw_obj_begin(w);
-        jw_key(w, "annotations"), jw_u64(w, 0);
-        jw_key(w, "auto_name"), jw_obj_begin(w);
-        jw_key(w, "kind"), jw_str(w, "3d");
-        jw_key(w, "storey"), jw_null(w);
-        jw_obj_end(w);
-        jw_key(w, "crop"), jw_null(w);
-        jw_key(w, "id"), jw_str_n(w, g.c, 22);
-        jw_key(w, "name"), jw_str(w, "3D");
-        jw_key(w, "references"), jw_u64(w, 0);
-        jw_key(w, "scale"), jw_u64(w, 100);
-        jw_key(w, "true_north"), jw_bool(w, 0);
-        jw_key(w, "type"), jw_str(w, "three_d");
-        jw_obj_end(w);
-    }
+    for (size_t i = 0; i < n; i++) cc_sv_summary_json(w, s->open ? &s->model : NULL, &v[i]);
     jw_arr_end(w);
     jw_obj_end(w);
+    arena_free(&a);
+    return done(w);
+}
+
+/* A C addition (views.h, ticket C1): what the viewport draws for the active view.
+ *   {"id", "type": "three_d"|"plan"|"section", "look": "down"|"up"|null, "storey": its id or null,
+ *    "elevation": the storey's (world mm) or null, "cut": the cut plane (world mm) or null,
+ *    "clip": {"min":[x,y,z],"max":[x,y,z]} (scene coordinates, f32 as ClipBox) or null}
+ * clip: views.rs view_clip for a plan: the model's bounds (all elements, ClipBox::around), z cut
+ * to what the plan shows (ResolvedRange::visible: depth to cut looking down, cut to depth looking
+ * up). null for a 3D view (and for a section: not drawn by the C core yet). Nothing loaded: null. */
+static int q_view_clip(cc_session *s, JsonW *w) {
+    Arena a;
+    arena_init(&a, 0);
+    cc_view v;
+    int r = loaded(s) && s->tab_open ? cc_sv_active(s, &a, &v) : 0;
+    if (r < 0) {
+        arena_free(&a);
+        return w->b->oom = 1, CC_ERR;
+    }
+    if (!r) {
+        arena_free(&a);
+        jw_null(w);
+        return done(w);
+    }
+    const cc_model *m = s->open ? &s->model : NULL;
+    double z[4];
+    int plan = v.kind == CC_VIEW_PLAN && !cc_sv_resolve(m, &v, z);
+    const cc_scene *sc = scene_now(s);
+    const cc_storey *st = NULL;
+    if (v.kind == CC_VIEW_PLAN && v.storey.n == 22 && m) {
+        cc_gid sid;
+        memcpy(sid.c, v.storey.p, 22);
+        st = cc_model_storey(m, &sid);
+    }
+    jw_obj_begin(w);
+    jw_key(w, "clip");
+    cc_vis box;
+    cc_vis_init(&box);
+    if (plan && sc) cc_vis_fit(&box, sc, NULL);
+    if (plan && box.has_box) {
+        double o = sc->origin[2];
+        double lo = v.look == CC_LOOK_DOWN ? z[CC_RANGE_DEPTH] : z[CC_RANGE_CUT];
+        double hi = v.look == CC_LOOK_DOWN ? z[CC_RANGE_CUT] : z[CC_RANGE_DEPTH];
+        if (lo == lo && lo > -1e300 && lo < 1e300 && (float)(lo - o) > box.min[2]) box.min[2] = (float)(lo - o);
+        if (hi == hi && hi > -1e300 && hi < 1e300 && (float)(hi - o) < box.max[2]) box.max[2] = (float)(hi - o);
+        jw_obj_begin(w);
+        jw_key(w, "max"), jw_arr_begin(w);
+        for (int k = 0; k < 3; k++) jw_f64(w, (double)box.max[k]);
+        jw_arr_end(w);
+        jw_key(w, "min"), jw_arr_begin(w);
+        for (int k = 0; k < 3; k++) jw_f64(w, (double)box.min[k]);
+        jw_arr_end(w);
+        jw_obj_end(w);
+    } else {
+        jw_null(w);
+    }
+    cc_vis_free(&box);
+    jw_key(w, "cut");
+    if (plan) jw_f64(w, z[CC_RANGE_CUT]);
+    else jw_null(w);
+    jw_key(w, "elevation");
+    if (st) jw_f64(w, st->elevation);
+    else jw_null(w);
+    jw_key(w, "id"), jw_str_n(w, v.id.c, 22);
+    jw_key(w, "look");
+    if (v.kind == CC_VIEW_PLAN) jw_str(w, cc_look_name(v.look));
+    else jw_null(w);
+    jw_key(w, "storey");
+    if (v.kind == CC_VIEW_PLAN) jw_str_n(w, v.storey.p, v.storey.n);
+    else jw_null(w);
+    jw_key(w, "type"), jw_str(w, cc_view_kind_name(v.kind));
+    jw_obj_end(w);
+    arena_free(&a);
     return done(w);
 }
 
@@ -779,6 +845,7 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         return done(&w);
     }
     if (!strcmp(name, "open_views")) return q_open_views(s, &w);
+    if (!strcmp(name, "view_clip")) return q_view_clip(s, &w);
     if (!strcmp(name, "collab")) return q_collab(&w);
     if (!strcmp(name, "status")) return q_status(s, &w, out);
     if (!strcmp(name, "placing")) { /* calls.rs:408-414: null without an editable model */
@@ -1355,7 +1422,9 @@ static int call_tab(cc_session *s, const char *body, size_t n, cc_buf *out) {
     /* ribbon.rs:415-432 TabRef::from_json */
     const JrVal *ty = t->type == JR_OBJ ? jr_get(t, "type") : NULL;
     const char *tys = ty && ty->type == JR_STR ? ty->s : NULL;
-    int is_view = 0, is_3d = 0;
+    int is_view = 0;
+    cc_gid tid;
+    memset(&tid, 0, sizeof tid);
     if (tys && (!strcmp(tys, "view") || !strcmp(tys, "sheet"))) {
         const JrVal *id = jr_get(t, "id");
         cc_guid g;
@@ -1366,8 +1435,7 @@ static int call_tab(cc_session *s, const char *body, size_t n, cc_buf *out) {
             goto end;
         }
         is_view = !strcmp(tys, "view");
-        cc_guid d = view3d();
-        is_3d = is_view && !memcmp(g.c, d.c, 22);
+        memcpy(tid.c, g.c, 22);
     } else if (tys && !strcmp(tys, "schedule")) {
         const JrVal *nm = jr_get(t, "name");
         if (!nm || nm->type != JR_STR) {
@@ -1387,21 +1455,36 @@ static int call_tab(cc_session *s, const char *body, size_t n, cc_buf *out) {
         buf_puts(out, "unknown op "), debug_str(out, op->s);
         goto end;
     }
-    int has3d = loaded(s) && is_3d; /* the only view (spec §1) */
+    /* calls.rs:220-232 (views.h): any view of open_views opens; activate an open tab only. */
+    if (cc_sv_sync(s)) {
+        buf_puts(out, "out of memory");
+        goto end;
+    }
+    int known = 0;
+    if (is_view) {
+        cc_view *vs;
+        size_t nv;
+        if (cc_sv_list(s, &a, &vs, &nv)) {
+            buf_puts(out, "out of memory");
+            goto end;
+        }
+        for (size_t i = 0; i < nv && !known; i++) known = !cc_gid_cmp(&vs[i].id, &tid);
+    }
     if (!strcmp(op->s, "open")) {
         if (!is_view) {
             buf_puts(out, "op \"open\" takes a view");
             goto end;
         }
-        if (!has3d) {
+        if (!known) {
             buf_puts(out, "no such view");
             goto end;
         }
-    } else if (!close && !(has3d && s->tab_open)) {
+    } else if (!close && !(is_view && known && loaded(s) && cc_sv_tab_open(s, &tid))) {
         buf_puts(out, "no such open tab");
         goto end;
     }
-    if (has3d) s->tab_open = !close; /* ribbon.rs:1484 tab_verb; other tabs: none open */
+    if (close) cc_sv_close(s, is_view && loaded(s), &tid); /* ribbon.rs:1484 tab_verb */
+    else cc_sv_go(s, &tid);
     rc = CC_OK;
 end:
     arena_free(&a);
@@ -1844,7 +1927,8 @@ void cc_change_json(cc_session *s, cc_buf *out) { /* calls.rs:134-167 (json!, so
     for (size_t i = 0; loaded(s) && i < s->nalso; i++) jw_str_n(&w, s->also[i].c, 22);
     jw_arr_end(&w);
     jw_key(&w, "tab");
-    if (loaded(s) && s->tab_open) tab_json(&w);
+    if (cc_sv_sync(s)) w.b->oom = 1;
+    if (loaded(s) && s->tab_open && s->has_active) tab_json(&w, s);
     else jw_null(&w);
     jw_key(&w, "unsaved"), jw_bool(&w, cc_session_unsaved(s));
     jw_key(&w, "view"), jw_arr_begin(&w);
@@ -1857,9 +1941,9 @@ void cc_change_json(cc_session *s, cc_buf *out) { /* calls.rs:134-167 (json!, so
         jw_u64(&w, l ? v->hidden.n : 0);
         jw_u64(&w, l ? v->isolated.n : 0);
         jw_u64(&w, l && cc_vis_hidden_in_view(v));
-        jw_u64(&w, 0); /* on_paper: no plans in the C core */
+        jw_u64(&w, 0); /* on_paper: the C core has no On paper picture */
     }
-    jw_u64(&w, loaded(s) && s->tab_open ? 1 : 0); /* open_tabs.len() */
+    jw_u64(&w, loaded(s) ? s->ntabs : 0); /* open_tabs.len() */
     jw_arr_end(&w);
     jw_obj_end(&w);
     jw_finish(&w);

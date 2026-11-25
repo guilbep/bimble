@@ -66,7 +66,12 @@ typedef struct cc_session {
     double top_offset_mm;
     int polygon;
     cc_tool tool; /* the place tool's points and pointer (tool.h); cleared with the placing state */
-    int tab_open; /* the 3D view's tab is open and current */
+    int tab_open; /* a view tab is current (`active`); 0: Home (views.h) */
+    /* The views (ticket C1, views.h): the active view and the open view tabs, in order. */
+    int has_active;
+    cc_gid active;
+    cc_gid *tabs;
+    size_t ntabs, captabs;
     cc_vis vis;   /* hidden, isolated, the section box (visibility.h): session state, not model */
     /* The scene of the current rev (calls.c), built once per rev, shared by query status and
      * GET /mesh. scene_rev 0: none built. */

@@ -20,7 +20,9 @@
 //            ticket B3: the visibility actions, query visibility(_sets), the box tool (box_set, box_press,
 //            box_move, box_release, box_cancel) on both, byte for byte, rev unchanged; ticket B5:
 //            linked models (link_model by path natively, host_open flag 4 in the module; links,
-//            select/element of a linked element, manage_links, /mesh with the LNKS trailer) on both
+//            select/element of a linked element, manage_links, /mesh with the LNKS trailer) on both;
+//            ticket C1: views and tabs (open_views, tab open/activate/close, view_clip, the place
+//            tool with an orthographic ray in a plan) on both, byte for byte
 //   files    the file actions in a fresh module (ticket A5): new, place, save (v2), save as,
 //            host_open of the saved bytes (the same elements), host_open import of golden/ifc/
 //            frame.ifc (the import golden's count) and of frame.json; export IFC4 with host_clock =
@@ -478,6 +480,8 @@ suite("host");
     check("a second host_open_text -> 400", call(X.host_open_text, ["frame.json", frameText]).status === 400);
 
     const STOREY = "1uAZA0Yfn05f$xRd1k4uPR";
+    // Rust's view ids (golden/verbs_all.txt), and a plan id not open (the Fondations' up: any other).
+    const V3D = "1v7Vtm2FfafmYPKIQEXnlY", PLAN_N1 = "3w8zGYnP$Ay1lyvMZjDnXq", PLAN_N2 = "0Kvmz3DcY9zKW4N4hq88bE";
     const firstId = Object.keys(frame.elements).sort()[0];
     const steps = [
       ["query", "state", "{}"], ["query", "actions", "{}"], ["query", "storeys", "{}"], ["query", "status", "null"],
@@ -513,6 +517,17 @@ suite("host");
       ["tool", "box_move", JSON.stringify({ ray: [-5000, 3000, 9000, 0.8, 0, -0.6] })], ["query", "visibility", "{}"],
       ["tool", "box_release", ""], ["query", "visibility", "{}"], ["tool", "box_cancel", ""], ["tool", "box_set", JSON.stringify({ min: [0, 0, 0], max: [1, 1, 1] })],
       ["action", "section_box", ""], ["query", "visibility", "{}"],
+      // ticket C1: views and tabs (session/views.h): a plan's tab, its clip, the placing storey, the
+      // place tool with an orthographic ray (straight down), activate, close, Home, open again
+      ["query", "open_views", "{}"], ["tab", "-", JSON.stringify({ op: "open", tab: { type: "view", id: PLAN_N1 } })],
+      ["query", "open_views", "{}"], ["query", "view_clip", "{}"], ["query", "placing", "{}"],
+      ["set_placing", "-", JSON.stringify({ kind: "column" })],
+      ["tool", "click", JSON.stringify({ ray: [2470, 1530, 90000, 0, 0, -1], ray_tol: [2620, 1530, 90000, 0, 0, -1], free: true })],
+      ["tab", "-", JSON.stringify({ op: "activate", tab: { type: "view", id: V3D } })], ["query", "view_clip", "{}"],
+      ["tab", "-", JSON.stringify({ op: "activate", tab: { type: "view", id: PLAN_N2 } })],
+      ["tab", "-", JSON.stringify({ op: "close", tab: { type: "view", id: PLAN_N1 } })],
+      ["tab", "-", JSON.stringify({ op: "close", tab: { type: "view", id: V3D } })], ["query", "open_views", "{}"], ["query", "view_clip", "{}"],
+      ["tab", "-", JSON.stringify({ op: "open", tab: { type: "view", id: V3D } })], ["query", "open_views", "{}"],
     ];
     let rev = 1, placedRev = 0, toolPlaced = 0;
     for (const s of steps) {
@@ -554,7 +569,7 @@ suite("host");
       rev = r;
     }
     check("the place happened", placedRev === 2, String(placedRev));
-    check("the tool placed a column and a beam", toolPlaced === 2, String(toolPlaced));
+    check("the tool placed a column and a beam, and a column in a plan (C1)", toolPlaced === 3, String(toolPlaced));
     // ticket B5: linked models (session/links.h). The native host links a path, the module the
     // page's bytes (host_open flag 4) under the same name; then the same calls on both: every
     // answer, the change JSON and /mesh (with the LNKS trailer) byte for byte.

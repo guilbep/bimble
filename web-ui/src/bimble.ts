@@ -805,6 +805,21 @@ export function tabCall(op: "activate" | "close" | "open", tab: OpenTab): string
 /** Open any view as its current tab (a navigator click). Returns the Rust error, or null. */
 export const openView = (id: string) => tabCall("open", { type: "view", id });
 
+/** What the viewport draws for the view shown (the C core's `query view_clip`, ticket C1,
+ *  ccore/session/views.h): a plan's look, cut (world mm) and clip box (scene coordinates: the
+ *  model's bounds cut to the view range). null without a view shown or where the query is not
+ *  known (the Rust bridge): the viewport stays 3D. */
+export interface ViewClip {
+  id: string;
+  type: "three_d" | "plan" | "section";
+  look: "down" | "up" | null;
+  storey: string | null;
+  elevation: number | null;
+  cut: number | null;
+  clip: { min: number[]; max: number[] } | null;
+}
+export const viewClip = (): ViewClip | null => tryQuery<ViewClip | null>("view_clip", null);
+
 /** Run one API verb as one undoable step. Returns the Rust error, or null. */
 export function runVerb(name: string, args: unknown = {}): string | null {
   const ro = linkedReadOnly(args);

@@ -13,6 +13,7 @@
 #include "json_w.h"
 #include "session.h"
 #include "links.h"
+#include "views.h"
 
 cc_session *cc_session_new(const cc_platform *pf) {
     cc_session *s = calloc(1, sizeof *s);
@@ -34,6 +35,7 @@ void cc_session_free(cc_session *s) {
     drop_view(s);
     cc_links_clear(s);
     free(s->links);
+    free(s->tabs);
     free(s->undo_ids), free(s->redo_ids), free(s->also), free(s->material);
     if (s->scene_rev) cc_scene_free(&s->scene);
     buf_free(&s->mesh);
@@ -131,6 +133,7 @@ static void drop_model(cc_session *s) {
     cc_vis_reset(&s->vis); /* lib.rs:1657-1676: a box or a hide means nothing for another model */
     free(s->material), s->material = NULL;
     s->open = 0, s->untitled = 0;
+    s->ntabs = 0, s->has_active = 0, s->tab_open = 0;
 }
 
 /* Makes `m` (loaded, validated) the session's model at `path`: a fresh history and editor (as
@@ -156,7 +159,7 @@ static void install(cc_session *s, cc_model *m, const char *path, uint64_t saved
     double sizes[5] = {300.0, 250.0, 500.0, 200.0, 250.0}; /* verbs.rs:86-96 */
     memcpy(s->sizes, sizes, sizeof sizes);
     s->offset[0] = 1000.0, s->offset[1] = 0.0, s->offset[2] = 0.0;
-    s->tab_open = 1; /* the 3D view is shown on load */
+    cc_sv_loaded(s); /* the 3D view is shown on load, its tab open */
     s->load_ms = s->pf->now_ms(s->pf->ctx) - t0;
 }
 
@@ -358,7 +361,7 @@ int cc_session_open_file(cc_session *s, const char *path, cc_error *err) {
     s->ifc = is, s->vf = vf, s->vscene = vs;
     s->rev++;
     s->next_step = 1, s->saved_step = 0;
-    s->tab_open = 1; /* the 3D view is shown on load */
+    cc_sv_loaded(s); /* the 3D view is shown on load, its tab open */
     s->load_ms = s->pf->now_ms(s->pf->ctx) - t0;
     persist_follow(s, NULL, 1); /* nothing to keep: no edits */
     return 0;
