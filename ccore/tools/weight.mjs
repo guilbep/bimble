@@ -55,7 +55,7 @@ const FEATURES = [
   ["DXF reader (L2)", "dxf_in"],
   ["links and references", "ref_read links links_ref links_dxf"],
   ["history store (H1)", "repo diff versions"],
-  ["session (calls, tools, platform, view-only)", "session calls tool platform view_only"],
+  ["session (calls, tools, platform, view-only)", "session calls tool platform view_only capabilities"],
   ["measure", "measure"],
   ["wasm carrier", "wasm_api wasm_stub"],
   ["host server (HTTP, static files, main, platform, fonts)", "server static main platform_native platform_win fonts"],
