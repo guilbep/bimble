@@ -14,6 +14,12 @@
 #   wasm   clang freestanding wasm32 of src/ (no libc) and the session layer (session/*.c: the
 #          native host's call code, without the host's HTTP server, platform and main), ccore.wasm
 #          exporting the API of src/wasm_api.h (test: node test/wasm_run.mjs, test/lab_wasm.mjs)
+#   wasm-view  the viewer-only wasm (ADR 0069 rule 3, ticket W1): out/wasm/ccore-view.wasm, the
+#          wasm build without VIEW_DENY (verbs, the verb table, the IFC import and writer), with
+#          -DCC_VIEW_ONLY (session/view_only.c, wasm_api.c VIEW_ONLY, wasm_stub.c's stubs) and
+#          VIEW_OPT; fails over VIEW_MAX bytes (test: node test/wasm_view_run.mjs)
+#   wasm-size [view]  bytes per object file in ccore.wasm (or ccore-view.wasm), from a link map
+#          (out/wsize/): code and data, largest first (results/wasm-size.md)
 # Boolean kernel (ADR 0068, 0069): manifold's C binding from $MANIFOLD_DIR or out/deps/manifold
 # (deps.sh). Found: -DCC_HAVE_MANIFOLD, clang links the static libraries (+ libstdc++), tcc the
 # shared one (it cannot link C++ archives). Not found, or CC_NO_KERNEL=1, or wasm: no kernel.
@@ -26,6 +32,10 @@ LIB=(); for f in src/*.c; do [[ $f == src/wasm_stub.c ]] || LIB+=("$f"); done
 TESTS=(); for f in test/*_test.c; do t=${f#test/}; TESTS+=("${t%_test.c}"); done
 INC=(-Isrc -Ivendor/ryu -Isession)
 SESSION=(session/*.c)
+# The viewer-only wasm: the files it leaves out, its optimisation and its budget (bytes).
+VIEW_DENY=(src/verbs.c src/verb_table.c src/ifc_in.c src/ifc_out.c)
+VIEW_OPT=-Os
+VIEW_MAX=400000
 HOST=(host/*.c)
 source ./deps.sh
 kernel_setup
@@ -148,8 +158,49 @@ host_mixed() {
     disown
 }
 
+# The wasm builds. VIEW_LIB: the library without VIEW_DENY.
+VIEW_LIB=()
+for f in "${LIB[@]}"; do [[ " ${VIEW_DENY[*]} " == *" $f "* ]] || VIEW_LIB+=("$f"); done
+WASM_FLAGS=(--target=wasm32 -std=c11 -ffreestanding -nostdlib -Wall -Werror -Wno-unused-function
+    -DRYU_ONLY_64_BIT_OPS -isystem src/freestanding "${INC[@]}")
+wasm_build() { # <out name> <opt> [-D...] <library files...>: one clang call, the session layer added
+    local out=$1 opt=$2
+    shift 2
+    mkdir -p out/wasm
+    step "clang wasm32 link" clang "${WASM_FLAGS[@]}" "$opt" -Wl,--no-entry "$@" src/wasm_stub.c \
+        "${SESSION[@]}" -o "out/wasm/$out"
+}
+wasm_sizes() {
+    printf '  %-28s %5d bytes\n' "$1" "$(wc -c < "out/wasm/$1")"
+    printf '  %-28s %5d bytes\n' "$1 gzip -9" "$(gzip -9 -c "out/wasm/$1" | wc -c)"
+}
+# wasm_size_table [view]: the same build in two steps (one object per file in out/wsize/, then a link
+# with a map), and the map summed per object: code bytes, data bytes (rodata and data, not bss);
+# "<internal>" is the merged string literals. The link is the shipped one (same flags and files).
+wasm_size_table() {
+    local opt=-O2 defs=() files=("${LIB[@]}") d=out/wsize objs=() f o
+    [[ ${1:-} == view ]] && opt=$VIEW_OPT defs=(-DCC_VIEW_ONLY) files=("${VIEW_LIB[@]}")
+    rm -rf "$d" && mkdir -p "$d"
+    for f in "${files[@]}" src/wasm_stub.c "${SESSION[@]}"; do
+        o="$d/$(basename "${f%.c}").o"
+        clang "${WASM_FLAGS[@]}" "$opt" "${defs[@]}" -c "$f" -o "$o" &
+        objs+=("$o")
+    done
+    wait
+    clang --target=wasm32 -nostdlib "$opt" -Wl,--no-entry -Wl,-Map=$d/map.txt "${objs[@]}" -o $d/size.wasm
+    printf '%s: %d bytes, gzip -9 %d bytes\n' "${1:-full}" "$(wc -c < $d/size.wasm)" "$(gzip -9 -c $d/size.wasm | wc -c)"
+    printf '| %-20s | %7s | %7s | %7s |\n|---|---:|---:|---:|\n' file total code data
+    awk 'function hex(s,  i, n) { for (i = 1; i <= length(s); i++) n = n * 16 + index("0123456789abcdef", substr(s, i, 1)) - 1; return n }
+        / CODE$/ {sec = "c"; next} / DATA$/ {sec = "d"; next} / \.bss$/ || / CUSTOM/ {sec = ""; next}
+        sec != "" && match($0, /[^ ]+:\(/) {
+            o = substr($0, RSTART, RLENGTH - 2); sub(/.*\//, "", o); split($0, a, " ")
+            n = hex(a[3]); if (sec == "c") c[o] += n; else dd[o] += n; seen[o] = 1 }
+        END { for (o in seen) printf "| %-20s | %7d | %7d | %7d |\n", o, c[o] + dd[o], c[o], dd[o] }' $d/map.txt |
+        sort -t'|' -k3 -rn
+}
+
 t_start=$(ms)
-if [[ ${1:-} == wasm ]]; then echo "  boolean kernel: none in wasm (openings and boolean results drawn uncut)"
+if [[ ${1:-} == wasm* ]]; then echo "  boolean kernel: none in wasm (openings and boolean results drawn uncut)"
 elif ((${#KFLAGS[@]})); then echo "  boolean kernel: manifold (out/deps/manifold)"
 else echo "  boolean kernel: none (openings and boolean results drawn uncut)"; fi
 case "${1:-}" in
@@ -164,12 +215,19 @@ case "${1:-}" in
     lib_and_tests out/native clang -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-function ;;
   wasm)
     echo "build.sh wasm -> out/wasm/ccore.wasm"
-    mkdir -p out/wasm
-    step "clang wasm32 link" clang --target=wasm32 -std=c11 -ffreestanding -nostdlib -O2 \
-        -Wall -Werror -Wno-unused-function -DRYU_ONLY_64_BIT_OPS -isystem src/freestanding "${INC[@]}" \
-        -Wl,--no-entry "${LIB[@]}" src/wasm_stub.c "${SESSION[@]}" -o out/wasm/ccore.wasm
-    printf '  %-28s %5d bytes\n' "ccore.wasm" "$(wc -c < out/wasm/ccore.wasm)"
-    printf '  %-28s %5d bytes\n' "ccore.wasm gzip -9" "$(gzip -9 -c out/wasm/ccore.wasm | wc -c)" ;;
-  *) echo "usage: $0 tcc|host|native|wasm" >&2; exit 2 ;;
+    wasm_build ccore.wasm -O2 "${LIB[@]}"
+    wasm_sizes ccore.wasm ;;
+  wasm-view)
+    echo "build.sh wasm-view -> out/wasm/ccore-view.wasm"
+    wasm_build ccore-view.wasm "$VIEW_OPT" -DCC_VIEW_ONLY "${VIEW_LIB[@]}"
+    wasm_sizes ccore-view.wasm
+    bytes=$(wc -c < out/wasm/ccore-view.wasm)
+    if ((bytes > VIEW_MAX)); then
+        echo "FAIL ccore-view.wasm is $bytes bytes, over the budget of $VIEW_MAX (ADR 0069)" >&2
+        exit 1
+    fi ;;
+  wasm-size)
+    wasm_size_table "${2:-}" ;;
+  *) echo "usage: $0 tcc|host|native|wasm|wasm-view|wasm-size [view]" >&2; exit 2 ;;
 esac
 printf '  %-28s %5d ms\n' "total" $(($(ms) - t_start))

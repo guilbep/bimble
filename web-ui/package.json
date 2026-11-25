@@ -8,6 +8,7 @@
     "dev": "vite",
     "ccore:dev": "../ccore/dev.sh",
     "ccore:wasm": "../ccore/build.sh wasm && node scripts/copy-ccore.mjs",
+    "ccore:wasm-view": "../ccore/build.sh wasm-view && node scripts/copy-ccore.mjs --view",
     "twin:dev": "../scripts/twin-dev.sh",
     "i18n-keys": "node scripts/i18n-keys.mjs",
     "typecheck": "node scripts/i18n-keys.mjs --check && vue-tsc --noEmit",

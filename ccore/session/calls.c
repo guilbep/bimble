@@ -28,6 +28,7 @@
 #include "verbs.h"
 #include "viewfile.h"
 #include "views.h"
+#include "view_only.h"
 #include "annot.h"
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
@@ -2199,6 +2200,7 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
 }
 
 int cc_call(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out) {
+    if (cc_view_only_refuses(op, name, out)) return CC_ERR; /* view build only (view_only.h) */
     if (!strcmp(op, "query")) return call_query(s, name, body, n, out);
     if (!strcmp(op, "action")) return call_action(s, name, body, n, out);
     if (!strcmp(op, "select")) return call_select(s, body, n, out);

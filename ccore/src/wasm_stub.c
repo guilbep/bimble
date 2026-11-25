@@ -121,3 +121,46 @@ void *calloc(size_t k, size_t n) {
 
 /* Bytes of the heap carved so far (blocks in use or on a free list); wasm_api.c exports it. */
 size_t cc_wasm_heap_used(void) { return heap_top - heap_base; }
+
+#ifdef CC_VIEW_ONLY
+/* ---- the viewer-only build (build.sh wasm-view, ticket W1) ----
+ * build.sh VIEW_DENY leaves out verbs.c, verb_table.c, ifc_in.c and ifc_out.c. Their symbols that
+ * the kept files still reference are defined here: an empty verb table (the `verbs` query answers
+ * [], `describe` "no verb with this name") and refusals. The calls that reach them (verb, the place
+ * tool, import, export) are refused before, by session/view_only.c and wasm_api.c's VIEW_ONLY. */
+#include "ifc_in.h"
+#include "ifc_out.h"
+#include "verb_table.h"
+#include "verbs.h"
+#include "view_only.h"
+
+static const cc_verb_def no_verb = {"", "", "{}", NULL, 1};
+const cc_verb_def cc_verb_table[] = {no_verb};
+const size_t cc_verb_count = 0;
+const cc_verb_def cc_verb_c_additions[] = {no_verb};
+const size_t cc_verb_c_addition_count = 0;
+void cc_verbs_list_json(Buf *out) { buf_puts(out, "[]"); }
+
+int cc_verb_run_ex(const cc_model *m, const char *name, const char *args, size_t n, int dry_run, int64_t if_rev,
+                   uint64_t current_rev, cc_cmds *out, Buf *err) {
+    (void)m, (void)name, (void)args, (void)n, (void)dry_run, (void)if_rev, (void)current_rev, (void)out;
+    buf_puts(err, CC_VIEW_ONLY_TEXT);
+    return -1;
+}
+
+int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, cc_error *err) {
+    (void)text, (void)n;
+    cc_model_init(m);
+    memset(rep, 0, sizeof *rep);
+    memcpy(err->msg, CC_VIEW_ONLY_TEXT, sizeof CC_VIEW_ONLY_TEXT);
+    err->offset = CC_NO_OFFSET;
+    return -1;
+}
+void cc_ifc_report_free(cc_ifc_report *rep) { buf_free(&rep->lines); }
+
+int cc_ifc_export(const cc_model *m, const char *file_name, const char *timestamp, cc_ifc_schema schema, Buf *out) {
+    (void)m, (void)file_name, (void)timestamp, (void)schema, (void)out;
+    return -1;
+}
+void cc_iso_utc(int64_t secs, char *out) { (void)secs, out[0] = 0; }
+#endif

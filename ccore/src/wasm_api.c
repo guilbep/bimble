@@ -24,6 +24,7 @@
 #include "mesh.h"
 #include "platform.h"
 #include "session.h"
+#include "view_only.h"
 
 #define EXPORT(name) __attribute__((export_name(name)))
 
@@ -63,6 +64,14 @@ static int text(cc_wasm_res *r, int status, const char *msg) {
     return answer(r, &b, status);
 }
 
+/* The viewer-only build (build.sh wasm-view, ticket W1) leaves out verbs, the IFC import and
+ * writer: the handle calls that edit, save or export answer view_only.h's text, status 400. */
+#ifdef CC_VIEW_ONLY
+#define VIEW_ONLY(r) return (r)->value = 0, text(r, 400, CC_VIEW_ONLY_TEXT)
+#else
+#define VIEW_ONLY(r) (void)0
+#endif
+
 static Doc *doc(int h, cc_wasm_res *r) {
     if (h < 1 || h > CC_WASM_MAX_MODELS || !docs[h - 1].used) {
         if (r) r->value = 0, text(r, 404, "no model with this handle");
@@ -98,6 +107,7 @@ EXPORT("open_text") int wa_open_text(const char *p, size_t n, cc_wasm_res *r) {
 }
 
 EXPORT("open_ifc") int wa_open_ifc(const char *p, size_t n, cc_wasm_res *r) {
+    VIEW_ONLY(r);
     r->value = 0;
     int h = new_doc();
     if (!h) return text(r, 400, "too many open models");
@@ -143,6 +153,7 @@ EXPORT("query") int wa_query(int h, const char *name, size_t nn, const char *arg
 }
 
 EXPORT("apply") int wa_apply(int h, const char *p, size_t n, cc_wasm_res *r) {
+    VIEW_ONLY(r);
     Doc *d = doc(h, r);
     if (!d) return 404;
     r->value = 0;
@@ -159,6 +170,7 @@ EXPORT("apply") int wa_apply(int h, const char *p, size_t n, cc_wasm_res *r) {
 }
 
 EXPORT("verb") int wa_verb(int h, const char *name, size_t nn, const char *args, size_t an, cc_wasm_res *r) {
+    VIEW_ONLY(r);
     Doc *d = doc(h, r);
     if (!d) return 404;
     r->value = 0;
@@ -187,6 +199,7 @@ EXPORT("verb") int wa_verb(int h, const char *name, size_t nn, const char *args,
 }
 
 static int undo_redo(int h, cc_wasm_res *r, int redo) {
+    VIEW_ONLY(r);
     Doc *d = doc(h, r);
     if (!d) return 404;
     int did = redo ? cc_history_redo(&d->h, &d->m) : cc_history_undo(&d->h, &d->m);
@@ -208,6 +221,7 @@ EXPORT("history") int wa_history(int h, cc_wasm_res *r) {
 }
 
 EXPORT("save") int wa_save(int h, cc_wasm_res *r) {
+    VIEW_ONLY(r);
     Doc *d = doc(h, r);
     if (!d) return 404;
     r->value = 0;
@@ -223,6 +237,7 @@ EXPORT("save") int wa_save(int h, cc_wasm_res *r) {
 /* bimble_ifc::export_as. The name and the timestamp are copied to NUL-terminated strings. */
 EXPORT("export_ifc") int wa_export_ifc(int h, int schema, const char *name, size_t nn, const char *stamp, size_t sn,
                                        cc_wasm_res *r) {
+    VIEW_ONLY(r);
     Doc *d = doc(h, r);
     if (!d) return 404;
     r->value = 0;

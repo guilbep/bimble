@@ -39,6 +39,17 @@ Build (from the repo root; output goes to `ccore/out/`, which git ignores):
     ccore/build.sh tcc      # debug library and test binaries, needs tcc
     ccore/build.sh native   # clang -O2
     ccore/build.sh wasm     # clang freestanding wasm32, no libc
+    ccore/build.sh wasm-view  # the viewer-only wasm32 (ADR 0069), fails over 400,000 bytes
+
+The viewer-only wasm (`out/wasm/ccore-view.wasm`, ticket W1) is the wasm build without the files in
+`VIEW_DENY` (build.sh: verbs, the verb table, the IFC import and writer), with `-DCC_VIEW_ONLY` and
+`-Os`. It reads `.bimble`, `.json`, IFC (read-only) and `.bimbleview`, draws, selects, hides, clips
+and answers the read queries as the editor build, byte for byte (`node test/wasm_view_run.mjs`),
+but `verbs` (`[]`) and `describe` (no verb).
+The calls that edit, save or export answer "this build is view-only" (`session/view_only.c`, one
+line at the top of `cc_call`; `VIEW_ONLY` in `src/wasm_api.c`). Sizes per file and what is left
+out: `results/wasm-size.md` (`build.sh wasm-size [view]` prints the table). In the lab: `npm run
+ccore:wasm-view` in `web-ui/` copies it to `public/ccore/ccore-view.wasm`.
 
 Run the tests (tcc by default, or any compiler in `CC`). The script exits non-zero on a failure:
 

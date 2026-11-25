@@ -3,9 +3,9 @@
 #   ccore/ci/run.sh [fast|full]          (default fast)
 #   fast  the gate of every ticket: build.sh tcc, test/run.sh (tcc), test/run.sh (clang with
 #         ASan and UBSan), build.sh wasm, test/wasm_run.mjs, test/host.sh (host_test, lab_boot).
-#   full  fast, then the Chromium lab tests and every other test/*.mjs suite, one after the other
-#         (a new test/<name>.mjs is picked up without an edit here; dev_test last: it rebuilds
-#         out/tcc/bimble-ccore through dev.sh).
+#   full  fast, then the Chromium lab tests, build.sh wasm-view and every other test/*.mjs suite,
+#         one after the other (a new test/<name>.mjs is picked up without an edit here; dev_test
+#         last: it rebuilds out/tcc/bimble-ccore through dev.sh).
 # Prints one line per suite (ok or FAIL, seconds, the "N passed, M failed" sums of its log) and a
 # last line "ci: N suites, M failed". A suite fails on a non-zero exit, a line that starts with
 # FAIL, or a "failed" count above 0. Every suite runs, even after a failure. Exits 1 on a failure.
@@ -66,6 +66,8 @@ if [[ $mode == full ]]; then
     skip=" ports host_test lab_boot wasm_run dev_test "
     labs=(lab_gl lab_tool lab_place lab_section lab_plan lab_wasm lab_links)
     for t in "${labs[@]}"; do suite "$t" node "test/$t.mjs"; done
+    # The viewer-only wasm and its 400 KB budget (ADR 0069), for test/wasm_view_run.mjs below.
+    suite build-wasm-view ./build.sh wasm-view
     for f in test/*.mjs; do
         t=$(basename "${f%.mjs}")
         [[ $skip == *" $t "* || " ${labs[*]} " == *" $t "* ]] && continue
