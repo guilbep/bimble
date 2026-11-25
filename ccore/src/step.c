@@ -547,7 +547,7 @@ static int fail(cc_error *err, size_t line, size_t off, const char *msg) {
 int cc_step_parse(cc_step_file *f, const char *text, size_t n, cc_error *err) {
     memset(f, 0, sizeof *f);
     arena_init(&f->arena, 0);
-    if (n > CC_STEP_MAX_BYTES) return fail(err, 0, 0, "file too large for the C core");
+    if ((uint64_t)n > CC_STEP_MAX_BYTES) return fail(err, 0, 0, "file too large for the C core");
     P p;
     memset(&p, 0, sizeof p);
     p.s = text, p.n = n, p.line = 1, p.a = &f->arena;

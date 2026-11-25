@@ -11,7 +11,9 @@
 #include "model.h"
 
 #define CC_STEP_MAX_DEPTH 64                       /* step.rs MAX_DEPTH */
-#define CC_STEP_MAX_BYTES ((size_t)1 << 30)         /* larger texts are refused */
+/* Larger texts are refused: read.rs MAX_FILE_BYTES (64 GiB; step.rs itself has no cap). Was
+ * 1 GiB, which refused the IFC4 export of a large imported model that Rust reads. */
+#define CC_STEP_MAX_BYTES ((uint64_t)64 << 30)
 #define CC_STEP_CHUNK_BYTES ((size_t)1 << 20)       /* step.rs CHUNK_BYTES: same statement split */
 
 typedef enum {

@@ -5,16 +5,19 @@
  *   format of the compile-speed spike's step_dump and compared with its expected dumps (by
  *   length and a BLAKE3 fingerprint, the dumps themselves live on that branch); imported, the
  *   report printed (what is outside the subset is reported, not failed).
- * - ifc/import goldens: the 16 inputs of golden/ifc/import imported (seeded ids), saved, masked
+ * - ifc/import goldens: the 17 inputs of golden/ifc/import imported (seeded ids), saved, masked
  *   and compared byte for byte with Rust's model and report (chain18: its size summary); each
  *   imported twice to check the ids are stable; time per fixture printed. With the boolean kernel
- *   (manifold, CC_HAVE_MANIFOLD) all 16 must match, booleans included (ticket C6: was a known
+ *   (manifold, CC_HAVE_MANIFOLD) all 17 must match, booleans included (ticket C6: was a known
  *   difference). Without it (cc_boolean_set(NULL), or a build without manifold) booleans must still
  *   differ (drawn uncut, counted as unsupported): a build with the kernel checks both paths.
+ * - a STEP text over 1 GiB parses (as in Rust; it was refused).
  * - robustness: truncations and byte mutations of frame.ifc (run it under ASan/UBSan too).
  * - timing: parse + import of frame.ifc. */
 #define _POSIX_C_SOURCE 199309L
+#define _DEFAULT_SOURCE /* MAP_ANONYMOUS */
 #include <stdint.h>
+#include <sys/mman.h>
 #include <string.h>
 #include <time.h>
 #include "../src/boolean.h"
@@ -176,6 +179,27 @@ static const struct {
 };
 
 /* ---- parser unit checks */
+/* A text over 1 GiB parses (Rust's parser has no cap; read.rs refuses only over 64 GiB): the
+ * IFC4 export of a large imported model is that big. Was refused ("file too large for the C
+ * core"). The text is a small file then zero bytes after its ENDSEC, in an anonymous mapping:
+ * untouched pages cost no memory. */
+static void over_1gib(void) {
+#if SIZE_MAX > 0xffffffffu
+    const char *t = "ISO-10303-21;\nHEADER;FILE_SCHEMA(('IFC4'));ENDSEC;\nDATA;\n#1=IFCX(1);\nENDSEC;\n";
+    size_t n = ((size_t)1 << 30) + 4096;
+    char *m = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (m == MAP_FAILED) { check_true("over 1 GiB: mmap", 0); return; }
+    memcpy(m, t, strlen(t));
+    cc_step_file f;
+    cc_error err;
+    int rc = cc_step_parse(&f, m, n, &err);
+    if (rc) printf("over 1 GiB: %s\n", err.msg);
+    check_true("a text over 1 GiB parses", rc == 0 && f.n == 1);
+    cc_step_free(&f);
+    munmap(m, n);
+#endif
+}
+
 static void parser_units(void) {
     const char *t = "ISO-10303-21;\nHEADER;FILE_SCHEMA(('IFC4'));ENDSEC;\nDATA;\n"
                     "#1=IFCX('it''s',\"0FF\",.t.,$,*,-12,+3,1.E-5,2.5e+2,-0.0,(1,(2,(#3))),IFCLABEL('a'),"
@@ -219,6 +243,7 @@ static void parser_units(void) {
     cc_step_free(&f);
     buf_free(&o);
     buf_free(&d);
+    over_1gib();
 }
 
 static void sqrt_units(void) {
@@ -411,6 +436,7 @@ int main(int argc, char **argv) {
             {"mapped_item", "golden/ifc/fixtures", "mapped_item.ifc"},
             {"indexed_arc", "golden/ifc/fixtures", "indexed_arc.ifc"},
             {"opening", "golden/ifc/fixtures", "opening.ifc"},
+            {"same_level", "golden/ifc/fixtures", "same_level.ifc"},
             {"frame2", "golden/ifc", "frame2.ifc"},
             {"frame2.ifc2x3", "golden/ifc", "frame2.ifc2x3.ifc"},
         };
