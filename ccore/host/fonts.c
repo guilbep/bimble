@@ -1,20 +1,23 @@
-/* Where the native host finds the Roboto files of the PDF export (ticket D7, session/sheet_svg.h
- * cc_paper_pdf_query). They are 350 KB each, so they stay out of the program and of the wasm:
- *   - `bimble-ccore open`: the lab's files (static.h), "/fonts/Roboto-Regular.ttf" and
- *     "/fonts/Roboto-Bold.ttf" (build.sh release puts them in the archive's web/fonts/), copied;
- *   - otherwise the first folder that holds Roboto-Regular.ttf of <exe dir>/web/fonts (an unpacked
- *     archive) and <exe dir>/../../../crates/bimble-drawing/fonts (the repository: the program is
- *     ccore/out/<mode>/bimble-ccore), read on the first export.
- * None found: the export sets its text in Helvetica (sheet_svg.h). */
+/* Where the native host finds the Roboto files of the PDF export (tickets D7, SIZE1,
+ * session/sheet_svg.h cc_paper_pdf_query). The export is Helvetica by default (nothing embedded);
+ * Roboto is an option, and its files (350 KB each) are not shipped: neither in the program, the
+ * wasm nor the release archive. The host only names a folder; the session reads it when Roboto is
+ * asked for (`pdf_fonts`, `sheet_pdf {"font":"roboto"}`), and finding nothing never fails:
+ *   - $BIMBLE_FONTS when set (and nothing else: tests point it at a folder of their own);
+ *   - else the repository's crates/bimble-drawing/fonts when it holds Roboto-Regular.ttf (a dev
+ *     build: the program is ccore/out/<mode>/bimble-ccore, three folders down);
+ *   - else the user's folder <config dir>/bimble/fonts: $XDG_CONFIG_HOME or ~/.config on Linux,
+ *     ~/Library/Application Support on macOS, %APPDATA% on Windows (named even when it does not
+ *     exist yet: files put there are found on the next export). */
 #define _POSIX_C_SOURCE 200809L
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
 #define _DARWIN_C_SOURCE
 #endif
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #if defined(__linux__) || defined(__APPLE__)
-#include <stdlib.h>
 #include <unistd.h>
 #endif
 #ifdef __APPLE__
@@ -57,23 +60,40 @@ static int has_regular(const char *dir) {
     return fp != NULL;
 }
 
+/* <config dir>/bimble/fonts into `out`, or 0 (no home). */
+static int user_dir(char *out, size_t n) {
+    const char *base = NULL, *tail = "/bimble/fonts";
+    char tmp[PATH_MAX];
+#if defined(_WIN32)
+    base = getenv("APPDATA"), tail = "\\bimble\\fonts";
+#elif defined(__APPLE__)
+    const char *home = getenv("HOME");
+    if (home && *home && snprintf(tmp, sizeof tmp, "%s/Library/Application Support", home) < (int)sizeof tmp) base = tmp;
+#else
+    base = getenv("XDG_CONFIG_HOME");
+    if (!base || !*base) {
+        const char *home = getenv("HOME");
+        base = NULL;
+        if (home && *home && snprintf(tmp, sizeof tmp, "%s/.config", home) < (int)sizeof tmp) base = tmp;
+    }
+#endif
+    if (!base || !*base) return 0;
+    int w = snprintf(out, n, "%s%s", base, tail);
+    return w > 0 && (size_t)w < n;
+}
+
 void cc_host_fonts(cc_session *s, const cc_static *web) {
-    if (web) {
-        const cc_static_file *r = cc_static_find(web, "/fonts/Roboto-Regular.ttf", 25);
-        const cc_static_file *b = cc_static_find(web, "/fonts/Roboto-Bold.ttf", 22);
-        if (r && b) {
-            cc_paper_set_fonts(s, (const unsigned char *)r->data, r->n, (const unsigned char *)b->data, b->n);
-            return;
-        }
+    (void)web; /* SIZE1: the lab's files hold no font any more */
+    const char *env = getenv("BIMBLE_FONTS");
+    if (env && *env) {
+        cc_paper_set_font_dir(s, env);
+        return;
     }
     char dir[PATH_MAX], cand[PATH_MAX + 64];
-    if (!exe_dir(dir, sizeof dir)) return;
-    static const char *const UNDER[] = {"/web/fonts", "/../../../crates/bimble-drawing/fonts"};
-    for (size_t i = 0; i < sizeof UNDER / sizeof *UNDER; i++) {
-        if (snprintf(cand, sizeof cand, "%s%s", dir, UNDER[i]) >= (int)sizeof cand) continue;
-        if (has_regular(cand)) {
-            cc_paper_set_font_dir(s, cand);
-            return;
-        }
+    if (exe_dir(dir, sizeof dir) && snprintf(cand, sizeof cand, "%s/../../../crates/bimble-drawing/fonts", dir) < (int)sizeof cand &&
+        has_regular(cand)) {
+        cc_paper_set_font_dir(s, cand);
+        return;
     }
+    if (user_dir(cand, sizeof cand)) cc_paper_set_font_dir(s, cand);
 }

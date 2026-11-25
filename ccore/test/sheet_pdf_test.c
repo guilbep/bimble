@@ -5,13 +5,18 @@
  *     S-101-helvetica.pdf byte for byte once the producer is masked (D6's comparison): the
  *     Helvetica fallback is Rust's own Helvetica file. Font files that are not the shipped ones
  *     fall back the same way.
- *   - With the shipped Roboto files (read from the folder on the first export): %PDF- … %%EOF,
+ *   - SIZE1: Helvetica is the default even with the Roboto files at hand (the folder set): the
+ *     same golden bytes; `{"font":"roboto"}` without files: the Helvetica golden too; a font that is
+ *     neither: an error. `pdf_fonts`: {"helvetica":true,"roboto":false} without the files or with
+ *     other files, true once the folder holds the shipped ones.
+ *   - `{"font":"roboto"}` with the shipped Roboto files (read from the folder): %PDF- … %%EOF,
  *     the object count of D6's session check (15: two embedded faces), both FontFile2 streams.
  *   - {"path"}: the same bytes written to the file, the answer {"bytes", "path"}; a folder that
  *     does not exist: "<file>: cannot write".
  *   - `view_pdf` of a plan view: a PDF; the errors (unknown sheet or view, missing field, a path
  *     that is not a string).
- * Fails on the code before D7: `sheet_pdf` was an unknown query. */
+ * Fails on the code before D7: `sheet_pdf` was an unknown query; before SIZE1: the folder made
+ * Roboto the default, and `pdf_fonts` was an unknown query. */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -110,12 +115,35 @@ int main(void) {
     mask(&got);
     check_eq("sheet_pdf without fonts = pdf/S-101-helvetica.pdf (producer masked)", got.p, got.len, golden, gn);
 
-    /* Files that are not the shipped Roboto: the same Helvetica file. */
+    /* SIZE1: pdf_fonts without files; Roboto asked for without files: the Helvetica golden. */
+    rc = call(ses, "pdf_fonts", "{}", &got);
+    check_eq("pdf_fonts without files", got.p, got.len, "{\"helvetica\":true,\"roboto\":false}", 33);
+    char rbody[600];
+    snprintf(rbody, sizeof rbody, "{\"sheet\":\"%.22s\",\"font\":\"roboto\"}", s101->id.c);
+    rc = call(ses, "sheet_pdf", rbody, &got);
+    mask(&got);
+    check_eq("sheet_pdf font roboto without files = the Helvetica golden", got.p, got.len, golden, gn);
+    snprintf(rbody, sizeof rbody, "{\"sheet\":\"%.22s\",\"font\":\"helvetica\"}", s101->id.c);
+    rc = call(ses, "sheet_pdf", rbody, &got);
+    mask(&got);
+    check_eq("sheet_pdf font helvetica = the Helvetica golden", got.p, got.len, golden, gn);
+    snprintf(rbody, sizeof rbody, "{\"sheet\":\"%.22s\",\"font\":\"arial\"}", s101->id.c);
+    rc = call(ses, "sheet_pdf", rbody, &got);
+    check_eq("font arial: an error", got.p, got.len, "font: \"helvetica\" or \"roboto\"", 29);
+    check_true("font arial: CC_ERR", rc == CC_ERR);
+
+    /* Files that are not the shipped Roboto: the same Helvetica file, asked for or not. */
     static const unsigned char junk[64] = "not a font";
     check_true("set junk fonts", cc_paper_set_fonts(ses, junk, sizeof junk, junk, sizeof junk) == 0);
     rc = call(ses, "sheet_pdf", body, &got);
     mask(&got);
     check_eq("sheet_pdf with other font files = the Helvetica golden", got.p, got.len, golden, gn);
+    snprintf(rbody, sizeof rbody, "{\"sheet\":\"%.22s\",\"font\":\"roboto\"}", s101->id.c);
+    rc = call(ses, "sheet_pdf", rbody, &got);
+    mask(&got);
+    check_eq("sheet_pdf font roboto with other files = the Helvetica golden", got.p, got.len, golden, gn);
+    rc = call(ses, "pdf_fonts", "{}", &got);
+    check_eq("pdf_fonts with other files: roboto false", got.p, got.len, "{\"helvetica\":true,\"roboto\":false}", 33);
     cc_paper_set_fonts(ses, NULL, 0, NULL, 0);
 
     /* view_pdf of S-101's first placed view (a plan), Helvetica. */
@@ -141,9 +169,17 @@ int main(void) {
     check_eq("a folder that does not exist", got.p, got.len, DIR "/none/x.pdf: cannot write", strlen(DIR "/none/x.pdf: cannot write"));
     check_true("cannot write: an error", rc == CC_ERR);
 
-    /* Roboto, read from the folder on the first export. */
+    /* SIZE1: the folder set: Helvetica still the default, byte for byte Rust's Helvetica file. */
     check_true("set font dir", cc_paper_set_font_dir(ses, FONTS) == 0);
     snprintf(body, sizeof body, "{\"sheet\":\"%.22s\"}", s101->id.c);
+    rc = call(ses, "sheet_pdf", body, &got);
+    mask(&got);
+    check_eq("sheet_pdf with the Roboto folder, no font asked = the Helvetica golden", got.p, got.len, golden, gn);
+    rc = call(ses, "pdf_fonts", "{}", &got);
+    check_eq("pdf_fonts with the folder: roboto true", got.p, got.len, "{\"helvetica\":true,\"roboto\":true}", 32);
+
+    /* Roboto, asked for, read from the folder. */
+    snprintf(body, sizeof body, "{\"sheet\":\"%.22s\",\"font\":\"roboto\"}", s101->id.c);
     rc = call(ses, "sheet_pdf", body, &got);
     check_true("Roboto: %PDF- ... %%EOF", rc == CC_OK && is_pdf(&got));
     check_true("Roboto: 15 objects (D6's session check), both faces embedded",
@@ -154,7 +190,7 @@ int main(void) {
     buf_append(&roboto, got.p, got.len);
 
     /* {"path"}: the same bytes in the file. */
-    snprintf(body, sizeof body, "{\"sheet\":\"%.22s\",\"path\":\"" DIR "/S-101 Plan and section.pdf\"}", s101->id.c);
+    snprintf(body, sizeof body, "{\"sheet\":\"%.22s\",\"font\":\"roboto\",\"path\":\"" DIR "/S-101 Plan and section.pdf\"}", s101->id.c);
     rc = call(ses, "sheet_pdf", body, &got);
     char want[200];
     int wn = snprintf(want, sizeof want, "{\"bytes\":%zu,\"path\":\"" DIR "/S-101 Plan and section.pdf\"}", roboto.len);

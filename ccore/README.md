@@ -56,7 +56,9 @@ Drawings on paper go out as SVG (`src/paper.c`) and as a one-page vector PDF (`s
 ticket D6; not `pdf_in`, the reader of links): the same paper items, Rust's `Sheet::to_pdf` byte
 for byte but the packed Roboto files (`golden/DEVIATIONS.md` 12). A Roboto PDF embeds the two
 font files, which the caller hands over (`cc_pdf_options.roboto`, `cc_paper_sheet_pdf` of
-`session/sheet_svg.h`; 350 KB each, not in the wasm); Helvetica needs none. Suite `pdf_out`.
+`session/sheet_svg.h`; 350 KB each, not in the wasm); Helvetica needs none and is the app's default
+(ticket SIZE1: no font file is shipped; `sheet_pdf {"font":"roboto"}` and `query pdf_fonts`,
+`host/fonts.c` for where the native host looks). Suite `pdf_out`.
 
 Run the tests (tcc by default, or any compiler in `CC`). The script exits non-zero on a failure:
 

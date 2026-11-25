@@ -1,15 +1,16 @@
-// The PDF export in the lab (ticket D7, ccore/session/sheet_svg.h `sheet_pdf`, web-ui/src/dialogs/Export.vue):
+// The PDF export in the lab (tickets D7, SIZE1; ccore/session/sheet_svg.h `sheet_pdf`, web-ui/src/dialogs/Export.vue):
 // node ccore/test/lab_export.mjs. Starts out/tcc/bimble-ccore (or $HOST_BIN) with a copy of
-// golden/drawing/model.json (its sheets), copies the wasm build and the fonts into web-ui/public/ccore/
-// (scripts/copy-ccore.mjs; needs out/wasm/ccore.wasm) with the same model as public/ccore/d7-model.json,
-// starts Vite from web-ui/ and headless /usr/bin/chromium over raw CDP, and on two pages:
-//   native  /?native=1&gl=1&port=…&token=…   (the host reads the fonts from the repository)
-//   wasm    /?ccore=1&gl=1&model=ccore/d7-model.json   (the page fetches ccore/fonts/ on the first export)
+// golden/drawing/model.json (its sheets), copies the wasm build into web-ui/public/ccore/
+// (scripts/copy-ccore.mjs; needs out/wasm/ccore.wasm; SIZE1: no font copied) with the same model as
+// public/ccore/d7-model.json, starts Vite from web-ui/ and headless /usr/bin/chromium over raw CDP, and on two pages:
+//   native  /?native=1&gl=1&port=…&token=…   (the dev host finds Roboto in the repository's folder)
+//   wasm    /?ccore=1&gl=1&model=ccore/d7-model.json   (no Roboto: the choice is disabled, with a note)
 // opens Print and export (the quick bar), keeps only sheet S-101 checked, picks PDF (no "missing" mark
-// on it any more) and clicks Export; the download (CDP Browser.setDownloadBehavior) is
+// on it any more) and clicks Export with the default font; the download (CDP Browser.setDownloadBehavior) is
 // "S-101 Plan and section.pdf" (Rust's "<number> <name>.pdf"), starts with %PDF- and ends with %%EOF,
-// embeds Roboto (/FontFile2: the fonts reached the core), and pdftotext (else: fail, the tool is
-// named) finds the sheet number and its name in it. The wasm page fetches each font file once.
+// is Helvetica with nothing embedded (no /FontFile2), and pdftotext (else: fail, the tool is named)
+// finds the sheet number and its name in it. The page fetches no font, ever. Native: Roboto is
+// offered (pdf_fonts), and an export with it embeds Roboto (/FontFile2) and pdftotext reads it too.
 // No uncaught page error; no console error or warning but the sync-XHR deprecation and the favicon 404.
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills all it starts.
 import { execFileSync, spawn } from "node:child_process";
@@ -129,9 +130,6 @@ async function exportOn(cdp, mode) {
       if (path.includes("/fonts/")) fontGets.push(path);
     }
   });
-  const dl = join(tmp, `dl-${mode}`);
-  mkdirSync(dl);
-  await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dl, eventsEnabled: true });
   for (const d of ["Runtime", "Log", "Page", "Network"]) await S(`${d}.enable`);
   await S("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
   await S("Page.navigate", { url: PAGES[mode] });
@@ -155,27 +153,46 @@ async function exportOn(cdp, mode) {
   check(`${mode}: the PDF choice is there, enabled, not marked missing`, pdfBtn && pdfBtn[0] === false && pdfBtn[1] === false, JSON.stringify(pdfBtn));
   await evalJs("document.querySelector('[data-bb=export-pdf]').click()");
   check(`${mode}: PDF chosen`, await evalJs("document.querySelector('[data-bb=export-pdf]').classList.contains('on')"));
-  const t0 = performance.now();
-  await evalJs("document.querySelector('[data-bb=export-go]').click()");
-  const done = await waitFor(`${mode}: the download`, 20000, async () => {
-    const err = await evalJs("document.querySelector('[data-bb=export-failed]')?.textContent ?? ''");
-    if (err) throw new Error(err);
-    return [...downloads.values()].find((d) => d.state === "completed") ?? null;
-  }).catch((e) => ({ error: e.message }));
-  console.log(`${mode}: click -> download complete in ${(performance.now() - t0).toFixed(0)} ms`);
-  check(`${mode}: a download, named "${FILE}" (Rust's "<number> <name>.pdf")`, done.name === FILE, JSON.stringify(done));
-  const file = join(dl, FILE);
-  const bytes = existsSync(file) ? readFileSync(file) : Buffer.alloc(0);
-  console.log(`${mode}: ${FILE}: ${bytes.length} bytes (files: ${readdirSync(dl).join(", ")})`);
-  check(`${mode}: %PDF- ... %%EOF`, bytes.subarray(0, 5).toString() === "%PDF-" && bytes.subarray(-5).toString() === "%%EOF");
-  check(`${mode}: Roboto embedded (the fonts reached the core)`, bytes.includes("/FontFile2") && bytes.includes("/BaseFont /Roboto"));
-  const text = bytes.length ? pdftotext(file) : "";
-  check(`${mode}: pdftotext finds the sheet number and name`, text !== null && text.includes("S-101") && text.includes("Plan and section"),
-    text === null ? "pdftotext is not installed (poppler)" : text.slice(0, 200).replace(/\s+/g, " "));
-  if (mode === "wasm") {
-    const once = ["/ccore/fonts/Roboto-Regular.ttf", "/ccore/fonts/Roboto-Bold.ttf"].every((f) => fontGets.filter((g) => g === f).length === 1);
-    check("wasm: each font file fetched once, on the export", once && fontGets.length === 2, fontGets.join(" "));
-  } else check("native: the page fetches no font (the host reads them)", fontGets.length === 0, fontGets.join(" "));
+  // SIZE1: the font choice: Helvetica on; Roboto enabled only where the core has the files.
+  const fontUi = await evalJs(`(() => { const h = document.querySelector('[data-bb=export-font-helvetica]'), r = document.querySelector('[data-bb=export-font-roboto]');
+    return h && r ? { h: h.classList.contains('on'), r: !r.disabled, note: document.querySelector('[data-bb=export-font-note]')?.textContent ?? '' } : null; })()`);
+  check(`${mode}: the Font choice, Helvetica on by default`, fontUi?.h === true, JSON.stringify(fontUi));
+  if (mode === "native") check("native: Roboto offered (the dev folder has the files)", fontUi?.r === true && fontUi.note === "", JSON.stringify(fontUi));
+  else check("wasm: Roboto disabled, with where to put the files", fontUi?.r === false && fontUi.note.includes("Roboto-Regular.ttf"), JSON.stringify(fontUi));
+
+  /** Export with the font chosen now, into a folder of its own: the PDF's bytes. */
+  const exportPdf = async (tag) => {
+    const dl = join(tmp, `dl-${mode}-${tag}`);
+    mkdirSync(dl);
+    downloads.clear();
+    await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dl, eventsEnabled: true });
+    const t0 = performance.now();
+    await evalJs("document.querySelector('[data-bb=export-go]').click()");
+    const done = await waitFor(`${mode} ${tag}: the download`, 20000, async () => {
+      const err = await evalJs("document.querySelector('[data-bb=export-failed]')?.textContent ?? ''");
+      if (err) throw new Error(err);
+      return [...downloads.values()].find((d) => d.state === "completed") ?? null;
+    }).catch((e) => ({ error: e.message }));
+    console.log(`${mode} ${tag}: click -> download complete in ${(performance.now() - t0).toFixed(0)} ms`);
+    check(`${mode} ${tag}: a download, named "${FILE}" (Rust's "<number> <name>.pdf")`, done.name === FILE, JSON.stringify(done));
+    const file = join(dl, FILE);
+    const bytes = existsSync(file) ? readFileSync(file) : Buffer.alloc(0);
+    console.log(`${mode} ${tag}: ${FILE}: ${bytes.length} bytes (files: ${readdirSync(dl).join(", ")})`);
+    check(`${mode} ${tag}: %PDF- ... %%EOF`, bytes.subarray(0, 5).toString() === "%PDF-" && bytes.subarray(-5).toString() === "%%EOF");
+    const text = bytes.length ? pdftotext(file) : "";
+    check(`${mode} ${tag}: pdftotext finds the sheet number and name`, text !== null && text.includes("S-101") && text.includes("Plan and section"),
+      text === null ? "pdftotext is not installed (poppler)" : text.slice(0, 200).replace(/\s+/g, " "));
+    return bytes;
+  };
+  const helv = await exportPdf("helvetica");
+  check(`${mode} helvetica: Helvetica, nothing embedded`, helv.includes("/BaseFont /Helvetica") && !helv.includes("/FontFile2"));
+  if (mode === "native") {
+    await evalJs("document.querySelector('[data-bb=export-font-roboto]').click()");
+    check("native: Roboto chosen", await evalJs("document.querySelector('[data-bb=export-font-roboto]').classList.contains('on')"));
+    const rob = await exportPdf("roboto");
+    check("native roboto: Roboto embedded (the dev folder reached the core)", rob.includes("/FontFile2") && rob.includes("/BaseFont /Roboto"));
+  }
+  check(`${mode}: the page fetches no font`, fontGets.length === 0, fontGets.join(" "));
 
   const IGNORED = [
     /Synchronous XMLHttpRequest on the main thread is deprecated/,
@@ -190,12 +207,13 @@ async function exportOn(cdp, mode) {
 async function main() {
   if (!existsSync(join(UI, "node_modules"))) throw new Error(`no ${UI}/node_modules: run npm ci in web-ui/`);
   execFileSync("node", [join(UI, "scripts/copy-ccore.mjs")], { stdio: "inherit" });
-  check("copy-ccore.mjs puts the fonts in public/ccore/fonts/", ["Roboto-Regular.ttf", "Roboto-Bold.ttf", "LICENSE-Roboto"].every((f) => existsSync(join(UI, "public/ccore/fonts", f))));
+  check("SIZE1: copy-ccore.mjs leaves no font in public/ccore/", !existsSync(join(UI, "public/ccore/fonts")));
   copyFileSync(join(CCORE, "golden/drawing/model.json"), MODEL_PUBLIC);
   const model = join(tmp, "frame.json");
   copyFileSync(join(CCORE, "golden/drawing/model.json"), model);
   const host = start("host", BIN, [String(PORT), model], {
-    env: { ...process.env, BIMBLE_TOKEN: TOKEN, BIMBLE_ORIGINS: `http://localhost:${VITE},http://127.0.0.1:${VITE}` },
+    // SIZE1: no BIMBLE_FONTS (the dev folder is the one under test); the config dir is the test's.
+    env: { ...process.env, BIMBLE_TOKEN: TOKEN, BIMBLE_FONTS: "", XDG_CONFIG_HOME: join(tmp, "config"), BIMBLE_ORIGINS: `http://localhost:${VITE},http://127.0.0.1:${VITE}` },
   });
   await waitFor("host 'listening'", 5000, () => host.out.includes("listening") || (host.exitCode !== null && Promise.reject(new Error(host.out))));
   const vite = start("vite", "npx", ["vite", "--port", String(VITE), "--strictPort"], { cwd: UI });

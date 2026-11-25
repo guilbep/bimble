@@ -22,6 +22,8 @@ export const fr = {
   "export.go": "Exporter {n} feuilles",
   "export.hint": "Choisissez les feuilles, puis exportez",
   "export.failed": "L’export n’a pas abouti : {e}",
+  "export.font": "Police",
+  "export.fontRobotoMissing": "Roboto : placez Roboto-Regular.ttf et Roboto-Bold.ttf dans ~/.config/bimble/fonts (ou $BIMBLE_FONTS), application de bureau seulement",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "export.title": "Print and export",
@@ -46,4 +48,6 @@ export const en: Record<keyof typeof fr, string> = {
   "export.go": "Export {n} sheets",
   "export.hint": "Choose the sheets, then export",
   "export.failed": "The export failed: {e}",
+  "export.font": "Font",
+  "export.fontRobotoMissing": "Roboto: put Roboto-Regular.ttf and Roboto-Bold.ttf in ~/.config/bimble/fonts (or $BIMBLE_FONTS), desktop app only",
 };

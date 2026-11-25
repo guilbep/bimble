@@ -74,6 +74,8 @@ export type PartKey =
   | "export.failed"
   | "export.files"
   | "export.folder"
+  | "export.font"
+  | "export.fontRobotoMissing"
   | "export.format"
   | "export.go"
   | "export.hint"

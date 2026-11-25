@@ -71,6 +71,11 @@ int cc_paper_pdf_query(struct cc_session *s, const cc_scene *sc, int view, const
     buf_puts(out, CC_VIEW_ONLY_TEXT);
     return CC_ERR;
 }
+int cc_paper_fonts_query(struct cc_session *s, Buf *out) { /* SIZE1 */
+    (void)s;
+    buf_puts(out, CC_VIEW_ONLY_TEXT);
+    return CC_ERR;
+}
 int cc_paper_sheet_svg(struct cc_session *s, const cc_scene *sc, const char *body, size_t n, Buf *out) {
     (void)s, (void)sc, (void)body, (void)n;
     buf_puts(out, CC_VIEW_ONLY_TEXT);
@@ -299,8 +304,22 @@ static void read_fonts(struct cc_session *s) {
         }
         buf_free(&path);
     }
-    if (s->pdf_font[0] && s->pdf_font[1]) return;
-    free(s->pdf_font_dir), s->pdf_font_dir = NULL; /* tried once */
+    /* SIZE1: the folder is kept (not "tried once"): files put there later are found by the next
+     * `pdf_fonts` or Roboto export. A missing file costs one failed open. */
+}
+
+/* SIZE1: `query pdf_fonts` -> {"helvetica":true,"roboto":bool}: roboto when both shipped files are
+ * here (handed over, or read from the folder now). */
+int cc_paper_fonts_query(struct cc_session *s, Buf *out) {
+    read_fonts(s);
+    JsonW w;
+    jw_init(&w, out, 0);
+    jw_obj_begin(&w);
+    jw_key(&w, "helvetica"), jw_bool(&w, 1);
+    jw_key(&w, "roboto"), jw_bool(&w, s->pdf_font[0] && s->pdf_font[1] && cc_pdf_roboto_is_shipped(s->pdf_font[0], s->pdf_font_n[0], 0) &&
+                                          cc_pdf_roboto_is_shipped(s->pdf_font[1], s->pdf_font_n[1], 1));
+    jw_obj_end(&w);
+    return jw_finish(&w) == JW_OK && !out->oom ? CC_OK : CC_ERR;
 }
 
 /* The sheet or the view on paper with `font`, into `a`. 0 ok; else -1 with the text in `err`. */
@@ -374,6 +393,16 @@ int cc_paper_pdf_query(struct cc_session *s, const cc_scene *sc, int view, const
         buf_puts(out, "path: a string");
         goto end;
     }
+    /* SIZE1: "font": "helvetica" (the default: no file needed) or "roboto" (when the files are here). */
+    const JrVal *fv = v->type == JR_OBJ ? jr_get(v, "font") : NULL;
+    int want_roboto = 0;
+    if (fv && fv->type != JR_NULL) {
+        if (fv->type == JR_STR && fv->n == 6 && !memcmp(fv->s, "roboto", 6)) want_roboto = 1;
+        else if (!(fv->type == JR_STR && fv->n == 9 && !memcmp(fv->s, "helvetica", 9))) {
+            buf_puts(out, "font: \"helvetica\" or \"roboto\"");
+            goto end;
+        }
+    }
     const char *path = pv && pv->type == JR_STR ? pv->s : NULL;
     if (path && (!pv->n || strlen(path) < pv->n)) {
         buf_puts(out, "path: empty or with a NUL");
@@ -405,22 +434,24 @@ int cc_paper_pdf_query(struct cc_session *s, const cc_scene *sc, int view, const
         buf_puts(out, "no model open");
         goto end;
     }
-    read_fonts(s);
+    if (want_roboto) read_fonts(s); /* SIZE1: only when asked for */
     cc_pdf_options po;
     memset(&po, 0, sizeof po);
     po.version = s->paper_version ? s->paper_version : CC_IFC_VERSION;
     po.version_len = strlen(po.version);
     for (int k = 0; k < 2; k++) po.roboto[k] = s->pdf_font[k], po.roboto_len[k] = s->pdf_font_n[k];
-    /* Roboto when both files are there; else, or when the writer refuses them, Helvetica. */
+    /* SIZE1: Helvetica by default; Roboto when asked for and both files are there; else, or when the
+     * writer refuses them, Helvetica (laid out with Helvetica's metrics: Rust's Helvetica file). */
     int r = CC_PDF_ERR_FONT;
-    if (s->pdf_font[0] && s->pdf_font[1]) {
+    if (want_roboto && s->pdf_font[0] && s->pdf_font[1]) {
         cc_paper paper;
         if (draw_paper(s, sc, sh, vw, views, nv, CC_FONT_ROBOTO, &a, &paper, out)) goto end;
         r = cc_paper_pdf(&paper, &po, &pdf);
     }
     if (r == CC_PDF_ERR_FONT) {
-        cc_log(s->pf, "bimble-ccore: PDF: the Roboto font files (Roboto-Regular.ttf, Roboto-Bold.ttf) are missing "
-                      "or not the shipped ones: the text is set in Helvetica");
+        if (want_roboto)
+            cc_log(s->pf, "bimble-ccore: PDF: the Roboto font files (Roboto-Regular.ttf, Roboto-Bold.ttf) are missing "
+                          "or not the shipped ones: the text is set in Helvetica");
         buf_clear(&pdf);
         pdf.oom = 0;
         cc_paper paper;

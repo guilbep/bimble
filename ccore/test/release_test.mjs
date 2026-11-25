@@ -8,8 +8,10 @@
 //   - path traversal, an unknown path, a symbolic link and a hidden file in web/ are 404; a wrong
 //     Host or a foreign Origin is 403; the calls and /change still need the token;
 //   - a query answers (the model is loaded), from the page's own origin too; SIGTERM exits 0;
-//   - ticket D7: web/fonts/ holds the two Roboto files and their licence; `query view_pdf` of a plan
-//     answers a PDF that embeds Roboto (the host found web/fonts/: no Helvetica fallback);
+//   - ticket SIZE1: no font file in the archive (no .ttf, no web/fonts/); `query view_pdf` of a plan
+//     answers a Helvetica PDF (nothing embedded) and `pdf_fonts` says roboto false (BIMBLE_FONTS: an
+//     empty folder of the test, so the real ~/.config is never read); with BIMBLE_FONTS holding the
+//     two Roboto files (copied from the repository), roboto true and `{"font":"roboto"}` embeds them;
 //   - `--port N` serves on N; a web/ without index.html or over 64 MiB refuses to start;
 //   - without --no-browser, xdg-open (a stand-in first on PATH) gets the URL and no socket.
 // The ports: the system's free ones (open picks one; --port gets one from node), not test/ports.mjs.
@@ -79,7 +81,8 @@ const freePort = () => new Promise((res, rej) => {
 
 /** Starts the unpacked host: {proc, out (stdout), log (stderr), exited}. */
 function start(bin, args, cwd, env = {}) {
-  const proc = spawn(bin, args, { cwd, env: { ...process.env, BIMBLE_TOKEN: "", ...env }, stdio: ["ignore", "pipe", "pipe"] });
+  // SIZE1: the font folder and the config dir are the test's (never the user's ~/.config/bimble).
+  const proc = spawn(bin, args, { cwd, env: { ...process.env, BIMBLE_TOKEN: "", BIMBLE_FONTS: join(tmp, "nofonts"), XDG_CONFIG_HOME: join(tmp, "config"), ...env }, stdio: ["ignore", "pipe", "pipe"] });
   const st = { proc, out: "", log: "" };
   proc.stdout.on("data", (d) => (st.out += d));
   proc.stderr.on("data", (d) => (st.log += d));
@@ -115,8 +118,10 @@ try {
   const list = execFileSync("tar", ["tzf", ARCHIVE], { encoding: "utf8" }).split("\n").filter(Boolean);
   const top = new Set(list.map((p) => p.split("/")[0]));
   check("one top folder named after the version and arch", top.size === 1 && top.has(NAME), [...top].join(" "));
-  for (const f of ["bimble-ccore", "web/index.html", "LICENSE", "README.txt", "web/fonts/Roboto-Regular.ttf", "web/fonts/Roboto-Bold.ttf", "web/fonts/LICENSE-Roboto"])
+  for (const f of ["bimble-ccore", "web/index.html", "LICENSE", "README.txt"])
     check(`archive holds ${f}`, list.includes(`${NAME}/${f}`));
+  const ttf = list.filter((p) => /\.(ttf|otf)$/i.test(p) || /\/fonts\//.test(p));
+  check("SIZE1: no font file in the archive", ttf.length === 0, ttf.join(" "));
   const rest = list.filter((p) => !/^[^/]+\/(bimble-ccore|LICENSE|README\.txt|web\/.*)?$/.test(p));
   check("nothing else in the archive", rest.length === 0, rest.join(" "));
 
@@ -132,6 +137,7 @@ try {
 
   // Untrusted web/ content added after unpacking: a link out of the tree and a hidden file.
   const webFiles = files(web);
+  console.log(`size: archive ${statSync(ARCHIVE).size} bytes; unpacked bimble-ccore ${statSync(bin).size} bytes, web/ ${webFiles.reduce((n, f) => n + statSync(join(web, f)).size, 0)} bytes in ${webFiles.length} files`);
   symlinkSync("/etc/passwd", join(web, "passwd"));
   symlinkSync("/etc", join(web, "etc"));
   writeFileSync(join(web, ".hidden"), "secret");
@@ -190,12 +196,14 @@ try {
   check("a call from the page's own origin -> 200 with Access-Control-Allow-Origin", qs.status === 200 && header(qs.head, "Access-Control-Allow-Origin") === self, `${qs.status}`);
   check("Origin http://localhost:<port> -> 200", (await post(port, `/query/state?t=${token}`, "", { Origin: `http://localhost:${port}`, Host: `localhost:${port}` })).status === 200);
   check("GET /change with the token -> 200", (await get(port, `/change?since=0&t=${token}`)).status === 200);
-  // D7: the PDF export reads web/fonts/ (Roboto embedded, not the Helvetica fallback).
+  // SIZE1: the PDF export is Helvetica (no font shipped, none in BIMBLE_FONTS); Roboto not offered.
   let plan = null;
   try { plan = JSON.parse((await post(port, `/query/open_views?t=${token}`)).body.toString()).views.find((v) => v.auto_name?.kind === "plan"); } catch { /* checked below */ }
   const pdf = plan ? await post(port, `/query/view_pdf?t=${token}`, JSON.stringify({ view: plan.id })) : null;
-  check("view_pdf of a plan: a PDF with Roboto embedded (web/fonts/)", pdf && pdf.status === 200 && pdf.body.subarray(0, 5).toString() === "%PDF-" &&
-    pdf.body.subarray(-5).toString() === "%%EOF" && pdf.body.includes("/FontFile2") && pdf.body.includes("/BaseFont /Roboto"), pdf ? `${pdf.status} ${pdf.body.length} bytes` : "no plan view");
+  check("view_pdf of a plan: a Helvetica PDF, nothing embedded", pdf && pdf.status === 200 && pdf.body.subarray(0, 5).toString() === "%PDF-" &&
+    pdf.body.subarray(-5).toString() === "%%EOF" && !pdf.body.includes("/FontFile2") && pdf.body.includes("/BaseFont /Helvetica"), pdf ? `${pdf.status} ${pdf.body.length} bytes` : "no plan view");
+  const pf = await post(port, `/query/pdf_fonts?t=${token}`);
+  check("pdf_fonts without Roboto files: roboto false", pf.status === 200 && pf.body.toString() === '{"helvetica":true,"roboto":false}', `${pf.status} ${pf.body}`);
   const mesh = await get(port, `/mesh?t=${token}`);
   check("GET /mesh with the token -> 200 BMSH", mesh.status === 200 && mesh.body.subarray(0, 4).toString() === "BMSH", `${mesh.status}`);
 
@@ -210,6 +218,23 @@ try {
   const ex = await stop(host);
   host = null;
   check("SIGTERM -> exits 0", ex && ex.code === 0, JSON.stringify(ex));
+
+  // SIZE1: Roboto from the user's folder (BIMBLE_FONTS), as a user who adds the files would.
+  if (plan) {
+    const fonts = join(tmp, "userfonts");
+    mkdirSync(fonts);
+    for (const f of ["Roboto-Regular.ttf", "Roboto-Bold.ttf"]) cpSync(join(CCORE, "../crates/bimble-drawing/fonts", f), join(fonts, f));
+    host = start(bin, ["open", "--no-browser", "frame.json"], work, { BIMBLE_FONTS: fonts });
+    const mu = /port=(\d+)&token=([0-9a-f]{32})$/.exec(await waitUrl(host));
+    const pf2 = mu ? await post(Number(mu[1]), `/query/pdf_fonts?t=${mu[2]}`) : null;
+    check("BIMBLE_FONTS with the files: pdf_fonts roboto true", pf2 && pf2.body.toString() === '{"helvetica":true,"roboto":true}', pf2 ? pf2.body.toString() : "no URL");
+    const rp = mu ? await post(Number(mu[1]), `/query/view_pdf?t=${mu[2]}`, JSON.stringify({ view: plan.id, font: "roboto" })) : null;
+    check('view_pdf {"font":"roboto"}: Roboto embedded', rp && rp.status === 200 && rp.body.includes("/FontFile2") && rp.body.includes("/BaseFont /Roboto"), rp ? `${rp.status} ${rp.body.length} bytes` : "");
+    const hp = mu ? await post(Number(mu[1]), `/query/view_pdf?t=${mu[2]}`, JSON.stringify({ view: plan.id })) : null;
+    check("view_pdf without font, the files there: still Helvetica", hp && hp.status === 200 && !hp.body.includes("/FontFile2"), hp ? `${hp.status}` : "");
+    await stop(host);
+    host = null;
+  }
 
   // --port N, no model.
   const p2 = await freePort();

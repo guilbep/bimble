@@ -927,11 +927,20 @@ export function query<T>(name: string, args?: unknown): T {
 // ---- D7: the PDF export (C core: ccore/session/sheet_svg.h `sheet_pdf`, `view_pdf`) ----
 /** A sheet as PDF (the sheet export of the Rust viewer, `Sheet::to_pdf`): the file's bytes. Throws the
  *  C core's error text (also "this build is view-only", and outside the C core). */
-export async function sheetPdf(id: string): Promise<Uint8Array> {
+export async function sheetPdf(id: string, font: PdfFont = "helvetica"): Promise<Uint8Array> {
   const w = wasmOrThrow();
   if (!w.bytes) throw new Error("PDF export: the C core only");
-  try { return await w.bytes("query", "sheet_pdf", JSON.stringify({ sheet: id })); } catch (e) { throw new Error(message(e)); }
+  // SIZE1: Helvetica by default (nothing embedded); "roboto" only when pdfFonts() says it is there.
+  const body = font === "roboto" ? { sheet: id, font } : { sheet: id };
+  try { return await w.bytes("query", "sheet_pdf", JSON.stringify(body)); } catch (e) { throw new Error(message(e)); }
 }
+// ---- SIZE1: the PDF's font: Helvetica (the default, no file) or Roboto (optional files) ----
+export type PdfFont = "helvetica" | "roboto";
+/** `query pdf_fonts`: which fonts the C core can set the PDF in. Outside the C core: Helvetica only. */
+export function pdfFonts(): { helvetica: boolean; roboto: boolean } {
+  try { return query<{ helvetica: boolean; roboto: boolean }>("pdf_fonts"); } catch { return { helvetica: true, roboto: false }; }
+}
+// ---- end SIZE1 ----
 /** A 2D view as PDF (the plan panel's "Export PDF…": its scale, the smallest paper it fits on). */
 export async function viewPdf(id: string): Promise<Uint8Array> {
   const w = wasmOrThrow();

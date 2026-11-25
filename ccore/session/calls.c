@@ -1024,6 +1024,7 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     /* D7: the PDF export, sheet_svg.h cc_paper_pdf_query (the answer is the PDF's bytes, or {path, bytes}) */
     if (!strcmp(name, "sheet_pdf") || !strcmp(name, "view_pdf"))
         return cc_paper_pdf_query(s, s->open ? scene_now(s) : NULL, name[0] == 'v', body, n, out);
+    if (!strcmp(name, "pdf_fonts")) return cc_paper_fonts_query(s, out); /* SIZE1: the export's font choice */
     if (s->open) return model_query(s, name, body, n, out); /* calls.rs:276-309 and :519-527 */
     if (!strcmp(name, "north") || !strcmp(name, "coordinates")) { /* ADR 0045, query.h: null without a model */
         buf_puts(out, "null");

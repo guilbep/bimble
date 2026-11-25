@@ -27,8 +27,8 @@
 //   and adds the picked file's bytes to the active 2D view (`ccoreLinkPdf`; host_open flag 8);
 //   `link_dxf` the same with a DXF picker (ticket L2: `ccoreLinkDxf`; host_open flag 16).
 // - PDF export (ticket D7, ccore/session/sheet_svg.h): `bytes("query", "sheet_pdf" | "view_pdf", body)` answers
-//   the PDF's bytes; on the first one the page fetches ccore/fonts/Roboto-{Regular,Bold}.ttf and hands
-//   them over (host_fonts); without them the PDF is set in Helvetica.
+//   the PDF's bytes. SIZE1: Helvetica, nothing fetched (no font is shipped); `host_fonts` stays for a
+//   page that hands Roboto files over, and `query pdf_fonts` says whether it did.
 
 interface Exports {
   memory: WebAssembly.Memory;
@@ -238,26 +238,7 @@ export function ccoreDownload(name: string, data: Uint8Array | string, type = "a
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
-// ---- D7: the PDF export's fonts: fetched once, on the first export (public/ccore/fonts/, copy-ccore.mjs) ----
-let fontsHanded: Promise<void> | null = null;
-/** Hands Roboto-Regular and -Bold to the module (host_fonts). Missing files: nothing handed over, the
- *  module sets the PDF's text in Helvetica and logs why (session/sheet_svg.h). */
-function ccoreFonts(): Promise<void> {
-  fontsHanded ??= (async () => {
-    const get = async (f: string) => {
-      try {
-        const r = await fetch(new URL(`ccore/fonts/${f}`, document.baseURI).href);
-        return r.ok ? new Uint8Array(await r.arrayBuffer()) : new Uint8Array();
-      } catch { return new Uint8Array(); }
-    };
-    const [reg, bold] = await Promise.all([get("Roboto-Regular.ttf"), get("Roboto-Bold.ttf")]);
-    if (!module || !reg.length || !bold.length) return; // (cc_alloc(0) may be 0) none: Helvetica
-    const r = run(module.X.host_fonts.bind(module.X), [reg, bold]);
-    if (r.status !== 200) console.warn(`ccore: fonts: ${dec.decode(r.bytes)}`);
-  })();
-  return fontsHanded;
-}
-// ---- end D7 ----
+// ---- SIZE1: no font fetch (D7 fetched ccore/fonts/ on the first export; the files are not shipped) ----
 
 /** The file picker of `open` / `import_ifc`. */
 function pickAndOpen(accept: string, importIfc = false): void {
@@ -432,7 +413,6 @@ export async function ccoreClient(params: URLSearchParams): Promise<CcoreClient>
     tool: (n, json) => call("tool", n, json),
     action_with: (n, json) => call("action", n, json),
     bytes: async (op, n, body) => { // D7: the answer's bytes as they are (the PDF)
-      await ccoreFonts();
       X.host_clock(Date.now() / 1000);
       const r = run(X.call.bind(X), [enc.encode(op), enc.encode(n), enc.encode(body)]);
       hostLog();

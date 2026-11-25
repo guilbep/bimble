@@ -7,8 +7,10 @@ export const hint = "export.hint";
 // Export downloads each checked sheet through a Blob (the web has no Rust file IO) as PDF (`sheet_pdf`, the
 // C core's Sheet::to_pdf, ticket D7; named "<number> <name>.pdf" as the egui sheet export) or as SVG
 // (`sheet_svg`). ADR 0052: no Cancel, one Export action; the close button closes.
+// SIZE1: the PDF's font: Helvetica (the default, built into every PDF reader) or Roboto, offered only
+// when the core has its files (`pdf_fonts`); otherwise shown disabled with where to put them.
 import { computed, ref } from "vue";
-import { query, sheetPdf, sheetPdfName, sheets, state } from "../bimble";
+import { type PdfFont, pdfFonts, query, sheetPdf, sheetPdfName, sheets, state } from "../bimble";
 import { t } from "../i18n";
 import { currentDialog } from ".";
 
@@ -20,6 +22,9 @@ const all = () => { picked.value = new Set(list.value.map((s) => s.id)); };
 const n = computed(() => list.value.filter((s) => picked.value.has(s.id)).length);
 // D7: PDF (the egui export's format) or SVG.
 const format = ref<"pdf" | "svg">("pdf");
+// SIZE1: the font choice (asked once, when the dialog opens).
+const font = ref<PdfFont>("helvetica");
+const roboto = pdfFonts().roboto;
 const failed = ref<string | null>(null);
 const busy = ref(false);
 
@@ -37,7 +42,7 @@ async function exportSheets() {
   try {
     for (const s of list.value.filter((x) => picked.value.has(x.id))) {
       if (format.value === "pdf") {
-        const pdf = await sheetPdf(s.id);
+        const pdf = await sheetPdf(s.id, font.value);
         download(sheetPdfName(s), new Blob([pdf.slice().buffer as ArrayBuffer], { type: "application/pdf" }));
       } else {
         const { svg } = query<{ svg: string }>("sheet_svg", { id: s.id });
@@ -80,6 +85,12 @@ async function exportSheets() {
             <button type="button" disabled data-missing="sheet_dxf: a DXF sheet export query">DXF</button>
             <button type="button" disabled data-missing="print: no printer on the web">{{ t('export.printer') }}</button>
           </span></div>
+        <div v-if="format === 'pdf'" class="fld"><span class="lbl">{{ t('export.font') }}</span>
+          <span class="seg" style="align-self:flex-start" data-bb="export-font">
+            <button type="button" :class="{ on: font === 'helvetica' }" :aria-pressed="font === 'helvetica'" data-bb="export-font-helvetica" @click="font = 'helvetica'">Helvetica</button>
+            <button type="button" :class="{ on: font === 'roboto' }" :aria-pressed="font === 'roboto'" :disabled="!roboto" data-bb="export-font-roboto" @click="font = 'roboto'">Roboto</button>
+          </span>
+          <span v-if="!roboto" class="note" data-bb="export-font-note">{{ t('export.fontRobotoMissing') }}</span></div>
         <div class="fld"><span class="lbl">{{ t('export.files') }}</span>
           <span class="seg" style="align-self:flex-start">
             <button type="button" class="on">{{ t('export.perSheet') }}</button>

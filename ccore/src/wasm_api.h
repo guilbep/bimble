@@ -100,8 +100,10 @@
  *                                           host_log ("bimble-ccore: Saved …"), then cleared
  *   host_fonts(reg, reg_len, bold, bold_len, res) -> status
  *                                           D7: Roboto-Regular.ttf and Roboto-Bold.ttf for the PDF
- *                                           export (session/sheet_svg.h; copied; empty: none, the
- *                                           export is then Helvetica). `call query sheet_pdf` /
+ *                                           export (session/sheet_svg.h; copied; empty: none).
+ *                                           SIZE1: the page hands none over; the export is
+ *                                           Helvetica unless the body asks "font":"roboto" and
+ *                                           the files are here (`query pdf_fonts`). `call query sheet_pdf` /
  *                                           `view_pdf` answer the PDF's bytes (status 200)
  *
  * BMSH (flags 0): exactly session/mesh.c's version 1 (rev = the model revision, bumped by every

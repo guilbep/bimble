@@ -551,20 +551,27 @@ from `reference::read_dxf` over the `dxf` crate 0.6.2:
 `plan_options` with the view: its scale, the smallest paper, not bare). They differ from Rust in
 three places:
 - Rust compiles the Roboto files into the program (`include_bytes!`), so its PDF always embeds
-  Roboto. The C core keeps them out of the program and the wasm (DEVIATIONS 12): the carrier hands
-  them over (the native host reads `web/fonts/` or the repository's `crates/bimble-drawing/fonts/`,
-  the page fetches `ccore/fonts/` on the first export). Without them, or with other files, the
-  sheet is drawn again in Helvetica (the style's other font, `SheetFont::Helvetica`), not embedded,
-  and a note goes to the log: the export does not fail.
+  Roboto. The C core's PDF is **Helvetica by default** (ticket SIZE1, the owner's decision of 25 Nov
+  2026: "Default to Helvetica (0 bytes, PDF viewers have it built in)! Roboto as optional"): the
+  drawing is laid out with Helvetica's metrics (the style's other font, `SheetFont::Helvetica`), so
+  the file is Rust's Helvetica file, with nothing embedded. No Roboto file is shipped (not in the
+  program, the wasm, the release archive nor the web build: 0.7 MB saved). Roboto is optional: the
+  body asks `"font": "roboto"`, and the carrier must have the two shipped files (the native host:
+  `$BIMBLE_FONTS`, else the repository's `crates/bimble-drawing/fonts/` in a dev build, else
+  `<config dir>/bimble/fonts`; the page hands none over). `query pdf_fonts` says
+  `{"helvetica":true,"roboto":bool}`; the Export dialog offers Roboto only when it is true. Asked
+  for without the files, or with other files, the sheet is drawn in Helvetica and a note goes to
+  the log: the export does not fail.
 - Rust asks where to save (`files::save`). Without `path`, and always in the wasm module, the call
   answers the PDF's bytes themselves (status 200), the one query whose answer is not JSON; the page
   downloads them as `"<number> <name>.pdf"` (a view: `"plan-<name>-1-<scale>.pdf"`), Rust's names.
 - The version in the frame's note and the producer is the C core's (deviation 11).
 
-**What Rust sees.** With no fonts, the test clock (2026-01-01), the file named `frame.json` and
-Rust's version (`cc_paper_set_version`, tests only), `sheet_pdf` of S-101 is
-`golden/drawing/pdf/S-101-helvetica.pdf` byte for byte, the producer masked (`test/sheet_pdf_test.c`).
-With the fonts, the file is D6's Roboto file (deviation 12).
+**What Rust sees.** By default (with or without the Roboto files at hand), with the test clock
+(2026-01-01), the file named `frame.json` and Rust's version (`cc_paper_set_version`, tests only),
+`sheet_pdf` of S-101 is `golden/drawing/pdf/S-101-helvetica.pdf` byte for byte, the producer
+masked (`test/sheet_pdf_test.c`). With `"font": "roboto"` and the files, the file is D6's Roboto
+file (deviation 12).
 
 **Where.** `ccore/session/sheet_svg.c` (`cc_paper_pdf_query`), `ccore/host/fonts.c`,
 `ccore/src/wasm_api.c` (`host_fonts`); tests `ccore/test/sheet_pdf_test.c`, `ccore/test/lab_export.mjs`.

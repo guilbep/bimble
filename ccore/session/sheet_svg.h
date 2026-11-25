@@ -49,19 +49,27 @@ void cc_paper_cache_free(struct cc_session *s);
  *     export_ifc) and the answer is {"path": file, "bytes": n}.
  *   - Without "path", and always in the wasm module (no files): the answer is the PDF's bytes
  *     themselves (the native host sends them as the POST body, the module as its answer buffer).
- *   - The text is Roboto (the default style's font) when the carrier handed the two shipped files
- *     over (cc_paper_set_fonts, or read from cc_paper_set_font_dir on the first export); else, or
- *     when a file is not the shipped one, the drawing is made again in Helvetica (the style's
- *     other font, not embedded) and a note goes to the log: the export does not fail.
+ *   - SIZE1: the text is Helvetica (one of the 14 fonts every PDF reader has: nothing embedded, no
+ *     file shipped), drawn with Helvetica's metrics, unless the body asks `"font": "roboto"` (also
+ *     `"helvetica"`, or null; another value is the error `font: "helvetica" or "roboto"`). Roboto
+ *     is used when the carrier handed the two shipped files over (cc_paper_set_fonts) or they are
+ *     in the folder of cc_paper_set_font_dir (read on that export); else, or when a file is not
+ *     the shipped one, the drawing is made in Helvetica and a note goes to the log: the export
+ *     does not fail.
  * Errors: "no sheet with id \"…\"", "no view with id \"…\"", "no model open", the drawing's own
  * text, "<file>: cannot write"; the viewer build: "this build is view-only". `view`: 0 sheet_pdf,
  * 1 view_pdf. */
 int cc_paper_pdf_query(struct cc_session *s, const cc_scene *sc, int view, const char *body, size_t n, Buf *out);
+/* SIZE1: the query `pdf_fonts` (no body) -> {"helvetica":true,"roboto":bool}: roboto when the two
+ * shipped Roboto files are handed over or in the font folder (read now). The viewer build: "this
+ * build is view-only". */
+int cc_paper_fonts_query(struct cc_session *s, Buf *out);
 /* The two Roboto files (Regular, Bold), copied; NULL / 0 drops one. 0 ok, -1 out of memory. */
 int cc_paper_set_fonts(struct cc_session *s, const unsigned char *regular, size_t nr, const unsigned char *bold,
                        size_t nb);
 /* The folder holding Roboto-Regular.ttf and Roboto-Bold.ttf, read through pf->read_file on the
- * first export that finds no files handed over (copied; NULL clears). 0 ok, -1 out of memory. */
+ * first Roboto export or `pdf_fonts` that finds no files handed over, again until both are found
+ * (copied; NULL clears). 0 ok, -1 out of memory. */
 int cc_paper_set_font_dir(struct cc_session *s, const char *dir);
 /* The version the PDF export names (the frame's note, the producer); NULL: the C core's
  * (CC_IFC_VERSION). For tests that compare with Rust's goldens. 0 ok, -1 out of memory. */
