@@ -7,7 +7,9 @@ sample and certification file we can find? What does it refuse, crash on, or ski
 ## Result in short (25 Nov 2026)
 
 **Update, ticket IFC2 (same day): the C reader now reads 7 of these gaps that Rust (frozen) still
-has; see "After IFC2" below.** The numbers in this section and the tables are IFC1's.
+has; see "After IFC2" below.** **Ticket IFC3: the importer at the reader's level (no silent drop),
+profile slopes, centre-line, composite and mirrored profiles, geometric sets, nesting 64; see
+"After IFC3".** The numbers in this section and the tables are IFC1's.
 
 - **617 STEP files (IFC2X3 283, IFC4 83, IFC4X3 249, other 2), 1.24 GB, 19.2 M entities: the C
   reader reads all 617 (ok), Rust reads all 617.** No refusal, no crash, no timeout, no file over
@@ -297,6 +299,168 @@ first "after" run). The sum of the read calls varies with the machine's load (ot
   joined like the revolved solid, caps at the ends. Size: 300–400 lines after the evaluator;
   1–2 days. The same evaluator also gives `IfcFixedReferenceSweptAreaSolid`,
   `IfcDirectrixCurveSweptAreaSolid` and `IfcInclinedReferenceSweptAreaSolid`.
+
+## After IFC3 (25 Nov 2026): the importer at the reader's level, slopes, more profiles, depth 64
+
+Ticket IFC3: the second round in the C core (`ccore/src/ifc_geom.h`, `ifc_read.c`, `ifc_in.c`);
+Rust (frozen, v0.19.0) still has every gap. What C does past Rust: `ccore/golden/DEVIATIONS.md`
+section 10, "Ticket IFC3". Each new type has a synthetic fixture in `ccore/golden/ifc_c/fixtures/`,
+a C-own read golden (`golden/ifc_c/read/`) and, new, a C-own import golden
+(`golden/ifc_c/import/<name>.json`, `.report.txt`), with hand-computed volumes and boxes in
+`ccore/test/ifc_read_test.c` and `ifc_in_test.c` (`own_imports`). Every Rust-origin golden is
+unchanged (the suites compare them: 0 failed).
+
+| item | done |
+|---|---|
+| 1. the importer takes a plain `IfcProductRepresentation` for every class (it took it only for the five classes it parametrises; IfcMember, proxies… were dropped without a word) | yes |
+| 2. importer and reader parity (table below); an extrusion is parametrised only when it is the whole Body | yes |
+| 3. slopes: I and U FlangeSlope, T WebSlope and FlangeSlope, L LegSlope; `IfcCenterLineProfileDef`, `IfcCompositeProfileDef`, `IfcMirroredProfileDef` (`IfcDerivedProfileDef` was there) | yes |
+| 4. `IfcGeometricSet` / `IfcGeometricCurveSet` read item by item; curves, points, texts in a body: "no body by design" | yes |
+| 5. representation nesting 32 -> 64 levels (the corpus needs 49) | yes |
+
+### Importer and display reader: what each takes (parity audit)
+
+The importer (`cc_ifc_import`) shares the reader's geometry (`ifc_geom.h`: `profile()`,
+`item()`). Its rule for an element: (a) its Body is one `IfcExtrudedAreaSolid` (through mapped
+items of one item each) that extrudes straight up a profile it can read: a parametric element
+(`wall`, `rect_column`, `rect_beam`, `pad_footing`, `slab`) or an `extruded_polygon` (any outline,
+holes included); (b) else its Body is one rigid `IfcMappedItem` without openings: a placed copy of
+the map's shared mesh; (c) else a `mesh` of everything `item()` draws; (d) nothing drawn: the named
+line `skipped: <class>: a body Bimble can't read yet` (or `no shape in the file`, `no 3D body,
+only <ids>`). Every new type follows that rule, so nothing the reader draws is dropped:
+
+| reader accepts | importer, before IFC3 | importer, after |
+|---|---|---|
+| plain `IfcProductRepresentation` | IfcColumn, IfcBeam, IfcSlab, IfcWall, IfcFooting only; **other classes dropped silently** | every class (`product_rep_member`) |
+| L, T, U, C, Z, asymmetric I, trapezium, ellipse, rounded rectangle profiles (IFC2) | `extruded_polygon` (shared `profile()`) | the same; the sloped ones too |
+| I, U, T, L slopes (IFC3) | drawn without the slope | `extruded_polygon` with the slope |
+| `IfcCenterLineProfileDef`, `IfcMirroredProfileDef` (IFC3) | none: "a body Bimble can't read yet" | `extruded_polygon` (the closed centre line: with its hole) |
+| `IfcCompositeProfileDef` (IFC3) | none | `mesh` (several regions are not one extrusion; one profile: that profile) |
+| `IfcRevolvedAreaSolid`, `IfcExtrudedAreaSolidTapered`, `IfcCsgSolid` and the five primitives (IFC2) | `mesh` | `mesh` |
+| booleans, face sets, breps, surface models, swept disks (Rust's set) | as Rust | as Rust |
+| an extrusion beside other items in one Body | **the first extrusion only, the rest dropped silently** (Rust too) | `mesh` of the whole Body (`multi_item`) |
+| curves, points, texts in a Body (IFC3: "no body by design") | "a body Bimble can't read yet" | the same line (and the reader's warning) |
+| 33..64 levels of nesting (IFC3) | none | `mesh` (`deep_nesting`) |
+
+On the corpus (`ifc_dump import`, the 616 STEP files under 60 MB, before = the IFC2 build, after
+= IFC3): **114,723 -> 114,797 elements imported** (the reader draws 114,708 elements on these
+files); 63 files changed. The largest change is the whole-Body rule: **12,825 elements had been
+parametrised from their first extrusion only** and are now meshes of their whole Body (doors and
+windows of frames and panes, MEP fittings, furniture, and 60 walls, 13 slabs, 2 columns:
+`DigitalHub_FM-ARC_v2.ifc` has 53 walls of four extrusions each, of which the importer kept one).
+Kinds after: mesh 63,423 -> 76,261, extruded_polygon 42,801 -> 30,112, wall 5,215 -> 5,155, slab
+1,196 -> 1,183, rect_column 466 -> 464 (beams and footings unchanged). +74 elements: the
+`IfcProductRepresentation` products of `acad2010_objects.ifc` (23 -> 52) and
+`nested_mapped_item.ifc` (23 -> 53), and the new types. The reader draws more than the importer
+imports on 8 files only, none for a geometry reason: invalid or duplicate GlobalIds (the
+IfcOpenShell "augmented" files `458`, `471`, `474`, `478` use `xxxx…`, `aaaa…`;
+`ifcopenshell_halfspaces.ifc` has ids out of the base-64 range; `construction2.ifc` and `640--…`
+one each): the importer skips such an element by name (`invalid GlobalId`, `duplicate
+GlobalId`), as Rust does.
+
+### Slopes: reference points and IfcOpenShell
+
+The IFC figures do not dimension where the nominal thickness of a sloped face holds; the reference
+points are IfcOpenShell's, read in its source (v0.8.0, `src/ifcgeom/mapping/IfcIShapeProfileDef.cpp`
+and the U, T, L ones; 0.9 is the venv here): I at the flange's edge, U at half FlangeWidth from the
+web's back, L at the box's centre lines, T's web at mid-depth and T's flange a quarter FlangeWidth
+from the centre. The slope is the face's angle exactly. One difference: IfcOpenShell's T underside
+ends at x = WebThickness/2 with a run of x/2 - WebThickness (it mixes the half and the whole web),
+so its face is a little less steep than FlangeSlope; C keeps the slope.
+
+Per product volume, C against IfcOpenShell 0.9 (before -> after):
+
+| file / fixture | before | after |
+|---|---|---|
+| `files/IfcLShapeProfileDef.ifc` (2 sloped of 4) | +1.70 %, +1.68 % | +0.000 %, +0.003 % |
+| `files/IfcUShapeProfileDef.ifc` (2 sloped of 4) | +1.58 %, +2.24 % | +0.000 %, +0.012 % |
+| `files/IfcTShapeProfileDef.ifc` (2 sloped of 4) | +2.84 %, +2.94 % | +0.22 %, +0.21 % |
+| `ishape_slope` (hand 13,411,040.8 mm³) | -13.5 % | 0.000 % |
+| `ushape_slope` (hand 3,270,207.2) | +1.77 % | 0.000 % |
+| `ushape_slope_fillet` (hand 3,295,600.4; arcs as chords) | +1.95 % | -0.015 % |
+| `lshape_slope` (hand 1,795,060.3) | +5.85 % | 0.000 % |
+| `tshape_slope` (hand 3,998,768.5; IfcOpenShell 3,965,280.7, its T rule) | +3.40 % | +0.84 % |
+
+The I-shape corpus file has no slope (IFC2X3); unchanged. Every corpus profile file is within
+0.5 % of IfcOpenShell.
+
+Other new types against IfcOpenShell 0.9: `IfcCompositeProfileDef` agrees region by region
+(`ISSUE_044`: the new element 431,487.4 / 431,487.5 mm³; `793--wall--segfault.ifc` -0.02 %;
+`files/IfcCompositeProfileDef.ifc` +4.5 %, all of it its derived T scaled by 0.3, where
+IfcOpenShell's area is 0.018 of the parent's instead of 0.3² = 0.09; the other three regions
+agree to 0.06 %). `IfcCenterLineProfileDef`: IfcOpenShell 0.8 maps it to nothing; 0.9 fills the
+curve's area (`files/10336--…`: a 10 mm strip on a half ellipse 50 x 25, C 120,811 mm³ against
+121,100 by hand, IfcOpenShell 194,244, the half-ellipse's area). `IfcMirroredProfileDef`:
+IfcOpenShell mirrors inside the parent's Position (the one corpus file with it,
+`UT_SAS_4/IFC reference files/UT_SAS_2.ifc`, IFC4X3_RC3, uses it as the section of an
+IfcSectionedSolidHorizontal: no change there). Curves in a body: neither draws
+them. The deep files: `599--beam--segfault.ifc` +0.002 %, `588--…` -1.3 % (its augmented
+faceted breps cut 49 times).
+
+### Before and after, file by file (C, `CORPUS_TAG=ifc3-before` / `ifc3-after`)
+
+Before: the IFC2 build (HEAD at the ticket's start, `C_DUMP=`); after: the IFC3 build.
+**828 files; 811 give the same scene, byte for byte; 17 changed, each explained** (checked by a
+script: the file holds a new type, or warned "representation nesting too deep" before):
+
+| file | elements | triangles | why |
+|---|---|---|---|
+| `IfcSampleFiles/Ifc4_Revit_ARC.ifc` | 442 -> 442 | 351933 -> 351933 | warning only: IFCINDEXEDPOLYCURVE now "no body by design" |
+| `IfcSampleFiles/Ifc4_Revit_ARC_FireRatingAdded.ifc` | 442 -> 442 | 351933 -> 351933 | the same |
+| `IfcSampleFiles/Ifc4_Revit_MEP.ifc` | 6787 -> 6787 | 997812 -> 997812 | the same |
+| `engine_web-ifc/tests/ifcfiles/public/FM_ARC_DigitalHub.ifc` | 529 -> 529 | 21744 -> 21744 | warning only: IFCPOLYLINE in a body |
+| `engine_web-ifc/tests/ifcfiles/public/ISSUE_034_HouseZ.ifc` | 228 -> 228 | 242972 -> 242972 | warning only: IFCGEOMETRICSET of curves and texts |
+| `engine_web-ifc/tests/ifcfiles/public/ISSUE_044_test_IFCCOMPOSITEPROFILEDEF.ifc` | 6 -> 7 | 104 -> 128 | IFCCOMPOSITEPROFILEDEF |
+| `engine_web-ifc/tests/ifcfiles/public/S_Office_Integrated Design Archi.ifc` | 3403 -> 3407 | 1165570 -> 1166908 | nesting bound (42 deep) |
+| `files/10336--buildingElementProxy--wrong-geometry.ifc` | 0 -> 6 | 0 -> 2752 | IFCCENTERLINEPROFILEDEF; IFCGEOMETRICSET now names its surfaces |
+| `files/452--line-segment--curved.ifc` | 0 -> 0 | 0 -> 0 | warning only: IFCGEOMETRICSET of curves |
+| `files/452--line-segment-straight.ifc` | 0 -> 0 | 0 -> 0 | the same |
+| `files/588--buildingElementPart--timeout--augmented.ifc` | 0 -> 1 | 0 -> 26 | nesting bound (49 deep) |
+| `files/599--beam--segfault.ifc` | 0 -> 1 | 0 -> 1546 | nesting bound (39 deep) |
+| `files/793--wall--segfault.ifc` | 0 -> 1 | 0 -> 14188 | IFCCOMPOSITEPROFILEDEF |
+| `files/IfcCompositeProfileDef.ifc` | 0 -> 1 | 0 -> 808 | IFCCOMPOSITEPROFILEDEF (an L with LegSlope inside) |
+| `files/IfcLShapeProfileDef.ifc` | 4 -> 4 | 272 -> 272 | LegSlope |
+| `files/IfcTShapeProfileDef.ifc` | 4 -> 4 | 496 -> 496 | WebSlope, FlangeSlope |
+| `files/IfcUShapeProfileDef.ifc` | 4 -> 4 | 368 -> 368 | FlangeSlope |
+
+- Elements drawn (617 STEP files): **125,817 -> 125,832** (+15).
+- The unsupported list loses `IFCGEOMETRICSET` (4 files), `IFCINDEXEDPOLYCURVE` (3),
+  `IFCPOLYLINE` (1), `IFCTEXTLITERALWITHEXTENT` (1), `IFCCOMPOSITEPROFILEDEF` (3),
+  `IFCCENTERLINEPROFILEDEF` (1) and "representation nesting too deep" (3); it gains
+  `IFCSURFACEOFLINEAREXTRUSION` and `IFCSURFACEOFREVOLUTION` (1 file each, `10336--…`: they were
+  hidden inside its geometric sets). Left: IfcAdvancedBrep (9), IfcSectionedSolidHorizontal (5),
+  IfcFixedReferenceSweptAreaSolid (3), IfcSurfaceCurveSweptAreaSolid (2),
+  IfcInclinedReferenceSweptAreaSolid (1), the two surfaces (1).
+
+### IfcOpenShell agreement (the 40-file sample, products with geometry)
+
+**IfcOpenShell 15,679; C 15,414 -> 15,416; equal files 34 -> 36** (`588--…` and `599--…`, the
+nesting bound). Still fewer: `338--…` (IfcAdvancedBrep), Viadotto Acerno
+(IfcSectionedSolidHorizontal, IfcLinearPlacement); still more: the two INDOT files IfcOpenShell
+draws empty.
+
+### Nesting bound: 64
+
+The deepest item nesting in the 617 STEP files (a script over the item graph: boolean operands,
+CSG roots, mapped items, geometric sets): 49 (`files/588--…`), then 42 (`S_Office_Integrated
+Design Archi.ifc`), 39 (`files/599--…`), 31, 30; all others under 30. The bound is now 64
+(`MAX_NESTING`, `ifc_geom.h`); the budget on visited items and triangles still caps the total
+work (a binary tree 64 deep visits at most `visits_left`, 5 M or a tenth of the displayed bytes).
+The recursion's stack: the wasm module has 64 KB (`__stack_pointer` 65,536); per level item()
+and boolean_result() now take 128 + 80 bytes on wasm32 (`-fstack-usage`, `-O2`) against 416 + 720
+before (the leaves, the mapped item's frames and the boolean arithmetic moved to NOINLINE
+functions), so 64 levels use 13 KB where 32 used 36 KB. Checked: `open_ifc` in `ccore.wasm` on
+`deep_nesting.ifc` (64), `deep_nesting_over.ifc` (65), `588--…` and `599--…`: no trap.
+Fixtures: `deep_nesting` (64 nested `IfcBooleanResult`, drawn) and `deep_nesting_over` (65:
+warned, the proxy skipped by the importer with its named line).
+
+### ASan+UBSan
+
+`bench/corpus.sh asan` then `CORPUS_TAG=ifc3-asan bench/corpus.sh run` (clang -O1 -g,
+ASan+UBSan+LeakSanitizer, `halt_on_error`) on the IFC3 sources: 655 files (617 STEP, 38 not
+STEP; 173 git-lfs pointers skipped as before), **no report**; every outcome equal to the -O2
+build's (617 ok, 38 refused), and the -O2 scenes of that run equal the "after" run's on all 828
+records. `ccore/ci/run.sh full`: 37 suites, 0 failed (the clang ASan+UBSan unit run included).
 
 ## Tables (generated: `ccore/bench/corpus.sh report`)
 
