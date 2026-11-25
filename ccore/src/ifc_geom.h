@@ -1407,6 +1407,125 @@ out:
     loops_free(&ls);
 }
 
+/* Local solids (file units, in a placement's coordinates) emitted through that placement:
+ * oriented outward by their signed volume (a mirroring placement included), then scaled. */
+static void emit_local(Tris *t, const Aff *pos, Emit *out) {
+    double vol = 0;
+    for (size_t i = 0; i < t->n; i++) {
+        const double *a = t->t[i], *b = a + 3, *c = a + 6;
+        double bc[3];
+        cross(b, c, bc);
+        vol += dot(a, bc);
+    }
+    int flip = (vol < 0.0) != (aff_det(pos) < 0.0);
+    for (size_t i = 0; i < t->n && has_budget(out); i++) {
+        double p[3][3];
+        for (int k = 0; k < 3; k++) aff_apply(pos, t->t[i] + 3 * k, p[k]);
+        if (flip) emit_triangle(out, p[0], p[2], p[1]);
+        else emit_triangle(out, p[0], p[1], p[2]);
+    }
+}
+/* A triangle unless two corners are the same point (on a revolution's axis). */
+static void tri_local(Tris *t, const double *a, const double *b, const double *c) {
+    if (!memcmp(a, b, 24) || !memcmp(b, c, 24) || !memcmp(a, c, 24)) return;
+    double q[3][3];
+    memcpy(q[0], a, 24), memcpy(q[1], b, 24), memcpy(q[2], c, 24);
+    tris_add(t, (const double(*)[3])q);
+}
+/* Room for more local triangles: the element's limit and the triangles left in the job. */
+static int local_room(const Tris *t, Emit *out) {
+    return !t->oom && t->n < out->budget->element_max && t->n < cc_atomic_load(&out->budget->triangles_left);
+}
+
+/* IfcRevolvedAreaSolid (SweptArea, Position, Axis, Angle): the profile turned about Axis (an
+ * IfcAxis1Placement in Position's XY plane) by Angle, right-handed; ticket IFC2 (Rust skips it).
+ * Rings of the profile's points at the reader's arc segmentation for the largest radius; end caps
+ * unless the turn is whole. */
+static void revolved(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {
+    Loops ls;
+    if (!profile(r, arg(e, 0), 0, &ls)) return;
+    Aff ap = axis_placement(r, arg(e, 1));
+    Aff pos = aff_then(tf, &ap);
+    const cc_step_entity *ax = get(r, arg(e, 2));
+    double A[3] = {0, 0, 0}, d0[3] = {0, 0, 1}, d[3], ang;
+    Tris t = {0};
+    P3 *rings = NULL;
+    if (ax && !point(r, arg(ax, 0), A)) A[0] = A[1] = A[2] = 0;
+    if (ax) direction(r, arg(ax, 1), d0);
+    if (!normalize(d0, d) || !num(e, 3, &ang)) goto out;
+    ang *= r->angle_scale;
+    if (ang > TAU) ang = TAU;
+    if (ang < -TAU) ang = -TAU;
+    if (!(ang != 0.0)) goto out;
+    int full = (ang < 0 ? -ang : ang) >= TAU - 1e-9;
+    for (size_t i = 0; i < ls.n; i++) {
+        int ccw = signed_area(&ls.v[i]) > 0.0;
+        if (ccw == (i > 0)) loop_reverse(&ls.v[i]);
+    }
+    /* Per profile point: height along the axis, radial vector, its turn by 90 degrees. */
+    double rmax = 0;
+    for (size_t i = 0; i < ls.n; i++)
+        for (size_t j = 0; j < ls.v[i].n; j++) {
+            double w[3] = {ls.v[i].p[j][0] - A[0], ls.v[i].p[j][1] - A[1], -A[2]}, h = dot(w, d);
+            double rv[3] = {w[0] - h * d[0], w[1] - h * d[1], w[2] - h * d[2]};
+            rmax = fmax_rs(rmax, norm3(rv));
+        }
+    if (!(rmax > 0.0) || !finite(rmax)) goto out;
+    size_t n = arc_segments(rmax, ang, r->arc_tol), nr = full ? n : n + 1;
+    rings = calloc(ls.n, sizeof *rings); /* loop i: nr rings of ls.v[i].n points */
+    if (!rings) { out->mb->oom = 1; goto out; }
+    for (size_t i = 0; i < ls.n; i++)
+        for (size_t k = 0; k < nr; k++) {
+            double th = ang * (double)k / (double)n, c = cc_cos(th), sn = cc_sin(th);
+            for (size_t j = 0; j < ls.v[i].n; j++) {
+                double w[3] = {ls.v[i].p[j][0] - A[0], ls.v[i].p[j][1] - A[1], -A[2]}, h = dot(w, d);
+                double rv[3] = {w[0] - h * d[0], w[1] - h * d[1], w[2] - h * d[2]}, pv[3], q[3];
+                cross(d, rv, pv);
+                for (int m = 0; m < 3; m++) q[m] = A[m] + h * d[m] + c * rv[m] + sn * pv[m];
+                if (p3_push(&rings[i], q)) { out->mb->oom = 1; goto out; }
+            }
+        }
+    for (size_t i = 0; i < ls.n && local_room(&t, out); i++) {
+        size_t m = ls.v[i].n;
+        for (size_t k = 0; k < n && local_room(&t, out); k++) {
+            const double(*b)[3] = rings[i].p + k * m, (*u)[3] = rings[i].p + ((k + 1) % nr) * m;
+            for (size_t a = 0; a < m; a++) {
+                size_t z = (a + 1) % m;
+                tri_local(&t, b[a], b[z], u[z]);
+                tri_local(&t, b[a], u[z], u[a]);
+            }
+        }
+    }
+    if (!full && local_room(&t, out)) { /* caps: the profile at 0 (reversed) and at Angle */
+        P3 *h0 = calloc(ls.n, sizeof *h0), *h1 = calloc(ls.n, sizeof *h1);
+        int bad = !h0 || !h1;
+        for (size_t i = 0; !bad && i < ls.n; i++) {
+            size_t m = ls.v[i].n;
+            for (size_t j = 0; !bad && j < m; j++) {
+                bad = p3_push(&h0[i], rings[i].p[i ? j : m - 1 - j]);
+                if (!bad) bad = p3_push(&h1[i], rings[i].p[n * m + j]);
+            }
+        }
+        if (bad) t.oom = 1;
+        else {
+            add_polygon(&t, (const double(*)[3])h0[0].p, h0[0].n, h0 + 1, ls.n - 1);
+            add_polygon(&t, (const double(*)[3])h1[0].p, h1[0].n, h1 + 1, ls.n - 1);
+        }
+        for (size_t i = 0; i < ls.n; i++) {
+            if (h0) p3_free(&h0[i]);
+            if (h1) p3_free(&h1[i]);
+        }
+        free(h0), free(h1);
+    }
+    if (t.oom) out->mb->oom = 1;
+    else emit_local(&t, &pos, out);
+out:
+    for (size_t i = 0; rings && i < ls.n; i++) p3_free(&rings[i]);
+    free(rings);
+    tris_free(&t);
+    loops_free(&ls);
+}
+
 /* point_list_3d: coordinates with three values each. */
 static int point_list_3d(R *r, const cc_sv *v, P3 *out, const Aff *tf) {
     memset(out, 0, sizeof *out);
@@ -1871,6 +1990,7 @@ static void item(R *r, uint64_t id, const Aff *tf, Emit *out, int depth) {
     const cc_step_entity *e = cc_step_get(r->f, id);
     if (!e) return;
     if (is(e, "IFCEXTRUDEDAREASOLID")) extrusion(r, e, tf, out);
+    else if (is(e, "IFCREVOLVEDAREASOLID")) revolved(r, e, tf, out);
     else if (is(e, "IFCPOLYGONALFACESET")) polygonal_face_set(r, e, tf, out);
     else if (is(e, "IFCTRIANGULATEDFACESET") || is(e, "IFCTRIANGULATEDIRREGULARNETWORK"))
         triangulated_face_set(r, e, tf, out);

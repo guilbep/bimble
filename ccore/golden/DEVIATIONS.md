@@ -331,6 +331,10 @@ byte for byte once both version notes are cut out.
   slope too). The Z-shape's FlangeWidth runs from the web's centre line, as IfcOpenShell draws it.
   Invalid dimensions (not a number, not > 0, a thickness past the depth): warning
   `invalid profile <TYPE> (skipped)`. Rust: `unsupported profile <TYPE> (skipped)`.
+- `IfcRevolvedAreaSolid`: the profile turned about its axis (right-handed) by the angle, in
+  rings at the reader's arc segmentation for the profile's largest radius, with end caps unless
+  the turn is whole; oriented outward by its signed volume. Rust: `unsupported geometry
+  IFCREVOLVEDAREASOLID (skipped)`.
 
 **Why.** ADR 0068 rule 10 (full IFC compatibility); the public corpus run (ticket IFC1,
 `ccore/results/ifc_corpus.md`) ranked these gaps. The reference is IfcOpenShell and the IFC

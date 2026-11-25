@@ -356,6 +356,12 @@ static const struct {
     {"ellipse", 1, 62831853.1, 5e-3, {-200, -100, 0}, {200, 100, 1000}, 1.0, NULL},
     /* rounded rectangle 400x200, r 50: 80000 - (4 - pi) 50^2 = 77853.98; chords within 0.2 % */
     {"rounded_rect", 1, 77853981.6, 2e-3, {-200, -100, 0}, {200, 100, 1000}, 1e-3, NULL},
+    /* IfcRevolvedAreaSolid: a 100x200 rectangle, x 400..500, turned about the Y axis
+     * (right-handed: +X goes to -Z). Pappus: angle * area * centroid radius; chords within 0.3 %.
+     * A quarter turn: pi/2 * 20000 * 450 = 14137166.9, box x 0..500, z -500..0 */
+    {"revolved", 1, 14137166.9, 3e-3, {0, -100, -500}, {500, 100, 0}, 1e-3, NULL},
+    /* A whole turn: 2 pi * 20000 * 450 = 56548667.8, box +-500 (within 1 mm: chords) */
+    {"revolved_full", 1, 56548667.8, 3e-3, {-500, -100, -500}, {500, 100, 500}, 1.0, NULL},
 };
 
 static void own_goldens(void) {
