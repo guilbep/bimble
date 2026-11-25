@@ -92,6 +92,36 @@ int main(int argc, char **argv) {
     }
     printf("  golden records: %zu\n", nrec);
 
+    /* frame2: walls, extruded polygons with voids, a mesh, properties, project info (T2b). */
+    {
+        size_t f2n, q2n;
+        char *f2 = slurp(golden, "frame2.json", &f2n);
+        if (f2n && f2[f2n - 1] == '\n') f2n--;
+        cc_model m2;
+        cc_error e2;
+        int loaded = cc_model_load(&m2, f2, f2n, &e2) == 0;
+        check_true("frame2.json loads", loaded);
+        if (loaded) {
+            char *t2 = slurp(golden, "frame2/query.txt", &q2n);
+            static Rec rec2[256];
+            size_t n2 = parse_records(t2, q2n, rec2, 256);
+            check_true("frame2/query.txt has records", n2 >= 25);
+            for (size_t i = 0; i < n2; i++) {
+                buf_clear(&b);
+                int st = cc_query(&m2, rec2[i].name, rec2[i].args, rec2[i].args_n, &b);
+                char what[256];
+                snprintf(what, sizeof what, "frame2 query %s %.*s", rec2[i].name, (int)rec2[i].args_n,
+                         rec2[i].args);
+                check_true(what, st == rec2[i].status);
+                check_eq(what, b.p ? b.p : "", b.len, rec2[i].want, rec2[i].want_n);
+            }
+            printf("  frame2 golden records: %zu\n", n2);
+            free(t2);
+        }
+        cc_model_free(&m2);
+        free(f2);
+    }
+
     {
         int reps = 100;
         double t0 = now_ms();
