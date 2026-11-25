@@ -16,6 +16,7 @@
 #include "scene.h"
 #include "tool.h"
 #include "viewfile.h"
+#include "visibility.h"
 
 typedef enum { CC_KIND_COLUMN, CC_KIND_BEAM, CC_KIND_WALL, CC_KIND_SLAB } cc_kind; /* verbs.rs:29 */
 
@@ -65,6 +66,7 @@ typedef struct cc_session {
     int polygon;
     cc_tool tool; /* the place tool's points and pointer (tool.h); cleared with the placing state */
     int tab_open; /* the 3D view's tab is open and current */
+    cc_vis vis;   /* hidden, isolated, the section box (visibility.h): session state, not model */
     /* The scene of the current rev (calls.c), built once per rev, shared by query status and
      * GET /mesh. scene_rev 0: none built. */
     cc_scene scene;

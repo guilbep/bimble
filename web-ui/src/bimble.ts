@@ -681,6 +681,43 @@ export function toolCall(name: "pointer" | "click" | "cancel", args: ToolPointer
   }
 }
 
+/** `query("visibility_sets")` (C core only, ccore/session/calls.h): the whole sets `query("visibility")` caps at 50. */
+export interface VisibilitySets {
+  hidden_in_view: string[];
+  isolated_in_view: string[];
+  now: { ids: string[]; isolate: boolean } | null;
+  reveal: boolean;
+}
+export const visibilitySets = () => tryQuery<VisibilitySets | null>("visibility_sets", null);
+
+/** The section box tool's state (C core only, op `tool` box_*): `box` is the drag's preview while `active`. Scene mm. */
+export interface BoxToolState {
+  active: boolean;
+  box: { min: number[]; max: number[]; yaw: number } | null;
+  face: number | null;
+  on: boolean;
+}
+/** One call of the section box tool (C core only): `box_press` / `box_move` / `box_release` take
+ *  `{ray, ray_tol}` (scene coordinates), `box_set` takes `{min, max, on?}`. Session state, no history step;
+ *  the box is not in the change signature, so `visibility` is refreshed here after a change. */
+export function boxTool(
+  name: "box_press" | "box_move" | "box_release" | "box_cancel" | "box_set",
+  args: { ray?: number[]; ray_tol?: number[]; min?: number[]; max?: number[]; on?: boolean } = {},
+): { state: BoxToolState | null; error: string | null } {
+  try {
+    const w = wasmOrThrow();
+    if (!w.tool) return { state: null, error: "the section box tool needs the C core" };
+    const state = JSON.parse(w.tool(name, JSON.stringify(args))) as BoxToolState;
+    if (name !== "box_move" && name !== "box_press") visibility.value = tryQuery<Visibility | null>("visibility", null);
+    return { state, error: null };
+  } catch (e) {
+    return { state: null, error: message(e) };
+  }
+}
+/** Set the section box (scene mm, as `visibility.section_box.box`); `on` also turns it on or off. Returns the error, or null. */
+export const setSectionBox = (min: number[], max: number[], on?: boolean) =>
+  boxTool("box_set", on === undefined ? { min, max } : { min, max, on }).error;
+
 export function undo(): string | null {
   try { wasmOrThrow().undo(); return null; } catch (e) { return message(e); }
 }
@@ -740,7 +777,12 @@ export const screenRoutes: Record<string, () => void> = {};
 export function runAction(name: string): string | null {
   const route = screenRoutes[name];
   if (route) { route(); return null; }
-  try { wasmOrThrow().action(name); return null; } catch (e) { return message(e); }
+  try {
+    wasmOrThrow().action(name);
+    // The box moves without a change event (its geometry is not in the change signature, calls.rs:152).
+    if (name === "box_to_selection") visibility.value = tryQuery<Visibility | null>("visibility", null);
+    return null;
+  } catch (e) { return message(e); }
 }
 
 /** Activate or close one open tab (`openViews.tabs`). Returns the Rust error, or null. */

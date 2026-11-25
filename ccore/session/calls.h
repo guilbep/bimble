@@ -46,7 +46,26 @@ enum { CC_OK = 200, CC_ERR = 400 };
  *    "kind":…,"placed":null|GlobalId,"points":[[x,y],…]}
  * ghost: the element the next click adds (a dry run of the verb meshed by the scene code), f32
  * positions relative to `origin` (the shown scene's origin); ghost_error: why there is none; snap:
- * "axis crossing", "column centre", "corner", "grid axis", "edge" or null (rounded). */
+ * "axis crossing", "column centre", "corner", "grid axis", "edge" or null (rounded).
+ * The section box's tool (op "tool", ticket B3, session/visibility.h), with any scene shown (else
+ * 400 "no model open"). Session state: no history step, no rev change.
+ *   box_press   {"ray":[…], "ray_tol":[…]} (scene coordinates): grabs the face handle under the
+ *               pointer (the face centre nearest to the ray, within the ray_tol distance); none,
+ *               or the box off: inactive, and the page orbits.
+ *   box_move    {"ray":[…]}: the held face follows the pointer (the point of its axis nearest to
+ *               the ray), at least 10 mm thick; the session's box is unchanged (a preview).
+ *   box_release {"ray":[…]} or empty: the preview becomes the session's box (one change).
+ *   box_cancel  the drag dropped, the box as it was.
+ *   box_set     {"min":[x,y,z], "max":[x,y,z], "on"?: bool}: the box (scene coordinates, mm
+ *               relative to the scene origin, as query visibility), at least 10 mm per axis.
+ * Each answers {"active":bool,"box":null|{"max":[…],"min":[…],"yaw":0.0},"face":null|0..5,"on":bool}
+ * (face k: axis k/2, its min side for even k); box: the preview while active.
+ * query "visibility_sets" (a C addition): the whole sets the page draws from (query visibility
+ * caps its lists at 50): {"hidden_in_view":[…],"isolated_in_view":[…],"now":null|{"ids":[…],
+ * "isolate":bool},"reveal":bool}.
+ * The visibility actions (hide_now, isolate_now, hide_in_view, isolate_in_view, unhide,
+ * reveal_hidden, clear_temporary, show_all_in_view, section_box, box_to_selection) run as
+ * ribbon.rs run_action; the change JSON's "view" carries their signature (calls.rs:152-161). */
 int cc_call(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out);
 
 /* The change JSON (`Viewer::change_json`, calls.rs:134-167) for the state now. The host

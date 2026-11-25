@@ -535,11 +535,27 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strncmp(name, "place_", 6)) return s->open;
     if (!strcmp(name, "export_ifc4") || !strcmp(name, "export_ifc2x3")) return s->open; /* ribbon.rs:577 */
     if (!strcmp(name, "home")) return 1;
+    /* Visibility and the section box (ribbon.rs:592-611; the C core has only the 3D view: never flat). */
+    if (!strcmp(name, "section_box") || !strcmp(name, "reveal_hidden")) return loaded(s);
+    if (!strcmp(name, "box_to_selection")) return loaded(s) && s->vis.section_on;
+    if (!strcmp(name, "clear_temporary")) return loaded(s) && s->vis.has_temp;
+    if (!strcmp(name, "show_all_in_view")) return loaded(s) && cc_vis_hidden_in_view(&s->vis);
+    if (!strcmp(name, "hide_now") || !strcmp(name, "isolate_now") || !strcmp(name, "hide_in_view") || !strcmp(name, "isolate_in_view"))
+        return loaded(s) && s->has_primary;
+    if (!strcmp(name, "unhide")) {
+        if (!loaded(s) || !s->has_primary) return 0;
+        if (cc_vis_hidden(&s->vis, &s->primary)) return 1;
+        for (size_t i = 0; i < s->nalso; i++)
+            if (cc_vis_hidden(&s->vis, &s->also[i])) return 1;
+        return 0;
+    }
     return 0;
 }
 
 static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strncmp(a->name, "place_", 6)) return s->open && s->placing && !strcmp(a->name + 6, KIND_NAME[s->placing_kind]);
+    if (!strcmp(a->name, "section_box")) return s->vis.section_on; /* ribbon.rs:629 */
+    if (!strcmp(a->name, "reveal_hidden")) return s->vis.reveal;   /* ribbon.rs:643 */
     return a->pressed;
 }
 
@@ -562,32 +578,9 @@ static int q_actions(cc_session *s, JsonW *w) { /* calls.rs:325-339 */
     return done(w);
 }
 
-static void capped_empty(JsonW *w) { /* calls.rs:57-63 `capped` */
-    jw_obj_begin(w);
-    jw_key(w, "count"), jw_u64(w, 0);
-    jw_key(w, "ids"), jw_arr_begin(w), jw_arr_end(w);
-    jw_obj_end(w);
-}
-
-static int q_visibility(cc_session *s, JsonW *w) { /* calls.rs:442-460: nothing hidden, no section box */
-    const cc_scene *sc = scene_now(s);
-    jw_obj_begin(w);
-    jw_key(w, "hidden_in_view"), capped_empty(w);
-    jw_key(w, "hidden_now"), capped_empty(w);
-    jw_key(w, "isolated_in_view"), capped_empty(w);
-    jw_key(w, "isolated_now"), capped_empty(w);
-    jw_key(w, "section_box");
-    jw_obj_begin(w);
-    jw_key(w, "box"), jw_null(w);
-    jw_key(w, "on"), jw_bool(w, 0);
-    jw_key(w, "origin_mm");
-    if (sc) {
-        jw_arr_begin(w);
-        for (int i = 0; i < 3; i++) jw_f64(w, sc->origin[i]);
-        jw_arr_end(w);
-    } else jw_null(w);
-    jw_obj_end(w);
-    jw_obj_end(w);
+static int q_visibility(cc_session *s, JsonW *w) { /* calls.rs:442-460 (visibility.h) */
+    const cc_scene *sc = loaded(s) ? scene_now(s) : NULL;
+    cc_vis_json(&s->vis, w, sc ? sc->origin : NULL);
     return done(w);
 }
 
@@ -778,6 +771,10 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         return CC_OK;
     }
     if (!strcmp(name, "visibility")) return q_visibility(s, &w);
+    if (!strcmp(name, "visibility_sets")) { /* a C addition (visibility.h): the page draws from these */
+        cc_vis_sets_json(&s->vis, &w);
+        return done(&w);
+    }
     if (!strcmp(name, "open_views")) return q_open_views(s, &w);
     if (!strcmp(name, "collab")) return q_collab(&w);
     if (!strcmp(name, "status")) return q_status(s, &w, out);
@@ -1025,6 +1022,52 @@ static int file_action(cc_session *s, const char *name, const FileArgs *fa, cc_b
     return -1;
 }
 
+static int gid_cmp(const void *a, const void *b);
+
+/* The selection, sorted and unique (visibility.rs `selection`: scene order = GlobalId order). */
+static cc_gid *selection_ids(const cc_session *s, size_t *n) {
+    *n = 0;
+    cc_gid *v = malloc((s->nalso + 1) * sizeof *v);
+    if (!v) return NULL;
+    if (s->has_primary) v[(*n)++] = s->primary;
+    for (size_t i = 0; i < s->nalso; i++) v[(*n)++] = s->also[i];
+    qsort(v, *n, sizeof *v, gid_cmp);
+    size_t k = 0;
+    for (size_t i = 0; i < *n; i++)
+        if (!k || cc_gid_cmp(&v[k - 1], &v[i])) v[k++] = v[i];
+    *n = k;
+    return v;
+}
+
+/* ribbon.rs:708-775: the section box and visibility actions. 0 ok (or not one of them), -1 with
+ * the error in `out` (out of memory). Session state only: no history step, rev unchanged. */
+static int vis_action(cc_session *s, const char *name, cc_buf *out) {
+    cc_vis *v = &s->vis;
+    const cc_gid *primary = s->has_primary ? &s->primary : NULL;
+    if (!strcmp(name, "section_box")) cc_vis_toggle(v, scene_now(s), primary);
+    else if (!strcmp(name, "box_to_selection")) cc_vis_fit(v, scene_now(s), primary);
+    else if (!strcmp(name, "reveal_hidden")) v->reveal = !v->reveal;
+    else if (!strcmp(name, "clear_temporary")) cc_vis_clear_temporary(v);
+    else if (!strcmp(name, "show_all_in_view")) cc_vis_show_all_in_view(v);
+    else {
+        static const char *const HIDE[] = {"hide_now", "isolate_now", "hide_in_view", "isolate_in_view", "unhide"};
+        int a = -1;
+        for (int i = 0; i < 5; i++)
+            if (!strcmp(name, HIDE[i])) a = i; /* CC_VIS_HIDE_NOW … CC_VIS_UNHIDE */
+        if (a < 0) return 0;
+        size_t n;
+        cc_gid *sel = selection_ids(s, &n);
+        int rc = !sel || cc_vis_hide_or_isolate(v, a, sel, n);
+        free(sel);
+        if (rc) {
+            buf_puts(out, "out of memory");
+            return -1;
+        }
+        if (n && !v->reveal) s->has_primary = 0, s->nalso = 0; /* visibility.rs:106 clear_selection */
+    }
+    return 0;
+}
+
 /* Actions the C core runs that the ribbon does not list (above). */
 static const char *const HIDDEN_ACTIONS[] = {"save_as", "close"};
 
@@ -1057,7 +1100,8 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     else if (!strncmp(name, "place_", 6)) {
         for (int k = 0; k < 4; k++)
             if (!strcmp(name + 6, KIND_NAME[k])) place_action(s, (cc_kind)k);
-    } /* home: the lab shows its own Home */
+    } else if (vis_action(s, name, out)) return CC_ERR;
+    /* home: the lab shows its own Home */
     return CC_OK;
 }
 
@@ -1542,6 +1586,13 @@ static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out) {
 
 /* op "tool" (calls.h). */
 static int call_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
+    if (cc_vis_tool_name(name)) { /* the section box's face drag (visibility.h): any scene shown */
+        if (!loaded(s)) {
+            buf_puts(out, NO_MODEL);
+            return CC_ERR;
+        }
+        return cc_vis_tool(&s->vis, name, body, n, out) == 200 ? CC_OK : CC_ERR;
+    }
     int pointer = !strcmp(name, "pointer"), click = !strcmp(name, "click"), cancel = !strcmp(name, "cancel");
     if (!pointer && !click && !cancel) {
         buf_puts(out, "unknown tool call ");
@@ -1646,7 +1697,17 @@ void cc_change_json(cc_session *s, cc_buf *out) { /* calls.rs:134-167 (json!, so
     else jw_null(&w);
     jw_key(&w, "unsaved"), jw_bool(&w, cc_session_unsaved(s));
     jw_key(&w, "view"), jw_arr_begin(&w);
-    for (int i = 0; i < 7; i++) jw_u64(&w, 0); /* nothing hidden, no section box, not on paper */
+    { /* calls.rs:152-161 */
+        const cc_vis *v = &s->vis;
+        int l = loaded(s);
+        jw_u64(&w, l && v->section_on);
+        jw_u64(&w, l && v->has_temp ? v->temp.n : 0);
+        jw_u64(&w, l && v->has_temp && v->temp_isolate);
+        jw_u64(&w, l ? v->hidden.n : 0);
+        jw_u64(&w, l ? v->isolated.n : 0);
+        jw_u64(&w, l && cc_vis_hidden_in_view(v));
+        jw_u64(&w, 0); /* on_paper: no plans in the C core */
+    }
     jw_u64(&w, loaded(s) && s->tab_open ? 1 : 0); /* open_tabs.len() */
     jw_arr_end(&w);
     jw_obj_end(&w);

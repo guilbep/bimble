@@ -17,6 +17,7 @@ cc_session *cc_session_new(const cc_platform *pf) {
     if (!s) return NULL;
     s->pf = pf;
     buf_init(&s->mesh);
+    cc_vis_init(&s->vis);
     return s;
 }
 
@@ -32,6 +33,7 @@ void cc_session_free(cc_session *s) {
     if (s->scene_rev) cc_scene_free(&s->scene);
     buf_free(&s->mesh);
     cc_tool_free(&s->tool);
+    cc_vis_free(&s->vis);
     persist_free(s);
     free(s);
 }
@@ -120,6 +122,7 @@ static void drop_model(cc_session *s) {
     s->has_primary = 0, s->nalso = 0;
     s->placing = 0, s->has_storey = 0, s->polygon = 0, s->top_offset_mm = 0;
     cc_tool_clear(&s->tool);
+    cc_vis_reset(&s->vis); /* lib.rs:1657-1676: a box or a hide means nothing for another model */
     free(s->material), s->material = NULL;
     s->open = 0, s->untitled = 0;
 }

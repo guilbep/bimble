@@ -16,7 +16,9 @@
 //            history, undo, redo, action save…): every answer, status and change JSON byte for
 //            byte, the saved text = the native host's saved file, host_mesh = GET /mesh; ticket E1:
 //            query verbs (= golden/verbs_list.json) and describe, verb with dry_run and if_rev, rename;
-//            ticket B4: the place tool (tool pointer/click/cancel, query ghost) on both, byte for byte
+//            ticket B4: the place tool (tool pointer/click/cancel, query ghost) on both, byte for byte;
+//            ticket B3: the visibility actions, query visibility(_sets), the box tool (box_set, box_press,
+//            box_move, box_release, box_cancel) on both, byte for byte, rev unchanged
 //   files    the file actions in a fresh module (ticket A5): new, place, save (v2), save as,
 //            host_open of the saved bytes (the same elements), host_open import of golden/ifc/
 //            frame.ifc (the import golden's count) and of frame.json; export IFC4 with host_clock =
@@ -499,6 +501,16 @@ suite("host");
       ["query", "placing", "{}"], ["tool", "pointer", JSON.stringify({ at: [9000, 7520], ortho: true })], ["tool", "click", ""],
       ["query", "history", "{}"], ["tool", "click", JSON.stringify({ at: [0, 0] })], ["tool", "cancel", ""], ["query", "placing", "{}"],
       ["tool", "nope", ""], ["tool", "click", "{}"], ["undo", "-", ""], ["query", "ghost", "{}"],
+      // ticket B3: visibility and the section box (session state: rev unchanged), the box tool
+      ["tool", "cancel", ""], ["select", "-", JSON.stringify([firstId])], ["action", "hide_now", ""], ["query", "visibility", "{}"],
+      ["query", "visibility_sets", "{}"], ["query", "actions", "{}"], ["action", "section_box", ""], ["query", "visibility", "{}"],
+      ["select", "-", JSON.stringify([firstId])], ["action", "unhide", ""], ["action", "isolate_in_view", ""], ["action", "box_to_selection", ""],
+      ["query", "visibility", "{}"], ["action", "show_all_in_view", ""], ["action", "reveal_hidden", ""], ["query", "actions", "{}"],
+      ["tool", "box_set", JSON.stringify({ min: [0, 0, 0], max: [8000.5, 6000.25, 3000.1], on: true })],
+      ["tool", "box_press", JSON.stringify({ ray: [-5000, 3000, 9000, 0.8320502943378437, 0, -0.5547001962252291], ray_tol: [-5000, 3150, 9000, 0.8320502943378437, 0, -0.5547001962252291] })],
+      ["tool", "box_move", JSON.stringify({ ray: [-5000, 3000, 9000, 0.8, 0, -0.6] })], ["query", "visibility", "{}"],
+      ["tool", "box_release", ""], ["query", "visibility", "{}"], ["tool", "box_cancel", ""], ["tool", "box_set", JSON.stringify({ min: [0, 0, 0], max: [1, 1, 1] })],
+      ["action", "section_box", ""], ["query", "visibility", "{}"],
     ];
     let rev = 1, placedRev = 0, toolPlaced = 0;
     for (const s of steps) {
@@ -529,7 +541,7 @@ suite("host");
       const r = JSON.parse(wc).rev;
       if (o === "verb" && name === "place") placedRev = r, check("verb place: rev + 1", r === rev + 1, `${rev} -> ${r}`);
       if (o === "tool") { // B4: a completed gesture is one step (rev + 1), anything else no change
-        const placed = w.status === 200 && JSON.parse(w.text).placed !== null;
+        const placed = w.status === 200 && (JSON.parse(w.text).placed ?? null) !== null; // B3: the box tool's answers have no "placed"
         if (placed) toolPlaced++;
         check(`tool ${name} ${body}: ${placed ? "placed, rev + 1" : "rev unchanged"}`, r === rev + (placed ? 1 : 0), `${w.status} ${w.text.slice(0, 120)}, rev ${rev} -> ${r}`);
       }

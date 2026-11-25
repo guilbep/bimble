@@ -11,7 +11,18 @@
 // Shift: free, no snap, as Rust; Ctrl or Cmd: ortho), which snaps, keeps the points and answers the
 // ghost (the element the next click adds, meshed in C); the page draws it translucent, with a marker
 // at the snapped point and a line from the last point. Esc cancels (stops placing, as Rust).
-import { placing, select, state, toolCall, type ToolPointer, type ToolState } from "./bimble";
+// Visibility and the section box (ticket B3, ADR 0014): what `query visibility` and `visibility_sets`
+// say is hidden is not drawn (Reveal hidden: drawn in the comparison colour) and cannot be picked.
+// With the box on, faces and edges outside it are discarded in the fragment shader; two passes, as
+// bimble-render: outward faces lit, then inward faces pushed back and drawn unlit at the cut shade
+// (0.72), so a cut solid shows a filled section; an edge whose two faces both look away (BMSH edge
+// normals) is not drawn, as Rust hides back edges in sections. Picking ignores hits outside the box.
+// Six handles (face centres) and the box's edges are drawn; a left press on a handle is the C core's
+// box tool (op tool box_press / box_move / box_release: drag state in C, one session change on release).
+import {
+  boxTool, placing, select, state, toolCall, visibility, visibilitySets,
+  type ToolPointer, type ToolState, type Visibility, type VisibilitySets,
+} from "./bimble";
 
 // Palette, sRGB (bimble-core style.rs:302, :335-410), by MaterialCategory index.
 const CATEGORY_SRGB: [number, number, number][] = [
@@ -27,6 +38,13 @@ const CATEGORY_SRGB: [number, number, number][] = [
 const BACKGROUND_SRGB = [247, 247, 245];
 const EDGE_SRGB = [26, 26, 28];
 const SELECTION_SRGB: [number, number, number] = [215, 172, 182];
+// Revealed hidden elements (Reveal hidden): the comparison colour, as Rust's Style::OnlyHere.
+const REVEALED_SRGB: [number, number, number] = [232, 150, 64];
+// bimble-render Style::cut_shade: the brightness of cut surfaces (ADR 0014).
+const CUT_SHADE = 0.72;
+// The section box's edges and handles.
+const BOX_SRGB: [number, number, number] = [40, 110, 200];
+const HANDLE_PX = 11;
 // The ghost of the place tool: translucent blue faces, its edges and the snap marker darker.
 const GHOST_SRGB: [number, number, number] = [74, 128, 214];
 const GHOST_EDGE_SRGB: [number, number, number] = [32, 70, 150];
@@ -42,14 +60,18 @@ interface Bmsh {
   origin: [number, number, number];
   ids: string[];
   cats: Uint8Array;
-  /** Per element: first vertex, vertex count, first index, index count. */
+  /** Per element: first vertex, vertex count, first index, index count, first segment, segment count. */
   v0: Uint32Array;
   nv: Uint32Array;
   i0: Uint32Array;
   ni: Uint32Array;
+  s0: Uint32Array;
+  ns: Uint32Array;
   pos: Float32Array;
   idx: Uint32Array;
   edges: Float32Array;
+  /** Per segment: the two face normals, snorm8 xyzw xyzw (0: unknown). */
+  normals: Int8Array;
 }
 
 /** Parses BMSH version 1 (ccore/session/mesh.c). Throws on a malformed buffer. */
@@ -64,6 +86,7 @@ export function parseBmsh(ab: ArrayBuffer): Bmsh {
   const origin: [number, number, number] = [dv.getFloat64(28, true), dv.getFloat64(36, true), dv.getFloat64(44, true)];
   const ids: string[] = [];
   const cats = new Uint8Array(nE), v0 = new Uint32Array(nE), nv = new Uint32Array(nE), i0 = new Uint32Array(nE), ni = new Uint32Array(nE);
+  const s0 = new Uint32Array(nE), ns = new Uint32Array(nE);
   const bytes = new Uint8Array(ab);
   for (let e = 0, o = 52; e < nE; e++, o += 48) {
     ids.push(String.fromCharCode(...bytes.subarray(o, o + 22)));
@@ -72,6 +95,8 @@ export function parseBmsh(ab: ArrayBuffer): Bmsh {
     nv[e] = u(o + 28);
     i0[e] = u(o + 32);
     ni[e] = u(o + 36);
+    s0[e] = u(o + 40);
+    ns[e] = u(o + 44);
   }
   let o = 52 + 48 * nE;
   const pos = new Float32Array(ab, o, 3 * nV);
@@ -79,10 +104,12 @@ export function parseBmsh(ab: ArrayBuffer): Bmsh {
   const idx = new Uint32Array(ab, o, nI);
   o += 4 * nI;
   const edges = new Float32Array(ab, o, 6 * nS);
+  o += 24 * nS;
+  const normals = new Int8Array(ab, o, 8 * nS);
   for (let i = 0; i < nI; i++) if ((idx[i] ?? 0) >= nV) throw new Error("BMSH index out of range");
   for (let e = 0; e < nE; e++)
-    if ((i0[e] ?? 0) + (ni[e] ?? 0) > nI || (v0[e] ?? 0) + (nv[e] ?? 0) > nV) throw new Error("BMSH row out of range");
-  return { rev, origin, ids, cats, v0, nv, i0, ni, pos, idx, edges };
+    if ((i0[e] ?? 0) + (ni[e] ?? 0) > nI || (v0[e] ?? 0) + (nv[e] ?? 0) > nV || (s0[e] ?? 0) + (ns[e] ?? 0) > nS) throw new Error("BMSH row out of range");
+  return { rev, origin, ids, cats, v0, nv, i0, ni, s0, ns, pos, idx, edges, normals };
 }
 
 // ---- small vector / matrix helpers (column-major mat4, as WebGL) ----
@@ -119,22 +146,44 @@ const toLinear = (c: number) => {
 const VS = `#version 300 es
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_col;
+layout(location = 2) in vec4 a_n1; // an edge's two face normals (snorm8); 0 or unset: unknown
+layout(location = 3) in vec4 a_n2;
 uniform mat4 u_mvp;
+uniform vec3 u_eye;
+uniform float u_point;
 out vec3 v_pos;
 out vec3 v_col;
-void main() { v_pos = a_pos; v_col = a_col; gl_Position = u_mvp * vec4(a_pos, 1.0); }`;
+flat out float v_back;
+void main() {
+  v_pos = a_pos; v_col = a_col;
+  vec3 to_eye = u_eye - a_pos;
+  v_back = (dot(a_n1.xyz, to_eye) < 0.0 && dot(a_n2.xyz, to_eye) < 0.0) ? 1.0 : 0.0;
+  gl_PointSize = u_point;
+  gl_Position = u_mvp * vec4(a_pos, 1.0);
+}`;
 const FS = `#version 300 es
 precision highp float;
 in vec3 v_pos;
 in vec3 v_col;
+flat in float v_back;
 uniform vec3 u_light;
+uniform int u_clip;      // 1: the section box is on
+uniform vec3 u_clip_min; // scene coordinates
+uniform vec3 u_clip_max;
+uniform float u_cut;     // brightness of cut surfaces (back faces while the box is on)
 uniform float u_ambient; // < 0: unlit (edges)
 uniform float u_alpha;
 out vec4 o;
 vec3 to_linear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
 vec3 to_srgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
 void main() {
-  if (u_ambient < 0.0) { o = vec4(v_col, u_alpha); return; }
+  if (u_clip == 1 && (any(lessThan(v_pos, u_clip_min)) || any(greaterThan(v_pos, u_clip_max)))) discard;
+  if (u_ambient < 0.0) {
+    if (u_clip == 1 && v_back > 0.5) discard; // a back edge, only ever seen through the cut
+    o = vec4(v_col, u_alpha);
+    return;
+  }
+  if (u_clip == 1 && !gl_FrontFacing) { o = vec4(to_srgb(to_linear(v_col) * u_cut), u_alpha); return; }
   vec3 n = cross(dFdx(v_pos), dFdy(v_pos));
   float len2 = dot(n, n);
   float lambert = len2 > 1e-30 ? abs(dot(n, u_light)) * inversesqrt(len2) : 1.0;
@@ -158,6 +207,16 @@ interface GlStats {
   toolError: string | null;
   /** The GlobalId the last completed gesture added. */
   placed: string | null;
+  /** Visibility and the section box: elements not drawn, triangles drawn, the box as drawn (scene mm,
+   *  the drag's preview while one runs), the face held, box tool calls and the last box error. */
+  hiddenElements: number;
+  drawnTris: number;
+  clip: { min: number[]; max: number[] } | null;
+  boxFace: number | null;
+  boxCalls: number;
+  boxError: string | null;
+  /** Test hook: the GlobalId a click at client (x, y) would pick, or null (selects nothing). */
+  pickAt?: (x: number, y: number) => string | null;
   /** Test hook: a world point (mm) -> CSS px in the viewport (clientX, clientY), or null. */
   toScreen?: (x: number, y: number, z: number) => [number, number] | null;
 }
@@ -181,7 +240,8 @@ export interface MeshSource {
 export function glViewport(base: string | MeshSource, token = ""): () => void {
   const canvas = document.getElementById("bimble");
   const stats: GlStats = { firstFrameMs: null, meshBytes: 0, meshFetchMs: 0, meshRev: null, frames: 0, picks: 0, error: null,
-    toolCalls: 0, ghostTris: 0, hover: null, toolError: null, placed: null };
+    toolCalls: 0, ghostTris: 0, hover: null, toolError: null, placed: null,
+    hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null };
   window.__bbGl = stats;
   if (!(canvas instanceof HTMLCanvasElement)) return () => undefined;
   const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
@@ -221,6 +281,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const uLight = gl.getUniformLocation(prog, "u_light");
   const uAmbient = gl.getUniformLocation(prog, "u_ambient");
   const uAlpha = gl.getUniformLocation(prog, "u_alpha");
+  const uEye = gl.getUniformLocation(prog, "u_eye");
+  const uPoint = gl.getUniformLocation(prog, "u_point");
+  const uClip = gl.getUniformLocation(prog, "u_clip");
+  const uClipMin = gl.getUniformLocation(prog, "u_clip_min");
+  const uClipMax = gl.getUniformLocation(prog, "u_clip_max");
+  const uCut = gl.getUniformLocation(prog, "u_cut");
 
   // One VAO: positions (location 0), per-vertex sRGB colour (location 1, u8 normalized), indices.
   // Edges reuse it: location 0 points at the edge buffer, location 1 is a constant.
@@ -229,6 +295,30 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   gl.bindVertexArray(vao);
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
   gl.bindVertexArray(null);
+  // Edges: their own VAO (positions, the two face normals per vertex, the visible segments' indices).
+  const edgeVao = gl.createVertexArray();
+  const edgeNrm = gl.createBuffer(), edgeIdx = gl.createBuffer();
+  gl.bindVertexArray(edgeVao);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, edgeIdx);
+  gl.bindBuffer(gl.ARRAY_BUFFER, edgeBuf);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, edgeNrm);
+  gl.enableVertexAttribArray(2);
+  gl.vertexAttribPointer(2, 4, gl.BYTE, true, 8, 0);
+  gl.enableVertexAttribArray(3);
+  gl.vertexAttribPointer(3, 4, gl.BYTE, true, 8, 4);
+  gl.bindVertexArray(null);
+  let faceN = 0, edgeN = 0;
+  // Visibility (query visibility and visibility_sets) and the box drag's preview.
+  let vis: Visibility | null = null;
+  let sets: VisibilitySets | null = null;
+  let seenVis: Visibility | null | undefined;
+  let visKey = "\u0000";
+  /** Per element of the mesh: 0 not drawn, 1 drawn, 2 drawn revealed (hidden, Reveal hidden on). */
+  let shown = new Uint8Array(0);
+  let preview: { min: number[]; max: number[] } | null = null;
+  const boxBuf = gl.createBuffer();
   // The place tool's ghost (its own VAO) and the marker lines (snap mark, clicked points, rubber line).
   const ghostVao = gl.createVertexArray();
   const ghostPos = gl.createBuffer(), ghostIdx = gl.createBuffer(), ghostEdges = gl.createBuffer(), markBuf = gl.createBuffer();
@@ -298,7 +388,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const sel = new Set(state.value.selection);
     const out = new Uint8Array(m.pos.length);
     for (let e = 0; e < m.ids.length; e++) {
-      const c = sel.has(m.ids[e] ?? "") ? SELECTION_SRGB : (CATEGORY_SRGB[m.cats[e] ?? 7] ?? CATEGORY_SRGB[7] ?? SELECTION_SRGB);
+      const c = sel.has(m.ids[e] ?? "") ? SELECTION_SRGB : shown[e] === 2 ? REVEALED_SRGB
+        : (CATEGORY_SRGB[m.cats[e] ?? 7] ?? CATEGORY_SRGB[7] ?? SELECTION_SRGB);
       const a = m.v0[e] ?? 0, n = m.nv[e] ?? 0;
       for (let v = a; v < a + n; v++) out.set(c, 3 * v);
     }
@@ -334,11 +425,19 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
     gl.bufferData(gl.ARRAY_BUFFER, m.pos, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.idx, gl.STATIC_DRAW);
     gl.bindVertexArray(null);
     gl.bindBuffer(gl.ARRAY_BUFFER, edgeBuf);
     gl.bufferData(gl.ARRAY_BUFFER, m.edges, gl.STATIC_DRAW);
+    // The two face normals of each segment, for both of its vertices.
+    const nrm = new Int8Array(16 * (m.edges.length / 6));
+    for (let k = 0; k < nrm.length / 16; k++) {
+      const src = m.normals.subarray(8 * k, 8 * k + 8);
+      nrm.set(src, 16 * k);
+      nrm.set(src, 16 * k + 8);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, edgeNrm);
+    gl.bufferData(gl.ARRAY_BUFFER, nrm, gl.STATIC_DRAW);
+    visKey = "\u0000"; // the draw lists on the next frame
     selKey = "\u0000"; // recolour on the next frame
     if (tool) showTool(tool); // the ghost against the new mesh's origin
     if (!fitted && bounds) {
@@ -370,6 +469,63 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
   };
 
+  /** visibility.rs hidden_by over the whole sets. */
+  const hiddenTest = () => {
+    const st = sets;
+    if (!st) return () => false;
+    const hid = new Set(st.hidden_in_view), iso = new Set(st.isolated_in_view), now = st.now ? new Set(st.now.ids) : null;
+    const isolateNow = st.now?.isolate === true;
+    return (id: string) => hid.has(id) || (iso.size > 0 && !iso.has(id)) || (now !== null && now.has(id) !== isolateNow);
+  };
+  /** The draw lists: the triangles and edge segments of the elements shown. */
+  const drawLists = () => {
+    const m = mesh;
+    if (!m) return;
+    const hidden = hiddenTest(), reveal = sets?.reveal === true;
+    shown = new Uint8Array(m.ids.length);
+    let nf = 0, ne = 0, nh = 0;
+    for (let e = 0; e < m.ids.length; e++) {
+      const h = hidden(m.ids[e] ?? "");
+      shown[e] = !h ? 1 : reveal ? 2 : 0;
+      if (shown[e]) nf += m.ni[e] ?? 0, ne += m.ns[e] ?? 0;
+      else nh++;
+    }
+    const fi = new Uint32Array(nf), ei = new Uint32Array(2 * ne);
+    let f = 0, k = 0;
+    for (let e = 0; e < m.ids.length; e++) {
+      if (!shown[e]) continue;
+      const i0 = m.i0[e] ?? 0, n = m.ni[e] ?? 0;
+      fi.set(m.idx.subarray(i0, i0 + n), f);
+      f += n;
+      const s0 = m.s0[e] ?? 0, ns = m.ns[e] ?? 0;
+      for (let q = s0; q < s0 + ns; q++) ei[k++] = 2 * q, ei[k++] = 2 * q + 1;
+    }
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, fi, gl.DYNAMIC_DRAW);
+    gl.bindVertexArray(edgeVao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, edgeIdx);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, ei, gl.DYNAMIC_DRAW);
+    gl.bindVertexArray(null);
+    faceN = nf;
+    edgeN = 2 * ne;
+    stats.hiddenElements = nh;
+    stats.drawnTris = nf / 3;
+    selKey = "\u0000"; // revealed elements change colour
+    dirty = true;
+  };
+  /** The box that cuts now: the drag's preview, else the session's box when it is on. */
+  const clipBox = (): { min: number[]; max: number[] } | null => {
+    if (preview) return preview;
+    const sb = vis?.section_box;
+    return sb?.on && sb.box ? { min: sb.box.min, max: sb.box.max } : null;
+  };
+  const faceCenter = (b: { min: number[]; max: number[] }, f: number): V3 => {
+    const c: V3 = [0, 1, 2].map((k) => ((b.min[k] ?? 0) + (b.max[k] ?? 0)) / 2) as V3;
+    const a = Math.floor(f / 2);
+    c[a] = (f & 1 ? b.max[a] : b.min[a]) ?? 0;
+    return c;
+  };
   const draw = () => {
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(BACKGROUND_SRGB[0]! / 255, BACKGROUND_SRGB[1]! / 255, BACKGROUND_SRGB[2]! / 255, 1);
@@ -380,10 +536,18 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (!m) return;
     const { e, mvp } = matrices();
     const light = norm(add(norm(sub(e, target)), [-0.3, -0.2, 0.9]));
+    const box = clipBox();
+    stats.clip = box;
     gl.useProgram(prog);
     gl.uniformMatrix4fv(uMvp, false, mvp);
     gl.uniform3fv(uLight, light);
+    gl.uniform3fv(uEye, e);
+    gl.uniform1f(uPoint, 1);
     gl.uniform1f(uAlpha, 1);
+    gl.uniform1i(uClip, box ? 1 : 0);
+    gl.uniform3fv(uClipMin, box ? box.min : [0, 0, 0]);
+    gl.uniform3fv(uClipMax, box ? box.max : [0, 0, 0]);
+    gl.uniform1f(uCut, CUT_SHADE);
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
     gl.disable(gl.CULL_FACE);
@@ -398,21 +562,56 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 3, gl.UNSIGNED_BYTE, true, 0, 0);
-    gl.drawElements(gl.TRIANGLES, m.idx.length, gl.UNSIGNED_INT, 0);
+    if (!box) gl.drawElements(gl.TRIANGLES, faceN, gl.UNSIGNED_INT, 0);
+    else {
+      // ADR 0014: outward faces lit, then inward faces (seen only through the cut) unlit at the cut
+      // shade, pushed back so silhouette corners keep the outward face.
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(gl.BACK);
+      gl.drawElements(gl.TRIANGLES, faceN, gl.UNSIGNED_INT, 0);
+      gl.cullFace(gl.FRONT);
+      gl.polygonOffset(4, 8);
+      gl.drawElements(gl.TRIANGLES, faceN, gl.UNSIGNED_INT, 0);
+      gl.disable(gl.CULL_FACE);
+    }
     gl.disable(gl.POLYGON_OFFSET_FILL);
-    // Edges: the same VAO, location 0 on the edge buffer, a constant colour.
+    // Edges: their VAO (with the face normals for the back-edge test), a constant colour.
     gl.uniform1f(uAmbient, -1);
-    gl.bindBuffer(gl.ARRAY_BUFFER, edgeBuf);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-    gl.disableVertexAttribArray(1);
+    gl.bindVertexArray(edgeVao);
     gl.vertexAttrib3f(1, EDGE_SRGB[0]! / 255, EDGE_SRGB[1]! / 255, EDGE_SRGB[2]! / 255);
     gl.depthMask(false);
-    gl.drawArrays(gl.LINES, 0, m.edges.length / 3);
+    gl.drawElements(gl.LINES, edgeN, gl.UNSIGNED_INT, 0);
     gl.depthMask(true);
     gl.bindVertexArray(null);
+    gl.uniform1i(uClip, 0);
+    if (box) drawBox(box);
     drawGhost();
     stats.frames++;
     if (stats.firstFrameMs === null) stats.firstFrameMs = performance.now();
+  };
+
+  /** The section box: its 12 edges and the 6 face handles, over the model. */
+  const drawBox = (b: { min: number[]; max: number[] }) => {
+    const c = (i: number): number[] => [0, 1, 2].map((k) => ((i >> k) & 1 ? b.max[k] : b.min[k]) ?? 0);
+    const v: number[] = [];
+    for (let i = 0; i < 8; i++)
+      for (let k = 0; k < 3; k++) if (!((i >> k) & 1)) v.push(...c(i), ...c(i | (1 << k)));
+    for (let f = 0; f < 6; f++) v.push(...faceCenter(b, f));
+    gl.bindVertexArray(ghostVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, boxBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.disableVertexAttribArray(1);
+    gl.uniform1f(uAmbient, -1);
+    gl.vertexAttrib3f(1, BOX_SRGB[0] / 255, BOX_SRGB[1] / 255, BOX_SRGB[2] / 255);
+    gl.disable(gl.DEPTH_TEST);
+    gl.drawArrays(gl.LINES, 0, 24);
+    gl.uniform1f(uPoint, HANDLE_PX);
+    gl.drawArrays(gl.POINTS, 24, 6);
+    gl.uniform1f(uPoint, 1);
+    gl.enable(gl.DEPTH_TEST);
+    gl.bindVertexArray(null);
   };
 
   /** The ghost: translucent faces over the model (depth-tested, no depth write), its edges, then the
@@ -557,7 +756,17 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // nearer hit replaces).
     const inv0 = 1 / dir[0], inv1 = 1 / dir[1], inv2 = 1 / dir[2];
     let hitE = -1;
+    const box = clipBox();
+    const outside = (d: number): boolean => {
+      if (!box) return false;
+      for (let k = 0; k < 3; k++) {
+        const p = e[k]! + dir[k]! * d;
+        if (p < (box.min[k] ?? 0) || p > (box.max[k] ?? 0)) return true;
+      }
+      return false;
+    };
     for (let el = 0; el < m.ids.length; el++) {
+      if (!shown[el]) continue; // hidden: not drawn, not picked (Reveal hidden: drawn and picked)
       const o = 6 * el;
       let tn = -Infinity, tf = Infinity;
       for (let ax = 0; ax < 3; ax++) {
@@ -581,7 +790,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         const q = cross(tv, e1), vv = dot(dir, q) * inv;
         if (vv < 0 || uu + vv > 1) continue;
         const d = dot(e2, q) * inv;
-        if (d > 0 && d < best) {
+        if (d > 0 && d < best && !outside(d)) { // ADR 0014: what the box removes is not picked
           best = d;
           hit = k;
           hitE = el;
@@ -591,6 +800,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     return hit < 0 ? -1 : hitE;
   };
 
+  stats.pickAt = (cx, cy) => {
+    const r = canvas.getBoundingClientRect();
+    const k = pick(cx - r.left, cy - r.top);
+    return k >= 0 ? mesh?.ids[k] ?? null : null;
+  };
+
   new ResizeObserver(() => {
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.max(1, Math.round(canvas.clientWidth * dpr));
@@ -598,14 +813,35 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     dirty = true;
   }).observe(canvas);
 
-  let drag: { pan: boolean; x: number; y: number; x0: number; y0: number; moved: boolean } | null = null;
+  let drag: { pan: boolean; box: boolean; x: number; y: number; x0: number; y0: number; moved: boolean } | null = null;
+  /** One call of the C core's box tool for the pointer at client (x, y). */
+  const boxAt = (name: "box_press" | "box_move" | "box_release", cx: number, cy: number) => {
+    const r = canvas.getBoundingClientRect();
+    const x = cx - r.left, y = cy - r.top;
+    stats.boxCalls++;
+    const { state: b, error } = boxTool(name, name === "box_press" ? { ray: rayAt(x, y), ray_tol: rayAt(x + SNAP_PX, y) } : { ray: rayAt(x, y) });
+    stats.boxError = error;
+    if (error) console.warn(`gl viewport: ${name}:`, error);
+    preview = b?.active && b.box ? { min: b.box.min, max: b.box.max } : null;
+    stats.boxFace = b?.active ? b.face : null;
+    dirty = true;
+    return b;
+  };
+  let pendingBox: PointerEvent | null = null;
   canvas.addEventListener("pointerdown", (e) => {
     canvas.setPointerCapture(e.pointerId);
-    drag = { pan: e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey), x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
+    // A left press on a handle of the section box: the box tool holds that face (no orbit).
+    const onHandle = e.button === 0 && !e.shiftKey && !placingNow() && clipBox() !== null && boxAt("box_press", e.clientX, e.clientY)?.active === true;
+    drag = { pan: e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey), box: onHandle, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!drag) {
       if (placingNow()) pendingMove = e;
+      return;
+    }
+    if (drag.box) {
+      if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > CLICK_PX) drag.moved = true;
+      pendingBox = e;
       return;
     }
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
@@ -628,6 +864,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const d = drag;
     drag = null;
     if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+    if (d?.box) { // one session change: the released box
+      pendingBox = null;
+      if (e.type === "pointerup") boxAt("box_release", e.clientX, e.clientY);
+      else { stats.boxCalls++; boxTool("box_cancel"); preview = null; stats.boxFace = null; dirty = true; }
+      return;
+    }
     if (e.type !== "pointerup" || !d || d.moved || e.button !== 0) return;
     if (placingNow()) { // a click while placing goes to the tool (Shift: free, no pan)
       pendingMove = null;
@@ -670,6 +912,26 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (!loading && wantRev !== rev) {
       wantRev = rev;
       void load();
+    }
+    if (visibility.value !== seenVis) { // a change (or the box tool): what is hidden, the box
+      seenVis = visibility.value;
+      vis = seenVis;
+      sets = visibilitySets();
+      dirty = true;
+      const key = JSON.stringify(sets);
+      if (key !== visKey) {
+        visKey = key;
+        drawLists();
+      }
+    }
+    if (mesh && visKey === "\u0000") {
+      visKey = JSON.stringify(sets);
+      drawLists();
+    }
+    if (pendingBox && drag?.box) {
+      const e = pendingBox;
+      pendingBox = null;
+      boxAt("box_move", e.clientX, e.clientY);
     }
     if (pendingMove) {
       const e = pendingMove;
