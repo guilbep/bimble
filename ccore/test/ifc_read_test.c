@@ -1,7 +1,7 @@
 /* Suite ifc_read: the IFC display reader (src/ifc_read.h) against Rust's read_str.
- * - golden/ifc/read/<name>/: scene.txt and every <k>.txt byte for byte, for the 18 inputs (the
- *   six crate fixtures, the eight ifc/fixtures, frame.ifc, frame2.ifc and their IFC2x3 forms).
- *   With the boolean kernel (manifold, CC_HAVE_MANIFOLD) all 18 must match, booleans and opening
+ * - golden/ifc/read/<name>/: scene.txt and every <k>.txt byte for byte, for the 19 inputs (the
+ *   six crate fixtures, the nine ifc/fixtures, frame.ifc, frame2.ifc and their IFC2x3 forms).
+ *   With the boolean kernel (manifold, CC_HAVE_MANIFOLD) all 19 must match, booleans and opening
  *   included (ticket C6: was a known difference). Without it (cc_boolean_set(NULL), or a build
  *   without manifold) booleans and opening must still differ (drawn uncut) and say so in a
  *   warning: a build with the kernel checks both paths.
@@ -40,6 +40,7 @@ static const struct {
     {"mapped_item", "golden/ifc/fixtures", "mapped_item.ifc"},
     {"indexed_arc", "golden/ifc/fixtures", "indexed_arc.ifc"},
     {"opening", "golden/ifc/fixtures", "opening.ifc"},
+    {"same_level", "golden/ifc/fixtures", "same_level.ifc"},
     {"frame", "golden/ifc", "frame.ifc"},
     {"frame.ifc2x3", "golden/ifc", "frame.ifc2x3.ifc"},
     {"frame2", "golden/ifc", "frame2.ifc"},

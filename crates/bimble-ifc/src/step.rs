@@ -266,8 +266,18 @@ impl StepFile {
     pub fn deref(&self, v: &Value) -> Option<&Entity> {
         v.as_ref().and_then(|r| self.get(r))
     }
+    /// The instances of one type, in id order. `entities.iter()` has no order when the ids are
+    /// sparse (a hash map, a new order each run): a "first" or "last wins" over these (the
+    /// building, storeys at one level, an element in two containers) would change from run to
+    /// run. Sorting only the matches costs little.
     pub fn by_type<'a>(&'a self, name: &'a str) -> impl Iterator<Item = (u64, &'a Entity)> + 'a {
-        self.entities.iter().filter(move |(_, e)| e.name == name)
+        let mut v: Vec<(u64, &Entity)> = self
+            .entities
+            .iter()
+            .filter(|(_, e)| e.name == name)
+            .collect();
+        v.sort_unstable_by_key(|(id, _)| *id);
+        v.into_iter()
     }
 }
 

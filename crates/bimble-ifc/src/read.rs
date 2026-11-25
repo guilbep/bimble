@@ -1242,6 +1242,8 @@ impl<'a> Reader<'a> {
     fn storey_levels(&mut self, scale: f64) -> Vec<bimble_geom::StoreyLevel> {
         let f = self.f;
         let mut out = Vec::new();
+        // `by_type` is in id order: the scene's stable sort by elevation keeps it for storeys
+        // at the same level.
         for (_, st) in f.by_type("IFCBUILDINGSTOREY") {
             let name = st.arg(2).as_str().unwrap_or("").to_owned();
             let z = match st.arg(5).as_ref() {
@@ -2668,6 +2670,18 @@ mod tests {
         let mut v: Vec<&str> = it.collect();
         v.sort_unstable();
         v
+    }
+
+    /// Storeys at one elevation keep file order, also when the ids are sparse (the entities
+    /// are then a hash map, whose order changes from run to run). Was the hash map's order:
+    /// two storeys at one level in a real model came out swapped against the C core.
+    #[test]
+    fn storeys_at_one_level_keep_file_order() {
+        let text = include_str!("../../../ccore/golden/ifc/fixtures/same_level.ifc");
+        let scene = read_str(text).unwrap();
+        let names: Vec<&str> = scene.storeys.iter().map(|s| s.name.as_str()).collect();
+        let want = ["D", "H", "B", "F", "A", "G", "C", "E"].map(|c| format!("Level {c}"));
+        assert_eq!(names, want);
     }
 
     /// The census counts what the scene draws, element by element, and a filtered scene holds

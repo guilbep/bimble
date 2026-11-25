@@ -194,9 +194,9 @@ in `frame.ifc`. In IFC2x3 the version is also in `IFCAPPLICATION(#n,'<version>',
 
 ## ifc/fixtures/
 
-Eight small hand-written IFC4 files, synthetic, for what the six crate fixtures
+Nine small hand-written IFC4 files, synthetic, for what the six crate fixtures
 (`crates/bimble-ifc/tests/fixtures/`) do not cover. Each has a project, site, building and one
-storey (`IfcRelAggregates`), its elements contained in it, one `IfcMaterial`; GlobalIds are
+storey (`IfcRelAggregates`, `same_level`: eight), its elements contained in it, one `IfcMaterial`; GlobalIds are
 `2T2c<Tag>…<NN>`. They are inputs: edit one, run the dumper, commit both.
 
 | File | Element(s) | Body |
@@ -209,11 +209,12 @@ storey (`IfcRelAggregates`), its elements contained in it, one `IfcMaterial`; Gl
 | `mapped_item` | 3 IfcColumn, 2 IfcBuildingElementProxy | 2 `IfcRepresentationMap`s: an L extrusion (2 columns share one `IfcMappedItem`, one turned; 1 has a translating operator) and an `IfcTriangulatedFaceSet` tetrahedron (2 copies, one turned) |
 | `indexed_arc` | IfcSlab | `IfcArbitraryClosedProfileDef` over `IfcIndexedPolyCurve`: `IfcLineIndex`, `IfcArcIndex` (half circle), `IfcLineIndex` |
 | `opening` | IfcWall | rectangle extrusion; `IfcOpeningElement` 1200×1400 by `IfcRelVoidsElement`; `Pset_WallCommon` |
+| `same_level` | IfcColumn | rectangle extrusion; eight storeys at elevation 0, ids sparse (#100000 + k×7919) and not in name order: the read keeps file order (Rust's entities are a hash map then) |
 
 ## ifc/import/
 
 `bimble_ifc::import::import_str(text)` on: the six crate fixtures (`booleans`, `chain18`, `curves`,
-`cyclic_map`, `mirror`, `tilt`), the eight `ifc/fixtures/`, `ifc/frame2.ifc` (`frame2`) and
+`cyclic_map`, `mirror`, `tilt`), the nine `ifc/fixtures/`, `ifc/frame2.ifc` (`frame2`) and
 `ifc/frame2.ifc2x3.ifc` (`frame2.ifc2x3`). `frame.ifc` is `ifc/frame_reimport.json` already.
 
 - `<name>.json`: the model, `file::to_string`, masked as above. The known ids are every token of
