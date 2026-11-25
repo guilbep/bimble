@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of `set_schedule`: the `ScheduleDef` fields to change, others kept.",
+  "properties": {
+    "columns": {
+      "description": "The columns, in order: field names (\"level\", \"name\", \"volume\", ...).",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "family": {
+      "default": null,
+      "description": "Only elements of this material family (\"concrete\", \"steel\", ...); null: every family.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "group_by_level": {
+      "description": "Rows grouped by level, a subtotal under each.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "The schedule's name (built-in or the model's own), case-insensitive.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "title": "SetScheduleArgs",
+  "type": "object"
+}

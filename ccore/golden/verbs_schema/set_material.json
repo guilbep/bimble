@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of `set_material`.",
+  "properties": {
+    "ids": {
+      "description": "GlobalIds of the elements.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "material": {
+      "description": "A model material's name or a library grade (\"C35/45\").",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ids",
+    "material"
+  ],
+  "title": "SetMaterialArgs",
+  "type": "object"
+}

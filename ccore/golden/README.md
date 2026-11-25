@@ -251,3 +251,111 @@ Same inputs as `ifc/import/`, plus `frame` (`ifc/frame.ifc`) and `frame.ifc2x3`.
 
 The display parses no property sets (`NOT_DISPLAYED` in `read.rs`), so there are no properties
 here; `import/` has them.
+
+## verbs_all.txt, frame2/verbs_all.txt (every verb)
+
+All 14 verbs of `dispatch::list`, for the C tickets after the first six. Same record format,
+`dispatch::run` + `History::apply` steps, and masking as `verbs.txt`, with two changes:
+
+- Known ids (written as they are) also include the model's default view ids
+  (`GlobalId::derived("bimble view 3d")`, `"bimble view plan down|up <storey id>"`) and the
+  `project` query's site and building ids (`derived("<project id>/site")`, `.../building`):
+  they are derived, so the C core must give the same text. New element, material and sheet ids
+  are `<new-N>` as before.
+- A step can be `query <name> {}` (`dispatch::query`, the answer as compact JSON, masked); it
+  prints the history and element lines like the others. `sheets` is not queried: it lists sheets
+  in id order and new ids are random.
+
+`verbs_all.txt` runs on a copy of `frame.json`, `frame2/verbs_all.txt` on a copy of
+`frame2.json`. Each new verb kind is followed by `undo` and `redo` of its first call. Arguments
+are compact JSON with sorted keys (as `serde_json` prints a `Value`).
+
+| Verb | frame (`verbs_all.txt`) | frame2 (`frame2/verbs_all.txt`) |
+|---|---|---|
+| `place` | (in `verbs.txt`) | a sloped wall, a slab with a timber material by name, a column with `sizes` in S355; refused: wall size −1 |
+| `move` | (in `verbs.txt`) | the 30° wall and the L slab; the plate and the mesh down 50.5; refused: dz −2e7 |
+| `set_generator` | (in `verbs.txt`) | wall thickness; polygon `height`; the new wall's length and height; refused: `width` on a polygon, height 1 on a mesh, no size |
+| `set_material` | (in `verbs.txt`) | polygons to S355; wall and slab to library `C40/50` (adds it); the same again (no command); refused: unknown material |
+| `set_note` | (in `verbs.txt`) | a note with accents and quotes, trimmed; blank (removes); another; refused: unknown id |
+| `delete` | (in `verbs.txt`) | a polygon slab and the mesh, undo, redo, undo; refused: `ids` not a list |
+| `copy` | a column and a beam by (7000, 0, 0); a copy and a slab by (0, −250.5, 3000) (names `(2) (2)`); a copy again (`(2) (3)`); the unknown all-zero id (no command); refused: dx 1e8, missing `d` | the 30° wall, the L slab and the mesh by (0, 10000, 0); the void slab and a copy up 3150.5; refused: dz 2e7 |
+| `rotate` | 30° about the centre of the origins; −45.5° about (1000, 2000); 90° (exact cos/sin); 360° (no command); refused: 400°, unknown id | 30° (wall, L slab); 17.25° about (0, 0) (the tilted plate, the mesh); −90° on the 30° wall; refused: −361° |
+| `mirror` | about x = 3000 (dir (0, 1)); about the diagonal (1, 1); refused: zero dir, unknown id | about y = 0 (the 30° wall, the void slab); through (500, 500) along (3, 4); refused: point 1e8 |
+| `set_project_field` | add `Maître d'ouvrage` (key `maitre_d_ouvrage`); change it through another spelling of the label; add `Phase`; the same again (no command); remove (empty value); refused: a label with no letters, missing `value` | change `phase`; remove `client`; add `Bureau d'études` (CJK value); the same again; remove `phase`; refused: `!!!`, missing `value` |
+| `set_view` | 3D view: scale 50 + true north (`add_view`: a default view's first change), scale 200 (`set_view`), `crop: null` on no crop (no command); the lowest storey's plan: scale 20 + crop (`add_view`), cut/bottom/depth offsets, `crop: null`, bottom −0.0 (written 0.0); refused: crop on 3D, crop min > max, unknown view, range on 3D, scale 0, planes out of order, unknown field | the same calls; the plan is the upper storey's |
+| `set_schedule` | `Concrete columns`: group_by_level off (adds it to the stored list), columns by an upper-case name; `Steel beams`: `family: null`, then timber; refused: unknown name, unknown column, no columns | the same with `Timber beams` and `Steel columns` |
+| `add_sheet` | defaults (`S-101`, `New sheet`, A1); number, name with `"` `\` `é`, A3, portrait; name only (next number `S-102`); refused: paper A5, a used number, a blank number | the same |
+| `set_sheet` | name + revision; paper A0 + landscape; the same again (no command); empty revision (removes); refused: a used number, unknown sheet, 201-character revision | the same |
+
+Then queries `project`, `views`, `schedules`.
+
+`verbs_all_after.json` and `frame2/verbs_all_after.json`: the model at the end
+(`file::to_string`, masked and renumbered as `verbs_after.json`), with views, sheets and
+schedules. The C core loads none of these yet (it refuses views, sheets and schedules): they are
+for the tickets that port the verbs.
+
+## verbs_list.json, verbs_schema/
+
+- `verbs_list.json`: `dispatch::list()`, the `verbs` query (the viewer's `verbs` call, MCP's
+  `list_verbs`): an array of `{name, summary}`, in the order of `VERBS`.
+- `verbs_schema/<verb>.json`: `dispatch::describe(<verb>)`, the JSON schema (schemars, draft
+  2020-12) of the verb's arguments, one file per listed verb. `move` and `copy` share one schema.
+
+Both are `serde_json::to_string_pretty` (2-space indent; object keys sorted, as `serde_json::Value`
+keeps them) plus a final `\n`.
+
+## view/ (.bimbleview, the viewer export)
+
+From `frame.json` and `frame2.json`: `bimble_geom::viewfile::write(Scene::from_model(m), gzip)`,
+what the viewer's share and `bimble pack` write (ADR 0040).
+
+- `view/<name>.bimbleview`: `gzip = true`, the file as written: gzip (flate2, level 6, mtime 0,
+  OS byte 255) of the stream below.
+- `view/<name>.bimbleview.raw`: `gzip = false`, the stream itself (what the gzip inflates to; the
+  dumper asserts it, and that `read_bytes` reads the file back).
+
+As for `bin/`, a C writer must give the `.raw` bytes exactly; its gzip may differ, compare after
+inflating.
+
+Format (`viewfile.rs`, version 1). Little-endian; varint = unsigned LEB128; str = varint byte
+length + UTF-8; f64 and f32 are written with `-0.0` as `0.0`.
+
+```
+"BIMBLEVW"  u32 version (1)
+sections, each: [u8; 4] kind, u64 payload length, payload
+  HEAD  varint elements, varint shared shapes, varint stored triangles; f64 × 3 scene origin (mm)
+  META  varint n, str × n: the distinct class, storey, material and family names, sorted (bytes)
+        storeys: varint n, (str name, f64 elevation, str id) × n
+        grids: varint n, (str tag, f64 × 4 start x y, end x y) × n
+        densities: varint n, (str material, f64) × n
+        warnings: varint n, str × n
+  GEOR  str: Scene::georef as JSON; only when not the default (absent here)
+  ELEM  (repeated) varint n, (varint length, codec mesh) × n: the shared shapes first used in
+        this chunk, numbered on from the previous chunks; then varint m, elements × m:
+        str GlobalId, str name, varint class, storey, material, family (indices into META's table)
+        then u8 0 + varint length + codec mesh (own geometry), or
+             u8 1 + varint shape index + f32 × 12 placement (columns x, y, z, t)
+```
+
+Sections in that order: HEAD, META, GEOR (if any), ELEM. Shapes are numbered by the first element
+that uses them (scene order). A chunk is closed once its shapes and elements reach 1 MiB
+(`CHUNK_BYTES`), so both frames have one ELEM. Family names are `MaterialCategory::label()`.
+
+The codec mesh (`bimble_geom::codec::encode`, ADR 0036):
+
+```
+"BMG1"  u8 quantized (1) or raw (0)
+varint positions, varint indices, varint edges, varint edge normals (min(normals, edges))
+quantized: f32 × 3 lower corner; positions as 3 varint zigzag deltas of round((c − lo) × 16)
+           (1/16 mm steps), per axis from the previous vertex (start 0)
+raw:       positions as f32 × 3
+indices: varint zigzag delta from the previous index (start 0)
+edge endpoints (2 per edge): an endpoint equal (bits) to a vertex: varint zigzag(index delta) << 1
+           (delta from the last such index, the first vertex with those bits); else byte 1, then
+           the point coded like a position (its own previous point, start 0)
+normals: varint n, i8 × 3 × n (the distinct ones, first use order); then one varint table index
+         per normal (x, y, z of each edge's [i8; 4] normals, w dropped)
+```
+
+A mesh is raw when a coordinate is not finite, it spans over 2^32 steps, or a vertex would come
+back more than 0.05 mm away.

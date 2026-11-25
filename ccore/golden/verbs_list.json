@@ -1,0 +1,58 @@
+[
+  {
+    "name": "place",
+    "summary": "Place a new column, beam, wall or slab on a storey (storey-relative mm)."
+  },
+  {
+    "name": "move",
+    "summary": "Move elements by a vector d = [dx, dy, dz], mm."
+  },
+  {
+    "name": "copy",
+    "summary": "Copy elements, moved by d = [dx, dy, dz] mm, with new GlobalIds and names."
+  },
+  {
+    "name": "delete",
+    "summary": "Delete elements."
+  },
+  {
+    "name": "set_generator",
+    "summary": "Change an element's sizes (width, height, length, depth, thickness), mm; missing ones are kept."
+  },
+  {
+    "name": "set_view",
+    "summary": "Change a view's scale (1:N), true_north, crop (null: none) or plan range offsets, mm; missing ones are kept."
+  },
+  {
+    "name": "set_schedule",
+    "summary": "Change a schedule's grouping by level, family filter (null: every family) or columns (field names); missing ones are kept."
+  },
+  {
+    "name": "set_material",
+    "summary": "Give elements a material: a model material's name or a library grade (\"C35/45\")."
+  },
+  {
+    "name": "set_note",
+    "summary": "Write a one-line note on an element (the property \"Note\"); an empty text removes it."
+  },
+  {
+    "name": "set_project_field",
+    "summary": "Set one project information field by its label (the key is made from it); an empty value removes it."
+  },
+  {
+    "name": "rotate",
+    "summary": "Rotate elements by angle_deg about the vertical axis through about = [x, y] mm (default: the centre of their origins)."
+  },
+  {
+    "name": "mirror",
+    "summary": "Mirror elements in the vertical plane through axis.point along axis.dir; placements stay right-handed."
+  },
+  {
+    "name": "add_sheet",
+    "summary": "Add a sheet (default: the next free number, \"New sheet\", A1 landscape) with a new GlobalId."
+  },
+  {
+    "name": "set_sheet",
+    "summary": "Change a sheet's number, name, paper (A4..A0), portrait or revision; missing ones are kept, an empty revision removes it."
+  }
+]

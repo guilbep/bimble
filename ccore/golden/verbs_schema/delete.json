@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of `delete`.",
+  "properties": {
+    "ids": {
+      "description": "GlobalIds of the elements.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "ids"
+  ],
+  "title": "IdsArgs",
+  "type": "object"
+}

@@ -1,0 +1,120 @@
+{
+  "$defs": {
+    "Kind": {
+      "oneOf": [
+        {
+          "enum": [
+            "wall"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "column",
+          "description": "One click: its centre.",
+          "type": "string"
+        },
+        {
+          "const": "beam",
+          "description": "Two clicks: start and end of its axis.",
+          "type": "string"
+        },
+        {
+          "const": "slab",
+          "description": "Two clicks: opposite corners of a rectangle.",
+          "type": "string"
+        }
+      ]
+    },
+    "Sizes": {
+      "description": "Sizes of new elements, mm.",
+      "properties": {
+        "beam_height": {
+          "default": 500.0,
+          "format": "double",
+          "type": "number"
+        },
+        "beam_width": {
+          "default": 250.0,
+          "format": "double",
+          "type": "number"
+        },
+        "column": {
+          "default": 300.0,
+          "format": "double",
+          "type": "number"
+        },
+        "slab": {
+          "default": 250.0,
+          "format": "double",
+          "type": "number"
+        },
+        "wall": {
+          "default": 200.0,
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of `place`.",
+  "properties": {
+    "a": {
+      "description": "First point [x, y], mm: a column's centre, an axis start, a slab corner.",
+      "items": {
+        "format": "double",
+        "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    },
+    "b": {
+      "description": "Second point [x, y], mm; not used for a column.",
+      "items": {
+        "format": "double",
+        "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "kind": {
+      "$ref": "#/$defs/Kind"
+    },
+    "material": {
+      "description": "A model material's name or a library grade (\"C35/45\"); default: the model's concrete.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sizes": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Sizes"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Sizes of new elements, mm; missing ones take defaults."
+    },
+    "storey": {
+      "description": "GlobalId of the storey.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "storey",
+    "a"
+  ],
+  "title": "PlaceArgs",
+  "type": "object"
+}

@@ -13,6 +13,9 @@
 //! IFC (`ifc/`): exports in IFC4 and IFC2x3, then `import_str` (`ifc/import/`) and the display
 //! reader `read_str` (`ifc/read/`) on the crate fixtures, the hand-written `ifc/fixtures/` and the
 //! exports.
+//!
+//! Every verb (`verbs_all.txt`, `frame2/verbs_all.txt`), the verbs' JSON schemas
+//! (`verbs_schema/`, `verbs_list.json`) and the viewer export (`view/*.bimbleview`).
 
 use bimble_api::dispatch;
 use bimble_core::demo::{FrameSpec, concrete_frame};
@@ -166,6 +169,9 @@ fn derive(dir: &Path) -> Files {
     ifc_files(&m, &known, &mut files);
     frame2_files(dir, &mut files);
     ifc_more_files(dir, &mut files);
+    verbs_all_files(dir, &m, &mut files);
+    schema_files(&mut files);
+    view_files(dir, &m, &mut files);
     files
 }
 
@@ -1260,4 +1266,514 @@ fn read_files(name: &str, text: &str, files: &mut Files) {
         writeln!(s, "warning {w}").unwrap();
     }
     files.insert(format!("{prefix}scene.txt"), s.into_bytes());
+}
+
+// ---------------------------------------------------------------- every verb
+
+/// The ids a `verbs_all` transcript writes as they are: the model's own (project, storeys,
+/// materials, elements), the derived ids of its default views and of its site and building (the
+/// `project` query), and the all-zero id.
+fn verbs_all_known(m: &Model) -> BTreeSet<GlobalId> {
+    let mut known: BTreeSet<GlobalId> = BTreeSet::new();
+    known.insert(m.project_id);
+    known.extend(m.storeys.keys());
+    known.extend(m.materials.keys());
+    known.extend(m.elements.keys());
+    known.extend(m.view_ids());
+    for part in ["site", "building"] {
+        known.insert(GlobalId::derived(
+            format!("{}/{part}", m.project_id).as_bytes(),
+        ));
+    }
+    known.insert(GlobalId::from_u128(0));
+    known
+}
+
+fn added_ids(cmds: &[Command]) -> Vec<String> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            Command::AddElement(e) => Some(e.id.to_string()),
+            Command::AddSheet(s) => Some(s.id.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+impl Run<'_> {
+    /// A verb that must succeed; the ids of the elements or sheets it adds.
+    fn ok(&mut self, name: &str, args: Value) -> Vec<String> {
+        let Some(cmds) = self.verb(name, args) else {
+            let last = self.s.trim_end().rsplit("\n\n").next().unwrap_or_default();
+            panic!("a verb that must succeed was refused:\n{last}");
+        };
+        added_ids(&cmds)
+    }
+
+    /// A verb that must be refused.
+    fn bad(&mut self, name: &str, args: Value) {
+        assert!(
+            self.verb(name, args.clone()).is_none(),
+            "{name} {args} is refused"
+        );
+    }
+
+    fn undo_then_redo(&mut self) {
+        self.undo_redo(false);
+        self.undo_redo(true);
+    }
+
+    /// A read-only query, recorded as a step (`query <name> {}`), its answer masked.
+    fn query(&mut self, name: &str) {
+        let r = dispatch::query(&self.m, name, json!({}));
+        let answer = r.map(|v| self.mask.mask(&v.to_string()));
+        self.step("query", name, &json!({}), &answer);
+    }
+
+    /// The new verbs' shared part: project fields, views, schedules, sheets, then the queries.
+    fn views_sheets_schedules(
+        &mut self,
+        fields: [(&str, &str); 4],
+        plan: &str,
+        schedules: [&str; 2],
+    ) {
+        // set_project_field: add, change, a second one, the same again (no command), remove.
+        let [(l1, v1), (l1b, v1b), (l2, v2), (bad_label, _)] = fields;
+        self.ok("set_project_field", json!({"label": l1, "value": v1}));
+        self.undo_then_redo();
+        self.ok("set_project_field", json!({"label": l1b, "value": v1b}));
+        self.ok("set_project_field", json!({"label": l2, "value": v2}));
+        self.ok("set_project_field", json!({"label": l2, "value": v2}));
+        self.ok("set_project_field", json!({"label": l1, "value": ""}));
+        self.bad(
+            "set_project_field",
+            json!({"label": bad_label, "value": "x"}),
+        );
+        self.bad("set_project_field", json!({"label": l1}));
+
+        // set_view: a default view's first change adds it (AddView), the next sets it (SetView).
+        let v3d = GlobalId::derived(b"bimble view 3d").to_string();
+        self.ok(
+            "set_view",
+            json!({"id": v3d, "scale": 50, "true_north": true}),
+        );
+        self.undo_then_redo();
+        self.ok("set_view", json!({"id": v3d, "scale": 200}));
+        self.ok("set_view", json!({"id": v3d, "crop": null}));
+        self.ok(
+            "set_view",
+            json!({"id": plan, "scale": 20, "crop": {"min": [-1000.0, -2000.5], "max": [30000.0, 25000.0]}}),
+        );
+        self.ok(
+            "set_view",
+            json!({"id": plan, "range": {"cut": {"offset_mm": 1000.0}, "bottom": {"offset_mm": -100.0}, "depth": {"offset_mm": -100.0}}}),
+        );
+        self.ok("set_view", json!({"id": plan, "crop": null}));
+        self.ok(
+            "set_view",
+            json!({"id": plan, "range": {"bottom": {"offset_mm": -0.0}}}),
+        );
+        self.bad(
+            "set_view",
+            json!({"id": v3d, "crop": {"min": [0.0, 0.0], "max": [1.0, 1.0]}}),
+        );
+        self.bad(
+            "set_view",
+            json!({"id": plan, "crop": {"min": [10.0, 0.0], "max": [1.0, 1.0]}}),
+        );
+        self.bad(
+            "set_view",
+            json!({"id": "0000000000000000000000", "scale": 50}),
+        );
+        self.bad(
+            "set_view",
+            json!({"id": v3d, "range": {"cut": {"offset_mm": 900.0}}}),
+        );
+        self.bad("set_view", json!({"id": v3d, "scale": 0}));
+        self.bad(
+            "set_view",
+            json!({"id": plan, "range": {"cut": {"offset_mm": -5000.0}}}),
+        );
+        self.bad("set_view", json!({"id": v3d, "zoom": 2}));
+
+        // set_schedule: a built-in one's first change adds it to the stored list.
+        let [a, b] = schedules;
+        self.ok("set_schedule", json!({"name": a, "group_by_level": false}));
+        self.undo_then_redo();
+        self.ok(
+            "set_schedule",
+            json!({"name": a.to_uppercase(), "columns": ["level", "name", "volume", "global_id"]}),
+        );
+        self.ok("set_schedule", json!({"name": b, "family": null}));
+        self.ok(
+            "set_schedule",
+            json!({"name": b, "family": "timber", "group_by_level": true}),
+        );
+        self.bad(
+            "set_schedule",
+            json!({"name": "Nope", "group_by_level": false}),
+        );
+        self.bad(
+            "set_schedule",
+            json!({"name": a, "columns": ["level", "bogus"]}),
+        );
+        self.bad("set_schedule", json!({"name": a, "columns": []}));
+
+        // add_sheet: defaults, then given fields, then the next free number.
+        let s1 = self.ok("add_sheet", json!({})).remove(0);
+        self.undo_then_redo();
+        let s2 = self
+            .ok(
+                "add_sheet",
+                json!({"number": "A-009", "name": "Plans \"RDC\" \\ é", "paper": "A3", "portrait": true}),
+            )
+            .remove(0);
+        self.ok("add_sheet", json!({"name": "Coupes"}));
+        self.bad("add_sheet", json!({"paper": "A5"}));
+        self.bad("add_sheet", json!({"number": "A-009"}));
+        self.bad("add_sheet", json!({"number": "  "}));
+
+        // set_sheet: change, the same again (no command), remove the revision.
+        self.ok(
+            "set_sheet",
+            json!({"id": s1, "name": "Vue en plan", "revision": "B"}),
+        );
+        self.undo_then_redo();
+        self.ok(
+            "set_sheet",
+            json!({"id": s2, "paper": "A0", "portrait": false}),
+        );
+        self.ok("set_sheet", json!({"id": s2, "paper": "A0"}));
+        self.ok("set_sheet", json!({"id": s1, "revision": ""}));
+        self.bad("set_sheet", json!({"id": s1, "number": "A-009"}));
+        self.bad(
+            "set_sheet",
+            json!({"id": "0000000000000000000000", "name": "x"}),
+        );
+        self.bad("set_sheet", json!({"id": s1, "revision": "r".repeat(201)}));
+
+        // Not `sheets`: it lists the sheets in id order, and new sheet ids are random.
+        for q in ["project", "views", "schedules"] {
+            self.query(q);
+        }
+    }
+}
+
+fn by_name(m: &Model, name: &str) -> String {
+    m.elements
+        .values()
+        .find(|e| e.name == name)
+        .unwrap_or_else(|| panic!("element {name:?}"))
+        .id
+        .to_string()
+}
+
+/// The id of the plan (looking down) of the storey at `elevation`.
+fn plan_view(m: &Model, elevation: f64) -> String {
+    let storey = m
+        .storeys
+        .values()
+        .find(|s| s.elevation == elevation)
+        .unwrap()
+        .id;
+    GlobalId::derived(format!("bimble view plan down {storey}").as_bytes()).to_string()
+}
+
+fn new_run<'a>(m: &Model, known: &'a BTreeSet<GlobalId>) -> Run<'a> {
+    Run {
+        m: m.clone(),
+        h: History::default(),
+        s: String::new(),
+        mask: Masker {
+            known,
+            new: HashMap::new(),
+        },
+    }
+}
+
+/// `verbs_all.txt` on the demo frame: copy, rotate, mirror and the view, schedule, sheet and
+/// project verbs.
+fn verbs_all_frame(frame: &Model, known: &BTreeSet<GlobalId>) -> (String, String) {
+    let mut r = new_run(frame, known);
+    let nth = |class: &str, n: usize| {
+        frame
+            .elements
+            .values()
+            .filter(|e| e.class_name() == class)
+            .nth(n)
+            .unwrap()
+            .id
+            .to_string()
+    };
+    let (col0, col1, beam0, slab0) = (
+        nth("IfcColumn", 0),
+        nth("IfcColumn", 1),
+        nth("IfcBeam", 0),
+        nth("IfcSlab", 0),
+    );
+    // copy
+    let c = r.ok(
+        "copy",
+        json!({"ids": [col0, beam0], "d": [7000.0, 0.0, 0.0]}),
+    );
+    r.undo_then_redo();
+    let c2 = r.ok(
+        "copy",
+        json!({"ids": [c[0], slab0], "d": [0.0, -250.5, 3000.0]}),
+    );
+    r.ok("copy", json!({"ids": [c[0]], "d": [0.0, 0.0, 6000.0]}));
+    r.ok(
+        "copy",
+        json!({"ids": ["0000000000000000000000"], "d": [1.0, 0.0, 0.0]}),
+    );
+    r.bad("copy", json!({"ids": [col0], "d": [1.0e8, 0.0, 0.0]}));
+    r.bad("copy", json!({"ids": [col0]}));
+    // rotate
+    r.ok("rotate", json!({"ids": [col0, beam0], "angle_deg": 30.0}));
+    r.undo_then_redo();
+    r.ok(
+        "rotate",
+        json!({"ids": [c[0], c2[1]], "angle_deg": -45.5, "about": [1000.0, 2000.0]}),
+    );
+    r.ok("rotate", json!({"ids": [c[1]], "angle_deg": 90.0}));
+    r.ok("rotate", json!({"ids": [c[1]], "angle_deg": 360.0}));
+    r.bad("rotate", json!({"ids": [col0], "angle_deg": 400.0}));
+    r.bad(
+        "rotate",
+        json!({"ids": ["0000000000000000000000"], "angle_deg": 10.0}),
+    );
+    // mirror
+    r.ok(
+        "mirror",
+        json!({"ids": [col1, beam0], "axis": {"point": [3000.0, 0.0], "dir": [0.0, 1.0]}}),
+    );
+    r.undo_then_redo();
+    r.ok(
+        "mirror",
+        json!({"ids": [c2[0], slab0], "axis": {"point": [0.0, 0.0], "dir": [1.0, 1.0]}}),
+    );
+    r.bad(
+        "mirror",
+        json!({"ids": [col1], "axis": {"point": [0.0, 0.0], "dir": [0.0, 0.0]}}),
+    );
+    r.bad(
+        "mirror",
+        json!({"ids": ["0000000000000000000000"], "axis": {"point": [0.0, 0.0], "dir": [1.0, 0.0]}}),
+    );
+    r.views_sheets_schedules(
+        [
+            ("Maître d'ouvrage", "Ville"),
+            ("  maître D'OUVRAGE ", "Commune \"Lac\""),
+            ("Phase", "51"),
+            ("  --- ", ""),
+        ],
+        &plan_view(frame, 0.0),
+        ["Concrete columns", "Steel beams"],
+    );
+    let after = r.mask.model_text(&r.m);
+    (r.s, after)
+}
+
+/// `frame2/verbs_all.txt`: the six first verbs on walls, polygons and a mesh, then the others.
+fn verbs_all_frame2(m2: &Model, known: &BTreeSet<GlobalId>) -> (String, String) {
+    let mut r = new_run(m2, known);
+    let id = |n: &str| by_name(m2, n);
+    let storey = |elev: f64| {
+        m2.storeys
+            .values()
+            .find(|s| s.elevation == elev)
+            .unwrap()
+            .id
+            .to_string()
+    };
+    let (s0, s1) = (storey(0.0), storey(3150.5));
+    let (w1, w2, d1, d2, d3) = (
+        id("W1"),
+        id("W2\trotated 30°"),
+        id("D1"),
+        id("D2 (L)"),
+        id("D3 trémie"),
+    );
+    let (plate, rail, col) = (id("Gousset"), id("Garde-corps"), id("C1"));
+    // place
+    let w3 = r
+        .ok(
+            "place",
+            json!({"kind": "wall", "storey": s0, "a": [0.0, 5000.0], "b": [4000.0, 8000.0]}),
+        )
+        .remove(0);
+    r.undo_then_redo();
+    r.ok(
+        "place",
+        json!({"kind": "slab", "storey": s1, "a": [0.0, 0.0], "b": [-3000.0, 2000.5], "material": "Bois \"local\" \\ épicéa"}),
+    );
+    r.ok(
+        "place",
+        json!({"kind": "column", "storey": s1, "a": [6000.0, 0.0], "sizes": {"column": 250.0}, "material": "S355"}),
+    );
+    r.bad(
+        "place",
+        json!({"kind": "wall", "storey": s0, "a": [0.0, 0.0], "b": [0.0, 0.0], "sizes": {"wall": -1.0}}),
+    );
+    // move
+    r.ok("move", json!({"ids": [w2, d2], "d": [100.0, 200.0, 0.0]}));
+    r.undo_then_redo();
+    r.ok(
+        "move",
+        json!({"ids": [plate, rail], "d": [0.0, 0.0, -50.5]}),
+    );
+    r.bad("move", json!({"ids": [w2], "d": [0.0, 0.0, -2.0e7]}));
+    // set_generator
+    r.ok(
+        "set_generator",
+        json!({"id": w1, "params": {"thickness": 250.0}}),
+    );
+    r.undo_then_redo();
+    r.ok(
+        "set_generator",
+        json!({"id": d2, "params": {"height": 300.0}}),
+    );
+    r.ok(
+        "set_generator",
+        json!({"id": w3, "params": {"length": 4500.0, "height": 3000.0}}),
+    );
+    r.bad(
+        "set_generator",
+        json!({"id": d2, "params": {"width": 300.0}}),
+    );
+    r.bad(
+        "set_generator",
+        json!({"id": rail, "params": {"height": 1.0}}),
+    );
+    r.bad("set_generator", json!({"id": w1, "params": {}}));
+    // set_material
+    r.ok("set_material", json!({"ids": [d2, d3], "material": "S355"}));
+    r.undo_then_redo();
+    r.ok(
+        "set_material",
+        json!({"ids": [w2, d1], "material": "C40/50"}),
+    );
+    r.ok("set_material", json!({"ids": [w2], "material": "C40/50"}));
+    r.bad(
+        "set_material",
+        json!({"ids": [w2], "material": "Unobtainium"}),
+    );
+    // set_note
+    r.ok(
+        "set_note",
+        json!({"id": d3, "text": " trémie à vérifier — \"urgent\" "}),
+    );
+    r.undo_then_redo();
+    r.ok("set_note", json!({"id": d3, "text": "   "}));
+    r.ok("set_note", json!({"id": col, "text": "ok"}));
+    r.bad(
+        "set_note",
+        json!({"id": "0000000000000000000000", "text": "x"}),
+    );
+    // delete
+    r.ok("delete", json!({"ids": [d3, rail]}));
+    r.undo_then_redo();
+    r.undo_redo(false);
+    r.bad("delete", json!({"ids": "W1"}));
+    // copy
+    let c = r.ok(
+        "copy",
+        json!({"ids": [w2, d2, rail], "d": [0.0, 10000.0, 0.0]}),
+    );
+    r.undo_then_redo();
+    r.ok("copy", json!({"ids": [d3, c[1]], "d": [0.0, 0.0, 3150.5]}));
+    r.bad("copy", json!({"ids": [d3], "d": [0.0, 0.0, 2.0e7]}));
+    // rotate
+    r.ok("rotate", json!({"ids": [w1, d2], "angle_deg": 30.0}));
+    r.undo_then_redo();
+    r.ok(
+        "rotate",
+        json!({"ids": [plate, rail], "angle_deg": 17.25, "about": [0.0, 0.0]}),
+    );
+    r.ok("rotate", json!({"ids": [w2], "angle_deg": -90.0}));
+    r.bad("rotate", json!({"ids": [w2], "angle_deg": -361.0}));
+    // mirror
+    r.ok(
+        "mirror",
+        json!({"ids": [w2, d3], "axis": {"point": [0.0, 0.0], "dir": [1.0, 0.0]}}),
+    );
+    r.undo_then_redo();
+    r.ok(
+        "mirror",
+        json!({"ids": [rail, c[0]], "axis": {"point": [500.0, 500.0], "dir": [3.0, 4.0]}}),
+    );
+    r.bad(
+        "mirror",
+        json!({"ids": [w2], "axis": {"point": [1.0e8, 0.0], "dir": [1.0, 0.0]}}),
+    );
+    r.views_sheets_schedules(
+        [
+            ("Phase", "52"),
+            ("Client", ""),
+            ("Bureau d'études", "BET \"Structure\" 日本"),
+            ("!!!", ""),
+        ],
+        &plan_view(m2, 3150.5),
+        ["Timber beams", "Steel columns"],
+    );
+    let after = r.mask.model_text(&r.m);
+    (r.s, after)
+}
+
+fn verbs_all_files(dir: &Path, frame: &Model, files: &mut Files) {
+    let known = verbs_all_known(frame);
+    let (s, after) = verbs_all_frame(frame, &known);
+    files.insert("verbs_all.txt".into(), s.into_bytes());
+    files.insert("verbs_all_after.json".into(), after.into_bytes());
+
+    let text = std::fs::read_to_string(dir.join("frame2.json")).expect("frame2.json");
+    let m2 = file::from_str(&text).expect("frame2.json loads");
+    let known = verbs_all_known(&m2);
+    let (s, after) = verbs_all_frame2(&m2, &known);
+    files.insert("frame2/verbs_all.txt".into(), s.into_bytes());
+    files.insert("frame2/verbs_all_after.json".into(), after.into_bytes());
+}
+
+// ---------------------------------------------------------------- verb schemas
+
+fn pretty(v: &impl serde::Serialize) -> Vec<u8> {
+    let mut s = serde_json::to_string_pretty(v).unwrap();
+    s.push('\n');
+    s.into_bytes()
+}
+
+/// `verbs_list.json` (`dispatch::list`, the `verbs` query) and `verbs_schema/<verb>.json`
+/// (`dispatch::describe`).
+fn schema_files(files: &mut Files) {
+    let list = dispatch::list();
+    files.insert("verbs_list.json".into(), pretty(&list));
+    for v in &list {
+        let schema = dispatch::describe(v.name).expect("every listed verb has a schema");
+        files.insert(format!("verbs_schema/{}.json", v.name), pretty(&schema));
+    }
+}
+
+// ---------------------------------------------------------------- viewer export
+
+/// `view/<name>.bimbleview`: `viewfile::write(Scene::from_model(m), true)` (gzipped, as the
+/// viewer's share and `bimble pack` write it), and `view/<name>.bimbleview.raw`: the same
+/// without gzip (what the gzip stream inflates to).
+fn view_files(dir: &Path, frame: &Model, files: &mut Files) {
+    use bimble_geom::viewfile;
+    use std::io::Read as _;
+    let text = std::fs::read_to_string(dir.join("frame2.json")).expect("frame2.json");
+    let m2 = file::from_str(&text).expect("frame2.json loads");
+    for (name, m) in [("frame", frame), ("frame2", &m2)] {
+        let scene = Scene::from_model(m);
+        let gz = viewfile::write(&scene, true);
+        let raw = viewfile::write(&scene, false);
+        let mut inflated = Vec::new();
+        flate2::read::GzDecoder::new(&gz[..])
+            .read_to_end(&mut inflated)
+            .expect("bimbleview is gzip");
+        assert_eq!(inflated, raw, "{name}: gzip inflates to the raw stream");
+        let back = viewfile::read_bytes(&gz).expect("bimbleview reads back");
+        assert_eq!(back.elements.len(), scene.elements.len());
+        files.insert(format!("view/{name}.bimbleview"), gz);
+        files.insert(format!("view/{name}.bimbleview.raw"), raw);
+    }
 }

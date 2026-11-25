@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of `set_note`.",
+  "properties": {
+    "id": {
+      "description": "GlobalId of the element.",
+      "type": "string"
+    },
+    "text": {
+      "description": "The note, one line. Empty: remove the note.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "text"
+  ],
+  "title": "SetNoteArgs",
+  "type": "object"
+}

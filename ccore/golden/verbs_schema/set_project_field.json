@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of `set_project_field`.",
+  "properties": {
+    "label": {
+      "description": "The field's label (\"Maître d'ouvrage\"); the key is made from it (`project::key_of`).",
+      "type": "string"
+    },
+    "value": {
+      "description": "The value; empty removes the field.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "label",
+    "value"
+  ],
+  "title": "SetProjectFieldArgs",
+  "type": "object"
+}

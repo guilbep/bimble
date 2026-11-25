@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of `set_sheet`: the fields to change, others kept.",
+  "properties": {
+    "id": {
+      "description": "GlobalId of the sheet.",
+      "type": "string"
+    },
+    "name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "number": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "paper": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "portrait": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "revision": {
+      "description": "The title block's {revision}; empty: removed.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "title": "SetSheetArgs",
+  "type": "object"
+}

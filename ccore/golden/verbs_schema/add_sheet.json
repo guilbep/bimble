@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of `add_sheet`.",
+  "properties": {
+    "name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "number": {
+      "description": "Drawing number, unique; default: the next free one (\"S-101\" → \"S-102\").",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "paper": {
+      "description": "A4, A3, A2, A1 or A0.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "portrait": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "title": "AddSheetArgs",
+  "type": "object"
+}
