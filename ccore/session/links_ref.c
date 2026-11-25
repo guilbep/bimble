@@ -166,7 +166,13 @@ int cc_refs_link(cc_session *s, const char *format, const char *body, size_t n, 
     cc_refread rd;
     Buf err;
     buf_init(&err);
+#ifdef CC_VIEW_ONLY /* build.sh VIEW_DENY: no reader (view_only.c refuses link_pdf before this) */
+    (void)scale, (void)nb, memset(&rd, 0, sizeof rd);
+    r = -1;
+    buf_puts(&err, "this build is view-only");
+#else
     r = cc_ref_read(name, strlen(name), (const unsigned char *)bytes, nb, scale, &rd, &err);
+#endif
     free(bytes);
     if (r) {
         buf_clear(out);
@@ -182,7 +188,9 @@ int cc_refs_link(cc_session *s, const char *format, const char *body, size_t n, 
     char *nm = arena_dup(a, name, strlen(name) + 1);
     char *src = s->pf->files ? arena_dup(a, p->s, p->n + 1) : NULL;
     if (!refs || !lines || !pts || !nm || (s->pf->files && !src)) {
+#ifndef CC_VIEW_ONLY
         cc_refread_free(&rd);
+#endif
         return fail(out, "out of memory", NULL);
     }
     if (view.nreferences) memcpy(refs, view.references, view.nreferences * sizeof *refs);
@@ -197,7 +205,9 @@ int cc_refs_link(cc_session *s, const char *format, const char *body, size_t n, 
     if (src) x->has_source = 1, x->source.p = src, x->source.n = p->n;
     x->visible = 1;
     x->polylines = lines, x->npolylines = rd.nlines;
+#ifndef CC_VIEW_ONLY
     cc_refread_free(&rd);
+#endif
     if (has_place) x->offset_mm[0] = off[0], x->offset_mm[1] = off[1], x->rotation_deg = rot;
     else place_reference(&s->model, &view, sc, x);
     view.references = refs, view.nreferences++;

@@ -52,6 +52,7 @@ VIEW_DENY+=(src/draw_cut.c src/paper.c src/draw_style.c src/draw_plan.c src/draw
 VIEW_DENY+=(src/draw_sheet.c) # sheets on paper (D5)
 VIEW_DENY+=(src/pdf_out.c) # the PDF writer (D6): not in the viewer
 VIEW_DENY+=(src/repo.c src/diff.c) # the history store (H1): no history folder in the browser (session/versions.c)
+VIEW_DENY+=(src/pdf_in.c src/ref_read.c) # L1: reading a PDF is link_pdf, an edit (view_only.c): the viewer shows the stored references only
 VIEW_OPT=-Os
 VIEW_MAX=400000
 HOST=(host/*.c)

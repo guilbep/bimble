@@ -124,7 +124,8 @@ try {
   const enabled = async () => Object.fromEntries((await q("actions")).filter((a) => /link/.test(a.name)).map((a) => [a.name, a.enabled]));
   const en0 = await enabled();
   check("link_model and manage_links enabled with a model (ribbon.rs `loaded`)", en0.link_model === true && en0.manage_links === true, JSON.stringify(en0));
-  check("link_dxf / link_pdf stay off (no flat view in the C core)", en0.link_dxf === false && en0.link_pdf === false, JSON.stringify(en0));
+  // link_pdf: ticket L1 (session/links_ref.h), enabled with an editable model (ribbon.rs `_ => loaded`); link_dxf: L2.
+  check("link_dxf stays off; link_pdf on with an editable model (ticket L1)", en0.link_dxf === false && en0.link_pdf === true, JSON.stringify(en0));
   const m0 = await mesh();
   const c0 = await change();
   check("no link: /mesh is the single-model BMSH, no trailer", m0.status === 200 && m0.bytes.length === bmshSize(m0.bytes, 0), `${m0.bytes.length} bytes`);
