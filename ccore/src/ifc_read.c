@@ -918,6 +918,49 @@ void cc_ifc_georef_json(Buf *b, const cc_ifc_georef *g) {
     buf_putc(b, '}');
 }
 
+int cc_ifc_scene_meta(const cc_ifc_scene *s, cc_viewfile_meta *mt) {
+    cc_viewfile_meta_init(mt);
+    Arena *a = &mt->arena;
+    size_t ne = s->scene.nelements;
+    cc_view_info *info = arena_alloc(a, (ne + 1) * sizeof *info, 8);
+    cc_view_storey *st = arena_alloc(a, (s->nstoreys + 1) * sizeof *st, 8);
+    cc_view_grid *gr = arena_alloc(a, (s->ngrids + 1) * sizeof *gr, 8);
+    if (!info || !st || !gr) return -1;
+    for (size_t k = 0; k < ne; k++) {
+        const cc_ifc_info *x = &s->info[s->scene.elements[k].model_index];
+        info[k].global_id = x->global_id;
+        info[k].name = x->name;
+        info[k].storey = x->storey;
+        info[k].material = x->material;
+    }
+    for (size_t i = 0; i < s->nstoreys; i++) {
+        st[i].name = s->storeys[i].name;
+        st[i].elevation = s->storeys[i].elevation_mm;
+        st[i].id = s->storeys[i].id;
+    }
+    for (size_t i = 0; i < s->ngrids; i++) {
+        const cc_ifc_grid *g = &s->grids[i];
+        gr[i].tag = g->tag;
+        memcpy(gr[i].start, g->start_mm, sizeof gr[i].start);
+        memcpy(gr[i].end, g->end_mm, sizeof gr[i].end);
+    }
+    Buf j;
+    buf_init(&j);
+    cc_ifc_georef_json(&j, &s->georef);
+    int rc = 0;
+    if (j.oom) rc = -1;
+    else if (!(j.len == 2 && j.p[0] == '{' && j.p[1] == '}')) { /* Georef::is_default */
+        char *t = arena_dup(a, j.p, j.len);
+        if (!t) rc = -1;
+        else mt->has_georef = 1, mt->georef.p = t, mt->georef.n = j.len;
+    }
+    buf_free(&j);
+    mt->info = info, mt->ninfo = ne;
+    mt->storeys = st, mt->nstoreys = s->nstoreys;
+    mt->grids = gr, mt->ngrids = s->ngrids;
+    return rc;
+}
+
 static void put_k(Buf *b, size_t k) { /* {k:03} */
     if (k < 100) buf_putc(b, '0');
     if (k < 10) buf_putc(b, '0');

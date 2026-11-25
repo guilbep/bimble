@@ -1,7 +1,9 @@
 /* Suite viewfile: the .bimbleview export (golden/view/, see golden/README.md) byte for byte with
  * Rust's raw stream, its gzip inflating to the same, Rust's files read back to the C scene,
  * robustness of the reader (prefixes, flipped bytes, lying lengths, huge varints, many
- * sections), and timings (the frame; the 20k synthetic model when out/t16-large-20000.bimble
+ * sections), sharing a read-only scene (cc_viewfile_write_meta: an IFC read as it is, read back
+ * C -> C as Rust has no golden of a read scene's view file; an opened view file shared again gives
+ * its raw bytes), and timings (the frame; the 20k synthetic model when out/t16-large-20000.bimble
  * exists: python3 bench/large_model.py). */
 #define _POSIX_C_SOURCE 199309L /* clock_gettime under -std=c11 */
 #include <string.h>
@@ -13,6 +15,7 @@
 #include "../src/inflate.h"
 #include "../src/meshcodec.h"
 #include "../src/viewfile.h"
+#include "../src/ifc_read.h"
 #include "check.h"
 
 static const char *golden;
@@ -402,6 +405,194 @@ static void large(void) {
     cc_scene_free(&s), cc_model_free(&m), free(text);
 }
 
+/* ---- sharing a read-only scene (cc_viewfile_write_meta) ---- */
+
+/* session.c view_scene: the cc_scene over a view file (meshes and shapes borrowed). */
+static int scene_of_file(cc_scene *sc, const cc_viewfile *v) {
+    memset(sc, 0, sizeof *sc);
+    arena_init(&sc->arena, 0);
+    memcpy(sc->origin, v->origin, sizeof sc->origin);
+    sc->shapes = v->shapes, sc->nshapes = v->nshapes;
+    sc->warnings = v->warnings, sc->nwarnings = v->nwarnings;
+    sc->elements = arena_alloc(&sc->arena, (v->nelements + 1) * sizeof *sc->elements, 8);
+    if (!sc->elements) return -1;
+    for (size_t k = 0; k < v->nelements; k++) {
+        const cc_view_element *x = &v->elements[k];
+        cc_scene_element *e = &sc->elements[k];
+        if (x->global_id.n == 22) memcpy(e->id.c, x->global_id.p, 22);
+        e->cls = CC_IFC_PROXY;
+        e->class_name = x->class_name;
+        e->category = x->category;
+        e->model_index = k;
+        e->shape = x->shape;
+        e->mesh = x->mesh;
+        e->to_scene = x->to_scene;
+    }
+    sc->nelements = v->nelements;
+    return 0;
+}
+
+/* An opened view file shared again: its raw bytes (Rust: read -> Scene -> write). */
+static void reshare_file(const char *what, const uint8_t *p, size_t n, const char *want, size_t wn) {
+    char label[256];
+    cc_viewfile v;
+    cc_error err;
+    cc_scene sc;
+    cc_viewfile_meta mt;
+    Buf raw, gz, inflated;
+    buf_init(&raw), buf_init(&gz), buf_init(&inflated);
+    memset(&sc, 0, sizeof sc);
+    cc_viewfile_meta_init(&mt);
+    int rc = cc_viewfile_read(p, n, &v, &err);
+    snprintf(label, sizeof label, "reshare %s: reads (%s)", what, rc ? err.msg : "ok");
+    check_true(label, rc == 0);
+    if (rc == 0) {
+        cc_viewfile_meta_free(&mt);
+        rc = scene_of_file(&sc, &v) || cc_viewfile_meta_from_file(&mt, &v) ||
+             cc_viewfile_write_meta(&mt, &sc, 0, &raw) || cc_viewfile_write_meta(&mt, &sc, 1, &gz);
+        snprintf(label, sizeof label, "reshare %s: written", what);
+        check_true(label, rc == 0);
+        snprintf(label, sizeof label, "reshare %s: raw stream == the file's", what);
+        check_bytes(label, &raw, want, wn);
+        const char *why = NULL;
+        snprintf(label, sizeof label, "reshare %s: gzip inflates to the file's raw stream", what);
+        check_true(label, cc_gunzip((const unsigned char *)gz.p, gz.len, 1u << 30, &inflated, &why) == 0);
+        check_bytes(label, &inflated, want, wn);
+    }
+    cc_viewfile_meta_free(&mt);
+    cc_scene_free(&sc);
+    cc_viewfile_free(&v);
+    buf_free(&raw), buf_free(&gz), buf_free(&inflated);
+}
+
+static int eq_str(cc_str a, cc_str b) { return a.n == b.n && (a.n == 0 || memcmp(a.p, b.p, a.n) == 0); }
+
+/* A view file read back against the IFC read scene it was shared from. */
+static void check_against_ifc(const char *what, const cc_viewfile *v, const cc_ifc_scene *is, const cc_viewfile_meta *mt) {
+    char label[256];
+    const cc_scene *s = &is->scene;
+    snprintf(label, sizeof label, "%s: %zu elements, %zu shapes (read scene: %zu, %zu)", what, v->nelements,
+             v->nshapes, s->nelements, s->nshapes);
+    check_true(label, v->nelements == s->nelements && v->nshapes == s->nshapes);
+    if (v->nelements != s->nelements) return;
+    int ok_meta = 1, ok_mesh = 1, ok_place = 1;
+    for (size_t k = 0; k < s->nelements; k++) {
+        const cc_scene_element *e = &s->elements[k];
+        const cc_view_element *x = &v->elements[k];
+        const cc_ifc_info *in = &is->info[e->model_index];
+        if (!eq_str(x->global_id, in->global_id) || !eq_str(x->name, in->name) ||
+            !eq_str(x->class_name, e->class_name) || !eq_str(x->class_name, in->class_name) ||
+            !eq_str(x->storey, in->storey) || !eq_str(x->material, in->material) || x->category != e->category)
+            ok_meta = 0;
+        if ((x->shape >= 0) != (e->shape >= 0)) {
+            ok_mesh = 0;
+            continue;
+        }
+        if (!same_mesh(cc_scene_local_mesh(s, k), cc_viewfile_local_mesh(v, k))) ok_mesh = 0;
+        if (e->shape >= 0) {
+            const float *a = &e->to_scene.x[0], *b = &x->to_scene.x[0];
+            for (int i = 0; i < 12; i++)
+                if (a[i] != b[i]) ok_place = 0;
+        }
+    }
+    snprintf(label, sizeof label, "%s: ids, names, classes, storeys, materials, families", what);
+    check_true(label, ok_meta);
+    snprintf(label, sizeof label, "%s: meshes (indices, normals exact; points within 0.05 mm)", what);
+    check_true(label, ok_mesh);
+    snprintf(label, sizeof label, "%s: placements", what);
+    check_true(label, ok_place);
+    snprintf(label, sizeof label, "%s: origin", what);
+    check_true(label, v->origin[0] == s->origin[0] && v->origin[1] == s->origin[1] && v->origin[2] == s->origin[2]);
+    int ok = v->nstoreys == mt->nstoreys && v->ngrids == mt->ngrids && v->nwarnings == s->nwarnings &&
+             v->ndensities == 0 && v->has_georef == mt->has_georef;
+    for (size_t i = 0; ok && i < v->nstoreys; i++)
+        ok = eq_str(v->storeys[i].name, mt->storeys[i].name) && eq_str(v->storeys[i].id, mt->storeys[i].id) &&
+             v->storeys[i].elevation == mt->storeys[i].elevation;
+    for (size_t i = 0; ok && i < v->ngrids; i++)
+        ok = eq_str(v->grids[i].tag, mt->grids[i].tag) && !memcmp(v->grids[i].start, mt->grids[i].start, 16) &&
+             !memcmp(v->grids[i].end, mt->grids[i].end, 16);
+    for (size_t i = 0; ok && i < v->nwarnings; i++) ok = eq_str(v->warnings[i], s->warnings[i]);
+    if (ok && v->has_georef) ok = eq_str(v->georef, mt->georef);
+    snprintf(label, sizeof label, "%s: storeys, grids, warnings, georef, no densities", what);
+    check_true(label, ok);
+}
+
+/* Read an IFC as it is, share it, read it back; share the read-back file again: same bytes.
+ * `extra`: add two grids and a georeference to the meta (no fixture has them) to cover GRID
+ * and GEOR. Checked C -> C: Rust has no golden view file of a read scene. */
+static void share_ifc(const char *name, const char *file, size_t want_elements, int extra) {
+    char label[256];
+    size_t n;
+    char *text = slurp(golden, file, &n);
+    cc_ifc_scene is;
+    cc_error err;
+    int rc = cc_ifc_read(text, n, &is, &err);
+    snprintf(label, sizeof label, "share %s: reads (%s)", name, rc ? err.msg : "ok");
+    check_true(label, rc == 0);
+    cc_viewfile_meta mt;
+    cc_viewfile_meta_init(&mt);
+    Buf raw, gz;
+    buf_init(&raw), buf_init(&gz);
+    if (rc == 0) {
+        cc_viewfile_meta_free(&mt);
+        rc = cc_ifc_scene_meta(&is, &mt);
+        static const cc_view_grid G2[2] = {{{"A", 1}, {-1000.5, 0}, {9000, 0}}, {{"1", 1}, {0, -250}, {0, 7000.25}}};
+        static const char GEO[] = "{\"rotation_deg\":12.5,\"crs\":\"EPSG:2056\",\"east_m\":2600000.0}";
+        if (extra) {
+            mt.grids = G2, mt.ngrids = 2;
+            mt.has_georef = 1, mt.georef.p = GEO, mt.georef.n = sizeof GEO - 1;
+        }
+        if (rc == 0) rc = cc_viewfile_write_meta(&mt, &is.scene, 0, &raw);
+        if (rc == 0) rc = cc_viewfile_write_meta(&mt, &is.scene, 1, &gz);
+        snprintf(label, sizeof label, "share %s: written (raw %zu bytes, gzip %zu)", name, raw.len, gz.len);
+        check_true(label, rc == 0);
+        snprintf(label, sizeof label, "share %s: %zu elements", name, want_elements);
+        check_true(label, is.scene.nelements == want_elements);
+    }
+    if (rc == 0) {
+        cc_viewfile v;
+        rc = cc_viewfile_read((const uint8_t *)gz.p, gz.len, &v, &err);
+        snprintf(label, sizeof label, "share %s: the gzip file reads back (%s)", name, rc ? err.msg : "ok");
+        check_true(label, rc == 0);
+        if (rc == 0) {
+            snprintf(label, sizeof label, "share %s%s", name, extra ? " + grids, georef" : "");
+            check_against_ifc(label, &v, &is, &mt);
+        }
+        cc_viewfile_free(&v);
+        snprintf(label, sizeof label, "%s%s (shared from IFC)", name, extra ? " + grids, georef" : "");
+        reshare_file(label, (const uint8_t *)gz.p, gz.len, raw.p, raw.len);
+    }
+    cc_viewfile_meta_free(&mt);
+    buf_free(&raw), buf_free(&gz);
+    cc_ifc_scene_free(&is);
+    free(text);
+}
+
+/* The model wrapper equals the meta writer fed cc_viewfile_meta_from_model (same bytes). */
+static void reshare_golden(const char *name) {
+    char path[256];
+    size_t n, wn;
+    snprintf(path, sizeof path, "view/%s.bimbleview", name);
+    char *gz = slurp(golden, path, &n);
+    snprintf(path, sizeof path, "view/%s.bimbleview.raw", name);
+    char *want = slurp(golden, path, &wn);
+    snprintf(path, sizeof path, "golden/view/%s.bimbleview (Rust's)", name);
+    reshare_file(path, (const uint8_t *)gz, n, want, wn);
+    snprintf(path, sizeof path, "golden/view/%s.bimbleview.raw (Rust's)", name);
+    reshare_file(path, (const uint8_t *)want, wn, want, wn);
+    free(gz), free(want);
+}
+
+static void share_read_only(void) {
+    reshare_golden("frame");
+    reshare_golden("frame2");
+    share_ifc("mapped_item", "ifc/fixtures/mapped_item.ifc", 5, 0);
+    share_ifc("mapped_item", "ifc/fixtures/mapped_item.ifc", 5, 1);
+    share_ifc("frame.ifc", "ifc/frame.ifc", 72, 0);
+    share_ifc("triangulated", "ifc/fixtures/triangulated.ifc", 1, 0);
+    share_ifc("chain18", "../../crates/bimble-ifc/tests/fixtures/chain18.ifc", 0, 0);
+}
+
 int main(int argc, char **argv) {
     static char dir[4096];
     snprintf(dir, sizeof dir, "%s/..", argc > 1 ? argv[1] : "ccore/golden/floats");
@@ -409,6 +600,7 @@ int main(int argc, char **argv) {
     one_model("frame");
     one_model("frame2");
     robustness();
+    share_read_only();
     large();
     return report("viewfile");
 }

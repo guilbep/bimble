@@ -22,7 +22,9 @@
 //            golden/bin/frame.cbor; read-only files (ticket A5c): host_open of golden/ifc/fixtures/
 //            mapped_item.ifc (host_mesh count = golden/ifc/read/mapped_item/scene.txt's, editable
 //            false, verb place refused with Rust's text), share_for_viewing of frame.json
-//            (inflated = golden/view/frame.bimbleview.raw) and host_open of it; close
+//            (inflated = golden/view/frame.bimbleview.raw) and host_open of it; shared again (the
+//            same raw stream) and share_for_viewing of the read-only mapped_item.ifc (opens with 5
+//            elements; ticket V1); close
 // Prints per-suite "N passed, M failed", the module size and timings; exits non-zero on a failure.
 // No dependencies.
 import { spawn } from "node:child_process";
@@ -625,6 +627,12 @@ suite("files");
   check("host_open f.bimbleview -> 200, read-only, mesh elements and triangles = frame's",
     ov.status === 200 && svw.editable === false && svw.file === "f.bimbleview" && vm.status === 200 && vm.elements === fm.elements && fm.elements === 72 && vm.triangles === fm.triangles,
     `${ov.text} ${JSON.stringify(svw)} ${JSON.stringify(vm)} vs ${JSON.stringify(fm)}`);
+  // Ticket V1: the opened view file shared again: the same raw stream.
+  const shv = act("share_for_viewing", { path: "again.bimbleview" });
+  let rawAgain = new Uint8Array(0);
+  try { rawAgain = gunzipSync(saved().bytes); } catch {}
+  check("share_for_viewing of the open f.bimbleview -> 200: again.bimbleview, inflated = golden/view/frame.bimbleview.raw",
+    shv.status === 200 && savedPath() === "again.bimbleview" && Buffer.compare(rawAgain, readFileSync(join(G, "view/frame.bimbleview.raw"))) === 0, `${shv.text} ${savedPath()} ${rawAgain.length}`);
   const mi = open("mapped_item.ifc", read("ifc/fixtures/mapped_item.ifc"));
   const sm = q("state");
   const [, gEls, gTris] = /^elements (\d+) triangles (\d+)/m.exec(read("ifc/read/mapped_item/scene.txt")).map(Number);
@@ -636,6 +644,15 @@ suite("files");
   check("read-only: verb place -> 400 Rust's read-only text", vp.status === 400 && vp.text === READ_ONLY, vp.text);
   const acts = Object.fromEntries(q("actions").map((a) => [a.name, a.enabled]));
   check("read-only in the module: place, save, export off; convert_open off (no files)", !acts.place_column && !acts.save && !acts.export_ifc4 && !acts.convert_open && acts.open, JSON.stringify(acts));
+  // Ticket V1: the read-only IFC shared for viewing (ribbon.rs:575), its view file opens with 5 elements.
+  const shi = act("share_for_viewing");
+  const miv = saved().bytes;
+  check("read-only IFC: share_for_viewing on -> 200: mapped_item.bimbleview (gzip)",
+    acts.share_for_viewing === true && shi.status === 200 && savedPath() === "mapped_item.bimbleview" && miv[0] === 0x1f, `${shi.text} ${savedPath()}`);
+  const omv = open("mapped_item.bimbleview", miv);
+  const mmv = meshOf();
+  check("host_open mapped_item.bimbleview -> 200, read-only, mesh 5 elements and the read scene's triangles",
+    omv.status === 200 && q("state").editable === false && mmv.elements === 5 && mmv.triangles === gTris, `${omv.text} ${JSON.stringify(mmv)}`);
   const im = open("mapped_item.ifc", read("ifc/fixtures/mapped_item.ifc"), 2);
   check("host_open import mapped_item.ifc -> editable copy", im.status === 200 && q("state").editable === true && q("state").file === "mapped_item.bimble", im.text);
   open("f.bimble", fb, 1);

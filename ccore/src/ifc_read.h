@@ -19,6 +19,7 @@
 #include "buf.h"
 #include "model.h"
 #include "scene.h"
+#include "viewfile.h"
 
 typedef struct { /* bimble_geom::StoreyLevel */
     cc_str name;
@@ -69,6 +70,13 @@ void cc_ifc_scene_free(cc_ifc_scene *s);
 
 /* serde_json of the Georef ("{}" when default), appended. */
 void cc_ifc_georef_json(Buf *b, const cc_ifc_georef *g);
+
+/* The META of the read scene for the .bimbleview writer (cc_viewfile_write_meta): Rust shares
+ * the Scene read_str gives (ribbon.rs:575), so per element the file's GlobalId text, name,
+ * storey and material; the storeys and grids as read; no densities (read_str sets none); GEOR
+ * when the georeference is not the default (its serde_json text). `mt` is always initialized
+ * (free it with cc_viewfile_meta_free); it borrows from `s`. 0 ok, -1 out of memory. */
+int cc_ifc_scene_meta(const cc_ifc_scene *s, cc_viewfile_meta *mt);
 
 /* The golden text of ccore/golden/ifc/read/<name>/ (golden/README.md, "ifc/read"): scene.txt
  * and, per element k, <k>.txt (the mesh/ format). */

@@ -6,9 +6,14 @@
  * written here: the C model has no georeference), ELEM chunks of about 1 MiB; meshes in the
  * "BMG1" codec (meshcodec.h).
  *
- * The META section is computed from the model and the scene: the sorted table of class, storey,
- * material and family names, the storeys sorted by elevation, no grids (from_model has none), the
- * densities by material name, the scene's warnings.
+ * Rust writes from any Scene shown (ribbon.rs:575): a model's, an IFC read as it is, a view file
+ * opened. Here the scene's text fields beside the geometry are a cc_viewfile_meta: per element
+ * GlobalId, name, storey and material (class and family come from the cc_scene element), the
+ * storeys, grids, densities and georeference. Fillers: cc_viewfile_meta_from_model (from_model:
+ * storeys sorted by elevation, no grids, densities by material name, no georeference),
+ * cc_viewfile_meta_from_file (what an opened view file holds, as is: sharing it again gives its
+ * raw bytes) and cc_ifc_scene_meta (ifc_read.h). The META table is computed by the writer: the
+ * sorted distinct class, storey, material and family names; the warnings are the scene's.
  *
  * Reading takes untrusted bytes (raw or gzipped): lengths checked against what is there, indices
  * against what was read, floats finite, UTF-8 checked, inflated size bounded, never aborts. The
@@ -26,7 +31,8 @@
 #define CC_VIEWFILE_CHUNK_BYTES ((size_t)1 << 20)
 
 /* Appends the view file of scene `s` (built from `m` by cc_scene_build) to `out`, gzipped when
- * `gzip`. 0 ok, -1 out of memory (or a scene that does not belong to the model). */
+ * `gzip`: cc_viewfile_meta_from_model then cc_viewfile_write_meta. 0 ok, -1 out of memory (or a
+ * scene that does not belong to the model). */
 int cc_viewfile_write(const cc_model *m, const cc_scene *s, int gzip, Buf *out);
 
 /* Whether bytes start like a view file (raw magic or gzip). */
@@ -77,6 +83,37 @@ typedef struct {
     cc_view_element *elements; /* malloc */
     size_t nelements;
 } cc_viewfile;
+
+typedef struct { /* the text of one scene element (SceneElement's fields beside class, family) */
+    cc_str global_id, name, storey, material;
+} cc_view_info;
+
+/* A scene's META (and GEOR) for the writer. Every string and array is borrowed (from the model,
+ * the scene, the view file or the IFC scene, which must outlive it) or lives in `arena`. */
+typedef struct {
+    Arena arena;
+    const cc_view_info *info; /* one per scene element, same index */
+    size_t ninfo;
+    const cc_view_storey *storeys; /* written in this order */
+    size_t nstoreys;
+    const cc_view_grid *grids;
+    size_t ngrids;
+    const cc_view_density *densities; /* sorted by material, one per material */
+    size_t ndensities;
+    int has_georef;
+    cc_str georef; /* GEOR's JSON text, when has_georef (Rust: only when not the default) */
+} cc_viewfile_meta;
+
+void cc_viewfile_meta_init(cc_viewfile_meta *mt);
+void cc_viewfile_meta_free(cc_viewfile_meta *mt);
+/* Fill `mt` (always initialized: free it either way). 0 ok, -1 out of memory or a scene that
+ * does not belong to the model. */
+int cc_viewfile_meta_from_model(cc_viewfile_meta *mt, const cc_model *m, const cc_scene *s);
+int cc_viewfile_meta_from_file(cc_viewfile_meta *mt, const cc_viewfile *v);
+
+/* Appends the view file of scene `s` with its META `mt` to `out`, gzipped when `gzip`
+ * (viewfile.rs write). 0 ok, -1 out of memory or `mt` not of `s` (ninfo != nelements). */
+int cc_viewfile_write_meta(const cc_viewfile_meta *mt, const cc_scene *s, int gzip, Buf *out);
 
 /* Reads a view file. Always initializes `out` (free it with cc_viewfile_free either way).
  * 0 ok, -1 with err->msg. */

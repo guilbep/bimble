@@ -517,9 +517,8 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "new") || !strcmp(name, "open") || !strcmp(name, "import_ifc")) return 1; /* ribbon.rs:559 */
     if (!strcmp(name, "save_as")) return s->open; /* not ribbon actions (file_action) */
     if (!strcmp(name, "close")) return loaded(s);
-    /* ribbon.rs:575: Rust shares any scene shown. Deviation: the C writer (viewfile.h) takes a
-     * model, so a read-only scene cannot be shared yet. */
-    if (!strcmp(name, "share_for_viewing")) return s->open;
+    /* ribbon.rs:575: Rust shares any scene shown: a model's, an IFC read as it is, a view file. */
+    if (!strcmp(name, "share_for_viewing")) return s->open || s->view != CC_VIEW_NONE;
     /* ribbon.rs:564-572: an IFC open read-only, natively (the browser keeps no path to read it
      * again), with something to edit (Deviation: any element, not structural_count). */
     if (!strcmp(name, "convert_open")) return s->view == CC_VIEW_IFC && s->pf->files && s->ifc->scene.nelements > 0;
@@ -909,7 +908,8 @@ static const char NOT_KEPT[] =
     "sheets, schedules, annotations, reference plans, linked models and the history.";
 
 /* File -> Share for viewing (share.rs:15-45): the scene shown as a gzipped .bimbleview
- * (viewfile.h, the raw stream byte for byte with Rust's). Rust asks where, proposing
+ * (viewfile.h, the raw stream byte for byte with Rust's): a model's, an IFC open read-only
+ * (cc_ifc_scene_meta) or a view file open (cc_viewfile_meta_from_file). Rust asks where, proposing
  * "<stem>.bimbleview"; the host writes `path`, else that name next to the model (never over the
  * open file). Like export IFC, the call answers Ok and logs the outcome. */
 static void share_for_viewing(cc_session *s, const char *path) {
@@ -926,7 +926,12 @@ static void share_for_viewing(cc_session *s, const char *path) {
     }
     Buf b, msg;
     buf_init(&b), buf_init(&msg);
-    int ok = cc_viewfile_write(&s->model, sc, 1, &b) == 0 && !b.oom;
+    cc_viewfile_meta mt;
+    int ok = (s->view == CC_VIEW_IFC    ? cc_ifc_scene_meta(s->ifc, &mt)
+              : s->view == CC_VIEW_FILE ? cc_viewfile_meta_from_file(&mt, s->vf)
+                                        : cc_viewfile_meta_from_model(&mt, &s->model, sc)) == 0;
+    if (ok) ok = cc_viewfile_write_meta(&mt, sc, 1, &b) == 0 && !b.oom;
+    cc_viewfile_meta_free(&mt);
     if (ok) ok = s->pf->write_file(s->pf->ctx, to, b.p, b.len) == 0;
     if (ok) {
         size_text(&msg, b.len);

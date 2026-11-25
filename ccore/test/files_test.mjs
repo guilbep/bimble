@@ -11,7 +11,9 @@
 // count = golden/ifc/read/mapped_item/scene.txt's, state editable false and schema IFC4, verb place
 // and storeys answer Rust's read-only text, the edit actions off), import_ifc of it is editable;
 // share_for_viewing of frame.json writes frame.bimbleview (inflated = golden/view/
-// frame.bimbleview.raw), and open of that file draws the same element count, read-only. Then a host with --session: the session file follows an open (its
+// frame.bimbleview.raw), and open of that file draws the same element count, read-only; shared
+// again it gives the same raw stream; share_for_viewing of the read-only mapped_item.ifc writes
+// mapped_item.bimbleview, which opens with 5 elements (ticket V1). Then a host with --session: the session file follows an open (its
 // default name moves to <opened>.ccore-session) and a restart on that file restores the edit.
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills what it starts.
 import { spawn } from "node:child_process";
@@ -208,6 +210,20 @@ try {
   const sc = await H.q("state");
   check("convert_open of the read-only IFC -> the editable copy", cv.status === 200 && sc.editable === true && sc.file === "mapped_item.bimble", `${cv.text} ${JSON.stringify(sc)}`);
 
+  // share_for_viewing of a read-only IFC (ticket V1, ribbon.rs:575: Rust shares any scene shown):
+  // mapped_item.bimbleview next to it, which opens with the read scene's 5 elements.
+  await H.act("open", { path: mi, discard: true });
+  const shActs = Object.fromEntries((await H.q("actions")).map((a) => [a.name, a.enabled]));
+  const shi = await H.act("share_for_viewing");
+  const miv = join(tmp, "mapped_item.bimbleview");
+  check("read-only IFC: share_for_viewing on -> 200, writes mapped_item.bimbleview (gzip)",
+    shActs.share_for_viewing === true && shi.status === 200 && existsSync(miv) && readFileSync(miv)[0] === 0x1f, `${shi.text} ${JSON.stringify(shActs)}`);
+  const omv = await H.act("open", { path: miv });
+  const smv = await H.q("state"), mmv = await H.mesh();
+  check("open mapped_item.bimbleview: read-only, /mesh 5 elements and the read scene's triangles",
+    omv.status === 200 && smv.editable === false && smv.file === "mapped_item.bimbleview" && mmv.elements === 5 && mmv.triangles === goldenTris,
+    `${omv.text} ${JSON.stringify(smv)} ${JSON.stringify(mmv)}`);
+
   // share_for_viewing (share.rs:15): frame.json's view file, then open it read-only.
   const fv = join(tmp, "fv.json");
   copyFileSync(join(G, "frame.json"), fv);
@@ -228,8 +244,15 @@ try {
   check("open fv.bimbleview -> 200, read-only, schema null", ov.status === 200 && sv.editable === false && sv.file === "fv.bimbleview" && sv.schema === null, `${ov.text} ${JSON.stringify(sv)}`);
   check("open fv.bimbleview: /mesh elements and triangles = frame.json's", vm.status === 200 && vm.elements === fm.elements && fm.elements > 0 && vm.triangles === fm.triangles, `${JSON.stringify(vm)} vs ${JSON.stringify(fm)}`);
   const vp2 = await H.call("verb", "place", JSON.stringify({ a: [0, 0], kind: "column" }));
-  check("view file: verb place -> 400 Rust's read-only text; share_for_viewing off (a model only, deviation)",
-    vp2.text === READ_ONLY && (await H.act("share_for_viewing")).status === 400, vp2.text);
+  check("view file: verb place -> 400 Rust's read-only text", vp2.text === READ_ONLY, vp2.text);
+  // share_for_viewing of an opened view file (ticket V1): the same raw stream as the file.
+  const fvActs = Object.fromEntries((await H.q("actions")).map((a) => [a.name, a.enabled]));
+  const shv = await H.act("share_for_viewing", { path: join(tmp, "again.bimbleview") });
+  let rawAgain = Buffer.alloc(0);
+  try { rawAgain = gunzipSync(readFileSync(join(tmp, "again.bimbleview"))); } catch {}
+  check("view file: share_for_viewing on -> 200, again.bimbleview inflated = golden/view/frame.bimbleview.raw",
+    fvActs.share_for_viewing === true && shv.status === 200 && Buffer.compare(rawAgain, readFileSync(join(G, "view/frame.bimbleview.raw"))) === 0,
+    `${shv.text} ${rawAgain.length}`);
   const bv = join(tmp, "broken.bimbleview");
   copyFileSync(join(G, "guid.txt"), bv);
   const ob = await H.act("open", { path: bv });

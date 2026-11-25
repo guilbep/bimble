@@ -71,41 +71,119 @@ static int64_t total_key(double x) {
 }
 
 typedef struct {
-    const cc_storey *s;
+    cc_view_storey s;
     size_t order;
 } StoreyRef;
 
 static int storey_qcmp(const void *a, const void *b) {
     const StoreyRef *x = a, *y = b;
-    int64_t kx = total_key(x->s->elevation), ky = total_key(y->s->elevation);
+    int64_t kx = total_key(x->s.elevation), ky = total_key(y->s.elevation);
     if (kx != ky) return kx < ky ? -1 : 1;
     return x->order < y->order ? -1 : x->order > y->order; /* stable */
 }
 
 typedef struct {
-    cc_str name;
-    double density;
+    cc_view_density d;
     size_t order;
 } DensityRef;
 
 static int density_qcmp(const void *a, const void *b) {
     const DensityRef *x = a, *y = b;
-    int c = str_cmp(&x->name, &y->name);
+    int c = str_cmp(&x->d.material, &y->d.material);
     if (c) return c;
     return x->order < y->order ? -1 : x->order > y->order;
 }
 
+void cc_viewfile_meta_init(cc_viewfile_meta *mt) {
+    memset(mt, 0, sizeof *mt);
+    arena_init(&mt->arena, 0);
+}
+
+void cc_viewfile_meta_free(cc_viewfile_meta *mt) {
+    arena_free(&mt->arena);
+    memset(mt, 0, sizeof *mt);
+}
+
+/* Scene::from_model's META: storeys sorted by elevation (stable), no grids, densities by
+ * material name (BTreeMap: the last one inserted, model order, wins), no georeference. */
+int cc_viewfile_meta_from_model(cc_viewfile_meta *mt, const cc_model *m, const cc_scene *s) {
+    cc_viewfile_meta_init(mt);
+    Arena *a = &mt->arena;
+    size_t ne = s->nelements;
+    cc_view_info *info = arena_alloc(a, (ne + 1) * sizeof *info, 8);
+    StoreyRef *st = arena_alloc(a, (m->nstoreys + 1) * sizeof *st, 8);
+    DensityRef *dens = arena_alloc(a, (m->nmaterials + 1) * sizeof *dens, 8);
+    cc_view_storey *storeys = arena_alloc(a, (m->nstoreys + 1) * sizeof *storeys, 8);
+    cc_view_density *dout = arena_alloc(a, (m->nmaterials + 1) * sizeof *dout, 8);
+    if (!info || !st || !dens || !storeys || !dout) return -1;
+    for (size_t k = 0; k < ne; k++) {
+        const cc_scene_element *e = &s->elements[k];
+        if (e->model_index >= m->nelements) return -1;
+        const cc_element *me = &m->elements[e->model_index];
+        const cc_storey *sto = cc_model_storey(m, &me->storey);
+        const cc_material *mat = cc_model_material(m, &me->material);
+        if (!sto || !mat) return -1;
+        info[k].global_id.p = e->id.c, info[k].global_id.n = 22;
+        info[k].name = me->name;
+        info[k].storey = sto->name;
+        info[k].material = mat->name;
+    }
+    for (size_t i = 0; i < m->nstoreys; i++) {
+        const cc_storey *x = &m->storeys[i];
+        st[i].s.name = x->name;
+        st[i].s.elevation = x->elevation;
+        st[i].s.id.p = x->id.c, st[i].s.id.n = 22;
+        st[i].order = i;
+    }
+    if (m->nstoreys) qsort(st, m->nstoreys, sizeof *st, storey_qcmp);
+    for (size_t i = 0; i < m->nstoreys; i++) storeys[i] = st[i].s;
+    size_t nd = 0;
+    for (size_t i = 0; i < m->nmaterials; i++)
+        if (m->materials[i].props.has_density) {
+            dens[nd].d.material = m->materials[i].name;
+            dens[nd].d.density = m->materials[i].props.density_kg_m3;
+            dens[nd].order = i;
+            nd++;
+        }
+    if (nd) qsort(dens, nd, sizeof *dens, density_qcmp);
+    size_t ndu = 0;
+    for (size_t i = 0; i < nd; i++) {
+        if (ndu && str_cmp(&dout[ndu - 1].material, &dens[i].d.material) == 0) dout[ndu - 1] = dens[i].d;
+        else dout[ndu++] = dens[i].d;
+    }
+    mt->info = info, mt->ninfo = ne;
+    mt->storeys = storeys, mt->nstoreys = m->nstoreys;
+    mt->densities = dout, mt->ndensities = ndu;
+    return 0;
+}
+
+/* viewfile.rs read -> Scene: what the file holds, as it is (share again = the same bytes). */
+int cc_viewfile_meta_from_file(cc_viewfile_meta *mt, const cc_viewfile *v) {
+    cc_viewfile_meta_init(mt);
+    cc_view_info *info = arena_alloc(&mt->arena, (v->nelements + 1) * sizeof *info, 8);
+    if (!info) return -1;
+    for (size_t k = 0; k < v->nelements; k++) {
+        const cc_view_element *x = &v->elements[k];
+        info[k].global_id = x->global_id;
+        info[k].name = x->name;
+        info[k].storey = x->storey;
+        info[k].material = x->material;
+    }
+    mt->info = info, mt->ninfo = v->nelements;
+    mt->storeys = v->storeys, mt->nstoreys = v->nstoreys;
+    mt->grids = v->grids, mt->ngrids = v->ngrids;
+    mt->densities = v->densities, mt->ndensities = v->ndensities;
+    mt->has_georef = v->has_georef, mt->georef = v->georef;
+    return 0;
+}
+
 /* The four META strings of scene element k: class, storey, material, family. */
-static int element_strings(const cc_model *m, const cc_scene *s, size_t k, cc_str out[4]) {
+static int element_strings(const cc_viewfile_meta *mt, const cc_scene *s, size_t k, cc_str out[4]) {
     const cc_scene_element *e = &s->elements[k];
-    if (e->model_index >= m->nelements) return -1;
-    const cc_element *me = &m->elements[e->model_index];
-    const cc_storey *st = cc_model_storey(m, &me->storey);
-    const cc_material *mat = cc_model_material(m, &me->material);
-    if (!st || !mat || (unsigned)e->category >= CC_CAT_COUNT) return -1;
+    if ((unsigned)e->category >= CC_CAT_COUNT) return -1;
     out[0] = e->class_name;
-    out[1] = st->name;
-    out[2] = mat->name;
+    out[1] = mt->info[k].storey;
+    out[2] = mt->info[k].material;
     out[3].p = FAMILY[e->category];
     out[3].n = strlen(FAMILY[e->category]);
     return 0;
@@ -143,16 +221,15 @@ static void flush_chunk(Buf *out, Buf *shapes, uint64_t *nshapes, Buf *elems, ui
     *nshapes = *nelems = 0;
 }
 
-static int write_raw(const cc_model *m, const cc_scene *s, Buf *out) {
+static int write_raw(const cc_viewfile_meta *mt, const cc_scene *s, Buf *out) {
     int rc = -1;
     size_t ne = s->nelements;
+    if (mt->ninfo != ne || (ne && !mt->info)) return -1;
     cc_str *table = malloc((4 * ne + 1) * sizeof *table);
     int64_t *shape_id = malloc((s->nshapes + 1) * sizeof *shape_id);
-    StoreyRef *storeys = malloc((m->nstoreys + 1) * sizeof *storeys);
-    DensityRef *dens = malloc((m->nmaterials + 1) * sizeof *dens);
     Buf p, ns, es;
     buf_init(&p), buf_init(&ns), buf_init(&es);
-    if (!table || !shape_id || !storeys || !dens) goto done;
+    if (!table || !shape_id) goto done;
 
     buf_append(out, MAGIC, 8);
     char ver[4] = {(char)CC_VIEWFILE_VERSION, 0, 0, 0};
@@ -184,7 +261,7 @@ static int write_raw(const cc_model *m, const cc_scene *s, Buf *out) {
     /* META */
     size_t nt = 0;
     for (size_t k = 0; k < ne; k++) {
-        if (element_strings(m, s, k, &table[nt])) goto done;
+        if (element_strings(mt, s, k, &table[nt])) goto done;
         nt += 4;
     }
     if (nt) qsort(table, nt, sizeof *table, str_qcmp);
@@ -194,52 +271,44 @@ static int write_raw(const cc_model *m, const cc_scene *s, Buf *out) {
     buf_clear(&p);
     cc_put_varint(&p, nu);
     for (size_t i = 0; i < nu; i++) put_str(&p, table[i].p, table[i].n);
-    for (size_t i = 0; i < m->nstoreys; i++) storeys[i].s = &m->storeys[i], storeys[i].order = i;
-    if (m->nstoreys) qsort(storeys, m->nstoreys, sizeof *storeys, storey_qcmp);
-    cc_put_varint(&p, m->nstoreys);
-    for (size_t i = 0; i < m->nstoreys; i++) {
-        const cc_storey *st = storeys[i].s;
+    cc_put_varint(&p, mt->nstoreys);
+    for (size_t i = 0; i < mt->nstoreys; i++) {
+        const cc_view_storey *st = &mt->storeys[i];
         put_str(&p, st->name.p, st->name.n);
         put_f64(&p, st->elevation);
-        put_str(&p, st->id.c, 22);
+        put_str(&p, st->id.p, st->id.n);
     }
-    cc_put_varint(&p, 0); /* grids: Scene::from_model has none */
-    size_t nd = 0;
-    for (size_t i = 0; i < m->nmaterials; i++)
-        if (m->materials[i].props.has_density) {
-            dens[nd].name = m->materials[i].name;
-            dens[nd].density = m->materials[i].props.density_kg_m3;
-            dens[nd].order = i;
-            nd++;
-        }
-    if (nd) qsort(dens, nd, sizeof *dens, density_qcmp);
-    size_t ndu = 0; /* BTreeMap: one per name, the last one inserted (model order) wins */
-    for (size_t i = 0; i < nd; i++) {
-        if (ndu && str_cmp(&dens[ndu - 1].name, &dens[i].name) == 0) dens[ndu - 1] = dens[i];
-        else dens[ndu++] = dens[i];
+    cc_put_varint(&p, mt->ngrids);
+    for (size_t i = 0; i < mt->ngrids; i++) {
+        const cc_view_grid *g = &mt->grids[i];
+        put_str(&p, g->tag.p, g->tag.n);
+        put_f64(&p, g->start[0]), put_f64(&p, g->start[1]);
+        put_f64(&p, g->end[0]), put_f64(&p, g->end[1]);
     }
-    cc_put_varint(&p, ndu);
-    for (size_t i = 0; i < ndu; i++) {
-        put_str(&p, dens[i].name.p, dens[i].name.n);
-        put_f64(&p, dens[i].density);
+    cc_put_varint(&p, mt->ndensities);
+    for (size_t i = 0; i < mt->ndensities; i++) {
+        put_str(&p, mt->densities[i].material.p, mt->densities[i].material.n);
+        put_f64(&p, mt->densities[i].density);
     }
     cc_put_varint(&p, s->nwarnings);
     for (size_t i = 0; i < s->nwarnings; i++) put_str(&p, s->warnings[i].p, s->warnings[i].n);
     section(out, "META", &p);
-    /* GEOR: the C model has no georeference (the default), so none. */
+    if (mt->has_georef) { /* only when known (not the default): older readers skip it */
+        buf_clear(&p);
+        put_str(&p, mt->georef.p, mt->georef.n);
+        section(out, "GEOR", &p);
+    }
 
     /* ELEM chunks */
     uint64_t n_shapes = 0, n_elems = 0;
     int64_t written = 0;
     for (size_t k = 0; k < ne; k++) {
         const cc_scene_element *e = &s->elements[k];
+        const cc_view_info *in = &mt->info[k];
         cc_str str[4];
-        char gid[22];
-        element_strings(m, s, k, str);
-        memcpy(gid, e->id.c, 22);
-        put_str(&es, gid, 22);
-        const cc_element *me = &m->elements[e->model_index];
-        put_str(&es, me->name.p, me->name.n);
+        element_strings(mt, s, k, str);
+        put_str(&es, in->global_id.p, in->global_id.n);
+        put_str(&es, in->name.p, in->name.n);
         for (int j = 0; j < 4; j++) cc_put_varint(&es, table_index(table, nu, &str[j]));
         if (e->shape < 0) {
             buf_putc(&es, 0);
@@ -271,17 +340,25 @@ static int write_raw(const cc_model *m, const cc_scene *s, Buf *out) {
     rc = (p.oom || ns.oom || es.oom || out->oom) ? -1 : 0;
 done:
     buf_free(&p), buf_free(&ns), buf_free(&es);
-    free(table), free(shape_id), free(storeys), free(dens);
+    free(table), free(shape_id);
+    return rc;
+}
+
+int cc_viewfile_write_meta(const cc_viewfile_meta *mt, const cc_scene *s, int gzip, Buf *out) {
+    if (!gzip) return write_raw(mt, s, out);
+    Buf raw;
+    buf_init(&raw);
+    int rc = write_raw(mt, s, &raw);
+    if (rc == 0) rc = cc_gzip((const unsigned char *)raw.p, raw.len, out);
+    buf_free(&raw);
     return rc;
 }
 
 int cc_viewfile_write(const cc_model *m, const cc_scene *s, int gzip, Buf *out) {
-    if (!gzip) return write_raw(m, s, out);
-    Buf raw;
-    buf_init(&raw);
-    int rc = write_raw(m, s, &raw);
-    if (rc == 0) rc = cc_gzip((const unsigned char *)raw.p, raw.len, out);
-    buf_free(&raw);
+    cc_viewfile_meta mt;
+    int rc = cc_viewfile_meta_from_model(&mt, m, s);
+    if (rc == 0) rc = cc_viewfile_write_meta(&mt, s, gzip, out);
+    cc_viewfile_meta_free(&mt);
     return rc;
 }
 
