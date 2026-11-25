@@ -79,7 +79,7 @@ Session journals (what happened, in order, with measurements) are in [`docs/jour
 | [0053](0053-sub-projects.md) | Sub-projects: one per element, visibility and loading, never a lock (borrowing still decides who edits); replaces a bullet of 0038 | Proposed |
 | [0054](0054-project-phases.md) | Project phases: three fixed phases, free phase filters per view; IFC Status plus a Bimble pset | Proposed |
 | [0055](0055-team-members.md) | Team members in the project information (IfcActor), title blocks read them; no OK/Cancel (0052) | Proposed |
-| [0056](0056-levels-and-grids.md) | Levels that are not storeys, project zero, grids editable in the model | Proposed |
+| [0056](0056-levels-and-grids.md) | Levels that are not storeys, project zero, grids editable in the model | Accepted |
 | [0057](0057-site-terrain.md) | Site: one terrain surface from survey points or contours, excavations with cut and fill | Proposed |
 | [0058](0058-rebar.md) | Rebar sets in concrete elements, bar schedule; the rebar code (SIA 262 / EC2) stays open | Proposed |
 | [0059](0059-steel-and-timber-members.md) | Steel and timber members from a section catalogue in the standards | Proposed |

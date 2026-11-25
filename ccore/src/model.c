@@ -2,6 +2,7 @@
 #include "model.h"
 #include <string.h>
 #include "fmt.h"
+#include "grid.h"
 #include "relation.h"
 #include "view_io.h"
 
@@ -289,7 +290,7 @@ static int key_char_ok(char c) {
 
 int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid *mkeys,
                            const cc_gid *ekeys, const cc_gid *vkeys, const cc_gid *shkeys, const cc_gid *rkeys,
-                           cc_error *err) {
+                           const cc_gid *gkeys, cc_error *err) {
     Buf b;
     buf_init(&b);
     /* project::validate */
@@ -368,9 +369,16 @@ int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid 
             buf_puts(&b, "key does not match id");
             return set_err(err, &b);
         }
-        if (!cc_model_storey(m, &e->storey)) {
+        const cc_storey *est = cc_model_storey(m, &e->storey);
+        if (!est) {
             buf_puts(&b, "unknown storey ");
             cc_buf_gid(&b, &e->storey);
+            return set_err(err, &b);
+        }
+        if (est->not_storey) { /* ADR 0056: a level that is not a storey holds no element */
+            buf_puts(&b, "the level ");
+            cc_buf_gid(&b, &e->storey);
+            buf_puts(&b, " is not a storey: no element belongs to it");
             return set_err(err, &b);
         }
         if (!cc_model_material(m, &e->material)) {
@@ -445,12 +453,13 @@ int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid 
             }
     }
     if (m->nrelations && cc_relations_validate(m, m->relations, m->nrelations, rkeys, &b)) return set_err(err, &b);
+    if (m->ngrids && cc_grids_validate(m, m->grids, m->ngrids, gkeys, &b)) return set_err(err, &b);
     buf_free(&b);
     return 0;
 }
 
 int cc_model_validate(const cc_model *m, cc_error *err) {
-    return cc_model_validate_keys(m, NULL, NULL, NULL, NULL, NULL, NULL, err);
+    return cc_model_validate_keys(m, NULL, NULL, NULL, NULL, NULL, NULL, NULL, err);
 }
 
 /* ---- canonical: x + 0.0 turns -0.0 into 0.0 and keeps every other value ---- */
@@ -511,4 +520,5 @@ void cc_model_canonical(cc_model *m) {
     }
     for (size_t i = 0; i < m->nviews; i++) cc_view_canonical(&m->views[i]);
     for (size_t i = 0; i < m->nsheets; i++) cc_sheet_canonical(&m->sheets[i]);
+    for (size_t i = 0; i < m->ngrids; i++) cc_grid_canonical(&m->grids[i]);
 }

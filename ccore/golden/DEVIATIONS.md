@@ -109,3 +109,49 @@ text for `.json`, else v2), and Rust's transcript is unchanged.
 
 **Where.** `ccore/host/mcp.{h,c}`, `ccore/host/main.c` (the sub-command), test
 `ccore/test/mcp_test.mjs`.
+
+## 4. Levels and grids (ticket G1, ADR 0056)
+
+**What.** Two model keys Rust's `Model` does not have, both left out when unused:
+- a storey's `"is_storey": false` (after `elevation`): a datum level (top of parapet, bottom of
+  foundation). No element belongs to it (a file load, `add_element` and `set_storey` refuse one),
+  and the IFC export leaves it out (it is not an `IfcBuildingStorey`).
+- `grids` (after `relations`): a map GlobalId → `{id, name, axes: [{id, tag, start_mm, end_mm}]}`,
+  plan, world mm, in v1 (JSON) and v2 (CBOR). Rules in `ccore/src/grid.h`: a name, 1 to 1000
+  axes, tags unique in a grid, ends within 1e7 mm, length ≥ 1 mm, ids unique across the model,
+  axes in at least two directions (IfcGrid needs UAxes and VAxes).
+
+Commands `set_storey`, `add_grid`, `set_grid`, `remove_grid` and the verbs `level_add`,
+`level_set`, `level_remove`, `grid_add`, `grid_axis_set`, `grid_remove` (C additions,
+`ccore/src/verb_table.c`) are the C core's own. The query `grids` is new; `storeys` gains
+`is_storey` and `height_mm` (to the next storey up, null for the top one and for a datum level)
+only in a model with a datum level or a grid. The IFC export writes each grid as an `IfcGrid`
+(UAxes: the axes parallel to its first one; VAxes: the others) of `IfcGridAxis` on two-point
+`IfcPolyline`s, with a `FootPrint` `GeometricCurveSet` representation in a new
+`IfcGeometricRepresentationSubContext`, contained in the storey nearest elevation 0 (the building
+when there is none); IFC2x3 drops `PredefinedType` and adds the owner history. The serde error
+text listing the command tags names the new ones too.
+
+**Why.** ADR 0056 (accepted under Pierre's delegation): a new model needs axes and levels
+before columns. Rust never built it: there is no oracle.
+
+**What Rust sees.** A model without grids and without datum levels is unchanged: same keys, same
+bytes, same hash, same IFC (`grid_test` reloads `golden/frame*.json` and `golden/bin/frame*.bimble`,
+undoes every step back to frame's bytes and IFC, and the suites `file`, `file2`, `query`,
+`ifc_out` and `verbs_all` still match Rust's goldens). A model with grids or datum levels loads in
+Rust without them (`Model` and `Storey` ignore unknown keys): Rust's save drops the grids and makes
+every datum level a storey again.
+
+**Goldens.** `golden/grids/verbs.txt` (47 steps: each verb, refusals, undo and redo, the queries
+`storeys` and `grids`, on a copy of `frame.json` with seeded ids), `model.json` (the model at the
+end), `grid.ifc` and `grid.ifc2x3.ifc` (its export), all written by `ccore/test/grid_test.c`
+(`CCORE_WRITE_GOLDEN=1` writes them again). IfcOpenShell 0.9 validates both IFC files with 0
+issues (`scripts/validate_ifc.py`). `ccore_golden --check` skips `grids/` (`C_OWN`).
+
+**Until G2 and S1.** A datum level still gets the default plan views a storey gets (`view.c`,
+`session/views.c`), the scene and the 2D view draw no grid of the model, and an IFC's grids are
+not imported into `grids` (the reader keeps reading them for drawing, as before).
+
+**Where.** `ccore/src/grid.{h,c}` (rules, read, write), `ccore/src/verbs_levels.c` (the verbs),
+`ccore/src/ifc_out_grid.{h,c}` (the export, one call in `ifc_out.c`), `ccore/src/model.{h,c}`,
+`ccore/src/command.{h,c}`, `ccore/src/file.c`, `ccore/src/query.c`, test `ccore/test/grid_test.c`.

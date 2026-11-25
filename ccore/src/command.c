@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "file.h"
+#include "grid.h"
 #include "relation.h"
 #include "view_io.h"
 
@@ -47,7 +48,8 @@ static const char *const OPS[] = {"add_storey",     "remove_storey",  "add_mater
                                   "rename",         "set_element_material", "set_property", "set_project",
                                   "add_view",       "remove_view",    "set_view",      "add_sheet",
                                   "remove_sheet",   "set_sheet",      "set_schedules", "add_relation",
-                                  "remove_relation", "set_relation"};
+                                  "remove_relation", "set_relation", "set_storey", "add_grid",
+                                  "remove_grid",    "set_grid"};
 
 const char *cc_cmd_op_name(cc_cmd_op op) { return (unsigned)op < CC_CMD_COUNT ? OPS[op] : "?"; }
 
@@ -381,6 +383,8 @@ static void arr_remove(void *arr, size_t n, size_t size, size_t at) {
     if (at + 1 < n) memmove(p + at * size, p + (at + 1) * size, (n - at - 1) * size);
 }
 
+static void put_name(Buf *b, cc_str s) { buf_append(b, s.p, s.n < 200 ? s.n : 200); }
+
 static int oom(Buf *err) {
     if (err) {
         buf_clear(err);
@@ -523,7 +527,10 @@ static int dup_element(Arena *a, cc_element *e) {
 /* The command's data copied into arena a and made canonical. */
 static int dup_command(Arena *a, cc_command *c) {
     switch (c->op) {
-    case CC_CMD_ADD_STOREY: c->storey.elevation += 0.0; return dup_str(a, &c->storey.name);
+    case CC_CMD_ADD_STOREY:
+    case CC_CMD_SET_STOREY: c->storey.elevation += 0.0; return dup_str(a, &c->storey.name);
+    case CC_CMD_ADD_GRID:
+    case CC_CMD_SET_GRID: return cc_grid_dup(a, &c->grid);
     case CC_CMD_ADD_MATERIAL: return dup_material(a, &c->material);
     case CC_CMD_ADD_ELEMENT: return dup_element(a, &c->element);
     case CC_CMD_SET_GENERATOR: return dup_generator(a, &c->generator);
@@ -595,7 +602,8 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
     switch (c->op) {
     case CC_CMD_ADD_STOREY: {
         const cc_storey *s = &c->storey;
-        if (cc_model_storey(m, &s->id) || cc_model_relation(m, &s->id)) return exists(err, &s->id);
+        if (cc_model_storey(m, &s->id) || cc_model_relation(m, &s->id) || cc_grid_uses_id(m, &s->id))
+            return exists(err, &s->id);
         if (!finite_(s->elevation)) return invalid(err, "storey elevation", 16);
         size_t at = lower_bound(m->storeys, m->nstoreys, sizeof *s, &s->id);
         cc_storey *p = arr_insert(a, m->storeys, m->nstoreys, sizeof *s, at, s);
@@ -622,7 +630,8 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
     }
     case CC_CMD_ADD_MATERIAL: {
         const cc_material *x = &c->material;
-        if (cc_model_material(m, &x->id) || cc_model_relation(m, &x->id)) return exists(err, &x->id);
+        if (cc_model_material(m, &x->id) || cc_model_relation(m, &x->id) || cc_grid_uses_id(m, &x->id))
+            return exists(err, &x->id);
         if (props_validate(&why, &x->props)) return invalid_buf(err, &why);
         size_t at = lower_bound(m->materials, m->nmaterials, sizeof *x, &x->id);
         cc_material *p = arr_insert(a, m->materials, m->nmaterials, sizeof *x, at, x);
@@ -645,8 +654,16 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
     }
     case CC_CMD_ADD_ELEMENT: {
         const cc_element *e = &c->element;
-        if (cc_model_element(m, &e->id) || cc_model_relation(m, &e->id)) return exists(err, &e->id);
-        if (!cc_model_storey(m, &e->storey)) return not_found(err, &e->storey);
+        if (cc_model_element(m, &e->id) || cc_model_relation(m, &e->id) || cc_grid_uses_id(m, &e->id))
+            return exists(err, &e->id);
+        const cc_storey *est = cc_model_storey(m, &e->storey);
+        if (!est) return not_found(err, &e->storey);
+        if (est->not_storey) { /* ADR 0056 */
+            buf_puts(&why, "the level ");
+            put_name(&why, est->name);
+            buf_puts(&why, " is not a storey: no element belongs to it");
+            return invalid_buf(err, &why);
+        }
         if (!cc_model_material(m, &e->material)) return not_found(err, &e->material);
         if (assembly_check(&why, e->cls, &e->generator, e->nopenings) || placement_validate(&why, &e->placement))
             return invalid_buf(err, &why);
@@ -865,6 +882,66 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
         arr_remove(m->relations, m->nrelations--, sizeof *r, (size_t)(r - m->relations));
         return 0;
     }
+    case CC_CMD_SET_STOREY: {
+        const cc_storey *s = &c->storey;
+        cc_storey *old = (cc_storey *)cc_model_storey(m, &s->id);
+        if (!old) return not_found(err, &s->id);
+        if (!finite_(s->elevation)) return invalid(err, "storey elevation", 16);
+        if (s->not_storey && !old->not_storey)
+            for (size_t i = 0; i < m->nelements; i++)
+                if (!cc_gid_cmp(&m->elements[i].storey, &s->id)) {
+                    buf_puts(&why, "the level ");
+                    put_name(&why, old->name);
+                    buf_puts(&why, " holds elements: it stays a storey");
+                    return invalid_buf(err, &why);
+                }
+        inv_init(inv, CC_CMD_SET_STOREY);
+        inv->storey = *old;
+        *old = *s; /* placements are relative to their storey: its elements move with it */
+        return 0;
+    }
+    case CC_CMD_ADD_GRID:
+    case CC_CMD_SET_GRID: {
+        const cc_grid *g = &c->grid;
+        cc_grid *old = (cc_grid *)cc_model_grid(m, &g->id);
+        if (c->op == CC_CMD_ADD_GRID && old) return exists(err, &g->id);
+        if (c->op == CC_CMD_SET_GRID && !old) return not_found(err, &g->id);
+        /* The whole table as it would be, validated as a file load does (ids unique across
+         * grids and axes). */
+        size_t n = m->ngrids + (old ? 0 : 1);
+        size_t at = lower_bound(m->grids, m->ngrids, sizeof *g, &g->id);
+        cc_grid *t = malloc(n * sizeof *t);
+        if (!t) return oom(err);
+        if (m->ngrids) memcpy(t, m->grids, m->ngrids * sizeof *t);
+        if (!old && m->ngrids > at) memmove(t + at + 1, t + at, (m->ngrids - at) * sizeof *t);
+        t[at] = *g;
+        int bad = cc_grids_validate(m, t, n, NULL, &why);
+        free(t);
+        if (bad && why.oom) return buf_free(&why), oom(err);
+        if (bad) return invalid_buf(err, &why);
+        buf_free(&why);
+        if (old) {
+            inv_init(inv, CC_CMD_SET_GRID);
+            inv->grid = *old;
+            *old = *g;
+            return 0;
+        }
+        cc_grid *p = arr_insert(a, m->grids, m->ngrids, sizeof *g, at, g);
+        if (!p) return oom(err);
+        m->grids = p;
+        m->ngrids++;
+        inv_init(inv, CC_CMD_REMOVE_GRID);
+        inv->id = g->id;
+        return 0;
+    }
+    case CC_CMD_REMOVE_GRID: {
+        const cc_grid *g = cc_model_grid(m, &c->id);
+        if (!g) return not_found(err, &c->id);
+        inv_init(inv, CC_CMD_ADD_GRID);
+        inv->grid = *g;
+        arr_remove(m->grids, m->ngrids--, sizeof *g, (size_t)(g - m->grids));
+        return 0;
+    }
     case CC_CMD_SET_SCHEDULES: {
         if (cc_schedules_validate(c->schedules, c->nschedules, &why)) return invalid_buf(err, &why);
         buf_free(&why);
@@ -1010,6 +1087,23 @@ void cc_command_describe(const cc_command *c, const cc_model *m, Buf *b) {
         buf_puts(b, "change the "), put_str(b, c->relation.kind);
         buf_puts(b, " of "), el_name(b, m, &c->relation.relating);
         break;
+    case CC_CMD_SET_STOREY: {
+        const cc_storey *old = cc_model_storey(m, &c->storey.id);
+        if (old && !str_eq(old->name, c->storey.name)) {
+            buf_puts(b, "rename the level "), put_str(b, old->name);
+            buf_puts(b, " to "), put_str(b, c->storey.name);
+        } else buf_puts(b, "change the level "), put_str(b, c->storey.name);
+        break;
+    }
+    case CC_CMD_ADD_GRID: buf_puts(b, "add the grid "), put_str(b, c->grid.name); break;
+    case CC_CMD_SET_GRID: buf_puts(b, "change the grid "), put_str(b, c->grid.name); break;
+    case CC_CMD_REMOVE_GRID: {
+        const cc_grid *g = cc_model_grid(m, &c->id);
+        buf_puts(b, "delete ");
+        if (g) buf_puts(b, "the grid "), put_str(b, g->name);
+        else buf_puts(b, "a grid");
+        break;
+    }
     default: break;
     }
 }
@@ -1125,13 +1219,19 @@ void cc_command_write(JsonW *w, const cc_command *c) {
         cc_em_relation(&em, &c->relation, cc_cmd_op_name(c->op));
         return;
     }
+    if (c->op == CC_CMD_ADD_GRID || c->op == CC_CMD_SET_GRID) {
+        cc_em_grid(&em, &c->grid, cc_cmd_op_name(c->op));
+        return;
+    }
     jw_obj_begin(w);
     jw_key(w, "op"), jw_str(w, cc_cmd_op_name(c->op));
     switch (c->op) {
     case CC_CMD_ADD_STOREY:
+    case CC_CMD_SET_STOREY:
         jw_key(w, "id"), w_gid(w, &c->storey.id);
         jw_key(w, "name"), w_str(w, c->storey.name);
         jw_key(w, "elevation"), jw_f64(w, c->storey.elevation);
+        if (c->storey.not_storey) jw_key(w, "is_storey"), jw_bool(w, 0);
         break;
     case CC_CMD_ADD_MATERIAL: {
         const cc_material *x = &c->material;
@@ -1168,7 +1268,8 @@ void cc_command_write(JsonW *w, const cc_command *c) {
     case CC_CMD_REMOVE_ELEMENT:
     case CC_CMD_REMOVE_VIEW:
     case CC_CMD_REMOVE_SHEET:
-    case CC_CMD_REMOVE_RELATION: jw_key(w, "id"), w_gid(w, &c->id); break;
+    case CC_CMD_REMOVE_RELATION:
+    case CC_CMD_REMOVE_GRID: jw_key(w, "id"), w_gid(w, &c->id); break;
     case CC_CMD_SET_SCHEDULES: jw_key(w, "schedules"), cc_em_schedules(&em, c->schedules, c->nschedules); break;
     case CC_CMD_SET_GENERATOR:
         jw_key(w, "id"), w_gid(w, &c->id);
@@ -1595,12 +1696,15 @@ static int d_strmap(D *d, const JrVal *v, cc_kv **out, size_t *n) {
 }
 
 static int d_storey(D *d, const JrVal *v, cc_storey *s) {
-    static const char *const F[] = {"id", "name", "elevation"};
-    const JrVal *f[3];
-    if (d_fields(d, v, F, 3, f, "struct Storey", 0)) return -1;
+    static const char *const F[] = {"id", "name", "elevation", "is_storey"};
+    const JrVal *f[4];
+    if (d_fields(d, v, F, 4, f, "struct Storey", 0)) return -1;
     for (int i = 0; i < 3; i++)
         if (need(d, v, f[i], F[i])) return -1;
-    return d_gid(d, f[0], &s->id) || d_str(d, f[1], &s->name) || d_f64(d, f[2], &s->elevation) ? -1 : 0;
+    if (d_gid(d, f[0], &s->id) || d_str(d, f[1], &s->name) || d_f64(d, f[2], &s->elevation)) return -1;
+    if (f[3] && f[3]->type != JR_BOOL) return type_err(d, f[3], "a boolean"); /* ADR 0056 */
+    s->not_storey = f[3] && !f[3]->b;
+    return 0;
 }
 
 static int d_props(D *d, const JrVal *v, cc_material_props *p) {
@@ -1704,13 +1808,14 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
                       "`remove_element`, `set_generator`, `set_placement`, `rename`, `set_element_material`, "
                       "`set_property`, `add_view`, `remove_view`, `set_view`, `add_sheet`, `remove_sheet`, "
                       "`set_sheet`, `set_material`, `set_schedules`, `set_project`, `add_relation`, "
-                      "`remove_relation`, `set_relation`",
+                      "`remove_relation`, `set_relation`, `set_storey`, `add_grid`, `remove_grid`, `set_grid`",
                       &op);
     }
     memset(c, 0, sizeof *c);
     c->op = (cc_cmd_op)op;
     switch (c->op) {
-    case CC_CMD_ADD_STOREY: return d_storey(d, v, &c->storey);
+    case CC_CMD_ADD_STOREY:
+    case CC_CMD_SET_STOREY: return d_storey(d, v, &c->storey);
     case CC_CMD_ADD_MATERIAL: return d_material(d, v, &c->material);
     case CC_CMD_ADD_ELEMENT: return d_element(d, v, &c->element);
     case CC_CMD_ADD_VIEW:
@@ -1730,10 +1835,13 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
         return rc ? -1 : 0;
     }
     case CC_CMD_ADD_RELATION:
-    case CC_CMD_SET_RELATION: {
+    case CC_CMD_SET_RELATION:
+    case CC_CMD_ADD_GRID:
+    case CC_CMD_SET_GRID: {
         cc_vd vd;
         cc_vd_init(&vd, d->a);
-        int rc = cc_vd_relation(&vd, v, "op", &c->relation);
+        int rc = c->op == CC_CMD_ADD_GRID || c->op == CC_CMD_SET_GRID ? cc_vd_grid(&vd, v, "op", &c->grid)
+                                                                     : cc_vd_relation(&vd, v, "op", &c->relation);
         if (rc) {
             buf_clear(&d->msg);
             buf_append(&d->msg, vd.msg.p, vd.msg.oom ? 0 : vd.msg.len);

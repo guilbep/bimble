@@ -743,6 +743,7 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
         m->storeys[k].id = g;
         m->storeys[k].name = astr(&m->arena, nm, nn);
         m->storeys[k].elevation = elev;
+        m->storeys[k].not_storey = 0; /* every IfcBuildingStorey is a storey (ADR 0056) */
         size_t *se = realloc(st_ent, (nst + 1) * sizeof *se);
         if (se) st_ent = se;
         cc_gid *sg = realloc(st_gid, (nst + 1) * sizeof *sg);
@@ -768,6 +769,7 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
         m->storeys[0].id = derived("storey/synthetic", 16);
         m->storeys[0].name = astr(&m->arena, "(no storey)", 11);
         m->storeys[0].elevation = 0.0;
+        m->storeys[0].not_storey = 0;
     }
     /* storeys sorted by id; the storey array moves into the arena at the end. */
     if (sort_by_gid(m->storeys, m->nstoreys, sizeof *m->storeys)) goto oom;

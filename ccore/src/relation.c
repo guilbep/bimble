@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "cbor.h"
+#include "grid.h"
 
 /* The kinds, in name order. */
 const cc_rel_kind cc_rel_kinds[] = {
@@ -122,7 +123,7 @@ static int ids_check(const cc_model *m, const cc_relation *r, const char *what, 
 
 static int id_taken(const cc_model *m, const cc_gid *id) {
     return !cc_gid_cmp(&m->project_id, id) || cc_model_storey(m, id) || cc_model_material(m, id) ||
-           cc_model_element(m, id) || cc_model_view(m, id) || cc_model_sheet(m, id);
+           cc_model_element(m, id) || cc_model_view(m, id) || cc_model_sheet(m, id) || cc_grid_uses_id(m, id);
 }
 
 static int one_check(const cc_model *m, const cc_relation *r, Buf *why) {

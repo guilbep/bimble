@@ -246,6 +246,85 @@ static const char SCHEMA_DELETE_ANNOTATION[] =
     ",\"required\":[\"view\",\"id\"],\"title\":\"DeleteAnnotationArgs\",\"type\":\"object\"}";
 static const char SUMMARY_DELETE_ANNOTATION[] = "Delete a dimension or a text from its view (a C addition).";
 
+/* C additions of ticket G1 (ADR 0056): levels and grids, handlers in verbs_levels.c. */
+static const char SCHEMA_LEVEL_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `level_add`.\",\"properties\":{\"level_mm\":{\"description\":\"The l"
+    "evel's height above project zero, mm (|level| <= 1e7).\",\"format\":\"double\",\"type\":\"number"
+    "\"},\"name\":{\"description\":\"The level's name, not blank.\",\"type\":\"string\"},\"storey\":{"
+    "\"description\":\"An IfcBuildingStorey that holds elements (default true); false: a datum level."
+    "\",\"type\":[\"boolean\",\"null\"]}},\"required\":[\"name\",\"level_mm\"],\"title\":\"LevelAddAr"
+    "gs\",\"type\":\"object\"}";
+static const char SUMMARY_LEVEL_ADD[] =
+    "Add a level (a storey by default, or a datum level with storey false) with a new GlobalId (a C a"
+    "ddition).";
+static const char SCHEMA_LEVEL_SET[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `level_set`: the fields to change, others kept.\",\"properties\":{\""
+    "id\":{\"description\":\"GlobalId of the level.\",\"type\":\"string\"},\"level_mm\":{\"descriptio"
+    "n\":\"The new level, mm; its elements move with it.\",\"format\":\"double\",\"type\":[\"number\""
+    ",\"null\"]},\"name\":{\"description\":\"The new name, not blank.\",\"type\":[\"string\",\"null\""
+    "]},\"storey\":{\"description\":\"true: a storey; false: a datum level (refused while elements ar"
+    "e on it).\",\"type\":[\"boolean\",\"null\"]}},\"required\":[\"id\"],\"title\":\"LevelSetArgs\","
+    "\"type\":\"object\"}";
+static const char SUMMARY_LEVEL_SET[] =
+    "Change a level's name, level (its elements move with it) or storey flag; missing ones are kept ("
+    "a C addition).";
+static const char SCHEMA_LEVEL_REMOVE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `level_remove`.\",\"properties\":{\"id\":{\"description\":\"GlobalId"
+    " of the level.\",\"type\":\"string\"}},\"required\":[\"id\"],\"title\":\"LevelRemoveArgs\",\"typ"
+    "e\":\"object\"}";
+static const char SUMMARY_LEVEL_REMOVE[] =
+    "Delete a level; refused while elements are on it (a C addition).";
+static const char SCHEMA_GRID_ADD[] =
+    "{\"$defs\":{\"AxisArgs\":{\"additionalProperties\":false,\"description\":\"One straight axis in "
+    "plan, world mm.\",\"properties\":{\"end\":{\"description\":\"End [x, y], mm.\",\"items\":{\"form"
+    "at\":\"double\",\"type\":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":\"array\"},\"start\""
+    ":{\"description\":\"Start [x, y], mm.\",\"items\":{\"format\":\"double\",\"type\":\"number\"},\""
+    "maxItems\":2,\"minItems\":2,\"type\":\"array\"},\"tag\":{\"description\":\"Its tag (\\\"A\\\", "
+    "\\\"1\\\"), unique in the grid.\",\"type\":\"string\"}},\"required\":[\"tag\",\"start\",\"end\"]"
+    ",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additional"
+    "Properties\":false,\"description\":\"Arguments of `grid_add`: `axes`, or the rectangular form `x"
+    "` and `y`.\",\"properties\":{\"axes\":{\"description\":\"The axes; they run in at least two dire"
+    "ctions.\",\"items\":{\"$ref\":\"#/$defs/AxisArgs\"},\"type\":[\"array\",\"null\"]},\"name\":{\"d"
+    "escription\":\"The grid's name, not blank.\",\"type\":\"string\"},\"tags\":{\"description\":\"Re"
+    "ctangular form: one tag per axis, the x axes first; default 1, 2, ... and A, B, ...\",\"items\":"
+    "{\"type\":\"string\"},\"type\":[\"array\",\"null\"]},\"x\":{\"description\":\"Rectangular form: "
+    "x of the axes parallel to Y, mm; they run 1000 mm past the outer y axes.\",\"items\":{\"format\""
+    ":\"double\",\"type\":\"number\"},\"type\":[\"array\",\"null\"]},\"y\":{\"description\":\"Rectang"
+    "ular form: y of the axes parallel to X, mm.\",\"items\":{\"format\":\"double\",\"type\":\"number"
+    "\"},\"type\":[\"array\",\"null\"]}},\"required\":[\"name\"],\"title\":\"GridAddArgs\",\"type\":"
+    "\"object\"}";
+static const char SUMMARY_GRID_ADD[] =
+    "Add a grid: its axes, or a rectangular grid from x and y (tags 1, 2, ... and A, B, ...), with ne"
+    "w GlobalIds (a C addition).";
+static const char SCHEMA_GRID_AXIS_SET[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `grid_axis_set`: the fields to change, others kept.\",\"properties\""
+    ":{\"axis\":{\"description\":\"GlobalId of the axis.\",\"type\":\"string\"},\"end\":{\"descriptio"
+    "n\":\"New end [x, y], mm.\",\"items\":{\"format\":\"double\",\"type\":\"number\"},\"maxItems\":2"
+    ",\"minItems\":2,\"type\":[\"array\",\"null\"]},\"grid\":{\"description\":\"GlobalId of the grid."
+    "\",\"type\":\"string\"},\"start\":{\"description\":\"New start [x, y], mm.\",\"items\":{\"format"
+    "\":\"double\",\"type\":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":[\"array\",\"null\"]},"
+    "\"tag\":{\"description\":\"New tag, unique in the grid.\",\"type\":[\"string\",\"null\"]}},\"req"
+    "uired\":[\"grid\",\"axis\"],\"title\":\"GridAxisSetArgs\",\"type\":\"object\"}";
+static const char SUMMARY_GRID_AXIS_SET[] =
+    "Change one grid axis: its tag, start or end; missing ones are kept (a C addition).";
+static const char SCHEMA_GRID_REMOVE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `grid_remove`.\",\"properties\":{\"id\":{\"description\":\"GlobalId "
+    "of the grid.\",\"type\":\"string\"}},\"required\":[\"id\"],\"title\":\"GridRemoveArgs\",\"type\""
+    ":\"object\"}";
+static const char SUMMARY_GRID_REMOVE[] =
+    "Delete a grid and its axes (a C addition).";
+int cc_vh_level_add(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_level_set(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_level_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_grid_add(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_grid_axis_set(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_grid_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+
 #define V(n, N) {#n, SUMMARY_##N, SCHEMA_##N, cc_vh_##n, 0}
 const cc_verb_def cc_verb_table[] = {
     V(place, PLACE),
@@ -269,6 +348,12 @@ const cc_verb_def cc_verb_c_additions[] = {
     V(add_text, ADD_TEXT),
     V(move_annotation, MOVE_ANNOTATION),
     V(delete_annotation, DELETE_ANNOTATION),
+    V(level_add, LEVEL_ADD),
+    V(level_set, LEVEL_SET),
+    V(level_remove, LEVEL_REMOVE),
+    V(grid_add, GRID_ADD),
+    V(grid_axis_set, GRID_AXIS_SET),
+    V(grid_remove, GRID_REMOVE),
 };
 #undef V
 const size_t cc_verb_count = sizeof cc_verb_table / sizeof cc_verb_table[0];

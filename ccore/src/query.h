@@ -18,6 +18,8 @@
  * Queries: storeys, materials, elements ({class, storey, limit}), element ({id}), project,
  * views, sheets, schedules (the stored ones, as query.rs lists them). C additions from the verb
  * table (verb_table.h), the viewer's calls of the same names: verbs (dispatch::list) and describe
- * ({name}: dispatch::describe, the schema as compact JSON; 400 "no verb with this name"). */
+ * ({name}: dispatch::describe, the schema as compact JSON; 400 "no verb with this name").
+ * C additions of ADR 0056: grids ([{axes, id, name}]), and storeys gains is_storey and height_mm
+ * in a model with a level that is not a storey or with a grid (else Rust's bytes). */
 int cc_query(const cc_model *m, const char *name, const char *args_json, size_t n, Buf *out);
 #endif

@@ -46,10 +46,16 @@ typedef enum { /* MaterialCategory, in MaterialCategory::ALL order */
     CC_CAT_COUNT
 } cc_category;
 
+/* A level (ADR 0056). `not_storey` 0 (the default, so every zeroed storey is one): a storey,
+ * IfcBuildingStorey, elements belong to it. 1: a datum level (top of parapet, bottom of
+ * foundation): views snap and dimension to it, no element belongs to it, the IFC export leaves it
+ * out. File key "is_storey": false, left out when the level is a storey (existing files keep
+ * their bytes). */
 typedef struct {
     cc_gid id;
     cc_str name;
     double elevation;
+    int not_storey;
 } cc_storey;
 
 typedef struct { /* library.rs MaterialProps: every value optional */
@@ -142,6 +148,21 @@ typedef struct {
     size_t nproperties;
 } cc_relation;
 
+/* A grid (ADR 0056, grid.h): its own GlobalId, a name, straight axes in plan, world mm, each
+ * with its own GlobalId and a tag ("A", "1"), in the order given. */
+typedef struct {
+    cc_gid id;
+    cc_str tag;
+    double start[2], end[2];
+} cc_grid_axis;
+
+typedef struct {
+    cc_gid id;
+    cc_str name;
+    cc_grid_axis *axes;
+    size_t naxes;
+} cc_grid;
+
 typedef struct {
     Arena arena;
     cc_gid project_id;
@@ -165,6 +186,8 @@ typedef struct {
     size_t nschedules;
     cc_relation *relations; /* sorted by id; key "relations", left out of the file when empty */
     size_t nrelations;
+    cc_grid *grids; /* sorted by id; key "grids", left out of the file when empty (ADR 0056) */
+    size_t ngrids;
 } cc_model;
 
 /* An error with a message (UTF-8, NUL-terminated, truncated to fit). `offset` is the input
@@ -195,7 +218,7 @@ int cc_model_validate(const cc_model *m, cc_error *err);
 /* The same, with the map keys the file gave (Rust checks key == id); NULL means the ids. */
 int cc_model_validate_keys(const cc_model *m, const cc_gid *storey_keys, const cc_gid *material_keys,
                            const cc_gid *element_keys, const cc_gid *view_keys, const cc_gid *sheet_keys,
-                           const cc_gid *relation_keys, cc_error *err);
+                           const cc_gid *relation_keys, const cc_gid *grid_keys, cc_error *err);
 /* version::canonical_model: every -0.0 becomes 0.0. */
 void cc_model_canonical(cc_model *m);
 

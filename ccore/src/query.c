@@ -7,6 +7,7 @@
  * last of duplicate keys wins), then derives the argument struct from it. Errors therefore
  * come in sorted key order; the texts below are serde's and serde_json's. */
 #include "query.h"
+#include "grid.h"
 #include <stdint.h>
 #include <string.h>
 #include "arena.h"
@@ -345,6 +346,11 @@ static int q_storeys(const cc_model *m, Arena *a, JsonW *w) {
         }
         memcpy(ord, tmp, n * sizeof *ord);
     }
+    /* ADR 0056, a C addition: a model that uses levels or grids also gets is_storey and
+     * height_mm (a storey's height to the next storey up, null for the top one and for a level
+     * that is not a storey). Other models answer Rust's bytes (golden/query.txt). */
+    int levels = m->ngrids > 0;
+    for (size_t i = 0; i < n && !levels; i++) levels = m->storeys[i].not_storey;
     jw_arr_begin(w);
     for (size_t i = 0; i < n; i++) {
         const cc_storey *s = ord[i];
@@ -353,14 +359,49 @@ static int q_storeys(const cc_model *m, Arena *a, JsonW *w) {
         jw_u64(w, cnt[s - m->storeys]);
         jw_key(w, "elevation");
         jw_f64(w, s->elevation);
+        if (levels) {
+            const cc_storey *up = NULL;
+            for (size_t j = i + 1; !s->not_storey && j < n && !up; j++)
+                if (!ord[j]->not_storey) up = ord[j];
+            jw_key(w, "height_mm");
+            if (up) jw_f64(w, up->elevation - s->elevation);
+            else jw_null(w);
+        }
         jw_key(w, "id");
         w_gid(w, &s->id);
+        if (levels) jw_key(w, "is_storey"), jw_bool(w, !s->not_storey);
         jw_key(w, "name");
         w_s(w, s->name);
         jw_obj_end(w);
     }
     jw_arr_end(w);
     return 0;
+}
+
+/* ADR 0056, a C addition: [{axes: [{end_mm, id, start_mm, tag}], id, name}], grids by id, axes in
+ * their order. */
+static void q_grids(const cc_model *m, JsonW *w) {
+    jw_arr_begin(w);
+    for (size_t i = 0; i < m->ngrids; i++) {
+        const cc_grid *g = &m->grids[i];
+        jw_obj_begin(w);
+        jw_key(w, "axes");
+        jw_arr_begin(w);
+        for (size_t k = 0; k < g->naxes; k++) {
+            const cc_grid_axis *a = &g->axes[k];
+            jw_obj_begin(w);
+            jw_key(w, "end_mm"), jw_arr_begin(w), jw_f64(w, a->end[0]), jw_f64(w, a->end[1]), jw_arr_end(w);
+            jw_key(w, "id"), w_gid(w, &a->id);
+            jw_key(w, "start_mm"), jw_arr_begin(w), jw_f64(w, a->start[0]), jw_f64(w, a->start[1]), jw_arr_end(w);
+            jw_key(w, "tag"), w_s(w, a->tag);
+            jw_obj_end(w);
+        }
+        jw_arr_end(w);
+        jw_key(w, "id"), w_gid(w, &g->id);
+        jw_key(w, "name"), w_s(w, g->name);
+        jw_obj_end(w);
+    }
+    jw_arr_end(w);
 }
 
 static int q_materials(const cc_model *m, Arena *a, JsonW *w) {
@@ -753,12 +794,13 @@ int cc_query(const cc_model *m, const char *name, const char *args_json, size_t 
         status = verb_query(name, args_json, n, out);
         goto done;
     }
-    enum { Q_STOREYS, Q_MATERIALS, Q_ELEMENTS, Q_ELEMENT, Q_PROJECT, Q_VIEWS, Q_SHEETS, Q_SCHEDULES } q;
-    static const char *const NAMES[] = {"storeys", "materials", "elements", "element",
-                                        "project", "views",     "sheets",   "schedules"};
-    for (q = 0; q < 8 && (strlen(name) != strlen(NAMES[q]) || memcmp(name, NAMES[q], strlen(name)) != 0); q++) {
+    /* "grids" (ADR 0056) is a C addition: past Rust's eight, so the unknown query text stays Rust's. */
+    enum { Q_STOREYS, Q_MATERIALS, Q_ELEMENTS, Q_ELEMENT, Q_PROJECT, Q_VIEWS, Q_SHEETS, Q_SCHEDULES, Q_GRIDS } q;
+    static const char *const NAMES[] = {"storeys", "materials", "elements", "element", "project",
+                                        "views",   "sheets",    "schedules", "grids"};
+    for (q = 0; q < 9 && (strlen(name) != strlen(NAMES[q]) || memcmp(name, NAMES[q], strlen(name)) != 0); q++) {
     }
-    if (q == 8) {
+    if (q == 9) {
         buf_puts(out, "unknown query ");
         cc_buf_debug_str(out, name, strlen(name));
         buf_puts(out, "; known: ");
@@ -813,6 +855,7 @@ int cc_query(const cc_model *m, const char *name, const char *args_json, size_t 
     case Q_PROJECT: q_project(m, &w); break;
     case Q_VIEWS: q_views(m, &w); break;
     case Q_SHEETS: q_sheets(m, &w); break;
+    case Q_GRIDS: q_grids(m, &w); break;
     default: q_schedules(m, &w); break;
     }
     if (oom) goto done;

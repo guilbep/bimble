@@ -1,7 +1,10 @@
 # ADR 0056 — Levels and grids: levels beyond storeys, a project zero, grids in the model
 
-- Status: Proposed
-- Decided by: not yet: proposed from the wireframes v01, for Pierre
+- Status: Accepted, 25 Nov 2026
+- Decided by: Pierre delegated the decision, as for ADR 0068 ("I won't be there to validate the
+  next ADR, so accept everything and advance without me! let's follow fable5.2 recommendation").
+  Proposed from the wireframes v01; ticket G1 in `docs/research/next-round.md` (the model half,
+  in the C core); G2 draws and edits.
 - Reversal cost: medium (a level kind, a grid map in the model, IFC export of both)
 - Extends: ADR 0018 (grid axes on plans), ADR 0021 (views per storey), ADR 0045 (coordinates)
 
@@ -49,6 +52,26 @@ What is new in wireframe A7:
 - IFC: storeys export as `IfcBuildingStorey` (exists). A non-storey level has no standard IFC
   place: export it as a Bimble property set `Bimble_Level` on the building, or skip it. Grids
   export as `IfcGrid` with `IfcGridAxis` and `IfcPolyline` curves, contained in the ground storey.
+
+## As built in the C core (ticket G1)
+
+- `cc_storey.not_storey` (file key `"is_storey": false`, left out for a storey): zero means a
+  storey, so every storey made elsewhere stays one. A file load and `add_element` refuse an
+  element on a datum level; `set_storey` and `level_set` refuse to untick a level that holds
+  elements.
+- `cc_model.grids` (file key `"grids"`, left out when empty), axes `{id, tag, start_mm, end_mm}`.
+  Rules: a name, 1 to 1000 axes, tags unique in the grid, ends within 1e7 mm, length ≥ 1 mm,
+  ids unique across the model, and axes in **at least two directions** (IfcGrid needs UAxes and
+  VAxes; axes parallel to the first one are U, the others V).
+- Commands `set_storey`, `add_grid`, `set_grid`, `remove_grid`; verbs `level_add`, `level_set`,
+  `level_remove`, `grid_add` (axes, or `x`/`y` with tags 1, 2, … and A, B, …, axes running
+  1000 mm past the outer ones), `grid_axis_set`, `grid_remove`; queries `grids` and `storeys`
+  (`is_storey`, `height_mm` only in a model with a datum level or a grid).
+- IFC: the first question below is answered by skipping: a datum level is not exported (it holds
+  no element). Grids are contained in the storey nearest elevation 0, with a `FootPrint`
+  `GeometricCurveSet` representation.
+- Not yet: `elevation_m` (the C model has no georeference), IFC import of grids into the map,
+  default views only for storeys (S1, G2). Deviations: `ccore/golden/DEVIATIONS.md` §3.
 
 ## Alternatives considered
 

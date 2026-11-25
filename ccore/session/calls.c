@@ -957,7 +957,7 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
             return CC_ERR;
         }
     if (s->open) return model_query(s, name, body, n, out); /* calls.rs:276-309 and :519-527 */
-    static const char *const EMPTY_NO_MODEL[] = {"sheets", "views", "schedules"};
+    static const char *const EMPTY_NO_MODEL[] = {"sheets", "views", "schedules", "grids"};
     for (size_t i = 0; i < sizeof EMPTY_NO_MODEL / sizeof EMPTY_NO_MODEL[0]; i++)
         if (!strcmp(name, EMPTY_NO_MODEL[i])) { /* spec §1: stub [] */
             buf_puts(out, "[]");

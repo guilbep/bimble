@@ -1,6 +1,7 @@
 /* IFC export: crates/bimble-ifc/src/lib.rs `export` (IFC4) and ifc2x3.rs `from_ifc4`, line for
  * line. Comments name the Rust they follow. */
 #include "ifc_out.h"
+#include "ifc_out_grid.h"
 #include <stdlib.h>
 #include <string.h>
 #include "fmt.h"
@@ -641,6 +642,7 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
     for (size_t i = 0; i < ns; i++) {
         const cc_storey *s = sorted[i].s;
         size_t k = (size_t)(s - m->storeys);
+        if (s->not_storey) continue; /* ADR 0056: a datum level is not an IfcBuildingStorey (holds no element) */
         double p[3] = {0.0, 0.0, s->elevation};
         uint64_t o = point3(w, p);
         uint64_t a = begin(w);
@@ -653,7 +655,7 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
         st_ent[k] = id, st_pl[k] = pl;
         ids_push(&w->tmp, id);
     }
-    if (ns) {
+    if (w->tmp.n) {
         agg = begin(w);
         put(w, "IFCRELAGGREGATES("), gid(w, "agg/building"), put(w, ",$,$,$,"), ref(w, bldg), put(w, ",(");
         refs(w, w->tmp.v, w->tmp.n), put(w, "))"), end(w, agg);
@@ -664,7 +666,7 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
         const cc_element *e = &m->elements[i];
         const cc_storey *st = cc_model_storey(m, &e->storey);
         const cc_material *mat = cc_model_material(m, &e->material);
-        if (!st || !mat) { w->err = 1; break; }
+        if (!st || !mat || st->not_storey) { w->err = 1; break; }
         el_st[i] = (size_t)(st - m->storeys), el_mat[i] = (size_t)(mat - m->materials);
         const cc_placement *p = &e->placement;
         uint64_t o = point3(w, p->origin), az = dir3(w, p->z_axis), ax = dir3(w, p->x_axis);
@@ -768,6 +770,7 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
         put(w, "IFCRELASSOCIATESMATERIAL("), gid_id(w, "material/", &mat->id), put(w, ",$,$,$,(");
         refs(w, w->tmp.v, w->tmp.n), put(w, "),"), ref(w, me), put(w, ")"), end(w, rel);
     }
+    if (cc_ifc_out_grids(m, d, &w->next, ctx, world, st_pl, st_ent, bldg_pl, bldg)) w->err = 1; /* ADR 0056 */
 done:
     free(sorted), free(st_ent), free(st_pl), free(el_ent), free(el_st), free(el_mat), free(order), free(start);
     if (w->tmp.oom) w->err = 1;
@@ -787,7 +790,7 @@ static const char *const ROOTED[] = {"IFCPROJECT", "IFCSITE", "IFCBUILDING", "IF
                                      "IFCBEAM", "IFCSLAB", "IFCWALL", "IFCFOOTING", "IFCBUILDINGELEMENTPROXY",
                                      "IFCOPENINGELEMENT", "IFCPROPERTYSET", "IFCRELAGGREGATES",
                                      "IFCRELCONTAINEDINSPATIALSTRUCTURE", "IFCRELDEFINESBYPROPERTIES",
-                                     "IFCRELVOIDSELEMENT", "IFCRELASSOCIATESMATERIAL", NULL};
+                                     "IFCRELVOIDSELEMENT", "IFCRELASSOCIATESMATERIAL", "IFCGRID", NULL};
 static const char *const DROPPED[] = {"IFCMATERIALPROPERTIES", "IFCPROJECTEDCRS", "IFCMAPCONVERSION", NULL};
 
 #define MAX_ARGS 64
@@ -897,7 +900,8 @@ static int to_ifc2x3(const char *t, size_t n, Buf *out) {
             if (in_list(e.name, e.namen, ROOTED) && na > 1 && args[1].n == 1 && args[1].p[0] == '$')
                 args[1] = (cc_str){ohs, ohn};
 #define NAME_IS(s) (e.namen == sizeof(s) - 1 && !memcmp(e.name, s, sizeof(s) - 1))
-            if (NAME_IS("IFCCOLUMN") || NAME_IS("IFCBEAM") || NAME_IS("IFCWALL") || NAME_IS("IFCOPENINGELEMENT")) {
+            if (NAME_IS("IFCCOLUMN") || NAME_IS("IFCBEAM") || NAME_IS("IFCWALL") || NAME_IS("IFCOPENINGELEMENT") ||
+                NAME_IS("IFCGRID")) { /* IFC2x3's IfcGrid has no PredefinedType (ADR 0056) */
                 na--; /* Rust's pop on a list that always has at least one argument */
             } else if (NAME_IS("IFCBUILDINGELEMENTPROXY")) {
                 args[na - 1] = (cc_str){"$", 1};

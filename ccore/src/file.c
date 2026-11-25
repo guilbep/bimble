@@ -7,7 +7,9 @@
  * - sections Rust knows and the C core does not hold (georef, mesh arrays by hash) are refused
  *   when non-empty, never dropped. Openings are kept (data only: the C scene does not cut them
  *   yet). Views, sheets and schedules are held (view.h). Relations (ADR 0070, relation.h) are the
- *   C core's own section "relations", left out when empty: Rust ignores it (no oracle).
+ *   C core's own section "relations", left out when empty: Rust ignores it (no oracle). Grids and
+ *   levels that are not storeys (ADR 0056, grid.h) likewise: section "grids" and the storey key
+ *   "is_storey" (false only), each left out when unused.
  * The binary form (version 2) is the same serde model in CBOR, read into the same DOM
  * (cbor.h), with each mesh array once in the top-level tables `positions` / `indices` and
  * elements referring to them by index (shared again in memory, as Rust shares its Arcs). */
@@ -16,6 +18,7 @@
 #include <string.h>
 #include "cbor.h"
 #include "fmt.h"
+#include "grid.h"
 #include "inflate.h"
 #include "json_r.h"
 #include "json_w.h"
@@ -454,12 +457,16 @@ static int d_strmap(D *d, const JrVal *v, cc_kv **out, size_t *n) {
 }
 
 static int d_storey(D *d, const JrVal *v, cc_storey *s) {
-    static const char *const F[] = {"id", "name", "elevation"};
-    const JrVal *f[3];
-    if (d_fields(d, v, F, 3, f, "struct Storey", 0)) return -1;
+    static const char *const F[] = {"id", "name", "elevation", "is_storey"};
+    const JrVal *f[4];
+    if (d_fields(d, v, F, 4, f, "struct Storey", 0)) return -1;
     for (int i = 0; i < 3; i++)
         if (need(d, v, f[i], F[i])) return -1;
-    return d_gid(d, f[0], &s->id) || d_str(d, f[1], &s->name) || d_f64(d, f[2], &s->elevation) ? -1 : 0;
+    if (d_gid(d, f[0], &s->id) || d_str(d, f[1], &s->name) || d_f64(d, f[2], &s->elevation)) return -1;
+    /* ADR 0056: "is_storey" is the C core's own, false only (true is the default, left out). */
+    if (f[3] && f[3]->type != JR_BOOL) return type_err(d, f[3], "a boolean");
+    s->not_storey = f[3] && !f[3]->b;
+    return 0;
 }
 
 static int d_props(D *d, const JrVal *v, cc_material_props *p) {
@@ -606,6 +613,11 @@ static int fn_relation(D *d, const JrVal *v, void *o) {
     cc_vd_init(&vd, d->a);
     return vd_done(d, &vd, cc_vd_relation(&vd, v, NULL, o));
 }
+static int fn_grid(D *d, const JrVal *v, void *o) {
+    cc_vd vd;
+    cc_vd_init(&vd, d->a);
+    return vd_done(d, &vd, cc_vd_grid(&vd, v, NULL, o));
+}
 
 static int unsupported_if(D *d, const JrVal *v, int is_obj, const char *what) {
     if (!v) return 0;
@@ -615,14 +627,14 @@ static int unsupported_if(D *d, const JrVal *v, int is_obj, const char *what) {
 }
 
 typedef struct {
-    cc_gid *skeys, *mkeys, *ekeys, *vkeys, *shkeys, *rkeys;
+    cc_gid *skeys, *mkeys, *ekeys, *vkeys, *shkeys, *rkeys, *gkeys;
 } Keys;
 
 static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
     static const char *const F[] = {"project_id", "project_name", "storeys", "materials", "elements",
-                                    "views", "sheets", "project", "schedules", "georef", "relations"};
-    const JrVal *f[11];
-    if (d_fields(d, v, F, 11, f, "struct Model", 0)) return -1;
+                                    "views", "sheets", "project", "schedules", "georef", "relations", "grids"};
+    const JrVal *f[12];
+    if (d_fields(d, v, F, 12, f, "struct Model", 0)) return -1;
     for (int i = 0; i < 5; i++)
         if (need(d, v, f[i], F[i])) return -1;
     void *p;
@@ -651,6 +663,10 @@ static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
     if (f[10]) {
         if (d_idmap(d, f[10], "a map", sizeof(cc_relation), fn_relation, &p, &m->nrelations, &keys->rkeys)) return -1;
         m->relations = p;
+    }
+    if (f[11]) {
+        if (d_idmap(d, f[11], "a map", sizeof(cc_grid), fn_grid, &p, &m->ngrids, &keys->gkeys)) return -1;
+        m->grids = p;
     }
     return 0;
 }
@@ -774,7 +790,7 @@ int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) {
     } else {
         cc_error verr;
         if (cc_model_validate_keys(m, keys.skeys, keys.mkeys, keys.ekeys, keys.vkeys, keys.shkeys, keys.rkeys,
-                                   &verr)) {
+                                   keys.gkeys, &verr)) {
             rc = dfail(&d, CC_NO_OFFSET, "invalid model: ", verr.msg, 0);
         } else {
             cc_model_canonical(m);
@@ -892,6 +908,7 @@ int cc_model_save(const cc_model *m, Buf *b) {
         jw_key(&w, "id"), w_gid(&w, &s->id);
         jw_key(&w, "name"), w_str(&w, s->name);
         jw_key(&w, "elevation"), jw_f64(&w, s->elevation);
+        if (s->not_storey) jw_key(&w, "is_storey"), jw_bool(&w, 0);
         jw_obj_end(&w);
     }
     jw_obj_end(&w);
@@ -968,6 +985,12 @@ int cc_model_save(const cc_model *m, Buf *b) {
         jw_obj_begin(&w);
         for (size_t i = 0; i < m->nrelations; i++)
             jw_key_n(&w, m->relations[i].id.c, 22), cc_em_relation(&em, &m->relations[i], NULL);
+        jw_obj_end(&w);
+    }
+    if (m->ngrids) {
+        jw_key(&w, "grids");
+        jw_obj_begin(&w);
+        for (size_t i = 0; i < m->ngrids; i++) jw_key_n(&w, m->grids[i].id.c, 22), cc_em_grid(&em, &m->grids[i], NULL);
         jw_obj_end(&w);
     }
     jw_obj_end(&w);
@@ -1137,7 +1160,7 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
         }
         c_key(b, "model");
         cb_head(b, CB_MAP, 5 + (m->nviews ? 1 : 0) + (m->nsheets ? 1 : 0) + (m->nproject ? 1 : 0) +
-                               (m->nschedules ? 1 : 0) + (m->nrelations ? 1 : 0));
+                               (m->nschedules ? 1 : 0) + (m->nrelations ? 1 : 0) + (m->ngrids ? 1 : 0));
         c_key(b, "project_id"), c_gid(b, &m->project_id);
         c_key(b, "project_name"), c_str(b, m->project_name);
         c_key(b, "storeys");
@@ -1145,10 +1168,11 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
         for (size_t i = 0; i < m->nstoreys; i++) {
             const cc_storey *s = &m->storeys[i];
             c_gid(b, &s->id);
-            cb_head(b, CB_MAP, 3);
+            cb_head(b, CB_MAP, 3 + (s->not_storey ? 1 : 0));
             c_key(b, "id"), c_gid(b, &s->id);
             c_key(b, "name"), c_str(b, s->name);
             c_key(b, "elevation"), cb_f64(b, s->elevation);
+            if (s->not_storey) c_key(b, "is_storey"), buf_putc(b, (char)0xF4); /* CBOR false */
         }
         c_key(b, "materials");
         cb_head(b, CB_MAP, m->nmaterials);
@@ -1233,6 +1257,11 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
             c_key(b, "relations");
             cb_head(b, CB_MAP, m->nrelations);
             for (size_t i = 0; i < m->nrelations; i++) c_gid(b, &m->relations[i].id), cc_em_relation(&em, &m->relations[i], NULL);
+        }
+        if (m->ngrids) {
+            c_key(b, "grids");
+            cb_head(b, CB_MAP, m->ngrids);
+            for (size_t i = 0; i < m->ngrids; i++) c_gid(b, &m->grids[i].id), cc_em_grid(&em, &m->grids[i], NULL);
         }
     }
     pool_free(&pp);
