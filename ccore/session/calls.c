@@ -28,6 +28,7 @@
 #include "verbs.h"
 #include "viewfile.h"
 #include "views.h"
+#include "annot.h"
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -135,6 +136,7 @@ static void debug_str(cc_buf *out, const char *s) { cc_buf_debug_str(out, s, str
 /* Something is shown: an editable model or a read-only scene (Rust's `loaded.is_some()`). */
 static int loaded(const cc_session *s) { return s->open || s->view; }
 static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out); /* the place tool, below */
+static int annot_json(cc_session *s, const cc_gid *added, cc_buf *out); /* the annotate tool, below */
 
 /* ---- views and tabs (views.h) ---- */
 
@@ -696,6 +698,52 @@ static int q_view_clip(cc_session *s, JsonW *w) {
     return done(w);
 }
 
+/* A C addition (annot.h, ticket C4): {"view"?: id (default: the active view), "unit"?: "mm"|"cm"|"m"}
+ * -> the view's dimensions and texts resolved for drawing (cc_annotations_json); null without
+ * that view (or nothing loaded). */
+static int q_view_annotations(cc_session *s, const char *body, size_t n, JsonW *w) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *args = n ? jr_parse(&a, body, n, &je) : NULL;
+    const JrVal *vid = args && args->type == JR_OBJ ? jr_get(args, "view") : NULL;
+    const JrVal *un = args && args->type == JR_OBJ ? jr_get(args, "unit") : NULL;
+    int unit = CC_UNIT_MM, rc;
+    if (n && !args) {
+        buf_puts(w->b, je.msg);
+        arena_free(&a);
+        return CC_ERR;
+    }
+    if (un && un->type == JR_STR && un->n == 2 && !memcmp(un->s, "cm", 2)) unit = CC_UNIT_CM;
+    else if (un && un->type == JR_STR && un->n == 1 && un->s[0] == 'm') unit = CC_UNIT_M;
+    else if (un && !(un->type == JR_STR && un->n == 2 && !memcmp(un->s, "mm", 2)) && un->type != JR_NULL) {
+        buf_puts(w->b, "unit: expected \"mm\", \"cm\" or \"m\"");
+        arena_free(&a);
+        return CC_ERR;
+    }
+    if (vid && vid->type != JR_NULL && (vid->type != JR_STR || vid->n != 22)) {
+        buf_puts(w->b, "view: expected a GlobalId");
+        arena_free(&a);
+        return CC_ERR;
+    }
+    cc_view *v = NULL, *all = NULL, act;
+    size_t nv = 0;
+    if (loaded(s) && vid && vid->type == JR_STR) {
+        if (cc_sv_list(s, &a, &all, &nv)) return arena_free(&a), w->b->oom = 1, CC_ERR;
+        for (size_t i = 0; i < nv && !v; i++)
+            if (!memcmp(all[i].id.c, vid->s, 22)) v = &all[i];
+    } else if (loaded(s) && s->tab_open) {
+        int r = cc_sv_active(s, &a, &act);
+        if (r < 0) return arena_free(&a), w->b->oom = 1, CC_ERR;
+        if (r) v = &act;
+    }
+    if (v) cc_annotations_json(w, s->open ? &s->model : NULL, v, unit);
+    else jw_null(w);
+    rc = done(w);
+    arena_free(&a);
+    return rc;
+}
+
 static int q_collab(JsonW *w) { /* collab.rs:289-297 (json!, sorted): the lab's NO_COLLAB */
     jw_obj_begin(w);
     jw_key(w, "belongs"), jw_null(w);
@@ -846,6 +894,14 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     }
     if (!strcmp(name, "open_views")) return q_open_views(s, &w);
     if (!strcmp(name, "view_clip")) return q_view_clip(s, &w);
+    if (!strcmp(name, "view_annotations")) return q_view_annotations(s, body, n, &w);
+    if (!strcmp(name, "annotate")) { /* the annotate tool's state (calls.h "annotate") */
+        if (!s->open) {
+            buf_puts(out, "null");
+            return CC_OK;
+        }
+        return annot_json(s, NULL, out);
+    }
     if (!strcmp(name, "collab")) return q_collab(&w);
     if (!strcmp(name, "status")) return q_status(s, &w, out);
     if (!strcmp(name, "placing")) { /* calls.rs:408-414: null without an editable model */
@@ -1710,7 +1766,7 @@ static void tool_pointer(cc_session *s, const ToolArgs *a) {
         }
         kind = cc_snap(&t->targets, p, tol, q);
     }
-    if (a->ortho && t->npoints && s->placing_kind != CC_KIND_COLUMN) {
+    if (a->ortho && t->npoints && (t->annot ? t->annot == 1 && t->npoints == 1 : s->placing_kind != CC_KIND_COLUMN)) {
         double r[2];
         cc_ortho(t->points[t->npoints - 1], q, r);
         if (r[0] != q[0] || r[1] != q[1]) kind = CC_SNAP_NONE;
@@ -1809,6 +1865,279 @@ static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out) {
     return done(&w);
 }
 
+/* ---- the annotate tool (ticket C4, calls.h "annotate"; annot.h) ---- */
+
+/* The active view when it is a plan with an editable model: 1 (into `v`, built in `a`), else 0. */
+static int annot_view(cc_session *s, Arena *a, cc_view *v) {
+    if (!s->open || !s->tab_open) return 0;
+    return cc_sv_active(s, a, v) == 1 && v->kind == CC_VIEW_PLAN && v->storey.n == 22;
+}
+
+/* The hover's feature anchor (annot.h cc_feature_near, within 1 mm on the plan's storey). */
+static void annot_hover_anchor(cc_session *s) {
+    cc_tool *t = &s->tool;
+    t->annot_ft[2].has = 0;
+    if (!t->has_hover || t->annot != 1) return;
+    Arena a;
+    arena_init(&a, 0);
+    cc_view v;
+    if (annot_view(s, &a, &v)) {
+        cc_gid sid;
+        memcpy(sid.c, v.storey.p, 22);
+        double at[3];
+        t->annot_ft[2].has = cc_feature_near(&s->model, t->hover, 1.0, &sid, &t->annot_ft[2].el, t->annot_ft[2].feat, at);
+    }
+    arena_free(&a);
+}
+
+/* f64::round, half away from zero. */
+static double annot_round(double x) {
+    double r = (double)(int64_t)(x + (x < 0 ? -0.5 : 0.5));
+    return (x < 0 ? -x : x) < 4503599627370496.0 ? r + 0.0 : x;
+}
+
+static void w_pair(JsonW *w, const double *p) {
+    jw_arr_begin(w), jw_f64(w, p[0] + 0.0), jw_f64(w, p[1] + 0.0), jw_arr_end(w);
+}
+
+/* The dimension a, b (offset `off`, `axis`) as a preview: {"a","axis","b","dir","mid","offset_mm","qa","qb","text","value_mm"}. */
+static void annot_preview(JsonW *w, const double *a, const double *b, double off, cc_dim_axis axis) {
+    static const char *const AXIS[] = {"aligned", "horizontal", "vertical"};
+    double pa[3] = {a[0], a[1], 0}, pb[3] = {b[0], b[1], 0}, u[2], qa[2], qb[2], len;
+    if (cc_dim_line(pa, pb, off, axis, u, qa, qb, &len)) {
+        jw_null(w);
+        return;
+    }
+    if (u[0] < 0.0 || (u[0] == 0.0 && u[1] < 0.0)) u[0] = -u[0], u[1] = -u[1];
+    double mid[2] = {(qa[0] + qb[0]) / 2.0, (qa[1] + qb[1]) / 2.0};
+    jw_obj_begin(w);
+    jw_key(w, "a"), w_pair(w, a);
+    jw_key(w, "axis"), jw_str(w, AXIS[axis]);
+    jw_key(w, "b"), w_pair(w, b);
+    jw_key(w, "dir"), w_pair(w, u);
+    jw_key(w, "mid"), w_pair(w, mid);
+    jw_key(w, "offset_mm"), jw_f64(w, off + 0.0);
+    jw_key(w, "qa"), w_pair(w, qa);
+    jw_key(w, "qb"), w_pair(w, qb);
+    Buf t;
+    buf_init(&t);
+    cc_dim_format(&t, len, CC_UNIT_MM);
+    jw_key(w, "text"), jw_str_n(w, t.oom ? "" : t.p, t.oom ? 0 : t.len);
+    buf_free(&t);
+    jw_key(w, "value_mm"), jw_f64(w, len);
+    jw_obj_end(w);
+}
+
+static void annot_anchor_json(JsonW *w, const cc_tool *t, int k) {
+    if (!t->annot_ft[k].has) {
+        jw_null(w);
+        return;
+    }
+    jw_obj_begin(w);
+    jw_key(w, "element"), jw_str_n(w, t->annot_ft[k].el.c, 22);
+    jw_key(w, "feature"), jw_str(w, t->annot_ft[k].feat);
+    jw_obj_end(w);
+}
+
+/* The annotate tool's state, keys sorted:
+ *   {"active","added","anchor","anchors","hover","mode","points","preview","text","view"}
+ * added: the GlobalId a click just added, or null; anchor: the hover's element feature
+ * ({"element","feature"}) or null; anchors: the clicked points' ones; hover: as the place tool's;
+ * mode: "dimension" | "text" | null; preview: the dimension the next click makes (1 point: a to the
+ * pointer, offset 0; 2 points: the third click's line) or null; view: the plan's id or null. */
+static int annot_json(cc_session *s, const cc_gid *added, cc_buf *out) {
+    cc_tool *t = &s->tool;
+    JsonW w;
+    jw_init(&w, out, 0);
+    Arena a;
+    arena_init(&a, 0);
+    cc_view v;
+    int on = t->annot && annot_view(s, &a, &v);
+    jw_obj_begin(&w);
+    jw_key(&w, "active"), jw_bool(&w, on);
+    jw_key(&w, "added");
+    if (added) jw_str_n(&w, added->c, 22);
+    else jw_null(&w);
+    jw_key(&w, "anchor"), annot_anchor_json(&w, t, 2);
+    jw_key(&w, "anchors"), jw_arr_begin(&w);
+    for (size_t i = 0; on && i < t->npoints && i < 2; i++) annot_anchor_json(&w, t, (int)i);
+    jw_arr_end(&w);
+    jw_key(&w, "hover");
+    if (on && t->has_hover) {
+        jw_obj_begin(&w);
+        jw_key(&w, "at"), w_pair(&w, t->hover);
+        jw_key(&w, "snap");
+        if (cc_snap_label(t->hover_kind)) jw_str(&w, cc_snap_label(t->hover_kind));
+        else jw_null(&w);
+        jw_key(&w, "z"), jw_f64(&w, storey_level(s) + 0.0);
+        jw_obj_end(&w);
+    } else jw_null(&w);
+    jw_key(&w, "mode");
+    if (on) jw_str(&w, t->annot == 1 ? "dimension" : "text");
+    else jw_null(&w);
+    jw_key(&w, "points"), jw_arr_begin(&w);
+    for (size_t i = 0; on && i < t->npoints; i++) w_pair(&w, t->points[i]);
+    jw_arr_end(&w);
+    jw_key(&w, "preview");
+    if (on && t->annot == 1 && t->has_hover && t->npoints == 1) annot_preview(&w, t->points[0], t->hover, 0.0, CC_AXIS_ALIGNED);
+    else if (on && t->annot == 1 && t->has_hover && t->npoints == 2) {
+        cc_dim_axis ax;
+        double off;
+        cc_dim_axis_offset(t->points[0], t->points[1], t->hover, &ax, &off);
+        annot_preview(&w, t->points[0], t->points[1], annot_round(off), ax);
+    } else jw_null(&w);
+    jw_key(&w, "text");
+    if (on && t->annot == 2 && t->annot_text) jw_str(&w, t->annot_text);
+    else jw_null(&w);
+    jw_key(&w, "view");
+    if (on) jw_str_n(&w, v.id.c, 22);
+    else jw_null(&w);
+    jw_obj_end(&w);
+    arena_free(&a);
+    return done(&w);
+}
+
+static void annot_point_arg(JsonW *w, const cc_tool *t, int k) {
+    if (t->annot_ft[k].has) {
+        jw_obj_begin(w);
+        jw_key(w, "element"), jw_str_n(w, t->annot_ft[k].el.c, 22);
+        jw_key(w, "feature"), jw_str(w, t->annot_ft[k].feat);
+        jw_obj_end(w);
+    } else w_pair(w, t->points[k]);
+}
+
+/* tool "annotate" {"mode": "dimension" | "text" | null, "text", "size_mm"}: starts (placing
+ * stops) or stops the tool. */
+static int annot_start(cc_session *s, const char *body, size_t n, cc_buf *out) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jr_parse(&a, body, n, &je);
+    int rc = CC_ERR, mode = 0;
+    const char *bad = NULL;
+    const JrVal *m = v && v->type == JR_OBJ ? jr_get(v, "mode") : NULL;
+    const JrVal *tx = v && v->type == JR_OBJ ? jr_get(v, "text") : NULL;
+    const JrVal *sz = v && v->type == JR_OBJ ? jr_get(v, "size_mm") : NULL;
+    if (!v || v->type != JR_OBJ) bad = "annotate: expected {\"mode\": \"dimension\" | \"text\" | null, \"text\"}";
+    else if (m && m->type == JR_STR && m->n == 9 && !memcmp(m->s, "dimension", 9)) mode = 1;
+    else if (m && m->type == JR_STR && m->n == 4 && !memcmp(m->s, "text", 4)) mode = 2;
+    else if (m && m->type != JR_NULL) bad = "mode: expected \"dimension\", \"text\" or null";
+    if (!bad && mode == 2 && (!tx || tx->type != JR_STR || !tx->n)) bad = "text: the text mode needs a text";
+    if (!bad && sz && sz->type != JR_NULL && (sz->type != JR_NUM || !(sz->num >= 0.5 && sz->num <= 50.0)))
+        bad = "size_mm: expected 0.5 to 50";
+    if (bad) {
+        buf_puts(out, bad);
+        goto end;
+    }
+    if (!s->open) {
+        buf_puts(out, loaded(s) ? READ_ONLY : NO_MODEL);
+        goto end;
+    }
+    cc_view pv;
+    if (mode && !annot_view(s, &a, &pv)) {
+        buf_puts(out, "dimensions and texts go in 2D views: open a plan");
+        goto end;
+    }
+    cc_tool_clear(&s->tool);
+    s->placing = 0;
+    s->tool.annot = mode;
+    s->tool.annot_size = sz && sz->type == JR_NUM ? sz->num : 3.5;
+    if (mode == 2) {
+        s->tool.annot_text = malloc(tx->n + 1);
+        if (!s->tool.annot_text) {
+            s->tool.annot = 0;
+            buf_puts(out, "out of memory");
+            goto end;
+        }
+        memcpy(s->tool.annot_text, tx->s, tx->n);
+        s->tool.annot_text[tx->n] = 0;
+    }
+    rc = annot_json(s, NULL, out);
+end:
+    arena_free(&a);
+    return rc;
+}
+
+/* pointer / click / cancel while the annotate tool is on. */
+static int annot_call(cc_session *s, int pointer, int cancel, const ToolArgs *ta, cc_buf *out) {
+    cc_tool *t = &s->tool;
+    if (cancel) { /* Esc: the tool stops, the points go */
+        cc_tool_clear(t);
+        return annot_json(s, NULL, out);
+    }
+    Arena a;
+    arena_init(&a, 0);
+    cc_view v;
+    int ok = annot_view(s, &a, &v);
+    arena_free(&a);
+    if (!ok) { /* the plan is no longer shown */
+        cc_tool_clear(t);
+        if (pointer) return annot_json(s, NULL, out);
+        buf_puts(out, "dimensions and texts go in 2D views: open a plan");
+        return CC_ERR;
+    }
+    tool_pointer(s, ta);
+    annot_hover_anchor(s);
+    if (pointer || !t->has_hover) return annot_json(s, NULL, out);
+    Buf args;
+    buf_init(&args);
+    JsonW w;
+    jw_init(&w, &args, 0);
+    jw_obj_begin(&w);
+    const char *verb;
+    if (t->annot == 2) {
+        verb = "add_text";
+        jw_key(&w, "at"), w_pair(&w, t->hover);
+        jw_key(&w, "size_mm"), jw_f64(&w, t->annot_size);
+        jw_key(&w, "text"), jw_str(&w, t->annot_text ? t->annot_text : "");
+    } else {
+        if (t->npoints < 2) { /* a, then b (not on a) */
+            size_t k = t->npoints;
+            if (k == 1 && t->hover[0] == t->points[0][0] && t->hover[1] == t->points[0][1]) {
+                jw_finish(&w);
+                buf_free(&args);
+                return annot_json(s, NULL, out);
+            }
+            t->points[k][0] = t->hover[0], t->points[k][1] = t->hover[1];
+            t->annot_ft[k] = t->annot_ft[2];
+            t->npoints++;
+            jw_finish(&w);
+            buf_free(&args);
+            return annot_json(s, NULL, out);
+        }
+        verb = "add_dimension";
+        cc_dim_axis ax;
+        double off;
+        cc_dim_axis_offset(t->points[0], t->points[1], t->hover, &ax, &off);
+        static const char *const AXIS[] = {"aligned", "horizontal", "vertical"};
+        jw_key(&w, "a"), annot_point_arg(&w, t, 0);
+        jw_key(&w, "axis"), jw_str(&w, AXIS[ax]);
+        jw_key(&w, "b"), annot_point_arg(&w, t, 1);
+        jw_key(&w, "offset"), jw_f64(&w, annot_round(off));
+    }
+    jw_key(&w, "view"), jw_str_n(&w, v.id.c, 22);
+    jw_obj_end(&w);
+    jw_finish(&w);
+    t->npoints = 0; /* the points are taken, also when the verb fails */
+    cc_cmds l;
+    cc_cmds_init(&l);
+    int rc = CC_ERR;
+    cc_gid id;
+    int has_id = 0;
+    if (args.oom) buf_puts(out, "out of memory");
+    else if (!cc_verb_run_ex(&s->model, verb, args.p, args.len, 0, -1, s->rev, &l, out)) {
+        for (size_t i = 0; i < l.n; i++)
+            if ((l.v[i].op == CC_CMD_SET_VIEW || l.v[i].op == CC_CMD_ADD_VIEW) && l.v[i].view.nannotations)
+                id = l.v[i].view.annotations[l.v[i].view.nannotations - 1].id, has_id = 1;
+        rc = try_apply(s, l.v, l.n, out);
+    }
+    cc_cmds_free(&l);
+    buf_free(&args);
+    if (rc != CC_OK) return rc;
+    if (t->annot == 2) cc_tool_clear(t); /* one text per start */
+    return annot_json(s, has_id ? &id : NULL, out);
+}
+
 /* op "tool" (calls.h). */
 static int call_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     if (cc_vis_tool_name(name)) { /* the section box's face drag (visibility.h): any scene shown */
@@ -1818,6 +2147,7 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
         }
         return cc_vis_tool(&s->vis, name, body, n, out) == 200 ? CC_OK : CC_ERR;
     }
+    if (!strcmp(name, "annotate")) return annot_start(s, body, n, out);
     int pointer = !strcmp(name, "pointer"), click = !strcmp(name, "click"), cancel = !strcmp(name, "cancel");
     if (!pointer && !click && !cancel) {
         buf_puts(out, "unknown tool call ");
@@ -1830,6 +2160,7 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
         buf_puts(out, READ_ONLY);
         return CC_ERR;
     }
+    if (s->tool.annot) return annot_call(s, pointer, cancel, &a, out);
     if (cancel) { /* lib.rs:3031 Esc: stops placing, the points go */
         s->placing = 0;
         cc_tool_clear(&s->tool);

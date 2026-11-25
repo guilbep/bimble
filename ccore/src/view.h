@@ -32,6 +32,10 @@ typedef struct {
     double at[3];
     int has_element;
     cc_gid element;
+    /* A C addition (golden/DEVIATIONS.md): the feature of `element` the point is taken on
+     * ("origin", "end", "corner:N"; annot.h), so the point follows the element. */
+    int has_feature;
+    cc_str feature;
 } cc_anchor;
 
 typedef struct { /* Annotation: a dimension or a text */

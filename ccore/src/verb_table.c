@@ -188,6 +188,64 @@ static const char SCHEMA_RENAME[] =
     "ring\"}},\"required\":[\"id\",\"name\"],\"title\":\"RenameArgs\",\"type\":\"object\"}";
 static const char SUMMARY_RENAME[] = "Rename an element (a C addition: Rust's dispatch has no rename verb).";
 
+static const char SCHEMA_ADD_DIMENSION[] =
+    "{\"$defs\":{\"AnchorArgs\":{\"additionalProperties\":false,\"description\":\"A point taken on an"
+    " element: `feature` (\\\"origin\\\", \\\"end\\\", \\\"corner:N\\\") of `element`, followed when "
+    "the element moves; or `at` with the element it was taken on.\",\"properties\":{\"at\":{\"anyOf\""
+    ":[{\"$ref\":\"#/$defs/Point\"},{\"type\":\"null\"}]},\"element\":{\"description\":\"GlobalId of "
+    "the element.\",\"type\":[\"string\",\"null\"]},\"feature\":{\"description\":\"\\\"origin\\\", \\"
+    "\"end\\\" or \\\"corner:N\\\" of the element's generator.\",\"type\":[\"string\",\"null\"]}},\"t"
+    "ype\":\"object\"},\"Point\":{\"description\":\"A point [x, y] or [x, y, z], world mm (z: the pla"
+    "n's storey elevation when left out).\",\"items\":{\"format\":\"double\",\"type\":\"number\"},\"m"
+    "axItems\":3,\"minItems\":2,\"type\":\"array\"}},\"$schema\":\"https://json-schema.org/draft/2020"
+    "-12/schema\",\"additionalProperties\":false,\"description\":\"Arguments of `add_dimension`.\",\""
+    "properties\":{\"a\":{\"anyOf\":[{\"$ref\":\"#/$defs/Point\"},{\"$ref\":\"#/$defs/AnchorArgs\"}],"
+    "\"description\":\"First end.\"},\"axis\":{\"description\":\"\\\"aligned\\\" (default), \\\"horiz"
+    "ontal\\\" or \\\"vertical\\\".\",\"enum\":[\"aligned\",\"horizontal\",\"vertical\",null],\"type\""
+    ":[\"string\",\"null\"]},\"b\":{\"anyOf\":[{\"$ref\":\"#/$defs/Point\"},{\"$ref\":\"#/$defs/Ancho"
+    "rArgs\"}],\"description\":\"Second end.\"},\"kind\":{\"description\":\"Its dimension type (graph"
+    "ic style); none: the plan template's.\",\"type\":[\"string\",\"null\"]},\"offset\":{\"descriptio"
+    "n\":\"Where the dimension line goes: mm to the left of a->b as seen in the view.\",\"format\":\""
+    "double\",\"type\":\"number\"},\"view\":{\"description\":\"GlobalId of the 2D view (a plan or a s"
+    "ection; a default plan is stored on first use).\",\"type\":\"string\"}},\"required\":[\"view\",\""
+    "a\",\"b\",\"offset\"],\"title\":\"AddDimensionArgs\",\"type\":\"object\"}";
+static const char SUMMARY_ADD_DIMENSION[] =
+    "Add a dimension to a 2D view: two ends (points, or features of elements it then follows) and an"
+    " offset (a C addition).";
+static const char SCHEMA_ADD_TEXT[] =
+    "{\"$defs\":{\"Point\":{\"description\":\"A point [x, y] or [x, y, z], world mm (z: the plan's st"
+    "orey elevation when left out).\",\"items\":{\"format\":\"double\",\"type\":\"number\"},\"maxItem"
+    "s\":3,\"minItems\":2,\"type\":\"array\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/sc"
+    "hema\",\"additionalProperties\":false,\"description\":\"Arguments of `add_text`.\",\"properties\""
+    ":{\"angle_deg\":{\"description\":\"Its angle, degrees counter-clockwise (default 0).\",\"format\""
+    ":\"double\",\"type\":[\"number\",\"null\"]},\"at\":{\"$ref\":\"#/$defs/Point\"},\"kind\":{\"desc"
+    "ription\":\"Its text type.\",\"type\":[\"string\",\"null\"]},\"size_mm\":{\"description\":\"Its "
+    "height on paper, mm (default 3.5).\",\"format\":\"double\",\"type\":[\"number\",\"null\"]},\"tex"
+    "t\":{\"description\":\"The text, up to 2000 characters.\",\"type\":\"string\"},\"view\""
+    ":{\"description\":\"GlobalId of the 2D view (a plan or a section; a default plan is stored on fi"
+    "rst use).\",\"type\":\"string\"}},\"required\":[\"view\",\"at\",\"text\"],\"title\":\"AddTextArg"
+    "s\",\"type\":\"object\"}";
+static const char SUMMARY_ADD_TEXT[] = "Add a text to a 2D view at a point (a C addition).";
+static const char SCHEMA_MOVE_ANNOTATION[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `move_annotation`.\",\"properties\":{\"by\":{\"description\":\"A tex"
+    "t: moved by [dx, dy] mm; a dimension: its line moved across itself by that much.\",\"items\":{\""
+    "format\":\"double\",\"type\":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":[\"array\",\"nul"
+    "l\"]},\"id\":{\"description\":\"GlobalId of the dimension or text.\",\"type\":\"string\"},\"offs"
+    "et\":{\"description\":\"A dimension: its new offset, mm.\",\"format\":\"double\",\"type\":[\"num"
+    "ber\",\"null\"]},\"view\":{\"description\":\"GlobalId of the 2D view (a plan or a section; a def"
+    "ault plan is stored on first use).\",\"type\":\"string\"}},\"required\":[\"view\",\"id\"],\"titl"
+    "e\":\"MoveAnnotationArgs\",\"type\":\"object\"}";
+static const char SUMMARY_MOVE_ANNOTATION[] =
+    "Move a text, or a dimension's line (by, or a new offset), in its view (a C addition).";
+static const char SCHEMA_DELETE_ANNOTATION[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `delete_annotation`.\",\"properties\":{\"id\":{\"description\":\"Glo"
+    "balId of the dimension or text.\",\"type\":\"string\"},\"view\":{\"description\":\"GlobalId of t"
+    "he 2D view (a plan or a section; a default plan is stored on first use).\",\"type\":\"string\"}}"
+    ",\"required\":[\"view\",\"id\"],\"title\":\"DeleteAnnotationArgs\",\"type\":\"object\"}";
+static const char SUMMARY_DELETE_ANNOTATION[] = "Delete a dimension or a text from its view (a C addition).";
+
 #define V(n, N) {#n, SUMMARY_##N, SCHEMA_##N, cc_vh_##n, 0}
 const cc_verb_def cc_verb_table[] = {
     V(place, PLACE),
@@ -207,6 +265,10 @@ const cc_verb_def cc_verb_table[] = {
 };
 const cc_verb_def cc_verb_c_additions[] = {
     V(rename, RENAME),
+    V(add_dimension, ADD_DIMENSION),
+    V(add_text, ADD_TEXT),
+    V(move_annotation, MOVE_ANNOTATION),
+    V(delete_annotation, DELETE_ANNOTATION),
 };
 #undef V
 const size_t cc_verb_count = sizeof cc_verb_table / sizeof cc_verb_table[0];

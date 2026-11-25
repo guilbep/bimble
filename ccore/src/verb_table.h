@@ -29,7 +29,8 @@ extern const size_t cc_verb_count;
 /* C additions (ADR 0068 rule 1: the lab's raw `apply` edits become verbs): verbs Rust's dispatch
  * has not, outside cc_verb_table so that the `verbs` list, the unknown verb text and the 14
  * schemas stay Rust's byte for byte. cc_verb_find finds them; the session's `describe` answers
- * their schema. Today: rename {id, name} (Command::Rename). */
+ * their schema. Today: rename {id, name} (Command::Rename); add_dimension, add_text,
+ * move_annotation, delete_annotation (ticket C4). */
 extern const cc_verb_def cc_verb_c_additions[];
 extern const size_t cc_verb_c_addition_count;
 
@@ -54,4 +55,10 @@ int cc_vh_mirror(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 int cc_vh_add_sheet(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 int cc_vh_set_sheet(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 int cc_vh_rename(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err); /* C addition */
+/* C additions (ticket C4, annot.h): dimensions and texts of a 2D view, each one set_view (or
+ * add_view: a default plan is stored on its first annotation), one history step. */
+int cc_vh_add_dimension(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_add_text(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_move_annotation(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_delete_annotation(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 #endif

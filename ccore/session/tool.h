@@ -76,10 +76,20 @@ typedef struct cc_tool {
     int has_targets;
     uint64_t targets_rev;
     double targets_level;
+    /* The annotate tool (ticket C4, calls.h "annotate"): 0 off, 1 dimension, 2 text. The anchors
+     * of the clicked points and of the hover: an element's feature (annot.h) or none. */
+    int annot;
+    char *annot_text; /* malloc'd, the text tool's text */
+    double annot_size;
+    struct {
+        int has;
+        cc_gid el;
+        char feat[24];
+    } annot_ft[3]; /* points 0, 1; 2: the hover */
 } cc_tool;
 
 void cc_tool_free(cc_tool *t);   /* the targets; the state is zeroed */
-void cc_tool_clear(cc_tool *t);  /* points and pointer dropped (Esc, a new kind, a new model) */
+void cc_tool_clear(cc_tool *t);  /* points and pointer dropped, the annotate tool off (Esc, a new kind, a new model) */
 
 /* The ghost: `cmds` (a dry run of `verb place` on `m`) applied to a scratch model holding `m`'s
  * storeys and materials, meshed by cc_scene_build. Writes the JSON object

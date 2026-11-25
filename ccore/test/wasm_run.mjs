@@ -483,6 +483,8 @@ suite("host");
     // Rust's view ids (golden/verbs_all.txt), and a plan id not open (the Fondations' up: any other).
     const V3D = "1v7Vtm2FfafmYPKIQEXnlY", PLAN_N1 = "3w8zGYnP$Ay1lyvMZjDnXq", PLAN_N2 = "0Kvmz3DcY9zKW4N4hq88bE";
     const firstId = Object.keys(frame.elements).sort()[0];
+    const COL00 = "2P97ZHH3v3XutfaphHA_Tu", COL60 = "2KmXk9zn1FAPxjTPfLpwLP"; // columns of Niveau 1 at (0, 0), (6000, 0)
+    let firstAnn = "";
     const steps = [
       ["query", "state", "{}"], ["query", "actions", "{}"], ["query", "storeys", "{}"], ["query", "status", "null"],
       ["query", "open_views", "{}"], ["query", "visibility", "{}"], ["query", "placing", "{}"],
@@ -528,8 +530,28 @@ suite("host");
       ["tab", "-", JSON.stringify({ op: "close", tab: { type: "view", id: PLAN_N1 } })],
       ["tab", "-", JSON.stringify({ op: "close", tab: { type: "view", id: V3D } })], ["query", "open_views", "{}"], ["query", "view_clip", "{}"],
       ["tab", "-", JSON.stringify({ op: "open", tab: { type: "view", id: V3D } })], ["query", "open_views", "{}"],
+      // ticket C4: dimensions and texts (src/annot.h): the verbs (a default plan stored on its first
+      // annotation), view_annotations (anchors on column corners follow a moved column), undo, the
+      // annotate tool (2 snapped clicks + the offset; Esc; a text), move, delete, errors
+      ["verb", "add_dimension", JSON.stringify({ view: PLAN_N1, a: { element: COL00, feature: "corner:0" }, b: { element: COL60, feature: "corner:1" }, offset: -800 })],
+      ["query", "views", "{}"], ["query", "view_annotations", JSON.stringify({ view: PLAN_N1 })],
+      ["verb", "add_text", JSON.stringify({ view: PLAN_N1, at: [1000.5, 2000], text: "Poteau \u00e9" })],
+      ["verb", "move", JSON.stringify({ ids: [COL60], d: [500, 250, 0] })], ["query", "view_annotations", JSON.stringify({ view: PLAN_N1, unit: "cm" })],
+      ["undo", "-", ""], ["query", "view_annotations", JSON.stringify({ view: PLAN_N1, unit: "m" })],
+      ["tab", "-", JSON.stringify({ op: "open", tab: { type: "view", id: PLAN_N1 } })], ["tool", "annotate", JSON.stringify({ mode: "dimension" })],
+      ["tool", "pointer", JSON.stringify({ at: [-142, -155], tol_mm: 40 })], ["tool", "click", JSON.stringify({ at: [-142, -155], tol_mm: 40 })],
+      ["tool", "pointer", JSON.stringify({ at: [6148, 147], tol_mm: 40 })], ["tool", "click", JSON.stringify({ at: [6148, 147], tol_mm: 40 })],
+      ["tool", "pointer", JSON.stringify({ at: [3000, 2600], tol_mm: 40 })], ["query", "annotate", "{}"],
+      ["tool", "click", JSON.stringify({ at: [3000, 2600], tol_mm: 40 })], ["query", "history", "{}"],
+      ["tool", "click", JSON.stringify({ at: [0, 5000] })], ["tool", "cancel", ""], ["query", "annotate", "{}"],
+      ["tool", "annotate", JSON.stringify({ mode: "text", text: "Axe A", size_mm: 5 })], ["tool", "click", JSON.stringify({ at: [2004, 3006], free: true })],
+      ["query", "view_annotations", "{}"], ["verb", "move_annotation", JSON.stringify({ view: PLAN_N1, id: "FIRST_ANN", by: [0, -200] })],
+      ["verb", "delete_annotation", JSON.stringify({ view: PLAN_N1, id: "FIRST_ANN" })], ["query", "view_annotations", "{}"], ["undo", "-", ""],
+      ["verb", "add_dimension", JSON.stringify({ view: PLAN_N1, a: [0, 0], b: [0, 0], offset: 0 })],
+      ["verb", "add_text", JSON.stringify({ view: V3D, at: [0, 0], text: "x" })], ["tool", "annotate", JSON.stringify({ mode: "bad" })],
+      ["action", "save", ""], "saved", ["tab", "-", JSON.stringify({ op: "activate", tab: { type: "view", id: V3D } })],
     ];
-    let rev = 1, placedRev = 0, toolPlaced = 0;
+    let rev = 1, placedRev = 0, toolPlaced = 0, toolAdded = 0;
     for (const s of steps) {
       if (s === "mesh") {
         const w = call(X.host_mesh, [], 0), n = await nmesh();
@@ -548,7 +570,7 @@ suite("host");
         eq("action save: host_saved = the native host's saved file", w.status === 200 ? w.text : `${w.status}`, readFileSync(model, "utf8"));
         continue;
       }
-      const [o, name] = s, body = s[2].replace('"if_rev":"REV"', `"if_rev":${rev}`); // the rev now
+      const [o, name] = s, body = s[2].replace('"if_rev":"REV"', `"if_rev":${rev}`).replaceAll("FIRST_ANN", firstAnn); // the rev now
       const w = hcall(o, name, body), n = await ncall(o, name, body);
       // The load time is a clock reading (the module has none: 0): masked in query status.
       const mask = (t) => o === "query" && name === "status" ? t.replace(/"load_ms":[0-9.e+-]+/, '"load_ms":_').replace(/loaded in [^·]*·/, "loaded in _ ·") : t;
@@ -558,16 +580,26 @@ suite("host");
       const r = JSON.parse(wc).rev;
       if (o === "verb" && name === "place") placedRev = r, check("verb place: rev + 1", r === rev + 1, `${rev} -> ${r}`);
       if (o === "tool") { // B4: a completed gesture is one step (rev + 1), anything else no change
-        const placed = w.status === 200 && (JSON.parse(w.text).placed ?? null) !== null; // B3: the box tool's answers have no "placed"
-        if (placed) toolPlaced++;
+        const ans = w.status === 200 ? JSON.parse(w.text) : {};
+        const added = (ans.added ?? null) !== null; // C4: the annotate tool's click that adds
+        const placed = (ans.placed ?? null) !== null || added; // B3: the box tool's answers have no "placed"
+        if ((ans.placed ?? null) !== null) toolPlaced++;
+        if (added) toolAdded++;
         check(`tool ${name} ${body}: ${placed ? "placed, rev + 1" : "rev unchanged"}`, r === rev + (placed ? 1 : 0), `${w.status} ${w.text.slice(0, 120)}, rev ${rev} -> ${r}`);
       }
       if (o === "verb" && name === "rename") { // E1: dry run and conflict change nothing; if_rev = rev runs
         const real = !body.includes("dry_run") && !body.includes("999");
         check(`verb rename ${body}: ${real ? "200, rev + 1" : "no change"}`, real ? w.status === 200 && r === rev + 1 : r === rev && (w.status === 200) === body.includes("dry_run"), `${w.status} ${w.text}, rev ${rev} -> ${r}`);
       }
+      if (o === "verb" && name === "add_dimension" && !firstAnn && w.status === 200) {
+        const vs = JSON.parse(hcall("query", "view_annotations", JSON.stringify({ view: PLAN_N1 })).text);
+        firstAnn = vs.items[0].id;
+      }
+      if (o === "query" && name === "view_annotations" && body === JSON.stringify({ view: PLAN_N1 }) && w.status === 200 && JSON.parse(w.text).items.length === 1)
+        check("C4: the anchored dimension measures 6300 (corner 0 at x -150 to corner 1 at x 6150)", JSON.parse(w.text).items[0].value_mm === 6300, w.text);
       rev = r;
     }
+    check("C4: the annotate tool added a dimension and a text", toolAdded === 2, String(toolAdded));
     check("the place happened", placedRev === 2, String(placedRev));
     check("the tool placed a column and a beam, and a column in a plan (C1)", toolPlaced === 3, String(toolPlaced));
     // ticket B5: linked models (session/links.h). The native host links a path, the module the
@@ -625,7 +657,7 @@ suite("host");
     const vl = hcall("query", "verbs", "");
     check("query verbs in the module = golden/verbs_list.json", vl.status === 200 && vl.text === JSON.stringify(JSON.parse(read("verbs_list.json"))), vl.text.slice(0, 120));
     const lg = call(X.host_log, []).text;
-    check("host_log has the Saved lines", (lg.match(/bimble-ccore: Saved frame\.json/g) ?? []).length === 2, JSON.stringify(lg));
+    check("host_log has the Saved lines (2 saves, 1 in the C4 block)", (lg.match(/bimble-ccore: Saved frame\.json/g) ?? []).length === 3, JSON.stringify(lg));
     const local = call(X.host_mesh, [], 1);
     check("host_mesh local -> BMSH version 2", local.status === 200 && new DataView(local.bytes.buffer).getUint32(4, true) === 2);
   } catch (e) {

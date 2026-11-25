@@ -11,6 +11,7 @@
 #include "guid.h"
 #include "json_r.h"
 #include "library.h"
+#include "annot.h"
 
 #ifndef __TINYC__ /* tcc never contracts and warns on the pragma */
 #pragma STDC FP_CONTRACT OFF /* a*b+c rounds twice, as in Rust */
@@ -1446,6 +1447,301 @@ int cc_vh_set_view(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
     if (!c) return fail(err, "out of memory");
     c->view = v;
     return 0;
+}
+
+/* ---- dimensions and texts (C additions, ticket C4; annot.h): one set_view / add_view each ---- */
+
+/* The view `id` for an annotation edit: effective, a 2D view. 0 ok, -1 with the error. */
+static int ann_view(const cc_model *m, const cc_gid *id, Arena *a, cc_view *out, Buf *err) {
+    int r = effective_view(m, id, a, out);
+    if (r < 0) return fail(err, "out of memory");
+    if (!r) {
+        buf_clear(err);
+        buf_puts(err, "no view GlobalId(");
+        cc_buf_gid(err, id);
+        buf_putc(err, ')');
+        return -1;
+    }
+    if (out->kind == CC_VIEW_THREE_D) {
+        buf_clear(err);
+        buf_puts(err, "view ");
+        buf_append(err, out->name.p, out->name.n);
+        buf_puts(err, ": dimensions and texts go in 2D views");
+        return -1;
+    }
+    return 0;
+}
+
+/* The elevation 2D points get: a plan's storey, else 0. */
+static double ann_z(const cc_model *m, const cc_view *v) {
+    if (v->kind != CC_VIEW_PLAN || v->storey.n != 22) return 0.0;
+    cc_gid sid;
+    memcpy(sid.c, v->storey.p, 22);
+    const cc_storey *s = cc_model_storey(m, &sid);
+    return s ? s->elevation : 0.0;
+}
+
+/* [x, y] or [x, y, z] (z: `z`). */
+static int ann_point(Buf *err, const JrVal *v, const char *what, double z, double out[3]) {
+    if (v->type != JR_ARR || (v->n != 2 && v->n != 3)) {
+        buf_clear(err);
+        buf_puts(err, "bad arguments: ");
+        buf_puts(err, what);
+        buf_puts(err, ": expected [x, y] or [x, y, z] in mm");
+        return -1;
+    }
+    out[2] = z;
+    for (size_t i = 0; i < v->n; i++)
+        if (d_f64(err, &v->items[i], &out[i])) return -1;
+    return mm_check(err, what, out, 3);
+}
+
+typedef struct {
+    const cc_model *m;
+    double z;
+    int has_at, has_el, has_feat;
+    double at[3];
+    cc_gid el;
+    cc_str feat;
+} AnchorArgs;
+
+static int anchor_field(void *ctx, int i, const JrVal *v, Buf *err) {
+    AnchorArgs *p = ctx;
+    if (v->type == JR_NULL) return 0;
+    if (i == 0) return p->has_at = 1, ann_point(err, v, "at", p->z, p->at);
+    if (i == 1) return p->has_el = 1, d_gid(err, v, &p->el);
+    return p->has_feat = 1, d_str(err, v, &p->feat);
+}
+
+/* An end of a dimension: a point, or {at?, element?, feature?} (feature: of the element; its
+ * point now is `at`). */
+static int ann_anchor(const cc_model *m, const JrVal *v, const char *what, double z, Arena *ar, cc_anchor *out, Buf *err) {
+    static const char *const F[] = {"at", "element", "feature"};
+    memset(out, 0, sizeof *out);
+    if (v->type == JR_ARR) return ann_point(err, v, what, z, out->at);
+    AnchorArgs a;
+    memset(&a, 0, sizeof a);
+    a.m = m, a.z = z;
+    if (d_struct(err, v, "AnchorArgs", F, 3, NULL, 1, anchor_field, &a)) return -1;
+    if (a.has_el) {
+        const cc_element *e = cc_model_element(m, &a.el);
+        if (!e) return no_element(err, &a.el);
+        out->has_element = 1, out->element = a.el;
+        if (a.has_feat) {
+            if (!cc_feature_name_ok(a.feat) || cc_feature_point(m, e, a.feat, out->at)) {
+                buf_clear(err);
+                buf_puts(err, what);
+                buf_puts(err, ": the element has no feature ");
+                cc_buf_debug_str(err, a.feat.p, a.feat.n < 64 ? a.feat.n : 64);
+                buf_puts(err, " (\"origin\", \"end\", \"corner:N\")");
+                return -1;
+            }
+            char *f = arena_dup(ar, a.feat.p, a.feat.n);
+            if (!f) return fail(err, "out of memory");
+            out->has_feature = 1, out->feature.p = f, out->feature.n = a.feat.n;
+            return 0;
+        }
+    } else if (a.has_feat) {
+        buf_clear(err);
+        buf_puts(err, what);
+        return buf_puts(err, ": a feature needs its element"), -1;
+    }
+    if (!a.has_at) {
+        buf_clear(err);
+        buf_puts(err, what);
+        return buf_puts(err, ": needs at, or an element and its feature"), -1;
+    }
+    memcpy(out->at, a.at, sizeof a.at);
+    return 0;
+}
+
+/* The view with its annotations replaced by `x` (n), validated, as one command. */
+static int ann_store(const cc_model *m, const cc_view *old, cc_annotation *x, size_t n, cc_cmds *l, Buf *err) {
+    cc_view v = *old;
+    v.annotations = x, v.nannotations = n;
+    Buf why;
+    buf_init(&why);
+    if (cc_view_validate(m, &v, &why)) {
+        buf_clear(err);
+        buf_append(err, why.p, why.len);
+        buf_free(&why);
+        return -1;
+    }
+    buf_free(&why);
+    cc_command *c = cc_cmds_push(l, cc_model_view(m, &v.id) ? CC_CMD_SET_VIEW : CC_CMD_ADD_VIEW);
+    if (!c) return fail(err, "out of memory");
+    c->view = v;
+    return 0;
+}
+
+/* The annotations of `v` and room for one more, in the arena. */
+static cc_annotation *ann_copy(const cc_view *v, Arena *a) {
+    cc_annotation *x = arena_alloc(a, (v->nannotations + 1) * sizeof *x, 8);
+    if (x && v->nannotations) memcpy(x, v->annotations, v->nannotations * sizeof *x);
+    return x;
+}
+
+static void ann_new_id(cc_annotation *x) {
+    cc_guid id = cc_guid_new();
+    memcpy(x->id.c, id.c, 22);
+}
+
+typedef struct {
+    const cc_model *m;
+    Arena *ar;
+    cc_gid view, id;
+    cc_view v;
+    int has_view, has_off, has_axis, has_size, has_angle, has_by;
+    const JrVal *a, *b, *at;
+    double off, size, angle, by[2];
+    int axis;
+    cc_str text, kind;
+    int has_kind;
+} AnnArgs;
+
+static int add_dim_field(void *ctx, int i, const JrVal *v, Buf *err) {
+    static const char *const AX[] = {"aligned", "horizontal", "vertical"};
+    AnnArgs *p = ctx;
+    switch (i) {
+    case 0: return d_gid(err, v, &p->view);
+    case 1: return p->a = v, 0;
+    case 2: return p->b = v, 0;
+    case 3: return p->has_off = 1, d_f64(err, v, &p->off);
+    case 4: return v->type == JR_NULL ? 0 : (p->has_axis = 1, d_variant(err, v, "DimAxis", AX, 3, &p->axis));
+    default: return v->type == JR_NULL ? 0 : (p->has_kind = 1, d_str(err, v, &p->kind));
+    }
+}
+
+int cc_vh_add_dimension(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
+    static const char *const F[] = {"view", "a", "b", "offset", "axis", "kind"};
+    static const int REQ[] = {1, 1, 1, 1, 0, 0};
+    AnnArgs p;
+    memset(&p, 0, sizeof p);
+    if (d_struct(err, args, "AddDimensionArgs", F, 6, REQ, 1, add_dim_field, &p)) return -1;
+    cc_view v;
+    if (ann_view(m, &p.view, &l->arena, &v, err)) return -1;
+    if (mm_check(err, "offset", &p.off, 1)) return -1;
+    double z = ann_z(m, &v);
+    cc_annotation *x = ann_copy(&v, &l->arena);
+    if (!x) return fail(err, "out of memory");
+    cc_annotation *d = &x[v.nannotations];
+    memset(d, 0, sizeof *d);
+    d->type = CC_ANN_DIMENSION;
+    if (ann_anchor(m, p.a, "a", z, &l->arena, &d->a, err) || ann_anchor(m, p.b, "b", z, &l->arena, &d->b, err)) return -1;
+    double u[2], qa[2], qb[2], len;
+    if (cc_dim_line(d->a.at, d->b.at, p.off, (cc_dim_axis)p.axis, u, qa, qb, &len))
+        return fail(err, "a dimension needs two points apart (along its axis)");
+    d->offset_mm = p.off + 0.0;
+    d->axis = (cc_dim_axis)p.axis;
+    if (p.has_kind) d->has_kind = 1, d->kind = p.kind;
+    ann_new_id(d);
+    return ann_store(m, &v, x, v.nannotations + 1, l, err);
+}
+
+static int add_text_field(void *ctx, int i, const JrVal *v, Buf *err) {
+    AnnArgs *p = ctx;
+    switch (i) {
+    case 0: return d_gid(err, v, &p->view);
+    case 1: return p->at = v, 0;
+    case 2: return d_str(err, v, &p->text);
+    case 3: return v->type == JR_NULL ? 0 : (p->has_size = 1, d_f64(err, v, &p->size));
+    case 4: return v->type == JR_NULL ? 0 : (p->has_angle = 1, d_f64(err, v, &p->angle));
+    default: return v->type == JR_NULL ? 0 : (p->has_kind = 1, d_str(err, v, &p->kind));
+    }
+}
+
+int cc_vh_add_text(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
+    static const char *const F[] = {"view", "at", "text", "size_mm", "angle_deg", "kind"};
+    static const int REQ[] = {1, 1, 1, 0, 0, 0};
+    AnnArgs p;
+    memset(&p, 0, sizeof p);
+    if (d_struct(err, args, "AddTextArgs", F, 6, REQ, 1, add_text_field, &p)) return -1;
+    cc_view v;
+    if (ann_view(m, &p.view, &l->arena, &v, err)) return -1;
+    cc_annotation *x = ann_copy(&v, &l->arena);
+    if (!x) return fail(err, "out of memory");
+    cc_annotation *t = &x[v.nannotations];
+    memset(t, 0, sizeof *t);
+    t->type = CC_ANN_TEXT;
+    if (ann_point(err, p.at, "at", ann_z(m, &v), t->at)) return -1;
+    t->text = p.text;
+    t->size_mm = p.has_size ? p.size : 3.5; /* layout.rs Tool::Text: 3.5 without a text type */
+    t->angle_deg = p.has_angle ? p.angle + 0.0 : 0.0;
+    if (p.has_kind) t->has_kind = 1, t->kind = p.kind;
+    ann_new_id(t);
+    return ann_store(m, &v, x, v.nannotations + 1, l, err);
+}
+
+static int ann_id_field(void *ctx, int i, const JrVal *v, Buf *err) {
+    AnnArgs *p = ctx;
+    switch (i) {
+    case 0: return d_gid(err, v, &p->view);
+    case 1: return d_gid(err, v, &p->id);
+    case 2: return v->type == JR_NULL ? 0 : (p->has_by = 1, d_vec(err, v, p->by, 2));
+    default: return v->type == JR_NULL ? 0 : (p->has_off = 1, d_f64(err, v, &p->off));
+    }
+}
+
+/* The annotation `id` of `v`: its index, or -1 with the error. */
+static long ann_find(const cc_view *v, const cc_gid *id, Buf *err) {
+    for (size_t i = 0; i < v->nannotations; i++)
+        if (!cc_gid_cmp(&v->annotations[i].id, id)) return (long)i;
+    buf_clear(err);
+    buf_puts(err, "no dimension or text GlobalId(");
+    cc_buf_gid(err, id);
+    buf_puts(err, ") in view ");
+    buf_append(err, v->name.p, v->name.n);
+    return -1;
+}
+
+int cc_vh_move_annotation(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
+    static const char *const F[] = {"view", "id", "by", "offset"};
+    static const int REQ[] = {1, 1, 0, 0};
+    AnnArgs p;
+    memset(&p, 0, sizeof p);
+    if (d_struct(err, args, "MoveAnnotationArgs", F, 4, REQ, 1, ann_id_field, &p)) return -1;
+    cc_view v;
+    if (ann_view(m, &p.view, &l->arena, &v, err)) return -1;
+    long i = ann_find(&v, &p.id, err);
+    if (i < 0) return -1;
+    if ((p.has_by && mm_check(err, "by", p.by, 2)) || (p.has_off && mm_check(err, "offset", &p.off, 1))) return -1;
+    cc_annotation *x = ann_copy(&v, &l->arena);
+    if (!x) return fail(err, "out of memory");
+    cc_annotation *a = &x[i];
+    if (a->type == CC_ANN_TEXT) {
+        if (p.has_off) return fail(err, "offset: a text has none (move it with by)");
+        if (!p.has_by || (p.by[0] == 0.0 && p.by[1] == 0.0)) return 0;
+        a->at[0] += p.by[0], a->at[1] += p.by[1];
+    } else {
+        double off = p.has_off ? p.off : a->offset_mm;
+        if (p.has_by) { /* the line moves across itself by `by` (paper axes, as dimension_on_paper) */
+            double pa[3], pb[3], u[2], qa[2], qb[2], len;
+            cc_anchor_point(m, &a->a, pa), cc_anchor_point(m, &a->b, pb);
+            if (!cc_dim_line(pa, pb, off, a->axis, u, qa, qb, &len)) {
+                double up[2] = {u[0], -u[1]}, n[2] = {up[1], -up[0]}, byp[2] = {p.by[0], -p.by[1]};
+                off += byp[0] * n[0] + byp[1] * n[1];
+            }
+        }
+        if (off == a->offset_mm) return 0;
+        a->offset_mm = off + 0.0;
+    }
+    return ann_store(m, &v, x, v.nannotations, l, err);
+}
+
+int cc_vh_delete_annotation(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
+    static const char *const F[] = {"view", "id"};
+    static const int REQ[] = {1, 1};
+    AnnArgs p;
+    memset(&p, 0, sizeof p);
+    if (d_struct(err, args, "DeleteAnnotationArgs", F, 2, REQ, 1, ann_id_field, &p)) return -1;
+    cc_view v;
+    if (ann_view(m, &p.view, &l->arena, &v, err)) return -1;
+    long i = ann_find(&v, &p.id, err);
+    if (i < 0) return -1;
+    cc_annotation *x = ann_copy(&v, &l->arena);
+    if (!x) return fail(err, "out of memory");
+    memmove(x + i, x + i + 1, (v.nannotations - (size_t)i - 1) * sizeof *x);
+    return ann_store(m, &v, v.nannotations > 1 ? x : NULL, v.nannotations - 1, l, err);
 }
 
 /* ---- set_schedule (schedule.rs default_schedules, effective) ---- */

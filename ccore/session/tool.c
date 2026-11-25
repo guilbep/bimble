@@ -320,10 +320,14 @@ int cc_snap(const cc_snap_targets *t, const double p[2], double tol, double out[
 
 void cc_tool_free(cc_tool *t) {
     cc_snap_targets_free(&t->targets);
+    free(t->annot_text);
     memset(t, 0, sizeof *t);
 }
 
-void cc_tool_clear(cc_tool *t) { t->npoints = 0, t->has_hover = 0; }
+void cc_tool_clear(cc_tool *t) {
+    t->npoints = 0, t->has_hover = 0, t->annot = 0;
+    free(t->annot_text), t->annot_text = NULL;
+}
 
 /* ---- the ghost ---- */
 

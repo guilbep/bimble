@@ -5,6 +5,7 @@
 #include "cbor.h"
 #include "command.h"
 #include "guid.h"
+#include "annot.h"
 
 static const char *const VKIND[] = {"three_d", "plan", "section"};
 static const char *const LOOK[] = {"down", "up"};
@@ -370,16 +371,16 @@ static int d_visibility(cc_vd *d, const JrVal *v, cc_visibility *out) {
 }
 
 static int d_anchor(cc_vd *d, const JrVal *v, cc_anchor *a) {
-    static const char *const F[] = {"at", "element"};
-    const JrVal *f[2];
-    if (fields(d, v, F, 2, f, "struct Anchor", NULL) || need(d, v, f[0], F[0]) || d_vec(d, f[0], a->at, 3))
+    static const char *const F[] = {"at", "element", "feature"};
+    const JrVal *f[3];
+    if (fields(d, v, F, 3, f, "struct Anchor", NULL) || need(d, v, f[0], F[0]) || d_vec(d, f[0], a->at, 3))
         return -1;
     a->has_element = 0;
     if (f[1] && f[1]->type != JR_NULL) {
         if (d_gid(d, f[1], &a->element)) return -1;
         a->has_element = 1;
     }
-    return 0;
+    return d_opt_str(d, f[2], &a->has_feature, &a->feature);
 }
 
 static int d_annotation(cc_vd *d, const JrVal *v, cc_annotation *a) {
@@ -646,9 +647,10 @@ static void e_visibility(cc_em *e, const cc_visibility *v) {
 }
 
 static void e_anchor(cc_em *e, const cc_anchor *a) {
-    e_map(e, 1 + (size_t)(a->has_element != 0));
+    e_map(e, 1 + (size_t)(a->has_element != 0) + (size_t)(a->has_feature != 0));
     e_key(e, "at"), e_vec(e, a->at, 3);
     if (a->has_element) e_key(e, "element"), e_gid(e, &a->element);
+    if (a->has_feature) e_key(e, "feature"), e_str(e, a->feature);
     e_map_end(e);
 }
 
@@ -1011,6 +1013,11 @@ static int view_check(const cc_model *m, const cc_view *v, Buf *b) {
         if (a->type == CC_ANN_DIMENSION) {
             if (!(pt_ok(a->a.at) && pt_ok(a->b.at) && finite(a->offset_mm)))
                 return buf_puts(b, "a dimension needs finite points and offset"), -1;
+            for (int k = 0; k < 2; k++) { /* a C addition (annot.h) */
+                const cc_anchor *x = k ? &a->b : &a->a;
+                if (x->has_feature && (!x->has_element || !cc_feature_name_ok(x->feature)))
+                    return buf_puts(b, "a dimension anchor's feature is \"origin\", \"end\" or \"corner:N\" of its element"), -1;
+            }
         } else {
             if (!pt_ok(a->at)) return buf_puts(b, "a text needs a finite position"), -1;
             if (check_text(a->text, a->size_mm, a->angle_deg, b)) return -1;
@@ -1232,7 +1239,9 @@ int cc_view_dup(Arena *a, cc_view *v) {
         if (!x) return -1;
         v->annotations = x;
         for (size_t i = 0; i < v->nannotations; i++)
-            if (dup_str(a, &x[i].text) || dup_str(a, &x[i].kind)) return -1;
+            if (dup_str(a, &x[i].text) || dup_str(a, &x[i].kind) || dup_str(a, &x[i].a.feature) ||
+                dup_str(a, &x[i].b.feature))
+                return -1;
     } else v->annotations = NULL;
     cc_view_canonical(v);
     return 0;
