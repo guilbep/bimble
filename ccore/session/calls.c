@@ -44,6 +44,7 @@
 #include "fmt.h"     /* SEC1: fmt_f64_json */
 #include "georef.h"  /* SEC1: cc_georef_plan_turn */
 #include "ifc_math.h" /* SEC1: cc_sin, cc_cos */
+#include "settings.h"      /* SET1 */
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -529,7 +530,7 @@ static int q_state(cc_session *s, JsonW *w) { /* calls.rs:239-258 */
     else if (s->view == CC_VIEW_IFC && s->ifc->schema.n) jw_str_n(w, s->ifc->schema.p, s->ifc->schema.n);
     else jw_null(w); /* a model's scene and a view file's have no IFC schema */
     jw_key(w, "unsaved"), jw_bool(w, cc_session_unsaved(s));
-    jw_key(w, "user"), jw_null(w);
+    jw_key(w, "user"), cc_settings_user_json(s, w); /* SET1: calls.rs:253, Settings → You */
     jw_key(w, "version"), jw_str(w, CC_VERSION);
     jw_obj_end(w);
     return done(w);
@@ -588,6 +589,10 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "save_as")) return s->open; /* not ribbon actions (file_action) */
     if (!strcmp(name, "close")) return loaded(s);
     if (!strcmp(name, "recent_remove")) return 1; /* FS1 */
+    /* ---- SET1: ribbon.rs:591 `Settings | About | Home => true`; set_settings, settings_load (settings.h) ---- */
+    if (!strcmp(name, "settings") || !strcmp(name, "about")) return 1;
+    if (!strcmp(name, "set_settings") || !strcmp(name, "settings_load")) return 1;
+    /* ---- end SET1 ---- */
     /* ribbon.rs:575: Rust shares any scene shown: a model's, an IFC read as it is, a view file. */
     if (!strcmp(name, "share_for_viewing")) return s->open || s->view != CC_VIEW_NONE;
     /* ribbon.rs:564-572: an IFC open read-only, natively (the browser keeps no path to read it
@@ -1182,6 +1187,11 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         jw_arr_end(&w);
         return done(&w);
     }
+    /* ---- SET1: settings.h ---- */
+    if (!strcmp(name, "settings")) return cc_settings_query(s, out) ? CC_ERR : CC_OK;
+    if (!strcmp(name, "settings_text")) return cc_settings_text_query(s, out) ? CC_ERR : CC_OK;
+    if (!strcmp(name, "about")) return cc_about_json(CC_VERSION, body, n, out) ? CC_ERR : CC_OK;
+    /* ---- end SET1 ---- */
     /* ---- FS1: the recent files of the settings file (settings_file.h) ---- */
     if (!strcmp(name, "recent_files")) return cc_recent_json(s, out), out->oom ? CC_ERR : CC_OK;
     /* ---- end FS1 ---- */
@@ -1643,7 +1653,7 @@ static int new_sheet_action(cc_session *s, cc_buf *out) {
 }
 
 /* Actions the C core runs that the ribbon does not list (above). */
-static const char *const HIDDEN_ACTIONS[] = {"save_as", "close", "recent_remove" /* FS1 */};
+static const char *const HIDDEN_ACTIONS[] = {"save_as", "close", "recent_remove" /* FS1 */, "set_settings", "settings_load" /* SET1 */};
 
 /* calls.rs:538-547 call_action, ribbon.rs:650 run_action. */
 static int call_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
@@ -1688,6 +1698,10 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     if (!strcmp(name, "close_sheet")) return s->sheet_shown = 0, CC_OK;
     if (!strcmp(name, "project") || !strcmp(name, "history")) return CC_OK;
     /* ---- end FAKE1 ---- */
+    /* ---- SET1: settings, about: the page opens its dialog; set_settings, settings_load (settings.h) ---- */
+    if (!strcmp(name, "settings") || !strcmp(name, "about")) return CC_OK;
+    if (!strcmp(name, "set_settings") || !strcmp(name, "settings_load")) return cc_settings_action(s, name, body, n, out) ? CC_ERR : CC_OK;
+    /* ---- end SET1 ---- */
     /* ---- KEY1: ribbon.rs:729-744, the plan template's flag (no history step, rev unchanged) ---- */
     if (cc_toggle_index(name) >= 0) return cc_toggle_flip(s, cc_toggle_index(name)), CC_OK;
     /* ---- end KEY1 ---- */

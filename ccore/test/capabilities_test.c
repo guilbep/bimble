@@ -104,7 +104,14 @@ int main(void) {
     char *sd = ask(s, "query", "standards", "", &st);
     check_true("standards false <=> query standards is null", (cap(c1, "standards") == 0) == !strcmp(sd, "null"));
     char *se = ask(s, "query", "state", "", &st);
-    check_true("user false <=> state.user is null", (cap(c1, "user") == 0) == (strstr(se, "\"user\":null") != NULL));
+    /* SET1: user true: state.user follows Settings → You (null with no name, as Rust's calls.rs:253) */
+    check_true("user true: state.user null with no name set", cap(c1, "user") == 1 && strstr(se, "\"user\":null") != NULL);
+    {
+        char *r = ask(s, "action", "set_settings", "{\"user_name\":\"Ada Lovelace\"}", &st);
+        char *se2 = ask(s, "query", "state", "", &st);
+        check_true("user true: a name set -> state.user", strstr(se2, "\"user\":{\"email\":null,\"name\":\"Ada Lovelace\",\"trigram\":\"AL\"}") != NULL);
+        free(r), free(se2);
+    }
     check_true("settings false <=> action settings off", (cap(c1, "settings") == 0) == !enabled(s, "settings"));
     check_true("about false <=> action about off", (cap(c1, "about") == 0) == !enabled(s, "about"));
     check_true("materials false <=> action materials off", (cap(c1, "materials") == 0) == !enabled(s, "materials"));

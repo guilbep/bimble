@@ -60,7 +60,7 @@ const FEATURES = [
   ["wasm carrier", "wasm_api wasm_stub"],
   ["host server (HTTP, static files, main, platform, fonts)", "server static main platform_native platform_win fonts"],
   ["MCP", "mcp"],
-  ["files from the page (FS1: the dialog's queries, POST /stage; the settings file, recent files)", "fs settings_file"],
+  ["files from the page (FS1: the dialog's queries, POST /stage; the settings file, recent files; SET1: the settings, About)", "fs settings_file settings"],
   ["merged string literals (wasm <internal>)", "<internal>"],
   ["kernel manifold (C++, native only)", "lib:manifold lib:manifoldc lib:Clipper2"],
   ["C++ runtime (libstdc++, libgcc, unwinder)", "lib:stdc++ lib:gcc lib:gcc_eh"],

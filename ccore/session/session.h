@@ -128,6 +128,9 @@ typedef struct cc_session {
     size_t nrecent_files;
     char *settings_file;
     /* ---- end FS1 ---- */
+    /* ---- SET1: the user's settings (settings.h), NULL until first asked ---- */
+    struct cc_user_settings *user_settings;
+    /* ---- end SET1 ---- */
     /* ---- KEY1: the plan annotation toggles (toggles.h), bit i set = off; 0 (all on) as new ---- */
     unsigned plan_off;
     /* ---- end KEY1 ---- */

@@ -1,11 +1,13 @@
 /* The settings file and the recent files (ticket FS1): settings_file.h. */
 #include "settings_file.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "arena.h"
 #include "json_r.h"
 #include "json_w.h"
 #include "session.h"
+#include "settings.h" /* SET1 */
 
 #ifndef CC_VIEW_ONLY /* the viewer-only wasm (build.sh wasm-view) has no files: the stubs at the end */
 
@@ -16,7 +18,7 @@ static char *dup_n(const char *s, size_t n) {
 }
 
 /* settings.rs from_json `recent`: the strings, not empty, <= 4096 bytes, the first 12. */
-static void recent_of(const JrVal *v, char **paths, size_t *n) {
+void cc_settings_recent_of(const JrVal *v, char **paths, size_t *n) {
     const JrVal *r = v && v->type == JR_OBJ ? jr_get(v, "recent") : NULL;
     /* serde_json keeps a repeated key's last value: the last "recent" */
     for (size_t i = 0; v && v->type == JR_OBJ && i < v->n; i++)
@@ -42,7 +44,7 @@ int cc_settings_recent_read(const cc_platform *pf, const char *file, char **path
     JrError je;
     const JrVal *v = jr_parse(&a, text, len, &je);
     /* settings.rs: broken JSON reads as the defaults (an empty list) */
-    if (v) recent_of(v, paths, n);
+    if (v) cc_settings_recent_of(v, paths, n);
     arena_free(&a);
     free(text);
     return v ? 0 : -1;
@@ -68,8 +70,8 @@ static int same_key(const JrMember *a, const JrMember *b) {
     return a->key_n == b->key_n && !memcmp(a->key, b->key, a->key_n);
 }
 
-/* `recent` (not NULL at the top level only): the list that replaces the member "recent". */
-static int put_value(Buf *b, const JrVal *v, char *const *recent, size_t nrecent, int top);
+/* `m` (at the top level only): the members that replace the file's of the same key (SET1). */
+static int put_value(Buf *b, const JrVal *v, const cc_settings_member *m, size_t nm, int top);
 
 static void put_recent(Buf *b, char *const *paths, size_t n) {
     buf_putc(b, '[');
@@ -80,44 +82,51 @@ static void put_recent(Buf *b, char *const *paths, size_t n) {
     buf_putc(b, ']');
 }
 
-static int put_object(Buf *b, const JrVal *v, char *const *recent, size_t nrecent, int top) {
+/* A file member's key against a replacing member's: bytewise, then the shorter first. */
+static int key_vs(const JrMember *a, const char *k) {
+    size_t kn = strlen(k), n = a->key_n < kn ? a->key_n : kn;
+    int c = memcmp(a->key, k, n);
+    if (c) return c;
+    return a->key_n < kn ? -1 : a->key_n > kn;
+}
+
+static void put_member(Buf *b, const cc_settings_member *m, int *first) {
+    if (!*first) buf_putc(b, ',');
+    *first = 0;
+    json_escape(b, m->key, strlen(m->key));
+    buf_putc(b, ':');
+    buf_append(b, m->json, m->json_n);
+}
+
+static int put_object(Buf *b, const JrVal *v, const cc_settings_member *m, size_t nm, int top) {
     KeyAt *k = malloc((v->n ? v->n : 1) * sizeof *k);
     if (!k) return -1;
     for (size_t i = 0; i < v->n; i++) k[i] = (KeyAt){&v->members[i], i};
     qsort(k, v->n, sizeof *k, key_cmp);
-    int had_recent = 0, first = 1, rc = 0;
+    if (!top) nm = 0;
+    size_t j = 0;
+    int first = 1, rc = 0;
     buf_putc(b, '{');
     for (size_t i = 0; i < v->n && !rc; i++) {
         if (i + 1 < v->n && same_key(k[i].m, k[i + 1].m)) continue; /* a later one of the same key */
-        int is_recent = top && k[i].m->key_n == 6 && !memcmp(k[i].m->key, "recent", 6);
-        /* "recent" where it sorts, when the file has none */
-        if (top && !had_recent && !is_recent) {
-            static const char R[] = "recent";
-            size_t kn = k[i].m->key_n < 6 ? k[i].m->key_n : 6;
-            int c = memcmp(k[i].m->key, R, kn);
-            if (c > 0 || (c == 0 && k[i].m->key_n > 6)) {
-                if (!first) buf_putc(b, ',');
-                buf_puts(b, "\"recent\":"), put_recent(b, recent, nrecent);
-                had_recent = 1, first = 0;
-            }
+        while (j < nm && key_vs(k[i].m, m[j].key) > 0) put_member(b, &m[j++], &first); /* added where it sorts */
+        if (j < nm && key_vs(k[i].m, m[j].key) == 0) { /* replaced */
+            put_member(b, &m[j++], &first);
+            continue;
         }
         if (!first) buf_putc(b, ',');
         first = 0;
         json_escape(b, k[i].m->key, k[i].m->key_n);
         buf_putc(b, ':');
-        if (is_recent) put_recent(b, recent, nrecent), had_recent = 1;
-        else rc = put_value(b, &k[i].m->val, NULL, 0, 0);
+        rc = put_value(b, &k[i].m->val, NULL, 0, 0);
     }
-    if (top && !had_recent) {
-        if (!first) buf_putc(b, ',');
-        buf_puts(b, "\"recent\":"), put_recent(b, recent, nrecent);
-    }
+    while (!rc && j < nm) put_member(b, &m[j++], &first);
     buf_putc(b, '}');
     free(k);
     return rc;
 }
 
-static int put_value(Buf *b, const JrVal *v, char *const *recent, size_t nrecent, int top) {
+static int put_value(Buf *b, const JrVal *v, const cc_settings_member *m, size_t nm, int top) {
     switch (v->type) {
     case JR_NULL: buf_puts(b, "null"); return 0;
     case JR_BOOL: buf_puts(b, v->b ? "true" : "false"); return 0;
@@ -131,9 +140,28 @@ static int put_value(Buf *b, const JrVal *v, char *const *recent, size_t nrecent
         }
         buf_putc(b, ']');
         return 0;
-    case JR_OBJ: return put_object(b, v, recent, nrecent, top); /* depth: jr_parse's bound */
+    case JR_OBJ: return put_object(b, v, m, nm, top); /* depth: jr_parse's bound */
     }
     return -1;
+}
+
+int cc_settings_merge(const char *text, size_t n, const cc_settings_member *m, size_t nm, Buf *out, char *why) {
+    if (!text || !n) {
+        int first = 1;
+        buf_putc(out, '{');
+        for (size_t j = 0; j < nm; j++) put_member(out, &m[j], &first);
+        buf_putc(out, '}');
+        return out->oom ? -1 : 0;
+    }
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jr_parse(&a, text, n, &je);
+    int rc = -1;
+    if (!v || v->type != JR_OBJ) snprintf(why, 128, "%s", v ? "not a JSON object" : je.msg);
+    else rc = put_value(out, v, m, nm, 1);
+    arena_free(&a);
+    return rc || out->oom ? -1 : 0;
 }
 
 /* The folders of `file`, made one by one (settings.rs write: create_dir_all). */
@@ -152,38 +180,41 @@ static void make_parents(const cc_platform *pf, const char *file) {
     free(p);
 }
 
-int cc_settings_recent_write(const cc_platform *pf, const char *file, char *const *paths, size_t n) {
+int cc_settings_write(const cc_platform *pf, const char *file, const cc_settings_member *m, size_t nm) {
     char *text = NULL;
     size_t len = 0;
     int st = pf->read_file(pf->ctx, file, CC_SETTINGS_MAX_BYTES, &text, &len);
     Buf b;
     buf_init(&b);
     int rc = 0;
+    char why[128] = "";
     if (st == CC_PF_NOT_FOUND) {
         make_parents(pf, file);
-        buf_puts(&b, "{\"recent\":"), put_recent(&b, paths, n), buf_putc(&b, '}');
+        rc = cc_settings_merge(NULL, 0, m, nm, &b, why);
     } else if (st != CC_PF_OK) {
-        cc_log(pf, "bimble-ccore: %s: cannot read the settings: the recent files are kept in memory", file);
+        cc_log(pf, "bimble-ccore: %s: cannot read the settings: the change is kept in memory", file);
         rc = -1;
-    } else {
-        Arena a;
-        arena_init(&a, 0);
-        JrError je;
-        const JrVal *v = jr_parse(&a, text, len, &je);
-        if (!v || v->type != JR_OBJ) {
-            cc_log(pf, "bimble-ccore: %s: not a JSON object (%s): left alone, the recent files are kept in memory", file,
-                   v ? "another value" : je.msg);
-            rc = -1;
-        } else rc = put_value(&b, v, paths, n, 1);
-        arena_free(&a);
+    } else if (cc_settings_merge(text, len, m, nm, &b, why)) {
+        cc_log(pf, "bimble-ccore: %s: not a JSON object (%s): left alone, the change is kept in memory", file, why);
+        rc = -1;
     }
     free(text);
     if (!rc && b.oom) rc = -1;
     if (!rc && pf->write_file(pf->ctx, file, b.p, b.len)) {
-        cc_log(pf, "bimble-ccore: %s: cannot write the settings: the recent files are kept in memory", file);
+        cc_log(pf, "bimble-ccore: %s: cannot write the settings: the change is kept in memory", file);
         rc = -1;
     }
     buf_free(&b);
+    return rc;
+}
+
+int cc_settings_recent_write(const cc_platform *pf, const char *file, char *const *paths, size_t n) {
+    Buf r;
+    buf_init(&r);
+    put_recent(&r, paths, n);
+    cc_settings_member m = {"recent", r.p ? r.p : "[]", r.p ? r.len : 2};
+    int rc = r.oom ? -1 : cc_settings_write(pf, file, &m, 1);
+    buf_free(&r);
     return rc;
 }
 
@@ -195,6 +226,7 @@ static void list_clear(cc_session *s) {
 }
 
 void cc_recent_free(cc_session *s) {
+    cc_settings_free(s); /* SET1: the settings follow the file */
     list_clear(s);
     free(s->settings_file);
     s->settings_file = NULL;

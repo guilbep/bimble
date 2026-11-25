@@ -106,7 +106,8 @@ try {
   const enabled = actions.filter((a) => a.enabled).map((a) => a.name).sort().join(",");
   // No model: save, undo, redo, place_* and export_ifc* need one (ribbon.rs:577-590); new, open
   // and import_ifc are always on (ribbon.rs:559; the C core runs them since ticket A5).
-  check("query actions: enabled set without a model (ribbon.rs:555)", enabled === "home,import_ifc,new,open", enabled);
+  // SET1: about, settings (ribbon.rs:591 `Settings | About | Home => true`).
+  check("query actions: enabled set without a model (ribbon.rs:555)", enabled === "about,home,import_ifc,new,open,settings", enabled);
   const hi = await call("query", "history");
   check("query history -> {redo:[],undo:[]}", hi.status === 200 && hi.body === '{"redo":[],"undo":[]}', hi.body);
   for (const [name, want] of [["status", "null"], ["placing", "null"], ["pointer", "null"], ["views", "[]"], ["sheets", "[]"],
@@ -234,7 +235,7 @@ try {
   check("model: query storeys = golden/query.txt first record", sto.status === 200 && sto.body === goldenAnswer("storeys"), sto.body);
   const en = async () => (await mq("actions")).filter((a) => a.enabled).map((a) => a.name).sort().join(",");
   const en0 = await en();
-  check("model: enabled actions, nothing to undo or save", en0 === "edges,export_ifc2x3,export_ifc4,fit,hatching,history,home,import_ifc,link_model,manage_links,measure,new,new_sheet,on_paper,open,openings,orthographic,place_beam,place_column,place_slab,place_wall,project,reveal_hidden,section_box,section_labels,section_marks,share_for_viewing,slab_levels,top", en0); // edges, fit, hatching, orthographic, top: ticket Q2 (ribbon.rs:591, :612; the 3D view, not flat); share_for_viewing: ticket A5c (ribbon.rs:575); reveal_hidden, section_box: ticket B3 (ribbon.rs:592, :596); link_model, manage_links: ticket B5 (ribbon.rs:596, :611); measure: ticket T1 (ribbon.rs:612 `_ => loaded`); FAKE1 (requirement change, Rust's rules): link_pdf, link_dxf off in the 3D view (ribbon.rs:595 `loaded && flat`); history (ribbon.rs:590 editable), project, new_sheet (ribbon.rs:611 `_ => loaded`) on
+  check("model: enabled actions, nothing to undo or save", en0 === "about,edges,export_ifc2x3,export_ifc4,fit,hatching,history,home,import_ifc,link_model,manage_links,measure,new,new_sheet,on_paper,open,openings,orthographic,place_beam,place_column,place_slab,place_wall,project,reveal_hidden,section_box,section_labels,section_marks,settings,share_for_viewing,slab_levels,top", en0); // edges, fit, hatching, orthographic, top: ticket Q2 (ribbon.rs:591, :612; the 3D view, not flat); share_for_viewing: ticket A5c (ribbon.rs:575); reveal_hidden, section_box: ticket B3 (ribbon.rs:592, :596); link_model, manage_links: ticket B5 (ribbon.rs:596, :611); measure: ticket T1 (ribbon.rs:612 `_ => loaded`); FAKE1 (requirement change, Rust's rules): link_pdf, link_dxf off in the 3D view (ribbon.rs:595 `loaded && flat`); history (ribbon.rs:590 editable), project, new_sheet (ribbon.rs:611 `_ => loaded`) on
   const r0 = await rev();
   check("model: rev 1 after load (lib.rs:1679)", r0 === 1, String(r0));
 

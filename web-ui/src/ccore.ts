@@ -29,7 +29,13 @@
 // - PDF export (ticket D7, ccore/session/sheet_svg.h): `bytes("query", "sheet_pdf" | "view_pdf", body)` answers
 //   the PDF's bytes. SIZE1: Helvetica, nothing fetched (no font is shipped); `host_fonts` stays for a
 //   page that hands Roboto files over, and `query pdf_fonts` says whether it did.
+// - Settings (ticket SET1, ccore/session/settings.h): the text of Rust's settings file kept in
+//   localStorage `bimble.settings` (settings.rs:246), loaded at start (`settings_load`), stored again
+//   after each `set_settings`.
 
+// ---- SET1: the browser's copy of the settings file (settings.rs:246) ----
+export const SETTINGS_KEY = "bimble.settings";
+// ---- end SET1 ----
 // ---- FS1: one code path for pickers and the unsaved question (files.ts) ----
 import { pickFile } from "./files";
 // ---- end FS1 ----
@@ -334,6 +340,17 @@ export async function ccoreClient(params: URLSearchParams): Promise<CcoreClient>
   };
   callHost = call;
   emitChange = emit;
+  // ---- SET1: the user's settings (ccore/session/settings.h). The module has no folder: the page keeps
+  // the file's text under the Rust viewer's own key (settings.rs:246 `bimble.settings`, Rust's JSON form),
+  // hands it in at start and stores it again after each change. The viewer-only build keeps none. ----
+  try {
+    const kept = localStorage.getItem(SETTINGS_KEY);
+    if (kept !== null) call("action", "settings_load", JSON.stringify({ text: kept }));
+  } catch (e) { console.info(`ccore: settings not loaded: ${String(e)}`); }
+  const keepSettings = () => {
+    try { localStorage.setItem(SETTINGS_KEY, call("query", "settings_text", "{}")); } catch (e) { console.warn(`ccore: settings not kept: ${String(e)}`); }
+  };
+  // ---- end SET1 ----
   window.ccoreSave = () => {
     // Save is enabled only with unsaved changes (as the native host): else the last saved text.
     if ((JSON.parse(last || "{}") as { unsaved?: boolean }).unsaved) call("action", "save");
@@ -356,7 +373,7 @@ export async function ccoreClient(params: URLSearchParams): Promise<CcoreClient>
     dismiss_belongs: () => void call("dismiss_belongs", null),
     standards_action: (n) => void call("standards_action", n),
     tool: (n, json) => call("tool", n, json),
-    action_with: (n, json) => call("action", n, json),
+    action_with: (n, json) => { const r = call("action", n, json); if (n === "set_settings") keepSettings(); return r; }, // SET1
     bytes: async (op, n, body) => { // D7: the answer's bytes as they are (the PDF)
       X.host_clock(Date.now() / 1000);
       const r = run(X.call.bind(X), [enc.encode(op), enc.encode(n), enc.encode(body)]);

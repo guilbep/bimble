@@ -723,3 +723,42 @@ blocks), `web-ui/src/files.ts`; tests `ccore/test/fs_test.mjs`, `ccore/test/lab_
   material lists hide their elements on screen (`visibility_sets` `by_view`, a C addition). Rust
   also keeps them while the view is shown unsaved in a read-only IFC (its side file); the C core
   has none, so a read-only scene keeps "in view" session-wide as before (DEVIATIONS 16).
+## 23. The user's settings and About (ticket SET1)
+
+**Oracle.** `crates/bimble-viewer/src/settings.rs` (`Settings`, `from_json`, `to_json`, the file's
+folder), `ui_theme.rs` (themes, fonts, text sizes), `lib.rs:4023-4190` (Settings, About),
+`calls.rs:253` (`state.user`), `ribbon.rs:591` (`settings`, `about` always enabled).
+
+**Same.** One file for both apps, the same eleven fields, names, defaults and reading rules
+(clamps, ids, `short_line`, 0.14's `wgs84`, a broken file reads as the defaults); written as Rust's
+`to_json` writes it (a sorted map, compact, `text_size` an f32 as a JSON f64: 12.3 is
+`12.300000190734863`); `state.user` `{email, name, trigram}`, null with no name.
+
+**Differs.**
+- **Unknown members are kept** on write (Rust's `to_json` drops them): a file written by a later
+  version keeps what this one does not know. Rust reads such a file unchanged (it ignores them).
+- **`set_settings` refuses** a value out of range, an unknown id or field, a line over 120
+  characters or with a control character (Rust's reader clamps or falls back; its dialog cannot
+  produce them). A refused call changes nothing.
+- **A file that is not a JSON object is left alone** (FS1's rule): the change is kept for the
+  session and `query settings` says so in `note`; Rust overwrites it with the defaults and the
+  change.
+- **Applies**: `memory_share`, `moving_fps`, `moving_proxies` and `gpu_cull` are stored and round
+  tripped but used by nothing (the lab's viewport is the page's WebGL one, natively too): `query
+  settings` reports `applies: false` and what each would need. They are not shown in the lab's
+  dialog. `recent` does not apply in the browser (no paths).
+- **The look**: the lab maps Rust's theme ids onto its own design tokens (`web-ui/src/shell/theme.ts`).
+  `grey`, Rust's default, is the lab's own default look (the Bimble design), not Rust's grey
+  surfaces; the five others follow Rust's colours. `roboto`, Rust's default font, is the lab's own
+  text font (Source Sans 3; the lab ships no Roboto); `ubuntu` asks the system for Ubuntu.
+- **Trigram**: upper case for Latin, Greek and Cyrillic letters only (`char::to_uppercase` knows
+  every script).
+- **About**: `query about` adds the C core's build (`ccore/VERSION`) and the page's commit to Rust's
+  three lines; "Graphics" is the page's WebGL renderer string, not a wgpu adapter.
+- **The goldens** `golden/settings/*.json` are written by hand in Rust's form (this ticket had no
+  Rust build): `ccore_golden` mode `settings` is still to write them from Rust.
+
+**Where.** `ccore/session/settings.c`, `settings_file.c` (the writer, shared with FS1),
+`calls.c` and `capabilities.c` (SET1 blocks); `web-ui/src/dialogs/Settings.vue`, `About.vue`,
+`web-ui/src/shell/theme.ts`, `web-ui/src/ccore.ts` (SET1 block); tests `ccore/test/settings_test.c`,
+`ccore/test/lab_settings.mjs`.

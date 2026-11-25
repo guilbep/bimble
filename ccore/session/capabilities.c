@@ -18,7 +18,7 @@ static const struct {
     const char *name;
     int when;
 } CAPS[] = {
-    {"about", NO},             /* SET1 */
+    {"about", YES},            /* SET1: action about, query about (settings.h) */
     {"collaboration", NO},     /* calls.c q_collab: a constant "nobody" (H2c) */
     {"export_ifc", FULL_BUILD},
     {"export_pdf", FULL_BUILD}, /* sheet_svg.h sheet_pdf, view_pdf (D7) */
@@ -43,14 +43,14 @@ static const struct {
     {"references", YES},       /* links.h, links_ref.h */
     {"schedules", FULL_BUILD},
     {"section_catalogue", NO},
-    {"settings", NO},          /* SET1 */
+    {"settings", FULL_BUILD},  /* SET1: query settings, action set_settings (settings.h; not in the viewer-only build) */
     {"sheet_tools", NO},       /* actions sheet_tool_* */
     {"sheets", YES},           /* query sheets, sheet_layout (SH1) */
     {"site", NO},
     {"standards", NO},         /* query standards: null (STD1) */
     {"steel", NO},
     {"subprojects", NO},
-    {"user", NO},              /* query state: user null (SET1) */
+    {"user", FULL_BUILD},      /* SET1: state.user from the settings (null until a name is set, as Rust) */
     {"users", NO},
     {"versions", NATIVE},      /* versions.h: the history store next to the file (H1) */
     {"views", FULL_BUILD},     /* SEC1: verbs view_add, view_remove, view_edit; sections shown live */

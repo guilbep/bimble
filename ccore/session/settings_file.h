@@ -13,6 +13,7 @@
 #define CCORE_SESSION_SETTINGS_FILE_H
 #include <stddef.h>
 #include "buf.h"
+#include "json_r.h"
 #include "platform.h"
 
 typedef struct cc_session cc_session;
@@ -26,6 +27,24 @@ typedef struct cc_session cc_session;
 int cc_settings_recent_read(const cc_platform *pf, const char *file, char **paths, size_t *n);
 /* Writes `paths` as the file's "recent" (above). 0 ok, -1 left alone (logged). */
 int cc_settings_recent_write(const cc_platform *pf, const char *file, char *const *paths, size_t n);
+
+/* ---- SET1: the other fields (settings.h) through the same writer ---- */
+/* The "recent" list of a parsed settings value, as cc_settings_recent_read (paths malloc'd). */
+void cc_settings_recent_of(const JrVal *v, char **paths, size_t *n);
+/* A member written in place of the file's member of that key, or added where it sorts. */
+typedef struct {
+    const char *key;
+    const char *json; /* its value, JSON text */
+    size_t json_n;
+} cc_settings_member;
+/* `text` (a JSON object; NULL or n 0: an empty one) with `m[0..nm)` (sorted by key, bytewise) in
+ * place of its members of those keys, the others kept: canonical, as above, into `out`.
+ * 0, or -1 when `text` is not a JSON object (the reason in why[0..128)). */
+int cc_settings_merge(const char *text, size_t n, const cc_settings_member *m, size_t nm, Buf *out, char *why);
+/* The file with those members (a missing file: created with them alone, and its folder).
+ * 0, -1 left alone (logged). */
+int cc_settings_write(const cc_platform *pf, const char *file, const cc_settings_member *m, size_t nm);
+/* ---- end SET1 ---- */
 
 /* The session's list. `file` NULL: the list lives in memory only (tests, the dev host). */
 void cc_recent_setup(cc_session *s, const char *file);
