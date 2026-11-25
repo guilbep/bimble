@@ -5,7 +5,8 @@
   "scripts": {
     "wasm": "node scripts/copy-wasm.mjs",
     "wasm:dev": "PROFILE=dev LAB=1 ../scripts/build-web.sh && node scripts/copy-wasm.mjs",
-    "dev": "vite",
+    "dev": "../ccore/dev.sh",
+    "dev:wasm": "npm run ccore:wasm && VITE_CCORE=1 vite",
     "ccore:dev": "../ccore/dev.sh",
     "ccore:wasm": "../ccore/build.sh wasm && node scripts/copy-ccore.mjs",
     "ccore:wasm-view": "../ccore/build.sh wasm-view && node scripts/copy-ccore.mjs --view",

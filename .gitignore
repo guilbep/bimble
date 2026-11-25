@@ -16,6 +16,9 @@ web-ui/public/bimble/
 web-ui/public/ccore/
 perf-results/
 web-ui/design-check/out/
+# ccore/tools/compile_commands.sh (absolute paths: per machine)
+ccore/compile_commands.json
+__pycache__/
 
 # Playwright MCP session output (browser checks)
 .playwright-mcp/

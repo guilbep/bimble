@@ -1,65 +1,77 @@
-# Needs Rust stable, CMake and a C++ compiler. `make help` lists the targets.
-# ponytail: Windows has no make by default; the cargo commands in the README work there.
+# Short names for the C core's usual commands (DEV.md). Each target is one line over ccore/ and
+# web-ui/; the scripts there are the reference and run without make. `make help` lists the targets.
 
-WASM_BINDGEN = $(shell awk '/^name = "wasm-bindgen"$$/ {getline; gsub(/version = |"/, ""); print; exit}' Cargo.lock)
-ORACLE = target/oracle
+S ?=
 
-.PHONY: build run install test check fmt web-setup web serve oracle perf-web clean help
-
-build: ## Build the bimble binary (target/release/bimble)
-	cargo build --release -p bimble-cli
-
-run: ## Run bimble, e.g. make run ARGS="view model.ifc"
-	cargo run --release -p bimble-cli -- $(ARGS)
-
-install: ## Install bimble into ~/.cargo/bin
-	cargo install --path crates/bimble-cli --locked
-
-test: ## Run the tests
-	cargo test --workspace
-
-check: ## What CI's rust job runs; must pass before a pull request
-	cargo fmt --all --check
-	cargo clippy --workspace --all-targets -- -D warnings
-	cargo test --workspace
-
-fmt: ## Format the code
-	cargo fmt --all
-
-web-setup: ## Install what the browser build needs (wasm32 target, wasm-bindgen-cli)
-	rustup target add wasm32-unknown-unknown
-	cargo install wasm-bindgen-cli --version $(WASM_BINDGEN) --locked
-
-web: ## Build the browser version into web/dist (also needs npm)
-	scripts/build-web.sh
-
-serve: web ## Build the browser version and serve it on http://localhost:8000
-	python3 -m http.server -d web/dist 8000
-
-oracle: build ## Compare with IfcOpenShell (pip install ifcopenshell)
-	mkdir -p $(ORACLE)
-	target/release/bimble demo $(ORACLE)/frame.bimble
-	target/release/bimble export-ifc $(ORACLE)/frame.bimble $(ORACLE)/frame.ifc
-	python3 -I scripts/check_ifc.py $(ORACLE)/frame.bimble $(ORACLE)/frame.ifc
-	target/release/bimble info $(ORACLE)/frame.ifc --elements-json > $(ORACLE)/ours.jsonl
-	python3 -I scripts/compare_ifcopenshell.py $(ORACLE)/frame.ifc $(ORACLE)/ours.jsonl
-
-perf-web: ## Time the Vue lab and the viewer page with Lighthouse (4x CPU, 10 Mbit/s, gzip), held to web-ui/perf/budgets.txt
-	scripts/build-web.sh
-	cargo build --release -p bimble-cli
-	mkdir -p web-ui/public
-	target/release/bimble demo web-ui/public/perf-small.bimble
-	target/release/bimble demo web-ui/public/perf-large.bimble --bays-x 20 --bays-y 20 --storeys 10
-	target/release/bimble info web-ui/public/perf-small.bimble
-	target/release/bimble info web-ui/public/perf-large.bimble
-	cp web-ui/public/perf-large.bimble web/dist/
-	cd web-ui && npm ci && npm run wasm && npm run build
-	cd web-ui && node perf/lighthouse.mjs $(or $(PERF_WEB_RUNS),5)
-	node web-ui/perf/check.mjs perf-results/web.txt web-ui/perf/budgets.txt 0.15
-
-clean: ## Delete build output
-	cargo clean
-	rm -rf web/dist
+.PHONY: help doctor deps tools dev dev-wasm build debug test gate full san lab release wasm lab-build weight perf parity flags clean
 
 help: ## List the targets
-	@awk -F':.*## ' '/^[a-z-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk -F':.*## ' '/^[a-z-]+:.*## / {printf "  make %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+doctor: ## Show which prerequisites are found (DEV.md section 1)
+	@for t in clang wasm-ld tcc wasm-opt cmake node npm inotifywait gdb; do \
+	  printf '  %-12s %s\n' "$$t" "$$(command -v $$t || echo MISSING)"; done
+	@printf '  %-12s %s\n' chromium "$${CHROMIUM:-$$(test -x /usr/bin/chromium && echo /usr/bin/chromium || echo 'MISSING (or set CHROMIUM)')}"
+	@printf '  %-12s %s\n' manifold "$$(test -d ccore/out/deps/manifold/lib && echo ccore/out/deps/manifold || echo 'not built: make deps')"
+	@printf '  %-12s %s\n' node_modules "$$(test -e web-ui/node_modules && echo web-ui/node_modules || echo 'missing: cd web-ui && npm ci')"
+	@printf '  %-12s pinned %s\n' tcc "$$(ccore/ci/tcc.sh --commit)"
+
+deps: ## Build the boolean kernel (manifold) into ccore/out/deps (minutes, once)
+	ccore/deps.sh
+
+tools: ## Install the pinned tcc and wasm-opt into ~/.local (then put their bin/ on PATH)
+	ccore/ci/tcc.sh $(HOME)/.local/tcc
+	ccore/ci/binaryen.sh $(HOME)/.local/binaryen
+
+dev: ## The edit loop: host + Vite, rebuilt and restarted on every save in ccore/src|session|host
+	ccore/dev.sh
+
+dev-wasm: ## The lab on the C wasm module in the page (no server)
+	cd web-ui && npm run dev:wasm
+
+build: ## Library, test binaries, host and tools with tcc (ccore/out/tcc)
+	ccore/build.sh tcc
+
+debug: ## ccore/out/debug/bimble-ccore: the host with clang -O0 -g, for gdb (no kernel)
+	mkdir -p ccore/out/debug
+	cd ccore && clang -std=c11 -O0 -g -DRYU_ONLY_64_BIT_OPS -Isrc -Ivendor/ryu -Isession -Ihost \
+	  $$(ls src/*.c | grep -v wasm_stub) session/*.c host/*.c -lm -pthread -o out/debug/bimble-ccore
+
+test: ## The C suites with tcc; S="json fmt" for some of them
+	ccore/test/run.sh $(S)
+
+gate: ## The gate of every change: ccore/ci/run.sh fast
+	ccore/ci/run.sh fast
+
+full: ## Every suite once, as CI on Linux: ccore/ci/run.sh full
+	ccore/ci/run.sh full
+
+san: ## The C suites with clang, ASan and UBSan; S="json" for some
+	CC=clang CFLAGS="-fsanitize=address,undefined" ccore/test/run.sh $(S)
+
+lab: ## The Chromium lab suites: ccore/ci/run.sh lab
+	ccore/ci/run.sh lab
+
+release: ## The release archive (ccore/out/release), then its test
+	ccore/build.sh release && node ccore/test/release_test.mjs
+
+wasm: ## Both wasm modules, copied into web-ui/public/ccore
+	cd web-ui && npm run ccore:wasm && npm run ccore:wasm-view
+
+lab-build: ## The lab as GitHub Pages serves it under /c/ (into web-ui/dist)
+	cd web-ui && npm run build:ccore
+
+weight: ## ccore/results/weight.md (after make release and make wasm)
+	node ccore/tools/weight.mjs
+
+perf: ## ccore/results/perf.md in the short mode (node ccore/tools/perf.mjs --full for all)
+	node ccore/tools/perf.mjs
+
+parity: ## The C host against the committed Rust answers (node ccore/tools/parity.mjs --write)
+	node ccore/tools/parity.mjs
+
+flags: ## ccore/compile_commands.json, for editors that do not read ccore/compile_flags.txt
+	ccore/tools/compile_commands.sh
+
+clean: ## Delete ccore/out (the kernel too: make deps again)
+	rm -rf ccore/out
