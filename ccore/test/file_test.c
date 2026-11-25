@@ -2,11 +2,12 @@
  * robustness on broken input (run it under ASan/UBSan too), validation errors.
  * The sources are included here because test/run.sh links a fixed list of src files. */
 #define _POSIX_C_SOURCE 199309L /* clock_gettime under -std=c11 */
+#include <string.h>
 #include <stdint.h>
 #include <time.h>
-#include "../src/json_r.c"
-#include "../src/model.c"
-#include "../src/file.c"
+#include "../src/json_r.h"
+#include "../src/model.h"
+#include "../src/file.h"
 #include "check.h"
 
 static const char *golden; /* the golden directory */
@@ -21,7 +22,7 @@ static int roundtrip(const char *text, size_t n, Buf *out, cc_error *err) {
     return rc;
 }
 
-static int is_id_char(char c) { return in_alphabet(c); }
+static int is_id_char(char c) { return c != 0 && strchr(cc_gid_alphabet, c) != NULL; }
 
 /* "<new-N>" -> GlobalId::from_u128(N) (N < 64). */
 static void unmask(const char *s, size_t n, Buf *out) {

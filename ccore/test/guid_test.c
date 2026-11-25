@@ -2,7 +2,7 @@
  * order of the element ids in golden/frame.json (Rust's BTreeMap order).
  * test/run.sh compiles a fixed list of src files, so this suite includes guid.c itself. */
 #include <stdint.h>
-#include "../src/guid.c"
+#include "../src/guid.h"
 #include "check.h"
 
 static int hexval(char c) {
