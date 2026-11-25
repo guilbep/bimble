@@ -8,7 +8,9 @@ import { currentScreen } from "../shell/send";
 /** What a page or dialog module may export. */
 /** A screen's status bar hint: an i18n key, or a function returning `{ key, params }` or a translated string. */
 export type Hint = string | (() => string | { key: string; params?: Record<string, string | number> });
-export type ScreenModule = { default: Component; layout?: "full"; hint?: Hint; side?: Component };
+export type ScreenModule = { default: Component; layout?: "full"; hint?: Hint; side?: Component;
+  /* ---- FAKE1: what the screen needs (shell/capability.ts): a capability of the core, an editable model ---- */
+  capability?: string; editable?: boolean };
 
 /** `import.meta.glob` result → { "kebab-id": module }. Shared by pages, dialogs and panels. */
 export function byId<M>(mods: Record<string, M>): Record<string, M> {

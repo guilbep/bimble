@@ -9,6 +9,7 @@ import { act, can } from "../shell/send";
 import { t } from "../i18n";
 import type * as copy from "../i18n/parts/filemenu";
 import { currentDialog } from ".";
+import { HIDE_NOT_AVAILABLE, notYetAction } from "../shell/capability"; // FAKE1
 
 type Key = keyof typeof copy.fr;
 const tx = (k: Key) => t(k);
@@ -48,7 +49,12 @@ const sections: { title: Key; entries: Entry[] }[] = [
 
 // The lab's own screens (shell/machine.ts): enabled where the shell has a row for them, not by `actions`.
 const SCREENS: Record<string, string> = { project: "project-info", history: "history" };
-const on = (name?: string) => !!name && (name in SCREENS ? can({ do: "showPage", page: SCREENS[name]! }) : actions.value.some((a) => a.name === name && a.enabled));
+// FAKE1: the core enables project and history now (ACT1): a screen entry needs its action too (not for a read-only file).
+const enabledNow = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
+const on = (name?: string) => !!name && (name in SCREENS ? can({ do: "showPage", page: SCREENS[name]! }) && enabledNow(name) : enabledNow(name));
+// ---- FAKE1: an entry whose action this core does not serve (shell/capability.ts): greyed with a "not yet" tooltip ----
+const notYet = (e: Entry) => !!e.action && notYetAction(e.action);
+// ---- end FAKE1 ----
 // A refusal of the session is shown (the shell's error state), not only logged.
 function run(name?: string) {
   currentDialog.value = null;
@@ -60,8 +66,9 @@ function run(name?: string) {
   <div class="bb-menu fm" role="menu" :aria-label="tx('filemenu.label')" data-bb="file-menu">
     <template v-for="s in sections" :key="s.title">
       <div class="eyebrow">{{ tx(s.title) }}</div>
-      <button v-for="e in s.entries" :key="e.key" class="ti" type="button" role="menuitem"
+      <button v-for="e in s.entries.filter((x) => !(HIDE_NOT_AVAILABLE && notYet(x)))" :key="e.key" class="ti" type="button" role="menuitem"
         :disabled="!e.dialog && !on(e.action)" :data-missing="e.missing" :data-bb="`file-menu-${e.action ?? e.dialog ?? e.missing}`"
+        :data-not-yet="notYet(e) ? '' : undefined" :title="notYet(e) ? t('na.tooltip', { name: tx(e.key) }) : undefined"
         @click="e.dialog ? (currentDialog = e.dialog) : run(e.action)">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="e.icon"></svg>
         <span style="flex:1">{{ tx(e.key) }}</span><span class="mono">{{ e.kbd ?? '' }}</span>

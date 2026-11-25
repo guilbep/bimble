@@ -16,6 +16,8 @@ export interface State {
   user?: { name: string; trigram: string; email: string | null } | null;
   /** `query("state")`: the viewer's version, e.g. "0.17.0". */
   version?: string | null;
+  /** `query("state")` (FAKE1): false for a file open read-only (an IFC as it is, a .bimbleview). */
+  editable?: boolean;
   /** on_change (C core, ccore/session/links.h): a counter of changes to the linked models; absent before any. */
   links?: number;
   /** on_change (C core): the selected element of a linked model (its id is then `selection`), absent otherwise. */
@@ -568,8 +570,9 @@ export async function start(): Promise<void> {
       queueMicrotask(() => {
         const prev = state.value;
         // schema and user are not in on_change: read them from query("state").
-        const q = tryQuery<Pick<State, "schema" | "user" | "version">>("state", {});
-        state.value = { ...s, schema: q.schema ?? null, user: q.user ?? null, version: q.version ?? null };
+        const q = tryQuery<Pick<State, "schema" | "user" | "version" | "editable">>("state", {});
+        state.value = { ...s, schema: q.schema ?? null, user: q.user ?? null, version: q.version ?? null, editable: q.editable ?? true };
+        loadCapabilities(q.version ?? null); // FAKE1
         refresh(prev.rev !== s.rev || prev.file !== s.file);
       });
     });
@@ -853,6 +856,20 @@ function tryQuery<T>(name: string, fallback: T, args?: unknown): T {
   }
 }
 
+// ---- FAKE1: what the core serves (ccore/session/capabilities.h `query capabilities`): pages,
+// panels, data sets and exports by name, each true or false; read through shell/capability.ts.
+// null: everything (the Rust viewer and the native twin have no such query, and serve it all).
+// Asked once, of the C core only (its version ends in "ccore": no 400 asked of Rust). ----
+export const capabilities = shallowRef<Record<string, boolean> | null>(null);
+let capsAsked = false;
+function loadCapabilities(version: string | null): void {
+  if (capsAsked) return;
+  capsAsked = true;
+  const c = backend === "ccore" || (version ?? "").endsWith("ccore") ? tryQuery<Record<string, boolean> | null>("capabilities", null) : null;
+  capabilities.value = c && typeof c === "object" ? c : null;
+}
+// ---- end FAKE1 ----
+
 let timed = false;
 /** Refresh the shallow refs; model-derived lists only when the model changed. Runs deferred. */
 function refresh(modelChanged: boolean): void {
@@ -865,9 +882,12 @@ function refresh(modelChanged: boolean): void {
   placing.value = tryQuery<Placing | null>("placing", null);
   if (modelChanged) setMeasure(tryQuery<MeasureState | null>("measure", null)); // another model: none kept
   if (modelChanged) {
-    storeys.value = tryQuery<StoreySummary[]>("storeys", []);
-    materials.value = tryQuery<MaterialSummary[]>("materials", []);
-    project.value = tryQuery<ProjectSummary | null>("project", null);
+    // ---- FAKE1: a read-only file answers these "this file is read only" (400): not asked ----
+    const editable = state.value.file !== null && state.value.editable !== false;
+    storeys.value = editable ? tryQuery<StoreySummary[]>("storeys", []) : [];
+    materials.value = editable ? tryQuery<MaterialSummary[]>("materials", []) : [];
+    project.value = editable ? tryQuery<ProjectSummary | null>("project", null) : null;
+    // ---- end FAKE1 ----
     refreshNorth(); // G2: project north (viewcube.ts projectNorth) and the setting-out panel
   }
   // A model is loaded and its first refresh is done (deeplink.ts then sets data-bb-ready for the design check).

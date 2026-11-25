@@ -1,5 +1,5 @@
 // Ribbon content per tab: data copied from the wireframes v01 (the screen where the tab is active).
-// icon: inner SVG of the reference's 22 px icon. action: `query("actions")` name, null = no Rust call yet.
+// icon: inner SVG of the reference's 22 px icon. action: `query("actions")` name, null = no Rust call yet (FAKE1: drawn "not yet").
 // The pressed / unavailable state comes from `actions` (the reference draws one sample state).
 // timber: no reference screen. A group may hold a box (.rbox: label + select or readout) instead of a tool.
 import type { TabId } from "./tabs";
@@ -7,7 +7,9 @@ import type { fr } from "../i18n/parts/ribbon";
 
 export type RibbonKey = keyof typeof fr;
 // page / panel: the Vue screen the tool opens instead of its egui action (pressed while that screen is open).
-export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string; action: string | null; page?: string; panel?: string }
+// dialog (FAKE1): the Vue dialog the tool opens. A tool that cannot work in this core (no action and no screen, or
+// one whose capability the core does not serve: shell/capability.ts toolNotYet) is drawn "not yet", with a tooltip.
+export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string; action: string | null; page?: string; panel?: string; dialog?: string }
 // Reference .rbox: a label over a 150 px select (sel) or a mono readout (readout). No Rust call yet: drawn disabled, empty.
 export interface RibbonBox { key: RibbonKey; kind: "sel" | "readout"; missing: string }
 // box: drawn after the tools, in a `.tools` with style="align-items:center" (as the reference).
@@ -52,8 +54,8 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
     { key: "ribbon.settingOut.g2", tools: [
     ], box: { key: "ribbon.settingOut.g2.b1", kind: "readout", missing: "project zero elevation (IfcSite.RefElevation query)" } },
     { key: "ribbon.settingOut.g3", tools: [
-      { key: "ribbon.settingOut.g3.t1", tag: "a", icon: "<path d=\"M3 7h3M9 7h3M15 7h6\"/><path d=\"M3 17h3M9 17h3M15 17h6\"/><path d=\"m18 4 2 3-2 0\"/>", action: null },
-      { key: "ribbon.settingOut.g3.t2", tag: "a", icon: "<path d=\"M8 3v18M16 3v18M3 8h18M3 16h18\"/>", action: null },
+      { key: "ribbon.settingOut.g3.t1", tag: "a", icon: "<path d=\"M3 7h3M9 7h3M15 7h6\"/><path d=\"M3 17h3M9 17h3M15 17h6\"/><path d=\"m18 4 2 3-2 0\"/>", action: null, page: "levels-grids" },
+      { key: "ribbon.settingOut.g3.t2", tag: "a", icon: "<path d=\"M8 3v18M16 3v18M3 8h18M3 16h18\"/>", action: null, page: "levels-grids" },
       { key: "ribbon.settingOut.g3.t3", tag: "button", icon: "<path d=\"M4 8 12 4l8 4-8 4z\"/><path d=\"M4 8v8l8 4 8-4V8\"/>", action: null },
     ] },
     { key: "ribbon.settingOut.g4", tools: [
@@ -196,7 +198,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
       { key: "ribbon.sheets.g3.t1", tag: "button", icon: "<path d=\"M5 21V4\"/><path d=\"M5 4h12l-2 4 2 4H5\"/>", action: null },
     ] },
     { key: "ribbon.sheets.g4", tools: [
-      { key: "ribbon.sheets.g4.t1", tag: "a", icon: "<path d=\"M7 9V4h10v5\"/><rect x=\"4\" y=\"9\" width=\"16\" height=\"7\" rx=\"1\"/><path d=\"M7 14h10v6H7z\"/>", action: null },
+      { key: "ribbon.sheets.g4.t1", tag: "a", icon: "<path d=\"M7 9V4h10v5\"/><rect x=\"4\" y=\"9\" width=\"16\" height=\"7\" rx=\"1\"/><path d=\"M7 14h10v6H7z\"/>", action: null, dialog: "export" },
     ] },
   ],
   graphics: [
@@ -231,7 +233,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
     { key: "ribbon.quantities.g1", tools: [
       { key: "ribbon.quantities.g1.t1", tag: "button", icon: "<rect x=\"4\" y=\"5\" width=\"16\" height=\"14\"/><path d=\"M4 10h16M10 10v9\"/>", action: null },
       { key: "ribbon.quantities.g1.t2", tag: "button", icon: "<path d=\"M9 6h11M9 12h11M9 18h11\"/><circle cx=\"5\" cy=\"6\" r=\"1\"/><circle cx=\"5\" cy=\"12\" r=\"1\"/><circle cx=\"5\" cy=\"18\" r=\"1\"/>", action: null },
-      { key: "ribbon.quantities.g1.t3", tag: "button", icon: "<path d=\"M4 7h10M18 7h2M4 17h4M12 17h8\"/><circle cx=\"16\" cy=\"7\" r=\"2\"/><circle cx=\"10\" cy=\"17\" r=\"2\"/>", action: null },
+      { key: "ribbon.quantities.g1.t3", tag: "button", icon: "<path d=\"M4 7h10M18 7h2M4 17h4M12 17h8\"/><circle cx=\"16\" cy=\"7\" r=\"2\"/><circle cx=\"10\" cy=\"17\" r=\"2\"/>", action: null, page: "quantities" },
     ] },
     { key: "ribbon.quantities.g2", tools: [
       { key: "ribbon.quantities.g2.t1", tag: "button", icon: "<path d=\"M4 12h11\"/><path d=\"m11 8 4 4-4 4\"/><rect x=\"16\" y=\"6\" width=\"5\" height=\"12\"/>", action: null },
@@ -242,7 +244,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
       { key: "ribbon.quantities.g3.t2", tag: "button", icon: "<circle cx=\"12\" cy=\"12\" r=\"8\"/><path d=\"M6 8c4 3 8 3 12 0M5 13c4 3 10 3 14 0\"/>", action: null },
     ] },
     { key: "ribbon.quantities.g4", tools: [
-      { key: "ribbon.quantities.g4.t1", tag: "button", icon: "<path d=\"M12 15V3\"/><path d=\"m7 8 5-5 5 5\"/><path d=\"M5 13v8h14v-8\"/>", action: null },
+      { key: "ribbon.quantities.g4.t1", tag: "button", icon: "<path d=\"M12 15V3\"/><path d=\"m7 8 5-5 5 5\"/><path d=\"M5 13v8h14v-8\"/>", action: null, page: "quantities" },
     ] },
   ],
 };

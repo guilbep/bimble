@@ -65,6 +65,7 @@ const TABLE = [
   ["host", "lab_shell", 47307, 7], // UX1
   ["host", "lab_levels", 47366, 66], // G2
   ["host", "perf", 47367, 67], // PERF1 (tools/perf.mjs: the static server of the built lab)
+  ["host", "lab_routes", 47344, 44], // FAKE1
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_gl", 5193, 131],
   ["vite", "lab_place", 5195, 133],
@@ -88,6 +89,7 @@ const TABLE = [
   ["vite", "lab_quantities", 5212, 150], // Q2 (150: 146 is lab_ifc_plan's host offset)
   ["vite", "lab_shell", 5220, 158], // UX1
   ["vite", "lab_levels", 5216, 154], // G2
+  ["vite", "lab_routes", 5198, 136], // FAKE1
 ];
 export const SPAN = 160; // offsets 0..SPAN-1
 const AUTO_LO = 20000, AUTO_SLOTS = Math.floor((32000 - AUTO_LO) / SPAN);

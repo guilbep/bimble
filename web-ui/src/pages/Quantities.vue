@@ -4,9 +4,10 @@ import { t as tt } from "../i18n";
 import { classNoun } from "../i18n/parts/modify";
 // D6: "1 ligne sélectionnée : dalle D3" for one selected element; the reference has no other hint.
 // ponytail: reads the selection, not whether its row is in the table (the "All elements" schedule lists every element).
+export const capability = "quantities", editable = true; // FAKE1: the schedules of an editable model
 export const hint = () => {
   const s = st.value.selection;
-  if (s.length !== 1) return "";
+  if (s.length !== 1 || st.value.editable === false) return ""; // FAKE1: query element refuses a read-only file
   try {
     const e = element(s[0]!);
     return { key: "quantities.hintOne", params: { cls: classNoun(e.class, (k) => tt(k as Parameters<typeof tt>[0])).noun.toLowerCase(), name: e.name } };

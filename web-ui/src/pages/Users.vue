@@ -1,5 +1,6 @@
 <script lang="ts">
 export const hint = "users.hint";
+export const capability = "users"; // FAKE1
 </script>
 
 <script setup lang="ts">

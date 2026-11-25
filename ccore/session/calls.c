@@ -38,6 +38,7 @@
 #include "links_dxf.h" /* L2 */
 #include "schedules.h" /* Q2 */
 #include "palette.h"   /* Q2 */
+#include "capabilities.h" /* FAKE1 */
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -928,6 +929,7 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     jw_init(&w, out, 0);
     if (!strcmp(name, "state")) return q_state(s, &w);
     if (!strcmp(name, "actions")) return q_actions(s, &w);
+    if (!strcmp(name, "capabilities")) return cc_capabilities_json(s, out); /* FAKE1, capabilities.h */
     if (!strcmp(name, "history")) { /* calls.rs:346-359 */
         if (s->open) {
             cc_history_json(&s->hist, out);

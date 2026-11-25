@@ -11,15 +11,21 @@ import { computed, ref } from "vue";
 import { state, actions, recentFiles } from "../bimble";
 import { t } from "../i18n";
 import { act as run, send, shown as control } from "../shell/send";
+import NotAvailable from "../shell/NotAvailable.vue"; // FAKE1
+import { useCapability, INSTEAD } from "../shell/capability"; // FAKE1
 
 /** Whether the action `name` is enabled now (`query("actions")`). */
 const on = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
 // New, Open and Import go to the shell (shell/send.ts screenRoutes); a refusal is shown, not dropped.
 const act = (name: string) => { if (on(name)) run(name); };
 // Re-read when the state changes (a file opened adds itself to the list).
-const recent = computed(() => (state.value, recentFiles()));
+const recent = computed(() => (state.value, hasRecent.value ? recentFiles() : [])); // FAKE1: not asked when not served
 const filter = ref("");
 const shown = computed(() => recent.value.filter((f) => f.name.toLowerCase().includes(filter.value.trim().toLowerCase())));
+// ---- FAKE1: the user line and the recent files only where the core serves them (capabilities
+// `user`, `recent_files`: FS1 and SET1 turn them on in the core, and these light up by themselves) ----
+const hasUser = useCapability("user"), hasRecent = useCapability("recent_files");
+// ---- end FAKE1 ----
 </script>
 
 <template>
@@ -40,7 +46,8 @@ const shown = computed(() => recent.value.filter((f) => f.name.toLowerCase().inc
         <!-- Rust home.rs "Back to the model": shown while a model is loaded. -->
         <button v-if="control('home-back')" class="btn s" type="button" data-bb="home-back" @click="send({ do: 'showView' })">{{ t('home.backToModel') }}</button>
       </div>
-      <div class="card you" data-bb="home-you">
+      <NotAvailable v-if="!hasUser" class="you" compact :what="t('na.screen.you')" :instead="t(INSTEAD.you!)" /><!-- FAKE1 -->
+      <div v-else class="card you" data-bb="home-you">
         <div class="eyebrow">{{ t('home.you') }}</div>
         <!-- Settings → You gives the name only: e-mail and shared folder have no Rust source. -->
         <div class="row"><span>{{ state.user?.name }}</span><span class="mono" style="font-size:12px" data-bb="home-email">{{ state.user?.email ?? '' }}</span></div>
@@ -53,9 +60,10 @@ const shown = computed(() => recent.value.filter((f) => f.name.toLowerCase().inc
       <div class="head">
         <h2 class="disp" data-bb="home-recent-title">{{ t('home.recent') }}</h2>
         <span style="flex:1"></span>
-        <input v-model="filter" class="inp" :placeholder="t('home.filter')" :aria-label="t('home.filter')" data-bb="home-filter">
+        <input v-if="hasRecent" v-model="filter" class="inp" :placeholder="t('home.filter')" :aria-label="t('home.filter')" data-bb="home-filter">
       </div>
-      <div class="grid" data-bb="home-recent">
+      <NotAvailable v-if="!hasRecent" compact :what="t('na.screen.recent')" :instead="t(INSTEAD.recent!)" /><!-- FAKE1 -->
+      <div v-else class="grid" data-bb="home-recent">
         <!-- ponytail: the web bridge cannot open a file by its path (no file system), so each card is drawn but disabled. -->
         <a v-for="f in shown" :key="f.path" href="#" class="card rc" :class="{ gone: !f.exists }" aria-disabled="true" data-missing="open-by-path" :title="f.path" @click.prevent>
           <!-- No preview from Rust: the reference's tile, empty. -->

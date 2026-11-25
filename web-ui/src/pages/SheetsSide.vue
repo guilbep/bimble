@@ -117,6 +117,7 @@ function unplace() {
   <nav class="nav" :aria-label="t('page.sheets')" data-bb="sheet-list">
     <div class="pn" style="display:flex;align-items:center;justify-content:space-between">{{ t('page.sheets') }}<button class="ib" type="button" :aria-label="t('sheets.add')" :title="t('sheets.add')" style="width:26px;height:26px" data-bb="sheet-add" @click="addSheet"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button></div>
     <a v-for="s in allSheets" :key="s.id" class="ti" :class="{ cur: s.id === currentSheet?.id }" href="#" :aria-current="s.id === currentSheet?.id ? 'page' : undefined" @click.prevent="openSheet(s.id)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h10l4 4v14H5z" /><path d="M14 3v5h5" /><rect x="8" y="11" width="8" height="6" /></svg><span class="mono" style="font-size:12px;min-width:30px">{{ s.number }}</span><span>{{ s.name }}</span><span class="n">{{ s.fields.revision ?? '' }}</span></a>
+    <p v-if="!allSheets.length" class="note" style="margin:6px 0" data-bb="sheet-list-none">{{ t('sheets.none') }}</p><!-- FAKE1: no empty panel -->
   </nav>
   <div v-if="error" class="err" role="alert" data-bb="sheet-side-error">{{ error }}</div>
   <template v-if="currentSheet">

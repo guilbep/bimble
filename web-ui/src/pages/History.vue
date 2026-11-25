@@ -2,6 +2,7 @@
 import HistorySide from "./HistorySide.vue";
 export const hint = "history.hint";
 export const side = HistorySide;
+export const capability = "history"; // FAKE1
 </script>
 
 <script setup lang="ts">
@@ -82,7 +83,7 @@ const short = (h: string) => h.slice(0, 12);
       <h2 style="font-size:20px" data-bb="history-version">{{ t('history.version') }} <span class="mono" :class="{ off: !selectedVersion }" style="font-size:14px">{{ selectedVersion ? short(selectedVersion.hash) : '—' }}</span></h2>
       <p class="note" style="margin:0" data-bb="history-meta">{{ selectedVersion && !selectedVersion.parents[0] ? t('history.first') : t('history.changes', { n: rows.length }) }}</p>
       <!-- The selected version against its first parent (query version_changes): element, field, before → after. -->
-      <table class="t" data-bb="history-changes">
+      <table v-if="rows.length" class="t" data-bb="history-changes"><!-- FAKE1: no empty table -->
         <thead><tr><th>{{ t('history.element') }}</th><th>{{ t('history.field') }}</th><th>{{ t('history.change') }}</th></tr></thead>
         <tbody>
           <tr v-for="(r, i) in rows" :key="i"><td>{{ r.element }}</td><td class="mono">{{ r.field }}</td><td>{{ r.change }}</td></tr>

@@ -1,5 +1,6 @@
 <script lang="ts">
 export const hint = "export.hint";
+export const capability = "export_svg"; // FAKE1: the sheets drawn (sheet_svg)
 </script>
 
 <script setup lang="ts">

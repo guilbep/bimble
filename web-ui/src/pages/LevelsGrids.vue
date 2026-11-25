@@ -2,6 +2,7 @@
 import LevelsGridsSide from "./LevelsGridsSide.vue";
 export const hint = "levelsgrids.hint";
 export const side = LevelsGridsSide;
+export const capability = "levels", editable = true; // FAKE1: query storeys refuses a read-only file
 </script>
 
 <script setup lang="ts">

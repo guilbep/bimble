@@ -3,6 +3,7 @@ import SubprojectsSide from "./SubprojectsSide.vue";
 // The active sub-project's name: no Rust source yet (query: subprojects → active), shown empty.
 export const hint = () => ({ key: "subprojects.hint", params: { name: "" } });
 export const side = SubprojectsSide;
+export const capability = "subprojects"; // FAKE1
 </script>
 
 <script setup lang="ts">

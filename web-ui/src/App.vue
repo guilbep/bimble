@@ -16,12 +16,23 @@ import { pages, currentPage, page } from "./pages";
 // (shell/send.ts routes the actions home, project, history, new, open, import_ifc and close).
 import { here, send, can } from "./shell/send";
 import ShellNotice from "./shell/ShellNotice.vue";
+// ---- FAKE1: a screen the core does not serve shows NotAvailable instead (shell/capability.ts) ----
+import NotAvailable from "./shell/NotAvailable.vue";
+import { blocked, INSTEAD } from "./shell/capability";
+const naProps = (id: string, m: Parameters<typeof blocked>[0]) => {
+  const reason = blocked(m);
+  return reason ? { what: t(`na.screen.${id}`), reason, ...(INSTEAD[id] ? { instead: t(INSTEAD[id]!) } : {}) } : null;
+};
+const pageNa = computed(() => (currentPage.value ? naProps(currentPage.value, page()) : null));
+const dialogNa = computed(() => (currentDialog.value ? naProps(currentDialog.value, dialog()) : null));
+const panelNa = computed(() => (currentPanel.value ? naProps(currentPanel.value, panel()) : null));
+// ---- end FAKE1 ----
 // The aside's name: the panel's `label` key (fr/Standards.html: aria-label="Standards graphiques").
 const panelLabel = computed(() => { const l = (panel() as { label?: string } | null)?.label; return l ? t(l) : undefined; });
 // A panel is not a screen of the shell: the ribbon's Standards opens it beside the view.
 Object.assign(screenRoutes, { standards: () => { currentPanel.value = "standards"; } });
 const shellName = computed(() => { const s = here.value; return s.at === "model" ? `model.${s.show}` : s.at; });
-import { dialogs, currentDialog } from "./dialogs";
+import { dialogs, currentDialog, dialog } from "./dialogs";
 import { panels, currentPanel, panel } from "./panels";
 import { applyDeepLink } from "./deeplink";
 // Under 1 024 px wide: the small-screen frame (ADR 0064) instead of the desktop bands.
@@ -67,7 +78,8 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <!-- Reference (D5): the right panel sits beside the viewport, under the view tabs. -->
         <div class="bb-row">
           <section v-if="currentPage && pages[currentPage]" class="bb-page" :class="{ full }" data-bb="page">
-            <component :is="pages[currentPage]" />
+            <NotAvailable v-if="pageNa" v-bind="pageNa" /><!-- FAKE1 -->
+            <component :is="pages[currentPage]" v-else />
           </section>
           <!-- Hidden, never removed, under a page. -->
           <div v-show="!(currentPage && pages[currentPage])" class="bb-vp" data-bb="viewport">
@@ -77,7 +89,8 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             <p v-if="startError" class="start-error" role="alert">{{ t('app.startError', { msg: startError }) }}</p>
           </div>
           <aside v-if="currentPanel && panels[currentPanel]" class="bb-right" data-bb="right-panel" :aria-label="panelLabel">
-            <component :is="panels[currentPanel]" />
+            <NotAvailable v-if="panelNa" v-bind="panelNa" compact /><!-- FAKE1 -->
+            <component :is="panels[currentPanel]" v-else />
           </aside>
           <SmallSheet v-if="small" />
         </div>
@@ -85,7 +98,8 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
       </div>
     </div>
     <div v-if="currentDialog && dialogs[currentDialog]" ref="backdrop" class="bb-backdrop" tabindex="-1" @click.self="currentDialog = null" @keydown="trapKey">
-      <component :is="dialogs[currentDialog]" />
+      <div v-if="dialogNa" class="bb-dialog" role="dialog" :aria-label="dialogNa.what"><NotAvailable v-bind="dialogNa" compact /></div><!-- FAKE1 -->
+      <component :is="dialogs[currentDialog]" v-else />
     </div>
     <ShellNotice />
     <StatusBar v-if="!small" />

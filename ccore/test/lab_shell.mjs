@@ -303,7 +303,12 @@ async function nativePaths(cdp) {
   const settingsOn = await P.bb("b.actions.value.some((a) => a.name === 'settings' && a.enabled)");
   const ch = await P.evalJs("(() => { const e = document.querySelector('[data-bb=home-settings]'); return e ? JSON.stringify({ dis: e.getAttribute('aria-disabled') === 'true' || e.disabled === true }) : 'null'; })()");
   const chv = JSON.parse(ch);
-  check("N12 Home's change link: disabled while Settings is not available", chv !== null && chv.dis === !settingsOn, `${ch} settings ${settingsOn}`);
+  // FAKE1 (requirement change): while the core does not serve "user" (query capabilities), the whole "You" card,
+  // the change link with it, is the NotAvailable state; once it does, the link is disabled while Settings is off.
+  const userCap = await P.bb("b.capabilities.value === null || b.capabilities.value.user === true");
+  const youNa = await P.evalJs("!!document.querySelector('[data-bb=home] .you[data-bb=not-available]')");
+  check("N12 Home's change link: disabled while Settings is not available (no \"You\" card: NotAvailable, while the core has no user)",
+    userCap ? chv !== null && chv.dis === !settingsOn : chv === null && youNa, `${ch} settings ${settingsOn} user ${userCap} na ${youNa}`);
   check("native: no uncaught page error", P.exceptions.length === 0, P.exceptions.join(" | "));
   await P.close();
 }

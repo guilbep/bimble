@@ -619,3 +619,19 @@ the same IFC offers the same views with the same ids.
   and Rust's unit tests (`ribbon.rs:1802`, `:1887`) give the same indices (`test/palette_test.mjs`);
   a label with an upper-case letter of another script, a final `Σ`, or a separator of another block
   may match differently.
+
+## 19. `query capabilities` and the actions a read-only file keeps off (ticket FAKE1)
+
+- **`query capabilities`** (`session/capabilities.h`): a C addition, Rust has no such query. One
+  object of booleans, keys sorted: what this build of the core serves that is not an action (a page,
+  a panel, a data set, an export). The page reads it once (`web-ui/src/bimble.ts`) and shows the one
+  "Not available yet" state for a false row; the Rust viewer and its native twin are asked nothing
+  and count as "everything" (null in the page). The rows follow the dispatcher, not a list in the
+  page: the viewer-only wasm answers false for quantities, schedules and the exports (VIEW_DENY),
+  the wasm modules false for versions (no folder); `test/capabilities_test.c` ties each false row
+  to a stub answer or an action never enabled, and each true row to an answer.
+- **`project` and `new_sheet` on an IFC opened as it is:** Rust enables both with any file loaded
+  (`ribbon.rs:611 _ => loaded`): its project data and its sheets live in the side file next to the
+  IFC. The C core reads no side file and answers `project` "this file is read only", so it keeps both
+  off for a read-only file (the 2 actions `parity.md` still shows as differing in `ifc_readonly`).
+  Every other enable rule ACT1 changed is Rust's own (`results/parity.md`).

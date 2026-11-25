@@ -28,6 +28,8 @@ const tabs = computed(() => {
 // An open page is the current tab: its name is the i18n key `page.<id>` from the page's own part (the id when it has none).
 const pageName = (id: string) => { const s = t(`page.${id}` as never); return s === `page.${id}` ? id : s; };
 const paper = computed(() => openViews.value.paper);
+// FAKE1: the switch only where the core draws On paper (capability paper_view): no dead control.
+import { has } from "./capability";
 // The switch is one action: click the side that is not on.
 const picture = (onPaper: boolean) => { if (onPaper !== paper.value.on) runAction("paper_view"); };
 </script>
@@ -45,7 +47,7 @@ const picture = (onPaper: boolean) => { if (onPaper !== paper.value.on) runActio
     <span v-if="!tabs.length && !currentPage" class="vtab" aria-hidden="true" style="visibility:hidden"><span class="xx" /></span>
     <span style="flex:1"></span>
     <!-- Model / On paper: the "paper_view" action toggles it (pressed = on paper). -->
-    <span v-if="paper.offered" class="seg" data-bb="view-picture" role="group" :aria-label="t('viewtabs.picture')"><span
+    <span v-if="paper.offered && has('paper_view')" class="seg" data-bb="view-picture" role="group" :aria-label="t('viewtabs.picture')"><span
         role="button" tabindex="0" :class="{ on: !paper.on }" :aria-pressed="!paper.on" @click="picture(false)" @keydown.enter="picture(false)">{{ t('viewtabs.model') }}</span><span
         role="button" tabindex="0" :class="{ on: paper.on }" :aria-pressed="paper.on" @click="picture(true)" @keydown.enter="picture(true)">{{ t('viewtabs.onPaper') }} <span class="kbd">P</span></span></span>
   </div>

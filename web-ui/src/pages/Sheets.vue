@@ -2,6 +2,7 @@
 import SheetsSide from "./SheetsSide.vue";
 export const hint = "sheets.hint";
 export const side = SheetsSide;
+export const capability = "sheets", editable = true; // FAKE1: the C core keeps sheets in an editable model
 </script>
 
 <script setup lang="ts">

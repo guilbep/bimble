@@ -1,5 +1,6 @@
 <script lang="ts">
 export const hint = "steel.hint";
+export const capability = "section_catalogue"; // FAKE1
 </script>
 
 <script setup lang="ts">

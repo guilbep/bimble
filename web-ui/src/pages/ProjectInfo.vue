@@ -2,6 +2,7 @@
 import ProjectInfoSide from "./ProjectInfoSide.vue";
 export const hint = "projectinfo.hint";
 export const side = ProjectInfoSide;
+export const capability = "project_info", editable = true; // FAKE1: query project refuses a read-only file
 </script>
 
 <script setup lang="ts">
@@ -11,6 +12,8 @@ import { computed, ref } from "vue";
 import { project, state, setProject, setProjectField, northInfo, coordinates } from "../bimble";
 import { t } from "../i18n";
 import { currentDialog } from "../dialogs";
+import NotAvailable from "../shell/NotAvailable.vue"; // FAKE1
+import { has } from "../shell/capability"; // FAKE1
 
 // The reference's "Basic data" rows, by Rust key (bimble-core project::KNOWN).
 const BASIC = ["project_number", "project_title", "project_address", "project_city", "phase", "phase_description"] as const;
@@ -74,12 +77,13 @@ function addField() {
       <div style="display:flex;align-items:center">
         <h2 style="font-size:20px">{{ t('projectinfo.team') }}</h2>
         <span style="flex:1" />
-        <button class="btn s" type="button" data-bb="project-add-member" @click="currentDialog = 'team-member'">
+        <button v-if="has('users')" class="btn s" type="button" data-bb="project-add-member" @click="currentDialog = 'team-member'">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>{{ t('projectinfo.addMember') }}
         </button>
       </div>
       <!-- No Rust source for team members yet: header only, no rows. -->
-      <table class="t" data-bb="project-team" data-missing="query: team members (ADR 0055)">
+      <NotAvailable v-if="!has('users')" compact :what="t('na.screen.team')" /><!-- FAKE1 -->
+      <table v-else class="t" data-bb="project-team" data-missing="query: team members (ADR 0055)">
         <thead><tr><th>{{ t('projectinfo.role') }}</th><th>{{ t('projectinfo.company') }}</th><th>{{ t('projectinfo.contact') }}</th><th>{{ t('projectinfo.mine') }}</th><th /></tr></thead>
         <tbody />
       </table>
