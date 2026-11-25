@@ -415,6 +415,17 @@ summed so no label, no total). The IFC fixtures get only these two.
 Cells are written as Rust's `format!("{:.N}")` writes them: exact digits, ties to even on the
 binary value, the sign of `-0.0` kept (`cc_fmt_fixed`). Sums run in row order, as Rust's.
 
+`schedule/session/` (ticket Q2, `schedule_session_files`): the viewer's schedule calls
+(bimble-viewer calls.rs) where the tables above do not already hold the text, each plus `\n`.
+`list-frame.json`: `schedule_list` on frame.json (`serde_json::to_string(&effective(&m.schedules))`,
+struct field order, `family` only when set); `list-changed.json`: the same after `set_schedule`
+`{"name": "Concrete columns", "group_by_level": false, "columns": [level, name, material, volume,
+mass]}` and `{"name": "Steel beams", "family": "timber"}`; `rows-changed-concrete-columns.json`:
+`schedule_rows` of the changed one; `csv-frame-slabs.json`: the whole `schedule_csv` answer
+(`{"csv"}`, serde_json's escaping) for Slabs. Compared by `test/schedules_test.mjs` (which also
+compares `schedule_rows` and `schedule_csv` of every built-in schedule of both frames with the
+files above); `quantity_test.c` leaves this folder to it.
+
 ## mcp/ (the MCP server's transcripts)
 
 Made by `ccore/tools/mcp_golden.sh` (not by the dumper; `--check` skips `mcp/`), which builds

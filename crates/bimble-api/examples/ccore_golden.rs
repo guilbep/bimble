@@ -222,6 +222,7 @@ fn derive(dir: &Path) -> Files {
     reference_files(dir, &mut files);
     dxf_files(dir, &mut files); // L2
     ifc_views_files(dir, &mut files); // S1
+    schedule_session_files(&m, &mut files); // Q2
     files
 }
 
@@ -3917,4 +3918,54 @@ fn ifc_views_files(dir: &Path, files: &mut Files) {
         }
         files.insert(format!("ifc/views/{name}.txt"), s.into_bytes());
     }
+// ---------------------------------------------------------------- Q2: schedules in the session
+
+/// `schedule/session/` (ticket Q2): what the viewer's schedule calls answer (calls.rs
+/// `schedule_list`, `schedule_rows`, `schedule_csv`) where `schedule/<model>/` does not already
+/// hold the text, each plus a final `\n`:
+///   `list-frame.json`: `schedule_list` on frame.json, `serde_json::to_string` of
+///     `effective(&model.schedules)` (struct field order, `family` only when set): the ten
+///     built-in ones;
+///   `list-changed.json`: the same after two `set_schedule` verbs (below), so a changed
+///     built-in one replaces its default, with `family` set;
+///   `rows-changed-concrete-columns.json`: `schedule_rows {"name": "Concrete columns"}` on the
+///     changed model (`table_json(.., 50)`);
+///   `csv-frame-slabs.json`: `schedule_csv {"name": "Slabs"}` on frame.json, the `{"csv"}` object.
+fn schedule_session_files(frame: &Model, files: &mut Files) {
+    use bimble_core::schedule::effective;
+    use bimble_drawing::schedule::{schedule, table_json, to_csv};
+    let line = |mut s: String| {
+        s.push('\n');
+        s.into_bytes()
+    };
+    let list = |m: &Model| serde_json::to_string(&effective(&m.schedules)).unwrap();
+    files.insert("schedule/session/list-frame.json".into(), line(list(frame)));
+    let mut m = frame.clone();
+    let mut h = bimble_core::History::default();
+    for args in [
+        json!({"name": "Concrete columns", "group_by_level": false,
+               "columns": ["level", "name", "material", "volume", "mass"]}),
+        json!({"name": "Steel beams", "family": "timber"}),
+    ] {
+        let cmds = dispatch::run(&m, "set_schedule", args).expect("set_schedule");
+        h.apply(&mut m, cmds).expect("set_schedule applies");
+    }
+    files.insert("schedule/session/list-changed.json".into(), line(list(&m)));
+    let def = effective(&m.schedules)
+        .into_iter()
+        .find(|d| d.name == "Concrete columns")
+        .expect("Concrete columns");
+    let scene = Scene::from_model(&m);
+    let rows = serde_json::to_string(&table_json(&schedule(&scene, &def), &scene, 50)).unwrap();
+    files.insert(
+        "schedule/session/rows-changed-concrete-columns.json".into(),
+        line(rows),
+    );
+    let def = effective(&frame.schedules)
+        .into_iter()
+        .find(|d| d.name == "Slabs")
+        .expect("Slabs");
+    let scene = Scene::from_model(frame);
+    let csv = json!({ "csv": to_csv(&schedule(&scene, &def)) }).to_string();
+    files.insert("schedule/session/csv-frame-slabs.json".into(), line(csv));
 }

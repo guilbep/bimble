@@ -36,6 +36,7 @@
 #include "measure.h" /* ticket T1 */
 #include "versions.h" /* ticket H1 */
 #include "links_dxf.h" /* L2 */
+#include "schedules.h" /* Q2 */
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -981,7 +982,11 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         cc_measure_json(&s->measure, &w);
         return done(&w);
     }
-    static const char *const EMPTY[] = {"recent_files", "schedule_list", "recent_actions"};
+    { /* ---- Q2: schedule_list, schedule_rows, schedule_csv (schedules.h) ---- */
+        int rc = cc_schedules_query(s, name, body, n, out);
+        if (rc >= 0) return rc;
+    }
+    static const char *const EMPTY[] = {"recent_files", "recent_actions"};
     for (size_t i = 0; i < sizeof EMPTY / sizeof EMPTY[0]; i++)
         if (!strcmp(name, EMPTY[i])) { /* spec §1: stub [] */
             buf_puts(out, "[]");
@@ -993,7 +998,7 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     /* D7: the PDF export, sheet_svg.h cc_paper_pdf_query (the answer is the PDF's bytes, or {path, bytes}) */
     if (!strcmp(name, "sheet_pdf") || !strcmp(name, "view_pdf"))
         return cc_paper_pdf_query(s, s->open ? scene_now(s) : NULL, name[0] == 'v', body, n, out);
-    static const char *const CUT[] = {"palette_match", "schedule_rows", "schedule_csv"};
+    static const char *const CUT[] = {"palette_match"};
     for (size_t i = 0; i < sizeof CUT / sizeof CUT[0]; i++)
         if (!strcmp(name, CUT[i])) {
             buf_puts(out, "query "), buf_puts(out, name), buf_puts(out, " is not in the C core");

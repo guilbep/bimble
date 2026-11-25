@@ -186,6 +186,9 @@ static size_t count_files(const char *dir) {
     struct dirent *e;
     while ((e = readdir(d))) {
         if (e->d_name[0] == '.') continue;
+        /* Q2: schedule/session/ holds the session calls' texts: test/schedules_test.mjs compares
+         * them, and checks that it compared every one. */
+        if (!strcmp(e->d_name, "session") && strstr(dir, "/schedule") && !strcmp(strstr(dir, "/schedule"), "/schedule")) continue;
         char sub[4096];
         snprintf(sub, sizeof sub, "%s/%s", dir, e->d_name);
         DIR *x = opendir(sub);

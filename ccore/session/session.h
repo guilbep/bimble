@@ -109,6 +109,8 @@ typedef struct cc_session {
     size_t pdf_font_n[2];
     char *pdf_font_dir;
     char *paper_version;
+    /* ---- Q2: the last schedule table asked (schedules.h), NULL: none ---- */
+    struct cc_sched_cache *sched;
 } cc_session;
 
 /* A new session with no model, on `pf` (kept by pointer). NULL when out of memory. */

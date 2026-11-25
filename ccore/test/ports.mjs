@@ -59,6 +59,8 @@ const TABLE = [
   ["host", "lab_export", 47306, 6], // D7
   ["host", "lab_ifc_plan", 47446, 146], // S1
   ["host", "parity", 47440, 140], // PAR2 (tools/parity.mjs: one host at a time, Rust twin then C)
+  ["host", "schedules_test", 47357, 57], // Q2
+  ["host", "lab_quantities", 47358, 58], // Q2
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_gl", 5193, 131],
   ["vite", "lab_place", 5195, 133],
@@ -79,6 +81,7 @@ const TABLE = [
   ["vite", "lab_refs_dxf", 5223, 156], // L2
   ["vite", "lab_export", 5196, 134], // D7
   ["vite", "lab_ifc_plan", 5210, 148], // S1
+  ["vite", "lab_quantities", 5208, 146], // Q2
 ];
 export const SPAN = 160; // offsets 0..SPAN-1
 const AUTO_LO = 20000, AUTO_SLOTS = Math.floor((32000 - AUTO_LO) / SPAN);
