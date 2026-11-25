@@ -41,12 +41,17 @@
 // (move_annotation: a text by the drag, a dimension's line across itself). While the annotate tool
 // is on (bimble.ts startDimension / startText), pointer moves and clicks go to it (op tool, as the
 // place tool) and its preview is drawn dashed; Esc stops it.
+// View cube (ticket VC1, viewcube.ts, Rust viewcube.rs): top right of the 3D view, its own canvas
+// (a click on it never picks); a click on a face, edge or corner turns the camera there in 0.3 s, a
+// drag orbits, Home and Fit all under it; it follows project north (viewcube.ts projectNorth). In a
+// plan the cube and Home are off, Fit all stays (ADR 0021).
 import {
   annotate, annotateCall, boxTool, deleteAnnotation, moveAnnotation, openViews, placing, select, selectLinked, state, toolCall,
   viewAnnotations, viewClip, visibility, visibilitySets,
   type AnnotateState, type ToolPointer, type ToolState, type ViewAnnotation, type ViewAnnotations, type ViewClip, type Visibility,
   type VisibilitySets,
 } from "./bimble";
+import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
 
 // Palette, sRGB (bimble-core style.rs:302, :335-410), by MaterialCategory index.
 const CATEGORY_SRGB: [number, number, number][] = [
@@ -339,8 +344,16 @@ interface GlStats {
   /** Test hook: where an annotation is drawn (client px): a dimension's line middle, a text's point. */
   annotationScreen?: (id: string) => [number, number] | null;
   /** The camera: "3d" (orbit, perspective) or "plan" (orthographic, top-down), the view shown, the
-   *  plan's half height in mm, and the camera's yaw and pitch (radians). */
-  camera?: { mode: "3d" | "plan"; view: string | null; look: string | null; half: number; yaw: number; pitch: number; target: number[] };
+   *  plan's half height in mm, the camera's yaw and pitch (radians), its distance (mm) and whether a
+   *  view-cube turn is running. */
+  camera?: { mode: "3d" | "plan"; view: string | null; look: string | null; half: number; yaw: number; pitch: number; target: number[];
+    distance: number; turning: boolean };
+  /** The view cube (viewcube.ts): shown, hovered target, clicks and drags. */
+  viewCube?: CubeStats;
+  /** Test hooks: a cube target's cell centre, a compass letter (client px), the target under client (x, y). */
+  cubeCellAt?: (d: Dir) => [number, number] | null;
+  cubeLetterAt?: (t: "N" | "E" | "S" | "W") => [number, number] | null;
+  cubeHitAt?: (x: number, y: number) => Dir | null;
 }
 declare global {
   interface Window {
@@ -472,7 +485,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const mirror = () => plan?.look === "up";
   let selKey = "";
   // Camera (bimble-render Camera): orbit around `target` at `distance`, z up.
-  let yaw = (-55 * Math.PI) / 180, pitch = (28 * Math.PI) / 180, distance = 10000;
+  let yaw = HOME_YAW + projectNorth(), pitch = HOME_PITCH, distance = 10000;
+  /** A view-cube turn in progress (lib.rs `turn`). */
+  let turn: Turn | null = null;
   let target: V3 = [0, 0, 0];
   let dirty = true;
   let loading = false;
@@ -539,13 +554,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       dirty = true;
       return;
     }
+    turn = null;
     if (viewId !== null) cams.set(viewId, { yaw, pitch, distance, target: [...target], half });
     viewId = id;
     plan = vc?.type === "plan" ? vc : null;
     const c = id === null ? undefined : cams.get(id);
     if (c) ({ yaw, pitch, distance, half } = c), (target = [...c.target]);
     else if (plan) fitPlan();
-    else if (fitted) { yaw = (-55 * Math.PI) / 180; pitch = (28 * Math.PI) / 180; fit(); }
+    else if (fitted) { yaw = HOME_YAW + projectNorth(); pitch = HOME_PITCH; fit(); }
     preview = null;
     dirty = true;
   };
@@ -1259,6 +1275,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     drag.y = e.clientY;
     if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > CLICK_PX) drag.moved = true;
     if (!drag.moved || (dx === 0 && dy === 0)) return;
+    turn = null; // the hand takes over from a view-cube turn
     if (drag.pan || plan) { // a plan has no orbit: any drag pans
       const { e: ey, up } = matrices();
       const f = norm(sub(target, ey)), s = norm(cross(f, up)), u = cross(s, f);
@@ -1338,8 +1355,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     stats.toolError = error;
     showTool(t);
   });
-  canvas.addEventListener("wheel", (e) => {
-    e.preventDefault();
+  const wheel = (e: WheelEvent) => {
     if (plan) { // about the pointer: the plan point under it stays put
       const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
       const a = rayAt(x, y);
@@ -1348,7 +1364,31 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       target = [target[0] + (a[0] ?? 0) - (b[0] ?? 0), target[1] + (a[1] ?? 0) - (b[1] ?? 0), target[2]];
     } else distance = Math.max(1, distance * Math.exp(e.deltaY * 0.001));
     dirty = true;
-  }, { passive: false });
+  };
+  canvas.addEventListener("wheel", (e) => { e.preventDefault(); wheel(e); }, { passive: false });
+
+  // The view cube, Home and Fit all (viewcube.ts): the camera stays here, the cube asks.
+  const cube = viewCube(canvas, {
+    look: (y, p) => { turn = startTurn(yaw, pitch, y, p, performance.now()); dirty = true; },
+    orbit: (dx, dy) => {
+      turn = null;
+      yaw -= dx;
+      pitch = Math.min(PITCH_LIMIT, Math.max(-PITCH_LIMIT, pitch + dy));
+      dirty = true;
+    },
+    home: () => { // lib.rs `navigation` Home: turn to the default view (project north), fit all
+      if (plan) return;
+      turn = startTurn(yaw, pitch, HOME_YAW + projectNorth(), HOME_PITCH, performance.now());
+      fit();
+      dirty = true;
+    },
+    fitAll: () => { if (plan) fitPlan(); else fit(); dirty = true; },
+    wheel,
+  });
+  stats.viewCube = cube.stats;
+  stats.cubeCellAt = (d) => cube.cellAt(d);
+  stats.cubeLetterAt = (t) => cube.letterAt(t);
+  stats.cubeHitAt = (x, y) => cube.hitAt(x, y);
 
   let seenAnnot: AnnotateState | null = null;
   const loop = () => {
@@ -1358,7 +1398,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const vc = cur?.type === "view" ? viewClip() : null;
       switchView(vc, cur?.type === "view" ? cur.id : null);
     }
-    stats.camera = { mode: plan ? "plan" : "3d", view: viewId, look: plan?.look ?? null, half, yaw, pitch, target: [...target] };
+    if (turn) { // a view-cube turn: one step per frame (lib.rs `animate`)
+      const k = turnAt(turn, performance.now());
+      yaw = k.yaw;
+      pitch = k.pitch;
+      if (k.done) turn = null;
+      dirty = true;
+    }
+    cube.update(yaw, pitch, mesh !== null, plan !== null);
+    stats.camera = { mode: plan ? "plan" : "3d", view: viewId, look: plan?.look ?? null, half, yaw, pitch, target: [...target], distance, turning: turn !== null };
     const rev = meshKey();
     if (state.value !== seenState) {
       seenState = state.value;
