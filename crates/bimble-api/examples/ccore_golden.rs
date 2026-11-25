@@ -3918,6 +3918,8 @@ fn ifc_views_files(dir: &Path, files: &mut Files) {
         }
         files.insert(format!("ifc/views/{name}.txt"), s.into_bytes());
     }
+}
+
 // ---------------------------------------------------------------- Q2: schedules in the session
 
 /// `schedule/session/` (ticket Q2): what the viewer's schedule calls answer (calls.rs
