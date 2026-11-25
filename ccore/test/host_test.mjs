@@ -234,7 +234,7 @@ try {
   check("model: query storeys = golden/query.txt first record", sto.status === 200 && sto.body === goldenAnswer("storeys"), sto.body);
   const en = async () => (await mq("actions")).filter((a) => a.enabled).map((a) => a.name).sort().join(",");
   const en0 = await en();
-  check("model: enabled actions, nothing to undo or save", en0 === "export_ifc2x3,export_ifc4,home,import_ifc,link_model,link_pdf,manage_links,measure,new,open,place_beam,place_column,place_slab,place_wall,reveal_hidden,section_box,share_for_viewing", en0); // share_for_viewing: ticket A5c (ribbon.rs:575); reveal_hidden, section_box: ticket B3 (ribbon.rs:592, :596); link_model, manage_links: ticket B5 (ribbon.rs:596, :611); measure: ticket T1 (ribbon.rs:612 `_ => loaded`); link_pdf: ticket L1 (an editable model)
+  check("model: enabled actions, nothing to undo or save", en0 === "export_ifc2x3,export_ifc4,home,import_ifc,link_dxf,link_model,link_pdf,manage_links,measure,new,open,place_beam,place_column,place_slab,place_wall,reveal_hidden,section_box,share_for_viewing", en0); // share_for_viewing: ticket A5c (ribbon.rs:575); reveal_hidden, section_box: ticket B3 (ribbon.rs:592, :596); link_model, manage_links: ticket B5 (ribbon.rs:596, :611); measure: ticket T1 (ribbon.rs:612 `_ => loaded`); link_pdf: ticket L1 (an editable model); link_dxf: ticket L2 (the same)
   const r0 = await rev();
   check("model: rev 1 after load (lib.rs:1679)", r0 === 1, String(r0));
 
