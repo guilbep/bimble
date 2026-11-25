@@ -449,3 +449,34 @@ In the session (`session/links_ref.c`): `link_pdf` takes `offset_mm` and `rotati
 placement is Rust's, viewing.rs place_reference). A reference in a section view is placed as it is
 (Rust also centres it on the model along the section). The default scale is the view's (Rust: the
 "Add reference plan" form's 1:N, default 100).
+## 14. DXF reference plans (ticket L2, ADR 0021)
+
+The reader (`src/dxf_in.c`) prints Rust's polylines and notes byte for byte on every file of
+`golden/dxf/fixtures/` (`golden/dxf/*.txt`, from `ccore_golden`; suite `dxf_in`). Where it differs
+from `reference::read_dxf` over the `dxf` crate 0.6.2:
+
+- **Additions, not in Rust's output:** each polyline's layer (an entity of layer `0` in a block takes
+  the INSERT's, as AutoCAD), the LAYER table's on / frozen, and TEXT / MTEXT anchors (placed, with
+  their height and text). Rust reads no layer and no text. Nothing is filtered by layer: the
+  polylines stay Rust's.
+- **Budgets Rust has not:** at most 2^24 entity visits through blocks (a block bomb: Rust loops
+  for ages; C stops and adds the note "stopped expanding blocks (too many copies)"); an arc or
+  ellipse whose `while sweep <= 0 { sweep += TAU }` would take more than 2^20 turns is not drawn
+  (Rust does not end); an arc of 2,000,000 points or more is not made, only noted as truncated
+  (Rust allocates it and may abort). 102 groups and xdata control groups are read without
+  recursion (Rust recurses).
+- **Refused, Rust reads them:** binary DXF and DXB ("not a readable DXF: binary DXF is not read
+  by the C core; save it as a text (ASCII) DXF").
+- **Malformed files only** (a well-formed file reads the same): the CLASSES, TABLES, OBJECTS and
+  THUMBNAILIMAGE sections are skipped to their ENDSEC, not parsed (Rust can fail inside them);
+  header variables other than `$INSUNITS` and `$ACADVER` are not checked for their codes; handles
+  (codes 5, 330…) are not parsed as hex; the `\U+XXXX` and `^` escapes in strings are not decoded
+  (block and layer names compare as raw bytes); a double in an error text is printed as `{:?}`, not
+  as the crate's `{:.12}`; a code line starting 0xEF ?? 0xBF keeps the 0xBF.
+- **Floats:** sin, cos and atan2 are the C core's correctly rounded ones (`ifc_math.h`); glibc's
+  differ in the last bit for about 0.1 % of inputs. All 14 fixtures match byte for byte today; the
+  suite accepts a number within 4 ulp and prints how many it needed (0).
+- **Session (minimal reference-plan layer, `session/links_dxf.c`):** a new reference is placed at
+  offset 0, rotation 0 (Rust also tries survey coordinates and centres a reference that misses the
+  model: `viewing.rs:1538-1600`, not ported); `view_references` gives segments for plans only
+  (sections: none yet).

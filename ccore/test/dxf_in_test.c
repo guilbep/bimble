@@ -12,6 +12,9 @@
 #include <string.h>
 #include "../src/dxf_in.h"
 #include "../src/fmt.h"
+#include "../host/host.h"
+#include "../session/calls.h"
+#include "../session/session.h"
 #include "check.h"
 
 static size_t ulp_numbers, exact_numbers;
@@ -276,6 +279,133 @@ static void mangled(const char *gdir) {
     check_true("mangled fixtures read or refused", runs > 500);
 }
 
+static int call(cc_session *s, const char *op, const char *name, const char *body, Buf *out) {
+    buf_clear(out);
+    return cc_call(s, op, name, body, strlen(body), out);
+}
+
+/* The session calls (links_dxf.h): link_dxf in a plan, the links rows, view_references,
+ * manage_links move / rotate / hide / show / reload / remove, each one undo step. */
+static void session_calls(const char *floats, const char *gdir) {
+    char path[4096], body[8192];
+    snprintf(path, sizeof path, "%s/../frame.json", floats);
+    cc_session *s = cc_session_new(cc_platform_native());
+    cc_error err;
+    if (!s || cc_session_open(s, path, &err)) {
+        check_true("frame.json opens", 0);
+        return;
+    }
+    Buf ans;
+    buf_init(&ans);
+    snprintf(body, sizeof body, "{\"path\":\"%s/fixtures/r12.dxf\"}", gdir);
+    check_true("link_dxf in the 3D view: refused", call(s, "action", "link_dxf", body, &ans) == CC_ERR &&
+                                                      strstr(buf_cstr(&ans), "2D views"));
+    call(s, "query", "open_views", "", &ans);
+    const char *k = strstr(buf_cstr(&ans), "\"auto_name\":{\"kind\":\"plan\"");
+    const char *idp = k ? strstr(k, "\"id\":\"") : NULL;
+    if (idp) idp += 6;
+    check_true("a plan view", idp != NULL);
+    if (!idp) return;
+    char vid[23];
+    memcpy(vid, idp, 22), vid[22] = 0;
+    char tb[256];
+    snprintf(tb, sizeof tb, "{\"op\":\"open\",\"tab\":{\"type\":\"view\",\"id\":\"%s\"}}", vid);
+    check_true("open the plan's tab", call(s, "tab", "", tb, &ans) == CC_OK);
+    snprintf(tb, sizeof tb, "{\"op\":\"activate\",\"tab\":{\"type\":\"view\",\"id\":\"%s\"}}", vid);
+    check_true("activate it", call(s, "tab", "", tb, &ans) == CC_OK);
+    size_t undo0 = s->hist.nundo;
+    snprintf(body, sizeof body, "{\"path\":\"%s/fixtures/r12.dxf\",\"offset_mm\":[0,0],\"rotation_deg\":0}", gdir);
+    int rc = call(s, "action", "link_dxf", body, &ans);
+    if (rc != CC_OK) printf("  link_dxf: %s\n", buf_cstr(&ans));
+    check_true("link_dxf r12.dxf -> 200", rc == CC_OK);
+    char rid[23] = "";
+    call(s, "query", "links", "", &ans);
+    const char *ip = strstr(buf_cstr(&ans), "{\"id\":\"");
+    if (ip) memcpy(rid, ip + 7, 22), rid[22] = 0;
+    check_true("link_dxf: one undo step", s->hist.nundo == undo0 + 1);
+    call(s, "query", "links", "", &ans);
+    char row[256];
+    snprintf(row, sizeof row, "[{\"id\":\"%s\",\"kind\":\"dxf\",\"name\":\"r12.dxf\",\"visible\":true}]", rid);
+    check_eq("query links: the reference's row", ans.p, ans.len, row, strlen(row));
+    snprintf(tb, sizeof tb, "{\"view\":\"%s\"}", vid);
+    call(s, "query", "view_references", tb, &ans);
+    check_true("view_references: r12.dxf listed", strstr(buf_cstr(&ans), "\"name\":\"r12.dxf\"") != NULL);
+    const char *seg = strstr(buf_cstr(&ans), "\"polylines\":[[0.0,0.0,");
+    check_true("view_references: the first point (0, 0) at the cut height", seg != NULL);
+    snprintf(tb, sizeof tb, "{\"op\":\"move\",\"id\":\"%s\",\"offset_mm\":[1000,-500]}", rid);
+    check_true("move -> 200, one step", call(s, "action", "manage_links", tb, &ans) == CC_OK && s->hist.nundo == undo0 + 2);
+    check_true("move again: no step", call(s, "action", "manage_links", tb, &ans) == CC_OK && s->hist.nundo == undo0 + 2);
+    snprintf(tb, sizeof tb, "{\"view\":\"%s\"}", vid);
+    call(s, "query", "view_references", tb, &ans);
+    check_true("moved: the first point at (1000, -500)", strstr(buf_cstr(&ans), "\"polylines\":[[1000.0,-500.0,") != NULL);
+    snprintf(tb, sizeof tb, "{\"op\":\"rotate\",\"id\":\"%s\",\"rotation_deg\":90}", rid);
+    check_true("rotate -> 200", call(s, "action", "manage_links", tb, &ans) == CC_OK && s->hist.nundo == undo0 + 3);
+    snprintf(tb, sizeof tb, "{\"op\":\"hide\",\"id\":\"%s\"}", rid);
+    check_true("hide -> 200", call(s, "action", "manage_links", tb, &ans) == CC_OK);
+    call(s, "query", "links", "", &ans);
+    check_true("hidden in links", strstr(buf_cstr(&ans), "\"visible\":false") != NULL);
+    snprintf(tb, sizeof tb, "{\"view\":\"%s\"}", vid);
+    call(s, "query", "view_references", tb, &ans);
+    check_true("hidden: listed with no polylines", strstr(buf_cstr(&ans), "\"visible\":false") && strstr(buf_cstr(&ans), "\"polylines\":[]"));
+    snprintf(tb, sizeof tb, "{\"op\":\"show\",\"id\":\"%s\"}", rid);
+    check_true("show -> 200", call(s, "action", "manage_links", tb, &ans) == CC_OK);
+    snprintf(body, sizeof body, "{\"op\":\"reload\",\"id\":\"%s\",\"path\":\"%s/fixtures/feet_bom.dxf\"}", rid, gdir);
+    check_true("reload from another file -> 200", call(s, "action", "manage_links", body, &ans) == CC_OK);
+    call(s, "query", "links", "", &ans);
+    check_true("reloaded: its name, the same id", strstr(buf_cstr(&ans), "feet_bom.dxf") && strstr(buf_cstr(&ans), rid));
+    const cc_model *m = cc_session_model(s);
+    const cc_reference *r = NULL;
+    for (size_t i = 0; i < m->nviews; i++)
+        if (m->views[i].nreferences) r = &m->views[i].references[0];
+    check_true("reloaded: kept where it was put", r && r->offset_mm[0] == 1000 && r->offset_mm[1] == -500 && r->rotation_deg == 90 &&
+                                                    r->npolylines == 1 && r->has_source);
+    check_true("undo -> back to r12.dxf", call(s, "action", "undo", "", &ans) == CC_OK);
+    call(s, "query", "links", "", &ans);
+    check_true("undone: r12.dxf again", strstr(buf_cstr(&ans), "r12.dxf") != NULL);
+    snprintf(tb, sizeof tb, "{\"op\":\"remove\",\"id\":\"%s\"}", rid);
+    check_true("remove -> 200", call(s, "action", "manage_links", tb, &ans) == CC_OK);
+    call(s, "query", "links", "", &ans);
+    check_eq("removed: no rows", ans.p, ans.len, "[]", 2);
+    check_true("remove again: no reference plan", call(s, "action", "manage_links", tb, &ans) == CC_ERR &&
+                                                       strstr(buf_cstr(&ans), "no reference plan"));
+    snprintf(body, sizeof body, "{\"path\":\"%s/fixtures/plan.dwg\"}", gdir);
+    check_true("a DWG: Rust's text", call(s, "action", "link_dxf", body, &ans) == CC_ERR && strstr(buf_cstr(&ans), "dwg2dxf"));
+    snprintf(body, sizeof body, "{\"path\":\"%s/fixtures/truncated.dxf\"}", gdir);
+    check_true("a truncated DXF: the reader's text", call(s, "action", "link_dxf", body, &ans) == CC_ERR &&
+                                                         strstr(buf_cstr(&ans), "unexpectedly ended"));
+    /* The same calls on a PDF reference (L1's link_pdf): manage_links works by id for both. */
+    snprintf(body, sizeof body, "{\"path\":\"%s/../reference/fixtures/lines.pdf\",\"offset_mm\":[0,0],\"rotation_deg\":0}", gdir);
+    check_true("link_pdf lines.pdf -> 200", call(s, "action", "link_pdf", body, &ans) == CC_OK);
+    call(s, "query", "links", "", &ans);
+    const char *pp = strstr(buf_cstr(&ans), "{\"id\":\"");
+    char pid[23] = "";
+    if (pp) memcpy(pid, pp + 7, 22), pid[22] = 0;
+    check_true("the PDF's row", pp && strstr(buf_cstr(&ans), "\"kind\":\"pdf\""));
+    size_t u = s->hist.nundo;
+    snprintf(tb, sizeof tb, "{\"op\":\"move\",\"id\":\"%s\",\"offset_mm\":[250,250]}", pid);
+    check_true("PDF: move -> 200, one step", call(s, "action", "manage_links", tb, &ans) == CC_OK && s->hist.nundo == u + 1);
+    snprintf(tb, sizeof tb, "{\"op\":\"hide\",\"id\":\"%s\"}", pid);
+    check_true("PDF: hide -> 200", call(s, "action", "manage_links", tb, &ans) == CC_OK && s->hist.nundo == u + 2);
+    snprintf(tb, sizeof tb, "{\"op\":\"reload\",\"id\":\"%s\"}", pid);
+    rc = call(s, "action", "manage_links", tb, &ans);
+    if (rc != CC_OK) printf("  reload: %s\n", buf_cstr(&ans));
+    check_true("PDF: reload from its source -> 200", rc == CC_OK);
+    m = cc_session_model(s);
+    r = NULL;
+    for (size_t i = 0; i < m->nviews; i++)
+        for (size_t j = 0; j < m->views[i].nreferences; j++)
+            if (!memcmp(m->views[i].references[j].id.c, pid, 22)) r = &m->views[i].references[j];
+    check_true("PDF reloaded: still a pdf, moved, hidden, with lines",
+               r && r->format.n == 3 && !memcmp(r->format.p, "pdf", 3) && r->offset_mm[0] == 250 && !r->visible && r->npolylines > 0);
+    snprintf(tb, sizeof tb, "{\"op\":\"remove\",\"id\":\"%s\"}", pid);
+    check_true("PDF: remove -> 200", call(s, "action", "manage_links", tb, &ans) == CC_OK);
+    check_true("PDF: undo the remove", call(s, "action", "undo", "", &ans) == CC_OK);
+    call(s, "query", "links", "", &ans);
+    check_true("PDF: back after undo", strstr(buf_cstr(&ans), pid) != NULL);
+    buf_free(&ans);
+    cc_session_free(s);
+}
+
 int main(int argc, char **argv) {
     const char *floats = argc > 1 ? argv[1] : "ccore/golden/floats";
     char gdir[4096];
@@ -284,5 +414,6 @@ int main(int argc, char **argv) {
     extras(gdir);
     hostile();
     mangled(gdir);
+    session_calls(floats, gdir);
     return report("dxf_in");
 }

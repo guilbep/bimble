@@ -35,6 +35,7 @@
 #include "annot.h"
 #include "measure.h" /* ticket T1 */
 #include "versions.h" /* ticket H1 */
+#include "links_dxf.h" /* L2 */
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -544,6 +545,7 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "measure")) return loaded(s); /* ribbon.rs:612 `_ => loaded` (ticket T1) */
     /* ---- L1: reference plans (links_ref.h): ribbon.rs `_ => loaded`; stored in a model's view ---- */
     if (!strcmp(name, "link_pdf")) return s->open;
+    if (!strcmp(name, "link_dxf")) return s->open; /* L2: as link_pdf (links_ref.h) */
     /* Visibility and the section box (ribbon.rs:592-611; the C core has only the 3D view: never flat). */
     if (!strcmp(name, "section_box") || !strcmp(name, "reveal_hidden")) return loaded(s);
     if (!strcmp(name, "box_to_selection")) return loaded(s) && s->vis.section_on;
@@ -1287,6 +1289,15 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         rc = CC_OK;
         goto end;
     }
+    /* ---- L2: manage_links on a reference plan (by "id", links_dxf.h): one step ---- */
+    if (v && jr_get(v, "id") && !jr_get(v, "name")) {
+        cc_cmds l;
+        cc_cmds_init(&l);
+        if (!cc_ref_manage(s, v, &a, &l, out)) rc = try_apply(s, l.v, l.n, out);
+        cc_cmds_free(&l);
+        goto end;
+    }
+    /* ---- end L2 ---- */
     const JrVal *op = v ? jr_get(v, "op") : NULL, *nm = v ? jr_get(v, "name") : NULL;
     if (op && op->type != JR_STR) {
         buf_puts(out, "op: a string");
@@ -1353,13 +1364,13 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
         return CC_ERR;
     }
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return link_action(s, name, body, n, out);
-    /* ---- L1: link_pdf, one set_view / add_view Command (links_ref.h) ---- */
-    if (!strcmp(name, "link_pdf")) {
+    /* ---- L1: link_pdf, one set_view / add_view Command (links_ref.h); L2: link_dxf the same way ---- */
+    if (!strcmp(name, "link_pdf") || !strcmp(name, "link_dxf")) {
         Arena ra;
         arena_init(&ra, 0);
         cc_cmds l;
         cc_cmds_init(&l);
-        int lrc = cc_refs_link(s, "pdf", body, n, scene_now(s), &ra, &l, out) ? CC_ERR : try_apply(s, l.v, l.n, out);
+        int lrc = cc_refs_link(s, name + 5, body, n, scene_now(s), &ra, &l, out) ? CC_ERR : try_apply(s, l.v, l.n, out);
         cc_cmds_free(&l);
         arena_free(&ra);
         return lrc;

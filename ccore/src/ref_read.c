@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "pdf_in.h"
+#include "dxf_in.h" /* L2 */
 
 void cc_refread_init(cc_refread *r) {
     memset(r, 0, sizeof *r);
@@ -72,10 +73,26 @@ int cc_ref_read(const char *name, size_t name_len, const unsigned char *bytes, s
         return -1;
     }
     if (ends_with_ci(name, name_len, ".dxf")) {
-        /* ---- L2: the DXF reader goes here (cc_dxf_read) ---- */
-        buf_append(err, name, name_len);
-        buf_puts(err, ": DXF reference plans are not read by the C core yet");
-        return -1;
+        /* ---- L2: the DXF reader (dxf_in.h), its polylines through Out::push, its notes ---- */
+        cc_dxf d;
+        if (cc_dxf_read(bytes, n, &d, err)) return -1;
+        for (size_t i = 0; i < d.npolylines && !out->oom; i++)
+            cc_refread_push(out, (const double(*)[2])(d.xy + 2 * d.start[i]), d.start[i + 1] - d.start[i]);
+        out->truncated |= d.truncated;
+        Buf nb;
+        buf_init(&nb);
+        cc_dxf_notes(&d, &nb);
+        buf_append(&out->notes, nb.p, nb.len);
+        if (nb.oom || out->notes.oom) out->oom = 1;
+        buf_free(&nb);
+        cc_dxf_free(&d);
+        if (out->oom) {
+            cc_refread_free(out);
+            buf_puts(err, "out of memory");
+            return -1;
+        }
+        return 0;
+        /* ---- end L2 ---- */
     }
     if (ends_with_ci(name, name_len, ".pdf")) return cc_pdf_read(bytes, n, pdf_scale, out, err);
     if (ends_with_ci(name, name_len, ".dwg")) {
