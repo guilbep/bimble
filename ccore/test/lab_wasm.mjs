@@ -271,7 +271,9 @@ async function main() {
   const saved = JSON.parse(await evalJs("(() => { try { const t = window.ccoreSave(); return JSON.stringify({ n: t.length, wall: t.includes('\"IfcWall\"') }); } catch (e) { return JSON.stringify({ e: String(e) }); } })()"));
   check("ccoreSave() returns the saved text with the placed wall, state saved", saved.n > 1000 && saved.wall && (await bb("b.state.value.unsaved")) === false, JSON.stringify(saved));
   const undoMs = await timed("b.undo()");
-  await sleep(200);
+  // The redraw after the undo: wait for the picture to be the one before the place (at most 5 s; a
+  // fixed 200 ms raced it on a loaded machine), then check it.
+  for (const until = Date.now() + 5000; Date.now() < until && (await evalJs(hash)) !== h0; ) await sleep(100);
   const h2 = await evalJs(hash), count2 = await bb("b.query('elements', {}).length");
   console.log(`undo: ${typeof undoMs === "number" ? undoMs.toFixed(1) + " ms to the frame" : undoMs}`);
   check("undo restores the element count and the picture", count2 === count0 && h2 === h0, `${count2} elements, hash ${h2} (before the place ${h0})`);

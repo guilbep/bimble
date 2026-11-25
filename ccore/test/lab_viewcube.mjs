@@ -156,12 +156,12 @@ async function main() {
   const gl = async () => JSON.parse(await evalJs("JSON.stringify(window.__bbGl)"));
   const camera = async () => (await gl()).camera;
   const frames = () => evalJs("window.__bbGl.frames");
-  // Settled: no new frame for 400 ms (at most 3000 ms). It waited for one more frame, and none ever came:
+  // Settled: no new frame for 1200 ms (400 ms raced the redraw on a loaded machine) (at most 3000 ms). It waited for one more frame, and none ever came:
   // the frame of the change was drawn already, so each call waited the full 3000 ms (K3: 6 to 15 calls a suite).
   const settle = async () => {
     const until = Date.now() + 3000;
     let f = await frames(), since = Date.now();
-    while (Date.now() - since < 400 && Date.now() < until) {
+    while (Date.now() - since < 1200 && Date.now() < until) {
       await sleep(50);
       const g = await frames();
       if (g !== f) (f = g), (since = Date.now());
