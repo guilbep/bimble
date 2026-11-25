@@ -98,7 +98,8 @@ int main(void) {
 
     /* False rows: nothing behind them. */
     char *rf = ask(s, "query", "recent_files", "", &st);
-    check_true("recent_files false <=> query recent_files is the stub []", (cap(c1, "recent_files") == 0) == (st == CC_OK && !strcmp(rf, "[]")));
+    /* FS1: the native core keeps the recent files (settings_file.h): the row is true and the query answers a list. */
+    check_true("native: recent_files true, and query recent_files answers a list", cap(c1, "recent_files") == 1 && st == CC_OK && rf[0] == '[');
     char *sd = ask(s, "query", "standards", "", &st);
     check_true("standards false <=> query standards is null", (cap(c1, "standards") == 0) == !strcmp(sd, "null"));
     char *se = ask(s, "query", "state", "", &st);

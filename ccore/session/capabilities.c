@@ -39,7 +39,7 @@ static const struct {
     {"project_info", YES},     /* query project, verb set_project_field */
     {"quantities", FULL_BUILD}, /* schedules.h schedule_rows, schedule_csv (Q2) */
     {"rebar", NO},
-    {"recent_files", NO},      /* calls.c EMPTY: a stub [] (FS1) */
+    {"recent_files", NATIVE},  /* FS1: settings_file.h, the native host reads and opens paths (the browser cannot) */
     {"references", YES},       /* links.h, links_ref.h */
     {"schedules", FULL_BUILD},
     {"section_catalogue", NO},
