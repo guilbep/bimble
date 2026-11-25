@@ -7,8 +7,14 @@
  *
  * Same limits as Rust (Limits::for_text: 10 triangles per displayed byte, at least 1 M; item
  * visits per 10 displayed bytes, at least 5 M; per element at most that many triangles + 1), the
- * same batches of 1024 elements and the same cut, single-threaded. The geometry is ifc_geom.h,
- * shared with the import (ifc_in.c).
+ * same batches of 1024 elements and the same cut. Multi-threaded like Rust (cc_jobs, jobs.h):
+ * the STEP chunks, the shared shapes, the elements of a batch and their meshes on all cores,
+ * merged in file order, so the scene is the same on any thread count (a batch that runs out of
+ * budget is meshed again on one thread, as read.rs). The property and quantity types Rust does
+ * not parse for display are not parsed (read.rs NOT_DISPLAYED). One difference: a placement
+ * whose chain warned is not cached, so its warning counts once per product (Rust: once per
+ * worker that met it, which depends on the timing). The geometry is ifc_geom.h, shared with the
+ * import (ifc_in.c).
  *
  * Not done (reported in the warnings, never silent): no boolean kernel in the C core (Rust:
  * manifold3d), so openings (IfcRelVoidsElement) are not cut and boolean results are drawn as

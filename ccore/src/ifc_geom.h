@@ -15,6 +15,7 @@
 #include "scene.h"
 #include "step.h"
 #include "verbs.h"
+#include "jobs.h"
 
 /* The freestanding wasm32 shim has no strcmp, strncmp, memchr or calloc: local ones. */
 static int s_cmp(const char *a, const char *b) {
@@ -37,10 +38,12 @@ static void *zalloc(size_t n, size_t sz) {
     if (p) memset(p, 0, n * sz);
     return p;
 }
+#ifdef __wasm__
 #define strcmp s_cmp
 #define strncmp s_ncmp
-#define memchr m_chr
 #define calloc zalloc
+#define memchr m_chr
+#endif
 
 #ifdef __clang__
 #pragma clang fp contract(off)
@@ -148,10 +151,18 @@ static void tally_sort(Tallies *t) { /* insertion sort: small, bounded by MAX_TA
 
 #define MAX_NESTING 32
 
+/* Placement cache: open addressing on the entity index (key ix + 1; 0 empty). */
+typedef struct {
+    size_t key;
+    Aff a;
+} PlSlot;
+
 typedef struct {
     const cc_step_file *f;
-    Aff *pl;          /* placement cache, by entity index */
-    unsigned char *has_pl;
+    PlSlot *pl; /* placement cache (malloc; NULL until the first placement) */
+    size_t plcap, pln;
+    int pl_no_warned; /* 1: a placement whose chain warned is not cached (its users all warn:
+                       * the count does not depend on which thread met it first) */
     Tallies warnings; /* Reader warnings (BTreeMap with counts) */
     Tallies unsup;    /* outside the C subset */
     double arc_tol;     /* arc tessellation tolerance, file units */
@@ -290,10 +301,45 @@ static Aff axis_placement(R *r, const cc_sv *v) {
     return a;
 }
 
+static size_t pl_hash(size_t ix, size_t cap) { return (size_t)(((uint64_t)ix * 0x9E3779B97F4A7C15ull) >> 20) & (cap - 1); }
+static const Aff *pl_get(const R *r, size_t ix) {
+    if (!r->pl) return NULL;
+    for (size_t k = pl_hash(ix, r->plcap);; k = (k + 1) & (r->plcap - 1)) {
+        if (!r->pl[k].key) return NULL;
+        if (r->pl[k].key == ix + 1) return &r->pl[k].a;
+    }
+}
+static void pl_put(R *r, size_t ix, const Aff *a) { /* out of memory: not cached */
+    if (2 * (r->pln + 1) > r->plcap) {
+        size_t cap = r->plcap ? r->plcap * 2 : 1024;
+        PlSlot *t = calloc(cap, sizeof *t);
+        if (!t) return;
+        for (size_t i = 0; i < r->plcap; i++) {
+            if (!r->pl[i].key) continue;
+            size_t k = pl_hash(r->pl[i].key - 1, cap);
+            while (t[k].key) k = (k + 1) & (cap - 1);
+            t[k] = r->pl[i];
+        }
+        free(r->pl);
+        r->pl = t, r->plcap = cap;
+    }
+    size_t k = pl_hash(ix, r->plcap);
+    while (r->pl[k].key && r->pl[k].key != ix + 1) k = (k + 1) & (r->plcap - 1);
+    if (!r->pl[k].key) r->pln++;
+    r->pl[k].key = ix + 1, r->pl[k].a = *a;
+}
+static void pl_clear(R *r) {
+    if (r->pl) memset(r->pl, 0, r->plcap * sizeof *r->pl);
+    r->pln = 0;
+}
+
 static Aff object_placement(R *r, uint64_t id, int depth) {
     const cc_step_entity *e = cc_step_get(r->f, id);
     size_t ix = e ? cc_step_index(r->f, e) : 0;
-    if (e && r->has_pl[ix]) return r->pl[ix];
+    const Aff *hit = e ? pl_get(r, ix) : NULL;
+    if (hit) return *hit;
+    size_t total0 = 0;
+    for (size_t k = 0; r->pl_no_warned && k < r->warnings.n; k++) total0 += r->warnings.v[k].count;
     if (depth > 64) {
         warn(r, "placement chain too deep or cyclic", 0, 0);
         return IDENT;
@@ -311,8 +357,9 @@ static Aff object_placement(R *r, uint64_t id, int depth) {
         warn(r, "unsupported placement ", e->name, " (used identity)");
         a = IDENT;
     }
-    r->pl[ix] = a;
-    r->has_pl[ix] = 1;
+    size_t total1 = 0;
+    for (size_t k = 0; r->pl_no_warned && k < r->warnings.n; k++) total1 += r->warnings.v[k].count;
+    if (!r->pl_no_warned || total1 == total0) pl_put(r, ix, &a);
     return a;
 }
 
@@ -1012,11 +1059,12 @@ out:
     free(hidx);
 }
 
-typedef struct { /* read.rs Budget, single-threaded */
+typedef struct { /* read.rs Budget: shared by the workers of a job (relaxed atomics) */
     size_t triangles_left, visits_left;
     int exhausted;
     size_t element_max; /* most triangles one element may take (SIZE_MAX: no limit) */
 } Budget;
+static int budget_exhausted(Budget *b) { return cc_atomic_load(&b->exhausted); }
 
 typedef struct {
     Tris *mb;
@@ -1025,17 +1073,26 @@ typedef struct {
 } Emit;
 
 static int has_budget(Emit *o) {
-    if (o->budget->triangles_left == 0) o->budget->exhausted = 1;
-    return !o->budget->exhausted && !o->mb->oom && o->mb->n < o->budget->element_max;
+    Budget *b = o->budget;
+    if (cc_atomic_load(&b->triangles_left) == 0) cc_atomic_store(&b->exhausted, 1);
+    return !cc_atomic_load(&b->exhausted) && !o->mb->oom && o->mb->n < b->element_max;
 }
 static void charge(Emit *o, size_t before) {
     size_t used = o->mb->n > before ? o->mb->n - before : 0;
-    o->budget->triangles_left = o->budget->triangles_left > used ? o->budget->triangles_left - used : 0;
+    if (!used) return; /* nothing to take (the CAS would store the same value) */
+    size_t v = cc_atomic_load(&o->budget->triangles_left);
+    while (!cc_atomic_cas(&o->budget->triangles_left, &v, v > used ? v - used : 0)) {
+    }
 }
 static int visit(Budget *b) {
-    int ok = !b->exhausted && b->visits_left > 0;
-    if (ok) b->visits_left--;
-    else b->exhausted = 1;
+    int ok = !cc_atomic_load(&b->exhausted);
+    if (ok) {
+        size_t v = cc_atomic_load(&b->visits_left);
+        while (v > 0 && !cc_atomic_cas(&b->visits_left, &v, v - 1)) {
+        }
+        ok = v > 0;
+    }
+    if (!ok) cc_atomic_store(&b->exhausted, 1);
     return ok;
 }
 /* Emit::polygon: file units -> mm, then add_polygon. */
@@ -1846,44 +1903,100 @@ static void materials(R *r, ElMat *em) {
 
 /* displayed_bytes: bytes of the instances the display parses (all but property sets and
  * quantities), for Limits::for_text. */
-static uint64_t displayed_bytes(const char *t, size_t n) {
-    static const char *NOT_DISPLAYED[] = {
-        "IFCPROPERTYSINGLEVALUE", "IFCPROPERTYENUMERATEDVALUE", "IFCPROPERTYLISTVALUE", "IFCPROPERTYBOUNDEDVALUE",
-        "IFCPROPERTYTABLEVALUE", "IFCPROPERTYREFERENCEVALUE", "IFCCOMPLEXPROPERTY", "IFCPROPERTYSET",
-        "IFCRELDEFINESBYPROPERTIES", "IFCELEMENTQUANTITY", "IFCQUANTITYLENGTH", "IFCQUANTITYAREA",
-        "IFCQUANTITYVOLUME", "IFCQUANTITYCOUNT", "IFCQUANTITYWEIGHT", "IFCQUANTITYTIME"};
-    uint64_t skipped = 0;
-    int in_skipped = 0;
-    size_t i = 0;
-    for (;;) {
+/* read.rs NOT_DISPLAYED: types the display never reads, not even parsed (cc_step_parse_skipping). */
+static const char *const NOT_DISPLAYED[] = {
+    "IFCPROPERTYSINGLEVALUE", "IFCPROPERTYENUMERATEDVALUE", "IFCPROPERTYLISTVALUE", "IFCPROPERTYBOUNDEDVALUE",
+    "IFCPROPERTYTABLEVALUE", "IFCPROPERTYREFERENCEVALUE", "IFCCOMPLEXPROPERTY", "IFCPROPERTYSET",
+    "IFCRELDEFINESBYPROPERTIES", "IFCELEMENTQUANTITY", "IFCQUANTITYLENGTH", "IFCQUANTITYAREA",
+    "IFCQUANTITYVOLUME", "IFCQUANTITYCOUNT", "IFCQUANTITYWEIGHT", "IFCQUANTITYTIME"};
+#define N_NOT_DISPLAYED (sizeof NOT_DISPLAYED / sizeof *NOT_DISPLAYED)
+
+/* The NOT_DISPLAYED state a line starting with '#' sets. */
+static int db_hash_line(const char *line, size_t len) {
+    size_t k = 0;
+    while (k < len && line[k] != '=') k++;
+    const char *rest = k < len ? line + k + 1 : line + len;
+    size_t rn = k < len ? len - k - 1 : 0;
+    while (rn && (*rest == ' ' || *rest == '\t' || *rest == '\r' || *rest == '\f' || *rest == '\n')) rest++, rn--;
+    size_t e = 0;
+    while (e < rn && ((rest[e] >= '0' && rest[e] <= '9') || (rest[e] >= 'a' && rest[e] <= 'z') ||
+                      (rest[e] >= 'A' && rest[e] <= 'Z') || rest[e] == '_'))
+        e++;
+    for (size_t q = 0; q < N_NOT_DISPLAYED; q++) {
+        const char *nd = NOT_DISPLAYED[q];
+        if (strlen(nd) != e) continue;
+        size_t c = 0;
+        while (c < e && (rest[c] >= 'a' && rest[c] <= 'z' ? rest[c] - 32 : rest[c]) == nd[c]) c++;
+        if (c == e) return 1;
+    }
+    return 0;
+}
+
+#define DB_CHUNK ((size_t)4 << 20)
+typedef struct {
+    const char *t;
+    size_t n;
+    uint64_t *prefix, *rest; /* per chunk: bytes of the lines before its first '#' line, and after */
+    int *has_hash, *last;    /* per chunk: a '#' line seen; the state after its last one */
+} DbJob;
+
+/* The first line start at or after `at` (lines start at 0 and after each '\n'; n is one when the
+ * text ends with '\n'). */
+static size_t db_line_start(const char *t, size_t n, size_t at) {
+    if (at == 0) return 0;
+    if (at > n) return n + 1;
+    while (at <= n && t[at - 1] != '\n') at++;
+    return at;
+}
+
+static void db_job(void *ctx, size_t k, size_t w) {
+    (void)w;
+    DbJob *d = ctx;
+    const char *t = d->t;
+    size_t n = d->n, i = db_line_start(t, n, k * DB_CHUNK), stop = db_line_start(t, n, (k + 1) * DB_CHUNK);
+    uint64_t pre = 0, rest = 0;
+    int seen = 0, st = 0;
+    while (i < stop && i <= n) {
         size_t j = i;
-        while (j < n && t[j] != '\n') j++;
-        const char *line = t + i;
+        const char *nl = i < n ? memchr(t + i, '\n', n - i) : NULL;
+        j = nl ? (size_t)(nl - t) : n;
         size_t len = j - i;
-        if (len && line[0] == '#') {
-            size_t k = 0;
-            while (k < len && line[k] != '=') k++;
-            const char *rest = k < len ? line + k + 1 : line + len;
-            size_t rn = k < len ? len - k - 1 : 0;
-            while (rn && (*rest == ' ' || *rest == '\t' || *rest == '\r' || *rest == '\f' || *rest == '\n'))
-                rest++, rn--;
-            size_t e = 0;
-            while (e < rn && ((rest[e] >= '0' && rest[e] <= '9') || (rest[e] >= 'a' && rest[e] <= 'z') ||
-                              (rest[e] >= 'A' && rest[e] <= 'Z') || rest[e] == '_'))
-                e++;
-            in_skipped = 0;
-            for (size_t q = 0; q < sizeof NOT_DISPLAYED / sizeof *NOT_DISPLAYED && !in_skipped; q++) {
-                const char *nd = NOT_DISPLAYED[q];
-                if (strlen(nd) != e) continue;
-                size_t c = 0;
-                while (c < e && (rest[c] >= 'a' && rest[c] <= 'z' ? rest[c] - 32 : rest[c]) == nd[c]) c++;
-                in_skipped = c == e;
-            }
-        }
-        if (in_skipped) skipped += len + 1;
-        if (j >= n) break;
+        if (len && t[i] == '#') seen = 1, st = db_hash_line(t + i, len);
+        if (!seen) pre += len + 1;
+        else if (st) rest += len + 1;
         i = j + 1;
     }
+    d->prefix[k] = pre, d->rest[k] = rest, d->has_hash[k] = seen, d->last[k] = st;
+}
+
+/* displayed_bytes: bytes of the instances the display parses (all but property sets and
+ * quantities), for Limits::for_text. A line continues the state of the last line starting with
+ * '#'. Chunks of lines in parallel, combined in order. */
+static uint64_t displayed_bytes(const char *t, size_t n) {
+    size_t nc = n / DB_CHUNK + 1;
+    DbJob d = {t, n, calloc(nc, sizeof(uint64_t)), calloc(nc, sizeof(uint64_t)), calloc(nc, sizeof(int)),
+               calloc(nc, sizeof(int))};
+    uint64_t skipped = 0;
+    if (d.prefix && d.rest && d.has_hash && d.last) {
+        cc_jobs_run(nc, db_job, &d);
+        int st = 0;
+        for (size_t k = 0; k < nc; k++) {
+            if (st) skipped += d.prefix[k];
+            skipped += d.rest[k];
+            if (d.has_hash[k]) st = d.last[k];
+        }
+    } else { /* out of memory: serial */
+        int st = 0;
+        for (size_t i = 0;;) {
+            size_t j = i;
+            while (j < n && t[j] != '\n') j++;
+            if (j > i && t[i] == '#') st = db_hash_line(t + i, j - i);
+            if (st) skipped += j - i + 1;
+            if (j >= n) break;
+            i = j + 1;
+        }
+    }
+    free(d.prefix), free(d.rest), free(d.has_hash), free(d.last);
     return (uint64_t)n > skipped ? (uint64_t)n - skipped : 0;
 }
 

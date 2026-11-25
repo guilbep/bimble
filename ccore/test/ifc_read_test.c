@@ -8,6 +8,9 @@
  * - each input read twice: the same text; the BMSH of each scene has the layout's size.
  * - robustness: truncations and byte mutations of frame.ifc, mapped_item.ifc and curves.ifc:
  *   a scene or an error, no crash (run it under ASan/UBSan too); not IFC, empty, not STEP.
+ * - threads (cc_jobs): every golden read on 1 thread and on 8 gives the same text; so does a
+ *   synthetic model of 3000 products (several 1 MiB parse chunks, several batches of 1024,
+ *   shared maps, openings, an unsupported placement shared by many products).
  * - timing per input (mean of runs). */
 #define _POSIX_C_SOURCE 199309L
 #include <stdint.h>
@@ -15,6 +18,8 @@
 #include <time.h>
 #include "../src/boolean.h"
 #include "../src/ifc_read.h"
+#include "../src/jobs.h"
+#include "../src/step.h"
 #include "check.h"
 
 static double now_ms(void) {
@@ -107,6 +112,98 @@ static int compare(const char *name, const cc_ifc_scene *s, int rc, const cc_err
     return ok;
 }
 
+/* The whole read as text: scene.txt and every element's mesh text, or the error. */
+static void read_txt(const char *t, size_t n, Buf *out) {
+    cc_ifc_scene s;
+    cc_error err;
+    if (cc_ifc_read(t, n, &s, &err)) cc_ifc_error_txt(out, &err);
+    else {
+        cc_ifc_scene_txt(out, &s);
+        for (size_t k = 0; k < s.scene.nelements; k++) cc_ifc_mesh_txt(out, &s, k);
+    }
+    cc_ifc_scene_free(&s);
+}
+
+/* A synthetic model of `n` products: columns with their own extrusion, every third a placed
+ * copy of a shared map, every fifth a wall with an opening, every seventh on a grid placement
+ * (unsupported: warned), property sets between them (parsed past, several chunks). */
+static void synthetic_model(Buf *t, size_t n) {
+    buf_puts(t, "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('synthetic'),'2;1');\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n"
+                "#1=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);\n#2=IFCSIUNIT(*,.PLANEANGLEUNIT.,$,.RADIAN.);\n"
+                "#3=IFCUNITASSIGNMENT((#1,#2));\n#4=IFCCARTESIANPOINT((0.,0.,0.));\n#5=IFCAXIS2PLACEMENT3D(#4,$,$);\n"
+                "#6=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#5,$);\n"
+                "#7=IFCPROJECT('3Synthetic000000000001',$,'p',$,$,$,$,(#6),#3);\n#8=IFCLOCALPLACEMENT($,#5);\n"
+                "#9=IFCBUILDINGSTOREY('3Synthetic000000000002',$,'Level 0',$,$,#8,$,$,.ELEMENT.,0.);\n"
+                "#10=IFCDIRECTION((0.,0.,1.));\n#11=IFCCARTESIANPOINT((0.,0.));\n#12=IFCAXIS2PLACEMENT2D(#11,$);\n"
+                "#13=IFCRECTANGLEPROFILEDEF(.AREA.,$,#12,300.,300.);\n#14=IFCEXTRUDEDAREASOLID(#13,#5,#10,2800.);\n"
+                "#15=IFCSHAPEREPRESENTATION(#6,'Body','SweptSolid',(#14));\n#16=IFCREPRESENTATIONMAP(#5,#15);\n"
+                "#17=IFCGRIDPLACEMENT($,$);\n");
+    unsigned long long b = 100;
+    Buf members;
+    buf_init(&members);
+    for (size_t i = 0; i < n; i++, b += 30) {
+        char line[1024];
+        double x = (double)(i % 60) * 1000.0, y = (double)(i / 60) * 1000.0;
+        snprintf(line, sizeof line,
+                 "#%llu=IFCCARTESIANPOINT((%.1f,%.1f,0.));\n#%llu=IFCAXIS2PLACEMENT3D(#%llu,$,$);\n"
+                 "#%llu=IFCLOCALPLACEMENT(#8,#%llu);\n",
+                 b, x, y, b + 1, b, b + 2, b + 1);
+        buf_puts(t, line);
+        unsigned long long pl = i % 7 == 6 ? 17 : b + 2;
+        if (i % 3 == 0)
+            snprintf(line, sizeof line,
+                     "#%llu=IFCMAPPEDITEM(#16,#%llu);\n#%llu=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#4,1.,$);\n"
+                     "#%llu=IFCSHAPEREPRESENTATION(#6,'Body','MappedRepresentation',(#%llu));\n",
+                     b + 3, b + 4, b + 4, b + 5, b + 3);
+        else
+            snprintf(line, sizeof line,
+                     "#%llu=IFCRECTANGLEPROFILEDEF(.AREA.,$,#12,%.1f,300.);\n#%llu=IFCEXTRUDEDAREASOLID(#%llu,#5,#10,%.1f);\n"
+                     "#%llu=IFCSHAPEREPRESENTATION(#6,'Body','SweptSolid',(#%llu));\n",
+                     b + 3, i % 5 == 0 ? 900.0 : 200.0 + (double)(i % 11) * 20.0, b + 4, b + 3,
+                     2000.0 + (double)(i % 13) * 100.0, b + 5, b + 4);
+        buf_puts(t, line);
+        snprintf(line, sizeof line, "#%llu=IFCPRODUCTDEFINITIONSHAPE($,$,(#%llu));\n#%llu=%s('3Syn%018zu',$,'E%zu',$,$,#%llu,#%llu,$,$);\n",
+                 b + 6, b + 5, b + 7, i % 5 == 0 ? "IFCWALL" : "IFCCOLUMN", i, i, pl, b + 6);
+        buf_puts(t, line);
+        if (i % 5 == 0) { /* an opening through the wall */
+            snprintf(line, sizeof line,
+                     "#%llu=IFCRECTANGLEPROFILEDEF(.AREA.,$,#12,200.,600.);\n#%llu=IFCEXTRUDEDAREASOLID(#%llu,#5,#10,1000.);\n"
+                     "#%llu=IFCSHAPEREPRESENTATION(#6,'Body','SweptSolid',(#%llu));\n#%llu=IFCPRODUCTDEFINITIONSHAPE($,$,(#%llu));\n"
+                     "#%llu=IFCOPENINGELEMENT('3SynO%017zu',$,$,$,$,#%llu,#%llu,$,.OPENING.);\n"
+                     "#%llu=IFCRELVOIDSELEMENT('3SynV%017zu',$,$,$,#%llu,#%llu);\n",
+                     b + 8, b + 9, b + 8, b + 10, b + 9, b + 11, b + 10, b + 12, i, b + 2, b + 11, b + 13, i, b + 7, b + 12);
+            buf_puts(t, line);
+        }
+        for (int k = 0; k < 6; k++) { /* properties: not displayed, parsed past */
+            snprintf(line, sizeof line, "#%llu=IFCPROPERTYSINGLEVALUE('Prop %d; ''x''',$,IFCLABEL('value %zu'),$);\n",
+                     b + 20 + k, k, i);
+            buf_puts(t, line);
+        }
+        char m[32];
+        snprintf(m, sizeof m, "%s#%llu", members.len ? "," : "", b + 7);
+        buf_puts(&members, m);
+    }
+    buf_puts(t, "#50=IFCRELCONTAINEDINSPATIALSTRUCTURE('3Synthetic000000000003',$,$,$,(");
+    buf_append(t, members.p, members.len);
+    buf_puts(t, "),#9);\nENDSEC;\nEND-ISO-10303-21;\n");
+    buf_free(&members);
+}
+
+/* Reads on 1 thread and on 8: the same text. */
+static void threads_same(const char *what, const char *t, size_t n) {
+    Buf a, b;
+    buf_init(&a), buf_init(&b);
+    cc_jobs_set_threads(1);
+    read_txt(t, n, &a);
+    cc_jobs_set_threads(8);
+    read_txt(t, n, &b);
+    cc_jobs_set_threads(0);
+    char m[128];
+    snprintf(m, sizeof m, "%s: 1 thread and 8, the same scene", what);
+    check_true(m, a.len == b.len && !memcmp(a.p, b.p, a.len));
+    buf_free(&a), buf_free(&b);
+}
+
 static int bmsh_size_ok(const cc_ifc_scene *s) {
     Buf b;
     buf_init(&b);
@@ -186,6 +283,7 @@ int main(void) {
         check_true("read twice: identical", rc == rc2 && a.len == b.len && !memcmp(a.p, b.p, a.len));
         buf_free(&a), buf_free(&b);
         cc_ifc_scene_free(&s2);
+        threads_same(G[g].name, t, tn);
         if (!rc) check_true("BMSH size", bmsh_size_ok(&s));
         /* Timing: mean of runs (at least 5, about 200 ms). */
         int runs = 0;
@@ -239,6 +337,31 @@ int main(void) {
             free(t);
         }
         cc_boolean_set(k);
+    }
+
+    /* Threads: a model of several parse chunks and element batches. */
+    {
+        Buf t;
+        buf_init(&t);
+        synthetic_model(&t, 3000);
+        cc_ifc_scene s;
+        cc_error err;
+        int rc = cc_ifc_read(t.p, t.len, &s, &err);
+        Buf a;
+        buf_init(&a);
+        if (!rc) cc_ifc_scene_txt(&a, &s);
+        const char *w = "unsupported placement IFCGRIDPLACEMENT (used identity) (\xc3\x97" "428)";
+        int warned = !rc && strstr(buf_cstr(&a), w) != NULL;
+        printf("synthetic: %zu bytes, %s, %zu elements, %zu shapes\n", t.len, rc ? err.msg : "read",
+               rc ? 0 : s.scene.nelements, rc ? 0 : s.scene.nshapes);
+        check_true("synthetic: over 2 parse chunks", t.len > 2 * CC_STEP_CHUNK_BYTES);
+        check_true("synthetic: 3000 elements", !rc && s.scene.nelements == 3000);
+        check_true("synthetic: the grid placement warned once per product on it (428)", warned);
+        if (!warned) printf("%s\n", buf_cstr(&a));
+        buf_free(&a);
+        cc_ifc_scene_free(&s);
+        threads_same("synthetic", t.p, t.len);
+        buf_free(&t);
     }
 
     /* Errors. */

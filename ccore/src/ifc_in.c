@@ -714,8 +714,6 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
     Buf b;
     buf_init(&b);
     size_t ne = f.n ? f.n : 1;
-    r.pl = malloc(ne * sizeof *r.pl);
-    r.has_pl = calloc(ne, 1);
     ElMat *em = calloc(ne, sizeof *em);
     Props props = {0};
     Pending *els = NULL;
@@ -733,7 +731,7 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
     int storeys_in_arena = 0;
     Cont *cont = calloc(ne, sizeof *cont);
     if (!cont) goto oom;
-    if (!r.pl || !r.has_pl || !em) goto oom;
+    if (!em) goto oom;
 
     if (f.skipped) {
         buf_clear(&b);
@@ -1318,7 +1316,6 @@ done:
     free(open_at);
     free(open_ids);
     free(r.pl);
-    free(r.has_pl);
     tally_free(&r.warnings);
     tally_free(&r.unsup);
     tally_free(&skipped);

@@ -13,6 +13,35 @@
 #define ELEMENT_MAX_TRIANGLES ((size_t)50000000) /* read.rs */
 #define BATCH 1024
 
+/* Built with -DCC_IFC_PROFILE (and -D_POSIX_C_SOURCE=200809L): time and memory per phase on
+ * stderr (ccore/results/ifc_read.md). */
+#ifdef CC_IFC_PROFILE
+#include <stdio.h>
+#include <time.h>
+static double prof_t0;
+static double prof_now(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1e3 + t.tv_nsec / 1e6;
+}
+static void prof(const char *what) {
+    FILE *f = fopen("/proc/self/status", "r");
+    char l[256];
+    long hwm = -1, rss = -1;
+    while (f && fgets(l, sizeof l, f)) {
+        if (!strncmp(l, "VmHWM:", 6)) hwm = strtol(l + 6, NULL, 10);
+        if (!strncmp(l, "VmRSS:", 6)) rss = strtol(l + 6, NULL, 10);
+    }
+    if (f) fclose(f);
+    double t = prof_now();
+    fprintf(stderr, "PROF %-22s %8.1f ms  peak %5ld MB  rss %5ld MB\n", what, t - prof_t0, hwm / 1024, rss / 1024);
+    prof_t0 = t;
+}
+#define PROF(what) prof(what)
+#else
+#define PROF(what) ((void)0)
+#endif
+
 /* ---- small helpers */
 
 static size_t sat_add(size_t a, size_t b) { return a > (size_t)-1 - b ? (size_t)-1 : a + b; }
@@ -31,17 +60,14 @@ static cc_str a_str(Arena *a, const char *s, size_t n, int *oom) {
 static void r_init(R *r, const cc_step_file *f, double arc_tol, double angle_scale) {
     memset(r, 0, sizeof *r);
     r->f = f;
-    size_t ne = f->n ? f->n : 1;
-    r->pl = malloc(ne * sizeof *r->pl);
-    r->has_pl = calloc(ne, 1);
+    r->pl_no_warned = 1;
     r->arc_tol = arc_tol;
     r->angle_scale = angle_scale;
     buf_init(&r->tmp);
 }
-static int r_ok(const R *r) { return r->pl && r->has_pl; }
+static int r_ok(const R *r) { return r->f != NULL; }
 static void r_free(R *r) {
     free(r->pl);
-    free(r->has_pl);
     tally_free(&r->warnings);
     tally_free(&r->unsup);
     buf_free(&r->tmp);
@@ -315,11 +341,14 @@ typedef struct {
     Tris tris;          /* own triangles (world mm) */
     size_t triangles;   /* Piece::triangles */
     Tallies warnings;
+    Tallies cut;        /* C only: openings and booleans left uncut */
+    int oom;
 } Piece;
 
 static void piece_free(Piece *p) {
     tris_free(&p->tris);
     tally_free(&p->warnings);
+    tally_free(&p->cut);
 }
 
 /* Sorts map ids (bottom-up merge sort, no libc qsort in the wasm build). */
@@ -356,7 +385,7 @@ typedef struct {
     const uint64_t *void_ids;
     Shape *shapes;
     size_t nshapes;
-    Tallies cut_warnings; /* C only: openings and booleans left uncut */
+    Tallies cut_warnings; /* C only: openings and booleans left uncut (the pieces' `cut`) */
 } Ctx;
 
 /* Parsed::mapped_item */
@@ -449,7 +478,7 @@ static int piece(Ctx *c, R *w, size_t ent, Budget *budget, Piece *out) {
             buf_puts(&b, ": ");
             buf_u64(&b, cutters);
             buf_puts(&b, " opening(s) not cut (no boolean kernel in the C core)");
-            tally_buf(&c->cut_warnings, &b, 0);
+            tally_buf(&out->cut, &b, 0);
         } else if (cutters && cut(w, &out->tris, ob, cutters, buf_cstr(&b)))
             out->tris.oom = 1;
         buf_free(&b);
@@ -458,7 +487,7 @@ static int piece(Ctx *c, R *w, size_t ent, Budget *budget, Piece *out) {
     }
     if (w->unsup_n > unsup0)
         for (size_t k = unsup0; k < w->unsup_n; k++)
-            tally_add(&c->cut_warnings, "boolean result drawn as its first operand (no boolean kernel in the C core)",
+            tally_add(&out->cut, "boolean result drawn as its first operand (no boolean kernel in the C core)",
                       75, 0);
     out->triangles = out->tris.n;
     out->warnings = w->warnings;
@@ -495,6 +524,98 @@ static int set_err(cc_error *err, const char *a, const char *b) {
 static float fmin32(float a, float b) { return a != a ? b : b != b ? a : a < b ? a : b; }
 static float fmax32(float a, float b) { return a != a ? b : b != b ? a : a > b ? a : b; }
 
+/* ---- parallel jobs (cc_jobs): each task writes its own slot, merged in order after */
+
+#define PROD_CHUNK ((size_t)1 << 16)
+typedef struct {
+    const cc_step_file *f;
+    unsigned char *isp; /* per entity: a product with a body */
+} ProdJob;
+
+static void prod_job(void *ctx, size_t k, size_t w) {
+    (void)w;
+    ProdJob *j = ctx;
+    const cc_step_file *f = j->f;
+    for (size_t i = k * PROD_CHUNK; i < f->n && i < (k + 1) * PROD_CHUNK; i++) {
+        const cc_step_entity *e = &f->ents[i];
+        int skip = 0;
+        for (size_t q = 0; q < sizeof SKIP_CLASSES / sizeof *SKIP_CLASSES && !skip; q++)
+            skip = !strcmp(e->name, SKIP_CLASSES[q]);
+        const cc_step_entity *sh = skip ? NULL : cc_step_deref(f, arg(e, 6)), *pl = sh ? cc_step_deref(f, arg(e, 5)) : NULL;
+        j->isp[i] = sh && is(sh, "IFCPRODUCTDEFINITIONSHAPE") && pl && ends_with(pl->name, "PLACEMENT");
+    }
+}
+
+typedef struct {
+    Ctx *c;
+    R *rs;          /* per worker */
+    Arena *arenas;  /* per worker: the meshes (adopted by the scene arena) */
+    Arena *scratch; /* per worker */
+    Budget *budget;
+    Tallies *warn;  /* per shape */
+    int *bad;       /* per shape */
+} ShapeJob;
+
+/* Parsed::shapes, one map. */
+static void shape_job(void *ctx, size_t k, size_t w) {
+    ShapeJob *j = ctx;
+    Ctx *c = j->c;
+    R *r = &j->rs[w];
+    Tris mb = {0};
+    const cc_step_entity *map = cc_step_get(c->f, c->shapes[k].id);
+    if (map) {
+        Emit e = {&mb, c->scale, j->budget};
+        map_shape(r, c->shapes[k].id, map, &e);
+    }
+    j->warn[k] = r->warnings;
+    memset(&r->warnings, 0, sizeof r->warnings);
+    double zero[3] = {0, 0, 0};
+    arena_reset(&j->scratch[w]);
+    j->bad[k] = mb.oom || cc_scene_mesh_build((double(*)[3][3])mb.t, (uint32_t)mb.n, zero, &j->arenas[w],
+                                              &j->scratch[w], &c->shapes[k].mesh);
+    tris_free(&mb);
+}
+
+typedef struct {
+    Ctx *c;
+    R *rs; /* per worker */
+    Budget *budget;
+    const size_t *ids;
+    Piece *res;
+} PieceJob;
+
+static void piece_job(void *ctx, size_t k, size_t w) {
+    PieceJob *j = ctx;
+    if (piece(j->c, &j->rs[w], j->ids[k], j->budget, &j->res[k])) j->res[k].oom = 1;
+}
+
+typedef struct {
+    size_t ent;
+    int instance;
+    size_t shape;
+    Aff tf;
+    Tris tris;
+    cc_mesh mesh; /* built from tris (not an instance) */
+    int bad;
+} Item;
+
+typedef struct {
+    Item *items;
+    const double *origin;
+    Arena *arenas, *scratch; /* per worker */
+} MeshJob;
+
+/* MeshBuilder::build of an element's own triangles. */
+static void mesh_job(void *ctx, size_t k, size_t w) {
+    MeshJob *j = ctx;
+    Item *it = &j->items[k];
+    if (it->instance) return;
+    arena_reset(&j->scratch[w]);
+    it->bad = cc_scene_mesh_build((double(*)[3][3])it->tris.t, (uint32_t)it->tris.n, j->origin, &j->arenas[w],
+                                  &j->scratch[w], &it->mesh);
+    tris_free(&it->tris);
+}
+
 /* ---- read */
 
 static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
@@ -515,17 +636,19 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     Piece *res = NULL;
     size_t nres = 0;
     Tallies warnings = {0};
-    Arena scratch;
-    arena_init(&scratch, 0);
-    typedef struct {
-        size_t ent;
-        int instance;
-        size_t shape;
-        Aff tf;
-        Tris tris;
-    } Item;
+    /* Per worker: a reader, an arena for meshes (adopted by the scene's), a scratch arena. */
+    size_t nw = cc_jobs_threads();
+    R *rs = calloc(nw, sizeof *rs);
+    Arena *warena = calloc(nw, sizeof *warena), *wscratch = calloc(nw, sizeof *wscratch);
+    Tallies *swarn = NULL;
+    int *sbad = NULL;
     Item *items = NULL;
     size_t nitems = 0;
+    if (!rs || !warena || !wscratch) goto oom;
+    for (size_t w = 0; w < nw; w++) {
+        arena_init(&warena[w], 0);
+        arena_init(&wscratch[w], 0);
+    }
     if (!r_ok(&r) || !cont || !em || !nvoids || !void_at) goto oom;
 
     /* Parsed::new */
@@ -542,6 +665,7 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     r.angle_scale = plane_angle_to_radians(&r);
     c.scale = scale, c.arc_tol = r.arc_tol, c.angle_scale = r.angle_scale;
     containers(&r, cont);
+    PROF("  containers");
     for (int pass = 0; pass < 2; pass++) { /* voids(): per host, opening ids sorted */
         size_t *fill = pass ? calloc(ne, sizeof *fill) : NULL;
         if (pass && !fill) goto oom;
@@ -567,18 +691,21 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
         free(fill);
     }
     c.nvoids = nvoids, c.void_at = void_at, c.void_ids = void_ids;
+    PROF("  voids");
     materials(&r, em);
+    PROF("  materials");
     ids = malloc(ne * sizeof *ids);
     if (!ids) goto oom;
-    for (size_t i = 0; i < f->n; i++) { /* products with a body, in id order */
-        const cc_step_entity *e = &f->ents[i];
-        int skip = 0;
-        for (size_t k = 0; k < sizeof SKIP_CLASSES / sizeof *SKIP_CLASSES && !skip; k++)
-            skip = !strcmp(e->name, SKIP_CLASSES[k]);
-        if (skip) continue;
-        const cc_step_entity *sh = get(&r, arg(e, 6)), *pl = get(&r, arg(e, 5));
-        if (sh && is(sh, "IFCPRODUCTDEFINITIONSHAPE") && pl && ends_with(pl->name, "PLACEMENT")) ids[nids++] = i;
+    { /* products with a body, in id order (flags by chunks of entities in parallel) */
+        unsigned char *isp = malloc(ne);
+        if (!isp) goto oom;
+        ProdJob pj = {f, isp};
+        cc_jobs_run((f->n + PROD_CHUNK - 1) / PROD_CHUNK, prod_job, &pj);
+        for (size_t i = 0; i < f->n; i++)
+            if (isp[i]) ids[nids++] = i;
+        free(isp);
     }
+    PROF("  ids");
     if (storey_levels(&r, scale, a, &out->storeys, &out->nstoreys)) goto oom;
     if (grid_axes(&r, scale, a, &out->grids, &out->ngrids)) goto oom;
     georef(&r, scale, a, &out->georef, &oom);
@@ -589,7 +716,10 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     if (!r_ok(&r)) goto oom;
 
     /* Limits::for_text */
+    PROF("parsed::new");
+    PROF("  pre-limits");
     uint64_t db = displayed_bytes(text, n);
+    PROF("  displayed_bytes");
     uint64_t mt64 = db > UINT64_MAX / 10 ? UINT64_MAX : db * 10;
     size_t max_triangles = mt64 > (uint64_t)(size_t)-1 ? (size_t)-1 : (size_t)mt64;
     if (max_triangles < 1000000) max_triangles = 1000000;
@@ -615,22 +745,20 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
         free(mids);
         c.nshapes = u;
         Budget sb = {(size_t)-1, max_visits, 0, element_max};
-        for (size_t k = 0; k < c.nshapes; k++) {
-            Tris mb = {0};
-            const cc_step_entity *map = cc_step_get(f, c.shapes[k].id);
-            if (map) {
-                Emit e = {&mb, scale, &sb};
-                map_shape(&r, c.shapes[k].id, map, &e);
-            }
-            double zero[3] = {0, 0, 0};
-            arena_reset(&scratch);
-            int bad = mb.oom || cc_scene_mesh_build((double(*)[3][3])mb.t, (uint32_t)mb.n, zero, a, &scratch,
-                                                    &c.shapes[k].mesh);
-            tris_free(&mb);
-            if (bad) goto oom;
-        }
+        swarn = calloc(c.nshapes ? c.nshapes : 1, sizeof *swarn);
+        sbad = calloc(c.nshapes ? c.nshapes : 1, sizeof *sbad);
+        if (!swarn || !sbad) goto oom;
+        for (size_t w = 0; w < nw; w++) r_init(&rs[w], f, c.arc_tol, c.angle_scale);
+        ShapeJob sj = {&c, rs, warena, wscratch, &sb, swarn, sbad};
+        PROF("  shapes setup");
+        cc_jobs_run(c.nshapes, shape_job, &sj);
+        PROF("  shapes run");
+        int bad = 0;
+        for (size_t k = 0; k < c.nshapes; k++) bad |= sbad[k], tally_merge(&r.warnings, &swarn[k]);
         tally_merge(&warnings, &r.warnings);
+        if (bad) goto oom;
     }
+    PROF("shapes");
 
     /* Parsed::scene_progress: batches in file order, the cap applied in order. */
     size_t total = 0, shown = 0, drawn = 0, visits_left = max_visits;
@@ -640,14 +768,20 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     if (!items || !res) goto oom;
     for (size_t b0 = 0; b0 < nids; b0 += BATCH) {
         size_t bn = min_z(BATCH, nids - b0);
-        r_free(&r);
-        r_init(&r, f, c.arc_tol, c.angle_scale);
-        if (!r_ok(&r)) goto oom;
+        /* Fresh readers per batch (read.rs: map_init per batch). */
+        for (size_t w = 0; w < nw; w++) {
+            r_free(&rs[w]);
+            r_init(&rs[w], f, c.arc_tol, c.angle_scale);
+        }
         Budget g = {sat_add(sat_add(cap - total, cap), 1), visits_left, 0, element_max};
-        for (size_t k = 0; k < bn; k++, nres++)
-            if (piece(&c, &r, ids[b0 + k], &g, &res[k])) { nres++; goto oom; }
+        PieceJob pj = {&c, rs, &g, ids + b0, res};
+        cc_jobs_run(bn, piece_job, &pj);
+        nres = bn;
+        int poom = 0;
+        for (size_t k = 0; k < nres; k++) poom |= res[k].oom, tally_merge(&c.cut_warnings, &res[k].cut);
+        if (poom) goto oom;
         Budget used = g;
-        if (g.exhausted) { /* meshed again in order, stopping past the cap */
+        if (g.exhausted) { /* meshed again in order on one thread, stopping past the cap */
             for (size_t k = 0; k < nres; k++) piece_free(&res[k]);
             nres = 0;
             r_free(&r);
@@ -658,6 +792,7 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
             for (size_t k = 0; k < bn; k++) {
                 int prc = piece(&c, &r, ids[b0 + k], &g2, &res[k]);
                 nres++;
+                tally_merge(&c.cut_warnings, &res[k].cut);
                 if (prc) goto oom;
                 sum += res[k].triangles;
                 if (sum > cap) break;
@@ -693,6 +828,7 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
         if (stop || visits_exhausted) break;
     }
     tally_merge(&warnings, &c.cut_warnings);
+    PROF("pieces (batches)");
     if (shown < nids || visits_exhausted) {
         Buf b;
         buf_init(&b);
@@ -732,12 +868,17 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
         }
     }
     for (int k = 0; k < 3; k++) s->origin[k] = finite(lo[0]) ? round_rs((lo[k] + hi[k]) / 2.0) : 0.0;
+    PROF("origin");
     s->shapes = arena_alloc(a, (c.nshapes + 1) * sizeof *s->shapes, 8);
     s->elements = arena_alloc(a, (nitems + 1) * sizeof *s->elements, 8);
     out->info = arena_alloc(a, (nitems + 1) * sizeof *out->info, 8);
     if (!s->shapes || !s->elements || !out->info) goto oom;
     for (size_t k = 0; k < c.nshapes; k++) s->shapes[k] = c.shapes[k].mesh;
     s->nshapes = c.nshapes;
+    {
+        MeshJob mj = {items, s->origin, warena, wscratch};
+        cc_jobs_run(nitems, mesh_job, &mj);
+    }
     Buf cls;
     buf_init(&cls);
     for (size_t i = 0; i < nitems; i++) {
@@ -754,10 +895,8 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
             }
         } else {
             se->shape = -1;
-            arena_reset(&scratch);
-            if (cc_scene_mesh_build((double(*)[3][3])it->tris.t, (uint32_t)it->tris.n, s->origin, a, &scratch,
-                                    &se->mesh)) { buf_free(&cls); goto oom; }
-            tris_free(&it->tris);
+            if (it->bad) { buf_free(&cls); goto oom; }
+            se->mesh = it->mesh;
             if (!se->mesh.ni) continue; /* all degenerate: dropped */
         }
         /* Parsed::info */
@@ -785,7 +924,9 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
         s->nelements++;
     }
     buf_free(&cls);
+    PROF("mesh build");
     if (oom || cc_scene_share_copies(s)) goto oom;
+    PROF("share_copies");
     for (size_t k = 0; k < s->nelements; k++) out->triangles += cc_scene_local_mesh(s, k)->ni / 3;
 
     /* Warnings, sorted, "(×N)" when repeated. */
@@ -833,6 +974,17 @@ done:
     tally_free(&warnings);
     tally_free(&c.cut_warnings);
     free(c.shapes);
+    for (size_t k = 0; swarn && k < c.nshapes; k++) tally_free(&swarn[k]);
+    free(swarn);
+    free(sbad);
+    for (size_t w = 0; w < nw; w++) {
+        if (rs) r_free(&rs[w]);
+        if (warena) arena_adopt(a, &warena[w]);
+        if (wscratch) arena_free(&wscratch[w]);
+    }
+    free(rs);
+    free(warena);
+    free(wscratch);
     free(cont);
     for (size_t i = 0; em && i < f->n; i++) free(em[i].name);
     free(em);
@@ -840,7 +992,6 @@ done:
     free(void_at);
     free(void_ids);
     free(ids);
-    arena_free(&scratch);
     return rc;
 }
 
@@ -849,7 +1000,10 @@ int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
     arena_init(&out->scene.arena, 0);
     out->schema.p = "";
     cc_step_file f;
-    if (cc_step_parse(&f, text, n, err)) {
+#ifdef CC_IFC_PROFILE
+    prof_t0 = prof_now();
+#endif
+    if (cc_step_parse_skipping(&f, text, n, NOT_DISPLAYED, N_NOT_DISPLAYED, err)) {
         char msg[sizeof err->msg];
         memcpy(msg, err->msg, sizeof msg);
         msg[sizeof msg - 1] = 0;
@@ -859,6 +1013,10 @@ int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
         cc_step_free(&f);
         return -1;
     }
+    PROF("step parse");
+#ifdef CC_IFC_PROFILE
+    fprintf(stderr, "PROF entities %zu\n", f.n);
+#endif
     int ifc = 0;
     for (size_t i = 0; i < f.nschemas; i++) ifc |= strncmp(f.schemas[i], "IFC", 3) == 0;
     if (!ifc) {
@@ -877,6 +1035,7 @@ int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
         return -1;
     }
     int rc = read_parsed(&f, text, n, out, err);
+    PROF("geometry+scene total");
     cc_step_free(&f);
     return rc;
 }
