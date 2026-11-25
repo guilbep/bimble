@@ -402,6 +402,31 @@ static void large(void) {
     free(p);
 }
 
+/* CRC-32 (ticket J1: slicing-by-8): the check value of RFC 1952's CRC, and every length and
+ * offset up to 64 against the byte-at-a-time definition, also chained in two calls. */
+static uint32_t crc_ref(uint32_t crc, const unsigned char *s, size_t n) {
+    crc = ~crc;
+    for (size_t i = 0; i < n; i++) {
+        crc ^= s[i];
+        for (int k = 0; k < 8; k++) crc = crc & 1 ? 0xEDB88320u ^ (crc >> 1) : crc >> 1;
+    }
+    return ~crc;
+}
+static void crc32_cases(void) {
+    check_true("crc32 check value", cc_crc32(0, "123456789", 9) == 0xCBF43926u);
+    check_true("crc32 empty", cc_crc32(0, "", 0) == 0);
+    unsigned char buf[80];
+    for (int i = 0; i < 80; i++) buf[i] = (unsigned char)(i * 37 + 11);
+    int bad = 0;
+    for (size_t off = 0; off < 8; off++)
+        for (size_t n = 0; n <= 64; n++) {
+            uint32_t want = crc_ref(0, buf + off, n);
+            if (cc_crc32(0, buf + off, n) != want) bad++;
+            if (cc_crc32(cc_crc32(0, buf + off, n / 3), buf + off + n / 3, n - n / 3) != want) bad++;
+        }
+    check_true("crc32 = byte-at-a-time, every length and offset", !bad);
+}
+
 int main(int argc, char **argv) {
     static char dir[4096];
     snprintf(dir, sizeof dir, "%s/..", argc > 1 ? argv[1] : "ccore/golden/floats");
@@ -411,5 +436,6 @@ int main(int argc, char **argv) {
     golden_case("frame2");
     robustness();
     large();
+    crc32_cases();
     return report("file2");
 }

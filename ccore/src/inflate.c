@@ -5,7 +5,9 @@
 
 /* ---- CRC-32 ---- */
 
-static uint32_t crc_table[256];
+/* Slicing-by-8 (8 table lookups per 8 bytes, bytes read one by one: any endianness, any
+ * alignment). Ticket J1: the byte-at-a-time loop was ~50 ms of a 16 MB gunzip (320 MB/s). */
+static uint32_t crc_table[8][256];
 static int crc_ready;
 
 uint32_t cc_crc32(uint32_t crc, const void *p, size_t n) {
@@ -13,13 +15,21 @@ uint32_t cc_crc32(uint32_t crc, const void *p, size_t n) {
         for (uint32_t i = 0; i < 256; i++) {
             uint32_t c = i;
             for (int k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
-            crc_table[i] = c;
+            crc_table[0][i] = c;
         }
+        for (uint32_t i = 0; i < 256; i++)
+            for (int t = 1; t < 8; t++) crc_table[t][i] = crc_table[0][crc_table[t - 1][i] & 0xFF] ^ (crc_table[t - 1][i] >> 8);
         crc_ready = 1;
     }
     const unsigned char *s = p;
     crc = ~crc;
-    for (size_t i = 0; i < n; i++) crc = crc_table[(crc ^ s[i]) & 0xFF] ^ (crc >> 8);
+    while (n >= 8) {
+        uint32_t a = crc ^ ((uint32_t)s[0] | (uint32_t)s[1] << 8 | (uint32_t)s[2] << 16 | (uint32_t)s[3] << 24);
+        crc = crc_table[7][a & 0xFF] ^ crc_table[6][(a >> 8) & 0xFF] ^ crc_table[5][(a >> 16) & 0xFF] ^ crc_table[4][a >> 24] ^
+              crc_table[3][s[4]] ^ crc_table[2][s[5]] ^ crc_table[1][s[6]] ^ crc_table[0][s[7]];
+        s += 8, n -= 8;
+    }
+    for (size_t i = 0; i < n; i++) crc = crc_table[0][(crc ^ s[i]) & 0xFF] ^ (crc >> 8);
     return ~crc;
 }
 
