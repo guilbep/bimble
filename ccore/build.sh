@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds ccore: build.sh tcc | native | wasm. Output in ccore/out/<mode>/. Prints ms per step.
-#   tcc    debug library (libccore.a) and test binaries, for the edit loop
+#   tcc    debug library (libccore.a), test binaries and the host (bimble-ccore), for the edit loop
 #   native clang -O2, same outputs
 #   wasm   clang freestanding wasm32 of src/ (no libc), ccore.wasm with a dummy export
 set -euo pipefail
@@ -38,6 +38,8 @@ lib_and_tests() { # <dir> <cc> <flags...>
     for t in "${TESTS[@]}"; do
         step "test binary $t" "$cc" "$@" "${INC[@]}" "test/${t}_test.c" "$dir/libccore.a" -o "$dir/test_$t"
     done
+    # The native host (not in wasm): every host/*.c on top of the library.
+    step "host bimble-ccore" "$cc" "$@" "${INC[@]}" -Ihost host/*.c "$dir/libccore.a" -o "$dir/bimble-ccore"
 }
 
 t_start=$(ms)
