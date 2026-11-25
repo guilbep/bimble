@@ -2,6 +2,8 @@
  * native and tcc builds see an empty file. */
 #ifdef __wasm__
 #include "wasm_api.h"
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "buf.h"
@@ -17,8 +19,9 @@
 #include "scene.h"
 #include "strtod.h"
 #include "verbs.h"
-#include "calls.h"   /* host/, -Ihost */
+#include "calls.h"   /* session/, -Isession */
 #include "mesh.h"
+#include "platform.h"
 #include "session.h"
 
 #define EXPORT(name) __attribute__((export_name(name)))
@@ -240,7 +243,7 @@ EXPORT("export_ifc") int wa_export_ifc(int h, int schema, const char *name, size
     return answer(r, &b, 200);
 }
 
-/* ---- mesh: host/mesh.c's BMSH walk, reimplemented on cc_scene_* ---- */
+/* ---- mesh: session/mesh.c's BMSH walk, reimplemented on cc_scene_* ---- */
 
 static void put_u32(Buf *b, uint32_t v) { buf_append(b, &v, 4); }
 
@@ -467,13 +470,10 @@ static void vformat(Buf *b, const char *f, va_list ap) {
     }
 }
 
-int snprintf(char *out, size_t cap, const char *fmt, ...) {
+int vsnprintf(char *out, size_t cap, const char *fmt, va_list ap) {
     Buf b;
     buf_init(&b);
-    va_list ap;
-    va_start(ap, fmt);
     vformat(&b, fmt, ap);
-    va_end(ap);
     if (b.oom) {
         buf_free(&b);
         if (cap) out[0] = 0;
@@ -489,21 +489,73 @@ int snprintf(char *out, size_t cap, const char *fmt, ...) {
     return n;
 }
 
-static Buf host_log_buf;
-int fprintf(cc_wasm_file *f, const char *fmt, ...) {
-    (void)f;
-    size_t before = host_log_buf.len;
+int snprintf(char *out, size_t cap, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    if (host_log_buf.len < (1u << 20)) vformat(&host_log_buf, fmt, ap); /* bounded */
+    int n = vsnprintf(out, cap, fmt, ap);
     va_end(ap);
-    return (int)(host_log_buf.len - before);
+    return n;
 }
 
-/* ---- the host call layer (host/calls.c, session.c, mesh.c) ---- */
+/* ---- the session layer (session/: calls.c, session.c, mesh.c) on the module's platform ---- */
 
-Buf cc_wasm_saved;
-int cc_wasm_has_saved;
+/* The module's platform (session/platform.h): no files, no clock. Opening reads the text the
+ * page handed in (host_open_text), whatever the path; Save keeps the text for host_saved; the
+ * log is kept for host_log. */
+typedef struct {
+    const char *text; /* the model text of the open in progress, NULL otherwise */
+    size_t n;
+    Buf saved;        /* what the last `action save` wrote */
+    int has_saved;
+    Buf log;
+} WasmPlatform;
+
+static int wp_read_file(void *ctx, const char *path, size_t max, char **p, size_t *n) {
+    WasmPlatform *w = ctx;
+    (void)path;
+    *p = NULL;
+    if (!w->text) return CC_PF_NOT_FOUND;
+    if (w->n > max) return CC_PF_TOO_LARGE;
+    char *z = malloc(w->n + 1);
+    if (!z) return CC_PF_NO_MEMORY;
+    memcpy(z, w->text, w->n);
+    z[w->n] = 0;
+    *p = z, *n = w->n;
+    return CC_PF_OK;
+}
+static int wp_exists(void *ctx, const char *path) { return (void)ctx, (void)path, 0; }
+static int wp_write_file(void *ctx, const char *path, const char *p, size_t n) {
+    WasmPlatform *w = ctx;
+    (void)path;
+    buf_clear(&w->saved);
+    w->saved.oom = 0;
+    buf_append(&w->saved, p, n);
+    w->has_saved = !w->saved.oom;
+    return w->has_saved ? 0 : -1;
+}
+static double wp_now_ms(void *ctx) { return (void)ctx, 0; } /* no clock: load_ms and build_ms read 0 */
+static int64_t wp_unix_s(void *ctx) { return (void)ctx, 0; }
+static int wp_random(void *ctx, void *p, size_t n) { return (void)ctx, (void)p, (void)n, -1; }
+static void wp_log(void *ctx, const char *line, size_t n) {
+    WasmPlatform *w = ctx;
+    if (w->log.len >= (1u << 20)) return; /* bounded */
+    buf_append(&w->log, line, n);
+    buf_putc(&w->log, '\n');
+}
+
+static WasmPlatform wasm_pf_state;
+static const cc_platform wasm_pf = {
+    &wasm_pf_state, 0, wp_read_file, wp_exists, wp_write_file, wp_now_ms, wp_unix_s, wp_random, wp_log,
+};
+
+/* The module's default session: the one the host_* exports and `call` work on (created on first
+ * use). The one file-scope session pointer of the carrier; more sessions are cc_session_new. */
+static cc_session *default_session;
+
+static cc_session *host_session(void) {
+    if (!default_session) default_session = cc_session_new(&wasm_pf);
+    return default_session;
+}
 
 /* Copies (p, n) into a NUL-terminated malloc'd string; NULL when out of memory. */
 static char *zdup(const char *p, size_t n) {
@@ -516,47 +568,59 @@ static char *zdup(const char *p, size_t n) {
 
 EXPORT("host_open_text") int wa_host_open_text(const char *name, size_t nn, const char *p, size_t n, cc_wasm_res *r) {
     r->value = 0;
+    cc_session *s = host_session();
     char *z = zdup(name, nn);
-    if (!z) return text(r, 500, "out of memory");
+    if (!z || !s) return free(z), text(r, 500, "out of memory");
+    if (s->open) { /* one model per instance (as before sessions were handles) */
+        free(z);
+        return text(r, 400, "a model is already open");
+    }
     cc_error err;
-    int rc = cc_session_open_text(nn ? z : "model.bimble", p, n, &err);
+    wasm_pf_state.text = p, wasm_pf_state.n = n;
+    int rc = cc_session_open(s, nn ? z : "model.bimble", &err);
+    wasm_pf_state.text = NULL, wasm_pf_state.n = 0;
     free(z);
     if (rc) return text(r, 400, err.msg);
-    r->value = cc_host_rev();
+    r->value = cc_session_rev(s);
     return text(r, 200, "");
 }
 
 EXPORT("call") int wa_call(const char *op, size_t on, const char *name, size_t nn, const char *body, size_t bn,
                            cc_wasm_res *r) {
     r->value = 0;
+    cc_session *s = host_session();
     char *zop = zdup(op, on), *zname = zdup(name, nn), *zbody = zdup(body, bn);
     int st;
     Buf b;
     buf_init(&b);
-    if (!zop || !zname || !zbody) st = 500, buf_puts(&b, "out of memory");
+    if (!s || !zop || !zname || !zbody) st = 500, buf_puts(&b, "out of memory");
     else if (!cc_known_op(zop)) st = 404, buf_puts(&b, "unknown call"); /* server.c: not a route */
-    else st = cc_call(zop, zname, zbody, bn, &b);
+    else st = cc_call(s, zop, zname, zbody, bn, &b);
     free(zop), free(zname), free(zbody);
     return answer(r, &b, st);
 }
 
 EXPORT("change_json") int wa_change_json(cc_wasm_res *r) {
-    r->value = cc_host_rev();
+    cc_session *s = host_session();
+    if (!s) return r->value = 0, text(r, 500, "out of memory");
+    r->value = cc_session_rev(s);
     Buf b;
     buf_init(&b);
-    cc_change_json(&b);
+    cc_change_json(s, &b);
     return answer(r, &b, 200);
 }
 
 EXPORT("host_mesh") int wa_host_mesh(int flags, cc_wasm_res *r) {
+    cc_session *s = host_session();
+    if (!s) return r->value = 0, text(r, 500, "out of memory");
     if (flags & 1) { /* the local form: the walk above, on the session's model */
-        const cc_model *m = cc_host_model();
-        r->value = cc_host_rev();
+        const cc_model *m = cc_session_model(s);
+        r->value = cc_session_rev(s);
         if (!m) return text(r, 404, "no model open");
         Buf b;
         buf_init(&b);
         cc_error err;
-        if (bmsh(m, cc_host_rev(), 1, &b, &err)) {
+        if (bmsh(m, cc_session_rev(s), 1, &b, &err)) {
             buf_free(&b);
             return text(r, 500, err.msg);
         }
@@ -566,7 +630,7 @@ EXPORT("host_mesh") int wa_host_mesh(int flags, cc_wasm_res *r) {
     size_t n;
     uint32_t rev;
     double ms;
-    int st = cc_mesh_get(&p, &n, &rev, &ms);
+    int st = cc_mesh_get(s, &p, &n, &rev, &ms);
     r->value = rev;
     Buf b;
     buf_init(&b);
@@ -576,17 +640,17 @@ EXPORT("host_mesh") int wa_host_mesh(int flags, cc_wasm_res *r) {
 
 EXPORT("host_saved") int wa_host_saved(cc_wasm_res *r) {
     r->value = 0;
-    if (!cc_wasm_has_saved) return text(r, 404, "not saved yet");
+    if (!wasm_pf_state.has_saved) return text(r, 404, "not saved yet");
     Buf b;
     buf_init(&b);
-    buf_append(&b, cc_wasm_saved.p, cc_wasm_saved.len);
+    buf_append(&b, wasm_pf_state.saved.p, wasm_pf_state.saved.len);
     return answer(r, &b, 200);
 }
 
 EXPORT("host_log") int wa_host_log(cc_wasm_res *r) {
     r->value = 0;
-    Buf b = host_log_buf;
-    buf_init(&host_log_buf);
+    Buf b = wasm_pf_state.log;
+    buf_init(&wasm_pf_state.log);
     return answer(r, &b, 200);
 }
 #endif

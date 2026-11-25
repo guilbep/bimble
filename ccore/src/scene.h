@@ -27,6 +27,7 @@
 #include <stdint.h>
 #include "arena.h"
 #include "model.h"
+#include "math.h" /* cc_sqrt, cc_sqrtf: exact helpers for callers that must match Rust's bits */
 
 /* bimble_geom::Mesh. Triangles are idx[3t..3t+3]; normals[k] belongs to edges[k] (snorm8:
  * face 1 xyz, w, face 2 xyz, w; all zero = unknown). nn == ne for meshes built here. */
@@ -80,8 +81,4 @@ const cc_mesh *cc_scene_local_mesh(const cc_scene *s, size_t k);
 /* SceneElement::world_mesh: the element's mesh in scene coordinates (a placed shape is
  * computed into `a`; an own mesh is copied by pointer). 0 ok, -1 out of memory. */
 int cc_scene_world_mesh(const cc_scene *s, size_t k, Arena *a, cc_mesh *out);
-
-/* Exact helpers (no libm), also for callers that must match Rust's bits. */
-double cc_sqrt(double x); /* correctly rounded, like f64::sqrt */
-float cc_sqrtf(float x);  /* correctly rounded, like f32::sqrt */
 #endif

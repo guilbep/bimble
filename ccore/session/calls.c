@@ -6,13 +6,7 @@
  * (spec §3, "Canonical JSON"), so keys are written in byte order. Each producer is cited.
  * Deviations from Rust: docs/research/c-core-spec.md §1 (version, IFC always imported) and the
  * ones marked "Deviation" below. */
-#define _POSIX_C_SOURCE 200809L
-#ifdef __wasm__
-#include "wasm_api.h" /* the few libc functions below, freestanding */
-#else
 #include <stdio.h>
-#include <time.h>
-#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -130,17 +124,11 @@ static int done(JsonW *w) {
 /* Rust `{:?}` of a str, for the error texts. */
 static void debug_str(cc_buf *out, const char *s) { cc_buf_debug_str(out, s, strlen(s)); }
 
-static cc_session *ses(void) { return cc_session_get(); }
-static int has_model(void) { return ses()->open; }
+static int has_model(const cc_session *s) { return s->open; }
 
 /* ---- the 3D view (core/view.rs:584) ---- */
 
-static cc_guid view3d(void) {
-    static cc_guid g;
-    static int made;
-    if (!made) g = cc_guid_derived("bimble view 3d", 14), made = 1;
-    return g;
-}
+static cc_guid view3d(void) { return cc_guid_derived("bimble view 3d", 14); }
 
 static void tab_json(JsonW *w) { /* ribbon.rs:406 json!({"type": "view", "id": id}), sorted */
     cc_guid g = view3d();
@@ -152,24 +140,19 @@ static void tab_json(JsonW *w) { /* ribbon.rs:406 json!({"type": "view", "id": i
 
 /* ---- the scene, built once per rev (status counts, visibility origin) ---- */
 
-static cc_scene g_scene;
-static int g_scene_ok;
-static uint64_t g_scene_rev; /* 0: none built */
-
-static const cc_scene *scene_now(void) {
-    cc_session *s = ses();
+static const cc_scene *scene_now(cc_session *s) {
     if (!s->open) return NULL;
-    if (g_scene_rev != s->rev) {
-        if (g_scene_rev) cc_scene_free(&g_scene);
+    if (s->scene_rev != s->rev) {
+        if (s->scene_rev) cc_scene_free(&s->scene);
         cc_error e;
-        g_scene_ok = cc_scene_build(&g_scene, &s->model, &e) == 0;
-        if (!g_scene_ok) fprintf(stderr, "bimble-ccore: scene: %s\n", e.msg);
-        g_scene_rev = s->rev;
+        s->scene_ok = cc_scene_build(&s->scene, &s->model, &e) == 0;
+        if (!s->scene_ok) cc_log(s->pf, "bimble-ccore: scene: %s", e.msg);
+        s->scene_rev = s->rev;
     }
-    return g_scene_ok ? &g_scene : NULL;
+    return s->scene_ok ? &s->scene : NULL;
 }
 
-const cc_scene *cc_host_scene(void) { return scene_now(); }
+const cc_scene *cc_session_scene(cc_session *s) { return scene_now(s); }
 
 /* ---- history step ids and selection (lib.rs:1725-1805) ---- */
 
@@ -186,8 +169,7 @@ static int push_id(uint64_t **v, size_t *n, size_t *cap, uint64_t id) {
 
 /* lib.rs:1767-1805 `rebuild_scene`: rev + 1; the primary selection kept by GlobalId, the others
  * dropped. */
-static void rebuild(void) {
-    cc_session *s = ses();
+static void rebuild(cc_session *s) {
     s->rev++;
     if (s->has_primary && !cc_model_element(&s->model, &s->primary)) s->has_primary = 0;
     s->nalso = 0;
@@ -195,8 +177,7 @@ static void rebuild(void) {
 
 /* lib.rs:1725 `try_apply` through edit.rs:233 `Editor::apply` (no commands: no step, but the
  * scene is rebuilt). */
-static int try_apply(const cc_command *cmds, size_t n, cc_buf *out) {
-    cc_session *s = ses();
+static int try_apply(cc_session *s, const cc_command *cmds, size_t n, cc_buf *out) {
     if (!s->open) {
         buf_puts(out, READ_ONLY);
         return CC_ERR;
@@ -208,15 +189,14 @@ static int try_apply(const cc_command *cmds, size_t n, cc_buf *out) {
             return CC_ERR;
         }
         s->nredo_ids = 0;
-        cc_session_note_apply(cmds, n); /* the session file logs the step with these */
+        cc_session_note_apply(s, cmds, n); /* the session file logs the step with these */
     }
-    rebuild();
+    rebuild(s);
     return CC_OK;
 }
 
 /* lib.rs:1744 `undo_redo`: nothing to take back is no change. */
-static void undo_redo(int undo) {
-    cc_session *s = ses();
+static void undo_redo(cc_session *s, int undo) {
     if (!s->open) return;
     if (undo ? cc_history_undo(&s->hist, &s->model) : cc_history_redo(&s->hist, &s->model)) {
         if (undo && s->nundo_ids) {
@@ -224,7 +204,7 @@ static void undo_redo(int undo) {
         } else if (!undo && s->nredo_ids) {
             if (!push_id(&s->undo_ids, &s->nundo_ids, &s->cap_undo_ids, s->redo_ids[s->nredo_ids - 1])) s->nredo_ids--;
         }
-        rebuild();
+        rebuild(s);
     }
 }
 
@@ -237,8 +217,7 @@ static const char *hint(const cc_session *s) { /* edit.rs:84-95 `Placing::hint`,
     return "Click the start point.";
 }
 
-static void placing_json(JsonW *w) { /* edit.rs:387-408, json! sorted */
-    cc_session *s = ses();
+static void placing_json(cc_session *s, JsonW *w) { /* edit.rs:387-408, json! sorted */
     cc_kind kind = s->placing ? s->placing_kind : s->kind;
     const cc_storey *st = s->has_storey ? cc_model_storey(&s->model, &s->storey) : NULL;
     jw_obj_begin(w);
@@ -270,8 +249,7 @@ static void placing_json(JsonW *w) { /* edit.rs:387-408, json! sorted */
 }
 
 /* ribbon.rs:676-690 Action::Place(k): toggles placing that kind. */
-static void place_action(cc_kind k) {
-    cc_session *s = ses();
+static void place_action(cc_session *s, cc_kind k) {
     int on = s->placing && s->placing_kind == k;
     s->placing = !on;
     if (!on) s->placing_kind = k, s->kind = k;
@@ -338,7 +316,7 @@ static size_t sorted_members(const JrVal *obj, const JrMember **out) {
 }
 
 /* edit.rs:113-140 PlacingPatch::parse, then calls.rs:190-202 and edit.rs:413-460. */
-static int call_set_placing(const char *body, size_t n, cc_buf *out) {
+static int call_set_placing(cc_session *s, const char *body, size_t n, cc_buf *out) {
     Arena a;
     arena_init(&a, 0);
     JrError je;
@@ -421,7 +399,6 @@ static int call_set_placing(const char *body, size_t n, cc_buf *out) {
             goto end;
         }
     }
-    cc_session *s = ses();
     if (!s->open) {
         buf_puts(out, READ_ONLY);
         goto end;
@@ -502,7 +479,7 @@ static int call_set_placing(const char *body, size_t n, cc_buf *out) {
     if (kind) {
         s->kind = k;
         if (s->placing) s->placing_kind = k; /* a new kind drops the points */
-        else place_action(k);                /* calls.rs:198: `place_<kind>`, enabled with a model */
+        else place_action(s, k);                /* calls.rs:198: `place_<kind>`, enabled with a model */
     }
     rc = CC_OK;
 end:
@@ -512,8 +489,7 @@ end:
 
 /* ---- queries ---- */
 
-static int q_state(JsonW *w) { /* calls.rs:239-258 */
-    cc_session *s = ses();
+static int q_state(cc_session *s, JsonW *w) { /* calls.rs:239-258 */
     jw_obj_begin(w);
     jw_key(w, "editable"), jw_bool(w, s->open);
     jw_key(w, "file");
@@ -529,8 +505,7 @@ static int q_state(JsonW *w) { /* calls.rs:239-258 */
     return done(w);
 }
 
-static int action_enabled(const char *name) { /* ribbon.rs:555-612, the C core's subset */
-    cc_session *s = ses();
+static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-612, the C core's subset */
     if (!strcmp(name, "save")) return cc_session_unsaved(s);
     if (!strcmp(name, "undo")) return s->open && s->hist.nundo > 0;
     if (!strcmp(name, "redo")) return s->open && s->hist.nredo > 0;
@@ -540,21 +515,20 @@ static int action_enabled(const char *name) { /* ribbon.rs:555-612, the C core's
     return 0;
 }
 
-static int action_pressed(const ActionRow *a) {
-    cc_session *s = ses();
+static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strncmp(a->name, "place_", 6)) return s->open && s->placing && !strcmp(a->name + 6, KIND_NAME[s->placing_kind]);
     return a->pressed;
 }
 
-static int q_actions(JsonW *w) { /* calls.rs:325-339 */
+static int q_actions(cc_session *s, JsonW *w) { /* calls.rs:325-339 */
     jw_arr_begin(w);
     for (size_t i = 0; i < sizeof ACTIONS / sizeof ACTIONS[0]; i++) {
         const ActionRow *a = &ACTIONS[i];
         jw_obj_begin(w);
-        jw_key(w, "enabled"), jw_bool(w, action_enabled(a->name));
+        jw_key(w, "enabled"), jw_bool(w, action_enabled(s, a->name));
         jw_key(w, "label"), jw_str(w, a->label);
         jw_key(w, "name"), jw_str(w, a->name);
-        jw_key(w, "pressed"), jw_bool(w, action_pressed(a));
+        jw_key(w, "pressed"), jw_bool(w, action_pressed(s, a));
         jw_key(w, "shortcut");
         if (a->shortcut) jw_str(w, a->shortcut);
         else jw_null(w);
@@ -572,8 +546,8 @@ static void capped_empty(JsonW *w) { /* calls.rs:57-63 `capped` */
     jw_obj_end(w);
 }
 
-static int q_visibility(JsonW *w) { /* calls.rs:442-460: nothing hidden, no section box */
-    const cc_scene *sc = scene_now();
+static int q_visibility(cc_session *s, JsonW *w) { /* calls.rs:442-460: nothing hidden, no section box */
+    const cc_scene *sc = scene_now(s);
     jw_obj_begin(w);
     jw_key(w, "hidden_in_view"), capped_empty(w);
     jw_key(w, "hidden_now"), capped_empty(w);
@@ -597,8 +571,7 @@ static int q_visibility(JsonW *w) { /* calls.rs:442-460: nothing hidden, no sect
 /* calls.rs:362-397. One view, the default 3D one (core/view.rs:584-594), its tab open and current
  * while `tab_open` (spec §1: no plans). A ViewSummary through to_value is a sorted map
  * (api/query.rs:164-178, `type` flattened), plus `auto_name` (viewing.rs:17-38). */
-static int q_open_views(JsonW *w) {
-    cc_session *s = ses();
+static int q_open_views(cc_session *s, JsonW *w) {
     int tab = s->open && s->tab_open;
     cc_guid g = view3d();
     jw_obj_begin(w);
@@ -687,13 +660,12 @@ static void size_text(cc_buf *out, uint64_t bytes) { /* big.rs:376-392 */
  * (visible = total), nothing drawn by the host: fps null, idle, app_bytes 0. `triangles`: the
  * scene's triangles, each element counted (Deviation: Rust counts the GPU scene's). model_bytes:
  * big.rs:215 held = 225 per stored triangle (scene.rs:235 stored_triangles). */
-static int q_status(JsonW *w, cc_buf *out) {
-    cc_session *s = ses();
+static int q_status(cc_session *s, JsonW *w, cc_buf *out) {
     if (!s->open) {
         buf_puts(out, "null");
         return CC_OK;
     }
-    const cc_scene *sc = scene_now();
+    const cc_scene *sc = scene_now(s);
     uint64_t total = sc ? sc->nelements : 0, tri = 0, stored = 0;
     if (sc) {
         for (size_t k = 0; k < sc->nelements; k++) {
@@ -730,8 +702,8 @@ static int q_status(JsonW *w, cc_buf *out) {
 /* A model query through cc_query (bimble_api), with the viewer's own texts for `element`
  * (calls.rs:302-309: serde's error, then "no element with this id"). Deviation: serde's
  * " at line L column C" suffix is not added. */
-static int model_query(const char *name, const char *body, size_t n, cc_buf *out) {
-    int st = cc_query(&ses()->model, name, body, n, out);
+static int model_query(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
+    int st = cc_query(&s->model, name, body, n, out);
     if (st == 200) return CC_OK;
     if (!strcmp(name, "element") || !strcmp(name, "elements")) {
         static const char BAD[] = "bad arguments: ", NOEL[] = "no element GlobalId(";
@@ -746,12 +718,11 @@ static int model_query(const char *name, const char *body, size_t n, cc_buf *out
     return CC_ERR;
 }
 
-static int call_query(const char *name, const char *body, size_t n, cc_buf *out) {
-    cc_session *s = ses();
+static int call_query(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     JsonW w;
     jw_init(&w, out, 0);
-    if (!strcmp(name, "state")) return q_state(&w);
-    if (!strcmp(name, "actions")) return q_actions(&w);
+    if (!strcmp(name, "state")) return q_state(s, &w);
+    if (!strcmp(name, "actions")) return q_actions(s, &w);
     if (!strcmp(name, "history")) { /* calls.rs:346-359 */
         if (s->open) {
             cc_history_json(&s->hist, out);
@@ -760,16 +731,16 @@ static int call_query(const char *name, const char *body, size_t n, cc_buf *out)
         buf_puts(out, "{\"redo\":[],\"undo\":[]}");
         return CC_OK;
     }
-    if (!strcmp(name, "visibility")) return q_visibility(&w);
-    if (!strcmp(name, "open_views")) return q_open_views(&w);
+    if (!strcmp(name, "visibility")) return q_visibility(s, &w);
+    if (!strcmp(name, "open_views")) return q_open_views(s, &w);
     if (!strcmp(name, "collab")) return q_collab(&w);
-    if (!strcmp(name, "status")) return q_status(&w, out);
+    if (!strcmp(name, "status")) return q_status(s, &w, out);
     if (!strcmp(name, "placing")) { /* calls.rs:408-414: null without an editable model */
         if (!s->open) {
             buf_puts(out, "null");
             return CC_OK;
         }
-        placing_json(&w);
+        placing_json(s, &w);
         return done(&w);
     }
     /* pointer (calls.rs:403, stubbed null, spec §1); standards stubbed null (spec §1). */
@@ -790,7 +761,7 @@ static int call_query(const char *name, const char *body, size_t n, cc_buf *out)
             buf_puts(out, "query "), buf_puts(out, name), buf_puts(out, " is not in the C core");
             return CC_ERR;
         }
-    if (s->open) return model_query(name, body, n, out); /* calls.rs:276-309 and :519-527 */
+    if (s->open) return model_query(s, name, body, n, out); /* calls.rs:276-309 and :519-527 */
     static const char *const EMPTY_NO_MODEL[] = {"sheets", "views", "schedules"};
     for (size_t i = 0; i < sizeof EMPTY_NO_MODEL / sizeof EMPTY_NO_MODEL[0]; i++)
         if (!strcmp(name, EMPTY_NO_MODEL[i])) { /* spec §1: stub [] */
@@ -812,35 +783,17 @@ static int call_query(const char *name, const char *body, size_t n, cc_buf *out)
 
 /* ---- save (lib.rs:1810-1857) ---- */
 
-static void save(void) {
-    cc_session *s = ses();
+static void save(cc_session *s) {
     Buf b;
     buf_init(&b);
     int ok = cc_model_save(&s->model, &b) == 0 && !b.oom;
-#ifdef __wasm__
-    /* No files in the module: the saved text is kept for the page (export host_saved). */
-    if (ok) {
-        buf_clear(&cc_wasm_saved);
-        cc_wasm_saved.oom = 0;
-        buf_append(&cc_wasm_saved, b.p, b.len);
-        ok = !cc_wasm_saved.oom;
-        cc_wasm_has_saved = ok;
-    }
-#else
-    if (ok) {
-        char tmp[4096 + 16];
-        snprintf(tmp, sizeof tmp, "%s.tmp", s->path);
-        FILE *f = fopen(tmp, "wb");
-        ok = f && fwrite(b.p, 1, b.len, f) == b.len;
-        if (f && fclose(f)) ok = 0;
-        if (ok) ok = rename(tmp, s->path) == 0;
-        else remove(tmp);
-    }
-#endif
+    /* Through the platform: a file natively; in the module, the text kept for the page
+     * (export host_saved). */
+    if (ok) ok = s->pf->write_file(s->pf->ctx, s->path, b.p, b.len) == 0;
     buf_free(&b);
     /* Rust shows the outcome in the editor's message, the call itself succeeds. */
-    if (ok) s->saved_step = cc_session_step(s), fprintf(stderr, "bimble-ccore: Saved %s\n", s->path);
-    else fprintf(stderr, "bimble-ccore: %s: cannot write\n", s->path);
+    if (ok) s->saved_step = cc_session_step(s), cc_log(s->pf, "bimble-ccore: Saved %s", s->path);
+    else cc_log(s->pf, "bimble-ccore: %s: cannot write", s->path);
 }
 
 /* ---- export IFC (share.rs:50-85 export_ifc) ----
@@ -849,13 +802,12 @@ static void save(void) {
  * Deviation, wasm: the module has no files and no clock; the page calls the export export_ifc
  * (wasm_api.h) and the action only logs. */
 
-static void export_ifc(cc_ifc_schema schema) {
-    cc_session *s = ses();
+static void export_ifc(cc_session *s, cc_ifc_schema schema) {
     const char *label = schema == CC_IFC4 ? "IFC4" : "IFC2x3";
-#ifdef __wasm__
-    (void)s;
-    fprintf(stderr, "bimble-ccore: Export %s: the page calls export_ifc\n", label);
-#else
+    if (!s->pf->files) { /* the module: the page calls the export itself */
+        cc_log(s->pf, "bimble-ccore: Export %s: the page calls export_ifc", label);
+        return;
+    }
     const char *slash = strrchr(s->path, '/');
     const char *name = slash ? slash + 1 : s->path;
     const char *dot = strrchr(name, '.');
@@ -865,36 +817,27 @@ static void export_ifc(cc_ifc_schema schema) {
     else snprintf(file, sizeof file, "%.*s.ifc", (int)stem, name);
     snprintf(to, sizeof to, "%.*s%s", (int)dir, s->path, file);
     if (!strcmp(to, s->path)) {
-        fprintf(stderr, "bimble-ccore: %s: export would overwrite the open file\n", to);
+        cc_log(s->pf, "bimble-ccore: %s: export would overwrite the open file", to);
         return;
     }
     char stamp[32];
-    cc_iso_utc((int64_t)time(NULL), stamp);
+    cc_iso_utc(s->pf->unix_s(s->pf->ctx), stamp);
     Buf b;
     buf_init(&b);
     int ok = cc_ifc_export(&s->model, file, stamp, schema, &b) == 0 && !b.oom;
-    if (ok) {
-        char tmp[4096 + 32];
-        snprintf(tmp, sizeof tmp, "%s.tmp", to);
-        FILE *f = fopen(tmp, "wb");
-        ok = f && fwrite(b.p, 1, b.len, f) == b.len;
-        if (f && fclose(f)) ok = 0;
-        if (ok) ok = rename(tmp, to) == 0;
-        else remove(tmp);
-    }
+    if (ok) ok = s->pf->write_file(s->pf->ctx, to, b.p, b.len) == 0;
     buf_free(&b);
     /* share.rs:68-77: the outcome goes in the view message; the call itself succeeds. */
-    if (ok && schema == CC_IFC4) fprintf(stderr, "bimble-ccore: Saved %s (%s)\n", to, label);
+    if (ok && schema == CC_IFC4) cc_log(s->pf, "bimble-ccore: Saved %s (%s)", to, label);
     else if (ok)
-        fprintf(stderr, "bimble-ccore: Saved %s (%s): material values (density, strength) and the map conversion "
-                        "are not in IFC2x3; the place and project north are kept in the building's placement\n",
+        cc_log(s->pf, "bimble-ccore: Saved %s (%s): material values (density, strength) and the map conversion "
+                      "are not in IFC2x3; the place and project north are kept in the building's placement",
                 to, label);
-    else fprintf(stderr, "bimble-ccore: %s: cannot write\n", to);
-#endif
+    else cc_log(s->pf, "bimble-ccore: %s: cannot write", to);
 }
 
 /* calls.rs:538-547 call_action, ribbon.rs:650 run_action. */
-static int call_action(const char *name, cc_buf *out) {
+static int call_action(cc_session *s, const char *name, cc_buf *out) {
     const ActionRow *a = NULL;
     for (size_t i = 0; i < sizeof ACTIONS / sizeof ACTIONS[0]; i++)
         if (!strcmp(ACTIONS[i].name, name)) a = &ACTIONS[i];
@@ -903,20 +846,20 @@ static int call_action(const char *name, cc_buf *out) {
         debug_str(out, name);
         return CC_ERR;
     }
-    if (!action_enabled(name)) {
+    if (!action_enabled(s, name)) {
         buf_puts(out, "action ");
         debug_str(out, name);
         buf_puts(out, " is not enabled now");
         return CC_ERR;
     }
-    if (!strcmp(name, "save")) save();
-    else if (!strcmp(name, "export_ifc4")) export_ifc(CC_IFC4);
-    else if (!strcmp(name, "export_ifc2x3")) export_ifc(CC_IFC2X3);
-    else if (!strcmp(name, "undo")) undo_redo(1);
-    else if (!strcmp(name, "redo")) undo_redo(0);
+    if (!strcmp(name, "save")) save(s);
+    else if (!strcmp(name, "export_ifc4")) export_ifc(s, CC_IFC4);
+    else if (!strcmp(name, "export_ifc2x3")) export_ifc(s, CC_IFC2X3);
+    else if (!strcmp(name, "undo")) undo_redo(s, 1);
+    else if (!strcmp(name, "redo")) undo_redo(s, 0);
     else if (!strncmp(name, "place_", 6)) {
         for (int k = 0; k < 4; k++)
-            if (!strcmp(name + 6, KIND_NAME[k])) place_action((cc_kind)k);
+            if (!strcmp(name + 6, KIND_NAME[k])) place_action(s, (cc_kind)k);
     } /* home: the lab shows its own Home */
     return CC_OK;
 }
@@ -925,7 +868,7 @@ static int call_action(const char *name, cc_buf *out) {
 
 static int gid_cmp(const void *a, const void *b) { return cc_gid_cmp(a, b); }
 
-static int call_select(const char *body, size_t n, cc_buf *out) {
+static int call_select(cc_session *s, const char *body, size_t n, cc_buf *out) {
     Arena a;
     arena_init(&a, 0);
     JrError je;
@@ -944,7 +887,6 @@ static int call_select(const char *body, size_t n, cc_buf *out) {
             buf_puts(out, "invalid type: "), buf_puts(out, type_word(&v->items[i])), buf_puts(out, ", expected a string");
             goto end;
         }
-    cc_session *s = ses();
     if (!s->open) {
         buf_puts(out, NO_MODEL);
         goto end;
@@ -995,7 +937,7 @@ end:
 
 /* ---- tab (calls.rs:205-232) ---- */
 
-static int call_tab(const char *body, size_t n, cc_buf *out) {
+static int call_tab(cc_session *s, const char *body, size_t n, cc_buf *out) {
     Arena a;
     arena_init(&a, 0);
     JrError je;
@@ -1053,7 +995,6 @@ static int call_tab(const char *body, size_t n, cc_buf *out) {
         buf_puts(out, "unknown op "), debug_str(out, op->s);
         goto end;
     }
-    cc_session *s = ses();
     int has3d = s->open && is_3d; /* the only view (spec §1) */
     if (!strcmp(op->s, "open")) {
         if (!is_view) {
@@ -1077,13 +1018,12 @@ end:
 
 /* ---- the dispatcher (calls.rs:74-130) ---- */
 
-int cc_call(const char *op, const char *name, const char *body, size_t n, cc_buf *out) {
-    cc_session *s = ses();
-    if (!strcmp(op, "query")) return call_query(name, body, n, out);
-    if (!strcmp(op, "action")) return call_action(name, out);
-    if (!strcmp(op, "select")) return call_select(body, n, out);
-    if (!strcmp(op, "tab")) return call_tab(body, n, out);
-    if (!strcmp(op, "set_placing")) return call_set_placing(body, n, out);
+int cc_call(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out) {
+    if (!strcmp(op, "query")) return call_query(s, name, body, n, out);
+    if (!strcmp(op, "action")) return call_action(s, name, out);
+    if (!strcmp(op, "select")) return call_select(s, body, n, out);
+    if (!strcmp(op, "tab")) return call_tab(s, body, n, out);
+    if (!strcmp(op, "set_placing")) return call_set_placing(s, body, n, out);
     if (!strcmp(op, "dismiss_belongs")) return CC_OK; /* calls.rs:108-114: nobody borrows here */
     if (!strcmp(op, "standards_action")) { /* calls.rs:172-187; spec §1: no-op */
         if (!strcmp(name, "revert") || !strcmp(name, "reset") || !strcmp(name, "save")) return CC_OK;
@@ -1096,13 +1036,13 @@ int cc_call(const char *op, const char *name, const char *body, size_t n, cc_buf
             buf_puts(out, READ_ONLY);
             return CC_ERR;
         }
-        undo_redo(!strcmp(op, "undo"));
+        undo_redo(s, !strcmp(op, "undo"));
         return CC_OK;
     }
     if (!strcmp(op, "apply")) { /* calls.rs:84-88 */
         cc_cmds l;
         cc_cmds_init(&l);
-        int rc = cc_commands_parse(body, n, &l, out) ? CC_ERR : try_apply(l.v, l.n, out);
+        int rc = cc_commands_parse(body, n, &l, out) ? CC_ERR : try_apply(s, l.v, l.n, out);
         cc_cmds_free(&l);
         return rc;
     }
@@ -1125,7 +1065,7 @@ int cc_call(const char *op, const char *name, const char *body, size_t n, cc_buf
         }
         cc_cmds l;
         cc_cmds_init(&l);
-        int rc = cc_verb_run(&s->model, name, body, blank ? 0 : n, &l, out) ? CC_ERR : try_apply(l.v, l.n, out);
+        int rc = cc_verb_run(&s->model, name, body, blank ? 0 : n, &l, out) ? CC_ERR : try_apply(s, l.v, l.n, out);
         cc_cmds_free(&l);
         return rc;
     }
@@ -1134,8 +1074,7 @@ int cc_call(const char *op, const char *name, const char *body, size_t n, cc_buf
     return CC_ERR;
 }
 
-void cc_change_json(cc_buf *out) { /* calls.rs:134-167 (json!, sorted keys) */
-    cc_session *s = ses();
+void cc_change_json(cc_session *s, cc_buf *out) { /* calls.rs:134-167 (json!, sorted keys) */
     JsonW w;
     jw_init(&w, out, 0);
     jw_obj_begin(&w);
@@ -1143,7 +1082,7 @@ void cc_change_json(cc_buf *out) { /* calls.rs:134-167 (json!, sorted keys) */
     if (s->open) jw_str(&w, s->file);
     else jw_null(&w);
     jw_key(&w, "placing");
-    if (s->open) placing_json(&w);
+    if (s->open) placing_json(s, &w);
     else jw_null(&w);
     jw_key(&w, "rev"), jw_u64(&w, s->rev);
     jw_key(&w, "selection"), jw_arr_begin(&w);

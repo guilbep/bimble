@@ -16,12 +16,14 @@ esac
 if [[ -n ${CFLAGS:-} ]]; then read -r -a extra <<< "$CFLAGS"; FLAGS+=("${extra[@]}"); fi
 out="out/run-$(basename "$CC")"
 mkdir -p "$out"
-# Every src/*.c but the wasm stub, as build.sh compiles the library.
+# Every src/*.c but the wasm stub, as build.sh compiles the library, then the session layer
+# (session/*.c) and the native platform (host/platform_native.c) for the suites that open sessions.
 SRC=(); for f in src/*.c; do [[ $f == src/wasm_stub.c ]] || SRC+=("$f"); done
+SRC+=(session/*.c host/platform_native.c)
 status=0
 for s in "${suites[@]}"; do
     if [[ ! -f "test/${s}_test.c" ]]; then echo "unknown suite: $s" >&2; status=1; continue; fi
-    "$CC" "${FLAGS[@]}" -Isrc -Ivendor/ryu "${SRC[@]}" \
+    "$CC" "${FLAGS[@]}" -Isrc -Ivendor/ryu -Isession -Ihost "${SRC[@]}" \
         "test/${s}_test.c" -o "$out/test_$s"
     if ! "$out/test_$s" golden/floats; then status=1; fi
 done

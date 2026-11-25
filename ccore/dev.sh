@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The dev loop for the C core behind the Vue lab: ccore/dev.sh [model]
 #   Builds the host with `build.sh host` (tcc for changed files, clang -O2 for the rest), starts Vite (web-ui/, --strictPort) and the native host, prints
-#   the lab URL, then watches src/ and host/ (*.c, *.h). On every save: rebuild with tcc and, when
+#   the lab URL, then watches src/, session/ and host/ (*.c, *.h). On every save: rebuild with tcc and, when
 #   the build passes, restart the host on the same port, token and model. The open lab page sees
 #   the new epoch in the change feed and re-syncs by itself. When the build fails, the compiler
 #   output is printed and the old host keeps running.
@@ -106,11 +106,11 @@ for i in $(seq 600); do
     sleep 0.05
 done
 echo "lab: http://localhost:$VITE/?native=1&gl=1&port=$PORT&token=$TOKEN"
-echo "dev.sh: model $MODEL; host log out/dev/host.log; watching src/ host/ (Ctrl-C stops)"
+echo "dev.sh: model $MODEL; host log out/dev/host.log; watching src/ session/ host/ (Ctrl-C stops)"
 
 rm -f "$FIFO"
 mkfifo "$FIFO"
-inotifywait -m -q -e close_write,moved_to,create --format '%w%f' "$CCORE/src" "$CCORE/host" > "$FIFO" 2> /dev/null &
+inotifywait -m -q -e close_write,moved_to,create --format '%w%f' "$CCORE/src" "$CCORE/session" "$CCORE/host" > "$FIFO" 2> /dev/null &
 watch_pid=$!
 exec 3< "$FIFO"
 

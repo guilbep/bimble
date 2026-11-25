@@ -7,91 +7,10 @@
 #include "json_r.h"
 #include "library.h"
 
-/* ---- f64 maths without libm ----
- * Neither test/run.sh nor build.sh links libm, and freestanding wasm has none. cc_sqrt is exact
- * (IEEE sqrt is correctly rounded, so any correct method gives the same bits). cc_hypot is
- * glibc's (sysdeps/ieee754/dbl-64/e_hypot.c, glibc 2.35+) with its FMA kernel, the one glibc
- * uses where FMA is native (aarch64, where the goldens were made); the FMA is emulated in
- * software (exact product, then round-to-odd, Boldo and Melquiond 2008), so every compiler and
- * wasm give the same bits. Checked natively against glibc 2.43 on aarch64: 0 differences in
- * 2x10^7 random mm pairs; 1 in 2x10^7 random bit patterns, near 2^-511 where the exact product
- * underflows. An x86_64 glibc without FMA uses another kernel
- * and may differ from Rust there in the last bit. Ticket 13 (wasm) must check it bit-exact.
- * No contraction: a*b+c must round twice, as in Rust (tcc never contracts). */
-#ifndef __TINYC__
-#pragma STDC FP_CONTRACT OFF
-#endif
-
-static uint64_t bits_of(double x) {
-    uint64_t u;
-    memcpy(&u, &x, 8);
-    return u;
-}
 static double of_bits(uint64_t u) {
     double x;
     memcpy(&x, &u, 8);
     return x;
-}
-
-/* cc_sqrt: the one in scene.c (correctly rounded; one definition for the whole core). */
-
-/* a*b = p + *e exactly (Veltkamp split, Dekker product; no overflow in hypot's range). */
-static double two_prod(double a, double b, double *e) {
-    double p = a * b;
-    double ca = 134217729.0 * a, cb = 134217729.0 * b;
-    double ah = ca - (ca - a), al = a - ah, bh = cb - (cb - b), bl = b - bh;
-    *e = ((ah * bh - p) + ah * bl + al * bh) + al * bl;
-    return p;
-}
-
-/* a + b = s + *e exactly (Knuth). */
-static double two_sum(double a, double b, double *e) {
-    double s = a + b, bb = s - a;
-    *e = (a - (s - bb)) + (b - bb);
-    return s;
-}
-
-/* a + b rounded to odd. */
-static double add_odd(double a, double b) {
-    double e, s = two_sum(a, b, &e);
-    uint64_t u = bits_of(s);
-    if (e != 0.0 && !(u & 1)) u += (e > 0) == (s > 0) ? 1 : (uint64_t)-1;
-    return of_bits(u);
-}
-
-/* fma(a, b, c), correctly rounded. */
-static double fma_(double a, double b, double c) {
-    double ul, uh = two_prod(a, b, &ul);
-    double tl, th = two_sum(c, uh, &tl);
-    return th + add_odd(tl, ul);
-}
-
-static double hypot_kernel(double ax, double ay) {
-    double t1 = ay + ay, t2 = ax - ay;
-    if (t1 >= ax) return cc_sqrt(fma_(t1, ax, t2 * t2));
-    return cc_sqrt(fma_(ax, ax, ay * ay));
-}
-
-double cc_hypot(double x, double y) {
-    const double SCALE = 0x1p-600, LARGE_VAL = 0x1p+511, TINY_VAL = 0x1p-511, EPS = 0x1p-54;
-    int xinf = x - x != 0.0 && x == x, yinf = y - y != 0.0 && y == y;
-    if (x - x != 0.0 || y - y != 0.0) { /* not finite */
-        if (xinf || yinf) return of_bits(0x7FF0000000000000ull);
-        return x + y;
-    }
-    x = x < 0 ? -x : x;
-    y = y < 0 ? -y : y;
-    double ax = x < y ? y : x, ay = x < y ? x : y;
-    if (ax > LARGE_VAL) {
-        if (ay <= ax * EPS) return ax + ay;
-        return hypot_kernel(ax * SCALE, ay * SCALE) / SCALE;
-    }
-    if (ay < TINY_VAL) {
-        if (ax >= ay / EPS) return ax + ay;
-        return hypot_kernel(ax / SCALE, ay / SCALE) * SCALE;
-    }
-    if (ay <= ax * EPS) return ax + ay;
-    return hypot_kernel(ax, ay);
 }
 
 /* ---- argument decoding, serde style ---- */

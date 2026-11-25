@@ -10,6 +10,27 @@ Today it holds the base every later slice uses: an arena, a growable byte buffer
 f64 formatters on top of vendored Ryu (`vendor/ryu`, see `SOURCE`): `fmt_f64_json` prints what
 `serde_json` prints, `fmt_f64_debug` prints what Rust's `{:?}` prints (the IFC writer uses it).
 
+## Layers
+
+ADR 0068 sets seven layers (`docs/research/core-architecture.md` §5). A file includes only its
+own layer and lower ones. L0–L3 have no files, clock, threads or globals; platform code lives only
+in the carriers (L6), which hand the session a `cc_platform` (`session/platform.h`: read file,
+write file atomically, exists, now, wall clock, random bytes, log).
+
+| Layer | What | Files today |
+|---|---|---|
+| L0 base | arena, buffers, JSON, CBOR, inflate, number formatting and parsing, GlobalIds, maths | `src/arena`, `buf`, `json_r`, `json_w`, `cbor`, `inflate`, `fmt`, `strtod`, `guid`, `math`, `src/freestanding/` |
+| L1 model | model, validate, canonical, Commands, History | `src/model`, `command`, `history`, `library` |
+| L2 io / geom | file (v1, v2), STEP, IFC in and out; scene | `src/file`, `step`, `ifc_in`, `ifc_out`, `scene`, `earcut` |
+| L3 api | verbs, query | `src/verbs`, `query` |
+| L4 store | journal, repo, remote | (none yet) |
+| L5 session | call router, sessions (handles: `cc_session *`), selection, placing, scene and /mesh caches, session file, platform interface | `session/calls`, `session`, `mesh`, `mesh_model`, `platform` |
+| L6 carriers | wasm module, HTTP host (native platform, `main`), later mcp and cli | `src/wasm_api.c` (+ `wasm_stub.c`), `host/server.c`, `host/platform_native.c`, `host/main.c` |
+
+A process holds any number of sessions (`cc_session_new(platform)`); the native host serves one
+(`main.c` creates it and passes it to `server.c` in `cc_host_config`), the wasm module's `host_*`
+exports and `call` work on its default session. `test/two_sessions_test.c` opens two at once.
+
 Build (from the repo root; output goes to `ccore/out/`, which git ignores):
 
     ccore/build.sh tcc      # debug library and test binaries, needs tcc
@@ -36,7 +57,7 @@ tcc, `inotifywait` from inotify-tools, and `npm ci` once in `web-ui/`):
 
 It builds the host with `build.sh host` (tcc for the files changed since the last build, cached clang -O2 objects for the rest, 15–100 ms), starts Vite (`web-ui/`, port 5173) and the host (port 47400) and
 prints the lab URL (`lab: http://localhost:5173/?native=1&gl=1&port=47400&token=…`). Open it once.
-Then every save of a `*.c` or `*.h` file in `src/` or `host/` rebuilds (50 ms debounce) and
+Then every save of a `*.c` or `*.h` file in `src/`, `session/` or `host/` rebuilds (50 ms debounce) and
 restarts the host on the same port, token and model; the open page sees the new epoch in the
 change feed and re-syncs by itself. Each cycle prints `rebuilt in N ms, host up in M ms` (host up:
 from the stop of the old host to "listening" of the new one). A build error prints the compiler
@@ -49,7 +70,7 @@ output and keeps the old host running. Ctrl-C stops Vite, the host and the watch
 - The host runs from a copy of the binary (`out/dev/bimble-ccore`), so a build never writes the
   file of the running host.
 
-Test: `node ccore/test/dev_test.mjs` (host 47411, Vite 5199) edits `host/calls.c` five times, then
+Test: `node ccore/test/dev_test.mjs` (host 47411, Vite 5199) edits `session/calls.c` five times, then
 breaks and reverts it, and restores it byte for byte. Measured on the 16 GB aarch64 dev machine,
 three runs of 5 cycles: rebuild 190-283 ms (all of `build.sh tcc`: library, the test binaries and the host),
 host up 9-26 ms.
@@ -58,7 +79,7 @@ host up 9-26 ms.
 
 `npm run ccore:wasm` in `web-ui/` builds `ccore.wasm` and copies it and the demo frame into
 `web-ui/public/ccore/`. Then open the lab with `?ccore=1&gl=1`: the page loads the module (244 KB,
-112 KB gzip) and runs the same call code as the native host (`host/calls.c`, `session.c`,
+112 KB gzip) and runs the same call code as the native host (`session/calls.c`, `session.c`,
 `mesh.c` compiled in). `?model=<url>` opens another `.bimble` text file; `window.ccoreSave()`
 returns the saved text. Checked by `node test/lab_wasm.mjs`; native and wasm answers are compared
 byte for byte by `node test/wasm_run.mjs` (suite `host`).

@@ -23,17 +23,12 @@
  * The positions block starts at 52 + 48 nE, a multiple of 4: a reader may view the positions,
  * indices and edges as Float32Array / Uint32Array over the same buffer.
  * The host is little-endian (x86-64, aarch64); the bytes are written with memcpy. */
-#define _POSIX_C_SOURCE 200809L
-#ifdef __wasm__
-#include "wasm_api.h" /* snprintf, freestanding */
-#else
 #include <stdio.h>
-#include <time.h>
-#endif
 #include <string.h>
 
 #include "mesh.h"
 #include "scene.h"
+#include "session.h"
 
 static void put_u32(Buf *b, uint32_t v) { buf_append(b, &v, 4); }
 
@@ -106,52 +101,38 @@ int cc_mesh_bmsh(const cc_model *m, uint32_t rev, Buf *out, cc_error *err) {
     return rc;
 }
 
-/* ---- the cached answer ---- */
+/* ---- the cached answer (in the session) ---- */
 
-static Buf cache;         /* BMSH bytes, or the error text */
-static int cache_status;  /* 0: nothing cached */
-static const cc_model *cache_model;
-static uint32_t cache_rev;
-
-#ifdef __wasm__
-static double now_ms(void) { return 0; } /* no clock in the module: build_ms reads 0 */
-#else
-static double now_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1e3 + (double)ts.tv_nsec / 1e6;
-}
-#endif
-
-int cc_mesh_get(const char **p, size_t *n, uint32_t *rev, double *build_ms) {
+int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double *build_ms) {
     cc_error err;
     *build_ms = 0;
-    const cc_model *m = cc_mesh_model(rev, &err);
+    Buf *cache = &s->mesh;
+    const cc_model *m = cc_mesh_model(s, rev, &err);
     if (!m) {
-        buf_clear(&cache);
-        cache_status = 0; /* not cached: a later model is picked up */
-        buf_puts(&cache, err.msg);
-        *p = buf_cstr(&cache), *n = cache.len;
+        buf_clear(cache);
+        s->mesh_status = 0; /* not cached: a later model is picked up */
+        buf_puts(cache, err.msg);
+        *p = buf_cstr(cache), *n = cache->len;
         return 404;
     }
-    if (!cache_status || cache_model != m || cache_rev != *rev) {
-        double t0 = now_ms();
-        buf_clear(&cache);
-        cache.oom = 0;
+    if (!s->mesh_status || s->mesh_model != m || s->mesh_rev != *rev) {
+        double t0 = s->pf->now_ms(s->pf->ctx);
+        buf_clear(cache);
+        cache->oom = 0;
         /* The session's scene of this rev (calls.c builds it once per rev for query status),
          * not a second build; when it has none (or it failed), a build here gives the error. */
-        const cc_scene *sc = cc_host_scene();
-        if ((sc ? bmsh_of(sc, *rev, &cache, &err) : cc_mesh_bmsh(m, *rev, &cache, &err)) != 0) {
-            buf_clear(&cache);
-            cache.oom = 0;
-            buf_puts(&cache, err.msg);
-            cache_status = 500;
+        const cc_scene *sc = cc_session_scene(s);
+        if ((sc ? bmsh_of(sc, *rev, cache, &err) : cc_mesh_bmsh(m, *rev, cache, &err)) != 0) {
+            buf_clear(cache);
+            cache->oom = 0;
+            buf_puts(cache, err.msg);
+            s->mesh_status = 500;
         } else {
-            cache_status = 200;
+            s->mesh_status = 200;
         }
-        cache_model = m, cache_rev = *rev;
-        *build_ms = now_ms() - t0;
+        s->mesh_model = m, s->mesh_rev = *rev;
+        *build_ms = s->pf->now_ms(s->pf->ctx) - t0;
     }
-    *p = cache.p ? cache.p : "", *n = cache.len;
-    return cache_status;
+    *p = cache->p ? cache->p : "", *n = cache->len;
+    return s->mesh_status;
 }

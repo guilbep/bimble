@@ -80,6 +80,12 @@ int main(int argc, char **argv) {
         fprintf(stderr, "bimble-ccore: \"%s\" is not a port\n", ps);
         return 2;
     }
+    /* The host's one session (a handle: the process could hold more). */
+    cc_session *ses = cc_session_new(cc_platform_native());
+    if (!ses) {
+        fprintf(stderr, "bimble-ccore: out of memory\n");
+        return 1;
+    }
     const char *model = argc > 2 ? argv[2] : getenv("CCORE_MODEL");
     if (model && *model) {
         cc_error err;
@@ -88,7 +94,7 @@ int main(int argc, char **argv) {
             snprintf(def, sizeof def, "%s.ccore-session", model);
             session = def;
         }
-        if (want_session ? cc_session_open_persisted(model, session, &err) : cc_session_open(model, &err)) {
+        if (want_session ? cc_session_open_persisted(ses, model, session, &err) : cc_session_open(ses, model, &err)) {
             fprintf(stderr, "bimble-ccore: %s: %s\n", model, err.msg);
             return 1;
         }
@@ -108,6 +114,7 @@ int main(int argc, char **argv) {
     memset(&cfg, 0, sizeof cfg);
     cfg.port = (uint16_t)port;
     cfg.warm = warm;
+    cfg.session = ses;
     cfg.token = t;
     cfg.epoch = epoch;
     cfg.origins[cfg.n_origins++] = "http://localhost:5173";
@@ -120,6 +127,7 @@ int main(int argc, char **argv) {
             if (*tok && strlen(tok) < 256) cfg.origins[cfg.n_origins++] = tok;
     }
     int rc = cc_host_run(&cfg);
-    cc_session_persist_now(); /* SIGTERM or SIGINT: the last change, if not written yet */
+    cc_session_persist_now(ses); /* SIGTERM or SIGINT: the last change, if not written yet */
+    cc_session_free(ses);
     return rc;
 }

@@ -1,6 +1,6 @@
 // The dev loop (ccore/dev.sh) end to end: node ccore/test/dev_test.mjs
 // Starts dev.sh on test ports (host 47411, Vite 5199), waits for the lab URL, checks the host
-// answers; then edits host/calls.c (a trailing comment, then without it) five times and checks
+// answers; then edits session/calls.c (a trailing comment, then without it) five times and checks
 // each save gives one "rebuilt in" line and a host with a new epoch; a syntax error prints the
 // compiler output while the old host still answers; the revert rebuilds. SIGTERM to dev.sh must
 // leave no process behind. The edited file is restored byte for byte. Needs tcc, inotifywait and
@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 47411;
 const VITE = 5199;
-const EDITED = join(CCORE, "host/calls.c");
+const EDITED = join(CCORE, "session/calls.c");
 const ORIGINAL = readFileSync(EDITED);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let passed = 0, failed = 0;
@@ -159,7 +159,7 @@ try {
   check(`nothing listens on ${PORT} or ${VITE}`, ls.trim() === "", ls.trim());
   for (const t of left) try { process.kill(t.pid, "SIGKILL"); } catch {}
   try { process.kill(-dev.pid, "SIGKILL"); } catch {}
-  check("host/calls.c restored byte for byte", readFileSync(EDITED).equals(ORIGINAL));
+  check("session/calls.c restored byte for byte", readFileSync(EDITED).equals(ORIGINAL));
   console.log(`${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

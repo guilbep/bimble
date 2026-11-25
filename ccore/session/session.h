@@ -1,16 +1,25 @@
-/* The native host's open model and what the viewer keeps beside it (crates/bimble-viewer:
+/* A session (L5): an open model and what the viewer keeps beside it (crates/bimble-viewer:
  * `Viewer::loaded`, `Editor`): history, selection, rev, placing state, the file path, the saved
- * step. One session per process; calls.c reads and changes it, main.c opens it. */
-#ifndef CCORE_HOST_SESSION_H
-#define CCORE_HOST_SESSION_H
+ * step, and the caches built from it (the scene and the /mesh bytes of the current rev).
+ * A handle: a process holds as many as it wants (each with its own model; Mission 1, superposed
+ * files). The carrier creates one with its platform (platform.h); calls.c reads and changes it.
+ * No file-scope mutable state: everything lives in the cc_session. */
+#ifndef CCORE_SESSION_SESSION_H
+#define CCORE_SESSION_SESSION_H
 #include <stddef.h>
 #include <stdint.h>
+#include "buf.h"
 #include "history.h"
 #include "model.h"
+#include "platform.h"
+#include "scene.h"
 
 typedef enum { CC_KIND_COLUMN, CC_KIND_BEAM, CC_KIND_WALL, CC_KIND_SLAB } cc_kind; /* verbs.rs:29 */
 
-typedef struct {
+typedef struct cc_persist cc_persist; /* the session file (session.c), NULL when off */
+
+typedef struct cc_session {
+    const cc_platform *pf; /* the carrier's, outlives the session */
     int open;            /* a model is loaded (always editable: the C core imports IFC, spec §1) */
     cc_model model;
     cc_history hist;
@@ -41,22 +50,40 @@ typedef struct {
     double top_offset_mm;
     int polygon;
     int tab_open; /* the 3D view's tab is open and current */
+    /* The scene of the current rev (calls.c), built once per rev, shared by query status and
+     * GET /mesh. scene_rev 0: none built. */
+    cc_scene scene;
+    int scene_ok;
+    uint64_t scene_rev;
+    /* The /mesh answer (mesh.c): BMSH bytes or the error text, per (model, rev). */
+    Buf mesh;
+    int mesh_status; /* 0: nothing cached */
+    const cc_model *mesh_model;
+    uint32_t mesh_rev;
+    cc_persist *persist;
 } cc_session;
 
-cc_session *cc_session_get(void);
+/* A new session with no model, on `pf` (kept by pointer). NULL when out of memory. */
+cc_session *cc_session_new(const cc_platform *pf);
+/* Frees the model, history, caches and the session file state (writes nothing). NULL is fine. */
+void cc_session_free(cc_session *s);
 
 /* Opens `path`: .ifc (any case) is imported (lib.rs:526-538: project named after the file stem,
  * Save writes `editable_copy_path`, starts unsaved), anything else is read as the .bimble JSON
  * text form. 0 ok; -1 with `err`. */
-int cc_session_open(const char *path, cc_error *err);
+int cc_session_open(cc_session *s, const char *path, cc_error *err);
 
 /* The current history step id (0: none). */
 uint64_t cc_session_step(const cc_session *s);
 int cc_session_unsaved(const cc_session *s);
 
 /* The open model, NULL without one; the rev of the scene it gives (for the /mesh endpoint). */
-const cc_model *cc_host_model(void);
-uint32_t cc_host_rev(void);
+const cc_model *cc_session_model(const cc_session *s);
+uint32_t cc_session_rev(const cc_session *s);
+
+/* The scene of the open model at its rev, built once per rev (calls.c) and shared by query
+ * status and GET /mesh; NULL when there is no model or the build failed. */
+const cc_scene *cc_session_scene(cc_session *s);
 
 /* The session file (tickets T12, T18): the state a restart of the host must keep, so the lab
  * page keeps its model edits, undo steps and selection across an edit -> rebuild -> restart loop.
@@ -80,9 +107,10 @@ uint32_t cc_host_rev(void);
  *
  * cc_session_persist_now: after each call (server.c, before the answer) and at exit: appends the
  * entry for what the call changed, if anything. cc_session_note_apply: calls.c hands the commands
- * of the step it just pushed. */
+ * of the step it just pushed. Native only (POSIX append and stat): in the wasm module the
+ * session file is never on. */
 #include "command.h"
-int cc_session_open_persisted(const char *model_path, const char *session_path, cc_error *err);
-void cc_session_persist_now(void);
-void cc_session_note_apply(const cc_command *cmds, size_t n);
+int cc_session_open_persisted(cc_session *s, const char *model_path, const char *session_path, cc_error *err);
+void cc_session_persist_now(cc_session *s);
+void cc_session_note_apply(cc_session *s, const cc_command *cmds, size_t n);
 #endif

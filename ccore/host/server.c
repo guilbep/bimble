@@ -431,15 +431,15 @@ static void route_post(Conn *c, Str path, const char *body, size_t n, int keep) 
         buf_puts(&out, opz);
         status = CC_ERR;
     } else {
-        status = cc_call(opz, namez, bz, n, &out);
-        cc_session_persist_now(); /* the session file has the change before the call answers */
+        status = cc_call(cfg->session, opz, namez, bz, n, &out);
+        cc_session_persist_now(cfg->session); /* the session file has the change before the call answers */
     }
     if (out.oom) status = 500, buf_clear(&out), out.oom = 0;
     /* The twin publishes the change after serving each call (twin.rs `run_headless`); the
      * feed drops it when nothing changed. */
     Buf ch;
     buf_init(&ch);
-    cc_change_json(&ch);
+    cc_change_json(cfg->session, &ch);
     if (!ch.oom) cc_host_publish_change(ch.p ? ch.p : "", ch.len);
     buf_free(&ch);
     respond(c, status == CC_OK ? 200 : status == CC_ERR ? 400 : 500, TEXT, out.p ? out.p : "", out.len, keep);
@@ -549,7 +549,7 @@ static void handle_one(Conn *c, int *again) {
         size_t mn;
         uint32_t rev;
         double ms;
-        int st = cc_mesh_get(&mp, &mn, &rev, &ms);
+        int st = cc_mesh_get(cfg->session, &mp, &mn, &rev, &ms);
         if (ms > 0) fprintf(stderr, "bimble-ccore: mesh rev %u built in %.3f ms, %zu bytes\n", (unsigned)rev, ms, mn);
         char xrev[80];
         snprintf(xrev, sizeof xrev, "X-Rev: %u\r\nAccess-Control-Expose-Headers: X-Rev\r\n", (unsigned)rev);
@@ -647,7 +647,7 @@ int cc_host_run(const cc_host_config *config) {
 
     Buf ch;
     buf_init(&ch);
-    cc_change_json(&ch);
+    cc_change_json(cfg->session, &ch);
     cc_host_publish_change(ch.p ? ch.p : "null", ch.len);
     buf_free(&ch);
 
@@ -672,7 +672,7 @@ int cc_host_run(const cc_host_config *config) {
         /* --warm: a new rev (load, a change) and nothing to read: build its scene and BMSH now,
          * while the page is still reacting to the change, so /mesh finds them cached. */
         static uint32_t warmed;
-        int want_warm = cfg->warm && cc_host_model() && cc_host_rev() != warmed;
+        int want_warm = cfg->warm && cc_session_model(cfg->session) && cc_session_rev(cfg->session) != warmed;
         if (want_warm) timeout = 0;
         int r = poll(pfd, (nfds_t)n, timeout);
         if (want_warm && r == 0) {
@@ -680,7 +680,7 @@ int cc_host_run(const cc_host_config *config) {
             size_t mn;
             uint32_t rev;
             double ms;
-            cc_mesh_get(&mp, &mn, &rev, &ms);
+            cc_mesh_get(cfg->session, &mp, &mn, &rev, &ms);
             warmed = rev;
             fprintf(stderr, "bimble-ccore: warm: mesh rev %u built in %.3f ms (scene included)\n", (unsigned)rev, ms);
             continue;

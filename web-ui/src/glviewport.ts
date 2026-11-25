@@ -1,5 +1,5 @@
 // WebGL2 viewport for the native C host (dev only, `?native=1&gl=1&port=&token=`; ticket 11a,
-// docs/research/c-core-spec.md §2). Fetches `GET /mesh` (BMSH, layout in ccore/host/mesh.c) at
+// docs/research/c-core-spec.md §2). Fetches `GET /mesh` (BMSH, layout in ccore/session/mesh.c) at
 // start and whenever the change feed's `rev` changes, and draws it in Bimble's style: flat faces
 // (normal from dFdx/dFdy, two-sided Lambert, ambient 0.62, light as bimble-render), one colour per
 // material family, the selection in the selection colour, crease edges as gl.LINES. Orbit (left
@@ -42,7 +42,7 @@ interface Bmsh {
   edges: Float32Array;
 }
 
-/** Parses BMSH version 1 (ccore/host/mesh.c). Throws on a malformed buffer. */
+/** Parses BMSH version 1 (ccore/session/mesh.c). Throws on a malformed buffer. */
 export function parseBmsh(ab: ArrayBuffer): Bmsh {
   const dv = new DataView(ab);
   if (ab.byteLength < 52 || dv.getUint32(0, true) !== 0x48534d42) throw new Error("not BMSH");

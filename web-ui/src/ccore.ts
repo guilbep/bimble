@@ -1,6 +1,6 @@
 // The C core in the browser (ticket T13b, `?ccore=1`): a `Wasm` (bimble.ts) over ccore.wasm, the
 // freestanding wasm32 build of ccore/ (ccore/build.sh wasm; exports in ccore/src/wasm_api.h). The
-// module holds the same call code as the native C host (ccore/host/calls.c): every call is
+// module holds the same call code as the native C host (ccore/session/calls.c): every call is
 // `call(op, name, body)`, exactly a `POST /<op>/<name>` of the host, with no server at all.
 // - Loads `ccore/ccore.wasm` (relative to the page; `npm run ccore:wasm` puts it in public/ccore/)
 //   or `?ccore_wasm=<url>`, and seeds the id generator from crypto.getRandomValues.

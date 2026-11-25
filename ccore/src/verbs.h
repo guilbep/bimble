@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include "buf.h"
 #include "command.h"
+#include "math.h" /* cc_sqrt, cc_hypot (verbs_test, callers that must match Rust's bits) */
 #include "model.h"
 
 #define CC_MAX_IDS 10000 /* dispatch::MAX_IDS */
@@ -18,8 +19,4 @@
  * "unknown verb …"); a Rust verb the C core lacks gives "the verb \"copy\" is not in the C core".
  * New GlobalIds come from cc_guid_new, in Rust's call order (seeded runs give Rust's sequence). */
 int cc_verb_run(const cc_model *m, const char *name, const char *args, size_t n, cc_cmds *out, Buf *err);
-
-/* f64::hypot. Natively the C core links no libm, so this is the C core's own; see verbs.c. */
-double cc_hypot(double x, double y);
-#include "scene.h" /* cc_sqrt */
 #endif

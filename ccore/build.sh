@@ -10,16 +10,19 @@
 #          clang with -ffp-contract=off (no fused multiply-add: the same floats as tcc). HOST_MIX=0:
 #          one tcc call over every source (the build before ticket T18).
 #   native clang -O2, same outputs
-#   wasm   clang freestanding wasm32 of src/ (no libc) and the host's call layer (HOST_CALLS:
-#          the native host's call code, without its HTTP server and main), ccore.wasm exporting
-#          the API of src/wasm_api.h (test: node test/wasm_run.mjs, test/lab_wasm.mjs)
+#   wasm   clang freestanding wasm32 of src/ (no libc) and the session layer (session/*.c: the
+#          native host's call code, without the host's HTTP server, platform and main), ccore.wasm
+#          exporting the API of src/wasm_api.h (test: node test/wasm_run.mjs, test/lab_wasm.mjs)
+# Layers (README "Layers"): src/ is L0-L3 (and the wasm carrier, wasm_api.c), session/ is L5, host/
+# is the native carrier (L6). Test suites link the library, session/ and host/platform_native.c.
 set -euo pipefail
 cd "$(dirname "$0")"
 # Every src/*.c is the library (wasm_stub.c only in the wasm build); every test/<name>_test.c is a suite.
 LIB=(); for f in src/*.c; do [[ $f == src/wasm_stub.c ]] || LIB+=("$f"); done
 TESTS=(); for f in test/*_test.c; do t=${f#test/}; TESTS+=("${t%_test.c}"); done
-INC=(-Isrc -Ivendor/ryu)
-HOST_CALLS=(host/calls.c host/session.c host/mesh.c host/mesh_model.c)
+INC=(-Isrc -Ivendor/ryu -Isession)
+SESSION=(session/*.c)
+HOST=(host/*.c)
 
 ms() { date +%s%N | cut -b1-13; }
 step() { # step <label> <command...>
@@ -46,21 +49,34 @@ lib_and_tests() { # <dir> <cc> <flags...>
     step "compile library ($cc)" compile_lib "$@"
     if [[ $cc == tcc ]]; then step "archive libccore.a" tcc -ar rcs "$dir/libccore.a" "${objs[@]}"
     else step "archive libccore.a" llvm-ar rcs "$dir/libccore.a" "${objs[@]}"; fi
+    # The session layer (L5) and the native platform: an archive the suites and the host link.
+    local sobjs=()
+    for f in "${SESSION[@]}" host/platform_native.c; do sobjs+=("$dir/$(basename "${f%.c}").o"); done
+    compile_session() {
+        local i=0
+        for f in "${SESSION[@]}" host/platform_native.c; do
+            "$cc" "$@" "${INC[@]}" -Ihost -c "$f" -o "${sobjs[$i]}"
+            i=$((i + 1))
+        done
+    }
+    step "compile session ($cc)" compile_session "$@"
+    if [[ $cc == tcc ]]; then step "archive libccore_session.a" tcc -ar rcs "$dir/libccore_session.a" "${sobjs[@]}"
+    else step "archive libccore_session.a" llvm-ar rcs "$dir/libccore_session.a" "${sobjs[@]}"; fi
     for t in "${TESTS[@]}"; do
-        step "test binary $t" "$cc" "$@" "${INC[@]}" "test/${t}_test.c" "$dir/libccore.a" -o "$dir/test_$t"
+        step "test binary $t" "$cc" "$@" "${INC[@]}" -Ihost "test/${t}_test.c" "$dir/libccore_session.a" "$dir/libccore.a" -o "$dir/test_$t"
     done
-    # The native host (not in wasm): every host/*.c on top of the library.
-    step "host bimble-ccore" "$cc" "$@" "${INC[@]}" -Ihost host/*.c "$dir/libccore.a" -o "$dir/bimble-ccore"
+    # The native host (not in wasm): every host/*.c on top of session/ and the library.
+    step "host bimble-ccore" "$cc" "$@" "${INC[@]}" -Ihost "${HOST[@]}" "${SESSION[@]}" "$dir/libccore.a" -o "$dir/bimble-ccore"
 }
 
 # build.sh host (see the header). Cache keys: sha1 of the file, of every header (and the vendored
 # ryu sources, included by fmt.c) and of the flags; objects out/hostmix/o2/<name>.<key>.o.
-HOST_SRCS=("${LIB[@]}" host/*.c)
+HOST_SRCS=("${LIB[@]}" "${SESSION[@]}" "${HOST[@]}")
 TCC_FLAGS=(-g -Wall -DRYU_ONLY_64_BIT_OPS)
 O2_FLAGS=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function)
 host_keys() { # prints "<key> <file>" per source
     local hh
-    hh=$( { printf '%s\n' "${O2_FLAGS[*]}" "${TCC_FLAGS[*]}"; cat src/*.h host/*.h vendor/ryu/ryu/*; } | sha1sum | cut -c1-16)
+    hh=$( { printf '%s\n' "${O2_FLAGS[*]}" "${TCC_FLAGS[*]}"; cat src/*.h session/*.h host/*.h vendor/ryu/ryu/*; } | sha1sum | cut -c1-16)
     local sum f
     while read -r sum f; do echo "${sum:0:16}$hh $f"; done < <(sha1sum "${HOST_SRCS[@]}")
 }
@@ -123,7 +139,7 @@ case "${1:-}" in
     mkdir -p out/wasm
     step "clang wasm32 link" clang --target=wasm32 -std=c11 -ffreestanding -nostdlib -O2 \
         -Wall -Werror -Wno-unused-function -DRYU_ONLY_64_BIT_OPS -isystem src/freestanding "${INC[@]}" \
-        -Ihost -Wl,--no-entry "${LIB[@]}" src/wasm_stub.c "${HOST_CALLS[@]}" -o out/wasm/ccore.wasm
+        -Wl,--no-entry "${LIB[@]}" src/wasm_stub.c "${SESSION[@]}" -o out/wasm/ccore.wasm
     printf '  %-28s %5d bytes\n' "ccore.wasm" "$(wc -c < out/wasm/ccore.wasm)"
     printf '  %-28s %5d bytes\n' "ccore.wasm gzip -9" "$(gzip -9 -c out/wasm/ccore.wasm | wc -c)" ;;
   *) echo "usage: $0 tcc|host|native|wasm" >&2; exit 2 ;;

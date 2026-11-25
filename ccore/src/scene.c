@@ -11,6 +11,7 @@
 #endif
 #include "scene.h"
 #include <string.h>
+#include "math.h"
 #include "buf.h"
 #include "earcut.h"
 #include <stdlib.h>
@@ -47,46 +48,6 @@ static float round32(float x) {
     memcpy(&t, &u, 4);
     return t;
 }
-
-/* Correctly rounded square root: digit by digit on the 108-bit radicand m << 54. */
-double cc_sqrt(double x) {
-    uint64_t u = bits64(x);
-    if (x != x) return x;
-    if (x == 0.0 || x == 1.0 / 0.0) return x; /* ±0, +inf */
-    if (u >> 63) return 0.0 / 0.0;
-    int e = (int)(u >> 52);
-    uint64_t m = u & ((1ull << 52) - 1);
-    if (e == 0) { /* subnormal */
-        e = 1;
-        while (!(m & (1ull << 52))) m <<= 1, e--;
-    } else {
-        m |= 1ull << 52;
-    }
-    int ex = e - 1075; /* x = m * 2^ex */
-    if (ex & 1) m <<= 1, ex--;
-    uint64_t hi = m >> 10, lo = m << 54, root = 0, rem = 0;
-    for (int i = 53; i >= 0; i--) {
-        int b = 2 * i;
-        uint64_t pair = b >= 64 ? (hi >> (b - 64)) & 3 : (lo >> b) & 3;
-        rem = (rem << 2) | pair;
-        uint64_t trial = (root << 2) | 1;
-        if (rem >= trial) {
-            rem -= trial;
-            root = (root << 1) | 1;
-        } else {
-            root <<= 1;
-        }
-    }
-    /* root in [2^53, 2^54): 53 bits and a guard bit; rem != 0 is the sticky bit. */
-    uint64_t mant = root >> 1;
-    if ((root & 1) && (rem != 0 || (mant & 1))) mant++;
-    int exp = ex / 2 - 26;
-    if (mant == (1ull << 53)) mant >>= 1, exp++;
-    return from64((uint64_t)(exp + 52 + 1023) << 52 | (mant & ((1ull << 52) - 1)));
-}
-
-/* Rounding the exact f64 root to f32 is correctly rounded (53 >= 2 * 24 + 2). */
-float cc_sqrtf(float x) { return (float)cc_sqrt((double)x); }
 
 /* f64::total_cmp */
 static int total_cmp(double a, double b) {

@@ -1,6 +1,6 @@
 // GET /mesh of the native host (ticket 11a): node ccore/test/mesh_http_test.mjs
 // Starts out/tcc/bimble-ccore (or $HOST_BIN) with CCORE_MODEL=golden/frame.json on 47321, fetches
-// /mesh, parses BMSH (layout: host/mesh.c) and checks it against golden/mesh/scene.txt (the
+// /mesh, parses BMSH (layout: session/mesh.c) and checks it against golden/mesh/scene.txt (the
 // scene of the same model, cc_scene_build): element count, each row's GlobalId, category and
 // vertex / triangle / edge counts, the origin bits, index ranges; the X-Rev header; a second
 // fetch is served from the cache (same bytes, one build); 403 on a bad token. Then a host with
@@ -33,7 +33,7 @@ async function startHost(port, env) {
   return h;
 }
 
-/** Parses BMSH (host/mesh.c). Throws on a malformed buffer. */
+/** Parses BMSH (session/mesh.c). Throws on a malformed buffer. */
 function parseBmsh(buf) {
   const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   const dv = new DataView(ab);
