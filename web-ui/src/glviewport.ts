@@ -51,6 +51,13 @@
 // which picks, snaps to a corner, an edge or a face and keeps the measurements (session state);
 // the overlay draws them, the rubber line and the snap marker, in 3D and in a plan. Esc: the first
 // point goes, then the tool.
+// Navigation (ticket NAV1, gl/nav.ts, Rust lib.rs wheel_pivot / orbit_pivot_at, bimble-render Camera):
+// in 3D the wheel zooms about the geometry under the cursor, else about the plane through the orbit
+// target facing the viewer, and keeps that pivot while only the wheel moves the camera; a left drag
+// orbits about the geometry under the press, else the selection's centre, else the target (0.008
+// rad/px, a marker at the pivot while it turns); the distance stays within 10 mm .. 1e8 mm; the clip
+// planes come from the model's sphere seen from the eye; a double-click fits all (a plan: fits the
+// plan). Plans keep their pan and zoom about the pointer.
 import {
   annotate, annotateCall, boxTool, deleteAnnotation, moveAnnotation, openViews, placing, select, selectLinked, state, toolCall,
   viewAnnotations, viewClip, visibility, visibilitySets, measure, measureCall, type MeasureState,
@@ -58,6 +65,7 @@ import {
   type VisibilitySets,
 } from "./bimble";
 import { drawMeasure } from "./gl/measure";
+import { clipPlanes, onTargetPlane, orbitAbout, ORBIT_RAD_PER_PX, sameCam, wheelFactor, zoomAt, type OrbitCam } from "./gl/nav";
 import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
 
 // Palette, sRGB (bimble-core style.rs:302, :335-410), by MaterialCategory index.
@@ -99,6 +107,8 @@ const ANNOT_SEL_CSS = "rgb(200, 60, 90)";
 const ANNOT_PREVIEW_CSS = "rgba(32, 70, 150, 0.7)";
 const DIM_TEXT_MM = 2.25; // a dimension's value without a dimension type (paper mm)
 const ANNOT_PICK_PX = 6;
+// The orbit pivot's marker (lib.rs handle_view_input: a 4 px disc in the selection fill, white ring).
+const NAV_PIVOT_CSS = "rgb(31, 78, 140)";
 
 interface Bmsh {
   rev: number;
@@ -365,6 +375,14 @@ interface GlStats {
   measure: MeasureState | null;
   measureCalls: number;
   measureError: string | null;
+  /** Navigation (ticket NAV1): pivot picks made (a test hook: the wheel keeps its pivot without
+   *  picking again), the wheel's last pivot and the current drag's pivot (world mm; null: none) and
+   *  what they came from, double-click fits. */
+  nav: { picks: number; zoomPivot: number[] | null; zoomFrom: "hit" | "plane" | null; orbitPivot: number[] | null;
+    orbitFrom: "hit" | "selection" | "target" | null; fits: number };
+  /** Test hooks (NAV1): the eye (world mm, 3D), an element's box (world mm) by GlobalId (the open model). */
+  navEye?: () => number[] | null;
+  elementBox?: (id: string) => { min: number[]; max: number[] } | null;
 }
 declare global {
   interface Window {
@@ -389,7 +407,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     toolCalls: 0, ghostTris: 0, hover: null, toolError: null, placed: null,
     hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null, links: [], linkTris: 0,
     annotations: null, overlayTexts: [], selectedAnnotation: null, annotate: null, annotateCalls: 0, annotError: null, annotAdded: null,
-    measure: null, measureCalls: 0, measureError: null };
+    measure: null, measureCalls: 0, measureError: null,
+    nav: { picks: 0, zoomPivot: null, zoomFrom: null, orbitPivot: null, orbitFrom: null, fits: 0 } };
   window.__bbGl = stats;
   if (!(canvas instanceof HTMLCanvasElement)) return () => undefined;
   const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
@@ -543,8 +562,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const proj = new Float32Array([m / w, 0, 0, 0, 0, 1 / half, 0, 0, 0, 0, -2 / (far - near), 0, 0, 0, -(far + near) / (far - near), 1]);
       return { e, view, proj, mvp: mul(proj, view), aspect, up };
     }
-    const far = distance + 2 * r + 1;
-    const near = Math.max(1, Math.min(distance - 1.5 * r, far / 1000), far / 100000);
+    // ---- navigation (NAV1): clip planes from the model's sphere seen from the eye (Camera::view_proj) ----
+    const { near, far } = clipPlanes({ yaw, pitch, distance, target }, bounds?.center ?? target, r);
     const e = eye();
     const up: V3 = Math.abs(pitch) > 1.55 ? [-Math.cos(yaw), -Math.sin(yaw), 0] : [0, 0, 1];
     const view = lookAt(e, target, up);
@@ -1054,6 +1073,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, overlay.width, overlay.height);
+    // NAV1: the orbit pivot's marker cleared again by its own square: headless Chromium was seen to
+    // keep it on screen after the whole-canvas clear above when nothing else was drawn.
+    if (navMark) ctx.clearRect((navMark[0] - 8) * dpr, (navMark[1] - 8) * dpr, 16 * dpr, 16 * dpr), (navMark = null);
     const texts: string[] = [];
     if (plan && mesh) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1091,8 +1113,28 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         return p ? [p[0] - b.left, p[1] - b.top] : null;
       }, texts);
     }
+    // ---- navigation (NAV1): where the drag turns the view about (lib.rs handle_view_input) ----
+    const op = drag?.orbit;
+    if (op && mesh && !plan) {
+      const b = canvas.getBoundingClientRect(), o = mesh.origin;
+      const q = stats.toScreen?.(op[0] + o[0], op[1] + o[1], op[2] + o[2]);
+      if (q) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.beginPath();
+        navMark = [q[0] - b.left, q[1] - b.top];
+        ctx.arc(navMark[0], navMark[1], 4, 0, 2 * Math.PI);
+        ctx.fillStyle = NAV_PIVOT_CSS;
+        ctx.fill();
+        ctx.strokeStyle = "white";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.beginPath();
+      }
+    }
     stats.overlayTexts = texts;
   };
+  /** NAV1: where the orbit pivot's marker was last drawn (overlay CSS px), or null. */
+  let navMark: [number, number] | null = null;
   /** The annotations of the view shown, again when the model or the view changed. */
   const refreshAnnotations = () => {
     const key = plan ? `${state.value.rev}|${viewId}` : "";
@@ -1180,9 +1222,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
 
   /** The element under canvas pixel (x, y) (CSS px from the top-left), or -1. */
-  const pick = (x: number, y: number): number => {
+  const pick = (x: number, y: number): number => pickHit(x, y)?.el ?? -1;
+  /** The element under canvas pixel (x, y) and the point hit (scene mm), or null. */
+  const pickHit = (x: number, y: number): { el: number; point: V3 } | null => {
     const m = mesh;
-    if (!m) return -1;
+    if (!m) return null;
     const r = rayAt(x, y);
     const e: V3 = [r[0] ?? 0, r[1] ?? 0, r[2] ?? 0], dir: V3 = [r[3] ?? 0, r[4] ?? 0, r[5] ?? 0];
     let best = Infinity, hit = -1;
@@ -1235,7 +1279,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         }
       }
     }
-    return hit < 0 ? -1 : hitE;
+    return hit < 0 ? null : { el: hitE, point: add(e, scale(dir, best)) };
   };
 
   stats.pickAt = (cx, cy) => {
@@ -1254,6 +1298,67 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     return id === undefined ? null : { id, link: linkOf(k) };
   };
 
+  // ---- navigation (ticket NAV1, gl/nav.ts): the pivots of the wheel and of an orbit drag ----
+  const camNow = (): OrbitCam & { half: number } => ({ yaw, pitch, distance, target: [...target], half });
+  const setCam = (c: OrbitCam) => { yaw = c.yaw; pitch = c.pitch; distance = c.distance; target = c.target; };
+  const toWorld = (p: V3): number[] => { const o = mesh?.origin ?? [0, 0, 0]; return [p[0] + o[0], p[1] + o[1], p[2] + o[2]]; };
+  /** The wheel's last pivot (lib.rs zoom_pivot): the pointer (canvas px), the camera after that zoom, the pivot (scene mm). */
+  let zoomPivot: { x: number; y: number; cam: OrbitCam & { half: number }; p: V3 } | null = null;
+  /** lib.rs wheel_pivot in 3D: the geometry under the cursor, else the plane through the orbit target. */
+  const wheelPivot = (x: number, y: number): V3 => {
+    stats.nav.picks++;
+    const h = pickHit(x, y);
+    stats.nav.zoomFrom = h ? "hit" : "plane";
+    if (h) return h.point;
+    const r = rayAt(x, y);
+    return onTargetPlane(camNow(), [r[0] ?? 0, r[1] ?? 0, r[2] ?? 0], [r[3] ?? 0, r[4] ?? 0, r[5] ?? 0]);
+  };
+  /** The centre of the selection's box (lib.rs: ClipBox::around the selected element), or null. */
+  const selectionCentre = (): V3 | null => {
+    const m = mesh;
+    if (!m) return null;
+    const linked = state.value.linked ?? null;
+    const sel = new Set(linked ? [] : state.value.selection);
+    const lo: V3 = [Infinity, Infinity, Infinity], hi: V3 = [-Infinity, -Infinity, -Infinity];
+    for (let el = 0; el < m.ids.length; el++) {
+      const k = m.model?.[el] ?? 0, id = m.ids[el] ?? "";
+      const on = k === 0 ? sel.has(id) : linked !== null && linked.id === id && linked.link === m.links?.[k - 1]?.name;
+      if (!on || !(m.nv[el] ?? 0)) continue;
+      for (let a = 0; a < 3; a++) {
+        lo[a] = Math.min(lo[a]!, boxes[6 * el + a] ?? 0);
+        hi[a] = Math.max(hi[a]!, boxes[6 * el + 3 + a] ?? 0);
+      }
+    }
+    return lo[0] <= hi[0] ? scale(add(lo, hi), 0.5) : null;
+  };
+  /** lib.rs orbit_pivot_at: the geometry under the press, else the selection's centre, else null (the target). */
+  const orbitPivotAt = (x: number, y: number): V3 | null => {
+    stats.nav.picks++;
+    const h = pickHit(x, y);
+    const p = h ? h.point : selectionCentre();
+    stats.nav.orbitFrom = h ? "hit" : p ? "selection" : "target";
+    stats.nav.orbitPivot = p ? toWorld(p) : null;
+    return p;
+  };
+  /** lib.rs handle_view_input, the wheel in 3D: zoom about the pivot, kept while the pointer and the
+   *  camera are those of the last zoom (zooming about a point leaves it under the cursor). */
+  const zoom3d = (e: WheelEvent) => {
+    const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    const z = zoomPivot;
+    const p = !mesh ? null : z && z.x === x && z.y === y && sameCam(z.cam, camNow()) ? z.p : wheelPivot(x, y);
+    setCam(zoomAt(camNow(), wheelFactor(e), p ?? target));
+    zoomPivot = p ? { x, y, cam: camNow(), p } : null;
+    stats.nav.zoomPivot = p ? toWorld(p) : null;
+  };
+  stats.navEye = () => (mesh && !plan ? toWorld(eye()) : null);
+  stats.elementBox = (id) => {
+    const m = mesh, el = m ? m.ids.findIndex((x, k) => x === id && !(m.model?.[k] ?? 0)) : -1;
+    if (!m || el < 0) return null;
+    const b = Array.from(boxes.subarray(6 * el, 6 * el + 6)), o = m.origin;
+    return { min: [b[0]! + o[0], b[1]! + o[1], b[2]! + o[2]], max: [b[3]! + o[0], b[4]! + o[1], b[5]! + o[2]] };
+  };
+  // ---- end of navigation ----
+
   new ResizeObserver(() => {
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.max(1, Math.round(canvas.clientWidth * dpr));
@@ -1261,7 +1366,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     dirty = true;
   }).observe(canvas);
 
-  let drag: { pan: boolean; box: boolean; annot?: string; x: number; y: number; x0: number; y0: number; moved: boolean } | null = null;
+  /** A press held on the canvas; `orbit`: the pivot of an orbit drag (NAV1), picked when it starts (null: the target). */
+  let drag: { pan: boolean; box: boolean; annot?: string; x: number; y: number; x0: number; y0: number; moved: boolean; orbit?: V3 | null } | null = null;
   /** One call of the C core's box tool for the pointer at client (x, y). */
   const boxAt = (name: "box_press" | "box_move" | "box_release", cx: number, cy: number) => {
     const r = canvas.getBoundingClientRect();
@@ -1319,9 +1425,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const k = plan ? (2 * half) / Math.max(1, canvas.clientHeight) : (2 * distance * Math.tan(FOV_Y / 2)) / Math.max(1, canvas.clientHeight);
       const sr = plan && mirror() ? scale(s, -1) : s;
       target = add(target, add(scale(sr, -dx * k), scale(u, dy * k)));
-    } else {
-      yaw -= dx * 0.01;
-      pitch = Math.min(1.57, Math.max(-1.57, pitch + dy * 0.01));
+    } else { // ---- navigation (NAV1): orbit about the pivot picked where the drag started ----
+      if (drag.orbit === undefined) {
+        const r = canvas.getBoundingClientRect();
+        drag.orbit = orbitPivotAt(drag.x0 - r.left, drag.y0 - r.top);
+      }
+      setCam(orbitAbout(camNow(), dx * ORBIT_RAD_PER_PX, dy * ORBIT_RAD_PER_PX, drag.orbit));
     }
     dirty = true;
   });
@@ -1329,6 +1438,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const d = drag;
     drag = null;
     if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+    if (d && d.orbit !== undefined) { stats.nav.orbitPivot = null; dirty = true; } // NAV1: the pivot's marker goes
     if (d?.box) { // one session change: the released box
       pendingBox = null;
       if (e.type === "pointerup") boxAt("box_release", e.clientX, e.clientY);
@@ -1409,13 +1519,24 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (plan) { // about the pointer: the plan point under it stays put
       const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
       const a = rayAt(x, y);
-      half = Math.min(1e7, Math.max(10, half * Math.exp(e.deltaY * 0.001)));
+      half = Math.min(1e7, Math.max(10, half * wheelFactor(e)));
       const b = rayAt(x, y);
       target = [target[0] + (a[0] ?? 0) - (b[0] ?? 0), target[1] + (a[1] ?? 0) - (b[1] ?? 0), target[2]];
-    } else distance = Math.max(1, distance * Math.exp(e.deltaY * 0.001));
+    } else zoom3d(e); // NAV1: about the geometry under the cursor
     dirty = true;
   };
   canvas.addEventListener("wheel", (e) => { e.preventDefault(); wheel(e); }, { passive: false });
+  // NAV1, lib.rs handle_view_input: a double-click fits all (a plan: the plan), except while a tool takes the clicks.
+  canvas.addEventListener("dblclick", (e) => {
+    if (e.button !== 0 || placingNow() || annotatingNow() || measuringNow()) return;
+    const r = canvas.getBoundingClientRect();
+    if (plan && annotationAt(e.clientX - r.left, e.clientY - r.top)) return;
+    turn = null;
+    if (plan) fitPlan();
+    else fit();
+    stats.nav.fits++;
+    dirty = true;
+  });
 
   // The view cube, Home and Fit all (viewcube.ts): the camera stays here, the cube asks.
   const cube = viewCube(canvas, {
