@@ -4,6 +4,7 @@
 #include "calls.h"
 #include "json_r.h"
 #include "json_w.h"
+#include "paper.h"
 #include "session.h"
 #include "view_io.h"
 #include "views.h"
@@ -118,12 +119,18 @@ int cc_sheet_layout(struct cc_session *s, const cc_scene *sc, const char *body, 
             bw = hi[0] - lo[0], bh = hi[1] - lo[1];
         }
         bw = (bw < 0 ? -bw : bw) / scale, bh = (bh < 0 ? -bh : bh) / scale;
+        /* The drawing's own box when the view is drawn (D5, paper.h), else the estimate. */
+        double box[4];
+        int drawn = sc && cc_paper_placed_box(s, sc, sh, &p->id, box);
+        if (!drawn) {
+            box[0] = mm3(p->at_mm[0] - bw / 2), box[1] = mm3(p->at_mm[1] - bh / 2);
+            box[2] = mm3(p->at_mm[0] + bw / 2), box[3] = mm3(p->at_mm[1] + bh / 2);
+        }
         jw_obj_begin(&jw);
         jw_key(&jw, "at_mm"), jw_arr_begin(&jw), jw_f64(&jw, p->at_mm[0]), jw_f64(&jw, p->at_mm[1]), jw_arr_end(&jw);
-        jw_key(&jw, "box"), jw_str(&jw, "estimate");
+        jw_key(&jw, "box"), jw_str(&jw, drawn ? "drawing" : "estimate");
         jw_key(&jw, "box_mm"), jw_arr_begin(&jw);
-        jw_f64(&jw, mm3(p->at_mm[0] - bw / 2)), jw_f64(&jw, mm3(p->at_mm[1] - bh / 2));
-        jw_f64(&jw, mm3(p->at_mm[0] + bw / 2)), jw_f64(&jw, mm3(p->at_mm[1] + bh / 2));
+        for (int k = 0; k < 4; k++) jw_f64(&jw, box[k]);
         jw_arr_end(&jw);
         jw_key(&jw, "id"), jw_str_n(&jw, p->id.c, 22);
         jw_key(&jw, "kind");

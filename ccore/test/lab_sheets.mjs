@@ -175,7 +175,7 @@ async function main() {
   check("place view: one outline on the paper", one === true, await evalJs("document.querySelector('[data-bb=sheet-side-error]')?.textContent ?? ''"));
   const lay0 = await B(`return b.sheetLayout('${sid}');`);
   check("sheet_layout: one placed view at the paper's centre", lay0.placed.length === 1 && lay0.placed[0].at_mm[0] === 420.5 && lay0.placed[0].at_mm[1] === 297, JSON.stringify(lay0));
-  check("…its box an estimate, the plan at 1:100", lay0.placed[0]?.box === "estimate" && lay0.placed[0].scale === 100 && lay0.placed[0].box_mm[2] > lay0.placed[0].box_mm[0], JSON.stringify(lay0.placed[0]));
+  check("…its box from the drawing, the plan at 1:100", lay0.placed[0]?.box === "drawing" && lay0.placed[0].scale === 100 && lay0.placed[0].box_mm[2] > lay0.placed[0].box_mm[0], JSON.stringify(lay0.placed[0]));
   const label = await evalJs("document.querySelector('[data-bb=sheet-placed-name]')?.textContent ?? ''");
   check("the outline shows the view's name", label === lay0.placed[0]?.view_name && label === "Plan Niveau 1", label);
   check("one history step", (await undoCount()) === h0 + 2);
