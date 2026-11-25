@@ -56,7 +56,8 @@ suite() {
 # The gate.
 suite build-tcc ./build.sh tcc
 suite run-tcc test/run.sh
-suite run-clang-asan env CC=clang CFLAGS="-fsanitize=address,undefined" test/run.sh
+# The sanitizer run is the long one (8-10 min on the dev machine, more than 15 on a GitHub runner).
+LIMIT=${CCORE_CI_ASAN_TIMEOUT:-2700} suite run-clang-asan env CC=clang CFLAGS="-fsanitize=address,undefined" test/run.sh
 suite build-wasm ./build.sh wasm
 suite wasm_run node test/wasm_run.mjs
 suite host test/host.sh # host_test.mjs and lab_boot.mjs
