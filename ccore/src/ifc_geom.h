@@ -191,7 +191,17 @@ static void ixmap_free(IxMap *m) {
 
 /* ------------------------------------------------------------------ reader */
 
-#define MAX_NESTING 32
+/* Representation items inside items (boolean operands, CSG roots, mapped items, geometric sets):
+ * 64 levels (ticket IFC3: 32 before; the deepest public file needs 49, see
+ * results/ifc_corpus.md "After IFC3"). The total work stays bounded by the budget's visits and
+ * triangles. Each level costs item() and boolean_result()'s frames only (about 0.2 KB on wasm32,
+ * whose stack is 64 KB): the leaves and the boolean arithmetic are NOINLINE, off the recursion. */
+#define MAX_NESTING 64
+#if defined(__clang__) || (defined(__GNUC__) && !defined(__TINYC__))
+#define NOINLINE __attribute__((noinline))
+#else
+#define NOINLINE
+#endif
 
 /* Placement cache: open addressing on the entity index (key ix + 1; 0 empty). */
 typedef struct {
@@ -2258,7 +2268,8 @@ static int tris_apply(cc_bool_op op, const Tris *a, const cc_tri_set *b, size_t 
 
 /* Reader::half_space: a half-space as a finite solid (mm, world), large enough to contain
  * `operand`. With AgreementFlag TRUE the material is on the -normal side of the plane. */
-static void half_space(R *r, const cc_step_entity *h, const Aff *tf, const Tris *operand, double scale, Tris *res) {
+static NOINLINE void half_space(R *r, const cc_step_entity *h, const Aff *tf, const Tris *operand, double scale,
+                                Tris *res) {
     memset(res, 0, sizeof *res);
     const cc_step_entity *plane = get(r, arg(h, 0));
     if (!is(plane, "IFCPLANE")) {
@@ -2335,6 +2346,7 @@ static void half_space(R *r, const cc_step_entity *h, const Aff *tf, const Tris 
 /* IfcBooleanResult / IfcBooleanClippingResult (Operator, FirstOperand, SecondOperand): read.rs
  * Reader::boolean, through cc_boolean_apply. Without a kernel (cc_boolean_kernel() NULL: wasm,
  * a build without manifold) the first operand is drawn uncut and the report says so. */
+static NOINLINE void boolean_finish(R *r, cc_bool_op op, Tris *ap, Tris *bp, int half, Emit *out);
 static void boolean_result(R *r, const cc_step_entity *e, const Aff *tf, Emit *out, int depth) {
     cc_bool_op op = enum_is(arg(e, 0), "UNION")          ? CC_BOOL_UNION
                     : enum_is(arg(e, 0), "INTERSECTION") ? CC_BOOL_INTERSECTION
@@ -2358,6 +2370,13 @@ static void boolean_result(R *r, const cc_step_entity *e, const Aff *tf, Emit *o
     if (h && half) half_space(r, h, tf, &a, out->scale, &b);
     else if (h && cc_sv_as_ref(arg(e, 2), &second)) solid_tris(r, second, tf, out, depth + 1, &b);
     if (b.oom) out->mb->oom = 1;
+    boolean_finish(r, op, &a, &b, half, out);
+}
+
+/* boolean_finish: a op b emitted (a when the cut fails), both freed. Out of the recursion. */
+static NOINLINE void boolean_finish(R *r, cc_bool_op op, Tris *ap, Tris *bp, int half, Emit *out) {
+#define a (*ap)
+#define b (*bp)
     cc_tri_set bs = tri_set(&b);
     Tris res;
     char err[CC_BOOL_ERR];
@@ -2374,6 +2393,8 @@ static void boolean_result(R *r, const cc_step_entity *e, const Aff *tf, Emit *o
     if (rc == 0) tris_free(&res);
     tris_free(&a);
     tris_free(&b);
+#undef a
+#undef b
 }
 
 static int map_on_stack(R *r, uint64_t id) {
@@ -2397,22 +2418,22 @@ static int no_body(const char *n) {
     return 0;
 }
 
-static void item(R *r, uint64_t id, const Aff *tf, Emit *out, int depth) {
-    if (depth > MAX_NESTING) {
-        warn(r, "representation nesting too deep", 0, 0);
-        return;
-    }
-    /* An element at its own limit stops here too: nothing it visits would be kept. */
-    if (out->mb->n >= out->budget->element_max || !visit(out->budget)) return;
-    const cc_step_entity *e = cc_step_get(r->f, id);
-    if (!e) return;
+/* mapped_frame: tf, then the item's target operator, then the map's origin. NOINLINE: the
+ * four frames stay off the recursion. */
+static NOINLINE Aff mapped_frame(R *r, const cc_step_entity *e, const cc_step_entity *map, const Aff *tf) {
+    Aff origin = axis_placement(r, arg(map, 0));
+    Aff target = transform_operator(r, arg(e, 1));
+    Aff t1 = aff_then(tf, &target);
+    return aff_then(&t1, &origin);
+}
+
+/* leaf_item: the items that hold no other item, drawn (or warned) here. 1 handled, 0 not a
+ * leaf. NOINLINE: its locals stay off item()'s recursion (the wasm stack). */
+static NOINLINE int leaf_item(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {
     if (is(e, "IFCEXTRUDEDAREASOLID")) extrusion(r, e, tf, out);
     else if (is(e, "IFCREVOLVEDAREASOLID")) revolved(r, e, tf, out);
     else if (is(e, "IFCEXTRUDEDAREASOLIDTAPERED")) tapered(r, e, tf, out);
-    else if (is(e, "IFCCSGSOLID")) {
-        uint64_t root;
-        if (cc_sv_as_ref(arg(e, 0), &root)) item(r, root, tf, out, depth + 1);
-    } else if (csg_primitive(r, e, tf, out)) {
+    else if (csg_primitive(r, e, tf, out)) {
     }
     else if (is(e, "IFCPOLYGONALFACESET")) polygonal_face_set(r, e, tf, out);
     else if (is(e, "IFCTRIANGULATEDFACESET") || is(e, "IFCTRIANGULATEDIRREGULARNETWORK"))
@@ -2428,35 +2449,54 @@ static void item(R *r, uint64_t id, const Aff *tf, Emit *out, int depth) {
             const cc_step_entity *shell = get(r, &l[i]);
             if (shell) faces(r, arg(shell, 0), tf, out);
         }
-    } else if (is(e, "IFCMAPPEDITEM")) {
-        uint64_t map_id;
-        const cc_step_entity *map, *rep;
-        if (!cc_sv_as_ref(arg(e, 0), &map_id) || !(map = cc_step_get(r->f, map_id))) return;
-        if (map_on_stack(r, map_id)) {
-            warn(r, "representation map contains itself (cycle skipped)", 0, 0);
-            return;
-        }
-        Aff origin = axis_placement(r, arg(map, 0));
-        Aff target = transform_operator(r, arg(e, 1));
-        Aff t1 = aff_then(tf, &target);
-        Aff t = aff_then(&t1, &origin);
-        if (!(rep = get(r, arg(map, 1)))) return;
-        if (r->nstack >= sizeof r->stack / sizeof *r->stack) return; /* bounded by MAX_NESTING */
-        r->stack[r->nstack++] = map_id;
-        const cc_sv *l;
-        size_t n;
-        if (!cc_sv_as_list(arg(rep, 3), &l, &n)) n = 0;
-        for (size_t i = 0; i < n; i++) {
-            uint64_t it;
-            if (cc_sv_as_ref(&l[i], &it)) item(r, it, &t, out, depth + 1);
-        }
-        r->nstack--;
-    } else if (is(e, "IFCBOOLEANCLIPPINGRESULT") || is(e, "IFCBOOLEANRESULT")) boolean_result(r, e, tf, out, depth);
-    else if (is(e, "IFCSWEPTDISKSOLID") || is(e, "IFCSWEPTDISKSOLIDPOLYGONAL")) swept_disk(r, e, tf, out);
+    } else if (is(e, "IFCSWEPTDISKSOLID") || is(e, "IFCSWEPTDISKSOLIDPOLYGONAL")) swept_disk(r, e, tf, out);
     else if (is(e, "IFCSTYLEDITEM")) {
-    } else if (is(e, "IFCGEOMETRICSET") || is(e, "IFCGEOMETRICCURVESET")) {
+    } else if (no_body(e->name))
+        warn(r, "no body by design: ", e->name, " (a curve, point or text in a body: nothing to draw)");
+    else return 0;
+    return 1;
+}
+
+/* mapped_draw: an IfcMappedItem's map, placed by its target, its items one level deeper. */
+static void mapped_draw(R *r, const cc_step_entity *e, const Aff *tf, Emit *out, int depth) {
+    uint64_t map_id;
+    const cc_step_entity *map, *rep;
+    if (!cc_sv_as_ref(arg(e, 0), &map_id) || !(map = cc_step_get(r->f, map_id))) return;
+    if (map_on_stack(r, map_id)) {
+        warn(r, "representation map contains itself (cycle skipped)", 0, 0);
+        return;
+    }
+    Aff t = mapped_frame(r, e, map, tf);
+    if (!(rep = get(r, arg(map, 1)))) return;
+    if (r->nstack >= sizeof r->stack / sizeof *r->stack) return; /* bounded by MAX_NESTING */
+    r->stack[r->nstack++] = map_id;
+    const cc_sv *l;
+    size_t n;
+    if (!cc_sv_as_list(arg(rep, 3), &l, &n)) n = 0;
+    for (size_t i = 0; i < n; i++) {
+        uint64_t it;
+        if (cc_sv_as_ref(&l[i], &it)) item(r, it, &t, out, depth + 1);
+    }
+    r->nstack--;
+}
+
+static void item(R *r, uint64_t id, const Aff *tf, Emit *out, int depth) {
+    if (depth > MAX_NESTING) {
+        warn(r, "representation nesting too deep", 0, 0);
+        return;
+    }
+    /* An element at its own limit stops here too: nothing it visits would be kept. */
+    if (out->mb->n >= out->budget->element_max || !visit(out->budget)) return;
+    const cc_step_entity *e = cc_step_get(r->f, id);
+    if (!e) return;
+    if (is(e, "IFCCSGSOLID")) {
+        uint64_t root;
+        if (cc_sv_as_ref(arg(e, 0), &root)) item(r, root, tf, out, depth + 1);
+    } else if (is(e, "IFCMAPPEDITEM")) mapped_draw(r, e, tf, out, depth);
+    else if (is(e, "IFCBOOLEANCLIPPINGRESULT") || is(e, "IFCBOOLEANRESULT")) boolean_result(r, e, tf, out, depth);
+    else if (is(e, "IFCGEOMETRICSET") || is(e, "IFCGEOMETRICCURVESET")) {
         /* (ticket IFC3) its elements, each as an item: the surfaces and solids drawn (or warned
-         * by their own type), the curves and points counted as no body (below). */
+         * by their own type), the curves and points counted as no body (leaf_item). */
         const cc_sv *l;
         size_t n;
         if (!cc_sv_as_list(arg(e, 0), &l, &n)) n = 0;
@@ -2464,9 +2504,7 @@ static void item(R *r, uint64_t id, const Aff *tf, Emit *out, int depth) {
             uint64_t it;
             if (cc_sv_as_ref(&l[i], &it)) item(r, it, tf, out, depth + 1);
         }
-    } else if (no_body(e->name))
-        warn(r, "no body by design: ", e->name, " (a curve, point or text in a body: nothing to draw)");
-    else warn(r, "unsupported geometry ", e->name, " (skipped)");
+    } else if (!leaf_item(r, e, tf, out)) warn(r, "unsupported geometry ", e->name, " (skipped)");
 }
 
 /* map_shape: a representation map's items in the map's own coordinates. */

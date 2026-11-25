@@ -389,45 +389,48 @@ static const struct {
     const char *skipped; /* the one "skipped" report line expected, or NULL */
 } OWN_IMPORT[] = {
     /* IfcColumn 300 x 300 x 3000 under an IfcProductRepresentation: parametric */
-    {"product_rep", 1, "rect_column", 270e6, 1e-9},
+    {"product_rep", 1, "rect_column", 270e6, 1e-9, NULL},
     /* IfcMember 200 x 100 x 2000 + IfcBuildingElementProxy 1000^3, both under an
      * IfcProductRepresentation (skipped before IFC3): 4e7 + 1e9 */
-    {"product_rep_member", 2, "extruded_polygon", 1.04e9, 1e-9},
+    {"product_rep_member", 2, "extruded_polygon", 1.04e9, 1e-9, NULL},
     /* IfcMember whose Body is two extrusions, 200 x 200 x 1000 and 100 x 100 x 500 at x 1000:
      * 4e7 + 5e6 (before IFC3 the importer kept the first, 4e7, without a word): a mesh */
-    {"multi_item", 1, "mesh", 4.5e7, 1e-9},
+    {"multi_item", 1, "mesh", 4.5e7, 1e-9, NULL},
     /* The profiles: extruded polygons, the reader's hand areas x 1000 */
-    {"lshape", 1, "extruded_polygon", 1.9e6, 1e-9},
-    {"lshape_fillet", 1, "extruded_polygon", 1910730.1, 2e-3},
-    {"tshape", 1, "extruded_polygon", 4.1e6, 1e-9},
-    {"ushape", 1, "extruded_polygon", 3.328e6, 1e-9},
-    {"cshape", 1, "extruded_polygon", 1.164e6, 1e-9},
-    {"zshape", 1, "extruded_polygon", 3.424e6, 1e-9},
-    {"asym_ishape", 1, "extruded_polygon", 9.9e6, 1e-9},
-    {"trapezium", 1, "extruded_polygon", 25e6, 1e-9},
-    {"ellipse", 1, "extruded_polygon", 62831853.1, 5e-3},
-    {"rounded_rect", 1, "extruded_polygon", 77853981.6, 2e-3},
+    {"lshape", 1, "extruded_polygon", 1.9e6, 1e-9, NULL},
+    {"lshape_fillet", 1, "extruded_polygon", 1910730.1, 2e-3, NULL},
+    {"tshape", 1, "extruded_polygon", 4.1e6, 1e-9, NULL},
+    {"ushape", 1, "extruded_polygon", 3.328e6, 1e-9, NULL},
+    {"cshape", 1, "extruded_polygon", 1.164e6, 1e-9, NULL},
+    {"zshape", 1, "extruded_polygon", 3.424e6, 1e-9, NULL},
+    {"asym_ishape", 1, "extruded_polygon", 9.9e6, 1e-9, NULL},
+    {"trapezium", 1, "extruded_polygon", 25e6, 1e-9, NULL},
+    {"ellipse", 1, "extruded_polygon", 62831853.1, 5e-3, NULL},
+    {"rounded_rect", 1, "extruded_polygon", 77853981.6, 2e-3, NULL},
     /* The sloped profiles (ticket IFC3): the reader's hand areas x 1000 */
-    {"ishape_slope", 1, "extruded_polygon", 13411040.8, 1e-6},
-    {"ushape_slope", 1, "extruded_polygon", 3270207.2, 1e-6},
-    {"ushape_slope_fillet", 1, "extruded_polygon", 3295600.4, 2e-3},
-    {"tshape_slope", 1, "extruded_polygon", 3998768.5, 1e-6},
-    {"lshape_slope", 1, "extruded_polygon", 1795060.3, 1e-6},
+    {"ishape_slope", 1, "extruded_polygon", 13411040.8, 1e-6, NULL},
+    {"ushape_slope", 1, "extruded_polygon", 3270207.2, 1e-6, NULL},
+    {"ushape_slope_fillet", 1, "extruded_polygon", 3295600.4, 2e-3, NULL},
+    {"tshape_slope", 1, "extruded_polygon", 3998768.5, 1e-6, NULL},
+    {"lshape_slope", 1, "extruded_polygon", 1795060.3, 1e-6, NULL},
     /* Centre line, mirrored (ticket IFC3): extruded polygons (the closed centre line: a hole) */
-    {"centreline", 1, "extruded_polygon", 3e7, 1e-9},
-    {"centreline_closed", 1, "extruded_polygon", 8e7, 1e-9},
-    {"mirrored", 1, "extruded_polygon", 2e7, 1e-9},
+    {"centreline", 1, "extruded_polygon", 3e7, 1e-9, NULL},
+    {"centreline_closed", 1, "extruded_polygon", 8e7, 1e-9, NULL},
+    {"mirrored", 1, "extruded_polygon", 2e7, 1e-9, NULL},
     /* A composite of two profiles is two regions: a mesh */
-    {"composite", 1, "mesh", 4e7, 1e-9},
+    {"composite", 1, "mesh", 4e7, 1e-9, NULL},
     /* Curves in a body: the member is a mesh of its extrusion (2e7), the curves-only proxy is
      * skipped with a named line */
     {"geometric_set", 1, "mesh", 2e7, 1e-9, "skipped: IfcBuildingElementProxy: a body Bimble can't read yet"},
+    /* 64 nested booleans: a mesh of 1e9; 65: the proxy skipped, the member imported (1e6) */
+    {"deep_nesting", 1, "mesh", 1e9, 1e-9, NULL},
+    {"deep_nesting_over", 1, "extruded_polygon", 1e6, 1e-9, "skipped: IfcBuildingElementProxy: a body Bimble can't read yet"},
     /* The solids the importer cannot parametrise: meshes (the reader's triangles) */
-    {"revolved", 1, "mesh", 14137166.9, 3e-3},
-    {"revolved_full", 1, "mesh", 56548667.8, 3e-3},
-    {"tapered", 1, "mesh", 23333333.3, 1e-6},
-    {"csg_block", 1, "mesh", 1.24e8, 1e-6},
-    {"csg_round", 1, "mesh", 38746309.4, 1.5e-2},
+    {"revolved", 1, "mesh", 14137166.9, 3e-3, NULL},
+    {"revolved_full", 1, "mesh", 56548667.8, 3e-3, NULL},
+    {"tapered", 1, "mesh", 23333333.3, 1e-6, NULL},
+    {"csg_block", 1, "mesh", 1.24e8, 1e-6, NULL},
+    {"csg_round", 1, "mesh", 38746309.4, 1.5e-2, NULL},
 };
 
 static void write_file(const char *path, const char *p, size_t n) {

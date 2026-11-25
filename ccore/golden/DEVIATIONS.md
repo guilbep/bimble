@@ -411,6 +411,12 @@ scene's volume and bounding box against numbers computed by hand from the fixtur
   `no body by design: <TYPE> (a curve, point or text in a body: nothing to draw)` instead of
   Rust's `unsupported geometry <TYPE> (skipped)`. IfcOpenShell 0.9's iterator draws no faces for
   them either (`geometric_set`; `files/452--line-segment-straight.ifc`: 0 products).
+- Representation items nest 64 levels deep (boolean operands, CSG roots, mapped items,
+  geometric sets), Rust 32: `representation nesting too deep` past 64. The deepest public file
+  needs 49 (`files/588--…`; `files/599--…` 39, `S_Office_Integrated Design Archi.ifc` 42).
+  Work stays bounded by the budget's visits and triangles; each level costs 0.2 KB of stack on
+  wasm32 (item 128 + boolean_result 80 bytes, `-fstack-usage`; 1.1 KB before the leaves and the
+  boolean arithmetic were made NOINLINE), 13 KB at the bound against the module's 64 KB stack.
 - Import goldens of the C's own: `golden/ifc_c/import/<name>.json` and `<name>.report.txt` for
   every `golden/ifc_c/fixtures/*.ifc` (ids masked as in `golden/ifc/import/`; the report with its
   C-only `unsupported: ` lines), `CCORE_WRITE_GOLDEN=1 test/run.sh ifc_in` writes them again;

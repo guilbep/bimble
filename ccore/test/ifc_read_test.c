@@ -334,91 +334,97 @@ static const struct {
     size_t elements;
     double volume, rel_tol, lo[3], hi[3], box_tol;
     const char *gone;
+    const char *want; /* a warning the scene must have, or NULL */
 } OWN[] = {
     /* 300 x 300 x 3000 at (1000, 2000): 270,000,000 */
-    {"product_rep", 1, 270e6, 1e-6, {850, 1850, 0}, {1150, 2150, 3000}, 1e-3, NULL},
+    {"product_rep", 1, 270e6, 1e-6, {850, 1850, 0}, {1150, 2150, 3000}, 1e-3, NULL, NULL},
     /* IfcMember 200 x 100 x 2000 at x 500, IfcBuildingElementProxy 1000^3 at x 2000, both under
      * an IfcProductRepresentation (ticket IFC3: the importer took neither): 4e7 + 1e9 */
-    {"product_rep_member", 2, 1.04e9, 1e-9, {400, -500, 0}, {2500, 500, 2000}, 1e-3, NULL},
+    {"product_rep_member", 2, 1.04e9, 1e-9, {400, -500, 0}, {2500, 500, 2000}, 1e-3, NULL, NULL},
     /* Two extrusions in one Body: 200 x 200 x 1000 + 100 x 100 x 500 at x 1000 = 4.5e7 */
-    {"multi_item", 1, 4.5e7, 1e-9, {-100, -100, 0}, {1050, 100, 1000}, 1e-3, NULL},
+    {"multi_item", 1, 4.5e7, 1e-9, {-100, -100, 0}, {1050, 100, 1000}, 1e-3, NULL, NULL},
     /* Parametric profiles, each extruded 1000 along +Z, centred on the bounding box; areas:
      * L 100x100x10: 100*10 + 90*10 = 1900 */
-    {"lshape", 1, 1.9e6, 1e-6, {-50, -50, 0}, {50, 50, 1000}, 1e-3, NULL},
+    {"lshape", 1, 1.9e6, 1e-6, {-50, -50, 0}, {50, 50, 1000}, 1e-3, NULL, NULL},
     /* + fillet 10 (adds (1 - pi/4) 10^2), - 2 edge radii 5 (2 (1 - pi/4) 5^2): 1910.73; arcs as
      * chords: within 0.2 % */
-    {"lshape_fillet", 1, 1910730.1, 2e-3, {-50, -50, 0}, {50, 50, 1000}, 1e-3, NULL},
+    {"lshape_fillet", 1, 1910730.1, 2e-3, {-50, -50, 0}, {50, 50, 1000}, 1e-3, NULL, NULL},
     /* T 200 deep, flange 150x15, web 10: 150*15 + 185*10 = 4100 */
-    {"tshape", 1, 4.1e6, 1e-6, {-75, -100, 0}, {75, 100, 1000}, 1e-3, NULL},
+    {"tshape", 1, 4.1e6, 1e-6, {-75, -100, 0}, {75, 100, 1000}, 1e-3, NULL, NULL},
     /* U 200x80, web 8, flanges 12: 2*80*12 + 176*8 = 3328 */
-    {"ushape", 1, 3.328e6, 1e-6, {-40, -100, 0}, {40, 100, 1000}, 1e-3, NULL},
+    {"ushape", 1, 3.328e6, 1e-6, {-40, -100, 0}, {40, 100, 1000}, 1e-3, NULL, NULL},
     /* C 200x80, wall 3, girth 20: web 200*3 + flanges 2*77*3 + lips 2*17*3 = 1164 */
-    {"cshape", 1, 1.164e6, 1e-6, {-40, -100, 0}, {40, 100, 1000}, 1e-3, NULL},
+    {"cshape", 1, 1.164e6, 1e-6, {-40, -100, 0}, {40, 100, 1000}, 1e-3, NULL, NULL},
     /* Z 200, flanges 80 from the web's centre line x 12, web 8: 2*(80 + 4)*12 + 176*8 = 3424;
      * x from -80 to 80 (IfcOpenShell: the same) */
-    {"zshape", 1, 3.424e6, 1e-6, {-80, -100, 0}, {80, 100, 1000}, 1e-3, NULL},
+    {"zshape", 1, 3.424e6, 1e-6, {-80, -100, 0}, {80, 100, 1000}, 1e-3, NULL, NULL},
     /* asymmetric I 400 deep, bottom 200x20, top 150x15, web 10: 4000 + 2250 + 365*10 = 9900 */
-    {"asym_ishape", 1, 9.9e6, 1e-6, {-100, -200, 0}, {100, 200, 1000}, 1e-3, NULL},
+    {"asym_ishape", 1, 9.9e6, 1e-6, {-100, -200, 0}, {100, 200, 1000}, 1e-3, NULL, NULL},
     /* trapezium bottom 300, top 200 from the bottom's left end - 50, height 100:
      * (300 + 200) / 2 * 100 = 25000; x from -50 to 300 centred: -175..175 */
-    {"trapezium", 1, 25e6, 1e-6, {-175, -50, 0}, {175, 50, 1000}, 1e-3, NULL},
+    {"trapezium", 1, 25e6, 1e-6, {-175, -50, 0}, {175, 50, 1000}, 1e-3, NULL, NULL},
     /* ellipse 200 x 100: pi * 200 * 100 = 62831.85; chords within 0.5 %, the box within 1 mm */
-    {"ellipse", 1, 62831853.1, 5e-3, {-200, -100, 0}, {200, 100, 1000}, 1.0, NULL},
+    {"ellipse", 1, 62831853.1, 5e-3, {-200, -100, 0}, {200, 100, 1000}, 1.0, NULL, NULL},
     /* rounded rectangle 400x200, r 50: 80000 - (4 - pi) 50^2 = 77853.98; chords within 0.2 % */
-    {"rounded_rect", 1, 77853981.6, 2e-3, {-200, -100, 0}, {200, 100, 1000}, 1e-3, NULL},
+    {"rounded_rect", 1, 77853981.6, 2e-3, {-200, -100, 0}, {200, 100, 1000}, 1e-3, NULL, NULL},
     /* Slopes (ticket IFC3; t = tan 0.1 rad = 0.1003346721): the reference points as IfcOpenShell
      * 0.8's source keeps them. I 200 x 400, web 10, flanges 20, thickness at the flange edge,
      * dy = 95 t at the web: 80000 - 2 * 95 (360 - dy) = 11600 + 190 dy = 13411.0408 */
-    {"ishape_slope", 1, 13411040.8, 1e-6, {-100, -200, 0}, {100, 200, 1000}, 1e-3, NULL},
+    {"ishape_slope", 1, 13411040.8, 1e-6, {-100, -200, 0}, {100, 200, 1000}, 1e-3, NULL, NULL},
     /* U 200 x 80, web 8, flanges 12, thickness at x = 0: 16000 - 72 (352 + 16 t) / 2 =
      * 3328 - 576 t = 3270.2072 */
-    {"ushape_slope", 1, 3270207.2, 1e-6, {-40, -100, 0}, {40, 100, 1000}, 1e-3, NULL},
+    {"ushape_slope", 1, 3270207.2, 1e-6, {-40, -100, 0}, {40, 100, 1000}, 1e-3, NULL, NULL},
     /* + fillets 10 at the two inner corners (+ r^2 (cot(phi/2) - (pi - phi)/2) each, phi the
      * corner's angle: +16.9288) and edge radii 5 at the toes (-4.2322 each): 3295.6004; arcs as
      * chords: within 0.2 % */
-    {"ushape_slope_fillet", 1, 3295600.4, 2e-3, {-40, -100, 0}, {40, 100, 1000}, 1e-3, NULL},
+    {"ushape_slope_fillet", 1, 3295600.4, 2e-3, {-40, -100, 0}, {40, 100, 1000}, 1e-3, NULL, NULL},
     /* T 200 deep, flange 150 x 15, web 10, WebSlope 0.02 (s = tan 0.02), FlangeSlope 0.1: the web
      * half-width 5 + y s (thickness at y = 0), 5 - 100 s = 2.99973 at the toe; the flange's
      * underside y = 85 + (x - 37.5) t (thickness at x = +-37.5), 88.76255 at the tips; they meet at
      * y = (85 - 37.5 t + 5 t) / (1 - s t) = 81.90350, x = 6.63829. Shoelace of the 8 corners:
      * 3998.7685 (IfcOpenShell 3965.28: its web-side point is at x 5 with x/2 - 10, see
      * DEVIATIONS.md section 10) */
-    {"tshape_slope", 1, 3998768.5, 1e-6, {-75, -100, 0}, {75, 100, 1000}, 1e-3, NULL},
+    {"tshape_slope", 1, 3998768.5, 1e-6, {-75, -100, 0}, {75, 100, 1000}, 1e-3, NULL, NULL},
     /* L 100 x 100 x 10, LegSlope 0.1, thickness at the box's centre lines: the faces
      * y = -40 - x t and x = -40 - y t meet at x = y = (-40 + 40 t) / (1 - t^2) = -36.35258;
      * shoelace of the 6 corners: 1795.0603 */
-    {"lshape_slope", 1, 1795060.3, 1e-6, {-50, -50, 0}, {50, 50, 1000}, 1e-3, NULL},
+    {"lshape_slope", 1, 1795060.3, 1e-6, {-50, -50, 0}, {50, 50, 1000}, 1e-3, NULL, NULL},
     /* IfcCenterLineProfileDef (ticket IFC3): (0,0)-(1000,0)-(1000,500) offset 10 to each side,
      * mitred: the miter adds the outer 10 x 10 square what it takes from the inner one, so the
      * area is Thickness x length = 20 x 1500 = 30000; x 1000. The ends square: x 0..1010,
      * y -10..500 */
-    {"centreline", 1, 3e7, 1e-9, {0, -10, 0}, {1010, 500, 1000}, 1e-3, NULL},
+    {"centreline", 1, 3e7, 1e-9, {0, -10, 0}, {1010, 500, 1000}, 1e-3, NULL, NULL},
     /* closed: the ring 1020^2 - 980^2 = 80000; x 1000 */
-    {"centreline_closed", 1, 8e7, 1e-9, {-10, -10, 0}, {1010, 1010, 1000}, 1e-3, NULL},
+    {"centreline_closed", 1, 8e7, 1e-9, {-10, -10, 0}, {1010, 1010, 1000}, 1e-3, NULL, NULL},
     /* IfcCompositeProfileDef: two 200 x 100 rectangles at x -300 and 300: 2 x 20000 x 1000 */
-    {"composite", 1, 4e7, 1e-9, {-400, -50, 0}, {400, 50, 1000}, 1e-3, NULL},
+    {"composite", 1, 4e7, 1e-9, {-400, -50, 0}, {400, 50, 1000}, 1e-3, NULL, NULL},
     /* IfcMirroredProfileDef: the 200 x 100 rectangle at x 500 mirrored about y: x -600..-400 */
-    {"mirrored", 1, 2e7, 1e-9, {-600, -50, 0}, {-400, 50, 1000}, 1e-3, NULL},
+    {"mirrored", 1, 2e7, 1e-9, {-600, -50, 0}, {-400, 50, 1000}, 1e-3, NULL, NULL},
     /* Curves in a body (ticket IFC3): the curves-only proxy draws nothing (and is no element),
      * the member its 200 x 100 x 1000 extrusion: 2e7; the curves counted as "no body by design",
      * not "unsupported" */
-    {"geometric_set", 1, 2e7, 1e-9, {-100, -50, 0}, {100, 50, 1000}, 1e-3, "IFCGEOMETRIC"},
+    {"geometric_set", 1, 2e7, 1e-9, {-100, -50, 0}, {100, 50, 1000}, 1e-3, "IFCGEOMETRIC", NULL},
     /* IfcRevolvedAreaSolid: a 100x200 rectangle, x 400..500, turned about the Y axis
      * (right-handed: +X goes to -Z). Pappus: angle * area * centroid radius; chords within 0.3 %.
      * A quarter turn: pi/2 * 20000 * 450 = 14137166.9, box x 0..500, z -500..0 */
-    {"revolved", 1, 14137166.9, 3e-3, {0, -100, -500}, {500, 100, 0}, 1e-3, NULL},
+    {"revolved", 1, 14137166.9, 3e-3, {0, -100, -500}, {500, 100, 0}, 1e-3, NULL, NULL},
     /* A whole turn: 2 pi * 20000 * 450 = 56548667.8, box +-500 (within 1 mm: chords) */
-    {"revolved_full", 1, 56548667.8, 3e-3, {-500, -100, -500}, {500, 100, 500}, 1.0, NULL},
+    {"revolved_full", 1, 56548667.8, 3e-3, {-500, -100, -500}, {500, 100, 500}, 1.0, NULL, NULL},
     /* IfcExtrudedAreaSolidTapered 200x200 to 100x100 over 1000, a frustum:
      * h/3 (A1 + A2 + sqrt(A1 A2)) = 1000/3 (40000 + 10000 + 20000) = 23333333.3 */
-    {"tapered", 1, 23333333.3, 1e-6, {-100, -100, 0}, {100, 100, 1000}, 1e-3, NULL},
+    {"tapered", 1, 23333333.3, 1e-6, {-100, -100, 0}, {100, 100, 1000}, 1e-3, NULL, NULL},
     /* IfcCsgSolid(IfcBlock 1000x500x200) = 1e8, and an IfcRectangularPyramid 400x300x600 at
      * x 2000: 400*300*600/3 = 2.4e7; 1.24e8 */
-    {"csg_block", 1, 1.24e8, 1e-6, {0, 0, 0}, {2400, 500, 600}, 1e-3, NULL},
+    {"csg_block", 1, 1.24e8, 1e-6, {0, 0, 0}, {2400, 500, 600}, 1e-3, NULL, NULL},
     /* IfcSphere r 100: 4/3 pi 1e6 = 4188790.2; IfcRightCircularCylinder r 100 h 1000 at x 500:
      * pi 1e7 = 31415926.5; IfcRightCircularCone r 100 h 300 at x 1000: pi 1e4 * 100 = 3141592.7;
      * 38746309.4; chords within 1.5 %, the box within 1 mm */
-    {"csg_round", 1, 38746309.4, 1.5e-2, {-100, -100, -100}, {1100, 100, 1000}, 1.0, NULL},
+    {"csg_round", 1, 38746309.4, 1.5e-2, {-100, -100, -100}, {1100, 100, 1000}, 1.0, NULL, NULL},
+    /* 64 nested IfcBooleanResult (ticket IFC3: the bound was 32): a 1000^3 block at depth 64,
+     * a disjoint 100^3 block cut off at each level: 1e9 */
+    {"deep_nesting", 1, 1e9, 1e-9, {0, 0, 0}, {1000, 1000, 1000}, 1e-3, NULL, NULL},
+    /* 65: one past the bound, the proxy drawn empty and warned; the plain member 100^3: 1e6 */
+    {"deep_nesting_over", 1, 1e6, 1e-9, {-50, -50, 0}, {50, 50, 100}, 1e-3, NULL, "representation nesting too deep"},
 };
 
 static void own_goldens(void) {
@@ -460,6 +466,10 @@ static void own_goldens(void) {
         check_true(m, box <= OWN[g].box_tol);
         snprintf(m, sizeof m, "ifc_c/%s: no unsupported or invalid warning", OWN[g].name);
         check_true(m, clean);
+        if (OWN[g].want) {
+            snprintf(m, sizeof m, "ifc_c/%s: warns \"%s\"", OWN[g].name, OWN[g].want);
+            check_true(m, strstr(buf_cstr(&b), OWN[g].want) != NULL);
+        }
         if (OWN[g].gone) {
             snprintf(m, sizeof m, "ifc_c/%s: no \"%s\"", OWN[g].name, OWN[g].gone);
             check_true(m, !strstr(buf_cstr(&b), OWN[g].gone));
