@@ -201,7 +201,7 @@ static int stored(Inf *s) {
         len--;
     }
     if (len > s->n - s->pos) return fail(s, "gzip: unexpected end of data");
-    memcpy(s->out->p + s->out->len, s->in + s->pos, len);
+    if (len) memcpy(s->out->p + s->out->len, s->in + s->pos, len); /* an empty stored block: p may be NULL */
     s->out->len += len;
     s->pos += len;
     return 0;
