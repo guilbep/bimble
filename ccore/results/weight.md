@@ -11,7 +11,7 @@ map (rows sum to the stripped binary exactly; `linker` = what no object owns). L
 |---|---:|---:|---:|---:|---:|---|
 | web/ccore/ in the archive (a public/ccore leftover; none in CI) | 0 | 0 | 0 | 0 | 1,401,105 |  |
 | kernel manifold (C++, native only) | 0 | 0 | 0 | 1,120,401 | 0 |  |
-| lab web UI (Vite: JS, CSS, UI fonts; static files) | 0 | 0 | 0 | 0 | 713,796 |  |
+| lab web UI (Vite: JS, CSS, UI fonts; static files) | 0 | 0 | 0 | 0 | 728,217 |  |
 | C++ runtime (libstdc++, libgcc, unwinder) | 0 | 0 | 0 | 574,870 | 0 |  |
 | IFC read (STEP parser, scene of an IFC) | 2,766 | 139,508 | 106,314 | 125,068 | 0 | ifc_math ifc_read step |
 | IFC import (IFC -> model) | 1,403 | 121,842 | 0 | 106,807 | 0 | ifc_in |
@@ -45,7 +45,7 @@ map (rows sum to the stripped binary exactly; `linker` = what no object owns). L
 | command palette | 239 | 3,486 | 2,911 | 3,500 | 0 | palette |
 | licence and README (static files) | 0 | 0 | 0 | 0 | 1,727 |  |
 | C runtime start files | 0 | 0 | 0 | 484 | 0 |  |
-| **total** | 51,565 | 1,066,846 | 450,887 | 3,019,032 | 2,116,628 | |
+| **total** | 51,565 | 1,066,846 | 450,887 | 3,019,032 | 2,131,049 | |
 
 ## Totals and limits
 
@@ -56,8 +56,8 @@ map (rows sum to the stripped binary exactly; `linker` = what no object owns). L
 | editor, sum of the objects (before wasm-opt) | 1,066,846 | | |
 | viewer, sum of the objects (before wasm-opt) | 450,887 | | |
 | bimble-ccore (native, stripped) | 3,019,032 | | none yet |
-| bimble-ccore-0.1.0-preview.2-aarch64-linux.tar.gz (release archive) | 2,419,204 | | none yet |
-| web build (build:ccore), 22 files | 2,115,230 | 953,161 | none yet |
+| bimble-ccore-0.1.0-preview.2-aarch64-linux.tar.gz (release archive) | 2,423,219 | | none yet |
+| web build (build:ccore), 22 files | 2,129,651 | 957,232 | none yet |
 
 ## Files of the release archive (bimble-ccore-0.1.0-preview.2-aarch64-linux)
 
@@ -68,10 +68,10 @@ web/ccore/ appears only when web-ui/public/ccore/ held a copy (copy-ccore.mjs, t
 | bimble-ccore | 3,019,032 | 1,450,477 |
 | web/ccore/ccore.wasm | 945,885 | 388,785 |
 | web/ccore/ccore-view.wasm | 405,729 | 192,093 |
-| web/assets/index-*.js | 351,390 | 99,325 |
-| web/assets/index-*.css | 70,449 | 10,405 |
+| web/assets/index-*.js | 363,452 | 102,829 |
+| web/assets/index-*.css | 71,539 | 10,547 |
 | web/ccore/frame.json | 49,491 | 3,200 |
-| web/assets/glviewport-*.js | 44,902 | 16,753 |
+| web/assets/glviewport-*.js | 46,171 | 17,189 |
 | web/assets/source-sans-3-latin-ext-400-normal-*.woff2 | 33,024 | 33,057 |
 | web/assets/source-sans-3-latin-ext-600-normal-*.woff2 | 32,704 | 32,732 |
 | web/assets/source-sans-3-latin-ext-400-italic-*.woff2 | 32,208 | 32,236 |
@@ -89,8 +89,8 @@ web/ccore/ appears only when web-ui/public/ccore/ held a copy (copy-ccore.mjs, t
 | web/assets/sora-latin-ext-700-normal-*.woff2 | 7,448 | 7,471 |
 | LICENSE | 1,072 | 650 |
 | README.txt | 655 | 419 |
-| web/index.html | 379 | 264 |
-| **total** | 5,135,660 | 2,404,586 |
+| web/index.html | 379 | 263 |
+| **total** | 5,150,081 | 2,408,667 |
 
 ## Files of the web build (npm run build:ccore)
 
@@ -98,10 +98,10 @@ web/ccore/ appears only when web-ui/public/ccore/ held a copy (copy-ccore.mjs, t
 |---|---:|---:|
 | ccore/ccore.wasm | 945,885 | 388,785 |
 | ccore/ccore-view.wasm | 405,729 | 192,093 |
-| assets/index-*.js | 351,801 | 99,451 |
-| assets/index-*.css | 70,365 | 10,400 |
+| assets/index-*.js | 363,863 | 102,943 |
+| assets/index-*.css | 71,455 | 10,542 |
 | ccore/frame.json | 49,491 | 3,200 |
-| assets/glviewport-*.js | 44,902 | 16,753 |
+| assets/glviewport-*.js | 46,171 | 17,190 |
 | assets/source-sans-3-latin-ext-400-normal-*.woff2 | 33,024 | 33,057 |
 | assets/source-sans-3-latin-ext-600-normal-*.woff2 | 32,704 | 32,732 |
 | assets/source-sans-3-latin-ext-400-italic-*.woff2 | 32,208 | 32,236 |
@@ -118,5 +118,5 @@ web/ccore/ appears only when web-ui/public/ccore/ held a copy (copy-ccore.mjs, t
 | assets/sora-latin-ext-500-normal-*.woff2 | 7,476 | 7,499 |
 | assets/sora-latin-ext-700-normal-*.woff2 | 7,448 | 7,471 |
 | index.html | 381 | 264 |
-| **total** | 2,115,230 | 953,161 |
+| **total** | 2,129,651 | 957,232 |
 
