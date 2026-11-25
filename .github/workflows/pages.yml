@@ -6,9 +6,27 @@
 # `preview_pr`), to open a branch on a phone before it is merged. The next deployment without that
 # input removes it. Only someone who can run workflows here can start it.
 #
+# Every deployment also publishes the C core's lab under c/ (ticket PG1, ccore/README.md): web-ui
+# built on the C wasm (`npm run build:ccore`) from the branch rewrite/c-core, or the input
+# `ccore_ref`. The site is one artifact per deployment, so a lab not built here disappears at the
+# next one. A failed C build leaves the Rust site published without c/.
+#
 # It runs after the release workflow, not inside it: a workflow started by a tag can't deploy to
 # the `github-pages` environment, which by default accepts deployments from the default branch
 # only. `workflow_run` and manual runs start from the default branch, so no setting is needed.
+#
+# The site root is the newest release whose tag is v<digits>… (the Rust releases), never a C
+# prerelease ccore-v* (it has no *-web.zip). The input `tag` overrides it.
+#
+# Two jobs, `site` (builds and uploads the artifact github-pages) then `deploy` (deploy-pages
+# only). On 25 Nov deploy-pages@v4 failed in 5 of its 6 runs with "No artifacts named "github-pages" were
+# found for this workflow run" when it ran in the job that had uploaded the artifact: it lists the
+# run's artifacts (ListArtifacts, artifact service) 0.3-0.4 s after the upload is finalized, the
+# list does not show the new artifact yet (it did 7 min later), and it does not retry (v4.0.5 and
+# v5.0.1 alike). A separate job starts many seconds later, and waits until the run lists one.
+# After a failure, start a FRESH run (Actions > pages > Run workflow). Never "Re-run all jobs": the
+# re-run uploads a second github-pages artifact in the same run and deploy-pages then fails with
+# "Multiple artifacts named github-pages". "Re-run failed jobs" is safe only when `site` succeeded.
 name: pages
 
 on:
@@ -18,10 +36,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release to publish, e.g. v0.5.0 (empty: the newest release)"
+        description: "Release to publish, e.g. v0.5.0 (empty: the newest release tagged v<digits>, not ccore-v*)"
         required: false
       preview_pr:
         description: "Also publish this pull request's lab under preview/pr-<number>/ (a number, optional)"
+        required: false
+      ccore_ref:
+        description: "Branch, tag or commit of the C lab published under c/ (empty: rewrite/c-core)"
         required: false
 
 permissions:
@@ -85,13 +106,58 @@ jobs:
           path: preview
           retention-days: 1
 
-  deploy:
-    needs: [preview]
+  # The C core's lab (ticket PG1), built without any right to deploy, on the same runs as `deploy`.
+  # The C wasm needs clang and lld (wasm-ld); no Rust.
+  ccore_lab:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.event == 'workflow_dispatch' ||
+        (github.event.workflow_run.event == 'push' &&
+         startsWith(github.event.workflow_run.head_branch, 'v'))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ccore_ref || 'rewrite/c-core' }}
+          path: src
+          persist-credentials: false
+      - run: src/scripts/apt-install.sh clang lld
+        timeout-minutes: 12
+      # wasm-opt: build.sh wasm-view needs it (the view wasm's 400 KB budget); pinned by the C branch.
+      - name: binaryen (wasm-opt)
+        run: |
+          src/ccore/ci/binaryen.sh "$HOME/.local/binaryen"
+          echo "$HOME/.local/binaryen/bin" >> "$GITHUB_PATH"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/web-ui/package-lock.json
+      - name: The Vue lab on the C wasm (ccore.wasm and ccore-view.wasm)
+        run: |
+          cd src/web-ui
+          npm ci --no-audit --no-fund
+          npm run build:ccore -- --outDir ../../ccore-lab --emptyOutDir
+          test -f ../../ccore-lab/index.html && test -f ../../ccore-lab/ccore/ccore.wasm && test -f ../../ccore-lab/ccore/ccore-view.wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccore-lab
+          path: ccore-lab
+          retention-days: 1
+
+  # The site, built and uploaded as the artifact github-pages. No right to deploy here.
+  site:
+    needs: [preview, ccore_lab]
     # After a successful release run that can have published: started by a tag push (head_branch
     # is then the tag's name) or by hand (one-button release). Not after pull requests: a branch
     # named "views" once passed a "starts with v" test alone.
     # `always()`: `preview` is skipped on every run but a manual one that asks for it; a failed
-    # preview stops the deployment.
+    # preview stops the deployment. `ccore_lab` is not tested here: a failed C lab does not stop the
+    # Rust site (the C lab is then missing from c/ until the next deployment).
     if: >-
       always() && needs.preview.result != 'failure' && needs.preview.result != 'cancelled' &&
       (github.event_name == 'workflow_dispatch' ||
@@ -101,11 +167,7 @@ jobs:
           startsWith(github.event.workflow_run.head_branch, 'v')))))
     runs-on: ubuntu-latest
     permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      contents: read
     steps:
       - name: The release's web zip
         env:
@@ -114,9 +176,13 @@ jobs:
           # version isn't in the event).
           TAG: ${{ inputs.tag || (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch) || '' }}
         run: |
+          # The newest release tagged v<digits>: `gh release list` is newest first, and the C
+          # prereleases (ccore-v*) have no *-web.zip.
           if [[ -z "$TAG" ]]; then
-            TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
+            TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName \
+              --jq '[.[].tagName | select(test("^v[0-9]"))][0] // empty')
           fi
+          [[ -n "$TAG" ]] || { echo "::error::no release tagged v<digits>"; exit 1; }
           echo "Publishing $TAG"
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*-web.zip' --dir zip
           echo "TAG=$TAG" >> "$GITHUB_ENV"
@@ -146,8 +212,50 @@ jobs:
         with:
           name: preview
           path: site/preview/pr-${{ inputs.preview_pr }}
+      - name: The C lab under c/
+        if: needs.ccore_lab.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: ccore-lab
+          path: site/c
+      - name: No C lab this time
+        if: needs.ccore_lab.result != 'success'
+        env:
+          RESULT: ${{ needs.ccore_lab.result }}
+        run: |
+          echo "::warning::ccore_lab $RESULT: the site is published without c/"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
+
+  # deploy-pages alone, in its own job (see the header): it needs pages and id-token; actions: read
+  # is for the wait below (the REST list of the run's artifacts), not for deploy-pages.
+  deploy:
+    needs: [site]
+    if: always() && needs.site.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+      actions: read
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Wait until the run lists one github-pages artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 24); do
+            n=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=github-pages" --jq '.total_count')
+            echo "try $i: $n artifact(s) named github-pages"
+            if [[ $n == 1 ]]; then sleep 5; exit 0; fi
+            if [[ $n -gt 1 ]]; then
+              echo "::error::$n artifacts named github-pages: this is a re-run of all jobs. Start a fresh run instead."
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "::warning::the run lists no github-pages artifact after 2 min; trying deploy-pages anyway"
       - id: deploy
         uses: actions/deploy-pages@v4
