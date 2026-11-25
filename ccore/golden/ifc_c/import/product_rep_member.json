@@ -1,0 +1,117 @@
+{
+  "format": "bimble",
+  "version": 1,
+  "model": {
+    "project_id": "2T2cProdRepM0000000001",
+    "project_name": "Imported model",
+    "storeys": {
+      "2T2cProdRepM0000000004": {
+        "id": "2T2cProdRepM0000000004",
+        "name": "Level 0",
+        "elevation": 0.0
+      }
+    },
+    "materials": {
+      "<new-1>": {
+        "id": "<new-1>",
+        "name": "Undefined",
+        "category": "other"
+      }
+    },
+    "elements": {
+      "2T2cProdRepM0000000010": {
+        "id": "2T2cProdRepM0000000010",
+        "class": "IfcBuildingElementProxy",
+        "name": "M-200x100",
+        "storey": "2T2cProdRepM0000000004",
+        "material": "<new-1>",
+        "placement": {
+          "origin": [
+            500.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              -100.0,
+              -50.0
+            ],
+            [
+              100.0,
+              -50.0
+            ],
+            [
+              100.0,
+              50.0
+            ],
+            [
+              -100.0,
+              50.0
+            ]
+          ],
+          "height": 2000.0
+        },
+        "ifc_entity": "IfcMember"
+      },
+      "2T2cProdRepM0000000012": {
+        "id": "2T2cProdRepM0000000012",
+        "class": "IfcBuildingElementProxy",
+        "name": "P-cube",
+        "storey": "2T2cProdRepM0000000004",
+        "material": "<new-1>",
+        "placement": {
+          "origin": [
+            2000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              -500.0,
+              -500.0
+            ],
+            [
+              500.0,
+              -500.0
+            ],
+            [
+              500.0,
+              500.0
+            ],
+            [
+              -500.0,
+              500.0
+            ]
+          ],
+          "height": 1000.0
+        }
+      }
+    }
+  }
+}

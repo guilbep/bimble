@@ -362,6 +362,18 @@ scene's volume and bounding box against numbers computed by hand from the fixtur
 **Where.** `ccore/src/ifc_read.c`, `ccore/src/ifc_geom.h`, test `ccore/test/ifc_read_test.c`
 (`own_goldens`).
 
+**Ticket IFC3 (the importer, and more types).**
+
+- The importer (`cc_ifc_import`, `ccore/src/ifc_in.c`) takes a product whose `Representation` is
+  a plain `IfcProductRepresentation` too, for every class (before: only the five classes it
+  parametrises, IfcColumn, IfcBeam, IfcSlab, IfcWall, IfcFooting; the others, IfcMember and
+  IfcBuildingElementProxy among them, were dropped without a word, as Rust's `import_str` does).
+- Import goldens of the C's own: `golden/ifc_c/import/<name>.json` and `<name>.report.txt` for
+  every `golden/ifc_c/fixtures/*.ifc` (ids masked as in `golden/ifc/import/`; the report with its
+  C-only `unsupported: ` lines), `CCORE_WRITE_GOLDEN=1 test/run.sh ifc_in` writes them again;
+  `ccore/test/ifc_in_test.c` (`own_imports`) also checks each model's volume against the hand
+  value.
+
 ## 12. The PDF's font files are packed by the C core's own deflate (ticket D6)
 
 **What.** Rust's `Sheet::to_pdf` (pdf-writer) embeds each Roboto file it uses as a FontFile2

@@ -902,7 +902,10 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
             int skip = 0;
             for (size_t k = 0; k < sizeof SKIP_CLASSES / sizeof *SKIP_CLASSES; k++) skip |= !strcmp(e->name, SKIP_CLASSES[k]);
             const cc_step_entity *s6 = get(&r, arg(e, 6));
-            if (skip || !is(s6, "IFCPRODUCTDEFINITIONSHAPE")) continue;
+            /* IFC2X3 allows the supertype IfcProductRepresentation (the same attributes): taken
+             * like IfcProductDefinitionShape, as the display reader does (ticket IFC3,
+             * DEVIATIONS.md section 10; Rust skips these products without a word). */
+            if (skip || !(is(s6, "IFCPRODUCTDEFINITIONSHAPE") || is(s6, "IFCPRODUCTREPRESENTATION"))) continue;
             cls = CC_IFC_PROXY;
             if (!strcmp(e->name, "IFCBUILDINGELEMENTPROXY")) {
                 const char *t;

@@ -1,0 +1,2 @@
+1 elements (1 parametric, 0 extruded polygons, 0 meshes)
+  IfcColumn: 1

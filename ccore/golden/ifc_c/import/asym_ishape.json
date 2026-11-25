@@ -1,0 +1,103 @@
+{
+  "format": "bimble",
+  "version": 1,
+  "model": {
+    "project_id": "2T2cAsymIshape00000001",
+    "project_name": "Imported model",
+    "storeys": {
+      "2T2cAsymIshape00000004": {
+        "id": "2T2cAsymIshape00000004",
+        "name": "Level 0",
+        "elevation": 0.0
+      }
+    },
+    "materials": {
+      "<new-1>": {
+        "id": "<new-1>",
+        "name": "Undefined",
+        "category": "other"
+      }
+    },
+    "elements": {
+      "2T2cAsymIshape00000010": {
+        "id": "2T2cAsymIshape00000010",
+        "class": "IfcBuildingElementProxy",
+        "name": "asym_ishape",
+        "storey": "2T2cAsymIshape00000004",
+        "material": "<new-1>",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              -100.0,
+              -200.0
+            ],
+            [
+              100.0,
+              -200.0
+            ],
+            [
+              100.0,
+              -180.0
+            ],
+            [
+              5.0,
+              -180.0
+            ],
+            [
+              5.0,
+              185.0
+            ],
+            [
+              75.0,
+              185.0
+            ],
+            [
+              75.0,
+              200.0
+            ],
+            [
+              -75.0,
+              200.0
+            ],
+            [
+              -75.0,
+              185.0
+            ],
+            [
+              -5.0,
+              185.0
+            ],
+            [
+              -5.0,
+              -180.0
+            ],
+            [
+              -100.0,
+              -180.0
+            ]
+          ],
+          "height": 1000.0
+        },
+        "ifc_entity": "IfcMember"
+      }
+    }
+  }
+}

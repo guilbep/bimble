@@ -23,6 +23,7 @@
 #else
 #include <sys/mman.h>
 #endif
+#include <sys/stat.h>
 #include <string.h>
 #include <time.h>
 #include "../src/boolean.h"
@@ -338,6 +339,156 @@ static void rust_lines(const Buf *l, Buf *out) {
     }
 }
 
+/* ---- C-own import goldens (ticket IFC3): golden/ifc_c/fixtures, the types past Rust's reader
+ * (IFC2, IFC3), through the importer. golden/ifc_c/import/<name>.json (the model, ids masked)
+ * and <name>.report.txt (every report line, the C-only "unsupported: " ones included) are the C
+ * importer's own output (CCORE_WRITE_GOLDEN=1 writes them again); each model's volume is checked
+ * against the hand value (the same numbers as the reader's, test/ifc_read_test.c). */
+
+static double loop_area(const cc_loop *l) {
+    double a = 0;
+    for (size_t i = 0; i < l->n; i++) {
+        const double *p = l->pts[i], *q = l->pts[(i + 1) % l->n];
+        a += p[0] * q[1] - q[0] * p[1];
+    }
+    return (a < 0 ? -a : a) / 2;
+}
+
+/* Volume (mm^3) of an element's generator, openings not cut. */
+static double gen_volume(const cc_generator *g) {
+    switch (g->kind) {
+    case CC_GEN_RECT_COLUMN:
+    case CC_GEN_PAD_FOOTING: return g->u.col.width * g->u.col.depth * g->u.col.height;
+    case CC_GEN_RECT_BEAM: return g->u.beam.width * g->u.beam.height * g->u.beam.length;
+    case CC_GEN_SLAB: return loop_area(&g->u.slab.outline) * g->u.slab.thickness;
+    case CC_GEN_WALL: return g->u.wall.length * g->u.wall.thickness * g->u.wall.height;
+    case CC_GEN_EXTRUDED_POLYGON: {
+        double a = loop_area(&g->u.poly.outline);
+        for (size_t k = 0; k < g->u.poly.nvoids; k++) a -= loop_area(&g->u.poly.voids[k]);
+        return a * g->u.poly.height;
+    }
+    case CC_GEN_MESH: {
+        double v = 0;
+        for (size_t t = 0; t + 2 < g->u.mesh.nindices; t += 3) {
+            const double *a = g->u.mesh.positions[g->u.mesh.indices[t]], *b = g->u.mesh.positions[g->u.mesh.indices[t + 1]],
+                         *c = g->u.mesh.positions[g->u.mesh.indices[t + 2]];
+            v += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6.0;
+        }
+        return v;
+    }
+    default: return 0;
+    }
+}
+
+/* Expected by hand: elements, the first element's generator, the volume of all elements. */
+static const struct {
+    const char *name;
+    size_t elements;
+    const char *kind;
+    double volume, rel_tol;
+} OWN_IMPORT[] = {
+    /* IfcColumn 300 x 300 x 3000 under an IfcProductRepresentation: parametric */
+    {"product_rep", 1, "rect_column", 270e6, 1e-9},
+    /* IfcMember 200 x 100 x 2000 + IfcBuildingElementProxy 1000^3, both under an
+     * IfcProductRepresentation (skipped before IFC3): 4e7 + 1e9 */
+    {"product_rep_member", 2, "extruded_polygon", 1.04e9, 1e-9},
+    /* The profiles: extruded polygons, the reader's hand areas x 1000 */
+    {"lshape", 1, "extruded_polygon", 1.9e6, 1e-9},
+    {"lshape_fillet", 1, "extruded_polygon", 1910730.1, 2e-3},
+    {"tshape", 1, "extruded_polygon", 4.1e6, 1e-9},
+    {"ushape", 1, "extruded_polygon", 3.328e6, 1e-9},
+    {"cshape", 1, "extruded_polygon", 1.164e6, 1e-9},
+    {"zshape", 1, "extruded_polygon", 3.424e6, 1e-9},
+    {"asym_ishape", 1, "extruded_polygon", 9.9e6, 1e-9},
+    {"trapezium", 1, "extruded_polygon", 25e6, 1e-9},
+    {"ellipse", 1, "extruded_polygon", 62831853.1, 5e-3},
+    {"rounded_rect", 1, "extruded_polygon", 77853981.6, 2e-3},
+    /* The solids the importer cannot parametrise: meshes (the reader's triangles) */
+    {"revolved", 1, "mesh", 14137166.9, 3e-3},
+    {"revolved_full", 1, "mesh", 56548667.8, 3e-3},
+    {"tapered", 1, "mesh", 23333333.3, 1e-6},
+    {"csg_block", 1, "mesh", 1.24e8, 1e-6},
+    {"csg_round", 1, "mesh", 38746309.4, 1.5e-2},
+};
+
+static void write_file(const char *path, const char *p, size_t n) {
+    FILE *f = fopen(path, "wb");
+    if (f) fwrite(p, 1, n, f), fclose(f);
+}
+
+static void own_imports(void) {
+    int write = getenv("CCORE_WRITE_GOLDEN") != NULL;
+    if (write) mkdir("golden/ifc_c/import", 0777);
+    for (size_t g = 0; g < sizeof OWN_IMPORT / sizeof *OWN_IMPORT; g++) {
+        const char *nm = OWN_IMPORT[g].name;
+        char file[160], m[256];
+        size_t tn;
+        snprintf(file, sizeof file, "%s.ifc", nm);
+        char *t = slurp("golden/ifc_c/fixtures", file, &tn);
+        Known kk;
+        known_from_text(t, tn, &kk);
+        Buf a, a2;
+        buf_init(&a), buf_init(&a2);
+        cc_ifc_report rp;
+        cc_error err;
+        cc_guid_seed(1);
+        int rc = import_mask(t, tn, &kk, &a, &rp, &err);
+        Buf lines;
+        buf_init(&lines);
+        buf_append(&lines, rp.lines.p ? rp.lines.p : "", rp.lines.len);
+        size_t unsup = rp.unsupported;
+        cc_ifc_report_free(&rp);
+        cc_guid_seed(1);
+        int rc2 = import_mask(t, tn, &kk, &a2, &rp, &err);
+        cc_ifc_report_free(&rp);
+        char jp[256], rpth[256];
+        snprintf(jp, sizeof jp, "golden/ifc_c/import/%s.json", nm);
+        snprintf(rpth, sizeof rpth, "golden/ifc_c/import/%s.report.txt", nm);
+        if (write && !rc) write_file(jp, a.p, a.len), write_file(rpth, lines.p ? lines.p : "", lines.len);
+        size_t jn = 0, rn = 0;
+        snprintf(file, sizeof file, "%s.json", nm);
+        FILE *probe = fopen(jp, "rb");
+        char *wj = probe ? (fclose(probe), slurp("golden/ifc_c/import", file, &jn)) : NULL;
+        snprintf(file, sizeof file, "%s.report.txt", nm);
+        probe = fopen(rpth, "rb");
+        char *wr = probe ? (fclose(probe), slurp("golden/ifc_c/import", file, &rn)) : NULL;
+        int model_ok = !rc && wj && a.len == jn && !memcmp(a.p, wj, jn);
+        int rep_ok = !rc && wr && lines.len == rn && (!rn || !memcmp(lines.p, wr, rn));
+        /* The hand numbers, on the unmasked model. */
+        cc_model cm;
+        cc_ifc_report rq;
+        cc_guid_seed(1);
+        int rc3 = cc_ifc_import(&cm, &rq, t, tn, &err);
+        double vol = 0;
+        const char *kind = "?";
+        size_t nel = rc3 ? 0 : cm.nelements;
+        for (size_t k = 0; k < nel; k++) vol += gen_volume(&cm.elements[k].generator);
+        if (nel) kind = cc_gen_kind_name(cm.elements[0].generator.kind);
+        double rel = (vol - OWN_IMPORT[g].volume) / OWN_IMPORT[g].volume;
+        printf("import ifc_c/%-18s %-8s elements %zu %s volume %.6g (hand %.6g, %+.2e), %zu unsupported%s%s\n", nm,
+               model_ok && rep_ok ? "MATCHES" : "DIFFERS", nel, kind, vol, OWN_IMPORT[g].volume, rel, unsup,
+               rc ? ": " : "", rc ? err.msg : "");
+        snprintf(m, sizeof m, "import ifc_c/%s: model matches its C-own golden", nm);
+        check_true(m, model_ok);
+        snprintf(m, sizeof m, "import ifc_c/%s: report matches its C-own golden", nm);
+        check_true(m, rep_ok);
+        snprintf(m, sizeof m, "import ifc_c/%s: two runs identical", nm);
+        check_true(m, rc == rc2 && a.len == a2.len && !memcmp(a.p, a2.p, a.len));
+        snprintf(m, sizeof m, "import ifc_c/%s: %zu element(s), the first a %s", nm, OWN_IMPORT[g].elements,
+                 OWN_IMPORT[g].kind);
+        check_true(m, nel == OWN_IMPORT[g].elements && !strcmp(kind, OWN_IMPORT[g].kind));
+        snprintf(m, sizeof m, "import ifc_c/%s: volume within %g of the hand value", nm, OWN_IMPORT[g].rel_tol);
+        check_true(m, (rel < 0 ? -rel : rel) <= OWN_IMPORT[g].rel_tol);
+        snprintf(m, sizeof m, "import ifc_c/%s: nothing skipped or unsupported", nm);
+        check_true(m, !rc3 && unsup == 0 && rq.elements == nel && !strstr(buf_cstr(&lines), "skipped") &&
+                          !strstr(buf_cstr(&lines), "can't read"));
+        if (!rc3) cc_model_free(&cm);
+        cc_ifc_report_free(&rq);
+        free(wj), free(wr), free(t), free(kk.v);
+        buf_free(&a), buf_free(&a2), buf_free(&lines);
+    }
+}
+
 static double now(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -581,6 +732,8 @@ int main(int argc, char **argv) {
         }
         cc_boolean_set(kernel);
     }
+
+    own_imports();
 
     /* Derived ids, unmasked (masked in the goldens): import.rs derives material ids as
      * GlobalId::derived("material/<name>") and the synthetic storey as derived("storey/synthetic");
