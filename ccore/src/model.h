@@ -163,6 +163,16 @@ typedef struct {
     size_t naxes;
 } cc_grid;
 
+/* Where the model is on Earth and its project north (bimble_core::georef::Georef, ADR 0045;
+ * georef.h). All zero, has_crs 0: unknown (the default), left out of the file. */
+typedef struct {
+    double rotation_deg;     /* project north: degrees counter-clockwise from true (grid) north */
+    int has_crs;             /* crs: Option<String> */
+    cc_str crs;              /* the survey system, e.g. "EPSG:2056" (LV95) */
+    double east_m, north_m, height_m; /* what the survey system adds to world coordinates (m) */
+    double map_rotation_deg; /* IfcMapConversion: the turn of the model's x axis in the survey system */
+} cc_georef;
+
 typedef struct {
     Arena arena;
     cc_gid project_id;
@@ -188,6 +198,7 @@ typedef struct {
     size_t nrelations;
     cc_grid *grids; /* sorted by id; key "grids", left out of the file when empty (ADR 0056) */
     size_t ngrids;
+    cc_georef georef; /* key "georef" after "schedules", left out when the default (ADR 0045) */
 } cc_model;
 
 /* An error with a message (UTF-8, NUL-terminated, truncated to fit). `offset` is the input

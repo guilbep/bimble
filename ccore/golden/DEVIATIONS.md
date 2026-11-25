@@ -195,3 +195,35 @@ seeded ids) and `model.json` (the model at its end), written by `ccore/test/shee
 **Where.** `ccore/src/verbs_sheets.c` (the verbs, in `VIEW_DENY`), `ccore/src/verb_table.c` (rows),
 `ccore/session/sheets.{h,c}` (the query, the tab check), two hooks in `ccore/session/calls.c`,
 tests `ccore/test/sheets_test.c` and `ccore/test/lab_sheets.mjs`.
+
+## 6. Setting the georeference (ticket GEO1, ADR 0045)
+
+**What.** Rust sets a model's `georef` only on IFC import; nothing edits it. The C core adds the
+command `set_georef` (`{"op": "set_georef", "georef": {…}}`: the whole georeference, `{}` clears
+it; its inverse is the old one) and the verb `georef_set` (a C addition, `ccore/src/verb_table.c`:
+`rotation_deg`, `crs` ("" for none), `east_m`, `north_m`, `height_m`, `map_rotation_deg`, `clear`;
+missing ones are kept; angles within 360 degrees, east and north within 1e8 m, height within
+1e5 m; the same values give no command). Two queries are new (`ccore/src/query.h`): `north`
+(project north and the map's turn, for the viewport and the view cube) and `coordinates` (a world
+point as the status bar says it, as Rust's `coords::text`, with its survey and WGS84 values). The
+serde error text listing the command tags names `set_georef` too.
+
+Two refusals Rust has not: a non-finite value in the georeference (a binary file can hold a NaN;
+Rust has no check and its canonical form would panic): "number out of range" on load, "georef:
+non-finite value" from a command; an IFC import whose map conversion holds one keeps no
+georeference. And, one family at a time (ADR 0045, Swiss first): coordinates of a model in another
+system of Rust's table (`crs_table.rs`), or in a target other than the survey system and WGS84
+(UTM, LV03, a State Plane zone), are refused with "… are not converted by the C core" where Rust
+says them through proj4rs.
+
+**What Rust sees.** The same `georef` key and bytes (v1 and v2), the same IFC: a model edited
+with `set_georef` is a model Rust could have imported (`georef_test`: the frame with `georef_set`
+saves to `golden/geo/geo.json` byte for byte).
+
+**Tolerance.** WGS84 is computed as proj4rs does it (somerc inverse on Bessel, the
+three-parameter shift, geocentric to geodetic), with the C core's own exp, log, tan and asin
+(`ccore/src/georef.c`, no libm): within 2e-9 degrees of Rust's (0.2 mm; measured 4.4e-10), the
+status bar's six-decimal text byte for byte on the 36 points of `golden/geo/*.coords.txt`.
+
+**Where.** `ccore/src/georef.{h,c}`, `ccore/src/command.{h,c}`, `ccore/src/query.{h,c}`,
+`ccore/src/verb_table.c`, test `ccore/test/georef_test.c`.

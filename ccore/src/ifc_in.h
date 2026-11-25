@@ -12,8 +12,9 @@
  * materials get derived ids (GlobalId::derived("material/<name>")) and no values.
  *
  * Not done: boolean results (IfcBooleanResult, clipping) are drawn uncut, the C core has no
- * boolean kernel (Rust: manifold3d); the georeference (building frame, IfcMapConversion) is
- * not kept (the C model has none). Both are reported in "unsupported: …" lines, never silent.
+ * boolean kernel (Rust: manifold3d), reported in "unsupported: …" lines, never silent. The
+ * georeference (the building's frame, IfcMapConversion, IfcProjectedCRS) is kept on the model as
+ * Rust keeps it (georef.h, ADR 0045).
  * Trigonometry is correctly rounded (ifc_math.h); glibc's, which Rust uses, is not always. */
 #ifndef CCORE_IFC_IN_H
 #define CCORE_IFC_IN_H

@@ -20,6 +20,11 @@
  * table (verb_table.h), the viewer's calls of the same names: verbs (dispatch::list) and describe
  * ({name}: dispatch::describe, the schema as compact JSON; 400 "no verb with this name").
  * C additions of ADR 0056: grids ([{axes, id, name}]), and storeys gains is_storey and height_mm
- * in a model with a level that is not a storey or with a grid (else Rust's bytes). */
+ * in a model with a level that is not a storey or with a grid (else Rust's bytes).
+ * C additions of ADR 0045 (georef.h): north ({crs, has_map, map_rotation_deg, plan_turn_project,
+ * plan_turn_true, rotation_deg}: project north for the viewport and the view cube) and
+ * coordinates ({at: [x, y, z] world mm, system: "survey" | "wgs84" | "utm" | "epsg:<n>"} ->
+ * {survey, text, wgs84, world_mm}: the status bar's text of a point; 400 for a system the C core
+ * does not convert to). */
 int cc_query(const cc_model *m, const char *name, const char *args_json, size_t n, Buf *out);
 #endif

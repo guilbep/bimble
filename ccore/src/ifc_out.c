@@ -1,10 +1,13 @@
 /* IFC export: crates/bimble-ifc/src/lib.rs `export` (IFC4) and ifc2x3.rs `from_ifc4`, line for
  * line. Comments name the Rust they follow. */
 #include "ifc_out.h"
+#pragma STDC FP_CONTRACT OFF /* a*b+c rounds twice, as in Rust */
 #include "ifc_out_grid.h"
 #include <stdlib.h>
 #include <string.h>
 #include "fmt.h"
+#include "georef.h"
+#include "ifc_math.h"
 #include "guid.h"
 #include "json_w.h"
 
@@ -543,6 +546,24 @@ static void group(const size_t *key, size_t n, size_t ngroups, size_t *start, si
     start[0] = 0;
 }
 
+/* f64::round: half away from zero. */
+static double round_away(double x) {
+    double ax = x < 0 ? -x : x;
+    if (!(ax < 4503599627370496.0)) return x;
+    double t = (double)(int64_t)x, d = x - t;
+    if (d >= 0.5) t += 1.0;
+    else if (d <= -0.5) t -= 1.0;
+    if (t == 0.0) return x < 0 || 1.0 / x < 0 ? -0.0 : 0.0;
+    return t;
+}
+
+/* BuildingFrame::local's turn: world axes into the building's (cos, sin). */
+static void turn_frame(double c, double s, const double v[3], double out[3]) {
+    out[0] = c * v[0] + s * v[1] + 0.0;
+    out[1] = -s * v[0] + c * v[1] + 0.0;
+    out[2] = v[2];
+}
+
 static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf *out) {
     const cc_model *m = w->m;
     Buf *d = w->d;
@@ -608,9 +629,39 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
     uint64_t site = begin(w);
     put(w, "IFCSITE("), gid(w, "site"), put(w, ",$,'Site',$,$,"), ref(w, site_pl);
     put(w, ",$,$,.ELEMENT.,$,$,$,$,$)"), end(w, site);
-    /* No georeference in the C model: the building sits at the world origin (BuildingFrame None). */
+    /* The building keeps the model's place and project north (lib.rs BuildingFrame, ADR 0045):
+     * placed at a whole metre near the model (the mean of the elements' origins), turned by the
+     * building's angle; elements are placed in its frame. None for the default georeference or an
+     * empty model: the building sits at the world origin. */
+    int framed = !cc_georef_is_default(&m->georef) && m->nelements > 0;
+    double fat[3] = {0, 0, 0}, fcos = 1.0, fsin = 0.0;
+    uint64_t bldg_axes = world;
+    if (framed) {
+        double n = (double)m->nelements, sx = 0.0, sy = 0.0;
+        for (size_t i = 0; i < m->nelements; i++) sx += m->elements[i].placement.origin[0], sy += m->elements[i].placement.origin[1];
+        fat[0] = round_away(sx / n / 1000.0) * 1000.0;
+        fat[1] = round_away(sy / n / 1000.0) * 1000.0;
+        double a = m->georef.rotation_deg * (3.14159265358979323846 / 180.0);
+        fsin = cc_sin(a) + 0.0, fcos = cc_cos(a);
+        uint64_t o = point3(w, fat);
+        double xd[3] = {fcos, fsin, 0.0};
+        uint64_t x = dir3(w, xd);
+        bldg_axes = begin(w);
+        put(w, "IFCAXIS2PLACEMENT3D("), ref(w, o), put(w, ",$,"), ref(w, x), put(w, ")"), end(w, bldg_axes);
+    }
     uint64_t bldg_pl = begin(w);
-    put(w, "IFCLOCALPLACEMENT("), ref(w, site_pl), put(w, ","), ref(w, world), put(w, ")"), end(w, bldg_pl);
+    put(w, "IFCLOCALPLACEMENT("), ref(w, site_pl), put(w, ","), ref(w, bldg_axes), put(w, ")"), end(w, bldg_pl);
+    /* IFC4: the survey system by name, and how the model's coordinates map onto it. */
+    if (m->georef.has_crs) {
+        const cc_georef *g = &m->georef;
+        uint64_t target = begin(w);
+        put(w, "IFCPROJECTEDCRS("), cstr(w, g->crs), put(w, ",$,$,$,$,$,$)"), end(w, target);
+        double a = g->map_rotation_deg * (3.14159265358979323846 / 180.0);
+        uint64_t mc = begin(w);
+        put(w, "IFCMAPCONVERSION("), ref(w, ctx), put(w, ","), ref(w, target), put(w, ",");
+        real(w, g->east_m), put(w, ","), real(w, g->north_m), put(w, ","), real(w, g->height_m), put(w, ",");
+        real(w, cc_cos(a)), put(w, ","), real(w, cc_sin(a) + 0.0), put(w, ",$)"), end(w, mc);
+    }
     uint64_t bldg = begin(w);
     put(w, "IFCBUILDING("), gid(w, "building"), put(w, ",$,");
     const cc_str *bname = project_value(m, "building");
@@ -669,6 +720,14 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
         if (!st || !mat || st->not_storey) { w->err = 1; break; }
         el_st[i] = (size_t)(st - m->storeys), el_mat[i] = (size_t)(mat - m->materials);
         const cc_placement *p = &e->placement;
+        cc_placement local;
+        if (framed) { /* BuildingFrame::local: the storey-relative placement in the building's frame */
+            const double o0[3] = {p->origin[0] - fat[0], p->origin[1] - fat[1], p->origin[2]};
+            turn_frame(fcos, fsin, o0, local.origin);
+            turn_frame(fcos, fsin, p->z_axis, local.z_axis);
+            turn_frame(fcos, fsin, p->x_axis, local.x_axis);
+            p = &local;
+        }
         uint64_t o = point3(w, p->origin), az = dir3(w, p->z_axis), ax = dir3(w, p->x_axis);
         uint64_t a = begin(w);
         put(w, "IFCAXIS2PLACEMENT3D("), ref(w, o), put(w, ","), ref(w, az), put(w, ","), ref(w, ax), put(w, ")");

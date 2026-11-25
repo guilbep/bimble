@@ -366,6 +366,24 @@ int cc_vh_sheet_move(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *er
 int cc_vh_sheet_unplace(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 int cc_vh_sheet_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 
+static const char SCHEMA_GEOREF_SET[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\""
+    "description\":\"Arguments of `georef_set`.\",\"properties\":{\"clear\":{\"description\":\"Remo"
+    "ve the georeference (the model's own coordinates only).\",\"type\":[\"boolean\",\"null\"]},\"c"
+    "rs\":{\"description\":\"The survey system, e.g. \\\"EPSG:2056\\\" (LV95); \\\"\\\" for none.\""
+    ",\"type\":[\"string\",\"null\"]},\"east_m\":{\"description\":\"What the survey system adds to "
+    "x, m.\",\"format\":\"double\",\"type\":[\"number\",\"null\"]},\"height_m\":{\"description\":\""
+    "What the survey system adds to z, m.\",\"format\":\"double\",\"type\":[\"number\",\"null\"]},\""
+    "map_rotation_deg\":{\"description\":\"The turn of the model's x axis in the survey system, deg"
+    "rees counter-clockwise.\",\"format\":\"double\",\"type\":[\"number\",\"null\"]},\"north_m\":{\""
+    "description\":\"What the survey system adds to y, m.\",\"format\":\"double\",\"type\":[\"numbe"
+    "r\",\"null\"]},\"rotation_deg\":{\"description\":\"Project north: degrees counter-clockwise fr"
+    "om true north.\",\"format\":\"double\",\"type\":[\"number\",\"null\"]}},\"title\":\"GeorefSetA"
+    "rgs\",\"type\":\"object\"}";
+static const char SUMMARY_GEOREF_SET[] =
+    "Set the model's georeference: project north, the survey system (LV95) and the map conversion; missing "
+    "ones are kept (a C addition, ADR 0045).";
+int cc_vh_georef_set(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 #define V(n, N) {#n, SUMMARY_##N, SCHEMA_##N, cc_vh_##n, 0}
 const cc_verb_def cc_verb_table[] = {
     V(place, PLACE),
@@ -400,6 +418,7 @@ const cc_verb_def cc_verb_c_additions[] = {
     V(sheet_move, SHEET_MOVE),
     V(sheet_unplace, SHEET_UNPLACE),
     V(sheet_remove, SHEET_REMOVE),
+    V(georef_set, GEOREF_SET),
 };
 #undef V
 const size_t cc_verb_count = sizeof cc_verb_table / sizeof cc_verb_table[0];

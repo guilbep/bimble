@@ -2,6 +2,7 @@
 #include "model.h"
 #include <string.h>
 #include "fmt.h"
+#include "georef.h"
 #include "grid.h"
 #include "relation.h"
 #include "view_io.h"
@@ -454,6 +455,7 @@ int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid 
     }
     if (m->nrelations && cc_relations_validate(m, m->relations, m->nrelations, rkeys, &b)) return set_err(err, &b);
     if (m->ngrids && cc_grids_validate(m, m->grids, m->ngrids, gkeys, &b)) return set_err(err, &b);
+    if (cc_georef_validate(&m->georef, &b)) return set_err(err, &b);
     buf_free(&b);
     return 0;
 }
@@ -521,4 +523,5 @@ void cc_model_canonical(cc_model *m) {
     for (size_t i = 0; i < m->nviews; i++) cc_view_canonical(&m->views[i]);
     for (size_t i = 0; i < m->nsheets; i++) cc_sheet_canonical(&m->sheets[i]);
     for (size_t i = 0; i < m->ngrids; i++) cc_grid_canonical(&m->grids[i]);
+    cc_georef_canonical(&m->georef);
 }

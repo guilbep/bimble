@@ -359,7 +359,10 @@ int main(int argc, char **argv) {
      * "unsupported by the C core" before). */
     expect_error(frame, fn, "\"project_name\"", "\"views\": {\"x\": 1}, \"project_name\"", "parse: invalid IFC GlobalId: \"x\"");
     expect_error(frame, fn, "\"project_name\"", "\"schedules\": [1], \"project_name\"", "invalid type: integer `1`, expected struct ScheduleDef");
-    expect_error(frame, fn, "\"project_name\"", "\"georef\": {\"x\": 1}, \"project_name\"", "unsupported by the C core: georef");
+    /* The georeference is held since GEO1 (ADR 0045): Georef denies unknown fields, as serde. */
+    expect_error(frame, fn, "\"project_name\"", "\"georef\": {\"x\": 1}, \"project_name\"",
+                 "unknown field `x`, expected one of `rotation_deg`, `crs`, `east_m`, `north_m`, `height_m`, "
+                 "`map_rotation_deg`");
     expect_error(frame, fn, "\"generator\": {", "\"openings\": [{}], \"generator\": {", "missing field `placement`");
     expect_error(frame, fn, "\"strength_mpa\": 30.0,", "\"strength_mpa\": 30.0, \"colour\": 1,", "unknown field `colour`");
     expect_error(frame, fn, "\"kind\": \"rect_column\"", "\"kind\": \"cylinder\"", "unknown variant `cylinder`");

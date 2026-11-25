@@ -1,9 +1,11 @@
 /* IFC import (subset), a port of crates/bimble-ifc/src/import.rs and the parts of read.rs it
  * uses. See ifc_in.h. Arithmetic follows Rust's order of operations exactly; no contraction. */
 #include "ifc_in.h"
+#pragma STDC FP_CONTRACT OFF /* a*b+c rounds twice, as in Rust */
 #include <stdlib.h>
 #include <string.h>
 #include "earcut.h"
+#include "georef.h"
 #include "guid.h"
 #include "ifc_math.h"
 #include "verbs.h"
@@ -839,10 +841,34 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
     const cc_step_entity *proj = first_of(&f, "IFCPROJECT");
     if (!proj || !gid_from_sv(arg(proj, 0), &m->project_id)) m->project_id = derived("project/imported", 16);
     m->project_name = astr(&m->arena, "Imported model", 14);
-    /* Georeference: Rust keeps it on the model; the C model has none. */
-    if (first_of(&f, "IFCMAPCONVERSION") || building.x[0] != 1.0 || building.x[1] != 0.0 || building.t[0] != 0.0 ||
-        building.t[1] != 0.0 || building.t[2] != 0.0)
-        unsup(&r, "georeference (building frame or IfcMapConversion) not kept", 0, 0);
+    /* Georeference (read.rs Reader::georef, ADR 0045): the first IfcBuilding's frame turns the
+     * plans and, in LV95's range, names the survey system; an IfcMapConversion gives the survey
+     * offset, the map's turn and the system by its target's name (metres: other map units are
+     * not read, as Rust). */
+    {
+        double at[3] = {building.t[0] * scale, building.t[1] * scale, building.t[2] * scale}, xa[2] = {building.x[0], building.x[1]};
+        cc_georef_from_frame(&m->georef, xa, at);
+        const cc_step_entity *mc = first_of(&f, "IFCMAPCONVERSION");
+        if (mc) {
+            cc_georef *g = &m->georef;
+            double v;
+            g->east_m = cc_sv_as_f64(arg(mc, 2), &v) ? v : 0.0;
+            g->north_m = cc_sv_as_f64(arg(mc, 3), &v) ? v : 0.0;
+            g->height_m = cc_sv_as_f64(arg(mc, 4), &v) ? v : 0.0;
+            double ax = cc_sv_as_f64(arg(mc, 5), &v) ? v : 1.0, o = cc_sv_as_f64(arg(mc, 6), &v) ? v : 0.0;
+            g->map_rotation_deg = round_rs(cc_atan2(o, ax) * (180.0 / 3.14159265358979323846) * 1e6) / 1e6 + 0.0;
+            const cc_step_entity *crs = get(&r, arg(mc, 1));
+            const char *cs;
+            size_t csn;
+            g->has_crs = 0, g->crs.p = NULL, g->crs.n = 0;
+            if (crs && cc_sv_as_str(arg(crs, 0), &cs, &csn)) {
+                g->has_crs = 1, g->crs = astr(&m->arena, cs, csn);
+                if (g->crs.n != csn) goto oom;
+            }
+        }
+        /* A file's values may be anything: what the model cannot hold is dropped, not refused. */
+        if (cc_georef_validate(&m->georef, NULL) < 0) memset(&m->georef, 0, sizeof m->georef);
+    }
 
     seen.cap = 64;
     while (seen.cap < 2 * f.n) seen.cap *= 2;
@@ -1241,6 +1267,7 @@ done:
         m->storeys = NULL, m->nstoreys = 0;
         m->elements = NULL, m->nelements = 0, m->cap_elements = 0;
         m->materials = NULL, m->nmaterials = 0;
+        memset(&m->georef, 0, sizeof m->georef);
     }
     elmats_free(&em);
     for (size_t i = 0; i < props.n; i++) free(props.v[i].key), free(props.v[i].val);

@@ -5,6 +5,7 @@
  *   scene.rs  SceneBuilder::push / push_instance / finish (origin, build, share_copies)
  * The geometry (Reader, Emit, Budget) is ifc_geom.h, shared with the import. */
 #include "ifc_read.h"
+#include "georef.h"
 #include "ifc_geom.h"
 #include "fmt.h"
 #include "json_w.h"
@@ -1134,19 +1135,7 @@ static void hex32(Buf *b, float x) {
 }
 static void jstr(Buf *b, cc_str s) { json_escape(b, s.p ? s.p : "", s.n); }
 
-void cc_ifc_georef_json(Buf *b, const cc_ifc_georef *g) {
-    int first = 1;
-    buf_putc(b, '{');
-#define KEY(k) (buf_puts(b, first ? "\"" k "\":" : ",\"" k "\":"), first = 0)
-    if (g->rotation_deg != 0.0) KEY("rotation_deg"), fmt_f64_json(b, g->rotation_deg);
-    if (g->has_crs) KEY("crs"), jstr(b, g->crs);
-    if (g->east_m != 0.0) KEY("east_m"), fmt_f64_json(b, g->east_m);
-    if (g->north_m != 0.0) KEY("north_m"), fmt_f64_json(b, g->north_m);
-    if (g->height_m != 0.0) KEY("height_m"), fmt_f64_json(b, g->height_m);
-    if (g->map_rotation_deg != 0.0) KEY("map_rotation_deg"), fmt_f64_json(b, g->map_rotation_deg);
-#undef KEY
-    buf_putc(b, '}');
-}
+void cc_ifc_georef_json(Buf *b, const cc_ifc_georef *g) { cc_georef_json(b, g); }
 
 int cc_ifc_scene_meta(const cc_ifc_scene *s, cc_viewfile_meta *mt) {
     cc_viewfile_meta_init(mt);

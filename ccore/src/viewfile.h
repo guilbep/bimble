@@ -2,15 +2,15 @@
  * for others to look at, without the model. Byte for byte with Rust's
  * `viewfile::write(Scene::from_model(m), gzip)`: the raw stream equals Rust's exactly; the gzip
  * wrapper is this core's own deflate (inflate.h), so compare gzipped files after inflating.
- * Layout in golden/README.md (view/): "BIMBLEVW", u32 version 1, sections HEAD, META, GEOR (never
- * written here: the C model has no georeference), ELEM chunks of about 1 MiB; meshes in the
+ * Layout in golden/README.md (view/): "BIMBLEVW", u32 version 1, sections HEAD, META, GEOR (when
+ * the georeference is not the default, ADR 0045), ELEM chunks of about 1 MiB; meshes in the
  * "BMG1" codec (meshcodec.h).
  *
  * Rust writes from any Scene shown (ribbon.rs:575): a model's, an IFC read as it is, a view file
  * opened. Here the scene's text fields beside the geometry are a cc_viewfile_meta: per element
  * GlobalId, name, storey and material (class and family come from the cc_scene element), the
  * storeys, grids, densities and georeference. Fillers: cc_viewfile_meta_from_model (from_model:
- * storeys sorted by elevation, no grids, densities by material name, no georeference),
+ * storeys sorted by elevation, no grids, densities by material name, the model's georeference),
  * cc_viewfile_meta_from_file (what an opened view file holds, as is: sharing it again gives its
  * raw bytes) and cc_ifc_scene_meta (ifc_read.h). The META table is computed by the writer: the
  * sorted distinct class, storey, material and family names; the warnings are the scene's.

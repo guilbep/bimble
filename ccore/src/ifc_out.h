@@ -4,7 +4,8 @@
  *
  * Entity ids follow model order; relationship GlobalIds are derived from the project id
  * (GlobalId::derived("<project id>/<seed>")), so two exports of one model give the same text.
- * The C model has no openings and no georeference: Rust writes neither for such a model. */
+ * The georeference (ADR 0045) is: the building placed near the model and turned by project north,
+ * elements in its frame, and in IFC4 IfcProjectedCRS and IfcMapConversion (IFC2x3 drops both). */
 #ifndef CCORE_IFC_OUT_H
 #define CCORE_IFC_OUT_H
 #include <stdint.h>

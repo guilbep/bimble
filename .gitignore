@@ -5,6 +5,8 @@
 # C core goldens: synthetic, exported from the demo frame by crates/bimble-api/examples/ccore_golden.rs.
 !ccore/golden/ifc/*.ifc
 !ccore/golden/grids/*.ifc
+!ccore/golden/geo/*.ifc
+!ccore/golden/geo/*.bimble
 !**/fixtures/*.bimble
 web/dist/
 .DS_Store

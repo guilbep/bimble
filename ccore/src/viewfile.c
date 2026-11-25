@@ -1,5 +1,6 @@
 /* The .bimbleview writer and reader, see viewfile.h. A port of crates/bimble-geom/src/viewfile.rs. */
 #include "viewfile.h"
+#include "georef.h"
 #include <stdlib.h>
 #include <string.h>
 #include "inflate.h"
@@ -105,7 +106,8 @@ void cc_viewfile_meta_free(cc_viewfile_meta *mt) {
 }
 
 /* Scene::from_model's META: storeys sorted by elevation (stable), no grids, densities by
- * material name (BTreeMap: the last one inserted, model order, wins), no georeference. */
+ * material name (BTreeMap: the last one inserted, model order, wins), and the model's
+ * georeference (GEOR, its serde_json text) when it is not the default (scene.rs:351). */
 int cc_viewfile_meta_from_model(cc_viewfile_meta *mt, const cc_model *m, const cc_scene *s) {
     cc_viewfile_meta_init(mt);
     Arena *a = &mt->arena;
@@ -154,6 +156,16 @@ int cc_viewfile_meta_from_model(cc_viewfile_meta *mt, const cc_model *m, const c
     mt->info = info, mt->ninfo = ne;
     mt->storeys = storeys, mt->nstoreys = m->nstoreys;
     mt->densities = dout, mt->ndensities = ndu;
+    if (!cc_georef_is_default(&m->georef)) {
+        Buf j;
+        buf_init(&j);
+        cc_georef_json(&j, &m->georef);
+        char *t = j.oom ? NULL : arena_dup(a, j.p, j.len);
+        size_t n = j.len;
+        buf_free(&j);
+        if (!t) return -1;
+        mt->has_georef = 1, mt->georef.p = t, mt->georef.n = n;
+    }
     return 0;
 }
 

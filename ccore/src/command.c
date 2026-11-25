@@ -3,6 +3,7 @@
  * until the model is freed), a removal shifts in place. Properties and project maps are copied
  * on write, never changed in place, because inverses in the history may still point to them. */
 #include "command.h"
+#include "georef.h"
 #include <stdlib.h>
 #include <string.h>
 #include "file.h"
@@ -49,7 +50,7 @@ static const char *const OPS[] = {"add_storey",     "remove_storey",  "add_mater
                                   "add_view",       "remove_view",    "set_view",      "add_sheet",
                                   "remove_sheet",   "set_sheet",      "set_schedules", "add_relation",
                                   "remove_relation", "set_relation", "set_storey", "add_grid",
-                                  "remove_grid",    "set_grid"};
+                                  "remove_grid",    "set_grid",       "set_georef"};
 
 const char *cc_cmd_op_name(cc_cmd_op op) { return (unsigned)op < CC_CMD_COUNT ? OPS[op] : "?"; }
 
@@ -531,6 +532,7 @@ static int dup_command(Arena *a, cc_command *c) {
     case CC_CMD_SET_STOREY: c->storey.elevation += 0.0; return dup_str(a, &c->storey.name);
     case CC_CMD_ADD_GRID:
     case CC_CMD_SET_GRID: return cc_grid_dup(a, &c->grid);
+    case CC_CMD_SET_GEOREF: return cc_georef_dup(a, &c->georef);
     case CC_CMD_ADD_MATERIAL: return dup_material(a, &c->material);
     case CC_CMD_ADD_ELEMENT: return dup_element(a, &c->element);
     case CC_CMD_SET_GENERATOR: return dup_generator(a, &c->generator);
@@ -942,6 +944,14 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
         arr_remove(m->grids, m->ngrids--, sizeof *g, (size_t)(g - m->grids));
         return 0;
     }
+    case CC_CMD_SET_GEOREF: { /* ADR 0045: the whole georeference, the old one is the inverse */
+        if (cc_georef_validate(&c->georef, &why)) return invalid_buf(err, &why);
+        buf_free(&why);
+        inv_init(inv, CC_CMD_SET_GEOREF);
+        inv->georef = m->georef;
+        m->georef = c->georef;
+        return 0;
+    }
     case CC_CMD_SET_SCHEDULES: {
         if (cc_schedules_validate(c->schedules, c->nschedules, &why)) return invalid_buf(err, &why);
         buf_free(&why);
@@ -1097,6 +1107,9 @@ void cc_command_describe(const cc_command *c, const cc_model *m, Buf *b) {
     }
     case CC_CMD_ADD_GRID: buf_puts(b, "add the grid "), put_str(b, c->grid.name); break;
     case CC_CMD_SET_GRID: buf_puts(b, "change the grid "), put_str(b, c->grid.name); break;
+    case CC_CMD_SET_GEOREF:
+        buf_puts(b, cc_georef_is_default(&c->georef) ? "clear the georeference" : "set the georeference");
+        break;
     case CC_CMD_REMOVE_GRID: {
         const cc_grid *g = cc_model_grid(m, &c->id);
         buf_puts(b, "delete ");
@@ -1221,6 +1234,13 @@ void cc_command_write(JsonW *w, const cc_command *c) {
     }
     if (c->op == CC_CMD_ADD_GRID || c->op == CC_CMD_SET_GRID) {
         cc_em_grid(&em, &c->grid, cc_cmd_op_name(c->op));
+        return;
+    }
+    if (c->op == CC_CMD_SET_GEOREF) {
+        jw_obj_begin(w);
+        jw_key(w, "op"), jw_str(w, cc_cmd_op_name(c->op));
+        jw_key(w, "georef"), cc_em_georef(&em, &c->georef);
+        jw_obj_end(w);
         return;
     }
     jw_obj_begin(w);
@@ -1808,7 +1828,8 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
                       "`remove_element`, `set_generator`, `set_placement`, `rename`, `set_element_material`, "
                       "`set_property`, `add_view`, `remove_view`, `set_view`, `add_sheet`, `remove_sheet`, "
                       "`set_sheet`, `set_material`, `set_schedules`, `set_project`, `add_relation`, "
-                      "`remove_relation`, `set_relation`, `set_storey`, `add_grid`, `remove_grid`, `set_grid`",
+                      "`remove_relation`, `set_relation`, `set_storey`, `add_grid`, `remove_grid`, `set_grid`, "
+                      "`set_georef`",
                       &op);
     }
     memset(c, 0, sizeof *c);
@@ -1842,6 +1863,25 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
         cc_vd_init(&vd, d->a);
         int rc = c->op == CC_CMD_ADD_GRID || c->op == CC_CMD_SET_GRID ? cc_vd_grid(&vd, v, "op", &c->grid)
                                                                      : cc_vd_relation(&vd, v, "op", &c->relation);
+        if (rc) {
+            buf_clear(&d->msg);
+            buf_append(&d->msg, vd.msg.p, vd.msg.oom ? 0 : vd.msg.len);
+            fail_buf(d, vd.off);
+        }
+        cc_vd_free(&vd);
+        return rc ? -1 : 0;
+    }
+    case CC_CMD_SET_GEOREF: { /* {"op": "set_georef", "georef": {...}}: {} clears it */
+        const JrVal *g = NULL;
+        for (size_t j = 0; j < v->n; j++)
+            if (jr_key_is(&v->members[j], "georef")) {
+                if (g) return dfail(d, v->members[j].val.off, "duplicate field `georef`", 0, 0);
+                g = &v->members[j].val;
+            }
+        if (!g) return dfail(d, v->off, "missing field `georef`", 0, 0);
+        cc_vd vd;
+        cc_vd_init(&vd, d->a);
+        int rc = cc_vd_georef(&vd, g, NULL, &c->georef);
         if (rc) {
             buf_clear(&d->msg);
             buf_append(&d->msg, vd.msg.p, vd.msg.oom ? 0 : vd.msg.len);

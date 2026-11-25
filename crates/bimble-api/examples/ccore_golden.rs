@@ -21,6 +21,10 @@
 //! Every verb (`verbs_all.txt`, `frame2/verbs_all.txt`), the verbs' JSON schemas
 //! (`verbs_schema/`, `verbs_list.json`), the viewer export (`view/*.bimbleview`) and the
 //! quantities and schedule tables (`schedule/`).
+//!
+//! Georeference (`geo/`, ADR 0045): three synthetic models made from the frame (a map conversion,
+//! a turn only, a model drawn in LV95), their files, IFC exports, imports, display reads, view
+//! files and coordinate tables.
 
 use bimble_api::dispatch;
 use bimble_core::demo::{FrameSpec, concrete_frame};
@@ -197,6 +201,7 @@ fn derive(dir: &Path) -> Files {
     schema_files(&mut files);
     view_files(dir, &m, &mut files);
     schedule_files(dir, &m, &mut files);
+    geo_files(&m, &mut files);
     files
 }
 
@@ -2031,6 +2036,221 @@ fn schedule_scene(
         files.insert(
             format!("schedule/{name}/{slug}.csv"),
             to_csv(&t).into_bytes(),
+        );
+    }
+}
+
+// ---------------------------------------------------------------- georeference (ADR 0045)
+
+/// The frame with a place: `geo` (an IFC4 map conversion to LV95 and a turn), `turned` (a turn
+/// only, no survey system) and `survey` (drawn in LV95 coordinates, as Revit exports are).
+fn geo_models(frame: &Model) -> Vec<(&'static str, Model)> {
+    use bimble_core::georef::{Georef, LV95};
+    let mut geo = frame.clone();
+    geo.georef = Georef {
+        rotation_deg: 12.5,
+        crs: Some(LV95.into()),
+        east_m: 2_600_123.456,
+        north_m: 1_199_876.5,
+        height_m: 432.1,
+        map_rotation_deg: -3.25,
+    };
+    let mut turned = frame.clone();
+    turned.georef = Georef {
+        rotation_deg: 30.0,
+        ..Default::default()
+    };
+    let mut survey = frame.clone();
+    for e in survey.elements.values_mut() {
+        e.placement.origin[0] += 2_600_000_000.0;
+        e.placement.origin[1] += 1_200_000_000.0;
+    }
+    survey.georef = Georef {
+        rotation_deg: -20.0,
+        crs: Some(LV95.into()),
+        ..Default::default()
+    };
+    vec![("geo", geo), ("turned", turned), ("survey", survey)]
+}
+
+/// The status bar's coordinates, a copy of `bimble-viewer`'s `coords::text` and `swiss` (the
+/// viewer is not a dependency of this example): the survey system, or WGS84 when asked.
+fn coords_text(g: &bimble_core::georef::Georef, world_mm: [f64; 3], wgs84: bool) -> String {
+    use bimble_core::georef::{LV95, Target};
+    if wgs84 && let Some(([lat, lon, h], _)) = g.in_system(world_mm, Target::Wgs84) {
+        let ns = if lat >= 0.0 { "N" } else { "S" };
+        let ew = if lon >= 0.0 { "E" } else { "W" };
+        return format!(
+            "{:.6}° {ns}, {:.6}° {ew} · {} m (WGS84)",
+            lat.abs(),
+            lon.abs(),
+            swiss(h, 2)
+        );
+    }
+    let s = g.survey(world_mm);
+    let height = format!("{} m", swiss(s[2], 2));
+    match g.crs.as_deref() {
+        Some(LV95) => format!(
+            "E {} N {} · {height} (LV95)",
+            swiss(s[0], 2),
+            swiss(s[1], 2)
+        ),
+        Some(crs) => format!(
+            "E {} N {} · {height} ({crs})",
+            swiss(s[0], 2),
+            swiss(s[1], 2)
+        ),
+        None => format!("x {} y {} · {height}", swiss(s[0], 3), swiss(s[1], 3)),
+    }
+}
+
+fn swiss(x: f64, decimals: usize) -> String {
+    let t = format!("{:.*}", decimals, x.abs());
+    let (int, frac) = t.split_once('.').unwrap_or((&t, ""));
+    let mut out = String::new();
+    for (i, c) in int.chars().enumerate() {
+        if i > 0 && (int.len() - i) % 3 == 0 {
+            out.push('\'');
+        }
+        out.push(c);
+    }
+    let sign = if x < 0.0 && t.chars().any(|c| c.is_ascii_digit() && c != '0') {
+        "-"
+    } else {
+        ""
+    };
+    if frac.is_empty() {
+        format!("{sign}{out}")
+    } else {
+        format!("{sign}{out}.{frac}")
+    }
+}
+
+/// Twelve world points (mm), moved by `at` (a model drawn in survey coordinates).
+fn geo_points(at: [f64; 2]) -> Vec<[f64; 3]> {
+    [
+        [0.0, 0.0, 0.0],
+        [12_345.6, -6_789.0, 3_000.0],
+        [-50_000.0, 25_000.0, -1_500.0],
+        [1e6, 1e6, 0.0],
+        [-123_456.789, 98_765.432_1, 432_100.0],
+        [0.5, -0.5, 0.004],
+        [250_000.0, -180_000.0, 10_000.0],
+        [-0.001, 0.001, -0.001],
+        [99_999.995, 0.0, 0.0],
+        [5e6, -5e6, 0.0],
+        [-2e5, -3e5, 2e5],
+        [777.777, 888.888, 999.999],
+    ]
+    .iter()
+    .map(|p| [p[0] + at[0], p[1] + at[1], p[2]])
+    .collect()
+}
+
+/// `geo/<name>.coords.txt`: the georeference, project north, and per point its survey
+/// coordinates, the status bar's two texts, WGS84 by PROJ (9 decimals: a C build matches it within
+/// 2e-9 degrees, `geo/README` in golden/README.md) and by swisstopo's formulas.
+fn geo_coords(m: &Model, at: [f64; 2]) -> String {
+    use bimble_core::georef::Target;
+    let g = &m.georef;
+    let mut s = String::new();
+    writeln!(s, "georef {}", serde_json::to_string(g).unwrap()).unwrap();
+    writeln!(
+        s,
+        "north rotation_deg {} map_rotation_deg {} plan_turn {} {} has_map {}",
+        hex64(g.rotation_deg),
+        hex64(g.map_rotation_deg),
+        hex64(g.plan_turn(false)),
+        hex64(g.plan_turn(true)),
+        g.has_map()
+    )
+    .unwrap();
+    let (rot, off) = g.survey_plan_to_world();
+    writeln!(
+        s,
+        "survey_plan_to_world {} {} {}",
+        hex64(rot),
+        hex64(off[0]),
+        hex64(off[1])
+    )
+    .unwrap();
+    for p in geo_points(at) {
+        writeln!(s, "point {:?} {:?} {:?}", p[0], p[1], p[2]).unwrap();
+        let v = g.survey(p);
+        writeln!(s, "survey {} {} {}", hex64(v[0]), hex64(v[1]), hex64(v[2])).unwrap();
+        writeln!(s, "text {}", coords_text(g, p, false)).unwrap();
+        writeln!(s, "text_wgs84 {}", coords_text(g, p, true)).unwrap();
+        match g.in_system(p, Target::Wgs84) {
+            Some(([lat, lon, _], _)) => writeln!(s, "wgs84 {lat:.9} {lon:.9}").unwrap(),
+            None => writeln!(s, "wgs84 none").unwrap(),
+        }
+        match g.wgs84(p) {
+            Some([lat, lon]) => writeln!(s, "approx {lat:.9} {lon:.9}").unwrap(),
+            None => writeln!(s, "approx none").unwrap(),
+        }
+    }
+    s
+}
+
+fn geo_files(frame: &Model, files: &mut Files) {
+    use bimble_geom::viewfile;
+    for (name, m) in geo_models(frame) {
+        let text = file::to_string(&m);
+        let back = file::from_str(&text).expect("geo model loads");
+        assert_eq!(file::to_string(&back), text, "{name}: load + save");
+        files.insert(format!("geo/{name}.json"), text.into_bytes());
+        let mut bin = Files::new();
+        bin_files(&m, name, &mut bin);
+        for (k, v) in bin {
+            files.insert(k.replace("bin/", "geo/"), v);
+        }
+        let ifc4 = mask_version(&bimble_ifc::export_as(
+            &m,
+            &format!("{name}.ifc"),
+            IFC_TIMESTAMP,
+            bimble_ifc::Schema::Ifc4,
+        ));
+        let ifc2x3 = mask_version(&bimble_ifc::export_as(
+            &m,
+            &format!("{name}.ifc2x3.ifc"),
+            IFC_TIMESTAMP,
+            bimble_ifc::Schema::Ifc2x3,
+        ));
+        files.insert(format!("geo/{name}.ifc"), ifc4.clone().into_bytes());
+        files.insert(
+            format!("geo/{name}.ifc2x3.ifc"),
+            ifc2x3.clone().into_bytes(),
+        );
+        for (n, t) in [
+            (name.to_string(), &ifc4),
+            (format!("{name}.ifc2x3"), &ifc2x3),
+        ] {
+            let mut tmp = Files::new();
+            import_files(&n, t, &mut tmp);
+            read_files(&n, t, &mut tmp);
+            for (k, v) in tmp {
+                if let Some(r) = k.strip_prefix("ifc/import/") {
+                    files.insert(format!("geo/import/{r}"), v);
+                } else if let Some(r) = k.strip_prefix("ifc/read/")
+                    && r.ends_with("/scene.txt")
+                {
+                    files.insert(format!("geo/read/{r}"), v);
+                }
+            }
+        }
+        let scene = Scene::from_model(&m);
+        files.insert(
+            format!("geo/{name}.bimbleview.raw"),
+            viewfile::write(&scene, false),
+        );
+        let at = if name == "survey" {
+            [2_600_000_000.0, 1_200_000_000.0]
+        } else {
+            [0.0, 0.0]
+        };
+        files.insert(
+            format!("geo/{name}.coords.txt"),
+            geo_coords(&m, at).into_bytes(),
         );
     }
 }

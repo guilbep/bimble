@@ -7,7 +7,9 @@
  * last of duplicate keys wins), then derives the argument struct from it. Errors therefore
  * come in sorted key order; the texts below are serde's and serde_json's. */
 #include "query.h"
+#pragma STDC FP_CONTRACT OFF /* a*b+c rounds twice, as in Rust */
 #include "grid.h"
+#include "georef.h"
 #include <stdint.h>
 #include <string.h>
 #include "arena.h"
@@ -768,6 +770,99 @@ static int verb_query(const char *name, const char *args_json, size_t n, Buf *ou
 
 static int is_ws(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
+/* ---- georeference (ADR 0045, C additions) ---- */
+
+/* north: project north and the map's turn, for the viewport and the view cube. */
+static void q_north(const cc_model *m, JsonW *w) {
+    const cc_georef *g = &m->georef;
+    jw_obj_begin(w);
+    jw_key(w, "crs");
+    if (g->has_crs) jw_str_n(w, g->crs.n ? g->crs.p : "", g->crs.n);
+    else jw_null(w);
+    jw_key(w, "has_map"), jw_bool(w, cc_georef_has_map(g));
+    jw_key(w, "map_rotation_deg"), jw_f64(w, g->map_rotation_deg);
+    jw_key(w, "plan_turn_project"), jw_f64(w, cc_georef_plan_turn(g, 0));
+    jw_key(w, "plan_turn_true"), jw_f64(w, cc_georef_plan_turn(g, 1));
+    jw_key(w, "rotation_deg"), jw_f64(w, g->rotation_deg);
+    jw_obj_end(w);
+}
+
+/* coordinates {at: [x, y, z] (world mm), system: "survey" (default) | "wgs84" | "utm" |
+ * "epsg:<n>"}: the status bar's text of the point (bimble-viewer coords.rs), its survey
+ * coordinates (m) and WGS84 latitude and longitude (degrees, null when the model's system is not
+ * LV95). 400 when the system cannot be said by the C core (georef.h). */
+static int q_coordinates(const cc_model *m, const JrVal *args, JsonW *w, Buf *e) {
+    const JrVal *at = NULL, *sys = NULL;
+    for (size_t k = 0; k < args->n; k++) {
+        const JrMember *mb = &args->members[k];
+        if (jr_key_is(mb, "at")) at = &mb->val;
+        else if (jr_key_is(mb, "system")) sys = &mb->val;
+        else {
+            buf_puts(e, "unknown field `");
+            buf_append(e, mb->key, mb->key_n < 200 ? mb->key_n : 200);
+            buf_puts(e, "`, expected `at` or `system`");
+            return -1;
+        }
+    }
+    double p[3];
+    if (!at || at->type != JR_ARR || at->n != 3) {
+        buf_puts(e, "`at`: [x, y, z], world mm");
+        return -1;
+    }
+    for (int k = 0; k < 3; k++) {
+        if (at->items[k].type != JR_NUM || at->items[k].num - at->items[k].num != 0.0) {
+            buf_puts(e, "`at`: [x, y, z], world mm");
+            return -1;
+        }
+        p[k] = at->items[k].num;
+    }
+    cc_coords_target t = CC_COORDS_SURVEY;
+    int code = 0;
+    if (sys && sys->type != JR_NULL) {
+        if (sys->type != JR_STR) {
+            buf_puts(e, "`system`: \"survey\", \"wgs84\", \"utm\" or \"epsg:<n>\"");
+            return -1;
+        }
+        if (sys->n == 6 && !memcmp(sys->s, "survey", 6)) t = CC_COORDS_SURVEY;
+        else if (sys->n == 5 && !memcmp(sys->s, "wgs84", 5)) t = CC_COORDS_WGS84;
+        else if (sys->n == 3 && !memcmp(sys->s, "utm", 3)) t = CC_COORDS_UTM;
+        else if (sys->n > 5 && sys->n < 11 && !memcmp(sys->s, "epsg:", 5)) {
+            t = CC_COORDS_EPSG;
+            for (size_t k = 5; k < sys->n; k++) {
+                if (sys->s[k] < '0' || sys->s[k] > '9') {
+                    buf_puts(e, "`system`: \"epsg:<n>\", n a number");
+                    return -1;
+                }
+                code = code * 10 + (sys->s[k] - '0');
+            }
+        } else {
+            buf_puts(e, "`system`: \"survey\", \"wgs84\", \"utm\" or \"epsg:<n>\"");
+            return -1;
+        }
+    }
+    Buf text;
+    buf_init(&text);
+    if (cc_georef_text(&text, &m->georef, p, t, code)) {
+        buf_append(e, text.p, text.len);
+        buf_free(&text);
+        return -1;
+    }
+    double sv[3], ll[2];
+    cc_georef_survey(&m->georef, p, sv);
+    int has_ll = m->georef.has_crs && m->georef.crs.n == 9 && !memcmp(m->georef.crs.p, CC_LV95, 9) &&
+                 !cc_lv95_to_wgs84(sv[0], sv[1], &ll[0], &ll[1]);
+    jw_obj_begin(w);
+    jw_key(w, "survey"), jw_arr_begin(w), jw_f64(w, sv[0]), jw_f64(w, sv[1]), jw_f64(w, sv[2]), jw_arr_end(w);
+    jw_key(w, "text"), jw_str_n(w, text.p ? text.p : "", text.len);
+    jw_key(w, "wgs84");
+    if (has_ll) jw_arr_begin(w), jw_f64(w, ll[0]), jw_f64(w, ll[1]), jw_arr_end(w);
+    else jw_null(w);
+    jw_key(w, "world_mm"), jw_arr_begin(w), jw_f64(w, p[0]), jw_f64(w, p[1]), jw_f64(w, p[2]), jw_arr_end(w);
+    jw_obj_end(w);
+    buf_free(&text);
+    return 0;
+}
+
 static const char KNOWN[] = "storeys, materials, elements, element, project, views, sheets, schedules";
 
 int cc_query(const cc_model *m, const char *name, const char *args_json, size_t n, Buf *out) {
@@ -795,12 +890,14 @@ int cc_query(const cc_model *m, const char *name, const char *args_json, size_t 
         goto done;
     }
     /* "grids" (ADR 0056) is a C addition: past Rust's eight, so the unknown query text stays Rust's. */
-    enum { Q_STOREYS, Q_MATERIALS, Q_ELEMENTS, Q_ELEMENT, Q_PROJECT, Q_VIEWS, Q_SHEETS, Q_SCHEDULES, Q_GRIDS } q;
-    static const char *const NAMES[] = {"storeys", "materials", "elements", "element", "project",
-                                        "views",   "sheets",    "schedules", "grids"};
-    for (q = 0; q < 9 && (strlen(name) != strlen(NAMES[q]) || memcmp(name, NAMES[q], strlen(name)) != 0); q++) {
+    /* "north" and "coordinates" (ADR 0045) likewise. */
+    enum { Q_STOREYS, Q_MATERIALS, Q_ELEMENTS, Q_ELEMENT, Q_PROJECT, Q_VIEWS, Q_SHEETS, Q_SCHEDULES, Q_GRIDS, Q_NORTH,
+           Q_COORDINATES } q;
+    static const char *const NAMES[] = {"storeys", "materials", "elements", "element", "project", "views",
+                                        "sheets",  "schedules", "grids",    "north",   "coordinates"};
+    for (q = 0; q < 11 && (strlen(name) != strlen(NAMES[q]) || memcmp(name, NAMES[q], strlen(name)) != 0); q++) {
     }
-    if (q == 9) {
+    if (q == 11) {
         buf_puts(out, "unknown query ");
         cc_buf_debug_str(out, name, strlen(name));
         buf_puts(out, "; known: ");
@@ -829,6 +926,7 @@ int cc_query(const cc_model *m, const char *name, const char *args_json, size_t 
     int bad;
     if (q == Q_ELEMENTS) bad = parse_filter(&a, &e, args, &f, &oom);
     else if (q == Q_ELEMENT) bad = parse_id(&a, &e, args, &id, &oom);
+    else if (q == Q_COORDINATES) bad = args->type == JR_OBJ ? 0 : (buf_puts(&e, "expected an object"), 1);
     else bad = parse_noargs(&a, &e, args, &oom);
     if (oom) goto done;
     if (bad) {
@@ -847,7 +945,15 @@ int cc_query(const cc_model *m, const char *name, const char *args_json, size_t 
 
     JsonW w;
     jw_init(&w, out, 0);
+    if (q == Q_COORDINATES && q_coordinates(m, args, &w, &e)) {
+        out->len = start;
+        buf_puts(out, "bad arguments: ");
+        buf_append(out, e.p, e.len);
+        goto done;
+    }
     switch (q) {
+    case Q_COORDINATES: break;
+    case Q_NORTH: q_north(m, &w); break;
     case Q_STOREYS: oom = q_storeys(m, &a, &w) != 0; break;
     case Q_MATERIALS: oom = q_materials(m, &a, &w) != 0; break;
     case Q_ELEMENTS: q_elements(m, &f, &w); break;

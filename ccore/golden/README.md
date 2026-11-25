@@ -330,7 +330,7 @@ sections, each: [u8; 4] kind, u64 payload length, payload
         grids: varint n, (str tag, f64 × 4 start x y, end x y) × n
         densities: varint n, (str material, f64) × n
         warnings: varint n, str × n
-  GEOR  str: Scene::georef as JSON; only when not the default (absent here)
+  GEOR  str: Scene::georef as JSON; only when not the default (absent here; see geo/)
   ELEM  (repeated) varint n, (varint length, codec mesh) × n: the shared shapes first used in
         this chunk, numbered on from the previous chunks; then varint m, elements × m:
         str GlobalId, str name, varint class, storey, material, family (indices into META's table)
@@ -360,6 +360,34 @@ normals: varint n, i8 × 3 × n (the distinct ones, first use order); then one v
 
 A mesh is raw when a coordinate is not finite, it spans over 2^32 steps, or a vertex would come
 back more than 0.05 mm away.
+
+## geo/ (georeference, ADR 0045)
+
+Three synthetic models made from `frame.json` by `geo_models` in the dumper:
+- `geo`: `georef` {rotation_deg 12.5, crs "EPSG:2056", east_m 2600123.456, north_m 1199876.5,
+  height_m 432.1, map_rotation_deg -3.25}: an IFC4 map conversion to LV95 and a turned building;
+- `turned`: {rotation_deg 30} only, no survey system;
+- `survey`: every element moved by (2 600 000 000, 1 200 000 000) mm, {rotation_deg -20, crs
+  "EPSG:2056"}: a model drawn in LV95 coordinates, as Revit exports are.
+
+Per model `<name>`:
+- `<name>.json`, `<name>.bimble`, `<name>.cbor`: the text (v1), the binary file and its CBOR (v2),
+  as `bin/`;
+- `<name>.ifc`, `<name>.ifc2x3.ifc`: `export_as` IFC4 and IFC2x3, version masked as `ifc/`;
+- `import/<name>[.ifc2x3].json`, `.report.txt`: `import_str` of each export, masked as
+  `ifc/import/`;
+- `read/<name>[.ifc2x3]/scene.txt`: `read_str` of each export, the `ifc/read/` scene text only
+  (no per-element meshes: `ifc/read/frame/` has them);
+- `<name>.bimbleview.raw`: `viewfile::write(Scene::from_model(m), false)`, with its GEOR section;
+- `<name>.coords.txt`: `georef <serde_json>`, then `north rotation_deg <hex> map_rotation_deg <hex>
+  plan_turn <project hex> <true hex> has_map <bool>`, `survey_plan_to_world <deg hex> <x hex>
+  <y hex>`, then for twelve world points (mm; moved by the survey offset for `survey`):
+  `point <x> <y> <z>` (Rust `{:?}`), `survey <hex × 3>` (`Georef::survey`, m), `text <…>` and
+  `text_wgs84 <…>` (the status bar's text, a copy of bimble-viewer `coords::text` in the dumper:
+  the survey system, then WGS84), `wgs84 <lat> <lon>` (`in_system(Wgs84)`, proj4rs, `{:.9}`, or
+  `none`) and `approx <lat> <lon>` (`Georef::wgs84`, swisstopo's formulas, `{:.9}`, or `none`).
+  Hex values are f64 bits. The C core matches everything byte for byte except `wgs84`, compared
+  within 2e-9 degrees (DEVIATIONS.md 5: its own exp, log, tan, asin; measured 4.4e-10).
 
 ## schedule/ (quantities and schedule tables)
 

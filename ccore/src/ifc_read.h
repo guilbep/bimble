@@ -38,11 +38,7 @@ typedef struct { /* bimble_geom::GridAxis: plan, world mm */
     double start_mm[2], end_mm[2];
 } cc_ifc_grid;
 
-typedef struct { /* bimble_core::georef::Georef */
-    double rotation_deg, east_m, north_m, height_m, map_rotation_deg;
-    int has_crs;
-    cc_str crs;
-} cc_ifc_georef;
+typedef cc_georef cc_ifc_georef; /* bimble_core::georef::Georef (model.h, georef.h) */
 
 typedef struct { /* ElementInfo of a scene element (SceneElement's text fields) */
     cc_str global_id; /* the file's text as is (not checked) */

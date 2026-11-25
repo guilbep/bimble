@@ -1,0 +1,5 @@
+72 elements (72 parametric, 0 extruded polygons, 0 meshes)
+  IfcBeam: 34
+  IfcColumn: 24
+  IfcFooting: 12
+  IfcSlab: 2

@@ -4,8 +4,9 @@
  *   them; ignored fields are lost on save, as in Rust;
  * - a duplicate struct field is an error ("duplicate field `x`"); a duplicate map key keeps the
  *   last value (BTreeMap insert);
- * - sections Rust knows and the C core does not hold (georef, mesh arrays by hash) are refused
- *   when non-empty, never dropped. Openings are kept (data only: the C scene does not cut them
+ * - sections Rust knows and the C core does not hold (mesh arrays by hash) are refused, never
+ *   dropped. The georeference (ADR 0045, georef.h) is held: key "georef", left out when the
+ *   default. Openings are kept (data only: the C scene does not cut them
  *   yet). Views, sheets and schedules are held (view.h). Relations (ADR 0070, relation.h) are the
  *   C core's own section "relations", left out when empty: Rust ignores it (no oracle). Grids and
  *   levels that are not storeys (ADR 0056, grid.h) likewise: section "grids" and the storey key
@@ -18,6 +19,7 @@
 #include <string.h>
 #include "cbor.h"
 #include "fmt.h"
+#include "georef.h"
 #include "grid.h"
 #include "inflate.h"
 #include "json_r.h"
@@ -619,13 +621,6 @@ static int fn_grid(D *d, const JrVal *v, void *o) {
     return vd_done(d, &vd, cc_vd_grid(&vd, v, NULL, o));
 }
 
-static int unsupported_if(D *d, const JrVal *v, int is_obj, const char *what) {
-    if (!v) return 0;
-    if (v->type != (is_obj ? JR_OBJ : JR_ARR)) return type_err(d, v, is_obj ? "a map" : "a sequence");
-    if (v->n) return dfail(d, v->off, "unsupported by the C core: ", what, " (use the Rust core)");
-    return 0;
-}
-
 typedef struct {
     cc_gid *skeys, *mkeys, *ekeys, *vkeys, *shkeys, *rkeys, *gkeys;
 } Keys;
@@ -659,7 +654,11 @@ static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
         cc_vd_init(&vd, d->a);
         if (vd_done(d, &vd, cc_vd_schedules(&vd, f[8], &m->schedules, &m->nschedules))) return -1;
     }
-    if (unsupported_if(d, f[9], 1, "georef")) return -1;
+    if (f[9]) {
+        cc_vd vd;
+        cc_vd_init(&vd, d->a);
+        if (vd_done(d, &vd, cc_vd_georef(&vd, f[9], NULL, &m->georef))) return -1;
+    }
     if (f[10]) {
         if (d_idmap(d, f[10], "a map", sizeof(cc_relation), fn_relation, &p, &m->nrelations, &keys->rkeys)) return -1;
         m->relations = p;
@@ -980,6 +979,7 @@ int cc_model_save(const cc_model *m, Buf *b) {
     }
     if (m->nproject) jw_key(&w, "project"), w_kvs(&w, m->project, m->nproject);
     if (m->nschedules) jw_key(&w, "schedules"), cc_em_schedules(&em, m->schedules, m->nschedules);
+    if (!cc_georef_is_default(&m->georef)) jw_key(&w, "georef"), cc_em_georef(&em, &m->georef);
     if (m->nrelations) {
         jw_key(&w, "relations");
         jw_obj_begin(&w);
@@ -1160,7 +1160,8 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
         }
         c_key(b, "model");
         cb_head(b, CB_MAP, 5 + (m->nviews ? 1 : 0) + (m->nsheets ? 1 : 0) + (m->nproject ? 1 : 0) +
-                               (m->nschedules ? 1 : 0) + (m->nrelations ? 1 : 0) + (m->ngrids ? 1 : 0));
+                               (m->nschedules ? 1 : 0) + (cc_georef_is_default(&m->georef) ? 0 : 1) +
+                               (m->nrelations ? 1 : 0) + (m->ngrids ? 1 : 0));
         c_key(b, "project_id"), c_gid(b, &m->project_id);
         c_key(b, "project_name"), c_str(b, m->project_name);
         c_key(b, "storeys");
@@ -1253,6 +1254,7 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
         }
         if (m->nproject) c_key(b, "project"), c_kvs(b, m->project, m->nproject);
         if (m->nschedules) c_key(b, "schedules"), cc_em_schedules(&em, m->schedules, m->nschedules);
+        if (!cc_georef_is_default(&m->georef)) c_key(b, "georef"), cc_em_georef(&em, &m->georef);
         if (m->nrelations) {
             c_key(b, "relations");
             cb_head(b, CB_MAP, m->nrelations);
