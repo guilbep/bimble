@@ -196,12 +196,13 @@ static int64_t quant(float c) {
     return (int64_t)r;
 }
 
-static int crease_edges(cc_mesh *m, Arena *a) {
+/* The edges and normals go to `a`; the working memory to `scratch`. */
+static int crease_edges(cc_mesh *m, Arena *a, Arena *scratch) {
     float cos_limit = cos_20_deg();
     uint32_t nt = m->ni / 3, nu = 0;
-    EdgeUse *uses = arena_alloc(a, (size_t)(3 * nt + 1) * sizeof(EdgeUse), 8);
+    EdgeUse *uses = arena_alloc(scratch, (size_t)(3 * nt + 1) * sizeof(EdgeUse), 8);
     Tab tab;
-    if (!uses || tab_init(&tab, a, 3 * (size_t)nt)) return -1;
+    if (!uses || tab_init(&tab, scratch, 3 * (size_t)nt)) return -1;
     for (uint32_t t = 0; t < nt; t++) {
         const uint32_t *tr = &m->idx[3 * t];
         const float *a0 = m->pos[tr[0]], *b0 = m->pos[tr[1]], *c0 = m->pos[tr[2]];
@@ -251,7 +252,7 @@ static int crease_edges(cc_mesh *m, Arena *a) {
         }
     }
     /* Keep boundary and crease edges, then sort (stable merge sort, like sort_by). */
-    uint32_t *ord = arena_alloc(a, (size_t)(2 * nu + 1) * sizeof(uint32_t), 4), n = 0;
+    uint32_t *ord = arena_alloc(scratch, (size_t)(2 * nu + 1) * sizeof(uint32_t), 4), n = 0;
     if (!ord) return -1;
     for (uint32_t i = 0; i < nu; i++)
         if (uses[i].count == 1 || uses[i].crease) ord[n++] = i;
@@ -593,13 +594,14 @@ static int to_world(const cc_mesh *l, const cc_placement *pl, double elevation, 
 }
 
 /* MeshBuilder::build: drop degenerate triangles, positions relative to the origin as f32,
- * weld by f32 bits, crease edges. */
-static int build_mesh(const World *w, const double origin[3], Arena *a, cc_mesh *m) {
+ * weld by f32 bits, crease edges. The mesh goes to `a` (positions at their welded count); the
+ * working memory to `scratch`, which the caller resets per element. */
+static int build_mesh(const World *w, const double origin[3], Arena *a, Arena *scratch, cc_mesh *m) {
     memset(m, 0, sizeof *m);
-    m->pos = arena_alloc(a, (3 * (size_t)w->ntris + 1) * sizeof m->pos[0], 4);
+    m->pos = arena_alloc(scratch, (3 * (size_t)w->ntris + 1) * sizeof m->pos[0], 4);
     m->idx = arena_alloc(a, (3 * (size_t)w->ntris + 1) * sizeof(uint32_t), 4);
     Tab tab;
-    if (!m->pos || !m->idx || tab_init(&tab, a, 3 * (size_t)w->ntris)) return -1;
+    if (!m->pos || !m->idx || tab_init(&tab, scratch, 3 * (size_t)w->ntris)) return -1;
     for (uint32_t i = 0; i < w->ntris; i++) {
         double (*t)[3] = w->tris[i];
         double u[3], v[3];
@@ -614,7 +616,9 @@ static int build_mesh(const World *w, const double origin[3], Arena *a, cc_mesh 
             m->idx[m->ni++] = (uint32_t)at;
         }
     }
-    return crease_edges(m, a);
+    m->pos = arena_dup(a, m->pos, ((size_t)m->nv + 1) * sizeof m->pos[0]);
+    if (!m->pos) return -1;
+    return crease_edges(m, a, scratch);
 }
 
 /* ---- dedup.rs share_copies ---- */
@@ -1008,12 +1012,13 @@ static int fail(cc_error *err, const char *a, const char *b, const char *c) {
     return -1;
 }
 
-int cc_scene_build(cc_scene *s, const cc_model *m, cc_error *err) {
-    memset(s, 0, sizeof *s);
-    arena_init(&s->arena, 0);
+/* The scene's arena keeps only the scene. The per-element working memory (local mesh, weld and
+ * edge tables) lives in `scratch`, reset per element, and the world triangles in `wa`, until the
+ * meshes are built: before, both stayed in the scene's arena, ~10 KB per element (T16). */
+static int scene_build(cc_scene *s, const cc_model *m, cc_error *err, Arena *scratch, Arena *wa) {
     Arena *a = &s->arena;
     size_t n = m->nelements;
-    World *w = arena_alloc(a, (n + 1) * sizeof *w, 8);
+    World *w = arena_alloc(wa, (n + 1) * sizeof *w, 8);
     s->elements = arena_alloc(a, (n + 1) * sizeof *s->elements, 8);
     s->warnings = arena_alloc(a, (n + 1) * sizeof *s->warnings, 8);
     if (!w || !s->elements || !s->warnings) return fail(err, "out of memory", "", "");
@@ -1026,7 +1031,8 @@ int cc_scene_build(cc_scene *s, const cc_model *m, cc_error *err) {
         memset(&l, 0, sizeof l);
         Buf why;
         buf_init(&why);
-        int rc = local_mesh(e, a, &l, &why);
+        arena_reset(scratch);
+        int rc = local_mesh(e, scratch, &l, &why);
         if (rc == LIMIT) {
             buf_free(&why);
             Buf t;
@@ -1062,7 +1068,7 @@ int cc_scene_build(cc_scene *s, const cc_model *m, cc_error *err) {
             continue;
         }
         buf_free(&why);
-        if (to_world(&l, &e->placement, st->elevation, a, &w[i])) return fail(err, "out of memory", "", "");
+        if (to_world(&l, &e->placement, st->elevation, wa, &w[i])) return fail(err, "out of memory", "", "");
     }
     /* SceneBuilder::finish: the origin is the middle of the world box, rounded to mm. */
     double lo[3] = {1.0 / 0.0, 1.0 / 0.0, 1.0 / 0.0}, hi[3] = {-1.0 / 0.0, -1.0 / 0.0, -1.0 / 0.0};
@@ -1075,7 +1081,8 @@ int cc_scene_build(cc_scene *s, const cc_model *m, cc_error *err) {
         if (!w[i].ntris) continue; /* push: no triangles, no element */
         const cc_element *e = &m->elements[i];
         cc_scene_element *se = &s->elements[s->nelements];
-        if (build_mesh(&w[i], s->origin, a, &se->mesh)) return fail(err, "out of memory", "", "");
+        arena_reset(scratch);
+        if (build_mesh(&w[i], s->origin, a, scratch, &se->mesh)) return fail(err, "out of memory", "", "");
         if (!se->mesh.ni) continue; /* all degenerate */
         se->id = e->id;
         se->cls = e->cls;
@@ -1088,6 +1095,16 @@ int cc_scene_build(cc_scene *s, const cc_model *m, cc_error *err) {
     }
     if (share_copies(s)) return fail(err, "out of memory", "", "");
     return 0;
+}
+
+int cc_scene_build(cc_scene *s, const cc_model *m, cc_error *err) {
+    memset(s, 0, sizeof *s);
+    arena_init(&s->arena, 0);
+    Arena scratch, wa;
+    arena_init(&scratch, 0), arena_init(&wa, 0);
+    int rc = scene_build(s, m, err, &scratch, &wa);
+    arena_free(&scratch), arena_free(&wa);
+    return rc;
 }
 
 void cc_scene_free(cc_scene *s) {
