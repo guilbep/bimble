@@ -1,9 +1,10 @@
 # ccore
 
-ccore is an experiment: a small C core behind the lab's `Wasm` interface, built with tcc in the
-edit loop (builds in tens of milliseconds) and with clang for release and wasm32. The Rust crates
-stay the oracle: C output must match Rust byte for byte. The plan and the tickets are in
-`docs/research/c-core-spec.md`.
+ccore is Bimble's core (ADR 0067–0069, 0072): a small C core behind the lab's `Wasm` interface,
+built with tcc in the edit loop (builds in tens of milliseconds) and with clang for release and
+wasm32. Rust v0.19.0 is the frozen oracle: C output matches the references it wrote
+(`golden/`) byte for byte, and the Rust sources are on the branch `oracle/rust`, not on `main`.
+The first plan and tickets are in `docs/research/c-core-spec.md`; the commands in `../DEV.md`.
 
 Today it holds the base every later slice uses: an arena, a growable byte buffer, a JSON writer
 (keys in the caller's order, compact or pretty like `serde_json::to_string_pretty`) and two exact
@@ -97,10 +98,10 @@ macOS (ticket MAC1): clang only. The scripts run under macOS's own bash 3.2 and 
 has no `wasm-ld`) and `dev.sh` (`inotifywait`, `setsid`) are not ported: the edit loop and the wasm
 builds stay on Linux. The lab tests take their browser from `CHROMIUM` (`test/ports.mjs`).
 
-Regenerate the goldens (a standalone Rust crate, not in the workspace; it pins the repo's
-serde_json version). Commit the changed `.txt` files:
-
-    cd ccore/golden/floats && CARGO_TARGET_DIR=../../out/cargo cargo run -j 2
+The float goldens (`golden/floats/*.txt`) were written by a standalone Rust crate that pins the
+Rust release's serde_json version. It is on the branch `oracle/rust` (`ccore/golden/floats/`): to
+regenerate, run `CARGO_TARGET_DIR=../../out/cargo cargo run -j 2` there and commit the changed
+`.txt` files here.
 
 ## Release
 
@@ -135,8 +136,8 @@ and on macOS 15, arm64 and x86_64 (Rosetta 2 runs the Intel one's test), on a ma
 `ccore-prerelease` attaches them and their `SHA256SUMS` to a GitHub prerelease and prints the
 Homebrew formula of that release (`ci/formula.sh <version> SHA256SUMS`), to commit on `main` as
 `Formula/bimble-ccore.rb` (`brew tap guilbep/bimble https://github.com/guilbep/bimble && brew
-install bimble-ccore`). Never a tag `v*`: that prefix starts the Rust release, the Pages
-deployment and `Formula/bimble.rb`.
+install bimble-ccore`). Never a tag `v*`: that prefix is the Rust releases' (v0.19.0, the site root
+of GitHub Pages and `Formula/bimble.rb`). The steps: `docs/RELEASING.md`.
 
 ## MCP over stdio
 
@@ -152,7 +153,8 @@ Claude Code: `claude mcp add bimble -- <repo>/ccore/out/tcc/bimble-ccore mcp <mo
 ## Comparing with Rust on any IFC file
 
 `build.sh native` (and `tcc`) also builds `out/<mode>/ifc_dump` (`tools/ifc_dump.c`), the C twin of
-the golden dumper's dump modes. Same files in both output folders, nothing masked:
+the golden dumper's dump modes. Same files in both output folders, nothing masked. The `cargo`
+lines run in a worktree of the branch `oracle/rust` (Rust is not on `main`, ADR 0072):
 
     cargo run --release -p bimble-api --example ccore_golden -- --dump-read <in.ifc> <rust-dir>
     ccore/out/native/ifc_dump read <in.ifc> <c-dir>          # scene.txt, meshes.txt, time.txt
@@ -210,7 +212,7 @@ lab at the site root. `npm run build:ccore` in `web-ui/` builds both wasm module
 the demo frame, and runs `vite build --base ./` with `VITE_CCORE=1`: the page starts on the C core
 without parameters (`ccore=1&gl=1`), `?view=1` loads `ccore-view.wasm` (a verb answers "this build is
 view-only"), and the status bar shows "Preview, C core <commit>". The wasm has no boolean kernel, so
-openings are drawn uncut. `pages.yml` (on `main`) builds it in every deployment, from the branch
-`rewrite/c-core` unless the input `ccore_ref` names another; a failed C build leaves the Rust site
-published without `c/`. Checked by `node test/lab_pages.mjs`: the build served from a sub-path, place
+openings are drawn uncut. `pages.yml` builds it in every deployment, from `main` unless the input
+`ccore_ref` names another; a failed C build leaves the root (the v0.19.0 lab) published without
+`c/`. Checked by `node test/lab_pages.mjs`: the build served from a sub-path, place
 and undo, the viewer-only build, and no request outside `/c/`.

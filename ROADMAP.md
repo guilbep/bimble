@@ -3,6 +3,21 @@
 _5 Nov 2026. Supersedes v0 (Python / IFC-file-as-native). Sources: the Bimble PRD/RFC and the
 "Feuille de route – Logiciel BIM structurel open source" (v0.1)._
 
+## 0. State (25 Nov 2026)
+
+- **Bimble is a C core behind the Vue lab** (ADR 0067–0069). `main` holds no Rust since ADR 0072:
+  the last Rust release, v0.19.0, is the frozen oracle (tag `v0.19.0`, branch `oracle/rust`); the
+  C suites check its committed references (`ccore/golden/`). Sections 2 and 4 below describe the
+  Rust era, which shipped as v0.1–v0.19.
+- **Where the port stands:** `ccore/results/parity.md` (actions, queries, shortcuts against the
+  Rust app), `ifc_corpus.md` (617 public IFC files), `weight.md`, `perf.md`, `bench.md`. Releases:
+  `ccore-v0.1.0-preview.2` (Linux, macOS); the C lab on <https://guilbep.github.io/bimble/c/>.
+- **Next:** `docs/research/round-4.md`. Waves A and B (the shell as a state machine, files from
+  the desktop UI, levels and grids, size review, nothing fake, shortcuts) and PAPER1 are merged;
+  SET1 and SEC1 are in progress; then materials, polygon slabs and openings in wasm, links,
+  graphic standards, assemblies, and history and collaboration (waves C–E).
+- **How we work on it:** `DEV.md` (the loop, the gate, how to add things) and `CLAUDE.md`.
+
 ## 1. Product principles
 
 1. **Fast on old machines.** Architects and engineers often have old laptops with weak GPUs. 3D must stay
@@ -25,7 +40,8 @@ _5 Nov 2026. Supersedes v0 (Python / IFC-file-as-native). Sources: the Bimble PR
    does is unchecked or irreversible (ADR 0048).
 9. **The online viewer stays first-class.** Today Bimble is mostly used to view IFC exports (Tekla,
    Revit) in the browser. Free viewing removes the barrier to adoption (`.bimbleview`, the web page).
-   Every release keeps the viewer fast: performance budgets in `web-ui/perf/` (the `perf` workflow).
+   Every release keeps the viewer fast: `ccore/tools/perf.mjs` measures the lab's production build
+   (`ccore/results/perf.md`; `ccore/ci/run.sh lab` runs its short mode).
 
 **Ideas, 20 Nov 2026, not planned yet** (Pierre):
 - Markup and edits on the PDF itself, like Bluebeam: change a dimension on the drawing.
@@ -36,6 +52,14 @@ _5 Nov 2026. Supersedes v0 (Python / IFC-file-as-native). Sources: the Bimble PR
 - A printed scale model: `bimble print` (docs/research/2026-11-20-3d-printing.md).
 
 ## 2. Stack
+
+**Since 25 Nov 2026** (ADR 0067–0069, 0072): the core is **C11** (`ccore/`), built with tcc in the
+edit loop and clang for release and wasm32; the UI is the **Vue lab** (`web-ui/`) drawing with
+WebGL2, served by a local C server on the desktop (the browser is the window) or running the C
+wasm module in a web page; manifold through its C binding for booleans (native builds); an MCP
+server over stdio from the same verb table. CI: `.github/workflows/ccore.yml` (Linux, macOS;
+Windows as a probe). The table below is the Rust stack, kept for its reasons; v0.19.0 is its last
+release.
 
 | Layer | Choice | Why / status |
 |---|---|---|
@@ -196,7 +220,8 @@ node editor. Merge/review UI and a sync server come along with collaboration. Ra
 ## 5. Open decisions
 1. ~~Exact-geometry/boolean kernel~~ → manifold3d for booleans (ADR 0010); exact B-rep still open
 2. ~~IFC import: IfcOpenShell via C++ bindings vs web-ifc~~ → extend the own reader (ADR 0032)
-3. Desktop shell: native winit app vs Tauri + web
+3. ~~Desktop shell: native winit app vs Tauri + web~~ → the browser and a local C server first
+   (ADR 0069 rule 2)
 4. Performance target: confirm the reference "old machine" with real users
 5. Palette and hatch patterns per material: agree with the engineer (office drawing conventions). Now a
    style file (ADR 0013): the office conventions become a `docs/styles/` file, no code change

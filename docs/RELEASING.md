@@ -1,32 +1,37 @@
 # Releasing
 
-## The usual way: one button
+Releases of the C core, `bimble-ccore` (`.github/workflows/ccore.yml`, `ccore/README.md`
+"Release"). The Rust releases ended with v0.19.0 (ADR 0072); their workflow and this file's old
+text are on the tag `v0.19.0` and the branch `oracle/rust`.
 
-*Actions → release → Run workflow*, branch `main`, **version** `X.Y.Z` (no `v`). The workflow:
+## A version
 
-1. stops if release `vX.Y.Z` already exists;
-2. sets `version` in the root `Cargo.toml` and updates `Cargo.lock`, and commits "Version X.Y.Z" to
-   `main` (nothing to commit if the version is already there);
-3. tags that commit `vX.Y.Z`. A tag of that name without a release (pushed by mistake, e.g. before
-   the bump) is moved to this commit;
-4. builds, smoke-tests and publishes the release (four archives, the web zip, `SHA256SUMS`, notes
-   from `.github/release-notes.md` plus GitHub's list of merged PRs);
-5. then the `pages` workflow publishes the web version.
+1. Set `ccore/VERSION` (for example `0.1.0-preview.3`) in a pull request to `main`, with the
+   release notes in its description. Merge it once `ccore.yml` is green.
+2. Tag the merge commit `ccore-v<VERSION>` and push the tag:
+   `git pull && git tag ccore-v0.1.0-preview.3 && git push origin ccore-v0.1.0-preview.3`.
+   The tag must name `ccore/VERSION`, or the job `ccore-release` stops.
+3. `ccore.yml` runs the suites on Linux and macOS, builds and checks the four archives (Linux
+   x86_64 and aarch64, macOS arm64 and x86_64) and, when all passed, attaches them and their
+   `SHA256SUMS` to a GitHub prerelease `ccore-v<VERSION>`. It prints the Homebrew formula and keeps
+   it as the artifact `ccore-formula`.
+4. Commit that formula to `main` as `Formula/bimble-ccore.rb` (`brew install bimble-ccore`), or
+   write it with `ccore/ci/formula.sh <VERSION> SHA256SUMS > Formula/bimble-ccore.rb`.
 
-Update `.github/release-notes.md` (what's new, known limits) in a PR before releasing.
+Never push a tag `v*`: that prefix is the Rust releases'. `Formula/bimble.rb` installs v0.19.0
+and stays as it is.
 
-## By hand
+## The archives of a branch before a tag
 
-The tag must match the version in `Cargo.toml`, or the workflow stops (on purpose: otherwise
-`bimble --version` would report the old number).
+A manual run of `ccore.yml` on that branch (Actions → ccore → Run workflow, or
+`gh workflow run ccore.yml --ref <branch>`) builds and checks the archives and keeps them as
+artifacts, without a release. On `main`, a push whose head commit message holds `[ccore-release]`
+does the same.
 
-1. Change `version` in the root `Cargo.toml` (`[workspace.package]`), run `cargo build` so
-   `Cargo.lock` follows, merge.
-2. `git pull && git tag vX.Y.Z && git push origin vX.Y.Z`, or create the release on GitHub with a new
-   tag `vX.Y.Z` on `main` (the workflow attaches the files and keeps your notes).
+## The web pages
 
-**If a tag was pushed before the bump**, the one-button release with that version fixes it. Or by
-hand: `git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`, bump, tag again.
-
-**To rebuild or re-attach files for an existing tag:** *Actions → release → Run workflow*, branch
-`main`, **tag** `vX.Y.Z`.
+`.github/workflows/pages.yml` publishes the C lab from `main` under `/c/` on every push to `main`
+that changes `ccore/` or `web-ui/`, beside the v0.19.0 lab at the root. A manual run (Actions →
+pages → Run workflow) can name another `ccore_ref` or publish a pull request's lab under
+`preview/pr-<number>/`. After a failed deployment, start a fresh run; never "Re-run all jobs"
+(the header of `pages.yml` says why).
