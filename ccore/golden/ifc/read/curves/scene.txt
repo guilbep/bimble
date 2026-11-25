@@ -1,0 +1,9 @@
+schema "IFC4"
+origin 407a800000000000 4079000000000000 4097600000000000
+georef {}
+storeys 0
+grids 0
+elements 3 triangles 872 meshes yes
+000 1YvctVUKr0kugbFTf53O9C IfcColumn 7 Other v=90 i=176 e=90 n=90 name="round column" storey="" material=""
+001 2YvctVUKr0kugbFTf53O9C IfcBeam 7 Other v=88 i=172 e=96 n=96 name="filleted I" storey="" material=""
+002 3YvctVUKr0kugbFTf53O9C IfcReinforcingBar 7 Other v=264 i=524 e=88 n=88 name="bent bar" storey="" material=""

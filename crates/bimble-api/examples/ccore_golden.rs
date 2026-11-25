@@ -9,6 +9,10 @@
 //! and write them.
 //! `ccore_golden --check`: derive them again and byte-compare with `ccore/golden/`; exit 1
 //! listing the files that differ, are missing or are not produced any more.
+//!
+//! IFC (`ifc/`): exports in IFC4 and IFC2x3, then `import_str` (`ifc/import/`) and the display
+//! reader `read_str` (`ifc/read/`) on the crate fixtures, the hand-written `ifc/fixtures/` and the
+//! exports.
 
 use bimble_api::dispatch;
 use bimble_core::demo::{FrameSpec, concrete_frame};
@@ -127,6 +131,7 @@ fn check(dir: &Path, files: &Files) -> Vec<String> {
         if !files.contains_key(&rel)
             && !NOT_PRODUCED.contains(&rel.as_str())
             && !rel.starts_with(OTHER_TICKET_DIR)
+            && !is_golden_fixture(&rel)
         {
             bad.push(format!("{rel} (not produced any more)"));
         }
@@ -159,6 +164,7 @@ fn derive(dir: &Path) -> Files {
     verbs_files(&m, &known, &mut files);
     ifc_files(&m, &known, &mut files);
     frame2_files(dir, &mut files);
+    ifc_more_files(dir, &mut files);
     files
 }
 
@@ -620,14 +626,22 @@ fn verbs_files(frame: &Model, known: &BTreeSet<GlobalId>, files: &mut Files) {
 
 // ---------------------------------------------------------------- IFC
 
+/// The Rust build's version in an export, replaced by a placeholder: the header's
+/// `'bimble <v>'` and, in IFC2x3, the owning application's `IFCAPPLICATION(#n,'<v>',…)`.
+fn mask_version(ifc: &str) -> String {
+    let v = env!("CARGO_PKG_VERSION");
+    ifc.replacen(&format!("'bimble {v}'"), "'bimble <version>'", 1)
+        .replacen(
+            &format!(",'{v}','Bimble','bimble')"),
+            ",'<version>','Bimble','bimble')",
+            1,
+        )
+}
+
 fn ifc_files(m: &Model, known: &BTreeSet<GlobalId>, files: &mut Files) {
     let ifc = bimble_ifc::export(m, "frame.ifc", IFC_TIMESTAMP);
     // The header names the Rust build's version; the golden keeps a placeholder.
-    let ifc = ifc.replacen(
-        &format!("'bimble {}'", env!("CARGO_PKG_VERSION")),
-        "'bimble <version>'",
-        1,
-    );
+    let ifc = mask_version(&ifc);
     let (back, _report) = bimble_ifc::import::import_str(&ifc).expect("frame.ifc imports");
     let mut mask = Masker {
         known,
@@ -988,4 +1002,240 @@ fn frame2_files(dir: &Path, files: &mut Files) {
     );
     mesh_files(&m, "frame2/mesh/", files);
     files.insert("frame2/query.txt".into(), frame2_query_txt(&m).into_bytes());
+}
+
+// ---------------------------------------------------------------- IFC import, export, display
+
+/// The six fixtures of `crates/bimble-ifc/tests/fixtures/`.
+const CRATE_FIXTURES: [&str; 6] = [
+    "booleans",
+    "chain18",
+    "curves",
+    "cyclic_map",
+    "mirror",
+    "tilt",
+];
+/// The hand-written fixtures of `ccore/golden/ifc/fixtures/`.
+const GOLDEN_FIXTURES: [&str; 8] = [
+    "circle_column",
+    "faceted_brep",
+    "indexed_arc",
+    "ishape_beam",
+    "mapped_item",
+    "opening",
+    "rect_hollow",
+    "triangulated",
+];
+/// Imported models whose text is larger than this keep `<name>.size.txt` instead of the text.
+const IMPORT_MODEL_MAX_BYTES: usize = 1 << 20;
+/// Display goldens with more triangles than this keep `scene.txt` only (no per-element files).
+const READ_MESH_MAX_TRIANGLES: usize = 20_000;
+
+/// An input of `ifc/fixtures/` the dumper reads (hand-written, not produced).
+fn is_golden_fixture(rel: &str) -> bool {
+    rel.strip_prefix("ifc/fixtures/")
+        .and_then(|r| r.strip_suffix(".ifc"))
+        .is_some_and(|n| GOLDEN_FIXTURES.contains(&n))
+}
+
+fn ifc_more_files(dir: &Path, files: &mut Files) {
+    let read = |p: PathBuf| std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+    let frame = file::from_str(&read(dir.join("frame.json"))).expect("frame.json loads");
+    let frame2 = file::from_str(&read(dir.join("frame2.json"))).expect("frame2.json loads");
+    let export = |m: &Model, name: &str, schema| {
+        mask_version(&bimble_ifc::export_as(m, name, IFC_TIMESTAMP, schema))
+    };
+    let frame_ifc = export(&frame, "frame.ifc", bimble_ifc::Schema::Ifc4);
+    let frame2_ifc = export(&frame2, "frame2.ifc", bimble_ifc::Schema::Ifc4);
+    let frame_2x3 = export(&frame, "frame.ifc2x3.ifc", bimble_ifc::Schema::Ifc2x3);
+    let frame2_2x3 = export(&frame2, "frame2.ifc2x3.ifc", bimble_ifc::Schema::Ifc2x3);
+    files.insert("ifc/frame2.ifc".into(), frame2_ifc.clone().into_bytes());
+    files.insert(
+        "ifc/frame.ifc2x3.ifc".into(),
+        frame_2x3.clone().into_bytes(),
+    );
+    files.insert(
+        "ifc/frame2.ifc2x3.ifc".into(),
+        frame2_2x3.clone().into_bytes(),
+    );
+
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bimble-ifc/tests/fixtures");
+    let mut inputs: Vec<(String, String)> = Vec::new();
+    for name in CRATE_FIXTURES {
+        inputs.push((name.into(), read(crate_dir.join(format!("{name}.ifc")))));
+    }
+    for name in GOLDEN_FIXTURES {
+        inputs.push((
+            name.into(),
+            read(dir.join(format!("ifc/fixtures/{name}.ifc"))),
+        ));
+    }
+    inputs.push(("frame2".into(), frame2_ifc));
+    inputs.push(("frame2.ifc2x3".into(), frame2_2x3));
+    for (name, text) in &inputs {
+        import_files(name, text, files);
+    }
+    // The display reader also on the frame (IFC4 and IFC2x3), which import covers already.
+    inputs.push(("frame".into(), frame_ifc));
+    inputs.push(("frame.ifc2x3".into(), frame_2x3));
+    for (name, text) in &inputs {
+        read_files(name, text, files);
+    }
+}
+
+/// Every token of `text` that is a valid GlobalId: the ids an import may keep.
+fn ids_in(text: &str) -> BTreeSet<GlobalId> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+        .filter_map(|t| t.parse::<GlobalId>().ok())
+        .chain(std::iter::once(GlobalId::from_u128(0)))
+        .collect()
+}
+
+/// `ifc/import/<name>.json` (the model, masked) and `ifc/import/<name>.report.txt`.
+fn import_files(name: &str, text: &str, files: &mut Files) {
+    let report = match bimble_ifc::import::import_str(text) {
+        Ok((m, rep)) => {
+            let known = ids_in(text);
+            let mut mask = Masker {
+                known: &known,
+                new: HashMap::new(),
+            };
+            let text = mask.model_text(&m);
+            if text.len() <= IMPORT_MODEL_MAX_BYTES {
+                files.insert(format!("ifc/import/{name}.json"), text.into_bytes());
+            } else {
+                files.insert(
+                    format!("ifc/import/{name}.size.txt"),
+                    import_size(&m, &text, &mut mask).into_bytes(),
+                );
+            }
+            let mut s = String::new();
+            for l in rep.lines() {
+                writeln!(s, "{}", mask.mask(&l)).unwrap();
+            }
+            s
+        }
+        Err(e) => format!("error {e}\n"),
+    };
+    files.insert(format!("ifc/import/{name}.report.txt"), report.into_bytes());
+}
+
+/// A model too large to keep (the `chain18` bomb): its text's size and one line per element.
+fn import_size(m: &Model, text: &str, mask: &mut Masker) -> String {
+    let mut s = String::new();
+    writeln!(s, "bytes {}", text.len()).unwrap();
+    writeln!(s, "elements {}", m.elements.len()).unwrap();
+    for e in m.elements.values() {
+        let (v, i) = match &e.generator {
+            Generator::Mesh { positions, indices } => (positions.len(), indices.len() / 3),
+            _ => (0, 0),
+        };
+        let line = format!(
+            "{} {} {} v={v} i={i}",
+            e.id,
+            e.class_name(),
+            e.generator.name()
+        );
+        writeln!(s, "{}", mask.mask(&line)).unwrap();
+    }
+    s
+}
+
+fn json_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap()
+}
+
+/// `ifc/read/<name>/scene.txt` and `<k>.txt`: what `bimble_ifc::read::read_str` gives the viewer.
+fn read_files(name: &str, text: &str, files: &mut Files) {
+    let prefix = format!("ifc/read/{name}/");
+    let scene = match bimble_ifc::read::read_str(text) {
+        Ok(s) => s,
+        Err(e) => {
+            files.insert(
+                format!("{prefix}scene.txt"),
+                format!("error {e}\n").into_bytes(),
+            );
+            return;
+        }
+    };
+    let o = scene.origin_mm;
+    let mut s = String::new();
+    writeln!(s, "schema {}", json_str(&scene.schema)).unwrap();
+    writeln!(s, "origin {} {} {}", hex64(o[0]), hex64(o[1]), hex64(o[2])).unwrap();
+    writeln!(
+        s,
+        "georef {}",
+        serde_json::to_string(&scene.georef).unwrap()
+    )
+    .unwrap();
+    writeln!(s, "storeys {}", scene.storeys.len()).unwrap();
+    for st in &scene.storeys {
+        writeln!(
+            s,
+            "storey {} {} {}",
+            hex64(st.elevation_mm),
+            json_str(&st.id),
+            json_str(&st.name)
+        )
+        .unwrap();
+    }
+    writeln!(s, "grids {}", scene.grids.len()).unwrap();
+    for g in &scene.grids {
+        let (a, b) = (g.start_mm, g.end_mm);
+        writeln!(
+            s,
+            "grid {} {} {} {} {}",
+            hex64(a[0]),
+            hex64(a[1]),
+            hex64(b[0]),
+            hex64(b[1]),
+            json_str(&g.tag)
+        )
+        .unwrap();
+    }
+    let triangles = scene.triangle_count();
+    let meshes = triangles <= READ_MESH_MAX_TRIANGLES;
+    writeln!(
+        s,
+        "elements {} triangles {triangles} meshes {}",
+        scene.elements.len(),
+        if meshes { "yes" } else { "no" }
+    )
+    .unwrap();
+    for (k, e) in scene.elements.iter().enumerate() {
+        let mesh = e.local_mesh();
+        writeln!(
+            s,
+            "{k:03} {} {} {} {:?} v={} i={} e={} n={} name={} storey={} material={}",
+            e.global_id,
+            e.class,
+            category_index(e.category),
+            e.category,
+            mesh.positions.len(),
+            mesh.indices.len() / 3,
+            mesh.edges.len(),
+            mesh.edge_normals.len(),
+            json_str(&e.name),
+            json_str(&e.storey),
+            json_str(&e.material)
+        )
+        .unwrap();
+        if meshes {
+            let mut t = String::new();
+            if let Geometry::Instance { to_scene: p, .. } = &e.geometry {
+                let h: Vec<String> = [p.x, p.y, p.z, p.t]
+                    .iter()
+                    .flatten()
+                    .map(|&c| hex32(c))
+                    .collect();
+                writeln!(t, "t {}", h.join(" ")).unwrap();
+            }
+            t.push_str(&mesh_text(mesh));
+            files.insert(format!("{prefix}{k:03}.txt"), t.into_bytes());
+        }
+    }
+    for w in &scene.warnings {
+        writeln!(s, "warning {w}").unwrap();
+    }
+    files.insert(format!("{prefix}scene.txt"), s.into_bytes());
 }

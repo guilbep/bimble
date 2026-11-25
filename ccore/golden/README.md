@@ -16,13 +16,14 @@ not made or checked here.
 - `cargo run -p bimble-api --example ccore_golden -- --check`: derives the files again in memory
   and compares them byte for byte with this directory. Exit 1 lists each file that differs, is
   missing, or is here but no longer produced (`frame.json`, `frame2.json`, `README.md` and
-  `floats/` excepted).
+  `floats/` excepted). `ifc/fixtures/*.ifc` are inputs too: hand-written, committed, checked
+  like the outputs (the dumper does not write them; see `ifc/fixtures/` below).
 
 All text files are UTF-8 with `\n` line ends and a final `\n`. "Hex" is lower case.
 
 ## Masking of new GlobalIds
 
-Used in `verbs.txt`, `verbs_after*.json` and `ifc/frame_reimport.json`.
+Used in `verbs.txt`, `verbs_after*.json`, `ifc/frame_reimport.json` and `ifc/import/`.
 
 - A **token** is a maximal run of characters from the IFC alphabet `[0-9A-Za-z_$]`.
 - A token that is a valid GlobalId (22 characters, first one in `0123`) and is not an id of
@@ -166,3 +167,72 @@ Derived from `frame2.json`, in the formats above:
 - `frame2/query.txt`: as `query.txt`. Calls: `storeys`, `materials`, `project`, `elements` with
   no filter, `class` for each of the 6 classes, `storey` for each storey, `limit` 2, then class
   IfcSlab + upper storey + limit 2; then `element` for every element, in id order.
+
+## ifc/ exports (IFC4 and IFC2x3)
+
+`bimble_ifc::export_as(model, <file name>, "2026-01-01T00:00:00", schema)`, the version masked as
+in `frame.ifc`. In IFC2x3 the version is also in `IFCAPPLICATION(#n,'<version>','Bimble','bimble')`.
+
+- `frame2.ifc`: `frame2.json`, IFC4, file name `frame2.ifc`.
+- `frame.ifc2x3.ifc`, `frame2.ifc2x3.ifc`: `Schema::Ifc2x3` (`ifc2x3::from_ifc4` of the IFC4 text),
+  file names `frame.ifc2x3.ifc`, `frame2.ifc2x3.ifc`.
+
+## ifc/fixtures/
+
+Eight small hand-written IFC4 files, synthetic, for what the six crate fixtures
+(`crates/bimble-ifc/tests/fixtures/`) do not cover. Each has a project, site, building and one
+storey (`IfcRelAggregates`), its elements contained in it, one `IfcMaterial`; GlobalIds are
+`2T2c<Tag>…<NN>`. They are inputs: edit one, run the dumper, commit both.
+
+| File | Element(s) | Body |
+|---|---|---|
+| `ishape_beam` | IfcBeam `HEA 200`, storey at 3000, along x | `IfcIShapeProfileDef` (fillet 18) extruded 5000; `Pset_BeamCommon` (3 values) |
+| `circle_column` | IfcColumn | `IfcCircleProfileDef` r 250, extruded 3200 |
+| `rect_hollow` | IfcColumn | `IfcRectangleHollowProfileDef` 200×100×8, fillets 8/12 |
+| `triangulated` | IfcSlab | `IfcTriangulatedFaceSet`, closed box 4000×3000×200; `Pset_SlabCommon` |
+| `faceted_brep` | IfcWall | `IfcFacetedBrep`: 6 `IfcPolyLoop` faces, sloped top |
+| `mapped_item` | 3 IfcColumn, 2 IfcBuildingElementProxy | 2 `IfcRepresentationMap`s: an L extrusion (2 columns share one `IfcMappedItem`, one turned; 1 has a translating operator) and an `IfcTriangulatedFaceSet` tetrahedron (2 copies, one turned) |
+| `indexed_arc` | IfcSlab | `IfcArbitraryClosedProfileDef` over `IfcIndexedPolyCurve`: `IfcLineIndex`, `IfcArcIndex` (half circle), `IfcLineIndex` |
+| `opening` | IfcWall | rectangle extrusion; `IfcOpeningElement` 1200×1400 by `IfcRelVoidsElement`; `Pset_WallCommon` |
+
+## ifc/import/
+
+`bimble_ifc::import::import_str(text)` on: the six crate fixtures (`booleans`, `chain18`, `curves`,
+`cyclic_map`, `mirror`, `tilt`), the eight `ifc/fixtures/`, `ifc/frame2.ifc` (`frame2`) and
+`ifc/frame2.ifc2x3.ifc` (`frame2.ifc2x3`). `frame.ifc` is `ifc/frame_reimport.json` already.
+
+- `<name>.json`: the model, `file::to_string`, masked as above. The known ids are every token of
+  the source IFC text that is a valid GlobalId (plus the all-zero id): the import keeps element,
+  storey, opening and project ids. What it derives (`GlobalId::derived`: materials
+  `material/<name>`, the synthetic storey, `material/none`…) becomes `<new-N>`, numbered per file.
+- `<name>.report.txt`: `ImportReport::lines()`, one per line (ids in them masked with the same
+  numbering). If `import_str` fails: one line `error <text>` and no model file.
+- `<name>.size.txt` instead of `<name>.json` when the model text is over 1 MiB (only `chain18`, a
+  nested-map bomb stopped at the import limits: 45 MB). Lines: `bytes <length of the masked text>`,
+  `elements <n>`, then per element in id order `<id> <IfcClass> <generator kind> v=<mesh
+  positions> i=<mesh triangles>` (0 0 for a non-mesh generator).
+
+## ifc/read/
+
+The display reader: what the viewer draws when it opens an IFC read-only,
+`bimble_ifc::read::read_str(text)` (default limits `Limits::for_text`), a `bimble_geom::Scene`.
+Same inputs as `ifc/import/`, plus `frame` (`ifc/frame.ifc`) and `frame.ifc2x3`. One folder each.
+
+- `scene.txt`:
+  - `schema <json string>`: `Scene::schema` (`"IFC4"`, `"IFC2X3"`).
+  - `origin` and 3 f64 hex, as in `mesh/scene.txt`.
+  - `georef <compact JSON>`: `Scene::georef` through serde (`{}` when default).
+  - `storeys <n>`, then per storey, lowest first: `storey <elevation f64 hex> <id json> <name json>`.
+  - `grids <n>`, then `grid <x0> <y0> <x1> <y1> <tag json>` (f64 hex, plan mm).
+  - `elements <n> triangles <total> meshes yes|no`. `no` when over 20 000 triangles: then no
+    `<k>.txt` (none today; `chain18` shows no element).
+  - Per element in scene order (file order of the products): `<k> <GlobalId> <IfcClass>
+    <category index> <category> v= i= e= n= name=<json> storey=<json> material=<json>`. The
+    GlobalId is the file's text as is (not checked, not masked); `storey` is the storey's name.
+  - `warning <text>` lines: the reader's warnings, sorted, `(×N)` when repeated.
+  - If `read_str` fails: one line `error <text>`, nothing else.
+- `<k>.txt`: as `mesh/<k>.txt`. An element that is a copy of a mapped shape (ADR 0034) starts
+  with the `t` line and gives the shared shape.
+
+The display parses no property sets (`NOT_DISPLAYED` in `read.rs`), so there are no properties
+here; `import/` has them.

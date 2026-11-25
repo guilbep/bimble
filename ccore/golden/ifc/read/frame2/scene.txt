@@ -1,0 +1,19 @@
+schema "IFC4"
+origin 40b9e10000000000 40a70c0000000000 409c840000000000
+georef {}
+storeys 2
+storey 0000000000000000 "1vIjA4wIz6huLvC8B1gv4M" "Rez-de-chaussée"
+storey 40a89d0000000000 "1gZ1R3uyTBO80cC4$nvoxB" "Étage \"1\""
+grids 0
+elements 11 triangles 148 meshes yes
+000 0X4VVrRkf1B9lE_0jARt46 IfcSlab 0 Concrete v=12 i=20 e=18 n=18 name="D2 (L)" storey="Étage \"1\"" material="C30/37"
+001 0uTOdmIsz6iAjMnb$AZIG3 IfcColumn 0 Concrete v=8 i=12 e=12 n=12 name="C1" storey="Rez-de-chaussée" material="C30/37"
+002 1WQ4saTef14QR$c82u9pxW IfcColumn 1 Steel v=8 i=12 e=12 n=12 name="HEB \"200\"" storey="Rez-de-chaussée" material="S355"
+003 25mfqCdS50juHEIq4vPK9f IfcSlab 0 Concrete v=16 i=32 e=24 n=24 name="D3 trémie" storey="Étage \"1\"" material="C30/37"
+004 2FgB3PCsHFafKWKmIHC4zx IfcSlab 0 Concrete v=8 i=12 e=12 n=12 name="D1" storey="Étage \"1\"" material="C30/37"
+005 2NwTA_MnbD$O1tovNVwcdv IfcFooting 0 Concrete v=8 i=12 e=12 n=12 name="F1" storey="Rez-de-chaussée" material="C30/37"
+006 2XB9jAbxPCKAXC_kVMr$h5 IfcWall 0 Concrete v=8 i=12 e=12 n=12 name="W1" storey="Rez-de-chaussée" material="C30/37"
+007 2Xi2EcNOvB3wSWg3M1CB5f IfcBuildingElementProxy 1 Steel v=6 i=8 e=9 n=9 name="Gousset" storey="Étage \"1\"" material="S355"
+008 2lIeeldDb7IPfCbvTRpHDc IfcWall 0 Concrete v=8 i=12 e=12 n=12 name="W2\trotated 30°" storey="Rez-de-chaussée" material="C30/37"
+009 3QaNBTGrj1jwCHQxXT6adX IfcBeam 2 Timber v=8 i=12 e=12 n=12 name="Poutre \\ \"B1\" bois" storey="Rez-de-chaussée" material="Bois \"local\" \\ épicéa"
+010 3guiHznOL0jAR4d3gsLWHw IfcBuildingElementProxy 1 Steel v=4 i=4 e=6 n=6 name="Garde-corps" storey="Étage \"1\"" material="S355"

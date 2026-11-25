@@ -1,0 +1,8 @@
+schema "IFC4"
+origin 40a3880000000000 0000000000000000 40a6b20000000000
+georef {}
+storeys 1
+storey 40a7700000000000 "2T2cIShape000000000004" "Level 3"
+grids 0
+elements 1 triangles 172 meshes yes
+000 2T2cIShape000000000010 IfcBeam 1 Steel v=88 i=172 e=96 n=96 name="HEA 200" storey="Level 3" material="S355"

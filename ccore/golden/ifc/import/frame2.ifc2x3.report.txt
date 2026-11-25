@@ -1,0 +1,9 @@
+11 elements (7 parametric, 3 extruded polygons, 1 meshes)
+  IfcBeam: 1
+  IfcColumn: 2
+  IfcFooting: 1
+  IfcPlate: 1
+  IfcRailing: 1
+  IfcSlab: 3
+  IfcWall: 2
+property values: 9

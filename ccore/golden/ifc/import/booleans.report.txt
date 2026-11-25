@@ -1,0 +1,5 @@
+3 elements (0 parametric, 0 extruded polygons, 3 meshes)
+  IfcBuildingElementProxy: 3
+skipped: IfcBuildingElementProxy: invalid GlobalId (×3)
+skipped: IfcWall: invalid GlobalId (×1)
+warning: no IfcBuildingStorey in the file; elements go into a synthetic storey

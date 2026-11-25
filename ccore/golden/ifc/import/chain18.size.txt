@@ -1,0 +1,3 @@
+bytes 45001754
+elements 1
+1YvctVUKr0kugbFTf53O9L IfcWall mesh v=8 i=1000000

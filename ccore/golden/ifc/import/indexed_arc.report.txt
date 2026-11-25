@@ -1,0 +1,2 @@
+1 elements (0 parametric, 1 extruded polygons, 0 meshes)
+  IfcSlab: 1
