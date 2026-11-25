@@ -2386,6 +2386,56 @@ fn drawing_cut(name: &str, scene: &Scene, files: &mut Files) {
         }
     }
     files.insert(format!("drawing/cut/{name}.txt"), s.into_bytes());
+    drawing_cut_more(name, scene, level, cut, files);
+}
+
+/// `cut/<model>.more.txt`: per scene element its sections at every storey's cut (level + 1200)
+/// and at its own mid height, then each edge clipped to the ground plan's heights (`clip_z` from
+/// level − 1 to the cut, as `plan` does) with `edge_seen_from_above`.
+fn drawing_cut_more(name: &str, scene: &Scene, level: f64, cut: f64, files: &mut Files) {
+    use bimble_drawing::cut::{clip_z, edge_seen_from_above, section};
+    let oz = scene.origin_mm[2];
+    let cuts: Vec<f64> = scene
+        .storeys
+        .iter()
+        .map(|s| s.elevation_mm - oz + 1200.0)
+        .collect();
+    let mut s = String::new();
+    for e in &scene.elements {
+        let m = e.world_mesh();
+        let (zmin, zmax) = m
+            .positions
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| {
+                (a.min(p[2] as f64), b.max(p[2] as f64))
+            });
+        writeln!(s, "element {} {}", e.global_id, e.class).unwrap();
+        for h in cuts.iter().copied().chain([(zmin + zmax) / 2.0]) {
+            let sec = section(&m, h);
+            writeln!(
+                s,
+                "at {h:?} loops {} open {}",
+                sec.loops.len(),
+                sec.open.len()
+            )
+            .unwrap();
+            for l in &sec.loops {
+                writeln!(s, "loop {} {}", l.len(), dbg_points(l)).unwrap();
+            }
+            for l in &sec.open {
+                writeln!(s, "open {} {}", l.len(), dbg_points(l)).unwrap();
+            }
+        }
+        for (i, seg) in m.edges.iter().enumerate() {
+            let seen = m.edge_normals.get(i).is_none_or(edge_seen_from_above);
+            let (a, b) = (seg[0].map(f64::from), seg[1].map(f64::from));
+            match clip_z(a, b, level - 1.0, cut) {
+                Some(c) => writeln!(s, "clip {i} {} {}", seen as u8, dbg_points(&c)).unwrap(),
+                None => writeln!(s, "clip {i} {} none", seen as u8).unwrap(),
+            }
+        }
+    }
+    files.insert(format!("drawing/cut/{name}.more.txt"), s.into_bytes());
 }
 
 fn frame_text(

@@ -452,6 +452,7 @@ template is the default one with axes `off`, every annotation switch off and no 
 | File | What | Ticket |
 |---|---|---|
 | `cut/<model>.txt` | `storey`, scene `origin`, `level`, `cut` (scene mm, storey level + 1200), then per scene element `element <id> <class> loops L open O up U` and one line per `cut::section` loop, open chain and `facing_up_region` loop: `loop\|open\|up <n> x y x y …`, `{:?}` | D1 |
+| `cut/<model>.more.txt` | per scene element `element <id> <class>`, its sections at every storey's cut (level + 1200) and at its mid height (`at <h> loops L open O` and the rings as above), then each edge `clip <i> <seen> x y x y` (or `none`): `clip_z` from the ground level − 1 to its cut, `edge_seen_from_above` (1 when the mesh has no normals for it) | D1 |
 | `svg/sample.svg`, `sample-roboto.svg` | `to_svg()` of a sheet built in the dumper (`drawing_sample_sheet`): holes, fills, hatches (0°, 90°, ±angles, offsets, NaN offset, zero spacing), an empty area, dashes, numbers that round at the third decimal, the three anchors, turned and bold text, text to escape; Helvetica and Roboto | D1 |
 | `roboto.txt` | per face: `face`, `ascent`, `descent`, `cap_height`, `bbox`, `missing` (advance of glyph 0), `chars N`, then `<hex code point> <glyph id> <advance>` for U+0020–U+024F and 20 punctuation marks; f32 `{:?}`, 1/1000 em | D1, D6 |
 | `plan/<model>/cut.svg`, `frame.txt` | a sheet of the minimal plan's size: per scene element one `Area` of its section loops through `PlanInfo.frame.to_paper(scene + origin, z = cut)`, pen 0.35 black, no fill or hatch; its open chains as `Lines` (pen 0.18 red, dash 1 0.5). `frame.txt`: sheet size and the `ViewFrame` fields, `{:?}` | D1 |
@@ -464,5 +465,5 @@ template is the default one with axes `off`, every annotation switch off and no 
 | `pdf/<name>-<font>.pdf`, `.content` | `to_pdf()` of the sample, the frame's full plan and `S-101`, in Roboto and Helvetica; `.content` is the page's content stream (object 4). The producer's version is masked by as many `x` (same length, offsets stay right). Roboto PDFs embed both font files (about 410 KB): only `sample-roboto.pdf` is kept whole | D6, L1 |
 | `fmt.txt` | f64 bits (hex), then Rust's `{}`, `{:.1}` and `{:.3}`: fixed values (ties, -0, extremes) and 1500 pseudo-random ones | D1 |
 
-`ccore/test/draw_test.c` (suite `draw`) checks `cut/`, `svg/` and `plan/*/cut.svg` byte for byte,
-and `fmt.txt`.
+`ccore/test/draw_test.c` (suite `draw`) checks `cut/`, `svg/`, `plan/*/cut.svg`, `roboto.txt` (against
+the table `tools/roboto_table.sh` generates from it) and `fmt.txt` byte for byte.
