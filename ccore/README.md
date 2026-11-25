@@ -52,6 +52,14 @@ with a fixed default and a unique offset per port. `CCORE_PORT_BASE` unset: the 
 once do not collide (give each its own base, 160 ports apart). `CCORE_PORT_BASE=auto`: a free base from
 a hash of the worktree path. `test/host.sh` passes the variable through.
 
+CI: `ccore/ci/run.sh fast` is the gate every ticket passes (build.sh tcc, test/run.sh with tcc and
+with clang ASan+UBSan, build.sh wasm, wasm_run, host.sh); `ccore/ci/run.sh full` adds the Chromium
+lab tests and every other `test/*.mjs` suite. One line per suite, logs in `out/ci/`, a last line
+`ci: N suites, M failed`, exit 1 on a failure; `CCORE_PORT_BASE` defaults to `auto`. GitHub runs
+`full` on Linux (`.github/workflows/ccore.yml`, job `ccore-linux`: tcc built from source by
+`ci/tcc.sh`, manifold by `deps.sh`, both cached) and `test/run.sh` on macOS as a feasibility probe
+that may fail (`ccore-macos`). Times and what blocks macOS and Windows: `results/ci.md`.
+
 Regenerate the goldens (a standalone Rust crate, not in the workspace; it pins the repo's
 serde_json version). Commit the changed `.txt` files:
 

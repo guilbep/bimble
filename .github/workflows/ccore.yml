@@ -1,0 +1,105 @@
+name: ccore
+# The C core's suites (ticket K1): the same script builders run, ccore/ci/run.sh full. Linux is the
+# check; macOS only measures what is missing (ccore/results/ci.md) and may fail.
+on:
+  push:
+    paths:
+      - "ccore/**"
+      - "web-ui/**"
+      - "scripts/apt-install.sh"
+      - ".github/workflows/ccore.yml"
+  pull_request:
+    paths:
+      - "ccore/**"
+      - "web-ui/**"
+      - "scripts/apt-install.sh"
+      - ".github/workflows/ccore.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ccore-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ccore-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      # clang and lld: the ASan suites and the wasm32 build (wasm-ld); cmake: manifold (deps.sh);
+      # inotify-tools: dev.sh's watcher (test/dev_test.mjs). tcc comes from source below.
+      - run: scripts/apt-install.sh clang lld cmake inotify-tools
+        timeout-minutes: 12
+      - name: Versions and keys
+        id: keys
+        run: |
+          echo "manifold=$(sed -n 's/^MANIFOLD_TAG=\([^ ]*\).*/\1/p' ccore/deps.sh)" >> "$GITHUB_OUTPUT"
+          echo "tcc=$(ccore/ci/tcc.sh --commit)" >> "$GITHUB_OUTPUT"
+          clang --version | head -n 1
+          cmake --version | head -n 1
+      # Ubuntu's tcc (Aug 2020) has no stdatomic.h nor __atomic builtins: the pinned one of ci/tcc.sh.
+      - name: tcc (cache)
+        id: tcc
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/tcc
+          key: tcc-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.tcc }}
+      - if: steps.tcc.outputs.cache-hit != 'true'
+        run: ccore/ci/tcc.sh "$HOME/.local/tcc"
+      - run: |
+          echo "$HOME/.local/tcc/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/tcc/bin/tcc" -v
+      # The boolean kernel: manifold's C binding, built by deps.sh into ccore/out/deps/manifold.
+      - name: manifold (cache)
+        id: manifold
+        uses: actions/cache@v4
+        with:
+          path: ccore/out/deps/manifold
+          key: manifold-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh') }}
+      - if: steps.manifold.outputs.cache-hit != 'true'
+        run: JOBS=4 ccore/deps.sh
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web-ui/package-lock.json
+      - working-directory: web-ui
+        run: npm ci --no-audit --no-fund
+      # The lab tests start /usr/bin/chromium (no shared variable for it in ccore/test): the image's
+      # Google Chrome at that path. Chrome's sandbox needs unprivileged user namespaces, which
+      # Ubuntu 24.04's AppArmor restricts by default.
+      - name: Chromium at /usr/bin/chromium
+        run: |
+          [ -x /usr/bin/chromium ] || sudo ln -s "$(command -v google-chrome)" /usr/bin/chromium
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          /usr/bin/chromium --version
+      - name: ccore/ci/run.sh full
+        run: ccore/ci/run.sh full
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccore-ci-logs
+          path: ccore/out/ci/
+          retention-days: 14
+
+  # Feasibility only (ccore/results/ci.md): the C suites with Apple clang, no boolean kernel. Its
+  # log is the evidence of what a macOS port needs; a failure does not fail the workflow.
+  ccore-macos:
+    runs-on: macos-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # macOS's /bin/bash is 3.2: an empty array under `set -u` ("${KFLAGS[@]}" without a kernel,
+      # test/run.sh) is an error there. A newer bash first, so the log reaches the C code.
+      - run: |
+          sw_vers
+          clang --version | head -n 1
+          bash --version | head -n 1
+          if [ "$(bash -c 'echo ${BASH_VERSINFO[0]}')" -lt 5 ]; then brew install bash; fi
+          bash --version | head -n 1
+      - name: test/run.sh (clang, no kernel)
+        run: ccore/test/run.sh
+        env:
+          CC: clang
+          CC_NO_KERNEL: "1"
