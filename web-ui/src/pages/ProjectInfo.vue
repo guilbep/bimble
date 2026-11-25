@@ -8,7 +8,7 @@ export const side = ProjectInfoSide;
 // A3 Project information (wireframes v01 ProjectInfo.html; ADR 0030, 0052). Leaving a field or Enter
 // (the native `change` event) sends one SetProject with the whole map; undo restores it.
 import { computed, ref } from "vue";
-import { project, state, setProject, setProjectField } from "../bimble";
+import { project, state, setProject, setProjectField, northInfo, coordinates } from "../bimble";
 import { t } from "../i18n";
 import { currentDialog } from "../dialogs";
 
@@ -19,6 +19,13 @@ const info = computed(() => project.value?.info ?? {});
 const other = computed(() => ["end_date", ...Object.keys(info.value).filter((k) => k !== "end_date" && !(BASIC as readonly string[]).includes(k))]);
 const label = (k: string) => (k === "end_date" || (BASIC as readonly string[]).includes(k) ? t(`projectinfo.${k}` as "projectinfo.end_date") : k.replace(/_/g, " "));
 const error = ref<string | null>(null);
+// ---- G2: the georeference's system and base point (query north, coordinates of the world origin) ----
+const georefText = computed(() => {
+  void state.value.rev;
+  const n = northInfo.value, c = n ? coordinates([0, 0, 0]) : null;
+  return n && c ? `${n.crs ?? "—"} · ${c.text} · ${n.rotation_deg}°` : "—";
+});
+// ---- end G2 ----
 
 function commit(key: string, e: Event) {
   const v = (e.target as HTMLInputElement).value;
@@ -58,6 +65,9 @@ function addField() {
         <span class="k">IfcSite</span><span class="mono" data-bb="project-site-id">{{ project?.site_id ?? '' }}</span>
         <span class="k">IfcBuilding</span><span class="mono" data-bb="project-building-id">{{ project?.building_id ?? '' }}</span>
         <span class="k">{{ t('projectinfo.schema') }}</span><span class="mono">{{ state.schema ?? '' }}</span>
+        <!-- G2: the georeference (IfcMapConversion on export), edited in the Setting out tab's panel -->
+        <span class="k">IfcMapConversion</span><span class="mono" data-bb="project-georef">{{ georefText }}</span>
+        <!-- end G2 -->
       </div>
     </section>
     <section class="col" style="gap:10px">

@@ -15,6 +15,8 @@
 // never picks or selects an element. Camera state stays in the page (view state, not model state).
 // Geometry is plain functions on the camera angles (yaw, pitch as bimble-render's Camera).
 
+import { northInfo } from "./bimble"; // G2: project north
+
 /** A view direction on the cube: each component -1, 0 or 1 (not all 0). Faces have one non-zero
  *  component, edges two, corners three. It points from the model towards the camera. */
 export type Dir = [number, number, number];
@@ -32,12 +34,12 @@ export const TURN_MS = 300;
 /**
  * PROJECT NORTH HOOK (ADR 0045): the angle (radians) the building's plan is turned by, as Rust's
  * viewing.rs `project_north` = `georef.plan_turn(false)` = the georeference's rotation_deg in
- * radians. The C model has no georeference yet and no query gives it: 0 until the georeference
- * ticket returns it here (from its query). Everything else (cube, compass, Home, the first view)
- * already goes through this function.
+ * radians. G2: the C core's `query north` (plan_turn_project, radians), read when the model
+ * changes (bimble.ts refreshNorth); 0 without an editable model or on Rust's bridge. Everything
+ * else (cube, compass, Home, the first view) already goes through this function.
  */
 export function projectNorth(): number {
-  return 0;
+  return northInfo.value?.plan_turn_project ?? 0; // G2
 }
 
 const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
