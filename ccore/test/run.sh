@@ -14,6 +14,8 @@ case "$CC" in
 esac
 # Extra flags, e.g. CC=clang CFLAGS="-fsanitize=address,undefined -g" test/run.sh file
 if [[ -n ${CFLAGS:-} ]]; then read -r -a extra <<< "$CFLAGS"; FLAGS+=("${extra[@]}"); fi
+# A sanitizer report fails the suite (UBSan only prints by default: a report once passed unseen).
+export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1${UBSAN_OPTIONS:+:$UBSAN_OPTIONS}"
 # The boolean kernel when found (build.sh, deps.sh): clang links it static, tcc shared.
 source ./deps.sh
 kernel_setup
