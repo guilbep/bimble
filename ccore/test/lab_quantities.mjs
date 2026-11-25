@@ -8,8 +8,12 @@
 //     anchor's Blob read back) gives golden/schedule/frame/all-elements.csv; a real click on a row
 //     selects its element (state.selection, the row drawn selected); the group select set to "none"
 //     (set_schedule, one history step) leaves no group line and the rows change; undo restores it.
+//   Palette: Ctrl+K opens it (the query field focused), "section box" typed lists fewer items (the
+//     C core's palette_match), Enter runs the first one: Section box, its pressed state turns
+//     (query and the page's `actions`), recent_actions starts with it, an empty query lists it first.
 // Before Q2 the C core answered schedule_list [] and refused schedule_rows: the page showed its
-// empty note ("quantities.empty"), which fails every check above.
+// empty note ("quantities.empty"), which fails every check above; palette_match was refused (the
+// palette threw from its computed list) and recent_actions was [].
 // No uncaught page error; no console error or warning but the sync-XHR deprecation and the favicon
 // 404. Prints "N passed, M failed"; exits non-zero on a failure. Kills all it starts.
 import { spawn, execFileSync } from "node:child_process";
@@ -171,6 +175,41 @@ async function quantities(mode, S, evalJs) {
   check(`${mode}: undo: the group lines are back`, back === true);
 }
 
+/** The command palette on one client: Ctrl+K, a query typed, the list filtered by the C core's
+ *  palette_match, Enter runs the first action (Section box: pressed, recent_actions). */
+async function palette(mode, S, evalJs) {
+  const B = (body) => evalJs(`(async () => { const b = await import('/src/bimble.ts'); ${body} })()`);
+  await S("Page.navigate", { url: PAGES[mode].replace("&page=quantities", "") });
+  await waitFor(`${mode}: data-bb-ready`, 30000, () => evalJs("document.documentElement.dataset.bbReady === '1' && !!window.__bbGl"));
+  const key = async (k, code, vk, modifiers = 0) => {
+    await S("Input.dispatchKeyEvent", { type: "keyDown", key: k, code, windowsVirtualKeyCode: vk, modifiers });
+    await S("Input.dispatchKeyEvent", { type: "keyUp", key: k, code, windowsVirtualKeyCode: vk, modifiers });
+  };
+  await key("k", "KeyK", 75, 2); // Ctrl+K (QuickBar.vue)
+  const open = await waitFor(`${mode}: the palette`, 5000, () => evalJs("document.activeElement?.dataset.bb === 'palette-query'")).catch(() => false);
+  check(`${mode}: Ctrl+K opens the palette, the query field focused`, open === true);
+  const all = await evalJs("document.querySelectorAll('[data-bb=palette-item]').length");
+  await S("Input.insertText", { text: "section box" });
+  const shown = await waitFor(`${mode}: the filtered list`, 5000, async () => { const n = await evalJs("document.querySelectorAll('[data-bb=palette-item]').length"); return n > 0 && n < all ? n : null; }).catch(() => 0);
+  check(`${mode}: typing "section box" lists the matching actions (${shown} of ${all})`, shown >= 1 && shown < all, `${shown} of ${all}`);
+  const before = await B("return b.query('actions').find((a) => a.name === 'section_box').pressed;");
+  await key("Enter", "Enter", 13);
+  const closed = await waitFor(`${mode}: the palette closed`, 5000, () => evalJs("!document.querySelector('[data-bb=palette]')")).catch(() => false);
+  check(`${mode}: Enter runs the first one and closes the palette`, closed === true);
+  const after = await B("return b.query('actions').find((a) => a.name === 'section_box').pressed;");
+  check(`${mode}: the action run is Section box: its pressed state turned (${before} -> ${after})`, before === false && after === true);
+  const follows = await waitFor(`${mode}: the page's actions`, 3000, () => B("return b.actions.value.find((a) => a.name === 'section_box').pressed;")).catch(() => false);
+  check(`${mode}: the page's actions follow (the ribbon draws it)`, follows === true);
+  const rec = await B("return b.recentActions();");
+  check(`${mode}: recent_actions starts with section_box`, rec[0] === "section_box", JSON.stringify(rec));
+  await key("k", "KeyK", 75, 2);
+  await waitFor(`${mode}: the palette again`, 5000, () => evalJs("document.activeElement?.dataset.bb === 'palette-query'")).catch(() => false);
+  const first = await evalJs("document.querySelector('[data-bb=palette-item] .lab')?.textContent ?? ''");
+  const boxLabel = await evalJs("[...document.querySelectorAll('[data-bb=palette-item]')].find((a) => a.querySelector('.kbd')?.textContent === 'B')?.querySelector('.lab')?.textContent ?? null");
+  check(`${mode}: an empty query lists the recent action first`, first !== "" && first === boxLabel, `${first} vs ${boxLabel}`);
+  await key("Escape", "Escape", 27);
+}
+
 async function main() {
   if (!existsSync(join(UI, "node_modules"))) throw new Error(`no ${UI}/node_modules: run npm ci in web-ui/`);
   execFileSync("node", [join(UI, "scripts/copy-ccore.mjs")], { stdio: "ignore" });
@@ -213,7 +252,10 @@ async function main() {
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
     return r.result.value;
   };
-  for (const mode of ["native", "wasm"]) await quantities(mode, S, evalJs);
+  for (const mode of ["native", "wasm"]) {
+    await quantities(mode, S, evalJs);
+    await palette(mode, S, evalJs);
+  }
 
   const IGNORED = [
     /Synchronous XMLHttpRequest on the main thread is deprecated/,

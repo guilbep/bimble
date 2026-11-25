@@ -111,6 +111,9 @@ typedef struct cc_session {
     char *paper_version;
     /* ---- Q2: the last schedule table asked (schedules.h), NULL: none ---- */
     struct cc_sched_cache *sched;
+    /* ---- Q2: the last actions run, newest first (ribbon.rs:495-503), as calls.c ACTIONS indices ---- */
+    int recent[5];
+    int nrecent;
 } cc_session;
 
 /* A new session with no model, on `pf` (kept by pointer). NULL when out of memory. */

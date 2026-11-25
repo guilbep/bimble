@@ -62,7 +62,16 @@ const text = ref("");
 const shown = computed(() => {
   const all = items.value;
   const q = text.value.trim();
-  if (q) return paletteMatch(q, all.map((i) => `${i.label} ${i.also ?? ""}`)).map((k) => all[k]!);
+  if (q) {
+    // Q2: a client whose palette_match fails (an old C core answered "not in the C core") must not
+    // throw out of this computed: a plain case-insensitive part match instead, and one warning.
+    const texts = all.map((i) => `${i.label} ${i.also ?? ""}`);
+    try { return paletteMatch(q, texts).map((k) => all[k]!).filter(Boolean); } catch (e) {
+      console.warn(`palette: palette_match: ${e instanceof Error ? e.message : String(e)}`);
+      const lq = q.toLowerCase();
+      return all.filter((_, k) => texts[k]!.toLowerCase().includes(lq));
+    }
+  }
   let recent: string[] = [];
   try { recent = recentActions(); } catch { /* no viewer yet */ }
   const first = recent.map((n) => all.find((i) => i.name === n)).filter((i): i is Item => !!i);

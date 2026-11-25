@@ -596,3 +596,19 @@ Rust's `default_views`, `auto_name` and `resolve` byte for byte (`golden/ifc/vie
 
 **What Rust sees.** Nothing new on a file: no model field, no stored view. A Rust viewer opening
 the same IFC offers the same views with the same ids.
+
+## 17. The schedule list of a read-only file, and the palette's folding (ticket Q2)
+
+- **`schedule_list` on an IFC or a .bimbleview opened as it is:** Rust's stored schedules are the
+  side file's next to the IFC (`schedules.rs` `stored_schedules`, `side_views`); the C core reads
+  no side file, so it answers the built-in ten (`session/schedules.h`). Without a side file the two
+  answer the same text. Everything else of `schedule_list`, `schedule_rows` and `schedule_csv` is
+  Rust's byte for byte (`golden/schedule/`, `test/schedules_test.mjs`).
+- **`palette_match`:** Rust's `fold` is `str::to_lowercase` (all of Unicode, final sigma as `ς`)
+  and its words split on `!char::is_alphanumeric` (all of Unicode). The C core (`session/palette.c`)
+  lowers the Latin, Greek and Cyrillic blocks (the table of `src/quantity.c`'s natural sort), and
+  splits words on ASCII non-alphanumerics, Latin-1 punctuation and symbols, General Punctuation
+  (`…`), U+2190..U+2BFF (arrows, maths, shapes) and the White_Space characters. Every ribbon label
+  and Rust's unit tests (`ribbon.rs:1802`, `:1887`) give the same indices (`test/palette_test.mjs`);
+  a label with an upper-case letter of another script, a final `Σ`, or a separator of another block
+  may match differently.

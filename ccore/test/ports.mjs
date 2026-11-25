@@ -61,6 +61,7 @@ const TABLE = [
   ["host", "parity", 47440, 140], // PAR2 (tools/parity.mjs: one host at a time, Rust twin then C)
   ["host", "schedules_test", 47357, 57], // Q2
   ["host", "lab_quantities", 47358, 58], // Q2
+  ["host", "palette_test", 47359, 59], // Q2
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_gl", 5193, 131],
   ["vite", "lab_place", 5195, 133],

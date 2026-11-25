@@ -37,6 +37,7 @@
 #include "versions.h" /* ticket H1 */
 #include "links_dxf.h" /* L2 */
 #include "schedules.h" /* Q2 */
+#include "palette.h"   /* Q2 */
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -986,7 +987,14 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         int rc = cc_schedules_query(s, name, body, n, out);
         if (rc >= 0) return rc;
     }
-    static const char *const EMPTY[] = {"recent_files", "recent_actions"};
+    if (!strcmp(name, "palette_match")) return cc_palette_match(body, n, out); /* Q2: calls.rs:313, palette.h */
+    if (!strcmp(name, "recent_actions")) { /* Q2: calls.rs:323, newest first */
+        jw_arr_begin(&w);
+        for (int i = 0; i < s->nrecent; i++) jw_str(&w, ACTIONS[s->recent[i]].name);
+        jw_arr_end(&w);
+        return done(&w);
+    }
+    static const char *const EMPTY[] = {"recent_files"};
     for (size_t i = 0; i < sizeof EMPTY / sizeof EMPTY[0]; i++)
         if (!strcmp(name, EMPTY[i])) { /* spec §1: stub [] */
             buf_puts(out, "[]");
@@ -998,12 +1006,6 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     /* D7: the PDF export, sheet_svg.h cc_paper_pdf_query (the answer is the PDF's bytes, or {path, bytes}) */
     if (!strcmp(name, "sheet_pdf") || !strcmp(name, "view_pdf"))
         return cc_paper_pdf_query(s, s->open ? scene_now(s) : NULL, name[0] == 'v', body, n, out);
-    static const char *const CUT[] = {"palette_match"};
-    for (size_t i = 0; i < sizeof CUT / sizeof CUT[0]; i++)
-        if (!strcmp(name, CUT[i])) {
-            buf_puts(out, "query "), buf_puts(out, name), buf_puts(out, " is not in the C core");
-            return CC_ERR;
-        }
     if (s->open) return model_query(s, name, body, n, out); /* calls.rs:276-309 and :519-527 */
     if (!strcmp(name, "north") || !strcmp(name, "coordinates")) { /* ADR 0045, query.h: null without a model */
         buf_puts(out, "null");
@@ -1375,6 +1377,14 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
         debug_str(out, name);
         buf_puts(out, " is not enabled now");
         return CC_ERR;
+    }
+    if (a) { /* ---- Q2: ribbon.rs:654 push_recent: newest first, once, the last five ---- */
+        int k = (int)(a - ACTIONS), j = 0;
+        for (int i = 0; i < s->nrecent; i++)
+            if (s->recent[i] != k) s->recent[j++] = s->recent[i];
+        if (j == 5) j = 4;
+        memmove(s->recent + 1, s->recent, (size_t)j * sizeof s->recent[0]);
+        s->recent[0] = k, s->nrecent = j + 1;
     }
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return link_action(s, name, body, n, out);
     /* ---- L1: link_pdf, one set_view / add_view Command (links_ref.h); L2: link_dxf the same way ---- */
