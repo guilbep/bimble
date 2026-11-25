@@ -14,6 +14,7 @@
 #include "guid.h"
 #include "json_r.h"
 #include "json_w.h"
+#include "verb_table.h"
 
 /* ---- arguments as a serde_json::Value ---- */
 
@@ -564,6 +565,164 @@ static void q_element(const cc_model *m, const cc_element *e, JsonW *w) {
     jw_obj_end(w);
 }
 
+/* views: ViewSummary (kind flattened), keys sorted. */
+static void w_pair(JsonW *w, const double *v) {
+    jw_arr_begin(w);
+    jw_f64(w, v[0]);
+    jw_f64(w, v[1]);
+    jw_arr_end(w);
+}
+
+static void q_views(const cc_model *m, JsonW *w) {
+    static const char *const PLANE[] = {"bottom", "cut", "depth", "top"};
+    static const int PIDX[] = {CC_RANGE_BOTTOM, CC_RANGE_CUT, CC_RANGE_DEPTH, CC_RANGE_TOP};
+    jw_arr_begin(w);
+    for (size_t i = 0; i < m->nviews; i++) {
+        const cc_view *v = &m->views[i];
+        jw_obj_begin(w);
+        jw_key(w, "annotations");
+        jw_u64(w, v->nannotations);
+        jw_key(w, "crop");
+        if (v->has_crop) {
+            jw_obj_begin(w);
+            jw_key(w, "max");
+            w_pair(w, v->crop_max);
+            jw_key(w, "min");
+            w_pair(w, v->crop_min);
+            jw_obj_end(w);
+        } else {
+            jw_null(w);
+        }
+        if (v->kind == CC_VIEW_SECTION) jw_key(w, "depth_mm"), jw_f64(w, v->depth_mm);
+        if (v->kind == CC_VIEW_SECTION) jw_key(w, "facing"), jw_str(w, cc_facing_name(v->facing));
+        jw_key(w, "id");
+        w_gid(w, &v->id);
+        if (v->kind == CC_VIEW_PLAN) jw_key(w, "look"), jw_str(w, cc_look_name(v->look));
+        jw_key(w, "name");
+        w_s(w, v->name);
+        if (v->kind == CC_VIEW_SECTION) jw_key(w, "origin"), w_pair(w, v->origin);
+        if (v->kind == CC_VIEW_PLAN) {
+            jw_key(w, "range");
+            jw_obj_begin(w);
+            for (int k = 0; k < 4; k++) {
+                jw_key(w, PLANE[k]);
+                jw_obj_begin(w);
+                jw_key(w, "level");
+                jw_str(w, cc_level_ref_name(v->range[PIDX[k]].level));
+                jw_key(w, "offset_mm");
+                jw_f64(w, v->range[PIDX[k]].offset_mm);
+                jw_obj_end(w);
+            }
+            jw_obj_end(w);
+        }
+        jw_key(w, "references");
+        jw_u64(w, v->nreferences);
+        jw_key(w, "scale");
+        jw_u64(w, v->scale);
+        if (v->kind == CC_VIEW_PLAN) jw_key(w, "storey"), w_s(w, v->storey);
+        jw_key(w, "true_north");
+        jw_bool(w, v->true_north);
+        jw_key(w, "type");
+        jw_str(w, cc_view_kind_name(v->kind));
+        jw_obj_end(w);
+    }
+    jw_arr_end(w);
+}
+
+/* sheets: SheetSummary, keys sorted. */
+static void q_sheets(const cc_model *m, JsonW *w) {
+    jw_arr_begin(w);
+    for (size_t i = 0; i < m->nsheets; i++) {
+        const cc_sheet *s = &m->sheets[i];
+        jw_obj_begin(w);
+        jw_key(w, "fields");
+        w_kv_map(w, s->fields, s->nfields);
+        jw_key(w, "id");
+        w_gid(w, &s->id);
+        jw_key(w, "name");
+        w_s(w, s->name);
+        jw_key(w, "number");
+        w_s(w, s->number);
+        jw_key(w, "paper");
+        w_s(w, s->paper);
+        jw_key(w, "placed");
+        jw_arr_begin(w);
+        for (size_t k = 0; k < s->nplaced; k++) {
+            const cc_placed *p = &s->placed[k];
+            jw_obj_begin(w);
+            jw_key(w, "at_mm");
+            w_pair(w, p->at_mm);
+            jw_key(w, "id");
+            w_gid(w, &p->id);
+            jw_key(w, "scale");
+            jw_u64(w, p->scale);
+            jw_key(w, "view");
+            w_gid(w, &p->view);
+            jw_obj_end(w);
+        }
+        jw_arr_end(w);
+        jw_key(w, "portrait");
+        jw_bool(w, s->portrait);
+        jw_key(w, "texts");
+        jw_u64(w, s->ntexts);
+        jw_obj_end(w);
+    }
+    jw_arr_end(w);
+}
+
+/* schedules: the stored ScheduleDefs, keys sorted (family only when set). */
+static void q_schedules(const cc_model *m, JsonW *w) {
+    jw_arr_begin(w);
+    for (size_t i = 0; i < m->nschedules; i++) {
+        const cc_schedule *d = &m->schedules[i];
+        jw_obj_begin(w);
+        jw_key(w, "classes");
+        jw_arr_begin(w);
+        for (size_t k = 0; k < d->classes.n; k++) w_s(w, d->classes.v[k]);
+        jw_arr_end(w);
+        if (d->has_family) jw_key(w, "family"), jw_str(w, cc_category_name((cc_category)d->family));
+        jw_key(w, "fields");
+        jw_arr_begin(w);
+        for (size_t k = 0; k < d->nfields; k++) jw_str(w, cc_sched_field_name(d->fields[k]));
+        jw_arr_end(w);
+        jw_key(w, "group_by_level");
+        jw_bool(w, d->group_by_level);
+        jw_key(w, "name");
+        w_s(w, d->name);
+        jw_key(w, "totals");
+        jw_bool(w, d->totals);
+        jw_obj_end(w);
+    }
+    jw_arr_end(w);
+}
+
+/* The verb table's queries (the viewer's `verbs` and `describe` calls, calls.rs): a C addition
+ * to dispatch::query. 200 with the answer, 400 with the error text. */
+static int verb_query(const char *name, const char *args_json, size_t n, Buf *out) {
+    if (name[0] == 'v') { /* verbs */
+        cc_verbs_list_json(out);
+        return out->oom ? 500 : 200;
+    }
+    Arena a;
+    arena_init(&a, 0);
+    JrError jerr;
+    const JrVal *v = n ? jr_parse(&a, args_json, n, &jerr) : NULL;
+    int status = 400;
+    const JrVal *nm = v && v->type == JR_OBJ ? jr_get(v, "name") : NULL;
+    if (n && !v) buf_puts(out, jerr.msg);
+    else if (!nm || nm->type != JR_STR) buf_puts(out, !nm ? "missing field `name`" : "invalid type: expected a string");
+    else {
+        const cc_verb_def *d = NULL;
+        for (size_t i = 0; i < cc_verb_count && !d; i++)
+            if (strlen(cc_verb_table[i].name) == nm->n && !memcmp(cc_verb_table[i].name, nm->s, nm->n))
+                d = &cc_verb_table[i];
+        if (!d) buf_puts(out, "no verb with this name");
+        else buf_puts(out, d->schema), status = 200;
+    }
+    arena_free(&a);
+    return out->oom ? 500 : status;
+}
+
 /* ---- dispatch ---- */
 
 static int is_ws(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
@@ -590,6 +749,10 @@ int cc_query(const cc_model *m, const char *name, const char *args_json, size_t 
         }
     }
 
+    if (!strcmp(name, "verbs") || !strcmp(name, "describe")) {
+        status = verb_query(name, args_json, n, out);
+        goto done;
+    }
     enum { Q_STOREYS, Q_MATERIALS, Q_ELEMENTS, Q_ELEMENT, Q_PROJECT, Q_VIEWS, Q_SHEETS, Q_SCHEDULES } q;
     static const char *const NAMES[] = {"storeys", "materials", "elements", "element",
                                         "project", "views",     "sheets",   "schedules"};
@@ -648,10 +811,9 @@ int cc_query(const cc_model *m, const char *name, const char *args_json, size_t 
     case Q_ELEMENTS: q_elements(m, &f, &w); break;
     case Q_ELEMENT: q_element(m, el, &w); break;
     case Q_PROJECT: q_project(m, &w); break;
-    default: /* views, sheets, schedules: the C model holds none */
-        jw_arr_begin(&w);
-        jw_arr_end(&w);
-        break;
+    case Q_VIEWS: q_views(m, &w); break;
+    case Q_SHEETS: q_sheets(m, &w); break;
+    default: q_schedules(m, &w); break;
     }
     if (oom) goto done;
     int wrc = jw_finish(&w);

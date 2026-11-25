@@ -16,6 +16,8 @@
  * or appends the error text and returns 400 (unknown query, bad arguments, unknown element,
  * JSON that does not parse). 500 with "out of memory" if an allocation failed.
  * Queries: storeys, materials, elements ({class, storey, limit}), element ({id}), project,
- * views, sheets, schedules (the C model has none of the last three: always []). */
+ * views, sheets, schedules (the stored ones, as query.rs lists them). C additions from the verb
+ * table (verb_table.h), the viewer's calls of the same names: verbs (dispatch::list) and describe
+ * ({name}: dispatch::describe, the schema as compact JSON; 400 "no verb with this name"). */
 int cc_query(const cc_model *m, const char *name, const char *args_json, size_t n, Buf *out);
 #endif

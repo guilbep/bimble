@@ -379,7 +379,7 @@ static void hand(void) {
 
     /* Verbs outside the transcript. */
     verb(&m, "copy", "{}", &b);
-    EQ("copy is not in the C core", b, "400 the verb \"copy\" is not in the C core");
+    EQ("copy without arguments", b, "400 bad arguments: missing field `ids`");
     verb(&m, "place", "{\"kind\":\"column\",\"storey\":\"1uAZA0Yfn05f$xRd1k4uPR\",\"a\":[0,0],\"x\":1}", &b);
     EQ("unknown field", b, "400 bad arguments: unknown field `x`, expected one of `kind`, `storey`, `a`, `b`, `sizes`, `material`");
     verb(&m, "place", "{\"kind\":\"column\",\"a\":[0,0]}", &b);
