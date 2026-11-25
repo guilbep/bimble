@@ -476,7 +476,9 @@ from `reference::read_dxf` over the `dxf` crate 0.6.2:
 - **Floats:** sin, cos and atan2 are the C core's correctly rounded ones (`ifc_math.h`); glibc's
   differ in the last bit for about 0.1 % of inputs. All 14 fixtures match byte for byte today; the
   suite accepts a number within 4 ulp and prints how many it needed (0).
-- **Session (minimal reference-plan layer, `session/links_dxf.c`):** a new reference is placed at
-  offset 0, rotation 0 (Rust also tries survey coordinates and centres a reference that misses the
-  model: `viewing.rs:1538-1600`, not ported); `view_references` gives segments for plans only
-  (sections: none yet).
+- **Session:** `link_dxf` is L1's path (`session/links_ref.c` `cc_refs_link(s, "dxf", …)`, placed
+  as section 13 says; `ref_read.c` hands the DXF to `cc_dxf_read` and its polylines to
+  `cc_refread_push`). `manage_links` by id (`session/links_dxf.c`: move, rotate, show, hide,
+  reload, remove) is a C addition for agents and tests: Rust's Manage links window has Reload,
+  Reload from… and Delete, and moves a reference by dragging it (`views.rs:203`), turns it in the
+  view form.

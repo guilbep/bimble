@@ -3660,20 +3660,6 @@ fn reference_files(dir: &Path, files: &mut Files) {
     let mut names: Vec<String> = std::fs::read_dir(&fixtures)
         .map(|d| {
             d.filter_map(|e| e.ok())
-// ---------------------------------------------------------------- L2: DXF reference plans
-
-/// Inputs of `dxf_files`: synthetic DXF files written by hand (ticket L2), committed.
-const DXF_FIXTURES: &str = "dxf/fixtures/";
-
-/// `dxf/<file>.txt` for each file of `dxf/fixtures/` (the C test `ccore/test/dxf_in_test.c`
-/// compares its reader with these): `reference::read(name, bytes, 100.0)` as
-///   `notes <n>`, then each note on its own line,
-///   `polylines <n>`, then each polyline as `{:?}` of `Vec<[f64; 2]>` on its own line;
-/// or a single line `error <text>` for a file Rust refuses.
-fn dxf_files(dir: &Path, files: &mut Files) {
-    let mut names: Vec<String> = std::fs::read_dir(dir.join(DXF_FIXTURES))
-        .map(|rd| {
-            rd.flatten()
                 .map(|e| e.file_name().to_string_lossy().into_owned())
                 .collect()
         })
@@ -3765,6 +3751,27 @@ fn reference_text(r: &Result<bimble_drawing::reference::Read, String>) -> String
         s += &body;
     }
     s
+}
+
+// ---------------------------------------------------------------- L2: DXF reference plans
+
+/// Inputs of `dxf_files`: synthetic DXF files written by hand (ticket L2), committed.
+const DXF_FIXTURES: &str = "dxf/fixtures/";
+
+/// `dxf/<file>.txt` for each file of `dxf/fixtures/` (the C test `ccore/test/dxf_in_test.c`
+/// compares its reader with these): `reference::read(name, bytes, 100.0)` as
+///   `notes <n>`, then each note on its own line,
+///   `polylines <n>`, then each polyline as `{:?}` of `Vec<[f64; 2]>` on its own line;
+/// or a single line `error <text>` for a file Rust refuses.
+fn dxf_files(dir: &Path, files: &mut Files) {
+    let mut names: Vec<String> = std::fs::read_dir(dir.join(DXF_FIXTURES))
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
     for name in names {
         let bytes = std::fs::read(dir.join(DXF_FIXTURES).join(&name)).expect("read DXF fixture");
         let mut s = String::new();

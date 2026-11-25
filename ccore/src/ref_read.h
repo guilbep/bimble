@@ -32,8 +32,8 @@ void cc_refread_free(cc_refread *r);
 int cc_refread_push(cc_refread *r, const double (*p)[2], size_t n);
 void cc_refread_note(cc_refread *r, const char *text);
 
-/* reference.rs `read`: by the name's extension (any case) .pdf (pdf_in.h), .dxf (ticket L2: not
- * read yet), .dwg (refused, with how to convert it), else refused. `pdf_scale`: the plan's 1:N.
+/* reference.rs `read`: by the name's extension (any case) .pdf (pdf_in.h), .dxf (dxf_in.h, ticket
+ * L2), .dwg (refused, with how to convert it), else refused. `pdf_scale`: the plan's 1:N.
  * 0 ok (`out` filled; free it with cc_refread_free), -1 with the error text in `err`. */
 int cc_ref_read(const char *name, size_t name_len, const unsigned char *bytes, size_t n, double pdf_scale,
                 cc_refread *out, Buf *err);
