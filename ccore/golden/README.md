@@ -8,11 +8,15 @@ not made or checked here.
 
 - `cargo run -p bimble-api --example ccore_golden -- --generate-frame`: makes `frame.json`. Its
   ids are random, so run it once and commit the file. It refuses to overwrite an existing one.
+- `cargo run -p bimble-api --example ccore_golden -- --generate-frame2`: makes `frame2.json`
+  (random ids too: run once, commit). It refuses to overwrite an existing one.
 - `cargo run -p bimble-api --example ccore_golden`: derives every other file from the committed
-  `frame.json` (loaded with Rust's own loader) and writes them. Reruns give the same bytes.
+  `frame.json` and `frame2.json` (loaded with Rust's own loader) and writes them. Reruns give the
+  same bytes.
 - `cargo run -p bimble-api --example ccore_golden -- --check`: derives the files again in memory
   and compares them byte for byte with this directory. Exit 1 lists each file that differs, is
-  missing, or is here but no longer produced (`frame.json`, `README.md` and `floats/` excepted).
+  missing, or is here but no longer produced (`frame.json`, `frame2.json`, `README.md` and
+  `floats/` excepted).
 
 All text files are UTF-8 with `\n` line ends and a final `\n`. "Hex" is lower case.
 
@@ -121,3 +125,44 @@ end. Both as `file::to_string`, masked as above.
 - `frame_reimport.json`: `bimble_ifc::import::import_str(frame.ifc)` (the masked text above),
   then `file::to_string`, masked as above. The import keeps element and storey ids, makes a new
   material id (`<new-1>`), drops the material's values and names the project "Imported model".
+
+## frame2.json
+
+A second synthetic model, for what `frame.json` lacks. Built through `Command`s and
+`History::apply` on an empty model (`frame2()` in the dumper), written with `file::to_string`.
+Load then save must give the same bytes (asserted on every run). It has:
+
+- Project name with `"` and `\`; project information (`SetProject`): 6 entries, values with
+  `"`, `\`, a newline, a tab, accents and CJK.
+- 2 storeys: `Rez-de-chaussée` (0.0) and `Étage "1"` (3150.5).
+- 3 materials: `C30/37` and `S355` from the library (all 4 props), and a timber
+  `Bois "local" \ épicéa` with density and strength only (no modulus, no source).
+- 11 elements:
+
+| Name | Class (`ifc_entity`) | Generator | Notes |
+|---|---|---|---|
+| `F1` | IfcFooting | pad_footing | origin z −600 |
+| `C1` | IfcColumn | rect_column | height 2899.9; 6 properties |
+| `HEB "200"` | IfcColumn | rect_column | steel |
+| `Poutre \ "B1" bois` | IfcBeam | rect_beam | timber, along x; renamed (`Rename`) |
+| `W1` | IfcWall | wall | axis-aligned |
+| `W2<tab>rotated 30°` | IfcWall | wall | `x_axis` = (cos 30°, sin 30°, 0); 2 properties |
+| `D1` | IfcSlab | slab | rectangle |
+| `D2 (L)` | IfcSlab | extruded_polygon | non-convex L, 6 points |
+| `D3 trémie` | IfcSlab | extruded_polygon | one clockwise void |
+| `Gousset` | IfcBuildingElementProxy (`IfcPlate`) | extruded_polygon | triangle; `z_axis` = −y |
+| `Garde-corps` | IfcBuildingElementProxy (`IfcRailing`) | mesh | tetrahedron, 4 vertices; 1 property |
+
+Property keys (`SetProperty`) include `Remarque "chantier"`, `Chemin\Clé`, `日本語/名前`; values
+include `"`, `\`, `—` and an emoji. No openings, views, sheets, schedules or georef.
+
+## frame2/
+
+Derived from `frame2.json`, in the formats above:
+
+- `frame2/mesh/`: as `mesh/` (`scene.txt`, `000.txt` … `010.txt`). Here the rectangular
+  extrusions (footing, columns, beam, walls, slab `D1`) are instances (a `t` line); the
+  extruded polygons and the mesh are not. `scene.txt`'s class is `ifc_entity` when there is one.
+- `frame2/query.txt`: as `query.txt`. Calls: `storeys`, `materials`, `project`, `elements` with
+  no filter, `class` for each of the 6 classes, `storey` for each storey, `limit` 2, then class
+  IfcSlab + upper storey + limit 2; then `element` for every element, in id order.

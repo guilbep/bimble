@@ -3,13 +3,20 @@
 //!
 //! `ccore_golden --generate-frame`: build the demo concrete frame and write `frame.json` (its ids
 //! are random: run once, commit the file).
-//! `ccore_golden`: derive every other file from the committed `frame.json` and write them.
+//! `ccore_golden --generate-frame2`: build the second synthetic model through commands and
+//! write `frame2.json` (random ids too: run once, commit).
+//! `ccore_golden`: derive every other file from the committed `frame.json` and `frame2.json`
+//! and write them.
 //! `ccore_golden --check`: derive them again and byte-compare with `ccore/golden/`; exit 1
 //! listing the files that differ, are missing or are not produced any more.
 
 use bimble_api::dispatch;
 use bimble_core::demo::{FrameSpec, concrete_frame};
-use bimble_core::{Command, GlobalId, History, MaterialCategory, Model, file};
+use bimble_core::library::{self, MaterialProps};
+use bimble_core::{
+    Command, Element, Generator, GlobalId, History, IfcClass, Material, MaterialCategory, Model,
+    Placement, Storey, file,
+};
 use bimble_geom::scene::Geometry;
 use bimble_geom::{Mesh, Scene};
 use serde_json::{Value, json};
@@ -20,7 +27,7 @@ use std::path::{Path, PathBuf};
 /// Fixed IFC header timestamp, so the export is reproducible.
 const IFC_TIMESTAMP: &str = "2026-01-01T00:00:00";
 /// Files in `ccore/golden/` this program does not produce (input, docs, another ticket's).
-const NOT_PRODUCED: [&str; 2] = ["frame.json", "README.md"];
+const NOT_PRODUCED: [&str; 3] = ["frame.json", "frame2.json", "README.md"];
 const OTHER_TICKET_DIR: &str = "floats/";
 
 type Files = BTreeMap<String, Vec<u8>>;
@@ -44,6 +51,17 @@ fn main() {
             std::fs::write(&path, file::to_string(&m)).expect("write frame.json");
             println!("wrote frame.json ({} elements)", m.elements.len());
         }
+        "--generate-frame2" => {
+            let path = dir.join("frame2.json");
+            if path.exists() {
+                eprintln!("frame2.json exists; delete it first to make a new one (new ids)");
+                std::process::exit(2);
+            }
+            std::fs::create_dir_all(&dir).expect("create ccore/golden");
+            let m = frame2();
+            std::fs::write(&path, file::to_string(&m)).expect("write frame2.json");
+            println!("wrote frame2.json ({} elements)", m.elements.len());
+        }
         "" | "--check" => {
             let files = derive(&dir);
             if mode.is_empty() {
@@ -62,7 +80,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("usage: ccore_golden [--generate-frame | --check]");
+            eprintln!("usage: ccore_golden [--generate-frame | --generate-frame2 | --check]");
             std::process::exit(2);
         }
     }
@@ -136,10 +154,11 @@ fn derive(dir: &Path) -> Files {
 
     let mut files = Files::new();
     files.insert("guid.txt".into(), guid_txt(&m).into_bytes());
-    mesh_files(&m, &mut files);
+    mesh_files(&m, "mesh/", &mut files);
     files.insert("query.txt".into(), query_txt(&m).into_bytes());
     verbs_files(&m, &known, &mut files);
     ifc_files(&m, &known, &mut files);
+    frame2_files(dir, &mut files);
     files
 }
 
@@ -267,7 +286,7 @@ fn category_index(c: MaterialCategory) -> usize {
     MaterialCategory::ALL.iter().position(|&x| x == c).unwrap()
 }
 
-fn mesh_files(m: &Model, files: &mut Files) {
+fn mesh_files(m: &Model, prefix: &str, files: &mut Files) {
     let scene = Scene::from_model(m);
     let o = scene.origin_mm;
     let mut s = String::new();
@@ -298,12 +317,12 @@ fn mesh_files(m: &Model, files: &mut Files) {
             mesh.edge_normals.len()
         )
         .unwrap();
-        files.insert(format!("mesh/{k:03}.txt"), text.into_bytes());
+        files.insert(format!("{prefix}{k:03}.txt"), text.into_bytes());
     }
     for w in &scene.warnings {
         writeln!(s, "warning {w}").unwrap();
     }
-    files.insert("mesh/scene.txt".into(), s.into_bytes());
+    files.insert(format!("{prefix}scene.txt"), s.into_bytes());
 }
 
 // ---------------------------------------------------------------- queries
@@ -619,4 +638,354 @@ fn ifc_files(m: &Model, known: &BTreeSet<GlobalId>, files: &mut Files) {
         "ifc/frame_reimport.json".into(),
         mask.model_text(&back).into_bytes(),
     );
+}
+
+// ---------------------------------------------------------------- frame2
+
+/// A second synthetic model with what the demo frame lacks: walls (one rotated 30° in plan),
+/// extruded polygons (non-convex, with a void, a triangle), a mesh, `ifc_entity`, element
+/// properties, project information, three materials with full, partial and library props, and
+/// names that need JSON escapes. Built through commands on an empty model.
+fn frame2() -> Model {
+    let mut m = Model::new("Synthetic \"frame 2\" \\ golden");
+    let mut h = History::default();
+    let mut apply = |m: &mut Model, cmds: Vec<Command>| h.apply(m, cmds).expect("frame2 command");
+
+    let ground = Storey {
+        id: GlobalId::new(),
+        name: "Rez-de-chaussée".into(),
+        elevation: 0.0,
+    };
+    let upper = Storey {
+        id: GlobalId::new(),
+        name: "Étage \"1\"".into(),
+        elevation: 3150.5,
+    };
+    let (s0, s1) = (ground.id, upper.id);
+    apply(
+        &mut m,
+        vec![Command::AddStorey(ground), Command::AddStorey(upper)],
+    );
+
+    let grade = |name: &str| library::to_material(&library::lookup(name).expect("library grade"));
+    let concrete = grade("C30/37");
+    let steel = grade("S355");
+    let timber = Material {
+        id: GlobalId::new(),
+        name: "Bois \"local\" \\ épicéa".into(),
+        category: MaterialCategory::Timber,
+        props: MaterialProps {
+            density_kg_m3: Some(450.0),
+            strength_mpa: Some(22.5),
+            ..Default::default()
+        },
+    };
+    let (mc, ms, mt) = (concrete.id, steel.id, timber.id);
+    apply(
+        &mut m,
+        vec![
+            Command::AddMaterial(concrete),
+            Command::AddMaterial(steel),
+            Command::AddMaterial(timber),
+        ],
+    );
+
+    let el = |class, name: &str, storey, material, placement, generator| Element {
+        id: GlobalId::new(),
+        class,
+        name: name.into(),
+        storey,
+        material,
+        placement,
+        generator,
+        openings: Vec::new(),
+        properties: Default::default(),
+        ifc_entity: None,
+    };
+    let (c, s) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+    let footing = el(
+        IfcClass::IfcFooting,
+        "F1",
+        s0,
+        mc,
+        Placement::at(0.0, 0.0, -600.0),
+        Generator::PadFooting {
+            width: 1500.0,
+            depth: 1500.0,
+            height: 600.0,
+        },
+    );
+    let column = el(
+        IfcClass::IfcColumn,
+        "C1",
+        s0,
+        mc,
+        Placement::at(0.0, 0.0, 0.0),
+        Generator::RectColumn {
+            width: 300.0,
+            depth: 400.0,
+            height: 2899.9,
+        },
+    );
+    let steel_column = el(
+        IfcClass::IfcColumn,
+        "HEB \"200\"",
+        s0,
+        ms,
+        Placement::at(6000.0, 0.0, 0.0),
+        Generator::RectColumn {
+            width: 200.0,
+            depth: 200.0,
+            height: 2899.9,
+        },
+    );
+    let beam = el(
+        IfcClass::IfcBeam,
+        "Poutre \\ \"B1\"",
+        s0,
+        mt,
+        Placement {
+            origin: [0.0, 0.0, 2650.0],
+            z_axis: [1.0, 0.0, 0.0],
+            x_axis: [0.0, 1.0, 0.0],
+        },
+        Generator::RectBeam {
+            width: 160.0,
+            height: 400.0,
+            length: 6000.0,
+        },
+    );
+    let wall = el(
+        IfcClass::IfcWall,
+        "W1",
+        s0,
+        mc,
+        Placement::at(0.0, -1000.0, 0.0),
+        Generator::Wall {
+            length: 6000.0,
+            thickness: 200.0,
+            height: 2900.0,
+        },
+    );
+    let rotated_wall = el(
+        IfcClass::IfcWall,
+        "W2\trotated 30°",
+        s0,
+        mc,
+        Placement {
+            origin: [6000.0, -1000.0, 0.0],
+            z_axis: [0.0, 0.0, 1.0],
+            x_axis: [c, s, 0.0],
+        },
+        Generator::Wall {
+            length: 3500.0,
+            thickness: 180.0,
+            height: 2900.0,
+        },
+    );
+    let slab = el(
+        IfcClass::IfcSlab,
+        "D1",
+        s1,
+        mc,
+        Placement::at(0.0, -1000.0, -250.0),
+        Generator::Slab {
+            outline: vec![[0.0, 0.0], [6000.0, 0.0], [6000.0, 4000.0], [0.0, 4000.0]],
+            thickness: 250.0,
+        },
+    );
+    let l_slab = el(
+        IfcClass::IfcSlab,
+        "D2 (L)",
+        s1,
+        mc,
+        Placement::at(8000.0, 0.0, -200.0),
+        Generator::ExtrudedPolygon {
+            outline: vec![
+                [0.0, 0.0],
+                [6000.0, 0.0],
+                [6000.0, 2000.0],
+                [2000.0, 2000.0],
+                [2000.0, 5000.0],
+                [0.0, 5000.0],
+            ],
+            voids: Vec::new(),
+            height: 200.0,
+        },
+    );
+    let void_slab = el(
+        IfcClass::IfcSlab,
+        "D3 trémie",
+        s1,
+        mc,
+        Placement::at(0.0, 4000.0, -200.0),
+        Generator::ExtrudedPolygon {
+            outline: vec![[0.0, 0.0], [4000.0, 0.0], [4000.0, 3000.0], [0.0, 3000.0]],
+            // Clockwise, as voids are.
+            voids: vec![vec![
+                [1000.0, 1000.0],
+                [1000.0, 2200.0],
+                [2500.5, 2200.0],
+                [2500.5, 1000.0],
+            ]],
+            height: 200.0,
+        },
+    );
+    let mut plate = el(
+        IfcClass::IfcBuildingElementProxy,
+        "Gousset",
+        s1,
+        ms,
+        Placement {
+            origin: [6000.0, 0.0, 500.0],
+            z_axis: [0.0, -1.0, 0.0],
+            x_axis: [1.0, 0.0, 0.0],
+        },
+        Generator::ExtrudedPolygon {
+            outline: vec![[0.0, 0.0], [300.0, 0.0], [0.0, 300.0]],
+            voids: Vec::new(),
+            height: 15.0,
+        },
+    );
+    plate.ifc_entity = Some("IfcPlate".into());
+    // A tetrahedron, outward faces.
+    let mut railing = el(
+        IfcClass::IfcBuildingElementProxy,
+        "Garde-corps",
+        s1,
+        ms,
+        Placement::at(1000.0, 1000.0, 0.0),
+        Generator::Mesh {
+            positions: std::sync::Arc::new(vec![
+                [0.0, 0.0, 0.0],
+                [1000.0, 0.0, 0.0],
+                [0.0, 1000.0, 0.0],
+                [0.0, 0.0, 1100.0],
+            ]),
+            indices: std::sync::Arc::new(vec![0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3]),
+        },
+    );
+    railing.ifc_entity = Some("IfcRailing".into());
+    let (col_id, rot_id, rail_id, beam_id) = (column.id, rotated_wall.id, railing.id, beam.id);
+    apply(
+        &mut m,
+        [
+            footing,
+            column,
+            steel_column,
+            beam,
+            wall,
+            rotated_wall,
+            slab,
+            l_slab,
+            void_slab,
+            plate,
+            railing,
+        ]
+        .into_iter()
+        .map(Command::AddElement)
+        .collect(),
+    );
+
+    let prop = |id, key: &str, value: &str| Command::SetProperty {
+        id,
+        key: key.into(),
+        value: Some(value.into()),
+    };
+    apply(
+        &mut m,
+        vec![
+            prop(col_id, "Pset_ColumnCommon/Reference", "C-1"),
+            prop(
+                col_id,
+                "Pset_ConcreteElementGeneral/StrengthClass",
+                "C30/37",
+            ),
+            prop(
+                col_id,
+                "Remarque \"chantier\"",
+                "Béton \"apparent\" — vérifier",
+            ),
+            prop(col_id, "Chemin\\Clé", "C:\\temp\\x"),
+            prop(col_id, "日本語/名前", "柱 🏗️"),
+            prop(col_id, "Note", "a / b"),
+            prop(rot_id, "Pset_WallCommon/IsExternal", "true"),
+            prop(rot_id, "Pset_WallCommon/FireRating", "EI 60"),
+            prop(rail_id, "Pset_RailingCommon/Height", "1100"),
+            Command::Rename {
+                id: beam_id,
+                name: "Poutre \\ \"B1\" bois".into(),
+            },
+        ],
+    );
+    let project = [
+        ("project_number", "2026-T2b"),
+        ("project_title", "Synthetic \"frame 2\""),
+        ("client", "Maître d'ouvrage — Ville"),
+        ("project_address", "Rue du \"Lac\" 1\n1000 Ville"),
+        ("phase", "51"),
+        ("custom_note_2", "back\\slash\ttab 日本"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    apply(&mut m, vec![Command::SetProject { project }]);
+    m
+}
+
+fn frame2_query_txt(m: &Model) -> String {
+    let storey = |elev: f64| {
+        m.storeys
+            .values()
+            .find(|s| s.elevation == elev)
+            .unwrap()
+            .id
+            .to_string()
+    };
+    let (s0, s1) = (storey(0.0), storey(3150.5));
+    let mut calls: Vec<(&str, Value)> = vec![
+        ("storeys", json!({})),
+        ("materials", json!({})),
+        ("project", json!({})),
+        ("elements", json!({})),
+    ];
+    for class in [
+        "IfcColumn",
+        "IfcBeam",
+        "IfcSlab",
+        "IfcWall",
+        "IfcFooting",
+        "IfcBuildingElementProxy",
+    ] {
+        calls.push(("elements", json!({ "class": class })));
+    }
+    calls.push(("elements", json!({ "storey": s0 })));
+    calls.push(("elements", json!({ "storey": s1 })));
+    calls.push(("elements", json!({"limit": 2})));
+    calls.push((
+        "elements",
+        json!({"class": "IfcSlab", "storey": s1, "limit": 2}),
+    ));
+    for id in m.elements.keys() {
+        calls.push(("element", json!({"id": id.to_string()})));
+    }
+    let mut s = String::new();
+    for (name, args) in calls {
+        let answer = dispatch::query(m, name, args.clone()).map(|v| v.to_string());
+        record(&mut s, "query", name, &args, &answer);
+    }
+    s
+}
+
+fn frame2_files(dir: &Path, files: &mut Files) {
+    let text = std::fs::read_to_string(dir.join("frame2.json"))
+        .expect("ccore/golden/frame2.json: run with --generate-frame2 first");
+    let m = file::from_str(&text).expect("frame2.json loads");
+    assert_eq!(
+        file::to_string(&m),
+        text,
+        "frame2.json: load + save must give identical bytes"
+    );
+    mesh_files(&m, "frame2/mesh/", files);
+    files.insert("frame2/query.txt".into(), frame2_query_txt(&m).into_bytes());
 }

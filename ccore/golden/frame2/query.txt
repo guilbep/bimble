@@ -1,0 +1,75 @@
+>>> query storeys {}
+200 [{"element_count":6,"elevation":0.0,"id":"1vIjA4wIz6huLvC8B1gv4M","name":"Rez-de-chaussée"},{"element_count":5,"elevation":3150.5,"id":"1gZ1R3uyTBO80cC4$nvoxB","name":"Étage \"1\""}]
+
+>>> query materials {}
+200 [{"category":"steel","element_count":3,"id":"09TM5shL90ruo$N1V6tpqq","name":"S355"},{"category":"concrete","element_count":7,"id":"1mkwj1Nm95IQysWJ$GMN4N","name":"C30/37"},{"category":"timber","element_count":1,"id":"2fQGV0aS95yO$ugIXpqVCc","name":"Bois \"local\" \\ épicéa"}]
+
+>>> query project {}
+200 {"building_id":"3dJJVTJ_tcn_Z5Y3K5b0FV","id":"21Mh7KP3zBjRllySRNfwpf","info":{"client":"Maître d'ouvrage — Ville","custom_note_2":"back\\slash\ttab 日本","phase":"51","project_address":"Rue du \"Lac\" 1\n1000 Ville","project_number":"2026-T2b","project_title":"Synthetic \"frame 2\""},"name":"Synthetic \"frame 2\" \\ golden","site_id":"29Rs5uLXKEO3M7DEejNgM_"}
+
+>>> query elements {}
+200 [{"class":"IfcSlab","generator":"extruded_polygon","id":"0X4VVrRkf1B9lE_0jARt46","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"D2 (L)","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcColumn","generator":"rect_column","id":"0uTOdmIsz6iAjMnb$AZIG3","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"C1","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcColumn","generator":"rect_column","id":"1WQ4saTef14QR$c82u9pxW","material":"09TM5shL90ruo$N1V6tpqq","name":"HEB \"200\"","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcSlab","generator":"extruded_polygon","id":"25mfqCdS50juHEIq4vPK9f","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"D3 trémie","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcSlab","generator":"slab","id":"2FgB3PCsHFafKWKmIHC4zx","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"D1","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcFooting","generator":"pad_footing","id":"2NwTA_MnbD$O1tovNVwcdv","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"F1","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcWall","generator":"wall","id":"2XB9jAbxPCKAXC_kVMr$h5","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"W1","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcBuildingElementProxy","generator":"extruded_polygon","id":"2Xi2EcNOvB3wSWg3M1CB5f","material":"09TM5shL90ruo$N1V6tpqq","name":"Gousset","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcWall","generator":"wall","id":"2lIeeldDb7IPfCbvTRpHDc","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"W2\trotated 30°","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcBeam","generator":"rect_beam","id":"3QaNBTGrj1jwCHQxXT6adX","material":"2fQGV0aS95yO$ugIXpqVCc","name":"Poutre \\ \"B1\" bois","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcBuildingElementProxy","generator":"mesh","id":"3guiHznOL0jAR4d3gsLWHw","material":"09TM5shL90ruo$N1V6tpqq","name":"Garde-corps","storey":"1gZ1R3uyTBO80cC4$nvoxB"}]
+
+>>> query elements {"class":"IfcColumn"}
+200 [{"class":"IfcColumn","generator":"rect_column","id":"0uTOdmIsz6iAjMnb$AZIG3","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"C1","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcColumn","generator":"rect_column","id":"1WQ4saTef14QR$c82u9pxW","material":"09TM5shL90ruo$N1V6tpqq","name":"HEB \"200\"","storey":"1vIjA4wIz6huLvC8B1gv4M"}]
+
+>>> query elements {"class":"IfcBeam"}
+200 [{"class":"IfcBeam","generator":"rect_beam","id":"3QaNBTGrj1jwCHQxXT6adX","material":"2fQGV0aS95yO$ugIXpqVCc","name":"Poutre \\ \"B1\" bois","storey":"1vIjA4wIz6huLvC8B1gv4M"}]
+
+>>> query elements {"class":"IfcSlab"}
+200 [{"class":"IfcSlab","generator":"extruded_polygon","id":"0X4VVrRkf1B9lE_0jARt46","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"D2 (L)","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcSlab","generator":"extruded_polygon","id":"25mfqCdS50juHEIq4vPK9f","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"D3 trémie","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcSlab","generator":"slab","id":"2FgB3PCsHFafKWKmIHC4zx","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"D1","storey":"1gZ1R3uyTBO80cC4$nvoxB"}]
+
+>>> query elements {"class":"IfcWall"}
+200 [{"class":"IfcWall","generator":"wall","id":"2XB9jAbxPCKAXC_kVMr$h5","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"W1","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcWall","generator":"wall","id":"2lIeeldDb7IPfCbvTRpHDc","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"W2\trotated 30°","storey":"1vIjA4wIz6huLvC8B1gv4M"}]
+
+>>> query elements {"class":"IfcFooting"}
+200 [{"class":"IfcFooting","generator":"pad_footing","id":"2NwTA_MnbD$O1tovNVwcdv","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"F1","storey":"1vIjA4wIz6huLvC8B1gv4M"}]
+
+>>> query elements {"class":"IfcBuildingElementProxy"}
+200 [{"class":"IfcBuildingElementProxy","generator":"extruded_polygon","id":"2Xi2EcNOvB3wSWg3M1CB5f","material":"09TM5shL90ruo$N1V6tpqq","name":"Gousset","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcBuildingElementProxy","generator":"mesh","id":"3guiHznOL0jAR4d3gsLWHw","material":"09TM5shL90ruo$N1V6tpqq","name":"Garde-corps","storey":"1gZ1R3uyTBO80cC4$nvoxB"}]
+
+>>> query elements {"storey":"1vIjA4wIz6huLvC8B1gv4M"}
+200 [{"class":"IfcColumn","generator":"rect_column","id":"0uTOdmIsz6iAjMnb$AZIG3","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"C1","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcColumn","generator":"rect_column","id":"1WQ4saTef14QR$c82u9pxW","material":"09TM5shL90ruo$N1V6tpqq","name":"HEB \"200\"","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcFooting","generator":"pad_footing","id":"2NwTA_MnbD$O1tovNVwcdv","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"F1","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcWall","generator":"wall","id":"2XB9jAbxPCKAXC_kVMr$h5","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"W1","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcWall","generator":"wall","id":"2lIeeldDb7IPfCbvTRpHDc","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"W2\trotated 30°","storey":"1vIjA4wIz6huLvC8B1gv4M"},{"class":"IfcBeam","generator":"rect_beam","id":"3QaNBTGrj1jwCHQxXT6adX","material":"2fQGV0aS95yO$ugIXpqVCc","name":"Poutre \\ \"B1\" bois","storey":"1vIjA4wIz6huLvC8B1gv4M"}]
+
+>>> query elements {"storey":"1gZ1R3uyTBO80cC4$nvoxB"}
+200 [{"class":"IfcSlab","generator":"extruded_polygon","id":"0X4VVrRkf1B9lE_0jARt46","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"D2 (L)","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcSlab","generator":"extruded_polygon","id":"25mfqCdS50juHEIq4vPK9f","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"D3 trémie","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcSlab","generator":"slab","id":"2FgB3PCsHFafKWKmIHC4zx","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"D1","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcBuildingElementProxy","generator":"extruded_polygon","id":"2Xi2EcNOvB3wSWg3M1CB5f","material":"09TM5shL90ruo$N1V6tpqq","name":"Gousset","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcBuildingElementProxy","generator":"mesh","id":"3guiHznOL0jAR4d3gsLWHw","material":"09TM5shL90ruo$N1V6tpqq","name":"Garde-corps","storey":"1gZ1R3uyTBO80cC4$nvoxB"}]
+
+>>> query elements {"limit":2}
+200 [{"class":"IfcSlab","generator":"extruded_polygon","id":"0X4VVrRkf1B9lE_0jARt46","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"D2 (L)","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcColumn","generator":"rect_column","id":"0uTOdmIsz6iAjMnb$AZIG3","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"C1","storey":"1vIjA4wIz6huLvC8B1gv4M"}]
+
+>>> query elements {"class":"IfcSlab","limit":2,"storey":"1gZ1R3uyTBO80cC4$nvoxB"}
+200 [{"class":"IfcSlab","generator":"extruded_polygon","id":"0X4VVrRkf1B9lE_0jARt46","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"D2 (L)","storey":"1gZ1R3uyTBO80cC4$nvoxB"},{"class":"IfcSlab","generator":"extruded_polygon","id":"25mfqCdS50juHEIq4vPK9f","material":"1mkwj1Nm95IQysWJ$GMN4N","name":"D3 trémie","storey":"1gZ1R3uyTBO80cC4$nvoxB"}]
+
+>>> query element {"id":"0X4VVrRkf1B9lE_0jARt46"}
+200 {"class":"IfcSlab","generator":"extruded_polygon","generator_params":{"height":200.0,"kind":"extruded_polygon","outline":[[0.0,0.0],[6000.0,0.0],[6000.0,2000.0],[2000.0,2000.0],[2000.0,5000.0],[0.0,5000.0]]},"id":"0X4VVrRkf1B9lE_0jARt46","material":"1mkwj1Nm95IQysWJ$GMN4N","material_name":"C30/37","name":"D2 (L)","openings":0,"placement":{"origin":[8000.0,0.0,-200.0],"x_axis":[1.0,0.0,0.0],"z_axis":[0.0,0.0,1.0]},"properties":{},"storey":"1gZ1R3uyTBO80cC4$nvoxB","storey_name":"Étage \"1\""}
+
+>>> query element {"id":"0uTOdmIsz6iAjMnb$AZIG3"}
+200 {"class":"IfcColumn","generator":"rect_column","generator_params":{"depth":400.0,"height":2899.9,"kind":"rect_column","width":300.0},"id":"0uTOdmIsz6iAjMnb$AZIG3","material":"1mkwj1Nm95IQysWJ$GMN4N","material_name":"C30/37","name":"C1","openings":0,"placement":{"origin":[0.0,0.0,0.0],"x_axis":[1.0,0.0,0.0],"z_axis":[0.0,0.0,1.0]},"properties":{"Chemin\\Clé":"C:\\temp\\x","Note":"a / b","Pset_ColumnCommon/Reference":"C-1","Pset_ConcreteElementGeneral/StrengthClass":"C30/37","Remarque \"chantier\"":"Béton \"apparent\" — vérifier","日本語/名前":"柱 🏗️"},"storey":"1vIjA4wIz6huLvC8B1gv4M","storey_name":"Rez-de-chaussée"}
+
+>>> query element {"id":"1WQ4saTef14QR$c82u9pxW"}
+200 {"class":"IfcColumn","generator":"rect_column","generator_params":{"depth":200.0,"height":2899.9,"kind":"rect_column","width":200.0},"id":"1WQ4saTef14QR$c82u9pxW","material":"09TM5shL90ruo$N1V6tpqq","material_name":"S355","name":"HEB \"200\"","openings":0,"placement":{"origin":[6000.0,0.0,0.0],"x_axis":[1.0,0.0,0.0],"z_axis":[0.0,0.0,1.0]},"properties":{},"storey":"1vIjA4wIz6huLvC8B1gv4M","storey_name":"Rez-de-chaussée"}
+
+>>> query element {"id":"25mfqCdS50juHEIq4vPK9f"}
+200 {"class":"IfcSlab","generator":"extruded_polygon","generator_params":{"height":200.0,"kind":"extruded_polygon","outline":[[0.0,0.0],[4000.0,0.0],[4000.0,3000.0],[0.0,3000.0]],"voids":[[[1000.0,1000.0],[1000.0,2200.0],[2500.5,2200.0],[2500.5,1000.0]]]},"id":"25mfqCdS50juHEIq4vPK9f","material":"1mkwj1Nm95IQysWJ$GMN4N","material_name":"C30/37","name":"D3 trémie","openings":0,"placement":{"origin":[0.0,4000.0,-200.0],"x_axis":[1.0,0.0,0.0],"z_axis":[0.0,0.0,1.0]},"properties":{},"storey":"1gZ1R3uyTBO80cC4$nvoxB","storey_name":"Étage \"1\""}
+
+>>> query element {"id":"2FgB3PCsHFafKWKmIHC4zx"}
+200 {"class":"IfcSlab","generator":"slab","generator_params":{"kind":"slab","outline":[[0.0,0.0],[6000.0,0.0],[6000.0,4000.0],[0.0,4000.0]],"thickness":250.0},"id":"2FgB3PCsHFafKWKmIHC4zx","material":"1mkwj1Nm95IQysWJ$GMN4N","material_name":"C30/37","name":"D1","openings":0,"placement":{"origin":[0.0,-1000.0,-250.0],"x_axis":[1.0,0.0,0.0],"z_axis":[0.0,0.0,1.0]},"properties":{},"storey":"1gZ1R3uyTBO80cC4$nvoxB","storey_name":"Étage \"1\""}
+
+>>> query element {"id":"2NwTA_MnbD$O1tovNVwcdv"}
+200 {"class":"IfcFooting","generator":"pad_footing","generator_params":{"depth":1500.0,"height":600.0,"kind":"pad_footing","width":1500.0},"id":"2NwTA_MnbD$O1tovNVwcdv","material":"1mkwj1Nm95IQysWJ$GMN4N","material_name":"C30/37","name":"F1","openings":0,"placement":{"origin":[0.0,0.0,-600.0],"x_axis":[1.0,0.0,0.0],"z_axis":[0.0,0.0,1.0]},"properties":{},"storey":"1vIjA4wIz6huLvC8B1gv4M","storey_name":"Rez-de-chaussée"}
+
+>>> query element {"id":"2XB9jAbxPCKAXC_kVMr$h5"}
+200 {"class":"IfcWall","generator":"wall","generator_params":{"height":2900.0,"kind":"wall","length":6000.0,"thickness":200.0},"id":"2XB9jAbxPCKAXC_kVMr$h5","material":"1mkwj1Nm95IQysWJ$GMN4N","material_name":"C30/37","name":"W1","openings":0,"placement":{"origin":[0.0,-1000.0,0.0],"x_axis":[1.0,0.0,0.0],"z_axis":[0.0,0.0,1.0]},"properties":{},"storey":"1vIjA4wIz6huLvC8B1gv4M","storey_name":"Rez-de-chaussée"}
+
+>>> query element {"id":"2Xi2EcNOvB3wSWg3M1CB5f"}
+200 {"class":"IfcBuildingElementProxy","generator":"extruded_polygon","generator_params":{"height":15.0,"kind":"extruded_polygon","outline":[[0.0,0.0],[300.0,0.0],[0.0,300.0]]},"id":"2Xi2EcNOvB3wSWg3M1CB5f","material":"09TM5shL90ruo$N1V6tpqq","material_name":"S355","name":"Gousset","openings":0,"placement":{"origin":[6000.0,0.0,500.0],"x_axis":[1.0,0.0,0.0],"z_axis":[0.0,-1.0,0.0]},"properties":{},"storey":"1gZ1R3uyTBO80cC4$nvoxB","storey_name":"Étage \"1\""}
+
+>>> query element {"id":"2lIeeldDb7IPfCbvTRpHDc"}
+200 {"class":"IfcWall","generator":"wall","generator_params":{"height":2900.0,"kind":"wall","length":3500.0,"thickness":180.0},"id":"2lIeeldDb7IPfCbvTRpHDc","material":"1mkwj1Nm95IQysWJ$GMN4N","material_name":"C30/37","name":"W2\trotated 30°","openings":0,"placement":{"origin":[6000.0,-1000.0,0.0],"x_axis":[0.8660254037844387,0.49999999999999994,0.0],"z_axis":[0.0,0.0,1.0]},"properties":{"Pset_WallCommon/FireRating":"EI 60","Pset_WallCommon/IsExternal":"true"},"storey":"1vIjA4wIz6huLvC8B1gv4M","storey_name":"Rez-de-chaussée"}
+
+>>> query element {"id":"3QaNBTGrj1jwCHQxXT6adX"}
+200 {"class":"IfcBeam","generator":"rect_beam","generator_params":{"height":400.0,"kind":"rect_beam","length":6000.0,"width":160.0},"id":"3QaNBTGrj1jwCHQxXT6adX","material":"2fQGV0aS95yO$ugIXpqVCc","material_name":"Bois \"local\" \\ épicéa","name":"Poutre \\ \"B1\" bois","openings":0,"placement":{"origin":[0.0,0.0,2650.0],"x_axis":[0.0,1.0,0.0],"z_axis":[1.0,0.0,0.0]},"properties":{},"storey":"1vIjA4wIz6huLvC8B1gv4M","storey_name":"Rez-de-chaussée"}
+
+>>> query element {"id":"3guiHznOL0jAR4d3gsLWHw"}
+200 {"class":"IfcBuildingElementProxy","generator":"mesh","generator_params":{"kind":"mesh","triangles":4,"vertices":4},"id":"3guiHznOL0jAR4d3gsLWHw","material":"09TM5shL90ruo$N1V6tpqq","material_name":"S355","name":"Garde-corps","openings":0,"placement":{"origin":[1000.0,1000.0,0.0],"x_axis":[1.0,0.0,0.0],"z_axis":[0.0,0.0,1.0]},"properties":{"Pset_RailingCommon/Height":"1100"},"storey":"1gZ1R3uyTBO80cC4$nvoxB","storey_name":"Étage \"1\""}
+
