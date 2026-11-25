@@ -484,6 +484,7 @@ name = "bimble-api"
 version = "0.18.1"
 dependencies = [
  "bimble-core",
+ "bimble-drawing",
  "bimble-geom",
  "bimble-ifc",
  "flate2",

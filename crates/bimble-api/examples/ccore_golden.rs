@@ -19,7 +19,8 @@
 //! goldens; `ccore/tools/ifc_dump.c` is the C side). Nothing is masked.
 //!
 //! Every verb (`verbs_all.txt`, `frame2/verbs_all.txt`), the verbs' JSON schemas
-//! (`verbs_schema/`, `verbs_list.json`) and the viewer export (`view/*.bimbleview`).
+//! (`verbs_schema/`, `verbs_list.json`), the viewer export (`view/*.bimbleview`) and the
+//! quantities and schedule tables (`schedule/`).
 
 use bimble_api::dispatch;
 use bimble_core::demo::{FrameSpec, concrete_frame};
@@ -191,6 +192,7 @@ fn derive(dir: &Path) -> Files {
     verbs_all_files(dir, &m, &mut files);
     schema_files(&mut files);
     view_files(dir, &m, &mut files);
+    schedule_files(dir, &m, &mut files);
     files
 }
 
@@ -1915,5 +1917,116 @@ fn view_files(dir: &Path, frame: &Model, files: &mut Files) {
         assert_eq!(back.elements.len(), scene.elements.len());
         files.insert(format!("view/{name}.bimbleview"), gz);
         files.insert(format!("view/{name}.bimbleview.raw"), raw);
+    }
+}
+
+// ---------------------------------------------------------------- quantities and schedules
+
+/// The schedules a golden table is made for: the effective ones of the model (the built-in
+/// ten, as neither frame stores one), then two that no built-in one covers: every field, not
+/// grouped; and only summed fields (no label in the totals), grouped, no total.
+fn golden_schedules(m: &Model) -> Vec<bimble_core::schedule::ScheduleDef> {
+    use bimble_core::schedule::{Field, ScheduleDef, effective};
+    let mut v = effective(&m.schedules);
+    v.push(ScheduleDef {
+        name: "Every field".into(),
+        classes: Vec::new(),
+        family: None,
+        fields: Field::ALL.to_vec(),
+        group_by_level: false,
+        totals: true,
+    });
+    v.push(ScheduleDef {
+        name: "Sums only".into(),
+        classes: vec!["IfcColumn".into(), "ifcbeam".into()],
+        family: None,
+        fields: vec![Field::Volume, Field::Area, Field::Mass, Field::Length],
+        group_by_level: true,
+        totals: false,
+    });
+    v
+}
+
+/// A schedule's file name: lower case, spaces as `-` ("concrete-columns").
+fn schedule_slug(name: &str) -> String {
+    name.to_lowercase().replace(' ', "-")
+}
+
+/// `schedule/<model>/`: per schedule `<slug>.json` (`table_json` with max 50, compact, `\n`)
+/// and `<slug>.csv` (`to_csv`); `measures.txt`, one line per scene element (`measure` and the
+/// mass from `density`, numbers as `{:?}`). Both frames get every effective schedule; the
+/// hand-written IFC fixtures, read for display (`read_str`), get the two extra ones
+/// (`schedule/ifc-<name>/`).
+fn schedule_files(dir: &Path, frame: &Model, files: &mut Files) {
+    let text = std::fs::read_to_string(dir.join("frame2.json")).expect("frame2.json");
+    let m2 = file::from_str(&text).expect("frame2.json loads");
+    for (name, m) in [("frame", frame), ("frame2", &m2)] {
+        schedule_scene(&Scene::from_model(m), &golden_schedules(m), name, files);
+    }
+    let extra: Vec<_> = golden_schedules(&Model::default())
+        .into_iter()
+        .skip(bimble_core::schedule::default_schedules().len())
+        .collect();
+    for name in SCHEDULE_IFC {
+        let path = dir.join(format!("ifc/fixtures/{name}.ifc"));
+        let text = std::fs::read_to_string(&path).expect("ifc fixture");
+        let scene = bimble_ifc::read::read_str(&text).expect("ifc fixture reads");
+        schedule_scene(&scene, &extra, &format!("ifc-{name}"), files);
+    }
+}
+
+/// The `ifc/fixtures/` given schedule tables (not `opening`: the C core cuts no openings).
+const SCHEDULE_IFC: [&str; 7] = [
+    "circle_column",
+    "ishape_beam",
+    "rect_hollow",
+    "triangulated",
+    "faceted_brep",
+    "mapped_item",
+    "indexed_arc",
+];
+
+fn schedule_scene(
+    scene: &Scene,
+    defs: &[bimble_core::schedule::ScheduleDef],
+    name: &str,
+    files: &mut Files,
+) {
+    use bimble_drawing::schedule::{density, measure, schedule, table_json, to_csv};
+    let mut s = String::new();
+    for (k, e) in scene.elements.iter().enumerate() {
+        let Some(x) = measure(scene, e) else {
+            writeln!(s, "{k:03} {} none", e.global_id).unwrap();
+            continue;
+        };
+        let mass = density(scene, &e.material)
+            .map_or("-".to_string(), |rho| format!("{:?}", x.volume_m3 * rho));
+        writeln!(
+            s,
+            "{k:03} {} volume={:?} area={:?} length={:?} width={:?} height={:?} mass={mass} \
+             centre={:?},{:?} section={}",
+            e.global_id,
+            x.volume_m3,
+            x.area_m2,
+            x.length,
+            x.width,
+            x.height,
+            x.centre[0],
+            x.centre[1],
+            json_str(&x.section)
+        )
+        .unwrap();
+    }
+    files.insert(format!("schedule/{name}/measures.txt"), s.into_bytes());
+    for def in defs {
+        let t = schedule(scene, def);
+        let slug = schedule_slug(&def.name);
+        let mut j = serde_json::to_string(&table_json(&t, scene, 50)).unwrap();
+        j.push('\n');
+        files.insert(format!("schedule/{name}/{slug}.json"), j.into_bytes());
+        files.insert(
+            format!("schedule/{name}/{slug}.csv"),
+            to_csv(&t).into_bytes(),
+        );
     }
 }

@@ -12,6 +12,7 @@ serde_json.workspace = true
 schemars.workspace = true
 
 [dev-dependencies]
+bimble-drawing.workspace = true
 bimble-geom.workspace = true
 bimble-ifc.workspace = true
 flate2.workspace = true

@@ -1,0 +1,1 @@
+000 2T2cRHollow00000000010 volume=0.013632 area=0.004544 length=3000.0 width=100.0 height=3000.0 mass=107.0112 centre=1000.0,0.0 section="20/10"

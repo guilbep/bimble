@@ -1,0 +1,77 @@
+Level,Name,IFC class,Material,Volume (m³),Mass (kg)
+Fondations,S00,IfcFooting,C30/37,1.152,2880
+Fondations,S01,IfcFooting,C30/37,1.152,2880
+Fondations,S02,IfcFooting,C30/37,1.152,2880
+Fondations,S10,IfcFooting,C30/37,1.152,2880
+Fondations,S11,IfcFooting,C30/37,1.152,2880
+Fondations,S12,IfcFooting,C30/37,1.152,2880
+Fondations,S20,IfcFooting,C30/37,1.152,2880
+Fondations,S21,IfcFooting,C30/37,1.152,2880
+Fondations,S22,IfcFooting,C30/37,1.152,2880
+Fondations,S30,IfcFooting,C30/37,1.152,2880
+Fondations,S31,IfcFooting,C30/37,1.152,2880
+Fondations,S32,IfcFooting,C30/37,1.152,2880
+Fondations (12),,,,13.824,34560
+Niveau 1,B1.x00,IfcBeam,C30/37,0.750,1875
+Niveau 1,B1.x01,IfcBeam,C30/37,0.750,1875
+Niveau 1,B1.x02,IfcBeam,C30/37,0.750,1875
+Niveau 1,B1.x10,IfcBeam,C30/37,0.750,1875
+Niveau 1,B1.x11,IfcBeam,C30/37,0.750,1875
+Niveau 1,B1.x12,IfcBeam,C30/37,0.750,1875
+Niveau 1,B1.x20,IfcBeam,C30/37,0.750,1875
+Niveau 1,B1.x21,IfcBeam,C30/37,0.750,1875
+Niveau 1,B1.x22,IfcBeam,C30/37,0.750,1875
+Niveau 1,B1.y00,IfcBeam,C30/37,0.625,1562
+Niveau 1,B1.y01,IfcBeam,C30/37,0.625,1562
+Niveau 1,B1.y10,IfcBeam,C30/37,0.625,1562
+Niveau 1,B1.y11,IfcBeam,C30/37,0.625,1562
+Niveau 1,B1.y20,IfcBeam,C30/37,0.625,1562
+Niveau 1,B1.y21,IfcBeam,C30/37,0.625,1562
+Niveau 1,B1.y30,IfcBeam,C30/37,0.625,1562
+Niveau 1,B1.y31,IfcBeam,C30/37,0.625,1562
+Niveau 1,D1,IfcSlab,C30/37,41.468,103669
+Niveau 1,P1.00,IfcColumn,C30/37,0.250,626
+Niveau 1,P1.01,IfcColumn,C30/37,0.250,626
+Niveau 1,P1.02,IfcColumn,C30/37,0.250,626
+Niveau 1,P1.10,IfcColumn,C30/37,0.250,626
+Niveau 1,P1.11,IfcColumn,C30/37,0.250,626
+Niveau 1,P1.12,IfcColumn,C30/37,0.250,626
+Niveau 1,P1.20,IfcColumn,C30/37,0.250,626
+Niveau 1,P1.21,IfcColumn,C30/37,0.250,626
+Niveau 1,P1.22,IfcColumn,C30/37,0.250,626
+Niveau 1,P1.30,IfcColumn,C30/37,0.250,626
+Niveau 1,P1.31,IfcColumn,C30/37,0.250,626
+Niveau 1,P1.32,IfcColumn,C30/37,0.250,626
+Niveau 1 (30),,,,56.220,140550
+Niveau 2,B2.x00,IfcBeam,C30/37,0.750,1875
+Niveau 2,B2.x01,IfcBeam,C30/37,0.750,1875
+Niveau 2,B2.x02,IfcBeam,C30/37,0.750,1875
+Niveau 2,B2.x10,IfcBeam,C30/37,0.750,1875
+Niveau 2,B2.x11,IfcBeam,C30/37,0.750,1875
+Niveau 2,B2.x12,IfcBeam,C30/37,0.750,1875
+Niveau 2,B2.x20,IfcBeam,C30/37,0.750,1875
+Niveau 2,B2.x21,IfcBeam,C30/37,0.750,1875
+Niveau 2,B2.x22,IfcBeam,C30/37,0.750,1875
+Niveau 2,B2.y00,IfcBeam,C30/37,0.625,1562
+Niveau 2,B2.y01,IfcBeam,C30/37,0.625,1562
+Niveau 2,B2.y10,IfcBeam,C30/37,0.625,1562
+Niveau 2,B2.y11,IfcBeam,C30/37,0.625,1562
+Niveau 2,B2.y20,IfcBeam,C30/37,0.625,1562
+Niveau 2,B2.y21,IfcBeam,C30/37,0.625,1562
+Niveau 2,B2.y30,IfcBeam,C30/37,0.625,1562
+Niveau 2,B2.y31,IfcBeam,C30/37,0.625,1562
+Niveau 2,D2,IfcSlab,C30/37,41.468,103669
+Niveau 2,P2.00,IfcColumn,C30/37,0.250,626
+Niveau 2,P2.01,IfcColumn,C30/37,0.250,626
+Niveau 2,P2.02,IfcColumn,C30/37,0.250,626
+Niveau 2,P2.10,IfcColumn,C30/37,0.250,626
+Niveau 2,P2.11,IfcColumn,C30/37,0.250,626
+Niveau 2,P2.12,IfcColumn,C30/37,0.250,626
+Niveau 2,P2.20,IfcColumn,C30/37,0.250,626
+Niveau 2,P2.21,IfcColumn,C30/37,0.250,626
+Niveau 2,P2.22,IfcColumn,C30/37,0.250,626
+Niveau 2,P2.30,IfcColumn,C30/37,0.250,626
+Niveau 2,P2.31,IfcColumn,C30/37,0.250,626
+Niveau 2,P2.32,IfcColumn,C30/37,0.250,626
+Niveau 2 (30),,,,56.220,140550
+Total (72),,,,126.264,315661

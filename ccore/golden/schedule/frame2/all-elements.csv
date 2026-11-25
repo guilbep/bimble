@@ -1,0 +1,15 @@
+Level,Name,IFC class,Material,Volume (m³),Mass (kg)
+Rez-de-chaussée,C1,IfcColumn,C30/37,0.348,870
+Rez-de-chaussée,F1,IfcFooting,C30/37,1.350,3375
+Rez-de-chaussée,"HEB ""200""",IfcColumn,S355,0.116,911
+Rez-de-chaussée,"Poutre \ ""B1"" bois",IfcBeam,"Bois ""local"" \ épicéa",0.384,173
+Rez-de-chaussée,W1,IfcWall,C30/37,3.480,8700
+Rez-de-chaussée,W2	rotated 30°,IfcWall,C30/37,1.827,4568
+Rez-de-chaussée (6),,,,7.505,18596
+"Étage ""1""",D1,IfcSlab,C30/37,6.000,15000
+"Étage ""1""",D2 (L),IfcSlab,C30/37,3.600,9000
+"Étage ""1""",D3 trémie,IfcSlab,C30/37,2.040,5100
+"Étage ""1""",Garde-corps,IfcRailing,S355,0.183,1439
+"Étage ""1""",Gousset,IfcPlate,S355,0.001,5
+"Étage ""1"" (5)",,,,11.824,30544
+Total (11),,,,19.329,49140

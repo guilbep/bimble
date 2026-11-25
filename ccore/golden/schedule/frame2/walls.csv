@@ -1,0 +1,5 @@
+Level,Name,Material,Width (cm),Length (m),Height (cm),Area (m²),Volume (m³)
+Rez-de-chaussée,W1,C30/37,20.0,6.000,290.0,17.40,3.480
+Rez-de-chaussée,W2	rotated 30°,C30/37,18.0,3.500,290.0,10.15,1.827
+Rez-de-chaussée (2),,,,9.500,,27.55,5.307
+Total (2),,,,9.500,,27.55,5.307

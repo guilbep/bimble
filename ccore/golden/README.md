@@ -360,3 +360,29 @@ normals: varint n, i8 × 3 × n (the distinct ones, first use order); then one v
 
 A mesh is raw when a coordinate is not finite, it spans over 2^32 steps, or a vertex would come
 back more than 0.05 mm away.
+
+## schedule/ (quantities and schedule tables)
+
+`bimble_drawing::schedule` on `Scene::from_model(frame)`, `Scene::from_model(frame2)` and the
+display read (`read_str`) of seven `ifc/fixtures/` (all but `opening` and `same_level`: the C core
+cuts no openings). One folder each: `frame/`, `frame2/`, `ifc-<fixture>/`. C side:
+`src/quantity.c`, suite `test/quantity_test.c` (it produces and compares every file here, and
+fails if the folder holds a file it did not compare).
+
+- `<slug>.json`: `table_json(schedule(scene, def), scene, 50)`, `serde_json::to_string`
+  (compact, keys sorted) plus a final `\n`. What the viewer's `schedule_rows` call answers.
+- `<slug>.csv`: `to_csv(schedule(scene, def))`, what `schedule_csv` wraps in `{"csv"}`.
+- `measures.txt`: one line per scene element, scene order: `<k> <GlobalId> volume= area=
+  length= width= height= mass= centre=<x>,<y> section=<json string>`; numbers are `{:?}` of
+  `measure()`'s `volume_m3`, `area_m2`, `length`, `width`, `height` (mm) and `centre` (world mm);
+  `mass` is `volume_m3 × density(scene, material)` or `-` when the density is unknown;
+  `<k> <GlobalId> none` when `measure` gives none.
+
+Schedules (`<slug>`: the name in lower case, spaces as `-`): for both frames every effective
+schedule (`schedule::effective`: the ten built-in ones, neither frame stores one), then two that
+no built-in one covers: `every-field` (all 13 fields, every class, not grouped, totals) and
+`sums-only` (Volume, Area, Mass, Length of `IfcColumn` and `ifcbeam`: grouped, every column
+summed so no label, no total). The IFC fixtures get only these two.
+
+Cells are written as Rust's `format!("{:.N}")` writes them: exact digits, ties to even on the
+binary value, the sign of `-0.0` kept (`cc_fmt_fixed`). Sums run in row order, as Rust's.

@@ -1,0 +1,13 @@
+Level,Location,Name,IFC class,Material,Section,Length (m),Width (cm),Height (cm),Area (m²),Volume (m³),Mass (kg),GlobalId
+Rez-de-chaussée,,C1,IfcColumn,C30/37,30/40,2.900,30.0,290.0,0.12,0.348,870,0uTOdmIsz6iAjMnb$AZIG3
+"Étage ""1""",,D1,IfcSlab,C30/37,,6.000,400.0,25.0,24.00,6.000,15000,2FgB3PCsHFafKWKmIHC4zx
+"Étage ""1""",,D2 (L),IfcSlab,C30/37,,6.000,500.0,20.0,18.00,3.600,9000,0X4VVrRkf1B9lE_0jARt46
+"Étage ""1""",,D3 trémie,IfcSlab,C30/37,,4.000,300.0,20.0,10.20,2.040,5100,25mfqCdS50juHEIq4vPK9f
+Rez-de-chaussée,,F1,IfcFooting,C30/37,150/60,1.500,150.0,60.0,2.25,1.350,3375,2NwTA_MnbD$O1tovNVwcdv
+"Étage ""1""",,Garde-corps,IfcRailing,S355,,1.414,70.7,110.0,0.17,0.183,1439,3guiHznOL0jAR4d3gsLWHw
+"Étage ""1""",,Gousset,IfcPlate,S355,,0.300,1.5,30.0,0.00,0.001,5,2Xi2EcNOvB3wSWg3M1CB5f
+Rez-de-chaussée,,"HEB ""200""",IfcColumn,S355,20/20,2.900,20.0,290.0,0.04,0.116,911,1WQ4saTef14QR$c82u9pxW
+Rez-de-chaussée,,"Poutre \ ""B1"" bois",IfcBeam,"Bois ""local"" \ épicéa","Bois ""local"" \ épicéa 16x40",6.000,16.0,40.0,0.96,0.384,173,3QaNBTGrj1jwCHQxXT6adX
+Rez-de-chaussée,,W1,IfcWall,C30/37,,6.000,20.0,290.0,17.40,3.480,8700,2XB9jAbxPCKAXC_kVMr$h5
+Rez-de-chaussée,,W2	rotated 30°,IfcWall,C30/37,,3.500,18.0,290.0,10.15,1.827,4568,2lIeeldDb7IPfCbvTRpHDc
+Total (11),,,,,,40.514,,,83.29,19.329,49140,

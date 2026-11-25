@@ -1,0 +1,1 @@
+000 2T2cFBrep0000000000010 volume=1.35 area=9.0 length=3000.0 width=200.0 height=3000.0 mass=- centre=1000.0,1100.0 section=""

@@ -1,0 +1,7 @@
+Level,Location,Name,IFC class,Material,Section,Length (m),Width (cm),Height (cm),Area (m²),Volume (m³),Mass (kg),GlobalId
+Level 0,,L-2 turned,IfcColumn,C30/37,40/40,2.800,40.0,280.0,0.10,0.273,682,2T2cMapped000000000011
+Level 0,,L-3 moved by the operator,IfcColumn,C30/37,40/40,2.800,40.0,280.0,0.10,0.273,682,2T2cMapped000000000012
+Level 0,,Tetra-1,IfcBuildingElementProxy,C30/37,,0.424,21.2,30.0,0.01,0.004,11,2T2cMapped000000000015
+Level 0,,Tetra-2 turned,IfcBuildingElementProxy,C30/37,,0.424,21.2,30.0,0.01,0.004,11,2T2cMapped000000000016
+Level 0,A-1,L-1,IfcColumn,C30/37,40/40,2.800,40.0,280.0,0.10,0.273,682,2T2cMapped000000000010
+Total (5),,,,,,9.249,,,0.32,0.828,2070,
