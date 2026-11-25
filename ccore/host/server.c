@@ -19,6 +19,7 @@
 
 #include "calls.h"
 #include "host.h"
+#include "mesh.h"
 
 #define MAX_BODY (1u << 20)        /* serve.rs:14 */
 #define MAX_HEADER (16u << 10)     /* serve.rs:15 */
@@ -132,7 +133,9 @@ static void flush_out(Conn *c) {
 }
 
 /* serve.rs:296-327 `respond`: the same header lines in the same order. */
-static void respond(Conn *c, int status, const char *ctype, const char *body, size_t n, int keep) {
+/* `extra`: more header lines ("Name: value\r\n"), or NULL (GET /mesh sends X-Rev). */
+static void respond_x(Conn *c, int status, const char *ctype, const char *extra, const char *body, size_t n,
+                      int keep) {
     Buf *o = &c->out;
     buf_clear(o);
     c->out_off = 0;
@@ -150,6 +153,7 @@ static void respond(Conn *c, int status, const char *ctype, const char *body, si
         buf_puts(o, "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
                     "Access-Control-Allow-Headers: Content-Type\r\n"
                     "Access-Control-Max-Age: 600\r\n");
+    if (extra) buf_puts(o, extra);
     buf_puts(o, "Content-Type: ");
     buf_puts(o, ctype);
     buf_puts(o, "\r\nContent-Length: ");
@@ -162,6 +166,10 @@ static void respond(Conn *c, int status, const char *ctype, const char *body, si
     }
     c->keep = keep;
     flush_out(c);
+}
+
+static void respond(Conn *c, int status, const char *ctype, const char *body, size_t n, int keep) {
+    respond_x(c, status, ctype, NULL, body, n, keep);
 }
 
 static void respond_s(Conn *c, int status, const char *body, int keep) {
@@ -533,6 +541,17 @@ static void handle_one(Conn *c, int *again) {
                  query_param(query, "h", &hh) && parse_u64(hh, &hv) && hv >= 1 && hv <= FRAME_MAX;
         if (!ok) respond_s(c, 400, "bad frame size", keep);
         else respond_s(c, 500, "no frames", keep); /* serve.rs:39-41 */
+    } else if (!strcmp(m, "GET") && str_eq(path, "/mesh")) {
+        /* The scene as BMSH for the WebGL2 viewport (mesh.c, spec §2). */
+        const char *mp;
+        size_t mn;
+        uint32_t rev;
+        double ms;
+        int st = cc_mesh_get(&mp, &mn, &rev, &ms);
+        if (ms > 0) fprintf(stderr, "bimble-ccore: mesh rev %u built in %.3f ms, %zu bytes\n", (unsigned)rev, ms, mn);
+        char xrev[80];
+        snprintf(xrev, sizeof xrev, "X-Rev: %u\r\nAccess-Control-Expose-Headers: X-Rev\r\n", (unsigned)rev);
+        respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, st == 200 ? xrev : NULL, mp, mn, keep);
     } else if (!strcmp(m, "POST")) {
         route_post(c, path, body.p ? body.p : "", body.len, keep);
     } else {

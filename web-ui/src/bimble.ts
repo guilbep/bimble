@@ -497,7 +497,10 @@ export async function start(): Promise<void> {
     if (native) {
       // Dev only: no manifold, no wasm; on_change below starts the long-poll loop.
       w = nativeClient(native.port, native.token);
-      viewportDirty = streamViewport(`http://127.0.0.1:${native.port}`, native.token);
+      // `&gl=1`: draw the host's /mesh with WebGL2 (the C host, spec §2) instead of /frame.
+      viewportDirty = url.searchParams.get("gl") === "1"
+        ? (await import("./glviewport")).glViewport(`http://127.0.0.1:${native.port}`, native.token)
+        : streamViewport(`http://127.0.0.1:${native.port}`, native.token);
     } else {
       try {
         const bridge = (await import(/* @vite-ignore */ `${WASM}manifold-bridge.js`)) as { loadManifold: () => Promise<void> };
