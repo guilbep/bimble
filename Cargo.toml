@@ -68,6 +68,17 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = "0.3"
 
+# Dev builds (ADR 0065): line tables only, so panics keep file and line, without the full debug
+# info that made the dev wasm 415 MB and wasm-bindgen 4 s. Dependencies are optimized for size
+# and carry no debug info: smaller wasm, faster wasm-bindgen and tests. Bimble's own crates stay
+# unoptimized, so an edit rebuilds fast.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = "s"
+debug = false
+
 # The browser build only (scripts/build-web.sh, ADR 0050): link-time optimized, one codegen unit.
 # opt-level 3, not "s" or "z": models open fastest (z: 1.9x slower to open; Pierre, 20 Nov).
 [profile.web]

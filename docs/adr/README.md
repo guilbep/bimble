@@ -88,3 +88,4 @@ Session journals (what happened, in order, with measurements) are in [`docs/jour
 | [0062](0062-print-and-export-dialog.md) | Print and export dialog: one Export action, no OK/Cancel, background job | Proposed |
 | [0063](0063-carbon-balance-lca.md) | Carbon balance from the Swiss KBOB list, A1-A3 first, cited on every report | Proposed |
 | [0064](0064-small-screens-viewer-with-light-edits.md) | Small screens: viewer with light edits below 1 024 px; bottom bar and sheets on a phone; a note is a property (`SetProperty`) | Accepted |
+| [0065](0065-fast-dev-builds.md) | Fast dev builds: line tables only, dependencies at opt-level "s", `npm run wasm:dev` for the lab (≈ 40 s → 3.3–4.4 s per edit) | Accepted |

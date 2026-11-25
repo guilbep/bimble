@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Build Bimble for the browser into web/dist (ADR 0020).
-#   scripts/build-web.sh            release build
-#   PROFILE=dev scripts/build-web.sh
+#   scripts/build-web.sh                    release build: viewer and editor
+#   PROFILE=dev scripts/build-web.sh        dev build: viewer and editor
+#   PROFILE=dev LAB=1 scripts/build-web.sh  dev build of the editor only, for the Vue lab (ADR 0065);
+#                                           `npm run wasm:dev` in web-ui/ runs it and copies the files
 # Needs: rustup target add wasm32-unknown-unknown; wasm-bindgen-cli matching the wasm-bindgen
 # crate version in Cargo.lock (the script says which); npm (fetches the manifold kernel's
 # WebAssembly build, pinned below); wasm-opt (binaryen) optional.
@@ -33,7 +35,7 @@ build() { # build <out dir> [cargo flags...]
   cargo build -p bimble-web --target wasm32-unknown-unknown $flag "$@"
   rm -rf "$out" && mkdir -p "$out"
   wasm-bindgen --target web --no-typescript $strip --out-dir "$out" \
-    "target/wasm32-unknown-unknown/$dir/bimble_web.wasm"
+    "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/$dir/bimble_web.wasm"
   if command -v wasm-opt >/dev/null && [ "$PROFILE" = release ]; then
     wasm-opt -O2 --enable-bulk-memory --enable-nontrapping-float-to-int \
       "$out/bimble_web_bg.wasm" -o "$out/bimble_web_bg.wasm"
@@ -46,6 +48,13 @@ build() { # build <out dir> [cargo flags...]
   cp "$deps/package/manifold.js" "$deps/package/manifold.wasm" "$out/"
   cp "$deps/package/LICENSE" "$out/manifold-LICENSE"
 }
+if [ "${LAB:-}" = 1 ]; then
+  # The lab uses only the editor (web-ui/scripts/copy-wasm.mjs reads web/dist/editor): one build,
+  # one wasm-bindgen run. web/dist itself (the viewer) is left as it is.
+  build web/dist/editor --features editor
+  ls -l web/dist/editor
+  exit 0
+fi
 build target/web-editor --features editor
 build web/dist
 mv target/web-editor web/dist/editor
