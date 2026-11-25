@@ -18,7 +18,7 @@
 //      (CHROMIUM of test/ports.mjs, SwiftShader): categories performance, accessibility,
 //      best-practices; the desktop preset and the default (mobile, simulated throttling); median
 //      of the runs per number. Missing package: a "lighthouse: not installed" line, b. still runs.
-//   b. our own marks over raw CDP (fresh tab per load, cache disabled, 1280x800), page clock
+//   b. our own marks over raw CDP (fresh tab per load, HTTP cache emptied, 1280x800), page clock
 //      (performance.now(), 0 = navigation start):
 //      wasm     __bbCcore.readyMs: WebAssembly.instantiate returned (ccore.ts);
 //      model    __bbCcore.openMs: host_open_text returned (the model parsed and validated);
@@ -32,8 +32,8 @@
 //               a GC; wasm memory: the sum of every WebAssembly.Memory's buffer (Runtime.queryObjects).
 //      Median of 3 loads per page and model (1 in CI for the large model: not run there).
 //   c. frame time while orbiting: 120 left-drag steps of 3 px (real Input.dispatchMouseEvent), each
-//      waiting for the next glviewport frame; requestAnimationFrame deltas in the page during the
-//      drag (median, p95, max) and the step latency (dispatch -> frame drawn, Node clock); the CI mode
+//      waiting for the next glviewport frame; the frame time = the requestAnimationFrame interval in
+//      which glviewport drew (median, p95, max; all intervals also) and the step latency (dispatch -> frame drawn, Node clock); the CI mode
 //      drags in the editor only (the viewer draws with the same glviewport.ts). In a plan
 //      view (?view=plan:1, the deep link) a drag pans: the same 120 steps, panning. Triangles drawn
 //      per frame (__bbGl.drawnTris) are reported so numbers compare across machines.
@@ -211,7 +211,7 @@ const PROBE = `(() => {
   const shown = () => { const g = window.__bbGl; const now = performance.now();
     if (g && g.firstFrameMs !== null && now > g.firstFrameMs) P.shownMs = now; else requestAnimationFrame(shown); };
   requestAnimationFrame(shown);
-  const tick = (t) => { if (P.rec) P.rec.push(t); requestAnimationFrame(tick); };
+  const tick = (t) => { if (P.rec) P.rec.push([t, window.__bbGl ? window.__bbGl.frames : 0]); requestAnimationFrame(tick); };
   requestAnimationFrame(tick);
   P.waitFrame = (n0, limit) => new Promise((res) => { const t0 = performance.now();
     const f = () => { const g = window.__bbGl; if ((g && g.frames > n0) || performance.now() - t0 > limit) res(g ? g.frames : -1); else requestAnimationFrame(f); };
@@ -227,7 +227,8 @@ async function openTab(url, readyTimeout) {
   const exceptions = [];
   cdp.on((msg) => { if (msg.sessionId === sessionId && msg.method === "Runtime.exceptionThrown") exceptions.push(msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text); });
   for (const d of ["Runtime", "Page", "Network", "Performance"]) await S(`${d}.enable`);
-  await S("Network.setCacheDisabled", { cacheDisabled: true });
+  // A cold load: the HTTP cache emptied (not disabled: a disabled cache also turns off <link rel=preload> reuse).
+  await S("Network.clearBrowserCache");
   await S("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
   await S("Page.addScriptToEvaluateOnNewDocument", { source: PROBE });
   const evalJs = async (expr) => {
@@ -318,9 +319,13 @@ async function measureOrbit(url, readyTimeout, plan) {
     await mouse("mouseReleased", 0);
     const c1 = await cam();
     const g = await tab.evalJs("({ tris: window.__bbGl.drawnTris, frames: window.__bbGl.frames })");
-    const d = rec.slice(1).map((t, i) => t - rec[i]);
+    // Frame time: the rAF interval that ends at the callback after a draw (the draw ran in that
+    // interval); idle intervals between steps (the CDP round trip) are not frame times.
+    const d = [];
+    for (let i = 2; i < rec.length; i++) if (rec[i - 1][1] > rec[i - 2][1]) d.push(rec[i][0] - rec[i - 1][0]);
+    const all = rec.slice(1).map(([t], i) => t - rec[i][0]);
     const moved = plan ? JSON.stringify(c0?.target) !== JSON.stringify(c1?.target) : c0?.yaw !== c1?.yaw;
-    return { ok: true, mode: c1?.mode ?? null, moved, misses, tris: g.tris, frames: rec.length,
+    return { ok: true, mode: c1?.mode ?? null, moved, misses, tris: g.tris, frames: d.length, allMed: median(all),
       dMed: median(d), dP95: pct(d, 95), dMax: d.length ? Math.max(...d) : null, latMed: median(lat), latP95: pct(lat, 95) };
   } finally {
     await tab.done();
@@ -413,9 +418,9 @@ async function main() {
     }
   } else notes.push(FULL ? "deployed pages: --no-remote" : "deployed pages: not measured in the CI mode (no network; `--full` measures them)");
 
-  // b. load marks. First the cold load: the first page of a fresh browser profile pays the GPU
-  // process and SwiftShader start in getContext("webgl2") (about 0.9 s here); every later load (a new
-  // tab, the same browser) does not. Reported apart; the medians below are warm loads.
+  // b. load marks. First the cold load: the first page of a fresh browser profile can pay the GPU
+  // process and SwiftShader start in getContext("webgl2"); later loads (a new tab, the same browser)
+  // do not. Reported apart; the medians below are warm loads.
   const cold = await measureLoad(pages[0].url, 60000);
   if (!cold.ok) problems.push(`${pages[0].name}: the cold load did not load: ${cold.why}`);
   else {
@@ -473,7 +478,7 @@ async function main() {
         orbits.push({ page: p, model: m, view, ...r });
         const k = `${p.key}.${m.key}.${view}`;
         for (const f of ["dMed", "dP95", "dMax", "latMed", "latP95", "tris"]) put(`${k}.${f}`, r[f]);
-        log(`${p.key} ${m.key} ${view}: ${fmtN(r.tris)} triangles, rAF delta median ${ms(r.dMed)} p95 ${ms(r.dP95)} max ${ms(r.dMax)} ms, step ${ms(r.latMed)} ms`);
+        log(`${p.key} ${m.key} ${view}: ${fmtN(r.tris)} triangles, frame time median ${ms(r.dMed)} p95 ${ms(r.dP95)} max ${ms(r.dMax)} ms, step ${ms(r.latMed)} ms`);
       }
     }
   }
@@ -524,12 +529,12 @@ async function main() {
   L.push(`- Machine: ${platform()} ${release().split("-")[0]} ${arch()}, ${cpu.length} CPUs (${cpu[0]?.model && cpu[0].model !== "unknown" ? cpu[0].model : "model not reported"}), ${(totalmem() / 2 ** 30).toFixed(0)} GiB; load average at start ${load0.map((x) => x.toFixed(2)).join(" / ")}, at end ${load1.map((x) => x.toFixed(2)).join(" / ")} (1 / 5 / 15 min).`);
   L.push(`- Browser: ${browserInfo.product}, headless, \`--use-angle=swiftshader\`; GL renderer: ${browserInfo.gpu}. Node ${process.version}. Lighthouse ${LH ? LH.version : "not run"}.`);
   L.push("- **SwiftShader is software rendering on the CPU.** The frame times below are NOT what a user's GPU gives: compare them across runs and machines through the triangles drawn per frame, not as user-facing fps.");
-  L.push("- Served: the production build (`npm run build:ccore`) under `/c/` by a local static server that answers as GitHub Pages does (gzip for html, js, css, wasm, json; `Cache-Control: max-age=600`); every CDP load runs with the cache disabled. Viewport 1280x800 for the CDP numbers; Lighthouse uses its own presets.");
+  L.push("- Served: the production build (`npm run build:ccore`) under `/c/` by a local static server that answers as GitHub Pages does (gzip for html, js, css, wasm, json; `Cache-Control: max-age=600`); every CDP load starts with the HTTP cache emptied (`Network.clearBrowserCache`). Viewport 1280x800 for the CDP numbers; Lighthouse uses its own presets.");
   if (large) L.push(`- Large model: \`bench/large_model.py ${LARGE}\` (synthetic): ${fmtN(large.elements)} elements (${Object.entries(large.by_class).map(([k, v]) => `${fmtN(v)} ${k}`).join(", ")}), ${mb(large.bytes)} (${mb(large.gz)} gzip), served as \`perf/large-${LARGE}.json\`, opened with \`?model=\`.`);
   L.push("");
 
   L.push("## Summary", "");
-  L.push("Lighthouse: performance score desktop / mobile (median); our marks in ms from navigation start, sample model, median of the loads; orbit: rAF delta median in 3D, sample model.", "");
+  L.push("Lighthouse: performance score desktop / mobile (median); our marks in ms from navigation start, sample model, median of the loads; orbit: frame time median in 3D, sample model.", "");
   L.push("| page | LH perf (desktop / mobile) | a11y | best practices | LCP desktop / mobile (ms) | TBT desktop / mobile (ms) | wasm instantiated | model opened | first model frame shown | ready | orbit frame (ms) |");
   L.push("|---|---|---|---|---|---|---:|---:|---:|---:|---:|");
   for (const p of [...pages, ...remote]) {
@@ -560,16 +565,16 @@ async function main() {
     if (!r.ok) { L.push(`| ${r.page.name} | ${r.model.name} | did not load: ${r.why} |||||||||||||`); continue; }
     L.push(`| ${r.page.name} | ${r.model.name} | ${ms(r.wasmEnd)} | ${ms(r.wasm)} | ${ms(r.modelEnd)} | ${ms(r.open)} | ${ms(r.drawn)} | ${ms(r.shown ?? r.shownRust)} | ${ms(r.ready)} | ${ms(r.fcp)} | ${fmtN(r.longCount)} / ${ms(r.longTotal)} / ${ms(r.longMax)} | ${mb(r.heap)} | ${mb(r.wasmMem)} | ${fmtN(r.tris)} | ${fmtN(r.wasmBytes)} / ${fmtN(r.modelBytes)} / ${fmtN(r.meshBytes)} |`);
   }
-  if (cold.ok) L.push("", `Cold browser (the first load of a fresh profile, editor, sample; not in the medians): drawn ${ms(cold.gl?.firstFrameMs)} ms, shown ${ms(cold.shownMs)} ms, ready ${ms(cold.readyMs)} ms, long tasks ${cold.longCount} / ${ms(cold.longTotal)} ms. The difference is the GPU process and SwiftShader start inside \`getContext("webgl2")\`.`);
+  if (cold.ok) L.push("", `Cold browser (the first load of a fresh profile, editor, sample; not in the medians): drawn ${ms(cold.gl?.firstFrameMs)} ms, shown ${ms(cold.shownMs)} ms, ready ${ms(cold.readyMs)} ms, long tasks ${cold.longCount} / ${ms(cold.longTotal)} ms. When it is far above the warm loads, the difference is the GPU process and SwiftShader starting inside \`getContext("webgl2")\` (measured 0.8-0.9 s for that one call in a fresh headless browser while developing PERF1; it varies with the machine's load).`);
   L.push("", "The longest tasks of the median load (start ms, duration ms):", "");
   for (const r of loads.filter((x) => x.ok)) L.push(`- ${r.page.key} ${r.model.key}: ${r.longTop.length ? r.longTop.map(([s, d]) => `${ms(s)} (${ms(d)})`).join(", ") : "none"}`);
   L.push("");
 
   L.push(`## Frame time while orbiting (${STEPS} drag steps of 3 px, one frame each)`, "");
-  L.push("rAF delta = time between animation frames during the drag (the frame time a user feels, capped by the display rate); step = dispatch of the mouse event -> the next glviewport frame drawn (Node clock, includes the CDP round trip). Plan: the drag pans (a plan has no orbit).", "");
-  L.push("| page | model | view | triangles drawn | frames | rAF delta median | p95 | max | step median | step p95 |");
-  L.push("|---|---|---|---:|---:|---:|---:|---:|---:|---:|");
-  for (const r of orbits) L.push(`| ${r.page.name} | ${r.model.name} | ${r.view === "3d" ? "3D perspective, orbit" : "plan, pan"} | ${fmtN(r.tris)} | ${fmtN(r.frames)} | ${ms(r.dMed)} | ${ms(r.dP95)} | ${ms(r.dMax)} | ${ms(r.latMed)} | ${ms(r.latP95)} |`);
+  L.push("Frame time = the requestAnimationFrame interval in which glviewport drew (the frame a user waits for; at least the display interval, 16.7 ms); every rAF interval during the drag is also given (idle frames between steps included). Step = dispatch of the mouse event -> the next glviewport frame drawn (Node clock, includes the CDP round trip). Plan: the drag pans (a plan has no orbit).", "");
+  L.push("| page | model | view | triangles drawn | frames drawn | frame time median | p95 | max | all rAF intervals median | step median | step p95 |");
+  L.push("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|");
+  for (const r of orbits) L.push(`| ${r.page.name} | ${r.model.name} | ${r.view === "3d" ? "3D perspective, orbit" : "plan, pan"} | ${fmtN(r.tris)} | ${fmtN(r.frames)} | ${ms(r.dMed)} | ${ms(r.dP95)} | ${ms(r.dMax)} | ${ms(r.allMed)} | ${ms(r.latMed)} | ${ms(r.latP95)} |`);
   L.push("");
   if (notes.length || problems.length) {
     L.push("## Notes", "");
