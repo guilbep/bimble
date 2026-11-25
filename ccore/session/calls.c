@@ -1439,40 +1439,64 @@ static cc_gid *selection_ids(const cc_session *s, size_t *n) {
 }
 
 /* ---- SEC1 ---- viewing.rs save_visibility / show_all_in_view: the "in view" sets stored in the
- * active view (verb view_edit, one undo step; nothing changed: no step), read back by rebuild. A
- * read-only scene (or the viewer build) keeps them in the session. `all`: every list cleared. */
+ * active view (one AddView / SetView command, as view_edit makes it, one undo step; nothing changed:
+ * no step), read back by rebuild. Built here, not by the verb, so that the viewer-only build (no
+ * verb table) behaves the same. A read-only scene keeps them in the session. `all`: every list
+ * cleared (Visibility::default). */
 static int try_apply(cc_session *s, const cc_command *cmds, size_t n, cc_buf *out);
-static int sec1_store_vis(cc_session *s, int all, cc_buf *out) {
-#ifdef CC_VIEW_ONLY
-    (void)s, (void)all, (void)out;
-    return 0;
-#else
-    if (!s->open || !s->has_active) return 0;
-    Buf args;
-    buf_init(&args);
-    buf_puts(&args, "{\"id\":\"");
-    buf_append(&args, s->active.c, 22);
-    buf_puts(&args, "\",\"visibility\":{");
-    const cc_gidset *set[2] = {&s->vis.hidden, &s->vis.isolated};
-    static const char *const K[2] = {"hidden_elements", "isolated_elements"};
-    for (int k = 0; k < 2; k++) {
-        buf_puts(&args, k ? ",\"" : "\""), buf_puts(&args, K[k]), buf_puts(&args, "\":[");
-        for (size_t i = 0; i < set[k]->n; i++)
-            buf_puts(&args, i ? ",\"" : "\""), buf_append(&args, set[k]->v[i].c, 22), buf_putc(&args, '"');
-        buf_putc(&args, ']');
+static int sec1_ids(Arena *a, const cc_gidset *set, cc_strs *out) {
+    cc_str *v = arena_alloc(a, (set->n ? set->n : 1) * sizeof *v, _Alignof(cc_str));
+    if (!v) return -1;
+    for (size_t i = 0; i < set->n; i++) {
+        char *p = arena_dup(a, set->v[i].c, 22);
+        if (!p) return -1;
+        v[i].p = p, v[i].n = 22;
     }
-    if (all) buf_puts(&args, ",\"hidden_families\":[],\"hidden_classes\":[],\"hidden_storeys\":[],\"hidden_links\":[],\"hidden_materials\":[]");
-    buf_puts(&args, "}}");
+    out->v = v, out->n = set->n;
+    return 0;
+}
+static int sec1_strs_eq(const cc_strs *x, const cc_strs *y) {
+    if (x->n != y->n) return 0;
+    for (size_t i = 0; i < x->n; i++)
+        if (x->v[i].n != y->v[i].n || (x->v[i].n && memcmp(x->v[i].p, y->v[i].p, x->v[i].n))) return 0;
+    return 1;
+}
+static int sec1_store_vis(cc_session *s, int all, cc_buf *out) {
+    if (!s->open || !s->has_active) return 0;
     cc_cmds l;
     cc_cmds_init(&l);
-    int rc = args.oom ? (buf_puts(out, "out of memory"), CC_ERR)
-             : cc_verb_run(&s->model, "view_edit", args.p, args.len, &l, out) ? CC_ERR
-             : l.n ? try_apply(s, l.v, l.n, out) : CC_OK;
+    cc_view v;
+    int r = cc_sv_active(s, &l.arena, &v), rc = CC_OK;
+    if (r == 1 && cc_view_dup(&l.arena, &v)) r = -1;
+    if (r != 1) {
+        cc_cmds_free(&l);
+        if (r < 0) buf_puts(out, "out of memory");
+        return r < 0 ? -1 : 0;
+    }
+    cc_visibility old = v.visibility, *w = &v.visibility;
+    if (sec1_ids(&l.arena, &s->vis.hidden, &w->hidden_elements) || sec1_ids(&l.arena, &s->vis.isolated, &w->isolated_elements)) {
+        cc_cmds_free(&l);
+        buf_puts(out, "out of memory");
+        return -1;
+    }
+    if (all) w->hidden_families.n = w->hidden_classes.n = w->hidden_storeys.n = w->hidden_links.n = w->hidden_materials.n = 0;
+    int same = sec1_strs_eq(&old.hidden_elements, &w->hidden_elements) && sec1_strs_eq(&old.isolated_elements, &w->isolated_elements) &&
+               sec1_strs_eq(&old.hidden_families, &w->hidden_families) && sec1_strs_eq(&old.hidden_classes, &w->hidden_classes) &&
+               sec1_strs_eq(&old.hidden_storeys, &w->hidden_storeys) && sec1_strs_eq(&old.hidden_links, &w->hidden_links) &&
+               sec1_strs_eq(&old.hidden_materials, &w->hidden_materials);
+    if (!same) {
+        Buf why;
+        buf_init(&why);
+        cc_command *c = NULL;
+        if (cc_view_validate(&s->model, &v, &why)) buf_append(out, why.p, why.len), rc = CC_ERR;
+        else if (!(c = cc_cmds_push(&l, cc_model_view(&s->model, &v.id) ? CC_CMD_SET_VIEW : CC_CMD_ADD_VIEW)))
+            buf_puts(out, "out of memory"), rc = CC_ERR;
+        else c->view = v, rc = try_apply(s, l.v, l.n, out);
+        buf_free(&why);
+    }
     cc_cmds_free(&l);
-    buf_free(&args);
     if (rc != CC_OK) cc_sv_vis_load(s); /* refused: the view's sets again */
     return rc == CC_OK ? 0 : -1;
-#endif
 }
 /* ---- end SEC1 ---- */
 
