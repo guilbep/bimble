@@ -410,6 +410,12 @@ static int only_item(R *r, const cc_step_entity *e, const cc_step_entity *solid)
 static int extruded_element(R *r, Arena *ar, const cc_step_entity *solid, const Aff *rel, cc_ifc_class cls,
                             double scale, cc_placement *pl, cc_generator *g) {
     Loops ls;
+    /* A composite of several profiles is several regions: not one extrusion (a mesh: the
+     * reader sweeps it region by region; ticket IFC3). */
+    const cc_step_entity *pd = get(r, arg(solid, 0));
+    const cc_sv *pl_;
+    size_t npl;
+    if (is(pd, "IFCCOMPOSITEPROFILEDEF") && cc_sv_as_list(arg(pd, 2), &pl_, &npl) && npl > 1) return 0;
     if (!profile(r, arg(solid, 0), 0, &ls)) return 0;
     int rc = 0;
     if (!ls.n || ls.v[0].n < 3) goto out;

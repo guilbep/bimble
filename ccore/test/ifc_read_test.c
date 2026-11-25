@@ -388,6 +388,17 @@ static const struct {
      * y = -40 - x t and x = -40 - y t meet at x = y = (-40 + 40 t) / (1 - t^2) = -36.35258;
      * shoelace of the 6 corners: 1795.0603 */
     {"lshape_slope", 1, 1795060.3, 1e-6, {-50, -50, 0}, {50, 50, 1000}, 1e-3, NULL},
+    /* IfcCenterLineProfileDef (ticket IFC3): (0,0)-(1000,0)-(1000,500) offset 10 to each side,
+     * mitred: the miter adds the outer 10 x 10 square what it takes from the inner one, so the
+     * area is Thickness x length = 20 x 1500 = 30000; x 1000. The ends square: x 0..1010,
+     * y -10..500 */
+    {"centreline", 1, 3e7, 1e-9, {0, -10, 0}, {1010, 500, 1000}, 1e-3, NULL},
+    /* closed: the ring 1020^2 - 980^2 = 80000; x 1000 */
+    {"centreline_closed", 1, 8e7, 1e-9, {-10, -10, 0}, {1010, 1010, 1000}, 1e-3, NULL},
+    /* IfcCompositeProfileDef: two 200 x 100 rectangles at x -300 and 300: 2 x 20000 x 1000 */
+    {"composite", 1, 4e7, 1e-9, {-400, -50, 0}, {400, 50, 1000}, 1e-3, NULL},
+    /* IfcMirroredProfileDef: the 200 x 100 rectangle at x 500 mirrored about y: x -600..-400 */
+    {"mirrored", 1, 2e7, 1e-9, {-600, -50, 0}, {-400, 50, 1000}, 1e-3, NULL},
     /* IfcRevolvedAreaSolid: a 100x200 rectangle, x 400..500, turned about the Y axis
      * (right-handed: +X goes to -Z). Pappus: angle * area * centroid radius; chords within 0.3 %.
      * A quarter turn: pi/2 * 20000 * 450 = 14137166.9, box x 0..500, z -500..0 */

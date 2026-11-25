@@ -1169,6 +1169,96 @@ static int param_profile(R *r, const cc_step_entity *e, Loops *out) {
     return 1;
 }
 
+/* centre_line: IfcCenterLineProfileDef (Curve, Thickness; ticket IFC3): the curve offset by
+ * Thickness / 2 to both sides, mitred joins so the thickness stays constant (a join sharper than
+ * a miter of 4 half-thicknesses is bevelled), the ends cut square. An open curve gives one loop;
+ * a closed one a ring (the larger loop outer, the other a hole). IfcOpenShell 0.8 draws nothing
+ * for this profile. 1 ok, 0 none (warned), -1 out of memory. */
+static int centre_line(R *r, const cc_step_entity *e, Loops *out) {
+    double th;
+    if (!num(e, 3, &th) || !(th > 0.0)) {
+        warn(r, "invalid profile ", e->name, " (skipped)");
+        return 0;
+    }
+    P3 c;
+    if (curve3(r, arg(e, 2), 0, &c) != 1) return 0;
+    Loop pts = {0}, side[2] = {{0}, {0}};
+    int rc = 1;
+    for (size_t i = 0; i < c.n && rc == 1; i++) {
+        double q[2] = {c.p[i][0], c.p[i][1]};
+        if (pts.n && dist2(q, pts.p[pts.n - 1]) < 1e-18) continue;
+        if (loop_push(&pts, q[0], q[1])) rc = -1;
+    }
+    p3_free(&c);
+    int closed = pts.n > 3 && dist2(pts.p[0], pts.p[pts.n - 1]) < 1e-18;
+    if (closed) pts.n--;
+    size_t n = pts.n;
+    if (rc == 1 && n < 2) rc = 0;
+    double h = th / 2.0;
+    for (size_t i = 0; rc == 1 && i < n; i++) {
+        /* the normals (left) of the segments before and after point i */
+        double nm[2][2];
+        int has[2] = {0, 0};
+        for (int k = 0; k < 2; k++) {
+            size_t a, b;
+            if (k == 0) {
+                if (!closed && i == 0) continue;
+                a = (i + n - 1) % n, b = i;
+            } else {
+                if (!closed && i + 1 >= n) continue;
+                a = i, b = (i + 1) % n;
+            }
+            double dx = pts.p[b][0] - pts.p[a][0], dy = pts.p[b][1] - pts.p[a][1], l = cc_sqrt(dx * dx + dy * dy);
+            if (!(l > 0.0)) continue;
+            nm[k][0] = -dy / l, nm[k][1] = dx / l, has[k] = 1;
+        }
+        if (!has[0] && !has[1]) continue;
+        if (!has[0]) nm[0][0] = nm[1][0], nm[0][1] = nm[1][1];
+        if (!has[1]) nm[1][0] = nm[0][0], nm[1][1] = nm[0][1];
+        double m[2] = {nm[0][0] + nm[1][0], nm[0][1] + nm[1][1]}, ml = cc_sqrt(m[0] * m[0] + m[1] * m[1]);
+        double cosh_ = ml > 1e-12 ? (m[0] * nm[1][0] + m[1] * nm[1][1]) / ml : 0.0;
+        for (int sd = 0; sd < 2 && rc == 1; sd++) {
+            double sg = sd ? -h : h;
+            if (cosh_ >= 0.25) {
+                double f = sg / cosh_ / ml;
+                if (loop_push(&side[sd], pts.p[i][0] + m[0] * f, pts.p[i][1] + m[1] * f)) rc = -1;
+            } else if (loop_push(&side[sd], pts.p[i][0] + nm[0][0] * sg, pts.p[i][1] + nm[0][1] * sg) ||
+                       loop_push(&side[sd], pts.p[i][0] + nm[1][0] * sg, pts.p[i][1] + nm[1][1] * sg))
+                rc = -1;
+        }
+    }
+    free(pts.p);
+    if (rc == 1 && (side[0].n < 2 || side[1].n < 2)) rc = 0;
+    if (rc == 1 && !closed) { /* left forward, then right backward */
+        Loop l = {0};
+        for (size_t i = 0; rc == 1 && i < side[0].n; i++)
+            if (loop_push(&l, side[0].p[i][0], side[0].p[i][1])) rc = -1;
+        for (size_t i = side[1].n; rc == 1 && i-- > 0;)
+            if (loop_push(&l, side[1].p[i][0], side[1].p[i][1])) rc = -1;
+        if (rc == 1 && loops_push(out, l)) rc = -1;
+        if (rc != 1) free(l.p);
+    } else if (rc == 1) {
+        double a0 = signed_area(&side[0]), a1 = signed_area(&side[1]);
+        int o = (a0 < 0 ? -a0 : a0) >= (a1 < 0 ? -a1 : a1) ? 0 : 1;
+        if (loops_push(out, side[o])) rc = -1;
+        else {
+            side[o].p = NULL;
+            if (loops_push(out, side[1 - o])) rc = -1;
+            else side[1 - o].p = NULL;
+        }
+    }
+    free(side[0].p), free(side[1].p);
+    return rc;
+}
+
+/* composite_one: an IfcCompositeProfileDef of exactly one profile. */
+static int composite_one(R *r, const cc_step_entity *e) {
+    const cc_sv *l;
+    size_t nl;
+    (void)r;
+    return cc_sv_as_list(arg(e, 2), &l, &nl) && nl == 1;
+}
+
 /* Reader::profile: loops in profile coordinates (outer first, then holes). 1 ok, 0 none. */
 static int profile(R *r, const cc_sv *v, int depth, Loops *out) {
     memset(out, 0, sizeof *out);
@@ -1243,6 +1333,27 @@ static int profile(R *r, const cc_sv *v, int depth, Loops *out) {
     } else if ((pc = param_profile(r, e, out)) != 2) {
         if (pc != 1) bad = 1;
         else loops_place(r, out, arg(e, 2));
+    } else if (is(e, "IFCCENTERLINEPROFILEDEF")) {
+        int c = centre_line(r, e, out);
+        if (c != 1) {
+            loops_free(out);
+            return 0;
+        }
+    } else if (is(e, "IFCMIRROREDPROFILEDEF") && depth < 4) {
+        /* IfcMirroredProfileDef (ticket IFC3): the parent mirrored about its y axis (the
+         * derived Operator: Axis1 (-1, 0)), as IfcOpenShell 0.8 draws it. */
+        if (!profile(r, arg(e, 2), depth + 1, out)) return 0;
+        for (size_t i = 0; i < out->n; i++) {
+            for (size_t j = 0; j < out->v[i].n; j++) out->v[i].p[j][0] = -out->v[i].p[j][0] + 0.0;
+            loop_reverse(&out->v[i]);
+        }
+    } else if (is(e, "IFCCOMPOSITEPROFILEDEF") && depth < 4 && composite_one(r, e)) {
+        /* one profile: that profile. More: a union of regions, swept one by one (sweep_regions);
+         * a caller that cannot (the tapered extrusion) gets the warning below. */
+        const cc_sv *l;
+        size_t nl;
+        cc_sv_as_list(arg(e, 2), &l, &nl);
+        if (!profile(r, &l[0], depth + 1, out)) return 0;
     } else if (is(e, "IFCDERIVEDPROFILEDEF") && depth < 4) {
         if (!profile(r, arg(e, 2), depth + 1, out)) return 0;
         Aff op = transform_operator_2d(r, arg(e, 3));
@@ -1444,9 +1555,32 @@ static int is_body(const cc_step_entity *rep) {
 
 static void item(R *r, uint64_t id, const Aff *tf, Emit *out, int depth);
 
-static void extrusion(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {
+/* sweep_regions: a swept solid once per profile of an IfcCompositeProfileDef (a union of
+ * regions, as IfcOpenShell 0.8 maps it: a collection; ticket IFC3), nested ones too (4 levels);
+ * else once. Each region is a visit of the budget. */
+typedef void (*SweepFn)(R *r, const cc_step_entity *e, const cc_sv *prof, const Aff *tf, Emit *out);
+static void sweep_regions(R *r, const cc_step_entity *e, const cc_sv *prof, const Aff *tf, Emit *out, SweepFn fn,
+                          int depth) {
+    const cc_step_entity *p = get(r, prof);
+    const cc_sv *l;
+    size_t n;
+    if (is(p, "IFCCOMPOSITEPROFILEDEF") && cc_sv_as_list(arg(p, 2), &l, &n) && n > 1) {
+        if (depth >= 4) {
+            warn(r, "composite profile nesting too deep (skipped)", 0, 0);
+            return;
+        }
+        for (size_t i = 0; i < n; i++) {
+            if (out->mb->n >= out->budget->element_max || !visit(out->budget)) return;
+            sweep_regions(r, e, &l[i], tf, out, fn, depth + 1);
+        }
+        return;
+    }
+    fn(r, e, prof, tf, out);
+}
+
+static void extrusion_of(R *r, const cc_step_entity *e, const cc_sv *prof, const Aff *tf, Emit *out) {
     Loops ls;
-    if (!profile(r, arg(e, 0), 0, &ls)) return;
+    if (!profile(r, prof, 0, &ls)) return;
     Aff ap = axis_placement(r, arg(e, 1));
     Aff pos = aff_then(tf, &ap);
     double dir[3], depth;
@@ -1497,6 +1631,9 @@ out:
     free(top);
     loops_free(&ls);
 }
+static void extrusion(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {
+    sweep_regions(r, e, arg(e, 0), tf, out, extrusion_of, 0);
+}
 
 /* Local solids (file units, in a placement's coordinates) emitted through that placement:
  * oriented outward by their signed volume (a mirroring placement included), then scaled. */
@@ -1532,9 +1669,9 @@ static int local_room(const Tris *t, Emit *out) {
  * IfcAxis1Placement in Position's XY plane) by Angle, right-handed; ticket IFC2 (Rust skips it).
  * Rings of the profile's points at the reader's arc segmentation for the largest radius; end caps
  * unless the turn is whole. */
-static void revolved(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {
+static void revolved_of(R *r, const cc_step_entity *e, const cc_sv *prof, const Aff *tf, Emit *out) {
     Loops ls;
-    if (!profile(r, arg(e, 0), 0, &ls)) return;
+    if (!profile(r, prof, 0, &ls)) return;
     Aff ap = axis_placement(r, arg(e, 1));
     Aff pos = aff_then(tf, &ap);
     const cc_step_entity *ax = get(r, arg(e, 2));
@@ -1615,6 +1752,9 @@ out:
     free(rings);
     tris_free(&t);
     loops_free(&ls);
+}
+static void revolved(R *r, const cc_step_entity *e, const Aff *tf, Emit *out) {
+    sweep_regions(r, e, arg(e, 0), tf, out, revolved_of, 0);
 }
 
 /* ---- IfcExtrudedAreaSolidTapered, CSG primitives (ticket IFC2; Rust skips them) */

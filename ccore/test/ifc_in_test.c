@@ -412,6 +412,12 @@ static const struct {
     {"ushape_slope_fillet", 1, "extruded_polygon", 3295600.4, 2e-3},
     {"tshape_slope", 1, "extruded_polygon", 3998768.5, 1e-6},
     {"lshape_slope", 1, "extruded_polygon", 1795060.3, 1e-6},
+    /* Centre line, mirrored (ticket IFC3): extruded polygons (the closed centre line: a hole) */
+    {"centreline", 1, "extruded_polygon", 3e7, 1e-9},
+    {"centreline_closed", 1, "extruded_polygon", 8e7, 1e-9},
+    {"mirrored", 1, "extruded_polygon", 2e7, 1e-9},
+    /* A composite of two profiles is two regions: a mesh */
+    {"composite", 1, "mesh", 4e7, 1e-9},
     /* The solids the importer cannot parametrise: meshes (the reader's triangles) */
     {"revolved", 1, "mesh", 14137166.9, 3e-3},
     {"revolved_full", 1, "mesh", 56548667.8, 3e-3},

@@ -389,6 +389,20 @@ scene's volume and bounding box against numbers computed by hand from the fixtur
   3965.28, 0.84 %; the corpus file `files/IfcTShapeProfileDef.ifc`: 0.21-0.22 %). Not drawn:
   the slopes of `IfcAsymmetricIShapeProfileDef` (IFC4 BottomFlangeSlope, TopFlangeSlope) and the
   I-shape's FlangeEdgeRadius (as before).
+- `IfcCenterLineProfileDef`: the curve offset by Thickness/2 to both sides, mitred joins (a join
+  sharper than a miter of 4 half-thicknesses is bevelled), square ends; a closed curve gives a
+  ring. Area = Thickness x length on a polyline. IfcOpenShell 0.8's source maps it to nothing
+  (`return nullptr`); 0.9 fills the area the curve encloses (`centreline`: 194,444 mm^2 where
+  the profile is 30,000; `files/10336--…`: 194,244 mm^3 for a half-ellipse strip C draws as
+  120,811, Thickness x arc length x depth = 121,100 by hand).
+- `IfcCompositeProfileDef`: each of its profiles swept on its own (extruded or revolved), a
+  union of regions as IfcOpenShell maps it (a collection); one profile: that profile. A tapered
+  extrusion of a composite keeps the warning `unsupported profile IFCCOMPOSITEPROFILEDEF
+  (skipped)`. The importer makes a mesh of an extrusion of several regions.
+- `IfcMirroredProfileDef`: the parent profile, as placed by its Position, mirrored about the y
+  axis (the derived Operator, applied as `IfcDerivedProfileDef`'s operator is: after the
+  parent's Position, Rust's order). IfcOpenShell 0.9 mirrors inside the parent's Position (a
+  parent placed at x 500 stays at x 400..600 there; C draws it at -600..-400).
 - Import goldens of the C's own: `golden/ifc_c/import/<name>.json` and `<name>.report.txt` for
   every `golden/ifc_c/fixtures/*.ifc` (ids masked as in `golden/ifc/import/`; the report with its
   C-only `unsupported: ` lines), `CCORE_WRITE_GOLDEN=1 test/run.sh ifc_in` writes them again;
