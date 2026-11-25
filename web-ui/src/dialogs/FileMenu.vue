@@ -4,7 +4,8 @@ export const hint = "filemenu.hint";
 
 <script setup lang="ts">
 // Screen A2, File menu (wireframes v01 fr/FileMenu.html). Each entry runs one egui action by name (`query("actions")`).
-import { actions, runAction } from "../bimble";
+import { actions } from "../bimble";
+import { act, can } from "../shell/send";
 import { t } from "../i18n";
 import type * as copy from "../i18n/parts/filemenu";
 import { currentDialog } from ".";
@@ -45,13 +46,13 @@ const sections: { title: Key; entries: Entry[] }[] = [
   ] },
 ];
 
-const on = (name?: string) => !!name && actions.value.some((a) => a.name === name && a.enabled);
+// The lab's own screens (shell/machine.ts): enabled where the shell has a row for them, not by `actions`.
+const SCREENS: Record<string, string> = { project: "project-info", history: "history" };
+const on = (name?: string) => !!name && (name in SCREENS ? can({ do: "showPage", page: SCREENS[name]! }) : actions.value.some((a) => a.name === name && a.enabled));
+// A refusal of the session is shown (the shell's error state), not only logged.
 function run(name?: string) {
   currentDialog.value = null;
-  if (name) {
-    const err = runAction(name);
-    if (err) console.warn(`file menu ${name}: ${err}`);
-  }
+  if (name) act(name);
 }
 </script>
 

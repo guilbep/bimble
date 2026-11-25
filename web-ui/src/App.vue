@@ -12,17 +12,15 @@ import "./shell/shell.css";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useFocusTrap } from "./shell/focusTrap";
 import { pages, currentPage, page } from "./pages";
-// Every caller (quick bar, File menu, palette, ribbon, Home) runs actions through runAction:
-// these open the Vue screen of the same name (a ribbon tool with `page`/`panel` toggles it itself).
-const openPage = (id: string) => () => { currentPage.value = id; };
+// The shell's state (ticket UX1): Home, the model's view or a page, moved only by `send`
+// (shell/send.ts routes the actions home, project, history, new, open, import_ifc and close).
+import { here, send, can } from "./shell/send";
+import ShellNotice from "./shell/ShellNotice.vue";
 // The aside's name: the panel's `label` key (fr/Standards.html: aria-label="Standards graphiques").
 const panelLabel = computed(() => { const l = (panel() as { label?: string } | null)?.label; return l ? t(l) : undefined; });
-Object.assign(screenRoutes, {
-  home: openPage("home"),
-  project: openPage("project-info"),
-  history: openPage("history"),
-  standards: () => { currentPanel.value = "standards"; },
-});
+// A panel is not a screen of the shell: the ribbon's Standards opens it beside the view.
+Object.assign(screenRoutes, { standards: () => { currentPanel.value = "standards"; } });
+const shellName = computed(() => { const s = here.value; return s.at === "model" ? `model.${s.show}` : s.at; });
 import { dialogs, currentDialog } from "./dialogs";
 import { panels, currentPanel, panel } from "./panels";
 import { applyDeepLink } from "./deeplink";
@@ -33,12 +31,13 @@ import SmallBar from "./small/SmallBar.vue";
 import SmallSheet from "./small/SmallSheet.vue";
 import SmallFloat from "./small/SmallFloat.vue";
 
-// Esc closes the dialog first, then the page.
+// Esc closes the dialog first, then the question or the error, then the page.
 function onKey(e: KeyboardEvent) {
   if (e.key !== "Escape") return;
   if (currentDialog.value) currentDialog.value = null;
   else if (small.value && sheet.value) sheet.value = null;
-  else if (currentPage.value) currentPage.value = null;
+  else if (can({ do: "cancel" })) send({ do: "cancel" });
+  else if (can({ do: "back" })) send({ do: "back" });
 }
 // One focus trap for every dialog and menu (#79 AD).
 const backdrop = ref<HTMLElement | null>(null);
@@ -55,7 +54,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
 <template>
   <!-- Window frame of the wireframes v01 (DESIGN-SPEC.md § Window). Each band owns its file. -->
-  <div class="bb-app" :class="{ small, wide }">
+  <div class="bb-app" :class="{ small, wide }" :data-bb-shell="shellName">
     <SmallTop v-if="small" />
     <QuickBar v-if="!small" />
     <!-- A full-window page (`layout = "full"`) hides the bands it has no use for; #bimble stays in the DOM. -->
@@ -88,6 +87,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
     <div v-if="currentDialog && dialogs[currentDialog]" ref="backdrop" class="bb-backdrop" tabindex="-1" @click.self="currentDialog = null" @keydown="trapKey">
       <component :is="dialogs[currentDialog]" />
     </div>
+    <ShellNotice />
     <StatusBar v-if="!small" />
     <SmallBar v-if="small" />
   </div>

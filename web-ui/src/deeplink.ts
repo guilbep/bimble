@@ -8,7 +8,7 @@
 import { watch } from "vue";
 import { modelReady, state, storeys, openView, select, runAction, runVerb, tabCall, openViews, query, type ViewSummary } from "./bimble";
 import { activeTab, isTabId } from "./shell/tabs";
-import { currentPage } from "./pages";
+import { send } from "./shell/send";
 import { currentDialog } from "./dialogs";
 import { currentPanel } from "./panels";
 
@@ -73,7 +73,8 @@ export async function applyDeepLink(): Promise<void> {
       await step("paper", () => runAction("paper_view"));
     }
     for (const a of (q.get("action") ?? "").split(",").filter(Boolean)) await step(a, () => runAction(a));
-    currentPage.value = q.get("page");
+    const pg = q.get("page");
+    if (pg) send(pg === "home" ? { do: "home" } : { do: "showPage", page: pg });
     currentPanel.value = q.get("panel");
     currentDialog.value = q.get("dialog");
   } catch (e) {

@@ -551,6 +551,7 @@ export async function start(): Promise<void> {
     performance.mark("bimble:wasm-ready");
     performance.measure("bimble:wasm-ready", { start: 0, end: "bimble:wasm-ready" });
     wasm = w;
+    backend = url.searchParams.get("ccore") === "1" ? "ccore" : native ? "native" : "rust"; // UX1
     let shown = false;
     // The callback runs inside a frame: calls back into the viewer would throw "busy", so defer.
     w.on_change((json) => {
@@ -978,8 +979,26 @@ export function tabCall(op: "activate" | "close" | "open", tab: OpenTab): string
   try { wasmOrThrow().tab(JSON.stringify({ op, tab })); } catch (e) { return message(e); }
   // A sheet tab opens the Sheets page on that sheet (SheetsSide.vue watches it).
   if (tab.type === "sheet") sheetTab.value = op === "close" ? null : { id: tab.id };
+  if (tab.type === "view" && op !== "close") shellHooks.viewShown?.(); // UX1: a view shown leaves Home or a page
   return null;
 }
+
+// ---- UX1 ---- the shell's calls into the session (shell/send.ts; the shell's state is not kept here)
+/** Which client runs: the C host over HTTP, the C core's wasm in the page, or the Rust wasm. */
+export let backend: "native" | "ccore" | "rust" = "rust";
+/** Set by shell/send.ts: told when a view tab was opened or activated (tabCall). */
+export const shellHooks: { viewShown?: () => void } = {};
+/** A file action (new, open, import_ifc, close) with its body {path, discard}, never through
+ *  `screenRoutes`. Returns the session's error text, or null. */
+export function fileCall(name: string, body: { path?: string; discard?: boolean }): string | null {
+  try {
+    const w = wasmOrThrow();
+    if (w.action_with) w.action_with(name, JSON.stringify(body));
+    else w.action(name); // the Rust wasm: its own dialogs
+    return null;
+  } catch (e) { return message(e); }
+}
+// ---- end UX1 ----
 
 /** Open any view as its current tab (a navigator click). Returns the Rust error, or null. */
 export const openView = (id: string) => tabCall("open", { type: "view", id });

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { t } from "../i18n";
 import { viewName } from "./viewName";
-import { currentPage } from "../pages";
+import { send } from "./send";
 import { actions, links, query, select, measurements, openView, openViews, runAction, scheduleList, sheets, state, storeys, type ViewSummary } from "../bimble";
 
 // `open_views` is `{views, active, tabs}` (bridge.rs); bimble.ts types it loosely until then.
@@ -88,11 +88,11 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
         <span v-if="v.references > 0" class="n">{{ t('nav.refs', { n: v.references }) }}</span>
       </a>
     </template>
-    <a class="ti h" href="#" style="padding-left:6px" data-missing="schedule-list-in-navigator" @click.prevent="currentPage = 'quantities'">
+    <a class="ti h" href="#" style="padding-left:6px" data-missing="schedule-list-in-navigator" @click.prevent="send({ do: 'showPage', page: 'quantities' })">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
       <span>{{ t('nav.schedules') }}</span><span class="n">{{ scheduleCount }}</span>
     </a>
-    <a class="ti h" href="#" style="padding-left:6px" data-missing="sheet-list-in-navigator" @click.prevent="currentPage = 'sheets'">
+    <a class="ti h" href="#" style="padding-left:6px" data-missing="sheet-list-in-navigator" @click.prevent="send({ do: 'showPage', page: 'sheets' })">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
       <span>{{ t('nav.sheets') }}</span><span class="n">{{ sheetCount ?? "" }}</span>
     </a>
@@ -124,7 +124,7 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
       </template>
     </template>
     <!-- No sub-project data in Rust yet (ADR 0059 proposed): the group opens the Sub-projects page. -->
-    <a class="ti h" href="#" style="padding-left:6px" data-missing="subprojects query" @click.prevent="currentPage = 'subprojects'">
+    <a class="ti h" href="#" style="padding-left:6px" data-missing="subprojects query" @click.prevent="send({ do: 'showPage', page: 'subprojects' })">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
       <span>{{ t('nav.subprojects') }}</span><span class="n" />
     </a>

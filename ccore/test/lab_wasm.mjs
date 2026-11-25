@@ -7,7 +7,7 @@
 // the properties panel shows it, a place through the client adds an element and the mesh redraws
 // (pixel hash changes), ccoreSave() returns the saved text, undo restores the picture; then the
 // file actions (ticket A5): ccoreOpenFile(Blob of golden/bin/frame2.bimble) -> 2 storeys and a new
-// mesh, ccoreExportIfc and ccoreSaveBytes, ribbon `new` -> 1 storey, ribbon `open` -> the picker
+// mesh, ccoreExportIfc and ccoreSaveBytes, ribbon `new` -> 1 storey, ribbon `open` -> the page asks (unsaved; UX1), Discard -> the picker
 // (intercepted: Page.fileChooserOpened) filled through DOM.setFileInputFiles (a copy of
 // frame.json) -> 3 storeys; ticket A5c: ccoreOpenFile(Blob of golden/view/frame2.bimbleview,
 // Rust's gzip) -> read-only (state editable false), the viewport draws its mesh (pixel hash
@@ -308,13 +308,18 @@ async function main() {
     return s.storeys.length === 1 ? s : null;
   }).catch(() => null);
   check("ribbon action new -> Untitled.bimble with 'Level 0'", nerr === null && st3?.file === "Untitled.bimble" && st3.storeys[0] === "Level 0", `${nerr} ${JSON.stringify(st3)}`);
-  await evalJs("window.confirm = () => true, 1"); // the new model is unsaved: open asks first
   // The picker as a click opens it (a user gesture), intercepted: CDP hands over its <input>.
   let chooser = null;
   cdp.on((msg) => { if (msg.sessionId === sessionId && msg.method === "Page.fileChooserOpened") chooser = msg.params; });
   await S("Page.setInterceptFileChooserDialog", { enabled: true });
   const oerr = (await S("Runtime.evaluate", { expression: "(async () => { const b = await import('/src/bimble.ts'); return b.runAction('open'); })()",
     returnByValue: true, awaitPromise: true, userGesture: true })).result.value;
+  // UX1: the new model is unsaved, so open asks first in the page (shell/machine.ts confirmClose):
+  // a real click on Discard, which opens the picker.
+  const discard = await waitFor("the unsaved-changes question", 5000, async () => JSON.parse(await evalJs(`(() => {
+    const e = document.querySelector('[data-bb=shell-confirm-discard]'); if (!e) return 'null';
+    const b = e.getBoundingClientRect(); return JSON.stringify({ x: b.x + b.width / 2, y: b.y + b.height / 2 }); })()`))).catch(() => null);
+  if (discard) for (const type of ["mousePressed", "mouseReleased"]) await S("Input.dispatchMouseEvent", { type, x: discard.x, y: discard.y, button: "left", buttons: type === "mousePressed" ? 1 : 0, clickCount: 1 });
   const nodeId = (await waitFor("Page.fileChooserOpened", 5000, () => chooser).catch(() => null))?.backendNodeId ?? 0;
   const pick = join(tmp, "picked.json");
   copyFileSync(join(CCORE, "golden/frame.json"), pick);
@@ -323,7 +328,7 @@ async function main() {
     const s = JSON.parse(await bb("JSON.stringify({ file: b.state.value.file, storeys: b.storeys.value.map((s) => s.name) })"));
     return s.storeys.length === 3 ? s : null;
   }).catch(() => null);
-  check("ribbon action open: the file picker, then the picked frame.json's 3 storeys", oerr === null && !!nodeId && st4?.file === "picked.json", `${oerr} node ${nodeId} ${JSON.stringify(st4)}`);
+  check("ribbon action open: asked (unsaved), the file picker, then the picked frame.json's 3 storeys", oerr === null && !!discard && !!nodeId && st4?.file === "picked.json", `${oerr} node ${nodeId} ${JSON.stringify(st4)}`);
 
   // A .bimbleview (ticket A5c): read-only, drawn, edit actions off in the ribbon.
   const ribbonCol = `(async () => { const t = await import('/src/shell/tabs.ts'); t.activeTab.value = 'concrete';

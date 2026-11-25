@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from "vue";
-import { state, actions, historyLabels, runAction, undo, redo } from "../bimble";
+import { state, actions, historyLabels, undo, redo } from "../bimble";
+import { act as runAction } from "./send";
 import { t } from "../i18n";
 import { currentDialog } from "../dialogs";
 import { page } from "../pages";

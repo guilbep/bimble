@@ -1,7 +1,7 @@
 <script lang="ts">
 import { computed, ref, watch } from "vue";
 import { openViews, sheetLayout, sheetTab, sheets, state, type PlacedLayout, type SheetSummary } from "../bimble";
-import { currentPage } from "./index";
+import { send } from "../shell/send";
 
 /** The sheet the page shows: the sheet a tab opened last, else Rust's current sheet tab, else the first sheet; null
  *  without sheets. */
@@ -21,7 +21,7 @@ export const sheetsError = ref<string | null>(null);
 watch(sheetTab, (t) => {
   if (!t) return;
   selectedPlaced.value = null;
-  currentPage.value = "sheets";
+  send({ do: "showSheet", sheet: t.id });
 });
 
 /** The selected placed view as the layout gives it (C core `sheet_layout`), null otherwise. */

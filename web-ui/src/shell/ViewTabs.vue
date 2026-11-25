@@ -4,6 +4,7 @@ import { openViews, sheets, tabCall, runAction, type OpenTab } from "../bimble";
 import { t } from "../i18n";
 import { viewName } from "./viewName";
 import { currentPage } from "../pages";
+import { send } from "./send";
 
 // `query("open_views")` (bridge.rs): the open tabs in order; `current` is what the main view shows.
 const same = (a: OpenTab | null, b: OpenTab | null) => JSON.stringify(a) === JSON.stringify(b);
@@ -36,9 +37,9 @@ const picture = (onPaper: boolean) => { if (onPaper !== paper.value.on) runActio
   <div class="vtabs" data-bb="viewtabs">
     <!-- An open page comes first, as the reference (fr/ProjectInfo.html: the page tab, then the views). -->
     <a v-if="currentPage" class="vtab on" href="#" aria-current="page" data-bb="viewtab-page" @click.prevent>{{ pageName(currentPage) }}<span class="xx" role="button" tabindex="0" :aria-label="t('viewtabs.close')"
-       @click.prevent.stop="currentPage = null" @keydown.enter.prevent.stop="currentPage = null"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span></a>
+       @click.prevent.stop="send({ do: 'back' })" @keydown.enter.prevent.stop="send({ do: 'back' })"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span></a>
     <a v-for="(tab, i) in tabs" :key="i" class="vtab" :class="{ on: tab.on }" href="#"
-       :aria-current="tab.on ? 'page' : undefined" @click.prevent="currentPage = null; tabCall('activate', tab.tab)">{{ tab.name }}<span class="xx" role="button" tabindex="0" :aria-label="t('viewtabs.close')"
+       :aria-current="tab.on ? 'page' : undefined" @click.prevent="tabCall('activate', tab.tab) ?? send({ do: 'showView' })">{{ tab.name }}<span class="xx" role="button" tabindex="0" :aria-label="t('viewtabs.close')"
        @click.prevent.stop="tabCall('close', tab.tab)" @keydown.enter.prevent.stop="tabCall('close', tab.tab)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span></a>
     <!-- No view open (a model without stored views): an empty pill holds the strip's height. -->
     <span v-if="!tabs.length && !currentPage" class="vtab" aria-hidden="true" style="visibility:hidden"><span class="xx" /></span>

@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { actions, runAction } from "../bimble";
 import { t } from "../i18n";
 import { currentPage } from "../pages";
+import { send } from "./send";
 import { currentPanel } from "../panels";
 import type { RibbonTool } from "./ribbon-tabs";
 
@@ -20,7 +21,7 @@ const missing = computed(() => vue.value ? undefined :
   props.tool.action === null ? "action" : state.value || !actions.value.length ? undefined : `action ${props.tool.action}`);
 
 function run(): void {
-  if (props.tool.page) currentPage.value = on.value ? null : props.tool.page;
+  if (props.tool.page) send(on.value ? { do: "back" } : { do: "showPage", page: props.tool.page });
   else if (props.tool.panel) currentPanel.value = on.value ? null : props.tool.panel;
   else if (props.tool.action && !off.value) runAction(props.tool.action);
 }
