@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "file.h"
+#include "relation.h"
 #include "view_io.h"
 
 #ifndef __TINYC__ /* tcc never contracts and warns on the pragma */
@@ -45,7 +46,8 @@ static const char *const OPS[] = {"add_storey",     "remove_storey",  "add_mater
                                   "add_element",    "remove_element", "set_generator", "set_placement",
                                   "rename",         "set_element_material", "set_property", "set_project",
                                   "add_view",       "remove_view",    "set_view",      "add_sheet",
-                                  "remove_sheet",   "set_sheet",      "set_schedules"};
+                                  "remove_sheet",   "set_sheet",      "set_schedules", "add_relation",
+                                  "remove_relation", "set_relation"};
 
 const char *cc_cmd_op_name(cc_cmd_op op) { return (unsigned)op < CC_CMD_COUNT ? OPS[op] : "?"; }
 
@@ -251,6 +253,27 @@ static int placement_validate(Buf *b, const cc_placement *p) {
 }
 
 /* MaterialProps::validate. */
+/* ADR 0070: an IfcElementAssembly has no generator (its shape is its parts) and no openings;
+ * every other element has a generator of its own. The same texts as model.c. */
+static int assembly_check(Buf *b, cc_ifc_class cls, const cc_generator *g, size_t nopenings) {
+    if (cls != CC_IFC_ELEMENT_ASSEMBLY) {
+        if (g->kind == CC_GEN_NONE) {
+            buf_puts(b, "missing generator");
+            return -1;
+        }
+        return gen_validate(b, g);
+    }
+    if (g->kind != CC_GEN_NONE) {
+        buf_puts(b, "an IfcElementAssembly has no generator: its shape is its parts");
+        return -1;
+    }
+    if (nopenings) {
+        buf_puts(b, "an IfcElementAssembly has no openings");
+        return -1;
+    }
+    return 0;
+}
+
 static int props_validate(Buf *b, const cc_material_props *p) {
     const char *what[3] = {"density", "modulus", "strength"};
     const char *maxs[3] = {"30000", "1000000", "10000"};
@@ -513,6 +536,8 @@ static int dup_command(Arena *a, cc_command *c) {
     case CC_CMD_ADD_SHEET:
     case CC_CMD_SET_SHEET: return cc_sheet_dup(a, &c->sheet);
     case CC_CMD_SET_SCHEDULES: return cc_schedules_dup(a, &c->schedules, c->nschedules);
+    case CC_CMD_ADD_RELATION:
+    case CC_CMD_SET_RELATION: return cc_relation_dup(a, &c->relation);
     default: return 0;
     }
 }
@@ -570,7 +595,7 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
     switch (c->op) {
     case CC_CMD_ADD_STOREY: {
         const cc_storey *s = &c->storey;
-        if (cc_model_storey(m, &s->id)) return exists(err, &s->id);
+        if (cc_model_storey(m, &s->id) || cc_model_relation(m, &s->id)) return exists(err, &s->id);
         if (!finite_(s->elevation)) return invalid(err, "storey elevation", 16);
         size_t at = lower_bound(m->storeys, m->nstoreys, sizeof *s, &s->id);
         cc_storey *p = arr_insert(a, m->storeys, m->nstoreys, sizeof *s, at, s);
@@ -597,7 +622,7 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
     }
     case CC_CMD_ADD_MATERIAL: {
         const cc_material *x = &c->material;
-        if (cc_model_material(m, &x->id)) return exists(err, &x->id);
+        if (cc_model_material(m, &x->id) || cc_model_relation(m, &x->id)) return exists(err, &x->id);
         if (props_validate(&why, &x->props)) return invalid_buf(err, &why);
         size_t at = lower_bound(m->materials, m->nmaterials, sizeof *x, &x->id);
         cc_material *p = arr_insert(a, m->materials, m->nmaterials, sizeof *x, at, x);
@@ -620,10 +645,10 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
     }
     case CC_CMD_ADD_ELEMENT: {
         const cc_element *e = &c->element;
-        if (cc_model_element(m, &e->id)) return exists(err, &e->id);
+        if (cc_model_element(m, &e->id) || cc_model_relation(m, &e->id)) return exists(err, &e->id);
         if (!cc_model_storey(m, &e->storey)) return not_found(err, &e->storey);
         if (!cc_model_material(m, &e->material)) return not_found(err, &e->material);
-        if (gen_validate(&why, &e->generator) || placement_validate(&why, &e->placement))
+        if (assembly_check(&why, e->cls, &e->generator, e->nopenings) || placement_validate(&why, &e->placement))
             return invalid_buf(err, &why);
         size_t at = lower_bound(m->elements, m->nelements, sizeof *e, &e->id);
         cc_element *p = arr_insert_grow(a, m->elements, m->nelements, &m->cap_elements, sizeof *e, at, e);
@@ -637,6 +662,19 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
     case CC_CMD_REMOVE_ELEMENT: {
         cc_element *e = find_element(m, &c->id);
         if (!e) return not_found(err, &c->id);
+        const cc_relation *r = cc_relation_using(m, &c->id); /* X2's verbs decide what delete does */
+        if (r) {
+            if (err) {
+                buf_clear(err);
+                cc_buf_gid(err, &c->id);
+                buf_puts(err, " is still used by the relation ");
+                cc_buf_gid(err, &r->id);
+                buf_puts(err, " (");
+                buf_append(err, r->kind.p, r->kind.n);
+                buf_putc(err, ')');
+            }
+            return -1;
+        }
         inv_init(inv, CC_CMD_ADD_ELEMENT);
         inv->element = *e;
         arr_remove(m->elements, m->nelements--, sizeof *e, (size_t)(e - m->elements));
@@ -646,6 +684,7 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
         if (gen_validate(&why, &c->generator)) return invalid_buf(err, &why);
         cc_element *e = find_element(m, &c->id);
         if (!e) return not_found(err, &c->id);
+        if (assembly_check(&why, e->cls, &c->generator, 0)) return invalid_buf(err, &why);
         inv_init(inv, CC_CMD_SET_GENERATOR);
         inv->id = c->id;
         inv->generator = e->generator;
@@ -781,6 +820,50 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
         arr_remove(m->sheets, m->nsheets--, sizeof *s, (size_t)(s - m->sheets));
         return 0;
     }
+    case CC_CMD_ADD_RELATION:
+    case CC_CMD_SET_RELATION: {
+        const cc_relation *r = &c->relation;
+        cc_relation *old = (cc_relation *)cc_model_relation(m, &r->id);
+        if (c->op == CC_CMD_ADD_RELATION && old) return exists(err, &r->id);
+        if (c->op == CC_CMD_SET_RELATION && !old) return not_found(err, &r->id);
+        /* The whole table as it would be, validated as a file load does (one whole per part,
+         * no cycle across relations). */
+        size_t n = m->nrelations + (old ? 0 : 1);
+        size_t at = lower_bound(m->relations, m->nrelations, sizeof *r, &r->id);
+        cc_relation *t = malloc(n * sizeof *t);
+        if (!t) return oom(err);
+        if (m->nrelations) memcpy(t, m->relations, m->nrelations * sizeof *t);
+        if (old) t[at] = *r;
+        else {
+            if (m->nrelations > at) memmove(t + at + 1, t + at, (m->nrelations - at) * sizeof *t);
+            t[at] = *r;
+        }
+        int bad = cc_relations_validate(m, t, n, NULL, &why);
+        free(t);
+        if (bad) return why.oom ? oom(err) : invalid_buf(err, &why);
+        buf_free(&why);
+        if (old) {
+            inv_init(inv, CC_CMD_SET_RELATION);
+            inv->relation = *old;
+            *old = *r;
+            return 0;
+        }
+        cc_relation *p = arr_insert(a, m->relations, m->nrelations, sizeof *r, at, r);
+        if (!p) return oom(err);
+        m->relations = p;
+        m->nrelations++;
+        inv_init(inv, CC_CMD_REMOVE_RELATION);
+        inv->id = r->id;
+        return 0;
+    }
+    case CC_CMD_REMOVE_RELATION: {
+        const cc_relation *r = cc_model_relation(m, &c->id);
+        if (!r) return not_found(err, &c->id);
+        inv_init(inv, CC_CMD_ADD_RELATION);
+        inv->relation = *r;
+        arr_remove(m->relations, m->nrelations--, sizeof *r, (size_t)(r - m->relations));
+        return 0;
+    }
     case CC_CMD_SET_SCHEDULES: {
         if (cc_schedules_validate(c->schedules, c->nschedules, &why)) return invalid_buf(err, &why);
         buf_free(&why);
@@ -911,6 +994,21 @@ void cc_command_describe(const cc_command *c, const cc_model *m, Buf *b) {
         }
         break;
     }
+    case CC_CMD_ADD_RELATION:
+        buf_puts(b, "add the "), put_str(b, c->relation.kind);
+        buf_puts(b, " of "), el_name(b, m, &c->relation.relating);
+        break;
+    case CC_CMD_REMOVE_RELATION: {
+        const cc_relation *r = cc_model_relation(m, &c->id);
+        buf_puts(b, "delete ");
+        if (r) buf_puts(b, "the "), put_str(b, r->kind), buf_puts(b, " of "), el_name(b, m, &r->relating);
+        else buf_puts(b, "a relation");
+        break;
+    }
+    case CC_CMD_SET_RELATION:
+        buf_puts(b, "change the "), put_str(b, c->relation.kind);
+        buf_puts(b, " of "), el_name(b, m, &c->relation.relating);
+        break;
     default: break;
     }
 }
@@ -1022,6 +1120,10 @@ void cc_command_write(JsonW *w, const cc_command *c) {
         cc_em_sheet(&em, &c->sheet, cc_cmd_op_name(c->op));
         return;
     }
+    if (c->op == CC_CMD_ADD_RELATION || c->op == CC_CMD_SET_RELATION) {
+        cc_em_relation(&em, &c->relation, cc_cmd_op_name(c->op));
+        return;
+    }
     jw_obj_begin(w);
     jw_key(w, "op"), jw_str(w, cc_cmd_op_name(c->op));
     switch (c->op) {
@@ -1055,7 +1157,7 @@ void cc_command_write(JsonW *w, const cc_command *c) {
         jw_key(w, "storey"), w_gid(w, &e->storey);
         jw_key(w, "material"), w_gid(w, &e->material);
         jw_key(w, "placement"), w_placement(w, &e->placement);
-        jw_key(w, "generator"), w_generator(w, &e->generator);
+        if (e->generator.kind != CC_GEN_NONE) jw_key(w, "generator"), w_generator(w, &e->generator);
         if (e->nproperties) jw_key(w, "properties"), w_kvs(w, e->properties, e->nproperties);
         if (e->has_ifc_entity) jw_key(w, "ifc_entity"), w_str(w, e->ifc_entity);
         break;
@@ -1064,7 +1166,8 @@ void cc_command_write(JsonW *w, const cc_command *c) {
     case CC_CMD_REMOVE_MATERIAL:
     case CC_CMD_REMOVE_ELEMENT:
     case CC_CMD_REMOVE_VIEW:
-    case CC_CMD_REMOVE_SHEET: jw_key(w, "id"), w_gid(w, &c->id); break;
+    case CC_CMD_REMOVE_SHEET:
+    case CC_CMD_REMOVE_RELATION: jw_key(w, "id"), w_gid(w, &c->id); break;
     case CC_CMD_SET_SCHEDULES: jw_key(w, "schedules"), cc_em_schedules(&em, c->schedules, c->nschedules); break;
     case CC_CMD_SET_GENERATOR:
         jw_key(w, "id"), w_gid(w, &c->id);
@@ -1535,16 +1638,21 @@ static int d_element(D *d, const JrVal *v, cc_element *e) {
                                     "generator", "openings", "properties", "ifc_entity"};
     const JrVal *f[10];
     if (d_fields(d, v, F, 10, f, "struct Element", 0)) return -1;
-    for (int i = 0; i < 7; i++)
+    for (int i = 0; i < 6; i++)
         if (need(d, v, f[i], F[i])) return -1;
     int cls = 0;
     if (d_gid(d, f[0], &e->id) ||
         d_enum(d, f[1], class_name_i, CC_IFC_CLASS_COUNT,
-               "`IfcColumn`, `IfcBeam`, `IfcSlab`, `IfcWall`, `IfcFooting`, `IfcBuildingElementProxy`", &cls) ||
+               "`IfcColumn`, `IfcBeam`, `IfcSlab`, `IfcWall`, `IfcFooting`, `IfcBuildingElementProxy`, "
+               "`IfcElementAssembly`",
+               &cls) ||
         d_str(d, f[2], &e->name) || d_gid(d, f[3], &e->storey) || d_gid(d, f[4], &e->material) ||
-        d_placement(d, f[5], &e->placement) || d_generator(d, f[6], &e->generator))
+        d_placement(d, f[5], &e->placement))
         return -1;
     e->cls = (cc_ifc_class)cls;
+    /* An IfcElementAssembly has no generator (ADR 0070): the key is left out. */
+    if (!f[6] && e->cls == CC_IFC_ELEMENT_ASSEMBLY) e->generator.kind = CC_GEN_NONE;
+    else if (need(d, v, f[6], F[6]) || d_generator(d, f[6], &e->generator)) return -1;
     if (f[7]) {
         if (f[7]->type != JR_ARR) return type_err(d, f[7], "a sequence");
         if (f[7]->n) return dfail(d, f[7]->off, "unsupported by the C core: element openings", 0, 0);
@@ -1594,7 +1702,8 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
                       "`add_storey`, `remove_storey`, `add_material`, `remove_material`, `add_element`, "
                       "`remove_element`, `set_generator`, `set_placement`, `rename`, `set_element_material`, "
                       "`set_property`, `add_view`, `remove_view`, `set_view`, `add_sheet`, `remove_sheet`, "
-                      "`set_sheet`, `set_material`, `set_schedules`, `set_project`",
+                      "`set_sheet`, `set_material`, `set_schedules`, `set_project`, `add_relation`, "
+                      "`remove_relation`, `set_relation`",
                       &op);
     }
     memset(c, 0, sizeof *c);
@@ -1611,6 +1720,19 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
         cc_vd_init(&vd, d->a);
         int rc = c->op == CC_CMD_ADD_VIEW || c->op == CC_CMD_SET_VIEW ? cc_vd_view(&vd, v, "op", &c->view)
                                                                      : cc_vd_sheet(&vd, v, "op", &c->sheet);
+        if (rc) {
+            buf_clear(&d->msg);
+            buf_append(&d->msg, vd.msg.p, vd.msg.oom ? 0 : vd.msg.len);
+            fail_buf(d, vd.off);
+        }
+        cc_vd_free(&vd);
+        return rc ? -1 : 0;
+    }
+    case CC_CMD_ADD_RELATION:
+    case CC_CMD_SET_RELATION: {
+        cc_vd vd;
+        cc_vd_init(&vd, d->a);
+        int rc = cc_vd_relation(&vd, v, "op", &c->relation);
         if (rc) {
             buf_clear(&d->msg);
             buf_append(&d->msg, vd.msg.p, vd.msg.oom ? 0 : vd.msg.len);

@@ -2,6 +2,7 @@
 #include "model.h"
 #include <string.h>
 #include "fmt.h"
+#include "relation.h"
 #include "view_io.h"
 
 const char cc_gid_alphabet[65] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
@@ -21,7 +22,7 @@ int cc_gid_valid(const char *s, size_t n) {
 int cc_gid_cmp(const cc_gid *a, const cc_gid *b) { return memcmp(a->c, b->c, 22); }
 
 static const char *const CLASS[] = {"IfcColumn", "IfcBeam", "IfcSlab", "IfcWall", "IfcFooting",
-                                    "IfcBuildingElementProxy"};
+                                    "IfcBuildingElementProxy", "IfcElementAssembly"};
 static const char *const CAT[] = {"concrete", "steel", "timber", "masonry",
                                   "insulation", "earth", "glass", "other"};
 static const char *const KIND[] = {"rect_column", "rect_beam", "slab", "wall",
@@ -29,7 +30,9 @@ static const char *const KIND[] = {"rect_column", "rect_beam", "slab", "wall",
 
 const char *cc_ifc_class_name(cc_ifc_class c) { return (unsigned)c < CC_IFC_CLASS_COUNT ? CLASS[c] : "?"; }
 const char *cc_category_name(cc_category c) { return (unsigned)c < CC_CAT_COUNT ? CAT[c] : "?"; }
-const char *cc_gen_kind_name(cc_gen_kind k) { return (unsigned)k < CC_GEN_COUNT ? KIND[k] : "?"; }
+const char *cc_gen_kind_name(cc_gen_kind k) {
+    return (unsigned)k < CC_GEN_COUNT ? KIND[k] : k == CC_GEN_NONE ? "none" : "?";
+}
 
 void cc_model_init(cc_model *m) {
     memset(m, 0, sizeof *m);
@@ -285,7 +288,8 @@ static int key_char_ok(char c) {
 }
 
 int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid *mkeys,
-                           const cc_gid *ekeys, const cc_gid *vkeys, const cc_gid *shkeys, cc_error *err) {
+                           const cc_gid *ekeys, const cc_gid *vkeys, const cc_gid *shkeys, const cc_gid *rkeys,
+                           cc_error *err) {
     Buf b;
     buf_init(&b);
     /* project::validate */
@@ -375,7 +379,22 @@ int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid 
             return set_err(err, &b);
         }
         if (placement_validate(&b, &e->placement)) return set_err(err, &b);
-        if (gen_validate(&b, &e->generator)) return set_err(err, &b);
+        /* ADR 0070: an assembly has no generator (its shape is its parts) and nothing to cut;
+         * every other element has one. */
+        if (e->cls == CC_IFC_ELEMENT_ASSEMBLY || e->generator.kind == CC_GEN_NONE) {
+            if (e->cls != CC_IFC_ELEMENT_ASSEMBLY) {
+                buf_puts(&b, "missing generator");
+                return set_err(err, &b);
+            }
+            if (e->generator.kind != CC_GEN_NONE) {
+                buf_puts(&b, "an IfcElementAssembly has no generator: its shape is its parts");
+                return set_err(err, &b);
+            }
+            if (e->nopenings) {
+                buf_puts(&b, "an IfcElementAssembly has no openings");
+                return set_err(err, &b);
+            }
+        } else if (gen_validate(&b, &e->generator)) return set_err(err, &b);
         for (size_t j = 0; j < e->nopenings; j++) {
             /* "{class_name} {name} (opening {j}): {msg}" */
             buf_clear(&b);
@@ -425,12 +444,13 @@ int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid 
                 return set_err(err, &b);
             }
     }
+    if (m->nrelations && cc_relations_validate(m, m->relations, m->nrelations, rkeys, &b)) return set_err(err, &b);
     buf_free(&b);
     return 0;
 }
 
 int cc_model_validate(const cc_model *m, cc_error *err) {
-    return cc_model_validate_keys(m, NULL, NULL, NULL, NULL, NULL, err);
+    return cc_model_validate_keys(m, NULL, NULL, NULL, NULL, NULL, NULL, err);
 }
 
 /* ---- canonical: x + 0.0 turns -0.0 into 0.0 and keeps every other value ---- */

@@ -30,6 +30,7 @@ typedef enum {
     CC_IFC_WALL,
     CC_IFC_FOOTING,
     CC_IFC_PROXY, /* IfcBuildingElementProxy */
+    CC_IFC_ELEMENT_ASSEMBLY, /* IfcElementAssembly: no generator, its shape is its parts (ADR 0070) */
     CC_IFC_CLASS_COUNT
 } cc_ifc_class;
 
@@ -81,7 +82,11 @@ typedef enum {
     CC_GEN_PAD_FOOTING,
     CC_GEN_EXTRUDED_POLYGON,
     CC_GEN_MESH,
-    CC_GEN_COUNT
+    CC_GEN_COUNT,
+    /* No shape of its own: the generator of an IfcElementAssembly (ADR 0070), and only of one.
+     * Past CC_GEN_COUNT so no table of kinds (file tags, verbs) knows it; the file leaves the
+     * element's "generator" out. cc_gen_kind_name gives "none". */
+    CC_GEN_NONE = CC_GEN_COUNT
 } cc_gen_kind;
 
 typedef struct {
@@ -120,6 +125,23 @@ typedef struct {
 
 #include "view.h"
 
+/* An IFC relationship as a model object (ADR 0070, relation.h): its own GlobalId, the IFC class
+ * name of the relationship as text (checked against relation.h's table), one relating element,
+ * the related elements (sorted, no duplicates), the realizing elements of
+ * IfcRelConnectsWithRealizingElements (sorted, no duplicates, else empty) and properties
+ * ("Pset_Name/Property" -> text, sorted by key bytes; disassembly data lives here). */
+typedef struct {
+    cc_gid id;
+    cc_str kind;
+    cc_gid relating;
+    cc_gid *related;
+    size_t nrelated;
+    cc_gid *realizing;
+    size_t nrealizing;
+    cc_kv *properties;
+    size_t nproperties;
+} cc_relation;
+
 typedef struct {
     Arena arena;
     cc_gid project_id;
@@ -141,6 +163,8 @@ typedef struct {
     size_t nsheets;
     cc_schedule *schedules; /* the model's schedules, in their order */
     size_t nschedules;
+    cc_relation *relations; /* sorted by id; key "relations", left out of the file when empty */
+    size_t nrelations;
 } cc_model;
 
 /* An error with a message (UTF-8, NUL-terminated, truncated to fit). `offset` is the input
@@ -156,7 +180,7 @@ int cc_gid_valid(const char *s, size_t n); /* shape only: length 22, alphabet, f
 int cc_gid_cmp(const cc_gid *a, const cc_gid *b);
 const char *cc_ifc_class_name(cc_ifc_class c);   /* "IfcColumn"… */
 const char *cc_category_name(cc_category c);     /* serde name: "concrete"… */
-const char *cc_gen_kind_name(cc_gen_kind k);     /* serde tag: "rect_column"… */
+const char *cc_gen_kind_name(cc_gen_kind k);     /* serde tag: "rect_column"…, "none" for CC_GEN_NONE */
 
 void cc_model_init(cc_model *m); /* empty model, arena ready */
 void cc_model_free(cc_model *m);
@@ -171,7 +195,7 @@ int cc_model_validate(const cc_model *m, cc_error *err);
 /* The same, with the map keys the file gave (Rust checks key == id); NULL means the ids. */
 int cc_model_validate_keys(const cc_model *m, const cc_gid *storey_keys, const cc_gid *material_keys,
                            const cc_gid *element_keys, const cc_gid *view_keys, const cc_gid *sheet_keys,
-                           cc_error *err);
+                           const cc_gid *relation_keys, cc_error *err);
 /* version::canonical_model: every -0.0 becomes 0.0. */
 void cc_model_canonical(cc_model *m);
 

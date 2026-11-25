@@ -30,6 +30,9 @@ typedef enum { /* serde tag "op" */
     CC_CMD_REMOVE_SHEET,
     CC_CMD_SET_SHEET,
     CC_CMD_SET_SCHEDULES,
+    CC_CMD_ADD_RELATION, /* the C core's own (ADR 0070): Rust has no relations */
+    CC_CMD_REMOVE_RELATION,
+    CC_CMD_SET_RELATION,
     CC_CMD_COUNT
 } cc_cmd_op;
 
@@ -41,6 +44,7 @@ typedef enum { /* serde tag "op" */
  *   set_property: id, key, value if has_value     set_project: project[nproject] (sorted keys)
  *   add_view, set_view: view    remove_view, remove_sheet: id
  *   add_sheet, set_sheet: sheet set_schedules: schedules[nschedules]
+ *   add_relation, set_relation: relation          remove_relation: id
  * Strings and arrays are borrowed: from the cc_cmds arena that made the command, or from the
  * model's arena for the inverses that apply returns. */
 typedef struct {
@@ -61,6 +65,7 @@ typedef struct {
     cc_sheet sheet;
     cc_schedule *schedules;
     size_t nschedules;
+    cc_relation relation;
 } cc_command;
 
 /* A list of commands with an arena for their strings and arrays. */
@@ -82,7 +87,8 @@ const char *cc_cmd_op_name(cc_cmd_op op); /* "add_storey"… */
  * made canonical and applied. On success fills *inverse (borrowing the model's arena) and
  * returns 0. On error the model is unchanged, -1, and `err` holds Rust's CommandError text
  * ("no such object: <id>", "object already exists: <id>", "<id> is still used by elements",
- * "invalid: <why>"). */
+ * "invalid: <why>"). The C core's own: remove_element of an element in a relation is refused,
+ * "<id> is still used by the relation <relation id> (<kind>)" (ADR 0070). */
 int cc_command_apply(cc_model *m, const cc_command *c, cc_command *inverse, Buf *err);
 
 /* Command::apply_inverse: no user-input checks, no copy (the command's data must live as long as

@@ -6,7 +6,8 @@
  *   last value (BTreeMap insert);
  * - sections Rust knows and the C core does not hold (georef, mesh arrays by hash) are refused
  *   when non-empty, never dropped. Openings are kept (data only: the C scene does not cut them
- *   yet). Views, sheets and schedules are held (view.h).
+ *   yet). Views, sheets and schedules are held (view.h). Relations (ADR 0070, relation.h) are the
+ *   C core's own section "relations", left out when empty: Rust ignores it (no oracle).
  * The binary form (version 2) is the same serde model in CBOR, read into the same DOM
  * (cbor.h), with each mesh array once in the top-level tables `positions` / `indices` and
  * elements referring to them by index (shared again in memory, as Rust shares its Arcs). */
@@ -18,6 +19,7 @@
 #include "inflate.h"
 #include "json_r.h"
 #include "json_w.h"
+#include "relation.h"
 #include "view_io.h"
 
 typedef struct {
@@ -511,16 +513,21 @@ static int d_element(D *d, const JrVal *v, cc_element *e) {
                                     "generator", "openings", "properties", "ifc_entity"};
     const JrVal *f[10];
     if (d_fields(d, v, F, 10, f, "struct Element", 0)) return -1;
-    for (int i = 0; i < 7; i++)
+    for (int i = 0; i < 6; i++)
         if (need(d, v, f[i], F[i])) return -1;
     int cls = 0;
     if (d_gid(d, f[0], &e->id) ||
         d_enum(d, f[1], class_name_i, CC_IFC_CLASS_COUNT,
-               "`IfcColumn`, `IfcBeam`, `IfcSlab`, `IfcWall`, `IfcFooting`, `IfcBuildingElementProxy`", &cls) ||
+               "`IfcColumn`, `IfcBeam`, `IfcSlab`, `IfcWall`, `IfcFooting`, `IfcBuildingElementProxy`, "
+               "`IfcElementAssembly`",
+               &cls) ||
         d_str(d, f[2], &e->name) || d_gid(d, f[3], &e->storey) || d_gid(d, f[4], &e->material) ||
-        d_placement(d, f[5], &e->placement) || d_generator(d, f[6], &e->generator))
+        d_placement(d, f[5], &e->placement))
         return -1;
     e->cls = (cc_ifc_class)cls;
+    /* An IfcElementAssembly has no generator (ADR 0070): the key is left out. */
+    if (!f[6] && e->cls == CC_IFC_ELEMENT_ASSEMBLY) e->generator.kind = CC_GEN_NONE;
+    else if (need(d, v, f[6], F[6]) || d_generator(d, f[6], &e->generator)) return -1;
     if (f[7]) {
         if (f[7]->type != JR_ARR) return type_err(d, f[7], "a sequence");
         e->nopenings = f[7]->n;
@@ -594,6 +601,11 @@ static int fn_sheet(D *d, const JrVal *v, void *o) {
     cc_vd_init(&vd, d->a);
     return vd_done(d, &vd, cc_vd_sheet(&vd, v, NULL, o));
 }
+static int fn_relation(D *d, const JrVal *v, void *o) {
+    cc_vd vd;
+    cc_vd_init(&vd, d->a);
+    return vd_done(d, &vd, cc_vd_relation(&vd, v, NULL, o));
+}
 
 static int unsupported_if(D *d, const JrVal *v, int is_obj, const char *what) {
     if (!v) return 0;
@@ -603,14 +615,14 @@ static int unsupported_if(D *d, const JrVal *v, int is_obj, const char *what) {
 }
 
 typedef struct {
-    cc_gid *skeys, *mkeys, *ekeys, *vkeys, *shkeys;
+    cc_gid *skeys, *mkeys, *ekeys, *vkeys, *shkeys, *rkeys;
 } Keys;
 
 static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
     static const char *const F[] = {"project_id", "project_name", "storeys", "materials", "elements",
-                                    "views", "sheets", "project", "schedules", "georef"};
-    const JrVal *f[10];
-    if (d_fields(d, v, F, 10, f, "struct Model", 0)) return -1;
+                                    "views", "sheets", "project", "schedules", "georef", "relations"};
+    const JrVal *f[11];
+    if (d_fields(d, v, F, 11, f, "struct Model", 0)) return -1;
     for (int i = 0; i < 5; i++)
         if (need(d, v, f[i], F[i])) return -1;
     void *p;
@@ -636,6 +648,10 @@ static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
         if (vd_done(d, &vd, cc_vd_schedules(&vd, f[8], &m->schedules, &m->nschedules))) return -1;
     }
     if (unsupported_if(d, f[9], 1, "georef")) return -1;
+    if (f[10]) {
+        if (d_idmap(d, f[10], "a map", sizeof(cc_relation), fn_relation, &p, &m->nrelations, &keys->rkeys)) return -1;
+        m->relations = p;
+    }
     return 0;
 }
 
@@ -757,7 +773,8 @@ int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) {
         rc = -1;
     } else {
         cc_error verr;
-        if (cc_model_validate_keys(m, keys.skeys, keys.mkeys, keys.ekeys, keys.vkeys, keys.shkeys, &verr)) {
+        if (cc_model_validate_keys(m, keys.skeys, keys.mkeys, keys.ekeys, keys.vkeys, keys.shkeys, keys.rkeys,
+                                   &verr)) {
             rc = dfail(&d, CC_NO_OFFSET, "invalid model: ", verr.msg, 0);
         } else {
             cc_model_canonical(m);
@@ -912,7 +929,7 @@ int cc_model_save(const cc_model *m, Buf *b) {
         jw_key(&w, "storey"), w_gid(&w, &e->storey);
         jw_key(&w, "material"), w_gid(&w, &e->material);
         jw_key(&w, "placement"), w_placement(&w, &e->placement);
-        jw_key(&w, "generator"), w_generator(&w, &e->generator);
+        if (e->generator.kind != CC_GEN_NONE) jw_key(&w, "generator"), w_generator(&w, &e->generator);
         if (e->nopenings) {
             jw_key(&w, "openings");
             jw_arr_begin(&w);
@@ -946,6 +963,13 @@ int cc_model_save(const cc_model *m, Buf *b) {
     }
     if (m->nproject) jw_key(&w, "project"), w_kvs(&w, m->project, m->nproject);
     if (m->nschedules) jw_key(&w, "schedules"), cc_em_schedules(&em, m->schedules, m->nschedules);
+    if (m->nrelations) {
+        jw_key(&w, "relations");
+        jw_obj_begin(&w);
+        for (size_t i = 0; i < m->nrelations; i++)
+            jw_key_n(&w, m->relations[i].id.c, 22), cc_em_relation(&em, &m->relations[i], NULL);
+        jw_obj_end(&w);
+    }
     jw_obj_end(&w);
     jw_obj_end(&w);
     return jw_finish(&w) == JW_OK && !b->oom ? 0 : -1;
@@ -1113,7 +1137,7 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
         }
         c_key(b, "model");
         cb_head(b, CB_MAP, 5 + (m->nviews ? 1 : 0) + (m->nsheets ? 1 : 0) + (m->nproject ? 1 : 0) +
-                               (m->nschedules ? 1 : 0));
+                               (m->nschedules ? 1 : 0) + (m->nrelations ? 1 : 0));
         c_key(b, "project_id"), c_gid(b, &m->project_id);
         c_key(b, "project_name"), c_str(b, m->project_name);
         c_key(b, "storeys");
@@ -1151,7 +1175,9 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
         for (size_t i = 0, k = 0; i < m->nelements; i++) {
             const cc_element *e = &m->elements[i];
             c_gid(b, &e->id);
-            cb_head(b, CB_MAP, 7 + (e->nopenings ? 1 : 0) + (e->nproperties ? 1 : 0) + (e->has_ifc_entity ? 1 : 0));
+            int has_gen = e->generator.kind != CC_GEN_NONE;
+            cb_head(b, CB_MAP, 6 + (has_gen ? 1 : 0) + (e->nopenings ? 1 : 0) + (e->nproperties ? 1 : 0) +
+                                   (e->has_ifc_entity ? 1 : 0));
             c_key(b, "id"), c_gid(b, &e->id);
             c_key(b, "class"), c_key(b, cc_ifc_class_name(e->cls));
             c_key(b, "name"), c_str(b, e->name);
@@ -1162,8 +1188,9 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
             c_key(b, "origin"), c_vec(b, e->placement.origin, 3);
             c_key(b, "z_axis"), c_vec(b, e->placement.z_axis, 3);
             c_key(b, "x_axis"), c_vec(b, e->placement.x_axis, 3);
-            c_key(b, "generator");
-            if (e->generator.kind == CC_GEN_MESH) {
+            if (has_gen) c_key(b, "generator");
+            if (!has_gen) {
+            } else if (e->generator.kind == CC_GEN_MESH) {
                 c_generator(b, &e->generator, (uint64_t)refs[2 * k], (uint64_t)refs[2 * k + 1]);
                 k++;
             } else c_generator(b, &e->generator, 0, 0);
@@ -1202,6 +1229,11 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
         }
         if (m->nproject) c_key(b, "project"), c_kvs(b, m->project, m->nproject);
         if (m->nschedules) c_key(b, "schedules"), cc_em_schedules(&em, m->schedules, m->nschedules);
+        if (m->nrelations) {
+            c_key(b, "relations");
+            cb_head(b, CB_MAP, m->nrelations);
+            for (size_t i = 0; i < m->nrelations; i++) c_gid(b, &m->relations[i].id), cc_em_relation(&em, &m->relations[i], NULL);
+        }
     }
     pool_free(&pp);
     pool_free(&pi);
