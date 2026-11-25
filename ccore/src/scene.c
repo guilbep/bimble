@@ -143,6 +143,11 @@ typedef struct {
     float normal[3], other[3], seg[6];
 } EdgeUse;
 
+typedef struct { /* a kept edge: its segment and its use */
+    float seg[6];
+    uint32_t use;
+} SegRec;
+
 /* Lexicographic partial_cmp of the 6 flattened coordinates: a < b. */
 static int seg_less(const float *a, const float *b) {
     for (int i = 0; i < 6; i++)
@@ -215,27 +220,34 @@ static int crease_edges(cc_mesh *m, Arena *a, Arena *scratch) {
         }
     }
     /* Keep boundary and crease edges, then sort (stable merge sort, like sort_by). */
-    uint32_t *ord = arena_alloc(scratch, (size_t)(2 * nu + 1) * sizeof(uint32_t), 4), n = 0;
+    /* As (segment, use) records, sorted in place of an index into `uses`: the merge passes read
+     * contiguous memory, not a random use each (same comparisons, same stable order). */
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < nu; i++) n += uses[i].count == 1 || uses[i].crease;
+    SegRec *ord = arena_alloc(scratch, (size_t)(2 * n + 1) * sizeof *ord, 4);
     if (!ord) return -1;
+    n = 0;
     for (uint32_t i = 0; i < nu; i++)
-        if (uses[i].count == 1 || uses[i].crease) ord[n++] = i;
-    uint32_t *tmp = ord + nu;
+        if (uses[i].count == 1 || uses[i].crease) {
+            memcpy(ord[n].seg, uses[i].seg, 24);
+            ord[n++].use = i;
+        }
+    SegRec *tmp = ord + n;
     for (uint32_t w = 1; w < n; w *= 2) {
         for (uint32_t lo = 0; lo < n; lo += 2 * w) {
             uint32_t mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n;
             uint32_t i = lo, j = mid, k = lo;
-            while (i < mid && j < hi)
-                tmp[k++] = seg_less(uses[ord[j]].seg, uses[ord[i]].seg) ? ord[j++] : ord[i++];
+            while (i < mid && j < hi) tmp[k++] = seg_less(ord[j].seg, ord[i].seg) ? ord[j++] : ord[i++];
             while (i < mid) tmp[k++] = ord[i++];
             while (j < hi) tmp[k++] = ord[j++];
         }
-        memcpy(ord, tmp, n * sizeof(uint32_t));
+        memcpy(ord, tmp, n * sizeof *ord);
     }
     m->edges = arena_alloc(a, (size_t)(n + 1) * sizeof m->edges[0], 4);
     m->normals = arena_alloc(a, (size_t)(n + 1) * sizeof m->normals[0], 1);
     if (!m->edges || !m->normals) return -1;
     for (uint32_t i = 0; i < n; i++) {
-        const EdgeUse *e = &uses[ord[i]];
+        const EdgeUse *e = &uses[ord[i].use];
         int8_t *o = m->normals[i];
         memcpy(m->edges[i], e->seg, 24);
         if (e->count == 1) {
