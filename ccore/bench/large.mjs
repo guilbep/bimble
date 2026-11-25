@@ -5,7 +5,7 @@
 // Needs: out/native/bimble-ccore and out/tcc/bimble-ccore (build.sh native, build.sh tcc), python3,
 // for LAB=1 also web-ui/node_modules, /usr/bin/chromium and tcc. Ports: hosts 47384-47386, Vite 5207.
 // Models: bench/large_model.py <size> out/t16-large-<size>.bimble (synthetic, deterministic; made
-// when missing). Raw results: out/t16-large.json. Kills all it starts; restores host/mesh.c.
+// when missing). Raw results: out/t16-large.json. Kills all it starts; restores session/mesh.c.
 //
 // Method, per size and per binary (all wall clock in Node, `performance.now()`):
 //  host     spawn -> "listening" on stderr (load + validate + canonical; median of RUNS starts);
@@ -32,7 +32,7 @@
 //           click-pick: a click on the canvas centre; in the page, window capture / bubble
 //           listeners around glviewport's pointerup (CPU ray pick + select() sync XHR), median of 5
 //           clicks; and Node time from the click to the recoloured frame;
-//           edit -> pixels (LOOP_SIZES): dev.sh's loop, host/mesh.c edited (a constant category
+//           edit -> pixels (LOOP_SIZES): dev.sh's loop, session/mesh.c edited (a constant category
 //           byte), `build.sh host`, stop the host, start out/tcc/bimble-ccore with --session on the
 //           same port, token and model; until an in-page rAF watcher sees a new canvas hash
 //           (bench/lab_loop.mjs's method). LOOP_RUNS runs after one warm-up; build / stop / spawn /
@@ -59,7 +59,7 @@ const TOKEN = "t16-large";
 const P_HOST = port("large_host", 47384), P_SES = port("large_session", 47385), P_LAB = port("large_lab", 47386), VITE = vitePort("large", 5207);
 const GL = process.env.GL ?? "swiftshader";
 const GL_FLAGS = GL === "gpu" ? ["--use-angle=gl"] : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
-const MESH_C = join(CCORE, "host/mesh.c");
+const MESH_C = join(CCORE, "session/mesh.c");
 const PX_ANCHOR = "buf_putc(out, (char)(unsigned char)e->category);";
 const ORIG_MESH = readFileSync(MESH_C, "utf8");
 if (ORIG_MESH.split(PX_ANCHOR).length !== 2) throw new Error(`anchor not found once in ${MESH_C}`);

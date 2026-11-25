@@ -10,9 +10,9 @@
 // checks that the page still shows that state after the restart (73 elements, the selection,
 // one undo step). One untimed warm-up per mode, then the runs alternate the modes.
 // Each run makes two edits at once, both reverted after the run (the source is restored on exit):
-//   pixels: host/mesh.c writes a constant MaterialCategory byte instead of `e->category` (each
+//   pixels: session/mesh.c writes a constant MaterialCategory byte instead of `e->category` (each
 //           run a different one): every element changes colour in the WebGL canvas;
-//   text:   host/calls.c `225.0` (bytes per stored triangle, `query status` model_bytes) becomes
+//   text:   session/calls.c `225.0` (bytes per stored triangle, `query status` model_bytes) becomes
 //           a constant chosen so the status bar's "{mb} MB" shows a new number M.
 // Times (wall clock; Node and page stamps are both Date.now(), same machine):
 //   t0 edit written; build = build.sh <mode> (the whole script: library, test binaries, host);
@@ -52,8 +52,8 @@ const PAGE = `http://localhost:${VITE}/?native=1&gl=1&port=${PORT}&token=${TOKEN
 const STOREY = "1uAZA0Yfn05f$xRd1k4uPR"; // golden/frame.json's lowest storey (host_test.mjs)
 const OUT = join(CCORE, "out");
 const RAW = join(OUT, "t12-lab_loop.json");
-const MESH_C = join(CCORE, "host/mesh.c");
-const CALLS_C = join(CCORE, "host/calls.c");
+const MESH_C = join(CCORE, "session/mesh.c");
+const CALLS_C = join(CCORE, "session/calls.c");
 const PX_ANCHOR = "buf_putc(out, (char)(unsigned char)e->category);";
 const TX_ANCHOR = "(uint64_t)(225.0 * (double)stored)";
 const ORIG_MESH = readFileSync(MESH_C, "utf8");
