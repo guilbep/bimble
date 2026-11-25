@@ -31,6 +31,7 @@ void cc_session_free(cc_session *s) {
     free(s->undo_ids), free(s->redo_ids), free(s->also), free(s->material);
     if (s->scene_rev) cc_scene_free(&s->scene);
     buf_free(&s->mesh);
+    cc_tool_free(&s->tool);
     persist_free(s);
     free(s);
 }
@@ -118,6 +119,7 @@ static void drop_model(cc_session *s) {
     s->nundo_ids = s->nredo_ids = 0;
     s->has_primary = 0, s->nalso = 0;
     s->placing = 0, s->has_storey = 0, s->polygon = 0, s->top_offset_mm = 0;
+    cc_tool_clear(&s->tool);
     free(s->material), s->material = NULL;
     s->open = 0, s->untitled = 0;
 }

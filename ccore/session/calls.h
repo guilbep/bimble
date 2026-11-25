@@ -27,6 +27,26 @@ enum { CC_OK = 200, CC_ERR = 400 };
  *                       the carriers (HTTP host, wasm) know 200 and 400 only; the text tells.
  * A body without them is passed through unchanged (old bodies work as before). A real run answers
  * 200 with an empty text, as Rust's. */
+/* op "tool" (a C addition, ADR 0068 rule 2; session/tool.h): the place tool. The page forwards the
+ * pointer while `placing` is active; C snaps, keeps the points and makes the ghost. Names:
+ *   pointer  body {"ray":[ox,oy,oz,dx,dy,dz], "ray_tol":[…]} (scene coordinates, as GET /mesh:
+ *            world mm minus the BMSH origin; ray_tol is the ray 12 px beside it and gives the snap
+ *            tolerance) or {"at":[x,y], "tol_mm":t} (world plan mm), plus "free" (no snap, rounded
+ *            to 10 mm: Rust's Shift) and "ortho" (the 2nd point along x or y from the 1st), both
+ *            optional booleans. Moves the hover; no model change. While not placing: 200, inactive.
+ *   click    the same body (empty: where the pointer was): adds the hover as a point; when the
+ *            kind has its points (column 1, beam/wall/slab rectangle 2) runs `verb place` once
+ *            (the session's sizes, material, storey; a slab gets top_offset_mm): one history step,
+ *            rev + 1, the points dropped (also on an error, as edit.rs). 400: not placing, the
+ *            verb's error, a polygon slab (not ported).
+ *   cancel   Esc: stops placing and drops the points.
+ * Each answers the tool's state, as `query ghost`:
+ *   {"active":bool,"ghost":null|{"edges":[…],"idx":[…],"origin":[x,y,z],"pos":[…]},
+ *    "ghost_error":null|text,"hover":null|{"at":[x,y],"snap":null|label,"z":elevation},
+ *    "kind":…,"placed":null|GlobalId,"points":[[x,y],…]}
+ * ghost: the element the next click adds (a dry run of the verb meshed by the scene code), f32
+ * positions relative to `origin` (the shown scene's origin); ghost_error: why there is none; snap:
+ * "axis crossing", "column centre", "corner", "grid axis", "edge" or null (rounded). */
 int cc_call(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out);
 
 /* The change JSON (`Viewer::change_json`, calls.rs:134-167) for the state now. The host

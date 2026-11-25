@@ -6,7 +6,12 @@
 // drag), pan (right or middle drag, shift-drag), zoom (wheel), fit-all on the first mesh. A click
 // without a drag picks on the CPU (ray against triangles) and calls `select([id])`, or `select([])`
 // on empty space. No dependency: the few matrix helpers are below.
-import { select, state } from "./bimble";
+// The place tool (ticket B4, ADR 0068 rule 2): while `placing` is active, pointer moves and clicks go
+// to the C core's tool (op `tool`: the pointer ray in scene coordinates and the ray 12 px beside it;
+// Shift: free, no snap, as Rust; Ctrl or Cmd: ortho), which snaps, keeps the points and answers the
+// ghost (the element the next click adds, meshed in C); the page draws it translucent, with a marker
+// at the snapped point and a line from the last point. Esc cancels (stops placing, as Rust).
+import { placing, select, state, toolCall, type ToolPointer, type ToolState } from "./bimble";
 
 // Palette, sRGB (bimble-core style.rs:302, :335-410), by MaterialCategory index.
 const CATEGORY_SRGB: [number, number, number][] = [
@@ -22,6 +27,11 @@ const CATEGORY_SRGB: [number, number, number][] = [
 const BACKGROUND_SRGB = [247, 247, 245];
 const EDGE_SRGB = [26, 26, 28];
 const SELECTION_SRGB: [number, number, number] = [215, 172, 182];
+// The ghost of the place tool: translucent blue faces, its edges and the snap marker darker.
+const GHOST_SRGB: [number, number, number] = [74, 128, 214];
+const GHOST_EDGE_SRGB: [number, number, number] = [32, 70, 150];
+const GHOST_ALPHA = 0.45;
+const SNAP_PX = 12; // lib.rs placing_point: the snap tolerance is 12 screen pixels
 const AMBIENT = 0.62;
 // Camera defaults (bimble-render lib.rs Camera::default): yaw -55°, pitch 28°, vertical fov 35°.
 const FOV_Y = (35 * Math.PI) / 180;
@@ -119,16 +129,17 @@ in vec3 v_pos;
 in vec3 v_col;
 uniform vec3 u_light;
 uniform float u_ambient; // < 0: unlit (edges)
+uniform float u_alpha;
 out vec4 o;
 vec3 to_linear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
 vec3 to_srgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
 void main() {
-  if (u_ambient < 0.0) { o = vec4(v_col, 1.0); return; }
+  if (u_ambient < 0.0) { o = vec4(v_col, u_alpha); return; }
   vec3 n = cross(dFdx(v_pos), dFdy(v_pos));
   float len2 = dot(n, n);
   float lambert = len2 > 1e-30 ? abs(dot(n, u_light)) * inversesqrt(len2) : 1.0;
   float k = u_ambient + (1.0 - u_ambient) * lambert;
-  o = vec4(to_srgb(to_linear(v_col) * k), 1.0);
+  o = vec4(to_srgb(to_linear(v_col) * k), u_alpha);
 }`;
 
 interface GlStats {
@@ -140,6 +151,15 @@ interface GlStats {
   frames: number;
   picks: number;
   error: string | null;
+  /** The place tool: calls made, the last answer's ghost triangles and hover, the last error. */
+  toolCalls: number;
+  ghostTris: number;
+  hover: ToolState["hover"];
+  toolError: string | null;
+  /** The GlobalId the last completed gesture added. */
+  placed: string | null;
+  /** Test hook: a world point (mm) -> CSS px in the viewport (clientX, clientY), or null. */
+  toScreen?: (x: number, y: number, z: number) => [number, number] | null;
 }
 declare global {
   interface Window {
@@ -160,7 +180,8 @@ export interface MeshSource {
 /** Draws the host's `/mesh` (or `source`'s) into #bimble with WebGL2. Returns a function that marks the view dirty. */
 export function glViewport(base: string | MeshSource, token = ""): () => void {
   const canvas = document.getElementById("bimble");
-  const stats: GlStats = { firstFrameMs: null, meshBytes: 0, meshFetchMs: 0, meshRev: null, frames: 0, picks: 0, error: null };
+  const stats: GlStats = { firstFrameMs: null, meshBytes: 0, meshFetchMs: 0, meshRev: null, frames: 0, picks: 0, error: null,
+    toolCalls: 0, ghostTris: 0, hover: null, toolError: null, placed: null };
   window.__bbGl = stats;
   if (!(canvas instanceof HTMLCanvasElement)) return () => undefined;
   const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
@@ -199,6 +220,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const uMvp = gl.getUniformLocation(prog, "u_mvp");
   const uLight = gl.getUniformLocation(prog, "u_light");
   const uAmbient = gl.getUniformLocation(prog, "u_ambient");
+  const uAlpha = gl.getUniformLocation(prog, "u_alpha");
 
   // One VAO: positions (location 0), per-vertex sRGB colour (location 1, u8 normalized), indices.
   // Edges reuse it: location 0 points at the edge buffer, location 1 is a constant.
@@ -207,6 +229,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   gl.bindVertexArray(vao);
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
   gl.bindVertexArray(null);
+  // The place tool's ghost (its own VAO) and the marker lines (snap mark, clicked points, rubber line).
+  const ghostVao = gl.createVertexArray();
+  const ghostPos = gl.createBuffer(), ghostIdx = gl.createBuffer(), ghostEdges = gl.createBuffer(), markBuf = gl.createBuffer();
+  gl.bindVertexArray(ghostVao);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ghostIdx);
+  gl.bindVertexArray(null);
+  let ghostN = 0, ghostEdgeN = 0, markN = 0;
+  let tool: ToolState | null = null;
 
   let mesh: Bmsh | null = null;
   let bounds: { center: V3; radius: number } | null = null;
@@ -310,6 +340,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindBuffer(gl.ARRAY_BUFFER, edgeBuf);
     gl.bufferData(gl.ARRAY_BUFFER, m.edges, gl.STATIC_DRAW);
     selKey = "\u0000"; // recolour on the next frame
+    if (tool) showTool(tool); // the ghost against the new mesh's origin
     if (!fitted && bounds) {
       fit();
       fitted = true;
@@ -352,6 +383,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.useProgram(prog);
     gl.uniformMatrix4fv(uMvp, false, mvp);
     gl.uniform3fv(uLight, light);
+    gl.uniform1f(uAlpha, 1);
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
     gl.disable(gl.CULL_FACE);
@@ -378,8 +410,133 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.drawArrays(gl.LINES, 0, m.edges.length / 3);
     gl.depthMask(true);
     gl.bindVertexArray(null);
+    drawGhost();
     stats.frames++;
     if (stats.firstFrameMs === null) stats.firstFrameMs = performance.now();
+  };
+
+  /** The ghost: translucent faces over the model (depth-tested, no depth write), its edges, then the
+   *  marker lines on top. Canvas alpha stays 1 (the blend keeps the destination's). */
+  const drawGhost = () => {
+    if (!ghostN && !markN) return;
+    gl.bindVertexArray(ghostVao);
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+    gl.depthMask(false);
+    gl.disableVertexAttribArray(1);
+    gl.enableVertexAttribArray(0);
+    if (ghostN) {
+      gl.uniform1f(uAmbient, AMBIENT);
+      gl.uniform1f(uAlpha, GHOST_ALPHA);
+      gl.vertexAttrib3f(1, GHOST_SRGB[0] / 255, GHOST_SRGB[1] / 255, GHOST_SRGB[2] / 255);
+      gl.bindBuffer(gl.ARRAY_BUFFER, ghostPos);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+      gl.drawElements(gl.TRIANGLES, ghostN, gl.UNSIGNED_INT, 0);
+    }
+    gl.uniform1f(uAmbient, -1);
+    gl.uniform1f(uAlpha, 0.9);
+    gl.vertexAttrib3f(1, GHOST_EDGE_SRGB[0] / 255, GHOST_EDGE_SRGB[1] / 255, GHOST_EDGE_SRGB[2] / 255);
+    if (ghostEdgeN) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, ghostEdges);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.LINES, 0, ghostEdgeN);
+    }
+    if (markN) {
+      gl.disable(gl.DEPTH_TEST);
+      gl.bindBuffer(gl.ARRAY_BUFFER, markBuf);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.LINES, 0, markN);
+      gl.enable(gl.DEPTH_TEST);
+    }
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    gl.uniform1f(uAlpha, 1);
+    gl.bindVertexArray(null);
+  };
+
+  /** Uploads the tool's answer: the ghost (moved from its origin to the mesh's) and the markers. */
+  const showTool = (t: ToolState | null) => {
+    tool = t;
+    const m = mesh;
+    stats.hover = t?.hover ?? null;
+    if (!m || !t || !t.active) {
+      ghostN = ghostEdgeN = markN = 0;
+      stats.ghostTris = 0;
+      dirty = true;
+      return;
+    }
+    const g = t.ghost;
+    ghostN = ghostEdgeN = 0;
+    if (g) {
+      const d = [g.origin[0] - m.origin[0], g.origin[1] - m.origin[1], g.origin[2] - m.origin[2]];
+      const pos = new Float32Array(g.pos.length), edges = new Float32Array(g.edges.length);
+      for (let i = 0; i < pos.length; i++) pos[i] = (g.pos[i] ?? 0) + (d[i % 3] ?? 0);
+      for (let i = 0; i < edges.length; i++) edges[i] = (g.edges[i] ?? 0) + (d[i % 3] ?? 0);
+      gl.bindVertexArray(ghostVao);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ghostIdx);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(g.idx), gl.DYNAMIC_DRAW);
+      gl.bindVertexArray(null);
+      gl.bindBuffer(gl.ARRAY_BUFFER, ghostPos);
+      gl.bufferData(gl.ARRAY_BUFFER, pos, gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, ghostEdges);
+      gl.bufferData(gl.ARRAY_BUFFER, edges, gl.DYNAMIC_DRAW);
+      ghostN = g.idx.length;
+      ghostEdgeN = edges.length / 3;
+    }
+    stats.ghostTris = ghostN / 3;
+    // Markers in scene coordinates: a cross at the hover point and at each clicked point, a line from
+    // the last point to the hover. Size: 1.5 % of the view distance.
+    const lines: number[] = [];
+    const z = (t.hover?.z ?? 0) - m.origin[2], r = 0.015 * distance;
+    const cross = (x: number, y: number, k: number) => {
+      const sx = x - m.origin[0], sy = y - m.origin[1];
+      lines.push(sx - k, sy, z, sx + k, sy, z, sx, sy - k, z, sx, sy + k, z);
+    };
+    for (const p of t.points) cross(p[0], p[1], r * 0.6);
+    if (t.hover) {
+      cross(t.hover.at[0], t.hover.at[1], r);
+      const last = t.points[t.points.length - 1];
+      if (last) lines.push(last[0] - m.origin[0], last[1] - m.origin[1], z, t.hover.at[0] - m.origin[0], t.hover.at[1] - m.origin[1], z);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, markBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lines), gl.DYNAMIC_DRAW);
+    markN = lines.length / 3;
+    dirty = true;
+  };
+
+  /** The camera ray through canvas CSS pixel (x, y): eye and direction, scene coordinates. */
+  const rayAt = (x: number, y: number): number[] => {
+    const { e, aspect, up } = matrices();
+    const f = norm(sub(target, e)), s = norm(cross(f, up)), u = cross(s, f);
+    const ndcX = (2 * x) / canvas.clientWidth - 1, ndcY = 1 - (2 * y) / canvas.clientHeight;
+    const th = Math.tan(FOV_Y / 2);
+    const dir = norm(add(f, add(scale(s, ndcX * th * aspect), scale(u, ndcY * th))));
+    return [...e, ...dir];
+  };
+  const placingNow = () => placing.value?.active === true && mesh !== null;
+  /** One tool call for the pointer at client (x, y); the answer is drawn. */
+  const toolAt = (name: "pointer" | "click", cx: number, cy: number, mods: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
+    const r = canvas.getBoundingClientRect();
+    const x = cx - r.left, y = cy - r.top;
+    const args: ToolPointer = { ray: rayAt(x, y), ray_tol: rayAt(x + SNAP_PX, y), free: mods.shiftKey, ortho: mods.ctrlKey || mods.metaKey };
+    stats.toolCalls++;
+    const { state: t, error } = toolCall(name, args);
+    stats.toolError = error;
+    if (error) console.warn(`gl viewport: tool ${name}:`, error);
+    if (t?.placed) stats.placed = t.placed;
+    showTool(t);
+  };
+  // Pointer moves while placing: at most one tool call per frame (the latest position).
+  let pendingMove: PointerEvent | null = null;
+  stats.toScreen = (x, y, z) => {
+    const m = mesh;
+    if (!m) return null;
+    const { mvp } = matrices();
+    const p = [x - m.origin[0], y - m.origin[1], z - m.origin[2], 1];
+    const c = [0, 1, 2, 3].map((r) => (mvp[r] ?? 0) * p[0]! + (mvp[4 + r] ?? 0) * p[1]! + (mvp[8 + r] ?? 0) * p[2]! + (mvp[12 + r] ?? 0) * p[3]!);
+    if ((c[3] ?? 0) <= 0) return null;
+    const rect = canvas.getBoundingClientRect();
+    return [rect.left + ((c[0]! / c[3]! + 1) / 2) * canvas.clientWidth, rect.top + ((1 - c[1]! / c[3]!) / 2) * canvas.clientHeight];
   };
 
   /** The element under canvas pixel (x, y) (CSS px from the top-left), or -1. */
@@ -447,7 +604,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     drag = { pan: e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey), x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
   });
   canvas.addEventListener("pointermove", (e) => {
-    if (!drag) return;
+    if (!drag) {
+      if (placingNow()) pendingMove = e;
+      return;
+    }
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     drag.x = e.clientX;
     drag.y = e.clientY;
@@ -468,7 +628,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const d = drag;
     drag = null;
     if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
-    if (e.type !== "pointerup" || !d || d.moved || e.button !== 0 || d.pan) return;
+    if (e.type !== "pointerup" || !d || d.moved || e.button !== 0) return;
+    if (placingNow()) { // a click while placing goes to the tool (Shift: free, no pan)
+      pendingMove = null;
+      toolAt("click", e.clientX, e.clientY, e);
+      return;
+    }
+    if (d.pan) return;
     const r = canvas.getBoundingClientRect();
     const k = pick(e.clientX - r.left, e.clientY - r.top);
     stats.picks++;
@@ -479,6 +645,16 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   canvas.addEventListener("pointerup", release);
   canvas.addEventListener("pointercancel", release);
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  // Esc while placing: the tool cancels (stops placing, drops the points), as Rust's Esc.
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || placing.value?.active !== true) return;
+    const el = e.target as HTMLElement | null;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+    stats.toolCalls++;
+    const { state: t, error } = toolCall("cancel");
+    stats.toolError = error;
+    showTool(t);
+  });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     distance = Math.max(1, distance * Math.exp(e.deltaY * 0.001));
@@ -495,6 +671,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       wantRev = rev;
       void load();
     }
+    if (pendingMove) {
+      const e = pendingMove;
+      pendingMove = null;
+      if (placingNow()) toolAt("pointer", e.clientX, e.clientY, e);
+    }
+    if (tool && placing.value?.active !== true) showTool(null); // placing stopped elsewhere
     const key = mesh ? state.value.selection.join(",") : "";
     if (mesh && key !== selKey) {
       selKey = key;

@@ -15,7 +15,8 @@
 //            actions: 54 rows), open frame.json, the same calls on both (select, verb place,
 //            history, undo, redo, action save…): every answer, status and change JSON byte for
 //            byte, the saved text = the native host's saved file, host_mesh = GET /mesh; ticket E1:
-//            query verbs (= golden/verbs_list.json) and describe, verb with dry_run and if_rev, rename
+//            query verbs (= golden/verbs_list.json) and describe, verb with dry_run and if_rev, rename;
+//            ticket B4: the place tool (tool pointer/click/cancel, query ghost) on both, byte for byte
 //   files    the file actions in a fresh module (ticket A5): new, place, save (v2), save as,
 //            host_open of the saved bytes (the same elements), host_open import of golden/ifc/
 //            frame.ifc (the import golden's count) and of frame.json; export IFC4 with host_clock =
@@ -491,8 +492,15 @@ suite("host");
       ["verb", "rename", JSON.stringify({ id: firstId, name: "P-x", dry_run: true })], ["query", "history", "{}"],
       ["verb", "rename", JSON.stringify({ id: firstId, name: "P-x", if_rev: 999 })],
       ["verb", "rename", JSON.stringify({ if_rev: "REV", id: firstId, name: "P-x" })], ["query", "history", "{}"], ["undo", "-", ""],
+      // ticket B4: the place tool (op tool, query ghost): snap, ghost, one step per gesture, cancel
+      ["set_placing", "-", JSON.stringify({ kind: "column" })], ["tool", "pointer", JSON.stringify({ at: [6037, 4958], tol_mm: 100 })],
+      ["query", "ghost", "{}"], ["tool", "click", JSON.stringify({ at: [3004, 2533], tol_mm: 50 })], ["query", "history", "{}"],
+      ["set_placing", "-", JSON.stringify({ kind: "beam" })], ["tool", "click", JSON.stringify({ at: [1000, 7500] })],
+      ["query", "placing", "{}"], ["tool", "pointer", JSON.stringify({ at: [9000, 7520], ortho: true })], ["tool", "click", ""],
+      ["query", "history", "{}"], ["tool", "click", JSON.stringify({ at: [0, 0] })], ["tool", "cancel", ""], ["query", "placing", "{}"],
+      ["tool", "nope", ""], ["tool", "click", "{}"], ["undo", "-", ""], ["query", "ghost", "{}"],
     ];
-    let rev = 1, placedRev = 0;
+    let rev = 1, placedRev = 0, toolPlaced = 0;
     for (const s of steps) {
       if (s === "mesh") {
         const w = call(X.host_mesh, [], 0), n = await nmesh();
@@ -520,6 +528,11 @@ suite("host");
       eq(`change after ${o} ${name}`, JSON.stringify(JSON.parse(wc)), await nchange());
       const r = JSON.parse(wc).rev;
       if (o === "verb" && name === "place") placedRev = r, check("verb place: rev + 1", r === rev + 1, `${rev} -> ${r}`);
+      if (o === "tool") { // B4: a completed gesture is one step (rev + 1), anything else no change
+        const placed = w.status === 200 && JSON.parse(w.text).placed !== null;
+        if (placed) toolPlaced++;
+        check(`tool ${name} ${body}: ${placed ? "placed, rev + 1" : "rev unchanged"}`, r === rev + (placed ? 1 : 0), `${w.status} ${w.text.slice(0, 120)}, rev ${rev} -> ${r}`);
+      }
       if (o === "verb" && name === "rename") { // E1: dry run and conflict change nothing; if_rev = rev runs
         const real = !body.includes("dry_run") && !body.includes("999");
         check(`verb rename ${body}: ${real ? "200, rev + 1" : "no change"}`, real ? w.status === 200 && r === rev + 1 : r === rev && (w.status === 200) === body.includes("dry_run"), `${w.status} ${w.text}, rev ${rev} -> ${r}`);
@@ -527,6 +540,7 @@ suite("host");
       rev = r;
     }
     check("the place happened", placedRev === 2, String(placedRev));
+    check("the tool placed a column and a beam", toolPlaced === 2, String(toolPlaced));
     const vl = hcall("query", "verbs", "");
     check("query verbs in the module = golden/verbs_list.json", vl.status === 200 && vl.text === JSON.stringify(JSON.parse(read("verbs_list.json"))), vl.text.slice(0, 120));
     const lg = call(X.host_log, []).text;

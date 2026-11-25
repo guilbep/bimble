@@ -210,6 +210,8 @@ interface Wasm {
   on_change(cb: (json: string) => void): void;
   set_placing(json: string): void;
   dismiss_belongs(): void;
+  /** The place tool (C core only, op `tool`): pointer, click, cancel. Answers the tool's state JSON. */
+  tool?(name: string, json: string): string;
 }
 
 export const state = shallowRef<State>({ selection: [], rev: 0, unsaved: false, file: null });
@@ -255,7 +257,7 @@ function wasmOrThrow(): Wasm {
 // - A call is `POST http://127.0.0.1:<port>/<op>/<name>?t=<token>`, `Content-Type: text/plain`,
 //   body = the JSON args string (or empty). A CORS simple request: no preflight.
 //   <op>: query, apply, undo, redo, select, action, verb, tab, set_placing, dismiss_belongs,
-//   standards_action. <name>: the name argument of query, verb, action, standards_action, else `-`.
+//   standards_action, tool (the C core's place tool, ccore/session/calls.h). <name>: the name argument of query, verb, action, standards_action, else `-`.
 // - 200: the text body is what wasm returns (empty for void). Any other status: wasm would throw;
 //   the body is the error text, thrown as a string (as wasm does).
 // - Calls are synchronous (sync XMLHttpRequest): every Wasm function but default() is sync.
@@ -297,6 +299,7 @@ function nativeClient(port: number, token: string): Wasm & { standards_action(na
     set_placing: (json) => void call("set_placing", null, json),
     dismiss_belongs: () => void call("dismiss_belongs", null),
     standards_action: (name) => void call("standards_action", name),
+    tool: (name, json) => call("tool", name, json),
     on_change: (cb) => void pollChanges(base, t, cb),
   };
 }
@@ -639,6 +642,42 @@ export function setPlacing(patch: { kind?: Placing["kind"]; storey?: string; mat
     return null;
   } catch (e) {
     return message(e);
+  }
+}
+
+/** The place tool's state (ccore/session/calls.h, op `tool` and `query ghost`). World mm. */
+export interface ToolState {
+  active: boolean;
+  /** What the next click adds, as the BMSH mesh: positions relative to `origin` (world mm). */
+  ghost: { edges: number[]; idx: number[]; origin: [number, number, number]; pos: number[] } | null;
+  /** Why the preview has no ghost (the place verb's error). */
+  ghost_error: string | null;
+  hover: { at: [number, number]; snap: string | null; z: number } | null;
+  kind: Placing["kind"];
+  /** The GlobalId a click just added. */
+  placed: string | null;
+  points: [number, number][];
+}
+/** A pointer for the tool: a ray in scene coordinates (as the BMSH mesh) and the ray 12 px beside it
+ *  (the snap tolerance), or a plan point `at` (world mm) with `tol_mm`. `free`: no snap; `ortho`:
+ *  the second point along x or y. */
+export interface ToolPointer {
+  ray?: number[];
+  ray_tol?: number[];
+  at?: [number, number];
+  tol_mm?: number;
+  free?: boolean;
+  ortho?: boolean;
+}
+
+/** One call of the place tool (C core only): the tool's state, or the error text. */
+export function toolCall(name: "pointer" | "click" | "cancel", args: ToolPointer = {}): { state: ToolState | null; error: string | null } {
+  try {
+    const w = wasmOrThrow();
+    if (!w.tool) return { state: null, error: "the place tool needs the C core" };
+    return { state: JSON.parse(w.tool(name, JSON.stringify(args))) as ToolState, error: null };
+  } catch (e) {
+    return { state: null, error: message(e) };
   }
 }
 

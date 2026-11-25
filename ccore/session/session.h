@@ -14,6 +14,7 @@
 #include "model.h"
 #include "platform.h"
 #include "scene.h"
+#include "tool.h"
 #include "viewfile.h"
 
 typedef enum { CC_KIND_COLUMN, CC_KIND_BEAM, CC_KIND_WALL, CC_KIND_SLAB } cc_kind; /* verbs.rs:29 */
@@ -53,7 +54,7 @@ typedef struct cc_session {
     size_t nalso, capalso;
     /* Editor's placing fields (edit.rs:142-180). */
     cc_kind kind;
-    int placing; /* edit.rs `placing.is_some()`; points stay empty: the host has no clicks */
+    int placing; /* edit.rs `placing.is_some()`; its points are tool.points */
     cc_kind placing_kind;
     int has_storey;
     cc_gid storey;
@@ -62,6 +63,7 @@ typedef struct cc_session {
     double offset[3];
     double top_offset_mm;
     int polygon;
+    cc_tool tool; /* the place tool's points and pointer (tool.h); cleared with the placing state */
     int tab_open; /* the 3D view's tab is open and current */
     /* The scene of the current rev (calls.c), built once per rev, shared by query status and
      * GET /mesh. scene_rev 0: none built. */

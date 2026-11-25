@@ -37,6 +37,7 @@ static const char NO_MODEL[] = "no model open";                              /* 
 static const char *const OPS[] = { /* calls.rs:27-41 `dispatch_op` */
     "apply", "undo", "redo", "select", "query", "action", "verb",
     "dismiss_belongs", "standards_action", "set_placing", "tab",
+    "tool", /* a C addition: the place tool (calls.h) */
 };
 
 int cc_known_op(const char *op) {
@@ -131,6 +132,7 @@ static void debug_str(cc_buf *out, const char *s) { cc_buf_debug_str(out, s, str
 
 /* Something is shown: an editable model or a read-only scene (Rust's `loaded.is_some()`). */
 static int loaded(const cc_session *s) { return s->open || s->view; }
+static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out); /* the place tool, below */
 
 /* ---- the 3D view (core/view.rs:584) ---- */
 
@@ -218,11 +220,11 @@ static void undo_redo(cc_session *s, int undo) {
 
 /* ---- placing (edit.rs:387-460) ---- */
 
-static const char *hint(const cc_session *s) { /* edit.rs:84-95 `Placing::hint`, no points */
+static const char *hint(const cc_session *s) { /* edit.rs:84-95 `Placing::hint` */
     if (s->placing_kind == CC_KIND_SLAB && s->polygon) return "Click the next corner of the slab.";
     if (s->placing_kind == CC_KIND_COLUMN) return "Click where the column goes (on the storey level). Esc stops.";
-    if (s->placing_kind == CC_KIND_SLAB) return "Click a corner of the slab.";
-    return "Click the start point.";
+    if (!s->tool.npoints) return s->placing_kind == CC_KIND_SLAB ? "Click a corner of the slab." : "Click the start point.";
+    return s->placing_kind == CC_KIND_SLAB ? "Click the opposite corner." : "Click the end point.";
 }
 
 static void placing_json(cc_session *s, JsonW *w) { /* edit.rs:387-408, json! sorted */
@@ -241,7 +243,10 @@ static void placing_json(cc_session *s, JsonW *w) { /* edit.rs:387-408, json! so
     jw_key(w, "offset_mm"), jw_arr_begin(w);
     for (int i = 0; i < 3; i++) jw_f64(w, s->offset[i]);
     jw_arr_end(w);
-    jw_key(w, "points"), jw_arr_begin(w), jw_arr_end(w); /* no clicks reach the host */
+    jw_key(w, "points"), jw_arr_begin(w); /* the place tool's clicks (op tool) */
+    for (size_t i = 0; s->placing && i < s->tool.npoints; i++)
+        jw_arr_begin(w), jw_f64(w, s->tool.points[i][0]), jw_f64(w, s->tool.points[i][1]), jw_arr_end(w);
+    jw_arr_end(w);
     jw_key(w, "shape"), jw_str(w, s->polygon ? "polygon" : "rectangle");
     jw_key(w, "sizes"), jw_obj_begin(w);
     for (int i = 0; i < 5; i++) jw_key(w, SIZE_KEY[SIZE_SORTED[i]]), jw_f64(w, s->sizes[SIZE_SORTED[i]]);
@@ -260,6 +265,7 @@ static void placing_json(cc_session *s, JsonW *w) { /* edit.rs:387-408, json! so
 static void place_action(cc_session *s, cc_kind k) {
     int on = s->placing && s->placing_kind == k;
     s->placing = !on;
+    cc_tool_clear(&s->tool);
     if (!on) s->placing_kind = k, s->kind = k;
 }
 
@@ -472,7 +478,7 @@ static int call_set_placing(cc_session *s, const char *body, size_t n, cc_buf *o
         goto end;
     }
     memcpy(s->sizes, ns, sizeof ns);
-    if (has_polygon && polygon != s->polygon) s->polygon = polygon; /* points cleared: none here */
+    if (has_polygon && polygon != s->polygon) s->polygon = polygon, s->tool.npoints = 0; /* points cleared */
     if (top) s->top_offset_mm = top->num + 0.0; /* no -0.0 */
     if (storey) s->has_storey = 1, s->storey = sid;
     if (material) {
@@ -486,7 +492,7 @@ static int call_set_placing(cc_session *s, const char *body, size_t n, cc_buf *o
     }
     if (kind) {
         s->kind = k;
-        if (s->placing) s->placing_kind = k; /* a new kind drops the points */
+        if (s->placing) s->placing_kind = k, s->tool.npoints = 0; /* a new kind drops the points */
         else place_action(s, k);                /* calls.rs:198: `place_<kind>`, enabled with a model */
     }
     rc = CC_OK;
@@ -782,6 +788,13 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         }
         placing_json(s, &w);
         return done(&w);
+    }
+    if (!strcmp(name, "ghost")) { /* the place tool's state (calls.h "tool"): null without an editable model */
+        if (!s->open) {
+            buf_puts(out, "null");
+            return CC_OK;
+        }
+        return tool_json(s, NULL, out);
     }
     /* pointer (calls.rs:403, stubbed null, spec §1); standards stubbed null (spec §1). */
     if (!strcmp(name, "pointer") || !strcmp(name, "standards")) {
@@ -1323,6 +1336,261 @@ done:
     return rc;
 }
 
+/* ---- the place tool (tool.h, calls.h "tool"; a C addition, ADR 0068 rule 2) ---- */
+
+typedef struct {
+    int has_at, has_ray, has_ray_tol, has_tol, free_, ortho;
+    double at[2], ray[6], ray_tol[6], tol;
+} ToolArgs;
+
+static int tool_nums(const JrVal *v, double *dst, size_t n) {
+    if (v->type != JR_ARR || v->n != n) return -1;
+    for (size_t i = 0; i < n; i++) {
+        if (v->items[i].type != JR_NUM || !(v->items[i].num >= -1e12 && v->items[i].num <= 1e12)) return -1;
+        dst[i] = v->items[i].num;
+    }
+    return 0;
+}
+
+/* The pointer body: {"at":[x,y]} (world plan mm) or {"ray":[ox,oy,oz,dx,dy,dz]} (scene
+ * coordinates, as the BMSH mesh) with "ray_tol" (the ray 12 px beside it) or "tol_mm"; "free",
+ * "ortho" booleans. Empty or null: no position. */
+static int tool_args(const char *body, size_t n, ToolArgs *t, cc_buf *out) {
+    memset(t, 0, sizeof *t);
+    size_t k = 0;
+    while (k < n && (body[k] == ' ' || body[k] == '\n' || body[k] == '\t' || body[k] == '\r')) k++;
+    if (k == n || (n - k == 4 && !memcmp(body + k, "null", 4))) return 0;
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    int rc = -1;
+    const JrVal *v = jr_parse(&a, body, n, &je);
+    if (!v) {
+        buf_puts(out, je.msg);
+        goto end;
+    }
+    if (v->type != JR_OBJ) {
+        buf_puts(out, "invalid type: "), buf_puts(out, type_word(v)), buf_puts(out, ", expected a map");
+        goto end;
+    }
+    for (size_t i = 0; i < v->n; i++) {
+        const JrMember *m = &v->members[i];
+        const JrVal *x = &m->val;
+        const char *bad = NULL;
+        if (jr_key_is(m, "at")) bad = tool_nums(x, t->at, 2) ? "at: expected [x, y] in mm" : NULL, t->has_at = 1;
+        else if (jr_key_is(m, "ray")) bad = tool_nums(x, t->ray, 6) ? "ray: expected [ox, oy, oz, dx, dy, dz]" : NULL, t->has_ray = 1;
+        else if (jr_key_is(m, "ray_tol"))
+            bad = tool_nums(x, t->ray_tol, 6) ? "ray_tol: expected [ox, oy, oz, dx, dy, dz]" : NULL, t->has_ray_tol = 1;
+        else if (jr_key_is(m, "tol_mm")) {
+            if (x->type != JR_NUM || !(x->num >= 0.0 && x->num <= CC_MAX_MM)) bad = "tol_mm: expected a number within [0, 10000000]";
+            else t->tol = x->num, t->has_tol = 1;
+        } else if (jr_key_is(m, "free") || jr_key_is(m, "ortho")) {
+            if (x->type != JR_BOOL) bad = jr_key_is(m, "free") ? "free: expected a boolean" : "ortho: expected a boolean";
+            else if (jr_key_is(m, "free")) t->free_ = x->b;
+            else t->ortho = x->b;
+        } else {
+            buf_puts(out, "unknown field: "), buf_append(out, m->key, m->key_n);
+            goto end;
+        }
+        if (bad) {
+            buf_puts(out, bad);
+            goto end;
+        }
+    }
+    rc = 0;
+end:
+    arena_free(&a);
+    return rc;
+}
+
+static double storey_level(const cc_session *s) { /* edit.rs storey_elevation */
+    const cc_storey *st = s->has_storey ? cc_model_storey(&s->model, &s->storey) : NULL;
+    return st ? st->elevation : 0.0;
+}
+
+/* lib.rs placing_point: the pointer on the storey plane, snapped (or rounded, `free`), then the
+ * ortho of a 2-point kind. No position, or the ray misses the plane: no hover. */
+static void tool_pointer(cc_session *s, const ToolArgs *a) {
+    cc_tool *t = &s->tool;
+    const cc_scene *sc = scene_now(s);
+    double org[3] = {0, 0, 0}, level = storey_level(s), p[2], tol = 0.0;
+    if (sc) memcpy(org, sc->origin, sizeof org);
+    if (!a->has_at && !a->has_ray) return; /* a click without a position: where the pointer was */
+    t->has_hover = 0;
+    if (a->has_at) p[0] = a->at[0], p[1] = a->at[1];
+    else if (cc_ray_plane(a->ray, level - org[2], p)) return;
+    else p[0] += org[0], p[1] += org[1];
+    if (a->has_tol) tol = a->tol;
+    else if (a->has_ray && a->has_ray_tol) {
+        double q[2];
+        if (!cc_ray_plane(a->ray_tol, level - org[2], q)) tol = cc_hypot(q[0] + org[0] - p[0], q[1] + org[1] - p[1]);
+        if (!(tol <= CC_MAX_MM)) tol = 0.0;
+    }
+    int kind = CC_SNAP_NONE;
+    double q[2];
+    if (a->free_ || !sc) q[0] = cc_round10(p[0]), q[1] = cc_round10(p[1]);
+    else {
+        if (!t->has_targets || t->targets_rev != s->rev || t->targets_level != level) {
+            double next = level + 4000.0; /* the storey above, or level + 4 m */
+            for (size_t i = 0; i < s->model.nstoreys; i++) {
+                double e = s->model.storeys[i].elevation;
+                if (e > level + 1.0 && e < next) next = e;
+            }
+            t->has_targets = !cc_snap_targets_build(&t->targets, sc, level, next);
+            t->targets_rev = s->rev, t->targets_level = level;
+        }
+        kind = cc_snap(&t->targets, p, tol, q);
+    }
+    if (a->ortho && t->npoints && s->placing_kind != CC_KIND_COLUMN) {
+        double r[2];
+        cc_ortho(t->points[t->npoints - 1], q, r);
+        if (r[0] != q[0] || r[1] != q[1]) kind = CC_SNAP_NONE;
+        q[0] = r[0], q[1] = r[1];
+    }
+    t->has_hover = 1, t->hover[0] = q[0] + 0.0, t->hover[1] = q[1] + 0.0, t->hover_kind = kind;
+}
+
+/* The arguments of `verb place` for a and b (b NULL: a column), from the placing state. */
+static void place_args(const cc_session *s, const double *a, const double *b, cc_buf *out) {
+    JsonW w;
+    jw_init(&w, out, 0);
+    jw_obj_begin(&w);
+    jw_key(&w, "a"), jw_arr_begin(&w), jw_f64(&w, a[0]), jw_f64(&w, a[1]), jw_arr_end(&w);
+    if (b) jw_key(&w, "b"), jw_arr_begin(&w), jw_f64(&w, b[0]), jw_f64(&w, b[1]), jw_arr_end(&w);
+    jw_key(&w, "kind"), jw_str(&w, KIND_NAME[s->placing_kind]);
+    if (s->material) jw_key(&w, "material"), jw_str(&w, s->material);
+    jw_key(&w, "sizes"), jw_obj_begin(&w);
+    for (int i = 0; i < 5; i++) jw_key(&w, SIZE_KEY[SIZE_SORTED[i]]), jw_f64(&w, s->sizes[SIZE_SORTED[i]]);
+    jw_obj_end(&w);
+    jw_key(&w, "storey"), jw_str_n(&w, s->storey.c, 22);
+    jw_obj_end(&w);
+    jw_finish(&w);
+}
+
+/* edit.rs Editor::click: the commands of `verb place` for points a, b (a run, or a dry run for
+ * the ghost), a slab raised by top_offset_mm. 0 ok, -1 with the error in `err`. */
+static int place_cmds(cc_session *s, const double *a, const double *b, int dry_run, cc_cmds *l, cc_buf *err) {
+    if (!s->has_storey) {
+        buf_puts(err, "choose a storey");
+        return -1;
+    }
+    Buf args;
+    buf_init(&args);
+    place_args(s, a, s->placing_kind == CC_KIND_COLUMN ? NULL : b, &args);
+    int rc = args.oom ? (buf_puts(err, "out of memory"), -1)
+                      : cc_verb_run_ex(&s->model, "place", args.p, args.len, dry_run, -1, s->rev, l, err) ? -1 : 0;
+    buf_free(&args);
+    if (!rc && s->placing_kind == CC_KIND_SLAB)
+        for (size_t i = 0; i < l->n; i++)
+            if (l->v[i].op == CC_CMD_ADD_ELEMENT) l->v[i].element.placement.origin[2] += s->top_offset_mm;
+    return rc;
+}
+
+/* The tool's state: {"active","ghost","ghost_error","hover","kind","placed","points"} (sorted).
+ * ghost: what the next click adds (tool.h cc_tool_ghost), null without one; ghost_error: why a
+ * preview has no ghost (the place verb's error), else null; hover: {"at":[x,y],"snap":label or
+ * null,"z":storey elevation} (world mm) or null; placed: the GlobalId a click just added, or null. */
+static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out) {
+    cc_tool *t = &s->tool;
+    JsonW w;
+    jw_init(&w, out, 0);
+    jw_obj_begin(&w);
+    jw_key(&w, "active"), jw_bool(&w, s->placing);
+    Buf gerr;
+    buf_init(&gerr);
+    jw_key(&w, "ghost");
+    int has_ghost = 0;
+    if (s->placing && t->has_hover && !(s->placing_kind == CC_KIND_SLAB && s->polygon) &&
+        (s->placing_kind == CC_KIND_COLUMN || t->npoints >= 1)) {
+        cc_cmds l;
+        cc_cmds_init(&l);
+        const double *a = s->placing_kind == CC_KIND_COLUMN ? t->hover : t->points[0];
+        if (!place_cmds(s, a, t->hover, 1, &l, &gerr)) {
+            const cc_scene *sc = scene_now(s);
+            double org[3] = {0, 0, 0};
+            if (sc) memcpy(org, sc->origin, sizeof org);
+            has_ghost = !cc_tool_ghost(&w, &s->model, l.v, l.n, org, &gerr);
+        }
+        cc_cmds_free(&l);
+    }
+    if (!has_ghost) jw_null(&w);
+    jw_key(&w, "ghost_error");
+    if (gerr.len) jw_str_n(&w, gerr.p, gerr.len);
+    else jw_null(&w);
+    buf_free(&gerr);
+    jw_key(&w, "hover");
+    if (s->placing && t->has_hover) {
+        jw_obj_begin(&w);
+        jw_key(&w, "at"), jw_arr_begin(&w), jw_f64(&w, t->hover[0]), jw_f64(&w, t->hover[1]), jw_arr_end(&w);
+        jw_key(&w, "snap");
+        if (cc_snap_label(t->hover_kind)) jw_str(&w, cc_snap_label(t->hover_kind));
+        else jw_null(&w);
+        jw_key(&w, "z"), jw_f64(&w, storey_level(s) + 0.0);
+        jw_obj_end(&w);
+    } else jw_null(&w);
+    jw_key(&w, "kind"), jw_str(&w, KIND_NAME[s->placing ? s->placing_kind : s->kind]);
+    jw_key(&w, "placed");
+    if (placed) jw_str_n(&w, placed->c, 22);
+    else jw_null(&w);
+    jw_key(&w, "points"), jw_arr_begin(&w);
+    for (size_t i = 0; s->placing && i < t->npoints; i++)
+        jw_arr_begin(&w), jw_f64(&w, t->points[i][0]), jw_f64(&w, t->points[i][1]), jw_arr_end(&w);
+    jw_arr_end(&w);
+    jw_obj_end(&w);
+    return done(&w);
+}
+
+/* op "tool" (calls.h). */
+static int call_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
+    int pointer = !strcmp(name, "pointer"), click = !strcmp(name, "click"), cancel = !strcmp(name, "cancel");
+    if (!pointer && !click && !cancel) {
+        buf_puts(out, "unknown tool call ");
+        debug_str(out, name);
+        return CC_ERR;
+    }
+    ToolArgs a;
+    if (tool_args(body, n, &a, out)) return CC_ERR;
+    if (!s->open) {
+        buf_puts(out, READ_ONLY);
+        return CC_ERR;
+    }
+    if (cancel) { /* lib.rs:3031 Esc: stops placing, the points go */
+        s->placing = 0;
+        cc_tool_clear(&s->tool);
+        return tool_json(s, NULL, out);
+    }
+    if (!s->placing) {
+        if (pointer) return tool_json(s, NULL, out);
+        buf_puts(out, "nothing is being placed");
+        return CC_ERR;
+    }
+    tool_pointer(s, &a);
+    if (pointer || !s->tool.has_hover) return tool_json(s, NULL, out);
+    if (s->placing_kind == CC_KIND_SLAB && s->polygon) {
+        buf_puts(out, "a polygon slab is not placed by clicks yet: use the rectangle shape or the place verb");
+        return CC_ERR;
+    }
+    cc_tool *t = &s->tool;
+    if (t->npoints >= CC_TOOL_MAX_POINTS) t->npoints = 0;
+    t->points[t->npoints][0] = t->hover[0], t->points[t->npoints][1] = t->hover[1], t->npoints++;
+    if (t->npoints < (s->placing_kind == CC_KIND_COLUMN ? 1u : 2u)) return tool_json(s, NULL, out);
+    double pa[2] = {t->points[0][0], t->points[0][1]}, pb[2] = {t->points[t->npoints - 1][0], t->points[t->npoints - 1][1]};
+    t->npoints = 0; /* edit.rs: the points are taken, also when the element fails */
+    cc_cmds l;
+    cc_cmds_init(&l);
+    int rc = CC_ERR;
+    cc_gid id;
+    int has_id = 0;
+    if (!place_cmds(s, pa, pb, 0, &l, out)) {
+        for (size_t i = 0; i < l.n; i++)
+            if (l.v[i].op == CC_CMD_ADD_ELEMENT) id = l.v[i].element.id, has_id = 1;
+        rc = try_apply(s, l.v, l.n, out);
+    }
+    cc_cmds_free(&l);
+    if (rc != CC_OK) return rc;
+    return tool_json(s, has_id ? &id : NULL, out);
+}
+
 int cc_call(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out) {
     if (!strcmp(op, "query")) return call_query(s, name, body, n, out);
     if (!strcmp(op, "action")) return call_action(s, name, body, n, out);
@@ -1352,6 +1620,7 @@ int cc_call(cc_session *s, const char *op, const char *name, const char *body, s
         return rc;
     }
     if (!strcmp(op, "verb")) return call_verb(s, name, body, n, out);
+    if (!strcmp(op, "tool")) return call_tool(s, name, body, n, out);
     buf_puts(out, "unknown op "); /* the router checked cc_known_op */
     buf_puts(out, op);
     return CC_ERR;

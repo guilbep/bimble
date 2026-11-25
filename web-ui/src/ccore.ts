@@ -67,6 +67,7 @@ export interface CcoreClient {
   set_placing(json: string): void;
   dismiss_belongs(): void;
   standards_action(name: string): void;
+  tool(name: string, json: string): string;
   on_change(cb: (json: string) => void): void;
   default: () => Promise<unknown>;
 }
@@ -306,6 +307,7 @@ export async function ccoreClient(params: URLSearchParams): Promise<CcoreClient>
     set_placing: (json) => void call("set_placing", null, json),
     dismiss_belongs: () => void call("dismiss_belongs", null),
     standards_action: (n) => void call("standards_action", n),
+    tool: (n, json) => call("tool", n, json),
     on_change: (cb) => {
       listener = cb;
       last = "";
