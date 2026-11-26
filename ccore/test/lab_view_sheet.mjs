@@ -213,7 +213,7 @@ async function tab(S, evalJs) {
   check("New view…: one undo step, the dialog closed", u0b === u0 + 1 && !(await exists("[data-bb=new-view-dialog]")), `${u0} -> ${u0b}, dialog ${await evalJs("(async () => (await import('/src/dialogs/index.ts')).currentDialog.value)()")} ${await evalJs("document.querySelector('[data-bb=new-view-error]')?.textContent ?? ''")}`);
 
   // DEAD1: a plan and a ceiling plan of the lowest level (Fondations, 800 mm under Niveau 1) by default: made
-  // (the core's default cut fits the storey, DEVIATIONS 34; it was refused: "the planes must be in order")
+  // (the core's default cut fits the storey, DEVIATIONS 35; it was refused: "the planes must be in order")
   const fond = await B("return b.storeys.value.find((s) => s.name === 'Fondations')?.id;");
   for (const kind of ["plan", "ceiling"]) {
     const n0 = await B("return b.openViews.value.views.length;");

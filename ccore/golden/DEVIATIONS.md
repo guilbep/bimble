@@ -1178,8 +1178,8 @@ C core's references are hand-computed in `test/concrete_test.c` (volumes, positi
   STRIP_FOOTING); otherwise Rust's (FLOOR, PAD_FOOTING…). No file without the property changes.
 - **`query element` `openings`**: the element's count (Rust's `e.openings.len()`, query.rs:146);
   the C core answered 0.
-## 34. What the core refuses, told before the click (ticket DEAD1, ADR 0074)
-## 34. What the core refuses, told before the click; a new plan of a low storey (ticket DEAD1, ADR 0074)
+
+## 35. What the core refuses, told before the click; a new plan of a low storey (ticket DEAD1, ADR 0074)
 
 Rust v0.19.0's default view range (view.rs:299 `ViewRange::default_for`) cuts a floor plan
 1200 mm above its level and a ceiling plan 2300 mm above it, the top at the level above. On a

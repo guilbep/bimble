@@ -204,7 +204,7 @@ int cc_vh_view_add(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
             v.look = k == 1 ? CC_LOOK_UP : CC_LOOK_DOWN;
             v.name = cat(a, k == 1 ? "Ceiling " : "Plan ", hit->name, " (copy)");
             v.storey = cat(a, "", hit->key, "");
-            /* DEAD1 (DEVIATIONS 34): Rust's default cut (1200 mm, a ceiling 2300 mm above the level)
+            /* DEAD1 (DEVIATIONS 35): Rust's default cut (1200 mm, a ceiling 2300 mm above the level)
              * lies above the level above on a storey lower than that (Fondations, 800 mm): Rust's
              * own check then refuses its default. There the cut goes half way up the storey; every
              * other default is Rust's. The level above as view.rs resolve finds it (> level + 1 mm). */

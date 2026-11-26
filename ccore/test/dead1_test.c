@@ -5,7 +5,7 @@
  *     (level_remove / level_set run dry: no step, no rev change); a new empty level is free.
  *   - view_add of a plan and a ceiling plan of Fondations (800 mm under Niveau 1): Rust's default
  *     cut (1200 / 2300 mm) lies above the level above and its own check refused it ("the planes
- *     must be in order", DEVIATIONS 34); now the cut goes half way up (400 mm) and the view is
+ *     must be in order", DEVIATIONS 35); now the cut goes half way up (400 mm) and the view is
  *     made; Niveau 1's plan keeps Rust's 1200 mm.
  * Before DEAD1: level_refusals was an unknown query; both view_add calls answered 400. */
 #include <stdlib.h>
