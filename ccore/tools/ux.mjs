@@ -1,6 +1,7 @@
 // The lab's controls against what the C core does, and how fast (ticket UXMAP):
 //   node ccore/tools/ux.mjs [--check] [--force] [--builds wasm,native] [--models small,large]
-//     [--reps N] [--no-timing] [--no-measure | --measure-only] [--merge out/ux/ux.json] [--site DIR] [--out FILE]
+//     [--reps N] [--no-timing] [--no-measure | --measure-only | --timing-only] [--merge out/ux/ux.json]
+//     [--site DIR] [--out FILE] [--only <surface>]
 // Writes ccore/results/ux.md (never edit it by hand) and the raw answers to out/ux/ux.json.
 //
 // What it does. ONE headless Chromium (SwiftShader, 1280x800, English) over raw CDP opens the lab:
@@ -50,6 +51,8 @@
 // before the page loads: name and ms of each call) and the frames drawn; one CDP Profiler run of the
 // moves gives the functions with the most self time.
 //
+// --merge FILE (an earlier run's out/ux/ux.json): its verdicts are reused and its Measure rows and
+// times kept, so verdicts, Measure (--measure-only) and timings (--timing-only) can run one at a time.
 // --check: the wasm build on the small model, verdicts only; exits 1 when it finds more `dead` or
 // `error` controls than the committed report counts (not in ci/run.sh yet: UXMAP study).
 import { spawn, execFileSync } from "node:child_process";
@@ -525,7 +528,7 @@ async function elementPoint() {
     for (let fy = 0.5; fy < 0.95; fy += 0.07) for (let fx = 0.5; fx < 0.95; fx += 0.07) for (const s of [1, -1]) {
       const x = r.left + r.width * (s > 0 ? fx : 1 - fx), y = r.top + r.height * fy;
       if (document.elementFromPoint(x, y)?.id !== 'bimble') continue;
-      const id = g.pickAt ? g.pickAt(x - r.left, y - r.top) : null;
+      const id = g.pickAt ? g.pickAt(x, y) : null; // client coordinates
       if (id) return [x, y];
     }
     return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
@@ -544,6 +547,7 @@ async function runSteps(steps) {
       await click(at);
     } else if (s.key) await key(s.key, s.mods ?? {});
     else if (s.select) await click(await elementPoint());
+    else if (s.zoom) { const p = await elementPoint(); await S("Input.dispatchMouseEvent", { type: "mouseWheel", x: p[0], y: p[1], deltaX: 0, deltaY: -400 }); }
     else if (s.right) { const p = await elementPoint(); await click(p); await settle(3000, false); await click(p, { button: "right" }); }
     await settle(MODEL !== "small" ? 15000 : 4000, false);
   }
@@ -711,6 +715,26 @@ async function exploreControl(surface, depth, list, e, dirty) {
     rec.calls = BUILD === "wasm" ? after.calls - before.calls : after.ev.rq - before.ev.rq;
     rec.verdict = verdictOf(e, before, after, rec.effects, rec.errors);
     if (rec.verdict === "dead" && e.current) { rec.verdict = "not exercised"; rec.note = "already the current one: a click changes nothing by design"; }
+    // a key whose action the core does not enable now (undo with nothing to undo): disabled, not dead
+    const ka = ACTIONS.find((x) => `action ${x.name}` === rec.binding);
+    if (rec.verdict === "dead" && surface.kind === "keys" && ka && !ka.enabled) { rec.verdict = "disabled"; rec.note = `core: action ${ka.name} enabled=false now`; }
+    // a camera control on a fresh page (already fitted, at Home): again after a wheel zoom
+    if (rec.verdict === "dead" && /\bfit\b|\bhome\b|camera|view cube/i.test(`${rec.binding} ${rec.label}`)) {
+      await runSteps(rec.steps);
+      const p = await elementPoint();
+      await S("Input.dispatchMouseEvent", { type: "mouseWheel", x: p[0], y: p[1], deltaX: 0, deltaY: -400 });
+      await settle(MODEL !== "small" ? 15000 : 4000, false);
+      const b2 = await snap();
+      await activate(surface, e);
+      const pr2 = await settle(MODEL !== "small" ? 20000 : 5000);
+      const a2 = await snap();
+      const eff2 = effects(b2, a2), err2 = errorsBetween(b2, a2);
+      if (eff2.length || err2.length) {
+        rec.effects = eff2, rec.errors = err2, rec.verdict = err2.length ? "error" : "works", rec.note = "after a wheel zoom (a fresh page is fitted already)";
+        rec.steps = [...rec.steps, { zoom: true }];
+        if (pr2.ms !== null) rec.ms = [pr2.ms];
+      }
+    }
     if (after.dom.naSide && !before.dom.naSide) rec.note = [rec.note, "the left panel then says not available"].filter(Boolean).join("; ");
     if (rec.verdict === "works" && pr.ms !== null) rec.ms.push(pr.ms);
     if (pr.timeout) rec.note = "still changing after the wait (timeout)";
@@ -819,7 +843,7 @@ function writeReport(R) {
   L.push(`- Commit: \`${R.commit}\`${R.dirty ? " (with uncommitted changes)" : ""}; run ${R.date}; ${R.runS} s.`,
     `- Machine: ${R.machine}; load at start \`${R.load0}\`, before the timings \`${R.loadT ?? "-"}\`.${R.numbersNote ? ` ${R.numbersNote}` : ""}`,
     `- Builds: ${R.builds.join(", ")}; models: small = \`golden/frame.json\` (72 elements)${R.models.includes("large") ? `, large = \`bench/large_model.py ${LARGE_N}\` (${R.largeCount ?? "?"} elements)` : ""}${R.models.includes("local") ? `, local = a local model, ${R.localCount ?? "?"} elements (not committed)` : ""}; repetitions: ${REPS}.`,
-    ...(R.merged ? [`- Merged (--merge): ${R.merged}; the Measure study from this run.`] : []),
+    ...(R.merged ? [`- Runs: ${R.merged}.`] : []),
     `- Page loads (fresh page per activation): median ${R.loadMedian} ms (${R.loads} loads).`, "");
   // counts per where
   const C = R.passes[0]?.controls ?? [];
@@ -891,34 +915,37 @@ async function main() {
   if (all.has("local")) localModel(site);
   await serve(site);
   await startBrowser();
-  const passes = [];
-  const times = {}; const timingCols = [];
+  // --merge FILE: an earlier run's JSON (out/ux/ux.json). Its verdicts are reused (no new verdict pass
+  // for a build it has), its Measure rows and times kept where this run has none: verdicts, the
+  // Measure study and the timings can be run one at a time (one browser, a load that changes).
+  const M = opt("--merge") ? JSON.parse(readFileSync(resolve(opt("--merge")), "utf8")) : null;
+  const passes = M ? [...M.passes] : [];
+  const times = M ? { ...(M.times ?? {}) } : {};
+  const timingCols = M ? [...(M.timingCols ?? [])] : [];
   const measure = [];
-  let loadT = null;
+  let loadT = M?.loadT ?? null;
   for (const build of BUILDS) {
     BUILD = build; MODEL = "small";
     if (build === "native" && !existsSync(BIN)) { log(`no ${BIN}: native pass skipped`); continue; }
-    if (MEASURE_ONLY) {
-      for (const model of MEASURE_MODELS) { MODEL = model; log(`measure ${build}/${model}`); measure.push({ build, model, ...(await measureStudy()) }); }
-      passes.push({ build, model: "small", controls: [] });
-      continue;
-    }
-    controls.length = 0; surfaces.length = 0; discovered.clear();
-    await enumerateBase();
-    for (let s = 0; s < surfaces.length; s++) {
-      if (opt("--only") && !surfaces[s].where.includes(opt("--only"))) continue; // a debugging aid: one surface
-      try { await exploreSurface(surfaces[s], surfaces[s].depth ?? 0); } catch (x) {
-        log(`${surfaces[s].where}: ${x.message}`);
-        controls.push({ where: surfaces[s].where, label: "(the rest of this surface)", verdict: "not exercised", note: `the tool failed here: ${String(x.message ?? x).slice(0, 120)}`, effects: [], errors: [], ms: [] });
+    let pass = passes.find((p) => p.build === build && p.controls.length);
+    if (!pass && !MEASURE_ONLY && !flag("--timing-only")) {
+      controls.length = 0; surfaces.length = 0; discovered.clear();
+      await enumerateBase();
+      for (let s = 0; s < surfaces.length; s++) {
+        if (opt("--only") && !surfaces[s].where.includes(opt("--only"))) continue; // a debugging aid: one surface
+        try { await exploreSurface(surfaces[s], surfaces[s].depth ?? 0); } catch (x) {
+          log(`${surfaces[s].where}: ${x.message}`);
+          controls.push({ where: surfaces[s].where, label: "(the rest of this surface)", verdict: "not exercised", note: `the tool failed here: ${String(x.message ?? x).slice(0, 120)}`, effects: [], errors: [], ms: [] });
+        }
+        writeFileSync(join(RAW, "ux-partial.json"), JSON.stringify(controls, null, 1));
       }
-      writeFileSync(join(RAW, "ux-partial.json"), JSON.stringify(controls, null, 1));
+      pass = { build, model: "small", controls: controls.map((c) => ({ ...c })) };
+      passes.push(pass);
+      writeFileSync(join(RAW, "ux.json"), JSON.stringify({ passes, times, timingCols, measure }, null, 1));
+      log(`${build}/small: ${VERDICTS.map((v) => `${v} ${pass.controls.filter((c) => c.verdict === v).length}`).join(", ")}`);
     }
-    const pass = { build, model: "small", controls: controls.map((c) => ({ ...c })) };
-    passes.push(pass);
-    writeFileSync(join(RAW, "ux.json"), JSON.stringify({ passes, times, measure }, null, 1));
-    log(`${build}/small: ${VERDICTS.map((v) => `${v} ${pass.controls.filter((c) => c.verdict === v).length}`).join(", ")}`);
     if (MEASURE) for (const model of MEASURE_MODELS) { MODEL = model; log(`measure ${build}/${model}`); measure.push({ build, model, ...(await measureStudy()) }); }
-    if (TIMING && !numbersNote) {
+    if (TIMING && !MEASURE_ONLY && pass) {
       loadT = loadNow();
       if (load1() > 4 && !FORCE) { numbersNote = `The 1-minute load was ${load1()} (> 4) before the timings: no response times written (--force to write them anyway).`; continue; }
       // one control per binding: the first that works (the palette, the keys and the ribbon often run the same action)
@@ -927,35 +954,30 @@ async function main() {
       for (const model of MODELS) {
         MODEL = model;
         const col = `${model} ${build}`;
-        timingCols.push(col);
+        if (!timingCols.includes(col)) timingCols.push(col);
         times[col] = {};
         log(`timing ${col}: ${todo.length} controls × ${REPS}`);
         for (const c of todo) {
           const k = `${c.where}|${c.label}|${c.i}`;
-          const reps = model === "small" ? Math.max(0, REPS - c.ms.length) : REPS;
+          const reps = model === "small" ? Math.max(0, REPS - (c.ms?.length ?? 0)) : REPS;
           const r = await timeControl(c, reps);
-          const all = model === "small" ? [...c.ms, ...r.ms] : r.ms;
+          const all = model === "small" ? [...(c.ms ?? []), ...r.ms] : r.ms;
           times[col][k] = median(all);
           for (const p of pass.controls) if (p.binding === c.binding && p.verdict === "works" && p !== c && /^(action|page|panel|dialog|effect)/.test(c.binding ?? "")) times[col][`${p.where}|${p.label}|${p.i}`] ??= times[col][k];
         }
-        writeFileSync(join(RAW, "ux.json"), JSON.stringify({ passes, times, measure }, null, 1));
+        writeFileSync(join(RAW, "ux.json"), JSON.stringify({ passes, times, timingCols, measure }, null, 1));
       }
       MODEL = "small";
     }
   }
+  for (const m of M?.measure ?? []) if (!measure.some((x) => x.build === m.build && x.model === m.model)) measure.push(m);
   const commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: CCORE }).toString().trim();
   const dirty = execFileSync("git", ["status", "--porcelain", "--", "../web-ui/src", "src", "session"], { cwd: CCORE }).toString().trim() !== "";
-  const R = { commit, dirty, date: new Date().toISOString().slice(0, 16).replace("T", " "), runS: Math.round((Date.now() - T0) / 1000),
-    machine: `${platform()} ${release()} ${arch()}, ${cpus().length} CPUs, ${Math.round(totalmem() / 2 ** 30)} GB`, load0, loadT, numbersNote,
-    builds: BUILDS, models: MODELS, largeCount, localCount: measure.find((m) => m.model === "local")?.count ?? null, loadMedian: median(loadMs), loads: loadMs.length, passes, times, timingCols, measure };
-  if (opt("--merge")) { // the verdicts (and times) of an earlier run's out/ux JSON, with this run's Measure study
-    const M = JSON.parse(readFileSync(resolve(opt("--merge")), "utf8"));
-    if (!R.passes.some((p) => p.controls.length)) R.passes = M.passes;
-    if (!R.timingCols.length) { R.timingCols = M.timingCols ?? []; R.times = M.times ?? {}; }
-    if (!R.measure.length) R.measure = M.measure ?? [];
-    R.loadMedian = M.loadMedian ?? R.loadMedian; R.loads = M.loads ?? R.loads;
-    R.merged = `verdicts from a run at commit ${M.commit} (${M.date}, ${M.runS} s, load at start \`${M.load0}\`)`;
-  }
+  const R = { commit, dirty, date: new Date().toISOString().slice(0, 16).replace("T", " "), runS: Math.round((Date.now() - T0) / 1000) + (M?.runS ?? 0),
+    machine: `${platform()} ${release()} ${arch()}, ${cpus().length} CPUs, ${Math.round(totalmem() / 2 ** 30)} GB`, load0: M ? `${M.load0}; this run ${load0}` : load0, loadT, numbersNote,
+    builds: [...new Set([...(M?.builds ?? []), ...BUILDS])], models: [...new Set([...(M?.models ?? []), ...MODELS])], largeCount, localCount: measure.find((m) => m.model === "local")?.count ?? null,
+    loadMedian: median([...loadMs, ...(M?.loadMs ?? [])]), loads: loadMs.length + (M?.loadMs?.length ?? 0), loadMs: [...loadMs, ...(M?.loadMs ?? [])], passes, times, timingCols, measure };
+  if (M) R.merged = `this report merges runs (--merge): ${M.merged ?? `one at commit ${M.commit} (${M.date})`}; and this one at ${commit} (${R.date})`;
   writeFileSync(join(RAW, EXTRA ? "ux-local.json" : "ux.json"), JSON.stringify(R, null, 1));
   if (CHECK) {
     const C = passes[0].controls, n = (v) => C.filter((c) => c.verdict === v).length;
