@@ -766,3 +766,21 @@ static void prev_clear(cc_vis *v) {
     while (v->nprev) prev_drop(v, v->nprev - 1);
 }
 /* ---- end ISS72 ---- */
+
+/* ---- M1LINKS ---- */
+static uint64_t fnv(uint64_t h, const void *p, size_t n) {
+    const unsigned char *c = p;
+    for (size_t i = 0; i < n; i++) h = (h ^ c[i]) * 1099511628211ull;
+    return h;
+}
+uint64_t cc_vis_sig(const cc_vis *v) {
+    uint64_t h = 1469598103934665603ull;
+    const cc_gidset *sets[4] = {&v->hidden, &v->isolated, &v->temp, &v->by_view};
+    for (int k = 0; k < 4; k++) {
+        h = fnv(h, &sets[k]->n, sizeof sets[k]->n);
+        if (sets[k]->n) h = fnv(h, sets[k]->v, sets[k]->n * sizeof *sets[k]->v);
+    }
+    int f[3] = {v->has_temp, v->temp_isolate, v->reveal};
+    return fnv(h, f, sizeof f);
+}
+/* ---- end M1LINKS ---- */

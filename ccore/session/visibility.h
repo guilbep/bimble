@@ -105,6 +105,10 @@ void cc_vis_fit(cc_vis *v, const cc_scene *sc, const cc_gid *primary);
 /* lib.rs toggle_section_box: on/off; the first time on, fitted. */
 void cc_vis_toggle(cc_vis *v, const cc_scene *sc, const cc_gid *primary);
 
+/* M1LINKS: a hash of what is hidden (the sets, the temporary state, reveal): the /mesh trailer leaves
+ * a link's hidden elements out, so a change of it is a change of the links (links_gen). */
+uint64_t cc_vis_sig(const cc_vis *v);
+
 /* `query visibility` (calls.rs:442-460), keys sorted. `origin` NULL: null. */
 void cc_vis_json(const cc_vis *v, JsonW *w, const double *origin);
 /* {"isolate":…} etc.: a C addition for the page, the whole sets (query visibility caps them at

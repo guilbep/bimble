@@ -114,6 +114,7 @@ typedef struct cc_session {
     size_t nlinks, caplinks;
     uint64_t links_gen, mesh_links_gen;
     uint64_t vis_links_gen; /* M1LINKS: the links_gen the view's rules were last folded at (m1links.h) */
+    uint64_t vis_sig;       /* M1LINKS: cc_vis_sig when the /mesh trailer was last told (links_gen) */
     struct cc_note *notes;  /* M1LINKS: the notes on linked elements (m1links.h), in the order made */
     size_t nnotes, capnotes;
     /* An element of a linked model selected (lib.rs:945 link_selected): its link (-1: none) and

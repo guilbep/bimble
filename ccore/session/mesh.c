@@ -113,6 +113,43 @@ static void link_bmsh_id(const void *ctx, const cc_scene *sc, size_t k, char out
     cc_link_id(ctx, k, out);
 }
 
+/* ---- M1LINKS: a link's elements hidden (by GlobalId: hide, isolate, the view's rules) are left out
+ * of its BMSH; the page draws what the trailer holds (the draw path is ticket 3D2's). ---- */
+typedef struct {
+    const cc_link *k;
+    const size_t *map; /* filtered index -> the link's scene index */
+} Kept;
+static void kept_bmsh_id(const void *ctx, const cc_scene *sc, size_t k, char out[22]) {
+    const Kept *x = ctx;
+    (void)sc;
+    cc_link_id(x->k, x->map[k], out);
+}
+/* The link's raw scene without its hidden elements in `f` (elements malloc'd in *map's block; the
+ * rest borrowed): 1 when some were left out, 0 none (f untouched), -1 out of memory. */
+static int link_kept(cc_session *s, const cc_link *k, cc_scene *f, size_t **map) {
+    const cc_scene *sc = cc_link_raw_scene(k);
+    if (s->vis.reveal || !k->kind || !sc->nelements) return 0;
+    size_t n = sc->nelements, kept = 0;
+    size_t *m = malloc(n * sizeof *m);
+    if (!m) return -1;
+    char id[22];
+    for (size_t i = 0; i < n; i++) {
+        cc_link_id(k, i, id);
+        cc_gid g;
+        memcpy(g.c, id, 22);
+        if (cc_gid_valid(id, 22) && cc_vis_hidden(&s->vis, &g)) continue;
+        m[kept++] = i;
+    }
+    if (kept == n) return free(m), 0;
+    *f = *sc;
+    f->elements = malloc((kept ? kept : 1) * sizeof *f->elements);
+    if (!f->elements) return free(m), -1;
+    for (size_t i = 0; i < kept; i++) f->elements[i] = sc->elements[m[i]];
+    f->nelements = kept;
+    *map = m;
+    return 1;
+}
+
 /* links.h: the LNKS trailer (`form` 3: each link's BMSH in version 3). */
 static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error *err) {
     if (!s->nlinks) return 0;
@@ -150,7 +187,15 @@ static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error 
         }
         buf_clear(&one);
         one.oom = 0;
-        if (form == 3) rc = cc_scene_bmsh3(cc_link_raw_scene(k), link_bmsh_id, k, rev, &one, err);
+        cc_scene f;
+        size_t *map = NULL;
+        int some = link_kept(s, k, &f, &map); /* M1LINKS */
+        if (some < 0) rc = fail(err, "out of memory");
+        else if (some) {
+            Kept x = {k, map};
+            rc = form == 3 ? cc_scene_bmsh3(&f, kept_bmsh_id, &x, rev, &one, err) : bmsh_of(&f, rev, &one, err);
+            free(f.elements), free(map);
+        } else if (form == 3) rc = cc_scene_bmsh3(cc_link_raw_scene(k), link_bmsh_id, k, rev, &one, err);
         else rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(&k->scene, rev, &one, err);
         if (!rc && (one.oom || one.len > UINT32_MAX)) rc = fail(err, "out of memory");
         if (!rc) put_u32(out, (uint32_t)one.len), buf_append(out, one.p, one.len);
