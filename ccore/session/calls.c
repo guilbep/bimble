@@ -619,6 +619,8 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "save_as")) return s->open; /* not ribbon actions (file_action) */
     if (!strcmp(name, "close")) return loaded(s);
     if (!strcmp(name, "recent_remove")) return 1; /* FS1 */
+    /* ---- H2a: the history store's writes answer their own refusals (versions.h) ---- */
+    if (!strcmp(name, "commit") || !strcmp(name, "branch_create") || !strcmp(name, "branch_switch")) return 1;
     /* ---- SET1: ribbon.rs:591 `Settings | About | Home => true`; set_settings, settings_load (settings.h) ---- */
     if (!strcmp(name, "settings") || !strcmp(name, "about")) return 1; /* the viewer-only build too (its actions are the editor's) */
     if (!strcmp(name, "set_settings") || !strcmp(name, "settings_load")) return 1;
@@ -1827,7 +1829,8 @@ static int new_sheet_action(cc_session *s, cc_buf *out) {
 }
 
 /* Actions the C core runs that the ribbon does not list (above). */
-static const char *const HIDDEN_ACTIONS[] = {"save_as", "close", "recent_remove" /* FS1 */, "set_settings", "settings_load" /* SET1 */};
+static const char *const HIDDEN_ACTIONS[] = {"save_as", "close", "recent_remove" /* FS1 */, "set_settings", "settings_load" /* SET1 */,
+                                             "commit", "branch_create", "branch_switch" /* H2a */};
 
 /* calls.rs:538-547 call_action, ribbon.rs:650 run_action. */
 static int call_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
@@ -1879,6 +1882,10 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     /* ---- KEY1: ribbon.rs:729-744, the plan template's flag (no history step, rev unchanged) ---- */
     if (cc_toggle_index(name) >= 0) return cc_toggle_flip(s, cc_toggle_index(name)), CC_OK;
     /* ---- end KEY1 ---- */
+    { /* ---- H2a: commit, branch_create, branch_switch (versions.h) ---- */
+        int vrc = cc_versions_action(s, name, body, n, out);
+        if (vrc != -1) return vrc;
+    }
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return link_action(s, name, body, n, out);
     /* ---- FS1: recent_remove {path} (Home's remove; settings_file.h) ---- */
     if (!strcmp(name, "recent_remove")) {

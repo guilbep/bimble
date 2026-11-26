@@ -141,6 +141,9 @@ typedef struct cc_session {
     size_t npaper_views, cappaper_views;
     int plan_window;
     /* ---- end PAPER1 ---- */
+    /* ---- H2a: query pending's cache (versions.c), NULL: none ---- */
+    struct cc_versions_cache *versions_cache;
+    /* ---- end H2a ---- */
 } cc_session;
 
 /* A new session with no model, on `pf` (kept by pointer). NULL when out of memory. */

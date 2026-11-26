@@ -5,6 +5,10 @@
 #include "json_r.h"
 #include "json_w.h"
 #include "repo.h"
+#include "repo_write.h" /* H2a */
+#include <stdlib.h>
+#include "file.h"
+#include "settings.h"
 
 #define NO_BROWSER "no history folder in the browser"
 
@@ -19,6 +23,14 @@ int cc_versions_query(cc_session *s, const char *name, const char *body, size_t 
     buf_puts(out, "{\"history\":false,\"reason\":\"" NO_BROWSER "\"}");
     return CC_OK;
 }
+int cc_versions_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
+    (void)s, (void)body, (void)n;
+    if (strcmp(name, "commit") && strcmp(name, "branch_create") && strcmp(name, "branch_switch")) return -1;
+    buf_clear(out);
+    buf_puts(out, NO_BROWSER);
+    return CC_ERR;
+}
+void cc_versions_free(cc_session *s) { (void)s; }
 #else
 
 /* {"history": false, "reason": ...}. */
@@ -259,6 +271,45 @@ done:
     return rc;
 }
 
+/* ---- H2a: pending, cached per (file, HEAD, rev): HEAD's model is read once per commit, the
+ * diff once per rev (H1 read HEAD's whole tree on every call). ---- */
+struct cc_versions_cache {
+    char *path;      /* malloc'd: the model file the history is next to */
+    cc_hash base;    /* HEAD's commit ("" before the first) */
+    int has_model;   /* `model` is base's */
+    cc_model model;
+    uint64_t rev;    /* the answer's rev (and `answered`) */
+    int answered;
+    Buf answer;
+};
+
+void cc_versions_free(cc_session *s) {
+    struct cc_versions_cache *c = s->versions_cache;
+    if (!c) return;
+    free(c->path);
+    if (c->has_model) cc_model_free(&c->model);
+    buf_free(&c->answer);
+    free(c);
+    s->versions_cache = NULL;
+}
+
+static struct cc_versions_cache *cache_for(cc_session *s, const cc_hash *base) {
+    struct cc_versions_cache *c = s->versions_cache;
+    if (c && (strcmp(c->path, s->path) || strcmp(c->base.h, base->h))) cc_versions_free(s), c = NULL;
+    if (!c) {
+        c = calloc(1, sizeof *c);
+        if (!c) return NULL;
+        size_t n = strlen(s->path);
+        c->path = malloc(n + 1);
+        if (!c->path) return free(c), NULL;
+        memcpy(c->path, s->path, n + 1);
+        c->base = *base;
+        buf_init(&c->answer);
+        s->versions_cache = c;
+    }
+    return c;
+}
+
 static int q_pending(cc_session *s, cc_buf *out) {
     if (s->pf->files && !s->open) return none(out, "no editable model open", 22);
     cc_repo r;
@@ -269,29 +320,66 @@ static int q_pending(cc_session *s, cc_buf *out) {
     cc_changes c;
     cc_changes_init(&c);
     cc_hash h;
+    memset(&h, 0, sizeof h);
     int found = 0, rc = CC_ERR;
-    if (cc_repo_head_commit(&r, &h, &found, &e) || cc_repo_status(&r, &s->model, &c, &e)) {
+    if (cc_repo_head_commit(&r, &h, &found, &e)) {
         fail(out, &e);
-    } else {
-        buf_clear(out);
-        JsonW w;
-        jw_init(&w, out, 0);
-        jw_obj_begin(&w);
-        jw_key(&w, "history");
-        jw_bool(&w, 1);
-        jw_key(&w, "base");
-        if (found) jw_str(&w, h.h);
-        else
-            jw_null(&w);
-        changes_json(&w, &c);
-        jw_obj_end(&w);
-        rc = jw_finish(&w) == JW_OK ? CC_OK : CC_ERR;
+        goto done;
     }
+    if (!found) h.h[0] = 0;
+    struct cc_versions_cache *k = cache_for(s, &h);
+    if (k && k->answered && k->rev == s->rev) {
+        buf_clear(out);
+        buf_append(out, k->answer.p, k->answer.len);
+        rc = out->oom ? CC_ERR : CC_OK;
+        goto done;
+    }
+    if (k && found && !k->has_model) {
+        Arena a;
+        arena_init(&a, 0);
+        cc_commit ci;
+        int bad = cc_repo_commit_info(&r, h.h, &a, &ci, &e) || cc_repo_read_tree(&r, ci.tree, &k->model, &e);
+        arena_free(&a);
+        if (bad) {
+            cc_model_free(&k->model);
+            fail(out, &e);
+            goto done;
+        }
+        k->has_model = 1;
+    }
+    int bad;
+    if (k && found) bad = cc_diff(&k->model, &s->model, &c, &e);
+    else
+        bad = cc_repo_status(&r, &s->model, &c, &e);
+    if (bad) {
+        fail(out, &e);
+        goto done;
+    }
+    buf_clear(out);
+    JsonW w;
+    jw_init(&w, out, 0);
+    jw_obj_begin(&w);
+    jw_key(&w, "history");
+    jw_bool(&w, 1);
+    jw_key(&w, "base");
+    if (found) jw_str(&w, h.h);
+    else
+        jw_null(&w);
+    changes_json(&w, &c);
+    jw_obj_end(&w);
+    rc = jw_finish(&w) == JW_OK ? CC_OK : CC_ERR;
+    if (rc == CC_OK && k) {
+        buf_clear(&k->answer);
+        buf_append(&k->answer, out->p, out->len);
+        k->answered = !k->answer.oom, k->rev = s->rev;
+    }
+done:
     cc_changes_free(&c);
     buf_free(&e);
     cc_repo_close(&r);
     return rc;
 }
+/* ---- end H2a ---- */
 
 int cc_versions_query(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     int which = !strcmp(name, "versions") ? 1 : !strcmp(name, "branches") ? 2 : !strcmp(name, "version_changes") ? 3
@@ -319,4 +407,193 @@ int cc_versions_query(cc_session *s, const char *name, const char *body, size_t 
     arena_free(&a);
     return rc;
 }
+/* ---- H2a: commit, branch_create, branch_switch (lib.rs:1903-2097, the History panel) ---- */
+
+static int refuse(cc_buf *out, const char *text) {
+    buf_clear(out);
+    buf_puts(out, text);
+    return CC_ERR;
+}
+
+/* settings.rs author(): "name <e-mail>", or the name alone. The C core refuses without a name
+ * (state.user is null then: the page sends the user to Settings), where Rust falls back to the
+ * e-mail alone or $BIMBLE_AUTHOR / $USER (DEVIATIONS 26). 0, or -1 without a name. */
+static int author_of(cc_session *s, Buf *author) {
+    Buf u;
+    buf_init(&u);
+    JsonW w;
+    jw_init(&w, &u, 0);
+    cc_settings_user_json(s, &w);
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jw_finish(&w) == JW_OK ? jr_parse(&a, u.p ? u.p : "", u.len, &je) : NULL;
+    const JrVal *name = v && v->type == JR_OBJ ? jr_get(v, "name") : NULL;
+    const JrVal *mail = v && v->type == JR_OBJ ? jr_get(v, "email") : NULL;
+    int rc = -1;
+    if (name && name->type == JR_STR && name->n) {
+        buf_append(author, name->s, name->n);
+        if (mail && mail->type == JR_STR && mail->n) buf_puts(author, " <"), buf_append(author, mail->s, mail->n), buf_putc(author, '>');
+        rc = 0;
+    }
+    arena_free(&a);
+    buf_free(&u);
+    return rc;
+}
+
+/* The body's members: a string `key` (NUL-terminated in the arena) and an optional bool. */
+static const JrVal *parse_body(Arena *a, const char *body, size_t n) {
+    if (!n) return NULL;
+    JrError je;
+    return jr_parse(a, body, n, &je);
+}
+
+/* lib.rs:2082-2092: the model a switch gives is written to the working file, which is opened
+ * again (fresh undo history, saved, rev + 1; the session file follows). */
+static int follow(cc_session *s, cc_model *m, cc_buf *out) {
+    Buf b;
+    buf_init(&b);
+    size_t pn = strlen(s->path);
+    int json = pn >= 5 && !strcmp(s->path + pn - 5, ".json"); /* file.rs:145, as cc_session_save */
+    int ok = (json ? cc_model_save(m, &b) : cc_model_save_v2(m, &b)) == 0 && !b.oom &&
+             s->pf->write_file(s->pf->ctx, s->path, b.p, b.len) == 0;
+    buf_free(&b);
+    if (!ok) {
+        buf_clear(out);
+        buf_puts(out, s->path);
+        buf_puts(out, ": cannot write");
+        return CC_ERR;
+    }
+    char path[sizeof s->path];
+    memcpy(path, s->path, sizeof path);
+    cc_error err;
+    if (cc_session_open(s, path, &err)) return refuse(out, err.msg);
+    return CC_OK;
+}
+
+static int a_commit(cc_session *s, const JrVal *v, cc_buf *out) {
+    int bad = 0;
+    const char *msg = str_arg(v, "message", NULL, &bad);
+    if (bad || !msg) return refuse(out, "commit: {message: the version's message}");
+    Buf author, e;
+    buf_init(&author), buf_init(&e);
+    cc_repo r;
+    r.dir = NULL;
+    int rc = CC_ERR;
+    if (author_of(s, &author)) {
+        refuse(out, "commit: set your name in Settings first (the author of each version)");
+        goto done;
+    }
+    /* lib.rs:1976: save first, so the file and the history agree. */
+    if (cc_session_unsaved(s)) {
+        cc_error err;
+        if (cc_session_save(s, NULL, &err)) {
+            refuse(out, err.msg);
+            goto done;
+        }
+    }
+    /* lib.rs:1932: a model without a history starts one ("Start history and commit"). */
+    Buf d;
+    buf_init(&d);
+    cc_repo_history_dir(s->path, &d);
+    buf_puts(&d, "/format");
+    int there = s->pf->exists(s->pf->ctx, buf_cstr(&d));
+    buf_free(&d);
+    if (there ? cc_repo_open(&r, s->pf, s->path, &e) : cc_repo_init(&r, s->pf, s->path, &e)) {
+        fail(out, &e);
+        goto done;
+    }
+    cc_hash h;
+    int64_t now = s->pf->unix_s ? s->pf->unix_s(s->pf->ctx) : 0;
+    if (cc_repo_commit(&r, &s->model, msg, buf_cstr(&author), now, &h, &e)) {
+        fail(out, &e);
+        goto done;
+    }
+    buf_clear(out);
+    buf_puts(out, "{\"commit\":\"");
+    buf_append(out, h.h, 64);
+    buf_puts(out, "\"}");
+    rc = CC_OK;
+done:
+    cc_repo_close(&r);
+    buf_free(&author), buf_free(&e);
+    return rc;
+}
+
+static int a_branch(cc_session *s, int create, const JrVal *v, cc_buf *out) {
+    int bad = 0;
+    const char *name = str_arg(v, "name", NULL, &bad);
+    const JrVal *dv = v && v->type == JR_OBJ ? jr_get(v, "discard") : NULL;
+    if (dv && dv->type != JR_BOOL && dv->type != JR_NULL) bad = 1;
+    int discard = dv && dv->type == JR_BOOL && dv->b;
+    if (bad || !name)
+        return refuse(out, create ? "branch_create: {name: the new branch}"
+                                  : "branch_switch: {name: a branch or a revision, discard?: bool}");
+    cc_repo r;
+    int answer;
+    if (open_repo(s, &r, out, &answer)) {
+        /* No history yet: nothing to branch from (Rust's panel shows only the first commit). */
+        return answer == CC_OK ? refuse(out, "no history yet: commit a first version") : answer;
+    }
+    Buf e;
+    buf_init(&e);
+    int rc = CC_ERR;
+    cc_model m;
+    cc_model_init(&m);
+    if (create) { /* lib.rs:2047-2050: create at HEAD, then switch to it (the model stays) */
+        cc_hash h;
+        if (cc_repo_create_branch(&r, name, NULL, &h, &e) || cc_repo_switch(&r, name, &m, &e)) fail(out, &e);
+        else
+            buf_clear(out), buf_puts(out, "{\"branch\":"), json_escape(out, name, strlen(name)), buf_putc(out, '}'), rc = CC_OK;
+        goto done;
+    }
+    /* lib.rs:2006: Switch is refused while changes are not committed ("Commit or undo the changes
+     * first"); {"discard": true} drops them. */
+    if (!discard) {
+        cc_changes c;
+        cc_changes_init(&c);
+        int st = cc_repo_status(&r, &s->model, &c, &e);
+        size_t n = c.n;
+        cc_changes_free(&c);
+        if (st) {
+            fail(out, &e);
+            goto done;
+        }
+        if (n) {
+            refuse(out, "uncommitted changes: commit them first, or send {\"discard\": true}");
+            goto done;
+        }
+    }
+    cc_model_free(&m);
+    if (cc_repo_switch(&r, name, &m, &e)) {
+        fail(out, &e);
+        goto done;
+    }
+    rc = follow(s, &m, out);
+    if (rc == CC_OK) buf_clear(out), buf_puts(out, "{\"branch\":"), json_escape(out, name, strlen(name)), buf_putc(out, '}');
+done:
+    cc_model_free(&m);
+    buf_free(&e);
+    cc_repo_close(&r);
+    return rc;
+}
+
+int cc_versions_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
+    int which = !strcmp(name, "commit") ? 1 : !strcmp(name, "branch_create") ? 2 : !strcmp(name, "branch_switch") ? 3 : 0;
+    if (!which) return -1;
+    if (!s->pf->files) return refuse(out, NO_BROWSER);
+    if (!s->open) return refuse(out, s->view ? "this file is read only: import it to edit" : "no model open");
+    if (s->untitled || !s->path[0])
+        return refuse(out, "the model has no file yet: action save_as with {\"path\": \"<file>\"} first");
+    Arena a;
+    arena_init(&a, 0);
+    const JrVal *v = parse_body(&a, body, n);
+    int rc;
+    if (n && !v) rc = refuse(out, "the body is not JSON");
+    else
+        rc = which == 1 ? a_commit(s, v, out) : a_branch(s, which == 2, v, out);
+    arena_free(&a);
+    return rc;
+}
+/* ---- end H2a ---- */
 #endif
