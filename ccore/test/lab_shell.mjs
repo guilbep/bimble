@@ -274,7 +274,7 @@ async function nativePaths(cdp) {
   check("N7 model -> Home -> Back to the model: the view", onHome && isView(v), brief(v));
 
   // N8: a page and the three ways back.
-  const toPage = async () => { await P.click("[data-missing=schedule-list-in-navigator]"); return P.until((x) => x.page !== null); };
+  const toPage = async () => { await P.click("[data-bb=nav-schedules]") /* QTY1: the list of lists (was data-missing) */; return P.until((x) => x.page !== null); };
   const p1 = await toPage();
   await P.click("[data-bb=viewtab-page] .xx");
   const b1 = await P.until(isView);

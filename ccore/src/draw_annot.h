@@ -23,8 +23,9 @@
 typedef struct {
     cc_item *p;
     size_t n, cap;
+    cc_item_tag tag; /* DXF1: given to every item pushed (the drawing sets it per part) */
 } cc_item_list;
-/* A zeroed item at the end, or NULL out of memory. */
+/* A zeroed item at the end with the list's tag, or NULL out of memory. */
 cc_item *cc_item_list_push(cc_item_list *v);
 
 /* What the annotations draw with: the sheet's items, the arena, the style, and the plan's

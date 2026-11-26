@@ -723,3 +723,43 @@ int cc_hlod_bprx(const cc_hlod *h, uint32_t rev, uint32_t nelements, Buf *out, c
 int cc_hlod_bprx_tree(const cc_hlod *h, uint32_t rev, uint32_t nelements, Buf *out, cc_error *err) {
     return bprx(h, 1, rev, nelements, out, err);
 }
+
+/* ---- LNK3D (ADR 0078 amendment 3): BPRX read back from a link's cache (untrusted) ---- */
+
+static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
+
+int cc_hlod_bprx_check(const uint8_t *p, size_t n, uint32_t nelements, cc_error *err) {
+    if (n < 48 || memcmp(p, "BPRX", 4) || rd32(p + 4) != 1) return fail(err, "proxies: not BPRX version 1");
+    uint64_t ne = rd32(p + 12), nc = rd32(p + 16), nk = rd32(p + 20), nl = rd32(p + 24), np = rd32(p + 28);
+    uint64_t nv = rd32(p + 32), ni = rd32(p + 36), ns = rd32(p + 40);
+    if (ne != nelements) return fail(err, "proxies: of another scene");
+    if (nc > CC_HLOD_MAX_CELLS || nl > 2ull * CC_HLOD_MAX_CELLS + 2ull * ne) return fail(err, "proxies: too many cells");
+    uint64_t want = 48 + 64 * nc + 4 * (nk + nl) + 28 * np + 12 * nv + 4 * ni + 32 * ns;
+    if (want != n) return fail(err, "proxies: size");
+    const uint8_t *cells = p + 48, *kids = cells + 64 * nc, *els = kids + 4 * nk, *parts = els + 4 * nl;
+    const uint8_t *idx = parts + 28 * np + 12 * nv;
+    for (uint64_t i = 0; i < nc; i++) {
+        const uint8_t *c = cells + 64 * i;
+        float f[7];
+        memcpy(f, c + 4, sizeof f);
+        for (int k = 0; k < 7; k++)
+            if (!(f[k] > -3.0e38f && f[k] < 3.0e38f)) return fail(err, "proxies: a cell's bounds");
+        uint64_t k0 = rd32(c + 32), kn = rd32(c + 36), e0 = rd32(c + 40), en = rd32(c + 44), p0 = rd32(c + 48), pn = rd32(c + 52);
+        if (rd32(c) > CC_HLOD_MAX_DEPTH || k0 + kn > nk || e0 + en > nl || p0 + pn > np) return fail(err, "proxies: a cell's ranges");
+        for (uint64_t k = k0; k < k0 + kn; k++) /* a tree: children after their parent (no cycle) */
+            if (rd32(kids + 4 * k) <= i || rd32(kids + 4 * k) >= nc) return fail(err, "proxies: a child");
+    }
+    for (uint64_t i = 0; i < nl; i++)
+        if (rd32(els + 4 * i) >= ne) return fail(err, "proxies: an element");
+    for (uint64_t i = 0; i < np; i++) {
+        const uint8_t *q = parts + 28 * i;
+        uint64_t v0 = rd32(q + 4), vn = rd32(q + 8), i0 = rd32(q + 12), in = rd32(q + 16), s0 = rd32(q + 20), sn = rd32(q + 24);
+        if (rd32(q) > 255 || v0 + vn > nv || i0 + in > ni || in % 3 || s0 + sn > ns) return fail(err, "proxies: a part's ranges");
+        for (uint64_t k = i0; k < i0 + in; k++) {
+            uint32_t x = rd32(idx + 4 * k);
+            if (x < v0 || x >= v0 + vn) return fail(err, "proxies: an index");
+        }
+    }
+    return 0;
+}
+

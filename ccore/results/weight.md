@@ -9,38 +9,39 @@ map (rows sum to the stripped binary exactly; `linker` = what no object owns). L
 
 | feature | lines of C | editor wasm | viewer wasm | native | static files (archive) | objects |
 |---|---:|---:|---:|---:|---:|---|
-| web/ccore/ in the archive (a public/ccore leftover; none in CI) | 0 | 0 | 0 | 0 | 1,665,828 |  |
+| web/ccore/ in the archive (a public/ccore leftover; none in CI) | 0 | 0 | 0 | 0 | 1,757,098 |  |
 | kernel manifold (C++, native only) | 0 | 0 | 0 | 1,120,401 | 0 |  |
-| lab web UI (Vite: JS, CSS, UI fonts; static files) | 0 | 0 | 0 | 0 | 934,478 |  |
+| lab web UI (Vite: JS, CSS, UI fonts; static files) | 0 | 0 | 0 | 0 | 966,571 |  |
 | C++ runtime (libstdc++, libgcc, unwinder) | 0 | 0 | 0 | 574,870 | 0 |  |
-| IFC read (STEP parser, scene of an IFC) | 2,854 | 140,508 | 106,618 | 125,124 | 0 | ifc_math ifc_read step |
+| IFC read (STEP parser, scene of an IFC) | 3,112 | 143,260 | 109,184 | 125,584 | 0 | ifc_math ifc_psets ifc_read step |
+| drawing D1-D5 (cut, plan, annotations, style, sheets, paper, SVG) | 7,825 | 123,670 | 629 | 115,342 | 0 | draw_annot draw_cut draw_plan draw_sheet draw_style draw_view paper paper_scene sheet_svg toggles |
 | IFC import (IFC -> model) | 1,568 | 125,802 | 0 | 109,475 | 0 | ifc_in |
-| drawing D1-D5 (cut, plan, annotations, style, sheets, paper, SVG) | 7,553 | 119,575 | 609 | 115,342 | 0 | draw_annot draw_cut draw_plan draw_sheet draw_style draw_view paper paper_scene sheet_svg toggles |
-| linker (headers, dynamic tables, eh_frame_hdr, padding) | 0 | 0 | 0 | 217,490 | 0 |  |
-| model (L1: model, commands, history, library, materials, annotations) | 3,828 | 64,655 | 50,025 | 125,544 | 0 | annot command history library material_class model |
-| session (calls, tools, platform, view-only) | 6,469 | 87,066 | 75,629 | 101,963 | 0 | calls capabilities platform session tool view_only |
-| verbs (edits by name, verb table) | 3,370 | 84,181 | 0 | 89,872 | 0 | verb_table verbs verbs_views |
+| linker (headers, dynamic tables, eh_frame_hdr, padding) | 0 | 0 | 0 | 222,119 | 0 |  |
+| session (calls, tools, platform, view-only) | 6,952 | 96,452 | 84,439 | 105,259 | 0 | calls capabilities platform session tool view_only |
+| model (L1: model, commands, history, library, materials, annotations) | 3,840 | 64,664 | 50,034 | 128,723 | 0 | annot command history library material_class model |
+| verbs (edits by name, verb table) | 3,411 | 88,406 | 0 | 89,872 | 0 | verb_table verbs verbs_views |
+| scene and mesh (triangulation, BMSH) | 4,644 | 89,002 | 67,479 | 76,084 | 0 | bvh earcut hlod mesh mesh_model meshcodec prism_cut scene scene_bmsh |
 | base (L0: arena, buffers, numbers, JSON, CBOR, ids, inflate) | 3,662 | 78,043 | 64,288 | 79,880 | 0 | arena buf cbor fmt guid inflate jobs json_r json_w math strtod |
-| scene and mesh (triangulation, BMSH) | 4,543 | 88,103 | 67,020 | 55,892 | 0 | bvh earcut hlod mesh mesh_model meshcodec prism_cut scene scene_bmsh |
-| views and visibility (2D views, ranges) | 3,141 | 61,164 | 44,652 | 67,224 | 0 | view view_effective view_range views visibility |
+| views and visibility (2D views, ranges) | 3,352 | 68,005 | 48,752 | 67,224 | 0 | view view_effective view_range views visibility |
 | history store (H1 read, H2a write) | 4,079 | 60,507 | 222 | 66,291 | 0 | diff merge repo repo_merge repo_write versions |
+| links and references | 3,854 | 63,058 | 50,777 | 50,871 | 0 | link_cache links links_dxf links_panel links_ref m1links ref_read |
 | IFC export (model -> IFC) | 1,324 | 36,896 | 0 | 35,972 | 0 | ifc_out ifc_out_grid |
-| links and references | 2,920 | 47,127 | 36,689 | 24,763 | 0 | link_cache links links_dxf links_panel links_ref ref_read |
 | PDF reader (L1) | 1,687 | 36,791 | 0 | 34,808 | 0 | pdf_in |
+| quantities and schedules | 2,234 | 43,662 | 6,394 | 24,032 | 0 | quantity schedules verbs_schedules |
+| .bimble file (read, write, view files) | 2,566 | 15,560 | 11,556 | 48,442 | 0 | file viewfile |
 | licence and README (static files) | 0 | 0 | 0 | 0 | 61,484 |  |
-| .bimble file (read, write, view files) | 2,414 | 14,285 | 10,389 | 46,298 | 0 | file viewfile |
-| merged string literals (wasm <internal>) | 0 | 54,646 | 32,744 | 0 | 0 |  |
-| PDF writer (D6) | 812 | 25,742 | 0 | 27,032 | 0 | pdf_out |
+| merged string literals (wasm <internal>) | 0 | 58,391 | 34,698 | 0 | 0 |  |
+| PDF writer (D6) | 812 | 25,740 | 0 | 27,032 | 0 | pdf_out |
 | georef and setting out (SETOUT: markers, north; WAVE1B: reference planes) | 1,408 | 25,396 | 13,875 | 27,040 | 0 | georef refplane refplanes setting_out |
-| files from the page (FS1: the dialog's queries, POST /stage; the settings file, recent files; SET1: the settings, About) | 1,741 | 19,854 | 986 | 30,905 | 0 | fs settings settings_file |
-| quantities and schedules | 1,444 | 26,415 | 6,377 | 24,032 | 0 | quantity schedules |
+| files from the page (FS1: the dialog's queries, POST /stage; the settings file, recent files; SET1: the settings, About) | 1,767 | 20,505 | 986 | 31,865 | 0 | fs settings settings_file |
 | DXF reader (L2) | 1,617 | 24,362 | 0 | 22,283 | 0 | dxf_in |
 | concrete tools (CONC1: footings, raft, openings, sleeves) | 1,133 | 22,686 | 6,350 | 22,889 | 0 | concrete verbs_concrete |
 | levels and grids | 948 | 17,793 | 5,172 | 21,128 | 0 | grid verbs_levels |
-| queries (model queries) | 1,022 | 15,069 | 12,832 | 15,444 | 0 | query |
-| host server (HTTP, static files, main, platform, fonts) | 2,516 | 0 | 0 | 28,428 | 0 | fonts main platform_native platform_win server static |
-| measure | 901 | 14,786 | 12,031 | 13,605 | 0 | measure |
-| materials (MAT1: verbs, library and page queries) | 592 | 9,353 | 4,566 | 10,552 | 0 | materials_page verbs_materials |
+| host server (HTTP, static files, main, platform, fonts) | 2,522 | 0 | 0 | 31,856 | 0 | fonts main platform_native platform_win server static |
+| queries (model queries) | 1,022 | 15,070 | 12,833 | 15,444 | 0 | query |
+| measure | 901 | 14,786 | 12,031 | 14,745 | 0 | measure |
+| DXF writer (DXF1) | 942 | 21,917 | 0 | 0 | 0 | dxf_out |
+| materials (MAT1: verbs, library and page queries) | 592 | 9,356 | 4,569 | 10,552 | 0 | materials_page verbs_materials |
 | relations | 588 | 8,637 | 6,604 | 9,364 | 0 | relation |
 | sheets (verbs and session) | 464 | 7,587 | 2,760 | 8,688 | 0 | sheets verbs_sheets |
 | wasm carrier | 1,100 | 15,409 | 9,980 | 0 | 0 | wasm_api wasm_stub |
@@ -49,32 +50,32 @@ map (rows sum to the stripped binary exactly; `linker` = what no object owns). L
 | command palette | 239 | 3,486 | 2,911 | 3,500 | 0 | palette |
 | views and sheets from the ribbon (VIEWSHEET: section tool, annotation types) | 154 | 1,409 | 0 | 1,640 | 0 | view_sheet |
 | C runtime start files | 0 | 0 | 0 | 484 | 0 |  |
-| **total** | 67,381 | 1,343,743 | 578,021 | 3,280,328 | 2,661,790 | |
+| **total** | 71,609 | 1,432,718 | 611,215 | 3,345,864 | 2,785,153 | |
 
 ## Totals and limits
 
 | artefact | bytes | gzip -9 | limit |
 |---|---:|---:|---|
-| ccore.wasm (editor) | 1,141,885 | 465,526 | none yet |
-| ccore-view.wasm (viewer, shipped, after wasm-opt) | 474,452 | 222,856 | 1,000,000 (ADR 0069 as amended; 47.4 % used) |
-| editor, sum of the objects (before wasm-opt) | 1,343,743 | | |
-| viewer, sum of the objects (before wasm-opt) | 578,021 | | |
-| bimble-ccore (native, stripped) | 3,280,328 | | none yet |
-| bimble-ccore-0.1.0-preview.3-aarch64-linux.tar.gz (release archive) | 2,729,221 | | none yet |
-| web build (build:ccore), 22 files | 2,633,310 | 1,131,279 | none yet |
+| ccore.wasm (editor) | 1,267,070 | 516,309 | none yet |
+| ccore-view.wasm (viewer, shipped, after wasm-opt) | 542,003 | 253,081 | 1,000,000 (ADR 0069 as amended; 54.2 % used) |
+| editor, sum of the objects (before wasm-opt) | 1,432,718 | | |
+| viewer, sum of the objects (before wasm-opt) | 611,215 | | |
+| bimble-ccore (native, stripped) | 3,345,864 | | none yet |
+| bimble-ccore-0.1.0-preview.4-aarch64-linux.tar.gz (release archive) | 2,814,488 | | none yet |
+| web build (build:ccore), 24 files | 2,944,605 | 1,250,818 | none yet |
 
-## Files of the release archive (bimble-ccore-0.1.0-preview.3-aarch64-linux)
+## Files of the release archive (bimble-ccore-0.1.0-preview.4-aarch64-linux)
 
 web/ccore/ appears only when web-ui/public/ccore/ held a copy (copy-ccore.mjs, the lab tests) at build time: the CI archive has none.
 
 | file | bytes | gzip -9 |
 |---|---:|---:|
-| bimble-ccore | 3,280,328 | 1,577,903 |
-| web/ccore/ccore.wasm | 1,141,885 | 465,526 |
-| web/assets/index-*.js | 521,644 | 147,085 |
-| web/ccore/ccore-view.wasm | 474,452 | 222,856 |
-| web/assets/index-*.css | 93,808 | 13,691 |
-| web/assets/glviewport-*.js | 71,398 | 25,969 |
+| bimble-ccore | 3,345,864 | 1,613,457 |
+| web/ccore/ccore.wasm | 1,192,199 | 486,918 |
+| web/assets/index-*.js | 536,274 | 151,230 |
+| web/ccore/ccore-view.wasm | 515,408 | 241,578 |
+| web/assets/index-*.css | 94,656 | 13,818 |
+| web/assets/glviewport-*.js | 87,842 | 31,428 |
 | web/ccore/frame.json | 49,491 | 3,200 |
 | web/assets/source-sans-3-latin-ext-400-normal-*.woff2 | 33,024 | 33,057 |
 | web/assets/source-sans-3-latin-ext-600-normal-*.woff2 | 32,704 | 32,732 |
@@ -91,7 +92,7 @@ web/ccore/ appears only when web-ui/public/ccore/ held a copy (copy-ccore.mjs, t
 | licences/Ryu-LICENSE-Apache2 | 11,357 | 3,968 |
 | web/assets/dm-mono-latin-ext-500-normal-*.woff2 | 9,616 | 9,639 |
 | web/assets/dm-mono-latin-ext-400-normal-*.woff2 | 9,552 | 9,575 |
-| web/assets/ccore-*.js | 8,057 | 3,001 |
+| web/assets/ccore-*.js | 8,228 | 3,040 |
 | web/assets/sora-latin-ext-500-normal-*.woff2 | 7,476 | 7,499 |
 | web/assets/sora-latin-ext-700-normal-*.woff2 | 7,448 | 7,471 |
 | licences/BLAKE3-LICENSE_CC0 | 7,048 | 2,826 |
@@ -103,22 +104,23 @@ web/ccore/ appears only when web-ui/public/ccore/ held a copy (copy-ccore.mjs, t
 | LICENSE | 1,072 | 650 |
 | licences/earcutr-LICENSE | 771 | 495 |
 | README.txt | 666 | 436 |
-| web/index.html | 379 | 265 |
-| **total** | 5,942,118 | 2,723,332 |
+| web/index.html | 379 | 266 |
+| **total** | 6,131,017 | 2,808,771 |
 
 ## Files of the web build (npm run build:ccore)
 
 | file | bytes | gzip -9 |
 |---|---:|---:|
-| ccore/ccore.wasm | 1,141,885 | 465,526 |
-| assets/index-*.js | 536,781 | 151,368 |
-| ccore/ccore-view.wasm | 474,452 | 222,856 |
-| assets/index-*.css | 94,572 | 13,814 |
-| assets/glviewport-*.js | 87,842 | 31,428 |
+| ccore/ccore.wasm | 1,267,070 | 516,309 |
+| assets/index-*.js | 594,993 | 168,535 |
+| ccore/ccore-view.wasm | 542,003 | 253,081 |
+| assets/glviewport-*.js | 109,079 | 39,135 |
+| assets/index-*.css | 100,365 | 14,589 |
 | ccore/frame.json | 49,491 | 3,200 |
 | assets/source-sans-3-latin-ext-400-normal-*.woff2 | 33,024 | 33,057 |
 | assets/source-sans-3-latin-ext-600-normal-*.woff2 | 32,704 | 32,732 |
 | assets/source-sans-3-latin-ext-400-italic-*.woff2 | 32,208 | 32,236 |
+| assets/render-*.js | 30,404 | 11,338 |
 | assets/source-sans-3-latin-400-italic-*.woff2 | 15,808 | 15,831 |
 | assets/source-sans-3-latin-400-normal-*.woff2 | 15,696 | 15,719 |
 | assets/source-sans-3-latin-600-normal-*.woff2 | 15,668 | 15,691 |
@@ -128,9 +130,10 @@ web/ccore/ appears only when web-ui/public/ccore/ held a copy (copy-ccore.mjs, t
 | assets/dm-mono-latin-400-normal-*.woff2 | 14,820 | 14,843 |
 | assets/dm-mono-latin-ext-500-normal-*.woff2 | 9,616 | 9,639 |
 | assets/dm-mono-latin-ext-400-normal-*.woff2 | 9,552 | 9,575 |
-| assets/ccore-*.js | 8,228 | 3,038 |
+| assets/ccore-*.js | 8,268 | 3,052 |
 | assets/sora-latin-ext-500-normal-*.woff2 | 7,476 | 7,499 |
 | assets/sora-latin-ext-700-normal-*.woff2 | 7,448 | 7,471 |
-| index.html | 867 | 517 |
-| **total** | 2,633,310 | 1,131,279 |
+| assets/device-*.js | 2,873 | 1,529 |
+| index.html | 867 | 518 |
+| **total** | 2,944,605 | 1,250,818 |
 

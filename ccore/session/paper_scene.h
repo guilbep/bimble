@@ -33,6 +33,11 @@ typedef struct {
     cc_model own_model; /* the made model (arena), when model == &own_model */
     cc_scene own_scene; /* the merged scene, when scene == &own_scene */
     int made_model, made_scene;
+    /* DXF1: where each drawn link's elements start (model_index), in order, and its name (the
+     * session's link name, borrowed): the DXF export's layer prefix. */
+    size_t *link_first;
+    const char **link_name;
+    size_t nlinks;
 } cc_paper_src;
 
 /* `sc`: the scene shown (calls.c scene_now), `view`: the drawn view (its hidden_links) or NULL.

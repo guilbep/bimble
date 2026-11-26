@@ -85,7 +85,7 @@ static int measures_txt(Buf *b, const cc_scene *s, const cc_viewfile_meta *mt) {
 
 /* The two schedules golden_schedules adds (ccore_golden.rs). */
 static cc_str EXTRA_CLS[] = {{"IfcColumn", 9}, {"ifcbeam", 7}};
-static uint8_t ALL_FIELDS[CC_FIELD_COUNT];
+static uint8_t ALL_FIELDS[CC_FIELD_RUST]; /* QTY1: Rust's 13 (the golden) */
 static uint8_t SUMS[] = {CC_FIELD_VOLUME, CC_FIELD_AREA, CC_FIELD_MASS, CC_FIELD_LENGTH};
 
 static void schedules_of(const char *dirname, const cc_scene *s, const cc_viewfile_meta *mt, const cc_schedule *stored,
@@ -93,9 +93,9 @@ static void schedules_of(const char *dirname, const cc_scene *s, const cc_viewfi
     const cc_schedule *eff[64];
     size_t ne = 0;
     if (builtins) ne = cc_schedules_effective(stored, nstored, eff, 62);
-    for (int i = 0; i < CC_FIELD_COUNT; i++) ALL_FIELDS[i] = (uint8_t)i;
-    cc_schedule every = {{"Every field", 11}, {NULL, 0}, 0, 0, ALL_FIELDS, CC_FIELD_COUNT, 0, 1};
-    cc_schedule sums = {{"Sums only", 9}, {EXTRA_CLS, 2}, 0, 0, SUMS, 4, 1, 0};
+    for (int i = 0; i < CC_FIELD_RUST; i++) ALL_FIELDS[i] = (uint8_t)i;
+    cc_schedule every = {{"Every field", 11}, {NULL, 0}, 0, 0, ALL_FIELDS, CC_FIELD_RUST, 0, 1, {NULL, 0}, 0, 0, 0, {NULL, 0}, {NULL, 0}, 0, {NULL, 0}, 0};
+    cc_schedule sums = {{"Sums only", 9}, {EXTRA_CLS, 2}, 0, 0, SUMS, 4, 1, 0, {NULL, 0}, 0, 0, 0, {NULL, 0}, {NULL, 0}, 0, {NULL, 0}, 0};
     eff[ne++] = &every;
     eff[ne++] = &sums;
     Buf b;
@@ -244,8 +244,8 @@ static void definitions(void) {
     check_true("ten built-in schedules", nb == 10 && b[9].classes.n == 0);
     uint8_t f[] = {CC_FIELD_NAME};
     cc_schedule stored[2] = {
-        {{"steel BEAMS", 11}, {NULL, 0}, 0, 0, f, 1, 0, 0},
-        {{"Rebar check", 11}, {NULL, 0}, 0, 0, f, 1, 0, 0},
+        {{"steel BEAMS", 11}, {NULL, 0}, 0, 0, f, 1, 0, 0, {NULL, 0}, 0, 0, 0, {NULL, 0}, {NULL, 0}, 0, {NULL, 0}, 0},
+        {{"Rebar check", 11}, {NULL, 0}, 0, 0, f, 1, 0, 0, {NULL, 0}, 0, 0, 0, {NULL, 0}, {NULL, 0}, 0, {NULL, 0}, 0},
     };
     const cc_schedule *out[16];
     size_t n = cc_schedules_effective(stored, 2, out, 16);
@@ -282,7 +282,7 @@ static void empty_and_order(void) {
             cc_sched_table_free(&t);
             /* Natural order: P1.2 before P1.10 (numbers, not text). */
             uint8_t f[] = {CC_FIELD_NAME};
-            cc_schedule names = {{"n", 1}, {NULL, 0}, 0, 0, f, 1, 0, 0};
+            cc_schedule names = {{"n", 1}, {NULL, 0}, 0, 0, f, 1, 0, 0, {NULL, 0}, 0, 0, 0, {NULL, 0}, {NULL, 0}, 0, {NULL, 0}, 0};
             check_true("names: table", cc_schedule_table(&t, &s, &mt, &names, &err) == 0);
             int sorted = t.ngroups == 1 && t.groups[0].nrows == s.nelements && !t.total;
             check_true("names: one group, no total", sorted);

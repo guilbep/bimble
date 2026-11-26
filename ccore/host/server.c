@@ -581,6 +581,12 @@ static void handle_one(Conn *c, int *again) {
          * per call, 202 with "read total" until built, then 200 with the BPRX bytes */
         Str prx;
         uint64_t budget = 0;
+        /* LNK3D (ADR 0078 amendment 3): ?link_proxies=k, link k's proxies baked in its cache (mesh.h cc_link_proxies) */
+        if (query_param(query, "link_proxies", &prx) && parse_u64(prx, &budget)) {
+            int st = cc_link_proxies(cfg->session, budget, &mp, &mn);
+            respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, NULL, mp, mn, keep);
+            goto mesh_done;
+        }
         if (query_param(query, "proxies", &prx) && parse_u64(prx, &budget)) {
             int st = cc_mesh_proxies(cfg->session, budget, &mp, &mn, &rev, &ms);
             if (st == 200) fprintf(stderr, "bimble-ccore: proxies rev %u built in %.3f ms, %zu bytes\n", (unsigned)rev, ms, mn);

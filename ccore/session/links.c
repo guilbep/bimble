@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "links.h"
+#include "m1links.h"
 #include "link_cache.h" /* LINKF */
 #include "jobs.h"       /* LINKF: cc_atomic_load */
 #include "ifc_math.h"   /* LINKF: cc_sin, cc_cos */
@@ -23,6 +24,7 @@ static void link_drop_data(cc_link *k) {
     if (k->model) cc_scene_free(&k->scene), cc_model_free(k->model), free(k->model), k->model = NULL;
     memset(&k->scene, 0, sizeof k->scene);
     if (k->placed) cc_scene_free(&k->pscene), k->placed = 0; /* LINKF */
+    free(k->psets), k->psets = NULL, k->npsets = 0; /* M1LINKS */
     k->kind = 0;
 }
 
@@ -95,7 +97,7 @@ int cc_links_add(cc_session *s, const char *path, cc_error *err) {
     }
     const cc_scene *sc = cc_link_scene(&k);
     cc_log(s->pf, "bimble-ccore: linked %s: %zu elements", path, sc->nelements); /* lib.rs:1484 */
-    s->links_gen++;
+    s->links_gen++, s->links_mesh_gen++; /* LNK3D: the geometry changed */
     return 0;
 }
 
@@ -116,7 +118,7 @@ int cc_links_reload(cc_session *s, int i, cc_error *err) {
     keep_settings(&k, &s->links[i]); /* LINKF */
     cc_link_free(&s->links[i]);
     s->links[i] = k;
-    s->links_gen++;
+    s->links_gen++, s->links_mesh_gen++;
     return 0;
 }
 
@@ -127,7 +129,7 @@ void cc_links_remove(cc_session *s, int i) { /* lib.rs:1535 unlink */
     memmove(&s->links[i], &s->links[i + 1], (s->nlinks - (size_t)i - 1) * sizeof *s->links);
     s->nlinks--;
     s->link_sel = -1;
-    s->links_gen++;
+    s->links_gen++, s->links_mesh_gen++;
 }
 
 void cc_links_set_visible(cc_session *s, int i, int visible) {
@@ -141,10 +143,11 @@ void cc_links_clear(cc_session *s) {
     free(s->links_saved), s->links_saved = NULL, s->links_saved_n = 0; /* LNK1 */
     if (s->link_job) cc_atomic_store(&s->link_job->pg.cancel, 1), s->link_job_uid = 0; /* LINKF */
     cc_links_undo_free(s);
-    if (s->nlinks) s->links_gen++;
+    if (s->nlinks) s->links_gen++, s->links_mesh_gen++;
     for (size_t i = 0; i < s->nlinks; i++) cc_link_free(&s->links[i]);
     s->nlinks = 0;
     s->link_sel = -1;
+    cc_notes_clear(s); /* M1LINKS: the notes go with the links */
 }
 
 void cc_links_json(const cc_session *s, JsonW *w) { /* state.rs:199-216, json! sorted */
@@ -163,6 +166,29 @@ void cc_links_json(const cc_session *s, JsonW *w) { /* state.rs:199-216, json! s
         jw_key(w, "kind"), jw_str(w, ext);
         jw_key(w, "name"), jw_str(w, k->name);
         jw_key(w, "visible"), jw_bool(w, k->visible);
+        jw_obj_end(w);
+    }
+    jw_arr_end(w);
+}
+
+/* LNK3D: query link_draw (links.h). */
+void cc_links_draw_json(cc_session *s, JsonW *w) {
+    jw_arr_begin(w);
+    for (size_t i = 0; i < s->nlinks; i++) {
+        const cc_link *k = &s->links[i];
+        double c, sn, t[3], o[3];
+        cc_link_placement(s, k, &c, &sn, t);
+        const double *lo = k->kind ? cc_link_raw_scene(k)->origin : (const double[3]){0, 0, 0};
+        o[0] = c * lo[0] - sn * lo[1] + t[0], o[1] = sn * lo[0] + c * lo[1] + t[1], o[2] = lo[2] + t[2];
+        jw_obj_begin(w);
+        jw_key(w, "colour"), jw_i64(w, k->colour);
+        jw_key(w, "cos"), jw_f64(w, c + 0.0);
+        jw_key(w, "name"), jw_str(w, k->name);
+        jw_key(w, "origin"), jw_arr_begin(w);
+        for (int q = 0; q < 3; q++) jw_f64(w, o[q] + 0.0); /* + 0.0: never -0.0 */
+        jw_arr_end(w);
+        jw_key(w, "sin"), jw_f64(w, sn + 0.0);
+        jw_key(w, "visible"), jw_bool(w, k->visible && k->kind);
         jw_obj_end(w);
     }
     jw_arr_end(w);
@@ -269,7 +295,14 @@ int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char 
     }
     char t[22];
     cc_link_id(k, (size_t)i, t);
-    return ro_element_json(sc, (size_t)i, cls, nm, storey, material, t, k->name, out);
+    size_t at = out->len;
+    if (ro_element_json(sc, (size_t)i, cls, nm, storey, material, t, k->name, out)) return -1;
+    if (out->len > at && out->p[out->len - 1] == '}') { /* M1LINKS: its property sets (m1links.h) */
+        out->len--;
+        cc_link_psets_json(s, k, (size_t)i, out);
+        buf_putc(out, '}');
+    }
+    return out->oom ? -1 : 0;
 }
 
 int cc_scene_element_json(cc_session *s, const char *id, size_t idn, Buf *out) {
@@ -518,6 +551,7 @@ static void sig(const cc_session *s, Buf *b) {
         buf_append(b, &k->rotation_deg, sizeof k->rotation_deg), buf_putc(b, k->pinned ? 'p' : 'u');
         buf_append(b, &k->colour, sizeof k->colour), buf_putc(b, '\n');
     }
+    cc_notes_sig(s, b); /* M1LINKS: a note added or removed is an unsaved change */
 }
 
 void cc_links_saved(cc_session *s) {
@@ -561,7 +595,7 @@ static int add_missing(cc_session *s, const char *path, int visible) {
     k.visible = visible;
     k.state = CC_LS_MISSING, k.uid = ++s->link_uid_next, k.pinned = 1, k.colour = -1; /* LINKF */
     s->links[s->nlinks++] = k;
-    s->links_gen++;
+    s->links_gen++, s->links_mesh_gen++;
     return 0;
 }
 
@@ -621,6 +655,7 @@ int cc_links_from_model(cc_session *s, const char *path) {
         }
         free(abs), free(rel);
     }
+    if (cc_notes_from_model(s)) return -1; /* M1LINKS: the notes the file keeps on linked elements */
     cc_links_saved(s);
     return 0;
 }
@@ -655,6 +690,7 @@ int cc_links_to_model(cc_session *s, const char *path) {
         l[i].origin = k->origin, l[i].rotation_deg = k->rotation_deg, l[i].unpinned = !k->pinned;
         l[i].has_colour = k->colour >= 0, l[i].colour = k->colour >= 0 ? k->colour : 0;
         memcpy(l[i].move_mm, k->move_mm, sizeof l[i].move_mm);
+        if (cc_notes_to_model(s, &m->arena, &l[i], k->name)) return -1; /* M1LINKS */
     }
     m->links = l, m->nlinks = s->nlinks;
     return 0;
@@ -672,7 +708,7 @@ int cc_links_locate(cc_session *s, int i, const char *path, cc_error *err) {
     keep_settings(&k, &s->links[i]); /* LINKF */
     cc_link_free(&s->links[i]);
     s->links[i] = k;
-    s->links_gen++;
+    s->links_gen++, s->links_mesh_gen++;
     cc_log(s->pf, "bimble-ccore: linked %s: %zu elements", path, cc_link_scene(&k)->nelements);
     return 0;
 }
@@ -742,6 +778,7 @@ static void take(cc_session *s, cc_link *k, cc_link_job *j) {
         }
         k->vf = j->vf, j->vf = NULL, k->kind = CC_LINK_VIEW;
     } else k->ifc = j->ifc, j->ifc = NULL, k->kind = CC_LINK_IFC;
+    k->psets = j->psets, k->npsets = j->npsets, j->psets = NULL, j->npsets = 0; /* M1LINKS: a small IFC's */
     k->state = CC_LS_READY;
     link_geo(k); /* LINKF: where the file says it is */
     k->cache = dup_z(j->cache), k->log = dup_z(j->log), k->msg = dup_z(j->note);
@@ -796,7 +833,7 @@ int cc_links_tick(cc_session *s) {
         if (s->link_job && cc_link_job_done(s->link_job)) /* ran here (no thread): take it now */
             return cc_links_tick(s), 1;
     }
-    if (ch) s->links_gen++;
+    if (ch) s->links_gen++, s->links_mesh_gen++;
     return ch;
 }
 
@@ -864,7 +901,7 @@ static int links_add_queued(cc_session *s, const char *path, int *at, cc_error *
             k.uid = ++s->link_uid_next;
             s->links[s->nlinks++] = k;
         }
-        s->links_gen++;
+        s->links_gen++, s->links_mesh_gen++;
         return 0;
     }
     /* queued: the row now, the scene when its turn came */
@@ -903,7 +940,7 @@ static int links_add_queued(cc_session *s, const char *path, int *at, cc_error *
     const char *sl = cc_path_last_sep(k->path);
     k->name = sl ? sl + 1 : k->path;
     k->state = CC_LS_QUEUED, k->progress = 0, k->bytes = bytes;
-    s->links_gen++;
+    s->links_gen++, s->links_mesh_gen++;
     cc_links_tick(s); /* starts it when nothing runs */
     return 0;
 }
@@ -912,7 +949,7 @@ void cc_links_cancel(cc_session *s, int i) {
     cc_link *k = &s->links[i];
     if (k->state == CC_LS_QUEUED) {
         k->state = CC_LS_FAILED, free(k->msg), k->msg = dup_z("cancelled");
-        s->links_gen++;
+        s->links_gen++, s->links_mesh_gen++;
     } else if (k->state == CC_LS_CONVERTING && s->link_job && s->link_job_uid == k->uid)
         cc_atomic_store(&s->link_job->pg.cancel, 1); /* the job ends "cancelled" (a batch later) */
 }
@@ -925,7 +962,7 @@ void cc_links_unload(cc_session *s, int i) {
     if (s->link_sel == i) s->link_sel = -1;
     link_drop_data(k);
     k->state = CC_LS_UNLOADED;
-    s->links_gen++;
+    s->links_gen++, s->links_mesh_gen++;
 }
 
 int cc_links_load(cc_session *s, int i, cc_error *err) {
@@ -997,7 +1034,7 @@ int cc_links_undo_step(cc_session *s, int undo) {
     if (push_entry(undo ? &s->links_redo : &s->links_undo, undo ? &s->nlinks_redo : &s->nlinks_undo,
                    undo ? &s->caplinks_redo : &s->caplinks_undo, e))
         undo_entry_free(&e);
-    s->links_gen++;
+    s->links_gen++, s->links_mesh_gen++;
     return 1;
 }
 

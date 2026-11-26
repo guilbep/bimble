@@ -7,6 +7,7 @@
 import { computed, onUnmounted, reactive, ref, watch } from "vue";
 import { t } from "../i18n";
 import { state } from "../bimble";
+import { linkDetail } from "../gl/linkmem"; // LNK3D (D): detail loaded / proxies only
 import { send } from "./send";
 import { enabled, linkFolder, linkLog, linksTick, linkNew, linksBusy, linksError, linksPanel, modelOp, modelReload, modelSet, refOp, refReload, reloadAll, type PanelModel, type PanelReference } from "./links";
 
@@ -78,6 +79,7 @@ const anyReady = computed(() => rows.value.models.some((m) => m.state === "ready
       </button>
       <span class="nm" :title="m.path">{{ m.name }}</span>
       <span class="k" data-bb="link-state">{{ stateText(m) }}</span>
+      <span v-if="linkDetail[m.name] !== undefined" class="k" data-bb="link-detail" :data-detail="linkDetail[m.name] ? '1' : '0'" :title="t('links.detailTip')">{{ linkDetail[m.name] ? t('links.detailLoaded') : t('links.proxiesOnly') }}</span>
       <button v-if="m.missing" type="button" data-bb="link-locate" :title="t('links.locateTip')" @click="modelReload(m, true)">{{ t('links.locate') }}</button>
       <button v-else-if="busy(m)" type="button" data-bb="link-cancel" :title="t('links.cancelTip')" @click="modelSet('cancel', m.name)">{{ t('links.cancel') }}</button>
       <template v-else>

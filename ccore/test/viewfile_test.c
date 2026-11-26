@@ -725,6 +725,50 @@ static void link_cache_source(void) {
     free(raw);
 }
 
+/* LNK3D (ADR 0078 amendment 3): a link cache's section HLOD (the baked proxies, BPRX), kept on disk as PROP:
+ * when only HLOD and PROP follow it, its place in the file is kept (has_hlod) and the scene reads as
+ * without it; elsewhere it is skipped; cut, or longer than the file: an error, never a crash. Its bytes
+ * are checked when served (hlod_test: cc_hlod_bprx_check). */
+static void link_cache_hlod(void) {
+    size_t wn;
+    char *raw = slurp(golden, "view/frame.bimbleview.raw", &wn);
+    static const char bprx[] = "BPRX-not-checked-here";
+    Buf b;
+    buf_init(&b);
+    buf_append(&b, raw, wn);
+    check_true("HLOD appended", cc_viewfile_append_hlod(&b, bprx, sizeof bprx - 1) == 0);
+    cc_viewfile v, w;
+    cc_error err;
+    int rc = cc_viewfile_read((const uint8_t *)b.p, b.len, &v, &err);
+    int rw = cc_viewfile_read((const uint8_t *)raw, wn, &w, &err);
+    check_true("a cache with HLOD last: its place kept, the scene as without it",
+               rc == 0 && rw == 0 && v.has_hlod && v.hlod_off == wn + 12 && v.hlod_len == sizeof bprx - 1 &&
+                   !memcmp(b.p + v.hlod_off, bprx, v.hlod_len) && v.nelements == w.nelements && v.nshapes == w.nshapes && !w.has_hlod);
+    if (!rc) cc_viewfile_free(&v);
+    if (!rw) cc_viewfile_free(&w);
+    /* HLOD then SRCE (not only lazy sections after it): read in memory, skipped, no place kept */
+    Buf c;
+    buf_init(&c);
+    buf_append(&c, raw, wn);
+    cc_viewfile_append_hlod(&c, bprx, sizeof bprx - 1);
+    cc_viewfile_append_source(&c, "{}", 2);
+    rc = cc_viewfile_read((const uint8_t *)c.p, c.len, &v, &err);
+    check_true("HLOD before another section: skipped, no place kept", rc == 0 && !v.has_hlod && v.has_source);
+    if (!rc) cc_viewfile_free(&v);
+    int all = 1; /* every prefix that cuts into HLOD: an error */
+    for (size_t n = wn + 1; n < b.len; n++)
+        if (read_ok(b.p, n)) all = 0;
+    check_true("every cut HLOD: an error", all);
+    /* a length past the end of the file */
+    buf_clear(&c);
+    buf_append(&c, b.p, b.len);
+    c.p[wn + 4] = (char)0xff, c.p[wn + 5] = (char)0xff;
+    check_true("an HLOD longer than the file: an error, no crash", !read_ok(c.p, c.len));
+    buf_free(&c);
+    buf_free(&b);
+    free(raw);
+}
+
 int main(int argc, char **argv) {
     static char dir[4096];
     snprintf(dir, sizeof dir, "%s/..", argc > 1 ? argv[1] : "ccore/golden/floats");
@@ -735,5 +779,6 @@ int main(int argc, char **argv) {
     share_read_only();
     large();
     link_cache_source(); /* LINKF */
+    link_cache_hlod();   /* LNK3D */
     return report("viewfile");
 }

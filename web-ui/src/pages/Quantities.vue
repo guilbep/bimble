@@ -21,8 +21,9 @@ export const hint = () => {
 // Groups carry `ids` (one GlobalId or null per row): a row click selects, the selected element's row is pink
 // (`tr.sl`). Group and filter change the schedule (`set_schedule`, undoable); Export CSV downloads
 // `schedule_csv`. Columns has no picker in the reference: drawn disabled.
-import { computed, ref } from "vue";
-import { materials, scheduleCsv, scheduleList, scheduleRows, select, setSchedule, state, type SchedulePatch, type ScheduleDef, type ScheduleTable } from "../bimble";
+import { computed, ref, watch } from "vue";
+import { materials, scheduleCsvAs, scheduleEdit, scheduleList, scheduleWindow, select, setSchedule, state, type SchedulePatch, type ScheduleDef, type ScheduleTable } from "../bimble";
+import { currentDialog } from "../dialogs"; // QTY1: Columns… opens the dialog
 import { t } from "../i18n";
 import { pickedSchedule } from "./quantitiesPick";
 import { openingRows, selectedOpening, type OpeningRow } from "../bimble"; // WAVE1B (B1)
@@ -36,11 +37,33 @@ const def = computed<ScheduleDef | null>(() => {
   return all.find((d) => d.name === (pickedSchedule.value ?? "All elements")) ?? all.find((d) => d.name === "All elements") ?? all[0] ?? null; // DEAD1: the palette's pick
 });
 type Table = ScheduleTable;
+// QTY1: a page of rows (PAGE at a time; the core builds the table once per revision, a page is a window of it).
+const PAGE = 200;
+const openColumns = () => { if (def.value) pickedSchedule.value = def.value.name; currentDialog.value = "quantity-columns"; };
+const offset = ref(0);
+watch(() => def.value?.name, () => { offset.value = 0; });
 const table = computed<Table | null>(() => {
   void state.value.rev;
   if (!def.value) return null;
-  try { return scheduleRows(def.value.name); } catch { return null; }
+  try { return scheduleWindow(def.value.name, offset.value, PAGE); } catch { return null; }
 });
+const rowCount = computed(() => table.value?.row_count ?? 0);
+const allLists = computed(() => { void state.value.rev; return (scheduleList() as ScheduleDef[]).map((d) => d.name); });
+const pick = (name: string) => { pickedSchedule.value = name; };
+// Sort by a column: its field (the list's own order of fields, then its properties), stored in the list (one undo step).
+const colIds = computed(() => [...((def.value?.fields as string[] | undefined) ?? []), ...((def.value?.properties as string[] | undefined) ?? [])]);
+const sortOf = computed(() => def.value?.sort as { column: string; descending: boolean } | undefined);
+function sortBy(i: number): void {
+  const id = colIds.value[i];
+  if (!def.value || !id) return;
+  const s = sortOf.value;
+  err.value = scheduleEdit(def.value.name, { sort: { column: id, descending: s?.column === id ? !s.descending : false } }) ?? "";
+}
+const mark = (i: number) => { const s = sortOf.value; return s && s.column === colIds.value[i] ? (s.descending ? " ↓" : " ↑") : ""; };
+// A group's label: a material's line, a level within a material, a level, or a material (not by level).
+const groupLabel = (g: Table["groups"][number]) => g.head || (g.material !== undefined && !g.level)
+  ? (g.material ? t('qty1.material', { name: g.material }) : t('qty1.noMaterial'))
+  : t('quantities.storey', { name: g.level });
 // ---- WAVE1B (B1): the openings and sleeves, a row each (a sleeve's volume: the exact cylinder) ----
 const opRows = computed<OpeningRow[]>(() => { void state.value.rev; return state.value.editable === false ? [] : openingRows(); });
 const opSize = (r: OpeningRow) => r.kind === "sleeve" ? `Ø ${r.diameter ?? 0}` : r.kind === "opening" ? `${r.width ?? 0} × ${r.height ?? r.length ?? 0}` : "—";
@@ -51,11 +74,12 @@ const fdRows = computed<FoundationRow[]>(() => { void state.value.rev; return st
 const fdTotal = computed(() => fdRows.value.reduce((s, r) => s + r.volume_m3, 0));
 // ---- end WAVE1B ----
 const shown = computed(() => table.value?.groups.reduce((n, g) => n + g.rows.length, 0) ?? 0);
+const from = computed(() => (shown.value ? offset.value + 1 : 0));
 
 const tr = (key: string, raw: string) => { const s = t(key); return s === key ? raw : s; };
 const head = (c: string) => tr(`quantities.col.${c}`, c);
 // A column with a unit holds numbers: right aligned, DM Mono. Class, material and GlobalId: DM Mono.
-const num = (c: string) => c.endsWith(")");
+const num = (c: string) => c.endsWith(")") || c === "Count"; // QTY1: the count
 const cls = (c = "") => (num(c) ? "r mono" : ["IFC class", "Material", "GlobalId"].includes(c) ? "mono" : "");
 // A subtotal or total line: its label spans the cells before the first value Rust wrote.
 const span = (cells: string[]) => Math.max(1, cells.findIndex((c) => c !== "") < 0 ? cells.length : cells.findIndex((c) => c !== ""));
@@ -65,10 +89,11 @@ const families = computed(() => [...new Set([...materials.value.map((m) => m.cat
 const err = ref("");
 const change = (patch: SchedulePatch) => { if (def.value) err.value = setSchedule(def.value.name, patch) ?? ""; };
 function exportCsv() {
-  if (!def.value) return;
+  if (!def.value || !table.value) return;
   try {
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([scheduleCsv(def.value.name)], { type: "text/csv" }));
+    // QTY1: the headers the table shows (an audit found Level / Storey: one source now, the table's)
+    a.href = URL.createObjectURL(new Blob([scheduleCsvAs(def.value.name, table.value.columns.map(head))], { type: "text/csv" }));
     a.download = `${def.value.name}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
@@ -81,6 +106,9 @@ function exportCsv() {
   <div class="qt" data-bb="quantities">
     <div class="head">
       <h2 style="font-size:20px" data-bb="quantities-title">{{ table?.name ?? def?.name ?? '' }}</h2>
+      <select class="sel-inp" style="width:190px" :value="def?.name ?? ''" :aria-label="t('qty1.pick')" data-bb="quantities-pick" @change="pick(($event.target as HTMLSelectElement).value)">
+        <option v-for="n in allLists" :key="n" :value="n">{{ n }}</option>
+      </select>
       <span style="flex:1" />
       <select class="sel-inp" style="width:170px" :disabled="!def" :value="def?.group_by_level ? 'level' : 'none'" :aria-label="t('quantities.group', { by: '' }).replace(/[\s:]+$/, '')" data-bb="quantities-group" @change="change({ group_by_level: ($event.target as HTMLSelectElement).value === 'level' })">
         <option v-for="b in ['none', 'level']" :key="b" :value="b">{{ t('quantities.group', { by: t(b === 'level' ? 'quantities.group.level' : 'quantities.group.none') }) }}</option>
@@ -89,15 +117,15 @@ function exportCsv() {
         <option value="">{{ t('quantities.filter', { family: t('quantities.family.all') }) }}</option>
         <option v-for="f in families" :key="f" :value="f">{{ t('quantities.filter', { family: famLabel(f) }) }}</option>
       </select>
-      <button class="btn s" type="button" disabled data-missing="UI: a column picker (not in the reference); set_schedule takes columns" data-bb="quantities-columns">{{ t('quantities.columns') }}</button>
+      <button class="btn s" type="button" :disabled="!def || state.editable === false" data-bb="quantities-columns" @click="openColumns">{{ t('quantities.columns') }}</button>
       <button class="btn p" type="button" :disabled="!table" data-bb="quantities-export" @click="exportCsv">{{ t('quantities.exportCsv') }}</button>
     </div>
     <table v-if="table" class="t" data-bb="quantities-table">
-      <thead><tr><th v-for="c in table.columns" :key="c" :class="{ r: num(c) }">{{ head(c) }}</th></tr></thead>
+      <thead><tr><th v-for="(c, i) in table.columns" :key="c" :class="{ r: num(c) }" :aria-sort="mark(i) ? (mark(i).includes('↓') ? 'descending' : 'ascending') : undefined"><button type="button" class="sort" :title="t('qty1.sortTip')" :disabled="state.editable === false" :data-bb="`quantities-sort-${i}`" @click="sortBy(i)">{{ head(c) }}{{ mark(i) }}</button></th></tr></thead>
       <tbody>
         <template v-for="(g, gi) in table.groups" :key="gi">
-          <tr v-if="g.level" class="g">
-            <td :colspan="span(g.subtotal)">{{ t('quantities.storey', { name: g.level }) }}</td>
+          <tr v-if="g.level || g.material !== undefined" class="g" :class="{ m: g.head || (g.material !== undefined && !g.level), sub: g.material !== undefined && !!g.level }" data-bb="quantities-group">
+            <td :colspan="span(g.subtotal)">{{ groupLabel(g) }}</td>
             <td v-for="(c, i) in g.subtotal.slice(span(g.subtotal))" :key="i" :class="cls(table.columns[i + span(g.subtotal)])">{{ c }}</td>
           </tr>
           <tr v-for="(r, ri) in g.rows" :key="ri" :class="{ sl: !!g.ids?.[ri] && state.selection.includes(g.ids[ri]!) }" @click="g.ids?.[ri] && select([g.ids[ri]!])">
@@ -114,7 +142,14 @@ function exportCsv() {
     </table>
     <p v-else class="note" style="margin:0">{{ t('quantities.empty') }}</p>
     <p v-if="err" class="note" style="margin:0" role="alert" data-bb="quantities-error">{{ err }}</p>
-    <p v-if="table?.truncated" class="note" style="margin:0" data-bb="quantities-truncated">{{ t('quantities.truncated', { shown, count: table.count }) }}</p>
+    <!-- QTY1: every row, a page of PAGE at a time (was "50 of 72 rows shown" with no way to the rest) -->
+    <div v-if="table && rowCount > PAGE" class="head" data-bb="quantities-paging">
+      <button class="btn s" type="button" :disabled="offset === 0" data-bb="quantities-prev" @click="offset = Math.max(0, offset - PAGE)">{{ t('qty1.prev') }}</button>
+      <span class="note" data-bb="quantities-rows">{{ t('qty1.rows', { from, to: offset + shown, count: rowCount }) }}</span>
+      <button class="btn s" type="button" :disabled="offset + PAGE >= rowCount" data-bb="quantities-next" @click="offset = offset + PAGE">{{ t('qty1.next') }}</button>
+    </div>
+    <p v-else-if="table && rowCount" class="note" style="margin:0" data-bb="quantities-rows">{{ t('qty1.rows', { from, to: offset + shown, count: rowCount }) }}</p>
+    <p v-if="table && def?.summary" class="note" style="margin:0" data-bb="quantities-summary">{{ t('qty1.summaryNote', { count: table.count }) }}</p>
     <!-- WAVE1B (B5): foundations (footings and rafts) -->
     <template v-if="fdRows.length">
       <h3 style="font-family:'Sora',sans-serif;font-size:16px;margin:8px 0 0">{{ t('quantities.fd.title') }}</h3>
@@ -168,5 +203,10 @@ table.t th { text-align: left; font-weight: 600; color: var(--bb-stone); border-
 table.t td { border-bottom: 1px solid var(--bb-sunk); padding: 5px 8px; vertical-align: middle; }
 table.t tr.g td { background: var(--bb-cream); font-weight: 600; }
 table.t tr.sl td { background: var(--bb-pink); }
+table.t tr.g.m td { background: var(--bb-sunk); } /* QTY1: a material's line */
+table.t tr.g.sub td:first-child { padding-left: 20px; }
+.sort { all: unset; cursor: pointer; }
+.sort:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
+.sort:disabled { cursor: default; }
 table.t td.r, table.t th.r { text-align: right; }
 </style>

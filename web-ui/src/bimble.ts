@@ -1,6 +1,8 @@
 // The one typed client of the wasm viewer (ADR 0048). Components never touch the wasm directly.
 import { shallowRef } from "vue";
 import { applyLook } from "./shell/theme"; // SET1
+import { warm2d } from "./warm"; // FIRST1
+import { QueryCache, cachedClient } from "./querycache"; // SMALL1
 
 export interface State {
   selection: string[];
@@ -21,6 +23,9 @@ export interface State {
   editable?: boolean;
   /** on_change (C core, ccore/session/links.h): a counter of changes to the linked models; absent before any. */
   links?: number;
+  /** on_change (C core, LNK3D): a counter of changes to the linked models' geometry (a link added, read,
+   *  removed): the viewport fetches the mesh again only when it moves, not on a hide, a move or a colour. */
+  links_mesh?: number;
   /** on_change (C core): the selected element of a linked model (its id is then `selection`), absent otherwise. */
   linked?: { id: string; link: string } | null;
 }
@@ -152,15 +157,25 @@ export interface ScheduleDef {
   [field: string]: unknown;
 }
 
-/** `query("schedule_rows")`: text cells, at most 50 rows in all. */
+/** `query("schedule_rows")`: text cells, at most 50 rows in all; QTY1: with `offset` and `limit`, a window of
+ *  the rows (`row_count` all of them, `first` the index of a group's first row; a material's line `head`). */
 export interface ScheduleTable {
   name: string;
   columns: string[];
   /** `ids`: one GlobalId (or null) per row, same order as `rows`. */
-  groups: { level: number; rows: string[][]; ids: (string | null)[]; subtotal: string[] }[];
+  groups: { level: string; rows: string[][]; ids: (string | null)[]; subtotal: string[]; material?: string; head?: boolean; first?: number }[];
   total: string[] | null;
   count: number;
   truncated: boolean;
+  offset?: number;
+  row_count?: number;
+}
+
+/** QTY1 (ADR 0080): what a saved list's columns can be (`query schedule_columns`). */
+export interface ScheduleColumns {
+  builtin: string[];
+  fields: { id: string; summed: boolean; title: string }[];
+  properties: string[];
 }
 
 /** `query("placing")`: what is placed (edit.rs `Editor::placing_json`). Sizes and offset in mm. */
@@ -294,6 +309,11 @@ function wasmOrThrow(): Wasm {
 // - Calls are synchronous (sync XMLHttpRequest): every Wasm function but default() is sync.
 // - Changes: long-poll `GET /change?since=<seq>&t=<token>` -> `{"seq":n,"change":<on_change JSON>}`,
 //   then poll again with since=n. On a network error, wait 1 s and retry.
+// - FIRST1: after each call that is not a query, one synchronous `GET /change?since=<more than any
+//   seq>` (the host answers it at once, server.c) and the change, when it is new, goes to on_change
+//   in the same task, as the wasm module does after every call (ccore.ts): the click that opens a
+//   view shows it in the next frame, not after the long-poll's answer a frame or more later. A seq
+//   is given to on_change once (`changes.seen`), by whichever of the two reads it first.
 
 function nativeParams(p: URLSearchParams): { port: number; token: string } {
   const port = Number(p.get("port"));
@@ -305,6 +325,24 @@ function nativeParams(p: URLSearchParams): { port: number; token: string } {
 function nativeClient(port: number, token: string): Wasm & { standards_action(name: string): void } {
   const base = `http://127.0.0.1:${port}`;
   const t = encodeURIComponent(token);
+  // ---- FIRST1: the change a call made, read at once (see above) ----
+  const changes: NativeChanges = { seen: 0, epoch: undefined, cb: null };
+  let nonce = 0;
+  const changeNow = (): void => {
+    if (!changes.cb) return;
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", `${base}/change?since=${Number.MAX_SAFE_INTEGER}&n=${++nonce}&t=${t}`, false);
+    try { xhr.send(); } catch { return; } // the long-poll reports a lost host
+    if (xhr.status !== 200) return;
+    let m: { epoch?: string; seq?: number; change?: unknown };
+    try { m = JSON.parse(xhr.responseText) as typeof m; } catch { return; }
+    // A restarted host (another epoch) is the long-poll's to handle.
+    if (typeof m.seq !== "number" || m.seq <= changes.seen || m.change === undefined || m.change === null) return;
+    if (typeof m.epoch === "string" && changes.epoch !== undefined && m.epoch !== changes.epoch) return;
+    changes.seen = m.seq;
+    changes.cb(JSON.stringify(m.change));
+  };
+  // ---- end FIRST1 ----
   const call = (op: string, name: string | null, body?: string): string => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${base}/${op}/${name === null ? "-" : encodeURIComponent(name)}?t=${t}`, false);
@@ -315,7 +353,9 @@ function nativeClient(port: number, token: string): Wasm & { standards_action(na
       throw `native ${op}: ${message(e)}`;
     }
     if (xhr.status !== 200) throw xhr.responseText || `native ${op}: HTTP ${xhr.status}`;
-    return xhr.responseText;
+    const text = xhr.responseText;
+    if (op !== "query") changeNow(); // FIRST1
+    return text;
   };
   return {
     default: async () => undefined,
@@ -338,8 +378,16 @@ function nativeClient(port: number, token: string): Wasm & { standards_action(na
       if (!r.ok) throw (await r.text()) || `native ${op}: HTTP ${r.status}`;
       return new Uint8Array(await r.arrayBuffer());
     },
-    on_change: (cb) => void pollChanges(base, t, cb),
+    on_change: (cb) => { changes.cb = cb; void pollChanges(base, t, changes); }, // FIRST1: shares `changes` with changeNow
   };
+}
+
+/** FIRST1: the native client's change state, shared by the long-poll and `changeNow`. */
+interface NativeChanges {
+  /** The last seq given to `cb` (of the host process `epoch`). */
+  seen: number;
+  epoch: string | undefined;
+  cb: ((json: string) => void) | null;
 }
 
 // ---- FIXUI: the native host's connection, for the shell (shell/send.ts: `lost`, `reconnected`) ----
@@ -355,9 +403,15 @@ export function retryConnection(): void { wakePoll?.(); }
 /** Long-poll loop for the native client; never rejects. On an error it retries after 20 ms,
  *  doubling up to 1 s: a dev rebuild restarts the engine in tens of ms (ccore/results/bench.md:
  *  the fixed 1 s wait was most of the C core's edit -> visible time). */
-async function pollChanges(base: string, t: string, cb: (json: string) => void): Promise<void> {
+async function pollChanges(base: string, t: string, changes: NativeChanges): Promise<void> {
   let since = 0;
   let epoch: string | undefined;
+  // FIRST1: each seq once to on_change (changeNow may have given it already); a new epoch starts again.
+  const cb = (json: string, seq: unknown): void => {
+    if (changes.epoch !== epoch) { changes.epoch = epoch; changes.seen = 0; }
+    if (typeof seq === "number") { if (seq <= changes.seen && seq !== 0) return; changes.seen = seq; }
+    changes.cb?.(json);
+  };
   let wait = 20;
   let failingSince: number | null = null, lost = false; // FIXUI
   for (;;) {
@@ -375,7 +429,7 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
         if (typeof m.epoch === "string") epoch = m.epoch;
         if (typeof m.seq === "number") since = m.seq;
         connectionHooks.back?.(sameProcess, m.change ?? null);
-        if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change));
+        if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change), m.seq);
         continue;
       }
       // A new epoch is a restarted twin: its seq began again, so ask for its current change.
@@ -388,7 +442,7 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
         }
       }
       if (typeof m.seq === "number") since = m.seq;
-      if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change));
+      if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change), m.seq);
     } catch (e) {
       const now = performance.now();
       failingSince ??= now;
@@ -609,8 +663,11 @@ export async function start(): Promise<void> {
     // Timings from navigation start, read by Lighthouse's user-timings audit (make perf-web).
     performance.mark("bimble:wasm-ready");
     performance.measure("bimble:wasm-ready", { start: 0, end: "bimble:wasm-ready" });
-    wasm = w;
     backend = url.searchParams.get("ccore") === "1" ? "ccore" : native ? "native" : "rust"; // UX1
+    // SMALL1: the C core's queries through the cache, one batch per change (querycache.ts)
+    const qcache = backend === "rust" ? null : new QueryCache((n, a) => w.query(n, a));
+    wasm = qcache ? cachedClient(w, qcache) : w;
+    if (qcache) (window as unknown as { __bbQueries?: QueryCache }).__bbQueries = qcache;
     let shown = false;
     // The callback runs inside a frame: calls back into the viewer would throw "busy", so defer.
     w.on_change((json) => {
@@ -622,6 +679,7 @@ export async function start(): Promise<void> {
         performance.measure("bimble:model-shown", { start: 0, end: "bimble:model-shown" });
       }
       queueMicrotask(() => {
+        qcache?.changed(s); // SMALL1: one call for what the refresh and the panels shown read
         const prev = state.value;
         // schema and user are not in on_change: read them from query("state").
         const q = tryQuery<Pick<State, "schema" | "user" | "version" | "editable">>("state", {});
@@ -633,6 +691,7 @@ export async function start(): Promise<void> {
     });
     watchPointer();
     labelTextAgent();
+    if (viewportDirty) void warm2d(); // FIRST1: the overlay's 2D programs compiled before ready, not at the first plan
     // ponytail: one 1 s timer for the whole session; it queries only while the viewer draws.
     setInterval(() => { if (status.value && !status.value.idle) status.value = tryQuery<Status | null>("status", null); }, 1000);
     resolveReady();
@@ -940,6 +999,8 @@ function loadCapabilities(version: string | null): void {
 export interface SettingsValues {
   coordinates: string; gpu_cull: boolean; memory_share: number; moving_fps: number; moving_proxies: boolean;
   recent: string[]; text_size: number; theme: string; ui_font: string; user_email: string; user_name: string;
+  /** GPU1 (ADR 0083): the lab's 3D renderer (not Rust's; absent from an older core). */
+  renderer?: "auto" | "webgl2" | "webgpu";
 }
 /** `query settings`. */
 export interface UserSettings {
@@ -1000,9 +1061,8 @@ function refresh(modelChanged: boolean): void {
   if (!timed && modelChanged && state.value.file !== null) {
     timed = true;
     console.debug(`bimble: refresh after change ${(performance.now() - t0).toFixed(2)} ms`);
-    const p0 = performance.now();
-    for (let i = 0; i < 100; i++) tryQuery("pointer", null);
-    console.debug(`bimble: 100 pointer polls ${(performance.now() - p0).toFixed(2)} ms`);
+    // FIRST1: no more "100 pointer polls" here (T29's probe): on the native host they were 100
+    // synchronous requests in the start's first refresh, 100 to 200 ms of the page blocked.
   }
 }
 
@@ -1081,6 +1141,16 @@ export async function viewPdf(id: string, font: PdfFont = "helvetica"): Promise<
 export const sheetPdfName = (s: { number: string; name: string }) => `${s.number} ${s.name}.pdf`;
 export const viewPdfName = (v: { name: string; scale: number }) => `plan-${v.name}-1-${v.scale}.pdf`;
 // ---- end D7 ----
+// ---- DXF1: the DXF export (`view_dxf`, `sheet_dxf`; ccore/src/dxf_out.h, ADR 0082) ----
+/** `query view_dxf` / `sheet_dxf`: the DXF's bytes (a view in model space at 1:1, a sheet in paper mm). */
+export async function exportDxf(kind: "view" | "sheet", id: string): Promise<Uint8Array> {
+  const w = wasmOrThrow();
+  if (!w.bytes) throw new Error("DXF export: the C core only");
+  try { return await w.bytes("query", `${kind}_dxf`, JSON.stringify({ [kind]: id })); } catch (e) { throw new Error(message(e)); }
+}
+/** A file name from a view's or sheet's name: the characters file systems refuse become "_". */
+export const dxfName = (name: string) => `${name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "view"}.dxf`;
+// ---- end DXF1 ----
 // ---- PAPER1: a view On paper and Export view as SVG (`view_svg`), several sheets as one PDF (`sheets_pdf`) ----
 /** `query view_svg`: the view's paper as SVG, its paper and scale. `bare`: the On paper picture (paper.rs). */
 export interface ViewSvg { svg: string; paper: string; portrait: boolean; scale: number; width_mm: number; height_mm: number }
@@ -1273,6 +1343,29 @@ export const setView = (id: string, patch: ViewPatch) => runVerb("set_view", { i
 /** Change only the given fields of a schedule (`set_schedule`); `family: null` lists every family. Columns are field names ("level", "volume"). */
 export type SchedulePatch = { group_by_level?: boolean; family?: string | null; columns?: string[] };
 export const setSchedule = (name: string, patch: SchedulePatch) => runVerb("set_schedule", { name, ...patch });
+// ---- QTY1 (ADR 0080): saved quantity lists (ccore/src/verbs_schedules.h) ----
+/** What a list is: what it lists, its columns, filter, grouping and sort (every key optional). */
+export interface ScheduleSpec {
+  classes?: string[] | null;
+  family?: string | null;
+  columns?: string[];
+  properties?: string[] | null;
+  group_by_level?: boolean;
+  group_by_material?: boolean;
+  summary?: boolean;
+  totals?: boolean;
+  filter?: { column: string; value: string } | null;
+  sort?: { column: string; descending: boolean } | null;
+}
+export const scheduleAdd = (name: string | null, spec: ScheduleSpec) => runVerb("schedule_add", { ...(name ? { name } : {}), ...spec });
+export const scheduleEdit = (name: string, spec: ScheduleSpec & { new_name?: string }) => runVerb("schedule_edit", { name, ...spec });
+export const scheduleRemove = (name: string) => runVerb("schedule_remove", { name });
+export const scheduleColumns = () => tryQuery<ScheduleColumns>("schedule_columns", { builtin: [], fields: [], properties: [] });
+/** A window of a list's rows (the page's paging; the table is built once per model revision). */
+export const scheduleWindow = (name: string, offset: number, limit: number) => query<ScheduleTable>("schedule_rows", { name, offset, limit });
+/** The CSV with the headers the table shows (one per column), so the file says what the page says. */
+export const scheduleCsvAs = (name: string, headers: string[]) => query<{ csv: string }>("schedule_csv", { name, headers }).csv;
+// ---- end QTY1 ----
 
 /** Select by GlobalId, primary first; `[]` clears. Returns the Rust error, or null. */
 export function select(ids: string[]): string | null {
@@ -1640,3 +1733,39 @@ export interface FoundationRow { id: string; kind: "pad" | "strip" | "raft" | "f
 export const foundationRows = () => tryQuery<FoundationRow[]>("foundation_rows", []);
 // ---- end WAVE1B ----
 // ---- end G2 ----
+// ---- M1LINKS (ccore/session/m1links.h, ADR 0081): Mission 1 across linked models ----
+/** A level from links (`query link_levels`): its floor plan's view id in `view`. */
+export interface LinkLevel { elevation_mm: number; key: string; link: string; name: string; view: string }
+export const linkLevels = () => tryQuery<LinkLevel[]>("link_levels", []);
+/** A link's object tree (`query links_tree`, `scene_tree {link}`): storeys at their placed elevation. */
+export interface LinkTree {
+  link: string; total: number; visible: boolean;
+  storeys: { count: number; elevation_mm: number | null; name: string; classes?: { class: string; count: number }[] }[];
+}
+export const linksTree = () => tryQuery<LinkTree[]>("links_tree", []);
+export const linkTree = (link: string) => tryQuery<LinkTree | null>("scene_tree", null, { link });
+export const linkElements = (link: string, storey: string, cls: string, limit = 200) =>
+  tryQuery<{ class: string; id: string; link: string; name: string }[]>("scene_elements", [], { link, storey, class: cls, limit });
+/** A note on a linked element (`query link_notes`): `at` in the host's world mm. */
+export interface LinkNote { at: [number, number, number]; element: string; index: number; link: string; orphan: boolean; text: string; visible: boolean }
+export const linkNotes = () => tryQuery<LinkNote[]>("link_notes", []);
+/** LNK3D: how each link is drawn (`query link_draw`, ccore/session/links.h): shown, colour (-1: its own),
+ *  its turn about Z (cos, sin) and placed origin (host world mm), in link order. */
+export interface LinkDraw { colour: number; cos: number; name: string; origin: [number, number, number]; sin: number; visible: boolean }
+export const linkDraw = () => tryQuery<LinkDraw[]>("link_draw", []);
+/** LNK3D: what the mesh holds (`query mesh_key`): `draw` moves with a change that may change what is drawn
+ *  (not a hide in a view, a sheet), `links` with the links' geometry. null: not served (the Rust viewer). */
+export const meshKey = () => tryQuery<{ draw: number; links: number; rev: number } | null>("mesh_key", null);
+/** A linked element's property and quantity sets (in `query element {id, link}`). */
+export interface PropertySet { name: string; properties: { name: string; value: string }[]; type: string }
+/** The Navigator's eye: hide, show or isolate a class, a link's storey, a link or an element (hidden action view_rule). */
+export function viewRule(op: "hide" | "show" | "isolate", rule: { class?: string; storey?: string; link?: string; element?: string }): string | null {
+  try { actionWith("view_rule", { op, ...rule }); return null; } catch (e) { return message(e); }
+}
+export function noteAdd(link: string, element: string, text: string): string | null {
+  try { actionWith("manage_links", { op: "note_add", name: link, element, text }); return null; } catch (e) { return message(e); }
+}
+export function noteRemove(link: string, index: number): string | null {
+  try { actionWith("manage_links", { op: "note_remove", name: link, index }); return null; } catch (e) { return message(e); }
+}
+// ---- end M1LINKS ----

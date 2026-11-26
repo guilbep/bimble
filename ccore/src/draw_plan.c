@@ -464,6 +464,7 @@ typedef struct {
     cc_str cls, material;
     cc_ring *loops, *open;
     size_t nloops, nopen;
+    uint32_t elem1; /* DXF1: model_index + 1 */
 } Cut;
 
 /* An element entirely below the cut: its top outline and its visible edges. */
@@ -475,6 +476,7 @@ typedef struct {
     size_t ntop;
     Seg *edges;
     size_t nedges;
+    uint32_t elem1; /* DXF1: model_index + 1 */
 } Seen;
 
 /* sort_by(total_cmp of top_z), stable: a merge sort. */
@@ -536,7 +538,18 @@ typedef struct {
     Arena *a;
     double ox, oy, k, lo[2], hi[2];
     cc_item_list items;
+    Vec ptags, atags; /* DXF1: a cc_item_tag per projection and above segment */
 } Plan;
+
+/* DXF1: the tag of the items pushed next (paper.h cc_item_tag). */
+static void set_tag(Plan *P, cc_tag_role role, cc_str cls, uint32_t elem1, cc_category cat, int has_cat) {
+    cc_item_tag t = {cls.n ? cls.p : NULL, cls.n, elem1, (uint8_t)role, (int8_t)(has_cat ? (int)cat + 1 : 0)};
+    P->items.tag = t;
+}
+static void set_role(Plan *P, cc_tag_role role) {
+    cc_item_tag t = {NULL, 0, 0, (uint8_t)role, 0};
+    P->items.tag = t;
+}
 
 static void to_paper(const Plan *P, const double p[2], double out[2]) {
     out[0] = P->ox + (p[0] - P->lo[0]) * P->k;
@@ -553,7 +566,7 @@ static cc_str element_material(const Plan *P, const cc_scene_element *e) {
 }
 
 /* Item::Lines of segments on paper. */
-static int seg_lines(Plan *P, const Seg *v, size_t n, const cc_pen *pen) {
+static int seg_lines(Plan *P, const Seg *v, size_t n, const cc_pen *pen, const cc_item_tag *ring_tags) {
     cc_ring *r = arena_alloc(P->a, (n ? n : 1) * sizeof *r, _Alignof(cc_ring));
     double(*pts)[2] = arena_alloc(P->a, (2 * n ? 2 * n : 1) * sizeof *pts, _Alignof(double));
     cc_item *it = r && pts ? push_item(P) : NULL;
@@ -569,6 +582,12 @@ static int seg_lines(Plan *P, const Seg *v, size_t n, const cc_pen *pen) {
     it->nrings = n;
     it->has_pen = 1;
     it->pen = *pen;
+    if (ring_tags && n) { /* DXF1: copied to the plan's arena */
+        cc_item_tag *t = arena_alloc(P->a, n * sizeof *t, _Alignof(cc_item_tag));
+        if (!t) return -1;
+        memcpy(t, ring_tags, n * sizeof *t);
+        it->ring_tags = t;
+    }
     return 0;
 }
 
@@ -712,6 +731,7 @@ static int element_geometry(Plan *P, size_t k, const Setup *su, Arena *tmp, Vec 
             if (!c) return -1;
             c->cat = e->category;
             c->cls = e->class_name;
+            c->elem1 = (uint32_t)e->model_index + 1;
             c->material = element_material(P, e);
             c->nloops = sec.nloops;
             c->nopen = sec.nopen;
@@ -742,6 +762,7 @@ static int element_geometry(Plan *P, size_t k, const Setup *su, Arena *tmp, Vec 
             if (!sn) return -1;
             sn->cat = e->category;
             sn->cls = e->class_name;
+            sn->elem1 = (uint32_t)e->model_index + 1;
             sn->top_z = zmax;
             sn->ntop = nup;
             sn->top = copy_rings(P->a, up, nup);
@@ -752,8 +773,12 @@ static int element_geometry(Plan *P, size_t k, const Setup *su, Arena *tmp, Vec 
         } else {
             for (size_t i = 0; i < edges->n; i++) {
                 Seg *d = vec_push(projection, sizeof(Seg));
-                if (!d) return -1;
+                cc_item_tag *t = d ? vec_push(&P->ptags, sizeof *t) : NULL;
+                if (!t) return -1;
                 memcpy(d, (Seg *)edges->p + i, sizeof(Seg));
+                cc_item_tag tg = {e->class_name.n ? e->class_name.p : NULL, e->class_name.n,
+                                  (uint32_t)e->model_index + 1, CC_TAG_VIEW, 0};
+                *t = tg;
             }
         }
     }
@@ -775,8 +800,12 @@ static int element_geometry(Plan *P, size_t k, const Setup *su, Arena *tmp, Vec 
             Seg c;
             if (!cc_cut_clip_z(pa, pb, cut, next, c) || !long_enough(c)) continue;
             Seg *d = vec_push(above, sizeof(Seg));
-            if (!d) return -1;
+            cc_item_tag *t = d ? vec_push(&P->atags, sizeof *t) : NULL;
+            if (!t) return -1;
             memcpy(d, c, sizeof c);
+            cc_item_tag tg = {e->class_name.n ? e->class_name.p : NULL, e->class_name.n, (uint32_t)e->model_index + 1,
+                              CC_TAG_ABOVE, 0};
+            *t = tg;
         }
     }
     return 0;
@@ -864,11 +893,13 @@ static int choose_paper(const cc_plan_options *o, double margin, double tb_h, do
 /* plan.rs, the view's crop (ADR 0046): what is cut, seen, projected and above clipped to the
  * rectangle `r` (turned scene mm), what is left out of it dropped, the beam labels whose middle
  * lies outside it too. In place; new rings in the plan's arena. */
-static size_t crop_segs(const cc_crop_rect *r, Seg *v, size_t n) {
+static size_t crop_segs(const cc_crop_rect *r, Seg *v, size_t n, cc_item_tag *tags) {
     size_t k = 0;
     for (size_t i = 0; i < n; i++) {
         Seg c;
-        if (cc_crop_segment(r, (const double(*)[2])v[i], c)) memcpy(v[k++], c, sizeof c);
+        if (!cc_crop_segment(r, (const double(*)[2])v[i], c)) continue;
+        if (tags) tags[k] = tags[i]; /* DXF1: the tags follow their segments */
+        memcpy(v[k++], c, sizeof c);
     }
     return k;
 }
@@ -927,12 +958,13 @@ static int crop_geometry(Plan *P, const cc_crop_rect *r, Vec *cuts, Vec *seen, V
         }
         sn.top = top;
         sn.ntop = nt;
-        sn.nedges = crop_segs(r, sn.edges, sn.nedges); /* the edges are the plan's own copy */
+        sn.nedges = crop_segs(r, sn.edges, sn.nedges, NULL); /* the edges are the plan's own copy */
         if (sn.ntop || sn.nedges) sv[ks++] = sn;
     }
     seen->n = ks;
-    projection->n = crop_segs(r, projection->p, projection->n);
-    above->n = crop_segs(r, above->p, above->n);
+    projection->n = crop_segs(r, projection->p, projection->n, P->ptags.p);
+    above->n = crop_segs(r, above->p, above->n, P->atags.p);
+    P->ptags.n = projection->n, P->atags.n = above->n;
     cc_beam_label *bv = beams->p;
     size_t kb = 0;
     for (size_t i = 0; i < beams->n; i++) {
@@ -1152,14 +1184,16 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     Vec openings = {0}; /* (lo x, lo y, hi x, hi y) of the slabs' rectangular openings */
 
     /* ---- items, back to front */
-    if (projection->n && seg_lines(P, pv, projection->n, &proj_pen)) return -1;
+    set_role(P, CC_TAG_VIEW); /* DXF1 */
+    if (projection->n && seg_lines(P, pv, projection->n, &proj_pen, P->ptags.p)) return -1;
     Vec labels = {0}; /* (centre x, y, top z) */
     size_t seen_lines = 0, seen_elements = 0;
     for (size_t i = 0; i < seen->n; i++) {
         const Seen *sn = &sv[i];
+        set_tag(P, CC_TAG_VIEW, sn->cls, sn->elem1, sn->cat, 1); /* DXF1 */
         if (sn->nedges) {
             seen_lines += sn->nedges;
-            if (seg_lines(P, sn->edges, sn->nedges, &proj_pen)) goto oom;
+            if (seg_lines(P, sn->edges, sn->nedges, &proj_pen, NULL)) goto oom;
         }
         if (!sn->ntop) continue;
         seen_elements++;
@@ -1221,6 +1255,7 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
                 }
             }
             if (ncross) {
+                set_role(P, CC_TAG_SYMBOL); /* DXF1 */
                 cc_item *it = push_item(P);
                 if (!it) goto oom;
                 it->kind = CC_ITEM_LINES;
@@ -1261,7 +1296,9 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
         tri->p = tp;
         tri->n = 3;
         cc_area_look ink = {1, style->edges, NULL, 0};
+        set_role(P, CC_TAG_SYMBOL); /* DXF1 */
         if (area_item(P, tri, 1, &ink, NULL)) goto oom;
+        set_role(P, CC_TAG_TEXT);
         Buf v;
         buf_init(&v);
         fmt_signed(&v, (c[2] + oz) / 1000.0 + 0.0, 2);
@@ -1272,11 +1309,13 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     }
     free(labels.p);
     labels.p = NULL;
-    if (above->n && seg_lines(P, av, above->n, &above_pen)) goto oom;
+    set_role(P, CC_TAG_ABOVE); /* DXF1 */
+    if (above->n && seg_lines(P, av, above->n, &above_pen, P->atags.p)) goto oom;
 
     /* Grid axes, under what is cut; their bubbles' places and where they cross the drawing's
      * top and left edges, for the dimension chains. */
     cc_axes_drawn drawn;
+    set_role(P, CC_TAG_GRID); /* DXF1 */
     if (cc_annot_axis_lines(&ac, axes, naxes, chains_v, chains_h, &drawn)) goto oom;
 
     /* Fills and hatches of all cut elements first, then all outlines on top: touching elements
@@ -1284,11 +1323,13 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     for (size_t i = 0; i < cuts->n; i++) {
         if (!cv[i].nloops) continue;
         cc_area_look look;
+        set_tag(P, CC_TAG_HATCH, cv[i].cls, cv[i].elem1, cv[i].cat, 1); /* DXF1 */
         if (cc_cut_look(style, cv[i].cat, o->scale, a, &look) ||
             area_item(P, paper_loops(P, cv[i].loops, cv[i].nloops), cv[i].nloops, &look, NULL))
             goto oom;
     }
     for (size_t i = 0; i < cuts->n; i++) {
+        set_tag(P, CC_TAG_CUT, cv[i].cls, cv[i].elem1, cv[i].cat, 1); /* DXF1 */
         if (cv[i].nloops && area_item(P, paper_loops(P, cv[i].loops, cv[i].nloops), cv[i].nloops, NULL, &cut_pen))
             goto oom;
         if (cv[i].nopen) {
@@ -1304,6 +1345,7 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     }
 
     /* Openings (#24): their size inside, their position from the nearest axis. */
+    set_role(P, CC_TAG_DIMENSION); /* DXF1 */
     for (size_t i = 0; i < openings.n; i++) {
         const double *op = (const double *)openings.p + 4 * i;
         if (cc_annot_opening(&ac, op, op + 2, axes, naxes)) goto oom;
@@ -1311,6 +1353,7 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
     free(openings.p);
     openings.p = NULL;
     /* Section labels (#24): beside what is cut, along the beams above. */
+    set_role(P, CC_TAG_TEXT); /* DXF1 */
     if (tpl->element_labels) {
         for (size_t i = 0; i < cuts->n; i++)
             if (cc_annot_cut_label(&ac, cv[i].cls, cv[i].cat, cv[i].material, cv[i].loops, cv[i].nloops)) return -1;
@@ -1318,15 +1361,20 @@ static int plan_body(Plan *P, Arena *tmp, cc_paper *sheet, cc_plan_info *info, B
             if (cc_annot_beam_label(&ac, (const cc_beam_label *)beams->p + i)) return -1;
     }
     /* Section marks (#24), on plans only. */
+    set_role(P, CC_TAG_SYMBOL); /* DXF1 */
     if (tpl->section_markers && su.turn.kind != CC_TURN_SECTION &&
         cc_annot_section_marks(&ac, o->section_marks, o->nsection_marks, &su.turn, s->origin, &P->m->georef, blo, bhi))
         return -1;
     /* Bubbles over everything, then the dimension chains along the axes and overall. */
-    if (cc_annot_bubbles(&ac, &drawn) || cc_annot_chains(&ac, &drawn, blo, bhi, any_v, any_h)) return -1;
+    set_role(P, CC_TAG_GRID); /* DXF1 */
+    if (cc_annot_bubbles(&ac, &drawn)) return -1;
+    set_role(P, CC_TAG_DIMENSION);
+    if (cc_annot_chains(&ac, &drawn, blo, bhi, any_v, any_h)) return -1;
     /* The view's own dimensions and texts (#33). */
     if (o->view && cc_annot_view(&ac, P->m, o->view, &su.turn, s->origin)) return -1;
 
-    /* ---- texts */
+    /* ---- texts: the sheet's own (DXF1) */
+    set_role(P, CC_TAG_PAPER);
     Buf nb, level_s, drawing, scale_s, paper_s, title;
     buf_init(&nb), buf_init(&level_s), buf_init(&drawing), buf_init(&scale_s), buf_init(&paper_s), buf_init(&title);
     buf_u64(&nb, o->scale);
@@ -1480,6 +1528,7 @@ int cc_plan(const cc_scene *s, const cc_model *m, const cc_plan_options *o, Aren
     Vec cuts = {0}, seen = {0}, projection = {0}, above = {0}, edges = {0}, beams = {0}, scratch = {0};
     int rc = plan_body(&P, &tmp, sheet, info, err, &cuts, &seen, &projection, &above, &edges, &beams, &scratch);
     free(cuts.p), free(seen.p), free(projection.p), free(above.p), free(edges.p), free(P.items.p);
+    free(P.ptags.p), free(P.atags.p); /* DXF1 */
     free(beams.p), free(scratch.p);
     cc_view_setup_free(&su);
     arena_free(&tmp);

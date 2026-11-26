@@ -4,6 +4,7 @@
 #include "verbs_concrete.h" /* CONC1 */
 #include "refplane.h" /* WAVE1B */
 #include "verbs_materials.h" /* MAT1 */
+#include "verbs_schedules.h" /* QTY1 */
 #include <string.h>
 #include "json_w.h"
 
@@ -588,6 +589,43 @@ static const char SCHEMA_REFERENCE_PLANE_ADD[] =
     "\"required\":[\"storey\"],\"title\":\"ReferencePlaneAddArgs\",\"type\":\"object\"}";
 static const char SUMMARY_REFERENCE_PLANE_ADD[] = "Add a reference plane (an IfcVirtualElement); a C addition.";
 /* ---- end WAVE1B ---- */
+/* ---- QTY1: saved quantity lists (verbs_schedules.h, ADR 0080) ---- */
+static const char SCHEMA_SCHEDULE_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":"
+    "\"Arguments of `schedule_add` (QTY1, ADR 0080).\",\"properties\":{"
+    "\"classes\":{\"description\":\"IFC classes listed (any ASCII case); empty: every class.\",\"items\":{\"type\":\"string\"},\"type\":[\"array\",\"null\"]},"
+    "\"columns\":{\"description\":\"Field names in order: level, location, name, class, material, section, length, width, height, area, volume (net), mass, global_id, count, type, gross_volume.\",\"items\":{\"type\":\"string\"},\"type\":\"array\"},"
+    "\"family\":{\"description\":\"Only this material family (null: every family).\",\"enum\":[\"concrete\",\"steel\",\"timber\",\"masonry\",\"insulation\",\"earth\",\"glass\",\"other\",null],\"type\":[\"string\",\"null\"]},"
+    "\"filter\":{\"description\":\"Rows whose column text equals the value (ASCII case ignored); null: none.\",\"type\":[\"object\",\"null\"]},"
+    "\"group_by_level\":{\"type\":\"boolean\"},\"group_by_material\":{\"type\":\"boolean\"},"
+    "\"properties\":{\"description\":\"Property columns after the fields, keys as the model stores them (Pset_WallCommon/IsExternal).\",\"items\":{\"type\":\"string\"},\"type\":[\"array\",\"null\"]},"
+    "\"sort\":{\"description\":\"{column, descending}; null: the default order (level, location, name).\",\"type\":[\"object\",\"null\"]},"
+    "\"summary\":{\"description\":\"Subtotals and total only.\",\"type\":\"boolean\"},\"totals\":{\"type\":\"boolean\"},"
+    "\"name\":{\"description\":\"Its name (default Schedule 1, Schedule 2...).\",\"type\":[\"string\",\"null\"]},"
+    "\"preset\":{\"description\":\"by_material: grouped by material then level, subtotals only.\",\"enum\":[\"by_material\",null],\"type\":[\"string\",\"null\"]}},"
+    "\"title\":\"ScheduleAddArgs\",\"type\":\"object\"}";
+static const char SUMMARY_SCHEDULE_ADD[] = "Add a saved quantity list (a schedule of the model's own); a C addition.";
+static const char SCHEMA_SCHEDULE_EDIT[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":"
+    "\"Arguments of `schedule_edit` (QTY1, ADR 0080): the fields given replace the list's.\",\"properties\":{"
+    "\"classes\":{\"description\":\"IFC classes listed (any ASCII case); empty: every class.\",\"items\":{\"type\":\"string\"},\"type\":[\"array\",\"null\"]},"
+    "\"columns\":{\"description\":\"Field names in order: level, location, name, class, material, section, length, width, height, area, volume (net), mass, global_id, count, type, gross_volume.\",\"items\":{\"type\":\"string\"},\"type\":\"array\"},"
+    "\"family\":{\"description\":\"Only this material family (null: every family).\",\"enum\":[\"concrete\",\"steel\",\"timber\",\"masonry\",\"insulation\",\"earth\",\"glass\",\"other\",null],\"type\":[\"string\",\"null\"]},"
+    "\"filter\":{\"description\":\"Rows whose column text equals the value (ASCII case ignored); null: none.\",\"type\":[\"object\",\"null\"]},"
+    "\"group_by_level\":{\"type\":\"boolean\"},\"group_by_material\":{\"type\":\"boolean\"},"
+    "\"properties\":{\"description\":\"Property columns after the fields, keys as the model stores them (Pset_WallCommon/IsExternal).\",\"items\":{\"type\":\"string\"},\"type\":[\"array\",\"null\"]},"
+    "\"sort\":{\"description\":\"{column, descending}; null: the default order (level, location, name).\",\"type\":[\"object\",\"null\"]},"
+    "\"summary\":{\"description\":\"Subtotals and total only.\",\"type\":\"boolean\"},\"totals\":{\"type\":\"boolean\"},"
+    "\"name\":{\"description\":\"The list (any ASCII case).\",\"type\":\"string\"},"
+    "\"new_name\":{\"description\":\"A new name (not for a built-in list).\",\"type\":[\"string\",\"null\"]}},"
+    "\"required\":[\"name\"],\"title\":\"ScheduleEditArgs\",\"type\":\"object\"}";
+static const char SUMMARY_SCHEDULE_EDIT[] = "Change a quantity list: what it lists, its columns, filter, grouping, sort, name; a C addition.";
+static const char SCHEMA_SCHEDULE_REMOVE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":"
+    "\"Arguments of `schedule_remove` (QTY1, ADR 0080).\",\"properties\":{\"name\":{\"description\":\"The list.\",\"type\":\"string\"}},"
+    "\"required\":[\"name\"],\"title\":\"ScheduleRemoveArgs\",\"type\":\"object\"}";
+static const char SUMMARY_SCHEDULE_REMOVE[] = "Delete a quantity list of the model's own, or set a built-in one back; a C addition.";
+/* ---- end QTY1 ---- */
 #define V(n, N) {#n, SUMMARY_##N, SCHEMA_##N, cc_vh_##n, 0}
 const cc_verb_def cc_verb_table[] = {
     V(place, PLACE),
@@ -643,6 +681,9 @@ const cc_verb_def cc_verb_c_additions[] = {
     V(opening_remove, OPENING_REMOVE),
     /* ---- end CONC1 ---- */
     V(reference_plane_add, REFERENCE_PLANE_ADD), /* WAVE1B */
+    V(schedule_add, SCHEDULE_ADD),       /* QTY1 */
+    V(schedule_edit, SCHEDULE_EDIT),     /* QTY1 */
+    V(schedule_remove, SCHEDULE_REMOVE), /* QTY1 */
 };
 #undef V
 const size_t cc_verb_count = sizeof cc_verb_table / sizeof cc_verb_table[0];

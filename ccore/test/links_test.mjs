@@ -183,7 +183,9 @@ try {
   check("change JSON: selection [linked id] and linked {id, link}", JSON.stringify(c.selection) === JSON.stringify([pickIfc]) &&
     c.linked?.id === pickIfc && c.linked?.link === "mapped_item.ifc", JSON.stringify(c));
   const vis = await q("visibility");
-  check("the open model's selection is empty (hide_now off)", !(await q("actions")).find((a) => a.name === "hide_now").enabled, JSON.stringify(vis).slice(0, 80));
+  // M1LINKS (ADR 0081, DEVIATIONS 39): a linked element is hidden by its GlobalId: hide_now is on for it (LNK1: off)
+  check("the open model's selection is empty, the linked element hideable (hide_now on, M1LINKS)", (await q("actions")).find((a) => a.name === "hide_now").enabled &&
+    vis.hidden_now.count === 0, JSON.stringify(vis).slice(0, 80));
   let el = await call("query", "element", JSON.stringify({ id: pickIfc, link: "mapped_item.ifc" }));
   let d = el.status === 200 ? JSON.parse(el.text) : null;
   console.log(`linked element (ifc): ${el.text}`);

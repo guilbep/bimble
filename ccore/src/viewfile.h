@@ -87,6 +87,16 @@ typedef struct {
     cc_str georef; /* GEOR's JSON text (checked to parse), when has_georef */
     int has_source;
     cc_str source;   /* LINKF: SRCE's JSON text (a link cache: the IFC it was read from), when has_source */
+    /* M1LINKS: a section PROP (a link cache: the elements' property sets, ifc_psets.h), not kept in
+     * memory: where its bytes are in the raw file (read lazily: pf->read_range), when has_psets. Its
+     * head was checked (entries = elements, ends rising, within the section). */
+    int has_psets;
+    uint64_t psets_off, psets_len;
+    /* LNK3D (ADR 0078 amendment 3): a section HLOD (a link cache's baked proxies, BPRX: hlod.h), kept on
+     * disk as PROP (only HLOD and PROP sections after it): its bytes' place in the raw file, when has_hlod.
+     * Not checked here: the session checks the bytes it reads back (cc_hlod_bprx_check). */
+    int has_hlod;
+    uint64_t hlod_off, hlod_len;
     cc_mesh *shapes; /* shared shapes, own coordinates (malloc) */
     size_t nshapes;
     cc_view_element *elements; /* malloc */
@@ -115,6 +125,9 @@ typedef struct {
     size_t ndensities;
     int has_georef;
     cc_str georef; /* GEOR's JSON text, when has_georef (Rust: only when not the default) */
+    /* QTY1 (ADR 0080): per scene element its model element (properties, PredefinedType, openings),
+     * set by cc_viewfile_meta_from_model only; NULL for an IFC read as it is or a view file. */
+    const cc_element *const *elements;
 } cc_viewfile_meta;
 
 void cc_viewfile_meta_init(cc_viewfile_meta *mt);
@@ -133,6 +146,11 @@ int cc_viewfile_write_meta(const cc_viewfile_meta *mt, const cc_scene *s, int gz
  * that does not know SRCE skips it (Rust's and this one skip a later addition); this reader keeps
  * it in `source` (checked to be UTF-8 JSON). 0 ok, -1 out of memory. */
 int cc_viewfile_append_source(Buf *out, const char *json, size_t n);
+/* M1LINKS: appends a section PROP holding the property sets table `t` (ifc_psets.h) to the raw
+ * view file in `out`. 0 ok, -1 out of memory. */
+int cc_viewfile_append_psets(Buf *out, const char *t, size_t n);
+/* LNK3D: appends a section HLOD holding BPRX bytes `t` (before PROP: both stay on disk when read). 0 ok, -1 out of memory. */
+int cc_viewfile_append_hlod(Buf *out, const char *t, size_t n);
 
 /* Reads a view file. Always initializes `out` (free it with cc_viewfile_free either way).
  * 0 ok, -1 with err->msg. */

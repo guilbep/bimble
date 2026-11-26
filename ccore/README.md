@@ -61,6 +61,11 @@ font files, which the caller hands over (`cc_pdf_options.roboto`, `cc_paper_shee
 (ticket SIZE1: no font file is shipped; `sheet_pdf {"font":"roboto"}` and `query pdf_fonts`,
 `host/fonts.c` for where the native host looks). Suite `pdf_out`.
 
+They also go out as DXF (`src/dxf_out.c`, ticket DXF1, ADR 0082; not `dxf_in`, the reader of
+links): the same items, AC1015 ASCII, a view in model space at 1:1 in its own millimetres, a sheet
+in paper millimetres, one layer per IFC class and role (`query view_dxf`, `sheet_dxf`; not in the
+viewer-only wasm). C-own goldens `golden/dxf_c/`. Suite `dxf_out`.
+
 Run the tests (tcc by default, or any compiler in `CC`). The script exits non-zero on a failure:
 
     ccore/test/run.sh             # all suites

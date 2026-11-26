@@ -5,6 +5,7 @@
 import { computed, shallowRef, watch } from "vue";
 import { backend, connectionHooks, fileCall, openViews, openView, runAction, screenRoutes, shellHooks, state, type State } from "../bimble";
 import { HOME, VIEW, kind, shows, step, type CoreState, type Event, type Shell } from "./machine";
+import { perfOpening } from "../perf"; // GPU1
 
 /** What the session says now (the change JSON in `state`). */
 export const coreOf = (s: State): CoreState => ({ file: s.file, unsaved: s.unsaved, tab: s.tab !== null });
@@ -28,7 +29,7 @@ export function send(e: Event): boolean {
     return false;
   }
   shell.value = to;
-  if (to.at === "opening" && to !== s) runFile(to);
+  if (to.at === "opening" && to !== s) perfOpening(), runFile(to); // GPU1: the performance panel's open time
   else if ((e.do === "showView" || e.do === "back") && to.at === "model" && to.show === "view" && c.file !== null && !c.tab) showAView();
   return true;
 }

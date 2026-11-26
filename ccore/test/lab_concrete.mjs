@@ -242,6 +242,7 @@ async function tab(S, evalJs, model) {
     const cl = JSON.parse(calls);
     console.log(`the click's core calls: ${cl.length}, ${cl.reduce((a, c) => a + c[1], 0).toFixed(1)} ms in all; the slowest: ` +
       [...cl].sort((a, b) => b[1] - a[1]).slice(0, 8).map((c) => `${c[0]} ${c[1].toFixed(1)} ms`).join(", "));
+    console.log(`the click's core calls in order: ${cl.map((c) => `${c[0]} ${c[1].toFixed(1)}`).join(", ")}`); // SMALL1
   }
   const pad = await gl().then((g) => g.placed);
   const padEl = await el(pad);

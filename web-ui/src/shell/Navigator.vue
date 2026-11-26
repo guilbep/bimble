@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { groupDigits } from "../format"; // QTY1
 import { t } from "../i18n";
 import { viewName } from "./viewName";
 import { send } from "./send";
@@ -8,11 +9,17 @@ import { links, query, select, measurements, openView, openViews, scheduleList, 
 import { viewAdd, viewRemove } from "../bimble";
 import { editableModel, has } from "./capability";
 import { refPlanes } from "../bimble"; // WAVE1B
+import { pickedSchedule } from "../pages/quantitiesPick"; // QTY1
 // ---- end SEC1 ----
 // ---- LNK1 ----
 import LinksPanel from "./LinksPanel.vue";
 import { linksOpen } from "./links";
 // ---- end LNK1 ----
+// ---- M1LINKS ---- the linked models' tree and notes (shell/LinksTree.vue); the plans from links marked
+import LinksTree from "./LinksTree.vue";
+import { linkLevels } from "../bimble";
+const fromLinks = computed(() => { void state.value.rev; void state.value.links; return new Set(linkLevels().map((l) => l.view)); });
+// ---- end M1LINKS ----
 
 // `open_views` is `{views, active, tabs}` (bridge.rs); bimble.ts types it loosely until then.
 const ov = computed(() => openViews.value as unknown as { views?: ViewSummary[]; active?: string | null });
@@ -50,6 +57,11 @@ const sheetCount = computed(() => {
   try { return sheets().length; } catch { return null; }
 });
 const scheduleCount = computed(() => { void state.value.rev; void openViews.value; return scheduleList().length; });
+// ---- QTY1: the saved quantity lists, each opens the Quantities page on it (control navigator-page) ----
+const schedOpen = ref(false);
+const scheduleNames = computed(() => { void state.value.rev; void openViews.value; return (scheduleList() as { name: string }[]).map((d) => d.name); });
+function openSchedule(name: string): void { pickedSchedule.value = name; send({ do: "showPage", page: "quantities" }); }
+// ---- end QTY1 ----
 const linkCount = computed(() => { void state.value.rev; void openViews.value; return links().length; });
 const measureCount = computed(() => { void state.value.rev; void openViews.value; return measurements().length; });
 // Measurements: a read-only list from Rust, shown when its group opens.
@@ -75,7 +87,7 @@ const treeStoreys = computed(() => sceneTree.value
   : storeys.value.map((s) => ({ id: s.id, name: s.name, element_count: s.element_count, scene: null })));
 const objects = computed(() => sceneTree.value ? sceneTree.value.total : storeys.value.reduce((n, s) => n + s.element_count, 0));
 // ---- end FIXUI ----
-const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+const grouped = (n: number) => groupDigits(n); // QTY1: format.ts
 
 // Object tree (storey → IFC class → elements), lazy: children load when a row opens. Local UI state only.
 type El = { id: string; class: string; name: string };
@@ -148,6 +160,7 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
           <template v-else><path d="M3 12h18"/><path d="m7 8-4 4 4 4"/><rect x="9" y="5" width="6" height="14" stroke-dasharray="2 2"/></template>
         </svg>
         <span>{{ viewName(v) }}</span>
+        <span v-if="fromLinks.has(v.id)" class="n" data-bb="from-links" :title="t('m1.fromLinksTip')">{{ t('m1.fromLinks') }}</span>
         <span v-if="v.references > 0" class="n">{{ t('nav.refs', { n: v.references }) }}</span>
       </a>
       <!-- SEC1: the view's menu (right click), as Rust's context menu -->
@@ -156,10 +169,13 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
         <button type="button" role="menuitem" @click="removeView(v.id)">{{ t(isDefault(v) ? 'sec1.reset' : 'sec1.delete') }}</button>
       </div></template>
     </template>
-    <a class="ti h" href="#" style="padding-left:6px" data-missing="schedule-list-in-navigator" @click.prevent="send({ do: 'showPage', page: 'quantities' })">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+    <a class="ti h" href="#" style="padding-left:6px" :aria-expanded="schedOpen" data-bb="nav-schedules" @click.prevent="schedOpen = !schedOpen; send({ do: 'showPage', page: 'quantities' })">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="schedOpen ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
       <span>{{ t('nav.schedules') }}</span><span class="n">{{ scheduleCount }}</span>
     </a>
+    <template v-if="schedOpen"><!-- QTY1: each list opens the Quantities page on it -->
+      <a v-for="n in scheduleNames" :key="n" class="ti" href="#" style="padding-left:22px" data-bb="nav-schedule" :data-name="n" @click.prevent="openSchedule(n)"><span>{{ n }}</span></a>
+    </template>
     <a class="ti h" href="#" style="padding-left:6px" data-missing="sheet-list-in-navigator" @click.prevent="send({ do: 'showPage', page: 'sheets' })">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
       <span>{{ t('nav.sheets') }}</span><span class="n">{{ sheetCount ?? "" }}</span>
@@ -191,6 +207,8 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
         </template>
       </template>
     </template>
+    <!-- M1LINKS: the linked models' storeys, classes, elements with their eyes; the notes -->
+    <LinksTree />
     <!-- No sub-project data in Rust yet (ADR 0059 proposed): the group opens the Sub-projects page. -->
     <a class="ti h" href="#" style="padding-left:6px" data-missing="subprojects query" @click.prevent="send({ do: 'showPage', page: 'subprojects' })">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>

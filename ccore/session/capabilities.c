@@ -20,7 +20,9 @@ static const struct {
 } CAPS[] = {
     {"about", YES},            /* SET1: action about, query about (settings.h) */
     {"base_point_move", NO},   /* SETOUT: moving the project base point by clicks (the model's coordinates stay: ADR 0075) */
+    {"cfc", NO},               /* QTY1: Assign CFC, CFC catalogue (ticket QTY2: the catalogue's licence first) */
     {"collaboration", NO},     /* calls.c q_collab: a constant "nobody" (H2c) */
+    {"export_dxf", FULL_BUILD}, /* sheet_svg.h view_dxf, sheet_dxf (DXF1, ADR 0082) */
     {"export_ifc", FULL_BUILD},
     {"export_pdf", FULL_BUILD}, /* sheet_svg.h sheet_pdf, view_pdf (D7) */
     {"export_svg", FULL_BUILD}, /* sheet_svg.h sheet_svg (D5) */

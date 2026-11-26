@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { groupDigits } from "./format"; // QTY1
 import { t } from "./i18n";
 import { viewName } from "./shell/viewName";
 import { state, element, query, rename, runVerb, setGenerator, setMaterial, setView, materials, openViews, storeys, type ElementDetail, type ViewSummary } from "./bimble";
@@ -10,6 +11,7 @@ import { editableModel, has } from "./shell/capability";
 // ---- end SEC1 ----
 // ---- WAVE1B (B2): the host's openings, one selected, its sizes changed (verb opening_set) ----
 import { openingSet, openingsOf, selectedOpening, type OpeningInfo, type OpeningPatch } from "./bimble";
+import { noteAdd, type PropertySet } from "./bimble"; // M1LINKS
 
 // Rendered inside `.props` (LeftPanel): rows as fr/View3D.html (view) and fr/SelectModify.html (element).
 const detail = ref<ElementDetail | null>(null);
@@ -87,6 +89,18 @@ const openingLabel = (o: OpeningInfo, i: number) => o.kind === "sleeve" ? t("pro
   : o.kind === "opening" ? t("props.op.box", { n: i + 1, w: grouped(o.width ?? 0), h: grouped((o.wall ? o.height : o.length) ?? 0) }) : t("props.op.other", { n: i + 1 });
 // ---- end WAVE1B ----
 
+// ---- M1LINKS ---- a linked element's property and quantity sets (query element {id, link}), a note on it
+const psets = computed(() => (detail.value as unknown as { property_sets?: PropertySet[] } | null)?.property_sets ?? null);
+const psetsNote = computed(() => (detail.value as unknown as { property_sets_note?: string | null } | null)?.property_sets_note ?? null);
+const noteText = ref("");
+const noteError = ref<string | null>(null);
+function addNote(): void {
+  const lk = state.value.linked;
+  if (!lk || !noteText.value.trim()) return;
+  noteError.value = noteAdd(lk.link, lk.id, noteText.value.trim());
+  if (!noteError.value) noteText.value = "";
+}
+// ---- end M1LINKS ----
 // FIXUI: the read-only rows' extra fields (scene_element, a linked element's detail).
 const roExtra = computed(() => {
   const d = detail.value as (ElementDetail & { family?: string; triangles?: number; volume_m3?: number }) | null;
@@ -279,7 +293,7 @@ const families = computed(() =>
   })),
 );
 // The reference writes thousands with a space and minus as U+2212 ("−250").
-const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").replace("-", "\u2212");
+const grouped = (n: number) => groupDigits(n); // QTY1: format.ts (the integer part only: "3 101.6124838541646")
 </script>
 
 <template>
@@ -316,6 +330,23 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
       <div v-if="roExtra.family" class="row"><span class="k">{{ t('props.family') }}</span><span>{{ roExtra.family }}</span></div>
       <div v-if="roExtra.triangles !== null" class="row"><span class="k">{{ t('props.triangles') }}</span><span class="mono">{{ grouped(roExtra.triangles) }}</span></div>
       <div v-if="roExtra.volume !== null" class="row"><span class="k">{{ t('props.volume') }}</span><span class="mono">{{ roExtra.volume.toFixed(3) }} m³</span></div>
+      <!-- M1LINKS: the linked element's property and quantity sets, then a note on it -->
+      <template v-if="psets !== null">
+        <div class="sec">{{ t('m1.propertySets') }}</div>
+        <p v-if="!psets.length" class="row" data-bb="props-no-sets">{{ psetsNote ? t('m1.setsNote', { why: psetsNote }) : t('m1.noSets') }}</p>
+        <template v-for="ps in psets" :key="ps.name">
+          <div class="row" data-bb="props-pset" :data-set="ps.name"><span class="k" style="font-weight:600">{{ ps.name }}</span><span class="mono" style="font-size:11px">{{ ps.type }}</span></div>
+          <div v-for="p in ps.properties" :key="`${ps.name}/${p.name}`" class="row" data-bb="props-prop" :data-prop="p.name"><span class="k">{{ p.name }}</span><span class="mono">{{ p.value }}</span></div>
+        </template>
+      </template>
+      <template v-if="linkedName !== null">
+        <div class="sec">{{ t('m1.addNote') }}</div>
+        <div class="row">
+          <input v-model="noteText" class="inp" style="width:170px" data-bb="note-text" :placeholder="t('m1.notePlaceholder')" :aria-label="t('m1.notePlaceholder')" @keydown.enter="addNote" />
+          <button type="button" class="btn" data-bb="note-add" :disabled="!noteText.trim()" @click="addNote">{{ t('m1.noteAdd') }}</button>
+        </div>
+        <p v-if="noteError" role="alert" class="error">{{ noteError }}</p>
+      </template>
     </template>
     <template v-else>
     <div class="row">
@@ -483,6 +514,10 @@ p.row { margin: 0; }
 /* Error: ink text on an ochre band, with the word "Error". */
 /* WAVE1B (B2): an opening's row; the selected one in the selection colour (ADR 0049: pink is selection) */
 .note { font-size: 13px; color: var(--bb-stone); margin: 0; }
+/* M1LINKS: the note's Add button */
+.btn { height: 30px; border: 1px solid var(--bb-ink); border-radius: 999px; background: var(--bb-sheet); padding: 0 12px; font: inherit; font-size: 13px; color: var(--bb-ink); cursor: pointer; }
+.btn:disabled { color: var(--bb-stone); border-color: var(--bb-stone); cursor: default; }
+.btn:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
 .oprow { display: block; width: 100%; text-align: left; background: none; border: 0; border-radius: 8px; padding: 2px 6px; font: inherit; font-size: 13.5px; color: var(--bb-ink); cursor: pointer; }
 .oprow:hover { background: var(--bb-sunk); }
 .oprow.sel { background: var(--bb-selection); }

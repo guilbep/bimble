@@ -8,6 +8,7 @@
  *   - 3D2: built in steps of a few triangles, the BPRX bytes are those of one build; the BPRX layout.
  *   - 3D2, hostile input: one element of 400,000 triangles and one with non-finite vertices, default
  *     options: it ends, each proxy under its cap, the cells bounded, the non-finite ones skipped.
+ *   - LNK3D: BPRX read back from a link cache, untrusted (cc_hlod_bprx_check): damages refused, no crash.
  * Fails on the code before 3D2: src/hlod.h did not exist. */
 #define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
@@ -213,6 +214,55 @@ static uint32_t u32at(const Buf *b, size_t o) {
 }
 
 /* 3D2: steps of a few triangles give the bytes of one build; the BPRX layout adds up. */
+/* LNK3D (ADR 0078 amendment 3): BPRX read back from a link cache is untrusted (hlod.h cc_hlod_bprx_check):
+ * the bytes of a build pass; each targeted damage is refused; 20,000 random byte changes and every cut
+ * end without a crash (ASan, UBSan suites) and a cut is always refused. */
+static uint32_t rnd(uint64_t *x) { *x = *x * 6364136223846793005ull + 1442695040888963407ull; return (uint32_t)(*x >> 33); }
+static void put32(char *p, uint32_t v) { memcpy(p, &v, 4); }
+static void bprx_hostile(const Buf *one, uint32_t ne) {
+    cc_error err;
+    const uint8_t *p = (const uint8_t *)one->p;
+    size_t n = one->len;
+    check_true("BPRX of a build: accepted", n >= 48 && cc_hlod_bprx_check(p, n, ne, &err) == 0);
+    check_true("BPRX of another scene (nE): refused", cc_hlod_bprx_check(p, n, ne + 1, &err) == -1);
+    char *c = malloc(n ? n : 1);
+    if (!c || n < 48) { free(c); check_true("BPRX hostile: a buffer", 0); return; }
+    uint32_t nC = u32at(one, 16), nK = u32at(one, 20), nL = u32at(one, 24), nP = u32at(one, 28), nV = u32at(one, 32);
+    size_t kids = 48 + 64 * (size_t)nC, els = kids + 4 * (size_t)nK, parts = els + 4 * (size_t)nL, idx = parts + 28 * (size_t)nP + 12 * (size_t)nV;
+    struct { const char *what; size_t at; uint32_t v; } dmg[] = {
+        {"the magic", 0, 0x58525042u ^ 1}, {"the version", 4, 2}, {"a count over the bytes (cells)", 16, nC + 1},
+        {"a count huge (cells)", 16, 0xffffffffu}, {"the vertices' count", 32, nV + 7},
+        {"a cell's first child past the list", 48 + 32, nK + 1}, {"a cell's elements past the list", 48 + 40, nL},
+        {"a cell's depth over 16", 48, 99},
+        {"a child that is its own parent (a cycle)", kids, 0}, {"an element past nE", els, ne},
+        {"a part's vertices past the end", parts + 4, nV}, {"an index outside its part", idx, 0xfffffff0u},
+    };
+    for (size_t i = 0; i < sizeof dmg / sizeof dmg[0]; i++) {
+        if (dmg[i].at + 4 > n || (dmg[i].at >= kids && dmg[i].at < els && !nK) || (dmg[i].at >= parts && !nP)) continue;
+        memcpy(c, p, n);
+        put32(c + dmg[i].at, dmg[i].v);
+        char t[160];
+        snprintf(t, sizeof t, "BPRX damaged (%s): refused", dmg[i].what);
+        check_true(t, cc_hlod_bprx_check((const uint8_t *)c, n, ne, &err) == -1);
+    }
+    float inf = 1.0f / 0.0f;
+    memcpy(c, p, n);
+    memcpy(c + 48 + 4, &inf, 4);
+    check_true("BPRX damaged (an infinite error): refused", cc_hlod_bprx_check((const uint8_t *)c, n, ne, &err) == -1);
+    int cuts = 1;
+    for (size_t k = 0; k < n; k += 1 + k / 64)
+        if (cc_hlod_bprx_check(p, k, ne, &err) != -1) cuts = 0;
+    check_true("every cut BPRX: refused", cuts);
+    uint64_t x = 42;
+    for (int i = 0; i < 20000; i++) { /* random changes: an answer, never a crash */
+        memcpy(c, p, n);
+        for (int j = 0; j < 4; j++) c[rnd(&x) % n] = (char)rnd(&x);
+        (void)cc_hlod_bprx_check((const uint8_t *)c, n, ne, &err);
+    }
+    check_true("20,000 random changes of BPRX: no crash", 1);
+    free(c);
+}
+
 static void steps(const char *what, const cc_scene *s, uint64_t budget) {
     cc_hlod_opts o;
     cc_hlod_default(&o);
@@ -267,6 +317,7 @@ static void steps(const char *what, const cc_scene *s, uint64_t budget) {
         for (uint32_t i = 0; i < nI; i++) idx_ok &= u32at(&one, I + 4 * (size_t)i) < nV;
         check_true("BPRX: indices in range", idx_ok);
     }
+    bprx_hostile(&one, (uint32_t)s->nelements);
     buf_free(&one), buf_free(&many);
     cc_hlod_free(&a), cc_hlod_free(&b);
 }

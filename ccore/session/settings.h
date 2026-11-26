@@ -5,7 +5,8 @@
  * browser's localStorage under Rust's key `bimble.settings`, settings.rs:246).
  *
  *   query settings          {applies, file, fonts, needs, note, text_sizes, themes, values}
- *                           values: the 11 fields, Rust's JSON names and defaults (to_json);
+ *                           values: the 11 fields, Rust's JSON names and defaults (to_json), and
+ *                           the lab's `renderer` (GPU1: auto, webgl2, webgpu);
  *                           applies: whether this build uses each field; needs: what a field that
  *                           does not apply would need; note: why the file did not read (or null)
  *   query settings_text     the file's text as it is stored now, as a JSON string (null: none);
@@ -44,6 +45,10 @@ typedef struct {
     char user_name[CC_SETTINGS_LINE_BYTES];
     char user_email[CC_SETTINGS_LINE_BYTES];
     char coordinates[16]; /* "survey" | "wgs84" | "utm" | "epsg:<n>" */
+    /* GPU1 (ADR 0083): the lab's 3D renderer, "auto" | "webgl2" | "webgpu" ("auto"). Not one of Rust's
+     * fields (its viewer chose wgpu's backend itself): not in to_json, written to the file only once
+     * set (a file without it keeps its bytes); query settings lists it in `values`. */
+    char renderer[8];
 } cc_settings;
 
 /* Settings::default(). */

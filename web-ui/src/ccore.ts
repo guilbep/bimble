@@ -73,6 +73,8 @@ export interface CcoreInfo {
   openMs: number;
   model: string;
   modelBytes: number;
+  /** GPU1: the module's memory now (bytes), for the performance panel. */
+  memBytes?: () => number;
 }
 declare global {
   interface Window {
@@ -410,7 +412,7 @@ export async function ccoreClient(params: URLSearchParams, steps: OpenSteps = {}
   steps.step?.("parse");
   const o = run(X.host_open_text.bind(X), [enc.encode(name), text]);
   if (o.status !== 200) throw new Error(`ccore: ${name}: ${dec.decode(o.bytes)}`);
-  window.__bbCcore = { wasmBytes: wasmBuf.byteLength, readyMs, openMs: performance.now(), model: name, modelBytes: text.length };
+  window.__bbCcore = { wasmBytes: wasmBuf.byteLength, readyMs, openMs: performance.now(), model: name, modelBytes: text.length, memBytes: () => X.memory.buffer.byteLength }; // GPU1: memBytes
   await warm(X, steps); // PERF2: the scene and the mesh, each in its own task, before the page asks
 
   let listener: ((json: string) => void) | null = null;

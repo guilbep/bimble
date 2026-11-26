@@ -89,6 +89,16 @@ int cc_paper_set_version(struct cc_session *s, const char *version);
 int cc_paper_view_svg(struct cc_session *s, const cc_scene *sc, const char *body, size_t n, Buf *out);
 int cc_paper_sheets_pdf(struct cc_session *s, const cc_scene *sc, const char *body, size_t n, Buf *out);
 /* ---- end PAPER1 ---- */
+/* ---- DXF1: the DXF export (src/dxf_out.h, ADR 0082) ----
+ * `query view_dxf {"view": id, "path"?: file}`: the 2D view drawn as view_svg's bare picture (its
+ * scale, no frame, title block or legend; Helvetica's metrics) written as DXF in model space at
+ * 1:1, the view's own millimetres; a linked model's elements on layers named after the link.
+ * `query sheet_dxf {"sheet": id, "path"?: file}`: the sheet drawn as sheet_pdf draws it, written as
+ * DXF in paper millimetres (frame, title block, views at their scales).
+ * The answer as cc_paper_pdf_query's: the DXF's bytes, or {"bytes", "path"} written at `path` on a
+ * carrier with files. Errors as view_pdf's / sheet_pdf's. `view`: 0 sheet_dxf, 1 view_dxf. The
+ * viewer build: "this build is view-only" (it has no drawing code). */
+int cc_paper_dxf_query(struct cc_session *s, const cc_scene *sc, int view, const char *body, size_t n, Buf *out);
 /* Frees the fonts, the folder and the version (cc_session_free). */
 void cc_paper_fonts_free(struct cc_session *s);
 #endif

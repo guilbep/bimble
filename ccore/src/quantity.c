@@ -13,6 +13,7 @@
 #include "json_w.h"
 #include "library.h"
 #include "math.h"
+#include "verbs_concrete.h" /* QTY1: cc_opening_info_of, the gross volume */
 
 static const double PI = 3.14159265358979323846264338327950288;
 
@@ -656,7 +657,8 @@ static void stable_sort(const Pending *p, size_t *idx, size_t *tmp, size_t n) {
 }
 
 static int field_summed(int f) {
-    return f == CC_FIELD_LENGTH || f == CC_FIELD_AREA || f == CC_FIELD_VOLUME || f == CC_FIELD_MASS;
+    return f == CC_FIELD_LENGTH || f == CC_FIELD_AREA || f == CC_FIELD_VOLUME || f == CC_FIELD_MASS ||
+           f == CC_FIELD_ELEMENTS || f == CC_FIELD_GROSS_VOLUME; /* QTY1 */
 }
 
 static cc_cell text_cell(cc_str s) {
@@ -688,7 +690,7 @@ static cc_cell *totals(Arena *a, const uint8_t *fields, size_t nf, cc_sched_row 
         for (size_t r = 0; r < nrows; r++)
             if (rows[r]->cells[k].kind == CC_CELL_NUM) s += rows[r]->cells[k].v;
         s = s + 0.0; /* an empty sum is -0.0: written "0.000" */
-        int dec = fields[k] == CC_FIELD_AREA ? 2 : fields[k] == CC_FIELD_MASS ? 0 : 3;
+        int dec = fields[k] == CC_FIELD_AREA ? 2 : fields[k] == CC_FIELD_MASS || fields[k] == CC_FIELD_ELEMENTS ? 0 : 3;
         out[k] = num_cell(s, dec);
     }
     for (size_t k = 0; k < nf; k++)
@@ -727,7 +729,208 @@ static int oom(cc_error *err) {
     return -1;
 }
 
+/* ---- QTY1 (ADR 0080): cells of the C additions, filter and sort ---- */
+
+typedef struct {
+    const cc_measures *m;
+    const cc_scene_element *e;
+    const cc_element *me; /* NULL: not a model's element */
+    cc_str location, name, storey, material, gid, section;
+    int has_rho;
+    double rho;
+} Elem;
+
+/* The openings' volume of a model element (m3): each opening's prism through the host's thickness,
+ * a sleeve its exact cylinder (concrete.c's opening rows: the same values). */
+static double openings_m3(const cc_element *e) {
+    if (!e) return 0.0;
+    double t = e->generator.kind == CC_GEN_WALL ? e->generator.u.wall.thickness
+               : e->generator.kind == CC_GEN_SLAB ? e->generator.u.slab.thickness
+                                                   : 0.0;
+    double v = 0.0;
+    for (size_t k = 0; t > 0.0 && k < e->nopenings; k++) {
+        cc_opening_info in;
+        cc_opening_info_of(e, k, &in);
+        if (in.kind == 1) v += PI * (in.dia / 2.0) * (in.dia / 2.0) * t / 1e9;
+        else if (in.kind == 0) v += in.w * (in.wall ? in.h : in.len) * t / 1e9;
+    }
+    return v;
+}
+
+static cc_str prop_of(const cc_element *me, cc_str key) {
+    for (size_t i = 0; me && i < me->nproperties; i++)
+        if (str_eq(me->properties[i].key, key)) return me->properties[i].value;
+    return cs("");
+}
+
+static cc_cell field_cell(int f, const Elem *x) {
+    const cc_measures *m = x->m;
+    switch (f) {
+    case CC_FIELD_LEVEL: return text_cell(x->storey);
+    case CC_FIELD_LOCATION: return text_cell(x->location);
+    case CC_FIELD_NAME: return text_cell(x->name);
+    case CC_FIELD_CLASS: return text_cell(x->e->class_name);
+    case CC_FIELD_MATERIAL: return text_cell(x->material);
+    case CC_FIELD_SECTION: return text_cell(x->section);
+    case CC_FIELD_LENGTH: return num_cell(m->length / 1000.0, 3);
+    case CC_FIELD_WIDTH: return num_cell(m->width / 10.0, 1);
+    case CC_FIELD_HEIGHT: return num_cell(m->height / 10.0, 1);
+    case CC_FIELD_AREA: return num_cell(m->area_m2, 2);
+    case CC_FIELD_VOLUME: return num_cell(m->volume_m3, 3);
+    case CC_FIELD_MASS: return x->has_rho ? num_cell(m->volume_m3 * x->rho, 0) : text_cell(cs(""));
+    case CC_FIELD_GLOBAL_ID: return text_cell(x->gid);
+    case CC_FIELD_ELEMENTS: return num_cell(1.0, 0);
+    case CC_FIELD_TYPE: {
+        const cc_str *p = x->me ? cc_element_predefined(x->me) : NULL;
+        return text_cell(p ? *p : cs(""));
+    }
+    case CC_FIELD_GROSS_VOLUME: return num_cell(m->volume_m3 + openings_m3(x->me), 3);
+    default: return text_cell(cs(""));
+    }
+}
+
+/* A column id (a field's name or a property key): its field, or -1 and the key. */
+static int column_field(cc_str id) {
+    for (int f = 0; f < CC_FIELD_COUNT; f++) {
+        const char *n = cc_sched_field_name(f);
+        if (strlen(n) == id.n && !memcmp(n, id.p, id.n)) return f;
+    }
+    return -1;
+}
+
+static cc_cell column_cell(cc_str id, const Elem *x) {
+    int f = column_field(id);
+    return f >= 0 ? field_cell(f, x) : text_cell(prop_of(x->me, id));
+}
+
+static int cell_is(const cc_cell *c, cc_str v, Buf *tmp) { /* the cell's text equals v, ASCII case ignored */
+    buf_clear(tmp);
+    cc_cell_text(tmp, c);
+    return !tmp->oom && ascii_ieq((cc_str){tmp->p ? tmp->p : "", tmp->len}, v.p ? v.p : "", v.n);
+}
+
+typedef struct {
+    int kind; /* 0 number, 1 text, 2 empty */
+    double v;
+    Natural t;
+} SortKey;
+
+static int sortkey_cmp(const SortKey *a, const SortKey *b) {
+    if (a->kind != b->kind) return a->kind < b->kind ? -1 : 1;
+    if (a->kind == 0) return total_cmp(a->v, b->v);
+    if (a->kind == 1) return natural_cmp(&a->t, &b->t);
+    return 0;
+}
+
+/* Stable merge sort of idx by keys (descending: the order reversed, ties kept). */
+static void sort_by_keys(const SortKey *k, int desc, size_t *idx, size_t *tmp, size_t n) {
+    for (size_t w = 1; w < n; w *= 2) {
+        for (size_t lo = 0; lo < n; lo += 2 * w) {
+            size_t mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n;
+            size_t i = lo, j = mid, o = lo;
+            while (i < mid && j < hi) {
+                int c = sortkey_cmp(&k[idx[j]], &k[idx[i]]);
+                tmp[o++] = (desc ? c > 0 : c < 0) ? idx[j++] : idx[i++];
+            }
+            while (i < mid) tmp[o++] = idx[i++];
+            while (j < hi) tmp[o++] = idx[j++];
+        }
+        memcpy(idx, tmp, n * sizeof *idx);
+    }
+}
+/* ---- end QTY1 ---- */
+
 void cc_sched_table_free(cc_sched_table *t) { arena_free(&t->arena); }
+
+/* Group `rows` (indices into P, in order) into one level group per distinct storey (lowest first,
+ * as the scene's storeys, then by name; no known storey last) or, not by level, one group; each
+ * with its subtotal. Appends to t->groups and to `all`. -1 out of memory. */
+typedef struct {
+    Arena *a, *tmp;
+    const cc_viewfile_meta *mt;
+    const cc_schedule *def;
+    const uint8_t *cols;
+    size_t nc;
+} GroupCtx;
+
+static int level_groups(GroupCtx *g, cc_sched_table *t, const Pending *P, const size_t *ix, size_t n, int by_level,
+                        cc_str material, int with_material, cc_sched_row **all, size_t *nall) {
+    Arena *a = g->a;
+    if (!by_level) {
+        cc_sched_group *G = &t->groups[t->ngroups++];
+        memset(G, 0, sizeof *G);
+        G->level = cs("");
+        G->material = material;
+        G->rows = arena_alloc(a, (n + 1) * sizeof *G->rows, 8);
+        if (!G->rows) return -1;
+        cc_sched_row **rp = arena_alloc(g->tmp, (n + 1) * sizeof *rp, 8);
+        if (!rp) return -1;
+        for (size_t i = 0; i < n; i++) G->rows[G->nrows++] = P[ix[i]].row;
+        for (size_t i = 0; i < n; i++) rp[i] = &G->rows[i], all[(*nall)++] = &G->rows[i];
+        if (with_material) { /* QTY1: a material group without levels: its subtotal under its rows */
+            cc_str label = label_of(a, material.n ? NULL : "No material", material, n);
+            if (!label.p || !(G->subtotal = totals(a, g->cols, g->nc, rp, n, label))) return -1;
+        }
+        return 0;
+    }
+    /* Levels lowest first (their place in the scene's storeys, by name), then by name;
+     * elements on no known storey last. */
+    size_t *order = arena_alloc(g->tmp, (n + 1) * sizeof *order, 8);
+    size_t *lv = arena_alloc(g->tmp, (n + 1) * sizeof *lv, 8); /* a row index per distinct level */
+    if (!order || !lv) return -1;
+    for (size_t i = 0; i < n; i++) {
+        order[i] = SIZE_MAX;
+        for (size_t k = 0; k < g->mt->nstoreys; k++)
+            if (str_eq(g->mt->storeys[k].name, P[ix[i]].storey)) {
+                order[i] = k;
+                break;
+            }
+    }
+    size_t nlv = 0;
+    for (size_t i = 0; i < n; i++) {
+        /* insertion into the sorted distinct list (first seen in the sorted rows) */
+        size_t at = nlv;
+        int dup = 0;
+        for (size_t k = 0; k < nlv; k++) {
+            size_t j = lv[k];
+            int c = order[i] < order[j] ? -1 : order[i] > order[j];
+            if (!c) c = str_cmp(P[ix[i]].storey, P[ix[j]].storey);
+            if (c == 0) {
+                dup = 1;
+                break;
+            }
+            if (c < 0) {
+                at = k;
+                break;
+            }
+        }
+        if (dup) continue;
+        memmove(lv + at + 1, lv + at, (nlv - at) * sizeof *lv);
+        lv[at] = i;
+        nlv++;
+    }
+    for (size_t gi = 0; gi < nlv; gi++) {
+        cc_str l = P[ix[lv[gi]]].storey;
+        cc_sched_group *G = &t->groups[t->ngroups++];
+        memset(G, 0, sizeof *G);
+        G->level = arena_str(a, l.p, l.n);
+        G->material = material;
+        size_t cnt = 0;
+        for (size_t i = 0; i < n; i++) cnt += str_eq(P[ix[i]].storey, l);
+        G->rows = arena_alloc(a, (cnt + 1) * sizeof *G->rows, 8);
+        if (!G->level.p || !G->rows) return -1;
+        for (size_t i = 0; i < n; i++)
+            if (str_eq(P[ix[i]].storey, l)) G->rows[G->nrows++] = P[ix[i]].row;
+        cc_sched_row **rp = arena_alloc(g->tmp, (cnt + 1) * sizeof *rp, 8);
+        if (!rp) return -1;
+        for (size_t i = 0; i < cnt; i++) rp[i] = &G->rows[i], all[(*nall)++] = &G->rows[i];
+        cc_str label = label_of(a, l.n ? NULL : "No level", l, cnt);
+        if (!label.p) return -1;
+        G->subtotal = totals(a, g->cols, g->nc, rp, cnt, label);
+        if (!G->subtotal) return -1;
+    }
+    return 0;
+}
 
 int cc_schedule_table(cc_sched_table *t, const cc_scene *s, const cc_viewfile_meta *mt, const cc_schedule *def,
                       cc_error *err) {
@@ -738,20 +941,28 @@ int cc_schedule_table(cc_sched_table *t, const cc_scene *s, const cc_viewfile_me
     arena_init(&tmp, 0);
     arena_init(&scratch, 0);
     int rc = -1;
-    size_t nf = def->nfields, ne = s->nelements;
+    size_t nreal = def->nfields, np = def->properties.n, nf = nreal + np, ne = s->nelements;
+    Buf ftmp;
+    buf_init(&ftmp);
     t->name = arena_str(a, def->name.p, def->name.n);
     t->fields = arena_alloc(a, nf + 1, 1);
     if (!t->name.p || !t->fields) goto done;
-    if (nf) memcpy(t->fields, def->fields, nf);
+    if (nreal) memcpy(t->fields, def->fields, nreal);
+    for (size_t k = 0; k < np; k++) t->fields[nreal + k] = CC_SCHED_PROP; /* QTY1 */
     t->nfields = nf;
+    t->props = def->properties.v, t->nprops = np;
+    t->by_material = def->group_by_material, t->summary = def->summary;
     int want_loc = 0;
-    for (size_t k = 0; k < nf; k++) want_loc |= def->fields[k] == CC_FIELD_LOCATION;
+    for (size_t k = 0; k < nreal; k++) want_loc |= def->fields[k] == CC_FIELD_LOCATION;
+    if (def->has_filter) want_loc |= column_field(def->filter_column) == CC_FIELD_LOCATION; /* QTY1 */
+    if (def->has_sort) want_loc |= column_field(def->sort_column) == CC_FIELD_LOCATION;
     Axis *axes = NULL;
     Crossing *cross = NULL;
     size_t ncross = 0;
     if (want_loc && crossings(s, mt, &tmp, &axes, &cross, &ncross)) goto done;
     Pending *rows = arena_alloc(&tmp, (ne + 1) * sizeof *rows, 8);
-    if (!rows) goto done;
+    SortKey *keys = def->has_sort ? arena_alloc(&tmp, (ne + 1) * sizeof *keys, 8) : NULL; /* QTY1 */
+    if (!rows || (def->has_sort && !keys)) goto done;
     size_t nrows = 0;
     for (size_t i = 0; i < ne; i++) {
         const cc_scene_element *e = &s->elements[i];
@@ -782,38 +993,39 @@ int cc_schedule_table(cc_sched_table *t, const cc_scene *s, const cc_viewfile_me
             }
         }
         const cc_view_info *info = i < mt->ninfo ? &mt->info[i] : NULL;
-        cc_str name = info ? info->name : cs(""), storey = info ? info->storey : cs("");
-        cc_str material = info ? info->material : cs(""), gid = info ? info->global_id : cs("");
-        double rho = 0;
-        int has_rho = cc_density(mt, material, &rho);
-        cc_str section = arena_str(a, m.section.p, m.section.n);
-        cc_cell *cells = arena_alloc(a, (nf + 1) * sizeof *cells, 8);
-        if (!cells || !section.p) goto done;
-        for (size_t k = 0; k < nf; k++) {
-            switch (def->fields[k]) {
-            case CC_FIELD_LEVEL: cells[k] = text_cell(storey); break;
-            case CC_FIELD_LOCATION: cells[k] = text_cell(location); break;
-            case CC_FIELD_NAME: cells[k] = text_cell(name); break;
-            case CC_FIELD_CLASS: cells[k] = text_cell(e->class_name); break;
-            case CC_FIELD_MATERIAL: cells[k] = text_cell(material); break;
-            case CC_FIELD_SECTION: cells[k] = text_cell(section); break;
-            case CC_FIELD_LENGTH: cells[k] = num_cell(m.length / 1000.0, 3); break;
-            case CC_FIELD_WIDTH: cells[k] = num_cell(m.width / 10.0, 1); break;
-            case CC_FIELD_HEIGHT: cells[k] = num_cell(m.height / 10.0, 1); break;
-            case CC_FIELD_AREA: cells[k] = num_cell(m.area_m2, 2); break;
-            case CC_FIELD_VOLUME: cells[k] = num_cell(m.volume_m3, 3); break;
-            case CC_FIELD_MASS:
-                cells[k] = has_rho ? num_cell(m.volume_m3 * rho, 0) : text_cell(cs(""));
-                break;
-            case CC_FIELD_GLOBAL_ID: cells[k] = text_cell(gid); break;
-            default: cells[k] = text_cell(cs("")); break;
+        Elem x;
+        memset(&x, 0, sizeof x);
+        x.m = &m, x.e = e, x.me = mt->elements && i < mt->ninfo ? mt->elements[i] : NULL;
+        x.location = location;
+        x.name = info ? info->name : cs(""), x.storey = info ? info->storey : cs("");
+        x.material = info ? info->material : cs(""), x.gid = info ? info->global_id : cs("");
+        x.has_rho = cc_density(mt, x.material, &x.rho);
+        x.section = arena_str(a, m.section.p, m.section.n);
+        if (!x.section.p) goto done;
+        if (def->has_filter) { /* QTY1 */
+            cc_cell fc = column_cell(def->filter_column, &x);
+            if (!cell_is(&fc, def->filter_value, &ftmp)) {
+                if (ftmp.oom) goto done;
+                continue;
             }
         }
+        cc_cell *cells = arena_alloc(a, (nf + 1) * sizeof *cells, 8);
+        if (!cells) goto done;
+        for (size_t k = 0; k < nreal; k++) cells[k] = field_cell(def->fields[k], &x);
+        for (size_t k = 0; k < np; k++) cells[nreal + k] = text_cell(prop_of(x.me, def->properties.v[k])); /* QTY1 */
+        if (def->has_sort) { /* QTY1 */
+            cc_cell sc = column_cell(def->sort_column, &x);
+            SortKey *sk = &keys[nrows];
+            memset(sk, 0, sizeof *sk);
+            sk->kind = sc.kind == CC_CELL_NUM ? 0 : sc.kind == CC_CELL_TEXT ? 1 : 2;
+            sk->v = sc.v;
+            if (sk->kind == 1 && natural(&tmp, sc.text, &sk->t)) goto done;
+        }
         Pending *p = &rows[nrows++];
-        p->storey = storey;
+        p->storey = x.storey;
         p->row.element = i;
         p->row.cells = cells;
-        if (natural(&tmp, location, &p->key[0]) || natural(&tmp, name, &p->key[1])) goto done;
+        if (natural(&tmp, location, &p->key[0]) || natural(&tmp, x.name, &p->key[1])) goto done;
     }
     t->count = nrows;
     size_t *idx = arena_alloc(&tmp, (nrows + 1) * sizeof *idx, 8), *ix2 = arena_alloc(&tmp, (nrows + 1) * sizeof *ix2, 8);
@@ -821,32 +1033,24 @@ int cc_schedule_table(cc_sched_table *t, const cc_scene *s, const cc_viewfile_me
     if (!idx || !ix2 || !all) goto done;
     for (size_t i = 0; i < nrows; i++) idx[i] = i;
     stable_sort(rows, idx, ix2, nrows);
+    if (def->has_sort) sort_by_keys(keys, def->sort_desc, idx, ix2, nrows); /* QTY1: after the default order, stable */
     size_t nall = 0;
-    if (def->group_by_level) {
-        /* Levels lowest first (their place in the scene's storeys, by name), then by name;
-         * elements on no known storey last. */
-        size_t *order = arena_alloc(&tmp, (nrows + 1) * sizeof *order, 8);
-        size_t *lv = arena_alloc(&tmp, (nrows + 1) * sizeof *lv, 8); /* a row index per distinct level */
-        t->groups = arena_alloc(a, (nrows + 1) * sizeof *t->groups, 8);
-        if (!order || !lv || !t->groups) goto done;
+    GroupCtx gc = {a, &tmp, mt, def, t->fields, nf};
+    /* at most a head and a group per row, and one more */
+    t->groups = arena_alloc(a, (2 * nrows + 2) * sizeof *t->groups, 8);
+    if (!t->groups) goto done;
+    if (def->group_by_material) { /* QTY1: materials by name (bytes), no material last; levels within */
+        size_t *mx = arena_alloc(&tmp, (nrows + 1) * sizeof *mx, 8), nm = 0; /* a row index per distinct material */
+        size_t *sub = arena_alloc(&tmp, (nrows + 1) * sizeof *sub, 8);
+        if (!mx || !sub) goto done;
         for (size_t i = 0; i < nrows; i++) {
-            order[i] = SIZE_MAX;
-            for (size_t k = 0; k < mt->nstoreys; k++)
-                if (str_eq(mt->storeys[k].name, rows[i].storey)) {
-                    order[i] = k;
-                    break;
-                }
-        }
-        size_t nlv = 0;
-        for (size_t i = 0; i < nrows; i++) {
-            /* insertion into the sorted distinct list */
-            size_t at = nlv;
+            cc_str mi = mt->ninfo > rows[idx[i]].row.element ? mt->info[rows[idx[i]].row.element].material : cs("");
+            size_t at = nm;
             int dup = 0;
-            for (size_t k = 0; k < nlv; k++) {
-                size_t j = lv[k];
-                int c = order[i] < order[j] ? -1 : order[i] > order[j];
-                if (!c) c = str_cmp(rows[i].storey, rows[j].storey);
-                if (c == 0) {
+            for (size_t k = 0; k < nm; k++) {
+                cc_str mk = mt->info[rows[mx[k]].row.element].material;
+                int c = !mi.n != !mk.n ? (!mi.n ? 1 : -1) : str_cmp(mi, mk);
+                if (!c) {
                     dup = 1;
                     break;
                 }
@@ -856,45 +1060,39 @@ int cc_schedule_table(cc_sched_table *t, const cc_scene *s, const cc_viewfile_me
                 }
             }
             if (dup) continue;
-            memmove(lv + at + 1, lv + at, (nlv - at) * sizeof *lv);
-            lv[at] = i;
-            nlv++;
+            memmove(mx + at + 1, mx + at, (nm - at) * sizeof *mx);
+            mx[at] = idx[i];
+            nm++;
         }
-        for (size_t g = 0; g < nlv; g++) {
-            cc_str l = rows[lv[g]].storey;
-            cc_sched_group *G = &t->groups[t->ngroups++];
-            G->level = arena_str(a, l.p, l.n);
-            size_t cnt = 0;
-            for (size_t i = 0; i < nrows; i++) cnt += str_eq(rows[idx[i]].storey, l);
-            G->rows = arena_alloc(a, (cnt + 1) * sizeof *G->rows, 8);
-            if (!G->level.p || !G->rows) goto done;
-            for (size_t i = 0; i < nrows; i++)
-                if (str_eq(rows[idx[i]].storey, l)) G->rows[G->nrows++] = rows[idx[i]].row;
-            cc_sched_row **rp = arena_alloc(&tmp, (cnt + 1) * sizeof *rp, 8);
-            if (!rp) goto done;
-            for (size_t i = 0; i < cnt; i++) rp[i] = &G->rows[i], all[nall++] = &G->rows[i];
-            cc_str label = label_of(a, l.n ? NULL : "No level", l, cnt);
-            if (!label.p) goto done;
-            G->subtotal = totals(a, def->fields, nf, rp, cnt, label);
-            if (!G->subtotal) goto done;
+        for (size_t k = 0; k < nm; k++) {
+            cc_str mk = mt->ninfo > rows[mx[k]].row.element ? mt->info[rows[mx[k]].row.element].material : cs("");
+            size_t ns = 0;
+            for (size_t i = 0; i < nrows; i++) {
+                cc_str mi = mt->ninfo > rows[idx[i]].row.element ? mt->info[rows[idx[i]].row.element].material : cs("");
+                if (str_eq(mi, mk)) sub[ns++] = idx[i];
+            }
+            size_t first = nall;
+            if (def->group_by_level) {
+                cc_sched_group *H = &t->groups[t->ngroups++];
+                memset(H, 0, sizeof *H);
+                H->level = cs(""), H->material = mk, H->head = 1;
+                if (level_groups(&gc, t, rows, sub, ns, 1, mk, 1, all, &nall)) goto done;
+                cc_str label = label_of(a, mk.n ? NULL : "No material", mk, ns);
+                if (!label.p || !(H->subtotal = totals(a, t->fields, nf, all + first, nall - first, label))) goto done;
+            } else if (level_groups(&gc, t, rows, sub, ns, 0, mk, 1, all, &nall))
+                goto done;
         }
-    } else {
-        t->groups = arena_alloc(a, sizeof *t->groups, 8);
-        if (!t->groups) goto done;
-        cc_sched_group *G = &t->groups[t->ngroups++];
-        G->level = cs("");
-        G->rows = arena_alloc(a, (nrows + 1) * sizeof *G->rows, 8);
-        if (!G->rows) goto done;
-        for (size_t i = 0; i < nrows; i++) G->rows[G->nrows++] = rows[idx[i]].row, all[nall++] = &G->rows[i];
-    }
+    } else if (level_groups(&gc, t, rows, idx, nrows, def->group_by_level, cs(""), 0, all, &nall))
+        goto done;
     if (def->totals) {
         cc_str label = label_of(a, "Total", cs(""), nrows);
         if (!label.p) goto done;
-        t->total = totals(a, def->fields, nf, all, nall, label);
+        t->total = totals(a, t->fields, nf, all, nall, label);
         if (!t->total) goto done;
     }
     rc = 0;
 done:
+    buf_free(&ftmp);
     arena_free(&tmp);
     arena_free(&scratch);
     if (rc) oom(err);
@@ -911,9 +1109,15 @@ void cc_cell_text(Buf *b, const cc_cell *c) {
 static const char *const TITLE[CC_FIELD_COUNT] = {
     "Level", "Location", "Name", "IFC class", "Material", "Section", "Length (m)", "Width (cm)", "Height (cm)",
     "Area (m\xc2\xb2)", "Volume (m\xc2\xb3)", "Mass (kg)", "GlobalId",
+    "Count", "Type", "Gross volume (m\xc2\xb3)", /* QTY1 */
 };
 
 const char *cc_sched_field_title(int f) { return (unsigned)f < CC_FIELD_COUNT ? TITLE[f] : "?"; }
+
+cc_str cc_sched_column_title(const cc_sched_table *t, size_t k) { /* QTY1 */
+    if (t->fields[k] == CC_SCHED_PROP) return t->props[k - (t->nfields - t->nprops)];
+    return cs(cc_sched_field_title(t->fields[k]));
+}
 
 static void csv_cell(Buf *out, const char *s, size_t n) {
     int q = 0;
@@ -944,20 +1148,23 @@ static void csv_line(Buf *out, const cc_cell *cells, size_t n) {
     buf_putc(out, '\n');
 }
 
-void cc_schedule_csv(Buf *out, const cc_sched_table *t) {
+void cc_schedule_csv_headers(Buf *out, const cc_sched_table *t, const cc_str *headers, size_t nh) {
     for (size_t k = 0; k < t->nfields; k++) {
         if (k) buf_putc(out, ',');
-        const char *s = cc_sched_field_title(t->fields[k]);
-        csv_cell(out, s, strlen(s));
+        cc_str h = headers && nh == t->nfields ? headers[k] : cc_sched_column_title(t, k); /* QTY1 */
+        csv_cell(out, h.n ? h.p : "", h.n);
     }
     buf_putc(out, '\n');
     for (size_t g = 0; g < t->ngroups; g++) {
         const cc_sched_group *G = &t->groups[g];
-        for (size_t r = 0; r < G->nrows; r++) csv_line(out, G->rows[r].cells, t->nfields);
+        if (!t->summary) /* QTY1 */
+            for (size_t r = 0; r < G->nrows; r++) csv_line(out, G->rows[r].cells, t->nfields);
         if (G->subtotal && t->nfields) csv_line(out, G->subtotal, t->nfields);
     }
     if (t->total) csv_line(out, t->total, t->nfields);
 }
+
+void cc_schedule_csv(Buf *out, const cc_sched_table *t) { cc_schedule_csv_headers(out, t, NULL, 0); }
 
 static void json_cells(JsonW *w, Buf *tmp, const cc_cell *cells, size_t n) {
     jw_arr_begin(w);
@@ -977,7 +1184,10 @@ void cc_schedule_json(Buf *out, const cc_sched_table *t, const cc_viewfile_meta 
     jw_obj_begin(&w);
     jw_key(&w, "columns");
     jw_arr_begin(&w);
-    for (size_t k = 0; k < t->nfields; k++) jw_str(&w, cc_sched_field_title(t->fields[k]));
+    for (size_t k = 0; k < t->nfields; k++) {
+        cc_str h = cc_sched_column_title(t, k); /* QTY1 */
+        jw_str_n(&w, h.n ? h.p : "", h.n);
+    }
     jw_arr_end(&w);
     jw_key(&w, "count");
     jw_u64(&w, t->count);
@@ -1020,6 +1230,78 @@ void cc_schedule_json(Buf *out, const cc_sched_table *t, const cc_viewfile_meta 
     buf_free(&tmp);
 }
 
+/* QTY1 (ADR 0080): see quantity.h. A group is written when one of its rows is in the window (a
+ * material's line when one of its level groups is); in a summary every group, no row. */
+void cc_schedule_json_page(Buf *out, const cc_sched_table *t, const cc_viewfile_meta *mt, size_t offset, size_t limit) {
+    JsonW w;
+    Buf tmp;
+    buf_init(&tmp);
+    jw_init(&w, out, 0);
+    jw_obj_begin(&w);
+    jw_key(&w, "columns");
+    jw_arr_begin(&w);
+    for (size_t k = 0; k < t->nfields; k++) {
+        cc_str h = cc_sched_column_title(t, k);
+        jw_str_n(&w, h.n ? h.p : "", h.n);
+    }
+    jw_arr_end(&w);
+    jw_key(&w, "count");
+    jw_u64(&w, t->count);
+    jw_key(&w, "groups");
+    jw_arr_begin(&w);
+    size_t end = limit > SIZE_MAX - offset ? SIZE_MAX : offset + limit, at = 0; /* the window, rows before the group */
+    for (size_t g = 0; g < t->ngroups; g++) {
+        const cc_sched_group *G = &t->groups[g];
+        size_t lo = at, hi = at + (t->summary ? 0 : G->nrows);
+        if (G->head) { /* the material's rows: its level groups up to the next head */
+            hi = at;
+            for (size_t h = g + 1; h < t->ngroups && !t->groups[h].head; h++) hi += t->summary ? 0 : t->groups[h].nrows;
+        }
+        int shown = t->summary ? 1 : hi > offset && lo < end;
+        if (!G->head) at = hi;
+        if (!shown) continue;
+        size_t r0 = G->head || t->summary ? 0 : (offset > lo ? offset - lo : 0);
+        size_t r1 = G->head || t->summary ? 0 : (end < hi ? end - lo : G->nrows);
+        jw_obj_begin(&w);
+        jw_key(&w, "first"); /* the index of its first row written, in the table's order */
+        jw_u64(&w, lo + r0);
+        if (G->head) jw_key(&w, "head"), jw_bool(&w, 1);
+        jw_key(&w, "ids");
+        jw_arr_begin(&w);
+        for (size_t r = r0; r < r1; r++) {
+            size_t e = G->rows[r].element;
+            if (e < mt->ninfo) jw_str_n(&w, mt->info[e].global_id.p, mt->info[e].global_id.n);
+            else jw_null(&w);
+        }
+        jw_arr_end(&w);
+        jw_key(&w, "level");
+        jw_str_n(&w, G->level.p ? G->level.p : "", G->level.n);
+        if (t->by_material) jw_key(&w, "material"), jw_str_n(&w, G->material.p ? G->material.p : "", G->material.n);
+        jw_key(&w, "rows");
+        jw_arr_begin(&w);
+        for (size_t r = r0; r < r1; r++) json_cells(&w, &tmp, G->rows[r].cells, t->nfields);
+        jw_arr_end(&w);
+        jw_key(&w, "subtotal");
+        json_cells(&w, &tmp, G->subtotal, G->subtotal ? t->nfields : 0);
+        jw_obj_end(&w);
+    }
+    jw_arr_end(&w);
+    jw_key(&w, "name");
+    jw_str_n(&w, t->name.p, t->name.n);
+    jw_key(&w, "offset");
+    jw_u64(&w, offset);
+    jw_key(&w, "row_count");
+    jw_u64(&w, t->summary ? 0 : t->count);
+    jw_key(&w, "total");
+    if (t->total) json_cells(&w, &tmp, t->total, t->nfields);
+    else jw_null(&w);
+    jw_key(&w, "truncated");
+    jw_bool(&w, !t->summary && (offset > 0 || end < t->count));
+    jw_obj_end(&w);
+    if (jw_finish(&w) != JW_OK || tmp.oom) out->oom = 1;
+    buf_free(&tmp);
+}
+
 /* ---- definitions (schedule.rs default_schedules, effective) ---- */
 
 static cc_str CLS_COLUMN[] = {{"IfcColumn", 9}};
@@ -1041,8 +1323,8 @@ static uint8_t FD_WALL[] = {F_LEVEL, F_NAME, F_MAT, F_WID, F_LEN, F_HEI, F_AREA,
 static uint8_t FD_FOOTING[] = {F_LEVEL, F_LOC, F_NAME, F_MAT, F_SEC, F_HEI, F_VOL};
 static uint8_t FD_ALL[] = {F_LEVEL, F_NAME, F_CLASS, F_MAT, F_VOL, F_MASS};
 #define DEF(nm, cls, fam, fd)                                                                                    \
-    {{nm, sizeof nm - 1}, {cls, sizeof cls / sizeof cls[0]}, fam >= 0, fam >= 0 ? fam : 0, fd, sizeof fd, 1, 1}
-#define DEF0(nm, fam, fd) {{nm, sizeof nm - 1}, {NULL, 0}, fam >= 0, fam >= 0 ? fam : 0, fd, sizeof fd, 1, 1}
+    {{nm, sizeof nm - 1}, {cls, sizeof cls / sizeof cls[0]}, fam >= 0, fam >= 0 ? fam : 0, fd, sizeof fd, 1, 1, {NULL, 0}, 0, 0, 0, {NULL, 0}, {NULL, 0}, 0, {NULL, 0}, 0}
+#define DEF0(nm, fam, fd) {{nm, sizeof nm - 1}, {NULL, 0}, fam >= 0, fam >= 0 ? fam : 0, fd, sizeof fd, 1, 1, {NULL, 0}, 0, 0, 0, {NULL, 0}, {NULL, 0}, 0, {NULL, 0}, 0}
 static const cc_schedule BUILTIN[] = {
     DEF("Concrete columns", CLS_COLUMN, CC_CAT_CONCRETE, FD_COL),
     DEF("Steel columns", CLS_COLUMN, CC_CAT_STEEL, FD_STEEL_COL),

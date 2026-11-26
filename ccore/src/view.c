@@ -14,7 +14,10 @@ static const char *const LEVEL[] = {"associated", "above", "below", "unlimited"}
 static const char *const AXIS[] = {"aligned", "horizontal", "vertical"};
 static const char *const ANN[] = {"dimension", "text"};
 static const char *const FIELD[] = {"level",  "location", "name",   "class", "material", "section",  "length",
-                                    "width",  "height",   "area",   "volume", "mass",    "global_id"};
+                                    "width",  "height",   "area",   "volume", "mass",    "global_id",
+                                    /* QTY1 (ADR 0080): C additions */
+                                    "count",  "type",     "gross_volume"};
+_Static_assert(sizeof FIELD / sizeof FIELD[0] == CC_FIELD_COUNT, "a name per field");
 static const char *const RANGE[] = {"top", "cut", "bottom", "depth"};
 static const char *const PAPERS[] = {"A4", "A3", "A2", "A1", "A0"};
 static const double PAPER_W[] = {297.0, 420.0, 594.0, 841.0, 1189.0};
@@ -525,11 +528,76 @@ int cc_vd_sheet(cc_vd *d, const JrVal *v, const char *skip, cc_sheet *out) {
 
 static const char *const CATS[] = {"concrete", "steel", "timber", "masonry", "insulation", "earth", "glass", "other"};
 
+/* QTY1 (ADR 0080): a Field by name. Rust's 13 first, with Rust's error text (which names its 13
+ * only); then the C additions. */
+static int d_field(cc_vd *d, const JrVal *v, int *k) {
+    if (v->type == JR_STR)
+        for (int i = CC_FIELD_RUST; i < CC_FIELD_COUNT; i++)
+            if (v->n == strlen(FIELD[i]) && !memcmp(v->s, FIELD[i], v->n)) return *k = i, 0;
+    return d_enum(d, v, FIELD, CC_FIELD_RUST, k);
+}
+
+/* QTY1: a column id of a filter or a sort: a field name or a property key, 1 to 200 bytes. */
+static int d_col_text(cc_vd *d, const JrVal *v, cc_str *out, int may_be_empty) {
+    if (d_str(d, v, out)) return -1;
+    if ((!may_be_empty && !out->n) || out->n > CC_SCHED_MAX_TEXT)
+        return vfail3(d, v->off, "a column or value of 1 to 200 bytes", 0, 0);
+    return 0;
+}
+
+/* QTY1: the C-only keys of a ScheduleDef (ADR 0080), read apart so that the unknown-field text of
+ * Rust's six stays Rust's. */
+static const char *const SCHED_C[] = {"properties", "group_by_material", "summary", "filter", "sort"};
+
+static int d_schedule_c(cc_vd *d, const JrVal *const *c, cc_schedule *s) {
+    if (c[0]) {
+        if (d_strs(d, c[0], &s->properties)) return -1;
+        if (s->properties.n > 32) return vfail3(d, c[0]->off, "at most 32 property columns", 0, 0);
+        for (size_t i = 0; i < s->properties.n; i++)
+            if (!s->properties.v[i].n || s->properties.v[i].n > CC_SCHED_MAX_TEXT)
+                return vfail3(d, c[0]->items[i].off, "a property key of 1 to 200 bytes", 0, 0);
+    }
+    if (c[1] && d_bool(d, c[1], &s->group_by_material)) return -1;
+    if (c[2] && d_bool(d, c[2], &s->summary)) return -1;
+    if (c[3]) {
+        static const char *const F[] = {"column", "value"};
+        const JrVal *f[2];
+        if (fields(d, c[3], F, 2, f, "struct Filter", NULL) || need(d, c[3], f[0], F[0]) || need(d, c[3], f[1], F[1]) ||
+            d_col_text(d, f[0], &s->filter_column, 0) || d_col_text(d, f[1], &s->filter_value, 1))
+            return -1;
+        s->has_filter = 1;
+    }
+    if (c[4]) {
+        static const char *const F[] = {"column", "descending"};
+        const JrVal *f[2];
+        if (fields(d, c[4], F, 2, f, "struct Sort", NULL) || need(d, c[4], f[0], F[0]) ||
+            d_col_text(d, f[0], &s->sort_column, 0) || (f[1] && d_bool(d, f[1], &s->sort_desc)))
+            return -1;
+        s->has_sort = 1;
+    }
+    return 0;
+}
+
 static int d_schedule(cc_vd *d, const JrVal *v, cc_schedule *s) {
     static const char *const F[] = {"name", "classes", "family", "fields", "group_by_level", "totals"};
-    const JrVal *f[6];
+    const JrVal *f[6], *c[5] = {0};
     memset(s, 0, sizeof *s);
-    if (fields(d, v, F, 6, f, "struct ScheduleDef", NULL)) return -1;
+    JrVal rust = *v; /* QTY1: v without the C-only keys */
+    if (v->type == JR_OBJ && v->n) {
+        JrMember *mm = alloc_n(d, v->n, sizeof *mm, v->off);
+        if (!mm) return -1;
+        size_t k = 0;
+        for (size_t j = 0; j < v->n; j++) {
+            int ci = -1;
+            for (int i = 0; i < 5 && ci < 0; i++)
+                if (jr_key_is(&v->members[j], SCHED_C[i])) ci = i;
+            if (ci < 0) mm[k++] = v->members[j];
+            else if (c[ci]) return vfail3(d, v->members[j].val.off, "duplicate field `", SCHED_C[ci], "`");
+            else c[ci] = &v->members[j].val;
+        }
+        rust.members = mm, rust.n = k;
+    }
+    if (fields(d, &rust, F, 6, f, "struct ScheduleDef", NULL)) return -1;
     if (need(d, v, f[0], F[0]) || need(d, v, f[1], F[1]) || need(d, v, f[3], F[3])) return -1;
     if (d_str(d, f[0], &s->name) || d_strs(d, f[1], &s->classes)) return -1;
     if (f[2] && f[2]->type != JR_NULL) {
@@ -543,12 +611,12 @@ static int d_schedule(cc_vd *d, const JrVal *v, cc_schedule *s) {
     s->nfields = fl->n;
     for (size_t i = 0; i < fl->n; i++) {
         int k = 0;
-        if (d_enum(d, &fl->items[i], FIELD, CC_FIELD_COUNT, &k)) return -1;
+        if (d_field(d, &fl->items[i], &k)) return -1;
         s->fields[i] = (uint8_t)k;
     }
     if (f[4] && d_bool(d, f[4], &s->group_by_level)) return -1;
     if (f[5] && d_bool(d, f[5], &s->totals)) return -1;
-    return 0;
+    return d_schedule_c(d, c, s);
 }
 
 int cc_vd_schedules(cc_vd *d, const JrVal *v, cc_schedule **out, size_t *n) {
@@ -812,7 +880,10 @@ void cc_em_schedules(cc_em *e, const cc_schedule *s, size_t n) {
     e_arr(e, n);
     for (size_t i = 0; i < n; i++) {
         const cc_schedule *d = &s[i];
-        e_map(e, 5 + (size_t)(d->has_family != 0));
+        /* QTY1: the C-only keys after Rust's, each only when set (a Rust schedule keeps its bytes) */
+        size_t extra = (d->properties.n != 0) + (d->group_by_material != 0) + (d->summary != 0) + (d->has_filter != 0) +
+                       (d->has_sort != 0);
+        e_map(e, 5 + (size_t)(d->has_family != 0) + extra);
         e_key(e, "name"), e_str(e, d->name);
         e_key(e, "classes"), e_strs(e, &d->classes);
         if (d->has_family) e_key(e, "family"), e_cstr(e, CATS[d->family]);
@@ -822,6 +893,21 @@ void cc_em_schedules(cc_em *e, const cc_schedule *s, size_t n) {
         e_arr_end(e);
         e_key(e, "group_by_level"), e_bool(e, d->group_by_level);
         e_key(e, "totals"), e_bool(e, d->totals);
+        if (d->properties.n) e_key(e, "properties"), e_strs(e, &d->properties);
+        if (d->group_by_material) e_key(e, "group_by_material"), e_bool(e, 1);
+        if (d->summary) e_key(e, "summary"), e_bool(e, 1);
+        if (d->has_filter) {
+            e_key(e, "filter"), e_map(e, 2);
+            e_key(e, "column"), e_str(e, d->filter_column);
+            e_key(e, "value"), e_str(e, d->filter_value);
+            e_map_end(e);
+        }
+        if (d->has_sort) {
+            e_key(e, "sort"), e_map(e, 2);
+            e_key(e, "column"), e_str(e, d->sort_column);
+            e_key(e, "descending"), e_bool(e, d->sort_desc);
+            e_map_end(e);
+        }
         e_map_end(e);
     }
     e_arr_end(e);
@@ -1125,6 +1211,16 @@ int cc_schedules_validate(const cc_schedule *s, size_t n, Buf *why) {
             buf_puts(why, "schedule "), put(why, d->name), buf_puts(why, ": at most 64 classes");
             return -1;
         }
+        /* ---- QTY1 (ADR 0080): the C-only parts, bounded ---- */
+        int bad = d->nfields + d->properties.n > 32 || (d->has_filter && (!d->filter_column.n || d->filter_column.n > CC_SCHED_MAX_TEXT ||
+                                                                          d->filter_value.n > CC_SCHED_MAX_TEXT)) ||
+                  (d->has_sort && (!d->sort_column.n || d->sort_column.n > CC_SCHED_MAX_TEXT));
+        for (size_t k = 0; k < d->nfields; k++) bad |= d->fields[k] >= CC_FIELD_COUNT;
+        for (size_t k = 0; k < d->properties.n; k++) bad |= !d->properties.v[k].n || d->properties.v[k].n > CC_SCHED_MAX_TEXT;
+        if (bad) {
+            buf_puts(why, "schedule "), put(why, d->name), buf_puts(why, ": 1 to 32 columns, texts of 1 to 200 bytes");
+            return -1;
+        }
         for (size_t k = 0; k < i; k++)
             if (lower_eq(s[k].name, d->name)) {
                 buf_puts(why, "two schedules are named "), put(why, d->name);
@@ -1141,6 +1237,14 @@ int cc_schedule_eq(const cc_schedule *a, const cc_schedule *b) {
         return 0;
     for (size_t i = 0; i < a->classes.n; i++)
         if (!str_eq(a->classes.v[i], b->classes.v[i])) return 0;
+    /* QTY1 */
+    if (a->properties.n != b->properties.n || a->group_by_material != b->group_by_material || a->summary != b->summary ||
+        a->has_filter != b->has_filter || a->has_sort != b->has_sort)
+        return 0;
+    for (size_t i = 0; i < a->properties.n; i++)
+        if (!str_eq(a->properties.v[i], b->properties.v[i])) return 0;
+    if (a->has_filter && (!str_eq(a->filter_column, b->filter_column) || !str_eq(a->filter_value, b->filter_value))) return 0;
+    if (a->has_sort && (!str_eq(a->sort_column, b->sort_column) || a->sort_desc != b->sort_desc)) return 0;
     return a->nfields == 0 || !memcmp(a->fields, b->fields, a->nfields);
 }
 
@@ -1277,6 +1381,9 @@ int cc_schedules_dup(Arena *a, cc_schedule **s, size_t n) {
     if (!d) return -1;
     for (size_t i = 0; i < n; i++) {
         if (dup_str(a, &d[i].name) || dup_strs(a, &d[i].classes)) return -1;
+        if (dup_strs(a, &d[i].properties) || dup_str(a, &d[i].filter_column) || dup_str(a, &d[i].filter_value) ||
+            dup_str(a, &d[i].sort_column)) /* QTY1 */
+            return -1;
         if (d[i].nfields && !(d[i].fields = dup_arr(a, d[i].fields, d[i].nfields))) return -1;
     }
     *s = d;

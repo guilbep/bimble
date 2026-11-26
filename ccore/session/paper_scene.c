@@ -6,6 +6,7 @@
 #include "guid.h"
 #include "json_r.h"
 #include "links.h"
+#include "m1links.h"
 #include "session.h"
 #include "view_effective.h"
 #include "view_io.h"
@@ -184,6 +185,34 @@ static int model_of_scene(cc_session *s, B *b) {
                        s->view == CC_VIEW_IFC ? &s->ifc->scene : &s->vscene);
 }
 
+/* M1LINKS (m1links.h): the levels from links become storeys of the made model (id the level's key,
+ * its name, its placed elevation), so that a plan "from links" finds its storey and a link's
+ * element takes the storey of its name. */
+static int link_levels_add(cc_session *s, B *b) {
+    cc_model *m = b->m;
+    cc_level *own = arena_alloc(b->a, (m->nstoreys ? m->nstoreys : 1) * sizeof *own, sizeof(double)), *ll;
+    if (!own) return -1;
+    for (size_t i = 0; i < m->nstoreys; i++) own[i].key.p = m->storeys[i].id.c, own[i].key.n = 22, own[i].name = m->storeys[i].name,
+                                             own[i].elevation = m->storeys[i].elevation;
+    size_t nll;
+    if (cc_link_levels(s, own, m->nstoreys, b->a, &ll, &nll, NULL)) return -1;
+    if (!nll) return 0;
+    cc_storey *st = arena_alloc(b->a, (m->nstoreys + nll) * sizeof *st, sizeof(double));
+    if (!st) return -1;
+    if (m->nstoreys) memcpy(st, m->storeys, m->nstoreys * sizeof *st);
+    for (size_t i = 0; i < nll; i++) {
+        cc_storey *x = &st[m->nstoreys + i];
+        memset(x, 0, sizeof *x);
+        memcpy(x->id.c, ll[i].key.p, 22);
+        x->name = ll[i].name;
+        x->elevation = ll[i].elevation;
+    }
+    m->storeys = st, m->nstoreys += nll;
+    qsort(m->storeys, m->nstoreys, sizeof *m->storeys, cmp_storey);
+    b->nhost_storeys = m->nstoreys;
+    return 0;
+}
+
 static int name_in(const cc_str *v, size_t n, const char *name) {
     for (size_t i = 0; i < n; i++)
         if (v[i].n == strlen(name) && !memcmp(v[i].p, name, v[i].n)) return 1;
@@ -197,8 +226,10 @@ static int link_drawn(const cc_link *k, const cc_view *view) {
 }
 
 /* Appends link `k`'s elements to the merged scene, moved by `d`, model_index from `base`. */
-static int scene_add_link(cc_scene *out, size_t *cap, const cc_scene *ls, const float d[3], size_t base) {
+static int scene_add_link(cc_scene *out, size_t *cap, const cc_link *lk, const cc_view *view, const cc_scene *ls,
+                          const float d[3], size_t base) {
     for (size_t k = 0; k < ls->nelements; k++) {
+        if (view && cc_link_hidden_by_rule(lk, k, &view->visibility)) continue; /* M1LINKS: a link storey hidden */
         cc_mesh w, m;
         if (cc_scene_world_mesh(ls, k, &out->arena, &w)) return -1;
         memset(&m, 0, sizeof m);
@@ -256,6 +287,7 @@ int cc_paper_src_get(cc_session *s, const cc_scene *sc, const cc_view *view, cc_
         m->nelements = h->nelements, m->nmaterials = h->nmaterials;
         b.nhost_storeys = m->nstoreys;
     } else if (model_of_scene(s, &b)) goto oom;
+    if (nl && link_levels_add(s, &b)) goto oom; /* M1LINKS: the levels from links are storeys of the drawing */
     size_t nhost = m->nelements;
     if (nl) {
         cc_scene *o = &src->own_scene;
@@ -268,14 +300,18 @@ int cc_paper_src_get(cc_session *s, const cc_scene *sc, const cc_view *view, cc_
         if (grow(&o->arena, (void **)&o->elements, &cap, sc->nelements + 1, sizeof *o->elements)) goto oom;
         if (sc->nelements) memcpy(o->elements, sc->elements, sc->nelements * sizeof *o->elements);
         o->nelements = sc->nelements;
+        src->link_first = arena_alloc(&m->arena, nl * sizeof *src->link_first, _Alignof(size_t)); /* DXF1 */
+        src->link_name = arena_alloc(&m->arena, nl * sizeof *src->link_name, _Alignof(const char *));
+        if (!src->link_first || !src->link_name) goto oom;
         for (size_t i = 0; i < s->nlinks; i++) {
             const cc_link *k = &s->links[i];
             if (!link_drawn(k, view)) continue;
+            src->link_first[src->nlinks] = m->nelements, src->link_name[src->nlinks++] = k->name; /* DXF1 */
             const cc_scene *ls = cc_link_scene(k);
             float d[3];
             for (int j = 0; j < 3; j++) d[j] = (float)(ls->origin[j] - sc->origin[j]); /* lib.rs:1499 offset */
             size_t base = m->nelements;
-            if (elements_of(&b, k->kind, k->ifc, k->vf, k->model, ls) || scene_add_link(o, &cap, ls, d, base)) goto oom;
+            if (elements_of(&b, k->kind, k->ifc, k->vf, k->model, ls) || scene_add_link(o, &cap, k, view, ls, d, base)) goto oom;
         }
         src->scene = o;
     }

@@ -113,6 +113,25 @@ static void link_bmsh_id(const void *ctx, const cc_scene *sc, size_t k, char out
     cc_link_id(ctx, k, out);
 }
 
+/* LNK3D (ADR 0078 amendment 3, DEVIATIONS 39): a link's hidden elements stay in its BMSH (M1LINKS
+ * left them out, and every change of what is hidden made the page fetch the whole mesh again); the
+ * page hides them by their ids (query visibility_sets) in its per-element draw state. */
+
+/* The trailer's light fields (visible, placement, colour), hashed (FNV-1a): a change of them alone
+ * writes the trailer again for a reader that asks, without bumping links_mesh_gen. */
+static uint64_t links_head(cc_session *s) {
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < s->nlinks; i++) {
+        const cc_link *k = &s->links[i];
+        double c, sn, t[3];
+        cc_link_placement(s, k, &c, &sn, t);
+        double v[6] = {c, sn, t[0], t[1], t[2], (double)k->colour + 2.0 * (k->visible && k->kind)};
+        const unsigned char *p = (const unsigned char *)v;
+        for (size_t j = 0; j < sizeof v; j++) h = (h ^ p[j]) * 1099511628211ull;
+    }
+    return h;
+}
+
 /* links.h: the LNKS trailer (`form` 3: each link's BMSH in version 3). */
 static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error *err) {
     if (!s->nlinks) return 0;
@@ -181,7 +200,8 @@ int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_
         *p = buf_cstr(cache), *n = cache->len;
         return 404;
     }
-    if (!s->mesh_status || s->mesh_model != m || s->mesh_rev != *rev || s->mesh_links_gen != s->links_gen || s->mesh_form != form) {
+    if (!s->mesh_status || s->mesh_model != m || s->mesh_rev != *rev || s->mesh_links_mesh_gen != s->links_mesh_gen ||
+        s->mesh_form != form || (s->nlinks && s->mesh_links_head != links_head(s))) {
         double t0 = s->pf->now_ms(s->pf->ctx);
         buf_clear(cache);
         cache->oom = 0;
@@ -210,7 +230,8 @@ int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_
         } else {
             s->mesh_status = 200;
         }
-        s->mesh_model = m, s->mesh_rev = *rev, s->mesh_links_gen = s->links_gen, s->mesh_form = form;
+        s->mesh_model = m, s->mesh_rev = *rev, s->mesh_links_mesh_gen = s->links_mesh_gen, s->mesh_form = form;
+        s->mesh_links_head = s->nlinks ? links_head(s) : 0; /* LNK3D */
         *build_ms = s->pf->now_ms(s->pf->ctx) - t0;
     }
     *p = cache->p ? cache->p : "", *n = cache->len;
@@ -275,3 +296,31 @@ int cc_mesh_proxies(cc_session *s, uint64_t budget, const char **p, size_t *n, u
     *p = s->hlod_out.p ? s->hlod_out.p : "", *n = s->hlod_out.len;
     return s->hlod_status;
 }
+
+/* ---- LNK3D (ADR 0078 amendment 3): a link's baked proxies (mesh.h) ---- */
+int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n) {
+    Buf *out = &s->link_prx_out;
+    buf_clear(out);
+    out->oom = 0;
+    const cc_link *l = k < s->nlinks ? &s->links[k] : NULL;
+    const cc_platform *pf = s->pf;
+    if (!l || l->kind != CC_LINK_VIEW || !l->vf || !l->vf->has_hlod || !l->cache || !pf->read_range) {
+        *p = "", *n = 0;
+        return 204; /* none: not an error (a small link, a .bimbleview, no file access) */
+    }
+    uint64_t len = l->vf->hlod_len;
+    int st = 200;
+    cc_error err;
+    size_t got = 0;
+    if (len > ((uint64_t)1 << 31) || buf_reserve(out, (size_t)len + 1)) st = 500, buf_puts(out, "proxies: too large");
+    else if (pf->read_range(pf->ctx, l->cache, l->vf->hlod_off, (size_t)len, out->p, &got) != CC_PF_OK || got != len)
+        st = 204, buf_clear(out); /* the cache gone since: none */
+    else {
+        out->len = (size_t)len;
+        if (cc_hlod_bprx_check((const uint8_t *)out->p, out->len, (uint32_t)cc_link_raw_scene(l)->nelements, &err))
+            buf_clear(out), buf_puts(out, err.msg), st = 500;
+    }
+    *p = out->p ? out->p : "", *n = out->len;
+    return st;
+}
+

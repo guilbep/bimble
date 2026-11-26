@@ -4,6 +4,7 @@
 #include <string.h>
 #include "guid.h"
 #include "links.h"
+#include "m1links.h"
 #include "session.h"
 #include "view_effective.h"
 #include "view_io.h"
@@ -32,9 +33,32 @@ int cc_sv_scene_levels(int kind, const void *scene, Arena *a, cc_level **out, si
     return 0;
 }
 
-int cc_sv_levels(const struct cc_session *s, Arena *a, cc_level **out, size_t *n) {
+static int has_view(const cc_view *v, size_t n, const cc_gid *id) {
+    for (size_t i = 0; i < n; i++)
+        if (!cc_gid_cmp(&v[i].id, id)) return 1;
+    return 0;
+}
+
+/* The open file's own levels (no link's). */
+static int own_levels(const struct cc_session *s, Arena *a, cc_level **out, size_t *n) {
     if (s->open) return cc_levels_of_model(&s->model, a, out, n);
     return cc_sv_scene_levels(s->view, s->view == CC_VIEW_IFC ? (const void *)s->ifc : (const void *)s->vf, a, out, n);
+}
+
+int cc_sv_levels(const struct cc_session *s, Arena *a, cc_level **out, size_t *n) {
+    if (own_levels(s, a, out, n)) return -1;
+    if (!s->nlinks) return 0;
+    /* M1LINKS (m1links.h): then the levels from links */
+    cc_level *ll;
+    size_t nll;
+    if (cc_link_levels(s, *out, *n, a, &ll, &nll, NULL)) return -1;
+    if (!nll) return 0;
+    cc_level *all = arena_alloc(a, (*n + nll) * sizeof *all, sizeof(double));
+    if (!all) return -1;
+    if (*n) memcpy(all, *out, *n * sizeof *all);
+    memcpy(all + *n, ll, nll * sizeof *all);
+    *out = all, *n += nll;
+    return 0;
 }
 
 int cc_sv_list(struct cc_session *s, Arena *a, cc_view **out, size_t *n) {
@@ -42,13 +66,33 @@ int cc_sv_list(struct cc_session *s, Arena *a, cc_view **out, size_t *n) {
     if (!loaded(s)) return 0;
     cc_level *lv;
     size_t nl;
-    if (cc_sv_levels(s, a, &lv, &nl)) return -1;
-    return cc_views_effective_lv(s->open ? &s->model : NULL, lv, nl, a, out, n);
-}
-
-static int has_view(const cc_view *v, size_t n, const cc_gid *id) {
-    for (size_t i = 0; i < n; i++)
-        if (!cc_gid_cmp(&v[i].id, id)) return 1;
+    if (own_levels(s, a, &lv, &nl)) return -1;
+    if (cc_views_effective_lv(s->open ? &s->model : NULL, lv, nl, a, out, n)) return -1;
+    if (!s->nlinks) return 0;
+    /* ---- M1LINKS (m1links.h): a floor plan per level from links, after the views of the file
+     * (made on every level, so that its cut and range see the levels around it); one the model
+     * stores under that id is already in the list. ---- */
+    cc_level *all;
+    size_t na;
+    if (cc_sv_levels(s, a, &all, &na)) return -1;
+    if (na == nl) return 0;
+    cc_view *d = arena_alloc(a, (1 + 2 * na) * sizeof *d, sizeof(double));
+    if (!d || cc_views_default_lv(all, na, a, d)) return -1;
+    size_t extra = 0;
+    for (size_t i = 1; i < 1 + 2 * na; i++) extra += d[i].kind == CC_VIEW_PLAN && d[i].look == CC_LOOK_DOWN;
+    cc_view *v = arena_alloc(a, (*n + extra + 1) * sizeof *v, sizeof(double));
+    if (!v) return -1;
+    if (*n) memcpy(v, *out, *n * sizeof *v);
+    size_t k = *n;
+    for (size_t i = 1; i < 1 + 2 * na; i++) {
+        if (d[i].kind != CC_VIEW_PLAN || d[i].look != CC_LOOK_DOWN) continue;
+        int link_level = 0;
+        for (size_t j = nl; j < na && !link_level; j++)
+            link_level = all[j].key.n == d[i].storey.n && !memcmp(all[j].key.p, d[i].storey.p, d[i].storey.n);
+        if (!link_level || has_view(v, k, &d[i].id)) continue;
+        v[k++] = d[i];
+    }
+    *out = v, *n = k;
     return 0;
 }
 
@@ -276,7 +320,20 @@ void cc_sv_summary_json(JsonW *w, const cc_level *lv, size_t nl, const cc_view *
 
 /* ---- S1: query grid_axes (views.h) ---- */
 
-static void w_axis(JsonW *w, cc_str tag, const double *a, const double *b) {
+/* M1LINKS: a placed link's axes and levels in the host's world (links.h cc_link_placement: x' =
+ * R x + t); NULL: as read. pl = {cos, sin, tx, ty, tz}. */
+static void placed2(const double *g_pl, const double *p, double out[2]) {
+    if (!g_pl) {
+        out[0] = p[0], out[1] = p[1];
+        return;
+    }
+    out[0] = g_pl[0] * p[0] - g_pl[1] * p[1] + g_pl[2] + 0.0;
+    out[1] = g_pl[1] * p[0] + g_pl[0] * p[1] + g_pl[3] + 0.0;
+}
+
+static void w_axis(JsonW *w, const double *g_pl, cc_str tag, const double *a0, const double *b0) {
+    double a[2], b[2];
+    placed2(g_pl, a0, a), placed2(g_pl, b0, b);
     jw_obj_begin(w);
     jw_key(w, "end_mm"), w_pair(w, b);
     jw_key(w, "start_mm"), w_pair(w, a);
@@ -285,17 +342,17 @@ static void w_axis(JsonW *w, cc_str tag, const double *a, const double *b) {
 }
 
 /* "axes" and "levels" of a model (its grids, id order, axes in order) or a read-only scene. */
-static void w_scene(JsonW *w, const cc_model *m, int kind, const void *scene) {
+static void w_scene(JsonW *w, const cc_model *m, int kind, const void *scene, const double *g_pl) {
     const cc_ifc_scene *ifc = kind == CC_VIEW_IFC ? scene : NULL;
     const cc_viewfile *vf = kind == CC_VIEW_FILE ? scene : NULL;
     jw_key(w, "axes"), jw_arr_begin(w);
     for (size_t g = 0; m && g < m->ngrids; g++)
         for (size_t i = 0; i < m->grids[g].naxes; i++) {
             const cc_grid_axis *x = &m->grids[g].axes[i];
-            w_axis(w, x->tag, x->start, x->end);
+            w_axis(w, g_pl, x->tag, x->start, x->end);
         }
-    for (size_t i = 0; ifc && i < ifc->ngrids; i++) w_axis(w, ifc->grids[i].tag, ifc->grids[i].start_mm, ifc->grids[i].end_mm);
-    for (size_t i = 0; vf && i < vf->ngrids; i++) w_axis(w, vf->grids[i].tag, vf->grids[i].start, vf->grids[i].end);
+    for (size_t i = 0; ifc && i < ifc->ngrids; i++) w_axis(w, g_pl, ifc->grids[i].tag, ifc->grids[i].start_mm, ifc->grids[i].end_mm);
+    for (size_t i = 0; vf && i < vf->ngrids; i++) w_axis(w, g_pl, vf->grids[i].tag, vf->grids[i].start, vf->grids[i].end);
     jw_arr_end(w);
     Arena a;
     arena_init(&a, 0);
@@ -305,7 +362,7 @@ static void w_scene(JsonW *w, const cc_model *m, int kind, const void *scene) {
     jw_key(w, "levels"), jw_arr_begin(w);
     for (size_t i = 0; i < n; i++) {
         jw_obj_begin(w);
-        jw_key(w, "elevation_mm"), jw_f64(w, lv[i].elevation);
+        jw_key(w, "elevation_mm"), jw_f64(w, g_pl ? lv[i].elevation + g_pl[4] + 0.0 : lv[i].elevation);
         jw_key(w, "key"), jw_str_n(w, lv[i].key.p, lv[i].key.n);
         jw_key(w, "name"), jw_str_n(w, lv[i].name.p, lv[i].name.n);
         jw_obj_end(w);
@@ -320,14 +377,16 @@ void cc_sv_grid_axes_json(struct cc_session *s, JsonW *w) {
         return;
     }
     jw_obj_begin(w);
-    w_scene(w, s->open ? &s->model : NULL, s->view, s->view == CC_VIEW_IFC ? (const void *)s->ifc : (const void *)s->vf);
+    w_scene(w, s->open ? &s->model : NULL, s->view, s->view == CC_VIEW_IFC ? (const void *)s->ifc : (const void *)s->vf, NULL);
     jw_key(w, "links"), jw_arr_begin(w);
     for (size_t i = 0; i < s->nlinks; i++) {
         const cc_link *k = &s->links[i];
         if (!k->kind) continue; /* LNK1: a missing link (links.h) has no axes nor levels */
         jw_obj_begin(w);
+        double pl[5]; /* M1LINKS: where the link is placed (LINKF left its axes and levels its own) */
+        cc_link_placement(s, k, &pl[0], &pl[1], pl + 2);
         w_scene(w, k->kind == CC_LINK_MODEL ? k->model : NULL, k->kind == CC_LINK_IFC ? CC_VIEW_IFC : CC_VIEW_FILE,
-                k->kind == CC_LINK_IFC ? (const void *)k->ifc : (const void *)k->vf);
+                k->kind == CC_LINK_IFC ? (const void *)k->ifc : (const void *)k->vf, pl);
         jw_key(w, "name"), jw_str(w, k->name);
         jw_key(w, "visible"), jw_bool(w, k->visible);
         jw_obj_end(w);
@@ -368,6 +427,9 @@ int cc_sv_vis_load(struct cc_session *s) {
         vis->hidden.n = vis->isolated.n = 0;
         return arena_free(&a), 0;
     }
+    size_t m1k;
+    if (v.kind == CC_VIEW_PLAN && cc_link_level_find(s, v.storey, &m1k)) /* M1LINKS: a plan from links is not stored: */
+        return arena_free(&a), 0;                                         /* its hides stay the session's */
     const cc_visibility *w = &v.visibility;
     rc = gids_of(&vis->hidden, &w->hidden_elements) || gids_of(&vis->isolated, &w->isolated_elements) ? -1 : 0;
     vis->view_lists = w->hidden_families.n + w->hidden_classes.n + w->hidden_storeys.n + w->hidden_materials.n +
@@ -389,6 +451,7 @@ int cc_sv_vis_load(struct cc_session *s) {
         }
         if (hide) rc = cc_gidset_add(&vis->by_view, &e->id);
     }
+    if (!rc && vis->view_lists && cc_links_by_view(s, w, &vis->by_view)) rc = -1; /* M1LINKS: the links' elements */
     arena_free(&a);
     return rc;
 }

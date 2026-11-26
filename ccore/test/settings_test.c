@@ -436,6 +436,46 @@ int main(void) {
         cc_session_free(s);
     }
 
+    /* ---- GPU1 (ADR 0083): the lab's 3D renderer, not one of Rust's fields: written only once set ---- */
+    {
+        reset_dir();
+        cc_session *s = session_on_file();
+        free(ask(s, "action", "set_settings", "{\"moving_fps\":60}", &st));
+        size_t n = 0;
+        char *f = read_all(FILE_, &n);
+        check_true("renderer: a file written before it is set has no renderer member", st == CC_OK && f && !strstr(f, "renderer"));
+        free(f);
+        char *q = ask(s, "query", "settings", "", &st), g[64];
+        value_of(q, "gpu_cull", g, sizeof g); /* applies (the first object of the answer) */
+        check_true("renderer: auto by default; gpu_cull does not apply (WebGL2)", strstr(q, "\"renderer\":\"auto\"") && !strcmp(g, "false"));
+        free(q);
+        free(ask(s, "action", "set_settings", "{\"renderer\":\"webgpu\"}", &st));
+        f = read_all(FILE_, &n);
+        check_true("renderer: set to webgpu, written in its sorted place", st == CC_OK && f && strstr(f, "\"recent\":[],\"renderer\":\"webgpu\",\"text_size\":"));
+        free(f);
+        q = ask(s, "query", "settings", "", &st);
+        value_of(q, "gpu_cull", g, sizeof g);
+        check_true("renderer: webgpu read back; gpu_cull applies (compute shaders)", strstr(q, "\"renderer\":\"webgpu\"") && !strcmp(g, "true"));
+        free(q);
+        char *e = ask(s, "action", "set_settings", "{\"renderer\":\"vulkan\"}", &st);
+        check_true("renderer: an unknown one refused", st != CC_OK && strstr(e, "`renderer`: auto, webgl2 or webgpu"));
+        free(e);
+        free(ask(s, "action", "set_settings", "{\"renderer\":\"auto\"}", &st));
+        f = read_all(FILE_, &n);
+        check_true("renderer: back to auto, written (the file had it)", st == CC_OK && f && strstr(f, "\"renderer\":\"auto\""));
+        free(f);
+        cc_settings d;
+        cc_settings_default(&d);
+        Buf b;
+        buf_init(&b);
+        cc_settings_to_json(&d, NULL, 0, &b);
+        buf_append(&b, "", 1); /* a Buf is not NUL-terminated: one for strstr */
+        check_true("renderer: not in Rust's to_json", b.p && !strstr(b.p, "renderer"));
+        buf_free(&b);
+        cc_session_free(s);
+        reset_dir();
+    }
+
     /* ---- the actions, the capabilities, query about ---- */
     {
         cc_session *s = cc_session_new(cc_platform_native());

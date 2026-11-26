@@ -6,7 +6,8 @@
   reviewed by Pierre on the implementation.
 - Reversal cost: low (a new BMSH version beside version 1, asked by the page; the viewport's draw
   path; no file format, no golden). Amendment 2 (ticket 3D2) adds the BPRX answer beside BMSH and
-  `src/hlod.c`, `src/bvh.c`: as low.
+  `src/hlod.c`, `src/bvh.c`: as low. Amendment 3 (ticket LNK3D) adds a section to the link cache
+  (format 4: older caches are converted again), two queries and a key in the change JSON with links: low.
 
 ## Context / Problem
 
@@ -198,6 +199,94 @@ take 5.3 s of it.
   (984 × 547 → 984 × 356; see "What is left").
 - Wasm sizes: `ccore.wasm` 1,129,321 bytes, `ccore-view.wasm` 473,334 bytes (budget 1,000,000).
 
+## Amendment 3 (26 Nov 2026, ticket LNK3D): a folder of links drawn as one building
+
+Pierre: "our goal is to display the whole ifc folder as links in the viewer" (17 IFC files, 4.18 GB, over
+100 million triangles). What 3D2, LINKF and M1LINKS left in the draw path: no proxies of links, a hide or a
+link's move fetched and merged the whole mesh again, notes on links not drawn, every link's detail on the
+GPU at once. The choices below by Claude on ticket LNK3D under the same delegation.
+
+15. **A state per element on the GPU, not draw lists per visibility** (`gl/cull.ts` `packState`,
+   `batchShown`): one RGBA8 texel per element (its colour; `a` = model << 1 | drawn), read in the vertex
+   shader by the element id each vertex (and each instance) carries; a hidden element's vertices go
+   outside the clip volume. The draw lists hold every element and are built once per mesh. A hide,
+   isolate, show all, show previous, reveal, a class, storey or link rule, a selection or a link's colour
+   writes texels (`texSubImage2D` of the rows that changed) and each batch's shown count (`vcum`, `shown`:
+   a batch with none is skipped, the moving budget counts shown triangles only). A link whose elements are
+   all shown in its own colour reads no texel (`u_plain`). **Alternative:** a per-vertex flag buffer
+   updated with `bufferSubData` (a class hidden touches thousands of ranges, 4 bytes a vertex against 4 a
+   element); index lists repacked (3D2's way: 0.3-0.6 s of upload on the local model).
+16. **The core stops leaving hidden linked elements out of the mesh** (M1LINKS decision 5 reversed): the
+   page hides them by GlobalId from `visibility_sets`, as the core hid them. `/mesh` is cached on
+   `links_mesh_gen` (a link's geometry: added, read, converted, removed, unloaded; the change JSON's
+   `links_mesh`); `query link_draw` gives each link's flag, colour and placement; `query mesh_key` says
+   whether a new rev may change what is drawn (`draw`: not a change of views, sheets or schedules alone),
+   so a hide in a view (an undoable view change) asks no mesh either. **Alternative:** a mesh rebuilt
+   without the hidden elements (the core's time and the page's refetch on every click).
+17. **Each model in its own buffers, placed by uniforms** (`makeModelGl`, `setModel`): a link's vertices
+   stay in its own frame; its draws set `u_model` and its placement's three rows (`xfRows`), so a move, a
+   turn or an offset changes those numbers and the boxes used for culling, picking, the budget and the
+   proxies (`xfBox`; picks map the ray into the link's frame, `xfRayToLocal`), never a buffer.
+   **Alternative:** one merged buffer with the placement read per vertex from a texture (the first
+   version of this ticket: no per-link release possible, a texel fetch more a vertex).
+18. **Proxies baked into each link's cache** (section `HLOD` before `PROP`, cache format 4): built by
+   3D2's builder in the background conversion from the view file read back (its element order is the
+   link's BMSH rows), kept on disk by the reader, served by `GET /mesh?link_proxies=k` after
+   `cc_hlod_bprx_check` (untrusted). The page asks them before the mesh and draws them at once: the first
+   picture of a project of links; then each frame cuts each link's tree with the eye in the link's frame
+   (3D2's pixel rule, its cells' boxes placed for culling); a link's batches are cut by its own leaves.
+   A link's proxies take its colour (reference or override). **Alternative:** build them in the core on
+   open (3D2's way: seconds per link, every open).
+19. **A GPU memory budget across links**: after each frame, a link the frame needed whose detail was
+   released is uploaded again from the page's copy (one a frame; one no longer needed is not: the
+   cancel), and over the budget the loaded links give their buffers back, hidden ones first, then the
+   least recently needed (not drawn in detail for 2 s: far, as proxies, out of view), never the selected
+   element's link. A released link is drawn as its coarsest usable proxies, else its batches' boxes; the
+   Links panel says "detail loaded" or "proxies only". The budget: `memory_share` of half the device's
+   memory (`navigator.deviceMemory`, 4 GiB when unknown; `gl/linkmem.ts`). **Alternative:** a stored
+   number of MB (a new setting); the page's copy dropped too and the link's mesh fetched again (a
+   `/mesh?link=k` route: left, see below).
+20. **Edges where they read**: a batch's edges are drawn when its box spans at least 16 device pixels and,
+   while moving, when the frame drew it whole; never a proxy's (3D2 drew their crease edges; a bench hook
+   keeps them). **Alternative:** every edge of every batch drawn (half the still frame under SwiftShader).
+21. **Notes on linked elements on the overlay** (3D and the live plan): a leader and a label, anchored in
+   the link's frame (they follow a move without asking the core), hidden with their link or element,
+   orphans in a muted colour; a click on the label selects the note and its element.
+
+22. **The WebGPU renderer (ADR 0083) leaves links to WebGL2 for now**: it reads the parsed mesh, the
+   element colours and `shown`, but not a model's placement (a link's vertices now stay in its own
+   frame), the links' proxies nor the memory budget. While links are loaded (or their proxies drawn
+   before the mesh) the viewport draws with WebGL2, live, and the performance panel says "linked models
+   are drawn by WebGL2 for now"; WebGPU takes over again when the links go. Without links it stays
+   correct: a visibility change gives `shown` a new array, so its lists are made again. **Alternative:**
+   the placement rows and a model index in its colour table (`0xMMRRGGBB`, `gl/cull.ts` `xfRows`) and an
+   element per edge vertex in `gpu/` (its edges know no element yet): the follow-up.
+
+### Evidence (ticket LNK3D)
+
+`ccore/tools/frames.mjs --links 6` (six synthetic links of 160 unique closed meshes, 558,144 triangles,
+native host, SwiftShader 1280×800), the code before (`next`) and after, the 1-minute load 5.9-7.4 for
+both (other tickets' browsers running):
+
+| | open → first picture | still frame (without edges) | moving frame: triangles | close still | GPU | half hidden, budget ½ |
+|---|---|---|---|---|---|---|
+| before | 2,357 ms (the first frame) | 141.8 ms (103.0) | 31.9 ms: 169,344 | 87.6 ms | 11.4 MB | 8.1 MB (nothing released) |
+| after | 1,556 ms (the links' proxies; complete 2,032) | 124.1 ms (90.7) | 12.6 ms: 64,950 | 71.8 ms | 12.9 MB | 7.0 MB (3 of 6 links' detail) |
+
+The pictures of three fixed cameras: 0 of 538,248 pixels differ (at all) between before and after.
+`--links 17` (1,581,408 triangles; load 3.3-4.3 before, 3.7-6.1 after): first picture 3,401 ms (the
+first frame) → 1,921 ms (proxies), complete 4,201 → 2,631 ms, still 342.4 → 260.8 ms (2 → 34 draws),
+moving 32.2 → 33.2 ms (147,060 → 184,025 triangles), close still 206.3 → 191.2 ms, GPU 32.2 → 36.6 MB
+(proxies 7.8 MB of the caches' 52.8; 1.3 s of conversion for the 17), half hidden with the budget at
+half: 22.4 → 18.9 MB (8 of 17 links' detail kept); pictures: 0 pixels over 40 levels, 1 pixel at all.
+A class hidden over the six links (1,392 elements): 1.4 ms in the page, 0.1 ms of state upload, no mesh
+fetched. Decision 15's choice by cost (`bench.stateCost(30000, 100)`): 30,000 elements' texels (120 kB)
+upload in 0.2 ms, a flag per vertex for them (100 vertices each, 12 MB) in 8.5 ms.
+The caches: 15.9 → 18.6 MB (the proxies 2.8 MB, 460 ms of conversion for the six). `lab_links_3d.mjs`:
+each input's feedback 29-120 ms (hide a link, show it, hide an element, a class, move a link, its
+colour, the note following it), no `/mesh` request and no draw list rebuilt for any of them; shown
+again, the same picture (0 pixels differ).
+
 ## What is left
 
 Done by ticket 3D2 (amendment 2 above): HLOD proxies, the box tree (in the core), GPU occlusion
@@ -219,5 +308,16 @@ Done by ticket 3D2 (amendment 2 above): HLOD proxies, the box tree (in the core)
   scan takes 2-5 ms; a selection without a resize is now drawn over the kept picture (decision 13).
 - **Rust's CPU occlusion (#5), screen edges while moving (#6), GPU culling of copies (#10)**: not
   ported (the queries stand for #5; #6 needs a depth read-back pass; #10 needs compute shaders).
-- **Proxies of linked models**: the proxies are the open model's (and a read-only IFC's); links are
-  drawn as they are.
+- **Proxies of linked models**: done by amendment 3 (baked in each link's cache).
+- **For 100-200 million triangles** (amendment 3's numbers): the page keeps its own copy of every
+  link's mesh (JS memory: the parsed BMSH, about 40 bytes a triangle with its lists), so the budget frees
+  the GPU's copy only; the next step is a mesh per link (`GET /mesh?link=k`, the trailer cut in parts)
+  fetched when needed and dropped from the page too, then tiles streamed by view (the link's HLOD leaves
+  as the unit: the cache already orders them). Quantised vertices (16-bit positions in each leaf's box,
+  8-bit normals) would halve the GPU bytes of positions; the state texel per element is already 4 bytes.
+- **Screen-space edges** (in place of the edge pass): a pass of the element id and depth into a render
+  target (WebGL2: an R32UI colour attachment beside the depth), then a full-screen pass drawing a line
+  where the id or the depth's slope changes between neighbours; it needs the element id as a vertex
+  output (amendment 3 gives it), `EXT_color_buffer_float` or integer targets, and a decision for
+  coplanar faces of one element (the crease angle from the normals). Not built: amendment 3's rule
+  (decision 20) halves the edge pass where it matters.

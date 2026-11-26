@@ -186,6 +186,16 @@ typedef struct {
  * saves; no Command changes it. `path` as linked (absolute on the desktop), `relative` the same
  * file from the saved file's folder ("" when none), `hidden` hidden in the session. ---- */
 #define CC_MODEL_LINKS_MAX 64
+/* M1LINKS (ADR 0081): a note on an element of the link: "notes" [{"at": [x, y, z] (the anchor, the
+ * link's own world mm), "element": its GlobalId, "text"}], left out when empty; at most
+ * CC_MODEL_NOTES_MAX per link, a text at most CC_MODEL_NOTE_TEXT bytes (UTF-8, no NUL). */
+#define CC_MODEL_NOTES_MAX 256
+#define CC_MODEL_NOTE_TEXT 2000
+typedef struct {
+    double at[3];
+    cc_gid element;
+    cc_str text;
+} cc_model_note;
 typedef struct {
     cc_str name, path, relative;
     int hidden;
@@ -197,6 +207,8 @@ typedef struct {
     double rotation_deg;
     int unpinned;
     int has_colour, colour; /* 0..11 when has_colour (zero-initialized: none) */
+    cc_model_note *notes;   /* M1LINKS: in the order made */
+    size_t nnotes;
 } cc_model_link;
 
 typedef struct {

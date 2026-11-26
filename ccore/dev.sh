@@ -11,7 +11,7 @@
 #   fixed 600 ms of quiet, took a slow build for an idle loop, and saw its restart as the next one's).
 #   model           default: a scratch copy of golden/frame.json in out/dev/ (the golden is never written)
 #   CCORE_DEV_PORT  host port, default 47400
-#   CCORE_DEV_VITE  Vite port, default 5173 (the host allows the two :5173 origins without config)
+#   CCORE_DEV_VITE  Vite port, default 5173 (the host allows the two :5173 origins without config); 0: no Vite
 #   BIMBLE_TOKEN    the token, default: random, one per dev.sh run
 # Ctrl-C or SIGTERM stops Vite, the host and the watcher. Needs tcc, inotifywait (inotify-tools),
 # and web-ui/node_modules (`npm ci` in web-ui/). Host output goes to out/dev/host.log.
@@ -43,6 +43,17 @@ now_ms() { local t=${EPOCHREALTIME/[.,]/}; echo $((t / 1000)); }
 
 host_pid="" vite_pid="" watch_pid=""
 FIFO=$DEV/watch.fifo
+# SMALL1: a stop signal sets `stopping` before anything else, and the main flow checks it before every
+# build and every host start. The trap's own cleanup is not enough: a signal that arrives during the
+# debounce's `read -t` runs the trap inside that read, and the read's timeout (bash leaves it by a
+# long jump) abandoned the cleanup halfway, with the traps already reset; the loop then went on,
+# rebuilt, started a new host and exited on "the watcher stopped" without stopping it (1 run in 60
+# with SIGTERM 0-150 ms after a save; CI on main, 26 Nov: a host left listening).
+stopping=0
+stop() { # the exit of a stop signal: cleanup runs again in full if the trap's run was cut short
+    cleanup
+    exit "$stopping"
+}
 cleanup() {
     trap - INT TERM EXIT
     [[ -n $watch_pid ]] && kill "$watch_pid" 2> /dev/null
@@ -66,8 +77,8 @@ cleanup() {
     rm -f "$FIFO"
     echo "dev.sh: stopped"
 }
-trap 'cleanup; exit 130' INT
-trap 'cleanup; exit 143' TERM
+trap 'stopping=130; cleanup; exit 130' INT
+trap 'stopping=143; cleanup; exit 143' TERM
 trap cleanup EXIT
 
 # The host runs from a copy of the binary: a build never writes the file of a running process, and a
@@ -83,11 +94,15 @@ build() { # prints the build output on failure; returns build.sh's status
 }
 
 start_host() { # spawns the host and waits for "listening"; returns non-zero if it exits first
+    ((stopping)) && stop
     cp "$BIN" "$RUN.tmp" && mv -f "$RUN.tmp" "$RUN"
+    ((stopping)) && stop
     "$RUN" --session --warm "$PORT" "$MODEL" > "$DEV/host.log" 2>&1 &
     host_pid=$!
+    ((stopping)) && stop
     local i
     for i in $(seq 2000); do
+        ((stopping)) && stop
         grep -q listening "$DEV/host.log" && return 0
         kill -0 "$host_pid" 2> /dev/null || break
         sleep 0.002
@@ -107,16 +122,20 @@ stop_host() {
 
 build || exit 1
 start_host || exit 1
-(cd "$UI" && exec setsid npx vite --port "$VITE" --strictPort) > "$DEV/vite.log" 2>&1 < /dev/null &
-vite_pid=$!
-for i in $(seq 600); do
-    curl -sf -o /dev/null "http://localhost:$VITE/" && break
-    if ! kill -0 "$vite_pid" 2> /dev/null; then
-        echo "dev.sh: Vite did not start:"; cat "$DEV/vite.log"; exit 1
-    fi
-    sleep 0.05
-done
-echo "lab: http://localhost:$VITE/?native=1&gl=1&port=$PORT&token=$TOKEN"
+if [[ $VITE == 0 ]]; then # the host's loop alone (test/dev_test.mjs's stop rounds)
+    echo "dev.sh: no Vite (CCORE_DEV_VITE=0); host on $PORT"
+else
+    (cd "$UI" && exec setsid npx vite --port "$VITE" --strictPort) > "$DEV/vite.log" 2>&1 < /dev/null &
+    vite_pid=$!
+    for i in $(seq 600); do
+        curl -sf -o /dev/null "http://localhost:$VITE/" && break
+        if ! kill -0 "$vite_pid" 2> /dev/null; then
+            echo "dev.sh: Vite did not start:"; cat "$DEV/vite.log"; exit 1
+        fi
+        sleep 0.05
+    done
+    echo "lab: http://localhost:$VITE/?native=1&gl=1&port=$PORT&token=$TOKEN"
+fi
 echo "dev.sh: model $MODEL; host log out/dev/host.log; watching src/ session/ host/ (Ctrl-C stops)"
 
 rm -f "$FIFO"
@@ -126,13 +145,16 @@ watch_pid=$!
 exec 3< "$FIFO"
 
 while true; do
-    read -r -u 3 path || { echo "dev.sh: the watcher stopped" >&2; exit 1; }
+    read -r -u 3 path || { ((stopping)) && stop; echo "dev.sh: the watcher stopped" >&2; exit 1; }
+    ((stopping)) && stop
     [[ $path == *.c || $path == *.h ]] || continue
     # Debounce: an editor's save is often several events; wait for 50 ms of quiet.
     while read -r -t 0.05 -u 3 _; do :; done
+    ((stopping)) && stop
     echo "dev.sh: ${path#"$CCORE"/} changed, building"
     t0=$(now_ms)
     build || continue
+    ((stopping)) && stop
     t1=$(now_ms)
     stop_host
     if start_host; then

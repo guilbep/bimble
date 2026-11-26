@@ -1361,3 +1361,69 @@ Rust's default, so no golden changes. Test: `test/dead1_test.c`.
     the elements whose colour changed, faces then edges, when the last frame was complete.
   - **The moving rate** counts only a budgeted frame after a budgeted frame (3D1 counted a whole
     frame too and could draw everything while moving).
+
+## 38. Saved quantity lists: New quantities, Columns, By material (ticket QTY1, ADR 0080)
+
+- **Five keys of a schedule** (C only, `ccore/src/view.c`): `properties`, `group_by_material`,
+  `summary`, `filter`, `sort`, written after Rust's six and only when set: a Rust schedule keeps its
+  bytes (every `golden/schedule/` file and `verbs_all.txt` unchanged). Rust's `ScheduleDef` denies
+  unknown fields: a file with them does not open in Rust v0.19.0. Read as untrusted input: 32
+  property keys at most, each 1 to 200 bytes, a filter or sort column 1 to 200 bytes, 1 to 32
+  columns in all; an unknown Field, a wrong type, a duplicate key: refused
+  (`test/quantity_lists_test.c`, hostile lists). The error texts of Rust's six keys and 13 fields
+  stay Rust's (the C keys and fields are matched apart).
+- **Three fields** after Rust's 13: `count` (1 a row, summed, "Count"), `type` (the element's
+  PredefinedType property, "Type"), `gross_volume` (the cut mesh's volume plus its openings' prisms,
+  a sleeve's exact cylinder, "Gross volume (m³)"). Rust's `set_schedule` still takes Rust's 13 only.
+- **Grouping by material**: a material's line (its sums) before its level groups (`head` in the
+  page's JSON), materials by name, no material last; `summary`: no element row written (CSV, JSON).
+  **Filter**: one equality on a column's text, ASCII case ignored. **Sort**: stable after Rust's
+  order (location, name), numbers before texts before empty cells.
+- **Verbs** `schedule_add`, `schedule_edit`, `schedule_remove` (C additions, `verbs_schedules.h`);
+  Rust's viewer made the same `SetSchedules` commands from its panel. **Actions** `new_quantities`,
+  `quantity_columns`, `quantities_by_material` (C additions, tab "Quantities"); **query**
+  `schedule_columns`; `schedule_rows {offset, limit}` answers a window with `first`, `head`,
+  `material`, `offset`, `row_count` (without them Rust's 50-row answer, unchanged);
+  `schedule_csv {headers}` writes the given header line (without it Rust's titles). **Capability**
+  `cfc` (false: Assign CFC and CFC catalogue, ticket QTY2); Bar schedule is the `rebar` one.
+- Tests: `test/quantity_lists_test.c` (hand-computed totals on the frame), `test/lab_quantity_lists.mjs`.
+
+## 39. Mission 1 across linked models (ticket M1LINKS, ADR 0081)
+
+Rust v0.19.0 draws at most three linked layers and nothing below applies to them; every golden keeps
+its bytes (a session without links answers as before; a `.bimble` without notes keeps its bytes).
+
+- **Levels from links** (`session/m1links.h`): the session's levels are the file's, then each loaded
+  link's storeys at their placed elevation not within 200 mm of one already taken; `open_views` lists a
+  floor plan per such level after the file's views (Rust: the file's levels only). `grid_axes` gives a
+  placed link's axes and levels where it is placed, and the place tool snaps to them there (LINKF left
+  them unplaced).
+- **Boxes over links**: with a link shown, the first section box, Box to selection's fallback, a plan's
+  and a section's clip fit the links too (Rust fits the open scene).
+- **Linked elements hidden**: hide, isolate, unhide take a linked selection by its GlobalId; the hidden
+  action `view_rule` writes a class, a link's storey (`<link>/<storey>` in `hidden_storeys`), a link or
+  an element into the active view; the view's lists hide linked elements too (`by_view`), and the
+  `/mesh` trailer leaves a link's hidden elements out (a change of what is hidden bumps `links_gen`).
+- **Property sets** (`src/ifc_psets.h`): Rust's reader skips them (`read.rs` NOT_DISPLAYED); the C core
+  reads them in a second, narrow parse (`cc_step_parse_only`) for a linked element; a link cache
+  (format `bimble-link-cache 3`) carries them in a last section `PROP`, skipped by any other reader,
+  kept on disk by this one. `query element {id, link}` adds `property_sets`, `property_sets_note`.
+- **Notes** in a link entry of the `.bimble` (`notes`: `at`, `element`, `text`; left out when empty; at
+  most 256 per link, 2000 bytes each), with `manage_links` `note_add` / `note_remove` and
+  `query link_notes`; not model data (no Command, no undo step), as LNK1's links section. A plan or
+  section drawn on paper shows the notes as texts.
+- Tests: `test/m1links_test.c` (hostile tables, sections and notes), `test/lab_mission1_links.mjs`.
+- **LNK3D (ADR 0078 amendment 3): the draw path of links.** The `/mesh` trailer no longer leaves a
+  link's hidden elements out (the page hides them by GlobalId from `visibility_sets`, in its per-element
+  state); `/mesh` is cached on `links_mesh_gen` (a link added, read, converted, removed, unloaded) and the
+  trailer's light fields (shown, placement, colour), so a hide, a move or a colour writes the trailer
+  again for a reader that asks but the page does not ask. The change JSON gains `links_mesh` beside
+  `links` (only once links changed: a session without links answers Rust's bytes). New queries
+  `link_draw` (each link's flag, colour, turn and placed origin: the trailer's version 2 numbers) and
+  `mesh_key` (`draw`: + 1 with each rev that may change what is drawn, not a change of views, sheets or
+  schedules alone; `links`: `links_mesh_gen`). A link cache is format `bimble-link-cache 4`: a section
+  `HLOD` (the link's proxies, BPRX, built at conversion; before `PROP`, both kept on disk; older caches
+  are converted again), served by `GET /mesh?link_proxies=k` after `cc_hlod_bprx_check`; the report
+  gives its cells, triangles, bytes and time. Rust has none of this (no proxies of links, a mesh rebuilt
+  on every visibility change). Tests: `test/lab_links_3d.mjs`, `test/hlod_test.c` (hostile BPRX),
+  `test/viewfile_test.c` (the HLOD section), `test/lab_mission1_links.mjs` (the mesh bytes stay on a hide).

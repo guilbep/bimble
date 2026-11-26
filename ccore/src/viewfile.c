@@ -1,5 +1,6 @@
 /* The .bimbleview writer and reader, see viewfile.h. A port of crates/bimble-geom/src/viewfile.rs. */
 #include "viewfile.h"
+#include "ifc_psets.h"
 #include "georef.h"
 #include <stdlib.h>
 #include <string.h>
@@ -113,11 +114,12 @@ int cc_viewfile_meta_from_model(cc_viewfile_meta *mt, const cc_model *m, const c
     Arena *a = &mt->arena;
     size_t ne = s->nelements;
     cc_view_info *info = arena_alloc(a, (ne + 1) * sizeof *info, 8);
+    const cc_element **els = arena_alloc(a, (ne + 1) * sizeof *els, 8); /* QTY1 */
     StoreyRef *st = arena_alloc(a, (m->nstoreys + 1) * sizeof *st, 8);
     DensityRef *dens = arena_alloc(a, (m->nmaterials + 1) * sizeof *dens, 8);
     cc_view_storey *storeys = arena_alloc(a, (m->nstoreys + 1) * sizeof *storeys, 8);
     cc_view_density *dout = arena_alloc(a, (m->nmaterials + 1) * sizeof *dout, 8);
-    if (!info || !st || !dens || !storeys || !dout) return -1;
+    if (!info || !els || !st || !dens || !storeys || !dout) return -1;
     for (size_t k = 0; k < ne; k++) {
         const cc_scene_element *e = &s->elements[k];
         if (e->model_index >= m->nelements) return -1;
@@ -130,7 +132,9 @@ int cc_viewfile_meta_from_model(cc_viewfile_meta *mt, const cc_model *m, const c
         info[k].name = me->name;
         info[k].storey = sto->name;
         info[k].material = mat->name;
+        els[k] = me; /* QTY1 */
     }
+    mt->elements = els;
     for (size_t i = 0; i < m->nstoreys; i++) {
         const cc_storey *x = &m->storeys[i];
         st[i].s.name = x->name;
@@ -583,6 +587,7 @@ static int read_elem(Rd *s, cc_viewfile *v, size_t *shape_cap, size_t *elem_cap,
 }
 
 static int read_raw(const uint8_t *p, size_t n, cc_viewfile *v, Err *e) {
+    const uint8_t *file0 = p; /* M1LINKS: PROP's offset in the file */
     if (n < 12 || memcmp(p, MAGIC, 8) != 0) return fail(e, E_NOT, NULL);
     uint32_t version = (uint32_t)p[8] | (uint32_t)p[9] << 8 | (uint32_t)p[10] << 16 | (uint32_t)p[11] << 24;
     if (version != CC_VIEWFILE_VERSION) {
@@ -640,6 +645,20 @@ static int read_raw(const uint8_t *p, size_t n, cc_viewfile *v, Err *e) {
             if (!ok) return fail(e, E_INVALID, "source: not JSON");
             v->source = g;
             v->has_source = 1;
+        } else if (memcmp(kind, "PROP", 4) == 0 && !v->has_psets) { /* M1LINKS: kept on disk (ifc_psets.h) */
+            if (s.n < 4) return fail(e, E_INVALID, "psets: no head");
+            uint64_t ne = (uint64_t)s.p[0] | (uint64_t)s.p[1] << 8 | (uint64_t)s.p[2] << 16 | (uint64_t)s.p[3] << 24;
+            if (ne != want_elems || cc_psets_head(ne) > s.n) return fail(e, E_INVALID, "psets: entries");
+            uint64_t last = 0;
+            for (uint64_t i = 0; i < ne; i++) {
+                const uint8_t *q = s.p + 4 + 4 * i;
+                uint64_t end = (uint64_t)q[0] | (uint64_t)q[1] << 8 | (uint64_t)q[2] << 16 | (uint64_t)q[3] << 24;
+                if (end < last || cc_psets_head(ne) + end > s.n) return fail(e, E_INVALID, "psets: entries");
+                last = end;
+            }
+            v->has_psets = 1;
+            v->psets_off = (uint64_t)(s.p - file0), v->psets_len = s.n;
+            s.n = 0;
         } else if (memcmp(kind, "HEAD", 4) == 0 || memcmp(kind, "META", 4) == 0) {
             return fail(e, E_INVALID, "section repeated");
         } else {
@@ -688,6 +707,26 @@ int cc_viewfile_append_source(Buf *out, const char *json, size_t n) {
     return bad ? -1 : 0;
 }
 
+int cc_viewfile_append_hlod(Buf *out, const char *t, size_t n) {
+    Buf p;
+    buf_init(&p);
+    buf_append(&p, t, n);
+    section(out, "HLOD", &p);
+    int bad = p.oom || out->oom;
+    buf_free(&p);
+    return bad ? -1 : 0;
+}
+
+int cc_viewfile_append_psets(Buf *out, const char *t, size_t n) {
+    Buf p;
+    buf_init(&p);
+    buf_append(&p, t, n);
+    section(out, "PROP", &p);
+    int bad = p.oom || out->oom;
+    buf_free(&p);
+    return bad ? -1 : 0;
+}
+
 int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err) {
     memset(out, 0, sizeof *out);
     arena_init(&out->arena, 0);
@@ -711,9 +750,50 @@ int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err
         size_t len = raw.len;
         buf_free(&raw);
         rc = copy ? read_raw(copy, len, out, &e) : fail(&e, E_OOM, NULL);
+        out->has_psets = 0; /* M1LINKS: offsets in the inflated stream, not the file: not read lazily */
+        out->has_hlod = 0;  /* LNK3D: the same */
     } else {
-        uint8_t *copy = arena_dup(&out->arena, p, n);
-        rc = copy ? read_raw(copy, n, out, &e) : fail(&e, E_OOM, NULL);
+        /* M1LINKS: a last section PROP stays out of the copy (read lazily from the file, ifc_psets.h):
+         * the sections' heads walked, the copy cut where it starts. LNK3D: so does a section HLOD (a link
+         * cache's baked proxies, BPRX; served from the file and checked then: hlod.h
+         * cc_hlod_bprx_check), when only HLOD and PROP sections follow it. */
+        size_t cut = n, at = 12, pset = 0, lazy = 0, hlod = 0;
+        while (n >= 12 && at + 12 <= n) {
+            uint64_t len = 0;
+            for (int i = 0; i < 8; i++) len |= (uint64_t)p[at + 4 + i] << (8 * i);
+            if (len > n - at - 12) break;
+            int is_prop = !memcmp(p + at, "PROP", 4), is_hlod = !memcmp(p + at, "HLOD", 4);
+            if (is_prop && at + 12 + len == n) pset = at;
+            if (is_hlod && !hlod) hlod = at;
+            if ((is_prop || is_hlod) && !lazy) lazy = at;
+            else if (!is_prop && !is_hlod) lazy = 0, hlod = 0;
+            at += 12 + (size_t)len;
+        }
+        if (at == n && lazy) cut = lazy;
+        else if (pset && at == n) cut = pset;
+        if (at != n || !lazy) hlod = 0;
+        uint8_t *copy = arena_dup(&out->arena, p, cut);
+        rc = copy ? read_raw(copy, cut, out, &e) : fail(&e, E_OOM, NULL);
+        if (!rc && hlod) { /* LNK3D: where it is in the file; its bytes checked when served */
+            uint64_t len = 0;
+            for (int i = 0; i < 8; i++) len |= (uint64_t)p[hlod + 4 + i] << (8 * i);
+            out->has_hlod = 1, out->hlod_off = hlod + 12, out->hlod_len = len;
+        }
+        if (!rc && pset && cut < n) { /* the head checked as read_raw does */
+            const uint8_t *q = p + pset + 12;
+            size_t ln = n - pset - 12;
+            uint64_t ne = ln >= 4 ? ((uint64_t)q[0] | (uint64_t)q[1] << 8 | (uint64_t)q[2] << 16 | (uint64_t)q[3] << 24) : 0;
+            int ok = ln >= 4 && ne == out->nelements && cc_psets_head(ne) <= ln;
+            uint64_t last = 0;
+            for (uint64_t i = 0; ok && i < ne; i++) {
+                const uint8_t *x = q + 4 + 4 * i;
+                uint64_t end = (uint64_t)x[0] | (uint64_t)x[1] << 8 | (uint64_t)x[2] << 16 | (uint64_t)x[3] << 24;
+                ok = end >= last && cc_psets_head(ne) + end <= ln;
+                last = end;
+            }
+            if (!ok) rc = fail(&e, E_INVALID, "psets: entries");
+            else out->has_psets = 1, out->psets_off = pset + 12, out->psets_len = ln;
+        }
     }
     if (rc) set_msg(err, &e);
     return rc;

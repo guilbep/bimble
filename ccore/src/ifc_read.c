@@ -994,6 +994,7 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
         size_t tn;
         if (!cc_sv_as_str(arg(e, 0), &t, &tn)) t = "", tn = 0;
         in->global_id = a_str(a, t, tn, &oom);
+        in->step_id = e->id; /* M1LINKS */
         if (cc_gid_valid(t, tn)) memcpy(se->id.c, t, 22);
         buf_clear(&cls);
         class_name(e->name, &cls);

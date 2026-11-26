@@ -9,6 +9,8 @@ import { currentDialog as dialogNow } from ".";
 export const exportWhat = vref<"sheets" | "view">("sheets");
 screenRoutes.on_paper = () => { exportWhat.value = "view"; dialogNow.value = "export"; };
 // ---- end PAPER1 ----
+/** DXF1: the format the dialog opens on (File → Export this view to DXF… sets "dxf" before on_paper). */
+export const exportFormat = vref<"pdf" | "svg" | "dxf" | null>(null);
 </script>
 
 <script setup lang="ts">
@@ -21,6 +23,8 @@ screenRoutes.on_paper = () => { exportWhat.value = "view"; dialogNow.value = "ex
 import { computed, onUnmounted, ref } from "vue";
 import { type PdfFont, pdfFonts, query, sheetPdf, sheetPdfName, sheets, state } from "../bimble";
 import { openViews, sheetsPdf, sheetsPdfName, viewPdf, viewPdfName, viewSvg, viewSvgName } from "../bimble"; // PAPER1
+import { dxfName, exportDxf } from "../bimble"; // DXF1
+import { useCapability } from "../shell/capability"; // DXF1
 import { viewName } from "../shell/viewName"; // PAPER1
 import { t } from "../i18n";
 import { currentDialog } from ".";
@@ -32,7 +36,13 @@ const toggle = (id: string) => { const p = new Set(picked.value); p.has(id) ? p.
 const all = () => { picked.value = new Set(list.value.map((s) => s.id)); };
 const n = computed(() => list.value.filter((s) => picked.value.has(s.id)).length);
 // D7: PDF (the egui export's format) or SVG.
-const format = ref<"pdf" | "svg">("pdf");
+const format = ref<"pdf" | "svg" | "dxf">(exportFormat.value ?? "pdf");
+exportFormat.value = null;
+// DXF1: served by the core (`query capabilities` export_dxf: not in the viewer-only build).
+const dxfServed = useCapability("export_dxf");
+const allViews = ref(false); // DXF1: every 2D view, one file each
+const done = ref<string | null>(null); // DXF1: the "exported" confirmation
+const progress = ref<string | null>(null);
 // SIZE1: the font choice (asked once, when the dialog opens).
 const font = ref<PdfFont>("helvetica");
 const roboto = pdfFonts().roboto;
@@ -57,15 +67,31 @@ const onePdf = ref(false);
 const what = exportWhat;
 onUnmounted(() => { exportWhat.value = "sheets"; }); // the next Print and export opens on the sheets
 const ready = computed(() => (what.value === "view" ? !!theView.value : n.value > 0));
+/** DXF1: the click's feedback is painted before the work starts (ADR 0074: within 200 ms). */
+const painted = () => new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
 async function exportView() {
   const v = theView.value;
   if (!v) return;
+  if (format.value === "dxf") {
+    const list = allViews.value ? views2d.value : [v];
+    let k = 0;
+    for (const x of list) {
+      progress.value = t("export.progress", { i: ++k, n: list.length });
+      await painted();
+      download(dxfName(viewName(x)), new Blob([(await exportDxf("view", x.id)).slice().buffer as ArrayBuffer], { type: "image/vnd.dxf" }));
+    }
+    done.value = t("export.done", { n: list.length });
+    return;
+  }
   if (format.value === "pdf") download(viewPdfName(v), new Blob([(await viewPdf(v.id, font.value)).slice().buffer as ArrayBuffer], { type: "application/pdf" }));
   else download(viewSvgName(v), new Blob([viewSvg(v.id).svg], { type: "image/svg+xml" }));
 }
 async function exportAll() {
   failed.value = null;
+  done.value = null;
+  progress.value = t("export.busy");
   busy.value = true;
+  await painted();
   try {
     if (what.value === "view") await exportView();
     else if (onePdf.value && format.value === "pdf") {
@@ -76,6 +102,7 @@ async function exportAll() {
     failed.value = e instanceof Error ? e.message : String(e);
   } finally {
     busy.value = false;
+    progress.value = null;
   }
 }
 // ---- end PAPER1 ----
@@ -85,7 +112,9 @@ async function exportSheets() {
   busy.value = true;
   try {
     for (const s of list.value.filter((x) => picked.value.has(x.id))) {
-      if (format.value === "pdf") {
+      if (format.value === "dxf") { // DXF1: the sheet in paper mm
+        download(dxfName(`${s.number} ${s.name}`), new Blob([(await exportDxf("sheet", s.id)).slice().buffer as ArrayBuffer], { type: "image/vnd.dxf" }));
+      } else if (format.value === "pdf") {
         const pdf = await sheetPdf(s.id, font.value);
         download(sheetPdfName(s), new Blob([pdf.slice().buffer as ArrayBuffer], { type: "application/pdf" }));
       } else {
@@ -93,6 +122,7 @@ async function exportSheets() {
         download(`${s.number}-${s.name}.svg`, new Blob([svg], { type: "image/svg+xml" }));
       }
     }
+    if (format.value === "dxf") done.value = t("export.done", { n: n.value });
   } catch (e) {
     failed.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -121,6 +151,7 @@ async function exportSheets() {
         <span v-if="!views2d.length" class="note" data-bb="export-view-none">{{ t('export.noView') }}</span>
         <span v-else class="note">{{ t('export.viewNote') }}</span>
         <span class="note" data-missing="plan_panel: the storey plan without a view, the paper and template choices">{{ t('export.storeyPlan') }}</span>
+        <label v-if="format === 'dxf'" class="note" style="display:inline-flex;gap:6px;align-items:center" data-bb="export-all-views"><input type="checkbox" :checked="allViews" @change="allViews = !allViews">{{ t('export.allViews') }} · {{ t('export.dxfViews') }}</label>
       </div>
       <div v-else style="display:flex;flex-direction:column;gap:6px">
         <div class="lbl">{{ t('export.sheets', { n, total: list.length }) }}</div>
@@ -140,7 +171,8 @@ async function exportSheets() {
           <span class="seg" style="align-self:flex-start" data-bb="export-format">
             <button type="button" :class="{ on: format === 'pdf' }" :aria-pressed="format === 'pdf'" data-bb="export-pdf" @click="format = 'pdf'">PDF</button>
             <button type="button" :class="{ on: format === 'svg' }" :aria-pressed="format === 'svg'" data-bb="export-svg" @click="format = 'svg'">SVG</button>
-            <button type="button" disabled data-not-yet :title="ny('DXF')" data-missing="sheet_dxf: a DXF sheet export query">DXF</button>
+            <button v-if="dxfServed" type="button" :class="{ on: format === 'dxf' }" :aria-pressed="format === 'dxf'" data-bb="export-dxf" @click="format = 'dxf'">DXF</button>
+            <button v-else type="button" disabled data-not-yet :title="ny('DXF')" data-missing="view_dxf, sheet_dxf: not in this build">DXF</button>
             <button type="button" disabled data-not-yet :title="ny(t('export.printer'))" data-missing="print: no printer on the web">{{ t('export.printer') }}</button>
           </span></div>
         <div v-if="format === 'pdf'" class="fld"><span class="lbl">{{ t('export.font') }}</span>
@@ -165,8 +197,11 @@ async function exportSheets() {
     </div>
     <div style="display:flex;gap:10px;align-items:center;justify-content:flex-end">
       <span v-if="failed" class="note err" role="alert" data-bb="export-failed">{{ t('export.failed', { e: failed }) }}</span>
+      <span v-else-if="progress" class="note" role="status" data-bb="export-progress">{{ progress }}</span>
+      <span v-else-if="done" class="note" role="status" data-bb="export-done">{{ done }}</span>
+      <span v-else-if="format === 'dxf'" class="note">{{ t('export.dxfNote') }}</span>
       <span v-else class="note">{{ t('export.background') }}</span>
-      <button class="btn" :class="ready ? 'p' : 'd'" type="button" :disabled="!ready || busy" data-bb="export-go" @click="exportAll">{{ what === 'view' ? t('export.goView') : t('export.go', { n }) }}</button>
+      <button class="btn" :class="ready ? 'p' : 'd'" type="button" :disabled="!ready || busy" :aria-busy="busy" data-bb="export-go" @click="exportAll">{{ what === 'view' ? (format === 'dxf' && allViews ? t('export.goViews', { n: views2d.length }) : t('export.goView')) : t('export.go', { n }) }}</button>
     </div>
   </div>
 </template>

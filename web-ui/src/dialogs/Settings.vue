@@ -9,7 +9,8 @@ export const capability = "settings"; // SET1: query settings, action set_settin
 // (ADR 0052: no OK/Cancel). The memory share and two performance fields are kept in the file but not
 // shown: the lab's viewport has no use for them (`query settings` applies, DEVIATIONS 23); "While the
 // view moves" (moving_fps) is shown since it applies (ticket 3D1, ADR 0078), and "Far parts simplified"
-// (moving_proxies, HLOD proxies) since ticket 3D2.
+// (moving_proxies, HLOD proxies) since ticket 3D2. GPU1 (ADR 0083): the 3D renderer (renderer: not one of Rust's
+// fields) and, with WebGPU, "Cull copies on the graphics card" (gpu_cull) apply.
 import { computed, ref, watch } from "vue";
 import { setSettings, userSettings, type SettingsValues } from "../bimble";
 import { t } from "../i18n";
@@ -114,6 +115,14 @@ const close = () => { currentDialog.value = null; };
         <label v-if="s?.applies.moving_proxies" class="row"><span>{{ tx('settings.proxies') }}</span>
           <input type="checkbox" :checked="v.moving_proxies" data-bb="settings-moving-proxies" data-setting="moving_proxies" @change="set({ moving_proxies: ($event.target as HTMLInputElement).checked })"></label>
         <p v-if="s?.applies.moving_proxies" class="note" data-bb="settings-proxies-note">{{ tx('settings.proxiesNote') }}</p>
+        <!-- GPU1 (ADR 0083): the 3D renderer (automatic is WebGL2 for now); GPU culling of copies applies with WebGPU -->
+        <label v-if="s?.applies.renderer" class="row"><span>{{ tx('settings.renderer') }}</span>
+          <select class="inp" :value="v.renderer ?? 'auto'" data-bb="settings-renderer" data-setting="renderer" @change="set({ renderer: ($event.target as HTMLSelectElement).value as 'auto' | 'webgl2' | 'webgpu' })">
+            <option v-for="r in ['auto', 'webgl2', 'webgpu']" :key="r" :value="r">{{ tx(`settings.renderer.${r}` as K) }}</option>
+          </select></label>
+        <p v-if="s?.applies.renderer" class="note" data-bb="settings-renderer-note">{{ tx('settings.rendererNote') }}</p>
+        <label v-if="s?.applies.gpu_cull" class="row"><span>{{ tx('settings.gpuCullOn') }}</span>
+          <input type="checkbox" :checked="v.gpu_cull" data-bb="settings-gpu-cull-on" data-setting="gpu_cull" @change="set({ gpu_cull: ($event.target as HTMLInputElement).checked })"></label>
         <p v-if="s && !s.applies.gpu_cull" class="note" data-bb="settings-gpu-cull">{{ tx('settings.gpuCull') }}</p>
         <button v-if="!isDefaultLook" class="btn s" type="button" style="align-self:flex-start" data-bb="settings-default-look" @click="set({ theme: 'grey', ui_font: 'roboto', text_size: TEXT_SIZE })">{{ tx('settings.defaultLook') }}</button>
       </section>

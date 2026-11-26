@@ -21,6 +21,7 @@
 #include "json_w.h"
 #include "library.h"
 #include "links.h"
+#include "m1links.h"
 #include "links_ref.h" /* L1 */
 #include "mesh.h"
 #include "sheet_svg.h"
@@ -168,8 +169,13 @@ static const ActionRow ACTIONS[] = {
     {"reference_planes", "Reference plane by three points", "Setting out", 0, 0}, /* WAVE1B (refplanes.h) */
     {"place_grid_axis", "Place: Grid axis", "Setting out", 0, 0},                 /* WAVE1B (A2) */
     {"link_folder", "Link a folder…", "Collaborate", 0, 0}, /* LINKF (links.h) */
+    /* ---- QTY1 (ADR 0080): the Quantities tab (verbs_schedules.h, DEVIATIONS 38) ---- */
+    {"new_quantities", "New quantities…", "Quantities", 0, 0},
+    {"quantity_columns", "Columns…", "Quantities", 0, 0},
+    {"quantities_by_material", "Quantities by material", "Quantities", 0, 0},
+    /* ---- end QTY1 ---- */
 };
-_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4 + 5 + 2 + 1, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4, CONC1 5, WAVE1B 2, LINKF 1");
+_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4 + 5 + 2 + 1 + 3, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4, CONC1 5, WAVE1B 2, LINKF 1, QTY1 3");
 
 static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab", /* verbs.rs:28 snake_case */
                                         "footing", "strip_footing", "raft", "opening", "sleeve", /* CONC1 */
@@ -188,6 +194,13 @@ static void debug_str(cc_buf *out, const char *s) { cc_buf_debug_str(out, s, str
 
 /* Something is shown: an editable model or a read-only scene (Rust's `loaded.is_some()`). */
 static int loaded(const cc_session *s) { return s->open || s->view; }
+/* M1LINKS: the linked element selected, as a GlobalId (hide, isolate, unhide take it): 1 when there
+ * is one with a valid GlobalId. */
+static int m1_link_sel(const cc_session *s, cc_gid *g) {
+    if (s->link_sel < 0 || (size_t)s->link_sel >= s->nlinks || !cc_gid_valid(s->link_sel_id, 22)) return 0;
+    if (g) memcpy(g->c, s->link_sel_id, 22);
+    return 1;
+}
 static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out); /* the place tool, below */
 static int annot_json(cc_session *s, const cc_gid *added, cc_buf *out); /* the annotate tool, below */
 
@@ -255,11 +268,22 @@ static int push_id(uint64_t **v, size_t *n, size_t *cap, uint64_t id) {
 
 /* lib.rs:1767-1805 `rebuild_scene`: rev + 1; the primary selection kept by GlobalId, the others
  * dropped. */
-static void rebuild(cc_session *s) {
+static void rebuild(cc_session *s, int drawn) {
     s->rev++;
+    if (drawn) s->draw_gen++; /* LNK3D: views, sheets, schedules alone draw nothing new */
     if (s->has_primary && !cc_model_element(&s->model, &s->primary)) s->has_primary = 0;
     s->nalso = 0;
     cc_sv_vis_load(s); /* ---- SEC1 ---- the view's hides, as the edit, undo or redo left them */
+}
+
+/* LNK3D: 1 when `cmds` may change what the scene draws (anything but views, sheets, schedules). */
+static int cmds_drawn(const cc_command *c, size_t n) {
+    for (size_t i = 0; i < n; i++) switch (c[i].op) {
+        case CC_CMD_ADD_VIEW: case CC_CMD_REMOVE_VIEW: case CC_CMD_SET_VIEW:
+        case CC_CMD_ADD_SHEET: case CC_CMD_REMOVE_SHEET: case CC_CMD_SET_SHEET: case CC_CMD_SET_SCHEDULES: continue;
+        default: return 1;
+        }
+    return 0;
 }
 
 /* lib.rs:1725 `try_apply` through edit.rs:233 `Editor::apply` (no commands: no step, but the
@@ -279,7 +303,7 @@ static int try_apply(cc_session *s, const cc_command *cmds, size_t n, cc_buf *ou
         cc_links_undo_clear_redo(s); /* LINKF: a new step: link_folder's redo goes too */
         cc_session_note_apply(s, cmds, n); /* the session file logs the step with these */
     }
-    rebuild(s);
+    rebuild(s, !n || cmds_drawn(cmds, n));
     return CC_OK;
 }
 
@@ -287,6 +311,8 @@ static int try_apply(cc_session *s, const cc_command *cmds, size_t n, cc_buf *ou
 static void undo_redo(cc_session *s, int undo) {
     if (!s->open) return;
     if (cc_links_undo_step(s, undo)) return; /* LINKF: link_folder was the last step (links.h) */
+    const cc_step *st = undo ? (s->hist.nundo ? &s->hist.undo[s->hist.nundo - 1] : NULL) : (s->hist.nredo ? &s->hist.redo[s->hist.nredo - 1] : NULL);
+    int drawn = !st || cmds_drawn(st->cmds, st->n); /* LNK3D */
     if (undo ? cc_history_undo(&s->hist, &s->model) : cc_history_redo(&s->hist, &s->model)) {
         if (undo && s->nundo_ids) {
             if (!push_id(&s->redo_ids, &s->nredo_ids, &s->cap_redo_ids, s->undo_ids[s->nundo_ids - 1])) s->nundo_ids--;
@@ -294,7 +320,7 @@ static void undo_redo(cc_session *s, int undo) {
             if (!push_id(&s->undo_ids, &s->nundo_ids, &s->cap_undo_ids, s->redo_ids[s->nredo_ids - 1])) s->nredo_ids--;
         }
         s->saved_step = UINT64_MAX; /* FAKE1: edit.rs:292-308, undo and redo set `dirty`: unsaved until saved */
-        rebuild(s);
+        rebuild(s, drawn);
     }
 }
 
@@ -764,7 +790,10 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "draw_section")) return vs_plan_shown(s);
     if (!strcmp(name, "sheet_place_view") || !strcmp(name, "sheet_revision")) return s->open && vs_sheet_shown(s);
     if (!strcmp(name, "annotation_type")) return 1;
+    if (!strcmp(name, "view_rule")) return loaded(s); /* M1LINKS: the Navigator's eyes (m1_view_rule) */
     /* ---- end VIEWSHEET ---- */
+    /* ---- QTY1: the saved lists are an editable model's (a read-only scene shows the built-in ones) ---- */
+    if (!strcmp(name, "new_quantities") || !strcmp(name, "quantity_columns") || !strcmp(name, "quantities_by_material")) return s->open;
     /* ---- PAPER1: ribbon.rs:597 PaperView two_pictures(); OnPaper (Export view) `_ => loaded`
      * (the C core draws a model's views only: s->open) ---- */
     if (!strcmp(name, "paper_view")) return two_pictures(s);
@@ -778,8 +807,10 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "show_previous")) return loaded(s) && iss72_prev_count(s) > 0;
     /* ---- end ISS72 ---- */
     if (!strcmp(name, "hide_now") || !strcmp(name, "isolate_now") || !strcmp(name, "hide_in_view") || !strcmp(name, "isolate_in_view"))
-        return loaded(s) && s->has_primary;
+        return loaded(s) && (s->has_primary || m1_link_sel(s, NULL)); /* M1LINKS: a linked element too */
     if (!strcmp(name, "unhide")) {
+        cc_gid lg; /* M1LINKS: a linked element hidden */
+        if (loaded(s) && !s->has_primary && m1_link_sel(s, &lg)) return cc_vis_hidden(&s->vis, &lg);
         if (!loaded(s) || !s->has_primary) return 0;
         if (cc_vis_hidden(&s->vis, &s->primary)) return 1;
         for (size_t i = 0; i < s->nalso; i++)
@@ -925,8 +956,8 @@ static int q_open_views(cc_session *s, JsonW *w) {
 }
 
 /* The box a plan shows (views.rs view_clip): the scene's bounds, z cut to the plan's range. */
-static void plan_box(const cc_scene *sc, const cc_view *v, const double z[4], cc_vis *box) {
-    cc_vis_fit(box, sc, NULL);
+static void plan_box(cc_session *s, const cc_scene *sc, const cc_view *v, const double z[4], cc_vis *box) {
+    cc_vis_fit_session(s, box, sc, NULL); /* M1LINKS: the links' bounds too (a project of links alone) */
     if (!box->has_box) return;
     double o = sc->origin[2];
     double lo = v->look == CC_LOOK_DOWN ? z[CC_RANGE_DEPTH] : z[CC_RANGE_CUT];
@@ -977,7 +1008,7 @@ static void sec1_rot(const double p[2], double a, double out[2]) { /* viewdraw.r
 }
 static void sec1_section_box(cc_session *s, const cc_scene *sc, const cc_view *v, cc_vis *box, double dir[2], double *yaw) {
     box->reveal = 1; /* ClipBox::around(scene, |_| true) */
-    cc_vis_fit(box, sc, NULL);
+    cc_vis_fit_session(s, box, sc, NULL); /* M1LINKS: the links' bounds too */
     box->reveal = 0;
     double a = s->open ? cc_georef_plan_turn(&s->model.georef, v->true_north) : 0.0;
     *yaw = (double)(float)a;
@@ -1053,7 +1084,7 @@ static int q_view_clip(cc_session *s, JsonW *w) {
     jw_key(w, "clip");
     cc_vis box;
     cc_vis_init(&box);
-    if (plan && sc) plan_box(sc, &v, z, &box);
+    if (plan && sc) plan_box(s, sc, &v, z, &box);
     /* ---- SEC1 ---- a section's box (views.rs view_clip), its look and turn */
     int sec = v.kind == CC_VIEW_SECTION && sc;
     double dir[2] = {0.0, 0.0}, yaw = 0.0;
@@ -1275,10 +1306,92 @@ static int verb_query(cc_session *s, const char *name, const char *body, size_t 
     return CC_ERR;
 }
 
+/* SMALL1: query "batch" {"queries":[<name> | {"name":<name>,"args":<the body as a JSON string>}]}:
+ * the answers of several queries in one call (one round trip of the native host after an edit,
+ * instead of one per query). Answers [{"ok":<the query's answer, its bytes as is>} |
+ * {"error":<its error text>}], in order: each part is byte for byte what `query <name>` with that
+ * body answers alone (test/batch_test.c). Bounded: at most CC_BATCH_MAX queries, each a name of
+ * BATCH_NAMES (reads of the model and the session; never "batch" itself, so no recursion). */
+#define CC_BATCH_MAX 32
+static const char *const BATCH_NAMES[] = {
+    "actions", "annotation_types", "collab", "coordinates", "element", "elements", "foundation_rows",
+    "grid_axes", "grids", "history", "level_refusals", "link_draw", "links", "materials", "measure", "measurements",
+    "mesh_key", "north", "open_views", /* LNK3D: link_draw, mesh_key */ "opening_rows", "openings", "placing", "project", "reference_planes",
+    "schedule_columns", "schedule_list", "schedule_rows", "schedules", "setting_out", /* QTY1: schedule_columns, schedule_rows */ "sheets", "state", "status", "storeys", "view_annotations",
+    "view_clip", "view_references", "view_visibility", "views", "visibility", "visibility_sets",
+};
+static int batch_name(const char *s, size_t n) {
+    for (size_t i = 0; i < sizeof BATCH_NAMES / sizeof *BATCH_NAMES; i++)
+        if (strlen(BATCH_NAMES[i]) == n && !memcmp(BATCH_NAMES[i], s, n)) return 1;
+    return 0;
+}
+static int q_batch(cc_session *s, const char *body, size_t n, cc_buf *out) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    int rc = CC_ERR;
+    const JrVal *v = jr_parse(&a, body, n, &je);
+    const JrVal *q = v && v->type == JR_OBJ ? jr_get(v, "queries") : NULL;
+    if (!v) {
+        buf_puts(out, je.msg);
+        goto end;
+    }
+    if (!q || q->type != JR_ARR) {
+        buf_puts(out, "batch: {\"queries\":[...]} expected");
+        goto end;
+    }
+    if (q->n > CC_BATCH_MAX) {
+        buf_puts(out, "batch: more than 32 queries");
+        goto end;
+    }
+    for (size_t i = 0; i < q->n; i++) { /* every part checked before any is asked */
+        const JrVal *it = &q->items[i], *nm = it, *ar = NULL;
+        if (it->type == JR_OBJ) nm = jr_get(it, "name"), ar = jr_get(it, "args");
+        if (!nm || nm->type != JR_STR || !batch_name(nm->s, nm->n) || (ar && ar->type != JR_STR)) {
+            buf_puts(out, "batch: query ");
+            buf_u64(out, i);
+            buf_puts(out, ": a name of the batch list and an optional args text expected");
+            goto end;
+        }
+    }
+    buf_putc(out, '[');
+    for (size_t i = 0; i < q->n; i++) {
+        const JrVal *it = &q->items[i], *nm = it, *ar = NULL;
+        if (it->type == JR_OBJ) nm = jr_get(it, "name"), ar = jr_get(it, "args");
+        cc_buf one;
+        buf_init(&one);
+        int r = cc_call(s, "query", nm->s, ar ? ar->s : "", ar ? ar->n : 0, &one);
+        if (i) buf_putc(out, ',');
+        if (r == CC_OK) {
+            buf_puts(out, "{\"ok\":");
+            if (one.len) buf_append(out, one.p, one.len);
+            else buf_puts(out, "null");
+        } else {
+            buf_puts(out, "{\"error\":");
+            Buf t;
+            buf_init(&t);
+            JsonW w;
+            jw_init(&w, &t, 0);
+            jw_str_n(&w, one.p ? one.p : "", one.len);
+            if (jw_finish(&w) != JW_OK) out->oom = 1;
+            else buf_append(out, t.p, t.len);
+            buf_free(&t);
+        }
+        buf_putc(out, '}');
+        buf_free(&one);
+    }
+    buf_putc(out, ']');
+    rc = out->oom ? CC_ERR : CC_OK;
+end:
+    arena_free(&a);
+    return rc;
+}
+
 static int measure_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out); /* WAVE1B: opening_at */
 static int call_query(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     JsonW w;
     jw_init(&w, out, 0);
+    if (!strcmp(name, "batch")) return q_batch(s, body, n, out); /* SMALL1 */
     if (!strcmp(name, "state")) return q_state(s, &w);
     if (!strcmp(name, "actions")) return q_actions(s, &w);
     if (!strcmp(name, "capabilities")) return cc_capabilities_json(s, out); /* FAKE1, capabilities.h */
@@ -1336,6 +1449,18 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         buf_puts(out, "null");
         return CC_OK;
     }
+    if (!strcmp(name, "mesh_key")) { /* LNK3D (ADR 0078 amendment 3): what /mesh would hold; the page fetches it when this moves */
+        jw_obj_begin(&w);
+        jw_key(&w, "draw"), jw_u64(&w, s->draw_gen);
+        jw_key(&w, "links"), jw_u64(&w, s->links_mesh_gen);
+        jw_key(&w, "rev"), jw_u64(&w, s->rev);
+        jw_obj_end(&w);
+        return done(&w);
+    }
+    if (!strcmp(name, "link_draw")) { /* LNK3D (links.h) */
+        cc_links_draw_json(s, &w);
+        return done(&w);
+    }
     if (!strcmp(name, "links")) { /* links.h: [] without links (spec §1's stub) */
         cc_links_json(s, &w);
         int lrc = done(&w);
@@ -1348,8 +1473,20 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "links_panel")) return cc_links_panel_json(s, out) ? (out->oom = 1, CC_ERR) : CC_OK;
     if (!strcmp(name, "link_log")) return cc_link_log_text(s, body, n, out) ? CC_ERR : CC_OK; /* LINKF: a link's report, by its name */
     /* ---- end LNK1 ---- */
-    if (!strcmp(name, "scene_tree")) return cc_scene_tree_json(s, out) ? CC_ERR : CC_OK; /* FIXUI, links.h */
-    if (!strcmp(name, "scene_elements")) { /* FIXUI: {"storey", "class"?, "limit"?} (links.h) */
+    if (!strcmp(name, "scene_tree")) { /* FIXUI, links.h; M1LINKS: {"link": name} a link's (m1links.h) */
+        Arena a;
+        arena_init(&a, 0);
+        JrError je;
+        const JrVal *v = n ? jr_parse(&a, body, n, &je) : NULL;
+        const JrVal *lk = v && v->type == JR_OBJ ? jr_get(v, "link") : NULL;
+        int rc = lk && lk->type == JR_STR ? cc_link_tree_json(s, lk->s, lk->n, out) : cc_scene_tree_json(s, out);
+        arena_free(&a);
+        return rc ? CC_ERR : CC_OK;
+    }
+    if (!strcmp(name, "links_tree")) return cc_links_tree_json(s, out) ? CC_ERR : CC_OK;   /* M1LINKS (m1links.h) */
+    if (!strcmp(name, "link_notes")) return cc_notes_json(s, out) ? CC_ERR : CC_OK;        /* M1LINKS (m1links.h) */
+    if (!strcmp(name, "link_levels")) return cc_link_levels_json(s, out) ? CC_ERR : CC_OK; /* M1LINKS (m1links.h) */
+    if (!strcmp(name, "scene_elements")) { /* FIXUI: {"storey", "class"?, "limit"?} (links.h); M1LINKS: "link"? */
         Arena a;
         arena_init(&a, 0);
         JrError je;
@@ -1357,10 +1494,14 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         const JrVal *st = v && v->type == JR_OBJ ? jr_get(v, "storey") : NULL;
         const JrVal *cl = v && v->type == JR_OBJ ? jr_get(v, "class") : NULL;
         const JrVal *li = v && v->type == JR_OBJ ? jr_get(v, "limit") : NULL;
+        const JrVal *lk = v && v->type == JR_OBJ ? jr_get(v, "link") : NULL;
         int rc = -1;
         if (!st || st->type != JR_STR) buf_puts(out, "storey: a string");
         else if (cl && cl->type != JR_STR && cl->type != JR_NULL) buf_puts(out, "class: a string");
         else if (li && (li->type != JR_NUM || !(li->num >= 0 && li->num <= 100000))) buf_puts(out, "limit: 0 to 100000");
+        else if (lk && lk->type == JR_STR)
+            rc = cc_link_elements_json(s, lk->s, lk->n, st->s, st->n, cl && cl->type == JR_STR ? cl->s : NULL,
+                                       cl && cl->type == JR_STR ? cl->n : 0, li ? (size_t)li->num : 200, out);
         else
             rc = cc_scene_elements_json(s, st->s, st->n, cl && cl->type == JR_STR ? cl->s : NULL, cl && cl->type == JR_STR ? cl->n : 0,
                                         li ? (size_t)li->num : 200, out);
@@ -1456,6 +1597,9 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "sheet_pdf") || !strcmp(name, "view_pdf"))
         return cc_paper_pdf_query(s, scene_now(s), name[0] == 'v', body, n, out); /* LNK1: a read-only scene's views too */
     if (!strcmp(name, "pdf_fonts")) return cc_paper_fonts_query(s, out); /* SIZE1: the export's font choice */
+    /* DXF1: the DXF export, sheet_svg.h cc_paper_dxf_query (the bytes, or {path, bytes}) */
+    if (!strcmp(name, "sheet_dxf") || !strcmp(name, "view_dxf"))
+        return cc_paper_dxf_query(s, scene_now(s), name[0] == 'v', body, n, out);
     /* ---- PAPER1: a view's paper as SVG; several sheets as one PDF (sheet_svg.h) ---- */
     if (!strcmp(name, "view_svg")) return cc_paper_view_svg(s, scene_now(s), body, n, out); /* LNK1: read-only too */
     if (!strcmp(name, "sheets_pdf")) return cc_paper_sheets_pdf(s, s->open ? scene_now(s) : NULL, body, n, out);
@@ -1776,9 +1920,10 @@ static int gid_cmp(const void *a, const void *b);
 /* The selection, sorted and unique (visibility.rs `selection`: scene order = GlobalId order). */
 static cc_gid *selection_ids(const cc_session *s, size_t *n) {
     *n = 0;
-    cc_gid *v = malloc((s->nalso + 1) * sizeof *v);
+    cc_gid *v = malloc((s->nalso + 2) * sizeof *v);
     if (!v) return NULL;
     if (s->has_primary) v[(*n)++] = s->primary;
+    if (m1_link_sel(s, &v[*n])) (*n)++; /* M1LINKS: the linked element selected, by its GlobalId */
     for (size_t i = 0; i < s->nalso; i++) v[(*n)++] = s->also[i];
     qsort(v, *n, sizeof *v, gid_cmp);
     size_t k = 0;
@@ -1820,6 +1965,8 @@ static int sec1_store_vis_ex(cc_session *s, int all, const cc_vis_state *from, c
     cc_cmds_init(&l);
     cc_view v;
     int r = cc_sv_active(s, &l.arena, &v), rc = CC_OK;
+    size_t m1k;
+    if (r == 1 && v.kind == CC_VIEW_PLAN && cc_link_level_find(s, v.storey, &m1k)) r = 0; /* M1LINKS: a plan from links keeps its hides in the session */
     if (r == 1 && cc_view_dup(&l.arena, &v)) r = -1;
     if (r != 1) {
         cc_cmds_free(&l);
@@ -1858,6 +2005,273 @@ static int sec1_store_vis_ex(cc_session *s, int all, const cc_vis_state *from, c
 }
 /* ---- end SEC1 ---- */
 
+/* ---- M1LINKS ---- hidden action view_rule {op: "hide"|"show"|"isolate", one of class, storey (with
+ * link: a link's storey), link, element}: the Navigator's eye on a row of the object tree, over the
+ * open model's and the links' elements (m1links.h). Kept as rules in the active view's lists (one
+ * AddView / SetView, one undo step: a class, a storey "<link>/<name>", a link, an element's GlobalId),
+ * so a view stores a few names rather than thousands of ids; at most CC_VIEW_RULE_MAX_IDS element
+ * ids per list. A view that cannot be stored (a plan from links, a read-only scene) takes the rule
+ * for now (the elements it names hidden or isolated for now: session state). */
+#define CC_VIEW_RULE_MAX_IDS 10000
+static int m1_scmp(const void *x, const void *y) {
+    const cc_str *a = x, *b = y;
+    size_t k = a->n < b->n ? a->n : b->n;
+    int c = k ? memcmp(a->p, b->p, k) : 0;
+    return c ? c : (a->n > b->n) - (a->n < b->n);
+}
+/* `l` with `t` added (on) or removed (off), sorted, unique; strings in `a`. 0, -1 out of memory. */
+static int m1_list_set(Arena *a, cc_strs *l, cc_str t, int on) {
+    cc_str *v = arena_alloc(a, (l->n + 1) * sizeof *v, _Alignof(cc_str));
+    if (!v) return -1;
+    size_t k = 0;
+    for (size_t i = 0; i < l->n; i++)
+        if (m1_scmp(&l->v[i], &t)) v[k++] = l->v[i];
+    if (on) {
+        char *p = arena_dup(a, t.n ? t.p : "", t.n ? t.n : 1);
+        if (!p) return -1;
+        v[k++] = (cc_str){p, t.n};
+    }
+    qsort(v, k, sizeof *v, m1_scmp);
+    l->v = v, l->n = k;
+    return 0;
+}
+/* Every distinct text `pick` gives over the open scene's and the links' elements, but `keep`. */
+enum { M1_CLASS, M1_STOREY };
+static int m1_all(cc_session *s, Arena *a, int what, cc_str keep, cc_strs *out) {
+    size_t cap = 64, n = 0;
+    cc_str *v = malloc(cap * sizeof *v);
+    if (!v) return -1;
+    const cc_scene *sc = scene_now(s);
+#define M1_PUSH(T)                                                                                                         \
+    do {                                                                                                                   \
+        cc_str t_ = (T);                                                                                                   \
+        if (m1_scmp(&t_, &keep)) {                                                                                         \
+            if (n == cap) {                                                                                                \
+                cc_str *q_ = realloc(v, 2 * cap * sizeof *v);                                                              \
+                if (!q_) goto oom;                                                                                         \
+                v = q_, cap *= 2;                                                                                          \
+            }                                                                                                              \
+            v[n++] = t_;                                                                                                   \
+        }                                                                                                                  \
+    } while (0)
+    if (what == M1_CLASS && sc)
+        for (size_t i = 0; i < sc->nelements; i++) M1_PUSH(sc->elements[i].class_name);
+    if (what == M1_STOREY && s->open)
+        for (size_t i = 0; i < s->model.nstoreys; i++) M1_PUSH(s->model.storeys[i].name);
+    for (size_t li = 0; li < s->nlinks; li++) {
+        const cc_link *k = &s->links[li];
+        if (!k->kind) continue;
+        const cc_scene *ls = cc_link_scene(k);
+        size_t ln = strlen(k->name);
+        for (size_t i = 0; i < ls->nelements; i++) {
+            cc_str cls, nm, st, mt;
+            cc_link_texts(k, i, &cls, &nm, &st, &mt);
+            if (what == M1_CLASS) {
+                M1_PUSH(cls);
+                continue;
+            }
+            char *p = arena_alloc(a, ln + 1 + st.n + 1, 1); /* "<link>/<storey>" */
+            if (!p) goto oom;
+            memcpy(p, k->name, ln), p[ln] = '/';
+            if (st.n) memcpy(p + ln + 1, st.p, st.n);
+            M1_PUSH(((cc_str){p, ln + 1 + st.n}));
+        }
+    }
+#undef M1_PUSH
+    qsort(v, n, sizeof *v, m1_scmp);
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++)
+        if (!k || m1_scmp(&v[k - 1], &v[i])) v[k++] = v[i];
+    out->v = arena_alloc(a, (k ? k : 1) * sizeof *out->v, _Alignof(cc_str));
+    if (!out->v) goto oom;
+    for (size_t i = 0; i < k; i++) {
+        char *p = arena_dup(a, v[i].n ? v[i].p : "", v[i].n ? v[i].n : 1);
+        if (!p) goto oom;
+        out->v[i] = (cc_str){p, v[i].n};
+    }
+    out->n = k;
+    free(v);
+    return 0;
+oom:
+    free(v);
+    return -1;
+}
+/* The elements a rule names (the fallback for now): GlobalIds into `set`. */
+static int m1_rule_ids(cc_session *s, const char *cls, const char *storey, const char *link, const char *el, cc_gidset *set) {
+    const cc_scene *sc = scene_now(s);
+    if (el) {
+        cc_gid g;
+        memcpy(g.c, el, 22);
+        return cc_gidset_add(set, &g);
+    }
+    if (sc && !link)
+        for (size_t i = 0; i < sc->nelements; i++) {
+            const cc_scene_element *e = &sc->elements[i];
+            int on = cls && e->class_name.n == strlen(cls) && !memcmp(e->class_name.p, cls, e->class_name.n);
+            if (!on && storey && s->open && e->model_index < s->model.nelements) {
+                const cc_storey *st = cc_model_storey(&s->model, &s->model.elements[e->model_index].storey);
+                on = st && st->name.n == strlen(storey) && !memcmp(st->name.p, storey, st->name.n);
+            }
+            if (on && cc_gid_valid(e->id.c, 22) && cc_gidset_add(set, &e->id)) return -1;
+        }
+    for (size_t li = 0; li < s->nlinks; li++) {
+        const cc_link *k = &s->links[li];
+        if (!k->kind || (link && strcmp(link, k->name))) continue;
+        const cc_scene *ls = cc_link_scene(k);
+        for (size_t i = 0; i < ls->nelements; i++) {
+            cc_str c, nm, st, mt;
+            cc_link_texts(k, i, &c, &nm, &st, &mt);
+            int on = (!cls && !storey) || (cls && c.n == strlen(cls) && !memcmp(c.p, cls, c.n)) ||
+                     (storey && st.n == strlen(storey) && !memcmp(st.p, storey, st.n));
+            char id[22];
+            cc_link_id(k, i, id);
+            cc_gid g;
+            memcpy(g.c, id, 22);
+            if (on && cc_gid_valid(id, 22) && cc_gidset_add(set, &g)) return -1;
+        }
+    }
+    return 0;
+}
+static int m1_view_rule(cc_session *s, const char *body, size_t n, cc_buf *out) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jr_parse(&a, body, n, &je);
+    const JrVal *op = v && v->type == JR_OBJ ? jr_get(v, "op") : NULL;
+    const char *F[4] = {"class", "storey", "link", "element"}, *val[4] = {0};
+    size_t vn[4] = {0};
+    int nval = 0, rc = CC_ERR;
+    for (int i = 0; v && v->type == JR_OBJ && i < 4; i++) {
+        const JrVal *x = jr_get(v, F[i]);
+        if (!x || x->type == JR_NULL) continue;
+        if (x->type != JR_STR || !x->n || x->n > 4096) {
+            buf_puts(out, F[i]), buf_puts(out, ": a non-empty string");
+            goto end;
+        }
+        val[i] = x->s, vn[i] = x->n;
+        nval += i != 2; /* link names the storey's link, or is the rule itself */
+    }
+    int o = !op || op->type != JR_STR ? -1 : !strcmp(op->s, "hide") ? 0 : !strcmp(op->s, "show") ? 1 : !strcmp(op->s, "isolate") ? 2 : -1;
+    if (o < 0 || nval > 1 || (!nval && !val[2]) || (val[3] && !cc_gid_valid(val[3], vn[3]))) {
+        buf_puts(out, "the action's body is {\"op\": \"hide\"|\"show\"|\"isolate\", and one of \"class\", \"storey\" (\"link\"?), "
+                      "\"link\", \"element\" (a GlobalId)}");
+        goto end;
+    }
+    if (!loaded(s)) {
+        buf_puts(out, "no model open");
+        goto end;
+    }
+    if (val[2] && cc_links_find(s, val[2], vn[2]) < 0) {
+        buf_puts(out, "no linked model "), buf_append(out, val[2], vn[2]);
+        goto end;
+    }
+    cc_view w;
+    int r = s->open && s->has_active ? cc_sv_active(s, &a, &w) : 0;
+    if (r == 1 && cc_view_dup(&a, &w)) r = -1;
+    if (r < 0) {
+        buf_puts(out, "out of memory");
+        goto end;
+    }
+    size_t lk;
+    int storable = r == 1 && !(w.kind == CC_VIEW_PLAN && cc_link_level_find(s, w.storey, &lk));
+    if (!storable) { /* for now: the elements the rule names */
+        cc_gidset set = {0};
+        if (m1_rule_ids(s, val[0], val[1], val[2], val[3], &set)) {
+            free(set.v);
+            buf_puts(out, "out of memory");
+            goto end;
+        }
+        if (o == 1) {
+            for (size_t i = 0; i < set.n; i++) cc_gidset_remove(o == 1 && s->vis.temp_isolate ? &s->vis.hidden : &s->vis.temp, &set.v[i]);
+            for (size_t i = 0; i < set.n; i++) cc_gidset_remove(&s->vis.hidden, &set.v[i]);
+        } else if (cc_vis_hide_or_isolate(&s->vis, o == 2 ? CC_VIS_ISOLATE_NOW : CC_VIS_HIDE_NOW, set.v, set.n)) {
+            free(set.v);
+            buf_puts(out, "out of memory");
+            goto end;
+        }
+        free(set.v);
+        rc = CC_OK;
+        goto end;
+    }
+    cc_visibility *vis = &w.visibility, old = w.visibility;
+    cc_str t = {"", 0};
+    char *pair = NULL;
+    int bad = 0;
+    if (val[3]) { /* an element */
+        t = (cc_str){val[3], 22};
+        if (o == 2) {
+            vis->isolated_elements.n = 0;
+            bad = m1_list_set(&a, &vis->isolated_elements, t, 1);
+        } else {
+            bad = m1_list_set(&a, &vis->hidden_elements, t, o == 0);
+            if (!bad && o == 1 && vis->isolated_elements.n) bad = m1_list_set(&a, &vis->isolated_elements, t, 1);
+        }
+        if (vis->hidden_elements.n > CC_VIEW_RULE_MAX_IDS || vis->isolated_elements.n > CC_VIEW_RULE_MAX_IDS) {
+            buf_puts(out, "a view keeps at most 10000 element ids: hide a class, a storey or a link instead");
+            goto end;
+        }
+    } else if (val[0] || val[1]) { /* a class, or a storey (a link's: "<link>/<storey>") */
+        if (val[1] && val[2]) {
+            pair = arena_alloc(&a, vn[2] + 1 + vn[1], 1);
+            if (!pair) bad = 1;
+            else memcpy(pair, val[2], vn[2]), pair[vn[2]] = '/', memcpy(pair + vn[2] + 1, val[1], vn[1]), t = (cc_str){pair, vn[2] + 1 + vn[1]};
+        } else t = val[0] ? (cc_str){val[0], vn[0]} : (cc_str){val[1], vn[1]};
+        cc_strs *l = val[0] ? &vis->hidden_classes : &vis->hidden_storeys;
+        if (!bad && o == 2) {
+            bad = m1_all(s, &a, val[0] ? M1_CLASS : M1_STOREY, t, l);
+            if (!bad && val[1]) { /* a storey isolated: the other links go too */
+                vis->hidden_links.n = 0;
+                for (size_t i = 0; !bad && i < s->nlinks; i++)
+                    if (!val[2] || strcmp(val[2], s->links[i].name))
+                        bad = m1_list_set(&a, &vis->hidden_links, (cc_str){s->links[i].name, strlen(s->links[i].name)}, 1);
+            }
+        } else if (!bad) bad = m1_list_set(&a, l, t, o == 0);
+    } else { /* a link */
+        t = (cc_str){val[2], vn[2]};
+        if (o == 2) {
+            vis->hidden_links.n = 0;
+            for (size_t i = 0; !bad && i < s->nlinks; i++)
+                if (strcmp(val[2], s->links[i].name))
+                    bad = m1_list_set(&a, &vis->hidden_links, (cc_str){s->links[i].name, strlen(s->links[i].name)}, 1);
+            cc_str none = {"", 0}; /* the open model's storeys hidden: only that link is left */
+            if (!bad) bad = m1_all(s, &a, M1_STOREY, none, &vis->hidden_storeys);
+            if (!bad) { /* but the links' own storeys stay */
+                size_t k = 0;
+                for (size_t i = 0; i < vis->hidden_storeys.n; i++) {
+                    int of_link = 0;
+                    for (size_t j = 0; j < s->nlinks && !of_link; j++) {
+                        size_t ln = strlen(s->links[j].name);
+                        of_link = vis->hidden_storeys.v[i].n > ln && !memcmp(vis->hidden_storeys.v[i].p, s->links[j].name, ln) &&
+                                  vis->hidden_storeys.v[i].p[ln] == '/';
+                    }
+                    if (!of_link) vis->hidden_storeys.v[k++] = vis->hidden_storeys.v[i];
+                }
+                vis->hidden_storeys.n = k;
+            }
+        } else bad = m1_list_set(&a, &vis->hidden_links, t, o == 0);
+    }
+    if (bad) {
+        buf_puts(out, "out of memory");
+        goto end;
+    }
+    (void)old;
+    cc_cmds l;
+    cc_cmds_init(&l);
+    Buf why;
+    buf_init(&why);
+    cc_command *c = NULL;
+    if (cc_view_validate(&s->model, &w, &why)) buf_append(out, why.p, why.len);
+    else if (!(c = cc_cmds_push(&l, cc_model_view(&s->model, &w.id) ? CC_CMD_SET_VIEW : CC_CMD_ADD_VIEW))) buf_puts(out, "out of memory");
+    else c->view = w, rc = try_apply(s, l.v, l.n, out);
+    buf_free(&why);
+    cc_cmds_free(&l);
+    cc_sv_vis_load(s);
+end:
+    arena_free(&a);
+    return rc;
+}
+/* ---- end M1LINKS ---- */
+
 /* ---- ISS71 ---- Box to selection (issue #71): the box around the selected elements (the open
  * model's and a linked model's), in the box's frame, grown by CC_BOX_SELECTION_MARGIN_MM on every
  * side; nothing selected: around everything visible (lib.rs fit_section_box's margin). The box is
@@ -1893,7 +2307,7 @@ static void iss71_box_to_selection(cc_session *s) {
     float lo[3], hi[3];
     v->yaw = iss71_yaw(s, v->true_north); /* in the orientation chosen */
     int any = iss71_sel_bounds(s, sc, v->yaw, lo, hi);
-    if (!any || cc_vis_fit_bounds(v, lo, hi, CC_BOX_SELECTION_MARGIN_MM)) cc_vis_fit(v, sc, NULL);
+    if (!any || cc_vis_fit_bounds(v, lo, hi, CC_BOX_SELECTION_MARGIN_MM)) cc_vis_fit_session(s, v, sc, NULL); /* M1LINKS */
     if (v->has_box) v->section_on = 1;
     v->drag_face = -1;
 }
@@ -1906,7 +2320,15 @@ static int vis_action_do(cc_session *s, const char *name, cc_buf *out) {
     const cc_gid *primary = s->has_primary ? &s->primary : NULL;
     if (!strcmp(name, "section_box")) {
         if (!v->has_box) v->yaw = iss71_yaw(s, v->true_north); /* ISS71: the first fit, in the orientation chosen */
-        cc_vis_toggle(v, scene_now(s), primary);
+        v->section_on = !v->section_on; /* cc_vis_toggle, the links' bounds too (M1LINKS) */
+        if (v->section_on && !v->has_box) {
+            float lo[3], hi[3];
+            const cc_scene *sc = scene_now(s);
+            if (!primary && s->link_sel >= 0 && sc && iss71_sel_bounds(s, sc, v->yaw, lo, hi)) /* a linked element selected */
+                cc_vis_fit_bounds(v, lo, hi, 1.0f);
+            else cc_vis_fit_session(s, v, sc, primary);
+        }
+        v->drag_face = -1;
     } else if (!strcmp(name, "box_to_selection")) iss71_box_to_selection(s); /* ISS71 */
     else if (!strcmp(name, "box_north_project") || !strcmp(name, "box_north_true")) { /* ISS71 */
         const cc_scene *sc = scene_now(s);
@@ -1939,7 +2361,7 @@ static int vis_action_do(cc_session *s, const char *name, cc_buf *out) {
             return -1;
         }
         if (n && a >= CC_VIS_HIDE_IN_VIEW && sec1_store_vis(s, 0, out)) return -1; /* SEC1 */
-        if (n && !v->reveal) s->has_primary = 0, s->nalso = 0; /* visibility.rs:106 clear_selection */
+        if (n && !v->reveal) s->has_primary = 0, s->nalso = 0, s->link_sel = -1; /* visibility.rs:106 clear_selection */
     }
     return 0;
 }
@@ -2154,12 +2576,14 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         goto end;
     }
     static const char *const OPS_L[] = {"remove", "reload", "show", "hide", "locate" /* LNK1 */,
-                                        "cancel", "unload", "load", "pin", "unpin", "place", "colour", "reload_all" /* LINKF */};
+                                        "cancel", "unload", "load", "pin", "unpin", "place", "colour", "reload_all" /* LINKF */,
+                                        "note_add", "note_remove" /* M1LINKS */};
     int o = -1;
-    for (int q = 0; q < 13; q++)
+    for (int q = 0; q < 15; q++)
         if (op->n == strlen(OPS_L[q]) && !memcmp(op->s, OPS_L[q], op->n)) o = q;
     if (o < 0) {
-        buf_puts(out, "op: one of list, remove, reload, show, hide, locate, cancel, unload, load, pin, unpin, place, colour, reload_all");
+        buf_puts(out, "op: one of list, remove, reload, show, hide, locate, cancel, unload, load, pin, unpin, place, colour, reload_all, "
+                      "note_add, note_remove");
         goto end;
     }
     if (o == 12) { /* LINKF: reload_all: each link read again (its cache when the IFC did not change) */
@@ -2180,7 +2604,9 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         buf_puts(out, "no linked model "), buf_append(out, nm->s, nm->n);
         goto end;
     }
-    if (o == 4) { /* ---- LNK1: locate {name, path}: the link read from another file, in its place ---- */
+    if (o == 13 || o == 14) { /* ---- M1LINKS: a note on a linked element (m1links.h) ---- */
+        if (cc_notes_op(s, o == 13, nm->s, nm->n, v, out)) goto end;
+    } else if (o == 4) { /* ---- LNK1: locate {name, path}: the link read from another file, in its place ---- */
         const JrVal *p = jr_get(v, "path");
         if (!p || p->type != JR_STR || !p->n || strlen(p->s) < p->n) {
             buf_puts(out, "path: the file to link in its place");
@@ -2248,7 +2674,7 @@ static int new_sheet_action(cc_session *s, cc_buf *out) {
 /* Actions the C core runs that the ribbon does not list (above). */
 static const char *const HIDDEN_ACTIONS[] = {"save_as", "close", "recent_remove" /* FS1 */, "set_settings", "settings_load" /* SET1 */,
                                              "commit", "branch_create", "branch_switch" /* H2a */, "merge" /* H2b */,
-                                             "annotation_type" /* VIEWSHEET */};
+                                             "annotation_type" /* VIEWSHEET */, "view_rule" /* M1LINKS */};
 
 /* calls.rs:538-547 call_action, ribbon.rs:650 run_action. */
 static int call_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
@@ -2300,6 +2726,23 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     /* ---- VIEWSHEET (view_sheet.h): the dialogs open in the page; the section tool is a switch
      * (it stops the place, annotate and measure tools, as one tool at a time); the types ---- */
     if (!strcmp(name, "new_view") || !strcmp(name, "sheet_place_view") || !strcmp(name, "sheet_revision")) return CC_OK;
+    /* ---- QTY1: New quantities and Columns open their dialog in the page; By material creates the
+     * "By material" list once (schedule_add preset, one history step), the page then shows it ---- */
+    if (!strcmp(name, "new_quantities") || !strcmp(name, "quantity_columns")) return CC_OK;
+    if (!strcmp(name, "quantities_by_material")) {
+        for (size_t i = 0; i < s->model.nschedules; i++) {
+            cc_str nm = s->model.schedules[i].name;
+            if (nm.n == 11 && !memcmp(nm.p, "By material", 11)) return CC_OK;
+        }
+        cc_cmds l;
+        cc_cmds_init(&l);
+        int rc = CC_ERR;
+        if (!cc_verb_run_ex(&s->model, "schedule_add", "{\"preset\":\"by_material\"}", 24, 0, -1, s->rev, &l, out))
+            rc = try_apply(s, l.v, l.n, out);
+        cc_cmds_free(&l);
+        return rc;
+    }
+    /* ---- end QTY1 ---- */
     if (!strcmp(name, "draw_section")) {
         s->vsh.section_draw = !(s->vsh.section_draw && vs_plan_shown(s));
         if (s->vsh.section_draw) {
@@ -2308,6 +2751,7 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
         }
         return CC_OK;
     }
+    if (!strcmp(name, "view_rule")) return m1_view_rule(s, body, n, out); /* M1LINKS */
     if (!strcmp(name, "annotation_type")) {
 #ifdef CC_VIEW_ONLY
         return fail(out, "annotation_type: no graphic standards in the viewer-only build");
@@ -2847,9 +3291,12 @@ static double (*snap_grid_axes(const cc_session *s, size_t *n))[4] {
             if (!cnt || !(v = malloc(cnt * sizeof *v))) break;
             cnt = 0;
         }
+        /* M1LINKS: a link's axes where the link is placed (cc_link_placement; LINKF left them its own) */
+        double pc = 1.0, ps = 0.0, pt[3] = {0, 0, 0};
 #define SNAP_AXIS(A, B)                                                                                                       \
     do {                                                                                                                      \
-        if (v) v[cnt][0] = (A)[0], v[cnt][1] = (A)[1], v[cnt][2] = (B)[0], v[cnt][3] = (B)[1];                                \
+        if (v) v[cnt][0] = pc * (A)[0] - ps * (A)[1] + pt[0], v[cnt][1] = ps * (A)[0] + pc * (A)[1] + pt[1],                \
+               v[cnt][2] = pc * (B)[0] - ps * (B)[1] + pt[0], v[cnt][3] = ps * (B)[0] + pc * (B)[1] + pt[1];                \
         cnt++;                                                                                                                \
     } while (0)
         for (size_t g = 0; g < s->model.ngrids; g++)
@@ -2857,6 +3304,7 @@ static double (*snap_grid_axes(const cc_session *s, size_t *n))[4] {
         for (size_t k = 0; k < s->nlinks; k++) {
             const cc_link *l = &s->links[k];
             if (!l->visible) continue;
+            cc_link_placement(s, l, &pc, &ps, pt);
             if (l->kind == CC_LINK_MODEL && l->model)
                 for (size_t g = 0; g < l->model->ngrids; g++)
                     for (size_t i = 0; i < l->model->grids[g].naxes; i++) SNAP_AXIS(l->model->grids[g].axes[i].start, l->model->grids[g].axes[i].end);
@@ -3602,7 +4050,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
         if (s->tab_open && cc_sv_active(s, &a, &v) == 1 && v.kind == CC_VIEW_PLAN && !cc_sv_plan_range(s, &v, z)) {
             cc_vis box;
             cc_vis_init(&box);
-            plan_box(sc, &v, z, &box);
+            plan_box(s, sc, &v, z, &box);
             if (box.has_box) has_box = 1, memcpy(mn, box.min, sizeof mn), memcpy(mx, box.max, sizeof mx);
             cc_vis_free(&box);
         } else if (s->vis.section_on && s->vis.has_box) {
@@ -3730,6 +4178,15 @@ int cc_call(cc_session *s, const char *op, const char *name, const char *body, s
     if (s->nlinks) cc_links_sync_placement(s);
     int rc = call_op(s, op, name, body, n, out);
     if (s->nlinks) cc_links_sync_placement(s);
+    if (s->vis_links_gen != s->links_gen) { /* M1LINKS: the view's rules over links loaded since */
+        s->vis_links_gen = s->links_gen;
+        if (s->vis.view_lists) cc_sv_vis_load(s);
+    }
+    if (s->nlinks) { /* M1LINKS: what is hidden changed (LNK3D: the mesh keeps it; links_mesh_gen stays, the page hides by id) */
+        uint64_t h = cc_vis_sig(&s->vis);
+        if (s->has_vis_sig && h != s->vis_sig) s->links_gen++, s->vis_links_gen = s->links_gen;
+        s->vis_sig = h, s->has_vis_sig = 1;
+    }
     return rc;
 }
 
@@ -3784,6 +4241,7 @@ void cc_change_json(cc_session *s, cc_buf *out) { /* calls.rs:134-167 (json!, so
         jw_obj_end(&w);
     }
     if (s->links_gen) jw_key(&w, "links"), jw_u64(&w, s->links_gen); /* links.h: once links changed */
+    if (s->links_gen) jw_key(&w, "links_mesh"), jw_u64(&w, s->links_mesh_gen); /* LNK3D: their geometry's changes */
     jw_key(&w, "placing");
     if (s->open) placing_json(s, &w);
     else jw_null(&w);

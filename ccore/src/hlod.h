@@ -103,4 +103,10 @@ int cc_hlod_bprx(const cc_hlod *h, uint32_t rev, uint32_t nelements, Buf *out, c
  * error 0 and no part (nP, nV, nI, nS 0). The cells, children and element list are those the built
  * tree will have, so the page can cut its draw lists by leaf before the proxies exist. */
 int cc_hlod_bprx_tree(const cc_hlod *h, uint32_t rev, uint32_t nelements, Buf *out, cc_error *err);
+/* LNK3D (ADR 0078 amendment 3): BPRX bytes read back (a link cache's section HLOD, untrusted) checked
+ * against what cc_hlod_bprx writes: the magic and version, `nelements`, the size from the counts, every
+ * cell's ranges, children after their parent (a tree, no cycle), elements under nelements, each part's
+ * ranges and its indices inside its own vertices, finite bounds and errors, depth at most
+ * CC_HLOD_MAX_DEPTH. 0 ok, -1 with `err`. O(n), no allocation. */
+int cc_hlod_bprx_check(const uint8_t *p, size_t n, uint32_t nelements, cc_error *err);
 #endif

@@ -175,8 +175,14 @@ async function main() {
   const ready = await waitFor("each link ready", 60000, async () => { const r = await rows(); return r.length === 4 && r.every((m) => m.state === "ready") ? r : null; });
   check("each becomes ready", ready.length === 4);
   check("caches and reports beside each IFC", Object.keys(FILES).every((n) => existsSync(join(dir, `${n}.bimbleview`)) && existsSync(join(dir, `${n}.log.txt`))));
-  const st = await waitFor("the viewport's mesh with four links", 15000, async () => { const s = await gl(); return s.links.length === 4 && s.linkTris > 0 ? s : null; });
-  const sum = ready.reduce((a, m) => a + m.elements, 0), drawn = st.links.reduce((a, l) => a + l.elements, 0);
+  // The links reach the viewport one after the other (LNK3D: proxies first, then each link's mesh):
+  // wait until the viewport holds every element of the four, then compare (on a slower machine the
+  // first mesh with four links did not hold them all yet: 89 / 78).
+  const sum = ready.reduce((a, m) => a + m.elements, 0);
+  const held = (s) => s.links.reduce((a, l) => a + l.elements, 0);
+  const st = await waitFor("the viewport's mesh with four links", 15000, async () => { const s = await gl(); return s.links.length === 4 && s.linkTris > 0 && held(s) === sum ? s : null; })
+    .catch(async () => gl());
+  const drawn = held(st);
   check("the scene holds the sum of their elements", sum === drawn && sum > 0, `${sum} / ${drawn}`);
   await waitFor("rows ready in the panel", 5000, () => evalJs("[...document.querySelectorAll('[data-bb=link-model]')].every((r) => r.dataset.state === 'ready')"));
 

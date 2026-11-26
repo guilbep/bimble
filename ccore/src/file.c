@@ -632,7 +632,8 @@ static int link_moved(const cc_model_link *k) { return k->move_mm[0] != 0.0 || k
 /* ---- LNK1: "links" (model.h cc_model_link): at most CC_MODEL_LINKS_MAX entries, each a name
  * and a path (4096 bytes at most, no NUL), maybe `relative` and `hidden` ---- */
 static int d_links(D *d, const JrVal *v, cc_model *m) {
-    static const char *const F[] = {"hidden", "name", "path", "relative", "origin", "move_mm", "rotation_deg", "pinned", "colour"};
+    static const char *const F[] = {"hidden", "name", "path", "relative", "origin", "move_mm", "rotation_deg", "pinned", "colour",
+                                    "notes" /* M1LINKS */};
     static const char *const ORIG[] = {"origin", "base_point", "survey_point"}; /* LINKF; "file" is the default, left out */
     if (v->type != JR_ARR) return type_err(d, v, "a sequence");
     if (v->n > CC_MODEL_LINKS_MAX) return dfail(d, v->off, "links: too many linked models", 0, 0);
@@ -640,10 +641,38 @@ static int d_links(D *d, const JrVal *v, cc_model *m) {
     m->links = arena_alloc_n(d->a, v->n, sizeof *m->links, sizeof(void *));
     if (!m->links) return dfail(d, v->off, "out of memory", 0, 0);
     for (size_t i = 0; i < v->n; i++) {
-        const JrVal *x = &v->items[i], *f[9];
+        const JrVal *x = &v->items[i], *f[10];
         cc_model_link *k = &m->links[i];
         memset(k, 0, sizeof *k);
-        if (d_fields(d, x, F, 9, f, "struct Link", 1) || need(d, x, f[1], F[1]) || need(d, x, f[2], F[2])) return -1;
+        if (d_fields(d, x, F, 10, f, "struct Link", 1) || need(d, x, f[1], F[1]) || need(d, x, f[2], F[2])) return -1;
+        if (f[9]) { /* ---- M1LINKS: notes (model.h cc_model_note), untrusted: each checked ---- */
+            static const char *const NF[] = {"at", "element", "text"};
+            if (f[9]->type != JR_ARR) return type_err(d, f[9], "a sequence");
+            if (f[9]->n > CC_MODEL_NOTES_MAX) return dfail(d, f[9]->off, "links: at most 256 notes per link", 0, 0);
+            k->notes = f[9]->n ? arena_alloc_n(d->a, f[9]->n, sizeof *k->notes, sizeof(double)) : NULL;
+            if (f[9]->n && !k->notes) return dfail(d, f[9]->off, "out of memory", 0, 0);
+            for (size_t q = 0; q < f[9]->n; q++) {
+                const JrVal *nx = &f[9]->items[q], *g[3];
+                cc_model_note *nt = &k->notes[q];
+                memset(nt, 0, sizeof *nt);
+                if (d_fields(d, nx, NF, 3, g, "struct Note", 1) || need(d, nx, g[0], NF[0]) || need(d, nx, g[1], NF[1]) ||
+                    need(d, nx, g[2], NF[2]))
+                    return -1;
+                if (g[0]->type != JR_ARR || g[0]->n != 3) return type_err(d, g[0], "a sequence of 3 numbers");
+                for (int c = 0; c < 3; c++) {
+                    if (d_f64(d, &g[0]->items[c], &nt->at[c])) return -1;
+                    if (!(nt->at[c] > -1e12 && nt->at[c] < 1e12)) return dfail(d, g[0]->off, "links: a note's point within 1e12 mm", 0, 0);
+                    nt->at[c] += 0.0; /* canonical: no -0.0 */
+                }
+                if (g[1]->type != JR_STR || !cc_gid_valid(g[1]->s, g[1]->n)) return dfail(d, g[1]->off, "links: a note's element is a GlobalId", 0, 0);
+                memcpy(nt->element.c, g[1]->s, 22);
+                if (d_str(d, g[2], &nt->text)) return -1;
+                int nul = 0;
+                for (size_t c = 0; c < nt->text.n; c++) nul |= nt->text.p[c] == 0;
+                if (nul || nt->text.n > CC_MODEL_NOTE_TEXT) return dfail(d, g[2]->off, "links: a note's text (2000 bytes at most, no NUL)", 0, 0);
+            }
+            k->nnotes = f[9]->n;
+        } /* ---- end M1LINKS ---- */
         /* ---- LINKF: the placement, pin and colour (model.h), untrusted: each checked ---- */
         if (f[4]) {
             if (f[4]->type != JR_STR) return type_err(d, f[4], "a string");
@@ -1116,6 +1145,20 @@ int cc_model_save(const cc_model *m, Buf *b) {
                 jw_arr_end(&w);
             }
             jw_key(&w, "name"), jw_str_n(&w, k->name.p ? k->name.p : "", k->name.n);
+            if (k->nnotes) { /* M1LINKS: keys sorted */
+                jw_key(&w, "notes"), jw_arr_begin(&w);
+                for (size_t q = 0; q < k->nnotes; q++) {
+                    const cc_model_note *nt = &k->notes[q];
+                    jw_obj_begin(&w);
+                    jw_key(&w, "at"), jw_arr_begin(&w);
+                    for (int c = 0; c < 3; c++) jw_f64(&w, nt->at[c]);
+                    jw_arr_end(&w);
+                    jw_key(&w, "element"), jw_str_n(&w, nt->element.c, 22);
+                    jw_key(&w, "text"), jw_str_n(&w, nt->text.p ? nt->text.p : "", nt->text.n);
+                    jw_obj_end(&w);
+                }
+                jw_arr_end(&w);
+            }
             if (k->origin > 0 && k->origin < 4) jw_key(&w, "origin"), jw_str(&w, LINK_ORIGIN[k->origin]); /* LINKF */
             jw_key(&w, "path"), jw_str_n(&w, k->path.p ? k->path.p : "", k->path.n);
             if (k->unpinned) jw_key(&w, "pinned"), jw_bool(&w, 0); /* LINKF */
@@ -1426,7 +1469,7 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
                 const cc_model_link *k = &m->links[i];
                 int org = k->origin > 0 && k->origin < 4, mv = link_moved(k);
                 cb_head(b, CB_MAP, 2 + (k->hidden ? 1 : 0) + (k->relative.n ? 1 : 0) + (k->has_colour ? 1 : 0) + mv + org +
-                                       (k->unpinned ? 1 : 0) + (k->rotation_deg != 0.0));
+                                       (k->unpinned ? 1 : 0) + (k->rotation_deg != 0.0) + (k->nnotes ? 1 : 0) /* M1LINKS */);
                 if (k->has_colour) c_key(b, "colour"), cb_head(b, CB_UINT, (uint64_t)k->colour); /* LINKF */
                 if (k->hidden) c_key(b, "hidden"), cb_head(b, 7, 21); /* true */
                 if (mv) {
@@ -1434,6 +1477,17 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
                     for (int c = 0; c < 3; c++) cb_f64(b, k->move_mm[c]);
                 }
                 c_key(b, "name"), c_str(b, k->name);
+                if (k->nnotes) { /* M1LINKS: as the text form */
+                    c_key(b, "notes"), cb_head(b, CB_ARRAY, k->nnotes);
+                    for (size_t q = 0; q < k->nnotes; q++) {
+                        const cc_model_note *nt = &k->notes[q];
+                        cb_head(b, CB_MAP, 3);
+                        c_key(b, "at"), cb_head(b, CB_ARRAY, 3);
+                        for (int c = 0; c < 3; c++) cb_f64(b, nt->at[c]);
+                        c_key(b, "element"), c_gid(b, &nt->element);
+                        c_key(b, "text"), c_str(b, nt->text);
+                    }
+                }
                 if (org) c_key(b, "origin"), cb_text(b, LINK_ORIGIN[k->origin], strlen(LINK_ORIGIN[k->origin]));
                 c_key(b, "path"), c_str(b, k->path);
                 if (k->unpinned) c_key(b, "pinned"), cb_head(b, 7, 20); /* false */

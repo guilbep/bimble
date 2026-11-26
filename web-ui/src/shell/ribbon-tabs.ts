@@ -11,7 +11,8 @@ export type RibbonKey = keyof typeof fr;
 // one whose capability the core does not serve: shell/capability.ts toolNotYet) is drawn "not yet", with a tooltip.
 // VIEWSHEET: a tool with both an action and a dialog is enabled by the action (`query actions`), opens the dialog;
 // offTip: the reason shown when the action is off (an i18n key).
-export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string; action: string | null; page?: string; panel?: string; dialog?: string; offTip?: string }
+// QTY1: schedule: the Quantities page opens on this saved list, after the action (which makes it once).
+export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string; action: string | null; page?: string; panel?: string; dialog?: string; offTip?: string; schedule?: string }
 // Reference .rbox: a label over a 150 px select (sel) or a mono readout (readout). No Rust call yet: drawn disabled, empty.
 // SETOUT: kind "zero" is the Setting out tab's project zero (shell/ProjectZeroBox.vue: the georeference's height).
 // VIEWSHEET: kind "types" is the Annotate tab's Text type and Dimension type selects (shell/AnnotationTypes.vue).
@@ -242,17 +243,17 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
   ],
   quantities: [
     { key: "ribbon.quantities.g1", tools: [
-      { key: "ribbon.quantities.g1.t1", tag: "button", icon: "<rect x=\"4\" y=\"5\" width=\"16\" height=\"14\"/><path d=\"M4 10h16M10 10v9\"/>", action: null },
-      { key: "ribbon.quantities.g1.t2", tag: "button", icon: "<path d=\"M9 6h11M9 12h11M9 18h11\"/><circle cx=\"5\" cy=\"6\" r=\"1\"/><circle cx=\"5\" cy=\"12\" r=\"1\"/><circle cx=\"5\" cy=\"18\" r=\"1\"/>", action: null },
+      { key: "ribbon.quantities.g1.t1", tag: "button", icon: "<rect x=\"4\" y=\"5\" width=\"16\" height=\"14\"/><path d=\"M4 10h16M10 10v9\"/>", action: "new_quantities", dialog: "new-quantities" }, // QTY1
+      { key: "ribbon.quantities.g1.t2", tag: "button", icon: "<path d=\"M9 6h11M9 12h11M9 18h11\"/><circle cx=\"5\" cy=\"6\" r=\"1\"/><circle cx=\"5\" cy=\"12\" r=\"1\"/><circle cx=\"5\" cy=\"18\" r=\"1\"/>", action: "quantity_columns", dialog: "quantity-columns" }, // QTY1
       { key: "ribbon.quantities.g1.t3", tag: "button", icon: "<path d=\"M4 7h10M18 7h2M4 17h4M12 17h8\"/><circle cx=\"16\" cy=\"7\" r=\"2\"/><circle cx=\"10\" cy=\"17\" r=\"2\"/>", action: null, page: "quantities" },
     ] },
     { key: "ribbon.quantities.g2", tools: [
-      { key: "ribbon.quantities.g2.t1", tag: "button", icon: "<path d=\"M4 12h11\"/><path d=\"m11 8 4 4-4 4\"/><rect x=\"16\" y=\"6\" width=\"5\" height=\"12\"/>", action: null },
-      { key: "ribbon.quantities.g2.t2", tag: "button", icon: "<ellipse cx=\"12\" cy=\"6\" rx=\"7\" ry=\"3\"/><path d=\"M5 6v12c0 1.7 3 3 7 3s7-1.3 7-3V6\"/><path d=\"M5 12c0 1.7 3 3 7 3s7-1.3 7-3\"/>", action: null },
+      { key: "ribbon.quantities.g2.t1", tag: "button", icon: "<path d=\"M4 12h11\"/><path d=\"m11 8 4 4-4 4\"/><rect x=\"16\" y=\"6\" width=\"5\" height=\"12\"/>", action: "assign_cfc" }, // QTY1: ticket QTY2 (capability cfc)
+      { key: "ribbon.quantities.g2.t2", tag: "button", icon: "<ellipse cx=\"12\" cy=\"6\" rx=\"7\" ry=\"3\"/><path d=\"M5 6v12c0 1.7 3 3 7 3s7-1.3 7-3V6\"/><path d=\"M5 12c0 1.7 3 3 7 3s7-1.3 7-3\"/>", action: "cfc_catalogue" }, // QTY1: ticket QTY2 (capability cfc)
     ] },
     { key: "ribbon.quantities.g3", tools: [
-      { key: "ribbon.quantities.g3.t1", tag: "button", icon: "<path d=\"M4 18 18 4\"/><path d=\"M7 21 21 7\"/><path d=\"M5 13l2 2M9 9l2 2M13 5l2 2\"/>", action: null },
-      { key: "ribbon.quantities.g3.t2", tag: "button", icon: "<circle cx=\"12\" cy=\"12\" r=\"8\"/><path d=\"M6 8c4 3 8 3 12 0M5 13c4 3 10 3 14 0\"/>", action: null },
+      { key: "ribbon.quantities.g3.t1", tag: "button", icon: "<path d=\"M4 18 18 4\"/><path d=\"M7 21 21 7\"/><path d=\"M5 13l2 2M9 9l2 2M13 5l2 2\"/>", action: "bar_schedule" }, // QTY1: ticket RBR4 (capability rebar)
+      { key: "ribbon.quantities.g3.t2", tag: "button", icon: "<circle cx=\"12\" cy=\"12\" r=\"8\"/><path d=\"M6 8c4 3 8 3 12 0M5 13c4 3 10 3 14 0\"/>", action: "quantities_by_material", page: "quantities", schedule: "By material" }, // QTY1
     ] },
     { key: "ribbon.quantities.g4", tools: [
       { key: "ribbon.quantities.g4.t1", tag: "button", icon: "<path d=\"M12 15V3\"/><path d=\"m7 8 5-5 5 5\"/><path d=\"M5 13v8h14v-8\"/>", action: null, page: "quantities" },

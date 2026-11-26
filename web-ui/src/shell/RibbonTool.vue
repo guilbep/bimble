@@ -8,6 +8,7 @@ import { currentPanel } from "../panels";
 import { currentDialog } from "../dialogs";
 import type { RibbonTool } from "./ribbon-tabs";
 import { HIDE_NOT_AVAILABLE, toolNotYet } from "./capability";
+import { pickedSchedule } from "../pages/quantitiesPick"; // QTY1
 import { shortcutFor } from "./keys"; // KEY1
 import { BOX_SELECTION_MARGIN_MM } from "./contextItems"; // ISS71
 import type { PartKey } from "../i18n/keys.gen"; // ISS71
@@ -24,10 +25,11 @@ let tipTimer = 0;
 onUnmounted(() => clearTimeout(tipTimer));
 // ---- end FAKE1 ----
 const on = computed(() => !notYet.value && (vue.value
-  ? (props.tool.page ? currentPage.value === props.tool.page : props.tool.panel ? currentPanel.value === props.tool.panel : currentDialog.value === props.tool.dialog)
+  ? (props.tool.page ? currentPage.value === props.tool.page && (!props.tool.schedule || pickedSchedule.value === props.tool.schedule) : props.tool.panel ? currentPanel.value === props.tool.panel : currentDialog.value === props.tool.dialog)
   : state.value?.pressed === true));
 // VIEWSHEET: a dialog tool with an action is as enabled as its action (the core says when: a sheet shown, a plan shown).
-const gated = computed(() => !!props.tool.dialog && props.tool.action !== null);
+// QTY1: a page tool with a saved list (By material) too: its action makes the list.
+const gated = computed(() => (!!props.tool.dialog || !!props.tool.schedule) && props.tool.action !== null);
 const off = computed(() => !notYet.value && (!vue.value || gated.value) && !state.value?.enabled);
 // Before the first `actions` refresh the list is empty: unavailable, not missing.
 const missing = computed(() => vue.value ? undefined :
@@ -52,7 +54,12 @@ function run(): void {
     tipTimer = window.setTimeout(() => (tip.value = false), 2500);
     return;
   }
-  if (props.tool.page) send(on.value ? { do: "back" } : { do: "showPage", page: props.tool.page });
+  if (props.tool.page && props.tool.schedule) { // QTY1: the action (makes the list once), then the page on it
+    if (on.value) { send({ do: "back" }); return; }
+    if (props.tool.action) runAction(props.tool.action);
+    pickedSchedule.value = props.tool.schedule;
+    send({ do: "showPage", page: props.tool.page }); // shell_graph: control ribbon-by-material
+  } else if (props.tool.page) send(on.value ? { do: "back" } : { do: "showPage", page: props.tool.page });
   else if (props.tool.panel) currentPanel.value = on.value ? null : props.tool.panel;
   else if (props.tool.dialog) { // VIEWSHEET: the action first (the palette's recent list), then the dialog
     if (gated.value && props.tool.action) runAction(props.tool.action);

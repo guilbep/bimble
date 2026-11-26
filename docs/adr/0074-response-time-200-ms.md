@@ -96,3 +96,89 @@ ticket, for review on the implementation.
   drawn again when the camera or the model changes. Pointer moves were already coalesced (one
   call per frame, the latest position). **Alternative:** draw the marker in WebGL: one full draw
   per move, 290 ms per move on a 2.2-million-triangle model under SwiftShader.
+
+## The first input of a session (ticket FIRST1, 26 Nov 2026)
+
+Delegated by Pierre ("it's just good practice to have 200ms reactivity threshold for UX; people
+notice it is slow above 200ms"), chosen in the ticket, for review on the implementation.
+
+- **Cause.** `data-bb-ready` was set before the page's first frame was on screen (first paint
+  130 to 460 ms after it). Headless Chromium's GPU process (SwiftShader) compiles the pipelines of
+  each new kind of drawing on first use, in every session (a kept profile does not help): its
+  first `SwapBuffers` took 200 to 900 ms each (trace: `SkiaOutputSurfaceImplOnGpu::SwapBuffers`
+  437, 317, 425 ms; a blank test page 700 ms, then 5 to 20 ms). The page's main thread was idle;
+  its next frame waited behind those swaps, so the first input after ready waited 190 to 710 ms
+  for its own frame, whatever it was (a click that only shows a tooltip and calls no core). The
+  first plan shown added the 2D overlay's first strokes and texts (`StrokeTessellateOp`, ANGLE
+  compile tasks): 470 to 550 ms, 63 to 84 ms with `--disable-accelerated-2d-canvas`. On the native
+  host the plan also came one frame late: its change arrived by the long-poll, after the click's
+  frame.
+- **Choice: ready means on screen.** `deeplink.ts` `onScreen`: after the deep link's steps, wait
+  for the viewport's first model frame, then three frames in a row under 50 ms apart, each with a
+  change to show (a 2-pixel probe over the viewport's canvas changes colour), 10 s at most; a
+  hidden page does not wait. **Alternative:** a fixed delay after the first frame: too short
+  under load, too long on a fast machine.
+- **Choice: the overlay's 2D programs at start** (`warm.ts` `warm2d`): the overlay's kinds of
+  strokes (widths 1 to 2.5, solid and dashed, joins), arcs, fills and texts drawn once on a canvas
+  never shown, before ready. **Alternative:** the overlay on the CPU (`willReadFrequently`): it
+  removes the cost for good but changes the draw path (glviewport.ts, other tickets).
+- **Choice: the native client reads the change of its own call at once** (`bimble.ts`
+  `changeNow`): after each call that is not a query, one synchronous `GET /change` with a `since`
+  above any seq (the host answers at once) and the change goes to on_change in the same task, as
+  the wasm module does; the long-poll then skips that seq. The first plan is in the first frame
+  after the click (native 24 to 63 ms, was about 500). **Alternative:** the host's answer carries
+  the change: a protocol change for one request saved.
+- Also: the first refresh no longer runs T29's "100 pointer polls" probe (100 synchronous
+  requests at start on the native host).
+- **The check.** `ccore/test/lab_first_input.mjs`: per case a fresh Chromium and page, the first
+  input at 0 and 400 ms after ready (a ribbon tool's "not available yet" tooltip, a pointer move
+  over the viewport, Ctrl K, the navigator's first plan), on the native host and the wasm build,
+  timed from the event to the first animation frame that holds its feedback (the watcher runs in
+  every frame from before the input), strictly under 200 ms. Before (load 1.7-2.6): 8 of 16 failed
+  (native key 202 ms, move none in 5 s, nav 201 ms; wasm at 0 ms 392 to 489 ms). After: 15 of 16
+  passed at load 6.2-6.8 (native 14 to 63 ms; wasm 11 to 64 ms, the plan at 400 ms 305 ms), 14 of
+  16 at load 2.8-4.7 (native all, 10 to 77 ms; wasm the plan at 0 ms 286 ms, the tool at 400 ms
+  302 ms).
+- **Cost.** Ready comes later: about 1.3 s after navigation before (load 2), 2.5 to 3.1 s after
+  (load 6-7); the page is painted at the same time as before, ready now waits for its frames.
+- **Left.** The first frame that shows a new kind of thing (the pressed tool's or row's hover
+  background, the tooltip) still takes 230 to 300 ms to reach the screen under SwiftShader (one
+  `SwapBuffers`, the page idle; a lookalike label or a pressed-like background shown before ready
+  did not take that cost away). A feedback made on `click` (after `pointerup`: the tooltip, the
+  navigator's view) lands in the frame after the `pointerdown`'s and waits for it when that one is
+  slow: the 2 failures above, and `lab_quantity_lists`' first click, 227 to 228 ms at load 3.7-3.9
+  (436 to 565 ms before; it also starts its clock's frame after its second CDP call, so it can
+  time the frame after the tooltip's). Next: find which pipeline that first swap compiles (a
+  SwiftShader build with its own trace), or answer the press itself (`pointerdown`).
+
+## What a headless software GPU can tell about 200 ms (FIRST1 follow-up, 26 Nov 2026)
+
+Decided by the orchestrator under Pierre's delegation: a timing check measures what the page
+controls, strictly, and reports what the GPU process adds, separately.
+
+- The lab checks run in headless Chromium on SwiftShader, a software rasteriser. It tells whether
+  the page does its part in time: its scripts, its core calls, its DOM and canvas changes, and
+  that it hands a frame over at once. It cannot tell how long a real GPU takes to show that frame:
+  SwiftShader compiles the pipelines of each new kind of drawing at its first frame (200 to 300 ms
+  a swap after the fixes above, the page idle), which a hardware driver does in milliseconds or
+  from its cache.
+- `ccore/test/lib/input_time.mjs` gives each input two times. `page_ms`: from the input event to
+  the page's part done (the feedback there after a DOM change, the input's own events or in a frame
+  callback), asserted at 200 ms always. `presented_ms`: to the first animation frame that holds
+  the feedback, asserted at 200 ms when the WebGL renderer (`WEBGL_debug_renderer_info`) is a
+  hardware one; on SwiftShader, llvmpipe or another software renderer it is printed and fails only
+  above 1,000 ms, and the log line says which rule applied. Used by `lab_first_input.mjs` and the
+  first click of `lab_quantity_lists.mjs`; the other lab checks keep their 200 ms on the frame.
+- Presented times on a real GPU are read in the lab itself: GPU1's performance panel
+  (`web-ui/src/perf.ts`, status bar › Performance, "slowest input → frame").
+- Feedback on press: the ribbon tool and the navigator row already change under the pressing
+  pointer (`:hover`); the "not available yet" tooltip and the view stay on `click` (a touch screen
+  has no hover; a press that slides off cancels), unchanged.
+- The status bar's coordinates under a still pointer follow the view now (`glviewport.ts`
+  pointerFrame: the count of frames drawn in its key, so a camera move, a fit or the model's first
+  frame reads the point again); before, a pointer over the viewport before the model's first frame
+  read "nothing" until it moved (`lab_first_input` "still": failed on the old code, native and
+  wasm, passes now).
+- Numbers (load 2.7-3.9): `lab_first_input` 18 of 18 (page 18 to 90 ms, presented 18 to 95 ms on
+  SwiftShader); `lab_quantity_lists` 28 of 28 (the first click: page 24.0 ms, presented 30.2 ms);
+  `lab_boot` 5 of 5, `lab_keys` 88 of 88.

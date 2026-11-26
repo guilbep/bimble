@@ -31,6 +31,14 @@ export const fr = {
   "export.storeyPlan": "Plan d’étage sans vue, format et gabarit : pas encore",
   "export.goView": "Exporter la vue",
   "export.fontRobotoMissing": "Roboto : placez Roboto-Regular.ttf et Roboto-Bold.ttf dans ~/.config/bimble/fonts (ou $BIMBLE_FONTS), application de bureau seulement",
+  // ---- DXF1: the DXF export (view_dxf, sheet_dxf; ADR 0082) ----
+  "export.allViews": "Toutes les vues 2D",
+  "export.dxfNote": "DXF (AutoCAD 2000) en millimètres à 1:1, un calque par classe IFC et par rôle",
+  "export.dxfViews": "Un fichier DXF par vue, nommé d’après la vue",
+  "export.busy": "Export en cours…",
+  "export.progress": "Export {i} sur {n}…",
+  "export.done": "Exporté : {n} fichier(s)",
+  "export.goViews": "Exporter {n} vues",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "export.title": "Print and export",
@@ -64,4 +72,12 @@ export const en: Record<keyof typeof fr, string> = {
   "export.storeyPlan": "Storey plan without a view, paper and template: not yet",
   "export.goView": "Export the view",
   "export.fontRobotoMissing": "Roboto: put Roboto-Regular.ttf and Roboto-Bold.ttf in ~/.config/bimble/fonts (or $BIMBLE_FONTS), desktop app only",
+  // ---- DXF1 ----
+  "export.allViews": "All 2D views",
+  "export.dxfNote": "DXF (AutoCAD 2000) in millimetres at 1:1, one layer per IFC class and role",
+  "export.dxfViews": "One DXF file per view, named after the view",
+  "export.busy": "Exporting…",
+  "export.progress": "Exporting {i} of {n}…",
+  "export.done": "Exported: {n} file(s)",
+  "export.goViews": "Export {n} views",
 };
