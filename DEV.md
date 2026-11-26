@@ -182,6 +182,15 @@ it serves, and the page never guesses (FAKE1, `web-ui/src/shell/capability.ts`).
   `ccore/results/parity.md`, whose header says what the counts support and what they do not.
   `--check` (in `ci/run.sh unit|full`) fails only on a crash, a 5xx or malformed JSON. `--rust`
   needs the Rust tree (section 8).
+- `node ccore/tools/ux.mjs [--check] [--force] [--builds wasm,native] [--models small,large]`:
+  every control of the lab, enumerated from the page and activated with real input in one headless
+  Chromium (the production wasm build, then the native host), its verdict (works, says not
+  available, dead, error, disabled, not exercised) and the response time of each one that works
+  against the 200 ms goal (ADR 0074), plus the Measure tool per pointer move; writes
+  `ccore/results/ux.md`. Refuses to write numbers when the 1-minute load is above 4 (`--force`).
+  `UX_EXTRA_MODEL=<file>` adds a local model, reported to `ccore/out/ux/ux-local.md` only.
+  `--check` (verdicts only, wasm, small model) fails on more dead or error controls than the
+  committed report; not in `ci/run.sh` yet (`docs/research/ux-map.md`).
 - `ccore/bench/corpus.sh fetch|asan|run|ios|report`: the public IFC corpora (617 STEP files; the
   38 non-STEP files are refused and 173 git-lfs pointers are not fetched) read by C (and by Rust and
   IfcOpenShell when present); `ccore/results/ifc_corpus.md`.
