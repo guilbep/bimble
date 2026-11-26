@@ -1119,3 +1119,33 @@ own references are hand-computed in `test/setting_out_test.c`; no golden changes
 - **`query setting_out`** (C only, `session/setting_out.h`): the markers and the values the page
   draws; null without an editable model. **`query capabilities`** gains `setting_out` (true),
   `reference_planes` and `base_point_move` (false: not served yet).
+
+## 33. Views and sheets from the ribbon: New view…, the section tool, Place view…, Revision…, annotation types (ticket VIEWSHEET, ADR 0076)
+
+Rust v0.19.0 made views from the navigator's "New view…" menu (viewing.rs:806-840), placed views
+on sheets by dragging them from the navigator (layout.rs:449), kept one `revision` per sheet
+(`set_sheet`, dispatch.rs:105; the title block's `{revision}`, template.rs:189) and chose the text
+and dimension types of new annotations in its ribbon (ribbon.rs:1285 `annotation_types`, kept in
+the layout: `text_kind`, `dim_kind`). The C core adds no file field and changes no golden; its
+references are hand-computed in `test/view_sheet_test.c`.
+
+- **Four actions after SETOUT's** (`query actions`: 65 rows): `new_view` (enabled with an editable
+  model), `draw_section` (a switch, session state: enabled and pressed only while a floor plan of
+  an editable model is shown; it stops the place, annotate and measure tools and they stop it),
+  `sheet_place_view` and `sheet_revision` (enabled with an editable model and a sheet shown). The
+  three dialog actions answer ok and change nothing: the page opens its dialog, which runs the
+  verbs. `sheet_place_view` is not named `place_view`: the `place_` prefix is the place tool's.
+- **`view_add` takes `scale` (1 to 5000, a whole number) and a section's `depth_mm` (0 or more)**,
+  so a view made with its scale is one Command and one undo step. Rust's viewer set the scale
+  afterwards (a second `set_view`). Refused: a fraction, 0, 5001, a string, a depth on a plan, a
+  negative or out-of-range depth.
+- **`query annotation_types`** (C only): the standards' text and dimension types (the default
+  standards, `cc_style_default`: the C core keeps no other) and the ones in use, null for Default.
+  **Action `annotation_type`** (not listed, as `set_settings`): `{"text": name | null}` or
+  `{"dimension": name | null}`; an unknown name, a non-string, an empty or over-200-byte name, two
+  keys or a body that is not JSON is refused and the state kept. The annotate tool (`tool
+  annotate`) gives a new text the type's name as `kind` and its size (layout.rs:540-545, as Rust's
+  sheet text tool), a new dimension the type's name; Rust applied them to sheet annotations only
+  (the C core's sheet tools are not served yet, capability `sheet_tools` false).
+- **Revision**: Rust's one `revision` per sheet, nothing new (no revision table, no date, no
+  author: Rust had none; ADR 0076 decision 4).

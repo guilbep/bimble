@@ -416,7 +416,8 @@ int cc_vh_georef_set(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *er
 static const char SCHEMA_VIEW_ADD[] =
     "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
     "escription\":\"Arguments of `view_add`: a new view (kind), or a copy of one (from).\",\"properti"
-    "es\":{\"facing\":{\"description\":\"A section's look direction.\",\"enum\":[\"north\",\"east\","
+    "es\":{\"depth_mm\":{\"description\":\"A section's depth beyond the cut, mm; 0 (default): all.\",\"form"
+    "at\":\"double\",\"type\":[\"number\",\"null\"]},\"facing\":{\"description\":\"A section's look direction.\",\"enum\":[\"north\",\"east\","
     "\"south\",\"west\",null],\"type\":[\"string\",\"null\"]},\"from\":{\"description\":\"GlobalId of"
     " a view to duplicate (its copy is named \\\"<name> (copy)\\\").\",\"type\":[\"string\",\"null\"]"
     "},\"kind\":{\"description\":\"plan, ceiling (a ceiling plan looking up), section or three_d.\","
@@ -424,7 +425,8 @@ static const char SCHEMA_VIEW_ADD[] =
     "ame\":{\"description\":\"The view's name; default: as Rust's viewer names a new view.\",\"type\""
     ":[\"string\",\"null\"]},\"origin\":{\"description\":\"A section's cut: a point it goes through, "
     "world mm [x, y]; default: the middle of the model.\",\"items\":{\"format\":\"double\",\"type\":"
-    "\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":[\"array\",\"null\"]},\"storey\":{\"descripti"
+    "\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":[\"array\",\"null\"]},\"scale\":{\"descripti"
+    "on\":\"1:N the view is drawn at (1 to 5000); default 100.\",\"format\":\"uint32\",\"type\":[\"integer\",\"null\"]},\"storey\":{\"descripti"
     "on\":\"A plan's level: its GlobalId.\",\"type\":[\"string\",\"null\"]}},\"title\":\"ViewAddArgs"
     "\",\"type\":\"object\"}";
 static const char SUMMARY_VIEW_ADD[] =

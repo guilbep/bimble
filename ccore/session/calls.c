@@ -150,8 +150,14 @@ static const ActionRow ACTIONS[] = {
     {"show_survey_point", "Survey point", "Setting out", 0, 0},
     {"view_true_north", "True / project north", "Setting out", 0, 0},
     /* ---- end SETOUT ---- */
+    /* ---- VIEWSHEET (ADR 0076): the View and Sheets tabs' tools (view_sheet.h, DEVIATIONS 33) ---- */
+    {"new_view", "New view…", "View", 0, 0},
+    {"draw_section", "Section", "View", 0, 0},
+    {"sheet_place_view", "Place view…", "Sheets", 0, 0},
+    {"sheet_revision", "Revision…", "Sheets", 0, 0},
+    /* ---- end VIEWSHEET ---- */
 };
-_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3");
+_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4");
 
 static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab"}; /* verbs.rs:28 snake_case */
 static const char *const SIZE_KEY[] = {"column", "beam_width", "beam_height", "wall", "slab"}; /* verbs.rs:78 */
@@ -300,6 +306,7 @@ static void place_action(cc_session *s, cc_kind k) {
     s->placing = !on;
     cc_tool_clear(&s->tool);
     if (!on) s->placing_kind = k, s->kind = k;
+    if (!on) s->vsh.section_draw = 0; /* VIEWSHEET: one tool at a time */
 }
 
 /* serde_json Value's Display: compact JSON (numbers as their token). */
@@ -626,6 +633,20 @@ static float iss71_yaw(cc_session *s, int true_north) {
 }
 /* ---- end ISS71 ---- */
 
+/* ---- VIEWSHEET: a plan (not a ceiling plan, not a section) of an editable model shown, no sheet
+ * over it; a sheet shown ---- */
+static int vs_sheet_shown(cc_session *s) { return s->sheet_shown && cc_sheet_known(s, &s->sheet); }
+static int vs_plan_shown(cc_session *s) {
+    if (!s->open || !s->tab_open || !s->has_active || vs_sheet_shown(s)) return 0;
+    Arena a;
+    arena_init(&a, 0);
+    cc_view v;
+    int plan = cc_sv_active(s, &a, &v) == 1 && v.kind == CC_VIEW_PLAN && v.look == CC_LOOK_DOWN;
+    arena_free(&a);
+    return plan;
+}
+/* ---- end VIEWSHEET ---- */
+
 static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-612, the C core's subset */
     if (!strcmp(name, "new") || !strcmp(name, "open") || !strcmp(name, "import_ifc")) return 1; /* ribbon.rs:559 */
     if (!strcmp(name, "save_as")) return s->open; /* not ribbon actions (file_action) */
@@ -685,6 +706,13 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "materials")) return loaded(s); /* MAT1: ribbon.rs:611 `_ => loaded` (read only: the list) */
     if (!strcmp(name, "close_sheet")) return loaded(s) && s->sheet_shown && cc_sheet_known(s, &s->sheet);
     /* ---- end FAKE1 ---- */
+    /* ---- VIEWSHEET (view_sheet.h): New view… with an editable model; Section with a plan shown
+     * (on or off); Place view… and Revision… with a sheet shown; the annotation types any time ---- */
+    if (!strcmp(name, "new_view")) return s->open;
+    if (!strcmp(name, "draw_section")) return vs_plan_shown(s);
+    if (!strcmp(name, "sheet_place_view") || !strcmp(name, "sheet_revision")) return s->open && vs_sheet_shown(s);
+    if (!strcmp(name, "annotation_type")) return 1;
+    /* ---- end VIEWSHEET ---- */
     /* ---- PAPER1: ribbon.rs:597 PaperView two_pictures(); OnPaper (Export view) `_ => loaded`
      * (the C core draws a model's views only: s->open) ---- */
     if (!strcmp(name, "paper_view")) return two_pictures(s);
@@ -758,6 +786,7 @@ static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strcmp(a->name, "box_north_true")) return s->vis.true_north;     /* ISS71 */
     if (cc_setout_index(a->name) >= 0) return s->open && cc_setout_on(&s->setout, cc_setout_index(a->name)); /* SETOUT */
     if (!strcmp(a->name, "view_true_north")) return s->open && setout_true_north(s); /* SETOUT */
+    if (!strcmp(a->name, "draw_section")) return s->vsh.section_draw && vs_plan_shown(s); /* VIEWSHEET */
     if (!strcmp(a->name, "reveal_hidden")) return s->vis.reveal;   /* ribbon.rs:643 */
     if (!strcmp(a->name, "measure")) return loaded(s) && s->measure.on; /* ribbon.rs:625 (ticket T1) */
     if (!strcmp(a->name, "edges")) return s->edges;               /* Q2: ribbon.rs:626 opts.edges */
@@ -1355,6 +1384,18 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "materials_page")) return cc_materials_page_query(s, out);
     if (!s->open && !strcmp(name, "material_library")) return cc_query(&s->model, name, body, n, out) == 200 ? CC_OK : CC_ERR;
     /* ---- end MAT1 ---- */
+    if (!strcmp(name, "annotation_types")) { /* VIEWSHEET (view_sheet.h): the standards' types, the ones in use */
+        Arena sa;
+        arena_init(&sa, 0);
+        cc_style st;
+        if (cc_style_default(&st, &sa)) {
+            arena_free(&sa);
+            return out->oom = 1, CC_ERR;
+        }
+        cc_vs_types_json(&s->vsh, &st.paper, &w);
+        arena_free(&sa);
+        return done(&w);
+    }
     if (!strcmp(name, "setting_out")) { /* SETOUT (setting_out.h): null without an editable model */
         if (!s->open) return buf_puts(out, "null"), CC_OK;
         JsonW w;
@@ -1963,7 +2004,8 @@ static int new_sheet_action(cc_session *s, cc_buf *out) {
 
 /* Actions the C core runs that the ribbon does not list (above). */
 static const char *const HIDDEN_ACTIONS[] = {"save_as", "close", "recent_remove" /* FS1 */, "set_settings", "settings_load" /* SET1 */,
-                                             "commit", "branch_create", "branch_switch" /* H2a */, "merge" /* H2b */};
+                                             "commit", "branch_create", "branch_switch" /* H2a */, "merge" /* H2b */,
+                                             "annotation_type" /* VIEWSHEET */};
 
 /* calls.rs:538-547 call_action, ribbon.rs:650 run_action. */
 static int call_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
@@ -2012,6 +2054,27 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     if (!strcmp(name, "settings") || !strcmp(name, "about")) return CC_OK;
     if (!strcmp(name, "set_settings") || !strcmp(name, "settings_load")) return cc_settings_action(s, name, body, n, out) ? CC_ERR : CC_OK;
     /* ---- end SET1 ---- */
+    /* ---- VIEWSHEET (view_sheet.h): the dialogs open in the page; the section tool is a switch
+     * (it stops the place, annotate and measure tools, as one tool at a time); the types ---- */
+    if (!strcmp(name, "new_view") || !strcmp(name, "sheet_place_view") || !strcmp(name, "sheet_revision")) return CC_OK;
+    if (!strcmp(name, "draw_section")) {
+        s->vsh.section_draw = !(s->vsh.section_draw && vs_plan_shown(s));
+        if (s->vsh.section_draw) {
+            cc_tool_clear(&s->tool), s->placing = 0;
+            if (s->measure.on) cc_measure_toggle(&s->measure);
+        }
+        return CC_OK;
+    }
+    if (!strcmp(name, "annotation_type")) {
+        Arena sa;
+        arena_init(&sa, 0);
+        cc_style st;
+        int trc = cc_style_default(&st, &sa) ? (buf_puts(out, "out of memory"), CC_ERR)
+                  : cc_vs_set_type(&s->vsh, &st.paper, body, n, out) ? CC_ERR : CC_OK;
+        arena_free(&sa);
+        return trc;
+    }
+    /* ---- end VIEWSHEET ---- */
     /* ---- KEY1: ribbon.rs:729-744, the plan template's flag (no history step, rev unchanged) ---- */
     if (cc_toggle_index(name) >= 0) return cc_toggle_flip(s, cc_toggle_index(name)), CC_OK;
     /* ---- end KEY1 ---- */
@@ -2051,7 +2114,7 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
         for (int k = 0; k < 4; k++)
             if (!strcmp(name + 6, KIND_NAME[k])) place_action(s, (cc_kind)k);
         if (s->placing) s->measure.on = 0, s->measure.has_first = s->measure.has_hover = 0; /* ribbon.rs:687 */
-    } else if (!strcmp(name, "measure")) cc_measure_toggle(&s->measure); /* ribbon.rs:691 (ticket T1) */
+    } else if (!strcmp(name, "measure")) cc_measure_toggle(&s->measure), s->vsh.section_draw = 0; /* ribbon.rs:691 (ticket T1); VIEWSHEET: one tool */
     else if (cc_setout_index(name) >= 0) cc_setout_flip(&s->setout, cc_setout_index(name)); /* SETOUT */
     else if (!strcmp(name, "view_true_north")) return setout_flip_north(s, out); /* SETOUT */
     else if (vis_action(s, name, out)) return CC_ERR;
@@ -2922,6 +2985,7 @@ static int annot_start(cc_session *s, const char *body, size_t n, cc_buf *out) {
     }
     cc_tool_clear(&s->tool);
     s->placing = 0;
+    s->vsh.section_draw = 0; /* VIEWSHEET: one tool at a time */
     s->tool.annot = mode;
     s->tool.annot_size = sz && sz->type == JR_NUM ? sz->num : 3.5;
     if (mode == 2) {
@@ -2970,7 +3034,14 @@ static int annot_call(cc_session *s, int pointer, int cancel, const ToolArgs *ta
     if (t->annot == 2) {
         verb = "add_text";
         jw_key(&w, "at"), w_pair(&w, t->hover);
-        jw_key(&w, "size_mm"), jw_f64(&w, t->annot_size);
+        /* VIEWSHEET: the text type in use gives its name and size (layout.rs:540-545) */
+        Arena ka;
+        arena_init(&ka, 0);
+        cc_style kst;
+        const cc_text_type *tt = s->vsh.text_kind[0] && !cc_style_default(&kst, &ka) ? cc_vs_text_type(&kst.paper, s->vsh.text_kind) : NULL;
+        if (tt) jw_key(&w, "kind"), jw_str(&w, s->vsh.text_kind);
+        jw_key(&w, "size_mm"), jw_f64(&w, tt ? (double)tt->size_mm : t->annot_size);
+        arena_free(&ka);
         jw_key(&w, "text"), jw_str(&w, t->annot_text ? t->annot_text : "");
     } else {
         if (t->npoints < 2) { /* a, then b (not on a) */
@@ -2995,6 +3066,7 @@ static int annot_call(cc_session *s, int pointer, int cancel, const ToolArgs *ta
         jw_key(&w, "a"), annot_point_arg(&w, t, 0);
         jw_key(&w, "axis"), jw_str(&w, AXIS[ax]);
         jw_key(&w, "b"), annot_point_arg(&w, t, 1);
+        if (s->vsh.dim_kind[0]) jw_key(&w, "kind"), jw_str(&w, s->vsh.dim_kind); /* VIEWSHEET: the dimension type in use */
         jw_key(&w, "offset"), jw_f64(&w, annot_round(off));
     }
     jw_key(&w, "view"), jw_str_n(&w, v.id.c, 22);

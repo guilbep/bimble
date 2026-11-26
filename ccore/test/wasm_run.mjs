@@ -559,7 +559,7 @@ suite("host");
     const st0 = hcall("query", "state", "{}");
     check("boot: query state -> 200, no file", st0.status === 200 && JSON.parse(st0.text).file === null, st0.text);
     const ac0 = hcall("query", "actions", "{}");
-    check("boot: query actions -> 61 rows (Rust's 54 + ISS72's 2 + ISS71's 2 + SETOUT's 3)", ac0.status === 200 && JSON.parse(ac0.text).length === 61, ac0.text.slice(0, 200));
+    check("boot: query actions -> 65 rows (Rust's 54 + ISS72's 2 + ISS71's 2 + SETOUT's 3 + VIEWSHEET's 4)", ac0.status === 200 && JSON.parse(ac0.text).length === 65, ac0.text.slice(0, 200));
     check("unknown op -> 404", hcall("nope").status === 404);
     check("host_saved before a save -> 404", call(X.host_saved, []).status === 404);
 

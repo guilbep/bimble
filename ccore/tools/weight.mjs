@@ -43,6 +43,7 @@ const FEATURES = [
   ["levels and grids", "grid verbs_levels"],
   ["materials (MAT1: verbs, library and page queries)", "verbs_materials materials_page"],
   ["georef and setting out (SETOUT: markers, north)", "georef setting_out"],
+  ["views and sheets from the ribbon (VIEWSHEET: section tool, annotation types)", "view_sheet"],
   ["queries (model queries)", "query"],
   ["quantities and schedules", "quantity schedules"],
   ["command palette", "palette"],
