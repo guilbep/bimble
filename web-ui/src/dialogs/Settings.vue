@@ -6,8 +6,9 @@ export const capability = "settings"; // SET1: query settings, action set_settin
 // Settings (ticket SET1): Rust's window (crates/bimble-viewer/src/lib.rs:4127 settings_ui): You (name,
 // e-mail: lib.rs:4023), Coordinates (coords.rs:57), Appearance (theme, font, text size: lib.rs:4041).
 // The same file as the Rust app (settings.rs): every change is one `set_settings`, applied at once
-// (ADR 0052: no OK/Cancel). The memory share and the three performance fields are kept in the file
-// but not shown: the lab's viewport has no use for them (`query settings` applies, DEVIATIONS 23).
+// (ADR 0052: no OK/Cancel). The memory share and two performance fields are kept in the file but not
+// shown: the lab's viewport has no use for them (`query settings` applies, DEVIATIONS 23); "While the
+// view moves" (moving_fps) is shown since it applies (ticket 3D1, ADR 0078).
 import { computed, ref, watch } from "vue";
 import { setSettings, userSettings, type SettingsValues } from "../bimble";
 import { t } from "../i18n";
@@ -102,6 +103,12 @@ const close = () => { currentDialog.value = null; };
             <input type="range" :min="sizes[0]" :max="sizes[1]" step="0.5" :value="v.text_size" data-bb="settings-text-size" data-setting="text_size" @change="set({ text_size: Number(($event.target as HTMLInputElement).value) })">
             <span class="mono" data-bb="settings-text-size-value">{{ v.text_size }} pt</span>
           </span></label>
+        <!-- 3D1 (ADR 0078): the moving budget follows moving_fps (Rust's choices: lib.rs settings_ui) -->
+        <label v-if="s?.applies.moving_fps" class="row"><span>{{ tx('settings.moving') }}</span>
+          <select class="inp" :value="v.moving_fps" data-bb="settings-moving-fps" data-setting="moving_fps" @change="set({ moving_fps: Number(($event.target as HTMLSelectElement).value) })">
+            <option v-for="f in [0, 15, 30, 60, 120, 240]" :key="f" :value="f">{{ f === 0 ? tx('settings.moving.0') : tx('settings.moving.fps', { fps: f }) }}</option>
+          </select></label>
+        <p v-if="s?.applies.moving_fps" class="note" data-bb="settings-moving-note">{{ tx('settings.movingNote') }}</p>
         <button v-if="!isDefaultLook" class="btn s" type="button" style="align-self:flex-start" data-bb="settings-default-look" @click="set({ theme: 'grey', ui_font: 'roboto', text_size: TEXT_SIZE })">{{ tx('settings.defaultLook') }}</button>
       </section>
 

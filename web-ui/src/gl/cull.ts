@@ -6,28 +6,45 @@
 // than that alone); a shape's instances likewise (at most BATCH_TRIS triangles of copies each).
 // Inside a batch the elements go largest first (half the box diagonal), so "everything at least r
 // big" is a prefix of each batch (ADR 0035 decision 1): culling and the moving budget cost one test
-// per batch and a binary search, not a pass over the elements.
+// per batch and binary searches, not a pass over the elements. The moving budget is in triangles
+// (ADR 0078, amended): the elements largest on screen first until the frame's budget is spent.
 
 /** Triangles a batch holds at most (bimble-render: 32,768 a cluster). */
 export const BATCH_TRIS = 32768;
 
-/** Rust's next_moving_px (bimble-viewer lib.rs:430): the next "leave out what is smaller than this
- *  many pixels" while moving, after a frame of `dt` seconds, aiming at `fps`: up by half while slower
- *  than 15 % over the target, down by a third while 30 % under it, to 0 (everything) at the bottom. A
- *  gap over 0.25 s is a pause, not a slow frame. `floor`: the shortest frame seen while moving (the
- *  screen's refresh caps frames timed between presents). */
-export function nextMovingPx(px: number, dt: number, fps: number, floor: number): number {
-  const f = Math.fround;
-  const want = f(1 / Math.max(fps, 1));
-  const target = Math.max(want, Math.min(floor, f(1 / 60)));
-  const screenBound = floor <= 0.02 && floor * 1.1 >= want && dt <= floor * 1.1;
-  if (dt >= 0.25) return px;
-  if (dt > target * 1.15) return Math.min(Math.max(px, 0.5) * 1.5, 48);
-  if (dt < target * 0.7 || screenBound) {
-    const p = px / 1.5;
-    return p < 0.5 ? 0 : p;
+/** A moving frame's triangles at least (ADR 0078 decision 4, amended): never an empty picture. */
+export const MIN_MOVING_TRIS = 20000;
+
+/** A batch as a frame sees it: its distance from the eye (mm; 1 for an orthographic view) and the
+ *  items already drawn (k0: a progressive fill continues from there). */
+export interface Cut { b: Batch; dist: number; k0: number }
+
+/** The items of `c` this frame draws for a screen threshold t: those at least t * dist big (a prefix:
+ *  largest first), from k0. */
+export function cutEnd(c: Cut, t: number): number {
+  return Math.max(c.k0, prefixCount(c.b, t * c.dist));
+}
+
+/** The triangle budget's cut: the smallest screen threshold t (size / distance) whose items, over
+ *  every batch, hold at most `budget` triangles; at least one item (the largest on screen) when even
+ *  that one is over the budget, so a frame is never empty while anything is left. t = 0: everything. */
+export function budgetCut(cs: Cut[], budget: number): { t: number; tris: number } {
+  const at = (t: number) => { let n = 0; for (const c of cs) n += c.b.cum[cutEnd(c, t)]! - c.b.cum[c.k0]!; return n; };
+  const all = at(0);
+  if (all <= budget) return { t: 0, tris: all };
+  let hi = 0;
+  for (const c of cs) if (c.k0 < c.b.n) hi = Math.max(hi, c.b.size[c.k0]! / Math.max(c.dist, 1e-9));
+  const top = hi;
+  hi = hi * (1 + 1e-9) + 1e-300;
+  let lo = 0; // at(lo) > budget >= at(hi)
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    if (at(mid) <= budget) hi = mid;
+    else lo = mid;
   }
-  return px;
+  let tris = at(hi);
+  if (tris === 0) hi = top, tris = at(top); // one item over the budget: the largest one(s) on screen alone
+  return { t: hi, tris };
 }
 
 /** The six planes (a, b, c, d: inside when a x + b y + c z + d >= 0) of a column-major view-projection

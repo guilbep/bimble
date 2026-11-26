@@ -45,21 +45,38 @@ times faster.
    is Rust's compute-shader test of copies (ADR 0036 #10), not this: it still does not apply.
    **Alternative:** cull per element (thousands of draw calls) or repack the visible elements'
    indices every frame (a buffer upload per frame).
-4. **A moving budget: Rust's `next_moving_px` and the setting `moving_fps`.** Inside each batch the
-   elements go largest first (half their box diagonal), so "everything at least r big" is a prefix:
-   while the camera moves, a frame draws each batch's prefix of the elements at least `px` pixels big
-   at the orbit target, `px` rising by half while frames are 15 % slower than the target and falling
-   by a third while 30 % faster (capped at 48 px, Rust's numbers and tests, ported in
-   `ccore/test/cull_test.mjs`). 150 ms after the camera stops the whole picture is drawn again.
-   **Alternative:** a fixed triangle budget per frame (fast machines lose detail for nothing, ADR
-   0035), or completing the still picture in slices over several frames (Rust measured size bands
-   slower than one whole frame, ADR 0036 #3; the still frame is one draw of the whole model,
-   skipped while the camera keeps moving).
+4. **A moving budget in triangles, never an empty picture** (amended the same day, see below).
+   Inside each batch the elements go largest first (half their box diagonal), so "everything at
+   least r big" is a prefix. A moving frame (the camera changed) draws, over all batches in view, the
+   elements largest on screen first (size over the distance from the eye to the batch's nearest
+   point) until its triangle budget is spent: `moving_fps` times the triangles a millisecond the last
+   frames drew, never under 20,000 (`MIN_MOVING_TRIS`), and at least the largest element on screen
+   when even that one is over it. The batches it could not finish are drawn as the outlines of their
+   boxes (one instanced draw of a unit cube's 12 edges), so the building's volume stays on screen.
+   150 ms after the camera stops (no button held) the rest is added in slices of the same budget, one
+   a frame, without clearing, then every edge once more (an edge of an element drawn early may be
+   covered by a coplanar face drawn later); any redraw for another reason (a move, a selection)
+   abandons the fill and starts over, so a still frame never delays the next move (ADR 0074).
+   **Alternative:** Rust's rule (`next_moving_px`: leave out what is under px pixels at the target,
+   px rising to 48 while frames are slow). Rust could afford it because its far cells were drawn as
+   HLOD proxies; without them, at 48 px the 20,026-element model drew nothing while moving (0
+   triangles, the first run of this ticket), which the owner refused. **Alternative 2:** one whole
+   still frame 150 ms after the stop (the first run): under SwiftShader it blocked the next move for
+   150-350 ms.
 5. **Picks stay in the page, box first, no box tree.** A placed shape's triangles are tested in the
    shape's own coordinates (the ray mapped by the inverse placement keeps its parameter).
    **Alternative:** port `bvh.rs` (into the core or the page); not needed while a pick answers in
    the time `frames.md` shows (see Evidence).
 6. **HLOD proxies and GPU occlusion are the next ticket**, not this one (see "What is left").
+
+## Amendment (26 Nov 2026, same ticket, on the orchestrator's review)
+
+"Never an empty or gutted picture while moving": decision 4 above replaces Rust's threshold-only
+rule with the triangle budget and the outlines, and the whole still frame with slices. Tests:
+`ccore/test/cull_test.mjs` (on the 20,026-element model at the fitted distance a moving frame draws
+more than 0 triangles and at most the budget, the largest on screen first; slices draw every
+triangle once), `ccore/tools/frames.mjs` (the canvas's non-background pixels while dragging against
+the still picture's; it fails under 20 %).
 
 ## Evidence
 

@@ -225,9 +225,10 @@ async function cdpConnect(wsUrl) {
 // animation-frame callbacks), the core module's memory.
 const INSTR = String.raw`(() => {
   if (window.__fr) return;
-  const fr = window.__fr = { tIn: null, kind: null, draws: [], X: null };
+  const fr = window.__fr = { tIn: null, kind: null, draws: [], moves: [], X: null };
   addEventListener("pointermove", (e) => { if (fr.kind === "move" && fr.tIn === null) fr.tIn = e.timeStamp; }, true);
   addEventListener("pointerdown", (e) => { if (fr.kind === "click" && fr.tIn === null) fr.tIn = e.timeStamp; }, true);
+  addEventListener("pointermove", (e) => { if (fr.kind === "stream") fr.moves.push(e.timeStamp); }, true);
   let f = -1;
   const raf = window.requestAnimationFrame.bind(window);
   const tick = () => { const g = window.__bbGl; const n = g ? g.frames : -1; if (n !== f) { f = n; fr.draws.push(performance.now()); if (fr.draws.length > 4000) fr.draws.splice(0, 2000); } };
@@ -242,6 +243,10 @@ const INSTR = String.raw`(() => {
 })();`;
 
 let cdp = null, S = null, browser = null, curTarget = null;
+// Non-background pixels of the viewport's canvas as last drawn (preserveDrawingBuffer: what is shown).
+const NONBG = `(() => { const c = document.getElementById("bimble"), gl = c.getContext("webgl2"), w = c.width, h = c.height, p = new Uint8Array(4 * w * h);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, p); let n = 0;
+  for (let i = 0; i < p.length; i += 4) if (Math.abs(p[i] - 247) + Math.abs(p[i + 1] - 247) + Math.abs(p[i + 2] - 245) > 12) n++; return n; })()`;
 async function startBrowser() {
   const gb = await waitMemory();
   log(`memory available ${gb.toFixed(1)} GB; starting Chromium`);
@@ -327,21 +332,31 @@ async function measure() {
   out.closeMedian = med(close.ms), out.closeTris = close.moving.tris, out.closeStill = med(close.st), out.closeStillTris = close.tris, out.closeStillDraws = close.draws;
   out.gpuBytes = await ev("window.__bbGl.gpuBytes ?? null");
   await quiet(20000);
-  // Orbit input -> frame: 20 drag moves of 8 px.
+  // Orbit input -> frame (ADR 0074), streamed: 60 drag moves of 4 px sent at 60 Hz without waiting; each
+  // input's timeStamp -> the end of the animation-frame callbacks of the first frame drawn after it. The
+  // picture while dragging: its non-background pixels against the still picture's (never blank).
+  await ev(`(window.__bbGl.bench.snap(0, 0), 0)`); // the home camera fitted (the close orbit left it near)
+  await quiet(20000);
+  const stillNonBg = await ev(NONBG);
   const [cx, cy] = await canvasCentre();
   await mouse("mouseMoved", cx, cy);
   await mouse("mousePressed", cx, cy, { button: "left", buttons: 1, clickCount: 1 });
-  const lat = [];
-  for (let k = 1; k <= 20; k++) {
-    await ev(`(window.__fr.kind = "move", window.__fr.tIn = null, 0)`);
-    await mouse("mouseMoved", cx + 8 * k, cy, { button: "left", buttons: 1 });
-    const r = await waitFor("a drawn move", 60000, () => ev(`(() => { const f = window.__fr; if (f.tIn === null) return null; const d = f.draws.find((x) => x >= f.tIn); return d === undefined ? null : d - f.tIn; })()`), 5);
-    lat.push(r);
+  await ev(`(window.__fr.kind = "stream", window.__fr.moves = [], 0)`);
+  const t0 = Date.now();
+  let dragNonBg = null;
+  for (let k = 1; k <= 60; k++) {
+    void mouse("mouseMoved", cx + 4 * k, cy, { button: "left", buttons: 1 }); // not awaited: streamed
+    const wait = t0 + k * (1000 / 60) - Date.now();
+    if (wait > 0) await sleep(wait);
+    if (k === 45) dragNonBg = await ev(NONBG); // the picture while the drag goes on
   }
-  await mouse("mouseReleased", cx + 160, cy, { button: "left", buttons: 0, clickCount: 1 });
+  await sleep(50);
+  const lat = await ev(`(() => { const f = window.__fr, out = []; for (const t of f.moves) { const d = f.draws.find((x) => x >= t); if (d !== undefined) out.push(d - t); } return out; })()`);
+  await mouse("mouseReleased", cx + 240, cy, { button: "left", buttons: 0, clickCount: 1 });
   await ev(`(window.__fr.kind = null, 0)`);
   await quiet(30000);
-  out.moveMedian = med(lat), out.moveP95 = p95(lat);
+  out.moveMedian = med(lat), out.moveP95 = p95(lat), out.moveInputs = lat.length;
+  out.stillNonBg = stillNonBg, out.dragNonBg = dragNonBg;
   // Pick click -> frame: 5 clicks where the model is (the canvas centre after a fit).
   const picks = [];
   for (let k = 0; k < 5; k++) {
@@ -405,10 +420,10 @@ const fmt = (v, d = 0) => (v === null || v === undefined || Number.isNaN(v) ? "�
 const mb = (v) => (v === null || v === undefined ? "–" : (v / 1048576).toFixed(1));
 function table(rows) {
   const L = [];
-  L.push("| build | open → first frame ms | orbit frame ms median / p95 | moving: triangles / draws | still frame ms | still: triangles / draws | close orbit ms (triangles) | close still ms: triangles / draws | GPU MB | JS heap MB (+ array buffers) | wasm MB | orbit input → frame ms median / p95 | pick click → frame ms |");
-  L.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+  L.push("| build | open → first frame ms | orbit frame ms median / p95 | moving: triangles / draws | still frame ms | still: triangles / draws | close orbit ms (triangles) | close still ms: triangles / draws | GPU MB | JS heap MB (+ array buffers) | wasm MB | orbit input → frame ms median / p95 (inputs) | pixels drawn while dragging / still | pick click → frame ms |");
+  L.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const r of rows)
-    L.push(`| ${r.build} | ${fmt(r.firstFrameMs)} | ${fmt(r.orbitMedian, 1)} / ${fmt(r.orbitP95, 1)} | ${fmt(r.movingTris)} / ${fmt(r.movingDraws)} | ${fmt(r.stillMedian, 1)} | ${fmt(r.stillTris)} / ${fmt(r.stillDraws)} | ${fmt(r.closeMedian, 1)} (${fmt(r.closeTris)}) | ${fmt(r.closeStill, 1)}: ${fmt(r.closeStillTris)} / ${fmt(r.closeStillDraws)} | ${mb(r.gpuBytes)} | ${mb(r.jsHeap)}${r.arrayBuffers ? ` (+ ${mb(r.arrayBuffers)})` : ""} | ${r.wasmMemory ? mb(r.wasmMemory) : "–"} | ${fmt(r.moveMedian, 1)} / ${fmt(r.moveP95, 1)} | ${fmt(r.pickMedian)} |`);
+    L.push(`| ${r.build} | ${fmt(r.firstFrameMs)} | ${fmt(r.orbitMedian, 1)} / ${fmt(r.orbitP95, 1)} | ${fmt(r.movingTris)} / ${fmt(r.movingDraws)} | ${fmt(r.stillMedian, 1)} | ${fmt(r.stillTris)} / ${fmt(r.stillDraws)} | ${fmt(r.closeMedian, 1)} (${fmt(r.closeTris)}) | ${fmt(r.closeStill, 1)}: ${fmt(r.closeStillTris)} / ${fmt(r.closeStillDraws)} | ${mb(r.gpuBytes)} | ${mb(r.jsHeap)}${r.arrayBuffers ? ` (+ ${mb(r.arrayBuffers)})` : ""} | ${r.wasmMemory ? mb(r.wasmMemory) : "–"} | ${fmt(r.moveMedian, 1)} / ${fmt(r.moveP95, 1)} (${fmt(r.moveInputs)}) | ${fmt(r.dragNonBg)} / ${fmt(r.stillNonBg)} | ${fmt(r.pickMedian)} |`);
   return L;
 }
 function report(rows, history, cmp, forced, loads) {
@@ -424,7 +439,8 @@ function report(rows, history, cmp, forced, loads) {
   L.push("first frame from the navigation start; an orbit of " + NFRAMES + " frames over 360°, each drawn as a moving frame and");
   L.push("finished (a 1×1 `readPixels`); the still frame (the full picture) after it; triangles and draw calls submitted");
   L.push("by that frame; the same orbit at a fifth of the fitted distance (close: what culling can leave out); GPU bytes of the model's buffers; JS heap used after a garbage collection; the core module's memory");
-  L.push("(wasm build); 20 drag moves by CDP input (pointermove → the frame that drew it, ADR 0074); 5 clicks on the");
+  L.push("(wasm build); 60 drag moves streamed at 60 Hz by CDP input (each pointermove → the first frame drawn after it, ADR 0074)");
+  L.push("and the canvas's non-background pixels while dragging against the still picture's; 5 clicks on the");
   L.push("model (pointerdown → the frame that drew the selection).", "");
   for (const model of MODELS) {
     const rs = rows.filter((r) => r.model === model);
@@ -484,6 +500,7 @@ async function main() {
   mkdirSync(dirname(OUT), { recursive: true });
   writeFileSync(OUT, report(rows, history, cmp, forced, loads));
   log(`wrote ${OUT}`);
+  for (const r of rows) if (r.dragNonBg !== null && r.stillNonBg && r.dragNonBg < 0.2 * r.stillNonBg) { log(`blank while dragging: ${r.build} ${r.model} ${r.dragNonBg} of ${r.stillNonBg}`); process.exitCode = 1; }
   if (cmp) for (const c of cmp) if (c.changed < 0 || c.changed > 0.001 * c.pixels) { log(`pictures differ: ${JSON.stringify(c)}`); process.exitCode = 1; }
 }
 

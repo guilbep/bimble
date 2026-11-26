@@ -1205,12 +1205,15 @@ Rust's default, so no golden changes. Test: `test/dead1_test.c`.
   hostile bucket).
 - **The page's draw** follows bimble-render: shapes of 4 copies or more instanced, fewer placed
   into the merged buffers (the page places them as `cc_scene_world_mesh` does); batches of at most
-  32,768 triangles culled against the view; largest first inside a batch, so while the view moves
-  a frame draws each batch's prefix of the elements at least `px` pixels big (Rust's
-  `next_moving_px` and its tests, `test/cull_test.mjs`). Differences: the size is half the element's
-  box diagonal (Rust: its bounding radius); no MSAA to drop (the lab draws without it); culling
-  ignores the section box (Rust culled against it too); the whole picture is drawn 150 ms after the
-  camera stops, as Rust, in one frame.
+  32,768 triangles culled against the view; largest first inside a batch. **The moving rule differs
+  from Rust's**: Rust left out what was under `px` pixels (`next_moving_px`, up to 48 px) and drew
+  far cells as HLOD proxies; the lab has no proxies, so a moving frame draws the elements largest on
+  screen first until a triangle budget is spent (`moving_fps` times the triangles a ms of the last
+  frames, at least 20,000, never zero) and the unfinished batches as box outlines; after the stop
+  the rest comes in slices of the same budget (abandoned by the next move), then every edge again.
+  Rust drew the whole still picture in one frame. Other differences: the size is half the element's
+  box diagonal (Rust: its bounding radius); no MSAA to drop; culling ignores the section box (Rust
+  culled against it too). Tests: `test/cull_test.mjs`, `tools/frames.mjs` (not blank while dragging).
 - **Settings**: `moving_fps` applies (`query settings` `applies.moving_fps` true, no `needs` row);
   `gpu_cull` (Rust's compute-shader test of copies) and `moving_proxies` (HLOD proxies, not ported)
   still do not.

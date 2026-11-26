@@ -35,7 +35,7 @@ const THREED_SPEED = [
   { feature: "Box tree for picks", rust: "bimble-geom bvh.rs, pick_hit_bvh", ported: false, note: "the page tests each element's box before its triangles (linear); MEAS1's measure tool likewise in the core; frames.md: a pick answers well under 200 ms, so no tree yet" },
   { feature: "Copies as instances", rust: "bimble-geom dedup.rs, instanced draws", ported: true, note: "dedup in ccore/src/scene.c; BMSH version 3 (ccore/src/scene_bmsh.h) sends each shape once; glviewport.ts draws shapes of 4 copies or more instanced" },
   { feature: "Frustum culling", rust: "bimble-render clusters, DrawOptions::cull", ported: true, note: "web-ui/src/gl/cull.ts: spatial batches of at most 32,768 triangles culled as wholes" },
-  { feature: "Moving budget", rust: "next_moving_px, moving_fps, DrawOptions::min_radius", ported: true, note: "largest first in each batch, a prefix while the view moves, the whole picture 150 ms after it stops" },
+  { feature: "Moving budget", rust: "next_moving_px, moving_fps, DrawOptions::min_radius", ported: true, note: "ported with a change (ADR 0078): a triangle budget from moving_fps, largest on screen first, unfinished batches as box outlines, completed in slices after the stop (Rust's px threshold needs HLOD proxies)" },
   { feature: "HLOD proxies", rust: "bimble-geom hlod.rs, bimble-render proxies.rs", ported: false, note: "next ticket (ADR 0078): an octree of simplified stand-ins drawn under a pixel of error" },
   { feature: "GPU occlusion", rust: "gpu_occlusion.rs, gpu_occlusion_poll", ported: false, note: "WebGL2 occlusion queries answer a frame late; Rust ran it on native backends only (ADR 0036 #1)" },
 ];
