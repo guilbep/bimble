@@ -238,6 +238,19 @@ try {
   eq("merge an unknown revision", [r.status, r.text], [400, 'unknown revision "nope"']);
   // ---- end H2b ----
 
+  // FIXSES: a link added and not saved is a change the model's status does not see; switch and
+  // merge reopen the file and would drop it: refused (before, both answered 200 and the link was gone).
+  r = await act("link_model", { path: plain });
+  check("link_model 200", r.status === 200, r.text);
+  eq("a link not saved: unsaved, pending clean", [(await q("state")).json?.unsaved, (await q("pending")).json?.changes], [true, []]);
+  r = await act("branch_switch", { name: "x" });
+  eq("switch refused with a link not saved", [r.status, r.text], [400, 'links changed and not saved: save them first, or send {"discard": true}']);
+  r = await act("merge", { name: "x" });
+  eq("merge refused with a link not saved", [r.status, r.text], [400, "links changed and not saved: save them first"]);
+  eq("refused: the link is still there", (await q("links")).json?.length, 1);
+  r = await act("branch_switch", { name: "main", discard: true });
+  eq("switch with discard drops the link", [r.status, (await q("links")).json?.length, (await q("state")).json?.unsaved], [200, 0, false]);
+
   // A damaged object: c2 as plain JSON with one byte flipped.
   const obj = join(tmp, "frame.bimble-history/objects", c2.slice(0, 2), c2.slice(2));
   const bytes = gunzipSync(readFileSync(obj));

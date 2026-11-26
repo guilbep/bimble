@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include "file.h"
 #include "settings.h"
+#include "links.h" /* FIXSES: cc_links_changed */
 
 #define NO_BROWSER "no history folder in the browser"
 
@@ -566,6 +567,13 @@ static int a_branch(cc_session *s, int create, const JrVal *v, cc_buf *out) {
             refuse(out, "uncommitted changes: commit them first, or send {\"discard\": true}");
             goto done;
         }
+        /* FIXSES: the links are saved with the model (LNK1) but not part of it until Save, so
+         * the model's status misses them, and the switch reopens the file without them. Rust's
+         * links live in the viewer and survive a switch; here they would be lost: refused too. */
+        if (cc_links_changed(s)) {
+            refuse(out, "links changed and not saved: save them first, or send {\"discard\": true}");
+            goto done;
+        }
     }
     cc_model_free(&m);
     if (cc_repo_switch(&r, name, &m, &e)) {
@@ -660,6 +668,10 @@ static int a_merge(cc_session *s, const JrVal *v, cc_buf *out) {
         }
         if (n) {
             refuse(out, "uncommitted changes: commit them first");
+            goto done;
+        }
+        if (cc_links_changed(s)) { /* FIXSES: as branch_switch: the merged model reopens the file */
+            refuse(out, "links changed and not saved: save them first");
             goto done;
         }
     }
