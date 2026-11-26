@@ -8,7 +8,7 @@ export const capability = "project_info", editable = true; // FAKE1: query proje
 <script setup lang="ts">
 // A3 Project information (wireframes v01 ProjectInfo.html; ADR 0030, 0052). Leaving a field or Enter
 // (the native `change` event) sends one SetProject with the whole map; undo restores it.
-import { computed, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { project, state, setProject, setProjectField, northInfo, coordinates } from "../bimble";
 import { t } from "../i18n";
 import { currentDialog } from "../dialogs";
@@ -39,14 +39,29 @@ function commit(key: string, e: Event) {
   error.value = setProject(next);
 }
 
-// "Add field": a label and a value; Enter on the value sends one `set_project_field` (the key is made in Rust).
+// "Add field": a label and a value; Add (or Enter in either field) sends one `set_project_field` (the
+// key is made in Rust). DEAD1: the row has its own Add and Cancel buttons and says why Add is off
+// (no name yet), and the core's refusal shows in the row; "Add field" again goes back to the name.
 const adding = ref(false);
 const newLabel = ref("");
 const newValue = ref("");
+const addError = ref<string | null>(null);
+const labelInput = ref<HTMLInputElement | null>(null);
+async function startAdding() {
+  adding.value = true;
+  await nextTick();
+  labelInput.value?.focus();
+}
 function addField() {
-  error.value = setProjectField(newLabel.value, newValue.value);
-  if (error.value) return;
+  if (newLabel.value.trim() === "") { addError.value = null; return; }
+  addError.value = setProjectField(newLabel.value, newValue.value);
+  if (addError.value) return;
   adding.value = false;
+  newLabel.value = newValue.value = "";
+}
+function cancelAdd() {
+  adding.value = false;
+  addError.value = null;
   newLabel.value = newValue.value = "";
 }
 </script>
@@ -94,11 +109,14 @@ function addField() {
         <input :id="`pi-${k}`" class="inp" :value="info[k] ?? ''" :data-bb="`project-field-${k}`" @change="commit(k, $event)">
         <span class="mono key">{{ '{' + k + '}' }}</span>
       </div>
-      <div v-if="adding" class="fld" data-bb="project-new-field">
-        <input v-model="newLabel" class="inp" :aria-label="t('projectinfo.newLabel')" :placeholder="t('projectinfo.newLabel')" data-bb="project-new-label">
-        <input v-model="newValue" class="inp" :aria-label="t('projectinfo.newValue')" :placeholder="t('projectinfo.newValue')" data-bb="project-new-value" @keydown.enter="addField">
-      </div>
-      <button type="button" class="qb add" data-bb="project-add-field" @click="adding = true">
+      <form v-if="adding" class="fld newf" data-bb="project-new-field" @submit.prevent="addField" @keydown.esc.prevent="cancelAdd">
+        <input ref="labelInput" v-model="newLabel" class="inp" :aria-label="t('projectinfo.newLabel')" :placeholder="t('projectinfo.newLabel')" data-bb="project-new-label">
+        <input v-model="newValue" class="inp" :aria-label="t('projectinfo.newValue')" :placeholder="t('projectinfo.newValue')" data-bb="project-new-value">
+        <button type="submit" class="btn s" :disabled="newLabel.trim() === ''" :title="newLabel.trim() === '' ? t('projectinfo.needLabel') : undefined" data-bb="project-new-add">{{ t('projectinfo.addIt') }}</button>
+        <button type="button" class="btn s" data-bb="project-new-cancel" @click="cancelAdd">{{ t('projectinfo.cancelAdd') }}</button>
+        <p v-if="addError" class="err" role="alert" data-bb="project-new-error">{{ t('projectinfo.error', { msg: addError }) }}</p>
+      </form>
+      <button type="button" class="qb add" data-bb="project-add-field" @click="startAdding">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg> {{ t('projectinfo.addField') }}
       </button>
     </section>
@@ -107,6 +125,9 @@ function addField() {
 
 <style scoped>
 /* .page style="display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:28px;align-content:start" (padding from .bb-page) */
+.fld.newf { display: flex; flex-wrap: wrap; gap: 8px; }
+.fld.newf .inp { flex: 1 1 150px; }
+.newf .err { flex-basis: 100%; margin: 0; color: var(--bb-red, #b42318); font-size: 12px; }
 .pi { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 28px; align-content: start; }
 .col { display: flex; flex-direction: column; }
 /* .page h2{font-family:'Sora',sans-serif;margin:0} */

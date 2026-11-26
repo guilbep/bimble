@@ -12,6 +12,7 @@
 //   - a file open read only: the header says "Read only" (not "Saved"), no Save is enabled;
 //   - no console error, no uncaught exception, no 4xx/5xx answer during the walk (GET /mesh with no
 //     model too: no request at all, TEST1); closing the model asks no /mesh and draws nothing.
+//   - DEAD1: Project information's Add field (native, editable): a row with Add and its reason, Add writes.
 // Runs on: the native host (/?native=1) with no model, an editable model (golden/frame.json) and a
 // read-only IFC (golden/ifc/frame.ifc); the C core's wasm (/?ccore=1, the model it boots with)
 // and the viewer-only wasm (&ccore_wasm=ccore/ccore-view.wasm). Needs web-ui/node_modules,
@@ -174,12 +175,41 @@ const SCREEN = (sel) => `(() => {
 })()`;
 
 /** One walk: every page, dialog, panel, ribbon tab; the File menu, the quick bar, the shell controls. */
+/** DEAD1: Project information's "Add field" (shown on the page before this walk step): a row with the
+ *  name focused, Add off with its reason until a name is typed, then Add writes the field (one
+ *  step, undone after). Before DEAD1 the row had no Add button: only Enter in the value field. */
+async function addField(P, label) {
+  await P.js(`return sh.send({ do: 'showPage', page: 'project-info' })`);
+  await sleep(350);
+  await P.click("[data-bb=project-add-field]");
+  await sleep(100);
+  const row = () => P.evalJs(`JSON.stringify((() => { const a = document.querySelector('[data-bb=project-new-add]');
+    return { row: !!document.querySelector('[data-bb=project-new-field]'), focused: document.activeElement?.dataset.bb ?? null, add: !!a, disabled: a?.disabled ?? null, title: a?.title ?? null }; })())`).then(JSON.parse);
+  const r0 = await row();
+  check(`${label}: Project information: Add field opens a row, its name focused, Add off with its reason (DEAD1)`,
+    r0.row && r0.focused === "project-new-label" && r0.add && r0.disabled === true && r0.title !== "", JSON.stringify(r0));
+  await P.S("Input.insertText", { text: "Client DEAD1" });
+  await P.click("[data-bb=project-new-value]");
+  await P.S("Input.insertText", { text: "Acme" });
+  const u0 = await P.js("return b.query('history').undo.length");
+  const r1 = await row();
+  await P.click("[data-bb=project-new-add]");
+  await sleep(200);
+  const info = await P.js("return JSON.stringify(b.query('project'))");
+  const u1 = await P.js("return b.query('history').undo.length");
+  check(`${label}: Project information: a name typed turns Add on; Add writes the field (one step) and closes the row (DEAD1)`,
+    r1.disabled === false && info.includes("Acme") && u1 === u0 + 1 && !(await row()).row, `${JSON.stringify(r1)} ${info.slice(0, 200)} ${u0} -> ${u1}`);
+  await P.js("return b.runAction('undo')");
+  await sleep(200);
+}
+
 async function walk(P, label, { model }) {
   const set = (route, st) => { if (!routes.has(route)) routes.set(route, {}); routes.get(route)[label] = st; };
   const before = P.seen; // since the last walk's check: the file's opening counts too
   const ids = JSON.parse(await P.js("return JSON.stringify({ pages: Object.keys(pg.pages), dialogs: Object.keys(dl.dialogs), panels: Object.keys(pn.panels), tabs: tb.TABS.map((t) => t.id) })"));
   // Pages: through the shell (a model is needed for any page but Home).
   for (const id of ids.pages) {
+    if (id === "project-info" && label === "native, editable") await addField(P, label); // DEAD1
     if (id === "home") {
       await P.js("sh.send({ do: 'home' }); return 1");
     } else {
