@@ -57,6 +57,7 @@ void cc_session_free(cc_session *s) {
     cc_tool_free(&s->tool);
     cc_vis_free(&s->vis);
     cc_measure_free(&s->measure);
+    cc_session_mboxes_free(s); /* MEAS1 */
     persist_free(s);
     free(s);
 }
@@ -151,6 +152,7 @@ static void drop_model(cc_session *s) {
     cc_tool_clear(&s->tool);
     cc_vis_reset(&s->vis); /* lib.rs:1657-1676: a box or a hide means nothing for another model */
     cc_measure_reset(&s->measure); /* lib.rs:1677: measurements mean nothing for another model */
+    cc_session_mboxes_free(s); /* MEAS1: the boxes are the old scenes' */
     free(s->material), s->material = NULL;
     s->open = 0, s->untitled = 0;
     s->ntabs = 0, s->has_active = 0, s->tab_open = 0;

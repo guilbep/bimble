@@ -360,6 +360,8 @@ interface GlStats {
   meshFetchMs: number;
   meshRev: number | null;
   frames: number;
+  /** MEAS1: frames that drew the 2D overlay alone (a measure pointer move), not the model. */
+  overlayFrames: number;
   picks: number;
   error: string | null;
   /** The place tool: calls made, the last answer's ghost triangles and hover, the last error. */
@@ -467,7 +469,7 @@ export interface MeshSource {
 /** Draws the host's `/mesh` (or `source`'s) into #bimble with WebGL2. Returns a function that marks the view dirty. */
 export function glViewport(base: string | MeshSource, token = ""): () => void {
   const canvas = document.getElementById("bimble");
-  const stats: GlStats = { firstFrameMs: null, meshBytes: 0, meshFetchMs: 0, meshRev: null, frames: 0, picks: 0, error: null,
+  const stats: GlStats = { firstFrameMs: null, meshBytes: 0, meshFetchMs: 0, meshRev: null, frames: 0, overlayFrames: 0, picks: 0, error: null,
     toolCalls: 0, ghostTris: 0, hover: null, toolError: null, placed: null,
     hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null, menus: 0, boxHandles: [], boxHover: null, links: [], linkTris: 0,
     annotations: null, overlayTexts: [], selectedAnnotation: null, annotate: null, annotateCalls: 0, annotError: null, annotAdded: null,
@@ -598,6 +600,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   let target: V3 = [0, 0, 0];
   let dirty = true;
+  // MEAS1 (ADR 0074): only the 2D overlay changed (the measure tool's marker, rubber line, tags):
+  // the overlay is drawn again, not the model (the 3D scene: when the camera or the model changes).
+  let overlayDirty = false;
   let loading = false;
   // What the mesh shows: the model's rev and the links' counter (change JSON `links`).
   const meshKey = () => `${state.value.rev}/${state.value.links ?? 0}`;
@@ -1412,7 +1417,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     stats.measureError = error;
     if (error) console.warn(`gl viewport: ${name}:`, error);
     stats.measure = st;
-    dirty = true;
+    overlayDirty = true; // MEAS1: what it draws is on the overlay
   };
   // ---- VIEWSHEET ---- the section tool (action draw_section, ADR 0076): in a plan, two clicks draw the section
   // line; the view looks to the line's right (A to B), snapped to the four facings the core's sections have; its cut
@@ -1986,8 +1991,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     fitCanvas(); // BUG1
     if (dirty) {
       dirty = false;
+      overlayDirty = false; // draw() draws the overlay too
       draw();
       stats.drawn = { frame: stats.frames, rev: mesh?.rev ?? null, w: canvas.width, h: canvas.height }; // BUG1
+    } else if (overlayDirty) { // MEAS1: the overlay alone
+      overlayDirty = false;
+      drawOverlay();
+      stats.overlayFrames++;
     }
     stats.loops = (stats.loops ?? 0) + 1; // BUG1
     requestAnimationFrame(loop);

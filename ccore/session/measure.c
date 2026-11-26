@@ -186,49 +186,211 @@ typedef struct {
     int found;
     double t;    /* the nearest hit along the ray */
     double n[3]; /* its triangle's unit normal */
-    Cand *c;     /* every element the ray meets (inside the box), in the arena */
+    size_t layer, el; /* whose */
+    Cand *c;     /* every element the ray meets (inside the box) within reach, in the arena */
     size_t nc, cap;
 } Hits;
 
-/* The triangles of one layer's visible elements the ray meets inside the box (Möller–Trumbore,
- * two-sided, in f64): the nearest overall, and each element's nearest. */
-static int pick_layer(const cc_mview *v, size_t li, const Ray *r, Arena *a, Arena *keep, Hits *h) {
-    const cc_mlayer *L = &v->layers[li];
-    const cc_scene *sc = L->sc;
-    double o[3] = {r->o[0] - L->off[0], r->o[1] - L->off[1], r->o[2] - L->off[2]};
+/* ---- MEAS1: the element boxes ---- */
+
+void cc_mboxes_free(cc_mboxes *b) {
+    free(b->box);
+    memset(b, 0, sizeof *b);
+}
+
+static void grow_box(float b[6], const float p[3]) {
+    for (int k = 0; k < 3; k++) {
+        if (p[k] < b[k]) b[k] = p[k];
+        if (p[k] > b[3 + k]) b[3 + k] = p[k];
+    }
+}
+
+static void mesh_box(const cc_mesh *m, float b[6]) {
+    b[0] = b[1] = b[2] = 1.0f / 0.0f, b[3] = b[4] = b[5] = -1.0f / 0.0f;
+    for (uint32_t i = 0; i < m->nv; i++) grow_box(b, m->pos[i]);
+    for (uint32_t i = 0; i < m->ne; i++) grow_box(b, m->edges[i]), grow_box(b, m->edges[i] + 3);
+}
+
+static double absd(double x) { return x < 0 ? -x : x; }
+
+/* The boxes of `sc` into `box` (n = sc->nelements), without placing any mesh: an own mesh's
+ * points and edge ends; a placed shape's own box, its 8 corners placed (in f64) and grown by the
+ * rounding of cc_scene_world_mesh's f32 placement (1e-5 of the terms + 0.01 mm), so that every
+ * placed point is inside. */
+static int boxes_of(const cc_scene *sc, float (*box)[6]) {
+    float(*sb)[6] = NULL;
+    if (sc->nshapes) {
+        sb = malloc(sc->nshapes * sizeof *sb);
+        if (!sb) return -1;
+        for (size_t i = 0; i < sc->nshapes; i++) mesh_box(&sc->shapes[i], sb[i]);
+    }
     for (size_t k = 0; k < sc->nelements; k++) {
-        if (L->vis && !L->vis->reveal && cc_vis_hidden(L->vis, &sc->elements[k].id)) continue;
-        cc_mesh m;
-        arena_reset(a); /* the previous element's placed mesh */
-        if (cc_scene_world_mesh(sc, k, a, &m)) return -1;
-        double tmin = FAR;
-        for (uint32_t i = 0; i + 2 < m.ni; i += 3) {
-            if (m.idx[i] >= m.nv || m.idx[i + 1] >= m.nv || m.idx[i + 2] >= m.nv) continue;
-            const float *A = m.pos[m.idx[i]], *B = m.pos[m.idx[i + 1]], *C = m.pos[m.idx[i + 2]];
-            double e1[3], e2[3], p[3], tv[3], q[3];
-            for (int c = 0; c < 3; c++) e1[c] = (double)B[c] - A[c], e2[c] = (double)C[c] - A[c], tv[c] = o[c] - A[c];
-            p[0] = r->d[1] * e2[2] - r->d[2] * e2[1], p[1] = r->d[2] * e2[0] - r->d[0] * e2[2], p[2] = r->d[0] * e2[1] - r->d[1] * e2[0];
-            double det = dot3(e1, p);
-            if (!(det > 1e-12 || det < -1e-12)) continue;
-            double inv = 1.0 / det, uu = dot3(tv, p) * inv;
-            if (uu < 0 || uu > 1) continue;
-            q[0] = tv[1] * e1[2] - tv[2] * e1[1], q[1] = tv[2] * e1[0] - tv[0] * e1[2], q[2] = tv[0] * e1[1] - tv[1] * e1[0];
-            double vv = dot3(r->d, q) * inv;
-            if (vv < 0 || uu + vv > 1) continue;
-            double t = dot3(e2, q) * inv;
-            if (!(t > 0) || !(t < tmin)) continue;
-            double at[3] = {r->o[0] + t * r->d[0], r->o[1] + t * r->d[1], r->o[2] + t * r->d[2]};
-            if (!inside(v, at, BOX_EPS)) continue; /* ADR 0014: what the box removes is not hit */
-            double n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
-            double l = cc_sqrt(dot3(n, n));
-            if (!(l > 0)) continue;
-            tmin = t;
-            if (!h->found || t < h->t) {
-                h->found = 1, h->t = t;
-                for (int c = 0; c < 3; c++) h->n[c] = n[c] / l;
+        const cc_scene_element *e = &sc->elements[k];
+        float *b = box[k];
+        if (e->shape < 0 || (size_t)e->shape >= sc->nshapes) {
+            mesh_box(&e->mesh, b);
+            continue;
+        }
+        const float *l = sb[e->shape];
+        const cc_placement32 *p = &e->to_scene;
+        double lo[3] = {FAR, FAR, FAR}, hi[3] = {-FAR, -FAR, -FAR}, big = 0.0;
+        for (int k2 = 0; k2 < 3; k2++) big = absd(l[k2]) > big ? absd(l[k2]) : big, big = absd(l[3 + k2]) > big ? absd(l[3 + k2]) : big;
+        for (int c = 0; c < 8; c++) {
+            double q[3] = {l[(c & 1) ? 3 : 0], l[(c & 2) ? 4 : 1], l[(c & 4) ? 5 : 2]};
+            for (int j = 0; j < 3; j++) {
+                double r = (double)p->x[j] * q[0] + (double)p->y[j] * q[1] + (double)p->z[j] * q[2] + (double)p->t[j];
+                lo[j] = r < lo[j] ? r : lo[j], hi[j] = r > hi[j] ? r : hi[j];
             }
         }
+        for (int j = 0; j < 3; j++) {
+            double pad = 1e-5 * (big * (absd(p->x[j]) + absd(p->y[j]) + absd(p->z[j])) + absd(p->t[j])) + 0.01;
+            b[j] = (float)(lo[j] - pad), b[3 + j] = (float)(hi[j] + pad);
+        }
+    }
+    free(sb);
+    return 0;
+}
+
+int cc_mboxes_build(cc_mboxes *b, const cc_scene *sc) {
+    cc_mboxes_free(b);
+    if (!sc->nelements) return b->sc = sc, 0;
+    float(*box)[6] = malloc(sc->nelements * sizeof *box);
+    if (!box || boxes_of(sc, box)) {
+        free(box);
+        return -1;
+    }
+    b->sc = sc, b->box = box, b->n = sc->nelements;
+    return 0;
+}
+
+
+/* Where the ray (o, d unit) enters the box `b` grown by a margin, at t >= 0: 1 with `tn`, 0 when
+ * it misses. The margin (1 µm + 1e-9 of the coordinate) covers the rounding of a hit computed in
+ * f64 from the f32 points; a box that is not finite is entered at 0 (always tested). */
+static int ray_box(const double o[3], const double d[3], const float b[6], double *tn) {
+    double t0 = 0.0, t1 = FAR;
+    for (int k = 0; k < 3; k++) {
+        double lo = b[k], hi = b[3 + k];
+        if (!(lo >= -FAR && hi <= FAR && lo <= hi)) return *tn = 0.0, 1;
+        double pad = 1e-3 + 1e-9 * (absd(lo) > absd(hi) ? absd(lo) : absd(hi));
+        lo -= pad, hi += pad;
+        if (d[k] == 0.0) {
+            if (o[k] < lo || o[k] > hi) return 0;
+            continue;
+        }
+        double ta = (lo - o[k]) / d[k], tb = (hi - o[k]) / d[k];
+        if (ta > tb) {
+            double x = ta;
+            ta = tb, tb = x;
+        }
+        if (ta > t0) t0 = ta;
+        if (tb < t1) t1 = tb;
+        if (t0 > t1) return 0;
+    }
+    *tn = t0;
+    return 1;
+}
+
+/* A box the ray enters: its element and where. */
+typedef struct {
+    double tn;
+    uint32_t layer;
+    size_t el;
+} Near;
+
+static int near_cmp(const void *x, const void *y) {
+    const Near *a = x, *b = y;
+    if (a->tn != b->tn) return a->tn < b->tn ? -1 : 1;
+    if (a->layer != b->layer) return a->layer < b->layer ? -1 : 1;
+    return a->el < b->el ? -1 : a->el > b->el;
+}
+
+static int cand_cmp(const void *x, const void *y) { /* layer, then element: the old scan's order */
+    const Cand *a = x, *b = y;
+    if (a->layer != b->layer) return a->layer < b->layer ? -1 : 1;
+    return a->el < b->el ? -1 : a->el > b->el;
+}
+
+/* measure.rs snap: corners and edges up to the hit's depth + max(0.2 % of it, 5 mm). */
+static double reach(double t) { return t + (t * 0.002 > 5.0 ? t * 0.002 : 5.0); }
+
+/* The triangles of element `k` of layer `li` the ray meets inside the box (Möller–Trumbore,
+ * two-sided, in f64): its nearest hit `*tmin` (FAR: none) and that triangle's unit normal (the
+ * first triangle at that depth, in index order). */
+static int pick_element(const cc_mview *v, size_t li, size_t k, const Ray *r, Arena *a, double *tmin, double nrm[3]) {
+    const cc_mlayer *L = &v->layers[li];
+    double o[3] = {r->o[0] - L->off[0], r->o[1] - L->off[1], r->o[2] - L->off[2]};
+    cc_mesh m;
+    arena_reset(a); /* the previous element's placed mesh */
+    if (cc_scene_world_mesh(L->sc, k, a, &m)) return -1;
+    if (v->work) v->work->meshes++, v->work->triangles += m.ni / 3;
+    *tmin = FAR;
+    for (uint32_t i = 0; i + 2 < m.ni; i += 3) {
+        if (m.idx[i] >= m.nv || m.idx[i + 1] >= m.nv || m.idx[i + 2] >= m.nv) continue;
+        const float *A = m.pos[m.idx[i]], *B = m.pos[m.idx[i + 1]], *C = m.pos[m.idx[i + 2]];
+        double e1[3], e2[3], p[3], tv[3], q[3];
+        for (int c = 0; c < 3; c++) e1[c] = (double)B[c] - A[c], e2[c] = (double)C[c] - A[c], tv[c] = o[c] - A[c];
+        p[0] = r->d[1] * e2[2] - r->d[2] * e2[1], p[1] = r->d[2] * e2[0] - r->d[0] * e2[2], p[2] = r->d[0] * e2[1] - r->d[1] * e2[0];
+        double det = dot3(e1, p);
+        if (!(det > 1e-12 || det < -1e-12)) continue;
+        double inv = 1.0 / det, uu = dot3(tv, p) * inv;
+        if (uu < 0 || uu > 1) continue;
+        q[0] = tv[1] * e1[2] - tv[2] * e1[1], q[1] = tv[2] * e1[0] - tv[0] * e1[2], q[2] = tv[0] * e1[1] - tv[1] * e1[0];
+        double vv = dot3(r->d, q) * inv;
+        if (vv < 0 || uu + vv > 1) continue;
+        double t = dot3(e2, q) * inv;
+        if (!(t > 0) || !(t < *tmin)) continue;
+        double at[3] = {r->o[0] + t * r->d[0], r->o[1] + t * r->d[1], r->o[2] + t * r->d[2]};
+        if (!inside(v, at, BOX_EPS)) continue; /* ADR 0014: what the box removes is not hit */
+        double n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+        double l = cc_sqrt(dot3(n, n));
+        if (!(l > 0)) continue;
+        *tmin = t;
+        for (int c = 0; c < 3; c++) nrm[c] = n[c] / l;
+    }
+    return 0;
+}
+
+/* The elements the ray meets, nearest box first (MEAS1): the same answer as testing every visible
+ * element in order (the nearest hit, ties to the first element in layer and element order; every
+ * element met within reach of it), with only the boxes the ray enters meshed, and none whose box
+ * starts beyond the reach of the best hit so far. `brute`: every visible element, in order. */
+static int pick(const cc_mview *v, const Ray *r, Arena *a, Arena *keep, Hits *h) {
+    size_t total = 0, nn = 0;
+    for (size_t li = 0; li < v->nlayers; li++) total += v->layers[li].sc->nelements;
+    if (!total) return 0;
+    Near *near = arena_alloc(keep, total * sizeof *near, sizeof(double));
+    if (!near) return -1;
+    for (size_t li = 0; li < v->nlayers; li++) {
+        const cc_mlayer *L = &v->layers[li];
+        const cc_scene *sc = L->sc;
+        const float(*box)[6] = L->box;
+        if (!box && !v->brute && sc->nelements) { /* no kept boxes: made for this call */
+            float(*b)[6] = arena_alloc(keep, sc->nelements * sizeof *b, sizeof(float));
+            if (!b || boxes_of(sc, b)) return -1;
+            box = (const float(*)[6])b;
+        }
+        double o[3] = {r->o[0] - L->off[0], r->o[1] - L->off[1], r->o[2] - L->off[2]};
+        for (size_t k = 0; k < sc->nelements; k++) {
+            double tn = 0.0;
+            if (!v->brute) {
+                if (v->work) v->work->boxes++;
+                if (!ray_box(o, r->d, box[k], &tn)) continue;
+            }
+            if (L->vis && !L->vis->reveal && cc_vis_hidden(L->vis, &sc->elements[k].id)) continue;
+            near[nn].tn = tn, near[nn].layer = (uint32_t)li, near[nn].el = k, nn++;
+        }
+    }
+    if (!v->brute) qsort(near, nn, sizeof *near, near_cmp);
+    for (size_t i = 0; i < nn; i++) {
+        if (!v->brute && h->found && near[i].tn > reach(h->t)) break; /* nothing nearer, nothing within reach */
+        double tmin, n[3];
+        if (pick_element(v, near[i].layer, near[i].el, r, a, &tmin, n)) return -1;
         if (tmin == FAR) continue;
+        if (!h->found || tmin < h->t || (tmin == h->t && (near[i].layer < h->layer || (near[i].layer == h->layer && near[i].el < h->el)))) {
+            h->found = 1, h->t = tmin, h->layer = near[i].layer, h->el = near[i].el;
+            memcpy(h->n, n, sizeof h->n);
+        }
         if (h->nc == h->cap) {
             size_t cap = h->cap ? 2 * h->cap : 64;
             Cand *c = arena_alloc(keep, cap * sizeof *c, sizeof(double));
@@ -236,8 +398,9 @@ static int pick_layer(const cc_mview *v, size_t li, const Ray *r, Arena *a, Aren
             if (h->nc) memcpy(c, h->c, h->nc * sizeof *c);
             h->c = c, h->cap = cap;
         }
-        h->c[h->nc].layer = li, h->c[h->nc].el = k, h->c[h->nc].t = tmin, h->nc++;
+        h->c[h->nc].layer = near[i].layer, h->c[h->nc].el = near[i].el, h->c[h->nc].t = tmin, h->nc++;
     }
+    if (h->nc > 1) qsort(h->c, h->nc, sizeof *h->c, cand_cmp);
     return 0;
 }
 
@@ -252,13 +415,11 @@ int cc_measure_snap(const cc_mview *v, const double ray[6], const double *ray_to
     Hits h;
     memset(&h, 0, sizeof h);
     int rc = 0;
-    for (size_t li = 0; li < v->nlayers; li++) {
-        if (pick_layer(v, li, &r, &a, &keep, &h)) {
-            rc = -1;
-            goto end;
-        }
-        arena_reset(&a);
+    if (pick(v, &r, &a, &keep, &h)) {
+        rc = -1;
+        goto end;
     }
+    arena_reset(&a);
     if (!h.found) goto end;
     memset(out, 0, sizeof *out);
     memcpy(out->org, v->org, sizeof out->org);
@@ -267,7 +428,7 @@ int cc_measure_snap(const cc_mview *v, const double ray[6], const double *ray_to
     /* measure.rs snap: a corner, else an edge point, of what is under the cursor: the elements the
      * ray meets within the visible depth (Rust: the element hit only; a column standing on a slab
      * meets it at the same depth, either may be "the" hit). */
-    double max_depth = h.t + (h.t * 0.002 > 5.0 ? h.t * 0.002 : 5.0);
+    double max_depth = reach(h.t);
     for (int pass = 0; !free_ && r.has_tol && pass < 2 && kind == CC_MSNAP_FACE; pass++)
         for (size_t c = 0; c < h.nc; c++) {
             if (!(h.c[c].t <= max_depth)) continue;
@@ -277,6 +438,7 @@ int cc_measure_snap(const cc_mview *v, const double ray[6], const double *ray_to
                 rc = -1;
                 goto end;
             }
+            if (v->work) v->work->meshes++;
             if (pass == 0)
                 for (uint32_t i = 0; i < m.nv; i++) {
                     double p[3] = {(double)(m.pos[i][0] + L->off[0]), (double)(m.pos[i][1] + L->off[1]), (double)(m.pos[i][2] + L->off[2])};

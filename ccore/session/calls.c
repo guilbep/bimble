@@ -210,6 +210,30 @@ static const cc_scene *scene_now(cc_session *s) {
 
 const cc_scene *cc_session_scene(cc_session *s) { return scene_now(s); }
 
+/* ---- MEAS1: the element boxes of the scenes the pointer can hit (measure.h cc_mboxes), one slot
+ * per layer, kept while the slot's scene and key (rev, links_gen, view) hold ---- */
+void cc_session_mboxes_free(cc_session *s) {
+    for (size_t i = 0; i < s->nmboxes; i++) cc_mboxes_free(&s->mboxes[i]);
+    free(s->mboxes);
+    s->mboxes = NULL, s->nmboxes = 0;
+}
+
+static const float (*mboxes_of(cc_session *s, size_t slot, const cc_scene *sc))[6] {
+    if (!s->mboxes) {
+        s->mboxes = calloc(1 + CC_MAX_LINKS, sizeof *s->mboxes);
+        if (!s->mboxes) return NULL; /* the call makes its own */
+        s->nmboxes = 1 + CC_MAX_LINKS;
+    }
+    cc_mboxes *b = &s->mboxes[slot];
+    uint64_t key[3] = {s->rev, s->links_gen, (uint64_t)s->view};
+    if (b->sc != sc || memcmp(b->key, key, sizeof key)) {
+        if (cc_mboxes_build(b, sc)) return NULL;
+        memcpy(b->key, key, sizeof key);
+    }
+    return (const float(*)[6])b->box;
+}
+/* ---- end MEAS1 ---- */
+
 /* ---- history step ids and selection (lib.rs:1725-1805) ---- */
 
 static int push_id(uint64_t **v, size_t *n, size_t *cap, uint64_t id) {
@@ -2675,7 +2699,8 @@ static void tool_pointer(cc_session *s, const ToolArgs *a) {
             }
             size_t ng = 0; /* SLAB1: the grid axes */
             double(*grid)[4] = snap_grid_axes(s, &ng);
-            t->has_targets = !cc_snap_targets_build_grid(&t->targets, sc, level, next, (const double(*)[4])grid, ng);
+            const float(*box)[6] = sc == scene_now(s) ? mboxes_of(s, 0, sc) : NULL; /* MEAS1: the measure tool's slot 0 */
+            t->has_targets = !cc_snap_targets_build_boxes(&t->targets, sc, level, next, (const double(*)[4])grid, ng, box);
             free(grid);
             t->targets_rev = s->rev, t->targets_level = level, t->targets_links = s->links_gen;
         }
@@ -3139,6 +3164,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
     float mn[3], mx[3], yaw = 0.0f; /* ISS71: the section box's turn */
     int has_box = 0;
     if (sc) {
+        memset(layers, 0, sizeof layers);
         layers[nl].sc = sc, layers[nl].vis = &s->vis, memset(layers[nl].off, 0, sizeof layers[nl].off), nl++;
         for (size_t i = 0; i < s->nlinks && nl < 1 + CC_MAX_LINKS; i++) { /* lib.rs snap_at `theirs` */
             const cc_scene *ls = s->links[i].visible ? cc_link_scene(&s->links[i]) : NULL;
@@ -3147,6 +3173,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
             for (int k = 0; k < 3; k++) layers[nl].off[k] = (float)(ls->origin[k] - sc->origin[k]); /* lib.rs:1499 */
             nl++;
         }
+        for (size_t i = 0; i < nl; i++) layers[i].box = mboxes_of(s, i, layers[i].sc); /* MEAS1 */
         Arena a;
         arena_init(&a, 0);
         cc_view v;
@@ -3163,7 +3190,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
         }
         arena_free(&a);
     }
-    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL, yaw};
+    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL, yaw, NULL, 0};
     return cc_measure_call(&s->measure, name, body, n, sc ? &mv : NULL, out) == 200 ? CC_OK : CC_ERR;
 }
 

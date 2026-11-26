@@ -144,6 +144,11 @@ int cc_snap_targets_build(cc_snap_targets *t, const cc_scene *sc, double level, 
 
 int cc_snap_targets_build_grid(cc_snap_targets *t, const cc_scene *sc, double level, double next, const double (*grid)[4],
                                size_t ngrid) {
+    return cc_snap_targets_build_boxes(t, sc, level, next, grid, ngrid, NULL);
+}
+
+int cc_snap_targets_build_boxes(cc_snap_targets *t, const cc_scene *sc, double level, double next, const double (*grid)[4],
+                                size_t ngrid, const float (*box)[6]) {
     cc_snap_targets_free(t);
     const double *o = sc->origin;
     double *cx = NULL, *cy = NULL;
@@ -155,6 +160,8 @@ int cc_snap_targets_build_grid(cc_snap_targets *t, const cc_scene *sc, double le
     arena_init(&a, 0);
     int rc = -1;
     for (size_t k = 0; k < sc->nelements; k++) {
+        /* MEAS1: every point's z is within its box's (the f32 values, + o[2] rounds monotonically) */
+        if (box && ((double)box[k][5] + o[2] < level - 1.0 || (double)box[k][2] + o[2] > next + 1.0)) continue;
         cc_mesh m;
         arena_reset(&a);
         if (cc_scene_world_mesh(sc, k, &a, &m)) goto end;

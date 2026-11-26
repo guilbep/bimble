@@ -14,6 +14,9 @@
 #include "../session/calls.h"
 #include "../session/measure.h"
 #include "../session/session.h"
+#include "../session/tool.h"
+#include "file.h"
+#include "ifc_math.h"
 #include "check.h"
 
 static int call(cc_session *s, const char *op, const char *name, const char *body, Buf *out) {
@@ -113,12 +116,168 @@ static void golden(const char *dir) {
     free(txt);
 }
 
+/* ---- MEAS1: the work of one pointer ray on the mesh-heavy model ---- */
+
+/* bench/mesh_heavy_model.py's model, made here: golden/frame.json plus `n` proxies, each a UV
+ * sphere of about `tris` triangles (400 mm radius) on a 1.5 m grid over the ground floor (the
+ * same shared shape: the scene places one copy per proxy, as an imported model's fixtures). */
+static char *heavy_model(const char *dir, int n, int tris, size_t *len) {
+    size_t fn;
+    char *frame = slurp(dir, "../frame.json", &fn);
+    const char *at = strstr(frame, "\"elements\": {");
+    if (!at) return NULL;
+    at += strlen("\"elements\": {");
+    Buf g; /* one proxy's generator */
+    buf_init(&g);
+    int seg = 4, rings;
+    while ((seg + 1) * (seg + 1) <= tris) seg++;
+    rings = tris / (2 * seg) + 1;
+    buf_puts(&g, "{\"kind\":\"mesh\",\"positions\":[[0.0,0.0,800.0]");
+    char t[160];
+    for (int i = 1; i < rings; i++)
+        for (int j = 0; j < seg; j++) {
+            double th = 3.141592653589793 * i / rings, ph = 2 * 3.141592653589793 * j / seg;
+            snprintf(t, sizeof t, ",[%.3f,%.3f,%.3f]", 400 * cc_sin(th) * cc_cos(ph), 400 * cc_sin(th) * cc_sin(ph), 400 + 400 * cc_cos(th));
+            buf_puts(&g, t);
+        }
+    int last = 1 + (rings - 1) * seg;
+    buf_puts(&g, ",[0.0,0.0,0.0]],\"indices\":[");
+    int first = 1;
+#define TRI(a, b, c) (snprintf(t, sizeof t, "%s%d,%d,%d", first ? "" : ",", (a), (b), (c)), buf_puts(&g, t), first = 0)
+    for (int j = 0; j < seg; j++) TRI(0, 1 + j, 1 + (j + 1) % seg);
+    for (int i = 0; i < rings - 2; i++)
+        for (int j = 0; j < seg; j++) {
+            int a = 1 + i * seg, b = 1 + (i + 1) * seg, k = (j + 1) % seg;
+            TRI(a + j, b + j, b + k), TRI(a + j, b + k, a + k);
+        }
+    for (int j = 0; j < seg; j++) TRI(1 + (rings - 2) * seg + j, last, 1 + (rings - 2) * seg + (j + 1) % seg);
+#undef TRI
+    buf_puts(&g, "]}");
+    Buf out;
+    buf_init(&out);
+    buf_append(&out, frame, (size_t)(at - frame));
+    int side = 1;
+    while (side * side < n) side++;
+    for (int k = 0; k < n; k++) { /* GlobalIds "0000000000000000" + 6 digits: before the frame's, in order */
+        snprintf(t, sizeof t, "\"0000000000000000%06d\":{\"id\":\"0000000000000000%06d\",\"class\":\"IfcBuildingElementProxy\",\"name\":\"Proxy %d\",", k, k, k + 1);
+        buf_puts(&out, t);
+        buf_puts(&out, "\"storey\":\"1uAZA0Yfn05f$xRd1k4uPR\",\"material\":\"0aEm4Mq4nC8emERFhb_kvJ\",");
+        snprintf(t, sizeof t, "\"placement\":{\"origin\":[%d.0,%d.0,0.0],\"z_axis\":[0.0,0.0,1.0],\"x_axis\":[1.0,0.0,0.0]},\"generator\":", 1500 * (k % side), 1500 * (k / side));
+        buf_puts(&out, t);
+        buf_append(&out, g.p, g.len);
+        buf_puts(&out, ",\"properties\":{}},");
+    }
+    buf_puts(&out, at);
+    buf_free(&g);
+    free(frame);
+    *len = out.len;
+    return out.p;
+}
+
+/* One snap through `v` (with or without the boxes), its work added to `w`. */
+static int snap_on(cc_mview *v, const double ray[6], const double tol[6], cc_mwork *w, cc_msnap *out) {
+    v->work = w;
+    memset(out, 0, sizeof *out);
+    return cc_measure_snap(v, ray, tol, 12.0, 0, out);
+}
+
+static void heavy(const char *dir) {
+    size_t n;
+    char *txt = heavy_model(dir, 700, 1000, &n);
+    cc_model m;
+    cc_error err;
+    cc_scene sc;
+    int ok = txt && !cc_model_load(&m, txt, n, &err);
+    if (!ok) printf("  heavy model: %s\n", txt ? err.msg : "no elements key");
+    check_true("MEAS1: the mesh-heavy model loads (72 + 700 elements)", ok && m.nelements == 772);
+    free(txt);
+    if (!ok) return;
+    ok = !cc_scene_build(&sc, &m, &err);
+    size_t tris = 0;
+    for (size_t k = 0; ok && k < sc.nelements; k++) tris += cc_scene_local_mesh(&sc, k)->ni / 3;
+    check_true("MEAS1: its scene: 772 elements, 695 264 triangles", ok && sc.nelements == 772 && tris == 695264);
+    cc_mboxes bx;
+    memset(&bx, 0, sizeof bx);
+    check_true("MEAS1: the element boxes", ok && !cc_mboxes_build(&bx, &sc) && bx.n == 772);
+    int in = ok; /* every placed point and edge end inside its element's box */
+    Arena a;
+    arena_init(&a, 0);
+    for (size_t k = 0; in && k < sc.nelements; k++) {
+        cc_mesh w;
+        arena_reset(&a);
+        in = !cc_scene_world_mesh(&sc, k, &a, &w);
+        for (uint32_t i = 0; in && i < w.nv + 2 * w.ne; i++) {
+            const float *q = i < w.nv ? w.pos[i] : w.edges[(i - w.nv) / 2] + 3 * ((i - w.nv) % 2);
+            for (int c = 0; c < 3; c++) in &= q[c] >= bx.box[k][c] && q[c] <= bx.box[k][3 + c];
+        }
+    }
+    arena_free(&a);
+    check_true("MEAS1: every placed point and edge end lies in its element's box", in);
+    cc_mlayer L = {&sc, {0, 0, 0}, NULL, (const float(*)[6])bx.box};
+    cc_mview v = {&L, 1, NULL, NULL, sc.origin, 0.0f, NULL, 0};
+    /* One pointer ray along a row of 27 spheres (y 7500, z 400, from x -5000), the ray_tol 24 mm
+     * beside: the first sphere's face. */
+    const double *o = sc.origin;
+    double ray[6] = {-5000 - o[0], 7500 - o[1], 400 - o[2], 1, 0, 0}, tol[6] = {-5000 - o[0], 7524 - o[1], 400 - o[2], 1, 0, 0};
+    cc_mwork w1 = {0, 0, 0}, w0 = {0, 0, 0};
+    cc_msnap s1, s0;
+    int r1 = snap_on(&v, ray, tol, &w1, &s1);
+    v.brute = 1;
+    int r0 = snap_on(&v, ray, tol, &w0, &s0);
+    v.brute = 0;
+    printf("  one ray, every element (the old way): %zu meshes, %zu triangles; with the boxes: %zu boxes, %zu meshes, %zu triangles\n",
+           w0.meshes, w0.triangles, w1.boxes, w1.meshes, w1.triangles);
+    check_true("MEAS1: the ray meets the first sphere, the same answer both ways",
+               r1 == 1 && r0 == 1 && !memcmp(&s1, &s0, sizeof s1) && s1.p[0] + o[0] > -500 && s1.p[0] + o[0] < 0);
+    check_true("MEAS1: one ray meshes at most 8 elements (all 772 the old way)", w1.meshes <= 8 && w0.meshes >= 772);
+    check_true("MEAS1: one ray tests at most 8 000 triangles (695 264 the old way)", w1.triangles <= 8000 && w0.triangles >= 695264);
+    /* the same answers as the old way for a fan of rays over the model (corners, edges, faces) */
+    int same = 1, hits = 0, kinds[3] = {0, 0, 0};
+    for (int i = 0; i < 9 && same; i++)
+        for (int j = 0; j < 9 && same; j++) {
+            double from[3] = {-6000 - o[0], -6000 - o[1], 9000 - o[2]}, to[3] = {4501.0 * i - o[0], 4499.0 * j - o[1], 397.0 * ((i + j) % 3) - o[2]};
+            double d[3] = {to[0] - from[0], to[1] - from[1], to[2] - from[2]};
+            double rr[6] = {from[0], from[1], from[2], d[0], d[1], d[2]}, rt[6] = {from[0] + 30, from[1] - 30, from[2], d[0], d[1], d[2]};
+            cc_mwork wa = {0, 0, 0};
+            v.brute = 0, r1 = snap_on(&v, rr, rt, &wa, &s1);
+            v.brute = 1, r0 = snap_on(&v, rr, rt, &wa, &s0);
+            v.brute = 0;
+            same = r1 == r0 && (r1 != 1 || !memcmp(&s1, &s0, sizeof s1));
+            hits += r1 == 1;
+            if (r1 == 1) kinds[s1.kind]++;
+            if (!same) printf("  ray %d %d: %d kind %d (%g %g %g) / %d kind %d (%g %g %g)\n", i, j, r1, s1.kind, s1.p[0], s1.p[1], s1.p[2], r0, s0.kind, s0.p[0], s0.p[1], s0.p[2]);
+        }
+    printf("  81 rays: %d corners, %d edge points, %d faces\n", kinds[CC_MSNAP_VERTEX], kinds[CC_MSNAP_EDGE], kinds[CC_MSNAP_FACE]);
+    check_true("MEAS1: 81 rays: the same snap (kind, point and normal, bit for bit) with the boxes as without", same && hits > 40);
+    /* the place tools' snap targets: the boxes skip what is outside the storey's band, the same targets */
+    int same_t = 1;
+    for (int lv = 0; lv < 3; lv++) {
+        static const double LV[3][2] = {{-800, 0}, {0, 3000}, {3000, 7000}};
+        cc_snap_targets t0, t1;
+        memset(&t0, 0, sizeof t0), memset(&t1, 0, sizeof t1);
+        same_t &= !cc_snap_targets_build_grid(&t0, &sc, LV[lv][0], LV[lv][1], NULL, 0) &&
+                  !cc_snap_targets_build_boxes(&t1, &sc, LV[lv][0], LV[lv][1], NULL, 0, (const float(*)[6])bx.box) && t0.npoints == t1.npoints &&
+                  t0.nlines == t1.nlines && t0.npoints > 0;
+        for (size_t i = 0; same_t && i < t0.npoints; i++) /* field by field: the structs have padding */
+            same_t &= !memcmp(t0.points[i].p, t1.points[i].p, sizeof t0.points[i].p) && t0.points[i].kind == t1.points[i].kind;
+        for (size_t i = 0; same_t && i < t0.nlines; i++)
+            same_t &= !memcmp(t0.lines[i].a, t1.lines[i].a, sizeof t0.lines[i].a) && !memcmp(t0.lines[i].b, t1.lines[i].b, sizeof t0.lines[i].b) &&
+                      t0.lines[i].kind == t1.lines[i].kind;
+        cc_snap_targets_free(&t0), cc_snap_targets_free(&t1);
+    }
+    check_true("MEAS1: the place tools' snap targets of each storey, the same with the boxes", same_t);
+    cc_mboxes_free(&bx);
+    cc_scene_free(&sc);
+    cc_model_free(&m);
+}
+
 static const double PX[3] = {1, 0, 0}, PY[3] = {0, 1, 0}, NX[3] = {-1, 0, 0};
 static const double GY[3] = {0, 24, 0}, GX[3] = {24, 0, 0}, GZ[3] = {0, 0, 24};
 
 int main(int argc, char **argv) {
     const char *floats = argc > 1 ? argv[1] : "ccore/golden/floats";
     golden(floats);
+    heavy(floats);
 
     /* ---- pure helpers ---- */
     cc_mdim slab = {{{0, 0, 250}, {0}, CC_MSNAP_FACE, 1, {0, 0, 1}}, {{3000, 4000, 0}, {0}, CC_MSNAP_FACE, 1, {0, 0, -1}}};

@@ -143,6 +143,12 @@ typedef struct cc_session {
     /* ---- KEY1: the plan annotation toggles (toggles.h), bit i set = off; 0 (all on) as new ---- */
     unsigned plan_off;
     /* ---- end KEY1 ---- */
+    /* ---- MEAS1: the element boxes of each scene the pointer can hit (measure.h cc_mboxes), one
+     * slot per layer of the measure tool (the shown scene, then the visible links), malloc'd, kept
+     * while their scene's key (rev, links_gen, view) holds; dropped with the model ---- */
+    cc_mboxes *mboxes;
+    size_t nmboxes;
+    /* ---- end MEAS1 ---- */
     /* ---- SETOUT: the setting-out markers shown (setting_out.h), session state ---- */
     cc_setout setout;
     /* ---- VIEWSHEET: the section tool and the annotation types (view_sheet.h), session state ---- */
@@ -167,6 +173,8 @@ typedef struct cc_session {
 cc_session *cc_session_new(const cc_platform *pf);
 /* Frees the model, history, caches and the session file state (writes nothing). NULL is fine. */
 void cc_session_free(cc_session *s);
+/* MEAS1: drops the measure tool's element boxes (calls.c keeps them, measure.h cc_mboxes). */
+void cc_session_mboxes_free(cc_session *s);
 
 /* lib.rs:191: the path of a new model until it is saved somewhere. */
 #define CC_UNTITLED "Untitled.bimble"

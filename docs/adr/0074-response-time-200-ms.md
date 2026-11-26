@@ -69,3 +69,28 @@ rule: it is honest, but it is a feature missing, and the study counts it.
 - Each ticket that adds or changes an interaction runs `ux.mjs` on it and says its number.
 - The Measure tool's pointer moves (see the study) are the first interaction to fix.
 - The parity tool's "fake UI" count stays a static check; `ux.mjs` is the one that drives controls.
+
+## Measure: the box index (ticket MEAS1, 26 Nov 2026)
+
+Delegated by Pierre ("for each feature we want to target < 200ms response time"), chosen in the
+ticket, for review on the implementation.
+
+- **Choice: one world box per element, tested before any mesh.** `ccore/session/measure.c`
+  (`cc_mboxes`) keeps, per scene the pointer can hit, the box of each element (24 bytes per
+  element), with the scene's own key (rev, links generation, view) in the session; it is built
+  without placing a mesh (an own mesh's points; a shared shape's box, its 8 corners placed and
+  grown by the f32 rounding). A pointer ray meshes only the elements whose box it enters, nearest
+  first, and stops at the first box beyond the reach of the best hit (the snap's visible depth):
+  the same answers as before, bit for bit (`test/measure_test.c` compares 81 rays with the old
+  scan). The place tools' snap targets skip the elements whose box is outside the storey's band.
+  **Alternative:** a BVH (or a grid) over the boxes and a lazy triangle BVH per element. Not needed
+  now: after the boxes, the 1,749-element local model answers a move in about 14 ms; it is the next
+  step if a model with very large single meshes is slow.
+- **Choice: no cache of placed meshes.** Only the few elements under the pointer are placed per
+  move. **Alternative:** a least-recently-used cache of placed meshes under a byte budget: more
+  memory and a budget to tune, for a cost that the numbers do not show.
+- **Choice: the page redraws the overlay alone for a measure answer** (`glviewport.ts`
+  `overlayDirty`): the marker, the rubber line and the tags are on the 2D overlay; the model is
+  drawn again when the camera or the model changes. Pointer moves were already coalesced (one
+  call per frame, the latest position). **Alternative:** draw the marker in WebGL: one full draw
+  per move, 290 ms per move on a 2.2-million-triangle model under SwiftShader.
