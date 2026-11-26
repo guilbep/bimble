@@ -17,6 +17,11 @@ export const fr = {
   "action.place_beam": "Poutre",
   "action.place_wall": "Mur",
   "action.place_slab": "Dalle",
+  "action.place_footing": "Semelle", // CONC1
+  "action.place_strip_footing": "Semelle filante", // CONC1
+  "action.place_raft": "Radier", // CONC1
+  "action.place_opening": "Ouverture", // CONC1
+  "action.place_sleeve": "Réservation", // CONC1
   "action.measure": "Mesurer",
   "action.sheet_tool_select": "Sélection",
   "action.sheet_tool_text": "Texte",
@@ -85,6 +90,11 @@ export const en: Record<keyof typeof fr, string> = {
   "action.place_beam": "Beam",
   "action.place_wall": "Wall",
   "action.place_slab": "Slab",
+  "action.place_footing": "Footing", // CONC1
+  "action.place_strip_footing": "Strip footing", // CONC1
+  "action.place_raft": "Raft", // CONC1
+  "action.place_opening": "Opening", // CONC1
+  "action.place_sleeve": "Sleeve", // CONC1
   "action.measure": "Measure",
   "action.sheet_tool_select": "Select",
   "action.sheet_tool_text": "Text",

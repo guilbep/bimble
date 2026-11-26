@@ -166,7 +166,7 @@ export interface ScheduleTable {
 /** `query("placing")`: what is placed (edit.rs `Editor::placing_json`). Sizes and offset in mm. */
 export interface Placing {
   active: boolean;
-  kind: "column" | "beam" | "wall" | "slab";
+  kind: "column" | "beam" | "wall" | "slab" | "footing" | "strip_footing" | "raft" | "opening" | "sleeve"; // CONC1: the Concrete tab's kinds
   storey: string | null;
   storey_name: string | null;
   material: string | null;
@@ -179,6 +179,13 @@ export interface Placing {
   points: number[][];
   clicks_needed: number;
   hint: string | null;
+  /** CONC1 (ccore/session/concrete.h): the Concrete tab's sizes, mm; only while one of its kinds is chosen. */
+  concrete?: ConcreteSizes;
+}
+export interface ConcreteSizes {
+  footing_depth: number; footing_length: number; footing_width: number;
+  opening_height: number; opening_length: number; opening_sill: number; opening_width: number;
+  raft_thickness: number; sleeve_diameter: number; strip_depth: number; strip_width: number;
 }
 
 /** One open tab, as the bridge's `open_views` gives it. */
@@ -718,7 +725,7 @@ export function setProject(next: Record<string, string>): string | null {
 }
 
 /** Change what is placed: `{kind?, storey?, material?, sizes?}`, all or nothing. Returns the Rust error, or null. */
-export function setPlacing(patch: { kind?: Placing["kind"]; storey?: string; material?: string; sizes?: Partial<Placing["sizes"]>; top_offset_mm?: number; shape?: Placing["shape"] }): string | null {
+export function setPlacing(patch: { kind?: Placing["kind"]; storey?: string; material?: string; sizes?: Partial<Placing["sizes"]>; top_offset_mm?: number; shape?: Placing["shape"]; concrete?: Partial<ConcreteSizes> }): string | null {
   try {
     wasmOrThrow().set_placing(JSON.stringify(patch));
     return null;

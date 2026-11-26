@@ -25,7 +25,7 @@ const counts = (): string => {
 // While placing: the hint keyed on kind and click step (Rust's `hint` is English only).
 const placingHint = (): Parameters<typeof t>[0] | undefined => {
   const p = placing.value;
-  if (p?.active && p.kind === "slab" && p.shape === "polygon") return "placing.slab.polygon";
+  if (p?.active && ((p.kind === "slab" && p.shape === "polygon") || p.kind === "raft")) return "placing.slab.polygon"; // CONC1: a raft too
   return p?.active ? `placing.${p.kind}.${p.points.length ? 1 : 0}` : undefined;
 };
 type Key = Parameters<typeof t>[0];

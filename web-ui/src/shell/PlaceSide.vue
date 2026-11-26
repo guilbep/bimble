@@ -2,7 +2,7 @@
 // The left panel properties while an element is placed (fr/PlaceSlab.html `.props`, B1), for every kind:
 // the size rows follow the kind; slab-only rows stay for the slab. Each field applies at once (ADR 0052).
 import { computed, reactive, ref, watch } from "vue";
-import { placing, storeys, materials, setPlacing, type Placing } from "../bimble";
+import { placing, storeys, materials, setPlacing, type Placing, type ConcreteSizes } from "../bimble";
 import { t } from "../i18n";
 
 type Size = keyof Placing["sizes"];
@@ -12,7 +12,28 @@ const ROWS: Record<Placing["kind"], { size: Size; label: "section" | "width" | "
   beam: [{ size: "beam_width", label: "width" }, { size: "beam_height", label: "height" }],
   wall: [{ size: "wall", label: "thickness" }],
   slab: [{ size: "slab", label: "thickness" }],
+  footing: [], strip_footing: [], raft: [], opening: [], sleeve: [], // CONC1: their sizes are CROWS'
 };
+// ---- CONC1 (ADR 0077) ---- the Concrete tab's kinds: their sizes (ccore/session/concrete.h)
+type CSize = keyof ConcreteSizes;
+const CROWS: Partial<Record<Placing["kind"], CSize[]>> = {
+  footing: ["footing_width", "footing_length", "footing_depth"],
+  strip_footing: ["strip_width", "strip_depth"],
+  raft: ["raft_thickness"],
+  opening: ["opening_height", "opening_sill"],
+  sleeve: ["sleeve_diameter"],
+};
+const crows = computed(() => (placing.value ? CROWS[placing.value.kind] ?? [] : []));
+const cdraft = reactive<Partial<Record<CSize, string>>>({});
+watch(() => placing.value?.concrete, (v) => {
+  for (const k of Object.keys(v ?? {}) as CSize[]) cdraft[k] = String(v![k]);
+}, { immediate: true });
+function ccommit(k: CSize): void {
+  if (cdraft[k] === String(placing.value?.concrete?.[k])) return;
+  apply({ concrete: { [k]: Number((cdraft[k] ?? "").replace(/[\s']/g, "")) } });
+}
+const footing = computed(() => placing.value?.kind === "footing" || placing.value?.kind === "strip_footing");
+// ---- end CONC1 ----
 const rows = computed(() => (placing.value ? ROWS[placing.value.kind] : []));
 
 const error = ref<string | null>(null);
@@ -60,6 +81,17 @@ const above = computed(() => {
       <label class="k" :for="`ps-${r.size}`">{{ t(`placeslab.${r.label}`) }}</label>
       <span style="display:inline-flex;align-items:center;gap:6px">
         <input :id="`ps-${r.size}`" :data-bb="i === 0 ? 'place-thickness' : undefined" v-model="draft[r.size]" class="inp mono" style="width:100px;text-align:right" :aria-invalid="error ? 'true' : 'false'" aria-describedby="ps-error" @keydown.enter="commit(r.size)" @blur="commit(r.size)" />
+        <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
+      </span>
+    </div>
+    <div v-if="footing" class="row">
+      <span class="k">{{ t('conc.footingType') }}</span>
+      <span class="seg" data-bb="place-footing-type"><span v-for="k in (['footing', 'strip_footing'] as const)" :key="k" role="button" tabindex="0" :class="{ on: placing.kind === k }" :aria-pressed="placing.kind === k" @click="apply({ kind: k })" @keydown.enter.space.prevent="apply({ kind: k })">{{ t(k === 'footing' ? 'conc.pad' : 'conc.strip') }}</span></span>
+    </div>
+    <div v-for="k in crows" :key="k" class="row">
+      <label class="k" :for="`ps-${k}`">{{ t(`conc.${k}`) }}</label>
+      <span style="display:inline-flex;align-items:center;gap:6px">
+        <input :id="`ps-${k}`" :data-bb="`place-${k}`" v-model="cdraft[k]" class="inp mono" style="width:100px;text-align:right" :aria-invalid="error ? 'true' : 'false'" aria-describedby="ps-error" @keydown.enter="ccommit(k)" @blur="ccommit(k)" />
         <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
       </span>
     </div>

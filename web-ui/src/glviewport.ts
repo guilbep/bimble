@@ -1116,7 +1116,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (last) lines.push(last[0] - m.origin[0], last[1] - m.origin[1], z, t.hover.at[0] - m.origin[0], t.hover.at[1] - m.origin[1], z);
     }
     // ---- SLAB1 ---- a polygon slab: its outline so far and the closing edge (the hover back to the first corner)
-    if (t.kind === "slab" && placing.value?.shape === "polygon") {
+    if ((t.kind === "slab" && placing.value?.shape === "polygon") || t.kind === "raft") { // CONC1: a raft too
       const P = t.points, seg = (a: [number, number], b: [number, number]) =>
         lines.push(a[0] - m.origin[0], a[1] - m.origin[1], z, b[0] - m.origin[0], b[1] - m.origin[1], z);
       for (let i = 1; i < P.length; i++) seg(P[i - 1]!, P[i]!);
@@ -1784,7 +1784,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   // ---- SLAB1 ---- Enter closes the polygon slab being clicked (lib.rs:2772 close_polygon)
   viewportKeys.enterTool = () => {
-    if (!placingNow() || placing.value?.kind !== "slab" || placing.value?.shape !== "polygon") return false;
+    if (!placingNow() || !((placing.value?.kind === "slab" && placing.value?.shape === "polygon") || placing.value?.kind === "raft")) return false; // CONC1: a raft too
     stats.toolCalls++;
     const { state: t, error } = toolCall("close");
     stats.toolError = error;

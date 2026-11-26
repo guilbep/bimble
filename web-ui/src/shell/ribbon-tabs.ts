@@ -93,16 +93,16 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
       { key: "ribbon.concrete.g1.t4", tag: "button", icon: "<path d=\"M3 12 12 7l9 5-9 5z\"/><path d=\"M3 12v2l9 5 9-5v-2\"/>", action: "place_slab" },
     ] },
     { key: "ribbon.concrete.g2", tools: [
-      { key: "ribbon.concrete.g2.t1", tag: "button", icon: "<rect x=\"9\" y=\"4\" width=\"6\" height=\"9\"/><path d=\"M4 13h16v6H4z\"/>", action: null },
-      { key: "ribbon.concrete.g2.t2", tag: "button", icon: "<path d=\"M2 15h20v4H2z\"/><path d=\"M6 15V9M12 15V7M18 15V9\"/>", action: null },
+      { key: "ribbon.concrete.g2.t1", tag: "button", icon: "<rect x=\"9\" y=\"4\" width=\"6\" height=\"9\"/><path d=\"M4 13h16v6H4z\"/>", action: "place_footing" },
+      { key: "ribbon.concrete.g2.t2", tag: "button", icon: "<path d=\"M2 15h20v4H2z\"/><path d=\"M6 15V9M12 15V7M18 15V9\"/>", action: "place_raft" },
     ] },
     { key: "ribbon.concrete.g3", tools: [
       { key: "ribbon.concrete.g3.t1", tag: "button", icon: "<path d=\"M4 20h4v-4h4v-4h4V8h4V4\"/>", action: null },
       { key: "ribbon.concrete.g3.t2", tag: "button", icon: "<path d=\"M3 19h18L3 9z\"/>", action: null },
     ] },
     { key: "ribbon.concrete.g4", tools: [
-      { key: "ribbon.concrete.g4.t1", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\"/><rect x=\"9\" y=\"8\" width=\"6\" height=\"8\"/>", action: null },
-      { key: "ribbon.concrete.g4.t2", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\"/><rect x=\"9\" y=\"8\" width=\"6\" height=\"8\"/>", action: null },
+      { key: "ribbon.concrete.g4.t1", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\"/><rect x=\"9\" y=\"8\" width=\"6\" height=\"8\"/>", action: "place_opening" },
+      { key: "ribbon.concrete.g4.t2", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\"/><circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M9 9l6 6M15 9l-6 6\"/>", action: "place_sleeve" },
     ] },
     { key: "ribbon.concrete.g5", tools: [
       { key: "ribbon.concrete.g5.t1", tag: "button", icon: "<path d=\"m4 16 12-12 4 4L8 20z\"/><path d=\"m8 12 2 2M11 9l2 2M14 6l2 2\"/>", action: "measure" },
