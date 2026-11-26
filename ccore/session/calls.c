@@ -1385,6 +1385,10 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!s->open && !strcmp(name, "material_library")) return cc_query(&s->model, name, body, n, out) == 200 ? CC_OK : CC_ERR;
     /* ---- end MAT1 ---- */
     if (!strcmp(name, "annotation_types")) { /* VIEWSHEET (view_sheet.h): the standards' types, the ones in use */
+#ifdef CC_VIEW_ONLY
+        buf_puts(out, "null"); /* no standards in the viewer-only build (draw_style.c is left out) */
+        return CC_OK;
+#else
         Arena sa;
         arena_init(&sa, 0);
         cc_style st;
@@ -1395,6 +1399,7 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         cc_vs_types_json(&s->vsh, &st.paper, &w);
         arena_free(&sa);
         return done(&w);
+#endif
     }
     if (!strcmp(name, "setting_out")) { /* SETOUT (setting_out.h): null without an editable model */
         if (!s->open) return buf_puts(out, "null"), CC_OK;
@@ -2066,6 +2071,9 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
         return CC_OK;
     }
     if (!strcmp(name, "annotation_type")) {
+#ifdef CC_VIEW_ONLY
+        return fail(out, "annotation_type: no graphic standards in the viewer-only build");
+#else
         Arena sa;
         arena_init(&sa, 0);
         cc_style st;
@@ -2073,6 +2081,7 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
                   : cc_vs_set_type(&s->vsh, &st.paper, body, n, out) ? CC_ERR : CC_OK;
         arena_free(&sa);
         return trc;
+#endif
     }
     /* ---- end VIEWSHEET ---- */
     /* ---- KEY1: ribbon.rs:729-744, the plan template's flag (no history step, rev unchanged) ---- */
@@ -3037,8 +3046,12 @@ static int annot_call(cc_session *s, int pointer, int cancel, const ToolArgs *ta
         /* VIEWSHEET: the text type in use gives its name and size (layout.rs:540-545) */
         Arena ka;
         arena_init(&ka, 0);
+#ifdef CC_VIEW_ONLY
+        const cc_text_type *tt = NULL; /* the viewer-only build places nothing (view_only.c) */
+#else
         cc_style kst;
         const cc_text_type *tt = s->vsh.text_kind[0] && !cc_style_default(&kst, &ka) ? cc_vs_text_type(&kst.paper, s->vsh.text_kind) : NULL;
+#endif
         if (tt) jw_key(&w, "kind"), jw_str(&w, s->vsh.text_kind);
         jw_key(&w, "size_mm"), jw_f64(&w, tt ? (double)tt->size_mm : t->annot_size);
         arena_free(&ka);
