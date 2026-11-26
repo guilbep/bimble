@@ -222,6 +222,9 @@ typedef struct {
     Buf tmp, dec;
     Name *names; /* open addressing, 2 * NAMES_MAX slots (NULL: no interning) */
     size_t nnames;
+    /* An unterminated comment: a scan from open_from found no closing star-slash to the end of
+     * the text (whose line is open_line_end), so neither does one from any later place. */
+    size_t open_from, open_line_end;
     int oom;
     char msg[160];
 } P;
@@ -249,9 +252,18 @@ static void skip_ws(P *p) {
         else if (is_ws(c)) p->i++;
         else if (c == '/' && p->i + 1 < p->n && p->s[p->i + 1] == '*') {
             p->i += 2;
+            if (p->i >= p->open_from) { /* known to run to the end: the same answer, at once */
+                p->i = p->n, p->line = p->open_line_end;
+                break;
+            }
+            size_t from = p->i;
             while (p->i < p->n && !(p->s[p->i] == '*' && p->i + 1 < p->n && p->s[p->i + 1] == '/')) {
                 if (p->s[p->i] == '\n') p->line++;
                 p->i++;
+            }
+            if (p->i >= p->n) { /* unterminated: each later statement found it again (quadratic) */
+                p->open_from = from, p->open_line_end = p->line;
+                break;
             }
             p->i = p->i + 2 < p->n ? p->i + 2 : p->n;
         } else break;
@@ -650,6 +662,7 @@ static void chunk_job(void *ctx, size_t k, size_t w) {
 static void p_init(P *p, const char *text, size_t n, Arena *a) {
     memset(p, 0, sizeof *p);
     p->s = text, p->n = n, p->line = 1, p->a = a;
+    p->open_from = (size_t)-1;
     buf_init(&p->tmp);
     buf_init(&p->dec);
     p->names = calloc(2 * NAMES_MAX, sizeof *p->names); /* NULL: names copied each time */
