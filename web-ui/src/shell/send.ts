@@ -123,6 +123,7 @@ watch(state, (s, prev) => {
   send({ do: "core" });
 });
 shellHooks.viewShown = () => { send({ do: "showView" }); };
+shellHooks.sheetShown = (id: string) => { send({ do: "showSheet", sheet: id }); }; // DEAD1: control ribbon-new-sheet
 
 // ---- FIXUI: the native host stopped answering (bimble.ts pollChanges), then answers again. The
 // same session when it is the same process (its epoch), or a restarted host that replayed the

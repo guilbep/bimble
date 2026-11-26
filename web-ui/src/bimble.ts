@@ -1135,8 +1135,15 @@ export function runAction(name: string): string | null {
   const route = screenRoutes[name];
   if (route) { route(); return null; }
   if (fileRoutes.run?.(name)) return null; // FS1
+  // DEAD1: New sheet shows the sheet it made (the core says it is shown: Place view… is enabled), so
+  // the screen and the session agree: the new id is the one not listed before.
+  const sheetsBefore = name === "new_sheet" ? new Set(tryQuery<SheetSummary[]>("sheets", []).map((x) => x.id)) : null;
   try {
     wasmOrThrow().action(name);
+    if (sheetsBefore) {
+      const made = tryQuery<SheetSummary[]>("sheets", []).find((x) => !sheetsBefore.has(x.id));
+      if (made) shellHooks.sheetShown?.(made.id);
+    }
     // Measuring is session state, not in the change JSON: its state and pressed button here (ticket T1).
     if (name === "measure" || name.startsWith("place_")) {
       setMeasure(tryQuery<MeasureState | null>("measure", null));
@@ -1182,7 +1189,7 @@ export function tabCall(op: "activate" | "close" | "open", tab: OpenTab): string
 /** Which client runs: the C host over HTTP, the C core's wasm in the page, or the Rust wasm. */
 export let backend: "native" | "ccore" | "rust" = "rust";
 /** Set by shell/send.ts: told when a view tab was opened or activated (tabCall). */
-export const shellHooks: { viewShown?: () => void } = {};
+export const shellHooks: { viewShown?: () => void; /** DEAD1: a sheet made by New sheet is shown */ sheetShown?: (id: string) => void } = {};
 /** A file action (new, open, import_ifc, close) with its body {path, discard}, never through
  *  `screenRoutes`. Returns the session's error text, or null. */
 export function fileCall(name: string, body: { path?: string; discard?: boolean; dropped?: boolean /* FS1 */ }): string | null {

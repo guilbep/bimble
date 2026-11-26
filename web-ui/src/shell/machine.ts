@@ -220,6 +220,7 @@ export const CONTROLS: readonly Control[] = [
   // a view on the sheet shown and stays on that sheet (dialogs/PlaceView.vue). Dialogs are drawn over any model state.
   { id: "newview-create", event: { do: "showView" }, shown: inModel },
   { id: "placeview-pick", event: { do: "showSheet", sheet: "S-101" }, shown: k("model.sheet") },
+  { id: "ribbon-new-sheet", event: { do: "showSheet", sheet: "S-102" }, shown: inModel }, // DEAD1: New sheet shows the sheet it made
 ];
 
 /** Whether the control `id` is shown in `s` (an unknown id: never). */

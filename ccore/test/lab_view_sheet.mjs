@@ -291,6 +291,9 @@ async function tab(S, evalJs) {
   await waitFor("Place view on", 5000, async () => (await attr(tool(1, 2), "aria-disabled")) === null);
   const sheetId = await evalJs("(async () => { const m = await import('/src/pages/SheetsSide.vue'); return m.currentSheet.value?.id ?? null; })()");
   check("a sheet shown: Place view… and Revision… on", !!sheetId && (await attr(tool(1, 2), "aria-disabled")) === null && (await attr(tool(3, 1), "aria-disabled")) === null);
+  // DEAD1: the screen shows the sheet the core says is shown (the shell's showSheet), not the plan behind it
+  const shellNow = await evalJs("(async () => JSON.stringify((await import('/src/shell/send.ts')).here.value))()");
+  check("New sheet: the shell shows that sheet (state and screen agree) (DEAD1)", JSON.parse(shellNow)?.show === "sheet" && JSON.parse(shellNow)?.sheet === sheetId, `${shellNow} vs ${sheetId}`);
   const svgS0 = await B(`return b.query('sheet_svg', { id: ${JSON.stringify(sheetId)} }).svg.length;`);
   ms = await timed("Place view… (dialog)", tool(1, 2), CLICK, "!!document.querySelector('[data-bb=place-view-list]')");
   check("Place view…: the dialog lists the views, the new section among them", ms !== null && (await exists(`[data-bb="place-view-${sec.added}"]`)));
