@@ -584,6 +584,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const pressed = (name: string, dflt: boolean) => actions.value.find((a) => a.name === name)?.pressed ?? dflt;
   const ortho3d = () => !plan && pressed("orthographic", false);
   let seenActions: unknown;
+  let seenSwitches = ""; // VIEWSHEET: the pressed switches the viewport draws with
   // ---- end Q2 ----
   let selKey = "";
   // Camera (bimble-render Camera): orbit around `target` at `distance`, z up.
@@ -1899,7 +1900,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const vc = cur?.type === "view" ? viewClip() : null;
       switchView(vc, cur?.type === "view" ? cur.id : null);
     }
-    if (actions.value !== seenActions) { seenActions = actions.value; dirty = true; } // Q2: a switch turned
+    // Q2: a switch turned. VIEWSHEET: only the switches the viewport draws with (orthographic, edges, the section
+    // tool), not any change of the action list (an action run, a dialog opened): a frame costs tens to hundreds of ms.
+    if (actions.value !== seenActions) {
+      seenActions = actions.value;
+      const sig = `${pressed("orthographic", false)}${pressed("edges", true)}${pressed("draw_section", false)}`;
+      if (sig !== seenSwitches) { seenSwitches = sig; dirty = true; }
+    }
     pointerFrame(); // KEY1: the status bar's coordinates, once a frame at most
     if (turn) { // a view-cube turn: one step per frame (lib.rs `animate`)
       const ms = performance.now() - turn.start;

@@ -153,6 +153,45 @@ async function tab(S, evalJs) {
   await waitFor("the actions", 10000, () => B("return b.actions.value.length > 0;"));
   await sleep(1500); // the page settles (the first frames, the mesh): the times below are the controls', not the load's
 
+  // VIEWSHEET_PROBE=2: the session's first switch from 3D to a plan alone (no verb), before the controls
+  if (process.env.VIEWSHEET_PROBE === "2") {
+    const p = await evalJs(`(async () => {
+      const b = await import('/src/bimble.ts'); const g = window.__bbGl; const raf = () => new Promise((r) => requestAnimationFrame(r)); const out = {};
+      const d3 = b.openViews.value.active, pl = b.openViews.value.views.find((v) => v.type === 'plan')?.id;
+      for (const k of [1, 2, 3]) {
+        let t = performance.now(); b.openView(pl); out['open_call' + k] = performance.now() - t; const f1 = g.frames; let n = 0;
+        while (g.frames === f1 && n++ < 300) await raf();
+        out['first_plan_frame' + k] = performance.now() - t;
+        b.openView(d3); for (let i = 0; i < 30; i++) await raf();
+      }
+      return JSON.stringify(out); })()`);
+    console.log(`probe2 ${p}`);
+  }
+
+  // VIEWSHEET_PROBE=3: a CPU profile of the session's first switch from 3D to a plan (the top self times)
+  if (process.env.VIEWSHEET_PROBE === "3") {
+    await S("Profiler.enable");
+    await S("Profiler.setSamplingInterval", { interval: 200 });
+    await S("Profiler.start");
+    const ms3 = await evalJs(`(async () => {
+      const b = await import('/src/bimble.ts'); const raf = () => new Promise((r) => requestAnimationFrame(r));
+      const pl = b.openViews.value.views.find((v) => v.type === 'plan')?.id; const t = performance.now();
+      b.openView(pl);
+      while (b.openViews.value.active !== pl && performance.now() - t < 5000) await raf();
+      for (let i = 0; i < 3; i++) await raf();
+      return performance.now() - t; })()`);
+    const { profile } = await S("Profiler.stop");
+    const self = new Map(), byId = new Map(profile.nodes.map((n) => [n.id, n]));
+    const dt = profile.timeDeltas;
+    profile.samples.forEach((id, i) => {
+      const n = byId.get(id); const f = n.callFrame;
+      const k = `${f.functionName || "(anon)"} ${f.url.replace(/^.*\/src\//, "src/").replace(/\?.*$/, "")}:${f.lineNumber + 1}`;
+      self.set(k, (self.get(k) ?? 0) + (dt[i] ?? 0) / 1000);
+    });
+    console.log(`probe3 first 3D -> plan ${ms3.toFixed(1)} ms; top self times (ms):`);
+    for (const [k, v] of [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14)) console.log(`probe3   ${v.toFixed(1)} ${k}`);
+  }
+
   // ======== View → New view… ========
   check("View: New view… and Section are real tools (not 'not yet')", (await attr(tool(5, 1), "data-not-yet")) === null && (await attr(tool(5, 2), "data-not-yet")) === null);
   check("View: no dead control", JSON.stringify(await dead()) === "[]", JSON.stringify(await dead()));
@@ -312,6 +351,15 @@ async function tab(S, evalJs) {
         t = performance.now(); b.query('view_clip'); out['q_view_clip' + k] = performance.now() - t;
         t = performance.now(); b.query('view_annotations', { view: r.id }); out['q_view_annotations' + k] = performance.now() - t;
       }
+      const d3 = b.openViews.value.views.find((v) => v.type === 'three_d')?.id, pl = b.openViews.value.views.find((v) => v.type === 'plan')?.id;
+      for (const k of [1, 2]) { // 3D, then a plan: the first switch of the session against a later one
+        b.openView(d3); for (let n = 0; n < 30; n++) await raf();
+        t = performance.now(); b.openView(pl); const f1 = g.frames; let n = 0;
+        while (g.frames === f1 && n++ < 300) await raf();
+        out['three_d_to_plan' + k] = performance.now() - t;
+      }
+      const sh = b.sheets()[0]?.id;
+      if (sh) { t = performance.now(); b.query('sheet_svg', { id: sh }); out.q_sheet_svg = performance.now() - t; }
       return JSON.stringify(out); })()`);
     console.log(`probe ${p}`);
   }
