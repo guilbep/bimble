@@ -6,7 +6,8 @@
 // by dev.sh's cycle lines (one "changed, building", then one end: rebuilt, build failed, or the host
 // did not start), not by a time of quiet: with a build slower than that time (920 ms on a GitHub
 // runner) the restart of one save was seen as the next one's (ticket K2). Each save must give
-// exactly one cycle. SIGTERM to dev.sh must leave no process behind. The edited file is restored byte for byte. Needs tcc, inotifywait and
+// exactly one cycle. SIGTERM to dev.sh must leave no process behind, also when it arrives during a
+// rebuild (stopRounds, ticket SMALL1). The edited file is restored byte for byte. Needs tcc, inotifywait and
 // web-ui/node_modules. Prints the cycle times and "N passed, M failed"; exits non-zero on a failure.
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
@@ -112,6 +113,48 @@ async function save(what, data) {
   return starts() - s0;
 }
 
+/** SMALL1: SIGTERM during a rebuild, on purpose. dev.sh without Vite (CCORE_DEV_VITE=0), one save
+ *  (the same bytes), SIGTERM DELAYS[k] ms after it: around the end of the 50 ms debounce, where the
+ *  stop signal ran its cleanup inside the debounce's `read -t` and the read's timeout cut it short (the
+ *  loop went on, started a new host and exited 1, the host left listening: CI on main on 26 Nov; 1 run
+ *  in 60 with SIGTERM at a random 0-150 ms; 3 of these 25 rounds on the old dev.sh, at 41, 48, 49 ms).
+ *  Each round must end with exit 143 and nothing listening on the host port within 5 s. */
+const DELAYS = Array.from({ length: 25 }, (_, k) => 36 + k); // 36..60 ms
+async function stopRounds() {
+  const bad = [];
+  for (const d of DELAYS) {
+    const p = spawn(join(CCORE, "dev.sh"), [], {
+      env: hostEnv({ CCORE_DEV_PORT: String(PORT), CCORE_DEV_VITE: "0" }), stdio: ["ignore", "pipe", "pipe"], detached: true,
+    });
+    let o = "";
+    p.stdout.on("data", (x) => (o += x));
+    p.stderr.on("data", (x) => (o += x));
+    const ex = new Promise((r) => p.on("exit", (code, sig) => r(code ?? sig)));
+    try {
+      await waitFor("dev.sh watching", 30000, () => { if (p.exitCode !== null) throw new Error(o); return o.includes("watching src/"); });
+      writeAtomic(EDITED, ORIGINAL);
+      await sleep(d);
+      process.kill(p.pid, "SIGTERM");
+      const code = await Promise.race([ex, sleep(10000).then(() => "no exit in 10 s")]);
+      const listening = () => { try { return execFileSync("ss", ["-ltnpH", `( sport = :${PORT} )`], { encoding: "utf8" }).trim(); } catch { return ""; } };
+      const t0 = Date.now();
+      let ls = listening();
+      while (ls !== "" && Date.now() - t0 < 5000) { await sleep(50); ls = listening(); }
+      if (code !== 143 || ls !== "") {
+        bad.push(`${d} ms: exit ${code}${ls ? `, ${ls}` : ""}; ${o.split("\n").filter((l) => /^dev\.sh|^rebuilt/.test(l)).slice(-3).join(" | ")}`);
+        const m = /pid=(\d+)/.exec(ls);
+        if (m) try { process.kill(+m[1], "SIGKILL"); } catch {}
+      }
+    } catch (e) {
+      bad.push(`${d} ms: ${e.message}`);
+    } finally {
+      try { process.kill(-p.pid, "SIGKILL"); } catch {}
+    }
+  }
+  check(`SIGTERM during a rebuild, ${DELAYS.length} rounds (${DELAYS[0]}..${DELAYS.at(-1)} ms after a save): exit 143, nothing listening`,
+    bad.length === 0, bad.join("; "));
+}
+
 let tree = [];
 try {
   const url = await waitFor("the lab URL", 60000, () => {
@@ -202,6 +245,8 @@ try {
   check(`nothing listens on ${PORT} or ${VITE} (within 5 s of dev.sh's exit)`, ls === "", ls);
   for (const t of left) try { process.kill(t.pid, "SIGKILL"); } catch {}
   try { process.kill(-dev.pid, "SIGKILL"); } catch {}
+  await stopRounds();
+  writeAtomic(EDITED, ORIGINAL);
   check("session/calls.c restored byte for byte", readFileSync(EDITED).equals(ORIGINAL));
   console.log(`${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
