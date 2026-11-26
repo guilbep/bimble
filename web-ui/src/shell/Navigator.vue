@@ -8,6 +8,10 @@ import { links, query, select, measurements, openView, openViews, scheduleList, 
 import { viewAdd, viewRemove } from "../bimble";
 import { editableModel, has } from "./capability";
 // ---- end SEC1 ----
+// ---- LNK1 ----
+import LinksPanel from "./LinksPanel.vue";
+import { linksOpen } from "./links";
+// ---- end LNK1 ----
 
 // `open_views` is `{views, active, tabs}` (bridge.rs); bimble.ts types it loosely until then.
 const ov = computed(() => openViews.value as unknown as { views?: ViewSummary[]; active?: string | null });
@@ -47,12 +51,25 @@ const sheetCount = computed(() => {
 const scheduleCount = computed(() => { void state.value.rev; void openViews.value; return scheduleList().length; });
 const linkCount = computed(() => { void state.value.rev; void openViews.value; return links().length; });
 const measureCount = computed(() => { void state.value.rev; void openViews.value; return measurements().length; });
-// Links and measurements: read-only lists from Rust, shown when their group opens.
-const linkOpen = ref(false);
+// Measurements: a read-only list from Rust, shown when its group opens.
+// ---- LNK1 ---- the Links group: shell/LinksPanel.vue (Manage links… opens it: shell/links.ts)
+const linkOpen = linksOpen;
+// ---- end LNK1 ----
 const measureOpen = ref(false);
-const linkRows = computed(() => { void state.value.rev; return linkOpen.value ? links() : []; });
 const measureRows = computed(() => { void state.value.rev; return measureOpen.value ? measurements() : []; });
-const objects = computed(() => storeys.value.reduce((n, s) => n + s.element_count, 0));
+// ---- FIXUI ---- a file open read only (an IFC, a .bimbleview) has no model storeys: its tree comes
+// from the scene the reader drew (query scene_tree / scene_elements, ccore/session/links.h).
+type SceneTree = { storeys: { name: string; count: number; classes: { class: string; count: number }[] }[]; total: number };
+const sceneTree = computed<SceneTree | null>(() => {
+  void state.value.rev;
+  if (state.value.file === null || state.value.editable !== false) return null;
+  try { return query<SceneTree>("scene_tree"); } catch { return null; }
+});
+const treeStoreys = computed(() => sceneTree.value
+  ? sceneTree.value.storeys.map((s) => ({ id: `scene:${s.name}`, name: s.name || "—", element_count: s.count, scene: s }))
+  : storeys.value.map((s) => ({ id: s.id, name: s.name, element_count: s.element_count, scene: null })));
+const objects = computed(() => sceneTree.value ? sceneTree.value.total : storeys.value.reduce((n, s) => n + s.element_count, 0));
+// ---- end FIXUI ----
 const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 
 // Object tree (storey → IFC class → elements), lazy: children load when a row opens. Local UI state only.
@@ -68,6 +85,8 @@ function toggle(key: string, load: () => void) {
   load(); s.add(key); openKeys.value = s;
 }
 function openStorey(id: string) {
+  const sc = treeStoreys.value.find((x) => x.id === id)?.scene;
+  if (sc) { toggle(id, () => { classes.value = new Map(classes.value).set(id, sc.classes.map((c) => [c.class, c.count] as [string, number])); }); return; }
   toggle(id, () => {
     // ponytail: counts by grouping the storey's elements (MAX_ELEMENTS 10 000); a per-class count query if storeys grow past that.
     const n = new Map<string, number>();
@@ -77,7 +96,10 @@ function openStorey(id: string) {
 }
 function openClass(storey: string, cls: string) {
   const key = `${storey}/${cls}`;
-  toggle(key, () => { elems.value = new Map(elems.value).set(key, query<El[]>("elements", { storey, class: cls, limit: LIMIT })); });
+  const sc = treeStoreys.value.find((x) => x.id === storey)?.scene;
+  toggle(key, () => { elems.value = new Map(elems.value).set(key, sc
+    ? query<El[]>("scene_elements", { storey: sc.name, class: cls, limit: LIMIT })
+    : query<El[]>("elements", { storey, class: cls, limit: LIMIT })); });
 }
 // The model changed: drop loaded children so open rows reload.
 watch(() => state.value.rev, () => { classes.value = new Map(); elems.value = new Map(); openKeys.value = new Set(); });
@@ -137,26 +159,26 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
       <span>{{ t('nav.sheets') }}</span><span class="n">{{ sheetCount ?? "" }}</span>
     </a>
-    <a class="ti h" href="#" style="padding-left:6px" :aria-expanded="objOpen" @click.prevent="objOpen = !objOpen">
+    <a class="ti h" href="#" style="padding-left:6px" :aria-expanded="objOpen" data-bb="nav-objects" @click.prevent="objOpen = !objOpen">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="objOpen ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
       <span>{{ t('nav.objects') }}</span><span class="n">{{ grouped(objects) }}</span>
     </a>
     <template v-if="objOpen">
-      <template v-for="s in storeys" :key="s.id">
-        <a class="ti" href="#" style="padding-left:22px" :aria-expanded="openKeys.has(s.id)" @click.prevent="openStorey(s.id)">
+      <template v-for="s in treeStoreys" :key="s.id">
+        <a class="ti" href="#" style="padding-left:22px" :aria-expanded="openKeys.has(s.id)" data-bb="nav-storey" @click.prevent="openStorey(s.id)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="openKeys.has(s.id) ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
           <span>{{ s.name }}</span><span class="n">{{ grouped(s.element_count) }}</span>
         </a>
         <template v-if="openKeys.has(s.id)">
           <template v-for="[c, n] in classes.get(s.id) ?? []" :key="c">
-            <a class="ti" href="#" style="padding-left:38px" :aria-expanded="openKeys.has(`${s.id}/${c}`)" @click.prevent="openClass(s.id, c)">
+            <a class="ti" href="#" style="padding-left:38px" :aria-expanded="openKeys.has(`${s.id}/${c}`)" data-bb="nav-class" @click.prevent="openClass(s.id, c)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="openKeys.has(`${s.id}/${c}`) ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
               <span>{{ c }}</span><span class="n">{{ grouped(n) }}</span>
             </a>
             <template v-if="openKeys.has(`${s.id}/${c}`)">
               <a
                 v-for="e in elems.get(`${s.id}/${c}`) ?? []" :key="e.id" class="ti" :class="{ sel: state.selection.includes(e.id) }"
-                href="#" style="padding-left:54px" @click.prevent="select([e.id])"
+                href="#" style="padding-left:54px" data-bb="nav-element" :data-id="e.id" @click.prevent="select([e.id])"
               ><span>{{ e.name || e.id }}</span></a>
               <span v-if="n > LIMIT" class="ti" style="padding-left:54px;color:var(--bb-stone)">{{ t('nav.more', { n: n - LIMIT }) }}</span>
             </template>
@@ -173,7 +195,9 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="linkOpen ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
       <span>{{ t('nav.links') }}</span><span class="n">{{ linkCount }}</span>
     </a>
-    <span v-for="l in linkRows" :key="l.id" class="ti" style="padding-left:22px"><span>{{ l.name }}</span><span class="n">{{ l.kind }}</span></span>
+    <!-- ---- LNK1 ---- the rows with their buttons (shell/LinksPanel.vue) -->
+    <LinksPanel v-if="linkOpen" />
+    <!-- ---- end LNK1 ---- -->
     <a class="ti h" href="#" style="padding-left:6px" :aria-expanded="measureOpen" @click.prevent="measureOpen = !measureOpen">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="measureOpen ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
       <span>{{ t('nav.measures') }}</span><span class="n">{{ measureCount }}</span>

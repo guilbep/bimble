@@ -35,6 +35,10 @@ static double pow2(int e) { /* 2^e, -1074 <= e <= 1023 */
 }
 
 static int nfail_shown;
+#if defined(_WIN32) || defined(STRTOD_EXACT_REF)
+static int exact_ok(const char *s, double g);
+static int crt_wrong, crt_shown; /* WIN2: the C runtime's strtod off, cc_strtod proven right */
+#endif
 /* Compares cc_strtod(s) with glibc strtod(s); counts one check. */
 static void cmp(const char *s) {
     double want = strtod(s, NULL), got = cc_strtod(s, strlen(s));
@@ -42,6 +46,21 @@ static void cmp(const char *s) {
         passed++;
         return;
     }
+#if defined(_WIN32) || defined(STRTOD_EXACT_REF)
+    /* WIN2: the C runtime is not the reference on Windows (UCRT's strtod rounds some inputs just
+     * below a power of two up to it: run 45726496943, 44 checks, each one ulp above the exact
+     * value). When the two differ, an exact decimal comparison decides: cc_strtod's result must
+     * be the correctly rounded one (ties to even) and the runtime's must not be; else a FAIL. */
+    int ok_got = exact_ok(s, got), ok_want = exact_ok(s, want);
+    if (ok_got == 1 && ok_want == 0) {
+        passed++, crt_wrong++;
+        if (crt_shown++ < 20)
+            printf("win32: C runtime strtod %.80s%s -> %016llx (off), exact -> %016llx (cc_strtod)\n", s,
+                   strlen(s) > 80 ? "..." : "", (unsigned long long)bits_of(want), (unsigned long long)bits_of(got));
+        return;
+    }
+    if (nfail_shown < 20) printf("exact check: cc_strtod %d, C runtime %d (1 right, 0 wrong, -1 undecided)\n", ok_got, ok_want);
+#endif
     failed++;
     if (nfail_shown++ < 20)
         printf("FAIL %.120s%s\n  got:  %016llx\n  want: %016llx\n", s, strlen(s) > 120 ? "..." : "",
@@ -98,6 +117,87 @@ static void midpoint(const char *a, const char *b, char *out) {
     }
     out[o] = 0;
 }
+
+#if defined(_WIN32) || defined(STRTOD_EXACT_REF)
+/* WIN2: exact decimal comparison, independent of any strtod. A decimal text as digits D (no
+ * leading or trailing zero) and exponent E: the value 0.D x 10^E; D empty is zero. Returns the
+ * sign (0 +, 1 -) or -1 when the text is not a plain decimal. */
+#define DEC_MAX 4096
+static int dec_parse(const char *s, char *D, long *E) {
+    int neg = 0;
+    if (*s == '+' || *s == '-') neg = *s++ == '-';
+    size_t n = 0;
+    long e = 0, lead = 0;
+    int seen = 0, point = 0;
+    for (; (*s >= '0' && *s <= '9') || *s == '.'; s++) {
+        if (*s == '.') {
+            if (point) return -1;
+            point = 1;
+            continue;
+        }
+        seen = 1;
+        if (n == 0 && *s == '0') { /* leading zero: after the point it shifts the exponent */
+            if (point) lead++;
+            continue;
+        }
+        if (n + 1 >= DEC_MAX) return -1;
+        D[n++] = *s;
+        if (!point) e++;
+    }
+    if (!seen) return -1;
+    if (*s == 'e' || *s == 'E') {
+        s++;
+        int eneg = 0;
+        if (*s == '+' || *s == '-') eneg = *s++ == '-';
+        if (!(*s >= '0' && *s <= '9')) return -1;
+        long x = 0;
+        for (; *s >= '0' && *s <= '9'; s++) x = x < 100000000 ? x * 10 + (*s - '0') : x;
+        e += eneg ? -x : x;
+    }
+    if (*s) return -1;
+    while (n > 0 && D[n - 1] == '0') n--;
+    D[n] = 0;
+    *E = n ? e - lead : 0;
+    return neg;
+}
+/* Sign of a - b, both >= 0 in the form above. */
+static int dec_cmp(const char *A, long EA, const char *B, long EB) {
+    if (!*A || !*B) return (*A != 0) - (*B != 0);
+    if (EA != EB) return EA < EB ? -1 : 1;
+    for (;; A++, B++) {
+        if (!*A || !*B) return (*A != 0) - (*B != 0);
+        if (*A != *B) return *A < *B ? -1 : 1;
+    }
+}
+/* The midpoint of two neighbouring finite doubles a < b, as D, E. */
+static void dec_mid(double a, double b, char *D, long *E) {
+    static char ea[2048], eb[2048], m[2100];
+    exact(a, ea, sizeof ea), exact(b, eb, sizeof eb);
+    midpoint(ea, eb, m);
+    dec_parse(m, D, E);
+}
+/* 1 when g is the correctly rounded value of the decimal text s (ties to even), 0 when not, -1
+ * when undecided (not a plain decimal; g infinite or the largest finite double). */
+static int exact_ok(const char *s, double g) {
+    static char D[DEC_MAX], M[DEC_MAX];
+    long E, EM;
+    int neg = dec_parse(s, D, &E);
+    if (neg < 0) return -1;
+    uint64_t b = bits_of(g);
+    if ((int)(b >> 63) != neg) return 0;
+    b &= 0x7fffffffffffffffull;
+    if (b >= 0x7fefffffffffffffull) return -1;
+    int even = (b & 1) == 0;
+    if (b > 0) { /* above the midpoint with the neighbour below */
+        dec_mid(of_bits(b - 1), of_bits(b), M, &EM);
+        int c = dec_cmp(D, E, M, EM);
+        if (c < 0 || (c == 0 && !even)) return 0;
+    }
+    dec_mid(of_bits(b), of_bits(b + 1), M, &EM); /* below the midpoint with the one above */
+    int c = dec_cmp(D, E, M, EM);
+    return c < 0 || (c == 0 && even);
+}
+#endif
 
 static void halfway(double x) {
     if (!(x >= 0) || !is_finite(x)) return;
@@ -249,6 +349,10 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 100000; i++) acc -= strtod(texts[i], NULL);
     double a2 = now_ms();
     printf("100000 %%.17g parses: cc_strtod %.1f ms, glibc strtod %.1f ms\n", a1 - a0, a2 - a1);
+#if defined(_WIN32) || defined(STRTOD_EXACT_REF)
+    printf("win32: %d texts where the C runtime's strtod is off and cc_strtod is exact (decided by the exact decimal check)\n",
+           crt_wrong);
+#endif
     printf("strtod suite: %.0f ms\n", now_ms() - t0);
     return report("strtod");
 }

@@ -1,4 +1,5 @@
-// The label of every Rust action (`query("actions")`, crates/bimble-viewer/src/ribbon.rs ALL_ACTIONS: 54), keyed by
+// The label of every Rust action (`query("actions")`, crates/bimble-viewer/src/ribbon.rs ALL_ACTIONS: 54; then the C
+// additions: ISS72's show_all, show_previous), keyed by
 // its `name`, and the Rust tabs the ribbon copy has no name for. Rust labels stay English (egui follows, ADR 0048).
 // Wording: the reference's (File menu, ribbon, palette) where it shows the command; else plain French in that style.
 export const fr = {
@@ -28,7 +29,7 @@ export const fr = {
   "action.hatching": "Hachures",
   "action.orthographic": "Orthogonale",
   "action.section_box": "Zone de coupe",
-  "action.box_to_selection": "Zone sur sélection",
+  "action.box_to_selection": "Boîte sur la sélection", // ISS71: the words of issue #71
   "action.fit": "Tout afficher",
   "action.top": "Dessus",
   "action.on_paper": "Exporter la vue… (PDF, SVG)",
@@ -56,6 +57,8 @@ export const fr = {
   "action.paper_view": "Sur papier",
   "action.clear_temporary": "Tout réafficher (masqués pour l'instant)",
   "action.show_all_in_view": "Tout afficher dans la vue",
+  "action.show_all": "Tout réafficher", // ISS72
+  "action.show_previous": "Affichage précédent", // ISS72
   "actionTab.Model": "Modèle",
   "actionTab.Manage": "Gérer",
   "actionTab.Quick access": "Accès rapide",
@@ -115,6 +118,8 @@ export const en: Record<keyof typeof fr, string> = {
   "action.paper_view": "On paper",
   "action.clear_temporary": "Show all hidden for now",
   "action.show_all_in_view": "Show all in view",
+  "action.show_all": "Show all", // ISS72
+  "action.show_previous": "Show previous", // ISS72
   "actionTab.Model": "Model",
   "actionTab.Manage": "Manage",
   "actionTab.Quick access": "Quick access",

@@ -12,6 +12,9 @@
 #define CCORE_IFC_MATH_H
 double cc_sin(double x);
 double cc_cos(double x);
+/* Both at once, the same bits as cc_sin and cc_cos (each of those evaluates both series: half the
+ * work for a caller that needs the two, ~2 us a call at any argument). */
+void cc_sincos(double x, double *s, double *c);
 double cc_atan2(double y, double x);
 double cc_acos(double x);
 double cc_fmod(double x, double y);

@@ -509,6 +509,18 @@ numbered 1–6 in that order (5 is `variant`, 6 the merge).
   (`model_at HEAD`), unknown revisions, a non-hash, a format line `bimble-history 2`, no history.
   The temp folder's path reads `<dir>`.
 
+### history/merge/ (ticket H2b)
+
+`bimble_core::repo::merge_models` on a small model cut from the frame (a beam, a column and a
+slab, the plan view "Plan Niveau 1", a sheet placing it, two project information keys, one
+schedule; ids derived): `base.json`; per case `<case>.ours.json` and `<case>.theirs.json` (each
+valid, canonical) and `<case>.txt`: for each Prefer (`neither`, `ours`, `theirs`) a line `prefer
+<p>: <n> conflict(s)`, one `conflict <Display> | <id or ->` per conflict, `valid` or `invalid
+<Model::validate's text>`, then `model <file>`: the merged model's canonical text is the named
+file (an input, or `<case>.<p>.json` written for the first Prefer that gave it). 26 cases: Rust's
+own tests of repo.rs (the case names and lines in `ccore/test/repo_merge_test.c`) and the rules of
+merge_models. Read by `ccore/test/repo_merge_test.c` (suite `repo_merge`).
+
 ## measure.txt
 
 The measure tool's text (ticket T1; `bimble_api::measure`, the viewer's `format_mm` and
@@ -561,3 +573,12 @@ user settings, and asks it over HTTP. Not this dumper's output: `parity/` is in 
 
 `node ccore/tools/parity.mjs --write` asks the C host the same things and writes
 `ccore/results/parity.md`.
+
+## place/polygon.txt (ticket SLAB1)
+
+Polygon slabs placed by clicks as the viewer's `Editor` does (edit.rs `click`, `close_polygon`:
+a click within 100 mm of the first point closes once there are 3 points, Enter closes;
+`verbs::new_slab`; the top offset added to z) on `frame.json`, the storey at elevation 0, default
+sizes. One record per case: `case <name>`, `top_offset <mm>`, `clicks <[[x, y], …]>`, `then
+<enter|none>`, `ok <commands JSON>` (the new element id as `<new-1>`) or `err <text>`, `points
+<n>` (the points left). Made by `slab1_files` on the branch `oracle/slab1`.

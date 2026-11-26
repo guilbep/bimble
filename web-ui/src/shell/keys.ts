@@ -169,6 +169,15 @@ export const keyStats = { handled: {} as Record<string, number>, ignored: 0 };
 
 function onKey(e: KeyboardEvent): void {
   if (e.defaultPrevented || e.isComposing) return;
+  // ---- SLAB1 ---- Enter while a polygon slab is clicked closes it (lib.rs:2772, the viewport's
+  // placing branch, not handle_keys: so not a row of Rust's shortcut table).
+  if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey && backend !== "rust" && !typingIn(e.target) && !currentDialog.value &&
+    inView() && viewportKeys.enterTool?.()) {
+    keyStats.handled.Enter = (keyStats.handled.Enter ?? 0) + 1;
+    e.preventDefault();
+    return;
+  }
+  // ---- end SLAB1 ----
   const r = rowOf(e);
   if (!r) return;
   const typing = typingIn(e.target);

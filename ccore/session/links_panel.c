@@ -1,0 +1,64 @@
+/* The Links panel's rows (ticket LNK1): see links_panel.h. */
+#include "links_panel.h"
+#include <string.h>
+#include "json_w.h"
+#include "links.h"
+#include "session.h"
+
+/* Path::extension of a file name, lowercased (state.rs links_json's "kind"). */
+static void ext_of(const char *name, char ext[32]) {
+    ext[0] = 0;
+    const char *dot = strrchr(name, '.');
+    if (!dot || dot == name || strlen(dot + 1) >= 32) return;
+    size_t j = 0;
+    for (; dot[1 + j]; j++) {
+        char c = dot[1 + j];
+        ext[j] = (char)(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+    }
+    ext[j] = 0;
+}
+
+int cc_links_panel_json(struct cc_session *s, Buf *out) {
+    JsonW w;
+    jw_init(&w, out, 0);
+    jw_obj_begin(&w);
+    jw_key(&w, "models"), jw_arr_begin(&w);
+    for (size_t i = 0; s->open || s->view ? i < s->nlinks : 0; i++) {
+        const cc_link *k = &s->links[i];
+        char ext[32];
+        ext_of(k->name, ext);
+        jw_obj_begin(&w);
+        jw_key(&w, "kind"), jw_str(&w, ext);
+        jw_key(&w, "missing"), jw_bool(&w, k->kind == 0);
+        jw_key(&w, "name"), jw_str(&w, k->name);
+        jw_key(&w, "path"), jw_str(&w, k->path ? k->path : "");
+        jw_key(&w, "visible"), jw_bool(&w, k->visible);
+        jw_obj_end(&w);
+    }
+    jw_arr_end(&w);
+    jw_key(&w, "references"), jw_arr_begin(&w);
+    const cc_model *m = &s->model;
+    for (size_t i = 0; s->open ? i < m->nviews : 0; i++) {
+        const cc_view *v = &m->views[i];
+        for (size_t k = 0; k < v->nreferences; k++) {
+            const cc_reference *r = &v->references[k];
+            jw_obj_begin(&w);
+            jw_key(&w, "id"), jw_str_n(&w, r->id.c, 22);
+            jw_key(&w, "kind"), jw_str_n(&w, r->format.p, r->format.n);
+            jw_key(&w, "name"), jw_str_n(&w, r->name.p, r->name.n);
+            jw_key(&w, "offset_mm"), jw_arr_begin(&w), jw_f64(&w, r->offset_mm[0]), jw_f64(&w, r->offset_mm[1]),
+                jw_arr_end(&w);
+            jw_key(&w, "rotation_deg"), jw_f64(&w, r->rotation_deg);
+            jw_key(&w, "source");
+            if (r->has_source) jw_str_n(&w, r->source.p, r->source.n);
+            else jw_null(&w);
+            jw_key(&w, "view"), jw_str_n(&w, v->id.c, 22);
+            jw_key(&w, "view_name"), jw_str_n(&w, v->name.p, v->name.n);
+            jw_key(&w, "visible"), jw_bool(&w, r->visible);
+            jw_obj_end(&w);
+        }
+    }
+    jw_arr_end(&w);
+    jw_obj_end(&w);
+    return jw_finish(&w) == JW_OK && !out->oom ? 0 : -1;
+}

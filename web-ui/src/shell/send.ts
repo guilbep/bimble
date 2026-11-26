@@ -3,7 +3,7 @@
 // (a file call while `opening`, a view tab for `showView`) and turns the session's changes into
 // events (`core`, and `opened` when another file is loaded).
 import { computed, shallowRef, watch } from "vue";
-import { backend, fileCall, openViews, openView, runAction, screenRoutes, shellHooks, state, type State } from "../bimble";
+import { backend, connectionHooks, fileCall, openViews, openView, runAction, screenRoutes, shellHooks, state, type State } from "../bimble";
 import { HOME, VIEW, kind, shows, step, type CoreState, type Event, type Shell } from "./machine";
 
 /** What the session says now (the change JSON in `state`). */
@@ -50,6 +50,7 @@ function screen(s: Shell): string | null {
   switch (s.at) {
     case "home": return "home";
     case "model": return s.show === "page" ? s.page : s.show === "sheet" ? "sheets" : null;
+    case "sessionLost": return "home"; // FIXUI: under the notice, nothing of the lost session
     default: return screen(s.back);
   }
 }
@@ -81,6 +82,10 @@ function runFile(o: Extract<Shell, { at: "opening" }>): void {
   finish(err);
 }
 
+// ---- PERF2: the step of the open under way (ccore.ts OpenSteps), for the `opening` state it belongs to ----
+export const openStep = shallowRef<{ of: Shell; step: string; n: number; total: number } | null>(null);
+// ---- end PERF2 ----
+
 // ---- FS1: the one picker (files.ts pickFile): the page's own dialog on the native host (a path), the
 // browser's picker in the wasm (the file's bytes), or a file dropped on the page. Its answer is the
 // next event: `opened`, `failed`, or `cancel` (the picker closed). The browser's picker may never say it
@@ -98,7 +103,10 @@ function pick(o: Extract<Shell, { at: "opening" }>, finish: (err: string | null)
       const f = r.file!;
       const cc = await import("../ccore");
       try {
-        await cc.ccoreOpenFile(f, o.discard, o.what === "import");
+        await cc.ccoreOpenFile(f, o.discard, o.what === "import", { // PERF2: steps and Cancel
+          step: (st) => { openStep.value = { of: o, step: st, n: cc.OPEN_STEPS.indexOf(st) + 1, total: cc.OPEN_STEPS.length }; },
+          cancelled: () => shell.value !== o,
+        });
         finish(null);
       } catch (e) {
         finish(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
@@ -115,6 +123,25 @@ watch(state, (s, prev) => {
   send({ do: "core" });
 });
 shellHooks.viewShown = () => { send({ do: "showView" }); };
+
+// ---- FIXUI: the native host stopped answering (bimble.ts pollChanges), then answers again. The
+// same session when it is the same process (its epoch), or a restarted host that replayed the
+// session (`--session`: the same file, rev and unsaved flag as when it went). Anything else: the
+// session was lost, and the shell says so (never a silent jump to Home).
+let known: { file: string | null; rev: number; unsaved: boolean } | null = null;
+connectionHooks.lost = () => {
+  known = { file: state.value.file, rev: state.value.rev, unsaved: state.value.unsaved };
+  send({ do: "lost" });
+};
+connectionHooks.back = (sameProcess, change) => {
+  const c = change as { file?: string | null; rev?: number; unsaved?: boolean } | null;
+  // A restarted host with nothing open has published no change yet (null): the same as no model.
+  const same = sameProcess || (known !== null && (c === null ? known.file === null
+    : c.file === known.file && c.rev === known.rev && c.unsaved === known.unsaved));
+  known = null;
+  send({ do: "reconnected", same });
+};
+// ---- end FIXUI ----
 
 // Actions the lab shows as its own screens, and the file actions: every caller of runAction
 // (quick bar, File menu, palette, ribbon, Home) goes through the shell.

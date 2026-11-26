@@ -1,15 +1,16 @@
 # Developing Bimble
 
 The fast loop for the C core (`ccore/`) behind the Vue lab (`web-ui/`). Every command below was run
-on the dev machine (16 GB aarch64 Linux, 25 Nov 2026); the times are from those runs. Run them from
+on the dev machine (16 GB aarch64 Linux, 25 Nov 2026). A time in the table comes from the report it
+names, with that report's conditions; a command with no report has no time. Run the commands from
 the repository root unless a line says otherwise.
 
 | Task | Command | Time |
 |---|---|---|
-| Edit C, see it in the lab | `make dev` (or `cd web-ui && npm run dev`) | edit → pixels ≈ 0.23 s |
-| One suite | `ccore/test/run.sh json fmt` | 0.4 s (tcc), 3.4 s (clang) |
-| The gate of every change | `make gate` (`ccore/ci/run.sh fast`) | 68 s |
-| Everything CI runs on Linux | `make full` (`ccore/ci/run.sh full`) | 12 min (machine loaded) |
+| Edit C, see it in the lab | `make dev` (or `cd web-ui && npm run dev`) | edit written → new pixels 0.23 s median: 72 elements, host built by tcc, SwiftShader, the watcher's delay not timed (`ccore/results/bench.md`); 2.1 s at 20,000 elements (`large.md`) |
+| One suite | `ccore/test/run.sh json fmt` | seconds (no report) |
+| The gate of every change | `make gate` (`ccore/ci/run.sh fast`) | minutes (no report; the last line of the run prints its time) |
+| Everything CI runs on Linux | `make full` (`ccore/ci/run.sh full`) | 836 s, 57 suites, machine loaded (`ccore/results/ci.md`, ticket WIN2) |
 | Editor include paths | nothing: `ccore/compile_flags.txt` is committed | |
 
 ## 1. Prerequisites (once)
@@ -40,9 +41,11 @@ make dev                    # = ccore/dev.sh = cd web-ui && npm run dev
 `dev.sh` builds the host with tcc, starts Vite on 5173 and the native host on 47400 on a scratch
 copy of `ccore/golden/frame.json`, and prints the lab URL
 (`http://localhost:5173/?native=1&gl=1&port=47400&token=…`). Open it once. Then save any `*.c` or
-`*.h` in `ccore/src`, `ccore/session` or `ccore/host`: the host is rebuilt (41 ms here) and
-restarted on the same port, token and model; the open page re-syncs by itself. A compile error is
-printed and the old host keeps running. Edit → pixels: 233 ms median (`ccore/results/bench.md`).
+`*.h` in `ccore/src`, `ccore/session` or `ccore/host`: the host is rebuilt (`build.sh host`, 73 ms
+median in `ccore/results/bench.md`) and restarted on the same port, token and model; the open page
+re-syncs by itself. A compile error is printed and the old host keeps running. Edit written → new
+pixels: 233 ms median on the 72-element frame, headless Chromium with SwiftShader, timed from the
+edit written (the watcher's delay is not in it); 2.1 s at 20,000 elements (`large.md`).
 
 - Another model: `ccore/dev.sh path/to/model.bimble` (or `.ifc`, `.json`).
 - Other ports: `CCORE_DEV_PORT=47500 CCORE_DEV_VITE=5180 ccore/dev.sh`.
@@ -69,8 +72,13 @@ CCORE_PORT_BASE=auto node ccore/test/host_test.mjs
 CCORE_PORT_BASE=auto node ccore/test/lab_gl.mjs      # starts Vite, the host and Chromium
 ```
 
-`CCORE_PORT_BASE=auto` gives this worktree its own ports (a hash of the path), so two worktrees can
-run the same test at once. Every port comes from the table in `ccore/test/ports.mjs`.
+`CCORE_PORT_BASE=auto` takes a free port per name in 20000..31999, so the same test can run several
+times at once, in one worktree or many: `ccore/test/ports.mjs` locks every port it gives
+(`<tmpdir>/bimble-ports/<port>`, the pid inside, freed at exit) and bind-tests it. Without the variable
+a name gets a stable port (a hash of the name), the next free one if taken. The test's log names each
+port it took (`ports: host lab_gl 23456 (auto)`). Two runs of `ci/run.sh` at once in one tree:
+`CCORE_CI_LOGS=out/ci2 CCORE_CI_BUILD=0 ccore/ci/run.sh lab` for the second (no rebuild of the
+binaries the first one runs).
 
 **The gate.** `make gate` = `ccore/ci/run.sh fast`: build.sh tcc, the C suites with tcc and with
 clang ASan+UBSan, build.sh wasm, wasm_run, host.sh. `make full` = `ccore/ci/run.sh full`: also the
@@ -84,6 +92,11 @@ performance report. One line per suite, logs in `ccore/out/ci/<suite>.log`, the 
 CC=clang CFLAGS="-fsanitize=address,undefined" ccore/test/run.sh json      # ASan + UBSan (the gate runs all suites so)
 CC=clang CFLAGS="-fsanitize=memory -fno-omit-frame-pointer" CC_NO_KERNEL=1 ccore/test/run.sh json   # MSan
 ```
+
+The host program under the sanitizers (`ci/run.sh san` and `full` do it): `ccore/build.sh asan`
+(the host alone, clang -O1, ASan and UBSan, in `ccore/out/asan/`), then
+`ccore/test/san_host.sh host_test fs_test` (each node suite on that host, one at a time; any
+sanitizer report fails the suite and is printed).
 
 MSan needs every byte of code instrumented, so it runs without the kernel (`CC_NO_KERNEL=1`:
 manifold is C++ built without MSan). All 38 C suites under MSan: no MSan report (25 Nov); `ifc_in`
@@ -124,9 +137,11 @@ it serves, and the page never guesses (FAKE1, `web-ui/src/shell/capability.ts`).
   `test/run.sh` find every `.c` by itself (and every `test/<name>_test.c` as a suite); add it to
   `VIEW_DENY` in `ccore/build.sh` if the viewer wasm must not carry it. Then map its object to a
   feature in `FEATURES` of `ccore/tools/weight.mjs`: an unclassified object fails `ci/run.sh full`.
-- **A lab test.** `ccore/test/lab_<name>.mjs` (copy one near it, for example `lab_gl.mjs`). Give it
-  its ports: one `host` row and one `vite` row in `TABLE` of `ccore/test/ports.mjs`, each with an
-  offset of its own (the table is checked at load: a shared offset throws). `ci/run.sh lab|full`
+- **A lab test.** `ccore/test/lab_<name>.mjs` (copy one near it, for example `lab_gl.mjs`). Its
+  ports: `port("lab_<name>")` and `vitePort("lab_<name>")`. You do not need a row in
+  `ccore/test/ports.mjs`: the name is enough, the lock and the bind test keep two tests apart (ticket
+  TEST1). The old second argument (a fixed default) is deprecated and ignored under `auto`; the table
+  keeps only the fixed ports a human opens (`tools/perf.mjs`, `tools/parity.mjs`). `ci/run.sh lab|full`
   picks up a new `test/lab_*.mjs` without an edit.
 
 ## 5. Debugging
@@ -162,20 +177,27 @@ it serves, and the page never guesses (FAKE1, `web-ui/src/shell/capability.ts`).
   builds (`ci/run.sh unit|full` runs it); writes `ccore/results/weight.md`.
 - `node ccore/tools/perf.mjs [--full]`: Lighthouse and our own marks on the production build of the
   C lab; writes `ccore/results/perf.md`.
-- `node ccore/tools/parity.mjs [--write]`: the C host against the committed Rust answers
-  (`ccore/golden/parity/`); writes `ccore/results/parity.md`. `--rust` needs the Rust tree
-  (section 8).
-- `ccore/bench/corpus.sh fetch|asan|run|ios|report`: the public IFC corpora (617 STEP files)
-  read by C (and by Rust and IfcOpenShell when present); `ccore/results/ifc_corpus.md`.
+- `node ccore/tools/parity.mjs [--write|--check]`: the C host against the committed Rust answers
+  (`ccore/golden/parity/`, dumped from a development build that reports 0.18.1); writes
+  `ccore/results/parity.md`, whose header says what the counts support and what they do not.
+  `--check` (in `ci/run.sh unit|full`) fails only on a crash, a 5xx or malformed JSON. `--rust`
+  needs the Rust tree (section 8).
+- `ccore/bench/corpus.sh fetch|asan|run|ios|report`: the public IFC corpora (617 STEP files; the
+  38 non-STEP files are refused and 173 git-lfs pointers are not fetched) read by C (and by Rust and
+  IfcOpenShell when present); `ccore/results/ifc_corpus.md`.
+- `node ccore/tools/status.mjs [--write|--check]`: the README's Status block from the reports above
+  (each number with its source and conditions). After a report changes, run `--write` and commit
+  README.md with it: `ci/run.sh unit|full` runs `--check` and fails on a stale block.
 - `ccore/tools/ifc_dump`: built by `build.sh tcc|native`, dumps what C reads or imports from any
   IFC file (`ccore/README.md`).
 
 ## 7. Common failures
 
-- **`ports.mjs: … share offset …` at load**, or `EADDRINUSE`: two rows of
-  `ccore/test/ports.mjs` share an offset (two tickets took the same free offset and both merged,
-  173b176: give one another offset), or another run holds the port (use `CCORE_PORT_BASE=auto`, or
-  another base 160 apart).
+- **`EADDRINUSE`** on a test port: a process outside the tests took the port between the bind test
+  and the start of the host (rare), or a fixed port (`dev.sh`, `tools/perf.mjs`) is taken by another
+  run: use `CCORE_PORT_BASE=auto`. A shared offset in `ccore/test/ports.mjs` no longer throws (ticket
+  TEST1): rows are hints, the locks decide. A stale lock (a test killed with SIGKILL) is taken over
+  when its pid is dead.
 - **`weight: … unclassified`** (the `weight` suite fails): a new C file has no feature in
   `FEATURES` of `ccore/tools/weight.mjs`. Add it to the right feature.
 - **The lab shows an old C core in wasm mode**, or the release archive holds a `web/ccore/`: a stale

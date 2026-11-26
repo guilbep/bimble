@@ -9,13 +9,13 @@ export const capability = "levels"; // FAKE1 capability; no `editable`: G2 lists
 // A7 Levels and grids (wireframes v01 LevelsGrids.html; ADR 0056). Ticket G2: the rows are the real
 // storeys (`storeys` query, elevation then id as the C core and Rust sort them; drawn highest first
 // as the reference) and every edit is a verb (level_add, level_set, level_remove, grid_add,
-// grid_axis_set, grid_remove: one undoable step each, the verb's error shown as it says it). A
+// grid_axis_set, grid_remove; SLAB1: grid_axis_add, grid_axis_remove: one undoable step each, the verb's error shown as it says it). A
 // read-only file (an IFC, a viewer file: `state.editable` false) lists its levels and grid axes
 // from `grid_axes` without edit controls. Altitude = the survey height of the level (`coordinates`).
-// Not in the C core: adding or removing one axis of a grid (no verb), a level's plan view link.
+// Not in the C core: a level's plan view link.
 import { computed, ref } from "vue";
 import {
-  coordinates, editableNow, gridAdd, gridAxes, gridAxisSet, gridRemove, grids, levelAdd, levelRemove, levelSet,
+  coordinates, editableNow, gridAdd, gridAxes, gridAxisAdd, gridAxisRemove, gridAxisSet, gridRemove, grids, levelAdd, levelRemove, levelSet,
   state, storeys, type GridAxisSummary, type LevelSummary,
 } from "../bimble";
 import { t } from "../i18n";
@@ -95,6 +95,34 @@ const move = (g: string, a: GridAxisSummary, e: Event) => {
   done(gridAxisSet(g, a.id, { start: s, end: en }));
 };
 const removeGrid = (id: string) => done(gridRemove(id));
+// ---- SLAB1: one axis more (after the selected axis, else the last: parallel, one step further,
+// the next tag of its kind) or less (the selected one; the verb keeps the last of a direction) ----
+const selAxis = ref<Record<string, string>>({});
+const nextTag = (tags: string[], like: string): string => {
+  const used = new Set(tags);
+  if (/^\d+$/.test(like)) { let n = Number(like) + 1; while (used.has(String(n))) n++; return String(n); }
+  if (/^[A-Z]$/.test(like)) { for (let c = like.charCodeAt(0) + 1; c <= 90; c++) if (!used.has(String.fromCharCode(c))) return String.fromCharCode(c); }
+  let k = 2; while (used.has(`${like}${k}`)) k++; return `${like}${k}`;
+};
+const addAxis = (g: { id: string; axes: GridAxisSummary[] }) => {
+  const from = g.axes.find((a) => a.id === selAxis.value[g.id]) ?? g.axes[g.axes.length - 1];
+  if (!from) return;
+  const k = along(from), i = k === "x" ? 0 : 1;
+  // The step: from the nearest parallel axis before it, else 6000 mm.
+  const par = k ? g.axes.filter((a) => a !== from && along(a) === k).map((a) => from.start_mm[i]! - a.start_mm[i]!).filter((d) => d > 0) : [];
+  const step = par.length ? Math.min(...par) : 6000;
+  const s: [number, number] = [from.start_mm[0], from.start_mm[1]], e: [number, number] = [from.end_mm[0], from.end_mm[1]];
+  if (k) { s[i] = s[i] + step; e[i] = e[i] + step; } else { s[1] += step; e[1] += step; }
+  done(gridAxisAdd(g.id, nextTag(g.axes.map((a) => a.tag), from.tag), s, e));
+};
+const removeAxis = (g: string) => {
+  const a = selAxis.value[g];
+  if (!a) return;
+  const err = gridAxisRemove(g, a);
+  if (!err) delete selAxis.value[g];
+  done(err);
+};
+// ---- end SLAB1 ----
 const gName = ref("Grid");
 const gx = ref("0 6000 12000");
 const gy = ref("0 5000");
@@ -173,7 +201,7 @@ const planLines = computed(() => {
             <table class="t" data-bb="grid-axes">
               <thead><tr><th>{{ t('levelsgrids.tag') }}</th><th>{{ t('levelsgrids.direction') }}</th><th class="r">{{ t('levelsgrids.position') }}</th></tr></thead>
               <tbody>
-                <tr v-for="a in g.axes" :key="a.id" :data-bb-axis="a.id">
+                <tr v-for="a in g.axes" :key="a.id" :data-bb-axis="a.id" :class="{ sel: selAxis[g.id] === a.id }" @click="selAxis[g.id] = a.id">
                   <td><input class="inp mono" style="width:70px" :value="a.tag" :aria-label="t('levelsgrids.tag')" data-bb="axis-tag" @change="retag(g.id, a, $event)"></td>
                   <td class="mono">{{ angle(a) }}</td>
                   <td class="r">
@@ -184,8 +212,8 @@ const planLines = computed(() => {
               </tbody>
             </table>
             <div class="addrow">
-              <button type="button" class="qb" disabled data-missing="verb: grid_axis_add (the C core has grid_axis_set only)">{{ t('levelsgrids.addAxis') }}</button>
-              <button type="button" class="qb" disabled data-missing="verb: grid_axis_remove (the C core has grid_axis_set only)">{{ t('levelsgrids.removeAxis') }}</button>
+              <button type="button" class="qb" data-bb="axis-add" :title="t('levelsgrids.addAxisTip')" @click="addAxis(g)">{{ t('levelsgrids.addAxis') }}</button>
+              <button type="button" class="qb" data-bb="axis-remove" :disabled="!selAxis[g.id]" :title="t('levelsgrids.removeAxisTip')" @click="removeAxis(g.id)">{{ t('levelsgrids.removeAxis') }}</button>
             </div>
           </div>
           <p v-if="!gridList.length" class="note" data-bb="grids-empty">{{ t('levelsgrids.noGrid') }}</p>
@@ -229,6 +257,8 @@ const planLines = computed(() => {
 </template>
 
 <style scoped>
+/* SLAB1: the chosen axis row (Remove an axis acts on it) */
+.t tr.sel td { background: var(--bb-sunk); }
 /* .page{...padding:24px 32px} + style="display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:28px" */
 .lg-page { flex: 1; background: var(--bb-sheet); overflow: auto; min-height: 0; padding: 24px 32px; display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 28px; height: 100%; box-sizing: border-box; }
 .col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }

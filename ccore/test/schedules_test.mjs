@@ -19,11 +19,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const GOLDEN = join(CCORE, "golden");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("schedules_test", 47357);
+const PORT = port("schedules_test");
 const TOKEN = "schedulestest-token";
 const base = `http://127.0.0.1:${PORT}`;
 let passed = 0, failed = 0;
@@ -57,7 +58,7 @@ const model = join(tmp, "frame.json");
 copyFileSync(join(GOLDEN, "frame.json"), model);
 copyFileSync(join(GOLDEN, "frame2.json"), join(tmp, "frame2.json"));
 copyFileSync(join(GOLDEN, "ifc/fixtures/triangulated.ifc"), join(tmp, "triangulated.ifc"));
-const host = spawn(BIN, [String(PORT), model], { env: { ...process.env, BIMBLE_TOKEN: TOKEN }, stdio: ["ignore", "ignore", "pipe"], detached: true });
+const host = spawn(BIN, [String(PORT), model], { env: hostEnv({ BIMBLE_TOKEN: TOKEN }), stdio: ["ignore", "ignore", "pipe"], detached: true });
 let log = "";
 host.stderr.on("data", (d) => (log += d));
 

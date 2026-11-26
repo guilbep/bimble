@@ -21,6 +21,7 @@ import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const GOLDEN = join(CCORE, "golden");
@@ -74,7 +75,7 @@ function masker() {
 // Runs `cmd args… mcp [flags…] <model>` with `input`; {status, out: [lines], err}.
 function serve(cmd, args, model, input, flags = []) {
   const r = spawnSync(cmd, [...args, "mcp", ...flags, model], {
-    input, env: { ...process.env, CCORE_SEED: "1" }, maxBuffer: 64 << 20, timeout: 60000,
+    input, env: hostEnv({ CCORE_SEED: "1" }), maxBuffer: 64 << 20, timeout: 60000,
   });
   const out = r.stdout ? r.stdout.toString("utf8") : "";
   const lines = out.split("\n");
@@ -190,9 +191,9 @@ try {
     const r = serve(BIN, [], bad, "");
     check("a model that does not load: exit 1, nothing on stdout", r.status === 1 && r.out.length === 0, `exit ${r.status}`);
     check("  and the reason on stderr", /bad\.json: parse/.test(r.err), r.err.trim());
-    const u = spawnSync(BIN, ["mcp"], { input: "" });
+    const u = spawnSync(BIN, ["mcp"], { input: "", env: hostEnv() });
     check("no model: usage, exit 2", u.status === 2 && /usage: bimble-ccore mcp/.test(u.stderr.toString()));
-    const f = spawnSync(BIN, ["mcp", "--write", fresh()], { input: "" });
+    const f = spawnSync(BIN, ["mcp", "--write", fresh()], { input: "", env: hostEnv() });
     check("an unknown flag: exit 2", f.status === 2 && /unknown flag --write/.test(f.stderr.toString()));
   }
 } finally {

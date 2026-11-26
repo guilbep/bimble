@@ -4,16 +4,49 @@
 // Cancel), an error with the session's words (Back). Each button is one `send`.
 import { computed } from "vue";
 import { t } from "../i18n";
-import { here, send, shown } from "./send";
+import { here, openStep, send, shown } from "./send";
 import { fileRequest } from "../files"; // FS1: the page's own file dialog has its own close
+import { recentFiles, retryConnection, state } from "../bimble"; // FIXUI: the connection notices
 
 const s = computed(() => here.value);
+// PERF2: the open's step (read, parse, scene, mesh), shown once a file is being opened
+const step = computed(() => (openStep.value && openStep.value.of === here.value ? openStep.value : null));
+// FIXUI: the file to reopen after a lost session: the recent entry of the same name (the host's settings).
+const reopen = computed(() => {
+  const v = here.value;
+  if (v.at !== "sessionLost" || v.file === null) return null;
+  return recentFiles().find((r) => r.name === v.file && r.exists) ?? null;
+});
+function retry(): void { if (send({ do: "retry" })) retryConnection(); }
 </script>
 
 <template>
-  <div v-if="(s.at === 'opening' && !fileRequest) || s.at === 'confirmClose' || s.at === 'error'" class="shell-backdrop">
-    <div v-if="s.at === 'opening'" class="bb-dialog shell-card" role="status" data-bb="shell-opening">
+  <div v-if="(s.at === 'opening' && !fileRequest) || s.at === 'confirmClose' || s.at === 'error' || s.at === 'disconnected' || s.at === 'sessionLost'" class="shell-backdrop">
+    <!-- FIXUI: the native host does not answer: blocking, with what is known, and Retry. -->
+    <div v-if="s.at === 'disconnected'" class="bb-dialog shell-card" role="alertdialog" :aria-label="t('shellstate.lost.title')" data-bb="shell-disconnected">
+      <h2 class="title">{{ t('shellstate.lost.title') }}</h2>
+      <p class="msg">{{ s.file === null ? t('shellstate.lost.noFile') : s.unsaved ? t('shellstate.lost.unsaved', { file: s.file }) : t('shellstate.lost.saved', { file: s.file }) }}</p>
+      <p class="msg step">{{ t('shellstate.lost.trying') }}</p>
+      <div class="acts">
+        <button v-if="shown('shell-disconnected-retry')" class="btn p" type="button" data-bb="shell-disconnected-retry" @click="retry">{{ t('shellstate.lost.retry') }}</button>
+      </div>
+    </div>
+    <div v-else-if="s.at === 'sessionLost'" class="bb-dialog shell-card" role="alertdialog" :aria-label="t('shellstate.gone.title')" data-bb="shell-session-lost">
+      <h2 class="title">{{ t('shellstate.gone.title') }}</h2>
+      <p class="msg">{{ s.file === null ? t('shellstate.gone.noFile') : s.unsaved ? t('shellstate.gone.unsaved', { file: s.file }) : t('shellstate.gone.saved', { file: s.file }) }}</p>
+      <p v-if="state.file !== null" class="msg step">{{ t('shellstate.gone.hostHas', { file: state.file }) }}</p>
+      <div class="acts">
+        <button v-if="shown('shell-lost-home')" class="btn s" type="button" data-bb="shell-lost-home" @click="send({ do: 'home' })">{{ t('shellstate.gone.home') }}</button>
+        <button v-if="shown('shell-lost-show')" class="btn s" type="button" data-bb="shell-lost-show" @click="send({ do: 'showView' })">{{ t('shellstate.gone.show', { file: state.file ?? '' }) }}</button>
+        <button v-if="reopen && shown('shell-lost-reopen')" class="btn p" type="button" data-bb="shell-lost-reopen" @click="send({ do: 'open', path: reopen.path })">{{ t('shellstate.gone.reopen', { file: reopen.name }) }}</button>
+      </div>
+    </div>
+    <div v-else-if="s.at === 'opening'" class="bb-dialog shell-card" role="status" data-bb="shell-opening">
       <p class="msg">{{ t(`shellstate.opening.${s.what}`) }}</p>
+      <template v-if="step"><!-- PERF2 -->
+        <progress class="bar" :value="step.n" :max="step.total" data-bb="shell-opening-progress" :aria-label="t('shellstate.step.of', { n: step.n, of: step.total })" />
+        <p class="msg step" data-bb="shell-opening-step">{{ t(`shellstate.step.${step.step}` as 'shellstate.step.read') }}</p>
+      </template>
       <div class="acts">
         <button v-if="shown('shell-opening-cancel')" class="btn s" type="button" data-bb="shell-opening-cancel" @click="send({ do: 'cancel' })">{{ t('shellstate.cancel') }}</button>
       </div>
@@ -42,5 +75,7 @@ const s = computed(() => here.value);
 .title { margin: 0; font-family: 'Sora', 'Source Sans 3', sans-serif; font-size: 20px; font-weight: 700; }
 .msg { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
 .mono { font-family: 'DM Mono', ui-monospace, Menlo, monospace; font-size: 13px; }
+.bar { width: 100%; height: 6px; accent-color: var(--bb-ink); }
+.step { font-size: 13px; color: var(--bb-stone); }
 .acts { display: flex; gap: 10px; justify-content: flex-end; }
 </style>

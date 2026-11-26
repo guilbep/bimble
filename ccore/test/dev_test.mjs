@@ -1,5 +1,5 @@
 // The dev loop (ccore/dev.sh) end to end: node ccore/test/dev_test.mjs
-// Starts dev.sh on test ports (host 47411, Vite 5199), waits for the lab URL, checks the host
+// Starts dev.sh on test ports (host <port>, Vite <port>), waits for the lab URL, checks the host
 // answers; then edits session/calls.c (a trailing comment, then without it) five times and checks
 // each save gives one "rebuilt in" line and a host with a new epoch; a syntax error prints the
 // compiler output while the old host still answers; the revert rebuilds. Every save is waited for
@@ -14,6 +14,7 @@ import http from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port, vitePort } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 /** Write a source file atomically (temp + rename): a background compile reading the old file must
  *  never see it truncated (clang mmaps sources; an in-place rewrite gave it SIGBUS). */
@@ -24,8 +25,8 @@ function writeAtomic(p, data) {
 }
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = port("dev_test", 47411);
-const VITE = vitePort("dev_test", 5199);
+const PORT = port("dev_test");
+const VITE = vitePort("dev_test");
 const EDITED = join(CCORE, "session/calls.c");
 const ORIGINAL = readFileSync(EDITED);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -83,7 +84,7 @@ function descendants(root) {
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 const dev = spawn(join(CCORE, "dev.sh"), [], {
-  env: { ...process.env, CCORE_DEV_PORT: String(PORT), CCORE_DEV_VITE: String(VITE) },
+  env: hostEnv({ CCORE_DEV_PORT: String(PORT), CCORE_DEV_VITE: String(VITE) }),
   stdio: ["ignore", "pipe", "pipe"], detached: true,
 });
 let out = "";
@@ -190,9 +191,15 @@ try {
   check("the host was among them", tree.some((t) => new RegExp(`bimble-ccore (--session )?(--warm )?${PORT}`).test(t.cmd)) && tree.some((t) => /vite/.test(t.cmd)));
   // By listening port, not by command line: a pgrep pattern also matched other shells that
   // merely mention it (false positive), and missed the host once it took --session.
-  let ls = "";
-  try { ls = execFileSync("ss", ["-ltnpH", `( sport = :${PORT} or sport = :${VITE} )`], { encoding: "utf8" }); } catch {}
-  check(`nothing listens on ${PORT} or ${VITE}`, ls.trim() === "", ls.trim());
+  // TEST1: dev.sh has exited, but under load its children may still be closing their sockets (one
+  // FAIL at load 25, 200 ms after the exit): the ports must be free within 5 s, and the time it took
+  // is printed. (A test of another run on these ports is ruled out: ports.mjs locks them.)
+  const listening = () => { try { return execFileSync("ss", ["-ltnpH", `( sport = :${PORT} or sport = :${VITE} )`], { encoding: "utf8" }).trim(); } catch { return ""; } };
+  const tl = Date.now();
+  let ls = listening();
+  while (ls !== "" && Date.now() - tl < 5000) { await sleep(50); ls = listening(); }
+  console.log(`ports ${PORT}, ${VITE} free ${Date.now() - tl} ms after the check began`);
+  check(`nothing listens on ${PORT} or ${VITE} (within 5 s of dev.sh's exit)`, ls === "", ls);
   for (const t of left) try { process.kill(t.pid, "SIGKILL"); } catch {}
   try { process.kill(-dev.pid, "SIGKILL"); } catch {}
   check("session/calls.c restored byte for byte", readFileSync(EDITED).equals(ORIGINAL));

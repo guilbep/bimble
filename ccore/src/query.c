@@ -7,6 +7,7 @@
  * last of duplicate keys wins), then derives the argument struct from it. Errors therefore
  * come in sorted key order; the texts below are serde's and serde_json's. */
 #include "query.h"
+#include "verbs_materials.h" /* MAT1 */
 #pragma STDC FP_CONTRACT OFF /* a*b+c rounds twice, as in Rust */
 #include "grid.h"
 #include "georef.h"
@@ -891,13 +892,15 @@ int cc_query(const cc_model *m, const char *name, const char *args_json, size_t 
     }
     /* "grids" (ADR 0056) is a C addition: past Rust's eight, so the unknown query text stays Rust's. */
     /* "north" and "coordinates" (ADR 0045) likewise. */
+    /* MAT1 (verbs_materials.h): "materials_full" (every field) and "material_library". */
     enum { Q_STOREYS, Q_MATERIALS, Q_ELEMENTS, Q_ELEMENT, Q_PROJECT, Q_VIEWS, Q_SHEETS, Q_SCHEDULES, Q_GRIDS, Q_NORTH,
-           Q_COORDINATES } q;
-    static const char *const NAMES[] = {"storeys", "materials", "elements", "element", "project", "views",
-                                        "sheets",  "schedules", "grids",    "north",   "coordinates"};
-    for (q = 0; q < 11 && (strlen(name) != strlen(NAMES[q]) || memcmp(name, NAMES[q], strlen(name)) != 0); q++) {
+           Q_COORDINATES, Q_MATERIALS_FULL, Q_MATERIAL_LIBRARY, Q_COUNT } q;
+    static const char *const NAMES[] = {"storeys", "materials", "elements",       "element",         "project",
+                                        "views",   "sheets",    "schedules",      "grids",           "north",
+                                        "coordinates", "materials_full", "material_library"};
+    for (q = 0; q < Q_COUNT && (strlen(name) != strlen(NAMES[q]) || memcmp(name, NAMES[q], strlen(name)) != 0); q++) {
     }
-    if (q == 11) {
+    if (q == Q_COUNT) {
         buf_puts(out, "unknown query ");
         cc_buf_debug_str(out, name, strlen(name));
         buf_puts(out, "; known: ");
@@ -962,6 +965,8 @@ int cc_query(const cc_model *m, const char *name, const char *args_json, size_t 
     case Q_VIEWS: q_views(m, &w); break;
     case Q_SHEETS: q_sheets(m, &w); break;
     case Q_GRIDS: q_grids(m, &w); break;
+    case Q_MATERIALS_FULL: oom = cc_materials_full_json(m, &w) != 0; break; /* MAT1 */
+    case Q_MATERIAL_LIBRARY: cc_material_library_json(&w); break;     /* MAT1 */
     default: q_schedules(m, &w); break;
     }
     if (oom) goto done;

@@ -7,6 +7,11 @@
 //     element (bounds of GET /mesh plus ClipBox::around's margin, f32), printed as serde prints f32;
 //   the box tool (op tool): box_set, box_press/box_move/box_release/box_cancel (a face follows the
 //     pointer ray, 10 mm minimum; the session's box changes only on release);
+//   ISS72 (GitHub issue #72, C additions): show_all (everything shown: clear_temporary + show_all_in_view,
+//     one undo step when the view stored something) and show_previous (the state before the last
+//     visibility change; pressed twice: back and forth), their enable rules, a stack per view,
+//     cleared by another model, the stored part undoable; on the code before ISS72 both answer
+//     400 "unknown action" and every ISS72 check fails;
 //   session state only: rev and history never change, but for the "in view" calls: since SEC1 they
 //     store what the view hides in the view, one history step each, as Rust's save_visibility and
 //     show_all_in_view (viewing.rs:452-500: store_view, a SetView / AddView); a new model resets it all.
@@ -16,15 +21,16 @@
 // bimble-render ClipBox::around (the box), section.rs (the drag, MIN_SIZE).
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills what it starts.
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("visibility_test", 47394);
+const PORT = port("visibility_test");
 const TOKEN = "vistest-token";
 const base = `http://127.0.0.1:${PORT}`;
 let passed = 0, failed = 0;
@@ -72,13 +78,30 @@ function around(boxes) {
   const m = [0, 1, 2].map((k) => f(1 + f(f(hi[k] - lo[k]) * f(1e-5))));
   return { min: [0, 1, 2].map((k) => f(lo[k] - m[k])), max: [0, 1, 2].map((k) => f(hi[k] + m[k])) };
 }
-/** Per element of GET /mesh (BMSH, session/mesh.c): its id and its f32 box. */
-async function meshBoxes() {
-  const ab = await (await fetch(`${base}/mesh?t=${TOKEN}`)).arrayBuffer();
-  const dv = new DataView(ab), u = (o) => dv.getUint32(o, true);
-  const nE = u(12), nV = u(16), bytes = new Uint8Array(ab);
+/** ISS71: the bounds of f32 boxes grown by `m` on every side (f32), as Box to selection. */
+function grown(boxes, m = 1000) {
+  const f = Math.fround, lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (const b of boxes) for (let k = 0; k < 3; k++) lo[k] = Math.min(lo[k], b[k]), hi[k] = Math.max(hi[k], b[3 + k]);
+  return { min: lo.map((x) => f(x - m)), max: hi.map((x) => f(x + m)) };
+}
+/** Per element of GET /mesh (BMSH, session/mesh.c): its id and its f32 box. ISS71: `at`, the
+ *  BMSH's byte offset (a link of the LNKS trailer); `links`: the trailer's BMSH offsets. */
+async function meshBoxes(at = 0, buf = null) {
+  const ab = buf ?? await (await fetch(`${base}/mesh?t=${TOKEN}`)).arrayBuffer();
+  const dv = new DataView(ab, at), u = (o) => dv.getUint32(o, true);
+  const nE = u(12), nV = u(16), bytes = new Uint8Array(ab, at);
   const origin = [dv.getFloat64(28, true), dv.getFloat64(36, true), dv.getFloat64(44, true)];
-  const pos = new Float32Array(ab, 52 + 48 * nE, 3 * nV), out = new Map();
+  const pos = new Float32Array(ab, at + 52 + 48 * nE, 3 * nV), out = new Map();
+  const size = 52 + 48 * nE + 12 * nV + 4 * u(20) + 32 * u(24), links = [];
+  if (at === 0 && ab.byteLength > size) { // the LNKS trailer (session/links.h)
+    let o = size + 12;
+    for (let i = 0; i < u(size + 8); i++) {
+      const L = new DataView(ab).getUint32(o, true);
+      o += 4 + L + ((4 - (L % 4)) % 4) + 8;
+      links.push(o);
+      o += new DataView(ab).getUint32(o - 4, true);
+    }
+  }
   for (let e = 0, o = 52; e < nE; e++, o += 48) {
     const id = String.fromCharCode(...bytes.subarray(o, o + 22)), v0 = u(o + 24), nv = u(o + 28);
     const b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
@@ -86,13 +109,13 @@ async function meshBoxes() {
       for (let k = 0; k < 3; k++) b[k] = Math.min(b[k], pos[3 * v + k]), b[3 + k] = Math.max(b[3 + k], pos[3 * v + k]);
     out.set(id, b);
   }
-  return { origin, boxes: out };
+  return { origin, boxes: out, links, ab };
 }
 
 const tmp = mkdtempSync(join(tmpdir(), "ccore-vis-"));
 const model = join(tmp, "frame.bimble");
 copyFileSync(join(CCORE, "golden/frame.json"), model);
-const host = spawn(BIN, [String(PORT), model], { env: { ...process.env, BIMBLE_TOKEN: TOKEN }, stdio: ["ignore", "ignore", "pipe"], detached: true });
+const host = spawn(BIN, [String(PORT), model], { env: hostEnv({ BIMBLE_TOKEN: TOKEN }), stdio: ["ignore", "ignore", "pipe"], detached: true });
 let log = "";
 host.stderr.on("data", (d) => (log += d));
 try {
@@ -115,8 +138,11 @@ try {
   // ---- nothing hidden, no box ----
   await same("loaded", vis({}));
   check("loaded: view signature [0,0,0,0,0,0,0,1]", (await view()) === "[0,0,0,0,0,0,0,1]", await view());
-  for (const n of ["hide_now", "isolate_now", "hide_in_view", "isolate_in_view", "unhide", "clear_temporary", "show_all_in_view", "box_to_selection"])
+  for (const n of ["hide_now", "isolate_now", "hide_in_view", "isolate_in_view", "unhide", "clear_temporary", "show_all_in_view",
+    "show_all", "show_previous" /* ISS72 */])
     check(`no selection, nothing hidden: ${n} disabled`, !(await enabled(n)));
+  // ISS71 (issue #71): Box to selection turns the box on: enabled with a model, the box off (Rust: on only).
+  check("box_to_selection enabled with a model, the box off (ISS71)", await enabled("box_to_selection"));
   check("section_box and reveal_hidden enabled with a model", (await enabled("section_box")) && (await enabled("reveal_hidden")));
   const off = await act("hide_now");
   check("hide_now without a selection -> 400 not enabled", off.status === 400 && off.text === 'action "hide_now" is not enabled now', off.text);
@@ -190,12 +216,23 @@ try {
     (await view()) === "[1,0,0,0,0,0,0,1]" && (await pressed("section_box")) && (await enabled("box_to_selection")), await view());
   await call("select", "-", JSON.stringify([d]));
   await act("box_to_selection");
+  // ISS71: the selected element's bounds grown by 1000 mm on every side (Rust: ClipBox::around's 1 mm).
+  const sel1 = grown([boxes.get(d)]);
+  await same("box_to_selection: the selected element's bounds ± 1000 mm (ISS71)", vis({ on: true, box: sel1 }));
+  await call("select", "-", JSON.stringify([c, d]));
+  await act("box_to_selection");
+  const sel2 = grown([boxes.get(c), boxes.get(d)]);
+  await same("box_to_selection of two elements: their bounds ± 1000 mm (ISS71)", vis({ on: true, box: sel2 }));
+  await act("section_box");
+  check("box_to_selection with the box off -> 200 (ISS71)", (await act("box_to_selection")).status === 200);
+  await same("box_to_selection turns the box on (ISS71)", vis({ on: true, box: sel2 }));
+  await call("select", "-", JSON.stringify([d]));
+  await act("box_to_selection");
+  await act("section_box");
+  await same("section_box off: the box is kept", vis({ on: false, box: sel1 }));
+  await act("section_box");
+  await same("section_box on again: not refitted", vis({ on: true, box: sel1 }));
   const one = around([boxes.get(d)]);
-  await same("box_to_selection: around the selected element", vis({ on: true, box: one }));
-  await act("section_box");
-  await same("section_box off: the box is kept", vis({ on: false, box: one }));
-  await act("section_box");
-  await same("section_box on again: not refitted", vis({ on: true, box: one }));
   // Hidden elements are left out of the fit: d isolated (the selection then cleared), fit to what shows.
   await act("clear_temporary");
   await call("select", "-", JSON.stringify([d]));
@@ -242,6 +279,88 @@ try {
   check("rev unchanged by every other visibility call", (await change()).rev === rev1, `${rev1} -> ${(await change()).rev}`);
   check("no other history step", (await q("history")) === hist1, await q("history"));
 
+  // ---- ISS72: show all, show previous ----
+  const v3dId = JSON.parse(await q("open_views")).views[0].id;
+  const ok = async (name) => { const r = await act(name); check(`${name} -> 200`, r.status === 200, `${r.status} ${r.text}`); };
+  const undoN = async () => JSON.parse(await q("history")).undo.length;
+  await call("select", "-", "[]");
+  const box9 = JSON.parse(await q("visibility")).section_box.box; // the box (off) the drag left: not part of a visibility state
+  const visB = (o) => vis({ ...o, box: { min: box9.min, max: box9.max } });
+  check("ISS72: before: nothing hidden, show_all disabled", (await q("visibility")).includes('"hidden_now":{"count":0') && !(await enabled("show_all")));
+  const acts = JSON.parse(await q("actions")).slice(54, 56); // ISS71's box_north_project, box_north_true follow
+  check("ISS72: query actions lists show_all, show_previous after Rust's 54 (View, no shortcut, never pressed)",
+    JSON.stringify(acts.map((x) => [x.name, x.label, x.tab, x.shortcut, x.pressed])) ===
+    JSON.stringify([["show_all", "Show all", "View", null, false], ["show_previous", "Show previous", "View", null, false]]), JSON.stringify(acts));
+  // hide A -> isolate B -> previous = A hidden only -> previous = B isolated -> show all = everything
+  await call("select", "-", JSON.stringify([a]));
+  await ok("hide_now");
+  check("ISS72: something hidden for now: show_all enabled", await enabled("show_all"));
+  await call("select", "-", JSON.stringify([b]));
+  await ok("isolate_now");
+  const u0 = await undoN();
+  await ok("show_previous");
+  await same("ISS72: hide a, isolate b, show_previous: a hidden only", visB({ hiddenNow: [a] }));
+  await ok("show_previous");
+  await same("ISS72: show_previous again: b isolated (back and forth)", visB({ isolatedNow: [b] }));
+  await ok("show_all");
+  await same("ISS72: show_all: everything shown", visB({}));
+  check("ISS72: show_all disabled now, show_previous enabled", !(await enabled("show_all")) && (await enabled("show_previous")));
+  check("ISS72: the for-now changes made no history step", (await undoN()) === u0, `${u0} -> ${await undoN()}`);
+  await ok("show_previous");
+  await same("ISS72: show_previous after show_all: b isolated again", visB({ isolatedNow: [b] }));
+  await ok("show_all");
+  // In the view and for now at once: show_all clears both, one undo step; show_previous brings both back.
+  await call("select", "-", JSON.stringify([c]));
+  await ok("hide_in_view");
+  await call("select", "-", JSON.stringify([d]));
+  await ok("hide_now");
+  await same("ISS72: c hidden in the view, d for now", visB({ hiddenInView: [c], hiddenNow: [d] }));
+  const u1 = await undoN();
+  await ok("show_all");
+  await same("ISS72: show_all clears the view's hides and the temporary ones", visB({}));
+  check("ISS72: show_all: one undo step (stored in the view)", (await undoN()) === u1 + 1 && JSON.parse(await q("history")).undo[0] === "change the view 3D",
+    `${u1} -> ${await undoN()}`);
+  await ok("show_previous");
+  await same("ISS72: show_previous: c in the view and d for now again", visB({ hiddenInView: [c], hiddenNow: [d] }));
+  check("ISS72: show_previous: the stored part is one more undo step", (await undoN()) === u1 + 2, `${u1} -> ${await undoN()}`);
+  // Undo takes back the stored part of show_previous (the temporary part is session state).
+  await call("undo");
+  await same("ISS72: undo of show_previous's step: the view's hides as show_all left them", visB({ hiddenNow: [d] }));
+  await call("redo");
+  await same("ISS72: redo: c hidden in the view again", visB({ hiddenInView: [c], hiddenNow: [d] }));
+  check("ISS72: in view only: show_all enabled", (await act("clear_temporary")).status === 200 && (await enabled("show_all")));
+  await ok("show_all");
+  await same("ISS72: show_all with the view's hides only", visB({}));
+  // A stack per view: a plan has its own (empty at first); the 3D view's is kept.
+  const ov = JSON.parse(await q("open_views")), v3d = ov.views[0].id, plan = ov.views[2].id;
+  const tab = (op, id) => call("tab", "-", JSON.stringify({ op, tab: { type: "view", id } }));
+  check("ISS72: open a plan -> 200", (await tab("open", plan)).status === 200);
+  check("ISS72: the plan's stack is empty: show_previous disabled there", !(await enabled("show_previous")));
+  await call("select", "-", JSON.stringify([a]));
+  await ok("hide_now");
+  await ok("show_previous");
+  await same("ISS72: in the plan, show_previous: back to nothing hidden", visB({}));
+  check("ISS72: back to the 3D view -> 200", (await tab("activate", v3d)).status === 200);
+  check("ISS72: the 3D view's stack is still there: show_previous enabled", await enabled("show_previous"));
+  await ok("show_previous");
+  await same("ISS72: the 3D view's previous state (c hidden in the view)", visB({ hiddenInView: [c] }));
+  await ok("show_all");
+  // ---- ISS71: box to selection of a linked model's element (lib.rs:1499: moved by its origin - ours) ----
+  const lk = await call("action", "link_model", JSON.stringify({ path: join(CCORE, "golden/ifc/fixtures/mapped_item.ifc") }));
+  check("ISS71: link_model mapped_item.ifc -> 200", lk.status === 200, lk.text);
+  const m2 = await meshBoxes();
+  const L = await meshBoxes(m2.links[0], m2.ab), lid = [...L.boxes.keys()][0], f = Math.fround;
+  const lOff = [0, 1, 2].map((k) => f(L.origin[k] - origin[k]));
+  const lb = L.boxes.get(lid).map((x, i) => f(x + lOff[i % 3]));
+  const ls = await call("select", "-", JSON.stringify({ link: "mapped_item.ifc", ids: [lid] }));
+  check("ISS71: select the linked element -> 200", ls.status === 200, ls.text);
+  await act("box_to_selection");
+  const gotL = JSON.parse(await q("visibility")).section_box, wantL = grown([lb]);
+  check("ISS71: box_to_selection of a linked element: its bounds (moved) ± 1000 mm, on",
+    gotL.on && JSON.stringify(gotL.box) === JSON.stringify({ max: wantL.max, min: wantL.min, yaw: 0 }), `${JSON.stringify(gotL)} want ${JSON.stringify(wantL)}`);
+  await call("action", "manage_links", JSON.stringify({ op: "remove", name: "mapped_item.ifc" }));
+  await act("section_box"); // off again, as before this block
+
   // ---- a new model: all reset ----
   await call("select", "-", JSON.stringify([a]));
   await act("hide_in_view");
@@ -252,11 +371,81 @@ try {
   check("new model: nothing hidden, no box (lib.rs:1657-1676)",
     vNew.hidden_in_view.count === 0 && vNew.section_box.on === false && vNew.section_box.box === null, JSON.stringify(vNew));
   check("new model: view [0,0,0,0,0,0,0,1]", (await view()) === "[0,0,0,0,0,0,0,1]", await view());
+  check("ISS72: new model: the stacks are cleared (show_previous disabled; its 3D view has the same id)",
+    !(await enabled("show_previous")) && !(await enabled("show_all")) && JSON.parse(await q("open_views")).views[0].id === v3dId);
   const closed = await call("action", "close", JSON.stringify({ discard: true }));
   check("close (discarding the new model) -> 200", closed.status === 200, closed.text);
   const none = await call("tool", "box_press", JSON.stringify({ ray: ray(top) }));
   check("no model: box tool -> 400 no model open", none.status === 400 && none.text === "no model open", none.text);
   check("no model: query visibility origin null", JSON.parse(await q("visibility")).section_box.origin_mm === null);
+
+  // ---- ISS71: the box's orientation (project north / true north) on a model whose map turns 30° ----
+  check("ISS71: frame.json (no georeference): the orientation choice disabled",
+    !(await enabled("box_north_project")) && !(await enabled("box_north_true")));
+  const geoModel = join(tmp, "geo30.bimble"), fj = JSON.parse(readFileSync(join(CCORE, "golden/frame.json"), "utf8"));
+  fj.model.georef = { map_rotation_deg: -30 }; // plan_turn(true) = +30° (georef.h: the map's opposite)
+  writeFileSync(geoModel, JSON.stringify(fj));
+  const opened = await call("action", "open", JSON.stringify({ path: geoModel, discard: true }));
+  check("ISS71: open the model turned 30° -> 200", opened.status === 200, opened.text);
+  const north = JSON.parse(await q("north"));
+  const yaw30 = Math.fround(Math.PI / 6);
+  check("ISS71: query north: plan_turn_true 30°, plan_turn_project 0", Math.abs(north.plan_turn_true - Math.PI / 6) < 1e-12 && north.plan_turn_project === 0, JSON.stringify(north));
+  check("ISS71: the orientation choice enabled, project north pressed (the default)",
+    (await enabled("box_north_project")) && (await enabled("box_north_true")) && (await pressed("box_north_project")) && !(await pressed("box_north_true")));
+  const G = await meshBoxes(), gids = [...G.boxes.keys()].sort();
+  // Inside a box (frame turned by yaw: the point turned by -yaw), within a tolerance.
+  const inBox = (bx, p, tol = 0.5) => {
+    const c = Math.cos(bx.yaw), s2 = Math.sin(bx.yaw), q2 = [c * p[0] + s2 * p[1], -s2 * p[0] + c * p[1], p[2]];
+    return [0, 1, 2].every((k) => q2[k] >= bx.min[k] - tol && q2[k] <= bx.max[k] + tol);
+  };
+  const corners = (b) => Array.from({ length: 8 }, (_, i) => [i & 1 ? b[3] : b[0], i & 2 ? b[4] : b[1], i & 4 ? b[5] : b[2]]);
+  const holds = (bx, ids2) => ids2.every((id) => corners(G.boxes.get(id)).every((p) => inBox(bx, p)));
+  const [g1, g2] = gids;
+  await call("select", "-", JSON.stringify([g1]));
+  await act("box_to_selection");
+  const bP = JSON.parse(await q("visibility")).section_box.box;
+  check("ISS71: project north: yaw 0, the selected element's bounds ± 1000 mm", bP.yaw === 0 &&
+    JSON.stringify(bP) === JSON.stringify({ max: grown([G.boxes.get(g1)]).max, min: grown([G.boxes.get(g1)]).min, yaw: 0 }), JSON.stringify(bP));
+  check("ISS71: box_north_true -> 200", (await act("box_north_true")).status === 200);
+  const bT = JSON.parse(await q("visibility")).section_box.box;
+  check("ISS71: true north: yaw = the map's 30° (f32), pressed", Math.fround(bT.yaw) === yaw30 && (await pressed("box_north_true")) && !(await pressed("box_north_project")), JSON.stringify(bT));
+  check("ISS71: true north: the box still holds the selected element (refit around it in the turned frame)", holds(bT, [g1]), JSON.stringify(bT));
+  // In the turned frame, the element's turned corners touch the box less 1000 mm on some side.
+  const gap = Math.min(...[0, 1].map((k) => Math.min(...corners(G.boxes.get(g1)).map((p) => {
+    const c = Math.cos(bT.yaw), s2 = Math.sin(bT.yaw), q2 = [c * p[0] + s2 * p[1], -s2 * p[0] + c * p[1]];
+    return q2[k] - bT.min[k];
+  }))));
+  check("ISS71: true north with a selection: 1000 mm margin in the turned frame", Math.abs(gap - 1000) < 1, String(gap));
+  await act("box_north_project");
+  const bP2 = JSON.parse(await q("visibility")).section_box.box;
+  check("ISS71: toggling the orientation twice gives the same box", JSON.stringify(bP2) === JSON.stringify(bP), `${JSON.stringify(bP2)} vs ${JSON.stringify(bP)}`);
+  // Without a selection: refit around the box's corners (it keeps what it held), and back.
+  await call("select", "-", "[]");
+  await act("box_north_true");
+  const bC = JSON.parse(await q("visibility")).section_box.box;
+  const all8 = gids.filter((id) => holds(bP, [id]));
+  check("ISS71: no selection, true north: the turned box holds every element the box held", Math.fround(bC.yaw) === yaw30 && all8.length > 0 && holds(bC, all8), `${all8.length} held, ${JSON.stringify(bC)}`);
+  await act("box_north_project");
+  check("ISS71: and back: the same box", JSON.stringify(JSON.parse(await q("visibility")).section_box.box) === JSON.stringify(bP));
+  // The face drag in a turned box: rays in scene coordinates, the face moves along the box's axis.
+  await act("box_north_true");
+  const bt = JSON.parse(await q("visibility")).section_box.box, cy0 = Math.cos(bt.yaw), sy0 = Math.sin(bt.yaw);
+  const toScene = (p) => [cy0 * p[0] - sy0 * p[1], sy0 * p[0] + cy0 * p[1], p[2]];
+  const fc = [(bt.min[0] + bt.max[0]) / 2, (bt.min[1] + bt.max[1]) / 2, bt.max[2]]; // the top face's centre (frame)
+  const eyeT = toScene([fc[0] - 9000, fc[1], fc[2] + 6000]);
+  const rayT = (p) => { const P = toScene(p), dd = P.map((v, k) => v - eyeT[k]), l = Math.hypot(...dd); return [...eyeT, ...dd.map((v) => v / l)]; };
+  const pr = JSON.parse((await call("tool", "box_press", JSON.stringify({ ray: rayT(fc), ray_tol: rayT([fc[0], fc[1] + 150, fc[2]]) }))).text);
+  check("ISS71: a turned box: box_press on the top face's centre holds face 5", pr.active === true && pr.face === 5, JSON.stringify(pr));
+  const rl = JSON.parse((await call("tool", "box_release", JSON.stringify({ ray: rayT([fc[0], fc[1], fc[2] - 500]) }))).text);
+  check("ISS71: a turned box: the release moves the top 500 mm down, yaw kept", Math.abs(rl.box.max[2] - (bt.max[2] - 500)) < 0.5 && rl.box.yaw === bt.yaw, JSON.stringify(rl.box));
+  const pr2 = JSON.parse((await call("tool", "box_press", JSON.stringify({ ray: rayT([fc[0], bt.max[1], (bt.min[2] + rl.box.max[2]) / 2]), ray_tol: rayT([fc[0], bt.max[1] + 150, (bt.min[2] + rl.box.max[2]) / 2]) }))).text);
+  check("ISS71: a turned box: box_press on the +y face's centre (turned) holds face 3", pr2.active === true && pr2.face === 3, JSON.stringify(pr2));
+  await call("tool", "box_cancel", "");
+  // A box moved by hand is not the one the orientation made: back to project north refits around its corners.
+  await act("box_north_project");
+  const bH = JSON.parse(await q("visibility")).section_box.box;
+  check("ISS71: after a drag, project north refits around the dragged box's corners (yaw 0, holds them)", bH.yaw === 0 &&
+    corners([...rl.box.min, ...rl.box.max]).every((p) => inBox(bH, [cy0 * p[0] - sy0 * p[1], sy0 * p[0] + cy0 * p[1], p[2]])), JSON.stringify(bH));
 } catch (e) {
   check("no exception", false, e.stack ?? String(e));
 } finally {

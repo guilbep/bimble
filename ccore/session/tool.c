@@ -139,6 +139,11 @@ static int crossing(const double a0[2], const double a1[2], const double b0[2], 
 }
 
 int cc_snap_targets_build(cc_snap_targets *t, const cc_scene *sc, double level, double next) {
+    return cc_snap_targets_build_grid(t, sc, level, next, NULL, 0);
+}
+
+int cc_snap_targets_build_grid(cc_snap_targets *t, const cc_scene *sc, double level, double next, const double (*grid)[4],
+                               size_t ngrid) {
     cc_snap_targets_free(t);
     const double *o = sc->origin;
     double *cx = NULL, *cy = NULL;
@@ -209,10 +214,16 @@ int cc_snap_targets_build(cc_snap_targets *t, const cc_scene *sc, double level, 
             if (!u || pair_qcmp(&edges[u - 1], &edges[i])) edges[u++] = edges[i];
         nedges = u;
     }
-    /* No grid in the C model: axes through the columns, across what is on the storey. */
+    /* SLAB1 (snap.rs:76-82): the model's grid axes (longer than 1 mm); without one, axes through
+     * the columns, across what is on the storey (snap.rs:127). */
     double(*axes)[4] = NULL;
     size_t naxes = 0;
-    if (ncent) {
+    for (size_t i = 0; i < ngrid; i++) {
+        if (!(cc_hypot(grid[i][2] - grid[i][0], grid[i][3] - grid[i][1]) > 1.0)) continue;
+        if (!axes && !(axes = malloc(ngrid * sizeof *axes))) goto end;
+        memcpy(axes[naxes++], grid[i], sizeof *axes);
+    }
+    if (!naxes && ncent) {
         double *xs = malloc(2 * ncent * sizeof *xs);
         axes = malloc(2 * ncent * sizeof *axes);
         if (!xs || !axes) {

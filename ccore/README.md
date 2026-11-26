@@ -75,11 +75,12 @@ the last line gives the totals. Every suite runs, even after a failure, and any 
 check, a crash, a sanitizer report, a compile error) makes the exit code 1. On the dev machine: all
 26 suites in 12 s with tcc, 29 s with ASan+UBSan (`results/ci.md`).
 
-The network tests (`test/*.mjs`, `bench/*.mjs`) take their ports from `test/ports.mjs`, one table
-with a fixed default and a unique offset per port. `CCORE_PORT_BASE` unset: the defaults (host
-473xx, Vite 51xx/52xx). `CCORE_PORT_BASE=48000`: base + offset, so worktrees that run the same test at
-once do not collide (give each its own base, 160 ports apart). `CCORE_PORT_BASE=auto`: a free base from
-a hash of the worktree path. `test/host.sh` passes the variable through.
+The network tests (`test/*.mjs`, `bench/*.mjs`) take their ports from `test/ports.mjs` by name
+(`port("lab_gl")`): no table row (ticket TEST1). Every port is locked for the life of the process (a
+file per port under `<tmpdir>/bimble-ports/`) and bind-tested, so tests running at once never share
+one. `CCORE_PORT_BASE=auto` (ci/run.sh's default): a free port in 20000..31999. Unset: a stable port
+per name (a hash), the next free one if taken. `CCORE_PORT_BASE=48000`: base + a hashed offset in
+0..159. Never 47400 or 5173 (`dev.sh`). `test/host.sh` passes the variable through.
 
 CI: `ccore/ci/run.sh fast` is the gate every ticket passes (build.sh tcc, test/run.sh with tcc and
 with clang ASan+UBSan, build.sh wasm, wasm_run, host.sh); `ccore/ci/run.sh full` adds the Chromium
@@ -127,6 +128,18 @@ of any path but `/change`, `/frame` and `/mesh` is a file of that list or 404, w
 request path is matched against the list, never joined to a file path. The calls, `/change` and
 `/mesh` keep the token; the Host and Origin checks hold for every request, and the host's own
 origin is allowed beside the others. The old form (`bimble-ccore <port> [model]`) serves no files.
+
+The calls that write a file (the token is their only gate; `host/fs.h` has the list with the
+code): at a path the caller gives, `action save_as`, `export_ifc4`, `export_ifc2x3` and
+`share_for_viewing` with `{path}`, and `query sheet_pdf`, `view_pdf`, `sheets_pdf` with `{path}`;
+next to the open model, `action save`, the exports and `share_for_viewing` without a path
+(`<stem>.ifc`, `<stem>.bimbleview`; refused for a new model, never over the open file), `action
+commit`, `branch_create`, `branch_switch` and `merge` (the folder `<model>.bimble-history/`, and the
+model file on a switch or merge), and with `--session` the session file `<model>.ccore-session`
+(a file holding changes not saved that the host cannot restore is renamed
+`<session>.orphan-<time>`, never overwritten: `query state` `session_set_aside`); in the host's
+own folders, `POST /stage` and the settings (`BIMBLE_CONFIG_DIR`). `link_model`, `link_pdf`,
+`link_dxf` and `manage_links {op: "locate", path}` only read the path given.
 
 `ccore/VERSION` is the archive's version (`--version`); the IFC writer's `CC_IFC_VERSION` and the
 `version` of `query state` stay as they are (the goldens hold them). GitHub (`ccore.yml`): job

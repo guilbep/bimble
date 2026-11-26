@@ -1,0 +1,18 @@
+prefer neither: 3 conflict(s)
+conflict element IfcBeam ours: generator.width [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+conflict element IfcBeam ours: name [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+conflict element IfcBeam ours: properties [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+valid
+model fields_and_conflict.neither.json
+prefer ours: 3 conflict(s)
+conflict element IfcBeam ours: generator.width [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+conflict element IfcBeam ours: name [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+conflict element IfcBeam ours: properties [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+valid
+model fields_and_conflict.neither.json
+prefer theirs: 3 conflict(s)
+conflict element IfcBeam ours: generator.width [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+conflict element IfcBeam ours: name [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+conflict element IfcBeam ours: properties [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+valid
+model fields_and_conflict.theirs.json

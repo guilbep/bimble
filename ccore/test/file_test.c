@@ -354,6 +354,11 @@ int main(int argc, char **argv) {
     /* Format, version, unknown and unsupported sections. */
     expect_error(frame, fn, "\"version\": 1", "\"version\": 2", "unsupported bimble format version 2 (this build reads 1 and 2)");
     expect_error(frame, fn, "\"version\": 1", "\"version\": 1.0", "invalid type: floating point `1.0`, expected u32");
+    /* FIXLIB: u32's range (without the check, (uint32_t)4294967297.0 is undefined: 1 on aarch64,
+     * a version that loads); 2^32 - 1 is a u32, refused as a version */
+    expect_error(frame, fn, "\"version\": 1", "\"version\": 4294967297", "invalid value: integer `4294967297`, expected u32");
+    expect_error(frame, fn, "\"version\": 1", "\"version\": -1", "invalid value: integer `-1`, expected u32");
+    expect_error(frame, fn, "\"version\": 1", "\"version\": 4294967295", "unsupported bimble format version 4294967295");
     expect_error(frame, fn, "\"format\": \"bimble\"", "\"format\": \"ifc\"", "not a bimble file (format = \"ifc\")");
     /* Views, sheets and schedules are held since A6a: a bad one is a parse error (it was
      * "unsupported by the C core" before). */

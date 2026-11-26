@@ -8,6 +8,7 @@ export const fr = {
   "filemenu.convert": "Convertir en .bimble (modifiable)…",
   "filemenu.save": "Enregistrer : modèle",
   "filemenu.saveAs": "Enregistrer sous…", // FS1
+  "filemenu.close": "Fermer le modèle", // FIXUI
   "filemenu.share": "Partager",
   "filemenu.shareView": "Partager pour consulter (.bimbleview)…",
   "filemenu.ifc4": "Exporter IFC4…",
@@ -32,6 +33,7 @@ export const en: Record<keyof typeof fr, string> = {
   "filemenu.convert": "Convert to .bimble (editable)…",
   "filemenu.save": "Save: model",
   "filemenu.saveAs": "Save as…", // FS1
+  "filemenu.close": "Close model", // FIXUI
   "filemenu.share": "Share",
   "filemenu.shareView": "Share for viewing (.bimbleview)…",
   "filemenu.ifc4": "Export IFC4…",

@@ -350,3 +350,30 @@ reparse point is an "f", as a symbolic link under lstat). The zig check after th
 110 of 110 files compile, 36 of 36 binaries link (`ifc_read_test.c` needed `mkdir(path)` too).
 
 Measured on Windows: nothing yet. The first push gives the rows.
+
+## Windows (ticket WIN2)
+
+What the runs of WIN1 measured (MSYS2 CLANG64, clang 23.1.5, libc++ 23, UCRT), and the fix of each:
+
+| What the log showed | Cause | Fix |
+|---|---|---|
+| compile check: 128 files, 4 failed (run 45726496943) | `host/fonts.c`: `tmp` unused under `_WIN32`; `mkdir(path, mode)` in `ifc_in_test.c`, `paper_view_test.c`, `sheet_pdf_test.c` (files added after WIN1) | `tmp` only where used; `mkdir(path)` under `_WIN32`. Fonts on Windows: the program's folder by `GetModuleFileNameW` (was: none) |
+| strtod: 1,247,423 passed, 44 failed: 22 texts of `%.16g`/`%.15e` (each twice: both formats print the same text), 1e-239 … 1e-148 | cc_strtod gave the mantissa all ones (`0e6fffffffffffff`), UCRT's `strtod` the power of two above (`0e70000000000000`). Python's correctly rounded `float()` agrees with cc_strtod for all ten texts shown: the reference was wrong | `strtod_test.c` under `_WIN32`: a disagreement passes only if cc_strtod's bits are the correctly rounded value of the text (exact decimal comparison with the midpoints of the neighbours, `%.1080f`, ties to even) and the runtime's are not; each such text printed (`win32: C runtime strtod ... (off)`). Checked on Linux (`-DSTRTOD_EXACT_REF`): 59,268 texts, glibc's answer right and both neighbours wrong; the ten texts: cc right, one ulp up wrong |
+| ifc_read: `ifc_c/deep_nesting` differs (no-kernel warning) | IFC3's C-own golden was written with manifold; `CC_NO_KERNEL=1` failed on Linux too | without the kernel a C-own golden with booleans is a known difference (must differ and warn), as for `booleans` and `opening`; same in `ifc_in` (CC_NO_KERNEL=1 test/run.sh on Linux: 43 suites, 0 failing) |
+| host_test `model host prints 'listening'`: the log held `bimble-ccore: listening` only | UCRT's unbuffered stderr wrote fprintf's pieces apart | `server.c` under `_WIN32`: the line formatted, then one `fwrite` |
+| host_test `model: query state`: `file` = `D:\\a\\...\\frame.bimble` | the session took the file name after the last `/` only; Rust's `Path::file_name` splits on `\` too on Windows | `cc_path_last_sep` (`session/platform.h`): `/` and `\` on Windows, `/` elsewhere; file name, IFC project name, link name, export sibling and `FILE_NAME`, PDF stem |
+| host_test `export_ifc4 ... age NaN ms` | the same: `FILE_NAME` held the whole path, the test's `FILE_NAME('frame.ifc', ...)` did not match | the same |
+| lab_boot: `spawn npx ENOENT` | `npx` is `npx.cmd`, which `spawn` runs only through a shell | on win32 node runs `web-ui/node_modules/vite/bin/vite.js` |
+| manifold probe: `no member named 'back_inserter'` in Clipper2 | libc++ 23 dropped transitive includes; zig's libc++ with `-D_LIBCPP_REMOVE_TRANSITIVE_INCLUDES` shows it and also `std::istream` in manifold's headers | `deps.sh` on Windows: `-include iterator -include istream` in `CMAKE_CXX_FLAGS` (the zig build then makes the three archives; the suites and the host link) |
+
+The release zip: `build.sh release` under MSYS2 links `bimble-ccore.exe` with `-static` (libc++,
+libunwind, winpthreads inside), `-lws2_32`, and packs `bimble-ccore-<v>-x86_64-windows.zip`
+(`bimble-ccore.exe`, `web/`, LICENSE, README.txt in CRLF). `release_test.mjs` has a win32 branch
+(the system's `tar.exe` for the zip, `llvm-objdump -p` for the imported DLLs, a junction in `web/`,
+skip lines for SIGTERM and the browser stand-in). `ccore-release` has a `windows-latest` entry
+(`continue-on-error` while it is new); `ccore-prerelease` adds the zip to SHA256SUMS when present.
+
+Linux gate after these changes: `ci/run.sh full` 57 suites, 0 failed (836 s); `ci/run.sh clang` 2 suites, 0 failed.
+Checked before the push: zig 0.17.1 (`zig cc -target x86_64-windows-gnu`): 132 of 132 files compile
+with `-Werror`, 45 of 45 binaries link (43 suites, `ifc_dump`, the host); with the kernel built by
+zig, `test_boolean.exe` and `bimble-ccore.exe` link too. Nothing ran on Windows here.

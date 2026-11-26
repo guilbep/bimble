@@ -64,6 +64,20 @@ typedef struct cc_platform {
     /* ---- end FS1 ---- */
 } cc_platform;
 
+/* WIN2: the last separator of the path `p`, or NULL: '/', and on Windows '\\' too (Rust's
+ * Path::file_name splits on both there: the file name of "D:\\models\\frame.bimble" is
+ * "frame.bimble"). Elsewhere the same as strrchr(p, '/'). */
+static inline const char *cc_path_last_sep(const char *p) {
+    const char *r = NULL;
+    for (; *p; p++)
+#ifdef _WIN32
+        if (*p == '/' || *p == '\\') r = p;
+#else
+        if (*p == '/') r = p;
+#endif
+    return r;
+}
+
 #ifdef _WIN32
 /* Windows (ticket WIN1, host/platform_win.c): the POSIX file calls the session file makes
  * (session.c), over the wide-character API: UTF-8 paths, binary mode, a rename that replaces its

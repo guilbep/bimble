@@ -140,6 +140,22 @@ double cc_cos(double x) {
     return dd_round(c);
 }
 
+void cc_sincos(double x, double *s, double *c) {
+    if (is_nan(x) || is_inf(x)) {
+        *s = *c = x - x;
+        return;
+    }
+    if (x == 0.0 || fabs_(x) > 1e15) {
+        *s = x == 0.0 ? x : 0.0;
+        *c = 1.0;
+        return;
+    }
+    DD ds, dc;
+    dd_sincos(dd(x), &ds, &dc);
+    *s = dd_round(ds);
+    *c = dd_round(dc);
+}
+
 /* A plain double atan, a few ulp: the start of the Newton steps. */
 static double atan_rough(double t) {
     int neg = t < 0;

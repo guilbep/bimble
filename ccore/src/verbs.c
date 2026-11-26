@@ -541,6 +541,15 @@ static int new_slab(const cc_model *m, const cc_gid *storey, double (*pts)[2], s
     return add_element(m, K_SLAB, storey, &mat, &p, &g, l, err);
 }
 
+/* ---- SLAB1: verbs::new_slab for the place tool's polygon (verbs.h) ---- */
+int cc_verb_new_slab(const cc_model *m, const cc_gid *storey, const double (*pts)[2], size_t n, const double sizes[5],
+                     const char *material_name, cc_cmds *out, Buf *err) {
+    Sizes sz = {sizes[0], sizes[1], sizes[2], sizes[3], sizes[4]};
+    cc_str name = {material_name, material_name ? strlen(material_name) : 0};
+    return new_slab(m, storey, (double (*)[2])pts, n, &sz, material_name ? &name : NULL, out, err);
+}
+/* ---- end SLAB1 ---- */
+
 /* verbs::new_element. */
 static int new_element(const cc_model *m, Kind kind, const cc_gid *storey, const double *a, const double *b,
                        const Sizes *sizes, const cc_str *mat_name, cc_cmds *l, Buf *err) {

@@ -6,6 +6,7 @@
 
 #include "arena.h"
 #include "fmt.h"
+#include "ifc_math.h" /* ISS71: cc_sin, cc_cos (a turned box) */
 #include "json_r.h"
 #include "math.h"
 
@@ -131,8 +132,13 @@ static int unit_ray(const double in[6], double o[3], double d[3]) {
     return 1;
 }
 
-static int inside(const cc_mview *v, const double p[3], double eps) {
+static int inside(const cc_mview *v, const double p0[3], double eps) {
     if (!v->clip_min || !v->clip_max) return 1;
+    double p[3] = {p0[0], p0[1], p0[2]};
+    if (v->clip_yaw != 0.0f) { /* ISS71: the point in the turned box's frame */
+        double sn = cc_sin(-(double)v->clip_yaw), cs = cc_cos(-(double)v->clip_yaw);
+        p[0] = cs * p0[0] - sn * p0[1], p[1] = sn * p0[0] + cs * p0[1];
+    }
     for (int k = 0; k < 3; k++)
         if (!(p[k] >= (double)v->clip_min[k] - eps && p[k] <= (double)v->clip_max[k] + eps)) return 0;
     return 1;

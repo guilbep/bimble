@@ -4,6 +4,7 @@ import { activeTab } from "./tabs";
 import { RIBBON } from "./ribbon-tabs";
 import RibbonTool from "./RibbonTool.vue";
 import { HIDE_NOT_AVAILABLE } from "./capability"; // FAKE1
+import BoxNorth from "./BoxNorth.vue"; // ISS71: the section box's orientation
 </script>
 
 <template>
@@ -12,6 +13,7 @@ import { HIDE_NOT_AVAILABLE } from "./capability"; // FAKE1
     <div v-for="(grp, g) in RIBBON[activeTab]" :key="grp.key" class="grp" :data-bb="`ribbon-grp-${g + 1}`">
       <div class="tools" :class="{ center: grp.box }">
         <RibbonTool v-for="(tool, m) in grp.tools" :key="tool.key" :tool="tool" :bb="`ribbon-tool-${g + 1}-${m + 1}`" />
+        <BoxNorth v-if="grp.north" /><!-- ISS71 -->
         <!-- Reference .rbox: no Rust call yet, drawn disabled (.off) and empty (no sample value). -->
         <!-- FAKE1: a box with no call behind it is "not yet" (ny), with the tooltip, as a tool. -->
         <div v-if="grp.box && !HIDE_NOT_AVAILABLE" class="rbox off ny" :class="{ readout: grp.box.kind === 'readout' }" aria-disabled="true"

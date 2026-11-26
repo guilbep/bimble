@@ -1,9 +1,9 @@
 // The C host answers the lab from a real model (ticket 9b): node ccore/test/lab_place.mjs
-// 1. Starts out/tcc/bimble-ccore (or $HOST_BIN) on 47333 with a copy of golden/frame.json named
+// 1. Starts out/tcc/bimble-ccore (or $HOST_BIN) on <port> with a copy of golden/frame.json named
 //    frame.bimble (out/t9b-lab_place/), and runs web-ui/e2e/native-place.mjs against it, unchanged.
-// 2. Starts a second host on 47334 (another copy), Vite from web-ui/ on 5195 (needs
+// 2. Starts a second host on <port> (another copy), Vite from web-ui/ on <port> (needs
 //    web-ui/node_modules: `npm ci` there) and headless /usr/bin/chromium over raw CDP; opens
-//    /?native=1&port=47334&token=… and checks: data-bb-ready is set (modelReady resolved), the
+//    /?native=1&port=<port>&token=… and checks: data-bb-ready is set (modelReady resolved), the
 //    navigator lists the 3 storeys, selecting an element through the client shows its properties
 //    (the element query's answer); ticket E1: renaming it in the properties panel goes through the
 //    verb `rename` and a project field through `set_project_field` (the lab POSTs no /apply),
@@ -18,9 +18,9 @@ import { CHROMIUM, RUN_TAG, port, vitePort } from "./ports.mjs";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("lab_place", 47333);
-const LAB_PORT = port("lab_place_lab", 47334);
-const VITE = vitePort("lab_place", 5195);
+const PORT = port("lab_place");
+const LAB_PORT = port("lab_place_lab");
+const VITE = vitePort("lab_place");
 const TOKEN = "labplace-token";
 const TMP = join(CCORE, `out/t9b-lab_place${RUN_TAG}`);
 const procs = [];

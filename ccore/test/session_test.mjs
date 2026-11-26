@@ -1,5 +1,5 @@
 // The host's session file survives a restart (ticket T12): node ccore/test/session_test.mjs
-// Starts out/tcc/bimble-ccore (or $HOST_BIN) with --session on 47341, on a temporary copy of
+// Starts out/tcc/bimble-ccore (or $HOST_BIN) with --session on <port>, on a temporary copy of
 // golden/frame.json. Places a column (verb place), selects it, stops the host (SIGTERM) and starts
 // it again on the same port and file; then checks: rev and selection as before (GET /change),
 // history as before, 73 elements, `undo` works and removes the column (72), redo brings it back.
@@ -8,15 +8,16 @@
 // host starts from the model file (rev 1, 72 elements, no history).
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills all it starts.
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("session_test", 47341);
+const PORT = port("session_test");
 const TOKEN = "session-test";
 const BASE = `http://127.0.0.1:${PORT}`;
 const tmp = mkdtempSync(join(tmpdir(), "ccore-session-"));
@@ -32,9 +33,9 @@ const check = (name, ok, detail = "") => {
   console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? `: ${detail}` : ""}`);
 };
 
-async function startHost() {
+async function startHost(model = MODEL, cwd = undefined) {
   const t0 = performance.now();
-  const h = spawn(BIN, ["--session", String(PORT), MODEL], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, BIMBLE_TOKEN: TOKEN } });
+  const h = spawn(BIN, ["--session", String(PORT), model], { cwd, stdio: ["ignore", "pipe", "pipe"], env: hostEnv({ BIMBLE_TOKEN: TOKEN }) });
   h.out = "";
   h.stdout.on("data", (d) => (h.out += d));
   h.stderr.on("data", (d) => (h.out += d));
@@ -145,11 +146,54 @@ try {
   await call("verb", "place", JSON.stringify({ a: [2500.0, 1500.0], kind: "column", storey: STOREY }));
   check("one more column placed (73)", (await elements()) === 73);
   await stop(h);
+  const unsavedText = readFileSync(SESSION, "utf8");
   const later = new Date(Date.now() + 5000);
   utimesSync(MODEL, later, later);
   h = await startHost();
   check("model file changed since: the session is ignored, logged, 72 elements", (await elements()) === 72 &&
     /changed since/.test(h.out), h.out.trim().split("\n").filter((l) => /session/.test(l)).join(" | "));
+  // FIXSES: the ignored file held a step not saved: set aside (renamed), never overwritten, and
+  // reported by query state. (Before, write_snapshot replaced it: the column was gone.)
+  const asides = () => readdirSync(tmp).filter((f) => f.startsWith("frame.bimble.ccore-session.orphan-"));
+  const st = await q("state");
+  const aside = asides().find((f) => readFileSync(join(tmp, f), "utf8") === unsavedText);
+  check("model file changed since: the session file with the unsaved column is set aside whole", aside !== undefined,
+    `set aside: ${JSON.stringify(asides())}`);
+  check("query state reports where it was set aside", aside !== undefined && st.session_set_aside === join(tmp, aside),
+    JSON.stringify(st.session_set_aside));
+  await stop(h);
+
+  // FIXSES: a session file with nothing unsaved (a selection only) is not set aside.
+  h = await startHost();
+  const n0b = asides().length;
+  await call("select", "-", JSON.stringify([[...(await ids())][0]]));
+  await stop(h);
+  const later2 = new Date(Date.now() + 10000);
+  utimesSync(MODEL, later2, later2);
+  h = await startHost();
+  const st2 = await q("state");
+  check("model file changed, nothing unsaved in the session: not set aside, no field",
+    asides().length === n0b && st2.session_set_aside === undefined && /changed since/.test(h.out), `${asides().length} vs ${n0b}, ${JSON.stringify(st2)}`);
+  await stop(h);
+
+  // FIXSES: one model, two spellings (`p.bimble`, `./p.bimble`): one default session file; the
+  // unsaved column is restored, not ignored as "written for another model path" and lost.
+  const dir = join(tmp, "spell");
+  mkdirSync(dir);
+  copyFileSync(join(CCORE, "golden/frame.json"), join(dir, "p.bimble"));
+  h = await startHost("p.bimble", dir);
+  await call("verb", "place", JSON.stringify({ a: [3500.0, 1500.0], kind: "column", storey: STOREY }));
+  check("p.bimble: a column placed (73), unsaved", (await elements()) === 73 && (await q("state")).unsaved === true);
+  await stop(h);
+  h = await startHost("./p.bimble", dir);
+  const ns = await elements(), sts = await q("state");
+  check("restart as ./p.bimble: the unsaved column is restored (73, unsaved)", ns === 73 && sts.unsaved === true &&
+    /session restored/.test(h.out), `${ns}, unsaved ${sts.unsaved}, log: ${h.out.trim().split("\n").filter((l) => /session/.test(l)).join(" | ")}`);
+  await stop(h);
+  h = await startHost("p.bimble", dir);
+  const ns2 = await elements();
+  check("restart as p.bimble again: still 73, nothing set aside", ns2 === 73 &&
+    !readdirSync(dir).some((f) => /orphan/.test(f)), `${ns2}, files ${readdirSync(dir).join(" ")}`);
   await stop(h);
 } catch (e) {
   check("no exception in the test", false, e.stack ?? String(e));

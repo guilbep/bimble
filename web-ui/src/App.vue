@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { startError, screenRoutes, state, collab } from "./bimble";
+import { startError, startStep, screenRoutes, state, collab } from "./bimble";
 import { t } from "./i18n";
 import QuickBar from "./shell/QuickBar.vue";
 import TabsBar from "./shell/TabsBar.vue";
@@ -8,6 +8,7 @@ import LeftPanel from "./shell/LeftPanel.vue";
 import ViewTabs from "./shell/ViewTabs.vue";
 import ModifierPanel from "./shell/ModifierPanel.vue";
 import StatusBar from "./shell/StatusBar.vue";
+import ContextMenu from "./shell/ContextMenu.vue"; // ISS71
 import "./shell/shell.css";
 import { computed, onMounted, ref, watch } from "vue";
 import { useFocusTrap } from "./shell/focusTrap";
@@ -75,7 +76,7 @@ onMounted(() => { installKeys(); void applyDeepLink(); });
     <Ribbon v-if="!small" v-show="!full" />
     <div class="bb-work">
       <LeftPanel v-if="!small" v-show="!full" />
-      <div class="bb-main">
+      <main class="bb-main"><!-- PERF2: the page's main landmark (Lighthouse landmark-one-main) -->
         <ViewTabs v-if="!small" v-show="!full" />
         <!-- Reference (D5): the right panel sits beside the viewport, under the view tabs. -->
         <div class="bb-row">
@@ -88,7 +89,9 @@ onMounted(() => { installKeys(); void applyDeepLink(); });
             <!-- Never re-created (no v-if): the viewer binds to it at init(). -->
             <canvas id="bimble" :style="paperOn ? { visibility: 'hidden' } : undefined" />
             <PaperView v-if="paperOn" /><!-- PAPER1 -->
+            <ContextMenu /><!-- ISS71: the viewport's right-click menu -->
             <SmallFloat v-if="small" />
+            <p v-if="startStep && !startError" class="start-step" role="status" data-bb="start-step">{{ t(`shellstate.step.${startStep}`) }}…</p><!-- PERF2 -->
             <p v-if="startError" class="start-error" role="alert">{{ t('app.startError', { msg: startError }) }}</p>
           </div>
           <aside v-if="currentPanel && panels[currentPanel]" class="bb-right" data-bb="right-panel" :aria-label="panelLabel">
@@ -98,7 +101,7 @@ onMounted(() => { installKeys(); void applyDeepLink(); });
           <SmallSheet v-if="small" />
         </div>
         <ModifierPanel v-if="!small" />
-      </div>
+      </main>
     </div>
     <div v-if="currentDialog && dialogs[currentDialog]" ref="backdrop" class="bb-backdrop" tabindex="-1" @click.self="currentDialog = null" @keydown="trapKey">
       <div v-if="dialogNa" class="bb-dialog" role="dialog" :aria-label="dialogNa.what"><NotAvailable v-bind="dialogNa" compact /></div><!-- FAKE1 -->
@@ -136,5 +139,6 @@ body { background: var(--bb-cream); }
 .bb-app.small .bb-page { padding: 12px; }
 #bimble { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 /* Error: ink text on an ochre band, with the word "Error". */
+.start-step { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; font-size: var(--bb-size-body, 15px); color: var(--bb-stone); pointer-events: none; }
 .start-error { position: absolute; inset: auto var(--bb-space-4) var(--bb-space-4); margin: 0; padding: var(--bb-space-2) var(--bb-space-3); background: var(--bb-error); color: var(--bb-ink); }
 </style>

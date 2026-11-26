@@ -17,7 +17,8 @@
 // bimble-render: outward faces lit, then inward faces pushed back and drawn unlit at the cut shade
 // (0.72), so a cut solid shows a filled section; an edge whose two faces both look away (BMSH edge
 // normals) is not drawn, as Rust hides back edges in sections. Picking ignores hits outside the box.
-// Six handles (face centres) and the box's edges are drawn; a left press on a handle is the C core's
+// The box's edges and one arrowhead per face (ISS71: pointing out along the face's normal, constant size
+// on screen, larger under the pointer) are drawn; a left press on an arrowhead is the C core's
 // box tool (op tool box_press / box_move / box_release: drag state in C, one session change on release).
 // Linked models (ticket B5, ccore/session/links.h): /mesh may end with the LNKS trailer, one BMSH per
 // link. They are merged after the open model's elements, moved by (their origin - ours) computed in
@@ -65,7 +66,8 @@
 // solids show filled at the cut shade (B3's passes, no hatching), pan and zoom as a plan, pick and
 // select work (rays along the look). The plan overlays (annotations, references, grid axes) stay
 // plans'. What the view hides by class, family, storey or material (visibility_sets `by_view`) is
-// not drawn. A building turned in its site (yaw != 0): the box is not turned here (see the report).
+// not drawn. A building turned in its site (yaw != 0): a section view's box is not turned here (see SEC1's report);
+// the 3D section box is (ISS71: its yaw, project or true north; the shader, the picks, edges and handles turn it).
 import {
   actions, viewActions, // Q2: the view switches (edges, orthographic, fit, top)
   viewportKeys, // KEY1: Esc and Delete in the viewport (shell/keys.ts)
@@ -105,7 +107,16 @@ const REVEALED_SRGB: [number, number, number] = [232, 150, 64];
 const CUT_SHADE = 0.72;
 // The section box's edges and handles.
 const BOX_SRGB: [number, number, number] = [40, 110, 200];
-const HANDLE_PX = 11;
+// ---- ISS71 ---- (issue #71) one arrowhead per face, pointing out along the face's normal: its length
+// on screen (CSS px, constant), the press radius about the face centre (the box tool's ray_tol: 32 px
+// across), its fill (the lab's "do" accent token, read each frame: the theme's) and its outline (the
+// viewport's ground stays light in every theme, BACKGROUND_SRGB: a dark outline shows on it).
+const ARROW_PX = 18;
+const ARROW_HOVER = 1.3;
+const ARROW_HIT_PX = 16;
+const ARROW_FILL_FALLBACK = "#C06A41";
+const ARROW_OUTLINE_CSS = "rgba(20, 20, 20, 0.9)";
+// ---- end ISS71 ----
 // The ghost of the place tool: translucent blue faces, its edges and the snap marker darker.
 const GHOST_SRGB: [number, number, number] = [74, 128, 214];
 const GHOST_EDGE_SRGB: [number, number, number] = [32, 70, 150];
@@ -187,6 +198,15 @@ export function parseBmsh(ab: ArrayBuffer, at = 0, exact = true): Bmsh {
     if ((i0[e] ?? 0) + (ni[e] ?? 0) > nI || (v0[e] ?? 0) + (nv[e] ?? 0) > nV || (s0[e] ?? 0) + (ns[e] ?? 0) > nS) throw new Error("BMSH row out of range");
   return { rev, origin, ids, cats, v0, nv, i0, ni, s0, ns, pos, idx, edges, normals, size };
 }
+
+// ---- TEST1: an empty BMSH (no element; what the host answers with no model open) ----
+const EMPTY_BMSH = (): ArrayBuffer => {
+  const ab = new ArrayBuffer(52), dv = new DataView(ab);
+  dv.setUint32(0, 0x48534d42, true); // "BMSH"
+  dv.setUint32(4, 1, true); // version 1; rev, counts and origin 0
+  return ab;
+};
+// ---- end TEST1 ----
 
 /** GET /mesh: the open model's BMSH, then (with links) the LNKS trailer of ccore/session/links.h,
  *  merged into one mesh: the links' elements after ours (`model` k + 1), moved by their origin minus
@@ -307,6 +327,7 @@ uniform vec3 u_light;
 uniform int u_clip;      // 1: the section box is on
 uniform vec3 u_clip_min; // scene coordinates
 uniform vec3 u_clip_max;
+uniform vec2 u_clip_rot; // ISS71: (cos, sin) of the box's yaw: the fragment turned by -yaw into its frame
 uniform float u_cut;     // brightness of cut surfaces (back faces while the box is on)
 uniform float u_ambient; // < 0: unlit (edges)
 uniform float u_alpha;
@@ -314,7 +335,8 @@ out vec4 o;
 vec3 to_linear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
 vec3 to_srgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
 void main() {
-  if (u_clip == 1 && (any(lessThan(v_pos, u_clip_min)) || any(greaterThan(v_pos, u_clip_max)))) discard;
+  vec3 q = vec3(u_clip_rot.x * v_pos.x + u_clip_rot.y * v_pos.y, u_clip_rot.x * v_pos.y - u_clip_rot.y * v_pos.x, v_pos.z);
+  if (u_clip == 1 && (any(lessThan(q, u_clip_min)) || any(greaterThan(q, u_clip_max)))) discard;
   if (u_ambient < 0.0) {
     if (u_clip == 1 && v_back > 0.5) discard; // a back edge, only ever seen through the cut
     o = vec4(v_col, u_alpha);
@@ -352,6 +374,11 @@ interface GlStats {
   boxFace: number | null;
   boxCalls: number;
   boxError: string | null;
+  /** ISS71: right-click menus opened; the section box's arrowheads as last drawn (canvas CSS px: the
+   *  face centre, the outward direction on screen), the face under the pointer. */
+  menus: number;
+  boxHandles: { face: number; x: number; y: number; dx: number; dy: number }[];
+  boxHover: number | null;
   /** Test hook: the GlobalId a click at client (x, y) would pick, or null (selects nothing). */
   pickAt?: (x: number, y: number) => string | null;
   /** Test hook: what a click at client (x, y) would pick: its id and its link (null: the open model). */
@@ -433,7 +460,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const canvas = document.getElementById("bimble");
   const stats: GlStats = { firstFrameMs: null, meshBytes: 0, meshFetchMs: 0, meshRev: null, frames: 0, picks: 0, error: null,
     toolCalls: 0, ghostTris: 0, hover: null, toolError: null, placed: null,
-    hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null, links: [], linkTris: 0,
+    hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null, menus: 0, boxHandles: [], boxHover: null, links: [], linkTris: 0,
     annotations: null, overlayTexts: [], selectedAnnotation: null, annotate: null, annotateCalls: 0, annotError: null, annotAdded: null,
     measure: null, measureCalls: 0, measureError: null,
     nav: { picks: 0, zoomPivot: null, zoomFrom: null, orbitPivot: null, orbitFrom: null, fits: 0 }, pointerQueries: 0 };
@@ -489,6 +516,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const uClip = gl.getUniformLocation(prog, "u_clip");
   const uClipMin = gl.getUniformLocation(prog, "u_clip_min");
   const uClipMax = gl.getUniformLocation(prog, "u_clip_max");
+  const uClipRot = gl.getUniformLocation(prog, "u_clip_rot"); // ISS71
   const uCut = gl.getUniformLocation(prog, "u_cut");
   const uZbias = gl.getUniformLocation(prog, "u_zbias");
 
@@ -521,7 +549,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   let visKey = "\u0000";
   /** Per element of the mesh: 0 not drawn, 1 drawn, 2 drawn revealed (hidden, Reveal hidden on). */
   let shown = new Uint8Array(0);
-  let preview: { min: number[]; max: number[] } | null = null;
+  let preview: { min: number[]; max: number[]; yaw?: number } | null = null; // ISS71: yaw, the box's turn
   const boxBuf = gl.createBuffer();
   // The place tool's ghost (its own VAO) and the marker lines (snap mark, clicked points, rubber line).
   const ghostVao = gl.createVertexArray();
@@ -731,6 +759,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       stats.meshFetchMs = performance.now() - t0;
       stats.meshBytes = ab.byteLength;
       const m = parseMesh(ab);
+      // ---- TEST1: the model closed while this answer was on its way: not drawn (the frame loop cleared the view) ----
+      if (state.value.file === null) return;
+      // ---- end TEST1 ----
       stats.meshRev = m.rev;
       stats.links = m.links ?? [];
       stats.error = null;
@@ -803,12 +834,75 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     dirty = true;
   };
   /** The box that cuts now: the drag's preview, else the session's box when it is on. */
-  const clipBox = (): { min: number[]; max: number[] } | null => {
+  const clipBox = (): { min: number[]; max: number[]; yaw?: number } | null => {
     if (plan) return plan.clip; // a plan: what its range shows (the section box is the 3D view's)
     if (preview) return preview;
     const sb = vis?.section_box;
-    return sb?.on && sb.box ? { min: sb.box.min, max: sb.box.max } : null;
+    return sb?.on && sb.box ? { min: sb.box.min, max: sb.box.max, yaw: sb.box.yaw } : null; // ISS71: yaw
   };
+  // ---- ISS71 ---- the box's frame: a point of it in the scene (ClipBox::from_frame, turned by yaw
+  // about the vertical through the scene origin) and back (to_frame).
+  const turnZ = (p: V3, a: number): V3 => {
+    if (!a) return p;
+    const c = Math.cos(a), s = Math.sin(a);
+    return [c * p[0] - s * p[1], s * p[0] + c * p[1], p[2]];
+  };
+  /** A scene point -> canvas CSS px, or null behind the eye. */
+  const sceneToLocal = (p: V3): [number, number] | null => {
+    const { mvp } = matrices();
+    const c = [0, 1, 3].map((r) => (mvp[r] ?? 0) * p[0] + (mvp[4 + r] ?? 0) * p[1] + (mvp[8 + r] ?? 0) * p[2] + (mvp[12 + r] ?? 0));
+    if ((c[2] ?? 0) <= 0) return null;
+    return [((c[0]! / c[2]! + 1) / 2) * canvas.clientWidth, ((1 - c[1]! / c[2]!) / 2) * canvas.clientHeight];
+  };
+  /** Each face's arrowhead: the face centre on screen and its outward normal's direction there. A face
+   *  seen head on (its normal along the view) points up the screen; one behind the eye has none. */
+  const boxHandles = (b: { min: number[]; max: number[]; yaw?: number }) => {
+    const out: GlStats["boxHandles"] = [];
+    const yaw = b.yaw ?? 0, diag = Math.hypot(...[0, 1, 2].map((k) => (b.max[k] ?? 0) - (b.min[k] ?? 0)));
+    for (let f = 0; f < 6; f++) {
+      const c = faceCenter(b, f), n: V3 = [0, 0, 0];
+      n[Math.floor(f / 2)] = f & 1 ? 1 : -1;
+      const p = sceneToLocal(turnZ(c, yaw)), q = sceneToLocal(turnZ(add(c, scale(n, 0.01 * Math.max(1, diag))), yaw));
+      if (!p) continue;
+      let dx = q ? q[0] - p[0] : 0, dy = q ? q[1] - p[1] : -1;
+      const l = Math.hypot(dx, dy);
+      if (l < 1e-3) dx = 0, dy = -1;
+      else dx /= l, dy /= l;
+      out.push({ face: f, x: p[0], y: p[1], dx, dy });
+    }
+    return out;
+  };
+  /** The face whose arrowhead is under canvas px (x, y) (within ARROW_HIT_PX of its centre), or null. */
+  const handleAt = (x: number, y: number): number | null => {
+    let best: number | null = null, bd = ARROW_HIT_PX;
+    for (const h of stats.boxHandles) {
+      const d = Math.hypot(h.x - x, h.y - y);
+      if (d <= bd) best = h.face, bd = d;
+    }
+    return best;
+  };
+  /** The arrowheads, on the overlay: a filled triangle per face, centred on the face centre. */
+  const drawHandles = (ctx: CanvasRenderingContext2D) => {
+    const fill = getComputedStyle(document.documentElement).getPropertyValue("--bb-clay").trim() || ARROW_FILL_FALLBACK;
+    const held = stats.boxFace;
+    for (const h of stats.boxHandles) {
+      const hot = h.face === held || h.face === stats.boxHover;
+      const L = ARROW_PX * (hot ? ARROW_HOVER : 1), px = -h.dy, py = h.dx;
+      ctx.beginPath();
+      ctx.moveTo(h.x + h.dx * L * 0.55, h.y + h.dy * L * 0.55);
+      ctx.lineTo(h.x - h.dx * L * 0.45 + px * L * 0.45, h.y - h.dy * L * 0.45 + py * L * 0.45);
+      ctx.lineTo(h.x - h.dx * L * 0.2, h.y - h.dy * L * 0.2);
+      ctx.lineTo(h.x - h.dx * L * 0.45 - px * L * 0.45, h.y - h.dy * L * 0.45 - py * L * 0.45);
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.lineJoin = "round";
+      ctx.lineWidth = hot ? 2 : 1.25;
+      ctx.strokeStyle = ARROW_OUTLINE_CSS;
+      ctx.stroke();
+    }
+  };
+  // ---- end ISS71 ----
   const faceCenter = (b: { min: number[]; max: number[] }, f: number): V3 => {
     const c: V3 = [0, 1, 2].map((k) => ((b.min[k] ?? 0) + (b.max[k] ?? 0)) / 2) as V3;
     const a = Math.floor(f / 2);
@@ -822,7 +916,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     const m = mesh;
-    if (!m) { drawOverlay(); return; }
+    if (!m) { stats.boxHandles = []; drawOverlay(); return; } // ISS71: no handles
     const { e, mvp } = matrices();
     const light = norm(add(norm(sub(e, target)), [-0.3, -0.2, 0.9]));
     const box = clipBox();
@@ -838,6 +932,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.uniform1i(uClip, box ? 1 : 0);
     gl.uniform3fv(uClipMin, box ? box.min : [0, 0, 0]);
     gl.uniform3fv(uClipMax, box ? box.max : [0, 0, 0]);
+    gl.uniform2f(uClipRot, Math.cos(box?.yaw ?? 0), Math.sin(box?.yaw ?? 0)); // ISS71: the turned box
     gl.uniform1f(uCut, CUT_SHADE);
     gl.uniform1f(uZbias, 0);
     gl.enable(gl.DEPTH_TEST);
@@ -898,19 +993,20 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindVertexArray(null);
     gl.uniform1i(uClip, 0);
     if (box && !plan) drawBox(box);
+    stats.boxHandles = box && !plan ? boxHandles(box) : []; // ISS71: drawn by drawOverlay
     drawGhost();
     drawOverlay();
     stats.frames++;
     if (stats.firstFrameMs === null) stats.firstFrameMs = performance.now();
   };
 
-  /** The section box: its 12 edges and the 6 face handles, over the model. */
-  const drawBox = (b: { min: number[]; max: number[] }) => {
-    const c = (i: number): number[] => [0, 1, 2].map((k) => ((i >> k) & 1 ? b.max[k] : b.min[k]) ?? 0);
+  /** The section box: its 12 edges, over the model (ISS71: turned by its yaw; the handles: arrowheads
+   *  on the overlay, drawHandles). */
+  const drawBox = (b: { min: number[]; max: number[]; yaw?: number }) => {
+    const c = (i: number): number[] => turnZ([0, 1, 2].map((k) => ((i >> k) & 1 ? b.max[k] : b.min[k]) ?? 0) as V3, b.yaw ?? 0);
     const v: number[] = [];
     for (let i = 0; i < 8; i++)
       for (let k = 0; k < 3; k++) if (!((i >> k) & 1)) v.push(...c(i), ...c(i | (1 << k)));
-    for (let f = 0; f < 6; f++) v.push(...faceCenter(b, f));
     gl.bindVertexArray(ghostVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, boxBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.DYNAMIC_DRAW);
@@ -921,9 +1017,6 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.vertexAttrib3f(1, BOX_SRGB[0] / 255, BOX_SRGB[1] / 255, BOX_SRGB[2] / 255);
     gl.disable(gl.DEPTH_TEST);
     gl.drawArrays(gl.LINES, 0, 24);
-    gl.uniform1f(uPoint, HANDLE_PX);
-    gl.drawArrays(gl.POINTS, 24, 6);
-    gl.uniform1f(uPoint, 1);
     gl.enable(gl.DEPTH_TEST);
     gl.bindVertexArray(null);
   };
@@ -1011,6 +1104,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const last = t.points[t.points.length - 1];
       if (last) lines.push(last[0] - m.origin[0], last[1] - m.origin[1], z, t.hover.at[0] - m.origin[0], t.hover.at[1] - m.origin[1], z);
     }
+    // ---- SLAB1 ---- a polygon slab: its outline so far and the closing edge (the hover back to the first corner)
+    if (t.kind === "slab" && placing.value?.shape === "polygon") {
+      const P = t.points, seg = (a: [number, number], b: [number, number]) =>
+        lines.push(a[0] - m.origin[0], a[1] - m.origin[1], z, b[0] - m.origin[0], b[1] - m.origin[1], z);
+      for (let i = 1; i < P.length; i++) seg(P[i - 1]!, P[i]!);
+      if (t.hover && P.length >= 2) seg(t.hover.at, P[0]!);
+    }
+    // ---- end SLAB1 ----
     gl.bindBuffer(gl.ARRAY_BUFFER, markBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lines), gl.DYNAMIC_DRAW);
     markN = lines.length / 3;
@@ -1167,6 +1268,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         return p ? [p[0] - b.left, p[1] - b.top] : null;
       }, texts);
     }
+    if (stats.boxHandles.length) { ctx.setTransform(dpr, 0, 0, dpr, 0, 0); drawHandles(ctx); } // ISS71
     // ---- navigation (NAV1): where the drag turns the view about (lib.rs handle_view_input) ----
     const op = drag?.orbit;
     if (op && mesh && !plan) {
@@ -1299,10 +1401,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const box = clipBox();
     const outside = (d: number): boolean => {
       if (!box) return false;
-      for (let k = 0; k < 3; k++) {
-        const p = e[k]! + dir[k]! * d;
-        if (p < (box.min[k] ?? 0) || p > (box.max[k] ?? 0)) return true;
-      }
+      const p = turnZ([e[0] + dir[0] * d, e[1] + dir[1] * d, e[2] + dir[2] * d], -(box.yaw ?? 0)); // ISS71: in the box's frame
+      for (let k = 0; k < 3; k++) if (p[k]! < (box.min[k] ?? 0) || p[k]! > (box.max[k] ?? 0)) return true;
       return false;
     };
     for (let el = 0; el < m.ids.length; el++) {
@@ -1439,10 +1539,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const r = canvas.getBoundingClientRect();
     const x = cx - r.left, y = cy - r.top;
     stats.boxCalls++;
-    const { state: b, error } = boxTool(name, name === "box_press" ? { ray: rayAt(x, y), ray_tol: rayAt(x + SNAP_PX, y) } : { ray: rayAt(x, y) });
+    const { state: b, error } = boxTool(name, name === "box_press" ? { ray: rayAt(x, y), ray_tol: rayAt(x + ARROW_HIT_PX, y) } : { ray: rayAt(x, y) }); // ISS71: the arrowhead's press radius
     stats.boxError = error;
     if (error) console.warn(`gl viewport: ${name}:`, error);
-    preview = b?.active && b.box ? { min: b.box.min, max: b.box.max } : null;
+    preview = b?.active && b.box ? { min: b.box.min, max: b.box.max, yaw: b.box.yaw } : null; // ISS71: yaw
     stats.boxFace = b?.active ? b.face : null;
     dirty = true;
     return b;
@@ -1453,6 +1553,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // A left press on a handle of the section box: the box tool holds that face (no orbit).
     const onHandle = e.button === 0 && !e.shiftKey && !placingNow() && !measuringNow() && !plan && clipBox() !== null && boxAt("box_press", e.clientX, e.clientY)?.active === true;
     drag = { pan: e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey), box: onHandle, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
+    if (onHandle) canvas.style.cursor = "grabbing"; // ISS71
     // A left press on a dimension or a text of the plan: it is held (a click selects it, a drag moves it).
     if (plan && e.button === 0 && !e.shiftKey && !placingNow() && !annotatingNow() && !measuringNow()) {
       const r = canvas.getBoundingClientRect();
@@ -1463,6 +1564,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   canvas.addEventListener("pointermove", (e) => {
     if (!drag) {
       if (placingNow() || annotatingNow() || measuringNow()) pendingMove = e;
+      // ---- ISS71 ---- the arrowhead under the pointer: drawn larger, the grab cursor
+      const r = canvas.getBoundingClientRect();
+      const hv = !placingNow() && !measuringNow() && !plan ? handleAt(e.clientX - r.left, e.clientY - r.top) : null;
+      if (hv !== stats.boxHover) { stats.boxHover = hv; canvas.style.cursor = hv === null ? "" : "grab"; dirty = true; }
+      // ---- end ISS71 ----
       return;
     }
     if (drag.annot) { // the held annotation follows the pointer (world mm: the orthographic rays' offset)
@@ -1507,6 +1613,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (d && d.orbit !== undefined) { stats.nav.orbitPivot = null; dirty = true; } // NAV1: the pivot's marker goes
     if (d?.box) { // one session change: the released box
       pendingBox = null;
+      canvas.style.cursor = stats.boxHover === null ? "" : "grab"; // ISS71
       if (e.type === "pointerup") boxAt("box_release", e.clientX, e.clientY);
       else { stats.boxCalls++; boxTool("box_cancel"); preview = null; stats.boxFace = null; dirty = true; }
       return;
@@ -1523,6 +1630,22 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       }
       return;
     }
+    // ---- ISS71 ---- a right click without a drag: the selection's menu (shell/ContextMenu.vue); the
+    // element under the pointer is selected first when it is not (an empty spot keeps the selection).
+    if (e.type === "pointerup" && d && !d.moved && e.button === 2 && !placingNow() && !annotatingNow() && !measuringNow()) {
+      const r = canvas.getBoundingClientRect();
+      const k = pick(e.clientX - r.left, e.clientY - r.top);
+      const id = k >= 0 ? mesh?.ids[k] : undefined;
+      if (id && !state.value.selection.includes(id)) {
+        const link = linkOf(k);
+        const err = link !== null ? selectLinked(link, id) : select([id]);
+        if (err) console.warn("gl viewport: select:", err);
+      }
+      stats.menus++;
+      window.dispatchEvent(new CustomEvent("bb-viewport-menu", { detail: { x: e.clientX, y: e.clientY } }));
+      return;
+    }
+    // ---- end ISS71 ----
     if (e.type !== "pointerup" || !d || d.moved || e.button !== 0) return;
     if (placingNow()) { // a click while placing goes to the tool (Shift: free, no pan)
       pendingMove = null;
@@ -1575,6 +1698,18 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     return false;
   };
+  // ---- SLAB1 ---- Enter closes the polygon slab being clicked (lib.rs:2772 close_polygon)
+  viewportKeys.enterTool = () => {
+    if (!placingNow() || placing.value?.kind !== "slab" || placing.value?.shape !== "polygon") return false;
+    stats.toolCalls++;
+    const { state: t, error } = toolCall("close");
+    stats.toolError = error;
+    if (error) console.warn("gl viewport: tool close:", error);
+    if (t?.placed) stats.placed = t.placed;
+    showTool(t);
+    return true;
+  };
+  // ---- end SLAB1 ----
   viewportKeys.selectedAnnotation = () => (plan && anns ? selAnn : null);
   viewportKeys.dropAnnotation = () => { selAnn = stats.selectedAnnotation = null; dirty = true; };
   viewportKeys.deleteAnnotation = () => { // Delete: the selected annotation goes
@@ -1699,7 +1834,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       seenState = state.value;
       if (!loading && !checking && wantRev === rev) void checkEpoch();
     }
-    if (!loading && wantRev !== rev) {
+    // ---- TEST1: no model open (state.file null): nothing to ask the host for (it would answer an empty
+    // mesh; GET /mesh used to 404 there and the error path retried every second). The last model's
+    // picture goes; the next model loads whatever its rev (wantRev forgotten). ----
+    if (state.value.file === null) {
+      wantRev = null;
+      if (mesh !== null && mesh.ids.length > 0) upload(parseMesh(EMPTY_BMSH()));
+    } else if (!loading && wantRev !== rev) {
+      // ---- end TEST1 ----
       wantRev = rev;
       void load();
     }

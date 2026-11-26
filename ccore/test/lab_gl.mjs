@@ -1,7 +1,7 @@
 // The lab's WebGL2 viewport against the C host (ticket 11a): node ccore/test/lab_gl.mjs
-// Starts out/tcc/bimble-ccore (or $HOST_BIN) on 47323 with CCORE_MODEL=golden/frame.json, Vite
-// from web-ui/ on 5193 (needs web-ui/node_modules), headless /usr/bin/chromium over raw CDP; opens
-// /?native=1&gl=1&port=47323&token=… and checks: the page draws a frame from GET /mesh; concrete
+// Starts out/tcc/bimble-ccore (or $HOST_BIN) on <port> with CCORE_MODEL=golden/frame.json, Vite
+// from web-ui/ on <port> (needs web-ui/node_modules), headless /usr/bin/chromium over raw CDP; opens
+// /?native=1&gl=1&port=<port>&token=… and checks: the page draws a frame from GET /mesh; concrete
 // grey as Rust shades a top face (207,207,204 ±6; fill 214,214,210, see below) covers > 5 % of the canvas and the background (247,247,245 ±2) is the
 // rest's main colour; no uncaught page error, no console error but the listed ones; a click on a
 // concrete pixel sends POST /select/- with one 22-character GlobalId (the stub host may answer
@@ -14,12 +14,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHROMIUM, port, vitePort } from "./ports.mjs";
+import { loops, settled } from "./lib/frames.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("lab_gl", 47323);
-const VITE = vitePort("lab_gl", 5193);
+const PORT = port("lab_gl");
+const VITE = vitePort("lab_gl");
 const TOKEN = "labgl-token";
 const PAGE = `http://localhost:${VITE}/?native=1&gl=1&port=${PORT}&token=${TOKEN}`;
 const tmp = mkdtempSync(join(tmpdir(), "ccore-lab-gl-"));
@@ -148,7 +149,7 @@ async function main() {
   console.log(`viewport stats: ${gl}`);
   const st = JSON.parse(gl);
   check("mesh loaded from the host", st.meshBytes > 0 && st.error === null && st.meshRev === 1, gl); // session rev after load (lib.rs:1679)
-  await sleep(500);
+  await settled(evalJs, "the first picture", await loops(evalJs)); // TEST1: was sleep(500)
 
   // Pixels: read the WebGL2 drawing buffer (preserveDrawingBuffer) of #bimble.
   const px = JSON.parse(await evalJs(`(() => {
@@ -241,10 +242,11 @@ async function main() {
   await S("Input.dispatchMouseEvent", { type: "mousePressed", x: mx, y: my, button: "left", buttons: 1, clickCount: 1 });
   for (let k = 1; k <= 5; k++) await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: mx + 12 * k, y: my + 4 * k, button: "left", buttons: 1 });
   await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: mx + 60, y: my + 20, button: "left", buttons: 0, clickCount: 1 });
-  await sleep(300);
-  const s1 = await sum();
+  // TEST1: a loop after the action and a draw after f0 (a camera move changes no rev), not sleep(300).
+  await settled(evalJs, "the orbit drawn", await loops(evalJs), { frame: f0 }).catch(() => null); // then one read: the check says
+  const s1 = await sum(), f1 = await evalJs("window.__bbGl.frames");
   await S("Input.dispatchMouseEvent", { type: "mouseWheel", x: mx, y: my, deltaX: 0, deltaY: -300 });
-  await sleep(300);
+  await settled(evalJs, "the zoom drawn", await loops(evalJs), { frame: f1 }).catch(() => null);
   const s2 = await sum(), f2 = await evalJs("window.__bbGl.frames");
   check("orbit and zoom redraw a different picture, no select", s1 !== s0 && s2 !== s1 && f2 > f0 && selects.length === nSel,
     `frames ${f0} -> ${f2}, selects ${nSel} -> ${selects.length}`);

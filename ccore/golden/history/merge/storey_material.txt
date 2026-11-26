@@ -1,0 +1,12 @@
+prefer neither: 1 conflict(s)
+conflict IfcBuildingStorey S ours: name [04Aobkc8v6$94cGl_9HNVX] | 04Aobkc8v6$94cGl_9HNVX
+valid
+model storey_material.neither.json
+prefer ours: 1 conflict(s)
+conflict IfcBuildingStorey S ours: name [04Aobkc8v6$94cGl_9HNVX] | 04Aobkc8v6$94cGl_9HNVX
+valid
+model storey_material.neither.json
+prefer theirs: 1 conflict(s)
+conflict IfcBuildingStorey S ours: name [04Aobkc8v6$94cGl_9HNVX] | 04Aobkc8v6$94cGl_9HNVX
+valid
+model storey_material.theirs.json

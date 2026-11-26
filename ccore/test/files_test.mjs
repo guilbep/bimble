@@ -1,5 +1,5 @@
 // The file actions of the native host (ticket A5): node ccore/test/files_test.mjs
-// Starts out/tcc/bimble-ccore (or $HOST_BIN) with no model on 47391 (CCORE_SEED=1) and checks,
+// Starts out/tcc/bimble-ccore (or $HOST_BIN) with no model on <port> (CCORE_SEED=1) and checks,
 // through POST /action/<name> with the optional body {"path", "discard"} (session/calls.c
 // file_action): new (lib.rs:1688: "Untitled", one storey "Level 0" at 0 mm, unsaved), save of a
 // new model refused (no file yet), open refused with unsaved changes, place, save as x.bimble (the
@@ -17,18 +17,19 @@
 // default name moves to <opened>.ccore-session) and a restart on that file restores the edit.
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills what it starts.
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { gunzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const G = join(CCORE, "golden");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
 const TOKEN = "files-test-token";
-const PORT = port("files_test", 47391), PORT2 = port("files_test2", 47392);
+const PORT = port("files_test"), PORT2 = port("files_test2");
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => {
   if (ok) passed++;
@@ -41,7 +42,8 @@ const hosts = [];
 
 async function startHost(port, args) {
   const h = spawn(BIN, [...args.flags ?? [], String(port), ...args.model ? [args.model] : []], {
-    env: { ...process.env, BIMBLE_TOKEN: TOKEN, CCORE_SEED: "1" }, stdio: ["ignore", "ignore", "pipe"],
+    cwd: tmp, // FIXSES: a file written without a folder would land here (checked below)
+    env: hostEnv({ BIMBLE_TOKEN: TOKEN, CCORE_SEED: "1" }), stdio: ["ignore", "ignore", "pipe"],
   });
   h.log = "";
   h.stderr.on("data", (d) => (h.log += d));
@@ -101,6 +103,15 @@ try {
   check("new: change feed file and rev 1", ch1.file === "Untitled.bimble" && ch1.rev === 1 && ch1.unsaved === true, JSON.stringify(ch1));
   const sv0 = await H.act("save");
   check("save of a new model -> 400 (no file yet: save_as)", sv0.status === 400 && sv0.text.includes("save_as"), sv0.text);
+  // FIXSES: export and share of a new model without a path: refused, nothing written in the
+  // host's working folder (before: 200, and Untitled.ifc / Untitled.bimbleview written there,
+  // over any file of that name).
+  writeFileSync(join(tmp, "Untitled.ifc"), "keep me");
+  const exu = await H.act("export_ifc4"), shu = await H.act("share_for_viewing");
+  check("new model: export_ifc4 without a path -> 400, Untitled.ifc in the working folder untouched",
+    exu.status === 400 && /no file yet: send \{"path"/.test(exu.text) && readFileSync(join(tmp, "Untitled.ifc"), "utf8") === "keep me", exu.text);
+  check("new model: share_for_viewing without a path -> 400, no Untitled.bimbleview",
+    shu.status === 400 && /no file yet: send \{"path"/.test(shu.text) && !existsSync(join(tmp, "Untitled.bimbleview")), shu.text);
   const op0 = await H.act("open", { path: join(G, "frame.json") });
   check("open with unsaved changes -> 400", op0.status === 400 && op0.text === UNSAVED, op0.text);
   const nw2 = await H.act("new");
@@ -238,6 +249,13 @@ try {
   check("share_for_viewing: the log says Saved … read-only", H.h.log.includes(`Saved ${fvv} (`) && H.h.log.includes("opens in Bimble, also in a browser, read-only."));
   const sh2 = await H.act("share_for_viewing", { path: join(tmp, "named.bimbleview") });
   check("share_for_viewing {path} writes there", sh2.status === 200 && existsSync(join(tmp, "named.bimbleview")), sh2.text);
+  // FIXSES: the open file under another spelling (`<dir>/./fv.json`, `./fv.json` from the host's
+  // folder) is still the open file: never written over (before: only the same text was refused).
+  const fvBytes = readFileSync(fv);
+  const sh3 = await H.act("share_for_viewing", { path: `${tmp}/./fv.json` });
+  const ex5 = await H.act("export_ifc4", { path: "./fv.json" });
+  check("share_for_viewing / export_ifc4 over the open file spelt otherwise: not written",
+    Buffer.compare(readFileSync(fv), fvBytes) === 0 && /would overwrite the open file/.test(H.h.log), `${sh3.text} ${ex5.text}`);
   const ov = await H.act("open", { path: fvv });
   const sv = await H.q("state");
   const vm = await H.mesh();
@@ -258,7 +276,9 @@ try {
   const ob = await H.act("open", { path: bv });
   check("open a broken .bimbleview -> 400 (viewfile's text), the open scene kept", ob.status === 400 && ob.text.includes("bimbleview") && (await H.q("state")).file === "fv.bimbleview", ob.text);
   const cv2 = await H.act("close");
-  check("close of a read-only scene -> 200, nothing open, /mesh 404", cv2.status === 200 && (await H.q("state")).file === null && (await H.mesh()).status === 404, cv2.text);
+  const cvm = await H.mesh(); // TEST1: no model -> an empty BMSH (was 404)
+  check("close of a read-only scene -> 200, nothing open, /mesh an empty BMSH", cv2.status === 200 && (await H.q("state")).file === null &&
+    cvm.status === 200 && cvm.magic === "BMSH" && cvm.elements === 0 && cvm.triangles === 0, `${cv2.text} ${JSON.stringify(cvm)}`);
   await H.act("open", { path: fj });
 
   // close; errors.

@@ -10,7 +10,8 @@
  *                       again replaces that link in its place (lib.rs:1516-1527). 400 with the
  *                       reader's error; nothing changes then. No body: 400 (no file dialog).
  *                       The wasm module stages the bytes (wasm_api.h host_open, flag 4).
- *   action manage_links {"op": "list"|"remove"|"reload"|"show"|"hide", "name": "<file name>"}:
+ *   action manage_links {"op": "list"|"remove"|"reload"|"show"|"hide"|"locate", "name": "<file name>"}:
+ *                       (LNK1: locate {"path"} links another file in its place: a missing one, below)
  *                       list (also with no body) answers query links; remove drops the link;
  *                       reload reads its path again (in place; the wasm module has no path to
  *                       read again: 400 unless the page staged the bytes); show / hide draw it
@@ -56,7 +57,7 @@ enum { CC_LINK_IFC = 1, CC_LINK_VIEW, CC_LINK_MODEL };
 struct cc_link {
     char *path;       /* malloc'd: where it was read (reload reads it again) */
     const char *name; /* its file name, inside `path`: how calls name it (lib.rs:171 name()) */
-    int kind;         /* CC_LINK_* */
+    int kind;         /* CC_LINK_*; 0: missing (LNK1, below) */
     cc_ifc_scene *ifc; /* CC_LINK_IFC (malloc'd) */
     cc_viewfile *vf;   /* CC_LINK_VIEW (malloc'd) */
     cc_model *model;   /* CC_LINK_MODEL (malloc'd) */
@@ -96,6 +97,53 @@ void cc_links_json(const cc_session *s, JsonW *w);
  * Storey and material names in storey_name / material_name (null when empty). 0 ok, -1 with the
  * error text in `out`: "no linked model <name>", "no element with this id". */
 int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char *id, size_t idn, Buf *out);
+
+/* query scene_element {"id"} (FIXUI, a C addition): an element of the read-only scene (an IFC or a
+ * .bimbleview open as it is), in cc_link_element_json's shape without "link" and with "triangles":
+ * the rows Rust's viewer shows for it (lib.rs:4570 `properties`: class, Name, GlobalId, Storey,
+ * Material, Family, Triangles, Volume), read from the display reader (ifc_read.h cc_ifc_info; no
+ * property sets: the reader does not keep them, as Rust's). `query element` keeps Rust's refusal
+ * ("this file is read only"). 0 ok, -1 with the error text: "no element with this id", "no model
+ * open", or the file is editable. */
+int cc_scene_element_json(cc_session *s, const char *id, size_t idn, Buf *out);
+
+/* query scene_tree (FIXUI, a C addition): the Navigator's object tree of the read-only scene,
+ * grouped by the reader's storey (container) name, then IFC class:
+ *   {"storeys": [{"classes": [{"class", "count"}], "count", "name"}], "total"}
+ * storeys in the file's storey order (lowest first; other containers and "" after, in name
+ * order), classes in byte order; total = the scene's elements. O(n log n). No read-only scene
+ * (no model, or an editable one: its tree is query storeys): the empty tree (the page may ask
+ * while a file opens or closes). 0 ok, -1 out of memory. */
+int cc_scene_tree_json(cc_session *s, Buf *out);
+
+/* query scene_elements {"storey": name, "class"?: name, "limit"?: n (default 200)} (FIXUI): the
+ * elements of one tree row, [{"class", "id", "name"}] in scene order; those without a valid
+ * GlobalId (not selectable) are left out. */
+int cc_scene_elements_json(cc_session *s, const char *storey, size_t sn, const char *cls, size_t cn, size_t limit,
+                           Buf *out);
+
+/* ---- LNK1: links kept in the .bimble (DEVIATIONS 29; model.h cc_model_link) ----
+ * A link of kind 0 is missing: the file the saved .bimble names was not found when it opened. It
+ * keeps its name, path and visibility, draws nothing (an empty scene), and is written again on
+ * save; manage_links {op: "locate", name, path} links it from another path, reload tries its path
+ * again, remove drops it.
+ *   cc_links_from_model: after a .bimble opened at `path`, each link it names: first its
+ *     `relative` from the file's folder, then its `path`; else a missing link. In the wasm module
+ *     (no files) every one is missing (the page locates them). The list as opened is the saved one.
+ *   cc_links_to_model: before a save to `path`: the model's list is the session's (each path made
+ *     absolute when the platform can, `relative` from the saved file's folder when there is one).
+ *   cc_links_saved: the list now is the saved one (after a save).
+ *   cc_links_changed: the list differs from the saved one (names, paths, visibility): the model
+ *     has unsaved changes (cc_session_unsaved). */
+int cc_links_from_model(cc_session *s, const char *path);
+int cc_links_to_model(cc_session *s, const char *path);
+void cc_links_saved(cc_session *s);
+int cc_links_changed(const cc_session *s);
+int cc_links_locate(cc_session *s, int i, const char *path, cc_error *err);
+/* The relative path from folder `dir` to file `file` (both absolute, '/' separated, as real_path
+ * gives them; "" when there is none: another drive, a relative input). 0 ok, -1 too long. */
+int cc_links_relative(const char *dir, const char *file, char *out, size_t n);
+/* ---- end LNK1 ---- */
 
 /* The /mesh trailer (above), appended to `out`. 0 ok, -1 with `err`. */
 int cc_links_bmsh(cc_session *s, uint32_t rev, Buf *out, cc_error *err);

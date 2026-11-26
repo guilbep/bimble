@@ -29,7 +29,24 @@ typedef struct {
     int depth;
     JrError *err;
     int failed;
+    JrBudget bud;
 } P;
+
+int jr_budget_take(JrBudget *b, size_t nodes, size_t each, size_t extra, const char **why) {
+    if (nodes > JR_MAX_NODES - b->nodes) {
+        *why = JR_ERR_NODES;
+        return -1;
+    }
+    /* nodes <= 2^24 and each is a struct size: the product fits */
+    size_t room = JR_MAX_DOM_BYTES - b->bytes, add = nodes * each;
+    if (add > room || extra > room - add) {
+        *why = JR_ERR_BYTES;
+        return -1;
+    }
+    b->nodes += nodes;
+    b->bytes += add + extra;
+    return 0;
+}
 
 static int fail(P *p, size_t off, const char *msg) {
     if (!p->failed) {
@@ -41,6 +58,11 @@ static int fail(P *p, size_t off, const char *msg) {
         p->failed = 1;
     }
     return -1;
+}
+
+static int take(P *p, size_t at, size_t nodes, size_t each, size_t extra) {
+    const char *why;
+    return jr_budget_take(&p->bud, nodes, each, extra, &why) ? fail(p, at, why) : 0;
 }
 
 static void ws(P *p) {
@@ -123,6 +145,7 @@ static int string(P *p, const char **out, size_t *out_n) {
         j++;
     }
     size_t raw = j - start;
+    if (take(p, start, 0, 0, raw + 1)) return -1;
     char *o = arena_alloc(p->a, raw + 1, 1);
     if (!o) return fail(p, start, "out of memory");
     if (!esc) {
@@ -248,6 +271,7 @@ static int container(P *p, JrVal *v, int obj) {
         p->i++;
     } else {
         for (;;) {
+            if (take(p, p->i, 1, sz, 0)) { rc = -1; break; }
             void *slot = vec_push(&sc, sz);
             if (!slot) { rc = fail(p, p->i, "out of memory"); break; }
             JrVal *child = slot;
@@ -314,7 +338,7 @@ static int value(P *p, JrVal *v) {
 }
 
 JrVal *jr_parse(Arena *a, const char *text, size_t n, JrError *err) {
-    P p = {text, n, 0, a, 0, err, 0};
+    P p = {text, n, 0, a, 0, err, 0, {0, 0}};
     err->offset = 0;
     err->msg[0] = 0;
     if (n > JR_MAX_BYTES) {
@@ -326,6 +350,7 @@ JrVal *jr_parse(Arena *a, const char *text, size_t n, JrError *err) {
         fail(&p, (size_t)bad, "invalid UTF-8");
         return NULL;
     }
+    if (take(&p, 0, 1, sizeof(JrVal), 0)) return NULL;
     JrVal *root = arena_alloc(a, sizeof *root, 16);
     if (!root) {
         fail(&p, 0, "out of memory");

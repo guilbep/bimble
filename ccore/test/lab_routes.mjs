@@ -10,7 +10,8 @@
 //     (`data-not-yet`) with a tooltip, and a click on it changes nothing and shows the tooltip;
 //   - a ribbon tab whose every tool is "not yet" carries the "preview" mark;
 //   - a file open read only: the header says "Read only" (not "Saved"), no Save is enabled;
-//   - no console error, no uncaught exception, no 4xx/5xx answer during the walk.
+//   - no console error, no uncaught exception, no 4xx/5xx answer during the walk (GET /mesh with no
+//     model too: no request at all, TEST1); closing the model asks no /mesh and draws nothing.
 // Runs on: the native host (/?native=1) with no model, an editable model (golden/frame.json) and a
 // read-only IFC (golden/ifc/frame.ifc); the C core's wasm (/?ccore=1, the model it boots with)
 // and the viewer-only wasm (&ccore_wasm=ccore/ccore-view.wasm). Needs web-ui/node_modules,
@@ -26,8 +27,8 @@ import { CHROMIUM, port, vitePort } from "./ports.mjs";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("lab_routes", 47344);
-const VITE = vitePort("lab_routes", 5198);
+const PORT = port("lab_routes");
+const VITE = vitePort("lab_routes");
 const TOKEN = "labroutes-token";
 const NATIVE = `http://localhost:${VITE}/?native=1&gl=1&port=${PORT}&token=${TOKEN}`;
 const WASM = `http://localhost:${VITE}/?ccore=1&gl=1`;
@@ -114,9 +115,11 @@ async function session(cdp) {
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
   const S = (m, p) => cdp.send(m, p, sessionId);
   const errors = [];
+  const meshReqs = []; // TEST1: every GET /mesh the page sends (its URL)
   cdp.on((msg) => {
     if (msg.sessionId !== sessionId) return;
     const p = msg.params;
+    if (msg.method === "Network.requestWillBeSent" && /^\/mesh$/.test(new URL(p.request.url).pathname)) meshReqs.push(p.request.url);
     if (msg.method === "Runtime.exceptionThrown") errors.push(`exception: ${p.exceptionDetails.exception?.description ?? p.exceptionDetails.text}`);
     if (msg.method === "Runtime.consoleAPICalled" && p.type === "error") errors.push(`console.error: ${p.args.map((a) => a.value ?? a.description).join(" ")}`);
     // The browser's own favicon request (the lab has none) is not the page's.
@@ -152,7 +155,7 @@ async function session(cdp) {
     await sleep(150);
     return true;
   };
-  return { S, evalJs, js, go, click, errors, seen: 0, close: () => cdp.send("Target.closeTarget", { targetId }) };
+  return { S, evalJs, js, go, click, errors, meshReqs, seen: 0, close: () => cdp.send("Target.closeTarget", { targetId }) };
 }
 
 // What a screen shows, from the DOM: NotAvailable, or data (text, no empty table), or empty.
@@ -164,7 +167,10 @@ const SCREEN = (sel) => `(() => {
   if (na && (na.parentElement === el || (na.parentElement.parentElement === el && na.parentElement.children.length === 1))) return JSON.stringify({ state: 'not-available' });
   const empty = [...el.querySelectorAll('table')].filter((t) => !t.querySelector('tbody tr, tr td')).length;
   const text = (el.innerText ?? '').replace(/\\s+/g, ' ').trim();
-  return JSON.stringify({ state: empty ? 'empty-table' : text.length < 8 ? 'empty' : na ? 'data, parts not-available' : 'data', text: text.slice(0, 80), empty });
+  // FIXUI 7: data is more than the screen's own title: 8 characters besides its headings (a heading
+  // alone counted as data).
+  const heads = [...el.querySelectorAll('h1, h2, h3, .pn')].reduce((n, h) => n + (h.innerText ?? '').replace(/\\s+/g, ' ').trim().length, 0);
+  return JSON.stringify({ state: empty ? 'empty-table' : text.length - heads < 8 ? 'empty' : na ? 'data, parts not-available' : 'data', text: text.slice(0, 80), empty });
 })()`;
 
 /** One walk: every page, dialog, panel, ribbon tab; the File menu, the quick bar, the shell controls. */
@@ -188,7 +194,8 @@ async function walk(P, label, { model }) {
     // The left panel beside a page: never empty.
     if (id !== "home") {
       const side = JSON.parse(await P.evalJs(SCREEN("[data-bb=properties]")));
-      check(`${label}: page ${id}: the left panel is not empty`, side.state !== "empty" && side.state !== "empty-table", JSON.stringify(side));
+      // FIXUI 7: a missing left panel ("absent") is not a panel with data.
+      check(`${label}: page ${id}: the left panel is not empty`, side.state.startsWith("data") || side.state === "not-available", JSON.stringify(side));
     }
     if (id === "home") {
       // Home's user line and recent files: data where served, else NotAvailable.
@@ -217,7 +224,9 @@ async function walk(P, label, { model }) {
       // save_as (FS1): a hidden action of the core (calls.c HIDDEN_ACTIONS, not in `query actions`),
       // enabled by the page with an editable model: checked as that.
       const editableNow = await P.js("return b.state.value.file !== null && b.state.value.editable !== false;");
-      const bad = fm.filter((e) => e.enabled && !e.core && !["export"].includes(e.id) && !(e.id === "save_as" && editableNow));
+      // close (FIXUI): hidden too (calls.c HIDDEN_ACTIONS), enabled by the core whenever a file is loaded.
+      const fileNow = await P.js("return b.state.value.file !== null;");
+      const bad = fm.filter((e) => e.enabled && !e.core && !["export"].includes(e.id) && !(e.id === "save_as" && editableNow) && !(e.id === "close" && fileNow));
       check(`${label}: File menu: every enabled entry's action is enabled in the core`, bad.length === 0, JSON.stringify(bad));
       const nyBad = fm.filter((e) => e.ny && (e.enabled || !/./.test(e.title)));
       check(`${label}: File menu: "not yet" entries are greyed with a tooltip`, nyBad.length === 0, JSON.stringify(nyBad));
@@ -235,11 +244,11 @@ async function walk(P, label, { model }) {
     await P.js("pn.currentPanel.value = null; return 1");
   }
   if (!model) {
-    // Known, not FAKE1's: the WebGL viewport (glviewport.ts, ticket G2's file) asks GET /mesh with no
-    // model open and the host answers 404 (session/mesh.c). Listed in the report; every other error counts.
-    const errs = P.errors.slice(before).filter((e) => !/(404|Not Found).*\/mesh\?/.test(e));
-    if (errs.length !== P.errors.length - before) console.log(`note ${label}: GET /mesh 404 with no model (glviewport.ts), ${P.errors.length - before - errs.length} line(s), not counted`);
-    check(`${label}: no console error, no 4xx/5xx during the walk`, errs.length === 0, errs.join(" | "));
+    // TEST1 (BUG2): GET /mesh with no model counts like any other answer (it was exempt: the WebGL
+    // viewport asked every second and the host answered 404). The page asks nothing with no model.
+    const errs = P.errors.slice(before);
+    check(`${label}: no console error, no 4xx/5xx since the page opened, nor during the walk`, errs.length === 0, errs.join(" | "));
+    check(`${label}: no GET /mesh with no model open`, P.meshReqs.length === 0, P.meshReqs.join(" | "));
     P.seen = P.errors.length;
     return;
   }
@@ -342,12 +351,89 @@ async function main() {
     await P.js("sh.send({ do: 'showView' }); return 1");
     await sleep(500);
     await walk(P, "native, editable", { model: true });
+    // FIXUI 3: an error line of the Modify panel (a bad vector) before another file opens: it must
+    // not stay over the next model's selection (it stayed after a convert).
+    {
+      await P.js("sh.send({ do: 'showView' }); b.select([b.query('elements', { limit: 1 })[0].id]); return 1");
+      await sleep(400);
+      await P.evalJs("(() => { const i = document.querySelector('[data-bb=modifier] .vec input'); i.value = 'x'; i.dispatchEvent(new Event('input')); return 1; })()");
+      await P.click("[data-bb=modifier-run]");
+      await sleep(200);
+      const shownErr = await P.evalJs("!!document.querySelector('[data-bb=modifier] .error')");
+      check("native, editable: a bad vector shows the Modify panel's error line", shownErr);
+      await P.js("b.select([]); return 1");
+      await sleep(500); // the page settles (its view panel asks the model's classes) before the agent's open
+
+    }
     const o2 = await host("action", "open", JSON.stringify({ path: join(tmp, "frame.ifc"), discard: true }));
     check("native: open frame.ifc read only", o2.status === 200, o2.text);
     await waitFor("the IFC in the page", 10000, () => P.js("return b.state.value.file === 'frame.ifc' && b.state.value.editable === false"));
     await P.js("sh.send({ do: 'showView' }); return 1");
     await sleep(500);
     await walk(P, "native, read-only IFC", { model: true });
+    // FIXUI 1: the Navigator's Objects of the read-only IFC (it said 0), then an element clicked in
+    // its tree: the Properties panel shows its name, IFC class and GlobalId (it showed only "Read-only
+    // file", and each click answered 400 /query/element). Fails on the old code: Objects 0, no tree.
+    {
+      const e0 = P.errors.length;
+      await P.js("sh.send({ do: 'showView' }); return 1");
+      await sleep(300);
+      const objN = await P.evalJs("document.querySelector('[data-bb=nav-objects] .n')?.textContent?.trim() ?? null");
+      check("native, read-only IFC: the Navigator's Objects count is the scene's 72", objN === "72", String(objN));
+      await P.click("[data-bb=nav-objects]");
+      await sleep(200);
+      await P.click("[data-bb=nav-storey]");
+      await sleep(200);
+      await P.click("[data-bb=nav-class]");
+      await sleep(200);
+      const want = JSON.parse(await P.evalJs(`JSON.stringify((() => { const e = document.querySelector('[data-bb=nav-element]');
+        return e ? { id: e.dataset.id, name: e.textContent.trim() } : null; })())`));
+      const clicked = want ? await P.click("[data-bb=nav-element]") : false;
+      await sleep(500);
+      const got = JSON.parse(await P.evalJs(`JSON.stringify((() => { const p = document.querySelector('[data-bb=properties]');
+        if (!p) return null;
+        return { text: p.innerText.replace(/\\s+/g, ' '), name: p.querySelector('#el-name')?.value ?? null,
+          sel: null }; })())`));
+      const sel = await P.js("return b.state.value.selection.join(',')");
+      check("native, read-only IFC: a click in the Objects tree selects the element", clicked && want && sel === want.id, `${JSON.stringify(want)} selection ${sel}`);
+      const cls = await P.js(`return b.query('scene_element', { id: ${JSON.stringify(want?.id ?? "")} }).class`).catch(() => null);
+      check("native, read-only IFC: Properties show the element's name, IFC class and GlobalId",
+        !!got && !!want && got.name === want.name && want.name.length > 0 && /^Ifc[A-Za-z]+$/.test(cls ?? "") && got.text.includes(cls) && got.text.includes(want.id),
+        `${JSON.stringify(got)} want ${JSON.stringify(want)} class ${cls}`);
+      check("native, read-only IFC: Properties show storey, material, family, volume (Rust's rows)",
+        !!got && /Volume [0-9]+\.[0-9]{3} m³/.test(got.text) && /Family|Famille/.test(got.text), JSON.stringify(got));
+      // FIXUI 3: the Modify panel on a read-only file: the edits disabled (they looked enabled, Delete
+      // answered "this file is read only"), the earlier model's error line gone.
+      const mod = JSON.parse(await P.evalJs(`JSON.stringify((() => { const m = document.querySelector('[data-bb=modifier]');
+        if (!m) return null;
+        const tools = [...m.querySelectorAll('.tools .tool')].slice(0, 4).map((x) => x.getAttribute('aria-disabled') === 'true');
+        return { tools, run: m.querySelector('[data-bb=modifier-run]')?.disabled ?? null, del: m.querySelector('[data-bb=modifier-delete]')?.disabled ?? null,
+          inputs: [...m.querySelectorAll('.vec input')].every((i) => i.disabled), ro: m.querySelector('[data-bb=modifier-readonly]')?.textContent ?? null,
+          error: m.querySelector('.error')?.textContent ?? null }; })())`));
+      check("native, read-only IFC: Modify's Move, Copy, Rotate, Mirror, the vector, Move by and Delete are disabled, with why",
+        !!mod && mod.tools.length === 4 && mod.tools.every(Boolean) && mod.run === true && mod.del === true && mod.inputs && /Read-only/.test(mod.ro ?? ""), JSON.stringify(mod));
+      check("native, read-only IFC: no error line left from the editable model", !!mod && mod.error === null, JSON.stringify(mod));
+      const r0 = P.errors.length;
+      await P.click("[data-bb=modifier-delete]");
+      await sleep(300);
+      check("native, read-only IFC: a click on the disabled Delete sends nothing, shows no error",
+        P.errors.length === r0 && !(await P.evalJs("!!document.querySelector('[data-bb=modifier] .error')")), P.errors.slice(r0).join(" | "));
+      check("native, read-only IFC: no 4xx/5xx nor console error during the selection", P.errors.length === e0, P.errors.slice(e0).join(" | "));
+      await P.js("b.select([]); return 1");
+      P.seen = P.errors.length;
+    }
+    // TEST1 (BUG2): close the model: the page drops the picture, asks no /mesh, sees no 4xx. 2.5 s
+    // is more than two turns of the old error path (a 404, then a retry a second later).
+    const e0 = P.errors.length, m0 = P.meshReqs.length;
+    const cl = await host("action", "close");
+    check("native: close", cl.status === 200, cl.text);
+    await waitFor("no model in the page", 10000, () => P.js("return b.state.value.file === null"));
+    await sleep(2500);
+    const tris = await P.evalJs("window.__bbGl?.drawnTris ?? -1");
+    check("native, closed: no GET /mesh after the close, no 4xx/5xx, nothing drawn",
+      P.meshReqs.length === m0 && P.errors.length === e0 && tris === 0,
+      `mesh ${P.meshReqs.slice(m0).join(" | ")}; errors ${P.errors.slice(e0).join(" | ")}; triangles drawn ${tris}`);
+    P.seen = P.errors.length;
     await P.close();
   });
   // The C core's wasm and the viewer-only wasm: the model each boots with.

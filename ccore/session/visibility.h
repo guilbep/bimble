@@ -11,7 +11,8 @@
  * Deviations (the C core has no views in its model, docs/research/c-core-spec.md §1):
  *   - "in view" hides and isolates are kept in the session, not stored in the view as a Command
  *     (Rust's save_visibility makes a history step on a .bimble model). show_all_in_view clears them.
- *   - the box is axis-aligned (yaw 0), as every box Rust makes today.
+ *   - the box is axis-aligned (yaw 0), as every box Rust makes today; ISS71: it may turn (yaw: project
+ *     or true north, DEVIATIONS), and Box to selection grows the selection's bounds by 1 m.
  *   - the face drag takes pointer rays (op tool: box_press, box_move, box_release): the face
  *     follows the point of its axis nearest to the pointer ray; Rust projects the screen drag on
  *     the axis as seen on screen. Same result for a pointer that stays on the axis. */
@@ -50,7 +51,36 @@ typedef struct {
     cc_gidset by_view;
     size_t view_lists;
     /* ---- end SEC1 ---- */
+    /* ---- ISS72 ---- the Show previous stacks (below), one per view, oldest first */
+    struct cc_vis_prev *prev;
+    size_t nprev, capprev;
+    /* ---- end ISS72 ---- */
+    /* ---- ISS71 ---- the box's turn (radians, counter-clockwise about the vertical through the
+     * scene origin, f32 as ClipBox::yaw): min and max are corners in the box's frame. */
+    float yaw;
+    /* The orientation chosen (1: true north, 0: project north) and, for a round trip, the box
+     * before the last orientation change (alt_*) and the box that change made (made_*). */
+    int true_north;
+    int has_alt;
+    float alt_min[3], alt_max[3], alt_yaw, made_min[3], made_max[3];
+    /* ---- end ISS71 ---- */
 } cc_vis;
+
+/* ---- ISS71 ---- Box to selection (issue #71): the selection's bounds grown by 1 m on every side. */
+#define CC_BOX_SELECTION_MARGIN_MM 1000.0f
+/* Grows [lo, hi] by the element `k` of `sc`, moved by `off` (scene mm), in the frame turned by
+ * `yaw` (the box's frame: the point turned by -yaw). Without vertices: unchanged. */
+void cc_vis_grow(const cc_scene *sc, size_t k, const float off[3], float yaw, float lo[3], float hi[3]);
+/* The box = [lo, hi] (in the frame of v->yaw) grown by `margin` on every side. 0, or -1 when
+ * [lo, hi] is empty (the box unchanged). */
+int cc_vis_fit_bounds(cc_vis *v, const float lo[3], const float hi[3], float margin);
+/* The box turned to `yaw` (an orientation change), keeping what it held: the box before the last
+ * change when the box is still the one that change made and that box had this yaw (a round trip
+ * gives the same box back); else around `sel_lo`..`sel_hi` (the selection in the new frame, NULL:
+ * none) grown by CC_BOX_SELECTION_MARGIN_MM; else around the current box's corners in the new
+ * frame. Without a box only the yaw changes (the next fit uses it). */
+void cc_vis_orient(cc_vis *v, float yaw, const float *sel_lo, const float *sel_hi);
+/* ---- end ISS71 ---- */
 
 void cc_vis_init(cc_vis *v);
 void cc_vis_free(cc_vis *v);
@@ -86,4 +116,33 @@ void cc_vis_sets_json(const cc_vis *v, JsonW *w);
 int cc_vis_tool(cc_vis *v, const char *name, const char *body, size_t n, Buf *out);
 /* 1 if `name` is one of the box tool's calls. */
 int cc_vis_tool_name(const char *name);
+
+/* ---- ISS72 ---- Show all and Show previous (GitHub issue #72; C additions, DEVIATIONS 25).
+ * A visibility state: what is hidden or isolated for now (the temporary set) and what the view
+ * stores (hidden_elements, isolated_elements and its family, class, storey, link and material
+ * lists). The reveal switch and the section box are not part of it. Behaviour: calls.c, ISS72. */
+#define CC_VIS_PREV_MAX 32 /* states kept per view */
+typedef struct {
+    int has_temp, temp_isolate;
+    cc_gidset temp, hidden, isolated;
+    Buf lists; /* the view's five other lists, packed (visibility.c) */
+} cc_vis_state;
+/* The state now: `v`'s sets and the view's lists `lists` (NULL: none, a read-only scene). A hide
+ * for now that hides nothing is no temporary state. 0 ok, -1 out of memory (`out` freed). */
+int cc_vis_capture(const cc_vis *v, const cc_visibility *lists, cc_vis_state *out);
+void cc_vis_state_free(cc_vis_state *st);
+int cc_vis_state_eq(const cc_vis_state *a, const cc_vis_state *b);
+/* The state's temporary and element sets become `v`'s (the view's lists: cc_vis_state_lists).
+ * 0 ok, -1 out of memory. */
+int cc_vis_restore(cc_vis *v, const cc_vis_state *st);
+/* The state's five other lists into `out` (hidden_families … hidden_materials; strings in `a`);
+ * the element lists are left as they are. 0 ok, -1 out of memory. */
+int cc_vis_state_lists(const cc_vis_state *st, Arena *a, cc_visibility *out);
+/* The stack of the view `view`: push takes `st` (moved: the caller's copy is emptied), the oldest
+ * state of that view goes past CC_VIS_PREV_MAX; top is NULL when empty; pop frees the top. */
+int cc_vis_prev_push(cc_vis *v, const cc_gid *view, cc_vis_state *st);
+const cc_vis_state *cc_vis_prev_top(const cc_vis *v, const cc_gid *view);
+void cc_vis_prev_pop(cc_vis *v, const cc_gid *view);
+size_t cc_vis_prev_count(const cc_vis *v, const cc_gid *view);
+/* ---- end ISS72 ---- */
 #endif

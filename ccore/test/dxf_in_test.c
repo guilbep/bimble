@@ -12,6 +12,7 @@
 #include <string.h>
 #include "../src/dxf_in.h"
 #include "../src/fmt.h"
+#include "../src/ifc_math.h"
 #include "../host/host.h"
 #include "../session/calls.h"
 #include "../session/session.h"
@@ -208,8 +209,68 @@ static void hostile(void) {
                          "0\nARC\n10\n0\n20\n0\n40\n1\n50\n0\n51\n1e300\n0\nELLIPSE\n10\n0\n20\n0\n11\n1\n21\n0\n41\n1e300\n42\n0\n"
                          "0\nCIRCLE\n10\nnan\n20\n0\n40\n1\n0\nLINE\n10\ninf\n20\n0\n11\n1\n21\n1\n0\nENDSEC\n0\nEOF\n";
     check_true("absurd angles read", read_text(angles, &d, &err) == 0);
-    check_true("absurd angles: nothing drawn, the huge sweep truncated", d.npolylines == 0 && d.truncated);
+    /* FIXLIB: the ARC from 0 to 1e300 degrees sweeps more than two turns: one turn, 65 points (it
+     * was "truncated": Rust would allocate it and abort); the others are not drawn, as before. */
+    check_true("absurd angles: the huge sweep is one turn, the rest not drawn",
+               d.npolylines == 1 && d.npts == 65 && !d.truncated && d.xy[0] == 1.0 && d.xy[1] == 0.0);
     buf_free(&err), cc_dxf_free(&d);
+
+    /* FIXLIB: an ARC sweeping 11,200,000 degrees (31,111 turns) made 1,991,113 points in 8 s
+     * (2 us a sine): past two turns it is one turn now; 100 of them in a 4 KB file took minutes. */
+    {
+        const char *one = "0\nSECTION\n2\nENTITIES\n0\nARC\n10\n0\n20\n0\n40\n5\n50\n0\n51\n11200000\n0\nENDSEC\n0\nEOF\n";
+        check_true("huge sweep: reads", read_text(one, &d, &err) == 0);
+        check_true("huge sweep: one turn, 65 points", d.npolylines == 1 && d.npts == 65 && !d.truncated);
+        buf_free(&err), cc_dxf_free(&d);
+        Buf arcs;
+        buf_init(&arcs);
+        buf_puts(&arcs, "0\nSECTION\n2\nENTITIES\n");
+        for (int i = 0; i < 100; i++) buf_puts(&arcs, "0\nARC\n10\n0\n20\n0\n40\n5\n50\n0\n51\n11200000\n");
+        buf_puts(&arcs, "0\nENDSEC\n0\nEOF\n");
+        buf_init(&err);
+        check_true("100 huge sweeps: read, 100 x 65 points", cc_dxf_read((const uint8_t *)arcs.p, arcs.len, &d, &err) == 0 &&
+                                                                d.npolylines == 100 && d.npts == 6500 && !d.truncated);
+        buf_free(&err), cc_dxf_free(&d), buf_free(&arcs);
+        /* two turns exactly is Rust's (129 points); a sweep just past it is one turn */
+        const char *two = "0\nSECTION\n2\nENTITIES\n0\nARC\n10\n0\n20\n0\n40\n5\n50\n0\n51\n720\n"
+                          "0\nARC\n10\n0\n20\n0\n40\n5\n50\n0\n51\n721\n0\nENDSEC\n0\nEOF\n";
+        check_true("720 and 721 degrees: read", read_text(two, &d, &err) == 0);
+        check_true("720 degrees: Rust's 129 points, 721: one turn (65)", d.npolylines == 2 && d.start[1] == 129 && d.npts == 129 + 65);
+        buf_free(&err), cc_dxf_free(&d);
+    }
+
+    /* FIXLIB: a non-finite bulge is a straight segment (reference.rs bulged: `!bulge.is_finite()`);
+     * without the check a NaN made NaN points (the polyline dropped), inf a circle of huge radius. */
+    {
+        static const char *const B[] = {"nan", "inf", "-inf"};
+        for (int i = 0; i < 3; i++) {
+            char t[256];
+            snprintf(t, sizeof t, "0\nSECTION\n2\nENTITIES\n0\nLWPOLYLINE\n10\n0\n20\n0\n42\n%s\n10\n10\n20\n0\n0\nENDSEC\n0\nEOF\n", B[i]);
+            char what[64];
+            snprintf(what, sizeof what, "bulge %s: a straight segment of 2 points", B[i]);
+            check_true(what, read_text(t, &d, &err) == 0 && d.npolylines == 1 && d.npts == 2 && d.xy[2] == 10.0 && d.xy[3] == 0.0);
+            buf_free(&err), cc_dxf_free(&d);
+        }
+    }
+
+    /* FIXLIB: the points made are budgeted (2 x 2,000,000), dropped ones too: a block of a
+     * 1000-vertex polyline with a NaN, copied 5000 times, made 5 M points (all dropped) without a
+     * bound; an arc of NaN radius is dropped before its sines. */
+    {
+        Buf nanb;
+        buf_init(&nanb);
+        buf_puts(&nanb, "0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n2\nN\n10\n0\n20\n0\n0\nLWPOLYLINE\n");
+        for (int i = 0; i < 1000; i++) buf_puts(&nanb, "10\nnan\n20\n0\n");
+        buf_puts(&nanb, "0\nENDBLK\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nINSERT\n2\nN\n10\n0\n20\n0\n70\n1000\n71\n5\n"
+                        "0\nLINE\n10\n0\n20\n0\n11\n1\n21\n0\n0\nENDSEC\n0\nEOF\n");
+        buf_init(&err);
+        check_true("5 M dropped points: reads", cc_dxf_read((const uint8_t *)nanb.p, nanb.len, &d, &err) == 0);
+        buf_init(&notes);
+        cc_dxf_notes(&d, &notes);
+        check_true("5 M dropped points: the point budget's note, nothing drawn after it",
+                   strstr(buf_cstr(&notes), "stopped drawing (more than 4000000 points made)\n") != NULL && d.npolylines == 0);
+        buf_free(&notes), buf_free(&err), cc_dxf_free(&d), buf_free(&nanb);
+    }
 
     /* 2,000,000 points: a polyline of 1,999,000, one of 1,001 that does not fit, then a line that does. */
     Buf big;
@@ -249,6 +310,26 @@ static void hostile(void) {
     buf_free(&err);
     check_true(".Dxf is a DXF", cc_dxf_name_kind("plan.Dxf", 8, &err) == 1);
     buf_free(&err);
+}
+
+/* FIXLIB: cc_sincos (the arcs' sines, once per angle) gives cc_sin's and cc_cos's bits. */
+static void sincos_bits(void) {
+    static const double special[] = {0.0, -0.0, 1e15, 2e15, -3e16, 1.0 / 0.0, -1.0 / 0.0, 0.0 / 0.0, 2e5, 1e-300};
+    int same = 0, total = 0;
+    uint64_t x = 0x9E3779B97F4A7C15ull;
+    for (int i = 0; i < 20000 + (int)(sizeof special / sizeof special[0]); i++) {
+        double a;
+        if (i < (int)(sizeof special / sizeof special[0])) a = special[i];
+        else {
+            x ^= x << 13, x ^= x >> 7, x ^= x << 17;
+            a = ((double)(x >> 11) / 9007199254740992.0 - 0.5) * (i % 2 ? 1e3 : 4e5);
+        }
+        double s, c, s1 = cc_sin(a), c1 = cc_cos(a);
+        cc_sincos(a, &s, &c);
+        total++;
+        if (!memcmp(&s, &s1, 8) && !memcmp(&c, &c1, 8)) same++;
+    }
+    check_true("cc_sincos: the bits of cc_sin and cc_cos", same == total);
 }
 
 /* Fills a large stretch of the stack below the caller with 0xA5, so a struct the reader frees
@@ -458,6 +539,7 @@ int main(int argc, char **argv) {
     goldens(gdir);
     extras(gdir);
     hostile();
+    sincos_bits();
     mangled(gdir);
     poisoned(gdir);
     session_calls(floats, gdir);

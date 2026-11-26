@@ -17,6 +17,8 @@ const s = computed(() => storeys.value.find((x) => x.id === picked.value) ?? nul
     <div class="row" data-bb="levels-side-count"><span class="k">{{ t('levelsgrids.side.count') }}</span><span class="mono">{{ s.element_count }}</span></div>
     <div class="row"><span class="k">{{ t('levelsgrids.side.ifc') }}</span><span class="mono">IfcBuildingStorey</span></div>
   </template>
+  <!-- FIXUI 7: nothing picked: say how to fill the panel (it showed its title alone). -->
+  <p v-else class="k" style="margin:0;white-space:normal" data-bb="levels-side-hint">{{ t('levelsgrids.side.pick') }}</p>
 </template>
 
 <style scoped>

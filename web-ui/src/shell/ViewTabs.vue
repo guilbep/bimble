@@ -61,7 +61,8 @@ const picture = (onPaper: boolean) => { if (onPaper !== paper.value.on) runActio
 /* .vtab.on{background:#FFFFFF;color:#141414;border-color:#DDD6C8} */
 .vtab.on { background: var(--bb-sheet); color: var(--bb-ink); border-color: var(--bb-line); }
 /* .vtab .xx{width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px} */
-.xx { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--bb-radius-pill); }
+/* PERF2: a 24 px target (Lighthouse target-size), drawn in the 20 px of the reference: the 2 px margins give it back */
+.xx { width: 24px; height: 24px; margin: -2px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--bb-radius-pill); }
 /* .seg{display:inline-flex;gap:2px;padding:2px;border-radius:999px;background:#EDE7DB} */
 .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--bb-radius-pill); background: var(--bb-sunk); }
 /* .seg span{padding:2px 12px;border-radius:999px;color:#5C574D;text-decoration:none;font:inherit;font-size:13px;border:0;background:none;cursor:pointer;white-space:nowrap} */

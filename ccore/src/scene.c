@@ -16,6 +16,7 @@
 #include "boolean.h"
 #include "buf.h"
 #include "earcut.h"
+#include "prism_cut.h" /* SLAB1 */
 #include <stdlib.h>
 
 typedef double V[3];
@@ -454,6 +455,60 @@ static int corner_loop(const double (*src)[2], size_t n, Arena *a, Loop *out) {
     return 0;
 }
 
+/* An extrusion generator's profile loops (outline, then voids; corners only) and depth, in `a`.
+ * 0 ok, -1 out of memory, WARN with `why` (not an extrusion, fewer than 3 corners). */
+static int gen_loops(const cc_generator *g, Arena *a, Loop **out, size_t *nloops, double *depth_out, Buf *why) {
+    double r[4][2], depth;
+    const cc_loop *outline = NULL, *voids = NULL;
+    size_t nvoids = 0;
+    switch (g->kind) {
+    case CC_GEN_RECT_COLUMN:
+    case CC_GEN_PAD_FOOTING:
+    case CC_GEN_RECT_BEAM: {
+        double xd = g->kind == CC_GEN_RECT_BEAM ? g->u.beam.width : g->u.col.width;
+        double yd = g->kind == CC_GEN_RECT_BEAM ? g->u.beam.height : g->u.col.depth;
+        depth = g->kind == CC_GEN_RECT_BEAM ? g->u.beam.length : g->u.col.height;
+        double x = xd / 2.0, y = yd / 2.0;
+        double q[4][2] = {{-x, -y}, {x, -y}, {x, y}, {-x, y}};
+        memcpy(r, q, sizeof r);
+        break;
+    }
+    case CC_GEN_WALL: {
+        double t = g->u.wall.thickness;
+        double q[4][2] = {{0.0, -t / 2.0}, {g->u.wall.length, -t / 2.0}, {g->u.wall.length, t / 2.0}, {0.0, t / 2.0}};
+        memcpy(r, q, sizeof r);
+        depth = g->u.wall.height;
+        break;
+    }
+    case CC_GEN_SLAB:
+        outline = &g->u.slab.outline;
+        depth = g->u.slab.thickness;
+        break;
+    case CC_GEN_EXTRUDED_POLYGON:
+        outline = &g->u.poly.outline;
+        voids = g->u.poly.voids;
+        nvoids = g->u.poly.nvoids;
+        depth = g->u.poly.height;
+        break;
+    default:
+        buf_puts(why, "no extrusion");
+        return WARN;
+    }
+    Loop *all = arena_alloc(a, (nvoids + 1) * sizeof *all, 8);
+    if (!all) return -1;
+    if (corner_loop(outline ? (const double (*)[2])outline->pts : (const double (*)[2])r, outline ? outline->n : 4, a,
+                    &all[0]))
+        return -1;
+    for (size_t v = 0; v < nvoids; v++)
+        if (corner_loop((const double (*)[2])voids[v].pts, voids[v].n, a, &all[v + 1])) return -1;
+    if (all[0].n < 3) {
+        buf_puts(why, "profile has fewer than 3 corners");
+        return WARN;
+    }
+    *out = all, *nloops = nvoids + 1, *depth_out = depth;
+    return 0;
+}
+
 /* A generator's triangles (element_tris / opening_tris before the openings, local mm) in `a`.
  * 0 ok, -1 out of memory, WARN with `why` (Rust's GeomError text), LIMIT. */
 static int gen_tris(const cc_generator *g, Arena *a, double (**out)[3][3], size_t *nout, Buf *why) {
@@ -470,59 +525,59 @@ static int gen_tris(const cc_generator *g, Arena *a, double (**out)[3][3], size_
         for (size_t t = 0; t < m; t++)
             for (int k = 0; k < 3; k++) memcpy(tris[t][k], g->u.mesh.positions[g->u.mesh.indices[3 * t + k]], 24);
     } else {
-        double r[4][2], depth;
-        const cc_loop *outline = NULL, *voids = NULL;
-        size_t nvoids = 0;
-        switch (g->kind) {
-        case CC_GEN_RECT_COLUMN:
-        case CC_GEN_PAD_FOOTING:
-        case CC_GEN_RECT_BEAM: {
-            double xd = g->kind == CC_GEN_RECT_BEAM ? g->u.beam.width : g->u.col.width;
-            double yd = g->kind == CC_GEN_RECT_BEAM ? g->u.beam.height : g->u.col.depth;
-            depth = g->kind == CC_GEN_RECT_BEAM ? g->u.beam.length : g->u.col.height;
-            double x = xd / 2.0, y = yd / 2.0;
-            double q[4][2] = {{-x, -y}, {x, -y}, {x, y}, {-x, y}};
-            memcpy(r, q, sizeof r);
-            break;
-        }
-        case CC_GEN_WALL: {
-            double t = g->u.wall.thickness;
-            double q[4][2] = {{0.0, -t / 2.0}, {g->u.wall.length, -t / 2.0}, {g->u.wall.length, t / 2.0}, {0.0, t / 2.0}};
-            memcpy(r, q, sizeof r);
-            depth = g->u.wall.height;
-            break;
-        }
-        case CC_GEN_SLAB:
-            outline = &g->u.slab.outline;
-            depth = g->u.slab.thickness;
-            break;
-        case CC_GEN_EXTRUDED_POLYGON:
-            outline = &g->u.poly.outline;
-            voids = g->u.poly.voids;
-            nvoids = g->u.poly.nvoids;
-            depth = g->u.poly.height;
-            break;
-        default:
-            buf_puts(why, "no extrusion");
-            return WARN;
-        }
-        Loop *all = arena_alloc(a, (nvoids + 1) * sizeof *all, 8);
-        if (!all) return -1;
-        if (corner_loop(outline ? (const double (*)[2])outline->pts : (const double (*)[2])r, outline ? outline->n : 4, a,
-                        &all[0]))
-            return -1;
-        for (size_t v = 0; v < nvoids; v++)
-            if (corner_loop((const double (*)[2])voids[v].pts, voids[v].n, a, &all[v + 1])) return -1;
-        if (all[0].n < 3) {
-            buf_puts(why, "profile has fewer than 3 corners");
-            return WARN;
-        }
-        int rc = extrude_tris(all, nvoids + 1, depth, a, &tris, &m, why);
+        Loop *all;
+        size_t nloops;
+        double depth;
+        int rc = gen_loops(g, a, &all, &nloops, &depth, why);
+        if (rc) return rc;
+        rc = extrude_tris(all, nloops, depth, a, &tris, &m, why);
         if (rc) return rc;
     }
     *out = tris, *nout = m;
     return 0;
 }
+
+/* ---- SLAB1: without a kernel, openings of a prism host cut exactly when they are boxes in a
+ * rectangular host or convex prisms through any profile (prism_cut.h). 0 cut (*tris, *m
+ * replaced), 1 not a special case, -1 out of memory. ---- */
+static int prism_cut(const cc_generator *g, const cc_tri_set *cut, size_t nc, Arena *a, double (**tris)[3][3], size_t *m) {
+    Loop *all;
+    size_t nloops;
+    double depth;
+    Buf why;
+    buf_init(&why);
+    int rc = gen_loops(g, a, &all, &nloops, &depth, &why);
+    int oom = why.oom;
+    buf_free(&why);
+    if (rc < 0 || oom) return -1;
+    if (rc) return 1;
+    cc_ploop *pl = arena_alloc(a, (nloops + nc) * sizeof *pl, 8);
+    if (!pl) return -1;
+    for (size_t i = 0; i < nloops; i++) pl[i].p = all[i].p, pl[i].n = all[i].n;
+    double (*t)[3][3];
+    size_t n;
+    rc = cc_prism_cut_box(pl, nloops, depth, cut, nc, a, &t, &n);
+    if (rc <= 0) {
+        if (!rc) *tris = t, *m = n;
+        return rc;
+    }
+    cc_ploop *holes;
+    rc = cc_prism_cut_holes(pl, nloops, depth, cut, nc, a, &holes);
+    if (rc) return rc;
+    Loop *more = arena_alloc(a, (nloops + nc) * sizeof *more, 8);
+    if (!more) return -1;
+    memcpy(more, all, nloops * sizeof *more);
+    for (size_t i = 0; i < nc; i++) more[nloops + i].p = holes[i].p, more[nloops + i].n = holes[i].n;
+    buf_init(&why);
+    rc = extrude_tris(more, nloops + nc, depth, a, &t, &n, &why);
+    oom = why.oom;
+    buf_free(&why);
+    if (rc < 0 || oom) return -1;
+    if (rc) return 1; /* earcut refused: uncut */
+    *tris = t, *m = n;
+    return 0;
+}
+/* ---- end SLAB1 ---- */
 
 /* element_tris: the openings subtracted (each through placement_matrix(o.placement, 0) into
  * element coordinates). An opening that cannot be meshed is skipped; a boolean that fails leaves
@@ -557,8 +612,10 @@ static int cut_openings(const cc_element *e, Arena *a, double (**tris)[3][3], si
         nc++;
     }
     if (!nc) return 0;
-    if (!cc_boolean_kernel()) {
-        *uncut = nc;
+    if (!cc_boolean_kernel()) { /* SLAB1: the prism special cases (prism_cut.h), else drawn uncut */
+        int rc = prism_cut(&e->generator, cut, nc, a, tris, m);
+        if (rc < 0) return -1;
+        if (rc) *uncut = nc;
         return 0;
     }
     cc_tri_set as = {(const double(*)[9])*tris, *m};

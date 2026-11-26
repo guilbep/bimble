@@ -202,8 +202,7 @@ static int d_vec(D *d, const JrVal *v, double *out, size_t n) {
 
 static void *alloc_n(D *d, size_t n, size_t sz, size_t off) {
     if (n == 0) return NULL;
-    if (n > ((size_t)-1) / sz) { dfail(d, off, "out of memory", 0, 0); return NULL; }
-    void *p = arena_alloc(d->a, n * sz, 8);
+    void *p = arena_alloc_n(d->a, n, sz, 8); /* NULL also when n * sz overflows */
     if (!p) dfail(d, off, "out of memory", 0, 0);
     return p;
 }
@@ -420,7 +419,7 @@ static int map_entries(D *d, const JrVal *v, const char *expected, Ent **ents, s
     *count = 0;
     if (v->type != JR_OBJ) return type_err(d, v, expected);
     if (!v->n) return 0;
-    Ent *e = malloc(2 * v->n * sizeof *e);
+    Ent *e = v->n <= (size_t)-1 / (2 * sizeof *e) ? malloc(2 * v->n * sizeof *e) : NULL;
     if (!e) return dfail(d, v->off, "out of memory", 0, 0);
     for (size_t i = 0; i < v->n; i++) {
         e[i].key = v->members[i].key;
@@ -625,11 +624,42 @@ typedef struct {
     cc_gid *skeys, *mkeys, *ekeys, *vkeys, *shkeys, *rkeys, *gkeys;
 } Keys;
 
+/* ---- LNK1: "links" (model.h cc_model_link): at most CC_MODEL_LINKS_MAX entries, each a name
+ * and a path (4096 bytes at most, no NUL), maybe `relative` and `hidden` ---- */
+static int d_links(D *d, const JrVal *v, cc_model *m) {
+    static const char *const F[] = {"hidden", "name", "path", "relative"};
+    if (v->type != JR_ARR) return type_err(d, v, "a sequence");
+    if (v->n > CC_MODEL_LINKS_MAX) return dfail(d, v->off, "links: too many linked models", 0, 0);
+    if (!v->n) return 0;
+    m->links = arena_alloc_n(d->a, v->n, sizeof *m->links, sizeof(void *));
+    if (!m->links) return dfail(d, v->off, "out of memory", 0, 0);
+    for (size_t i = 0; i < v->n; i++) {
+        const JrVal *x = &v->items[i], *f[4];
+        cc_model_link *k = &m->links[i];
+        memset(k, 0, sizeof *k);
+        if (d_fields(d, x, F, 4, f, "struct Link", 1) || need(d, x, f[1], F[1]) || need(d, x, f[2], F[2])) return -1;
+        if (d_str(d, f[1], &k->name) || d_str(d, f[2], &k->path) || (f[3] && d_str(d, f[3], &k->relative))) return -1;
+        if (f[0] && f[0]->type != JR_BOOL) return type_err(d, f[0], "a boolean");
+        k->hidden = f[0] && f[0]->b;
+        const cc_str t[3] = {k->name, k->path, k->relative};
+        for (int j = 0; j < 3; j++) {
+            int nul = 0;
+            for (size_t c = 0; c < t[j].n && t[j].n <= 4096; c++) nul |= t[j].p[c] == 0;
+            if (t[j].n > 4096 || nul || (j < 2 && !t[j].n))
+                return dfail(d, x->off, "links: a name and a path (4096 bytes at most, no NUL)", 0, 0);
+        }
+    }
+    m->nlinks = v->n;
+    return 0;
+}
+/* ---- end LNK1 ---- */
+
 static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
     static const char *const F[] = {"project_id", "project_name", "storeys", "materials", "elements",
-                                    "views", "sheets", "project", "schedules", "georef", "relations", "grids"};
-    const JrVal *f[12];
-    if (d_fields(d, v, F, 12, f, "struct Model", 0)) return -1;
+                                    "views", "sheets", "project", "schedules", "georef", "relations", "grids",
+                                    "links" /* LNK1 */};
+    const JrVal *f[13];
+    if (d_fields(d, v, F, 13, f, "struct Model", 0)) return -1;
     for (int i = 0; i < 5; i++)
         if (need(d, v, f[i], F[i])) return -1;
     void *p;
@@ -667,6 +697,7 @@ static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
         if (d_idmap(d, f[11], "a map", sizeof(cc_grid), fn_grid, &p, &m->ngrids, &keys->gkeys)) return -1;
         m->grids = p;
     }
+    if (f[12] && d_links(d, f[12], m)) return -1; /* LNK1 */
     return 0;
 }
 
@@ -742,7 +773,7 @@ static int d_file(D *d, const JrVal *root, cc_model *m, Keys *keys) {
     return 0;
 }
 
-int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) {
+static int load(cc_model *m, const char *text, size_t n, cc_error *err, int validate) {
     cc_error dummy;
     if (!err) err = &dummy;
     cc_model_init(m);
@@ -788,7 +819,7 @@ int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) {
         rc = -1;
     } else {
         cc_error verr;
-        if (cc_model_validate_keys(m, keys.skeys, keys.mkeys, keys.ekeys, keys.vkeys, keys.shkeys, keys.rkeys,
+        if (validate && cc_model_validate_keys(m, keys.skeys, keys.mkeys, keys.ekeys, keys.vkeys, keys.shkeys, keys.rkeys,
                                    keys.gkeys, &verr)) {
             rc = dfail(&d, CC_NO_OFFSET, "invalid model: ", verr.msg, 0);
         } else {
@@ -803,6 +834,14 @@ int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) {
     }
     return rc;
 }
+
+int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) { return load(m, text, n, err, 1); }
+
+/* ---- H2b: a merged model, decoded but not validated (merge.c) ---- */
+int cc_model_load_unchecked(cc_model *m, const char *text, size_t n, cc_error *err) {
+    return load(m, text, n, err, 0);
+}
+/* ---- end H2b ---- */
 
 /* ---- save ---- */
 
@@ -830,7 +869,35 @@ static void w_kvs(JsonW *w, const cc_kv *kv, size_t n) {
     jw_obj_end(w);
 }
 
-static void w_generator(JsonW *w, const cc_generator *g) {
+/* H2a: mesh arrays as references (cc_model_object_json): NULL writes them in full. */
+static void w_generator(JsonW *w, const cc_generator *g, const cc_mesh_refs *refs);
+
+/* One mesh array written compactly into a scratch buffer, handed to refs->mesh_ref, its hash
+ * written in its place (repo.rs put: file::shared::Refs). A failure sticks in the writer. */
+static void w_mesh_ref(JsonW *w, const cc_generator *g, int indices, const cc_mesh_refs *refs) {
+    Buf a;
+    buf_init(&a);
+    JsonW aw;
+    jw_init(&aw, &a, 0);
+    jw_arr_begin(&aw);
+    if (indices)
+        for (size_t i = 0; i < g->u.mesh.nindices; i++) jw_u64(&aw, g->u.mesh.indices[i]);
+    else
+        for (size_t i = 0; i < g->u.mesh.npositions; i++) {
+            jw_arr_begin(&aw);
+            for (int k = 0; k < 3; k++) jw_f64(&aw, g->u.mesh.positions[i][k]);
+            jw_arr_end(&aw);
+        }
+    jw_arr_end(&aw);
+    char hash[65];
+    if (jw_finish(&aw) != JW_OK || a.oom || refs->mesh_ref(refs->ctx, a.p ? a.p : "", a.len, hash)) {
+        if (!w->err) w->err = JW_ERR_OOM;
+    } else
+        jw_str_n(w, hash, 64);
+    buf_free(&a);
+}
+
+static void w_generator(JsonW *w, const cc_generator *g, const cc_mesh_refs *refs) {
     jw_obj_begin(w);
     jw_key(w, "kind");
     jw_str(w, cc_gen_kind_name(g->kind));
@@ -866,6 +933,11 @@ static void w_generator(JsonW *w, const cc_generator *g) {
         jw_key(w, "height"), jw_f64(w, g->u.poly.height);
         break;
     case CC_GEN_MESH:
+        if (refs && refs->mesh_ref) {
+            jw_key(w, "positions"), w_mesh_ref(w, g, 0, refs);
+            jw_key(w, "indices"), w_mesh_ref(w, g, 1, refs);
+            break;
+        }
         jw_key(w, "positions");
         jw_arr_begin(w);
         for (size_t i = 0; i < g->u.mesh.npositions; i++) w_vec(w, g->u.mesh.positions[i], 3);
@@ -888,6 +960,61 @@ static void w_placement(JsonW *w, const cc_placement *p) {
     jw_obj_end(w);
 }
 
+/* One storey, material, element as serde writes it (cc_model_save, cc_model_object_json). */
+static void w_storey(JsonW *w, const cc_storey *s) {
+    jw_obj_begin(w);
+    jw_key(w, "id"), w_gid(w, &s->id);
+    jw_key(w, "name"), w_str(w, s->name);
+    jw_key(w, "elevation"), jw_f64(w, s->elevation);
+    if (s->not_storey) jw_key(w, "is_storey"), jw_bool(w, 0);
+    jw_obj_end(w);
+}
+
+static void w_material(JsonW *w, const cc_material *mt) {
+    const cc_material_props *p = &mt->props;
+    jw_obj_begin(w);
+    jw_key(w, "id"), w_gid(w, &mt->id);
+    jw_key(w, "name"), w_str(w, mt->name);
+    jw_key(w, "category"), jw_str(w, cc_category_name(mt->category));
+    if (p->has_density || p->has_e || p->has_strength || p->source.n) {
+        jw_key(w, "props");
+        jw_obj_begin(w);
+        if (p->has_density) jw_key(w, "density_kg_m3"), jw_f64(w, p->density_kg_m3);
+        if (p->has_e) jw_key(w, "e_mpa"), jw_f64(w, p->e_mpa);
+        if (p->has_strength) jw_key(w, "strength_mpa"), jw_f64(w, p->strength_mpa);
+        if (p->source.n) jw_key(w, "source"), w_str(w, p->source);
+        jw_obj_end(w);
+    }
+    jw_obj_end(w);
+}
+
+static void w_element(JsonW *w, const cc_element *e, const cc_mesh_refs *refs) {
+    jw_obj_begin(w);
+    jw_key(w, "id"), w_gid(w, &e->id);
+    jw_key(w, "class"), jw_str(w, cc_ifc_class_name(e->cls));
+    jw_key(w, "name"), w_str(w, e->name);
+    jw_key(w, "storey"), w_gid(w, &e->storey);
+    jw_key(w, "material"), w_gid(w, &e->material);
+    jw_key(w, "placement"), w_placement(w, &e->placement);
+    if (e->generator.kind != CC_GEN_NONE) jw_key(w, "generator"), w_generator(w, &e->generator, refs);
+    if (e->nopenings) {
+        jw_key(w, "openings");
+        jw_arr_begin(w);
+        for (size_t j = 0; j < e->nopenings; j++) {
+            const cc_opening *o = &e->openings[j];
+            jw_obj_begin(w);
+            if (o->has_id) jw_key(w, "id"), w_gid(w, &o->id);
+            jw_key(w, "placement"), w_placement(w, &o->placement);
+            jw_key(w, "generator"), w_generator(w, &o->generator, refs);
+            jw_obj_end(w);
+        }
+        jw_arr_end(w);
+    }
+    if (e->nproperties) jw_key(w, "properties"), w_kvs(w, e->properties, e->nproperties);
+    if (e->has_ifc_entity) jw_key(w, "ifc_entity"), w_str(w, e->ifc_entity);
+    jw_obj_end(w);
+}
+
 int cc_model_save(const cc_model *m, Buf *b) {
     JsonW w;
     jw_init(&w, b, 1);
@@ -900,69 +1027,15 @@ int cc_model_save(const cc_model *m, Buf *b) {
     jw_key(&w, "project_name"), w_str(&w, m->project_name);
     jw_key(&w, "storeys");
     jw_obj_begin(&w);
-    for (size_t i = 0; i < m->nstoreys; i++) {
-        const cc_storey *s = &m->storeys[i];
-        jw_key_n(&w, s->id.c, 22);
-        jw_obj_begin(&w);
-        jw_key(&w, "id"), w_gid(&w, &s->id);
-        jw_key(&w, "name"), w_str(&w, s->name);
-        jw_key(&w, "elevation"), jw_f64(&w, s->elevation);
-        if (s->not_storey) jw_key(&w, "is_storey"), jw_bool(&w, 0);
-        jw_obj_end(&w);
-    }
+    for (size_t i = 0; i < m->nstoreys; i++) jw_key_n(&w, m->storeys[i].id.c, 22), w_storey(&w, &m->storeys[i]);
     jw_obj_end(&w);
     jw_key(&w, "materials");
     jw_obj_begin(&w);
-    for (size_t i = 0; i < m->nmaterials; i++) {
-        const cc_material *mt = &m->materials[i];
-        const cc_material_props *p = &mt->props;
-        jw_key_n(&w, mt->id.c, 22);
-        jw_obj_begin(&w);
-        jw_key(&w, "id"), w_gid(&w, &mt->id);
-        jw_key(&w, "name"), w_str(&w, mt->name);
-        jw_key(&w, "category"), jw_str(&w, cc_category_name(mt->category));
-        if (p->has_density || p->has_e || p->has_strength || p->source.n) {
-            jw_key(&w, "props");
-            jw_obj_begin(&w);
-            if (p->has_density) jw_key(&w, "density_kg_m3"), jw_f64(&w, p->density_kg_m3);
-            if (p->has_e) jw_key(&w, "e_mpa"), jw_f64(&w, p->e_mpa);
-            if (p->has_strength) jw_key(&w, "strength_mpa"), jw_f64(&w, p->strength_mpa);
-            if (p->source.n) jw_key(&w, "source"), w_str(&w, p->source);
-            jw_obj_end(&w);
-        }
-        jw_obj_end(&w);
-    }
+    for (size_t i = 0; i < m->nmaterials; i++) jw_key_n(&w, m->materials[i].id.c, 22), w_material(&w, &m->materials[i]);
     jw_obj_end(&w);
     jw_key(&w, "elements");
     jw_obj_begin(&w);
-    for (size_t i = 0; i < m->nelements; i++) {
-        const cc_element *e = &m->elements[i];
-        jw_key_n(&w, e->id.c, 22);
-        jw_obj_begin(&w);
-        jw_key(&w, "id"), w_gid(&w, &e->id);
-        jw_key(&w, "class"), jw_str(&w, cc_ifc_class_name(e->cls));
-        jw_key(&w, "name"), w_str(&w, e->name);
-        jw_key(&w, "storey"), w_gid(&w, &e->storey);
-        jw_key(&w, "material"), w_gid(&w, &e->material);
-        jw_key(&w, "placement"), w_placement(&w, &e->placement);
-        if (e->generator.kind != CC_GEN_NONE) jw_key(&w, "generator"), w_generator(&w, &e->generator);
-        if (e->nopenings) {
-            jw_key(&w, "openings");
-            jw_arr_begin(&w);
-            for (size_t j = 0; j < e->nopenings; j++) {
-                const cc_opening *o = &e->openings[j];
-                jw_obj_begin(&w);
-                if (o->has_id) jw_key(&w, "id"), w_gid(&w, &o->id);
-                jw_key(&w, "placement"), w_placement(&w, &o->placement);
-                jw_key(&w, "generator"), w_generator(&w, &o->generator);
-                jw_obj_end(&w);
-            }
-            jw_arr_end(&w);
-        }
-        if (e->nproperties) jw_key(&w, "properties"), w_kvs(&w, e->properties, e->nproperties);
-        if (e->has_ifc_entity) jw_key(&w, "ifc_entity"), w_str(&w, e->ifc_entity);
-        jw_obj_end(&w);
-    }
+    for (size_t i = 0; i < m->nelements; i++) jw_key_n(&w, m->elements[i].id.c, 22), w_element(&w, &m->elements[i], NULL);
     jw_obj_end(&w);
     cc_em em = {&w, NULL};
     if (m->nviews) {
@@ -993,10 +1066,46 @@ int cc_model_save(const cc_model *m, Buf *b) {
         for (size_t i = 0; i < m->ngrids; i++) jw_key_n(&w, m->grids[i].id.c, 22), cc_em_grid(&em, &m->grids[i], NULL);
         jw_obj_end(&w);
     }
+    if (m->nlinks) { /* LNK1: model.h cc_model_link, keys sorted */
+        jw_key(&w, "links");
+        jw_arr_begin(&w);
+        for (size_t i = 0; i < m->nlinks; i++) {
+            const cc_model_link *k = &m->links[i];
+            jw_obj_begin(&w);
+            if (k->hidden) jw_key(&w, "hidden"), jw_bool(&w, 1);
+            jw_key(&w, "name"), jw_str_n(&w, k->name.p ? k->name.p : "", k->name.n);
+            jw_key(&w, "path"), jw_str_n(&w, k->path.p ? k->path.p : "", k->path.n);
+            if (k->relative.n) jw_key(&w, "relative"), jw_str_n(&w, k->relative.p, k->relative.n);
+            jw_obj_end(&w);
+        }
+        jw_arr_end(&w);
+    }
     jw_obj_end(&w);
     jw_obj_end(&w);
     return jw_finish(&w) == JW_OK && !b->oom ? 0 : -1;
 }
+
+/* ---- H2a: one object's compact JSON (the history store, repo_write.c) ---- */
+int cc_model_object_json(const cc_model *m, int kind, size_t i, const cc_mesh_refs *refs, Buf *out) {
+    JsonW w;
+    jw_init(&w, out, 0);
+    cc_em em = {&w, NULL};
+    switch (kind) {
+    case CC_OBJ_STOREY: if (i >= m->nstoreys) return -1; w_storey(&w, &m->storeys[i]); break;
+    case CC_OBJ_MATERIAL: if (i >= m->nmaterials) return -1; w_material(&w, &m->materials[i]); break;
+    case CC_OBJ_ELEMENT: if (i >= m->nelements) return -1; w_element(&w, &m->elements[i], refs); break;
+    case CC_OBJ_VIEW: if (i >= m->nviews) return -1; cc_em_view(&em, &m->views[i], NULL); break;
+    case CC_OBJ_SHEET: if (i >= m->nsheets) return -1; cc_em_sheet(&em, &m->sheets[i], NULL); break;
+    case CC_OBJ_RELATION: if (i >= m->nrelations) return -1; cc_em_relation(&em, &m->relations[i], NULL); break;
+    case CC_OBJ_GRID: if (i >= m->ngrids) return -1; cc_em_grid(&em, &m->grids[i], NULL); break;
+    case CC_OBJ_PROJECT: w_kvs(&w, m->project, m->nproject); break;
+    case CC_OBJ_SCHEDULES: cc_em_schedules(&em, m->schedules, m->nschedules); break;
+    case CC_OBJ_GEOREF: cc_em_georef(&em, &m->georef); break;
+    default: return -1;
+    }
+    return jw_finish(&w) == JW_OK && !out->oom ? 0 : -1;
+}
+/* ---- end H2a ---- */
 
 /* ---- save, binary (version 2) ---- */
 
@@ -1161,7 +1270,7 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
         c_key(b, "model");
         cb_head(b, CB_MAP, 5 + (m->nviews ? 1 : 0) + (m->nsheets ? 1 : 0) + (m->nproject ? 1 : 0) +
                                (m->nschedules ? 1 : 0) + (cc_georef_is_default(&m->georef) ? 0 : 1) +
-                               (m->nrelations ? 1 : 0) + (m->ngrids ? 1 : 0));
+                               (m->nrelations ? 1 : 0) + (m->ngrids ? 1 : 0) + (m->nlinks ? 1 : 0) /* LNK1 */);
         c_key(b, "project_id"), c_gid(b, &m->project_id);
         c_key(b, "project_name"), c_str(b, m->project_name);
         c_key(b, "storeys");
@@ -1264,6 +1373,18 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
             c_key(b, "grids");
             cb_head(b, CB_MAP, m->ngrids);
             for (size_t i = 0; i < m->ngrids; i++) c_gid(b, &m->grids[i].id), cc_em_grid(&em, &m->grids[i], NULL);
+        }
+        if (m->nlinks) { /* LNK1: as the text form */
+            c_key(b, "links");
+            cb_head(b, CB_ARRAY, m->nlinks);
+            for (size_t i = 0; i < m->nlinks; i++) {
+                const cc_model_link *k = &m->links[i];
+                cb_head(b, CB_MAP, 2 + (k->hidden ? 1 : 0) + (k->relative.n ? 1 : 0));
+                if (k->hidden) c_key(b, "hidden"), cb_head(b, 7, 21); /* true */
+                c_key(b, "name"), c_str(b, k->name);
+                c_key(b, "path"), c_str(b, k->path);
+                if (k->relative.n) c_key(b, "relative"), c_str(b, k->relative);
+            }
         }
     }
     pool_free(&pp);

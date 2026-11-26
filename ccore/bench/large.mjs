@@ -3,7 +3,7 @@
 //   GL=gpu: Chromium on the real GPU (ANGLE on the system's OpenGL: --use-angle=gl; ticket T18);
 //   the renderer string (SystemInfo.getInfo glRenderer) is kept in the raw results either way.
 // Needs: out/native/bimble-ccore and out/tcc/bimble-ccore (build.sh native, build.sh tcc), python3,
-// for LAB=1 also web-ui/node_modules, /usr/bin/chromium and tcc. Ports: hosts 47384-47386, Vite 5207.
+// for LAB=1 also web-ui/node_modules, /usr/bin/chromium and tcc. Ports: hosts <ports>, Vite <port>.
 // Models: bench/large_model.py <size> out/t16-large-<size>.bimble (synthetic, deterministic; made
 // when missing). Raw results: out/t16-large.json. Kills all it starts; restores session/mesh.c.
 //
@@ -64,7 +64,7 @@ const LOOP_RUNS = Number(process.env.LOOP_RUNS ?? 5);
 const LOOP_SIZES = (process.env.LOOP_SIZES ?? "20000").split(/\s+/).filter(Boolean).map(Number);
 const RAW = process.env.RAW ?? join(OUT, "t16-large.json");
 const TOKEN = "t16-large";
-const P_HOST = port("large_host", 47384), P_SES = port("large_session", 47385), P_LAB = port("large_lab", 47386), VITE = vitePort("large", 5207);
+const P_HOST = port("large_host"), P_SES = port("large_session"), P_LAB = port("large_lab"), VITE = vitePort("large");
 const GL = process.env.GL ?? "swiftshader";
 const GL_FLAGS = GL === "gpu" ? ["--use-angle=gl"] : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
 const MESH_C = join(CCORE, "session/mesh.c");

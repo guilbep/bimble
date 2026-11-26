@@ -1,0 +1,212 @@
+{
+  "format": "bimble",
+  "version": 1,
+  "model": {
+    "project_id": "1ECFGZP4n20ADaVDzRQc6J",
+    "project_name": "Concrete frame 3x2x2",
+    "storeys": {
+      "04Aobkc8v6$94cGl_9HNVX": {
+        "id": "04Aobkc8v6$94cGl_9HNVX",
+        "name": "Fondations",
+        "elevation": -800.0
+      },
+      "1jLno3kWj4Hfl6pUGBDd7E": {
+        "id": "1jLno3kWj4Hfl6pUGBDd7E",
+        "name": "Niveau 2",
+        "elevation": 3000.0
+      },
+      "1uAZA0Yfn05f$xRd1k4uPR": {
+        "id": "1uAZA0Yfn05f$xRd1k4uPR",
+        "name": "Niveau 1",
+        "elevation": 0.0
+      }
+    },
+    "materials": {
+      "0aEm4Mq4nC8emERFhb_kvJ": {
+        "id": "0aEm4Mq4nC8emERFhb_kvJ",
+        "name": "C30/37",
+        "category": "concrete",
+        "props": {
+          "density_kg_m3": 2500.0,
+          "e_mpa": 33000.0,
+          "strength_mpa": 30.0,
+          "source": "EN 1992-1-1 Table 3.1; 25 kN/m³ reinforced (EN 1991-1-1)"
+        }
+      }
+    },
+    "elements": {
+      "004z1Cm4z4hgNOg0ez4Id1": {
+        "id": "004z1Cm4z4hgNOg0ez4Id1",
+        "class": "IfcColumn",
+        "name": "P2.00",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 2780.0
+        }
+      },
+      "01KnL9d95C2OMpOLdTJDE_": {
+        "id": "01KnL9d95C2OMpOLdTJDE_",
+        "class": "IfcBeam",
+        "name": "B2.x01",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            5000.0,
+            2530.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 300.0,
+          "height": 650.0,
+          "length": 6000.0
+        }
+      },
+      "1khkLES9P8rPMAGC5wqOCk": {
+        "id": "1khkLES9P8rPMAGC5wqOCk",
+        "class": "IfcSlab",
+        "name": "D2",
+        "storey": "1jLno3kWj4Hfl6pUGBDd7E",
+        "material": "0aEm4Mq4nC8emERFhb_kvJ",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            2780.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "slab",
+          "outline": [
+            [
+              -150.0,
+              -150.0
+            ],
+            [
+              18150.0,
+              -150.0
+            ],
+            [
+              18150.0,
+              10150.0
+            ],
+            [
+              -150.0,
+              10150.0
+            ]
+          ],
+          "thickness": 220.0
+        }
+      }
+    },
+    "views": {
+      "1oUd0GlW9JWNOQxiRBQrZU": {
+        "id": "1oUd0GlW9JWNOQxiRBQrZU",
+        "name": "Plan Niveau 1",
+        "kind": {
+          "type": "plan",
+          "storey": "1uAZA0Yfn05f$xRd1k4uPR",
+          "look": "down",
+          "range": {
+            "top": {
+              "level": "above",
+              "offset_mm": 0.0
+            },
+            "cut": {
+              "level": "associated",
+              "offset_mm": 1200.0
+            },
+            "bottom": {
+              "level": "associated",
+              "offset_mm": 0.0
+            },
+            "depth": {
+              "level": "associated",
+              "offset_mm": 0.0
+            }
+          }
+        }
+      }
+    },
+    "sheets": {
+      "0$oP$5B0dXqAvthHSiSCuV": {
+        "id": "0$oP$5B0dXqAvthHSiSCuV",
+        "number": "S-101",
+        "name": "Plans",
+        "paper": "A1",
+        "placed": [
+          {
+            "id": "1YZWaJQubM$wLjAToaXQ30",
+            "view": "1oUd0GlW9JWNOQxiRBQrZU",
+            "scale": 100,
+            "at_mm": [
+              400.0,
+              300.0
+            ]
+          }
+        ]
+      }
+    },
+    "project": {
+      "client": "Synthetic client",
+      "phase": "Tender"
+    },
+    "schedules": [
+      {
+        "name": "Merge test",
+        "classes": [
+          "IfcBeam"
+        ],
+        "fields": [
+          "level",
+          "volume"
+        ],
+        "group_by_level": false,
+        "totals": true
+      }
+    ]
+  }
+}

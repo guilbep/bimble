@@ -7,8 +7,8 @@
  * Ported from the Rust desktop (crates/bimble-viewer):
  *   snap.rs `targets` and `snap`: axis crossings, column centres, element corners (points), then
  *     axes and element edges (lines), within a tolerance; else the point rounded to 10 mm.
- *     Axes come from the columns of the storey (the C model has no grid axes: Rust's
- *     `scene.grids` branch is skipped).
+ *     Axes: the model's grid axes and those of the visible links (SLAB1), else through the
+ *     columns of the storey.
  *   lib.rs `placing_point`: the tolerance is the plan distance of 12 screen pixels; `free`
  *     (Shift in Rust): no snap, rounded to 10 mm.
  *   lib.rs `storey_point`: the pointer ray meets the plane of the storey's elevation.
@@ -16,7 +16,7 @@
  *     points are taken when the element completes (also when it fails); a slab gets
  *     top_offset_mm on its z.
  * A C addition: `ortho` (the second point of a 2-point kind along x or y from the first).
- * Not ported: polygon slabs (the place verb takes a rectangle; edit.rs close_polygon). */
+ * SLAB1: polygon slabs (edit.rs click / close_polygon) in calls.c, through cc_verb_new_slab. */
 #ifndef CCORE_SESSION_TOOL_H
 #define CCORE_SESSION_TOOL_H
 #include <stddef.h>
@@ -48,6 +48,11 @@ typedef struct { /* snap.rs Targets: plan, world mm */
  * scene `sc` (its elements in that height band). Frees what `t` held first. 0 ok, -1 out of
  * memory (t is then empty). */
 int cc_snap_targets_build(cc_snap_targets *t, const cc_scene *sc, double level, double next);
+/* SLAB1: the same with the model's grid axes `grid` (n x {x0, y0, x1, y1}, world mm; snap.rs
+ * `scene.grids`): those longer than 1 mm are the axes (their crossings, then the lines); none: the
+ * axes through the columns, as above. */
+int cc_snap_targets_build_grid(cc_snap_targets *t, const cc_scene *sc, double level, double next, const double (*grid)[4],
+                               size_t ngrid);
 void cc_snap_targets_free(cc_snap_targets *t);
 /* snap.rs `snap`: `p` snapped within `tol` mm into `out`; returns the kind (CC_SNAP_NONE: p
  * rounded to 10 mm). */
@@ -75,6 +80,7 @@ typedef struct cc_tool {
     cc_snap_targets targets;
     int has_targets;
     uint64_t targets_rev;
+    uint64_t targets_links; /* SLAB1: the session's links_gen the targets were built with */
     double targets_level;
     /* The annotate tool (ticket C4, calls.h "annotate"): 0 off, 1 dimension, 2 text. The anchors
      * of the clicked points and of the hover: an element's feature (annot.h) or none. */

@@ -1,16 +1,17 @@
 // GET /mesh of the native host (ticket 11a): node ccore/test/mesh_http_test.mjs
-// Starts out/tcc/bimble-ccore (or $HOST_BIN) with CCORE_MODEL=golden/frame.json on 47321, fetches
+// Starts out/tcc/bimble-ccore (or $HOST_BIN) with CCORE_MODEL=golden/frame.json on <port>, fetches
 // /mesh, parses BMSH (layout: session/mesh.c) and checks it against golden/mesh/scene.txt (the
 // scene of the same model, cc_scene_build): element count, each row's GlobalId, category and
 // vertex / triangle / edge counts, the origin bits, index ranges; the X-Rev header; a second
 // fetch is served from the cache (same bytes, one build); 403 on a bad token. Then a host with
-// no model on 47322 answers 404. Prints sizes and times, "N passed, M failed"; exits non-zero on
+// no model on <port> answers 200 and an empty BMSH (TEST1). Prints sizes and times, "N passed, M failed"; exits non-zero on
 // a failure. No dependencies. Kills the hosts it starts.
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
@@ -25,7 +26,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const hosts = [];
 
 async function startHost(port, env) {
-  const h = spawn(BIN, [String(port)], { env: { ...process.env, BIMBLE_TOKEN: TOKEN, ...env }, stdio: ["ignore", "ignore", "pipe"] });
+  const h = spawn(BIN, [String(port)], { env: hostEnv({ BIMBLE_TOKEN: TOKEN, ...env }), stdio: ["ignore", "ignore", "pipe"] });
   h.log = "";
   h.stderr.on("data", (d) => (h.log += d));
   hosts.push(h);
@@ -59,7 +60,7 @@ function parseBmsh(buf) {
   return h;
 }
 
-const PORT = port("mesh_http", 47321), NOMODEL = port("mesh_http_nomodel", 47322);
+const PORT = port("mesh_http"), NOMODEL = port("mesh_http_nomodel");
 try {
   const golden = readFileSync(join(CCORE, "golden/mesh/scene.txt"), "utf8").split("\n");
   const gOrigin = golden[0].split(" ").slice(1);
@@ -134,8 +135,14 @@ try {
 
   await startHost(NOMODEL, { CCORE_MODEL: "" });
   const nm = await fetch(`http://127.0.0.1:${NOMODEL}/mesh?t=${TOKEN}`);
-  const nmText = await nm.text();
-  check("no model -> 404 text", nm.status === 404 && /no model/.test(nmText), `${nm.status} ${nmText}`);
+  const nmBody = Buffer.from(await nm.arrayBuffer());
+  // TEST1 (BUG2): no model is "no geometry", not an error: 200, an empty BMSH (52 bytes, no element,
+  // origin 0) and the session's rev in X-Rev and the header (was 404 "no model open").
+  const nmM = nm.status === 200 && nmBody.length === 52 ? parseBmsh(nmBody) : null;
+  check("no model -> 200, an empty BMSH (52 bytes, 0 elements, origin 0), X-Rev = its rev",
+    nmM !== null && nmM.magic === "BMSH" && nmM.version === 1 && nmM.nE === 0 && nmM.nV === 0 && nmM.nI === 0 && nmM.nS === 0 && nmBody.subarray(28, 52).equals(Buffer.alloc(24)) &&
+    nm.headers.get("content-type") === "application/octet-stream" && nm.headers.get("x-rev") === String(nmBody.readUInt32LE(8)),
+    `${nm.status} ${nmBody.length} bytes ${nm.headers.get("x-rev")} ${nmBody.subarray(0, 16).toString("hex")}`);
 } catch (e) {
   check("no exception in the test", false, e.stack ?? String(e));
   for (const h of hosts) console.log(`--- host ---\n${h.log.slice(-2000)}`);

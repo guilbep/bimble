@@ -7,6 +7,7 @@ typedef struct {
     const unsigned char *p;
     size_t n, pos;
     JrError *err;
+    JrBudget bud; /* json_r.h: the same budget as the text form */
 } R;
 
 static int rfail(R *r, size_t off, const char *msg) {
@@ -56,8 +57,15 @@ static int head(R *r, int *major, uint64_t *arg, int *ai) {
     return 0;
 }
 
+/* Charges the DOM budget before the memory is taken. */
+static int take(R *r, size_t at, size_t nodes, size_t each, size_t extra) {
+    const char *why;
+    return jr_budget_take(&r->bud, nodes, each, extra, &why) ? rfail(r, at, why) : 0;
+}
+
 static int text(R *r, size_t at, uint64_t len, const char **s, size_t *n) {
     if (len > r->n - r->pos) return rfail(r, at, "CBOR length runs past the data");
+    if (take(r, at, 0, 0, (size_t)len + 1)) return -1;
     const char *src = (const char *)r->p + r->pos;
     if (jr_utf8_check(src, (size_t)len) >= 0) return rfail(r, at, "invalid UTF-8 in a CBOR text");
     char *d = arena_alloc(r->a, (size_t)len + 1, 1);
@@ -102,10 +110,13 @@ static int item(R *r, JrVal *v, int depth) {
         if (arg > (major == 4 ? left : left / 2)) return rfail(r, at, "CBOR length runs past the data");
         size_t cnt = (size_t)arg;
         v->n = cnt;
+        /* the count is honest only as far as the bytes go: the budget bounds what it asks for
+         * (a 19 KB gzip of 20 M one-byte items asked for 1.2 GB at once) */
+        if (take(r, at, cnt, major == 4 ? sizeof(JrVal) : sizeof(JrMember), 0)) return -1;
         if (major == 4) {
             v->type = JR_ARR;
             if (!cnt) return 0;
-            v->items = arena_alloc(r->a, cnt * sizeof(JrVal), 8);
+            v->items = arena_alloc_n(r->a, cnt, sizeof(JrVal), 8);
             if (!v->items) return rfail(r, at, "out of memory");
             for (size_t i = 0; i < cnt; i++)
                 if (item(r, &v->items[i], depth + 1)) return -1;
@@ -113,7 +124,7 @@ static int item(R *r, JrVal *v, int depth) {
         }
         v->type = JR_OBJ;
         if (!cnt) return 0;
-        v->members = arena_alloc(r->a, cnt * sizeof(JrMember), 8);
+        v->members = arena_alloc_n(r->a, cnt, sizeof(JrMember), 8);
         if (!v->members) return rfail(r, at, "out of memory");
         for (size_t i = 0; i < cnt; i++) {
             JrMember *m = &v->members[i];
@@ -153,9 +164,10 @@ static int item(R *r, JrVal *v, int depth) {
 }
 
 JrVal *cbor_parse(Arena *a, const unsigned char *p, size_t n, JrError *err) {
-    R r = {a, p, n, 0, err};
+    R r = {a, p, n, 0, err, {0, 0}};
     err->offset = 0;
     err->msg[0] = 0;
+    if (take(&r, 0, 1, sizeof(JrVal), 0)) return NULL;
     JrVal *root = arena_alloc(a, sizeof *root, 8);
     if (!root) {
         rfail(&r, 0, "out of memory");

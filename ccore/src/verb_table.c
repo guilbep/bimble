@@ -1,6 +1,7 @@
 /* See verb_table.h. The schema and summary texts below are Rust's (crates/bimble-api/src/
  * dispatch.rs), compacted from golden/verbs_schema/<verb>.json and golden/verbs_list.json. */
 #include "verb_table.h"
+#include "verbs_materials.h" /* MAT1 */
 #include <string.h>
 #include "json_w.h"
 
@@ -325,6 +326,31 @@ int cc_vh_grid_add(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err)
 int cc_vh_grid_axis_set(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 int cc_vh_grid_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 
+/* ---- SLAB1: single grid axes, handlers in verbs_levels.c ---- */
+static const char SCHEMA_GRID_AXIS_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `grid_axis_add`: one straight axis in plan, world mm.\",\"properties"
+    "\":{\"end\":{\"description\":\"End [x, y], mm.\",\"items\":{\"format\":\"double\",\"type\":\"num"
+    "ber\"},\"maxItems\":2,\"minItems\":2,\"type\":\"array\"},\"grid\":{\"description\":\"GlobalId of"
+    " the grid.\",\"type\":\"string\"},\"start\":{\"description\":\"Start [x, y], mm.\",\"items\":{\""
+    "format\":\"double\",\"type\":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":\"array\"},\"tag"
+    "\":{\"description\":\"Its tag (\\\"A\\\", \\\"1\\\"), unique in the grid.\",\"type\":\"string\"}"
+    "},\"required\":[\"grid\",\"tag\",\"start\",\"end\"],\"title\":\"GridAxisAddArgs\",\"type\":\"obj"
+    "ect\"}";
+static const char SUMMARY_GRID_AXIS_ADD[] =
+    "Add one axis to a grid, with a new GlobalId (a C addition).";
+static const char SCHEMA_GRID_AXIS_REMOVE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `grid_axis_remove`.\",\"properties\":{\"axis\":{\"description\":\"Gl"
+    "obalId of the axis.\",\"type\":\"string\"},\"grid\":{\"description\":\"GlobalId of the grid.\","
+    "\"type\":\"string\"}},\"required\":[\"grid\",\"axis\"],\"title\":\"GridAxisRemoveArgs\",\"type\":"
+    "\"object\"}";
+static const char SUMMARY_GRID_AXIS_REMOVE[] =
+    "Delete one grid axis; the last axis of a direction stays (IfcGrid needs U and V axes; a C addition).";
+int cc_vh_grid_axis_add(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_grid_axis_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+/* ---- end SLAB1 ---- */
+
 /* C additions of ticket SH1: views placed on sheets, handlers in verbs_sheets.c. */
 static const char SCHEMA_SHEET_PLACE[] =
     "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
@@ -445,6 +471,43 @@ int cc_vh_view_add(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err)
 int cc_vh_view_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 int cc_vh_view_edit(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 /* ---- end SEC1 ---- */
+/* ---- MAT1: the materials (verbs_materials.h), C additions ---- */
+static const char SCHEMA_MATERIAL_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `material_add`: a library grade, or a blank material by name.\",\"pr"
+    "operties\":{\"category\":{\"description\":\"The material family (default: the grade's, or other)"
+    ".\",\"enum\":[\"concrete\",\"steel\",\"timber\",\"masonry\",\"insulation\",\"earth\",\"glass\","
+    "\"other\",null],\"type\":[\"string\",\"null\"]},\"library\":{\"description\":\"A grade of the li"
+    "brary (query material_library), e.g. \\\"C30/37\\\".\",\"type\":[\"string\",\"null\"]},\"name\":"
+    "{\"description\":\"The material's name (default: the grade's); required without `library`.\",\"t"
+    "ype\":[\"string\",\"null\"]}},\"title\":\"MaterialAddArgs\",\"type\":\"object\"}";
+static const char SUMMARY_MATERIAL_ADD[] =
+    "Add a material: a grade of the library with its values, or a blank one by name (a C addition).";
+static const char SCHEMA_MATERIAL_SET[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `material_set`: the fields to change, others kept.\",\"properties\":"
+    "{\"category\":{\"description\":\"The material family.\",\"enum\":[\"concrete\",\"steel\",\"timbe"
+    "r\",\"masonry\",\"insulation\",\"earth\",\"glass\",\"other\",null],\"type\":[\"string\",\"null\""
+    "]},\"id\":{\"description\":\"GlobalId of the material.\",\"type\":\"string\"},\"name\":{\"descri"
+    "ption\":\"The new name, not blank, unique.\",\"type\":[\"string\",\"null\"]},\"props\":{\"additi"
+    "onalProperties\":false,\"description\":\"The values (all four replaced; {} clears them).\",\"pro"
+    "perties\":{\"density_kg_m3\":{\"description\":\"kg/m³, up to 30000.\",\"format\":\"double\",\"ty"
+    "pe\":[\"number\",\"null\"]},\"e_mpa\":{\"description\":\"Modulus of elasticity, MPa, up to 10000"
+    "00.\",\"format\":\"double\",\"type\":[\"number\",\"null\"]},\"source\":{\"description\":\"Where "
+    "the values come from, at most 200 characters.\",\"type\":[\"string\",\"null\"]},\"strength_mpa\""
+    ":{\"description\":\"Characteristic strength, MPa, up to 10000.\",\"format\":\"double\",\"type\":"
+    "[\"number\",\"null\"]}},\"type\":[\"object\",\"null\"]}},\"required\":[\"id\"],\"title\":\"Mater"
+    "ialSetArgs\",\"type\":\"object\"}";
+static const char SUMMARY_MATERIAL_SET[] =
+    "Change a material's name, family or values (a C addition; the command set_material).";
+static const char SCHEMA_MATERIAL_REMOVE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `material_remove`.\",\"properties\":{\"id\":{\"description\":\"Globa"
+    "lId of the material.\",\"type\":\"string\"}},\"required\":[\"id\"],\"title\":\"MaterialRemoveArg"
+    "s\",\"type\":\"object\"}";
+static const char SUMMARY_MATERIAL_REMOVE[] =
+    "Delete a material; refused while elements are made of it (a C addition).";
+/* ---- end MAT1 ---- */
 #define V(n, N) {#n, SUMMARY_##N, SCHEMA_##N, cc_vh_##n, 0}
 const cc_verb_def cc_verb_table[] = {
     V(place, PLACE),
@@ -474,6 +537,8 @@ const cc_verb_def cc_verb_c_additions[] = {
     V(grid_add, GRID_ADD),
     V(grid_axis_set, GRID_AXIS_SET),
     V(grid_remove, GRID_REMOVE),
+    V(grid_axis_add, GRID_AXIS_ADD),       /* SLAB1 */
+    V(grid_axis_remove, GRID_AXIS_REMOVE), /* SLAB1 */
     /* ticket SH1 */
     V(sheet_place, SHEET_PLACE),
     V(sheet_move, SHEET_MOVE),
@@ -485,6 +550,11 @@ const cc_verb_def cc_verb_c_additions[] = {
     V(view_remove, VIEW_REMOVE),
     V(view_edit, VIEW_EDIT),
     /* ---- end SEC1 ---- */
+    /* ---- MAT1 ---- */
+    V(material_add, MATERIAL_ADD),
+    V(material_set, MATERIAL_SET),
+    V(material_remove, MATERIAL_REMOVE),
+    /* ---- end MAT1 ---- */
 };
 #undef V
 const size_t cc_verb_count = sizeof cc_verb_table / sizeof cc_verb_table[0];

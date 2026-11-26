@@ -4,6 +4,7 @@
 #define _POSIX_C_SOURCE 200809L /* mkdtemp */
 #endif
 #include "fs.h"
+#include "fs_rule.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,7 +23,8 @@
 #define FS_MAX_PATH 4096
 #define FS_LIST_BYTES ((size_t)16 << 20) /* the names of one folder, all together */
 
-static char *roots[FS_MAX_ROOTS];
+static char *roots[FS_MAX_ROOTS];       /* resolved (realpath) */
+static char *roots_given[FS_MAX_ROOTS]; /* as given, normalised by fs_rule.h; NULL: not absolute */
 static int nroots, home_root = -1;
 
 /* The folder listed last per purpose ("open", "save_as"…): the dialog starts there next time.
@@ -57,60 +59,88 @@ static void remember(const JrVal *p, const char *dir) {
 }
 
 #ifdef _WIN32
-static int ch_eq(char a, char b) { /* Windows: paths compare without case (ASCII) */
-    if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
-    if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
-    return a == b;
-}
+#define FSR_WIN 1
 #else
-static int ch_eq(char a, char b) { return a == b; }
+#define FSR_WIN 0
 #endif
 
-/* `p` is `root` or under it (both resolved, '/' separators). */
-static int under(const char *p, const char *root) {
-    size_t k = strlen(root);
-    while (k > 1 && root[k - 1] == '/') k--; /* "/" stays "/"; "C:/" -> "C:" */
-    for (size_t i = 0; i < k; i++)
-        if (!p[i] || !ch_eq(p[i], root[i])) return 0;
-    return p[k] == 0 || p[k] == '/' || (k == 1 && root[0] == '/');
-}
-
+/* The resolved path `p` is a root or under one (fs_rule.h). */
 static int in_roots(const char *p) {
     for (int i = 0; i < nroots; i++)
-        if (under(p, roots[i])) return 1;
+        if (fsr_under(p, roots[i], FSR_WIN)) return 1;
     return 0;
 }
 
-static int absolute(const char *p) {
-    if (p[0] == '/') return 1;
+/* The normalised (not resolved) path `p` is under a root as resolved or as given: the lexical
+ * check, before the file system is touched (fs_rule.h). */
+static int in_roots_lexical(const char *p) {
+    for (int i = 0; i < nroots; i++)
+        if (fsr_under(p, roots[i], FSR_WIN) || (roots_given[i] && fsr_under(p, roots_given[i], FSR_WIN))) return 1;
+    return 0;
+}
+
+/* FIXSES: may fs_list follow the link `full` (realpath)? Its text first: each target is read
+ * without following it (readlink), joined to the link's folder when relative, normalised by the
+ * text alone, and must be under a root before the next link of the chain is read (at most 16);
+ * so a link to a path outside the roots, a network mount or another link out of them is never
+ * followed while listing. 1 yes; 0 no (reported "outside", nothing beyond touched). Windows: a
+ * symbolic link or a junction is never followed (its reparse point is not read here): 0. */
+static int link_may_follow(const char *full) {
 #ifdef _WIN32
-    if (p[0] == '\\' && p[1] == '\\') return 1;
-    if (((p[0] | 32) >= 'a' && (p[0] | 32) <= 'z') && p[1] == ':' && (p[2] == '/' || p[2] == '\\')) return 1;
+    (void)full;
+    return 0;
+#else
+    char cur[FS_MAX_PATH + 1], t[FS_MAX_PATH + 1], j[2 * FS_MAX_PATH + 4], nb[2 * FS_MAX_PATH + 6];
+    if (strlen(full) > FS_MAX_PATH) return 0;
+    strcpy(cur, full);
+    for (int hop = 0; hop < 16; hop++) {
+        ssize_t k = readlink(cur, t, sizeof t - 1);
+        if (k < 0) return hop > 0; /* the end of the chain (not a link), or nothing there */
+        t[k] = 0;
+        if (t[0] == '/') snprintf(j, sizeof j, "%s", t);
+        else {
+            const char *sl = strrchr(cur, '/');
+            snprintf(j, sizeof j, "%.*s/%s", sl ? (int)(sl - cur) : 0, cur, t);
+        }
+        if (fsr_normalise(j, 0, nb, sizeof nb) != FSR_OK || strlen(nb) > FS_MAX_PATH || !in_roots_lexical(nb)) return 0;
+        strcpy(cur, nb);
+    }
+    return 0; /* a chain of more than 16 links */
 #endif
+}
+
+/* A root is a network path ("//server/share"): only then may fs_list take one. */
+static int unc_root(void) {
+    for (int i = 0; i < nroots; i++)
+        if (roots[i][0] == '/' && roots[i][1] == '/') return 1;
     return 0;
 }
 
 int cc_host_fs_add_root(const char *dir) {
     const cc_platform *pf = cc_platform_native();
-    char r[FS_MAX_PATH + 1];
+    char r[FS_MAX_PATH + 1], g[FS_MAX_PATH + 2];
     cc_pf_stat st;
-    if (nroots >= FS_MAX_ROOTS || !dir || !*dir || pf->real_path(pf->ctx, dir, r, sizeof r) ||
+    /* a device path is never a root; a relative root is resolved, but has no lexical form */
+    int lx = dir && *dir ? fsr_normalise(dir, FSR_WIN, g, sizeof g) : FSR_BAD;
+    if (nroots >= FS_MAX_ROOTS || !dir || !*dir || lx == FSR_DEVICE || pf->real_path(pf->ctx, dir, r, sizeof r) ||
         pf->stat_path(pf->ctx, r, 1, &st) || st.kind != CC_PF_DIR)
         return -1;
     for (int i = 0; i < nroots; i++)
         if (!strcmp(roots[i], r)) return 0;
-    char *c = malloc(strlen(r) + 1);
-    if (!c) return -1;
+    char *c = malloc(strlen(r) + 1), *cg = lx == FSR_BAD ? NULL : malloc(strlen(g) + 1);
+    if (!c || (lx != FSR_BAD && !cg)) return free(c), free(cg), -1;
     strcpy(c, r);
+    if (cg) strcpy(cg, g);
+    roots_given[nroots] = cg;
     roots[nroots++] = c;
     return 0;
 }
 
 void cc_host_fs_init(void) {
 #ifdef _WIN32
-    const char *h = getenv("USERPROFILE");
+    const char *h = cc_host_getenv("USERPROFILE");
 #else
-    const char *h = getenv("HOME");
+    const char *h = cc_host_getenv("HOME");
 #endif
     if (h && *h && home_root < 0 && !cc_host_fs_add_root(h)) home_root = nroots - 1;
 }
@@ -169,8 +199,19 @@ static int fs_list(const char *body, size_t n, Buf *out) {
     char *names = NULL;
     Name *list = NULL;
     if (ext && ext->type == JR_NULL) ext = NULL;
-    if (!d || d->type != JR_STR || !d->n || d->n > FS_MAX_PATH || strlen(d->s) != d->n || !absolute(d->s)) {
+    /* FIXDOC: the lexical rule first (fs_rule.h): nothing outside the roots reaches the file system */
+    char nd[FS_MAX_PATH + 2];
+    int lx = d && d->type == JR_STR && strlen(d->s) == d->n ? fsr_normalise(d->s, FSR_WIN, nd, sizeof nd) : FSR_BAD;
+    if (lx == FSR_BAD || !d->n || d->n > FS_MAX_PATH) {
         rc = fs_err(out, "dir: an absolute path, without NUL, at most 4096 bytes");
+        goto end;
+    }
+    if (lx == FSR_DEVICE || (lx == FSR_UNC && !unc_root())) {
+        rc = fs_err(out, FS_NETWORK);
+        goto end;
+    }
+    if (!in_roots_lexical(nd)) {
+        rc = fs_err(out, FS_OUTSIDE);
         goto end;
     }
     if (ext && (ext->type != JR_ARR || ext->n > 16)) {
@@ -184,7 +225,7 @@ static int fs_list(const char *body, size_t n, Buf *out) {
         }
     char rd[FS_MAX_PATH + 1];
     cc_pf_stat st;
-    /* resolved first: "..", "." and every link, then the rule */
+    /* then resolved: "..", "." and every link, and the rule again */
     if (pf->real_path(pf->ctx, d->s, rd, sizeof rd)) {
         rc = fs_err(out, "no such folder");
         goto end;
@@ -247,8 +288,10 @@ static int fs_list(const char *body, size_t n, Buf *out) {
         }
         int target = 0, outside = 0;
         if (es.kind == CC_PF_LINK) {
-            /* never followed silently: where it leads, only when that is inside the roots */
-            if (!pf->real_path(pf->ctx, full, tr, sizeof tr) && in_roots(tr) && !pf->stat_path(pf->ctx, tr, 1, &ts))
+            /* never followed silently: where it leads, only when that is inside the roots, by its
+             * text first (FIXSES: link_may_follow), then resolved */
+            if (link_may_follow(full) && !pf->real_path(pf->ctx, full, tr, sizeof tr) && in_roots(tr) &&
+                !pf->stat_path(pf->ctx, tr, 1, &ts))
                 target = ts.kind;
             else outside = 1;
         }
@@ -370,13 +413,13 @@ static int stage_dir_ready(void) {
     if (stage_dir[0]) return 0;
 #ifdef _WIN32
     const cc_platform *pf = cc_platform_native();
-    const char *t = getenv("TEMP");
+    const char *t = cc_host_getenv("TEMP");
     unsigned r = 0;
     if (pf->random(pf->ctx, &r, sizeof r)) r = (unsigned)(size_t)&r;
     int w = snprintf(stage_dir, sizeof stage_dir, "%s/bimble-ccore-drop-%08x", t && *t ? t : ".", r);
     if (w <= 0 || (size_t)w >= sizeof stage_dir || pf->make_dir(pf->ctx, stage_dir)) return stage_dir[0] = 0, -1;
 #else
-    const char *t = getenv("TMPDIR");
+    const char *t = cc_host_getenv("TMPDIR");
     int w = snprintf(stage_dir, sizeof stage_dir, "%s/bimble-ccore-drop-XXXXXX", t && *t ? t : "/tmp");
     if (w <= 0 || (size_t)w >= sizeof stage_dir || !mkdtemp(stage_dir)) return stage_dir[0] = 0, -1; /* 0700 */
 #endif
@@ -390,8 +433,9 @@ int cc_host_stage(const char *name, const char *bytes, size_t n, Buf *out) {
         unsigned char c = (unsigned char)name[i];
         if (c < 0x20 || c == 0x7f || strchr("/\\:*?\"<>|", c)) ok = 0; /* Windows' forbidden ones too */
     }
+    if (ok && fsr_dos_device(name, k)) ok = 0; /* FIXSES: CON, NUL, COM1… open a device on Windows */
     if (!ok) {
-        buf_puts(out, "stage: name: a plain file name (no folder, not hidden, at most 255 bytes)");
+        buf_puts(out, "stage: name: a plain file name (no folder, not hidden, not a device name, at most 255 bytes)");
         return CC_ERR;
     }
     if (n > FS_STAGE_MAX) {

@@ -14,8 +14,10 @@
  * table (on / frozen), and the anchors of TEXT and MTEXT (placed as their polylines are).
  *
  * Untrusted input (L2 layer: no files, no globals): the file at most 256 MB (Rust's check), at
- * most CC_DXF_MAX_POINTS points (then a note, as Rust), block nesting at most 8 (Rust's), and a
- * work budget on block copies (Rust has none: a hostile file can make it loop for ever). Binary
+ * most CC_DXF_MAX_POINTS points (then a note, as Rust), block nesting at most 8 (Rust's), a
+ * work budget on block copies and one on the points made (twice the output's cap), an arc or
+ * ellipse of more than two turns drawn as one (Rust has none: a hostile file can make it loop for
+ * ever, or for minutes on one 4 KB file of arcs). Binary
  * DXF and DXB are refused with a text (Rust reads them: a deviation). Never aborts; out of
  * memory is an error. */
 #ifndef CCORE_DXF_IN_H
@@ -62,6 +64,7 @@ typedef struct {
     size_t skipped;  /* entities not drawn (Rust's count) */
     int truncated;   /* stopped at CC_DXF_MAX_POINTS (Rust's note) */
     int over_budget; /* stopped expanding blocks (a C budget; its own note) */
+    int over_points; /* stopped drawing: 2 x CC_DXF_MAX_POINTS points made (a C budget; its note) */
     size_t caps[4];  /* private: capacities */
 } cc_dxf;
 
@@ -73,7 +76,8 @@ void cc_dxf_free(cc_dxf *d);
 
 /* Rust's notes, each followed by '\n': "DXF units: <unit>", "<k> entities not drawn (text,
  * hatches, 3D, nesting)" when k > 0, "stopped at 2000000 points" when truncated; plus the C
- * budget's "stopped expanding blocks (too many copies)". Returns the number of notes. */
+ * budgets' "stopped expanding blocks (too many copies)" and "stopped drawing (more than 4000000
+ * points made)". Returns the number of notes. */
 size_t cc_dxf_notes(const cc_dxf *d, Buf *out);
 
 /* reference.rs `read` for a DXF or DWG by its name: a .dwg is refused with Rust's text (0 is

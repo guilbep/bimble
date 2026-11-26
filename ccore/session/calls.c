@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "calls.h"
+#include "materials_page.h" /* MAT1 */
 #include "file.h"
 #include "guid.h"
 #include "ifc_out.h"
@@ -37,6 +38,7 @@
 #include "measure.h" /* ticket T1 */
 #include "versions.h" /* ticket H1 */
 #include "links_dxf.h" /* L2 */
+#include "links_panel.h" /* LNK1 */
 #include "schedules.h" /* Q2 */
 #include "palette.h"   /* Q2 */
 #include "capabilities.h" /* FAKE1 */
@@ -134,8 +136,16 @@ static const ActionRow ACTIONS[] = {
     {"paper_view", "On paper", "View", 0, 0},
     {"clear_temporary", "Show all hidden for now", "View", 0, 0},
     {"show_all_in_view", "Show all in view", "View", 0, 0},
+    /* ---- ISS72: C additions after Rust's 54 (GitHub issue #72, visibility.c ISS72, DEVIATIONS 25) ---- */
+    {"show_all", "Show all", "View", 0, 0},
+    {"show_previous", "Show previous", "View", 0, 0},
+    /* ---- end ISS72 ---- */
+    /* ---- ISS71 (issue #71): C additions after Rust's 54, the section box's orientation ---- */
+    {"box_north_project", "Section box: project north", "View", 0, 0},
+    {"box_north_true", "Section box: true north", "View", 0, 0},
+    /* ---- end ISS71 ---- */
 };
-_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54, "ribbon.rs:130 has 54 actions");
+_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each");
 
 static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab"}; /* verbs.rs:28 snake_case */
 static const char *const SIZE_KEY[] = {"column", "beam_width", "beam_height", "wall", "slab"}; /* verbs.rs:78 */
@@ -237,7 +247,8 @@ static void undo_redo(cc_session *s, int undo) {
 /* ---- placing (edit.rs:387-460) ---- */
 
 static const char *hint(const cc_session *s) { /* edit.rs:84-95 `Placing::hint` */
-    if (s->placing_kind == CC_KIND_SLAB && s->polygon) return "Click the next corner of the slab.";
+    if (s->placing_kind == CC_KIND_SLAB && s->polygon) /* edit.rs:402-405 (SLAB1: the second text) */
+        return s->tool.npoints < 3 ? "Click the next corner of the slab." : "Click the next corner; click the first corner or Enter closes.";
     if (s->placing_kind == CC_KIND_COLUMN) return "Click where the column goes (on the storey level). Esc stops.";
     if (!s->tool.npoints) return s->placing_kind == CC_KIND_SLAB ? "Click a corner of the slab." : "Click the start point.";
     return s->placing_kind == CC_KIND_SLAB ? "Click the opposite corner." : "Click the end point.";
@@ -529,6 +540,9 @@ static int q_state(cc_session *s, JsonW *w) { /* calls.rs:239-258 */
     if (s->open && s->schema_bimble) jw_str(w, ".bimble");
     else if (s->view == CC_VIEW_IFC && s->ifc->schema.n) jw_str_n(w, s->ifc->schema.p, s->ifc->schema.n);
     else jw_null(w); /* a model's scene and a view file's have no IFC schema */
+    /* FIXSES (a C addition): where a session file holding changes not saved was set aside at
+     * start (session.h cc_session_set_aside); left out when none. */
+    if (cc_session_set_aside(s)) jw_key(w, "session_set_aside"), jw_str(w, cc_session_set_aside(s));
     jw_key(w, "unsaved"), jw_bool(w, cc_session_unsaved(s));
     jw_key(w, "user"), cc_settings_user_json(s, w); /* SET1: calls.rs:253, Settings → You */
     jw_key(w, "version"), jw_str(w, CC_VERSION);
@@ -550,9 +564,10 @@ static int in_2d(cc_session *s) {
 /* ---- PAPER1: On paper (paper.rs). Rust's on_paper(): no sheet shown (layout.is_none()), a 2D
  * view shown, and that view in paper_views. paper.rs:217-227: placing and measuring are done on
  * the model, so either switches the active view back to Model (Rust does it at the next frame;
- * here when asked). The drawing reads the model: a read-only scene has no On paper (DEVIATIONS 22). */
+ * here when asked). LNK1: a read-only scene is drawn too (session/paper_scene.h), as Rust's
+ * two_pictures (ribbon.rs:1478) asks only for a 2D view shown. */
 static int sheet_now(cc_session *s) { return s->sheet_shown && cc_sheet_known(s, &s->sheet); }
-static int two_pictures(cc_session *s) { return s->open && in_2d(s) && !sheet_now(s); } /* ribbon.rs:1478 */
+static int two_pictures(cc_session *s) { return loaded(s) && in_2d(s) && !sheet_now(s); } /* ribbon.rs:1478 */
 static long paper_find(const cc_session *s) {
     for (size_t i = 0; s->has_active && i < s->npaper_views; i++)
         if (!cc_gid_cmp(&s->paper_views[i], &s->active)) return (long)i;
@@ -560,7 +575,7 @@ static long paper_find(const cc_session *s) {
 }
 static int on_paper(cc_session *s) {
     long i = paper_find(s);
-    if (i >= 0 && s->open && (s->placing || s->measure.on)) {
+    if (i >= 0 && loaded(s) && (s->placing || s->measure.on)) {
         s->paper_views[i] = s->paper_views[--s->npaper_views];
         cc_log(s->pf, "bimble-ccore: Switched to Model: elements are placed and measured on the model");
         return 0;
@@ -584,11 +599,35 @@ static int set_on_paper(cc_session *s, int on) { /* paper.rs:70 (the camera stay
 }
 /* ---- end PAPER1 ---- */
 
+/* ---- ISS72 ---- the key of the current view's Show previous stack (visibility.c ISS72): the
+ * active view, or none (a zero id). */
+static cc_gid iss72_view(const cc_session *s) {
+    cc_gid g;
+    if (s->has_active) g = s->active;
+    else memset(&g, 0, sizeof g);
+    return g;
+}
+static size_t iss72_prev_count(const cc_session *s) {
+    cc_gid g = iss72_view(s);
+    return cc_vis_prev_count(&s->vis, &g);
+}
+/* ---- end ISS72 ---- */
+/* ---- ISS71 ---- the section box's turn for an orientation (issue #71): project north (the
+ * building's axes, georef rotation_deg) or true north (the map's), as a section's (views.rs
+ * plan_turn); 0 without a model of the session's own (a read-only file keeps its axes). */
+static float iss71_yaw(cc_session *s, int true_north) {
+    return s->open ? (float)cc_georef_plan_turn(&s->model.georef, true_north) + 0.0f : 0.0f;
+}
+/* ---- end ISS71 ---- */
+
 static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-612, the C core's subset */
     if (!strcmp(name, "new") || !strcmp(name, "open") || !strcmp(name, "import_ifc")) return 1; /* ribbon.rs:559 */
     if (!strcmp(name, "save_as")) return s->open; /* not ribbon actions (file_action) */
     if (!strcmp(name, "close")) return loaded(s);
     if (!strcmp(name, "recent_remove")) return 1; /* FS1 */
+    /* ---- H2a: the history store's writes answer their own refusals (versions.h) ---- */
+    if (!strcmp(name, "commit") || !strcmp(name, "branch_create") || !strcmp(name, "branch_switch")) return 1;
+    if (!strcmp(name, "merge")) return 1; /* H2b */
     /* ---- SET1: ribbon.rs:591 `Settings | About | Home => true`; set_settings, settings_load (settings.h) ---- */
     if (!strcmp(name, "settings") || !strcmp(name, "about")) return 1; /* the viewer-only build too (its actions are the editor's) */
     if (!strcmp(name, "set_settings") || !strcmp(name, "settings_load")) return 1;
@@ -621,21 +660,31 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     /* Visibility and the section box (ribbon.rs:592-611). FAKE1: ribbon.rs:592-593 `!flat`. */
     if (!strcmp(name, "reveal_hidden")) return loaded(s);
     if (!strcmp(name, "section_box")) return loaded(s) && !in_2d(s);
-    if (!strcmp(name, "box_to_selection")) return loaded(s) && !in_2d(s) && s->vis.section_on;
+    /* ISS71 (issue #71): Box to selection turns the box on; Rust also wants it on (DEVIATIONS). */
+    if (!strcmp(name, "box_to_selection")) return loaded(s) && !in_2d(s);
+    /* ISS71: the box's orientation, a choice only when true north differs from project north */
+    if (!strcmp(name, "box_north_project") || !strcmp(name, "box_north_true"))
+        return loaded(s) && !in_2d(s) && iss71_yaw(s, 0) != iss71_yaw(s, 1);
     /* ---- FAKE1: pages the lab serves and the sheet verbs. project: ribbon.rs:611 `_ => loaded`,
      * history: ribbon.rs:590 editable(), new_sheet: ribbon.rs:611 `_ => loaded` (the C core
      * answers the project query and stores sheets in an editable model only: a read-only IFC
      * keeps them off, DEVIATIONS 19), close_sheet: ribbon.rs:594 `layout.is_some()` ---- */
     if (!strcmp(name, "project") || !strcmp(name, "history") || !strcmp(name, "new_sheet")) return s->open;
+    if (!strcmp(name, "materials")) return loaded(s); /* MAT1: ribbon.rs:611 `_ => loaded` (read only: the list) */
     if (!strcmp(name, "close_sheet")) return loaded(s) && s->sheet_shown && cc_sheet_known(s, &s->sheet);
     /* ---- end FAKE1 ---- */
     /* ---- PAPER1: ribbon.rs:597 PaperView two_pictures(); OnPaper (Export view) `_ => loaded`
      * (the C core draws a model's views only: s->open) ---- */
     if (!strcmp(name, "paper_view")) return two_pictures(s);
-    if (!strcmp(name, "on_paper")) return s->open;
+    if (!strcmp(name, "on_paper")) return loaded(s); /* LNK1: ribbon.rs:611 `_ => loaded` */
     /* ---- end PAPER1 ---- */
     if (!strcmp(name, "clear_temporary")) return loaded(s) && s->vis.has_temp;
     if (!strcmp(name, "show_all_in_view")) return loaded(s) && cc_vis_hidden_in_view(&s->vis);
+    /* ---- ISS72: show_all when something is hidden (for now or in the view); show_previous when
+     * the current view's stack has a state (visibility.c ISS72) ---- */
+    if (!strcmp(name, "show_all")) return loaded(s) && (s->vis.has_temp || cc_vis_hidden_in_view(&s->vis));
+    if (!strcmp(name, "show_previous")) return loaded(s) && iss72_prev_count(s) > 0;
+    /* ---- end ISS72 ---- */
     if (!strcmp(name, "hide_now") || !strcmp(name, "isolate_now") || !strcmp(name, "hide_in_view") || !strcmp(name, "isolate_in_view"))
         return loaded(s) && s->has_primary;
     if (!strcmp(name, "unhide")) {
@@ -651,6 +700,8 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
 static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strncmp(a->name, "place_", 6)) return s->open && s->placing && !strcmp(a->name + 6, KIND_NAME[s->placing_kind]);
     if (!strcmp(a->name, "section_box")) return s->vis.section_on; /* ribbon.rs:629 */
+    if (!strcmp(a->name, "box_north_project")) return !s->vis.true_north; /* ISS71 */
+    if (!strcmp(a->name, "box_north_true")) return s->vis.true_north;     /* ISS71 */
     if (!strcmp(a->name, "reveal_hidden")) return s->vis.reveal;   /* ribbon.rs:643 */
     if (!strcmp(a->name, "measure")) return loaded(s) && s->measure.on; /* ribbon.rs:625 (ticket T1) */
     if (!strcmp(a->name, "edges")) return s->edges;               /* Q2: ribbon.rs:626 opts.edges */
@@ -658,7 +709,7 @@ static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strcmp(a->name, "orthographic")) return s->orthographic; /* Q2: ribbon.rs:628 camera.orthographic */
     if (cc_toggle_index(a->name) >= 0) return cc_toggle_on(s, cc_toggle_index(a->name)); /* KEY1: ribbon.rs:631-634 */
     if (!strcmp(a->name, "paper_view")) return on_paper(s);         /* PAPER1: ribbon.rs:631 */
-    if (!strcmp(a->name, "on_paper")) return s->open && s->plan_window; /* PAPER1: ribbon.rs:630 */
+    if (!strcmp(a->name, "on_paper")) return loaded(s) && s->plan_window; /* PAPER1: ribbon.rs:630; LNK1: loaded */
     return a->pressed;
 }
 
@@ -1154,6 +1205,38 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     }
     /* ---- L1: a view's reference plans, placed (links_ref.h) ---- */
     if (!strcmp(name, "view_references")) return cc_refs_view_references(s, body, n, out) ? CC_ERR : CC_OK;
+    /* ---- LNK1: the Links panel's rows (links_panel.h) ---- */
+    if (!strcmp(name, "links_panel")) return cc_links_panel_json(s, out) ? (out->oom = 1, CC_ERR) : CC_OK;
+    /* ---- end LNK1 ---- */
+    if (!strcmp(name, "scene_tree")) return cc_scene_tree_json(s, out) ? CC_ERR : CC_OK; /* FIXUI, links.h */
+    if (!strcmp(name, "scene_elements")) { /* FIXUI: {"storey", "class"?, "limit"?} (links.h) */
+        Arena a;
+        arena_init(&a, 0);
+        JrError je;
+        const JrVal *v = jr_parse(&a, body, n, &je);
+        const JrVal *st = v && v->type == JR_OBJ ? jr_get(v, "storey") : NULL;
+        const JrVal *cl = v && v->type == JR_OBJ ? jr_get(v, "class") : NULL;
+        const JrVal *li = v && v->type == JR_OBJ ? jr_get(v, "limit") : NULL;
+        int rc = -1;
+        if (!st || st->type != JR_STR) buf_puts(out, "storey: a string");
+        else if (cl && cl->type != JR_STR && cl->type != JR_NULL) buf_puts(out, "class: a string");
+        else if (li && (li->type != JR_NUM || !(li->num >= 0 && li->num <= 100000))) buf_puts(out, "limit: 0 to 100000");
+        else
+            rc = cc_scene_elements_json(s, st->s, st->n, cl && cl->type == JR_STR ? cl->s : NULL, cl && cl->type == JR_STR ? cl->n : 0,
+                                        li ? (size_t)li->num : 200, out);
+        arena_free(&a);
+        return rc ? CC_ERR : CC_OK;
+    }
+    if (!strcmp(name, "scene_element")) { /* FIXUI: {"id"}: an element of the read-only scene (links.h) */
+        Arena a;
+        arena_init(&a, 0);
+        JrError je;
+        const JrVal *v = jr_parse(&a, body, n, &je);
+        const JrVal *id = v && v->type == JR_OBJ ? jr_get(v, "id") : NULL;
+        int rc = !id || id->type != JR_STR ? (buf_puts(out, "id: a string"), -1) : cc_scene_element_json(s, id->s, id->n, out);
+        arena_free(&a);
+        return rc ? CC_ERR : CC_OK;
+    }
     if (!strcmp(name, "element")) { /* {"id", "link"}: an element of a linked model (links.h) */
         Arena a;
         arena_init(&a, 0);
@@ -1206,12 +1289,16 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "sheet_svg")) return cc_paper_sheet_svg(s, s->open ? scene_now(s) : NULL, body, n, out); /* D5, sheet_svg.h */
     /* D7: the PDF export, sheet_svg.h cc_paper_pdf_query (the answer is the PDF's bytes, or {path, bytes}) */
     if (!strcmp(name, "sheet_pdf") || !strcmp(name, "view_pdf"))
-        return cc_paper_pdf_query(s, s->open ? scene_now(s) : NULL, name[0] == 'v', body, n, out);
+        return cc_paper_pdf_query(s, scene_now(s), name[0] == 'v', body, n, out); /* LNK1: a read-only scene's views too */
     if (!strcmp(name, "pdf_fonts")) return cc_paper_fonts_query(s, out); /* SIZE1: the export's font choice */
     /* ---- PAPER1: a view's paper as SVG; several sheets as one PDF (sheet_svg.h) ---- */
-    if (!strcmp(name, "view_svg")) return cc_paper_view_svg(s, s->open ? scene_now(s) : NULL, body, n, out);
+    if (!strcmp(name, "view_svg")) return cc_paper_view_svg(s, scene_now(s), body, n, out); /* LNK1: read-only too */
     if (!strcmp(name, "sheets_pdf")) return cc_paper_sheets_pdf(s, s->open ? scene_now(s) : NULL, body, n, out);
     /* ---- end PAPER1 ---- */
+    /* ---- MAT1: the materials page (materials_page.h, any file) and the library (no model needed) ---- */
+    if (!strcmp(name, "materials_page")) return cc_materials_page_query(s, out);
+    if (!s->open && !strcmp(name, "material_library")) return cc_query(&s->model, name, body, n, out) == 200 ? CC_OK : CC_ERR;
+    /* ---- end MAT1 ---- */
     if (s->open) return model_query(s, name, body, n, out); /* calls.rs:276-309 and :519-527 */
     if (!strcmp(name, "north") || !strcmp(name, "coordinates")) { /* ADR 0045, query.h: null without a model */
         buf_puts(out, "null");
@@ -1309,7 +1396,7 @@ static void sibling(const cc_session *s, const char *path, const char *ext, char
         snprintf(to, cap, "%s", path);
         return;
     }
-    const char *slash = strrchr(s->path, '/');
+    const char *slash = cc_path_last_sep(s->path);
     const char *name = slash ? slash + 1 : s->path;
     const char *dot = strrchr(name, '.');
     size_t dir = (size_t)(name - s->path), stem = dot && dot != name ? (size_t)(dot - name) : strlen(name);
@@ -1317,15 +1404,31 @@ static void sibling(const cc_session *s, const char *path, const char *ext, char
     else snprintf(to, cap, "%.*s%.*s.%s", (int)dir, s->path, (int)stem, name, ext);
 }
 
+/* FIXSES: `to` names the open file: the same text, or the same file once the carrier resolved
+ * both (pf->real_path: `./m.bimble` is `m.bimble`). A path that does not resolve (no such file
+ * yet) is not the open file. */
+static int is_open_file(const cc_session *s, const char *to) {
+    if (!strcmp(to, s->path)) return 1;
+    if (!s->pf->files || !s->pf->real_path || !s->path[0]) return 0;
+    char a[4096], b[4096];
+    return !s->pf->real_path(s->pf->ctx, to, a, sizeof a) && !s->pf->real_path(s->pf->ctx, s->path, b, sizeof b) &&
+           !strcmp(a, b);
+}
+
+/* FIXSES: without `path`, the file goes next to the open file; a new model (or a dropped one)
+ * has none, so "Untitled.<ext>" landed in the host's working folder, over a file of that name.
+ * The host refuses instead (the wasm module, without files, writes under the current name). */
+static int needs_path(const cc_session *s, const char *path) { return !path && s->pf->files && s->open && s->untitled; }
+
 static void export_ifc(cc_session *s, cc_ifc_schema schema, const char *path) {
     const char *label = schema == CC_IFC4 ? "IFC4" : "IFC2x3";
     char to[4096 + 16];
     sibling(s, path, "ifc", to, sizeof to);
-    if (!strcmp(to, s->path)) {
+    if (is_open_file(s, to)) {
         cc_log(s->pf, "bimble-ccore: %s: export would overwrite the open file", to);
         return;
     }
-    const char *file = strrchr(to, '/'); /* FILE_NAME holds the file name */
+    const char *file = cc_path_last_sep(to); /* FILE_NAME holds the file name */
     file = file ? file + 1 : to;
     char stamp[32];
     cc_iso_utc(s->pf->unix_s(s->pf->ctx), stamp);
@@ -1357,7 +1460,7 @@ static const char NOT_KEPT[] =
 static void share_for_viewing(cc_session *s, const char *path) {
     char to[4096 + 16];
     sibling(s, path, "bimbleview", to, sizeof to);
-    if (!strcmp(to, s->path)) {
+    if (is_open_file(s, to)) {
         cc_log(s->pf, "bimble-ccore: %s: the view file would overwrite the open file", to);
         return;
     }
@@ -1419,10 +1522,14 @@ static int file_action(cc_session *s, const char *name, const FileArgs *fa, cc_b
         return CC_OK;
     }
     if (!strcmp(name, "export_ifc4") || !strcmp(name, "export_ifc2x3")) {
+        if (needs_path(s, fa->path))
+            return fail(out, "a new model has no file yet: send {\"path\": \"<file>.ifc\"}, or save it first");
         export_ifc(s, !strcmp(name, "export_ifc4") ? CC_IFC4 : CC_IFC2X3, fa->path);
         return CC_OK;
     }
     if (!strcmp(name, "share_for_viewing")) {
+        if (needs_path(s, fa->path))
+            return fail(out, "a new model has no file yet: send {\"path\": \"<file>.bimbleview\"}, or save it first");
         share_for_viewing(s, fa->path);
         return CC_OK;
     }
@@ -1475,7 +1582,10 @@ static int sec1_strs_eq(const cc_strs *x, const cc_strs *y) {
         if (x->v[i].n != y->v[i].n || (x->v[i].n && memcmp(x->v[i].p, y->v[i].p, x->v[i].n))) return 0;
     return 1;
 }
-static int sec1_store_vis(cc_session *s, int all, cc_buf *out) {
+static int sec1_store_vis_ex(cc_session *s, int all, const cc_vis_state *from, cc_buf *out); /* ISS72 */
+static int sec1_store_vis(cc_session *s, int all, cc_buf *out) { return sec1_store_vis_ex(s, all, NULL, out); }
+/* ISS72: `from` not NULL: the view's five other lists are that state's (show_previous). */
+static int sec1_store_vis_ex(cc_session *s, int all, const cc_vis_state *from, cc_buf *out) {
     if (!s->open || !s->has_active) return 0;
     cc_cmds l;
     cc_cmds_init(&l);
@@ -1494,6 +1604,11 @@ static int sec1_store_vis(cc_session *s, int all, cc_buf *out) {
         return -1;
     }
     if (all) w->hidden_families.n = w->hidden_classes.n = w->hidden_storeys.n = w->hidden_links.n = w->hidden_materials.n = 0;
+    if (from && cc_vis_state_lists(from, &l.arena, w)) { /* ISS72 */
+        cc_cmds_free(&l);
+        buf_puts(out, "out of memory");
+        return -1;
+    }
     int same = sec1_strs_eq(&old.hidden_elements, &w->hidden_elements) && sec1_strs_eq(&old.isolated_elements, &w->isolated_elements) &&
                sec1_strs_eq(&old.hidden_families, &w->hidden_families) && sec1_strs_eq(&old.hidden_classes, &w->hidden_classes) &&
                sec1_strs_eq(&old.hidden_storeys, &w->hidden_storeys) && sec1_strs_eq(&old.hidden_links, &w->hidden_links) &&
@@ -1514,18 +1629,72 @@ static int sec1_store_vis(cc_session *s, int all, cc_buf *out) {
 }
 /* ---- end SEC1 ---- */
 
+/* ---- ISS71 ---- Box to selection (issue #71): the box around the selected elements (the open
+ * model's and a linked model's), in the box's frame, grown by CC_BOX_SELECTION_MARGIN_MM on every
+ * side; nothing selected: around everything visible (lib.rs fit_section_box's margin). The box is
+ * turned on. */
+/* The selection's bounds in the frame turned by `yaw`; 0: nothing selected. */
+static int iss71_sel_bounds(cc_session *s, const cc_scene *sc, float yaw, float lo[3], float hi[3]) {
+    float inf = 1e30f * 1e30f;
+    for (int k = 0; k < 3; k++) lo[k] = inf, hi[k] = -inf;
+    static const float zero[3] = {0, 0, 0};
+    int any = 0;
+    for (size_t k = 0; k < sc->nelements; k++) {
+        const cc_gid *g = &sc->elements[k].id;
+        int on = s->has_primary && !cc_gid_cmp(&s->primary, g);
+        for (size_t i = 0; !on && i < s->nalso; i++) on = !cc_gid_cmp(&s->also[i], g);
+        if (on) cc_vis_grow(sc, k, zero, yaw, lo, hi), any = 1;
+    }
+    if (s->link_sel >= 0 && (size_t)s->link_sel < s->nlinks) { /* a linked model's element */
+        const cc_scene *ls = cc_link_scene(&s->links[s->link_sel]);
+        for (size_t k = 0; ls && k < ls->nelements; k++) {
+            if (memcmp(ls->elements[k].id.c, s->link_sel_id, 22)) continue;
+            float off[3];
+            for (int q = 0; q < 3; q++) off[q] = (float)(ls->origin[q] - sc->origin[q]); /* lib.rs:1499 */
+            cc_vis_grow(ls, k, off, yaw, lo, hi), any = 1;
+        }
+    }
+    return any;
+}
+
+static void iss71_box_to_selection(cc_session *s) {
+    cc_vis *v = &s->vis;
+    const cc_scene *sc = scene_now(s);
+    if (!sc) return;
+    float lo[3], hi[3];
+    v->yaw = iss71_yaw(s, v->true_north); /* in the orientation chosen */
+    int any = iss71_sel_bounds(s, sc, v->yaw, lo, hi);
+    if (!any || cc_vis_fit_bounds(v, lo, hi, CC_BOX_SELECTION_MARGIN_MM)) cc_vis_fit(v, sc, NULL);
+    if (v->has_box) v->section_on = 1;
+    v->drag_face = -1;
+}
+/* ---- end ISS71 ---- */
+
 /* ribbon.rs:708-775: the section box and visibility actions. 0 ok (or not one of them), -1 with
  * the error in `out` (out of memory). Session state only: no history step, rev unchanged. */
-static int vis_action(cc_session *s, const char *name, cc_buf *out) {
+static int vis_action_do(cc_session *s, const char *name, cc_buf *out) {
     cc_vis *v = &s->vis;
     const cc_gid *primary = s->has_primary ? &s->primary : NULL;
-    if (!strcmp(name, "section_box")) cc_vis_toggle(v, scene_now(s), primary);
-    else if (!strcmp(name, "box_to_selection")) cc_vis_fit(v, scene_now(s), primary);
+    if (!strcmp(name, "section_box")) {
+        if (!v->has_box) v->yaw = iss71_yaw(s, v->true_north); /* ISS71: the first fit, in the orientation chosen */
+        cc_vis_toggle(v, scene_now(s), primary);
+    } else if (!strcmp(name, "box_to_selection")) iss71_box_to_selection(s); /* ISS71 */
+    else if (!strcmp(name, "box_north_project") || !strcmp(name, "box_north_true")) { /* ISS71 */
+        const cc_scene *sc = scene_now(s);
+        v->true_north = !strcmp(name, "box_north_true");
+        float yaw = iss71_yaw(s, v->true_north), lo[3], hi[3];
+        int any = sc && iss71_sel_bounds(s, sc, yaw, lo, hi);
+        cc_vis_orient(v, yaw, any ? lo : NULL, any ? hi : NULL);
+    }
     else if (!strcmp(name, "reveal_hidden")) v->reveal = !v->reveal;
     else if (!strcmp(name, "clear_temporary")) cc_vis_clear_temporary(v);
     else if (!strcmp(name, "show_all_in_view")) {
         cc_vis_show_all_in_view(v);
         if (sec1_store_vis(s, 1, out)) return -1; /* SEC1: viewing.rs:490, stored with the view */
+    } else if (!strcmp(name, "show_all")) { /* ---- ISS72: clear_temporary + show_all_in_view ---- */
+        cc_vis_clear_temporary(v);
+        cc_vis_show_all_in_view(v);
+        if (sec1_store_vis(s, 1, out)) return -1;
     } else {
         static const char *const HIDE[] = {"hide_now", "isolate_now", "hide_in_view", "isolate_in_view", "unhide"};
         int a = -1;
@@ -1545,6 +1714,72 @@ static int vis_action(cc_session *s, const char *name, cc_buf *out) {
     }
     return 0;
 }
+
+/* ---- ISS72 ---- Show previous (visibility.c ISS72 has the behaviour). */
+static int iss72_capture(cc_session *s, cc_vis_state *st) {
+    Arena a;
+    arena_init(&a, 0);
+    cc_view v;
+    int r = s->open ? cc_sv_active(s, &a, &v) : 0;
+    int rc = r < 0 ? -1 : cc_vis_capture(&s->vis, r == 1 ? &v.visibility : NULL, st);
+    arena_free(&a);
+    return rc;
+}
+
+static int iss72_oom(cc_buf *out) {
+    buf_puts(out, "out of memory");
+    return -1;
+}
+
+/* The top state of this view's stack restored; the state it leaves pushed instead (pressed twice:
+ * back and forth). The stored part as any "in view" change (one undo step). */
+static int iss72_show_previous(cc_session *s, cc_buf *out) {
+    cc_gid view = iss72_view(s);
+    const cc_vis_state *top = cc_vis_prev_top(&s->vis, &view);
+    if (!top) return 0;
+    cc_vis_state now, after;
+    if (iss72_capture(s, &now)) return iss72_oom(out);
+    /* The stack is not touched until the state is restored: `top` stays valid. */
+    int rc = cc_vis_restore(&s->vis, top) ? iss72_oom(out) : sec1_store_vis_ex(s, 0, top, out);
+    if (rc) { /* refused: the state as it was, the stack as it was */
+        cc_vis_restore(&s->vis, &now);
+        cc_sv_vis_load(s);
+        cc_vis_state_free(&now);
+        return -1;
+    }
+    cc_vis_prev_pop(&s->vis, &view);
+    if (iss72_capture(s, &after)) { /* the state it left, read back (the view's sets as stored) */
+        cc_vis_state_free(&now);
+        return iss72_oom(out);
+    }
+    if (!cc_vis_state_eq(&now, &after) && cc_vis_prev_push(&s->vis, &view, &now)) rc = iss72_oom(out);
+    cc_vis_state_free(&now), cc_vis_state_free(&after);
+    return rc;
+}
+
+/* The actions that change what is hidden: the state before is pushed when they change it. */
+static int vis_action(cc_session *s, const char *name, cc_buf *out) {
+    static const char *const TRACKED[] = {"hide_now", "isolate_now", "hide_in_view", "isolate_in_view", "unhide",
+                                          "clear_temporary", "show_all_in_view", "show_all"};
+    if (!strcmp(name, "show_previous")) return iss72_show_previous(s, out);
+    int tracked = 0;
+    for (size_t i = 0; i < sizeof TRACKED / sizeof TRACKED[0]; i++) tracked |= !strcmp(name, TRACKED[i]);
+    if (!tracked) return vis_action_do(s, name, out);
+    cc_gid view = iss72_view(s);
+    cc_vis_state before, after;
+    if (iss72_capture(s, &before)) return iss72_oom(out);
+    int rc = vis_action_do(s, name, out);
+    if (!rc) {
+        if (iss72_capture(s, &after)) rc = iss72_oom(out);
+        else {
+            if (!cc_vis_state_eq(&before, &after) && cc_vis_prev_push(&s->vis, &view, &before)) rc = iss72_oom(out);
+            cc_vis_state_free(&after);
+        }
+    }
+    cc_vis_state_free(&before);
+    return rc;
+}
+/* ---- end ISS72 ---- */
 
 /* link_model and manage_links (links.h). */
 static int link_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
@@ -1604,12 +1839,12 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         rc = done(&w);
         goto end;
     }
-    static const char *const OPS_L[] = {"remove", "reload", "show", "hide"};
+    static const char *const OPS_L[] = {"remove", "reload", "show", "hide", "locate" /* LNK1 */};
     int o = -1;
-    for (int q = 0; q < 4; q++)
+    for (int q = 0; q < 5; q++)
         if (op->n == strlen(OPS_L[q]) && !memcmp(op->s, OPS_L[q], op->n)) o = q;
     if (o < 0) {
-        buf_puts(out, "op: one of list, remove, reload, show, hide");
+        buf_puts(out, "op: one of list, remove, reload, show, hide, locate");
         goto end;
     }
     if (!nm || nm->type != JR_STR) {
@@ -1621,7 +1856,18 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         buf_puts(out, "no linked model "), buf_append(out, nm->s, nm->n);
         goto end;
     }
-    if (o == 0) cc_links_remove(s, li);
+    if (o == 4) { /* ---- LNK1: locate {name, path}: the link read from another file, in its place ---- */
+        const JrVal *p = jr_get(v, "path");
+        if (!p || p->type != JR_STR || !p->n || strlen(p->s) < p->n) {
+            buf_puts(out, "path: the file to link in its place");
+            goto end;
+        }
+        cc_error err;
+        if (cc_links_locate(s, li, p->s, &err)) {
+            buf_puts(out, err.msg);
+            goto end;
+        }
+    } else if (o == 0) cc_links_remove(s, li);
     else if (o == 1) {
         cc_error err;
         if (cc_links_reload(s, li, &err)) {
@@ -1653,7 +1899,8 @@ static int new_sheet_action(cc_session *s, cc_buf *out) {
 }
 
 /* Actions the C core runs that the ribbon does not list (above). */
-static const char *const HIDDEN_ACTIONS[] = {"save_as", "close", "recent_remove" /* FS1 */, "set_settings", "settings_load" /* SET1 */};
+static const char *const HIDDEN_ACTIONS[] = {"save_as", "close", "recent_remove" /* FS1 */, "set_settings", "settings_load" /* SET1 */,
+                                             "commit", "branch_create", "branch_switch" /* H2a */, "merge" /* H2b */};
 
 /* calls.rs:538-547 call_action, ribbon.rs:650 run_action. */
 static int call_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
@@ -1705,6 +1952,10 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     /* ---- KEY1: ribbon.rs:729-744, the plan template's flag (no history step, rev unchanged) ---- */
     if (cc_toggle_index(name) >= 0) return cc_toggle_flip(s, cc_toggle_index(name)), CC_OK;
     /* ---- end KEY1 ---- */
+    { /* ---- H2a: commit, branch_create, branch_switch (versions.h) ---- */
+        int vrc = cc_versions_action(s, name, body, n, out);
+        if (vrc != -1) return vrc;
+    }
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return link_action(s, name, body, n, out);
     /* ---- FS1: recent_remove {path} (Home's remove; settings_file.h) ---- */
     if (!strcmp(name, "recent_remove")) {
@@ -2202,6 +2453,46 @@ static double storey_level(const cc_session *s) { /* edit.rs storey_elevation */
     return st ? st->elevation : 0.0;
 }
 
+/* ---- SLAB1: the grid axes the place tool snaps to (snap.rs `scene.grids`): the model's grids,
+ * then those of each visible link (query grid_axes' lists), world plan mm. malloc'd, *n axes;
+ * NULL with *n 0 when there are none (or out of memory: the column axes then, as without grid). */
+static double (*snap_grid_axes(const cc_session *s, size_t *n))[4] {
+    size_t cnt = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        double(*v)[4] = NULL;
+        if (pass) {
+            if (!cnt || !(v = malloc(cnt * sizeof *v))) break;
+            cnt = 0;
+        }
+#define SNAP_AXIS(A, B)                                                                                                       \
+    do {                                                                                                                      \
+        if (v) v[cnt][0] = (A)[0], v[cnt][1] = (A)[1], v[cnt][2] = (B)[0], v[cnt][3] = (B)[1];                                \
+        cnt++;                                                                                                                \
+    } while (0)
+        for (size_t g = 0; g < s->model.ngrids; g++)
+            for (size_t i = 0; i < s->model.grids[g].naxes; i++) SNAP_AXIS(s->model.grids[g].axes[i].start, s->model.grids[g].axes[i].end);
+        for (size_t k = 0; k < s->nlinks; k++) {
+            const cc_link *l = &s->links[k];
+            if (!l->visible) continue;
+            if (l->kind == CC_LINK_MODEL && l->model)
+                for (size_t g = 0; g < l->model->ngrids; g++)
+                    for (size_t i = 0; i < l->model->grids[g].naxes; i++) SNAP_AXIS(l->model->grids[g].axes[i].start, l->model->grids[g].axes[i].end);
+            if (l->kind == CC_LINK_IFC && l->ifc)
+                for (size_t i = 0; i < l->ifc->ngrids; i++) SNAP_AXIS(l->ifc->grids[i].start_mm, l->ifc->grids[i].end_mm);
+            if (l->kind != CC_LINK_MODEL && l->kind != CC_LINK_IFC && l->vf)
+                for (size_t i = 0; i < l->vf->ngrids; i++) SNAP_AXIS(l->vf->grids[i].start, l->vf->grids[i].end);
+        }
+#undef SNAP_AXIS
+        if (pass) {
+            *n = cnt;
+            return v;
+        }
+    }
+    *n = 0;
+    return NULL;
+}
+/* ---- end SLAB1 ---- */
+
 /* lib.rs placing_point: the pointer on the storey plane, snapped (or rounded, `free`), then the
  * ortho of a 2-point kind. No position, or the ray misses the plane: no hover. */
 static void tool_pointer(cc_session *s, const ToolArgs *a) {
@@ -2224,14 +2515,17 @@ static void tool_pointer(cc_session *s, const ToolArgs *a) {
     double q[2];
     if (a->free_ || !sc) q[0] = cc_round10(p[0]), q[1] = cc_round10(p[1]);
     else {
-        if (!t->has_targets || t->targets_rev != s->rev || t->targets_level != level) {
+        if (!t->has_targets || t->targets_rev != s->rev || t->targets_level != level || t->targets_links != s->links_gen) {
             double next = level + 4000.0; /* the storey above, or level + 4 m */
             for (size_t i = 0; i < s->model.nstoreys; i++) {
                 double e = s->model.storeys[i].elevation;
                 if (e > level + 1.0 && e < next) next = e;
             }
-            t->has_targets = !cc_snap_targets_build(&t->targets, sc, level, next);
-            t->targets_rev = s->rev, t->targets_level = level;
+            size_t ng = 0; /* SLAB1: the grid axes */
+            double(*grid)[4] = snap_grid_axes(s, &ng);
+            t->has_targets = !cc_snap_targets_build_grid(&t->targets, sc, level, next, (const double(*)[4])grid, ng);
+            free(grid);
+            t->targets_rev = s->rev, t->targets_level = level, t->targets_links = s->links_gen;
         }
         kind = cc_snap(&t->targets, p, tol, q);
     }
@@ -2280,6 +2574,46 @@ static int place_cmds(cc_session *s, const double *a, const double *b, int dry_r
     return rc;
 }
 
+/* ---- SLAB1: the polygon slab by clicks (edit.rs:318-385) ---- */
+#define CLOSE_MM 100.0 /* edit.rs CLOSE_MM: a click this close to the first point closes */
+static int polygon_now(const cc_session *s) { return s->placing && s->placing_kind == CC_KIND_SLAB && s->polygon; }
+/* edit.rs click: 3 points or more and `p` within CLOSE_MM of the first. */
+static int polygon_closes(const cc_tool *t, const double *p) {
+    return t->npoints >= 3 && cc_hypot(t->points[0][0] - p[0], t->points[0][1] - p[1]) <= CLOSE_MM;
+}
+/* verbs::new_slab on `pts` with the placing state, raised by top_offset_mm (close_polygon). */
+static int polygon_cmds(cc_session *s, const double (*pts)[2], size_t n, cc_cmds *l, cc_buf *err) {
+    if (!s->has_storey) {
+        buf_puts(err, "choose a storey");
+        return -1;
+    }
+    if (cc_verb_new_slab(&s->model, &s->storey, pts, n, s->sizes, s->material, l, err)) return -1;
+    for (size_t i = 0; i < l->n; i++)
+        if (l->v[i].op == CC_CMD_ADD_ELEMENT) l->v[i].element.placement.origin[2] += s->top_offset_mm;
+    return 0;
+}
+/* edit.rs close_polygon (Enter, or a click on the first point): one slab with the clicked
+ * outline, one history step, the points dropped; an error keeps the points. Nothing clicked or
+ * not a polygon slab: no change (Rust's None). */
+static int polygon_close(cc_session *s, cc_buf *out) {
+    cc_tool *t = &s->tool;
+    if (!polygon_now(s) || !t->npoints) return tool_json(s, NULL, out);
+    cc_cmds l;
+    cc_cmds_init(&l);
+    int rc = CC_ERR, has_id = 0;
+    cc_gid id;
+    if (!polygon_cmds(s, (const double(*)[2])t->points, t->npoints, &l, out)) {
+        t->npoints = 0;
+        for (size_t i = 0; i < l.n; i++)
+            if (l.v[i].op == CC_CMD_ADD_ELEMENT) id = l.v[i].element.id, has_id = 1;
+        rc = try_apply(s, l.v, l.n, out);
+    }
+    cc_cmds_free(&l);
+    if (rc != CC_OK) return rc;
+    return tool_json(s, has_id ? &id : NULL, out);
+}
+/* ---- end SLAB1 ---- */
+
 /* The tool's state: {"active","ghost","ghost_error","hover","kind","placed","points"} (sorted).
  * ghost: what the next click adds (tool.h cc_tool_ghost), null without one; ghost_error: why a
  * preview has no ghost (the place verb's error), else null; hover: {"at":[x,y],"snap":label or
@@ -2294,7 +2628,21 @@ static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out) {
     buf_init(&gerr);
     jw_key(&w, "ghost");
     int has_ghost = 0;
-    if (s->placing && t->has_hover && !(s->placing_kind == CC_KIND_SLAB && s->polygon) &&
+    if (polygon_now(s) && t->has_hover && t->npoints >= 2 && t->npoints < CC_TOOL_MAX_POINTS) { /* SLAB1 */
+        cc_cmds l;
+        cc_cmds_init(&l);
+        double pts[CC_TOOL_MAX_POINTS][2];
+        memcpy(pts, t->points, t->npoints * sizeof pts[0]);
+        size_t np = t->npoints;
+        if (!polygon_closes(t, t->hover)) pts[np][0] = t->hover[0], pts[np][1] = t->hover[1], np++;
+        if (!polygon_cmds(s, (const double(*)[2])pts, np, &l, &gerr)) {
+            const cc_scene *sc = scene_now(s);
+            double org[3] = {0, 0, 0};
+            if (sc) memcpy(org, sc->origin, sizeof org);
+            has_ghost = !cc_tool_ghost(&w, &s->model, l.v, l.n, org, &gerr);
+        }
+        cc_cmds_free(&l);
+    } else if (s->placing && t->has_hover && !(s->placing_kind == CC_KIND_SLAB && s->polygon) &&
         (s->placing_kind == CC_KIND_COLUMN || t->npoints >= 1)) {
         cc_cmds l;
         cc_cmds_init(&l);
@@ -2613,7 +2961,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
     const cc_scene *sc = loaded(s) ? scene_now(s) : NULL;
     cc_mlayer layers[1 + CC_MAX_LINKS];
     size_t nl = 0;
-    float mn[3], mx[3];
+    float mn[3], mx[3], yaw = 0.0f; /* ISS71: the section box's turn */
     int has_box = 0;
     if (sc) {
         layers[nl].sc = sc, layers[nl].vis = &s->vis, memset(layers[nl].off, 0, sizeof layers[nl].off), nl++;
@@ -2636,10 +2984,11 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
             cc_vis_free(&box);
         } else if (s->vis.section_on && s->vis.has_box) {
             has_box = 1, memcpy(mn, s->vis.min, sizeof mn), memcpy(mx, s->vis.max, sizeof mx);
+            yaw = s->vis.yaw; /* ISS71 */
         }
         arena_free(&a);
     }
-    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL};
+    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL, yaw};
     return cc_measure_call(&s->measure, name, body, n, sc ? &mv : NULL, out) == 200 ? CC_OK : CC_ERR;
 }
 
@@ -2655,7 +3004,8 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
     }
     if (!strcmp(name, "annotate")) return annot_start(s, body, n, out);
     int pointer = !strcmp(name, "pointer"), click = !strcmp(name, "click"), cancel = !strcmp(name, "cancel");
-    if (!pointer && !click && !cancel) {
+    int close = !strcmp(name, "close"); /* SLAB1: Enter closes a polygon slab */
+    if (!pointer && !click && !cancel && !close) {
         buf_puts(out, "unknown tool call ");
         debug_str(out, name);
         return CC_ERR;
@@ -2666,7 +3016,15 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
         buf_puts(out, READ_ONLY);
         return CC_ERR;
     }
-    if (s->tool.annot) return annot_call(s, pointer, cancel, &a, out);
+    if (s->tool.annot) {
+        if (close) return annot_json(s, NULL, out); /* SLAB1: Enter does nothing to the annotate tool */
+        return annot_call(s, pointer, cancel, &a, out);
+    }
+    if (close) return polygon_close(s, out); /* SLAB1 */
+    if (cancel && polygon_now(s) && s->tool.npoints) { /* SLAB1: Esc takes the last corner back first */
+        s->tool.npoints--;
+        return tool_json(s, NULL, out);
+    }
     if (cancel) { /* lib.rs:3031 Esc: stops placing, the points go */
         s->placing = 0;
         cc_tool_clear(&s->tool);
@@ -2679,11 +3037,16 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
     }
     tool_pointer(s, &a);
     if (pointer || !s->tool.has_hover) return tool_json(s, NULL, out);
-    if (s->placing_kind == CC_KIND_SLAB && s->polygon) {
-        buf_puts(out, "a polygon slab is not placed by clicks yet: use the rectangle shape or the place verb");
-        return CC_ERR;
-    }
     cc_tool *t = &s->tool;
+    if (polygon_now(s)) { /* SLAB1: edit.rs click, the polygon branch */
+        if (polygon_closes(t, t->hover)) return polygon_close(s, out);
+        if (t->npoints >= CC_TOOL_MAX_POINTS - 1) {
+            buf_puts(out, "a slab outline has at most 63 corners");
+            return CC_ERR;
+        }
+        t->points[t->npoints][0] = t->hover[0], t->points[t->npoints][1] = t->hover[1], t->npoints++;
+        return tool_json(s, NULL, out);
+    }
     if (t->npoints >= CC_TOOL_MAX_POINTS) t->npoints = 0;
     t->points[t->npoints][0] = t->hover[0], t->points[t->npoints][1] = t->hover[1], t->npoints++;
     if (t->npoints < (s->placing_kind == CC_KIND_COLUMN ? 1u : 2u)) return tool_json(s, NULL, out);

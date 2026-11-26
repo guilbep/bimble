@@ -11,8 +11,8 @@
 //   memory   1000 x (open, mesh, close) and 100 x open_ifc: no growth after the first round
 //   host     the host call layer in the module (call, change_json, host_open_text, host_mesh,
 //            host_saved; ticket T13b) against the native host (out/tcc/bimble-ccore or $HOST_BIN,
-//            port 47351, CCORE_SEED=1 and guid_seed(1) on both): boot without a model (state,
-//            actions: 54 rows), open frame.json, the same calls on both (select, verb place,
+//            port <port>, CCORE_SEED=1 and guid_seed(1) on both): boot without a model (state,
+//            actions: 58 rows: Rust's 54 + ISS72's 2 + ISS71's 2), open frame.json, the same calls on both (select, verb place,
 //            history, undo, redo, action save…): every answer, status and change JSON byte for
 //            byte, the saved text = the native host's saved file, host_mesh = GET /mesh; ticket E1:
 //            query verbs (= golden/verbs_list.json) and describe, verb with dry_run and if_rev, rename;
@@ -34,15 +34,17 @@
 //            (inflated = golden/view/frame.bimbleview.raw) and host_open of it; shared again (the
 //            same raw stream) and share_for_viewing of the read-only mapped_item.ifc (opens with 5
 //            elements; ticket V1); close
+//   bounds   a binary .bimble whose CBOR array count wraps size_t on wasm32 (ticket FIXLIB): refused
 // Prints per-suite "N passed, M failed", the module size and timings; exits non-zero on a failure.
 // No dependencies.
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const G = join(CCORE, "golden");
@@ -434,9 +436,92 @@ suite("memory");
   end();
 }
 
+// ---- SLAB1: openings cut in the wasm build (src/prism_cut.h: no kernel in wasm) against the
+// native host (the manifold kernel when built in): volume and box of every element within 1e-6 ----
+const HOST_BIN_SLAB1 = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
+suite("openings");
+{
+  const ids = (c) => `0Slab1Wasm${c.repeat(12)}`; // 22 characters
+  const box = (x0, y0, z0, x1, y1, z1) => ({
+    kind: "mesh",
+    positions: [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+    indices: [0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7],
+  });
+  const at = (o) => ({ origin: o, z_axis: [0, 0, 1], x_axis: [1, 0, 0] });
+  const el = (c, cls, origin, generator, openings) => [ids(c), {
+    id: ids(c), class: cls, name: cls + c, storey: ids("S"), material: ids("M"), placement: at(origin), generator,
+    openings: openings.map((o, k) => ({ id: ids(c).slice(0, 21) + "abcdefgh"[k], placement: at([0, 0, 0]), generator: o })),
+  }];
+  const model = { format: "bimble", version: 1, model: {
+    project_id: ids("P"), project_name: "slab1 openings",
+    storeys: { [ids("S")]: { id: ids("S"), name: "L0", elevation: 0 } },
+    materials: { [ids("M")]: { id: ids("M"), name: "C30/37", category: "concrete" } },
+    elements: Object.fromEntries([
+      el("A", "IfcWall", [0, 0, 0], { kind: "wall", length: 6000, thickness: 200, height: 3000 },
+        [box(500, -300, 900, 1700, 300, 2100), box(4500, -300, 0, 5400, 300, 2200)]),
+      el("B", "IfcSlab", [0, 1000, 3000], { kind: "slab", outline: [[0, 0], [6000, 0], [6000, 2000], [2000, 2000], [2000, 5000], [0, 5000]], thickness: 250 },
+        [box(4000, 500, -10, 4500, 1500, 260)]),
+      el("C", "IfcSlab", [0, 8000, 3000], { kind: "slab", outline: [[0, 0], [3000, 0], [3000, 1000], [1000, 1000], [1000, 3000], [0, 3000]], thickness: 250 },
+        [box(200, 200, 100, 600, 600, 400)]), // a recess in an L: not a special case, uncut in wasm
+    ]),
+  } };
+  const text = JSON.stringify(model);
+  /** Per element id: [volume, xmin, ymin, zmin, xmax, ymax, zmax] of a world BMSH (positions + origin). */
+  const solids = (bytes) => {
+    const M = parseBmsh(bytes), out = {};
+    const org = M.origin.map((h) => { const dv = new DataView(new ArrayBuffer(8)); dv.setBigUint64(0, BigInt("0x" + h)); return dv.getFloat64(0); });
+    for (const r of M.rows) {
+      let v = 0;
+      const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      const P = (i) => [0, 1, 2].map((k) => M.pos[3 * (r.v0 + i) + k] + org[k]);
+      for (let i = 0; i < r.nv; i++) { const p = P(i); for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], p[k]); hi[k] = Math.max(hi[k], p[k]); } }
+      for (let t = r.i0; t + 2 < r.i0 + r.ni; t += 3) {
+        const [a, b, c] = [P(M.idx[t] - r.v0), P(M.idx[t + 1] - r.v0), P(M.idx[t + 2] - r.v0)]; // indices are absolute
+        v += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6;
+      }
+      out[r.id] = [v, ...lo, ...hi];
+    }
+    return out;
+  };
+  const o = openText(text);
+  check("openings model opens in wasm", o.status === 200, o.text);
+  const W = solids(call(X.mesh, [], o.value, 0).bytes);
+  const tmpd = mkdtempSync(join(tmpdir(), "ccore-wasm-slab1-"));
+  const file = join(tmpd, "openings.json");
+  writeFileSync(file, text);
+  const P = port("wasm_run_slab1"), TOKEN = "slab1-token";
+  const host = spawn(HOST_BIN_SLAB1, [String(P), file], { env: hostEnv({ BIMBLE_TOKEN: TOKEN }), stdio: ["ignore", "ignore", "pipe"] });
+  let err = "";
+  host.stderr.on("data", (d) => (err += d));
+  try {
+    const until = Date.now() + 5000;
+    while (!err.includes("listening")) {
+      if (Date.now() > until || host.exitCode !== null) throw new Error(`native host did not start: ${err}`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const N = solids(new Uint8Array(await (await fetch(`http://127.0.0.1:${P}/mesh?t=${TOKEN}`)).arrayBuffer()));
+    const rel = (a, b) => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b));
+    const same = (id) => W[id] && N[id] && W[id].every((x, k) => rel(x, N[id][k]));
+    const hand = { A: 6000 * 200 * 3000 - 1200 * 200 * 1200 - 900 * 200 * 2200, B: (6000 * 2000 + 2000 * 3000) * 250 - 500 * 1000 * 250 };
+    for (const c of ["A", "B"]) {
+      check(`opening cut in wasm: ${c === "A" ? "wall, window + door" : "L slab, shaft"}: volume and box = native's (1e-6)`, same(ids(c)),
+        `wasm ${W[ids(c)]} native ${N[ids(c)]}`);
+      check(`  ${c}: native's volume is the hand's ${hand[c]}`, N[ids(c)] && rel(N[ids(c)][0], hand[c]), `${N[ids(c)]?.[0]}`);
+    }
+    // The recess: native cuts it (kernel), wasm draws it uncut (not a special case) and says so.
+    console.log(`  recess: wasm volume ${W[ids("C")]?.[0]}, native ${N[ids("C")]?.[0]}`);
+    check("the recess in an L slab: uncut in wasm (its whole volume), cut natively", W[ids("C")] && rel(W[ids("C")][0], 5000000 * 250) &&
+      N[ids("C")] && rel(N[ids("C")][0], 5000000 * 250 - 400 * 400 * 150));
+  } finally {
+    host.kill();
+    X.close(o.value);
+  }
+  end();
+}
+
 // ---- host: the call layer in the module against the native host ----
 const HOST_BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const HOST_PORT = port("wasm_run", 47351), HOST_TOKEN = "wasmrun-token";
+const HOST_PORT = port("wasm_run"), HOST_TOKEN = "wasmrun-token";
 /** One call of the module's host layer: {status, text, bytes, value}. */
 const hcall = (op, name = "-", body = "") => call(X.call, [op, name, body]);
 const change = () => call(X.change_json, []).text;
@@ -446,7 +531,7 @@ suite("host");
   const model = join(tmpd, "frame.json");
   copyFileSync(join(G, "frame.json"), model);
   const host = spawn(HOST_BIN, [String(HOST_PORT), model], {
-    env: { ...process.env, BIMBLE_TOKEN: HOST_TOKEN, CCORE_SEED: "1" }, stdio: ["ignore", "ignore", "pipe"],
+    env: hostEnv({ BIMBLE_TOKEN: HOST_TOKEN, CCORE_SEED: "1" }), stdio: ["ignore", "ignore", "pipe"],
   });
   let hostErr = "";
   host.stderr.on("data", (d) => (hostErr += d));
@@ -474,7 +559,7 @@ suite("host");
     const st0 = hcall("query", "state", "{}");
     check("boot: query state -> 200, no file", st0.status === 200 && JSON.parse(st0.text).file === null, st0.text);
     const ac0 = hcall("query", "actions", "{}");
-    check("boot: query actions -> 54 rows", ac0.status === 200 && JSON.parse(ac0.text).length === 54, ac0.text.slice(0, 200));
+    check("boot: query actions -> 58 rows (Rust's 54 + ISS72's 2 + ISS71's 2)", ac0.status === 200 && JSON.parse(ac0.text).length === 58, ac0.text.slice(0, 200));
     check("unknown op -> 404", hcall("nope").status === 404);
     check("host_saved before a save -> 404", call(X.host_saved, []).status === 404);
 
@@ -519,6 +604,11 @@ suite("host");
       ["query", "visibility_sets", "{}"], ["query", "actions", "{}"], ["action", "section_box", ""], ["query", "visibility", "{}"],
       ["select", "-", JSON.stringify([firstId])], ["action", "unhide", ""], ["action", "isolate_in_view", ""], ["action", "box_to_selection", ""],
       ["query", "visibility", "{}"], ["action", "show_all_in_view", ""], ["action", "reveal_hidden", ""], ["query", "actions", "{}"],
+      // ISS72: show_previous (back before show_all_in_view), show_all, show_previous again
+      ["action", "show_previous", ""], ["query", "visibility_sets", "{}"], ["action", "show_all", ""], ["query", "visibility_sets", "{}"],
+      ["action", "show_previous", ""], ["query", "visibility_sets", "{}"], ["query", "actions", "{}"], ["action", "show_all", ""],
+      // ISS71: the box's orientation (refused alike: frame.json has no turned georeference)
+      ["action", "box_north_true", ""], ["action", "box_north_project", ""], ["query", "visibility", "{}"],
       ["tool", "box_set", JSON.stringify({ min: [0, 0, 0], max: [8000.5, 6000.25, 3000.1], on: true })],
       ["tool", "box_press", JSON.stringify({ ray: [-5000, 3000, 9000, 0.8320502943378437, 0, -0.5547001962252291], ray_tol: [-5000, 3150, 9000, 0.8320502943378437, 0, -0.5547001962252291] })],
       ["tool", "box_move", JSON.stringify({ ray: [-5000, 3000, 9000, 0.8, 0, -0.6] })], ["query", "visibility", "{}"],
@@ -818,6 +908,25 @@ suite("files");
   const s3 = q("state");
   check("close -> 200, no model", cl.status === 200 && s3.file === null, `${cl.text} ${JSON.stringify(s3)}`);
   Y.guid_seed(0n);
+  end();
+}
+
+// ---- bounds (ticket FIXLIB): a CBOR count whose DOM size wraps on wasm32 ----
+// 89,478,486 items x 48 bytes (sizeof(JrVal) on wasm32) is 2^32 + 32: the old cbor.c asked the
+// arena for 32 bytes, then wrote 89 M items past them. Now refused (the DOM budget, json_r.h) before
+// any allocation, the module still usable.
+suite("bounds");
+{
+  const cnt = 89478486;
+  const body = Buffer.alloc(5 + cnt);
+  body[0] = 0x9a;
+  body.writeUInt32BE(cnt, 1);
+  const file = Buffer.concat([Buffer.from("bimble\0", "latin1"), gzipSync(body, { level: 1 })]);
+  const o = openText(file);
+  check("a count that wraps on wasm32 -> 400, the value budget", o.status === 400 && /too many values/.test(o.text), `${o.status} ${o.text}`);
+  const again = openText(read("frame.json"));
+  check("frame.json still opens after it", again.status === 200, again.text);
+  if (again.status === 200) X.close(again.value);
   end();
 }
 

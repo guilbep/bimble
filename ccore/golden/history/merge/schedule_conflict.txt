@@ -1,0 +1,12 @@
+prefer neither: 1 conflict(s)
+conflict schedule Merge test | -
+valid
+model schedule_conflict.ours.json
+prefer ours: 1 conflict(s)
+conflict schedule Merge test | -
+valid
+model schedule_conflict.ours.json
+prefer theirs: 1 conflict(s)
+conflict schedule Merge test | -
+valid
+model schedule_conflict.theirs.json

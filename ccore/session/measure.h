@@ -73,6 +73,7 @@ typedef struct {
     size_t nlayers;
     const float *clip_min, *clip_max;
     const double *org;
+    float clip_yaw; /* ISS71: the box's turn (visibility.h cc_vis.yaw): min, max are in its frame */
 } cc_mview;
 
 void cc_measure_free(cc_measure *m);  /* the measurements; the state is zeroed */

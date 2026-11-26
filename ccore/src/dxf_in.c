@@ -14,6 +14,13 @@
 #define CIRCLE_SEGMENTS 64.0
 #define SWEEP_STEPS (1u << 20)     /* `while sweep <= 0 { sweep += TAU }`: Rust has no bound */
 #define WORK_BUDGET ((size_t)1 << 24) /* entity visits through blocks (Rust has none) */
+/* Points made (pushed or not: a polyline with a non-finite point is dropped after it is made),
+ * twice the output's cap: the work of a file is bounded even where the cap is never reached (a
+ * million arcs of NaN radius, a block of arcs copied 2^24 times). Rust has none. */
+#define POINT_BUDGET (2 * CC_DXF_MAX_POINTS)
+/* An arc or ellipse sweeping more than two turns is drawn as one turn (the same curve; Rust makes
+ * every turn: 11,200,000 degrees was 1,991,113 points and 8 s). Up to two turns, Rust's points. */
+#define MAX_SWEEP (2.0 * TAU)
 
 /* ---------------------------------------------------------------- small maths */
 
@@ -440,6 +447,7 @@ typedef struct {
     size_t ntop, captop;
     uint32_t *lhash; /* open addressing over d->layers, size LHASH */
     size_t work;
+    size_t made; /* points made, against POINT_BUDGET */
     int oom;
 } Ctx;
 
@@ -1111,8 +1119,20 @@ typedef struct {
 
 static size_t room(const cc_dxf *d) { return CC_DXF_MAX_POINTS - d->npts; }
 
+/* Takes k points of the point budget: 0, or -1 (the budget spent: its note, nothing taken). */
+static int spend(G *g, size_t k) {
+    Ctx *c = g->c;
+    if (k > POINT_BUDGET - c->made) {
+        c->d->over_points = 1;
+        return -1;
+    }
+    c->made += k;
+    return 0;
+}
+
 static int pl_add(G *g, double x, double y) {
-    if (g->too_long) return 0;
+    if (g->too_long || g->c->d->over_points) return 0;
+    if (spend(g, 1)) return 0;
     if (g->pl.n / 2 > CC_DXF_MAX_POINTS) { /* can never fit: Out.push would truncate */
         g->too_long = 1;
         return 0;
@@ -1125,6 +1145,10 @@ static int pl_add(G *g, double x, double y) {
 static int out_push(G *g, const M *m, uint32_t layer) {
     cc_dxf *d = g->c->d;
     size_t n = g->pl.n / 2;
+    if (d->over_points) { /* the budget ran out while it was made: not drawn */
+        g->pl.n = 0, g->too_long = 0;
+        return 0;
+    }
     if (g->too_long) {
         g->pl.n = 0, g->too_long = 0;
         d->truncated = 1;
@@ -1178,14 +1202,17 @@ static int arc(G *g, double cx, double cy, double r, double a0, double a1) {
         if (++steps > SWEEP_STEPS) return 1;
         sweep += TAU;
     }
+    if (sweep > MAX_SWEEP) sweep = TAU; /* past two turns: one (DEVIATIONS 14) */
+    /* a non-finite centre or radius makes a non-finite point, which Out::push drops: the same
+     * answer without the sines (a file of a million such arcs) */
+    if (!finite_(cx) || !finite_(cy) || !finite_(r)) return 1;
     size_t n = as_count(max2(ceil_((sweep / TAU) * CIRCLE_SEGMENTS)));
-    if (n >= CC_DXF_MAX_POINTS) {
-        g->too_long = 1;
-        return 0;
-    }
+    if (n + 1 > POINT_BUDGET - g->c->made) return g->c->d->over_points = 1, 1; /* before the sines */
+    if (g->c->d->truncated && n + 1 > room(g->c->d)) return 1; /* refused or dropped: the same answer */
     for (size_t i = 0; i <= n; i++) {
-        double a = a0 + sweep * (double)i / (double)n;
-        if (pl_add(g, cx + r * cc_cos(a), cy + r * cc_sin(a))) return -1;
+        double a = a0 + sweep * (double)i / (double)n, s, co;
+        cc_sincos(a, &s, &co);
+        if (pl_add(g, cx + r * co, cy + r * s)) return -1;
     }
     return 0;
 }
@@ -1214,9 +1241,11 @@ static int bulged(G *g, const double *x, const double *y, const double *bu, size
         double a0 = cc_atan2(ay - c1, ax - c0);
         size_t steps = as_count(max2(ceil_((fabs_(theta) / TAU) * CIRCLE_SEGMENTS)));
         double rr = fabs_(r);
+        if (steps > POINT_BUDGET - g->c->made) return g->c->d->over_points = 1, 0; /* before the sines */
         for (size_t k = 1; k <= steps; k++) {
-            double t = a0 + theta * (double)k / (double)steps;
-            if (pl_add(g, c0 + rr * cc_cos(t), c1 + rr * cc_sin(t))) return -1;
+            double t = a0 + theta * (double)k / (double)steps, s, co;
+            cc_sincos(t, &s, &co);
+            if (pl_add(g, c0 + rr * co, c1 + rr * s)) return -1;
         }
     }
     return 0;
@@ -1251,10 +1280,13 @@ static int add_text(Ctx *c, const Ent *e, const M *m, uint32_t layer, double k) 
     return 0;
 }
 
+static int d_spent(const Ctx *c) { return c->d->over_budget || c->d->over_points; }
+
 /* dxf_entity (reference.rs:158). 0 ok, -1 out of memory. */
 static int entity(G *g, const Ent *e, const M *m, size_t depth, uint32_t parent_layer, double k) {
     Ctx *c = g->c;
     cc_dxf *d = c->d;
+    if (d->over_points) return 0;
     if (++c->work > WORK_BUDGET) {
         d->over_budget = 1;
         return 0;
@@ -1281,12 +1313,14 @@ static int entity(G *g, const Ent *e, const M *m, size_t depth, uint32_t parent_
             if (++steps > SWEEP_STEPS) return g->pl.n = 0, 0;
             t1 += TAU;
         }
+        if (t1 - t0 > MAX_SWEEP) t1 = t0 + TAU; /* past two turns: one (DEVIATIONS 14) */
         size_t n = as_count(max2(ceil_(((t1 - t0) / TAU) * CIRCLE_SEGMENTS)));
-        if (n >= CC_DXF_MAX_POINTS) g->too_long = 1;
+        if (n + 1 > POINT_BUDGET - c->made) d->over_points = 1; /* before the sines */
+        else if (d->truncated && n + 1 > room(d)) return g->pl.n = 0, 0; /* refused or dropped: the same answer */
         else
             for (size_t i = 0; i <= n; i++) {
-                double t = t0 + (t1 - t0) * (double)i / (double)n;
-                double s = cc_sin(t), co = cc_cos(t);
+                double t = t0 + (t1 - t0) * (double)i / (double)n, s, co;
+                cc_sincos(t, &s, &co);
                 if (pl_add(g, e->p[0][0] + ax * co - ay * r * s, e->p[0][1] + ay * co + ax * r * s)) return -1;
             }
         break;
@@ -1333,7 +1367,7 @@ static int entity(G *g, const Ent *e, const M *m, size_t depth, uint32_t parent_
                 M mm = after(m, &local);
                 for (size_t i = 0; i < b->ne; i++) {
                     if (entity(g, &b->e[i], &mm, depth + 1, layer, k)) return -1;
-                    if (d->truncated || d->over_budget) return 0;
+                    if (d->truncated || d->over_budget || d->over_points) return 0;
                 }
             }
         return 0;
@@ -1433,6 +1467,9 @@ int cc_dxf_read(const uint8_t *bytes, size_t n, cc_dxf *out, Buf *err) {
         for (size_t i = 0; i < c.ntop; i++) {
             if (c.top[i].paper) continue;
             if (entity(&g, &c.top[i], &scale, 0, CC_DXF_NO_LAYER, k)) break;
+            /* the budgets are spent: nothing more is drawn (a truncated output goes on, as Rust's
+             * Out::push: a later polyline that fits is still pushed, its work under POINT_BUDGET) */
+            if (d_spent(&c)) break;
         }
         free(g.pl.v);
         if (c.oom) {
@@ -1463,6 +1500,10 @@ size_t cc_dxf_notes(const cc_dxf *d, Buf *out) {
     }
     if (d->over_budget) {
         buf_puts(out, "stopped expanding blocks (too many copies)\n");
+        k++;
+    }
+    if (d->over_points) {
+        buf_puts(out, "stopped drawing (more than 4000000 points made)\n");
         k++;
     }
     return k;

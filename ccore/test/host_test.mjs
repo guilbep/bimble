@@ -1,10 +1,10 @@
 // Checks the native host's HTTP side (ticket 9a): node ccore/test/host_test.mjs
-// Starts out/tcc/bimble-ccore (or $HOST_BIN) on port 47311 with a token and checks the transport
+// Starts out/tcc/bimble-ccore (or $HOST_BIN) on port <port> with a token and checks the transport
 // of crates/bimble-viewer/src/serve.rs: 403 on a bad token, Origin or Host; 413 over 1 MiB;
 // the stub queries; the change feed (at once, then a long-poll that does not block a call);
 // garbage closes the connection only; SIGTERM exits 0. Then (ticket 9b) a host on a copy of
-// golden/frame.json on 47331: the model's queries, verb place, undo/redo, unsaved, action save
-// (bytes), a second host on the saved file (47332), and the latency of verb place and query element.
+// golden/frame.json on <port>: the model's queries, verb place, undo/redo, unsaved, action save
+// (bytes), a second host on the saved file (<port>), and the latency of verb place and query element.
 // Prints timings and "N passed, M failed"; exits non-zero on a failure. No dependencies.
 import { spawn } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
@@ -14,10 +14,11 @@ import { gunzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RUN_TAG, port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("host_test", 47311);
+const PORT = port("host_test");
 const TOKEN = "hosttest-token";
 const HOST = `127.0.0.1:${PORT}`;
 let passed = 0, failed = 0;
@@ -60,7 +61,7 @@ function req(method, path, { body = "", headers = {}, ag = agent, port = PORT } 
 const call = (op, name, body = "") => req("POST", `/${op}/${name}?t=${TOKEN}`, { body, headers: { "Content-Type": "text/plain" } });
 
 const t0 = performance.now();
-const host = spawn(BIN, [String(PORT)], { env: { ...process.env, BIMBLE_TOKEN: TOKEN }, stdio: ["ignore", "ignore", "pipe"] });
+const host = spawn(BIN, [String(PORT)], { env: hostEnv({ BIMBLE_TOKEN: TOKEN }), stdio: ["ignore", "ignore", "pipe"] });
 let log = "";
 host.stderr.on("data", (d) => (log += d));
 const exited = new Promise((r) => host.on("exit", (code, sig) => r({ code, sig })));
@@ -100,9 +101,10 @@ try {
   let actions = [];
   try { actions = JSON.parse(ac.body); } catch {}
   const ORDER = JSON.stringify(["enabled", "label", "name", "pressed", "shortcut", "tab"]);
-  check("query actions -> 54 rows", ac.status === 200 && actions.length === 54, `${actions.length}`);
+  check("query actions -> 58 rows (Rust's 54, then ISS72's show_all, show_previous, ISS71's box_north_project, box_north_true)", ac.status === 200 && actions.length === 58 &&
+    JSON.stringify(actions.slice(54).map((a) => a.name)) === '["show_all","show_previous","box_north_project","box_north_true"]', `${actions.length}`);
   check("query actions key order (calls.rs:325, json! sorted)", actions.length > 0 && actions.every((a) => JSON.stringify(Object.keys(a)) === ORDER));
-  check("query actions: unique names", new Set(actions.map((a) => a.name)).size === 54);
+  check("query actions: unique names", new Set(actions.map((a) => a.name)).size === 58);
   const enabled = actions.filter((a) => a.enabled).map((a) => a.name).sort().join(",");
   // No model: save, undo, redo, place_* and export_ifc* need one (ribbon.rs:577-590); new, open
   // and import_ifc are always on (ribbon.rs:559; the C core runs them since ticket A5).
@@ -154,6 +156,23 @@ try {
   check("one-word request line -> 400 and connection closed", g2.closed && status(g2.out) === 400, g2.out.split("\r\n")[0]);
   const big2 = await raw(`GET /x HTTP/1.1\r\n${"X-A: b\r\n".repeat(3000)}\r\n`);
   check("header block > 16 KiB -> 431", status(big2.out) === 431, big2.out.split("\r\n")[0]);
+  // FIXSES: the request smuggling guards (server.c parse_head): a Transfer-Encoding header, two
+  // Content-Length that differ, and (new) a second Host or Origin are malformed: 400, closed.
+  // Before, removing either of the first two guards passed every test.
+  const smug = [
+    ["Transfer-Encoding: chunked", `POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: ${HOST}\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n`],
+    ["Transfer-Encoding with a Content-Length", `POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: ${HOST}\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n{}`],
+    ["two Content-Length that differ", `POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: ${HOST}\r\nContent-Length: 2\r\nContent-Length: 0\r\n\r\n{}`],
+    ["two Host (another, then ours)", `POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: evil.example\r\nHost: ${HOST}\r\nContent-Length: 0\r\n\r\n`],
+    ["two Host (ours twice)", `POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: ${HOST}\r\nhost: ${HOST}\r\nContent-Length: 0\r\n\r\n`],
+    ["two Origin (another, then an allowed one)", `POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: ${HOST}\r\nOrigin: http://evil.example\r\nOrigin: http://localhost:5173\r\nContent-Length: 0\r\n\r\n`],
+  ];
+  for (const [what, text] of smug) {
+    const r = await raw(text);
+    check(`${what} -> 400 and connection closed`, r.closed && status(r.out) === 400, r.out.split("\r\n")[0]);
+  }
+  const same = await raw(`POST /query/state?t=${TOKEN} HTTP/1.1\r\nHost: ${HOST}\r\nContent-Length: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+  check("two Content-Length that agree -> 200", status(same.out) === 200, same.out.split("\r\n")[0]);
   const alive = await call("query", "state");
   check("server alive after garbage", alive.status === 200);
 
@@ -184,14 +203,14 @@ try {
 }
 
 // ---- With a model (ticket 9b) ----
-const MPORT = port("host_test_model", 47331), MPORT2 = port("host_test_model2", 47332);
+const MPORT = port("host_test_model"), MPORT2 = port("host_test_model2");
 const TMP = join(CCORE, `out/t9b-host_test${RUN_TAG}`);
 const GOLDEN = join(CCORE, "golden");
 const hosts = [];
 const magent = new http.Agent({ keepAlive: true, maxSockets: 4 });
 function startHost(port, model) {
   const t = performance.now();
-  const h = spawn(BIN, [String(port), model], { env: { ...process.env, BIMBLE_TOKEN: TOKEN }, stdio: ["ignore", "ignore", "pipe"] });
+  const h = spawn(BIN, [String(port), model], { env: hostEnv({ BIMBLE_TOKEN: TOKEN }), stdio: ["ignore", "ignore", "pipe"] });
   h.log = "";
   h.stderr.on("data", (d) => (h.log += d));
   h.exited = new Promise((r) => h.on("exit", (code, sig) => r({ code, sig })));
@@ -235,7 +254,7 @@ try {
   check("model: query storeys = golden/query.txt first record", sto.status === 200 && sto.body === goldenAnswer("storeys"), sto.body);
   const en = async () => (await mq("actions")).filter((a) => a.enabled).map((a) => a.name).sort().join(",");
   const en0 = await en();
-  check("model: enabled actions, nothing to undo or save", en0 === "about,edges,export_ifc2x3,export_ifc4,fit,hatching,history,home,import_ifc,link_model,manage_links,measure,new,new_sheet,on_paper,open,openings,orthographic,place_beam,place_column,place_slab,place_wall,project,reveal_hidden,section_box,section_labels,section_marks,settings,share_for_viewing,slab_levels,top", en0); // edges, fit, hatching, orthographic, top: ticket Q2 (ribbon.rs:591, :612; the 3D view, not flat); share_for_viewing: ticket A5c (ribbon.rs:575); reveal_hidden, section_box: ticket B3 (ribbon.rs:592, :596); link_model, manage_links: ticket B5 (ribbon.rs:596, :611); measure: ticket T1 (ribbon.rs:612 `_ => loaded`); FAKE1 (requirement change, Rust's rules): link_pdf, link_dxf off in the 3D view (ribbon.rs:595 `loaded && flat`); history (ribbon.rs:590 editable), project, new_sheet (ribbon.rs:611 `_ => loaded`) on
+  check("model: enabled actions, nothing to undo or save", en0 === "about,box_to_selection,edges,export_ifc2x3,export_ifc4,fit,hatching,history,home,import_ifc,link_model,manage_links,materials,measure,new,new_sheet,on_paper,open,openings,orthographic,place_beam,place_column,place_slab,place_wall,project,reveal_hidden,section_box,section_labels,section_marks,settings,share_for_viewing,slab_levels,top", en0); // edges, fit, hatching, orthographic, top: ticket Q2 (ribbon.rs:591, :612; the 3D view, not flat); share_for_viewing: ticket A5c (ribbon.rs:575); reveal_hidden, section_box: ticket B3 (ribbon.rs:592, :596); box_to_selection: ISS71 (issue #71: it turns the box on, Rust wants it on already); link_model, manage_links: ticket B5 (ribbon.rs:596, :611); measure: ticket T1 (ribbon.rs:612 `_ => loaded`); FAKE1 (requirement change, Rust's rules): link_pdf, link_dxf off in the 3D view (ribbon.rs:595 `loaded && flat`); history (ribbon.rs:590 editable), project, new_sheet (ribbon.rs:611 `_ => loaded`) on; materials: ticket MAT1 (ribbon.rs:611 `_ => loaded`)
   const r0 = await rev();
   check("model: rev 1 after load (lib.rs:1679)", r0 === 1, String(r0));
 

@@ -2,6 +2,7 @@
  * pretty.txt), plus writer, buf and arena unit checks. */
 #include <stdint.h>
 #include "../src/arena.h"
+#include "../src/json_r.h"
 #include "../src/json_w.h"
 #include "check.h"
 
@@ -184,8 +185,52 @@ int main(int argc, char **argv) {
     arena_reset(&a);
     check_true("arena reset keeps one block", a.head != NULL);
     check_true("arena after reset", arena_alloc(&a, 100, 8) != NULL);
+    /* FIXLIB: n * size checked (a count from a file; on wasm32 the product wrapped to a small
+     * block). SIZE_MAX / 8 + 1 items of 8 bytes wrap to 0 bytes without the check. */
+    check_true("arena_alloc_n overflow -> NULL", arena_alloc_n(&a, (size_t)-1 / 8 + 1, 8, 8) == NULL);
+    check_true("arena_alloc_n overflow, size 48", arena_alloc_n(&a, (size_t)-1 / 48 + 1, 48, 8) == NULL);
+    double *pn = arena_alloc_n(&a, 3, sizeof(double), 8);
+    check_true("arena_alloc_n 3 doubles", pn && pn[2] == 0.0);
     arena_free(&a);
     check_true("arena freed", a.head == NULL);
+
+    /* FIXLIB: the DOM budget (json_r.h), one for the text and the CBOR form */
+    {
+        JrBudget bud = {0, 0};
+        const char *why = NULL;
+        check_true("budget: 16 M values of 64 B fit", jr_budget_take(&bud, JR_MAX_NODES, 64, 0, &why) == 0);
+        check_true("budget: one more value refused", jr_budget_take(&bud, 1, 0, 0, &why) == -1 && why && !strcmp(why, JR_ERR_NODES));
+        check_true("budget: nothing taken on refusal", bud.nodes == JR_MAX_NODES && bud.bytes == JR_MAX_DOM_BYTES);
+        JrBudget b2 = {0, 0};
+        why = NULL;
+        check_true("budget: bytes over the limit refused",
+                   jr_budget_take(&b2, 10, 64, JR_MAX_DOM_BYTES, &why) == -1 && why && !strcmp(why, JR_ERR_BYTES) && b2.bytes == 0);
+        check_true("budget: a huge count refused before the multiply",
+                   jr_budget_take(&b2, (size_t)-1, (size_t)-1, 0, &why) == -1 && why && !strcmp(why, JR_ERR_NODES));
+        /* the text reader charges: an honest document parses, its values counted */
+        Arena ja;
+        arena_init(&ja, 0);
+        JrError je;
+        const char *doc = "{\"a\": [1, 2, \"xyz\"], \"b\": null}";
+        check_true("budget: a small document parses", jr_parse(&ja, doc, strlen(doc), &je) != NULL);
+        /* FIXLIB: a high surrogate must be followed by a low one (\uDC00-\uDFFF): \uD800\u0041
+         * is serde's "lone leading surrogate" (without the check: U+F441 made of garbage). */
+        const char *sur = "\"\\uD800\\u0041\"";
+        check_true("JSON: high surrogate then \\u0041 refused",
+                   jr_parse(&ja, sur, strlen(sur), &je) == NULL && !strcmp(je.msg, "lone leading surrogate in hex escape"));
+        const char *sur2 = "\"\\uDBFF\\uE000\"";
+        check_true("JSON: high surrogate then \\uE000 refused",
+                   jr_parse(&ja, sur2, strlen(sur2), &je) == NULL && !strcmp(je.msg, "lone leading surrogate in hex escape"));
+        const char *pair = "\"\\uD83D\\uDE00\"";
+        const JrVal *pv = jr_parse(&ja, pair, strlen(pair), &je);
+        check_true("JSON: a surrogate pair is U+1F600", pv && pv->n == 4 && !memcmp(pv->s, "\xF0\x9F\x98\x80", 4));
+        arena_free(&ja);
+        /* FIXLIB: UTF-8 after E0 needs A0-BF (E0 80..9F xx is an overlong form of U+0000-U+07FF) */
+        check_true("UTF-8: E0 80 80 (overlong NUL) refused at 0", jr_utf8_check("\xE0\x80\x80", 3) == 0);
+        check_true("UTF-8: E0 9F BF (overlong U+07FF) refused at 1", jr_utf8_check("a\xE0\x9F\xBF", 4) == 1);
+        check_true("UTF-8: E0 A0 80 (U+0800) valid", jr_utf8_check("\xE0\xA0\x80", 3) == -1);
+        check_true("UTF-8: ED A0 80 (a surrogate) refused", jr_utf8_check("\xED\xA0\x80", 3) == 0);
+    }
 
     buf_free(&b);
     return report("json");

@@ -1,169 +1,172 @@
-// The network ports of ccore's tests and benches, from one place (ticket P1):
+// The network ports of ccore's tests and benches (tickets P1, TEST1):
 //   import { port, vitePort } from "./ports.mjs";   // or "../test/ports.mjs" from bench/
-//   const PORT = port("lab_gl", 47323), VITE = vitePort("lab_gl", 5193);
-// CCORE_PORT_BASE decides:
-//   unset    each port is its default (the fixed ports below): runs behave as before.
-//   <number> base + the name's offset (base 1024..65535-SPAN). Two worktrees with different bases
-//            never share a port: CCORE_PORT_BASE=48000 in one, 49000 in another.
-//   auto     a base from a hash of the worktree path (20000..31999, under the Linux ephemeral
-//            range), checked free on every offset of the table; if a port is taken, the next slot.
-//            The resolved number is written back to process.env, so child processes (a bench run
-//            by a test, dev.sh) use the same base.
-// Every name in the suite has its own offset (checked at load): no two ports collide in a base.
-// Also CHROMIUM, the browser every lab test starts (below).
-// Host offset = default - 47300; Vite offset = 128 + default - 5190. Never 47400 or 5173 (dev.sh).
-import net from "node:net";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+//   const PORT = port("lab_gl"), VITE = vitePort("lab_gl");
+// A new test needs NO row anywhere: the name is enough. Every chosen port is reserved for the life
+// of the process by a lock file (<tmpdir>/bimble-ports/<port>, holding the pid; a dead pid's lock
+// is taken over) and checked free by a bind test, so two tests running at once on one machine never
+// pick the same port, whatever their names. Each choice is printed on stderr ("ports: host lab_gl
+// 23456 (auto)"), which lands in the test's log.
+// CCORE_PORT_BASE decides where the search starts:
+//   auto     (ci/run.sh's default) a random start in 20000..31999: under the Linux ephemeral range
+//            (32768..60999, where the OS takes outgoing ports), so never 47400 or 5173 (dev.sh's
+//            ports) nor a fixed port of the table below.
+//   unset    a stable port per name: 20000 + a hash of kind and name, the next free one if taken.
+//   <number> base + a hash of kind and name in 0..SPAN-1 (base 1024..65535-SPAN), the next free
+//            offset if taken: two worktrees with bases SPAN apart never share a port.
+// The second argument (a default port) is DEPRECATED and optional: kept so tests written against
+// the old table still run unchanged. With a default and a matching row below, unset mode tries that
+// fixed default first and a number base tries base + the row's offset first; auto ignores both.
+// A clash in the table no longer throws (rows are hints, the locks decide). The rows kept are the
+// human-facing fixed ports (tools/perf.mjs, tools/parity.mjs: one host at a time, a URL people
+// open) and a few rows tests still in flight append after; a new row is never needed.
+// Also CHROMIUM, the browser every lab test starts, and RUN_TAG (below).
+import { spawnSync } from "node:child_process";
+import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // [kind, name, default, offset]
 const TABLE = [
-  ["host", "host_test", 47311, 11],
-  ["host", "lab_boot", 47312, 12],
-  ["host", "mesh_http", 47321, 21],
-  ["host", "mesh_http_nomodel", 47322, 22],
-  ["host", "lab_gl", 47323, 23],
-  ["host", "lab_tool", 47324, 24],
-  ["host", "host_test_model", 47331, 31],
-  ["host", "host_test_model2", 47332, 32],
-  ["host", "lab_place", 47333, 33],
-  ["host", "lab_place_lab", 47334, 34],
-  ["host", "session_test", 47341, 41],
-  ["host", "lab_loop", 47342, 42],
-  ["host", "wasm_run", 47351, 51],
-  ["host", "large_test", 47375, 75],
-  ["host", "session_log", 47382, 82],
-  ["host", "large_host", 47384, 84],
-  ["host", "large_session", 47385, 85],
-  ["host", "large_lab", 47386, 86],
-  ["host", "files_test", 47391, 91],
-  ["host", "files_test2", 47392, 92],
-  ["host", "verbs_session", 47393, 93],
-  ["host", "dev_test", 47411, 111],
-  ["host", "visibility_test", 47394, 94],
-  ["host", "lab_section", 47395, 95],
-  ["host", "links_test", 47396, 96],
-  ["host", "lab_links", 47397, 97],
-  ["host", "views_test", 47398, 98],
-  ["host", "lab_plan", 47399, 99],
-  ["host", "annotations_test", 47412, 112],
-  ["host", "lab_dims", 47413, 113],
-  ["host", "lab_viewcube", 47426, 126],
-  ["host", "lab_sheets", 47427, 127],
-  ["host", "lab_pages", 47365, 65],
-  ["host", "lab_measure", 47428, 128],
-  ["host", "lab_nav", 47417, 117],
-  ["host", "versions_test", 47318, 18], // ticket H1
-  ["host", "lab_refs", 47418, 118], // L1
-  ["host", "lab_refs_dxf", 47438, 138], // L2
-  ["host", "lab_export", 47306, 6], // D7
-  ["host", "lab_ifc_plan", 47446, 146], // S1
   ["host", "parity", 47440, 140], // PAR2 (tools/parity.mjs: one host at a time, Rust twin then C)
-  ["host", "schedules_test", 47357, 57], // Q2
-  ["host", "lab_quantities", 47358, 58], // Q2
-  ["host", "palette_test", 47359, 59], // Q2
-  ["host", "lab_shell", 47307, 7], // UX1
-  ["host", "lab_levels", 47366, 66], // G2
   ["host", "perf", 47367, 67], // PERF1 (tools/perf.mjs: the static server of the built lab)
-  ["host", "lab_routes", 47344, 44], // FAKE1
-  ["host", "fs_test", 47300, 0], // FS1
-  ["host", "fs_test2", 47301, 1], // FS1
-  ["host", "lab_files", 47302, 2], // FS1
-  ["host", "lab_keys", 47404, 104], // KEY1
-  ["host", "lab_paper", 47309, 9], // PAPER1
-  ["host", "lab_section_view", 47379, 79], // SEC1
   ["host", "lab_settings", 47303, 3], // SET1
+  ["host", "lab_materials", 47387, 87], // MAT1
+  ["host", "lab_visibility", 47372, 72], // ISS72
+  ["host", "lab_section_box", 47389, 89], // ISS71
+  ["host", "lab_history", 47304, 4], // H2a
   ["vite", "lab_boot", 5191, 129],
-  ["vite", "lab_gl", 5193, 131],
-  ["vite", "lab_place", 5195, 133],
-  ["vite", "lab_loop", 5197, 135],
-  ["vite", "dev_test", 5199, 137],
-  ["vite", "lab_wasm", 5201, 139],
-  ["vite", "large", 5207, 145],
-  ["vite", "lab_tool", 5209, 147],
-  ["vite", "lab_section", 5211, 149],
-  ["vite", "lab_links", 5213, 151],
-  ["vite", "lab_plan", 5215, 153],
-  ["vite", "lab_dims", 5217, 155],
-  ["vite", "lab_viewcube", 5219, 157],
-  ["vite", "lab_sheets", 5221, 159],
-  ["vite", "lab_measure", 5192, 130],
-  ["vite", "lab_nav", 5205, 143],
-  ["vite", "lab_refs", 5203, 141], // L1
-  ["vite", "lab_refs_dxf", 5223, 156], // L2
-  ["vite", "lab_export", 5196, 134], // D7
-  ["vite", "lab_ifc_plan", 5210, 148], // S1
-  ["vite", "lab_quantities", 5212, 150], // Q2 (150: 146 is lab_ifc_plan's host offset)
-  ["vite", "lab_shell", 5220, 158], // UX1
-  ["vite", "lab_levels", 5216, 154], // G2
-  ["vite", "lab_routes", 5198, 136], // FAKE1
-  ["vite", "lab_files", 5194, 132], // FS1
-  ["vite", "lab_keys", 5214, 152], // KEY1
-  ["vite", "lab_paper", 5130, 68], // PAPER1
-  ["vite", "lab_section_view", 5131, 69], // SEC1
   ["vite", "lab_settings", 5204, 142], // SET1
+  ["vite", "lab_materials", 5150, 88], // MAT1
+  ["vite", "lab_visibility", 5135, 73], // ISS72
+  ["vite", "lab_section_box", 5152, 90], // ISS71
+  ["vite", "lab_history", 5133, 71], // H2a
 ];
-export const SPAN = 160; // offsets 0..SPAN-1
-const AUTO_LO = 20000, AUTO_SLOTS = Math.floor((32000 - AUTO_LO) / SPAN);
 
-{
-  const seen = new Map();
-  for (const [kind, name, def, off] of TABLE) {
-    if (off < 0 || off >= SPAN) throw new Error(`ports.mjs: ${kind} ${name}: offset ${off} outside 0..${SPAN - 1}`);
-    if (seen.has(off)) throw new Error(`ports.mjs: ${kind} ${name} and ${seen.get(off)} share offset ${off}`);
-    if (def === 47400 || def === 5173) throw new Error(`ports.mjs: ${kind} ${name}: ${def} is dev.sh's port`);
-    seen.set(off, `${kind} ${name}`);
-  }
-}
-
-const free = (p) => new Promise((res) => {
-  const s = net.createServer();
-  s.once("error", () => res(false));
-  s.listen({ port: p, exclusive: true }, () => s.close(() => res(true)));
-});
-
-async function autoBase() {
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-  let h = 0x811c9dc5; // FNV-1a 32 of the worktree path
-  for (const c of Buffer.from(root)) h = Math.imul(h ^ c, 0x01000193) >>> 0;
-  for (let i = 0; i < AUTO_SLOTS; i++) {
-    const base = AUTO_LO + ((h + i) % AUTO_SLOTS) * SPAN;
-    let ok = true;
-    for (let o = 0; o < SPAN && ok; o++) ok = await free(base + o);
-    if (ok) return base;
-  }
-  throw new Error("ports.mjs: CCORE_PORT_BASE=auto: no free range of " + SPAN + " ports");
-}
+export const SPAN = 160; // offsets 0..SPAN-1 of a number base
+const LO = 20000, HI = 32000; // the auto and unset range: under the ephemeral ports, above 1024
+const NEVER = new Set([47400, 5173]); // dev.sh's documented ports (the owner's dev loop)
+for (const r of TABLE) NEVER.add(r[2]); // and every fixed port of the table: never a hashed pick
 
 const env = process.env.CCORE_PORT_BASE;
-let BASE = null;
+let BASE = null, MODE = "unset";
 if (env !== undefined && env !== "") {
-  if (env === "auto") {
-    BASE = await autoBase();
-    process.env.CCORE_PORT_BASE = String(BASE);
-  } else if (/^[0-9]+$/.test(env) && Number(env) >= 1024 && Number(env) + SPAN <= 65536) {
+  if (env === "auto") MODE = "auto";
+  else if (/^[0-9]+$/.test(env) && Number(env) >= 1024 && Number(env) + SPAN <= 65536) {
     BASE = Number(env);
+    MODE = "base";
   } else {
     throw new Error(`ports.mjs: CCORE_PORT_BASE=${env}: a number 1024..${65536 - SPAN} or auto`);
   }
 }
+// The numeric base, or null (unset, auto).
 export const PORT_BASE = BASE;
 
 // The browser of the lab tests (headless, over CDP): $CHROMIUM when set, else /usr/bin/chromium on
 // Linux and Google Chrome's binary on macOS (ticket MAC1; the GitHub macOS image has Chrome).
 export const CHROMIUM = process.env.CHROMIUM ||
   (process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "/usr/bin/chromium");
-// A suffix for fixed scratch paths under out/ ("" without a base): two runs in one tree, two dirs.
-export const RUN_TAG = BASE === null ? "" : `-${BASE}`;
+// A suffix for fixed scratch paths under out/: "" unset, -<base> with a number, -p<pid> with auto,
+// so two runs at once in one tree never share a scratch directory.
+export const RUN_TAG = MODE === "unset" ? "" : MODE === "base" ? `-${BASE}` : `-p${process.pid}`;
 
-function lookup(kind, name, def) {
-  const row = TABLE.find((r) => r[0] === kind && r[1] === name);
-  if (!row) throw new Error(`ports.mjs: unknown ${kind} port ${name}: add it to the table`);
-  if (row[2] !== def) throw new Error(`ports.mjs: ${kind} ${name}: default ${def}, the table says ${row[2]}`);
-  return BASE === null ? def : BASE + row[3];
+// FNV-1a 32 of a string.
+function hash(s) {
+  let h = 0x811c9dc5;
+  for (const c of Buffer.from(s)) h = Math.imul(h ^ c, 0x01000193) >>> 0;
+  return h;
 }
 
-// A host (or other non-Vite) port.
-export const port = (name, def) => lookup("host", name, def);
-// A Vite dev-server port.
-export const vitePort = (name, def) => lookup("vite", name, def);
+// Locks: one file per port, created exclusively; ours are removed at exit.
+const LOCKS = join(process.env.CCORE_PORT_LOCKS || tmpdir(), "bimble-ports");
+const held = new Set();
+process.on("exit", () => { for (const p of held) try { unlinkSync(join(LOCKS, String(p))); } catch {} });
+const alive = (pid) => {
+  if (!(pid > 0)) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
+};
+function lock(p) {
+  if (held.has(p)) return false; // another name of this process holds it
+  mkdirSync(LOCKS, { recursive: true });
+  const f = join(LOCKS, String(p));
+  for (let tries = 0; tries < 2; tries++) {
+    try {
+      const fd = openSync(f, "wx");
+      writeSync(fd, String(process.pid));
+      closeSync(fd);
+      held.add(p);
+      return true;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      let pid = 0;
+      try { pid = Number(readFileSync(f, "utf8")); } catch {}
+      if (alive(pid)) return false;
+      // A stale lock (its process died without its exit hook): take it over, once. A pid not yet
+      // written (0, a lock being made right now) counts as dead only after a second look.
+      if (pid === 0 && tries === 0) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); continue; }
+      // Remove it only if it still names that dead pid (another process may have just taken it over).
+      try { if (Number(readFileSync(f, "utf8")) === pid) unlinkSync(f); } catch {}
+    }
+  }
+  return false;
+}
+function unlock(p) {
+  held.delete(p);
+  try { unlinkSync(join(LOCKS, String(p))); } catch {}
+}
+
+// The bind test, synchronous (port() is): a child Node listens on each port (all interfaces, as
+// the earlier helper did, so an IPv4 or IPv6 listener both count) and prints those it could bind.
+const PROBE = `const net=require("net");const ps=process.argv.slice(1).map(Number),ok=[];let i=0;
+(function next(){if(i>=ps.length){process.stdout.write(ok.join(" "));return;}const p=ps[i++],s=net.createServer();
+s.once("error",next);s.listen({port:p,exclusive:true},()=>{ok.push(p);s.close(next);});})();`;
+function bindable(ports) {
+  const r = spawnSync(process.execPath, ["-e", PROBE, ...ports.map(String)], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`ports.mjs: the bind test failed: ${r.stderr}`);
+  return new Set(r.stdout.split(" ").filter(Boolean).map(Number));
+}
+
+const chosen = new Map(); // "kind name" -> port: one port per name and process
+function pick(kind, name, def) {
+  const key = `${kind} ${name}`;
+  if (chosen.has(key)) return chosen.get(key);
+  const row = def === undefined ? undefined : TABLE.find((r) => r[0] === kind && r[1] === name && r[2] === def);
+  // The candidates, in order of preference.
+  const cands = [];
+  if (MODE === "base") {
+    if (row) cands.push(BASE + row[3]);
+    const h = hash(key);
+    for (let i = 0; i < SPAN; i++) cands.push(BASE + ((h + i) % SPAN));
+    for (let i = cands.length - 1; i >= 0; i--) if (cands[i] === 47400 || cands[i] === 5173) cands.splice(i, 1); // dev.sh's
+  } else {
+    if (MODE === "unset" && def !== undefined && def !== 47400 && def !== 5173) cands.push(def); // the old fixed default
+    const h = MODE === "auto" ? hash(`${key} ${process.pid} ${process.hrtime.bigint()}`) : hash(key);
+    for (let i = 0; i < HI - LO; i++) {
+      const p = LO + ((h + i) % (HI - LO));
+      if (!NEVER.has(p)) cands.push(p);
+    }
+  }
+  // Lock up to 8 candidates, bind-test them in one child, keep the first free one.
+  let at = 0;
+  while (at < cands.length) {
+    const batch = [];
+    while (at < cands.length && batch.length < 8) {
+      const p = cands[at++];
+      if (lock(p)) batch.push(p);
+    }
+    if (batch.length === 0) continue;
+    const ok = bindable(batch);
+    const got = batch.find((p) => ok.has(p));
+    for (const p of batch) if (p !== got) unlock(p);
+    if (got !== undefined) {
+      chosen.set(key, got);
+      process.stderr.write(`ports: ${kind} ${name} ${got} (${MODE}${MODE === "base" ? ` ${BASE}` : ""})\n`);
+      return got;
+    }
+  }
+  throw new Error(`ports.mjs: no free ${kind} port for ${name} (${MODE})`);
+}
+
+// A host (or other non-Vite) port. The second argument is deprecated and optional (see above).
+export const port = (name, def) => pick("host", name, def);
+// A Vite dev-server port. The second argument is deprecated and optional (see above).
+export const vitePort = (name, def) => pick("vite", name, def);

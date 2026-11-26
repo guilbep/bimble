@@ -9,6 +9,8 @@ import { currentDialog } from "../dialogs";
 import type { RibbonTool } from "./ribbon-tabs";
 import { HIDE_NOT_AVAILABLE, toolNotYet } from "./capability";
 import { shortcutFor } from "./keys"; // KEY1
+import { BOX_SELECTION_MARGIN_MM } from "./contextItems"; // ISS71
+import type { PartKey } from "../i18n/keys.gen"; // ISS71
 
 const props = defineProps<{ tool: RibbonTool; bb: string }>();
 // Real state from Rust; an action Rust does not list (or no action) is unavailable.
@@ -32,6 +34,12 @@ const title = computed(() => (notYet.value ? t("na.tooltip", { name: t(props.too
 
 // ---- KEY1 ---- the tooltip: the tool's name and its key (the key table's, Rust's), when it has one.
 const keyTip = computed(() => { const k = shortcutFor(props.tool.action); return k ? `${t(props.tool.key)} (${k})` : undefined; });
+// ISS71: an action's longer tooltip, after the tool's name and key ({m}: Box to selection's margin, m).
+const TIPS: Partial<Record<string, PartKey>> = { box_to_selection: "ctx.boxToSelectionTip" };
+const longTip = computed(() => {
+  const k = props.tool.action ? TIPS[props.tool.action] : undefined;
+  return k ? `${keyTip.value ?? t(props.tool.key)}: ${t(k, { m: BOX_SELECTION_MARGIN_MM / 1000 })}` : undefined;
+});
 // ---- end KEY1 ----
 
 function run(): void {
@@ -53,7 +61,7 @@ function run(): void {
   <component :is="tool.tag" v-if="!(notYet && HIDE_NOT_AVAILABLE)" class="tool" :class="{ on, off, ny: notYet }" :type="tool.tag === 'button' ? 'button' : undefined"
              :href="tool.tag === 'a' ? '#' : undefined" :role="tool.tag === 'a' ? 'button' : undefined" :aria-pressed="on ? 'true' : undefined"
              :aria-disabled="off || notYet ? 'true' : undefined" :data-missing="missing" :data-bb="bb" :data-not-yet="notYet ? '' : undefined"
-             :title="title ?? keyTip" @click.prevent="run" @keydown.space.prevent="run">
+             :title="title ?? longTip ?? keyTip" @click.prevent="run" @keydown.space.prevent="run">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
          stroke-linejoin="round" aria-hidden="true" v-html="tool.icon" />
     <span>{{ t(tool.key) }}</span>

@@ -101,7 +101,7 @@ export const fr = {
   "ribbon.view.g1.t3": "Orthogonale",
   "ribbon.view.g2": "Couper",
   "ribbon.view.g2.t1": "Zone de coupe",
-  "ribbon.view.g2.t2": "Zone sur sélection",
+  "ribbon.view.g2.t2": "Boîte sur la sélection", // ISS71: the words of issue #71
   "ribbon.view.g3": "Caméra",
   "ribbon.view.g3.t1": "Tout afficher",
   "ribbon.view.g3.t2": "Dessus",
@@ -110,6 +110,8 @@ export const fr = {
   "ribbon.view.g4.t2": "Isoler",
   "ribbon.view.g4.t3": "Afficher masqués",
   "ribbon.view.g4.t4": "Afficher",
+  "ribbon.view.g4.t5": "Tout réafficher", // ISS72 ("Tout afficher" is the camera's Fit all)
+  "ribbon.view.g4.t6": "Affichage précédent", // ISS72
   "ribbon.view.g5": "Vues",
   "ribbon.view.g5.t1": "Nouvelle vue…",
   "ribbon.view.g5.t2": "Coupe",
@@ -267,6 +269,8 @@ export const en: Record<keyof typeof fr, string> = {
   "ribbon.view.g4.t2": "Isolate",
   "ribbon.view.g4.t3": "Reveal hidden",
   "ribbon.view.g4.t4": "Unhide",
+  "ribbon.view.g4.t5": "Show all", // ISS72
+  "ribbon.view.g4.t6": "Show previous", // ISS72
   "ribbon.view.g5": "Views",
   "ribbon.view.g5.t1": "New view…",
   "ribbon.view.g5.t2": "Section",

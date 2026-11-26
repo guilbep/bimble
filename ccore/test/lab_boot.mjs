@@ -1,9 +1,9 @@
 // The unchanged Vue lab boots against the C host (ticket 9a): node ccore/test/lab_boot.mjs
-// Adapted from web-ui/e2e/native-lab.mjs: starts out/tcc/bimble-ccore (no model) on 47312, Vite
-// from web-ui/ on 5191 (needs web-ui/node_modules: `npm ci` there), headless /usr/bin/chromium
-// over raw CDP; opens /?native=1&port=47312&token=…, waits for the first change to reach the page
+// Adapted from web-ui/e2e/native-lab.mjs: starts out/tcc/bimble-ccore (no model) on <port>, Vite
+// from web-ui/ on <port> (needs web-ui/node_modules: `npm ci` there), headless /usr/bin/chromium
+// over raw CDP; opens /?native=1&port=<port>&token=…, waits for the first change to reach the page
 // and checks: no uncaught page error; no console error but the listed ones; startError is null;
-// the ribbon renders with tools; the page holds the host's 54 actions. Prints
+// the ribbon renders with tools; the page holds the host's 58 actions (Rust's 54 + ISS72's 2 + ISS71's 2). Prints
 // "N passed, M failed"; exits non-zero on a failure. Kills all it starts.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -15,8 +15,8 @@ import { CHROMIUM, port, vitePort } from "./ports.mjs";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("lab_boot", 47312);
-const VITE = vitePort("lab_boot", 5191);
+const PORT = port("lab_boot");
+const VITE = vitePort("lab_boot");
 const TOKEN = "labboot-token";
 const PAGE = `http://localhost:${VITE}/?native=1&port=${PORT}&token=${TOKEN}`;
 const tmp = mkdtempSync(join(tmpdir(), "ccore-lab-boot-"));
@@ -97,7 +97,11 @@ async function main() {
   });
   await waitFor("host 'listening'", 5000, () => host.out.includes("listening") || (host.exitCode !== null && Promise.reject(new Error(host.out))));
 
-  const vite = start("vite", "npx", ["vite", "--port", String(VITE), "--strictPort"], { cwd: UI });
+  // WIN2: npx is npx.cmd on Windows, which spawn runs only through a shell (run 45689424050:
+  // "spawn npx ENOENT"): there Vite's own script under this node.
+  const vite = process.platform === "win32"
+    ? start("vite", process.execPath, [join(UI, "node_modules", "vite", "bin", "vite.js"), "--port", String(VITE), "--strictPort"], { cwd: UI })
+    : start("vite", "npx", ["vite", "--port", String(VITE), "--strictPort"], { cwd: UI });
   await waitFor(`Vite on ${VITE}`, 30000, async () => {
     if (vite.exitCode !== null) throw new Error(vite.out);
     return (await fetch(`http://localhost:${VITE}/`)).ok;
@@ -148,7 +152,7 @@ async function main() {
   const startError = await bb("b.startError.value");
   check("startError is null", startError === null, String(startError));
   const n = await bb("b.actions.value.length");
-  check("page holds 54 actions", booted && n === 54, String(n));
+  check("page holds 58 actions (Rust's 54 + ISS72's show_all, show_previous + ISS71's box_north_project, box_north_true)", booted && n === 58, String(n));
   const stateFile = await bb("JSON.stringify(b.state.value)");
   console.log(`page state: ${stateFile}`);
   const ribbon = await evalJs("(() => { const r = document.querySelector('[data-bb=ribbon]'); return r ? r.querySelectorAll('[data-bb^=ribbon-tool-]').length : -1; })()");

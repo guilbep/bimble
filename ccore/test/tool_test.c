@@ -226,7 +226,7 @@ int main(int argc, char **argv) {
         if (!has(a, "\"at\":[6000.0,5000.0]")) printf("  %s\n", a);
         free(a);
     }
-    /* slab: rectangle; polygon refused */
+    /* slab: rectangle; polygon by clicks (SLAB1) */
     a = ask(s, "set_placing", "-", "{\"kind\":\"slab\",\"top_offset_mm\":-20}", &st);
     free(a);
     size_t n2 = cc_session_model(s)->nelements;
@@ -247,7 +247,7 @@ int main(int argc, char **argv) {
     a = ask(s, "set_placing", "-", "{\"shape\":\"polygon\"}", &st);
     free(a);
     a = ask(s, "tool", "click", "{\"at\":[0,0]}", &st);
-    check_true("polygon slab: refused (not ported)", st == CC_ERR && has(a, "polygon"));
+    check_true("polygon slab: a click adds a corner (SLAB1; place_polygon_test)", st == CC_OK && s->tool.npoints == 1);
     free(a);
     cc_session_free(s);
     return report("tool");

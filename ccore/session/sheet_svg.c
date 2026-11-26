@@ -17,6 +17,8 @@
 #include "ifc_out.h" /* cc_iso_utc, CC_IFC_VERSION */
 #include "pdf_out.h"
 #include "view_effective.h" /* D7 */
+#include "paper_scene.h" /* LNK1 */
+#include "views.h"       /* LNK1: cc_sv_list */
 #endif
 
 void cc_paper_cache_free(struct cc_session *s) {
@@ -109,7 +111,7 @@ int cc_paper_sheets_pdf(struct cc_session *s, const cc_scene *sc, const char *bo
 /* Path::file_stem of the session's path: the file name without its last extension (a name that
  * starts with its only dot keeps it). */
 static cc_str file_stem(const char *path) {
-    const char *f = strrchr(path, '/');
+    const char *f = cc_path_last_sep(path);
     f = f ? f + 1 : path;
     size_t n = strlen(f);
     const char *dot = strrchr(f, '.');
@@ -144,6 +146,8 @@ static int ensure(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, 
     buf_puts(&key, s->path);
     buf_putc(&key, ' '); /* KEY1: the plan annotation toggles drawn */
     buf_u64(&key, s->plan_off);
+    buf_putc(&key, ' '); /* LNK1: the linked models drawn */
+    buf_u64(&key, s->links_gen);
     if (key.oom) return buf_free(&key), buf_puts(err, "out of memory"), -1;
     if (s->paper_svg.len && key.len == s->paper_key.len && !memcmp(key.p, s->paper_key.p, key.len))
         return buf_free(&key), 0;
@@ -165,7 +169,10 @@ static int ensure(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, 
                           {CC_IFC_VERSION, strlen(CC_IFC_VERSION)}};
     cc_paper paper;
     cc_sheet_info info;
-    int r = cc_sheet_draw(sc, &s->model, sh, &o, &a, &paper, &info, &derr);
+    cc_paper_src src; /* LNK1: the model with its visible links (paper_scene.h) */
+    if (cc_paper_src_get(s, sc, NULL, &src, err)) goto end;
+    int r = cc_sheet_draw(src.scene, src.model, sh, &o, &a, &paper, &info, &derr);
+    cc_paper_src_free(&src);
     if (r) {
         if (r < 0 || derr.oom) buf_puts(err, "out of memory");
         else buf_append(err, derr.p, derr.len);
@@ -274,7 +281,10 @@ int cc_paper_sheet_pdf(struct cc_session *s, const cc_scene *sc, const cc_sheet 
                           {CC_IFC_VERSION, strlen(CC_IFC_VERSION)}};
     cc_paper paper;
     cc_sheet_info info;
-    int r = cc_sheet_draw(sc, &s->model, sh, &o, &a, &paper, &info, &derr);
+    cc_paper_src src; /* LNK1: the model with its visible links (paper_scene.h) */
+    if (cc_paper_src_get(s, sc, NULL, &src, err)) goto end;
+    int r = cc_sheet_draw(src.scene, src.model, sh, &o, &a, &paper, &info, &derr);
+    cc_paper_src_free(&src);
     if (r) {
         if (r < 0 || derr.oom) buf_puts(err, "out of memory");
         else buf_append(err, derr.p, derr.len);
@@ -362,22 +372,25 @@ static int draw_paper_ex(struct cc_session *s, const cc_scene *sc, const cc_shee
     cc_plan_template *tpl = arena_alloc(a, sizeof *tpl, _Alignof(cc_plan_template));
     char *d = arena_alloc(a, sizeof date, 1);
     if (!style || !tpl || !d || cc_style_default(style, a) || cc_plan_template_default(tpl, a) ||
-        cc_plan_template_with_project(tpl, s->model.project, s->model.nproject, a))
+        cc_plan_template_with_project(tpl, s->open ? s->model.project : NULL, s->open ? s->model.nproject : 0, a))
         return buf_puts(err, "out of memory"), -1;
     cc_toggles_apply(s, tpl); /* KEY1: the plan annotation toggles (toggles.h) */
     memcpy(d, date, sizeof date);
     style->paper.font = font;
+    cc_paper_src src; /* LNK1: a read-only scene's made model, the visible links (paper_scene.h) */
+    if (cc_paper_src_get(s, sc, sh ? NULL : v, &src, err)) return -1;
     Buf derr;
     buf_init(&derr);
     int r;
     if (sh) {
         cc_sheet_options o = {style, tpl, file_stem(s->path), {d, strlen(d)}, {ver, strlen(ver)}};
         cc_sheet_info info;
-        r = cc_sheet_draw(sc, &s->model, sh, &o, a, paper, &info, &derr);
+        r = cc_sheet_draw(src.scene, src.model, sh, &o, a, paper, &info, &derr);
     } else {
         cc_section_mark *marks;
         size_t nm;
-        if (cc_section_marks(views, nv, a, &marks, &nm)) return buf_free(&derr), buf_puts(err, "out of memory"), -1;
+        if (cc_section_marks(views, nv, a, &marks, &nm))
+            return cc_paper_src_free(&src), buf_free(&derr), buf_puts(err, "out of memory"), -1;
         cc_plan_options po; /* lib.rs plan_options with the view */
         cc_plan_options_init(&po);
         po.scale = v->scale;
@@ -391,7 +404,7 @@ static int draw_paper_ex(struct cc_session *s, const cc_scene *sc, const cc_shee
         po.nsection_marks = nm;
         po.bare = bare; /* PAPER1 */
         cc_plan_info pinfo;
-        r = cc_plan(sc, &s->model, &po, a, paper, &pinfo, &derr);
+        r = cc_plan(src.scene, src.model, &po, a, paper, &pinfo, &derr);
         if (!r && pinfo_out) *pinfo_out = pinfo;
     }
     if (r) {
@@ -399,6 +412,7 @@ static int draw_paper_ex(struct cc_session *s, const cc_scene *sc, const cc_shee
         else buf_append(err, derr.p, derr.len);
     }
     buf_free(&derr);
+    cc_paper_src_free(&src);
     return r ? -1 : 0;
 }
 
@@ -444,12 +458,13 @@ int cc_paper_pdf_query(struct cc_session *s, const cc_scene *sc, int view, const
     const cc_view *vw = NULL;
     cc_view *views = NULL;
     size_t nv = 0;
-    if (s->open && idv->n == 22) {
+    if ((s->open || (view && s->view)) && idv->n == 22) { /* LNK1: a read-only scene's views too */
         cc_gid id;
         memcpy(id.c, idv->s, 22);
         if (!view) sh = cc_model_sheet(&s->model, &id);
         else {
-            if (cc_views_effective(&s->model, &a, &views, &nv)) {
+            if (s->open ? cc_views_effective(&s->model, &a, &views, &nv)
+                        : cc_sv_list(s, &a, &views, &nv) || cc_paper_src_views(s, views, nv, &a)) {
                 buf_puts(out, "out of memory");
                 goto end;
             }
@@ -559,10 +574,11 @@ int cc_paper_view_svg(struct cc_session *s, const cc_scene *sc, const char *body
     const cc_view *vw = NULL;
     cc_view *views = NULL;
     size_t nv = 0;
-    if (s->open && idv->n == 22) {
+    if ((s->open || s->view) && idv->n == 22) { /* LNK1: a read-only scene's views too */
         cc_gid id;
         memcpy(id.c, idv->s, 22);
-        if (cc_views_effective(&s->model, &a, &views, &nv)) {
+        if (s->open ? cc_views_effective(&s->model, &a, &views, &nv)
+                    : cc_sv_list(s, &a, &views, &nv) || cc_paper_src_views(s, views, nv, &a)) {
             buf_puts(out, "out of memory");
             goto end;
         }

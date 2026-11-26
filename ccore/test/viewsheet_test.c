@@ -434,7 +434,8 @@ static void hand(void) {
     expect_apply(&h, &m, "[{\"op\":\"set_schedules\",\"schedules\":[{\"name\":\"X\",\"classes\":[],\"fields\":[\"bogus\"]}]}]",
                  "unknown variant `bogus`, expected one of `level`, `location`, `name`, `class`, `material`, `section`, `length`, "
                  "`width`, `height`, `area`, `volume`, `mass`, `global_id`");
-    expect_apply(&h, &m, "[{\"op\":\"set_material\",\"id\":\"0000000000000000000001\"}]", "unsupported by the C core: the command set_material");
+    /* MAT1: set_material is a command of the C core now (verbs_materials_test.c): serde's text */
+    expect_apply(&h, &m, "[{\"op\":\"set_material\",\"id\":\"0000000000000000000001\"}]", "missing field `name`");
 
     /* Saved, loaded, saved: same bytes; -0.0 written 0.0; omissions as Rust */
     Buf a, b, v2;

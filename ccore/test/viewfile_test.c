@@ -208,11 +208,85 @@ static void put_le(Buf *b, uint64_t v, int n) {
     for (int i = 0; i < n; i++) buf_putc(b, (char)(v >> (8 * i)));
 }
 
+/* FIXLIB: a hand-made view file of one element (a string table of one entry), with one thing
+ * wrong at a time: the element's 4th string index, its shape index (kind 1, no shape stored), the
+ * header's origin x (any f64). Each check is the only guard before an out-of-range read (the
+ * table, v->shapes) or a non-finite origin. */
+static void section(Buf *x, const char *kind, const Buf *payload) {
+    buf_append(x, kind, 4);
+    put_le(x, payload->len, 8);
+    buf_append(x, payload->p, payload->len);
+}
+static void tiny_view(Buf *x, const char *magic12, uint64_t family_index, uint64_t shape_k, uint64_t origin_bits) {
+    Buf s;
+    buf_init(&s);
+    buf_clear(x);
+    buf_append(x, magic12, 12);
+    cc_put_varint(&s, 1), cc_put_varint(&s, 0), cc_put_varint(&s, 0); /* 1 element, 0 shapes, 0 triangles */
+    put_le(&s, origin_bits, 8), put_le(&s, 0, 8), put_le(&s, 0, 8);
+    section(x, "HEAD", &s);
+    buf_clear(&s);
+    cc_put_varint(&s, 1), cc_put_varint(&s, 1), buf_putc(&s, 'x'); /* the table: "x" */
+    for (int k = 0; k < 4; k++) cc_put_varint(&s, 0);             /* storeys, grids, densities, warnings */
+    section(x, "META", &s);
+    buf_clear(&s);
+    cc_put_varint(&s, 0), cc_put_varint(&s, 1);                   /* 0 shapes, 1 element */
+    cc_put_varint(&s, 0), cc_put_varint(&s, 0);                   /* global id, name: "" */
+    cc_put_varint(&s, 0), cc_put_varint(&s, 0), cc_put_varint(&s, 0), cc_put_varint(&s, family_index);
+    buf_putc(&s, 1), cc_put_varint(&s, shape_k);                  /* kind 1: shape k */
+    for (int j = 0; j < 12; j++) put_le(&s, 0, 4);                /* the placement: zeros */
+    section(x, "ELEM", &s);
+    buf_free(&s);
+}
+
+static void index_checks(const char *raw) {
+    Buf x;
+    buf_init(&x);
+    tiny_view(&x, raw, 0, 0, 0);
+    check_true("tiny view: shape 0 of none: \"shape index\"", read_err(x.p, x.len, "shape index"));
+    tiny_view(&x, raw, 1, 0, 0);
+    check_true("tiny view: string 1 of a table of 1: \"string index\"", read_err(x.p, x.len, "string index"));
+    tiny_view(&x, raw, 0, 0, 0x7ff8000000000000ull);
+    check_true("tiny view: a NaN origin: \"number not finite\"", read_err(x.p, x.len, "number not finite"));
+    tiny_view(&x, raw, 0, 0, 0xfff0000000000000ull);
+    check_true("tiny view: a -inf origin: \"number not finite\"", read_err(x.p, x.len, "number not finite"));
+    buf_free(&x);
+
+    /* The mesh codec (raw mode, one vertex at 0): an index past the vertices, and an edge's
+     * vertex past them (without the check: a read of pos[5] in a 2-vertex array). */
+#define FIXLIB_V0 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 /* one raw vertex at (0, 0, 0) */
+    static const uint8_t idx_bad[] = {'B', 'M', 'G', '1', 0, 1, 3, 0, 0, FIXLIB_V0, 0, 0, 2, 0};
+    static const uint8_t idx_ok[] = {'B', 'M', 'G', '1', 0, 1, 3, 0, 0, FIXLIB_V0, 0, 0, 0, 0};
+    static const uint8_t edge_bad[] = {'B', 'M', 'G', '1', 0, 1, 0, 1, 0, FIXLIB_V0, 0, 20, 0};
+    static const uint8_t edge_neg[] = {'B', 'M', 'G', '1', 0, 1, 0, 1, 0, FIXLIB_V0, 0, 2, 0};
+#undef FIXLIB_V0
+    static const struct { const char *what; const uint8_t *p; size_t n; int rc; const char *why; } mc[] = {
+        {"codec: index 1 of 1 vertex", idx_bad, sizeof idx_bad, CC_MC_INVALID, "index out of range"},
+        {"codec: indices 0 0 0 of 1 vertex read", idx_ok, sizeof idx_ok, CC_MC_OK, ""},
+        {"codec: an edge at vertex 5 of 1", edge_bad, sizeof edge_bad, CC_MC_INVALID, "edge vertex"},
+        {"codec: an edge at vertex 0 then -1", edge_neg, sizeof edge_neg, CC_MC_INVALID, "edge vertex"},
+    };
+    Arena a;
+    arena_init(&a, 0);
+    for (size_t i = 0; i < sizeof mc / sizeof mc[0]; i++) {
+        cc_mesh d;
+        const char *why = "";
+        int rc = cc_meshcodec_decode(mc[i].p, mc[i].n, &a, &d, &why);
+        if (rc != mc[i].rc || strcmp(why, mc[i].why)) printf("  %s: rc %d \"%s\"\n", mc[i].what, rc, why);
+        check_true(mc[i].what, rc == mc[i].rc && !strcmp(why, mc[i].why));
+        arena_reset(&a);
+    }
+    arena_free(&a);
+}
+
 /* Damaged files: errors, never a crash. */
 static void robustness(void) {
     size_t wn, gn;
     char *raw = slurp(golden, "view/frame.bimbleview.raw", &wn);
     char *gz = slurp(golden, "view/frame.bimbleview", &gn);
+    /* first, flushed: without the string-index check the random damage below crashes the suite */
+    index_checks(raw);
+    fflush(stdout);
 
     int all = 1;
     for (size_t n = 0; n < wn; n++)

@@ -1,0 +1,9 @@
+prefer neither: 0 conflict(s)
+valid
+model schedules.neither.json
+prefer ours: 0 conflict(s)
+valid
+model schedules.neither.json
+prefer theirs: 0 conflict(s)
+valid
+model schedules.neither.json

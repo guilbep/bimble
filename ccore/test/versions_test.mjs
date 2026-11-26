@@ -10,12 +10,22 @@
 //     in serde's form;
 //   query pending: nothing on load (the model is HEAD's), one change after a verb, none after undo;
 //   a model with no history folder: {"history": false, "reason": Rust's "no history next to ..."};
+//   H2a, the writes (action commit, branch_create, branch_switch; BIMBLE_CONFIG_DIR a temp folder):
+//     no name in the settings: refused; nothing to commit: Rust's text; an edit, then commit: the
+//     version first in query versions with the settings' author, pending clean, saved; a new
+//     branch, a bad branch name; switch refused with changes not committed, then a commit on the
+//     branch, switch back: the model is main's (pending clean, project field back); discard;
+//     a model without a history: commit starts one; capabilities history_write true;
+//   H2b, action merge: onto itself refused, a bad prefer, up to date, a fast-forward (the model
+//     reopened), refused with changes not committed, a conflict listed and nothing merged, then
+//     prefer theirs: a merge commit with two parents, the model reopened; an unknown revision;
 //   a damaged object (one byte flipped): 400 with Rust's "damaged history: ... does not match its hash";
 //   the wasm modules (out/wasm/ccore.wasm, ccore-view.wasm when built): the same four queries on a
-//   model answer {"history": false, "reason": "no history folder in the browser"}.
+//   model answer {"history": false, "reason": "no history folder in the browser"}; action commit is
+//   400 with that reason and capabilities history_write false (H2a).
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills what it starts.
 import { spawn } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,7 +35,7 @@ import { port } from "./ports.mjs";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const GOLD = join(CCORE, "golden/history");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("versions_test", 47318);
+const PORT = port("versions_test");
 const TOKEN = "versionstest-token";
 const base = `http://127.0.0.1:${PORT}`;
 let passed = 0, failed = 0;
@@ -62,7 +72,8 @@ copyFileSync(join(GOLD, "model_at_6.json"), model);
 cpSync(join(GOLD, "frame.bimble-history"), join(tmp, "frame.bimble-history"), { recursive: true });
 const plain = join(tmp, "plain.bimble");
 copyFileSync(join(CCORE, "golden/frame.json"), plain);
-const host = spawn(BIN, [String(PORT), model], { env: { ...process.env, BIMBLE_TOKEN: TOKEN }, stdio: ["ignore", "ignore", "pipe"], detached: true });
+const config = join(tmp, "config"); // H2a: never the user's settings
+const host = spawn(BIN, [String(PORT), model], { env: { ...process.env, BIMBLE_TOKEN: TOKEN, BIMBLE_CONFIG_DIR: config }, stdio: ["ignore", "ignore", "pipe"], detached: true });
 let log = "";
 host.stderr.on("data", (d) => (log += d));
 try {
@@ -112,6 +123,162 @@ try {
   r = await q("pending");
   eq("pending after undo", r.json?.changes, []);
 
+  // ---- H2a: commit, branch_create, branch_switch ----
+  const act = async (name, args) => call("action", name, args === undefined ? "" : JSON.stringify(args));
+  const project = async () => JSON.stringify((await q("project")).json);
+  r = await q("capabilities");
+  check("capabilities history_write true natively", r.json?.history_write === true, r.text);
+  r = await act("commit", { message: "no author" });
+  eq("commit without a name: refused", [r.status, r.text], [400, "commit: set your name in Settings first (the author of each version)"]);
+  r = await act("set_settings", { user_name: "Test User", user_email: "test@example.org" });
+  check("set_settings 200", r.status === 200, r.text);
+  r = await act("commit", { message: "nothing" });
+  eq("nothing to commit", [r.status, r.text], [400, `nothing to commit: the model is the same as ${c6.slice(0, 12)}`]);
+  r = await act("commit", { message: " \n " });
+  eq("empty message", [r.status, r.text], [400, "a commit needs a message"]);
+  r = await call("verb", "set_project_field", JSON.stringify({ label: "Phase", value: "51" }));
+  check("edit 200", r.status === 200, r.text);
+  r = await act("commit", { message: "  phase 51 " });
+  check("commit 200", r.status === 200, r.text);
+  const k1 = r.status === 200 ? JSON.parse(r.text).commit : "";
+  r = await q("versions");
+  eq("the version first, the settings' author", [r.json?.versions[0]?.hash, r.json?.versions[0]?.message, r.json?.versions[0]?.author, r.json?.versions[0]?.parents],
+    [k1, "phase 51", "Test User <test@example.org>", [c6]]);
+  eq("head moved", r.json?.head, { branch: "main", commit: k1 });
+  r = await q("pending");
+  eq("pending clean after the commit", [r.json?.base, r.json?.changes], [k1, []]);
+  r = await q("state");
+  eq("saved before the commit", r.json?.unsaved, false);
+  r = await act("branch_create", { name: "bad name" });
+  eq("bad branch name", [r.status, r.text], [400, 'invalid branch name "bad name": use letters, digits, \'-\', \'_\', \'.\' and \'/\'']);
+  r = await act("branch_create", { name: "main" });
+  eq("branch exists", [r.status, r.text], [400, "branch main already exists"]);
+  r = await act("branch_create", { name: "idea" });
+  eq("branch_create 200", [r.status, r.text], [200, '{"branch":"idea"}']);
+  r = await q("branches");
+  eq("on the new branch", [r.json?.head, r.json?.branches.map((b) => b.name)], [{ branch: "idea", commit: k1 }, ["idea", "main", "variant"]]);
+  r = await call("verb", "set_project_field", JSON.stringify({ label: "Phase", value: "idea" }));
+  check("edit on the branch", r.status === 200, r.text);
+  r = await act("branch_switch", { name: "main" });
+  eq("switch refused with changes not committed", [r.status, r.text], [400, 'uncommitted changes: commit them first, or send {"discard": true}']);
+  r = await act("commit", { message: "on idea" });
+  check("commit on the branch", r.status === 200, r.text);
+  const k2 = r.status === 200 ? JSON.parse(r.text).commit : "";
+  r = await act("branch_switch", { name: "main" });
+  eq("switch back to main", [r.status, r.text], [200, '{"branch":"main"}']);
+  r = await q("state");
+  eq("switch: saved", r.json?.unsaved, false);
+  r = await q("pending");
+  eq("switch: the model is main's (pending clean against main)", [r.json?.base, r.json?.changes], [k1, []]);
+  check("switch: the project field is main's", (await project()).includes('"51"') && !(await project()).includes('"idea"'), await project());
+  r = await q("version_changes", { a: "main", b: "idea" });
+  eq("main and idea differ", r.json?.changes.length, 1);
+  r = await call("verb", "set_project_field", JSON.stringify({ label: "Phase", value: "dropped" }));
+  r = await act("branch_switch", { name: "idea", discard: true });
+  eq("switch with discard", [r.status, r.text], [200, '{"branch":"idea"}']);
+  r = await q("pending");
+  eq("discard: the model is idea's", [r.json?.base, r.json?.changes], [k2, []]);
+  check("discard: the project field is idea's", (await project()).includes('"idea"'), await project());
+  r = await q("history");
+  check("switch: a fresh undo history", r.status === 200 && !r.text.includes("Phase"), r.text);
+  r = await act("branch_switch", { name: "nope" });
+  eq("switch to an unknown revision", [r.status, r.text], [400, 'unknown revision "nope"']);
+  r = await act("branch_switch", { name: "main" });
+  check("back to main", r.status === 200, r.text);
+
+  // ---- H2b: merge {name, prefer?} ----
+  r = await act("merge", { name: "main" });
+  eq("merge onto itself: refused", [r.status, r.text], [400, "merge: main is the current branch"]);
+  r = await act("merge", { name: "idea", prefer: "mine" });
+  check("merge: a bad prefer is 400", r.status === 400, r.text);
+  r = await act("merge", { name: "variant" });
+  eq("merge variant: up to date (Rust's merge c6 holds it)", [r.status, r.text], [200, `{"merged":"up_to_date","commit":"${k1}","conflicts":[]}`]);
+  r = await act("merge", { name: "idea" });
+  eq("merge idea into main: fast-forward", [r.status, r.text], [200, `{"merged":"fast_forward","commit":"${k2}","conflicts":[]}`]);
+  r = await q("versions");
+  eq("fast-forward: HEAD main at idea's commit", r.json?.head, { branch: "main", commit: k2 });
+  r = await q("pending");
+  eq("fast-forward: the model is idea's (pending clean)", [r.json?.base, r.json?.changes], [k2, []]);
+  check("fast-forward: the project field is idea's", (await project()).includes('"idea"'), await project());
+  r = await act("merge", { name: "idea" });
+  eq("merge again: up to date", [r.status, r.text], [200, `{"merged":"up_to_date","commit":"${k2}","conflicts":[]}`]);
+  // Both sides change the phase: a conflict, nothing merged; then take theirs.
+  r = await act("branch_create", { name: "x" });
+  check("branch x", r.status === 200, r.text);
+  await call("verb", "set_project_field", JSON.stringify({ label: "Phase", value: "X" }));
+  r = await act("commit", { message: "phase X" });
+  const kx = r.status === 200 ? JSON.parse(r.text).commit : "";
+  check("commit on x", r.status === 200, r.text);
+  r = await act("branch_switch", { name: "main" });
+  check("switch main", r.status === 200, r.text);
+  await call("verb", "set_project_field", JSON.stringify({ label: "Phase", value: "M" }));
+  r = await act("merge", { name: "x" });
+  eq("merge refused with changes not committed", [r.status, r.text], [400, "uncommitted changes: commit them first"]);
+  r = await act("commit", { message: "phase M" });
+  const km = r.status === 200 ? JSON.parse(r.text).commit : "";
+  check("commit on main", r.status === 200, r.text);
+  r = await act("merge", { name: "x" });
+  eq("merge x: the conflict, nothing merged", [r.status, r.text], [200,
+    '{"merged":"conflicts","conflicts":[{"kind":"IfcProject","id":null,"name":"project information phase","text":"IfcProject project information phase"}]}']);
+  r = await q("versions");
+  eq("conflict: HEAD unchanged", r.json?.head, { branch: "main", commit: km });
+  r = await act("merge", { name: "x", prefer: "theirs" });
+  const mj = r.status === 200 ? JSON.parse(r.text) : null;
+  eq("merge x, take theirs: a merge commit", [r.status, mj?.merged, mj?.conflicts?.length], [200, "commit", 1]);
+  r = await q("versions");
+  eq("the merge commit first: two parents, Rust's message, the settings' author",
+    [r.json?.versions[0]?.hash, r.json?.versions[0]?.parents, r.json?.versions[0]?.message, r.json?.versions[0]?.author],
+    [mj?.commit, [km, kx], "Merge x", "Test User <test@example.org>"]);
+  check("take theirs: the phase is X", (await project()).includes('"X"'), await project());
+  r = await q("pending");
+  eq("after the merge: pending clean, saved", [r.json?.base, r.json?.changes, (await q("state")).json?.unsaved], [mj?.commit, [], false]);
+  r = await q("history");
+  check("after the merge: a fresh undo history", r.status === 200 && !r.text.includes("Phase"), r.text);
+  r = await act("merge", { name: "nope" });
+  eq("merge an unknown revision", [r.status, r.text], [400, 'unknown revision "nope"']);
+  // ---- end H2b ----
+
+  // FIXSES: a link added and not saved is a change the model's status does not see; switch and
+  // merge reopen the file and would drop it: refused (before, both answered 200 and the link was gone).
+  r = await act("link_model", { path: plain });
+  check("link_model 200", r.status === 200, r.text);
+  eq("a link not saved: unsaved, pending clean", [(await q("state")).json?.unsaved, (await q("pending")).json?.changes], [true, []]);
+  r = await act("branch_switch", { name: "x" });
+  eq("switch refused with a link not saved", [r.status, r.text], [400, 'links changed and not saved: save them first, or send {"discard": true}']);
+  r = await act("merge", { name: "x" });
+  eq("merge refused with a link not saved", [r.status, r.text], [400, "links changed and not saved: save them first"]);
+  eq("refused: the link is still there", (await q("links")).json?.length, 1);
+  r = await act("branch_switch", { name: "main", discard: true });
+  eq("switch with discard drops the link", [r.status, (await q("links")).json?.length, (await q("state")).json?.unsaved], [200, 0, false]);
+
+  // FIXSES: the working file cannot be written (its folder read-only): switch and merge answer
+  // 400 and HEAD stays where it was (before, HEAD had moved to the new branch while the file and
+  // the model stayed on the old one). POSIX only: chmod.
+  if (process.platform !== "win32") {
+    const headNow = async () => (await q("versions")).json?.head;
+    const h0 = await headNow();
+    chmodSync(tmp, 0o555);
+    try {
+      r = await act("branch_switch", { name: "x" });
+    } finally { chmodSync(tmp, 0o755); }
+    eq("switch, the folder read-only: 400", [r.status, r.text], [400, `${model}: cannot write`]);
+    eq("switch refused: HEAD still main", await headNow(), h0);
+    r = await act("branch_create", { name: "y" });
+    await call("verb", "set_project_field", JSON.stringify({ label: "Phase", value: "Y" }));
+    r = await act("commit", { message: "phase Y" });
+    check("commit on y", r.status === 200, r.text);
+    r = await act("branch_switch", { name: "main" });
+    check("switch main", r.status === 200, r.text);
+    const h1 = await headNow();
+    chmodSync(tmp, 0o555);
+    try {
+      r = await act("merge", { name: "y" });
+    } finally { chmodSync(tmp, 0o755); }
+    eq("merge (a fast-forward), the folder read-only: 400", [r.status, r.text], [400, `${model}: cannot write`]);
+    eq("merge refused: HEAD main still at its commit", await headNow(), h1);
+    eq("merge refused: pending clean (the model is HEAD's)", (await q("pending")).json?.changes, []);
+  }
+
   // A damaged object: c2 as plain JSON with one byte flipped.
   const obj = join(tmp, "frame.bimble-history/objects", c2.slice(0, 2), c2.slice(2));
   const bytes = gunzipSync(readFileSync(obj));
@@ -129,6 +296,13 @@ try {
   }
   r = await q("version_changes", { a: "HEAD~1" });
   eq("version_changes without history", r.json?.history, false);
+  // H2a: commit starts the history (lib.rs:1932 "Start history and commit").
+  r = await act("commit", { message: "first" });
+  check("commit without a history: 200", r.status === 200, r.text);
+  r = await q("versions");
+  eq("the new history", [r.json?.history, r.json?.head?.branch, r.json?.versions.map((v) => v.message)], [true, "main", ["first"]]);
+  check("the folder next to the file", existsSync(join(tmp, "plain.bimble-history/format")));
+  if (process.env.H2A_KEEP) cpSync(join(tmp, "plain.bimble-history"), process.env.H2A_KEEP, { recursive: true }); // for a Rust reader
 } catch (e) {
   check("run", false, `${e.stack}\n${log}`);
 } finally {
@@ -162,6 +336,14 @@ for (const name of ["ccore.wasm", "ccore-view.wasm"]) {
   for (const [q, body] of [["versions", ""], ["branches", ""], ["version_changes", '{"a":"HEAD~1"}'], ["pending", ""]]) {
     const r = wcall(X.call, ["query", q, body]);
     eq(`${name}: ${q}`, [r.status, r.text], [200, '{"history":false,"reason":"no history folder in the browser"}']);
+  }
+  if (name === "ccore.wasm") { // H2a
+    const c = wcall(X.call, ["action", "commit", '{"message":"x"}']);
+    eq(`${name}: action commit`, [c.status, c.text], [400, "no history folder in the browser"]);
+    const mg = wcall(X.call, ["action", "merge", '{"name":"x"}']); // H2b
+    eq(`${name}: action merge`, [mg.status, mg.text], [400, "no history folder in the browser"]);
+    const caps = JSON.parse(wcall(X.call, ["query", "capabilities", ""]).text);
+    eq(`${name}: history_write false`, caps.history_write, false);
   }
 }
 console.log(`${passed} passed, ${failed} failed`);

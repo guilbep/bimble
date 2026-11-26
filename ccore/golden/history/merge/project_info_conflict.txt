@@ -1,0 +1,15 @@
+prefer neither: 2 conflict(s)
+conflict IfcProject project information client | -
+conflict IfcProject project information phase | -
+valid
+model project_info_conflict.ours.json
+prefer ours: 2 conflict(s)
+conflict IfcProject project information client | -
+conflict IfcProject project information phase | -
+valid
+model project_info_conflict.ours.json
+prefer theirs: 2 conflict(s)
+conflict IfcProject project information client | -
+conflict IfcProject project information phase | -
+valid
+model project_info_conflict.theirs.json

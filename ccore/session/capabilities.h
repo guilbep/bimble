@@ -12,11 +12,12 @@
  *
  * The rows (DEVIATIONS.md section 19: Rust has no such query; the Rust twin is "everything"):
  *   always true:  georef, grids, levels (storeys, grids, north/coordinates; ticket G2's pages),
- *                 history (the undo list), measure, palette, project_info, references, sheets
+ *                 history (the undo list), materials (MAT1: query materials_page, verbs material_*),
+ *                 measure, palette, project_info, references, sheets
  *   full builds:  export_ifc, export_pdf, export_svg, quantities, schedules (VIEW_DENY'd in the
  *                 viewer: false there)
  *   native only:  versions (H1's read-only history store: a folder next to the file)
- *   false here:   about, collaboration, export_view, history_write, lca, materials, paper_view,
+ *   false here:   about, collaboration, export_view, history_write, lca, paper_view,
  *                 phases, plan_annotations, rebar, recent_files, section_catalogue, settings,
  *                 sheet_tools, site, standards, steel, subprojects, user, users */
 #ifndef CCORE_SESSION_CAPABILITIES_H

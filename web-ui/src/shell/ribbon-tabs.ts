@@ -13,7 +13,8 @@ export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string;
 // Reference .rbox: a label over a 150 px select (sel) or a mono readout (readout). No Rust call yet: drawn disabled, empty.
 export interface RibbonBox { key: RibbonKey; kind: "sel" | "readout"; missing: string }
 // box: drawn after the tools, in a `.tools` with style="align-items:center" (as the reference).
-export interface RibbonGroup { key: RibbonKey; tools: RibbonTool[]; box?: RibbonBox }
+// north (ISS71): the section box's orientation control after the tools (shell/BoxNorth.vue).
+export interface RibbonGroup { key: RibbonKey; tools: RibbonTool[]; box?: RibbonBox; north?: boolean }
 
 export const RIBBON: Record<TabId, RibbonGroup[]> = {
   project: [
@@ -167,7 +168,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
     { key: "ribbon.view.g2", tools: [
       { key: "ribbon.view.g2.t1", tag: "button", icon: "<path d=\"M12 3 20 7v10l-8 4-8-4V7z\"/><path d=\"M4 7l8 4 8-4M12 11v10\"/>", action: "section_box" },
       { key: "ribbon.view.g2.t2", tag: "button", icon: "<path d=\"M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5\"/>", action: "box_to_selection" },
-    ] },
+    ], north: true }, // ISS71
     { key: "ribbon.view.g3", tools: [
       { key: "ribbon.view.g3.t1", tag: "button", icon: "<path d=\"M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5\"/>", action: "fit" },
       { key: "ribbon.view.g3.t2", tag: "button", icon: "<rect x=\"5\" y=\"5\" width=\"14\" height=\"14\"/><path d=\"M12 9v6M9 12h6\"/>", action: "top" },
@@ -177,6 +178,10 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
       { key: "ribbon.view.g4.t2", tag: "button", icon: "<rect x=\"8\" y=\"8\" width=\"8\" height=\"8\"/><path d=\"M3 3h4M17 3h4M3 21h4M17 21h4M3 3v4M21 3v4M3 17v4M21 17v4\"/>", action: "isolate_now" },
       { key: "ribbon.view.g4.t3", tag: "button", icon: "<path d=\"M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>", action: "reveal_hidden" },
       { key: "ribbon.view.g4.t4", tag: "button", icon: "<path d=\"M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>", action: "unhide" },
+      // ---- ISS72 (GitHub issue #72): Show all (four boxes: every element), Show previous (an arrow back over an eye) ----
+      { key: "ribbon.view.g4.t5", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"7\" height=\"7\"/><rect x=\"13\" y=\"4\" width=\"7\" height=\"7\"/><rect x=\"4\" y=\"13\" width=\"7\" height=\"7\"/><rect x=\"13\" y=\"13\" width=\"7\" height=\"7\"/>", action: "show_all" },
+      { key: "ribbon.view.g4.t6", tag: "button", icon: "<path d=\"M3 15s3.5-5 9-5 9 5 9 5-3.5 5-9 5-9-5-9-5z\"/><circle cx=\"12\" cy=\"15\" r=\"2\"/><path d=\"M9 3 6 6l3 3\"/><path d=\"M6 6h9a3 3 0 0 1 3 3\"/>", action: "show_previous" },
+      // ---- end ISS72 ----
     ] },
     { key: "ribbon.view.g5", tools: [
       { key: "ribbon.view.g5.t1", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\"/><path d=\"M4 12h9v8M13 4v4\"/>", action: null },
@@ -204,7 +209,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
   graphics: [
     { key: "ribbon.graphics.g1", tools: [
       { key: "ribbon.graphics.g1.t1", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"3\"/><path d=\"M8 10h8M8 14h5\"/>", action: "standards", panel: "standards" },
-      { key: "ribbon.graphics.g1.t2", tag: "button", icon: "<circle cx=\"12\" cy=\"12\" r=\"8\"/><path d=\"M6 8c4 3 8 3 12 0M5 13c4 3 10 3 14 0\"/>", action: "materials" },
+      { key: "ribbon.graphics.g1.t2", tag: "button", icon: "<circle cx=\"12\" cy=\"12\" r=\"8\"/><path d=\"M6 8c4 3 8 3 12 0M5 13c4 3 10 3 14 0\"/>", action: "materials", page: "materials" },
     ] },
     { key: "ribbon.graphics.g2", tools: [
       { key: "ribbon.graphics.g2.t1", tag: "button", icon: "<path d=\"M3 7h18\"/><path d=\"M3 12h4M10 12h4M17 12h4\"/><path d=\"M3 17h2M8 17h1M12 17h2M17 17h1\"/>", action: null },

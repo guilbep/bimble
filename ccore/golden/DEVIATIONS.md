@@ -294,25 +294,6 @@ Rust's plan of its IFC.
 
 **Where.** `ccore/src/draw_view.c` (`cc_view_turn_axes`), one call in `ccore/src/draw_plan.c`.
 
-## 11. A sheet drawn by the session (ticket D5)
-
-**What.** The query `sheet_svg {id}` draws the sheet as Rust's (`calls.rs` `sheet_svg`,
-`sheetdraw::draw`), with three differences in its options. The frame's note says the C core's
-version (`Bimble 0.1.0-ccore`, `CC_IFC_VERSION`), not Rust's `CARGO_PKG_VERSION`; the note is
-placed by its width, so its `x` differs too. The graphic style and the plan template are the
-defaults (with the model's project information): the C session keeps no style or template of its
-own, where Rust takes the viewer's (the defaults until the user edits them). The viewer-only
-wasm has no drawing code: `sheet_svg` answers "this build is view-only".
-
-**Why.** The version names the program that drew the sheet (as the IFC header, deviation 3's
-`serverInfo.version`). The C core has no style or template editor yet.
-
-**What Rust sees.** `ccore/test/draw_sheet_test.c` draws every sheet of `golden/drawing/model.json`
-through the library with Rust's version: `sheet/*.svg` and `.info.txt` byte for byte. Through the
-session (`sheet_svg`, natively and in the wasm module, `wasm_run.mjs`), `S-101.svg` is the golden
-byte for byte once both version notes are cut out.
-
-**Where.** `ccore/session/sheet_svg.c`; the library is `ccore/src/draw_sheet.c`.
 ## 10. The IFC display reader past Rust's (ticket IFC2)
 
 **What.** The C display reader (`cc_ifc_read`, and the import through the shared
@@ -423,6 +404,26 @@ scene's volume and bounding box against numbers computed by hand from the fixtur
   `ccore/test/ifc_in_test.c` (`own_imports`) also checks each model's volume against the hand
   value.
 
+## 11. A sheet drawn by the session (ticket D5)
+
+**What.** The query `sheet_svg {id}` draws the sheet as Rust's (`calls.rs` `sheet_svg`,
+`sheetdraw::draw`), with three differences in its options. The frame's note says the C core's
+version (`Bimble 0.1.0-ccore`, `CC_IFC_VERSION`), not Rust's `CARGO_PKG_VERSION`; the note is
+placed by its width, so its `x` differs too. The graphic style and the plan template are the
+defaults (with the model's project information): the C session keeps no style or template of its
+own, where Rust takes the viewer's (the defaults until the user edits them). The viewer-only
+wasm has no drawing code: `sheet_svg` answers "this build is view-only".
+
+**Why.** The version names the program that drew the sheet (as the IFC header, deviation 3's
+`serverInfo.version`). The C core has no style or template editor yet.
+
+**What Rust sees.** `ccore/test/draw_sheet_test.c` draws every sheet of `golden/drawing/model.json`
+through the library with Rust's version: `sheet/*.svg` and `.info.txt` byte for byte. Through the
+session (`sheet_svg`, natively and in the wasm module, `wasm_run.mjs`), `S-101.svg` is the golden
+byte for byte once both version notes are cut out.
+
+**Where.** `ccore/session/sheet_svg.c`; the library is `ccore/src/draw_sheet.c`.
+
 ## 12. The PDF's font files are packed by the C core's own deflate (ticket D6)
 
 **What.** Rust's `Sheet::to_pdf` (pdf-writer) embeds each Roboto file it uses as a FontFile2
@@ -452,6 +453,77 @@ marks) is glyph 0, where Rust reads the whole `cmap`. A pen of negative or NaN w
 `CC_PDF_ERR_PEN` where Rust's pdf-writer asserts (a panic).
 
 **Where.** `ccore/src/pdf_out.c` (`zlib`, `embed_font`), `ccore/test/pdf_out_test.c`.
+
+## 13. Reference plans read from PDFs (ticket L1, ADR 0021)
+
+The C reader (`src/pdf_in.c`) gives Rust's polylines and notes byte for byte on every golden of
+`reference/` (`bimble_drawing::reference::read` over lopdf 0.47: the hand-written fixtures and D1's
+plan PDFs, compressed or not, 30,000 segments included), with one exception and these differences
+on files the goldens do not hold:
+
+- **Encrypted PDFs are refused** with "the PDF is encrypted: …". lopdf decrypts a PDF whose user
+  password is empty; `encrypted.pdf` (a fake standard security handler) gives "the PDF has no page"
+  in Rust. Decryption (RC4, AES) is not in the C core: a plan from an architect is rarely
+  encrypted, and the text says what to do. `test/ref_test.c` checks both texts.
+- **Filters**: only FlateDecode (with PNG predictors) is decoded. lopdf also decodes LZW,
+  ASCII85, ASCIIHex and RunLength: such a page content is read raw in C (no lines, or fewer).
+- **Inline images** end at the first white space + `EI` + white space; lopdf counts the bytes from
+  the image's size first. Only data holding " EI " differs.
+- **Error texts** of damaged files: "not a readable PDF: couldn't parse input" (lopdf's most common,
+  the one of every bad golden) for any file whose header, cross-reference data and rebuilt table
+  all fail; lopdf has other texts for rarer cases. "page 1: the page's content passes 256 MB" for
+  lopdf's MemoryLimitExceeded text.
+- **Reals** are parsed to the nearest double, then rounded to f32 (lopdf: `f32::from_str`). The two
+  differ only for a decimal text within 2^-53 of a halfway point between two f32 (more than about
+  15 significant digits); no golden has one.
+
+In the session (`session/links_ref.c`): `link_pdf` takes `offset_mm` and `rotation_deg` beside
+`path` and `scale` (a C addition, so agents and tests can place a plan exactly; without them the
+placement is Rust's, viewing.rs place_reference). A reference in a section view is placed as it is
+(Rust also centres it on the model along the section). The default scale is the view's (Rust: the
+"Add reference plan" form's 1:N, default 100).
+
+## 14. DXF reference plans (ticket L2, ADR 0021)
+
+The reader (`src/dxf_in.c`) prints Rust's polylines and notes byte for byte on every file of
+`golden/dxf/fixtures/` (`golden/dxf/*.txt`, from `ccore_golden`; suite `dxf_in`). Where it differs
+from `reference::read_dxf` over the `dxf` crate 0.6.2:
+
+- **Additions, not in Rust's output:** each polyline's layer (an entity of layer `0` in a block takes
+  the INSERT's, as AutoCAD), the LAYER table's on / frozen, and TEXT / MTEXT anchors (placed, with
+  their height and text). Rust reads no layer and no text. Nothing is filtered by layer: the
+  polylines stay Rust's.
+- **Budgets Rust has not:** at most 2^24 entity visits through blocks (a block bomb: Rust loops
+  for ages; C stops and adds the note "stopped expanding blocks (too many copies)"); at most
+  4,000,000 points made, drawn or dropped (twice the output's cap: a file of a million arcs of NaN
+  radius, or a block of them copied, is bounded; C stops and adds the note "stopped drawing (more
+  than 4000000 points made)"); an arc or ellipse whose `while sweep <= 0 { sweep += TAU }` would
+  take more than 2^20 turns is not drawn (Rust does not end); an arc or ellipse sweeping more than
+  two turns is drawn as one turn, 65 points (the same curve; Rust makes every turn: one ARC to
+  11,200,000 degrees was 1,991,113 points and 8 s, a 4 KB file of 100 of them minutes), up to two
+  turns the points are Rust's. Without that work, the same answer: an arc of non-finite centre or
+  radius is dropped before its points are made (Rust's Out::push drops it), and once the output is
+  truncated an arc that cannot fit is not made. The truncated case is Rust's: "stopped at 2000000
+  points", and a later polyline that fits is still pushed. 102 groups and xdata control groups are
+  read without recursion (Rust recurses).
+- **Refused, Rust reads them:** binary DXF and DXB ("not a readable DXF: binary DXF is not read
+  by the C core; save it as a text (ASCII) DXF").
+- **Malformed files only** (a well-formed file reads the same): the CLASSES, TABLES, OBJECTS and
+  THUMBNAILIMAGE sections are skipped to their ENDSEC, not parsed (Rust can fail inside them);
+  header variables other than `$INSUNITS` and `$ACADVER` are not checked for their codes; handles
+  (codes 5, 330…) are not parsed as hex; the `\U+XXXX` and `^` escapes in strings are not decoded
+  (block and layer names compare as raw bytes); a double in an error text is printed as `{:?}`, not
+  as the crate's `{:.12}`; a code line starting 0xEF ?? 0xBF keeps the 0xBF.
+- **Floats:** sin, cos and atan2 are the C core's correctly rounded ones (`ifc_math.h`); glibc's
+  differ in the last bit for about 0.1 % of inputs. All 14 fixtures match byte for byte today; the
+  suite accepts a number within 4 ulp and prints how many it needed (0).
+- **Session:** `link_dxf` is L1's path (`session/links_ref.c` `cc_refs_link(s, "dxf", …)`, placed
+  as section 13 says; `ref_read.c` hands the DXF to `cc_dxf_read` and its polylines to
+  `cc_refread_push`). `manage_links` by id (`session/links_dxf.c`: move, rotate, show, hide,
+  reload, remove) is a C addition for agents and tests: Rust's Manage links window has Reload,
+  Reload from… and Delete, and moves a reference by dragging it (`views.rs:203`), turns it in the
+  view form.
+
 ## 15. The history store's texts and queries (ticket H1, ADR 0017)
 
 **What.** The C history store (`ccore/src/repo.c`, `diff.c`) reads a Rust-written history folder
@@ -482,67 +554,7 @@ folder Rust writes reads the same.
 
 **Where.** `ccore/src/repo.c`, `ccore/session/versions.c`; tests `ccore/test/repo_test.c`,
 `ccore/test/versions_test.mjs`.
-## 13. Reference plans read from PDFs (ticket L1, ADR 0021)
 
-The C reader (`src/pdf_in.c`) gives Rust's polylines and notes byte for byte on every golden of
-`reference/` (`bimble_drawing::reference::read` over lopdf 0.47: the hand-written fixtures and D1's
-plan PDFs, compressed or not, 30,000 segments included), with one exception and these differences
-on files the goldens do not hold:
-
-- **Encrypted PDFs are refused** with "the PDF is encrypted: …". lopdf decrypts a PDF whose user
-  password is empty; `encrypted.pdf` (a fake standard security handler) gives "the PDF has no page"
-  in Rust. Decryption (RC4, AES) is not in the C core: a plan from an architect is rarely
-  encrypted, and the text says what to do. `test/ref_test.c` checks both texts.
-- **Filters**: only FlateDecode (with PNG predictors) is decoded. lopdf also decodes LZW,
-  ASCII85, ASCIIHex and RunLength: such a page content is read raw in C (no lines, or fewer).
-- **Inline images** end at the first white space + `EI` + white space; lopdf counts the bytes from
-  the image's size first. Only data holding " EI " differs.
-- **Error texts** of damaged files: "not a readable PDF: couldn't parse input" (lopdf's most common,
-  the one of every bad golden) for any file whose header, cross-reference data and rebuilt table
-  all fail; lopdf has other texts for rarer cases. "page 1: the page's content passes 256 MB" for
-  lopdf's MemoryLimitExceeded text.
-- **Reals** are parsed to the nearest double, then rounded to f32 (lopdf: `f32::from_str`). The two
-  differ only for a decimal text within 2^-53 of a halfway point between two f32 (more than about
-  15 significant digits); no golden has one.
-
-In the session (`session/links_ref.c`): `link_pdf` takes `offset_mm` and `rotation_deg` beside
-`path` and `scale` (a C addition, so agents and tests can place a plan exactly; without them the
-placement is Rust's, viewing.rs place_reference). A reference in a section view is placed as it is
-(Rust also centres it on the model along the section). The default scale is the view's (Rust: the
-"Add reference plan" form's 1:N, default 100).
-## 14. DXF reference plans (ticket L2, ADR 0021)
-
-The reader (`src/dxf_in.c`) prints Rust's polylines and notes byte for byte on every file of
-`golden/dxf/fixtures/` (`golden/dxf/*.txt`, from `ccore_golden`; suite `dxf_in`). Where it differs
-from `reference::read_dxf` over the `dxf` crate 0.6.2:
-
-- **Additions, not in Rust's output:** each polyline's layer (an entity of layer `0` in a block takes
-  the INSERT's, as AutoCAD), the LAYER table's on / frozen, and TEXT / MTEXT anchors (placed, with
-  their height and text). Rust reads no layer and no text. Nothing is filtered by layer: the
-  polylines stay Rust's.
-- **Budgets Rust has not:** at most 2^24 entity visits through blocks (a block bomb: Rust loops
-  for ages; C stops and adds the note "stopped expanding blocks (too many copies)"); an arc or
-  ellipse whose `while sweep <= 0 { sweep += TAU }` would take more than 2^20 turns is not drawn
-  (Rust does not end); an arc of 2,000,000 points or more is not made, only noted as truncated
-  (Rust allocates it and may abort). 102 groups and xdata control groups are read without
-  recursion (Rust recurses).
-- **Refused, Rust reads them:** binary DXF and DXB ("not a readable DXF: binary DXF is not read
-  by the C core; save it as a text (ASCII) DXF").
-- **Malformed files only** (a well-formed file reads the same): the CLASSES, TABLES, OBJECTS and
-  THUMBNAILIMAGE sections are skipped to their ENDSEC, not parsed (Rust can fail inside them);
-  header variables other than `$INSUNITS` and `$ACADVER` are not checked for their codes; handles
-  (codes 5, 330…) are not parsed as hex; the `\U+XXXX` and `^` escapes in strings are not decoded
-  (block and layer names compare as raw bytes); a double in an error text is printed as `{:?}`, not
-  as the crate's `{:.12}`; a code line starting 0xEF ?? 0xBF keeps the 0xBF.
-- **Floats:** sin, cos and atan2 are the C core's correctly rounded ones (`ifc_math.h`); glibc's
-  differ in the last bit for about 0.1 % of inputs. All 14 fixtures match byte for byte today; the
-  suite accepts a number within 4 ulp and prints how many it needed (0).
-- **Session:** `link_dxf` is L1's path (`session/links_ref.c` `cc_refs_link(s, "dxf", …)`, placed
-  as section 13 says; `ref_read.c` hands the DXF to `cc_dxf_read` and its polylines to
-  `cc_refread_push`). `manage_links` by id (`session/links_dxf.c`: move, rotate, show, hide,
-  reload, remove) is a C addition for agents and tests: Rust's Manage links window has Reload,
-  Reload from… and Delete, and moves a reference by dragging it (`views.rs:203`), turns it in the
-  view form.
 ## 16. The PDF export in the app (ticket D7)
 
 **What.** The queries `sheet_pdf {sheet, path?}` and `view_pdf {view, path?}`
@@ -576,34 +588,6 @@ file (deviation 12).
 **Where.** `ccore/session/sheet_svg.c` (`cc_paper_pdf_query`), `ccore/host/fonts.c`,
 `ccore/src/wasm_api.c` (`host_fonts`); tests `ccore/test/sheet_pdf_test.c`, `ccore/test/lab_export.mjs`.
 
-## 16. Views of a read-only scene (ticket S1, ADR 0021)
-
-An IFC opened as it is, or a `.bimbleview`, now offers Rust's views: the 3D view, then a plan and
-a ceiling plan per storey (viewing.rs `refresh_views` on `Scene::levels`: key the storey's
-GlobalId text, or its name when it has none). `open_views`, the plan tabs and `view_clip` match
-Rust's `default_views`, `auto_name` and `resolve` byte for byte (`golden/ifc/views/`, from
-`ccore_golden`; `ccore/test/views_test.mjs`). What differs:
-
-- **No side views file.** Rust keeps the views of an IFC in a side file (`open_side_file`,
-  `ViewsFile`): stored views and sheets over the defaults. The C core has none: the views of a
-  read-only scene are derived from its storeys, never stored; `set_view` on one is refused as
-  every edit of a read-only scene ("this file is read only: import it to edit").
-- **The query `grid_axes` is new** (`session/views.h`, `cc_sv_grid_axes_json`), for G2 to draw:
-  `{"axes": [{"end_mm", "start_mm", "tag"}], "levels": [{"elevation_mm", "key", "name"}],
-  "links": [{"axes", "levels", "name", "visible"}]}`, null with nothing open. A read-only scene's
-  axes are `Scene::grids` as read and its levels `Scene::levels` (the golden's `grid_axes` line);
-  an editable model's axes are its grids' (ADR 0056, G1; id order, axes in order) and its levels
-  its storeys (id order); then each linked model's, in link order. Rust has no such query.
-- **`view_clip`** (already a C addition, ticket C1) works on a read-only scene: `cut` from
-  `resolve` and `elevation` the plan's level as `resolve` finds it (the lowest with that key).
-- Code: the levels are `cc_level` (`src/view_effective.h`): `cc_views_default_lv`,
-  `cc_views_effective_lv`, `cc_view_resolve_lv` (`src/view_range.h`); the model functions are
-  these on the model's storeys, so every model golden keeps its bytes. The session takes the
-  levels of what is open (`session/views.c` `cc_sv_levels`).
-
-**What Rust sees.** Nothing new on a file: no model field, no stored view. A Rust viewer opening
-the same IFC offers the same views with the same ids.
-
 ## 17. The schedule list of a read-only file, and the palette's folding (ticket Q2)
 
 - **`schedule_list` on an IFC or a .bimbleview opened as it is:** Rust's stored schedules are the
@@ -620,22 +604,6 @@ the same IFC offers the same views with the same ids.
   a label with an upper-case letter of another script, a final `Σ`, or a separator of another block
   may match differently.
 
-## 19. `query capabilities` and the actions a read-only file keeps off (ticket FAKE1)
-
-- **`query capabilities`** (`session/capabilities.h`): a C addition, Rust has no such query. One
-  object of booleans, keys sorted: what this build of the core serves that is not an action (a page,
-  a panel, a data set, an export). The page reads it once (`web-ui/src/bimble.ts`) and shows the one
-  "Not available yet" state for a false row; the Rust viewer and its native twin are asked nothing
-  and count as "everything" (null in the page). The rows follow the dispatcher, not a list in the
-  page: the viewer-only wasm answers false for quantities, schedules and the exports (VIEW_DENY),
-  the wasm modules false for versions (no folder); `test/capabilities_test.c` ties each false row
-  to a stub answer or an action never enabled, and each true row to an answer.
-- **`project` and `new_sheet` on an IFC opened as it is:** Rust enables both with any file loaded
-  (`ribbon.rs:611 _ => loaded`): its project data and its sheets live in the side file next to the
-  IFC. The C core reads no side file and answers `project` (and `storeys`, `materials`) "this file
-  is read only", so it keeps both off for a read-only file (the 2 actions `parity.md` still shows as
-  differing in `ifc_readonly`); the page does not ask those queries of a read-only file.
-  Every other enable rule ACT1 changed is Rust's own (`results/parity.md`).
 ## 18. Files from the page: the dialog, the recent files, a dropped file (ticket FS1)
 
 **What.** Rust asks where with the system's dialog (`rfd`, `files.rs`); a browser page cannot show
@@ -665,36 +633,50 @@ such queries. The recent files keep Rust's rule and file (`settings.rs` `recent`
 **Where.** `ccore/host/fs.c`, `ccore/session/settings_file.c`, `ccore/session/calls.c` (FS1
 blocks), `web-ui/src/files.ts`; tests `ccore/test/fs_test.mjs`, `ccore/test/lab_files.mjs`.
 
-## 22. On paper, Export view and several sheets as one PDF (ticket PAPER1)
+## 19. `query capabilities` and the actions a read-only file keeps off (ticket FAKE1)
 
-- **`query view_svg`** (`session/sheet_svg.h`): a C addition next to `sheet_svg`. Without `bare` it
-  is the drawing of `view_pdf` (lib.rs `plan_options`) as `Sheet::to_svg()`, equal byte for byte to
-  D4's `golden/drawing/view/<nn>.svg` (`test/paper_view_test.c`). With `bare: true` it is the
-  drawing paper.rs `refresh_paper` shows On paper; Rust shows it as a raster of the prepared sheet
-  (egui texture), the lab as the SVG itself (pan and zoom of the picture). The answer adds the
-  paper's name, orientation, size and the view's scale.
-- **On paper of a read-only scene:** Rust draws the views of any loaded scene, an IFC opened as it
-  is too (`ribbon.rs:597 two_pictures`, `:611 _ => loaded` for Export view). The C core's drawing
-  reads the model (`cc_plan` takes a `cc_model`), so `paper_view` and `on_paper` are enabled with a
-  model open for editing only, and `open_views.paper.offered` is false on a read-only scene: no
-  switch that does nothing. `parity.md` shows them as differing in `ifc_readonly`.
-- **Placing and measuring switch to Model:** Rust does it when it paints the paper (paper.rs:217,
-  each frame); the C core when it is next asked (`actions`, `open_views`, the change JSON) after
-  measuring or placing started. The note Rust shows goes to the log.
-- **The Export view window** (`on_paper`, pressed while open: ribbon.rs:722) is the lab's Export
-  dialog on "This view". The lab opens it without running the action (as Project information and
-  History), so the core's pressed state stays false in the lab; the action toggles it for any other
-  caller. The dialog draws the active 2D view (else the first) and lists the 2D views; Rust's
-  "Storey plan" choice (a storey and a cut height without a view), its paper choice and its
-  template check boxes are not offered. File names are Rust's: `plan-<view>-1-<scale>.pdf` / `.svg`.
-- **`query sheets_pdf` and `cc_paper_pdf_pages`:** Rust has no multi-page PDF (`Sheet::to_pdf` writes
-  one page; the egui app exports one file per sheet). C-own golden
-  `golden/paper_c/S-101+S-102-helvetica.pdf` (checked with `qpdf --check` and `pdftotext`: 2 pages,
-  both sheet numbers). The file is the one-page file's layout: page 1 keeps ids 3 and 4, each further
-  page takes two ids after the fonts (page, content), the two fonts are shared (Roboto: one subset of
-  all pages' glyphs), /Title is the first sheet's. One page is `cc_paper_pdf`'s file byte for byte
-  (the `pdf_out` and `sheet_pdf` suites unchanged). The lab names it
-  `<first number>-<last number>.pdf` (a C choice: Rust has no such file).
+- **`query capabilities`** (`session/capabilities.h`): a C addition, Rust has no such query. One
+  object of booleans, keys sorted: what this build of the core serves that is not an action (a page,
+  a panel, a data set, an export). The page reads it once (`web-ui/src/bimble.ts`) and shows the one
+  "Not available yet" state for a false row; the Rust viewer and its native twin are asked nothing
+  and count as "everything" (null in the page). The rows follow the dispatcher, not a list in the
+  page: the viewer-only wasm answers false for quantities, schedules and the exports (VIEW_DENY),
+  the wasm modules false for versions (no folder); `test/capabilities_test.c` ties each false row
+  to a stub answer or an action never enabled, and each true row to an answer.
+- **`project` and `new_sheet` on an IFC opened as it is:** Rust enables both with any file loaded
+  (`ribbon.rs:611 _ => loaded`): its project data and its sheets live in the side file next to the
+  IFC. The C core reads no side file and answers `project` (and `storeys`, `materials`) "this file
+  is read only", so it keeps both off for a read-only file (the 2 actions `parity.md` still shows as
+  differing in `ifc_readonly`); the page does not ask those queries of a read-only file.
+  Every other enable rule ACT1 changed is Rust's own (`results/parity.md`).
+
+## 20. Views of a read-only scene (ticket S1, ADR 0021)
+
+An IFC opened as it is, or a `.bimbleview`, now offers Rust's views: the 3D view, then a plan and
+a ceiling plan per storey (viewing.rs `refresh_views` on `Scene::levels`: key the storey's
+GlobalId text, or its name when it has none). `open_views`, the plan tabs and `view_clip` match
+Rust's `default_views`, `auto_name` and `resolve` byte for byte (`golden/ifc/views/`, from
+`ccore_golden`; `ccore/test/views_test.mjs`). What differs:
+
+- **No side views file.** Rust keeps the views of an IFC in a side file (`open_side_file`,
+  `ViewsFile`): stored views and sheets over the defaults. The C core has none: the views of a
+  read-only scene are derived from its storeys, never stored; `set_view` on one is refused as
+  every edit of a read-only scene ("this file is read only: import it to edit").
+- **The query `grid_axes` is new** (`session/views.h`, `cc_sv_grid_axes_json`), for G2 to draw:
+  `{"axes": [{"end_mm", "start_mm", "tag"}], "levels": [{"elevation_mm", "key", "name"}],
+  "links": [{"axes", "levels", "name", "visible"}]}`, null with nothing open. A read-only scene's
+  axes are `Scene::grids` as read and its levels `Scene::levels` (the golden's `grid_axes` line);
+  an editable model's axes are its grids' (ADR 0056, G1; id order, axes in order) and its levels
+  its storeys (id order); then each linked model's, in link order. Rust has no such query.
+- **`view_clip`** (already a C addition, ticket C1) works on a read-only scene: `cut` from
+  `resolve` and `elevation` the plan's level as `resolve` finds it (the lowest with that key).
+- Code: the levels are `cc_level` (`src/view_effective.h`): `cc_views_default_lv`,
+  `cc_views_effective_lv`, `cc_view_resolve_lv` (`src/view_range.h`); the model functions are
+  these on the model's storeys, so every model golden keeps its bytes. The session takes the
+  levels of what is open (`session/views.c` `cc_sv_levels`).
+
+**What Rust sees.** Nothing new on a file: no model field, no stored view. A Rust viewer opening
+the same IFC offers the same views with the same ids.
 
 ## 21. View verbs, sections in the viewport, what a view hides (ticket SEC1, ADR 0021, 0046)
 
@@ -722,7 +704,45 @@ blocks), `web-ui/src/files.ts`; tests `ccore/test/fs_test.mjs`, `ccore/test/lab_
   them with `view_edit` (one undo step; Rust: one `SetView`). The view's class, family, storey and
   material lists hide their elements on screen (`visibility_sets` `by_view`, a C addition). Rust
   also keeps them while the view is shown unsaved in a read-only IFC (its side file); the C core
-  has none, so a read-only scene keeps "in view" session-wide as before (DEVIATIONS 16).
+  has none, so a read-only scene keeps "in view" session-wide as before (DEVIATIONS 20).
+
+## 22. On paper, Export view and several sheets as one PDF (ticket PAPER1)
+
+- **`query view_svg`** (`session/sheet_svg.h`): a C addition next to `sheet_svg`. Without `bare` it
+  is the drawing of `view_pdf` (lib.rs `plan_options`) as `Sheet::to_svg()`, equal byte for byte to
+  D4's `golden/drawing/view/<nn>.svg` (`test/paper_view_test.c`). With `bare: true` it is the
+  drawing paper.rs `refresh_paper` shows On paper; Rust shows it as a raster of the prepared sheet
+  (egui texture), the lab as the SVG itself (pan and zoom of the picture). The answer adds the
+  paper's name, orientation, size and the view's scale.
+- **On paper of a read-only scene:** removed by ticket LNK1. Rust draws the views of any loaded
+  scene, an IFC opened as it is too (`ribbon.rs:597 two_pictures`, `:611 _ => loaded` for Export
+  view); the C core now does the same: the drawing takes a model made from what the read-only scene
+  read (`session/paper_scene.h`: storeys, materials, grids, georeference, one element per scene
+  element) and `paper_view`, `on_paper`, `open_views.paper.offered`, `view_svg` and `view_pdf` work
+  there. Proof (`test/paper_view_test.c` `test_lnk1`): `golden/ifc/frame.ifc` opened as it is
+  draws its 6 plans and ceiling plans (bare or not) and the PDF of a plan byte for byte as
+  `golden/frame.json` opened for editing draws them. What may still differ on other files: the
+  title block's project fields (a read-only scene has no project information: Rust's comes from
+  its side views file, which the C core has not, DEVIATIONS 20) and an element's storey or material
+  when the IFC names two of them alike (the made model keys them by name).
+- **Placing and measuring switch to Model:** Rust does it when it paints the paper (paper.rs:217,
+  each frame); the C core when it is next asked (`actions`, `open_views`, the change JSON) after
+  measuring or placing started. The note Rust shows goes to the log.
+- **The Export view window** (`on_paper`, pressed while open: ribbon.rs:722) is the lab's Export
+  dialog on "This view". The lab opens it without running the action (as Project information and
+  History), so the core's pressed state stays false in the lab; the action toggles it for any other
+  caller. The dialog draws the active 2D view (else the first) and lists the 2D views; Rust's
+  "Storey plan" choice (a storey and a cut height without a view), its paper choice and its
+  template check boxes are not offered. File names are Rust's: `plan-<view>-1-<scale>.pdf` / `.svg`.
+- **`query sheets_pdf` and `cc_paper_pdf_pages`:** Rust has no multi-page PDF (`Sheet::to_pdf` writes
+  one page; the egui app exports one file per sheet). C-own golden
+  `golden/paper_c/S-101+S-102-helvetica.pdf` (checked with `qpdf --check` and `pdftotext`: 2 pages,
+  both sheet numbers). The file is the one-page file's layout: page 1 keeps ids 3 and 4, each further
+  page takes two ids after the fonts (page, content), the two fonts are shared (Roboto: one subset of
+  all pages' glyphs), /Title is the first sheet's. One page is `cc_paper_pdf`'s file byte for byte
+  (the `pdf_out` and `sheet_pdf` suites unchanged). The lab names it
+  `<first number>-<last number>.pdf` (a C choice: Rust has no such file).
+
 ## 23. The user's settings and About (ticket SET1)
 
 **Oracle.** `crates/bimble-viewer/src/settings.rs` (`Settings`, `from_json`, `to_json`, the file's
@@ -762,3 +782,313 @@ folder), `ui_theme.rs` (themes, fonts, text sizes), `lib.rs:4023-4190` (Settings
 `calls.c` and `capabilities.c` (SET1 blocks); `web-ui/src/dialogs/Settings.vue`, `About.vue`,
 `web-ui/src/shell/theme.ts`, `web-ui/src/ccore.ts` (SET1 block); tests `ccore/test/settings_test.c`,
 `ccore/test/lab_settings.mjs`.
+
+## 24. The materials browser: verbs, queries and the page (ticket MAT1, ADR 0031)
+
+**Oracle.** `crates/bimble-core/src/command.rs:183-198,317-341,399-458` (AddMaterial,
+RemoveMaterial, SetMaterial: checks, error and describe texts), `library.rs` (the table, `lookup`,
+`to_material`), `model.rs:48-85,173-185` (MaterialCategory, Material),
+`crates/bimble-viewer/src/materials_page.rs` (the page), `ribbon.rs:611,791` (the action).
+Golden: `golden/materials/` from `ccore_golden` `materials_files` (branch `oracle/mat1`).
+
+**Same.** The command `set_material` (it was refused before MAT1): JSON, checks in Rust's order,
+error texts, describe and undo texts, canonical writing; the 26 commands of
+`golden/materials/transcript.txt`, the model after them (`after.json`) and its IFC4 export
+(`after.ifc`) byte for byte; undoing them gives `frame2.json` back. AddMaterial does not check the
+name (Rust's): only SetMaterial refuses a name taken (trimmed, ASCII case ignored). The library is
+Rust's (16 grades, values and sources). The action `materials` is enabled as Rust's (`_ => loaded`).
+
+**Differs.**
+- **Verbs.** Rust's page applies the commands itself; its dispatch has no material verb. The C
+  core's writers are verbs (ADR 0068 rule 1): `material_add`, `material_set`, `material_remove`
+  are C additions (`src/verbs_materials.h`), one history step each. `material_add` refuses a name
+  already there (Rust's page offers no Add for a grade in the model, `materials_page.rs:180`, but
+  its command would add it), and adds a blank material by name (Rust's page has no blank add).
+  `material_remove` refuses a material in use with the element count
+  ("material_remove: <name> is the material of N elements: give them another material first"), where
+  the command's text names the id only; Rust's page has no remove at all.
+- **Queries.** `materials` stays Rust's summary; `materials_full` (every field) and
+  `material_library` (the table) are C additions, and `materials_page` (the page's rows: the
+  values or the grade's, the family's screen colour and pattern, the paper hatch names) is the
+  session's. Rows sort by the lowercase name as Rust; lowercase covers ASCII and Latin-1 only.
+- **The page** shows the family's on-screen pattern (lines, stipple) as a swatch; Rust paints the
+  paper hatch of the standards (`paint_hatch`). The default standards set no paper hatch per
+  family, so both say "the family's own pattern". On-screen hatching of the viewport is not drawn
+  by the lab yet: the colour changes on screen at once, the hatch shows on paper drawings.
+- **Assign** (the selected elements to the material): Rust does it in the Properties panel; the C
+  page has a button too, through Rust's verb `set_material`.
+
+## 25. Show all and Show previous (ticket ISS72, GitHub issue #72)
+
+**Oracle.** None: Rust v0.19.0 has neither action. Its nearest are `clear_temporary` ("Show all
+hidden for now") and `show_all_in_view` (`viewing.rs:490`), each of which leaves the other part
+hidden; `ribbon.rs:130` lists 54 actions. The office's engineer asked for both buttons (issue #72).
+
+**Differs (C additions).**
+- **`query actions` has 56 rows**: Rust's 54 in Rust's order, then `show_all` ("Show all") and
+  `show_previous` ("Show previous"), tab View, no shortcut, never pressed. Rust's rows are unchanged.
+- **`show_all`**: `clear_temporary` then `show_all_in_view`: everything shown in the current view,
+  whatever hid it (hidden or isolated for now, in the view, by the view's class, family, storey,
+  link or material lists). One undo step when the view stored something (as `show_all_in_view`),
+  none otherwise. Enabled when something is hidden for now or in the view.
+- **`show_previous`**: the visibility state before the last visibility change of the current view
+  (state = the temporary set + the view's stored lists; Reveal hidden and the section box are not
+  part of it). Every action that changes the state (hide, isolate, unhide, for now and in the view,
+  `clear_temporary`, `show_all_in_view`, `show_all`, `show_previous`) pushes the state it left on
+  the view's stack; `show_previous` restores the top one and pushes the state it leaves, so pressed
+  twice it goes back and forth. The stored part is one undo step (as any in-view change). One stack
+  per view, 32 states each, the oldest dropped; session state (not in the file nor the session
+  file), cleared when a model is opened, made or closed. Undo and redo push nothing. Enabled when
+  the current view's stack has a state.
+- **No shortcut**: Rust's H (`lib.rs:2983`, hatching) ignores the modifiers, so Shift H is taken.
+- Tests: `test/visibility_test.mjs` (ISS72 checks), `test/lab_visibility.mjs` (the ribbon buttons,
+  native and wasm), `test/wasm_run.mjs` and `test/wasm_view_run.mjs` (native = wasm).
+
+## 26. The section box: Box to selection with 1 m, a right-click menu, arrowheads, turned to project or true north (ticket ISS71, issue #71)
+
+**Rust.** `box_to_selection` (lib.rs `fit_section_box`) fits the box around the one primary
+selected element, or around everything visible, with `ClipBox::around`'s margin (1 mm + 1e-5 of
+the size); it is enabled only while the box is on (ribbon.rs:593). The viewport has no context menu.
+
+**Differs.** The office's structural engineer asked for it (GitHub issue #71).
+- **Box to selection** = the bounds of every selected element (the primary, the others, and a
+  linked model's selected element moved by its origin - ours, lib.rs:1499) grown by
+  `CC_BOX_SELECTION_MARGIN_MM` = 1000 mm on every side (`session/visibility.h`). Nothing selected:
+  Rust's fit (everything visible, Rust's margin). It **turns the box on**, so it is enabled with a
+  model in 3D, the box on or off (`loaded && !in_2d`; Rust: `&& section_on`).
+- **The viewport's right-click menu** (`web-ui/src/shell/ContextMenu.vue`, items in
+  `shell/contextItems.ts`): a right click without a drag selects the element under the pointer
+  when it is not selected, then shows Box to selection, Hide, Isolate, Show all, Show previous (the
+  actions `box_to_selection`, `hide_now`, `isolate_now` and section 25's `show_all`,
+  `show_previous`, greyed out as `query actions` says). French: "Boîte sur la sélection" (the
+  issue's words) in the ribbon, the palette, the menu and the small screen.
+
+- **The handles** are one arrowhead per face (Rust's `section.rs` overlay: six square handles),
+  pointing out along the face's normal, 18 px on screen, the press radius 16 px about the face centre.
+- **The box turns** (Rust's `ClipBox::yaw` is always 0 for the section box): two C actions after
+  Rust's 54 and section 25's two (`query actions`: 58 rows), `box_north_project` (the default) and `box_north_true` (pressed: the choice the session
+  keeps; enabled in 3D when the two turns differ), give the box `yaw` = `plan_turn(true_north)`
+  (`georef.h`), as a section's (views.rs): project north is the building's axes (`rotation_deg`, 0
+  for every model without a georeference: the box as before), true north the map's
+  (`-map_rotation_deg`). A change keeps what the box held: the box before the last change when the
+  box is still the one that change made (a round trip gives the same box), else around the
+  selection + 1 m in the new frame, else around the box's corners in the new frame. The face drag
+  takes its rays into the box's frame; the measure tool's clip, the page's shader, picks, edges and
+  handles turn with it. `query visibility` prints the yaw (f32 as serde).
+
+**Where.** `ccore/session/visibility.c` and `.h`, `calls.c`, `measure.c` and `.h` (ISS71 blocks);
+`web-ui/src/shell/ContextMenu.vue`, `contextItems.ts`, `BoxNorth.vue`, `Ribbon.vue`, `RibbonTool.vue`
+(tooltip), `web-ui/src/glviewport.ts`, `bimble.ts` (ISS71 blocks); tests
+`ccore/test/visibility_test.mjs`, `lab_section_box.mjs`, `host_test.mjs`, `palette_test.mjs`.
+
+## 27. Writing the history: commit, branch, switch (ticket H2a, ADR 0017)
+
+**What.** The C history store writes as Rust's `bimble_core::repo` (`ccore/src/repo_write.c`): for
+the same model, author, time and message, every object, tree and commit has Rust's name (BLAKE3 of
+the plain JSON, byte for byte `serde_json::to_vec`); `golden/history/`'s 4+1 commits replayed in C
+give every commit and tree hash of Rust's folder (suite `repo_write`). It differs from Rust here:
+- **Relations and grids.** The C model holds two sections Rust's has not (`relations`, ticket X1;
+  `grids`, ticket G1). A tree of a model with them carries them as two more maps of objects,
+  `relations` and `grids`, after `meshes`; left out when empty, so the tree of every model Rust can
+  hold is Rust's, byte for byte. The C reader (`repo.c`) reads them back. Rust refuses such a tree
+  (`deny_unknown_fields`: `unknown field "relations"`).
+- **The gzip bytes** of an object are the C core's deflate, not flate2's (`Compression::fast`):
+  the object's name is the hash of the plain bytes, so names are equal; any gzip reader inflates
+  both (H1 already reads either).
+- **Errors of the file system** read `io: cannot write <path>` and `io: cannot create the folder
+  <path>`, where Rust prints the OS error; a platform without folders (the wasm module) cannot
+  write a history: `io: no history folder here` (the session says `no history folder in the
+  browser` first).
+- **The author.** Rust's `Settings::author()` (settings.rs:158) is `name <e-mail>`, the name alone,
+  the e-mail alone, or else `$BIMBLE_AUTHOR`, `$USER`, `$USERNAME`, `unknown`. The C session (L5)
+  has no environment: without a name (`state.user` is null) `action commit` is refused with
+  `commit: set your name in Settings first (the author of each version)` and the History page links
+  to Settings. With a name, the author is Rust's.
+- **The session's actions** `commit {message}`, `branch_create {name}`, `branch_switch {name,
+  discard?}` (`ccore/session/versions.h`) have no Rust twin: the egui History panel calls
+  `Repo` directly (lib.rs:1903-2097). They do what the panel does: save first, start the history
+  on the first commit, create then switch to a new branch, refuse a switch while changes are not
+  committed (Rust disables the button; `discard: true` is the C core's way through, there is no
+  such button in Rust), write the switched model to the file and open it again.
+- **Crash safety** is Rust's order (objects first, refs last, each file through a temporary file
+  and a rename); the native `write_file` does not fsync, as Rust's `write_atomic` does not.
+
+**Why.** CLAUDE.md: the C model's extra sections must not be lost by a commit, and leaving them out
+when empty keeps every Rust-written history and hash unchanged (round-4 rule 4). L5 has no
+environment by design (core-architecture.md §5). The actions are what the lab's History page needs
+(ADR 0038).
+
+**What Rust sees.** A folder written by C for a model without relations and grids: Rust's own
+bytes after inflating, the same log, branches and models. With relations or grids: Rust refuses
+the trees that hold them (the commits before still read).
+
+**Where.** `ccore/src/repo_write.c/.h`, `ccore/src/file.c` (`cc_model_object_json`),
+`ccore/src/repo.c` (reads `relations`, `grids`), `ccore/session/versions.c`,
+`web-ui/src/pages/History.vue`; tests `ccore/test/repo_write_test.c`,
+`ccore/test/versions_test.mjs`, `ccore/test/lab_history.mjs`.
+
+## 28. Merging history branches (ticket H2b, ADR 0017)
+
+**What.** The C history store merges as Rust's `Repo::merge` and `merge_models`
+(`ccore/src/merge.c`, `ccore/src/repo_merge.c`): `golden/history/`'s scenario replayed in C, then
+`variant` merged into `main`, gives Rust's merge commit `9d1b67cbf963…` and its tree, byte for
+byte `model_at_6.json`, every object name of Rust's folder (suite `repo_merge`); 26 merge cases ×
+3 Prefer give Rust's conflicts, validation texts and merged models byte for byte
+(`golden/history/merge/`, a new Rust golden from `ccore_golden` on the oracle). It differs from
+Rust here:
+- **Relations and grids** (the C sections, section 27) merge by Rust's rules, per object id, after
+  Rust's sections: a conflict's kind is `relation` (its name the relation's IFC class,
+  `IfcRelConnectsWithRealizingElements`) or `IfcGrid` (its name the grid's), the path as Rust's
+  (`properties.Bimble_Connection/Fastener`, `name`). Rust's model has neither section.
+- **Equality** is the objects' serde bytes (`cc_model_object_json`), where Rust compares the typed
+  values (`PartialEq`): the writer gives one text per value, so they agree on every value a model
+  can hold.
+- **The walk** queues each hash once (Rust queues duplicates and skips them when reached: the same
+  order, so the same merge base); a parent that is not a hash fails when it is queued, where Rust
+  fails when the walk reaches it (they differ only past the 1,000,000-commit bound).
+- **A fast-forward** reads the target's model before it moves the ref (Rust moves, then reads): a
+  damaged target leaves the ref where it was.
+- **The session's action** `merge {name, prefer?}` has no Rust twin: the egui History panel calls
+  `Repo::merge` with `Prefer::Neither` (lib.rs:2015-2033) and, on conflicts, prints the first 8
+  and "merge from the command line with --prefer". The C page lists the first 8, then "and N
+  more", and offers keep mine / take theirs, which merge again with `prefer: "ours" | "theirs"`.
+  With a `prefer` the answer still lists the conflicts it resolved (Rust's `merge` drops them). The
+  merge needs the author's name in Settings, as commit does (section 27). Up to date leaves the
+  working file as it is (Rust writes HEAD's model, the same since nothing is pending).
+
+**Where.** `ccore/src/merge.c/.h`, `ccore/src/repo_merge.c/.h`, `ccore/src/repo_write.c`
+(`cc_repo_put_commit`, `cc_repo_move_head`), `ccore/src/file.c` (`cc_model_load_unchecked`),
+`ccore/session/versions.c`, `web-ui/src/pages/History.vue`; tests `ccore/test/repo_merge_test.c`,
+`ccore/test/versions_test.mjs`, `ccore/test/lab_history.mjs`.
+
+## 29. Links: the panel, drawn on paper, kept in the .bimble (ticket LNK1, GitHub issue #69)
+
+- **Linked models on paper (a C addition).** Rust's paper drawing draws the host scene only
+  (`paper.rs:119 l.scene`): a linked model is never on a plan, a sheet or a PDF. Issue #69 asks for
+  a coordination plan of linked models ("sortir un plan de coordination"), and a `.bimble` whose
+  geometry is only links has an empty model, so the C core draws every visible link with the host:
+  one scene, the host's elements then each link's (its meshes moved by link origin - host origin,
+  `lib.rs:1499 offset`), a link's elements under the host storey of the same name (else none) and
+  their own materials (`session/paper_scene.h`). A link hidden in the session (`manage_links hide`)
+  or in the drawn view's `hidden_links` is left out. Without visible links the drawing is the
+  model's as before: the D4 goldens keep their bytes (`draw_plan`, `draw_view`, `draw_sheet`,
+  `paper_view`). Test: `paper_view_test.c` `test_lnk1` (a new model draws nothing; with
+  `frame.ifc` linked its plan draws the cut; hidden, nothing again).
+- **`query links_panel`** (`session/links_panel.h`, a C addition): the Links panel's rows. `query
+  links` stays Rust's `links_json`; the panel also needs each link's path, a reference plan's
+  view, placement (move and rotate by numbers) and source.
+- **The panel** (`web-ui/src/shell/LinksPanel.vue`, in the Navigator's Links group as Rust's side
+  panel; Manage links… opens it): per row show / hide, Reload, Reload from…, remove; a reference
+  also ΔX, ΔY (mm) and its angle. Rust's Manage links window has Reload, Reload from… and Delete,
+  its side panel Solid / Edges / Hidden per model: the C panel has an eye (Hidden or shown; no
+  Edges mode) and no "Show differences" (compare is LNK1b).
+- **Reload in the browser:** the wasm module keeps no path, so Reload asks for the file again (the
+  browser's picker): a model is linked again under its name (in its place), a reference reloaded
+  with the picked bytes staged (`host_action_file`, `wasm_api.h`). Rust's wasm build disables
+  Reload there ("Where it was read from isn't known here") and keeps Reload from….
+- **Linked models kept in the `.bimble` (a C addition, issue #69: "on link tous les liens qui nous
+  intéressent, et ensuite on l'enregistre en .bimble").** Rust v0.19.0 saves no linked model (its
+  `Linked` list lives in the viewer; only reference plans, with their lines, are stored in views,
+  `source` the absolute path they were read from). The C core writes the session's links into the
+  file as the model section `links` (`model.h cc_model_link`), the C core's own like `relations`
+  and `grids`, left out when empty (every existing file keeps its bytes: `file2_test.c`
+  `links_section`, and the `file`/`file2` goldens): `[{"hidden"?: true, "name", "path",
+  "relative"?}]` in link order, `path` as linked (absolute on the desktop, as Rust's `source`),
+  `relative` the same file from the saved file's folder. A Rust viewer ignores the section (it
+  drops it on save). Opening the `.bimble` links each one again: its `relative` first, then its
+  `path`; a file found at neither is kept as a **missing** link (`query links_panel` "missing":
+  true, nothing drawn, written again on save) with **Locate…** in the panel
+  (`manage_links {"op": "locate", "name", "path"}`, a C addition). Linking, unlinking, hiding or
+  showing a model marks the model unsaved (Rust: no change to save); none of it is an undo step
+  (as Rust: a link is not in the history). The wasm module has no files: every saved link opens
+  missing there and Locate… takes the picked file's bytes. Test: `links_test.mjs` (three IFC and a
+  DXF saved, reopened, the folder moved, one file moved and located, Box to selection on a linked
+  element).
+
+## 30. Placing: the polygon slab by clicks, single grid axes, snapping to the grid, openings in wasm (ticket SLAB1)
+
+**Polygon slab (Rust's own, golden).** The clicks, the close (a click within 100 mm of the first
+corner once there are 3, or Enter), `verbs::new_slab` (at least 3 points, no crossing, Rust's
+texts; a clockwise outline stored counter-clockwise from its lower-left corner) and the top offset
+are Rust's (edit.rs:318-385): `golden/place/polygon.txt` comes from `ccore_golden` on the branch
+`oracle/slab1` (block `slab1_files`), replayed through the session's tool calls by
+`test/place_polygon_test.c`. Rust has no verb that takes an outline (the editor calls `new_slab`
+directly): the C core exports `cc_verb_new_slab` (verbs.h) for the tool, not a new verb.
+
+**What differs.**
+- **Esc** takes back the last corner of a polygon slab first, then stops placing (Rust's Esc stops
+  placing at once, lib.rs:3031). The ticket asked for it: a mis-click costs one key, not the outline.
+- **Enter** is not a row of the shortcut table (it is not in Rust's `handle_keys` either): the
+  viewport's placing branch takes it (lib.rs:2772), `shell/keys.ts` routes it to the viewport
+  before the table (`viewportKeys.enterTool`) while a polygon slab is clicked.
+- **The ghost.** Rust draws only the snap marker while placing. The C tool answers the slab the
+  next click would close (the corners and the pointer, or the corners when the pointer is on the
+  first one) as its ghost from 2 corners on, and the page draws the outline so far and the closing
+  edge. A crossing outline has no ghost; `ghost_error` says why.
+- **At most 63 corners** per outline (`CC_TOOL_MAX_POINTS`; Rust's `Vec` has no bound): a 64th
+  click is refused with `a slab outline has at most 63 corners`.
+
+**Single grid axes (C additions, no Rust oracle).** Rust edits no grid (it reads them from IFC).
+`grid_axis_add {grid, tag, start, end}` appends one axis with a new GlobalId; `grid_axis_remove
+{grid, axis}` drops one; both answer one `set_grid` (one history step), every other GlobalId kept,
+and run the grid rules of `grid_add` (tags unique in the grid, at least 1 mm long, ends within
+1e7 mm, at most 1000 axes). IFC4 `IfcGrid` has `UAxes` and `VAxes`, each `LIST [1:?] OF UNIQUE
+IfcGridAxis` (`WAxes` optional): the export puts the axes parallel to the first in U and the others
+in V, so the grid must keep axes in two directions. What is enforced: removing the last axis of a
+direction is refused with `grid_axis_remove: <tag> is the last axis of its direction; an IfcGrid
+needs axes in two (UAxes and VAxes)`. Removing the first axis is allowed (U is then the axes
+parallel to the new first one). Tested by `test/grid_axis_test.c` (the IFC4 and IFC2x3 exports
+carry the new axis), not in `golden/grids/verbs.txt` (that transcript keeps its bytes).
+
+**Snapping to the grid (Rust's rule, plus the links).** The place tool's axes are the model's
+grid axes longer than 1 mm, their crossings (the strongest target) and lines, as snap.rs
+`targets` takes `scene.grids`; the axes through the columns only when there is no grid; the
+tolerance stays 12 screen pixels. A C addition: the axes of the visible links (model, IFC and
+viewer-file links, as `query grid_axes` lists them) count too; Rust's placing snaps to its own
+scene only. The measure tool does not share this code (measure.rs snaps to what is under the
+cursor) and is unchanged. Tested by `test/snap_grid_test.c` (snap.rs's own grid test, and a column
+clicked 52 mm from a crossing placed on it exactly).
+
+**Openings in the wasm build (no kernel).** Rust always cuts with manifold3d; the wasm build has no
+kernel and drew every opening uncut. Now `src/prism_cut.c` cuts the exact special cases when
+`cc_boolean_kernel()` is NULL (wasm, `CC_NO_KERNEL=1`), the native build keeps the kernel (every
+golden unchanged): (a) a host whose profile is an axis-aligned rectangle (a rectangular column,
+beam, wall or slab) with openings that are axis-aligned boxes in its frame, at any depth (an
+imported window or door: an 8-corner mesh): the solid is split along every distinct coordinate and
+the faces between solid and empty cells are kept; (b) any profile (with voids) with openings that
+are convex prisms along its extrusion through the whole depth, strictly inside the outline and
+apart from the voids and each other: each becomes one more void of the extrusion. The mesh is not
+the kernel's (more triangles on a split face; the same crease edges): the volume, area and box are
+the kernel's within 1e-6 (`test/prism_cut_test.c` with and without the kernel in one native run;
+`test/wasm_run.mjs` suite `openings`: wasm against the native host). Anything else (a recess in an
+L slab, a shaft touching the outline, a mesh host) stays uncut with the warning `<class> <name>:
+N opening(s) not cut (no boolean kernel in the C core)`. In the goldens, the one opening
+(`ifc/import/opening.json`: a wall and a box window) is case (a); `frame2.json` has no opening.
+
+## 31. Unsaved work and the host's guards (ticket FIXSES)
+
+- **The session file is set aside, never overwritten (a C addition: Rust has no session file).**
+  A session file the host cannot keep whole (written for another model path, a model file changed
+  since, a line that does not replay) and that holds steps not saved is renamed
+  `<session>.orphan-<unix time>` (its model side files with it) before a new snapshot is written.
+  `query state` then has the C-only field `session_set_aside` (the path; left out when none, so
+  every other state answer keeps its bytes). A model path spelt otherwise (`m.json`, `./m.json`)
+  is the same model once the carrier resolved both (`session/session.c` `same_model_path`,
+  `set_aside`).
+- **Switch and merge refuse a link not saved.** Rust's linked models live in the viewer and
+  survive a branch switch; the C core keeps them in the `.bimble` (section 29) and a switch or a
+  merge reopens the working file, so `branch_switch` answers 400 `links changed and not saved:
+  save them first, or send {"discard": true}` and `merge` 400 `links changed and not saved: save
+  them first` (`session/versions.c`).
+- **A switch or merge whose working file cannot be written changes nothing.** Rust (`lib.rs:2082`)
+  moves HEAD, keeps the new model in memory and shows the save error (the model then unsaved). The
+  C session's model is its file: the call answers 400 `<path>: cannot write` and HEAD (switch) or
+  HEAD's ref (merge; the merge commit stays unreferenced in the store) is put back.
+- **Export and share of a new model need a path.** Rust asks where with a dialog. The C host has
+  none: `export_ifc4`, `export_ifc2x3` and `share_for_viewing` of an untitled model without
+  `path` answer 400 (before, `Untitled.<ext>` was written in the host's working folder). The wasm
+  module, without files, still writes under the current name. The "never over the open file"
+  check compares the resolved paths too (`session/calls.c` `is_open_file`).
+- **A second `Host` or `Origin` header is malformed (400).** Rust's `read_head` (`serve.rs:164`)
+  keeps the last one; which one a proxy or a browser checked is not known, so the C host trusts
+  neither (`host/server.c` `parse_head`).

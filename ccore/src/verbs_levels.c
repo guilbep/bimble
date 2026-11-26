@@ -392,3 +392,91 @@ int cc_vh_grid_remove(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err
     c->id = id;
     return 0;
 }
+
+/* ---- SLAB1: single grid axes ---- */
+
+int cc_vh_grid_axis_add(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_grid_axis_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+
+static const cc_grid *grid_of(const cc_model *m, const char *verb, const cc_gid *gid, Buf *err) {
+    const cc_grid *g = cc_model_grid(m, gid);
+    if (!g) {
+        buf_clear(err);
+        buf_puts(err, verb);
+        buf_puts(err, ": no grid ");
+        cc_buf_gid(err, gid);
+    }
+    return g;
+}
+
+/* grid_axis_add {grid, tag, start, end}: one axis more, with a new GlobalId (the others keep
+ * theirs); set_grid, one history step. */
+int cc_vh_grid_axis_add(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
+    static const char *const F[] = {"end", "grid", "start", "tag"};
+    const JrVal *f[4];
+    cc_gid gid;
+    cc_grid_axis a;
+    memset(&a, 0, sizeof a);
+    if (args_of(args, F, 4, f, err) || need(f[1], "grid", err) || need(f[3], "tag", err) || need(f[2], "start", err) ||
+        need(f[0], "end", err) || a_gid(f[1], "grid", &gid, err) || a_text(f[3], "tag", &a.tag, err) ||
+        a_pt(f[2], "start", a.start, err) || a_pt(f[0], "end", a.end, err))
+        return -1;
+    const cc_grid *old = grid_of(m, "grid_axis_add", &gid, err);
+    if (!old) return -1;
+    if (old->naxes >= CC_GRID_MAX_AXES) return fail(err, "grid_axis_add", "a grid has at most 1000 axes", NONE, 0);
+    cc_grid g = *old;
+    g.axes = arena_alloc(&l->arena, (g.naxes + 1) * sizeof *g.axes, 8);
+    if (!g.axes) return bad(err, "out of memory", 0, 0);
+    memcpy(g.axes, old->axes, g.naxes * sizeof *g.axes);
+    new_gid(&a.id);
+    g.axes[g.naxes++] = a;
+    if (grid_check(m, "grid_axis_add", &g, err)) return -1;
+    cc_command *c = cc_cmds_push(l, CC_CMD_SET_GRID);
+    if (!c) return bad(err, "out of memory", 0, 0);
+    c->grid = g;
+    return 0;
+}
+
+/* grid_axis_remove {grid, axis}: the axis goes, the others keep their GlobalIds. IFC4 IfcGrid has
+ * UAxes and VAxes, each LIST [1:?] (WAxes optional): the last axis of a direction stays. */
+int cc_vh_grid_axis_remove(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
+    static const char *const F[] = {"axis", "grid"};
+    const JrVal *f[2];
+    cc_gid gid, aid;
+    if (args_of(args, F, 2, f, err) || need(f[1], "grid", err) || need(f[0], "axis", err) ||
+        a_gid(f[1], "grid", &gid, err) || a_gid(f[0], "axis", &aid, err))
+        return -1;
+    const cc_grid *old = grid_of(m, "grid_axis_remove", &gid, err);
+    if (!old) return -1;
+    const cc_grid_axis *oa = cc_grid_axis_find(old, &aid);
+    if (!oa) {
+        buf_clear(err);
+        buf_puts(err, "grid_axis_remove: no axis ");
+        cc_buf_gid(err, &aid);
+        buf_puts(err, " in the grid ");
+        buf_append(err, old->name.p, old->name.n < 200 ? old->name.n : 200);
+        return -1;
+    }
+    cc_grid g = *old;
+    g.axes = arena_alloc(&l->arena, (g.naxes ? g.naxes : 1) * sizeof *g.axes, 8);
+    if (!g.axes) return bad(err, "out of memory", 0, 0);
+    size_t k = (size_t)(oa - old->axes);
+    memcpy(g.axes, old->axes, k * sizeof *g.axes);
+    memcpy(g.axes + k, old->axes + k + 1, (old->naxes - k - 1) * sizeof *g.axes);
+    g.naxes--;
+    int two = 0;
+    for (size_t i = 1; i < g.naxes && !two; i++) two = !cc_grid_axis_is_u(&g, i);
+    if (!two) {
+        buf_clear(err);
+        buf_puts(err, "grid_axis_remove: ");
+        buf_append(err, oa->tag.p, oa->tag.n < 200 ? oa->tag.n : 200);
+        buf_puts(err, " is the last axis of its direction; an IfcGrid needs axes in two (UAxes and VAxes)");
+        return -1;
+    }
+    if (grid_check(m, "grid_axis_remove", &g, err)) return -1;
+    cc_command *c = cc_cmds_push(l, CC_CMD_SET_GRID);
+    if (!c) return bad(err, "out of memory", 0, 0);
+    c->grid = g;
+    return 0;
+}
+/* ---- end SLAB1 ---- */

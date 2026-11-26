@@ -1,6 +1,7 @@
 /* Model mutations (crates/bimble-core/src/command.rs). Every change to a model is a command:
  * applying one validates it first, makes it canonical (-0.0 to 0.0), mutates the model and
- * returns its inverse. Every command of Rust but set_material (docs/research/c-core-spec.md §3). */
+ * returns its inverse. Every command of Rust (docs/research/c-core-spec.md §3); set_material since
+ * MAT1. */
 #ifndef CCORE_COMMAND_H
 #define CCORE_COMMAND_H
 #include <stddef.h>
@@ -38,12 +39,13 @@ typedef enum { /* serde tag "op" */
     CC_CMD_REMOVE_GRID,
     CC_CMD_SET_GRID,
     CC_CMD_SET_GEOREF, /* the C core's own (ADR 0045): Rust sets the georeference on import only */
+    CC_CMD_SET_MATERIAL, /* MAT1: Rust's SetMaterial (command.rs:317), last so older ops keep their numbers */
     CC_CMD_COUNT
 } cc_cmd_op;
 
 /* One command. Which fields count depends on `op`:
  *   add_storey: storey          remove_storey/material/element: id
- *   add_material: material      add_element: element
+ *   add_material, set_material: material (set: the whole material, by id)   add_element: element
  *   set_generator: id, generator          set_placement: id, placement
  *   rename: id, name            set_element_material: id, material_id
  *   set_property: id, key, value if has_value     set_project: project[nproject] (sorted keys)
@@ -100,7 +102,9 @@ const char *cc_cmd_op_name(cc_cmd_op op); /* "add_storey"… */
  * "<id> is still used by the relation <relation id> (<kind>)" (ADR 0070). ADR 0056: set_storey
  * makes a level a datum only while no element is on it ("invalid: the level <name> holds
  * elements: it stays a storey"), add_element on a datum level is refused, and grid commands
- * validate the whole grid table (grid.h). */
+ * validate the whole grid table (grid.h). set_material (command.rs:317): a name not blank and at
+ * most 200 characters, valid props, no other material of that name (trimmed, ASCII case ignored):
+ * "invalid: there is already a material named \"<name>\"". */
 int cc_command_apply(cc_model *m, const cc_command *c, cc_command *inverse, Buf *err);
 
 /* Command::apply_inverse: no user-input checks, no copy (the command's data must live as long as

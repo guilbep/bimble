@@ -4,6 +4,7 @@ import { state, element, actions, runAction, runVerb, rotate, mirror } from "../
 import { currentPage } from "../pages";
 import { t } from "../i18n";
 import { classNoun, parseMm } from "../i18n/parts/modify";
+import { editableModel } from "./capability";
 
 // Reference: the `section[aria-label=Modifier]` under `.vp` (fr/SelectModify.html). Shown while something is selected.
 const ids = computed(() => state.value.selection);
@@ -32,24 +33,37 @@ const angle = ref("90");
 // Mirror axis: point X, Y then direction X, Y.
 const axis = ref(["0", "0", "0", "1"]);
 const error = ref<string | null>(null);
+// FIXUI: the edits need an editable model (`query state`.editable, capability.ts): a file open as it
+// is, or a linked model's element, shows them disabled with why. An error belongs to the selection
+// and the model it came from: a new selection, model or rev clears it.
+const readOnly = computed(() => {
+  void state.value.rev;
+  if (!editableModel()) return t("props.fileReadOnly");
+  const lk = state.value.linked;
+  return lk && ids.value.includes(lk.id) ? t("props.linkedReadOnly", { name: lk.link.replace(/\.[^.]+$/, "") }) : null;
+});
+watch(() => [ids.value, state.value.file, state.value.rev, state.value.editable] as const, () => { error.value = null; });
 
 function byVector(): void {
+  if (readOnly.value) return;
   const d = vec.value.map(parseMm);
   if (d.some((x) => x === null)) { error.value = t("modify.vector"); return; }
   error.value = runVerb(mode.value, { ids: ids.value, d });
 }
 function byAngle(): void {
+  if (readOnly.value) return;
   const a = Number(angle.value.replace(",", "."));
   if (!angle.value.trim() || !Number.isFinite(a)) { error.value = t("modify.angle"); return; }
   error.value = rotate(ids.value, a);
 }
 function byAxis(): void {
+  if (readOnly.value) return;
   const v = axis.value.map(parseMm);
   if (v.some((x) => x === null)) { error.value = t("modify.axis"); return; }
   const [px, py, dx, dy] = v as number[];
   error.value = mirror(ids.value, { point: [px!, py!], dir: [dx!, dy!] });
 }
-function remove(): void { error.value = runVerb("delete", { ids: ids.value }); }
+function remove(): void { if (!readOnly.value) error.value = runVerb("delete", { ids: ids.value }); }
 
 interface Tool { key: string; icon: string; on?: boolean; off?: boolean; missing?: string; run?: () => void }
 const act = (name: string) => actions.value.find((a) => a.name === name);
@@ -59,10 +73,10 @@ const actionTool = (key: string, name: string, icon: string): Tool => ({
 const missing = (key: string, call: string, icon: string): Tool => ({ key, icon, off: true, missing: call });
 const groups = computed<{ key: string; tools: Tool[] }[]>(() => [
   { key: "modify.transform", tools: [
-    { key: "modify.move", icon: '<path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>', on: mode.value === "move", run: () => (mode.value = "move") },
-    { key: "modify.copy", icon: '<rect x="8" y="8" width="12" height="12"/><path d="M16 8V4H4v12h4"/>', on: mode.value === "copy", run: () => (mode.value = "copy") },
-    { key: "modify.rotate", icon: '<path d="M20 12a8 8 0 1 1-3-6.2"/><path d="M20 4v5h-5"/>', on: mode.value === "rotate", run: () => (mode.value = "rotate") },
-    { key: "modify.mirror", icon: '<path d="M12 3v18"/><path d="M9 7 3 17h6zM15 7l6 10h-6z"/>', on: mode.value === "mirror", run: () => (mode.value = "mirror") },
+    { key: "modify.move", icon: '<path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>', on: mode.value === "move", off: readOnly.value !== null, run: () => (mode.value = "move") },
+    { key: "modify.copy", icon: '<rect x="8" y="8" width="12" height="12"/><path d="M16 8V4H4v12h4"/>', on: mode.value === "copy", off: readOnly.value !== null, run: () => (mode.value = "copy") },
+    { key: "modify.rotate", icon: '<path d="M20 12a8 8 0 1 1-3-6.2"/><path d="M20 4v5h-5"/>', on: mode.value === "rotate", off: readOnly.value !== null, run: () => (mode.value = "rotate") },
+    { key: "modify.mirror", icon: '<path d="M12 3v18"/><path d="M9 7 3 17h6zM15 7l6 10h-6z"/>', on: mode.value === "mirror", off: readOnly.value !== null, run: () => (mode.value = "mirror") },
   ] },
   { key: "modify.geometry", tools: [
     missing("modify.align", "align verb", '<path d="M4 4v16"/><rect x="7" y="6" width="10" height="4"/><rect x="7" y="14" width="14" height="4"/>'),
@@ -82,6 +96,7 @@ function click(tool: Tool): void { if (!tool.off) tool.run?.(); }
   <section v-if="open" :aria-label="t('modify.title')" class="mod" data-bb="modifier">
     <div class="head">
       <span class="pn">{{ t('modify.title') }}</span><span class="note">{{ note }}</span>
+      <span v-if="readOnly" class="note" data-bb="modifier-readonly">{{ readOnly }}</span>
     </div>
     <div v-for="g in groups" :key="g.key" class="grp">
       <div class="tools">
@@ -98,14 +113,14 @@ function click(tool: Tool): void { if (!tool.off) tool.run?.(); }
     <div class="vec">
       <template v-if="mode === 'rotate'">
         <label class="lbl" for="mod-angle">{{ t('modify.angle') }}</label>
-        <input id="mod-angle" v-model="angle" class="inp mono" style="width:86px;text-align:right" @keydown.enter="byAngle" />
+        <input id="mod-angle" v-model="angle" class="inp mono" style="width:86px;text-align:right" :disabled="readOnly !== null" @keydown.enter="byAngle" />
       </template>
       <template v-else-if="mode === 'mirror'">
         <span class="lbl">{{ t('modify.axis') }}</span>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <label v-for="(a, i) in ['X', 'Y', 'dX', 'dY']" :key="a" style="display:inline-flex;gap:6px;align-items:center">
             <span class="mono" style="font-size:12px">{{ a }}</span>
-            <input v-model="axis[i]" class="inp mono" style="width:70px;text-align:right" @keydown.enter="byAxis" />
+            <input v-model="axis[i]" class="inp mono" style="width:70px;text-align:right" :disabled="readOnly !== null" @keydown.enter="byAxis" />
           </label>
         </div>
       </template>
@@ -114,15 +129,15 @@ function click(tool: Tool): void { if (!tool.off) tool.run?.(); }
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <label v-for="(a, i) in ['X', 'Y', 'Z']" :key="a" style="display:inline-flex;gap:6px;align-items:center">
             <span class="mono" style="font-size:12px">{{ a }}</span>
-            <input v-model="vec[i]" class="inp mono" style="width:86px;text-align:right" @keydown.enter="byVector" />
+            <input v-model="vec[i]" class="inp mono" style="width:86px;text-align:right" :disabled="readOnly !== null" @keydown.enter="byVector" />
           </label>
         </div>
       </template>
       <div style="display:flex;gap:8px">
-        <button v-if="mode === 'rotate'" class="btn p" type="button" @click="byAngle">{{ t('modify.rotateBy') }}</button>
-        <button v-else-if="mode === 'mirror'" class="btn p" type="button" @click="byAxis">{{ t('modify.mirrorBy') }}</button>
-        <button v-else class="btn p" type="button" @click="byVector">{{ t(mode === 'move' ? 'modify.moveBy' : 'modify.copyBy') }}</button>
-        <button class="btn s" type="button" @click="remove">
+        <button v-if="mode === 'rotate'" class="btn p" type="button" :disabled="readOnly !== null" :title="readOnly ?? undefined" data-bb="modifier-run" @click="byAngle">{{ t('modify.rotateBy') }}</button>
+        <button v-else-if="mode === 'mirror'" class="btn p" type="button" :disabled="readOnly !== null" :title="readOnly ?? undefined" data-bb="modifier-run" @click="byAxis">{{ t('modify.mirrorBy') }}</button>
+        <button v-else class="btn p" type="button" :disabled="readOnly !== null" :title="readOnly ?? undefined" data-bb="modifier-run" @click="byVector">{{ t(mode === 'move' ? 'modify.moveBy' : 'modify.copyBy') }}</button>
+        <button class="btn s" type="button" :disabled="readOnly !== null" :title="readOnly ?? undefined" data-bb="modifier-delete" @click="remove">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>{{ t('modify.delete') }}
         </button>
       </div>
@@ -163,5 +178,6 @@ function click(tool: Tool): void { if (!tool.off) tool.run?.(); }
 /* .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:5px 16px;border-radius:999px;font:inherit;font-weight:600;color:#141414;cursor:pointer;text-decoration:none;white-space:nowrap} */
 /* .btn.p{background:#C06A41;border:0} .btn.s{background:#FFFFFF;border:1px solid #141414;font-weight:400} */
 .btn.p { background: var(--bb-action); border: 0; }
+.inp:disabled { color: var(--bb-stone); background: var(--bb-sunk); cursor: default; }
 /* Error: ink text on an ochre band, with the word "Error". */
 </style>

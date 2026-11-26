@@ -10,6 +10,7 @@
 #          clang with -ffp-contract=off (no fused multiply-add: the same floats as tcc). HOST_MIX=0:
 #          one tcc call over every source (the build before ticket T18).
 #   native clang -O2, same outputs
+#   asan   only the host, clang -O1 with ASan and UBSan: out/asan/bimble-ccore (ci/run.sh san)
 #   (tcc and native also build tools/*.c, e.g. ifc_dump: README "Comparing with Rust")
 #   wasm   clang freestanding wasm32 of src/ (no libc) and the session layer (session/*.c: the
 #          native host's call code, without the host's HTTP server, platform and main), ccore.wasm
@@ -25,7 +26,8 @@
 #   release  the release archive (ticket R1, ADR 0069 rule 2): the host with clang -O2 and
 #          the boolean kernel static (fails without it), the lab built by Vite (web-ui/, needs
 #          node_modules), then out/release/bimble-ccore-<VERSION>-<arch>-<os>.tar.gz holding
-#          bimble-ccore, web/ (no font: SIZE1, the PDF is Helvetica by default), LICENSE and README.txt
+#          bimble-ccore, web/ (no font: SIZE1, the PDF is Helvetica by default), LICENSE, README.txt,
+#          THIRD-PARTY.txt and licences/ (FIXDOC; Linux: hardened, -z relro -z now)
 #          (test: node test/release_test.mjs). <os> is
 #          linux (libstdc++ static) or macos (ticket MAC1: libc++ is the system's, stripped then
 #          signed ad hoc; CMAKE_OSX_ARCHITECTURES=x86_64 builds the Intel one on an arm64 Mac, with
@@ -53,6 +55,8 @@ VIEW_DENY+=(src/draw_cut.c src/paper.c src/draw_style.c src/draw_plan.c src/draw
 VIEW_DENY+=(src/draw_sheet.c) # sheets on paper (D5)
 VIEW_DENY+=(src/pdf_out.c) # the PDF writer (D6): not in the viewer
 VIEW_DENY+=(src/repo.c src/diff.c) # the history store (H1): no history folder in the browser (session/versions.c)
+VIEW_DENY+=(src/repo_write.c) # H2a: writing the history store (no folder in the browser)
+VIEW_DENY+=(src/merge.c src/repo_merge.c) # H2b: merging history branches (no folder in the browser)
 VIEW_DENY+=(src/pdf_in.c src/ref_read.c) # L1: reading a PDF is link_pdf, an edit (view_only.c): the viewer shows the stored references only
 VIEW_DENY+=(src/dxf_in.c) # L2: reading a DXF is link_dxf, an edit, as link_pdf
 VIEW_DENY+=(src/verbs_views.c) # SEC1: view_add, view_remove, view_edit are verbs (the table is not in the viewer)
@@ -188,6 +192,33 @@ host_mixed() {
     disown
 }
 
+# build.sh asan (ticket FIXDOC): the native host alone, clang -O1 with ASan and UBSan, the kernel
+# when found (manifold is not instrumented). For ci/run.sh san: test/san_host.sh runs the host's
+# node suites on it and fails on any sanitizer report. One clang call per file, two at a time
+# (the dev machine has 16 GB).
+host_asan() {
+    local d=out/asan f objs=() pids=()
+    mkdir -p $d/o
+    local flags=(-std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wno-unused-function
+        -DRYU_ONLY_64_BIT_OPS "$VDEF" ${KFLAGS[@]+"${KFLAGS[@]}"} ${PLATFORM_CFLAGS[@]+"${PLATFORM_CFLAGS[@]}"})
+    compile_asan() {
+        local n=0 rc=0
+        for f in "${HOST_SRCS[@]}"; do
+            local o="$d/o/$(basename "$(dirname "$f")")_$(basename "${f%.c}").o"
+            objs+=("$o")
+            clang "${flags[@]}" "${INC[@]}" -Ihost -c "$f" -o "$o" &
+            pids+=($!)
+            n=$((n + 1))
+            if ((n % 2 == 0)); then for p in "${pids[@]}"; do wait "$p" || rc=1; done; pids=(); fi
+        done
+        for p in ${pids[@]+"${pids[@]}"}; do wait "$p" || rc=1; done
+        return $rc
+    }
+    step "compile (clang -O1, ASan+UBSan)" compile_asan
+    step "link bimble-ccore (ASan+UBSan)" clang -fsanitize=address,undefined -pthread "${objs[@]}" \
+        ${KLINK_CLANG[@]+"${KLINK_CLANG[@]}"} -lm ${PLATFORM_LIBS[@]+"${PLATFORM_LIBS[@]}"} -o $d/bimble-ccore
+}
+
 # The wasm builds. VIEW_LIB: the library without VIEW_DENY.
 VIEW_LIB=()
 for f in "${LIB[@]}"; do [[ " ${VIEW_DENY[*]} " == *" $f "* ]] || VIEW_LIB+=("$f"); done
@@ -250,9 +281,10 @@ release() {
         archf=(-arch "$arch")
         export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-11.0}
     fi
+    [[ $CC_OS == Windows ]] && os=windows osname=Windows # WIN2: MSYS2 CLANG64, a .zip
     local name="bimble-ccore-$CC_VER-$arch-$os"
     local stage="$R/stage/$name" obj="$R/obj"
-    rm -rf "$R/stage" "$obj" "$R/$name.tar.gz"
+    rm -rf "$R/stage" "$obj" "$R/$name.tar.gz" "$R/$name.zip"
     mkdir -p "$stage" "$obj"
     local flags=(-std=c11 -O2 -g0 -ffp-contract=off -DRYU_ONLY_64_BIT_OPS -Wall -Wno-unused-function -pthread
         "$VDEF" ${KFLAGS[@]+"${KFLAGS[@]}"} ${PLATFORM_CFLAGS[@]+"${PLATFORM_CFLAGS[@]}"} ${archf[@]+"${archf[@]}"}
@@ -261,6 +293,14 @@ release() {
     # deps.sh builds manifold the same way): 3,674,408 -> 2,232,352 bytes on aarch64 Linux, the
     # read benchmark unchanged (results/native-size.md). Linux only: macOS's -dead_strip is not measured.
     [[ $CC_OS == Darwin ]] || flags+=(-ffunction-sections -fdata-sections)
+    # FIXDOC: hardening on Linux: checked libc calls where the size is known, stack canaries in
+    # functions with arrays, and (at the link) the relocations read-only and resolved at start
+    # (RELRO, BIND_NOW: test/release_test.mjs checks it with readelf -d).
+    local harden_link=()
+    if [[ $CC_OS == Linux ]]; then
+        flags+=(-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -fstack-protector-strong)
+        harden_link=(-Wl,-z,relro,-z,now)
+    fi
     compile_release() { # at most $JOBS at once: wait for the oldest (bash 3.2 has no `wait -n`)
         local f o q=() rc=0 pid
         for f in "${LIB[@]}" "${SESSION[@]}" "${HOST[@]}"; do
@@ -285,10 +325,21 @@ release() {
             "$kd/libmanifold.a" "$kd/libClipper2.a" -lc++ -lm -o "$bin"
         step "strip, sign ad hoc" bash -c 'strip "$1" && codesign --force --sign - "$1"' _ "$bin"
         printf '  %-28s %s, macOS %s or newer\n' "arch" "$(lipo -archs "$bin")" "$MACOSX_DEPLOYMENT_TARGET"
+    elif [[ $CC_OS == Windows ]]; then
+        # WIN2: -static: libc++, libunwind and winpthreads inside the program (no DLL of MSYS2's
+        # to ship); the UCRT and the system DLLs stay imported. Winsock: PLATFORM_LIBS.
+        bin="$stage/bimble-ccore.exe"
+        step "link bimble-ccore.exe (kernel static)" clang -pthread -static -s "$obj"/*.o "$kd/libmanifoldc.a" \
+            "$kd/libmanifold.a" "$kd/libClipper2.a" -lc++ -lm ${PLATFORM_LIBS[@]+"${PLATFORM_LIBS[@]}"} \
+            -Wl,--gc-sections -Wl,-Map="$R/bimble-ccore.map" -o "$bin"
+        if command -v llvm-objdump > /dev/null; then
+            printf '  %-28s %s\n' "DLLs" "$(llvm-objdump -p "$bin" | sed -n 's/^ *DLL Name: //p' | tr '\n' ' ')"
+        fi
     else
         # SIZE1: the link map (out/release/bimble-ccore.map) gives tools/weight.mjs the bytes per object.
         step "link bimble-ccore (kernel static)" clang -pthread -s "$obj"/*.o "$kd/libmanifoldc.a" "$kd/libmanifold.a" \
-            "$kd/libClipper2.a" -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc -lm -Wl,--gc-sections -Wl,-Map="$R/bimble-ccore.map" -o "$bin"
+            "$kd/libClipper2.a" -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc -lm -Wl,--gc-sections \
+            ${harden_link[@]+"${harden_link[@]}"} -Wl,-Map="$R/bimble-ccore.map" -o "$bin"
     fi
     local web
     web=$(cd "$stage" && pwd)/web
@@ -299,11 +350,36 @@ release() {
     # in public/ccore/fonts/ would ship them: removed.
     rm -rf "$web/ccore/fonts" "$web/fonts"
     cp ../LICENSE "$stage/LICENSE"
+    # FIXDOC: the third parties (THIRD-PARTY.txt) and the licence texts the repository holds.
+    cp THIRD-PARTY.txt "$stage/THIRD-PARTY.txt"
+    mkdir -p "$stage/licences"
+    local lf
+    for lf in LICENSE_CC0 LICENSE_A2 LICENSE_A2LLVM; do cp "vendor/blake3/$lf" "$stage/licences/BLAKE3-$lf"; done
+    for lf in LICENSE-Apache2 LICENSE-Boost; do cp "vendor/ryu/$lf" "$stage/licences/Ryu-$lf"; done
+    cp vendor/earcutr/LICENSE "$stage/licences/earcutr-LICENSE"
+    for lf in OFL-Sora.txt OFL-SourceSans3.txt OFL-DMMono.txt; do cp "../web-ui/src/brand/$lf" "$stage/licences/$lf"; done
     local needs="Linux with glibc 2.35 or newer and a browser with WebGL2. Nothing is installed."
     local last=""
     if [[ $CC_OS == Darwin ]]; then
         needs="macOS $MACOSX_DEPLOYMENT_TARGET or newer and a browser with WebGL2. Nothing is installed."
         last="Signed: ad hoc only. Unpacked from a browser download: xattr -dr com.apple.quarantine ."
+    fi
+    if [[ $CC_OS == Windows ]]; then # WIN2: its own README (bimble-ccore.exe; CRLF, for Notepad), a .zip
+        cat > "$stage/README.txt" << EOF
+bimble-ccore $CC_VER ($arch, $osname): the C core of Bimble and its lab, a preview build.
+Bimble is open-source structural BIM (MIT licence, see LICENSE): https://github.com/guilbep/bimble
+
+Run:    bimble-ccore.exe open model.ifc     (also .bimble or .json; no model: an empty lab)
+        It serves the lab on 127.0.0.1 only, prints its address and opens it in your browser.
+        --no-browser: only print the address. --port N: this port, not a free one.
+Stop:   Ctrl-C.
+Files:  bimble-ccore.exe, web\ (the lab: keep it next to the program), THIRD-PARTY.txt, licences\.
+Needs:  Windows 10 or newer (x64) and a browser with WebGL2. Nothing is installed. Not signed.
+EOF
+        sed -i 's/$/\r/' "$stage/README.txt"
+        step "archive (zip)" bash -c 'cd "$1" && zip -q -X -r "../$2.zip" "$2"' _ "$R/stage" "$name"
+        printf '  %-28s %s, %d bytes\n' "archive" "$R/$name.zip" "$(wc -c < "$R/$name.zip")"
+        return
     fi
     cat > "$stage/README.txt" << EOF
 bimble-ccore $CC_VER ($arch, $osname): the C core of Bimble and its lab, a preview build.
@@ -313,7 +389,7 @@ Run:    ./bimble-ccore open model.ifc       (also .bimble or .json; no model: an
         It serves the lab on 127.0.0.1 only, prints its address and opens it in your browser.
         --no-browser: only print the address. --port N: this port, not a free one.
 Stop:   Ctrl-C.
-Files:  bimble-ccore (the program) and web/ (the lab; keep it next to the program).
+Files:  bimble-ccore, web/ (the lab: keep it next to the program), THIRD-PARTY.txt, licences/.
 Needs:  $needs
 EOF
     [[ -z $last ]] || echo "$last" >> "$stage/README.txt"
@@ -372,6 +448,9 @@ case "${1:-}" in
   release)
     echo "build.sh release -> out/release/"
     release ;;
-  *) echo "usage: $0 tcc|host|native|wasm|wasm-view|wasm-size [view]|release" >&2; exit 2 ;;
+  asan)
+    echo "build.sh asan -> out/asan/bimble-ccore"
+    host_asan ;;
+  *) echo "usage: $0 tcc|host|native|asan|wasm|wasm-view|wasm-size [view]|release" >&2; exit 2 ;;
 esac
 printf '  %-28s %5d ms\n' "total" $(($(ms) - t_start))

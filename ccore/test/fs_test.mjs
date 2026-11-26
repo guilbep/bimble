@@ -6,6 +6,8 @@
 // - the path rule (host/fs.h): a relative path, a path with NUL, ".." out of a root, an absolute
 //   path outside the roots and a symbolic link that leaves them are refused, each with one text;
 //   a link inside the roots is listed as a link with its target, one outside as "outside";
+//   the text is checked before the file system (FIXDOC: a missing folder outside is "outside",
+//   ".." resolved lexically; Windows network and device paths refused, POSIX "//" is "/");
 //   an unreadable folder is refused (not as root); a missing token is 403;
 // - 10,000 entries: 5,000 listed, "truncated": true;
 // - recent files: a settings.json in Rust's schema (settings.rs to_json, a hand-written fixture:
@@ -31,7 +33,7 @@ const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const G = join(CCORE, "golden");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
 const TOKEN = "fs1-test-token";
-const PORT = port("fs_test", 47300), PORT2 = port("fs_test2", 47301);
+const PORT = port("fs_test"), PORT2 = port("fs_test2");
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => {
   if (ok) passed++;
@@ -87,6 +89,7 @@ const rawPost = (p, path, len) => new Promise((res) => {
   setTimeout(() => sock.destroy(), 3000);
 });
 const OUTSIDE = "fs_list: outside the folders Bimble lists (query fs_roots)";
+const NETWORK = "fs_list: dir: network and device paths are not listed (\\\\server, \\\\.\\, \\\\?\\)"; // host/fs.h FS_NETWORK
 
 try {
   // The tree: files, a folder, a hidden file, a 255-byte name, a non-UTF-8 name (Linux only),
@@ -111,6 +114,13 @@ try {
   symlinkSync(join(home, "sub"), join(home, "inlink"));
   symlinkSync(outside, join(home, "outlink"));
   symlinkSync(join(outside, "secret.ifc"), join(home, "outfile.ifc"));
+  // FIXSES: a link whose text leads outside the roots, through a link outside that leads back in
+  // (home/via.ifc -> <tmp>/back/in.ifc, <tmp>/back -> home): the outside link must not be read
+  // while listing (on Windows it could be a network path), so via.ifc is "outside", not a file.
+  writeFileSync(join(home, "in.ifc"), "x");
+  symlinkSync(home, join(tmp, "back"));
+  symlinkSync(join(tmp, "back", "in.ifc"), join(home, "via.ifc"));
+  symlinkSync("in.ifc", join(home, "rel.ifc")); // a relative link inside: followed
   mkdirSync(join(home, "locked"));
   chmodSync(join(home, "locked"), 0o000);
   const big = join(extra, "big");
@@ -135,6 +145,10 @@ try {
   check("fs_list: a link inside the roots is a link to a dir", by.inlink?.kind === "link" && by.inlink.target === "dir" && !by.inlink.outside, JSON.stringify(by.inlink));
   check("fs_list: a link leaving the roots: outside, no target", by.outlink?.kind === "link" && by.outlink.target === null && by.outlink.outside === true, JSON.stringify(by.outlink));
   check("fs_list: a file link leaving the roots: outside", by["outfile.ifc"]?.outside === true && by["outfile.ifc"].target === null, JSON.stringify(by["outfile.ifc"]));
+  check("fs_list: a link through a path outside the roots (that leads back in): outside, not followed",
+    by["via.ifc"]?.kind === "link" && by["via.ifc"].outside === true && by["via.ifc"].target === null, JSON.stringify(by["via.ifc"]));
+  check("fs_list: a relative link inside the roots: a link to a file", by["rel.ifc"]?.kind === "link" && by["rel.ifc"].target === "file" &&
+    !by["rel.ifc"].outside, JSON.stringify(by["rel.ifc"]));
   if (nonUtf8) check("fs_list: a non-UTF-8 name skipped and counted", l0.skipped === 1 && !names.some((n) => n.startsWith("bad-")), `skipped ${l0.skipped}`);
   check("fs_list: names and metadata only (no bytes)", !r0.text.includes("ISO-10303") && !r0.text.includes("%PDF"));
   check("fs_list home: the parent is not listed (outside)", l0.parent === null && l0.dir === home && l0.truncated === false, JSON.stringify({ parent: l0.parent, dir: l0.dir }));
@@ -161,6 +175,28 @@ try {
   check("fs_list / -> 400 outside", etc.status === 400 && etc.text === OUTSIDE, etc.text);
   const lk = await H.ls(join(home, "outlink"));
   check("fs_list a link that leaves the roots -> 400 outside", lk.status === 400 && lk.text === OUTSIDE, lk.text);
+  // FIXDOC: the lexical rule (host/fs_rule.h) comes before the file system: a missing folder
+  // outside the roots gets the outside text, not "no such folder" (the old order said whether it
+  // existed); ".." in the text is resolved before the check; "//" is not a network path on POSIX.
+  const goneOut = await H.ls(join(outside, "nothing", "deeper"));
+  check("fs_list a missing folder outside -> 400 outside (checked before the file system)", goneOut.status === 400 && goneOut.text === OUTSIDE, goneOut.text);
+  const dots = await H.ls(home + "/sub/../../outside");
+  check("fs_list home/sub/../../outside (text not normalised by the client) -> 400 outside", dots.status === 400 && dots.text === OUTSIDE, dots.text);
+  const dotsIn = await H.ls(home + "/sub/./../sub");
+  check("fs_list home/sub/./../sub -> 200, resolved", dotsIn.status === 200 && JSON.parse(dotsIn.text).dir === join(home, "sub"), dotsIn.text);
+  const above = await H.ls(process.platform === "win32" ? home.slice(0, 3) + ".." : "/../..");
+  check("fs_list .. above the file system's root -> 400 absolute path", above.status === 400 && above.text.startsWith("fs_list: dir: an absolute path"), above.text);
+  if (process.platform !== "win32") {
+    const two = await H.ls("/" + outside);
+    check("fs_list //<outside> (POSIX: not a network path) -> 400 outside", two.status === 400 && two.text === OUTSIDE, two.text);
+    const twoIn = await H.ls("/" + home);
+    check("fs_list //<home> (POSIX: the same folder) -> 200", twoIn.status === 200 && JSON.parse(twoIn.text).dir === home, twoIn.text);
+  } else {
+    const unc = await H.ls("\\\\127.0.0.1\\c$");
+    check("fs_list \\\\server\\share -> 400 network (never opened)", unc.status === 400 && unc.text === NETWORK, unc.text);
+    const dev = await H.ls("\\\\.\\PhysicalDrive0");
+    check("fs_list \\\\.\\device -> 400 network", dev.status === 400 && dev.text === NETWORK, dev.text);
+  }
   const gone = await H.ls(join(home, "nothing"));
   check("fs_list a missing folder -> 400", gone.status === 400 && gone.text === "fs_list: no such folder", gone.text);
   const file = await H.ls(join(home, "b.ifc"));
@@ -189,7 +225,8 @@ try {
   const bin = Buffer.alloc(3 << 20);
   for (let i = 0; i < bin.length; i++) bin[i] = (i * 2654435761) >>> 24;
   check("stage without the token -> 403", (await stage("a.bimble", "x", null)).status === 403);
-  for (const bad of ["a/b.ifc", "../x.ifc", ".hidden", "", "a\\b.ifc", "x".repeat(256)]) {
+  // FIXSES: DOS device names (on every system: the name would open a device on Windows).
+  for (const bad of ["a/b.ifc", "../x.ifc", ".hidden", "", "a\\b.ifc", "x".repeat(256), "CON", "nul.ifc", "Com1 .bimble", "aux..", "CONOUT$"]) {
     const r = await stage(bad, "x");
     check(`stage name ${JSON.stringify(bad.slice(0, 20))} -> 400`, r.status === 400 && r.text.startsWith("stage: name"), `${r.status} ${r.text}`);
   }

@@ -5,12 +5,21 @@
 #     page from the tag's web-ui sources (main has no Rust since ADR 0072);
 #   - c/: the C core's lab (ticket PG1, ccore/README.md), web-ui on the C wasm (`npm run
 #     build:ccore`), from main (a push) or the input `ccore_ref` (a manual run, default main).
-# The site is one artifact per deployment, so a lab not built here disappears at the next one. A
-# failed C build leaves the root published without c/.
+# The site is one artifact per deployment, so a lab not built here disappears at the next one. On a
+# push, a failed C build fails the site job: nothing is deployed, the published site stays as it
+# was (FIXDOC; before, the root was published without c/). On a manual run it only warns.
+#
+# Deployment only from main (FIXDOC): a manual run started on another branch builds every job but
+# skips `deploy` (its ref must be refs/heads/main).
 #
 # A manual run can also publish one pull request's C lab under preview/pr-<number>/ (input
 # `preview_pr`), to open a branch on a phone before it is merged. The next deployment without that
 # input removes it. Only someone who can run workflows here can start it.
+# RISK (FIXDOC, docs/adr/0073-pages-previews.md): the preview is served from the production origin
+# (guilbep.github.io). Its JavaScript shares that origin's storage (localStorage, IndexedDB) with
+# the published labs (the C lab keeps its settings in localStorage), and runs with the origin's
+# trust, so a pull request's code can read or change what the labs keep there. Start a preview only for a pull request whose code you have read.
+# The ADR lists the options; the choice is the owner's.
 #
 # Runs on a push to main that changes the lab, and by hand. Both start from the default branch,
 # which the `github-pages` environment accepts by default (a tag push would not).
@@ -75,7 +84,7 @@ jobs:
           SHA=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)
           echo "PR $PR at $SHA"
           echo "SHA=$SHA" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (v4 on 26 Nov 2026)
         with:
           ref: ${{ env.SHA }}
           path: src
@@ -86,7 +95,7 @@ jobs:
         run: |
           src/ccore/ci/binaryen.sh "$HOME/.local/binaryen"
           echo "$HOME/.local/binaryen/bin" >> "$GITHUB_PATH"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0 (v4 on 26 Nov 2026)
         with:
           node-version: 24
           cache: npm
@@ -97,7 +106,7 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build:ccore -- --outDir ../../preview --emptyOutDir
           test -f ../../preview/index.html && test -f ../../preview/ccore/ccore.wasm
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
         with:
           name: preview
           path: preview
@@ -111,7 +120,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (v4 on 26 Nov 2026)
         with:
           ref: ${{ inputs.ccore_ref || (github.event_name == 'push' && github.sha) || 'main' }}
           path: src
@@ -123,7 +132,7 @@ jobs:
         run: |
           src/ccore/ci/binaryen.sh "$HOME/.local/binaryen"
           echo "$HOME/.local/binaryen/bin" >> "$GITHUB_PATH"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0 (v4 on 26 Nov 2026)
         with:
           node-version: 24
           cache: npm
@@ -134,7 +143,7 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build:ccore -- --outDir ../../ccore-lab --emptyOutDir
           test -f ../../ccore-lab/index.html && test -f ../../ccore-lab/ccore/ccore.wasm && test -f ../../ccore-lab/ccore/ccore-view.wasm
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
         with:
           name: ccore-lab
           path: ccore-lab
@@ -144,8 +153,8 @@ jobs:
   site:
     needs: [preview, ccore_lab]
     # `always()`: `preview` is skipped on every run but a manual one that asks for it; a failed
-    # preview stops the deployment. `ccore_lab` is not tested here: a failed C lab does not stop the
-    # root (the C lab is then missing from c/ until the next deployment).
+    # preview stops the deployment. A failed `ccore_lab` fails this job on a push (step "No C lab
+    # this time"); on a manual run the root is published without c/.
     if: always() && needs.preview.result != 'failure' && needs.preview.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
@@ -168,11 +177,11 @@ jobs:
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           mkdir -p web/dist && unzip -q zip/*-web.zip -d web/dist
           test -f web/dist/editor/bimble_web.js
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (v4 on 26 Nov 2026)
         with:
           ref: ${{ env.TAG }}
           path: src
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0 (v4 on 26 Nov 2026)
         with:
           node-version: 24
           cache: npm
@@ -188,13 +197,13 @@ jobs:
           test -f ../../site/index.html && test -f ../../site/bimble/bimble_web.js && test -f ../../site/egui/index.html
       - name: The pull request's C lab under preview/pr-<number>/
         if: needs.preview.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           name: preview
           path: site/preview/pr-${{ inputs.preview_pr }}
       - name: The C lab under c/
         if: needs.ccore_lab.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           name: ccore-lab
           path: site/c
@@ -202,9 +211,15 @@ jobs:
         if: needs.ccore_lab.result != 'success'
         env:
           RESULT: ${{ needs.ccore_lab.result }}
+          EVENT: ${{ github.event_name }}
         run: |
+          # FIXDOC: a push publishes main's C lab or nothing; a manual run may publish the root alone.
+          if [[ $EVENT == push ]]; then
+            echo "::error::ccore_lab $RESULT on a push: no deployment (the published site keeps its c/)"
+            exit 1
+          fi
           echo "::warning::ccore_lab $RESULT: the site is published without c/"
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1 (v3 on 26 Nov 2026)
         with:
           path: site
 
@@ -212,7 +227,8 @@ jobs:
   # is for the wait below (the REST list of the run's artifacts), not for deploy-pages.
   deploy:
     needs: [site]
-    if: always() && needs.site.result == 'success'
+    # FIXDOC: only a run on main deploys; a manual run on another branch stops after `site`.
+    if: always() && needs.site.result == 'success' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -238,4 +254,4 @@ jobs:
           done
           echo "::warning::the run lists no github-pages artifact after 2 min; trying deploy-pages anyway"
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5 (v4 on 26 Nov 2026)

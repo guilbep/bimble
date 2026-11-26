@@ -27,10 +27,10 @@ static const struct {
     {"georef", YES},           /* query north, coordinates (ADR 0045); G2's setting-out panel */
     {"grids", YES},            /* query grids, grid_axes (S1); G2 */
     {"history", YES},          /* query history: the undo list (calls.rs:346) */
-    {"history_write", NO},     /* commit, branch (H2a) */
+    {"history_write", NATIVE}, /* H2a: action commit, branch_create, branch_switch; H2b: merge (versions.h) */
     {"lca", NO},
     {"levels", YES},           /* query storeys; G2 */
-    {"materials", NO},         /* the materials browser (MAT1); the query materials is a list only */
+    {"materials", YES},        /* the materials browser (MAT1): query materials_page, verbs material_* */
     {"measure", YES},          /* the measure tool (T1) */
     {"palette", YES},          /* query palette_match (Q2) */
     {"paper_view", FULL_BUILD}, /* action paper_view, the On paper switch (view_svg; PAPER1) */

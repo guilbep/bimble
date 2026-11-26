@@ -228,6 +228,19 @@ interface Wasm {
 export const state = shallowRef<State>({ selection: [], rev: 0, unsaved: false, file: null });
 /** Set when the viewer could not start. */
 export const startError = shallowRef<string | null>(null);
+// ---- PERF2: the start's open, step by step (ccore.ts OpenSteps), shown over the viewport until its first frame ----
+export const startStep = shallowRef<"read" | "parse" | "scene" | "mesh" | "draw" | null>(null);
+/** Clears `startStep` once the viewport drew the model (or gave up): polled per frame, 20 s at most. */
+function clearStartStepOnFirstFrame(): void {
+  let frames = 0;
+  const tick = () => {
+    const g = window.__bbGl;
+    if (!g || g.firstFrameMs !== null || g.error !== null || ++frames > 1200 || (state.value.file === null && frames > 2)) startStep.value = null;
+    else requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+// ---- end PERF2 ----
 
 // Wasm data: shallow refs, replaced as a whole after each change (never mutated in place).
 export const actions = shallowRef<ActionState[]>([]);
@@ -322,6 +335,16 @@ function nativeClient(port: number, token: string): Wasm & { standards_action(na
   };
 }
 
+// ---- FIXUI: the native host's connection, for the shell (shell/send.ts: `lost`, `reconnected`) ----
+/** The poll failed for LOST_AFTER_MS: `lost` once; the first answer after it: `back`, with whether
+ *  it is the same host process (same epoch) and the host's current change (file, rev, unsaved). */
+export const connectionHooks: { lost?: () => void; back?: (sameProcess: boolean, change: unknown) => void } = {};
+const LOST_AFTER_MS = 1500;
+let wakePoll: (() => void) | null = null;
+/** Retry now (the notice's Retry): the poll's back-off wait ends at once. */
+export function retryConnection(): void { wakePoll?.(); }
+// ---- end FIXUI ----
+
 /** Long-poll loop for the native client; never rejects. On an error it retries after 20 ms,
  *  doubling up to 1 s: a dev rebuild restarts the engine in tens of ms (ccore/results/bench.md:
  *  the fixed 1 s wait was most of the C core's edit -> visible time). */
@@ -329,6 +352,7 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
   let since = 0;
   let epoch: string | undefined;
   let wait = 20;
+  let failingSince: number | null = null, lost = false; // FIXUI
   for (;;) {
     try {
       // The epoch lets a restarted twin answer at once, even when its seq equals ours.
@@ -337,6 +361,16 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const m = (await r.json()) as { epoch?: string; seq: number; change: unknown };
       wait = 20;
+      failingSince = null;
+      if (lost) { // FIXUI: back after an outage (since = 0: the host's current change, at once)
+        lost = false;
+        const sameProcess = typeof m.epoch !== "string" || m.epoch === epoch;
+        if (typeof m.epoch === "string") epoch = m.epoch;
+        if (typeof m.seq === "number") since = m.seq;
+        connectionHooks.back?.(sameProcess, m.change ?? null);
+        if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change));
+        continue;
+      }
       // A new epoch is a restarted twin: its seq began again, so ask for its current change.
       if (typeof m.epoch === "string" && m.epoch !== epoch) {
         const restarted = epoch !== undefined;
@@ -349,8 +383,16 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
       if (typeof m.seq === "number") since = m.seq;
       if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change));
     } catch (e) {
-      if (wait >= 1000) console.warn("native change poll:", e);
-      await new Promise((res) => setTimeout(res, wait));
+      const now = performance.now();
+      failingSince ??= now;
+      if (!lost && now - failingSince >= LOST_AFTER_MS) { // FIXUI: the shell blocks and says so
+        lost = true;
+        since = 0;
+        console.warn("native change poll: the host does not answer:", e);
+        connectionHooks.lost?.();
+      }
+      await new Promise<void>((res) => { wakePoll = res; setTimeout(res, wait); });
+      wakePoll = null;
       wait = Math.min(1000, wait * 2);
     }
   }
@@ -528,14 +570,17 @@ export async function start(): Promise<void> {
       // PERF1: the viewport's chunk is fetched while the wasm and the model load, not after them.
       const glChunk = url.searchParams.get("gl") === "1" ? import("./glviewport") : null;
       glChunk?.catch(() => undefined); // awaited below; no unhandled rejection if ccoreClient throws first
+      startStep.value = "read"; // PERF2
       const cc = await import("./ccore");
-      w = await cc.ccoreClient(url.searchParams);
+      w = await cc.ccoreClient(url.searchParams, { step: (s) => { startStep.value = s; } });
       if (glChunk) {
+        startStep.value = "draw";
         viewportDirty = (await glChunk).glViewport({
           mesh: async () => cc.ccoreMesh().bytes,
           epoch: async () => null,
         });
-      }
+        clearStartStepOnFirstFrame();
+      } else startStep.value = null;
     } else if (native) {
       // Dev only: no manifold, no wasm; on_change below starts the long-poll loop.
       w = nativeClient(native.port, native.token);
@@ -584,6 +629,7 @@ export async function start(): Promise<void> {
     setInterval(() => { if (status.value && !status.value.idle) status.value = tryQuery<Status | null>("status", null); }, 1000);
     resolveReady();
   } catch (e) {
+    startStep.value = null; // PERF2
     startError.value = message(e);
     throw e;
   }
@@ -626,8 +672,12 @@ export function element(id: string): ElementDetail {
   try {
     // A linked element selected (C core, links.h): its read-only detail from its link.
     const lk = state.value.linked;
-    const args = lk && lk.id === id ? { id, link: lk.link } : { id };
-    return JSON.parse(wasmOrThrow().query("element", JSON.stringify(args))) as ElementDetail;
+    if (lk && lk.id === id) return JSON.parse(wasmOrThrow().query("element", JSON.stringify({ id, link: lk.link }))) as ElementDetail;
+    // FIXUI: a file open as it is (an IFC, a .bimbleview): `element` refuses it as Rust's does; the
+    // scene's rows (class, name, GlobalId, storey, material, family, triangles, volume) come from
+    // `scene_element` (ccore/session/links.h), as Rust's viewer reads them from its scene (lib.rs:4570).
+    const name = state.value.file !== null && state.value.editable === false ? "scene_element" : "element";
+    return JSON.parse(wasmOrThrow().query(name, JSON.stringify({ id }))) as ElementDetail;
   } catch (e) {
     throw new Error(message(e));
   }
@@ -703,7 +753,7 @@ export interface ToolPointer {
 }
 
 /** One call of the place tool (C core only): the tool's state, or the error text. */
-export function toolCall(name: "pointer" | "click" | "cancel", args: ToolPointer = {}): { state: ToolState | null; error: string | null } {
+export function toolCall(name: "pointer" | "click" | "cancel" | "close" /* SLAB1: Enter closes a polygon slab */, args: ToolPointer = {}): { state: ToolState | null; error: string | null } {
   try {
     const w = wasmOrThrow();
     if (!w.tool) return { state: null, error: "the place tool needs the C core" };
@@ -1059,6 +1109,8 @@ export const viewportKeys: {
   deleteAnnotation?: () => boolean;
   /** Esc: the selected annotation is let go. */
   dropAnnotation?: () => void;
+  /** SLAB1: Enter closes the polygon slab being clicked (edit.rs close_polygon). True if one was. */
+  enterTool?: () => boolean;
 } = {};
 // ---- end KEY1 ----
 
@@ -1067,6 +1119,9 @@ export const fileRoutes: { run?: (name: string) => boolean } = {};
 /** An action with a JSON body (`{path, discard}`): throws the error text. */
 export function actionBody(name: string, body: unknown): void { actionWith(name, body); }
 // ---- end FS1 ----
+// ---- H2b: an action's answer, parsed (merge: {merged, commit?, conflicts}) ----
+export function actionAnswer<T>(name: string, body: unknown): T { return JSON.parse(actionWith(name, body)) as T; }
+// ---- end H2b ----
 
 export function runAction(name: string): string | null {
   const route = screenRoutes[name];
@@ -1081,6 +1136,12 @@ export function runAction(name: string): string | null {
     }
     // The box moves without a change event (its geometry is not in the change signature, calls.rs:152).
     if (name === "box_to_selection") visibility.value = tryQuery<Visibility | null>("visibility", null);
+    // ---- ISS71 ---- the box's orientation: the box turns and the pressed choice moves, no change event
+    if (name === "box_north_project" || name === "box_north_true") {
+      visibility.value = tryQuery<Visibility | null>("visibility", null);
+      actions.value = tryQuery<ActionState[]>("actions", []);
+    }
+    // ---- end ISS71 ----
     // ---- Q2: the view switches are session state, not in the change JSON: their pressed state
     // here; fit and top move the page's camera (glviewport.ts registers `viewActions`). ----
     if (VIEW_SWITCHES.includes(name)) {
@@ -1298,6 +1359,14 @@ export const links = () => tryQuery<Link[]>("links", []);
 // ---- Linked models (ticket B5, C core: ccore/session/links.h) ----
 
 /** `query("element", {id, link})`: an element of a linked model, read-only (ElementDetail's shape plus these). */
+/** `query("scene_element", {id})` (C core, FIXUI): an element of a file open read only, the rows Rust's viewer shows. */
+export interface SceneElementDetail extends ElementDetail {
+  read_only: true;
+  family: string;
+  triangles: number;
+  volume_m3: number;
+}
+
 export interface LinkedElementDetail extends ElementDetail {
   link: string;
   read_only: true;
@@ -1424,6 +1493,11 @@ export const gridAdd = (name: string, x: number[], y: number[], tags?: string[])
 export const gridAxisSet = (grid: string, axis: string, patch: { tag?: string; start?: [number, number]; end?: [number, number] }) =>
   runVerb("grid_axis_set", { grid, axis, ...patch });
 export const gridRemove = (id: string) => runVerb("grid_remove", { id });
+// ---- SLAB1: one axis more or less (verbs_levels.c grid_axis_add, grid_axis_remove) ----
+export const gridAxisAdd = (grid: string, tag: string, start: [number, number], end: [number, number]) =>
+  runVerb("grid_axis_add", { grid, tag, start, end });
+export const gridAxisRemove = (grid: string, axis: string) => runVerb("grid_axis_remove", { grid, axis });
+// ---- end SLAB1 ----
 
 /** `query("north")`: the georeference as the viewport turns by it; null without an editable model. */
 export interface NorthInfo { crs: string | null; has_map: boolean; map_rotation_deg: number; plan_turn_project: number; plan_turn_true: number; rotation_deg: number }

@@ -23,6 +23,10 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h> /* rmdir */
+#ifdef _WIN32
+#include <io.h>
+#define mkdir(path, mode) mkdir(path) /* WIN2: no mode argument there */
+#endif
 #include "../host/host.h" /* cc_platform_native */
 #include "../session/calls.h"
 #include "../session/session.h"
@@ -317,6 +321,84 @@ static void test_sheets_pdf(cc_session *ses) {
     buf_free(&one), buf_free(&got), buf_free(&ans);
 }
 
+/* ---- LNK1: the paper drawing of a read-only scene and of a model's linked models (paper_scene.h).
+ * golden/ifc/frame.ifc (the IFC export of golden/frame.json) opened as it is draws every 2D view
+ * as golden/frame.json opened for editing draws it, byte for byte (view_svg, bare or not, and
+ * view_pdf); its plans offer On paper and Export view. A new model (one storey, nothing in it)
+ * draws nothing; with frame.ifc linked its plan draws the link's cut; hidden, nothing again.
+ * Fails on the code before LNK1: view_svg of a read-only scene answered "no view with id",
+ * paper_view and on_paper were off there, and a link was never drawn. ---- */
+static void lnk1_open(cc_session **s, const char *path, int read_only) {
+    cc_platform *pf = malloc(sizeof *pf);
+    *pf = *cc_platform_native();
+    pf->unix_s = new_year;
+    *s = cc_session_new(pf);
+    cc_error e;
+    int bad = !*s || (read_only ? cc_session_open_file(*s, path, &e) : cc_session_open(*s, path, &e));
+    check_true(path, !bad);
+    if (*s) cc_paper_set_version(*s, RUST_VERSION);
+}
+
+static void test_lnk1(void) {
+    cc_session *ro, *ed;
+    lnk1_open(&ro, "golden/ifc/frame.ifc", 1);
+    lnk1_open(&ed, "golden/frame.json", 0);
+    if (!ro || !ed) return;
+    Buf a, b, ov;
+    buf_init(&a), buf_init(&b), buf_init(&ov);
+    call(ro, "query", "open_views", "", &ov);
+    int views = 0, same = 0;
+    for (const char *p = ov.p; (p = find(p, ov.len - (size_t)(p - ov.p), "\"id\":\"")) != NULL;) {
+        p += 6;
+        char id[23];
+        memcpy(id, p, 22), id[22] = 0;
+        const char *ty = find(p, ov.len - (size_t)(p - ov.p), "\"type\":\"");
+        if (!ty || strncmp(ty + 8, "plan", 4) || ty - p > 400) continue;
+        for (int bare = 0; bare < 2; bare++) {
+            char body[96];
+            snprintf(body, sizeof body, "{\"view\":\"%s\",\"bare\":%s}", id, bare ? "true" : "false");
+            int ra = call(ro, "query", "view_svg", body, &a), rb = call(ed, "query", "view_svg", body, &b);
+            views++;
+            same += ra == CC_OK && rb == CC_OK && a.len == b.len && !memcmp(a.p, b.p, a.len);
+        }
+        if (views == 2) { /* the first plan: also as PDF, and the switches */
+            char body[64];
+            snprintf(body, sizeof body, "{\"view\":\"%s\"}", id);
+            int ra = call(ro, "query", "view_pdf", body, &a), rb = call(ed, "query", "view_pdf", body, &b);
+            check_true("read-only IFC: view_pdf of a plan = the .bimble's, byte for byte",
+                       ra == CC_OK && rb == CC_OK && a.len == b.len && !memcmp(a.p, b.p, a.len));
+            char t[128];
+            snprintf(t, sizeof t, "{\"op\":\"open\",\"tab\":{\"type\":\"view\",\"id\":\"%s\"}}", id);
+            check_true("read-only IFC: open the plan", call(ro, "tab", "", t, &a) == CC_OK);
+            check_true("read-only IFC: paper_view enabled in a plan (ribbon.rs:1478)", action(ro, "paper_view", "enabled") == 1);
+            check_true("read-only IFC: Export view (on_paper) enabled (ribbon.rs:611)", action(ro, "on_paper", "enabled") == 1);
+            check_true("read-only IFC: paper_view runs, On paper", call(ro, "action", "paper_view", "", &a) == CC_OK && paper_on(ro));
+        }
+    }
+    check_true("read-only IFC: 12 drawings of the 6 plans and ceiling plans", views == 12);
+    check_true("read-only IFC: every drawing = the .bimble's, byte for byte", same == views);
+    /* A model with no geometry of its own: its plans draw the visible links' cut (DEVIATIONS 29). */
+    cc_error e;
+    check_true("new model", cc_session_new_model(ed, &e) == 0);
+    call(ed, "query", "open_views", "", &ov);
+    const char *pl = find(ov.p, ov.len, "\"type\":\"plan\"");
+    const char *ip = pl ? pl : ov.p;
+    while (ip > ov.p && memcmp(ip, "\"id\":\"", 6)) ip--;
+    char body[96];
+    snprintf(body, sizeof body, "{\"view\":\"%.22s\",\"bare\":true}", ip + 6);
+    check_true("new model: nothing to draw", call(ed, "query", "view_svg", body, &a) == CC_ERR && find(a.p, a.len, "nothing to draw"));
+    check_true("link frame.ifc", call(ed, "action", "link_model", "{\"path\":\"golden/ifc/frame.ifc\"}", &b) == CC_OK);
+    int r = call(ed, "query", "view_svg", body, &a);
+    check_true("linked: the plan draws the link's cut", r == CC_OK && count(a.p, a.len, "<path") > 10);
+    call(ed, "action", "manage_links", "{\"op\":\"hide\",\"name\":\"frame.ifc\"}", &b);
+    check_true("hidden: nothing to draw again", call(ed, "query", "view_svg", body, &a) == CC_ERR);
+    buf_free(&a), buf_free(&b), buf_free(&ov);
+    const cc_platform *p1 = ro->pf, *p2 = ed->pf;
+    cc_session_free(ro), cc_session_free(ed);
+    free((void *)p1), free((void *)p2);
+}
+/* ---- end LNK1 ---- */
+
 int main(void) {
     size_t n;
     char *json = slurp(G, "model.json", &n);
@@ -339,6 +421,7 @@ int main(void) {
     test_svg(ses);
     test_switch(ses);
     test_sheets_pdf(ses);
+    test_lnk1(); /* LNK1 */
     cc_session_free(ses);
     remove(copy);
     if (!getenv("PAPER1_WRITE")) rmdir(DIR);

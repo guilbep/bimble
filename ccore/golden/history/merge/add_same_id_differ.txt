@@ -1,0 +1,12 @@
+prefer neither: 1 conflict(s)
+conflict element IfcColumn ours column [1MtPJgMtNfDOiyTmnVou0I] | 1MtPJgMtNfDOiyTmnVou0I
+valid
+model add_same_id_differ.ours.json
+prefer ours: 1 conflict(s)
+conflict element IfcColumn ours column [1MtPJgMtNfDOiyTmnVou0I] | 1MtPJgMtNfDOiyTmnVou0I
+valid
+model add_same_id_differ.ours.json
+prefer theirs: 1 conflict(s)
+conflict element IfcColumn ours column [1MtPJgMtNfDOiyTmnVou0I] | 1MtPJgMtNfDOiyTmnVou0I
+valid
+model add_same_id_differ.theirs.json

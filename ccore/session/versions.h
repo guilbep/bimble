@@ -26,4 +26,45 @@
 
 /* One of the queries above: CC_OK or CC_ERR with the answer in `out`. -1: not one of them. */
 int cc_versions_query(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out);
+
+/* ---- H2a: writing the history (repo_write.h; lib.rs:1903-2097, the History panel) ----
+ *   action commit {message}       saves the model first when unsaved (lib.rs:1976), starts the
+ *                                 history when there is none (lib.rs:1932), commits the open model
+ *                                 on HEAD: author "name <e-mail>" from the settings (no name: 400
+ *                                 "commit: set your name in Settings first …"), time the platform's
+ *                                 clock. 200 {"commit": hash}; 400 with Rust's text ("nothing to
+ *                                 commit: …", "a commit needs a message", …).
+ *   action branch_create {name}   Repo::create_branch at HEAD, then switch to it (lib.rs:2047):
+ *                                 the open model stays (changes not committed come along).
+ *                                 200 {"branch": name}.
+ *   action branch_switch {name, discard?}
+ *                                 refused while the open model has changes not committed
+ *                                 (lib.rs:2006, Rust's Switch is disabled: "uncommitted changes:
+ *                                 commit them first, or send {\"discard\": true}"); then
+ *                                 Repo::switch (a branch, or any revision: detached), the model there
+ *                                 written to the file and opened again (lib.rs:2082: fresh undo
+ *                                 history, saved, rev + 1). 200 {"branch": name}.
+ * Each: 400 without a file system (NO_BROWSER), without an editable model, for a model with no
+ * file yet. The queries above follow (pending is cached per file, HEAD and rev).
+ * cc_versions_free: the session's pending cache (cc_session_free). */
+/* ---- H2b ----
+ *   action merge {name, prefer?: "ours"|"theirs"}
+ *                                 Repo::merge of branch (or revision) `name` into HEAD
+ *                                 (lib.rs:2015-2033), author as commit's, message "Merge <name>".
+ *                                 Refused onto the current branch ("merge: <name> is the current
+ *                                 branch") and while changes are not committed ("uncommitted
+ *                                 changes: commit them first": Rust disables Merge). 200
+ *                                 {"merged": "up_to_date"|"fast_forward"|"commit", "commit": hash,
+ *                                 "conflicts": [...]} (a fast-forward or a merge commit is written
+ *                                 to the file and opened again, as after a switch); without
+ *                                 `prefer` and with conflicts nothing is merged: 200 {"merged":
+ *                                 "conflicts", "conflicts": [{"kind", "id"|null, "name", "text"}]}
+ *                                 (text: Rust's Display); the page offers keep mine (prefer ours)
+ *                                 and take theirs (prefer theirs), which merge again. 400 with
+ *                                 Rust's text ("the merged model is invalid: …", "unknown
+ *                                 revision …").
+ * ---- end H2b ---- */
+int cc_versions_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out);
+void cc_versions_free(cc_session *s);
+/* ---- end H2a ---- */
 #endif

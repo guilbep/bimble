@@ -141,6 +141,13 @@ typedef struct cc_session {
     size_t npaper_views, cappaper_views;
     int plan_window;
     /* ---- end PAPER1 ---- */
+    /* ---- LNK1: the links list as last saved or opened (links.h cc_links_changed), NULL: none ---- */
+    char *links_saved;
+    size_t links_saved_n;
+    /* ---- end LNK1 ---- */
+    /* ---- H2a: query pending's cache (versions.c), NULL: none ---- */
+    struct cc_versions_cache *versions_cache;
+    /* ---- end H2a ---- */
 } cc_session;
 
 /* A new session with no model, on `pf` (kept by pointer). NULL when out of memory. */
@@ -215,6 +222,12 @@ const cc_scene *cc_session_scene(cc_session *s);
  * and selection checked). A bad snapshot: the session file is ignored, the reason logged, and the
  * model opened as cc_session_open does. A bad or truncated entry: the replay stops there, logged,
  * the lines before are kept. Then persistence is on. 0 ok; -1 with `err` (the model file).
+ * "Belongs to": the same path text, or the same file once the carrier resolved both
+ * (pf->real_path: `m.json` and `./m.json`). FIXSES: a session file the session does not keep
+ * whole (ignored, or lines dropped) and that holds steps not saved is never overwritten: it is
+ * renamed `<session_path>.orphan-<unix time>` (with its model side files) first, and
+ * cc_session_set_aside gives that path (`query state` "session_set_aside"); NULL when none. When
+ * it cannot be renamed it is left alone and the session runs without a file.
  *
  * The session file follows the file actions (ticket A5): after cc_session_open of another file,
  * and after a save to another path (Save as, or the first Save of an imported IFC's copy), the
@@ -230,5 +243,6 @@ const cc_scene *cc_session_scene(cc_session *s);
 #include "command.h"
 int cc_session_open_persisted(cc_session *s, const char *model_path, const char *session_path, cc_error *err);
 void cc_session_persist_now(cc_session *s);
+const char *cc_session_set_aside(const cc_session *s); /* FIXSES */
 void cc_session_note_apply(cc_session *s, const cc_command *cmds, size_t n);
 #endif

@@ -12,6 +12,8 @@
 //     answers a Helvetica PDF (nothing embedded) and `pdf_fonts` says roboto false (BIMBLE_FONTS: an
 //     empty folder of the test, so the real ~/.config is never read); with BIMBLE_FONTS holding the
 //     two Roboto files (copied from the repository), roboto true and `{"font":"roboto"}` embeds them;
+//   - FIXDOC: THIRD-PARTY.txt and every licences/ file it names; readelf -d: BIND_NOW (Linux);
+//     the Roboto files of the user's Bimble folder (settings.rs's spelling) under a non-ASCII profile;
 //   - `--port N` serves on N; a web/ without index.html or over 64 MiB refuses to start;
 //   - without --no-browser, xdg-open (a stand-in first on PATH) gets the URL and no socket.
 // The ports: the system's free ones (open picks one; --port gets one from node), not test/ports.mjs.
@@ -19,6 +21,10 @@
 // macOS (ticket MAC1): bimble-ccore-<VERSION>-<arch>-macos.tar.gz (RELEASE_ARCH=x86_64: the Intel
 // one on an arm64 Mac, run by Rosetta 2), otool -L for ldd (libc++ is the system's), the stand-in
 // is named `open`, and it lists its files with lsof (no /proc).
+// Windows (ticket WIN2): bimble-ccore-<VERSION>-x86_64-windows.zip, listed and unpacked by the
+// system's tar.exe (bsdtar reads zip), bimble-ccore.exe; llvm-objdump -p for ldd (no libc++,
+// libunwind, winpthreads DLL: linked static); the web/ links are a file link and a junction to
+// C:\Windows; no SIGTERM and no stand-in for ShellExecuteW: those two checks print a skip line.
 import { execFileSync, spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import net from "node:net";
@@ -29,10 +35,15 @@ import { fileURLToPath } from "node:url";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = readFileSync(join(CCORE, "VERSION"), "utf8").trim();
 const MAC = process.platform === "darwin";
-const ARCH = process.env.RELEASE_ARCH || execFileSync("uname", ["-m"], { encoding: "utf8" }).trim();
-const NAME = `bimble-ccore-${VERSION}-${ARCH}-${MAC ? "macos" : "linux"}`;
+const WIN = process.platform === "win32"; // WIN2
+const ARCH = process.env.RELEASE_ARCH || (WIN ? "x86_64" : execFileSync("uname", ["-m"], { encoding: "utf8" }).trim());
+const NAME = `bimble-ccore-${VERSION}-${ARCH}-${MAC ? "macos" : WIN ? "windows" : "linux"}`;
 const OPENER = MAC ? "open" : "xdg-open";
-const ARCHIVE = process.env.RELEASE_ARCHIVE ?? join(CCORE, "out/release", `${NAME}.tar.gz`);
+const EXT = WIN ? ".zip" : ".tar.gz";
+const ARCHIVE = process.env.RELEASE_ARCHIVE ?? join(CCORE, "out/release", `${NAME}${EXT}`);
+const EXE = WIN ? "bimble-ccore.exe" : "bimble-ccore";
+// WIN2: the system's bsdtar (MSYS2's GNU tar first on PATH reads no zip)
+const TAR = WIN ? join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe") : "tar";
 
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => {
@@ -113,33 +124,64 @@ const CTYPE = { html: "text/html", js: "text/javascript", css: "text/css", woff2
 const tmp = mkdtempSync(join(tmpdir(), "ccore-release-"));
 let host = null;
 try {
-  check(`archive ${NAME}.tar.gz exists`, existsSync(ARCHIVE), ARCHIVE);
+  check(`archive ${NAME}${EXT} exists`, existsSync(ARCHIVE), ARCHIVE);
   console.log(`archive bytes: ${statSync(ARCHIVE).size}`);
-  const list = execFileSync("tar", ["tzf", ARCHIVE], { encoding: "utf8" }).split("\n").filter(Boolean);
+  const list = execFileSync(TAR, WIN ? ["tf", ARCHIVE] : ["tzf", ARCHIVE], { encoding: "utf8" }).split(/\r?\n/).filter(Boolean);
   const top = new Set(list.map((p) => p.split("/")[0]));
   check("one top folder named after the version and arch", top.size === 1 && top.has(NAME), [...top].join(" "));
-  for (const f of ["bimble-ccore", "web/index.html", "LICENSE", "README.txt"])
+  for (const f of [EXE, "web/index.html", "LICENSE", "README.txt", "THIRD-PARTY.txt"])
     check(`archive holds ${f}`, list.includes(`${NAME}/${f}`));
+  // FIXDOC: every licence file THIRD-PARTY.txt names under licences/ is in the archive, and it
+  // names the parts built in and the fonts of web/.
+  const tp = execFileSync(TAR, WIN ? ["xOf", ARCHIVE, `${NAME}/THIRD-PARTY.txt`] : ["xzOf", ARCHIVE, `${NAME}/THIRD-PARTY.txt`], { encoding: "utf8" });
+  const named = [...tp.matchAll(/licences\/[\w.-]+/g)].map((m) => m[0]);
+  const missing = named.filter((l) => !list.includes(`${NAME}/${l}`));
+  check("THIRD-PARTY.txt: every licences/ file it names is in the archive", named.length >= 9 && missing.length === 0, `${named.length} named; missing ${missing.join(" ")}`);
+  const parts = ["manifold", "Clipper2", "BLAKE3", "Ryu", "earcutr", "Sora", "Source Sans 3", "DM Mono"];
+  const absent = parts.filter((p) => !tp.includes(p));
+  check("THIRD-PARTY.txt names manifold, Clipper2, BLAKE3, Ryu, earcutr and the three UI fonts", absent.length === 0, absent.join(", "));
+  const spdx = ["Apache-2.0", "BSL-1.0", "CC0-1.0", "ISC", "OFL-1.1"].filter((id) => !tp.includes(id));
+  check("THIRD-PARTY.txt gives their SPDX identifiers", spdx.length === 0, spdx.join(", "));
   const ttf = list.filter((p) => /\.(ttf|otf)$/i.test(p) || /\/fonts\//.test(p));
   check("SIZE1: no font file in the archive", ttf.length === 0, ttf.join(" "));
-  const rest = list.filter((p) => !/^[^/]+\/(bimble-ccore|LICENSE|README\.txt|web\/.*)?$/.test(p));
+  const rest = list.filter((p) => !(WIN ? /^[^/]+\/(bimble-ccore\.exe|LICENSE|README\.txt|THIRD-PARTY\.txt|licences\/.*|web\/.*)?$/ : /^[^/]+\/(bimble-ccore|LICENSE|README\.txt|THIRD-PARTY\.txt|licences\/.*|web\/.*)?$/).test(p));
   check("nothing else in the archive", rest.length === 0, rest.join(" "));
 
-  execFileSync("tar", ["xzf", ARCHIVE, "-C", tmp]);
-  const root = join(tmp, NAME), bin = join(root, "bimble-ccore"), web = join(root, "web");
-  const readme = readFileSync(join(root, "README.txt"), "utf8").trimEnd().split("\n");
+  execFileSync(TAR, [WIN ? "xf" : "xzf", ARCHIVE, "-C", tmp]);
+  const root = join(tmp, NAME), bin = join(root, EXE), web = join(root, "web");
+  const readme = readFileSync(join(root, "README.txt"), "utf8").trimEnd().split(/\r?\n/);
   check("README.txt has at most ten lines", readme.length <= 10, `${readme.length} lines`);
   const ver = execFileSync(bin, ["--version"], { encoding: "utf8" }).trim();
   check("--version prints ccore/VERSION", ver === `bimble-ccore ${VERSION}`, ver);
-  const ldd = execFileSync(MAC ? "otool" : "ldd", MAC ? ["-L", bin] : [bin], { encoding: "utf8" });
-  check("ldd names no libmanifold", !/manifold/i.test(ldd) && (MAC ? /libSystem/ : /libc\.so/).test(ldd), ldd.replace(/\s+/g, " ").trim());
-  check("ldd names no libstdc++ (static)", !/libstdc\+\+/.test(ldd));
+  if (WIN) {
+    // WIN2: the imported DLLs (llvm-objdump -p: "DLL Name: X"): the system's and the UCRT only.
+    const dlls = [...execFileSync("llvm-objdump", ["-p", bin], { encoding: "utf8" }).matchAll(/DLL Name: (\S+)/g)].map((x) => x[1]);
+    check("imports name no manifold DLL, and KERNEL32.dll", !dlls.some((d) => /manifold/i.test(d)) && dlls.some((d) => /^kernel32\.dll$/i.test(d)), dlls.join(" "));
+    check("imports name no libc++, libunwind, winpthreads, libgcc or libstdc++ DLL (static)",
+      !dlls.some((d) => /^(libc\+\+|libunwind|libwinpthread|libgcc|libstdc\+\+)/i.test(d)), dlls.join(" "));
+  } else {
+    const ldd = execFileSync(MAC ? "otool" : "ldd", MAC ? ["-L", bin] : [bin], { encoding: "utf8" });
+    check("ldd names no libmanifold", !/manifold/i.test(ldd) && (MAC ? /libSystem/ : /libc\.so/).test(ldd), ldd.replace(/\s+/g, " ").trim());
+    check("ldd names no libstdc++ (static)", !/libstdc\+\+/.test(ldd));
+    if (!MAC) { // FIXDOC: the hardened link (build.sh release: -z relro -z now)
+      const dyn = execFileSync("readelf", ["-d", bin], { encoding: "utf8" });
+      check("readelf -d: BIND_NOW (-z now)", /\(BIND_NOW\)|Flags:.*\bNOW\b/.test(dyn), dyn.split("\n").filter((l) => /FLAGS|BIND/.test(l)).join(" | "));
+      const seg = execFileSync("readelf", ["-lW", bin], { encoding: "utf8" });
+      check("readelf -l: a GNU_RELRO segment", /GNU_RELRO/.test(seg));
+    }
+  }
 
   // Untrusted web/ content added after unpacking: a link out of the tree and a hidden file.
   const webFiles = files(web);
   console.log(`size: archive ${statSync(ARCHIVE).size} bytes; unpacked bimble-ccore ${statSync(bin).size} bytes, web/ ${webFiles.reduce((n, f) => n + statSync(join(web, f)).size, 0)} bytes in ${webFiles.length} files`);
-  symlinkSync("/etc/passwd", join(web, "passwd"));
-  symlinkSync("/etc", join(web, "etc"));
+  if (WIN) { // WIN2: a file link (the runner is an administrator) and a junction, out of the tree
+    const sys = process.env.SystemRoot || "C:\\Windows";
+    symlinkSync(join(sys, "win.ini"), join(web, "passwd"), "file");
+    symlinkSync(sys, join(web, "etc"), "junction");
+  } else {
+    symlinkSync("/etc/passwd", join(web, "passwd"));
+    symlinkSync("/etc", join(web, "etc"));
+  }
   writeFileSync(join(web, ".hidden"), "secret");
 
   // The run of a user: a model next to the archive, no repo, no token in the environment.
@@ -221,7 +263,8 @@ try {
 
   const ex = await stop(host);
   host = null;
-  check("SIGTERM -> exits 0", ex && ex.code === 0, JSON.stringify(ex));
+  if (WIN) console.log("skip SIGTERM -> exits 0 (win32: no SIGTERM; node ends the process with TerminateProcess)");
+  else check("SIGTERM -> exits 0", ex && ex.code === 0, JSON.stringify(ex));
 
   // SIZE1: Roboto from the user's folder (BIMBLE_FONTS), as a user who adds the files would.
   if (plan) {
@@ -240,6 +283,24 @@ try {
     host = null;
   }
 
+  // FIXDOC: no BIMBLE_FONTS: the fonts of the user's Bimble folder, the settings.rs spelling on
+  // every system (macOS .../Application Support/Bimble, Windows %APPDATA%\Bimble, Linux
+  // $XDG_CONFIG_HOME/bimble), under a profile whose name is not ASCII (Windows: read with
+  // _wgetenv, not the ANSI code page).
+  if (plan) {
+    const prof = join(tmp, "Jérôme");
+    const cfg = MAC ? join(prof, "Library", "Application Support", "Bimble") : WIN ? join(prof, "Bimble") : join(prof, "bimble");
+    mkdirSync(join(cfg, "fonts"), { recursive: true });
+    for (const f of ["Roboto-Regular.ttf", "Roboto-Bold.ttf"]) cpSync(join(CCORE, "fonts", f), join(cfg, "fonts", f));
+    const env = { BIMBLE_FONTS: "", ...(MAC ? { HOME: prof } : WIN ? { APPDATA: prof } : { XDG_CONFIG_HOME: prof }) };
+    host = start(bin, ["open", "--no-browser", "frame.json"], work, env);
+    const mu = /port=(\d+)&token=([0-9a-f]{32})$/.exec(await waitUrl(host));
+    const pf3 = mu ? await post(Number(mu[1]), `/query/pdf_fonts?t=${mu[2]}`) : null;
+    check("no BIMBLE_FONTS: the fonts of <the user's Bimble folder>/fonts, a non-ASCII profile: roboto true", pf3 && pf3.body.toString() === '{"helvetica":true,"roboto":true}', pf3 ? pf3.body.toString() : "no URL");
+    await stop(host);
+    host = null;
+  }
+
   // --port N, no model.
   const p2 = await freePort();
   host = start(bin, ["open", "--no-browser", "--port", String(p2)], work);
@@ -252,6 +313,8 @@ try {
   // The browser: xdg-open gets the URL, detached, with none of the host's sockets (a browser it
   // starts would keep the port). A stand-in records its argument and open files.
   const fake = join(tmp, "fakebin"), rec = join(tmp, "xdg-open.txt");
+  if (WIN) console.log("skip xdg-open gets the printed URL, holds no socket (win32: ShellExecuteW, no stand-in on PATH)");
+  else {
   mkdirSync(fake);
   // Its open files, one line each: /proc's link targets ("socket:[n]" for a socket), or lsof's
   // file types on macOS ("tIPv4" for a TCP socket), after the URL.
@@ -265,6 +328,7 @@ try {
   check("xdg-open holds no socket of the host", got.length > 1 && !got.slice(1).some((l) => /^(socket:|tIPv[46]$|tunix$)/.test(l)), got.slice(1).join(" "));
   await stop(host);
   host = null;
+  }
 
   // A web/ that cannot be served refuses to start (exit 1, a message).
   const noIndex = join(tmp, "noindex");

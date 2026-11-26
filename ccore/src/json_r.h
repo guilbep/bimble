@@ -9,6 +9,15 @@
 
 #define JR_MAX_DEPTH 64
 #define JR_MAX_BYTES ((size_t)256 << 20)
+/* The DOM budget, one for both forms of a .bimble (this JSON reader and cbor.c): values (each
+ * JrVal, each object member) and bytes (those nodes and the decoded strings), charged as they are
+ * decoded and before the memory is taken. The text cap above holds ~10 M values of a typical model
+ * (27 bytes of text a value: bench/large_model.py 20000 is 15 MB, 552 k values, a 40 MB DOM);
+ * CBOR spends one byte a value, so without this a 19 KB gzip bomb asked for 1.2 GB. */
+#define JR_MAX_NODES ((size_t)1 << 24)
+#define JR_MAX_DOM_BYTES ((size_t)1 << 30)
+#define JR_ERR_NODES "too many values (the limit is 16777216)"
+#define JR_ERR_BYTES "decoded data too large (the limit is 1073741824 bytes)"
 
 enum { JR_NULL, JR_BOOL, JR_NUM, JR_STR, JR_ARR, JR_OBJ };
 
@@ -38,6 +47,13 @@ typedef struct {
     size_t offset;  /* byte offset of the error in the input */
     char msg[128];
 } JrError;
+
+typedef struct {
+    size_t nodes, bytes; /* taken so far */
+} JrBudget;
+/* Takes `nodes` values of `each` bytes plus `extra` bytes. 0, or -1 (nothing taken) with *why
+ * set to JR_ERR_NODES or JR_ERR_BYTES when that passes a limit. */
+int jr_budget_take(JrBudget *b, size_t nodes, size_t each, size_t extra, const char **why);
 
 /* Parses `n` bytes (need not be NUL-terminated). Returns the root, or NULL with `err` filled. */
 JrVal *jr_parse(Arena *a, const char *text, size_t n, JrError *err);

@@ -336,8 +336,15 @@ static int parse_head(const char *p, size_t len, Head *h) {
             if (!colon) return H_MALFORMED;
             Str k = trim((Str){line.p, (size_t)(colon - line.p)});
             Str v = trim((Str){colon + 1, line.n - (size_t)(colon - line.p) - 1});
-            if (ieq(k, "origin")) h->origin = v, h->has_origin = 1;
-            else if (ieq(k, "host")) h->host = v, h->has_host = 1;
+            /* FIXSES: a second Host or Origin is malformed (Rust keeps the last one): which one a
+             * proxy or a browser checked is not known, so neither is trusted (DEVIATIONS 31). */
+            if (ieq(k, "origin")) {
+                if (h->has_origin) return H_MALFORMED;
+                h->origin = v, h->has_origin = 1;
+            } else if (ieq(k, "host")) {
+                if (h->has_host) return H_MALFORMED;
+                h->host = v, h->has_host = 1;
+            }
             else if (ieq(k, "content-length")) {
                 uint64_t n;
                 if (!parse_u64(v, &n)) return H_MALFORMED;
@@ -568,6 +575,17 @@ static void handle_one(Conn *c, int *again) {
         if (ms > 0) fprintf(stderr, "bimble-ccore: mesh rev %u built in %.3f ms, %zu bytes\n", (unsigned)rev, ms, mn);
         char xrev[80];
         snprintf(xrev, sizeof xrev, "X-Rev: %u\r\nAccess-Control-Expose-Headers: X-Rev\r\n", (unsigned)rev);
+        /* ---- TEST1: no model open (mesh.c's only 404): a well-formed empty BMSH (52 bytes, no
+         * element, origin 0, the session's rev), 200: "no geometry" is an answer, not an error. A page
+         * that asks between a close and the change that tells it (BUG2) draws nothing and does not
+         * retry; mesh.c's 404 stays for the wasm module (the page does not ask it with no model). */
+        unsigned char none[52] = {'B', 'M', 'S', 'H', 1, 0, 0, 0};
+        if (st == 404) {
+            uint32_t r32 = rev;
+            memcpy(none + 8, &r32, 4); /* little-endian host (mesh.c) */
+            st = 200, mp = (const char *)none, mn = sizeof none;
+        }
+        /* ---- end TEST1 ---- */
         respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, st == 200 ? xrev : NULL, mp, mn, keep);
     } else if (is_static) {
         const cc_static_file *f = cc_static_find(cfg->web, path.p, path.n);
@@ -690,7 +708,18 @@ int cc_host_run(const cc_host_config *config) {
     cc_host_publish_change(ch.p ? ch.p : "null", ch.len);
     buf_free(&ch);
 
+#ifdef _WIN32
+    /* WIN2: one write. UCRT's unbuffered stderr wrote fprintf's literal prefix and the rest
+     * apart: a reader saw "bimble-ccore: listening" without the port (host_test, run 45689424050). */
+    {
+        char line[256];
+        int ln = snprintf(line, sizeof line, "bimble-ccore: listening %u token %s\n", (unsigned)bound_port, cfg->token);
+        if (ln > 0 && (size_t)ln < sizeof line) fwrite(line, 1, (size_t)ln, stderr);
+        else fprintf(stderr, "bimble-ccore: listening %u token %s\n", (unsigned)bound_port, cfg->token);
+    }
+#else
     fprintf(stderr, "bimble-ccore: listening %u token %s\n", (unsigned)bound_port, cfg->token);
+#endif
     fflush(stderr);
     if (cfg->on_listen) cfg->on_listen(bound_port, cfg->on_listen_ctx);
 

@@ -121,7 +121,7 @@ int cc_links_bmsh(cc_session *s, uint32_t rev, Buf *out, cc_error *err) {
         buf_append(out, k->name, L);
         static const char zero[4];
         buf_append(out, zero, (4 - L % 4) % 4);
-        put_u32(out, k->visible ? 1u : 0u);
+        put_u32(out, k->visible && k->kind ? 1u : 0u); /* LNK1: a missing link (kind 0) draws nothing */
         buf_clear(&one);
         one.oom = 0;
         rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(&k->scene, rev, &one, err);

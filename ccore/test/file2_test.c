@@ -267,6 +267,29 @@ static void robustness(void) {
         wrap((const char *)huge[i], 10, &b);
         expect_load_error("CBOR huge length", b.p, b.len, "length runs past the data");
     }
+    /* FIXLIB: the DOM budget (json_r.h), charged at the container's head, before the memory is
+     * taken. An array of 16 M + 1 zeros (one byte each, 16 MB inflated, 16 KB of gzip) asked for
+     * 1 GB at once and decoded it; a map of 14 M entries passes the byte budget first (80 bytes a
+     * member). Both refused now before any allocation (old code: "invalid type: sequence…"
+     * after a 1 GB DOM, or "out of memory" under an address-space cap). */
+    {
+        size_t cnt = JR_MAX_NODES + 1;
+        buf_clear(&c);
+        buf_fill(&c, 0, 5 + cnt);
+        c.p[0] = (char)0x9A;
+        for (int k = 0; k < 4; k++) c.p[1 + k] = (char)(cnt >> (24 - 8 * k));
+        wrap(c.p, c.len, &b);
+        double t1 = now_ms();
+        expect_load_error("CBOR array of 16 M + 1 one-byte items: the value budget", b.p, b.len, JR_ERR_NODES);
+        printf("  array bomb: %zu B file, %zu items, refused in %.0f ms\n", b.len, cnt, now_ms() - t1);
+        size_t mc = 14000000;
+        buf_clear(&c);
+        buf_fill(&c, 0, 5 + 2 * mc);
+        c.p[0] = (char)0xBA;
+        for (int k = 0; k < 4; k++) c.p[1 + k] = (char)(mc >> (24 - 8 * k));
+        wrap(c.p, c.len, &b);
+        expect_load_error("CBOR map of 14 M entries: the byte budget", b.p, b.len, JR_ERR_BYTES);
+    }
     /* other refused CBOR */
     static const struct {
         const char *what, *bytes;
@@ -285,6 +308,36 @@ static void robustness(void) {
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
         wrap(bad[i].bytes, bad[i].n, &b);
         expect_load_error(bad[i].what, b.p, b.len, bad[i].want);
+    }
+    /* FIXLIB: a back-reference before the start of the output ("distance too far back"; without
+     * the check a copy from before the buffer, seen only by ASan): fixed block, literal 'a', then
+     * length 3 at distance 2 (one byte written); distance 1 is fine. */
+    for (int dist = 1; dist <= 2; dist++) {
+        static const unsigned char head[10] = {0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 0xFF};
+        Buf g, o;
+        buf_init(&g), buf_init(&o);
+        buf_append(&g, head, 10);
+        W w = {&g, 0, 0};
+        wput(&w, 1, 1), wput(&w, 1, 2);    /* last block, fixed codes */
+        wput(&w, rev(0x30 + 'a', 8), 8);   /* literal 'a' */
+        wput(&w, rev(1, 7), 7);            /* length 3 (symbol 257) */
+        wput(&w, rev((uint32_t)dist - 1, 5), 5); /* distance code 0 (1) or 1 (2) */
+        wput(&w, 0, 7), wput(&w, 0, 8);    /* end of block, flush */
+        unsigned char tr[8] = {0}; /* CRC32 of "aaaa" and ISIZE 4 */
+        uint32_t crc = 0xFFFFFFFFu;
+        for (int i = 0; i < 4; i++) {
+            crc ^= 'a';
+            for (int k = 0; k < 8; k++) crc = crc >> 1 ^ (0xEDB88320u & (0u - (crc & 1)));
+        }
+        crc ^= 0xFFFFFFFFu;
+        for (int i = 0; i < 4; i++) tr[i] = (unsigned char)(crc >> 8 * i);
+        tr[4] = 4;
+        buf_append(&g, tr, 8);
+        const char *why = "";
+        int rc = cc_gunzip((const unsigned char *)g.p, g.len, 1 << 20, &o, &why);
+        if (dist == 1) check_true("gzip: distance 1 after one byte: \"aaaa\"", rc == 0 && o.len == 4 && !memcmp(o.p, "aaaa", 4));
+        else check_true("gzip: distance 2 after one byte: \"distance too far back\"", rc != 0 && !strcmp(why, "gzip: distance too far back"));
+        buf_free(&g), buf_free(&o);
     }
     /* gzip-level damage */
     expect_load_error("magic only", CC_MAGIC, CC_MAGIC_LEN, "gzip: not gzip data");
@@ -474,6 +527,58 @@ static void stored_blocks(void) {
     check_true("gzip stored blocks: 0, 1, 65535, 65536, 200000 bytes round trip", !bad);
 }
 
+/* ---- LNK1: the "links" section (model.h cc_model_link, DEVIATIONS 29): left out when empty (frame
+ * saves without it, its bytes as before: golden_case), kept through text -> binary -> text, and
+ * refused when broken (not an array, a missing path, too many entries). Fails on the code before
+ * LNK1: the key was ignored and lost on save. ---- */
+static void links_section(void) {
+    size_t n = 0;
+    char *frame = slurp(golden, "frame.json", &n);
+    check_true("links: frame.json read", n > 0);
+    if (!n) return free(frame);
+    cc_model m;
+    cc_error err;
+    Buf t, b, t2;
+    buf_init(&t), buf_init(&b), buf_init(&t2);
+    check_true("links: frame loads", cc_model_load(&m, frame, n, &err) == 0);
+    cc_model_save(&m, &t);
+    check_true("links: no \"links\" key without links", !contains(buf_cstr(&t), "\"links\""));
+    static cc_model_link L[2];
+    L[0].name = (cc_str){"a.ifc", 5}, L[0].path = (cc_str){"/x/models/a.ifc", 15}, L[0].relative = (cc_str){"../models/a.ifc", 15};
+    L[1].name = (cc_str){"b.bimble", 8}, L[1].path = (cc_str){"/y/b.bimble", 11}, L[1].hidden = 1;
+    m.links = L, m.nlinks = 2;
+    buf_clear(&t);
+    cc_model_save(&m, &t);
+    check_true("links: the text names both, hidden only when hidden",
+               contains(buf_cstr(&t), "\"links\": [") && contains(buf_cstr(&t), "\"relative\": \"../models/a.ifc\"") &&
+                   contains(buf_cstr(&t), "\"hidden\": true"));
+    check_true("links: binary save", cc_model_save_v2(&m, &b) == 0);
+    cc_model_free(&m);
+    check_true("links: text -> binary -> text, the same text", to_text(b.p, b.len, &t2, &err) == 0 && t2.len == t.len &&
+                                                                    !memcmp(t2.p, t.p, t.len));
+    char *last = strrchr(frame, '}');
+    static const char *const bad[] = {"\"links\": 1", "\"links\": [{\"name\": \"a.ifc\"}]",
+                                      "\"links\": [{\"name\": \"a.ifc\", \"path\": \"p\", \"x\": 1}]"};
+    for (int i = 0; i < 3 && last; i++) { /* into the model object: before the model's closing brace */
+        Buf e;
+        buf_init(&e);
+        char *mo = last - 1;
+        while (mo > frame && *mo != '}') mo--;
+        buf_append(&e, frame, (size_t)(mo - frame));
+        buf_puts(&e, ", "), buf_puts(&e, bad[i]);
+        buf_append(&e, mo, n - (size_t)(mo - frame));
+        cc_model x;
+        int bad_rc = cc_model_load(&x, e.p, e.len, &err);
+        check_true("links: a broken section is refused (its own error)", bad_rc != 0 &&
+                   (contains(err.msg, "sequence") || contains(err.msg, "path") || contains(err.msg, "unknown field")));
+        if (!bad_rc) cc_model_free(&x);
+        buf_free(&e);
+    }
+    buf_free(&t), buf_free(&b), buf_free(&t2);
+    free(frame);
+}
+/* ---- end LNK1 ---- */
+
 int main(int argc, char **argv) {
     static char dir[4096];
     snprintf(dir, sizeof dir, "%s/..", argc > 1 ? argv[1] : "ccore/golden/floats");
@@ -487,5 +592,6 @@ int main(int argc, char **argv) {
     stored_case("frame");
     stored_case("frame2");
     stored_blocks();
+    links_section(); /* LNK1 */
     return report("file2");
 }

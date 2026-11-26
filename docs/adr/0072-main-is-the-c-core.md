@@ -61,6 +61,23 @@ release. Two cores in one tree cost twice: the Rust CI (`ci.yml`, `perf.yml`, `r
 - The Rust release workflow is gone from `main`: a Rust release can no longer be made from `main`.
   A fix to v0.19.0, if ever needed, branches from the tag.
 
+## Correction (26 Nov 2026, ticket FIXDOC)
+
+The context above says "617 public files read, C == Rust on 616". Two parts of that were
+overstated, and the decision does not depend on them:
+
+- "Read" meant not refused, not crashed, no sanitizer report; 173 git-lfs pointer files and 38
+  ifcZIP and ifcXML files were not read, and 97.7 % (now 97.9 %) of the products with a body were
+  drawn, not all.
+- "C == Rust on 616" held for the C reader of ticket IFC1. Tickets IFC2 and IFC3 then made the C
+  reader draw types Rust does not, on purpose (26 and then 17 files changed:
+  `ccore/results/ifc_corpus.md`, `ccore/golden/DEVIATIONS.md` section 10). The Rust side of that
+  comparison was a release-mode build of the golden dumper from the development sources of
+  25 Nov, not the v0.19.0 release binary.
+
+The current numbers are in the README's Status block, written from the reports by
+`ccore/tools/status.mjs`.
+
 ## How to revert
 
 `git revert <the removal commit>` ("Remove Rust from the tree: …", ticket MAIN1) on `main`: Rust,

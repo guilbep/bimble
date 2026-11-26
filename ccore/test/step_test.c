@@ -5,7 +5,9 @@
  *   comments, complex instances, malformed instances, duplicate ids across chunks, ids out of
  *   order) parses to the same entities, byte for byte, on 1 thread and on 8, and as expected.
  * - cc_jobs_run: every task once, worker indices in range, whatever the thread count. */
+#define _POSIX_C_SOURCE 200809L /* clock_gettime under -std=c11 */
 #include <stdint.h>
+#include <time.h>
 #include <string.h>
 #include "../src/jobs.h"
 #include "../src/step.h"
@@ -207,7 +209,60 @@ static void jobs(void) {
     cc_jobs_run(0, count_job, NULL); /* no tasks: nothing called */
 }
 
+static double now_s(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+/* FIXLIB: the nesting bound (step.rs MAX_DEPTH 64: a value deeper than 64 is refused). The
+ * arguments' list is depth 1, so 63 lists inside it put the innermost value at depth 64 (read)
+ * and 64 lists at 65 (the statement refused, the next one read). */
+static void depth_bound(void) {
+    for (int k = 63; k <= 64; k++) {
+        Buf t;
+        buf_init(&t);
+        buf_puts(&t, "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n#1=IFCX(");
+        for (int i = 0; i < k; i++) buf_putc(&t, '(');
+        buf_putc(&t, '1');
+        for (int i = 0; i < k; i++) buf_putc(&t, ')');
+        buf_puts(&t, ");\n#2=IFCY(2);\nENDSEC;\nEND-ISO-10303-21;\n");
+        cc_step_file f;
+        cc_error err;
+        int rc = cc_step_parse(&f, t.p, t.len, &err);
+        printf("  depth %d lists: rc %d, %zu entities, %zu skipped\n", k, rc, rc ? (size_t)0 : f.n, rc ? (size_t)0 : f.skipped);
+        if (k == 63) check_true("63 nested lists (depth 64): read", rc == 0 && f.n == 2 && f.skipped == 0);
+        else check_true("64 nested lists (depth 65): the statement refused, the next read", rc == 0 && f.n == 1 && f.skipped == 1);
+        if (rc == 0) cc_step_free(&f);
+        buf_free(&t);
+    }
+}
+
+/* FIXLIB: an unterminated comment inside a statement: the statement is skipped and the next one
+ * met it again, scanning to the end each time (80,000 lines: 22 s). The answer is Rust's (every
+ * such statement skipped, a statement before them read); the scan is done once now. */
+static void open_comment(void) {
+    Buf t;
+    buf_init(&t);
+    buf_puts(&t, "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n#1=IFCX(/* closed */ 1);\n");
+    char line[64];
+    for (int i = 2; i < 80002; i++) snprintf(line, sizeof line, "#%d=A(/*;\n", i), buf_puts(&t, line);
+    cc_step_file f;
+    cc_error err;
+    double t0 = now_s();
+    int rc = cc_step_parse(&f, t.p, t.len, &err);
+    double dt = now_s() - t0;
+    printf("  80,000 unterminated comments: rc %d, %zu entities, %zu skipped, %.3f s\n", rc, rc ? (size_t)0 : f.n,
+           rc ? (size_t)0 : f.skipped, dt);
+    check_true("80,000 unterminated comments: #1 read, the rest skipped", rc == 0 && f.n == 1 && f.ents[0].id == 1 && f.skipped == 80000);
+    check_true("80,000 unterminated comments: in under 3 s (22 s before)", dt < 3.0);
+    if (rc == 0) cc_step_free(&f);
+    buf_free(&t);
+}
+
 int main(void) {
+    open_comment();
+    depth_bound();
     skipping();
     chunks();
     jobs();
