@@ -1,0 +1,8 @@
+schema "IFC4"
+origin 409f400000000000 40a3880000000000 c05f400000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cIdxArc000000000004" "Level 0"
+grids 0
+elements 1 triangles 292 meshes yes
+000 2T2cIdxArc000000000010 IfcSlab 0 Concrete v=148 i=292 e=150 n=150 name="D slab" storey="Level 0" material="C30/37"

@@ -1,0 +1,7 @@
+schema "IFC4"
+origin 0000000000000000 0000000000000000 0000000000000000
+georef {}
+storeys 0
+grids 0
+elements 0 triangles 0 meshes yes
+warning model too large or nested too deeply: 1 element(s) not shown after 0 triangles / 250011 items

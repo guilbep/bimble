@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of `move` and `copy`.",
+  "properties": {
+    "d": {
+      "description": "Vector [dx, dy, dz], mm.",
+      "items": {
+        "format": "double",
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "ids": {
+      "description": "GlobalIds of the elements.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "ids",
+    "d"
+  ],
+  "title": "MoveArgs",
+  "type": "object"
+}

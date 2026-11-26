@@ -4,10 +4,13 @@ export const hint = "filemenu.hint";
 
 <script setup lang="ts">
 // Screen A2, File menu (wireframes v01 fr/FileMenu.html). Each entry runs one egui action by name (`query("actions")`).
-import { actions, runAction } from "../bimble";
+import { actions, query, state } from "../bimble";
+import { act, can } from "../shell/send";
 import { t } from "../i18n";
 import type * as copy from "../i18n/parts/filemenu";
 import { currentDialog } from ".";
+import { HIDE_NOT_AVAILABLE, notYetAction } from "../shell/capability"; // FAKE1
+import { shortcutFor } from "../shell/keys";
 
 type Key = keyof typeof copy.fr;
 const tx = (k: Key) => t(k);
@@ -17,14 +20,18 @@ const NEW = '<path d="M5 3h10l4 4v14H5z"/><path d="M12 10v6M9 13h6"/>';
 const UP = '<path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 13v8h14v-8"/>';
 const INFO = '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><path d="M12 8h.01"/>';
 
-interface Entry { key: Key; icon: string; kbd?: string; action?: string; missing?: string; dialog?: string }
+// KEY1: the shortcut shown is the key table's (shell/keys.ts, Rust's): none for Open, Print, Settings (Rust has none).
+interface Entry { key: Key; icon: string; action?: string; missing?: string; dialog?: string }
 const sections: { title: Key; entries: Entry[] }[] = [
   { title: "filemenu.files", entries: [
-    { key: "filemenu.new", icon: NEW, kbd: "Ctrl+N", action: "new" },
-    { key: "filemenu.open", icon: '<path d="M3 7h6l2 2h10v10H3z"/><path d="M3 7V5h6"/>', kbd: "Ctrl+O", action: "open" },
+    { key: "filemenu.new", icon: NEW, action: "new" },
+    { key: "filemenu.open", icon: '<path d="M3 7h6l2 2h10v10H3z"/><path d="M3 7V5h6"/>', action: "open" },
     { key: "filemenu.importIfc", icon: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 13v8h14v-8"/>', action: "import_ifc" },
     { key: "filemenu.convert", icon: NEW, action: "convert_open" },
-    { key: "filemenu.save", icon: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><rect x="8" y="13" width="8" height="5"/>', kbd: "Ctrl+S", action: "save" },
+    { key: "filemenu.save", icon: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><rect x="8" y="13" width="8" height="5"/>', action: "save" },
+    // ---- FS1: Save as (not a ribbon action: enabled with an editable model, calls.c action_enabled) ----
+    { key: "filemenu.saveAs", icon: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><path d="M12 13v5M9.5 15.5h5"/>', action: "save_as" },
+    // ---- end FS1 ----
   ] },
   { title: "filemenu.share", entries: [
     { key: "filemenu.shareView", icon: '<circle cx="6" cy="12" r="2.2"/><circle cx="17" cy="6" r="2.2"/><circle cx="17" cy="18" r="2.2"/><path d="m8 11 7-4M8 13l7 4"/>', action: "share_for_viewing" },
@@ -33,25 +40,37 @@ const sections: { title: Key; entries: Entry[] }[] = [
   ] },
   { title: "filemenu.paper", entries: [
     // Print and export opens screen D4 (dialogs/Export.vue).
-    { key: "filemenu.print", icon: '<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1"/><path d="M7 14h10v6H7z"/>', kbd: "Ctrl+P", dialog: "export" },
+    { key: "filemenu.print", icon: '<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1"/><path d="M7 14h10v6H7z"/>', dialog: "export" },
     // egui "Export view… (PDF, SVG)".
     { key: "filemenu.exportView", icon: UP, action: "on_paper" },
   ] },
   { title: "filemenu.project", entries: [
     { key: "filemenu.projectInfo", icon: INFO, action: "project" },
     { key: "filemenu.history", icon: '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/>', action: "history" },
-    { key: "filemenu.settings", icon: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>', kbd: "Ctrl+,", action: "settings" },
+    { key: "filemenu.settings", icon: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>', action: "settings" },
     { key: "filemenu.about", icon: INFO, action: "about" },
   ] },
 ];
 
-const on = (name?: string) => !!name && actions.value.some((a) => a.name === name && a.enabled);
+// The lab's own screens (shell/machine.ts): enabled where the shell has a row for them, not by `actions`.
+const SCREENS: Record<string, string> = { project: "project-info", history: "history" };
+// FAKE1: the core enables project and history now (ACT1): a screen entry needs its action too (not for a read-only file).
+const enabledNow = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
+const on = (name?: string) => !!name && (name === "save_as" ? editable() /* FS1 */ : name in SCREENS ? can({ do: "showPage", page: SCREENS[name]! }) && enabledNow(name) : enabledNow(name));
+// ---- FAKE1: an entry whose action this core does not serve (shell/capability.ts): greyed with a "not yet" tooltip ----
+const notYet = (e: Entry) => !!e.action && notYetAction(e.action);
+// ---- end FAKE1 ----
+// PAPER1: a "not yet" entry is greyed even when the core enables its action (the viewer-only wasm keeps Rust's
+// enable rules and refuses the run: on_paper).
+// A refusal of the session is shown (the shell's error state), not only logged.
+// FS1: save_as is not in `query("actions")`; an editable model has it (calls.c action_enabled).
+function editable(): boolean {
+  void state.value;
+  try { return query<{ editable?: boolean }>("state").editable === true; } catch { return false; }
+}
 function run(name?: string) {
   currentDialog.value = null;
-  if (name) {
-    const err = runAction(name);
-    if (err) console.warn(`file menu ${name}: ${err}`);
-  }
+  if (name) act(name);
 }
 </script>
 
@@ -59,11 +78,12 @@ function run(name?: string) {
   <div class="bb-menu fm" role="menu" :aria-label="tx('filemenu.label')" data-bb="file-menu">
     <template v-for="s in sections" :key="s.title">
       <div class="eyebrow">{{ tx(s.title) }}</div>
-      <button v-for="e in s.entries" :key="e.key" class="ti" type="button" role="menuitem"
-        :disabled="!e.dialog && !on(e.action)" :data-missing="e.missing" :data-bb="`file-menu-${e.action ?? e.dialog ?? e.missing}`"
+      <button v-for="e in s.entries.filter((x) => !(HIDE_NOT_AVAILABLE && notYet(x)))" :key="e.key" class="ti" type="button" role="menuitem"
+        :disabled="!e.dialog && (!on(e.action) || notYet(e))" :data-missing="e.missing" :data-bb="`file-menu-${e.action ?? e.dialog ?? e.missing}`"
+        :data-not-yet="notYet(e) ? '' : undefined" :title="notYet(e) ? t('na.tooltip', { name: tx(e.key) }) : undefined"
         @click="e.dialog ? (currentDialog = e.dialog) : run(e.action)">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="e.icon"></svg>
-        <span style="flex:1">{{ tx(e.key) }}</span><span class="mono">{{ e.kbd ?? '' }}</span>
+        <span style="flex:1">{{ tx(e.key) }}</span><span class="mono" data-bb="file-menu-kbd">{{ shortcutFor(e.action) }}</span>
       </button>
     </template>
     <div class="sep"></div>

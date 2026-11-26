@@ -1,0 +1,54 @@
+{
+  "$defs": {
+    "MirrorAxis": {
+      "additionalProperties": false,
+      "description": "A vertical mirror plane: through `point`, along `dir` (plan, mm).",
+      "properties": {
+        "dir": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "point": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "required": [
+        "point",
+        "dir"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of `mirror`.",
+  "properties": {
+    "axis": {
+      "$ref": "#/$defs/MirrorAxis"
+    },
+    "ids": {
+      "description": "GlobalIds of the elements.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "ids",
+    "axis"
+  ],
+  "title": "MirrorArgs",
+  "type": "object"
+}

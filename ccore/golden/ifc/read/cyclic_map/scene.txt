@@ -1,0 +1,8 @@
+schema "IFC4"
+origin 0000000000000000 0000000000000000 4049000000000000
+georef {}
+storeys 0
+grids 0
+elements 1 triangles 12 meshes yes
+000 1YvctVUKr0kugbFTf53O9L IfcWall 7 Other v=8 i=12 e=12 n=12 name="w" storey="" material=""
+warning representation map contains itself (cycle skipped) (×2)

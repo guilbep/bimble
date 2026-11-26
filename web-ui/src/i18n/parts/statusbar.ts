@@ -1,6 +1,7 @@
 // Copy for the statusbar band. Keys are added here only (one file per component ticket).
 export const fr = {
   "status.hint": "Glisser : orbite · Clic droit + glisser : panoramique · Molette : zoom · Poignées : zone de coupe",
+  "status.hintPlan": "Glisser : panoramique · Molette : zoom",
   "status.selectedOne": "1 sélectionné",
   "status.selected": "{n} sélectionnés",
   "status.sectionBox": "Zone de coupe",
@@ -19,6 +20,7 @@ export const fr = {
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "status.hint": "Drag: orbit · Right-drag: pan · Scroll: zoom · Handles: section box",
+  "status.hintPlan": "Drag: pan · Scroll: zoom",
   "status.selectedOne": "1 selected",
   "status.selected": "{n} selected",
   "status.sectionBox": "Section box",

@@ -11,110 +11,72 @@ Open-source structural BIM (Building Information Modeling), built to stay fast o
 IFC is the data model; `.bimble` is our own format, a superset of IFC with history and branches.
 Concrete first: model → IFC → formwork and rebar drawings.
 
-## Download
+Bimble is a small C core (`ccore/`) behind a Vue lab (`web-ui/`). The core reads and writes the
+model, IFC, drawings and PDF; the lab is the user interface, in the browser. The same C code runs
+as a local server on the desktop (your browser is the window), as a wasm module in a web page,
+and as an MCP server for agents (ADR 0067–0069, ADR 0072).
 
-Prebuilt binaries for macOS, Windows and Linux are on the
-[releases page](https://github.com/guilbep/bimble/releases). Unpack and run `bimble`.
+## Status (25 Nov 2026, version `0.1.0-preview.2`)
 
-## View a model
+A preview. The numbers come from the generated reports in `ccore/results/`:
 
-```bash
-bimble                         # opens the viewer; Open… or drop a file on the window
-bimble view model.ifc          # IFC2x3 / IFC4 / IFC4x3, or a .bimble file
-```
+- **IFC reading:** 617 public STEP files (IFC2X3, IFC4, IFC4X3; 1.24 GB): all read, no report
+  under ASan and UBSan, the same scene and meshes as the last Rust release on 616 of them; 97.7 %
+  of the products with a body are drawn. Against IfcOpenShell 0.9.0 on 40 files: 15,409 products
+  with geometry for its 15,679 (`ifc_corpus.md`, with the short to-do list for full IFC).
+- **Editing:** the 14 verbs of the Rust release plus C additions (rename, levels, grids,
+  dimensions, texts), undo and redo, `.bimble` text and binary, IFC4 and IFC2x3 export, plans,
+  sheets, PDF and SVG, quantities and schedules, linked models, PDF and DXF reference plans.
+- **Against the Rust app** (`parity.md`): 54 of 54 actions present, 40 with the same state in
+  every scenario; 18 of 29 queries the same shape; 16 of 16 shortcuts handled. What is still
+  missing or a stub is listed there, and the lab labels it "not available yet".
+- **Size** (`weight.md`): 52,910 lines of C; the viewer wasm 407,538 bytes (192,859 gzip), the
+  editor wasm 953,165 bytes, the native program 3.1 MB, the Linux release archive 2.4 MB.
+- **Speed** (`perf.md`, `bench.md`): the C lab on GitHub Pages scores 100 / 94 (Lighthouse
+  performance, desktop / mobile); edit a C file → new pixels in the lab in 0.23 s (median, dev
+  loop).
 
-Drag to orbit, right-drag or Shift-drag to pan, scroll to zoom, click to select, double-click or
-`F` to fit, `T` top view, `O` orthographic, `E` edges, `H` hatching. The side panel shows or hides
-elements by material family, IFC class and storey.
+Not yet: the boolean kernel in wasm (openings are drawn uncut in the browser build), Windows
+(a CI probe), collaboration, rebar, steel. See [ROADMAP.md](ROADMAP.md).
 
-## Command line
+## Try it
 
-```bash
-bimble render model.ifc out.png --hide earth   # PNG without a window (also works on servers)
-bimble info model.ifc                          # counts, materials, triangles, load time
-bimble demo frame.bimble                       # 2 storeys, 3×2 bays concrete frame
-bimble ls frame.bimble --class IfcBeam         # GlobalId, class, name, parameters
-bimble set frame.bimble <GlobalId> height=600 -o frame2.bimble
-bimble diff frame.bimble frame2.bimble         # element-level diff
-bimble export-ifc frame.bimble frame.ifc       # IFC4
-bimble import-ifc model.ifc model.bimble       # IFC → editable .bimble (columns, beams, slabs, walls, footings,
-                                               # openings cut, property sets, report of what didn't map)
-bimble plan model.ifc plan.pdf --storey "Niveau 1" --scale 100      # storey plan (.pdf, .svg, .png)
-bimble plan model.ifc plan.pdf --storey N01 --template docs/templates/plan-fr.json \
-       --field phase="Projet d'ouvrage"                              # office title block and words
-bimble plan-template                           # the default plan template (JSON) to start from
+- **In a browser:** <https://guilbep.github.io/bimble/c/> (the C lab, built from `main`). Files
+  you open stay on your computer.
+- **Desktop (Linux x86_64 and aarch64, macOS arm64 and x86_64):** the archives of the latest
+  `ccore-v*` [prerelease](https://github.com/guilbep/bimble/releases). Unpack, then
+  `./bimble-ccore open model.ifc`: the lab opens in your browser.
+- **Homebrew:** `brew tap guilbep/bimble https://github.com/guilbep/bimble && brew install
+  bimble-ccore`.
+- **For agents:** `bimble-ccore mcp model.bimble` is an MCP server over stdio (`ccore/README.md`).
 
-bimble history init frame.bimble               # history in frame.bimble-history/
-bimble history commit frame.bimble -m "Deeper beams"
-bimble history log frame.bimble
-bimble history branch frame.bimble variant && bimble history switch frame.bimble variant
-bimble history merge frame.bimble variant      # by GlobalId, field by field; --prefer ours|theirs
-```
+## Develop
 
-`.bimble` models can also be edited in the viewer (Edit…, History…, Ctrl+Z / Ctrl+Y / Ctrl+S).
-
-## In a browser
-
-The viewer also runs in a web page (WebGPU, or WebGL2 where there is no WebGPU). Files you open
-stay on your computer: nothing is uploaded. Saving and plan exports are downloads; the model
-history is desktop-only for now.
+[DEV.md](DEV.md) is the guide: prerequisites, `make dev` (edit C, see pixels), one suite, the
+gate, sanitizers, debugging, how to add a verb, query, action, page or test. In short, on Linux
+with clang, lld, tcc, node and Chromium:
 
 ```bash
-make web-setup   # once: wasm32 target and the matching wasm-bindgen-cli
-make serve       # builds web/dist/ (static files, needs npm), then open http://localhost:8000
+ccore/deps.sh                  # once: the boolean kernel (manifold)
+(cd web-ui && npm ci)          # once
+make dev                       # the lab on http://localhost:5173, rebuilt on every save
+ccore/test/run.sh json         # one suite
+ccore/ci/run.sh fast           # the gate of every change (CI runs `full`)
 ```
 
-## Build from source
+Rules for contributors and agents: [CLAUDE.md](CLAUDE.md). Decisions: [docs/adr](docs/adr). Work
+log: [docs/journal](docs/journal). The C core's internals: [ccore/README.md](ccore/README.md).
+Releases: [docs/RELEASING.md](docs/RELEASING.md).
 
-### Prerequisites
+## Where the Rust version went
 
-Rust stable (through [rustup](https://rustup.rs)), plus CMake and a C++ compiler for the geometry
-kernel.
+Bimble was written in Rust until 25 Nov 2026. The last Rust release, **v0.19.0**, is the frozen
+reference the C core is checked against (ADR 0067): its binaries stay on the
+[releases page](https://github.com/guilbep/bimble/releases/tag/v0.19.0), `brew install bimble`
+installs it, and its lab is still the root of <https://guilbep.github.io/bimble/>. The Rust
+sources are on the tag `v0.19.0` and on the branch `oracle/rust` (with the dumpers that wrote
+`ccore/golden/`), not on `main` (ADR 0072).
 
-```bash
-# macOS
-xcode-select --install
-brew install rustup cmake
-echo 'export PATH="$(brew --prefix rustup)/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
-rustup default stable
+## Licence
 
-# Debian / Ubuntu (rustup from https://rustup.rs)
-sudo apt-get install build-essential cmake
-
-# Windows (Visual Studio Build Tools with the C++ workload, which rustup offers to install)
-winget install Rustlang.Rustup Kitware.CMake
-```
-
-Optional: `npm` for the browser build, `wasm-opt` (binaryen) for a smaller page,
-`pip install ifcopenshell` for the checks below.
-
-### Build
-
-```bash
-make                           # binary in target/release/bimble
-make check                     # format, clippy and tests, as in CI
-make help                      # the other targets
-```
-
-No `make` (Windows): `cargo build --release -p bimble-cli`, `cargo test --workspace`.
-
-Checks against IfcOpenShell (`pip install ifcopenshell`):
-
-```bash
-python3 scripts/check_ifc.py frame.bimble frame.ifc            # our export, read by IfcOpenShell
-bimble info model.ifc --elements-json > ours.jsonl
-python3 scripts/compare_ifcopenshell.py model.ifc ours.jsonl    # our reader vs IfcOpenShell
-```
-
-## Layout
-
-| Crate | Role |
-|---|---|
-| `bimble-core` | IFC-typed model, GlobalIds, generators, commands + undo, hashing, diff, `.bimble` I/O |
-| `bimble-geom` | Meshes, scenes (render-ready, rebased to a local origin), crease edges |
-| `bimble-ifc` | IFC4 export; STEP parser and IFC reader for display |
-| `bimble-render` | Drawing-style wgpu renderer, camera, picking, headless PNG output |
-| `bimble-viewer` | The viewer window (eframe) |
-| `bimble-cli` | The `bimble` binary |
-
-See [ROADMAP.md](ROADMAP.md), [docs/adr](docs/adr), [docs/format](docs/format) and, to publish a version, [docs/RELEASING.md](docs/RELEASING.md).
+MIT, see [LICENSE](LICENSE).

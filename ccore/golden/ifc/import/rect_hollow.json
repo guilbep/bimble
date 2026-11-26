@@ -1,0 +1,90 @@
+{
+  "format": "bimble",
+  "version": 1,
+  "model": {
+    "project_id": "2T2cRHollow00000000001",
+    "project_name": "Imported model",
+    "storeys": {
+      "2T2cRHollow00000000004": {
+        "id": "2T2cRHollow00000000004",
+        "name": "Level 0",
+        "elevation": 0.0
+      }
+    },
+    "materials": {
+      "<new-1>": {
+        "id": "<new-1>",
+        "name": "S235",
+        "category": "steel"
+      }
+    },
+    "elements": {
+      "2T2cRHollow00000000010": {
+        "id": "2T2cRHollow00000000010",
+        "class": "IfcColumn",
+        "name": "RHS 200x100x8",
+        "storey": "2T2cRHollow00000000004",
+        "material": "<new-1>",
+        "placement": {
+          "origin": [
+            1000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              -100.0,
+              -50.0
+            ],
+            [
+              100.0,
+              -50.0
+            ],
+            [
+              100.0,
+              50.0
+            ],
+            [
+              -100.0,
+              50.0
+            ]
+          ],
+          "voids": [
+            [
+              [
+                -92.0,
+                42.0
+              ],
+              [
+                92.0,
+                42.0
+              ],
+              [
+                92.0,
+                -42.0
+              ],
+              [
+                -92.0,
+                -42.0
+              ]
+            ]
+          ],
+          "height": 3000.0
+        }
+      }
+    }
+  }
+}

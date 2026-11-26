@@ -1,0 +1,4 @@
+1 elements (0 parametric, 0 extruded polygons, 1 meshes)
+  IfcWall: 1
+warning: no IfcBuildingStorey in the file; elements go into a synthetic storey
+warning: model too large or nested too deeply: geometry stopped at the import limits; what was left is skipped

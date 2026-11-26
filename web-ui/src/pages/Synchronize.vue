@@ -1,5 +1,6 @@
 <script lang="ts">
 export const hint = "synchronize.hint";
+export const capability = "collaboration"; // FAKE1
 </script>
 
 <script setup lang="ts">

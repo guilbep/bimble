@@ -1,0 +1,2 @@
+~ IfcColumn P2.00 [004z1Cm4z4hgNOg0ez4Id1]
+    placement.origin.0: 0.0 → 250.0

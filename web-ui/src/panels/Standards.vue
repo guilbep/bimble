@@ -1,6 +1,7 @@
 <script lang="ts">
 export const hint = "standards.hint";
 export const label = "standards.title";
+export const capability = "standards"; // FAKE1
 </script>
 
 <script setup lang="ts">

@@ -1,0 +1,2 @@
+~ IfcBeam Poutre "P1" — renommée [01KnL9d95C2OMpOLdTJDE_]
+    name: "B2.x01" → "Poutre \"P1\" — renommée"

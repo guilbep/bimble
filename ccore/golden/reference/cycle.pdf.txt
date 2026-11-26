@@ -1,0 +1,3 @@
+note PDF page 1 of 2, read at 1:100
+polylines 1 points 2
+[[0.0, 0.0], [352.7777777777777, 352.7777777777777]]

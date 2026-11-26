@@ -1,0 +1,9 @@
+Ryu (shortest round-trip double to decimal), by Ulf Adams.
+URL:    https://github.com/ulfjack/ryu
+Commit: 4c0618b0e44f7ef027ebae05d2cc7812048f7c8f (master, 2026-02-10; latest tag v2.0 is older)
+Files:  ryu/{common.h,d2s.c,d2s_full_table.h,d2s_intrinsics.h,d2s_small_table.h,digit_table.h,ryu.h,
+        f2s.c,f2s_intrinsics.h},
+        LICENSE-Apache2, LICENSE-Boost (dual licence, unchanged).
+Local changes: none. ccore/src/fmt.c includes ryu/d2s.c to reach the static d2d() and
+d2d_small_int() functions; ccore/src/pdf_out.c includes ryu/f2s.c for its static f2d() (f32
+numbers in PDFs, as the ryu crate). tcc and wasm32 builds define RYU_ONLY_64_BIT_OPS (no __int128).

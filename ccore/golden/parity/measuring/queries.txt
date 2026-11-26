@@ -1,0 +1,44 @@
+state -> 200 {editable:bool,file:str,schema:null,unsaved:bool,user:null,version:str}
+recent_files -> 200 [{exists:bool,folder:str,name:str,opened_unix:null,path:str,schema:null}]*1
+storeys -> 200 [{id:str,name:str,elevation:num,element_count:num}]*3
+materials -> 200 [{id:str,name:str,category:str,element_count:num}]*1
+standards -> 200 {actions:{reset:bool,revert:bool,save:bool},hatches:[{cut:null,family:str,seen:null}]*8,moved:[],pens:{roles:{cut:num,seen:num,thin:num},rows:[{mm:[…]*7,pen:num}]*16,scales:[num]*7},source:null}
+elements -> 200 [{id:str,class:str,name:str,storey:str,material:str,generator:str}]*72
+element {"id":"<id>"} -> 200 {id:str,class:str,name:str,storey:str,material:str,generator:str,storey_name:str,material_name:str,placement:{origin:[num]*3,z_axis:[num]*3,x_axis:[num]*3},generator_params:{depth:num,height:num,kind:str,width:num},openings:num,properties:{}}
+palette_match {"q":"sec","items":["Section box","Fit all","Section labels on plans"]} -> 200 [num]*2
+recent_actions -> 200 [str]*1
+actions -> 200 [{enabled:bool,label:str,name:str,pressed:bool,shortcut:str,tab:str}]*54
+verbs -> 200 [{name:str,summary:str}]*14
+describe {"name":"place"} -> 200 {$defs:{Kind:{oneOf:[{…}]*4},Sizes:{description:str,properties:{beam_height:{…},beam_width:{…},column:{…},slab:{…},wall:{…}},type:str}},$schema:str,additionalProperties:bool,description:str,properties:{a:{description:str,items:{format:str,type:str},maxItems:num,minItems:num,type:str},b:{description:str,items:{format:str,type:str},maxItems:num,minItems:num,type:[str]*2},kind:{$ref:str},material:{description:str,type:[str]*2},sizes:{anyOf:[{…}]*2,description:str},storey:{description:str,type:str}},required:[str]*3,title:str,type:str}
+history -> 200 {redo:[],undo:[]}
+open_views -> 200 {active:str,current:{id:str,type:str},paper:{offered:bool,on:bool},tabs:[{id:str,type:str}]*1,views:[{annotations:num,auto_name:{kind:str,storey:null},crop:null,id:str,name:str,references:num,scale:num,true_north:bool,type:str}]*7}
+schedule_list -> 200 [{name:str,classes:[str]*1,family:str,fields:[str]*7,group_by_level:bool,totals:bool}]*10
+pointer -> 200 null
+placing -> 200 {active:bool,clicks_needed:num,hint:null,kind:str,material:null,offset_mm:[num]*3,points:[],shape:str,sizes:{beam_height:num,beam_width:num,column:num,slab:num,wall:num},storey:str,storey_name:str,top_offset_mm:num}
+links -> 200 []
+measurements -> 200 []
+status -> 200 {visible:num,total:num,triangles:num,load_ms:num,model_bytes:num,app_bytes:num,fps:null,idle:bool,text:str}
+collab -> 200 {belongs:null,borrowed_by_me:num,borrowed_by_others:[],folder:null,last_sync:null,right:null,user:null}
+visibility -> 200 {hidden_in_view:{count:num,ids:[]},hidden_now:{count:num,ids:[]},isolated_in_view:{count:num,ids:[]},isolated_now:{count:num,ids:[]},section_box:{box:null,on:bool,origin_mm:[num]*3}}
+schedule_rows {"name":"Concrete columns"} -> 200 {columns:[str]*7,count:num,groups:[{ids:[str]*12,level:str,rows:[[…]*7]*12,subtotal:[str]*7}]*2,name:str,total:[str]*7,truncated:bool}
+schedule_csv {"name":"Concrete columns"} -> 200 {csv:str}
+sheet_svg {"id":"<id>"} -> 400 "no sheet with id \"0000000000000000000000\""
+project -> 200 {building_id:str,id:str,info:{},name:str,site_id:str}
+views -> 200 []
+sheets -> 200 []
+schedules -> 200 []
+visibility_sets -> 400 "unknown query \"visibility_sets\"; known: storeys, materials, elements, element, project, views, sheet…"
+view_clip -> 400 "unknown query \"view_clip\"; known: storeys, materials, elements, element, project, views, sheets, sch…"
+view_annotations {"view":"<id>"} -> 400 "unknown query \"view_annotations\"; known: storeys, materials, elements, element, project, views, shee…"
+annotate -> 400 "unknown query \"annotate\"; known: storeys, materials, elements, element, project, views, sheets, sche…"
+ghost -> 400 "unknown query \"ghost\"; known: storeys, materials, elements, element, project, views, sheets, schedul…"
+view_references {"view":"<id>"} -> 400 "unknown query \"view_references\"; known: storeys, materials, elements, element, project, views, sheet…"
+measure -> 400 "unknown query \"measure\"; known: storeys, materials, elements, element, project, views, sheets, sched…"
+sheet_layout {"id":"<id>"} -> 400 "unknown query \"sheet_layout\"; known: storeys, materials, elements, element, project, views, sheets, …"
+north -> 400 "unknown query \"north\"; known: storeys, materials, elements, element, project, views, sheets, schedul…"
+coordinates -> 400 "unknown query \"coordinates\"; known: storeys, materials, elements, element, project, views, sheets, s…"
+grids -> 400 "unknown query \"grids\"; known: storeys, materials, elements, element, project, views, sheets, schedul…"
+versions -> 400 "unknown query \"versions\"; known: storeys, materials, elements, element, project, views, sheets, sche…"
+branches -> 400 "unknown query \"branches\"; known: storeys, materials, elements, element, project, views, sheets, sche…"
+version_changes -> 400 "unknown query \"version_changes\"; known: storeys, materials, elements, element, project, views, sheet…"
+pending -> 400 "unknown query \"pending\"; known: storeys, materials, elements, element, project, views, sheets, sched…"

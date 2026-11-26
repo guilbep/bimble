@@ -12,6 +12,7 @@ import { actions, openView, openViews, paletteMatch, recentActions, runAction, s
 import { t } from "../i18n";
 import { RIBBON, type RibbonTool } from "../shell/ribbon-tabs";
 import { viewName } from "../shell/viewName";
+import { shortcutFor } from "../shell/keys"; // KEY1: the shortcut shown is the one the key table runs
 import { currentDialog } from ".";
 
 interface Item { /** The Rust action name, for actions. */ name?: string; label: string; /** Also searched: the Rust (English) label. */ also?: string; note: string; kbd: string; icon: string; enabled: boolean; go: () => string | null }
@@ -39,7 +40,7 @@ const items = computed<Item[]>(() => {
       label: copy(`action.${a.name}`, a.label),
       also: a.label,
       note: a.tab in TAB ? t(TAB[a.tab]!) : copy(`actionTab.${a.tab}`, a.tab),
-      kbd: a.shortcut ?? "—",
+      kbd: shortcutFor(a.name) || "—",
       icon: tool?.icon ?? "",
       enabled: a.enabled,
       go: () => runAction(a.name),
@@ -62,7 +63,16 @@ const text = ref("");
 const shown = computed(() => {
   const all = items.value;
   const q = text.value.trim();
-  if (q) return paletteMatch(q, all.map((i) => `${i.label} ${i.also ?? ""}`)).map((k) => all[k]!);
+  if (q) {
+    // Q2: a client whose palette_match fails (an old C core answered "not in the C core") must not
+    // throw out of this computed: a plain case-insensitive part match instead, and one warning.
+    const texts = all.map((i) => `${i.label} ${i.also ?? ""}`);
+    try { return paletteMatch(q, texts).map((k) => all[k]!).filter(Boolean); } catch (e) {
+      console.warn(`palette: palette_match: ${e instanceof Error ? e.message : String(e)}`);
+      const lq = q.toLowerCase();
+      return all.filter((_, k) => texts[k]!.toLowerCase().includes(lq));
+    }
+  }
   let recent: string[] = [];
   try { recent = recentActions(); } catch { /* no viewer yet */ }
   const first = recent.map((n) => all.find((i) => i.name === n)).filter((i): i is Item => !!i);

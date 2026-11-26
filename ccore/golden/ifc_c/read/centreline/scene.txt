@@ -1,0 +1,8 @@
+schema "IFC4"
+origin 407f900000000000 406ea00000000000 407f400000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cCentreline00000004" "Level 0"
+grids 0
+elements 1 triangles 20 meshes yes
+000 2T2cCentreline00000010 IfcMember 7 Other v=12 i=20 e=18 n=18 name="centreline" storey="Level 0" material=""

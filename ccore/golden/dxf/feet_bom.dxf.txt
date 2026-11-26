@@ -1,0 +1,4 @@
+notes 1
+DXF units: feet
+polylines 1
+[[304.8, 304.8], [609.6, 609.6]]

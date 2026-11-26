@@ -1,26 +1,28 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
-import { state, actions, historyLabels, runAction, undo, redo } from "../bimble";
+import { computed } from "vue";
+import { state, actions, historyLabels, undo, redo } from "../bimble";
+import { act as runAction } from "./send";
 import { t } from "../i18n";
 import { currentDialog } from "../dialogs";
 import { page } from "../pages";
 import labIcon from "../brand/bimble-icon-lab.svg";
+// KEY1: Ctrl K / Cmd K opens the command palette (D8) in shell/keys.ts, as every shortcut; its label from there.
+import { shortcutFor } from "./keys";
 
 /** Whether the ribbon action `name` is enabled now (`query("actions")`). */
 const on = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
+// ---- FAKE1: a file open read only shows "Read only", never "Saved" with a Save; Synchronize and the
+// user disc only where the core serves them (shell/capability.ts) ----
+import { has } from "./capability";
+const readOnly = computed(() => state.value.file !== null && state.value.editable === false);
+const canSave = computed(() => on("save") && !readOnly.value);
+// ---- end FAKE1 ----
 const undoLabel = computed(() => {
   const what = historyLabels.value.undo[0];
   return what ? t("quick.undo", { what }) : t("app.undo");
 });
 // A full-window page (Home) has the reference's short header: logo, File, command field, user (fr/Home.html).
 const bare = computed(() => page()?.layout === "full");
-// Ctrl+K / Cmd+K opens the command palette anywhere (D8). Capture phase, and the event stops here:
-// egui binds Ctrl K to its own palette when the canvas has focus.
-function onKey(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); e.stopImmediatePropagation(); currentDialog.value = "palette"; }
-}
-onMounted(() => window.addEventListener("keydown", onKey, true));
-onUnmounted(() => window.removeEventListener("keydown", onKey, true));
 </script>
 
 <template>
@@ -36,7 +38,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
     <span v-if="!bare" class="tabsep" data-bb="quickbar-sep"></span>
     <button v-if="!bare" class="ib" type="button" :disabled="!on('open')" :aria-label="t('quick.open')" :title="t('quick.open')" data-bb="quickbar-open"
       @click="runAction('open')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z"/><path d="M3 7V5h6"/></svg></button>
-    <button v-if="!bare" class="ib" type="button" :disabled="!on('save')" :aria-label="t('quick.save')" :title="t('quick.save')" data-bb="quickbar-save"
+    <button v-if="!bare" class="ib" type="button" :disabled="!canSave" :aria-label="t('quick.save')" :title="t('quick.save')" data-bb="quickbar-save"
       @click="runAction('save')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><rect x="8" y="13" width="8" height="5"/></svg></button>
     <button v-if="!bare" class="ib" type="button" :disabled="!on('undo')" :aria-label="undoLabel" :title="undoLabel" data-bb="quickbar-undo"
       @click="undo()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 7 5 11l4 4"/><path d="M5 11h9a5 5 0 0 1 0 10h-3"/></svg></button>
@@ -45,20 +47,21 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
     <!-- Print and export opens screen D4 (dialogs/Export.vue). -->
     <button v-if="!bare" class="ib a" type="button" :aria-label="t('quick.export')" :title="t('quick.export')" data-bb="quickbar-export"
       aria-haspopup="dialog" @click="currentDialog = 'export'"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1"/><path d="M7 14h10v6H7z"/></svg></button>
-    <button v-if="!bare" class="ib a" type="button" :disabled="!on('synchronize')" :aria-label="t('quick.sync')" :title="t('quick.sync')" data-bb="quickbar-sync"
+    <button v-if="!bare && has('collaboration')" class="ib a" type="button" :disabled="!on('synchronize')" :aria-label="t('quick.sync')" :title="t('quick.sync')" data-bb="quickbar-sync"
       @click="runAction('synchronize')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.5-4.5L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.5 4.5L20 16"/><path d="M20 20v-4h-4"/></svg></button>
     <div v-if="bare" style="flex:1"></div>
     <div v-else class="fname">
       <span data-bb="filename">{{ state.file ?? t('app.noFile') }}</span>
       <!-- `query("state").schema`: ".bimble", "IFC4"… -->
       <span class="mono schema" style="font-size:12px" data-bb="quickbar-schema">{{ state.schema ?? '' }}</span>
-      <span class="chip nx" :class="state.unsaved ? 'c-o' : 'c-m'" data-bb="state-chip">{{ t(state.unsaved ? 'quick.notSaved' : 'app.saved') }}</span>
+      <span v-if="readOnly" class="chip nx" data-bb="state-chip" data-read-only="">{{ t('na.chip.readOnly') }}</span><!-- FAKE1 -->
+      <span v-else class="chip nx" :class="state.unsaved ? 'c-o' : 'c-m'" data-bb="state-chip">{{ t(state.unsaved ? 'quick.notSaved' : 'app.saved') }}</span>
     </div>
     <!-- Opens the command palette (src/dialogs/Palette.vue, D8). -->
-    <button class="cmdk" type="button" data-bb="command-field" aria-haspopup="dialog" @click="currentDialog = 'palette'"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg><span>{{ t('quick.search') }}</span><span class="kbd">Ctrl K</span></button>
+    <button class="cmdk" type="button" data-bb="command-field" aria-haspopup="dialog" @click="currentDialog = 'palette'"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg><span>{{ t('quick.search') }}</span><span class="kbd" data-bb="command-field-kbd">{{ shortcutFor('palette') }}</span></button>
     <!-- Settings → You: an empty disc when no name is set. -->
-    <span class="user" data-bb="quickbar-user" :title="state.user?.name" :data-missing="state.user ? undefined : 'user-name-unset'">{{ state.user?.trigram }}</span>
-    <button v-if="!bare" class="btn" :class="on('save') ? 'p' : 'd'" type="button" :disabled="!on('save')" data-bb="quickbar-primary"
+    <span v-if="has('user') || state.user" class="user" data-bb="quickbar-user" :title="state.user?.name" :data-missing="state.user ? undefined : 'user-name-unset'">{{ state.user?.trigram }}</span>
+    <button v-if="!bare" class="btn" :class="canSave ? 'p' : 'd'" type="button" :disabled="!canSave" data-bb="quickbar-primary"
       @click="runAction('save')">{{ t('quick.saveButton') }}</button>
   </header>
 </template>

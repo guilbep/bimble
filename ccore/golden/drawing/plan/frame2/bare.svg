@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="134.26088867187502mm" height="47.279423828125005mm" viewBox="0 0 134.26088867187502 47.279423828125005">
+<title>frame – Plan Rez-de-chaussée, 1:100</title>
+<rect x="0" y="0" width="134.26088867187502" height="47.279423828125005" fill="#ffffff"/>
+<path d="M31.000 27.779L46.000 27.779M31.000 12.779L31.000 27.779M46.000 27.779L46.000 12.779M46.000 12.779L31.000 12.779" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M31.000 27.779L46.000 27.779L46.000 12.779L31.000 12.779Z" fill="#efefed" fill-rule="evenodd"/>
+<path d="M31.000 27.779L46.000 27.779L46.000 12.779L31.000 12.779Z" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M37.000 22.279L40.000 22.279M37.000 18.279L37.000 22.279M40.000 22.279L40.000 18.279M40.000 18.279L37.000 18.279M97.500 21.279L99.500 21.279M97.500 19.279L97.500 21.279M99.500 21.279L99.500 19.279M99.500 19.279L97.500 19.279M38.500 31.279L98.500 31.279M38.500 29.279L38.500 31.279M98.500 31.279L98.500 29.279M98.500 29.279L38.500 29.279M98.950 31.059L129.261 13.559M98.050 29.500L98.950 31.059M129.261 13.559L128.361 12.000M128.361 12.000L98.050 29.500M98.500 21.079L38.500 21.079M98.500 21.079L98.500 19.479M38.500 21.079L98.500 21.079M38.500 21.079L38.500 19.479M38.500 19.479L38.500 21.079M38.500 19.479L98.500 19.479M38.500 19.479L98.500 19.479M98.500 19.479L98.500 21.079" fill="none" stroke="#000000" stroke-width="0.100" stroke-linejoin="round" stroke-linecap="butt" stroke-dasharray="2.000 1.000"/>
+<path d="M13.000 20.279L132.261 20.279" fill="none" stroke="#000000" stroke-width="0.100" stroke-linejoin="round" stroke-linecap="butt" stroke-dasharray="12.000 1.500 0.500 1.500"/>
+<path d="M40.000 22.279L38.241 22.279L37.000 22.279L37.000 19.935L37.000 18.279L38.759 18.279L40.000 18.279L40.000 20.624Z" fill="#d6d6d2" fill-rule="evenodd"/>
+<path d="M99.500 21.279L98.328 21.279L97.500 21.279L97.500 20.107L97.500 19.279L98.672 19.279L99.500 19.279L99.500 20.452Z" fill="#96aac4" fill-rule="evenodd"/>
+<clipPath id="c1"><path d="M99.500 21.279L98.328 21.279L97.500 21.279L97.500 20.107L97.500 19.279L98.672 19.279L99.500 19.279L99.500 20.452Z" clip-rule="evenodd"/></clipPath><g clip-path="url(#c1)">
+<path d="M98.890 21.890L96.890 19.890M99.765 21.015L97.765 19.015" fill="none" stroke="#535e6c" stroke-width="0.100" stroke-linejoin="round" stroke-linecap="butt"/>
+</g>
+<path d="M98.500 31.279L63.328 31.279L38.500 31.279L38.500 30.107L38.500 29.279L73.672 29.279L98.500 29.279L98.500 30.452Z" fill="#d6d6d2" fill-rule="evenodd"/>
+<path d="M129.261 13.559L111.492 23.817L98.950 31.059L98.422 30.145L98.050 29.500L115.818 19.241L128.361 12.000L128.888 12.914Z" fill="#d6d6d2" fill-rule="evenodd"/>
+<path d="M40.000 22.279L38.241 22.279L37.000 22.279L37.000 19.935L37.000 18.279L38.759 18.279L40.000 18.279L40.000 20.624Z" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M99.500 21.279L98.328 21.279L97.500 21.279L97.500 20.107L97.500 19.279L98.672 19.279L99.500 19.279L99.500 20.452Z" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M98.500 31.279L63.328 31.279L38.500 31.279L38.500 30.107L38.500 29.279L73.672 29.279L98.500 29.279L98.500 30.452Z" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M129.261 13.559L111.492 23.817L98.950 31.059L98.422 30.145L98.050 29.500L115.818 19.241L128.361 12.000L128.888 12.914Z" fill="none" stroke="#000000" stroke-width="0.500" stroke-linejoin="round" stroke-linecap="butt"/>
+<text x="40.600" y="17.679" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.000" fill="#1a1a1c">30/40</text>
+<text x="100.100" y="18.679" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.000" fill="#1a1a1c">20/20</text>
+<text x="56.703" y="18.679" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.000" fill="#1a1a1c">Bois &quot;local&quot; \ épicéa 16x40</text>
+<path d="M13.000 20.279L12.939 20.974L12.759 21.648L12.464 22.279L12.064 22.851L11.571 23.344L11.000 23.744L10.368 24.038L9.695 24.219L9.000 24.279L8.305 24.219L7.632 24.038L7.000 23.744L6.429 23.344L5.936 22.851L5.536 22.279L5.241 21.648L5.061 20.974L5.000 20.279L5.061 19.585L5.241 18.911L5.536 18.279L5.936 17.708L6.429 17.215L7.000 16.815L7.632 16.521L8.305 16.340L9.000 16.279L9.695 16.340L10.368 16.521L11.000 16.815L11.571 17.215L12.064 17.708L12.464 18.279L12.759 18.911L12.939 19.585L13.000 20.279Z" fill="#ffffff" fill-rule="evenodd"/>
+<path d="M13.000 20.279L12.939 20.974L12.759 21.648L12.464 22.279L12.064 22.851L11.571 23.344L11.000 23.744L10.368 24.038L9.695 24.219L9.000 24.279L8.305 24.219L7.632 24.038L7.000 23.744L6.429 23.344L5.936 22.851L5.536 22.279L5.241 21.648L5.061 20.974L5.000 20.279L5.061 19.585L5.241 18.911L5.536 18.279L5.936 17.708L6.429 17.215L7.000 16.815L7.632 16.521L8.305 16.340L9.000 16.279L9.695 16.340L10.368 16.521L11.000 16.815L11.571 17.215L12.064 17.708L12.464 18.279L12.759 18.911L12.939 19.585L13.000 20.279Z" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<text x="7.876" y="21.719" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="4.000" fill="#1a1a1c">1</text>
+<path d="M29.500 5.000L130.761 5.000M31.000 10.500L31.000 3.500M129.261 10.500L129.261 3.500M24.000 10.500L24.000 32.779M29.500 12.000L22.500 12.000M29.500 20.279L22.500 20.279M29.500 31.279L22.500 31.279M17.000 10.500L17.000 32.779M29.500 12.000L15.500 12.000M29.500 31.279L15.500 31.279" fill="none" stroke="#000000" stroke-width="0.100" stroke-linejoin="round" stroke-linecap="butt"/>
+<path d="M30.100 5.900L31.900 4.100M128.361 5.900L130.161 4.100M23.100 12.900L24.900 11.100M23.100 21.179L24.900 19.379M23.100 32.179L24.900 30.379M16.100 12.900L17.900 11.100M16.100 32.179L17.900 30.379" fill="none" stroke="#000000" stroke-width="0.200" stroke-linejoin="round" stroke-linecap="butt"/>
+<text x="77.305" y="4.200" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.250" fill="#1a1a1c">982.6</text>
+<text x="23.200" y="18.333" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.250" fill="#1a1a1c" transform="rotate(-90.000 23.200 18.333)">82.8</text>
+<text x="23.200" y="27.676" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.250" fill="#1a1a1c" transform="rotate(-90.000 23.200 27.676)">110</text>
+<text x="16.200" y="24.465" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="2.250" fill="#1a1a1c" transform="rotate(-90.000 16.200 24.465)">192.8</text>
+<text x="31.000" y="43.279" font-family="Roboto, Helvetica, Arial, sans-serif" font-size="5.000" font-weight="bold" fill="#1a1a1c">Plan Rez-de-chaussée, 1:100</text>
+<path d="M31.000 44.279L96.920 44.279" fill="none" stroke="#000000" stroke-width="0.350" stroke-linejoin="round" stroke-linecap="butt"/>
+</svg>

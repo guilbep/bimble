@@ -1,0 +1,12 @@
+schema "IFC4"
+origin 40a3880000000000 40a9000000000000 4095e00000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cMapped000000000004" "Level 0"
+grids 0
+elements 5 triangles 68 meshes yes
+000 2T2cMapped000000000010 IfcColumn 0 Concrete v=12 i=20 e=18 n=18 name="L-1" storey="Level 0" material="C30/37"
+001 2T2cMapped000000000011 IfcColumn 0 Concrete v=12 i=20 e=18 n=18 name="L-2 turned" storey="Level 0" material="C30/37"
+002 2T2cMapped000000000012 IfcColumn 0 Concrete v=12 i=20 e=18 n=18 name="L-3 moved by the operator" storey="Level 0" material="C30/37"
+003 2T2cMapped000000000015 IfcBuildingElementProxy 0 Concrete v=4 i=4 e=6 n=6 name="Tetra-1" storey="Level 0" material="C30/37"
+004 2T2cMapped000000000016 IfcBuildingElementProxy 0 Concrete v=4 i=4 e=6 n=6 name="Tetra-2 turned" storey="Level 0" material="C30/37"

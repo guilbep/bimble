@@ -23,6 +23,10 @@ export const fr = {
   "history.side.variants": "Variantes",
   "history.side.stored": "Stocké",
   "history.side.size": "Taille",
+  "history.none": "Pas d'historique : {reason}",
+  "history.added": "ajouté",
+  "history.removed": "supprimé",
+  "history.first": "Première version : tout est ajouté",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "page.history": "History",
@@ -48,4 +52,8 @@ export const en: Record<keyof typeof fr, string> = {
   "history.side.variants": "Variants",
   "history.side.stored": "Stored",
   "history.side.size": "Size",
+  "history.none": "No history: {reason}",
+  "history.added": "added",
+  "history.removed": "removed",
+  "history.first": "First version: everything is added",
 };

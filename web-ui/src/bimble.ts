@@ -1,5 +1,6 @@
 // The one typed client of the wasm viewer (ADR 0048). Components never touch the wasm directly.
 import { shallowRef } from "vue";
+import { applyLook } from "./shell/theme"; // SET1
 
 export interface State {
   selection: string[];
@@ -16,6 +17,12 @@ export interface State {
   user?: { name: string; trigram: string; email: string | null } | null;
   /** `query("state")`: the viewer's version, e.g. "0.17.0". */
   version?: string | null;
+  /** `query("state")` (FAKE1): false for a file open read-only (an IFC as it is, a .bimbleview). */
+  editable?: boolean;
+  /** on_change (C core, ccore/session/links.h): a counter of changes to the linked models; absent before any. */
+  links?: number;
+  /** on_change (C core): the selected element of a linked model (its id is then `selection`), absent otherwise. */
+  linked?: { id: string; link: string } | null;
 }
 
 /** `query("element")`: crates/bimble-api/src/query.rs ElementDetail (summary flattened). */
@@ -210,6 +217,12 @@ interface Wasm {
   on_change(cb: (json: string) => void): void;
   set_placing(json: string): void;
   dismiss_belongs(): void;
+  /** The place tool (C core only, op `tool`): pointer, click, cancel. Answers the tool's state JSON. */
+  tool?(name: string, json: string): string;
+  /** An action with a JSON body (C core only: link_model {path}, manage_links {op, name}). Answers its text. */
+  action_with?(name: string, json: string): string;
+  /** D7: a call whose answer is bytes (C core only: `query sheet_pdf` / `view_pdf`, the PDF itself). */
+  bytes?(op: string, name: string, body: string): Promise<Uint8Array>;
 }
 
 export const state = shallowRef<State>({ selection: [], rev: 0, unsaved: false, file: null });
@@ -255,7 +268,7 @@ function wasmOrThrow(): Wasm {
 // - A call is `POST http://127.0.0.1:<port>/<op>/<name>?t=<token>`, `Content-Type: text/plain`,
 //   body = the JSON args string (or empty). A CORS simple request: no preflight.
 //   <op>: query, apply, undo, redo, select, action, verb, tab, set_placing, dismiss_belongs,
-//   standards_action. <name>: the name argument of query, verb, action, standards_action, else `-`.
+//   standards_action, tool (the C core's place tool, ccore/session/calls.h). <name>: the name argument of query, verb, action, standards_action, else `-`.
 // - 200: the text body is what wasm returns (empty for void). Any other status: wasm would throw;
 //   the body is the error text, thrown as a string (as wasm does).
 // - Calls are synchronous (sync XMLHttpRequest): every Wasm function but default() is sync.
@@ -297,13 +310,21 @@ function nativeClient(port: number, token: string): Wasm & { standards_action(na
     set_placing: (json) => void call("set_placing", null, json),
     dismiss_belongs: () => void call("dismiss_belongs", null),
     standards_action: (name) => void call("standards_action", name),
+    tool: (name, json) => call("tool", name, json),
+    action_with: (name, json) => call("action", name, json),
+    // D7: the answer's bytes (a PDF): an async fetch, since a sync XHR cannot read binary.
+    bytes: async (op, name, body) => {
+      const r = await fetch(`${base}/${op}/${encodeURIComponent(name)}?t=${t}`, { method: "POST", headers: { "Content-Type": "text/plain" }, body });
+      if (!r.ok) throw (await r.text()) || `native ${op}: HTTP ${r.status}`;
+      return new Uint8Array(await r.arrayBuffer());
+    },
     on_change: (cb) => void pollChanges(base, t, cb),
   };
 }
 
 /** Long-poll loop for the native client; never rejects. On an error it retries after 20 ms,
- *  doubling up to 1 s: a dev rebuild restarts the engine in tens of ms (C core spike,
- *  ccore/results/bench.md: the fixed 1 s wait was most of the C core's edit -> visible time). */
+ *  doubling up to 1 s: a dev rebuild restarts the engine in tens of ms (ccore/results/bench.md:
+ *  the fixed 1 s wait was most of the C core's edit -> visible time). */
 async function pollChanges(base: string, t: string, cb: (json: string) => void): Promise<void> {
   let since = 0;
   let epoch: string | undefined;
@@ -498,11 +519,30 @@ export async function start(): Promise<void> {
     }
     let w: Wasm;
     let viewportDirty: (() => void) | null = null;
+    // The C lab's build (`npm run build:ccore`, ticket PG1): `ccore=1&gl=1` without parameters; `?view=1`: the viewer-only wasm.
+    if (import.meta.env.VITE_CCORE === "1" && !url.searchParams.has("ccore")) { url.searchParams.set("ccore", "1"); url.searchParams.set("gl", "1"); }
+    if (import.meta.env.VITE_CCORE === "1" && url.searchParams.get("view") === "1" && !url.searchParams.has("ccore_wasm")) url.searchParams.set("ccore_wasm", "ccore/ccore-view.wasm");
     const native = url.searchParams.get("native") === "1" ? nativeParams(url.searchParams) : null;
-    if (native) {
+    if (url.searchParams.get("ccore") === "1") {
+      // The C core's wasm module in the page (ticket T13b): no server, no Rust. `&gl=1` draws its mesh.
+      // PERF1: the viewport's chunk is fetched while the wasm and the model load, not after them.
+      const glChunk = url.searchParams.get("gl") === "1" ? import("./glviewport") : null;
+      glChunk?.catch(() => undefined); // awaited below; no unhandled rejection if ccoreClient throws first
+      const cc = await import("./ccore");
+      w = await cc.ccoreClient(url.searchParams);
+      if (glChunk) {
+        viewportDirty = (await glChunk).glViewport({
+          mesh: async () => cc.ccoreMesh().bytes,
+          epoch: async () => null,
+        });
+      }
+    } else if (native) {
       // Dev only: no manifold, no wasm; on_change below starts the long-poll loop.
       w = nativeClient(native.port, native.token);
-      viewportDirty = streamViewport(`http://127.0.0.1:${native.port}`, native.token);
+      // `&gl=1`: draw the host's /mesh with WebGL2 (the C host, spec §2) instead of /frame.
+      viewportDirty = url.searchParams.get("gl") === "1"
+        ? (await import("./glviewport")).glViewport(`http://127.0.0.1:${native.port}`, native.token)
+        : streamViewport(`http://127.0.0.1:${native.port}`, native.token);
     } else {
       try {
         const bridge = (await import(/* @vite-ignore */ `${WASM}manifold-bridge.js`)) as { loadManifold: () => Promise<void> };
@@ -517,6 +557,7 @@ export async function start(): Promise<void> {
     performance.mark("bimble:wasm-ready");
     performance.measure("bimble:wasm-ready", { start: 0, end: "bimble:wasm-ready" });
     wasm = w;
+    backend = url.searchParams.get("ccore") === "1" ? "ccore" : native ? "native" : "rust"; // UX1
     let shown = false;
     // The callback runs inside a frame: calls back into the viewer would throw "busy", so defer.
     w.on_change((json) => {
@@ -530,8 +571,10 @@ export async function start(): Promise<void> {
       queueMicrotask(() => {
         const prev = state.value;
         // schema and user are not in on_change: read them from query("state").
-        const q = tryQuery<Pick<State, "schema" | "user" | "version">>("state", {});
-        state.value = { ...s, schema: q.schema ?? null, user: q.user ?? null, version: q.version ?? null };
+        const q = tryQuery<Pick<State, "schema" | "user" | "version" | "editable">>("state", {});
+        state.value = { ...s, schema: q.schema ?? null, user: q.user ?? null, version: q.version ?? null, editable: q.editable ?? true };
+        loadCapabilities(q.version ?? null); // FAKE1
+        if (!settingsAsked) loadSettings(); // SET1: the look and the readout's system, once at start
         refresh(prev.rev !== s.rev || prev.file !== s.file);
       });
     });
@@ -562,7 +605,7 @@ function labelTextAgent(): void {
  *  (never inside on_change, whose callback runs in the viewer's frame). */
 function watchPointer(): void {
   const canvas = document.getElementById("bimble");
-  if (!canvas) return;
+  if (!canvas || backend !== "rust") return; // KEY1: the C core's page computes it (glviewport.ts)
   let timer = 0;
   let queued = false;
   const poll = () => {
@@ -581,14 +624,23 @@ function message(e: unknown): string {
 
 export function element(id: string): ElementDetail {
   try {
-    return JSON.parse(wasmOrThrow().query("element", JSON.stringify({ id }))) as ElementDetail;
+    // A linked element selected (C core, links.h): its read-only detail from its link.
+    const lk = state.value.linked;
+    const args = lk && lk.id === id ? { id, link: lk.link } : { id };
+    return JSON.parse(wasmOrThrow().query("element", JSON.stringify(args))) as ElementDetail;
   } catch (e) {
     throw new Error(message(e));
   }
 }
 
-/** Rename one element as one undoable step. Returns the Rust error, or null. */
+/** Rename one element as one undoable step: the verb `rename` (ADR 0068 rule 1; a C core
+ * addition, Rust's dispatch has none). On Rust's wasm module ("unknown verb") the raw Command is
+ * applied instead, until Rust has the verb. Returns the error, or null. */
 export function rename(id: string, name: string): string | null {
+  const ro = linkedReadOnly({ id });
+  if (ro) return ro;
+  const err = runVerb("rename", { id, name });
+  if (err === null || !err.startsWith("unknown verb")) return err;
   try {
     wasmOrThrow().apply(JSON.stringify([{ op: "rename", id, name }]));
     return null;
@@ -597,14 +649,22 @@ export function rename(id: string, name: string): string | null {
   }
 }
 
-/** Replace the project information (ADR 0030) as one undoable step: the whole map. Returns the Rust error, or null. */
-export function setProject(project: Record<string, string>): string | null {
-  try {
-    wasmOrThrow().apply(JSON.stringify([{ op: "set_project", project }]));
-    return null;
-  } catch (e) {
-    return message(e);
+/** A project key `set_project_field` gives back unchanged when used as the label (Rust `project::key_of`). */
+const STABLE_KEY = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
+
+/** Change the project information (ADR 0030) to `project`: one `set_project_field` verb per changed
+ * key (ADR 0068 rule 1), an empty value for a removed key. The project page changes one field at a
+ * time, so that is one undoable step. A key the verb cannot address (not letters, digits and `_`,
+ * or longer than 64) is refused. Returns the error, or null. */
+export function setProject(next: Record<string, string>): string | null {
+  const cur = project.value?.info ?? {};
+  const keys = [...new Set([...Object.keys(cur), ...Object.keys(next)])].filter((k) => (cur[k] ?? "") !== (next[k] ?? ""));
+  for (const k of keys) {
+    if (!STABLE_KEY.test(k) || k.length > 64) return `the field ${JSON.stringify(k)} cannot be changed here`;
+    const err = setProjectField(k, next[k] ?? "");
+    if (err) return err;
   }
+  return null;
 }
 
 /** Change what is placed: `{kind?, storey?, material?, sizes?}`, all or nothing. Returns the Rust error, or null. */
@@ -616,6 +676,172 @@ export function setPlacing(patch: { kind?: Placing["kind"]; storey?: string; mat
     return message(e);
   }
 }
+
+/** The place tool's state (ccore/session/calls.h, op `tool` and `query ghost`). World mm. */
+export interface ToolState {
+  active: boolean;
+  /** What the next click adds, as the BMSH mesh: positions relative to `origin` (world mm). */
+  ghost: { edges: number[]; idx: number[]; origin: [number, number, number]; pos: number[] } | null;
+  /** Why the preview has no ghost (the place verb's error). */
+  ghost_error: string | null;
+  hover: { at: [number, number]; snap: string | null; z: number } | null;
+  kind: Placing["kind"];
+  /** The GlobalId a click just added. */
+  placed: string | null;
+  points: [number, number][];
+}
+/** A pointer for the tool: a ray in scene coordinates (as the BMSH mesh) and the ray 12 px beside it
+ *  (the snap tolerance), or a plan point `at` (world mm) with `tol_mm`. `free`: no snap; `ortho`:
+ *  the second point along x or y. */
+export interface ToolPointer {
+  ray?: number[];
+  ray_tol?: number[];
+  at?: [number, number];
+  tol_mm?: number;
+  free?: boolean;
+  ortho?: boolean;
+}
+
+/** One call of the place tool (C core only): the tool's state, or the error text. */
+export function toolCall(name: "pointer" | "click" | "cancel", args: ToolPointer = {}): { state: ToolState | null; error: string | null } {
+  try {
+    const w = wasmOrThrow();
+    if (!w.tool) return { state: null, error: "the place tool needs the C core" };
+    return { state: JSON.parse(w.tool(name, JSON.stringify(args))) as ToolState, error: null };
+  } catch (e) {
+    return { state: null, error: message(e) };
+  }
+}
+
+// ---- Dimensions and texts in a plan (ticket C4, ccore/src/annot.h; C core only) ----
+
+/** An end of a dimension as `view_annotations` gives it: the element feature it follows, if any. */
+export interface AnnotationAnchor { element: string | null; feature: string | null; follows: boolean }
+/** `query("view_annotations")` items: resolved for drawing, world plan mm. */
+export type ViewAnnotation =
+  | { type: "dimension"; id: string; a: [number, number]; b: [number, number]; qa: [number, number] | null; qb: [number, number] | null;
+      mid: [number, number] | null; dir: [number, number] | null; offset_mm: number; axis: "aligned" | "horizontal" | "vertical";
+      value_mm: number; text: string; kind: string | null; anchors: [AnnotationAnchor, AnnotationAnchor] }
+  | { type: "text"; id: string; at: [number, number]; text: string; size_mm: number; angle_deg: number; kind: string | null };
+export interface ViewAnnotations { view: string; scale: number; unit: "mm" | "cm" | "m"; items: ViewAnnotation[] }
+/** The dimensions and texts of a view (default: the view shown), or null (none shown, or not the C core). */
+export const viewAnnotations = (view?: string, unit?: "mm" | "cm" | "m") =>
+  tryQuery<ViewAnnotations | null>("view_annotations", null, { ...(view ? { view } : {}), ...(unit ? { unit } : {}) });
+
+// ---- L1: reference plans in a 2D view (ccore/session/links_ref.h; C core only) ----
+/** `query("view_references")`: a view's reference plans, placed, world plan mm (flat x, y pairs). */
+export interface ViewReference { id: string; name: string; polylines: number[][]; segments: number; visible: boolean }
+export interface ViewReferences { view: string; references: ViewReference[]; segments: number; shown: number }
+/** The reference plans of a view (default: the view shown), or null (none shown, or not the C core). */
+export const viewReferences = (view?: string) => tryQuery<ViewReferences | null>("view_references", null, view ? { view } : {});
+/** Add a PDF to the active 2D view (`link_pdf {path, scale?}`; native host: a path it can read). Returns the error, or null. */
+export function linkPdf(path: string, scale?: number, place?: { offset_mm?: [number, number]; rotation_deg?: number }): string | null {
+  try { actionWith("link_pdf", { path, ...(scale ? { scale } : {}), ...(place ?? {}) }); return null; } catch (e) { return message(e); }
+}
+
+// ---- L2: DXF reference plans and managing a reference (session/links_dxf.h; C core only) ----
+/** Add a DXF to the active 2D view (`link_dxf {path}`; native host: a path it can read). Returns the error, or null. */
+export function linkDxf(path: string, place?: { offset_mm?: [number, number]; rotation_deg?: number }): string | null {
+  try { actionWith("link_dxf", { path, ...(place ?? {}) }); return null; } catch (e) { return message(e); }
+}
+/** A reference plan's change, by its id (`query links`), PDF or DXF: one undo step each. */
+export type ReferenceOp =
+  | { op: "move"; offset_mm: [number, number] }
+  | { op: "rotate"; rotation_deg: number }
+  | { op: "show" | "hide" | "remove" }
+  | { op: "reload"; path?: string };
+/** `manage_links {op, id, …}` on a reference plan. Returns the error, or null. */
+export function manageReference(id: string, o: ReferenceOp): string | null {
+  try { actionWith("manage_links", { ...o, id }); return null; } catch (e) { return message(e); }
+}
+
+/** The annotate tool's state (op `tool` "annotate", then pointer / click / cancel while it is on). */
+export interface AnnotateState {
+  active: boolean;
+  mode: "dimension" | "text" | null;
+  /** The GlobalId the last click added. */
+  added: string | null;
+  /** The element feature under the pointer, as a click would anchor it. */
+  anchor: { element: string; feature: string } | null;
+  anchors: ({ element: string; feature: string } | null)[];
+  hover: { at: [number, number]; snap: string | null; z: number } | null;
+  points: [number, number][];
+  /** The dimension the next click makes (as a view_annotations dimension, without id and anchors). */
+  preview: { a: [number, number]; b: [number, number]; qa: [number, number]; qb: [number, number]; mid: [number, number];
+    dir: [number, number]; offset_mm: number; axis: string; text: string; value_mm: number } | null;
+  text: string | null;
+  view: string | null;
+}
+/** The annotate tool's state as the last call left it (the viewport draws it and sends it the pointer). */
+export const annotate = shallowRef<AnnotateState | null>(null);
+/** One call of the annotate tool: the state, or the error text. */
+export function annotateCall(name: "annotate" | "pointer" | "click" | "cancel", args: unknown = {}): { state: AnnotateState | null; error: string | null } {
+  try {
+    const w = wasmOrThrow();
+    if (!w.tool) return { state: null, error: "dimensions need the C core" };
+    const st = JSON.parse(w.tool(name, JSON.stringify(args))) as AnnotateState;
+    annotate.value = st.active ? st : null;
+    return { state: st, error: null };
+  } catch (e) {
+    return { state: null, error: message(e) };
+  }
+}
+/** The Annotate tab's Dimension: in the plan shown, two clicks (snapped, anchored on element corners)
+ *  and a third for the line. Esc stops. Returns the error, or null. */
+export const startDimension = (): string | null => annotateCall("annotate", { mode: "dimension" }).error;
+/** The Annotate tab's Text: one click in the plan shown places `text`. Returns the error, or null. */
+export const startText = (text: string, sizeMm?: number): string | null =>
+  annotateCall("annotate", sizeMm === undefined ? { mode: "text", text } : { mode: "text", text, size_mm: sizeMm }).error;
+/** Stop the annotate tool. */
+export const stopAnnotate = (): string | null => annotateCall("cancel").error;
+/** A dimension between two points or element features (`{element, feature}`), `offset` mm to the left of a->b. One undoable step. */
+export const addDimension = (view: string, a: [number, number] | { element: string; feature: string }, b: [number, number] | { element: string; feature: string }, offset: number) =>
+  runVerb("add_dimension", { view, a, b, offset });
+/** A text at a plan point. One undoable step. */
+export const addText = (view: string, at: [number, number], text: string) => runVerb("add_text", { view, at, text });
+/** Move a text by `by` (mm), or a dimension's line across itself. One undoable step. */
+export const moveAnnotation = (view: string, id: string, by: [number, number]) => runVerb("move_annotation", { view, id, by });
+/** Delete a dimension or a text. One undoable step. */
+export const deleteAnnotation = (view: string, id: string) => runVerb("delete_annotation", { view, id });
+
+/** `query("visibility_sets")` (C core only, ccore/session/calls.h): the whole sets `query("visibility")` caps at 50. */
+export interface VisibilitySets {
+  /** SEC1: what the view's class, family, storey and material lists hide (C core only). */
+  by_view?: string[];
+  hidden_in_view: string[];
+  isolated_in_view: string[];
+  now: { ids: string[]; isolate: boolean } | null;
+  reveal: boolean;
+}
+export const visibilitySets = () => tryQuery<VisibilitySets | null>("visibility_sets", null);
+
+/** The section box tool's state (C core only, op `tool` box_*): `box` is the drag's preview while `active`. Scene mm. */
+export interface BoxToolState {
+  active: boolean;
+  box: { min: number[]; max: number[]; yaw: number } | null;
+  face: number | null;
+  on: boolean;
+}
+/** One call of the section box tool (C core only): `box_press` / `box_move` / `box_release` take
+ *  `{ray, ray_tol}` (scene coordinates), `box_set` takes `{min, max, on?}`. Session state, no history step;
+ *  the box is not in the change signature, so `visibility` is refreshed here after a change. */
+export function boxTool(
+  name: "box_press" | "box_move" | "box_release" | "box_cancel" | "box_set",
+  args: { ray?: number[]; ray_tol?: number[]; min?: number[]; max?: number[]; on?: boolean } = {},
+): { state: BoxToolState | null; error: string | null } {
+  try {
+    const w = wasmOrThrow();
+    if (!w.tool) return { state: null, error: "the section box tool needs the C core" };
+    const state = JSON.parse(w.tool(name, JSON.stringify(args))) as BoxToolState;
+    if (name !== "box_move" && name !== "box_press") visibility.value = tryQuery<Visibility | null>("visibility", null);
+    return { state, error: null };
+  } catch (e) {
+    return { state: null, error: message(e) };
+  }
+}
+/** Set the section box (scene mm, as `visibility.section_box.box`); `on` also turns it on or off. Returns the error, or null. */
+export const setSectionBox = (min: number[], max: number[], on?: boolean) =>
+  boxTool("box_set", on === undefined ? { min, max } : { min, max, on }).error;
 
 export function undo(): string | null {
   try { wasmOrThrow().undo(); return null; } catch (e) { return message(e); }
@@ -634,6 +860,60 @@ function tryQuery<T>(name: string, fallback: T, args?: unknown): T {
   }
 }
 
+// ---- FAKE1: what the core serves (ccore/session/capabilities.h `query capabilities`): pages,
+// panels, data sets and exports by name, each true or false; read through shell/capability.ts.
+// null: everything (the Rust viewer and the native twin have no such query, and serve it all).
+// Asked once, of the C core only (its version ends in "ccore": no 400 asked of Rust). ----
+export const capabilities = shallowRef<Record<string, boolean> | null>(null);
+let capsAsked = false;
+function loadCapabilities(version: string | null): void {
+  if (capsAsked) return;
+  capsAsked = true;
+  const c = backend === "ccore" || (version ?? "").endsWith("ccore") ? tryQuery<Record<string, boolean> | null>("capabilities", null) : null;
+  capabilities.value = c && typeof c === "object" ? c : null;
+}
+// ---- end FAKE1 ----
+
+// ---- SET1: the user's settings (ccore/session/settings.h `query settings`, `action set_settings`): the
+// same file as the Rust viewer (settings.rs). Read once at start (the look applied: shell/theme.ts) and
+// after each change; `state.user` follows (query state). null: not served (the Rust wasm, the viewer-only
+// build). ----
+/** settings.rs `Settings` as to_json writes it. */
+export interface SettingsValues {
+  coordinates: string; gpu_cull: boolean; memory_share: number; moving_fps: number; moving_proxies: boolean;
+  recent: string[]; text_size: number; theme: string; ui_font: string; user_email: string; user_name: string;
+}
+/** `query settings`. */
+export interface UserSettings {
+  applies: Record<keyof SettingsValues, boolean>; file: string | null; fonts: string[]; needs: Partial<Record<keyof SettingsValues, string>>;
+  note: string | null; text_sizes: [number, number]; themes: string[]; values: SettingsValues;
+}
+export const userSettings = shallowRef<UserSettings | null>(null);
+let settingsAsked = false;
+/** Reads the settings (the file may have changed: the Rust app shares it) and applies the look. */
+export function loadSettings(): void {
+  settingsAsked = true;
+  const s = capabilities.value === null || capabilities.value["settings"] ? tryQuery<UserSettings | null>("settings", null) : null;
+  userSettings.value = s && typeof s === "object" && s.values ? s : null;
+  if (userSettings.value) applyLook(userSettings.value.values);
+}
+/** Changes settings (`{field: value}`, settings.rs names): validated by the core as a whole. Returns
+ *  the core's error text, or null; the settings and `state.user` are read again. */
+export function setSettings(patch: Partial<SettingsValues>): string | null {
+  try { actionWith("set_settings", patch); } catch (e) { return message(e); }
+  loadSettings();
+  const q = tryQuery<Pick<State, "user">>("state", {});
+  state.value = { ...state.value, user: q.user ?? null };
+  return null;
+}
+/** The readout's coordinate system (settings.rs coordinates; coords.rs:57), "survey" by default. */
+export const readoutSystem = (): string => userSettings.value?.values.coordinates ?? "survey";
+/** `query about` (lib.rs:4081): the page gives its WebGL renderer and its build's commit. */
+export interface AboutInfo { build: string; commit: string | null; graphics: string | null; platform: string; text: string; version: string }
+export const aboutInfo = (graphics: string | null, commit: string | null): AboutInfo | null =>
+  tryQuery<AboutInfo | null>("about", null, { ...(graphics ? { graphics } : {}), ...(commit ? { commit } : {}) });
+// ---- end SET1 ----
+
 let timed = false;
 /** Refresh the shallow refs; model-derived lists only when the model changed. Runs deferred. */
 function refresh(modelChanged: boolean): void {
@@ -644,10 +924,16 @@ function refresh(modelChanged: boolean): void {
   openViews.value = tryQuery<OpenViews>("open_views", NO_VIEWS);
   status.value = tryQuery<Status | null>("status", null);
   placing.value = tryQuery<Placing | null>("placing", null);
+  if (modelChanged) setMeasure(tryQuery<MeasureState | null>("measure", null)); // another model: none kept
   if (modelChanged) {
-    storeys.value = tryQuery<StoreySummary[]>("storeys", []);
-    materials.value = tryQuery<MaterialSummary[]>("materials", []);
-    project.value = tryQuery<ProjectSummary | null>("project", null);
+    // ---- FAKE1: a file open read only (an IFC as it is, a .bimbleview) and no file answer these
+    // "this file is read only" (400, calls.c MODEL): not asked ----
+    const editable = state.value.file !== null && state.value.editable !== false;
+    storeys.value = editable ? tryQuery<StoreySummary[]>("storeys", []) : [];
+    materials.value = editable ? tryQuery<MaterialSummary[]>("materials", []) : [];
+    project.value = editable ? tryQuery<ProjectSummary | null>("project", null) : null;
+    // ---- end FAKE1 ----
+    refreshNorth(); // G2: project north (viewcube.ts projectNorth) and the setting-out panel
   }
   // A model is loaded and its first refresh is done (deeplink.ts then sets data-bb-ready for the design check).
   if (state.value.file !== null && actions.value.length > 0) resolveModel();
@@ -660,6 +946,44 @@ function refresh(modelChanged: boolean): void {
   }
 }
 
+// ---- H1: the model's history, read only (ccore/session/versions.h). The Rust viewer has no
+// such queries: the fallback says so. Writing (commit, switch, merge) is ticket H2.
+export interface VersionInfo { hash: string; parents: string[]; author: string; time: number; message: string }
+export interface HistoryHead { branch: string | null; commit: string | null }
+export interface VersionField { path: string; before: unknown; after: unknown }
+/** version::Change in serde's form. */
+export interface VersionChange { change: "added" | "removed" | "modified"; kind: string; id: string; name: string; fields?: VersionField[] }
+/** A history answer, or why there is none ("no history next to …", "no history folder in the browser"). */
+export type HistoryAnswer<T> = ({ history: true } & T) | { history: false; reason: string };
+export interface RepoHistory {
+  versions: HistoryAnswer<{ head: HistoryHead; versions: VersionInfo[] }>;
+  branches: HistoryAnswer<{ head: HistoryHead; branches: { name: string; commit: string }[] }>;
+  pending: HistoryAnswer<{ base: string | null; changes: VersionChange[] }>;
+}
+export const repoHistory = shallowRef<RepoHistory | null>(null);
+
+function historyQuery<T>(name: string, args?: unknown): HistoryAnswer<T> {
+  try {
+    return query<HistoryAnswer<T>>(name, args);
+  } catch (e) {
+    return { history: false, reason: message(e) };
+  }
+}
+
+/** Reads versions, branches and pending changes; the History page calls it when shown and on each change. */
+export function loadRepoHistory(): void {
+  repoHistory.value = {
+    versions: historyQuery("versions"),
+    branches: historyQuery("branches"),
+    pending: historyQuery("pending"),
+  };
+}
+
+/** What changed from version `a` to version `b` (version::diff). */
+export function versionChanges(a: string, b: string): HistoryAnswer<{ a: string; b: string; changes: VersionChange[] }> {
+  return historyQuery("version_changes", { a, b });
+}
+
 /** Typed query by name (bridge.rs, then bimble-api dispatch). Throws with the Rust message. */
 export function query<T>(name: string, args?: unknown): T {
   try {
@@ -669,26 +993,175 @@ export function query<T>(name: string, args?: unknown): T {
   }
 }
 
+// ---- D7: the PDF export (C core: ccore/session/sheet_svg.h `sheet_pdf`, `view_pdf`) ----
+/** A sheet as PDF (the sheet export of the Rust viewer, `Sheet::to_pdf`): the file's bytes. Throws the
+ *  C core's error text (also "this build is view-only", and outside the C core). */
+export async function sheetPdf(id: string, font: PdfFont = "helvetica"): Promise<Uint8Array> {
+  const w = wasmOrThrow();
+  if (!w.bytes) throw new Error("PDF export: the C core only");
+  // SIZE1: Helvetica by default (nothing embedded); "roboto" only when pdfFonts() says it is there.
+  const body = font === "roboto" ? { sheet: id, font } : { sheet: id };
+  try { return await w.bytes("query", "sheet_pdf", JSON.stringify(body)); } catch (e) { throw new Error(message(e)); }
+}
+// ---- SIZE1: the PDF's font: Helvetica (the default, no file) or Roboto (optional files) ----
+export type PdfFont = "helvetica" | "roboto";
+/** `query pdf_fonts`: which fonts the C core can set the PDF in. Outside the C core: Helvetica only. */
+export function pdfFonts(): { helvetica: boolean; roboto: boolean } {
+  try { return query<{ helvetica: boolean; roboto: boolean }>("pdf_fonts"); } catch { return { helvetica: true, roboto: false }; }
+}
+// ---- end SIZE1 ----
+/** A 2D view as PDF (the plan panel's "Export PDF…": its scale, the smallest paper it fits on). */
+export async function viewPdf(id: string, font: PdfFont = "helvetica"): Promise<Uint8Array> { // PAPER1: the font
+  const w = wasmOrThrow();
+  if (!w.bytes) throw new Error("PDF export: the C core only");
+  const body = font === "roboto" ? { view: id, font } : { view: id };
+  try { return await w.bytes("query", "view_pdf", JSON.stringify(body)); } catch (e) { throw new Error(message(e)); }
+}
+/** Rust's file names: "<number> <name>.pdf" for a sheet (viewing.rs export_sheet), "plan-<view>-1-<scale>.pdf" for a view (lib.rs). */
+export const sheetPdfName = (s: { number: string; name: string }) => `${s.number} ${s.name}.pdf`;
+export const viewPdfName = (v: { name: string; scale: number }) => `plan-${v.name}-1-${v.scale}.pdf`;
+// ---- end D7 ----
+// ---- PAPER1: a view On paper and Export view as SVG (`view_svg`), several sheets as one PDF (`sheets_pdf`) ----
+/** `query view_svg`: the view's paper as SVG, its paper and scale. `bare`: the On paper picture (paper.rs). */
+export interface ViewSvg { svg: string; paper: string; portrait: boolean; scale: number; width_mm: number; height_mm: number }
+export const viewSvg = (id: string, bare = false, font?: PdfFont): ViewSvg =>
+  query<ViewSvg>("view_svg", { view: id, ...(bare ? { bare } : {}), ...(font ? { font } : {}) });
+/** Rust's view export name (lib.rs plan_panel): "plan-<view>-1-<scale>.svg". */
+export const viewSvgName = (v: { name: string; scale: number }) => `plan-${v.name}-1-${v.scale}.svg`;
+/** Several sheets as one PDF, one page each in that order (C core only; Rust has no such file). */
+export async function sheetsPdf(ids: string[], font: PdfFont = "helvetica"): Promise<Uint8Array> {
+  const w = wasmOrThrow();
+  if (!w.bytes) throw new Error("PDF export: the C core only");
+  const body = font === "roboto" ? { sheets: ids, font } : { sheets: ids };
+  try { return await w.bytes("query", "sheets_pdf", JSON.stringify(body)); } catch (e) { throw new Error(message(e)); }
+}
+/** The one-PDF name (a C choice, DEVIATIONS 22): "<first number>-<last number>.pdf", "<number>.pdf" for one. */
+export const sheetsPdfName = (s: { number: string }[]) =>
+  `${[...new Set([s[0]?.number ?? "sheets", s[s.length - 1]?.number ?? "sheets"])].join("-")}.pdf`;
+// ---- end PAPER1 ----
+
 /** Run one ribbon action by name (see `actions`). Returns the Rust error, or null. */
 /** Actions the lab shows as a Vue screen instead of egui's (App.vue fills it: no import cycle). */
 export const screenRoutes: Record<string, () => void> = {};
 
+/** Q2: the ribbon's view switches (ribbon.rs:695-723), run by the C core then drawn by the page. */
+const VIEW_SWITCHES = ["edges", "hatching", "orthographic", "fit", "top",
+  "section_labels", "openings", "section_marks", "slab_levels"]; // KEY1: the plan annotation toggles (pressed state)
+/** Q2: what the viewport does after a view switch ran (glviewport.ts fills it: fit, top). */
+export const viewActions: Record<string, () => void> = {};
+// ---- KEY1 ---- what the viewport does for a key (shell/keys.ts calls it; glviewport.ts fills it)
+export const viewportKeys: {
+  /** Esc: stops the tool running (annotate, place, measure: its first point, then the tool). True if one ran. */
+  cancelTool?: () => boolean;
+  /** The annotation selected in the plan (a click on it), or null. */
+  selectedAnnotation?: () => string | null;
+  /** Delete: the selected annotation goes (delete_annotation). True if one was selected. */
+  deleteAnnotation?: () => boolean;
+  /** Esc: the selected annotation is let go. */
+  dropAnnotation?: () => void;
+} = {};
+// ---- end KEY1 ----
+
+// ---- FS1: the file actions of the native host go to files.ts (its dialogs; set there, no import cycle) ----
+export const fileRoutes: { run?: (name: string) => boolean } = {};
+/** An action with a JSON body (`{path, discard}`): throws the error text. */
+export function actionBody(name: string, body: unknown): void { actionWith(name, body); }
+// ---- end FS1 ----
+
 export function runAction(name: string): string | null {
   const route = screenRoutes[name];
   if (route) { route(); return null; }
-  try { wasmOrThrow().action(name); return null; } catch (e) { return message(e); }
+  if (fileRoutes.run?.(name)) return null; // FS1
+  try {
+    wasmOrThrow().action(name);
+    // Measuring is session state, not in the change JSON: its state and pressed button here (ticket T1).
+    if (name === "measure" || name.startsWith("place_")) {
+      setMeasure(tryQuery<MeasureState | null>("measure", null));
+      actions.value = tryQuery<ActionState[]>("actions", []);
+    }
+    // The box moves without a change event (its geometry is not in the change signature, calls.rs:152).
+    if (name === "box_to_selection") visibility.value = tryQuery<Visibility | null>("visibility", null);
+    // ---- Q2: the view switches are session state, not in the change JSON: their pressed state
+    // here; fit and top move the page's camera (glviewport.ts registers `viewActions`). ----
+    if (VIEW_SWITCHES.includes(name)) {
+      actions.value = tryQuery<ActionState[]>("actions", []);
+      viewActions[name]?.();
+    }
+    return null;
+  } catch (e) { return message(e); }
 }
 
 /** Activate or close one open tab (`openViews.tabs`). Returns the Rust error, or null. */
 export function tabCall(op: "activate" | "close" | "open", tab: OpenTab): string | null {
-  try { wasmOrThrow().tab(JSON.stringify({ op, tab })); return null; } catch (e) { return message(e); }
+  try { wasmOrThrow().tab(JSON.stringify({ op, tab })); } catch (e) { return message(e); }
+  // A sheet tab opens the Sheets page on that sheet (SheetsSide.vue watches it).
+  if (tab.type === "sheet") sheetTab.value = op === "close" ? null : { id: tab.id };
+  if (tab.type === "view" && op !== "close") shellHooks.viewShown?.(); // UX1: a view shown leaves Home or a page
+  return null;
 }
+
+// ---- UX1 ---- the shell's calls into the session (shell/send.ts; the shell's state is not kept here)
+/** Which client runs: the C host over HTTP, the C core's wasm in the page, or the Rust wasm. */
+export let backend: "native" | "ccore" | "rust" = "rust";
+/** Set by shell/send.ts: told when a view tab was opened or activated (tabCall). */
+export const shellHooks: { viewShown?: () => void } = {};
+/** A file action (new, open, import_ifc, close) with its body {path, discard}, never through
+ *  `screenRoutes`. Returns the session's error text, or null. */
+export function fileCall(name: string, body: { path?: string; discard?: boolean; dropped?: boolean /* FS1 */ }): string | null {
+  try {
+    const w = wasmOrThrow();
+    if (w.action_with) w.action_with(name, JSON.stringify(body));
+    else w.action(name); // the Rust wasm: its own dialogs
+    return null;
+  } catch (e) { return message(e); }
+}
+// ---- end UX1 ----
 
 /** Open any view as its current tab (a navigator click). Returns the Rust error, or null. */
 export const openView = (id: string) => tabCall("open", { type: "view", id });
 
+/** What the viewport draws for the view shown (the C core's `query view_clip`, ticket C1,
+ *  ccore/session/views.h): a plan's look, cut (world mm) and clip box (scene coordinates: the
+ *  model's bounds cut to the view range). null without a view shown or where the query is not
+ *  known (the Rust bridge): the viewport stays 3D. */
+export interface ViewClip {
+  id: string;
+  type: "three_d" | "plan" | "section";
+  look: "down" | "up" | null;
+  storey: string | null;
+  elevation: number | null;
+  cut: number | null;
+  clip: { min: number[]; max: number[] } | null;
+}
+export const viewClip = (): ViewClip | null => tryQuery<ViewClip | null>("view_clip", null);
+
+// ---- SEC1 ---- views made, changed and removed by verb (ccore/src/verbs_views.h), a section's
+// frame in `view_clip` (ccore/session/calls.c q_view_clip), what the active view hides.
+/** A section's extra fields in `view_clip`: its look (world x, y, turned), facing, cut line point
+ *  (world mm), depth (0: all) and turn (project north, radians). */
+export interface SectionClip extends ViewClip { dir?: number[]; facing?: string; origin?: number[]; depth_mm?: number; yaw?: number }
+export type ViewAdd = { kind?: "plan" | "ceiling" | "section" | "three_d"; storey?: string; facing?: string; origin?: number[]; from?: string; name?: string };
+/** `view_add`, then the new view's id (the one `open_views` did not list before), or the error. */
+export function viewAdd(args: ViewAdd): { id: string | null; error: string | null } {
+  const ids = (v: unknown) => new Set(((v as { views?: { id: string }[] }).views ?? []).map((x) => x.id));
+  const before = ids(tryQuery<unknown>("open_views", {}));
+  const error = runVerb("view_add", args);
+  if (error) return { id: null, error };
+  const after = [...ids(tryQuery<unknown>("open_views", {}))].filter((id) => !before.has(id));
+  return { id: after[0] ?? null, error: null };
+}
+export type ViewVisibility = { id: string; hidden_classes: string[]; hidden_elements: string[]; hidden_families: string[]; hidden_links: string[]; hidden_materials: string[]; hidden_storeys: string[]; isolated_elements: string[] };
+export type ViewEdit = { name?: string; origin?: number[]; facing?: string; depth_mm?: number; levels?: Record<string, string>; visibility?: Partial<Omit<ViewVisibility, "id">> };
+export const viewEdit = (id: string, patch: ViewEdit) => runVerb("view_edit", { id, ...patch });
+export const viewRemove = (id: string) => runVerb("view_remove", { id });
+/** What the active view hides (`query view_visibility`, C core only); null without a view. */
+export const viewVisibility = (): ViewVisibility | null => tryQuery<ViewVisibility | null>("view_visibility", null);
+// ---- end SEC1 ----
+
 /** Run one API verb as one undoable step. Returns the Rust error, or null. */
 export function runVerb(name: string, args: unknown = {}): string | null {
+  const ro = linkedReadOnly(args);
+  if (ro) return ro;
   try { wasmOrThrow().verb(name, JSON.stringify(args)); return null; } catch (e) { return message(e); }
 }
 
@@ -722,6 +1195,44 @@ export const scheduleRows = (name: string) => query<ScheduleTable>("schedule_row
 export const scheduleCsv = (name: string) => query<{ csv: string }>("schedule_csv", { name }).csv;
 export const views = () => query<ViewSummary[]>("views");
 export const sheets = () => query<SheetSummary[]>("sheets");
+/** One view placed on a sheet, as `sheet_layout` gives it (C core, ccore/session/sheets.h). Paper mm from the
+ *  sheet's top-left corner; `box: "estimate"` until the drawing is made (D5): the view's crop, else the model's box,
+ *  divided by the scale. */
+export interface PlacedLayout {
+  id: string;
+  view: string;
+  view_name: string | null;
+  kind: "three_d" | "plan" | "section" | null;
+  /** 1:N the view is drawn at (ADR 0046: the view's own). */
+  scale: number;
+  at_mm: [number, number];
+  box_mm: [number, number, number, number];
+  box: "estimate" | "drawing";
+}
+/** `query("sheet_layout", { id })`: the paper in the sheet's orientation and its placed views (C core only). */
+export interface SheetLayout {
+  id: string;
+  number: string;
+  name: string;
+  paper: string;
+  portrait: boolean;
+  width_mm: number;
+  height_mm: number;
+  placed: PlacedLayout[];
+}
+export const sheetLayout = (id: string) => query<SheetLayout>("sheet_layout", { id });
+/** Place a view on a sheet at `at` (paper mm); the scale is the view's (`scale` only for the first placement of a
+ *  view whose scale is not said). One undoable step. Returns the error, or null. */
+export const sheetPlace = (sheet: string, view: string, at: [number, number], scale?: number) =>
+  runVerb("sheet_place", scale === undefined ? { sheet, view, at_mm: at } : { sheet, view, at_mm: at, scale });
+/** Move a placed view to `at` (paper mm). One undoable step. Returns the error, or null. */
+export const sheetMove = (sheet: string, placed: string, at: [number, number]) => runVerb("sheet_move", { sheet, placed, at_mm: at });
+/** Take a placed view off its sheet (the view stays). One undoable step. Returns the error, or null. */
+export const sheetUnplace = (sheet: string, placed: string) => runVerb("sheet_unplace", { sheet, placed });
+/** Delete a sheet (its views stay). One undoable step. Returns the error, or null. */
+export const sheetRemove = (id: string) => runVerb("sheet_remove", { id });
+/** The sheet a sheet tab opened last (`tabCall` with type "sheet"), a new object per call: the Sheets page shows it. */
+export const sheetTab = shallowRef<{ id: string } | null>(null);
 export const schedules = () => query<ScheduleDef[]>("schedules");
 /** Empty until the `schedule_list` query is merged. */
 export const scheduleList = () => tryQuery<unknown[]>("schedule_list", []);
@@ -776,14 +1287,101 @@ export function standardsAction(name: "revert" | "reset" | "save"): string | nul
   }
 }
 /** Home's recent files, newest first (bridge query "recent_files"); empty when the settings hold none. */
-export type RecentFile = { name: string; path: string; folder: string; opened_unix: number | null; schema: string | null; exists: boolean };
+export type RecentFile = { name: string; path: string; folder: string; opened_unix: number | null; schema: string | null; exists: boolean;
+  /** FS1 (C core): "bimble", "ifc", "bimbleview", "json", "pdf", "dxf" or "other", by extension; the file's mtime (s), null when missing. */
+  kind?: string; mtime?: number | null };
 export const recentFiles = () => tryQuery<RecentFile[]>("recent_files", []);
 /** Linked models and reference plans (bridge query "links"); `kind` is "ifc", "bimble", "dxf", "pdf"… */
 export type Link = { id: string; name: string; kind: string; visible: boolean };
 export const links = () => tryQuery<Link[]>("links", []);
+
+// ---- Linked models (ticket B5, C core: ccore/session/links.h) ----
+
+/** `query("element", {id, link})`: an element of a linked model, read-only (ElementDetail's shape plus these). */
+export interface LinkedElementDetail extends ElementDetail {
+  link: string;
+  read_only: true;
+  family: string;
+  volume_m3: number;
+}
+
+/** A linked element is read-only: the edit verbs naming the selected linked id are refused here (its
+ *  GlobalId may also be one of the open model's, e.g. a link of an exported copy). */
+function linkedReadOnly(args: unknown): string | null {
+  const lk = state.value.linked;
+  if (!lk || typeof args !== "object" || args === null) return null;
+  const a = args as { id?: unknown; ids?: unknown };
+  const named = a.id === lk.id || (Array.isArray(a.ids) && a.ids.includes(lk.id));
+  return named ? `${lk.id} is in the linked model ${lk.link}: read only` : null;
+}
+
+/** Select one element of a linked model (`id` as the link's mesh gives it); `null` clears. Returns the error, or null. */
+export function selectLinked(link: string, id: string | null): string | null {
+  try { wasmOrThrow().select(JSON.stringify({ link, ids: id === null ? [] : [id] })); return null; } catch (e) { return message(e); }
+}
+
+/** An action with a JSON body (C core). Throws the error text. */
+function actionWith(name: string, args: unknown): string {
+  const w = wasmOrThrow();
+  if (!w.action_with) throw new Error(`${name}: not in this viewer`);
+  return w.action_with(name, JSON.stringify(args));
+}
+
+/** Link a model read-only beside the open one (`link_model {path}`; native host: a path it can read). Returns the error, or null. */
+export function linkModel(path: string): string | null {
+  try { actionWith("link_model", { path }); return null; } catch (e) { return message(e); }
+}
+
+/** Manage links: remove, reload, show or hide one by its file name (`links()` ids). Returns the error, or null. */
+export function manageLink(op: "remove" | "reload" | "show" | "hide", name: string): string | null {
+  try { actionWith("manage_links", { op, name }); return null; } catch (e) { return message(e); }
+}
 /** Measurements kept in the viewer (bridge query "measurements"); `label` as the egui panel shows it. */
 export type Measurement = { id: number; label: string; value_mm: number };
-export const measurements = () => tryQuery<Measurement[]>("measurements", []);
+export const measurements = () => { void measureKept.value; return tryQuery<Measurement[]>("measurements", []); };
+
+// ---- The measure tool (ticket T1, ccore/session/measure.h; C core only) ----
+
+/** The measure tool's state (op `tool` measure_*, `query measure`). Points in world mm. */
+export interface MeasureState {
+  active: boolean;
+  /** The first point of the measurement being made. */
+  first: [number, number, number] | null;
+  /** Where the next click measures to: a corner, an edge point or a face point. */
+  hover: { at: [number, number, number]; snap: "corner" | "edge" | "face" } | null;
+  /** The measurements kept: `label` as the list shows it, `text` as the view draws it. */
+  items: { a: [number, number, number]; b: [number, number, number]; id: number; label: string; text: string; value_mm: number }[];
+  /** From the first point to the hover. */
+  preview: { text: string; value_mm: number } | null;
+}
+/** The measure tool's state as the last call left it (the viewport draws it; the lists read it). */
+export const measure = shallowRef<MeasureState | null>(null);
+/** The kept measurements' labels: changes only when one is added or removed, so the lists that
+ *  read `measurements()` follow the tool without a query per pointer move. */
+const measureKept = shallowRef("");
+const setMeasure = (st: MeasureState | null) => {
+  measure.value = st;
+  measureKept.value = st ? st.items.map((i) => i.label).join("\n") : "";
+};
+/** A pointer for the measure tool: the ray in scene coordinates and the ray `tol_px` pixels beside
+ *  it; `free`: no snap (Alt), `ortho`: along an axis from the first point (Shift), `chain`: the
+ *  next measurement starts where this one ends (Ctrl). */
+export interface MeasurePointer { ray?: number[]; ray_tol?: number[]; tol_px?: number; free?: boolean; ortho?: boolean; chain?: boolean }
+/** One call of the measure tool: the state, or the error text. No history step, no rev change. */
+export function measureCall(name: "measure_pointer" | "measure_click" | "measure_cancel" | "measure_clear", args: MeasurePointer = {}): { state: MeasureState | null; error: string | null } {
+  try {
+    const w = wasmOrThrow();
+    if (!w.tool) return { state: null, error: "the measure tool needs the C core" };
+    const st = JSON.parse(w.tool(name, JSON.stringify(args))) as MeasureState;
+    setMeasure(st);
+    if (name === "measure_cancel" && !st.active) actions.value = tryQuery<ActionState[]>("actions", []); // its pressed state
+    return { state: st, error: null };
+  } catch (e) {
+    return { state: null, error: message(e) };
+  }
+}
+/** Drop every measurement. Returns the error, or null. */
+export const clearMeasurements = (): string | null => measureCall("measure_clear").error;
 
 /** Rust's palette filter (`palette_match`, the egui one): the matching indices of `items`, in order. */
 export function paletteMatch(q: string, items: string[]): number[] {
@@ -794,3 +1392,47 @@ export function paletteMatch(q: string, items: string[]): number[] {
 export function recentActions(): string[] {
   return query<string[]>("recent_actions");
 }
+
+// ---- G2: levels, grids and the georeference (ccore/src/verbs_levels.c, src/georef.c, query.c
+// `grids`, `north`, `coordinates`; session/views.h `grid_axes`). C additions (ADR 0045, 0056):
+// Rust's bridge has none of them, so every read falls back to empty and every verb answers its
+// "unknown verb" text there. ----
+
+/** `query("storeys")` when the model uses levels or grids: is_storey and height_mm (query.c q_storeys). */
+export type LevelSummary = StoreySummary & { is_storey?: boolean; height_mm?: number | null };
+export interface GridAxisSummary { id: string; tag: string; start_mm: [number, number]; end_mm: [number, number] }
+/** `query("grids")`: the model's grids by id, axes in order. */
+export interface GridSummary { id: string; name: string; axes: GridAxisSummary[] }
+export const grids = () => tryQuery<GridSummary[]>("grids", []);
+/** `query("grid_axes")`: the axes (plan, world mm) and levels of what is open, then of each link. */
+export interface GridAxesScene {
+  axes: { tag: string; start_mm: [number, number]; end_mm: [number, number] }[];
+  levels: { elevation_mm: number; key: string; name: string }[];
+}
+export type GridAxes = GridAxesScene & { links: (GridAxesScene & { name: string; visible: boolean })[] };
+export const gridAxes = () => tryQuery<GridAxes | null>("grid_axes", null);
+/** `query("state").editable`: an editable model is open (false for a read-only IFC or viewer file). */
+export const editableNow = () => tryQuery<{ editable?: boolean }>("state", {}).editable === true;
+
+export const levelAdd = (name: string, level_mm: number, storey?: boolean) =>
+  runVerb("level_add", storey === undefined ? { name, level_mm } : { name, level_mm, storey });
+export const levelSet = (id: string, patch: { name?: string; level_mm?: number; storey?: boolean }) => runVerb("level_set", { id, ...patch });
+export const levelRemove = (id: string) => runVerb("level_remove", { id });
+/** A rectangular grid: axes at `x` (numbered 1, 2…) and at `y` (lettered A, B…), as the verb tags them. */
+export const gridAdd = (name: string, x: number[], y: number[], tags?: string[]) =>
+  runVerb("grid_add", tags ? { name, x, y, tags } : { name, x, y });
+export const gridAxisSet = (grid: string, axis: string, patch: { tag?: string; start?: [number, number]; end?: [number, number] }) =>
+  runVerb("grid_axis_set", { grid, axis, ...patch });
+export const gridRemove = (id: string) => runVerb("grid_remove", { id });
+
+/** `query("north")`: the georeference as the viewport turns by it; null without an editable model. */
+export interface NorthInfo { crs: string | null; has_map: boolean; map_rotation_deg: number; plan_turn_project: number; plan_turn_true: number; rotation_deg: number }
+export const northInfo = shallowRef<NorthInfo | null>(null);
+export const refreshNorth = () => (northInfo.value = tryQuery<NorthInfo | null>("north", null));
+/** `query("coordinates")`: a world point (mm) in the survey system (m) and its status bar text. */
+export interface Coordinates { survey: [number, number, number]; text: string; wgs84: [number, number] | null; world_mm: [number, number, number] }
+export const coordinates = (at: [number, number, number], system: string | undefined = readoutSystem()) => // SET1: the setting's system
+  tryQuery<Coordinates | null>("coordinates", null, system && system !== "survey" ? { at, system } : { at });
+export type GeorefPatch = { crs?: string; east_m?: number; north_m?: number; height_m?: number; rotation_deg?: number; map_rotation_deg?: number; clear?: boolean };
+export const georefSet = (patch: GeorefPatch) => runVerb("georef_set", patch);
+// ---- end G2 ----

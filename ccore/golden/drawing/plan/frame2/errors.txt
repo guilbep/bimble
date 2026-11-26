@@ -1,0 +1,3 @@
+scale 0: scale 1:0: must be between 1:1 and 1:5000
+unknown storey: no storey "No such storey". Storeys: Rez-de-chaussée (+0.000 m), Étage "1" (+3.151 m)
+A4 at 1:1: at 1:1 the plan (9.8 × 1.9 m) needs 9862 × 1956 mm and does not fit on A4; 1:50 fits on A4

@@ -1,0 +1,19 @@
+HEAD -> 9d1b67cbf963c7f84a75f4d315f2c195defc1d748d563256e0f7dd13af6a2f76
+ -> 9d1b67cbf963c7f84a75f4d315f2c195defc1d748d563256e0f7dd13af6a2f76
+main -> 9d1b67cbf963c7f84a75f4d315f2c195defc1d748d563256e0f7dd13af6a2f76
+variant -> 2245c01674708e2be11f854aa84199d6ac08a807108eb66757519308373f9ab7
+HEAD~ -> c1453cc2e32eddc5ff357bbac51950c89225fd97434fa5ef2ee3c16cadea5a8c
+HEAD~1 -> c1453cc2e32eddc5ff357bbac51950c89225fd97434fa5ef2ee3c16cadea5a8c
+HEAD~3 -> 903b5b5fc1b762fe8ed0537a818193b18aaf4ab5663297dfcbe86a8564eb4192
+HEAD~4 -> 19e04b09662ba46c4dddf3909ff0b2b6e76246dbf5b853cf31eddf68185cf07e
+variant~2 -> 903b5b5fc1b762fe8ed0537a818193b18aaf4ab5663297dfcbe86a8564eb4192
+903b5b5fc1b762fe8ed0537a818193b18aaf4ab5663297dfcbe86a8564eb4192 -> 903b5b5fc1b762fe8ed0537a818193b18aaf4ab5663297dfcbe86a8564eb4192
+903b -> 903b5b5fc1b762fe8ed0537a818193b18aaf4ab5663297dfcbe86a8564eb4192
+903B5B5FC1B7 -> 903b5b5fc1b762fe8ed0537a818193b18aaf4ab5663297dfcbe86a8564eb4192
+c1453cc2~1 -> c904ef487e159537246bfb3e7d1cbfb4751aa43363b630b993adcd36f40f9342
+c48fa9e2b0 error unknown revision "c48fa9e2b0"
+nope error unknown revision "nope"
+abc error unknown revision "abc"
+HEAD~x error unknown revision "HEAD~x"
+main~-1 error unknown revision "main~-1"
+../main error unknown revision "../main"

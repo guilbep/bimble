@@ -1,0 +1,93 @@
+{
+  "fields": [
+    {
+      "field": "memory_share",
+      "type": "f64",
+      "default": "0.8",
+      "source": "settings.rs:10",
+      "doc": "Share of the machine's memory one model may take (ADR 0033), 0.2–1.0. The browser ignores it: a tab gets all it can address (4 GB)."
+    },
+    {
+      "field": "moving_fps",
+      "type": "u32",
+      "default": "30",
+      "source": "settings.rs:13",
+      "doc": "While the view moves, keep at least this frame rate by leaving out what is smallest on screen, and draw everything again once it stops (0: never leave anything out)."
+    },
+    {
+      "field": "moving_proxies",
+      "type": "bool",
+      "default": "true",
+      "source": "settings.rs:16",
+      "doc": "On a machine that misses that frame rate, draw far parts as simplified stand-ins while the view moves (ADR 0036 #9)."
+    },
+    {
+      "field": "gpu_cull",
+      "type": "bool",
+      "default": "false",
+      "source": "settings.rs:19",
+      "doc": "Test each shared shape's copies against the view on the GPU (ADR 0036 #10; where compute shaders exist). Experimental: no gain measured yet."
+    },
+    {
+      "field": "theme",
+      "type": "String",
+      "default": "\"grey\"",
+      "source": "settings.rs:21",
+      "doc": "Interface theme, by id (`ui_theme::THEMES`; ADR 0041)."
+    },
+    {
+      "field": "ui_font",
+      "type": "String",
+      "default": "\"roboto\"",
+      "source": "settings.rs:23",
+      "doc": "Interface font, by id (`ui_theme::UiFont`)."
+    },
+    {
+      "field": "text_size",
+      "type": "f32",
+      "default": "12.0",
+      "source": "settings.rs:25",
+      "doc": "Body text size of the interface, points."
+    },
+    {
+      "field": "user_name",
+      "type": "String",
+      "default": "\"\"",
+      "source": "settings.rs:28",
+      "doc": "Who you are (#52, until there is a server to sign in to): the author of commits, the owner of borrowed elements (\"this element belongs to …\")."
+    },
+    {
+      "field": "user_email",
+      "type": "String",
+      "default": "\"\"",
+      "source": "settings.rs:29",
+      "doc": null
+    },
+    {
+      "field": "recent",
+      "type": "Vec<String>",
+      "default": "[]",
+      "source": "settings.rs:31",
+      "doc": "Files opened last, newest first (the desktop; Home, #52)."
+    },
+    {
+      "field": "coordinates",
+      "type": "String",
+      "default": "\"survey\"",
+      "source": "settings.rs:34",
+      "doc": "The system coordinates are read in (ADR 0045): \"survey\" (the model's own: LV95 for Swiss models), \"wgs84\", \"utm\" (ETRS89, the point's zone) or \"epsg:N\" (LV03, a State Plane zone…)."
+    }
+  ],
+  "themes": [
+    "grey",
+    "dark",
+    "light",
+    "solarized-dark",
+    "solarized-light",
+    "high-contrast"
+  ],
+  "fonts": [
+    "roboto",
+    "ubuntu"
+  ]
+}

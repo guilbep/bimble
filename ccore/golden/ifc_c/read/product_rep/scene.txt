@@ -1,0 +1,8 @@
+schema "IFC2X3"
+origin 408f400000000000 409f400000000000 4097700000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cProdRep00000000004" "Level 0"
+grids 0
+elements 1 triangles 12 meshes yes
+000 2T2cProdRep00000000010 IfcColumn 7 Other v=8 i=12 e=12 n=12 name="C-300" storey="Level 0" material=""

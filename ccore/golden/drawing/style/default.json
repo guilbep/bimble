@@ -1,0 +1,1604 @@
+{
+  "background": "#f7f7f5",
+  "edges": "#1a1a1c",
+  "selection": "#d7acb6",
+  "hover": "#1e90ff",
+  "dimensions": "#146edc",
+  "reference": "#bed6ee",
+  "reference_edges": "#346eb4",
+  "only_here": "#e04b3a",
+  "only_in_reference": "#2ea05a",
+  "hatch_strength": 0.5,
+  "hatch_darken": 0.45,
+  "ambient": 0.62,
+  "cut_shade": 0.72,
+  "families": {
+    "concrete": {
+      "color": "#d6d6d2",
+      "lines": [],
+      "stipple": {
+        "cell_px": 0.625,
+        "density": 0.07,
+        "strength": 0.8
+      }
+    },
+    "steel": {
+      "color": "#96aac4",
+      "lines": [
+        {
+          "angle_deg": 135.0,
+          "spacing_px": 3.535534,
+          "width": 0.12
+        }
+      ]
+    },
+    "timber": {
+      "color": "#e2c496",
+      "lines": [
+        {
+          "angle_deg": 45.0,
+          "spacing_px": 6.363961,
+          "width": 0.1
+        }
+      ]
+    },
+    "masonry": {
+      "color": "#ce9680",
+      "lines": [
+        {
+          "angle_deg": 45.0,
+          "spacing_px": 8.485282,
+          "width": 0.08
+        },
+        {
+          "angle_deg": 135.0,
+          "spacing_px": 16.970564,
+          "width": 0.05
+        }
+      ]
+    },
+    "insulation": {
+      "color": "#ecdc78",
+      "lines": [
+        {
+          "angle_deg": 0.0,
+          "spacing_px": 8.0,
+          "width": 0.12,
+          "dash_px": 10.0,
+          "dash_on": 0.6
+        }
+      ]
+    },
+    "earth": {
+      "color": "#b0a084",
+      "lines": [
+        {
+          "angle_deg": 45.0,
+          "spacing_px": 7.071068,
+          "width": 0.08
+        },
+        {
+          "angle_deg": 135.0,
+          "spacing_px": 7.071068,
+          "width": 0.08
+        }
+      ]
+    },
+    "glass": {
+      "color": "#b0d6e2",
+      "lines": []
+    },
+    "other": {
+      "color": "#eeeeec",
+      "lines": []
+    }
+  },
+  "paper": {
+    "cut_pen_mm": 0.5,
+    "projection_pen_mm": 0.18,
+    "above_pen_mm": 0.13,
+    "above_dash_mm": [
+      2.0,
+      1.0
+    ],
+    "hatch_pen_mm": 0.13,
+    "hatch_mm_per_px": 0.35,
+    "frame_pen_mm": 0.5,
+    "text_mm": 2.5,
+    "annotation_pen_mm": 0.13,
+    "axis_pen_mm": 0.13,
+    "axis_dash_mm": [
+      12.0,
+      1.5,
+      0.5,
+      1.5
+    ],
+    "seen_lighten": 0.6,
+    "pens": {
+      "scales": [
+        5,
+        10,
+        20,
+        50,
+        100,
+        200,
+        500
+      ],
+      "model": [
+        [
+          0.1,
+          0.1,
+          0.1,
+          0.1,
+          0.1,
+          0.1,
+          0.1
+        ],
+        [
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.1,
+          0.1
+        ],
+        [
+          0.3,
+          0.25,
+          0.35,
+          0.35,
+          0.25,
+          0.18,
+          0.15
+        ],
+        [
+          0.7,
+          0.7,
+          0.5,
+          0.5,
+          0.35,
+          0.25,
+          0.18
+        ],
+        [
+          1.0,
+          1.0,
+          0.7,
+          0.7,
+          0.5,
+          0.35,
+          0.25
+        ],
+        [
+          1.4,
+          1.4,
+          1.0,
+          1.0,
+          0.7,
+          0.5,
+          0.35
+        ],
+        [
+          2.0,
+          2.0,
+          1.4,
+          1.4,
+          1.0,
+          0.7,
+          0.5
+        ],
+        [
+          2.8,
+          2.8,
+          2.0,
+          2.0,
+          1.4,
+          1.0,
+          0.7
+        ],
+        [
+          4.0,
+          4.0,
+          2.8,
+          2.8,
+          2.0,
+          1.4,
+          1.0
+        ],
+        [
+          5.0,
+          5.0,
+          4.0,
+          4.0,
+          2.8,
+          2.0,
+          1.4
+        ],
+        [
+          6.0,
+          6.0,
+          5.0,
+          5.0,
+          4.0,
+          2.8,
+          2.0
+        ],
+        [
+          7.0,
+          7.0,
+          6.0,
+          6.0,
+          5.0,
+          4.0,
+          2.8
+        ],
+        [
+          8.0,
+          8.0,
+          7.0,
+          7.0,
+          6.0,
+          5.0,
+          4.0
+        ],
+        [
+          9.0,
+          9.0,
+          8.0,
+          8.0,
+          7.0,
+          6.0,
+          5.0
+        ],
+        [
+          9.0,
+          9.0,
+          9.0,
+          9.0,
+          8.0,
+          7.0,
+          6.0
+        ],
+        [
+          0.05,
+          0.05,
+          0.18,
+          0.18,
+          0.1,
+          0.1,
+          0.1
+        ]
+      ],
+      "perspective": [
+        0.1,
+        0.18,
+        0.25,
+        0.35,
+        0.5,
+        0.7,
+        1.0,
+        1.4,
+        2.0,
+        2.8,
+        4.0,
+        5.0,
+        6.0,
+        7.0,
+        8.0,
+        10.0
+      ],
+      "annotation": [
+        0.1,
+        0.18,
+        0.25,
+        0.35,
+        0.5,
+        0.7,
+        1.0,
+        1.4,
+        2.0,
+        2.8,
+        4.0,
+        5.0,
+        6.0,
+        7.0,
+        8.0,
+        10.0
+      ]
+    },
+    "line_types": [
+      {
+        "name": "black_continu_1",
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "black_continu_2",
+        "color": "#000000",
+        "pen": 2
+      },
+      {
+        "name": "black_continu_3",
+        "color": "#000000",
+        "pen": 3
+      },
+      {
+        "name": "black_continu_5",
+        "color": "#000000",
+        "pen": 5
+      },
+      {
+        "name": "black_dash_1",
+        "color": "#000000",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "black_dash_2",
+        "color": "#000000",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 2
+      },
+      {
+        "name": "black_dash_3",
+        "color": "#000000",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 3
+      },
+      {
+        "name": "black_dash_5",
+        "color": "#000000",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 5
+      },
+      {
+        "name": "black_axes_1",
+        "color": "#000000",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 1
+      },
+      {
+        "name": "black_axes_2",
+        "color": "#000000",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 2
+      },
+      {
+        "name": "black_axes_detail_1",
+        "color": "#000000",
+        "dash_mm": [
+          3.0,
+          1.0,
+          0.5,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "red_continu_1",
+        "color": "#e6281e",
+        "pen": 1
+      },
+      {
+        "name": "red_continu_2",
+        "color": "#e6281e",
+        "pen": 2
+      },
+      {
+        "name": "red_continu_3",
+        "color": "#e6281e",
+        "pen": 3
+      },
+      {
+        "name": "red_continu_5",
+        "color": "#e6281e",
+        "pen": 5
+      },
+      {
+        "name": "red_dash_1",
+        "color": "#e6281e",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "red_dash_2",
+        "color": "#e6281e",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 2
+      },
+      {
+        "name": "red_dash_3",
+        "color": "#e6281e",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 3
+      },
+      {
+        "name": "red_dash_5",
+        "color": "#e6281e",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 5
+      },
+      {
+        "name": "red_axes_1",
+        "color": "#e6281e",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 1
+      },
+      {
+        "name": "red_axes_2",
+        "color": "#e6281e",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 2
+      },
+      {
+        "name": "red_axes_detail_1",
+        "color": "#e6281e",
+        "dash_mm": [
+          3.0,
+          1.0,
+          0.5,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "grey_continu_1",
+        "color": "#808080",
+        "pen": 1
+      },
+      {
+        "name": "grey_continu_2",
+        "color": "#808080",
+        "pen": 2
+      },
+      {
+        "name": "grey_continu_3",
+        "color": "#808080",
+        "pen": 3
+      },
+      {
+        "name": "grey_continu_5",
+        "color": "#808080",
+        "pen": 5
+      },
+      {
+        "name": "grey_dash_1",
+        "color": "#808080",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "grey_dash_2",
+        "color": "#808080",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 2
+      },
+      {
+        "name": "grey_dash_3",
+        "color": "#808080",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 3
+      },
+      {
+        "name": "grey_dash_5",
+        "color": "#808080",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 5
+      },
+      {
+        "name": "grey_axes_1",
+        "color": "#808080",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 1
+      },
+      {
+        "name": "grey_axes_2",
+        "color": "#808080",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 2
+      },
+      {
+        "name": "grey_axes_detail_1",
+        "color": "#808080",
+        "dash_mm": [
+          3.0,
+          1.0,
+          0.5,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "green_continu_1",
+        "color": "#28a028",
+        "pen": 1
+      },
+      {
+        "name": "green_continu_2",
+        "color": "#28a028",
+        "pen": 2
+      },
+      {
+        "name": "green_continu_3",
+        "color": "#28a028",
+        "pen": 3
+      },
+      {
+        "name": "green_continu_5",
+        "color": "#28a028",
+        "pen": 5
+      },
+      {
+        "name": "green_dash_1",
+        "color": "#28a028",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "green_dash_2",
+        "color": "#28a028",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 2
+      },
+      {
+        "name": "green_dash_3",
+        "color": "#28a028",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 3
+      },
+      {
+        "name": "green_dash_5",
+        "color": "#28a028",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 5
+      },
+      {
+        "name": "green_axes_1",
+        "color": "#28a028",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 1
+      },
+      {
+        "name": "green_axes_2",
+        "color": "#28a028",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 2
+      },
+      {
+        "name": "green_axes_detail_1",
+        "color": "#28a028",
+        "dash_mm": [
+          3.0,
+          1.0,
+          0.5,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "brown_continu_1",
+        "color": "#965a28",
+        "pen": 1
+      },
+      {
+        "name": "brown_continu_2",
+        "color": "#965a28",
+        "pen": 2
+      },
+      {
+        "name": "brown_continu_3",
+        "color": "#965a28",
+        "pen": 3
+      },
+      {
+        "name": "brown_continu_5",
+        "color": "#965a28",
+        "pen": 5
+      },
+      {
+        "name": "brown_dash_1",
+        "color": "#965a28",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "brown_dash_2",
+        "color": "#965a28",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 2
+      },
+      {
+        "name": "brown_dash_3",
+        "color": "#965a28",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 3
+      },
+      {
+        "name": "brown_dash_5",
+        "color": "#965a28",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 5
+      },
+      {
+        "name": "brown_axes_1",
+        "color": "#965a28",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 1
+      },
+      {
+        "name": "brown_axes_2",
+        "color": "#965a28",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 2
+      },
+      {
+        "name": "brown_axes_detail_1",
+        "color": "#965a28",
+        "dash_mm": [
+          3.0,
+          1.0,
+          0.5,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "orange_continu_1",
+        "color": "#f08228",
+        "pen": 1
+      },
+      {
+        "name": "orange_continu_2",
+        "color": "#f08228",
+        "pen": 2
+      },
+      {
+        "name": "orange_continu_3",
+        "color": "#f08228",
+        "pen": 3
+      },
+      {
+        "name": "orange_continu_5",
+        "color": "#f08228",
+        "pen": 5
+      },
+      {
+        "name": "orange_dash_1",
+        "color": "#f08228",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "orange_dash_2",
+        "color": "#f08228",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 2
+      },
+      {
+        "name": "orange_dash_3",
+        "color": "#f08228",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 3
+      },
+      {
+        "name": "orange_dash_5",
+        "color": "#f08228",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 5
+      },
+      {
+        "name": "orange_axes_1",
+        "color": "#f08228",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 1
+      },
+      {
+        "name": "orange_axes_2",
+        "color": "#f08228",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 2
+      },
+      {
+        "name": "orange_axes_detail_1",
+        "color": "#f08228",
+        "dash_mm": [
+          3.0,
+          1.0,
+          0.5,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "blue_continu_1",
+        "color": "#1e6ef0",
+        "pen": 1
+      },
+      {
+        "name": "blue_continu_2",
+        "color": "#1e6ef0",
+        "pen": 2
+      },
+      {
+        "name": "blue_continu_3",
+        "color": "#1e6ef0",
+        "pen": 3
+      },
+      {
+        "name": "blue_continu_5",
+        "color": "#1e6ef0",
+        "pen": 5
+      },
+      {
+        "name": "blue_dash_1",
+        "color": "#1e6ef0",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "blue_dash_2",
+        "color": "#1e6ef0",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 2
+      },
+      {
+        "name": "blue_dash_3",
+        "color": "#1e6ef0",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 3
+      },
+      {
+        "name": "blue_dash_5",
+        "color": "#1e6ef0",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 5
+      },
+      {
+        "name": "blue_axes_1",
+        "color": "#1e6ef0",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 1
+      },
+      {
+        "name": "blue_axes_2",
+        "color": "#1e6ef0",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 2
+      },
+      {
+        "name": "blue_axes_detail_1",
+        "color": "#1e6ef0",
+        "dash_mm": [
+          3.0,
+          1.0,
+          0.5,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "pink_continu_1",
+        "color": "#e61ee6",
+        "pen": 1
+      },
+      {
+        "name": "pink_continu_2",
+        "color": "#e61ee6",
+        "pen": 2
+      },
+      {
+        "name": "pink_continu_3",
+        "color": "#e61ee6",
+        "pen": 3
+      },
+      {
+        "name": "pink_continu_5",
+        "color": "#e61ee6",
+        "pen": 5
+      },
+      {
+        "name": "pink_dash_1",
+        "color": "#e61ee6",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "pink_dash_2",
+        "color": "#e61ee6",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 2
+      },
+      {
+        "name": "pink_dash_3",
+        "color": "#e61ee6",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 3
+      },
+      {
+        "name": "pink_dash_5",
+        "color": "#e61ee6",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 5
+      },
+      {
+        "name": "pink_axes_1",
+        "color": "#e61ee6",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 1
+      },
+      {
+        "name": "pink_axes_2",
+        "color": "#e61ee6",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 2
+      },
+      {
+        "name": "pink_axes_detail_1",
+        "color": "#e61ee6",
+        "dash_mm": [
+          3.0,
+          1.0,
+          0.5,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "yellow_continu_1",
+        "color": "#e6d214",
+        "pen": 1
+      },
+      {
+        "name": "yellow_continu_2",
+        "color": "#e6d214",
+        "pen": 2
+      },
+      {
+        "name": "yellow_continu_3",
+        "color": "#e6d214",
+        "pen": 3
+      },
+      {
+        "name": "yellow_continu_5",
+        "color": "#e6d214",
+        "pen": 5
+      },
+      {
+        "name": "yellow_dash_1",
+        "color": "#e6d214",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 1
+      },
+      {
+        "name": "yellow_dash_2",
+        "color": "#e6d214",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 2
+      },
+      {
+        "name": "yellow_dash_3",
+        "color": "#e6d214",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 3
+      },
+      {
+        "name": "yellow_dash_5",
+        "color": "#e6d214",
+        "dash_mm": [
+          2.0,
+          1.0
+        ],
+        "pen": 5
+      },
+      {
+        "name": "yellow_axes_1",
+        "color": "#e6d214",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 1
+      },
+      {
+        "name": "yellow_axes_2",
+        "color": "#e6d214",
+        "dash_mm": [
+          12.0,
+          1.5,
+          0.5,
+          1.5
+        ],
+        "pen": 2
+      },
+      {
+        "name": "yellow_axes_detail_1",
+        "color": "#e6d214",
+        "dash_mm": [
+          3.0,
+          1.0,
+          0.5,
+          1.0
+        ],
+        "pen": 1
+      }
+    ],
+    "lines": {
+      "cut": "black_continu_5",
+      "seen": "black_continu_2",
+      "above": "black_dash_1",
+      "hatch": "black_continu_1",
+      "axis": "black_axes_1",
+      "dimension": "black_continu_1",
+      "frame": "black_continu_5"
+    },
+    "text_types": [
+      {
+        "name": "Arial 5 mm black",
+        "font": "Arial",
+        "size_mm": 5.0,
+        "color": "#000000"
+      },
+      {
+        "name": "Arial 4 mm black",
+        "font": "Arial",
+        "size_mm": 4.0,
+        "color": "#000000"
+      },
+      {
+        "name": "Arial 3.5 mm black",
+        "font": "Arial",
+        "size_mm": 3.5,
+        "color": "#000000"
+      },
+      {
+        "name": "Arial 2.5 mm black",
+        "font": "Arial",
+        "size_mm": 2.5,
+        "color": "#000000"
+      },
+      {
+        "name": "Arial 2 mm black",
+        "font": "Arial",
+        "size_mm": 2.0,
+        "color": "#000000"
+      },
+      {
+        "name": "Arial 5 mm red",
+        "font": "Arial",
+        "size_mm": 5.0,
+        "color": "#e6281e"
+      },
+      {
+        "name": "Arial 4 mm red",
+        "font": "Arial",
+        "size_mm": 4.0,
+        "color": "#e6281e"
+      },
+      {
+        "name": "Arial 3.5 mm red",
+        "font": "Arial",
+        "size_mm": 3.5,
+        "color": "#e6281e"
+      },
+      {
+        "name": "Arial 2.5 mm red",
+        "font": "Arial",
+        "size_mm": 2.5,
+        "color": "#e6281e"
+      },
+      {
+        "name": "Arial 2 mm red",
+        "font": "Arial",
+        "size_mm": 2.0,
+        "color": "#e6281e"
+      },
+      {
+        "name": "Arial 5 mm green",
+        "font": "Arial",
+        "size_mm": 5.0,
+        "color": "#28a028"
+      },
+      {
+        "name": "Arial 4 mm green",
+        "font": "Arial",
+        "size_mm": 4.0,
+        "color": "#28a028"
+      },
+      {
+        "name": "Arial 3.5 mm green",
+        "font": "Arial",
+        "size_mm": 3.5,
+        "color": "#28a028"
+      },
+      {
+        "name": "Arial 2.5 mm green",
+        "font": "Arial",
+        "size_mm": 2.5,
+        "color": "#28a028"
+      },
+      {
+        "name": "Arial 2 mm green",
+        "font": "Arial",
+        "size_mm": 2.0,
+        "color": "#28a028"
+      },
+      {
+        "name": "Arial 5 mm brown",
+        "font": "Arial",
+        "size_mm": 5.0,
+        "color": "#be6e28"
+      },
+      {
+        "name": "Arial 4 mm brown",
+        "font": "Arial",
+        "size_mm": 4.0,
+        "color": "#be6e28"
+      },
+      {
+        "name": "Arial 3.5 mm brown",
+        "font": "Arial",
+        "size_mm": 3.5,
+        "color": "#be6e28"
+      },
+      {
+        "name": "Arial 2.5 mm brown",
+        "font": "Arial",
+        "size_mm": 2.5,
+        "color": "#be6e28"
+      },
+      {
+        "name": "Arial 2 mm brown",
+        "font": "Arial",
+        "size_mm": 2.0,
+        "color": "#be6e28"
+      },
+      {
+        "name": "Arial 5 mm blue",
+        "font": "Arial",
+        "size_mm": 5.0,
+        "color": "#1e6ef0"
+      },
+      {
+        "name": "Arial 4 mm blue",
+        "font": "Arial",
+        "size_mm": 4.0,
+        "color": "#1e6ef0"
+      },
+      {
+        "name": "Arial 3.5 mm blue",
+        "font": "Arial",
+        "size_mm": 3.5,
+        "color": "#1e6ef0"
+      },
+      {
+        "name": "Arial 2.5 mm blue",
+        "font": "Arial",
+        "size_mm": 2.5,
+        "color": "#1e6ef0"
+      },
+      {
+        "name": "Arial 2 mm blue",
+        "font": "Arial",
+        "size_mm": 2.0,
+        "color": "#1e6ef0"
+      }
+    ],
+    "dimension_types": [
+      {
+        "name": "black cm",
+        "unit": "cm",
+        "decimals": 0,
+        "show_unit": false,
+        "color": "#000000",
+        "text_mm": 2.5,
+        "line_type": "black_continu_1"
+      },
+      {
+        "name": "black m",
+        "unit": "m",
+        "decimals": 2,
+        "show_unit": true,
+        "color": "#000000",
+        "text_mm": 2.5,
+        "line_type": "black_continu_1"
+      },
+      {
+        "name": "black mm",
+        "unit": "mm",
+        "decimals": 0,
+        "show_unit": true,
+        "color": "#000000",
+        "text_mm": 2.5,
+        "line_type": "black_continu_1"
+      },
+      {
+        "name": "red cm",
+        "unit": "cm",
+        "decimals": 0,
+        "show_unit": false,
+        "color": "#e6281e",
+        "text_mm": 2.5,
+        "line_type": "black_continu_1"
+      },
+      {
+        "name": "red m",
+        "unit": "m",
+        "decimals": 2,
+        "show_unit": true,
+        "color": "#e6281e",
+        "text_mm": 2.5,
+        "line_type": "black_continu_1"
+      },
+      {
+        "name": "red mm",
+        "unit": "mm",
+        "decimals": 0,
+        "show_unit": true,
+        "color": "#e6281e",
+        "text_mm": 2.5,
+        "line_type": "black_continu_1"
+      },
+      {
+        "name": "blue cm",
+        "unit": "cm",
+        "decimals": 0,
+        "show_unit": false,
+        "color": "#1e6ef0",
+        "text_mm": 2.5,
+        "line_type": "black_continu_1"
+      },
+      {
+        "name": "blue m",
+        "unit": "m",
+        "decimals": 2,
+        "show_unit": true,
+        "color": "#1e6ef0",
+        "text_mm": 2.5,
+        "line_type": "black_continu_1"
+      },
+      {
+        "name": "blue mm",
+        "unit": "mm",
+        "decimals": 0,
+        "show_unit": true,
+        "color": "#1e6ef0",
+        "text_mm": 2.5,
+        "line_type": "black_continu_1"
+      },
+      {
+        "name": "green cm",
+        "unit": "cm",
+        "decimals": 0,
+        "show_unit": false,
+        "color": "#28a028",
+        "text_mm": 2.5,
+        "line_type": "black_continu_1"
+      },
+      {
+        "name": "green m",
+        "unit": "m",
+        "decimals": 2,
+        "show_unit": true,
+        "color": "#28a028",
+        "text_mm": 2.5,
+        "line_type": "black_continu_1"
+      },
+      {
+        "name": "green mm",
+        "unit": "mm",
+        "decimals": 0,
+        "show_unit": true,
+        "color": "#28a028",
+        "text_mm": 2.5,
+        "line_type": "black_continu_1"
+      }
+    ],
+    "hatch_types": [
+      {
+        "name": "concrete cut",
+        "lines": [
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 1.5
+          }
+        ],
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "concrete seen",
+        "fill": "#ebebeb",
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "masonry cut",
+        "lines": [
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 1.0
+          },
+          {
+            "angle_deg": 135.0,
+            "spacing_mm": 3.0
+          }
+        ],
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "masonry seen",
+        "lines": [
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 3.0
+          }
+        ],
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "steel cut",
+        "fill": "#000000",
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "timber cut",
+        "lines": [
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 2.0
+          },
+          {
+            "angle_deg": 135.0,
+            "spacing_mm": 2.0
+          }
+        ],
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "timber seen",
+        "lines": [
+          {
+            "angle_deg": 0.0,
+            "spacing_mm": 2.0
+          }
+        ],
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "earth",
+        "lines": [
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 4.0
+          },
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 4.0,
+            "offset_mm": 0.5
+          },
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 4.0,
+            "offset_mm": 1.0
+          }
+        ],
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "drainage",
+        "lines": [
+          {
+            "angle_deg": 0.0,
+            "spacing_mm": 1.2,
+            "dash_mm": [
+              0.2,
+              1.0
+            ]
+          },
+          {
+            "angle_deg": 0.0,
+            "spacing_mm": 1.2,
+            "offset_mm": 0.6,
+            "dash_mm": [
+              0.2,
+              1.0
+            ]
+          }
+        ],
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "insulation",
+        "lines": [
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 3.0,
+            "dash_mm": [
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "angle_deg": 135.0,
+            "spacing_mm": 3.0,
+            "dash_mm": [
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "diagonals black",
+        "lines": [
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 2.0
+          }
+        ],
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "diagonals red",
+        "lines": [
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 2.0
+          }
+        ],
+        "color": "#e6281e",
+        "pen": 1
+      },
+      {
+        "name": "diagonals green",
+        "lines": [
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 2.0
+          }
+        ],
+        "color": "#28a028",
+        "pen": 1
+      },
+      {
+        "name": "diagonals brown",
+        "lines": [
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 2.0
+          }
+        ],
+        "color": "#be6e28",
+        "pen": 1
+      },
+      {
+        "name": "diagonals blue",
+        "lines": [
+          {
+            "angle_deg": 45.0,
+            "spacing_mm": 2.0
+          }
+        ],
+        "color": "#1e6ef0",
+        "pen": 1
+      },
+      {
+        "name": "solid black",
+        "fill": "#000000",
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "solid grey",
+        "fill": "#bebebe",
+        "color": "#000000",
+        "pen": 1
+      },
+      {
+        "name": "solid light grey",
+        "fill": "#e1e1e1",
+        "color": "#000000",
+        "pen": 1
+      }
+    ],
+    "font": "roboto"
+  }
+}

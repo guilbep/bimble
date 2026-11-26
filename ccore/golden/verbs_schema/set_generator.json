@@ -1,0 +1,64 @@
+{
+  "$defs": {
+    "GeneratorParams": {
+      "additionalProperties": false,
+      "properties": {
+        "depth": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "height": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "length": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "thickness": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "width": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of `set_generator`.",
+  "properties": {
+    "id": {
+      "description": "GlobalId of the element.",
+      "type": "string"
+    },
+    "params": {
+      "$ref": "#/$defs/GeneratorParams",
+      "description": "New sizes, mm, > 0; only the ones the element's generator has."
+    }
+  },
+  "required": [
+    "id",
+    "params"
+  ],
+  "title": "SetGeneratorArgs",
+  "type": "object"
+}

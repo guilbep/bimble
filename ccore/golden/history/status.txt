@@ -1,0 +1,8 @@
+~ IfcProject Concrete frame (working) [1ECFGZP4n20ADaVDzRQc6J]
+    project_name: "Concrete frame 3x2x2" → "Concrete frame (working)"
+~ IfcProject project information [1ECFGZP4n20ADaVDzRQc6J]
+    project.address: "Rue du Test 1, Lausanne" → ""
+    project.client: "" → "Synthetic SA"
+~ IfcBuildingStorey Sous-sol [04Aobkc8v6$94cGl_9HNVX]
+    name: "Fondations" → "Sous-sol"
+- IfcBeam Poutre "P1" — renommée [01KnL9d95C2OMpOLdTJDE_]

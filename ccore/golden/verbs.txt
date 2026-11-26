@@ -1,0 +1,108 @@
+>>> verb place {"a":[1500.0,1500.0],"kind":"column","storey":"1uAZA0Yfn05f$xRd1k4uPR"}
+200 [{"op":"add_element","id":"<new-1>","class":"IfcColumn","name":"P1","storey":"1uAZA0Yfn05f$xRd1k4uPR","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[1500.0,1500.0,0.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]},"generator":{"kind":"rect_column","width":300.0,"depth":300.0,"height":3000.0}}]
+undo ["add P1"]
+redo []
+elements 73
+
+>>> verb place {"a":[0.0,2500.0],"b":[6000.0,2500.0],"kind":"beam","storey":"1uAZA0Yfn05f$xRd1k4uPR"}
+200 [{"op":"add_element","id":"<new-2>","class":"IfcBeam","name":"B1","storey":"1uAZA0Yfn05f$xRd1k4uPR","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[0.0,2500.0,2750.0],"z_axis":[1.0,0.0,0.0],"x_axis":[-0.0,1.0,0.0]},"generator":{"kind":"rect_beam","width":250.0,"height":500.0,"length":6000.0}}]
+undo ["add B1","add P1"]
+redo []
+elements 74
+
+>>> verb place {"a":[0.0,-2000.0],"b":[6000.0,-2000.0],"kind":"wall","storey":"1uAZA0Yfn05f$xRd1k4uPR"}
+200 [{"op":"add_element","id":"<new-3>","class":"IfcWall","name":"M1","storey":"1uAZA0Yfn05f$xRd1k4uPR","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[0.0,-2000.0,0.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]},"generator":{"kind":"wall","length":6000.0,"thickness":200.0,"height":3000.0}}]
+undo ["add M1","add B1","add P1"]
+redo []
+elements 75
+
+>>> verb place {"a":[20000.0,0.0],"b":[24000.0,4000.0],"kind":"slab","material":"C35/45","storey":"1uAZA0Yfn05f$xRd1k4uPR"}
+200 [{"op":"add_material","id":"<new-4>","name":"C35/45","category":"concrete","props":{"density_kg_m3":2500.0,"e_mpa":34000.0,"strength_mpa":35.0,"source":"EN 1992-1-1 Table 3.1; 25 kN/m³ reinforced (EN 1991-1-1)"}},{"op":"add_element","id":"<new-5>","class":"IfcSlab","name":"D3","storey":"1uAZA0Yfn05f$xRd1k4uPR","material":"<new-4>","placement":{"origin":[20000.0,0.0,2750.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]},"generator":{"kind":"slab","outline":[[0.0,0.0],[4000.0,0.0],[4000.0,4000.0],[0.0,4000.0]],"thickness":250.0}}]
+undo ["add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo []
+elements 76
+
+>>> verb move {"d":[100.0,-50.0,0.0],"ids":["<new-1>","004z1Cm4z4hgNOg0ez4Id1"]}
+200 [{"op":"set_placement","id":"<new-1>","placement":{"origin":[1600.0,1450.0,0.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]}},{"op":"set_placement","id":"004z1Cm4z4hgNOg0ez4Id1","placement":{"origin":[100.0,-50.0,0.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]}}]
+undo ["move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo []
+elements 76
+
+>>> verb set_generator {"id":"<new-2>","params":{"height":600.0}}
+200 [{"op":"set_generator","id":"<new-2>","generator":{"kind":"rect_beam","width":250.0,"height":600.0,"length":6000.0}}]
+undo ["change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo []
+elements 76
+
+>>> verb set_material {"ids":["<new-3>","004z1Cm4z4hgNOg0ez4Id1"],"material":"C35/45"}
+200 [{"op":"set_element_material","id":"<new-3>","material":"<new-4>"},{"op":"set_element_material","id":"004z1Cm4z4hgNOg0ez4Id1","material":"<new-4>"}]
+undo ["set the material of M1 to C35/45 and 1 more change","change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo []
+elements 76
+
+>>> verb set_note {"id":"<new-1>","text":"  Check cover  "}
+200 [{"op":"set_property","id":"<new-1>","key":"Note","value":"Check cover"}]
+undo ["set Note of P1","set the material of M1 to C35/45 and 1 more change","change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo []
+elements 76
+
+>>> verb delete {"ids":["<new-5>"]}
+200 [{"op":"remove_element","id":"<new-5>"}]
+undo ["delete D3","set Note of P1","set the material of M1 to C35/45 and 1 more change","change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo []
+elements 75
+
+>>> undo - null
+200 true
+undo ["set Note of P1","set the material of M1 to C35/45 and 1 more change","change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo ["delete D3"]
+elements 76
+
+>>> undo - null
+200 true
+undo ["set the material of M1 to C35/45 and 1 more change","change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo ["set Note of P1","delete D3"]
+elements 76
+
+>>> undo - null
+200 true
+undo ["change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo ["set the material of M1 to C35/45 and 1 more change","set Note of P1","delete D3"]
+elements 76
+
+>>> redo - null
+200 true
+undo ["set the material of M1 to C35/45 and 1 more change","change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo ["set Note of P1","delete D3"]
+elements 76
+
+>>> verb place {"a":[0.0,0.0],"kind":"door","storey":"1uAZA0Yfn05f$xRd1k4uPR"}
+400 bad arguments: unknown variant `door`, expected one of `column`, `beam`, `wall`, `slab`
+undo ["set the material of M1 to C35/45 and 1 more change","change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo ["set Note of P1","delete D3"]
+elements 76
+
+>>> verb place {"a":[0.0,0.0],"kind":"beam","storey":"1uAZA0Yfn05f$xRd1k4uPR"}
+400 Beam: b is required
+undo ["set the material of M1 to C35/45 and 1 more change","change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo ["set Note of P1","delete D3"]
+elements 76
+
+>>> verb move {"d":[1.0,0.0,0.0],"ids":["0000000000000000000000"]}
+200 []
+undo ["nothing","set the material of M1 to C35/45 and 1 more change","change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo []
+elements 76
+
+>>> verb set_generator {"id":"<new-1>","params":{"width":-5.0}}
+400 width: -5 is not a size within [10, 100000] mm
+undo ["nothing","set the material of M1 to C35/45 and 1 more change","change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo []
+elements 76
+
+>>> verb fly {}
+400 unknown verb "fly"; known: place, move, copy, delete, set_generator, set_view, set_schedule, set_material, set_note, set_project_field, rotate, mirror, add_sheet, set_sheet
+undo ["nothing","set the material of M1 to C35/45 and 1 more change","change the sizes of B1","move P1 and 1 more change","add the material C35/45 and 1 more change","add M1","add B1","add P1"]
+redo []
+elements 76
+

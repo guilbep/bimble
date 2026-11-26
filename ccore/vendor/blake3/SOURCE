@@ -1,0 +1,9 @@
+BLAKE3 (official C implementation), by the BLAKE3 team.
+URL:    https://github.com/BLAKE3-team/BLAKE3 (directory c/)
+Tag:    1.8.7 (commit f3149ec5bb5449af877ba20377a11008ff499fa2)
+Files:  blake3.c, blake3_dispatch.c, blake3_portable.c, blake3.h, blake3_impl.h (portable code only;
+        no SIMD, assembly or TBB files), LICENSE_A2, LICENSE_A2LLVM, LICENSE_CC0 (from the repo
+        root: CC0 1.0, or Apache 2.0, or Apache 2.0 with LLVM exceptions, at your choice; unchanged).
+Local changes: none. ccore/src/guid.c includes the three .c files into its translation unit and
+defines BLAKE3_NO_SSE2, BLAKE3_NO_SSE41, BLAKE3_NO_AVX2, BLAKE3_NO_AVX512 and BLAKE3_USE_NEON=0
+first, so only the portable code is compiled (tcc, clang and freestanding wasm32 build it).

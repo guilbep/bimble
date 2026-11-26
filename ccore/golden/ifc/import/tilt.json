@@ -1,0 +1,70 @@
+{
+  "format": "bimble",
+  "version": 1,
+  "model": {
+    "project_id": "0YvctVUKr0kugbFTf53O9L",
+    "project_name": "Imported model",
+    "storeys": {
+      "<new-1>": {
+        "id": "<new-1>",
+        "name": "(no storey)",
+        "elevation": 0.0
+      }
+    },
+    "materials": {
+      "<new-2>": {
+        "id": "<new-2>",
+        "name": "Undefined",
+        "category": "other"
+      }
+    },
+    "elements": {
+      "1YvctVUKr0kugbFTf53O9L": {
+        "id": "1YvctVUKr0kugbFTf53O9L",
+        "class": "IfcBuildingElementProxy",
+        "name": "tilt",
+        "storey": "<new-1>",
+        "material": "<new-2>",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.9500148013459083,
+            0.0,
+            0.3122048641896764
+          ],
+          "x_axis": [
+            0.3122048641896765,
+            0.0,
+            -0.9500148013459083
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              -500.0,
+              -50.0
+            ],
+            [
+              500.0,
+              -50.0
+            ],
+            [
+              500.0,
+              50.0
+            ],
+            [
+              -500.0,
+              50.0
+            ]
+          ],
+          "height": 100.0
+        }
+      }
+    }
+  }
+}

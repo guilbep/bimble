@@ -1,0 +1,148 @@
+> add_sheet {"number":"S-101","name":"Plans"}
+  [{"op":"add_sheet","id":"0000000000000000000001","number":"S-101","name":"Plans","paper":"A1"}]
+  history {"redo":[],"undo":["add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"3w8zGYnP$Ay1lyvMZjDnXq","at_mm":[300,250]}
+  [{"op":"set_sheet","id":"0000000000000000000001","number":"S-101","name":"Plans","paper":"A1","placed":[{"id":"0000000000000000000002","view":"3w8zGYnP$Ay1lyvMZjDnXq","scale":100,"at_mm":[300.0,250.0]}]}]
+  history {"redo":[],"undo":["change the sheet S-101","add the sheet S-101"]}
+> query sheet_layout {"id":"<new-1>"}
+  200 {"height_mm":594.0,"id":"0000000000000000000001","name":"Plans","number":"S-101","paper":"A1","placed":[{"at_mm":[300.0,250.0],"box":"drawing","box_mm":[186.0,170.5,414.0,329.5],"id":"0000000000000000000002","kind":"plan","scale":100,"view":"3w8zGYnP$Ay1lyvMZjDnXq","view_name":"Plan Niveau 1"}],"portrait":false,"width_mm":841.0}
+> undo
+  history {"redo":["change the sheet S-101"],"undo":["add the sheet S-101"]}
+> redo
+  history {"redo":[],"undo":["change the sheet S-101","add the sheet S-101"]}
+> set_view {"id":"3w8zGYnP$Ay1lyvMZjDnXq","scale":50}
+  [{"op":"add_view","id":"3w8zGYnP$Ay1lyvMZjDnXq","name":"Plan Niveau 1","kind":{"type":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","look":"down","range":{"top":{"level":"above","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1200.0},"bottom":{"level":"associated","offset_mm":0.0},"depth":{"level":"associated","offset_mm":0.0}}},"scale":50}]
+  history {"redo":[],"undo":["add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> query sheet_layout {"id":"<new-1>"}
+  200 {"height_mm":594.0,"id":"0000000000000000000001","name":"Plans","number":"S-101","paper":"A1","placed":[{"at_mm":[300.0,250.0],"box":"drawing","box_mm":[90.0,114.5,510.0,385.5],"id":"0000000000000000000002","kind":"plan","scale":50,"view":"3w8zGYnP$Ay1lyvMZjDnXq","view_name":"Plan Niveau 1"}],"portrait":false,"width_mm":841.0}
+> sheet_place {"sheet":"<new-1>","view":"1v7Vtm2FfafmYPKIQEXnlY","at_mm":[600,300],"scale":200}
+  [{"op":"set_sheet","id":"0000000000000000000001","number":"S-101","name":"Plans","paper":"A1","placed":[{"id":"0000000000000000000002","view":"3w8zGYnP$Ay1lyvMZjDnXq","scale":100,"at_mm":[300.0,250.0]},{"id":"0000000000000000000003","view":"1v7Vtm2FfafmYPKIQEXnlY","scale":200,"at_mm":[600.0,300.0]}]}]
+  history {"redo":[],"undo":["change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"1v7Vtm2FfafmYPKIQEXnlY","at_mm":[700,300],"scale":50}
+  error sheet_place: the view 1v7Vtm2FfafmYPKIQEXnlY is drawn at 1:200: a view has one scale on every sheet (set_view changes it)
+  history {"redo":[],"undo":["change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"1v7Vtm2FfafmYPKIQEXnlY","at_mm":[700,300]}
+  [{"op":"set_sheet","id":"0000000000000000000001","number":"S-101","name":"Plans","paper":"A1","placed":[{"id":"0000000000000000000002","view":"3w8zGYnP$Ay1lyvMZjDnXq","scale":100,"at_mm":[300.0,250.0]},{"id":"0000000000000000000003","view":"1v7Vtm2FfafmYPKIQEXnlY","scale":200,"at_mm":[600.0,300.0]},{"id":"0000000000000000000004","view":"1v7Vtm2FfafmYPKIQEXnlY","scale":200,"at_mm":[700.0,300.0]}]}]
+  history {"redo":[],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"3w8zGYnP$Ay1lyvMZjDnXq","at_mm":[100,100],"scale":20}
+  error sheet_place: the view Plan Niveau 1 is drawn at 1:50: a view has one scale on every sheet (set_view changes it)
+  history {"redo":[],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"3w8zGYnP$Ay1lyvMZjDnXq","at_mm":[100,100],"scale":50}
+  [{"op":"set_sheet","id":"0000000000000000000001","number":"S-101","name":"Plans","paper":"A1","placed":[{"id":"0000000000000000000002","view":"3w8zGYnP$Ay1lyvMZjDnXq","scale":100,"at_mm":[300.0,250.0]},{"id":"0000000000000000000003","view":"1v7Vtm2FfafmYPKIQEXnlY","scale":200,"at_mm":[600.0,300.0]},{"id":"0000000000000000000004","view":"1v7Vtm2FfafmYPKIQEXnlY","scale":200,"at_mm":[700.0,300.0]},{"id":"0000000000000000000005","view":"3w8zGYnP$Ay1lyvMZjDnXq","scale":50,"at_mm":[100.0,100.0]}]}]
+  history {"redo":[],"undo":["change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> undo
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> query sheet_layout {"id":"<new-1>"}
+  200 {"height_mm":594.0,"id":"0000000000000000000001","name":"Plans","number":"S-101","paper":"A1","placed":[{"at_mm":[300.0,250.0],"box":"drawing","box_mm":[90.0,114.5,510.0,385.5],"id":"0000000000000000000002","kind":"plan","scale":50,"view":"3w8zGYnP$Ay1lyvMZjDnXq","view_name":"Plan Niveau 1"},{"at_mm":[600.0,300.0],"box":"estimate","box_mm":[551.994,271.994,648.006,328.006],"id":"0000000000000000000003","kind":"three_d","scale":200,"view":"1v7Vtm2FfafmYPKIQEXnlY","view_name":"3D"},{"at_mm":[700.0,300.0],"box":"estimate","box_mm":[651.994,271.994,748.006,328.006],"id":"0000000000000000000004","kind":"three_d","scale":200,"view":"1v7Vtm2FfafmYPKIQEXnlY","view_name":"3D"}],"portrait":false,"width_mm":841.0}
+> sheet_place {"sheet":"<new-1>","view":"3w8zGYnP$Ay1lyvMZjDnXq","at_mm":[900,100]}
+  error sheet_place: sheet S-101 Plans: a view is placed off the paper
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"2zzzzzzzzzzzzzzzzzzzzz","at_mm":[100,100]}
+  error sheet_place: sheet S-101 Plans: no view 2zzzzzzzzzzzzzzzzzzzzz
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"2zzzzzzzzzzzzzzzzzzzzz","view":"3w8zGYnP$Ay1lyvMZjDnXq","at_mm":[100,100]}
+  error no sheet GlobalId(2zzzzzzzzzzzzzzzzzzzzz)
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"3w8zGYnP$Ay1lyvMZjDnXq","at_mm":[100]}
+  error bad arguments: `at_mm`: expected [x, y], paper mm
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"3w8zGYnP$Ay1lyvMZjDnXq","at_mm":[1e308,1]}
+  error bad arguments: `at_mm`: at most 1e7 mm
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"3w8zGYnP$Ay1lyvMZjDnXq","at_mm":[100,100],"scale":0}
+  error bad arguments: `scale`: 1:1 to 1:5000
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"3w8zGYnP$Ay1lyvMZjDnXq","at_mm":[100,100],"scale":2.5}
+  error bad arguments: `scale`: expected a whole number N of 1:N
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"3w8zGYnP$Ay1lyvMZjDnXq","at_mm":[100,100],"scale":1e300}
+  error bad arguments: `scale`: 1:1 to 1:5000
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"3w8zGYnP$Ay1lyvMZjDnXq","at_mm":[100,100],"x":1}
+  error bad arguments: unknown field `x`, expected one of `at_mm`, `scale`, `sheet`, `view`
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"sheet":"<new-1>","view":"bad","at_mm":[100,100]}
+  error bad arguments: invalid IFC GlobalId: "bad"
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place {"view":"3w8zGYnP$Ay1lyvMZjDnXq","at_mm":[100,100]}
+  error bad arguments: missing field `sheet`
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_place [1]
+  error bad arguments: expected an object
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_move {"sheet":"<new-1>","placed":"<new-2>","at_mm":[320.5,260]}
+  [{"op":"set_sheet","id":"0000000000000000000001","number":"S-101","name":"Plans","paper":"A1","placed":[{"id":"0000000000000000000002","view":"3w8zGYnP$Ay1lyvMZjDnXq","scale":100,"at_mm":[320.5,260.0]},{"id":"0000000000000000000003","view":"1v7Vtm2FfafmYPKIQEXnlY","scale":200,"at_mm":[600.0,300.0]},{"id":"0000000000000000000004","view":"1v7Vtm2FfafmYPKIQEXnlY","scale":200,"at_mm":[700.0,300.0]}]}]
+  history {"redo":[],"undo":["change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> undo
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> redo
+  history {"redo":[],"undo":["change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_move {"sheet":"<new-1>","placed":"<new-2>","at_mm":[320.5,260]}
+  no command
+  history {"redo":[],"undo":["change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_move {"sheet":"<new-1>","placed":"2zzzzzzzzzzzzzzzzzzzzz","at_mm":[10,10]}
+  error sheet_move: no placed view 2zzzzzzzzzzzzzzzzzzzzz on the sheet S-101
+  history {"redo":[],"undo":["change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_move {"sheet":"<new-1>","placed":"<new-2>","at_mm":[841.5,10]}
+  error sheet_move: sheet S-101 Plans: a view is placed off the paper
+  history {"redo":[],"undo":["change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_move {"sheet":"<new-1>","placed":"<new-2>","at_mm":[-0.0,0]}
+  [{"op":"set_sheet","id":"0000000000000000000001","number":"S-101","name":"Plans","paper":"A1","placed":[{"id":"0000000000000000000002","view":"3w8zGYnP$Ay1lyvMZjDnXq","scale":100,"at_mm":[0.0,0.0]},{"id":"0000000000000000000003","view":"1v7Vtm2FfafmYPKIQEXnlY","scale":200,"at_mm":[600.0,300.0]},{"id":"0000000000000000000004","view":"1v7Vtm2FfafmYPKIQEXnlY","scale":200,"at_mm":[700.0,300.0]}]}]
+  history {"redo":[],"undo":["change the sheet S-101","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> undo
+  history {"redo":["change the sheet S-101"],"undo":["change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> set_view {"id":"3w8zGYnP$Ay1lyvMZjDnXq","crop":{"min":[0,0],"max":[10000,5000]}}
+  [{"op":"set_view","id":"3w8zGYnP$Ay1lyvMZjDnXq","name":"Plan Niveau 1","kind":{"type":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","look":"down","range":{"top":{"level":"above","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1200.0},"bottom":{"level":"associated","offset_mm":0.0},"depth":{"level":"associated","offset_mm":0.0}}},"scale":50,"crop":{"min":[0.0,0.0],"max":[10000.0,5000.0]}}]
+  history {"redo":[],"undo":["change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> query sheet_layout {"id":"<new-1>"}
+  200 {"height_mm":594.0,"id":"0000000000000000000001","name":"Plans","number":"S-101","paper":"A1","placed":[{"at_mm":[320.5,260.0],"box":"drawing","box_mm":[202.5,186.5,438.5,333.5],"id":"0000000000000000000002","kind":"plan","scale":50,"view":"3w8zGYnP$Ay1lyvMZjDnXq","view_name":"Plan Niveau 1"},{"at_mm":[600.0,300.0],"box":"estimate","box_mm":[551.994,271.994,648.006,328.006],"id":"0000000000000000000003","kind":"three_d","scale":200,"view":"1v7Vtm2FfafmYPKIQEXnlY","view_name":"3D"},{"at_mm":[700.0,300.0],"box":"estimate","box_mm":[651.994,271.994,748.006,328.006],"id":"0000000000000000000004","kind":"three_d","scale":200,"view":"1v7Vtm2FfafmYPKIQEXnlY","view_name":"3D"}],"portrait":false,"width_mm":841.0}
+> sheet_unplace {"sheet":"<new-1>","placed":"<new-4>"}
+  [{"op":"set_sheet","id":"0000000000000000000001","number":"S-101","name":"Plans","paper":"A1","placed":[{"id":"0000000000000000000002","view":"3w8zGYnP$Ay1lyvMZjDnXq","scale":100,"at_mm":[320.5,260.0]},{"id":"0000000000000000000003","view":"1v7Vtm2FfafmYPKIQEXnlY","scale":200,"at_mm":[600.0,300.0]}]}]
+  history {"redo":[],"undo":["change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> undo
+  history {"redo":["change the sheet S-101"],"undo":["change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> redo
+  history {"redo":[],"undo":["change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_unplace {"sheet":"<new-1>","placed":"<new-4>"}
+  error sheet_unplace: no placed view 0000000000000000000004 on the sheet S-101
+  history {"redo":[],"undo":["change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_unplace {"sheet":"<new-1>"}
+  error bad arguments: missing field `placed`
+  history {"redo":[],"undo":["change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> add_sheet {"number":"S-102","name":"Coupes","paper":"A3","portrait":true}
+  [{"op":"add_sheet","id":"0000000000000000000006","number":"S-102","name":"Coupes","paper":"A3","portrait":true}]
+  history {"redo":[],"undo":["add the sheet S-102","change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> set_sheet {"id":"<new-1>","paper":"A4"}
+  error sheet S-101 Plans: a view is placed off the paper
+  history {"redo":[],"undo":["add the sheet S-102","change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> set_sheet {"id":"<new-1>","paper":"A0","portrait":true}
+  [{"op":"set_sheet","id":"0000000000000000000001","number":"S-101","name":"Plans","paper":"A0","portrait":true,"placed":[{"id":"0000000000000000000002","view":"3w8zGYnP$Ay1lyvMZjDnXq","scale":100,"at_mm":[320.5,260.0]},{"id":"0000000000000000000003","view":"1v7Vtm2FfafmYPKIQEXnlY","scale":200,"at_mm":[600.0,300.0]}]}]
+  history {"redo":[],"undo":["change the sheet S-101","add the sheet S-102","change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> query sheet_layout {"id":"<new-1>"}
+  200 {"height_mm":1189.0,"id":"0000000000000000000001","name":"Plans","number":"S-101","paper":"A0","placed":[{"at_mm":[320.5,260.0],"box":"drawing","box_mm":[202.5,186.5,438.5,333.5],"id":"0000000000000000000002","kind":"plan","scale":50,"view":"3w8zGYnP$Ay1lyvMZjDnXq","view_name":"Plan Niveau 1"},{"at_mm":[600.0,300.0],"box":"estimate","box_mm":[551.994,271.994,648.006,328.006],"id":"0000000000000000000003","kind":"three_d","scale":200,"view":"1v7Vtm2FfafmYPKIQEXnlY","view_name":"3D"}],"portrait":true,"width_mm":841.0}
+> undo
+  history {"redo":["change the sheet S-101"],"undo":["add the sheet S-102","change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_remove {"id":"<new-6>"}
+  [{"op":"remove_sheet","id":"0000000000000000000006"}]
+  history {"redo":[],"undo":["delete the sheet S-102","add the sheet S-102","change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> undo
+  history {"redo":["delete the sheet S-102"],"undo":["add the sheet S-102","change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> redo
+  history {"redo":[],"undo":["delete the sheet S-102","add the sheet S-102","change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_remove {"id":"<new-6>"}
+  error no sheet GlobalId(0000000000000000000006)
+  history {"redo":[],"undo":["delete the sheet S-102","add the sheet S-102","change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_remove {"id":"3w8zGYnP$Ay1lyvMZjDnXq"}
+  error no sheet GlobalId(3w8zGYnP$Ay1lyvMZjDnXq)
+  history {"redo":[],"undo":["delete the sheet S-102","add the sheet S-102","change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> sheet_remove {}
+  error bad arguments: missing field `id`
+  history {"redo":[],"undo":["delete the sheet S-102","add the sheet S-102","change the sheet S-101","change the view Plan Niveau 1","change the sheet S-101","change the sheet S-101","change the sheet S-101","add the view Plan Niveau 1","change the sheet S-101","add the sheet S-101"]}
+> query sheets
+  200 [{"fields":{},"id":"0000000000000000000001","name":"Plans","number":"S-101","paper":"A1","placed":[{"at_mm":[320.5,260.0],"id":"0000000000000000000002","scale":100,"view":"3w8zGYnP$Ay1lyvMZjDnXq"},{"at_mm":[600.0,300.0],"id":"0000000000000000000003","scale":200,"view":"1v7Vtm2FfafmYPKIQEXnlY"}],"portrait":false,"texts":0}]
+> query sheet_layout {"id":"2zzzzzzzzzzzzzzzzzzzzz"}
+  400 no sheet GlobalId(2zzzzzzzzzzzzzzzzzzzzz)
+> query sheet_layout {"id":"bad"}
+  400 id: a GlobalId
+> query sheet_layout {}
+  400 missing field `id`

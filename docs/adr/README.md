@@ -79,7 +79,7 @@ Session journals (what happened, in order, with measurements) are in [`docs/jour
 | [0053](0053-sub-projects.md) | Sub-projects: one per element, visibility and loading, never a lock (borrowing still decides who edits); replaces a bullet of 0038 | Proposed |
 | [0054](0054-project-phases.md) | Project phases: three fixed phases, free phase filters per view; IFC Status plus a Bimble pset | Proposed |
 | [0055](0055-team-members.md) | Team members in the project information (IfcActor), title blocks read them; no OK/Cancel (0052) | Proposed |
-| [0056](0056-levels-and-grids.md) | Levels that are not storeys, project zero, grids editable in the model | Proposed |
+| [0056](0056-levels-and-grids.md) | Levels that are not storeys, project zero, grids editable in the model | Accepted |
 | [0057](0057-site-terrain.md) | Site: one terrain surface from survey points or contours, excavations with cut and fill | Proposed |
 | [0058](0058-rebar.md) | Rebar sets in concrete elements, bar schedule; the rebar code (SIA 262 / EC2) stays open | Proposed |
 | [0059](0059-steel-and-timber-members.md) | Steel and timber members from a section catalogue in the standards | Proposed |
@@ -90,3 +90,9 @@ Session journals (what happened, in order, with measurements) are in [`docs/jour
 | [0064](0064-small-screens-viewer-with-light-edits.md) | Small screens: viewer with light edits below 1 024 px; bottom bar and sheets on a phone; a note is a property (`SetProperty`) | Accepted |
 | [0065](0065-fast-dev-builds.md) | Fast dev builds: line tables only, dependencies at opt-level "s", `npm run wasm:dev` for the lab (≈ 40 s → 3.3–4.4 s per edit) | Accepted |
 | [0066](0066-headless-native-twin-for-the-dev-loop.md) | A headless native twin behind `bimble.ts` for the dev loop (p95 2 ms; edit → value 1.72 s against 3.75 s for wasm); mold for native dev builds | Accepted |
+| [0067](0067-c-core-for-the-lab-loop.md) | Bimble moves to a C core (tcc in dev, clang for release; lab edit → pixels 233 ms median); one final Rust release becomes the frozen oracle; a feature enters C only with its golden | Accepted |
+| [0068](0068-c-core-architecture-verbs-first.md) | The C core's architecture: verbs first, one call function with several carriers (wasm, HTTP, MCP, CLI), a command journal beside the `.bimble` snapshot (OPFS/IndexedDB on the web), layers L0–L6, full IFC compatibility as the goal | Accepted |
+| [0069](0069-port-order-shell-and-builds.md) | Port order (IFC in/out first, editing second, 2D view third, paper later), browser + local C server first, three builds from one C codebase, keep manifold; supersedes ADR 0001's Rust core | Accepted |
+| [0070](0070-relations-as-model-objects.md) | Relations as model objects: one table of IFC relationships with GlobalIds (`IfcRelAggregates`, `IfcRelConnectsElements`, `IfcRelConnectsWithRealizingElements`; `IfcRelDefinesByType` reserved), `IfcElementAssembly` without a generator, file key `relations` left out when empty | Accepted |
+| [0071](0071-helvetica-default-and-weight-table.md) | The C core's PDF export is Helvetica by default (nothing embedded), Roboto optional and not shipped; a generated weight table per feature and file (`ccore/results/weight.md`); the release link drops unused code (`--gc-sections`: 3.67 → 2.23 MB) | Accepted |
+| [0072](0072-main-is-the-c-core.md) | `main` is the C core: no Rust on `main` (one revertible commit); Rust v0.19.0 stays on its tag and on the branch `oracle/rust` with the golden dumpers; the committed references are checked without Rust; CI on `main` is `ccore.yml`; Pages keeps the v0.19.0 lab at the root, the C lab from `main` under `/c/` | Accepted |

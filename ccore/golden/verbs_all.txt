@@ -1,0 +1,456 @@
+>>> verb copy {"d":[7000.0,0.0,0.0],"ids":["004z1Cm4z4hgNOg0ez4Id1","01KnL9d95C2OMpOLdTJDE_"]}
+200 [{"op":"add_element","id":"<new-1>","class":"IfcColumn","name":"P2.00 (2)","storey":"1jLno3kWj4Hfl6pUGBDd7E","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[7000.0,0.0,0.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]},"generator":{"kind":"rect_column","width":300.0,"depth":300.0,"height":2780.0}},{"op":"add_element","id":"<new-2>","class":"IfcBeam","name":"B2.x01 (2)","storey":"1jLno3kWj4Hfl6pUGBDd7E","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[7000.0,5000.0,2530.0],"z_axis":[1.0,0.0,0.0],"x_axis":[0.0,1.0,0.0]},"generator":{"kind":"rect_beam","width":250.0,"height":500.0,"length":6000.0}}]
+undo ["add P2.00 (2) and 1 more change"]
+redo []
+elements 74
+
+>>> undo - null
+200 true
+undo []
+redo ["add P2.00 (2) and 1 more change"]
+elements 72
+
+>>> redo - null
+200 true
+undo ["add P2.00 (2) and 1 more change"]
+redo []
+elements 74
+
+>>> verb copy {"d":[0.0,-250.5,3000.0],"ids":["<new-1>","1khkLES9P8rPMAGC5wqOCk"]}
+200 [{"op":"add_element","id":"<new-3>","class":"IfcColumn","name":"P2.00 (2) (2)","storey":"1jLno3kWj4Hfl6pUGBDd7E","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[7000.0,-250.5,3000.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]},"generator":{"kind":"rect_column","width":300.0,"depth":300.0,"height":2780.0}},{"op":"add_element","id":"<new-4>","class":"IfcSlab","name":"D2 (2)","storey":"1jLno3kWj4Hfl6pUGBDd7E","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[0.0,-250.5,5780.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]},"generator":{"kind":"slab","outline":[[-150.0,-150.0],[18150.0,-150.0],[18150.0,10150.0],[-150.0,10150.0]],"thickness":220.0}}]
+undo ["add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 76
+
+>>> verb copy {"d":[0.0,0.0,6000.0],"ids":["<new-1>"]}
+200 [{"op":"add_element","id":"<new-5>","class":"IfcColumn","name":"P2.00 (2) (3)","storey":"1jLno3kWj4Hfl6pUGBDd7E","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[7000.0,0.0,6000.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]},"generator":{"kind":"rect_column","width":300.0,"depth":300.0,"height":2780.0}}]
+undo ["add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb copy {"d":[1.0,0.0,0.0],"ids":["0000000000000000000000"]}
+200 []
+undo ["nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb copy {"d":[100000000.0,0.0,0.0],"ids":["004z1Cm4z4hgNOg0ez4Id1"]}
+400 d: 100000000 is not a finite value within ±10000000 mm
+undo ["nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb copy {"ids":["004z1Cm4z4hgNOg0ez4Id1"]}
+400 bad arguments: missing field `d`
+undo ["nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb rotate {"angle_deg":30.0,"ids":["004z1Cm4z4hgNOg0ez4Id1","01KnL9d95C2OMpOLdTJDE_"]}
+200 [{"op":"set_placement","id":"004z1Cm4z4hgNOg0ez4Id1","placement":{"origin":[1249.9999999999998,334.9364905389034,0.0],"z_axis":[0.0,0.0,1.0],"x_axis":[0.8660254037844387,0.49999999999999994,0.0]}},{"op":"set_placement","id":"01KnL9d95C2OMpOLdTJDE_","placement":{"origin":[-1249.9999999999998,4665.063509461097,2530.0],"z_axis":[0.8660254037844387,0.49999999999999994,0.0],"x_axis":[-0.49999999999999994,0.8660254037844387,0.0]}}]
+undo ["move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> undo - null
+200 true
+undo ["nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo ["move P2.00 and 1 more change"]
+elements 77
+
+>>> redo - null
+200 true
+undo ["move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb rotate {"about":[1000.0,2000.0],"angle_deg":-45.5,"ids":["<new-1>","<new-4>"]}
+200 [{"op":"set_placement","id":"<new-1>","placement":{"origin":[3778.9546874907437,-3681.32122352479,0.0],"z_axis":[0.0,0.0,1.0],"x_axis":[0.7009092642998511,-0.7132504491541813,0.0]}},{"op":"set_placement","id":"<new-4>","placement":{"origin":[-1306.0794001213362,1135.8541498473664,5780.0],"z_axis":[0.0,0.0,1.0],"x_axis":[0.7009092642998511,-0.7132504491541813,0.0]}}]
+undo ["move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb rotate {"angle_deg":90.0,"ids":["<new-2>"]}
+200 [{"op":"set_placement","id":"<new-2>","placement":{"origin":[7000.0,5000.0,2530.0],"z_axis":[0.0,1.0,0.0],"x_axis":[-1.0,0.0,0.0]}}]
+undo ["move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb rotate {"angle_deg":360.0,"ids":["<new-2>"]}
+200 []
+undo ["nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb rotate {"angle_deg":400.0,"ids":["004z1Cm4z4hgNOg0ez4Id1"]}
+400 angle_deg: 400 is not within ±360
+undo ["nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb rotate {"angle_deg":10.0,"ids":["0000000000000000000000"]}
+400 no element GlobalId(0000000000000000000000)
+undo ["nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb mirror {"axis":{"dir":[0.0,1.0],"point":[3000.0,0.0]},"ids":["08Bn0kkKjBp90qLHF1eSQc","01KnL9d95C2OMpOLdTJDE_"]}
+200 [{"op":"set_placement","id":"08Bn0kkKjBp90qLHF1eSQc","placement":{"origin":[-12000.0,0.0,0.0],"z_axis":[0.0,0.0,1.0],"x_axis":[-1.0,0.0,0.0]}},{"op":"set_placement","id":"01KnL9d95C2OMpOLdTJDE_","placement":{"origin":[7250.0,4665.063509461097,2530.0],"z_axis":[-0.8660254037844387,0.49999999999999994,0.0],"x_axis":[0.49999999999999994,0.8660254037844387,0.0]}}]
+undo ["move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> undo - null
+200 true
+undo ["nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo ["move P2.30 and 1 more change"]
+elements 77
+
+>>> redo - null
+200 true
+undo ["move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb mirror {"axis":{"dir":[1.0,1.0],"point":[0.0,0.0]},"ids":["<new-3>","1khkLES9P8rPMAGC5wqOCk"]}
+200 [{"op":"set_placement","id":"<new-3>","placement":{"origin":[-250.5000000000009,6999.999999999999,3000.0],"z_axis":[0.0,0.0,1.0],"x_axis":[-2.220446049250313e-16,0.9999999999999998,0.0]}},{"op":"set_placement","id":"1khkLES9P8rPMAGC5wqOCk","placement":{"origin":[0.0,0.0,2780.0],"z_axis":[0.0,0.0,1.0],"x_axis":[-2.220446049250313e-16,0.9999999999999998,0.0]}}]
+undo ["move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb mirror {"axis":{"dir":[0.0,0.0],"point":[0.0,0.0]},"ids":["08Bn0kkKjBp90qLHF1eSQc"]}
+400 axis.dir must not be zero
+undo ["move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb mirror {"axis":{"dir":[1.0,0.0],"point":[0.0,0.0]},"ids":["0000000000000000000000"]}
+400 no element GlobalId(0000000000000000000000)
+undo ["move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_project_field {"label":"Maître d'ouvrage","value":"Ville"}
+200 [{"op":"set_project","project":{"maitre_d_ouvrage":"Ville"}}]
+undo ["change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> undo - null
+200 true
+undo ["move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo ["change the project information"]
+elements 77
+
+>>> redo - null
+200 true
+undo ["change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_project_field {"label":"  maître D'OUVRAGE ","value":"Commune \"Lac\""}
+200 [{"op":"set_project","project":{"maitre_d_ouvrage":"Commune \"Lac\""}}]
+undo ["change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_project_field {"label":"Phase","value":"51"}
+200 [{"op":"set_project","project":{"maitre_d_ouvrage":"Commune \"Lac\"","phase":"51"}}]
+undo ["change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_project_field {"label":"Phase","value":"51"}
+200 []
+undo ["nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_project_field {"label":"Maître d'ouvrage","value":""}
+200 [{"op":"set_project","project":{"phase":"51"}}]
+undo ["change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_project_field {"label":"  --- ","value":"x"}
+400 "  --- ": a label needs letters or digits
+undo ["change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_project_field {"label":"Maître d'ouvrage"}
+400 bad arguments: missing field `value`
+undo ["change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"id":"1v7Vtm2FfafmYPKIQEXnlY","scale":50,"true_north":true}
+200 [{"op":"add_view","id":"1v7Vtm2FfafmYPKIQEXnlY","name":"3D","kind":{"type":"three_d"},"true_north":true,"scale":50}]
+undo ["add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> undo - null
+200 true
+undo ["change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo ["add the view 3D"]
+elements 77
+
+>>> redo - null
+200 true
+undo ["add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"id":"1v7Vtm2FfafmYPKIQEXnlY","scale":200}
+200 [{"op":"set_view","id":"1v7Vtm2FfafmYPKIQEXnlY","name":"3D","kind":{"type":"three_d"},"true_north":true,"scale":200}]
+undo ["change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"crop":null,"id":"1v7Vtm2FfafmYPKIQEXnlY"}
+200 []
+undo ["nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"crop":{"max":[30000.0,25000.0],"min":[-1000.0,-2000.5]},"id":"3w8zGYnP$Ay1lyvMZjDnXq","scale":20}
+200 [{"op":"add_view","id":"3w8zGYnP$Ay1lyvMZjDnXq","name":"Plan Niveau 1","kind":{"type":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","look":"down","range":{"top":{"level":"above","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1200.0},"bottom":{"level":"associated","offset_mm":0.0},"depth":{"level":"associated","offset_mm":0.0}}},"scale":20,"crop":{"min":[-1000.0,-2000.5],"max":[30000.0,25000.0]}}]
+undo ["add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"id":"3w8zGYnP$Ay1lyvMZjDnXq","range":{"bottom":{"offset_mm":-100.0},"cut":{"offset_mm":1000.0},"depth":{"offset_mm":-100.0}}}
+200 [{"op":"set_view","id":"3w8zGYnP$Ay1lyvMZjDnXq","name":"Plan Niveau 1","kind":{"type":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","look":"down","range":{"top":{"level":"above","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1000.0},"bottom":{"level":"associated","offset_mm":-100.0},"depth":{"level":"associated","offset_mm":-100.0}}},"scale":20,"crop":{"min":[-1000.0,-2000.5],"max":[30000.0,25000.0]}}]
+undo ["change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"crop":null,"id":"3w8zGYnP$Ay1lyvMZjDnXq"}
+200 [{"op":"set_view","id":"3w8zGYnP$Ay1lyvMZjDnXq","name":"Plan Niveau 1","kind":{"type":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","look":"down","range":{"top":{"level":"above","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1000.0},"bottom":{"level":"associated","offset_mm":-100.0},"depth":{"level":"associated","offset_mm":-100.0}}},"scale":20}]
+undo ["change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"id":"3w8zGYnP$Ay1lyvMZjDnXq","range":{"bottom":{"offset_mm":-0.0}}}
+200 [{"op":"set_view","id":"3w8zGYnP$Ay1lyvMZjDnXq","name":"Plan Niveau 1","kind":{"type":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","look":"down","range":{"top":{"level":"above","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1000.0},"bottom":{"level":"associated","offset_mm":0.0},"depth":{"level":"associated","offset_mm":-100.0}}},"scale":20}]
+undo ["change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"crop":{"max":[1.0,1.0],"min":[0.0,0.0]},"id":"1v7Vtm2FfafmYPKIQEXnlY"}
+400 view 3D (1v7Vtm2FfafmYPKIQEXnlY): a 3D view has no crop region
+undo ["change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"crop":{"max":[1.0,1.0],"min":[10.0,0.0]},"id":"3w8zGYnP$Ay1lyvMZjDnXq"}
+400 view Plan Niveau 1 (3w8zGYnP$Ay1lyvMZjDnXq): a crop region needs finite corners, the first below the second
+undo ["change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"id":"0000000000000000000000","scale":50}
+400 no view GlobalId(0000000000000000000000)
+undo ["change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"id":"1v7Vtm2FfafmYPKIQEXnlY","range":{"cut":{"offset_mm":900.0}}}
+400 view 3D: only a plan has a view range
+undo ["change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"id":"1v7Vtm2FfafmYPKIQEXnlY","scale":0}
+400 view 3D (1v7Vtm2FfafmYPKIQEXnlY): scale 1:0: must be between 1:1 and 1:5000
+undo ["change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"id":"3w8zGYnP$Ay1lyvMZjDnXq","range":{"cut":{"offset_mm":-5000.0}}}
+400 view Plan Niveau 1 (3w8zGYnP$Ay1lyvMZjDnXq): looking down, the planes must be in order: view depth ≤ bottom ≤ cut ≤ top
+undo ["change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_view {"id":"1v7Vtm2FfafmYPKIQEXnlY","zoom":2}
+400 bad arguments: unknown field `zoom`, expected one of `id`, `scale`, `true_north`, `crop`, `range`
+undo ["change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_schedule {"group_by_level":false,"name":"Concrete columns"}
+200 [{"op":"set_schedules","schedules":[{"name":"Concrete columns","classes":["IfcColumn"],"family":"concrete","fields":["level","location","name","material","section","length","volume"],"group_by_level":false,"totals":true}]}]
+undo ["add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> undo - null
+200 true
+undo ["change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo ["add the schedule Concrete columns"]
+elements 77
+
+>>> redo - null
+200 true
+undo ["add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_schedule {"columns":["level","name","volume","global_id"],"name":"CONCRETE COLUMNS"}
+200 [{"op":"set_schedules","schedules":[{"name":"Concrete columns","classes":["IfcColumn"],"family":"concrete","fields":["level","name","volume","global_id"],"group_by_level":false,"totals":true}]}]
+undo ["change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_schedule {"family":null,"name":"Steel beams"}
+200 [{"op":"set_schedules","schedules":[{"name":"Concrete columns","classes":["IfcColumn"],"family":"concrete","fields":["level","name","volume","global_id"],"group_by_level":false,"totals":true},{"name":"Steel beams","classes":["IfcBeam"],"fields":["level","name","material","section","length","width","height","volume","mass"],"group_by_level":true,"totals":true}]}]
+undo ["add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_schedule {"family":"timber","group_by_level":true,"name":"Steel beams"}
+200 [{"op":"set_schedules","schedules":[{"name":"Concrete columns","classes":["IfcColumn"],"family":"concrete","fields":["level","name","volume","global_id"],"group_by_level":false,"totals":true},{"name":"Steel beams","classes":["IfcBeam"],"family":"timber","fields":["level","name","material","section","length","width","height","volume","mass"],"group_by_level":true,"totals":true}]}]
+undo ["change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_schedule {"group_by_level":false,"name":"Nope"}
+400 no schedule "Nope"
+undo ["change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_schedule {"columns":["level","bogus"],"name":"Concrete columns"}
+400 bad arguments: unknown variant `bogus`, expected one of `level`, `location`, `name`, `class`, `material`, `section`, `length`, `width`, `height`, `area`, `volume`, `mass`, `global_id`
+undo ["change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_schedule {"columns":[],"name":"Concrete columns"}
+400 schedule Concrete columns: 1 to 32 columns
+undo ["change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb add_sheet {}
+200 [{"op":"add_sheet","id":"<new-6>","number":"S-101","name":"New sheet","paper":"A1"}]
+undo ["add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> undo - null
+200 true
+undo ["change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo ["add the sheet S-101"]
+elements 77
+
+>>> redo - null
+200 true
+undo ["add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb add_sheet {"name":"Plans \"RDC\" \\ é","number":"A-009","paper":"A3","portrait":true}
+200 [{"op":"add_sheet","id":"<new-7>","number":"A-009","name":"Plans \"RDC\" \\ é","paper":"A3","portrait":true}]
+undo ["add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb add_sheet {"name":"Coupes"}
+200 [{"op":"add_sheet","id":"<new-8>","number":"S-102","name":"Coupes","paper":"A1"}]
+undo ["add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb add_sheet {"paper":"A5"}
+400 sheet S-103 New sheet: paper "A5": one of A4, A3, A2, A1, A0
+undo ["add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb add_sheet {"number":"A-009"}
+400 sheet number A-009 is already used
+undo ["add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb add_sheet {"number":"  "}
+400 sheet    New sheet: needs a number
+undo ["add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_sheet {"id":"<new-6>","name":"Vue en plan","revision":"B"}
+200 [{"op":"set_sheet","id":"<new-6>","number":"S-101","name":"Vue en plan","paper":"A1","fields":{"revision":"B"}}]
+undo ["change the sheet S-101","add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> undo - null
+200 true
+undo ["add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo ["change the sheet S-101"]
+elements 77
+
+>>> redo - null
+200 true
+undo ["change the sheet S-101","add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_sheet {"id":"<new-7>","paper":"A0","portrait":false}
+200 [{"op":"set_sheet","id":"<new-7>","number":"A-009","name":"Plans \"RDC\" \\ é","paper":"A0"}]
+undo ["change the sheet A-009","change the sheet S-101","add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_sheet {"id":"<new-7>","paper":"A0"}
+200 []
+undo ["nothing","change the sheet A-009","change the sheet S-101","add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_sheet {"id":"<new-6>","revision":""}
+200 [{"op":"set_sheet","id":"<new-6>","number":"S-101","name":"Vue en plan","paper":"A1"}]
+undo ["change the sheet S-101","nothing","change the sheet A-009","change the sheet S-101","add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_sheet {"id":"<new-6>","number":"A-009"}
+400 sheet number A-009 is already used
+undo ["change the sheet S-101","nothing","change the sheet A-009","change the sheet S-101","add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_sheet {"id":"0000000000000000000000","name":"x"}
+400 no sheet GlobalId(0000000000000000000000)
+undo ["change the sheet S-101","nothing","change the sheet A-009","change the sheet S-101","add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> verb set_sheet {"id":"<new-6>","revision":"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"}
+400 revision: at most 200 characters
+undo ["change the sheet S-101","nothing","change the sheet A-009","change the sheet S-101","add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> query project {}
+200 {"building_id":"3S50QIFi3RTlrcI6MgJC7G","id":"1ECFGZP4n20ADaVDzRQc6J","info":{"phase":"51"},"name":"Concrete frame 3x2x2","site_id":"24iRmPJEuGZKmhVgNqicyR"}
+undo ["change the sheet S-101","nothing","change the sheet A-009","change the sheet S-101","add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> query views {}
+200 [{"annotations":0,"crop":null,"id":"1v7Vtm2FfafmYPKIQEXnlY","name":"3D","references":0,"scale":200,"true_north":true,"type":"three_d"},{"annotations":0,"crop":null,"id":"3w8zGYnP$Ay1lyvMZjDnXq","look":"down","name":"Plan Niveau 1","range":{"bottom":{"level":"associated","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1000.0},"depth":{"level":"associated","offset_mm":-100.0},"top":{"level":"above","offset_mm":0.0}},"references":0,"scale":20,"storey":"1uAZA0Yfn05f$xRd1k4uPR","true_north":false,"type":"plan"}]
+undo ["change the sheet S-101","nothing","change the sheet A-009","change the sheet S-101","add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+
+>>> query schedules {}
+200 [{"classes":["IfcColumn"],"family":"concrete","fields":["level","name","volume","global_id"],"group_by_level":false,"name":"Concrete columns","totals":true},{"classes":["IfcBeam"],"family":"timber","fields":["level","name","material","section","length","width","height","volume","mass"],"group_by_level":true,"name":"Steel beams","totals":true}]
+undo ["change the sheet S-101","nothing","change the sheet A-009","change the sheet S-101","add the sheet S-102","add the sheet A-009","add the sheet S-101","change the schedule Steel beams","add the schedule Steel beams","change the schedule Concrete columns","add the schedule Concrete columns","change the view Plan Niveau 1","change the view Plan Niveau 1","change the view Plan Niveau 1","add the view Plan Niveau 1","nothing","change the view 3D","add the view 3D","change the project information","nothing","change the project information","change the project information","change the project information","move P2.00 (2) (2) and 1 more change","move P2.30 and 1 more change","nothing","move B2.x01 (2)","move P2.00 (2) and 1 more change","move P2.00 and 1 more change","nothing","add P2.00 (2) (3)","add P2.00 (2) (2) and 1 more change","add P2.00 (2) and 1 more change"]
+redo []
+elements 77
+

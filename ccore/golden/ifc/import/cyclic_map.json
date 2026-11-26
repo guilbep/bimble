@@ -1,0 +1,54 @@
+{
+  "format": "bimble",
+  "version": 1,
+  "model": {
+    "project_id": "0YvctVUKr0kugbFTf53O9L",
+    "project_name": "Imported model",
+    "storeys": {
+      "<new-1>": {
+        "id": "<new-1>",
+        "name": "(no storey)",
+        "elevation": 0.0
+      }
+    },
+    "materials": {
+      "<new-2>": {
+        "id": "<new-2>",
+        "name": "Undefined",
+        "category": "other"
+      }
+    },
+    "elements": {
+      "1YvctVUKr0kugbFTf53O9L": {
+        "id": "1YvctVUKr0kugbFTf53O9L",
+        "class": "IfcWall",
+        "name": "w",
+        "storey": "<new-1>",
+        "material": "<new-2>",
+        "placement": {
+          "origin": [
+            -50.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "wall",
+          "length": 100.0,
+          "thickness": 100.0,
+          "height": 100.0
+        }
+      }
+    }
+  }
+}

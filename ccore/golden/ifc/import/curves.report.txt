@@ -1,0 +1,5 @@
+3 elements (0 parametric, 2 extruded polygons, 1 meshes)
+  IfcBeam: 1
+  IfcColumn: 1
+  IfcReinforcingBar: 1
+warning: no IfcBuildingStorey in the file; elements go into a synthetic storey

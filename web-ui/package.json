@@ -3,24 +3,22 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "wasm": "node scripts/copy-wasm.mjs",
-    "wasm:dev": "PROFILE=dev LAB=1 ../scripts/build-web.sh && node scripts/copy-wasm.mjs",
-    "dev": "vite",
-    "twin:dev": "../scripts/twin-dev.sh",
+    "dev": "../ccore/dev.sh",
+    "dev:wasm": "npm run ccore:wasm && VITE_CCORE=1 vite",
+    "ccore:dev": "../ccore/dev.sh",
+    "ccore:wasm": "../ccore/build.sh wasm && node scripts/copy-ccore.mjs",
+    "ccore:wasm-view": "../ccore/build.sh wasm-view && node scripts/copy-ccore.mjs --view",
+    "build:ccore": "../ccore/build.sh wasm && ../ccore/build.sh wasm-view && node scripts/copy-ccore.mjs && node scripts/copy-ccore.mjs --view && VITE_CCORE=1 VITE_CCORE_REV=${VITE_CCORE_REV:-$(git rev-parse --short HEAD)} vite build --base ./",
     "i18n-keys": "node scripts/i18n-keys.mjs",
     "typecheck": "node scripts/i18n-keys.mjs --check && vue-tsc --noEmit",
     "prebuild": "node scripts/i18n-keys.mjs",
     "build": "vite build",
-    "perf": "node perf/lighthouse.mjs",
-    "perf:check": "node perf/check.mjs ../perf-results/web.txt perf/budgets.txt 0.15",
     "design-check": "node design-check/compare.mjs",
     "e2e:place": "node e2e/place-slab.mjs --lab",
     "e2e:a11y": "node e2e/a11y.mjs --lab",
     "e2e:buttons": "node e2e/buttons.mjs --lab",
     "e2e:small": "node e2e/small.mjs --lab",
-    "e2e:native": "node e2e/native-place.mjs",
-    "e2e:native-lab": "node e2e/native-lab.mjs",
-    "e2e:twin-loop": "node e2e/twin_loop.mjs"
+    "e2e:native": "node e2e/native-place.mjs"
   },
   "dependencies": {
     "vue": "^3.5.45"
@@ -28,6 +26,7 @@
   "devDependencies": {
     "@playwright/test": "1.65.0",
     "@vitejs/plugin-vue": "^6.0.11",
+    "lighthouse": "13.6.0",
     "pixelmatch": "8.0.0",
     "pngjs": "7.0.0",
     "typescript": "^6.0.3",

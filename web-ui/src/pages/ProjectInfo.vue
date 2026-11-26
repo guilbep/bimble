@@ -2,15 +2,18 @@
 import ProjectInfoSide from "./ProjectInfoSide.vue";
 export const hint = "projectinfo.hint";
 export const side = ProjectInfoSide;
+export const capability = "project_info", editable = true; // FAKE1: query project refuses a read-only file
 </script>
 
 <script setup lang="ts">
 // A3 Project information (wireframes v01 ProjectInfo.html; ADR 0030, 0052). Leaving a field or Enter
 // (the native `change` event) sends one SetProject with the whole map; undo restores it.
 import { computed, ref } from "vue";
-import { project, state, setProject, setProjectField } from "../bimble";
+import { project, state, setProject, setProjectField, northInfo, coordinates } from "../bimble";
 import { t } from "../i18n";
 import { currentDialog } from "../dialogs";
+import NotAvailable from "../shell/NotAvailable.vue"; // FAKE1
+import { has } from "../shell/capability"; // FAKE1
 
 // The reference's "Basic data" rows, by Rust key (bimble-core project::KNOWN).
 const BASIC = ["project_number", "project_title", "project_address", "project_city", "phase", "phase_description"] as const;
@@ -19,6 +22,13 @@ const info = computed(() => project.value?.info ?? {});
 const other = computed(() => ["end_date", ...Object.keys(info.value).filter((k) => k !== "end_date" && !(BASIC as readonly string[]).includes(k))]);
 const label = (k: string) => (k === "end_date" || (BASIC as readonly string[]).includes(k) ? t(`projectinfo.${k}` as "projectinfo.end_date") : k.replace(/_/g, " "));
 const error = ref<string | null>(null);
+// ---- G2: the georeference's system and base point (query north, coordinates of the world origin) ----
+const georefText = computed(() => {
+  void state.value.rev;
+  const n = northInfo.value, c = n ? coordinates([0, 0, 0]) : null;
+  return n && c ? `${n.crs ?? "—"} · ${c.text} · ${n.rotation_deg}°` : "—";
+});
+// ---- end G2 ----
 
 function commit(key: string, e: Event) {
   const v = (e.target as HTMLInputElement).value;
@@ -58,18 +68,22 @@ function addField() {
         <span class="k">IfcSite</span><span class="mono" data-bb="project-site-id">{{ project?.site_id ?? '' }}</span>
         <span class="k">IfcBuilding</span><span class="mono" data-bb="project-building-id">{{ project?.building_id ?? '' }}</span>
         <span class="k">{{ t('projectinfo.schema') }}</span><span class="mono">{{ state.schema ?? '' }}</span>
+        <!-- G2: the georeference (IfcMapConversion on export), edited in the Setting out tab's panel -->
+        <span class="k">IfcMapConversion</span><span class="mono" data-bb="project-georef">{{ georefText }}</span>
+        <!-- end G2 -->
       </div>
     </section>
     <section class="col" style="gap:10px">
       <div style="display:flex;align-items:center">
         <h2 style="font-size:20px">{{ t('projectinfo.team') }}</h2>
         <span style="flex:1" />
-        <button class="btn s" type="button" data-bb="project-add-member" @click="currentDialog = 'team-member'">
+        <button v-if="has('users')" class="btn s" type="button" data-bb="project-add-member" @click="currentDialog = 'team-member'">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>{{ t('projectinfo.addMember') }}
         </button>
       </div>
       <!-- No Rust source for team members yet: header only, no rows. -->
-      <table class="t" data-bb="project-team" data-missing="query: team members (ADR 0055)">
+      <NotAvailable v-if="!has('users')" compact :what="t('na.screen.team')" /><!-- FAKE1 -->
+      <table v-else class="t" data-bb="project-team" data-missing="query: team members (ADR 0055)">
         <thead><tr><th>{{ t('projectinfo.role') }}</th><th>{{ t('projectinfo.company') }}</th><th>{{ t('projectinfo.contact') }}</th><th>{{ t('projectinfo.mine') }}</th><th /></tr></thead>
         <tbody />
       </table>

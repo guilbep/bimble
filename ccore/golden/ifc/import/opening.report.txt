@@ -1,0 +1,4 @@
+1 elements (1 parametric, 0 extruded polygons, 0 meshes)
+  IfcWall: 1
+openings: 1 cut on import (as meshes, subtracted at draw time)
+property values: 2

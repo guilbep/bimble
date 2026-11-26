@@ -1,0 +1,9 @@
+schema "IFC2X3"
+origin 4096a80000000000 0000000000000000 408f400000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cProdRepM0000000004" "Level 0"
+grids 0
+elements 2 triangles 24 meshes yes
+000 2T2cProdRepM0000000010 IfcMember 7 Other v=8 i=12 e=12 n=12 name="M-200x100" storey="Level 0" material=""
+001 2T2cProdRepM0000000012 IfcBuildingElementProxy 7 Other v=8 i=12 e=12 n=12 name="P-cube" storey="Level 0" material=""

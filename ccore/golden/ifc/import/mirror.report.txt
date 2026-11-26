@@ -1,0 +1,3 @@
+2 elements (0 parametric, 2 extruded polygons, 0 meshes)
+  IfcBuildingElementProxy: 2
+warning: no IfcBuildingStorey in the file; elements go into a synthetic storey

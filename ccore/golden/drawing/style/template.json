@@ -1,0 +1,117 @@
+{
+  "title": "Plan {storey}, {scale}",
+  "level_note": "{storey}: {level} m",
+  "dimension_unit": "cm",
+  "hidden_classes": [
+    "IfcReinforcingBar",
+    "IfcReinforcingMesh",
+    "IfcTendon",
+    "IfcTendonAnchor",
+    "IfcSpace",
+    "IfcOpeningElement",
+    "IfcAnnotation",
+    "IfcGeographicElement"
+  ],
+  "seen_fills": true,
+  "axes": "model-or-columns",
+  "dimensions": true,
+  "slab_levels": true,
+  "opening_crosses": true,
+  "opening_dimensions": true,
+  "element_labels": true,
+  "section_markers": true,
+  "legend": {
+    "show": true,
+    "title": "Legend",
+    "cut": "{family}, cut",
+    "seen": "{family}, seen",
+    "above": "Above the cut",
+    "families": {}
+  },
+  "title_block": {
+    "height_mm": 28.0,
+    "columns": [
+      {
+        "width_mm": null,
+        "entries": [
+          {
+            "label": "PROJECT",
+            "value": "{project} {project_number}",
+            "color": null
+          },
+          {
+            "label": "CLIENT",
+            "value": "{client}",
+            "color": null
+          }
+        ]
+      },
+      {
+        "width_mm": 60.0,
+        "entries": [
+          {
+            "label": "DRAWING",
+            "value": "{drawing}",
+            "color": null
+          }
+        ]
+      },
+      {
+        "width_mm": 30.0,
+        "entries": [
+          {
+            "label": "SCALE",
+            "value": "{scale}",
+            "color": null
+          },
+          {
+            "label": "FORMAT",
+            "value": "{paper}",
+            "color": null
+          }
+        ]
+      },
+      {
+        "width_mm": 30.0,
+        "entries": [
+          {
+            "label": "DATE",
+            "value": "{date}",
+            "color": null
+          },
+          {
+            "label": "REVISION",
+            "value": "{revision}",
+            "color": null
+          }
+        ]
+      },
+      {
+        "width_mm": 24.0,
+        "entries": [
+          {
+            "label": "DRAWN",
+            "value": "{drawn}",
+            "color": null
+          },
+          {
+            "label": "CHECKED",
+            "value": "{checked}",
+            "color": null
+          }
+        ]
+      },
+      {
+        "width_mm": 40.0,
+        "entries": [
+          {
+            "label": "DRAWING N°",
+            "value": "{drawing_no}",
+            "color": null
+          }
+        ]
+      }
+    ]
+  },
+  "fields": {}
+}

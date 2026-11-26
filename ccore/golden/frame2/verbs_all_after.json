@@ -1,0 +1,1017 @@
+{
+  "format": "bimble",
+  "version": 1,
+  "model": {
+    "project_id": "21Mh7KP3zBjRllySRNfwpf",
+    "project_name": "Synthetic \"frame 2\" \\ golden",
+    "storeys": {
+      "1gZ1R3uyTBO80cC4$nvoxB": {
+        "id": "1gZ1R3uyTBO80cC4$nvoxB",
+        "name": "Étage \"1\"",
+        "elevation": 3150.5
+      },
+      "1vIjA4wIz6huLvC8B1gv4M": {
+        "id": "1vIjA4wIz6huLvC8B1gv4M",
+        "name": "Rez-de-chaussée",
+        "elevation": 0.0
+      }
+    },
+    "materials": {
+      "<new-4>": {
+        "id": "<new-4>",
+        "name": "C40/50",
+        "category": "concrete",
+        "props": {
+          "density_kg_m3": 2500.0,
+          "e_mpa": 35000.0,
+          "strength_mpa": 40.0,
+          "source": "EN 1992-1-1 Table 3.1; 25 kN/m³ reinforced (EN 1991-1-1)"
+        }
+      },
+      "09TM5shL90ruo$N1V6tpqq": {
+        "id": "09TM5shL90ruo$N1V6tpqq",
+        "name": "S355",
+        "category": "steel",
+        "props": {
+          "density_kg_m3": 7850.0,
+          "e_mpa": 210000.0,
+          "strength_mpa": 355.0,
+          "source": "EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"
+        }
+      },
+      "1mkwj1Nm95IQysWJ$GMN4N": {
+        "id": "1mkwj1Nm95IQysWJ$GMN4N",
+        "name": "C30/37",
+        "category": "concrete",
+        "props": {
+          "density_kg_m3": 2500.0,
+          "e_mpa": 33000.0,
+          "strength_mpa": 30.0,
+          "source": "EN 1992-1-1 Table 3.1; 25 kN/m³ reinforced (EN 1991-1-1)"
+        }
+      },
+      "2fQGV0aS95yO$ugIXpqVCc": {
+        "id": "2fQGV0aS95yO$ugIXpqVCc",
+        "name": "Bois \"local\" \\ épicéa",
+        "category": "timber",
+        "props": {
+          "density_kg_m3": 450.0,
+          "strength_mpa": 22.5
+        }
+      }
+    },
+    "elements": {
+      "<new-1>": {
+        "id": "<new-1>",
+        "class": "IfcWall",
+        "name": "M1",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "1mkwj1Nm95IQysWJ$GMN4N",
+        "placement": {
+          "origin": [
+            0.0,
+            5000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            0.8,
+            0.6,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "wall",
+          "length": 4500.0,
+          "thickness": 200.0,
+          "height": 3000.0
+        }
+      },
+      "<new-2>": {
+        "id": "<new-2>",
+        "class": "IfcSlab",
+        "name": "D2",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "2fQGV0aS95yO$ugIXpqVCc",
+        "placement": {
+          "origin": [
+            -3000.0,
+            0.0,
+            2750.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "slab",
+          "outline": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              3000.0,
+              0.0
+            ],
+            [
+              3000.0,
+              2000.5
+            ],
+            [
+              0.0,
+              2000.5
+            ]
+          ],
+          "thickness": 250.0
+        }
+      },
+      "<new-3>": {
+        "id": "<new-3>",
+        "class": "IfcColumn",
+        "name": "P1",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            6000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 250.0,
+          "depth": 250.0,
+          "height": 3000.0
+        }
+      },
+      "<new-5>": {
+        "id": "<new-5>",
+        "class": "IfcWall",
+        "name": "W2\trotated 30° (2)",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "<new-4>",
+        "placement": {
+          "origin": [
+            7284.0,
+            8312.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            0.237512886940357,
+            0.9713843876330612,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "wall",
+          "length": 3500.0,
+          "thickness": 180.0,
+          "height": 2900.0
+        },
+        "properties": {
+          "Pset_WallCommon/FireRating": "EI 60",
+          "Pset_WallCommon/IsExternal": "true"
+        }
+      },
+      "<new-6>": {
+        "id": "<new-6>",
+        "class": "IfcSlab",
+        "name": "D2 (L) (2)",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            8100.0,
+            10200.0,
+            -200.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              6000.0,
+              0.0
+            ],
+            [
+              6000.0,
+              2000.0
+            ],
+            [
+              2000.0,
+              2000.0
+            ],
+            [
+              2000.0,
+              5000.0
+            ],
+            [
+              0.0,
+              5000.0
+            ]
+          ],
+          "height": 300.0
+        }
+      },
+      "<new-7>": {
+        "id": "<new-7>",
+        "class": "IfcBuildingElementProxy",
+        "name": "Garde-corps (2)",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            1000.0,
+            11000.0,
+            -50.5
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "mesh",
+          "positions": [
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              1000.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1000.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1100.0
+            ]
+          ],
+          "indices": [
+            0,
+            2,
+            1,
+            0,
+            1,
+            3,
+            0,
+            3,
+            2,
+            1,
+            2,
+            3
+          ]
+        },
+        "properties": {
+          "Pset_RailingCommon/Height": "1100"
+        },
+        "ifc_entity": "IfcRailing"
+      },
+      "<new-8>": {
+        "id": "<new-8>",
+        "class": "IfcSlab",
+        "name": "D3 trémie (2)",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            0.0,
+            4000.0,
+            2950.5
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              4000.0,
+              0.0
+            ],
+            [
+              4000.0,
+              3000.0
+            ],
+            [
+              0.0,
+              3000.0
+            ]
+          ],
+          "voids": [
+            [
+              [
+                1000.0,
+                1000.0
+              ],
+              [
+                1000.0,
+                2200.0
+              ],
+              [
+                2500.5,
+                2200.0
+              ],
+              [
+                2500.5,
+                1000.0
+              ]
+            ]
+          ],
+          "height": 200.0
+        }
+      },
+      "<new-9>": {
+        "id": "<new-9>",
+        "class": "IfcSlab",
+        "name": "D2 (L) (2) (2)",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            8100.0,
+            10200.0,
+            2950.5
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              6000.0,
+              0.0
+            ],
+            [
+              6000.0,
+              2000.0
+            ],
+            [
+              2000.0,
+              2000.0
+            ],
+            [
+              2000.0,
+              5000.0
+            ],
+            [
+              0.0,
+              5000.0
+            ]
+          ],
+          "height": 300.0
+        }
+      },
+      "0X4VVrRkf1B9lE_0jARt46": {
+        "id": "0X4VVrRkf1B9lE_0jARt46",
+        "class": "IfcSlab",
+        "name": "D2 (L)",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            7257.402885326977,
+            2144.6152422706627,
+            -200.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            0.8660254037844387,
+            0.49999999999999994,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              6000.0,
+              0.0
+            ],
+            [
+              6000.0,
+              2000.0
+            ],
+            [
+              2000.0,
+              2000.0
+            ],
+            [
+              2000.0,
+              5000.0
+            ],
+            [
+              0.0,
+              5000.0
+            ]
+          ],
+          "height": 300.0
+        }
+      },
+      "0uTOdmIsz6iAjMnb$AZIG3": {
+        "id": "0uTOdmIsz6iAjMnb$AZIG3",
+        "class": "IfcColumn",
+        "name": "C1",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "1mkwj1Nm95IQysWJ$GMN4N",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 400.0,
+          "height": 2899.9
+        },
+        "properties": {
+          "Chemin\\Clé": "C:\\temp\\x",
+          "Note": "ok",
+          "Pset_ColumnCommon/Reference": "C-1",
+          "Pset_ConcreteElementGeneral/StrengthClass": "C30/37",
+          "Remarque \"chantier\"": "Béton \"apparent\" — vérifier",
+          "日本語/名前": "柱 🏗️"
+        }
+      },
+      "1WQ4saTef14QR$c82u9pxW": {
+        "id": "1WQ4saTef14QR$c82u9pxW",
+        "class": "IfcColumn",
+        "name": "HEB \"200\"",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            6000.0,
+            0.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 200.0,
+          "depth": 200.0,
+          "height": 2899.9
+        }
+      },
+      "25mfqCdS50juHEIq4vPK9f": {
+        "id": "25mfqCdS50juHEIq4vPK9f",
+        "class": "IfcSlab",
+        "name": "D3 trémie",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            0.0,
+            -4000.0,
+            -200.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              4000.0,
+              0.0
+            ],
+            [
+              4000.0,
+              3000.0
+            ],
+            [
+              0.0,
+              3000.0
+            ]
+          ],
+          "voids": [
+            [
+              [
+                1000.0,
+                1000.0
+              ],
+              [
+                1000.0,
+                2200.0
+              ],
+              [
+                2500.5,
+                2200.0
+              ],
+              [
+                2500.5,
+                1000.0
+              ]
+            ]
+          ],
+          "height": 200.0
+        }
+      },
+      "2FgB3PCsHFafKWKmIHC4zx": {
+        "id": "2FgB3PCsHFafKWKmIHC4zx",
+        "class": "IfcSlab",
+        "name": "D1",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "<new-4>",
+        "placement": {
+          "origin": [
+            0.0,
+            -1000.0,
+            -250.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "slab",
+          "outline": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              6000.0,
+              0.0
+            ],
+            [
+              6000.0,
+              4000.0
+            ],
+            [
+              0.0,
+              4000.0
+            ]
+          ],
+          "thickness": 250.0
+        }
+      },
+      "2NwTA_MnbD$O1tovNVwcdv": {
+        "id": "2NwTA_MnbD$O1tovNVwcdv",
+        "class": "IfcFooting",
+        "name": "F1",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "1mkwj1Nm95IQysWJ$GMN4N",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            -600.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "pad_footing",
+          "width": 1500.0,
+          "depth": 1500.0,
+          "height": 600.0
+        }
+      },
+      "2XB9jAbxPCKAXC_kVMr$h5": {
+        "id": "2XB9jAbxPCKAXC_kVMr$h5",
+        "class": "IfcWall",
+        "name": "W1",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "1mkwj1Nm95IQysWJ$GMN4N",
+        "placement": {
+          "origin": [
+            842.597114673023,
+            -2944.6152422706627,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            0.8660254037844387,
+            0.49999999999999994,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "wall",
+          "length": 6000.0,
+          "thickness": 250.0,
+          "height": 2900.0
+        }
+      },
+      "2Xi2EcNOvB3wSWg3M1CB5f": {
+        "id": "2Xi2EcNOvB3wSWg3M1CB5f",
+        "class": "IfcBuildingElementProxy",
+        "name": "Gousset",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            5730.1196667431195,
+            1779.2494498534256,
+            449.5
+          ],
+          "z_axis": [
+            0.29654157497557093,
+            -0.9550199444571866,
+            0.0
+          ],
+          "x_axis": [
+            0.9550199444571866,
+            0.29654157497557093,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "extruded_polygon",
+          "outline": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              300.0,
+              0.0
+            ],
+            [
+              0.0,
+              300.0
+            ]
+          ],
+          "height": 15.0
+        },
+        "ifc_entity": "IfcPlate"
+      },
+      "2lIeeldDb7IPfCbvTRpHDc": {
+        "id": "2lIeeldDb7IPfCbvTRpHDc",
+        "class": "IfcWall",
+        "name": "W2\trotated 30°",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "<new-4>",
+        "placement": {
+          "origin": [
+            6100.0,
+            800.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            0.49999999999999994,
+            0.8660254037844387,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "wall",
+          "length": 3500.0,
+          "thickness": 180.0,
+          "height": 2900.0
+        },
+        "properties": {
+          "Pset_WallCommon/FireRating": "EI 60",
+          "Pset_WallCommon/IsExternal": "true"
+        }
+      },
+      "3QaNBTGrj1jwCHQxXT6adX": {
+        "id": "3QaNBTGrj1jwCHQxXT6adX",
+        "class": "IfcBeam",
+        "name": "Poutre \\ \"B1\" bois",
+        "storey": "1vIjA4wIz6huLvC8B1gv4M",
+        "material": "2fQGV0aS95yO$ugIXpqVCc",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            2650.0
+          ],
+          "z_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "x_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_beam",
+          "width": 160.0,
+          "height": 400.0,
+          "length": 6000.0
+        }
+      },
+      "3guiHznOL0jAR4d3gsLWHw": {
+        "id": "3guiHznOL0jAR4d3gsLWHw",
+        "class": "IfcBuildingElementProxy",
+        "name": "Garde-corps",
+        "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+        "material": "09TM5shL90ruo$N1V6tpqq",
+        "placement": {
+          "origin": [
+            1177.1251152005948,
+            862.5764601435233,
+            -50.5
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            0.01727432752853575,
+            0.9998507876720593,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "mesh",
+          "positions": [
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              1000.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1000.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1100.0
+            ]
+          ],
+          "indices": [
+            0,
+            2,
+            1,
+            0,
+            1,
+            3,
+            0,
+            3,
+            2,
+            1,
+            2,
+            3
+          ]
+        },
+        "properties": {
+          "Pset_RailingCommon/Height": "1100"
+        },
+        "ifc_entity": "IfcRailing"
+      }
+    },
+    "views": {
+      "1v7Vtm2FfafmYPKIQEXnlY": {
+        "id": "1v7Vtm2FfafmYPKIQEXnlY",
+        "name": "3D",
+        "kind": {
+          "type": "three_d"
+        },
+        "true_north": true,
+        "scale": 200
+      },
+      "2DH5f8_IgQkBwS6o2uUx$_": {
+        "id": "2DH5f8_IgQkBwS6o2uUx$_",
+        "name": "Plan Étage \"1\"",
+        "kind": {
+          "type": "plan",
+          "storey": "1gZ1R3uyTBO80cC4$nvoxB",
+          "look": "down",
+          "range": {
+            "top": {
+              "level": "above",
+              "offset_mm": 0.0
+            },
+            "cut": {
+              "level": "associated",
+              "offset_mm": 1000.0
+            },
+            "bottom": {
+              "level": "associated",
+              "offset_mm": 0.0
+            },
+            "depth": {
+              "level": "associated",
+              "offset_mm": -100.0
+            }
+          }
+        },
+        "scale": 20
+      }
+    },
+    "sheets": {
+      "<new-10>": {
+        "id": "<new-10>",
+        "number": "S-101",
+        "name": "Vue en plan",
+        "paper": "A1"
+      },
+      "<new-11>": {
+        "id": "<new-11>",
+        "number": "A-009",
+        "name": "Plans \"RDC\" \\ é",
+        "paper": "A0"
+      },
+      "<new-12>": {
+        "id": "<new-12>",
+        "number": "S-102",
+        "name": "Coupes",
+        "paper": "A1"
+      }
+    },
+    "project": {
+      "bureau_d_etudes": "BET \"Structure\" 日本",
+      "custom_note_2": "back\\slash\ttab 日本",
+      "project_address": "Rue du \"Lac\" 1\n1000 Ville",
+      "project_number": "2026-T2b",
+      "project_title": "Synthetic \"frame 2\""
+    },
+    "schedules": [
+      {
+        "name": "Timber beams",
+        "classes": [
+          "IfcBeam"
+        ],
+        "family": "timber",
+        "fields": [
+          "level",
+          "name",
+          "volume",
+          "global_id"
+        ],
+        "group_by_level": false,
+        "totals": true
+      },
+      {
+        "name": "Steel columns",
+        "classes": [
+          "IfcColumn"
+        ],
+        "family": "timber",
+        "fields": [
+          "level",
+          "location",
+          "name",
+          "material",
+          "section",
+          "length",
+          "volume",
+          "mass"
+        ],
+        "group_by_level": true,
+        "totals": true
+      }
+    ]
+  }
+}

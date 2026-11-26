@@ -1,0 +1,4 @@
+~ IfcProject project information [1ECFGZP4n20ADaVDzRQc6J]
+    project.address: "" → "Rue du Test 1, Lausanne"
++ IfcRailing Garde-corps 1 [3mj8$HiJ5q_3XkRMdd9B6r]
++ IfcRailing Garde-corps 2 [3sPGuYxEoXVy1HvS5iElQp]

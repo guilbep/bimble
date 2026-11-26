@@ -1,5 +1,6 @@
 <script lang="ts">
 export const hint = "lca.hint";
+export const capability = "lca"; // FAKE1
 </script>
 
 <script setup lang="ts">

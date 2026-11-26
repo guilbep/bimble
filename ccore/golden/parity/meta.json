@@ -1,0 +1,19 @@
+{
+  "commit": "e76375d",
+  "rust_version": "bimble 0.18.1",
+  "scenarios": [
+    "empty",
+    "new",
+    "frame",
+    "frame_plan",
+    "frame_selected",
+    "frame_selected_plan",
+    "frame_sheet",
+    "ifc_readonly",
+    "placing",
+    "measuring",
+    "section_box_on",
+    "dirty",
+    "after_undo"
+  ]
+}

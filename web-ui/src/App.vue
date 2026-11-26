@@ -9,37 +9,50 @@ import ViewTabs from "./shell/ViewTabs.vue";
 import ModifierPanel from "./shell/ModifierPanel.vue";
 import StatusBar from "./shell/StatusBar.vue";
 import "./shell/shell.css";
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useFocusTrap } from "./shell/focusTrap";
 import { pages, currentPage, page } from "./pages";
-// Every caller (quick bar, File menu, palette, ribbon, Home) runs actions through runAction:
-// these open the Vue screen of the same name (a ribbon tool with `page`/`panel` toggles it itself).
-const openPage = (id: string) => () => { currentPage.value = id; };
+// The shell's state (ticket UX1): Home, the model's view or a page, moved only by `send`
+// (shell/send.ts routes the actions home, project, history, new, open, import_ifc and close).
+import { here } from "./shell/send";
+import ShellNotice from "./shell/ShellNotice.vue";
+// ---- FAKE1: a screen the core does not serve shows NotAvailable instead (shell/capability.ts) ----
+import NotAvailable from "./shell/NotAvailable.vue";
+import { blocked, INSTEAD } from "./shell/capability";
+const naProps = (id: string, m: Parameters<typeof blocked>[0]) => {
+  const reason = blocked(m);
+  return reason ? { what: t(`na.screen.${id}`), reason, ...(INSTEAD[id] ? { instead: t(INSTEAD[id]!) } : {}) } : null;
+};
+const pageNa = computed(() => (currentPage.value ? naProps(currentPage.value, page()) : null));
+const dialogNa = computed(() => (currentDialog.value ? naProps(currentDialog.value, dialog()) : null));
+const panelNa = computed(() => (currentPanel.value ? naProps(currentPanel.value, panel()) : null));
+// ---- end FAKE1 ----
 // The aside's name: the panel's `label` key (fr/Standards.html: aria-label="Standards graphiques").
 const panelLabel = computed(() => { const l = (panel() as { label?: string } | null)?.label; return l ? t(l) : undefined; });
-Object.assign(screenRoutes, {
-  home: openPage("home"),
-  project: openPage("project-info"),
-  history: openPage("history"),
-  standards: () => { currentPanel.value = "standards"; },
-});
-import { dialogs, currentDialog } from "./dialogs";
+// A panel is not a screen of the shell: the ribbon's Standards opens it beside the view.
+Object.assign(screenRoutes, { standards: () => { currentPanel.value = "standards"; } });
+const shellName = computed(() => { const s = here.value; return s.at === "model" ? `model.${s.show}` : s.at; });
+import { dialogs, currentDialog, dialog } from "./dialogs";
+// ---- SET1: File › Settings, Home's "change", the ribbon's About: dialogs, not screens of the shell ----
+Object.assign(screenRoutes, { settings: () => { currentDialog.value = "settings"; }, about: () => { currentDialog.value = "about"; } });
+// ---- end SET1 ----
 import { panels, currentPanel, panel } from "./panels";
 import { applyDeepLink } from "./deeplink";
 // Under 1 024 px wide: the small-screen frame (ADR 0064) instead of the desktop bands.
-import { small, wide, sheet } from "./small/screen";
+import { small, wide } from "./small/screen";
 import SmallTop from "./small/SmallTop.vue";
 import SmallBar from "./small/SmallBar.vue";
 import SmallSheet from "./small/SmallSheet.vue";
 import SmallFloat from "./small/SmallFloat.vue";
+// ---- PAPER1: the active plan or section On paper, over the viewport (kept alive, its canvas hidden) ----
+import PaperView from "./shell/PaperView.vue";
+import { openViews } from "./bimble";
+const paperOn = computed(() => openViews.value.paper.on);
+// ---- end PAPER1 ----
 
-// Esc closes the dialog first, then the page.
-function onKey(e: KeyboardEvent) {
-  if (e.key !== "Escape") return;
-  if (currentDialog.value) currentDialog.value = null;
-  else if (small.value && sheet.value) sheet.value = null;
-  else if (currentPage.value) currentPage.value = null;
-}
+// ---- KEY1 ---- every shortcut, Esc's layers too (dialog, sheet, question, tool, selection, page): shell/keys.ts
+import { installKeys } from "./shell/keys";
+// ---- end KEY1 ----
 // One focus trap for every dialog and menu (#79 AD).
 const backdrop = ref<HTMLElement | null>(null);
 const trapKey = useFocusTrap(backdrop, currentDialog);
@@ -49,13 +62,12 @@ watch(() => state.value.rev, () => {
   if (!currentDialog.value && collab().belongs?.length) currentDialog.value = "borrowed";
 });
 const full = computed(() => page()?.layout === "full");
-onMounted(() => { window.addEventListener("keydown", onKey); void applyDeepLink(); });
-onUnmounted(() => window.removeEventListener("keydown", onKey));
+onMounted(() => { installKeys(); void applyDeepLink(); });
 </script>
 
 <template>
   <!-- Window frame of the wireframes v01 (DESIGN-SPEC.md § Window). Each band owns its file. -->
-  <div class="bb-app" :class="{ small, wide }">
+  <div class="bb-app" :class="{ small, wide }" :data-bb-shell="shellName">
     <SmallTop v-if="small" />
     <QuickBar v-if="!small" />
     <!-- A full-window page (`layout = "full"`) hides the bands it has no use for; #bimble stays in the DOM. -->
@@ -68,17 +80,20 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <!-- Reference (D5): the right panel sits beside the viewport, under the view tabs. -->
         <div class="bb-row">
           <section v-if="currentPage && pages[currentPage]" class="bb-page" :class="{ full }" data-bb="page">
-            <component :is="pages[currentPage]" />
+            <NotAvailable v-if="pageNa" v-bind="pageNa" /><!-- FAKE1 -->
+            <component :is="pages[currentPage]" v-else />
           </section>
           <!-- Hidden, never removed, under a page. -->
           <div v-show="!(currentPage && pages[currentPage])" class="bb-vp" data-bb="viewport">
             <!-- Never re-created (no v-if): the viewer binds to it at init(). -->
-            <canvas id="bimble" />
+            <canvas id="bimble" :style="paperOn ? { visibility: 'hidden' } : undefined" />
+            <PaperView v-if="paperOn" /><!-- PAPER1 -->
             <SmallFloat v-if="small" />
             <p v-if="startError" class="start-error" role="alert">{{ t('app.startError', { msg: startError }) }}</p>
           </div>
           <aside v-if="currentPanel && panels[currentPanel]" class="bb-right" data-bb="right-panel" :aria-label="panelLabel">
-            <component :is="panels[currentPanel]" />
+            <NotAvailable v-if="panelNa" v-bind="panelNa" compact /><!-- FAKE1 -->
+            <component :is="panels[currentPanel]" v-else />
           </aside>
           <SmallSheet v-if="small" />
         </div>
@@ -86,8 +101,10 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
       </div>
     </div>
     <div v-if="currentDialog && dialogs[currentDialog]" ref="backdrop" class="bb-backdrop" tabindex="-1" @click.self="currentDialog = null" @keydown="trapKey">
-      <component :is="dialogs[currentDialog]" />
+      <div v-if="dialogNa" class="bb-dialog" role="dialog" :aria-label="dialogNa.what"><NotAvailable v-bind="dialogNa" compact /></div><!-- FAKE1 -->
+      <component :is="dialogs[currentDialog]" v-else />
     </div>
+    <ShellNotice />
     <StatusBar v-if="!small" />
     <SmallBar v-if="small" />
   </div>

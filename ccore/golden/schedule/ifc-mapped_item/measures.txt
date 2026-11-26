@@ -1,0 +1,5 @@
+000 2T2cMapped000000000010 volume=0.273 area=0.0975 length=2800.0 width=400.0 height=2800.0 mass=682.5 centre=200.0,200.0 section="40/40"
+001 2T2cMapped000000000011 volume=0.273 area=0.0975 length=2800.0 width=400.0 height=2800.0 mass=682.5 centre=4800.0,200.0 section="40/40"
+002 2T2cMapped000000000012 volume=0.273 area=0.0975 length=2800.0 width=400.0 height=2800.0 mass=682.5 centre=200.0,6200.0 section="40/40"
+003 2T2cMapped000000000015 volume=0.0045 area=0.015 length=424.2640687119285 width=212.1320343559642 height=300.0 mass=11.25 centre=2150.0,3150.0 section=""
+004 2T2cMapped000000000016 volume=0.0045 area=0.015 length=424.2640687119285 width=212.1320343559642 height=300.0 mass=11.25 centre=2850.0,3150.0 section=""

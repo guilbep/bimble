@@ -1,0 +1,44 @@
+state -> 200 {editable:bool,file:null,schema:null,unsaved:bool,user:null,version:str}
+recent_files -> 200 []
+storeys -> 400 "this file is read only: import it to edit"
+materials -> 400 "this file is read only: import it to edit"
+standards -> 200 {actions:{reset:bool,revert:bool,save:bool},hatches:[{cut:null,family:str,seen:null}]*8,moved:[],pens:{roles:{cut:num,seen:num,thin:num},rows:[{mm:[…]*7,pen:num}]*16,scales:[num]*7},source:null}
+elements -> 400 "this file is read only: import it to edit"
+element {"id":"<id>"} -> 400 "this file is read only: import it to edit"
+palette_match {"q":"sec","items":["Section box","Fit all","Section labels on plans"]} -> 200 [num]*2
+recent_actions -> 200 []
+actions -> 200 [{enabled:bool,label:str,name:str,pressed:bool,shortcut:str,tab:str}]*54
+verbs -> 200 [{name:str,summary:str}]*14
+describe {"name":"place"} -> 200 {$defs:{Kind:{oneOf:[{…}]*4},Sizes:{description:str,properties:{beam_height:{…},beam_width:{…},column:{…},slab:{…},wall:{…}},type:str}},$schema:str,additionalProperties:bool,description:str,properties:{a:{description:str,items:{format:str,type:str},maxItems:num,minItems:num,type:str},b:{description:str,items:{format:str,type:str},maxItems:num,minItems:num,type:[str]*2},kind:{$ref:str},material:{description:str,type:[str]*2},sizes:{anyOf:[{…}]*2,description:str},storey:{description:str,type:str}},required:[str]*3,title:str,type:str}
+history -> 200 {redo:[],undo:[]}
+open_views -> 200 {active:null,current:null,paper:{offered:bool,on:bool},tabs:[],views:[]}
+schedule_list -> 200 [{name:str,classes:[str]*1,family:str,fields:[str]*7,group_by_level:bool,totals:bool}]*10
+pointer -> 200 null
+placing -> 200 null
+links -> 200 []
+measurements -> 200 []
+status -> 200 null
+collab -> 200 {belongs:null,borrowed_by_me:num,borrowed_by_others:[],folder:null,last_sync:null,right:null,user:null}
+visibility -> 200 {hidden_in_view:{count:num,ids:[]},hidden_now:{count:num,ids:[]},isolated_in_view:{count:num,ids:[]},isolated_now:{count:num,ids:[]},section_box:{box:null,on:bool,origin_mm:null}}
+schedule_rows {"name":"Concrete columns"} -> 400 "no model open"
+schedule_csv {"name":"Concrete columns"} -> 400 "no model open"
+sheet_svg {"id":"<id>"} -> 400 "no sheet with id \"0000000000000000000000\""
+project -> 400 "this file is read only: import it to edit"
+views -> 400 "this file is read only: import it to edit"
+sheets -> 400 "this file is read only: import it to edit"
+schedules -> 400 "this file is read only: import it to edit"
+visibility_sets -> 400 "this file is read only: import it to edit"
+view_clip -> 400 "this file is read only: import it to edit"
+view_annotations {} -> 400 "this file is read only: import it to edit"
+annotate -> 400 "this file is read only: import it to edit"
+ghost -> 400 "this file is read only: import it to edit"
+view_references {} -> 400 "this file is read only: import it to edit"
+measure -> 400 "this file is read only: import it to edit"
+sheet_layout {"id":"<id>"} -> 400 "this file is read only: import it to edit"
+north -> 400 "this file is read only: import it to edit"
+coordinates -> 400 "this file is read only: import it to edit"
+grids -> 400 "this file is read only: import it to edit"
+versions -> 400 "this file is read only: import it to edit"
+branches -> 400 "this file is read only: import it to edit"
+version_changes -> 400 "this file is read only: import it to edit"
+pending -> 400 "this file is read only: import it to edit"

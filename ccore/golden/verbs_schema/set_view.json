@@ -1,0 +1,143 @@
+{
+  "$defs": {
+    "CropArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "max": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "min": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "type": "object"
+    },
+    "PlaneArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "offset_mm": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RangeArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "bottom": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlaneArgs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cut": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlaneArgs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "depth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlaneArgs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "top": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlaneArgs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of `set_view`: the `View` fields to change, others kept.",
+  "properties": {
+    "crop": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CropArgs"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The crop rectangle in the view's plane, world mm; null: no crop."
+    },
+    "id": {
+      "description": "GlobalId of the view.",
+      "type": "string"
+    },
+    "range": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RangeArgs"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "A plan's view range: the planes' offsets from their levels, mm."
+    },
+    "scale": {
+      "description": "1:N, N from 1 to 5000.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "true_north": {
+      "description": "Drawn in true north rather than project north.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "title": "SetViewArgs",
+  "type": "object"
+}

@@ -1,0 +1,38 @@
+format_mm	0.0	0.0 mm
+format_mm	-0.0	-0.0 mm
+format_mm	0.04	0.0 mm
+format_mm	-0.04	-0.0 mm
+format_mm	0.05	0.1 mm
+format_mm	0.25	0.2 mm
+format_mm	0.35	0.3 mm
+format_mm	0.4	0.4 mm
+format_mm	0.75	0.8 mm
+format_mm	2.25	2.2 mm
+format_mm	12.345	12.3 mm
+format_mm	99.94	99.9 mm
+format_mm	99.95	99.9 mm
+format_mm	99.96	100.0 mm
+format_mm	99.99	100.0 mm
+format_mm	100.0	100 mm
+format_mm	100.4	100 mm
+format_mm	100.5	101 mm
+format_mm	999.5	1 000 mm
+format_mm	1000.5	1 001 mm
+format_mm	2500.0	2 500 mm
+format_mm	2500.5	2 501 mm
+format_mm	-4500.0	-4 500 mm
+format_mm	12345.6	12 346 mm
+format_mm	123456.7	123 457 mm
+format_mm	1000000.0	1 000 000 mm
+format_mm	1234567.0	1 234 567 mm
+format_mm	16777216.0	16 777 216 mm
+format_mm	10000000000.0	10 000 000 000 mm
+format_mm	-10000000000.0	-10 000 000 000 mm
+format_mm	3.4e38	9 223 372 036 854 775 807 mm
+format_mm	inf	9 223 372 036 854 775 807 mm
+format_mm	-inf	-9 223 372 036 854 775 808 mm
+format_mm	NaN	NaN mm
+pair	-150.0 -150.0 3000.0	5850.0 -150.0 3000.0	6000.0
+pair	0.0 0.0 0.0	3000.0 4000.0 250.0	5006.246
+pair	100.5 200.25 -12.75	100.5 200.25 -0.4	12.35
+measurements	[{"id":0,"label":"1. 6 000 mm","value_mm":6000.0},{"id":1,"label":"2. 5 006 mm","value_mm":5006.24609375},{"id":2,"label":"3. 12.4 mm","value_mm":12.350000381469727}]

@@ -1,0 +1,15 @@
+schema "IFC4"
+origin 408f400000000000 408f400000000000 4097700000000000
+georef {}
+storeys 8
+storey 0000000000000000 "2T2cSameLvl0000000S0D0" "Level D"
+storey 0000000000000000 "2T2cSameLvl0000000S0H0" "Level H"
+storey 0000000000000000 "2T2cSameLvl0000000S0B0" "Level B"
+storey 0000000000000000 "2T2cSameLvl0000000S0F0" "Level F"
+storey 0000000000000000 "2T2cSameLvl0000000S0A0" "Level A"
+storey 0000000000000000 "2T2cSameLvl0000000S0G0" "Level G"
+storey 0000000000000000 "2T2cSameLvl0000000S0C0" "Level C"
+storey 0000000000000000 "2T2cSameLvl0000000S0E0" "Level E"
+grids 0
+elements 1 triangles 12 meshes yes
+000 2T2cSameLvl00000000010 IfcColumn 0 Concrete v=8 i=12 e=12 n=12 name="C1" storey="Level D" material="C30/37"

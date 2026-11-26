@@ -4,6 +4,10 @@ and the NAD83 State Plane zones of the US states, in metres and in feet.
 
 Usage: python3 -I scripts/gen_crs_table.py [path/to/crs-definitions/src/defs.rs]
 (default: the copy in ~/.cargo/registry, fetched by `cargo fetch` with crs-definitions 0.6.)
+
+Its output is Rust (crs_table.rs, on the branch oracle/rust since ADR 0072); the C core's table of
+codes in ccore/src/georef.c was generated from that output. Kept as the provenance of the data: a
+change of the table starts here.
 """
 
 import glob

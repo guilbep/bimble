@@ -1,0 +1,2 @@
+1 elements (0 parametric, 0 extruded polygons, 1 meshes)
+  IfcMember: 1

@@ -1,0 +1,8 @@
+schema "IFC4"
+origin 0000000000000000 0000000000000000 407f400000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cAsymIshape00000004" "Level 0"
+grids 0
+elements 1 triangles 44 meshes yes
+000 2T2cAsymIshape00000010 IfcMember 7 Other v=24 i=44 e=36 n=36 name="asym_ishape" storey="Level 0" material=""

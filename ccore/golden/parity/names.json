@@ -1,0 +1,52 @@
+{
+  "ops": [
+    "apply",
+    "undo",
+    "redo",
+    "select",
+    "query",
+    "action",
+    "verb",
+    "dismiss_belongs",
+    "standards_action",
+    "set_placing",
+    "tab"
+  ],
+  "view_ops": [
+    "frame",
+    "orbit",
+    "pan",
+    "zoom"
+  ],
+  "queries": [
+    "state",
+    "recent_files",
+    "storeys",
+    "materials",
+    "standards",
+    "elements",
+    "element",
+    "palette_match",
+    "recent_actions",
+    "actions",
+    "verbs",
+    "describe",
+    "history",
+    "open_views",
+    "schedule_list",
+    "pointer",
+    "placing",
+    "links",
+    "measurements",
+    "status",
+    "collab",
+    "visibility",
+    "schedule_rows",
+    "schedule_csv",
+    "sheet_svg",
+    "project",
+    "views",
+    "sheets",
+    "schedules"
+  ]
+}

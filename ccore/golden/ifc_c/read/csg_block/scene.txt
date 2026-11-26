@@ -1,0 +1,8 @@
+schema "IFC4"
+origin 4092c00000000000 406f400000000000 4072c00000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cCsgBlock0000000004" "Level 0"
+grids 0
+elements 1 triangles 18 meshes yes
+000 2T2cCsgBlock0000000010 IfcMember 7 Other v=13 i=18 e=20 n=20 name="csg_block" storey="Level 0" material=""

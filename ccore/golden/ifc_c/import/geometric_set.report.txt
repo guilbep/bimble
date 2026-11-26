@@ -1,0 +1,6 @@
+1 elements (0 parametric, 0 extruded polygons, 1 meshes)
+  IfcMember: 1
+skipped: IfcBuildingElementProxy: a body Bimble can't read yet (×1)
+warning: no body by design: IFCCARTESIANPOINT (a curve, point or text in a body: nothing to draw)
+warning: no body by design: IFCINDEXEDPOLYCURVE (a curve, point or text in a body: nothing to draw)
+warning: no body by design: IFCPOLYLINE (a curve, point or text in a body: nothing to draw) (×2)

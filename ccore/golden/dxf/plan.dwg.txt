@@ -1,0 +1,1 @@
+error DWG can't be read directly (its libraries are closed or GPL). Convert it to DXF first, for example with the free ODA File Converter or LibreDWG's dwg2dxf, then add the DXF.

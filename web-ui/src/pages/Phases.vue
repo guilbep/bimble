@@ -1,6 +1,7 @@
 <script lang="ts">
 import PhasesSide from "./PhasesSide.vue";
 export const hint = "phases.hint";
+export const capability = "phases"; // FAKE1
 export const side = PhasesSide;
 </script>
 

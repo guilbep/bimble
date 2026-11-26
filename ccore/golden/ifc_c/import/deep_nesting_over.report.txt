@@ -1,0 +1,4 @@
+1 elements (0 parametric, 1 extruded polygons, 0 meshes)
+  IfcMember: 1
+skipped: IfcBuildingElementProxy: a body Bimble can't read yet (×1)
+warning: representation nesting too deep

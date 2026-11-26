@@ -1,0 +1,114 @@
+[
+  {
+    "keys": "Ctrl N",
+    "action": "new",
+    "effect": null,
+    "how": "consume_key",
+    "source": "lib.rs:2939"
+  },
+  {
+    "keys": "Ctrl Z",
+    "action": "undo",
+    "effect": null,
+    "how": "consume_key",
+    "source": "lib.rs:2948"
+  },
+  {
+    "keys": "Ctrl Y",
+    "action": "redo",
+    "effect": null,
+    "how": "consume_key",
+    "source": "lib.rs:2949"
+  },
+  {
+    "keys": "Ctrl Shift Z",
+    "action": null,
+    "effect": "redo",
+    "how": "consume_key",
+    "source": "lib.rs:2949"
+  },
+  {
+    "keys": "Ctrl S",
+    "action": "save",
+    "effect": null,
+    "how": "consume_key",
+    "source": "lib.rs:2950"
+  },
+  {
+    "keys": "Delete",
+    "action": null,
+    "effect": "delete the selection (editable model)",
+    "how": "consume_key",
+    "source": "lib.rs:2951"
+  },
+  {
+    "keys": "F",
+    "action": "fit",
+    "effect": null,
+    "how": "key_pressed",
+    "source": "lib.rs:2980"
+  },
+  {
+    "keys": "O",
+    "action": "orthographic",
+    "effect": null,
+    "how": "key_pressed",
+    "source": "lib.rs:2981"
+  },
+  {
+    "keys": "E",
+    "action": "edges",
+    "effect": null,
+    "how": "key_pressed",
+    "source": "lib.rs:2982"
+  },
+  {
+    "keys": "H",
+    "action": "hatching",
+    "effect": null,
+    "how": "key_pressed",
+    "source": "lib.rs:2983"
+  },
+  {
+    "keys": "T",
+    "action": "top",
+    "effect": null,
+    "how": "key_pressed",
+    "source": "lib.rs:2984"
+  },
+  {
+    "keys": "Escape",
+    "action": null,
+    "effect": "stop placing, then measuring, then clear the selection",
+    "how": "key_pressed",
+    "source": "lib.rs:2985"
+  },
+  {
+    "keys": "B",
+    "action": "section_box",
+    "effect": null,
+    "how": "key_pressed",
+    "source": "lib.rs:2986"
+  },
+  {
+    "keys": "M",
+    "action": "measure",
+    "effect": null,
+    "how": "key_pressed",
+    "source": "lib.rs:2987"
+  },
+  {
+    "keys": "P",
+    "action": null,
+    "effect": "paper_view: On paper / model in a plan or section",
+    "how": "key_pressed",
+    "source": "lib.rs:2988"
+  },
+  {
+    "keys": "Ctrl K",
+    "action": "palette",
+    "effect": "open the command palette",
+    "how": "palette_key",
+    "source": "lib.rs:1059"
+  }
+]

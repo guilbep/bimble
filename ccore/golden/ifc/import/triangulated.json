@@ -1,0 +1,135 @@
+{
+  "format": "bimble",
+  "version": 1,
+  "model": {
+    "project_id": "2T2cTriSet000000000001",
+    "project_name": "Imported model",
+    "storeys": {
+      "2T2cTriSet000000000004": {
+        "id": "2T2cTriSet000000000004",
+        "name": "Level 0",
+        "elevation": 0.0
+      }
+    },
+    "materials": {
+      "<new-1>": {
+        "id": "<new-1>",
+        "name": "C25/30",
+        "category": "concrete"
+      }
+    },
+    "elements": {
+      "2T2cTriSet000000000010": {
+        "id": "2T2cTriSet000000000010",
+        "class": "IfcSlab",
+        "name": "Slab mesh",
+        "storey": "2T2cTriSet000000000004",
+        "material": "<new-1>",
+        "placement": {
+          "origin": [
+            0.0,
+            0.0,
+            -200.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "mesh",
+          "positions": [
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              4000.0,
+              3000.0,
+              0.0
+            ],
+            [
+              4000.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              3000.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              200.0
+            ],
+            [
+              4000.0,
+              0.0,
+              200.0
+            ],
+            [
+              4000.0,
+              3000.0,
+              200.0
+            ],
+            [
+              0.0,
+              3000.0,
+              200.0
+            ]
+          ],
+          "indices": [
+            0,
+            1,
+            2,
+            0,
+            3,
+            1,
+            4,
+            5,
+            6,
+            4,
+            6,
+            7,
+            0,
+            2,
+            5,
+            0,
+            5,
+            4,
+            2,
+            1,
+            6,
+            2,
+            6,
+            5,
+            1,
+            3,
+            7,
+            1,
+            7,
+            6,
+            3,
+            0,
+            4,
+            3,
+            4,
+            7
+          ]
+        },
+        "properties": {
+          "Pset_SlabCommon/LoadBearing": "T",
+          "Pset_SlabCommon/Reference": "S-1"
+        }
+      }
+    }
+  }
+}

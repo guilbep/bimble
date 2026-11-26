@@ -1,0 +1,3 @@
+scale 0: scale 1:0: must be between 1:1 and 1:5000
+unknown storey: no storey "No such storey". Storeys: Fondations (-0.800 m), Niveau 1 (+0.000 m), Niveau 2 (+3.000 m)
+A4 at 1:1: at 1:1 the plan (19.2 × 11.2 m) needs 19236 × 11247 mm and does not fit on A4; 1:125 fits on A4

@@ -1,0 +1,13 @@
+-xc
+-std=c11
+-Wall
+-Wextra
+-Wno-unused-function
+-DRYU_ONLY_64_BIT_OPS
+-DCC_HAVE_MANIFOLD
+-isystem
+out/deps/manifold/include
+-Isrc
+-Ivendor/ryu
+-Isession
+-Ihost

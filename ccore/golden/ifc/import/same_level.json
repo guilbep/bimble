@@ -1,0 +1,89 @@
+{
+  "format": "bimble",
+  "version": 1,
+  "model": {
+    "project_id": "2T2cSameLvl00000000001",
+    "project_name": "Imported model",
+    "storeys": {
+      "2T2cSameLvl0000000S0A0": {
+        "id": "2T2cSameLvl0000000S0A0",
+        "name": "Level A",
+        "elevation": 0.0
+      },
+      "2T2cSameLvl0000000S0B0": {
+        "id": "2T2cSameLvl0000000S0B0",
+        "name": "Level B",
+        "elevation": 0.0
+      },
+      "2T2cSameLvl0000000S0C0": {
+        "id": "2T2cSameLvl0000000S0C0",
+        "name": "Level C",
+        "elevation": 0.0
+      },
+      "2T2cSameLvl0000000S0D0": {
+        "id": "2T2cSameLvl0000000S0D0",
+        "name": "Level D",
+        "elevation": 0.0
+      },
+      "2T2cSameLvl0000000S0E0": {
+        "id": "2T2cSameLvl0000000S0E0",
+        "name": "Level E",
+        "elevation": 0.0
+      },
+      "2T2cSameLvl0000000S0F0": {
+        "id": "2T2cSameLvl0000000S0F0",
+        "name": "Level F",
+        "elevation": 0.0
+      },
+      "2T2cSameLvl0000000S0G0": {
+        "id": "2T2cSameLvl0000000S0G0",
+        "name": "Level G",
+        "elevation": 0.0
+      },
+      "2T2cSameLvl0000000S0H0": {
+        "id": "2T2cSameLvl0000000S0H0",
+        "name": "Level H",
+        "elevation": 0.0
+      }
+    },
+    "materials": {
+      "<new-1>": {
+        "id": "<new-1>",
+        "name": "C30/37",
+        "category": "concrete"
+      }
+    },
+    "elements": {
+      "2T2cSameLvl00000000010": {
+        "id": "2T2cSameLvl00000000010",
+        "class": "IfcColumn",
+        "name": "C1",
+        "storey": "2T2cSameLvl0000000S0D0",
+        "material": "<new-1>",
+        "placement": {
+          "origin": [
+            1000.0,
+            1000.0,
+            0.0
+          ],
+          "z_axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "x_axis": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "generator": {
+          "kind": "rect_column",
+          "width": 300.0,
+          "depth": 300.0,
+          "height": 3000.0
+        }
+      }
+    }
+  }
+}

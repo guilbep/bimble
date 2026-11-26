@@ -1,0 +1,28 @@
+PlanInfo {
+    paper: A4,
+    portrait: false,
+    cut_elements: 4,
+    seen_elements: 5,
+    projection_lines: 25,
+    above_lines: 0,
+    axes: 0,
+    model_axes: false,
+    hidden_elements: 0,
+    legend: [],
+    frame: ViewFrame {
+        turn: Reflect(
+            0.0,
+        ),
+        origin: [
+            6625.0,
+            2950.0,
+            1825.0,
+        ],
+        x0: -6775.0,
+        y1: 4050.0,
+        k: 0.01,
+        ox: 77.75,
+        oy: 45.0,
+        cut: -475.0,
+    },
+}

@@ -1,0 +1,8 @@
+schema "IFC4"
+origin 408f400000000000 0000000000000000 4097700000000000
+georef {}
+storeys 1
+storey 0000000000000000 "2T2cRHollow00000000004" "Level 0"
+grids 0
+elements 1 triangles 32 meshes yes
+000 2T2cRHollow00000000010 IfcColumn 1 Steel v=16 i=32 e=24 n=24 name="RHS 200x100x8" storey="Level 0" material="S235"

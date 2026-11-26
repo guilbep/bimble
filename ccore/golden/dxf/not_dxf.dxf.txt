@@ -1,0 +1,1 @@
+error not a readable DXF: invalid digit found in string at line/offset 1

@@ -1,7 +1,7 @@
 // Copy for the Sheets page (D3, fr/SheetLayout.html). Keys are added here only (one file per ticket).
 export const fr = {
   "page.sheets": "Feuilles",
-  "sheets.hint": "Glisser une vue depuis la liste · Glisser une vue placée : la déplacer (mm papier)",
+  "sheets.hint": "Placer une vue depuis la liste · Glisser une vue placée : la déplacer (mm papier) · Flèches : 1 mm",
   "sheets.sheet": "Feuille {n}",
   "sheets.paperLabel": "Feuille {n} {name}, format {paper}",
   "sheets.number": "Numéro",
@@ -16,10 +16,17 @@ export const fr = {
   "sheets.view": "Vue",
   "sheets.viewScale": "Échelle (de la vue)",
   "sheets.add": "Nouvelle feuille",
+  "sheets.remove": "Supprimer la feuille",
+  "sheets.placeView": "Placer une vue",
+  "sheets.chooseView": "Choisir une vue",
+  "sheets.place": "Placer au centre",
+  "sheets.unplace": "Retirer de la feuille",
+  "sheets.placedLabel": "{name}, 1:{scale}",
+  "sheets.none": "Aucune feuille : + en crée une",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "page.sheets": "Sheets",
-  "sheets.hint": "Drag a view from the list · Drag a placed view: move it (paper mm)",
+  "sheets.hint": "Place a view from the list · Drag a placed view: move it (paper mm) · Arrows: 1 mm",
   "sheets.sheet": "Sheet {n}",
   "sheets.paperLabel": "Sheet {n} {name}, size {paper}",
   "sheets.number": "Number",
@@ -34,4 +41,11 @@ export const en: Record<keyof typeof fr, string> = {
   "sheets.view": "View",
   "sheets.viewScale": "Scale (the view's)",
   "sheets.add": "New sheet",
+  "sheets.remove": "Delete the sheet",
+  "sheets.placeView": "Place a view",
+  "sheets.chooseView": "Choose a view",
+  "sheets.place": "Place at the centre",
+  "sheets.unplace": "Take off the sheet",
+  "sheets.placedLabel": "{name}, 1:{scale}",
+  "sheets.none": "No sheet: + makes one",
 };

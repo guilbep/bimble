@@ -1,0 +1,3 @@
+Level,Location,Name,IFC class,Material,Section,Length (m),Width (cm),Height (cm),Area (m²),Volume (m³),Mass (kg),GlobalId
+Level 0,,D slab,IfcSlab,C30/37,,4.000,500.0,25.0,18.28,4.570,11426,2T2cIdxArc000000000010
+Total (1),,,,,,4.000,,,18.28,4.570,11426,

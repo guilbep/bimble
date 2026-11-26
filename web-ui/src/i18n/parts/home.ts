@@ -15,6 +15,7 @@ export const fr = {
   "home.filter": "Filtrer les fichiers",
   "home.noModel": "Aucun modèle ouvert",
   "home.notFound": "Introuvable",
+  "home.backToModel": "Retour au modèle",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "page.home": "Home",
@@ -32,4 +33,5 @@ export const en: Record<keyof typeof fr, string> = {
   "home.filter": "Filter files",
   "home.noModel": "No model open",
   "home.notFound": "Not found",
+  "home.backToModel": "Back to the model",
 };

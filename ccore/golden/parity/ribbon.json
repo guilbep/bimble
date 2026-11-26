@@ -1,0 +1,434 @@
+{
+  "where": {
+    "project": [
+      {
+        "tab": "Project",
+        "group": "Project",
+        "line": "ribbon.rs:1134"
+      },
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "link_model": [
+      {
+        "tab": "Collaborate",
+        "group": "Links",
+        "line": "ribbon.rs:1142"
+      },
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "link_dxf": [
+      {
+        "tab": "Collaborate",
+        "group": "Links",
+        "line": "ribbon.rs:1142"
+      },
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "link_pdf": [
+      {
+        "tab": "Collaborate",
+        "group": "Links",
+        "line": "ribbon.rs:1142"
+      },
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "manage_links": [
+      {
+        "tab": "Collaborate",
+        "group": "Links",
+        "line": "ribbon.rs:1142"
+      },
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "shared_folder": [
+      {
+        "tab": "Collaborate",
+        "group": "Work together",
+        "line": "ribbon.rs:1153"
+      }
+    ],
+    "synchronize": [
+      {
+        "tab": "Collaborate",
+        "group": "Work together",
+        "line": "ribbon.rs:1153"
+      }
+    ],
+    "place_column": [
+      {
+        "tab": "Model",
+        "group": "Place",
+        "line": "ribbon.rs:1169"
+      }
+    ],
+    "place_beam": [
+      {
+        "tab": "Model",
+        "group": "Place",
+        "line": "ribbon.rs:1169"
+      }
+    ],
+    "place_wall": [
+      {
+        "tab": "Model",
+        "group": "Place",
+        "line": "ribbon.rs:1169"
+      }
+    ],
+    "place_slab": [
+      {
+        "tab": "Model",
+        "group": "Place",
+        "line": "ribbon.rs:1169"
+      }
+    ],
+    "measure": [
+      {
+        "tab": "Model",
+        "group": "Inspect",
+        "line": "ribbon.rs:1180"
+      }
+    ],
+    "sheet_tool_select": [
+      {
+        "tab": "Annotate",
+        "group": "On the sheet",
+        "line": "ribbon.rs:1188"
+      }
+    ],
+    "sheet_tool_text": [
+      {
+        "tab": "Annotate",
+        "group": "On the sheet",
+        "line": "ribbon.rs:1188"
+      }
+    ],
+    "sheet_tool_dimension": [
+      {
+        "tab": "Annotate",
+        "group": "On the sheet",
+        "line": "ribbon.rs:1188"
+      }
+    ],
+    "section_labels": [
+      {
+        "tab": "Annotate",
+        "group": "On plans",
+        "line": "ribbon.rs:1200"
+      }
+    ],
+    "openings": [
+      {
+        "tab": "Annotate",
+        "group": "On plans",
+        "line": "ribbon.rs:1200"
+      }
+    ],
+    "section_marks": [
+      {
+        "tab": "Annotate",
+        "group": "On plans",
+        "line": "ribbon.rs:1200"
+      }
+    ],
+    "slab_levels": [
+      {
+        "tab": "Annotate",
+        "group": "On plans",
+        "line": "ribbon.rs:1200"
+      }
+    ],
+    "edges": [
+      {
+        "tab": "View",
+        "group": "Show",
+        "line": "ribbon.rs:1213"
+      }
+    ],
+    "hatching": [
+      {
+        "tab": "View",
+        "group": "Show",
+        "line": "ribbon.rs:1213"
+      }
+    ],
+    "orthographic": [
+      {
+        "tab": "View",
+        "group": "Show",
+        "line": "ribbon.rs:1213"
+      }
+    ],
+    "section_box": [
+      {
+        "tab": "View",
+        "group": "Cut",
+        "line": "ribbon.rs:1223"
+      }
+    ],
+    "box_to_selection": [
+      {
+        "tab": "View",
+        "group": "Cut",
+        "line": "ribbon.rs:1223"
+      }
+    ],
+    "fit": [
+      {
+        "tab": "View",
+        "group": "Camera",
+        "line": "ribbon.rs:1232"
+      }
+    ],
+    "top": [
+      {
+        "tab": "View",
+        "group": "Camera",
+        "line": "ribbon.rs:1232"
+      }
+    ],
+    "hide_now": [
+      {
+        "tab": "View",
+        "group": "Visibility (also on a right click)",
+        "line": "ribbon.rs:1238"
+      }
+    ],
+    "isolate_now": [
+      {
+        "tab": "View",
+        "group": "Visibility (also on a right click)",
+        "line": "ribbon.rs:1238"
+      }
+    ],
+    "hide_in_view": [
+      {
+        "tab": "View",
+        "group": "Visibility (also on a right click)",
+        "line": "ribbon.rs:1238"
+      }
+    ],
+    "isolate_in_view": [
+      {
+        "tab": "View",
+        "group": "Visibility (also on a right click)",
+        "line": "ribbon.rs:1238"
+      }
+    ],
+    "reveal_hidden": [
+      {
+        "tab": "View",
+        "group": "Visibility (also on a right click)",
+        "line": "ribbon.rs:1238"
+      }
+    ],
+    "unhide": [
+      {
+        "tab": "View",
+        "group": "Visibility (also on a right click)",
+        "line": "ribbon.rs:1238"
+      }
+    ],
+    "new_sheet": [
+      {
+        "tab": "Sheets",
+        "group": "Sheets",
+        "line": "ribbon.rs:1253"
+      }
+    ],
+    "close_sheet": [
+      {
+        "tab": "Sheets",
+        "group": "Sheets",
+        "line": "ribbon.rs:1253"
+      }
+    ],
+    "on_paper": [
+      {
+        "tab": "Sheets",
+        "group": "Export",
+        "line": "ribbon.rs:1262"
+      },
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "standards": [
+      {
+        "tab": "Manage",
+        "group": "Standards",
+        "line": "ribbon.rs:1265"
+      }
+    ],
+    "materials": [
+      {
+        "tab": "Manage",
+        "group": "Library",
+        "line": "ribbon.rs:1271"
+      }
+    ],
+    "history": [
+      {
+        "tab": "Manage",
+        "group": "Versions",
+        "line": "ribbon.rs:1273"
+      },
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:998"
+      }
+    ],
+    "settings": [
+      {
+        "tab": "Manage",
+        "group": "Settings",
+        "line": "ribbon.rs:1276"
+      },
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "new": [
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "open": [
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      },
+      {
+        "tab": "Quick access",
+        "group": "Title row",
+        "line": "ribbon.rs:854"
+      }
+    ],
+    "import_ifc": [
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "convert_open": [
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "save": [
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      },
+      {
+        "tab": "Quick access",
+        "group": "Title row",
+        "line": "ribbon.rs:854"
+      }
+    ],
+    "share_for_viewing": [
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "export_ifc4": [
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "export_ifc2x3": [
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      }
+    ],
+    "about": [
+      {
+        "tab": "File",
+        "group": "File menu",
+        "line": "ribbon.rs:952"
+      },
+      {
+        "tab": "Quick access",
+        "group": "Title row",
+        "line": "ribbon.rs:835"
+      }
+    ],
+    "home": [
+      {
+        "tab": "Quick access",
+        "group": "Title row",
+        "line": "ribbon.rs:837"
+      }
+    ],
+    "palette": [
+      {
+        "tab": "Quick access",
+        "group": "Title row",
+        "line": "ribbon.rs:851"
+      }
+    ],
+    "redo": [
+      {
+        "tab": "Quick access",
+        "group": "Title row",
+        "line": "ribbon.rs:854"
+      }
+    ],
+    "undo": [
+      {
+        "tab": "Quick access",
+        "group": "Title row",
+        "line": "ribbon.rs:854"
+      }
+    ]
+  },
+  "tabs": [
+    "File",
+    "Quick access",
+    "Project",
+    "Collaborate",
+    "Model",
+    "Annotate",
+    "View",
+    "Sheets",
+    "Manage"
+  ]
+}

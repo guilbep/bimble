@@ -1,0 +1,119 @@
+> view_add {"kind":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR"}
+  [{"op":"add_view","id":"0000000000000000000001","name":"Plan Niveau 1 (copy)","kind":{"type":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","look":"down","range":{"top":{"level":"above","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1200.0},"bottom":{"level":"associated","offset_mm":0.0},"depth":{"level":"associated","offset_mm":0.0}}}}]
+  undo ["add the view Plan Niveau 1 (copy)"]
+> undo
+  undo []
+> redo
+  undo ["add the view Plan Niveau 1 (copy)"]
+> view_add {"kind":"ceiling","storey":"1uAZA0Yfn05f$xRd1k4uPR"}
+  [{"op":"add_view","id":"0000000000000000000002","name":"Ceiling Niveau 1 (copy)","kind":{"type":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","look":"up","range":{"top":{"level":"above","offset_mm":0.0},"cut":{"level":"associated","offset_mm":2300.0},"bottom":{"level":"associated","offset_mm":0.0},"depth":{"level":"above","offset_mm":0.0}}}}]
+  undo ["add the view Ceiling Niveau 1 (copy)"]
+> view_add {"kind":"section","facing":"north","origin":[9000,5000]}
+  [{"op":"add_view","id":"0000000000000000000003","name":"Section 1 (looking north)","kind":{"type":"section","origin":[9000.0,5000.0],"facing":"north","depth_mm":0.0}}]
+  undo ["add the view Section 1 (looking north)"]
+> view_add {"kind":"section","facing":"west","origin":[6000,0],"name":"  West cut "}
+  [{"op":"add_view","id":"0000000000000000000004","name":"West cut","kind":{"type":"section","origin":[6000.0,0.0],"facing":"west","depth_mm":0.0}}]
+  undo ["add the view West cut"]
+> view_add {"kind":"three_d"}
+  [{"op":"add_view","id":"0000000000000000000005","name":"3D 12","kind":{"type":"three_d"}}]
+  undo ["add the view 3D 12"]
+> view_add {"from":"<new-3>"}
+  [{"op":"add_view","id":"0000000000000000000006","name":"Section 1 (looking north) (copy)","kind":{"type":"section","origin":[9000.0,5000.0],"facing":"north","depth_mm":0.0}}]
+  undo ["add the view Section 1 (looking north) (copy)"]
+> view_add {"from":"3w8zGYnP$Ay1lyvMZjDnXq"}
+  [{"op":"add_view","id":"0000000000000000000007","name":"Plan Niveau 1 (copy)","kind":{"type":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","look":"down","range":{"top":{"level":"above","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1200.0},"bottom":{"level":"associated","offset_mm":0.0},"depth":{"level":"associated","offset_mm":0.0}}}}]
+  undo ["add the view Plan Niveau 1 (copy)"]
+> view_add {"kind":"section","facing":"up","origin":[0,0]}
+  error bad arguments: `facing`: expected one of north, south, east, west
+  undo ["add the view Plan Niveau 1 (copy)"]
+> view_add {"kind":"section","facing":"east"}
+  error bad arguments: missing field `origin`
+  undo ["add the view Plan Niveau 1 (copy)"]
+> view_add {"kind":"plan","storey":"00000000000000000000ZZ"}
+  error bad arguments: no level "00000000000000000000ZZ"
+  undo ["add the view Plan Niveau 1 (copy)"]
+> view_add {"kind":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","facing":"north"}
+  error bad arguments: a plan has no `facing` or `origin`
+  undo ["add the view Plan Niveau 1 (copy)"]
+> view_add {"kind":"section","facing":"north","origin":[2e7,0]}
+  error bad arguments: `origin`: at most 1e7 mm
+  undo ["add the view Plan Niveau 1 (copy)"]
+> view_add {"kind":"wall"}
+  error bad arguments: `kind`: expected one of plan, ceiling, section, three_d
+  undo ["add the view Plan Niveau 1 (copy)"]
+> view_add {"kind":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","name":" "}
+  error bad arguments: `name` is blank
+  undo ["add the view Plan Niveau 1 (copy)"]
+> view_add {"from":"00000000000000000000ZZ"}
+  error no view GlobalId(00000000000000000000ZZ)
+  undo ["add the view Plan Niveau 1 (copy)"]
+> view_add {"kind":"three_d","zoom":2}
+  error bad arguments: unknown field `zoom`, expected one of `kind`, `storey`, `facing`, `origin`, `from`, `name`
+  undo ["add the view Plan Niveau 1 (copy)"]
+> view_edit {"id":"<new-3>","name":"Section A-A","depth_mm":4000}
+  [{"op":"set_view","id":"0000000000000000000003","name":"Section A-A","kind":{"type":"section","origin":[9000.0,5000.0],"facing":"north","depth_mm":4000.0}}]
+  undo ["rename the view Section 1 (looking north) to Section A-A"]
+> undo
+  undo ["add the view Plan Niveau 1 (copy)"]
+> redo
+  undo ["rename the view Section 1 (looking north) to Section A-A"]
+> view_edit {"id":"<new-3>","name":"Section A-A","depth_mm":4000}
+  no command
+  undo ["rename the view Section 1 (looking north) to Section A-A"]
+> view_edit {"id":"<new-3>","facing":"south","origin":[9000,5500]}
+  [{"op":"set_view","id":"0000000000000000000003","name":"Section A-A","kind":{"type":"section","origin":[9000.0,5500.0],"facing":"south","depth_mm":4000.0}}]
+  undo ["change the view Section A-A"]
+> view_edit {"id":"<new-3>","depth_mm":-1}
+  error bad arguments: `depth_mm`: 0 (all) or more
+  undo ["change the view Section A-A"]
+> view_edit {"id":"<new-1>","origin":[0,0]}
+  error bad arguments: `origin`, `facing` and `depth_mm` belong to a section
+  undo ["change the view Section A-A"]
+> view_edit {"id":"<new-1>","levels":{"top":"unlimited","depth":"below"}}
+  [{"op":"set_view","id":"0000000000000000000001","name":"Plan Niveau 1 (copy)","kind":{"type":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","look":"down","range":{"top":{"level":"unlimited","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1200.0},"bottom":{"level":"associated","offset_mm":0.0},"depth":{"level":"below","offset_mm":0.0}}}}]
+  undo ["change the view Plan Niveau 1 (copy)"]
+> view_edit {"id":"<new-3>","levels":{"top":"above"}}
+  error bad arguments: `levels`: only a plan has a view range
+  undo ["change the view Plan Niveau 1 (copy)"]
+> view_edit {"id":"<new-1>","levels":{"top":"sky"}}
+  error bad arguments: `top`: expected one of associated, above, below, unlimited
+  undo ["change the view Plan Niveau 1 (copy)"]
+> view_edit {"id":"3w8zGYnP$Ay1lyvMZjDnXq","visibility":{"hidden_classes":["IfcSlab","IfcBeam","IfcSlab"]}}
+  [{"op":"add_view","id":"3w8zGYnP$Ay1lyvMZjDnXq","name":"Plan Niveau 1","kind":{"type":"plan","storey":"1uAZA0Yfn05f$xRd1k4uPR","look":"down","range":{"top":{"level":"above","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1200.0},"bottom":{"level":"associated","offset_mm":0.0},"depth":{"level":"associated","offset_mm":0.0}}},"visibility":{"hidden_classes":["IfcBeam","IfcSlab"]}}]
+  undo ["add the view Plan Niveau 1"]
+> undo
+  undo ["change the view Plan Niveau 1 (copy)"]
+> redo
+  undo ["add the view Plan Niveau 1"]
+> view_edit {"id":"3w8zGYnP$Ay1lyvMZjDnXq","visibility":{"hidden_classes":["IfcBeam","IfcSlab"]}}
+  no command
+  undo ["add the view Plan Niveau 1"]
+> view_edit {"id":"3w8zGYnP$Ay1lyvMZjDnXq","visibility":{"hidden_elements":["nope"]}}
+  error bad arguments: `hidden_elements`: expected GlobalIds
+  undo ["add the view Plan Niveau 1"]
+> view_edit {"id":"3w8zGYnP$Ay1lyvMZjDnXq","visibility":{"hidden_walls":[]}}
+  error bad arguments: unknown field `hidden_walls`, expected one of `hidden_families`, `hidden_classes`, `hidden_storeys`, `hidden_links`, `hidden_materials`, `hidden_elements`, `isolated_elements`
+  undo ["add the view Plan Niveau 1"]
+> view_edit {"id":"<new-3>","visibility":{"hidden_classes":[],"hidden_storeys":["Niveau 2"]}}
+  [{"op":"set_view","id":"0000000000000000000003","name":"Section A-A","kind":{"type":"section","origin":[9000.0,5500.0],"facing":"south","depth_mm":4000.0},"visibility":{"hidden_storeys":["Niveau 2"]}}]
+  undo ["change the view Section A-A"]
+> view_remove {"id":"<new-2>"}
+  [{"op":"remove_view","id":"0000000000000000000002"}]
+  undo ["delete the view Ceiling Niveau 1 (copy)"]
+> undo
+  undo ["change the view Section A-A"]
+> redo
+  undo ["delete the view Ceiling Niveau 1 (copy)"]
+> view_remove {"id":"3w8zGYnP$Ay1lyvMZjDnXq"}
+  [{"op":"remove_view","id":"3w8zGYnP$Ay1lyvMZjDnXq"}]
+  undo ["delete the view Plan Niveau 1"]
+> undo
+  undo ["delete the view Ceiling Niveau 1 (copy)"]
+> view_remove {"id":"<new-2>"}
+  error view_remove: the view 0000000000000000000002 is not a view of the model
+  undo ["delete the view Ceiling Niveau 1 (copy)"]
+> view_remove {"id":"1v7Vtm2FfafmYPKIQEXnlY"}
+  error view_remove: the view 1v7Vtm2FfafmYPKIQEXnlY is a default view, unchanged: nothing to remove
+  undo ["delete the view Ceiling Niveau 1 (copy)"]
+> query views
+  200 [{"annotations":0,"crop":null,"id":"0000000000000000000001","look":"down","name":"Plan Niveau 1 (copy)","range":{"bottom":{"level":"associated","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1200.0},"depth":{"level":"below","offset_mm":0.0},"top":{"level":"unlimited","offset_mm":0.0}},"references":0,"scale":100,"storey":"1uAZA0Yfn05f$xRd1k4uPR","true_north":false,"type":"plan"},{"annotations":0,"crop":null,"depth_mm":4000.0,"facing":"south","id":"0000000000000000000003","name":"Section A-A","origin":[9000.0,5500.0],"references":0,"scale":100,"true_north":false,"type":"section"},{"annotations":0,"crop":null,"depth_mm":0.0,"facing":"west","id":"0000000000000000000004","name":"West cut","origin":[6000.0,0.0],"references":0,"scale":100,"true_north":false,"type":"section"},{"annotations":0,"crop":null,"id":"0000000000000000000005","name":"3D 12","references":0,"scale":100,"true_north":false,"type":"three_d"},{"annotations":0,"crop":null,"depth_mm":0.0,"facing":"north","id":"0000000000000000000006","name":"Section 1 (looking north) (copy)","origin":[9000.0,5000.0],"references":0,"scale":100,"true_north":false,"type":"section"},{"annotations":0,"crop":null,"id":"0000000000000000000007","look":"down","name":"Plan Niveau 1 (copy)","range":{"bottom":{"level":"associated","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1200.0},"depth":{"level":"associated","offset_mm":0.0},"top":{"level":"above","offset_mm":0.0}},"references":0,"scale":100,"storey":"1uAZA0Yfn05f$xRd1k4uPR","true_north":false,"type":"plan"},{"annotations":0,"crop":null,"id":"3w8zGYnP$Ay1lyvMZjDnXq","look":"down","name":"Plan Niveau 1","range":{"bottom":{"level":"associated","offset_mm":0.0},"cut":{"level":"associated","offset_mm":1200.0},"depth":{"level":"associated","offset_mm":0.0},"top":{"level":"above","offset_mm":0.0}},"references":0,"scale":100,"storey":"1uAZA0Yfn05f$xRd1k4uPR","true_north":false,"type":"plan"}]

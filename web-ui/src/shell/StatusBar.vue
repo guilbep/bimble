@@ -7,6 +7,7 @@ import { dialog } from "../dialogs";
 import { panel, currentPanel } from "../panels";
 
 const langs: Lang[] = ["fr", "en"];
+const preview = import.meta.env.VITE_CCORE === "1" ? `Preview, C core ${import.meta.env.VITE_CCORE_REV ?? "dev"} · openings drawn uncut (no boolean kernel in wasm)` : ""; // ticket PG1
 // Linked models and reference plans shown now; re-read when the model or the views change.
 const shownLinks = computed(() => { void state.value.rev; void openViews.value; return links().filter((k) => k.visible); });
 // Each chip: a view mode read from `query("visibility")`; `undo` is the action its × runs, enabled as `query("actions")` says.
@@ -36,7 +37,13 @@ const hintText = (): string => {
   if (p) return t(p);
   // D2: on paper the reference shows the Dimension tool's hint; Rust has no "sheet tool active" state, so on paper at all.
   if (openViews.value.paper?.on) return t("onpaper.hint");
-  return t(state.value.selection.length && !page() ? "shell.selectionHint" : "status.hint");
+  if (state.value.selection.length && !page()) return t("shell.selectionHint");
+  return t(planShown() ? "status.hintPlan" : "status.hint");
+};
+// The main view shows a plan (or a ceiling plan): a drag pans, there is no orbit (glviewport.ts, plan views).
+const planShown = (): boolean => {
+  const cur = openViews.value.current;
+  return cur?.type === "view" && openViews.value.views.some((v) => v.id === cur.id && v.type === "plan");
 };
 const chips = (): Chip[] => {
   const v = visibility.value;
@@ -72,6 +79,7 @@ const chips = (): Chip[] => {
         @click="runAction(c.undo)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span>
     <!-- Reference (B1): `.chip.c-s.nx` "Lié : Architecture", slate = linked models (ADR 0049); one per shown link. -->
     <span v-for="k in shownLinks" :key="k.id" data-bb="status-chip" class="chip c-s nx">{{ t("status.linked", { name: k.name.replace(/\.[^.]+$/, "") }) }}</span>
+    <span v-if="preview" class="mono q" style="font-size:12px" data-bb="status-preview">{{ preview }}</span>
     <span class="mono q" style="font-size:12px" data-bb="status-counts">{{ counts() }}</span>
     <span class="seg" role="group" :aria-label="t('status.langGroup')" style="margin-left:4px" data-bb="status-lang">
       <button v-for="l in langs" :key="l" type="button" class="lg" :class="{ on: lang === l }"
