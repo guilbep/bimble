@@ -1292,3 +1292,36 @@ Rust's default, so no golden changes. Test: `test/dead1_test.c`.
 - **Settings**: `moving_fps` applies (`query settings` `applies.moving_fps` true, no `needs` row);
   `gpu_cull` (Rust's compute-shader test of copies) and `moving_proxies` (HLOD proxies, not ported)
   still do not.
+
+## 37. Link IFC and link a folder: limits per format, caches beside the IFC, conversions in turn (ticket LINKF, ADR 0079)
+
+- **Each format its own limit.** Rust v0.19.0 opened any file up to `file.rs` `MAX_FILE_BYTES`
+  (8 GiB native, 1 GiB wasm) and an IFC through `read.rs` (64 GiB). The C session checked every
+  file against `CC_MAX_FILE_BYTES` (256 MiB, the `.bimble`'s JSON DOM cap) and refused large IFC
+  that Rust reads. Now an IFC is checked against `CC_IFC_MAX_FILE_BYTES` (the STEP reader's), a
+  `.bimbleview` against `CC_VIEWFILE_MAX_FILE_BYTES` (8 GiB native), a `.bimble` / `.json` keeps
+  256 MiB, on open and on link (`session/session.c` `cc_session_read_limit`). A C addition beside
+  it: a file whose reader would need more memory than the carrier says is free is refused before
+  a byte is read, "too large for this machine" with the numbers (`cc_session_fits`; Rust had no
+  such check). The native `read_file` reads a regular file into one buffer of its size (no
+  doubling). Test: `test/link_large_test.mjs` (a 270 MiB synthetic IFC opened and linked; refused
+  with 100 MB free); on the code before, both answered "larger than 268435456 bytes".
+- **The cache beside a linked IFC** (Rust re-read the IFC on every link): `<file>.ifc.bimbleview`
+  and `<file>.ifc.log.txt` (`session/link_cache.h`), in the user's cache folder when the IFC's
+  folder cannot be written. The view file is the writer's bytes (raw, not gzipped) plus a section
+  `SRCE` after the last ELEM chunk; `cc_viewfile_read` keeps it in `source` and skips nothing else
+  new (Rust's reader skips an unknown section: a cache stays a valid `.bimbleview` for it). The
+  shared-for-viewing files and every golden keep their bytes (no SRCE). Files under 1 MiB are read
+  as before, without a cache. Test: `viewfile_test.c` `link_cache_source` (hostile SRCE sections,
+  the matching rule), `test/link_folder_test.mjs`.
+- **Conversions in turn on the carrier's thread**: a link of an IFC of 1 MiB or more answers at
+  once with a queued row (`query links_panel` "state": queued, converting with "progress",
+  ready, failed, refused, unloaded); Rust read a link on its loader thread too
+  (`load_scene_progress`) but one link at a time from the user, with no queue. `link_model` of a
+  smaller file, and every link in the wasm module and the C suites, still read in the call.
+- **`link_folder {path, recursive?}`** (a C action, the last row of `query actions`) and its one
+  undo step (link_folder's own steps beside the history; DEVIATIONS 29's links are otherwise not
+  undo steps, as Rust). `manage_links` gains `cancel`, `unload`, `load`, `reload_all`, `pin`,
+  `unpin`, `place` {origin, move_mm, rotation_deg} (refused while pinned) and `colour`; their
+  values are served by `query links_panel` but not yet applied to the drawing nor saved in the
+  `.bimble` (ADR 0079 decision 10).
