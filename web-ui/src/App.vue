@@ -76,7 +76,7 @@ onMounted(() => { installKeys(); void applyDeepLink(); });
     <Ribbon v-if="!small" v-show="!full" />
     <div class="bb-work">
       <LeftPanel v-if="!small" v-show="!full" />
-      <div class="bb-main">
+      <main class="bb-main"><!-- PERF2: the page's main landmark (Lighthouse landmark-one-main) -->
         <ViewTabs v-if="!small" v-show="!full" />
         <!-- Reference (D5): the right panel sits beside the viewport, under the view tabs. -->
         <div class="bb-row">
@@ -100,7 +100,7 @@ onMounted(() => { installKeys(); void applyDeepLink(); });
           <SmallSheet v-if="small" />
         </div>
         <ModifierPanel v-if="!small" />
-      </div>
+      </main>
     </div>
     <div v-if="currentDialog && dialogs[currentDialog]" ref="backdrop" class="bb-backdrop" tabindex="-1" @click.self="currentDialog = null" @keydown="trapKey">
       <div v-if="dialogNa" class="bb-dialog" role="dialog" :aria-label="dialogNa.what"><NotAvailable v-bind="dialogNa" compact /></div><!-- FAKE1 -->
