@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const G = join(CCORE, "golden");
@@ -35,7 +36,7 @@ const hosts = [];
 
 async function startHost(port, model) {
   const h = spawn(BIN, [String(port), ...(model ? [model] : [])], {
-    env: { ...process.env, BIMBLE_TOKEN: TOKEN, CCORE_SEED: "1" }, stdio: ["ignore", "ignore", "pipe"],
+    env: hostEnv({ BIMBLE_TOKEN: TOKEN, CCORE_SEED: "1" }), stdio: ["ignore", "ignore", "pipe"],
   });
   h.log = "";
   h.stderr.on("data", (d) => (h.log += d));

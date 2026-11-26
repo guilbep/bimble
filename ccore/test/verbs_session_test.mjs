@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const GOLDEN = join(CCORE, "golden");
@@ -102,7 +103,7 @@ function parseTranscript(text) {
 let host;
 try {
   copyFileSync(join(GOLDEN, "frame.json"), MODEL);
-  host = spawn(BIN, [String(PORT), MODEL], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, BIMBLE_TOKEN: TOKEN } });
+  host = spawn(BIN, [String(PORT), MODEL], { stdio: ["ignore", "pipe", "pipe"], env: hostEnv({ BIMBLE_TOKEN: TOKEN }) });
   host.out = "";
   host.stdout.on("data", (d) => (host.out += d));
   host.stderr.on("data", (d) => (host.out += d));

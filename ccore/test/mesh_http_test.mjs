@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
@@ -25,7 +26,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const hosts = [];
 
 async function startHost(port, env) {
-  const h = spawn(BIN, [String(port)], { env: { ...process.env, BIMBLE_TOKEN: TOKEN, ...env }, stdio: ["ignore", "ignore", "pipe"] });
+  const h = spawn(BIN, [String(port)], { env: hostEnv({ BIMBLE_TOKEN: TOKEN, ...env }), stdio: ["ignore", "ignore", "pipe"] });
   h.log = "";
   h.stderr.on("data", (d) => (h.log += d));
   hosts.push(h);

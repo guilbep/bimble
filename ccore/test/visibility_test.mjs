@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
@@ -114,7 +115,7 @@ async function meshBoxes(at = 0, buf = null) {
 const tmp = mkdtempSync(join(tmpdir(), "ccore-vis-"));
 const model = join(tmp, "frame.bimble");
 copyFileSync(join(CCORE, "golden/frame.json"), model);
-const host = spawn(BIN, [String(PORT), model], { env: { ...process.env, BIMBLE_TOKEN: TOKEN }, stdio: ["ignore", "ignore", "pipe"], detached: true });
+const host = spawn(BIN, [String(PORT), model], { env: hostEnv({ BIMBLE_TOKEN: TOKEN }), stdio: ["ignore", "ignore", "pipe"], detached: true });
 let log = "";
 host.stderr.on("data", (d) => (log += d));
 try {

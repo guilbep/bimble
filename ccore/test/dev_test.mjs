@@ -14,6 +14,7 @@ import http from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port, vitePort } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 /** Write a source file atomically (temp + rename): a background compile reading the old file must
  *  never see it truncated (clang mmaps sources; an in-place rewrite gave it SIGBUS). */
@@ -83,7 +84,7 @@ function descendants(root) {
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 const dev = spawn(join(CCORE, "dev.sh"), [], {
-  env: { ...process.env, CCORE_DEV_PORT: String(PORT), CCORE_DEV_VITE: String(VITE) },
+  env: hostEnv({ CCORE_DEV_PORT: String(PORT), CCORE_DEV_VITE: String(VITE) }),
   stdio: ["ignore", "pipe", "pipe"], detached: true,
 });
 let out = "";

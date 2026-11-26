@@ -44,6 +44,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const G = join(CCORE, "golden");
@@ -489,7 +490,7 @@ suite("openings");
   const file = join(tmpd, "openings.json");
   writeFileSync(file, text);
   const P = port("wasm_run_slab1"), TOKEN = "slab1-token";
-  const host = spawn(HOST_BIN_SLAB1, [String(P), file], { env: { ...process.env, BIMBLE_TOKEN: TOKEN }, stdio: ["ignore", "ignore", "pipe"] });
+  const host = spawn(HOST_BIN_SLAB1, [String(P), file], { env: hostEnv({ BIMBLE_TOKEN: TOKEN }), stdio: ["ignore", "ignore", "pipe"] });
   let err = "";
   host.stderr.on("data", (d) => (err += d));
   try {
@@ -530,7 +531,7 @@ suite("host");
   const model = join(tmpd, "frame.json");
   copyFileSync(join(G, "frame.json"), model);
   const host = spawn(HOST_BIN, [String(HOST_PORT), model], {
-    env: { ...process.env, BIMBLE_TOKEN: HOST_TOKEN, CCORE_SEED: "1" }, stdio: ["ignore", "ignore", "pipe"],
+    env: hostEnv({ BIMBLE_TOKEN: HOST_TOKEN, CCORE_SEED: "1" }), stdio: ["ignore", "ignore", "pipe"],
   });
   let hostErr = "";
   host.stderr.on("data", (d) => (hostErr += d));

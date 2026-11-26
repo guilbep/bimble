@@ -14,6 +14,7 @@ import { gunzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RUN_TAG, port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
@@ -60,7 +61,7 @@ function req(method, path, { body = "", headers = {}, ag = agent, port = PORT } 
 const call = (op, name, body = "") => req("POST", `/${op}/${name}?t=${TOKEN}`, { body, headers: { "Content-Type": "text/plain" } });
 
 const t0 = performance.now();
-const host = spawn(BIN, [String(PORT)], { env: { ...process.env, BIMBLE_TOKEN: TOKEN }, stdio: ["ignore", "ignore", "pipe"] });
+const host = spawn(BIN, [String(PORT)], { env: hostEnv({ BIMBLE_TOKEN: TOKEN }), stdio: ["ignore", "ignore", "pipe"] });
 let log = "";
 host.stderr.on("data", (d) => (log += d));
 const exited = new Promise((r) => host.on("exit", (code, sig) => r({ code, sig })));
@@ -209,7 +210,7 @@ const hosts = [];
 const magent = new http.Agent({ keepAlive: true, maxSockets: 4 });
 function startHost(port, model) {
   const t = performance.now();
-  const h = spawn(BIN, [String(port), model], { env: { ...process.env, BIMBLE_TOKEN: TOKEN }, stdio: ["ignore", "ignore", "pipe"] });
+  const h = spawn(BIN, [String(port), model], { env: hostEnv({ BIMBLE_TOKEN: TOKEN }), stdio: ["ignore", "ignore", "pipe"] });
   h.log = "";
   h.stderr.on("data", (d) => (h.log += d));
   h.exited = new Promise((r) => h.on("exit", (code, sig) => r({ code, sig })));

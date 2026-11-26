@@ -11,6 +11,7 @@ import { readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "./ports.mjs";
+import { hostEnv } from "./lib/host_env.mjs"; // FIXSES: never the caller's BIMBLE_CONFIG_DIR
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(CCORE, "out");
@@ -46,7 +47,7 @@ try {
   check("rotated walls (x axis 0.6, 0.8)", els.some((e) => e.class === "IfcWall" && e.placement.x_axis[0] === 0.6 && e.placement.x_axis[1] === 0.8));
   check("extruded polygons with two voids", els.some((e) => e.generator.kind === "extruded_polygon" && e.generator.voids.length === 2));
 
-  host = spawn(BIN, [String(PORT), A], { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, BIMBLE_TOKEN: TOKEN } });
+  host = spawn(BIN, [String(PORT), A], { stdio: ["ignore", "ignore", "pipe"], env: hostEnv({ BIMBLE_TOKEN: TOKEN }) });
   host.log = "";
   host.stderr.on("data", (d) => (host.log += d));
   for (let i = 0; i < 1000 && !host.log.includes("listening") && host.exitCode === null; i++) await sleep(5);
@@ -74,7 +75,7 @@ try {
   let benchOk = true, out = "";
   try {
     out = execFileSync("node", [join(CCORE, "bench/large.mjs")], {
-      env: { ...process.env, SIZES: String(N), BINS: "tcc", RUNS: "1", LAB: "0", RAW: raw }, timeout: 120000,
+      env: hostEnv({ SIZES: String(N), BINS: "tcc", RUNS: "1", LAB: "0", RAW: raw }), timeout: 120000,
     }).toString();
   } catch (e) {
     benchOk = false;
