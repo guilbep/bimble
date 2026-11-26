@@ -200,6 +200,10 @@ async function scenario(cdp, mode, geoText) {
   await settle();
   const topOf = (e) => [cx(e.box), (e.box.min[1] + e.box.max[1]) / 2, e.box.max[2] - 1];
   const px = async (e) => pixelAt(await screen(topOf(e)));
+  // D clipped, E and C drawn, read in one sample (a layout change moving the canvas fails all three),
+  // again until true or 5 s: the modifier panel a selection opens resizes the canvas a moment later.
+  const cut3 = async () => { const p = [await px(C), await px(E), await px(D)]; return { ok: ink(p[0]) && ink(p[1]) && bg(p[2]), p }; };
+  const cutNow = async () => (await waitFor("D clipped, E and C drawn", 5000, async () => (await cut3()).ok && (await cut3())).catch(() => null)) ?? (await cut3());
 
   // ---- Box to selection from the View tab ----
   await clickAt(await screen(topOf(C)));
@@ -222,7 +226,7 @@ async function scenario(cdp, mode, geoText) {
   const wantMin = [0, 1, 2].map((k) => C.box.min[k] - o[k] - MARGIN), wantMax = [0, 1, 2].map((k) => C.box.max[k] - o[k] + MARGIN);
   check(`${tag} ribbon Box to selection: the box = C's bounds ± 1000 mm, on`, v.on && v.box.yaw === 0 &&
     [0, 1, 2].every((k) => Math.abs(v.box.min[k] - wantMin[k]) < 1 && Math.abs(v.box.max[k] - wantMax[k]) < 1), JSON.stringify(v.box));
-  const [pC, pE, pD] = [await px(C), await px(E), await px(D)];
+  const c3 = await cutNow(), [pC, pE, pD] = c3.p;
   check(`${tag} D, 2 m away, is clipped (background at its pixel)`, bg(pD), JSON.stringify(pD));
   check(`${tag} E, 0.5 m away, and C are drawn`, ink(pE) && ink(pC), `${JSON.stringify(pE)} ${JSON.stringify(pC)}`);
 
@@ -287,7 +291,8 @@ async function scenario(cdp, mode, geoText) {
   await waitFor("the box on, around C", 5000, async () => { const b = (await vis()).section_box; return b.on && Math.abs(b.box.min[0] - wantMin[0]) < 1; });
   await settle();
   check(`${tag} the menu's Box to selection: the box around C again, on; the menu closed`, !(await evalJs("!!document.querySelector('[data-bb=viewport-menu]')")));
-  check(`${tag} after the menu: D clipped, E and C drawn`, bg(await px(D)) && ink(await px(E)) && ink(await px(C)));
+  const c3m = await cutNow();
+  check(`${tag} after the menu: D clipped, E and C drawn`, c3m.ok, JSON.stringify(c3m.p));
 
   // ---- true north (the map turns 30°) ----
   await waitFor("the orientation control", 5000, () => evalJs("!!document.querySelector('[data-bb=box-north-box_north_true]:not([disabled])')"));
@@ -308,7 +313,8 @@ async function scenario(cdp, mode, geoText) {
   const pIn = toWorld([bx.max[0] - 250, bx.max[1] - 250]), pOut = toWorld([bx.max[0] + 250, (bx.min[1] + bx.max[1]) / 2 + 300]);
   // The same two points against the unturned box around C (what the old axis-aligned shader cut).
   const un = (w) => [0, 1].every((k) => w[k] - o[k] >= wantMin[k] && w[k] - o[k] <= wantMax[k]);
-  const [qIn, qOut] = [await pixelAt(await screen(pIn)), await pixelAt(await screen(pOut))];
+  const two = async () => [await pixelAt(await screen(pIn)), await pixelAt(await screen(pOut))];
+  const [qIn, qOut] = (await waitFor("the turned cut", 5000, async () => { const q = await two(); return ink(q[0]) && bg(q[1]) && q; }).catch(() => null)) ?? (await two());
   check(`${tag} a slab point just inside the turned box's corner is drawn (outside the unturned box: ${!un(pIn)})`, ink(qIn) && !un(pIn), JSON.stringify(qIn));
   check(`${tag} a slab point just outside the turned box's +x side is not (inside the unturned box: ${un(pOut)})`, bg(qOut) && un(pOut), JSON.stringify(qOut));
   g = await gl();
