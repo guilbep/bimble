@@ -162,6 +162,49 @@ static void head_is(cc_repo *r, const char *what, const char *want) {
     buf_free(&e);
 }
 
+/* H2A_KEEP set: the folders are kept, and C's answers printed in the form of the Rust reader
+ * (oracle/h2a crates/bimble-core/examples/h2a_read.rs) to compare with it. */
+static void dump(const char *dir) {
+    if (!getenv("H2A_KEEP")) return;
+    cc_repo r;
+    Buf e, o;
+    buf_init(&e), buf_init(&o);
+    if (cc_repo_open_dir(&r, native, dir, &e)) return;
+    printf("H2A-DUMP %s\n", dir);
+    cc_repo_head_t h;
+    if (!cc_repo_head(&r, &h, &e)) printf(h.detached ? "HEAD %s\n" : "HEAD ref: %s\n", h.detached ? h.commit.h : h.branch);
+    Arena a;
+    arena_init(&a, 0);
+    cc_branch *br;
+    size_t nb = 0;
+    cc_repo_branches(&r, &a, &br, &nb, &e);
+    for (size_t i = 0; i < nb; i++) printf("%s %s\n", br[i].name, br[i].commit.h);
+    for (size_t i = 0; i <= nb; i++) {
+        const char *rev = i < nb ? br[i].name : h.detached ? h.commit.h : NULL;
+        if (!rev) break;
+        printf("log %s\n", rev);
+        Arena la;
+        arena_init(&la, 0);
+        cc_log_entry *v;
+        size_t n = 0;
+        cc_repo_log(&r, rev, 100, &la, &v, &n, &e);
+        for (size_t k = 0; k < n; k++) {
+            log_block(&r, v[k].hash.h, &o);
+            char *nl = strchr(o.p, '\n');
+            printf("%.*s\n", nl ? (int)(nl - o.p) : (int)o.len, o.p);
+            cc_model m;
+            if (!cc_repo_model_at(&r, v[k].hash.h, &m, &e)) printf("  model_at ok: %zu elements\n", m.nelements);
+            else
+                printf("  model_at error %s\n", buf_cstr(&e));
+            cc_model_free(&m);
+        }
+        arena_free(&la);
+    }
+    arena_free(&a);
+    cc_repo_close(&r);
+    buf_free(&e), buf_free(&o);
+}
+
 /* ---------------------------------------------------------------- 1. interoperability */
 
 static const char *const AUTHOR[5] = {"alice@example.org", "bob@example.org", "alice@example.org", "bob@example.org",
@@ -274,6 +317,7 @@ static void interop(void) {
 
     for (int i = 0; i < 5; i++) cc_model_free(&m[i]);
     cc_repo_close(&r), cc_repo_close(&g);
+    dump(dir);
     buf_free(&e), buf_free(&a), buf_free(&b);
 }
 
@@ -396,6 +440,7 @@ static void rules(void) {
     check_true("HEAD unchanged after a refused switch", !cc_repo_head(&r, &hd, &e) && hd.detached && !strcmp(hd.commit.h, c4.h));
     cc_model_free(&m), cc_model_free(&m2), cc_model_free(&m3), cc_model_free(&m4);
     cc_repo_close(&r);
+    dump(dir);
     buf_free(&e), buf_free(&a), buf_free(&b);
 }
 
@@ -549,6 +594,8 @@ int main(void) {
     rules();
     crash();
     own_sections();
-    rm_rf(tmp);
+    if (getenv("H2A_KEEP")) printf("H2A-KEEP %s\n", tmp);
+    else
+        rm_rf(tmp);
     return report("repo_write");
 }

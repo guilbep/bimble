@@ -858,3 +858,49 @@ the size); it is enabled only while the box is on (ribbon.rs:593). The viewport 
 `web-ui/src/shell/ContextMenu.vue`, `contextItems.ts`, `BoxNorth.vue`, `Ribbon.vue`, `RibbonTool.vue`
 (tooltip), `web-ui/src/glviewport.ts`, `bimble.ts` (ISS71 blocks); tests
 `ccore/test/visibility_test.mjs`, `lab_section_box.mjs`, `host_test.mjs`, `palette_test.mjs`.
+
+## 26. Writing the history: commit, branch, switch (ticket H2a, ADR 0017)
+
+**What.** The C history store writes as Rust's `bimble_core::repo` (`ccore/src/repo_write.c`): for
+the same model, author, time and message, every object, tree and commit has Rust's name (BLAKE3 of
+the plain JSON, byte for byte `serde_json::to_vec`); `golden/history/`'s 4+1 commits replayed in C
+give every commit and tree hash of Rust's folder (suite `repo_write`). It differs from Rust here:
+- **Relations and grids.** The C model holds two sections Rust's has not (`relations`, ticket X1;
+  `grids`, ticket G1). A tree of a model with them carries them as two more maps of objects,
+  `relations` and `grids`, after `meshes`; left out when empty, so the tree of every model Rust can
+  hold is Rust's, byte for byte. The C reader (`repo.c`) reads them back. Rust refuses such a tree
+  (`deny_unknown_fields`: `unknown field "relations"`).
+- **The gzip bytes** of an object are the C core's deflate, not flate2's (`Compression::fast`):
+  the object's name is the hash of the plain bytes, so names are equal; any gzip reader inflates
+  both (H1 already reads either).
+- **Errors of the file system** read `io: cannot write <path>` and `io: cannot create the folder
+  <path>`, where Rust prints the OS error; a platform without folders (the wasm module) cannot
+  write a history: `io: no history folder here` (the session says `no history folder in the
+  browser` first).
+- **The author.** Rust's `Settings::author()` (settings.rs:158) is `name <e-mail>`, the name alone,
+  the e-mail alone, or else `$BIMBLE_AUTHOR`, `$USER`, `$USERNAME`, `unknown`. The C session (L5)
+  has no environment: without a name (`state.user` is null) `action commit` is refused with
+  `commit: set your name in Settings first (the author of each version)` and the History page links
+  to Settings. With a name, the author is Rust's.
+- **The session's actions** `commit {message}`, `branch_create {name}`, `branch_switch {name,
+  discard?}` (`ccore/session/versions.h`) have no Rust twin: the egui History panel calls
+  `Repo` directly (lib.rs:1903-2097). They do what the panel does: save first, start the history
+  on the first commit, create then switch to a new branch, refuse a switch while changes are not
+  committed (Rust disables the button; `discard: true` is the C core's way through, there is no
+  such button in Rust), write the switched model to the file and open it again.
+- **Crash safety** is Rust's order (objects first, refs last, each file through a temporary file
+  and a rename); the native `write_file` does not fsync, as Rust's `write_atomic` does not.
+
+**Why.** CLAUDE.md: the C model's extra sections must not be lost by a commit, and leaving them out
+when empty keeps every Rust-written history and hash unchanged (round-4 rule 4). L5 has no
+environment by design (core-architecture.md §5). The actions are what the lab's History page needs
+(ADR 0038).
+
+**What Rust sees.** A folder written by C for a model without relations and grids: Rust's own
+bytes after inflating, the same log, branches and models. With relations or grids: Rust refuses
+the trees that hold them (the commits before still read).
+
+**Where.** `ccore/src/repo_write.c/.h`, `ccore/src/file.c` (`cc_model_object_json`),
+`ccore/src/repo.c` (reads `relations`, `grids`), `ccore/session/versions.c`,
+`web-ui/src/pages/History.vue`; tests `ccore/test/repo_write_test.c`,
+`ccore/test/versions_test.mjs`, `ccore/test/lab_history.mjs`.
