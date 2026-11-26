@@ -7,12 +7,13 @@
 // panel opened asks for its own data when it opens (a miss), and is in the next batch.
 // No DOM and no Vue here: ccore/test/refresh_test.mjs runs it in node against the host.
 
-/** The queries `query batch` answers (calls.c BATCH_NAMES, kept in step): reads of the model and the session. */
+/** The queries `query batch` answers (calls.c BATCH_NAMES, kept in step): reads of the model and the session.
+ *  QTY1: schedule_columns, schedule_rows (the Quantities page reads its window again after an edit). */
 export const BATCHABLE = new Set([
   "actions", "annotation_types", "collab", "coordinates", "element", "elements", "foundation_rows",
   "grid_axes", "grids", "history", "level_refusals", "links", "materials", "measure", "measurements",
   "north", "open_views", "opening_rows", "openings", "placing", "project", "reference_planes",
-  "schedule_list", "schedules", "setting_out", "sheets", "state", "status", "storeys", "view_annotations",
+  "schedule_columns", "schedule_list", "schedule_rows", "schedules", "setting_out", "sheets", "state", "status", "storeys", "view_annotations",
   "view_clip", "view_references", "view_visibility", "views", "visibility", "visibility_sets",
 ]);
 /** At most this many queries in one batch (calls.c CC_BATCH_MAX). */
