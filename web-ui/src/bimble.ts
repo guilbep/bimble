@@ -1,6 +1,7 @@
 // The one typed client of the wasm viewer (ADR 0048). Components never touch the wasm directly.
 import { shallowRef } from "vue";
 import { applyLook } from "./shell/theme"; // SET1
+import { warm2d } from "./warm"; // FIRST1
 import { QueryCache, cachedClient } from "./querycache"; // SMALL1
 
 export interface State {
@@ -305,6 +306,11 @@ function wasmOrThrow(): Wasm {
 // - Calls are synchronous (sync XMLHttpRequest): every Wasm function but default() is sync.
 // - Changes: long-poll `GET /change?since=<seq>&t=<token>` -> `{"seq":n,"change":<on_change JSON>}`,
 //   then poll again with since=n. On a network error, wait 1 s and retry.
+// - FIRST1: after each call that is not a query, one synchronous `GET /change?since=<more than any
+//   seq>` (the host answers it at once, server.c) and the change, when it is new, goes to on_change
+//   in the same task, as the wasm module does after every call (ccore.ts): the click that opens a
+//   view shows it in the next frame, not after the long-poll's answer a frame or more later. A seq
+//   is given to on_change once (`changes.seen`), by whichever of the two reads it first.
 
 function nativeParams(p: URLSearchParams): { port: number; token: string } {
   const port = Number(p.get("port"));
@@ -316,6 +322,24 @@ function nativeParams(p: URLSearchParams): { port: number; token: string } {
 function nativeClient(port: number, token: string): Wasm & { standards_action(name: string): void } {
   const base = `http://127.0.0.1:${port}`;
   const t = encodeURIComponent(token);
+  // ---- FIRST1: the change a call made, read at once (see above) ----
+  const changes: NativeChanges = { seen: 0, epoch: undefined, cb: null };
+  let nonce = 0;
+  const changeNow = (): void => {
+    if (!changes.cb) return;
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", `${base}/change?since=${Number.MAX_SAFE_INTEGER}&n=${++nonce}&t=${t}`, false);
+    try { xhr.send(); } catch { return; } // the long-poll reports a lost host
+    if (xhr.status !== 200) return;
+    let m: { epoch?: string; seq?: number; change?: unknown };
+    try { m = JSON.parse(xhr.responseText) as typeof m; } catch { return; }
+    // A restarted host (another epoch) is the long-poll's to handle.
+    if (typeof m.seq !== "number" || m.seq <= changes.seen || m.change === undefined || m.change === null) return;
+    if (typeof m.epoch === "string" && changes.epoch !== undefined && m.epoch !== changes.epoch) return;
+    changes.seen = m.seq;
+    changes.cb(JSON.stringify(m.change));
+  };
+  // ---- end FIRST1 ----
   const call = (op: string, name: string | null, body?: string): string => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${base}/${op}/${name === null ? "-" : encodeURIComponent(name)}?t=${t}`, false);
@@ -326,7 +350,9 @@ function nativeClient(port: number, token: string): Wasm & { standards_action(na
       throw `native ${op}: ${message(e)}`;
     }
     if (xhr.status !== 200) throw xhr.responseText || `native ${op}: HTTP ${xhr.status}`;
-    return xhr.responseText;
+    const text = xhr.responseText;
+    if (op !== "query") changeNow(); // FIRST1
+    return text;
   };
   return {
     default: async () => undefined,
@@ -349,8 +375,16 @@ function nativeClient(port: number, token: string): Wasm & { standards_action(na
       if (!r.ok) throw (await r.text()) || `native ${op}: HTTP ${r.status}`;
       return new Uint8Array(await r.arrayBuffer());
     },
-    on_change: (cb) => void pollChanges(base, t, cb),
+    on_change: (cb) => { changes.cb = cb; void pollChanges(base, t, changes); }, // FIRST1: shares `changes` with changeNow
   };
+}
+
+/** FIRST1: the native client's change state, shared by the long-poll and `changeNow`. */
+interface NativeChanges {
+  /** The last seq given to `cb` (of the host process `epoch`). */
+  seen: number;
+  epoch: string | undefined;
+  cb: ((json: string) => void) | null;
 }
 
 // ---- FIXUI: the native host's connection, for the shell (shell/send.ts: `lost`, `reconnected`) ----
@@ -366,9 +400,15 @@ export function retryConnection(): void { wakePoll?.(); }
 /** Long-poll loop for the native client; never rejects. On an error it retries after 20 ms,
  *  doubling up to 1 s: a dev rebuild restarts the engine in tens of ms (ccore/results/bench.md:
  *  the fixed 1 s wait was most of the C core's edit -> visible time). */
-async function pollChanges(base: string, t: string, cb: (json: string) => void): Promise<void> {
+async function pollChanges(base: string, t: string, changes: NativeChanges): Promise<void> {
   let since = 0;
   let epoch: string | undefined;
+  // FIRST1: each seq once to on_change (changeNow may have given it already); a new epoch starts again.
+  const cb = (json: string, seq: unknown): void => {
+    if (changes.epoch !== epoch) { changes.epoch = epoch; changes.seen = 0; }
+    if (typeof seq === "number") { if (seq <= changes.seen && seq !== 0) return; changes.seen = seq; }
+    changes.cb?.(json);
+  };
   let wait = 20;
   let failingSince: number | null = null, lost = false; // FIXUI
   for (;;) {
@@ -386,7 +426,7 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
         if (typeof m.epoch === "string") epoch = m.epoch;
         if (typeof m.seq === "number") since = m.seq;
         connectionHooks.back?.(sameProcess, m.change ?? null);
-        if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change));
+        if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change), m.seq);
         continue;
       }
       // A new epoch is a restarted twin: its seq began again, so ask for its current change.
@@ -399,7 +439,7 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
         }
       }
       if (typeof m.seq === "number") since = m.seq;
-      if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change));
+      if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change), m.seq);
     } catch (e) {
       const now = performance.now();
       failingSince ??= now;
@@ -648,6 +688,7 @@ export async function start(): Promise<void> {
     });
     watchPointer();
     labelTextAgent();
+    if (viewportDirty) void warm2d(); // FIRST1: the overlay's 2D programs compiled before ready, not at the first plan
     // ponytail: one 1 s timer for the whole session; it queries only while the viewer draws.
     setInterval(() => { if (status.value && !status.value.idle) status.value = tryQuery<Status | null>("status", null); }, 1000);
     resolveReady();
@@ -1017,9 +1058,8 @@ function refresh(modelChanged: boolean): void {
   if (!timed && modelChanged && state.value.file !== null) {
     timed = true;
     console.debug(`bimble: refresh after change ${(performance.now() - t0).toFixed(2)} ms`);
-    const p0 = performance.now();
-    for (let i = 0; i < 100; i++) tryQuery("pointer", null);
-    console.debug(`bimble: 100 pointer polls ${(performance.now() - p0).toFixed(2)} ms`);
+    // FIRST1: no more "100 pointer polls" here (T29's probe): on the native host they were 100
+    // synchronous requests in the start's first refresh, 100 to 200 ms of the page blocked.
   }
 }
 

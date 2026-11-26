@@ -4,7 +4,8 @@
 // edit=move-first-beam: one real `move` verb (first IfcBeam, 1 mm in x): unsaved, one undo step.
 // view=plan:N opens the plan as the first tab, the 3D view after it (close and re-open 3D).
 // Each wasm step waits for the next state change (or 1 s) before the next one; never called inside on_change.
-// data-bb-ready is set when all steps are done: the design check waits for it.
+// data-bb-ready is set when all steps are done and the page is on screen (FIRST1, `onScreen`): the
+// design check and the lab checks wait for it.
 import { watch } from "vue";
 import { modelReady, state, storeys, openView, select, runAction, runVerb, tabCall, openViews, query, type ViewSummary } from "./bimble";
 import { activeTab, isTabId } from "./shell/tabs";
@@ -43,6 +44,43 @@ function selection(v: string): string[] {
   return query<{ id: string }[]>("elements", { class: cls, limit: 1 }).map((e) => e.id);
 }
 
+// ---- FIRST1: ready means on screen and answering (ADR 0074) ----
+/** The next animation frame's time, or null when none came within `ms` (a hidden page has none). */
+const frame = (ms: number): Promise<number | null> => new Promise((resolve) => {
+  const timer = setTimeout(() => resolve(null), ms);
+  requestAnimationFrame((t) => { clearTimeout(timer); resolve(t); });
+});
+/** Resolves once the viewport drew the model (when there is one) and the page's frames are shown at
+ *  the display's pace again: CALM frames in a row, each under GAP_MS after the one before, each with
+ *  a change of its own to show (a few-pixel probe that changes colour), so the GPU has to show it,
+ *  not only the page to draw it. Headless Chromium's GPU process (SwiftShader) takes 200 to 900 ms
+ *  per frame for the first frames of a session (it compiles the pipelines each new kind of drawing
+ *  needs); until they are on screen every new frame waits behind them, and an input given then
+ *  waited as long for its own (FIRST1: 190 to 710 ms after the old ready). 10 s at most. */
+async function onScreen(): Promise<void> {
+  const CALM = 3, GAP_MS = 50, until = performance.now() + 10000;
+  const late = () => performance.now() > until || document.visibilityState === "hidden";
+  for (let g = window.__bbGl; g && g.firstFrameMs === null && g.error === null && state.value.file !== null && !late(); g = window.__bbGl) await frame(100);
+  const probe = document.createElement("div");
+  probe.setAttribute("aria-hidden", "true");
+  // Over the viewport's canvas, as a tooltip, a menu or the palette comes over it: the GPU composes
+  // a layer over the WebGL picture before ready, not first at the user's first input.
+  const vp = document.getElementById("bimble")?.getBoundingClientRect();
+  const at = vp && vp.width > 4 && vp.height > 4 ? `left:${Math.round(vp.left + 2)}px;top:${Math.round(vp.bottom - 4)}px` : "left:0;bottom:0";
+  probe.style.cssText = `position:fixed;${at};z-index:50;width:2px;height:2px;border-radius:1px;pointer-events:none;background:rgba(20,20,20,0.02)`;
+  document.body.append(probe);
+  let last = await frame(100), calm = 0, odd = false;
+  while (calm < CALM && !late()) {
+    odd = !odd;
+    probe.style.background = odd ? "rgba(20,20,20,0.03)" : "rgba(20,20,20,0.02)";
+    const t = await frame(1000);
+    calm = t !== null && last !== null && t - last < GAP_MS ? calm + 1 : 0;
+    last = t;
+  }
+  probe.remove();
+}
+// ---- end FIRST1 ----
+
 export async function applyDeepLink(): Promise<void> {
   await modelReady;
   const q = new URLSearchParams(location.search);
@@ -80,5 +118,6 @@ export async function applyDeepLink(): Promise<void> {
   } catch (e) {
     console.warn("deep link:", e);
   }
+  await onScreen(); // FIRST1
   document.documentElement.dataset.bbReady = "1";
 }
