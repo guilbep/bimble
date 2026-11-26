@@ -1,6 +1,6 @@
 // The lab's controls against what the C core does, and how fast (ticket UXMAP):
 //   node ccore/tools/ux.mjs [--check] [--force] [--builds wasm,native] [--models small,large]
-//     [--reps N] [--no-timing] [--no-measure | --measure-only] [--site DIR] [--out FILE]
+//     [--reps N] [--no-timing] [--no-measure | --measure-only] [--merge out/ux/ux.json] [--site DIR] [--out FILE]
 // Writes ccore/results/ux.md (never edit it by hand) and the raw answers to out/ux/ux.json.
 //
 // What it does. ONE headless Chromium (SwiftShader, 1280x800, English) over raw CDP opens the lab:
@@ -76,6 +76,10 @@ const REPS = Number(opt("--reps") ?? 5);
 const TIMING = !CHECK && !flag("--no-timing");
 const MEASURE = !CHECK && !flag("--no-measure");
 const MEASURE_ONLY = flag("--measure-only"); // the Measure study alone (no verdicts, no timings)
+// The Measure study's models: also "heavy", a mesh-heavy stand-in (bench/mesh_heavy_model.py: the frame
+// plus HEAVY proxies of about HEAVY_TRIS triangles each), and "local" with UX_EXTRA_MODEL.
+const HEAVY = 700, HEAVY_TRIS = 1000;
+const MEASURE_MODELS = (opt("--measure-models") ?? (EXTRA ? "small,large,heavy,local" : "small,large,heavy")).split(",");
 const LARGE_N = Number(opt("--large") ?? 20000);
 const OUT = resolve(opt("--out") ?? (EXTRA ? join(CCORE, "out/ux/ux-local.md") : join(CCORE, "results/ux.md")));
 const RAW = join(CCORE, "out/ux");
@@ -187,8 +191,13 @@ function localModel(site) {
   if (!EXTRA || !existsSync(EXTRA)) throw new Error("UX_EXTRA_MODEL: no such file");
   copyFileSync(EXTRA, join(site, "ccore/local" + extname(EXTRA)));
 }
-const MODEL_FILE = { small: () => FIXTURE, large: () => join(RAW, `large-${LARGE_N}.bimble`), local: () => EXTRA };
-const MODEL_URL = { small: "", large: "model=ccore/large.bimble", local: () => `model=ccore/local${extname(EXTRA)}` };
+function heavyModel(site) {
+  const f = join(RAW, `heavy-${HEAVY}-${HEAVY_TRIS}.json`);
+  if (!existsSync(f)) execFileSync("python3", [join(CCORE, "bench/mesh_heavy_model.py"), String(HEAVY), String(HEAVY_TRIS), f], { stdio: ["ignore", "pipe", "pipe"] });
+  copyFileSync(f, join(site, "ccore/heavy.json"));
+}
+const MODEL_FILE = { small: () => FIXTURE, large: () => join(RAW, `large-${LARGE_N}.bimble`), heavy: () => join(RAW, `heavy-${HEAVY}-${HEAVY_TRIS}.json`), local: () => EXTRA };
+const MODEL_URL = { small: "", large: "model=ccore/large.bimble", heavy: "model=ccore/heavy.json", local: () => `model=ccore/local${extname(EXTRA)}` };
 
 // ---- the native host ----
 const HOST_PORT = port("ux_host");
@@ -325,6 +334,7 @@ const INSTR = String.raw`(() => {
     return { i, tag: e.tagName.toLowerCase(), type: e.getAttribute("type") || e.getAttribute("role") || "", label: labelOf(e),
       bb: e.getAttribute("data-bb") || "", near: rb ? rb.getAttribute("data-bb") : "", disabled: e.disabled === true || e.getAttribute("aria-disabled") === "true",
       notYet: e.hasAttribute("data-not-yet"), missing: e.getAttribute("data-missing") || "", pressed: e.getAttribute("aria-pressed") || e.getAttribute("aria-checked") || "",
+      current: e.getAttribute("aria-current") === "page" || e.getAttribute("aria-selected") === "true" || (e.classList.contains("on") && !e.classList.contains("tool")),
       group: (e.closest(".grp") && e.closest(".grp").querySelector(".gname") ? e.closest(".grp").querySelector(".gname").innerText.trim() : "") };
   });
   ux.at = (roots, i, label) => {
@@ -348,7 +358,10 @@ const INSTR = String.raw`(() => {
       dialog: box(".bb-backdrop [role=dialog], .bb-backdrop > *"), page: box('[data-bb="page"]'), panel: box('[data-bb="right-panel"]'),
       menu: box('[role="menu"]'), props: box('[data-bb="properties"]'), modifier: box('[data-bb="modifier"]'),
       tab: (document.querySelector('a.tab.on') || {}).innerText || null,
-      notYetTip: !!document.querySelector('[data-bb="not-yet-tip"]'), notAvailable: !!document.querySelector('[data-bb="not-available"]'),
+      notYetTip: !!document.querySelector('[data-bb="not-yet-tip"]'),
+      // the screen a control opens is "not available" as a whole (FAKE1: App.vue puts NotAvailable in its place)
+      naMain: ['[data-bb="page"] > [data-bb="not-available"]', '[data-bb="right-panel"] > [data-bb="not-available"]', '.bb-backdrop > [role="dialog"] > [data-bb="not-available"]'].filter((q) => document.querySelector(q)).join(",") || null,
+      naSide: !!document.querySelector('[data-bb="properties"] [data-bb="not-available"]'),
       alert: [...document.querySelectorAll('[role="alert"]')].map((e) => e.innerText.trim()).filter(Boolean).join(" | "),
       text: hash(text),
       camera: JSON.stringify([r(g.navEye ? g.navEye() : null), g.q2 || null, g.clip ? JSON.stringify(g.clip).length : null]),
@@ -390,7 +403,7 @@ async function openTab() {
   const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
   curTarget = targetId, curSession = sessionId;
-  S = (m, p) => cdp.send(m, p, sessionId);
+  S = (m, p) => Promise.race([cdp.send(m, p, sessionId), sleep(20000).then(() => { throw new Error(`CDP ${m}: no answer in 20 s`); })]);
   for (const d of ["Runtime", "Log", "Page", "Network"]) await S(`${d}.enable`);
   await S("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
   await S("Emulation.setLocaleOverride", { locale: "en-US" }).catch(() => {});
@@ -413,9 +426,18 @@ async function fresh(extra = "") {
   if (BUILD === "native") await startHost(MODEL);
   const t0 = Date.now();
   const nonce = `&ux=${++navs}`, url = pageUrl(extra + nonce);
-  await openTab();
-  await S("Page.navigate", { url });
-  await waitFor("the navigation", 10000, () => ev(`location.search.includes(${JSON.stringify(nonce)})`), 50);
+  for (let k = 0; ; k++) { // a tab that does not navigate (a print dialog, a hung page): a new one
+    try {
+      await openTab();
+      await S("Page.navigate", { url });
+      await waitFor("the navigation", 10000, () => ev(`location.search.includes(${JSON.stringify(nonce)})`), 50);
+      break;
+    } catch (e) {
+      log(`navigation failed (${e.message}), new tab`);
+      if (k >= 2) throw e;
+      curTarget = null; // left open: closing it may hang as well
+    }
+  }
   const ready = () => ev(`!!(document.querySelector('[data-bb-ready]') && window.__bbGl && window.__bbGl.firstFrameMs && (document.querySelector('.bb-app')?.getAttribute('data-bb-shell') || '').startsWith('model'))`);
   try {
     await waitFor("the page ready", MODEL !== "small" ? 120000 : 30000, ready, 50);
@@ -439,7 +461,8 @@ async function core(op, name, body = "{}") {
 async function coreSnap() {
   const o = {};
   for (const q of ["state", "actions", "measure", "visibility", "open_views", "history"]) o[q] = await core("query", q);
-  try { o.rev = JSON.parse(o.state).rev; } catch { o.rev = null; }
+  // `query state` has no rev: a model change is a new undo step (or a changed redo list / unsaved flag)
+  try { const h = JSON.parse(o.history), st = JSON.parse(o.state); o.rev = `${h.undo.length}/${h.redo.length}/${st.unsaved}/${st.file}`; } catch { o.rev = null; }
   try { o.measurements = JSON.parse(o.measure)?.items?.length ?? 0; } catch { o.measurements = 0; }
   return o;
 }
@@ -461,7 +484,7 @@ async function settle(maxMs = 5000, armed = true) {
 const DIFF_KEYS = ["shell", "dialog", "page", "panel", "menu", "props", "modifier", "tab", "text", "camera", "url"];
 function effects(a, b) {
   const out = [];
-  if (a.core.rev !== b.core.rev) out.push("rev");
+  if (a.core.rev !== b.core.rev) out.push("model");
   for (const q of ["state", "actions", "measure", "visibility", "open_views", "history"]) if (q !== "state" || a.core.rev === b.core.rev) if (a.core[q] !== b.core[q]) out.push(q === "state" ? "state" : q);
   for (const k of DIFF_KEYS) if (a.dom[k] !== b.dom[k]) out.push(k);
   if (b.ev.ch > a.ev.ch) out.push("file chooser");
@@ -582,7 +605,9 @@ function opened(a, b) {
 
 /** Drives a tool's gesture after it started: returns {ok, note, ms}. */
 async function gesture(name, before) {
-  const pts = [[-150, -150, 0], [5850, -150, 0], [5850, 4850, 0], [-150, 4850, 0]];
+  // Measure: two column foot corners (snapped); Place: free spots inside the first bay (a corner
+  // snaps to an axis crossing where a column stands already).
+  const pts = name === "measure" ? [[-150, -150, 0], [5850, -150, 0]] : [[3000, 2530, 0], [4500, 4000, 0], [3000, 4000, 0], [4500, 2530, 0]]; // a slab: a diagonal
   const want = name === "measure" ? (c) => c.measurements > before.core.measurements : (c) => c.rev !== before.core.rev;
   let ms = null;
   for (let k = 0; k < (name === "measure" ? 2 : 4); k++) {
@@ -602,11 +627,13 @@ async function gesture(name, before) {
     const pr = await settle(4000);
     if (want(await coreSnap())) return { ok: true, note: "4 clicks and Enter place an element", ms: pr.ms };
   }
-  return { ok: false, note: `the tool starts, but ${name === "measure" ? "two clicks store no measurement" : "4 clicks and Enter place nothing"}`, ms };
+  const why = await ev(`JSON.stringify({ toolError: window.__bbGl?.toolError ?? null, measureError: window.__bbGl?.measureError ?? null, hover: window.__bbGl?.hover ?? null, toolCalls: window.__bbGl?.toolCalls, calls: window.__ux.calls.slice(-6).map((c) => c[0]) })`);
+  const placing = await core("query", "placing");
+  return { ok: false, note: `the tool starts, but ${name === "measure" ? "two clicks store no measurement" : "4 clicks and Enter place nothing"} (page: ${why}; placing: ${String(placing).slice(0, 200)})`, ms };
 }
 
 function verdictOf(e, before, after, eff, errs) {
-  if (e.notYet || after.dom.notYetTip || (after.dom.notAvailable && !before.dom.notAvailable)) return "says not available";
+  if (e.notYet || after.dom.notYetTip || (after.dom.naMain && after.dom.naMain !== before.dom.naMain)) return "says not available";
   if (errs.length) return "error";
   if (e.disabled) return eff.length ? "works" : "disabled";
   return eff.length ? "works" : "dead";
@@ -655,24 +682,36 @@ async function exploreSurface(surface, depth) {
   log(`${surface.where}: ${list.length} controls`);
   let dirty = false;
   for (const e of list) {
+    try { dirty = await exploreControl(surface, depth, list, e, dirty); } catch (x) {
+      const rec = controls[controls.length - 1];
+      if (rec && rec.verdict === null) { rec.verdict = "not exercised"; rec.note = `the tool failed here: ${String(x.message ?? x).slice(0, 120)}`; }
+      log(`${surface.where} › ${e.label}: ${x.message}`);
+      dirty = true;
+    }
+  }
+}
+async function exploreControl(surface, depth, list, e, dirty) {
+  {
     const rec = { where: surface.where, group: e.group || "", label: e.label || `(${e.tag} ${e.bb || e.type})`, bb: e.bb, binding: e.binding ?? bindingOf(surface, e),
       enabled: !e.disabled && !e.notYet, notYet: e.notYet, missing: e.missing, steps: surface.steps, roots: surface.roots, i: e.i, kind: surface.kind ?? "dom", verdict: null, effects: [], errors: [], note: "", ms: [] };
     controls.push(rec);
-    if (["input", "select", "textarea"].includes(e.tag) && !["checkbox", "radio", "file"].includes(e.type)) { rec.verdict = "not exercised"; rec.note = `a ${e.tag === "input" ? `${e.type || "text"} field` : e.tag}: typing a value is not driven`; continue; }
+    if (["input", "select", "textarea"].includes(e.tag) && !["checkbox", "radio", "file"].includes(e.type)) { rec.verdict = "not exercised"; rec.note = `a ${e.tag === "input" ? `${e.type || "text"} field` : e.tag}: typing a value is not driven`; return dirty; }
     if (surface.kind === "keys" && e.context === "2d") rec.steps = [{ url: "&view=plan:1" }];
     if (surface.kind === "keys" && (e.label === "Delete" || e.label === "Escape")) rec.steps = [{ select: true }];
     if (rec.steps !== surface.steps || dirty) {
       const se = await runSteps(rec.steps);
-      if (se) { rec.verdict = "not exercised"; rec.note = se; dirty = true; continue; }
+      if (se) { rec.verdict = "not exercised"; rec.note = se; dirty = true; return true; }
     }
     const before = await snap();
-    try { await activate(surface, e); } catch (x) { rec.verdict = "not exercised"; rec.note = String(x.message ?? x).slice(0, 120); dirty = true; continue; }
+    try { await activate(surface, e); } catch (x) { rec.verdict = "not exercised"; rec.note = String(x.message ?? x).slice(0, 120); dirty = true; return true; }
     const pr = await settle(MODEL !== "small" ? 20000 : 5000);
     const after = await snap();
     rec.effects = effects(before, after);
     rec.errors = errorsBetween(before, after);
     rec.calls = BUILD === "wasm" ? after.calls - before.calls : after.ev.rq - before.ev.rq;
     rec.verdict = verdictOf(e, before, after, rec.effects, rec.errors);
+    if (rec.verdict === "dead" && e.current) { rec.verdict = "not exercised"; rec.note = "already the current one: a click changes nothing by design"; }
+    if (after.dom.naSide && !before.dom.naSide) rec.note = [rec.note, "the left panel then says not available"].filter(Boolean).join("; ");
     if (rec.verdict === "works" && pr.ms !== null) rec.ms.push(pr.ms);
     if (pr.timeout) rec.note = "still changing after the wait (timeout)";
     // a tool: its gesture decides
@@ -694,7 +733,7 @@ async function exploreSurface(surface, depth) {
           skipLabels: o.what === "page" ? new Set(list.map((x) => `${x.bb}|${x.label}`)) : undefined });
       }
     }
-    dirty = rec.effects.length > 0 || rec.errors.length > 0 || !!rec.gesture;
+    return rec.effects.length > 0 || rec.errors.length > 0 || !!rec.gesture;
   }
 }
 const ACTION_OF = (b) => (/^(?:action|page \S+ \(action) (\w+)/.exec(b ?? "")?.[1] ?? null);
@@ -780,6 +819,7 @@ function writeReport(R) {
   L.push(`- Commit: \`${R.commit}\`${R.dirty ? " (with uncommitted changes)" : ""}; run ${R.date}; ${R.runS} s.`,
     `- Machine: ${R.machine}; load at start \`${R.load0}\`, before the timings \`${R.loadT ?? "-"}\`.${R.numbersNote ? ` ${R.numbersNote}` : ""}`,
     `- Builds: ${R.builds.join(", ")}; models: small = \`golden/frame.json\` (72 elements)${R.models.includes("large") ? `, large = \`bench/large_model.py ${LARGE_N}\` (${R.largeCount ?? "?"} elements)` : ""}${R.models.includes("local") ? `, local = a local model, ${R.localCount ?? "?"} elements (not committed)` : ""}; repetitions: ${REPS}.`,
+    ...(R.merged ? [`- Merged (--merge): ${R.merged}; the Measure study from this run.`] : []),
     `- Page loads (fresh page per activation): median ${R.loadMedian} ms (${R.loads} loads).`, "");
   // counts per where
   const C = R.passes[0]?.controls ?? [];
@@ -828,7 +868,8 @@ function writeReport(R) {
   for (const m of R.measure) {
     const mv = m.moves.map((x) => x.ms), cl = m.clicks.map((x) => x.ms);
     const callMs = (xs) => { const t = new Map(); for (const s of xs) for (const [n, ms] of s.calls) t.set(n, [(t.get(n)?.[0] ?? 0) + 1, (t.get(n)?.[1] ?? 0) + ms]); return [...t.entries()].map(([n, [k, ms]]) => `${n} ×${(k / xs.length).toFixed(1)} ${(ms / xs.length).toFixed(1)} ms`).join(", "); };
-    L.push(`### ${m.build}, ${m.model} model (${m.tris} triangles drawn, tool on: ${m.on})`, "",
+    const named = { small: "small (golden/frame.json)", large: `large (bench/large_model.py ${LARGE_N})`, heavy: `heavy (bench/mesh_heavy_model.py ${HEAVY} ${HEAVY_TRIS})`, local: "a local model (not committed)" }[m.model] ?? m.model;
+    L.push(`### ${m.build}, ${named}: ${m.count ?? "?"} elements, ${m.tris} triangles drawn, tool on: ${m.on}`, "",
       `- Pointer move → frame: median ${fmt(median(mv))} ms, max ${fmt(Math.max(...mv.filter(Number.isFinite)))} ms (${mv.length} moves); frames drawn per move: median ${median(m.moves.map((x) => x.frames))}.`,
       `- Click → frame: ${cl.map(fmt).join(", ")} ms.`,
       m.build === "wasm" ? `- Core calls per move (mean count and ms): ${callMs(m.moves) || "none"}.` : `- Requests to the host per move: median ${median(m.moves.map((x) => x.requests))}.`,
@@ -844,8 +885,10 @@ async function main() {
   if (TIMING && load1() > 4 && !FORCE) numbersNote = `The 1-minute load was ${load1()} (> 4) at the start: no response times written (--force to write them anyway).`;
   const site = buildSite();
   let largeCount = null;
-  if (MODELS.includes("large")) { const f = largeModel(site); largeCount = LARGE_N; log(`large model ${f}`); }
-  if (MODELS.includes("local")) localModel(site);
+  const all = new Set([...MODELS, ...(MEASURE ? MEASURE_MODELS : [])]);
+  if (all.has("large")) { const f = largeModel(site); largeCount = LARGE_N; log(`large model ${f}`); }
+  if (all.has("heavy")) heavyModel(site);
+  if (all.has("local")) localModel(site);
   await serve(site);
   await startBrowser();
   const passes = [];
@@ -856,18 +899,25 @@ async function main() {
     BUILD = build; MODEL = "small";
     if (build === "native" && !existsSync(BIN)) { log(`no ${BIN}: native pass skipped`); continue; }
     if (MEASURE_ONLY) {
-      for (const model of MODELS) { MODEL = model; log(`measure ${build}/${model}`); measure.push({ build, model, ...(await measureStudy()) }); }
+      for (const model of MEASURE_MODELS) { MODEL = model; log(`measure ${build}/${model}`); measure.push({ build, model, ...(await measureStudy()) }); }
       passes.push({ build, model: "small", controls: [] });
       continue;
     }
     controls.length = 0; surfaces.length = 0; discovered.clear();
     await enumerateBase();
-    for (let s = 0; s < surfaces.length; s++) await exploreSurface(surfaces[s], surfaces[s].depth ?? 0);
+    for (let s = 0; s < surfaces.length; s++) {
+      if (opt("--only") && !surfaces[s].where.includes(opt("--only"))) continue; // a debugging aid: one surface
+      try { await exploreSurface(surfaces[s], surfaces[s].depth ?? 0); } catch (x) {
+        log(`${surfaces[s].where}: ${x.message}`);
+        controls.push({ where: surfaces[s].where, label: "(the rest of this surface)", verdict: "not exercised", note: `the tool failed here: ${String(x.message ?? x).slice(0, 120)}`, effects: [], errors: [], ms: [] });
+      }
+      writeFileSync(join(RAW, "ux-partial.json"), JSON.stringify(controls, null, 1));
+    }
     const pass = { build, model: "small", controls: controls.map((c) => ({ ...c })) };
     passes.push(pass);
     writeFileSync(join(RAW, "ux.json"), JSON.stringify({ passes, times, measure }, null, 1));
     log(`${build}/small: ${VERDICTS.map((v) => `${v} ${pass.controls.filter((c) => c.verdict === v).length}`).join(", ")}`);
-    if (MEASURE) for (const model of MODELS) { MODEL = model; log(`measure ${build}/${model}`); measure.push({ build, model, ...(await measureStudy()) }); }
+    if (MEASURE) for (const model of MEASURE_MODELS) { MODEL = model; log(`measure ${build}/${model}`); measure.push({ build, model, ...(await measureStudy()) }); }
     if (TIMING && !numbersNote) {
       loadT = loadNow();
       if (load1() > 4 && !FORCE) { numbersNote = `The 1-minute load was ${load1()} (> 4) before the timings: no response times written (--force to write them anyway).`; continue; }
@@ -898,7 +948,15 @@ async function main() {
   const R = { commit, dirty, date: new Date().toISOString().slice(0, 16).replace("T", " "), runS: Math.round((Date.now() - T0) / 1000),
     machine: `${platform()} ${release()} ${arch()}, ${cpus().length} CPUs, ${Math.round(totalmem() / 2 ** 30)} GB`, load0, loadT, numbersNote,
     builds: BUILDS, models: MODELS, largeCount, localCount: measure.find((m) => m.model === "local")?.count ?? null, loadMedian: median(loadMs), loads: loadMs.length, passes, times, timingCols, measure };
-  writeFileSync(join(RAW, "ux.json"), JSON.stringify(R, null, 1));
+  if (opt("--merge")) { // the verdicts (and times) of an earlier run's out/ux JSON, with this run's Measure study
+    const M = JSON.parse(readFileSync(resolve(opt("--merge")), "utf8"));
+    if (!R.passes.some((p) => p.controls.length)) R.passes = M.passes;
+    if (!R.timingCols.length) { R.timingCols = M.timingCols ?? []; R.times = M.times ?? {}; }
+    if (!R.measure.length) R.measure = M.measure ?? [];
+    R.loadMedian = M.loadMedian ?? R.loadMedian; R.loads = M.loads ?? R.loads;
+    R.merged = `verdicts from a run at commit ${M.commit} (${M.date}, ${M.runS} s, load at start \`${M.load0}\`)`;
+  }
+  writeFileSync(join(RAW, EXTRA ? "ux-local.json" : "ux.json"), JSON.stringify(R, null, 1));
   if (CHECK) {
     const C = passes[0].controls, n = (v) => C.filter((c) => c.verdict === v).length;
     const old = existsSync(OUT) ? readFileSync(OUT, "utf8") : "";
