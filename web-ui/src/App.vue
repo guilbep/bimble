@@ -8,6 +8,7 @@ import LeftPanel from "./shell/LeftPanel.vue";
 import ViewTabs from "./shell/ViewTabs.vue";
 import ModifierPanel from "./shell/ModifierPanel.vue";
 import StatusBar from "./shell/StatusBar.vue";
+import ContextMenu from "./shell/ContextMenu.vue"; // ISS71
 import "./shell/shell.css";
 import { computed, onMounted, ref, watch } from "vue";
 import { useFocusTrap } from "./shell/focusTrap";
@@ -88,6 +89,7 @@ onMounted(() => { installKeys(); void applyDeepLink(); });
             <!-- Never re-created (no v-if): the viewer binds to it at init(). -->
             <canvas id="bimble" :style="paperOn ? { visibility: 'hidden' } : undefined" />
             <PaperView v-if="paperOn" /><!-- PAPER1 -->
+            <ContextMenu /><!-- ISS71: the viewport's right-click menu -->
             <SmallFloat v-if="small" />
             <p v-if="startError" class="start-error" role="alert">{{ t('app.startError', { msg: startError }) }}</p>
           </div>

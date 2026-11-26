@@ -11,7 +11,8 @@
  * Deviations (the C core has no views in its model, docs/research/c-core-spec.md §1):
  *   - "in view" hides and isolates are kept in the session, not stored in the view as a Command
  *     (Rust's save_visibility makes a history step on a .bimble model). show_all_in_view clears them.
- *   - the box is axis-aligned (yaw 0), as every box Rust makes today.
+ *   - the box is axis-aligned (yaw 0), as every box Rust makes today; ISS71: it may turn (yaw: project
+ *     or true north, DEVIATIONS), and Box to selection grows the selection's bounds by 1 m.
  *   - the face drag takes pointer rays (op tool: box_press, box_move, box_release): the face
  *     follows the point of its axis nearest to the pointer ray; Rust projects the screen drag on
  *     the axis as seen on screen. Same result for a pointer that stays on the axis. */
@@ -54,7 +55,21 @@ typedef struct {
     struct cc_vis_prev *prev;
     size_t nprev, capprev;
     /* ---- end ISS72 ---- */
+    /* ---- ISS71 ---- the box's turn (radians, counter-clockwise about the vertical through the
+     * scene origin, f32 as ClipBox::yaw): min and max are corners in the box's frame. */
+    float yaw;
+    /* ---- end ISS71 ---- */
 } cc_vis;
+
+/* ---- ISS71 ---- Box to selection (issue #71): the selection's bounds grown by 1 m on every side. */
+#define CC_BOX_SELECTION_MARGIN_MM 1000.0f
+/* Grows [lo, hi] by the element `k` of `sc`, moved by `off` (scene mm), in the frame turned by
+ * `yaw` (the box's frame: the point turned by -yaw). Without vertices: unchanged. */
+void cc_vis_grow(const cc_scene *sc, size_t k, const float off[3], float yaw, float lo[3], float hi[3]);
+/* The box = [lo, hi] (in the frame of v->yaw) grown by `margin` on every side. 0, or -1 when
+ * [lo, hi] is empty (the box unchanged). */
+int cc_vis_fit_bounds(cc_vis *v, const float lo[3], const float hi[3], float margin);
+/* ---- end ISS71 ---- */
 
 void cc_vis_init(cc_vis *v);
 void cc_vis_free(cc_vis *v);

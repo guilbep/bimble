@@ -640,7 +640,8 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     /* Visibility and the section box (ribbon.rs:592-611). FAKE1: ribbon.rs:592-593 `!flat`. */
     if (!strcmp(name, "reveal_hidden")) return loaded(s);
     if (!strcmp(name, "section_box")) return loaded(s) && !in_2d(s);
-    if (!strcmp(name, "box_to_selection")) return loaded(s) && !in_2d(s) && s->vis.section_on;
+    /* ISS71 (issue #71): Box to selection turns the box on; Rust also wants it on (DEVIATIONS). */
+    if (!strcmp(name, "box_to_selection")) return loaded(s) && !in_2d(s);
     /* ---- FAKE1: pages the lab serves and the sheet verbs. project: ribbon.rs:611 `_ => loaded`,
      * history: ribbon.rs:590 editable(), new_sheet: ribbon.rs:611 `_ => loaded` (the C core
      * answers the project query and stores sheets in an editable model only: a read-only IFC
@@ -1551,13 +1552,45 @@ static int sec1_store_vis_ex(cc_session *s, int all, const cc_vis_state *from, c
 }
 /* ---- end SEC1 ---- */
 
+/* ---- ISS71 ---- Box to selection (issue #71): the box around the selected elements (the open
+ * model's and a linked model's), in the box's frame, grown by CC_BOX_SELECTION_MARGIN_MM on every
+ * side; nothing selected: around everything visible (lib.rs fit_section_box's margin). The box is
+ * turned on. */
+static void iss71_box_to_selection(cc_session *s) {
+    cc_vis *v = &s->vis;
+    const cc_scene *sc = scene_now(s);
+    if (!sc) return;
+    float inf = 1e30f * 1e30f, lo[3] = {inf, inf, inf}, hi[3] = {-inf, -inf, -inf};
+    static const float zero[3] = {0, 0, 0};
+    int any = 0;
+    for (size_t k = 0; k < sc->nelements; k++) {
+        const cc_gid *g = &sc->elements[k].id;
+        int on = s->has_primary && !cc_gid_cmp(&s->primary, g);
+        for (size_t i = 0; !on && i < s->nalso; i++) on = !cc_gid_cmp(&s->also[i], g);
+        if (on) cc_vis_grow(sc, k, zero, v->yaw, lo, hi), any = 1;
+    }
+    if (s->link_sel >= 0 && (size_t)s->link_sel < s->nlinks) { /* a linked model's element */
+        const cc_scene *ls = cc_link_scene(&s->links[s->link_sel]);
+        for (size_t k = 0; ls && k < ls->nelements; k++) {
+            if (memcmp(ls->elements[k].id.c, s->link_sel_id, 22)) continue;
+            float off[3];
+            for (int q = 0; q < 3; q++) off[q] = (float)(ls->origin[q] - sc->origin[q]); /* lib.rs:1499 */
+            cc_vis_grow(ls, k, off, v->yaw, lo, hi), any = 1;
+        }
+    }
+    if (!any || cc_vis_fit_bounds(v, lo, hi, CC_BOX_SELECTION_MARGIN_MM)) cc_vis_fit(v, sc, NULL);
+    if (v->has_box) v->section_on = 1;
+    v->drag_face = -1;
+}
+/* ---- end ISS71 ---- */
+
 /* ribbon.rs:708-775: the section box and visibility actions. 0 ok (or not one of them), -1 with
  * the error in `out` (out of memory). Session state only: no history step, rev unchanged. */
 static int vis_action_do(cc_session *s, const char *name, cc_buf *out) {
     cc_vis *v = &s->vis;
     const cc_gid *primary = s->has_primary ? &s->primary : NULL;
     if (!strcmp(name, "section_box")) cc_vis_toggle(v, scene_now(s), primary);
-    else if (!strcmp(name, "box_to_selection")) cc_vis_fit(v, scene_now(s), primary);
+    else if (!strcmp(name, "box_to_selection")) iss71_box_to_selection(s); /* ISS71 */
     else if (!strcmp(name, "reveal_hidden")) v->reveal = !v->reveal;
     else if (!strcmp(name, "clear_temporary")) cc_vis_clear_temporary(v);
     else if (!strcmp(name, "show_all_in_view")) {

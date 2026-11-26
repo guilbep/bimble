@@ -4,12 +4,14 @@
 // timber: no reference screen. A group may hold a box (.rbox: label + select or readout) instead of a tool.
 import type { TabId } from "./tabs";
 import type { fr } from "../i18n/parts/ribbon";
+import type { PartKey } from "../i18n/keys.gen"; // ISS71
 
 export type RibbonKey = keyof typeof fr;
 // page / panel: the Vue screen the tool opens instead of its egui action (pressed while that screen is open).
 // dialog (FAKE1): the Vue dialog the tool opens. A tool that cannot work in this core (no action and no screen, or
 // one whose capability the core does not serve: shell/capability.ts toolNotYet) is drawn "not yet", with a tooltip.
-export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string; action: string | null; page?: string; panel?: string; dialog?: string }
+// tip (ISS71): a longer tooltip's i18n key ({m}: Box to selection's margin in metres, shell/contextItems.ts).
+export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string; action: string | null; page?: string; panel?: string; dialog?: string; tip?: PartKey }
 // Reference .rbox: a label over a 150 px select (sel) or a mono readout (readout). No Rust call yet: drawn disabled, empty.
 export interface RibbonBox { key: RibbonKey; kind: "sel" | "readout"; missing: string }
 // box: drawn after the tools, in a `.tools` with style="align-items:center" (as the reference).
@@ -166,7 +168,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
     ] },
     { key: "ribbon.view.g2", tools: [
       { key: "ribbon.view.g2.t1", tag: "button", icon: "<path d=\"M12 3 20 7v10l-8 4-8-4V7z\"/><path d=\"M4 7l8 4 8-4M12 11v10\"/>", action: "section_box" },
-      { key: "ribbon.view.g2.t2", tag: "button", icon: "<path d=\"M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5\"/>", action: "box_to_selection" },
+      { key: "ribbon.view.g2.t2", tag: "button", icon: "<path d=\"M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5\"/>", action: "box_to_selection", tip: "ctx.boxToSelectionTip" },
     ] },
     { key: "ribbon.view.g3", tools: [
       { key: "ribbon.view.g3.t1", tag: "button", icon: "<path d=\"M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5\"/>", action: "fit" },

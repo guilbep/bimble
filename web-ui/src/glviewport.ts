@@ -361,6 +361,8 @@ interface GlStats {
   boxFace: number | null;
   boxCalls: number;
   boxError: string | null;
+  /** ISS71: right-click menus opened. */
+  menus: number;
   /** Test hook: the GlobalId a click at client (x, y) would pick, or null (selects nothing). */
   pickAt?: (x: number, y: number) => string | null;
   /** Test hook: what a click at client (x, y) would pick: its id and its link (null: the open model). */
@@ -442,7 +444,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const canvas = document.getElementById("bimble");
   const stats: GlStats = { firstFrameMs: null, meshBytes: 0, meshFetchMs: 0, meshRev: null, frames: 0, picks: 0, error: null,
     toolCalls: 0, ghostTris: 0, hover: null, toolError: null, placed: null,
-    hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null, links: [], linkTris: 0,
+    hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null, menus: 0, links: [], linkTris: 0,
     annotations: null, overlayTexts: [], selectedAnnotation: null, annotate: null, annotateCalls: 0, annotError: null, annotAdded: null,
     measure: null, measureCalls: 0, measureError: null,
     nav: { picks: 0, zoomPivot: null, zoomFrom: null, orbitPivot: null, orbitFrom: null, fits: 0 }, pointerQueries: 0 };
@@ -1535,6 +1537,22 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       }
       return;
     }
+    // ---- ISS71 ---- a right click without a drag: the selection's menu (shell/ContextMenu.vue); the
+    // element under the pointer is selected first when it is not (an empty spot keeps the selection).
+    if (e.type === "pointerup" && d && !d.moved && e.button === 2 && !placingNow() && !annotatingNow() && !measuringNow()) {
+      const r = canvas.getBoundingClientRect();
+      const k = pick(e.clientX - r.left, e.clientY - r.top);
+      const id = k >= 0 ? mesh?.ids[k] : undefined;
+      if (id && !state.value.selection.includes(id)) {
+        const link = linkOf(k);
+        const err = link !== null ? selectLinked(link, id) : select([id]);
+        if (err) console.warn("gl viewport: select:", err);
+      }
+      stats.menus++;
+      window.dispatchEvent(new CustomEvent("bb-viewport-menu", { detail: { x: e.clientX, y: e.clientY } }));
+      return;
+    }
+    // ---- end ISS71 ----
     if (e.type !== "pointerup" || !d || d.moved || e.button !== 0) return;
     if (placingNow()) { // a click while placing goes to the tool (Shift: free, no pan)
       pendingMove = null;

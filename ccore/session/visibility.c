@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "fmt.h"
+#include "ifc_math.h" /* ISS71: cc_sin, cc_cos (the turned box) */
 #include "json_r.h"
 #include "math.h"
 #include "strtod.h"
@@ -78,6 +79,7 @@ void cc_vis_reset(cc_vis *v) {
     v->section_on = v->has_box = 0;
     v->drag_face = -1;
     prev_clear(v); /* ISS72: the Show previous stacks belong to the model that was open */
+    v->yaw = 0.0f; /* ISS71 */
 }
 
 int cc_vis_hidden(const cc_vis *v, const cc_gid *g) {
@@ -160,6 +162,44 @@ static int element_bounds(const cc_scene *sc, size_t k, float lo[3], float hi[3]
     return 1;
 }
 
+/* ---- ISS71 ---- a scene point in the box's frame (ClipBox::to_frame: turned by -yaw) */
+static void to_frame(float yaw, const float p[3], float out[3]) {
+    double sn = cc_sin((double)yaw), cs = cc_cos((double)yaw);
+    out[0] = (float)(cs * p[0] + sn * p[1]), out[1] = (float)(-sn * p[0] + cs * p[1]), out[2] = p[2];
+}
+
+void cc_vis_grow(const cc_scene *sc, size_t k, const float off[3], float yaw, float lo[3], float hi[3]) {
+    if (yaw == 0.0f) { /* the element's box (SceneElement::bounds), moved */
+        float a[3], b[3];
+        if (!element_bounds(sc, k, a, b)) return;
+        for (int q = 0; q < 3; q++) a[q] += off[q], b[q] += off[q];
+        corner_union(lo, hi, a), corner_union(lo, hi, b);
+        return;
+    }
+    const cc_scene_element *e = &sc->elements[k]; /* turned: every vertex, for a tight box */
+    const cc_mesh *m = cc_scene_local_mesh(sc, k);
+    const cc_placement32 *t = &e->to_scene;
+    for (uint32_t i = 0; i < m->nv; i++) {
+        const float *c = m->pos[i];
+        float p[3], f[3];
+        for (int q = 0; q < 3; q++) {
+            if (e->shape < 0) p[q] = c[q];
+            else p[q] = t->x[q] * c[0] + t->y[q] * c[1] + t->z[q] * c[2] + t->t[q];
+            p[q] += off[q];
+        }
+        to_frame(yaw, p, f);
+        corner_union(lo, hi, f);
+    }
+}
+
+int cc_vis_fit_bounds(cc_vis *v, const float lo[3], const float hi[3], float margin) {
+    if (!(lo[0] <= hi[0] && lo[1] <= hi[1] && lo[2] <= hi[2])) return -1;
+    for (int k = 0; k < 3; k++) v->min[k] = lo[k] - margin, v->max[k] = hi[k] + margin;
+    v->has_box = 1;
+    return 0;
+}
+/* ---- end ISS71 ---- */
+
 void cc_vis_fit(cc_vis *v, const cc_scene *sc, const cc_gid *primary) {
     if (!sc) return;
     float inf = 1e30f * 1e30f, lo[3] = {inf, inf, inf}, hi[3] = {-inf, -inf, -inf};
@@ -167,6 +207,11 @@ void cc_vis_fit(cc_vis *v, const cc_scene *sc, const cc_gid *primary) {
         const cc_gid *g = &sc->elements[k].id;
         if (!v->reveal && cc_vis_hidden(v, g)) continue; /* lib.rs `visible` */
         if (primary && cc_gid_cmp(primary, g)) continue;
+        if (v->yaw != 0.0f) { /* ISS71: in the turned box's frame */
+            static const float zero[3] = {0, 0, 0};
+            cc_vis_grow(sc, k, zero, v->yaw, lo, hi);
+            continue;
+        }
         float a[3], b[3];
         if (element_bounds(sc, k, a, b)) corner_union(lo, hi, a), corner_union(lo, hi, b);
     }
@@ -249,11 +294,11 @@ static void vec3_f32(JsonW *w, const float p[3]) {
     jw_arr_end(w);
 }
 
-static void box_json(JsonW *w, const float mn[3], const float mx[3]) { /* json!({"min","max","yaw"}) */
+static void box_json(JsonW *w, const float mn[3], const float mx[3], float yaw) { /* json!({"min","max","yaw"}) */
     jw_obj_begin(w);
     jw_key(w, "max"), vec3_f32(w, mx);
     jw_key(w, "min"), vec3_f32(w, mn);
-    jw_key(w, "yaw"), jw_f64(w, 0.0);
+    jw_key(w, "yaw"), jw_f64(w, f32_json(yaw)); /* ISS71: the box's turn */
     jw_obj_end(w);
 }
 
@@ -275,7 +320,7 @@ void cc_vis_json(const cc_vis *v, JsonW *w, const double *origin) {
     jw_key(w, "isolated_now"), capped(w, &v->temp, v->has_temp && v->temp_isolate);
     jw_key(w, "section_box"), jw_obj_begin(w);
     jw_key(w, "box");
-    if (v->has_box) box_json(w, v->min, v->max);
+    if (v->has_box) box_json(w, v->min, v->max, v->yaw);
     else jw_null(w);
     jw_key(w, "on"), jw_bool(w, v->section_on);
     jw_key(w, "origin_mm");
@@ -408,8 +453,8 @@ static void tool_json(const cc_vis *v, Buf *out) {
     jw_obj_begin(&w);
     jw_key(&w, "active"), jw_bool(&w, v->drag_face >= 0);
     jw_key(&w, "box");
-    if (v->drag_face >= 0) box_json(&w, v->prev_min, v->prev_max);
-    else if (v->has_box) box_json(&w, v->min, v->max);
+    if (v->drag_face >= 0) box_json(&w, v->prev_min, v->prev_max, v->yaw);
+    else if (v->has_box) box_json(&w, v->min, v->max, v->yaw);
     else jw_null(&w);
     jw_key(&w, "face");
     if (v->drag_face >= 0) jw_u64(&w, (uint64_t)v->drag_face);

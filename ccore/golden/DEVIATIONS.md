@@ -822,3 +822,23 @@ hidden; `ribbon.rs:130` lists 54 actions. The office's engineer asked for both b
 - **No shortcut**: Rust's H (`lib.rs:2983`, hatching) ignores the modifiers, so Shift H is taken.
 - Tests: `test/visibility_test.mjs` (ISS72 checks), `test/lab_visibility.mjs` (the ribbon buttons,
   native and wasm), `test/wasm_run.mjs` and `test/wasm_view_run.mjs` (native = wasm).
+## 26. The section box: Box to selection with 1 m, a right-click menu (ticket ISS71, issue #71)
+
+**Rust.** `box_to_selection` (lib.rs `fit_section_box`) fits the box around the one primary
+selected element, or around everything visible, with `ClipBox::around`'s margin (1 mm + 1e-5 of
+the size); it is enabled only while the box is on (ribbon.rs:593). The viewport has no context menu.
+
+**Differs.** The office's structural engineer asked for it (GitHub issue #71).
+- **Box to selection** = the bounds of every selected element (the primary, the others, and a
+  linked model's selected element moved by its origin - ours, lib.rs:1499) grown by
+  `CC_BOX_SELECTION_MARGIN_MM` = 1000 mm on every side (`session/visibility.h`). Nothing selected:
+  Rust's fit (everything visible, Rust's margin). It **turns the box on**, so it is enabled with a
+  model in 3D, the box on or off (`loaded && !in_2d`; Rust: `&& section_on`).
+- **The viewport's right-click menu** (`web-ui/src/shell/ContextMenu.vue`, items in
+  `shell/contextItems.ts`): a right click without a drag selects the element under the pointer
+  when it is not selected, then shows Box to selection, Hide, Isolate (the actions `box_to_selection`,
+  `hide_now`, `isolate_now`, greyed out as `query actions` says).
+
+**Where.** `ccore/session/visibility.c` and `.h`, `calls.c` (ISS71 blocks);
+`web-ui/src/shell/ContextMenu.vue`, `contextItems.ts`, `RibbonTool.vue` (tooltip),
+`web-ui/src/glviewport.ts` (ISS71 blocks); tests `ccore/test/visibility_test.mjs`, `host_test.mjs`.

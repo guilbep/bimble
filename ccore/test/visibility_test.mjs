@@ -77,13 +77,30 @@ function around(boxes) {
   const m = [0, 1, 2].map((k) => f(1 + f(f(hi[k] - lo[k]) * f(1e-5))));
   return { min: [0, 1, 2].map((k) => f(lo[k] - m[k])), max: [0, 1, 2].map((k) => f(hi[k] + m[k])) };
 }
-/** Per element of GET /mesh (BMSH, session/mesh.c): its id and its f32 box. */
-async function meshBoxes() {
-  const ab = await (await fetch(`${base}/mesh?t=${TOKEN}`)).arrayBuffer();
-  const dv = new DataView(ab), u = (o) => dv.getUint32(o, true);
-  const nE = u(12), nV = u(16), bytes = new Uint8Array(ab);
+/** ISS71: the bounds of f32 boxes grown by `m` on every side (f32), as Box to selection. */
+function grown(boxes, m = 1000) {
+  const f = Math.fround, lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (const b of boxes) for (let k = 0; k < 3; k++) lo[k] = Math.min(lo[k], b[k]), hi[k] = Math.max(hi[k], b[3 + k]);
+  return { min: lo.map((x) => f(x - m)), max: hi.map((x) => f(x + m)) };
+}
+/** Per element of GET /mesh (BMSH, session/mesh.c): its id and its f32 box. ISS71: `at`, the
+ *  BMSH's byte offset (a link of the LNKS trailer); `links`: the trailer's BMSH offsets. */
+async function meshBoxes(at = 0, buf = null) {
+  const ab = buf ?? await (await fetch(`${base}/mesh?t=${TOKEN}`)).arrayBuffer();
+  const dv = new DataView(ab, at), u = (o) => dv.getUint32(o, true);
+  const nE = u(12), nV = u(16), bytes = new Uint8Array(ab, at);
   const origin = [dv.getFloat64(28, true), dv.getFloat64(36, true), dv.getFloat64(44, true)];
-  const pos = new Float32Array(ab, 52 + 48 * nE, 3 * nV), out = new Map();
+  const pos = new Float32Array(ab, at + 52 + 48 * nE, 3 * nV), out = new Map();
+  const size = 52 + 48 * nE + 12 * nV + 4 * u(20) + 32 * u(24), links = [];
+  if (at === 0 && ab.byteLength > size) { // the LNKS trailer (session/links.h)
+    let o = size + 12;
+    for (let i = 0; i < u(size + 8); i++) {
+      const L = new DataView(ab).getUint32(o, true);
+      o += 4 + L + ((4 - (L % 4)) % 4) + 8;
+      links.push(o);
+      o += new DataView(ab).getUint32(o - 4, true);
+    }
+  }
   for (let e = 0, o = 52; e < nE; e++, o += 48) {
     const id = String.fromCharCode(...bytes.subarray(o, o + 22)), v0 = u(o + 24), nv = u(o + 28);
     const b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
@@ -91,7 +108,7 @@ async function meshBoxes() {
       for (let k = 0; k < 3; k++) b[k] = Math.min(b[k], pos[3 * v + k]), b[3 + k] = Math.max(b[3 + k], pos[3 * v + k]);
     out.set(id, b);
   }
-  return { origin, boxes: out };
+  return { origin, boxes: out, links, ab };
 }
 
 const tmp = mkdtempSync(join(tmpdir(), "ccore-vis-"));
@@ -120,9 +137,11 @@ try {
   // ---- nothing hidden, no box ----
   await same("loaded", vis({}));
   check("loaded: view signature [0,0,0,0,0,0,0,1]", (await view()) === "[0,0,0,0,0,0,0,1]", await view());
-  for (const n of ["hide_now", "isolate_now", "hide_in_view", "isolate_in_view", "unhide", "clear_temporary", "show_all_in_view", "box_to_selection",
+  for (const n of ["hide_now", "isolate_now", "hide_in_view", "isolate_in_view", "unhide", "clear_temporary", "show_all_in_view",
     "show_all", "show_previous" /* ISS72 */])
     check(`no selection, nothing hidden: ${n} disabled`, !(await enabled(n)));
+  // ISS71 (issue #71): Box to selection turns the box on: enabled with a model, the box off (Rust: on only).
+  check("box_to_selection enabled with a model, the box off (ISS71)", await enabled("box_to_selection"));
   check("section_box and reveal_hidden enabled with a model", (await enabled("section_box")) && (await enabled("reveal_hidden")));
   const off = await act("hide_now");
   check("hide_now without a selection -> 400 not enabled", off.status === 400 && off.text === 'action "hide_now" is not enabled now', off.text);
@@ -196,12 +215,23 @@ try {
     (await view()) === "[1,0,0,0,0,0,0,1]" && (await pressed("section_box")) && (await enabled("box_to_selection")), await view());
   await call("select", "-", JSON.stringify([d]));
   await act("box_to_selection");
+  // ISS71: the selected element's bounds grown by 1000 mm on every side (Rust: ClipBox::around's 1 mm).
+  const sel1 = grown([boxes.get(d)]);
+  await same("box_to_selection: the selected element's bounds ± 1000 mm (ISS71)", vis({ on: true, box: sel1 }));
+  await call("select", "-", JSON.stringify([c, d]));
+  await act("box_to_selection");
+  const sel2 = grown([boxes.get(c), boxes.get(d)]);
+  await same("box_to_selection of two elements: their bounds ± 1000 mm (ISS71)", vis({ on: true, box: sel2 }));
+  await act("section_box");
+  check("box_to_selection with the box off -> 200 (ISS71)", (await act("box_to_selection")).status === 200);
+  await same("box_to_selection turns the box on (ISS71)", vis({ on: true, box: sel2 }));
+  await call("select", "-", JSON.stringify([d]));
+  await act("box_to_selection");
+  await act("section_box");
+  await same("section_box off: the box is kept", vis({ on: false, box: sel1 }));
+  await act("section_box");
+  await same("section_box on again: not refitted", vis({ on: true, box: sel1 }));
   const one = around([boxes.get(d)]);
-  await same("box_to_selection: around the selected element", vis({ on: true, box: one }));
-  await act("section_box");
-  await same("section_box off: the box is kept", vis({ on: false, box: one }));
-  await act("section_box");
-  await same("section_box on again: not refitted", vis({ on: true, box: one }));
   // Hidden elements are left out of the fit: d isolated (the selection then cleared), fit to what shows.
   await act("clear_temporary");
   await call("select", "-", JSON.stringify([d]));
@@ -314,6 +344,21 @@ try {
   await ok("show_previous");
   await same("ISS72: the 3D view's previous state (c hidden in the view)", visB({ hiddenInView: [c] }));
   await ok("show_all");
+  // ---- ISS71: box to selection of a linked model's element (lib.rs:1499: moved by its origin - ours) ----
+  const lk = await call("action", "link_model", JSON.stringify({ path: join(CCORE, "golden/ifc/fixtures/mapped_item.ifc") }));
+  check("ISS71: link_model mapped_item.ifc -> 200", lk.status === 200, lk.text);
+  const m2 = await meshBoxes();
+  const L = await meshBoxes(m2.links[0], m2.ab), lid = [...L.boxes.keys()][0], f = Math.fround;
+  const lOff = [0, 1, 2].map((k) => f(L.origin[k] - origin[k]));
+  const lb = L.boxes.get(lid).map((x, i) => f(x + lOff[i % 3]));
+  const ls = await call("select", "-", JSON.stringify({ link: "mapped_item.ifc", ids: [lid] }));
+  check("ISS71: select the linked element -> 200", ls.status === 200, ls.text);
+  await act("box_to_selection");
+  const gotL = JSON.parse(await q("visibility")).section_box, wantL = grown([lb]);
+  check("ISS71: box_to_selection of a linked element: its bounds (moved) ± 1000 mm, on",
+    gotL.on && JSON.stringify(gotL.box) === JSON.stringify({ max: wantL.max, min: wantL.min, yaw: 0 }), `${JSON.stringify(gotL)} want ${JSON.stringify(wantL)}`);
+  await call("action", "manage_links", JSON.stringify({ op: "remove", name: "mapped_item.ifc" }));
+  await act("section_box"); // off again, as before this block
 
   // ---- a new model: all reset ----
   await call("select", "-", JSON.stringify([a]));
