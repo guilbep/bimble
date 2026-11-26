@@ -32,6 +32,7 @@
 #include "links.h"
 #include "mesh.h"
 #include "scene.h"
+#include "scene_bmsh.h"
 #include "session.h"
 
 static void put_u32(Buf *b, uint32_t v) { buf_append(b, &v, 4); }
@@ -105,8 +106,14 @@ int cc_mesh_bmsh(const cc_model *m, uint32_t rev, Buf *out, cc_error *err) {
     return rc;
 }
 
-/* links.h: the LNKS trailer. */
-int cc_links_bmsh(cc_session *s, uint32_t rev, Buf *out, cc_error *err) {
+/* 3D1: a link's ids in BMSH version 3 (links.c cc_link_id). */
+static void link_bmsh_id(const void *ctx, const cc_scene *sc, size_t k, char out[22]) {
+    (void)sc;
+    cc_link_id(ctx, k, out);
+}
+
+/* links.h: the LNKS trailer (`form` 3: each link's BMSH in version 3). */
+static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error *err) {
     if (!s->nlinks) return 0;
     buf_append(out, "LNKS", 4);
     put_u32(out, 1);
@@ -124,7 +131,8 @@ int cc_links_bmsh(cc_session *s, uint32_t rev, Buf *out, cc_error *err) {
         put_u32(out, k->visible && k->kind ? 1u : 0u); /* LNK1: a missing link (kind 0) draws nothing */
         buf_clear(&one);
         one.oom = 0;
-        rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(&k->scene, rev, &one, err);
+        if (form == 3) rc = cc_scene_bmsh3(cc_link_scene(k), link_bmsh_id, k, rev, &one, err);
+        else rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(&k->scene, rev, &one, err);
         if (!rc && (one.oom || one.len > UINT32_MAX)) rc = fail(err, "out of memory");
         if (!rc) put_u32(out, (uint32_t)one.len), buf_append(out, one.p, one.len);
     }
@@ -133,10 +141,17 @@ int cc_links_bmsh(cc_session *s, uint32_t rev, Buf *out, cc_error *err) {
     return rc;
 }
 
+int cc_links_bmsh(cc_session *s, uint32_t rev, Buf *out, cc_error *err) { return links_bmsh(s, rev, 1, out, err); }
+
 /* ---- the cached answer (in the session) ---- */
 
 int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double *build_ms) {
+    return cc_mesh_get_form(s, 1, p, n, rev, build_ms);
+}
+
+int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_t *rev, double *build_ms) {
     cc_error err;
+    if (form != 3) form = 1;
     *build_ms = 0;
     Buf *cache = &s->mesh;
     const cc_model *m = cc_mesh_model(s, rev, &err);
@@ -147,7 +162,7 @@ int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double 
         *p = buf_cstr(cache), *n = cache->len;
         return 404;
     }
-    if (!s->mesh_status || s->mesh_model != m || s->mesh_rev != *rev || s->mesh_links_gen != s->links_gen) {
+    if (!s->mesh_status || s->mesh_model != m || s->mesh_rev != *rev || s->mesh_links_gen != s->links_gen || s->mesh_form != form) {
         double t0 = s->pf->now_ms(s->pf->ctx);
         buf_clear(cache);
         cache->oom = 0;
@@ -155,9 +170,19 @@ int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double 
          * not a second build; when it has none (or it failed), a build here gives the error. */
         const cc_scene *sc = cc_session_scene(s);
         int rc;
-        if (s->view == CC_VIEW_IFC) rc = cc_ifc_scene_bmsh(s->ifc, *rev, cache, &err); /* the file's id text */
+        if (form == 3) { /* 3D1: shapes once */
+            cc_scene own;
+            int built = 0;
+            if (s->view == CC_VIEW_IFC) rc = cc_ifc_scene_bmsh3(s->ifc, *rev, cache, &err);
+            else if (sc) rc = cc_scene_bmsh3(sc, NULL, NULL, *rev, cache, &err);
+            else {
+                built = 1;
+                rc = cc_scene_build(&own, m, &err) != 0 ? -1 : cc_scene_bmsh3(&own, NULL, NULL, *rev, cache, &err);
+            }
+            if (built) cc_scene_free(&own);
+        } else if (s->view == CC_VIEW_IFC) rc = cc_ifc_scene_bmsh(s->ifc, *rev, cache, &err); /* the file's id text */
         else rc = sc ? bmsh_of(sc, *rev, cache, &err) : cc_mesh_bmsh(m, *rev, cache, &err);
-        if (rc == 0) rc = cc_links_bmsh(s, *rev, cache, &err); /* nothing without links */
+        if (rc == 0) rc = links_bmsh(s, *rev, form, cache, &err); /* nothing without links */
         if (rc != 0) {
             buf_clear(cache);
             cache->oom = 0;
@@ -166,7 +191,7 @@ int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double 
         } else {
             s->mesh_status = 200;
         }
-        s->mesh_model = m, s->mesh_rev = *rev, s->mesh_links_gen = s->links_gen;
+        s->mesh_model = m, s->mesh_rev = *rev, s->mesh_links_gen = s->links_gen, s->mesh_form = form;
         *build_ms = s->pf->now_ms(s->pf->ctx) - t0;
     }
     *p = cache->p ? cache->p : "", *n = cache->len;

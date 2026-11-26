@@ -364,6 +364,9 @@ static int parse_head(const char *p, size_t len, Head *h) {
 }
 
 /* serve.rs:368-374: the first `key=value` pair with this key; no decoding. */
+/* 3D1: the BMSH version the page asked last (1, or 3 with ?shapes=1): what --warm prebuilds. */
+static int mesh_form = 1;
+
 static int query_param(Str q, const char *key, Str *out) {
     size_t kn = strlen(key), i = 0;
     while (i <= q.n) {
@@ -571,7 +574,10 @@ static void handle_one(Conn *c, int *again) {
         size_t mn;
         uint32_t rev;
         double ms;
-        int st = cc_mesh_get(cfg->session, &mp, &mn, &rev, &ms);
+        /* 3D1 (ADR 0078): ?shapes=1, BMSH version 3 (each shape once, a placement per element) */
+        Str shp;
+        mesh_form = query_param(query, "shapes", &shp) && str_eq(shp, "1") ? 3 : 1;
+        int st = cc_mesh_get_form(cfg->session, mesh_form, &mp, &mn, &rev, &ms);
         if (ms > 0) fprintf(stderr, "bimble-ccore: mesh rev %u built in %.3f ms, %zu bytes\n", (unsigned)rev, ms, mn);
         char xrev[80];
         snprintf(xrev, sizeof xrev, "X-Rev: %u\r\nAccess-Control-Expose-Headers: X-Rev\r\n", (unsigned)rev);
@@ -749,7 +755,7 @@ int cc_host_run(const cc_host_config *config) {
             size_t mn;
             uint32_t rev;
             double ms;
-            cc_mesh_get(cfg->session, &mp, &mn, &rev, &ms);
+            cc_mesh_get_form(cfg->session, mesh_form, &mp, &mn, &rev, &ms); /* 3D1: the form the page asked last */
             warmed = rev;
             fprintf(stderr, "bimble-ccore: warm: mesh rev %u built in %.3f ms (scene included)\n", (unsigned)rev, ms);
             continue;

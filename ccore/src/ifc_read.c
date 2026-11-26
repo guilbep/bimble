@@ -10,6 +10,7 @@
 #include "fmt.h"
 #include "json_w.h"
 #include "scene_build.h"
+#include "scene_bmsh.h"
 
 #define ELEMENT_MAX_TRIANGLES ((size_t)50000000) /* read.rs */
 #define BATCH 1024
@@ -1382,4 +1383,15 @@ int cc_ifc_scene_bmsh(const cc_ifc_scene *is, uint32_t rev, Buf *out, cc_error *
 done:
     arena_free(&tmp);
     return rc;
+}
+
+/* ---- 3D1: BMSH version 3 (scene_bmsh.h), the ids as cc_ifc_scene_bmsh writes them */
+static void ifc_bmsh_id(const void *ctx, const cc_scene *s, size_t k, char out[22]) {
+    const cc_ifc_scene *is = ctx;
+    cc_str id = is->info[s->elements[k].model_index].global_id;
+    for (size_t i = 0; i < 22; i++) out[i] = i < id.n ? id.p[i] : '0';
+}
+
+int cc_ifc_scene_bmsh3(const cc_ifc_scene *is, uint32_t rev, Buf *out, cc_error *err) {
+    return cc_scene_bmsh3(&is->scene, ifc_bmsh_id, is, rev, out, err);
 }

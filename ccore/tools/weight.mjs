@@ -48,7 +48,7 @@ const FEATURES = [
   ["queries (model queries)", "query"],
   ["quantities and schedules", "quantity schedules"],
   ["command palette", "palette"],
-  ["scene and mesh (triangulation, BMSH)", "scene earcut meshcodec mesh mesh_model prism_cut"],
+  ["scene and mesh (triangulation, BMSH)", "scene earcut meshcodec mesh mesh_model prism_cut scene_bmsh"],
   ["booleans glue (kernel calls)", "boolean"],
   ["views and visibility (2D views, ranges)", "view view_effective view_range views visibility"],
   ["drawing D1-D5 (cut, plan, annotations, style, sheets, paper, SVG)", "draw_cut draw_plan draw_annot draw_style draw_view draw_sheet paper sheet_svg toggles paper_scene"],

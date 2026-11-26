@@ -25,4 +25,8 @@ const cc_model *cc_mesh_model(const cc_session *s, uint32_t *rev, cc_error *err)
  * the BMSH bytes, 404 (nothing open) or 500 (the scene cannot be built) with a UTF-8 text. `*p`
  * stays valid until the next call on `s`. `*build_ms` is the build time, 0 when served from cache. */
 int cc_mesh_get(cc_session *s, const char **p, size_t *n, uint32_t *rev, double *build_ms);
+/* 3D1 (ADR 0078): the same in BMSH version `form`: 1 (above), or 3 (src/scene_bmsh.h: each shared
+ * shape once and a placement per element; the LNKS trailer's blocks in version 3 too). One form is
+ * cached at a time. */
+int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_t *rev, double *build_ms);
 #endif

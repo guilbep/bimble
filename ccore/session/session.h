@@ -94,6 +94,7 @@ typedef struct cc_session {
     int mesh_status; /* 0: nothing cached */
     const cc_model *mesh_model;
     uint32_t mesh_rev;
+    int mesh_form; /* 3D1: the BMSH version cached (1, or 3: shapes once, scene_bmsh.h) */
     cc_persist *persist;
     /* Linked models (ticket B5, links.h): read-only scenes drawn with the open one, in link
      * order; dropped with the open model (lib.rs:1668). links_gen + 1 on every change to them

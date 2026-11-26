@@ -678,7 +678,7 @@ EXPORT("host_mesh") int wa_host_mesh(int flags, cc_wasm_res *r) {
     size_t n;
     uint32_t rev;
     double ms;
-    int st = cc_mesh_get(s, &p, &n, &rev, &ms);
+    int st = cc_mesh_get_form(s, flags & 2 ? 3 : 1, &p, &n, &rev, &ms); /* 3D1: bit 1, BMSH version 3 */
     r->value = rev;
     Buf b;
     buf_init(&b);

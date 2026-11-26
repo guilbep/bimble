@@ -96,4 +96,6 @@ void cc_ifc_error_txt(Buf *b, const cc_error *err);
  * draws), appended to `out`. The GlobalId field holds the file's id text, cut or padded with
  * '0' to 22 bytes. 0 ok, -1 with `err` (out of memory, a count over u32). */
 int cc_ifc_scene_bmsh(const cc_ifc_scene *s, uint32_t rev, Buf *out, cc_error *err);
+/* 3D1: the same as BMSH version 3 (scene_bmsh.h: each shape once, a placement per element). */
+int cc_ifc_scene_bmsh3(const cc_ifc_scene *s, uint32_t rev, Buf *out, cc_error *err);
 #endif
