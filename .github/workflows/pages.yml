@@ -1,13 +1,16 @@
-# GitHub Pages (ADR 0020, ADR 0072). Two labs in one site:
-#   - the site root: the last Rust release (v0.19.0, the frozen oracle of ADR 0067), as it was: the
-#     Vue lab (web-ui) of the release's tag on the editor wasm of the release's web zip, the egui
-#     page of the zip under egui/. Nothing is compiled: the wasm comes from the release assets, the
+# GitHub Pages (ADR 0020, ADR 0072). Two labs in one site (the owner's decision of 26 Nov 2026:
+# the C lab is the site root, the Rust lab moves under rust/):
+#   - the site root: the C core's lab (ticket PG1, ccore/README.md), web-ui on the C wasm (`npm run
+#     build:ccore`), from main (a push) or the input `ccore_ref` (a manual run, default main);
+#   - rust/: the last Rust release (v0.19.0, the frozen oracle of ADR 0067), as it was: the Vue lab
+#     (web-ui) of the release's tag on the editor wasm of the release's web zip, the egui page of
+#     the zip under rust/egui/. Nothing is compiled: the wasm comes from the release assets, the
 #     page from the tag's web-ui sources (main has no Rust since ADR 0072);
-#   - c/: the C core's lab (ticket PG1, ccore/README.md), web-ui on the C wasm (`npm run
-#     build:ccore`), from main (a push) or the input `ccore_ref` (a manual run, default main).
-# The site is one artifact per deployment, so a lab not built here disappears at the next one. On a
-# push, a failed C build fails the site job: nothing is deployed, the published site stays as it
-# was (FIXDOC; before, the root was published without c/). On a manual run it only warns.
+#   - c/ and egui/: one page each that sends an old link on (c/ to the root, egui/ to rust/egui/),
+#     with its query and fragment.
+# The site is one artifact per deployment, so a lab not built here disappears at the next one. A
+# failed C build fails the site job: nothing is deployed, the published site stays as it was (the
+# root cannot be published empty).
 #
 # Deployment only from main (FIXDOC): a manual run started on another branch builds every job but
 # skips `deploy` (its ref must be refs/heads/main).
@@ -153,8 +156,8 @@ jobs:
   site:
     needs: [preview, ccore_lab]
     # `always()`: `preview` is skipped on every run but a manual one that asks for it; a failed
-    # preview stops the deployment. A failed `ccore_lab` fails this job on a push (step "No C lab
-    # this time"); on a manual run the root is published without c/.
+    # preview stops the deployment. A failed `ccore_lab` fails this job (step "No C lab this
+    # time"): the root is the C lab.
     if: always() && needs.preview.result != 'failure' && needs.preview.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
@@ -186,39 +189,52 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: src/web-ui/package-lock.json
-      - name: The Vue lab on the release's wasm, egui page under egui/
+      - name: The Rust lab under rust/ (the Vue lab on the release's wasm, egui page under rust/egui/)
         run: |
           mkdir -p src/web && mv web/dist src/web/dist
           cd src/web-ui
           npm ci --no-audit --no-fund
           npm run wasm
-          npm run build -- --base ./ --outDir ../../site --emptyOutDir
-          mv ../web/dist ../../site/egui
-          test -f ../../site/index.html && test -f ../../site/bimble/bimble_web.js && test -f ../../site/egui/index.html
+          npm run build -- --base ./ --outDir ../../site/rust --emptyOutDir
+          mv ../web/dist ../../site/rust/egui
+          test -f ../../site/rust/index.html && test -f ../../site/rust/bimble/bimble_web.js && test -f ../../site/rust/egui/index.html
       - name: The pull request's C lab under preview/pr-<number>/
         if: needs.preview.result == 'success'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           name: preview
           path: site/preview/pr-${{ inputs.preview_pr }}
-      - name: The C lab under c/
-        if: needs.ccore_lab.result == 'success'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0 (v4 on 26 Nov 2026)
-        with:
-          name: ccore-lab
-          path: site/c
       - name: No C lab this time
         if: needs.ccore_lab.result != 'success'
         env:
           RESULT: ${{ needs.ccore_lab.result }}
-          EVENT: ${{ github.event_name }}
         run: |
-          # FIXDOC: a push publishes main's C lab or nothing; a manual run may publish the root alone.
-          if [[ $EVENT == push ]]; then
-            echo "::error::ccore_lab $RESULT on a push: no deployment (the published site keeps its c/)"
-            exit 1
-          fi
-          echo "::warning::ccore_lab $RESULT: the site is published without c/"
+          echo "::error::ccore_lab $RESULT: no deployment (the site root is the C lab; the published site stays as it was)"
+          exit 1
+      - name: The C lab at the site root
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0 (v4 on 26 Nov 2026)
+        with:
+          name: ccore-lab
+          path: site
+      - name: Old links (c/ and egui/) are sent on
+        run: |
+          test -f site/index.html && test -f site/ccore/ccore.wasm && test -f site/rust/index.html
+          # The C lab must not own these names: a page of its own there would be replaced.
+          test ! -e site/c && test ! -e site/egui
+          forward() { # <folder> <relative target>
+            mkdir -p "site/$1"
+            cat > "site/$1/index.html" <<HTML
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>Bimble</title>
+          <meta name="robots" content="noindex">
+          <script>location.replace("$2" + location.search + location.hash)</script>
+          <noscript><meta http-equiv="refresh" content="0; url=$2"></noscript>
+          <p><a href="$2">Bimble has moved here.</a></p>
+          HTML
+          }
+          forward c ../
+          forward egui ../rust/egui/
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1 (v3 on 26 Nov 2026)
         with:
           path: site

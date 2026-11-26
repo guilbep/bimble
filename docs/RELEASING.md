@@ -35,9 +35,10 @@ does the same.
 
 ## The web pages
 
-`.github/workflows/pages.yml` publishes the C lab from `main` under `/c/` on every push to `main`
-that changes `ccore/` or `web-ui/`, beside the v0.19.0 lab at the root. When the C lab fails to
-build on a push, nothing is deployed and the site keeps its last `c/`. A manual run (Actions →
+`.github/workflows/pages.yml` publishes the C lab from `main` at the site root on every push to `main`
+that changes `ccore/` or `web-ui/`, with the v0.19.0 lab under `/rust/` (its wasm comes from the
+release assets: Rust is never compiled). When the C lab fails to build, nothing is deployed and
+the site stays as it was. `/c/` and `/egui/` send old links on. A manual run (Actions →
 pages → Run workflow) can name another `ccore_ref` or publish a pull request's lab under
 `preview/pr-<number>/`; only a run started on `main` deploys (a run on another branch builds and
 stops). A preview is served from the production origin and shares its browser storage with the

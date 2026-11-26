@@ -51,7 +51,7 @@ edit written (the watcher's delay is not in it); 2.1 s at 20,000 elements (`larg
 - Other ports: `CCORE_DEV_PORT=47500 CCORE_DEV_VITE=5180 ccore/dev.sh`.
 - Logs: `ccore/out/dev/host.log`, `ccore/out/dev/vite.log`.
 - Vue edits (`web-ui/src`) reload through Vite as usual.
-- The wasm lab instead of the native host (no server, as on GitHub Pages under `/c/`):
+- The wasm lab instead of the native host (no server, as on GitHub Pages):
   `cd web-ui && npm run dev:wasm`, then open `http://localhost:5173/` (rebuild the wasm with
   `npm run ccore:wasm` after a C change).
 
