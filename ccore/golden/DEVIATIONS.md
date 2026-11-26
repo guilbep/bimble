@@ -673,11 +673,17 @@ blocks), `web-ui/src/files.ts`; tests `ccore/test/fs_test.mjs`, `ccore/test/lab_
   drawing paper.rs `refresh_paper` shows On paper; Rust shows it as a raster of the prepared sheet
   (egui texture), the lab as the SVG itself (pan and zoom of the picture). The answer adds the
   paper's name, orientation, size and the view's scale.
-- **On paper of a read-only scene:** Rust draws the views of any loaded scene, an IFC opened as it
-  is too (`ribbon.rs:597 two_pictures`, `:611 _ => loaded` for Export view). The C core's drawing
-  reads the model (`cc_plan` takes a `cc_model`), so `paper_view` and `on_paper` are enabled with a
-  model open for editing only, and `open_views.paper.offered` is false on a read-only scene: no
-  switch that does nothing. `parity.md` shows them as differing in `ifc_readonly`.
+- **On paper of a read-only scene:** removed by ticket LNK1. Rust draws the views of any loaded
+  scene, an IFC opened as it is too (`ribbon.rs:597 two_pictures`, `:611 _ => loaded` for Export
+  view); the C core now does the same: the drawing takes a model made from what the read-only scene
+  read (`session/paper_scene.h`: storeys, materials, grids, georeference, one element per scene
+  element) and `paper_view`, `on_paper`, `open_views.paper.offered`, `view_svg` and `view_pdf` work
+  there. Proof (`test/paper_view_test.c` `test_lnk1`): `golden/ifc/frame.ifc` opened as it is
+  draws its 6 plans and ceiling plans (bare or not) and the PDF of a plan byte for byte as
+  `golden/frame.json` opened for editing draws them. What may still differ on other files: the
+  title block's project fields (a read-only scene has no project information: Rust's comes from
+  its side views file, which the C core has not, DEVIATIONS 16) and an element's storey or material
+  when the IFC names two of them alike (the made model keys them by name).
 - **Placing and measuring switch to Model:** Rust does it when it paints the paper (paper.rs:217,
   each frame); the C core when it is next asked (`actions`, `open_views`, the change JSON) after
   measuring or placing started. The note Rust shows goes to the log.
@@ -938,3 +944,28 @@ Rust here:
 (`cc_repo_put_commit`, `cc_repo_move_head`), `ccore/src/file.c` (`cc_model_load_unchecked`),
 `ccore/session/versions.c`, `web-ui/src/pages/History.vue`; tests `ccore/test/repo_merge_test.c`,
 `ccore/test/versions_test.mjs`, `ccore/test/lab_history.mjs`.
+## 29. Links: the panel, drawn on paper, kept in the .bimble (ticket LNK1, GitHub issue #69)
+
+- **Linked models on paper (a C addition).** Rust's paper drawing draws the host scene only
+  (`paper.rs:119 l.scene`): a linked model is never on a plan, a sheet or a PDF. Issue #69 asks for
+  a coordination plan of linked models ("sortir un plan de coordination"), and a `.bimble` whose
+  geometry is only links has an empty model, so the C core draws every visible link with the host:
+  one scene, the host's elements then each link's (its meshes moved by link origin - host origin,
+  `lib.rs:1499 offset`), a link's elements under the host storey of the same name (else none) and
+  their own materials (`session/paper_scene.h`). A link hidden in the session (`manage_links hide`)
+  or in the drawn view's `hidden_links` is left out. Without visible links the drawing is the
+  model's as before: the D4 goldens keep their bytes (`draw_plan`, `draw_view`, `draw_sheet`,
+  `paper_view`). Test: `paper_view_test.c` `test_lnk1` (a new model draws nothing; with
+  `frame.ifc` linked its plan draws the cut; hidden, nothing again).
+- **`query links_panel`** (`session/links_panel.h`, a C addition): the Links panel's rows. `query
+  links` stays Rust's `links_json`; the panel also needs each link's path, a reference plan's
+  view, placement (move and rotate by numbers) and source.
+- **The panel** (`web-ui/src/shell/LinksPanel.vue`, in the Navigator's Links group as Rust's side
+  panel; Manage links… opens it): per row show / hide, Reload, Reload from…, remove; a reference
+  also ΔX, ΔY (mm) and its angle. Rust's Manage links window has Reload, Reload from… and Delete,
+  its side panel Solid / Edges / Hidden per model: the C panel has an eye (Hidden or shown; no
+  Edges mode) and no "Show differences" (compare is LNK1b).
+- **Reload in the browser:** the wasm module keeps no path, so Reload asks for the file again (the
+  browser's picker): a model is linked again under its name (in its place), a reference reloaded
+  with the picked bytes staged (`host_action_file`, `wasm_api.h`). Rust's wasm build disables
+  Reload there ("Where it was read from isn't known here") and keeps Reload from….

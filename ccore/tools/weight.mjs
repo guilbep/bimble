@@ -49,7 +49,7 @@ const FEATURES = [
   ["scene and mesh (triangulation, BMSH)", "scene earcut meshcodec mesh mesh_model"],
   ["booleans glue (kernel calls)", "boolean"],
   ["views and visibility (2D views, ranges)", "view view_effective view_range views visibility"],
-  ["drawing D1-D5 (cut, plan, annotations, style, sheets, paper, SVG)", "draw_cut draw_plan draw_annot draw_style draw_view draw_sheet paper sheet_svg toggles"],
+  ["drawing D1-D5 (cut, plan, annotations, style, sheets, paper, SVG)", "draw_cut draw_plan draw_annot draw_style draw_view draw_sheet paper sheet_svg toggles paper_scene"],
   ["sheets (verbs and session)", "verbs_sheets sheets"],
   ["PDF writer (D6)", "pdf_out"],
   ["PDF reader (L1)", "pdf_in"],

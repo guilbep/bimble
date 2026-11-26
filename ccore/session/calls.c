@@ -560,9 +560,10 @@ static int in_2d(cc_session *s) {
 /* ---- PAPER1: On paper (paper.rs). Rust's on_paper(): no sheet shown (layout.is_none()), a 2D
  * view shown, and that view in paper_views. paper.rs:217-227: placing and measuring are done on
  * the model, so either switches the active view back to Model (Rust does it at the next frame;
- * here when asked). The drawing reads the model: a read-only scene has no On paper (DEVIATIONS 22). */
+ * here when asked). LNK1: a read-only scene is drawn too (session/paper_scene.h), as Rust's
+ * two_pictures (ribbon.rs:1478) asks only for a 2D view shown. */
 static int sheet_now(cc_session *s) { return s->sheet_shown && cc_sheet_known(s, &s->sheet); }
-static int two_pictures(cc_session *s) { return s->open && in_2d(s) && !sheet_now(s); } /* ribbon.rs:1478 */
+static int two_pictures(cc_session *s) { return loaded(s) && in_2d(s) && !sheet_now(s); } /* ribbon.rs:1478 */
 static long paper_find(const cc_session *s) {
     for (size_t i = 0; s->has_active && i < s->npaper_views; i++)
         if (!cc_gid_cmp(&s->paper_views[i], &s->active)) return (long)i;
@@ -570,7 +571,7 @@ static long paper_find(const cc_session *s) {
 }
 static int on_paper(cc_session *s) {
     long i = paper_find(s);
-    if (i >= 0 && s->open && (s->placing || s->measure.on)) {
+    if (i >= 0 && loaded(s) && (s->placing || s->measure.on)) {
         s->paper_views[i] = s->paper_views[--s->npaper_views];
         cc_log(s->pf, "bimble-ccore: Switched to Model: elements are placed and measured on the model");
         return 0;
@@ -671,7 +672,7 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     /* ---- PAPER1: ribbon.rs:597 PaperView two_pictures(); OnPaper (Export view) `_ => loaded`
      * (the C core draws a model's views only: s->open) ---- */
     if (!strcmp(name, "paper_view")) return two_pictures(s);
-    if (!strcmp(name, "on_paper")) return s->open;
+    if (!strcmp(name, "on_paper")) return loaded(s); /* LNK1: ribbon.rs:611 `_ => loaded` */
     /* ---- end PAPER1 ---- */
     if (!strcmp(name, "clear_temporary")) return loaded(s) && s->vis.has_temp;
     if (!strcmp(name, "show_all_in_view")) return loaded(s) && cc_vis_hidden_in_view(&s->vis);
@@ -704,7 +705,7 @@ static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strcmp(a->name, "orthographic")) return s->orthographic; /* Q2: ribbon.rs:628 camera.orthographic */
     if (cc_toggle_index(a->name) >= 0) return cc_toggle_on(s, cc_toggle_index(a->name)); /* KEY1: ribbon.rs:631-634 */
     if (!strcmp(a->name, "paper_view")) return on_paper(s);         /* PAPER1: ribbon.rs:631 */
-    if (!strcmp(a->name, "on_paper")) return s->open && s->plan_window; /* PAPER1: ribbon.rs:630 */
+    if (!strcmp(a->name, "on_paper")) return loaded(s) && s->plan_window; /* PAPER1: ribbon.rs:630; LNK1: loaded */
     return a->pressed;
 }
 
@@ -1255,10 +1256,10 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "sheet_svg")) return cc_paper_sheet_svg(s, s->open ? scene_now(s) : NULL, body, n, out); /* D5, sheet_svg.h */
     /* D7: the PDF export, sheet_svg.h cc_paper_pdf_query (the answer is the PDF's bytes, or {path, bytes}) */
     if (!strcmp(name, "sheet_pdf") || !strcmp(name, "view_pdf"))
-        return cc_paper_pdf_query(s, s->open ? scene_now(s) : NULL, name[0] == 'v', body, n, out);
+        return cc_paper_pdf_query(s, scene_now(s), name[0] == 'v', body, n, out); /* LNK1: a read-only scene's views too */
     if (!strcmp(name, "pdf_fonts")) return cc_paper_fonts_query(s, out); /* SIZE1: the export's font choice */
     /* ---- PAPER1: a view's paper as SVG; several sheets as one PDF (sheet_svg.h) ---- */
-    if (!strcmp(name, "view_svg")) return cc_paper_view_svg(s, s->open ? scene_now(s) : NULL, body, n, out);
+    if (!strcmp(name, "view_svg")) return cc_paper_view_svg(s, scene_now(s), body, n, out); /* LNK1: read-only too */
     if (!strcmp(name, "sheets_pdf")) return cc_paper_sheets_pdf(s, s->open ? scene_now(s) : NULL, body, n, out);
     /* ---- end PAPER1 ---- */
     /* ---- MAT1: the materials page (materials_page.h, any file) and the library (no model needed) ---- */
