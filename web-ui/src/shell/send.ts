@@ -3,7 +3,7 @@
 // (a file call while `opening`, a view tab for `showView`) and turns the session's changes into
 // events (`core`, and `opened` when another file is loaded).
 import { computed, shallowRef, watch } from "vue";
-import { backend, fileCall, openViews, openView, runAction, screenRoutes, shellHooks, state, type State } from "../bimble";
+import { backend, connectionHooks, fileCall, openViews, openView, runAction, screenRoutes, shellHooks, state, type State } from "../bimble";
 import { HOME, VIEW, kind, shows, step, type CoreState, type Event, type Shell } from "./machine";
 
 /** What the session says now (the change JSON in `state`). */
@@ -50,6 +50,7 @@ function screen(s: Shell): string | null {
   switch (s.at) {
     case "home": return "home";
     case "model": return s.show === "page" ? s.page : s.show === "sheet" ? "sheets" : null;
+    case "sessionLost": return "home"; // FIXUI: under the notice, nothing of the lost session
     default: return screen(s.back);
   }
 }
@@ -122,6 +123,25 @@ watch(state, (s, prev) => {
   send({ do: "core" });
 });
 shellHooks.viewShown = () => { send({ do: "showView" }); };
+
+// ---- FIXUI: the native host stopped answering (bimble.ts pollChanges), then answers again. The
+// same session when it is the same process (its epoch), or a restarted host that replayed the
+// session (`--session`: the same file, rev and unsaved flag as when it went). Anything else: the
+// session was lost, and the shell says so (never a silent jump to Home).
+let known: { file: string | null; rev: number; unsaved: boolean } | null = null;
+connectionHooks.lost = () => {
+  known = { file: state.value.file, rev: state.value.rev, unsaved: state.value.unsaved };
+  send({ do: "lost" });
+};
+connectionHooks.back = (sameProcess, change) => {
+  const c = change as { file?: string | null; rev?: number; unsaved?: boolean } | null;
+  // A restarted host with nothing open has published no change yet (null): the same as no model.
+  const same = sameProcess || (known !== null && (c === null ? known.file === null
+    : c.file === known.file && c.rev === known.rev && c.unsaved === known.unsaved));
+  known = null;
+  send({ do: "reconnected", same });
+};
+// ---- end FIXUI ----
 
 // Actions the lab shows as its own screens, and the file actions: every caller of runAction
 // (quick bar, File menu, palette, ribbon, Home) goes through the shell.

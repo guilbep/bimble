@@ -220,7 +220,9 @@ async function walk(P, label, { model }) {
       // save_as (FS1): a hidden action of the core (calls.c HIDDEN_ACTIONS, not in `query actions`),
       // enabled by the page with an editable model: checked as that.
       const editableNow = await P.js("return b.state.value.file !== null && b.state.value.editable !== false;");
-      const bad = fm.filter((e) => e.enabled && !e.core && !["export"].includes(e.id) && !(e.id === "save_as" && editableNow));
+      // close (FIXUI): hidden too (calls.c HIDDEN_ACTIONS), enabled by the core whenever a file is loaded.
+      const fileNow = await P.js("return b.state.value.file !== null;");
+      const bad = fm.filter((e) => e.enabled && !e.core && !["export"].includes(e.id) && !(e.id === "save_as" && editableNow) && !(e.id === "close" && fileNow));
       check(`${label}: File menu: every enabled entry's action is enabled in the core`, bad.length === 0, JSON.stringify(bad));
       const nyBad = fm.filter((e) => e.ny && (e.enabled || !/./.test(e.title)));
       check(`${label}: File menu: "not yet" entries are greyed with a tooltip`, nyBad.length === 0, JSON.stringify(nyBad));

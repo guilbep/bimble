@@ -29,7 +29,12 @@ export type Shell =
   | { at: "model"; show: "page"; page: string }
   | { at: "model"; show: "sheet"; sheet: string }
   | { at: "error"; message: string; back: Shell }
-  | { at: "confirmClose"; then: FileCall; path?: string; back: Shell };
+  | { at: "confirmClose"; then: FileCall; path?: string; back: Shell }
+  // FIXUI: the native host stopped answering (send.ts: the change poll failed for a while). What
+  // was known when it went: the file and whether it had unsaved changes. Blocking: the page cannot
+  // reach the model. `reconnected` decides: the same session goes back, another says so.
+  | { at: "disconnected"; file: string | null; unsaved: boolean; back: Shell }
+  | { at: "sessionLost"; file: string | null; unsaved: boolean };
 
 export type Event =
   | { do: "new" }
@@ -46,14 +51,18 @@ export type Event =
   | { do: "showSheet"; sheet: string }
   | { do: "back" }
   | { do: "home" }
-  | { do: "core" };
+  | { do: "core" }
+  // FIXUI: the connection to the native host (send.ts watches bimble.ts `connection`).
+  | { do: "lost" }
+  | { do: "retry" }
+  | { do: "reconnected"; same: boolean };
 
 export type EventName = Event["do"];
 /** The state's name in the transition table: `model` is split by what it shows. */
-export type Kind = "home" | "opening" | "model.view" | "model.page" | "model.sheet" | "error" | "confirmClose";
-export const KINDS: readonly Kind[] = ["home", "opening", "model.view", "model.page", "model.sheet", "error", "confirmClose"];
+export type Kind = "home" | "opening" | "model.view" | "model.page" | "model.sheet" | "error" | "confirmClose" | "disconnected" | "sessionLost";
+export const KINDS: readonly Kind[] = ["home", "opening", "model.view", "model.page", "model.sheet", "error", "confirmClose", "disconnected", "sessionLost"];
 export const EVENTS: readonly EventName[] = ["new", "open", "import", "close", "opened", "closed", "failed", "cancel", "discard",
-  "showView", "showPage", "showSheet", "back", "home", "core"];
+  "showView", "showPage", "showSheet", "back", "home", "core", "lost", "retry", "reconnected"];
 
 export const kind = (s: Shell): Kind => (s.at === "model" ? `model.${s.show}` : s.at);
 
@@ -87,17 +96,22 @@ const view: Row = (_s, _e, core) => (core.file === null ? null : VIEW);
 const same: Row = (s) => s;
 const toHome: Row = () => HOME;
 const sync: Row = (s, _e, core) => derive(s, core);
+// FIXUI: the host stopped answering: block, keeping what was known and where the user was.
+const lost: Row = (s, _e, core) => ({ at: "disconnected", file: core.file, unsaved: core.unsaved, back: s });
+// A second error while one shows: the newer message, the same way back (it was dropped with a warning).
+const failedAgain: Row = (s, e) => ({ ...(s as Extract<Shell, { at: "error" }>), message: as(e, "failed").message });
 
 // Every model state: the same rows, but `back` (a page and a sheet go back to the view).
 const MODEL: Partial<Record<EventName, Row>> = {
   ...FILE, close: file("close"), opened, closed: toHome, failed, showView: view, showPage: page, showSheet: sheet,
-  home: toHome, core: sync,
+  home: toHome, core: sync, lost,
 };
 
 /** The transition table: state kind -> event -> row. An event with no row (or a row answering
  *  null) is refused: `next` keeps the state and `send` reports it. */
 export const TRANSITIONS: Record<Kind, Partial<Record<EventName, Row>>> = {
-  home: { ...FILE, opened, closed: same, failed, showView: view, showPage: page, showSheet: sheet, home: same, core: sync },
+  home: { ...FILE, close: (s, e, core) => (core.file === null ? null : file("close")(s, e, core)), opened, closed: same, failed,
+    showView: view, showPage: page, showSheet: sheet, home: same, core: sync, lost },
   opening: {
     // The call answered ok: the session's change (with the file) may come later; `core` re-checks.
     opened: () => VIEW,
@@ -105,6 +119,7 @@ export const TRANSITIONS: Record<Kind, Partial<Record<EventName, Row>>> = {
     failed: (s, e) => ({ at: "error", message: as(e, "failed").message, back: (s as Extract<Shell, { at: "opening" }>).back }),
     cancel: (s, _e, core) => back((s as Extract<Shell, { at: "opening" }>).back, core),
     core: same,
+    lost,
   },
   "model.view": { ...MODEL },
   "model.page": { ...MODEL, back: view },
@@ -113,7 +128,9 @@ export const TRANSITIONS: Record<Kind, Partial<Record<EventName, Row>>> = {
     back: (s, _e, core) => back((s as Extract<Shell, { at: "error" }>).back, core),
     home: toHome,
     opened, closed: toHome,
+    failed: failedAgain,
     core: same,
+    lost,
   },
   confirmClose: {
     discard: (s) => {
@@ -122,7 +139,33 @@ export const TRANSITIONS: Record<Kind, Partial<Record<EventName, Row>>> = {
     },
     cancel: (s, _e, core) => back((s as Extract<Shell, { at: "confirmClose" }>).back, core),
     opened, closed: toHome,
+    // A refusal while the question shows (an action run from the palette): the error, then back here.
+    failed,
     core: same,
+    lost,
+  },
+  // FIXUI: nothing reaches the host. The session's changes cannot come (a restarted host's first
+  // change is read after `reconnected`); Retry asks again now; a call's failure is the outage's.
+  disconnected: {
+    retry: same,
+    lost: same,
+    failed: same,
+    opened: same, closed: same, core: same,
+    reconnected: (s, e, core) => {
+      const d = s as Extract<Shell, { at: "disconnected" }>;
+      return as(e, "reconnected").same ? derive(d.back, core) : { at: "sessionLost", file: d.file, unsaved: d.unsaved };
+    },
+  },
+  // The host answers again, but with another session (restarted without it): said plainly, never a
+  // silent Home. Home, reopen a file (Home's recent list, or the file by its path), or show what the
+  // host has open now.
+  sessionLost: {
+    home: toHome,
+    ...FILE,
+    showView: view,
+    opened: same, closed: same, core: same,
+    failed,
+    lost: (s, _e, core) => ({ at: "disconnected", file: (s as Extract<Shell, { at: "sessionLost" }>).file ?? core.file, unsaved: false, back: s }),
   },
 };
 
@@ -166,6 +209,12 @@ export const CONTROLS: readonly Control[] = [
   { id: "shell-error-back", event: { do: "back" }, shown: k("error") },
   { id: "shell-confirm-discard", event: { do: "discard" }, shown: k("confirmClose") },
   { id: "shell-confirm-cancel", event: { do: "cancel" }, shown: k("confirmClose") },
+  // FIXUI: File -> Close (the model), and the connection notices.
+  { id: "file-menu-close", event: { do: "close" }, shown: (s, c) => inModel(s) || (kind(s) === "home" && c.file !== null) },
+  { id: "shell-disconnected-retry", event: { do: "retry" }, shown: k("disconnected") },
+  { id: "shell-lost-home", event: { do: "home" }, shown: k("sessionLost") },
+  { id: "shell-lost-reopen", event: { do: "open", path: "/recent/file.bimble" }, shown: (s) => s.at === "sessionLost" && s.file !== null },
+  { id: "shell-lost-show", event: { do: "showView" }, shown: (s, c) => kind(s) === "sessionLost" && c.file !== null },
 ];
 
 /** Whether the control `id` is shown in `s` (an unknown id: never). */

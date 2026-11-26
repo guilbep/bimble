@@ -32,7 +32,7 @@ function moves(s, core) {
   const out = [];
   const user = [{ do: "new" }, { do: "open" }, { do: "open", path: "/x/sample.bimble" }, { do: "import" }, { do: "close" },
     { do: "discard" }, { do: "cancel" }, { do: "showView" }, { do: "showPage", page: "quantities" },
-    { do: "showSheet", sheet: "s1" }, { do: "back" }, { do: "home" }];
+    { do: "showSheet", sheet: "s1" }, { do: "back" }, { do: "home" }, { do: "retry" }];
   for (const e of user) {
     const to = step(s, e, core);
     if (to === null) continue;
@@ -45,6 +45,10 @@ function moves(s, core) {
     [{ do: "opened" }, LOADED], [{ do: "closed" }, EMPTY], [{ do: "failed", message: "refused" }, core],
     [{ do: "core" }, core],
     [{ do: "core" }, EMPTY], // the model closed by an agent
+    // FIXUI: the host stops answering; it comes back with the same session, or another (a fresh
+    // host with the sample open, or none).
+    [{ do: "lost" }, core], [{ do: "reconnected", same: true }, core],
+    [{ do: "reconnected", same: false }, LOADED], [{ do: "reconnected", same: false }, EMPTY],
     ...(core.file !== null ? [[{ do: "core" }, { ...core, tab: false }], [{ do: "core" }, { ...core, unsaved: true }], [{ do: "core" }, { ...core, unsaved: false }]] : []),
     ...(core.file !== null && !core.tab ? [[{ do: "core" }, { ...core, tab: true }]] : []),
   ];
@@ -125,6 +129,81 @@ check("the model closed under a page -> Home", at(page, { do: "core" }, EMPTY)?.
 check("a failed open -> the error; back -> where it came from",
   kindOf(at(at({ at: "opening", what: "open", discard: false, back: page }, { do: "failed", message: "x" }, LOADED), { do: "back" }, LOADED)) === "model.page");
 check("a page without a model is refused", at({ at: "home" }, { do: "showPage", page: "quantities" }, EMPTY) === null);
+
+// ---- FIXUI: expectations written by hand, not derived from the machine's own step/CONTROLS: a
+// row removed, added or sent elsewhere fails here (the audit's mutations: opening.closed,
+// MODEL.failed, error.home, home.failed, confirmClose.cancel -> HOME all survived the checks above).
+const WANT_KINDS = ["home", "opening", "model.view", "model.page", "model.sheet", "error", "confirmClose", "disconnected", "sessionLost"];
+check("the reachable state kinds are exactly the expected nine", JSON.stringify([...reached].sort()) === JSON.stringify([...WANT_KINDS].sort()) &&
+  JSON.stringify([...KINDS].sort()) === JSON.stringify([...WANT_KINDS].sort()), [...reached].join(", "));
+const MODEL_ROWS = "new open import close opened closed failed showView showPage showSheet home core lost";
+const WANT_ROWS = {
+  home: MODEL_ROWS,
+  opening: "opened closed failed cancel core lost",
+  "model.view": MODEL_ROWS,
+  "model.page": `${MODEL_ROWS} back`,
+  "model.sheet": `${MODEL_ROWS} back`,
+  error: "back home opened closed failed core lost",
+  confirmClose: "discard cancel opened closed failed core lost",
+  disconnected: "retry lost failed opened closed core reconnected",
+  sessionLost: "home new open import showView opened closed core failed lost",
+};
+for (const kd of WANT_KINDS) {
+  const got = Object.keys(TRANSITIONS[kd] ?? {}).sort().join(" "), want = WANT_ROWS[kd].split(" ").sort().join(" ");
+  check(`${kd}: its rows are exactly the expected events`, got === want, `got ${got}; want ${want}`);
+}
+const DIRTY = { ...LOADED, unsaved: true };
+const sheetS = { at: "model", show: "sheet", sheet: "s1" };
+const opening = (back, what = "open") => ({ at: "opening", what, discard: false, back });
+const err = { at: "error", message: "first", back: page };
+const ask = { at: "confirmClose", then: "open", back: page };
+const gone = { at: "disconnected", file: "sample.bimble", unsaved: true, back: page };
+const lostS = { at: "sessionLost", file: "sample.bimble", unsaved: true };
+// [name, state, event, core, expected kind (null: refused), extra predicate on the result]
+const CASES = [
+  ["Home -> New, no model: the call", { at: "home" }, { do: "new" }, EMPTY, "opening"],
+  ["Home -> a failed action: the error", { at: "home" }, { do: "failed", message: "x" }, EMPTY, "error", (r) => r.back.at === "home"],
+  ["Home -> Close with no model: refused", { at: "home" }, { do: "close" }, EMPTY, null],
+  ["Home -> Close with a model: the call", { at: "home" }, { do: "close" }, LOADED, "opening", (r) => r.what === "close"],
+  ["opening a close -> closed: Home", opening(VIEW, "close"), { do: "closed" }, EMPTY, "home"],
+  ["opening -> opened: the view", opening({ at: "home" }), { do: "opened" }, LOADED, "model.view"],
+  ["opening -> cancel: back where it came from", opening(page), { do: "cancel" }, LOADED, "model.page"],
+  ["the view -> failed: the error, back to the view", VIEW, { do: "failed", message: "x" }, LOADED, "error", (r) => kind(r.back) === "model.view"],
+  ["a page -> failed: the error, back to the page", page, { do: "failed", message: "x" }, LOADED, "error", (r) => kind(r.back) === "model.page"],
+  ["a sheet -> failed: the error, back to the sheet", sheetS, { do: "failed", message: "x" }, LOADED, "error", (r) => kind(r.back) === "model.sheet"],
+  ["a sheet -> back: the view", sheetS, { do: "back" }, LOADED, "model.view"],
+  ["the view -> Home", VIEW, { do: "home" }, LOADED, "home"],
+  ["the error -> Home", err, { do: "home" }, LOADED, "home"],
+  ["the error -> back: the page it came from", err, { do: "back" }, LOADED, "model.page"],
+  ["the error -> a second error: the newer message, the same way back", err, { do: "failed", message: "second" }, LOADED, "error",
+    (r) => r.message === "second" && kind(r.back) === "model.page"],
+  ["the question -> cancel: the page it came from (not Home)", ask, { do: "cancel" }, DIRTY, "model.page"],
+  ["the question -> discard: the call, discarding", ask, { do: "discard" }, DIRTY, "opening", (r) => r.discard === true],
+  ["the question -> an error: shown", ask, { do: "failed", message: "x" }, DIRTY, "error"],
+  ["the view -> the host lost: blocking, what was known kept", VIEW, { do: "lost" }, DIRTY, "disconnected",
+    (r) => r.file === "sample.bimble" && r.unsaved === true && kind(r.back) === "model.view"],
+  ["a page -> the host lost", page, { do: "lost" }, LOADED, "disconnected"],
+  ["the host lost -> Retry: still disconnected", gone, { do: "retry" }, LOADED, "disconnected"],
+  ["the host lost -> Home: refused (no silent jump)", gone, { do: "home" }, LOADED, null],
+  ["the host lost -> the session's change: no move", gone, { do: "core" }, EMPTY, "disconnected"],
+  ["the host back, same session: the page it showed", gone, { do: "reconnected", same: true }, LOADED, "model.page"],
+  ["the host back, another session: said so", gone, { do: "reconnected", same: false }, EMPTY, "sessionLost",
+    (r) => r.file === "sample.bimble" && r.unsaved === true],
+  ["session lost -> its change: no silent Home", lostS, { do: "core" }, EMPTY, "sessionLost"],
+  ["session lost -> Home", lostS, { do: "home" }, EMPTY, "home"],
+  ["session lost -> reopen the file", lostS, { do: "open", path: "/x/sample.bimble" }, EMPTY, "opening", (r) => r.path === "/x/sample.bimble"],
+  ["session lost -> show what the host has open", lostS, { do: "showView" }, LOADED, "model.view"],
+];
+for (const [name, st, e, c, want, pred] of CASES) {
+  const r = step(st, e, c);
+  check(name, (r === null ? null : kind(r)) === want && (!pred || (r !== null && pred(r))), JSON.stringify(r));
+}
+// The controls: the File menu's Close and the notices' buttons, where a hand list says.
+const WANT_CONTROLS = ["file-menu-close", "shell-disconnected-retry", "shell-lost-home", "shell-lost-reopen", "shell-lost-show"];
+check("the connection notices' and File -> Close's controls exist", WANT_CONTROLS.every((id) => CONTROLS.some((x) => x.id === id)));
+const ctl = (id) => CONTROLS.find((x) => x.id === id);
+check("File -> Close shows with a model, not without", ctl("file-menu-close")?.shown(VIEW, LOADED) === true && ctl("file-menu-close")?.shown({ at: "home" }, EMPTY) === false);
+check("Retry shows only while disconnected", ctl("shell-disconnected-retry")?.shown(gone, LOADED) === true && ctl("shell-disconnected-retry")?.shown(VIEW, LOADED) === false);
 
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

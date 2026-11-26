@@ -32,6 +32,8 @@ const sections: { title: Key; entries: Entry[] }[] = [
     // ---- FS1: Save as (not a ribbon action: enabled with an editable model, calls.c action_enabled) ----
     { key: "filemenu.saveAs", icon: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><path d="M12 13v5M9.5 15.5h5"/>', action: "save_as" },
     // ---- end FS1 ----
+    // FIXUI: Close the model (the shell's `close`: asks first with unsaved changes; calls.c HIDDEN_ACTIONS)
+    { key: "filemenu.close", icon: '<path d="M5 3h10l4 4v14H5z"/><path d="m9.5 11.5 5 5M14.5 11.5l-5 5"/>', action: "close" },
   ] },
   { title: "filemenu.share", entries: [
     { key: "filemenu.shareView", icon: '<circle cx="6" cy="12" r="2.2"/><circle cx="17" cy="6" r="2.2"/><circle cx="17" cy="18" r="2.2"/><path d="m8 11 7-4M8 13l7 4"/>', action: "share_for_viewing" },
@@ -56,7 +58,7 @@ const sections: { title: Key; entries: Entry[] }[] = [
 const SCREENS: Record<string, string> = { project: "project-info", history: "history" };
 // FAKE1: the core enables project and history now (ACT1): a screen entry needs its action too (not for a read-only file).
 const enabledNow = (name: string) => actions.value.some((a) => a.name === name && a.enabled);
-const on = (name?: string) => !!name && (name === "save_as" ? editable() /* FS1 */ : name in SCREENS ? can({ do: "showPage", page: SCREENS[name]! }) && enabledNow(name) : enabledNow(name));
+const on = (name?: string) => !!name && (name === "save_as" ? editable() /* FS1 */ : name === "close" ? state.value.file !== null && can({ do: "close" }) /* FIXUI */ : name in SCREENS ? can({ do: "showPage", page: SCREENS[name]! }) && enabledNow(name) : enabledNow(name));
 // ---- FAKE1: an entry whose action this core does not serve (shell/capability.ts): greyed with a "not yet" tooltip ----
 const notYet = (e: Entry) => !!e.action && notYetAction(e.action);
 // ---- end FAKE1 ----

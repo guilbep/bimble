@@ -335,6 +335,16 @@ function nativeClient(port: number, token: string): Wasm & { standards_action(na
   };
 }
 
+// ---- FIXUI: the native host's connection, for the shell (shell/send.ts: `lost`, `reconnected`) ----
+/** The poll failed for LOST_AFTER_MS: `lost` once; the first answer after it: `back`, with whether
+ *  it is the same host process (same epoch) and the host's current change (file, rev, unsaved). */
+export const connectionHooks: { lost?: () => void; back?: (sameProcess: boolean, change: unknown) => void } = {};
+const LOST_AFTER_MS = 1500;
+let wakePoll: (() => void) | null = null;
+/** Retry now (the notice's Retry): the poll's back-off wait ends at once. */
+export function retryConnection(): void { wakePoll?.(); }
+// ---- end FIXUI ----
+
 /** Long-poll loop for the native client; never rejects. On an error it retries after 20 ms,
  *  doubling up to 1 s: a dev rebuild restarts the engine in tens of ms (ccore/results/bench.md:
  *  the fixed 1 s wait was most of the C core's edit -> visible time). */
@@ -342,6 +352,7 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
   let since = 0;
   let epoch: string | undefined;
   let wait = 20;
+  let failingSince: number | null = null, lost = false; // FIXUI
   for (;;) {
     try {
       // The epoch lets a restarted twin answer at once, even when its seq equals ours.
@@ -350,6 +361,16 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const m = (await r.json()) as { epoch?: string; seq: number; change: unknown };
       wait = 20;
+      failingSince = null;
+      if (lost) { // FIXUI: back after an outage (since = 0: the host's current change, at once)
+        lost = false;
+        const sameProcess = typeof m.epoch !== "string" || m.epoch === epoch;
+        if (typeof m.epoch === "string") epoch = m.epoch;
+        if (typeof m.seq === "number") since = m.seq;
+        connectionHooks.back?.(sameProcess, m.change ?? null);
+        if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change));
+        continue;
+      }
       // A new epoch is a restarted twin: its seq began again, so ask for its current change.
       if (typeof m.epoch === "string" && m.epoch !== epoch) {
         const restarted = epoch !== undefined;
@@ -362,8 +383,16 @@ async function pollChanges(base: string, t: string, cb: (json: string) => void):
       if (typeof m.seq === "number") since = m.seq;
       if (m.change !== undefined && m.change !== null) cb(JSON.stringify(m.change));
     } catch (e) {
-      if (wait >= 1000) console.warn("native change poll:", e);
-      await new Promise((res) => setTimeout(res, wait));
+      const now = performance.now();
+      failingSince ??= now;
+      if (!lost && now - failingSince >= LOST_AFTER_MS) { // FIXUI: the shell blocks and says so
+        lost = true;
+        since = 0;
+        console.warn("native change poll: the host does not answer:", e);
+        connectionHooks.lost?.();
+      }
+      await new Promise<void>((res) => { wakePoll = res; setTimeout(res, wait); });
+      wakePoll = null;
       wait = Math.min(1000, wait * 2);
     }
   }
