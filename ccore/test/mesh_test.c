@@ -317,6 +317,30 @@ static int has_text(const char *p, size_t n, const char *t) {
         if (!memcmp(p + i, t, m)) return 1;
     return 0;
 }
+/* SLAB1: volume, area and box of a scene mesh (world mm, positions + origin). */
+static void mesh_measure(const cc_mesh *w, const double org[3], double *vol, double *area, double box[6]) {
+    double v = 0, ar = 0;
+    for (int k = 0; k < 3; k++) box[k] = 1e300, box[3 + k] = -1e300;
+    for (uint32_t i = 0; i < w->nv; i++)
+        for (int k = 0; k < 3; k++) {
+            double x = org[k] + w->pos[i][k];
+            box[k] = x < box[k] ? x : box[k], box[3 + k] = x > box[3 + k] ? x : box[3 + k];
+        }
+    for (uint32_t i = 0; i + 2 < w->ni; i += 3) {
+        double p[3][3];
+        for (int c = 0; c < 3; c++)
+            for (int k = 0; k < 3; k++) p[c][k] = org[k] + w->pos[w->idx[i + c]][k];
+        v += (p[0][0] * (p[1][1] * p[2][2] - p[1][2] * p[2][1]) - p[0][1] * (p[1][0] * p[2][2] - p[1][2] * p[2][0]) +
+              p[0][2] * (p[1][0] * p[2][1] - p[1][1] * p[2][0])) / 6.0;
+        double u[3], q[3];
+        for (int k = 0; k < 3; k++) u[k] = p[1][k] - p[0][k], q[k] = p[2][k] - p[0][k];
+        double c[3] = {u[1] * q[2] - u[2] * q[1], u[2] * q[0] - u[0] * q[2], u[0] * q[1] - u[1] * q[0]};
+        ar += cc_sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]) / 2.0;
+    }
+    *vol = v, *area = ar;
+}
+static int rel_eq(double a, double b) { return (a - b <= 1e-6 * (b < 0 ? -b : b)) && (b - a <= 1e-6 * (b < 0 ? -b : b)); }
+
 static void opening_checks(void) {
     size_t tn, sn, mn;
     char *ifc = slurp(golden, "ifc/fixtures/opening.ifc", &tn);
@@ -338,6 +362,8 @@ static void opening_checks(void) {
     }
     check_true("opening: read golden has 16 points", nw == 16);
     const cc_boolean *kernel = cc_boolean_kernel();
+    /* SLAB1: by hand, the wall 5000 x 200 x 2800 less the window 1200 x 1400 through it */
+    double kvol = 5000.0 * 200.0 * 2800.0 - 1200.0 * 200.0 * 1400.0, karea = -1, kbox[6] = {0};
     for (int pass = 0; pass < (kernel ? 2 : 1); pass++) {
         if (pass) cc_boolean_set(NULL);
         int cut = cc_boolean_kernel() != NULL;
@@ -357,7 +383,12 @@ static void opening_checks(void) {
             int ok = s.nelements == 1 && !cc_scene_world_mesh(&s, 0, &a, &w);
             printf("opening model scene (%s): %u triangles, %u vertices, %zu warning(s)\n",
                    cut ? "kernel" : "no kernel", ok ? w.ni / 3 : 0, ok ? w.nv : 0, s.nwarnings);
+            double vol = 0, area = 0, box[6];
+            if (ok) mesh_measure(&w, s.origin, &vol, &area, box);
+            printf("opening model scene (%s): volume %.17g area %.17g\n", cut ? "kernel" : "no kernel", vol, area);
             if (cut) {
+                karea = area, memcpy(kbox, box, sizeof kbox);
+                check_true("opening: the kernel's volume is the hand's", ok && rel_eq(vol, kvol));
                 check_true("opening: cut like Rust (32 triangles, 16 vertices)", ok && w.ni == 96 && w.nv == 16);
                 check_true("opening: no warning", s.nwarnings == 0);
                 /* Every point of each side has one of the other within 0.01 mm. */
@@ -381,10 +412,14 @@ static void opening_checks(void) {
                 }
                 printf("opening model scene vs read golden: worst point distance %.3g mm\n", worst);
                 check_true("opening: same points as Rust's read (0.01 mm)", ok && worst <= 0.01);
-            } else {
-                check_true("opening: uncut without a kernel (12 triangles)", ok && w.ni == 36);
-                check_true("opening: warned without a kernel",
-                           s.nwarnings == 1 && has_text(s.warnings[0].p, s.warnings[0].n, "opening(s) not cut (no boolean kernel"));
+            } else { /* SLAB1: without a kernel the box opening of a wall is cut by prism_cut.c */
+                check_true("opening: cut without a kernel too (prism_cut), no warning", ok && w.ni > 36 && s.nwarnings == 0);
+                check_true("opening: without a kernel, the hand's volume (1e-6)", ok && rel_eq(vol, kvol));
+                if (karea >= 0) {
+                    int same_box = 1;
+                    for (int k = 0; k < 6; k++) same_box &= rel_eq(box[k], kbox[k]) || (box[k] - kbox[k] < 1e-9 && kbox[k] - box[k] < 1e-9);
+                    check_true("opening: without a kernel, the kernel's area and box (1e-6)", ok && rel_eq(area, karea) && same_box);
+                }
             }
             arena_free(&a);
             cc_scene_free(&s);

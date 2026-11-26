@@ -37,7 +37,7 @@
 // Prints per-suite "N passed, M failed", the module size and timings; exits non-zero on a failure.
 // No dependencies.
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
@@ -431,6 +431,89 @@ suite("memory");
   for (let i = 0; i < 100; i++) ifcRound();
   check("100 x open_ifc + close: heap unchanged", X.cc_heap_used() === heap2, `${heap2} -> ${X.cc_heap_used()}`);
   console.log(`memory: ${pages1} pages (${(pages1 / 16).toFixed(1)} MiB), heap ${heap1} bytes; 1000 rounds in ${loopMs.toFixed(0)} ms`);
+  end();
+}
+
+// ---- SLAB1: openings cut in the wasm build (src/prism_cut.h: no kernel in wasm) against the
+// native host (the manifold kernel when built in): volume and box of every element within 1e-6 ----
+const HOST_BIN_SLAB1 = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
+suite("openings");
+{
+  const ids = (c) => `0Slab1Wasm${c.repeat(12)}`; // 22 characters
+  const box = (x0, y0, z0, x1, y1, z1) => ({
+    kind: "mesh",
+    positions: [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+    indices: [0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7],
+  });
+  const at = (o) => ({ origin: o, z_axis: [0, 0, 1], x_axis: [1, 0, 0] });
+  const el = (c, cls, origin, generator, openings) => [ids(c), {
+    id: ids(c), class: cls, name: cls + c, storey: ids("S"), material: ids("M"), placement: at(origin), generator,
+    openings: openings.map((o, k) => ({ id: ids(c).slice(0, 21) + "abcdefgh"[k], placement: at([0, 0, 0]), generator: o })),
+  }];
+  const model = { format: "bimble", version: 1, model: {
+    project_id: ids("P"), project_name: "slab1 openings",
+    storeys: { [ids("S")]: { id: ids("S"), name: "L0", elevation: 0 } },
+    materials: { [ids("M")]: { id: ids("M"), name: "C30/37", category: "concrete" } },
+    elements: Object.fromEntries([
+      el("A", "IfcWall", [0, 0, 0], { kind: "wall", length: 6000, thickness: 200, height: 3000 },
+        [box(500, -300, 900, 1700, 300, 2100), box(4500, -300, 0, 5400, 300, 2200)]),
+      el("B", "IfcSlab", [0, 1000, 3000], { kind: "slab", outline: [[0, 0], [6000, 0], [6000, 2000], [2000, 2000], [2000, 5000], [0, 5000]], thickness: 250 },
+        [box(4000, 500, -10, 4500, 1500, 260)]),
+      el("C", "IfcSlab", [0, 8000, 3000], { kind: "slab", outline: [[0, 0], [3000, 0], [3000, 1000], [1000, 1000], [1000, 3000], [0, 3000]], thickness: 250 },
+        [box(200, 200, 100, 600, 600, 400)]), // a recess in an L: not a special case, uncut in wasm
+    ]),
+  } };
+  const text = JSON.stringify(model);
+  /** Per element id: [volume, xmin, ymin, zmin, xmax, ymax, zmax] of a world BMSH (positions + origin). */
+  const solids = (bytes) => {
+    const M = parseBmsh(bytes), out = {};
+    const org = M.origin.map((h) => { const dv = new DataView(new ArrayBuffer(8)); dv.setBigUint64(0, BigInt("0x" + h)); return dv.getFloat64(0); });
+    for (const r of M.rows) {
+      let v = 0;
+      const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      const P = (i) => [0, 1, 2].map((k) => M.pos[3 * (r.v0 + i) + k] + org[k]);
+      for (let i = 0; i < r.nv; i++) { const p = P(i); for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], p[k]); hi[k] = Math.max(hi[k], p[k]); } }
+      for (let t = r.i0; t + 2 < r.i0 + r.ni; t += 3) {
+        const [a, b, c] = [P(M.idx[t] - r.v0), P(M.idx[t + 1] - r.v0), P(M.idx[t + 2] - r.v0)]; // indices are absolute
+        v += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6;
+      }
+      out[r.id] = [v, ...lo, ...hi];
+    }
+    return out;
+  };
+  const o = openText(text);
+  check("openings model opens in wasm", o.status === 200, o.text);
+  const W = solids(call(X.mesh, [], o.value, 0).bytes);
+  const tmpd = mkdtempSync(join(tmpdir(), "ccore-wasm-slab1-"));
+  const file = join(tmpd, "openings.json");
+  writeFileSync(file, text);
+  const P = port("wasm_run_slab1"), TOKEN = "slab1-token";
+  const host = spawn(HOST_BIN_SLAB1, [String(P), file], { env: { ...process.env, BIMBLE_TOKEN: TOKEN }, stdio: ["ignore", "ignore", "pipe"] });
+  let err = "";
+  host.stderr.on("data", (d) => (err += d));
+  try {
+    const until = Date.now() + 5000;
+    while (!err.includes("listening")) {
+      if (Date.now() > until || host.exitCode !== null) throw new Error(`native host did not start: ${err}`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const N = solids(new Uint8Array(await (await fetch(`http://127.0.0.1:${P}/mesh?t=${TOKEN}`)).arrayBuffer()));
+    const rel = (a, b) => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b));
+    const same = (id) => W[id] && N[id] && W[id].every((x, k) => rel(x, N[id][k]));
+    const hand = { A: 6000 * 200 * 3000 - 1200 * 200 * 1200 - 900 * 200 * 2200, B: (6000 * 2000 + 2000 * 3000) * 250 - 500 * 1000 * 250 };
+    for (const c of ["A", "B"]) {
+      check(`opening cut in wasm: ${c === "A" ? "wall, window + door" : "L slab, shaft"}: volume and box = native's (1e-6)`, same(ids(c)),
+        `wasm ${W[ids(c)]} native ${N[ids(c)]}`);
+      check(`  ${c}: native's volume is the hand's ${hand[c]}`, N[ids(c)] && rel(N[ids(c)][0], hand[c]), `${N[ids(c)]?.[0]}`);
+    }
+    // The recess: native cuts it (kernel), wasm draws it uncut (not a special case) and says so.
+    console.log(`  recess: wasm volume ${W[ids("C")]?.[0]}, native ${N[ids("C")]?.[0]}`);
+    check("the recess in an L slab: uncut in wasm (its whole volume), cut natively", W[ids("C")] && rel(W[ids("C")][0], 5000000 * 250) &&
+      N[ids("C")] && rel(N[ids("C")][0], 5000000 * 250 - 400 * 400 * 150));
+  } finally {
+    host.kill();
+    X.close(o.value);
+  }
   end();
 }
 

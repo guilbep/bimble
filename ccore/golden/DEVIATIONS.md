@@ -1030,3 +1030,19 @@ viewer-file links, as `query grid_axes` lists them) count too; Rust's placing sn
 scene only. The measure tool does not share this code (measure.rs snaps to what is under the
 cursor) and is unchanged. Tested by `test/snap_grid_test.c` (snap.rs's own grid test, and a column
 clicked 52 mm from a crossing placed on it exactly).
+
+**Openings in the wasm build (no kernel).** Rust always cuts with manifold3d; the wasm build has no
+kernel and drew every opening uncut. Now `src/prism_cut.c` cuts the exact special cases when
+`cc_boolean_kernel()` is NULL (wasm, `CC_NO_KERNEL=1`), the native build keeps the kernel (every
+golden unchanged): (a) a host whose profile is an axis-aligned rectangle (a rectangular column,
+beam, wall or slab) with openings that are axis-aligned boxes in its frame, at any depth (an
+imported window or door: an 8-corner mesh): the solid is split along every distinct coordinate and
+the faces between solid and empty cells are kept; (b) any profile (with voids) with openings that
+are convex prisms along its extrusion through the whole depth, strictly inside the outline and
+apart from the voids and each other: each becomes one more void of the extrusion. The mesh is not
+the kernel's (more triangles on a split face; the same crease edges): the volume, area and box are
+the kernel's within 1e-6 (`test/prism_cut_test.c` with and without the kernel in one native run;
+`test/wasm_run.mjs` suite `openings`: wasm against the native host). Anything else (a recess in an
+L slab, a shaft touching the outline, a mesh host) stays uncut with the warning `<class> <name>:
+N opening(s) not cut (no boolean kernel in the C core)`. In the goldens, the one opening
+(`ifc/import/opening.json`: a wall and a box window) is case (a); `frame2.json` has no opening.
