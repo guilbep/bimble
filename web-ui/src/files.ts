@@ -24,13 +24,14 @@ import { currentDialog } from "./dialogs";
 import { actionBody, fileRoutes, state } from "./bimble";
 import { here, send } from "./shell/send";
 
-export type Purpose = "open" | "import_ifc" | "link_model" | "link_pdf" | "link_dxf" | "save_as" | "export_ifc4" | "export_ifc2x3" | "share_for_viewing";
+export type Purpose = "open" | "import_ifc" | "link_model" | "link_folder" | "link_pdf" | "link_dxf" | "save_as" | "export_ifc4" | "export_ifc2x3" | "share_for_viewing";
 
 /** Per purpose: the extensions listed, and for a write the name proposed. */
-export const PURPOSES: Record<Purpose, { ext: string[]; save?: (stem: string) => string }> = {
+export const PURPOSES: Record<Purpose, { ext: string[]; save?: (stem: string) => string; folder?: boolean }> = {
   open: { ext: [".bimble", ".json", ".ifc", ".bimbleview"] },
   import_ifc: { ext: [".ifc"] },
   link_model: { ext: [".ifc", ".bimbleview", ".bimble", ".json"] },
+  link_folder: { ext: [".ifc", ".bimbleview"], folder: true }, // LINKF: the folder shown is the answer
   link_pdf: { ext: [".pdf"] },
   link_dxf: { ext: [".dxf"] },
   save_as: { ext: [".bimble", ".json"], save: (s) => `${s}.bimble` },
@@ -110,6 +111,22 @@ export interface Picked { path?: string; file?: File; dropped?: boolean }
 /** Ask for a file: on the native host the page's own dialog (an absolute path), in wasm the
  *  browser's picker (the file's bytes; a write purpose has no picker there: null). A file dropped on
  *  the page just before is the answer of Open, without asking. Throws when a drop cannot be staged. */
+/** LINKF: the browser's picker for several files (wasm: Link a folder… links each one). */
+export function browserPickMany(ext: string[]): Promise<File[]> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.accept = ext.join(",");
+    input.dataset.bb = "ccore-link-folder";
+    input.style.display = "none";
+    input.addEventListener("change", () => { const f = [...(input.files ?? [])]; input.remove(); resolve(f); });
+    input.addEventListener("cancel", () => { input.remove(); resolve([]); });
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
 export async function pickFile(purpose: Purpose): Promise<Picked | null> {
   const drop = purpose === "open" ? dropped : null;
   dropped = null;

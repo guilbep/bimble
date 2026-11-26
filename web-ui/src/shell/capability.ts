@@ -50,7 +50,7 @@ export const ACTION_CAPABILITY: Readonly<Record<string, string>> = {
   shared_folder: "collaboration", synchronize: "collaboration",
   standards: "standards", materials: "materials", settings: "settings", about: "about",
   on_paper: "export_view", paper_view: "paper_view",
-  link_pdf: "references", link_dxf: "references", link_model: "references", manage_links: "references",
+  link_pdf: "references", link_dxf: "references", link_model: "references", manage_links: "references", link_folder: "references",
   project: "project_info", history: "history", new_sheet: "sheets", close_sheet: "sheets",
   measure: "measure",
   show_base_point: "setting_out", show_survey_point: "setting_out", view_true_north: "setting_out", // SETOUT

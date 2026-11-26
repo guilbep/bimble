@@ -18,6 +18,7 @@ interface Listing { dir: string; parent: string | null; entries: Entry[]; hidden
 const req = fileRequest.value;
 const purpose: Purpose = req?.purpose ?? "open";
 const saving = !!PURPOSES[purpose].save;
+const folder = !!PURPOSES[purpose].folder; // LINKF: Link a folder…: the folder shown is the answer
 const roots = ref<{ kind: "home" | "root"; path: string }[]>([]);
 const listing = ref<Listing | null>(null);
 const where = ref("");
@@ -79,6 +80,7 @@ function click(e: Entry): void {
   }
 }
 function choose(n: string | null = saving ? name.value.trim() : picked.value): void {
+  if (folder && listing.value && agree.value) return req?.resolve(listing.value.dir); // LINKF
   if (!n || !listing.value || !agree.value) return; // FIXUI: never into a folder other than the one shown
   let file = n;
   // A typed name without its extension takes the purpose's first one.
@@ -86,7 +88,7 @@ function choose(n: string | null = saving ? name.value.trim() : picked.value): v
   req?.resolve(file.startsWith("/") || /^[A-Za-z]:[\\/]/.test(file) ? file : join(listing.value.dir, file));
 }
 const exists = computed(() => saving && !!name.value.trim() && (listing.value?.entries ?? []).some((e) => e.name === name.value.trim()));
-const go = computed(() => t(saving ? (purpose === "save_as" ? "files.go.save" : "files.go.export") : purpose.startsWith("link") ? "files.go.link" : purpose === "import_ifc" ? "files.go.import" : "files.go.open"));
+const go = computed(() => t(saving ? (purpose === "save_as" ? "files.go.save" : "files.go.export") : folder ? "files.go.linkFolder" : purpose.startsWith("link") ? "files.go.link" : purpose === "import_ifc" ? "files.go.import" : "files.go.open"));
 const size = (n: number) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 const date = (s: number) => new Date(s * 1000).toLocaleString();
 </script>
@@ -130,7 +132,7 @@ const date = (s: number) => new Date(s * 1000).toLocaleString();
       <span v-if="error" class="note err" role="alert" data-bb="file-browser-error">{{ error }}</span>
       <span v-else-if="exists" class="note" data-bb="file-browser-replace">{{ t('files.replace', { name: name.trim() }) }}</span>
       <span style="flex:1"></span>
-      <button class="btn p" type="button" :disabled="!agree || (saving ? !name.trim() : !picked)" :title="agree ? undefined : t('files.notShown')" data-bb="file-browser-go" @click="choose()">{{ go }}</button>
+      <button class="btn p" type="button" :disabled="!agree || (folder ? false : saving ? !name.trim() : !picked)" :title="agree ? undefined : t('files.notShown')" data-bb="file-browser-go" @click="choose()">{{ go }}</button>
     </div>
   </div>
 </template>

@@ -14,9 +14,16 @@
 //   saved .bimble names whose file was not found; picking it links it again.
 import { ref, shallowRef } from "vue";
 import { actions, actionBody, manageLink, manageReference, query, screenRoutes, state } from "../bimble";
-import { isNative, isWasm, pickFile, type Purpose } from "../files";
+import { browserPickMany, isNative, isWasm, pickFile, type Purpose } from "../files";
 
-export interface PanelModel { kind: string; missing: boolean; name: string; path: string; visible: boolean }
+export interface PanelModel {
+  kind: string; missing: boolean; name: string; path: string; visible: boolean;
+  // LINKF (ccore/session/links_panel.h): the conversion's state and the link's numbers
+  state?: "ready" | "missing" | "queued" | "converting" | "failed" | "refused" | "unloaded"; progress?: number;
+  message?: string | null; bytes?: number; elements?: number; triangles?: number; cache?: string | null;
+  cache_mtime_s?: number; log?: string | null; from_cache?: boolean; pinned?: boolean; colour?: number | null;
+  origin?: "file" | "origin" | "base_point" | "survey_point"; move_mm?: [number, number, number]; rotation_deg?: number;
+}
 export interface PanelReference {
   id: string; kind: string; name: string; offset_mm: [number, number]; rotation_deg: number;
   source: string | null; view: string; view_name: string; visible: boolean;
@@ -127,4 +134,30 @@ Object.assign(screenRoutes, {
   link_pdf: () => { linksOpen.value = true; void linkNew("link_pdf"); },
   link_dxf: () => { linksOpen.value = true; void linkNew("link_dxf"); },
   manage_links: () => { linksOpen.value = true; },
+  link_folder: () => { linksOpen.value = true; void linkFolder(); }, // LINKF
 });
+
+/** LINKF: Link a folder…: natively the page's dialog picks a folder and the host links every IFC of it
+ *  (converted in turn, the smallest first, ccore/session/links.h); in the browser (no folders) several
+ *  files are picked and linked one at a time. */
+export function linkFolder(): Promise<string | null> {
+  return run(async () => {
+    if (!enabled("link_folder")) return "open a model first";
+    if (isNative()) {
+      const r = await pickFile("link_folder");
+      if (r?.path) actionBody("link_folder", { path: r.path });
+      return null;
+    }
+    if (!isWasm()) return "no folders here";
+    const fs = await browserPickMany([".ifc", ".bimbleview"]);
+    for (const f of [...fs].sort((a, b) => a.size - b.size)) await linkBytes("link_model", f);
+    return null;
+  });
+}
+
+/** LINKF: a linked model's other operations (manage_links {op, name, ...}). */
+export const modelSet = (op: "cancel" | "unload" | "load" | "pin" | "unpin" | "place" | "colour", name: string, extra: Record<string, unknown> = {}) =>
+  run(async () => { actionBody("manage_links", { op, name, ...extra }); return null; });
+
+/** LINKF: Reload all (manage_links {op: "reload_all"}): each link from its cache unless its IFC changed. */
+export const reloadAll = () => run(async () => { actionBody("manage_links", { op: "reload_all" }); return null; });
