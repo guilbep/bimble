@@ -239,6 +239,20 @@ static void hostile(void) {
         buf_free(&err), cc_dxf_free(&d);
     }
 
+    /* FIXLIB: a non-finite bulge is a straight segment (reference.rs bulged: `!bulge.is_finite()`);
+     * without the check a NaN made NaN points (the polyline dropped), inf a circle of huge radius. */
+    {
+        static const char *const B[] = {"nan", "inf", "-inf"};
+        for (int i = 0; i < 3; i++) {
+            char t[256];
+            snprintf(t, sizeof t, "0\nSECTION\n2\nENTITIES\n0\nLWPOLYLINE\n10\n0\n20\n0\n42\n%s\n10\n10\n20\n0\n0\nENDSEC\n0\nEOF\n", B[i]);
+            char what[64];
+            snprintf(what, sizeof what, "bulge %s: a straight segment of 2 points", B[i]);
+            check_true(what, read_text(t, &d, &err) == 0 && d.npolylines == 1 && d.npts == 2 && d.xy[2] == 10.0 && d.xy[3] == 0.0);
+            buf_free(&err), cc_dxf_free(&d);
+        }
+    }
+
     /* FIXLIB: the points made are budgeted (2 x 2,000,000), dropped ones too: a block of a
      * 1000-vertex polyline with a NaN, copied 5000 times, made 5 M points (all dropped) without a
      * bound; an arc of NaN radius is dropped before its sines. */

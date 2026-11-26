@@ -213,6 +213,55 @@ static void damaged(void) {
     check_true("every damaged read answers (polylines or an error text)", ok == runs);
 }
 
+/* FIXLIB: lopdf's DEREF_LIMIT (128 references followed). /Root is a chain of `n` objects each
+ * holding only a reference to the next, then the catalog: n = 127 is 128 hops (read), n = 128 is
+ * 129 (no catalog). The answer differs at the bound, so a missing check fails here instead of
+ * hanging on cycle.pdf. */
+static void pdf_chain(size_t n, Buf *pdf) {
+    size_t *off = calloc(n + 5, sizeof *off);
+    buf_clear(pdf);
+    buf_puts(pdf, "%PDF-1.4\n");
+    char t[256];
+    for (size_t k = 1; k <= n + 4; k++) {
+        off[k] = pdf->len;
+        size_t c = n + 1; /* the catalog */
+        if (k <= n) snprintf(t, sizeof t, "%zu 0 obj\n%zu 0 R\nendobj\n", k, k + 1);
+        else if (k == c) snprintf(t, sizeof t, "%zu 0 obj\n<< /Type /Catalog /Pages %zu 0 R >>\nendobj\n", k, c + 1);
+        else if (k == c + 1) snprintf(t, sizeof t, "%zu 0 obj\n<< /Type /Pages /Kids [%zu 0 R] /Count 1 >>\nendobj\n", k, c + 2);
+        else if (k == c + 2)
+            snprintf(t, sizeof t, "%zu 0 obj\n<< /Type /Page /Parent %zu 0 R /MediaBox [0 0 595 842] /Contents %zu 0 R >>\nendobj\n",
+                     k, c + 1, c + 3);
+        else snprintf(t, sizeof t, "%zu 0 obj\n<< /Length 15 >>\nstream\n0 0 m 72 0 l S\nendstream\nendobj\n", k);
+        buf_puts(pdf, t);
+    }
+    size_t x = pdf->len;
+    snprintf(t, sizeof t, "xref\n0 %zu\n0000000000 65535 f \n", n + 5);
+    buf_puts(pdf, t);
+    for (size_t k = 1; k <= n + 4; k++) {
+        snprintf(t, sizeof t, "%010zu 00000 n \n", off[k]);
+        buf_puts(pdf, t);
+    }
+    snprintf(t, sizeof t, "trailer\n<< /Size %zu /Root 1 0 R >>\nstartxref\n%zu\n%%%%EOF\n", n + 5, x);
+    buf_puts(pdf, t);
+    free(off);
+}
+
+static void deref_limit(void) {
+    Buf pdf, out;
+    buf_init(&pdf), buf_init(&out);
+    pdf_chain(127, &pdf);
+    read_text(&out, "chain.pdf", pdf.p, pdf.len, 100.0);
+    printf("  127 references to the catalog: %.*s", (int)(out.len < 120 ? out.len : 120), out.p);
+    check_true("127 references (128 hops): the page's line", strstr(buf_cstr(&out), "polylines 1 points 2\n") != NULL);
+    buf_clear(&out);
+    pdf_chain(128, &pdf);
+    read_text(&out, "chain.pdf", pdf.p, pdf.len, 100.0);
+    printf("  128 references to the catalog: %.*s", (int)(out.len < 120 ? out.len : 120), out.p);
+    check_true("128 references (129 hops): past DEREF_LIMIT, no page", strstr(buf_cstr(&out), "polylines 1 ") == NULL &&
+                                                                        !strncmp(buf_cstr(&out), "error ", 6));
+    buf_free(&pdf), buf_free(&out);
+}
+
 /* ---- the session (session/links_ref.h) ---- */
 
 static char *ask(cc_session *s, const char *op, const char *name, const char *body, int *st) {
@@ -301,6 +350,8 @@ static void session(void) {
 }
 
 int main(void) {
+    deref_limit();
+    fflush(stdout); /* first: without the limit cycle.pdf (goldens, damaged) hangs */
     int n = goldens();
     printf("  ref: %d goldens byte for byte\n", n);
     scales_and_names();

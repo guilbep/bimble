@@ -213,7 +213,23 @@ int main(int argc, char **argv) {
         JrError je;
         const char *doc = "{\"a\": [1, 2, \"xyz\"], \"b\": null}";
         check_true("budget: a small document parses", jr_parse(&ja, doc, strlen(doc), &je) != NULL);
+        /* FIXLIB: a high surrogate must be followed by a low one (\uDC00-\uDFFF): \uD800\u0041
+         * is serde's "lone leading surrogate" (without the check: U+F441 made of garbage). */
+        const char *sur = "\"\\uD800\\u0041\"";
+        check_true("JSON: high surrogate then \\u0041 refused",
+                   jr_parse(&ja, sur, strlen(sur), &je) == NULL && !strcmp(je.msg, "lone leading surrogate in hex escape"));
+        const char *sur2 = "\"\\uDBFF\\uE000\"";
+        check_true("JSON: high surrogate then \\uE000 refused",
+                   jr_parse(&ja, sur2, strlen(sur2), &je) == NULL && !strcmp(je.msg, "lone leading surrogate in hex escape"));
+        const char *pair = "\"\\uD83D\\uDE00\"";
+        const JrVal *pv = jr_parse(&ja, pair, strlen(pair), &je);
+        check_true("JSON: a surrogate pair is U+1F600", pv && pv->n == 4 && !memcmp(pv->s, "\xF0\x9F\x98\x80", 4));
         arena_free(&ja);
+        /* FIXLIB: UTF-8 after E0 needs A0-BF (E0 80..9F xx is an overlong form of U+0000-U+07FF) */
+        check_true("UTF-8: E0 80 80 (overlong NUL) refused at 0", jr_utf8_check("\xE0\x80\x80", 3) == 0);
+        check_true("UTF-8: E0 9F BF (overlong U+07FF) refused at 1", jr_utf8_check("a\xE0\x9F\xBF", 4) == 1);
+        check_true("UTF-8: E0 A0 80 (U+0800) valid", jr_utf8_check("\xE0\xA0\x80", 3) == -1);
+        check_true("UTF-8: ED A0 80 (a surrogate) refused", jr_utf8_check("\xED\xA0\x80", 3) == 0);
     }
 
     buf_free(&b);

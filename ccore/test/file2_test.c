@@ -309,6 +309,36 @@ static void robustness(void) {
         wrap(bad[i].bytes, bad[i].n, &b);
         expect_load_error(bad[i].what, b.p, b.len, bad[i].want);
     }
+    /* FIXLIB: a back-reference before the start of the output ("distance too far back"; without
+     * the check a copy from before the buffer, seen only by ASan): fixed block, literal 'a', then
+     * length 3 at distance 2 (one byte written); distance 1 is fine. */
+    for (int dist = 1; dist <= 2; dist++) {
+        static const unsigned char head[10] = {0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 0xFF};
+        Buf g, o;
+        buf_init(&g), buf_init(&o);
+        buf_append(&g, head, 10);
+        W w = {&g, 0, 0};
+        wput(&w, 1, 1), wput(&w, 1, 2);    /* last block, fixed codes */
+        wput(&w, rev(0x30 + 'a', 8), 8);   /* literal 'a' */
+        wput(&w, rev(1, 7), 7);            /* length 3 (symbol 257) */
+        wput(&w, rev((uint32_t)dist - 1, 5), 5); /* distance code 0 (1) or 1 (2) */
+        wput(&w, 0, 7), wput(&w, 0, 8);    /* end of block, flush */
+        unsigned char tr[8] = {0}; /* CRC32 of "aaaa" and ISIZE 4 */
+        uint32_t crc = 0xFFFFFFFFu;
+        for (int i = 0; i < 4; i++) {
+            crc ^= 'a';
+            for (int k = 0; k < 8; k++) crc = crc >> 1 ^ (0xEDB88320u & (0u - (crc & 1)));
+        }
+        crc ^= 0xFFFFFFFFu;
+        for (int i = 0; i < 4; i++) tr[i] = (unsigned char)(crc >> 8 * i);
+        tr[4] = 4;
+        buf_append(&g, tr, 8);
+        const char *why = "";
+        int rc = cc_gunzip((const unsigned char *)g.p, g.len, 1 << 20, &o, &why);
+        if (dist == 1) check_true("gzip: distance 1 after one byte: \"aaaa\"", rc == 0 && o.len == 4 && !memcmp(o.p, "aaaa", 4));
+        else check_true("gzip: distance 2 after one byte: \"distance too far back\"", rc != 0 && !strcmp(why, "gzip: distance too far back"));
+        buf_free(&g), buf_free(&o);
+    }
     /* gzip-level damage */
     expect_load_error("magic only", CC_MAGIC, CC_MAGIC_LEN, "gzip: not gzip data");
     buf_clear(&b);

@@ -207,7 +207,31 @@ static void jobs(void) {
     cc_jobs_run(0, count_job, NULL); /* no tasks: nothing called */
 }
 
+/* FIXLIB: the nesting bound (step.rs MAX_DEPTH 64: a value deeper than 64 is refused). The
+ * arguments' list is depth 1, so 63 lists inside it put the innermost value at depth 64 (read)
+ * and 64 lists at 65 (the statement refused, the next one read). */
+static void depth_bound(void) {
+    for (int k = 63; k <= 64; k++) {
+        Buf t;
+        buf_init(&t);
+        buf_puts(&t, "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n#1=IFCX(");
+        for (int i = 0; i < k; i++) buf_putc(&t, '(');
+        buf_putc(&t, '1');
+        for (int i = 0; i < k; i++) buf_putc(&t, ')');
+        buf_puts(&t, ");\n#2=IFCY(2);\nENDSEC;\nEND-ISO-10303-21;\n");
+        cc_step_file f;
+        cc_error err;
+        int rc = cc_step_parse(&f, t.p, t.len, &err);
+        printf("  depth %d lists: rc %d, %zu entities, %zu skipped\n", k, rc, rc ? (size_t)0 : f.n, rc ? (size_t)0 : f.skipped);
+        if (k == 63) check_true("63 nested lists (depth 64): read", rc == 0 && f.n == 2 && f.skipped == 0);
+        else check_true("64 nested lists (depth 65): the statement refused, the next read", rc == 0 && f.n == 1 && f.skipped == 1);
+        if (rc == 0) cc_step_free(&f);
+        buf_free(&t);
+    }
+}
+
 int main(void) {
+    depth_bound();
     skipping();
     chunks();
     jobs();
