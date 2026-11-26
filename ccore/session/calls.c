@@ -25,6 +25,7 @@
 #include "mesh.h"
 #include "sheet_svg.h"
 #include "toggles.h" /* KEY1 */
+#include "setting_out.h" /* SETOUT */
 #include "query.h"
 #include "scene.h"
 #include "session.h"
@@ -144,8 +145,13 @@ static const ActionRow ACTIONS[] = {
     {"box_north_project", "Section box: project north", "View", 0, 0},
     {"box_north_true", "Section box: true north", "View", 0, 0},
     /* ---- end ISS71 ---- */
+    /* ---- SETOUT (ADR 0075): the Setting out tab's markers and the view's north (DEVIATIONS 32) ---- */
+    {"show_base_point", "Project base point", "Setting out", 0, 0},
+    {"show_survey_point", "Survey point", "Setting out", 0, 0},
+    {"view_true_north", "True / project north", "Setting out", 0, 0},
+    /* ---- end SETOUT ---- */
 };
-_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each");
+_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3");
 
 static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab"}; /* verbs.rs:28 snake_case */
 static const char *const SIZE_KEY[] = {"column", "beam_width", "beam_height", "wall", "slab"}; /* verbs.rs:78 */
@@ -665,6 +671,12 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     /* ISS71: the box's orientation, a choice only when true north differs from project north */
     if (!strcmp(name, "box_north_project") || !strcmp(name, "box_north_true"))
         return loaded(s) && !in_2d(s) && iss71_yaw(s, 0) != iss71_yaw(s, 1);
+    /* ---- SETOUT: the markers of an editable model's georeference; the view's north when true
+     * north differs from project north (in 3D the section box's, ISS71; in a plan or a section the
+     * stored view's true_north, ADR 0045) ---- */
+    if (cc_setout_index(name) >= 0) return s->open;
+    if (!strcmp(name, "view_true_north")) return s->open && iss71_yaw(s, 0) != iss71_yaw(s, 1);
+    /* ---- end SETOUT ---- */
     /* ---- FAKE1: pages the lab serves and the sheet verbs. project: ribbon.rs:611 `_ => loaded`,
      * history: ribbon.rs:590 editable(), new_sheet: ribbon.rs:611 `_ => loaded` (the C core
      * answers the project query and stores sheets in an editable model only: a read-only IFC
@@ -697,11 +709,55 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     return 0;
 }
 
+/* ---- SETOUT: the view's north (view_true_north): a plan or a section shown says its stored
+ * true_north (ADR 0045), the 3D view the section box's (ISS71) ---- */
+static int setout_true_north(cc_session *s) {
+    if (!s->open) return 0;
+    if (!in_2d(s)) return s->vis.true_north;
+    Arena a;
+    arena_init(&a, 0);
+    cc_view v;
+    int on = cc_sv_active(s, &a, &v) == 1 && v.true_north;
+    arena_free(&a);
+    return on;
+}
+
+/* Flips it: in a plan or a section one set_view (add_view) Command, a history step; in 3D the
+ * section box's orientation (box_north_project / box_north_true, session state). */
+static int vis_action_do(cc_session *s, const char *name, cc_buf *out);
+static int setout_flip_north(cc_session *s, cc_buf *out) {
+    if (!in_2d(s)) return vis_action_do(s, s->vis.true_north ? "box_north_project" : "box_north_true", out) ? CC_ERR : CC_OK;
+    cc_cmds l;
+    cc_cmds_init(&l);
+    cc_view v;
+    int r = cc_sv_active(s, &l.arena, &v), rc = CC_OK;
+    if (r == 1 && cc_view_dup(&l.arena, &v)) r = -1;
+    if (r != 1) {
+        cc_cmds_free(&l);
+        if (r < 0) buf_puts(out, "out of memory");
+        return r < 0 ? CC_ERR : CC_OK;
+    }
+    v.true_north = !v.true_north;
+    Buf why;
+    buf_init(&why);
+    cc_command *c = NULL;
+    if (cc_view_validate(&s->model, &v, &why)) buf_append(out, why.p, why.len), rc = CC_ERR;
+    else if (!(c = cc_cmds_push(&l, cc_model_view(&s->model, &v.id) ? CC_CMD_SET_VIEW : CC_CMD_ADD_VIEW)))
+        buf_puts(out, "out of memory"), rc = CC_ERR;
+    else c->view = v, rc = try_apply(s, l.v, l.n, out);
+    buf_free(&why);
+    cc_cmds_free(&l);
+    return rc;
+}
+/* ---- end SETOUT ---- */
+
 static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strncmp(a->name, "place_", 6)) return s->open && s->placing && !strcmp(a->name + 6, KIND_NAME[s->placing_kind]);
     if (!strcmp(a->name, "section_box")) return s->vis.section_on; /* ribbon.rs:629 */
     if (!strcmp(a->name, "box_north_project")) return !s->vis.true_north; /* ISS71 */
     if (!strcmp(a->name, "box_north_true")) return s->vis.true_north;     /* ISS71 */
+    if (cc_setout_index(a->name) >= 0) return s->open && cc_setout_on(&s->setout, cc_setout_index(a->name)); /* SETOUT */
+    if (!strcmp(a->name, "view_true_north")) return s->open && setout_true_north(s); /* SETOUT */
     if (!strcmp(a->name, "reveal_hidden")) return s->vis.reveal;   /* ribbon.rs:643 */
     if (!strcmp(a->name, "measure")) return loaded(s) && s->measure.on; /* ribbon.rs:625 (ticket T1) */
     if (!strcmp(a->name, "edges")) return s->edges;               /* Q2: ribbon.rs:626 opts.edges */
@@ -1299,6 +1355,13 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "materials_page")) return cc_materials_page_query(s, out);
     if (!s->open && !strcmp(name, "material_library")) return cc_query(&s->model, name, body, n, out) == 200 ? CC_OK : CC_ERR;
     /* ---- end MAT1 ---- */
+    if (!strcmp(name, "setting_out")) { /* SETOUT (setting_out.h): null without an editable model */
+        if (!s->open) return buf_puts(out, "null"), CC_OK;
+        JsonW w;
+        jw_init(&w, out, 0);
+        cc_setout_json(&s->setout, &s->model, &w);
+        return done(&w);
+    }
     if (s->open) return model_query(s, name, body, n, out); /* calls.rs:276-309 and :519-527 */
     if (!strcmp(name, "north") || !strcmp(name, "coordinates")) { /* ADR 0045, query.h: null without a model */
         buf_puts(out, "null");
@@ -1989,6 +2052,8 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
             if (!strcmp(name + 6, KIND_NAME[k])) place_action(s, (cc_kind)k);
         if (s->placing) s->measure.on = 0, s->measure.has_first = s->measure.has_hover = 0; /* ribbon.rs:687 */
     } else if (!strcmp(name, "measure")) cc_measure_toggle(&s->measure); /* ribbon.rs:691 (ticket T1) */
+    else if (cc_setout_index(name) >= 0) cc_setout_flip(&s->setout, cc_setout_index(name)); /* SETOUT */
+    else if (!strcmp(name, "view_true_north")) return setout_flip_north(s, out); /* SETOUT */
     else if (vis_action(s, name, out)) return CC_ERR;
     /* home: the lab shows its own Home */
     return CC_OK;

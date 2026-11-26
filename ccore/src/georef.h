@@ -22,7 +22,12 @@
 
 #define CC_LV95 "EPSG:2056"
 
-int cc_georef_is_default(const cc_georef *g); /* Georef::is_default (-0.0 counts as 0) */
+int cc_georef_is_default(const cc_georef *g); /* Georef::is_default (-0.0 counts as 0), and no survey point */
+/* SETOUT: Rust's Georef is not the default (the survey point aside): the model has a place. */
+int cc_georef_places(const cc_georef *g);
+#define CC_SURVEY_POINT_MAX_MM 1e7
+/* SETOUT: an angle in degrees brought into (-180, 180] (no -0.0). */
+double cc_angle_norm_deg(double deg);
 int cc_georef_eq(const cc_georef *a, const cc_georef *b);
 /* Georef::from_frame: the turn of the building's x axis (world XY, rounded to micro-degrees,
  * no -0.0) and LV95 when the building (world mm) lies in Switzerland's LV95 range. `crs` points

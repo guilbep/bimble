@@ -12,7 +12,7 @@
 //   host     the host call layer in the module (call, change_json, host_open_text, host_mesh,
 //            host_saved; ticket T13b) against the native host (out/tcc/bimble-ccore or $HOST_BIN,
 //            port <port>, CCORE_SEED=1 and guid_seed(1) on both): boot without a model (state,
-//            actions: 58 rows: Rust's 54 + ISS72's 2 + ISS71's 2), open frame.json, the same calls on both (select, verb place,
+//            actions: 61 rows: Rust's 54 + ISS72's 2 + ISS71's 2 + SETOUT's 3), open frame.json, the same calls on both (select, verb place,
 //            history, undo, redo, action save…): every answer, status and change JSON byte for
 //            byte, the saved text = the native host's saved file, host_mesh = GET /mesh; ticket E1:
 //            query verbs (= golden/verbs_list.json) and describe, verb with dry_run and if_rev, rename;
@@ -559,7 +559,7 @@ suite("host");
     const st0 = hcall("query", "state", "{}");
     check("boot: query state -> 200, no file", st0.status === 200 && JSON.parse(st0.text).file === null, st0.text);
     const ac0 = hcall("query", "actions", "{}");
-    check("boot: query actions -> 58 rows (Rust's 54 + ISS72's 2 + ISS71's 2)", ac0.status === 200 && JSON.parse(ac0.text).length === 58, ac0.text.slice(0, 200));
+    check("boot: query actions -> 61 rows (Rust's 54 + ISS72's 2 + ISS71's 2 + SETOUT's 3)", ac0.status === 200 && JSON.parse(ac0.text).length === 61, ac0.text.slice(0, 200));
     check("unknown op -> 404", hcall("nope").status === 404);
     check("host_saved before a save -> 404", call(X.host_saved, []).status === 404);
 

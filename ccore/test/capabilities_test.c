@@ -75,9 +75,9 @@ int main(void) {
         check_true("values true or false", bools);
         check_true("at least 30 rows", n >= 30);
     }
-    for (const char *const *k = (const char *const[]){"about", "collaboration", "export_pdf", "export_svg", "export_view", "georef", "grids",
+    for (const char *const *k = (const char *const[]){"about", "base_point_move", "collaboration", "export_pdf", "export_svg", "export_view", "georef", "grids",
                                                       "history", "lca", "levels", "materials", "paper_view", "phases", "plan_annotations",
-                                                      "project_info", "quantities", "recent_files", "references", "schedules", "settings",
+                                                      "project_info", "quantities", "recent_files", "reference_planes", "references", "setting_out", "schedules", "settings",
                                                       "sheets", "standards", "subprojects", "user", "users", "versions", "views", NULL};
          *k; k++) {
         char what[96];
@@ -140,6 +140,18 @@ int main(void) {
     char *sh = ask(s, "query", "sheets", "", &st);
     check_true("sheets true: query sheets answers", cap(c1, "sheets") == 1 && st == CC_OK && sh[0] == '[');
     check_true("history true: action history on with a model (FAKE1)", cap(c1, "history") == 1 && enabled(s, "history"));
+    { /* SETOUT: setting_out true: the query answers and the markers' actions are on with a model */
+        char *so = ask(s, "query", "setting_out", "", &st);
+        check_true("SETOUT: setting_out true <=> query setting_out answers, show_base_point on",
+                   cap(c1, "setting_out") == 1 && st == CC_OK && !strncmp(so, "{\"base_point\":", 14) && enabled(s, "show_base_point"));
+        free(so);
+        char *rp = ask(s, "query", "reference_planes", "", &st);
+        check_true("SETOUT: reference_planes false <=> query reference_planes unknown", cap(c1, "reference_planes") == 0 && st == CC_ERR);
+        free(rp);
+        char *bm = ask(s, "action", "base_point_move", "", &st);
+        check_true("SETOUT: base_point_move false <=> no such action", cap(c1, "base_point_move") == 0 && st == CC_ERR);
+        free(bm);
+    }
     free(c0), free(c1), free(rf), free(sd), free(se), free(sl), free(pj), free(sh);
     cc_session_free(s);
     return report("capabilities");

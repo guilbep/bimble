@@ -1092,3 +1092,30 @@ N opening(s) not cut (no boolean kernel in the C core)`. In the goldens, the one
 - **A second `Host` or `Origin` header is malformed (400).** Rust's `read_head` (`serve.rs:164`)
   keeps the last one; which one a proxy or a browser checked is not known, so the C host trusts
   neither (`host/server.c` `parse_head`).
+
+## 32. Setting out: the survey point, the markers, north from the tab (ticket SETOUT, ADR 0075)
+
+Rust v0.19.0 has none of this: its Setting out tab was a placeholder (no survey point, no
+base-point marker, no project zero readout, no reference planes; `git grep -i "survey_point\|base
+point\|reference plane" oracle/rust -- crates/` finds only a DXF block's base point). The C core's
+own references are hand-computed in `test/setting_out_test.c`; no golden changes.
+
+- **Georef gains `survey_point_mm` (C only).** `cc_georef.has_survey_point`, `survey_point_mm`
+  (world mm `[x, y, z]`): file key `"survey_point_mm"` after Rust's six, left out when unset, so
+  every model without one keeps its bytes and hash (tested: `frame.json` saved before and after a
+  set-then-cleared georeference is the same bytes). Rust's `Georef` is `deny_unknown_fields`: Rust
+  v0.19.0 refuses a file that holds one (as it refuses a C file with `grids`). On load: finite,
+  `|x| <= 1e7` mm, exactly three numbers, no duplicate key; the unknown-field message still names
+  Rust's six fields. The IFC export does not change for it: `IfcMapConversion` stays the tie to the
+  map, and the building's place is decided by the six (`cc_georef_places`).
+- **`georef_set` brings angles into (-180, 180]** (`rotation_deg`, `map_rotation_deg`; 350 -> -10,
+  -180 -> 180, -0.0 -> 0.0). Before, any value up to ±360 was kept as typed. A C verb: no Rust
+  reference. New argument `survey_point_mm` (`[x, y, z]` sets, `[]` removes).
+- **Three actions after ISS71's** (`query actions`: 61 rows): `show_base_point`,
+  `show_survey_point` (session state, pressed when the marker is shown, enabled with an editable
+  model) and `view_true_north` (enabled when true north differs from project north; pressed and
+  run as the section box's orientation in 3D, as the active stored view's `true_north` in a plan or
+  a section: one `set_view` Command there).
+- **`query setting_out`** (C only, `session/setting_out.h`): the markers and the values the page
+  draws; null without an editable model. **`query capabilities`** gains `setting_out` (true),
+  `reference_planes` and `base_point_move` (false: not served yet).

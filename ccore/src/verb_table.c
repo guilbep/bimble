@@ -404,11 +404,13 @@ static const char SCHEMA_GEOREF_SET[] =
     "rees counter-clockwise.\",\"format\":\"double\",\"type\":[\"number\",\"null\"]},\"north_m\":{\""
     "description\":\"What the survey system adds to y, m.\",\"format\":\"double\",\"type\":[\"numbe"
     "r\",\"null\"]},\"rotation_deg\":{\"description\":\"Project north: degrees counter-clockwise fr"
-    "om true north.\",\"format\":\"double\",\"type\":[\"number\",\"null\"]}},\"title\":\"GeorefSetA"
-    "rgs\",\"type\":\"object\"}";
+    "om true north.\",\"format\":\"double\",\"type\":[\"number\",\"null\"]},\"survey_point_mm\":{\"des"
+    "cription\":\"The survey point (a benchmark of the site), world mm [x, y, z]; [] removes it (SETOUT, A"
+    "DR 0075).\",\"items\":{\"format\":\"double\",\"type\":\"number\"},\"type\":[\"array\",\"null\"]}},"
+    "\"title\":\"GeorefSetArgs\",\"type\":\"object\"}";
 static const char SUMMARY_GEOREF_SET[] =
-    "Set the model's georeference: project north, the survey system (LV95) and the map conversion; missing "
-    "ones are kept (a C addition, ADR 0045).";
+    "Set the model's georeference: project north, the survey system (LV95), the map conversion and the survey "
+    "point; missing ones are kept, angles come back in (-180, 180] (a C addition, ADR 0045, 0075).";
 int cc_vh_georef_set(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 /* ---- SEC1 ---- C additions of ticket SEC1: views, handlers in verbs_views.c. */
 static const char SCHEMA_VIEW_ADD[] =

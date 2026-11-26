@@ -171,6 +171,11 @@ typedef struct {
     cc_str crs;              /* the survey system, e.g. "EPSG:2056" (LV95) */
     double east_m, north_m, height_m; /* what the survey system adds to world coordinates (m) */
     double map_rotation_deg; /* IfcMapConversion: the turn of the model's x axis in the survey system */
+    /* SETOUT (ADR 0075, DEVIATIONS 32): the survey point, a C addition: a benchmark of the site in
+     * world mm, its survey coordinates those of the georeference. File key "survey_point_mm"
+     * [x, y, z] after Rust's six, left out when unset (has_survey_point 0). */
+    int has_survey_point;
+    double survey_point_mm[3];
 } cc_georef;
 
 /* ---- LNK1: a linked model the file names (GitHub issue #69, DEVIATIONS 29): file key "links",

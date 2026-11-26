@@ -633,7 +633,7 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
      * placed at a whole metre near the model (the mean of the elements' origins), turned by the
      * building's angle; elements are placed in its frame. None for the default georeference or an
      * empty model: the building sits at the world origin. */
-    int framed = !cc_georef_is_default(&m->georef) && m->nelements > 0;
+    int framed = cc_georef_places(&m->georef) && m->nelements > 0; /* SETOUT: the survey point is no place */
     double fat[3] = {0, 0, 0}, fcos = 1.0, fsin = 0.0;
     uint64_t bldg_axes = world;
     if (framed) {

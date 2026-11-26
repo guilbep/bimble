@@ -15,6 +15,7 @@
 #include "model.h"
 #include "platform.h"
 #include "scene.h"
+#include "setting_out.h" /* SETOUT */
 #include "tool.h"
 #include "viewfile.h"
 #include "visibility.h"
@@ -134,6 +135,8 @@ typedef struct cc_session {
     /* ---- KEY1: the plan annotation toggles (toggles.h), bit i set = off; 0 (all on) as new ---- */
     unsigned plan_off;
     /* ---- end KEY1 ---- */
+    /* ---- SETOUT: the setting-out markers shown (setting_out.h), session state ---- */
+    cc_setout setout;
     /* ---- PAPER1: paper.rs paper_views, the views shown On paper (by id, unsorted, unique;
      * cleared with the model, lib.rs:1661); plan_window: the Export view window (ribbon.rs:722
      * Action::OnPaper toggles it, :630 drawn pressed) ---- */

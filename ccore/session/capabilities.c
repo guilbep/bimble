@@ -19,6 +19,7 @@ static const struct {
     int when;
 } CAPS[] = {
     {"about", YES},            /* SET1: action about, query about (settings.h) */
+    {"base_point_move", NO},   /* SETOUT: moving the project base point by clicks (the model's coordinates stay: ADR 0075) */
     {"collaboration", NO},     /* calls.c q_collab: a constant "nobody" (H2c) */
     {"export_ifc", FULL_BUILD},
     {"export_pdf", FULL_BUILD}, /* sheet_svg.h sheet_pdf, view_pdf (D7) */
@@ -40,9 +41,11 @@ static const struct {
     {"quantities", FULL_BUILD}, /* schedules.h schedule_rows, schedule_csv (Q2) */
     {"rebar", NO},
     {"recent_files", NATIVE},  /* FS1: settings_file.h, the native host reads and opens paths (the browser cannot) */
+    {"reference_planes", NO},  /* SETOUT: named work planes (ADR 0075 item 4): not in the C core yet */
     {"references", YES},       /* links.h, links_ref.h */
     {"schedules", FULL_BUILD},
     {"section_catalogue", NO},
+    {"setting_out", YES},      /* SETOUT: query setting_out, actions show_base_point, show_survey_point, view_true_north */
     {"settings", FULL_BUILD},  /* SET1: query settings, action set_settings (settings.h; not in the viewer-only build) */
     {"sheet_tools", NO},       /* actions sheet_tool_* */
     {"sheets", YES},           /* query sheets, sheet_layout (SH1) */
