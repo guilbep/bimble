@@ -40,8 +40,12 @@ export const linksBusy = ref(false);
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** The panel's rows (`query links_panel`), empty when the core has none. */
+/** LINKF: bumped after each link call, so the rows answer at once (not only at the next change). */
+export const linksTick = ref(0);
+
 export function linksPanel(): LinksPanel {
   void state.value;
+  void linksTick.value;
   try { return query<LinksPanel>("links_panel"); } catch { return { models: [], references: [] }; }
 }
 
@@ -62,6 +66,7 @@ async function run(what: () => Promise<string | null>): Promise<string | null> {
   let err: string | null;
   try { err = await what(); } catch (e) { err = msg(e); }
   linksBusy.value = false;
+  linksTick.value++;
   linksError.value = err;
   if (err) console.warn(`links: ${err}`);
   return err;

@@ -110,6 +110,9 @@ const SELECTION_SRGB: [number, number, number] = [215, 172, 182];
 const SELECTION_CSS = `rgb(${SELECTION_SRGB.join(", ")})`; // WAVE1B (B2): the selected opening's box
 // Linked (reference) models: bimble-core style.rs:340-341 `reference`, `reference_edges`.
 const REFERENCE_SRGB: [number, number, number] = [190, 214, 238];
+/** LINKF: a link's colour override (ccore/session/links.h, palette 0..11; LinksPanel.vue's swatches). */
+const LINK_SRGB: [number, number, number][] = ["#c0504d", "#4f81bd", "#9bbb59", "#8064a2", "#4bacc6", "#f79646", "#2c4d75", "#7f7f7f", "#d99694", "#95b3d7", "#c3d69b", "#b2a2c7"]
+  .map((h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]);
 const REFERENCE_EDGE_SRGB: [number, number, number] = [52, 110, 180];
 // Revealed hidden elements (Reveal hidden): the comparison colour, as Rust's Style::OnlyHere.
 const REVEALED_SRGB: [number, number, number] = [232, 150, 64];
@@ -930,7 +933,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const colourOf = (e: number) => {
       const k = m.model?.[e] ?? 0;
       return k > 0
-        ? (linked && linked.id === m.ids[e] && linked.link === m.links?.[k - 1]?.name ? SELECTION_SRGB : REFERENCE_SRGB)
+        ? (linked && linked.id === m.ids[e] && linked.link === m.links?.[k - 1]?.name ? SELECTION_SRGB : LINK_SRGB[m.links?.[k - 1]?.colour ?? -1] ?? REFERENCE_SRGB)
         : sel.has(m.ids[e] ?? "") ? SELECTION_SRGB : shown[e] === 2 ? REVEALED_SRGB
         : (CATEGORY_SRGB[m.cats[e] ?? 7] ?? CATEGORY_SRGB[7] ?? SELECTION_SRGB);
     };
