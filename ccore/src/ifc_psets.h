@@ -13,7 +13,7 @@
  * enumeration's values joined by ", ", a quantity's value (its unit left out). Types' property
  * sets (IfcRelDefinesByType) are not read.
  *
- * The table's bytes (a link cache's section PSET, or kept in memory for a small IFC):
+ * The table's bytes (a link cache's section PROP, or kept in memory for a small IFC):
  *   u32 n, u32 end[n] (the end of entry i in the text after the table; entry i starts at end[i-1],
  *   0 for i = 0), then the texts. Little-endian.
  * Bounded: at most CC_PSETS_SETS sets and CC_PSETS_PROPS properties per set are written, an entry at

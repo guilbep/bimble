@@ -1,0 +1,130 @@
+/* Mission 1 across links (ticket M1LINKS, ADR 0081): the property sets read beside the display
+ * (src/ifc_psets.h), their table as a link cache's section PROP (src/viewfile.c, kept on disk),
+ * hostile tables and sections, the notes of a link entry in the .bimble (src/file.c). Fails before
+ * M1LINKS: no ifc_psets.h, no cc_step_parse_only, no notes in a link entry. */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "check.h"
+#include "file.h"
+#include "ifc_psets.h"
+#include "ifc_read.h"
+#include "viewfile.h"
+
+static const char *golden;
+
+static void psets_of_frame(void) {
+    size_t n;
+    char *text = slurp(golden, "ifc/frame.ifc", &n);
+    cc_ifc_scene s;
+    cc_error err;
+    check_true("frame.ifc read", cc_ifc_read(text, n, &s, &err) == 0);
+    Buf t;
+    buf_init(&t);
+    check_true("its property sets read", cc_ifc_psets(text, n, &s, &t, &err) == 0 && !t.oom);
+    size_t with = 0;
+    for (size_t i = 0; i < s.scene.nelements; i++) {
+        const uint8_t *p;
+        size_t len;
+        if (cc_psets_entry((const uint8_t *)t.p, t.len, i, &p, &len)) {
+            check_true("every entry holds together", 0);
+            break;
+        }
+        with += len && !memcmp(p, "[{\"name\":\"Bimble_Generator\"", 27);
+    }
+    check_true("every element of frame.ifc has its Bimble_Generator set", with == s.scene.nelements);
+    /* the cache: the view file, its PROP last; read back, the section stays on disk */
+    cc_viewfile_meta mt;
+    Buf vb;
+    buf_init(&vb);
+    check_true("the cache written", !cc_ifc_scene_meta(&s, &mt) && !cc_viewfile_write_meta(&mt, &s.scene, 0, &vb) &&
+                                        !cc_viewfile_append_psets(&vb, t.p, t.len));
+    cc_viewfile_meta_free(&mt);
+    cc_viewfile v;
+    check_true("the cache read: PROP found, not copied", cc_viewfile_read((const uint8_t *)vb.p, vb.len, &v, &err) == 0 && v.has_psets &&
+                                                          v.psets_off + v.psets_len == vb.len && v.psets_len == t.len);
+    cc_viewfile_free(&v);
+    /* hostile: the head's count, an end going back, an end past the section */
+    for (int k = 0; k < 3; k++) {
+        Buf h;
+        buf_init(&h);
+        buf_append(&h, vb.p, vb.len);
+        char *pay = h.p + (h.len - t.len);
+        if (k == 0) pay[0] ^= 1;                    /* entries != elements */
+        if (k == 1) memset(pay + 8, 0, 4);          /* end[1] < end[0] when end[0] > 0 */
+        if (k == 2) memset(pay + 4 + 4 * (s.scene.nelements - 1), 0xff, 4); /* the last end past the end */
+        int rc = cc_viewfile_read((const uint8_t *)h.p, h.len, &v, &err);
+        char what[96];
+        snprintf(what, sizeof what, "a hostile PROP refused (%d): %s", k, rc ? err.msg : "read");
+        check_true(what, rc != 0);
+        cc_viewfile_free(&v);
+        buf_free(&h);
+    }
+    /* hostile tables given to the entry reader */
+    const uint8_t tiny[3] = {1, 0, 0}, big[8] = {0xff, 0xff, 0xff, 0x7f, 0, 0, 0, 0};
+    const uint8_t *p;
+    size_t len;
+    check_true("a table shorter than its head", cc_psets_entry(tiny, 3, 0, &p, &len) != 0);
+    check_true("a table counting more entries than it holds", cc_psets_entry(big, 8, 0, &p, &len) != 0);
+    check_true("an entry past the count", cc_psets_entry((const uint8_t *)t.p, t.len, s.scene.nelements, &p, &len) != 0);
+    buf_free(&vb), buf_free(&t);
+    cc_ifc_scene_free(&s);
+    free(text);
+}
+
+static void notes_in_the_file(void) {
+    static const char *const base =
+        "{\"format\":\"bimble\",\"version\":1,\"model\":{\"project_id\":\"1ECFGZP4n20ADaVDzRQc6J\",\"project_name\":\"P\",\"storeys\":{},"
+        "\"materials\":{},\"elements\":{},\"links\":[{\"name\":\"a.ifc\",\"notes\":%s,\"path\":\"/x/a.ifc\"}]}}";
+    char text[8192];
+    cc_model m;
+    cc_error err;
+    snprintf(text, sizeof text, base, "[{\"at\":[1.5,-2.0,3000.0],\"element\":\"0svT5hRin94BdWGBOHxd1z\",\"text\":\"Check\"}]");
+    int rc = cc_model_load(&m, text, strlen(text), &err);
+    if (rc) printf("  %s\n", err.msg);
+    check_true("a link's note read", rc == 0 && m.nlinks == 1 && m.links[0].nnotes == 1 && m.links[0].notes[0].at[2] == 3000.0);
+    if (!rc) {
+        Buf b;
+        buf_init(&b);
+        check_true("written back with its keys sorted", !cc_model_save(&m, &b) && strstr(buf_cstr(&b), "\"notes\": [") != NULL);
+        buf_free(&b);
+        cc_model_free(&m);
+    }
+    static const char *const bad[] = {
+        "[{\"at\":[1,2],\"element\":\"0svT5hRin94BdWGBOHxd1z\",\"text\":\"x\"}]",      /* two numbers */
+        "[{\"at\":[1,2,3],\"element\":\"not a GlobalId\",\"text\":\"x\"}]",            /* no GlobalId */
+        "[{\"at\":[1,2,1e300],\"element\":\"0svT5hRin94BdWGBOHxd1z\",\"text\":\"x\"}]", /* too far */
+        "[{\"at\":[1,2,3],\"element\":\"0svT5hRin94BdWGBOHxd1z\",\"text\":\"a\\u0000b\"}]", /* a NUL */
+        "[{\"at\":[1,2,3],\"element\":\"0svT5hRin94BdWGBOHxd1z\",\"text\":\"x\",\"z\":1}]", /* an unknown key */
+        "{}",
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) {
+        snprintf(text, sizeof text, base, bad[i]);
+        rc = cc_model_load(&m, text, strlen(text), &err);
+        char what[64];
+        snprintf(what, sizeof what, "a hostile note refused (%zu)", i);
+        check_true(what, rc != 0);
+        if (!rc) cc_model_free(&m);
+    }
+    /* 257 notes: refused */
+    Buf many;
+    buf_init(&many);
+    buf_putc(&many, '[');
+    for (int i = 0; i < 257; i++) buf_puts(&many, i ? ",{\"at\":[0,0,0],\"element\":\"0svT5hRin94BdWGBOHxd1z\",\"text\":\"n\"}" : "{\"at\":[0,0,0],\"element\":\"0svT5hRin94BdWGBOHxd1z\",\"text\":\"n\"}");
+    buf_putc(&many, ']');
+    char *big = malloc(many.len + 4096);
+    snprintf(big, many.len + 4096, base, buf_cstr(&many));
+    rc = cc_model_load(&m, big, strlen(big), &err);
+    check_true("257 notes on a link refused", rc != 0);
+    if (!rc) cc_model_free(&m);
+    free(big), buf_free(&many);
+}
+
+int main(int argc, char **argv) {
+    static char dir[4096];
+    snprintf(dir, sizeof dir, "%s/..", argc > 1 ? argv[1] : "ccore/golden/floats");
+    golden = dir;
+    psets_of_frame();
+    notes_in_the_file();
+    return report("m1links");
+}

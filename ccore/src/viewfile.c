@@ -584,7 +584,7 @@ static int read_elem(Rd *s, cc_viewfile *v, size_t *shape_cap, size_t *elem_cap,
 }
 
 static int read_raw(const uint8_t *p, size_t n, cc_viewfile *v, Err *e) {
-    const uint8_t *file0 = p; /* M1LINKS: PSET's offset in the file */
+    const uint8_t *file0 = p; /* M1LINKS: PROP's offset in the file */
     if (n < 12 || memcmp(p, MAGIC, 8) != 0) return fail(e, E_NOT, NULL);
     uint32_t version = (uint32_t)p[8] | (uint32_t)p[9] << 8 | (uint32_t)p[10] << 16 | (uint32_t)p[11] << 24;
     if (version != CC_VIEWFILE_VERSION) {
@@ -642,7 +642,7 @@ static int read_raw(const uint8_t *p, size_t n, cc_viewfile *v, Err *e) {
             if (!ok) return fail(e, E_INVALID, "source: not JSON");
             v->source = g;
             v->has_source = 1;
-        } else if (memcmp(kind, "PSET", 4) == 0 && !v->has_psets) { /* M1LINKS: kept on disk (ifc_psets.h) */
+        } else if (memcmp(kind, "PROP", 4) == 0 && !v->has_psets) { /* M1LINKS: kept on disk (ifc_psets.h) */
             if (s.n < 4) return fail(e, E_INVALID, "psets: no head");
             uint64_t ne = (uint64_t)s.p[0] | (uint64_t)s.p[1] << 8 | (uint64_t)s.p[2] << 16 | (uint64_t)s.p[3] << 24;
             if (ne != want_elems || cc_psets_head(ne) > s.n) return fail(e, E_INVALID, "psets: entries");
@@ -708,7 +708,7 @@ int cc_viewfile_append_psets(Buf *out, const char *t, size_t n) {
     Buf p;
     buf_init(&p);
     buf_append(&p, t, n);
-    section(out, "PSET", &p);
+    section(out, "PROP", &p);
     int bad = p.oom || out->oom;
     buf_free(&p);
     return bad ? -1 : 0;
@@ -739,14 +739,14 @@ int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err
         rc = copy ? read_raw(copy, len, out, &e) : fail(&e, E_OOM, NULL);
         out->has_psets = 0; /* M1LINKS: offsets in the inflated stream, not the file: not read lazily */
     } else {
-        /* M1LINKS: a last section PSET stays out of the copy (read lazily from the file, ifc_psets.h):
+        /* M1LINKS: a last section PROP stays out of the copy (read lazily from the file, ifc_psets.h):
          * the sections' heads walked, the copy cut where it starts. */
         size_t cut = n, at = 12, pset = 0;
         while (n >= 12 && at + 12 <= n) {
             uint64_t len = 0;
             for (int i = 0; i < 8; i++) len |= (uint64_t)p[at + 4 + i] << (8 * i);
             if (len > n - at - 12) break;
-            if (!memcmp(p + at, "PSET", 4) && at + 12 + len == n) pset = at;
+            if (!memcmp(p + at, "PROP", 4) && at + 12 + len == n) pset = at;
             at += 12 + (size_t)len;
         }
         if (pset && at == n) cut = pset;

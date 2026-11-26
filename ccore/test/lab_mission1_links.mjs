@@ -13,7 +13,7 @@
 // the caches: plans, note, sets still there. In the page: the eye on a class row, a click on a linked element's
 // row, a click on a plan from links, the note's Add: each one's own feedback within 200 ms (ADR 0074; the load
 // average printed; loaded: one rerun under load 4 before concluding). Screenshots in M1_SHOTS when set.
-// Fails on the code before M1LINKS: no query link_levels (no plans from links), no view_rule, no PSET.
+// Fails on the code before M1LINKS: no query link_levels (no plans from links), no view_rule, no PROP.
 import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
