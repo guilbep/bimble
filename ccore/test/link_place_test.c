@@ -286,9 +286,40 @@ int main(int argc, char **argv) {
     if (lk) memcpy(&ver, lk + 4, 4);
     check_true("LNKS version 2 with a colour", ver == 2);
 
+    /* WAVE1B: a linked model with a reference plane (an IfcVirtualElement, no body) and opening
+     * ghosts: placed, drawn, measured without a crash; as a .bimble and as its IFC4 export */
+    {
+        cc_session *r = cc_session_new(cc_platform_native());
+        char rb[512];
+        snprintf(rb, sizeof rb, "%s/frame.json", gold);
+        int ok = r && !cc_session_open(r, rb, &err);
+        ok = ok && call(r, "verb", "reference_plane_add",
+                        "{\"storey\":\"1jLno3kWj4Hfl6pUGBDd7E\",\"name\":\"RP\",\"origin\":[1000,2000,1500],\"normal\":[0,0,1],"
+                        "\"width\":4000,\"height\":2000}", &o) == CC_OK;
+        ok = ok && call(r, "action", "save_as", "{\"path\":\"" DIR "/rp.bimble\"}", &o) == CC_OK;
+        ok = ok && call(r, "action", "export_ifc4", "{\"path\":\"" DIR "/rp.ifc\"}", &o) == CC_OK;
+        check_true("a model with a reference plane, saved and exported", ok);
+        if (r) cc_session_free(r);
+        for (int w = 0; w < 2; w++) {
+            snprintf(body, sizeof body, "{\"path\":\"%s\"}", w ? DIR "/rp.ifc" : DIR "/rp.bimble");
+            int lk2 = call(s, "action", "link_model", body, &o) == CC_OK;
+            const char *nm = w ? "rp.ifc" : "rp.bimble";
+            snprintf(body, sizeof body, "{\"op\":\"unpin\",\"name\":\"%s\"}", nm);
+            call(s, "action", "manage_links", body, &o);
+            snprintf(body, sizeof body, "{\"op\":\"place\",\"name\":\"%s\",\"rotation_deg\":30,\"move_mm\":[500,0,0]}", nm);
+            int pl = call(s, "action", "manage_links", body, &o) == CC_OK;
+            int li = find_link(s, nm);
+            int drawn = cc_mesh_get_form(s, 3, &mp, &mn, &rev, &ms) == 200 && cc_mesh_get_form(s, 1, &mp, &mn, &rev, &ms) == 200;
+            call(s, "query", "links_panel", "{}", &o);
+            check_true(w ? "its IFC4 linked, placed, drawn" : "the .bimble linked, placed, drawn",
+                       lk2 && pl && li >= 0 && s->links[li].placed && drawn && strstr(buf_cstr(&o), nm));
+        }
+    }
+
     buf_free(&o);
     cc_session_free(s);
     for (int i = 0; i < 4; i++) remove(L[i]);
+    remove(DIR "/rp.bimble"), remove(DIR "/rp.ifc");
     rmdir(DIR);
     return report("link_place");
 }
