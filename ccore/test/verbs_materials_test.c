@@ -243,6 +243,12 @@ static void verbs(void) {
     const cc_material *mo = by_name(&m, "Mortier");
     check_true("blank: masonry, no values", mo && mo->category == CC_CAT_MASONRY && !mo->props.has_density &&
                                              !mo->props.has_e && !mo->props.has_strength && !mo->props.source.n);
+    if (!mo) { /* the verb is not there (the code before MAT1): nothing more to check */
+        cc_history_free(&h);
+        cc_model_free(&m);
+        buf_free(&err), buf_free(&js), buf_free(&before);
+        return;
+    }
     char mo_id[23];
     memcpy(mo_id, mo->id.c, 22), mo_id[22] = 0;
     /* set: rename, family, values; the same values: no step */
@@ -259,7 +265,8 @@ static void verbs(void) {
     check_true("material_set bad value refused", run(&m, &h, "material_set", a, &err) < 0);
     err_is("material_set bad value text", &err, "invalid: material modulus: a positive number up to 1000000");
     snprintf(a, sizeof a, "{\"id\":\"%s\",\"props\":{}}", mo_id);
-    check_true("material_set props {} clears", run(&m, &h, "material_set", a, &err) == 1 && !by_name(&m, "Mortier M10")->props.has_density);
+    check_true("material_set props {} clears", run(&m, &h, "material_set", a, &err) == 1 && by_name(&m, "Mortier M10") &&
+                                                   !by_name(&m, "Mortier M10")->props.has_density);
     check_true("material_set no such material", run(&m, &h, "material_set", "{\"id\":\"0000000000000000000000\"}", &err) < 0);
     err_is("material_set no such text", &err, "material_set: no material 0000000000000000000000");
     /* assign (Rust's verb set_material), then remove refused while in use */

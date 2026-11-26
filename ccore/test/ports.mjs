@@ -73,6 +73,7 @@ const TABLE = [
   ["host", "lab_paper", 47309, 9], // PAPER1
   ["host", "lab_section_view", 47379, 79], // SEC1
   ["host", "lab_settings", 47303, 3], // SET1
+  ["host", "lab_materials", 47387, 87], // MAT1
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_gl", 5193, 131],
   ["vite", "lab_place", 5195, 133],
@@ -102,6 +103,7 @@ const TABLE = [
   ["vite", "lab_paper", 5130, 68], // PAPER1
   ["vite", "lab_section_view", 5131, 69], // SEC1
   ["vite", "lab_settings", 5204, 142], // SET1
+  ["vite", "lab_materials", 5150, 88], // MAT1
 ];
 export const SPAN = 160; // offsets 0..SPAN-1
 const AUTO_LO = 20000, AUTO_SLOTS = Math.floor((32000 - AUTO_LO) / SPAN);
