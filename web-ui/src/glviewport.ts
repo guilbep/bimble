@@ -93,6 +93,7 @@ import { drawSettingOut, type MarkerDrawn } from "./gl/settingout"; // SETOUT: b
 import { drawRefPlanes, type RefPlaneDrawn } from "./gl/refplanes"; // WAVE1B: reference planes
 import { clipPlanes, onTargetPlane, orbitAbout, ORBIT_RAD_PER_PX, sameCam, wheelFactor, zoomAt, type OrbitCam } from "./gl/nav";
 import { perfFrame, perfInputs, perfMesh } from "./perf"; // GPU1: the performance panel's counters
+import { gpuSwitch, type GpuRenderer, type GpuView } from "./gpu/switch"; // GPU1: the WebGPU renderer (ADR 0083)
 import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
 
 // Palette, sRGB (bimble-core style.rs:302, :335-410), by MaterialCategory index.
@@ -680,6 +681,32 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   canvas.insertAdjacentElement("afterend", overlay);
   const octx = overlay.getContext("2d");
   perfInputs(canvas); // GPU1
+  // ---- GPU1 (ADR 0083): the WebGPU renderer when asked (gpu/switch.ts; null: WebGL2 draws). It only turns the
+  // scene, the camera and the states into pixels on its own canvas; everything else of the viewport is shared. ----
+  let gpuR: GpuRenderer | null = null;
+  gpuSwitch(canvas, stats, (r) => { gpuR = r; dirty = true; });
+  const gpuView = (): GpuView => {
+    const { e, mvp } = matrices(), m = mesh, sel = new Set(state.value.linked ? [] : state.value.selection), k = (2 * Math.tan(FOV_Y / 2)) / Math.max(1, canvas.height);
+    return { mesh: m, boxes, shown, colour: elColour, selected: (el) => sel.has(m?.ids[el] ?? ""), prx, proxiesOn: proxiesOn(), mvp, eye: e, target,
+      ortho: plan !== null || ortho3d(), plan: plan !== null, mirror: mirror(), clip: clipBox(), edges: pressed("edges", true), camKey: camKey(),
+      held: () => drag !== null, fps: userSettings.value?.values.moving_fps ?? 30, mmPerPx: ortho3d() ? () => distance * k : (d) => d * k,
+      zbias: plan ? (2 * 2) / (2 * (4 * (bounds?.radius ?? distance) + 1000) - 1) : 0, w: canvas.width, h: canvas.height,
+      noCull: stats.noCull === true, noProxies: stats.noProxies === true, noEdges: stats.noEdges === true };
+  };
+  /** The frame drawn by WebGPU (true), or by WebGL2 below (the place tool's ghost and markers: WebGL2's). */
+  const gpuDraw = (): boolean => {
+    gpuR?.show(!ghostN && !markN);
+    if (!gpuR || ghostN || markN) return false;
+    gpuR.frame(gpuView());
+    const b = clipBox();
+    stats.boxHandles = b && !plan ? boxHandles(b) : [];
+    drawOverlay();
+    stats.frames++;
+    perfFrame(gpuR.last.moving, gpuR.last.t0, gpuR.done());
+    if (stats.firstFrameMs === null && mesh) stats.firstFrameMs = performance.now();
+    return true;
+  };
+  // ---- end GPU1 ----
   const source: MeshSource = typeof base !== "string" ? base : {
     epoch: async () => {
       const r = await fetch(`${base}/change?since=0&t=${t}`, { cache: "no-store" });
@@ -1110,7 +1137,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const OVERPAINT_MAX = 2000;
   const overpaint = (els: number[]): boolean => {
     const m = mesh;
-    if (!m || !lastComplete || plan || clipBox() || ghostN || markN || els.length > OVERPAINT_MAX || els.length === 0) return false;
+    if (gpuR || !m || !lastComplete || plan || clipBox() || ghostN || markN || els.length > OVERPAINT_MAX || els.length === 0) return false; // GPU1: gpuR
     for (const el of els) {
       if (elFace[el] === undefined || (elFace[el]! < 0 && elInst[el]! < 0 && shown[el])) return false;
       const lf = prx && !((m.model?.[el] ?? 0) > 0) ? prx.leafOf[el] ?? -1 : -1;
@@ -1580,6 +1607,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     return c;
   };
   const draw = () => {
+    if (gpuDraw()) return; // GPU1: the seam (else the WebGL2 frame below, untouched)
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(BACKGROUND_SRGB[0]! / 255, BACKGROUND_SRGB[1]! / 255, BACKGROUND_SRGB[2]! / 255, 1);
     gl.clearDepth(1);

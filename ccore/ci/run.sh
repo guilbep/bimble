@@ -79,7 +79,7 @@ fi
 done_=" "
 # suite <name> <command...>: runs the command with its output in out/ci/<name>.log, once a run.
 suite() {
-    local name=$1 log="$LOGS/$1.log" t0 t1 rc bad=0 sums
+    local name=$1 log="$LOGS/$1.log" t0 t1 rc bad=0 sums skip
     shift
     [[ $done_ == *" $name "* ]] && return 0
     done_+="$name "
@@ -98,11 +98,15 @@ suite() {
     ((rc != 0)) && bad=1
     # FIXUI: a FAIL line, or one a suite re-prints from its sub-test ("  | FAIL …", lab_place).
     grep -qE '^([[:space:]]*\|[[:space:]]*)?FAIL([[:space:]:]|$)' "$log" && bad=1
-    # FIXUI: a suite that prints its counts and counted no check passed nothing.
-    [[ $sums == "0 passed, 0 failed" ]] && { bad=1; sums="no check ran (0 passed, 0 failed)"; }
     # Any "M failed" above 0 makes the sum above 0. (No `grep | grep -q`: under pipefail the
     # writer's SIGPIPE, when -q stops early, can turn a match into false.)
     [[ $sums =~ ([0-9]+)\ failed$ ]] && ((BASH_REMATCH[1] > 0)) && bad=1
+    # GPU1: a suite that declares a skip (a line "skipped: <why>") says so in the roll-up; with no
+    # check at all it is "skipped", not a failure. FIXUI: a silent zero (no such line) still fails.
+    skip=$(grep -m1 -E '^skipped: ' "$log" | cut -c1-140)
+    if [[ $sums == "0 passed, 0 failed" ]]; then
+        if [[ -n $skip ]]; then sums=$skip; else bad=1; sums="no check ran (0 passed, 0 failed)"; fi
+    elif [[ -n $skip && -n $sums ]]; then sums+=" ($skip)"; fi
     ((rc == 124)) && sums="timed out after $LIMIT s"
     n=$((n + 1))
     if ((bad)); then

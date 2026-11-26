@@ -132,7 +132,12 @@ export async function lab({ name, model, query = "", chromiumFlags = [], width =
     for (let i = 1; i <= steps; i++) { await M("mouseMoved", x + (dx * i) / steps, y + (dy * i) / steps, 1); await sleep(16); }
     await M("mouseReleased", x + dx, y + dy, 0);
   };
-  /** The viewport's pixels as shown (a screenshot of the canvas's box): { w, h, rgba } (PNG decoded). */
+  /** Another address in the same browser; waits for the new page's first frame. */
+  L.navigate = async (q) => {
+    await L.evalJs("window.__bbOld = 1");
+    await L.S("Page.navigate", { url: L.url(q) });
+    await waitFor("the new page's first frame", 60000, () => L.evalJs("!window.__bbOld && !!(window.__bbGl && window.__bbGl.firstFrameMs && window.__bbGl.meshRev !== null)"));
+  };
   L.close = async () => { L.cdp?.close(); await kill(procs); rmSync(tmp, { recursive: true, force: true }); };
   await L.open(query, chromiumFlags);
   return L;
