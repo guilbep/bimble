@@ -31,6 +31,7 @@
 #include <stdint.h>
 #include "buf.h"
 #include "json_w.h"
+#include "bvh.h"
 #include "scene.h"
 #include "visibility.h"
 
@@ -66,12 +67,19 @@ typedef struct cc_measure {
  * inside its box: the elements whose box the ray misses are not meshed, and the others are meshed
  * nearest box first until the nearest left lies beyond the visible depth of the best hit. The
  * session keeps one per scene shown (calls.c, with the scene's own key: rev, links generation,
- * view): 24 bytes per element. */
+ * view): 24 bytes per element.
+ * 3D2: a box tree over them (bvh.h; about 60 bytes per element more): a ray visits only the boxes
+ * it enters, not all of them. The boxes left out of the tree (not finite, or empty) are listed in
+ * `odd` and tested one by one, as before. */
 typedef struct {
     const cc_scene *sc; /* what it was built for (NULL: nothing) */
     uint64_t key[3];    /* the session's key: rev, links_gen, view */
     float (*box)[6];
     size_t n;
+    Arena arena;   /* 3D2: the tree and `odd` */
+    cc_bvh tree;   /* 3D2: over `box` (item k: element k) */
+    uint32_t *odd; /* 3D2: the elements not in the tree */
+    size_t nodd;
 } cc_mboxes;
 /* Builds `b` for `sc` (freed first). 0 ok, -1 out of memory (`b` then empty). */
 int cc_mboxes_build(cc_mboxes *b, const cc_scene *sc);
@@ -89,6 +97,7 @@ typedef struct {
     float off[3];       /* added to its points (a link: its origin - the shown scene's, f32 as Rust) */
     const cc_vis *vis;  /* its hidden elements (visibility.h; reveal shows them); NULL: none */
     const float (*box)[6]; /* MEAS1: its elements' boxes (cc_mboxes of sc); NULL: made for the call */
+    const cc_mboxes *index; /* 3D2: the cc_mboxes `box` belongs to (its tree); NULL: every box tested */
 } cc_mlayer;
 
 /* What a pointer call sees: the layers (the shown scene first), the box that cuts (scene

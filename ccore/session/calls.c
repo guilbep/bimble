@@ -3593,7 +3593,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
             for (int k = 0; k < 3; k++) layers[nl].off[k] = (float)(ls->origin[k] - sc->origin[k]); /* lib.rs:1499 */
             nl++;
         }
-        for (size_t i = 0; i < nl; i++) layers[i].box = mboxes_of(s, i, layers[i].sc); /* MEAS1 */
+        for (size_t i = 0; i < nl; i++) layers[i].box = mboxes_of(s, i, layers[i].sc), layers[i].index = layers[i].box ? &s->mboxes[i] : NULL; /* MEAS1, 3D2: the box tree */
         Arena a;
         arena_init(&a, 0);
         cc_view v;

@@ -195,6 +195,7 @@ typedef struct {
 
 void cc_mboxes_free(cc_mboxes *b) {
     free(b->box);
+    arena_free(&b->arena);
     memset(b, 0, sizeof *b);
 }
 
@@ -259,7 +260,24 @@ int cc_mboxes_build(cc_mboxes *b, const cc_scene *sc) {
         free(box);
         return -1;
     }
-    b->sc = sc, b->box = box, b->n = sc->nelements;
+    /* 3D2: the tree over the boxes; those it leaves out (not finite, or empty) in `odd` */
+    size_t n = sc->nelements, nodd = 0;
+    arena_init(&b->arena, 1024);
+    cc_aabb *ab = malloc(n * sizeof *ab);
+    for (size_t k = 0; ab && k < n; k++) {
+        memcpy(ab[k].min, box[k], sizeof ab[k].min), memcpy(ab[k].max, box[k] + 3, sizeof ab[k].max);
+        nodd += !cc_aabb_is_valid(&ab[k]);
+    }
+    uint32_t *odd = nodd ? arena_alloc_n(&b->arena, nodd, sizeof *odd, 4) : NULL;
+    if (!ab || (nodd && !odd) || cc_bvh_build(&b->tree, ab, n, &b->arena)) {
+        free(ab), free(box);
+        cc_mboxes_free(b);
+        return -1;
+    }
+    for (size_t k = 0, j = 0; k < n; k++)
+        if (!cc_aabb_is_valid(&ab[k])) odd[j++] = (uint32_t)k;
+    free(ab);
+    b->sc = sc, b->box = box, b->n = n, b->odd = odd, b->nodd = nodd;
     return 0;
 }
 
@@ -302,6 +320,38 @@ static int near_cmp(const void *x, const void *y) {
     if (a->tn != b->tn) return a->tn < b->tn ? -1 : 1;
     if (a->layer != b->layer) return a->layer < b->layer ? -1 : 1;
     return a->el < b->el ? -1 : a->el > b->el;
+}
+
+/* 3D2: the boxes of one layer the ray enters, through its tree (the same boxes as testing each). */
+typedef struct {
+    const cc_mview *v;
+    const cc_mlayer *L;
+    const float (*box)[6];
+    double o[3];
+    const double *d;
+    Near *near;
+    size_t nn;
+    uint32_t li;
+} Walk;
+
+/* Element k if the ray enters its box and it is shown: into `near`. */
+static void walk_item(void *ctx, uint32_t k) {
+    Walk *w = ctx;
+    double tn;
+    if (w->v->work) w->v->work->boxes++;
+    if (!ray_box(w->o, w->d, w->box[k], &tn)) return;
+    if (w->L->vis && !w->L->vis->reveal && cc_vis_hidden(w->L->vis, &w->L->sc->elements[k].id)) return;
+    w->near[w->nn].tn = tn, w->near[w->nn].layer = w->li, w->near[w->nn].el = k, w->nn++;
+}
+
+/* A node of the tree: entered as an element's box would be (ray_box's margin grows with the box,
+ * so a node's grown box holds its items' grown boxes: no element the scan finds is missed). */
+static int walk_enter(void *ctx, const cc_aabb *b) {
+    Walk *w = ctx;
+    float f[6] = {b->min[0], b->min[1], b->min[2], b->max[0], b->max[1], b->max[2]};
+    double tn;
+    if (w->v->work) w->v->work->boxes++;
+    return ray_box(w->o, w->d, f, &tn);
 }
 
 static int cand_cmp(const void *x, const void *y) { /* layer, then element: the old scan's order */
@@ -353,7 +403,8 @@ static int pick_element(const cc_mview *v, size_t li, size_t k, const Ray *r, Ar
 /* The elements the ray meets, nearest box first (MEAS1): the same answer as testing every visible
  * element in order (the nearest hit, ties to the first element in layer and element order; every
  * element met within reach of it), with only the boxes the ray enters meshed, and none whose box
- * starts beyond the reach of the best hit so far. `brute`: every visible element, in order. */
+ * starts beyond the reach of the best hit so far. A layer with its tree (3D2) tests only the boxes
+ * the ray enters, the others each box. `brute`: every visible element, in order. */
 static int pick(const cc_mview *v, const Ray *r, Arena *a, Arena *keep, Hits *h) {
     size_t total = 0, nn = 0;
     for (size_t li = 0; li < v->nlayers; li++) total += v->layers[li].sc->nelements;
@@ -370,6 +421,14 @@ static int pick(const cc_mview *v, const Ray *r, Arena *a, Arena *keep, Hits *h)
             box = (const float(*)[6])b;
         }
         double o[3] = {r->o[0] - L->off[0], r->o[1] - L->off[1], r->o[2] - L->off[2]};
+        const cc_mboxes *ix = v->brute ? NULL : L->index; /* 3D2: the tree, if it is this box's */
+        if (ix && ix->sc == sc && ix->n == sc->nelements && (const float(*)[6])ix->box == box) {
+            Walk w = {v, L, box, {o[0], o[1], o[2]}, r->d, near, nn, (uint32_t)li};
+            cc_bvh_visit(&ix->tree, walk_enter, walk_item, &w);
+            for (size_t j = 0; j < ix->nodd; j++) walk_item(&w, ix->odd[j]);
+            nn = w.nn;
+            continue;
+        }
         for (size_t k = 0; k < sc->nelements; k++) {
             double tn = 0.0;
             if (!v->brute) {
