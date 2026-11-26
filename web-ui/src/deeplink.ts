@@ -75,7 +75,7 @@ export async function applyDeepLink(): Promise<void> {
     for (const a of (q.get("action") ?? "").split(",").filter(Boolean)) await step(a, () => runAction(a));
     const pg = q.get("page");
     if (pg) send(pg === "home" ? { do: "home" } : { do: "showPage", page: pg });
-    currentPanel.value = q.get("panel");
+    currentPanel.value = q.get("panel") ?? (q.get("perf") === "1" ? "performance" : null); // GPU1: ?perf=1
     currentDialog.value = q.get("dialog");
   } catch (e) {
     console.warn("deep link:", e);

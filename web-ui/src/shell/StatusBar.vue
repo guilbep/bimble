@@ -82,6 +82,9 @@ const chips = (): Chip[] => {
     <span v-for="k in shownLinks" :key="k.id" data-bb="status-chip" class="chip c-s nx">{{ t("status.linked", { name: k.name.replace(/\.[^.]+$/, "") }) }}</span>
     <span v-if="preview" class="mono q" style="font-size:12px" data-bb="status-preview">{{ preview }}</span>
     <span class="mono q" style="font-size:12px" data-bb="status-counts">{{ counts() }}</span>
+    <!-- GPU1 (ADR 0083): the performance panel, opt-in (also ?perf=1) -->
+    <button type="button" class="pf" data-bb="status-perf" :aria-pressed="currentPanel === 'performance'" :title="t('perf.openTitle')"
+      @click="currentPanel = currentPanel === 'performance' ? null : 'performance'">{{ t('perf.open') }}</button>
     <span class="seg" role="group" :aria-label="t('status.langGroup')" style="margin-left:4px" data-bb="status-lang">
       <button v-for="l in langs" :key="l" type="button" class="lg" :class="{ on: lang === l }"
         :aria-pressed="lang === l" :lang="l" :title="t(l === 'fr' ? 'status.langFr' : 'status.langEn')"
@@ -119,4 +122,7 @@ const chips = (): Chip[] => {
 .lg { border: 0; cursor: pointer; font-family: var(--bb-font-data); font-size: 12px; padding: 2px 9px; border-radius: var(--bb-radius-pill); }
 /* active: inline style="background:#141414;color:#F5F2EB" in the reference (= .seg .on) */
 .seg .on { background: var(--bb-ink); color: var(--bb-on-ink); }
+/* GPU1: the performance panel's button, quiet as the counts beside it */
+.pf { border: 0; background: none; padding: 2px 6px; border-radius: var(--bb-radius-pill); color: var(--bb-stone); font: inherit; font-size: 12px; cursor: pointer; }
+.pf[aria-pressed="true"] { background: var(--bb-sunk); color: var(--bb-ink); }
 </style>

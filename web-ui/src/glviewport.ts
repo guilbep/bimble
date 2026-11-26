@@ -92,6 +92,7 @@ import { gridLayer } from "./gl/grids"; // ---- G2: grid axes in plans ---- / --
 import { drawSettingOut, type MarkerDrawn } from "./gl/settingout"; // SETOUT: base point, survey point, north
 import { drawRefPlanes, type RefPlaneDrawn } from "./gl/refplanes"; // WAVE1B: reference planes
 import { clipPlanes, onTargetPlane, orbitAbout, ORBIT_RAD_PER_PX, sameCam, wheelFactor, zoomAt, type OrbitCam } from "./gl/nav";
+import { perfFrame, perfInputs, perfMesh } from "./perf"; // GPU1: the performance panel's counters
 import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
 
 // Palette, sRGB (bimble-core style.rs:302, :335-410), by MaterialCategory index.
@@ -678,6 +679,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   overlay.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:block";
   canvas.insertAdjacentElement("afterend", overlay);
   const octx = overlay.getContext("2d");
+  perfInputs(canvas); // GPU1
   const source: MeshSource = typeof base !== "string" ? base : {
     epoch: async () => {
       const r = await fetch(`${base}/change?since=0&t=${t}`, { cache: "no-store" });
@@ -1114,6 +1116,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const lf = prx && !((m.model?.[el] ?? 0) > 0) ? prx.leafOf[el] ?? -1 : -1;
       if (lf >= 0 && lastReplaced?.[lf]) return false; // under a proxy: the picture changes more
     }
+    const tOver = performance.now(); // GPU1
     const { e, mvp } = matrices();
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.useProgram(prog);
@@ -1170,6 +1173,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindVertexArray(null);
     drawOverlay();
     stats.frames++;
+    perfFrame(false, tOver, gl); // GPU1
     stats.overpaints = (stats.overpaints ?? 0) + 1;
     return true;
   };
@@ -1362,6 +1366,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       stats.links = m.links ?? [];
       stats.error = null;
       upload(m);
+      perfMesh(m); // GPU1
       stats.loadSteps = { parse: tu - tp, upload: performance.now() - tu, lists: 0, colours: 0 }; // 3D2 (step 5)
       void loadProxies(m); // 3D2: after the first frame, in steps
     } catch (e) {
@@ -1930,6 +1935,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (!slice) drawGhost(); // (a slice adds to the kept picture: the ghost is drawn once)
     drawOverlay();
     stats.frames++;
+    perfFrame(movingNow, tNow, gl); // GPU1
     if (stats.firstFrameMs === null) stats.firstFrameMs = performance.now();
   };
 
