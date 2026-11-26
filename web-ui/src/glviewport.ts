@@ -1104,6 +1104,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const last = t.points[t.points.length - 1];
       if (last) lines.push(last[0] - m.origin[0], last[1] - m.origin[1], z, t.hover.at[0] - m.origin[0], t.hover.at[1] - m.origin[1], z);
     }
+    // ---- SLAB1 ---- a polygon slab: its outline so far and the closing edge (the hover back to the first corner)
+    if (t.kind === "slab" && placing.value?.shape === "polygon") {
+      const P = t.points, seg = (a: [number, number], b: [number, number]) =>
+        lines.push(a[0] - m.origin[0], a[1] - m.origin[1], z, b[0] - m.origin[0], b[1] - m.origin[1], z);
+      for (let i = 1; i < P.length; i++) seg(P[i - 1]!, P[i]!);
+      if (t.hover && P.length >= 2) seg(t.hover.at, P[0]!);
+    }
+    // ---- end SLAB1 ----
     gl.bindBuffer(gl.ARRAY_BUFFER, markBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lines), gl.DYNAMIC_DRAW);
     markN = lines.length / 3;
@@ -1690,6 +1698,18 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     return false;
   };
+  // ---- SLAB1 ---- Enter closes the polygon slab being clicked (lib.rs:2772 close_polygon)
+  viewportKeys.enterTool = () => {
+    if (!placingNow() || placing.value?.kind !== "slab" || placing.value?.shape !== "polygon") return false;
+    stats.toolCalls++;
+    const { state: t, error } = toolCall("close");
+    stats.toolError = error;
+    if (error) console.warn("gl viewport: tool close:", error);
+    if (t?.placed) stats.placed = t.placed;
+    showTool(t);
+    return true;
+  };
+  // ---- end SLAB1 ----
   viewportKeys.selectedAnnotation = () => (plan && anns ? selAnn : null);
   viewportKeys.dropAnnotation = () => { selAnn = stats.selectedAnnotation = null; dirty = true; };
   viewportKeys.deleteAnnotation = () => { // Delete: the selected annotation goes

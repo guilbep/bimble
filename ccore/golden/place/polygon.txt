@@ -1,0 +1,54 @@
+case five-ccw-click-closes
+top_offset 0.0
+clicks [[1000.0,500.0],[5000.0,500.0],[5000.0,3000.0],[3000.0,4000.0],[1000.0,3000.0],[1030.0,540.0]]
+then none
+ok [{"op":"add_element","id":"<new-1>","class":"IfcSlab","name":"D3","storey":"1uAZA0Yfn05f$xRd1k4uPR","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[1000.0,500.0,2750.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]},"generator":{"kind":"slab","outline":[[0.0,0.0],[4000.0,0.0],[4000.0,2500.0],[2000.0,3500.0],[0.0,2500.0]],"thickness":250.0}}]
+points 0
+case five-cw-enter
+top_offset 0.0
+clicks [[1000.0,3000.0],[3000.0,4000.0],[5000.0,3000.0],[5000.0,500.0],[1000.0,500.0]]
+then enter
+ok [{"op":"add_element","id":"<new-1>","class":"IfcSlab","name":"D3","storey":"1uAZA0Yfn05f$xRd1k4uPR","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[1000.0,500.0,2750.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]},"generator":{"kind":"slab","outline":[[0.0,0.0],[4000.0,0.0],[4000.0,2500.0],[2000.0,3500.0],[0.0,2500.0]],"thickness":250.0}}]
+points 0
+case l-shape-6
+top_offset 0.0
+clicks [[0.0,0.0],[6000.0,0.0],[6000.0,2000.0],[2000.0,2000.0],[2000.0,5000.0],[0.0,5000.0],[0.0,0.0]]
+then none
+ok [{"op":"add_element","id":"<new-1>","class":"IfcSlab","name":"D3","storey":"1uAZA0Yfn05f$xRd1k4uPR","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[0.0,0.0,2750.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]},"generator":{"kind":"slab","outline":[[0.0,0.0],[6000.0,0.0],[6000.0,2000.0],[2000.0,2000.0],[2000.0,5000.0],[0.0,5000.0]],"thickness":250.0}}]
+points 0
+case five-top-offset
+top_offset -50.0
+clicks [[1000.0,500.0],[5000.0,500.0],[5000.0,3000.0],[3000.0,4000.0],[1000.0,3000.0],[1030.0,540.0]]
+then none
+ok [{"op":"add_element","id":"<new-1>","class":"IfcSlab","name":"D3","storey":"1uAZA0Yfn05f$xRd1k4uPR","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[1000.0,500.0,2700.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]},"generator":{"kind":"slab","outline":[[0.0,0.0],[4000.0,0.0],[4000.0,2500.0],[2000.0,3500.0],[0.0,2500.0]],"thickness":250.0}}]
+points 0
+case bow-tie
+top_offset 0.0
+clicks [[0.0,0.0],[2000.0,2000.0],[2000.0,0.0],[0.0,2000.0]]
+then enter
+err the slab outline crosses itself
+points 4
+case two-points
+top_offset 0.0
+clicks [[0.0,0.0],[3000.0,0.0]]
+then enter
+err a slab outline needs at least 3 points
+points 2
+case near-first-with-two
+top_offset 0.0
+clicks [[0.0,0.0],[3000.0,0.0],[50.0,50.0]]
+then enter
+ok [{"op":"add_element","id":"<new-1>","class":"IfcSlab","name":"D3","storey":"1uAZA0Yfn05f$xRd1k4uPR","material":"0aEm4Mq4nC8emERFhb_kvJ","placement":{"origin":[0.0,0.0,2750.0],"z_axis":[0.0,0.0,1.0],"x_axis":[1.0,0.0,0.0]},"generator":{"kind":"slab","outline":[[0.0,0.0],[3000.0,0.0],[50.0,50.0]],"thickness":250.0}}]
+points 0
+case too-small
+top_offset 0.0
+clicks [[0.0,0.0],[10.0,0.0],[10.0,10.0]]
+then enter
+err the slab outline is too small
+points 3
+case repeated-corner
+top_offset 0.0
+clicks [[0.0,0.0],[3000.0,0.0],[3000.0,0.0],[0.0,3000.0]]
+then enter
+err the slab outline crosses itself
+points 4

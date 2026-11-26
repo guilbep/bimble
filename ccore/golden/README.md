@@ -573,3 +573,12 @@ user settings, and asks it over HTTP. Not this dumper's output: `parity/` is in 
 
 `node ccore/tools/parity.mjs --write` asks the C host the same things and writes
 `ccore/results/parity.md`.
+
+## place/polygon.txt (ticket SLAB1)
+
+Polygon slabs placed by clicks as the viewer's `Editor` does (edit.rs `click`, `close_polygon`:
+a click within 100 mm of the first point closes once there are 3 points, Enter closes;
+`verbs::new_slab`; the top offset added to z) on `frame.json`, the storey at elevation 0, default
+sizes. One record per case: `case <name>`, `top_offset <mm>`, `clicks <[[x, y], …]>`, `then
+<enter|none>`, `ok <commands JSON>` (the new element id as `<new-1>`) or `err <text>`, `points
+<n>` (the points left). Made by `slab1_files` on the branch `oracle/slab1`.

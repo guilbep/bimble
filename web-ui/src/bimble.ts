@@ -720,7 +720,7 @@ export interface ToolPointer {
 }
 
 /** One call of the place tool (C core only): the tool's state, or the error text. */
-export function toolCall(name: "pointer" | "click" | "cancel", args: ToolPointer = {}): { state: ToolState | null; error: string | null } {
+export function toolCall(name: "pointer" | "click" | "cancel" | "close" /* SLAB1: Enter closes a polygon slab */, args: ToolPointer = {}): { state: ToolState | null; error: string | null } {
   try {
     const w = wasmOrThrow();
     if (!w.tool) return { state: null, error: "the place tool needs the C core" };
@@ -1076,6 +1076,8 @@ export const viewportKeys: {
   deleteAnnotation?: () => boolean;
   /** Esc: the selected annotation is let go. */
   dropAnnotation?: () => void;
+  /** SLAB1: Enter closes the polygon slab being clicked (edit.rs close_polygon). True if one was. */
+  enterTool?: () => boolean;
 } = {};
 // ---- end KEY1 ----
 

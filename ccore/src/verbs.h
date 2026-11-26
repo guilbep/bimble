@@ -33,4 +33,11 @@ int cc_verb_run(const cc_model *m, const char *name, const char *args, size_t n,
  * The unknown verb check comes first, then if_rev, then the arguments. */
 int cc_verb_run_ex(const cc_model *m, const char *name, const char *args, size_t n, int dry_run, int64_t if_rev,
                    uint64_t current_rev, cc_cmds *out, Buf *err);
+/* SLAB1: verbs::new_slab, the polygon slab of the place tool (edit.rs close_polygon calls it
+ * directly; no Rust verb takes an outline). `pts` world plan mm, at least 3, a simple polygon;
+ * sizes: column, beam_width, beam_height, wall, slab; material_name NUL-terminated or NULL (the
+ * first concrete one). 0: the commands appended to `out`; -1: Rust's text in `err` ("a slab
+ * outline needs at least 3 points", "the slab outline crosses itself", …). */
+int cc_verb_new_slab(const cc_model *m, const cc_gid *storey, const double (*pts)[2], size_t n, const double sizes[5],
+                     const char *material_name, cc_cmds *out, Buf *err);
 #endif

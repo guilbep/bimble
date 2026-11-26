@@ -16,7 +16,7 @@
  *     points are taken when the element completes (also when it fails); a slab gets
  *     top_offset_mm on its z.
  * A C addition: `ortho` (the second point of a 2-point kind along x or y from the first).
- * Not ported: polygon slabs (the place verb takes a rectangle; edit.rs close_polygon). */
+ * SLAB1: polygon slabs (edit.rs click / close_polygon) in calls.c, through cc_verb_new_slab. */
 #ifndef CCORE_SESSION_TOOL_H
 #define CCORE_SESSION_TOOL_H
 #include <stddef.h>

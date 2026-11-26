@@ -987,3 +987,25 @@ Rust here:
   missing there and Locate… takes the picked file's bytes. Test: `links_test.mjs` (three IFC and a
   DXF saved, reopened, the folder moved, one file moved and located, Box to selection on a linked
   element).
+## 30. Placing: the polygon slab by clicks, single grid axes, snapping to the grid, openings in wasm (ticket SLAB1)
+
+**Polygon slab (Rust's own, golden).** The clicks, the close (a click within 100 mm of the first
+corner once there are 3, or Enter), `verbs::new_slab` (at least 3 points, no crossing, Rust's
+texts; a clockwise outline stored counter-clockwise from its lower-left corner) and the top offset
+are Rust's (edit.rs:318-385): `golden/place/polygon.txt` comes from `ccore_golden` on the branch
+`oracle/slab1` (block `slab1_files`), replayed through the session's tool calls by
+`test/place_polygon_test.c`. Rust has no verb that takes an outline (the editor calls `new_slab`
+directly): the C core exports `cc_verb_new_slab` (verbs.h) for the tool, not a new verb.
+
+**What differs.**
+- **Esc** takes back the last corner of a polygon slab first, then stops placing (Rust's Esc stops
+  placing at once, lib.rs:3031). The ticket asked for it: a mis-click costs one key, not the outline.
+- **Enter** is not a row of the shortcut table (it is not in Rust's `handle_keys` either): the
+  viewport's placing branch takes it (lib.rs:2772), `shell/keys.ts` routes it to the viewport
+  before the table (`viewportKeys.enterTool`) while a polygon slab is clicked.
+- **The ghost.** Rust draws only the snap marker while placing. The C tool answers the slab the
+  next click would close (the corners and the pointer, or the corners when the pointer is on the
+  first one) as its ghost from 2 corners on, and the page draws the outline so far and the closing
+  edge. A crossing outline has no ghost; `ghost_error` says why.
+- **At most 63 corners** per outline (`CC_TOOL_MAX_POINTS`; Rust's `Vec` has no bound): a 64th
+  click is refused with `a slab outline has at most 63 corners`.

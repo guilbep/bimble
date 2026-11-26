@@ -247,7 +247,8 @@ static void undo_redo(cc_session *s, int undo) {
 /* ---- placing (edit.rs:387-460) ---- */
 
 static const char *hint(const cc_session *s) { /* edit.rs:84-95 `Placing::hint` */
-    if (s->placing_kind == CC_KIND_SLAB && s->polygon) return "Click the next corner of the slab.";
+    if (s->placing_kind == CC_KIND_SLAB && s->polygon) /* edit.rs:402-405 (SLAB1: the second text) */
+        return s->tool.npoints < 3 ? "Click the next corner of the slab." : "Click the next corner; click the first corner or Enter closes.";
     if (s->placing_kind == CC_KIND_COLUMN) return "Click where the column goes (on the storey level). Esc stops.";
     if (!s->tool.npoints) return s->placing_kind == CC_KIND_SLAB ? "Click a corner of the slab." : "Click the start point.";
     return s->placing_kind == CC_KIND_SLAB ? "Click the opposite corner." : "Click the end point.";
@@ -2478,6 +2479,46 @@ static int place_cmds(cc_session *s, const double *a, const double *b, int dry_r
     return rc;
 }
 
+/* ---- SLAB1: the polygon slab by clicks (edit.rs:318-385) ---- */
+#define CLOSE_MM 100.0 /* edit.rs CLOSE_MM: a click this close to the first point closes */
+static int polygon_now(const cc_session *s) { return s->placing && s->placing_kind == CC_KIND_SLAB && s->polygon; }
+/* edit.rs click: 3 points or more and `p` within CLOSE_MM of the first. */
+static int polygon_closes(const cc_tool *t, const double *p) {
+    return t->npoints >= 3 && cc_hypot(t->points[0][0] - p[0], t->points[0][1] - p[1]) <= CLOSE_MM;
+}
+/* verbs::new_slab on `pts` with the placing state, raised by top_offset_mm (close_polygon). */
+static int polygon_cmds(cc_session *s, const double (*pts)[2], size_t n, cc_cmds *l, cc_buf *err) {
+    if (!s->has_storey) {
+        buf_puts(err, "choose a storey");
+        return -1;
+    }
+    if (cc_verb_new_slab(&s->model, &s->storey, pts, n, s->sizes, s->material, l, err)) return -1;
+    for (size_t i = 0; i < l->n; i++)
+        if (l->v[i].op == CC_CMD_ADD_ELEMENT) l->v[i].element.placement.origin[2] += s->top_offset_mm;
+    return 0;
+}
+/* edit.rs close_polygon (Enter, or a click on the first point): one slab with the clicked
+ * outline, one history step, the points dropped; an error keeps the points. Nothing clicked or
+ * not a polygon slab: no change (Rust's None). */
+static int polygon_close(cc_session *s, cc_buf *out) {
+    cc_tool *t = &s->tool;
+    if (!polygon_now(s) || !t->npoints) return tool_json(s, NULL, out);
+    cc_cmds l;
+    cc_cmds_init(&l);
+    int rc = CC_ERR, has_id = 0;
+    cc_gid id;
+    if (!polygon_cmds(s, (const double(*)[2])t->points, t->npoints, &l, out)) {
+        t->npoints = 0;
+        for (size_t i = 0; i < l.n; i++)
+            if (l.v[i].op == CC_CMD_ADD_ELEMENT) id = l.v[i].element.id, has_id = 1;
+        rc = try_apply(s, l.v, l.n, out);
+    }
+    cc_cmds_free(&l);
+    if (rc != CC_OK) return rc;
+    return tool_json(s, has_id ? &id : NULL, out);
+}
+/* ---- end SLAB1 ---- */
+
 /* The tool's state: {"active","ghost","ghost_error","hover","kind","placed","points"} (sorted).
  * ghost: what the next click adds (tool.h cc_tool_ghost), null without one; ghost_error: why a
  * preview has no ghost (the place verb's error), else null; hover: {"at":[x,y],"snap":label or
@@ -2492,7 +2533,21 @@ static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out) {
     buf_init(&gerr);
     jw_key(&w, "ghost");
     int has_ghost = 0;
-    if (s->placing && t->has_hover && !(s->placing_kind == CC_KIND_SLAB && s->polygon) &&
+    if (polygon_now(s) && t->has_hover && t->npoints >= 2 && t->npoints < CC_TOOL_MAX_POINTS) { /* SLAB1 */
+        cc_cmds l;
+        cc_cmds_init(&l);
+        double pts[CC_TOOL_MAX_POINTS][2];
+        memcpy(pts, t->points, t->npoints * sizeof pts[0]);
+        size_t np = t->npoints;
+        if (!polygon_closes(t, t->hover)) pts[np][0] = t->hover[0], pts[np][1] = t->hover[1], np++;
+        if (!polygon_cmds(s, (const double(*)[2])pts, np, &l, &gerr)) {
+            const cc_scene *sc = scene_now(s);
+            double org[3] = {0, 0, 0};
+            if (sc) memcpy(org, sc->origin, sizeof org);
+            has_ghost = !cc_tool_ghost(&w, &s->model, l.v, l.n, org, &gerr);
+        }
+        cc_cmds_free(&l);
+    } else if (s->placing && t->has_hover && !(s->placing_kind == CC_KIND_SLAB && s->polygon) &&
         (s->placing_kind == CC_KIND_COLUMN || t->npoints >= 1)) {
         cc_cmds l;
         cc_cmds_init(&l);
@@ -2854,7 +2909,8 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
     }
     if (!strcmp(name, "annotate")) return annot_start(s, body, n, out);
     int pointer = !strcmp(name, "pointer"), click = !strcmp(name, "click"), cancel = !strcmp(name, "cancel");
-    if (!pointer && !click && !cancel) {
+    int close = !strcmp(name, "close"); /* SLAB1: Enter closes a polygon slab */
+    if (!pointer && !click && !cancel && !close) {
         buf_puts(out, "unknown tool call ");
         debug_str(out, name);
         return CC_ERR;
@@ -2865,7 +2921,15 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
         buf_puts(out, READ_ONLY);
         return CC_ERR;
     }
-    if (s->tool.annot) return annot_call(s, pointer, cancel, &a, out);
+    if (s->tool.annot) {
+        if (close) return annot_json(s, NULL, out); /* SLAB1: Enter does nothing to the annotate tool */
+        return annot_call(s, pointer, cancel, &a, out);
+    }
+    if (close) return polygon_close(s, out); /* SLAB1 */
+    if (cancel && polygon_now(s) && s->tool.npoints) { /* SLAB1: Esc takes the last corner back first */
+        s->tool.npoints--;
+        return tool_json(s, NULL, out);
+    }
     if (cancel) { /* lib.rs:3031 Esc: stops placing, the points go */
         s->placing = 0;
         cc_tool_clear(&s->tool);
@@ -2878,11 +2942,16 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
     }
     tool_pointer(s, &a);
     if (pointer || !s->tool.has_hover) return tool_json(s, NULL, out);
-    if (s->placing_kind == CC_KIND_SLAB && s->polygon) {
-        buf_puts(out, "a polygon slab is not placed by clicks yet: use the rectangle shape or the place verb");
-        return CC_ERR;
-    }
     cc_tool *t = &s->tool;
+    if (polygon_now(s)) { /* SLAB1: edit.rs click, the polygon branch */
+        if (polygon_closes(t, t->hover)) return polygon_close(s, out);
+        if (t->npoints >= CC_TOOL_MAX_POINTS - 1) {
+            buf_puts(out, "a slab outline has at most 63 corners");
+            return CC_ERR;
+        }
+        t->points[t->npoints][0] = t->hover[0], t->points[t->npoints][1] = t->hover[1], t->npoints++;
+        return tool_json(s, NULL, out);
+    }
     if (t->npoints >= CC_TOOL_MAX_POINTS) t->npoints = 0;
     t->points[t->npoints][0] = t->hover[0], t->points[t->npoints][1] = t->hover[1], t->npoints++;
     if (t->npoints < (s->placing_kind == CC_KIND_COLUMN ? 1u : 2u)) return tool_json(s, NULL, out);

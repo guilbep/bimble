@@ -38,8 +38,13 @@ enum { CC_OK = 200, CC_ERR = 400 };
  *            kind has its points (column 1, beam/wall/slab rectangle 2) runs `verb place` once
  *            (the session's sizes, material, storey; a slab gets top_offset_mm): one history step,
  *            rev + 1, the points dropped (also on an error, as edit.rs). 400: not placing, the
- *            verb's error, a polygon slab (not ported).
- *   cancel   Esc: stops placing and drops the points.
+ *            verb's error. A polygon slab (SLAB1, edit.rs:318-385): each click adds a corner; a
+ *            click within 100 mm of the first corner once there are 3 closes the outline
+ *            (verbs::new_slab: one slab, one history step); an error keeps the corners.
+ *   close    SLAB1, Enter: closes the polygon slab being clicked (edit.rs close_polygon; 400 with
+ *            Rust's text: fewer than 3 points, a crossing outline); otherwise no change.
+ *   cancel   Esc: stops placing and drops the points. SLAB1: a polygon slab's last corner goes
+ *            first (a C addition, DEVIATIONS 30).
  * Each answers the tool's state, as `query ghost`:
  *   {"active":bool,"ghost":null|{"edges":[…],"idx":[…],"origin":[x,y,z],"pos":[…]},
  *    "ghost_error":null|text,"hover":null|{"at":[x,y],"snap":null|label,"z":elevation},
