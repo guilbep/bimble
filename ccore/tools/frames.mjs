@@ -283,10 +283,10 @@ async function openTab() {
 const GPU_HELPERS = `window.__fr.F = async (d, m) => { const t0 = performance.now(); window.__bbGl.bench.frame(d, m); await window.__bbGpu.done(); return performance.now() - t0; };
 window.__fr.S = async (dy, dp) => { window.__bbGl.bench.snap(dy, dp); window.__bbGl.bench.snap(dy, dp); await window.__bbGpu.done(); return window.__bbGpu.pixels(); };
 window.__fr.N = async () => { const p = await window.__bbGpu.pixels(); let n = 0; for (let i = 0; i < p.rgba.length; i += 4) if (Math.abs(p.rgba[i] - 247) + Math.abs(p.rgba[i + 1] - 247) + Math.abs(p.rgba[i + 2] - 245) > 12) n++; return n; };`;
-const forGpu = (expr) => (expr === NONBG ? "window.__fr.N()" : expr.replace(/\(\(\) => \{/g, "(async () => {").replace(/\(window\.__bbGl\.bench\.snap\(/g, "(await window.__fr.S(")
-  .replace(/(?:window\.__bbGl\.bench|\bb)\.frame\(/g, "await window.__fr.F(").replace(/(?:window\.__bbGl\.bench|\bb)\.snap\(/g, "await window.__fr.S("));
+const forGpu = (expr) => (expr === NONBG ? "window.__fr.N()" : expr.replace(/\(\(\) => \{/g, "(async () => {")
+  .replace(/(?:window\.__bbGl\.bench|\bb)\.frame\(/g, "await window.__fr.F(").replace(/(?:window\.__bbGl\.bench|\bb)\.snap\(([^)]*)\)/g, "(await window.__fr.S($1))"));
 async function ev(expr) {
-  if (GPU) expr = forGpu(expr);
+  if (GPU) { expr = forGpu(expr); if (expr.includes("await ") && !expr.startsWith("(async")) expr = `(async () => (${expr}))()`; }
   const r = await S("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true });
   if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
   return r.result.value;
