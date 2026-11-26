@@ -494,10 +494,19 @@ static void own_imports(void) {
         printf("import ifc_c/%-18s %-8s elements %zu %s volume %.6g (hand %.6g, %+.2e), %zu unsupported%s%s\n", nm,
                model_ok && rep_ok ? "MATCHES" : "DIFFERS", nel, kind, vol, OWN_IMPORT[g].volume, rel, unsup,
                rc ? ": " : "", rc ? err.msg : "");
-        snprintf(m, sizeof m, "import ifc_c/%s: model matches its C-own golden", nm);
-        check_true(m, model_ok);
-        snprintf(m, sizeof m, "import ifc_c/%s: report matches its C-own golden", nm);
-        check_true(m, rep_ok);
+        /* WIN2: the C-own goldens were written with the kernel. Without it (CC_NO_KERNEL=1: the
+         * Windows job until manifold builds there) a boolean is drawn uncut and counted as
+         * unsupported: a known difference, as for the Rust goldens below. */
+        int uncut = !cc_boolean_kernel() && unsup > 0 && strstr(buf_cstr(&lines), "no boolean kernel in the C core");
+        if (uncut) {
+            snprintf(m, sizeof m, "import ifc_c/%s: no kernel: differs from its C-own golden, uncut boolean counted as unsupported", nm);
+            check_true(m, !(model_ok && rep_ok));
+        } else {
+            snprintf(m, sizeof m, "import ifc_c/%s: model matches its C-own golden", nm);
+            check_true(m, model_ok);
+            snprintf(m, sizeof m, "import ifc_c/%s: report matches its C-own golden", nm);
+            check_true(m, rep_ok);
+        }
         snprintf(m, sizeof m, "import ifc_c/%s: two runs identical", nm);
         check_true(m, rc == rc2 && a.len == a2.len && !memcmp(a.p, a2.p, a.len));
         snprintf(m, sizeof m, "import ifc_c/%s: %zu element(s), the first a %s", nm, OWN_IMPORT[g].elements,
@@ -506,8 +515,11 @@ static void own_imports(void) {
         snprintf(m, sizeof m, "import ifc_c/%s: volume within %g of the hand value", nm, OWN_IMPORT[g].rel_tol);
         check_true(m, (rel < 0 ? -rel : rel) <= OWN_IMPORT[g].rel_tol);
         const char *sk = OWN_IMPORT[g].skipped;
-        snprintf(m, sizeof m, "import ifc_c/%s: %s", nm, sk ? sk : "nothing skipped or unsupported");
-        if (sk) check_true(m, !rc3 && unsup == 0 && rq.elements == nel && strstr(buf_cstr(&lines), sk));
+        snprintf(m, sizeof m, "import ifc_c/%s: %s", nm,
+                 uncut ? "nothing skipped (no kernel: the uncut boolean is the unsupported)" : sk ? sk : "nothing skipped or unsupported");
+        if (uncut) check_true(m, !rc3 && rq.elements == nel && !strstr(buf_cstr(&lines), "skipped") &&
+                                     !strstr(buf_cstr(&lines), "can't read")); /* WIN2: unsupported is the uncut boolean */
+        else if (sk) check_true(m, !rc3 && unsup == 0 && rq.elements == nel && strstr(buf_cstr(&lines), sk));
         else
             check_true(m, !rc3 && unsup == 0 && rq.elements == nel && !strstr(buf_cstr(&lines), "skipped") &&
                               !strstr(buf_cstr(&lines), "can't read"));
