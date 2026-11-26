@@ -268,7 +268,8 @@ async function walk(P, label, { model }) {
           want: cap.toolNotYet(tl), core: tl.action ? en.has(tl.action) : null, bb: 'ribbon-tool-' + (gi + 1) + '-' + (ti + 1) });
       }));
       const mark = !!document.querySelector('[data-bb=tab-preview-${tab}]');
-      return JSON.stringify({ tools: out, mark, boxes: [...document.querySelectorAll('.ribbon .rbox')].map((x) => ({ ny: x.hasAttribute('data-not-yet'), title: x.title })) })`));
+      return JSON.stringify({ tools: out, mark, boxes: [...document.querySelectorAll('.ribbon .rbox')].map((x) => ({ ny: x.hasAttribute('data-not-yet'), title: x.title,
+        real: !!x.querySelector('[data-bb^=ribbon-project-zero]') /* SETOUT: the Setting out tab's project zero, served */ })) })`));
     const live = r.tools.filter((x) => x.shown && !x.ny && !x.off);
     const bad = live.filter((x) => !x.screen && !x.core);
     check(`${label}: ribbon ${tab}: every enabled tool runs an action the core enables`, bad.length === 0, JSON.stringify(bad));
@@ -277,7 +278,7 @@ async function walk(P, label, { model }) {
     const nyWrong = r.tools.filter((x) => x.shown && x.ny !== x.want);
     check(`${label}: ribbon ${tab}: "not yet" drawn as capability.ts says`, nyWrong.length === 0, JSON.stringify(nyWrong));
     check(`${label}: ribbon ${tab}: "not yet" tools have a tooltip`, r.tools.filter((x) => x.ny && !x.title).length === 0);
-    check(`${label}: ribbon ${tab}: "not yet" boxes have a tooltip`, r.boxes.every((x) => x.ny && x.title));
+    check(`${label}: ribbon ${tab}: "not yet" boxes have a tooltip (SETOUT: a served box is real, not "not yet")`, r.boxes.every((x) => (x.ny && x.title) || (x.real && !x.ny)));
     const allNy = r.tools.every((x) => x.ny || !x.shown);
     check(`${label}: ribbon ${tab}: the "preview" mark ${allNy ? "shown" : "absent"} (every tool not yet: ${allNy})`, r.mark === allNy);
     set(`ribbon ${tab}`, `${r.tools.length - r.tools.filter((x) => x.ny).length} real, ${r.tools.filter((x) => x.ny).length} not yet${r.mark ? ", preview" : ""}`);
