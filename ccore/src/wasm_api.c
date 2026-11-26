@@ -733,6 +733,27 @@ EXPORT("host_open") int wa_host_open(int discard, const char *name, size_t nn, c
     return answer(r, &b, st);
 }
 
+/* ---- LNK1: an action with a body, the file it reads staged (the module has no paths): the Links
+ * panel's Reload and Reload from… of a reference plan (`manage_links {"op": "reload", "id", "path":
+ * name}`) and Locate… of a missing linked model (`manage_links {"op": "locate", "name", "path"}`).
+ * Every read during the call answers `bytes`, whatever its path. ---- */
+EXPORT("host_action_file") int wa_host_action_file(const char *name, size_t nn, const char *body, size_t bn,
+                                                   const char *p, size_t n, cc_wasm_res *r) {
+    r->value = 0;
+    cc_session *s = host_session();
+    char *z = zdup(name, nn), *zb = zdup(body, bn);
+    Buf b;
+    buf_init(&b);
+    if (!s || !z || !zb) return free(z), free(zb), text(r, 500, "out of memory");
+    wasm_pf_state.text = p, wasm_pf_state.n = n;
+    int st = cc_call(s, "action", z, zb, bn, &b);
+    wasm_pf_state.text = NULL, wasm_pf_state.n = 0;
+    free(z), free(zb);
+    r->value = cc_session_rev(s);
+    return answer(r, &b, st);
+}
+/* ---- end LNK1 ---- */
+
 EXPORT("host_log") int wa_host_log(cc_wasm_res *r) {
     r->value = 0;
     Buf b = wasm_pf_state.log;

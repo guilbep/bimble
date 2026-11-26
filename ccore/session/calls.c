@@ -38,6 +38,7 @@
 #include "measure.h" /* ticket T1 */
 #include "versions.h" /* ticket H1 */
 #include "links_dxf.h" /* L2 */
+#include "links_panel.h" /* LNK1 */
 #include "schedules.h" /* Q2 */
 #include "palette.h"   /* Q2 */
 #include "capabilities.h" /* FAKE1 */
@@ -1199,6 +1200,9 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     }
     /* ---- L1: a view's reference plans, placed (links_ref.h) ---- */
     if (!strcmp(name, "view_references")) return cc_refs_view_references(s, body, n, out) ? CC_ERR : CC_OK;
+    /* ---- LNK1: the Links panel's rows (links_panel.h) ---- */
+    if (!strcmp(name, "links_panel")) return cc_links_panel_json(s, out) ? (out->oom = 1, CC_ERR) : CC_OK;
+    /* ---- end LNK1 ---- */
     if (!strcmp(name, "element")) { /* {"id", "link"}: an element of a linked model (links.h) */
         Arena a;
         arena_init(&a, 0);

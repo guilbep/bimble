@@ -8,6 +8,10 @@ import { links, query, select, measurements, openView, openViews, scheduleList, 
 import { viewAdd, viewRemove } from "../bimble";
 import { editableModel, has } from "./capability";
 // ---- end SEC1 ----
+// ---- LNK1 ----
+import LinksPanel from "./LinksPanel.vue";
+import { linksOpen } from "./links";
+// ---- end LNK1 ----
 
 // `open_views` is `{views, active, tabs}` (bridge.rs); bimble.ts types it loosely until then.
 const ov = computed(() => openViews.value as unknown as { views?: ViewSummary[]; active?: string | null });
@@ -47,10 +51,11 @@ const sheetCount = computed(() => {
 const scheduleCount = computed(() => { void state.value.rev; void openViews.value; return scheduleList().length; });
 const linkCount = computed(() => { void state.value.rev; void openViews.value; return links().length; });
 const measureCount = computed(() => { void state.value.rev; void openViews.value; return measurements().length; });
-// Links and measurements: read-only lists from Rust, shown when their group opens.
-const linkOpen = ref(false);
+// Measurements: a read-only list from Rust, shown when its group opens.
+// ---- LNK1 ---- the Links group: shell/LinksPanel.vue (Manage links… opens it: shell/links.ts)
+const linkOpen = linksOpen;
+// ---- end LNK1 ----
 const measureOpen = ref(false);
-const linkRows = computed(() => { void state.value.rev; return linkOpen.value ? links() : []; });
 const measureRows = computed(() => { void state.value.rev; return measureOpen.value ? measurements() : []; });
 const objects = computed(() => storeys.value.reduce((n, s) => n + s.element_count, 0));
 const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
@@ -173,7 +178,9 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="linkOpen ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
       <span>{{ t('nav.links') }}</span><span class="n">{{ linkCount }}</span>
     </a>
-    <span v-for="l in linkRows" :key="l.id" class="ti" style="padding-left:22px"><span>{{ l.name }}</span><span class="n">{{ l.kind }}</span></span>
+    <!-- ---- LNK1 ---- the rows with their buttons (shell/LinksPanel.vue) -->
+    <LinksPanel v-if="linkOpen" />
+    <!-- ---- end LNK1 ---- -->
     <a class="ti h" href="#" style="padding-left:6px" :aria-expanded="measureOpen" @click.prevent="measureOpen = !measureOpen">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="measureOpen ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
       <span>{{ t('nav.measures') }}</span><span class="n">{{ measureCount }}</span>

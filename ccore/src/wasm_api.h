@@ -94,6 +94,10 @@
  * *                                           (0: the view's scale)
  *                                           flags bit 4 (16, ticket L2): `action link_dxf {"path":
  *                                           name}`: the DXF added to the active 2D view
+ *   host_action_file(name, nl, body, bl, bytes, len, res) -> status   (ticket LNK1)
+ *                                           `action <name> <body>` with `bytes` staged: every
+ *                                           file read during the call answers them (manage_links
+ *                                           reload {id, path} of a reference, locate {name, path})
  *   host_clock(unix_s: f64)                 the wall clock for the session (IFC export stamps);
  *                                           0 until set (1970-01-01T00:00:00)
  *   host_log(res) -> status                 what the host layer wrote on stderr since the last

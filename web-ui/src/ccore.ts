@@ -55,6 +55,7 @@ interface Exports {
   host_clock(unixS: number): void;
   host_log(res: number): number;
   host_fonts(rp: number, rn: number, bp: number, bn: number, res: number): number; // D7
+  host_action_file?(np: number, nn: number, bp: number, bn: number, fp: number, fn: number, res: number): number; // LNK1
 }
 
 export interface CcoreInfo {
@@ -193,6 +194,20 @@ export function ccoreLinkDxf(name: string, bytes: Uint8Array): void {
   emitChange?.();
   if (r.status !== 200) throw dec.decode(r.bytes) || `ccore link_dxf: ${r.status}`;
 }
+
+// ---- LNK1 ---- an action whose file is the bytes given (the module keeps no path): the Links
+// panel's Reload / Reload from… of a reference plan and Locate… of a missing linked model
+// (wasm_api.h host_action_file). Throws the C core's error text.
+export function ccoreActionFile(action: string, body: unknown, bytes: Uint8Array): void {
+  if (!module) throw new Error("ccore: not loaded");
+  const { X } = module;
+  if (!X.host_action_file) throw new Error("this C core has no host_action_file");
+  const r = run(X.host_action_file.bind(X), [enc.encode(action), enc.encode(JSON.stringify(body)), bytes]);
+  hostLog();
+  emitChange?.();
+  if (r.status !== 200) throw dec.decode(r.bytes) || `ccore ${action}: ${r.status}`;
+}
+// ---- end LNK1 ----
 
 /** The bytes the module wrote last and their file name (host_saved, host_saved_path). */
 function lastWritten(): { name: string; bytes: Uint8Array } {
