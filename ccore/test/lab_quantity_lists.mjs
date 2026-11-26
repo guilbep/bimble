@@ -20,7 +20,9 @@
 //     available yet" (their tooltip, capability cfc / rebar false).
 // Each click's own feedback (the dialog, the page, the table changed, the tooltip) is timed from the
 // pointerdown's timeStamp to the next animation frame after it: under 200 ms each (ADR 0074),
-// /proc/loadavg printed. On the code before QTY1 the New quantities, Columns and By material tools are
+// /proc/loadavg printed. The session's first click (Assign CFC) through lib/input_time.mjs (FIRST1):
+// the page's part <= 200 ms, the frame on screen at 200 ms on a hardware GPU, reported (fails above
+// 1 s) on a software rasteriser. On the code before QTY1 the New quantities, Columns and By material tools are
 // drawn "not yet" (action null): the first checks fail. Prints "N passed, M failed".
 import { spawn, execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -29,6 +31,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHROMIUM, port, vitePort } from "./ports.mjs";
 import { hostEnv } from "./lib/host_env.mjs";
+import { adapter, readTimes, verdict, watchSource } from "./lib/input_time.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
@@ -181,7 +184,23 @@ async function main() {
   check("no tool drawn off (every other tool works on an editable model)", all.every((x) => x[1] || x[2] !== "true"), JSON.stringify(all));
   await shot("qty1-ribbon-1280");
   for (const [g, m] of [[2, 1], [2, 2], [3, 1]]) {
-    const ms = await click(`not yet ${g}-${m}`, tool(g, m), "!!document.querySelector('[data-bb=not-yet-tip]')");
+    const tipCond = "!!document.querySelector('[data-bb=not-yet-tip]')";
+    if (g === 2 && m === 1) {
+      // The session's first click (FIRST1, ADR 0074): the watcher armed before the input; the page's
+      // part (page_ms) <= 200 ms always, the frame on screen (presented_ms) at 200 ms on a hardware
+      // GPU, reported on a software rasteriser (its first frame of a new kind compiles: 200-300 ms).
+      const box = await evalJs(`(() => { const e = document.querySelector(${JSON.stringify(tool(g, m))}); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+      await evalJs(watchSource({ kind: "pointerdown", page: tipCond }));
+      for (const type of ["mousePressed", "mouseReleased"]) await S("Input.dispatchMouseEvent", { type, x: box[0], y: box[1], button: "left", buttons: type === "mousePressed" ? 1 : 0, clickCount: 1 });
+      const t = await readTimes(evalJs);
+      const tip = await evalJs("document.querySelector('[data-bb=not-yet-tip]')?.textContent ?? ''");
+      const v = verdict(t, await adapter(evalJs));
+      if (typeof t.presented_ms === "number") times.push([`not yet ${g}-${m}`, t.presented_ms]);
+      check(`tool ${g}-${m}: its tooltip says not available yet, ${v.line}`, v.ok && /not available|pas encore/i.test(tip), tip);
+      await sleep(2700);
+      continue;
+    }
+    const ms = await click(`not yet ${g}-${m}`, tool(g, m), tipCond);
     const tip = await evalJs("document.querySelector('[data-bb=not-yet-tip]')?.textContent ?? ''");
     check(`tool ${g}-${m}: its tooltip says not available yet, within 200 ms (${ms?.toFixed(1)} ms)`, fast(ms) && /not available|pas encore/i.test(tip), tip);
     await sleep(2700);

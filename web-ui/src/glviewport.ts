@@ -2854,7 +2854,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   const pointerFrame = () => {
     if (!ptrAt || !mesh) return;
-    const key = `${ptrAt[0]},${ptrAt[1]}`;
+    // FIRST1: the frames drawn in the key too: a still pointer's point changes when the view turns,
+    // fits or the model is drawn under it (before its first frame the pick misses: it read "nothing
+    // under the pointer" for good before).
+    const key = `${ptrAt[0]},${ptrAt[1]}|${stats.frames}`;
     if (key === ptrDone) return;
     ptrDone = key;
     stats.pointerQueries++;

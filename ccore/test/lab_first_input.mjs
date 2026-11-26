@@ -13,10 +13,15 @@
 //   key   Ctrl K: the palette is shown;
 //   nav   a click on the navigator's first plan view (the first plan shown in the session): the plan
 //         is the active view and the viewport drew a frame after the click.
-// Response (ADR 0074): from the input event's timeStamp (pointerdown / pointermove / keydown) to the
-// first animation frame whose callbacks see the feedback (a watcher runs in every frame from before
-// the input); each case strictly under 200 ms. /proc/loadavg printed at the start and the end, and
-// the frames' times around the input when a case fails.
+// Response (ADR 0074, lib/input_time.mjs): page_ms, from the input event's timeStamp to the page's
+// part done (the feedback there after a DOM change, the input's events or in a frame callback; for
+// the plan: the view made active), <= 200 ms strictly; presented_ms, to the first animation frame
+// whose callbacks see the feedback (for the plan: the WebGL frame drawn), <= 200 ms on a hardware
+// GPU, reported and failed only above 1 s on a software rasteriser (headless SwiftShader here). The
+// watchers are armed before the input. /proc/loadavg printed at the start and the end, and the
+// frames' times around the input when a case fails.
+// still: the pointer over the viewport before the model is drawn, then still: the status bar's
+// coordinates come once the view fits the model (no feedback ever before FIRST1's follow-up).
 // Before FIRST1 data-bb-ready was set before the page's first frame was on screen: headless
 // Chromium's GPU process (SwiftShader) takes 200 to 900 ms per frame for the first frames of a
 // session (it compiles the pipelines of each new kind of drawing on first use), the page's frames
@@ -31,6 +36,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHROMIUM, port, vitePort } from "./ports.mjs";
 import { hostEnv } from "./lib/host_env.mjs";
+import { adapter, readTimes, verdict, watchSource } from "./lib/input_time.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
@@ -40,7 +46,8 @@ const VITE = vitePort("lab_first_input");
 const TOKEN = "labfirstinput-token";
 const BUILDS = (process.env.FIRST1_BUILDS ?? "native,wasm").split(",");
 const DELAYS = [0, 400];
-const INPUTS = ["tool", "move", "key", "nav"];
+const ONLY = process.env.FIRST1_ONLY ?? null; // one input of tool, move, key, nav, still (to look at one)
+const INPUTS = ["tool", "move", "key", "nav"].filter((i) => !ONLY || i === ONLY);
 const tmp = mkdtempSync(join(tmpdir(), "ccore-lab-firstinput-"));
 const procs = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -102,13 +109,17 @@ async function cdpConnect(wsUrl) {
   return { send, on: (fn) => listeners.push(fn), close: () => ws.close() };
 }
 
-/** The feedback of each input, a page expression (true once it is there; read in an animation frame). */
+/** The feedback of each input, a page expression (true once it is there). PAGE: the page has done
+ *  its part (lib/input_time.mjs page_ms); FEEDBACK: what the frame must show (presented_ms). */
 const FEEDBACK = {
   tool: "!!document.querySelector('[data-bb=not-yet-tip]')",
   move: "(document.querySelector('[data-bb=status-coords]')?.textContent.trim() ?? '') !== ''",
   key: "!!document.querySelector('[data-bb=palette]')",
   nav: "window.__f1B.openViews.value.active === window.__f1View && (window.__bbGl?.frames ?? 0) > window.__f1Frames",
 };
+// The plan: the page's part is the view made active (state, tabs, viewport marked to draw); the
+// WebGL draw comes in the next frame the browser gives.
+const PAGE = { ...FEEDBACK, nav: "window.__f1B.openViews.value.active === window.__f1View" };
 /** The input event whose timeStamp starts the clock. */
 const KIND = { tool: "pointerdown", move: "pointermove", key: "keydown", nav: "pointerdown" };
 /** Where the input goes (a page expression: the element whose middle is clicked or moved over). */
@@ -163,6 +174,19 @@ async function oneCase(build, delay, input) {
     await S("Page.addScriptToEvaluateOnNewDocument", { source: `window.__f1In = [];
       for (const t of ['pointerdown', 'pointermove', 'keydown']) addEventListener(t, (e) => window.__f1In.push([t, e.timeStamp]), true);` });
     await S("Page.navigate", { url: page });
+    if (input === "still") {
+      // The pointer over the viewport before the model is drawn, then still: its coordinates must come
+      // once the view fits the model (the readout was computed once per pointer position: "nothing
+      // under the pointer", for good, before FIRST1).
+      const xy = await waitFor("the viewport's canvas", 30000, () => evalJs(`(() => { const c = document.getElementById('bimble'); const r = c?.getBoundingClientRect();
+        return r && r.width > 100 && window.__bbGl && window.__bbGl.firstFrameMs === null ? [r.x + r.width / 2, r.y + r.height / 2] : null; })()`));
+      await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: xy[0], y: xy[1], button: "none", buttons: 0 });
+      await waitFor("data-bb-ready", 60000, () => evalJs("document.documentElement?.dataset.bbReady === '1'"));
+      const text = await waitFor("the coordinates", 3000, () => evalJs("document.querySelector('[data-bb=status-coords]')?.textContent.trim() || null")).catch(() => null);
+      const why = text ? "" : JSON.stringify(await evalJs("({ q: window.__bbGl?.pointerQueries, ff: window.__bbGl?.firstFrameMs, el: (() => { const e = document.elementFromPoint(" + xy[0] + "," + xy[1] + "); return e ? e.tagName + '#' + e.id + '.' + e.className : null; })() })"));
+      check(`${name}: a still pointer's coordinates once the model is drawn under it (${JSON.stringify(text)})`, !!text, why);
+      return;
+    }
     // Ready, then (in the same page task) the case's setup, the watcher armed, then the delay:
     // measured in the page, no CDP round trip between ready and the input for 0 ms. The watcher runs
     // in every animation frame from before the input: the first frame whose callbacks see the
@@ -177,18 +201,10 @@ async function oneCase(build, delay, input) {
         const el = ${TARGET[input]};
         if (!el) return done({ error: 'no control (${input})', at });
         const r = el.getBoundingClientRect();
-        window.__f1Hit = null; window.__f1Log = [];
-        const loop = (ft) => {
-          if (window.__f1Log.length < 400) window.__f1Log.push(ft);
-          const e = window.__f1In.find((x) => x[0] === ${JSON.stringify(KIND[input])});
-          if (e) {
-            let ok = false; try { ok = ${FEEDBACK[input]}; } catch { ok = false; }
-            if (ok) { window.__f1Hit = { ms: performance.now() - e[1], after: e[1] - at }; return; }
-            if (performance.now() - e[1] > 5000) { window.__f1Hit = { ms: null, after: e[1] - at }; return; }
-          }
-          requestAnimationFrame(loop);
-        };
-        requestAnimationFrame(loop);
+        window.__f1Log = [];
+        const log = (ft) => { window.__f1Log.push(ft); if (window.__f1Log.length < 400) requestAnimationFrame(log); };
+        requestAnimationFrame(log);
+        ${watchSource({ kind: KIND[input], page: PAGE[input], presented: FEEDBACK[input], stamp: `window.__f1In.find((x) => x[0] === '${KIND[input]}')?.[1] ?? null` })};
         const wait = () => performance.now() - at >= ${delay} ? done({ at, before: window.__f1In.length, xy: [r.x + r.width / 2, r.y + r.height / 2] }) : setTimeout(wait, 2);
         wait();
       };
@@ -204,12 +220,13 @@ async function oneCase(build, delay, input) {
       await S("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "k", code: "KeyK", windowsVirtualKeyCode: 75, modifiers: 2 });
       await S("Input.dispatchKeyEvent", { type: "keyUp", key: "k", code: "KeyK", windowsVirtualKeyCode: 75, modifiers: 2 });
     }
-    const r = await waitFor("the feedback", 8000, () => evalJs("window.__f1Hit")).catch(() => null);
-    const ms = r?.ms;
+    const r = await readTimes(evalJs);
     // The frames around the input (their times from the input event), printed when the check fails.
-    const frames = await evalJs(`(() => { const e = window.__f1In.find((x) => x[0] === ${JSON.stringify(KIND[input])}); return e ? window.__f1Log.map((t) => Math.round(t - e[1])).filter((t) => t > -200) : []; })()`).catch(() => []);
-    check(`${name}: its feedback within 200 ms (${typeof ms === "number" ? ms.toFixed(1) : "none"} ms; the input ${r ? r.after.toFixed(0) : "-"} ms after ready, ready ${armed.at.toFixed(0)} ms after navigation, no input before it: ${armed.before === 0})`,
-      typeof ms === "number" && ms < 200 && armed.before === 0, `frames at ${frames.join(" ")} ms from the input`);
+    const frames = await evalJs(`(() => { const e = window.__f1In.find((x) => x[0] === ${JSON.stringify(KIND[input])}); return e ? window.__f1Log.map((t) => Math.round(t - e[1])).filter((t) => t > -50).slice(0, 12) : []; })()`).catch(() => []);
+    const gpu = await adapter(evalJs); // after the input: a WebGL context of its own is GPU work
+    const v = verdict(r, gpu);
+    check(`${name}: its feedback, ${v.line} (the input ${r.input !== null ? (r.input - armed.at).toFixed(0) : "-"} ms after ready, ready ${armed.at.toFixed(0)} ms after navigation, no input before it: ${armed.before === 0})`,
+      v.ok && armed.before === 0, `frames at ${frames.join(" ")} ms from the input`);
     if (exceptions.length) check(`${name}: no page exception`, false, exceptions.join(" | "));
   } finally {
     cdp.close();
@@ -239,6 +256,9 @@ async function main() {
   }
   for (const build of BUILDS) for (const delay of DELAYS) for (const input of INPUTS) {
     try { await oneCase(build, delay, input); } catch (e) { check(`${build} ${input} at ${delay} ms`, false, e.message ?? String(e)); }
+  }
+  for (const build of ONLY && ONLY !== "still" ? [] : BUILDS) {
+    try { await oneCase(build, 0, "still"); } catch (e) { check(`${build} still pointer`, false, e.message ?? String(e)); }
   }
   console.log(`loadavg ${load()}`);
 }

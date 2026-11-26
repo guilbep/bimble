@@ -150,3 +150,35 @@ notice it is slow above 200ms"), chosen in the ticket, for review on the impleme
   (436 to 565 ms before; it also starts its clock's frame after its second CDP call, so it can
   time the frame after the tooltip's). Next: find which pipeline that first swap compiles (a
   SwiftShader build with its own trace), or answer the press itself (`pointerdown`).
+
+## What a headless software GPU can tell about 200 ms (FIRST1 follow-up, 26 Nov 2026)
+
+Decided by the orchestrator under Pierre's delegation: a timing check measures what the page
+controls, strictly, and reports what the GPU process adds, separately.
+
+- The lab checks run in headless Chromium on SwiftShader, a software rasteriser. It tells whether
+  the page does its part in time: its scripts, its core calls, its DOM and canvas changes, and
+  that it hands a frame over at once. It cannot tell how long a real GPU takes to show that frame:
+  SwiftShader compiles the pipelines of each new kind of drawing at its first frame (200 to 300 ms
+  a swap after the fixes above, the page idle), which a hardware driver does in milliseconds or
+  from its cache.
+- `ccore/test/lib/input_time.mjs` gives each input two times. `page_ms`: from the input event to
+  the page's part done (the feedback there after a DOM change, the input's own events or in a frame
+  callback), asserted at 200 ms always. `presented_ms`: to the first animation frame that holds
+  the feedback, asserted at 200 ms when the WebGL renderer (`WEBGL_debug_renderer_info`) is a
+  hardware one; on SwiftShader, llvmpipe or another software renderer it is printed and fails only
+  above 1,000 ms, and the log line says which rule applied. Used by `lab_first_input.mjs` and the
+  first click of `lab_quantity_lists.mjs`; the other lab checks keep their 200 ms on the frame.
+- Presented times on a real GPU are read in the lab itself: GPU1's performance panel
+  (`web-ui/src/perf.ts`, status bar › Performance, "slowest input → frame").
+- Feedback on press: the ribbon tool and the navigator row already change under the pressing
+  pointer (`:hover`); the "not available yet" tooltip and the view stay on `click` (a touch screen
+  has no hover; a press that slides off cancels), unchanged.
+- The status bar's coordinates under a still pointer follow the view now (`glviewport.ts`
+  pointerFrame: the count of frames drawn in its key, so a camera move, a fit or the model's first
+  frame reads the point again); before, a pointer over the viewport before the model's first frame
+  read "nothing" until it moved (`lab_first_input` "still": failed on the old code, native and
+  wasm, passes now).
+- Numbers (load 2.7-3.9): `lab_first_input` 18 of 18 (page 18 to 90 ms, presented 18 to 95 ms on
+  SwiftShader); `lab_quantity_lists` 28 of 28 (the first click: page 24.0 ms, presented 30.2 ms);
+  `lab_boot` 5 of 5, `lab_keys` 88 of 88.
