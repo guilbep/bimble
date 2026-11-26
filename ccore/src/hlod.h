@@ -99,4 +99,8 @@ uint64_t cc_hlod_proxy_bytes(const cc_hlod_cell *c);
  *   coordinates, as BMSH), u32 x nI indices (absolute), f32[6] x nS segments, i8[8] x nS normals.
  * 0 ok, -1 with `err` (not built, out of memory, a count over u32). */
 int cc_hlod_bprx(const cc_hlod *h, uint32_t rev, uint32_t nelements, Buf *out, cc_error *err);
+/* 3D2: the tree alone, as soon as cc_hlod_start has split it: the same layout with every cell's
+ * error 0 and no part (nP, nV, nI, nS 0). The cells, children and element list are those the built
+ * tree will have, so the page can cut its draw lists by leaf before the proxies exist. */
+int cc_hlod_bprx_tree(const cc_hlod *h, uint32_t rev, uint32_t nelements, Buf *out, cc_error *err);
 #endif

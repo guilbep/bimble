@@ -248,9 +248,18 @@ int cc_mesh_proxies(cc_session *s, uint64_t budget, const char **p, size_t *n, u
         else s->hlod_status = 202;
         s->hlod_ms += s->pf->now_ms(s->pf->ctx) - t0;
     }
+    if (s->hlod_status == 202 && !budget) { /* the tree alone (hlod.h cc_hlod_bprx_tree), no step */
+        buf_clear(&s->hlod_out);
+        s->hlod_out.oom = 0;
+        int rc = cc_hlod_bprx_tree(s->hlod, *rev, (uint32_t)sc->nelements, &s->hlod_out, &err);
+        *ms = s->hlod_ms;
+        if (rc) buf_clear(&s->hlod_out), buf_puts(&s->hlod_out, err.msg);
+        *p = s->hlod_out.p ? s->hlod_out.p : "", *n = s->hlod_out.len;
+        return rc ? 500 : 200;
+    }
     if (s->hlod_status == 202) {
         double t0 = s->pf->now_ms(s->pf->ctx);
-        int r = cc_hlod_step(s->hlod, budget ? budget : 1, &err);
+        int r = cc_hlod_step(s->hlod, budget, &err);
         buf_clear(&s->hlod_out);
         s->hlod_out.oom = 0;
         if (r < 0) s->hlod_status = 500, buf_puts(&s->hlod_out, err.msg);

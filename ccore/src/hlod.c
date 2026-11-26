@@ -652,13 +652,15 @@ uint64_t cc_hlod_proxy_bytes(const cc_hlod_cell *c) {
 
 static void put_u32(Buf *b, uint32_t v) { buf_append(b, &v, 4); }
 
-int cc_hlod_bprx(const cc_hlod *h, uint32_t rev, uint32_t nelements, Buf *out, cc_error *err) {
-    if (h->work) return fail(err, "proxies not built yet");
+/* The proxies of cell c as written: none in a tree alone. */
+#define NPROXY(c) (tree ? 0u : (c)->nproxy)
+
+static int bprx(const cc_hlod *h, int tree, uint32_t rev, uint32_t nelements, Buf *out, cc_error *err) {
     uint64_t nk = 0, np = 0, nv = 0, ni = 0, ns = 0;
     for (uint32_t i = 0; i < h->ncells; i++) {
         const cc_hlod_cell *c = &h->cells[i];
-        nk += c->nchildren, np += c->nproxy;
-        for (uint32_t k = 0; k < c->nproxy; k++) nv += c->proxy[k].mesh.nv, ni += c->proxy[k].mesh.ni, ns += c->proxy[k].mesh.ne;
+        nk += c->nchildren, np += NPROXY(c);
+        for (uint32_t k = 0; k < NPROXY(c); k++) nv += c->proxy[k].mesh.nv, ni += c->proxy[k].mesh.ni, ns += c->proxy[k].mesh.ne;
     }
     if (nv > UINT32_MAX || ni > UINT32_MAX || ns > UINT32_MAX) return fail(err, "proxies too large");
     if (buf_reserve(out, 48 + 64 * (size_t)h->ncells + 4 * (nk + h->nelements) + 28 * np + 12 * nv + 4 * ni + 32 * ns))
@@ -671,18 +673,19 @@ int cc_hlod_bprx(const cc_hlod *h, uint32_t rev, uint32_t nelements, Buf *out, c
     for (uint32_t i = 0; i < h->ncells; i++) {
         const cc_hlod_cell *c = &h->cells[i];
         put_u32(out, c->depth);
-        buf_append(out, &c->error_mm, 4);
+        static const float zero_mm = 0.0f;
+        buf_append(out, tree ? &zero_mm : &c->error_mm, 4);
         buf_append(out, c->bounds, 24);
         put_u32(out, k0), put_u32(out, c->nchildren), put_u32(out, c->el0), put_u32(out, c->nel);
-        put_u32(out, p0), put_u32(out, c->nproxy);
+        put_u32(out, p0), put_u32(out, NPROXY(c));
         buf_append(out, &c->original_triangles, 8);
-        k0 += c->nchildren, p0 += c->nproxy;
+        k0 += c->nchildren, p0 += NPROXY(c);
     }
     for (uint32_t i = 0; i < h->ncells; i++) buf_append(out, h->cells[i].children, 4 * (size_t)h->cells[i].nchildren);
     buf_append(out, h->elements, 4 * (size_t)h->nelements);
     uint32_t v0 = 0, i0 = 0, s0 = 0;
     for (uint32_t i = 0; i < h->ncells; i++)
-        for (uint32_t k = 0; k < h->cells[i].nproxy; k++) {
+        for (uint32_t k = 0; k < NPROXY(&h->cells[i]); k++) {
             const cc_hlod_part *p = &h->cells[i].proxy[k];
             uint32_t cat = (uint32_t)p->cat;
             put_u32(out, cat);
@@ -691,22 +694,32 @@ int cc_hlod_bprx(const cc_hlod *h, uint32_t rev, uint32_t nelements, Buf *out, c
             v0 += p->mesh.nv, i0 += p->mesh.ni, s0 += p->mesh.ne;
         }
     for (uint32_t i = 0; i < h->ncells; i++)
-        for (uint32_t k = 0; k < h->cells[i].nproxy; k++) buf_append(out, h->cells[i].proxy[k].mesh.pos, 12 * (size_t)h->cells[i].proxy[k].mesh.nv);
+        for (uint32_t k = 0; k < NPROXY(&h->cells[i]); k++) buf_append(out, h->cells[i].proxy[k].mesh.pos, 12 * (size_t)h->cells[i].proxy[k].mesh.nv);
     v0 = 0;
     for (uint32_t i = 0; i < h->ncells; i++)
-        for (uint32_t k = 0; k < h->cells[i].nproxy; k++) {
+        for (uint32_t k = 0; k < NPROXY(&h->cells[i]); k++) {
             const cc_mesh *m = &h->cells[i].proxy[k].mesh;
             for (uint32_t q = 0; q < m->ni; q++) put_u32(out, v0 + m->idx[q]);
             v0 += m->nv;
         }
     for (uint32_t i = 0; i < h->ncells; i++)
-        for (uint32_t k = 0; k < h->cells[i].nproxy; k++) buf_append(out, h->cells[i].proxy[k].mesh.edges, 24 * (size_t)h->cells[i].proxy[k].mesh.ne);
+        for (uint32_t k = 0; k < NPROXY(&h->cells[i]); k++) buf_append(out, h->cells[i].proxy[k].mesh.edges, 24 * (size_t)h->cells[i].proxy[k].mesh.ne);
     static const int8_t zero[8];
     for (uint32_t i = 0; i < h->ncells; i++)
-        for (uint32_t k = 0; k < h->cells[i].nproxy; k++) {
+        for (uint32_t k = 0; k < NPROXY(&h->cells[i]); k++) {
             const cc_mesh *m = &h->cells[i].proxy[k].mesh;
             for (uint32_t q = 0; q < m->ne; q++) buf_append(out, q < m->nn ? m->normals[q] : zero, 8);
         }
     if (out->oom) return fail(err, "out of memory");
     return 0;
+}
+#undef NPROXY
+
+int cc_hlod_bprx(const cc_hlod *h, uint32_t rev, uint32_t nelements, Buf *out, cc_error *err) {
+    if (h->work) return fail(err, "proxies not built yet");
+    return bprx(h, 0, rev, nelements, out, err);
+}
+
+int cc_hlod_bprx_tree(const cc_hlod *h, uint32_t rev, uint32_t nelements, Buf *out, cc_error *err) {
+    return bprx(h, 1, rev, nelements, out, err);
 }

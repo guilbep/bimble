@@ -222,7 +222,9 @@ export function parseBmsh(ab: ArrayBuffer, at = 0, exact = true): Bmsh {
   o += 24 * nS;
   const normals = new Int8Array(ab, o, 8 * nS);
   o += 8 * nS;
-  for (let i = 0; i < nI; i++) if ((idx[i] ?? 0) >= nV) throw new Error("BMSH index out of range");
+  let top = 0; // (3D2, step 5: the largest index once, not a test a index)
+  for (let i = 0; i < nI; i++) { const x = idx[i]!; if (x > top) top = x; }
+  if (nI && top >= nV) throw new Error("BMSH index out of range");
   for (let e = 0; e < nE; e++)
     if ((i0[e] ?? 0) + (ni[e] ?? 0) > nI || (v0[e] ?? 0) + (nv[e] ?? 0) > nV || (s0[e] ?? 0) + (ns[e] ?? 0) > nS) throw new Error("BMSH row out of range");
   const m: Bmsh = { rev, origin, ids, cats, v0, nv, i0, ni, s0, ns, pos, idx, edges, normals, size };
@@ -1292,8 +1294,23 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     for (let e = 0; e < m.ids.length; e++) if (!((m.model?.[e] ?? 0) > 0)) main++, tris += (m.ni[e] ?? 0) / 3;
     if (tris < PROXY_MIN_TRIS) return;
     stats.proxiesPending = true;
+    // the tree alone first (a budget of 0: the core splits it, no proxy yet), so that the first draw
+    // lists are cut by leaf and the proxies, when they come, need no new lists (their index upload is
+    // the slowest step of a large model under SwiftShader); the lists wait for it (treeWait)
+    treeWait = m;
+    try {
+      const r = await ask(0);
+      if (r.status === 200 && prxFor === m && mesh === m) {
+        const t = parseBprx(r.bytes);
+        if (t.rev === m.rev && t.nElements === main) prx = t, visKey = "\u0000"; // (lists not made yet: treeWait)
+      }
+    } catch { /* the proxies are asked again below; the lists are cut again when they come */ }
+    if (treeWait === m) treeWait = null;
+    dirty = true;
     try { await askProxies(m, ask, main); } finally { if (prxFor === m) stats.proxiesPending = false; }
   };
+  /** The mesh whose octree the draw lists wait for (3D2). */
+  let treeWait: Bmsh | null = null;
   const askProxies = async (m: Bmsh, ask: NonNullable<MeshSource["proxies"]>, main: number): Promise<void> => {
     const frame = () => new Promise<void>((res) => requestAnimationFrame(() => res()));
     await frame(); // the first frame of this mesh first (ADR 0074: opening is not slower)
@@ -1314,12 +1331,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       try { p = parseBprx(r.bytes); } catch (err) { console.warn("gl viewport: proxies:", err); return; }
       if (p.rev !== m.rev || p.nElements !== main) return; // another rev's: the next mesh asks again
       uploadProxies(p);
-      prx = p;
+      const same = prx !== null && prx.leafCount === p.leafCount && prx.cells.length === p.cells.length && prx.leafOf.every((l, e) => l === p.leafOf[e]);
+      prx = p, prxUsableKey = "";
       let withProxy = 0, ptris = 0;
       for (const c of p.cells) if (c.parts.length) withProxy++, ptris += c.parts.reduce((n, q) => n + q.ni / 3, 0);
       stats.proxies = { cells: p.cells.length, withProxy, tris: ptris, bytes: r.bytes.byteLength, steps, maxStepMs: maxStep, loadMs: performance.now() - t0,
         drawnCells: 0, drawnTris: 0, standIns: 0, on: true };
-      visKey = "\u0000"; // the draw lists again, by leaf
+      if (!same) visKey = "\u0000"; // the draw lists again, by leaf (none when the tree came first)
       dirty = true;
       return;
     }
@@ -2957,7 +2975,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     let previewNow = false;
     if (mesh && visKey === "\u0000" && firstOfMesh && !previewed) previewed = previewNow = true, previewBoxes(); // 3D2 (step 5)
-    else if (mesh && visKey === "\u0000") {
+    else if (mesh && visKey === "\u0000" && treeWait !== mesh) {
       visKey = JSON.stringify(sets);
       const tl = performance.now();
       drawLists();
@@ -3015,7 +3033,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     } else if (!dirty && (fill !== null || fillEdges)) dirty = fillStep = true;
     if (!dirty && occPending && pollOcc()) dirty = true; // 3D2 (step 3): a hidden batch showed again
     if (dirty && !fillStep) fill = null, fillEdges = false;
-    if (dirty && !previewNow) { // (3D2: a box preview is this loop's frame; the lists and the first frame come next)
+    if (dirty && !previewNow && (treeWait === null || treeWait !== mesh)) { // (3D2: a box preview is this loop's frame; the lists, after the octree, and the first frame come next)
       dirty = false;
       overlayDirty = false; // draw() draws the overlay too
       draw();

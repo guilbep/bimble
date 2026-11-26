@@ -34,7 +34,9 @@ int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_
  * 0074; the wasm core runs on the page's thread): each call reads about `budget` triangles more and
  * returns 202 with "read total" (the triangles read so far and in all) until it is done, then 200
  * with the BPRX bytes (hlod.h), the same on every later call of that rev; 404 when nothing is open or
- * the scene was not built (no proxies: the page draws without), 500 with the error. `*p` stays valid
+ * the scene was not built (no proxies: the page draws without), 500 with the error. A budget of 0
+ * reads nothing: 200 with the tree alone while building (hlod.h cc_hlod_bprx_tree: the cells, no
+ * proxy), the whole BPRX once built. `*p` stays valid
  * until the next call on `s`; `*ms` is the build time so far. */
 int cc_mesh_proxies(cc_session *s, uint64_t budget, const char **p, size_t *n, uint32_t *rev, double *ms);
 void cc_mesh_proxies_free(cc_session *s);

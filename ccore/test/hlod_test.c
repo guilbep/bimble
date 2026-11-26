@@ -223,6 +223,24 @@ static void steps(const char *what, const cc_scene *s, uint64_t budget) {
     buf_init(&one), buf_init(&many);
     int ok = cc_hlod_build(&a, s, &o, &err) == 0 && cc_hlod_bprx(&a, 5, (uint32_t)s->nelements, &one, &err) == 0;
     ok &= cc_hlod_start(&b, s, &o, &err) == 0;
+    /* 3D2: the tree alone, before any step: the built tree's cells, children and elements, no part */
+    Buf tree;
+    buf_init(&tree);
+    if (ok && cc_hlod_bprx_tree(&b, 5, (uint32_t)s->nelements, &tree, &err) == 0 && tree.len >= 48 && one.len >= 48) {
+        uint32_t nC = u32at(&tree, 16), nK = u32at(&tree, 20), nL = u32at(&tree, 24);
+        int same = !memcmp(tree.p, "BPRX", 4) && nC == u32at(&one, 16) && nK == u32at(&one, 20) && nL == u32at(&one, 24) &&
+                   !u32at(&tree, 28) && !u32at(&tree, 32) && !u32at(&tree, 36) && !u32at(&tree, 40) &&
+                   tree.len == 48 + 64 * (size_t)nC + 4 * ((size_t)nK + nL);
+        for (uint32_t c = 0; same && c < nC; c++) {
+            const char *x = tree.p + 48 + 64 * (size_t)c, *y = one.p + 48 + 64 * (size_t)c;
+            /* depth, bounds, children, elements, original triangles alike; error 0 and no part in the tree */
+            same &= !memcmp(x, y, 4) && !memcmp(x + 8, y + 8, 40) && !memcmp(x + 56, y + 56, 8) && !u32at(&tree, 48 + 64 * (size_t)c + 52);
+        }
+        size_t lists = 48 + 64 * (size_t)nC;
+        same &= !memcmp(tree.p + lists, one.p + lists, 4 * ((size_t)nK + nL));
+        check_true("the tree alone, before any step: the built tree's cells, children and elements, no proxy", same);
+    } else check_true("the tree alone, before any step", 0);
+    buf_free(&tree);
     int n = 0, r = 0;
     while (ok && (r = cc_hlod_step(&b, budget, &err)) == 0) {
         n++;

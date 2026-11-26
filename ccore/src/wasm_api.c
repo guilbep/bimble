@@ -695,7 +695,7 @@ EXPORT("host_proxies") int wa_host_proxies(int budget, cc_wasm_res *r) {
     size_t n;
     uint32_t rev;
     double ms;
-    int st = cc_mesh_proxies(s, budget > 0 ? (uint64_t)budget : 1, &p, &n, &rev, &ms);
+    int st = cc_mesh_proxies(s, budget > 0 ? (uint64_t)budget : 0, &p, &n, &rev, &ms); /* 0: the tree alone */
     r->value = rev;
     Buf b;
     buf_init(&b);

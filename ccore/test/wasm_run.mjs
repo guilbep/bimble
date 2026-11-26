@@ -653,6 +653,9 @@ suite("host");
         check(`host_mesh = GET /mesh at rev ${w.value}`, w.status === 200 && w.bytes.length === n.length && w.bytes.every((b, i) => b === n[i]),
           `${w.status} ${w.bytes.length} vs ${n.length} bytes`);
         // 3D2: the HLOD proxies, in steps until built (202), then the same BPRX bytes as GET /mesh?proxies=N
+        const wt = call(X.host_proxies, [], 0), nt = new Uint8Array(await (await fetch(`${base}/mesh?t=${HOST_TOKEN}&proxies=0`)).arrayBuffer());
+        check(`host_proxies(0) = GET /mesh?proxies=0: the tree (${wt.bytes.length} bytes)`, wt.status === 200 && wt.bytes.length === nt.length && wt.bytes.every((b, i) => b === nt[i]) &&
+          String.fromCharCode(...wt.bytes.subarray(0, 4)) === "BPRX", `${wt.status} ${wt.bytes.length} vs ${nt.length}`);
         let wp, steps = 0;
         while ((wp = call(X.host_proxies, [], 100)).status === 202 && steps < 10000) steps++;
         const np = new Uint8Array(await (await fetch(`${base}/mesh?t=${HOST_TOKEN}&proxies=1000000000`)).arrayBuffer());
