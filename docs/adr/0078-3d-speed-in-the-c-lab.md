@@ -80,12 +80,19 @@ the still picture's; it fails under 20 %).
 
 ## Evidence
 
-`ccore/results/frames.md`, wasm build, SwiftShader, before → after (loads 3.6–11.8: parallel gates):
+`ccore/results/frames.md`, wasm build, SwiftShader, before → after the amendment (run without
+`--force`: 1-minute load 3.9 at the start, 3.9-9.1 at each model's start from the run's own
+SwiftShader threads and a parallel ticket):
 
-| model | orbit frame median | still frame | close orbit | GPU bytes | pictures (3 cameras) |
-|---|---|---|---|---|---|
-| 20,026 elements | 187.5 → 39.9 ms | 182 → 156 ms | 358 → 352 ms | 17.2 → 17.3 MB | identical |
-| 772 elements, mesh-heavy | 146.1 → 112.5 ms | 178 → 120 ms | 146.5 → 90.2 ms | 13.0 → 0.1 MB | identical |
+| model | orbit frame median | still frame | close orbit | GPU bytes | drag input → frame (median) | pick → frame | pictures (3 cameras) |
+|---|---|---|---|---|---|---|---|
+| 20,026 elements | 187.5 → 31.1 ms | 182 → 174 ms | 358 → 80.5 ms | 17.2 → 17.3 MB | 317 → 23.7 ms | 32 → 32 ms | identical |
+| 772 elements, mesh-heavy | 146.1 → 31.7 ms | 178 → 152 ms | 146.5 → 31.5 ms | 13.0 → 0.1 MB | 139 → 42.3 ms | 43 → 17 ms | identical |
+
+The drag latency before was measured one move at a time; after, with 60 Hz streamed moves (the
+first run's one-at-a-time method gave 394 ms on the large model, the still frame falling between
+moves). While dragging, the canvas keeps 72 % (large) and 82 % (heavy) of the still picture's drawn
+pixels (budget plus outlines).
 
 The mesh-heavy model's 700 proxies are one shape: BMSH 12.6 MB → 96 KB. The 20,026-element model's
 boxes are copies too, but of 12 triangles: drawn instanced, SwiftShader took 1.2 s a frame against
@@ -93,13 +100,8 @@ boxes are copies too, but of 12 triangles: drawn instanced, SwiftShader took 1.2
 buffers (`INSTANCE_MIN_TRIS`). A 1×1 readPixels after a frame takes most of the frame time once the
 budget leaves things out (49 of 50 ms): SwiftShader's work is per pixel there, not per triangle.
 
-Regressions measured and left open (next ticket): the drag input → frame and the pick click → frame
-times rose (large: 317 → 394 ms, 32 → 189 ms). The pick: a selection opens a panel that resizes the
-canvas, which counted as a camera move (a moving frame, then the still one 150 ms later); fixed
-after the run (the canvas size left out of the camera key), not re-measured. The drag: the test
-waits for each move's frame before the next, so the still frame (150 ms after) falls between moves.
-At 48 px (Rust's cap) a moving frame of the 20,026-element model can draw nothing at the fitted
-distance: Rust's rule, kept; proxies (below) are what kept far parts visible in Rust.
+The first run's regressions (pick 32 → 189 ms: a selection's panel resized the canvas, which counted
+as a camera move; drag 317 → 394 ms; an empty moving picture at 48 px) are gone in the table above.
 
 ## What is left
 
