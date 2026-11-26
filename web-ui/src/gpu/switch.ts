@@ -87,7 +87,7 @@ export function gpuSwitch(canvas: HTMLCanvasElement, stats: object, set: (r: Gpu
         perfRenderer.using = "WebGL2", perfRenderer.reason = why;
       });
       if (g !== gen) { if (!("reason" in d)) d.device.destroy(); return; }
-      if ("reason" in d) { perfRenderer.reason = d.reason; console.warn("webgpu:", d.reason, "- WebGL2 draws"); return; }
+      if ("reason" in d) { perfRenderer.reason = d.reason; console.info("webgpu:", d.reason, "- WebGL2 draws"); return; } // (said in the performance panel)
       const { createRenderer } = await import("./render");
       if (g !== gen) { d.device.destroy(); return; }
       const r = createRenderer(canvas, d, stats), frame = r.frame.bind(r);

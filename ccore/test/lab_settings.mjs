@@ -318,6 +318,7 @@ async function main() {
     /Synchronous XMLHttpRequest on the main thread is deprecated/,
     /404 \(Not Found\) http:\/\/localhost:\d+\/favicon\.ico$/,
     /^Canvas2D: Multiple readback operations using getImageData/,
+    /^No available adapters\. /, // GPU1: Chrome's own line when WebGPU is chosen with no adapter (the viewport stays WebGL2)
   ];
   const errors = consoleLog.filter((m) => /error|warn/.test(m.level) && !IGNORED.some((r) => r.test(m.text)));
   check("no uncaught page error", exceptions.length === 0, exceptions.join(" | "));
