@@ -155,6 +155,10 @@ r = await b.call("action", "open", JSON.stringify({ path: saved, discard: true }
 rows = await settle(b);
 check("reopened: four links, each ready from its cache (an IFC unreadable)", r.status === 200 && rows.length === 4 && rows.every((m) => m.state === "ready" && m.from_cache),
   JSON.stringify(rows.map((m) => [m.name, m.state, m.from_cache, m.message])));
+const ra = rows.find((m) => m.name === "a_frame.ifc"), rc = rows.find((m) => m.name === "c_mapped.ifc");
+check("reopened: the placement, the pin and the colour as saved", ra?.pinned === false && JSON.stringify(ra.move_mm) === "[1000,0,0]" &&
+  ra.rotation_deg === 90 && ra.origin === "origin" && rc?.colour === 3 && rc.pinned === true && rows.find((m) => m.name === "b_frame2.ifc")?.visible === false,
+  JSON.stringify(rows.map((m) => [m.name, m.pinned, m.move_mm, m.rotation_deg, m.origin, m.colour, m.visible])));
 check("the unreadable one says its cache serves", /could not be read/.test(rows.find((m) => m.name === "b_frame2.ifc")?.message ?? ""), rows.find((m) => m.name === "b_frame2.ifc")?.message);
 chmodSync(join(dir, "b_frame2.ifc"), 0o644);
 

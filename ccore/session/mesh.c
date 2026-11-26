@@ -115,8 +115,16 @@ static void link_bmsh_id(const void *ctx, const cc_scene *sc, size_t k, char out
 /* links.h: the LNKS trailer (`form` 3: each link's BMSH in version 3). */
 static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error *err) {
     if (!s->nlinks) return 0;
+    /* LINKF: version 2 when a link is placed or coloured (links.h); else version 1, as before */
+    int v2 = 0;
+    for (size_t i = 0; i < s->nlinks; i++) {
+        const cc_link *k = &s->links[i];
+        double c, sn, t[3];
+        cc_link_placement(s, k, &c, &sn, t);
+        if (k->colour >= 0 || (k->kind && !(c == 1.0 && sn == 0.0 && t[0] == 0.0 && t[1] == 0.0 && t[2] == 0.0))) v2 = 1;
+    }
     buf_append(out, "LNKS", 4);
-    put_u32(out, 1);
+    put_u32(out, v2 ? 2 : 1);
     put_u32(out, (uint32_t)s->nlinks);
     Buf one;
     buf_init(&one);
@@ -129,9 +137,19 @@ static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error 
         static const char zero[4];
         buf_append(out, zero, (4 - L % 4) % 4);
         put_u32(out, k->visible && k->kind ? 1u : 0u); /* LNK1: a missing link (kind 0) draws nothing */
+        if (v2) { /* LINKF: the turn about Z (cos, sin), the placed origin (host world mm), the colour */
+            double c, sn, t[3], o[3];
+            cc_link_placement(s, k, &c, &sn, t);
+            const double *lo = cc_link_raw_scene(k)->origin;
+            o[0] = c * lo[0] - sn * lo[1] + t[0], o[1] = sn * lo[0] + c * lo[1] + t[1], o[2] = lo[2] + t[2];
+            buf_append(out, &c, 8), buf_append(out, &sn, 8);
+            for (int q = 0; q < 3; q++) buf_append(out, &o[q], 8);
+            int32_t col = k->colour;
+            buf_append(out, &col, 4);
+        }
         buf_clear(&one);
         one.oom = 0;
-        if (form == 3) rc = cc_scene_bmsh3(cc_link_scene(k), link_bmsh_id, k, rev, &one, err);
+        if (form == 3) rc = cc_scene_bmsh3(cc_link_raw_scene(k), link_bmsh_id, k, rev, &one, err);
         else rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(&k->scene, rev, &one, err);
         if (!rc && (one.oom || one.len > UINT32_MAX)) rc = fail(err, "out of memory");
         if (!rc) put_u32(out, (uint32_t)one.len), buf_append(out, one.p, one.len);

@@ -6,6 +6,7 @@
 #include "guid.h"
 #include "json_r.h"
 #include "jobs.h"
+#include "json_w.h"
 #include "link_cache.h"
 #include "session.h"
 
@@ -43,16 +44,45 @@ static int ends_hash(const char *head, size_t nh, const char *tail, size_t nt, u
 }
 
 int cc_link_cache_source(uint64_t bytes, int64_t mtime_s, const char *head, size_t nh, const char *tail, size_t nt,
-                         char *out, size_t n) {
+                         const double *base_mm, char *out, size_t n) {
     char e[65];
     if (ends_hash(head, nh, tail, nt, bytes, e)) return -1;
-    Buf b; /* sorted keys; buf_u64/buf_i64: the wasm snprintf has no %lld */
+    Buf b;
     buf_init(&b);
-    buf_puts(&b, "{\"bytes\":"), buf_u64(&b, bytes), buf_puts(&b, ",\"ends\":\""), buf_puts(&b, e);
-    buf_puts(&b, "\",\"format\":\"" CC_LINK_CACHE_FORMAT "\",\"mtime_s\":"), buf_i64(&b, mtime_s), buf_putc(&b, '}');
-    int rc = b.oom || b.len + 1 > n ? -1 : 0;
+    JsonW w; /* compact, keys sorted */
+    jw_init(&w, &b, 0);
+    jw_obj_begin(&w);
+    if (base_mm) { /* LINKF: the IFC's base point (its building's origin), for the link's positioning */
+        jw_key(&w, "base_point_mm"), jw_arr_begin(&w);
+        for (int k = 0; k < 3; k++) jw_f64(&w, base_mm[k] + 0.0);
+        jw_arr_end(&w);
+    }
+    jw_key(&w, "bytes"), jw_u64(&w, bytes);
+    jw_key(&w, "ends"), jw_str(&w, e);
+    jw_key(&w, "format"), jw_str(&w, CC_LINK_CACHE_FORMAT);
+    jw_key(&w, "mtime_s"), jw_i64(&w, mtime_s);
+    jw_obj_end(&w);
+    int rc = jw_finish(&w) != JW_OK || b.oom || b.len + 1 > n ? -1 : 0;
     if (!rc) memcpy(out, b.p, b.len), out[b.len] = 0;
     buf_free(&b);
+    return rc;
+}
+
+/* LINKF: the base point a cache's SRCE names (0 ok; -1 none). */
+int cc_link_cache_base_point(const char *src, size_t n, double out[3]) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jr_parse(&a, src, n, &je), *b = v && v->type == JR_OBJ ? jr_get(v, "base_point_mm") : NULL;
+    int rc = -1;
+    if (b && b->type == JR_ARR && b->n == 3 && b->items[0].type == JR_NUM && b->items[1].type == JR_NUM && b->items[2].type == JR_NUM) {
+        rc = 0;
+        for (int k = 0; k < 3; k++) {
+            out[k] = b->items[k].num + 0.0;
+            if (!(out[k] > -1e12 && out[k] < 1e12)) rc = -1;
+        }
+    }
+    arena_free(&a);
     return rc;
 }
 
@@ -250,11 +280,11 @@ static void run(cc_link_job *j) {
     }
     if (!have_stat) j->bytes = n;
     char src[512] = "";
-    if (cached && cc_link_cache_source(j->bytes, j->mtime_s, text, n < ENDS ? n : ENDS, n > ENDS ? text + n - ENDS : text,
-                                       n < ENDS ? n : ENDS, src, sizeof src))
-        cached = 0;
     cc_ifc_scene *s = malloc(sizeof *s);
     int rc = s ? cc_ifc_read_progress(text, n, s, &j->err, &j->pg) : -1;
+    if (!rc && cached && cc_link_cache_source(j->bytes, j->mtime_s, text, n < ENDS ? n : ENDS, n > ENDS ? text + n - ENDS : text,
+                                              n < ENDS ? n : ENDS, s->base_point_mm, src, sizeof src))
+        cached = 0;
     free(text); /* the scene owns its strings (ifc_read.h) */
     if (!s) snprintf(j->err.msg, sizeof j->err.msg, "out of memory");
     if (rc) {

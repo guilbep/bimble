@@ -2,7 +2,7 @@
  * <file>.ifc.RVT beside the IFC): the light read-only form beside it, and a plain-text report.
  *   <file>.ifc.bimbleview  the reader's scene as a view file (viewfile.h, copies shared), raw (not
  *                          gzipped: read without inflating), plus a section SRCE: the source
- *                          {"bytes", "ends", "format", "mtime_s"}; "ends" is the BLAKE3 of the
+ *                          {"base_point_mm", "bytes", "ends", "format", "mtime_s"}; "ends" is the BLAKE3 of the
  *                          IFC's first MiB, its last MiB and its size (8 bytes LE), in hex
  *   <file>.ifc.log.txt     the conversion report: schema, counts per IFC class, products with and
  *                          without a body, what was skipped and why (the reader's warnings),
@@ -27,7 +27,7 @@
 #include "viewfile.h"
 
 #define CC_LINK_CACHE_MIN ((uint64_t)1 << 20) /* bytes; below, no cache (ADR 0079) */
-#define CC_LINK_CACHE_FORMAT "bimble-link-cache 1"
+#define CC_LINK_CACHE_FORMAT "bimble-link-cache 2" /* 2: SRCE names the base point */
 
 enum { CC_JOB_OK = 0, CC_JOB_FAILED = -1, CC_JOB_REFUSED = -2, CC_JOB_CANCELLED = -3 };
 
@@ -66,7 +66,9 @@ void cc_link_job_orphan(cc_link_job *j);
 /* The SRCE text of an IFC now (`head`, `tail`: its first and last MiB, NULL when unread), into
  * out[0..n). 0 ok. */
 int cc_link_cache_source(uint64_t bytes, int64_t mtime_s, const char *head, size_t nh, const char *tail, size_t nt,
-                         char *out, size_t n);
+                         const double *base_mm, char *out, size_t n);
+/* LINKF: the IFC's base point a cache's SRCE names ("base_point_mm"): 0, or -1 when none. */
+int cc_link_cache_base_point(const char *src, size_t n, double out[3]);
 /* Whether `src` (a cache's SRCE) matches the IFC: 1 yes; with ends_known 0, size and time only. */
 int cc_link_cache_matches(const char *src, size_t n, uint64_t bytes, int64_t mtime_s, const char *ends_hex, int ends_known);
 #endif

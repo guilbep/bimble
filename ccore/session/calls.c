@@ -3701,7 +3701,18 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
     return tool_json(s, has_id ? &id : NULL, out);
 }
 
+static int call_op(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out);
+
+/* LINKF: the links' placed scenes follow their placement and the host's georeference before and
+ * after every call (links.h cc_links_sync_placement). */
 int cc_call(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out) {
+    if (s->nlinks) cc_links_sync_placement(s);
+    int rc = call_op(s, op, name, body, n, out);
+    if (s->nlinks) cc_links_sync_placement(s);
+    return rc;
+}
+
+static int call_op(cc_session *s, const char *op, const char *name, const char *body, size_t n, cc_buf *out) {
     if (cc_view_only_refuses(op, name, out)) return CC_ERR; /* view build only (view_only.h) */
     if (!strcmp(op, "query")) return call_query(s, name, body, n, out);
     if (!strcmp(op, "action")) return call_action(s, name, body, n, out);

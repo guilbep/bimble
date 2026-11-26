@@ -676,7 +676,7 @@ static void link_cache_source(void) {
     char *raw = slurp(golden, "view/frame.bimbleview.raw", &wn);
     char src[512];
     static const char head[] = "ISO-10303-21;\nHEADER;", tail[] = "ENDSEC;\nEND-ISO-10303-21;\n";
-    check_true("source text", cc_link_cache_source(68059, 1795696594, head, sizeof head - 1, tail, sizeof tail - 1, src, sizeof src) == 0);
+    check_true("source text", cc_link_cache_source(68059, 1795696594, head, sizeof head - 1, tail, sizeof tail - 1, NULL, src, sizeof src) == 0);
     Buf b;
     buf_init(&b);
     buf_append(&b, raw, wn);

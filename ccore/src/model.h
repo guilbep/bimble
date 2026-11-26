@@ -189,6 +189,14 @@ typedef struct {
 typedef struct {
     cc_str name, path, relative;
     int hidden;
+    /* LINKF (session/links.h, ADR 0079), each left out at its default: "origin" one of "origin",
+     * "base_point", "survey_point" (default "file": 0 here), "move_mm" [x, y, z] (zeros),
+     * "rotation_deg" (0; |x| < 1e6), "pinned": false (default true), "colour" 0..11 (none: left out). */
+    int origin;           /* 0 file, 1 origin, 2 base_point, 3 survey_point */
+    double move_mm[3];    /* each |x| < 1e9 */
+    double rotation_deg;
+    int unpinned;
+    int has_colour, colour; /* 0..11 when has_colour (zero-initialized: none) */
 } cc_model_link;
 
 typedef struct {

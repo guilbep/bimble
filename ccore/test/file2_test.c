@@ -574,6 +574,52 @@ static void links_section(void) {
         if (!bad_rc) cc_model_free(&x);
         buf_free(&e);
     }
+    /* LINKF: the placement, pin and colour, each left out at its default; hostile values refused */
+    buf_clear(&t), buf_clear(&t2), buf_clear(&b);
+    check_true("links: frame loads again", cc_model_load(&m, frame, n, &err) == 0);
+    static cc_model_link P[2];
+    P[0] = L[0], P[1] = L[1];
+    P[0].origin = 3, P[0].move_mm[0] = 1000.5, P[0].move_mm[2] = -250, P[0].rotation_deg = 90, P[0].unpinned = 1, P[0].has_colour = 1, P[0].colour = 4;
+    m.links = P, m.nlinks = 2;
+    cc_model_save(&m, &t);
+    const char *tx = buf_cstr(&t);
+    check_true("links: placement written", contains(tx, "\"origin\": \"survey_point\"") && contains(tx, "\"move_mm\": [") &&
+                                              contains(tx, "\"rotation_deg\": 90") && contains(tx, "\"pinned\": false") && contains(tx, "\"colour\": 4"));
+    check_true("links: defaults left out", !contains(strstr(tx, "b.bimble") ? strstr(tx, "b.bimble") : tx, "\"origin\""));
+    check_true("links (placed): binary save", cc_model_save_v2(&m, &b) == 0);
+    cc_model_free(&m);
+    check_true("links (placed): text -> binary -> text, the same text", to_text(b.p, b.len, &t2, &err) == 0 && t2.len == t.len && !memcmp(t2.p, t.p, t.len));
+    cc_model rt;
+    check_true("links (placed): loads back", cc_model_load(&rt, t.p, t.len, &err) == 0 && rt.nlinks == 2 && rt.links[0].origin == 3 &&
+                                                rt.links[0].move_mm[0] == 1000.5 && rt.links[0].rotation_deg == 90 && rt.links[0].unpinned &&
+                                                rt.links[0].has_colour && rt.links[0].colour == 4 && !rt.links[1].has_colour && !rt.links[1].unpinned);
+    cc_model_free(&rt);
+    static const char *const hostile[] = {
+        "\"links\": [{\"name\": \"a.ifc\", \"path\": \"p\", \"origin\": \"elsewhere\"}]",
+        "\"links\": [{\"name\": \"a.ifc\", \"path\": \"p\", \"origin\": 1}]",
+        "\"links\": [{\"name\": \"a.ifc\", \"path\": \"p\", \"move_mm\": [1, 2]}]",
+        "\"links\": [{\"name\": \"a.ifc\", \"path\": \"p\", \"move_mm\": [1, 2, 1e300]}]",
+        "\"links\": [{\"name\": \"a.ifc\", \"path\": \"p\", \"move_mm\": [1, 2, \"x\"]}]",
+        "\"links\": [{\"name\": \"a.ifc\", \"path\": \"p\", \"rotation_deg\": 1e30}]",
+        "\"links\": [{\"name\": \"a.ifc\", \"path\": \"p\", \"pinned\": 0}]",
+        "\"links\": [{\"name\": \"a.ifc\", \"path\": \"p\", \"colour\": 12}]",
+        "\"links\": [{\"name\": \"a.ifc\", \"path\": \"p\", \"colour\": -1}]",
+        "\"links\": [{\"name\": \"a.ifc\", \"path\": \"p\", \"colour\": 1.5}]",
+    };
+    for (int i = 0; i < 10 && last; i++) {
+        Buf e;
+        buf_init(&e);
+        char *mo = last - 1;
+        while (mo > frame && *mo != '}') mo--;
+        buf_append(&e, frame, (size_t)(mo - frame));
+        buf_puts(&e, ", "), buf_puts(&e, hostile[i]);
+        buf_append(&e, mo, n - (size_t)(mo - frame));
+        cc_model x;
+        int bad_rc = cc_model_load(&x, e.p, e.len, &err);
+        check_true("links: a hostile placement is refused", bad_rc != 0);
+        if (!bad_rc) cc_model_free(&x), printf("  accepted: %s\n", hostile[i]);
+        buf_free(&e);
+    }
     buf_free(&t), buf_free(&b), buf_free(&t2);
     free(frame);
 }

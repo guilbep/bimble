@@ -7,6 +7,8 @@
 #include "links.h"
 #include "link_cache.h" /* LINKF */
 #include "jobs.h"       /* LINKF: cc_atomic_load */
+#include "ifc_math.h"   /* LINKF: cc_sin, cc_cos */
+#include "json_r.h"
 
 static const char *const FAMILY[CC_CAT_COUNT] = {"Concrete", "Steel", "Timber", "Masonry",
                                                  "Insulation", "Earth", "Glass", "Other"}; /* MaterialCategory::label */
@@ -20,6 +22,7 @@ static void link_drop_data(cc_link *k) {
     if (k->vf) cc_scene_free(&k->scene), cc_viewfile_free(k->vf), free(k->vf), k->vf = NULL;
     if (k->model) cc_scene_free(&k->scene), cc_model_free(k->model), free(k->model), k->model = NULL;
     memset(&k->scene, 0, sizeof k->scene);
+    if (k->placed) cc_scene_free(&k->pscene), k->placed = 0; /* LINKF */
     k->kind = 0;
 }
 
@@ -30,7 +33,8 @@ void cc_link_free(cc_link *k) {
     memset(k, 0, sizeof *k);
 }
 
-const cc_scene *cc_link_scene(const cc_link *k) { return k->ifc ? &k->ifc->scene : &k->scene; }
+const cc_scene *cc_link_raw_scene(const cc_link *k) { return k->ifc ? &k->ifc->scene : &k->scene; }
+const cc_scene *cc_link_scene(const cc_link *k) { return k->placed ? &k->pscene : cc_link_raw_scene(k); } /* LINKF */
 
 void cc_link_id(const cc_link *k, size_t i, char id[22]) {
     const cc_scene *sc = cc_link_scene(k);
@@ -508,7 +512,11 @@ static void sig(const cc_session *s, Buf *b) {
     for (size_t i = 0; i < s->nlinks; i++) {
         const cc_link *k = &s->links[i];
         buf_puts(b, k->name), buf_putc(b, 0), buf_puts(b, k->path ? k->path : ""), buf_putc(b, 0);
-        buf_putc(b, k->visible ? '1' : '0'), buf_putc(b, '\n');
+        buf_putc(b, k->visible ? '1' : '0');
+        /* LINKF: the placement, pin and colour are saved too */
+        buf_append(b, &k->origin, sizeof k->origin), buf_append(b, k->move_mm, sizeof k->move_mm);
+        buf_append(b, &k->rotation_deg, sizeof k->rotation_deg), buf_putc(b, k->pinned ? 'p' : 'u');
+        buf_append(b, &k->colour, sizeof k->colour), buf_putc(b, '\n');
     }
 }
 
@@ -589,6 +597,17 @@ int cc_links_from_model(cc_session *s, const char *path) {
             else if (cc_links_add(s, abs, &err) == 0) ok = 1;
         }
         if (ok && s->nlinks > before && e->hidden) s->links[s->nlinks - 1].visible = 0;
+        if (s->nlinks > before || ok) { /* LINKF: the saved placement, pin and colour */
+            const char *nm = cc_path_last_sep(abs);
+            nm = nm ? nm + 1 : abs;
+            int li = cc_links_find(s, nm, strlen(nm));
+            if (li < 0 && s->nlinks > before) li = (int)s->nlinks - 1;
+            if (li >= 0) {
+                cc_link *k = &s->links[li];
+                k->origin = e->origin, k->rotation_deg = e->rotation_deg, k->pinned = !e->unpinned, k->colour = e->has_colour ? e->colour : -1;
+                memcpy(k->move_mm, e->move_mm, sizeof k->move_mm);
+            }
+        }
         if (!ok) {
             cc_log(s->pf, "bimble-ccore: linked model %s not found (%s): kept as missing", abs,
                    s->pf->files ? err.msg : "no files here");
@@ -596,6 +615,9 @@ int cc_links_from_model(cc_session *s, const char *path) {
                 free(abs), free(rel);
                 return -1;
             }
+            cc_link *k = &s->links[s->nlinks - 1]; /* LINKF: kept as saved */
+            k->origin = e->origin, k->rotation_deg = e->rotation_deg, k->pinned = !e->unpinned, k->colour = e->has_colour ? e->colour : -1;
+            memcpy(k->move_mm, e->move_mm, sizeof k->move_mm);
         }
         free(abs), free(rel);
     }
@@ -629,6 +651,10 @@ int cc_links_to_model(cc_session *s, const char *path) {
         if (!pp || (rn && !rp) || !np) return -1;
         l[i].name = (cc_str){np, nn}, l[i].path = (cc_str){pp, pn}, l[i].relative = (cc_str){rp, rn};
         l[i].hidden = !k->visible;
+        /* LINKF: its placement, pin and colour (model.h; each left out of the file at its default) */
+        l[i].origin = k->origin, l[i].rotation_deg = k->rotation_deg, l[i].unpinned = !k->pinned;
+        l[i].has_colour = k->colour >= 0, l[i].colour = k->colour >= 0 ? k->colour : 0;
+        memcpy(l[i].move_mm, k->move_mm, sizeof l[i].move_mm);
     }
     m->links = l, m->nlinks = s->nlinks;
     return 0;
@@ -691,6 +717,8 @@ static int link_by_uid(const cc_session *s, uint32_t uid) {
     return -1;
 }
 
+static void link_geo(cc_link *k);
+
 /* The finished job's results into link k (its data was dropped when it was queued). */
 static void take(cc_session *s, cc_link *k, cc_link_job *j) {
     free(k->msg), free(k->cache), free(k->log);
@@ -715,6 +743,7 @@ static void take(cc_session *s, cc_link *k, cc_link_job *j) {
         k->vf = j->vf, j->vf = NULL, k->kind = CC_LINK_VIEW;
     } else k->ifc = j->ifc, j->ifc = NULL, k->kind = CC_LINK_IFC;
     k->state = CC_LS_READY;
+    link_geo(k); /* LINKF: where the file says it is */
     k->cache = dup_z(j->cache), k->log = dup_z(j->log), k->msg = dup_z(j->note);
     k->cache_mtime_s = j->cache_mtime_s, k->from_cache = j->from_cache;
     cc_log(s->pf, "bimble-ccore: linked %s: %zu elements (%s, %.0f ms)", k->path, cc_link_scene(k)->nelements,
@@ -1064,3 +1093,183 @@ int cc_links_add_folder(cc_session *s, const char *dir, int recursive, size_t *a
     return nd ? 0 : -1;
 }
 /* ---- end LINKF ---- */
+
+/* ---- LINKF: positioning (links.h cc_link_placement) ---- */
+
+static const double PI = 3.14159265358979323846;
+
+/* The georeference of a view file's GEOR (georef.h's file form) into k's geo fields. */
+static void geo_from_json(cc_link *k, const char *p, size_t n) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jr_parse(&a, p, n, &je);
+    if (v && v->type == JR_OBJ) {
+        const JrVal *e = jr_get(v, "east_m"), *no = jr_get(v, "north_m"), *h = jr_get(v, "height_m"), *r = jr_get(v, "map_rotation_deg");
+        const JrVal *c = jr_get(v, "crs"), *sp = jr_get(v, "survey_point_mm");
+        if (e && e->type == JR_NUM) k->geo_e = e->num;
+        if (no && no->type == JR_NUM) k->geo_n = no->num;
+        if (h && h->type == JR_NUM) k->geo_h = h->num;
+        if (r && r->type == JR_NUM) k->geo_rot = r->num;
+        if (c && c->type == JR_STR && c->n < sizeof k->geo_crs) memcpy(k->geo_crs, c->s, c->n), k->geo_crs[c->n] = 0;
+        if (sp && sp->type == JR_ARR && sp->n == 3)
+            for (int i = 0; i < 3; i++)
+                if (sp->items[i].type == JR_NUM) k->survey_mm[i] = sp->items[i].num;
+    }
+    arena_free(&a);
+}
+
+static void geo_from(cc_link *k, const cc_georef *g) {
+    k->geo_e = g->east_m, k->geo_n = g->north_m, k->geo_h = g->height_m, k->geo_rot = g->map_rotation_deg;
+    if (g->has_crs && g->crs.n < sizeof k->geo_crs) memcpy(k->geo_crs, g->crs.p, g->crs.n), k->geo_crs[g->crs.n] = 0;
+    if (g->has_survey_point) memcpy(k->survey_mm, g->survey_point_mm, sizeof k->survey_mm);
+}
+
+static int finite_all(const double *v, int n) {
+    for (int i = 0; i < n; i++)
+        if (!(v[i] > -1e15 && v[i] < 1e15)) return 0;
+    return 1;
+}
+
+static void link_geo(cc_link *k) {
+    k->geo_map = 0, k->geo_e = k->geo_n = k->geo_h = k->geo_rot = 0, k->geo_crs[0] = 0;
+    memset(k->base_mm, 0, sizeof k->base_mm), memset(k->survey_mm, 0, sizeof k->survey_mm);
+    if (k->ifc) geo_from(k, &k->ifc->georef), memcpy(k->base_mm, k->ifc->base_point_mm, sizeof k->base_mm);
+    else if (k->vf) {
+        if (k->vf->has_georef) geo_from_json(k, k->vf->georef.p, k->vf->georef.n);
+        if (k->vf->has_source) cc_link_cache_base_point(k->vf->source.p, k->vf->source.n, k->base_mm);
+    } else if (k->model) geo_from(k, &k->model->georef);
+    double g[4] = {k->geo_e, k->geo_n, k->geo_h, k->geo_rot};
+    if (!finite_all(g, 4) || !finite_all(k->base_mm, 3) || !finite_all(k->survey_mm, 3)) { /* untrusted: never a NaN placement */
+        k->geo_e = k->geo_n = k->geo_h = k->geo_rot = 0;
+        memset(k->base_mm, 0, sizeof k->base_mm), memset(k->survey_mm, 0, sizeof k->survey_mm);
+    }
+    k->geo_map = k->geo_e != 0.0 || k->geo_n != 0.0 || k->geo_rot != 0.0;
+}
+
+/* The host's: the open model's georeference (base point: its world origin, ADR 0075; survey point:
+ * the georeference's, else the world origin), or the read-only IFC's (base point: its building). */
+static void host_geo(const cc_session *s, cc_link *h) {
+    memset(h, 0, sizeof *h);
+    if (s->open) geo_from(h, &s->model.georef);
+    else if (s->view == CC_VIEW_IFC && s->ifc) geo_from(h, &s->ifc->georef), memcpy(h->base_mm, s->ifc->base_point_mm, sizeof h->base_mm);
+    else if (s->view == CC_VIEW_FILE && s->vf && s->vf->has_georef) geo_from_json(h, s->vf->georef.p, s->vf->georef.n);
+    h->geo_map = h->geo_e != 0.0 || h->geo_n != 0.0 || h->geo_rot != 0.0;
+}
+
+static void rot2(double c, double sn, const double v[2], double out[2]) {
+    double x = c * v[0] - sn * v[1], y = sn * v[0] + c * v[1];
+    out[0] = x, out[1] = y;
+}
+
+void cc_link_placement(const cc_session *s, const cc_link *k, double *c, double *sn, double t[3]) {
+    cc_link h;
+    host_geo(s, &h);
+    double ang = 0, tr[3] = {0, 0, 0}; /* the rule: w -> R(ang) w + tr */
+    int rule = k->origin;
+    if (rule == CC_LO_FILE && k->geo_map && h.geo_map && (!k->geo_crs[0] || !h.geo_crs[0] || !strcmp(k->geo_crs, h.geo_crs))) {
+        /* survey_l(w) = R(a_l) w + S_l (mm); the host point with the same survey coordinates:
+         * h = R(-a_h) (R(a_l) w + S_l - S_h) */
+        double ah = h.geo_rot * PI / 180.0;
+        ang = (k->geo_rot - h.geo_rot) * PI / 180.0;
+        double d[2] = {(k->geo_e - h.geo_e) * 1000.0, (k->geo_n - h.geo_n) * 1000.0};
+        rot2(cc_cos(-ah), cc_sin(-ah), d, tr);
+        tr[2] = (k->geo_h - h.geo_h) * 1000.0;
+    } else if (rule == CC_LO_BASE_POINT)
+        for (int i = 0; i < 3; i++) tr[i] = h.base_mm[i] - k->base_mm[i];
+    else if (rule == CC_LO_SURVEY_POINT)
+        for (int i = 0; i < 3; i++) tr[i] = h.survey_mm[i] - k->survey_mm[i];
+    /* then the manual turn about the host's Z and the offset */
+    double am = k->rotation_deg * PI / 180.0, cm = cc_cos(am), sm = cc_sin(am);
+    double a = ang + am;
+    *c = cc_cos(a), *sn = cc_sin(a);
+    if (a == 0.0) *c = 1.0, *sn = 0.0;
+    rot2(cm, sm, tr, t);
+    if (am == 0.0) t[0] = tr[0], t[1] = tr[1];
+    t[0] += k->move_mm[0], t[1] += k->move_mm[1], t[2] = tr[2] + k->move_mm[2];
+    for (int i = 0; i < 3; i++) t[i] += 0.0;
+}
+
+/* `in` placed: origin R o + t, own meshes and placements turned by R (shapes borrowed). */
+static int place_scene(cc_scene *out, const cc_scene *in, double c, double sn, const double t[3]) {
+    memset(out, 0, sizeof *out);
+    arena_init(&out->arena, 0);
+    double o[2];
+    rot2(c, sn, in->origin, o);
+    out->origin[0] = o[0] + t[0], out->origin[1] = o[1] + t[1], out->origin[2] = in->origin[2] + t[2];
+    out->shapes = in->shapes, out->nshapes = in->nshapes;
+    out->warnings = in->warnings, out->nwarnings = in->nwarnings;
+    if (!in->nelements) return 0;
+    out->elements = arena_alloc(&out->arena, in->nelements * sizeof *out->elements, 8);
+    if (!out->elements) return -1;
+    float cf = (float)c, sf = (float)sn;
+    for (size_t i = 0; i < in->nelements; i++) {
+        cc_scene_element *e = &out->elements[i];
+        *e = in->elements[i];
+        if (e->shape >= 0) {
+            float *ax[4] = {e->to_scene.x, e->to_scene.y, e->to_scene.z, e->to_scene.t};
+            for (int q = 0; q < 4; q++) {
+                float x = ax[q][0], y = ax[q][1];
+                ax[q][0] = cf * x - sf * y, ax[q][1] = sf * x + cf * y;
+            }
+            continue;
+        }
+        const cc_mesh *m = &in->elements[i].mesh;
+        cc_mesh *d = &e->mesh;
+        if (m->nv) {
+            d->pos = arena_alloc(&out->arena, (size_t)m->nv * sizeof *d->pos, 4);
+            if (!d->pos) return -1;
+            for (uint32_t v = 0; v < m->nv; v++) {
+                float x = m->pos[v][0], y = m->pos[v][1];
+                d->pos[v][0] = cf * x - sf * y, d->pos[v][1] = sf * x + cf * y, d->pos[v][2] = m->pos[v][2];
+            }
+        }
+        if (m->ne) {
+            d->edges = arena_alloc(&out->arena, (size_t)m->ne * sizeof *d->edges, 4);
+            if (!d->edges) return -1;
+            for (uint32_t v = 0; v < m->ne; v++)
+                for (int q = 0; q < 6; q += 3) {
+                    float x = m->edges[v][q], y = m->edges[v][q + 1];
+                    d->edges[v][q] = cf * x - sf * y, d->edges[v][q + 1] = sf * x + cf * y, d->edges[v][q + 2] = m->edges[v][q + 2];
+                }
+        }
+        if (m->nn) {
+            d->normals = arena_alloc(&out->arena, (size_t)m->nn * sizeof *d->normals, 1);
+            if (!d->normals) return -1;
+            for (uint32_t v = 0; v < m->nn; v++)
+                for (int q = 0; q < 8; q += 4) {
+                    float x = m->normals[v][q], y = m->normals[v][q + 1];
+                    float rx = cf * x - sf * y, ry = sf * x + cf * y;
+                    d->normals[v][q] = (int8_t)(rx < 0 ? rx - 0.5f : rx + 0.5f), d->normals[v][q + 1] = (int8_t)(ry < 0 ? ry - 0.5f : ry + 0.5f);
+                    d->normals[v][q + 2] = m->normals[v][q + 2], d->normals[v][q + 3] = m->normals[v][q + 3];
+                }
+        }
+    }
+    out->nelements = in->nelements;
+    return 0;
+}
+
+int cc_links_sync_placement(cc_session *s) {
+    int ch = 0, rc = 0;
+    for (size_t i = 0; i < s->nlinks; i++) {
+        cc_link *k = &s->links[i];
+        if (!k->kind) continue;
+        double c, sn, t[3];
+        cc_link_placement(s, k, &c, &sn, t);
+        int ident = c == 1.0 && sn == 0.0 && t[0] == 0.0 && t[1] == 0.0 && t[2] == 0.0;
+        if (ident) {
+            if (k->placed) cc_scene_free(&k->pscene), k->placed = 0, ch = 1;
+            continue;
+        }
+        if (k->placed && k->pc == c && k->ps == sn && !memcmp(k->pt, t, sizeof t)) continue;
+        if (k->placed) cc_scene_free(&k->pscene), k->placed = 0;
+        if (place_scene(&k->pscene, cc_link_raw_scene(k), c, sn, t)) {
+            cc_scene_free(&k->pscene);
+            rc = -1;
+        } else k->placed = 1, k->pc = c, k->ps = sn, memcpy(k->pt, t, sizeof t);
+        ch = 1;
+    }
+    if (ch) s->links_gen++;
+    return rc ? -1 : ch;
+}
+/* ---- end LINKF positioning ---- */

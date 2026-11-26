@@ -37,7 +37,12 @@
  *          session rev). B is a multiple of 4, so every block stays 4-byte aligned.
  * A reader draws link k at (its origin_mm - the open scene's origin_mm), computed in f64 (lib.rs:1499
  * `offset`): one scene origin for all. Without links, no trailer: the bytes are the single-model
- * BMSH exactly. */
+ * BMSH exactly.
+ * LINKF: version 2 when a link is placed (cc_link_placement not the identity) or has a colour;
+ * per link after its flags: f64 cos, f64 sin (the turn about Z), f64[3] its placed origin (host
+ * world mm: R origin_mm + t), i32 colour (-1 none, else 0..11), then its BMSH as read (its own
+ * coordinates). A reader draws a vertex p of link k at R p + (placed origin - the open scene's
+ * origin_mm). Version 1 otherwise, byte for byte as before: an old reader fails on version 2. */
 #ifndef CCORE_SESSION_LINKS_H
 #define CCORE_SESSION_LINKS_H
 #include <stddef.h>
@@ -78,6 +83,15 @@ struct cc_link {
     double rotation_deg;  /* the manual rotation about Z, degrees */
     int pinned;           /* 1: not moved by accident (default) */
     int colour;           /* -1: its own colours; else a palette index 0..11, flat */
+    /* where the file says it is (set when it became ready; cc_link_placement) */
+    int geo_map;          /* it has a map conversion (IfcMapConversion, a georeference) */
+    double geo_e, geo_n, geo_h, geo_rot; /* m, m, m, degrees */
+    char geo_crs[64];
+    double base_mm[3], survey_mm[3]; /* its base point, its survey point (its world mm) */
+    /* the placed scene cc_link_scene answers when the placement is not the identity */
+    int placed;
+    cc_scene pscene;
+    double pc, ps, pt[3]; /* the placement pscene was built with */
 };
 
 /* ---- LINKF (ADR 0079, DEVIATIONS 37): link a folder, conversions in turn, positioning ----
@@ -122,9 +136,18 @@ int cc_links_undo_step(cc_session *s, int undo);
 int cc_links_can_undo(const cc_session *s, int undo);
 /* A model edit drops the links' redo steps. */
 void cc_links_undo_clear_redo(cc_session *s);
-/* The link's placement: link scene coordinates -> host scene coordinates, as a rotation about Z
- * (cos, sin) then a translation (mm, from the host's scene origin). */
+/* The link's placement: a point of the link's world (mm) w goes to the host's world at
+ * R(c, sn) w + t: a rotation about Z, then a translation (mm). The origin rule first (links.h
+ * above; "file": both georeferenced (a map conversion, the same or an unnamed system): through the
+ * survey coordinates, R = map turn of the link - the host's; else none), then the manual rotation
+ * about the host's world Z axis and the offset: R_m (R_r w + t_r) + move. */
 void cc_link_placement(const cc_session *s, const cc_link *k, double *c, double *sn, double t[3]);
+/* The link's scene as read (its own world), whatever its placement: the /mesh trailer's. */
+const cc_scene *cc_link_raw_scene(const cc_link *k);
+/* Brings every ready link's placed scene (cc_link_scene) up to date with its placement and the
+ * host's georeference (the session calls it before each call and each /mesh). 1 when one changed
+ * (links_gen bumped). -1 out of memory (that link drawn unplaced). */
+int cc_links_sync_placement(cc_session *s);
 /* The session goes: a running conversion orphaned (link_cache.h), the undo steps freed. */
 void cc_links_session_free(cc_session *s);
 /* The cc_scene over a view file (session.c): rows in its own arena, meshes borrowed from `v`. */

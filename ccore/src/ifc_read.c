@@ -327,13 +327,14 @@ done:
 static double to_degrees(double x) { return x * 57.2957795130823208767981548141051703; }
 
 /* georef() with Georef::from_frame */
-static void georef(R *r, double scale, Arena *a, cc_ifc_georef *g, int *oom) {
+static void georef(R *r, double scale, Arena *a, cc_ifc_georef *g, double base_mm[3], int *oom) {
     memset(g, 0, sizeof *g);
     const cc_step_entity *b = first_of(r->f, "IFCBUILDING");
     uint64_t pl;
     Aff bf = b && cc_sv_as_ref(arg(b, 5), &pl) ? object_placement(r, pl, 0) : IDENT;
     double rot = to_degrees(cc_atan2(bf.x[1], bf.x[0]));
     g->rotation_deg = round_rs(rot * 1e6) / 1e6 + 0.0;
+    for (int k = 0; k < 3; k++) base_mm[k] = bf.t[k] * scale + 0.0; /* LINKF: the building's origin, world mm */
     double e = bf.t[0] * scale / 1000.0, n = bf.t[1] * scale / 1000.0;
     if (e >= 2480000.0 && e <= 2840000.0 && n >= 1070000.0 && n <= 1300000.0) {
         g->has_crs = 1;
@@ -791,7 +792,7 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     PROF("  ids");
     if (storey_levels(&r, scale, a, &out->storeys, &out->nstoreys)) goto oom;
     if (grid_axes(&r, scale, a, &out->grids, &out->ngrids)) goto oom;
-    georef(&r, scale, a, &out->georef, &oom);
+    georef(&r, scale, a, &out->georef, out->base_point_mm, &oom);
     warnings = r.warnings;
     memset(&r.warnings, 0, sizeof r.warnings);
     r_free(&r);

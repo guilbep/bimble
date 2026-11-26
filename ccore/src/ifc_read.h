@@ -62,6 +62,7 @@ typedef struct {
     cc_ifc_grid *grids; /* file order */
     size_t ngrids;
     cc_ifc_georef georef;
+    double base_point_mm[3]; /* LINKF: the origin of the IfcBuilding's placement, world mm (a link's base point) */
     cc_str schema; /* FILE_SCHEMA names joined by ", " ("IFC4", "IFC2X3") */
     size_t triangles; /* Scene::triangle_count: local meshes' triangles */
     /* Counts for reports (not in the golden text, no Rust twin): the products with a body
