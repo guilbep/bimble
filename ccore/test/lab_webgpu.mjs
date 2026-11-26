@@ -14,7 +14,8 @@
 //    rasterise 1-px lines and the depth bias of coplanar faces a little differently; no anti-
 //    aliasing in either); the count and the largest difference are printed for each. A moving
 //    frame (the budget) on WebGPU is not empty: at least 20 % of the still picture's drawn pixels
-//    (frames.mjs's rule). When no adapter runs here, part 2 prints "skipped: <reason>".
+//    (frames.mjs's rule). When no adapter runs here, part 2 prints "SKIP WebGPU parity: <reason>"
+//    (ci/run.sh adds it to the suite's line) and only part 1 counts.
 // Prints "N passed, M failed"; exits non-zero on a failure.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -155,7 +156,7 @@ try {
     adapterHere = /no adapter|no WebGPU/.test(r2.reason ?? "") ? null : r2;
     if (adapterHere) {
       check("a fallback (software) adapter is refused without ?gpuSoftware=1: WebGL2 draws", r2.using === "WebGL2" && /fallback/.test(r2.reason ?? ""), JSON.stringify(r2));
-    } else console.log(`skipped: WebGPU parity: no WebGPU adapter in Chromium here (${r2.reason}); the fallback above ran instead`);
+    } else console.log(`SKIP WebGPU parity: no WebGPU adapter in Chromium here (${r2.reason}); the fallback above ran instead`);
   } finally {
     await L.close();
   }

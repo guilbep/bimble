@@ -39,6 +39,11 @@
 // --no-wait: do not wait for the load to fall under 4 (with --force: the report is marked as forced).
 // --label NAME: the run's name in the report's history (one table row per label, kept from the
 // committed report: before and after each step of ticket 3D1).
+// --renderer webgl2|webgpu (GPU1, ADR 0083): webgpu opens the page with ?gpu=webgpu&gpuSoftware=1 in a
+// Chromium with a WebGPU adapter (Dawn's Vulkan on SwiftShader here), each frame finished by the
+// queue's onSubmittedWorkDone instead of a 1x1 readPixels, the pictures read from the renderer's
+// target; occlusion queries are WebGL2's only (not measured). The report goes to
+// out/frames/frames-webgpu.md unless --out. It fails when the page does not draw with WebGPU.
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -55,6 +60,9 @@ const opt = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : nu
 const flag = (n) => argv.includes(n);
 const FORCE = flag("--force");
 const LABEL = opt("--label") ?? "run";
+const RENDERER = opt("--renderer") ?? "webgl2"; // GPU1
+if (RENDERER !== "webgl2" && RENDERER !== "webgpu") throw new Error(`--renderer: webgl2 or webgpu, not ${RENDERER}`);
+const GPU = RENDERER === "webgpu";
 const BUILDS = (opt("--builds") ?? "wasm,native").split(",");
 const EXTRA = process.env.FRAMES_EXTRA_MODEL ? resolve(process.env.FRAMES_EXTRA_MODEL) : null;
 const MODELS = (opt("--models") ?? (EXTRA ? "large,heavy,local" : "large,heavy")).split(",");
@@ -62,7 +70,7 @@ const NFRAMES = Number(opt("--frames") ?? 120);
 const PIXELS = opt("--pixels") ? resolve(opt("--pixels")) : null;
 const COMPARE = opt("--compare") ? resolve(opt("--compare")) : null;
 const HEAVY = 700, HEAVY_TRIS = 1000, LARGE_N = 20000;
-const OUT = resolve(opt("--out") ?? (EXTRA ? join(CCORE, "out/frames/frames-local.md") : join(CCORE, "results/frames.md")));
+const OUT = resolve(opt("--out") ?? (GPU ? join(CCORE, "out/frames/frames-webgpu.md") : EXTRA ? join(CCORE, "out/frames/frames-local.md") : join(CCORE, "results/frames.md")));
 const RAW = join(CCORE, "out/frames");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
 const WASM = join(CCORE, "out/wasm/ccore.wasm");
@@ -254,7 +262,8 @@ async function startBrowser() {
   log(`memory available ${gb.toFixed(1)} GB; starting Chromium`);
   browser = start("chromium", CHROMIUM, ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--remote-debugging-port=0",
     `--user-data-dir=${join(tmp, "chromium")}`, "--no-first-run", "--no-default-browser-check", "--lang=en-US", "--window-size=1280,800",
-    "--js-flags=--expose-gc", "about:blank"], { env: { ...process.env, HOME } });
+    "--js-flags=--expose-gc", ...(GPU ? ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-vulkan=swiftshader", "--disable-vulkan-surface"] : []), // GPU1
+    "about:blank"], { env: { ...process.env, HOME } });
   const wsUrl = await waitFor("DevTools line", 60000, () => browser.out.match(/DevTools listening on (ws:\/\/\S+)/)?.[1]);
   cdp = await cdpConnect(wsUrl);
 }
@@ -269,20 +278,34 @@ async function openTab() {
   await S("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
   await S("Page.addScriptToEvaluateOnNewDocument", { source: INSTR });
 }
+// GPU1: under --renderer webgpu the page's expressions finish a frame on the GPU's queue and read the
+// renderer's pixels (window.__fr.F, .S, .N below), in async functions.
+const GPU_HELPERS = `window.__fr.F = async (d, m) => { const t0 = performance.now(); window.__bbGl.bench.frame(d, m); await window.__bbGpu.done(); return performance.now() - t0; };
+window.__fr.S = async (dy, dp) => { window.__bbGl.bench.snap(dy, dp); window.__bbGl.bench.snap(dy, dp); await window.__bbGpu.done(); return window.__bbGpu.pixels(); };
+window.__fr.N = async () => { const p = await window.__bbGpu.pixels(); let n = 0; for (let i = 0; i < p.rgba.length; i += 4) if (Math.abs(p.rgba[i] - 247) + Math.abs(p.rgba[i + 1] - 247) + Math.abs(p.rgba[i + 2] - 245) > 12) n++; return n; };`;
+const forGpu = (expr) => (expr === NONBG ? "window.__fr.N()" : expr.replace(/\(\(\) => \{/g, "(async () => {").replace(/\(window\.__bbGl\.bench\.snap\(/g, "(await window.__fr.S(")
+  .replace(/(?:window\.__bbGl\.bench|\bb)\.frame\(/g, "await window.__fr.F(").replace(/(?:window\.__bbGl\.bench|\bb)\.snap\(/g, "await window.__fr.S("));
 async function ev(expr) {
+  if (GPU) expr = forGpu(expr);
   const r = await S("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true });
   if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
   return r.result.value;
 }
 
 let BUILD = "wasm", MODEL = "large";
-const pageUrl = () => (BUILD === "wasm" ? `${ORIGIN}/?model=${siteName(MODEL)}` : `${ORIGIN}/?ccore=0&native=1&gl=1&port=${HOST_PORT}&token=${TOKEN}`);
+const pageUrl = () => (BUILD === "wasm" ? `${ORIGIN}/?model=${siteName(MODEL)}` : `${ORIGIN}/?ccore=0&native=1&gl=1&port=${HOST_PORT}&token=${TOKEN}`) + (GPU ? "&gpu=webgpu&gpuSoftware=1" : ""); // GPU1
 async function fresh() {
   if (BUILD === "native") await startHost(MODEL);
   await openTab();
   await S("Page.navigate", { url: pageUrl() });
   const ready = () => ev(`!!(document.querySelector('[data-bb-ready]') && window.__bbGl && window.__bbGl.firstFrameMs && (document.querySelector('.bb-app')?.getAttribute('data-bb-shell') || '').startsWith('model'))`);
   await waitFor("the page ready", 240000, ready, 50);
+  if (GPU) { // GPU1: the WebGPU renderer must be the one drawing
+    await waitFor("the renderer", 30000, () => ev("(window.__bbPerf?.snapshot().renderer.reason ?? '') !== 'starting…'"), 50);
+    const r = await ev("window.__bbPerf.snapshot().renderer");
+    if (r.using !== "WebGPU") throw new Error(`--renderer webgpu: ${r.using} draws (${r.reason})`);
+    await S("Runtime.evaluate", { expression: GPU_HELPERS }); // (not through ev: its rewriting is for the measures)
+  }
   await quiet(30000);
 }
 /** Waits until no frame was drawn for QUIET ms; returns the last draw's time. */
@@ -351,10 +374,10 @@ async function measure() {
       const c = b.snap(0, 0).rgba; let n = 0, any = 0; for (let k = 0; k < a.length; k += 4) { const d = Math.max(Math.abs(a[k] - c[k]), Math.abs(a[k + 1] - c[k + 1]), Math.abs(a[k + 2] - c[k + 2]));
       if (d > 40) n++; if (d > 0) any++; } return { changed: n, any, pixels: a.length / 4, cells: g.proxies.drawnCells, tris: g.proxies.drawnTris }; })()`);
   }
-  // 3D2 (step 3): occlusion queries on. WebGL2 answers a query only after the page's task ends, so each frame
+  // 3D2 (step 3): occlusion queries on (WebGL2's only: not under --renderer webgpu). WebGL2 answers a query only after the page's task ends, so each frame
   // here is its own animation frame: 3 still frames to settle (each asks, the next uses the answers), then 5
   // timed; an orbit likewise; the queries asked and batches left out; the picture against the one without.
-  {
+  if (!GPU) {
     const oc = await ev(`(async () => { const b = window.__bbGl.bench, g = window.__bbGl, ms = [], next = () => new Promise((r) => requestAnimationFrame(() => r()));
       g.occlusion = true; for (let i = 0; i < 3; i++) { b.frame(0, false); await next(); }
       for (let i = 0; i < 5; i++) { ms.push(b.frame(0, false)); await next(); } const r = { ms, tris: g.frameTris, draws: g.frameDraws, occ: g.occ };
@@ -503,7 +526,7 @@ function report(rows, history, cmp, forced, loads) {
   L.push("`ccore/out/frames/frames.json` (not committed).", "");
   if (forced) L.push("**Forced:** written with the 1-minute load over 4 (`--force`): the numbers are slower than on an idle machine.", "");
   L.push(`Machine: ${platform()} ${release()} ${arch()}, ${cpus().length} CPUs (${cpus()[0]?.model ?? "?"}), ${(totalmem() / 1073741824).toFixed(1)} GB. ` +
-    `Run ${new Date().toISOString().slice(0, 16)}Z, label \`${LABEL}\`, 1-minute load at each model's start: ${loads.join(", ")}.`, "");
+    `Run ${new Date().toISOString().slice(0, 16)}Z, label \`${LABEL}\`, renderer ${RENDERER}, 1-minute load at each model's start: ${loads.join(", ")}.`, "");
   L.push("Headless Chromium draws WebGL2 with **SwiftShader** (on the CPU, 1280×800): the numbers compare before and");
   L.push("after on this machine; a GPU draws the same frames many times faster. Method in the tool's header: open →");
   L.push("first frame from the navigation start; an orbit of " + NFRAMES + " frames over 360°, each drawn as a moving frame and");
