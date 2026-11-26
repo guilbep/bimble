@@ -108,9 +108,9 @@ int cc_host_fs_add_root(const char *dir) {
 
 void cc_host_fs_init(void) {
 #ifdef _WIN32
-    const char *h = getenv("USERPROFILE");
+    const char *h = cc_host_getenv("USERPROFILE");
 #else
-    const char *h = getenv("HOME");
+    const char *h = cc_host_getenv("HOME");
 #endif
     if (h && *h && home_root < 0 && !cc_host_fs_add_root(h)) home_root = nroots - 1;
 }
@@ -381,13 +381,13 @@ static int stage_dir_ready(void) {
     if (stage_dir[0]) return 0;
 #ifdef _WIN32
     const cc_platform *pf = cc_platform_native();
-    const char *t = getenv("TEMP");
+    const char *t = cc_host_getenv("TEMP");
     unsigned r = 0;
     if (pf->random(pf->ctx, &r, sizeof r)) r = (unsigned)(size_t)&r;
     int w = snprintf(stage_dir, sizeof stage_dir, "%s/bimble-ccore-drop-%08x", t && *t ? t : ".", r);
     if (w <= 0 || (size_t)w >= sizeof stage_dir || pf->make_dir(pf->ctx, stage_dir)) return stage_dir[0] = 0, -1;
 #else
-    const char *t = getenv("TMPDIR");
+    const char *t = cc_host_getenv("TMPDIR");
     int w = snprintf(stage_dir, sizeof stage_dir, "%s/bimble-ccore-drop-XXXXXX", t && *t ? t : "/tmp");
     if (w <= 0 || (size_t)w >= sizeof stage_dir || !mkdtemp(stage_dir)) return stage_dir[0] = 0, -1; /* 0700 */
 #endif

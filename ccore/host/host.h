@@ -48,9 +48,22 @@ const cc_platform *cc_platform_native(void);
 wchar_t *cc_win_wide(const char *s);
 char *cc_win_utf8(const wchar_t *w);
 FILE *cc_win_fopen(const char *path, const char *mode);
+/* FIXDOC: getenv() gives the ANSI code page's bytes ("C:\Users\J?r?me"), not UTF-8: the variable
+ * through _wgetenv and cc_win_utf8, kept for the process's life (the host never sets one). NULL
+ * when unset or not convertible. */
+const char *cc_win_getenv(const char *name);
+#define cc_host_getenv(name) cc_win_getenv(name)
+#else
+#define cc_host_getenv(name) getenv(name)
 #endif
+/* FIXDOC: the user's Bimble folder, Rust's settings.rs `path` without the file name: macOS
+ * $HOME/Library/Application Support/Bimble, Windows %APPDATA%\Bimble, else
+ * $XDG_CONFIG_HOME/bimble or $HOME/.config/bimble ('/' separators added). 1 when written to
+ * `buf`, 0 without the variables or when it does not fit (main.c). The settings file and the
+ * optional fonts (fonts.c: <this>/fonts) live there, one spelling on every system. */
+int cc_host_config_dir(char *buf, size_t n);
 /* D7, SIZE1 (fonts.c): names the folder of the PDF export's optional Roboto files to session `s`:
- * $BIMBLE_FONTS, else the repository's ccore/fonts, else <config dir>/bimble/fonts.
+ * $BIMBLE_FONTS, else the repository's ccore/fonts, else <the user's Bimble folder>/fonts.
  * `web` is not used (no font is shipped). */
 void cc_host_fonts(cc_session *s, const cc_static *web);
 #endif

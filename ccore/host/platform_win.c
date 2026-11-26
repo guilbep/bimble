@@ -34,15 +34,40 @@ wchar_t *cc_win_wide(const char *s) {
     return w;
 }
 
+/* WC_ERR_INVALID_CHARS (FIXDOC): an unpaired surrogate fails (NULL) instead of becoming U+FFFD,
+ * which would name another file. */
 char *cc_win_utf8(const wchar_t *w) {
-    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w, -1, NULL, 0, NULL, NULL);
     if (n <= 0) return NULL;
     char *s = malloc((size_t)n);
-    if (s && WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, NULL, NULL) != n) {
+    if (s && WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w, -1, s, n, NULL, NULL) != n) {
         free(s);
         return NULL;
     }
     return s;
+}
+
+#define WIN_ENV_MAX 32
+static struct {
+    char *name, *value;
+} win_env[WIN_ENV_MAX];
+
+const char *cc_win_getenv(const char *name) {
+    for (int i = 0; i < WIN_ENV_MAX && win_env[i].name; i++)
+        if (!strcmp(win_env[i].name, name)) return win_env[i].value;
+    wchar_t *wn = cc_win_wide(name);
+    const wchar_t *wv = wn ? _wgetenv(wn) : NULL;
+    char *v = wv ? cc_win_utf8(wv) : NULL;
+    free(wn);
+    for (int i = 0; i < WIN_ENV_MAX; i++)
+        if (!win_env[i].name) {
+            char *c = malloc(strlen(name) + 1);
+            if (!c) break;
+            strcpy(c, name);
+            win_env[i].name = c, win_env[i].value = v;
+            return v;
+        }
+    return v; /* the table is full: a new copy each call (never more than 32 names here) */
 }
 
 FILE *cc_win_fopen(const char *path, const char *mode) {

@@ -217,28 +217,31 @@ typedef struct {
 } Serve;
 
 /* ---- FS1: the settings folder (settings.rs `path`) and the dialog's roots ---- */
-static const char *settings_dir(const Serve *sv, char *buf, size_t n) {
-    if (sv->config_dir && *sv->config_dir) return sv->config_dir;
-    const char *e = getenv("BIMBLE_CONFIG_DIR");
-    if (e && *e) return e;
-    if (!sv->default_config) return NULL;
-    const char *home = getenv("HOME");
+int cc_host_config_dir(char *buf, size_t n) {
     int w;
 #if defined(__APPLE__)
-    if (!home || !*home) return NULL;
+    const char *home = cc_host_getenv("HOME");
+    if (!home || !*home) return 0;
     w = snprintf(buf, n, "%s/Library/Application Support/Bimble", home);
 #elif defined(_WIN32)
-    const char *ad = getenv("APPDATA");
-    if (!ad || !*ad) return NULL;
-    (void)home;
+    const char *ad = cc_host_getenv("APPDATA");
+    if (!ad || !*ad) return 0;
     w = snprintf(buf, n, "%s/Bimble", ad);
 #else
-    const char *x = getenv("XDG_CONFIG_HOME");
+    const char *x = cc_host_getenv("XDG_CONFIG_HOME"), *home = cc_host_getenv("HOME");
     if (x && *x) w = snprintf(buf, n, "%s/bimble", x);
     else if (home && *home) w = snprintf(buf, n, "%s/.config/bimble", home);
-    else return NULL;
+    else return 0;
 #endif
-    return w > 0 && (size_t)w < n ? buf : NULL;
+    return w > 0 && (size_t)w < n;
+}
+
+static const char *settings_dir(const Serve *sv, char *buf, size_t n) {
+    if (sv->config_dir && *sv->config_dir) return sv->config_dir;
+    const char *e = cc_host_getenv("BIMBLE_CONFIG_DIR");
+    if (e && *e) return e;
+    if (!sv->default_config) return NULL;
+    return cc_host_config_dir(buf, n) ? buf : NULL;
 }
 
 static void files_setup(cc_session *ses, const Serve *sv) {
@@ -314,7 +317,7 @@ static int serve(unsigned port, Serve *sv) {
     cc_host_fonts(ses, sv->web); /* D7: the PDF export's Roboto files (fonts.c) */
     files_setup(ses, sv);         /* FS1 */
     static char token[33], epoch[33];
-    const char *t = getenv("BIMBLE_TOKEN");
+    const char *t = cc_host_getenv("BIMBLE_TOKEN");
     if (!t || !*t) {
         random_hex(token);
         t = token;
@@ -337,7 +340,7 @@ static int serve(unsigned port, Serve *sv) {
     cfg.origins[cfg.n_origins++] = "http://localhost:5173";
     cfg.origins[cfg.n_origins++] = "http://127.0.0.1:5173";
     static char extra[1024];
-    const char *e = getenv("BIMBLE_ORIGINS");
+    const char *e = cc_host_getenv("BIMBLE_ORIGINS");
     if (e && strlen(e) < sizeof extra) {
         strcpy(extra, e);
         for (char *tok = strtok(extra, ","); tok && cfg.n_origins < CC_HOST_MAX_ORIGINS; tok = strtok(NULL, ","))
@@ -446,7 +449,7 @@ int main(int argc, char **argv) {
     /* Flags first, then the positional port and model. */
     Serve sv;
     memset(&sv, 0, sizeof sv);
-    const char *session = getenv("CCORE_SESSION");
+    const char *session = cc_host_getenv("CCORE_SESSION");
     sv.want_session = session && *session;
     sv.session = sv.want_session ? session : NULL;
     while (argc > 1 && !strncmp(argv[1], "--", 2)) {
@@ -465,7 +468,7 @@ int main(int argc, char **argv) {
         }
         argv[1] = argv[0], argv++, argc--;
     }
-    const char *ps = argc > 1 ? argv[1] : getenv("BIMBLE_SERVE");
+    const char *ps = argc > 1 ? argv[1] : cc_host_getenv("BIMBLE_SERVE");
     unsigned port;
     if (!ps) {
         fprintf(stderr, "usage: bimble-ccore <port> [model] (or BIMBLE_SERVE=<port>, CCORE_MODEL=<model>)\n"
@@ -476,6 +479,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, "bimble-ccore: \"%s\" is not a port\n", ps);
         return 2;
     }
-    sv.model = argc > 2 ? argv[2] : getenv("CCORE_MODEL");
+    sv.model = argc > 2 ? argv[2] : cc_host_getenv("CCORE_MODEL");
     return serve(port, &sv);
 }
