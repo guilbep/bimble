@@ -113,7 +113,8 @@ implementation.
 7. **HLOD proxies built in the core, in steps, served on their own** (`ccore/src/hlod.{h,c}`, a port
    of `hlod.rs` with Rust's options: leaves of 65,536 triangles, a 64-cell grid per side, proxies of
    at most 65,536 triangles kept under a quarter of what they stand for, depth 16; `GET
-   /mesh?proxies=N`, wasm `host_proxies`, BPRX bytes). The page asks after the mesh's first frame,
+   /mesh?proxies=N`, wasm `host_proxies`, BPRX bytes; `N` = 0: the octree alone, asked before the
+   first draw lists so they are cut by leaf once). The page asks the proxies after the mesh's first frame,
    one step a frame of about 25 ms (20,000 triangles first, then as many as fit, at most twice the
    last), so opening is not slower and no step blocks the page long (ADR 0074).
    **Alternative:** a section of BMSH version 3 (opening pays the whole build before the first
@@ -207,11 +208,11 @@ Done by ticket 3D2 (amendment 2 above): HLOD proxies, the box tree (in the core)
   occlusion queries would help there most (Rust's ceiling: 20-97 % hidden close up) but cost more
   than they save while moving. A GPU draws it in milliseconds.
 - **The draw lists' index upload**: on the local imported model the face index buffer (23.6 MB)
-  takes 0.3-0.6 s to upload under SwiftShader, after every visibility change and once when the
-  proxies arrive (the batches are cut again by leaf). The boxes are on screen meanwhile on open, but
-  a hide or isolate on that model answers in that time, over ADR 0074's 200 ms. Leaves known before
-  the first lists (the core's octree split is cheap: `cc_hlod_start`) and lists uploaded in slices
-  would remove both.
+  takes 0.3-0.6 s to upload under SwiftShader, on open (the boxes are on screen meanwhile) and after
+  every visibility change: a hide or isolate on that model answers in that time, over ADR 0074's
+  200 ms. Lists uploaded in slices (or kept whole, the hidden elements skipped by their ranges)
+  would remove it. (The proxies' arrival no longer cuts the lists again: the page asks the octree
+  alone first, `GET /mesh?proxies=0`.)
 - **The native pick → frame** (about 200 ms on the 20,026-element model): the click's selection
   opens the properties panel, which shrinks the canvas (984 × 547 → 984 × 356): the resized canvas
   is drawn whole (a still frame, ~150 ms under SwiftShader) after the host's answer. The page's ray

@@ -1337,7 +1337,7 @@ Rust's default, so no golden changes. Test: `test/dead1_test.c`.
 - **Ticket 3D2 (ADR 0078, amendment 2): the rest of Rust's 3D layer.**
   - **HLOD proxies** (`src/hlod.h`, a port of `hlod.rs` with Rust's options): built in steps (Rust:
     at once, each depth's cells in parallel) and served on their own as BPRX (`GET
-    /mesh?proxies=N`, wasm `host_proxies`; Rust had no wire format). A vertex counts once per
+    /mesh?proxies=N`, wasm `host_proxies`; Rust had no wire format; `N` = 0: the octree alone). A vertex counts once per
     element in its cluster's mean (Rust: once per chunk of 65,536 triangles), so the steps' chunks
     do not change the result; the clusters are sorted arrays merged when they double (Rust: hash
     maps), the final grid the same. The page cuts the tree at 3 px while moving (Rust's
