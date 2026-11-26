@@ -1355,7 +1355,7 @@ static void sibling(const cc_session *s, const char *path, const char *ext, char
         snprintf(to, cap, "%s", path);
         return;
     }
-    const char *slash = strrchr(s->path, '/');
+    const char *slash = cc_path_last_sep(s->path);
     const char *name = slash ? slash + 1 : s->path;
     const char *dot = strrchr(name, '.');
     size_t dir = (size_t)(name - s->path), stem = dot && dot != name ? (size_t)(dot - name) : strlen(name);
@@ -1371,7 +1371,7 @@ static void export_ifc(cc_session *s, cc_ifc_schema schema, const char *path) {
         cc_log(s->pf, "bimble-ccore: %s: export would overwrite the open file", to);
         return;
     }
-    const char *file = strrchr(to, '/'); /* FILE_NAME holds the file name */
+    const char *file = cc_path_last_sep(to); /* FILE_NAME holds the file name */
     file = file ? file + 1 : to;
     char stamp[32];
     cc_iso_utc(s->pf->unix_s(s->pf->ctx), stamp);

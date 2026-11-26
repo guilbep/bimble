@@ -109,7 +109,7 @@ int cc_paper_sheets_pdf(struct cc_session *s, const cc_scene *sc, const char *bo
 /* Path::file_stem of the session's path: the file name without its last extension (a name that
  * starts with its only dot keeps it). */
 static cc_str file_stem(const char *path) {
-    const char *f = strrchr(path, '/');
+    const char *f = cc_path_last_sep(path);
     f = f ? f + 1 : path;
     size_t n = strlen(f);
     const char *dot = strrchr(f, '.');

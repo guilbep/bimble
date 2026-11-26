@@ -701,7 +701,18 @@ int cc_host_run(const cc_host_config *config) {
     cc_host_publish_change(ch.p ? ch.p : "null", ch.len);
     buf_free(&ch);
 
+#ifdef _WIN32
+    /* WIN2: one write. UCRT's unbuffered stderr wrote fprintf's literal prefix and the rest
+     * apart: a reader saw "bimble-ccore: listening" without the port (host_test, run 45689424050). */
+    {
+        char line[256];
+        int ln = snprintf(line, sizeof line, "bimble-ccore: listening %u token %s\n", (unsigned)bound_port, cfg->token);
+        if (ln > 0 && (size_t)ln < sizeof line) fwrite(line, 1, (size_t)ln, stderr);
+        else fprintf(stderr, "bimble-ccore: listening %u token %s\n", (unsigned)bound_port, cfg->token);
+    }
+#else
     fprintf(stderr, "bimble-ccore: listening %u token %s\n", (unsigned)bound_port, cfg->token);
+#endif
     fflush(stderr);
     if (cfg->on_listen) cfg->on_listen(bound_port, cfg->on_listen_ctx);
 

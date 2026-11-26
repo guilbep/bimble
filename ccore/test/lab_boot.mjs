@@ -97,7 +97,11 @@ async function main() {
   });
   await waitFor("host 'listening'", 5000, () => host.out.includes("listening") || (host.exitCode !== null && Promise.reject(new Error(host.out))));
 
-  const vite = start("vite", "npx", ["vite", "--port", String(VITE), "--strictPort"], { cwd: UI });
+  // WIN2: npx is npx.cmd on Windows, which spawn runs only through a shell (run 45689424050:
+  // "spawn npx ENOENT"): there Vite's own script under this node.
+  const vite = process.platform === "win32"
+    ? start("vite", process.execPath, [join(UI, "node_modules", "vite", "bin", "vite.js"), "--port", String(VITE), "--strictPort"], { cwd: UI })
+    : start("vite", "npx", ["vite", "--port", String(VITE), "--strictPort"], { cwd: UI });
   await waitFor(`Vite on ${VITE}`, 30000, async () => {
     if (vite.exitCode !== null) throw new Error(vite.out);
     return (await fetch(`http://localhost:${VITE}/`)).ok;

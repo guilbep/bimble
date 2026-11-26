@@ -90,7 +90,7 @@ static int ends_with_ci(const char *s, const char *suffix) {
 /* lib.rs:503-521 editable_copy_path: "<stem>.bimble", "<stem> (imported).bimble",
  * "<stem> (imported 2).bimble"… next to the IFC, the first that does not exist. */
 static int editable_copy_path(const cc_session *s, const char *ifc, char *out, size_t cap) {
-    const char *slash = strrchr(ifc, '/');
+    const char *slash = cc_path_last_sep(ifc);
     size_t dir = slash ? (size_t)(slash - ifc + 1) : 0;
     const char *name = ifc + dir;
     const char *dot = strrchr(name, '.');
@@ -118,7 +118,7 @@ static void persist_drop_cmds(cc_session *s);
 /* s->path := path (it fits: the callers checked), with the file name and the schema. */
 static void set_path(cc_session *s, const char *path) {
     if (s->path != path) memmove(s->path, path, strlen(path) + 1);
-    const char *slash = strrchr(s->path, '/');
+    const char *slash = cc_path_last_sep(s->path);
     s->file = slash ? slash + 1 : s->path;
     s->schema_bimble = ends_with(s->file, ".bimble") && strlen(s->file) > 7; /* calls.rs:244 */
 }
@@ -205,7 +205,7 @@ static int open_impl(cc_session *s, const char *path, const char *model_text, si
             rc = cc_ifc_import(&m, &rep, text, n, err);
             cc_ifc_report_free(&rep);
             if (rc == 0) { /* lib.rs:529-536: the project takes the file stem, then validate */
-                const char *name = strrchr(path, '/');
+                const char *name = cc_path_last_sep(path);
                 name = name ? name + 1 : path;
                 const char *dot = strrchr(name, '.');
                 size_t k = dot && dot != name ? (size_t)(dot - name) : strlen(name);
@@ -333,7 +333,7 @@ int cc_link_load(cc_session *s, const char *path, cc_link *k, cc_error *err) {
         return -1;
     }
     strcpy(l.path, path);
-    const char *slash = strrchr(l.path, '/');
+    const char *slash = cc_path_last_sep(l.path);
     l.name = slash ? slash + 1 : l.path;
     l.visible = 1;
     l.load_ms = s->pf->now_ms(s->pf->ctx) - t0;
