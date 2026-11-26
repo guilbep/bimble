@@ -129,6 +129,18 @@ request path is matched against the list, never joined to a file path. The calls
 `/mesh` keep the token; the Host and Origin checks hold for every request, and the host's own
 origin is allowed beside the others. The old form (`bimble-ccore <port> [model]`) serves no files.
 
+The calls that write a file (the token is their only gate; `host/fs.h` has the list with the
+code): at a path the caller gives, `action save_as`, `export_ifc4`, `export_ifc2x3` and
+`share_for_viewing` with `{path}`, and `query sheet_pdf`, `view_pdf`, `sheets_pdf` with `{path}`;
+next to the open model, `action save`, the exports and `share_for_viewing` without a path
+(`<stem>.ifc`, `<stem>.bimbleview`; refused for a new model, never over the open file), `action
+commit`, `branch_create`, `branch_switch` and `merge` (the folder `<model>.bimble-history/`, and the
+model file on a switch or merge), and with `--session` the session file `<model>.ccore-session`
+(a file holding changes not saved that the host cannot restore is renamed
+`<session>.orphan-<time>`, never overwritten: `query state` `session_set_aside`); in the host's
+own folders, `POST /stage` and the settings (`BIMBLE_CONFIG_DIR`). `link_model`, `link_pdf`,
+`link_dxf` and `manage_links {op: "locate", path}` only read the path given.
+
 `ccore/VERSION` is the archive's version (`--version`); the IFC writer's `CC_IFC_VERSION` and the
 `version` of `query state` stay as they are (the goldens hold them). GitHub (`ccore.yml`): job
 `ccore-release` builds and checks the archives on Ubuntu 22.04 (glibc 2.35), x86_64 and aarch64,

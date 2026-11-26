@@ -31,7 +31,22 @@
  *     folders always listed.
  * The calls need the session token like every call (server.c), /stage too. The actions that open or write a
  * file (open, import_ifc, link_*, save_as, export_*) take the picked path as before: the token
- * is their gate, not this rule (the tests, the MCP server and scripts give them any path). */
+ * is their gate, not this rule (the tests, the MCP server and scripts give them any path).
+ * EVERY CALL THAT WRITES A FILE (FIXSES; none checks this rule, the token is the gate):
+ *   at a path the caller gives:
+ *     action save_as {path}; action export_ifc4, export_ifc2x3, share_for_viewing {path};
+ *     query sheet_pdf, view_pdf, sheets_pdf {path} (a PDF; without path the bytes are answered);
+ *   next to the open model (its folder, a name made from it):
+ *     action save (the model file); export_ifc4, export_ifc2x3 without path ("<stem>.ifc"),
+ *     share_for_viewing without path ("<stem>.bimbleview"); refused for a new model, never over
+ *     the open file (session/calls.c); action commit, branch_create, branch_switch, merge (the
+ *     history folder "<model>.bimble-history/", and the model file itself on switch and merge:
+ *     session/versions.c); the session file with --session ("<model>.ccore-session", its side
+ *     files ".model-a"/".model-b", a set-aside "<session>.orphan-<time>": session/session.c);
+ *   in the host's own folders: POST /stage (below), the settings and recent files
+ *     (BIMBLE_CONFIG_DIR or the user's config folder: session/settings_file.c, set_settings).
+ *   The action link_model, link_pdf, link_dxf and manage_links {op: "locate", path} only read
+ *   the file at the path given; the links are written into the model by the next save. */
 #ifndef CCORE_HOST_FS_H
 #define CCORE_HOST_FS_H
 #include <stddef.h>
