@@ -155,6 +155,52 @@ static void str_or_null(JsonW *w, cc_str t) {
     else jw_null(w);
 }
 
+/* The read-only element detail (lib.rs:4508 link_properties, :4570 properties): query element's
+ * shape plus family, read_only, triangles and volume_m3; "link" only for a linked model. */
+static int ro_element_json(const cc_scene *sc, size_t i, cc_str cls, cc_str nm, cc_str storey, cc_str material,
+                           const char t[22], const char *link, Buf *out) {
+    const cc_scene_element *e = &sc->elements[i];
+    const cc_mesh *lm = cc_scene_local_mesh(sc, i);
+    JsonW w;
+    jw_init(&w, out, 0);
+    jw_obj_begin(&w); /* sorted keys */
+    jw_key(&w, "class"), jw_str_n(&w, cls.p ? cls.p : "", cls.n);
+    jw_key(&w, "family"), jw_str(&w, FAMILY[e->category < CC_CAT_COUNT ? e->category : CC_CAT_COUNT - 1]);
+    jw_key(&w, "generator"), jw_str(&w, "");
+    jw_key(&w, "generator_params"), jw_obj_begin(&w), jw_obj_end(&w);
+    jw_key(&w, "id"), jw_str_n(&w, t, 22);
+    if (link) jw_key(&w, "link"), jw_str(&w, link);
+    jw_key(&w, "material"), jw_str(&w, "");
+    jw_key(&w, "material_name"), str_or_null(&w, material);
+    jw_key(&w, "name"), jw_str_n(&w, nm.p ? nm.p : "", nm.n);
+    jw_key(&w, "openings"), jw_u64(&w, 0);
+    jw_key(&w, "placement"), jw_obj_begin(&w);
+    static const double O[3] = {0, 0, 0}, X[3] = {1, 0, 0}, Z[3] = {0, 0, 1};
+    jw_key(&w, "origin"), jw_arr_begin(&w);
+    for (int j = 0; j < 3; j++) jw_f64(&w, O[j]);
+    jw_arr_end(&w);
+    jw_key(&w, "x_axis"), jw_arr_begin(&w);
+    for (int j = 0; j < 3; j++) jw_f64(&w, X[j]);
+    jw_arr_end(&w);
+    jw_key(&w, "z_axis"), jw_arr_begin(&w);
+    for (int j = 0; j < 3; j++) jw_f64(&w, Z[j]);
+    jw_arr_end(&w);
+    jw_obj_end(&w);
+    jw_key(&w, "properties"), jw_obj_begin(&w), jw_obj_end(&w);
+    jw_key(&w, "read_only"), jw_bool(&w, 1);
+    jw_key(&w, "storey"), jw_str(&w, "");
+    jw_key(&w, "storey_name"), str_or_null(&w, storey);
+    if (!link) jw_key(&w, "triangles"), jw_u64(&w, lm ? lm->ni / 3 : 0); /* lib.rs:4590 "Triangles" */
+    jw_key(&w, "volume_m3"), jw_f64(&w, volume_mm3(sc, i) / 1e9);
+    jw_obj_end(&w);
+    if (jw_finish(&w) != JW_OK || out->oom) {
+        buf_clear(out);
+        buf_puts(out, "out of memory");
+        return -1;
+    }
+    return 0;
+}
+
 int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char *id, size_t idn, Buf *out) {
     int li = cc_links_find(s, name, nn);
     if (li < 0) {
@@ -186,37 +232,185 @@ int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char 
     }
     char t[22];
     cc_link_id(k, (size_t)i, t);
+    return ro_element_json(sc, (size_t)i, cls, nm, storey, material, t, k->name, out);
+}
+
+int cc_scene_element_json(cc_session *s, const char *id, size_t idn, Buf *out) {
+    if (s->open || (s->view != CC_VIEW_IFC && s->view != CC_VIEW_FILE)) {
+        buf_puts(out, s->open ? "scene_element: the file is editable: query element" : "no model open");
+        return -1;
+    }
+    const cc_scene *sc = s->view == CC_VIEW_IFC ? &s->ifc->scene : &s->vscene;
+    for (size_t i = 0; idn == 22 && i < sc->nelements; i++) {
+        const cc_scene_element *e = &sc->elements[i];
+        if (!e->id.c[0] || memcmp(e->id.c, id, 22)) continue;
+        cc_str cls = e->class_name, nm = {0}, storey = {0}, material = {0};
+        if (s->view == CC_VIEW_IFC) {
+            const cc_ifc_info *f = &s->ifc->info[e->model_index];
+            cls = f->class_name, nm = f->name, storey = f->storey, material = f->material;
+        } else {
+            const cc_view_element *f = &s->vf->elements[e->model_index];
+            cls = f->class_name, nm = f->name, storey = f->storey, material = f->material;
+        }
+        return ro_element_json(sc, i, cls, nm, storey, material, e->id.c, NULL, out);
+    }
+    buf_puts(out, "no element with this id");
+    return -1;
+}
+
+/* ---- FIXUI: the Navigator's object tree of a read-only scene (links.h) ---- */
+
+typedef struct {
+    cc_str storey, cls, name;
+    const char *id; /* 22 chars, or NULL: no valid GlobalId */
+    size_t at;      /* scene order */
+} ro_row;
+
+static int str_cmp(cc_str a, cc_str b) {
+    size_t n = a.n < b.n ? a.n : b.n;
+    int c = n ? memcmp(a.p, b.p, n) : 0;
+    return c ? c : (a.n > b.n) - (a.n < b.n);
+}
+static int str_eq(cc_str a, const char *p, size_t n) { return a.n == n && (!n || !memcmp(a.p, p, n)); }
+
+static int row_cmp(const void *x, const void *y) {
+    const ro_row *a = x, *b = y;
+    int c = str_cmp(a->storey, b->storey);
+    if (!c) c = str_cmp(a->cls, b->cls);
+    return c ? c : (a->at > b->at) - (a->at < b->at);
+}
+
+/* The read-only scene's rows, sorted by (storey, class, scene order). NULL: no read-only scene or
+ * out of memory (`*oom`). */
+static ro_row *ro_rows(cc_session *s, size_t *n, int *oom) {
+    *n = 0, *oom = 0;
+    if (s->open || (s->view != CC_VIEW_IFC && s->view != CC_VIEW_FILE)) return NULL;
+    const cc_scene *sc = s->view == CC_VIEW_IFC ? &s->ifc->scene : &s->vscene;
+    ro_row *r = malloc((sc->nelements ? sc->nelements : 1) * sizeof *r);
+    if (!r) return *oom = 1, NULL;
+    for (size_t i = 0; i < sc->nelements; i++) {
+        const cc_scene_element *e = &sc->elements[i];
+        ro_row *w = &r[i];
+        if (s->view == CC_VIEW_IFC) {
+            const cc_ifc_info *f = &s->ifc->info[e->model_index];
+            w->storey = f->storey, w->cls = f->class_name, w->name = f->name;
+        } else {
+            const cc_view_element *f = &s->vf->elements[e->model_index];
+            w->storey = f->storey, w->cls = f->class_name, w->name = f->name;
+        }
+        if (!w->cls.n) w->cls = e->class_name;
+        w->id = e->id.c[0] ? e->id.c : NULL;
+        w->at = i;
+    }
+    *n = sc->nelements;
+    qsort(r, *n, sizeof *r, row_cmp);
+    return r;
+}
+
+/* A storey group's rank: its place among the IFC's storeys (lowest first), else after them. */
+static size_t storey_rank(const cc_session *s, cc_str name) {
+    if (s->view == CC_VIEW_IFC && s->ifc->nstoreys <= 4096) /* a bound: groups x storeys */
+        for (size_t k = 0; k < s->ifc->nstoreys; k++)
+            if (!str_cmp(s->ifc->storeys[k].name, name)) return k;
+    return (size_t)-1;
+}
+
+typedef struct {
+    size_t from, to, rank;
+} ro_group;
+
+static int group_cmp(const void *x, const void *y) {
+    const ro_group *a = x, *b = y;
+    if (a->rank != b->rank) return a->rank < b->rank ? -1 : 1;
+    return (a->from > b->from) - (a->from < b->from);
+}
+
+int cc_scene_tree_json(cc_session *s, Buf *out) {
+    size_t n;
+    int oom;
+    ro_row *r = ro_rows(s, &n, &oom);
+    if (!r && !oom && !s->open) { /* no model: an empty tree, as `sheets` answers [] (calls.c EMPTY_NO_MODEL) */
+        buf_puts(out, "{\"storeys\":[],\"total\":0}");
+        return 0;
+    }
+    if (!r) {
+        buf_puts(out, oom ? "out of memory" : "scene_tree: the file is editable: query storeys");
+        return -1;
+    }
+    size_t ng = 0;
+    for (size_t i = 0; i < n; i++) ng += !i || str_cmp(r[i].storey, r[i - 1].storey);
+    ro_group *g = malloc((ng ? ng : 1) * sizeof *g);
+    if (!g) {
+        free(r);
+        buf_puts(out, "out of memory");
+        return -1;
+    }
+    ng = 0;
+    for (size_t i = 0; i < n; i++)
+        if (!i || str_cmp(r[i].storey, r[i - 1].storey)) {
+            if (ng) g[ng - 1].to = i;
+            g[ng].from = i, g[ng].rank = storey_rank(s, r[i].storey), ng++;
+        }
+    if (ng) g[ng - 1].to = n;
+    qsort(g, ng, sizeof *g, group_cmp);
     JsonW w;
     jw_init(&w, out, 0);
-    jw_obj_begin(&w); /* sorted keys */
-    jw_key(&w, "class"), jw_str_n(&w, cls.p ? cls.p : "", cls.n);
-    jw_key(&w, "family"), jw_str(&w, FAMILY[e->category < CC_CAT_COUNT ? e->category : CC_CAT_COUNT - 1]);
-    jw_key(&w, "generator"), jw_str(&w, "");
-    jw_key(&w, "generator_params"), jw_obj_begin(&w), jw_obj_end(&w);
-    jw_key(&w, "id"), jw_str_n(&w, t, 22);
-    jw_key(&w, "link"), jw_str(&w, k->name);
-    jw_key(&w, "material"), jw_str(&w, "");
-    jw_key(&w, "material_name"), str_or_null(&w, material);
-    jw_key(&w, "name"), jw_str_n(&w, nm.p ? nm.p : "", nm.n);
-    jw_key(&w, "openings"), jw_u64(&w, 0);
-    jw_key(&w, "placement"), jw_obj_begin(&w);
-    static const double O[3] = {0, 0, 0}, X[3] = {1, 0, 0}, Z[3] = {0, 0, 1};
-    jw_key(&w, "origin"), jw_arr_begin(&w);
-    for (int j = 0; j < 3; j++) jw_f64(&w, O[j]);
+    jw_obj_begin(&w);
+    jw_key(&w, "storeys"), jw_arr_begin(&w);
+    for (size_t k = 0; k < ng; k++) {
+        jw_obj_begin(&w);
+        jw_key(&w, "classes"), jw_arr_begin(&w);
+        for (size_t i = g[k].from; i < g[k].to;) {
+            size_t j = i;
+            while (j < g[k].to && !str_cmp(r[j].cls, r[i].cls)) j++;
+            jw_obj_begin(&w);
+            jw_key(&w, "class"), jw_str_n(&w, r[i].cls.p ? r[i].cls.p : "", r[i].cls.n);
+            jw_key(&w, "count"), jw_u64(&w, j - i);
+            jw_obj_end(&w);
+            i = j;
+        }
+        jw_arr_end(&w);
+        jw_key(&w, "count"), jw_u64(&w, g[k].to - g[k].from);
+        cc_str nm = r[g[k].from].storey;
+        jw_key(&w, "name"), jw_str_n(&w, nm.p ? nm.p : "", nm.n);
+        jw_obj_end(&w);
+    }
     jw_arr_end(&w);
-    jw_key(&w, "x_axis"), jw_arr_begin(&w);
-    for (int j = 0; j < 3; j++) jw_f64(&w, X[j]);
-    jw_arr_end(&w);
-    jw_key(&w, "z_axis"), jw_arr_begin(&w);
-    for (int j = 0; j < 3; j++) jw_f64(&w, Z[j]);
-    jw_arr_end(&w);
+    jw_key(&w, "total"), jw_u64(&w, n);
     jw_obj_end(&w);
-    jw_key(&w, "properties"), jw_obj_begin(&w), jw_obj_end(&w);
-    jw_key(&w, "read_only"), jw_bool(&w, 1);
-    jw_key(&w, "storey"), jw_str(&w, "");
-    jw_key(&w, "storey_name"), str_or_null(&w, storey);
-    jw_key(&w, "volume_m3"), jw_f64(&w, volume_mm3(sc, (size_t)i) / 1e9);
-    jw_obj_end(&w);
+    free(g), free(r);
+    if (jw_finish(&w) != JW_OK || out->oom) {
+        buf_clear(out);
+        buf_puts(out, "out of memory");
+        return -1;
+    }
+    return 0;
+}
+
+int cc_scene_elements_json(cc_session *s, const char *storey, size_t sn, const char *cls, size_t cn, size_t limit,
+                           Buf *out) {
+    size_t n;
+    int oom;
+    ro_row *r = ro_rows(s, &n, &oom);
+    if (!r) {
+        buf_puts(out, oom ? "out of memory" : s->open ? "scene_elements: the file is editable: query elements" : "no model open");
+        return -1;
+    }
+    JsonW w;
+    jw_init(&w, out, 0);
+    jw_arr_begin(&w);
+    size_t k = 0;
+    for (size_t i = 0; i < n && k < limit; i++) {
+        if (!r[i].id || !str_eq(r[i].storey, storey, sn) || (cls && !str_eq(r[i].cls, cls, cn))) continue;
+        jw_obj_begin(&w);
+        jw_key(&w, "class"), jw_str_n(&w, r[i].cls.p ? r[i].cls.p : "", r[i].cls.n);
+        jw_key(&w, "id"), jw_str_n(&w, r[i].id, 22);
+        jw_key(&w, "name"), jw_str_n(&w, r[i].name.p ? r[i].name.p : "", r[i].name.n);
+        jw_obj_end(&w);
+        k++;
+    }
+    jw_arr_end(&w);
+    free(r);
     if (jw_finish(&w) != JW_OK || out->oom) {
         buf_clear(out);
         buf_puts(out, "out of memory");

@@ -332,8 +332,10 @@ async function main() {
   check("no uncaught page error", exceptions.length === 0, exceptions.join(" | "));
   check("no console error or warning", errors.length === 0, errors.map((m) => m.text).join(" | "));
   const badResp = failedResp.filter((r) => !/^404 http:\/\/localhost:\d+\/favicon\.ico$/.test(r) &&
-    !new RegExp(`^400 http://127\\.0\\.0\\.1:${PORT}/(verb/material_remove|query/(storeys|materials|project|element|elements|materials_full))\\?`).test(r));
-  check("no failed response but the refusal asked for and the model queries of a read-only scene", badResp.length === 0, badResp.join(" | "));
+    // FIXUI: only the refusal the test asks for; a read-only scene's model queries are no longer
+    // asked (FAKE1) and its elements answer through scene_element, so a 400 there is a regression.
+    !new RegExp(`^400 http://127\\.0\\.0\\.1:${PORT}/verb/material_remove\\?`).test(r));
+  check("no failed response but the refusal asked for", badResp.length === 0, badResp.join(" | "));
   cdp.close();
 }
 

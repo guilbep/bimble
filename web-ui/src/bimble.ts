@@ -643,8 +643,12 @@ export function element(id: string): ElementDetail {
   try {
     // A linked element selected (C core, links.h): its read-only detail from its link.
     const lk = state.value.linked;
-    const args = lk && lk.id === id ? { id, link: lk.link } : { id };
-    return JSON.parse(wasmOrThrow().query("element", JSON.stringify(args))) as ElementDetail;
+    if (lk && lk.id === id) return JSON.parse(wasmOrThrow().query("element", JSON.stringify({ id, link: lk.link }))) as ElementDetail;
+    // FIXUI: a file open as it is (an IFC, a .bimbleview): `element` refuses it as Rust's does; the
+    // scene's rows (class, name, GlobalId, storey, material, family, triangles, volume) come from
+    // `scene_element` (ccore/session/links.h), as Rust's viewer reads them from its scene (lib.rs:4570).
+    const name = state.value.file !== null && state.value.editable === false ? "scene_element" : "element";
+    return JSON.parse(wasmOrThrow().query(name, JSON.stringify({ id }))) as ElementDetail;
   } catch (e) {
     throw new Error(message(e));
   }
@@ -1326,6 +1330,14 @@ export const links = () => tryQuery<Link[]>("links", []);
 // ---- Linked models (ticket B5, C core: ccore/session/links.h) ----
 
 /** `query("element", {id, link})`: an element of a linked model, read-only (ElementDetail's shape plus these). */
+/** `query("scene_element", {id})` (C core, FIXUI): an element of a file open read only, the rows Rust's viewer shows. */
+export interface SceneElementDetail extends ElementDetail {
+  read_only: true;
+  family: string;
+  triangles: number;
+  volume_m3: number;
+}
+
 export interface LinkedElementDetail extends ElementDetail {
   link: string;
   read_only: true;

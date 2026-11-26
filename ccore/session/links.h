@@ -98,6 +98,30 @@ void cc_links_json(const cc_session *s, JsonW *w);
  * error text in `out`: "no linked model <name>", "no element with this id". */
 int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char *id, size_t idn, Buf *out);
 
+/* query scene_element {"id"} (FIXUI, a C addition): an element of the read-only scene (an IFC or a
+ * .bimbleview open as it is), in cc_link_element_json's shape without "link" and with "triangles":
+ * the rows Rust's viewer shows for it (lib.rs:4570 `properties`: class, Name, GlobalId, Storey,
+ * Material, Family, Triangles, Volume), read from the display reader (ifc_read.h cc_ifc_info; no
+ * property sets: the reader does not keep them, as Rust's). `query element` keeps Rust's refusal
+ * ("this file is read only"). 0 ok, -1 with the error text: "no element with this id", "no model
+ * open", or the file is editable. */
+int cc_scene_element_json(cc_session *s, const char *id, size_t idn, Buf *out);
+
+/* query scene_tree (FIXUI, a C addition): the Navigator's object tree of the read-only scene,
+ * grouped by the reader's storey (container) name, then IFC class:
+ *   {"storeys": [{"classes": [{"class", "count"}], "count", "name"}], "total"}
+ * storeys in the file's storey order (lowest first; other containers and "" after, in name
+ * order), classes in byte order; total = the scene's elements. O(n log n). No model: the empty
+ * tree (the page may ask while a file closes). 0 ok, -1 with the error text (an editable model:
+ * query storeys). */
+int cc_scene_tree_json(cc_session *s, Buf *out);
+
+/* query scene_elements {"storey": name, "class"?: name, "limit"?: n (default 200)} (FIXUI): the
+ * elements of one tree row, [{"class", "id", "name"}] in scene order; those without a valid
+ * GlobalId (not selectable) are left out. */
+int cc_scene_elements_json(cc_session *s, const char *storey, size_t sn, const char *cls, size_t cn, size_t limit,
+                           Buf *out);
+
 /* ---- LNK1: links kept in the .bimble (DEVIATIONS 29; model.h cc_model_link) ----
  * A link of kind 0 is missing: the file the saved .bimble names was not found when it opened. It
  * keeps its name, path and visibility, draws nothing (an empty scene), and is written again on

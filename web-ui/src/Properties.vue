@@ -49,6 +49,12 @@ watch(
   },
 );
 
+// FIXUI: the read-only rows' extra fields (scene_element, a linked element's detail).
+const roExtra = computed(() => {
+  const d = detail.value as (ElementDetail & { family?: string; triangles?: number; volume_m3?: number }) | null;
+  return { family: d?.family ?? "", triangles: typeof d?.triangles === "number" ? d.triangles : null, volume: typeof d?.volume_m3 === "number" ? d.volume_m3 : null };
+});
+
 function commit(): void {
   const d = detail.value;
   if (!d || name.value === d.name) return;
@@ -242,8 +248,7 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
   <p v-if="state.selection.length > 1" class="pn" style="display:flex;align-items:center;gap:8px">
     <span class="dot" style="background:var(--bb-selection)" aria-hidden="true" />{{ t('props.selected', { n: state.selection.length }) }}
   </p>
-  <!-- A file open as it is has no element detail (the core answers "read only"): the line, not an error. -->
-  <p v-else-if="loadError && readOnly" class="ro" data-bb="props-readonly"><span class="dot" aria-hidden="true" />{{ readOnly.text }}</p>
+  <!-- A file open as it is: scene_element answers its elements (FIXUI); an error stays an error. -->
   <p v-else-if="loadError" class="error" role="alert">{{ t('props.error', { msg: loadError }) }}</p>
   <template v-else-if="detail">
     <div class="pn" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:var(--bb-selection)" />{{ title }}</div>
@@ -267,6 +272,14 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
     <div class="row"><span class="k">{{ t('props.class') }}</span><span class="mono">{{ detail.class }}</span></div>
     <div class="row"><span class="k">GlobalId</span><span class="mono"><span style="font-size:11.5px">{{ detail.id }}</span></span></div>
     <div class="row"><span class="k">{{ t('props.storey') }}</span><span>{{ detail.storey_name ?? "—" }}</span></div>
+    <!-- FIXUI: read only (a file open as it is, a linked model): the rows Rust's viewer shows (lib.rs:4570). -->
+    <template v-if="readOnly">
+      <div class="row" data-bb="props-material"><span class="k">{{ t('props.material') }}</span><span>{{ detail.material_name ?? "—" }}</span></div>
+      <div v-if="roExtra.family" class="row"><span class="k">{{ t('props.family') }}</span><span>{{ roExtra.family }}</span></div>
+      <div v-if="roExtra.triangles !== null" class="row"><span class="k">{{ t('props.triangles') }}</span><span class="mono">{{ grouped(roExtra.triangles) }}</span></div>
+      <div v-if="roExtra.volume !== null" class="row"><span class="k">{{ t('props.volume') }}</span><span class="mono">{{ roExtra.volume.toFixed(3) }} m³</span></div>
+    </template>
+    <template v-else>
     <div class="row">
       <label class="k" for="el-material">{{ t('props.material') }}</label>
       <select id="el-material" class="sel-inp" style="width:150px" :value="detail.material_name ?? ''" :disabled="readOnly !== null"
@@ -300,6 +313,7 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
       </span>
     </div>
     <p v-if="zError" role="alert" class="error">{{ t('modify.error', { msg: zError }) }}</p>
+    </template>
   </template>
   <template v-else-if="view && onPaper">
     <div class="pn">{{ t('view.props', { name: viewName(view) }) }}</div>

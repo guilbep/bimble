@@ -351,6 +351,41 @@ async function main() {
     await P.js("sh.send({ do: 'showView' }); return 1");
     await sleep(500);
     await walk(P, "native, read-only IFC", { model: true });
+    // FIXUI 1: the Navigator's Objects of the read-only IFC (it said 0), then an element clicked in
+    // its tree: the Properties panel shows its name, IFC class and GlobalId (it showed only "Read-only
+    // file", and each click answered 400 /query/element). Fails on the old code: Objects 0, no tree.
+    {
+      const e0 = P.errors.length;
+      await P.js("sh.send({ do: 'showView' }); return 1");
+      await sleep(300);
+      const objN = await P.evalJs("document.querySelector('[data-bb=nav-objects] .n')?.textContent?.trim() ?? null");
+      check("native, read-only IFC: the Navigator's Objects count is the scene's 72", objN === "72", String(objN));
+      await P.click("[data-bb=nav-objects]");
+      await sleep(200);
+      await P.click("[data-bb=nav-storey]");
+      await sleep(200);
+      await P.click("[data-bb=nav-class]");
+      await sleep(200);
+      const want = JSON.parse(await P.evalJs(`JSON.stringify((() => { const e = document.querySelector('[data-bb=nav-element]');
+        return e ? { id: e.dataset.id, name: e.textContent.trim() } : null; })())`));
+      const clicked = want ? await P.click("[data-bb=nav-element]") : false;
+      await sleep(500);
+      const got = JSON.parse(await P.evalJs(`JSON.stringify((() => { const p = document.querySelector('[data-bb=properties]');
+        if (!p) return null;
+        return { text: p.innerText.replace(/\\s+/g, ' '), name: p.querySelector('#el-name')?.value ?? null,
+          sel: null }; })())`));
+      const sel = await P.js("return b.state.value.selection.join(',')");
+      check("native, read-only IFC: a click in the Objects tree selects the element", clicked && want && sel === want.id, `${JSON.stringify(want)} selection ${sel}`);
+      const cls = await P.js(`return b.query('scene_element', { id: ${JSON.stringify(want?.id ?? "")} }).class`).catch(() => null);
+      check("native, read-only IFC: Properties show the element's name, IFC class and GlobalId",
+        !!got && !!want && got.name === want.name && want.name.length > 0 && /^Ifc[A-Za-z]+$/.test(cls ?? "") && got.text.includes(cls) && got.text.includes(want.id),
+        `${JSON.stringify(got)} want ${JSON.stringify(want)} class ${cls}`);
+      check("native, read-only IFC: Properties show storey, material, family, volume (Rust's rows)",
+        !!got && /Volume [0-9]+\.[0-9]{3} m³/.test(got.text) && /Family|Famille/.test(got.text), JSON.stringify(got));
+      check("native, read-only IFC: no 4xx/5xx nor console error during the selection", P.errors.length === e0, P.errors.slice(e0).join(" | "));
+      await P.js("b.select([]); return 1");
+      P.seen = P.errors.length;
+    }
     // TEST1 (BUG2): close the model: the page drops the picture, asks no /mesh, sees no 4xx. 2.5 s
     // is more than two turns of the old error path (a 404, then a retry a second later).
     const e0 = P.errors.length, m0 = P.meshReqs.length;

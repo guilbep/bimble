@@ -1205,6 +1205,35 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     /* ---- LNK1: the Links panel's rows (links_panel.h) ---- */
     if (!strcmp(name, "links_panel")) return cc_links_panel_json(s, out) ? (out->oom = 1, CC_ERR) : CC_OK;
     /* ---- end LNK1 ---- */
+    if (!strcmp(name, "scene_tree")) return cc_scene_tree_json(s, out) ? CC_ERR : CC_OK; /* FIXUI, links.h */
+    if (!strcmp(name, "scene_elements")) { /* FIXUI: {"storey", "class"?, "limit"?} (links.h) */
+        Arena a;
+        arena_init(&a, 0);
+        JrError je;
+        const JrVal *v = jr_parse(&a, body, n, &je);
+        const JrVal *st = v && v->type == JR_OBJ ? jr_get(v, "storey") : NULL;
+        const JrVal *cl = v && v->type == JR_OBJ ? jr_get(v, "class") : NULL;
+        const JrVal *li = v && v->type == JR_OBJ ? jr_get(v, "limit") : NULL;
+        int rc = -1;
+        if (!st || st->type != JR_STR) buf_puts(out, "storey: a string");
+        else if (cl && cl->type != JR_STR && cl->type != JR_NULL) buf_puts(out, "class: a string");
+        else if (li && (li->type != JR_NUM || !(li->num >= 0 && li->num <= 100000))) buf_puts(out, "limit: 0 to 100000");
+        else
+            rc = cc_scene_elements_json(s, st->s, st->n, cl && cl->type == JR_STR ? cl->s : NULL, cl && cl->type == JR_STR ? cl->n : 0,
+                                        li ? (size_t)li->num : 200, out);
+        arena_free(&a);
+        return rc ? CC_ERR : CC_OK;
+    }
+    if (!strcmp(name, "scene_element")) { /* FIXUI: {"id"}: an element of the read-only scene (links.h) */
+        Arena a;
+        arena_init(&a, 0);
+        JrError je;
+        const JrVal *v = jr_parse(&a, body, n, &je);
+        const JrVal *id = v && v->type == JR_OBJ ? jr_get(v, "id") : NULL;
+        int rc = !id || id->type != JR_STR ? (buf_puts(out, "id: a string"), -1) : cc_scene_element_json(s, id->s, id->n, out);
+        arena_free(&a);
+        return rc ? CC_ERR : CC_OK;
+    }
     if (!strcmp(name, "element")) { /* {"id", "link"}: an element of a linked model (links.h) */
         Arena a;
         arena_init(&a, 0);
