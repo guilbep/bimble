@@ -48,10 +48,21 @@ nothing the user does. There was no number for what a click costs.
 ## Nothing fake (CLAUDE.md), today
 
 CLAUDE.md already says: "Nothing fake: what is not served shows 'not available yet'". The controls
-that break it at the time of this ADR are listed in `ccore/results/ux.md`, section "Dead" (drawn
-enabled, activation changes nothing observable), and in `docs/research/ux-map.md` section (b).
-A control drawn "not yet" (dashed, the tooltip) does not break the rule: it is honest, but it is
-still a feature missing, and the study counts it.
+that break it on 26 Nov 2026 (`ccore/results/ux.md`, `docs/research/ux-map.md` section (b)):
+
+1. Drawn enabled, activation changes nothing (dead), on the Levels & grids page: the three
+   "Remove the level" buttons and the three "Building storey" check boxes (the core refuses a level
+   that holds elements; the run saw no message).
+2. Print and export: Roboto (dead on native, disabled on wasm: no font is shipped).
+3. Shown merely disabled where the core does not serve them, with no "not available yet": the
+   palette's rows Shared folder, Synchronize, Select / Text / Dimension (sheet tools) and Graphic
+   standards; the Print and export dialog's DXF, Printer and Revision B only; File › Exit in the
+   browser build; Setting out's "Move the base point…".
+4. On the native host, the palette's ten "Go to: <quantity list>" rows open the page while a call
+   answers 400.
+
+A control drawn "not yet" (dashed, the tooltip: 71 of them, 69 in the ribbon) does not break the
+rule: it is honest, but it is a feature missing, and the study counts it.
 
 ## Consequences
 

@@ -1,7 +1,7 @@
 // The lab's controls against what the C core does, and how fast (ticket UXMAP):
 //   node ccore/tools/ux.mjs [--check] [--force] [--builds wasm,native] [--models small,large]
 //     [--reps N] [--no-timing] [--no-measure | --measure-only | --timing-only] [--merge out/ux/ux.json]
-//     [--site DIR] [--out FILE] [--only <surface>]
+//     [--fresh-verdicts] [--report-only] [--site DIR] [--out FILE] [--only <surface>]
 // Writes ccore/results/ux.md (never edit it by hand) and the raw answers to out/ux/ux.json.
 //
 // What it does. ONE headless Chromium (SwiftShader, 1280x800, English) over raw CDP opens the lab:
@@ -42,7 +42,9 @@
 // Response time (ADR 0074): from the input event (the page's pointerdown / keydown / wheel timeStamp)
 // to the end of the animation-frame callbacks of the first frame that holds the last effect (the last
 // DOM change, the last WebGL draw or the last core call, then 300 ms with none): the frame is then
-// handed to the compositor. Median of --reps (default 5) activations, each on a freshly loaded page.
+// handed to the compositor. The verdict pass's own activation gives one number per control and build
+// ("ms 1 run"); the timing pass (--timing-only, or after the verdicts) the median of --reps (default 5)
+// activations, each on a freshly loaded page, one control per binding.
 // Numbers are not written when the 1-minute load (/proc/loadavg) is above 4, unless --force.
 // The machine waits for 3 GB of available memory before it starts the browser.
 //
@@ -51,8 +53,9 @@
 // before the page loads: name and ms of each call) and the frames drawn; one CDP Profiler run of the
 // moves gives the functions with the most self time.
 //
-// --merge FILE (an earlier run's out/ux/ux.json): its verdicts are reused and its Measure rows and
-// times kept, so verdicts, Measure (--measure-only) and timings (--timing-only) can run one at a time.
+// --merge FILE (an earlier run's out/ux/ux.json): its verdicts are reused (unless --fresh-verdicts) and
+// its Measure rows and times kept, so verdicts, Measure (--measure-only) and timings (--timing-only) can
+// run one at a time; --report-only writes the report from FILE without a browser.
 // --check: the wasm build on the small model, verdicts only; exits 1 when it finds more `dead` or
 // `error` controls than the committed report counts (not in ci/run.sh yet: UXMAP study).
 import { spawn, execFileSync } from "node:child_process";
@@ -211,7 +214,7 @@ async function startHost(model) {
   const src = MODEL_FILE[model](), copy = join(FILES, model === "small" ? "frame.json" : `${model}${extname(src)}`);
   copyFileSync(src, copy);
   for (let attempt = 0; ; attempt++) {
-    host = start("host", BIN, [String(HOST_PORT), copy], { cwd: FILES, env: { ...process.env, HOME, BIMBLE_CONFIG_DIR: CONFIG, BIMBLE_TOKEN: TOKEN } });
+    host = start("host", BIN, [String(HOST_PORT), copy], { cwd: FILES, env: { ...process.env, HOME, BIMBLE_CONFIG_DIR: CONFIG, BIMBLE_TOKEN: TOKEN, BIMBLE_ORIGINS: ORIGIN } }); // the site's origin may call it (host/main.c)
     try {
       await waitFor("the host", 20000, async () => {
         if (host.exitCode !== null) throw new Error(host.out.slice(-400));
@@ -853,7 +856,7 @@ function writeReport(R) {
     "**Response** (ADR 0074): from the input event (the page's pointerdown / keydown / wheel timeStamp) to the end of the animation-frame callbacks of the first frame that holds the last effect (the last DOM change, WebGL draw or core call, followed by 300 ms with none); the frame is then handed to the compositor. Median of the repetitions, each on a freshly loaded page (and a freshly started host). Over 200 ms: **bold** ⚠.", "");
   L.push(`- Commit: \`${R.commit}\`${R.dirty ? " (with uncommitted changes)" : ""}; run ${R.date}; ${R.runS} s.`,
     `- Machine: ${R.machine}; load at start \`${R.load0}\`, before the timings \`${R.loadT ?? "-"}\`.${R.numbersNote ? ` ${R.numbersNote}` : ""}`,
-    `- Builds: ${R.builds.join(", ")}; models: small = \`golden/frame.json\` (72 elements)${R.models.includes("large") ? `, large = \`bench/large_model.py ${LARGE_N}\` (${R.largeCount ?? "?"} elements)` : ""}${R.models.includes("local") ? `, local = a local model, ${R.localCount ?? "?"} elements (not committed)` : ""}; repetitions: ${REPS}.`,
+    `- Builds: ${R.builds.join(", ")}; models: small = \`golden/frame.json\` (72 elements)${R.models.includes("large") ? `, large = \`bench/large_model.py ${LARGE_N}\` (${R.measure?.find((m) => m.model === "large")?.count ?? R.largeCount ?? "?"} elements)` : ""}${R.models.includes("local") ? `, local = a local model, ${R.localCount ?? "?"} elements (not committed)` : ""}; repetitions: ${REPS}.`,
     ...(R.merged ? [`- Runs: ${R.merged}.`] : []),
     `- Page loads (fresh page per activation): median ${R.loadMedian} ms (${R.loads} loads).`, "");
   // counts per where
@@ -887,14 +890,26 @@ function writeReport(R) {
   const cols = R.timingCols;
   L.push(`## Works (${works.length}) and response times`, "", "One control per binding is timed (the palette, the keys and the ribbon often run the same action: the others show its number). On the large model only the ribbon, the keys, the viewport and the title row are timed (a page load takes seconds there); \"–\": not timed.", "");
   if (R.numbersNote && !cols.length) L.push(R.numbersNote, "");
-  L.push(`| Where | Control | Bound to | Effect | ${cols.map((c) => `ms ${c}`).join(" | ")} |`, `|---|---|---|---|${cols.map(() => "---:").join("|")}|`);
+  // one sample per build from the verdict pass (the activation that gave the verdict), then the medians
+  const others = R.passes.slice(1).filter((p) => p.model === "small");
+  if (R.oneRunLoad === undefined) { R.oneRunLoad = Number(String(R.load0).split("this run ").pop().split(" ")[0]); R.noOneRun = R.oneRunLoad > 4 && !FORCE; }
+  const one = (p, c) => { const o = p.controls.find((x) => x.where === c.where && x.label === c.label && x.i === c.i); return o?.verdict === "works" && !R.noOneRun ? o.ms?.[0] : undefined; };
+  if (R.noOneRun) { L.push(`The verdict pass started at a 1-minute load of ${R.oneRunLoad} (> 4): its one-run times are not written (--force).`, ""); for (const c of works) c.ms = []; }
+  else L.push(`"ms 1 run": the one activation of the verdict pass (a fresh page; 1-minute load at its start ${R.oneRunLoad}${R.oneRunLoad > 4 ? ", above 4: written with --force, indicative only" : ""}): an indication, not a median. "(median)": --reps repetitions.`, "");
+  const heads = [`ms 1 run ${R.passes[0].build}`, ...others.map((p) => `ms 1 run ${p.build}`), ...cols.map((c) => `ms ${c} (median)`)];
+  L.push(`| Where | Control | Bound to | Effect | ${heads.join(" | ")} |`, `|---|---|---|---|${heads.map(() => "---:").join("|")}|`);
   for (const c of works) {
     const k = `${c.where}|${c.label}|${c.i}`;
-    L.push(`| ${esc(c.where)} | ${esc(c.label)} | ${esc(c.binding)} | ${esc(c.effects.slice(0, 4).join(", "))}${c.gesture ? `; ${esc(c.gesture.note)}` : ""} | ${cols.map((col) => fmt(R.times[col]?.[k])).join(" | ")} |`);
+    const cells = [fmt(c.ms?.[0]), ...others.map((p) => fmt(one(p, c))), ...cols.map((col) => fmt(R.times[col]?.[k]))];
+    L.push(`| ${esc(c.where)} | ${esc(c.label)} | ${esc(c.binding)} | ${esc(c.effects.slice(0, 4).join(", "))}${c.gesture ? `; ${esc(c.gesture.note)}` : ""} | ${cells.join(" | ")} |`);
   }
   L.push("");
   const over = [];
-  for (const c of works) for (const col of cols) { const v = R.times[col]?.[`${c.where}|${c.label}|${c.i}`]; if (Number.isFinite(v) && v > 200) over.push([c, col, v]); }
+  for (const c of works) {
+    if (Number.isFinite(c.ms?.[0]) && c.ms[0] > 200) over.push([c, `1 run ${R.passes[0].build}`, c.ms[0]]);
+    for (const p of others) { const v = one(p, c); if (Number.isFinite(v) && v > 200) over.push([c, `1 run ${p.build}`, v]); }
+    for (const col of cols) { const v = R.times[col]?.[`${c.where}|${c.label}|${c.i}`]; if (Number.isFinite(v) && v > 200) over.push([c, col, v]); }
+  }
   L.push(`### Over 200 ms (${over.length} cells)`, "");
   L.push(over.length ? over.map(([c, col, v]) => `- ${esc(c.where)} › ${esc(c.label)} (${col}): ${Math.round(v)} ms`).join("\n") : "None.", "");
   // measure
@@ -916,6 +931,13 @@ function writeReport(R) {
 
 // ---- main ----
 async function main() {
+  if (flag("--report-only")) { // the report again from a run's JSON (--merge FILE), no browser
+    const R = JSON.parse(readFileSync(resolve(opt("--merge")), "utf8"));
+    if (!/UTC/.test(R.date)) R.date += " UTC";
+    writeReport(R);
+    log(`wrote ${OUT} from ${opt("--merge")}`);
+    return;
+  }
   const load0 = loadNow();
   let numbersNote = "";
   if (TIMING && load1() > 4 && !FORCE) numbersNote = `The 1-minute load was ${load1()} (> 4) at the start: no response times written (--force to write them anyway).`;
@@ -988,8 +1010,10 @@ async function main() {
   for (const m of M?.measure ?? []) if (!measure.some((x) => x.build === m.build && x.model === m.model)) measure.push(m);
   const commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: CCORE }).toString().trim();
   const dirty = execFileSync("git", ["status", "--porcelain", "--", "../web-ui/src", "src", "session"], { cwd: CCORE }).toString().trim() !== "";
-  const R = { commit, dirty, date: new Date().toISOString().slice(0, 16).replace("T", " "), runS: Math.round((Date.now() - T0) / 1000) + (M?.runS ?? 0),
+  const R = { commit, dirty, date: `${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`, runS: Math.round((Date.now() - T0) / 1000) + (M?.runS ?? 0),
     machine: `${platform()} ${release()} ${arch()}, ${cpus().length} CPUs, ${Math.round(totalmem() / 2 ** 30)} GB`, load0: M ? `${M.load0}; this run ${load0}` : load0, loadT, numbersNote,
+    // the verdict pass's one-run times obey the same rule as the medians: none above load 4
+    oneRunLoad: Number(load0.split(" ")[0]), noOneRun: Number(load0.split(" ")[0]) > 4 && !FORCE,
     builds: [...new Set([...(M?.builds ?? []), ...BUILDS])], models: [...new Set([...(M?.models ?? []), ...MODELS])], largeCount, localCount: measure.find((m) => m.model === "local")?.count ?? null,
     loadMedian: median([...loadMs, ...(M?.loadMs ?? [])]), loads: loadMs.length + (M?.loadMs?.length ?? 0), loadMs: [...loadMs, ...(M?.loadMs ?? [])], passes, times, timingCols, measure };
   if (M) R.merged = `this report merges runs (--merge): ${M.merged ?? `one at commit ${M.commit} (${M.date})`}; and this one at ${commit} (${R.date})`;
