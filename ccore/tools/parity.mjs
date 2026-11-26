@@ -32,12 +32,15 @@ import { port } from "../test/ports.mjs";
 
 // 3D1 (ADR 0078): Rust's 3D speed features and the C lab's state; update a row when a ticket ports one.
 const THREED_SPEED = [
-  { feature: "Box tree for picks", rust: "bimble-geom bvh.rs, pick_hit_bvh", ported: false, note: "the page tests each element's box before its triangles (linear); MEAS1's measure tool likewise in the core; frames.md: a pick answers well under 200 ms, so no tree yet" },
+  { feature: "Box tree for picks", rust: "bimble-geom bvh.rs, pick_hit_bvh", ported: true, note: "ccore/src/bvh.{h,c} (3D2, Rust's queries_match_brute_force in test/bvh_test.c): the measure tool's ray in the core goes through it; the page's pick keeps its linear box scan (frames.md: under 3 ms on every model measured), no tree served to it" },
   { feature: "Copies as instances", rust: "bimble-geom dedup.rs, instanced draws", ported: true, note: "dedup in ccore/src/scene.c; BMSH version 3 (ccore/src/scene_bmsh.h) sends each shape once; glviewport.ts draws shapes of 4 copies or more instanced" },
-  { feature: "Frustum culling", rust: "bimble-render clusters, DrawOptions::cull", ported: true, note: "web-ui/src/gl/cull.ts: spatial batches of at most 32,768 triangles culled as wholes" },
-  { feature: "Moving budget", rust: "next_moving_px, moving_fps, DrawOptions::min_radius", ported: true, note: "ported with a change (ADR 0078): a triangle budget from moving_fps, largest on screen first, unfinished batches as box outlines, completed in slices after the stop (Rust's px threshold needs HLOD proxies)" },
-  { feature: "HLOD proxies", rust: "bimble-geom hlod.rs, bimble-render proxies.rs", ported: false, note: "next ticket (ADR 0078): an octree of simplified stand-ins drawn under a pixel of error" },
-  { feature: "GPU occlusion", rust: "gpu_occlusion.rs, gpu_occlusion_poll", ported: false, note: "WebGL2 occlusion queries answer a frame late; Rust ran it on native backends only (ADR 0036 #1)" },
+  { feature: "Frustum culling", rust: "bimble-render clusters, DrawOptions::cull", ported: true, note: "web-ui/src/gl/cull.ts: spatial batches of at most 32,768 triangles culled as wholes (3D2: never across two HLOD leaves)" },
+  { feature: "Moving budget", rust: "next_moving_px, moving_fps, DrawOptions::min_radius", ported: true, note: "ported with a change (ADR 0078): a triangle budget from moving_fps, largest on screen first, far cells as proxies (3D2), unfinished leaves as proxies or box outlines, completed in slices after the stop" },
+  { feature: "HLOD proxies", rust: "bimble-geom hlod.rs, bimble-render proxies.rs", ported: true, note: "ccore/src/hlod.{h,c} (Rust's three tests in test/hlod_test.c), built in steps and served as BPRX (GET /mesh?proxies=N, wasm host_proxies); web-ui/src/gl/proxies.ts cuts the tree at 3 px moving, 1 px still (Rust: still frames exact); the setting moving_proxies turns them off" },
+  { feature: "GPU occlusion", rust: "gpu_occlusion.rs, gpu_occlusion_poll", ported: true, note: "3D2: WebGL2 occlusion queries per batch, last frames' answers, Rust's rule against a still view redrawing forever; off by default as Rust on WebGL2 (a test hook turns it on; frames.md measures it)" },
+  { feature: "CPU occlusion", rust: "occlusion.rs (ADR 0036 #5)", ported: false, note: "not ported: the GPU queries above stand for it under SwiftShader" },
+  { feature: "Screen edges while moving", rust: "edges.wgsl, DrawOptions::screen_edges (ADR 0036 #6)", ported: false, note: "not ported: a moving frame draws the edges of what its budget draws; frames.md measures the still frame without its edge pass" },
+  { feature: "GPU culling of copies", rust: "DrawOptions::gpu_cull (ADR 0036 #10)", ported: false, note: "does not apply: WebGL2 has no compute shaders (query settings needs.gpu_cull)" },
 ];
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");

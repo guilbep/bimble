@@ -763,11 +763,11 @@ folder), `ui_theme.rs` (themes, fonts, text sizes), `lib.rs:4023-4190` (Settings
 - **A file that is not a JSON object is left alone** (FS1's rule): the change is kept for the
   session and `query settings` says so in `note`; Rust overwrites it with the defaults and the
   change.
-- **Applies**: `memory_share`, `moving_proxies` and `gpu_cull` are stored and round
+- **Applies**: `memory_share` and `gpu_cull` are stored and round
   tripped but used by nothing (the lab's viewport is the page's WebGL one, natively too): `query
   settings` reports `applies: false` and what each would need. `moving_fps` applies since ticket
-  3D1 (section 36). They are not shown in the lab's
-  dialog. `recent` does not apply in the browser (no paths).
+  3D1, `moving_proxies` since ticket 3D2 (section 36), and both are shown in the lab's dialog; the
+  other two are not. `recent` does not apply in the browser (no paths).
 - **The look**: the lab maps Rust's theme ids onto its own design tokens (`web-ui/src/shell/theme.ts`).
   `grey`, Rust's default, is the lab's own default look (the Bimble design), not Rust's grey
   surfaces; the five others follow Rust's colours. `roboto`, Rust's default font, is the lab's own
@@ -1332,3 +1332,32 @@ Rust's default, so no golden changes. Test: `test/dead1_test.c`.
 - **`link_model {paths}`** (a C addition): several files in one call and one undo step; per path
   linked, skipped (already linked) or a "refused" row with its reason (outside the file dialog's
   roots: the native host's `path_allowed`). Test: `test/link_folder_test.mjs`.
+  `moving_proxies` applies since ticket 3D2 (below); `gpu_cull` (Rust's compute-shader test of
+  copies) still does not: WebGL2 has no compute shaders (the dialog says so).
+- **Ticket 3D2 (ADR 0078, amendment 2): the rest of Rust's 3D layer.**
+  - **HLOD proxies** (`src/hlod.h`, a port of `hlod.rs` with Rust's options): built in steps (Rust:
+    at once, each depth's cells in parallel) and served on their own as BPRX (`GET
+    /mesh?proxies=N`, wasm `host_proxies`; Rust had no wire format). A vertex counts once per
+    element in its cluster's mean (Rust: once per chunk of 65,536 triangles), so the steps' chunks
+    do not change the result; the clusters are sorted arrays merged when they double (Rust: hash
+    maps), the final grid the same. The page cuts the tree at 3 px while moving (Rust's
+    `MOVING_PROXY_PX`) and at 1 px still (Rust drew stills exact), for models of at least 250,000
+    triangles (Rust: 1,000,000, slow GPUs only); while moving the proxies take at most half the
+    triangle budget, and a leaf the budget could not finish is drawn as a proxy instead of its box
+    outline where one fits. Not with a section box or in a plan (as Rust), not over a hidden,
+    revealed or selected element (Rust's `usable`). The batches never span two octree leaves.
+    Tests: `test/hlod_test.c` (Rust's three tests on `frame.json` and `frame2.json` tiled 3 x 3:
+    Rust used a 4 x 3 x 3 concrete frame the C core cannot generate; steps give the bytes of one
+    build; hostile input), `test/cull_test.mjs`, `test/wasm_run.mjs` (host_proxies = GET).
+  - **The box tree** (`src/bvh.h`, `bvh.rs` with its test): the measure tool's ray in the core;
+    boxes with equal centres split by index (Rust: unordered), non-finite boxes left out (Rust:
+    only min > max). The page's pick stays a linear box scan (Rust: `pick_hit_bvh`).
+  - **Occlusion queries** (ADR 0036 #1): per batch of the open model, nearest first, a hidden
+    batch's box asking when it shows again, with Rust's rule against a still view redrawing forever;
+    off by default (Rust: native backends only; on WebGL2 never). Not in a slice of the fill.
+  - **The first frame of a large mesh**: its element boxes as outlines before its draw lists, then
+    a budgeted frame and the fill (Rust drew the whole picture once uploaded).
+  - **A selection drawn over the kept picture** (Rust's #3 did the same with a highlight layer):
+    the elements whose colour changed, faces then edges, when the last frame was complete.
+  - **The moving rate** counts only a budgeted frame after a budgeted frame (3D1 counted a whole
+    frame too and could draw everything while moving).
