@@ -10,6 +10,7 @@
 #          clang with -ffp-contract=off (no fused multiply-add: the same floats as tcc). HOST_MIX=0:
 #          one tcc call over every source (the build before ticket T18).
 #   native clang -O2, same outputs
+#   asan   only the host, clang -O1 with ASan and UBSan: out/asan/bimble-ccore (ci/run.sh san)
 #   (tcc and native also build tools/*.c, e.g. ifc_dump: README "Comparing with Rust")
 #   wasm   clang freestanding wasm32 of src/ (no libc) and the session layer (session/*.c: the
 #          native host's call code, without the host's HTTP server, platform and main), ccore.wasm
@@ -188,6 +189,33 @@ host_mixed() {
         echo "refreshed: ${changed[*]}"
     ) &
     disown
+}
+
+# build.sh asan (ticket FIXDOC): the native host alone, clang -O1 with ASan and UBSan, the kernel
+# when found (manifold is not instrumented). For ci/run.sh san: test/san_host.sh runs the host's
+# node suites on it and fails on any sanitizer report. One clang call per file, two at a time
+# (the dev machine has 16 GB).
+host_asan() {
+    local d=out/asan f objs=() pids=()
+    mkdir -p $d/o
+    local flags=(-std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wno-unused-function
+        -DRYU_ONLY_64_BIT_OPS "$VDEF" ${KFLAGS[@]+"${KFLAGS[@]}"} ${PLATFORM_CFLAGS[@]+"${PLATFORM_CFLAGS[@]}"})
+    compile_asan() {
+        local n=0 rc=0
+        for f in "${HOST_SRCS[@]}"; do
+            local o="$d/o/$(basename "$(dirname "$f")")_$(basename "${f%.c}").o"
+            objs+=("$o")
+            clang "${flags[@]}" "${INC[@]}" -Ihost -c "$f" -o "$o" &
+            pids+=($!)
+            n=$((n + 1))
+            if ((n % 2 == 0)); then for p in "${pids[@]}"; do wait "$p" || rc=1; done; pids=(); fi
+        done
+        for p in ${pids[@]+"${pids[@]}"}; do wait "$p" || rc=1; done
+        return $rc
+    }
+    step "compile (clang -O1, ASan+UBSan)" compile_asan
+    step "link bimble-ccore (ASan+UBSan)" clang -fsanitize=address,undefined -pthread "${objs[@]}" \
+        ${KLINK_CLANG[@]+"${KLINK_CLANG[@]}"} -lm ${PLATFORM_LIBS[@]+"${PLATFORM_LIBS[@]}"} -o $d/bimble-ccore
 }
 
 # The wasm builds. VIEW_LIB: the library without VIEW_DENY.
@@ -402,6 +430,9 @@ case "${1:-}" in
   release)
     echo "build.sh release -> out/release/"
     release ;;
-  *) echo "usage: $0 tcc|host|native|wasm|wasm-view|wasm-size [view]|release" >&2; exit 2 ;;
+  asan)
+    echo "build.sh asan -> out/asan/bimble-ccore"
+    host_asan ;;
+  *) echo "usage: $0 tcc|host|native|asan|wasm|wasm-view|wasm-size [view]|release" >&2; exit 2 ;;
 esac
 printf '  %-28s %5d ms\n' "total" $(($(ms) - t_start))

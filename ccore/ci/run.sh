@@ -10,7 +10,10 @@
 #         edit here; dev_test last: it rebuilds out/tcc/bimble-ccore through dev.sh); before them
 #         the README's Status block against the committed reports (tools/status.mjs --check) and
 #         the parity tool's check of the C host (tools/parity.mjs --check; ticket FIXDOC).
-#   san   test/run.sh with clang, ASan and UBSan (the job ccore-san).
+#   san   test/run.sh with clang, ASan and UBSan (the job ccore-san); then the host program itself
+#         under ASan and UBSan (build.sh asan) through its node suites without a browser:
+#         test/san_host.sh host_test, fs_test, mcp_test, mesh_http_test, files_test, one at a time,
+#         each failing on any sanitizer report (ticket FIXDOC).
 #   lab   build.sh tcc and wasm, then every test/lab_*.mjs but lab_boot (host.sh runs it): the
 #         Chromium suites (the job ccore-lab); then the performance report (tools/perf.mjs,
 #         ticket PERF1: out/ci/perf.md and its change against results/perf.md).
@@ -109,6 +112,11 @@ suite() {
 # test/run.sh compiles the library once and runs its suites in parallel (CCORE_TEST_JOBS).
 unit_c() { suite run-tcc test/run.sh; }
 san() { suite run-clang-asan env CC=clang CFLAGS="-fsanitize=address,undefined" test/run.sh; }
+# FIXDOC: the host program (server, files, MCP) under the sanitizers; one suite at a time.
+san_host() {
+    suite build-asan ./build.sh asan
+    for t in host_test fs_test mcp_test mesh_http_test files_test; do suite "san-$t" test/san_host.sh "$t"; done
+}
 gate_rest() {
     suite build-wasm ./build.sh wasm
     suite wasm_run node test/wasm_run.mjs
@@ -158,9 +166,9 @@ unit_rest() {
 case "$mode" in
     fast) suite build-tcc ./build.sh tcc; unit_c; san; gate_rest ;;
     unit) suite build-tcc ./build.sh tcc; unit_c; gate_rest; docs_checks; unit_rest ;;
-    san) san ;;
+    san) san; san_host ;;
     lab) labs ;;
-    full) suite build-tcc ./build.sh tcc; unit_c; san; gate_rest; docs_checks; labs; unit_rest ;;
+    full) suite build-tcc ./build.sh tcc; unit_c; san; san_host; gate_rest; docs_checks; labs; unit_rest ;;
     clang) suite run-clang env CC=clang test/run.sh; suite host env HOST_BUILD=native test/host.sh ;;
 esac
 

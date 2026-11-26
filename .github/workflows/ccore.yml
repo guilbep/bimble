@@ -26,7 +26,8 @@ jobs:
   # Three jobs side by side (ticket K3), each one mode of the same script, ccore/ci/run.sh:
   # ccore-linux runs `unit` (the builds, the C suites with tcc at the full sample, wasm, host,
   # release, every .mjs suite but the lab's), ccore-san `san` (the C suites under ASan and UBSan, in
-  # parallel, a sample of the generated inputs), ccore-lab `lab` (the Chromium suites). `full` runs
+  # parallel, a sample of the generated inputs; then the host program built with ASan and UBSan
+  # through its node suites), ccore-lab `lab` (the Chromium suites). `full` runs
   # all three, one after the other, on a builder's machine.
   ccore-linux:
     runs-on: ubuntu-latest
@@ -130,6 +131,11 @@ jobs:
           key: manifold-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh') }}
       - if: steps.manifold.outputs.cache-hit != 'true'
         run: JOBS=4 ccore/deps.sh
+      # FIXDOC: node for test/san_host.sh (the host's node suites on the ASan+UBSan host; no npm ci,
+      # no browser).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
       - name: ccore/ci/run.sh san
         run: ccore/ci/run.sh san
       - if: always()
