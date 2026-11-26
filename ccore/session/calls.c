@@ -1404,11 +1404,27 @@ static void sibling(const cc_session *s, const char *path, const char *ext, char
     else snprintf(to, cap, "%.*s%.*s.%s", (int)dir, s->path, (int)stem, name, ext);
 }
 
+/* FIXSES: `to` names the open file: the same text, or the same file once the carrier resolved
+ * both (pf->real_path: `./m.bimble` is `m.bimble`). A path that does not resolve (no such file
+ * yet) is not the open file. */
+static int is_open_file(const cc_session *s, const char *to) {
+    if (!strcmp(to, s->path)) return 1;
+    if (!s->pf->files || !s->pf->real_path || !s->path[0]) return 0;
+    char a[4096], b[4096];
+    return !s->pf->real_path(s->pf->ctx, to, a, sizeof a) && !s->pf->real_path(s->pf->ctx, s->path, b, sizeof b) &&
+           !strcmp(a, b);
+}
+
+/* FIXSES: without `path`, the file goes next to the open file; a new model (or a dropped one)
+ * has none, so "Untitled.<ext>" landed in the host's working folder, over a file of that name.
+ * The host refuses instead (the wasm module, without files, writes under the current name). */
+static int needs_path(const cc_session *s, const char *path) { return !path && s->pf->files && s->open && s->untitled; }
+
 static void export_ifc(cc_session *s, cc_ifc_schema schema, const char *path) {
     const char *label = schema == CC_IFC4 ? "IFC4" : "IFC2x3";
     char to[4096 + 16];
     sibling(s, path, "ifc", to, sizeof to);
-    if (!strcmp(to, s->path)) {
+    if (is_open_file(s, to)) {
         cc_log(s->pf, "bimble-ccore: %s: export would overwrite the open file", to);
         return;
     }
@@ -1444,7 +1460,7 @@ static const char NOT_KEPT[] =
 static void share_for_viewing(cc_session *s, const char *path) {
     char to[4096 + 16];
     sibling(s, path, "bimbleview", to, sizeof to);
-    if (!strcmp(to, s->path)) {
+    if (is_open_file(s, to)) {
         cc_log(s->pf, "bimble-ccore: %s: the view file would overwrite the open file", to);
         return;
     }
@@ -1506,10 +1522,14 @@ static int file_action(cc_session *s, const char *name, const FileArgs *fa, cc_b
         return CC_OK;
     }
     if (!strcmp(name, "export_ifc4") || !strcmp(name, "export_ifc2x3")) {
+        if (needs_path(s, fa->path))
+            return fail(out, "a new model has no file yet: send {\"path\": \"<file>.ifc\"}, or save it first");
         export_ifc(s, !strcmp(name, "export_ifc4") ? CC_IFC4 : CC_IFC2X3, fa->path);
         return CC_OK;
     }
     if (!strcmp(name, "share_for_viewing")) {
+        if (needs_path(s, fa->path))
+            return fail(out, "a new model has no file yet: send {\"path\": \"<file>.bimbleview\"}, or save it first");
         share_for_viewing(s, fa->path);
         return CC_OK;
     }
