@@ -204,7 +204,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
   graphics: [
     { key: "ribbon.graphics.g1", tools: [
       { key: "ribbon.graphics.g1.t1", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"3\"/><path d=\"M8 10h8M8 14h5\"/>", action: "standards", panel: "standards" },
-      { key: "ribbon.graphics.g1.t2", tag: "button", icon: "<circle cx=\"12\" cy=\"12\" r=\"8\"/><path d=\"M6 8c4 3 8 3 12 0M5 13c4 3 10 3 14 0\"/>", action: "materials" },
+      { key: "ribbon.graphics.g1.t2", tag: "button", icon: "<circle cx=\"12\" cy=\"12\" r=\"8\"/><path d=\"M6 8c4 3 8 3 12 0M5 13c4 3 10 3 14 0\"/>", action: "materials", page: "materials" },
     ] },
     { key: "ribbon.graphics.g2", tools: [
       { key: "ribbon.graphics.g2.t1", tag: "button", icon: "<path d=\"M3 7h18\"/><path d=\"M3 12h4M10 12h4M17 12h4\"/><path d=\"M3 17h2M8 17h1M12 17h2M17 17h1\"/>", action: null },
