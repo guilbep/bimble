@@ -456,8 +456,13 @@ static void own_goldens(void) {
         printf("%-16s %-8s elements %zu volume %.6g (hand %.6g, %+.2e) box [%.3f %.3f %.3f]-[%.3f %.3f %.3f] %s%s\n",
                OWN[g].name, ok ? "MATCHES" : "DIFFERS", rc ? 0 : s.scene.nelements, vol, OWN[g].volume, rel, lo[0],
                lo[1], lo[2], hi[0], hi[1], hi[2], clean ? "" : "WARNED ", ok ? "" : why);
-        snprintf(m, sizeof m, "ifc_c/%s: matches its C-own golden", OWN[g].name);
-        check_true(m, ok);
+        /* WIN2: the C-own goldens were written with the kernel. Without it (CC_NO_KERNEL=1: the
+         * Windows job until manifold builds there) a scene with booleans is a known difference, as
+         * "booleans" and "opening" above: it must differ and say why in its warning. */
+        int uncut = !cc_boolean_kernel() && !rc && strstr(buf_cstr(&b), "(no boolean kernel in the C core)");
+        snprintf(m, sizeof m, "ifc_c/%s: matches its C-own golden%s", OWN[g].name,
+                 uncut ? " (no kernel: differs, drawn uncut and warned)" : "");
+        check_true(m, uncut ? !ok : ok);
         snprintf(m, sizeof m, "ifc_c/%s: %zu element(s)", OWN[g].name, OWN[g].elements);
         check_true(m, !rc && s.scene.nelements == OWN[g].elements);
         snprintf(m, sizeof m, "ifc_c/%s: volume within %g of the hand value", OWN[g].name, OWN[g].rel_tol);
