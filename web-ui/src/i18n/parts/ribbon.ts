@@ -101,7 +101,7 @@ export const fr = {
   "ribbon.view.g1.t3": "Orthogonale",
   "ribbon.view.g2": "Couper",
   "ribbon.view.g2.t1": "Zone de coupe",
-  "ribbon.view.g2.t2": "Zone sur sélection",
+  "ribbon.view.g2.t2": "Boîte sur la sélection", // ISS71: the words of issue #71
   "ribbon.view.g3": "Caméra",
   "ribbon.view.g3.t1": "Tout afficher",
   "ribbon.view.g3.t2": "Dessus",

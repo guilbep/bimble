@@ -836,13 +836,15 @@ the size); it is enabled only while the box is on (ribbon.rs:593). The viewport 
   model in 3D, the box on or off (`loaded && !in_2d`; Rust: `&& section_on`).
 - **The viewport's right-click menu** (`web-ui/src/shell/ContextMenu.vue`, items in
   `shell/contextItems.ts`): a right click without a drag selects the element under the pointer
-  when it is not selected, then shows Box to selection, Hide, Isolate (the actions `box_to_selection`,
-  `hide_now`, `isolate_now`, greyed out as `query actions` says).
+  when it is not selected, then shows Box to selection, Hide, Isolate, Show all, Show previous (the
+  actions `box_to_selection`, `hide_now`, `isolate_now` and section 25's `show_all`,
+  `show_previous`, greyed out as `query actions` says). French: "Boîte sur la sélection" (the
+  issue's words) in the ribbon, the palette, the menu and the small screen.
 
 - **The handles** are one arrowhead per face (Rust's `section.rs` overlay: six square handles),
   pointing out along the face's normal, 18 px on screen, the press radius 16 px about the face centre.
 - **The box turns** (Rust's `ClipBox::yaw` is always 0 for the section box): two C actions after
-  Rust's 54, `box_north_project` (the default) and `box_north_true` (pressed: the choice the session
+  Rust's 54 and section 25's two (`query actions`: 58 rows), `box_north_project` (the default) and `box_north_true` (pressed: the choice the session
   keeps; enabled in 3D when the two turns differ), give the box `yaw` = `plan_turn(true_north)`
   (`georef.h`), as a section's (views.rs): project north is the building's axes (`rotation_deg`, 0
   for every model without a georeference: the box as before), true north the map's

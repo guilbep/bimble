@@ -10,7 +10,8 @@
 //     on screen, drawn in the theme's --bb-clay on the overlay; hover on the +x one: boxHover 1;
 //     dragging it moves the +x face (max x grows, min x kept);
 //   the right-click menu: the box around D, then off; a right click on C selects it and opens the menu
-//     (data-bb=viewport-menu), its Box to selection item -> the box around C again, on;
+//     (data-bb=viewport-menu: Box to selection, Hide, Isolate, then ISS72's Show all, Show previous as
+//     enabled), its Box to selection item -> the box around C again, on;
 //   true north: the View tab's "Géo" (box_north_true) -> yaw 30°, the box still holds C; a point of
 //     the slab 250 mm inside a corner of the turned box (outside the unturned one) is drawn, one 250 mm
 //     outside its +x side (inside the unturned box) is not; the arrowheads at the turned face centres.
@@ -286,7 +287,10 @@ async function scenario(cdp, mode, geoText) {
   await waitFor("the menu", 5000, async () => (await gl()).menus > m0 && (await evalJs("!!document.querySelector('[data-bb=viewport-menu]')")));
   await waitFor("C selected by the right click", 5000, async () => (await sel()).includes(C.id));
   const items = await evalJs("[...document.querySelectorAll('[data-bb=viewport-menu] [role=menuitem]')].map((e) => e.dataset.bb + (e.disabled ? ':off' : ''))");
-  check(`${tag} right click on C: the menu (Box to selection, Hide, Isolate), C selected`, JSON.stringify(items) === JSON.stringify(["ctx-box_to_selection", "ctx-hide_now", "ctx-isolate_now"]), JSON.stringify(items));
+  // ISS72's Show all and Show previous follow, greyed out as query actions says.
+  const on72 = await B("const a = b.query('actions'); return ['show_all', 'show_previous'].map((n) => `ctx-${n}` + (a.find((x) => x.name === n)?.enabled ? '' : ':off'));");
+  check(`${tag} right click on C: the menu (Box to selection, Hide, Isolate, Show all, Show previous), C selected`,
+    JSON.stringify(items) === JSON.stringify(["ctx-box_to_selection", "ctx-hide_now", "ctx-isolate_now", ...on72]), JSON.stringify(items));
   await clickEl("[data-bb=ctx-box_to_selection]");
   await waitFor("the box on, around C", 5000, async () => { const b = (await vis()).section_box; return b.on && Math.abs(b.box.min[0] - wantMin[0]) < 1; });
   await settle();

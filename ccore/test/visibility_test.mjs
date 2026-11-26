@@ -286,8 +286,8 @@ try {
   const box9 = JSON.parse(await q("visibility")).section_box.box; // the box (off) the drag left: not part of a visibility state
   const visB = (o) => vis({ ...o, box: { min: box9.min, max: box9.max } });
   check("ISS72: before: nothing hidden, show_all disabled", (await q("visibility")).includes('"hidden_now":{"count":0') && !(await enabled("show_all")));
-  const acts = JSON.parse(await q("actions")).slice(-2);
-  check("ISS72: query actions lists show_all, show_previous last (View, no shortcut, never pressed)",
+  const acts = JSON.parse(await q("actions")).slice(54, 56); // ISS71's box_north_project, box_north_true follow
+  check("ISS72: query actions lists show_all, show_previous after Rust's 54 (View, no shortcut, never pressed)",
     JSON.stringify(acts.map((x) => [x.name, x.label, x.tab, x.shortcut, x.pressed])) ===
     JSON.stringify([["show_all", "Show all", "View", null, false], ["show_previous", "Show previous", "View", null, false]]), JSON.stringify(acts));
   // hide A -> isolate B -> previous = A hidden only -> previous = B isolated -> show all = everything

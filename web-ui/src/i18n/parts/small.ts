@@ -34,7 +34,7 @@ export const fr = {
   "small.geometry": "La géométrie se modifie sur un écran d'au moins 1 024 px de large.",
   "small.error": "Erreur : {msg}",
   "small.sectionBox": "Boîte de coupe",
-  "small.boxToSelection": "Boîte autour de la sélection",
+  "small.boxToSelection": "Boîte sur la sélection", // ISS71: the words of issue #71
   "small.boxOn": "Active",
   "small.boxOff": "Inactive",
   "small.top": "Haut",

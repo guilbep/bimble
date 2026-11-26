@@ -6,6 +6,8 @@ export const fr = {
   "ctx.boxToSelectionTip": "Réduit la zone de coupe autour des éléments sélectionnés, avec {m} m de marge (rien de sélectionné : tout le modèle)",
   "ctx.hide": "Masquer",
   "ctx.isolate": "Isoler",
+  "ctx.showAll": "Tout réafficher", // ISS72's action show_all
+  "ctx.showPrevious": "Affichage précédent", // ISS72's action show_previous
 };
 export const en: Record<keyof typeof fr, string> = {
   "ctx.menu": "Selection actions",
@@ -13,4 +15,6 @@ export const en: Record<keyof typeof fr, string> = {
   "ctx.boxToSelectionTip": "Shrinks the section box around the selected elements, with a {m} m margin (nothing selected: the whole model)",
   "ctx.hide": "Hide",
   "ctx.isolate": "Isolate",
+  "ctx.showAll": "Show all",
+  "ctx.showPrevious": "Show previous",
 };

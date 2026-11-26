@@ -94,6 +94,8 @@ export type PartKey =
   | "ctx.hide"
   | "ctx.isolate"
   | "ctx.menu"
+  | "ctx.showAll"
+  | "ctx.showPrevious"
   | "el.sizes"
   | "export.all"
   | "export.background"

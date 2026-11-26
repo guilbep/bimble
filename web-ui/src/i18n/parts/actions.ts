@@ -29,7 +29,7 @@ export const fr = {
   "action.hatching": "Hachures",
   "action.orthographic": "Orthogonale",
   "action.section_box": "Zone de coupe",
-  "action.box_to_selection": "Zone sur sélection",
+  "action.box_to_selection": "Boîte sur la sélection", // ISS71: the words of issue #71
   "action.fit": "Tout afficher",
   "action.top": "Dessus",
   "action.on_paper": "Exporter la vue… (PDF, SVG)",
