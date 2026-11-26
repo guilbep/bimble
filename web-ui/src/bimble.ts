@@ -1081,6 +1081,12 @@ export function runAction(name: string): string | null {
     }
     // The box moves without a change event (its geometry is not in the change signature, calls.rs:152).
     if (name === "box_to_selection") visibility.value = tryQuery<Visibility | null>("visibility", null);
+    // ---- ISS71 ---- the box's orientation: the box turns and the pressed choice moves, no change event
+    if (name === "box_north_project" || name === "box_north_true") {
+      visibility.value = tryQuery<Visibility | null>("visibility", null);
+      actions.value = tryQuery<ActionState[]>("actions", []);
+    }
+    // ---- end ISS71 ----
     // ---- Q2: the view switches are session state, not in the change JSON: their pressed state
     // here; fit and top move the page's camera (glviewport.ts registers `viewActions`). ----
     if (VIEW_SWITCHES.includes(name)) {

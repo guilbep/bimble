@@ -139,8 +139,12 @@ static const ActionRow ACTIONS[] = {
     {"show_all", "Show all", "View", 0, 0},
     {"show_previous", "Show previous", "View", 0, 0},
     /* ---- end ISS72 ---- */
+    /* ---- ISS71 (issue #71): C additions after Rust's 54, the section box's orientation ---- */
+    {"box_north_project", "Section box: project north", "View", 0, 0},
+    {"box_north_true", "Section box: true north", "View", 0, 0},
+    /* ---- end ISS71 ---- */
 };
-_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 2, "ribbon.rs:130 has 54 actions; ISS72 adds 2");
+_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each");
 
 static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab"}; /* verbs.rs:28 snake_case */
 static const char *const SIZE_KEY[] = {"column", "beam_width", "beam_height", "wall", "slab"}; /* verbs.rs:78 */
@@ -602,6 +606,13 @@ static size_t iss72_prev_count(const cc_session *s) {
     return cc_vis_prev_count(&s->vis, &g);
 }
 /* ---- end ISS72 ---- */
+/* ---- ISS71 ---- the section box's turn for an orientation (issue #71): project north (the
+ * building's axes, georef rotation_deg) or true north (the map's), as a section's (views.rs
+ * plan_turn); 0 without a model of the session's own (a read-only file keeps its axes). */
+static float iss71_yaw(cc_session *s, int true_north) {
+    return s->open ? (float)cc_georef_plan_turn(&s->model.georef, true_north) + 0.0f : 0.0f;
+}
+/* ---- end ISS71 ---- */
 
 static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-612, the C core's subset */
     if (!strcmp(name, "new") || !strcmp(name, "open") || !strcmp(name, "import_ifc")) return 1; /* ribbon.rs:559 */
@@ -642,6 +653,9 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "section_box")) return loaded(s) && !in_2d(s);
     /* ISS71 (issue #71): Box to selection turns the box on; Rust also wants it on (DEVIATIONS). */
     if (!strcmp(name, "box_to_selection")) return loaded(s) && !in_2d(s);
+    /* ISS71: the box's orientation, a choice only when true north differs from project north */
+    if (!strcmp(name, "box_north_project") || !strcmp(name, "box_north_true"))
+        return loaded(s) && !in_2d(s) && iss71_yaw(s, 0) != iss71_yaw(s, 1);
     /* ---- FAKE1: pages the lab serves and the sheet verbs. project: ribbon.rs:611 `_ => loaded`,
      * history: ribbon.rs:590 editable(), new_sheet: ribbon.rs:611 `_ => loaded` (the C core
      * answers the project query and stores sheets in an editable model only: a read-only IFC
@@ -677,6 +691,8 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
 static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strncmp(a->name, "place_", 6)) return s->open && s->placing && !strcmp(a->name + 6, KIND_NAME[s->placing_kind]);
     if (!strcmp(a->name, "section_box")) return s->vis.section_on; /* ribbon.rs:629 */
+    if (!strcmp(a->name, "box_north_project")) return !s->vis.true_north; /* ISS71 */
+    if (!strcmp(a->name, "box_north_true")) return s->vis.true_north;     /* ISS71 */
     if (!strcmp(a->name, "reveal_hidden")) return s->vis.reveal;   /* ribbon.rs:643 */
     if (!strcmp(a->name, "measure")) return loaded(s) && s->measure.on; /* ribbon.rs:625 (ticket T1) */
     if (!strcmp(a->name, "edges")) return s->edges;               /* Q2: ribbon.rs:626 opts.edges */
@@ -1556,18 +1572,17 @@ static int sec1_store_vis_ex(cc_session *s, int all, const cc_vis_state *from, c
  * model's and a linked model's), in the box's frame, grown by CC_BOX_SELECTION_MARGIN_MM on every
  * side; nothing selected: around everything visible (lib.rs fit_section_box's margin). The box is
  * turned on. */
-static void iss71_box_to_selection(cc_session *s) {
-    cc_vis *v = &s->vis;
-    const cc_scene *sc = scene_now(s);
-    if (!sc) return;
-    float inf = 1e30f * 1e30f, lo[3] = {inf, inf, inf}, hi[3] = {-inf, -inf, -inf};
+/* The selection's bounds in the frame turned by `yaw`; 0: nothing selected. */
+static int iss71_sel_bounds(cc_session *s, const cc_scene *sc, float yaw, float lo[3], float hi[3]) {
+    float inf = 1e30f * 1e30f;
+    for (int k = 0; k < 3; k++) lo[k] = inf, hi[k] = -inf;
     static const float zero[3] = {0, 0, 0};
     int any = 0;
     for (size_t k = 0; k < sc->nelements; k++) {
         const cc_gid *g = &sc->elements[k].id;
         int on = s->has_primary && !cc_gid_cmp(&s->primary, g);
         for (size_t i = 0; !on && i < s->nalso; i++) on = !cc_gid_cmp(&s->also[i], g);
-        if (on) cc_vis_grow(sc, k, zero, v->yaw, lo, hi), any = 1;
+        if (on) cc_vis_grow(sc, k, zero, yaw, lo, hi), any = 1;
     }
     if (s->link_sel >= 0 && (size_t)s->link_sel < s->nlinks) { /* a linked model's element */
         const cc_scene *ls = cc_link_scene(&s->links[s->link_sel]);
@@ -1575,9 +1590,19 @@ static void iss71_box_to_selection(cc_session *s) {
             if (memcmp(ls->elements[k].id.c, s->link_sel_id, 22)) continue;
             float off[3];
             for (int q = 0; q < 3; q++) off[q] = (float)(ls->origin[q] - sc->origin[q]); /* lib.rs:1499 */
-            cc_vis_grow(ls, k, off, v->yaw, lo, hi), any = 1;
+            cc_vis_grow(ls, k, off, yaw, lo, hi), any = 1;
         }
     }
+    return any;
+}
+
+static void iss71_box_to_selection(cc_session *s) {
+    cc_vis *v = &s->vis;
+    const cc_scene *sc = scene_now(s);
+    if (!sc) return;
+    float lo[3], hi[3];
+    v->yaw = iss71_yaw(s, v->true_north); /* in the orientation chosen */
+    int any = iss71_sel_bounds(s, sc, v->yaw, lo, hi);
     if (!any || cc_vis_fit_bounds(v, lo, hi, CC_BOX_SELECTION_MARGIN_MM)) cc_vis_fit(v, sc, NULL);
     if (v->has_box) v->section_on = 1;
     v->drag_face = -1;
@@ -1589,8 +1614,17 @@ static void iss71_box_to_selection(cc_session *s) {
 static int vis_action_do(cc_session *s, const char *name, cc_buf *out) {
     cc_vis *v = &s->vis;
     const cc_gid *primary = s->has_primary ? &s->primary : NULL;
-    if (!strcmp(name, "section_box")) cc_vis_toggle(v, scene_now(s), primary);
-    else if (!strcmp(name, "box_to_selection")) iss71_box_to_selection(s); /* ISS71 */
+    if (!strcmp(name, "section_box")) {
+        if (!v->has_box) v->yaw = iss71_yaw(s, v->true_north); /* ISS71: the first fit, in the orientation chosen */
+        cc_vis_toggle(v, scene_now(s), primary);
+    } else if (!strcmp(name, "box_to_selection")) iss71_box_to_selection(s); /* ISS71 */
+    else if (!strcmp(name, "box_north_project") || !strcmp(name, "box_north_true")) { /* ISS71 */
+        const cc_scene *sc = scene_now(s);
+        v->true_north = !strcmp(name, "box_north_true");
+        float yaw = iss71_yaw(s, v->true_north), lo[3], hi[3];
+        int any = sc && iss71_sel_bounds(s, sc, yaw, lo, hi);
+        cc_vis_orient(v, yaw, any ? lo : NULL, any ? hi : NULL);
+    }
     else if (!strcmp(name, "reveal_hidden")) v->reveal = !v->reveal;
     else if (!strcmp(name, "clear_temporary")) cc_vis_clear_temporary(v);
     else if (!strcmp(name, "show_all_in_view")) {
@@ -2753,7 +2787,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
     const cc_scene *sc = loaded(s) ? scene_now(s) : NULL;
     cc_mlayer layers[1 + CC_MAX_LINKS];
     size_t nl = 0;
-    float mn[3], mx[3];
+    float mn[3], mx[3], yaw = 0.0f; /* ISS71: the section box's turn */
     int has_box = 0;
     if (sc) {
         layers[nl].sc = sc, layers[nl].vis = &s->vis, memset(layers[nl].off, 0, sizeof layers[nl].off), nl++;
@@ -2776,10 +2810,11 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
             cc_vis_free(&box);
         } else if (s->vis.section_on && s->vis.has_box) {
             has_box = 1, memcpy(mn, s->vis.min, sizeof mn), memcpy(mx, s->vis.max, sizeof mx);
+            yaw = s->vis.yaw; /* ISS71 */
         }
         arena_free(&a);
     }
-    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL};
+    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL, yaw};
     return cc_measure_call(&s->measure, name, body, n, sc ? &mv : NULL, out) == 200 ? CC_OK : CC_ERR;
 }
 

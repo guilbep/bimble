@@ -73,7 +73,9 @@ try {
   check("the ellipsis separates words: \"ifc open\" finds \"Link IFC…Open\"", (await match("ifc open", ["Link IFC…Open"])) === "[0]", await match("ifc open", ["Link IFC…Open"]));
   const labels = JSON.parse((await q("actions")).text).map((a) => a.label);
   const sb = await match("sec box", labels);
-  check("the ribbon's labels: \"sec box\" -> Section box, Section box to selection", sb === JSON.stringify([labels.indexOf("Section box"), labels.indexOf("Section box to selection")]), sb);
+  // ISS71: + the orientation's two actions (Section box: project north, true north), after Rust's 54.
+  check("the ribbon's labels: \"sec box\" -> Section box, Section box to selection, Section box: project / true north", sb === JSON.stringify([labels.indexOf("Section box"), labels.indexOf("Section box to selection"),
+    labels.indexOf("Section box: project north"), labels.indexOf("Section box: true north")]), sb);
   for (const [body, why] of [[{ items: [] }, "missing field `q`"], [{ q: "x" }, "missing field `items`"], [{ q: "x", items: [1] }, "items: invalid type"]]) {
     const r = await q("palette_match", body);
     check(`palette_match ${JSON.stringify(body)}: 400 ${why}`, r.status === 400 && r.text.startsWith(why), `${r.status} ${r.text}`);

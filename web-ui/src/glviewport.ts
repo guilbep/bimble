@@ -66,7 +66,8 @@
 // solids show filled at the cut shade (B3's passes, no hatching), pan and zoom as a plan, pick and
 // select work (rays along the look). The plan overlays (annotations, references, grid axes) stay
 // plans'. What the view hides by class, family, storey or material (visibility_sets `by_view`) is
-// not drawn. A building turned in its site (yaw != 0): the box is not turned here (see the report).
+// not drawn. A building turned in its site (yaw != 0): a section view's box is not turned here (see SEC1's report);
+// the 3D section box is (ISS71: its yaw, project or true north; the shader, the picks, edges and handles turn it).
 import {
   actions, viewActions, // Q2: the view switches (edges, orthographic, fit, top)
   viewportKeys, // KEY1: Esc and Delete in the viewport (shell/keys.ts)
@@ -326,6 +327,7 @@ uniform vec3 u_light;
 uniform int u_clip;      // 1: the section box is on
 uniform vec3 u_clip_min; // scene coordinates
 uniform vec3 u_clip_max;
+uniform vec2 u_clip_rot; // ISS71: (cos, sin) of the box's yaw: the fragment turned by -yaw into its frame
 uniform float u_cut;     // brightness of cut surfaces (back faces while the box is on)
 uniform float u_ambient; // < 0: unlit (edges)
 uniform float u_alpha;
@@ -333,7 +335,8 @@ out vec4 o;
 vec3 to_linear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
 vec3 to_srgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
 void main() {
-  if (u_clip == 1 && (any(lessThan(v_pos, u_clip_min)) || any(greaterThan(v_pos, u_clip_max)))) discard;
+  vec3 q = vec3(u_clip_rot.x * v_pos.x + u_clip_rot.y * v_pos.y, u_clip_rot.x * v_pos.y - u_clip_rot.y * v_pos.x, v_pos.z);
+  if (u_clip == 1 && (any(lessThan(q, u_clip_min)) || any(greaterThan(q, u_clip_max)))) discard;
   if (u_ambient < 0.0) {
     if (u_clip == 1 && v_back > 0.5) discard; // a back edge, only ever seen through the cut
     o = vec4(v_col, u_alpha);
@@ -513,6 +516,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const uClip = gl.getUniformLocation(prog, "u_clip");
   const uClipMin = gl.getUniformLocation(prog, "u_clip_min");
   const uClipMax = gl.getUniformLocation(prog, "u_clip_max");
+  const uClipRot = gl.getUniformLocation(prog, "u_clip_rot"); // ISS71
   const uCut = gl.getUniformLocation(prog, "u_cut");
   const uZbias = gl.getUniformLocation(prog, "u_zbias");
 
@@ -928,6 +932,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.uniform1i(uClip, box ? 1 : 0);
     gl.uniform3fv(uClipMin, box ? box.min : [0, 0, 0]);
     gl.uniform3fv(uClipMax, box ? box.max : [0, 0, 0]);
+    gl.uniform2f(uClipRot, Math.cos(box?.yaw ?? 0), Math.sin(box?.yaw ?? 0)); // ISS71: the turned box
     gl.uniform1f(uCut, CUT_SHADE);
     gl.uniform1f(uZbias, 0);
     gl.enable(gl.DEPTH_TEST);
@@ -1388,10 +1393,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const box = clipBox();
     const outside = (d: number): boolean => {
       if (!box) return false;
-      for (let k = 0; k < 3; k++) {
-        const p = e[k]! + dir[k]! * d;
-        if (p < (box.min[k] ?? 0) || p > (box.max[k] ?? 0)) return true;
-      }
+      const p = turnZ([e[0] + dir[0] * d, e[1] + dir[1] * d, e[2] + dir[2] * d], -(box.yaw ?? 0)); // ISS71: in the box's frame
+      for (let k = 0; k < 3; k++) if (p[k]! < (box.min[k] ?? 0) || p[k]! > (box.max[k] ?? 0)) return true;
       return false;
     };
     for (let el = 0; el < m.ids.length; el++) {

@@ -21,7 +21,7 @@
 // bimble-render ClipBox::around (the box), section.rs (the drag, MIN_SIZE).
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills what it starts.
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -377,6 +377,74 @@ try {
   const none = await call("tool", "box_press", JSON.stringify({ ray: ray(top) }));
   check("no model: box tool -> 400 no model open", none.status === 400 && none.text === "no model open", none.text);
   check("no model: query visibility origin null", JSON.parse(await q("visibility")).section_box.origin_mm === null);
+
+  // ---- ISS71: the box's orientation (project north / true north) on a model whose map turns 30° ----
+  check("ISS71: frame.json (no georeference): the orientation choice disabled",
+    !(await enabled("box_north_project")) && !(await enabled("box_north_true")));
+  const geoModel = join(tmp, "geo30.bimble"), fj = JSON.parse(readFileSync(join(CCORE, "golden/frame.json"), "utf8"));
+  fj.model.georef = { map_rotation_deg: -30 }; // plan_turn(true) = +30° (georef.h: the map's opposite)
+  writeFileSync(geoModel, JSON.stringify(fj));
+  const opened = await call("action", "open", JSON.stringify({ path: geoModel, discard: true }));
+  check("ISS71: open the model turned 30° -> 200", opened.status === 200, opened.text);
+  const north = JSON.parse(await q("north"));
+  const yaw30 = Math.fround(Math.PI / 6);
+  check("ISS71: query north: plan_turn_true 30°, plan_turn_project 0", Math.abs(north.plan_turn_true - Math.PI / 6) < 1e-12 && north.plan_turn_project === 0, JSON.stringify(north));
+  check("ISS71: the orientation choice enabled, project north pressed (the default)",
+    (await enabled("box_north_project")) && (await enabled("box_north_true")) && (await pressed("box_north_project")) && !(await pressed("box_north_true")));
+  const G = await meshBoxes(), gids = [...G.boxes.keys()].sort();
+  // Inside a box (frame turned by yaw: the point turned by -yaw), within a tolerance.
+  const inBox = (bx, p, tol = 0.5) => {
+    const c = Math.cos(bx.yaw), s2 = Math.sin(bx.yaw), q2 = [c * p[0] + s2 * p[1], -s2 * p[0] + c * p[1], p[2]];
+    return [0, 1, 2].every((k) => q2[k] >= bx.min[k] - tol && q2[k] <= bx.max[k] + tol);
+  };
+  const corners = (b) => Array.from({ length: 8 }, (_, i) => [i & 1 ? b[3] : b[0], i & 2 ? b[4] : b[1], i & 4 ? b[5] : b[2]]);
+  const holds = (bx, ids2) => ids2.every((id) => corners(G.boxes.get(id)).every((p) => inBox(bx, p)));
+  const [g1, g2] = gids;
+  await call("select", "-", JSON.stringify([g1]));
+  await act("box_to_selection");
+  const bP = JSON.parse(await q("visibility")).section_box.box;
+  check("ISS71: project north: yaw 0, the selected element's bounds ± 1000 mm", bP.yaw === 0 &&
+    JSON.stringify(bP) === JSON.stringify({ max: grown([G.boxes.get(g1)]).max, min: grown([G.boxes.get(g1)]).min, yaw: 0 }), JSON.stringify(bP));
+  check("ISS71: box_north_true -> 200", (await act("box_north_true")).status === 200);
+  const bT = JSON.parse(await q("visibility")).section_box.box;
+  check("ISS71: true north: yaw = the map's 30° (f32), pressed", Math.fround(bT.yaw) === yaw30 && (await pressed("box_north_true")) && !(await pressed("box_north_project")), JSON.stringify(bT));
+  check("ISS71: true north: the box still holds the selected element (refit around it in the turned frame)", holds(bT, [g1]), JSON.stringify(bT));
+  // In the turned frame, the element's turned corners touch the box less 1000 mm on some side.
+  const gap = Math.min(...[0, 1].map((k) => Math.min(...corners(G.boxes.get(g1)).map((p) => {
+    const c = Math.cos(bT.yaw), s2 = Math.sin(bT.yaw), q2 = [c * p[0] + s2 * p[1], -s2 * p[0] + c * p[1]];
+    return q2[k] - bT.min[k];
+  }))));
+  check("ISS71: true north with a selection: 1000 mm margin in the turned frame", Math.abs(gap - 1000) < 1, String(gap));
+  await act("box_north_project");
+  const bP2 = JSON.parse(await q("visibility")).section_box.box;
+  check("ISS71: toggling the orientation twice gives the same box", JSON.stringify(bP2) === JSON.stringify(bP), `${JSON.stringify(bP2)} vs ${JSON.stringify(bP)}`);
+  // Without a selection: refit around the box's corners (it keeps what it held), and back.
+  await call("select", "-", "[]");
+  await act("box_north_true");
+  const bC = JSON.parse(await q("visibility")).section_box.box;
+  const all8 = gids.filter((id) => holds(bP, [id]));
+  check("ISS71: no selection, true north: the turned box holds every element the box held", Math.fround(bC.yaw) === yaw30 && all8.length > 0 && holds(bC, all8), `${all8.length} held, ${JSON.stringify(bC)}`);
+  await act("box_north_project");
+  check("ISS71: and back: the same box", JSON.stringify(JSON.parse(await q("visibility")).section_box.box) === JSON.stringify(bP));
+  // The face drag in a turned box: rays in scene coordinates, the face moves along the box's axis.
+  await act("box_north_true");
+  const bt = JSON.parse(await q("visibility")).section_box.box, cy0 = Math.cos(bt.yaw), sy0 = Math.sin(bt.yaw);
+  const toScene = (p) => [cy0 * p[0] - sy0 * p[1], sy0 * p[0] + cy0 * p[1], p[2]];
+  const fc = [(bt.min[0] + bt.max[0]) / 2, (bt.min[1] + bt.max[1]) / 2, bt.max[2]]; // the top face's centre (frame)
+  const eyeT = toScene([fc[0] - 9000, fc[1], fc[2] + 6000]);
+  const rayT = (p) => { const P = toScene(p), dd = P.map((v, k) => v - eyeT[k]), l = Math.hypot(...dd); return [...eyeT, ...dd.map((v) => v / l)]; };
+  const pr = JSON.parse((await call("tool", "box_press", JSON.stringify({ ray: rayT(fc), ray_tol: rayT([fc[0], fc[1] + 150, fc[2]]) }))).text);
+  check("ISS71: a turned box: box_press on the top face's centre holds face 5", pr.active === true && pr.face === 5, JSON.stringify(pr));
+  const rl = JSON.parse((await call("tool", "box_release", JSON.stringify({ ray: rayT([fc[0], fc[1], fc[2] - 500]) }))).text);
+  check("ISS71: a turned box: the release moves the top 500 mm down, yaw kept", Math.abs(rl.box.max[2] - (bt.max[2] - 500)) < 0.5 && rl.box.yaw === bt.yaw, JSON.stringify(rl.box));
+  const pr2 = JSON.parse((await call("tool", "box_press", JSON.stringify({ ray: rayT([fc[0], bt.max[1], (bt.min[2] + rl.box.max[2]) / 2]), ray_tol: rayT([fc[0], bt.max[1] + 150, (bt.min[2] + rl.box.max[2]) / 2]) }))).text);
+  check("ISS71: a turned box: box_press on the +y face's centre (turned) holds face 3", pr2.active === true && pr2.face === 3, JSON.stringify(pr2));
+  await call("tool", "box_cancel", "");
+  // A box moved by hand is not the one the orientation made: back to project north refits around its corners.
+  await act("box_north_project");
+  const bH = JSON.parse(await q("visibility")).section_box.box;
+  check("ISS71: after a drag, project north refits around the dragged box's corners (yaw 0, holds them)", bH.yaw === 0 &&
+    corners([...rl.box.min, ...rl.box.max]).every((p) => inBox(bH, [cy0 * p[0] - sy0 * p[1], sy0 * p[0] + cy0 * p[1], p[2]])), JSON.stringify(bH));
 } catch (e) {
   check("no exception", false, e.stack ?? String(e));
 } finally {

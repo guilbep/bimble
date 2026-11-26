@@ -15,7 +15,8 @@ export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string;
 // Reference .rbox: a label over a 150 px select (sel) or a mono readout (readout). No Rust call yet: drawn disabled, empty.
 export interface RibbonBox { key: RibbonKey; kind: "sel" | "readout"; missing: string }
 // box: drawn after the tools, in a `.tools` with style="align-items:center" (as the reference).
-export interface RibbonGroup { key: RibbonKey; tools: RibbonTool[]; box?: RibbonBox }
+// north (ISS71): the section box's orientation control after the tools (shell/BoxNorth.vue).
+export interface RibbonGroup { key: RibbonKey; tools: RibbonTool[]; box?: RibbonBox; north?: boolean }
 
 export const RIBBON: Record<TabId, RibbonGroup[]> = {
   project: [
@@ -169,7 +170,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
     { key: "ribbon.view.g2", tools: [
       { key: "ribbon.view.g2.t1", tag: "button", icon: "<path d=\"M12 3 20 7v10l-8 4-8-4V7z\"/><path d=\"M4 7l8 4 8-4M12 11v10\"/>", action: "section_box" },
       { key: "ribbon.view.g2.t2", tag: "button", icon: "<path d=\"M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5\"/>", action: "box_to_selection", tip: "ctx.boxToSelectionTip" },
-    ] },
+    ], north: true }, // ISS71
     { key: "ribbon.view.g3", tools: [
       { key: "ribbon.view.g3.t1", tag: "button", icon: "<path d=\"M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5\"/>", action: "fit" },
       { key: "ribbon.view.g3.t2", tag: "button", icon: "<rect x=\"5\" y=\"5\" width=\"14\" height=\"14\"/><path d=\"M12 9v6M9 12h6\"/>", action: "top" },

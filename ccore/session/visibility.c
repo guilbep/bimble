@@ -79,7 +79,7 @@ void cc_vis_reset(cc_vis *v) {
     v->section_on = v->has_box = 0;
     v->drag_face = -1;
     prev_clear(v); /* ISS72: the Show previous stacks belong to the model that was open */
-    v->yaw = 0.0f; /* ISS71 */
+    v->yaw = 0.0f, v->true_north = 0, v->has_alt = 0; /* ISS71 */
 }
 
 int cc_vis_hidden(const cc_vis *v, const cc_gid *g) {
@@ -197,6 +197,33 @@ int cc_vis_fit_bounds(cc_vis *v, const float lo[3], const float hi[3], float mar
     for (int k = 0; k < 3; k++) v->min[k] = lo[k] - margin, v->max[k] = hi[k] + margin;
     v->has_box = 1;
     return 0;
+}
+static int same3(const float *a, const float *b) { return a[0] == b[0] && a[1] == b[1] && a[2] == b[2]; }
+
+void cc_vis_orient(cc_vis *v, float yaw, const float *sel_lo, const float *sel_hi) {
+    v->drag_face = -1;
+    if (!v->has_box || yaw == v->yaw) {
+        v->yaw = yaw;
+        return;
+    }
+    float mn[3], mx[3];
+    if (v->has_alt && v->alt_yaw == yaw && same3(v->min, v->made_min) && same3(v->max, v->made_max)) {
+        memcpy(mn, v->alt_min, sizeof mn), memcpy(mx, v->alt_max, sizeof mx);
+    } else if (sel_lo && sel_hi && sel_lo[0] <= sel_hi[0] && sel_lo[1] <= sel_hi[1] && sel_lo[2] <= sel_hi[2]) {
+        for (int k = 0; k < 3; k++) mn[k] = sel_lo[k] - CC_BOX_SELECTION_MARGIN_MM, mx[k] = sel_hi[k] + CC_BOX_SELECTION_MARGIN_MM;
+    } else { /* the corners: from the old frame to the scene, then into the new frame */
+        float inf = 1e30f * 1e30f;
+        for (int k = 0; k < 3; k++) mn[k] = inf, mx[k] = -inf;
+        double d = (double)v->yaw - (double)yaw, sn = cc_sin(d), cs = cc_cos(d);
+        for (int i = 0; i < 8; i++) {
+            double c[2] = {(i & 1) ? v->max[0] : v->min[0], (i & 2) ? v->max[1] : v->min[1]};
+            float p[3] = {(float)(cs * c[0] - sn * c[1]), (float)(sn * c[0] + cs * c[1]), (i & 4) ? v->max[2] : v->min[2]};
+            corner_union(mn, mx, p);
+        }
+    }
+    memcpy(v->alt_min, v->min, sizeof mn), memcpy(v->alt_max, v->max, sizeof mx), v->alt_yaw = v->yaw;
+    memcpy(v->min, mn, sizeof mn), memcpy(v->max, mx, sizeof mx), v->yaw = yaw;
+    memcpy(v->made_min, mn, sizeof mn), memcpy(v->made_max, mx, sizeof mx), v->has_alt = 1;
 }
 /* ---- end ISS71 ---- */
 
@@ -482,9 +509,22 @@ static void drag_to(cc_vis *v, const double ray[6]) {
     }
 }
 
+/* ISS71: a ray (origin, direction) in the turned box's frame (turned by -yaw). */
+static void ray_to_frame(float yaw, double r[6]) {
+    double sn = cc_sin(-(double)yaw), cs = cc_cos(-(double)yaw);
+    for (int k = 0; k < 6; k += 3) {
+        double x = r[k], y = r[k + 1];
+        r[k] = cs * x - sn * y, r[k + 1] = sn * x + cs * y;
+    }
+}
+
 int cc_vis_tool(cc_vis *v, const char *name, const char *body, size_t n, Buf *out) {
     BoxArgs a;
     if (box_args(body, n, &a, out)) return 400;
+    if (v->yaw != 0.0f) { /* ISS71: the pointer rays in the box's frame (min, max of box_set are) */
+        if (a.has_ray) ray_to_frame(v->yaw, a.ray);
+        if (a.has_ray_tol) ray_to_frame(v->yaw, a.ray_tol);
+    }
     if (!strcmp(name, "box_set")) {
         if (!a.has_min || !a.has_max) {
             buf_puts(out, "box_set needs \"min\" and \"max\" ([x, y, z], mm relative to the scene origin)");

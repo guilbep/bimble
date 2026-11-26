@@ -150,7 +150,8 @@ for (const [i, [name, content]] of files.entries()) {
   fmesh();
   both("action", "unhide", "");
   both("select", "-", JSON.stringify(ids.slice(0, 2)));
-  for (const a of ["isolate_in_view", "box_to_selection", "section_box", "show_all_in_view", "reveal_hidden", "hide_in_view", "clear_temporary", "isolate_now", "show_previous", "show_all", "show_previous" /* ISS72 */])
+  for (const a of ["isolate_in_view", "box_to_selection", "section_box", "show_all_in_view", "reveal_hidden", "hide_in_view", "clear_temporary", "isolate_now", "show_previous", "show_all", "show_previous" /* ISS72 */,
+    "box_north_true", "box_north_project" /* ISS71: refused alike on a model without a turned georeference */])
     both("action", a, ""), both("query", "visibility", "{}");
   both("tool", "box_set", JSON.stringify({ min: [0, 0, 0], max: [8000.5, 6000.25, 3000.1], on: true }));
   both("tool", "box_press", JSON.stringify({ ray: [-5000, 3000, 9000, 0.8320502943378437, 0, -0.5547001962252291], ray_tol: [-5000, 3150, 9000, 0.8320502943378437, 0, -0.5547001962252291] }));

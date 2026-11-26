@@ -58,6 +58,11 @@ typedef struct {
     /* ---- ISS71 ---- the box's turn (radians, counter-clockwise about the vertical through the
      * scene origin, f32 as ClipBox::yaw): min and max are corners in the box's frame. */
     float yaw;
+    /* The orientation chosen (1: true north, 0: project north) and, for a round trip, the box
+     * before the last orientation change (alt_*) and the box that change made (made_*). */
+    int true_north;
+    int has_alt;
+    float alt_min[3], alt_max[3], alt_yaw, made_min[3], made_max[3];
     /* ---- end ISS71 ---- */
 } cc_vis;
 
@@ -69,6 +74,12 @@ void cc_vis_grow(const cc_scene *sc, size_t k, const float off[3], float yaw, fl
 /* The box = [lo, hi] (in the frame of v->yaw) grown by `margin` on every side. 0, or -1 when
  * [lo, hi] is empty (the box unchanged). */
 int cc_vis_fit_bounds(cc_vis *v, const float lo[3], const float hi[3], float margin);
+/* The box turned to `yaw` (an orientation change), keeping what it held: the box before the last
+ * change when the box is still the one that change made and that box had this yaw (a round trip
+ * gives the same box back); else around `sel_lo`..`sel_hi` (the selection in the new frame, NULL:
+ * none) grown by CC_BOX_SELECTION_MARGIN_MM; else around the current box's corners in the new
+ * frame. Without a box only the yaw changes (the next fit uses it). */
+void cc_vis_orient(cc_vis *v, float yaw, const float *sel_lo, const float *sel_hi);
 /* ---- end ISS71 ---- */
 
 void cc_vis_init(cc_vis *v);

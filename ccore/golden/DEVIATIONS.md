@@ -822,7 +822,7 @@ hidden; `ribbon.rs:130` lists 54 actions. The office's engineer asked for both b
 - **No shortcut**: Rust's H (`lib.rs:2983`, hatching) ignores the modifiers, so Shift H is taken.
 - Tests: `test/visibility_test.mjs` (ISS72 checks), `test/lab_visibility.mjs` (the ribbon buttons,
   native and wasm), `test/wasm_run.mjs` and `test/wasm_view_run.mjs` (native = wasm).
-## 26. The section box: Box to selection with 1 m, a right-click menu (ticket ISS71, issue #71)
+## 26. The section box: Box to selection with 1 m, a right-click menu, arrowheads, turned to project or true north (ticket ISS71, issue #71)
 
 **Rust.** `box_to_selection` (lib.rs `fit_section_box`) fits the box around the one primary
 selected element, or around everything visible, with `ClipBox::around`'s margin (1 mm + 1e-5 of
@@ -839,6 +839,20 @@ the size); it is enabled only while the box is on (ribbon.rs:593). The viewport 
   when it is not selected, then shows Box to selection, Hide, Isolate (the actions `box_to_selection`,
   `hide_now`, `isolate_now`, greyed out as `query actions` says).
 
-**Where.** `ccore/session/visibility.c` and `.h`, `calls.c` (ISS71 blocks);
-`web-ui/src/shell/ContextMenu.vue`, `contextItems.ts`, `RibbonTool.vue` (tooltip),
-`web-ui/src/glviewport.ts` (ISS71 blocks); tests `ccore/test/visibility_test.mjs`, `host_test.mjs`.
+- **The handles** are one arrowhead per face (Rust's `section.rs` overlay: six square handles),
+  pointing out along the face's normal, 18 px on screen, the press radius 16 px about the face centre.
+- **The box turns** (Rust's `ClipBox::yaw` is always 0 for the section box): two C actions after
+  Rust's 54, `box_north_project` (the default) and `box_north_true` (pressed: the choice the session
+  keeps; enabled in 3D when the two turns differ), give the box `yaw` = `plan_turn(true_north)`
+  (`georef.h`), as a section's (views.rs): project north is the building's axes (`rotation_deg`, 0
+  for every model without a georeference: the box as before), true north the map's
+  (`-map_rotation_deg`). A change keeps what the box held: the box before the last change when the
+  box is still the one that change made (a round trip gives the same box), else around the
+  selection + 1 m in the new frame, else around the box's corners in the new frame. The face drag
+  takes its rays into the box's frame; the measure tool's clip, the page's shader, picks, edges and
+  handles turn with it. `query visibility` prints the yaw (f32 as serde).
+
+**Where.** `ccore/session/visibility.c` and `.h`, `calls.c`, `measure.c` and `.h` (ISS71 blocks);
+`web-ui/src/shell/ContextMenu.vue`, `contextItems.ts`, `BoxNorth.vue`, `Ribbon.vue`, `RibbonTool.vue`
+(tooltip), `web-ui/src/glviewport.ts`, `bimble.ts` (ISS71 blocks); tests
+`ccore/test/visibility_test.mjs`, `lab_section_box.mjs`, `host_test.mjs`, `palette_test.mjs`.
