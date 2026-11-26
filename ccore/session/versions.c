@@ -453,8 +453,10 @@ static const JrVal *parse_body(Arena *a, const char *body, size_t n) {
 }
 
 /* lib.rs:2082-2092: the model a switch gives is written to the working file, which is opened
- * again (fresh undo history, saved, rev + 1; the session file follows). */
-static int follow(cc_session *s, cc_model *m, cc_buf *out) {
+ * again (fresh undo history, saved, rev + 1; the session file follows). *written (FIXSES): 0 when
+ * the working file was left as it was (the write failed): the caller puts HEAD back. */
+static int follow(cc_session *s, cc_model *m, cc_buf *out, int *written) {
+    *written = 0;
     Buf b;
     buf_init(&b);
     size_t pn = strlen(s->path);
@@ -468,6 +470,7 @@ static int follow(cc_session *s, cc_model *m, cc_buf *out) {
         buf_puts(out, ": cannot write");
         return CC_ERR;
     }
+    *written = 1;
     char path[sizeof s->path];
     memcpy(path, s->path, sizeof path);
     cc_error err;
@@ -576,11 +579,23 @@ static int a_branch(cc_session *s, int create, const JrVal *v, cc_buf *out) {
         }
     }
     cc_model_free(&m);
+    /* FIXSES: cc_repo_switch moves HEAD before the working file is written; when that write fails
+     * (a read-only folder, a full disk) HEAD is put back, so a refused switch changed nothing (else
+     * the next commit put the old branch's model on the new branch). Rust keeps the new model in
+     * memory, unsaved: the C session's model is its file, so the call is undone instead. */
+    cc_repo_head_t old;
+    if (cc_repo_head(&r, &old, &e)) {
+        fail(out, &e);
+        goto done;
+    }
     if (cc_repo_switch(&r, name, &m, &e)) {
         fail(out, &e);
         goto done;
     }
-    rc = follow(s, &m, out);
+    int written;
+    rc = follow(s, &m, out, &written);
+    if (rc != CC_OK && !written && cc_repo_set_head(&r, &old, &e))
+        buf_puts(out, "; HEAD not put back: "), buf_append(out, e.p ? e.p : "", e.len);
     if (rc == CC_OK) buf_clear(out), buf_puts(out, "{\"branch\":"), json_escape(out, name, strlen(name)), buf_putc(out, '}');
 done:
     cc_model_free(&m);
@@ -676,15 +691,27 @@ static int a_merge(cc_session *s, const JrVal *v, cc_buf *out) {
         }
     }
     int how = 0;
-    cc_hash h;
+    cc_hash h, before;
+    int had = 0;
     int64_t now = s->pf->unix_s ? s->pf->unix_s(s->pf->ctx) : 0;
+    if (cc_repo_head_commit(&r, &before, &had, &e)) {
+        fail(out, &e);
+        goto done;
+    }
     if (cc_repo_merge(&r, name, prefer, buf_cstr(&author), now, NULL, &how, &h, &m, &cf, &e)) {
         fail(out, &e);
         goto done;
     }
-    /* lib.rs:2077-2092: the merged model (or the one fast-forwarded to) becomes the working file. */
+    /* lib.rs:2077-2092: the merged model (or the one fast-forwarded to) becomes the working file.
+     * FIXSES: when it cannot be written, HEAD's ref goes back to the commit it had (the merge
+     * commit stays in the store, unreferenced), as branch_switch above. */
     if (how == CC_MERGED_FAST_FORWARD || how == CC_MERGED_COMMIT) {
-        if (follow(s, &m, out) != CC_OK) goto done;
+        int written;
+        if (follow(s, &m, out, &written) != CC_OK) {
+            if (!written && had && cc_repo_move_head(&r, before.h, &e))
+                buf_puts(out, "; HEAD not put back: "), buf_append(out, e.p ? e.p : "", e.len);
+            goto done;
+        }
     }
     buf_clear(out);
     JsonW w;

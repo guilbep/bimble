@@ -25,7 +25,7 @@
 //   400 with that reason and capabilities history_write false (H2a).
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills what it starts.
 import { spawn } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -250,6 +250,34 @@ try {
   eq("refused: the link is still there", (await q("links")).json?.length, 1);
   r = await act("branch_switch", { name: "main", discard: true });
   eq("switch with discard drops the link", [r.status, (await q("links")).json?.length, (await q("state")).json?.unsaved], [200, 0, false]);
+
+  // FIXSES: the working file cannot be written (its folder read-only): switch and merge answer
+  // 400 and HEAD stays where it was (before, HEAD had moved to the new branch while the file and
+  // the model stayed on the old one). POSIX only: chmod.
+  if (process.platform !== "win32") {
+    const headNow = async () => (await q("versions")).json?.head;
+    const h0 = await headNow();
+    chmodSync(tmp, 0o555);
+    try {
+      r = await act("branch_switch", { name: "x" });
+    } finally { chmodSync(tmp, 0o755); }
+    eq("switch, the folder read-only: 400", [r.status, r.text], [400, `${model}: cannot write`]);
+    eq("switch refused: HEAD still main", await headNow(), h0);
+    r = await act("branch_create", { name: "y" });
+    await call("verb", "set_project_field", JSON.stringify({ label: "Phase", value: "Y" }));
+    r = await act("commit", { message: "phase Y" });
+    check("commit on y", r.status === 200, r.text);
+    r = await act("branch_switch", { name: "main" });
+    check("switch main", r.status === 200, r.text);
+    const h1 = await headNow();
+    chmodSync(tmp, 0o555);
+    try {
+      r = await act("merge", { name: "y" });
+    } finally { chmodSync(tmp, 0o755); }
+    eq("merge (a fast-forward), the folder read-only: 400", [r.status, r.text], [400, `${model}: cannot write`]);
+    eq("merge refused: HEAD main still at its commit", await headNow(), h1);
+    eq("merge refused: pending clean (the model is HEAD's)", (await q("pending")).json?.changes, []);
+  }
 
   // A damaged object: c2 as plain JSON with one byte flipped.
   const obj = join(tmp, "frame.bimble-history/objects", c2.slice(0, 2), c2.slice(2));
