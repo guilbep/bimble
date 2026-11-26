@@ -27,9 +27,8 @@ the conditions of each number are listed under the list.
 - **IFC reading** [1]: 617 public STEP files (IFC2X3 283, IFC4 83, IFC4X3 249, other 2;
   1.24 GB) read. "Read" means not refused, no crash, no timeout, and no report under ASan and
   UBSan; it does not mean every product is drawn: 125,832 of 128,591 products with a body
-  get a mesh (97.9 %). Not
-  counted: 38 non-STEP files (ifcZIP, ifcXML: refused, not read yet) and 173 git-lfs pointer
-  files that were not fetched.
+  get a mesh (97.9 %). Not counted: 38 non-STEP files (ifcZIP, ifcXML: refused, not
+  read yet) and 173 git-lfs pointer files that were not fetched.
 - **IFC against Rust** [1]: before the C reader learnt new types, C and Rust gave the same scene
   and meshes on 616 of 617 files. Since then the C reader draws types Rust does not, on purpose:
   26 STEP files changed with IFC2 (591 kept their scene byte for byte), 17 more files with IFC3,
@@ -41,9 +40,9 @@ the conditions of each number are listed under the list.
   only, not what the action does); 44 of them have the same `enabled` and `pressed` flags in all
   13 scenarios (synthetic fixtures, mainly a 72-element frame). 21 of the 29 Rust queries
   answer with the same JSON key names and types (not checked: the values). 16 of the 16 Rust
-  shortcuts have a row in
-  the lab's key table; 1 of them cannot run in a browser tab (Ctrl N: the browser keeps it). The
-  Rust answers were dumped from a development build that reports `bimble 0.18.1`, not from v0.19.0.
+  shortcuts have a row in the lab's key table; 1 of them cannot run in a browser tab
+  (Ctrl N: the browser keeps it). The Rust answers were dumped from a development build that
+  reports `bimble 0.18.1`, not from v0.19.0.
   6 controls still shown are not served by the C core; the report lists them.
 - **Size** [3]: 59,540 lines of C; the viewer wasm 438,424 bytes (206,371 gzip, 43.8 % of
   its 1,000,000-byte limit), the editor wasm 1,059,779 bytes (433,732 gzip), the native program
@@ -62,9 +61,9 @@ the conditions of each number are listed under the list.
 Sources and conditions:
 
 1. `ccore/results/ifc_corpus.md` (`ccore/bench/corpus.sh`): the public corpora at pinned commits;
-   the sanitizer run covered 655 files (617 STEP, 38 not STEP). "Drawn" counts products with a
-   non-empty mesh;
-   the IfcOpenShell count is products its iterator triangulates to at least one face.
+   the sanitizer run covered 655 files (617 STEP, 38 not STEP). "Drawn" counts products
+   with a non-empty mesh; the IfcOpenShell count is products its iterator triangulates to at
+   least one face.
 2. `ccore/results/parity.md` (`ccore/tools/parity.mjs`): its header says what it supports and what it
    does not.
 3. `ccore/results/weight.md` (`ccore/tools/weight.mjs`): the wasm files built by `build.sh wasm` and
