@@ -48,7 +48,8 @@ the site stays as it was.
 | `/c/` | one page that sends an old link on to `/`, with its query and fragment |
 | `/egui/` | the same, to `/rust/egui/` |
 | `/preview/pr-<number>/` | one pull request's C lab, only after a manual run that asks for it |
- A manual run (Actions →
+
+A manual run (Actions →
 pages → Run workflow) can name another `ccore_ref` or publish a pull request's lab under
 `preview/pr-<number>/`; only a run started on `main` deploys (a run on another branch builds and
 stops). A preview is served from the production origin and shares its browser storage with the
