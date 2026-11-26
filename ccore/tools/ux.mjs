@@ -261,7 +261,13 @@ const INSTR = String.raw`(() => {
     for (const r of recs) {
       const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
       if (el && el.closest && el.closest('[data-bb="status-coords"]')) continue;
-      ux.muts++; ux.lastMut = now(); break;
+      ux.muts++; ux.lastMut = now();
+      // MEAS1: what changed last (the element's data-bb, else its tag and class), for the Measure study's moves
+      const bb = el && el.closest ? el.closest("[data-bb]") : null;
+      ux.lastMutWhat = (bb ? bb.getAttribute("data-bb") : "") + " " + (el ? el.tagName.toLowerCase() + (el.className && typeof el.className === "string" ? "." + el.className.split(" ")[0] : "") : "") + " " + r.type + (r.attributeName ? ":" + r.attributeName : "")
+        + [...r.addedNodes].slice(0, 1).map((n) => " +" + (n.nodeType === 1 ? n.tagName.toLowerCase() + (n.getAttribute("data-bb") ? "[" + n.getAttribute("data-bb") + "]" : "") + (typeof n.className === "string" && n.className ? "." + n.className.split(" ")[0] : "") : "#" + n.nodeName)).join("")
+        + [...r.removedNodes].slice(0, 1).map((n) => " -" + (n.nodeType === 1 ? n.tagName.toLowerCase() + (n.getAttribute("data-bb") ? "[" + n.getAttribute("data-bb") + "]" : "") + (typeof n.className === "string" && n.className ? "." + n.className.split(" ")[0] : "") : "#" + n.nodeName)).join("");
+      break;
     }
   }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   for (const t of ["pointerdown", "keydown", "wheel", "mousedown", "pointermove"]) addEventListener(t, (e) => { if (ux.arm) { ux.arm = false; ux.tIn = e.timeStamp; } }, true);
@@ -814,7 +820,8 @@ async function measureStudy() {
     const pr = await settle(MODEL !== "small" ? 30000 : 6000);
     const calls = BUILD === "wasm" ? await ev(`window.__ux.calls.slice(${c0}).map((c) => [c[0], Math.round(c[2] * 10) / 10])`) : [];
     const f1 = await ev("window.__bbGl.frames");
-    return { ms: pr.ms, calls, frames: f1 - f0, requests: events.requests - rq0, click: clickIt };
+    const what = pr.ms !== null && pr.ms > 100 ? await ev("window.__ux.lastMutWhat ?? null") : undefined; // MEAS1: a slow one's last DOM change
+    return { ms: pr.ms, calls, frames: f1 - f0, requests: events.requests - rq0, click: clickIt, ...(what ? { what } : {}) };
   };
   for (let k = 0; k < 20; k++) {
     const x = Math.min(rect[0] + rect[2] - 5, Math.max(rect[0] + 5, start[0] + (k - 10) * 9)), y = start[1] + ((k % 5) - 2) * 7;
@@ -896,7 +903,7 @@ function writeReport(R) {
   const one = (p, c) => { const o = p.controls.find((x) => x.where === c.where && x.label === c.label && x.i === c.i); return o?.verdict === "works" && !R.noOneRun ? o.ms?.[0] : undefined; };
   if (R.noOneRun) { L.push(`The verdict pass started at a 1-minute load of ${R.oneRunLoad} (> 4): its one-run times are not written (--force).`, ""); for (const c of works) c.ms = []; }
   else L.push(`"ms 1 run": the one activation of the verdict pass (a fresh page; 1-minute load at its start ${R.oneRunLoad}${R.oneRunLoad > 4 ? ", above 4: written with --force, indicative only" : ""}): an indication, not a median. "(median)": --reps repetitions.`, "");
-  const heads = [`ms 1 run ${R.passes[0].build}`, ...others.map((p) => `ms 1 run ${p.build}`), ...cols.map((c) => `ms ${c} (median)`)];
+  const heads = [`ms 1 run ${R.passes[0]?.build ?? "-"}`, ...others.map((p) => `ms 1 run ${p.build}`), ...cols.map((c) => `ms ${c} (median)`)];
   L.push(`| Where | Control | Bound to | Effect | ${heads.join(" | ")} |`, `|---|---|---|---|${heads.map(() => "---:").join("|")}|`);
   for (const c of works) {
     const k = `${c.where}|${c.label}|${c.i}`;
@@ -906,7 +913,7 @@ function writeReport(R) {
   L.push("");
   const over = [];
   for (const c of works) {
-    if (Number.isFinite(c.ms?.[0]) && c.ms[0] > 200) over.push([c, `1 run ${R.passes[0].build}`, c.ms[0]]);
+    if (Number.isFinite(c.ms?.[0]) && c.ms[0] > 200) over.push([c, `1 run ${R.passes[0]?.build ?? "-"}`, c.ms[0]]);
     for (const p of others) { const v = one(p, c); if (Number.isFinite(v) && v > 200) over.push([c, `1 run ${p.build}`, v]); }
     for (const col of cols) { const v = R.times[col]?.[`${c.where}|${c.label}|${c.i}`]; if (Number.isFinite(v) && v > 200) over.push([c, col, v]); }
   }
@@ -923,6 +930,7 @@ function writeReport(R) {
       `- Load (/proc/loadavg) before / after: \`${m.load ?? "?"}\` / \`${m.loadAfter ?? "?"}\`${Number(String(m.load).split(" ")[0]) > 4 ? " (above 4: the numbers are indicative, the shares of the profile hold)" : ""}.`,
       `- Pointer move → frame: median ${fmt(median(mv))} ms, max ${fmt(Math.max(...mv.filter(Number.isFinite)))} ms (${mv.length} moves); frames drawn per move: median ${median(m.moves.map((x) => x.frames))}.`,
       `- Click → frame: ${cl.map(fmt).join(", ")} ms.`,
+      ...(m.moves.some((x) => x.what) ? [`- Moves over 100 ms and their last DOM change: ${m.moves.map((x, k) => (x.what ? `move ${k + 1} ${Math.round(x.ms)} ms: ${esc(x.what)}` : null)).filter(Boolean).join("; ")}.`] : []),
       m.build === "wasm" ? `- Core calls per move (mean count and ms): ${callMs(m.moves) || "none"}.` : `- Requests to the host per move: median ${median(m.moves.map((x) => x.requests))}.`,
       `- Profile of 10 more moves (CDP Profiler, self time): ${m.profile.map((p) => `${esc(p.fn)} ${p.ms} ms (${p.share} %)`).join("; ")}.`, "");
   }

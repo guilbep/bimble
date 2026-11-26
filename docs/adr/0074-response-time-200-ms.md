@@ -84,8 +84,10 @@ ticket, for review on the implementation.
   the same answers as before, bit for bit (`test/measure_test.c` compares 81 rays with the old
   scan). The place tools' snap targets skip the elements whose box is outside the storey's band.
   **Alternative:** a BVH (or a grid) over the boxes and a lazy triangle BVH per element. Not needed
-  now: after the boxes, the 1,749-element local model answers a move in about 14 ms; it is the next
-  step if a model with very large single meshes is slow.
+  now: with the boxes a pointer move answers in 14 to 16 ms (median, wasm build, `ux.mjs
+  --measure-only`, 1-minute load 1.1 to 2.3) on the 72-element frame, the 20,026-element model, the
+  mesh-heavy model (772 elements) and a local imported model (1,749 elements, 2.2 M triangles: 582 ms
+  before); it is the next step if a model with very large single meshes is slow.
 - **Choice: no cache of placed meshes.** Only the few elements under the pointer are placed per
   move. **Alternative:** a least-recently-used cache of placed meshes under a byte budget: more
   memory and a budget to tune, for a cost that the numbers do not show.

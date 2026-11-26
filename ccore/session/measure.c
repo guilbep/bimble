@@ -263,7 +263,6 @@ int cc_mboxes_build(cc_mboxes *b, const cc_scene *sc) {
     return 0;
 }
 
-
 /* Where the ray (o, d unit) enters the box `b` grown by a margin, at t >= 0: 1 with `tn`, 0 when
  * it misses. The margin (1 µm + 1e-9 of the coordinate) covers the rounding of a hit computed in
  * f64 from the f32 points; a box that is not finite is entered at 0 (always tested). */
