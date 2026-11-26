@@ -32,10 +32,12 @@ const TABLE = [
   ["host", "lab_settings", 47303, 3], // SET1
   ["host", "lab_materials", 47387, 87], // MAT1
   ["host", "lab_visibility", 47372, 72], // ISS72
+  ["host", "lab_section_box", 47389, 89], // ISS71
   ["vite", "lab_boot", 5191, 129],
   ["vite", "lab_settings", 5204, 142], // SET1
   ["vite", "lab_materials", 5150, 88], // MAT1
   ["vite", "lab_visibility", 5135, 73], // ISS72
+  ["vite", "lab_section_box", 5152, 90], // ISS71
 ];
 
 export const SPAN = 160; // offsets 0..SPAN-1 of a number base

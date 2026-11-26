@@ -10,6 +10,7 @@ import type { RibbonTool } from "./ribbon-tabs";
 import { HIDE_NOT_AVAILABLE, toolNotYet } from "./capability";
 import { shortcutFor } from "./keys"; // KEY1
 import { BOX_SELECTION_MARGIN_MM } from "./contextItems"; // ISS71
+import type { PartKey } from "../i18n/keys.gen"; // ISS71
 
 const props = defineProps<{ tool: RibbonTool; bb: string }>();
 // Real state from Rust; an action Rust does not list (or no action) is unavailable.
@@ -33,8 +34,12 @@ const title = computed(() => (notYet.value ? t("na.tooltip", { name: t(props.too
 
 // ---- KEY1 ---- the tooltip: the tool's name and its key (the key table's, Rust's), when it has one.
 const keyTip = computed(() => { const k = shortcutFor(props.tool.action); return k ? `${t(props.tool.key)} (${k})` : undefined; });
-// ISS71: a tool's longer tooltip (ribbon-tabs.ts `tip`), after its name and key.
-const longTip = computed(() => (props.tool.tip ? `${keyTip.value ?? t(props.tool.key)}: ${t(props.tool.tip, { m: BOX_SELECTION_MARGIN_MM / 1000 })}` : undefined));
+// ISS71: an action's longer tooltip, after the tool's name and key ({m}: Box to selection's margin, m).
+const TIPS: Partial<Record<string, PartKey>> = { box_to_selection: "ctx.boxToSelectionTip" };
+const longTip = computed(() => {
+  const k = props.tool.action ? TIPS[props.tool.action] : undefined;
+  return k ? `${keyTip.value ?? t(props.tool.key)}: ${t(k, { m: BOX_SELECTION_MARGIN_MM / 1000 })}` : undefined;
+});
 // ---- end KEY1 ----
 
 function run(): void {
