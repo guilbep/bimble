@@ -593,7 +593,7 @@ answer:
  *
  * The issue: Isolate and Reveal hidden work; missing are "Show all" (back to everything visible)
  * and "Show previous" (back to the visibility before the last hide or isolate). Both are C
- * additions (Rust has neither; DEVIATIONS 24). The behaviour:
+ * additions (Rust has neither; DEVIATIONS 25). The behaviour:
  *
  *   A visibility state = the temporary set (hidden or isolated for now, session only) + what the
  *   active view stores (hidden_elements, isolated_elements, and its family, class, storey, link

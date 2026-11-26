@@ -135,7 +135,7 @@ static const ActionRow ACTIONS[] = {
     {"paper_view", "On paper", "View", 0, 0},
     {"clear_temporary", "Show all hidden for now", "View", 0, 0},
     {"show_all_in_view", "Show all in view", "View", 0, 0},
-    /* ---- ISS72: C additions after Rust's 54 (GitHub issue #72, visibility.c ISS72, DEVIATIONS 24) ---- */
+    /* ---- ISS72: C additions after Rust's 54 (GitHub issue #72, visibility.c ISS72, DEVIATIONS 25) ---- */
     {"show_all", "Show all", "View", 0, 0},
     {"show_previous", "Show previous", "View", 0, 0},
     /* ---- end ISS72 ---- */

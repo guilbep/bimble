@@ -15,7 +15,7 @@
  * Folders are made with the platform's make_dir (FS1); a platform without it (the wasm module)
  * cannot write a history: "io: no history folder here". The C model holds two sections Rust's has
  * not (relations, grids): a tree of a model with them carries them too (left out when empty, so
- * every other tree is Rust's); Rust refuses such a tree (DEVIATIONS 26). */
+ * every other tree is Rust's); Rust refuses such a tree (DEVIATIONS 27). */
 #ifndef CCORE_REPO_WRITE_H
 #define CCORE_REPO_WRITE_H
 #include "repo.h"

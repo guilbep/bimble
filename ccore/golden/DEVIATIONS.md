@@ -859,7 +859,7 @@ the size); it is enabled only while the box is on (ribbon.rs:593). The viewport 
 (tooltip), `web-ui/src/glviewport.ts`, `bimble.ts` (ISS71 blocks); tests
 `ccore/test/visibility_test.mjs`, `lab_section_box.mjs`, `host_test.mjs`, `palette_test.mjs`.
 
-## 26. Writing the history: commit, branch, switch (ticket H2a, ADR 0017)
+## 27. Writing the history: commit, branch, switch (ticket H2a, ADR 0017)
 
 **What.** The C history store writes as Rust's `bimble_core::repo` (`ccore/src/repo_write.c`): for
 the same model, author, time and message, every object, tree and commit has Rust's name (BLAKE3 of

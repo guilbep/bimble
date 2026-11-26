@@ -117,7 +117,7 @@ int cc_vis_tool(cc_vis *v, const char *name, const char *body, size_t n, Buf *ou
 /* 1 if `name` is one of the box tool's calls. */
 int cc_vis_tool_name(const char *name);
 
-/* ---- ISS72 ---- Show all and Show previous (GitHub issue #72; C additions, DEVIATIONS 24).
+/* ---- ISS72 ---- Show all and Show previous (GitHub issue #72; C additions, DEVIATIONS 25).
  * A visibility state: what is hidden or isolated for now (the temporary set) and what the view
  * stores (hidden_elements, isolated_elements and its family, class, storey, link and material
  * lists). The reveal switch and the section box are not part of it. Behaviour: calls.c, ISS72. */

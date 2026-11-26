@@ -417,7 +417,7 @@ static int refuse(cc_buf *out, const char *text) {
 
 /* settings.rs author(): "name <e-mail>", or the name alone. The C core refuses without a name
  * (state.user is null then: the page sends the user to Settings), where Rust falls back to the
- * e-mail alone or $BIMBLE_AUTHOR / $USER (DEVIATIONS 26). 0, or -1 without a name. */
+ * e-mail alone or $BIMBLE_AUTHOR / $USER (DEVIATIONS 27). 0, or -1 without a name. */
 static int author_of(cc_session *s, Buf *author) {
     Buf u;
     buf_init(&u);

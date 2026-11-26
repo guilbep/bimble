@@ -288,7 +288,7 @@ int cc_repo_write_tree(const cc_repo *r, const cc_model *m, cc_hash *out, Buf *e
         }
         buf_putc(&t, ']');
     }
-    /* The C model's own sections (DEVIATIONS 26): only when there are some. */
+    /* The C model's own sections (DEVIATIONS 27): only when there are some. */
     if ((m->nrelations && put_map(r, m, CC_OBJ_RELATION, m->nrelations, "relations", &ms, &t, err)) ||
         (m->ngrids && put_map(r, m, CC_OBJ_GRID, m->ngrids, "grids", &ms, &t, err)))
         goto done;
