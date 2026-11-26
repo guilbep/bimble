@@ -58,7 +58,7 @@ export type Asked = "auto" | "webgl2" | "webgpu";
 const asked = (): Asked => {
   const q = new URLSearchParams(location.search).get("gpu");
   if (q === "webgpu" || q === "webgl2") return q;
-  const s = (userSettings.value?.values as { renderer?: string } | undefined)?.renderer;
+  const s = userSettings.value?.values.renderer;
   return s === "webgpu" || s === "webgl2" ? s : "auto";
 };
 

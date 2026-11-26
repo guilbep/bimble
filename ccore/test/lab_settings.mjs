@@ -206,6 +206,17 @@ async function lab(mode, S, evalJs) {
   const pOn = await storedHas('"moving_proxies":true');
   check(`${mode}: Far parts simplified: off then on (moving_proxies stored false, then true)`, pOff.includes('"moving_proxies":false') && pOn.includes('"moving_proxies":true'), `${pOff} / ${pOn}`);
   check(`${mode}: GPU culling of copies: not available yet, with the reason`, /WebGL2/.test((await text("[data-bb=settings-gpu-cull]")) ?? ""), (await text("[data-bb=settings-gpu-cull]")) ?? "none");
+  if (mode === "wasm") { // GPU1 (ADR 0083): the 3D renderer, stored; GPU culling offered with WebGPU (the native file stays Rust's eleven fields below)
+    const pickRenderer = (r) => evalJs(`(() => { const s = document.querySelector('[data-bb=settings-renderer]'); s.value = ${JSON.stringify(r)}; s.dispatchEvent(new Event('change')); return s.value; })()`);
+    check(`${mode}: 3D renderer: automatic by default`, (await evalJs("document.querySelector('[data-bb=settings-renderer]')?.value ?? null")) === "auto");
+    await pickRenderer("webgpu");
+    const rOn = await storedHas('"renderer":"webgpu"');
+    await raf2();
+    const cullOn = await evalJs("!!document.querySelector('[data-bb=settings-gpu-cull-on]') && !document.querySelector('[data-bb=settings-gpu-cull]')");
+    await pickRenderer("auto");
+    const rOff = await storedHas('"renderer":"auto"');
+    check(`${mode}: 3D renderer: WebGPU stored, GPU culling of copies then offered, back to automatic`, rOn.includes('"renderer":"webgpu"') && cullOn && rOff.includes('"renderer":"auto"'), `${cullOn} ${rOff}`);
+  }
   await click("[data-bb=settings-close]");
 
   // A reload: everything still there

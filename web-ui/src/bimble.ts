@@ -955,6 +955,8 @@ function loadCapabilities(version: string | null): void {
 export interface SettingsValues {
   coordinates: string; gpu_cull: boolean; memory_share: number; moving_fps: number; moving_proxies: boolean;
   recent: string[]; text_size: number; theme: string; ui_font: string; user_email: string; user_name: string;
+  /** GPU1 (ADR 0083): the lab's 3D renderer (not Rust's; absent from an older core). */
+  renderer?: "auto" | "webgl2" | "webgpu";
 }
 /** `query settings`. */
 export interface UserSettings {
