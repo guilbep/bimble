@@ -394,4 +394,9 @@ Not in `ccore/ci/run.sh` now (it would fail today). In this order:
   "not exercised"; a click on an element's list row in a page that only moves the focus.
 - **The `wasm-function[N]` names** in the profiles: `wasm-opt` strips the names; a build with a
   name section would name them (they are all inside `measure_pointer`, by the call timing).
+- **The status bar's EN / FR switch** changes the tabs' names, so the tool explored the left panel
+  again under "the tab FR" and "the tab EN": 2 extra surfaces, harmless, counted.
+- **Run times:** the wasm verdict pass and the Measure study on three models, 656 s; the native
+  verdict pass, about 760 s; the local model's Measure, about 3 minutes. A fresh page per activation
+  (median 820 ms per load) is most of it.
 - **No fix was made** (the page was not changed; the Measure fix is described in (c)).
