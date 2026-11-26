@@ -26,6 +26,7 @@
  * With linked models (links.h), the LNKS trailer follows: one BMSH per link. Without, nothing
  * follows (the bytes above, unchanged). */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ifc_read.h"
@@ -214,4 +215,54 @@ int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_
     }
     *p = cache->p ? cache->p : "", *n = cache->len;
     return s->mesh_status;
+}
+
+/* ---- 3D2 (ADR 0078): the HLOD proxies, in steps (mesh.h) ---- */
+
+void cc_mesh_proxies_free(cc_session *s) {
+    if (s->hlod) cc_hlod_free(s->hlod);
+    free(s->hlod);
+    buf_free(&s->hlod_out);
+    s->hlod = NULL, s->hlod_scene = NULL, s->hlod_status = 0, s->hlod_rev = 0, s->hlod_ms = 0;
+}
+
+int cc_mesh_proxies(cc_session *s, uint64_t budget, const char **p, size_t *n, uint32_t *rev, double *ms) {
+    cc_error err;
+    const cc_model *m = cc_mesh_model(s, rev, &err);
+    const cc_scene *sc = m || s->view ? cc_session_scene(s) : NULL; /* the open model's, an IFC's, a view file's */
+    if (!sc) {
+        cc_mesh_proxies_free(s);
+        buf_puts(&s->hlod_out, "no scene");
+        *p = buf_cstr(&s->hlod_out), *n = s->hlod_out.len, *ms = 0;
+        return 404;
+    }
+    if (s->hlod_scene != sc || s->hlod_rev != *rev || !s->hlod_status) {
+        cc_mesh_proxies_free(s);
+        s->hlod_scene = sc, s->hlod_rev = *rev;
+        s->hlod = calloc(1, sizeof *s->hlod);
+        cc_hlod_opts o;
+        cc_hlod_default(&o);
+        double t0 = s->pf->now_ms(s->pf->ctx);
+        if (!s->hlod) s->hlod_status = 500, buf_puts(&s->hlod_out, "out of memory");
+        else if (cc_hlod_start(s->hlod, sc, &o, &err)) s->hlod_status = 500, buf_puts(&s->hlod_out, err.msg);
+        else s->hlod_status = 202;
+        s->hlod_ms += s->pf->now_ms(s->pf->ctx) - t0;
+    }
+    if (s->hlod_status == 202) {
+        double t0 = s->pf->now_ms(s->pf->ctx);
+        int r = cc_hlod_step(s->hlod, budget ? budget : 1, &err);
+        buf_clear(&s->hlod_out);
+        s->hlod_out.oom = 0;
+        if (r < 0) s->hlod_status = 500, buf_puts(&s->hlod_out, err.msg);
+        else if (r == 0) buf_u64(&s->hlod_out, s->hlod->read), buf_putc(&s->hlod_out, ' '), buf_u64(&s->hlod_out, s->hlod->total);
+        else if (cc_hlod_bprx(s->hlod, *rev, (uint32_t)sc->nelements, &s->hlod_out, &err)) {
+            buf_clear(&s->hlod_out);
+            s->hlod_out.oom = 0;
+            s->hlod_status = 500, buf_puts(&s->hlod_out, err.msg);
+        } else s->hlod_status = 200;
+        s->hlod_ms += s->pf->now_ms(s->pf->ctx) - t0;
+    }
+    *ms = s->hlod_ms;
+    *p = s->hlod_out.p ? s->hlod_out.p : "", *n = s->hlod_out.len;
+    return s->hlod_status;
 }

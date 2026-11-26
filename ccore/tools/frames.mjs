@@ -1,4 +1,4 @@
-// 3D speed of the C lab (ticket 3D1, ADR 0078):
+// 3D speed of the C lab (tickets 3D1, 3D2, ADR 0078):
 //   node ccore/tools/frames.mjs [--force] [--label NAME] [--builds wasm,native] [--models large,heavy]
 //     [--frames 120] [--site DIR] [--pixels DIR] [--compare DIR] [--out FILE] [--no-history]
 // Writes ccore/results/frames.md (never edit it by hand) and the raw numbers to out/frames/frames.json.
@@ -36,6 +36,7 @@
 // --pixels DIR saves the picture of three fixed cameras per model (wasm build) as raw RGBA; --compare
 // DIR compares them with an earlier --pixels run (a pixel counts when a channel differs by more than
 // 40 levels, the threshold of Rust's culling_changes_nothing_on_screen) and fails over 0.1 % of pixels.
+// --no-wait: do not wait for the load to fall under 4 (with --force: the report is marked as forced).
 // --label NAME: the run's name in the report's history (one table row per label, kept from the
 // committed report: before and after each step of ticket 3D1).
 import { spawn, execFileSync } from "node:child_process";
@@ -225,7 +226,8 @@ async function cdpConnect(wsUrl) {
 // animation-frame callbacks), the core module's memory.
 const INSTR = String.raw`(() => {
   if (window.__fr) return;
-  const fr = window.__fr = { tIn: null, kind: null, draws: [], moves: [], X: null };
+  const fr = window.__fr = { tIn: null, kind: null, draws: [], moves: [], X: null, errors: [] };
+  addEventListener("error", (e) => { if (fr.errors.length < 20) fr.errors.push(String(e.message)); }); // 3D2: the page's uncaught errors
   addEventListener("pointermove", (e) => { if (fr.kind === "move" && fr.tIn === null) fr.tIn = e.timeStamp; }, true);
   addEventListener("pointerdown", (e) => { if (fr.kind === "click" && fr.tIn === null) fr.tIn = e.timeStamp; }, true);
   addEventListener("pointermove", (e) => { if (fr.kind === "stream") fr.moves.push(e.timeStamp); }, true);
@@ -304,11 +306,23 @@ const mouse = (type, x, y, extra = {}) => S("Input.dispatchMouseEvent", { type, 
 async function measure() {
   const out = { build: BUILD, model: MODEL, load: loadNow() };
   await fresh();
-  const g0 = await ev(`(() => { const g = window.__bbGl; return { first: g.firstFrameMs, tris: g.drawnTris, bytes: g.meshBytes, gpu: g.gpuBytes ?? null, elements: g.hiddenElements }; })()`);
+  const g0 = await ev(`(() => { const g = window.__bbGl; return { first: g.firstFrameMs, tris: g.drawnTris, bytes: g.meshBytes, gpu: g.gpuBytes ?? null, elements: g.hiddenElements,
+    meshAt: g.meshAt ?? null, full: g.fullFrameMs ?? null, fetch: g.meshFetchMs, ff: g.firstFrame ?? null, steps: g.loadSteps ?? null, preview: g.previewAt ?? null }; })()`);
   out.firstFrameMs = g0.first;
+  // 3D2 (step 5): the mesh's bytes in the page → its first frame, and → the picture complete
+  out.meshAt = g0.meshAt, out.fullFrameMs = g0.full, out.meshFetchMs = g0.fetch, out.firstFrame = g0.ff, out.loadSteps = g0.steps, out.previewAt = g0.preview;
   out.meshBytes = g0.bytes;
   out.gpuBytes = g0.gpu;
   out.trianglesShown = g0.tris;
+  // 3D2: the HLOD proxies, asked in steps after the first frame: wait until they are uploaded (at most 5 min)
+  const pr0 = Date.now();
+  while ((await ev("window.__bbGl.proxiesPending === true")) && Date.now() - pr0 < 300000) await sleep(100);
+  out.proxies = await ev("window.__bbGl.proxies ?? null");
+  out.proxyWaitMs = Date.now() - pr0;
+  await quiet(30000);
+  // 3D2 (step 5): read after the fill and the proxies (a quiet page): the picture complete, the frames after the first
+  const g1 = await ev(`(() => { const g = window.__bbGl; return { full: g.fullFrameMs ?? null, log: g.frameLog ?? null, loops: g.loops ?? null, errors: window.__fr.errors }; })()`);
+  out.fullFrameMs = g1.full, out.frameLog = g1.log, out.loops = g1.loops, out.pageErrors = g1.errors;
   await S("HeapProfiler.collectGarbage").catch(() => {});
   const heap = await S("Runtime.getHeapUsage");
   out.jsHeap = heap.usedSize;
@@ -323,12 +337,42 @@ async function measure() {
   const still = await ev(`(() => { const b = window.__bbGl.bench, ms = []; for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
     return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
   out.stillMedian = med(still.ms), out.stillTris = still.tris, out.stillDraws = still.draws;
+  // 3D2 (step 2): the same still frame without its edge pass (what edges cost)
+  const ne = await ev(`(() => { const b = window.__bbGl.bench, g = window.__bbGl, ms = []; g.noEdges = true; for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
+    g.noEdges = false; b.frame(0, false); return { ms, segs: g.q2 ? g.q2.edgeSegs : null }; })()`);
+  out.stillNoEdgesMedian = med(ne.ms), out.stillEdgeSegs = ne.segs;
+  out.stillProxy = await ev("window.__bbGl.proxies ? { cells: window.__bbGl.proxies.drawnCells, tris: window.__bbGl.proxies.drawnTris } : null");
+  // 3D2: the same still frame without proxies (the full detail), and the two pictures compared at the home camera
+  if (out.proxies) {
+    const full = await ev(`(() => { const b = window.__bbGl.bench, g = window.__bbGl, ms = []; g.noProxies = true; for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
+      const r = { ms, tris: g.frameTris, draws: g.frameDraws }; g.noProxies = false; b.frame(0, false); return r; })()`);
+    out.stillFullMedian = med(full.ms), out.stillFullTris = full.tris, out.stillFullDraws = full.draws;
+    out.proxyPixels = await ev(`(() => { const b = window.__bbGl.bench, g = window.__bbGl; g.noProxies = true; const a = b.snap(0, 0).rgba; g.noProxies = false;
+      const c = b.snap(0, 0).rgba; let n = 0, any = 0; for (let k = 0; k < a.length; k += 4) { const d = Math.max(Math.abs(a[k] - c[k]), Math.abs(a[k + 1] - c[k + 1]), Math.abs(a[k + 2] - c[k + 2]));
+      if (d > 40) n++; if (d > 0) any++; } return { changed: n, any, pixels: a.length / 4, cells: g.proxies.drawnCells, tris: g.proxies.drawnTris }; })()`);
+  }
+  // 3D2 (step 3): occlusion queries on. WebGL2 answers a query only after the page's task ends, so each frame
+  // here is its own animation frame: 3 still frames to settle (each asks, the next uses the answers), then 5
+  // timed; an orbit likewise; the queries asked and batches left out; the picture against the one without.
+  {
+    const oc = await ev(`(async () => { const b = window.__bbGl.bench, g = window.__bbGl, ms = [], next = () => new Promise((r) => requestAnimationFrame(() => r()));
+      g.occlusion = true; for (let i = 0; i < 3; i++) { b.frame(0, false); await next(); }
+      for (let i = 0; i < 5; i++) { ms.push(b.frame(0, false)); await next(); } const r = { ms, tris: g.frameTris, draws: g.frameDraws, occ: g.occ };
+      const orbit = []; const d = 2 * Math.PI / ${NFRAMES}; for (let i = 0; i < ${NFRAMES}; i++) { orbit.push(b.frame(d, true)); await next(); } r.orbit = orbit; r.orbitOcc = g.occ;
+      g.occlusion = false; b.frame(0, false); return r; })()`);
+    out.occStillMedian = med(oc.ms), out.occStillTris = oc.tris, out.occStillDraws = oc.draws, out.occ = oc.occ, out.occOrbitMedian = med(oc.orbit), out.occOrbit = oc.orbitOcc;
+    out.occPixels = await ev(`(async () => { const b = window.__bbGl.bench, g = window.__bbGl, next = () => new Promise((r) => requestAnimationFrame(() => r()));
+      const a = b.snap(0, 0).rgba; g.occlusion = true; for (let i = 0; i < 4; i++) { b.snap(0, 0); await next(); }
+      const c = b.snap(0, 0).rgba; const occ = g.occ; g.occlusion = false; let n = 0, any = 0; for (let k = 0; k < a.length; k += 4) { const d = Math.max(Math.abs(a[k] - c[k]), Math.abs(a[k + 1] - c[k + 1]), Math.abs(a[k + 2] - c[k + 2]));
+      if (d > 40) n++; if (d > 0) any++; } return { changed: n, any, occ }; })()`);
+  }
   // Close orbit (Rust's bench "close": a fifth of the fitted distance): what culling leaves out.
   const close = await ev(`(() => { const b = window.__bbGl.bench, ms = []; b.snap(0, 0); b.zoom(0.2); const d = 2 * Math.PI / ${NFRAMES};
     for (let i = 0; i < ${NFRAMES}; i++) ms.push(b.frame(d, true));
-    const moving = { tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; const st = [];
+    const moving = { tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws, mv: window.__bbGl.moving }; const st = [];
     for (let i = 0; i < 3; i++) st.push(b.frame(0, false));
     return { ms, st, moving, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
+  out.closeMoving = close.moving.mv;
   out.closeMedian = med(close.ms), out.closeTris = close.moving.tris, out.closeStill = med(close.st), out.closeStillTris = close.tris, out.closeStillDraws = close.draws;
   out.gpuBytes = await ev("window.__bbGl.gpuBytes ?? null");
   await quiet(20000);
@@ -358,15 +402,18 @@ async function measure() {
   out.moveMedian = med(lat), out.moveP95 = p95(lat), out.moveInputs = lat.length;
   out.stillNonBg = stillNonBg, out.dragNonBg = dragNonBg;
   // Pick click -> frame: 5 clicks where the model is (the canvas centre after a fit).
-  const picks = [];
+  const picks = [], pickWhat = [];
   for (let k = 0; k < 5; k++) {
     await ev(`(window.__bbGl.bench.snap(0, 0), 0)`); // the home camera fitted: the model under the centre
     await quiet(20000);
-    await ev(`(window.__fr.kind = "click", window.__fr.tIn = null, 0)`);
+    await ev(`(window.__fr.kind = "click", window.__fr.tIn = null, window.__fr.pick0 = { f: window.__bbGl.frames, o: window.__bbGl.overpaints ?? 0, d: window.__bbGl.drawn, n: window.__fr.draws.length }, 0)`);
     await mouse("mouseMoved", cx, cy);
     await mouse("mousePressed", cx, cy, { button: "left", buttons: 1, clickCount: 1 });
     await mouse("mouseReleased", cx, cy, { button: "left", buttons: 0, clickCount: 1 });
     const last = await quiet(60000);
+    // 3D2 (step 4): what the click drew: frames, of them selections over the kept picture, the canvas size before and after, the frames' times after the input
+    pickWhat.push(await ev(`(() => { const p = window.__fr.pick0, g = window.__bbGl; return { frames: g.frames - p.f, overpaints: (g.overpaints ?? 0) - p.o, size0: p.d ? p.d.w + "x" + p.d.h : null,
+      size1: g.drawn ? g.drawn.w + "x" + g.drawn.h : null, at: window.__fr.draws.slice(p.n).map((x) => Math.round(x - window.__fr.tIn)) }; })()`));
     const t = await ev("window.__fr.tIn");
     picks.push(t !== null && last >= t ? last - t : null);
     await ev(`(window.__fr.kind = null, 0)`);
@@ -376,6 +423,8 @@ async function measure() {
     await quiet(20000);
   }
   out.pickMedian = med(picks.filter((x) => x !== null));
+  out.pickWhat = pickWhat;
+  out.pickScanMs = await ev("window.__bbGl.pickMs ?? null"); // 3D2: the page's ray scan of the last click
   out.selected = await ev("window.__bbGl.picks");
   if (PIXELS && BUILD === "wasm") await pixels();
   return out;
@@ -420,10 +469,31 @@ const fmt = (v, d = 0) => (v === null || v === undefined || Number.isNaN(v) ? "�
 const mb = (v) => (v === null || v === undefined ? "–" : (v / 1048576).toFixed(1));
 function table(rows) {
   const L = [];
-  L.push("| build | open → first frame ms | orbit frame ms median / p95 | moving: triangles / draws | still frame ms | still: triangles / draws | close orbit ms (triangles) | close still ms: triangles / draws | GPU MB | JS heap MB (+ array buffers) | wasm MB | orbit input → frame ms median / p95 (inputs) | pixels drawn while dragging / still | pick click → frame ms |");
+  L.push("| build | open → first frame ms (data → boxes / first / complete) | orbit frame ms median / p95 | moving: triangles / draws | still frame ms | still: triangles / draws | close orbit ms (triangles) | close still ms: triangles / draws | GPU MB | JS heap MB (+ array buffers) | wasm MB | orbit input → frame ms median / p95 (inputs) | pixels drawn while dragging / still | pick click → frame ms (the page's ray scan) |");
   L.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const r of rows)
-    L.push(`| ${r.build} | ${fmt(r.firstFrameMs)} | ${fmt(r.orbitMedian, 1)} / ${fmt(r.orbitP95, 1)} | ${fmt(r.movingTris)} / ${fmt(r.movingDraws)} | ${fmt(r.stillMedian, 1)} | ${fmt(r.stillTris)} / ${fmt(r.stillDraws)} | ${fmt(r.closeMedian, 1)} (${fmt(r.closeTris)}) | ${fmt(r.closeStill, 1)}: ${fmt(r.closeStillTris)} / ${fmt(r.closeStillDraws)} | ${mb(r.gpuBytes)} | ${mb(r.jsHeap)}${r.arrayBuffers ? ` (+ ${mb(r.arrayBuffers)})` : ""} | ${r.wasmMemory ? mb(r.wasmMemory) : "–"} | ${fmt(r.moveMedian, 1)} / ${fmt(r.moveP95, 1)} (${fmt(r.moveInputs)}) | ${fmt(r.dragNonBg)} / ${fmt(r.stillNonBg)} | ${fmt(r.pickMedian)} |`);
+    L.push(`| ${r.build} | ${fmt(r.firstFrameMs)}${r.meshAt ? ` (${r.previewAt ? fmt(r.previewAt - r.meshAt) : "–"} / ${fmt(r.firstFrameMs - r.meshAt)} / ${r.fullFrameMs ? fmt(r.fullFrameMs - r.meshAt) : "–"})` : ""} | ${fmt(r.orbitMedian, 1)} / ${fmt(r.orbitP95, 1)} | ${fmt(r.movingTris)} / ${fmt(r.movingDraws)} | ${fmt(r.stillMedian, 1)} | ${fmt(r.stillTris)} / ${fmt(r.stillDraws)} | ${fmt(r.closeMedian, 1)} (${fmt(r.closeTris)}) | ${fmt(r.closeStill, 1)}: ${fmt(r.closeStillTris)} / ${fmt(r.closeStillDraws)} | ${mb(r.gpuBytes)} | ${mb(r.jsHeap)}${r.arrayBuffers ? ` (+ ${mb(r.arrayBuffers)})` : ""} | ${r.wasmMemory ? mb(r.wasmMemory) : "–"} | ${fmt(r.moveMedian, 1)} / ${fmt(r.moveP95, 1)} (${fmt(r.moveInputs)}) | ${fmt(r.dragNonBg)} / ${fmt(r.stillNonBg)} | ${fmt(r.pickMedian)}${r.pickScanMs != null ? ` (scan ${fmt(r.pickScanMs, 1)})` : ""} |`);
+  return L;
+}
+/** 3D2: the HLOD proxies per build and model (none: under the page's triangle threshold, or not served). */
+function proxyTable(rows) {
+  const L = ["| build | still frame ms | without its edge pass | edge segments drawn |", "|---|---|---|---|"];
+  for (const r of rows) L.push(`| ${r.build} | ${fmt(r.stillMedian, 1)} | ${fmt(r.stillNoEdgesMedian, 1)} | ${fmt(r.stillEdgeSegs)} |`);
+  L.push("");
+  L.push("| build | cells (with a proxy) | proxy triangles | BPRX MB | steps (longest ms); first ask → uploaded ms | still frame ms with / without proxies | still: triangles / draws with / without | proxy cells (triangles) drawn still | pixels changed > 40 / any (of) |");
+  L.push("|---|---|---|---|---|---|---|---|---|");
+  for (const r of rows) {
+    const p = r.proxies, x = r.proxyPixels;
+    if (!p) { L.push(`| ${r.build} | none | – | – | – | – | – | – | – |`); continue; }
+    L.push(`| ${r.build} | ${fmt(p.cells)} (${fmt(p.withProxy)}) | ${fmt(p.tris)} | ${mb(p.bytes)} | ${fmt(p.steps)} (${fmt(p.maxStepMs)}); ${fmt(p.loadMs)} | ${fmt(r.stillMedian, 1)} / ${fmt(r.stillFullMedian, 1)} | ${fmt(r.stillTris)} / ${fmt(r.stillDraws)} – ${fmt(r.stillFullTris)} / ${fmt(r.stillFullDraws)} | ${fmt(r.stillProxy?.cells)} (${fmt(r.stillProxy?.tris)}) | ${x ? `${fmt(x.changed)} / ${fmt(x.any)} (${fmt(x.pixels)})` : "–"} |`);
+  }
+  return L;
+}
+/** 3D2 (step 3): occlusion queries (off by default) against the same frames without. */
+function occTable(rows) {
+  const L = ["| build | still frame ms without / with queries | still with: triangles / draws | queries asked; batches hidden | orbit ms median without / with | pixels changed > 40 / any, settled |", "|---|---|---|---|---|---|"];
+  for (const r of rows)
+    L.push(`| ${r.build} | ${fmt(r.stillMedian, 1)} / ${fmt(r.occStillMedian, 1)} | ${fmt(r.occStillTris)} / ${fmt(r.occStillDraws)} | ${fmt(r.occ?.asked)}; ${fmt(r.occ?.hidden)} | ${fmt(r.orbitMedian, 1)} / ${fmt(r.occOrbitMedian, 1)} | ${r.occPixels ? `${fmt(r.occPixels.changed)} / ${fmt(r.occPixels.any)}` : "–"} |`);
   return L;
 }
 function report(rows, history, cmp, forced, loads) {
@@ -447,9 +517,13 @@ function report(rows, history, cmp, forced, loads) {
     if (!rs.length) continue;
     L.push(`## ${MODEL_NAME[model]}`, "");
     L.push(...table(rs), "");
+    L.push("Ticket 3D2: the still frame without its edge pass (what edges cost); then the HLOD proxies: the tree the core served,", "the still frame at the home camera with and without them, and the two pictures compared (a pixel counts when a channel", "differs by more than 40 levels).", "");
+    L.push(...proxyTable(rs), "");
+    L.push("Occlusion queries (ticket 3D2 step 3; ADR 0036 #1, off by default as Rust on WebGL2): still frames settled with and", "without them, an orbit with them.", "");
+    L.push(...occTable(rs), "");
   }
   if (history.length) {
-    L.push("## Before and after (each step of ticket 3D1)", "");
+    L.push("## Before and after (each step of tickets 3D1 and 3D2)", "");
     L.push("One row per label and model, wasm build: orbit frame median ms, still frame median ms, close orbit median ms,");
     L.push("open → first frame ms, GPU MB, orbit input → frame median ms, pick click → frame ms.", "");
     L.push("| label | model | orbit ms | still ms | close orbit ms | first frame ms | GPU MB | input → frame ms | pick ms | load |");
@@ -472,7 +546,7 @@ function report(rows, history, cmp, forced, loads) {
 async function main() {
   const loads = [];
   // The load before the run (the run's own SwiftShader threads raise it: it is recorded per model, not checked).
-  for (let i = 0; load1() > 4 && i < 60; i++) { if (i % 6 === 0) log(`waiting: 1-minute load ${load1()} over 4`); await sleep(10000); }
+  for (let i = 0; load1() > 4 && i < (flag("--no-wait") ? 0 : 60); i++) { if (i % 6 === 0) log(`waiting: 1-minute load ${load1()} over 4`); await sleep(10000); }
   if (load1() > 4 && !FORCE) throw new Error(`1-minute load ${load1()} over 4: not measured (--force to measure and mark the report)`);
   let forced = load1() > 4;
   const site = buildSite();

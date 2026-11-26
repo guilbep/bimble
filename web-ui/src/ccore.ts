@@ -55,6 +55,7 @@ interface Exports {
   call(op: number, on: number, np: number, nn: number, bp: number, bn: number, res: number): number;
   change_json(res: number): number;
   host_mesh(flags: number, res: number): number;
+  host_proxies(budget: number, res: number): number; // 3D2
   host_saved(res: number): number;
   host_saved_path(res: number): number;
   host_open(flags: number, np: number, nn: number, bp: number, bn: number, res: number): number;
@@ -174,7 +175,7 @@ async function warm(X: Exports, steps: OpenSteps = {}): Promise<void> {
   try { run(X.call.bind(X), [enc.encode("query"), enc.encode("status"), enc.encode("{}")]); } catch { /* asked again by the page */ }
   await yieldTask();
   steps.step?.("mesh");
-  try { run(X.host_mesh.bind(X), [], [2]); } catch { /* asked again by the viewport (3D1: BMSH version 3) */ }
+  try { run(X.host_mesh.bind(X), [], [2 | 4]); } catch { /* asked again by the viewport (3D1: BMSH version 3; 3D2: bit 2, no copy) */ }
   await yieldTask();
 }
 // ---- end PERF2 ----
@@ -191,6 +192,14 @@ export function ccoreMesh(): { bytes: ArrayBuffer; rev: number } {
   const r = run(module.X.host_mesh.bind(module.X), [], [2]); // 3D1 (ADR 0078): BMSH version 3, shapes once
   if (r.status !== 200) throw new Error(`mesh: ${r.status} ${dec.decode(r.bytes)}`);
   return { bytes: r.bytes.buffer as ArrayBuffer, rev: r.value };
+}
+
+/** 3D2 (ADR 0078): the HLOD proxies in steps (host_proxies, session/mesh.h cc_mesh_proxies): `budget`
+ *  triangles more a call; 202 while building, then 200 with the BPRX bytes (ccore/src/hlod.h). */
+export function ccoreProxies(budget: number): { status: number; bytes: ArrayBuffer; rev: number } {
+  if (!module) throw new Error("ccore: not loaded");
+  const r = run(module.X.host_proxies.bind(module.X), [], [budget]);
+  return { status: r.status, bytes: r.bytes.buffer as ArrayBuffer, rev: r.value };
 }
 
 /** Opens a file's bytes in the session: .bimble v1/v2 and .json as an editable model, .ifc and
@@ -269,7 +278,7 @@ export async function ccoreWarmMesh(): Promise<void> {
   if (!module) return;
   await yieldTask();
   const { X } = module;
-  try { run(X.host_mesh.bind(X), [], [2]); } catch { /* asked again by the viewport (3D1: BMSH version 3) */ }
+  try { run(X.host_mesh.bind(X), [], [2 | 4]); } catch { /* asked again by the viewport (3D1: BMSH version 3; 3D2: no copy) */ }
 }
 
 /** The bytes the module wrote last and their file name (host_saved, host_saved_path). */

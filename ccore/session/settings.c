@@ -450,8 +450,9 @@ int cc_settings_query(cc_session *s, Buf *out) {
     jw_obj_begin(&w);
     /* What this build does with each field: the page applies the look, the readout and the user;
      * the viewport is the page's WebGL one, natively too (ADR 0066): its moving budget follows
-     * moving_fps (ticket 3D1, ADR 0078); no memory budget, no stand-ins, no GPU culling. */
-    static const signed char APPLIES[NFIELDS] = {1, 0, 0, 1, 0, -1, 1, 1, 1, 1, 1}; /* -1: with files */
+     * moving_fps (ticket 3D1, ADR 0078), its far cells' stand-ins moving_proxies (3D2); no memory
+     * budget, no GPU culling. */
+    static const signed char APPLIES[NFIELDS] = {1, 0, 0, 1, 1, -1, 1, 1, 1, 1, 1}; /* -1: with files; 3D2: moving_proxies */
     jw_key(&w, "applies"), jw_obj_begin(&w);
     for (size_t k = 0; k < NFIELDS; k++) jw_key(&w, FIELDS[k]), jw_bool(&w, APPLIES[k] < 0 ? files : APPLIES[k]);
     jw_obj_end(&w);
@@ -465,7 +466,6 @@ int cc_settings_query(cc_session *s, Buf *out) {
     jw_key(&w, "gpu_cull"), jw_str(&w, "compute shaders to test copies on the GPU (ADR 0036 #10): WebGL2 has none, WebGPU would");
     jw_key(&w, "memory_share"),
         jw_str(&w, "a memory budget per model in the C core, and an open that asks which part to show past it (ADR 0033)");
-    jw_key(&w, "moving_proxies"), jw_str(&w, "simplified stand-ins for far parts in the mesh the page draws (ADR 0036 #9)");
     if (!files) jw_key(&w, "recent"), jw_str(&w, "a file system: the browser keeps no path to open again");
     jw_obj_end(&w);
     jw_key(&w, "note");

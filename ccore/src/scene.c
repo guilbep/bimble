@@ -1148,6 +1148,8 @@ int cc_scene_mesh_build(double (*tris)[3][3], uint32_t ntris, const double origi
 
 int cc_scene_share_copies(cc_scene *s) { return share_copies(s); }
 
+int cc_scene_crease_edges(cc_mesh *m, Arena *a, Arena *scratch) { return crease_edges(m, a, scratch); }
+
 /* ---- Scene::from_model ---- */
 
 /* Element::class_name: the IFC entity when there is one. */

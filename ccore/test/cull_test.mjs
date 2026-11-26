@@ -12,7 +12,11 @@
 // - makeBatches: every item lands in exactly one batch, a batch holds at most the cap (unless one item
 //   alone is larger), sizes descend inside a batch, cum / ecum add up, the batch box holds its items;
 //   prefixCount equals a count of the sizes at least the threshold.
-// Fails on the code before 3D1: web-ui/src/gl/cull.ts did not exist.
+// - 3D2 (HLOD proxies, web-ui/src/gl/proxies.ts, ccore/src/hlod.h): the same model's proxies served in steps
+//   (GET /mesh?proxies=N: 202 until built, then 200 with BPRX), parsed: every element in one leaf, a
+//   cell's leaves hold its children's; from far away the proxies stand for every leaf, at 0 px for none;
+//   a hidden element keeps every cell above it from standing; stand-ins never cover a leaf twice.
+// Fails on the code before 3D1: web-ui/src/gl/cull.ts did not exist (3D2: gl/proxies.ts, /mesh?proxies).
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -133,6 +137,50 @@ const check = (what, ok, more = "") => { if (ok) passed++; else failed++; consol
         if (cut.t === 0) break;
       }
       check(`slices of ${C.MIN_MOVING_TRIS}: ${slices + 1} slices draw every triangle once (${sum} of ${total}), ${over} over the budget (a single item larger)`, sum === total && k0s.every((k, i) => k === batches[i].n));
+      // ---- 3D2: the HLOD proxies of the same model, served in steps (GET /mesh?proxies=N) ----
+      const X = await import(pathToFileURL(join(here, "../../web-ui/src/gl/proxies.ts")).href);
+      let r, steps = 0, progress = "";
+      for (; steps < 1000; steps++) {
+        r = await fetch(`http://127.0.0.1:${PORT}/mesh?t=${TOKEN}&proxies=20000`);
+        if (r.status !== 202) break;
+        progress = await r.text();
+      }
+      check(`proxies: built in ${steps + 1} steps of 20,000 triangles (the last 202 said "${progress}"), then 200`, r.status === 200 && steps > 3 && /^\d+ \d+$/.test(progress));
+      const P = X.parseBprx(await r.arrayBuffer());
+      const again = await fetch(`http://127.0.0.1:${PORT}/mesh?t=${TOKEN}&proxies=1`);
+      check("proxies: the same bytes again once built", again.status === 200 && (await again.arrayBuffer()).byteLength > 0);
+      const inLeaf = Array.from(P.leafOf).filter((l) => l >= 0).length;
+      const withProxy = P.cells.filter((c) => c.parts.length).length, ptris = P.cells.reduce((a, c) => a + c.parts.reduce((n, q) => n + q.ni / 3, 0), 0);
+      check(`proxies: ${P.cells.length} cells, ${withProxy} with a proxy (${ptris} triangles), ${P.leafCount} leaves; every element in one leaf`,
+        P.nElements === nE && inLeaf === nE && P.cells[0].leaves[0] === 0 && P.cells[0].leaves[1] === P.leafCount && withProxy > 0);
+      let ranges = true;
+      for (const c of P.cells) for (const k of c.children) ranges &&= P.cells[k].leaves[0] >= c.leaves[0] && P.cells[k].leaves[1] <= c.leaves[1] && P.cells[k].depth === c.depth + 1;
+      check("proxies: a cell's leaves hold its children's", ranges);
+      const all = X.usableCells(P, () => true);
+      const eyeFar = eye.map((x, a) => centre[a] + 50 * (x - centre[a])); // far away: the coarsest proxies stand
+      const k = (2 * Math.tan(fov / 2)) / 800, mmPerPx = (d) => d * k;
+      const far = X.cutProxies(P, all, null, eyeFar, mmPerPx, 3);
+      const covered = far.replaced.reduce((a, x) => a + x, 0);
+      check(`proxies: from 50 times the fitted distance, ${far.cells.length} cells stand for ${covered} of ${P.leafCount} leaves`, far.cells.length > 0 && covered === P.leafCount);
+      check("proxies: 0 px, none", X.cutProxies(P, all, null, eyeFar, mmPerPx, 0).cells.length === 0);
+      { // fitProxies: under a cap of 0 every cell gives way (its leaves back to their batches); under a large one nothing changes
+        const a = X.cutProxies(P, all, null, eyeFar, mmPerPx, 3), z = X.fitProxies(P, all, a.cells, a.replaced, 0);
+        const b = X.cutProxies(P, all, null, eyeFar, mmPerPx, 3), y = X.fitProxies(P, all, b.cells, b.replaced, 1e12);
+        check("proxies: fitted under 0 triangles none stands, under plenty all stay", z.length === 0 && a.replaced.every((x) => x === 0) && y.length === b.cells.length);
+      }
+      const near = X.cutProxies(P, all, null, eye, mmPerPx, 3), nearTris = near.cells.reduce((a, c) => a + P.cells[c].parts.reduce((n, q) => n + q.ni / 3, 0), 0);
+      console.log(`  at the fitted distance, 3 px: ${near.cells.length} cells, ${nearTris} proxy triangles; 1 px: ${X.cutProxies(P, all, null, eye, mmPerPx, 1).cells.length} cells`);
+      // a hidden element: no cell above it stands for it
+      const hid = P.elements[0], notHid = X.usableCells(P, (e) => e !== hid);
+      let ok = true;
+      P.cells.forEach((c, i) => { const has = Array.from(P.elements.subarray(c.el0, c.el0 + c.nel)).includes(hid); if (has && notHid[i]) ok = false; if (!has && notHid[i] !== all[i]) ok = false; });
+      const hidFar = X.cutProxies(P, notHid, null, eyeFar, mmPerPx, 3);
+      check("proxies: a hidden element keeps every cell above it from standing (the others unchanged), its leaf drawn as it is", ok && !hidFar.replaced[P.leafOf[hid]]);
+      // stand-ins for unfinished leaves: the shallowest usable cells, no leaf twice
+      const rep = new Uint8Array(P.leafCount), si = X.standIns(P, all, [...Array(P.leafCount).keys()], rep);
+      let twice = false; const seenL = new Uint8Array(P.leafCount);
+      for (const c of si) for (let l = P.cells[c].leaves[0]; l < P.cells[c].leaves[1]; l++) { if (seenL[l]) twice = true; seenL[l] = 1; }
+      check(`proxies: stand-ins for every leaf: ${si.length} cells, no leaf twice`, si.length > 0 && !twice);
     } finally {
       host.kill("SIGKILL");
       rmSync(tmp, { recursive: true, force: true });

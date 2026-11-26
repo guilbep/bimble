@@ -652,6 +652,12 @@ suite("host");
         const w = call(X.host_mesh, [], 0), n = await nmesh();
         check(`host_mesh = GET /mesh at rev ${w.value}`, w.status === 200 && w.bytes.length === n.length && w.bytes.every((b, i) => b === n[i]),
           `${w.status} ${w.bytes.length} vs ${n.length} bytes`);
+        // 3D2: the HLOD proxies, in steps until built (202), then the same BPRX bytes as GET /mesh?proxies=N
+        let wp, steps = 0;
+        while ((wp = call(X.host_proxies, [], 100)).status === 202 && steps < 10000) steps++;
+        const np = new Uint8Array(await (await fetch(`${base}/mesh?t=${HOST_TOKEN}&proxies=1000000000`)).arrayBuffer());
+        check(`host_proxies = GET /mesh?proxies at rev ${wp.value} (${steps} steps of 100 triangles first)`, wp.status === 200 && wp.bytes.length === np.length &&
+          wp.bytes.every((b, i) => b === np[i]) && String.fromCharCode(...wp.bytes.subarray(0, 4)) === "BPRX", `${wp.status} ${wp.bytes.length} vs ${np.length} bytes`);
         continue;
       }
       if (s === "saved=open") { // place, undo, save: the text cc_model_save gives frame.json (export save)

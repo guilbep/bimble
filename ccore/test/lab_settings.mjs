@@ -198,6 +198,14 @@ async function lab(mode, S, evalJs) {
   await B("return b.undo();");
   await realClick("[data-bb=settings-coord-survey]");
   check(`${mode}: back to survey`, (await B("return b.readoutSystem();")) === "survey");
+  // 3D2 (ADR 0078): HLOD proxies (moving_proxies) turned off and on from the dialog; GPU culling said not available
+  const storedHas = async (t) => { for (let i = 0; i < 100; i++) { const v = await stored(); if (v.includes(t)) return v; await raf2(); } return await stored(); };
+  await realClick("[data-bb=settings-moving-proxies]");
+  const pOff = await storedHas('"moving_proxies":false');
+  await realClick("[data-bb=settings-moving-proxies]");
+  const pOn = await storedHas('"moving_proxies":true');
+  check(`${mode}: Far parts simplified: off then on (moving_proxies stored false, then true)`, pOff.includes('"moving_proxies":false') && pOn.includes('"moving_proxies":true'), `${pOff} / ${pOn}`);
+  check(`${mode}: GPU culling of copies: not available yet, with the reason`, /WebGL2/.test((await text("[data-bb=settings-gpu-cull]")) ?? ""), (await text("[data-bb=settings-gpu-cull]")) ?? "none");
   await click("[data-bb=settings-close]");
 
   // A reload: everything still there

@@ -585,6 +585,7 @@ export async function start(): Promise<void> {
         viewportDirty = (await glChunk).glViewport({
           mesh: async () => cc.ccoreMesh().bytes,
           epoch: async () => null,
+          proxies: async (budget: number) => cc.ccoreProxies(budget), // 3D2
         });
         clearStartStepOnFirstFrame();
       } else startStep.value = null;

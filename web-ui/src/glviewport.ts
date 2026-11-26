@@ -85,6 +85,7 @@ import {
 } from "./bimble";
 import { drawMeasure } from "./gl/measure";
 import { BATCH_TRIS, boxInFrustum, budgetCut, cutEnd, frustumPlanes, makeBatches, MIN_MOVING_TRIS, type Batch, type Cut } from "./gl/cull"; // 3D1
+import { cutProxies, fitProxies, parseBprx, standIns, usableCells, type Proxies } from "./gl/proxies"; // 3D2
 import { referenceLayer } from "./gl/reference"; // L1: reference plans
 import { sectionMatrices, sectionFit, isSection } from "./gl/section"; // SEC1
 import { gridLayer } from "./gl/grids"; // ---- G2: grid axes in plans ---- / ---- end G2 ----
@@ -491,6 +492,17 @@ void main() {
 interface GlStats {
   /** ms from navigation start to the first frame drawn with a mesh. */
   firstFrameMs: number | null;
+  /** 3D2 (step 5): when the last mesh's bytes arrived, and when its picture was first complete (every
+   *  batch drawn: a whole frame, or the last pass of the fill that follows a budgeted first frame). */
+  meshAt?: number;
+  /** 3D2 (step 5): when a large mesh's element boxes were drawn, before its draw lists. */
+  previewAt?: number;
+  fullFrameMs?: number | null;
+  /** 3D2 (step 5): ms of the last mesh's parse, upload, draw lists and colours. */
+  loadSteps?: { parse: number; upload: number; lists: number; colours: number };
+  firstFrame?: { moving: boolean; tris: number; draws: number; budget: number; t: number; ms: number };
+  /** 3D2: the frames after a mesh's first (time, moving / slice / whole, cut, triangles, fill state), 80 at most. */
+  frameLog?: string[];
   meshBytes: number;
   meshFetchMs: number;
   meshRev: number | null;
@@ -597,8 +609,26 @@ interface GlStats {
   gpuBytes?: number;
   /** 3D1: the moving budget of the last frame (px at the target, the size left out under in mm), the
    *  batches and how many drew nothing; a test hook to turn frustum culling off (the same picture). */
-  moving?: { moving: boolean; slice: boolean; budget: number; t: number; batches: number; culled: number; outlines: number; tris: number };
+  moving?: { moving: boolean; slice: boolean; budget: number; t: number; batches: number; culled: number; outlines: number; tris: number; proxied?: number };
   noCull?: boolean;
+  /** 3D2 (ADR 0078): HLOD proxies: the tree served (cells, cells with a proxy, proxy triangles, bytes, the
+   *  steps asked and the ms from the first ask to the upload), what the last frame drew of it (cells, triangles), and a test hook
+   *  to draw without them (the full-detail picture). */
+  proxies?: { cells: number; withProxy: number; tris: number; bytes: number; steps: number; maxStepMs: number; loadMs: number;
+    drawnCells: number; drawnTris: number; standIns: number; on: boolean };
+  noProxies?: boolean;
+  /** 3D2 (step 3): occlusion queries on (a test hook, off by default) and the last frame's queries asked
+   *  and batches left out as hidden. */
+  occlusion?: boolean;
+  occ?: { asked: number; hidden: number };
+  /** 3D2 (step 2): a bench hook, frames without edges (what the edge pass costs). */
+  noEdges?: boolean;
+  /** 3D2 (step 4): selections drawn over the kept picture (the elements whose colour changed), not as a whole frame. */
+  overpaints?: number;
+  /** 3D2 (step 4): ms of the last pick's ray scan in the page (pickHit). */
+  pickMs?: number;
+  /** 3D2: true while the proxies are being asked for (frames.mjs waits for them). */
+  proxiesPending?: boolean;
   bench?: { frame: (dyaw: number, moving: boolean) => number; zoom: (k: number) => void; snap: (dyaw: number, dpitch: number) => { w: number; h: number; rgba: Uint8Array } };
 }
 declare global {
@@ -615,6 +645,9 @@ export interface MeshSource {
   mesh(): Promise<ArrayBuffer>;
   /** The process the mesh came from (GET /change `epoch`); null when there is none. */
   epoch(): Promise<string | null>;
+  /** 3D2 (ADR 0078): the HLOD proxies in steps (GET /mesh?proxies=N, wasm host_proxies): `budget`
+   *  triangles more a call; 202 while building, 200 with the BPRX bytes, else none served. */
+  proxies?(budget: number): Promise<{ status: number; bytes: ArrayBuffer; rev: number }>;
 }
 
 /** Draws the host's `/mesh` (or `source`'s) into #bimble with WebGL2. Returns a function that marks the view dirty. */
@@ -653,6 +686,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const r = await fetch(`${base}/mesh?t=${t}&shapes=1`, { cache: "no-store" }); // 3D1: BMSH version 3
       if (!r.ok) throw new Error(`mesh: HTTP ${r.status} ${await r.text()}`);
       return r.arrayBuffer();
+    },
+    proxies: async (budget: number) => { // 3D2
+      const r = await fetch(`${base}/mesh?t=${t}&proxies=${budget}`, { cache: "no-store" });
+      return { status: r.status, bytes: await r.arrayBuffer(), rev: Number(r.headers.get("X-Rev") ?? -1) };
     },
   };
 
@@ -746,11 +783,72 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     for (let c = 0; c < 4; c++) gl.enableVertexAttribArray(4 + c), gl.vertexAttribDivisor(4 + c, 1), gl.vertexAttribPointer(4 + c, 3, gl.FLOAT, false, 48, 12 * c);
     gl.bindVertexArray(null);
   }
+  // ---- 3D2 (ADR 0078): HLOD proxies (gl/proxies.ts): their faces (positions, a colour per vertex from
+  // the part's category, indices) and crease edges (two vertices a segment, with the two face normals). ----
+  const prxPos = gl.createBuffer(), prxCol = gl.createBuffer(), prxIdx = gl.createBuffer(), prxEdge = gl.createBuffer(), prxNrm = gl.createBuffer();
+  const prxVao = gl.createVertexArray(), prxEdgeVao = gl.createVertexArray();
+  gl.bindVertexArray(prxVao);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, prxIdx);
+  gl.bindBuffer(gl.ARRAY_BUFFER, prxPos);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, prxCol);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+  gl.bindVertexArray(prxEdgeVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, prxEdge);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, prxNrm);
+  gl.enableVertexAttribArray(2);
+  gl.vertexAttribPointer(2, 4, gl.BYTE, true, 8, 0);
+  gl.enableVertexAttribArray(3);
+  gl.vertexAttribPointer(3, 4, gl.BYTE, true, 8, 4);
+  gl.bindVertexArray(null);
+  /** The proxies of the mesh shown (null: none served yet, or none for this model). */
+  let prx: Proxies | null = null;
+  let prxBytes = 0, prxUsable: Uint8Array = new Uint8Array(0), prxUsableKey = "", listsGen = 0;
+  // 3D2 (step 3, ADR 0036 #1): occlusion queries per batch, last frames' answers (off by default, as
+  // Rust on WebGL2; frames.mjs turns it on through stats.occlusion to measure). Probe boxes: 36 vertices each.
+  const probeBuf = gl.createBuffer(), probeVao = gl.createVertexArray();
+  gl.bindVertexArray(probeVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, probeBuf);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+  let occPending = false, occKey = "";
+  /** The answers in: true when a hidden batch's box showed again (from another view than the one that
+   *  found it hidden: CHC++'s rule as Rust's, so a still view does not redraw forever). */
+  const pollOcc = (): boolean => {
+    let back = false, pending = false;
+    for (const d of dbs) {
+      const o = d.o;
+      if (!o?.q) continue;
+      if (!gl.getQueryParameter(o.q, gl.QUERY_RESULT_AVAILABLE)) { pending = true; continue; }
+      const seen = !!gl.getQueryParameter(o.q, gl.QUERY_RESULT);
+      gl.deleteQuery(o.q);
+      o.q = null;
+      if (o.box) { if (seen && o.qAt !== o.hidAt) o.hidden = false, back = true; }
+      else if (!seen) o.hidden = true, o.hidAt = o.qAt;
+    }
+    occPending = pending;
+    return back;
+  };
+  const occReset = () => {
+    for (const d of dbs) if (d.o) { if (d.o.q) gl.deleteQuery(d.o.q); delete d.o; }
+    occPending = false;
+  };
+  /** The mesh the proxies are being asked for (a newer mesh abandons the steps). */
+  let prxFor: object | null = null;
+  // ---- end 3D2 ----
   /** A run of instances of one shape: its packed index range, its segments, its instances [first, first + count). */
   interface InstGroup { i0: number; ni: number; s0: number; ns: number; first: number; count: number; mirrored: boolean; link: boolean; dbs: DrawBatch[] }
   /** 3D1 (steps 2, 3): a batch of the merged lists (g null: faces from index f0, edges from e0) or of a
    *  group's instances (from g.first + b.first), and how many of its items this frame draws (k). */
-  interface DrawBatch { b: Batch; f0: number; e0: number; link: boolean; g: InstGroup | null; k0: number; k1: number }
+  interface DrawBatch { b: Batch; f0: number; e0: number; link: boolean; g: InstGroup | null; k0: number; k1: number; o?: OccState }
+  /** 3D2 (step 3): a batch's occlusion query: pending (`q`, asked by its faces or, when hidden, by its
+   *  box; `qAt` the camera then), and whether its faces were found hidden (`hidAt`: at which camera). */
+  interface OccState { q: WebGLQuery | null; box: boolean; qAt: string; hidden: boolean; hidAt: string }
   let dbs: DrawBatch[] = [];
   let groups: InstGroup[] = [];
   /** Per shape (k + 1 - 1): its first index in the packed shape indices. */
@@ -819,9 +917,43 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   // their boxes; STILL_MS after the camera stopped, the rest is added in slices of the same budget, one
   // a frame, without clearing (a move abandons it), then every edge once more. ----
   const STILL_MS = 150;
-  let lastCamKey: string | null = null, stillDue = 0, lastFrameAt = 0, lastFrameTris = 0, trisPerMs = 0;
+  // 3D2 (ADR 0078): a far cell's proxy stands for its elements when its error spans at most this many
+  // pixels: Rust's MOVING_PROXY_PX (3) while moving, 1 when still (under a pixel: the picture keeps its
+  // look, the count of pixels that differ is in frames.md); proxies are asked for a model of at least
+  // PROXY_MIN_TRIS triangles (Rust: 1,000,000, on slow GPUs only), PROXY_STEP_TRIS read by the first call,
+  // then as many as take about PROXY_STEP_MS.
+  const MOVING_PROXY_PX = 3, STILL_PROXY_PX = 1, PROXY_MIN_TRIS = 250000, PROXY_STEP_TRIS = 20000, PROXY_STEP_MS = 25;
+  let lastCamKey: string | null = null, stillDue = 0, lastFrameAt = 0, lastFrameTris = 0, trisPerMs = 0, lastBudgeted = false;
   /** The progressive fill after a stop: the screen threshold drawn down to (null: none running). */
   let fill: { t: number } | null = null, fillEdges = false;
+  /** 3D2 (step 5): the first frame of a new mesh is drawn within the moving budget, the rest in slices at
+   *  once after it (something on screen within a frame of the data, the picture then refines). */
+  let firstOfMesh = false;
+  /** 3D2 (step 5): a large mesh's element boxes were drawn as outlines before its draw lists (their index
+   *  upload took 294 of 318 ms on the local model under SwiftShader: the boxes are on screen meanwhile). */
+  let previewed = false;
+  const PREVIEW_BOXES = 4096, FIRST_BUDGET_TRIS = 1000000;
+  const previewBoxes = () => {
+    const m = mesh;
+    if (!m) return;
+    const n = m.ids.length, size = new Float32Array(n);
+    for (let e = 0; e < n; e++) size[e] = m.nv[e] ? Math.hypot(boxes[6 * e + 3]! - boxes[6 * e]!, boxes[6 * e + 4]! - boxes[6 * e + 1]!, boxes[6 * e + 5]! - boxes[6 * e + 2]!) : -1;
+    const order = [...Array(n).keys()].filter((e) => size[e]! >= 0).sort((a, b) => size[b]! - size[a]!).slice(0, PREVIEW_BOXES);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(BACKGROUND_SRGB[0]! / 255, BACKGROUND_SRGB[1]! / 255, BACKGROUND_SRGB[2]! / 255, 1);
+    gl.clearDepth(1);
+    gl.depthMask(true);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    const { e, mvp } = matrices();
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(uMvp, false, mvp);
+    gl.uniform3fv(uEye, plan || ortho3d() ? norm(sub(e, target)) : e);
+    gl.uniform1f(uEyeDir, plan || ortho3d() ? 1 : 0);
+    gl.uniform1f(uPoint, 1), gl.uniform1f(uAlpha, 1), gl.uniform1i(uClip, 0), gl.uniform1f(uZbias, 0);
+    gl.enable(gl.DEPTH_TEST);
+    drawOutlines(order.map((el) => boxes.subarray(6 * el, 6 * el + 6)));
+    stats.previewAt = performance.now();
+  };
   // (not the canvas size: a panel shown by a selection resizes it, and that is not a camera move)
   const camKey = () => `${yaw}|${pitch}|${distance}|${target.join(",")}|${half}|${viewId}`;
   /** This frame's triangle budget (Infinity: no budget). */
@@ -937,11 +1069,21 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         : sel.has(m.ids[e] ?? "") ? SELECTION_SRGB : shown[e] === 2 ? REVEALED_SRGB
         : (CATEGORY_SRGB[m.cats[e] ?? 7] ?? CATEGORY_SRGB[7] ?? SELECTION_SRGB);
     };
+    // 3D2 (step 4): each element's colour kept, the ones that changed listed (a selection is drawn over the
+    // kept picture when only colours changed: overpaint below)
+    const was = elColour.length === m.ids.length ? elColour : null;
+    elColour = new Uint32Array(m.ids.length), recoloured = [];
+    for (let e = 0; e < m.ids.length; e++) {
+      const c = colourOf(e);
+      elColour[e] = (c[0] << 16) | (c[1] << 8) | c[2];
+      if (!was || was[e] !== elColour[e]) recoloured.push(e);
+    }
+    if (!was) recoloured = null;
     for (let e = 0; e < m.ids.length; e++) {
       if (m.shape?.[e]) continue; // 3D1: a placed shape's colour is its instance's
-      const c = colourOf(e);
+      const c = colourOf(e), r = c[0], g = c[1], b = c[2];
       const a = m.v0[e] ?? 0, n = m.nv[e] ?? 0;
-      for (let v = a; v < a + n; v++) out.set(c, 3 * v);
+      for (let v = 3 * a, z = 3 * (a + n); v < z; v += 3) out[v] = r, out[v + 1] = g, out[v + 2] = b; // 3D2 (step 5): no set() a vertex
     }
     // 3D1: the instances' colours, in instance order
     const ic = new Uint8Array(4 * instEls.length);
@@ -952,6 +1094,84 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     return out;
   };
 
+  // ---- 3D2 (step 4; Rust's #3, highlights over the kept picture): a change of colours alone (a selection)
+  // redraws the elements whose colour changed over the last complete picture, not the whole model. ----
+  let elColour = new Uint32Array(0), recoloured: number[] | null = null;
+  /** Per element: its first index in the merged face list and edge list (-1: instanced or not drawn), its
+   *  instance and group (-1: merged). */
+  let elFace = new Int32Array(0), elEdge = new Int32Array(0), elInst = new Int32Array(0), elGroup = new Int32Array(0);
+  /** The last frame was a complete picture of the open model (whole, or the end of a fill) and which
+   *  leaves its proxies stood for. */
+  let lastComplete = false, lastReplaced: Uint8Array | null = null;
+  const OVERPAINT_MAX = 2000;
+  const overpaint = (els: number[]): boolean => {
+    const m = mesh;
+    if (!m || !lastComplete || plan || clipBox() || ghostN || markN || els.length > OVERPAINT_MAX || els.length === 0) return false;
+    for (const el of els) {
+      if (elFace[el] === undefined || (elFace[el]! < 0 && elInst[el]! < 0 && shown[el])) return false;
+      const lf = prx && !((m.model?.[el] ?? 0) > 0) ? prx.leafOf[el] ?? -1 : -1;
+      if (lf >= 0 && lastReplaced?.[lf]) return false; // under a proxy: the picture changes more
+    }
+    const { e, mvp } = matrices();
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(uMvp, false, mvp);
+    gl.uniform3fv(uLight, norm(add(norm(sub(e, target)), [-0.3, -0.2, 0.9])));
+    gl.uniform3fv(uEye, ortho3d() ? norm(sub(e, target)) : e);
+    gl.uniform1f(uEyeDir, ortho3d() ? 1 : 0);
+    gl.uniform1f(uPoint, 1), gl.uniform1f(uAlpha, 1), gl.uniform1i(uClip, 0), gl.uniform1f(uZbias, 0), gl.uniform1f(uCut, CUT_SHADE);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.disable(gl.CULL_FACE);
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.uniform1f(uAmbient, AMBIENT);
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
+    gl.vertexAttribPointer(1, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+    const shownEls = els.filter((el) => shown[el]);
+    for (const el of shownEls) {
+      const link = (m.model?.[el] ?? 0) > 0;
+      gl.polygonOffset(link ? 2.5 : 1.5, link ? 16 : 2);
+      if (elFace[el]! >= 0) { gl.drawElements(gl.TRIANGLES, m.ni[el] ?? 0, gl.UNSIGNED_INT, 4 * elFace[el]!); continue; }
+      const g = groups[elGroup[el]!];
+      if (!g) continue;
+      gl.bindVertexArray(instVao);
+      instAttrs(elInst[el]!, true);
+      if (g.mirrored) gl.frontFace(gl.CW);
+      gl.drawElementsInstanced(gl.TRIANGLES, g.ni, gl.UNSIGNED_INT, 4 * g.i0, 1);
+      gl.frontFace(gl.CCW);
+      gl.bindVertexArray(vao);
+    }
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    if (pressed("edges", true)) {
+      gl.uniform1f(uAmbient, -1);
+      gl.depthMask(false);
+      for (const el of shownEls) {
+        const link = (m.model?.[el] ?? 0) > 0, c = link ? REFERENCE_EDGE_SRGB : EDGE_SRGB;
+        if (elEdge[el]! >= 0) {
+          gl.bindVertexArray(edgeVao);
+          gl.vertexAttrib3f(1, c[0]! / 255, c[1]! / 255, c[2]! / 255);
+          gl.drawElements(gl.LINES, 2 * (m.ns[el] ?? 0), gl.UNSIGNED_INT, 4 * elEdge[el]!);
+          continue;
+        }
+        const g = groups[elGroup[el]!];
+        if (!g || !g.ns) continue;
+        gl.bindVertexArray(instEdgeVao);
+        gl.vertexAttrib3f(1, c[0]! / 255, c[1]! / 255, c[2]! / 255);
+        instAttrs(elInst[el]!, false);
+        gl.drawArraysInstanced(gl.LINES, 2 * g.s0, 2 * g.ns, 1);
+      }
+      gl.depthMask(true);
+    }
+    gl.bindVertexArray(null);
+    drawOverlay();
+    stats.frames++;
+    stats.overpaints = (stats.overpaints ?? 0) + 1;
+    return true;
+  };
+  // ---- end 3D2 (step 4) ----
   /** Per element: its vertices' box (min xyz, max xyz), for the pick's ray-box test. */
   let boxes = new Float32Array(0);
   let meshBytes = 0, listBytes = 0; // 3D1: the model's GPU bytes (stats.gpuBytes)
@@ -965,9 +1185,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const pl = m.shape?.[e] ? m.place!.subarray(12 * e, 12 * e + 12) : null; // 3D1: a placed shape: its placed vertices
       for (let v = 3 * a; v < 3 * (a + n); v += 3) {
         let x = P[v] ?? 0, y = P[v + 1] ?? 0, z = P[v + 2] ?? 0;
-        if (pl) {
-          const q = [x, y, z].map((_, j) => f(f(f(f(pl[j]! * x) + f(pl[3 + j]! * y)) + f(pl[6 + j]! * z)) + pl[9 + j]!));
-          x = q[0]!, y = q[1]!, z = q[2]!;
+        if (pl) { // (3D2, step 5: no array a vertex)
+          const qx = f(f(f(f(pl[0]! * x) + f(pl[3]! * y)) + f(pl[6]! * z)) + pl[9]!), qy = f(f(f(f(pl[1]! * x) + f(pl[4]! * y)) + f(pl[7]! * z)) + pl[10]!);
+          z = f(f(f(f(pl[2]! * x) + f(pl[5]! * y)) + f(pl[8]! * z)) + pl[11]!), x = qx, y = qy;
         }
         if (x < x0) x0 = x;
         if (x > x1) x1 = x;
@@ -993,12 +1213,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindVertexArray(null);
     gl.bindBuffer(gl.ARRAY_BUFFER, edgeBuf);
     gl.bufferData(gl.ARRAY_BUFFER, m.edges, gl.STATIC_DRAW);
-    // The two face normals of each segment, for both of its vertices.
+    // The two face normals of each segment, for both of its vertices (3D2, step 5: 4-byte words, not a
+    // subarray a segment; the blocks start on 4-byte boundaries, mesh.c).
     const nrm = new Int8Array(16 * (m.edges.length / 6));
-    for (let k = 0; k < nrm.length / 16; k++) {
-      const src = m.normals.subarray(8 * k, 8 * k + 8);
-      nrm.set(src, 16 * k);
-      nrm.set(src, 16 * k + 8);
+    {
+      const ns = m.edges.length / 6, d = new Uint32Array(nrm.buffer);
+      const sw = m.normals.byteOffset % 4 === 0 ? new Uint32Array(m.normals.buffer, m.normals.byteOffset, 2 * ns) : new Uint32Array(m.normals.slice().buffer, 0, 2 * ns);
+      for (let k = 0; k < ns; k++) { const a = sw[2 * k]!, b = sw[2 * k + 1]!; d[4 * k] = a, d[4 * k + 1] = b, d[4 * k + 2] = a, d[4 * k + 3] = b; }
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, edgeNrm);
     gl.bufferData(gl.ARRAY_BUFFER, nrm, gl.STATIC_DRAW);
@@ -1019,7 +1240,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sidx, gl.STATIC_DRAW);
     gl.bindVertexArray(null);
     meshBytes = m.pos.byteLength + m.edges.byteLength + nrm.byteLength + m.pos.length + sidx.byteLength; // 3D1: + colours (3 B a vertex), shape indices
-    stats.gpuBytes = meshBytes + listBytes;
+    stats.gpuBytes = meshBytes + listBytes + prxBytes; // (3D2: + the proxies)
+    // 3D2 (step 5): a mesh of at least FIRST_BUDGET_TRIS triangles: its boxes first, then a budgeted first frame and
+    // slices (a smaller one is drawn whole at once, as before: its whole frame is short and its lists fast)
+    let tris = 0;
+    for (let e = 0; e < m.ids.length; e++) tris += (m.ni[e] ?? 0) / 3;
+    firstOfMesh = tris >= FIRST_BUDGET_TRIS, stats.fullFrameMs = null, previewed = false;
     visKey = "\u0000"; // the draw lists on the next frame
     selKey = "\u0000"; // recolour on the next frame
     if (tool) showTool(tool); // the ghost against the new mesh's origin
@@ -1031,6 +1257,74 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     dirty = true;
   };
 
+  // ---- 3D2 (ADR 0078): the proxies, asked in steps after the first frame (one step a frame: the wasm
+  // core runs on this thread), then uploaded once; the draw lists are cut again by leaf. ----
+  const proxiesOn = () => userSettings.value?.values.moving_proxies ?? true;
+  const uploadProxies = (p: Proxies) => {
+    const col = new Uint8Array(p.pos.length);
+    for (const c of p.cells) for (const q of c.parts) {
+      const rgb = CATEGORY_SRGB[q.cat] ?? CATEGORY_SRGB[7]!;
+      for (let v = q.v0; v < q.v0 + q.nv; v++) col.set(rgb, 3 * v);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, prxPos);
+    gl.bufferData(gl.ARRAY_BUFFER, p.pos, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, prxCol);
+    gl.bufferData(gl.ARRAY_BUFFER, col, gl.STATIC_DRAW);
+    gl.bindVertexArray(prxVao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, prxIdx);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, p.idx, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    gl.bindBuffer(gl.ARRAY_BUFFER, prxEdge);
+    gl.bufferData(gl.ARRAY_BUFFER, p.edges, gl.STATIC_DRAW);
+    const nrm = new Int8Array(2 * p.normals.length); // the two face normals of a segment, for both its vertices
+    for (let k = 0; k < p.normals.length / 8; k++) nrm.set(p.normals.subarray(8 * k, 8 * k + 8), 16 * k), nrm.set(p.normals.subarray(8 * k, 8 * k + 8), 16 * k + 8);
+    gl.bindBuffer(gl.ARRAY_BUFFER, prxNrm);
+    gl.bufferData(gl.ARRAY_BUFFER, nrm, gl.STATIC_DRAW);
+    prxBytes = p.pos.byteLength + col.byteLength + p.idx.byteLength + p.edges.byteLength + nrm.byteLength;
+    stats.gpuBytes = meshBytes + listBytes + prxBytes;
+  };
+  const loadProxies = async (m: Bmsh): Promise<void> => {
+    prx = null, prxBytes = 0, prxFor = m;
+    delete stats.proxies;
+    const ask = source.proxies;
+    if (!ask || !proxiesOn()) return;
+    let main = 0, tris = 0;
+    for (let e = 0; e < m.ids.length; e++) if (!((m.model?.[e] ?? 0) > 0)) main++, tris += (m.ni[e] ?? 0) / 3;
+    if (tris < PROXY_MIN_TRIS) return;
+    stats.proxiesPending = true;
+    try { await askProxies(m, ask, main); } finally { if (prxFor === m) stats.proxiesPending = false; }
+  };
+  const askProxies = async (m: Bmsh, ask: NonNullable<MeshSource["proxies"]>, main: number): Promise<void> => {
+    const frame = () => new Promise<void>((res) => requestAnimationFrame(() => res()));
+    await frame(); // the first frame of this mesh first (ADR 0074: opening is not slower)
+    const t0 = performance.now();
+    let steps = 0, budget = PROXY_STEP_TRIS, maxStep = 0;
+    for (;;) {
+      if (prxFor !== m || mesh !== m) return; // a newer mesh
+      let r: { status: number; bytes: ArrayBuffer; rev: number };
+      const t1 = performance.now();
+      try { r = await ask(Math.round(budget)); } catch { return; }
+      maxStep = Math.max(maxStep, performance.now() - t1);
+      // a step of about PROXY_STEP_MS (the wasm core blocks this thread meanwhile: ADR 0074)
+      budget = Math.min(2 * budget, 200000, Math.max(2000, (budget * PROXY_STEP_MS) / Math.max(1, performance.now() - t1)));
+      steps++;
+      if (r.status === 202) { await frame(); continue; }
+      if (r.status !== 200 || prxFor !== m || mesh !== m) return;
+      let p: Proxies;
+      try { p = parseBprx(r.bytes); } catch (err) { console.warn("gl viewport: proxies:", err); return; }
+      if (p.rev !== m.rev || p.nElements !== main) return; // another rev's: the next mesh asks again
+      uploadProxies(p);
+      prx = p;
+      let withProxy = 0, ptris = 0;
+      for (const c of p.cells) if (c.parts.length) withProxy++, ptris += c.parts.reduce((n, q) => n + q.ni / 3, 0);
+      stats.proxies = { cells: p.cells.length, withProxy, tris: ptris, bytes: r.bytes.byteLength, steps, maxStepMs: maxStep, loadMs: performance.now() - t0,
+        drawnCells: 0, drawnTris: 0, standIns: 0, on: true };
+      visKey = "\u0000"; // the draw lists again, by leaf
+      dirty = true;
+      return;
+    }
+  };
+  // ---- end 3D2 ----
   const load = async (): Promise<void> => {
     loading = true;
     try {
@@ -1038,8 +1332,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       epoch = await hostEpoch().catch(() => null);
       const ab = await source.mesh();
       stats.meshFetchMs = performance.now() - t0;
+      stats.meshAt = performance.now(); // 3D2
       stats.meshBytes = ab.byteLength;
+      const tp = performance.now();
       const m = parseMesh(ab);
+      const tu = performance.now();
       // ---- TEST1: the model closed while this answer was on its way: not drawn (the frame loop cleared the view) ----
       if (state.value.file === null) return;
       // ---- end TEST1 ----
@@ -1047,6 +1344,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       stats.links = m.links ?? [];
       stats.error = null;
       upload(m);
+      stats.loadSteps = { parse: tu - tp, upload: performance.now() - tu, lists: 0, colours: 0 }; // 3D2 (step 5)
+      void loadProxies(m); // 3D2: after the first frame, in steps
     } catch (e) {
       stats.error = e instanceof Error ? e.message : String(e);
       console.warn("gl viewport:", stats.error);
@@ -1095,15 +1394,23 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const linkDbs: DrawBatch[] = [];
     // Edges: the open model's first, then the links' (drawn in their own colour).
     // 3D1 (step 2): in spatial batches, largest first inside each (gl/cull.ts)
+    // 3D2: with proxies, batched by HLOD leaf too (a far cell's proxy stands for its leaves' batches)
+    const p = prx, grp = (e: number) => (p && !((m.model?.[e] ?? 0) > 0) ? p.leafOf[e] ?? -1 : -1);
+    listsGen++;
+    occReset(); // 3D2: the batches change (visibility, a model): every answer is forgotten
+    elFace = new Int32Array(m.ids.length).fill(-1), elEdge = new Int32Array(m.ids.length).fill(-1);
+    elInst = new Int32Array(m.ids.length).fill(-1), elGroup = new Int32Array(m.ids.length).fill(-1);
+    lastComplete = false;
     for (const links of [false, true]) {
       const items: number[] = [];
       for (let e = 0; e < m.ids.length; e++) if (shown[e] && ((m.model?.[e] ?? 0) > 0) === links && !m.shape?.[e]) items.push(e);
-      const { order: ord, batches: bs } = makeBatches(items, boxes, (e) => (m.ni[e] ?? 0) / 3, (e) => m.ns[e] ?? 0, BATCH_TRIS);
+      const { order: ord, batches: bs } = makeBatches(items, boxes, (e) => (m.ni[e] ?? 0) / 3, (e) => m.ns[e] ?? 0, BATCH_TRIS, grp);
       for (const b of bs) {
         (links ? linkDbs : dbs).push({ b, f0: f, e0: k, link: links, g: null, k0: 0, k1: b.n });
         for (let j = b.first; j < b.first + b.n; j++) {
           const e = ord[j]!;
           const i0 = m.i0[e] ?? 0, n = m.ni[e] ?? 0;
+          elFace[e] = f, elEdge[e] = k; // 3D2 (step 4)
           fi.set(m.idx.subarray(i0, i0 + n), f);
           f += n;
           const s0 = m.s0[e] ?? 0, ns = m.ns[e] ?? 0;
@@ -1149,7 +1456,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const inst: number[] = [];
     groups.forEach((g, gi) => {
       g.first = inst.length;
-      const { order: ord, batches: bs } = makeBatches(byGroup[gi]!, boxes, () => g.ni / 3, () => g.ns, BATCH_TRIS);
+      const { order: ord, batches: bs } = makeBatches(byGroup[gi]!, boxes, () => g.ni / 3, () => g.ns, BATCH_TRIS, grp);
       for (const b of bs) {
         const d: DrawBatch = { b, f0: 0, e0: 0, link: g.link, g, k0: 0, k1: b.n };
         g.dbs.push(d);
@@ -1159,13 +1466,15 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     });
     dbs.push(...linkDbs);
     instEls = Uint32Array.from(inst);
+    inst.forEach((e, i) => { elInst[e] = i; }); // 3D2 (step 4)
+    groups.forEach((g, gi) => { for (let i = g.first; i < g.first + g.count; i++) elGroup[inst[i]!] = gi; });
     const mats = new Float32Array(12 * inst.length);
     inst.forEach((e, i) => mats.set(P.subarray(12 * e, 12 * e + 12), 12 * i));
     gl.bindBuffer(gl.ARRAY_BUFFER, instMat);
     gl.bufferData(gl.ARRAY_BUFFER, mats, gl.STATIC_DRAW);
     // ---- end 3D1 ----
     listBytes = fi.byteLength + ei.byteLength + mats.byteLength + 4 * order.length; // 3D1
-    stats.gpuBytes = meshBytes + listBytes;
+    stats.gpuBytes = meshBytes + listBytes + prxBytes; // (3D2: + the proxies)
     stats.hiddenElements = nh;
     stats.drawnTris = nf / 3 + tri; // 3D1: + the instances'
     selKey = "\u0000"; // revealed elements change colour
@@ -1255,7 +1564,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // 3D1: what this frame is: moving (the camera changed), a slice of the fill after a stop (added to
     // the kept picture), or the whole picture
     const key = camKey(), tNow = performance.now();
-    const movingNow = lastCamKey !== null && key !== lastCamKey && frameBudget() < Infinity && !ghostN && !markN;
+    const first = firstOfMesh && !!mesh; // 3D2: the first frame of a mesh, budgeted
+    if (first) firstOfMesh = false;
+    const movingNow = (first || (lastCamKey !== null && key !== lastCamKey)) && frameBudget() < Infinity && !ghostN && !markN;
     lastCamKey = key;
     if (movingNow || (fill === null && !fillEdges)) fill = null, fillEdges = false;
     const slice = !movingNow && (fill !== null || fillEdges);
@@ -1303,7 +1614,26 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     let culled = 0, budget = Infinity, cutT = 0;
     const seen: { d: DrawBatch; c: Cut }[] = [];
     const orthoEye = plan !== null || ortho3d();
+    // ---- 3D2 (ADR 0078; lib.rs:625 proxied): far cells drawn as their proxy, their leaves' batches not.
+    // Not in a plan or with a section box (Rust: not with a clip), nor with the setting off. ----
+    let prxCells: number[] = [], replaced: Uint8Array | null = null;
+    const prxOn = prx !== null && !stats.noProxies && !box && !plan && proxiesOn();
+    if (prxOn) {
+      const p = prx!, uk = `${listsGen}|${selKey}`;
+      if (uk !== prxUsableKey) { // proxies.rs usable: every element under the cell drawn plainly
+        prxUsableKey = uk;
+        const sel = new Set(state.value.linked ? [] : state.value.selection);
+        prxUsable = usableCells(p, (el) => shown[el] === 1 && !sel.has(m.ids[el] ?? ""));
+      }
+      const k = (2 * Math.tan(FOV_Y / 2)) / Math.max(1, canvas.height);
+      const mmPerPx = ortho3d() ? () => distance * k : (d: number) => d * k;
+      ({ cells: prxCells, replaced } = cutProxies(p, prxUsable, planes ? (b) => boxInFrustum(planes, b, 0) : null, e, mmPerPx, movingNow ? MOVING_PROXY_PX : STILL_PROXY_PX));
+      // while moving, the proxies take at most half the budget (coarser cells, else the largest give way)
+      if (movingNow && prxCells.length) prxCells = fitProxies(p, prxUsable, prxCells, replaced, frameBudget() / 2);
+    }
+    // ---- end 3D2 ----
     for (const d of dbs) {
+      if (replaced && d.b.group >= 0 && replaced[d.b.group]) { d.k0 = d.k1 = 0; continue; } // 3D2: a proxy stands for it
       if (planes && !boxInFrustum(planes, d.b.box, 0)) { d.k0 = d.k1 = 0; culled++; continue; }
       // the nearest point of the batch's box: its items are at most that near (largest on screen first)
       const bx = d.b.box, q = [0, 1, 2].map((a) => Math.min(Math.max(e[a]!, bx[a]!), bx[3 + a]!));
@@ -1313,16 +1643,119 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (slice && fillEdges) for (const { d } of seen) d.k0 = d.k1 = 0; // the last pass: edges only (below)
     else {
       if (movingNow || slice) budget = frameBudget();
+      // 3D2: while moving, the batches take what the proxies leave of the budget
+      if (movingNow && prxCells.length && budget < Infinity) budget = Math.max(MIN_MOVING_TRIS, budget - prxCells.reduce((n, k) => n + prx!.tris[k]!, 0));
       const cut = budgetCut(seen.map((x) => x.c), budget);
       cutT = cut.t;
       for (const { d, c } of seen) d.k0 = c.k0, d.k1 = cutEnd(c, cut.t);
     }
     // the outlines of what a moving frame could not draw (its batches not finished)
-    const unfinished = movingNow ? seen.filter(({ d }) => d.k1 < d.b.n).map(({ d }) => d.b.box) : [];
-    stats.moving = { moving: movingNow, slice, budget, t: cutT, batches: dbs.length, culled, outlines: unfinished.length, tris: 0 };
+    let unDs = movingNow ? seen.filter(({ d }) => d.k1 < d.b.n) : [];
+    // 3D2: a leaf it could not finish is drawn as the proxy of the deepest usable cell holding it instead
+    // (its batches left out), where there is one; the outlines stay for the rest
+    let nStand = 0;
+    if (prxOn && replaced && unDs.length) {
+      const leaves = new Set<number>();
+      for (const { d } of unDs) if (d.b.group >= 0) leaves.add(d.b.group);
+      const used = prxCells.reduce((n, k) => n + prx!.tris[k]!, 0);
+      const extra = standIns(prx!, prxUsable, leaves, replaced, Math.max(0, frameBudget() / 2 - used));
+      nStand = extra.length;
+      if (extra.length) {
+        prxCells.push(...extra);
+        const r = replaced;
+        for (const { d } of seen) if (d.b.group >= 0 && r[d.b.group]) d.k0 = d.k1 = 0;
+        unDs = unDs.filter(({ d }) => !(d.b.group >= 0 && r[d.b.group]));
+      }
+    }
+    const unfinished = unDs.map(({ d }) => d.b.box);
+    stats.moving = { moving: movingNow, slice, budget, t: cutT, batches: dbs.length, culled, outlines: unfinished.length, tris: 0, proxied: prxCells.length };
+    // 3D2: the proxies' runs (cells in order: their parts lie side by side), faces in a frame that starts
+    // over, edges then and in the last pass of a fill
+    const drawPrx = prxCells.length > 0 && (!slice || fill?.t === Infinity);
+    let prxTris = 0;
+    const prxRuns = (seg: boolean): [number, number][] => {
+      const runs: [number, number][] = [];
+      for (const k of [...prxCells].sort((a, b) => a - b)) for (const q of prx!.cells[k]!.parts) {
+        const a = seg ? q.s0 : q.i0, n = seg ? q.ns : q.ni, last = runs[runs.length - 1];
+        if (!n) continue;
+        if (last && last[0] + last[1] === a) last[1] += n;
+        else runs.push([a, n]);
+      }
+      return runs;
+    };
+    const prxFaces = () => {
+      if (!drawPrx) return;
+      gl.bindVertexArray(prxVao);
+      for (const [a, n] of prxRuns(false)) gl.drawElements(gl.TRIANGLES, n, gl.UNSIGNED_INT, 4 * a), fDraws++, fTris += n / 3, prxTris += n / 3;
+      gl.bindVertexArray(vao);
+    };
     // 3D1: the instanced groups after the merged faces of the same model (the open one, then the links);
     // a mirrored placement turns the winding, so its group takes the other front face.
     const front = box && mirror() ? gl.CW : gl.CCW;
+    // ---- 3D2 (step 3): occlusion queries (stats.occlusion; not with a section box, in a plan or in a
+    // slice of the fill). The open model's batches nearest first, one draw each: a batch found hidden
+    // leaves its faces out (its edges stay, Rust's rule) and its box asks, without colour or depth,
+    // when it shows again; anything else that changes forgets the answers (occReset). ----
+    const occActive = stats.occlusion === true && !box && !plan && !slice;
+    const ok = `${listsGen}|${JSON.stringify(box)}|${viewId}|${occActive}`;
+    if (ok !== occKey) occKey = ok, occReset();
+    else if (occActive) pollOcc();
+    const hiddenDs: DrawBatch[] = [];
+    let occAsked = 0;
+    const ask = (d: DrawBatch, drawIt: () => void) => {
+      const o = (d.o ??= { q: null, box: false, qAt: "", hidden: false, hidAt: "" });
+      if (o.hidden) { hiddenDs.push(d); return; }
+      if (o.q) { drawIt(); return; }
+      o.q = gl.createQuery(), o.box = false, o.qAt = key, occAsked++;
+      gl.beginQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE, o.q);
+      drawIt();
+      gl.endQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE);
+    };
+    const occFaces = () => {
+      let inInst = false;
+      for (const { d } of seen.filter((x) => !x.d.link && x.d.k1 > x.d.k0).sort((x, y) => x.c.dist - y.c.dist)) {
+        const g = d.g;
+        ask(d, () => {
+          if (!g) {
+            if (inInst) gl.bindVertexArray(vao), inInst = false;
+            const s = d.f0 + 3 * d.b.cum[d.k0]!, t = d.f0 + 3 * d.b.cum[d.k1]!;
+            gl.drawElements(gl.TRIANGLES, t - s, gl.UNSIGNED_INT, 4 * s), fDraws++, fTris += (t - s) / 3;
+            return;
+          }
+          if (!inInst) gl.bindVertexArray(instVao), inInst = true;
+          const s = g.first + d.b.first + d.k0, t = g.first + d.b.first + d.k1;
+          instAttrs(s, true);
+          if (g.mirrored) gl.frontFace(front === gl.CCW ? gl.CW : gl.CCW);
+          gl.drawElementsInstanced(gl.TRIANGLES, g.ni, gl.UNSIGNED_INT, 4 * g.i0, t - s);
+          if (g.mirrored) gl.frontFace(front);
+          fTris += (g.ni / 3) * (t - s), fDraws++;
+        });
+      }
+      if (inInst) gl.bindVertexArray(vao);
+      if (!hiddenDs.length) return;
+      const v = new Float32Array(108 * hiddenDs.length); // each hidden batch's box: 12 triangles
+      hiddenDs.forEach((d, i) => {
+        const b = d.b.box, c = (k: number) => [k & 1 ? b[3]! : b[0]!, k & 2 ? b[4]! : b[1]!, k & 4 ? b[5]! : b[2]!];
+        const F = [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]];
+        let o = 108 * i;
+        for (const f of F) for (const k of [f[0]!, f[1]!, f[2]!, f[0]!, f[2]!, f[3]!]) v.set(c(k), o), o += 3;
+      });
+      gl.bindVertexArray(probeVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, probeBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, v, gl.DYNAMIC_DRAW);
+      gl.colorMask(false, false, false, false), gl.depthMask(false);
+      hiddenDs.forEach((d, i) => {
+        const o = d.o!;
+        if (o.q) return;
+        o.q = gl.createQuery(), o.box = true, o.qAt = key, occAsked++;
+        gl.beginQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE, o.q);
+        gl.drawArrays(gl.TRIANGLES, 36 * i, 36), fDraws++;
+        gl.endQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE);
+      });
+      gl.colorMask(true, true, true, true), gl.depthMask(true);
+      gl.bindVertexArray(vao);
+    };
+    // ---- end 3D2 (step 3) ----
     const instFaces = (link: boolean) => {
       let any = false;
       for (const g of groups) {
@@ -1360,8 +1793,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     };
     const faces = (push: number) => {
       gl.polygonOffset(1.5 + push, 2 + 2.4 * push); // (1.5, 2), and (4, 8) for the inward pass, as before
-      merged(false);
-      instFaces(false);
+      if (occActive) occFaces(); // 3D2 (step 3)
+      else merged(false), instFaces(false);
+      prxFaces(); // 3D2 (none with a section box)
       gl.polygonOffset(2.5 + push, 16 + 2.4 * push);
       merged(true);
       instFaces(true);
@@ -1391,7 +1825,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.depthMask(false);
     // A plan: edges 2 mm ahead, so the outline of a cut drawn where it stands on something stays.
     if (plan) gl.uniform1f(uZbias, (2 * 2) / (2 * (4 * (bounds?.radius ?? distance) + 1000) - 1));
-    const edgesOn = pressed("edges", true); // Q2: ribbon.rs:695 Edges (opts.edges): no edge drawn when off
+    const edgesOn = pressed("edges", true) && !stats.noEdges; // Q2: ribbon.rs:695 Edges (opts.edges): no edge drawn when off (3D2: a bench hook too)
     let instSegs = 0, segs = 0;
     const instEdges = (link: boolean) => { // 3D1: the instanced groups' segments, the batches drawn
       let any = false;
@@ -1427,9 +1861,16 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       flush();
     };
     if (slice && fillEdges) for (const { d } of seen) d.k0 = 0, d.k1 = d.b.n; // every edge once more over the filled picture
+    const prxEdges = () => { // 3D2: the proxies' crease edges
+      if (!prxCells.length || !(drawPrx || (slice && fillEdges))) return;
+      gl.bindVertexArray(prxEdgeVao);
+      for (const [a, n] of prxRuns(true)) gl.drawArrays(gl.LINES, 2 * a, 2 * n), fDraws++, segs += n;
+      gl.bindVertexArray(edgeVao);
+    };
     if (edgesOn) {
       mergedEdges(false);
       instEdges(false);
+      prxEdges();
       // linked models: their edges in the reference edge colour
       gl.vertexAttrib3f(1, REFERENCE_EDGE_SRGB[0] / 255, REFERENCE_EDGE_SRGB[1] / 255, REFERENCE_EDGE_SRGB[2] / 255);
       mergedEdges(true);
@@ -1439,18 +1880,29 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (unfinished.length) drawOutlines(unfinished), fDraws++;
     stats.frameTris = fTris, stats.frameDraws = fDraws; // 3D1
     stats.moving.tris = fTris;
+    if (occActive) occPending = occPending || occAsked > 0, stats.occ = { asked: occAsked, hidden: hiddenDs.length }; // 3D2 (step 3)
+    if (stats.proxies) stats.proxies.drawnCells = drawPrx ? prxCells.length : 0, stats.proxies.drawnTris = prxTris, stats.proxies.standIns = nStand, stats.proxies.on = prxOn; // 3D2
     // 3D1: the triangles a ms (frame to frame, the frames that had a budget), the fill's next step
-    if ((movingNow || slice) && lastFrameAt && tNow - lastFrameAt < 250 && lastFrameTris > 0) {
+    // (3D2: the last frame budgeted too: a whole frame's triangles over the time to the next frame, its GPU
+    // work not waited for, made a rate many times too high and a moving frame that drew everything)
+    if ((movingNow || slice) && lastBudgeted && lastFrameAt && tNow - lastFrameAt < 250 && lastFrameTris > 0) {
       const r = lastFrameTris / Math.max(1, tNow - lastFrameAt);
       trisPerMs = trisPerMs ? 0.5 * trisPerMs + 0.5 * r : r;
     }
-    lastFrameAt = tNow, lastFrameTris = fTris;
-    if (movingNow) stillDue = tNow + STILL_MS;
+    lastFrameAt = tNow, lastFrameTris = fTris, lastBudgeted = movingNow || slice;
+    if (movingNow) stillDue = first ? tNow : tNow + STILL_MS; // 3D2: after a first frame, the fill at once
     if (slice) {
       if (fillEdges) fillEdges = false;
       else if (cutT === 0) fill = null, fillEdges = true;
       else fill = { t: cutT };
     }
+    // 3D2: the picture complete (every batch drawn): a whole frame, the end of a fill, a moving frame that drew all
+    if (stats.fullFrameMs === null && (slice ? fill === null && !fillEdges && cutT === 0 : cutT === 0 && !unfinished.length && !(stats.moving?.proxied ?? 0)))
+      stats.fullFrameMs = tNow;
+    lastComplete = !movingNow && !(stats.moving?.outlines ?? 0) && (slice ? fill === null && !fillEdges && cutT === 0 : cutT === 0) && !box && !plan; // 3D2 (step 4)
+    lastReplaced = replaced;
+    if (first) stats.firstFrame = { moving: movingNow, tris: fTris, draws: fDraws, budget, t: cutT, ms: performance.now() - tNow }, stats.frameLog = [];
+    if (stats.frameLog && stats.frameLog.length < 80) stats.frameLog.push(`${Math.round(tNow)} ${movingNow ? "m" : slice ? "s" : "w"} t${cutT.toPrecision(2)} ${fTris} f${fill ? fill.t : "-"} e${fillEdges ? 1 : 0}`);
     gl.uniform1f(uZbias, 0);
     gl.depthMask(true);
     gl.bindVertexArray(null);
@@ -1970,6 +2422,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const pick = (x: number, y: number): number => pickHit(x, y)?.el ?? -1;
   /** The element under canvas pixel (x, y) and the point hit (scene mm), or null. */
   const pickHit = (x: number, y: number): { el: number; point: V3 } | null => {
+    const t0 = performance.now(), h = pickScan(x, y);
+    stats.pickMs = performance.now() - t0; // 3D2 (step 4): the page's ray scan alone
+    return h;
+  };
+  const pickScan = (x: number, y: number): { el: number; point: V3 } | null => {
     const m = mesh;
     if (!m) return null;
     const r = rayAt(x, y);
@@ -2498,9 +2955,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         drawLists();
       }
     }
-    if (mesh && visKey === "\u0000") {
+    let previewNow = false;
+    if (mesh && visKey === "\u0000" && firstOfMesh && !previewed) previewed = previewNow = true, previewBoxes(); // 3D2 (step 5)
+    else if (mesh && visKey === "\u0000") {
       visKey = JSON.stringify(sets);
+      const tl = performance.now();
       drawLists();
+      if (stats.loadSteps && !stats.loadSteps.lists) stats.loadSteps.lists = performance.now() - tl; // 3D2 (step 5)
     }
     if (pendingBox && drag?.box) {
       const e = pendingBox;
@@ -2538,8 +2999,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (mesh && key !== selKey) {
       selKey = key;
       gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
+      const tc = performance.now();
       gl.bufferData(gl.ARRAY_BUFFER, colours(), gl.DYNAMIC_DRAW);
-      dirty = true;
+      if (stats.loadSteps && !stats.loadSteps.colours) stats.loadSteps.colours = performance.now() - tc; // 3D2 (step 5)
+      // 3D2 (step 4): only colours changed and nothing else asks for a frame: over the kept picture
+      if (dirty || fill !== null || fillEdges || !recoloured || !overpaint(recoloured)) dirty = true;
     }
     fitCanvas(); // BUG1
     // 3D1: STILL_MS after the camera stopped (no button held), the picture is completed in slices, one a
@@ -2547,10 +3011,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     let fillStep = false;
     if (!dirty && stillDue && !drag && performance.now() >= stillDue) {
       stillDue = 0;
-      if ((stats.moving?.t ?? 0) > 0 || (stats.moving?.outlines ?? 0) > 0) fill = { t: Infinity }, fillEdges = false, dirty = fillStep = true;
+      if ((stats.moving?.t ?? 0) > 0 || (stats.moving?.outlines ?? 0) > 0 || (stats.moving?.proxied ?? 0) > 0) fill = { t: Infinity }, fillEdges = false, dirty = fillStep = true; // 3D2: proxies at 3 px
     } else if (!dirty && (fill !== null || fillEdges)) dirty = fillStep = true;
+    if (!dirty && occPending && pollOcc()) dirty = true; // 3D2 (step 3): a hidden batch showed again
     if (dirty && !fillStep) fill = null, fillEdges = false;
-    if (dirty) {
+    if (dirty && !previewNow) { // (3D2: a box preview is this loop's frame; the lists and the first frame come next)
       dirty = false;
       overlayDirty = false; // draw() draws the overlay too
       draw();

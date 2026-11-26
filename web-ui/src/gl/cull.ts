@@ -83,13 +83,17 @@ function spread(v: number): number {
 /** A batch: items [first, first + n) of its list (elements or instances), largest first; `size` their
  *  sizes (mm, descending), `cum[i]` the triangles (or instances' indices) of the first i items, the
  *  same for edge segments in `ecum`; `box` the items' box. */
-export interface Batch { first: number; n: number; size: Float32Array; cum: Uint32Array; ecum: Uint32Array; box: Float32Array }
+export interface Batch { first: number; n: number; size: Float32Array; cum: Uint32Array; ecum: Uint32Array; box: Float32Array;
+  /** 3D2: the HLOD leaf its items are in (-1: none); a batch never spans two leaves. */
+  group: number }
 
 /** Cuts `items` (indices into `boxes`, 6 floats each) into batches: Morton order of the box centres
  *  inside `bounds`, a new batch when the next item would pass `cap` (its `cost`), then largest first
- *  inside each. Returns the items in their new order and the batches. */
+ *  inside each. 3D2: with `group` (an item's HLOD leaf), the items go by group first (leaves in
+ *  their depth-first order, so a cell's batches lie side by side) and a batch never spans two groups.
+ *  Returns the items in their new order and the batches. */
 export function makeBatches(items: number[], boxes: Float32Array, cost: (e: number) => number, edges: (e: number) => number,
-  cap: number): { order: number[]; batches: Batch[] } {
+  cap: number, group: (e: number) => number = () => -1): { order: number[]; batches: Batch[] } {
   if (!items.length) return { order: [], batches: [] };
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   for (const e of items) for (let a = 0; a < 3; a++) lo[a] = Math.min(lo[a]!, boxes[6 * e + a]!), hi[a] = Math.max(hi[a]!, boxes[6 * e + 3 + a]!);
@@ -102,13 +106,14 @@ export function makeBatches(items: number[], boxes: Float32Array, cost: (e: numb
     }
     key.set(e, k >>> 0);
   }
-  const sorted = [...items].sort((a, b) => key.get(a)! - key.get(b)! || a - b);
+  const sorted = [...items].sort((a, b) => group(a) - group(b) || key.get(a)! - key.get(b)! || a - b);
   const sizeOf = (e: number) => Math.hypot(boxes[6 * e + 3]! - boxes[6 * e]!, boxes[6 * e + 4]! - boxes[6 * e + 1]!, boxes[6 * e + 5]! - boxes[6 * e + 2]!) / 2;
   const order: number[] = [], batches: Batch[] = [];
   let i = 0;
   while (i < sorted.length) {
     let j = i, c = 0;
-    while (j < sorted.length && (j === i || c + cost(sorted[j]!) <= cap)) c += cost(sorted[j]!), j++;
+    const g = group(sorted[i]!);
+    while (j < sorted.length && (j === i || (c + cost(sorted[j]!) <= cap && group(sorted[j]!) === g))) c += cost(sorted[j]!), j++;
     const part = sorted.slice(i, j).sort((a, b) => sizeOf(b) - sizeOf(a) || a - b);
     const n = part.length, size = new Float32Array(n), cum = new Uint32Array(n + 1), ecum = new Uint32Array(n + 1), box = new Float32Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
     part.forEach((e, k) => {
@@ -117,7 +122,7 @@ export function makeBatches(items: number[], boxes: Float32Array, cost: (e: numb
       ecum[k + 1] = ecum[k]! + edges(e);
       for (let a = 0; a < 3; a++) box[a] = Math.min(box[a]!, boxes[6 * e + a]!), box[3 + a] = Math.max(box[3 + a]!, boxes[6 * e + 3 + a]!);
     });
-    batches.push({ first: order.length, n, size, cum, ecum, box });
+    batches.push({ first: order.length, n, size, cum, ecum, box, group: g });
     order.push(...part);
     i = j;
   }

@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include "buf.h"
 #include "history.h"
+#include "hlod.h" /* 3D2 */
 #include "ifc_read.h"
 #include "measure.h"
 #include "model.h"
@@ -97,6 +98,14 @@ typedef struct cc_session {
     const cc_model *mesh_model;
     uint32_t mesh_rev;
     int mesh_form; /* 3D1: the BMSH version cached (1, or 3: shapes once, scene_bmsh.h) */
+    /* 3D2 (ADR 0078): the HLOD proxies of the scene /mesh draws (mesh.h cc_mesh_proxies), built in
+     * steps the page asks for, then their BPRX bytes; per (scene, rev). */
+    cc_hlod *hlod;
+    const cc_scene *hlod_scene;
+    uint32_t hlod_rev;
+    int hlod_status; /* 0 none, 202 building, 200 built (hlod_out: BPRX), 500 (hlod_out: the error) */
+    Buf hlod_out;
+    double hlod_ms;  /* build time so far */
     cc_persist *persist;
     /* Linked models (ticket B5, links.h): read-only scenes drawn with the open one, in link
      * order; dropped with the open model (lib.rs:1668). links_gen + 1 on every change to them

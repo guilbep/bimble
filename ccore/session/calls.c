@@ -204,6 +204,7 @@ static const cc_scene *scene_now(cc_session *s) {
     if (s->view == CC_VIEW_FILE) return &s->vscene;
     if (!s->open) return NULL;
     if (s->scene_rev != s->rev) {
+        if (s->hlod_scene == &s->scene) cc_mesh_proxies_free(s); /* 3D2: built on the old scene */
         if (s->scene_rev) cc_scene_free(&s->scene);
         cc_error e;
         s->scene_ok = cc_scene_build(&s->scene, &s->model, &e) == 0;

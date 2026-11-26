@@ -81,6 +81,7 @@ static void on_signal(int sig) {
 static const char *reason(int status) { /* serve.rs:306-316 */
     switch (status) {
     case 200: return "OK";
+    case 202: return "Accepted"; /* 3D2: GET /mesh?proxies=N, still building */
     case 204: return "No Content";
     case 400: return "Bad Request";
     case 403: return "Forbidden";
@@ -576,6 +577,18 @@ static void handle_one(Conn *c, int *again) {
         size_t mn;
         uint32_t rev;
         double ms;
+        /* 3D2 (ADR 0078): ?proxies=N, the HLOD proxies (mesh.h cc_mesh_proxies): N more triangles read
+         * per call, 202 with "read total" until built, then 200 with the BPRX bytes */
+        Str prx;
+        uint64_t budget = 0;
+        if (query_param(query, "proxies", &prx) && parse_u64(prx, &budget)) {
+            int st = cc_mesh_proxies(cfg->session, budget, &mp, &mn, &rev, &ms);
+            if (st == 200) fprintf(stderr, "bimble-ccore: proxies rev %u built in %.3f ms, %zu bytes\n", (unsigned)rev, ms, mn);
+            char xr[80];
+            snprintf(xr, sizeof xr, "X-Rev: %u\r\nAccess-Control-Expose-Headers: X-Rev\r\n", (unsigned)rev);
+            respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, xr, mp, mn, keep);
+            goto mesh_done;
+        }
         /* 3D1 (ADR 0078): ?shapes=1, BMSH version 3 (each shape once, a placement per element) */
         Str shp;
         mesh_form = query_param(query, "shapes", &shp) && str_eq(shp, "1") ? 3 : 1;
@@ -595,6 +608,7 @@ static void handle_one(Conn *c, int *again) {
         }
         /* ---- end TEST1 ---- */
         respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, st == 200 ? xrev : NULL, mp, mn, keep);
+    mesh_done:;
     } else if (is_static) {
         const cc_static_file *f = cc_static_find(cfg->web, path.p, path.n);
         if (f)

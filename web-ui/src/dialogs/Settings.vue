@@ -8,7 +8,8 @@ export const capability = "settings"; // SET1: query settings, action set_settin
 // The same file as the Rust app (settings.rs): every change is one `set_settings`, applied at once
 // (ADR 0052: no OK/Cancel). The memory share and two performance fields are kept in the file but not
 // shown: the lab's viewport has no use for them (`query settings` applies, DEVIATIONS 23); "While the
-// view moves" (moving_fps) is shown since it applies (ticket 3D1, ADR 0078).
+// view moves" (moving_fps) is shown since it applies (ticket 3D1, ADR 0078), and "Far parts simplified"
+// (moving_proxies, HLOD proxies) since ticket 3D2.
 import { computed, ref, watch } from "vue";
 import { setSettings, userSettings, type SettingsValues } from "../bimble";
 import { t } from "../i18n";
@@ -109,6 +110,11 @@ const close = () => { currentDialog.value = null; };
             <option v-for="f in [0, 15, 30, 60, 120, 240]" :key="f" :value="f">{{ f === 0 ? tx('settings.moving.0') : tx('settings.moving.fps', { fps: f }) }}</option>
           </select></label>
         <p v-if="s?.applies.moving_fps" class="note" data-bb="settings-moving-note">{{ tx('settings.movingNote') }}</p>
+        <!-- 3D2 (ADR 0078): HLOD proxies (moving_proxies, Rust's setting): far cells drawn as stand-ins -->
+        <label v-if="s?.applies.moving_proxies" class="row"><span>{{ tx('settings.proxies') }}</span>
+          <input type="checkbox" :checked="v.moving_proxies" data-bb="settings-moving-proxies" data-setting="moving_proxies" @change="set({ moving_proxies: ($event.target as HTMLInputElement).checked })"></label>
+        <p v-if="s?.applies.moving_proxies" class="note" data-bb="settings-proxies-note">{{ tx('settings.proxiesNote') }}</p>
+        <p v-if="s && !s.applies.gpu_cull" class="note" data-bb="settings-gpu-cull">{{ tx('settings.gpuCull') }}</p>
         <button v-if="!isDefaultLook" class="btn s" type="button" style="align-self:flex-start" data-bb="settings-default-look" @click="set({ theme: 'grey', ui_font: 'roboto', text_size: TEXT_SIZE })">{{ tx('settings.defaultLook') }}</button>
       </section>
 

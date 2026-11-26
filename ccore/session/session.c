@@ -14,6 +14,7 @@
 #include "guid.h"
 #include "inflate.h"
 #include "json_w.h"
+#include "mesh.h"
 #include "session.h"
 #include "concrete.h" /* CONC1 */
 #include "links.h"
@@ -52,6 +53,7 @@ void cc_session_free(cc_session *s) {
     free(s->undo_ids), free(s->redo_ids), free(s->also), free(s->material);
     if (s->scene_rev) cc_scene_free(&s->scene);
     buf_free(&s->mesh);
+    cc_mesh_proxies_free(s); /* 3D2 */
     cc_paper_cache_free(s);
     cc_paper_fonts_free(s); /* D7 */
     cc_versions_free(s); /* H2a */
@@ -175,6 +177,7 @@ static void set_path(cc_session *s, const char *path) {
 
 /* Drops the read-only scene, if any. */
 static void drop_view(cc_session *s) {
+    cc_mesh_proxies_free(s); /* 3D2: built on the scene dropped here */
     if (s->ifc) cc_ifc_scene_free(s->ifc), free(s->ifc), s->ifc = NULL;
     if (s->vf) cc_scene_free(&s->vscene), cc_viewfile_free(s->vf), free(s->vf), s->vf = NULL;
     s->view = CC_VIEW_NONE;
@@ -198,6 +201,7 @@ static void drop_model(cc_session *s) {
     cc_measure_reset(&s->measure); /* lib.rs:1677: measurements mean nothing for another model */
     memset(&s->wp, 0, sizeof s->wp); /* WAVE1B: the storey's level again, the plane tool off */
     cc_session_mboxes_free(s); /* MEAS1: the boxes are the old scenes' */
+    cc_mesh_proxies_free(s); /* 3D2: so are the proxies */
     free(s->material), s->material = NULL;
     s->open = 0, s->untitled = 0;
     s->ntabs = 0, s->has_active = 0, s->tab_open = 0;
