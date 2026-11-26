@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { startError, screenRoutes, state, collab } from "./bimble";
+import { startError, startStep, screenRoutes, state, collab } from "./bimble";
 import { t } from "./i18n";
 import QuickBar from "./shell/QuickBar.vue";
 import TabsBar from "./shell/TabsBar.vue";
@@ -91,6 +91,7 @@ onMounted(() => { installKeys(); void applyDeepLink(); });
             <PaperView v-if="paperOn" /><!-- PAPER1 -->
             <ContextMenu /><!-- ISS71: the viewport's right-click menu -->
             <SmallFloat v-if="small" />
+            <p v-if="startStep && !startError" class="start-step" role="status" data-bb="start-step">{{ t(`shellstate.step.${startStep}`) }}…</p><!-- PERF2 -->
             <p v-if="startError" class="start-error" role="alert">{{ t('app.startError', { msg: startError }) }}</p>
           </div>
           <aside v-if="currentPanel && panels[currentPanel]" class="bb-right" data-bb="right-panel" :aria-label="panelLabel">
@@ -138,5 +139,6 @@ body { background: var(--bb-cream); }
 .bb-app.small .bb-page { padding: 12px; }
 #bimble { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 /* Error: ink text on an ochre band, with the word "Error". */
+.start-step { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; font-size: var(--bb-size-body, 15px); color: var(--bb-stone); pointer-events: none; }
 .start-error { position: absolute; inset: auto var(--bb-space-4) var(--bb-space-4); margin: 0; padding: var(--bb-space-2) var(--bb-space-3); background: var(--bb-error); color: var(--bb-ink); }
 </style>

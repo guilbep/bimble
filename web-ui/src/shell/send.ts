@@ -81,6 +81,10 @@ function runFile(o: Extract<Shell, { at: "opening" }>): void {
   finish(err);
 }
 
+// ---- PERF2: the step of the open under way (ccore.ts OpenSteps), for the `opening` state it belongs to ----
+export const openStep = shallowRef<{ of: Shell; step: string; n: number; total: number } | null>(null);
+// ---- end PERF2 ----
+
 // ---- FS1: the one picker (files.ts pickFile): the page's own dialog on the native host (a path), the
 // browser's picker in the wasm (the file's bytes), or a file dropped on the page. Its answer is the
 // next event: `opened`, `failed`, or `cancel` (the picker closed). The browser's picker may never say it
@@ -98,7 +102,10 @@ function pick(o: Extract<Shell, { at: "opening" }>, finish: (err: string | null)
       const f = r.file!;
       const cc = await import("../ccore");
       try {
-        await cc.ccoreOpenFile(f, o.discard, o.what === "import");
+        await cc.ccoreOpenFile(f, o.discard, o.what === "import", { // PERF2: steps and Cancel
+          step: (st) => { openStep.value = { of: o, step: st, n: cc.OPEN_STEPS.indexOf(st) + 1, total: cc.OPEN_STEPS.length }; },
+          cancelled: () => shell.value !== o,
+        });
         finish(null);
       } catch (e) {
         finish(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);

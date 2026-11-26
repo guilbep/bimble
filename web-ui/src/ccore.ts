@@ -29,6 +29,12 @@
 // - PDF export (ticket D7, ccore/session/sheet_svg.h): `bytes("query", "sheet_pdf" | "view_pdf", body)` answers
 //   the PDF's bytes. SIZE1: Helvetica, nothing fetched (no font is shipped); `host_fonts` stays for a
 //   page that hands Roboto files over, and `query pdf_fonts` says whether it did.
+// - PERF2 (ccore/results/perf.md): an open is staged so no single task holds it all: the parse
+//   (host_open / host_open_text), then the scene (`query status` builds it once per rev, calls.c
+//   scene_now), then the BMSH (host_mesh, cached per rev in the session: mesh.c cc_mesh_get), each
+//   in its own task with a yield between (`yieldTask`). The page hears of the new model (the change
+//   feed) only after them, so its first queries and the viewport's first /mesh are served from the
+//   caches. `OpenSteps` reports the step (read, parse, scene, mesh) and is cancelled before the parse.
 // - Settings (ticket SET1, ccore/session/settings.h): the text of Rust's settings file kept in
 //   localStorage `bimble.settings` (settings.rs:246), loaded at start (`settings_load`), stored again
 //   after each `set_settings`.
@@ -129,6 +135,37 @@ function run(f: (...a: number[]) => number, args: Uint8Array[], lead: number[] =
   return { status, bytes, value };
 }
 
+// ---- PERF2: an open in steps, each its own task ----
+/** Gives the event loop a turn (input, paint) between two heavy steps: `scheduler.yield()` where
+ *  the browser has it (its continuation runs first), else a message (not throttled as setTimeout is). */
+export function yieldTask(): Promise<void> {
+  const s = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (typeof s?.yield === "function") return s.yield();
+  return new Promise((r) => { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); r(); }; c.port2.postMessage(0); });
+}
+/** The steps of an open, in order (the shell's progress bar; the page's start line). */
+export const OPEN_STEPS = ["read", "parse", "scene", "mesh"] as const;
+export type OpenStep = (typeof OPEN_STEPS)[number];
+export interface OpenSteps {
+  /** Called when a step starts. */
+  step?: (s: OpenStep) => void;
+  /** True: the open is dropped. Asked before the parse only: after it, the core holds the new model. */
+  cancelled?: () => boolean;
+}
+/** After a parse: the scene, then the BMSH, each in its own task (both cached in the session per
+ *  rev, so the page's queries and the viewport's /mesh that follow are answered at once). An error
+ *  here is not the open's: the page asks again and shows it as before. */
+async function warm(X: Exports, steps: OpenSteps = {}): Promise<void> {
+  await yieldTask();
+  steps.step?.("scene");
+  try { run(X.call.bind(X), [enc.encode("query"), enc.encode("status"), enc.encode("{}")]); } catch { /* asked again by the page */ }
+  await yieldTask();
+  steps.step?.("mesh");
+  try { run(X.host_mesh.bind(X), [], [0]); } catch { /* asked again by the viewport */ }
+  await yieldTask();
+}
+// ---- end PERF2 ----
+
 function hostLog(): void {
   if (!module) return;
   const t = dec.decode(run(module.X.host_log.bind(module.X), []).bytes);
@@ -147,15 +184,20 @@ export function ccoreMesh(): { bytes: ArrayBuffer; rev: number } {
  *  .bimbleview read-only (no model: the scene only), or with `importIfc` an .ifc imported as an
  *  editable copy. With unsaved changes and no `discard`, refused (the shell asks first: UX1).
  *  Throws the C core's error text when the file does not open. */
-export async function ccoreOpenFile(file: Blob & { name?: string }, discard = false, importIfc = false): Promise<boolean> {
+export async function ccoreOpenFile(file: Blob & { name?: string }, discard = false, importIfc = false, steps: OpenSteps = {}): Promise<boolean> {
   if (!module) throw new Error("ccore: not loaded");
   const { X } = module;
   // FS1: the question is the shell's (confirmClose, shell/ShellNotice.vue): without `discard`, a model
   // with unsaved changes is refused by the module, as the native host refuses it.
+  steps.step?.("read");
   const bytes = new Uint8Array(await file.arrayBuffer());
+  await yieldTask(); // PERF2: the Cancel pressed while reading is seen here
+  if (steps.cancelled?.()) return false;
   const name = file.name || "model.bimble";
+  steps.step?.("parse");
   const r = run(X.host_open.bind(X), [enc.encode(name), bytes], [(discard ? 1 : 0) | (importIfc ? 2 : 0)]);
   hostLog();
+  if (r.status === 200) await warm(X, steps); // PERF2: the scene and the mesh, each in its own task
   emitChange?.();
   if (r.status !== 200) throw dec.decode(r.bytes) || `ccore open: ${r.status}`;
   return true;
@@ -208,6 +250,14 @@ export function ccoreActionFile(action: string, body: unknown, bytes: Uint8Array
   if (r.status !== 200) throw dec.decode(r.bytes) || `ccore ${action}: ${r.status}`;
 }
 // ---- end LNK1 ----
+/** PERF2: builds the session's BMSH now, in a task of its own (cached per rev and links: the
+ *  viewport's next /mesh is a copy). After a link: the parse was the link's task, the mesh is this one. */
+export async function ccoreWarmMesh(): Promise<void> {
+  if (!module) return;
+  await yieldTask();
+  const { X } = module;
+  try { run(X.host_mesh.bind(X), [], [0]); } catch { /* asked again by the viewport */ }
+}
 
 /** The bytes the module wrote last and their file name (host_saved, host_saved_path). */
 function lastWritten(): { name: string; bytes: Uint8Array } {
@@ -264,7 +314,9 @@ function pickAndLink(purpose: "link_model" | "link_pdf" | "link_dxf"): void {
     const f = r?.file;
     if (!f) return;
     const link = purpose === "link_model" ? ccoreLinkFile : purpose === "link_pdf" ? ccoreLinkPdf : ccoreLinkDxf;
-    void f.arrayBuffer().then((b) => link(f.name, new Uint8Array(b))).catch((e) => console.error(`ccore: link ${f.name}: ${String(e)}`));
+    void f.arrayBuffer().then((b) => link(f.name, new Uint8Array(b)))
+      .then(() => { if (purpose === "link_model") return ccoreWarmMesh(); }) // PERF2: the new mesh in its own task, not in the viewport's frame
+      .catch((e) => console.error(`ccore: link ${f.name}: ${String(e)}`));
   });
 }
 
@@ -312,10 +364,11 @@ function fileAction(name: string): boolean {
 }
 
 /** Loads the module, opens the model and returns a `Wasm` for bimble.ts. */
-export async function ccoreClient(params: URLSearchParams): Promise<CcoreClient> {
+export async function ccoreClient(params: URLSearchParams, steps: OpenSteps = {}): Promise<CcoreClient> {
   const base = document.baseURI;
   const wasmUrl = new URL(params.get("ccore_wasm") ?? "ccore/ccore.wasm", base).href;
   const modelUrl = new URL(params.get("model") ?? "ccore/frame.json", base).href;
+  steps.step?.("read");
   const [wr, mr] = await Promise.all([fetch(wasmUrl), fetch(modelUrl)]);
   if (!wr.ok) throw new Error(`ccore: ${wasmUrl}: HTTP ${wr.status} (run npm run ccore:wasm)`);
   if (!mr.ok) throw new Error(`ccore: ${modelUrl}: HTTP ${mr.status}`);
@@ -331,9 +384,12 @@ export async function ccoreClient(params: URLSearchParams): Promise<CcoreClient>
 
   const text = new Uint8Array(await mr.arrayBuffer());
   const name = decodeURIComponent(new URL(modelUrl).pathname.split("/").pop() || "model.bimble");
+  await yieldTask(); // PERF2: the instantiation and the parse in two tasks
+  steps.step?.("parse");
   const o = run(X.host_open_text.bind(X), [enc.encode(name), text]);
   if (o.status !== 200) throw new Error(`ccore: ${name}: ${dec.decode(o.bytes)}`);
   window.__bbCcore = { wasmBytes: wasmBuf.byteLength, readyMs, openMs: performance.now(), model: name, modelBytes: text.length };
+  await warm(X, steps); // PERF2: the scene and the mesh, each in its own task, before the page asks
 
   let listener: ((json: string) => void) | null = null;
   let last = "";

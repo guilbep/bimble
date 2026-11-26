@@ -373,6 +373,17 @@ async function main() {
   const ccx = (expr) => evalJs(`(async () => { const c = await import('/src/ccore.ts'); const b = await import('/src/bimble.ts'); return ${expr}; })()`);
   const f2 = readFileSync(join(CCORE, "golden/bin/frame2.bimble")).toString("base64");
   const revBefore = await bb("b.state.value.rev");
+  // PERF2: the open in steps (ccore.ts OpenSteps): Cancel seen before the parse drops the file (the
+  // page keeps its model and rev). On the code before PERF2 the 4th argument is ignored: it opens.
+  const p2 = JSON.parse(await ccx(`(async () => {
+    const bytes = Uint8Array.from(atob(${JSON.stringify(f2)}), (ch) => ch.charCodeAt(0));
+    const seen = [];
+    let r;
+    try { r = await c.ccoreOpenFile(new File([bytes], 'frame2.bimble'), true, false, { step: (s) => seen.push(s), cancelled: () => true }); } catch (e) { r = String(e); }
+    return JSON.stringify({ r, seen, file: b.state.value.file, rev: b.state.value.rev, steps: c.OPEN_STEPS });
+  })()`));
+  check("PERF2: ccoreOpenFile cancelled before the parse -> dropped (the model and its rev stay)",
+    p2.r === false && p2.seen.join() === "read" && p2.rev === revBefore && p2.file !== "frame2.bimble" && String(p2.steps) === "read,parse,scene,mesh", JSON.stringify(p2));
   const opened = await ccx(`(async () => {
     const bytes = Uint8Array.from(atob(${JSON.stringify(f2)}), (ch) => ch.charCodeAt(0));
     try { return await c.ccoreOpenFile(new File([bytes], 'frame2.bimble'), true); } catch (e) { return String(e); }

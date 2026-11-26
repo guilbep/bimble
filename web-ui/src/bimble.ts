@@ -228,6 +228,19 @@ interface Wasm {
 export const state = shallowRef<State>({ selection: [], rev: 0, unsaved: false, file: null });
 /** Set when the viewer could not start. */
 export const startError = shallowRef<string | null>(null);
+// ---- PERF2: the start's open, step by step (ccore.ts OpenSteps), shown over the viewport until its first frame ----
+export const startStep = shallowRef<"read" | "parse" | "scene" | "mesh" | "draw" | null>(null);
+/** Clears `startStep` once the viewport drew the model (or gave up): polled per frame, 20 s at most. */
+function clearStartStepOnFirstFrame(): void {
+  let frames = 0;
+  const tick = () => {
+    const g = window.__bbGl;
+    if (!g || g.firstFrameMs !== null || g.error !== null || ++frames > 1200 || (state.value.file === null && frames > 2)) startStep.value = null;
+    else requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+// ---- end PERF2 ----
 
 // Wasm data: shallow refs, replaced as a whole after each change (never mutated in place).
 export const actions = shallowRef<ActionState[]>([]);
@@ -528,14 +541,17 @@ export async function start(): Promise<void> {
       // PERF1: the viewport's chunk is fetched while the wasm and the model load, not after them.
       const glChunk = url.searchParams.get("gl") === "1" ? import("./glviewport") : null;
       glChunk?.catch(() => undefined); // awaited below; no unhandled rejection if ccoreClient throws first
+      startStep.value = "read"; // PERF2
       const cc = await import("./ccore");
-      w = await cc.ccoreClient(url.searchParams);
+      w = await cc.ccoreClient(url.searchParams, { step: (s) => { startStep.value = s; } });
       if (glChunk) {
+        startStep.value = "draw";
         viewportDirty = (await glChunk).glViewport({
           mesh: async () => cc.ccoreMesh().bytes,
           epoch: async () => null,
         });
-      }
+        clearStartStepOnFirstFrame();
+      } else startStep.value = null;
     } else if (native) {
       // Dev only: no manifold, no wasm; on_change below starts the long-poll loop.
       w = nativeClient(native.port, native.token);
@@ -584,6 +600,7 @@ export async function start(): Promise<void> {
     setInterval(() => { if (status.value && !status.value.idle) status.value = tryQuery<Status | null>("status", null); }, 1000);
     resolveReady();
   } catch (e) {
+    startStep.value = null; // PERF2
     startError.value = message(e);
     throw e;
   }

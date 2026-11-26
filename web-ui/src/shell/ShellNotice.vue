@@ -4,16 +4,22 @@
 // Cancel), an error with the session's words (Back). Each button is one `send`.
 import { computed } from "vue";
 import { t } from "../i18n";
-import { here, send, shown } from "./send";
+import { here, openStep, send, shown } from "./send";
 import { fileRequest } from "../files"; // FS1: the page's own file dialog has its own close
 
 const s = computed(() => here.value);
+// PERF2: the open's step (read, parse, scene, mesh), shown once a file is being opened
+const step = computed(() => (openStep.value && openStep.value.of === here.value ? openStep.value : null));
 </script>
 
 <template>
   <div v-if="(s.at === 'opening' && !fileRequest) || s.at === 'confirmClose' || s.at === 'error'" class="shell-backdrop">
     <div v-if="s.at === 'opening'" class="bb-dialog shell-card" role="status" data-bb="shell-opening">
       <p class="msg">{{ t(`shellstate.opening.${s.what}`) }}</p>
+      <template v-if="step"><!-- PERF2 -->
+        <progress class="bar" :value="step.n" :max="step.total" data-bb="shell-opening-progress" :aria-label="t('shellstate.step.of', { n: step.n, of: step.total })" />
+        <p class="msg step" data-bb="shell-opening-step">{{ t(`shellstate.step.${step.step}` as 'shellstate.step.read') }}</p>
+      </template>
       <div class="acts">
         <button v-if="shown('shell-opening-cancel')" class="btn s" type="button" data-bb="shell-opening-cancel" @click="send({ do: 'cancel' })">{{ t('shellstate.cancel') }}</button>
       </div>
@@ -42,5 +48,7 @@ const s = computed(() => here.value);
 .title { margin: 0; font-family: 'Sora', 'Source Sans 3', sans-serif; font-size: 20px; font-weight: 700; }
 .msg { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
 .mono { font-family: 'DM Mono', ui-monospace, Menlo, monospace; font-size: 13px; }
+.bar { width: 100%; height: 6px; accent-color: var(--bb-ink); }
+.step { font-size: 13px; color: var(--bb-stone); }
 .acts { display: flex; gap: 10px; justify-content: flex-end; }
 </style>
