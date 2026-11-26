@@ -189,6 +189,16 @@ void cc_conc_json(const cc_session *s, JsonW *w) {
 }
 
 /* ---- WAVE1B (B2): openings selected and previewed (concrete.h) ---- */
+#ifdef CC_VIEW_ONLY
+/* The viewer-only build has no verbs (build.sh VIEW_DENY: verbs_concrete.c) and no editable model:
+ * these queries answer "read only" before they get here; an opening is "other" for it. */
+static void opening_info_of(const cc_element *e, size_t k, cc_opening_info *out) {
+    (void)e, (void)k;
+    memset(out, 0, sizeof *out);
+    out->kind = 2;
+}
+#define cc_opening_info_of opening_info_of
+#endif
 
 static double elev_of(const cc_model *m, const cc_gid *storey) {
     const cc_storey *st = cc_model_storey(m, storey);
