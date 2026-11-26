@@ -36,6 +36,7 @@
  *   at a path the caller gives:
  *     action save_as {path}; action export_ifc4, export_ifc2x3, share_for_viewing {path};
  *     query sheet_pdf, view_pdf, sheets_pdf {path} (a PDF; without path the bytes are answered);
+ *     query view_dxf, sheet_dxf {path} (a DXF, DXF1; without path the bytes are answered);
  *   next to the open model (its folder, a name made from it):
  *     action save (the model file); export_ifc4, export_ifc2x3 without path ("<stem>.ifc"),
  *     share_for_viewing without path ("<stem>.bimbleview"); refused for a new model, never over

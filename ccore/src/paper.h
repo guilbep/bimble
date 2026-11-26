@@ -34,6 +34,29 @@ typedef struct {
     cc_pen pen;
 } cc_hatch;
 
+/* DXF1 (dxf_out.h, ADR 0082): what an item draws, so a writer that sorts by layer can name it.
+ * The SVG and PDF writers never read it (their bytes do not change). A zeroed tag is the sheet's
+ * own drawing (frame, title block, legend, scale bar, a drawing's title). */
+typedef enum {
+    CC_TAG_PAPER,     /* the sheet's: frame, title block, legend, scale bar, title */
+    CC_TAG_CUT,       /* an element's outline cut by the plane */
+    CC_TAG_VIEW,      /* an element seen beyond the cut (edges, the top it shows) */
+    CC_TAG_ABOVE,     /* an element above the cut, dashed */
+    CC_TAG_HATCH,     /* the fill and hatch of a cut element */
+    CC_TAG_GRID,      /* grid axes and their bubbles */
+    CC_TAG_DIMENSION, /* dimension lines and their values */
+    CC_TAG_TEXT,      /* labels and notes */
+    CC_TAG_SYMBOL     /* level marks, section marks, opening crosses */
+} cc_tag_role;
+
+typedef struct {
+    const char *cls; /* the element's IFC class ("IfcWall"), not NUL-terminated; NULL: none */
+    size_t cls_n;
+    uint32_t elem1; /* the element's model_index + 1; 0: none */
+    uint8_t role;   /* cc_tag_role */
+    int8_t cat;     /* its material family (draw_style.h cc_category) + 1; 0: none */
+} cc_item_tag;
+
 typedef enum { CC_ITEM_AREA, CC_ITEM_LINES, CC_ITEM_TEXT } cc_item_kind;
 typedef enum { CC_ANCHOR_START, CC_ANCHOR_MIDDLE, CC_ANCHOR_END } cc_text_anchor;
 typedef enum { CC_FONT_ROBOTO, CC_FONT_HELVETICA } cc_sheet_font;
@@ -56,6 +79,10 @@ typedef struct {
     cc_rgb color;
     cc_text_anchor anchor;
     int bold;
+    /* DXF1: what it draws; Lines may tag each ring (the projection and above lines gather many
+     * elements in one item), else NULL. */
+    cc_item_tag tag;
+    const cc_item_tag *ring_tags;
 } cc_item;
 
 typedef struct {

@@ -54,6 +54,7 @@ const FEATURES = [
   ["drawing D1-D5 (cut, plan, annotations, style, sheets, paper, SVG)", "draw_cut draw_plan draw_annot draw_style draw_view draw_sheet paper sheet_svg toggles paper_scene"],
   ["sheets (verbs and session)", "verbs_sheets sheets"],
   ["PDF writer (D6)", "pdf_out"],
+  ["DXF writer (DXF1)", "dxf_out"],
   ["PDF reader (L1)", "pdf_in"],
   ["DXF reader (L2)", "dxf_in"],
   ["links and references", "ref_read links links_ref links_dxf links_panel link_cache m1links"],

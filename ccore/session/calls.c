@@ -1483,6 +1483,9 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "sheet_pdf") || !strcmp(name, "view_pdf"))
         return cc_paper_pdf_query(s, scene_now(s), name[0] == 'v', body, n, out); /* LNK1: a read-only scene's views too */
     if (!strcmp(name, "pdf_fonts")) return cc_paper_fonts_query(s, out); /* SIZE1: the export's font choice */
+    /* DXF1: the DXF export, sheet_svg.h cc_paper_dxf_query (the bytes, or {path, bytes}) */
+    if (!strcmp(name, "sheet_dxf") || !strcmp(name, "view_dxf"))
+        return cc_paper_dxf_query(s, scene_now(s), name[0] == 'v', body, n, out);
     /* ---- PAPER1: a view's paper as SVG; several sheets as one PDF (sheet_svg.h) ---- */
     if (!strcmp(name, "view_svg")) return cc_paper_view_svg(s, scene_now(s), body, n, out); /* LNK1: read-only too */
     if (!strcmp(name, "sheets_pdf")) return cc_paper_sheets_pdf(s, s->open ? scene_now(s) : NULL, body, n, out);

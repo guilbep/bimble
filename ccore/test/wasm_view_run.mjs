@@ -210,6 +210,7 @@ suite("refused");
     // PAPER1: no drawing on paper in the view build (the editor: "not enabled" in the 3D view, the window toggled twice)
     ["action", "paper_view", ""], ["action", "on_paper", ""], ["action", "on_paper", ""],
     ["query", "view_svg", JSON.stringify({ view: "x" })], ["query", "sheets_pdf", JSON.stringify({ sheets: ["x"] })],
+    ["query", "view_dxf", JSON.stringify({ view: "x" })], ["query", "sheet_dxf", JSON.stringify({ sheet: "x" })], // DXF1: not in the viewer (ADR 0082)
   ];
   for (const [op, nm, body] of edits) {
     refused(`view: ${op} ${nm}`, V.call(V.X.call, [op, nm, body]));

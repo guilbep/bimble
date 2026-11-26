@@ -54,6 +54,7 @@ VIEW_DENY=(src/verbs.c src/verb_table.c src/verbs_concrete.c src/verbs_sheets.c 
 VIEW_DENY+=(src/draw_cut.c src/paper.c src/draw_style.c src/draw_plan.c src/draw_annot.c src/draw_view.c) # drawings on paper (D1-D4): not in the viewer
 VIEW_DENY+=(src/draw_sheet.c) # sheets on paper (D5)
 VIEW_DENY+=(src/pdf_out.c) # the PDF writer (D6): not in the viewer
+VIEW_DENY+=(src/dxf_out.c) # DXF1: the DXF writer needs the drawing (draw_*), not in the viewer (ADR 0082)
 VIEW_DENY+=(src/repo.c src/diff.c) # the history store (H1): no history folder in the browser (session/versions.c)
 VIEW_DENY+=(src/repo_write.c) # H2a: writing the history store (no folder in the browser)
 VIEW_DENY+=(src/merge.c src/repo_merge.c) # H2b: merging history branches (no folder in the browser)

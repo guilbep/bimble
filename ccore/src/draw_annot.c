@@ -106,6 +106,7 @@ cc_item *cc_item_list_push(cc_item_list *v) {
     }
     cc_item *it = &v->p[v->n++];
     memset(it, 0, sizeof *it);
+    it->tag = v->tag; /* DXF1 */
     return it;
 }
 
@@ -1038,6 +1039,7 @@ int cc_annot_view(cc_annot_ctx *c, const cc_model *m, const cc_view *v, const cc
     if (pen_of(c, CC_ROLE_DIMENSION, c->scale, &note)) return -1;
     for (size_t i = 0; i < v->nannotations; i++) {
         const cc_annotation *an = &v->annotations[i];
+        c->items->tag.role = an->type == CC_ANN_DIMENSION ? CC_TAG_DIMENSION : CC_TAG_TEXT; /* DXF1 */
         if (an->type == CC_ANN_DIMENSION) {
             const cc_dim_type *dt = NULL;
             for (size_t j = 0; an->has_kind && j < ps->ndim_types && !dt; j++)

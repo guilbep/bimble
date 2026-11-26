@@ -16,6 +16,7 @@
 #include "draw_style.h"
 #include "ifc_out.h" /* cc_iso_utc, CC_IFC_VERSION */
 #include "pdf_out.h"
+#include "dxf_out.h" /* DXF1 */
 #include "view_effective.h" /* D7 */
 #include "paper_scene.h" /* LNK1 */
 #include "views.h"       /* LNK1: cc_sv_list */
@@ -108,6 +109,11 @@ int cc_paper_sheets_pdf(struct cc_session *s, const cc_scene *sc, const char *bo
     return CC_ERR;
 }
 /* ---- end PAPER1 ---- */
+int cc_paper_dxf_query(struct cc_session *s, const cc_scene *sc, int view, const char *body, size_t n, Buf *out) {
+    (void)s, (void)sc, (void)view, (void)body, (void)n; /* DXF1: the writer is not in this build (ADR 0082) */
+    buf_puts(out, CC_VIEW_ONLY_TEXT);
+    return CC_ERR;
+}
 #else
 /* Path::file_stem of the session's path: the file name without its last extension (a name that
  * starts with its only dot keeps it). */
@@ -355,16 +361,22 @@ int cc_paper_fonts_query(struct cc_session *s, Buf *out) {
  * PlanInfo, or NULL). Note for KEY1: Rust draws with the viewer's plan template (self.plan.template,
  * which the actions section_labels, openings, section_marks, slab_levels toggle); this takes the
  * default one, so once the session keeps those toggles they belong here too. */
+/* DXF1: the drawn links' first elements and names (paper_scene.h), copied for the DXF's layers. */
+typedef struct {
+    size_t *first;
+    const char **name;
+    size_t n;
+} DxfLinks;
 static int draw_paper_ex(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, const cc_view *v,
                          const cc_view *views, size_t nv, cc_sheet_font font, int bare, cc_plan_info *pinfo_out,
-                         Arena *a, cc_paper *paper, Buf *err);
+                         Arena *a, cc_paper *paper, Buf *err, DxfLinks *links);
 static int draw_paper(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, const cc_view *v,
                       const cc_view *views, size_t nv, cc_sheet_font font, Arena *a, cc_paper *paper, Buf *err) {
-    return draw_paper_ex(s, sc, sh, v, views, nv, font, 0, NULL, a, paper, err);
+    return draw_paper_ex(s, sc, sh, v, views, nv, font, 0, NULL, a, paper, err, NULL);
 }
 static int draw_paper_ex(struct cc_session *s, const cc_scene *sc, const cc_sheet *sh, const cc_view *v,
                          const cc_view *views, size_t nv, cc_sheet_font font, int bare, cc_plan_info *pinfo_out,
-                         Arena *a, cc_paper *paper, Buf *err) {
+                         Arena *a, cc_paper *paper, Buf *err, DxfLinks *links) {
     char date[32];
     cc_iso_utc(s->pf->unix_s ? s->pf->unix_s(s->pf->ctx) : 0, date);
     date[10] = 0; /* YYYY-MM-DD */
@@ -413,6 +425,16 @@ static int draw_paper_ex(struct cc_session *s, const cc_scene *sc, const cc_shee
         else buf_append(err, derr.p, derr.len);
     }
     buf_free(&derr);
+    if (!r && links && src.nlinks) { /* DXF1: the names are the session's, the starts copied */
+        links->first = arena_alloc(a, src.nlinks * sizeof *links->first, _Alignof(size_t));
+        links->name = arena_alloc(a, src.nlinks * sizeof *links->name, _Alignof(const char *));
+        if (!links->first || !links->name) r = -1, buf_puts(err, "out of memory");
+        else {
+            memcpy(links->first, src.link_first, src.nlinks * sizeof *links->first);
+            memcpy(links->name, src.link_name, src.nlinks * sizeof *links->name);
+            links->n = src.nlinks;
+        }
+    }
     cc_paper_src_free(&src);
     return r ? -1 : 0;
 }
@@ -606,7 +628,7 @@ int cc_paper_view_svg(struct cc_session *s, const cc_scene *sc, const char *body
     cc_paper paper;
     cc_plan_info info;
     if (draw_paper_ex(s, sc, NULL, vw, views, nv, roboto ? CC_FONT_ROBOTO : CC_FONT_HELVETICA,
-                      bv && bv->type == JR_BOOL && bv->b, &info, &a, &paper, out))
+                      bv && bv->type == JR_BOOL && bv->b, &info, &a, &paper, out, NULL))
         goto end;
     if (cc_paper_svg(&paper, &svg)) {
         buf_puts(out, "out of memory");
@@ -746,4 +768,115 @@ end:
     return rc;
 }
 /* ---- end PAPER1 ---- */
+
+/* ---- DXF1: view_dxf and sheet_dxf (sheet_svg.h cc_paper_dxf_query, src/dxf_out.h) ---- */
+
+static const char *dxf_link_name(const void *ctx, uint32_t mi, size_t *n) {
+    const DxfLinks *l = ctx;
+    const char *name = NULL;
+    for (size_t i = 0; i < l->n; i++)
+        if (mi >= l->first[i]) name = l->name[i];
+    *n = name ? strlen(name) : 0;
+    return name;
+}
+
+int cc_paper_dxf_query(struct cc_session *s, const cc_scene *sc, int view, const char *body, size_t n, Buf *out) {
+    const char *key = view ? "view" : "sheet";
+    Arena a;
+    arena_init(&a, 0);
+    int rc = CC_ERR;
+    Buf dxf;
+    buf_init(&dxf);
+    JrError je;
+    const JrVal *v = jr_parse(&a, body, n, &je);
+    const JrVal *idv = v && v->type == JR_OBJ ? jr_get(v, key) : NULL;
+    const JrVal *pv = v && v->type == JR_OBJ ? jr_get(v, "path") : NULL;
+    if (!v) {
+        buf_puts(out, je.msg);
+        goto end;
+    }
+    if (!idv || idv->type != JR_STR) {
+        buf_puts(out, idv ? "" : "missing field `"), buf_puts(out, key), buf_puts(out, idv ? ": a string" : "`");
+        goto end;
+    }
+    if (pv && pv->type != JR_STR && pv->type != JR_NULL) {
+        buf_puts(out, "path: a string");
+        goto end;
+    }
+    const char *path = pv && pv->type == JR_STR ? pv->s : NULL;
+    if (path && (!pv->n || strlen(path) < pv->n)) {
+        buf_puts(out, "path: empty or with a NUL");
+        goto end;
+    }
+    const cc_sheet *sh = NULL;
+    const cc_view *vw = NULL;
+    cc_view *views = NULL;
+    size_t nv = 0;
+    if ((s->open || (view && s->view)) && idv->n == 22) { /* a read-only scene's views too, as view_pdf */
+        cc_gid id;
+        memcpy(id.c, idv->s, 22);
+        if (!view) sh = cc_model_sheet(&s->model, &id);
+        else {
+            if (s->open ? cc_views_effective(&s->model, &a, &views, &nv)
+                        : cc_sv_list(s, &a, &views, &nv) || cc_paper_src_views(s, views, nv, &a)) {
+                buf_puts(out, "out of memory");
+                goto end;
+            }
+            for (size_t k = 0; k < nv && !vw; k++)
+                if (!cc_gid_cmp(&views[k].id, &id)) vw = &views[k];
+        }
+    }
+    if (!sh && !vw) {
+        buf_puts(out, view ? "no view with id " : "no sheet with id ");
+        debug_str(out, idv->s, idv->n);
+        goto end;
+    }
+    if (!sc) {
+        buf_puts(out, "no model open");
+        goto end;
+    }
+    /* A view: its bare drawing (no frame, title block, legend: the sheet's own items are left
+     * out of model space anyway) at its scale; a sheet: as sheet_pdf draws it. Helvetica's
+     * metrics (nothing depends on a font file). */
+    cc_paper paper;
+    cc_plan_info info;
+    memset(&info, 0, sizeof info);
+    DxfLinks links = {NULL, NULL, 0};
+    if (draw_paper_ex(s, sc, sh, vw, views, nv, CC_FONT_HELVETICA, vw != NULL, vw ? &info : NULL, &a, &paper, out, &links))
+        goto end;
+    cc_dxf_options o;
+    memset(&o, 0, sizeof o);
+    o.sheet = sh != NULL;
+    o.frame = info.frame;
+    o.scale = vw ? vw->scale : 1;
+    o.link_name = dxf_link_name;
+    o.link_ctx = &links;
+    int r = cc_dxf_write_buf(&paper, &o, &dxf);
+    if (r || dxf.oom) {
+        buf_puts(out, r == CC_DXF_NONFINITE ? "a number that is not finite in the drawing" : "out of memory");
+        goto end;
+    }
+    if (path && s->pf->files) {
+        if (s->pf->write_file(s->pf->ctx, path, dxf.p, dxf.len)) {
+            buf_puts(out, path), buf_puts(out, ": cannot write");
+            goto end;
+        }
+        cc_log(s->pf, "bimble-ccore: Saved %s", path);
+        JsonW w;
+        jw_init(&w, out, 0);
+        jw_obj_begin(&w);
+        jw_key(&w, "bytes"), jw_u64(&w, dxf.len);
+        jw_key(&w, "path"), jw_str(&w, path);
+        jw_obj_end(&w);
+        rc = jw_finish(&w) == JW_OK && !out->oom ? CC_OK : CC_ERR;
+        goto end;
+    }
+    buf_append(out, dxf.p, dxf.len);
+    rc = out->oom ? CC_ERR : CC_OK;
+end:
+    buf_free(&dxf);
+    arena_free(&a);
+    return rc;
+}
+/* ---- end DXF1 ---- */
 #endif

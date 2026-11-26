@@ -75,7 +75,7 @@ int main(void) {
         check_true("values true or false", bools);
         check_true("at least 30 rows", n >= 30);
     }
-    for (const char *const *k = (const char *const[]){"about", "base_point_move", "collaboration", "export_pdf", "export_svg", "export_view", "georef", "grids",
+    for (const char *const *k = (const char *const[]){"about", "base_point_move", "collaboration", "export_dxf", "export_pdf", "export_svg", "export_view", "georef", "grids",
                                                       "history", "lca", "levels", "materials", "paper_view", "phases", "plan_annotations",
                                                       "project_info", "quantities", "recent_files", "reference_planes", "references", "setting_out", "schedules", "settings",
                                                       "sheets", "standards", "subprojects", "user", "users", "versions", "views", NULL};
@@ -87,6 +87,7 @@ int main(void) {
     /* The native build: the full core and a file system. */
     check_true("native: quantities, export_pdf, versions true", cap(c0, "quantities") == 1 && cap(c0, "export_pdf") == 1 && cap(c0, "versions") == 1);
     check_true("SEC1: views true (view_add, view_remove, view_edit)", cap(c0, "views") == 1);
+    check_true("DXF1: export_dxf true (view_dxf, sheet_dxf)", cap(c0, "export_dxf") == 1);
     check_true("G2's pages: levels, grids, georef true", cap(c0, "levels") == 1 && cap(c0, "grids") == 1 && cap(c0, "georef") == 1);
 
     cc_error err;

@@ -300,9 +300,13 @@ int cc_paper_src_get(cc_session *s, const cc_scene *sc, const cc_view *view, cc_
         if (grow(&o->arena, (void **)&o->elements, &cap, sc->nelements + 1, sizeof *o->elements)) goto oom;
         if (sc->nelements) memcpy(o->elements, sc->elements, sc->nelements * sizeof *o->elements);
         o->nelements = sc->nelements;
+        src->link_first = arena_alloc(&m->arena, nl * sizeof *src->link_first, _Alignof(size_t)); /* DXF1 */
+        src->link_name = arena_alloc(&m->arena, nl * sizeof *src->link_name, _Alignof(const char *));
+        if (!src->link_first || !src->link_name) goto oom;
         for (size_t i = 0; i < s->nlinks; i++) {
             const cc_link *k = &s->links[i];
             if (!link_drawn(k, view)) continue;
+            src->link_first[src->nlinks] = m->nelements, src->link_name[src->nlinks++] = k->name; /* DXF1 */
             const cc_scene *ls = cc_link_scene(k);
             float d[3];
             for (int j = 0; j < 3; j++) d[j] = (float)(ls->origin[j] - sc->origin[j]); /* lib.rs:1499 offset */
