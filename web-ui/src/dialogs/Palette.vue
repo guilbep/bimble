@@ -28,7 +28,7 @@ const LIST = '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="5" cy="6" r="1"/><c
 const tools = new Map<string, RibbonTool>();
 for (const groups of Object.values(RIBBON)) for (const g of groups) for (const tool of g.tools) if (tool.action && !tools.has(tool.action)) tools.set(tool.action, tool);
 // Rust tab (`ActionState.tab`) → the tab bar's copy, else `actionTab.<tab>` (i18n/parts/actions.ts).
-const TAB: Record<string, string> = { File: "quick.file", Project: "tab.project", Collaborate: "tab.collaborate", Annotate: "tab.annotate", View: "tab.view", Sheets: "tab.sheets", "Setting out": "tab.settingOut" /* SETOUT */ };
+const TAB: Record<string, string> = { File: "quick.file", Project: "tab.project", Collaborate: "tab.collaborate", Annotate: "tab.annotate", View: "tab.view", Sheets: "tab.sheets", Concrete: "tab.concrete", "Setting out": "tab.settingOut" /* SETOUT */ };
 const copy = (key: string, rust: string) => { const s = t(key); return s === key ? rust : s; };
 
 const items = computed<Item[]>(() => {
