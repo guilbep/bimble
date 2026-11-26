@@ -168,6 +168,14 @@ typedef struct cc_session {
     /* ---- LNK1: the links list as last saved or opened (links.h cc_links_changed), NULL: none ---- */
     char *links_saved;
     size_t links_saved_n;
+    /* ---- LINKF: the link conversions (links.h cc_links_tick): one at a time, smallest first ---- */
+    struct cc_link_job *link_job; /* running (on the carrier's thread, or done and not yet taken) */
+    uint32_t link_job_uid;        /* the link it is for (cc_link uid); 0: the link went */
+    uint32_t link_uid_next;
+    uint64_t link_cache_min;      /* CC_LINK_CACHE_MIN unless the carrier sets less (BIMBLE_LINK_CACHE_MIN) */
+    int link_no_beside;           /* 1: caches only in the platform's cache folder (BIMBLE_LINK_CACHE_BESIDE=0) */
+    struct cc_links_undo *links_undo, *links_redo; /* link_folder's undo and redo steps (links.h) */
+    size_t nlinks_undo, nlinks_redo, caplinks_undo, caplinks_redo;
     /* ---- end LNK1 ---- */
     /* ---- H2a: query pending's cache (versions.c), NULL: none ---- */
     struct cc_versions_cache *versions_cache;
@@ -199,6 +207,15 @@ int cc_session_open(cc_session *s, const char *path, cc_error *err);
  * draws the scene. Replaces what is open only when the new file loaded; rev + 1; the session file
  * pauses (nothing to keep). 0 ok; -1 with `err`. */
 int cc_session_open_file(cc_session *s, const char *path, cc_error *err);
+
+/* LINKF: the largest file an open or a link of `path` reads, by its format (an IFC: the STEP
+ * reader's, a .bimbleview: its reader's, else CC_MAX_FILE_BYTES), and the reader's peak memory per
+ * input byte (`peak_per_byte`, optional). cc_session_fits: 0 when a file of `size` bytes at `path`
+ * is within that limit and its reader's peak within the memory the platform says is free (none
+ * said: no check); -1 with "<path>: larger than N bytes", -2 with "<path>: too large for this
+ * machine: ..." in `err`. Every open and link checks it before a byte is read. */
+size_t cc_session_read_limit(const char *path, size_t *peak_per_byte);
+int cc_session_fits(const cc_platform *pf, const char *path, uint64_t size, cc_error *err);
 
 /* File -> New (lib.rs:1688-1712 start_new, verbs.rs:101 new_model): project "Untitled" with a new
  * GlobalId, one storey "Level 0" at 0 mm, path CC_UNTITLED, editable and unsaved (as an imported

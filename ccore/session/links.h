@@ -64,7 +64,72 @@ struct cc_link {
     cc_scene scene;    /* the scene over vf or model (CC_LINK_VIEW, CC_LINK_MODEL) */
     int visible;
     double load_ms;
+    /* ---- LINKF (below) ---- */
+    uint32_t uid;         /* the session's number for it (a conversion finds its link by it) */
+    int state;            /* CC_LS_*; kind is 0 until it is ready */
+    char *msg;            /* malloc'd or NULL: why it failed or was refused; a note when ready */
+    uint64_t bytes;       /* the file's size when linked */
+    unsigned progress;    /* 0..1000 while converting */
+    char *cache, *log;    /* malloc'd or NULL: its .bimbleview cache and report */
+    int64_t cache_mtime_s;
+    int from_cache;       /* the last load read the cache, not the IFC */
+    int origin;           /* CC_LO_* (positioning) */
+    double move_mm[3];    /* the manual offset, mm */
+    double rotation_deg;  /* the manual rotation about Z, degrees */
+    int pinned;           /* 1: not moved by accident (default) */
+    int colour;           /* -1: its own colours; else a palette index 0..11, flat */
 };
+
+/* ---- LINKF (ADR 0079, DEVIATIONS 37): link a folder, conversions in turn, positioning ----
+ * A link of an IFC (or a .bimbleview) at least s->link_cache_min bytes is not read in the call: it
+ * is queued (state "queued", kind 0, nothing drawn) and its conversion (link_cache.h: the cache
+ * beside the IFC loaded, else the IFC read and the cache written) runs on the carrier's thread
+ * (pf->spawn), one at a time, the smallest queued first, while the session answers. A carrier
+ * calls cc_links_tick often while cc_links_busy (the native host: every 100 ms of its poll loop):
+ * it takes a finished conversion (state "ready", the link drawn) and starts the next; each change
+ * bumps links_gen, so the change long-poll tells the page. Without pf->spawn (the wasm module, the
+ * C suites) and for smaller files the conversion runs in the call, as before.
+ *   action link_folder {path, recursive?}: links every *.ifc of the folder (and each *.bimbleview
+ *     without its IFC: not a cache), sorted by name, at most CC_MAX_LINKS in all; one undo step
+ *     (cc_links_undo: undo unlinks them, redo links them again).
+ *   manage_links {op, name, ...}: also "cancel" (a queued or converting link: failed, "cancelled"),
+ *     "unload" / "load" (keep the link, free its memory / read it again), "reload_all",
+ *     "place" {origin?, move_mm?, rotation_deg?} (refused while pinned), "pin" / "unpin",
+ *     "colour" {colour: 0..11 | null}.
+ * Positioning (Revit's Link IFC options): origin "file" (default: the file's georeference to the
+ * host's, ADR 0075: both georeferenced, the link lands at its true place; else shared local
+ * origins), "origin" (the link's local origin on the host's), "base_point" (the link's base
+ * point, its building frame origin, on the host's), "survey_point" (the link's survey point, its
+ * georeference's local origin, on the host's); then the manual rotation about Z and offset. */
+enum { CC_LS_READY = 0, CC_LS_MISSING, CC_LS_QUEUED, CC_LS_CONVERTING, CC_LS_FAILED, CC_LS_REFUSED, CC_LS_UNLOADED };
+enum { CC_LO_FILE = 0, CC_LO_ORIGIN, CC_LO_BASE_POINT, CC_LO_SURVEY_POINT };
+extern const char *const CC_LINK_STATE_NAME[]; /* "ready", "missing", "queued", "converting", "failed", "refused", "unloaded" */
+extern const char *const CC_LINK_ORIGIN_NAME[]; /* "file", "origin", "base_point", "survey_point" */
+
+int cc_links_busy(const cc_session *s);
+/* Takes a finished conversion and starts the next. 1 when a link changed (publish the change). */
+int cc_links_tick(cc_session *s);
+/* Cancels link i's conversion (queued or running). */
+void cc_links_cancel(cc_session *s, int i);
+/* Frees link i's memory, keeps the link (state "unloaded"); load queues it again. */
+void cc_links_unload(cc_session *s, int i);
+int cc_links_load(cc_session *s, int i, cc_error *err);
+/* link_folder: the files of folder `dir` to link (calls.c), added in one undo step. 0 ok with
+ * *added; -1 with err. */
+int cc_links_add_folder(cc_session *s, const char *dir, int recursive, size_t *added, cc_error *err);
+/* link_folder's undo and redo (calls.c undo_redo): 1 when it took the step. */
+int cc_links_undo_step(cc_session *s, int undo);
+int cc_links_can_undo(const cc_session *s, int undo);
+/* A model edit drops the links' redo steps. */
+void cc_links_undo_clear_redo(cc_session *s);
+/* The link's placement: link scene coordinates -> host scene coordinates, as a rotation about Z
+ * (cos, sin) then a translation (mm, from the host's scene origin). */
+void cc_link_placement(const cc_session *s, const cc_link *k, double *c, double *sn, double t[3]);
+/* The session goes: a running conversion orphaned (link_cache.h), the undo steps freed. */
+void cc_links_session_free(cc_session *s);
+/* The cc_scene over a view file (session.c): rows in its own arena, meshes borrowed from `v`. */
+int cc_view_scene(cc_scene *sc, const cc_viewfile *v, cc_error *err);
+/* ---- end LINKF ---- */
 
 /* Reads `path` as a link (session.c: the platform reads it). 0 ok with `*k` filled (visible);
  * -1 with `err`, `*k` untouched. */

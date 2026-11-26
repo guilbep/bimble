@@ -17,6 +17,7 @@
 #include "../src/viewfile.h"
 #include "../src/ifc_read.h"
 #include "check.h"
+#include "../session/link_cache.h" /* LINKF */
 
 static const char *golden;
 
@@ -667,6 +668,63 @@ static void share_read_only(void) {
     share_ifc("chain18", "../test/fixtures/chain18.ifc", 0, 0);
 }
 
+/* LINKF: the SRCE section of a link cache (viewfile.h cc_viewfile_append_source, link_cache.h):
+ * kept by this reader, untrusted (not JSON, not UTF-8, cut, repeated: errors or skipped, never a
+ * crash), and the matching rule of the cache against its IFC. */
+static void link_cache_source(void) {
+    size_t wn;
+    char *raw = slurp(golden, "view/frame.bimbleview.raw", &wn);
+    char src[512];
+    static const char head[] = "ISO-10303-21;\nHEADER;", tail[] = "ENDSEC;\nEND-ISO-10303-21;\n";
+    check_true("source text", cc_link_cache_source(68059, 1795696594, head, sizeof head - 1, tail, sizeof tail - 1, src, sizeof src) == 0);
+    Buf b;
+    buf_init(&b);
+    buf_append(&b, raw, wn);
+    check_true("SRCE appended", cc_viewfile_append_source(&b, src, strlen(src)) == 0);
+    cc_viewfile v;
+    cc_error err;
+    int rc = cc_viewfile_read((const uint8_t *)b.p, b.len, &v, &err);
+    check_true("a cache with SRCE reads, its source kept", rc == 0 && v.has_source && v.source.n == strlen(src) && !memcmp(v.source.p, src, v.source.n));
+    cc_viewfile_free(&v);
+    check_true("without SRCE: no source (a shared view file)", cc_viewfile_read((const uint8_t *)raw, wn, &v, &err) == 0 && !v.has_source);
+    cc_viewfile_free(&v);
+    const char *ends = strstr(src, "\"ends\":\"") + 8;
+    char hexs[65];
+    memcpy(hexs, ends, 64), hexs[64] = 0;
+    check_true("matches: same size, time, ends", cc_link_cache_matches(src, strlen(src), 68059, 1795696594, hexs, 1));
+    check_true("another size: no", !cc_link_cache_matches(src, strlen(src), 68060, 1795696594, hexs, 1));
+    check_true("another time: no", !cc_link_cache_matches(src, strlen(src), 68059, 1795696595, hexs, 1));
+    hexs[0] = hexs[0] == '0' ? '1' : '0';
+    check_true("other ends: no", !cc_link_cache_matches(src, strlen(src), 68059, 1795696594, hexs, 1));
+    check_true("ends unknown (the IFC unreadable): size and time", cc_link_cache_matches(src, strlen(src), 68059, 1795696594, "", 0));
+    check_true("not JSON: no", !cc_link_cache_matches("{bytes", 6, 68059, 1795696594, "", 0));
+    static const char other[] = "{\"bytes\":1,\"ends\":\"\",\"format\":\"x\",\"mtime_s\":1}";
+    check_true("another format: no", !cc_link_cache_matches(other, sizeof other - 1, 1, 1, "", 0));
+    /* hostile SRCE sections */
+    static const char *const bad[] = {"not json", "{\"a\":", "\xff\xfe"};
+    for (int i = 0; i < 3; i++) {
+        buf_clear(&b);
+        buf_append(&b, raw, wn);
+        cc_viewfile_append_source(&b, bad[i], strlen(bad[i]));
+        check_true("a damaged SRCE: an error, no crash", read_err(b.p, b.len, "damaged"));
+    }
+    buf_clear(&b);
+    buf_append(&b, raw, wn);
+    cc_viewfile_append_source(&b, src, strlen(src));
+    cc_viewfile_append_source(&b, "{}", 2);
+    check_true("a second SRCE: skipped (the first kept)", cc_viewfile_read((const uint8_t *)b.p, b.len, &v, &err) == 0 && v.source.n == strlen(src));
+    cc_viewfile_free(&v);
+    int all = 1; /* every prefix that cuts into SRCE: an error */
+    buf_clear(&b);
+    buf_append(&b, raw, wn);
+    cc_viewfile_append_source(&b, src, strlen(src));
+    for (size_t n = wn + 1; n < b.len; n++)
+        if (read_ok(b.p, n)) all = 0;
+    check_true("every cut SRCE: an error", all);
+    buf_free(&b);
+    free(raw);
+}
+
 int main(int argc, char **argv) {
     static char dir[4096];
     snprintf(dir, sizeof dir, "%s/..", argc > 1 ? argv[1] : "ccore/golden/floats");
@@ -676,5 +734,6 @@ int main(int argc, char **argv) {
     robustness();
     share_read_only();
     large();
+    link_cache_source(); /* LINKF */
     return report("viewfile");
 }

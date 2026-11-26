@@ -1,0 +1,350 @@
+/* LINKF: a linked IFC read once, its light form and report beside it (link_cache.h, ADR 0079). */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "guid.h"
+#include "json_r.h"
+#include "jobs.h"
+#include "link_cache.h"
+#include "session.h"
+
+#define ENDS ((size_t)1 << 20) /* the first and last MiB hashed */
+
+
+static int ends_with_ci(const char *s, const char *suffix) {
+    size_t n = strlen(s), k = strlen(suffix);
+    if (n < k) return 0;
+    for (size_t i = 0; i < k; i++) {
+        char c = s[n - k + i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != suffix[i]) return 0;
+    }
+    return 1;
+}
+
+static void hex(const unsigned char *p, size_t n, char *out) {
+    static const char H[] = "0123456789abcdef";
+    for (size_t i = 0; i < n; i++) out[2 * i] = H[p[i] >> 4], out[2 * i + 1] = H[p[i] & 15];
+    out[2 * n] = 0;
+}
+
+/* BLAKE3(first MiB || last MiB || size as 8 bytes LE), 64 hex digits. -1 out of memory. */
+static int ends_hash(const char *head, size_t nh, const char *tail, size_t nt, uint64_t bytes, char out[65]) {
+    unsigned char *b = malloc(nh + nt + 8), h[32];
+    if (!b) return -1;
+    if (nh) memcpy(b, head, nh);
+    if (nt) memcpy(b + nh, tail, nt);
+    for (int i = 0; i < 8; i++) b[nh + nt + i] = (unsigned char)(bytes >> (8 * i));
+    cc_blake3(b, nh + nt + 8, h);
+    free(b);
+    hex(h, 32, out);
+    return 0;
+}
+
+int cc_link_cache_source(uint64_t bytes, int64_t mtime_s, const char *head, size_t nh, const char *tail, size_t nt,
+                         char *out, size_t n) {
+    char e[65];
+    if (ends_hash(head, nh, tail, nt, bytes, e)) return -1;
+    Buf b; /* sorted keys; buf_u64/buf_i64: the wasm snprintf has no %lld */
+    buf_init(&b);
+    buf_puts(&b, "{\"bytes\":"), buf_u64(&b, bytes), buf_puts(&b, ",\"ends\":\""), buf_puts(&b, e);
+    buf_puts(&b, "\",\"format\":\"" CC_LINK_CACHE_FORMAT "\",\"mtime_s\":"), buf_i64(&b, mtime_s), buf_putc(&b, '}');
+    int rc = b.oom || b.len + 1 > n ? -1 : 0;
+    if (!rc) memcpy(out, b.p, b.len), out[b.len] = 0;
+    buf_free(&b);
+    return rc;
+}
+
+int cc_link_cache_matches(const char *src, size_t n, uint64_t bytes, int64_t mtime_s, const char *ends_hex, int ends_known) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = jr_parse(&a, src, n, &je);
+    int ok = 0;
+    if (v && v->type == JR_OBJ) {
+        const JrVal *b = jr_get(v, "bytes"), *m = jr_get(v, "mtime_s"), *f = jr_get(v, "format"), *e = jr_get(v, "ends");
+        ok = b && b->type == JR_NUM && b->num == (double)bytes && m && m->type == JR_NUM && m->num == (double)mtime_s &&
+             f && f->type == JR_STR && !strcmp(f->s, CC_LINK_CACHE_FORMAT) && e && e->type == JR_STR && e->n == 64;
+        if (ok && ends_known) ok = !memcmp(e->s, ends_hex, 64);
+    }
+    arena_free(&a);
+    return ok;
+}
+
+cc_link_job *cc_link_job_new(const cc_platform *pf, const char *path) {
+    cc_link_job *j = calloc(1, sizeof *j);
+    if (!j) return NULL;
+    j->path = malloc(strlen(path) + 1);
+    if (!j->path) return free(j), NULL;
+    strcpy(j->path, path);
+    j->pf = pf;
+    j->cache_min = CC_LINK_CACHE_MIN;
+    return j;
+}
+
+void cc_link_job_free(cc_link_job *j) {
+    if (!j) return;
+    if (j->vf) cc_viewfile_free(j->vf), free(j->vf);
+    if (j->ifc) cc_ifc_scene_free(j->ifc), free(j->ifc);
+    free(j->path);
+    free(j);
+}
+
+static void fail(cc_link_job *j, int rc, const char *msg) {
+    j->rc = rc;
+    if (msg) snprintf(j->err.msg, sizeof j->err.msg, "%s", msg);
+}
+
+/* Reads the view file at `path` (untrusted) into a new cc_viewfile. NULL with err. */
+static cc_viewfile *read_view(const cc_platform *pf, const char *path, uint64_t size, cc_error *err) {
+    if (cc_session_fits(pf, path, size, err)) return NULL;
+    char *p = NULL;
+    size_t n = 0;
+    int st = pf->read_file(pf->ctx, path, cc_session_read_limit(path, NULL), &p, &n);
+    if (st != CC_PF_OK) {
+        snprintf(err->msg, sizeof err->msg, "%s: %s", path, st == CC_PF_NOT_FOUND ? "cannot open" : st == CC_PF_TOO_LARGE ? "too large" : "read error");
+        return NULL;
+    }
+    cc_viewfile *vf = malloc(sizeof *vf);
+    if (!vf) {
+        free(p);
+        snprintf(err->msg, sizeof err->msg, "out of memory");
+        return NULL;
+    }
+    int rc = cc_viewfile_read((const uint8_t *)p, n, vf, err);
+    free(p);
+    if (rc) return cc_viewfile_free(vf), free(vf), NULL;
+    return vf;
+}
+
+/* The cache-folder twin of `beside` (`ext` appended): <dir>/links/<16 hex of BLAKE3(path)>-<name><ext>. */
+static int alt_path(const cc_platform *pf, const char *path, const char *ext, char *out, size_t n) {
+    char dir[4096];
+    if (!pf->cache_dir || pf->cache_dir(pf->ctx, dir, sizeof dir)) return -1;
+    size_t dl = strlen(dir);
+    if (dl + 7 >= sizeof dir) return -1;
+    memcpy(dir + dl, "/links", 7);
+    if (pf->make_dir && pf->make_dir(pf->ctx, dir)) return -1;
+    unsigned char h[32];
+    cc_blake3(path, strlen(path), h);
+    char hx[65];
+    hex(h, 8, hx);
+    const char *sl = cc_path_last_sep(path);
+    int w = snprintf(out, n, "%s/%s-%s%s", dir, hx, sl ? sl + 1 : path, ext);
+    return w < 0 || (size_t)w >= n ? -1 : 0;
+}
+
+static int str_cmp(const void *x, const void *y) {
+    const cc_str *a = x, *b = y;
+    size_t n = a->n < b->n ? a->n : b->n;
+    int c = n ? memcmp(a->p, b->p, n) : 0;
+    return c ? c : (a->n > b->n) - (a->n < b->n);
+}
+
+/* The conversion report (link_cache.h). */
+static void report(Buf *b, const cc_link_job *j, const cc_ifc_scene *s, double read_ms, uint64_t cache_bytes,
+                   const char *cache, const char *where) {
+    const char *sl = cc_path_last_sep(j->path);
+    buf_puts(b, "Bimble: link conversion report\n\nsource: "), buf_puts(b, sl ? sl + 1 : j->path);
+    buf_puts(b, "\nsource bytes: "), buf_u64(b, j->bytes);
+    buf_puts(b, "\nsource modified (s since 1970 UTC): "), buf_i64(b, j->mtime_s);
+    buf_puts(b, "\nschema: "), buf_append(b, s->schema.p ? s->schema.p : "", s->schema.n);
+    buf_puts(b, "\nSTEP entities parsed: "), buf_u64(b, s->entities);
+    buf_puts(b, "\nproducts with a body: "), buf_u64(b, s->products);
+    buf_puts(b, "\nelements drawn: "), buf_u64(b, s->scene.nelements);
+    buf_puts(b, "\ntriangles: "), buf_u64(b, s->triangles);
+    buf_puts(b, "\nshapes after sharing: "), buf_u64(b, s->scene.nshapes);
+    buf_puts(b, "\nstoreys: "), buf_u64(b, s->nstoreys);
+    buf_puts(b, "\ngrid axes: "), buf_u64(b, s->ngrids);
+    buf_puts(b, "\nread time (ms): "), buf_u64(b, (uint64_t)(read_ms + 0.5));
+    buf_puts(b, "\n\nelements drawn per IFC class:\n");
+    size_t n = s->scene.nelements;
+    cc_str *c = malloc((n ? n : 1) * sizeof *c);
+    if (c) {
+        for (size_t i = 0; i < n; i++) c[i] = s->info[s->scene.elements[i].model_index].class_name;
+        qsort(c, n, sizeof *c, str_cmp);
+        for (size_t i = 0; i < n;) {
+            size_t k = i;
+            while (k < n && !str_cmp(&c[k], &c[i])) k++;
+            buf_puts(b, "  "), buf_append(b, c[i].p ? c[i].p : "", c[i].n), buf_puts(b, " "), buf_u64(b, k - i), buf_putc(b, '\n');
+            i = k;
+        }
+        free(c);
+    }
+    buf_puts(b, "\nproducts with a body drawn empty (left out), per entity:\n");
+    if (s->empty_classes.n) buf_append(b, s->empty_classes.p, s->empty_classes.n);
+    else buf_puts(b, "  none\n");
+    buf_puts(b, "\nskipped and why (the reader's warnings):\n");
+    for (size_t i = 0; i < s->scene.nwarnings; i++)
+        buf_puts(b, "  "), buf_append(b, s->scene.warnings[i].p, s->scene.warnings[i].n), buf_putc(b, '\n');
+    if (!s->scene.nwarnings) buf_puts(b, "  none\n");
+    buf_puts(b, "\ncache: ");
+    if (cache[0]) buf_puts(b, cache), buf_puts(b, " ("), buf_u64(b, cache_bytes), buf_puts(b, " bytes)");
+    else buf_puts(b, "none written");
+    if (where && *where) buf_puts(b, "\n"), buf_puts(b, where);
+    buf_puts(b, "\nThe cache is the IFC read for display, read only. Do not edit it; it is written again when the IFC changes.\n");
+}
+
+static void run(cc_link_job *j) {
+    const cc_platform *pf = j->pf;
+    cc_pf_stat st;
+    int have_stat = pf->stat_path && pf->stat_path(pf->ctx, j->path, 1, &st) == CC_PF_OK && st.kind == CC_PF_FILE;
+    if (have_stat) j->bytes = st.size, j->mtime_s = st.mtime_s;
+    if (ends_with_ci(j->path, ".bimbleview")) {
+        if (!(j->vf = read_view(pf, j->path, j->bytes, &j->err))) fail(j, CC_JOB_FAILED, NULL);
+        return;
+    }
+    int cached = have_stat && j->bytes >= j->cache_min && pf->files;
+    char ends[65] = "", beside[4096], alt[4096] = "", alt_log[4096] = "";
+    int ends_known = 0;
+    if (cached && pf->read_range) { /* the IFC's ends, without reading it */
+        char *h = malloc(2 * ENDS);
+        size_t nh = 0, nt = 0;
+        if (h && pf->read_range(pf->ctx, j->path, 0, ENDS, h, &nh) == CC_PF_OK && nh == (j->bytes < ENDS ? j->bytes : ENDS) &&
+            pf->read_range(pf->ctx, j->path, j->bytes > ENDS ? j->bytes - ENDS : 0, ENDS, h + ENDS, &nt) == CC_PF_OK &&
+            nt == nh && !ends_hash(h, nh, h + ENDS, nt, j->bytes, ends))
+            ends_known = 1;
+        free(h);
+    }
+    if (cached) {
+        if (j->no_beside) beside[0] = 0;
+        else if ((size_t)snprintf(beside, sizeof beside, "%s.bimbleview", j->path) >= sizeof beside) cached = 0;
+        if (alt_path(pf, j->path, ".bimbleview", alt, sizeof alt) || alt_path(pf, j->path, ".log.txt", alt_log, sizeof alt_log))
+            alt[0] = alt_log[0] = 0;
+    }
+    for (int c = 0; cached && c < 2; c++) { /* a cache that matches: loaded instead of the IFC */
+        const char *cp = c ? alt : beside;
+        cc_pf_stat cs;
+        if (!cp[0] || pf->stat_path(pf->ctx, cp, 1, &cs) != CC_PF_OK || cs.kind != CC_PF_FILE) continue;
+        cc_error e;
+        cc_viewfile *vf = read_view(pf, cp, cs.size, &e);
+        if (vf && vf->has_source && cc_link_cache_matches(vf->source.p, vf->source.n, j->bytes, j->mtime_s, ends, ends_known)) {
+            j->vf = vf, j->from_cache = 1;
+            snprintf(j->cache, sizeof j->cache, "%s", cp);
+            if (c) snprintf(j->log, sizeof j->log, "%s", alt_log);
+            else snprintf(j->log, sizeof j->log, "%s.log.txt", j->path);
+            j->cache_bytes = cs.size, j->cache_mtime_s = cs.mtime_s;
+            if (!ends_known) snprintf(j->note, sizeof j->note, "the IFC could not be read: its cache serves (same size and time)");
+            cc_atomic_store(&j->pg.done, (size_t)1000);
+            return;
+        }
+        snprintf(j->note, sizeof j->note, "%s", vf ? "the cache was of another version of the IFC: read again" : "the cache was damaged: read again");
+        if (vf) cc_viewfile_free(vf), free(vf);
+    }
+    /* read the IFC */
+    int fits = have_stat ? cc_session_fits(pf, j->path, j->bytes, &j->err) : 0;
+    if (fits) {
+        fail(j, fits == -2 ? CC_JOB_REFUSED : CC_JOB_FAILED, NULL);
+        return;
+    }
+    double t0 = pf->now_ms(pf->ctx);
+    char *text = NULL;
+    size_t n = 0;
+    int rs = pf->read_file(pf->ctx, j->path, CC_IFC_MAX_FILE_BYTES, &text, &n);
+    if (rs != CC_PF_OK) {
+        snprintf(j->err.msg, sizeof j->err.msg, "%s: %s", j->path,
+                 rs == CC_PF_NOT_FOUND ? "cannot open" : rs == CC_PF_TOO_LARGE ? "too large" : rs == CC_PF_IO ? "read error" : "out of memory");
+        fail(j, CC_JOB_FAILED, NULL);
+        return;
+    }
+    if (!have_stat) j->bytes = n;
+    char src[512] = "";
+    if (cached && cc_link_cache_source(j->bytes, j->mtime_s, text, n < ENDS ? n : ENDS, n > ENDS ? text + n - ENDS : text,
+                                       n < ENDS ? n : ENDS, src, sizeof src))
+        cached = 0;
+    cc_ifc_scene *s = malloc(sizeof *s);
+    int rc = s ? cc_ifc_read_progress(text, n, s, &j->err, &j->pg) : -1;
+    free(text); /* the scene owns its strings (ifc_read.h) */
+    if (!s) snprintf(j->err.msg, sizeof j->err.msg, "out of memory");
+    if (rc) {
+        if (s) cc_ifc_scene_free(s), free(s);
+        fail(j, cc_atomic_load(&j->pg.cancel) ? CC_JOB_CANCELLED : CC_JOB_FAILED, NULL);
+        return;
+    }
+    double read_ms = pf->now_ms(pf->ctx) - t0;
+    if (!cached) { /* small: kept as read */
+        j->ifc = s;
+        return;
+    }
+    cc_viewfile_meta mt;
+    Buf vb;
+    buf_init(&vb);
+    int wr = cc_ifc_scene_meta(s, &mt) || cc_viewfile_write_meta(&mt, &s->scene, 0, &vb) ||
+             cc_viewfile_append_source(&vb, src, strlen(src));
+    cc_viewfile_meta_free(&mt);
+    if (wr || vb.oom) {
+        buf_free(&vb);
+        cc_ifc_scene_free(s), free(s);
+        fail(j, CC_JOB_FAILED, "out of memory");
+        return;
+    }
+    const char *where = "";
+    char logp[4096];
+    if (beside[0] && pf->write_file(pf->ctx, beside, vb.p, vb.len) == 0) {
+        snprintf(j->cache, sizeof j->cache, "%s", beside);
+        snprintf(logp, sizeof logp, "%s.log.txt", j->path);
+    } else if (alt[0] && pf->write_file(pf->ctx, alt, vb.p, vb.len) == 0) {
+        snprintf(j->cache, sizeof j->cache, "%s", alt);
+        snprintf(logp, sizeof logp, "%s", alt_log);
+        where = beside[0] ? "The IFC's folder could not be written: the cache is in the user's cache folder."
+                          : "The cache is in the cache folder (asked: nothing written beside the IFC).";
+        snprintf(j->note, sizeof j->note, "%s", beside[0] ? "cache in the user's cache folder (the IFC's folder is read only)" : "cache in the cache folder");
+    } else {
+        logp[0] = 0;
+        snprintf(j->note, sizeof j->note, "no cache written (neither the IFC's folder nor the cache folder could be written)");
+    }
+    if (j->cache[0]) {
+        cc_pf_stat cs;
+        j->cache_bytes = vb.len;
+        if (pf->stat_path(pf->ctx, j->cache, 1, &cs) == CC_PF_OK) j->cache_mtime_s = cs.mtime_s;
+        Buf lg;
+        buf_init(&lg);
+        report(&lg, j, s, read_ms, vb.len, j->cache, where);
+        if (!lg.oom && pf->write_file(pf->ctx, logp, lg.p, lg.len) == 0) snprintf(j->log, sizeof j->log, "%s", logp);
+        buf_free(&lg);
+    }
+    cc_ifc_scene_free(s), free(s); /* the session keeps the light scene only */
+    cc_viewfile *vf = malloc(sizeof *vf);
+    if (!vf || cc_viewfile_read((const uint8_t *)vb.p, vb.len, vf, &j->err)) {
+        if (vf) cc_viewfile_free(vf), free(vf);
+        buf_free(&vb);
+        fail(j, CC_JOB_FAILED, vf ? NULL : "out of memory");
+        return;
+    }
+    buf_free(&vb);
+    j->vf = vf;
+}
+
+void cc_link_job_run(void *p) {
+    cc_link_job *j = p;
+    double t0 = j->pf->now_ms(j->pf->ctx);
+    j->rc = CC_JOB_OK;
+    run(j);
+    if (j->rc == CC_JOB_OK) cc_atomic_store(&j->pg.done, (size_t)1000);
+    j->ms = j->pf->now_ms(j->pf->ctx) - t0;
+#if !defined(__wasm__)
+    int exp = 0;
+    if (!__atomic_compare_exchange_n(&j->finished, &exp, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        cc_link_job_free(j); /* orphaned (2): the session went, nobody takes the results */
+#else
+    j->finished = 1;
+#endif
+}
+
+int cc_link_job_done(cc_link_job *j) {
+#if !defined(__wasm__)
+    return __atomic_load_n(&j->finished, __ATOMIC_ACQUIRE) == 1;
+#else
+    return j->finished == 1;
+#endif
+}
+
+void cc_link_job_orphan(cc_link_job *j) {
+    cc_atomic_store(&j->pg.cancel, 1);
+#if !defined(__wasm__)
+    int exp = 0;
+    if (__atomic_compare_exchange_n(&j->finished, &exp, 2, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return; /* it frees itself */
+#endif
+    cc_link_job_free(j);
+}

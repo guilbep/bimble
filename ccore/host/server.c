@@ -17,6 +17,7 @@
 #include "calls.h"
 #include "fs.h" /* FS1 */
 #include "host.h"
+#include "links.h" /* LINKF: cc_links_tick */
 #include "mesh.h"
 #include "session.h"
 
@@ -444,6 +445,7 @@ static void route_post(Conn *c, Str path, const char *body, size_t n, int keep) 
     } else {
         /* ---- FS1: the file dialog's queries, the native host's own (fs.h) ---- */
         int fs = !strcmp(opz, "query") ? cc_host_fs_query(namez, bz, n, &out) : -1;
+        if (!strcmp(opz, "action") && !strcmp(namez, "link_folder")) fs = cc_host_fs_check_link_folder(bz, n, &out); /* LINKF */
         /* ---- end FS1 ---- */
         status = fs >= 0 ? fs : cc_call(cfg->session, opz, namez, bz, n, &out);
         cc_session_persist_now(cfg->session); /* the session file has the change before the call answers */
@@ -749,7 +751,17 @@ int cc_host_run(const cc_host_config *config) {
         static uint32_t warmed;
         int want_warm = cfg->warm && cc_session_model(cfg->session) && cc_session_rev(cfg->session) != warmed;
         if (want_warm) timeout = 0;
+        /* LINKF: a link conversion runs on its own thread (links.h): look every 100 ms */
+        int linking = cc_links_busy(cfg->session);
+        if (linking && timeout > 100) timeout = 100;
         int r = net_poll(pfd, n, timeout);
+        if (linking && cc_links_tick(cfg->session)) {
+            Buf lc;
+            buf_init(&lc);
+            cc_change_json(cfg->session, &lc);
+            if (!lc.oom) cc_host_publish_change(lc.p ? lc.p : "", lc.len);
+            buf_free(&lc);
+        }
         if (want_warm && r == 0) {
             const char *mp;
             size_t mn;

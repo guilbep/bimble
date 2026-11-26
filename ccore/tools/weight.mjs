@@ -56,7 +56,7 @@ const FEATURES = [
   ["PDF writer (D6)", "pdf_out"],
   ["PDF reader (L1)", "pdf_in"],
   ["DXF reader (L2)", "dxf_in"],
-  ["links and references", "ref_read links links_ref links_dxf links_panel"],
+  ["links and references", "ref_read links links_ref links_dxf links_panel link_cache"],
   ["history store (H1 read, H2a write)", "repo repo_write diff versions merge repo_merge"],
   ["session (calls, tools, platform, view-only)", "session calls tool platform view_only capabilities"],
   ["measure", "measure"],

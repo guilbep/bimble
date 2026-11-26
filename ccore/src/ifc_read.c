@@ -696,7 +696,13 @@ static void mesh_job(void *ctx, size_t k, size_t w) {
 
 /* ---- read */
 
-static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
+/* LINKF: progress (ifc_read.h cc_ifc_progress), relaxed atomics: another thread reads it. */
+static void pg_set(cc_ifc_progress *pg, size_t v) {
+    if (pg) cc_atomic_store(&pg->done, v);
+}
+static int pg_cancelled(cc_ifc_progress *pg) { return pg && cc_atomic_load(&pg->cancel); }
+
+static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene *out, cc_error *err, cc_ifc_progress *pg) {
     cc_scene *s = &out->scene;
     Arena *a = &s->arena;
     int rc = -1, oom = 0;
@@ -845,6 +851,8 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     if (!items || !res) goto oom;
     for (size_t b0 = 0; b0 < nids; b0 += BATCH) {
         size_t bn = min_z(BATCH, nids - b0);
+        pg_set(pg, 300 + 650 * b0 / nids); /* LINKF */
+        if (pg_cancelled(pg)) goto cancelled;
         /* Fresh readers per batch (read.rs: map_init per batch). */
         for (size_t w = 0; w < nw; w++) {
             r_free(&rs[w]);
@@ -1069,6 +1077,9 @@ static int read_parsed(cc_step_file *f, const char *text, size_t n, cc_ifc_scene
     goto done;
 oom:
     set_err(err, "out of memory", "");
+    goto done;
+cancelled: /* LINKF */
+    set_err(err, "cancelled", "");
 done:
     for (size_t k = 0; k < nres; k++) piece_free(&res[k]);
     for (size_t k = 0; items && k < nitems; k++) tris_free(&items[k].tris);
@@ -1099,6 +1110,10 @@ done:
 }
 
 int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
+    return cc_ifc_read_progress(text, n, out, err, NULL);
+}
+
+int cc_ifc_read_progress(const char *text, size_t n, cc_ifc_scene *out, cc_error *err, cc_ifc_progress *pg) {
     memset(out, 0, sizeof *out);
     arena_init(&out->scene.arena, 0);
     out->schema.p = "";
@@ -1126,6 +1141,7 @@ int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
         return -1;
     }
     PROF("step parse");
+    pg_set(pg, 300); /* LINKF */
 #ifdef CC_IFC_PROFILE
     fprintf(stderr, "PROF entities %zu\n", f.n);
 #endif
@@ -1146,7 +1162,8 @@ int cc_ifc_read(const char *text, size_t n, cc_ifc_scene *out, cc_error *err) {
         cc_step_free(&f);
         return -1;
     }
-    int rc = read_parsed(&f, text, n, out, err);
+    int rc = pg_cancelled(pg) ? (set_err(err, "cancelled", ""), -1) : read_parsed(&f, text, n, out, err, pg);
+    if (!rc) pg_set(pg, 950);
     PROF("geometry+scene total");
     cc_step_free(&f);
     return rc;

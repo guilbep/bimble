@@ -167,8 +167,9 @@ static const ActionRow ACTIONS[] = {
     /* ---- end CONC1 ---- */
     {"reference_planes", "Reference plane by three points", "Setting out", 0, 0}, /* WAVE1B (refplanes.h) */
     {"place_grid_axis", "Place: Grid axis", "Setting out", 0, 0},                 /* WAVE1B (A2) */
+    {"link_folder", "Link a folder…", "Collaborate", 0, 0}, /* LINKF (links.h) */
 };
-_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4 + 5 + 2, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4, CONC1 5, WAVE1B 2");
+_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4 + 5 + 2 + 1, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4, CONC1 5, WAVE1B 2, LINKF 1");
 
 static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab", /* verbs.rs:28 snake_case */
                                         "footing", "strip_footing", "raft", "opening", "sleeve", /* CONC1 */
@@ -274,6 +275,7 @@ static int try_apply(cc_session *s, const cc_command *cmds, size_t n, cc_buf *ou
             return CC_ERR;
         }
         s->nredo_ids = 0;
+        cc_links_undo_clear_redo(s); /* LINKF: a new step: link_folder's redo goes too */
         cc_session_note_apply(s, cmds, n); /* the session file logs the step with these */
     }
     rebuild(s);
@@ -283,6 +285,7 @@ static int try_apply(cc_session *s, const cc_command *cmds, size_t n, cc_buf *ou
 /* lib.rs:1744 `undo_redo`: nothing to take back is no change. */
 static void undo_redo(cc_session *s, int undo) {
     if (!s->open) return;
+    if (cc_links_undo_step(s, undo)) return; /* LINKF: link_folder was the last step (links.h) */
     if (undo ? cc_history_undo(&s->hist, &s->model) : cc_history_redo(&s->hist, &s->model)) {
         if (undo && s->nundo_ids) {
             if (!push_id(&s->redo_ids, &s->nredo_ids, &s->cap_redo_ids, s->undo_ids[s->nundo_ids - 1])) s->nundo_ids--;
@@ -710,14 +713,15 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
      * again), with something to edit (Deviation: any element, not structural_count). */
     if (!strcmp(name, "convert_open")) return s->view == CC_VIEW_IFC && s->pf->files && s->ifc->scene.nelements > 0;
     if (!strcmp(name, "save")) return cc_session_unsaved(s);
-    if (!strcmp(name, "undo")) return s->open && s->hist.nundo > 0;
-    if (!strcmp(name, "redo")) return s->open && s->hist.nredo > 0;
+    if (!strcmp(name, "undo")) return s->open && (s->hist.nundo > 0 || cc_links_can_undo(s, 1)); /* LINKF */
+    if (!strcmp(name, "redo")) return s->open && (s->hist.nredo > 0 || cc_links_can_undo(s, 0));
     if (!strcmp(name, "place_grid_axis")) return s->open && s->model.ngrids > 0; /* WAVE1B (A2): an axis of a grid */
     if (!strncmp(name, "place_", 6)) return s->open;
     if (!strcmp(name, "export_ifc4") || !strcmp(name, "export_ifc2x3")) return s->open; /* ribbon.rs:577 */
     if (!strcmp(name, "home")) return 1;
     /* Links (ticket B5, links.h): ribbon.rs:596 ManageLinks `loaded`, LinkModel `_ => loaded`. */
     if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return loaded(s);
+    if (!strcmp(name, "link_folder")) return loaded(s); /* LINKF: natively a folder; the browser page picks several files (ccore.ts) */
     if (!strcmp(name, "measure")) return loaded(s); /* ribbon.rs:612 `_ => loaded` (ticket T1) */
     /* ---- KEY1: the plan annotation toggles (toggles.h): ribbon.rs:612 `_ => loaded` ---- */
     if (cc_toggle_index(name) >= 0) return loaded(s);
@@ -2004,6 +2008,53 @@ static int vis_action(cc_session *s, const char *name, cc_buf *out) {
 }
 /* ---- end ISS72 ---- */
 
+/* LINKF: manage_links place {origin?, move_mm?: [x, y, z], rotation_deg?} (links.h): refused while
+ * the link is pinned; every value checked before any is set. */
+static int link_place(cc_session *s, cc_link *k, const JrVal *v, cc_buf *out) {
+    if (k->pinned) {
+        buf_puts(out, "the link is pinned: unpin it to move it");
+        return -1;
+    }
+    const JrVal *o = jr_get(v, "origin"), *m = jr_get(v, "move_mm"), *r = jr_get(v, "rotation_deg");
+    int origin = k->origin;
+    double mv[3] = {k->move_mm[0], k->move_mm[1], k->move_mm[2]}, rot = k->rotation_deg;
+    if (o) {
+        origin = -1;
+        for (int i = 0; o->type == JR_STR && i < 4; i++)
+            if (!strcmp(o->s, CC_LINK_ORIGIN_NAME[i])) origin = i;
+        if (origin < 0) {
+            buf_puts(out, "origin: one of file, origin, base_point, survey_point");
+            return -1;
+        }
+    }
+    if (m) {
+        if (m->type != JR_ARR || m->n < 2 || m->n > 3) {
+            buf_puts(out, "move_mm: [x, y] or [x, y, z] in mm");
+            return -1;
+        }
+        mv[2] = 0;
+        for (size_t i = 0; i < m->n; i++) {
+            double x = m->items[i].num;
+            if (m->items[i].type != JR_NUM || !(x > -1e9 && x < 1e9)) {
+                buf_puts(out, "move_mm: finite numbers within 1000 km");
+                return -1;
+            }
+            mv[i] = x;
+        }
+    }
+    if (r) {
+        if (r->type != JR_NUM || !(r->num > -1e6 && r->num < 1e6)) {
+            buf_puts(out, "rotation_deg: a number");
+            return -1;
+        }
+        rot = r->num;
+    }
+    k->origin = origin, k->rotation_deg = rot + 0.0; /* + 0.0: never -0.0 */
+    for (int i = 0; i < 3; i++) k->move_mm[i] = mv[i] + 0.0;
+    s->links_gen++;
+    return 0;
+}
+
 /* link_model and manage_links (links.h). */
 static int link_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     Arena a;
@@ -2021,6 +2072,25 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
     if (v && v->type != JR_OBJ) {
         buf_puts(out, !strcmp(name, "link_model") ? "the action's body is {\"path\": string}"
                                                   : "the action's body is {\"op\": string, \"name\": string}");
+        goto end;
+    }
+    if (!strcmp(name, "link_folder")) { /* ---- LINKF (links.h): every IFC of a folder, one undo step ---- */
+        const JrVal *p = v ? jr_get(v, "path") : NULL, *rec = v ? jr_get(v, "recursive") : NULL;
+        if (!p || p->type != JR_STR || !p->n || strlen(p->s) < p->n) {
+            buf_puts(out, "link_folder: send {\"path\": \"<folder>\", \"recursive\"?: bool}");
+            goto end;
+        }
+        if (rec && rec->type != JR_BOOL && rec->type != JR_NULL) {
+            buf_puts(out, "recursive: true or false");
+            goto end;
+        }
+        cc_error err;
+        size_t added = 0;
+        if (cc_links_add_folder(s, p->s, rec && rec->type == JR_BOOL && rec->b, &added, &err)) {
+            buf_puts(out, err.msg);
+            goto end;
+        }
+        rc = CC_OK;
         goto end;
     }
     if (!strcmp(name, "link_model")) {
@@ -2062,12 +2132,22 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         rc = done(&w);
         goto end;
     }
-    static const char *const OPS_L[] = {"remove", "reload", "show", "hide", "locate" /* LNK1 */};
+    static const char *const OPS_L[] = {"remove", "reload", "show", "hide", "locate" /* LNK1 */,
+                                        "cancel", "unload", "load", "pin", "unpin", "place", "colour", "reload_all" /* LINKF */};
     int o = -1;
-    for (int q = 0; q < 5; q++)
+    for (int q = 0; q < 13; q++)
         if (op->n == strlen(OPS_L[q]) && !memcmp(op->s, OPS_L[q], op->n)) o = q;
     if (o < 0) {
-        buf_puts(out, "op: one of list, remove, reload, show, hide, locate");
+        buf_puts(out, "op: one of list, remove, reload, show, hide, locate, cancel, unload, load, pin, unpin, place, colour, reload_all");
+        goto end;
+    }
+    if (o == 12) { /* LINKF: reload_all: each link read again (its cache when the IFC did not change) */
+        for (size_t i = 0; i < s->nlinks; i++) {
+            cc_error err;
+            if (s->links[i].state != CC_LS_MISSING && cc_links_reload(s, (int)i, &err))
+                cc_log(s->pf, "bimble-ccore: reload %s: %s", s->links[i].name, err.msg);
+        }
+        rc = CC_OK;
         goto end;
     }
     if (!nm || nm->type != JR_STR) {
@@ -2089,6 +2169,29 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         if (cc_links_locate(s, li, p->s, &err)) {
             buf_puts(out, err.msg);
             goto end;
+        }
+    } else if (o >= 5) { /* ---- LINKF ---- */
+        cc_link *k = &s->links[li];
+        if (o == 5) cc_links_cancel(s, li);
+        else if (o == 6) cc_links_unload(s, li);
+        else if (o == 7) {
+            cc_error err;
+            if (cc_links_load(s, li, &err)) {
+                buf_puts(out, err.msg);
+                goto end;
+            }
+        } else if (o == 8 || o == 9) {
+            if (k->pinned != (o == 8)) k->pinned = o == 8, s->links_gen++;
+        } else if (o == 10) {
+            if (link_place(s, k, v, out)) goto end;
+        } else {
+            const JrVal *c = jr_get(v, "colour");
+            if (!c || (c->type != JR_NULL && (c->type != JR_NUM || c->num != (double)(int)c->num || c->num < 0 || c->num > 11))) {
+                buf_puts(out, "colour: a palette index 0..11, or null (its own colours)");
+                goto end;
+            }
+            k->colour = c->type == JR_NULL ? -1 : (int)c->num;
+            s->links_gen++;
         }
     } else if (o == 0) cc_links_remove(s, li);
     else if (o == 1) {
@@ -2205,7 +2308,8 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
         int vrc = cc_versions_action(s, name, body, n, out);
         if (vrc != -1) return vrc;
     }
-    if (!strcmp(name, "link_model") || !strcmp(name, "manage_links")) return link_action(s, name, body, n, out);
+    if (!strcmp(name, "link_model") || !strcmp(name, "manage_links") || !strcmp(name, "link_folder"))
+        return link_action(s, name, body, n, out);
     /* ---- FS1: recent_remove {path} (Home's remove; settings_file.h) ---- */
     if (!strcmp(name, "recent_remove")) {
         FileArgs ra;

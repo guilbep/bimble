@@ -5,19 +5,32 @@
 #include <string.h>
 
 #include "links.h"
+#include "link_cache.h" /* LINKF */
+#include "jobs.h"       /* LINKF: cc_atomic_load */
 
 static const char *const FAMILY[CC_CAT_COUNT] = {"Concrete", "Steel", "Timber", "Masonry",
                                                  "Insulation", "Earth", "Glass", "Other"}; /* MaterialCategory::label */
 
+static void keep_settings(cc_link *k, const cc_link *old);
+static void cc_links_undo_free(cc_session *s);
+
+/* What link k holds in memory (its scene), freed; the link itself stays. */
+static void link_drop_data(cc_link *k) {
+    if (k->ifc) cc_ifc_scene_free(k->ifc), free(k->ifc), k->ifc = NULL;
+    if (k->vf) cc_scene_free(&k->scene), cc_viewfile_free(k->vf), free(k->vf), k->vf = NULL;
+    if (k->model) cc_scene_free(&k->scene), cc_model_free(k->model), free(k->model), k->model = NULL;
+    memset(&k->scene, 0, sizeof k->scene);
+    k->kind = 0;
+}
+
 void cc_link_free(cc_link *k) {
-    if (k->ifc) cc_ifc_scene_free(k->ifc), free(k->ifc);
-    if (k->vf) cc_scene_free(&k->scene), cc_viewfile_free(k->vf), free(k->vf);
-    if (k->model) cc_scene_free(&k->scene), cc_model_free(k->model), free(k->model);
+    link_drop_data(k);
     free(k->path);
+    free(k->msg), free(k->cache), free(k->log); /* LINKF */
     memset(k, 0, sizeof *k);
 }
 
-const cc_scene *cc_link_scene(const cc_link *k) { return k->kind == CC_LINK_IFC ? &k->ifc->scene : &k->scene; }
+const cc_scene *cc_link_scene(const cc_link *k) { return k->ifc ? &k->ifc->scene : &k->scene; }
 
 void cc_link_id(const cc_link *k, size_t i, char id[22]) {
     const cc_scene *sc = cc_link_scene(k);
@@ -43,13 +56,18 @@ int cc_links_find(const cc_session *s, const char *name, size_t n) {
     return -1;
 }
 
+static int links_add_queued(cc_session *s, const char *path, int *at, cc_error *err); /* LINKF */
+static int queued_kind(const char *path);
+
 int cc_links_add(cc_session *s, const char *path, cc_error *err) {
+    if (queued_kind(path)) return links_add_queued(s, path, NULL, err); /* LINKF */
     cc_link k;
     if (cc_link_load(s, path, &k, err)) return -1;
     int at = cc_links_find(s, k.name, strlen(k.name)); /* the same file again: in its place */
     if (at >= 0) {
         k.visible = s->links[at].visible;
         if (s->link_sel == at) s->link_sel = -1;
+        keep_settings(&k, &s->links[at]); /* LINKF */
         cc_link_free(&s->links[at]);
         s->links[at] = k;
     } else {
@@ -68,6 +86,7 @@ int cc_links_add(cc_session *s, const char *path, cc_error *err) {
             }
             s->links = p, s->caplinks = c;
         }
+        k.uid = ++s->link_uid_next, k.pinned = 1, k.colour = -1; /* LINKF */
         s->links[s->nlinks++] = k;
     }
     const cc_scene *sc = cc_link_scene(&k);
@@ -77,10 +96,20 @@ int cc_links_add(cc_session *s, const char *path, cc_error *err) {
 }
 
 int cc_links_reload(cc_session *s, int i, cc_error *err) {
+    if (s->links[i].kind != CC_LINK_MODEL && queued_kind(s->links[i].path)) { /* LINKF: its cache, else read again */
+        int at = i;
+        char *p = malloc(strlen(s->links[i].path) + 1);
+        if (!p) return snprintf(err->msg, sizeof err->msg, "out of memory"), -1;
+        strcpy(p, s->links[i].path);
+        int rc = links_add_queued(s, p, &at, err);
+        free(p);
+        return rc;
+    }
     cc_link k;
     if (cc_link_load(s, s->links[i].path, &k, err)) return -1;
     k.visible = s->links[i].visible;
     if (s->link_sel == i) s->link_sel = -1;
+    keep_settings(&k, &s->links[i]); /* LINKF */
     cc_link_free(&s->links[i]);
     s->links[i] = k;
     s->links_gen++;
@@ -88,6 +117,8 @@ int cc_links_reload(cc_session *s, int i, cc_error *err) {
 }
 
 void cc_links_remove(cc_session *s, int i) { /* lib.rs:1535 unlink */
+    if (s->link_job && s->link_job_uid == s->links[i].uid) /* LINKF: its conversion stops, its result is dropped */
+        cc_atomic_store(&s->link_job->pg.cancel, 1), s->link_job_uid = 0;
     cc_link_free(&s->links[i]);
     memmove(&s->links[i], &s->links[i + 1], (s->nlinks - (size_t)i - 1) * sizeof *s->links);
     s->nlinks--;
@@ -104,6 +135,8 @@ void cc_links_set_visible(cc_session *s, int i, int visible) {
 
 void cc_links_clear(cc_session *s) {
     free(s->links_saved), s->links_saved = NULL, s->links_saved_n = 0; /* LNK1 */
+    if (s->link_job) cc_atomic_store(&s->link_job->pg.cancel, 1), s->link_job_uid = 0; /* LINKF */
+    cc_links_undo_free(s);
     if (s->nlinks) s->links_gen++;
     for (size_t i = 0; i < s->nlinks; i++) cc_link_free(&s->links[i]);
     s->nlinks = 0;
@@ -518,6 +551,7 @@ static int add_missing(cc_session *s, const char *path, int visible) {
     const char *sl = cc_path_last_sep(k.path);
     k.name = sl ? sl + 1 : k.path;
     k.visible = visible;
+    k.state = CC_LS_MISSING, k.uid = ++s->link_uid_next, k.pinned = 1, k.colour = -1; /* LINKF */
     s->links[s->nlinks++] = k;
     s->links_gen++;
     return 0;
@@ -601,10 +635,15 @@ int cc_links_to_model(cc_session *s, const char *path) {
 }
 
 int cc_links_locate(cc_session *s, int i, const char *path, cc_error *err) {
+    if (queued_kind(path)) { /* LINKF: in its place, through the queue */
+        int at = i;
+        return links_add_queued(s, path, &at, err);
+    }
     cc_link k;
     if (cc_link_load(s, path, &k, err)) return -1;
     k.visible = s->links[i].visible;
     if (s->link_sel == i) s->link_sel = -1;
+    keep_settings(&k, &s->links[i]); /* LINKF */
     cc_link_free(&s->links[i]);
     s->links[i] = k;
     s->links_gen++;
@@ -612,3 +651,416 @@ int cc_links_locate(cc_session *s, int i, const char *path, cc_error *err) {
     return 0;
 }
 /* ---- end LNK1 ---- */
+
+/* ---- LINKF: conversions in turn, link a folder, its undo step (links.h, link_cache.h) ---- */
+
+const char *const CC_LINK_STATE_NAME[] = {"ready", "missing", "queued", "converting", "failed", "refused", "unloaded"};
+const char *const CC_LINK_ORIGIN_NAME[] = {"file", "origin", "base_point", "survey_point"};
+
+static int ends_ci(const char *p, const char *suffix) {
+    size_t n = strlen(p), k = strlen(suffix);
+    if (n < k) return 0;
+    for (size_t i = 0; i < k; i++) {
+        char c = p[n - k + i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != suffix[i]) return 0;
+    }
+    return 1;
+}
+
+/* The files a conversion job reads (link_cache.h): an IFC, a .bimbleview. */
+static int queued_kind(const char *path) { return ends_ci(path, ".ifc") || ends_ci(path, ".bimbleview"); }
+
+static char *dup_z(const char *p) {
+    if (!p || !*p) return NULL;
+    char *q = malloc(strlen(p) + 1);
+    if (q) strcpy(q, p);
+    return q;
+}
+
+/* What the user set on a link, kept when it is read again in its place. */
+static void keep_settings(cc_link *k, const cc_link *old) {
+    k->uid = old->uid, k->origin = old->origin, k->rotation_deg = old->rotation_deg, k->pinned = old->pinned;
+    k->colour = old->colour;
+    memcpy(k->move_mm, old->move_mm, sizeof k->move_mm);
+}
+
+static int link_by_uid(const cc_session *s, uint32_t uid) {
+    for (size_t i = 0; uid && i < s->nlinks; i++)
+        if (s->links[i].uid == uid) return (int)i;
+    return -1;
+}
+
+/* The finished job's results into link k (its data was dropped when it was queued). */
+static void take(cc_session *s, cc_link *k, cc_link_job *j) {
+    free(k->msg), free(k->cache), free(k->log);
+    k->msg = k->cache = k->log = NULL;
+    k->progress = 1000;
+    k->bytes = j->bytes;
+    k->load_ms = j->ms;
+    if (j->rc != CC_JOB_OK) {
+        k->state = j->rc == CC_JOB_REFUSED ? CC_LS_REFUSED : CC_LS_FAILED;
+        k->msg = dup_z(j->rc == CC_JOB_CANCELLED ? "cancelled" : j->err.msg);
+        cc_log(s->pf, "bimble-ccore: link %s: %s", k->path, j->rc == CC_JOB_CANCELLED ? "cancelled" : j->err.msg);
+        return;
+    }
+    cc_error err;
+    if (j->vf) {
+        if (cc_view_scene(&k->scene, j->vf, &err)) {
+            cc_scene_free(&k->scene);
+            memset(&k->scene, 0, sizeof k->scene);
+            k->state = CC_LS_FAILED, k->msg = dup_z("out of memory");
+            return;
+        }
+        k->vf = j->vf, j->vf = NULL, k->kind = CC_LINK_VIEW;
+    } else k->ifc = j->ifc, j->ifc = NULL, k->kind = CC_LINK_IFC;
+    k->state = CC_LS_READY;
+    k->cache = dup_z(j->cache), k->log = dup_z(j->log), k->msg = dup_z(j->note);
+    k->cache_mtime_s = j->cache_mtime_s, k->from_cache = j->from_cache;
+    cc_log(s->pf, "bimble-ccore: linked %s: %zu elements (%s, %.0f ms)", k->path, cc_link_scene(k)->nelements,
+           j->from_cache ? "its cache" : j->cache[0] ? "read, cache written" : "read", j->ms);
+}
+
+/* Starts link i's conversion: on the carrier's thread, else here. */
+static void start(cc_session *s, int i) {
+    cc_link *k = &s->links[i];
+    cc_link_job *j = cc_link_job_new(s->pf, k->path);
+    if (!j) {
+        k->state = CC_LS_FAILED, free(k->msg), k->msg = dup_z("out of memory");
+        return;
+    }
+    j->cache_min = s->link_cache_min, j->no_beside = s->link_no_beside;
+    k->state = CC_LS_CONVERTING, k->progress = 0;
+    s->link_job = j, s->link_job_uid = k->uid;
+    if (!s->pf->spawn || s->pf->spawn(s->pf->ctx, cc_link_job_run, j)) cc_link_job_run(j);
+}
+
+int cc_links_busy(const cc_session *s) {
+    if (s->link_job) return 1;
+    for (size_t i = 0; i < s->nlinks; i++)
+        if (s->links[i].state == CC_LS_QUEUED) return 1;
+    return 0;
+}
+
+int cc_links_tick(cc_session *s) {
+    int ch = 0;
+    cc_link_job *j = s->link_job;
+    if (j) {
+        int at = link_by_uid(s, s->link_job_uid);
+        if (!cc_link_job_done(j)) {
+            unsigned d = (unsigned)cc_atomic_load(&j->pg.done);
+            if (at >= 0 && d / 50 != s->links[at].progress / 50) s->links[at].progress = d, ch = 1; /* every 5 % */
+            if (!ch) return 0;
+        } else {
+            if (at >= 0) take(s, &s->links[at], j);
+            cc_link_job_free(j);
+            s->link_job = NULL, s->link_job_uid = 0;
+            ch = 1;
+        }
+    }
+    if (!s->link_job) { /* the next: the smallest queued, so something appears soon */
+        int best = -1;
+        for (size_t i = 0; i < s->nlinks; i++)
+            if (s->links[i].state == CC_LS_QUEUED && (best < 0 || s->links[i].bytes < s->links[best].bytes)) best = (int)i;
+        if (best >= 0) start(s, best), ch = 1;
+        if (s->link_job && cc_link_job_done(s->link_job)) /* ran here (no thread): take it now */
+            return cc_links_tick(s), 1;
+    }
+    if (ch) s->links_gen++;
+    return ch;
+}
+
+/* Queues `path` as a link: at *at (in its place) when at is given, else in the place of a link of
+ * the same name, else at the end. Small files and carriers without a thread: read now, and on a
+ * failure nothing changes (-1 with the reader's error), as before. */
+static int links_add_queued(cc_session *s, const char *path, int *at, cc_error *err) {
+    err->offset = CC_NO_OFFSET;
+    err->msg[0] = 0;
+    uint64_t bytes = 0;
+    if (s->pf->files && s->pf->stat_path) {
+        cc_pf_stat st;
+        if (s->pf->stat_path(s->pf->ctx, path, 1, &st) != CC_PF_OK || st.kind != CC_PF_FILE) {
+            snprintf(err->msg, sizeof err->msg, "%s: cannot open", path);
+            return -1;
+        }
+        bytes = st.size;
+    }
+    int now = !s->pf->spawn || bytes < s->link_cache_min || !s->pf->files;
+    if (now) { /* read here: as cc_link_load, through the job (the cache when it is worth one) */
+        cc_link_job *j = cc_link_job_new(s->pf, path);
+        if (!j) return snprintf(err->msg, sizeof err->msg, "out of memory"), -1;
+        j->cache_min = s->link_cache_min, j->no_beside = s->link_no_beside;
+        cc_link_job_run(j);
+        if (j->rc != CC_JOB_OK) {
+            *err = j->err;
+            if (j->rc == CC_JOB_CANCELLED) snprintf(err->msg, sizeof err->msg, "cancelled");
+            cc_link_job_free(j);
+            return -1;
+        }
+        cc_link k;
+        memset(&k, 0, sizeof k);
+        k.path = dup_z(path);
+        if (!k.path) return cc_link_job_free(j), snprintf(err->msg, sizeof err->msg, "out of memory"), -1;
+        const char *sl = cc_path_last_sep(k.path);
+        k.name = sl ? sl + 1 : k.path;
+        k.visible = 1, k.pinned = 1, k.colour = -1;
+        take(s, &k, j);
+        cc_link_job_free(j);
+        if (k.state != CC_LS_READY) {
+            snprintf(err->msg, sizeof err->msg, "%s", k.msg ? k.msg : "failed");
+            cc_link_free(&k);
+            return -1;
+        }
+        int i = at ? *at : cc_links_find(s, k.name, strlen(k.name));
+        if (i >= 0) {
+            k.visible = s->links[i].visible;
+            if (s->link_sel == i) s->link_sel = -1;
+            if (s->link_job && s->link_job_uid == s->links[i].uid) cc_atomic_store(&s->link_job->pg.cancel, 1), s->link_job_uid = 0;
+            keep_settings(&k, &s->links[i]);
+            cc_link_free(&s->links[i]);
+            s->links[i] = k;
+        } else {
+            if (s->nlinks >= CC_MAX_LINKS) {
+                cc_link_free(&k);
+                snprintf(err->msg, sizeof err->msg, "at most %d linked models", CC_MAX_LINKS);
+                return -1;
+            }
+            if (s->nlinks == s->caplinks) {
+                size_t c = s->caplinks ? 2 * s->caplinks : 4;
+                cc_link *p = realloc(s->links, c * sizeof *p);
+                if (!p) return cc_link_free(&k), snprintf(err->msg, sizeof err->msg, "out of memory"), -1;
+                s->links = p, s->caplinks = c;
+            }
+            k.uid = ++s->link_uid_next;
+            s->links[s->nlinks++] = k;
+        }
+        s->links_gen++;
+        return 0;
+    }
+    /* queued: the row now, the scene when its turn came */
+    int i = at ? *at : -1;
+    if (i < 0) {
+        const char *sl = cc_path_last_sep(path);
+        const char *nm = sl ? sl + 1 : path;
+        i = cc_links_find(s, nm, strlen(nm));
+    }
+    char *p = dup_z(path);
+    if (!p) return snprintf(err->msg, sizeof err->msg, "out of memory"), -1;
+    if (i < 0) {
+        if (s->nlinks >= CC_MAX_LINKS) {
+            free(p);
+            snprintf(err->msg, sizeof err->msg, "at most %d linked models", CC_MAX_LINKS);
+            return -1;
+        }
+        if (s->nlinks == s->caplinks) {
+            size_t c = s->caplinks ? 2 * s->caplinks : 4;
+            cc_link *q = realloc(s->links, c * sizeof *q);
+            if (!q) return free(p), snprintf(err->msg, sizeof err->msg, "out of memory"), -1;
+            s->links = q, s->caplinks = c;
+        }
+        i = (int)s->nlinks++;
+        memset(&s->links[i], 0, sizeof s->links[i]);
+        s->links[i].uid = ++s->link_uid_next, s->links[i].visible = 1, s->links[i].pinned = 1, s->links[i].colour = -1;
+    } else {
+        if (s->link_sel == i) s->link_sel = -1;
+        if (s->link_job && s->link_job_uid == s->links[i].uid) cc_atomic_store(&s->link_job->pg.cancel, 1), s->link_job_uid = 0;
+        link_drop_data(&s->links[i]);
+        free(s->links[i].path), free(s->links[i].msg), free(s->links[i].cache), free(s->links[i].log);
+        s->links[i].msg = s->links[i].cache = s->links[i].log = NULL;
+    }
+    cc_link *k = &s->links[i];
+    k->path = p;
+    const char *sl = cc_path_last_sep(k->path);
+    k->name = sl ? sl + 1 : k->path;
+    k->state = CC_LS_QUEUED, k->progress = 0, k->bytes = bytes;
+    s->links_gen++;
+    cc_links_tick(s); /* starts it when nothing runs */
+    return 0;
+}
+
+void cc_links_cancel(cc_session *s, int i) {
+    cc_link *k = &s->links[i];
+    if (k->state == CC_LS_QUEUED) {
+        k->state = CC_LS_FAILED, free(k->msg), k->msg = dup_z("cancelled");
+        s->links_gen++;
+    } else if (k->state == CC_LS_CONVERTING && s->link_job && s->link_job_uid == k->uid)
+        cc_atomic_store(&s->link_job->pg.cancel, 1); /* the job ends "cancelled" (a batch later) */
+}
+
+void cc_links_unload(cc_session *s, int i) {
+    cc_link *k = &s->links[i];
+    if (k->state == CC_LS_MISSING) return;
+    if (k->state == CC_LS_CONVERTING && s->link_job && s->link_job_uid == k->uid)
+        cc_atomic_store(&s->link_job->pg.cancel, 1), s->link_job_uid = 0;
+    if (s->link_sel == i) s->link_sel = -1;
+    link_drop_data(k);
+    k->state = CC_LS_UNLOADED;
+    s->links_gen++;
+}
+
+int cc_links_load(cc_session *s, int i, cc_error *err) {
+    if (s->links[i].state == CC_LS_READY) return 0;
+    if (s->links[i].state == CC_LS_QUEUED || s->links[i].state == CC_LS_CONVERTING) return 0;
+    return cc_links_reload(s, i, err);
+}
+
+/* ---- link_folder: one undo step ---- */
+struct cc_links_undo {
+    char *paths; /* NUL-separated */
+    size_t len, npaths;
+    size_t hist_nundo; /* the model's undo steps when it was taken: undone only when it is the last step */
+};
+
+static void undo_entry_free(struct cc_links_undo *u) { free(u->paths); }
+
+static void cc_links_undo_free(cc_session *s) {
+    for (size_t i = 0; i < s->nlinks_undo; i++) undo_entry_free(&s->links_undo[i]);
+    for (size_t i = 0; i < s->nlinks_redo; i++) undo_entry_free(&s->links_redo[i]);
+    s->nlinks_undo = s->nlinks_redo = 0;
+}
+
+void cc_links_session_free(cc_session *s) {
+    if (s->link_job) cc_link_job_orphan(s->link_job), s->link_job = NULL;
+    cc_links_undo_free(s);
+    free(s->links_undo), free(s->links_redo);
+    s->links_undo = s->links_redo = NULL;
+}
+
+void cc_links_undo_clear_redo(cc_session *s) {
+    for (size_t i = 0; i < s->nlinks_redo; i++) undo_entry_free(&s->links_redo[i]);
+    s->nlinks_redo = 0;
+}
+
+static int push_entry(struct cc_links_undo **v, size_t *n, size_t *cap, struct cc_links_undo e) {
+    if (*n == *cap) {
+        size_t c = *cap ? 2 * *cap : 4;
+        struct cc_links_undo *p = realloc(*v, c * sizeof *p);
+        if (!p) return -1;
+        *v = p, *cap = c;
+    }
+    (*v)[(*n)++] = e;
+    return 0;
+}
+
+int cc_links_can_undo(const cc_session *s, int undo) {
+    size_t hn = s->open ? s->hist.nundo : 0;
+    if (undo) return s->nlinks_undo && s->links_undo[s->nlinks_undo - 1].hist_nundo == hn;
+    return s->nlinks_redo && s->links_redo[s->nlinks_redo - 1].hist_nundo == hn;
+}
+
+int cc_links_undo_step(cc_session *s, int undo) {
+    if (!cc_links_can_undo(s, undo)) return 0;
+    struct cc_links_undo e = undo ? s->links_undo[--s->nlinks_undo] : s->links_redo[--s->nlinks_redo];
+    const char *p = e.paths;
+    for (size_t k = 0; k < e.npaths; k++, p += strlen(p) + 1) {
+        if (undo) {
+            for (size_t i = 0; i < s->nlinks; i++)
+                if (s->links[i].path && !strcmp(s->links[i].path, p)) {
+                    cc_links_remove(s, (int)i);
+                    break;
+                }
+        } else {
+            cc_error err;
+            if (cc_links_add(s, p, &err)) cc_log(s->pf, "bimble-ccore: redo link %s: %s", p, err.msg);
+        }
+    }
+    if (push_entry(undo ? &s->links_redo : &s->links_undo, undo ? &s->nlinks_redo : &s->nlinks_undo,
+                   undo ? &s->caplinks_redo : &s->caplinks_undo, e))
+        undo_entry_free(&e);
+    s->links_gen++;
+    return 1;
+}
+
+static int name_cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+
+/* The files of `dir` to link, sorted: every *.ifc, and each *.bimbleview that is not an IFC's cache
+ * (<x>.ifc.bimbleview with <x>.ifc there). Into `names` (malloc'd), recursion bounded. */
+static int folder_files(cc_session *s, const char *dir, int depth, int recursive, char ***names, size_t *n, size_t *cap) {
+    char *list = NULL;
+    size_t ln = 0;
+    if (!s->pf->list_dir || s->pf->list_dir(s->pf->ctx, dir, (size_t)16 << 20, &list, &ln) != CC_PF_OK) return -1;
+    int rc = 0;
+    for (size_t o = 0; o < ln && !rc; o += strlen(list + o) + 1) {
+        const char *e = list + o + 1;
+        int is_dir = list[o] == 'd';
+        if (e[0] == '.') continue; /* hidden */
+        size_t need = strlen(dir) + 1 + strlen(e) + 1;
+        char *full = malloc(need);
+        if (!full) { rc = -1; break; }
+        snprintf(full, need, "%s/%s", dir, e);
+        if (is_dir) {
+            if (recursive && depth < 8) rc = folder_files(s, full, depth + 1, recursive, names, n, cap);
+            free(full);
+            continue;
+        }
+        int take_it = ends_ci(e, ".ifc");
+        if (!take_it && ends_ci(e, ".bimbleview")) {
+            size_t el = strlen(full);
+            take_it = 1;
+            if (el > 15 && ends_ci(full + el - 15, ".ifc.bimbleview")) { /* a cache: its IFC there? */
+                full[el - 11] = 0;
+                take_it = !s->pf->exists(s->pf->ctx, full);
+                full[el - 11] = '.';
+            }
+        }
+        if (!take_it) { free(full); continue; }
+        if (*n == *cap) {
+            size_t c = *cap ? 2 * *cap : 16;
+            char **p = realloc(*names, c * sizeof *p);
+            if (!p) { free(full); rc = -1; break; }
+            *names = p, *cap = c;
+        }
+        (*names)[(*n)++] = full;
+    }
+    free(list);
+    return rc;
+}
+
+int cc_links_add_folder(cc_session *s, const char *dir, int recursive, size_t *added, cc_error *err) {
+    err->offset = CC_NO_OFFSET;
+    err->msg[0] = 0;
+    *added = 0;
+    char **names = NULL;
+    size_t n = 0, cap = 0;
+    char real[4096];
+    if (s->pf->real_path && !s->pf->real_path(s->pf->ctx, dir, real, sizeof real)) dir = real;
+    if (folder_files(s, dir, 0, recursive, &names, &n, &cap)) {
+        for (size_t i = 0; i < n; i++) free(names[i]);
+        free(names);
+        snprintf(err->msg, sizeof err->msg, "%s: not a folder that can be listed", dir);
+        return -1;
+    }
+    if (n) qsort(names, n, sizeof *names, name_cmp);
+    Buf done;
+    buf_init(&done);
+    size_t nd = 0;
+    int rc = 0;
+    if (!n) snprintf(err->msg, sizeof err->msg, "%s: no .ifc or .bimbleview file in this folder", dir), rc = -1;
+    for (size_t i = 0; i < n && !rc; i++) {
+        cc_error e;
+        int before = cc_links_find(s, cc_path_last_sep(names[i]) + 1, strlen(cc_path_last_sep(names[i]) + 1));
+        if (before < 0 && s->nlinks >= CC_MAX_LINKS) {
+            snprintf(err->msg, sizeof err->msg, "at most %d linked models: %zu of the folder's %zu files linked", CC_MAX_LINKS, nd, n);
+            break;
+        }
+        if (cc_links_add(s, names[i], &e)) { /* a small file read now that failed: a failed row, the others go on */
+            cc_log(s->pf, "bimble-ccore: link_folder %s: %s", names[i], e.msg);
+            continue;
+        }
+        buf_puts(&done, names[i]), buf_putc(&done, 0), nd++;
+    }
+    for (size_t i = 0; i < n; i++) free(names[i]);
+    free(names);
+    if (nd && !done.oom) {
+        struct cc_links_undo u = {malloc(done.len), done.len, nd, s->open ? s->hist.nundo : 0};
+        if (u.paths) {
+            memcpy(u.paths, done.p, done.len);
+            if (push_entry(&s->links_undo, &s->nlinks_undo, &s->caplinks_undo, u)) free(u.paths);
+            else cc_links_undo_clear_redo(s);
+        }
+    }
+    buf_free(&done);
+    *added = nd;
+    return nd ? 0 : -1;
+}
+/* ---- end LINKF ---- */

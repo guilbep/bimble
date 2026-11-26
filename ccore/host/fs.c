@@ -346,6 +346,27 @@ end:
     return rc;
 }
 
+/* LINKF: action link_folder {path}: the folder must be under a root, as fs_list's `dir` (fs.h). */
+int cc_host_fs_check_link_folder(const char *body, size_t n, Buf *out) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = n ? jr_parse(&a, body, n, &je) : NULL;
+    const JrVal *d = v && v->type == JR_OBJ ? jr_get(v, "path") : NULL;
+    int rc = -1;
+    char nd[FS_MAX_PATH + 2], rd[FS_MAX_PATH + 1];
+    const cc_platform *pf = cc_platform_native();
+    if (d && d->type == JR_STR && strlen(d->s) == d->n && d->n && d->n <= FS_MAX_PATH) {
+        int lx = fsr_normalise(d->s, FSR_WIN, nd, sizeof nd);
+        if (lx == FSR_DEVICE || (lx == FSR_UNC && !unc_root())) buf_puts(out, "link_folder: path: network and device paths are refused"), rc = CC_ERR;
+        else if (lx == FSR_BAD) buf_puts(out, "link_folder: path: an absolute path"), rc = CC_ERR;
+        else if (!in_roots_lexical(nd) || (!pf->real_path(pf->ctx, d->s, rd, sizeof rd) && !in_roots(rd)))
+            buf_puts(out, "link_folder: the folder is " FS_OUTSIDE), rc = CC_ERR;
+    }
+    arena_free(&a);
+    return rc; /* -1: the session answers (also a body it refuses) */
+}
+
 int cc_host_fs_query(const char *name, const char *body, size_t n, Buf *out) {
     if (!strcmp(name, "fs_list")) return fs_list(body, n, out);
     if (!strcmp(name, "fs_home")) { /* {purpose?}: also the folder that purpose listed last */
