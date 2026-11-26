@@ -347,6 +347,20 @@ async function main() {
     await P.js("sh.send({ do: 'showView' }); return 1");
     await sleep(500);
     await walk(P, "native, editable", { model: true });
+    // FIXUI 3: an error line of the Modify panel (a bad vector) before another file opens: it must
+    // not stay over the next model's selection (it stayed after a convert).
+    {
+      await P.js("sh.send({ do: 'showView' }); b.select([b.query('elements', { limit: 1 })[0].id]); return 1");
+      await sleep(400);
+      await P.evalJs("(() => { const i = document.querySelector('[data-bb=modifier] .vec input'); i.value = 'x'; i.dispatchEvent(new Event('input')); return 1; })()");
+      await P.click("[data-bb=modifier-run]");
+      await sleep(200);
+      const shownErr = await P.evalJs("!!document.querySelector('[data-bb=modifier] .error')");
+      check("native, editable: a bad vector shows the Modify panel's error line", shownErr);
+      await P.js("b.select([]); return 1");
+      await sleep(500); // the page settles (its view panel asks the model's classes) before the agent's open
+
+    }
     const o2 = await host("action", "open", JSON.stringify({ path: join(tmp, "frame.ifc"), discard: true }));
     check("native: open frame.ifc read only", o2.status === 200, o2.text);
     await waitFor("the IFC in the page", 10000, () => P.js("return b.state.value.file === 'frame.ifc' && b.state.value.editable === false"));
@@ -384,6 +398,22 @@ async function main() {
         `${JSON.stringify(got)} want ${JSON.stringify(want)} class ${cls}`);
       check("native, read-only IFC: Properties show storey, material, family, volume (Rust's rows)",
         !!got && /Volume [0-9]+\.[0-9]{3} m³/.test(got.text) && /Family|Famille/.test(got.text), JSON.stringify(got));
+      // FIXUI 3: the Modify panel on a read-only file: the edits disabled (they looked enabled, Delete
+      // answered "this file is read only"), the earlier model's error line gone.
+      const mod = JSON.parse(await P.evalJs(`JSON.stringify((() => { const m = document.querySelector('[data-bb=modifier]');
+        if (!m) return null;
+        const tools = [...m.querySelectorAll('.tools .tool')].slice(0, 4).map((x) => x.getAttribute('aria-disabled') === 'true');
+        return { tools, run: m.querySelector('[data-bb=modifier-run]')?.disabled ?? null, del: m.querySelector('[data-bb=modifier-delete]')?.disabled ?? null,
+          inputs: [...m.querySelectorAll('.vec input')].every((i) => i.disabled), ro: m.querySelector('[data-bb=modifier-readonly]')?.textContent ?? null,
+          error: m.querySelector('.error')?.textContent ?? null }; })())`));
+      check("native, read-only IFC: Modify's Move, Copy, Rotate, Mirror, the vector, Move by and Delete are disabled, with why",
+        !!mod && mod.tools.length === 4 && mod.tools.every(Boolean) && mod.run === true && mod.del === true && mod.inputs && /Read-only/.test(mod.ro ?? ""), JSON.stringify(mod));
+      check("native, read-only IFC: no error line left from the editable model", !!mod && mod.error === null, JSON.stringify(mod));
+      const r0 = P.errors.length;
+      await P.click("[data-bb=modifier-delete]");
+      await sleep(300);
+      check("native, read-only IFC: a click on the disabled Delete sends nothing, shows no error",
+        P.errors.length === r0 && !(await P.evalJs("!!document.querySelector('[data-bb=modifier] .error')")), P.errors.slice(r0).join(" | "));
       check("native, read-only IFC: no 4xx/5xx nor console error during the selection", P.errors.length === e0, P.errors.slice(e0).join(" | "));
       await P.js("b.select([]); return 1");
       P.seen = P.errors.length;
