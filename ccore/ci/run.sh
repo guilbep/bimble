@@ -7,7 +7,9 @@
 #         builds, test/run.sh with tcc, wasm_run, host.sh, build.sh wasm-view and
 #         release, the weight table (tools/weight.mjs, ticket SIZE1), every test/*.mjs suite but
 #         lab_* (a new test/<name>.mjs is picked up without an
-#         edit here; dev_test last: it rebuilds out/tcc/bimble-ccore through dev.sh).
+#         edit here; dev_test last: it rebuilds out/tcc/bimble-ccore through dev.sh); before them
+#         the README's Status block against the committed reports (tools/status.mjs --check) and
+#         the parity tool's check of the C host (tools/parity.mjs --check; ticket FIXDOC).
 #   san   test/run.sh with clang, ASan and UBSan (the job ccore-san).
 #   lab   build.sh tcc and wasm, then every test/lab_*.mjs but lab_boot (host.sh runs it): the
 #         Chromium suites (the job ccore-lab); then the performance report (tools/perf.mjs,
@@ -127,6 +129,13 @@ labs() {
     suite perf node tools/perf.mjs --prebuilt --out "$LOGS/perf.md"
     grep '^perf: ' "$LOGS/perf.log" | sed 's/^/      /'
 }
+# FIXDOC: the README's Status block must equal what tools/status.mjs writes from the committed
+# reports (before tools/weight.mjs below rewrites results/weight.md for this machine), and the
+# parity tool runs the C host on its scenarios (fails on a crash, a 5xx or malformed JSON only).
+docs_checks() {
+    suite status node tools/status.mjs --check
+    suite parity node tools/parity.mjs --check
+}
 unit_rest() {
     # The viewer-only wasm and its 400 KB budget (ADR 0069), for test/wasm_view_run.mjs below.
     suite build-wasm-view ./build.sh wasm-view
@@ -148,10 +157,10 @@ unit_rest() {
 
 case "$mode" in
     fast) suite build-tcc ./build.sh tcc; unit_c; san; gate_rest ;;
-    unit) suite build-tcc ./build.sh tcc; unit_c; gate_rest; unit_rest ;;
+    unit) suite build-tcc ./build.sh tcc; unit_c; gate_rest; docs_checks; unit_rest ;;
     san) san ;;
     lab) labs ;;
-    full) suite build-tcc ./build.sh tcc; unit_c; san; gate_rest; labs; unit_rest ;;
+    full) suite build-tcc ./build.sh tcc; unit_c; san; gate_rest; docs_checks; labs; unit_rest ;;
     clang) suite run-clang env CC=clang test/run.sh; suite host env HOST_BUILD=native test/host.sh ;;
 esac
 

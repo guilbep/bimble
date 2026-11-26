@@ -1,15 +1,16 @@
 # Developing Bimble
 
 The fast loop for the C core (`ccore/`) behind the Vue lab (`web-ui/`). Every command below was run
-on the dev machine (16 GB aarch64 Linux, 25 Nov 2026); the times are from those runs. Run them from
+on the dev machine (16 GB aarch64 Linux, 25 Nov 2026). A time in the table comes from the report it
+names, with that report's conditions; a command with no report has no time. Run the commands from
 the repository root unless a line says otherwise.
 
 | Task | Command | Time |
 |---|---|---|
-| Edit C, see it in the lab | `make dev` (or `cd web-ui && npm run dev`) | edit → pixels ≈ 0.23 s |
-| One suite | `ccore/test/run.sh json fmt` | 0.4 s (tcc), 3.4 s (clang) |
-| The gate of every change | `make gate` (`ccore/ci/run.sh fast`) | 68 s |
-| Everything CI runs on Linux | `make full` (`ccore/ci/run.sh full`) | 12 min (machine loaded) |
+| Edit C, see it in the lab | `make dev` (or `cd web-ui && npm run dev`) | edit written → new pixels 0.23 s median: 72 elements, host built by tcc, SwiftShader, the watcher's delay not timed (`ccore/results/bench.md`); 2.1 s at 20,000 elements (`large.md`) |
+| One suite | `ccore/test/run.sh json fmt` | seconds (no report) |
+| The gate of every change | `make gate` (`ccore/ci/run.sh fast`) | minutes (no report; the last line of the run prints its time) |
+| Everything CI runs on Linux | `make full` (`ccore/ci/run.sh full`) | 836 s, 57 suites, machine loaded (`ccore/results/ci.md`, ticket WIN2) |
 | Editor include paths | nothing: `ccore/compile_flags.txt` is committed | |
 
 ## 1. Prerequisites (once)
@@ -40,9 +41,11 @@ make dev                    # = ccore/dev.sh = cd web-ui && npm run dev
 `dev.sh` builds the host with tcc, starts Vite on 5173 and the native host on 47400 on a scratch
 copy of `ccore/golden/frame.json`, and prints the lab URL
 (`http://localhost:5173/?native=1&gl=1&port=47400&token=…`). Open it once. Then save any `*.c` or
-`*.h` in `ccore/src`, `ccore/session` or `ccore/host`: the host is rebuilt (41 ms here) and
-restarted on the same port, token and model; the open page re-syncs by itself. A compile error is
-printed and the old host keeps running. Edit → pixels: 233 ms median (`ccore/results/bench.md`).
+`*.h` in `ccore/src`, `ccore/session` or `ccore/host`: the host is rebuilt (`build.sh host`, 73 ms
+median in `ccore/results/bench.md`) and restarted on the same port, token and model; the open page
+re-syncs by itself. A compile error is printed and the old host keeps running. Edit written → new
+pixels: 233 ms median on the 72-element frame, headless Chromium with SwiftShader, timed from the
+edit written (the watcher's delay is not in it); 2.1 s at 20,000 elements (`large.md`).
 
 - Another model: `ccore/dev.sh path/to/model.bimble` (or `.ifc`, `.json`).
 - Other ports: `CCORE_DEV_PORT=47500 CCORE_DEV_VITE=5180 ccore/dev.sh`.
@@ -169,11 +172,17 @@ it serves, and the page never guesses (FAKE1, `web-ui/src/shell/capability.ts`).
   builds (`ci/run.sh unit|full` runs it); writes `ccore/results/weight.md`.
 - `node ccore/tools/perf.mjs [--full]`: Lighthouse and our own marks on the production build of the
   C lab; writes `ccore/results/perf.md`.
-- `node ccore/tools/parity.mjs [--write]`: the C host against the committed Rust answers
-  (`ccore/golden/parity/`); writes `ccore/results/parity.md`. `--rust` needs the Rust tree
-  (section 8).
-- `ccore/bench/corpus.sh fetch|asan|run|ios|report`: the public IFC corpora (617 STEP files)
-  read by C (and by Rust and IfcOpenShell when present); `ccore/results/ifc_corpus.md`.
+- `node ccore/tools/parity.mjs [--write|--check]`: the C host against the committed Rust answers
+  (`ccore/golden/parity/`, dumped from a development build that reports 0.18.1); writes
+  `ccore/results/parity.md`, whose header says what the counts support and what they do not.
+  `--check` (in `ci/run.sh unit|full`) fails only on a crash, a 5xx or malformed JSON. `--rust`
+  needs the Rust tree (section 8).
+- `ccore/bench/corpus.sh fetch|asan|run|ios|report`: the public IFC corpora (617 STEP files; the
+  38 non-STEP files are refused and 173 git-lfs pointers are not fetched) read by C (and by Rust and
+  IfcOpenShell when present); `ccore/results/ifc_corpus.md`.
+- `node ccore/tools/status.mjs [--write|--check]`: the README's Status block from the reports above
+  (each number with its source and conditions). After a report changes, run `--write` and commit
+  README.md with it: `ci/run.sh unit|full` runs `--check` and fails on a stale block.
 - `ccore/tools/ifc_dump`: built by `build.sh tcc|native`, dumps what C reads or imports from any
   IFC file (`ccore/README.md`).
 
