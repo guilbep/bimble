@@ -202,6 +202,17 @@ async function tab(S, evalJs) {
   ms = await timed("side angle 390 refused", "[data-bb=settingout-rotation_deg]", type("390"), "!!document.querySelector('[data-bb=settingout-error]')");
   check("side panel: 390° refused with the verb's reason", ms !== null && (await so()).north.rotation_deg === 30);
 
+  // ---- WAVE1B (A5): the same georeference fields on the Project information page (before A5 the
+  // page showed them as a read-only line: no such field, the check fails there) ----
+  await evalJs(`(async () => { const s = await import('/src/shell/send.ts'); s.send({ do: "showPage", page: "project-info" }); })()`);
+  await waitFor("Project information", 5000, () => exists("[data-bb=project-georef-east_m]")).catch(() => {});
+  check("Project information: the georeference's fields (system, east, north, height, angles)", (await evalJs("document.querySelectorAll('[data-bb^=project-georef-]').length")) >= 6);
+  ms = await timed("project info: east", "[data-bb=project-georef-east_m]", type("2600100"), "b.settingOut.value?.base_point.survey_m[0] === 2600100");
+  check("Project information: east 2600100 -> the base point's survey east, one step (georef_set)", ms !== null);
+  ms = await timed("project info: east back", "[data-bb=project-georef-east_m]", type("2600000"), "b.settingOut.value?.base_point.survey_m[0] === 2600000");
+  await evalJs(`(async () => { const s = await import('/src/shell/send.ts'); s.send({ do: "showView" }); })()`);
+  await waitFor("the view again", 5000, async () => !(await exists("[data-bb=project-info]"))).catch(() => {});
+
   // ---- the survey point ----
   ms = await timed("survey X", "[data-bb=settingout-survey-X]", type("12000"), "b.settingOut.value?.survey_point.set && b.settingOut.value.survey_point.at_mm[0] === 12000");
   check("survey point X 12000 -> placed, its survey coordinates move", ms !== null && (await so()).survey_point.survey_m[0] !== 2600000, JSON.stringify((await so()).survey_point));

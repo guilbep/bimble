@@ -11,6 +11,7 @@ export const fr = {
   "projectinfo.phase_description": "Description de la phase",
   "projectinfo.end_date": "Date de fin",
   "projectinfo.ifc": "Paramètres IFC",
+  "projectinfo.georef": "Géoréférencement", // WAVE1B (A5)
   "projectinfo.schema": "Schéma",
   "projectinfo.team": "Équipe de projet",
   "projectinfo.addMember": "Ajouter un intervenant",
@@ -47,6 +48,7 @@ export const en: Record<keyof typeof fr, string> = {
   "projectinfo.phase_description": "Phase description",
   "projectinfo.end_date": "End date",
   "projectinfo.ifc": "IFC parameters",
+  "projectinfo.georef": "Georeference", // WAVE1B (A5)
   "projectinfo.schema": "Schema",
   "projectinfo.team": "Project team",
   "projectinfo.addMember": "Add a team member",

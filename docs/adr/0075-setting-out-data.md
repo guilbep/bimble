@@ -115,6 +115,11 @@ SLAB1).
     every object kind at once, kept for its own ticket with a hand-computed test on a rotated
     georeference; the side panel's E, N, H fields already set the base point's survey values.
 
+16. **The georeference on the Project information page too** (WAVE1B A5): the system, the base
+    point's east, north, height and the two angles, each one `georef_set` step, the same fields as
+    the Setting out panel (one verb, two surfaces). *Alternative:* a link from the page to the
+    panel: the page is where an engineer looks for the project's survey data.
+
 ## Consequences
 
 - The tab has no dead control: 7 of its 8 controls act (Survey point, Project base point, True /

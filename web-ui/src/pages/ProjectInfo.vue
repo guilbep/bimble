@@ -10,6 +10,7 @@ export const capability = "project_info", editable = true; // FAKE1: query proje
 // (the native `change` event) sends one SetProject with the whole map; undo restores it.
 import { computed, nextTick, ref } from "vue";
 import { project, state, setProject, setProjectField, northInfo, coordinates } from "../bimble";
+import { georefSet, type GeorefPatch } from "../bimble"; // WAVE1B (A5)
 import { t } from "../i18n";
 import { currentDialog } from "../dialogs";
 import NotAvailable from "../shell/NotAvailable.vue"; // FAKE1
@@ -29,6 +30,29 @@ const georefText = computed(() => {
   return n && c ? `${n.crs ?? "—"} · ${c.text} · ${n.rotation_deg}°` : "—";
 });
 // ---- end G2 ----
+// ---- WAVE1B (A5): the georeference's fields here too (verb georef_set, one undoable step each), as
+// the Setting out panel edits them: system, the base point's east, north and height, the angles ----
+type GNum = "east_m" | "north_m" | "height_m" | "rotation_deg" | "map_rotation_deg";
+const geoVer = ref(0);
+const geoError = ref<string | null>(null);
+const geoFields = computed((): { k: GNum; unit: string; v: number | null }[] => {
+  void state.value.rev; void geoVer.value;
+  const n = northInfo.value, b = n ? coordinates([0, 0, 0])?.survey ?? null : null;
+  return [
+    { k: "east_m", unit: "m", v: b ? b[0] : null }, { k: "north_m", unit: "m", v: b ? b[1] : null }, { k: "height_m", unit: "m", v: b ? b[2] : null },
+    { k: "rotation_deg", unit: "°", v: n ? n.rotation_deg : null }, { k: "map_rotation_deg", unit: "°", v: n ? n.map_rotation_deg : null },
+  ];
+});
+const geoShow = (v: number | null) => (v === null ? "" : String(Math.round(v * 1e6) / 1e6));
+const geoApply = (patch: GeorefPatch) => { geoError.value = georefSet(patch); geoVer.value++; };
+function geoNum(k: GNum, e: Event) {
+  const txt = (e.target as HTMLInputElement).value.trim().replace(",", ".");
+  const v = Number(txt);
+  if (txt === "" || !Number.isFinite(v)) { geoError.value = t("settingout.badNumber"); geoVer.value++; return; }
+  geoApply({ [k]: v });
+}
+const GEO_LABEL: Record<GNum, Parameters<typeof t>[0]> = { east_m: "settingout.east", north_m: "settingout.north", height_m: "settingout.elevation", rotation_deg: "settingout.angle", map_rotation_deg: "settingout.mapAngle" };
+// ---- end WAVE1B ----
 
 function commit(key: string, e: Event) {
   const v = (e.target as HTMLInputElement).value;
@@ -86,6 +110,17 @@ function cancelAdd() {
         <!-- G2: the georeference (IfcMapConversion on export), edited in the Setting out tab's panel -->
         <span class="k">IfcMapConversion</span><span class="mono" data-bb="project-georef">{{ georefText }}</span>
         <!-- end G2 -->
+      </div>
+      <!-- WAVE1B (A5): the georeference, editable here as in the Setting out panel -->
+      <h2 style="font-size:20px;margin-top:14px" data-bb="project-georef-title">{{ t('projectinfo.georef') }}</h2>
+      <p v-if="geoError" class="banner b-o" role="alert" data-bb="project-georef-error">{{ t('projectinfo.error', { msg: geoError }) }}</p>
+      <div :key="geoVer" class="ifc">
+        <label class="k" for="pi-geo-crs">{{ t('settingout.system') }}</label>
+        <input id="pi-geo-crs" class="inp mono" :value="northInfo?.crs ?? ''" placeholder="EPSG:2056" data-bb="project-georef-crs" @change="geoApply({ crs: ($event.target as HTMLInputElement).value.trim() })">
+        <template v-for="f in geoFields" :key="f.k">
+          <label class="k" :for="`pi-geo-${f.k}`">{{ t(GEO_LABEL[f.k]) }} ({{ f.unit }})</label>
+          <input :id="`pi-geo-${f.k}`" class="inp mono" style="text-align:right" :value="geoShow(f.v)" :data-bb="`project-georef-${f.k}`" @change="geoNum(f.k, $event)">
+        </template>
       </div>
     </section>
     <section class="col" style="gap:10px">

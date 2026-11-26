@@ -626,6 +626,7 @@ export type PartKey =
   | "projectinfo.contact"
   | "projectinfo.end_date"
   | "projectinfo.error"
+  | "projectinfo.georef"
   | "projectinfo.hint"
   | "projectinfo.ifc"
   | "projectinfo.mine"
