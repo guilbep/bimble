@@ -3,6 +3,10 @@ manifold (3D mesh boolean kernel, C++), by Emmett Lalish and contributors; with 
 URL:     https://github.com/elalish/manifold
 Tag:     v3.5.3 (commit 0edd9d54876f3135e431575214dd6d8a72866fee), the version the Rust side
          links through the manifold-csg-sys 3.5.105 crate (its build.rs MANIFOLD_VERSION).
+         deps.sh checks the clone's commit (MANIFOLD_COMMIT) and, after the configure, the
+         Clipper2 commit that manifold's cmake fetched (CLIPPER2_COMMIT
+         46f639177fe418f9689e8ddb74f08a870c71f5b4, pinned by cmake/manifoldDeps.cmake at that
+         commit, with manifold's carry patch 0001-clipper2-no-iostream.patch).
 Licence: Apache License 2.0 (manifold); Boost 1.0 (Clipper2). Both allow static linking into
          Bimble (MIT); a binary distribution carries their licence texts and NOTICE.
 Files:   none committed here (no sources, no binaries). ccore/deps.sh clones the tag and builds it

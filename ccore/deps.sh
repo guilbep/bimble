@@ -3,7 +3,8 @@
 # in out/deps/manifold/ (include/manifold/*.h, lib/libmanifoldc.a libmanifold.a libClipper2.a,
 # and lib/libmanifoldc.so for tcc, which cannot link C++ static archives). Nothing is committed:
 # vendor/manifold/SOURCE records the pinned version and the licence.
-#   deps.sh            clone the pinned tag and build it with cmake (the options of the
+#   deps.sh            clone the pinned tag, check its commit (MANIFOLD_COMMIT; Clipper2's after
+#                      the configure: CLIPPER2_COMMIT), and build it with cmake (the options of the
 #                      manifold-csg-sys crate Rust uses: no TBB, static, C binding on; SIZE1: one
 #                      section per function, so build.sh release's --gc-sections drops the unused
 #                      ones: the kernel 1.13 MB -> 0.41 MB in the program). Minutes.
@@ -23,8 +24,43 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/portable.sh"
 
 MANIFOLD_TAG=v3.5.3 # manifold-csg-sys 3.5.105 (build.rs MANIFOLD_VERSION)
+# FIXDOC: the commit the tag named on 26 Nov 2026 (`git ls-remote https://github.com/elalish/manifold
+# refs/tags/v3.5.3`): a tag can move, the clone must be this commit or deps.sh stops.
+MANIFOLD_COMMIT=0edd9d54876f3135e431575214dd6d8a72866fee
+# Clipper2 is fetched by manifold's cmake (cmake/manifoldDeps.cmake, FetchContent_Declare with
+# GIT_TAG pinned to this commit at MANIFOLD_COMMIT). Checked after the configure: another commit
+# (a changed manifold, a FETCHCONTENT_SOURCE_DIR_CLIPPER2 from the environment) stops deps.sh.
+CLIPPER2_COMMIT=46f639177fe418f9689e8ddb74f08a870c71f5b4
 MANIFOLD_URL=https://github.com/elalish/manifold.git
 DEPS_OUT=out/deps/manifold
+
+# deps_fetch <src dir>: the pinned manifold source in <src dir> (cloned when missing), its HEAD
+# checked against MANIFOLD_COMMIT.
+deps_fetch() {
+    local src=$1 head
+    [[ -d $src/.git ]] || git clone --depth 1 --branch "$MANIFOLD_TAG" "$MANIFOLD_URL" "$src"
+    head=$(git -C "$src" rev-parse HEAD)
+    if [[ $head != "$MANIFOLD_COMMIT" ]]; then
+        echo "deps.sh: $src is manifold $head, not the pinned $MANIFOLD_COMMIT ($MANIFOLD_TAG):" \
+            "the tag moved, or an older clone; delete $src and run deps.sh again" >&2
+        return 1
+    fi
+    echo "manifold $MANIFOLD_TAG at $head (pinned)"
+}
+
+# deps_check_clipper2 <cmake build dir>: the Clipper2 that cmake fetched is CLIPPER2_COMMIT.
+deps_check_clipper2() {
+    local c=$1/_deps/clipper2-src head
+    head=$(git -C "$c" rev-parse HEAD 2> /dev/null) || {
+        echo "deps.sh: no git checkout of Clipper2 in $c: cannot check its commit" >&2
+        return 1
+    }
+    if [[ $head != "$CLIPPER2_COMMIT" ]]; then
+        echo "deps.sh: Clipper2 in $c is $head, not the pinned $CLIPPER2_COMMIT" >&2
+        return 1
+    fi
+    echo "Clipper2 at $head (pinned)"
+}
 
 # deps_import <cmake build dir> <source tree>: copy the libraries and the header, make the .so
 # (not on macOS: see the header).
@@ -84,7 +120,7 @@ deps_main() {
         return
     fi
     local src=out/deps/src/manifold bld=out/deps/build/manifold
-    [[ -d $src/.git ]] || git clone --depth 1 --branch "$MANIFOLD_TAG" "$MANIFOLD_URL" "$src"
+    deps_fetch "$src" || exit 1
     local cxxflags="-ffunction-sections -fdata-sections"
     # WIN2: MSYS2 CLANG64's libc++ (LLVM 23) no longer includes <iterator> and <istream> through
     # other headers: Clipper2 uses std::back_inserter, manifold's headers std::istream without
@@ -96,6 +132,7 @@ deps_main() {
         -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DMANIFOLD_PAR=OFF \
         "-DCMAKE_C_FLAGS=-ffunction-sections -fdata-sections" "-DCMAKE_CXX_FLAGS=$cxxflags" \
         ${CMAKE_OSX_ARCHITECTURES:+"-DCMAKE_OSX_ARCHITECTURES=$CMAKE_OSX_ARCHITECTURES"}
+    deps_check_clipper2 "$bld" || exit 1
     cmake --build "$bld" -j "${JOBS:-2}"
     deps_import "$bld" "$src"
     echo "manifold $MANIFOLD_TAG built into $DEPS_OUT"
