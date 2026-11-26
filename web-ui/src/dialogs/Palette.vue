@@ -13,11 +13,14 @@ import { t } from "../i18n";
 import { RIBBON, type RibbonTool } from "../shell/ribbon-tabs";
 import { viewName } from "../shell/viewName";
 import { shortcutFor } from "../shell/keys"; // KEY1: the shortcut shown is the one the key table runs
+import { notYetAction } from "../shell/capability"; // DEAD1
 import { currentDialog } from ".";
 import { send } from "../shell/send";
 import { pickedSchedule } from "../pages/quantitiesPick";
 
-interface Item { /** The Rust action name, for actions. */ name?: string; label: string; /** Also searched: the Rust (English) label. */ also?: string; note: string; kbd: string; icon: string; enabled: boolean; go: () => string | null }
+interface Item { /** The Rust action name, for actions. */ name?: string; label: string; /** Also searched: the Rust (English) label. */ also?: string; note: string; kbd: string; icon: string; enabled: boolean; go: () => string | null;
+  /** DEAD1: a disabled row says why: "not available yet" (an action of a capability this core does not serve), or the ribbon tool's reason it is off now. */
+  notYet?: boolean; why?: string | undefined }
 
 // Icons copied from the reference (and the navigator's, for plans).
 const CUBE = '<path d="M12 3 20 7v10l-8 4-8-4V7z"/><path d="M4 7l8 4 8-4M12 11v10"/>';
@@ -46,6 +49,9 @@ const items = computed<Item[]>(() => {
       icon: tool?.icon ?? "",
       enabled: a.enabled,
       go: () => runAction(a.name),
+      // DEAD1: why a row is off: not served by this core (capability), else the ribbon's reason, if any
+      notYet: !a.enabled && notYetAction(a.name),
+      why: a.enabled ? undefined : notYetAction(a.name) ? t("na.tooltip", { name: copy(`action.${a.name}`, a.label) }) : tool?.offTip ? `${copy(`action.${a.name}`, a.label)}: ${t(tool.offTip)}` : undefined,
     };
   });
   for (const v of openViews.value.views) {
@@ -143,9 +149,9 @@ onBeforeUnmount(() => ro?.disconnect());
       <div style="border-top:1px solid var(--bb-sunk)"></div>
       <div ref="list" class="rows" data-bb="palette-list">
         <a v-for="(item, i) in shown" :key="i" href="#" class="ti" :class="{ sel: i === index, off: !item.enabled }" style="padding:8px 12px;gap:12px"
-          :aria-disabled="!item.enabled || undefined" data-bb="palette-item" @click.prevent="run(i)">
+          :aria-disabled="!item.enabled || undefined" :title="item.why" :data-not-yet="item.notYet ? '' : undefined" data-bb="palette-item" @click.prevent="run(i)">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="item.icon"></svg>
-          <span class="lab">{{ item.label }}</span><span class="note">{{ item.note }}</span><span class="kbd">{{ item.kbd }}</span>
+          <span class="lab">{{ item.label }}</span><span v-if="item.notYet" class="note ny" data-bb="palette-not-yet">{{ t('palette.notYet') }}</span><span class="note">{{ item.note }}</span><span class="kbd">{{ item.kbd }}</span>
         </a>
       </div>
       <div class="note" style="padding:4px 12px" data-bb="palette-help">{{ t('palette.help') }}</div>

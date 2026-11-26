@@ -517,6 +517,7 @@ export type PartKey =
   | "palette.goto"
   | "palette.help"
   | "palette.hint"
+  | "palette.notYet"
   | "palette.query"
   | "palette.title"
   | "paperview.failed"

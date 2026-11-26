@@ -36,6 +36,8 @@ const format = ref<"pdf" | "svg">("pdf");
 // SIZE1: the font choice (asked once, when the dialog opens).
 const font = ref<PdfFont>("helvetica");
 const roboto = pdfFonts().roboto;
+/** DEAD1: a choice not served yet says so (its tooltip; data-not-yet for the tools). */
+const ny = (name: string) => t("na.tooltip", { name });
 const failed = ref<string | null>(null);
 const busy = ref(false);
 
@@ -130,7 +132,7 @@ async function exportSheets() {
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn s" type="button" @click="all">{{ t('export.all') }}</button>
-          <button class="btn s" type="button" disabled data-missing="sheets: a revision filter (current revision per sheet)">{{ t('export.revisionOnly') }}</button>
+          <button class="btn s" type="button" disabled data-not-yet :title="ny(t('export.revisionOnly'))" data-missing="sheets: a revision filter (current revision per sheet)">{{ t('export.revisionOnly') }}</button>
         </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:10px">
@@ -138,13 +140,13 @@ async function exportSheets() {
           <span class="seg" style="align-self:flex-start" data-bb="export-format">
             <button type="button" :class="{ on: format === 'pdf' }" :aria-pressed="format === 'pdf'" data-bb="export-pdf" @click="format = 'pdf'">PDF</button>
             <button type="button" :class="{ on: format === 'svg' }" :aria-pressed="format === 'svg'" data-bb="export-svg" @click="format = 'svg'">SVG</button>
-            <button type="button" disabled data-missing="sheet_dxf: a DXF sheet export query">DXF</button>
-            <button type="button" disabled data-missing="print: no printer on the web">{{ t('export.printer') }}</button>
+            <button type="button" disabled data-not-yet :title="ny('DXF')" data-missing="sheet_dxf: a DXF sheet export query">DXF</button>
+            <button type="button" disabled data-not-yet :title="ny(t('export.printer'))" data-missing="print: no printer on the web">{{ t('export.printer') }}</button>
           </span></div>
         <div v-if="format === 'pdf'" class="fld"><span class="lbl">{{ t('export.font') }}</span>
           <span class="seg" style="align-self:flex-start" data-bb="export-font">
             <button type="button" :class="{ on: font === 'helvetica' }" :aria-pressed="font === 'helvetica'" data-bb="export-font-helvetica" @click="font = 'helvetica'">Helvetica</button>
-            <button type="button" :class="{ on: font === 'roboto' }" :aria-pressed="font === 'roboto'" :disabled="!roboto" data-bb="export-font-roboto" @click="font = 'roboto'">Roboto</button>
+            <button type="button" :class="{ on: font === 'roboto' }" :aria-pressed="font === 'roboto'" :disabled="!roboto" :title="roboto ? undefined : t('export.fontRobotoMissing')" data-bb="export-font-roboto" @click="font = 'roboto'">Roboto</button>
           </span>
           <span v-if="!roboto" class="note" data-bb="export-font-note">{{ t('export.fontRobotoMissing') }}</span></div>
         <div v-if="what === 'sheets'" class="fld"><span class="lbl">{{ t('export.files') }}</span>
@@ -153,12 +155,12 @@ async function exportSheets() {
             <button type="button" :class="{ on: onePdf && format === 'pdf' }" :aria-pressed="onePdf && format === 'pdf'" :disabled="format !== 'pdf'" data-bb="export-one-pdf" @click="onePdf = true">{{ t('export.onePdf') }}</button>
           </span></div>
         <div class="fld"><label class="lbl" for="ex-names">{{ t('export.names') }}</label>
-          <input id="ex-names" class="inp mono" value="{project_number}-{level}-{sheet_number}-{revision}-{sheet_name}" disabled data-missing="export_name_template: a file-name template in Rust"></div>
+          <input id="ex-names" class="inp mono" value="{project_number}-{level}-{sheet_number}-{revision}-{sheet_name}" disabled data-not-yet :title="ny(t('export.names'))" data-missing="export_name_template: a file-name template in Rust"></div>
         <div class="note" data-missing="export_name_template: the example name">{{ t('export.example') }}<span class="mono" style="color:var(--bb-ink);font-size:12.5px">—</span></div>
         <div class="row" data-missing="standards: the pen set used by the export"><span class="k">{{ t('export.pens') }}</span><span>—</span></div>
         <div class="row" data-missing="sheet_svg: a colour option"><span class="k">{{ t('export.colour') }}</span><span>—</span></div>
         <div class="fld"><label class="lbl" for="ex-dir">{{ t('export.folder') }}</label>
-          <div style="display:flex;gap:8px"><input id="ex-dir" class="inp mono" style="flex:1" value="" disabled data-missing="export folder: the web downloads, no Rust file IO"><button class="btn s" type="button" disabled data-missing="export folder: the web downloads, no Rust file IO">{{ t('export.browse') }}</button></div></div>
+          <div style="display:flex;gap:8px"><input id="ex-dir" class="inp mono" style="flex:1" value="" disabled data-not-yet :title="ny(t('export.folder'))" data-missing="export folder: the web downloads, no Rust file IO"><button class="btn s" type="button" disabled data-not-yet :title="ny(t('export.browse'))" data-missing="export folder: the web downloads, no Rust file IO">{{ t('export.browse') }}</button></div></div>
       </div>
     </div>
     <div style="display:flex;gap:10px;align-items:center;justify-content:flex-end">

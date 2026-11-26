@@ -6,6 +6,7 @@ export const fr = {
   "palette.goto": "Aller à : {name}",
   "palette.help": "↑ ↓ pour choisir · Entrée pour lancer · chaque outil, vue, feuille et métré est ici",
   "palette.hint": "Palette de commandes ouverte",
+  "palette.notYet": "pas encore disponible",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "palette.title": "Command palette",
@@ -13,4 +14,5 @@ export const en: Record<keyof typeof fr, string> = {
   "palette.goto": "Go to: {name}",
   "palette.help": "↑ ↓ to choose · Enter to run · every tool, view, sheet and quantities list is here",
   "palette.hint": "Command palette open",
+  "palette.notYet": "not available yet",
 };

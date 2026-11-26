@@ -216,6 +216,15 @@ async function palette(mode, S, evalJs, log) {
   check(`${mode}: an empty query lists the recent action first`, first !== "" && first === boxLabel, `${first} vs ${boxLabel}`);
   await key("Escape", "Escape", 27);
   await B("return b.runAction('section_box');"); // off again (the native host keeps it across pages)
+  // DEAD1: a disabled row of an action this core does not serve says "not available yet" (Shared folder: collaboration)
+  await key("k", "KeyK", 75, 2);
+  await waitFor(`${mode}: the palette for Shared folder`, 5000, () => evalJs("document.activeElement?.dataset.bb === 'palette-query'")).catch(() => false);
+  await S("Input.insertText", { text: "shared folder" });
+  await sleep(300);
+  const sf = await evalJs(`(() => { const a = [...document.querySelectorAll('[data-bb=palette-item]')].find((x) => x.getAttribute('aria-disabled') === 'true');
+    return a ? { notYet: a.hasAttribute('data-not-yet'), title: a.title, mark: a.querySelector('[data-bb=palette-not-yet]')?.textContent ?? null } : null; })()`);
+  check(`${mode}: palette: a disabled row of a capability not served says "not available yet" (DEAD1)`, !!sf && sf.notYet && /not available yet/.test(sf.title) && sf.mark === "not available yet", JSON.stringify(sf));
+  await key("Escape", "Escape", 27);
   // DEAD1: "Go to: Concrete columns" (a schedule) shows the Quantities page on that schedule, and no
   // call is refused (the page asked the core to open a schedule as a view tab: 400; on wasm silently)
   await key("k", "KeyK", 75, 2);
