@@ -25,7 +25,7 @@ import { port } from "./ports.mjs";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const GOLD = join(CCORE, "golden/history");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("versions_test", 47318);
+const PORT = port("versions_test");
 const TOKEN = "versionstest-token";
 const base = `http://127.0.0.1:${PORT}`;
 let passed = 0, failed = 0;

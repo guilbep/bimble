@@ -1,5 +1,5 @@
 // The session file as an append-only log (ticket T18): node ccore/test/session_log_test.mjs
-// Starts out/tcc/bimble-ccore (or $HOST_BIN) with --session on 47382, on a temporary copy of
+// Starts out/tcc/bimble-ccore (or $HOST_BIN) with --session on <port>, on a temporary copy of
 // golden/frame.json. Checks: the fresh snapshot has no model text (the model is the file); each
 // change appends one line (the file is never rewritten for a change); a mix of places, undo, redo,
 // select and a save survives SIGKILL with the same elements, history, rev and selection; after a
@@ -20,7 +20,7 @@ import { port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("session_log", 47382);
+const PORT = port("session_log");
 const TOKEN = "session-log-test";
 const BASE = `http://127.0.0.1:${PORT}`;
 const tmp = mkdtempSync(join(tmpdir(), "ccore-session-log-"));

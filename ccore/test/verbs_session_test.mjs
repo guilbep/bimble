@@ -23,7 +23,7 @@ import { port } from "./ports.mjs";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const GOLDEN = join(CCORE, "golden");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("verbs_session", 47393);
+const PORT = port("verbs_session");
 const TOKEN = "verbs-session-test";
 const BASE = `http://127.0.0.1:${PORT}`;
 const tmp = mkdtempSync(join(tmpdir(), "ccore-verbs-session-"));

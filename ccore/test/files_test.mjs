@@ -1,5 +1,5 @@
 // The file actions of the native host (ticket A5): node ccore/test/files_test.mjs
-// Starts out/tcc/bimble-ccore (or $HOST_BIN) with no model on 47391 (CCORE_SEED=1) and checks,
+// Starts out/tcc/bimble-ccore (or $HOST_BIN) with no model on <port> (CCORE_SEED=1) and checks,
 // through POST /action/<name> with the optional body {"path", "discard"} (session/calls.c
 // file_action): new (lib.rs:1688: "Untitled", one storey "Level 0" at 0 mm, unsaved), save of a
 // new model refused (no file yet), open refused with unsaved changes, place, save as x.bimble (the
@@ -28,7 +28,7 @@ const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const G = join(CCORE, "golden");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
 const TOKEN = "files-test-token";
-const PORT = port("files_test", 47391), PORT2 = port("files_test2", 47392);
+const PORT = port("files_test"), PORT2 = port("files_test2");
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => {
   if (ok) passed++;

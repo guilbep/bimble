@@ -1,7 +1,7 @@
 // The lab's WebGL2 viewport against the C host (ticket 11a): node ccore/test/lab_gl.mjs
-// Starts out/tcc/bimble-ccore (or $HOST_BIN) on 47323 with CCORE_MODEL=golden/frame.json, Vite
-// from web-ui/ on 5193 (needs web-ui/node_modules), headless /usr/bin/chromium over raw CDP; opens
-// /?native=1&gl=1&port=47323&token=… and checks: the page draws a frame from GET /mesh; concrete
+// Starts out/tcc/bimble-ccore (or $HOST_BIN) on <port> with CCORE_MODEL=golden/frame.json, Vite
+// from web-ui/ on <port> (needs web-ui/node_modules), headless /usr/bin/chromium over raw CDP; opens
+// /?native=1&gl=1&port=<port>&token=… and checks: the page draws a frame from GET /mesh; concrete
 // grey as Rust shades a top face (207,207,204 ±6; fill 214,214,210, see below) covers > 5 % of the canvas and the background (247,247,245 ±2) is the
 // rest's main colour; no uncaught page error, no console error but the listed ones; a click on a
 // concrete pixel sends POST /select/- with one 22-character GlobalId (the stub host may answer
@@ -18,8 +18,8 @@ import { CHROMIUM, port, vitePort } from "./ports.mjs";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("lab_gl", 47323);
-const VITE = vitePort("lab_gl", 5193);
+const PORT = port("lab_gl");
+const VITE = vitePort("lab_gl");
 const TOKEN = "labgl-token";
 const PAGE = `http://localhost:${VITE}/?native=1&gl=1&port=${PORT}&token=${TOKEN}`;
 const tmp = mkdtempSync(join(tmpdir(), "ccore-lab-gl-"));

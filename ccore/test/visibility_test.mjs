@@ -29,7 +29,7 @@ import { port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("visibility_test", 47394);
+const PORT = port("visibility_test");
 const TOKEN = "vistest-token";
 const base = `http://127.0.0.1:${PORT}`;
 let passed = 0, failed = 0;

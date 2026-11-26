@@ -1,5 +1,5 @@
 // The dev loop (ccore/dev.sh) end to end: node ccore/test/dev_test.mjs
-// Starts dev.sh on test ports (host 47411, Vite 5199), waits for the lab URL, checks the host
+// Starts dev.sh on test ports (host <port>, Vite <port>), waits for the lab URL, checks the host
 // answers; then edits session/calls.c (a trailing comment, then without it) five times and checks
 // each save gives one "rebuilt in" line and a host with a new epoch; a syntax error prints the
 // compiler output while the old host still answers; the revert rebuilds. Every save is waited for
@@ -24,8 +24,8 @@ function writeAtomic(p, data) {
 }
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = port("dev_test", 47411);
-const VITE = vitePort("dev_test", 5199);
+const PORT = port("dev_test");
+const VITE = vitePort("dev_test");
 const EDITED = join(CCORE, "session/calls.c");
 const ORIGINAL = readFileSync(EDITED);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

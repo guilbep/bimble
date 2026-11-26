@@ -24,7 +24,7 @@ import { CHROMIUM, port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
-const PORT = port("lab_pages", 47365);
+const PORT = port("lab_pages");
 const ORIGIN = `http://localhost:${PORT}`;
 const tmp = mkdtempSync(join(tmpdir(), "ccore-lab-pages-"));
 const SITE = join(tmp, "site");

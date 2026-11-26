@@ -31,7 +31,7 @@ const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const G = join(CCORE, "golden");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
 const TOKEN = "fs1-test-token";
-const PORT = port("fs_test", 47300), PORT2 = port("fs_test2", 47301);
+const PORT = port("fs_test"), PORT2 = port("fs_test2");
 let passed = 0, failed = 0;
 const check = (name, ok, detail = "") => {
   if (ok) passed++;

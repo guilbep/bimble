@@ -1,7 +1,7 @@
 // The unchanged Vue lab boots against the C host (ticket 9a): node ccore/test/lab_boot.mjs
-// Adapted from web-ui/e2e/native-lab.mjs: starts out/tcc/bimble-ccore (no model) on 47312, Vite
-// from web-ui/ on 5191 (needs web-ui/node_modules: `npm ci` there), headless /usr/bin/chromium
-// over raw CDP; opens /?native=1&port=47312&token=…, waits for the first change to reach the page
+// Adapted from web-ui/e2e/native-lab.mjs: starts out/tcc/bimble-ccore (no model) on <port>, Vite
+// from web-ui/ on <port> (needs web-ui/node_modules: `npm ci` there), headless /usr/bin/chromium
+// over raw CDP; opens /?native=1&port=<port>&token=…, waits for the first change to reach the page
 // and checks: no uncaught page error; no console error but the listed ones; startError is null;
 // the ribbon renders with tools; the page holds the host's 56 actions (Rust's 54 + ISS72's 2). Prints
 // "N passed, M failed"; exits non-zero on a failure. Kills all it starts.
@@ -15,8 +15,8 @@ import { CHROMIUM, port, vitePort } from "./ports.mjs";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("lab_boot", 47312);
-const VITE = vitePort("lab_boot", 5191);
+const PORT = port("lab_boot");
+const VITE = vitePort("lab_boot");
 const TOKEN = "labboot-token";
 const PAGE = `http://localhost:${VITE}/?native=1&port=${PORT}&token=${TOKEN}`;
 const tmp = mkdtempSync(join(tmpdir(), "ccore-lab-boot-"));

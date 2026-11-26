@@ -23,8 +23,8 @@ import { CHROMIUM, port, vitePort } from "./ports.mjs";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("lab_export", 47306);
-const VITE = vitePort("lab_export", 5196);
+const PORT = port("lab_export");
+const VITE = vitePort("lab_export");
 const TOKEN = "labexport-token";
 const MODEL_PUBLIC = join(UI, "public/ccore/d7-model.json");
 const PAGES = {

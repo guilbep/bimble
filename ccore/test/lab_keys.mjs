@@ -38,8 +38,8 @@ import { CHROMIUM, port, vitePort } from "./ports.mjs";
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("lab_keys", 47404);
-const VITE = vitePort("lab_keys", 5214);
+const PORT = port("lab_keys");
+const VITE = vitePort("lab_keys");
 const TOKEN = "labkeys-token";
 const PAGES = {
   native: `http://localhost:${VITE}/?native=1&gl=1&port=${PORT}&token=${TOKEN}`,

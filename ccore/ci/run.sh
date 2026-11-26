@@ -19,8 +19,11 @@
 # Prints one line per suite (ok or FAIL, seconds, the "N passed, M failed" sums of its log) and a
 # last line "ci: N suites, M failed". A suite fails on a non-zero exit, a line that starts with
 # FAIL, or a "failed" count above 0. Every suite runs, even after a failure. Exits 1 on a failure.
-# Logs: ccore/out/ci/<suite>.log. CCORE_PORT_BASE defaults to auto (test/ports.mjs), so runs in two
-# worktrees never share a port. CCORE_CI_TIMEOUT: seconds per suite (default 900).
+# Logs: ccore/out/ci/<suite>.log (CCORE_CI_LOGS: another directory). CCORE_PORT_BASE defaults to
+# auto (test/ports.mjs): every port of every test is locked and bind-tested, so two runs at once, in
+# one worktree or two, never share a port (ticket TEST1). CCORE_CI_BUILD=0 skips the build-* suites
+# and takes out/ as built: for a second run at the same time in the same tree (a build would rewrite
+# the binaries the first run is executing). CCORE_CI_TIMEOUT: seconds per suite (default 900).
 # The lab tests need web-ui/node_modules (npm ci in web-ui/) and /usr/bin/chromium; dev_test
 # needs inotifywait (inotify-tools); build-wasm-view needs wasm-opt (binaryen, ci/binaryen.sh).
 # Portable (ticket MAC1): macOS's /bin/bash 3.2; no GNU `timeout` there, so a shell watchdog
@@ -32,7 +35,7 @@ mode=${1:-fast}
 case "$mode" in fast | full | unit | san | lab | clang) ;; *) echo "usage: $0 [fast|full|unit|san|lab|clang]" >&2; exit 2 ;; esac
 export CCORE_PORT_BASE=${CCORE_PORT_BASE:-auto}
 LIMIT=${CCORE_CI_TIMEOUT:-900}
-LOGS=out/ci
+LOGS=${CCORE_CI_LOGS:-out/ci}
 mkdir -p "$LOGS"
 
 n=0 failed=0 t_all=$(ms_now)
@@ -74,6 +77,7 @@ suite() {
     shift
     [[ $done_ == *" $name "* ]] && return 0
     done_+="$name "
+    [[ ${CCORE_CI_BUILD:-1} == 0 && $name == build-* ]] && { printf 'skip  %-20s (CCORE_CI_BUILD=0)\n' "$name"; return 0; }
     t0=$(ms_now)
     limit "$LIMIT" "$@" > "$log" 2>&1 < /dev/null
     rc=$?

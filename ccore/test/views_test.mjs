@@ -27,7 +27,7 @@ import { port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("views_test", 47398);
+const PORT = port("views_test");
 const TOKEN = "viewstest-token";
 const base = `http://127.0.0.1:${PORT}`;
 let passed = 0, failed = 0;

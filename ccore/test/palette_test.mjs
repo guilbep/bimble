@@ -23,7 +23,7 @@ import { port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("palette_test", 47359);
+const PORT = port("palette_test");
 const TOKEN = "palettetest-token";
 const base = `http://127.0.0.1:${PORT}`;
 let passed = 0, failed = 0;

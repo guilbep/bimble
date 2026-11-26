@@ -8,6 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p out
 sfx=${CCORE_PORT_BASE:+-$CCORE_PORT_BASE} # one set of logs per port base: parallel runs in one tree
+[[ ${CCORE_PORT_BASE:-} == auto ]] && sfx=-auto$$ # auto: one set per run (TEST1)
 mode=${HOST_BUILD:-tcc}
 case "$mode" in tcc | native) ;; *) echo "HOST_BUILD=$mode: tcc or native" >&2; exit 2 ;; esac
 export HOST_BIN=${HOST_BIN:-$PWD/out/$mode/bimble-ccore}

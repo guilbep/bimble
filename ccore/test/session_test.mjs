@@ -1,5 +1,5 @@
 // The host's session file survives a restart (ticket T12): node ccore/test/session_test.mjs
-// Starts out/tcc/bimble-ccore (or $HOST_BIN) with --session on 47341, on a temporary copy of
+// Starts out/tcc/bimble-ccore (or $HOST_BIN) with --session on <port>, on a temporary copy of
 // golden/frame.json. Places a column (verb place), selects it, stops the host (SIGTERM) and starts
 // it again on the same port and file; then checks: rev and selection as before (GET /change),
 // history as before, 73 elements, `undo` works and removes the column (72), redo brings it back.
@@ -16,7 +16,7 @@ import { port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("session_test", 47341);
+const PORT = port("session_test");
 const TOKEN = "session-test";
 const BASE = `http://127.0.0.1:${PORT}`;
 const tmp = mkdtempSync(join(tmpdir(), "ccore-session-"));

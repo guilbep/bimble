@@ -19,7 +19,7 @@ import { port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("annotations_test", 47412);
+const PORT = port("annotations_test");
 const TOKEN = "annotest-token";
 const base = `http://127.0.0.1:${PORT}`;
 let passed = 0, failed = 0;

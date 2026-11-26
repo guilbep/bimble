@@ -1,6 +1,6 @@
 // The lab fully in the browser on the C core's wasm module (ticket T13b): node ccore/test/lab_wasm.mjs
 // No host process: copies out/wasm/ccore.wasm and golden/frame.json into web-ui/public/ccore/
-// (scripts/copy-ccore.mjs), starts Vite from web-ui/ on 5201 (needs web-ui/node_modules) and
+// (scripts/copy-ccore.mjs), starts Vite from web-ui/ on <port> (needs web-ui/node_modules) and
 // headless /usr/bin/chromium over raw CDP, opens /?ccore=1&gl=1 and checks: the page boots on the
 // module (data-bb-ready), the navigator lists the 3 storeys, the canvas shows shaded concrete
 // (207,207,204 ±6) on > 5 %, a click on a grey face selects one element (page state.selection) and
@@ -29,7 +29,7 @@ import { CHROMIUM, vitePort } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = resolve(CCORE, "../web-ui");
-const VITE = Number(process.env.LAB_WASM_VITE ?? vitePort("lab_wasm", 5201)); // LAB_WASM_VITE: another port when 5201 is taken
+const VITE = Number(process.env.LAB_WASM_VITE ?? vitePort("lab_wasm")); // LAB_WASM_VITE: a fixed port of your choice
 const PAGE = `http://localhost:${VITE}/?ccore=1&gl=1`;
 const STOREY = "1uAZA0Yfn05f$xRd1k4uPR";
 const tmp = mkdtempSync(join(tmpdir(), "ccore-lab-wasm-"));

@@ -1,10 +1,10 @@
 // Checks the native host's HTTP side (ticket 9a): node ccore/test/host_test.mjs
-// Starts out/tcc/bimble-ccore (or $HOST_BIN) on port 47311 with a token and checks the transport
+// Starts out/tcc/bimble-ccore (or $HOST_BIN) on port <port> with a token and checks the transport
 // of crates/bimble-viewer/src/serve.rs: 403 on a bad token, Origin or Host; 413 over 1 MiB;
 // the stub queries; the change feed (at once, then a long-poll that does not block a call);
 // garbage closes the connection only; SIGTERM exits 0. Then (ticket 9b) a host on a copy of
-// golden/frame.json on 47331: the model's queries, verb place, undo/redo, unsaved, action save
-// (bytes), a second host on the saved file (47332), and the latency of verb place and query element.
+// golden/frame.json on <port>: the model's queries, verb place, undo/redo, unsaved, action save
+// (bytes), a second host on the saved file (<port>), and the latency of verb place and query element.
 // Prints timings and "N passed, M failed"; exits non-zero on a failure. No dependencies.
 import { spawn } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
@@ -17,7 +17,7 @@ import { RUN_TAG, port } from "./ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const PORT = port("host_test", 47311);
+const PORT = port("host_test");
 const TOKEN = "hosttest-token";
 const HOST = `127.0.0.1:${PORT}`;
 let passed = 0, failed = 0;
@@ -185,7 +185,7 @@ try {
 }
 
 // ---- With a model (ticket 9b) ----
-const MPORT = port("host_test_model", 47331), MPORT2 = port("host_test_model2", 47332);
+const MPORT = port("host_test_model"), MPORT2 = port("host_test_model2");
 const TMP = join(CCORE, `out/t9b-host_test${RUN_TAG}`);
 const GOLDEN = join(CCORE, "golden");
 const hosts = [];

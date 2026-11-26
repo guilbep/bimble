@@ -11,7 +11,7 @@
 //   memory   1000 x (open, mesh, close) and 100 x open_ifc: no growth after the first round
 //   host     the host call layer in the module (call, change_json, host_open_text, host_mesh,
 //            host_saved; ticket T13b) against the native host (out/tcc/bimble-ccore or $HOST_BIN,
-//            port 47351, CCORE_SEED=1 and guid_seed(1) on both): boot without a model (state,
+//            port <port>, CCORE_SEED=1 and guid_seed(1) on both): boot without a model (state,
 //            actions: 56 rows: Rust's 54 + ISS72's 2), open frame.json, the same calls on both (select, verb place,
 //            history, undo, redo, action save…): every answer, status and change JSON byte for
 //            byte, the saved text = the native host's saved file, host_mesh = GET /mesh; ticket E1:
@@ -436,7 +436,7 @@ suite("memory");
 
 // ---- host: the call layer in the module against the native host ----
 const HOST_BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
-const HOST_PORT = port("wasm_run", 47351), HOST_TOKEN = "wasmrun-token";
+const HOST_PORT = port("wasm_run"), HOST_TOKEN = "wasmrun-token";
 /** One call of the module's host layer: {status, text, bytes, value}. */
 const hcall = (op, name = "-", body = "") => call(X.call, [op, name, body]);
 const change = () => call(X.change_json, []).text;

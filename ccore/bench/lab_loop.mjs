@@ -1,7 +1,7 @@
 // The C core's dev loop in the real Vue lab (ticket T12): edit a constant in C -> build.sh ->
 // restart the host on the same port, token and session -> the lab page shows the change.
 //   RUNS=10 MODES="tcc native" node ccore/bench/lab_loop.mjs   (MODES may add "host": build.sh host, dev.sh's build)     (or bench/lab_loop.sh)
-// Needs web-ui/node_modules, /usr/bin/chromium, tcc, clang. Ports: host 47342, Vite 5197.
+// Needs web-ui/node_modules, /usr/bin/chromium, tcc, clang. Ports: host <port>, Vite <port>.
 //
 // Method (after spikes/native-twin/exp2/loop_browser.mjs, the 1.66 s / 4.66 s baselines):
 // one Vite, one headless Chromium (raw CDP, SwiftShader, 1280x800), the lab opened ONCE at
@@ -52,8 +52,8 @@ const RUNS = Number(process.env.RUNS ?? 10);
 const MODES = (process.env.MODES ?? "tcc native").split(/\s+/).filter(Boolean);
 const SPECS = [...MODES.map((m) => ({ name: m, mode: m, fast: false })),
   ...(process.env.PROBE === "0" || !MODES.includes("tcc") ? [] : [{ name: "tcc-retry20", mode: "tcc", fast: true }])];
-const PORT = port("lab_loop", 47342);
-const VITE = vitePort("lab_loop", 5197);
+const PORT = port("lab_loop");
+const VITE = vitePort("lab_loop");
 const TOKEN = "lab-loop";
 const HOST = `http://127.0.0.1:${PORT}`;
 const PAGE = `http://localhost:${VITE}/?native=1&gl=1&port=${PORT}&token=${TOKEN}`;

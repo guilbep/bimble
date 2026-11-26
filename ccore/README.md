@@ -75,11 +75,12 @@ the last line gives the totals. Every suite runs, even after a failure, and any 
 check, a crash, a sanitizer report, a compile error) makes the exit code 1. On the dev machine: all
 26 suites in 12 s with tcc, 29 s with ASan+UBSan (`results/ci.md`).
 
-The network tests (`test/*.mjs`, `bench/*.mjs`) take their ports from `test/ports.mjs`, one table
-with a fixed default and a unique offset per port. `CCORE_PORT_BASE` unset: the defaults (host
-473xx, Vite 51xx/52xx). `CCORE_PORT_BASE=48000`: base + offset, so worktrees that run the same test at
-once do not collide (give each its own base, 160 ports apart). `CCORE_PORT_BASE=auto`: a free base from
-a hash of the worktree path. `test/host.sh` passes the variable through.
+The network tests (`test/*.mjs`, `bench/*.mjs`) take their ports from `test/ports.mjs` by name
+(`port("lab_gl")`): no table row (ticket TEST1). Every port is locked for the life of the process (a
+file per port under `<tmpdir>/bimble-ports/`) and bind-tested, so tests running at once never share
+one. `CCORE_PORT_BASE=auto` (ci/run.sh's default): a free port in 20000..31999. Unset: a stable port
+per name (a hash), the next free one if taken. `CCORE_PORT_BASE=48000`: base + a hashed offset in
+0..159. Never 47400 or 5173 (`dev.sh`). `test/host.sh` passes the variable through.
 
 CI: `ccore/ci/run.sh fast` is the gate every ticket passes (build.sh tcc, test/run.sh with tcc and
 with clang ASan+UBSan, build.sh wasm, wasm_run, host.sh); `ccore/ci/run.sh full` adds the Chromium

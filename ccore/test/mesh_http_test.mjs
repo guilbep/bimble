@@ -1,10 +1,10 @@
 // GET /mesh of the native host (ticket 11a): node ccore/test/mesh_http_test.mjs
-// Starts out/tcc/bimble-ccore (or $HOST_BIN) with CCORE_MODEL=golden/frame.json on 47321, fetches
+// Starts out/tcc/bimble-ccore (or $HOST_BIN) with CCORE_MODEL=golden/frame.json on <port>, fetches
 // /mesh, parses BMSH (layout: session/mesh.c) and checks it against golden/mesh/scene.txt (the
 // scene of the same model, cc_scene_build): element count, each row's GlobalId, category and
 // vertex / triangle / edge counts, the origin bits, index ranges; the X-Rev header; a second
 // fetch is served from the cache (same bytes, one build); 403 on a bad token. Then a host with
-// no model on 47322 answers 404. Prints sizes and times, "N passed, M failed"; exits non-zero on
+// no model on <port> answers 404. Prints sizes and times, "N passed, M failed"; exits non-zero on
 // a failure. No dependencies. Kills the hosts it starts.
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -59,7 +59,7 @@ function parseBmsh(buf) {
   return h;
 }
 
-const PORT = port("mesh_http", 47321), NOMODEL = port("mesh_http_nomodel", 47322);
+const PORT = port("mesh_http"), NOMODEL = port("mesh_http_nomodel");
 try {
   const golden = readFileSync(join(CCORE, "golden/mesh/scene.txt"), "utf8").split("\n");
   const gOrigin = golden[0].split(" ").slice(1);
