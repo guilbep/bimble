@@ -40,6 +40,8 @@ export const fr = {
   "qty1.next": "Suivantes",
   "qty1.summaryNote": "Sous-totaux seulement : {count} éléments.",
   "qty1.sortTip": "Trier par cette colonne ; encore : dans l'autre sens",
+  "na.screen.new-quantities": "Nouveau métré", // the dialog's name when not served (NotAvailable.vue)
+  "na.screen.quantity-columns": "Colonnes du métré",
   "quantities.col.Count": "Nombre",
   "quantities.col.Type": "Type (PredefinedType)",
   "quantities.col.Gross volume (m³)": "Volume brut (m³)",
@@ -84,6 +86,8 @@ export const en: Record<keyof typeof fr, string> = {
   "qty1.next": "Next",
   "qty1.summaryNote": "Subtotals only: {count} elements.",
   "qty1.sortTip": "Sort by this column; again: the other way",
+  "na.screen.new-quantities": "New quantities",
+  "na.screen.quantity-columns": "Quantity columns",
   "quantities.col.Count": "Count",
   "quantities.col.Type": "Type (PredefinedType)",
   "quantities.col.Gross volume (m³)": "Gross volume (m³)",
