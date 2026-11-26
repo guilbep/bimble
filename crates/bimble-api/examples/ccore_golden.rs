@@ -224,6 +224,7 @@ fn derive(dir: &Path) -> Files {
     ifc_views_files(dir, &mut files); // S1
     schedule_session_files(&m, &mut files); // Q2
     materials_files(dir, &mut files); // MAT1
+    merge_case_files(&m, &mut files); // H2b
     files
 }
 
@@ -4109,4 +4110,380 @@ fn materials_files(dir: &Path, files: &mut Files) {
     files.insert("materials/transcript.txt".into(), t.into_bytes());
     files.insert("materials/after.json".into(), after.into_bytes());
     files.insert("materials/after.ifc".into(), ifc.into_bytes());
+}
+
+// ---------------------------------------------------------------- merge (ticket H2b)
+
+/// `history/merge/`: three-way merges by `bimble_core::repo::merge_models` on a small model cut
+/// from the frame (a beam, a column and a slab; a plan view, a sheet, project information, a
+/// schedule). `base.json`; per case `<case>.ours.json` and `<case>.theirs.json`; `<case>.txt`:
+/// per Prefer (neither, ours, theirs) the conflicts (`Display`, then the id or `-`) and the merged
+/// model's validation; the merged model's canonical text in `<case>.<prefer>.json`.
+fn merge_case_files(frame: &Model, files: &mut Files) {
+    use bimble_core::repo::{Prefer, merge_models};
+    use bimble_core::schedule::{Field, ScheduleDef};
+    use bimble_core::version::canonical_model;
+    let first = |m: &Model, f: &dyn Fn(&Element) -> bool| {
+        *m.elements
+            .iter()
+            .find(|(_, e)| f(e))
+            .expect("the frame has it")
+            .0
+    };
+    let beam = first(frame, &|e| matches!(e.generator, Generator::RectBeam { .. }));
+    let column = first(frame, &|e| matches!(e.generator, Generator::RectColumn { .. }));
+    let slab = first(frame, &|e| matches!(e.generator, Generator::Slab { .. }));
+    let mut base = frame.clone();
+    base.elements.retain(|id, _| [beam, column, slab].contains(id));
+    let mut view = bimble_core::view::default_views(&base.levels())
+        .into_iter()
+        .find(|v| v.name == "Plan Niveau 1")
+        .expect("plan view");
+    view.id = GlobalId::derived(b"h2b view");
+    let vid = view.id;
+    base.views.insert(vid, view);
+    let mut sheet = bimble_core::sheet::Sheet::new("S-101", "Plans");
+    sheet.id = GlobalId::derived(b"h2b sheet");
+    sheet.placed.push(bimble_core::sheet::Placed {
+        id: GlobalId::derived(b"h2b placed"),
+        view: vid,
+        scale: 100,
+        at_mm: [400.0, 300.0],
+    });
+    let sid = sheet.id;
+    base.sheets.insert(sid, sheet);
+    base.project
+        .insert("client".into(), "Synthetic client".into());
+    base.project.insert("phase".into(), "Tender".into());
+    base.schedules.push(ScheduleDef {
+        name: "Merge test".into(),
+        classes: vec!["IfcBeam".into()],
+        family: None,
+        fields: vec![Field::Level, Field::Volume],
+        group_by_level: false,
+        totals: true,
+    });
+    base.validate().expect("the merge base is valid");
+    let base = canonical_model(base);
+    let unused_storey = *base
+        .storeys
+        .iter()
+        .find(|(id, s)| s.name != "Niveau 1" && !base.elements.values().any(|e| e.storey == **id))
+        .expect("an unused storey")
+        .0;
+    let material = base.elements[&column].material;
+    let added = |m: &mut Model, seed: &[u8], name: &str| {
+        let mut e = m.elements[&column].clone();
+        e.id = GlobalId::derived(seed);
+        e.name = name.into();
+        e.placement.origin[0] += 5000.0;
+        m.elements.insert(e.id, e);
+    };
+    let set_beam = |m: &mut Model, w: Option<f64>, h: Option<f64>| {
+        if let Generator::RectBeam { width, height, .. } =
+            &mut m.elements.get_mut(&beam).unwrap().generator
+        {
+            if let Some(w) = w {
+                *width = w;
+            }
+            if let Some(h) = h {
+                *height = h;
+            }
+        }
+    };
+    type Edit<'a> = Box<dyn Fn(&mut Model) + 'a>;
+    // (case, ours, theirs). Rust's own tests first (bimble-core/src/repo.rs on oracle/rust).
+    let cases: Vec<(&str, Edit, Edit)> = vec![
+        // repo.rs:1148 merges_take_both_sides_and_report_conflicts: a beam renamed on one side,
+        // a column on the other.
+        (
+            "disjoint",
+            Box::new(|m| m.elements.get_mut(&beam).unwrap().name = "main beam".into()),
+            Box::new(|m| m.elements.get_mut(&column).unwrap().name = "b column".into()),
+        ),
+        // repo.rs:1192 the same column renamed x and y.
+        (
+            "same_name",
+            Box::new(|m| m.elements.get_mut(&column).unwrap().name = "y".into()),
+            Box::new(|m| m.elements.get_mut(&column).unwrap().name = "x".into()),
+        ),
+        // repo.rs:1219 field_level_merge_keeps_both_changes: width on one side, height on the other.
+        (
+            "field_level",
+            Box::new(move |m| set_beam(m, Some(300.0), None)),
+            Box::new(move |m| set_beam(m, None, Some(650.0))),
+        ),
+        // repo.rs:1247 the same field changed differently.
+        (
+            "same_field",
+            Box::new(move |m| set_beam(m, Some(300.0), None)),
+            Box::new(move |m| set_beam(m, Some(350.0), None)),
+        ),
+        // repo.rs:1256 sheets_are_committed_and_merged: a new name, a new paper.
+        (
+            "sheets",
+            Box::new(|m| m.sheets.get_mut(&sid).unwrap().name = "Formwork".into()),
+            Box::new(|m| m.sheets.get_mut(&sid).unwrap().paper = "A0".into()),
+        ),
+        // repo.rs:1295 project_information_is_committed_and_merged: key by key.
+        (
+            "project_info",
+            Box::new(|m| {
+                m.project.insert("phase".into(), "Execution".into());
+            }),
+            Box::new(|m| {
+                m.project.insert("project_number".into(), "P-001".into());
+            }),
+        ),
+        // repo.rs:1339 views_are_committed_and_merged: a rename, a cut offset.
+        (
+            "views",
+            Box::new(|m| m.views.get_mut(&vid).unwrap().name = "Formwork N1".into()),
+            Box::new(|m| {
+                if let bimble_core::view::ViewKind::Plan { range, .. } =
+                    &mut m.views.get_mut(&vid).unwrap().kind
+                {
+                    range.cut.offset_mm = 1000.0;
+                }
+            }),
+        ),
+        // The cases merge_models' rules name (repo.rs:621-626, 637-654, 734-783).
+        (
+            "delete_vs_change",
+            Box::new(|m| {
+                m.elements.remove(&beam);
+            }),
+            Box::new(|m| m.elements.get_mut(&beam).unwrap().name = "renamed".into()),
+        ),
+        (
+            "change_vs_delete",
+            Box::new(|m| m.elements.get_mut(&beam).unwrap().name = "renamed".into()),
+            Box::new(|m| {
+                m.elements.remove(&beam);
+            }),
+        ),
+        (
+            "delete_both",
+            Box::new(|m| {
+                m.elements.remove(&slab);
+            }),
+            Box::new(|m| {
+                m.elements.remove(&slab);
+            }),
+        ),
+        (
+            "delete_vs_unchanged",
+            Box::new(|_| {}),
+            Box::new(|m| {
+                m.elements.remove(&slab);
+            }),
+        ),
+        (
+            "add_same_id_same",
+            Box::new(move |m| added(m, b"h2b new", "new column")),
+            Box::new(move |m| added(m, b"h2b new", "new column")),
+        ),
+        (
+            "add_same_id_differ",
+            Box::new(move |m| added(m, b"h2b new", "ours column")),
+            Box::new(move |m| added(m, b"h2b new", "theirs column")),
+        ),
+        (
+            "add_both",
+            Box::new(move |m| added(m, b"h2b ours", "ours column")),
+            Box::new(move |m| added(m, b"h2b theirs", "theirs column")),
+        ),
+        (
+            "generator_kind",
+            Box::new(|m| {
+                m.elements.get_mut(&beam).unwrap().generator = Generator::RectColumn {
+                    width: 300.0,
+                    depth: 300.0,
+                    height: 3000.0,
+                }
+            }),
+            Box::new(move |m| set_beam(m, Some(350.0), None)),
+        ),
+        (
+            "fields_and_conflict",
+            Box::new(move |m| {
+                set_beam(m, Some(300.0), Some(700.0));
+                m.elements.get_mut(&beam).unwrap().name = "ours".into();
+                m.elements
+                    .get_mut(&beam)
+                    .unwrap()
+                    .properties
+                    .insert("Mark".into(), "B1".into());
+            }),
+            Box::new(move |m| {
+                set_beam(m, Some(350.0), Some(700.0));
+                m.elements.get_mut(&beam).unwrap().name = "theirs".into();
+                m.elements.get_mut(&beam).unwrap().placement.origin[2] += 100.0;
+                m.elements
+                    .get_mut(&beam)
+                    .unwrap()
+                    .properties
+                    .insert("Mark".into(), "B2".into());
+            }),
+        ),
+        (
+            "project_name",
+            Box::new(|m| m.project_name = "Projet A".into()),
+            Box::new(|m| m.project_name = "Projet B".into()),
+        ),
+        (
+            "project_info_conflict",
+            Box::new(|m| {
+                m.project.insert("phase".into(), "Execution".into());
+                m.project.remove("client");
+            }),
+            Box::new(|m| {
+                m.project.insert("phase".into(), "Design".into());
+                m.project.insert("client".into(), "Another client".into());
+            }),
+        ),
+        (
+            "schedules",
+            Box::new(|m| m.schedules[0].totals = false),
+            Box::new(|m| {
+                m.schedules.push(ScheduleDef {
+                    name: "Second".into(),
+                    classes: Vec::new(),
+                    family: None,
+                    fields: vec![Field::Volume],
+                    group_by_level: true,
+                    totals: false,
+                })
+            }),
+        ),
+        (
+            "schedule_conflict",
+            Box::new(|m| m.schedules[0].totals = false),
+            Box::new(|m| m.schedules[0].group_by_level = true),
+        ),
+        (
+            "georef",
+            Box::new(|m| {
+                m.georef = bimble_core::georef::Georef::from_frame(
+                    [1.0, 0.0],
+                    [2_600_000_000.0, 1_200_000_000.0, 0.0],
+                )
+            }),
+            Box::new(|m| {
+                m.georef = bimble_core::georef::Georef::from_frame(
+                    [0.866025403784, 0.5],
+                    [2_600_000_000.0, 1_200_000_000.0, 0.0],
+                )
+            }),
+        ),
+        (
+            "georef_theirs",
+            Box::new(|m| m.elements.get_mut(&column).unwrap().name = "c".into()),
+            Box::new(|m| {
+                m.georef = bimble_core::georef::Georef::from_frame(
+                    [0.866025403784, 0.5],
+                    [2_600_000_000.0, 1_200_000_000.0, 0.0],
+                )
+            }),
+        ),
+        (
+            "storey_material",
+            // (the unused storey: the plan view names "Niveau 1")
+            Box::new(move |m| {
+                m.storeys.get_mut(&unused_storey).unwrap().name = "S ours".into();
+                m.materials.get_mut(&material).unwrap().name = "C35/45".into();
+            }),
+            Box::new(move |m| {
+                m.storeys.get_mut(&unused_storey).unwrap().name = "S theirs".into();
+                m.storeys.get_mut(&unused_storey).unwrap().elevation -= 100.0;
+            }),
+        ),
+        (
+            "view_sheet_conflict",
+            Box::new(|m| {
+                m.views.get_mut(&vid).unwrap().name = "V ours".into();
+                m.sheets.get_mut(&sid).unwrap().placed[0].scale = 50;
+            }),
+            Box::new(|m| {
+                m.views.get_mut(&vid).unwrap().name = "V theirs".into();
+                m.sheets.get_mut(&sid).unwrap().placed[0].scale = 20;
+            }),
+        ),
+        // Each side valid, the union not: a column moved to a storey the other side removed.
+        (
+            "invalid_union",
+            Box::new(move |m| {
+                m.storeys.remove(&unused_storey);
+            }),
+            Box::new(move |m| m.elements.get_mut(&column).unwrap().storey = unused_storey),
+        ),
+        (
+            "unchanged",
+            Box::new(|_| {}),
+            Box::new(|_| {}),
+        ),
+    ];
+    files.insert(
+        "history/merge/base.json".into(),
+        file::to_string(&base).into_bytes(),
+    );
+    for (name, ours_edit, theirs_edit) in &cases {
+        let mut ours = base.clone();
+        ours_edit(&mut ours);
+        let mut theirs = base.clone();
+        theirs_edit(&mut theirs);
+        ours.validate()
+            .unwrap_or_else(|e| panic!("{name}: ours is invalid: {e}"));
+        theirs
+            .validate()
+            .unwrap_or_else(|e| panic!("{name}: theirs is invalid: {e}"));
+        let ours = canonical_model(ours);
+        let theirs = canonical_model(theirs);
+        files.insert(
+            format!("history/merge/{name}.ours.json"),
+            file::to_string(&ours).into_bytes(),
+        );
+        files.insert(
+            format!("history/merge/{name}.theirs.json"),
+            file::to_string(&theirs).into_bytes(),
+        );
+        let mut t = String::new();
+        let (ours_text, theirs_text) = (file::to_string(&ours), file::to_string(&theirs));
+        let mut seen: Vec<(String, String)> = vec![
+            ("base.json".into(), file::to_string(&base)),
+            (format!("{name}.ours.json"), ours_text),
+            (format!("{name}.theirs.json"), theirs_text),
+        ];
+        for (pname, prefer) in [
+            ("neither", Prefer::Neither),
+            ("ours", Prefer::Ours),
+            ("theirs", Prefer::Theirs),
+        ] {
+            let (merged, conflicts) = merge_models(&base, &ours, &theirs, prefer);
+            writeln!(t, "prefer {pname}: {} conflict(s)", conflicts.len()).unwrap();
+            for c in &conflicts {
+                let id = c.id.map(|i| i.to_string()).unwrap_or_else(|| "-".into());
+                writeln!(t, "conflict {c} | {id}").unwrap();
+            }
+            match merged.validate() {
+                Ok(()) => writeln!(t, "valid").unwrap(),
+                Err(e) => writeln!(t, "invalid {e}").unwrap(),
+            }
+            // The merged model: the same text as an input or an earlier Prefer's is named, not
+            // written again.
+            let text = file::to_string(&canonical_model(merged));
+            match seen.iter().find(|(_, s)| *s == text) {
+                Some((same, _)) => writeln!(t, "model {same}").unwrap(),
+                None => {
+                    writeln!(t, "model {name}.{pname}.json").unwrap();
+                    files.insert(
+                        format!("history/merge/{name}.{pname}.json"),
+                        text.clone().into_bytes(),
+                    );
+                    seen.push((format!("{name}.{pname}.json"), text));
+                }
+            }
+        }
+        files.insert(format!("history/merge/{name}.txt"), t.into_bytes());
+    }
 }

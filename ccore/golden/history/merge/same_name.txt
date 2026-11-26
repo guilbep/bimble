@@ -1,0 +1,12 @@
+prefer neither: 1 conflict(s)
+conflict element IfcColumn y: name [004z1Cm4z4hgNOg0ez4Id1] | 004z1Cm4z4hgNOg0ez4Id1
+valid
+model same_name.ours.json
+prefer ours: 1 conflict(s)
+conflict element IfcColumn y: name [004z1Cm4z4hgNOg0ez4Id1] | 004z1Cm4z4hgNOg0ez4Id1
+valid
+model same_name.ours.json
+prefer theirs: 1 conflict(s)
+conflict element IfcColumn y: name [004z1Cm4z4hgNOg0ez4Id1] | 004z1Cm4z4hgNOg0ez4Id1
+valid
+model same_name.theirs.json

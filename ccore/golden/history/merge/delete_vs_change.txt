@@ -1,0 +1,12 @@
+prefer neither: 1 conflict(s)
+conflict element IfcBeam renamed [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+valid
+model delete_vs_change.ours.json
+prefer ours: 1 conflict(s)
+conflict element IfcBeam renamed [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+valid
+model delete_vs_change.ours.json
+prefer theirs: 1 conflict(s)
+conflict element IfcBeam renamed [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+valid
+model delete_vs_change.theirs.json

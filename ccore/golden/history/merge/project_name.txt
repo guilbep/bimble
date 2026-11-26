@@ -1,0 +1,12 @@
+prefer neither: 1 conflict(s)
+conflict IfcProject project name | -
+valid
+model project_name.ours.json
+prefer ours: 1 conflict(s)
+conflict IfcProject project name | -
+valid
+model project_name.ours.json
+prefer theirs: 1 conflict(s)
+conflict IfcProject project name | -
+valid
+model project_name.theirs.json
