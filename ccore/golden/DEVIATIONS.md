@@ -904,3 +904,37 @@ the trees that hold them (the commits before still read).
 `ccore/src/repo.c` (reads `relations`, `grids`), `ccore/session/versions.c`,
 `web-ui/src/pages/History.vue`; tests `ccore/test/repo_write_test.c`,
 `ccore/test/versions_test.mjs`, `ccore/test/lab_history.mjs`.
+
+## 28. Merging history branches (ticket H2b, ADR 0017)
+
+**What.** The C history store merges as Rust's `Repo::merge` and `merge_models`
+(`ccore/src/merge.c`, `ccore/src/repo_merge.c`): `golden/history/`'s scenario replayed in C, then
+`variant` merged into `main`, gives Rust's merge commit `9d1b67cbf963…` and its tree, byte for
+byte `model_at_6.json`, every object name of Rust's folder (suite `repo_merge`); 26 merge cases ×
+3 Prefer give Rust's conflicts, validation texts and merged models byte for byte
+(`golden/history/merge/`, a new Rust golden from `ccore_golden` on the oracle). It differs from
+Rust here:
+- **Relations and grids** (the C sections, section 27) merge by Rust's rules, per object id, after
+  Rust's sections: a conflict's kind is `relation` (its name the relation's IFC class,
+  `IfcRelConnectsWithRealizingElements`) or `IfcGrid` (its name the grid's), the path as Rust's
+  (`properties.Bimble_Connection/Fastener`, `name`). Rust's model has neither section.
+- **Equality** is the objects' serde bytes (`cc_model_object_json`), where Rust compares the typed
+  values (`PartialEq`): the writer gives one text per value, so they agree on every value a model
+  can hold.
+- **The walk** queues each hash once (Rust queues duplicates and skips them when reached: the same
+  order, so the same merge base); a parent that is not a hash fails when it is queued, where Rust
+  fails when the walk reaches it (they differ only past the 1,000,000-commit bound).
+- **A fast-forward** reads the target's model before it moves the ref (Rust moves, then reads): a
+  damaged target leaves the ref where it was.
+- **The session's action** `merge {name, prefer?}` has no Rust twin: the egui History panel calls
+  `Repo::merge` with `Prefer::Neither` (lib.rs:2015-2033) and, on conflicts, prints the first 8
+  and "merge from the command line with --prefer". The C page lists the first 8, then "and N
+  more", and offers keep mine / take theirs, which merge again with `prefer: "ours" | "theirs"`.
+  With a `prefer` the answer still lists the conflicts it resolved (Rust's `merge` drops them). The
+  merge needs the author's name in Settings, as commit does (section 27). Up to date leaves the
+  working file as it is (Rust writes HEAD's model, the same since nothing is pending).
+
+**Where.** `ccore/src/merge.c/.h`, `ccore/src/repo_merge.c/.h`, `ccore/src/repo_write.c`
+(`cc_repo_put_commit`, `cc_repo_move_head`), `ccore/src/file.c` (`cc_model_load_unchecked`),
+`ccore/session/versions.c`, `web-ui/src/pages/History.vue`; tests `ccore/test/repo_merge_test.c`,
+`ccore/test/versions_test.mjs`, `ccore/test/lab_history.mjs`.

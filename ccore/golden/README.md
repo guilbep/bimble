@@ -509,6 +509,18 @@ numbered 1–6 in that order (5 is `variant`, 6 the merge).
   (`model_at HEAD`), unknown revisions, a non-hash, a format line `bimble-history 2`, no history.
   The temp folder's path reads `<dir>`.
 
+### history/merge/ (ticket H2b)
+
+`bimble_core::repo::merge_models` on a small model cut from the frame (a beam, a column and a
+slab, the plan view "Plan Niveau 1", a sheet placing it, two project information keys, one
+schedule; ids derived): `base.json`; per case `<case>.ours.json` and `<case>.theirs.json` (each
+valid, canonical) and `<case>.txt`: for each Prefer (`neither`, `ours`, `theirs`) a line `prefer
+<p>: <n> conflict(s)`, one `conflict <Display> | <id or ->` per conflict, `valid` or `invalid
+<Model::validate's text>`, then `model <file>`: the merged model's canonical text is the named
+file (an input, or `<case>.<p>.json` written for the first Prefer that gave it). 26 cases: Rust's
+own tests of repo.rs (the case names and lines in `ccore/test/repo_merge_test.c`) and the rules of
+merge_models. Read by `ccore/test/repo_merge_test.c` (suite `repo_merge`).
+
 ## measure.txt
 
 The measure tool's text (ticket T1; `bimble_api::measure`, the viewer's `format_mm` and

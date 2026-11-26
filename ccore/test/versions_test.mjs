@@ -16,6 +16,9 @@
 //     branch, a bad branch name; switch refused with changes not committed, then a commit on the
 //     branch, switch back: the model is main's (pending clean, project field back); discard;
 //     a model without a history: commit starts one; capabilities history_write true;
+//   H2b, action merge: onto itself refused, a bad prefer, up to date, a fast-forward (the model
+//     reopened), refused with changes not committed, a conflict listed and nothing merged, then
+//     prefer theirs: a merge commit with two parents, the model reopened; an unknown revision;
 //   a damaged object (one byte flipped): 400 with Rust's "damaged history: ... does not match its hash";
 //   the wasm modules (out/wasm/ccore.wasm, ccore-view.wasm when built): the same four queries on a
 //   model answer {"history": false, "reason": "no history folder in the browser"}; action commit is
@@ -183,6 +186,58 @@ try {
   r = await act("branch_switch", { name: "main" });
   check("back to main", r.status === 200, r.text);
 
+  // ---- H2b: merge {name, prefer?} ----
+  r = await act("merge", { name: "main" });
+  eq("merge onto itself: refused", [r.status, r.text], [400, "merge: main is the current branch"]);
+  r = await act("merge", { name: "idea", prefer: "mine" });
+  check("merge: a bad prefer is 400", r.status === 400, r.text);
+  r = await act("merge", { name: "variant" });
+  eq("merge variant: up to date (Rust's merge c6 holds it)", [r.status, r.text], [200, `{"merged":"up_to_date","commit":"${k1}","conflicts":[]}`]);
+  r = await act("merge", { name: "idea" });
+  eq("merge idea into main: fast-forward", [r.status, r.text], [200, `{"merged":"fast_forward","commit":"${k2}","conflicts":[]}`]);
+  r = await q("versions");
+  eq("fast-forward: HEAD main at idea's commit", r.json?.head, { branch: "main", commit: k2 });
+  r = await q("pending");
+  eq("fast-forward: the model is idea's (pending clean)", [r.json?.base, r.json?.changes], [k2, []]);
+  check("fast-forward: the project field is idea's", (await project()).includes('"idea"'), await project());
+  r = await act("merge", { name: "idea" });
+  eq("merge again: up to date", [r.status, r.text], [200, `{"merged":"up_to_date","commit":"${k2}","conflicts":[]}`]);
+  // Both sides change the phase: a conflict, nothing merged; then take theirs.
+  r = await act("branch_create", { name: "x" });
+  check("branch x", r.status === 200, r.text);
+  await call("verb", "set_project_field", JSON.stringify({ label: "Phase", value: "X" }));
+  r = await act("commit", { message: "phase X" });
+  const kx = r.status === 200 ? JSON.parse(r.text).commit : "";
+  check("commit on x", r.status === 200, r.text);
+  r = await act("branch_switch", { name: "main" });
+  check("switch main", r.status === 200, r.text);
+  await call("verb", "set_project_field", JSON.stringify({ label: "Phase", value: "M" }));
+  r = await act("merge", { name: "x" });
+  eq("merge refused with changes not committed", [r.status, r.text], [400, "uncommitted changes: commit them first"]);
+  r = await act("commit", { message: "phase M" });
+  const km = r.status === 200 ? JSON.parse(r.text).commit : "";
+  check("commit on main", r.status === 200, r.text);
+  r = await act("merge", { name: "x" });
+  eq("merge x: the conflict, nothing merged", [r.status, r.text], [200,
+    '{"merged":"conflicts","conflicts":[{"kind":"IfcProject","id":null,"name":"project information phase","text":"IfcProject project information phase"}]}']);
+  r = await q("versions");
+  eq("conflict: HEAD unchanged", r.json?.head, { branch: "main", commit: km });
+  r = await act("merge", { name: "x", prefer: "theirs" });
+  const mj = r.status === 200 ? JSON.parse(r.text) : null;
+  eq("merge x, take theirs: a merge commit", [r.status, mj?.merged, mj?.conflicts?.length], [200, "commit", 1]);
+  r = await q("versions");
+  eq("the merge commit first: two parents, Rust's message, the settings' author",
+    [r.json?.versions[0]?.hash, r.json?.versions[0]?.parents, r.json?.versions[0]?.message, r.json?.versions[0]?.author],
+    [mj?.commit, [km, kx], "Merge x", "Test User <test@example.org>"]);
+  check("take theirs: the phase is X", (await project()).includes('"X"'), await project());
+  r = await q("pending");
+  eq("after the merge: pending clean, saved", [r.json?.base, r.json?.changes, (await q("state")).json?.unsaved], [mj?.commit, [], false]);
+  r = await q("history");
+  check("after the merge: a fresh undo history", r.status === 200 && !r.text.includes("Phase"), r.text);
+  r = await act("merge", { name: "nope" });
+  eq("merge an unknown revision", [r.status, r.text], [400, 'unknown revision "nope"']);
+  // ---- end H2b ----
+
   // A damaged object: c2 as plain JSON with one byte flipped.
   const obj = join(tmp, "frame.bimble-history/objects", c2.slice(0, 2), c2.slice(2));
   const bytes = gunzipSync(readFileSync(obj));
@@ -244,6 +299,8 @@ for (const name of ["ccore.wasm", "ccore-view.wasm"]) {
   if (name === "ccore.wasm") { // H2a
     const c = wcall(X.call, ["action", "commit", '{"message":"x"}']);
     eq(`${name}: action commit`, [c.status, c.text], [400, "no history folder in the browser"]);
+    const mg = wcall(X.call, ["action", "merge", '{"name":"x"}']); // H2b
+    eq(`${name}: action merge`, [mg.status, mg.text], [400, "no history folder in the browser"]);
     const caps = JSON.parse(wcall(X.call, ["query", "capabilities", ""]).text);
     eq(`${name}: history_write false`, caps.history_write, false);
   }

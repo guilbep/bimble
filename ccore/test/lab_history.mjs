@@ -12,7 +12,12 @@
 //     Switch: commit first); Create version on idea; the select back to main: the model is main's
 //     (the project field typed on idea is gone, pending 0, the version list is main's);
 //   nothing pending: Create version disabled (Rust's Commit needs changes); a bad branch name: Rust's
-//     text inline under the form (the one 400 the page logs).
+//     text inline under the form (the one 400 the page logs);
+//   H2b, Merge: the picker lists the other variant; an edit disables Merge (Rust's); main sets the
+//     client, idea had set the phase: Merge idea gives "Merge idea" first, its row naming two parents,
+//     the model with both edits; a variant alt and main both change the phase: Merge alt lists the
+//     conflict as Rust's Display ("1 conflict(s), nothing merged"), the model unchanged; take theirs:
+//     "Merge alt", alt's phase. On the code before H2b the Merge button is disabled (data-missing).
 // On the code before H2a the Create version button is disabled for ever (data-missing) and the
 // first check of the flow fails.
 // No uncaught page error; no console error or warning but the sync-XHR deprecation, the favicon 404 and
@@ -187,6 +192,57 @@ async function lab(S, evalJs) {
   check("switch: the model is main's (the field typed on idea is gone)", (await project()).includes('"51"') && !(await project()).includes('"idea"'), await project());
   check("switch: nothing pending, saved", (await pending()) === "0 elements" && (await B("return b.state.value.unsaved;")) === false, await pending());
   check("switch: no error shown", !(await exists("[data-bb=history-commit-error]")) && !(await exists("[data-bb=history-branch-error]")));
+  // ---- H2b: merge ----
+  // Two branches with different edits: main sets the client, idea set the phase. Merge idea: both.
+  const options = (sel) => evalJs(`[...document.querySelectorAll(${JSON.stringify(sel + " option")})].map((o) => o.value).join('|')`);
+  check("the merge picker lists the other variant", (await options("[data-bb=history-merge-from]")) === "idea", await options("[data-bb=history-merge-from]"));
+  check("Merge enabled (nothing pending)", (await disabled("[data-bb=history-merge]")) === false);
+  const client = await B("return b.runVerb('set_project_field', { label: 'Client', value: 'ACME' });");
+  await waitFor("the client edit in pending", 5000, async () => (await pending()) !== "0 elements");
+  check("an edit: Merge disabled (Rust's Merge: commit first)", client === null && (await disabled("[data-bb=history-merge]")) === true, String(client));
+  await field("[data-bb=history-message]", "client ACME");
+  await click("[data-bb=history-commit]");
+  await waitFor("the client version", 5000, async () => (await versions())[0]?.[0] === "client ACME");
+  await waitFor("Merge enabled again", 5000, async () => (await disabled("[data-bb=history-merge]")) === false);
+  check("the Merge button names the variant", ((await text("[data-bb=history-merge]")) ?? "").includes("idea"), await text("[data-bb=history-merge]"));
+  await click("[data-bb=history-merge]");
+  await waitFor("the merge version", 5000, async () => (await versions())[0]?.[0] === "Merge idea");
+  const vm = await versions();
+  check("the merge version first, with its two parents", vm[0]?.[0] === "Merge idea" && await exists("[data-bb=history-versions] .ver [data-bb=history-merge-row]"), JSON.stringify(vm));
+  check("the merge row names two parents", /\[merge\] [0-9a-f]{12} \+ [0-9a-f]{12}$/.test(vm[0]?.[1] ?? ""), vm[0]?.[1]);
+  check("merged: the model shows both edits (main's client, idea's phase)", (await project()).includes('"ACME"') && (await project()).includes('"idea"'), await project());
+  check("merged: the note, nothing pending, saved", ((await text("[data-bb=history-merge-note]")) ?? "").startsWith("Merged idea") &&
+    (await pending()) === "0 elements" && (await B("return b.state.value.unsaved;")) === false, await text("[data-bb=history-merge-note]"));
+  // A conflict: the phase changed on both sides.
+  await click("[data-bb=history-new-variant]");
+  await field("[data-bb=history-branch-name]", "alt");
+  await click("[data-bb=history-branch-create]");
+  await waitFor("on alt", 5000, async () => (await evalJs("document.querySelector('[data-bb=history-switch]').value")) === "alt");
+  await edit("alt");
+  await field("[data-bb=history-message]", "phase alt");
+  await click("[data-bb=history-commit]");
+  await waitFor("the version on alt", 5000, async () => (await versions())[0]?.[0] === "phase alt");
+  await pick("[data-bb=history-switch]", "main");
+  await waitFor("back on main", 5000, async () => (await versions())[0]?.[0] === "Merge idea");
+  await edit("main");
+  await field("[data-bb=history-message]", "phase main");
+  await click("[data-bb=history-commit]");
+  await waitFor("the version on main", 5000, async () => (await versions())[0]?.[0] === "phase main");
+  await pick("[data-bb=history-merge-from]", "alt");
+  await waitFor("Merge enabled", 5000, async () => (await disabled("[data-bb=history-merge]")) === false);
+  await click("[data-bb=history-merge]");
+  await waitFor("the conflict list", 5000, () => exists("[data-bb=history-conflicts]"));
+  const list = await evalJs("JSON.stringify([...document.querySelectorAll('[data-bb=history-conflict]')].map((l) => l.textContent.trim()))").then(JSON.parse);
+  check("the conflict listed as Rust's Display", JSON.stringify(list) === JSON.stringify(["IfcProject project information phase"]), JSON.stringify(list));
+  check("the conflicts' title", ((await text("[data-bb=history-conflicts] .eyebrow")) ?? "") === "1 conflict(s), nothing merged", await text("[data-bb=history-conflicts] .eyebrow"));
+  check("nothing merged: main's phase, main's last version", (await project()).includes('"main"') && (await versions())[0]?.[0] === "phase main", await project());
+  check("keep mine and take theirs offered", await exists("[data-bb=history-keep-mine]") && await exists("[data-bb=history-take-theirs]"));
+  await click("[data-bb=history-take-theirs]");
+  await waitFor("the merge of alt", 5000, async () => (await versions())[0]?.[0] === "Merge alt");
+  check("take theirs: alt's phase", (await project()).includes('"alt"') && !(await project()).includes('"main"'), await project());
+  check("take theirs: the list gone, the note shown", !(await exists("[data-bb=history-conflicts]")) && ((await text("[data-bb=history-merge-note]")) ?? "").startsWith("Merged alt"));
+  check("merge: no error shown", !(await exists("[data-bb=history-merge-error]")));
+  // ---- end H2b ----
 }
 
 async function main() {
