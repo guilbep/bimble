@@ -1361,3 +1361,29 @@ Rust's default, so no golden changes. Test: `test/dead1_test.c`.
     the elements whose colour changed, faces then edges, when the last frame was complete.
   - **The moving rate** counts only a budgeted frame after a budgeted frame (3D1 counted a whole
     frame too and could draw everything while moving).
+
+## 39. Mission 1 across linked models (ticket M1LINKS, ADR 0081)
+
+Rust v0.19.0 draws at most three linked layers and nothing below applies to them; every golden keeps
+its bytes (a session without links answers as before; a `.bimble` without notes keeps its bytes).
+
+- **Levels from links** (`session/m1links.h`): the session's levels are the file's, then each loaded
+  link's storeys at their placed elevation not within 200 mm of one already taken; `open_views` lists a
+  floor plan per such level after the file's views (Rust: the file's levels only). `grid_axes` gives a
+  placed link's axes and levels where it is placed, and the place tool snaps to them there (LINKF left
+  them unplaced).
+- **Boxes over links**: with a link shown, the first section box, Box to selection's fallback, a plan's
+  and a section's clip fit the links too (Rust fits the open scene).
+- **Linked elements hidden**: hide, isolate, unhide take a linked selection by its GlobalId; the hidden
+  action `view_rule` writes a class, a link's storey (`<link>/<storey>` in `hidden_storeys`), a link or
+  an element into the active view; the view's lists hide linked elements too (`by_view`), and the
+  `/mesh` trailer leaves a link's hidden elements out (a change of what is hidden bumps `links_gen`).
+- **Property sets** (`src/ifc_psets.h`): Rust's reader skips them (`read.rs` NOT_DISPLAYED); the C core
+  reads them in a second, narrow parse (`cc_step_parse_only`) for a linked element; a link cache
+  (format `bimble-link-cache 3`) carries them in a last section `PROP`, skipped by any other reader,
+  kept on disk by this one. `query element {id, link}` adds `property_sets`, `property_sets_note`.
+- **Notes** in a link entry of the `.bimble` (`notes`: `at`, `element`, `text`; left out when empty; at
+  most 256 per link, 2000 bytes each), with `manage_links` `note_add` / `note_remove` and
+  `query link_notes`; not model data (no Command, no undo step), as LNK1's links section. A plan or
+  section drawn on paper shows the notes as texts.
+- Tests: `test/m1links_test.c` (hostile tables, sections and notes), `test/lab_mission1_links.mjs`.

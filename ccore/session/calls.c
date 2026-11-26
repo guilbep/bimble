@@ -4050,7 +4050,8 @@ int cc_call(cc_session *s, const char *op, const char *name, const char *body, s
     }
     if (s->nlinks) { /* M1LINKS: what is hidden changed: the links' meshes leave it out (mesh.c) */
         uint64_t h = cc_vis_sig(&s->vis);
-        if (h != s->vis_sig) s->vis_sig = h, s->links_gen++, s->vis_links_gen = s->links_gen;
+        if (s->has_vis_sig && h != s->vis_sig) s->links_gen++, s->vis_links_gen = s->links_gen;
+        s->vis_sig = h, s->has_vis_sig = 1;
     }
     return rc;
 }
