@@ -114,6 +114,13 @@ try {
   symlinkSync(join(home, "sub"), join(home, "inlink"));
   symlinkSync(outside, join(home, "outlink"));
   symlinkSync(join(outside, "secret.ifc"), join(home, "outfile.ifc"));
+  // FIXSES: a link whose text leads outside the roots, through a link outside that leads back in
+  // (home/via.ifc -> <tmp>/back/in.ifc, <tmp>/back -> home): the outside link must not be read
+  // while listing (on Windows it could be a network path), so via.ifc is "outside", not a file.
+  writeFileSync(join(home, "in.ifc"), "x");
+  symlinkSync(home, join(tmp, "back"));
+  symlinkSync(join(tmp, "back", "in.ifc"), join(home, "via.ifc"));
+  symlinkSync("in.ifc", join(home, "rel.ifc")); // a relative link inside: followed
   mkdirSync(join(home, "locked"));
   chmodSync(join(home, "locked"), 0o000);
   const big = join(extra, "big");
@@ -138,6 +145,10 @@ try {
   check("fs_list: a link inside the roots is a link to a dir", by.inlink?.kind === "link" && by.inlink.target === "dir" && !by.inlink.outside, JSON.stringify(by.inlink));
   check("fs_list: a link leaving the roots: outside, no target", by.outlink?.kind === "link" && by.outlink.target === null && by.outlink.outside === true, JSON.stringify(by.outlink));
   check("fs_list: a file link leaving the roots: outside", by["outfile.ifc"]?.outside === true && by["outfile.ifc"].target === null, JSON.stringify(by["outfile.ifc"]));
+  check("fs_list: a link through a path outside the roots (that leads back in): outside, not followed",
+    by["via.ifc"]?.kind === "link" && by["via.ifc"].outside === true && by["via.ifc"].target === null, JSON.stringify(by["via.ifc"]));
+  check("fs_list: a relative link inside the roots: a link to a file", by["rel.ifc"]?.kind === "link" && by["rel.ifc"].target === "file" &&
+    !by["rel.ifc"].outside, JSON.stringify(by["rel.ifc"]));
   if (nonUtf8) check("fs_list: a non-UTF-8 name skipped and counted", l0.skipped === 1 && !names.some((n) => n.startsWith("bad-")), `skipped ${l0.skipped}`);
   check("fs_list: names and metadata only (no bytes)", !r0.text.includes("ISO-10303") && !r0.text.includes("%PDF"));
   check("fs_list home: the parent is not listed (outside)", l0.parent === null && l0.dir === home && l0.truncated === false, JSON.stringify({ parent: l0.parent, dir: l0.dir }));

@@ -79,6 +79,36 @@ static int in_roots_lexical(const char *p) {
     return 0;
 }
 
+/* FIXSES: may fs_list follow the link `full` (realpath)? Its text first: each target is read
+ * without following it (readlink), joined to the link's folder when relative, normalised by the
+ * text alone, and must be under a root before the next link of the chain is read (at most 16);
+ * so a link to a path outside the roots, a network mount or another link out of them is never
+ * followed while listing. 1 yes; 0 no (reported "outside", nothing beyond touched). Windows: a
+ * symbolic link or a junction is never followed (its reparse point is not read here): 0. */
+static int link_may_follow(const char *full) {
+#ifdef _WIN32
+    (void)full;
+    return 0;
+#else
+    char cur[FS_MAX_PATH + 1], t[FS_MAX_PATH + 1], j[2 * FS_MAX_PATH + 4], nb[2 * FS_MAX_PATH + 6];
+    if (strlen(full) > FS_MAX_PATH) return 0;
+    strcpy(cur, full);
+    for (int hop = 0; hop < 16; hop++) {
+        ssize_t k = readlink(cur, t, sizeof t - 1);
+        if (k < 0) return hop > 0; /* the end of the chain (not a link), or nothing there */
+        t[k] = 0;
+        if (t[0] == '/') snprintf(j, sizeof j, "%s", t);
+        else {
+            const char *sl = strrchr(cur, '/');
+            snprintf(j, sizeof j, "%.*s/%s", sl ? (int)(sl - cur) : 0, cur, t);
+        }
+        if (fsr_normalise(j, 0, nb, sizeof nb) != FSR_OK || strlen(nb) > FS_MAX_PATH || !in_roots_lexical(nb)) return 0;
+        strcpy(cur, nb);
+    }
+    return 0; /* a chain of more than 16 links */
+#endif
+}
+
 /* A root is a network path ("//server/share"): only then may fs_list take one. */
 static int unc_root(void) {
     for (int i = 0; i < nroots; i++)
@@ -258,8 +288,10 @@ static int fs_list(const char *body, size_t n, Buf *out) {
         }
         int target = 0, outside = 0;
         if (es.kind == CC_PF_LINK) {
-            /* never followed silently: where it leads, only when that is inside the roots */
-            if (!pf->real_path(pf->ctx, full, tr, sizeof tr) && in_roots(tr) && !pf->stat_path(pf->ctx, tr, 1, &ts))
+            /* never followed silently: where it leads, only when that is inside the roots, by its
+             * text first (FIXSES: link_may_follow), then resolved */
+            if (link_may_follow(full) && !pf->real_path(pf->ctx, full, tr, sizeof tr) && in_roots(tr) &&
+                !pf->stat_path(pf->ctx, tr, 1, &ts))
                 target = ts.kind;
             else outside = 1;
         }
