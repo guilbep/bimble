@@ -370,6 +370,26 @@ async function main() {
   await evalJs(`window.__bbGl.bench.look(${JSON.stringify(near)}, 140000)`);
   await evalJs("delete window.__bbGl.gpuBudget");
 
+  // ---- REAL1: a link thousands of km from the others (a file without georeference) ----
+  // Fails on the code before REAL1: the scene's bounds took it in, Fit all showed a dot (link_0 not drawn)
+  // and the near plane (far x 1e-4) clipped the near links.
+  // (manage_links place sets the move, within 1000 km: 900 km added to the far link's, then put back)
+  const move0 = JSON.parse((await hcall("query", "links_panel")).text).models.find((m) => m.name === `link_${N - 1}.ifc`).move_mm;
+  const farMove = [move0[0] + 9e8, move0[1], move0[2]];
+  await hcall("action", "manage_links", { op: "place", name: `link_${N - 1}.ifc`, move_mm: farMove });
+  await waitFor("the far link placed in the page", 10000, async () => ((await gl()).farLinks ?? []).length === 1).catch(() => null);
+  const farSt = await gl();
+  await evalJs("document.querySelector('[data-bb=view-fit]').click()");
+  await calm();
+  const redFar = await pix("red");
+  const farNote = await waitFor("the Links panel's notice", 5000, () => evalJs(`document.querySelector('[data-bb=link-row][data-name="link_${N - 1}.ifc"] [data-bb=link-far]')?.textContent ?? null`)).catch(() => null);
+  check("a link 900 km away: left out of Fit all (the near links fill the view, link_0 drawn red), the Links panel says how far",
+    (farSt.farLinks ?? []).length === 1 && farSt.farLinks[0].name === `link_${N - 1}.ifc` && redFar.n > 200 && /km/.test(farNote ?? ""),
+    `far ${JSON.stringify(farSt.farLinks)}, red ${redFar.n} px, notice ${JSON.stringify(farNote)}`);
+  await hcall("action", "manage_links", { op: "place", name: `link_${N - 1}.ifc`, move_mm: move0 });
+  await waitFor("the far link back", 10000, async () => ((await gl()).farLinks ?? []).length === 0).catch(() => null);
+  await evalJs(`window.__bbGl.bench.look(${JSON.stringify(near)}, 140000)`);
+
   // ---- the numbers ----
   const st2 = await gl();
   console.log(`GPU ${(st2.gpuBytes / 1e6).toFixed(1)} MB (links' proxies ${(st2.linkProxies.reduce((a, x) => a + x.bytes, 0) / 1e6).toFixed(2)} MB); state upload: ${JSON.stringify(st2.stateUpload)}, visibility in the page ${st2.visApplyMs?.toFixed(1)} ms`);

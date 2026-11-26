@@ -363,6 +363,8 @@ export type PartKey =
   | "links.detailTip"
   | "links.dx"
   | "links.dy"
+  | "links.far"
+  | "links.farTip"
   | "links.fromCache"
   | "links.hide"
   | "links.in2d"

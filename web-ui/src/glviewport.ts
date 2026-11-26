@@ -90,6 +90,7 @@ import { batchShown, IDENTITY_XF, packState, sameXf, STATE_NONE, STATE_TEX_W, xf
 import { cutProxies, fitProxies, parseBprx, standIns, usableCells, type Proxies } from "./gl/proxies"; // 3D2
 import { referenceLayer } from "./gl/reference"; // L1: reference plans
 import { autoGpuBudget, linkDetail } from "./gl/linkmem"; // LNK3D (D)
+import { farModels, linkFar } from "./gl/farlinks"; // REAL1
 import { sectionMatrices, sectionFit, isSection } from "./gl/section"; // SEC1
 import { gridLayer } from "./gl/grids"; // ---- G2: grid axes in plans ---- / ---- end G2 ----
 import { drawSettingOut, type MarkerDrawn } from "./gl/settingout"; // SETOUT: base point, survey point, north
@@ -689,6 +690,8 @@ interface GlStats {
   /** LNK3D (D): the GPU budget across links (bytes; a test hook: unset, automatic from memory_share), each link's
    *  detail on the GPU or not (its bytes, its uploads), the last upload of a link's detail (ms). */
   gpuBudget?: number;
+  /** REAL1 (gl/farlinks.ts): links left out of the scene's bounds (Fit all, the clip planes): thousands of km away. */
+  farLinks?: { name: string; km: number }[];
   linkDetail?: { name: string; detail: boolean; bytes: number; loads: number }[];
   linkReloadMs?: number;
   /** 3D2 (step 4): ms of the last pick's ray scan in the page (pickHit). */
@@ -1071,12 +1074,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   let prePrx: { x: LinkPrx; xf: ModelXf; visible: boolean; colour: number }[] = [];
   const prePrxBounds = (): { center: V3; radius: number } | null => {
     const lo: V3 = [Infinity, Infinity, Infinity], hi: V3 = [-Infinity, -Infinity, -Infinity], b = new Float32Array(6);
-    for (const { x, xf, visible } of prePrx) {
+    const per = prePrx.map(({ x, xf, visible }) => { // REAL1: a link far from the others left out (gl/farlinks.ts)
       const root = x.p.cells[0];
-      if (!visible || !root) continue;
+      if (!visible || !root) return null;
       xfBox(xf, root.box, 0, b, 0);
-      for (let a = 0; a < 3; a++) lo[a] = Math.min(lo[a]!, b[a]!), hi[a] = Math.max(hi[a]!, b[3 + a]!);
-    }
+      return { min: [b[0]!, b[1]!, b[2]!], max: [b[3]!, b[4]!, b[5]!] };
+    });
+    const far = farModels(per);
+    per.forEach((p, k) => { if (p && !far.has(k)) for (let a = 0; a < 3; a++) lo[a] = Math.min(lo[a]!, p.min[a]!), hi[a] = Math.max(hi[a]!, p.max[a]!); });
     return lo[0] <= hi[0] ? { center: scale(add(lo, hi), 0.5), radius: Math.max(1, Math.hypot(...sub(hi, lo)) / 2) } : null;
   };
   const tmpBox = new Float32Array(6);
@@ -1180,6 +1185,28 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
 
   let mesh: Bmsh | null = null;
   let bounds: { center: V3; radius: number } | null = null;
+  /** REAL1 (gl/farlinks.ts): the scene's bounds from the elements' boxes, each model's (the open one, each link)
+   *  first; a model thousands of km from the others (a file without georeference) is left out (Fit all, the clip
+   *  planes), the Links panel told (linkFar) and stats.farLinks set. Null: no element with a mesh. */
+  const sceneBounds = (m: Bmsh): { center: V3; radius: number } | null => {
+    const L = m.links ?? [], ranges: [number, number][] = [[0, L[0]?.e0 ?? m.ids.length], ...L.map((l): [number, number] => [l.e0, l.e0 + l.elements])];
+    const per = ranges.map(([a, b]) => {
+      const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      for (let e = a; e < b; e++) {
+        if (!(m.nv[e] ?? 0)) continue;
+        for (let k = 0; k < 3; k++) lo[k] = Math.min(lo[k]!, boxes[6 * e + k] ?? 0), hi[k] = Math.max(hi[k]!, boxes[6 * e + 3 + k] ?? 0);
+      }
+      return lo[0]! <= hi[0]! ? { min: lo, max: hi } : null;
+    });
+    const far = farModels(per);
+    const min: V3 = [Infinity, Infinity, Infinity], max: V3 = [-Infinity, -Infinity, -Infinity];
+    per.forEach((b, k) => { if (b && !far.has(k)) for (let a = 0; a < 3; a++) min[a] = Math.min(min[a]!, b.min[a]!), max[a] = Math.max(max[a]!, b.max[a]!); });
+    const named: Record<string, number> = {};
+    for (const [k, d] of far) if (k > 0) named[L[k - 1]!.name] = Math.round(d / 1e6);
+    if (JSON.stringify(named) !== JSON.stringify(linkFar.value)) linkFar.value = named;
+    stats.farLinks = Object.entries(named).map(([name, km]) => ({ name, km }));
+    return min[0] <= max[0] ? { center: scale(add(min, max), 0.5), radius: Math.max(1, Math.hypot(...sub(max, min)) / 2) } : null;
+  };
   // The view shown (open_views current, view_clip): a plan makes the camera orthographic.
   let plan: ViewClip | null = null;
   let viewId: string | null = null;
@@ -1621,15 +1648,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     for (const l of m.links ?? []) placeLinkBoxes(l.e0, l.e0 + l.elements, l.xf);
     uploadModels();
     stateTexels = new Uint8Array(4 * m.ids.length), stateRows = 0;
-    const min: V3 = [Infinity, Infinity, Infinity], max: V3 = [-Infinity, -Infinity, -Infinity];
-    for (let e = 0; e < m.ids.length; e++) { // 3D1: the elements' boxes (placed shapes placed): the vertices' bounds
-      if (!(m.nv[e] ?? 0)) continue;
-      for (let a = 0; a < 3; a++) {
-        min[a] = Math.min(min[a]!, boxes[6 * e + a] ?? 0);
-        max[a] = Math.max(max[a]!, boxes[6 * e + 3 + a] ?? 0);
-      }
-    }
-    bounds = m.pos.length ? { center: scale(add(min, max), 0.5), radius: Math.max(1, Math.hypot(...sub(max, min)) / 2) } : null;
+    bounds = m.pos.length ? sceneBounds(m) : null; // 3D1: the elements' boxes (placed shapes placed); REAL1: far models left out
     // 3D1: each placed shape's indices once, packed per model (the merged lists hold the own meshes'); shapeI0:
     // a shape's first index in its model's packed list
     let nsh = 0;
@@ -1803,12 +1822,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const refitBounds = () => {
     const m = mesh;
     if (!m) return;
-    const min: V3 = [Infinity, Infinity, Infinity], max: V3 = [-Infinity, -Infinity, -Infinity];
-    for (let e = 0; e < m.ids.length; e++) {
-      if (!(m.nv[e] ?? 0)) continue;
-      for (let a = 0; a < 3; a++) min[a] = Math.min(min[a]!, boxes[6 * e + a]!), max[a] = Math.max(max[a]!, boxes[6 * e + 3 + a]!);
-    }
-    bounds = min[0] <= max[0] ? { center: scale(add(min, max), 0.5), radius: Math.max(1, Math.hypot(...sub(max, min)) / 2) } : bounds;
+    bounds = sceneBounds(m) ?? bounds;
   };
   const applyLinkDraw = (rows: LinkDraw[]) => {
     const m = mesh, L = m?.links;
