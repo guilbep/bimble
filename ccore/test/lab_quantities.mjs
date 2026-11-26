@@ -11,6 +11,8 @@
 //   Palette: Ctrl+K opens it (the query field focused), "section box" typed lists fewer items (the
 //     C core's palette_match), Enter runs the first one: Section box, its pressed state turns
 //     (query and the page's `actions`), recent_actions starts with it, an empty query lists it first.
+//     DEAD1: "Go to: Concrete columns" shows the Quantities page on that schedule with no refused call
+//     and no warning; on wasm a refused call is kept in window.__bbRefused (ccore.ts).
 //   View switches (glviewport.ts Q2 blocks): Edges off draws no edge (the dark pixels go) and on
 //     again; Fit all after a wheel zoom gives the fitted camera back; Orthographic projects a line
 //     of sight to one point; Top view sets pitch 1.5 and yaw -π/2; a click from that view picks
@@ -182,7 +184,7 @@ async function quantities(mode, S, evalJs) {
 
 /** The command palette on one client: Ctrl+K, a query typed, the list filtered by the C core's
  *  palette_match, Enter runs the first action (Section box: pressed, recent_actions). */
-async function palette(mode, S, evalJs) {
+async function palette(mode, S, evalJs, log) {
   const B = (body) => evalJs(`(async () => { const b = await import('/src/bimble.ts'); ${body} })()`);
   await S("Page.navigate", { url: PAGES[mode].replace("&page=quantities", "") });
   await waitFor(`${mode}: data-bb-ready`, 30000, () => evalJs("document.documentElement.dataset.bbReady === '1' && !!window.__bbGl"));
@@ -214,6 +216,28 @@ async function palette(mode, S, evalJs) {
   check(`${mode}: an empty query lists the recent action first`, first !== "" && first === boxLabel, `${first} vs ${boxLabel}`);
   await key("Escape", "Escape", 27);
   await B("return b.runAction('section_box');"); // off again (the native host keeps it across pages)
+  // DEAD1: "Go to: Concrete columns" (a schedule) shows the Quantities page on that schedule, and no
+  // call is refused (the page asked the core to open a schedule as a view tab: 400; on wasm silently)
+  await key("k", "KeyK", 75, 2);
+  await waitFor(`${mode}: the palette for Go to`, 5000, () => evalJs("document.activeElement?.dataset.bb === 'palette-query'")).catch(() => false);
+  const log0 = log.length, ref0 = await evalJs("(window.__bbRefused ?? []).length");
+  await S("Input.insertText", { text: "concrete columns" });
+  await waitFor(`${mode}: Go to: Concrete columns listed`, 5000, () => evalJs("document.querySelector('[data-bb=palette-item] .lab')?.textContent.includes('Concrete columns')")).catch(() => false);
+  await key("Enter", "Enter", 13);
+  const title = await waitFor(`${mode}: the Quantities page`, 5000, () => evalJs("document.querySelector('[data-bb=quantities-title]')?.textContent.trim() || null")).catch(() => null);
+  await sleep(300);
+  const late = log.slice(log0).filter((m) => /error|warn/.test(m.level) && !/Synchronous XMLHttpRequest/.test(m.text)).map((m) => m.text);
+  const refusedN = (await evalJs("(window.__bbRefused ?? []).length")) - ref0;
+  check(`${mode}: Go to: Concrete columns shows the Quantities page on it, no refused call, no warning (DEAD1)`,
+    title === "Concrete columns" && refusedN === 0 && late.length === 0, JSON.stringify({ title, refusedN, late }));
+  // DEAD1: a refused call is told on wasm too (the client wrapper, ccore.ts): a bad verb
+  if (mode === "wasm") { // (native: the browser logs the host's 400 itself)
+    const ref1 = await evalJs("(window.__bbRefused ?? []).length");
+    const bad = await B("return b.runVerb('level_remove', { id: 'not-an-id' });");
+    const seen = await evalJs("(window.__bbRefused ?? []).slice(-1)[0] ?? null");
+    check(`wasm: a refused call is kept in window.__bbRefused and told (DEAD1)`, !!bad && (await evalJs("(window.__bbRefused ?? []).length")) === ref1 + 1 && seen?.op === "verb" && seen?.name === "level_remove" && seen?.status === 400, JSON.stringify({ bad, seen }));
+  }
+  await evalJs("(async () => (await import('/src/shell/send.ts')).send({ do: 'showView' }))()");
 }
 
 /** The view switches on one client: Edges off and on (no edge drawn, the dark pixels go), Fit all
@@ -336,7 +360,7 @@ async function main() {
   };
   for (const mode of ["native", "wasm"]) {
     await quantities(mode, S, evalJs);
-    await palette(mode, S, evalJs);
+    await palette(mode, S, evalJs, consoleLog);
     await switches(mode, S, evalJs);
   }
 

@@ -205,6 +205,7 @@ export const CONTROLS: readonly Control[] = [
   { id: "viewtab-page-close", event: { do: "back" }, shown: k("model.page", "model.sheet") },
   { id: "navigator-page", event: { do: "showPage", page: "quantities" }, shown: inModel },
   { id: "ribbon-page", event: { do: "showPage", page: "quantities" }, shown: inModel },
+  { id: "palette-page", event: { do: "showPage", page: "quantities" }, shown: inModel }, // DEAD1: Go to: <schedule>
   { id: "shell-opening-cancel", event: { do: "cancel" }, shown: k("opening") },
   { id: "shell-error-back", event: { do: "back" }, shown: k("error") },
   { id: "shell-confirm-discard", event: { do: "discard" }, shown: k("confirmClose") },

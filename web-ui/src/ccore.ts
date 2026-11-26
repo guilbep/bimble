@@ -103,6 +103,19 @@ export interface CcoreClient {
   default: () => Promise<unknown>;
 }
 
+/** DEAD1 (ADR 0074): a call the core refused (status 400), as the native host's answer shows in the
+ *  browser's console and network log: told on the console (info level: a refusal is often the
+ *  expected answer to a value typed) and kept, the last 100, in `window.__bbRefused` for the tools
+ *  (ccore/tools/ux.mjs, the lab tests). */
+export interface Refusal { op: string; name: string; status: number; text: string; at: number }
+function refused(op: string, name: string | null, status: number, text: string): void {
+  const w = window as unknown as { __bbRefused?: Refusal[] };
+  const list = (w.__bbRefused ??= []);
+  list.push({ op, name: name ?? "-", status, text: text.slice(0, 300), at: performance.now() });
+  if (list.length > 100) list.splice(0, list.length - 100);
+  console.info(`ccore: ${op} ${name ?? "-"} refused (${status}): ${text.slice(0, 300)}`);
+}
+
 let module: { X: Exports; res: number } | null = null;
 /** The client's call (log, change feed, throws the error text); set by ccoreClient. */
 let callHost: ((op: string, name: string | null, body?: string) => string) | null = null;
@@ -406,7 +419,10 @@ export async function ccoreClient(params: URLSearchParams, steps: OpenSteps = {}
     hostLog();
     emit();
     const t = dec.decode(r.bytes);
-    if (r.status !== 200) throw t || `ccore ${op}: ${r.status}`; // as wasm: the error text as a string
+    if (r.status !== 200) { // as wasm: the error text as a string
+      refused(op, name, r.status, t); // DEAD1: seen, as the native host's 400 is (the browser logs it)
+      throw t || `ccore ${op}: ${r.status}`;
+    }
     return t;
   };
   callHost = call;

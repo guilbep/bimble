@@ -24,13 +24,14 @@ export const hint = () => {
 import { computed, ref } from "vue";
 import { materials, scheduleCsv, scheduleList, scheduleRows, select, setSchedule, state, type SchedulePatch, type ScheduleDef, type ScheduleTable } from "../bimble";
 import { t } from "../i18n";
+import { pickedSchedule } from "./quantitiesPick";
 
 // ponytail: the built-in "All elements" schedule is shown (it mixes classes, as the reference); no schedule
 // picker in the reference. Add one when the navigator's schedule list opens a schedule here.
 const def = computed<ScheduleDef | null>(() => {
   void state.value.rev;
   const all = scheduleList() as ScheduleDef[];
-  return all.find((d) => d.name === "All elements") ?? all[0] ?? null;
+  return all.find((d) => d.name === (pickedSchedule.value ?? "All elements")) ?? all.find((d) => d.name === "All elements") ?? all[0] ?? null; // DEAD1: the palette's pick
 });
 type Table = ScheduleTable;
 const table = computed<Table | null>(() => {

@@ -14,6 +14,8 @@ import { RIBBON, type RibbonTool } from "../shell/ribbon-tabs";
 import { viewName } from "../shell/viewName";
 import { shortcutFor } from "../shell/keys"; // KEY1: the shortcut shown is the one the key table runs
 import { currentDialog } from ".";
+import { send } from "../shell/send";
+import { pickedSchedule } from "../pages/quantitiesPick";
 
 interface Item { /** The Rust action name, for actions. */ name?: string; label: string; /** Also searched: the Rust (English) label. */ also?: string; note: string; kbd: string; icon: string; enabled: boolean; go: () => string | null }
 
@@ -52,10 +54,17 @@ const items = computed<Item[]>(() => {
   // ponytail: sheets throw without a model; no model, no entries. Schedules: the effective ones (`schedule_list`), as egui.
   try {
     for (const s of sheets()) list.push({ label: t("palette.goto", { name: `${s.number} ${s.name}` }), note: t("tab.sheets"), kbd: "—", icon: SHEET, enabled: true, go: () => tabCall("open", { type: "sheet", id: s.id }) });
-    for (const s of scheduleList() as ScheduleDef[]) list.push({ label: t("palette.goto", { name: s.name }), note: t("tab.quantities"), kbd: "—", icon: LIST, enabled: true, go: () => tabCall("open", { type: "schedule", name: s.name }) });
+    for (const s of scheduleList() as ScheduleDef[]) list.push({ label: t("palette.goto", { name: s.name }), note: t("tab.quantities"), kbd: "—", icon: LIST, enabled: true, go: () => goSchedule(s.name) });
   } catch { /* no model */ }
   return list;
 });
+
+/** DEAD1: a schedule is a page, not a view tab (the core's tab "open" takes views only: it answered
+ *  400): the Quantities page on that schedule, through the shell. */
+function goSchedule(name: string): string | null {
+  pickedSchedule.value = name;
+  return send({ do: "showPage", page: "quantities" }) ? null : `the Quantities page cannot be shown now`;
+}
 
 // Filtering is Rust's (`palette_match`, egui's word-start matcher, accent-insensitive), on the label
 // joined with the Rust label: "sec" finds "Zone de coupe" through "Section box".
