@@ -23,6 +23,10 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h> /* rmdir */
+#ifdef _WIN32
+#include <io.h>
+#define mkdir(path, mode) mkdir(path) /* WIN2: no mode argument there */
+#endif
 #include "../host/host.h" /* cc_platform_native */
 #include "../session/calls.h"
 #include "../session/session.h"

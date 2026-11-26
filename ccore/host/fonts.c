@@ -23,6 +23,9 @@
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
+#ifdef _WIN32 /* WIN2: the program's folder by GetModuleFileNameW */
+#include <windows.h>
+#endif
 
 #include "host.h"
 #include "sheet_svg.h"
@@ -43,10 +46,20 @@ static int exe_dir(char *out, size_t n) {
     ssize_t k = readlink("/proc/self/exe", exe, sizeof exe - 1);
     if (k <= 0) return 0;
     exe[k] = 0;
+#elif defined(_WIN32)
+    /* WIN2: the program's path as UTF-8 (as host/main.c finds <exe dir>\web) */
+    wchar_t wp[PATH_MAX];
+    DWORD wn = GetModuleFileNameW(NULL, wp, PATH_MAX);
+    if (wn == 0 || wn >= PATH_MAX) return 0;
+    if (!WideCharToMultiByte(CP_UTF8, 0, wp, -1, exe, (int)sizeof exe, NULL, NULL)) return 0;
 #else
     return 0;
 #endif
     char *slash = strrchr(exe, '/');
+#ifdef _WIN32
+    char *bs = strrchr(exe, '\\'); /* WIN2: either separator */
+    if (bs && (!slash || bs > slash)) slash = bs;
+#endif
     if (!slash) return 0;
     int w = snprintf(out, n, "%.*s", (int)(slash - exe), exe);
     return w > 0 && (size_t)w < n;
@@ -63,7 +76,9 @@ static int has_regular(const char *dir) {
 /* <config dir>/bimble/fonts into `out`, or 0 (no home). */
 static int user_dir(char *out, size_t n) {
     const char *base = NULL, *tail = "/bimble/fonts";
+#ifndef _WIN32 /* WIN2: unused there */
     char tmp[PATH_MAX];
+#endif
 #if defined(_WIN32)
     base = getenv("APPDATA"), tail = "\\bimble\\fonts";
 #elif defined(__APPLE__)

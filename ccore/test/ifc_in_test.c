@@ -24,6 +24,10 @@
 #include <sys/mman.h>
 #endif
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <io.h>
+#define mkdir(path, mode) mkdir(path) /* WIN2: no mode argument there */
+#endif
 #include <string.h>
 #include <time.h>
 #include "../src/boolean.h"
