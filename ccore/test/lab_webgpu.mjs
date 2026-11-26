@@ -142,8 +142,9 @@ try {
     check("no adapter: the reason is kept (no adapter, ADR 0020)", /no adapter/.test(r.reason ?? ""), r.reason);
     check("no adapter: no WebGPU canvas over the view", !(await L.evalJs("!!document.querySelector('canvas[data-bb-gpu]')")));
     check("no adapter: WebGL2 drew the model", (await L.evalJs("window.__bbGl.frameTris")) > 0);
-    await waitFor("the panel", 20000, () => L.evalJs("!!document.querySelector('[data-bb=perf-fallback]')"));
-    const fb = await L.evalJs("document.querySelector('[data-bb=perf-fallback]').textContent.trim()");
+    // The panel reads the renderer's state on its own tick: before that it says "starting…".
+    await waitFor("the panel's reason", 20000, () => L.evalJs("(() => { const e = document.querySelector('[data-bb=perf-fallback]'); return !!e && !/starting/.test(e.textContent); })()")).catch(() => null);
+    const fb = await L.evalJs("document.querySelector('[data-bb=perf-fallback]')?.textContent.trim() ?? ''");
     check("no adapter: the performance panel says why WebGPU is not used", /no adapter/.test(fb), fb);
     await L.evalJs("document.querySelector('[data-bb=perf-copy]').click()");
     const text = await waitFor("the copied report", 5000, () => L.evalJs("window.__bbPerfCopied ?? null"));
