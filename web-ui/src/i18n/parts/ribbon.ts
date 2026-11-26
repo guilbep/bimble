@@ -110,7 +110,7 @@ export const fr = {
   "ribbon.view.g4.t2": "Isoler",
   "ribbon.view.g4.t3": "Afficher masqués",
   "ribbon.view.g4.t4": "Afficher",
-  "ribbon.view.g4.t5": "Tout afficher", // ISS72
+  "ribbon.view.g4.t5": "Tout réafficher", // ISS72 ("Tout afficher" is the camera's Fit all)
   "ribbon.view.g4.t6": "Affichage précédent", // ISS72
   "ribbon.view.g5": "Vues",
   "ribbon.view.g5.t1": "Nouvelle vue…",

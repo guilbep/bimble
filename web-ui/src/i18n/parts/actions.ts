@@ -57,7 +57,7 @@ export const fr = {
   "action.paper_view": "Sur papier",
   "action.clear_temporary": "Tout réafficher (masqués pour l'instant)",
   "action.show_all_in_view": "Tout afficher dans la vue",
-  "action.show_all": "Tout afficher", // ISS72
+  "action.show_all": "Tout réafficher", // ISS72
   "action.show_previous": "Affichage précédent", // ISS72
   "actionTab.Model": "Modèle",
   "actionTab.Manage": "Gérer",

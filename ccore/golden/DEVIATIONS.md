@@ -797,7 +797,7 @@ Rust's (16 grades, values and sources). The action `materials` is enabled as Rus
   by the lab yet: the colour changes on screen at once, the hatch shows on paper drawings.
 - **Assign** (the selected elements to the material): Rust does it in the Properties panel; the C
   page has a button too, through Rust's verb `set_material`.
-## 24. Show all and Show previous (ticket ISS72, GitHub issue #72)
+## 25. Show all and Show previous (ticket ISS72, GitHub issue #72)
 
 **Oracle.** None: Rust v0.19.0 has neither action. Its nearest are `clear_temporary` ("Show all
 hidden for now") and `show_all_in_view` (`viewing.rs:490`), each of which leaves the other part
