@@ -111,6 +111,8 @@ caches weigh 96 MB on disk for 1.84 GB of IFC (5 %). BLAKE3 (the portable code t
     would rebuild its buffers in the page instead of changing one matrix. The base point is the
     building's origin, not Revit's project base point (an IFC has none): said in the panel's
     vocabulary only.
+11. **Unload / Load** keep the link and free its memory; **Reload all** reads each link again (its
+    cache unless the IFC changed).
 12. **Several chosen files in one go** (the owner: "is there a way to select like 4 files at once?"):
     `link_model {paths: [...]}` beside `{path}`: one call, one undo step, the same queue; a path
     already linked is skipped with a note, one outside the dialog's roots (`cc_platform.path_allowed`),
@@ -127,8 +129,6 @@ caches weigh 96 MB on disk for 1.84 GB of IFC (5 %). BLAKE3 (the portable code t
     its rows while one runs. After: 16 to 57 ms (load average 3.4 to 5). The eye's row answers within
     200 ms; the viewport follows when /mesh is fetched again (51 to 131 ms measured): a per-batch
     visibility flag in the draw path is left for after ticket 3D2.
-11. **Unload / Load** keep the link and free its memory; **Reload all** reads each link again (its
-    cache unless the IFC changed).
 
 ## Consequences
 
