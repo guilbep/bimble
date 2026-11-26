@@ -113,41 +113,23 @@ static void link_bmsh_id(const void *ctx, const cc_scene *sc, size_t k, char out
     cc_link_id(ctx, k, out);
 }
 
-/* ---- M1LINKS: a link's elements hidden (by GlobalId: hide, isolate, the view's rules) are left out
- * of its BMSH; the page draws what the trailer holds (the draw path is ticket 3D2's). ---- */
-typedef struct {
-    const cc_link *k;
-    const size_t *map; /* filtered index -> the link's scene index */
-} Kept;
-static void kept_bmsh_id(const void *ctx, const cc_scene *sc, size_t k, char out[22]) {
-    const Kept *x = ctx;
-    (void)sc;
-    cc_link_id(x->k, x->map[k], out);
-}
-/* The link's raw scene without its hidden elements in `f` (elements malloc'd in *map's block; the
- * rest borrowed): 1 when some were left out, 0 none (f untouched), -1 out of memory. */
-static int link_kept(cc_session *s, const cc_link *k, cc_scene *f, size_t **map) {
-    const cc_scene *sc = cc_link_raw_scene(k);
-    if (s->vis.reveal || !k->kind || !sc->nelements) return 0;
-    size_t n = sc->nelements, kept = 0;
-    size_t *m = malloc(n * sizeof *m);
-    if (!m) return -1;
-    char id[22];
-    for (size_t i = 0; i < n; i++) {
-        cc_link_id(k, i, id);
-        cc_gid g;
-        memcpy(g.c, id, 22);
-        if (cc_gid_valid(id, 22) && cc_vis_hidden(&s->vis, &g)) continue;
-        m[kept++] = i;
+/* LNK3D (ADR 0078 amendment 3, DEVIATIONS 39): a link's hidden elements stay in its BMSH (M1LINKS
+ * left them out, and every change of what is hidden made the page fetch the whole mesh again); the
+ * page hides them by their ids (query visibility_sets) in its per-element draw state. */
+
+/* The trailer's light fields (visible, placement, colour), hashed (FNV-1a): a change of them alone
+ * writes the trailer again for a reader that asks, without bumping links_mesh_gen. */
+static uint64_t links_head(cc_session *s) {
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < s->nlinks; i++) {
+        const cc_link *k = &s->links[i];
+        double c, sn, t[3];
+        cc_link_placement(s, k, &c, &sn, t);
+        double v[6] = {c, sn, t[0], t[1], t[2], (double)k->colour + 2.0 * (k->visible && k->kind)};
+        const unsigned char *p = (const unsigned char *)v;
+        for (size_t j = 0; j < sizeof v; j++) h = (h ^ p[j]) * 1099511628211ull;
     }
-    if (kept == n) return free(m), 0;
-    *f = *sc;
-    f->elements = malloc((kept ? kept : 1) * sizeof *f->elements);
-    if (!f->elements) return free(m), -1;
-    for (size_t i = 0; i < kept; i++) f->elements[i] = sc->elements[m[i]];
-    f->nelements = kept;
-    *map = m;
-    return 1;
+    return h;
 }
 
 /* links.h: the LNKS trailer (`form` 3: each link's BMSH in version 3). */
@@ -187,15 +169,7 @@ static int links_bmsh(cc_session *s, uint32_t rev, int form, Buf *out, cc_error 
         }
         buf_clear(&one);
         one.oom = 0;
-        cc_scene f;
-        size_t *map = NULL;
-        int some = link_kept(s, k, &f, &map); /* M1LINKS */
-        if (some < 0) rc = fail(err, "out of memory");
-        else if (some) {
-            Kept x = {k, map};
-            rc = form == 3 ? cc_scene_bmsh3(&f, kept_bmsh_id, &x, rev, &one, err) : bmsh_of(&f, rev, &one, err);
-            free(f.elements), free(map);
-        } else if (form == 3) rc = cc_scene_bmsh3(cc_link_raw_scene(k), link_bmsh_id, k, rev, &one, err);
+        if (form == 3) rc = cc_scene_bmsh3(cc_link_raw_scene(k), link_bmsh_id, k, rev, &one, err);
         else rc = k->kind == CC_LINK_IFC ? cc_ifc_scene_bmsh(k->ifc, rev, &one, err) : bmsh_of(&k->scene, rev, &one, err);
         if (!rc && (one.oom || one.len > UINT32_MAX)) rc = fail(err, "out of memory");
         if (!rc) put_u32(out, (uint32_t)one.len), buf_append(out, one.p, one.len);
@@ -226,7 +200,8 @@ int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_
         *p = buf_cstr(cache), *n = cache->len;
         return 404;
     }
-    if (!s->mesh_status || s->mesh_model != m || s->mesh_rev != *rev || s->mesh_links_gen != s->links_gen || s->mesh_form != form) {
+    if (!s->mesh_status || s->mesh_model != m || s->mesh_rev != *rev || s->mesh_links_mesh_gen != s->links_mesh_gen ||
+        s->mesh_form != form || (s->nlinks && s->mesh_links_head != links_head(s))) {
         double t0 = s->pf->now_ms(s->pf->ctx);
         buf_clear(cache);
         cache->oom = 0;
@@ -255,7 +230,8 @@ int cc_mesh_get_form(cc_session *s, int form, const char **p, size_t *n, uint32_
         } else {
             s->mesh_status = 200;
         }
-        s->mesh_model = m, s->mesh_rev = *rev, s->mesh_links_gen = s->links_gen, s->mesh_form = form;
+        s->mesh_model = m, s->mesh_rev = *rev, s->mesh_links_mesh_gen = s->links_mesh_gen, s->mesh_form = form;
+        s->mesh_links_head = s->nlinks ? links_head(s) : 0; /* LNK3D */
         *build_ms = s->pf->now_ms(s->pf->ctx) - t0;
     }
     *p = cache->p ? cache->p : "", *n = cache->len;

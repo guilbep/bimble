@@ -1436,6 +1436,10 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         buf_puts(out, "null");
         return CC_OK;
     }
+    if (!strcmp(name, "link_draw")) { /* LNK3D (links.h) */
+        cc_links_draw_json(s, &w);
+        return done(&w);
+    }
     if (!strcmp(name, "links")) { /* links.h: [] without links (spec §1's stub) */
         cc_links_json(s, &w);
         int lrc = done(&w);
@@ -4157,7 +4161,7 @@ int cc_call(cc_session *s, const char *op, const char *name, const char *body, s
         s->vis_links_gen = s->links_gen;
         if (s->vis.view_lists) cc_sv_vis_load(s);
     }
-    if (s->nlinks) { /* M1LINKS: what is hidden changed: the links' meshes leave it out (mesh.c) */
+    if (s->nlinks) { /* M1LINKS: what is hidden changed (LNK3D: the mesh keeps it; links_mesh_gen stays, the page hides by id) */
         uint64_t h = cc_vis_sig(&s->vis);
         if (s->has_vis_sig && h != s->vis_sig) s->links_gen++, s->vis_links_gen = s->links_gen;
         s->vis_sig = h, s->has_vis_sig = 1;
@@ -4216,6 +4220,7 @@ void cc_change_json(cc_session *s, cc_buf *out) { /* calls.rs:134-167 (json!, so
         jw_obj_end(&w);
     }
     if (s->links_gen) jw_key(&w, "links"), jw_u64(&w, s->links_gen); /* links.h: once links changed */
+    if (s->links_gen) jw_key(&w, "links_mesh"), jw_u64(&w, s->links_mesh_gen); /* LNK3D: their geometry's changes */
     jw_key(&w, "placing");
     if (s->open) placing_json(s, &w);
     else jw_null(&w);

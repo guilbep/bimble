@@ -6,7 +6,7 @@
 // (IFC4, one shared coordinate system, one storey at 0; d_column gets a Pset_ColumnCommon and a Qto here).
 // New project -> link the folder -> the levels from links (Fondations -800, Niveau 2 3000: 3150.5 is within
 // 200 mm of 3000) each have a floor plan, drawn on paper with the links -> the section box encloses every link ->
-// a linked element hidden, a class isolated, show all (the mesh trailer shrinks and comes back) -> a measure from
+// a linked element hidden, a class isolated, show all (LNK3D: the mesh bytes stay, the ids in the sets) -> a measure from
 // a_frame's column P1.00 (300 x 300 at (0, 0)) to d_column's C-r250 (r 250 at (4000, 2000), moved by 40 m):
 // hand-computed (-150, 0, 500) to (44250, 2000, 500): 44 445.0 mm -> the property set of a linked element ->
 // a note on it survives Reload -> the plan exported to PDF shows it (pdftotext), 1 page -> saved, reopened from
@@ -154,10 +154,15 @@ async function main() {
   const cols = await q("scene_elements", { link: "a_frame.ifc", storey: "Niveau 1", class: "IfcColumn", limit: 1 });
   let r = await hcall("action", "view_rule", { op: "hide", element: cols[0].id });
   const m1 = await meshBytes();
-  check("hide one element of a link: the view keeps its id, the mesh trailer leaves it out", r.status === 200 && (await q("view_visibility")).hidden_elements.includes(cols[0].id) && m1 < m0, `${m0} -> ${m1}`);
+  // LNK3D (ADR 0078 amendment 3): the mesh keeps a link's hidden elements (the page hides them by id, no
+  // refetch); the visibility sets name the hidden one for the page
+  const vs1 = await q("visibility_sets");
+  check("hide one element of a link: the view keeps its id, the sets name it, the mesh bytes stay (LNK3D)", r.status === 200 && (await q("view_visibility")).hidden_elements.includes(cols[0].id) &&
+    vs1.hidden_in_view.includes(cols[0].id) && m1 === m0, `${m0} -> ${m1}`);
   r = await hcall("action", "view_rule", { op: "isolate", class: "IfcColumn" });
-  const vv = await q("view_visibility"), m2 = await meshBytes();
-  check("isolate IfcColumn: a rule per other class, not ids", r.status === 200 && vv.hidden_classes.includes("IfcBeam") && !vv.hidden_classes.includes("IfcColumn") && m2 < m1, JSON.stringify(vv.hidden_classes));
+  const vv = await q("view_visibility"), m2 = await meshBytes(), vs2 = await q("visibility_sets");
+  check("isolate IfcColumn: a rule per other class, not ids; the sets hide the other classes' ids, the mesh bytes stay (LNK3D)", r.status === 200 && vv.hidden_classes.includes("IfcBeam") &&
+    !vv.hidden_classes.includes("IfcColumn") && (vs2.by_view ?? []).length > 0 && !(vs2.by_view ?? []).includes(cols[0].id) && m2 === m1, JSON.stringify(vv.hidden_classes));
   await hcall("action", "undo");
   check("undo: the class rule goes (one undo step)", !(await q("view_visibility")).hidden_classes.length);
   await hcall("action", "show_all");

@@ -105,8 +105,9 @@ void cc_vis_fit(cc_vis *v, const cc_scene *sc, const cc_gid *primary);
 /* lib.rs toggle_section_box: on/off; the first time on, fitted. */
 void cc_vis_toggle(cc_vis *v, const cc_scene *sc, const cc_gid *primary);
 
-/* M1LINKS: a hash of what is hidden (the sets, the temporary state, reveal): the /mesh trailer leaves
- * a link's hidden elements out, so a change of it is a change of the links (links_gen). */
+/* M1LINKS: a hash of what is hidden (the sets, the temporary state, reveal): a change of it is a change
+ * of the links (links_gen). LNK3D: the /mesh trailer keeps a link's hidden elements (links_mesh_gen
+ * stays); the page hides them by id in its draw state. */
 uint64_t cc_vis_sig(const cc_vis *v);
 
 /* `query visibility` (calls.rs:442-460), keys sorted. `origin` NULL: null. */

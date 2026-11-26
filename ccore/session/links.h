@@ -194,6 +194,13 @@ void cc_links_clear(cc_session *s);
 
 /* query links (state.rs:199 links_json). */
 void cc_links_json(const cc_session *s, JsonW *w);
+/* LNK3D (ADR 0078 amendment 3): query link_draw, what the viewport needs to draw each link without
+ * fetching /mesh again: [{"colour" (-1 or 0..11), "cos", "name", "origin" ([x, y, z]: the placed
+ * origin, host world mm), "sin", "visible" (drawn: shown and loaded)}] in link order, the numbers of
+ * the LNKS trailer's version 2. A vertex p of link k goes to R(cos, sin) p + (origin - the open
+ * scene's origin_mm). The change JSON's "links_mesh" (present with "links") counts the changes of
+ * the links' geometry; "links" counts every change (a hide, a move, a colour too). */
+void cc_links_draw_json(cc_session *s, JsonW *w);
 /* query element {"id","link"}: the element of a link, read-only, in query element's shape
  * (ElementDetail: id, class, name, storey and material ids empty, generator "", no params, no
  * openings, no properties, an identity placement) plus "family" (its MaterialCategory label),

@@ -113,6 +113,11 @@ typedef struct cc_session {
     cc_link *links;
     size_t nlinks, caplinks;
     uint64_t links_gen, mesh_links_gen;
+    /* LNK3D (ADR 0078 amendment 3): + 1 only when a link's geometry changes (added, removed, read,
+     * converted, unloaded): the /mesh cache and the change JSON's "links_mesh" follow it, so a hide,
+     * a move, a colour or a visibility rule never makes the page fetch the mesh again. mesh_links_head:
+     * the trailer's light fields (visible, placement, colour) the cached /mesh was written with. */
+    uint64_t links_mesh_gen, mesh_links_mesh_gen, mesh_links_head;
     uint64_t vis_links_gen; /* M1LINKS: the links_gen the view's rules were last folded at (m1links.h) */
     uint64_t vis_sig;       /* M1LINKS: cc_vis_sig when the /mesh trailer was last told (links_gen) */
     int has_vis_sig;        /* M1LINKS: vis_sig was taken (the first one bumps nothing) */

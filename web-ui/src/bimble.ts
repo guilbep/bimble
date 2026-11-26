@@ -23,6 +23,9 @@ export interface State {
   editable?: boolean;
   /** on_change (C core, ccore/session/links.h): a counter of changes to the linked models; absent before any. */
   links?: number;
+  /** on_change (C core, LNK3D): a counter of changes to the linked models' geometry (a link added, read,
+   *  removed): the viewport fetches the mesh again only when it moves, not on a hide, a move or a colour. */
+  links_mesh?: number;
   /** on_change (C core): the selected element of a linked model (its id is then `selection`), absent otherwise. */
   linked?: { id: string; link: string } | null;
 }
@@ -1746,6 +1749,10 @@ export const linkElements = (link: string, storey: string, cls: string, limit = 
 /** A note on a linked element (`query link_notes`): `at` in the host's world mm. */
 export interface LinkNote { at: [number, number, number]; element: string; index: number; link: string; orphan: boolean; text: string; visible: boolean }
 export const linkNotes = () => tryQuery<LinkNote[]>("link_notes", []);
+/** LNK3D: how each link is drawn (`query link_draw`, ccore/session/links.h): shown, colour (-1: its own),
+ *  its turn about Z (cos, sin) and placed origin (host world mm), in link order. */
+export interface LinkDraw { colour: number; cos: number; name: string; origin: [number, number, number]; sin: number; visible: boolean }
+export const linkDraw = () => tryQuery<LinkDraw[]>("link_draw", []);
 /** A linked element's property and quantity sets (in `query element {id, link}`). */
 export interface PropertySet { name: string; properties: { name: string; value: string }[]; type: string }
 /** The Navigator's eye: hide, show or isolate a class, a link's storey, a link or an element (hidden action view_rule). */

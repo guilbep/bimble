@@ -29,7 +29,8 @@ export function cutEnd(c: Cut, t: number): number {
  *  every batch, hold at most `budget` triangles; at least one item (the largest on screen) when even
  *  that one is over the budget, so a frame is never empty while anything is left. t = 0: everything. */
 export function budgetCut(cs: Cut[], budget: number): { t: number; tris: number } {
-  const at = (t: number) => { let n = 0; for (const c of cs) n += c.b.cum[cutEnd(c, t)]! - c.b.cum[c.k0]!; return n; };
+  // LNK3D: the triangles of the items shown (vcum, when set): a hidden element costs no budget
+  const at = (t: number) => { let n = 0; for (const c of cs) { const k = c.b.vcum ?? c.b.cum; n += k[cutEnd(c, t)]! - k[c.k0]!; } return n; };
   const all = at(0);
   if (all <= budget) return { t: 0, tris: all };
   let hi = 0;
@@ -85,7 +86,11 @@ function spread(v: number): number {
  *  same for edge segments in `ecum`; `box` the items' box. */
 export interface Batch { first: number; n: number; size: Float32Array; cum: Uint32Array; ecum: Uint32Array; box: Float32Array;
   /** 3D2: the HLOD leaf its items are in (-1: none); a batch never spans two leaves. */
-  group: number }
+  group: number;
+  /** LNK3D: `vcum[i]` the triangles of the first i items that are shown (hidden ones count 0; unset:
+   *  `cum`), and how many items are shown (0: the batch is not drawn). Set by the viewport when what
+   *  is hidden changes; the budget (budgetCut) counts these. */
+  vcum?: Uint32Array; shown?: number }
 
 /** Cuts `items` (indices into `boxes`, 6 floats each) into batches: Morton order of the box centres
  *  inside `bounds`, a new batch when the next item would pass `cap` (its `cost`), then largest first
@@ -139,4 +144,68 @@ export function prefixCount(b: Batch, minSize: number): number {
     else hi = mid;
   }
   return lo;
+}
+
+// ---- LNK3D (ADR 0078 amendment 3): what both renderers (WebGL glviewport.ts, WebGPU gpu/) share to
+// draw linked models without rebuilding buffers: a placement per model and a state per element. ----
+
+/** A model's placement in the scene (mm, relative to the open scene's origin): a point p of the model
+ *  is drawn at R p + t, R the turn about Z by (c, s) = (cos, sin). The open model: IDENTITY_XF. A link:
+ *  the LNKS trailer (version 2) or `query link_draw` (ccore/session/links.h), t = its placed origin
+ *  minus the open scene's origin. A move, a turn or an offset changes this only (one uniform). */
+export interface ModelXf { c: number; s: number; t: [number, number, number] }
+export const IDENTITY_XF: ModelXf = { c: 1, s: 0, t: [0, 0, 0] };
+export const sameXf = (a: ModelXf, b: ModelXf) => a.c === b.c && a.s === b.s && a.t[0] === b.t[0] && a.t[1] === b.t[1] && a.t[2] === b.t[2];
+
+/** The matrix's three rows (R row, t), 12 floats: what a shader reads per model. */
+export function xfRows(x: ModelXf, out = new Float32Array(12), o = 0): Float32Array {
+  out.set([x.c, -x.s, 0, x.t[0], x.s, x.c, 0, x.t[1], 0, 0, 1, x.t[2]], o);
+  return out;
+}
+
+/** The box `src[so .. so + 6]` (min xyz, max xyz, the model's frame) placed by x, as the axis-aligned
+ *  box around it at `dst[d0 ..]` (exact for no turn; a turned box's 4 corners in plan otherwise). */
+export function xfBox(x: ModelXf, src: Float32Array, so: number, dst: Float32Array, d0: number): void {
+  const x0 = src[so]!, y0 = src[so + 1]!, x1 = src[so + 3]!, y1 = src[so + 4]!;
+  if (!(x0 <= x1)) { dst.set(src.subarray(so, so + 6), d0); return; } // an empty box stays empty
+  let lx = Infinity, ly = Infinity, hx = -Infinity, hy = -Infinity;
+  for (const [px, py] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]] as const) {
+    const qx = x.c * px - x.s * py, qy = x.s * px + x.c * py;
+    if (qx < lx) lx = qx;
+    if (qx > hx) hx = qx;
+    if (qy < ly) ly = qy;
+    if (qy > hy) hy = qy;
+  }
+  dst[d0] = lx + x.t[0], dst[d0 + 1] = ly + x.t[1], dst[d0 + 2] = src[so + 2]! + x.t[2];
+  dst[d0 + 3] = hx + x.t[0], dst[d0 + 4] = hy + x.t[1], dst[d0 + 5] = src[so + 5]! + x.t[2];
+}
+
+/** A ray (scene point e, direction d) in the model's own frame: R^T (e - t), R^T d. A rigid placement
+ *  keeps the ray's parameter, so a hit's distance holds in both frames (the page's pick). */
+export function xfRayToLocal(x: ModelXf, e: number[], d: number[]): { e: [number, number, number]; d: [number, number, number] } {
+  const ex = e[0]! - x.t[0], ey = e[1]! - x.t[1];
+  return { e: [x.c * ex + x.s * ey, -x.s * ex + x.c * ey, e[2]! - x.t[2]], d: [x.c * d[0]! + x.s * d[1]!, -x.s * d[0]! + x.c * d[1]!, d[2]!] };
+}
+/** A point of the model's frame in the scene: R p + t. */
+export const xfPoint = (x: ModelXf, p: number[]): [number, number, number] =>
+  [x.c * p[0]! - x.s * p[1]! + x.t[0], x.s * p[0]! + x.c * p[1]! + x.t[1], p[2]! + x.t[2]];
+
+/** Per element draw state (LNK3D): 0 hidden (not drawn, not picked, no budget), 1 shown, 2 shown revealed
+ *  (hidden, Reveal hidden on: the comparison colour). Selection and a link's colour override are its colour. */
+export const EL_HIDDEN = 0, EL_SHOWN = 1, EL_REVEALED = 2;
+/** The state texture (RGBA8, a texel per element, STATE_TEX_W a row): r, g, b the element's colour (sRGB),
+ *  a = model << 1 | drawn (model 0: the open one, k + 1: link k; at most 127 models). A vertex without an
+ *  element (proxies, outlines, the ghost) carries STATE_NONE and takes its own colour and the draw's model. */
+export const STATE_TEX_W = 2048, STATE_NONE = 0xffffffff;
+/** Writes element e's texel. */
+export function packState(out: Uint8Array, e: number, rgb: readonly number[], model: number, drawn: boolean): void {
+  out[4 * e] = rgb[0]!, out[4 * e + 1] = rgb[1]!, out[4 * e + 2] = rgb[2]!, out[4 * e + 3] = ((model & 127) << 1) | (drawn ? 1 : 0);
+}
+/** A batch's shown items (vcum, shown) from the per-element state: `items` its elements in batch order,
+ *  `tris(e)` an item's triangles. */
+export function batchShown(b: Batch, items: ArrayLike<number>, shown: Uint8Array, tris: (e: number) => number): void {
+  const v = b.vcum && b.vcum.length === b.n + 1 ? b.vcum : new Uint32Array(b.n + 1);
+  let n = 0;
+  for (let i = 0; i < b.n; i++) { const e = items[i]!, on = shown[e]! > 0; v[i + 1] = v[i]! + (on ? tris(e) : 0); if (on) n++; }
+  b.vcum = v, b.shown = n;
 }
