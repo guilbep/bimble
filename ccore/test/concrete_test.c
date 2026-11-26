@@ -326,6 +326,20 @@ int main(void) {
                ra && n_el(s) == n2 + 1 && ra->cls == CC_IFC_SLAB && !cc_gid_cmp(&ra->storey, &fond) &&
                    ra->placement.origin[2] == -400 && ra->generator.u.slab.thickness == 400 && !strcmp(prop(ra), "BASESLAB"));
     if (ra) check_true("raft: 4.8 m3", near(volume(&s->model, &ra->id), 4.8, 1e-6));
+    { /* ---- WAVE1B (B5): the foundations list: footings and the raft, not the floor slabs ---- */
+        r = ask(s, "query", "foundation_rows", "", &st);
+        size_t pads = 0, strips = 0, rafts = 0, slabs = 0;
+        for (const char *p = r; (p = strstr(p, "\"kind\":\"")); p += 8) {
+            p += 8;
+            pads += !strncmp(p, "pad\"", 4), strips += !strncmp(p, "strip\"", 6), rafts += !strncmp(p, "raft\"", 5);
+        }
+        slabs = has(r, "\"name\":\"D1\"") || has(r, "\"name\":\"D2\"");
+        printf("  B5 foundations: %zu pads, %zu strips, %zu raft(s)\n", pads, strips, rafts);
+        check_true("B5 foundation_rows: the 12 pads of the fixture and F1, the 2 strips, the raft R1 (4.8 m3), no floor slab",
+                   st == CC_OK && pads == 13 && strips == 2 && rafts == 1 && !slabs && has(r, "\"name\":\"R1\",\"section\":\"\",\"volume_m3\":4.8"));
+        if (!(pads == 13 && strips == 2 && rafts == 1)) printf("  got %.300s\n", r);
+        free(r);
+    }
 
     /* ---- IFC4 ---- */
     Buf ifc;

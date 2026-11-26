@@ -37,6 +37,7 @@
 #include "view_only.h"
 #include "annot.h"
 #include "measure.h" /* ticket T1 */
+#include "quantity_rows.h" /* WAVE1B (B5) */
 #include "versions.h" /* ticket H1 */
 #include "links_dxf.h" /* L2 */
 #include "links_panel.h" /* LNK1 */
@@ -1475,6 +1476,15 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
 #endif
     }
     if (!strcmp(name, "opening_at")) return measure_tool(s, "opening_at", body, n, out); /* WAVE1B (B2) */
+    if (!strcmp(name, "foundation_rows")) { /* WAVE1B (B5, quantity_rows.h): footings and rafts */
+        if (!s->open) return buf_puts(out, READ_ONLY), CC_ERR;
+        const cc_scene *sc = scene_now(s);
+        if (!sc) return buf_puts(out, "the scene could not be built"), CC_ERR;
+        JsonW w;
+        jw_init(&w, out, 0);
+        if (cc_foundation_rows_json(&s->model, sc, &w)) return buf_clear(out), buf_puts(out, "out of memory"), CC_ERR;
+        return done(&w);
+    }
     if (!strcmp(name, "opening_rows")) { /* WAVE1B (B1, concrete.h): the openings and sleeves of the model */
         if (!s->open) return buf_puts(out, READ_ONLY), CC_ERR;
         JsonW w;

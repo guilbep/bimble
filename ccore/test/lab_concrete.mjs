@@ -218,7 +218,31 @@ async function tab(S, evalJs, model) {
   let ms = await timedTool("Footing (tool on)", tool(2, 1), "b.placing.value?.active && b.placing.value.kind === 'footing'");
   check("Footing: the place tool is on (footing)", ms !== null);
   let u0 = await undoN();
+  // WAVE1B (B5): WAVE1B_PROFILE=1 profiles the first footing click (CDP Profiler, self time per function)
+  const prof = !!process.env.WAVE1B_PROFILE;
+  if (prof) {
+    await evalJs(`(() => { window.__w1calls = []; const o = XMLHttpRequest.prototype.open, sd = XMLHttpRequest.prototype.send; window.__w1orig = [o, sd];
+      XMLHttpRequest.prototype.open = function (m, u, ...r) { this.__u = String(u).replace(/[?].*$/, ""); return o.call(this, m, u, ...r); };
+      XMLHttpRequest.prototype.send = function (...a) { const t = performance.now(); try { return sd.apply(this, a); } finally { window.__w1calls.push([this.__u.split("/").slice(-2).join("/"), performance.now() - t]); } }; })()`);
+    await S("Profiler.enable"); await S("Profiler.setSamplingInterval", { interval: 100 }); await S("Profiler.start");
+  }
   ms = await click("Footing: click on a column -> footing drawn", [20, 20, 0], "b.state.value.rev > 0 && window.__bbGl.placed && (window.__bbGl.frames > window.__concF)");
+  if (prof) {
+    const { profile: p } = await S("Profiler.stop");
+    const self = new Map(), dt = p.timeDeltas, byId = new Map(p.nodes.map((n) => [n.id, n]));
+    for (let k = 0; k < p.samples.length; k++) {
+      const n = byId.get(p.samples[k]), f = n.callFrame, nm = `${f.functionName || "(anonymous)"} ${f.url ? f.url.split("/").pop().split("?")[0] : ""}${f.lineNumber >= 0 ? `:${f.lineNumber + 1}` : ""}`.trim();
+      self.set(nm, (self.get(nm) ?? 0) + (dt[k] ?? 0) / 1000);
+    }
+    const total = [...self.values()].reduce((a, b) => a + b, 0);
+    console.log(`profile of the first footing click (${Math.round(ms ?? -1)} ms, load ${readFileSync("/proc/loadavg", "utf8").trim()}): ` +
+      [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([n2, t]) => `${n2} ${t.toFixed(1)} ms (${Math.round((100 * t) / total)} %)`).join("; "));
+    await S("Profiler.disable");
+    const calls = await evalJs("(() => { [XMLHttpRequest.prototype.open, XMLHttpRequest.prototype.send] = window.__w1orig; return JSON.stringify(window.__w1calls); })()");
+    const cl = JSON.parse(calls);
+    console.log(`the click's core calls: ${cl.length}, ${cl.reduce((a, c) => a + c[1], 0).toFixed(1)} ms in all; the slowest: ` +
+      [...cl].sort((a, b) => b[1] - a[1]).slice(0, 8).map((c) => `${c[0]} ${c[1].toFixed(1)} ms`).join(", "));
+  }
   const pad = await gl().then((g) => g.placed);
   const padEl = await el(pad);
   check("Footing: an IfcFooting pad_footing under the column, top at its base", padEl?.class === "IfcFooting" && padEl?.generator === "pad_footing" &&
@@ -367,6 +391,20 @@ async function tab(S, evalJs, model) {
   check("Raft: an IfcSlab BASESLAB on the lowest storey, top at its elevation", raftEl?.class === "IfcSlab" && raftEl?.storey_name === "Fondations" &&
     raftEl.properties?.["Bimble/PredefinedType"] === "BASESLAB" && raftEl.placement.origin[2] === -400, JSON.stringify(raftEl)?.slice(0, 300));
   check("Raft: one step", (await undoN()) === u0 + 1);
+  // ---- WAVE1B (B5): the Quantities page's foundations list: pads, the strip, the raft (3.6 m3), no floor slab ----
+  {
+    const t0 = await evalJs(`(async () => { const s = await import('/src/shell/send.ts'); const t = performance.now(); s.send({ do: "showPage", page: "quantities" });
+      const raf = () => new Promise((r) => requestAnimationFrame(r));
+      while (performance.now() - t < 5000) { await raf(); if (document.querySelector('[data-bb=quantities-foundation][data-kind=raft]')) return performance.now() - t; }
+      return null; })()`);
+    if (typeof t0 === "number") times.push(["Quantities: the foundations table shown", t0]);
+    const kinds = await evalJs("[...document.querySelectorAll('[data-bb=quantities-foundation]')].map((e) => e.getAttribute('data-kind'))");
+    const raftTd = await evalJs("[...document.querySelectorAll('[data-bb=quantities-foundation][data-kind=raft] td')].map((e) => e.textContent.trim())");
+    check("B5 Quantities: a foundations list with the pads, the strip and the raft (3.600 m3: 6 x 3 / 2 x 0.4), apart from the slabs",
+      t0 !== null && kinds.includes("pad") && kinds.includes("strip") && raftTd[4] === "3.600" && !kinds.includes("slab"), JSON.stringify({ kinds, raftTd }));
+    await evalJs(`(async () => { const s = await import('/src/shell/send.ts'); s.send({ do: "showView" }); })()`);
+    await settle();
+  }
   await key("Escape", "Escape", 27);
   await shot("conc1-plan-1280.png");
 

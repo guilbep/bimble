@@ -1249,6 +1249,12 @@ C core's references are hand-computed in `test/concrete_test.c` (volumes, positi
   wall generator. Round trip: `test/concrete_test.c` (18 elements, 3 openings, the same), the lab
   (`test/lab_concrete.mjs`: the export imported back).
 
+- **Foundations list (ticket WAVE1B B5, ADR 0077 decision 19).** `query foundation_rows` (C only):
+  each IfcFooting and each IfcSlab of PredefinedType BASESLAB with its kind (pad, strip, raft,
+  footing), level, name, section text and volume as `cc_measure` gives it. The schedules
+  (`schedule_list`, `schedule_rows`) keep Rust's bytes. Test: `test/concrete_test.c` (13 pads, 2
+  strips, the raft's 4.8 m3), `test/lab_concrete.mjs`.
+
 ## 35. What the core refuses, told before the click; a new plan of a low storey (ticket DEAD1, ADR 0074)
 
 Rust v0.19.0's default view range (view.rs:299 `ViewRange::default_for`) cuts a floor plan

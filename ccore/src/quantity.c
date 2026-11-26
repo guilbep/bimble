@@ -1086,3 +1086,44 @@ size_t cc_schedules_effective(const cc_schedule *stored, size_t nstored, const c
     }
     return n;
 }
+
+/* ---- WAVE1B (B5): the foundations list (quantity_rows.h) ---- */
+#include "quantity_rows.h"
+int cc_foundation_rows_json(const cc_model *m, const cc_scene *sc, JsonW *w) {
+    cc_viewfile_meta mt;
+    if (cc_viewfile_meta_from_model(&mt, m, sc)) return -1;
+    int rc = 0;
+    jw_arr_begin(w);
+    for (size_t k = 0; k < sc->nelements && !rc; k++) {
+        size_t mi = sc->elements[k].model_index;
+        if (mi >= m->nelements) continue;
+        const cc_element *e = &m->elements[mi];
+        const cc_str *pd = cc_element_predefined(e);
+        int raft = e->cls == CC_IFC_SLAB && pd && pd->n == 8 && !memcmp(pd->p, "BASESLAB", 8);
+        if (e->cls != CC_IFC_FOOTING && !raft) continue;
+        const char *kind = raft ? "raft"
+                           : e->generator.kind == CC_GEN_PAD_FOOTING ? "pad"
+                           : (pd && pd->n == 13 && !memcmp(pd->p, "STRIP_FOOTING", 13)) || e->generator.kind == CC_GEN_WALL ? "strip"
+                                                                                                                         : "footing";
+        Arena a;
+        arena_init(&a, 0);
+        cc_measures q;
+        int r = cc_measure(sc, &mt, k, &a, &q);
+        if (r < 0) rc = -1;
+        if (r == 1) {
+            const cc_storey *st = cc_model_storey(m, &e->storey);
+            jw_obj_begin(w);
+            jw_key(w, "id"), jw_str_n(w, e->id.c, 22);
+            jw_key(w, "kind"), jw_str(w, kind);
+            jw_key(w, "level"), jw_str_n(w, st && st->name.n ? st->name.p : "", st ? st->name.n : 0);
+            jw_key(w, "name"), jw_str_n(w, e->name.n ? e->name.p : "", e->name.n);
+            jw_key(w, "section"), jw_str_n(w, q.section.n ? q.section.p : "", q.section.n);
+            jw_key(w, "volume_m3"), jw_f64(w, q.volume_m3);
+            jw_obj_end(w);
+        }
+        arena_free(&a);
+    }
+    jw_arr_end(w);
+    cc_viewfile_meta_free(&mt);
+    return rc;
+}

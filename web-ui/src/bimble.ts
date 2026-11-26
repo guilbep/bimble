@@ -1634,5 +1634,8 @@ export const openingSet = (host: string, id: string, patch: OpeningPatch) => run
 export interface OpeningRow { host: string; host_name: string; id: string; kind: "opening" | "sleeve" | "other"; level: string;
   width?: number; height?: number; length?: number; diameter?: number; volume_m3: number | null }
 export const openingRows = () => tryQuery<OpeningRow[]>("opening_rows", []);
+/** WAVE1B (B5): the foundations (footings and rafts, `query foundation_rows`), measured as the schedules are. */
+export interface FoundationRow { id: string; kind: "pad" | "strip" | "raft" | "footing"; level: string; name: string; section: string; volume_m3: number }
+export const foundationRows = () => tryQuery<FoundationRow[]>("foundation_rows", []);
 // ---- end WAVE1B ----
 // ---- end G2 ----

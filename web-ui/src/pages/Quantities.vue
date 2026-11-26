@@ -26,6 +26,7 @@ import { materials, scheduleCsv, scheduleList, scheduleRows, select, setSchedule
 import { t } from "../i18n";
 import { pickedSchedule } from "./quantitiesPick";
 import { openingRows, selectedOpening, type OpeningRow } from "../bimble"; // WAVE1B (B1)
+import { foundationRows, type FoundationRow } from "../bimble"; // WAVE1B (B5)
 
 // ponytail: the built-in "All elements" schedule is shown (it mixes classes, as the reference); no schedule
 // picker in the reference. Add one when the navigator's schedule list opens a schedule here.
@@ -45,6 +46,9 @@ const opRows = computed<OpeningRow[]>(() => { void state.value.rev; return state
 const opSize = (r: OpeningRow) => r.kind === "sleeve" ? `Ø ${r.diameter ?? 0}` : r.kind === "opening" ? `${r.width ?? 0} × ${r.height ?? r.length ?? 0}` : "—";
 const opTotal = computed(() => opRows.value.reduce((s, r) => s + (r.volume_m3 ?? 0), 0));
 const opPick = (r: OpeningRow) => { select([r.host]); selectedOpening.value = r.id ? { host: r.host, id: r.id } : null; };
+// ---- B5: the foundations (footings and rafts), apart from the slabs ----
+const fdRows = computed<FoundationRow[]>(() => { void state.value.rev; return state.value.editable === false ? [] : foundationRows(); });
+const fdTotal = computed(() => fdRows.value.reduce((s, r) => s + r.volume_m3, 0));
 // ---- end WAVE1B ----
 const shown = computed(() => table.value?.groups.reduce((n, g) => n + g.rows.length, 0) ?? 0);
 
@@ -111,6 +115,19 @@ function exportCsv() {
     <p v-else class="note" style="margin:0">{{ t('quantities.empty') }}</p>
     <p v-if="err" class="note" style="margin:0" role="alert" data-bb="quantities-error">{{ err }}</p>
     <p v-if="table?.truncated" class="note" style="margin:0" data-bb="quantities-truncated">{{ t('quantities.truncated', { shown, count: table.count }) }}</p>
+    <!-- WAVE1B (B5): foundations (footings and rafts) -->
+    <template v-if="fdRows.length">
+      <h3 style="font-family:'Sora',sans-serif;font-size:16px;margin:8px 0 0">{{ t('quantities.fd.title') }}</h3>
+      <table class="t" data-bb="quantities-foundations">
+        <thead><tr><th>{{ t('quantities.op.level') }}</th><th>{{ t('quantities.fd.name') }}</th><th>{{ t('quantities.op.kind') }}</th><th>{{ t('quantities.fd.section') }}</th><th class="r">{{ t('quantities.op.volume') }}</th></tr></thead>
+        <tbody>
+          <tr v-for="r in fdRows" :key="r.id" :class="{ sl: state.selection.includes(r.id) }" data-bb="quantities-foundation" :data-kind="r.kind" @click="select([r.id])">
+            <td>{{ r.level }}</td><td>{{ r.name }}</td><td>{{ t(`quantities.fd.${r.kind}`) }}</td><td class="mono">{{ r.section }}</td><td class="r mono">{{ r.volume_m3.toFixed(3) }}</td>
+          </tr>
+        </tbody>
+        <tfoot><tr><td colspan="4" style="font-weight:600;padding:6px 8px">{{ t('quantities.total') }}</td><td class="r mono" style="font-weight:600;padding:6px 8px">{{ fdTotal.toFixed(3) }}</td></tr></tfoot>
+      </table>
+    </template>
     <!-- WAVE1B (B1): openings and sleeves -->
     <template v-if="opRows.length">
       <h3 style="font-family:'Sora',sans-serif;font-size:16px;margin:8px 0 0">{{ t('quantities.op.title') }}</h3>

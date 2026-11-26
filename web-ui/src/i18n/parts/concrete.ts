@@ -61,6 +61,14 @@ export const fr = {
   "quantities.op.sleeve": "Fourreau",
   "quantities.op.other": "Réservation importée",
   "quantities.op.note": "Volume d'un fourreau : le cylindre exact π r² e (e : l'épaisseur de son hôte), déduit aussi du volume net de l'hôte.",
+  // ---- WAVE1B (B5): the Quantities page's foundations ----
+  "quantities.fd.title": "Fondations",
+  "quantities.fd.name": "Nom",
+  "quantities.fd.section": "Section",
+  "quantities.fd.pad": "Semelle isolée",
+  "quantities.fd.strip": "Semelle filante",
+  "quantities.fd.raft": "Radier",
+  "quantities.fd.footing": "Semelle",
 };
 export const en: Record<keyof typeof fr, string> = {
   "placeslab.title.footing": "Place: pad footing",
@@ -123,4 +131,12 @@ export const en: Record<keyof typeof fr, string> = {
   "quantities.op.sleeve": "Sleeve",
   "quantities.op.other": "Imported opening",
   "quantities.op.note": "A sleeve's volume is the exact cylinder π r² t (t: its host's thickness), also taken out of the host's net volume.",
+  // ---- WAVE1B (B5): the Quantities page's foundations ----
+  "quantities.fd.title": "Foundations",
+  "quantities.fd.name": "Name",
+  "quantities.fd.section": "Section",
+  "quantities.fd.pad": "Pad footing",
+  "quantities.fd.strip": "Strip footing",
+  "quantities.fd.raft": "Raft",
+  "quantities.fd.footing": "Footing",
 };

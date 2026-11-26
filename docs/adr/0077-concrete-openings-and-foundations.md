@@ -118,11 +118,27 @@ Each choice, then the alternative rejected.
     1e-6 mm, GlobalIds kept). Rejected: checking that the box goes through the host first (the cut
     is the same solid either way; a recess keeps its depth).
 
+19. **A foundations list** (WAVE1B B5): the Quantities page shows, apart from the schedules, the
+    footings (pad, strip) and the rafts (IfcSlab BASESLAB) measured as the schedules measure
+    (`query foundation_rows`, `src/quantity_rows.h`), with their total. The built-in schedules
+    keep Rust's list (its "Slabs" still holds a raft, by class). Rejected: a new built-in schedule
+    (Rust's schedule list, a golden, would change for every model) and a raft moved out of
+    "Slabs" (a class filter that reads properties, for one kind).
+
 ## Response times (ADR 0074)
 
 Measured by `ccore/test/lab_concrete.mjs` on the native host (tcc build), headless Chromium with
 SwiftShader at 1280×800, the 72-element fixture: see the ticket's report for the numbers and the
 load (`/proc/loadavg`) of the run.
+
+The first footing click (213 ms in CONC1's run) profiled in WAVE1B (`WAVE1B_PROFILE=1 node
+ccore/test/lab_concrete.mjs`, CDP Profiler at 0.1 ms, load 6.8, so the shares count more than the
+milliseconds): 213 ms from the pointerdown to the frame; the core's click itself is 5 ms (curl on
+the host) to 7.8 ms (in the page); the page then makes 28 synchronous calls to the core (74.5 ms in
+all, 2 to 8 ms each: visibility_sets, view_clip, measurements, view_annotations…), 25 % of the
+profile, and Chromium's own work (layout, paint, the SwiftShader upload) is another 22 %. Not fixed
+here: the cure is one batched refresh call instead of 28 (the page's refresh, bimble.ts), a change
+to every page surface; recorded as the next step of ADR 0074's slow list.
 
 ## Consequences
 
