@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { groupDigits } from "./format"; // QTY1
 import { t } from "./i18n";
 import { viewName } from "./shell/viewName";
 import { state, element, query, rename, runVerb, setGenerator, setMaterial, setView, materials, openViews, storeys, type ElementDetail, type ViewSummary } from "./bimble";
@@ -292,7 +293,7 @@ const families = computed(() =>
   })),
 );
 // The reference writes thousands with a space and minus as U+2212 ("−250").
-const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").replace("-", "\u2212");
+const grouped = (n: number) => groupDigits(n); // QTY1: format.ts (the integer part only: "3 101.6124838541646")
 </script>
 
 <template>
