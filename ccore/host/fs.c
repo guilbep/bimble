@@ -401,8 +401,9 @@ int cc_host_stage(const char *name, const char *bytes, size_t n, Buf *out) {
         unsigned char c = (unsigned char)name[i];
         if (c < 0x20 || c == 0x7f || strchr("/\\:*?\"<>|", c)) ok = 0; /* Windows' forbidden ones too */
     }
+    if (ok && fsr_dos_device(name, k)) ok = 0; /* FIXSES: CON, NUL, COM1… open a device on Windows */
     if (!ok) {
-        buf_puts(out, "stage: name: a plain file name (no folder, not hidden, at most 255 bytes)");
+        buf_puts(out, "stage: name: a plain file name (no folder, not hidden, not a device name, at most 255 bytes)");
         return CC_ERR;
     }
     if (n > FS_STAGE_MAX) {

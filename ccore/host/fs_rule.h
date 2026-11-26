@@ -9,7 +9,9 @@
  *      "X:/" or "X:\" (a drive), else a network path ("\\server\share", "//server/share": FSR_UNC)
  *      or a device or NT path ("\\.\", "\\?\", "\??\": FSR_DEVICE, always refused); "X:" without a
  *      separator, "\x" without a drive, a ':' after the drive (a stream) and a segment that ends
- *      with '.' or ' ' (Windows drops those characters) are refused (FSR_BAD).
+ *      with '.' or ' ' (Windows drops those characters) are refused (FSR_BAD); a segment that is a
+ *      DOS device name (fsr_dos_device: CON, NUL, COM1…; opening it opens the device) is
+ *      FSR_DEVICE.
  *   2. fsr_under: the normalised path is a root or under one (Windows: ASCII letters compare
  *      without case). The host keeps each root as given (normalised) and as resolved.
  *   3. Only then the file system: realpath, and the same rule on the resolved path (fs.c). */
@@ -22,6 +24,25 @@
 enum { FSR_OK = 0, FSR_BAD = 1, FSR_UNC = 2, FSR_DEVICE = 3 };
 
 static inline int fsr_sep(char c, int win) { return c == '/' || (win && c == '\\'); }
+
+/* FIXSES: 1 when the path segment p[0..k) names a DOS device on Windows: CON, PRN, AUX, NUL,
+ * COM1-9, LPT1-9 (also with the superscripts ¹ ² ³), CONIN$, CONOUT$, without case, with any
+ * extension and trailing dots or spaces ("con", "NUL.txt", "Com1 .ifc", "AUX..."): Windows opens
+ * the device whatever the folder. The part before the first '.', trailing spaces dropped. */
+static inline int fsr_dos_device(const char *p, size_t k) {
+    size_t n = 0;
+    while (n < k && p[n] != '.') n++;
+    while (n && p[n - 1] == ' ') n--;
+    char b[8];
+    if (n < 3 || n > 7) return 0;
+    for (size_t i = 0; i < n; i++) b[i] = (char)(p[i] >= 'a' && p[i] <= 'z' ? p[i] - 32 : p[i]);
+    if (n == 3)
+        return !memcmp(b, "CON", 3) || !memcmp(b, "PRN", 3) || !memcmp(b, "AUX", 3) || !memcmp(b, "NUL", 3);
+    if (n == 4 && (!memcmp(b, "COM", 3) || !memcmp(b, "LPT", 3))) return b[3] >= '1' && b[3] <= '9';
+    if (n == 5 && (!memcmp(b, "COM", 3) || !memcmp(b, "LPT", 3)))
+        return (unsigned char)b[3] == 0xC2 && ((unsigned char)b[4] == 0xB9 || (unsigned char)b[4] == 0xB2 || (unsigned char)b[4] == 0xB3);
+    return (n == 6 && !memcmp(b, "CONIN$", 6)) || (n == 7 && !memcmp(b, "CONOUT$", 7));
+}
 
 /* `p` normalised into `out` (at least strlen(p) + 2 bytes, FSR_MAX + 2 is always enough).
  * Returns FSR_OK, or FSR_UNC with `out` normalised ("//server/share/…"), or FSR_BAD / FSR_DEVICE
@@ -68,6 +89,7 @@ static inline int fsr_normalise(const char *p, int win, char *out, size_t cap) {
             segs--;
             continue;
         }
+        if (win && fsr_dos_device(p + s, k)) return FSR_DEVICE; /* FIXSES */
         if (win && (p[i - 1] == '.' || p[i - 1] == ' ')) return FSR_BAD;
         memcpy(out + o, p + s, k);
         o += k;

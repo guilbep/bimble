@@ -63,6 +63,29 @@ int main(void) {
     norm("long UNC prefix", "\\\\?\\UNC\\server\\share", 1, FSR_DEVICE, NULL);
     norm("NT namespace", "\\??\\C:\\Users", 1, FSR_DEVICE, NULL);
     norm("device alone", "\\\\.", 1, FSR_DEVICE, NULL);
+    /* FIXSES: DOS device names, a segment anywhere, any case, extension, trailing dots or spaces */
+    norm("device name CON", "C:\\a\\CON", 1, FSR_DEVICE, NULL);
+    norm("device name con.txt", "C:\\a\\con.txt", 1, FSR_DEVICE, NULL);
+    norm("device name NUL, a folder", "C:/NUL/x.ifc", 1, FSR_DEVICE, NULL);
+    norm("device name Aux.tar.gz", "C:\\Aux.tar.gz", 1, FSR_DEVICE, NULL);
+    norm("device name prn, trailing dots", "C:\\a\\prn...", 1, FSR_DEVICE, NULL);
+    norm("device name COM1 with a space before the extension", "C:\\a\\COM1 .ifc", 1, FSR_DEVICE, NULL);
+    norm("device name lpt9", "C:\\a\\lpt9", 1, FSR_DEVICE, NULL);
+    norm("device name COM, superscript 1", "C:\\a\\COM\xc2\xb9.txt", 1, FSR_DEVICE, NULL);
+    norm("device name CONIN$", "C:\\a\\conin$", 1, FSR_DEVICE, NULL);
+    norm("device name CONOUT$.log", "C:\\a\\CONOUT$.log", 1, FSR_DEVICE, NULL);
+    norm("device name in a UNC path", "\\\\server\\share\\nul", 1, FSR_DEVICE, NULL);
+    norm("not a device: CONSOLE", "C:\\a\\CONSOLE", 1, FSR_OK, "C:/a/CONSOLE");
+    norm("not a device: COM0", "C:\\a\\COM0", 1, FSR_OK, "C:/a/COM0");
+    norm("not a device: COM10", "C:\\a\\COM10", 1, FSR_OK, "C:/a/COM10");
+    norm("not a device: a.con", "C:\\a\\a.con", 1, FSR_OK, "C:/a/a.con");
+    norm("not a device: xNUL", "C:\\a\\xNUL", 1, FSR_OK, "C:/a/xNUL");
+    norm("a device name is a name on POSIX", "/a/CON", 0, FSR_OK, "/a/CON");
+    check_true("fsr_dos_device: Nul", fsr_dos_device("Nul", 3));
+    check_true("fsr_dos_device: \"nul  .x\"", fsr_dos_device("nul  .x", 7));
+    check_true("fsr_dos_device: LPT, superscript 3", fsr_dos_device("LPT\xc2\xb3", 5));
+    check_true("fsr_dos_device: not LPT, acute accent", !fsr_dos_device("LPT\xc2\xb4", 5));
+    check_true("fsr_dos_device: not an empty name", !fsr_dos_device("", 0));
     /* fsr_under */
     check_true("under: the root itself", fsr_under("/home/u", "/home/u", 0));
     check_true("under: below", fsr_under("/home/u/x", "/home/u", 0));

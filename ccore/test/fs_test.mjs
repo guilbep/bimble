@@ -214,7 +214,8 @@ try {
   const bin = Buffer.alloc(3 << 20);
   for (let i = 0; i < bin.length; i++) bin[i] = (i * 2654435761) >>> 24;
   check("stage without the token -> 403", (await stage("a.bimble", "x", null)).status === 403);
-  for (const bad of ["a/b.ifc", "../x.ifc", ".hidden", "", "a\\b.ifc", "x".repeat(256)]) {
+  // FIXSES: DOS device names (on every system: the name would open a device on Windows).
+  for (const bad of ["a/b.ifc", "../x.ifc", ".hidden", "", "a\\b.ifc", "x".repeat(256), "CON", "nul.ifc", "Com1 .bimble", "aux..", "CONOUT$"]) {
     const r = await stage(bad, "x");
     check(`stage name ${JSON.stringify(bad.slice(0, 20))} -> 400`, r.status === 400 && r.text.startsWith("stage: name"), `${r.status} ${r.text}`);
   }
