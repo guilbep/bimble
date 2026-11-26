@@ -8,6 +8,8 @@ import { classNoun, parseMm } from "./i18n/parts/modify";
 import { viewClip, viewEdit, viewVisibility, visibility, type SectionClip, type ViewVisibility } from "./bimble";
 import { editableModel, has } from "./shell/capability";
 // ---- end SEC1 ----
+// ---- WAVE1B (B2): the host's openings, one selected, its sizes changed (verb opening_set) ----
+import { openingSet, openingsOf, selectedOpening, type OpeningInfo, type OpeningPatch } from "./bimble";
 
 // Rendered inside `.props` (LeftPanel): rows as fr/View3D.html (view) and fr/SelectModify.html (element).
 const detail = ref<ElementDetail | null>(null);
@@ -48,6 +50,42 @@ watch(
     }
   },
 );
+
+// ---- WAVE1B (B2): openings of the selected host; the selected one's fields ----
+const openings = computed<OpeningInfo[]>(() => { void state.value.rev; const d = detail.value; return d && d.openings > 0 ? openingsOf(d.id) : []; });
+const selOpening = computed(() => {
+  const so = selectedOpening.value, d = detail.value;
+  return so && d && so.host === d.id ? openings.value.find((o) => o.id === so.id) ?? null : null;
+});
+// The element selection moved to another element: the opening is let go.
+watch(one, (id) => { if (selectedOpening.value && selectedOpening.value.host !== id) selectedOpening.value = null; });
+const openingError = ref<string | null>(null);
+const openingFields = computed(() => {
+  const o = selOpening.value;
+  if (!o || o.kind === "other") return [] as { k: keyof OpeningPatch; v: number }[];
+  const ks: (keyof OpeningPatch)[] = o.kind === "sleeve" ? (o.wall ? ["diameter", "sill"] : ["diameter"]) : o.wall ? ["width", "height", "sill"] : ["width", "length"];
+  return ks.map((k) => ({ k, v: (o[k as keyof OpeningInfo] as number | undefined) ?? 0 }));
+});
+function commitOpening(k: keyof OpeningPatch, old: number, e: Event): void {
+  const o = selOpening.value, d = detail.value;
+  const v = parseMm((e.target as HTMLInputElement).value);
+  openingError.value = null;
+  if (!o || !d || v === null || v === old) return;
+  openingError.value = openingSet(d.id, o.id, { [k]: v });
+}
+/** The centre moved: x, y typed (world mm). */
+function commitOpeningAt(i: 0 | 1, e: Event): void {
+  const o = selOpening.value, d = detail.value;
+  const v = parseMm((e.target as HTMLInputElement).value);
+  openingError.value = null;
+  if (!o || !d || v === null || v === o.centre[i]) return;
+  const a: [number, number] = [o.centre[0], o.centre[1]];
+  a[i] = v;
+  openingError.value = openingSet(d.id, o.id, { a });
+}
+const openingLabel = (o: OpeningInfo, i: number) => o.kind === "sleeve" ? t("props.op.sleeve", { n: i + 1, d: grouped(o.diameter ?? 0) })
+  : o.kind === "opening" ? t("props.op.box", { n: i + 1, w: grouped(o.width ?? 0), h: grouped((o.wall ? o.height : o.length) ?? 0) }) : t("props.op.other", { n: i + 1 });
+// ---- end WAVE1B ----
 
 // FIXUI: the read-only rows' extra fields (scene_element, a linked element's detail).
 const roExtra = computed(() => {
@@ -313,6 +351,33 @@ const grouped = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ").r
       </span>
     </div>
     <p v-if="zError" role="alert" class="error">{{ t('modify.error', { msg: zError }) }}</p>
+    <!-- WAVE1B (B2): the openings of this host; one selected (here, or a click on it in a view) -->
+    <template v-if="openings.length">
+      <div class="sec">{{ t('props.op.title') }}</div>
+      <button v-for="(o, i) in openings" :key="o.id" type="button" class="oprow" :class="{ sel: selOpening?.id === o.id }" data-bb="props-opening" :data-id="o.id"
+              :aria-pressed="selOpening?.id === o.id" @click="selectedOpening = { host: detail.id, id: o.id }">{{ openingLabel(o, i) }}</button>
+      <template v-if="selOpening">
+        <div v-for="f in openingFields" :key="f.k" class="row">
+          <label class="k" :for="`op-${f.k}`">{{ t(`props.op.${f.k}`) }}</label>
+          <span style="display:inline-flex;align-items:center;gap:6px">
+            <input :id="`op-${f.k}`" :key="`${selOpening.id}:${f.k}:${f.v}`" class="inp mono" :value="grouped(f.v)" style="width:96px;text-align:right" :data-bb="`props-opening-${f.k}`"
+                   @keydown.enter="commitOpening(f.k, f.v, $event)" @blur="commitOpening(f.k, f.v, $event)" />
+            <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
+          </span>
+        </div>
+        <div v-for="(ax, i) in (['x', 'y'] as const)" v-show="selOpening.kind !== 'other'" :key="ax" class="row">
+          <label class="k" :for="`op-at-${ax}`">{{ t('props.op.at', { axis: ax.toUpperCase() }) }}</label>
+          <span style="display:inline-flex;align-items:center;gap:6px">
+            <input :id="`op-at-${ax}`" :key="`${selOpening.id}:${ax}:${selOpening.centre[i]}`" class="inp mono" :value="grouped(Math.round(selOpening.centre[i] ?? 0))" style="width:96px;text-align:right"
+                   :data-bb="`props-opening-at-${ax}`" @keydown.enter="commitOpeningAt(i as 0 | 1, $event)" @blur="commitOpeningAt(i as 0 | 1, $event)" />
+            <span class="mono" style="font-size:12px;color:var(--bb-stone);width:22px">mm</span>
+          </span>
+        </div>
+        <p v-if="selOpening.kind === 'other'" class="note">{{ t('props.op.notEditable') }}</p>
+        <p v-if="openingError" role="alert" class="error" data-bb="props-opening-error">{{ t('modify.error', { msg: openingError }) }}</p>
+      </template>
+    </template>
+    <!-- end WAVE1B -->
     </template>
   </template>
   <template v-else-if="view && onPaper">
@@ -416,4 +481,10 @@ p.row { margin: 0; }
 .ro .dot.linked { background: var(--bb-slate); }
 .inp:disabled, .sel-inp:disabled { color: var(--bb-stone); background: var(--bb-sunk); cursor: default; }
 /* Error: ink text on an ochre band, with the word "Error". */
+/* WAVE1B (B2): an opening's row; the selected one in the selection colour (ADR 0049: pink is selection) */
+.note { font-size: 13px; color: var(--bb-stone); margin: 0; }
+.oprow { display: block; width: 100%; text-align: left; background: none; border: 0; border-radius: 8px; padding: 2px 6px; font: inherit; font-size: 13.5px; color: var(--bb-ink); cursor: pointer; }
+.oprow:hover { background: var(--bb-sunk); }
+.oprow.sel { background: var(--bb-selection); }
+.oprow:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
 </style>

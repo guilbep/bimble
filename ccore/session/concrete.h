@@ -30,4 +30,18 @@ int cc_conc_set(cc_session *s, const JrVal *v, Buf *err);
 void cc_conc_json(const cc_session *s, JsonW *w);
 /* The defaults (session.c at start). */
 void cc_conc_defaults(double *p);
+/* ---- WAVE1B (B2): openings selected and previewed ----
+ * query openings {host}: [{"centre":[x,y,z],"corners":[[x,y,z] x 8],"diameter"?,"height"?,"id","kind":
+ *   "opening"|"sleeve"|"other","length"?,"sill"?,"wall":b,"width"?}] in the host's order, world mm (the
+ *   centre: the plan centre `a` opening_set takes, at the middle of the opening's box in z). An opening
+ *   without a GlobalId (an imported one) is "other" with id "". */
+void cc_conc_openings_json(const cc_model *m, const cc_element *host, JsonW *w);
+/* The opening under the ray (world mm: origin, direction; any length): the one whose box (grown by
+ * `tol` mm) the ray enters first, not beyond t_max (the distance to the surface the ray meets first;
+ * a negative t_max: none). 1 with the host and the opening's id, 0 none. */
+int cc_conc_opening_at(const cc_model *m, const double ray[6], double t_max, double tol, cc_gid *host, cc_gid *id);
+/* The ghost of an opening being placed: the dry run's set_openings `in` made into one add_element
+ * of the new opening's solid (in the host's storey, its placement through the host's) in `out`, so
+ * cc_tool_ghost meshes it. 0 ok, -1 none (no set_openings, out of memory). */
+int cc_conc_opening_ghost(const cc_model *m, const cc_cmds *in, cc_cmds *out);
 #endif

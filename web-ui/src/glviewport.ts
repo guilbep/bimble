@@ -78,6 +78,7 @@ import {
   settingOut, // SETOUT
   userSettings, // 3D1: moving_fps
   refPlanes, // WAVE1B
+  openingAt, openingsOf, selectedOpening, // WAVE1B (B2)
   type AnnotateState, type ToolPointer, type ToolState, type ViewAnnotation, type ViewAnnotations, type ViewClip, type Visibility,
   type VisibilitySets,
 } from "./bimble";
@@ -105,6 +106,7 @@ const CATEGORY_SRGB: [number, number, number][] = [
 const BACKGROUND_SRGB = [247, 247, 245];
 const EDGE_SRGB = [26, 26, 28];
 const SELECTION_SRGB: [number, number, number] = [215, 172, 182];
+const SELECTION_CSS = `rgb(${SELECTION_SRGB.join(", ")})`; // WAVE1B (B2): the selected opening's box
 // Linked (reference) models: bimble-core style.rs:340-341 `reference`, `reference_edges`.
 const REFERENCE_SRGB: [number, number, number] = [190, 214, 238];
 const REFERENCE_EDGE_SRGB: [number, number, number] = [52, 110, 180];
@@ -497,6 +499,8 @@ interface GlStats {
   setoutAt?: number;
   /** WAVE1B: the reference planes last drawn (overlay CSS px). */
   refplanes?: RefPlaneDrawn[];
+  /** WAVE1B (B2): the selected opening's box drawn in the last frame. */
+  openingDrawn?: boolean;
   /** Dimensions and texts (ticket C4): the view's annotations as last fetched, the strings the
    *  overlay drew in its last frame, the selected annotation, the annotate tool's state and calls,
    *  the last annotation error. */
@@ -1740,6 +1744,27 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         return p ? [p[0] - b.left, p[1] - b.top] : null;
       });
       stats.setoutAt = performance.now();
+      // ---- WAVE1B (B2): the selected opening's box, in the selection colour ----
+      stats.openingDrawn = false;
+      const so = selectedOpening.value;
+      const okey = so ? `${so.host}/${so.id}/${state.value.rev}` : "";
+      if (okey !== openingKey) { openingKey = okey; openingBox = so ? openingsOf(so.host).find((o) => o.id === so.id) : undefined; }
+      const ob = openingBox;
+      if (ob) {
+        const q = ob.corners.map((c) => { const p = stats.toScreen?.(c[0], c[1], c[2]); return p ? [p[0] - b.left, p[1] - b.top] as [number, number] : null; });
+        if (q.every((x) => x)) {
+          ctx.save();
+          ctx.strokeStyle = SELECTION_CSS;
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          for (const [i, j] of [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]] as const) {
+            ctx.moveTo(q[i]![0], q[i]![1]); ctx.lineTo(q[j]![0], q[j]![1]);
+          }
+          ctx.stroke();
+          ctx.restore();
+          stats.openingDrawn = true;
+        }
+      }
       // ---- WAVE1B: reference planes: the outline in 3D, the cut line in a plan or a section ----
       const sc = plan as (ViewClip & { origin?: number[]; dir?: number[] }) | null;
       const cut = !sc ? null : sc.type === "plan" ? { at: [0, 0, sc.cut ?? (sc.elevation ?? 0) + 1200] as [number, number, number], n: [0, 0, 1] as [number, number, number] }
@@ -1774,6 +1799,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** SETOUT: the setting-out answer last drawn. */
   let seenSetOut: unknown = null;
   let seenRefPlanes: unknown = null; // WAVE1B
+  let seenOpening: unknown = null; // WAVE1B (B2)
+  let openingKey = "", openingBox: ReturnType<typeof openingsOf>[number] | undefined; // WAVE1B (B2): the box drawn, per rev
   /** NAV1: where the orbit pivot's marker was last drawn (overlay CSS px), or null. */
   let navMark: [number, number] | null = null;
   /** The annotations of the view shown, again when the model or the view changed. */
@@ -2202,7 +2229,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     stats.picks++;
     const id = k >= 0 ? mesh?.ids[k] : undefined;
     const link = k >= 0 ? linkOf(k) : null;
-    const err = id && link !== null ? selectLinked(link, id) : select(id ? [id] : []);
+    // ---- WAVE1B (B2): a click on an opening (its reveal, or through it) selects it: its host is the
+    // element selected, Properties shows the opening (bimble.ts selectedOpening) ----
+    const op = link === null && state.value.editable !== false ? openingAt(rayAt(e.clientX - r.left, e.clientY - r.top)) : null;
+    selectedOpening.value = op;
+    const pickId = op ? op.host : id;
+    const err = pickId && link !== null && !op ? selectLinked(link, pickId) : select(pickId ? [pickId] : []);
     if (err) console.warn("gl viewport: select:", err);
   };
   canvas.addEventListener("pointerup", release);
@@ -2447,6 +2479,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (measure.value !== stats.measure) { stats.measure = measure.value; dirty = true; } // the action, a clear, another model
     if (settingOut.value !== seenSetOut) { seenSetOut = settingOut.value; dirty = true; } // SETOUT: shown, moved, turned
     if (refPlanes.value !== seenRefPlanes) { seenRefPlanes = refPlanes.value; dirty = true; } // WAVE1B
+    if (selectedOpening.value !== seenOpening) { seenOpening = selectedOpening.value; dirty = true; } // WAVE1B (B2)
     if (annotate.value !== seenAnnot) { // started or stopped (bimble.ts startDimension, startText)
       seenAnnot = annotate.value;
       stats.annotate = seenAnnot;

@@ -38,6 +38,18 @@ export const fr = {
   "placing.opening.1": "Clic : autre bord (mur) ou coin opposé (dalle) · Échap : arrêter",
   "placing.sleeve.0": "Clic sur un mur ou une dalle : centre de la réservation · Échap : arrêter",
   "placing.sleeve.1": "Clic sur un mur ou une dalle : centre de la réservation · Échap : arrêter",
+  // ---- WAVE1B (B2): a host's openings in Properties ----
+  "props.op.title": "Réservations",
+  "props.op.box": "Réservation {n} — {w} × {h}",
+  "props.op.sleeve": "Fourreau {n} — Ø {d}",
+  "props.op.other": "Réservation {n} (importée)",
+  "props.op.width": "Largeur",
+  "props.op.height": "Hauteur",
+  "props.op.length": "Longueur",
+  "props.op.sill": "Allège",
+  "props.op.diameter": "Diamètre",
+  "props.op.at": "Centre {axis}",
+  "props.op.notEditable": "Forme importée : supprimez-la et redessinez-la pour la modifier.",
 };
 export const en: Record<keyof typeof fr, string> = {
   "placeslab.title.footing": "Place: pad footing",
@@ -77,4 +89,16 @@ export const en: Record<keyof typeof fr, string> = {
   "placing.opening.1": "Click: the other side (wall) or the opposite corner (slab) · Esc: stop",
   "placing.sleeve.0": "Click on a wall or a slab: the sleeve's centre · Esc: stop",
   "placing.sleeve.1": "Click on a wall or a slab: the sleeve's centre · Esc: stop",
+  // ---- WAVE1B (B2): a host's openings in Properties ----
+  "props.op.title": "Openings",
+  "props.op.box": "Opening {n} — {w} × {h}",
+  "props.op.sleeve": "Sleeve {n} — Ø {d}",
+  "props.op.other": "Opening {n} (imported)",
+  "props.op.width": "Width",
+  "props.op.height": "Height",
+  "props.op.length": "Length",
+  "props.op.sill": "Sill",
+  "props.op.diameter": "Diameter",
+  "props.op.at": "Centre {axis}",
+  "props.op.notEditable": "An imported shape: delete it and draw it again to change it.",
 };

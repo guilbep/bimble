@@ -1608,4 +1608,26 @@ export interface RefPlaneArgs { storey: string; name?: string; origin?: V3; norm
 export const referencePlaneAdd = (args: RefPlaneArgs) => runVerb("reference_plane_add", args);
 export const referencePlaneRename = (id: string, name: string) => runVerb("rename", { id, name });
 export const referencePlaneDelete = (id: string) => runVerb("delete", { ids: [id] });
+// ---- WAVE1B (B2, ADR 0077): an opening of a host, selected and changed (verb opening_set) ----
+export interface OpeningInfo {
+  id: string;
+  /** "opening" (a box), "sleeve" (round), "other" (an imported shape: not editable here). */
+  kind: "opening" | "sleeve" | "other";
+  /** In a wall (sizes: width, height, sill) or a slab (width, length). */
+  wall: boolean;
+  width?: number; height?: number; length?: number; sill?: number; diameter?: number;
+  /** Its centre (world mm) and its box's eight corners (world mm), for the overlay. */
+  centre: [number, number, number];
+  corners: [number, number, number][];
+}
+/** `query openings {host}`: the host's openings in order. */
+export const openingsOf = (host: string) => tryQuery<OpeningInfo[]>("openings", [], { host });
+/** The opening selected (its host and GlobalId), or null. Page state: the element selection stays the host. */
+export const selectedOpening = shallowRef<{ host: string; id: string } | null>(null);
+/** `query opening_at {ray}` (scene coordinates, as the measure tool's): the opening under the pointer, or null. */
+export const openingAt = (ray: number[]) => tryQuery<{ host: string; id: string } | null>("opening_at", null, { ray });
+export type OpeningPatch = { width?: number; height?: number; length?: number; sill?: number; diameter?: number; a?: [number, number] };
+/** Changes an opening by its parameters (verb opening_set), its GlobalId kept. One step. Returns the error, or null. */
+export const openingSet = (host: string, id: string, patch: OpeningPatch) => runVerb("opening_set", { host, id, ...patch });
+// ---- end WAVE1B ----
 // ---- end G2 ----

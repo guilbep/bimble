@@ -1197,6 +1197,13 @@ C core's references are hand-computed in `test/concrete_test.c` (volumes, positi
 - **`query element` `openings`**: the element's count (Rust's `e.openings.len()`, query.rs:146);
   the C core answered 0.
 
+- **Openings selected and previewed (ticket WAVE1B B2, ADR 0077 decisions 11-12).** C additions
+  with no Rust counterpart: `query openings {host}` (each opening's kind, sizes as `opening_set`
+  takes them, centre and box corners in world mm; an opening without a GlobalId is "other"),
+  `query opening_at {ray}` (the opening a pointer ray enters before the first surface); the place
+  tool's answer carries a ghost for the opening and sleeve kinds (CONC1 answered `null`).
+  Hand-computed in `test/concrete_test.c`, gestures in `test/lab_concrete.mjs`.
+
 ## 35. What the core refuses, told before the click; a new plan of a low storey (ticket DEAD1, ADR 0074)
 
 Rust v0.19.0's default view range (view.rs:299 `ViewRange::default_for`) cuts a floor plan

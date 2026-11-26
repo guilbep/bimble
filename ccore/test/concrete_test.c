@@ -194,6 +194,40 @@ int main(void) {
     check_true("opening: the wall is 3.6 - 0.24 = 3.36 m3", near(volume(&s->model, &wid), 3.36, 1e-6));
     char body[512], ws[23], os[23];
     memcpy(ws, wid.c, 22), ws[22] = 0, memcpy(os, oid.c, 22), os[22] = 0;
+    { /* ---- WAVE1B (B2): the opening listed, picked by a ray, previewed while placing ---- */
+        const cc_element *wl = cc_model_element(&s->model, &wid);
+        const cc_storey *wst = wl ? cc_model_storey(&s->model, &wl->storey) : NULL;
+        double z0 = (wl ? wl->placement.origin[2] : 0) + (wst ? wst->elevation : 0); /* the wall's base, world */
+        snprintf(body, sizeof body, "{\"host\":\"%s\"}", ws);
+        r = ask(s, "query", "openings", body, &st);
+        char want[160];
+        snprintf(want, sizeof want, "\"centre\":[1500.0,-2000.0,%.1f]", z0 + 900 + 600); /* sill 900 + half of 1200 */
+        check_true("B2 query openings: 1000 x 1200, sill 900, centre (1500, -2000, base + 1500), its GlobalId",
+                   st == CC_OK && has(r, "\"kind\":\"opening\"") && has(r, "\"width\":1000.0") && has(r, "\"height\":1200.0") &&
+                       has(r, "\"sill\":900.0") && has(r, want) && has(r, os) && has(r, "\"wall\":true"));
+        if (!has(r, want)) printf("  got %s (want %s)\n", r, want);
+        free(r);
+        const cc_scene *sc = cc_session_scene(s);
+        double o[3] = {sc ? sc->origin[0] : 0, sc ? sc->origin[1] : 0, sc ? sc->origin[2] : 0};
+        /* a ray along +y through the hole (x 1500, at its middle height): the opening */
+        snprintf(body, sizeof body, "{\"ray\":[%.17g,%.17g,%.17g,0,1,0]}", 1500 - o[0], -9000 - o[1], z0 + 1500 - o[2]);
+        r = ask(s, "query", "opening_at", body, &st);
+        check_true("B2 opening_at: a ray through the hole -> the wall and the opening", st == CC_OK && has(r, ws) && has(r, os));
+        free(r);
+        /* beside it (x 500): the wall's face, no opening */
+        snprintf(body, sizeof body, "{\"ray\":[%.17g,%.17g,%.17g,0,1,0]}", 500 - o[0], -9000 - o[1], z0 + 1500 - o[2]);
+        r = ask(s, "query", "opening_at", body, &st);
+        check_true("B2 opening_at: a ray on the wall beside it -> null", st == CC_OK && !strcmp(r, "null"));
+        free(r);
+        /* the ghost of the next opening while placing (CONC1 drew none) */
+        check_true("B2 set_placing opening", call_ok(s, "set_placing", "", "{\"kind\":\"opening\"}"));
+        free(ask(s, "tool", "click", "{\"at\":[3000,-2000],\"free\":true}", &st));
+        r = ask(s, "tool", "pointer", "{\"at\":[3600,-2000],\"free\":true}", &st);
+        check_true("B2 opening preview: the tool answers a ghost (the void's solid)", st == CC_OK && has(r, "\"ghost\":{\"edges\":["));
+        free(r);
+        free(ask(s, "tool", "cancel", "", &st));
+        check_true("B2 opening preview: nothing added", cc_model_element(&s->model, &wid)->nopenings == 1);
+    }
     snprintf(body, sizeof body, "{\"host\":\"%s\",\"a\":[1600,-2000],\"width\":400}", ws);
     r = call_err(s, "verb", "opening_add", body);
     check_true("opening: refused over another", has(r, "overlaps another opening"));

@@ -26,4 +26,14 @@ int cc_vh_opening_add(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err
 int cc_vh_opening_set(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err);
 int cc_vh_opening_remove(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err);
 
+/* WAVE1B (B2): opening k of the element `e` as opening_set reads it. kind 0: a box (opening), 1: a
+ * sleeve, 2: another shape (imported: not editable by its parameters). The sizes as spec: cx, cy the
+ * centre in the host's plan frame (a wall: along it, cy 0), w, h (wall), len (slab), sill (wall),
+ * dia (sleeve); box: the host-local box of its solid (min x, y, z, max x, y, z). */
+typedef struct {
+    int kind, wall;
+    double cx, cy, w, h, len, sill, dia;
+    double box[6];
+} cc_opening_info;
+void cc_opening_info_of(const cc_element *e, size_t k, cc_opening_info *out);
 #endif

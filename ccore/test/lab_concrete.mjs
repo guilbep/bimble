@@ -15,6 +15,9 @@
 //   save, reopen, save: the same bytes; the IFC4 export holds IfcFooting STRIP_FOOTING, IfcSlab
 //   BASESLAB, IfcOpeningElement and two IfcRelVoidsElement, the sleeve's 'SLEEVE';
 //   Stairs and Ramp: "not available yet" (data-not-yet).
+//   WAVE1B (B2): the opening tool's preview (a ghost after the first click), an opening selected by
+//     a click in the plan, by its row in the wall's Properties and by a click in 3D (its box drawn in
+//     the selection colour), its width and sill changed in Properties (opening_set, GlobalId kept).
 // Volumes are checked by hand-computed values in the C suite `concrete` (test/concrete_test.c).
 // Before CONC1 Footing, Raft, Opening and Sleeve had no action ("not yet"): the first check and
 // every gesture fail there. Each step's time (click or key -> the end of the first frame after its
@@ -115,6 +118,23 @@ async function tab(S, evalJs, model) {
   const tool = (g, m) => `[data-bb=ribbon] [data-bb=ribbon-tool-${g}-${m}]`;
   const el = (id) => B(`try { return b.query('element', { id: ${JSON.stringify(id)} }); } catch (e) { return null; }`);
   const rev = () => B("return b.state.value.rev;");
+  /** WAVE1B (B2): `act` (a statement on `el`) on a control in the page: ms to the first frame holding `cond`. */
+  const timed = async (name, sel, act, cond) => {
+    const ms = await evalJs(`(async () => {
+      const b = await import('/src/bimble.ts'); const g = () => window.__bbGl;
+      const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return -1;
+      const f0 = g()?.frames ?? 0, t0 = performance.now(); ${act};
+      const raf = () => new Promise((r) => requestAnimationFrame(r));
+      while (performance.now() - t0 < 5000) {
+        await raf();
+        let ok = false; try { ok = await (async () => (${cond}))(); } catch { ok = false; }
+        if (ok) { if ((g()?.frames ?? 0) === f0) await raf(); return performance.now() - t0; }
+      }
+      return null; })()`);
+    if (typeof ms === "number" && ms >= 0) times.push([name, ms]);
+    return typeof ms === "number" && ms >= 0 ? ms : null;
+  };
+  const type = (v) => `el.value = ${JSON.stringify(v)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('blur', { bubbles: true }))`;
   /** A ribbon control clicked in the page: ms from the click to the first frame holding `cond`. */
   const timedTool = async (name, sel, cond) => {
     const ms = await evalJs(`(async () => {
@@ -237,6 +257,73 @@ async function tab(S, evalJs, model) {
   check("Opening: undo removes it in one step", (await el(wallId))?.openings === 0);
   await B("return b.redo();");
   await settle();
+
+  // ---- WAVE1B (B2): the opening's preview, its selection (a click in the plan, its row in
+  // Properties, a click in 3D) and its Properties fields. Before B2 the tool answered no ghost for
+  // an opening, `query openings` and `opening_at` were unknown and Properties had no opening rows:
+  // every check of this block fails there. ----
+  const plainClick = async (name, [x, y, z], cond) => {
+    const [sx, sy] = await screen(x, y, z);
+    await evalJs(`(() => { window.__concT = null; document.addEventListener('pointerdown', (e) => { window.__concT = e.timeStamp; }, { capture: true, once: true }); window.__concF = window.__bbGl.frames; })()`);
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: sx, y: sy, button: "none", buttons: 0 });
+    await S("Input.dispatchMouseEvent", { type: "mousePressed", x: sx, y: sy, button: "left", buttons: 1, clickCount: 1 });
+    await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: sx, y: sy, button: "left", buttons: 0, clickCount: 1 });
+    const t = await evalJs(`(async () => {
+      const b = await import('/src/bimble.ts'); const g = () => window.__bbGl;
+      const raf = () => new Promise((r) => requestAnimationFrame(r)); const t0 = performance.now();
+      while (performance.now() - t0 < 5000) {
+        await raf();
+        let ok = false; try { ok = await (async () => (${cond}))(); } catch { ok = false; }
+        if (ok && window.__concT !== null) { if (g().frames === window.__concF) await raf(); return performance.now() - window.__concT; }
+      }
+      return null; })()`);
+    if (typeof t === "number") times.push([name, t]);
+    return t;
+  };
+  if (!(await B("return b.placing.value?.active === true && b.placing.value.kind === 'opening';")))
+    await timedTool("Opening (tool on, preview)", tool(4, 1), "b.placing.value?.active && b.placing.value.kind === 'opening'");
+  await click(null, [3500, -3000, 0], "b.placing.value?.points.length === 1");
+  {
+    const [sx, sy] = await screen(4500, -3000, 0);
+    await evalJs(`(() => { window.__concT = null; document.addEventListener('pointermove', (e) => { window.__concT = e.timeStamp; }, { capture: true, once: true }); window.__concF = window.__bbGl.frames; })()`);
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: sx, y: sy, button: "none", buttons: 0, modifiers: 8 });
+    ms = await evalJs(`(async () => { const raf = () => new Promise((r) => requestAnimationFrame(r)); const t0 = performance.now();
+      while (performance.now() - t0 < 5000) { await raf(); if ((window.__bbGl.ghostTris ?? 0) > 0 && window.__concT !== null && window.__bbGl.frames > window.__concF) return performance.now() - window.__concT; }
+      return null; })()`);
+    if (typeof ms === "number") times.push(["Opening: pointer move -> preview drawn", ms]);
+    check("B2 Opening preview: the next opening's ghost is drawn while placing", ms !== null && (await gl()).ghostTris > 0, String((await gl()).ghostTris));
+  }
+  await key("Escape", "Escape", 27);
+  await key("Escape", "Escape", 27);
+  await settle();
+  check("B2 Opening preview: Esc, nothing added", (await el(wallId))?.openings === 1);
+  ms = await plainClick("Opening: click in the plan -> selected", [1500, -3000, 0], "!!b.selectedOpening.value && !!document.querySelector('[data-bb=props-opening][aria-pressed=true]')");
+  const opId = await B("return b.selectedOpening.value?.id ?? null;");
+  check("B2 a click on the opening in the plan selects it: the wall selected, its opening pressed in Properties, its box drawn",
+    ms !== null && !!opId && (await B("return b.state.value.selection[0];")) === wallId && (await gl()).openingDrawn === true, String(opId));
+  ms = await timed("Opening: width 800 in Properties", "[data-bb=props-opening-width]", type("800"), `b.openingsOf(${JSON.stringify(wallId)})[0]?.width === 800`);
+  check("B2 Properties: the opening's width 800 (opening_set, one step), its GlobalId kept", ms !== null && (await B(`return b.openingsOf(${JSON.stringify(wallId)})[0].id;`)) === opId);
+  ms = await timed("Opening: sill 1000 in Properties", "[data-bb=props-opening-sill]", type("1000"), `b.openingsOf(${JSON.stringify(wallId)})[0]?.sill === 1000`);
+  check("B2 Properties: the opening's sill 1000", ms !== null);
+  await B("b.selectedOpening.value = null; return null;");
+  ms = await timed("Opening: its row in Properties -> selected", `[data-bb=props-opening][data-id="${opId}"]`, "el.click()", "!!b.selectedOpening.value");
+  check("B2 Properties: the host's list of openings selects one", ms !== null && (await B("return b.selectedOpening.value?.id;")) === opId);
+  await B("b.selectedOpening.value = null; return b.select([]);");
+  await settle();
+  { // in 3D: a click on the opening (through the hole, its reveal) selects it as in the plan
+    const v3 = views.find((v) => v.type === "three_d");
+    await B(`return b.openView(${JSON.stringify(v3?.id)});`);
+    await waitFor("the 3D camera", 10000, async () => (await evalJs("window.__bbGl.camera && window.__bbGl.camera.mode")) !== "plan").catch(() => {});
+    await settle();
+    const sel = await B(`return b.openingsOf(${JSON.stringify(wallId)})[0];`);
+    ms = await plainClick("Opening: click in 3D -> selected", sel.centre, "!!b.selectedOpening.value && !!document.querySelector('[data-bb=props-opening][aria-pressed=true]')");
+    check("B2 a click on the opening in 3D selects it", ms !== null && (await B("return b.selectedOpening.value?.id;")) === opId);
+    await shot("wave1b-opening-selected-3d-1280.png");
+    await B("b.selectedOpening.value = null; return b.select([]);");
+    await B(`return b.openView(${JSON.stringify(plan.id)});`);
+    await waitFor("the plan camera", 10000, async () => (await evalJs("window.__bbGl.camera && window.__bbGl.camera.mode")) === "plan").catch(() => {});
+    await settle();
+  }
 
   // ---- Sleeve: one click on the slab of Niveau 1 ----
   ms = await timedTool("Sleeve (tool on)", tool(4, 2), "b.placing.value?.active && b.placing.value.kind === 'sleeve'");

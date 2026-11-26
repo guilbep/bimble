@@ -4,6 +4,7 @@
 #include "fmt.h"
 #include "math.h"
 #include "verbs.h"
+#include "verbs_concrete.h" /* WAVE1B: cc_opening_info_of */
 
 /* The sizes, keys sorted (the answer's order). */
 enum {
@@ -185,4 +186,140 @@ void cc_conc_json(const cc_session *s, JsonW *w) {
     jw_obj_begin(w);
     for (int k = 0; k < P_N; k++) jw_key(w, KEY[k]), jw_f64(w, s->conc[k]);
     jw_obj_end(w);
+}
+
+/* ---- WAVE1B (B2): openings selected and previewed (concrete.h) ---- */
+
+static double elev_of(const cc_model *m, const cc_gid *storey) {
+    const cc_storey *st = cc_model_storey(m, storey);
+    return st ? st->elevation : 0.0;
+}
+/* A host-local point to world mm (the host's placement, its storey's elevation). */
+static void host_world(const cc_element *e, double elev, const double q[3], double out[3]) {
+    const double *x = e->placement.x_axis, *z = e->placement.z_axis, *o = e->placement.origin;
+    double y[3] = {z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]};
+    for (int k = 0; k < 3; k++) out[k] = o[k] + x[k] * q[0] + y[k] * q[1] + z[k] * q[2] + 0.0;
+    out[2] += elev;
+}
+static void wv3(JsonW *w, const double v[3]) {
+    jw_arr_begin(w);
+    for (int k = 0; k < 3; k++) jw_f64(w, v[k] + 0.0);
+    jw_arr_end(w);
+}
+
+void cc_conc_openings_json(const cc_model *m, const cc_element *e, JsonW *w) {
+    double elev = elev_of(m, &e->storey);
+    jw_arr_begin(w);
+    for (size_t k = 0; k < e->nopenings; k++) {
+        cc_opening_info in;
+        cc_opening_info_of(e, k, &in);
+        const cc_opening *o = &e->openings[k];
+        int kind = o->has_id ? in.kind : 2;
+        const double *b = in.box;
+        double mid[3] = {(b[0] + b[3]) / 2.0, (b[1] + b[4]) / 2.0, (b[2] + b[5]) / 2.0}, c[3];
+        jw_obj_begin(w);
+        jw_key(w, "centre"), host_world(e, elev, mid, c), wv3(w, c);
+        jw_key(w, "corners"), jw_arr_begin(w);
+        for (int i = 0; i < 8; i++) {
+            double q[3] = {b[i & 1 ? 3 : 0], b[i & 2 ? 4 : 1], b[i & 4 ? 5 : 2]};
+            host_world(e, elev, q, c), wv3(w, c);
+        }
+        jw_arr_end(w);
+        if (kind == 1) jw_key(w, "diameter"), jw_f64(w, in.dia);
+        if (kind == 0 && in.wall) jw_key(w, "height"), jw_f64(w, in.h);
+        jw_key(w, "id");
+        if (o->has_id) jw_str_n(w, o->id.c, 22);
+        else jw_str(w, "");
+        jw_key(w, "kind"), jw_str(w, kind == 0 ? "opening" : kind == 1 ? "sleeve" : "other");
+        if (kind == 0 && !in.wall) jw_key(w, "length"), jw_f64(w, in.len);
+        if (kind != 2 && in.wall) jw_key(w, "sill"), jw_f64(w, in.sill);
+        jw_key(w, "wall"), jw_bool(w, in.wall);
+        if (kind == 0) jw_key(w, "width"), jw_f64(w, in.w);
+        jw_obj_end(w);
+    }
+    jw_arr_end(w);
+}
+
+/* Slab test of the ray (local: origin o, direction d) against the box b grown by tol: the entry t
+ * (0 when the origin is inside), -1 when missed. */
+static double ray_box(const double o[3], const double d[3], const double b[6], double tol) {
+    double t0 = 0.0, t1 = 1e300;
+    for (int k = 0; k < 3; k++) {
+        double lo = b[k] - tol, hi = b[3 + k] + tol;
+        if (d[k] > -1e-12 && d[k] < 1e-12) {
+            if (o[k] < lo || o[k] > hi) return -1.0;
+            continue;
+        }
+        double a = (lo - o[k]) / d[k], c = (hi - o[k]) / d[k];
+        if (a > c) {
+            double t = a;
+            a = c, c = t;
+        }
+        if (a > t0) t0 = a;
+        if (c < t1) t1 = c;
+        if (t0 > t1) return -1.0;
+    }
+    return t0;
+}
+
+int cc_conc_opening_at(const cc_model *m, const double ray[6], double t_max, double tol, cc_gid *host, cc_gid *id) {
+    double d[3] = {ray[3], ray[4], ray[5]}, l = cc_sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (!(l > 0.0) || l != l) return 0;
+    for (int k = 0; k < 3; k++) d[k] /= l;
+    double best = 1e300;
+    int found = 0;
+    for (size_t i = 0; i < m->nelements; i++) {
+        const cc_element *e = &m->elements[i];
+        if (!e->nopenings) continue;
+        double elev = elev_of(m, &e->storey);
+        const double *x = e->placement.x_axis, *z = e->placement.z_axis, *po = e->placement.origin;
+        double y[3] = {z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]};
+        double r[3] = {ray[0] - po[0], ray[1] - po[1], ray[2] - po[2] - elev};
+        double lo[3] = {r[0] * x[0] + r[1] * x[1] + r[2] * x[2], r[0] * y[0] + r[1] * y[1] + r[2] * y[2], r[0] * z[0] + r[1] * z[1] + r[2] * z[2]};
+        double ld[3] = {d[0] * x[0] + d[1] * x[1] + d[2] * x[2], d[0] * y[0] + d[1] * y[1] + d[2] * y[2], d[0] * z[0] + d[1] * z[1] + d[2] * z[2]};
+        for (size_t k = 0; k < e->nopenings; k++) {
+            if (!e->openings[k].has_id) continue;
+            cc_opening_info in;
+            cc_opening_info_of(e, k, &in);
+            double t = ray_box(lo, ld, in.box, tol);
+            if (t < 0.0 || (t_max >= 0.0 && t > t_max + tol) || t >= best) continue;
+            best = t, found = 1, *host = e->id, *id = e->openings[k].id;
+        }
+    }
+    return found;
+}
+
+int cc_conc_opening_ghost(const cc_model *m, const cc_cmds *in, cc_cmds *out) {
+    for (size_t i = 0; i < in->n; i++) {
+        const cc_command *c = &in->v[i];
+        if (c->op != CC_CMD_SET_OPENINGS) continue;
+        const cc_element *h = cc_model_element(m, &c->id);
+        if (!h) return -1;
+        const cc_opening *o = NULL; /* the one the host has not got */
+        for (size_t k = 0; k < c->element.nopenings && !o; k++) {
+            const cc_opening *q = &c->element.openings[k];
+            int old = 0;
+            for (size_t j = 0; j < h->nopenings && !old; j++) old = q->has_id && h->openings[j].has_id && !cc_gid_cmp(&q->id, &h->openings[j].id);
+            if (!old) o = q;
+        }
+        if (!o) return -1;
+        cc_element g;
+        memset(&g, 0, sizeof g);
+        g.id = o->has_id ? o->id : h->id;
+        g.cls = CC_IFC_PROXY, g.storey = h->storey, g.material = h->material, g.generator = o->generator;
+        g.name = (cc_str){"opening", 7};
+        const double *x = h->placement.x_axis, *z = h->placement.z_axis;
+        double y[3] = {z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]};
+        for (int k = 0; k < 3; k++) {
+            const double *q = o->placement.origin, *qz = o->placement.z_axis, *qx = o->placement.x_axis;
+            g.placement.origin[k] = h->placement.origin[k] + x[k] * q[0] + y[k] * q[1] + z[k] * q[2];
+            g.placement.z_axis[k] = x[k] * qz[0] + y[k] * qz[1] + z[k] * qz[2];
+            g.placement.x_axis[k] = x[k] * qx[0] + y[k] * qx[1] + z[k] * qx[2];
+        }
+        cc_command *a = cc_cmds_push(out, CC_CMD_ADD_ELEMENT);
+        if (!a) return -1;
+        a->element = g;
+        return 0;
+    }
+    return -1;
 }

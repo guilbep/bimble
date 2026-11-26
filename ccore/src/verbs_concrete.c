@@ -520,6 +520,29 @@ static int spec_of(const Host *h, const cc_opening *o, Spec *s) {
     return 0;
 }
 
+void cc_opening_info_of(const cc_element *e, size_t k, cc_opening_info *out) { /* WAVE1B (B2), verbs_concrete.h */
+    memset(out, 0, sizeof *out);
+    Host h;
+    memset(&h, 0, sizeof h);
+    h.e = e;
+    const cc_generator *g = &e->generator;
+    if (g->kind == CC_GEN_WALL && e->cls == CC_IFC_WALL) h.wall = 1, h.len = g->u.wall.length, h.thick = g->u.wall.thickness, h.height = g->u.wall.height;
+    else if (g->kind == CC_GEN_SLAB) h.thick = g->u.slab.thickness;
+    out->wall = h.wall;
+    if (k >= e->nopenings) {
+        out->kind = 2;
+        return;
+    }
+    opening_box(&e->openings[k], out->box);
+    Spec s;
+    if (spec_of(&h, &e->openings[k], &s)) {
+        out->kind = 2;
+        return;
+    }
+    out->kind = s.round ? 1 : 0;
+    out->cx = s.cx, out->cy = s.cy, out->w = s.w, out->h = s.h, out->len = s.len, out->sill = s.sill, out->dia = s.dia;
+}
+
 /* The new list: the host's openings with `o` added (skip < 0) or in place of index `skip`;
  * refused when it overlaps another one. One set_openings Command. */
 static int push_openings(const Host *h, const cc_opening *o, long skip, cc_cmds *l, Buf *err) {

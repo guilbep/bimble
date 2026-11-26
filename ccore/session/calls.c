@@ -1264,6 +1264,7 @@ static int verb_query(cc_session *s, const char *name, const char *body, size_t 
     return CC_ERR;
 }
 
+static int measure_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out); /* WAVE1B: opening_at */
 static int call_query(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     JsonW w;
     jw_init(&w, out, 0);
@@ -1467,6 +1468,23 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         arena_free(&sa);
         return done(&w);
 #endif
+    }
+    if (!strcmp(name, "opening_at")) return measure_tool(s, "opening_at", body, n, out); /* WAVE1B (B2) */
+    if (!strcmp(name, "openings")) { /* WAVE1B (B2, concrete.h): {"host"}: its openings */
+        if (!s->open) return buf_puts(out, READ_ONLY), CC_ERR;
+        Arena a;
+        arena_init(&a, 0);
+        JrError je;
+        const JrVal *v = n ? jr_parse(&a, body, n, &je) : NULL, *h = v && v->type == JR_OBJ ? jr_get(v, "host") : NULL;
+        cc_gid hid;
+        const cc_element *e = NULL;
+        if (h && h->type == JR_STR && cc_gid_valid(h->s, h->n)) memcpy(hid.c, h->s, 22), e = cc_model_element(&s->model, &hid);
+        arena_free(&a);
+        if (!e) return buf_puts(out, "openings: {\"host\": the GlobalId of an element}"), CC_ERR;
+        JsonW w;
+        jw_init(&w, out, 0);
+        cc_conc_openings_json(&s->model, e, &w);
+        return done(&w);
     }
     if (!strcmp(name, "reference_planes")) { /* WAVE1B (refplanes.h): null without an editable model */
         JsonW w;
@@ -2904,8 +2922,7 @@ static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out) {
             has_ghost = !cc_tool_ghost(&w, &s->model, l.v, l.n, org, &gerr);
         }
         cc_cmds_free(&l);
-    } else if (s->placing && t->has_hover && !polygon_now(s) && s->placing_kind != CC_KIND_OPENING &&
-               s->placing_kind != CC_KIND_SLEEVE && /* CONC1: an opening's preview is its cut, not a solid */
+    } else if (s->placing && t->has_hover && !polygon_now(s) &&
                (one_click(s) || t->npoints >= 1 || s->placing_kind == CC_KIND_STRIP_FOOTING)) {
         cc_cmds l;
         cc_cmds_init(&l);
@@ -2914,7 +2931,12 @@ static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out) {
             const cc_scene *sc = scene_now(s);
             double org[3] = {0, 0, 0};
             if (sc) memcpy(org, sc->origin, sizeof org);
-            has_ghost = !cc_tool_ghost(&w, &s->model, l.v, l.n, org, &gerr);
+            if (s->placing_kind == CC_KIND_OPENING || s->placing_kind == CC_KIND_SLEEVE) { /* WAVE1B (B2): the void's solid */
+                cc_cmds g;
+                cc_cmds_init(&g);
+                has_ghost = !cc_conc_opening_ghost(&s->model, &l, &g) && !cc_tool_ghost(&w, &s->model, g.v, g.n, org, &gerr);
+                cc_cmds_free(&g);
+            } else has_ghost = !cc_tool_ghost(&w, &s->model, l.v, l.n, org, &gerr);
         }
         cc_cmds_free(&l);
     }
@@ -3276,6 +3298,46 @@ static int plane_pick_click(cc_session *s, const char *body, size_t n, const cc_
     return cc_measure_call(&s->measure, "measure_pointer", "{}", 2, mv, out) == 200 ? CC_OK : CC_ERR;
 }
 
+/* WAVE1B (B2): query opening_at {"ray": [ox, oy, oz, dx, dy, dz]} (scene coordinates, as the
+ * measure tool's): {"host", "id"} of the opening the ray enters before the first surface it meets
+ * (the measure tool's pick: the plan's range or the section box cuts), within 30 mm of its box;
+ * else null. */
+static int opening_at(cc_session *s, const char *body, size_t n, const cc_mview *mv, cc_buf *out) {
+    if (!s->open) return fail(out, READ_ONLY);
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    const JrVal *v = n ? jr_parse(&a, body, n, &je) : NULL, *r = v && v->type == JR_OBJ ? jr_get(v, "ray") : NULL;
+    double ray[6];
+    int ok = r && r->type == JR_ARR && r->n == 6;
+    for (int k = 0; ok && k < 6; k++) ok = r->items[k].type == JR_NUM && r->items[k].num - r->items[k].num == 0.0, ray[k] = ok ? r->items[k].num : 0;
+    arena_free(&a);
+    if (!ok) return fail(out, "opening_at: {\"ray\": [ox, oy, oz, dx, dy, dz]}");
+    double t = -1.0, d = cc_sqrt(ray[3] * ray[3] + ray[4] * ray[4] + ray[5] * ray[5]);
+    cc_msnap sn;
+    cc_mview m2;
+    if (mv) {
+        m2 = *mv, m2.plane = NULL;
+        if (cc_measure_snap(&m2, ray, NULL, 0.0, 1, &sn) == 1 && d > 0) {
+            double q[3] = {sn.p[0] - ray[0], sn.p[1] - ray[1], sn.p[2] - ray[2]};
+            t = cc_sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]);
+        }
+    }
+    double w[6] = {ray[0], ray[1], ray[2], ray[3], ray[4], ray[5]};
+    if (mv && mv->org)
+        for (int k = 0; k < 3; k++) w[k] += mv->org[k];
+    cc_gid host, id;
+    JsonW jw;
+    jw_init(&jw, out, 0);
+    if (cc_conc_opening_at(&s->model, w, t, 30.0, &host, &id)) {
+        jw_obj_begin(&jw);
+        jw_key(&jw, "host"), jw_str_n(&jw, host.c, 22);
+        jw_key(&jw, "id"), jw_str_n(&jw, id.c, 22);
+        jw_obj_end(&jw);
+    } else jw_null(&jw);
+    return done(&jw);
+}
+
 /* The measure tool (ticket T1, measure.h): the shown scene and its visible links, the box that
  * cuts (a plan's range, else the section box when on). */
 static int measure_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
@@ -3317,6 +3379,7 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
         for (int k = 0; k < 3; k++) wplane[k] -= sc->origin[k];
         mv.plane = wplane;
     }
+    if (!strcmp(name, "opening_at")) return opening_at(s, body, n, sc ? &mv : NULL, out); /* WAVE1B (B2) */
     if (s->wp.pick && s->open && !strcmp(name, "measure_click")) return plane_pick_click(s, body, n, sc ? &mv : NULL, out);
     if (s->wp.pick && s->open && !strcmp(name, "measure_cancel")) { /* WAVE1B: the last point back, then the tool stops */
         if (s->wp.npick) s->wp.npick--;

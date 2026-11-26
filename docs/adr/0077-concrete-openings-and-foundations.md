@@ -68,6 +68,18 @@ Each choice, then the alternative rejected.
 10. **Hosts** must be an `IfcWall` with the wall generator or an `IfcSlab` with the slab generator
     (an imported mesh wall cannot take an opening yet).
 
+11. **The preview of an opening or a sleeve** (ticket WAVE1B, the same delegation) is the void's
+    solid as the ghost the other place tools draw: the dry run's `set_openings` made into one
+    solid in the host's frame (`cc_conc_opening_ghost`). Rejected: the host's cut drawn live (a
+    boolean per pointer move; the 200 ms budget of ADR 0074).
+12. **Selecting an opening** keeps the element selection on its host and adds the opening as page
+    state (`selectedOpening`): a click in 3D or in a plan asks `query opening_at {ray}` (the opening
+    whose box, grown by 30 mm, the ray enters before the first surface the measure tool's pick
+    meets), and the host's Properties lists its openings (`query openings {host}`); the selected
+    one's box is drawn in the selection colour and its fields (width, height, sill; length;
+    diameter; the centre X, Y) run `opening_set`. Rejected: openings as selectable ids of the
+    selection (every selection consumer would have to tell an opening from an element).
+
 ## Response times (ADR 0074)
 
 Measured by `ccore/test/lab_concrete.mjs` on the native host (tcc build), headless Chromium with
