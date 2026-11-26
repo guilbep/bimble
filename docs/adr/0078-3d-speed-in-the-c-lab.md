@@ -253,6 +253,15 @@ GPU at once. The choices below by Claude on ticket LNK3D under the same delegati
    the link's frame (they follow a move without asking the core), hidden with their link or element,
    orphans in a muted colour; a click on the label selects the note and its element.
 
+22. **The WebGPU renderer (ADR 0083) leaves links to WebGL2 for now**: it reads the parsed mesh, the
+   element colours and `shown`, but not a model's placement (a link's vertices now stay in its own
+   frame), the links' proxies nor the memory budget. While links are loaded (or their proxies drawn
+   before the mesh) the viewport draws with WebGL2, live, and the performance panel says "linked models
+   are drawn by WebGL2 for now"; WebGPU takes over again when the links go. Without links it stays
+   correct: a visibility change gives `shown` a new array, so its lists are made again. **Alternative:**
+   the placement rows and a model index in its colour table (`0xMMRRGGBB`, `gl/cull.ts` `xfRows`) and an
+   element per edge vertex in `gpu/` (its edges know no element yet): the follow-up.
+
 ### Evidence (ticket LNK3D)
 
 `ccore/tools/frames.mjs --links 6` (six synthetic links of 160 unique closed meshes, 558,144 triangles,

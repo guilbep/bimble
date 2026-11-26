@@ -15,7 +15,9 @@
 //     pixels in that colour, no /mesh request;
 //   - a note on a linked element is drawn in 3D and follows the link's move; a click on its label selects it;
 //   - each input's feedback within 200 ms (ADR 0074), the load printed; loaded (1-minute load over 4): that
-//     input measured once more after the load falls under 4.
+//     input measured once more after the load falls under 4. The link's eye is clicked for real and timed by
+//     test/lib/input_time.mjs (the page's time asserted at 200 ms; the presented frame by its rule); the other
+//     inputs are the page's calls (view_rule, the Links panel's place and colour), timed from the call to the frame.
 // Fails on the code before LNK3D: every hide or move fetched /mesh again (M1LINKS, LINKF), no proxies of
 // links, no notes in 3D.
 import { spawn } from "node:child_process";
@@ -25,6 +27,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHROMIUM, port, vitePort } from "./ports.mjs";
 import { makeLinkFolder } from "../bench/links_synth.mjs";
+import { adapter, readTimes, verdict, watchSource } from "./lib/input_time.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = process.env.LNK3D_UI ? resolve(process.env.LNK3D_UI) : resolve(CCORE, "../web-ui"); // (LNK3D_UI, HOST_BIN: the code before, to see it fail)
@@ -228,17 +231,41 @@ async function main() {
   // ---- hide a link: its eye in the Links panel ----
   await evalJs("(async () => (await import('/src/bimble.ts')).runAction('manage_links'))()");
   await waitFor("the Links panel rows", 10000, () => evalJs(`!!document.querySelector('[data-bb=link-row][data-name="link_1.ifc"] [data-bb=link-eye]')`));
-  const eye = `() => document.querySelector('[data-bb=link-row][data-name="link_1.ifc"] [data-bb=link-eye]').click()`;
-  const hideMs = await timed("hide a link (its eye)", eye, "window.__bbGl.linkDraw[1].visible === false", eye);
+  // the eye clicked for real (CDP input), timed by test/lib/input_time.mjs (ADR 0074, FIRST1): the page's time
+  // (the row and the viewport's frame without the link) asserted at 200 ms, the presented frame as its rule says
+  const gpu = await adapter(evalJs);
+  const eyeClick = async (visible) => {
+    const rect = `(() => { const r = document.querySelector('[data-bb=link-row][data-name="link_1.ifc"] [data-bb=link-eye]').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`;
+    // (the panel may hold it below the fold: scrolled into view, every scroll put back after the click)
+    await evalJs(`(() => { const e = document.querySelector('[data-bb=link-row][data-name="link_1.ifc"] [data-bb=link-eye]'); window.__scrolls = [];
+      for (let p = e.parentElement; p; p = p.parentElement) window.__scrolls.push([p, p.scrollTop, p.scrollLeft]); e.scrollIntoView({ block: "center" }); })()`);
+    await calm();
+    let at = await evalJs(rect); // where it stays (the panel laid out)
+    for (let i = 0; i < 20; i++) { await sleep(100); const b = await evalJs(rect); if (b[0] === at[0] && b[1] === at[1]) break; at = b; }
+    const top = await evalJs(`!!document.elementFromPoint(${at[0]}, ${at[1]})?.closest('[data-bb=link-eye]')`);
+    if (!top) throw new Error(`the eye of link_1 is covered at ${at}`);
+    const cond = `document.querySelector('[data-bb=link-row][data-name="link_1.ifc"]')?.dataset.visible === '${visible ? 1 : 0}' && window.__bbGl.linkDraw[1].visible === ${visible}`;
+    await evalJs(watchSource({ kind: "pointerdown", page: cond, presented: cond }));
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: at[0], y: at[1], button: "none", buttons: 0 });
+    await S("Input.dispatchMouseEvent", { type: "mousePressed", x: at[0], y: at[1], button: "left", buttons: 1, clickCount: 1 });
+    await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: at[0], y: at[1], button: "left", buttons: 0, clickCount: 1 });
+    const tm = await readTimes(evalJs);
+    await evalJs("(() => { for (const [p, t, l] of window.__scrolls ?? []) p.scrollTop = t, p.scrollLeft = l; })()");
+    return verdict(tm, gpu);
+  };
+  const hideV = await eyeClick(false);
+  check(`hide a link (its eye clicked): ${hideV.line}`, hideV.ok);
   const pur1 = await pix("purple");
-  check("hide a link: the frame after the click shows it gone", hideMs >= 0 && pur1.n === 0, `${hideMs.toFixed(1)} ms, purple ${pur0.n} -> ${pur1.n} px`);
+  check("hide a link: the frame after the click shows it gone", hideV.pageOk && pur1.n === 0, `purple ${pur0.n} -> ${pur1.n} px`);
   await noRefetch("hide a link");
-  const showMs = await timed("show the link again (its eye)", eye, "window.__bbGl.linkDraw[1].visible === true");
+  const showV = await eyeClick(true);
+  check(`show the link again (its eye clicked): ${showV.line}`, showV.ok);
+  const showMs = showV.pageOk ? 0 : -1;
   await calm();
   const after = await evalJs("Array.from(window.__bbGl.bench.read().rgba)");
   let diff = 0;
   for (let i = 0; i < before.length; i += 4) if (Math.max(Math.abs(before[i] - after[i]), Math.abs(before[i + 1] - after[i + 1]), Math.abs(before[i + 2] - after[i + 2])) > 40) diff++;
-  check("shown again: the same picture as before the hide (0 pixels differ by more than 40 levels)", showMs >= 0 && diff === 0, `${showMs.toFixed(1)} ms, ${diff} pixels`);
+  check("shown again: the same picture as before the hide (0 pixels differ by more than 40 levels)", showMs >= 0 && diff === 0, `${diff} pixels`);
   await noRefetch("show the link");
 
   // ---- hide an element of a link (the Navigator's rule) ----
