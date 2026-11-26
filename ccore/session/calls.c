@@ -1315,8 +1315,8 @@ static int verb_query(cc_session *s, const char *name, const char *body, size_t 
 #define CC_BATCH_MAX 32
 static const char *const BATCH_NAMES[] = {
     "actions", "annotation_types", "collab", "coordinates", "element", "elements", "foundation_rows",
-    "grid_axes", "grids", "history", "level_refusals", "links", "materials", "measure", "measurements",
-    "north", "open_views", "opening_rows", "openings", "placing", "project", "reference_planes",
+    "grid_axes", "grids", "history", "level_refusals", "link_draw", "links", "materials", "measure", "measurements",
+    "mesh_key", "north", "open_views", /* LNK3D: link_draw, mesh_key */ "opening_rows", "openings", "placing", "project", "reference_planes",
     "schedule_columns", "schedule_list", "schedule_rows", "schedules", "setting_out", /* QTY1: schedule_columns, schedule_rows */ "sheets", "state", "status", "storeys", "view_annotations",
     "view_clip", "view_references", "view_visibility", "views", "visibility", "visibility_sets",
 };

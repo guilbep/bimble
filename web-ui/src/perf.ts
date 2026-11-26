@@ -18,7 +18,9 @@ export interface PerfInput { what: string; ms: number; at: number; synced: boole
 export interface PerfAdapter { vendor: string; architecture: string; description: string; software: boolean }
 /** What draws the 3D view: asked (the setting or ?gpu=), in use, the adapter, why WebGPU is not in use. */
 export interface PerfRenderer { asked: "auto" | "webgl2" | "webgpu"; using: "WebGL2" | "WebGPU"; adapter: PerfAdapter | null; reason: string | null; gpuCull: boolean }
-export interface PerfLink { name: string; elements: number; triangles: number; visible: boolean }
+export interface PerfLink { name: string; elements: number; triangles: number; visible: boolean;
+  /** LNK3D (ADR 0078 amendment 3): its detail on the GPU (false: its proxies only; null: not told) and its GPU bytes. */
+  detail?: boolean | null; gpuBytes?: number | null }
 
 const RING = 120;
 const frames: PerfFrame[] = [];
@@ -169,7 +171,10 @@ export function perfSnapshot(): PerfSnapshot {
     elements: meshElements, triangles: meshTris,
     openToFirst: firstAt !== null ? firstAt - openAt : null,
     openToComplete: completeAt !== null ? completeAt - openAt : null,
-    links, inputs: [...inputs], frames: g?.frames ?? 0,
+    links: links.map((l) => { // LNK3D: shown, detail and bytes as the viewport has them now (the memory budget)
+      const d = g?.linkDetail?.find((x) => x.name === l.name), w = g?.linkDraw?.find((x) => x.name === l.name);
+      return { ...l, visible: w ? w.visible : l.visible, detail: d ? d.detail : null, gpuBytes: d ? d.bytes : null };
+    }), inputs: [...inputs], frames: g?.frames ?? 0,
     record: lastRecord ? { seconds: lastRecord.seconds, moving: stats(lastRecord.frames.filter((f) => f.moving)), still: stats(lastRecord.frames.filter((f) => !f.moving)), inputs: lastRecord.inputs } : null,
     recording: recording !== null,
     canvas: { w: c?.width ?? 0, h: c?.height ?? 0, dpr: window.devicePixelRatio || 1 },
@@ -198,7 +203,8 @@ export function perfReport(names: boolean, file: string | null): string {
   L.push(`model${names && file ? ` ${file}` : ""}: ${num(s.elements)} elements, ${num(s.triangles)} triangles; open -> first frame ${ms(s.openToFirst)}, -> complete picture ${ms(s.openToComplete)}`);
   if (s.links.length) {
     L.push(`links (${s.links.length}):`);
-    s.links.forEach((l, k) => L.push(`  ${names ? l.name : `link ${k + 1}`}: ${num(l.elements)} elements, ${num(l.triangles)} triangles, ${l.visible ? "shown" : "hidden"}`));
+    s.links.forEach((l, k) => L.push(`  ${names ? l.name : `link ${k + 1}`}: ${num(l.elements)} elements, ${num(l.triangles)} triangles, ${l.visible ? "shown" : "hidden"}` +
+      (l.detail === true ? `, detail loaded (${mb(l.gpuBytes ?? null)})` : l.detail === false ? ", proxies only" : "")));
   }
   L.push("slowest input -> frame (this session):");
   if (!s.inputs.length) L.push("  none yet");

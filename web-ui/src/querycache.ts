@@ -11,8 +11,8 @@
  *  QTY1: schedule_columns, schedule_rows (the Quantities page reads its window again after an edit). */
 export const BATCHABLE = new Set([
   "actions", "annotation_types", "collab", "coordinates", "element", "elements", "foundation_rows",
-  "grid_axes", "grids", "history", "level_refusals", "links", "materials", "measure", "measurements",
-  "north", "open_views", "opening_rows", "openings", "placing", "project", "reference_planes",
+  "grid_axes", "grids", "history", "level_refusals", "link_draw", "links", "materials", "measure", "measurements",
+  "mesh_key", "north", "open_views", "opening_rows", "openings", "placing", "project", "reference_planes",
   "schedule_columns", "schedule_list", "schedule_rows", "schedules", "setting_out", "sheets", "state", "status", "storeys", "view_annotations",
   "view_clip", "view_references", "view_visibility", "views", "visibility", "visibility_sets",
 ]);

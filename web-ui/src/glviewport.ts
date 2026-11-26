@@ -95,7 +95,7 @@ import { gridLayer } from "./gl/grids"; // ---- G2: grid axes in plans ---- / --
 import { drawSettingOut, type MarkerDrawn } from "./gl/settingout"; // SETOUT: base point, survey point, north
 import { drawRefPlanes, type RefPlaneDrawn } from "./gl/refplanes"; // WAVE1B: reference planes
 import { clipPlanes, onTargetPlane, orbitAbout, ORBIT_RAD_PER_PX, sameCam, wheelFactor, zoomAt, type OrbitCam } from "./gl/nav";
-import { perfFrame, perfInputs, perfMesh } from "./perf"; // GPU1: the performance panel's counters
+import { perfFrame, perfInputs, perfMesh, renderer as perfRenderer } from "./perf"; // GPU1: the performance panel's counters (LNK3D: the renderer's reason)
 import { gpuSwitch, type GpuRenderer, type GpuView } from "./gpu/switch"; // GPU1: the WebGPU renderer (ADR 0083)
 import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
 
@@ -761,9 +761,16 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       noCull: stats.noCull === true, noProxies: stats.noProxies === true, noEdges: stats.noEdges === true };
   };
   /** The frame drawn by WebGPU (true), or by WebGL2 below (the place tool's ghost and markers: WebGL2's). */
+  // LNK3D (ADR 0078 amendment 3): the WebGPU renderer does not know a link's placement, its proxies nor its
+  // budget (each model in its own frame, buffers, uniforms): with links loaded WebGL2 draws, live, and the
+  // performance panel says why; WebGPU takes over again when the links go
+  const LINKS_WEBGL2 = "linked models are drawn by WebGL2 for now";
   const gpuDraw = (): boolean => {
-    gpuR?.show(!ghostN && !markN);
-    if (!gpuR || ghostN || markN) return false;
+    const linksNow = (mesh?.links?.length ?? 0) > 0 || prePrx.length > 0; // (also their proxies before the mesh)
+    if (gpuR && linksNow && perfRenderer.reason !== LINKS_WEBGL2) perfRenderer.using = "WebGL2", perfRenderer.reason = LINKS_WEBGL2;
+    else if (gpuR && !linksNow && perfRenderer.reason === LINKS_WEBGL2) perfRenderer.using = "WebGPU", perfRenderer.reason = null;
+    gpuR?.show(!ghostN && !markN && !linksNow);
+    if (!gpuR || ghostN || markN || linksNow) return false;
     gpuR.frame(gpuView());
     const b = clipBox();
     stats.boxHandles = b && !plan ? boxHandles(b) : [];
@@ -1916,7 +1923,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (!m) return;
     const t0 = performance.now();
     const hidden = hiddenTest(), reveal = sets?.reveal === true;
-    if (shown.length !== m.ids.length) shown = new Uint8Array(m.ids.length);
+    shown = new Uint8Array(m.ids.length); // (a new array: GPU1's renderer makes its lists again when it changes)
     let nf = 0, nh = 0, lf = 0;
     for (let e = 0; e < m.ids.length; e++) {
       const lk = m.model?.[e] ?? 0;

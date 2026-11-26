@@ -95,7 +95,7 @@ function record() {
     </dl>
     <template v-if="snap.links.length">
       <div class="sec">{{ t('perf.links') }}</div>
-      <div v-for="(l, k) in snap.links" :key="k" class="note mono" data-bb="perf-link">{{ names ? l.name : `${k + 1}` }} · {{ num(l.elements) }} · {{ num(l.triangles) }} △ · {{ l.visible ? t('perf.linkShown') : t('perf.linkHidden') }}</div>
+      <div v-for="(l, k) in snap.links" :key="k" class="note mono" data-bb="perf-link">{{ names ? l.name : `${k + 1}` }} · {{ num(l.elements) }} · {{ num(l.triangles) }} △ · {{ l.visible ? t('perf.linkShown') : t('perf.linkHidden') }}<template v-if="l.detail === true"> · {{ t('links.detailLoaded') }} ({{ ((l.gpuBytes ?? 0) / 1048576).toFixed(1) }} MB)</template><template v-else-if="l.detail === false"> · {{ t('links.proxiesOnly') }}</template></div>
     </template>
     <div class="sec">{{ t('perf.inputs') }}</div>
     <ol class="inputs" data-bb="perf-inputs">
