@@ -43,7 +43,7 @@ void cc_mesh_proxies_free(cc_session *s);
 /* LNK3D (ADR 0078 amendment 3): link k's baked proxies (its cache's section HLOD, BPRX with rev 0 and
  * nE its elements: the rows of its BMSH in the /mesh trailer), read from the cache file and checked
  * (hlod.h cc_hlod_bprx_check) on each call: 200 with the bytes in `*p` (valid until the next call),
- * 404 none (not ready, not from a cache, no proxies, no file access), 500 a damaged section (the error
- * text). The native host serves it as GET /mesh?link_proxies=k. */
+ * 204 none, no body (not ready, not from a cache, no proxies, no file access: not an error), 500 a
+ * damaged section (the error text). The native host serves it as GET /mesh?link_proxies=k. */
 int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n);
 #endif

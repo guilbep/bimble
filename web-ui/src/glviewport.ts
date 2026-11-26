@@ -1633,6 +1633,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     slots = (m.ranges ?? [{ e0: 0, e1: m.ids.length, v0: 0, v1: m.pos.length / 3, s0: 0, s1: m.edges.length / 6 }])
       .map((r, k) => ({ k, ...r, gl: null, lists: null, bytes: 0, needAt: performance.now(), loads: 0 }));
     for (const x of slots) loadSlot(x);
+    useModel(slots[0]?.gl ?? g0); // (the buffers of the mesh before are gone)
     meshBytes = slots.reduce((n, x) => n + x.bytes, 0) + 4 * m.ids.length; // (LNK3D: + the state texture)
     stats.gpuBytes = gpuNow();
     // 3D2 (step 5): a mesh of at least FIRST_BUDGET_TRIS triangles: its boxes first, then a budgeted first frame and

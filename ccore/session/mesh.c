@@ -305,9 +305,8 @@ int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n) {
     const cc_link *l = k < s->nlinks ? &s->links[k] : NULL;
     const cc_platform *pf = s->pf;
     if (!l || l->kind != CC_LINK_VIEW || !l->vf || !l->vf->has_hlod || !l->cache || !pf->read_range) {
-        buf_puts(out, "no proxies for this link");
-        *p = buf_cstr(out), *n = out->len;
-        return 404;
+        *p = "", *n = 0;
+        return 204; /* none: not an error (a small link, a .bimbleview, no file access) */
     }
     uint64_t len = l->vf->hlod_len;
     int st = 200;
@@ -315,13 +314,12 @@ int cc_link_proxies(cc_session *s, uint64_t k, const char **p, size_t *n) {
     size_t got = 0;
     if (len > ((uint64_t)1 << 31) || buf_reserve(out, (size_t)len + 1)) st = 500, buf_puts(out, "proxies: too large");
     else if (pf->read_range(pf->ctx, l->cache, l->vf->hlod_off, (size_t)len, out->p, &got) != CC_PF_OK || got != len)
-        st = 404, buf_puts(out, "the link's cache could not be read");
+        st = 204, buf_clear(out); /* the cache gone since: none */
     else {
         out->len = (size_t)len;
         if (cc_hlod_bprx_check((const uint8_t *)out->p, out->len, (uint32_t)cc_link_raw_scene(l)->nelements, &err))
             buf_clear(out), buf_puts(out, err.msg), st = 500;
     }
-    if (st != 200 && out->len == 0) buf_puts(out, "no proxies");
     *p = out->p ? out->p : "", *n = out->len;
     return st;
 }
