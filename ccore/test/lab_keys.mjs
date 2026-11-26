@@ -239,7 +239,8 @@ async function keys(mode, S, evalJs) {
     // Ctrl Z with nothing to undo (a fresh model): not handled, its default left alone.
     const hk0 = (await handled())["Ctrl Z"] ?? 0;
     await press("Ctrl Z");
-    check(`${mode}: Ctrl Z with nothing to undo: not handled, default not prevented`, h0 > 0 || (((await handled())["Ctrl Z"] ?? 0) === hk0 && (await lastPrevented()) === false), `${h0} steps`);
+    // FIXUI 7: the fresh model has nothing to undo, or the check tests nothing (it passed on h0 > 0).
+    check(`${mode}: Ctrl Z with nothing to undo: not handled, default not prevented`, h0 === 0 && ((await handled())["Ctrl Z"] ?? 0) === hk0 && (await lastPrevented()) === false, `${h0} steps`);
     await B(`return b.select([${JSON.stringify(col)}]);`);
     await waitFor(`${mode}: selected`, 3000, async () => (await B("return b.state.value.selection;")).length === 1);
     await field();
@@ -306,11 +307,20 @@ async function keys(mode, S, evalJs) {
     const o0 = await pressed("orthographic"), b0 = await pressed("section_box"), c0 = await cam();
     const paper0 = (await B("return b.openViews.value;")).paper.on;
     const hp0 = (await handled()).P ?? 0;
-    await press("O"); await press("T"); await press("B"); await press("P");
+    await press("O"); await press("T"); await press("B");
     const c1 = await cam();
     check(`${mode}: in a plan O, T, B do nothing`, (await pressed("orthographic")) === o0 && (await pressed("section_box")) === b0 && c1.pitch === c0.pitch && c1.yaw === c0.yaw);
+    // FIXUI 7: paper_view is enabled in a plan (PAPER1): P puts the plan on paper, P again back
+    // (the check said "P inert" and passed whenever paper_view was enabled).
     const pe = (await B("return b.query('actions');")).find((a) => a.name === "paper_view")?.enabled;
-    check(`${mode}: P inert while the core does not enable paper_view (enabled ${pe})`, pe === true || ((await handled()).P ?? 0) === hp0 && (await B("return b.openViews.value;")).paper.on === paper0);
+    await press("P");
+    await waitFor(`${mode}: P on paper`, 3000, async () => (await B("return b.openViews.value;")).paper.on === !paper0).catch(() => null);
+    const paper1 = (await B("return b.openViews.value;")).paper.on, hp1 = (await handled()).P ?? 0;
+    await press("P");
+    await waitFor(`${mode}: P back`, 3000, async () => (await B("return b.openViews.value;")).paper.on === paper0).catch(() => null);
+    const paper2 = (await B("return b.openViews.value;")).paper.on;
+    check(`${mode}: in a plan P switches the view on paper and back (paper_view enabled: ${pe})`,
+      pe === true && paper1 === !paper0 && hp1 === hp0 + 1 && paper2 === paper0, `paper ${paper0} -> ${paper1} -> ${paper2}, P handled ${hp0} -> ${hp1}`);
     // E still works in a plan.
     const e0 = await pressed("edges");
     await press("E");

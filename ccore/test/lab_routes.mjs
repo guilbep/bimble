@@ -167,7 +167,10 @@ const SCREEN = (sel) => `(() => {
   if (na && (na.parentElement === el || (na.parentElement.parentElement === el && na.parentElement.children.length === 1))) return JSON.stringify({ state: 'not-available' });
   const empty = [...el.querySelectorAll('table')].filter((t) => !t.querySelector('tbody tr, tr td')).length;
   const text = (el.innerText ?? '').replace(/\\s+/g, ' ').trim();
-  return JSON.stringify({ state: empty ? 'empty-table' : text.length < 8 ? 'empty' : na ? 'data, parts not-available' : 'data', text: text.slice(0, 80), empty });
+  // FIXUI 7: data is more than the screen's own title: 8 characters besides its headings (a heading
+  // alone counted as data).
+  const heads = [...el.querySelectorAll('h1, h2, h3, .pn')].reduce((n, h) => n + (h.innerText ?? '').replace(/\\s+/g, ' ').trim().length, 0);
+  return JSON.stringify({ state: empty ? 'empty-table' : text.length - heads < 8 ? 'empty' : na ? 'data, parts not-available' : 'data', text: text.slice(0, 80), empty });
 })()`;
 
 /** One walk: every page, dialog, panel, ribbon tab; the File menu, the quick bar, the shell controls. */
@@ -191,7 +194,8 @@ async function walk(P, label, { model }) {
     // The left panel beside a page: never empty.
     if (id !== "home") {
       const side = JSON.parse(await P.evalJs(SCREEN("[data-bb=properties]")));
-      check(`${label}: page ${id}: the left panel is not empty`, side.state !== "empty" && side.state !== "empty-table", JSON.stringify(side));
+      // FIXUI 7: a missing left panel ("absent") is not a panel with data.
+      check(`${label}: page ${id}: the left panel is not empty`, side.state.startsWith("data") || side.state === "not-available", JSON.stringify(side));
     }
     if (id === "home") {
       // Home's user line and recent files: data where served, else NotAvailable.

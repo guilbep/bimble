@@ -295,6 +295,7 @@ export type PartKey =
   | "levelsgrids.side.count"
   | "levelsgrids.side.ifc"
   | "levelsgrids.side.level"
+  | "levelsgrids.side.pick"
   | "levelsgrids.side.title"
   | "levelsgrids.storey"
   | "levelsgrids.storeyAria"

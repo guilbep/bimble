@@ -292,9 +292,13 @@ async function scenario(cdp, mode, geoText) {
   check(`${tag} right click on C: the menu (Box to selection, Hide, Isolate, Show all, Show previous), C selected`,
     JSON.stringify(items) === JSON.stringify(["ctx-box_to_selection", "ctx-hide_now", "ctx-isolate_now", ...on72]), JSON.stringify(items));
   await clickEl("[data-bb=ctx-box_to_selection]");
-  await waitFor("the box on, around C", 5000, async () => { const b = (await vis()).section_box; return b.on && Math.abs(b.box.min[0] - wantMin[0]) < 1; });
+  await waitFor("the box on, around C", 5000, async () => { const b = (await vis()).section_box; return b.on && Math.abs(b.box.min[0] - wantMin[0]) < 1; }).catch(() => null);
   await settle();
-  check(`${tag} the menu's Box to selection: the box around C again, on; the menu closed`, !(await evalJs("!!document.querySelector('[data-bb=viewport-menu]')")));
+  // FIXUI 7: the title's three claims, each tested (the predicate checked only the menu).
+  const bxm = (await vis()).section_box;
+  check(`${tag} the menu's Box to selection: the box around C again, on; the menu closed`,
+    bxm.on && [0, 1, 2].every((k) => Math.abs(bxm.box.min[k] - wantMin[k]) < 1 && Math.abs(bxm.box.max[k] - wantMax[k]) < 1) &&
+    !(await evalJs("!!document.querySelector('[data-bb=viewport-menu]')")), JSON.stringify(bxm));
   const c3m = await cutNow();
   check(`${tag} after the menu: D clipped, E and C drawn`, c3m.ok, JSON.stringify(c3m.p));
 

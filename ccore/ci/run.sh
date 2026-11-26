@@ -95,7 +95,10 @@ suite() {
               if (NR > 1 && p[NR] == sp - p[NR] && f[NR] == sf - f[NR]) { sp = p[NR]; sf = f[NR] }
               printf "%d passed, %d failed", sp, sf }')
     ((rc != 0)) && bad=1
-    grep -qE '^FAIL' "$log" && bad=1
+    # FIXUI: a FAIL line, or one a suite re-prints from its sub-test ("  | FAIL …", lab_place).
+    grep -qE '^([[:space:]]*\|[[:space:]]*)?FAIL([[:space:]:]|$)' "$log" && bad=1
+    # FIXUI: a suite that prints its counts and counted no check passed nothing.
+    [[ $sums == "0 passed, 0 failed" ]] && { bad=1; sums="no check ran (0 passed, 0 failed)"; }
     # Any "M failed" above 0 makes the sum above 0. (No `grep | grep -q`: under pipefail the
     # writer's SIGPIPE, when -q stops early, can turn a match into false.)
     [[ $sums =~ ([0-9]+)\ failed$ ]] && ((BASH_REMATCH[1] > 0)) && bad=1
