@@ -324,6 +324,7 @@ void cc_sv_grid_axes_json(struct cc_session *s, JsonW *w) {
     jw_key(w, "links"), jw_arr_begin(w);
     for (size_t i = 0; i < s->nlinks; i++) {
         const cc_link *k = &s->links[i];
+        if (!k->kind) continue; /* LNK1: a missing link (links.h) has no axes nor levels */
         jw_obj_begin(w);
         w_scene(w, k->kind == CC_LINK_MODEL ? k->model : NULL, k->kind == CC_LINK_IFC ? CC_VIEW_IFC : CC_VIEW_FILE,
                 k->kind == CC_LINK_IFC ? (const void *)k->ifc : (const void *)k->vf);

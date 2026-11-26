@@ -141,6 +141,10 @@ typedef struct cc_session {
     size_t npaper_views, cappaper_views;
     int plan_window;
     /* ---- end PAPER1 ---- */
+    /* ---- LNK1: the links list as last saved or opened (links.h cc_links_changed), NULL: none ---- */
+    char *links_saved;
+    size_t links_saved_n;
+    /* ---- end LNK1 ---- */
     /* ---- H2a: query pending's cache (versions.c), NULL: none ---- */
     struct cc_versions_cache *versions_cache;
     /* ---- end H2a ---- */

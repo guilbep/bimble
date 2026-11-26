@@ -474,6 +474,58 @@ static void stored_blocks(void) {
     check_true("gzip stored blocks: 0, 1, 65535, 65536, 200000 bytes round trip", !bad);
 }
 
+/* ---- LNK1: the "links" section (model.h cc_model_link, DEVIATIONS 29): left out when empty (frame
+ * saves without it, its bytes as before: golden_case), kept through text -> binary -> text, and
+ * refused when broken (not an array, a missing path, too many entries). Fails on the code before
+ * LNK1: the key was ignored and lost on save. ---- */
+static void links_section(void) {
+    size_t n = 0;
+    char *frame = slurp(golden, "frame.json", &n);
+    check_true("links: frame.json read", n > 0);
+    if (!n) return free(frame);
+    cc_model m;
+    cc_error err;
+    Buf t, b, t2;
+    buf_init(&t), buf_init(&b), buf_init(&t2);
+    check_true("links: frame loads", cc_model_load(&m, frame, n, &err) == 0);
+    cc_model_save(&m, &t);
+    check_true("links: no \"links\" key without links", !contains(buf_cstr(&t), "\"links\""));
+    static cc_model_link L[2];
+    L[0].name = (cc_str){"a.ifc", 5}, L[0].path = (cc_str){"/x/models/a.ifc", 15}, L[0].relative = (cc_str){"../models/a.ifc", 15};
+    L[1].name = (cc_str){"b.bimble", 8}, L[1].path = (cc_str){"/y/b.bimble", 11}, L[1].hidden = 1;
+    m.links = L, m.nlinks = 2;
+    buf_clear(&t);
+    cc_model_save(&m, &t);
+    check_true("links: the text names both, hidden only when hidden",
+               contains(buf_cstr(&t), "\"links\": [") && contains(buf_cstr(&t), "\"relative\": \"../models/a.ifc\"") &&
+                   contains(buf_cstr(&t), "\"hidden\": true"));
+    check_true("links: binary save", cc_model_save_v2(&m, &b) == 0);
+    cc_model_free(&m);
+    check_true("links: text -> binary -> text, the same text", to_text(b.p, b.len, &t2, &err) == 0 && t2.len == t.len &&
+                                                                    !memcmp(t2.p, t.p, t.len));
+    char *last = strrchr(frame, '}');
+    static const char *const bad[] = {"\"links\": 1", "\"links\": [{\"name\": \"a.ifc\"}]",
+                                      "\"links\": [{\"name\": \"a.ifc\", \"path\": \"p\", \"x\": 1}]"};
+    for (int i = 0; i < 3 && last; i++) { /* into the model object: before the model's closing brace */
+        Buf e;
+        buf_init(&e);
+        char *mo = last - 1;
+        while (mo > frame && *mo != '}') mo--;
+        buf_append(&e, frame, (size_t)(mo - frame));
+        buf_puts(&e, ", "), buf_puts(&e, bad[i]);
+        buf_append(&e, mo, n - (size_t)(mo - frame));
+        cc_model x;
+        int bad_rc = cc_model_load(&x, e.p, e.len, &err);
+        check_true("links: a broken section is refused (its own error)", bad_rc != 0 &&
+                   (contains(err.msg, "sequence") || contains(err.msg, "path") || contains(err.msg, "unknown field")));
+        if (!bad_rc) cc_model_free(&x);
+        buf_free(&e);
+    }
+    buf_free(&t), buf_free(&b), buf_free(&t2);
+    free(frame);
+}
+/* ---- end LNK1 ---- */
+
 int main(int argc, char **argv) {
     static char dir[4096];
     snprintf(dir, sizeof dir, "%s/..", argc > 1 ? argv[1] : "ccore/golden/floats");
@@ -487,5 +539,6 @@ int main(int argc, char **argv) {
     stored_case("frame");
     stored_case("frame2");
     stored_blocks();
+    links_section(); /* LNK1 */
     return report("file2");
 }

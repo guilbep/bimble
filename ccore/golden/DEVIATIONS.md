@@ -969,3 +969,21 @@ Rust here:
   browser's picker): a model is linked again under its name (in its place), a reference reloaded
   with the picked bytes staged (`host_action_file`, `wasm_api.h`). Rust's wasm build disables
   Reload there ("Where it was read from isn't known here") and keeps Reload from….
+- **Linked models kept in the `.bimble` (a C addition, issue #69: "on link tous les liens qui nous
+  intéressent, et ensuite on l'enregistre en .bimble").** Rust v0.19.0 saves no linked model (its
+  `Linked` list lives in the viewer; only reference plans, with their lines, are stored in views,
+  `source` the absolute path they were read from). The C core writes the session's links into the
+  file as the model section `links` (`model.h cc_model_link`), the C core's own like `relations`
+  and `grids`, left out when empty (every existing file keeps its bytes: `file2_test.c`
+  `links_section`, and the `file`/`file2` goldens): `[{"hidden"?: true, "name", "path",
+  "relative"?}]` in link order, `path` as linked (absolute on the desktop, as Rust's `source`),
+  `relative` the same file from the saved file's folder. A Rust viewer ignores the section (it
+  drops it on save). Opening the `.bimble` links each one again: its `relative` first, then its
+  `path`; a file found at neither is kept as a **missing** link (`query links_panel` "missing":
+  true, nothing drawn, written again on save) with **Locate…** in the panel
+  (`manage_links {"op": "locate", "name", "path"}`, a C addition). Linking, unlinking, hiding or
+  showing a model marks the model unsaved (Rust: no change to save); none of it is an undo step
+  (as Rust: a link is not in the history). The wasm module has no files: every saved link opens
+  missing there and Locate… takes the picked file's bytes. Test: `links_test.mjs` (three IFC and a
+  DXF saved, reopened, the folder moved, one file moved and located, Box to selection on a linked
+  element).

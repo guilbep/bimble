@@ -173,6 +173,17 @@ typedef struct {
     double map_rotation_deg; /* IfcMapConversion: the turn of the model's x axis in the survey system */
 } cc_georef;
 
+/* ---- LNK1: a linked model the file names (GitHub issue #69, DEVIATIONS 29): file key "links",
+ * the C core's own section, left out when empty (Rust ignores it: its links are not saved). Not
+ * model data: the session keeps the live links (session/links.h) and writes this list when it
+ * saves; no Command changes it. `path` as linked (absolute on the desktop), `relative` the same
+ * file from the saved file's folder ("" when none), `hidden` hidden in the session. ---- */
+#define CC_MODEL_LINKS_MAX 64
+typedef struct {
+    cc_str name, path, relative;
+    int hidden;
+} cc_model_link;
+
 typedef struct {
     Arena arena;
     cc_gid project_id;
@@ -199,6 +210,8 @@ typedef struct {
     cc_grid *grids; /* sorted by id; key "grids", left out of the file when empty (ADR 0056) */
     size_t ngrids;
     cc_georef georef; /* key "georef" after "schedules", left out when the default (ADR 0045) */
+    cc_model_link *links; /* LNK1: key "links" after "grids", in link order, left out when empty */
+    size_t nlinks;
 } cc_model;
 
 /* An error with a message (UTF-8, NUL-terminated, truncated to fit). `offset` is the input

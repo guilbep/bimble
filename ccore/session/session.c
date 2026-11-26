@@ -64,7 +64,9 @@ const cc_model *cc_session_model(const cc_session *s) { return s->open ? &s->mod
 uint32_t cc_session_rev(const cc_session *s) { return (uint32_t)s->rev; }
 
 uint64_t cc_session_step(const cc_session *s) { return s->nundo_ids ? s->undo_ids[s->nundo_ids - 1] : 0; }
-int cc_session_unsaved(const cc_session *s) { return s->open && cc_session_step(s) != s->saved_step; }
+int cc_session_unsaved(const cc_session *s) {
+    return s->open && (cc_session_step(s) != s->saved_step || cc_links_changed(s)); /* LNK1: the links are saved too */
+}
 
 /* The whole file through the platform, NUL-terminated, at most CC_MAX_FILE_BYTES. NULL with `err`. */
 static char *read_all(const cc_session *s, const char *path, size_t *n, cc_error *err) {
@@ -232,6 +234,8 @@ static int open_impl(cc_session *s, const char *path, const char *model_text, si
 
 int cc_session_open(cc_session *s, const char *path, cc_error *err) {
     if (open_impl(s, path, NULL, 0, err)) return -1;
+    if (!ends_with_ci(path, ".ifc") && cc_links_from_model(s, path)) /* LNK1: the links it names */
+        cc_log(s->pf, "bimble-ccore: %s: out of memory linking its models", path);
     persist_follow(s, path, 1); /* the model is the file's content (an IFC: its import) */
     return 0;
 }
@@ -404,6 +408,11 @@ int cc_session_save(cc_session *s, const char *path, cc_error *err) {
         snprintf(err->msg, sizeof err->msg, "%s: %s", to, *to ? "path too long" : "no path");
         return -1;
     }
+    /* LNK1: the links go into the file (links.h cc_links_to_model, DEVIATIONS 29) */
+    if (cc_links_to_model(s, to)) {
+        snprintf(err->msg, sizeof err->msg, "out of memory");
+        return -1;
+    }
     Buf b;
     buf_init(&b);
     /* file.rs:145: the extension "json" (exactly) gives the text form, anything else the binary. */
@@ -419,6 +428,7 @@ int cc_session_save(cc_session *s, const char *path, cc_error *err) {
     int moved = strcmp(to, s->path) != 0;
     if (moved) set_path(s, to), s->untitled = 0;
     s->saved_step = cc_session_step(s);
+    cc_links_saved(s); /* LNK1 */
     cc_log(s->pf, "bimble-ccore: Saved %s", s->path);
     persist_follow(s, s->path, 0); /* a no-op when the session file is already the saved path's */
     return 0;

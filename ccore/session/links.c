@@ -103,6 +103,7 @@ void cc_links_set_visible(cc_session *s, int i, int visible) {
 }
 
 void cc_links_clear(cc_session *s) {
+    free(s->links_saved), s->links_saved = NULL, s->links_saved_n = 0; /* LNK1 */
     if (s->nlinks) s->links_gen++;
     for (size_t i = 0; i < s->nlinks; i++) cc_link_free(&s->links[i]);
     s->nlinks = 0;
@@ -223,3 +224,195 @@ int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char 
     }
     return 0;
 }
+
+/* ---- LNK1: links kept in the .bimble (links.h, DEVIATIONS 29) ---- */
+
+static int is_abs(const char *p) {
+    return p[0] == '/' || p[0] == '\\' || (((p[0] | 32) >= 'a' && (p[0] | 32) <= 'z') && p[1] == ':');
+}
+
+/* The next component of p at *i ('/' or '\\' separated): its start and length, 0 at the end. */
+static size_t comp(const char *p, size_t *i, const char **c) {
+    while (p[*i] == '/' || p[*i] == '\\') (*i)++;
+    *c = p + *i;
+    size_t k = 0;
+    while (p[*i] && p[*i] != '/' && p[*i] != '\\') (*i)++, k++;
+    return k;
+}
+
+int cc_links_relative(const char *dir, const char *file, char *out, size_t n) {
+    out[0] = 0;
+    if (!is_abs(dir) || !is_abs(file)) return 0;
+    size_t i = 0, j = 0, common = 0;
+    for (;;) { /* the common folders */
+        size_t si = i, sj = j;
+        const char *a, *b;
+        size_t na = comp(dir, &i, &a), nb = comp(file, &j, &b);
+        if (!na || !nb || na != nb || memcmp(a, b, na)) {
+            i = si, j = sj;
+            break;
+        }
+        common++;
+    }
+    if (!common) return 0; /* nothing in common (another drive, another top folder): the absolute path serves */
+    size_t k = 0;
+    const char *c;
+    for (size_t t = i; comp(dir, &t, &c);) { /* up out of what is left of dir */
+        if (k + 4 > n) return -1;
+        memcpy(out + k, "../", 3), k += 3;
+    }
+    const char *rest = file + j;
+    while (*rest == '/' || *rest == '\\') rest++;
+    size_t rn = strlen(rest);
+    if (!rn || k + rn + 1 > n) return out[0] = 0, rn ? -1 : 0;
+    memcpy(out + k, rest, rn + 1);
+    return 0;
+}
+
+/* The folder part of `path` ("" for a bare name). */
+static size_t dir_len(const char *path) {
+    const char *sl = cc_path_last_sep(path);
+    return sl ? (size_t)(sl - path) : 0;
+}
+
+static void sig(const cc_session *s, Buf *b) {
+    for (size_t i = 0; i < s->nlinks; i++) {
+        const cc_link *k = &s->links[i];
+        buf_puts(b, k->name), buf_putc(b, 0), buf_puts(b, k->path ? k->path : ""), buf_putc(b, 0);
+        buf_putc(b, k->visible ? '1' : '0'), buf_putc(b, '\n');
+    }
+}
+
+void cc_links_saved(cc_session *s) {
+    Buf b;
+    buf_init(&b);
+    sig(s, &b);
+    free(s->links_saved), s->links_saved = NULL, s->links_saved_n = 0;
+    if (!b.oom && b.len) {
+        s->links_saved = malloc(b.len);
+        if (s->links_saved) memcpy(s->links_saved, b.p, b.len), s->links_saved_n = b.len;
+    }
+    buf_free(&b);
+}
+
+int cc_links_changed(const cc_session *s) {
+    if (!s->nlinks) return s->links_saved_n != 0;
+    Buf b;
+    buf_init(&b);
+    sig(s, &b);
+    int ch = b.oom || b.len != s->links_saved_n || (b.len && memcmp(b.p, s->links_saved, b.len));
+    buf_free(&b);
+    return ch;
+}
+
+/* A missing link at the end: `path` kept, nothing drawn. */
+static int add_missing(cc_session *s, const char *path, int visible) {
+    if (s->nlinks >= CC_MAX_LINKS) return -1;
+    if (s->nlinks == s->caplinks) {
+        size_t c = s->caplinks ? 2 * s->caplinks : 4;
+        cc_link *p = realloc(s->links, c * sizeof *p);
+        if (!p) return -1;
+        s->links = p, s->caplinks = c;
+    }
+    cc_link k;
+    memset(&k, 0, sizeof k);
+    k.path = malloc(strlen(path) + 1);
+    if (!k.path) return -1;
+    strcpy(k.path, path);
+    const char *sl = cc_path_last_sep(k.path);
+    k.name = sl ? sl + 1 : k.path;
+    k.visible = visible;
+    s->links[s->nlinks++] = k;
+    s->links_gen++;
+    return 0;
+}
+
+int cc_links_from_model(cc_session *s, const char *path) {
+    if (!s->open) return 0;
+    const cc_model *m = &s->model;
+    size_t dl = dir_len(path);
+    for (size_t i = 0; i < m->nlinks; i++) {
+        const cc_model_link *e = &m->links[i];
+        char *abs = malloc(e->path.n + 1), *rel = malloc(dl + 1 + e->relative.n + 1);
+        if (!abs || !rel) {
+            free(abs), free(rel);
+            return -1;
+        }
+        memcpy(abs, e->path.p, e->path.n), abs[e->path.n] = 0;
+        rel[0] = 0;
+        if (e->relative.n && !is_abs(e->relative.p)) {
+            memcpy(rel, path, dl);
+            size_t k = dl;
+            if (dl) rel[k++] = '/';
+            memcpy(rel + k, e->relative.p, e->relative.n), rel[k + e->relative.n] = 0;
+        }
+        cc_error err;
+        err.msg[0] = 0;
+        size_t before = s->nlinks;
+        int ok = 0;
+        if (s->pf->files) { /* the module has no files: its read would answer the open's own bytes */
+            char real[4096];
+            if (rel[0] && s->pf->real_path && !s->pf->real_path(s->pf->ctx, rel, real, sizeof real) &&
+                cc_links_add(s, real, &err) == 0)
+                ok = 1; /* "out/../models/a.ifc" kept as the absolute path it names */
+            else if (rel[0] && cc_links_add(s, rel, &err) == 0) ok = 1;
+            else if (cc_links_add(s, abs, &err) == 0) ok = 1;
+        }
+        if (ok && s->nlinks > before && e->hidden) s->links[s->nlinks - 1].visible = 0;
+        if (!ok) {
+            cc_log(s->pf, "bimble-ccore: linked model %s not found (%s): kept as missing", abs,
+                   s->pf->files ? err.msg : "no files here");
+            if (add_missing(s, abs, !e->hidden)) {
+                free(abs), free(rel);
+                return -1;
+            }
+        }
+        free(abs), free(rel);
+    }
+    cc_links_saved(s);
+    return 0;
+}
+
+int cc_links_to_model(cc_session *s, const char *path) {
+    if (!s->open) return 0;
+    cc_model *m = &s->model;
+    m->links = NULL, m->nlinks = 0;
+    if (!s->nlinks) return 0;
+    cc_model_link *l = arena_alloc(&m->arena, s->nlinks * sizeof *l, sizeof(void *));
+    if (!l) return -1;
+    char dir[4096], absdir[4096], abs[4096], rel[4096];
+    size_t dl = dir_len(path);
+    if (dl >= sizeof dir) dl = 0;
+    memcpy(dir, path, dl), dir[dl] = 0;
+    int real = s->pf->files && s->pf->real_path;
+    if (!real || s->pf->real_path(s->pf->ctx, dl ? dir : ".", absdir, sizeof absdir)) absdir[0] = 0;
+    for (size_t i = 0; i < s->nlinks; i++) {
+        const cc_link *k = &s->links[i];
+        const char *p = k->path ? k->path : k->name;
+        if (real && k->kind && !s->pf->real_path(s->pf->ctx, p, abs, sizeof abs)) p = abs;
+        rel[0] = 0;
+        if (absdir[0]) cc_links_relative(absdir, p, rel, sizeof rel);
+        else if (!s->pf->files && !cc_path_last_sep(p)) snprintf(rel, sizeof rel, "%s", p); /* the module: a file name */
+        size_t pn = strlen(p), rn = strlen(rel), nn = strlen(k->name);
+        char *pp = arena_dup(&m->arena, p, pn ? pn : 1), *rp = rn ? arena_dup(&m->arena, rel, rn) : NULL;
+        char *np = arena_dup(&m->arena, k->name, nn ? nn : 1);
+        if (!pp || (rn && !rp) || !np) return -1;
+        l[i].name = (cc_str){np, nn}, l[i].path = (cc_str){pp, pn}, l[i].relative = (cc_str){rp, rn};
+        l[i].hidden = !k->visible;
+    }
+    m->links = l, m->nlinks = s->nlinks;
+    return 0;
+}
+
+int cc_links_locate(cc_session *s, int i, const char *path, cc_error *err) {
+    cc_link k;
+    if (cc_link_load(s, path, &k, err)) return -1;
+    k.visible = s->links[i].visible;
+    if (s->link_sel == i) s->link_sel = -1;
+    cc_link_free(&s->links[i]);
+    s->links[i] = k;
+    s->links_gen++;
+    cc_log(s->pf, "bimble-ccore: linked %s: %zu elements", path, cc_link_scene(&k)->nelements);
+    return 0;
+}
+/* ---- end LNK1 ---- */

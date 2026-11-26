@@ -12,7 +12,7 @@
 // the enabled lists (link_model, manage_links on with a model, off without).
 // Prints "N passed, M failed"; exits non-zero on a failure. Kills what it starts.
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -263,6 +263,85 @@ try {
   check("nothing open: link_model and manage_links off", en1.link_model === false && en1.manage_links === false, JSON.stringify(en1));
   r = await call("action", "link_model", JSON.stringify({ path: IFC }));
   check("link_model with nothing open -> 400 not enabled", r.status === 400 && /not enabled/.test(r.text), r.text);
+  // ---- LNK1: the Links panel's rows, links kept in the .bimble, a moved link located (DEVIATIONS 29) ----
+  {
+    const work = join(tmp, "lnk1"), sub = join(work, "models"), out = join(work, "out");
+    for (const d of [work, sub, out]) mkdirSync(d, { recursive: true });
+    for (const n of ["a.ifc", "b.ifc", "c.ifc"]) copyFileSync(join(G, "ifc/frame.ifc"), join(sub, n));
+    copyFileSync(join(G, "dxf/fixtures/r12.dxf"), join(work, "plan.dxf"));
+    copyFileSync(join(G, "frame.json"), join(work, "host.json"));
+    r = await call("action", "open", JSON.stringify({ path: join(work, "host.json"), discard: true }));
+    for (const n of ["a.ifc", "b.ifc", "c.ifc"]) r = await call("action", "link_model", JSON.stringify({ path: join(sub, n) }));
+    const ov = await q("open_views");
+    const plan = ov.views.find((v) => v.type === "plan");
+    await call("tab", "-", JSON.stringify({ op: "open", tab: { type: "view", id: plan.id } }));
+    r = await call("action", "link_dxf", JSON.stringify({ path: join(work, "plan.dxf") }));
+    check("LNK1: three IFC and a DXF linked", r.status === 200 && (await q("links")).length === 4, r.text);
+    let lp = await q("links_panel");
+    check("LNK1: links_panel lists the models (path, kind, missing false) and the reference (view, placement)",
+      lp.models.length === 3 && lp.models.every((m) => m.kind === "ifc" && !m.missing && m.visible && m.path.startsWith(sub)) &&
+      lp.references.length === 1 && lp.references[0].kind === "dxf" && lp.references[0].view === plan.id &&
+      Array.isArray(lp.references[0].offset_mm) && typeof lp.references[0].rotation_deg === "number", JSON.stringify(lp));
+    check("LNK1: query links stays Rust's shape (id, kind, name, visible)",
+      (await q("links")).every((l) => JSON.stringify(Object.keys(l)) === JSON.stringify(["id", "kind", "name", "visible"])));
+    await call("action", "manage_links", JSON.stringify({ op: "hide", name: "b.ifc" }));
+    const st = await q("state");
+    check("LNK1: links changed: the model is unsaved", st.unsaved === true, JSON.stringify(st));
+    const saved = join(out, "coord.bimble");
+    r = await call("action", "save_as", JSON.stringify({ path: saved }));
+    check("LNK1: save_as", r.status === 200 && !(await q("state")).unsaved, r.text);
+    r = await call("action", "open", JSON.stringify({ path: join(G, "frame.json"), discard: true }));
+    r = await call("action", "open", JSON.stringify({ path: saved }));
+    lp = await q("links_panel");
+    check("LNK1: reopened: the three models are back, in order, b.ifc still hidden, the DXF in its view",
+      r.status === 200 && lp.models.map((m) => `${m.name}:${m.visible}:${m.missing}`).join() === "a.ifc:true:false,b.ifc:false:false,c.ifc:true:false" &&
+      lp.references.length === 1 && lp.references[0].name === "plan.dxf", r.text + JSON.stringify(lp));
+    check("LNK1: reopened: not unsaved", (await q("state")).unsaved === false);
+    // The text form says where: path as linked, relative from the saved file's folder.
+    r = await call("action", "save_as", JSON.stringify({ path: join(out, "coord.json") }));
+    const txt = JSON.parse(readFileSync(join(out, "coord.json"), "utf8"));
+    const L = txt.model?.links ?? txt.links;
+    check("LNK1: the file's links: name, path, relative (../models/a.ifc), hidden only when hidden",
+      Array.isArray(L) && L.length === 3 && L[0].relative === "../models/a.ifc" && L[0].path === join(sub, "a.ifc") &&
+      L[1].hidden === true && !("hidden" in L[0]), JSON.stringify(L));
+    // The folder moves with the file: found by its relative path.
+    const moved = join(tmp, "lnk1-moved");
+    renameSync(work, moved);
+    r = await call("action", "open", JSON.stringify({ path: join(moved, "out/coord.bimble"), discard: true }));
+    lp = await q("links_panel");
+    check("LNK1: the whole folder moved: found by the relative path", r.status === 200 && lp.models.length === 3 &&
+      lp.models.every((m) => !m.missing && m.path.startsWith(join(moved, "models"))), JSON.stringify(lp));
+    // One file moved away: kept as missing, located again.
+    renameSync(join(moved, "models/a.ifc"), join(moved, "a-elsewhere.ifc"));
+    r = await call("action", "open", JSON.stringify({ path: join(moved, "out/coord.bimble"), discard: true }));
+    lp = await q("links_panel");
+    const pm = parseMesh((await mesh()).bytes);
+    check("LNK1: a link not found: kept as missing, drawn empty, the others there", r.status === 200 &&
+      lp.models[0].missing === true && lp.models[0].name === "a.ifc" && !lp.models[1].missing && pm.links.length === 3 &&
+      pm.links[0].visible === false && ids(pm.links[0].bmsh).length === 0, JSON.stringify(lp.models));
+    r = await call("action", "manage_links", JSON.stringify({ op: "locate", name: "a.ifc", path: join(moved, "a-elsewhere.ifc") }));
+    lp = await q("links_panel");
+    check("LNK1: locate: linked from the new path, in its place", r.status === 200 && lp.models[0].name === "a-elsewhere.ifc" &&
+      !lp.models[0].missing && (await q("state")).unsaved === true, r.text + JSON.stringify(lp.models));
+    // A located link's element: selected, then Box to selection around it (ISS71 on a linked element).
+    const lid = ids(parseMesh((await mesh()).bytes).links[0].bmsh)[0];
+    r = await call("select", "-", JSON.stringify({ link: "a-elsewhere.ifc", ids: [lid] }));
+    const bx = await call("action", "box_to_selection");
+    const vis = await q("visibility");
+    check("LNK1: a linked element selected, Box to selection turns the box on around it", r.status === 200 && bx.status === 200 &&
+      vis.section_box?.on === true && vis.section_box.box.max[0] > vis.section_box.box.min[0], JSON.stringify(vis.section_box));
+    r = await call("action", "manage_links", JSON.stringify({ op: "locate", name: "b.ifc" }));
+    check("LNK1: locate without a path -> 400", r.status === 400 && /path/.test(r.text), r.text);
+    // A links-only .bimble draws the links on paper (DEVIATIONS 29).
+    await call("action", "new", JSON.stringify({ discard: true }));
+    await call("action", "link_model", JSON.stringify({ path: join(moved, "models/b.ifc") }));
+    const ov2 = await q("open_views"), p2 = ov2.views.find((v) => v.type === "plan");
+    r = await call("query", "view_svg", JSON.stringify({ view: p2.id, bare: true }));
+    check("LNK1: a links-only model: its plan draws the link's cut", r.status === 200 && (JSON.parse(r.text).svg.match(/<path/g) ?? []).length > 10,
+      r.text.slice(0, 200));
+    await call("action", "open", JSON.stringify({ path: join(G, "frame.json"), discard: true }));
+  }
+  // ---- end LNK1 ----
 } catch (e) {
   check("no exception", false, e.stack ?? String(e));
 } finally {

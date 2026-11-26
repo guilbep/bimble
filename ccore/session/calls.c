@@ -1786,12 +1786,12 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         rc = done(&w);
         goto end;
     }
-    static const char *const OPS_L[] = {"remove", "reload", "show", "hide"};
+    static const char *const OPS_L[] = {"remove", "reload", "show", "hide", "locate" /* LNK1 */};
     int o = -1;
-    for (int q = 0; q < 4; q++)
+    for (int q = 0; q < 5; q++)
         if (op->n == strlen(OPS_L[q]) && !memcmp(op->s, OPS_L[q], op->n)) o = q;
     if (o < 0) {
-        buf_puts(out, "op: one of list, remove, reload, show, hide");
+        buf_puts(out, "op: one of list, remove, reload, show, hide, locate");
         goto end;
     }
     if (!nm || nm->type != JR_STR) {
@@ -1803,7 +1803,18 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         buf_puts(out, "no linked model "), buf_append(out, nm->s, nm->n);
         goto end;
     }
-    if (o == 0) cc_links_remove(s, li);
+    if (o == 4) { /* ---- LNK1: locate {name, path}: the link read from another file, in its place ---- */
+        const JrVal *p = jr_get(v, "path");
+        if (!p || p->type != JR_STR || !p->n || strlen(p->s) < p->n) {
+            buf_puts(out, "path: the file to link in its place");
+            goto end;
+        }
+        cc_error err;
+        if (cc_links_locate(s, li, p->s, &err)) {
+            buf_puts(out, err.msg);
+            goto end;
+        }
+    } else if (o == 0) cc_links_remove(s, li);
     else if (o == 1) {
         cc_error err;
         if (cc_links_reload(s, li, &err)) {

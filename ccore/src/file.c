@@ -625,11 +625,39 @@ typedef struct {
     cc_gid *skeys, *mkeys, *ekeys, *vkeys, *shkeys, *rkeys, *gkeys;
 } Keys;
 
+/* ---- LNK1: "links" (model.h cc_model_link): at most CC_MODEL_LINKS_MAX entries, each a name
+ * and a path (4096 bytes at most, no NUL), maybe `relative` and `hidden` ---- */
+static int d_links(D *d, const JrVal *v, cc_model *m) {
+    static const char *const F[] = {"hidden", "name", "path", "relative"};
+    if (v->type != JR_ARR) return type_err(d, v, "a sequence");
+    if (v->n > CC_MODEL_LINKS_MAX) return dfail(d, v->off, "links: too many linked models", 0, 0);
+    if (!v->n) return 0;
+    m->links = arena_alloc(d->a, v->n * sizeof *m->links, sizeof(void *));
+    if (!m->links) return dfail(d, v->off, "out of memory", 0, 0);
+    for (size_t i = 0; i < v->n; i++) {
+        const JrVal *x = &v->items[i], *f[4];
+        cc_model_link *k = &m->links[i];
+        memset(k, 0, sizeof *k);
+        if (d_fields(d, x, F, 4, f, "struct Link", 1) || need(d, x, f[1], F[1]) || need(d, x, f[2], F[2])) return -1;
+        if (d_str(d, f[1], &k->name) || d_str(d, f[2], &k->path) || (f[3] && d_str(d, f[3], &k->relative))) return -1;
+        if (f[0] && f[0]->type != JR_BOOL) return type_err(d, f[0], "a boolean");
+        k->hidden = f[0] && f[0]->b;
+        const cc_str t[3] = {k->name, k->path, k->relative};
+        for (int j = 0; j < 3; j++)
+            if (t[j].n > 4096 || (t[j].n && memchr(t[j].p, 0, t[j].n)) || (j < 2 && !t[j].n))
+                return dfail(d, x->off, "links: a name and a path (4096 bytes at most, no NUL)", 0, 0);
+    }
+    m->nlinks = v->n;
+    return 0;
+}
+/* ---- end LNK1 ---- */
+
 static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
     static const char *const F[] = {"project_id", "project_name", "storeys", "materials", "elements",
-                                    "views", "sheets", "project", "schedules", "georef", "relations", "grids"};
-    const JrVal *f[12];
-    if (d_fields(d, v, F, 12, f, "struct Model", 0)) return -1;
+                                    "views", "sheets", "project", "schedules", "georef", "relations", "grids",
+                                    "links" /* LNK1 */};
+    const JrVal *f[13];
+    if (d_fields(d, v, F, 13, f, "struct Model", 0)) return -1;
     for (int i = 0; i < 5; i++)
         if (need(d, v, f[i], F[i])) return -1;
     void *p;
@@ -667,6 +695,7 @@ static int d_model(D *d, const JrVal *v, cc_model *m, Keys *keys) {
         if (d_idmap(d, f[11], "a map", sizeof(cc_grid), fn_grid, &p, &m->ngrids, &keys->gkeys)) return -1;
         m->grids = p;
     }
+    if (f[12] && d_links(d, f[12], m)) return -1; /* LNK1 */
     return 0;
 }
 
@@ -1035,6 +1064,20 @@ int cc_model_save(const cc_model *m, Buf *b) {
         for (size_t i = 0; i < m->ngrids; i++) jw_key_n(&w, m->grids[i].id.c, 22), cc_em_grid(&em, &m->grids[i], NULL);
         jw_obj_end(&w);
     }
+    if (m->nlinks) { /* LNK1: model.h cc_model_link, keys sorted */
+        jw_key(&w, "links");
+        jw_arr_begin(&w);
+        for (size_t i = 0; i < m->nlinks; i++) {
+            const cc_model_link *k = &m->links[i];
+            jw_obj_begin(&w);
+            if (k->hidden) jw_key(&w, "hidden"), jw_bool(&w, 1);
+            jw_key(&w, "name"), jw_str_n(&w, k->name.p ? k->name.p : "", k->name.n);
+            jw_key(&w, "path"), jw_str_n(&w, k->path.p ? k->path.p : "", k->path.n);
+            if (k->relative.n) jw_key(&w, "relative"), jw_str_n(&w, k->relative.p, k->relative.n);
+            jw_obj_end(&w);
+        }
+        jw_arr_end(&w);
+    }
     jw_obj_end(&w);
     jw_obj_end(&w);
     return jw_finish(&w) == JW_OK && !b->oom ? 0 : -1;
@@ -1225,7 +1268,7 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
         c_key(b, "model");
         cb_head(b, CB_MAP, 5 + (m->nviews ? 1 : 0) + (m->nsheets ? 1 : 0) + (m->nproject ? 1 : 0) +
                                (m->nschedules ? 1 : 0) + (cc_georef_is_default(&m->georef) ? 0 : 1) +
-                               (m->nrelations ? 1 : 0) + (m->ngrids ? 1 : 0));
+                               (m->nrelations ? 1 : 0) + (m->ngrids ? 1 : 0) + (m->nlinks ? 1 : 0) /* LNK1 */);
         c_key(b, "project_id"), c_gid(b, &m->project_id);
         c_key(b, "project_name"), c_str(b, m->project_name);
         c_key(b, "storeys");
@@ -1328,6 +1371,18 @@ int cc_model_to_cbor(const cc_model *m, Buf *b) {
             c_key(b, "grids");
             cb_head(b, CB_MAP, m->ngrids);
             for (size_t i = 0; i < m->ngrids; i++) c_gid(b, &m->grids[i].id), cc_em_grid(&em, &m->grids[i], NULL);
+        }
+        if (m->nlinks) { /* LNK1: as the text form */
+            c_key(b, "links");
+            cb_head(b, CB_ARRAY, m->nlinks);
+            for (size_t i = 0; i < m->nlinks; i++) {
+                const cc_model_link *k = &m->links[i];
+                cb_head(b, CB_MAP, 2 + (k->hidden ? 1 : 0) + (k->relative.n ? 1 : 0));
+                if (k->hidden) c_key(b, "hidden"), cb_head(b, 7, 21); /* true */
+                c_key(b, "name"), c_str(b, k->name);
+                c_key(b, "path"), c_str(b, k->path);
+                if (k->relative.n) c_key(b, "relative"), c_str(b, k->relative);
+            }
         }
     }
     pool_free(&pp);
