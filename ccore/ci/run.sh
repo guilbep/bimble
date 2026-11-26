@@ -12,8 +12,9 @@
 #         the parity tool's check of the C host (tools/parity.mjs --check; ticket FIXDOC).
 #   san   test/run.sh with clang, ASan and UBSan (the job ccore-san); then the host program itself
 #         under ASan and UBSan (build.sh asan) through its node suites without a browser:
-#         test/san_host.sh host_test, fs_test, mcp_test, mesh_http_test, files_test, one at a time,
-#         each failing on any sanitizer report (ticket FIXDOC).
+#         test/san_host.sh host_test, fs_test, mcp_test, mesh_http_test, files_test (ticket FIXDOC),
+#         session_test, session_log_test, versions_test, links_test, verbs_session_test (ticket
+#         FIXSES), one at a time, each failing on any sanitizer report.
 #   lab   build.sh tcc and wasm, then every test/lab_*.mjs but lab_boot (host.sh runs it): the
 #         Chromium suites (the job ccore-lab); then the performance report (tools/perf.mjs,
 #         ticket PERF1: out/ci/perf.md and its change against results/perf.md).
@@ -118,7 +119,10 @@ san() { suite run-clang-asan env CC=clang CFLAGS="-fsanitize=address,undefined" 
 # FIXDOC: the host program (server, files, MCP) under the sanitizers; one suite at a time.
 san_host() {
     suite build-asan ./build.sh asan
-    for t in host_test fs_test mcp_test mesh_http_test files_test; do suite "san-$t" test/san_host.sh "$t"; done
+    for t in host_test fs_test mcp_test mesh_http_test files_test \
+        session_test session_log_test versions_test links_test verbs_session_test; do # FIXSES: the last five
+        suite "san-$t" test/san_host.sh "$t"
+    done
 }
 gate_rest() {
     suite build-wasm ./build.sh wasm
