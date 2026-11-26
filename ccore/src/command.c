@@ -50,7 +50,7 @@ static const char *const OPS[] = {"add_storey",     "remove_storey",  "add_mater
                                   "add_view",       "remove_view",    "set_view",      "add_sheet",
                                   "remove_sheet",   "set_sheet",      "set_schedules", "add_relation",
                                   "remove_relation", "set_relation", "set_storey", "add_grid",
-                                  "remove_grid",    "set_grid",       "set_georef"};
+                                  "remove_grid",    "set_grid",       "set_georef",    "set_material"};
 
 const char *cc_cmd_op_name(cc_cmd_op op) { return (unsigned)op < CC_CMD_COUNT ? OPS[op] : "?"; }
 
@@ -96,6 +96,16 @@ cc_str cc_str_trim(cc_str s) {
     }
     cc_str t = {seen ? s.p + start : s.p, seen ? end - start : 0};
     return t;
+}
+
+/* str::eq_ignore_ascii_case on n bytes each. */
+static int ascii_ieq_n(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        char x = a[i] >= 'A' && a[i] <= 'Z' ? (char)(a[i] + 32) : a[i];
+        char y = b[i] >= 'A' && b[i] <= 'Z' ? (char)(b[i] + 32) : b[i];
+        if (x != y) return 0;
+    }
+    return 1;
 }
 
 static size_t utf8_count(cc_str s) {
@@ -533,7 +543,8 @@ static int dup_command(Arena *a, cc_command *c) {
     case CC_CMD_ADD_GRID:
     case CC_CMD_SET_GRID: return cc_grid_dup(a, &c->grid);
     case CC_CMD_SET_GEOREF: return cc_georef_dup(a, &c->georef);
-    case CC_CMD_ADD_MATERIAL: return dup_material(a, &c->material);
+    case CC_CMD_ADD_MATERIAL:
+    case CC_CMD_SET_MATERIAL: return dup_material(a, &c->material);
     case CC_CMD_ADD_ELEMENT: return dup_element(a, &c->element);
     case CC_CMD_SET_GENERATOR: return dup_generator(a, &c->generator);
     case CC_CMD_SET_PLACEMENT: canon_placement(&c->placement); return 0;
@@ -652,6 +663,30 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
         inv_init(inv, CC_CMD_ADD_MATERIAL);
         inv->material = *x;
         arr_remove(m->materials, m->nmaterials--, sizeof *x, (size_t)(x - m->materials));
+        return 0;
+    }
+    case CC_CMD_SET_MATERIAL: { /* command.rs:317-341 */
+        const cc_material *x = &c->material;
+        cc_material *old = (cc_material *)cc_model_material(m, &x->id);
+        if (!old) return not_found(err, &x->id);
+        if (cc_str_trim(x->name).n == 0 || utf8_count(x->name) > 200)
+            return invalid(err, "a material needs a name (at most 200 characters)", 48);
+        if (props_validate(&why, &x->props)) return invalid_buf(err, &why);
+        /* Materials are shown, scheduled and selected by name: two of one name would be one in
+         * every list. */
+        cc_str t = cc_str_trim(x->name);
+        for (size_t i = 0; i < m->nmaterials; i++) {
+            cc_str o = cc_str_trim(m->materials[i].name);
+            if (cc_gid_cmp(&m->materials[i].id, &x->id) && o.n == t.n && ascii_ieq_n(o.p, t.p, t.n)) {
+                buf_puts(&why, "there is already a material named ");
+                cc_buf_debug_str(&why, t.p, t.n);
+                return invalid_buf(err, &why);
+            }
+        }
+        buf_free(&why);
+        inv_init(inv, CC_CMD_SET_MATERIAL);
+        inv->material = *old;
+        *old = *x;
         return 0;
     }
     case CC_CMD_ADD_ELEMENT: {
@@ -1003,6 +1038,16 @@ void cc_command_describe(const cc_command *c, const cc_model *m, Buf *b) {
         if (x) put_str(b, x->name);
         break;
     }
+    case CC_CMD_SET_MATERIAL: { /* command.rs:454 */
+        const cc_material *old = cc_model_material(m, &c->material.id);
+        if (old && (old->name.n != c->material.name.n || memcmp(old->name.p, c->material.name.p, old->name.n))) {
+            buf_puts(b, "rename the material "), put_str(b, old->name);
+            buf_puts(b, " to "), put_str(b, c->material.name);
+        } else {
+            buf_puts(b, "change the material "), put_str(b, c->material.name);
+        }
+        break;
+    }
     case CC_CMD_ADD_ELEMENT: buf_puts(b, "add "), put_str(b, c->element.name); break;
     case CC_CMD_REMOVE_ELEMENT: buf_puts(b, "delete "), el_name(b, m, &c->id); break;
     case CC_CMD_SET_GENERATOR: buf_puts(b, "change the sizes of "), el_name(b, m, &c->id); break;
@@ -1253,7 +1298,8 @@ void cc_command_write(JsonW *w, const cc_command *c) {
         jw_key(w, "elevation"), jw_f64(w, c->storey.elevation);
         if (c->storey.not_storey) jw_key(w, "is_storey"), jw_bool(w, 0);
         break;
-    case CC_CMD_ADD_MATERIAL: {
+    case CC_CMD_ADD_MATERIAL:
+    case CC_CMD_SET_MATERIAL: {
         const cc_material *x = &c->material;
         const cc_material_props *p = &x->props;
         jw_key(w, "id"), w_gid(w, &x->id);
@@ -1820,8 +1866,6 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
     for (op = 0; op < CC_CMD_COUNT; op++)
         if (strlen(op_name_i(op)) == tag->n && memcmp(op_name_i(op), tag->s, tag->n) == 0) break;
     if (op == CC_CMD_COUNT) {
-        if (tag->n == 12 && memcmp("set_material", tag->s, 12) == 0)
-            return dfail(d, tag->off, "unsupported by the C core: the command set_material", 0, 0);
         /* Rust's variants, in its order. */
         return d_enum(d, tag, op_name_i, CC_CMD_COUNT,
                       "`add_storey`, `remove_storey`, `add_material`, `remove_material`, `add_element`, "
@@ -1837,7 +1881,8 @@ static int d_command(D *d, const JrVal *v, cc_command *c) {
     switch (c->op) {
     case CC_CMD_ADD_STOREY:
     case CC_CMD_SET_STOREY: return d_storey(d, v, &c->storey);
-    case CC_CMD_ADD_MATERIAL: return d_material(d, v, &c->material);
+    case CC_CMD_ADD_MATERIAL:
+    case CC_CMD_SET_MATERIAL: return d_material(d, v, &c->material);
     case CC_CMD_ADD_ELEMENT: return d_element(d, v, &c->element);
     case CC_CMD_ADD_VIEW:
     case CC_CMD_SET_VIEW:

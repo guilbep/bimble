@@ -30,7 +30,7 @@ static const struct {
     {"history_write", NO},     /* commit, branch (H2a) */
     {"lca", NO},
     {"levels", YES},           /* query storeys; G2 */
-    {"materials", NO},         /* the materials browser (MAT1); the query materials is a list only */
+    {"materials", YES},        /* the materials browser (MAT1): query materials_page, verbs material_* */
     {"measure", YES},          /* the measure tool (T1) */
     {"palette", YES},          /* query palette_match (Q2) */
     {"paper_view", FULL_BUILD}, /* action paper_view, the On paper switch (view_svg; PAPER1) */

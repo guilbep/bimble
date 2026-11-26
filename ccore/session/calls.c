@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "calls.h"
+#include "materials_page.h" /* MAT1 */
 #include "file.h"
 #include "guid.h"
 #include "ifc_out.h"
@@ -627,6 +628,7 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
      * answers the project query and stores sheets in an editable model only: a read-only IFC
      * keeps them off, DEVIATIONS 19), close_sheet: ribbon.rs:594 `layout.is_some()` ---- */
     if (!strcmp(name, "project") || !strcmp(name, "history") || !strcmp(name, "new_sheet")) return s->open;
+    if (!strcmp(name, "materials")) return loaded(s); /* MAT1: ribbon.rs:611 `_ => loaded` (read only: the list) */
     if (!strcmp(name, "close_sheet")) return loaded(s) && s->sheet_shown && cc_sheet_known(s, &s->sheet);
     /* ---- end FAKE1 ---- */
     /* ---- PAPER1: ribbon.rs:597 PaperView two_pictures(); OnPaper (Export view) `_ => loaded`
@@ -1212,6 +1214,10 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "view_svg")) return cc_paper_view_svg(s, s->open ? scene_now(s) : NULL, body, n, out);
     if (!strcmp(name, "sheets_pdf")) return cc_paper_sheets_pdf(s, s->open ? scene_now(s) : NULL, body, n, out);
     /* ---- end PAPER1 ---- */
+    /* ---- MAT1: the materials page (materials_page.h, any file) and the library (no model needed) ---- */
+    if (!strcmp(name, "materials_page")) return cc_materials_page_query(s, out);
+    if (!s->open && !strcmp(name, "material_library")) return cc_query(&s->model, name, body, n, out) == 200 ? CC_OK : CC_ERR;
+    /* ---- end MAT1 ---- */
     if (s->open) return model_query(s, name, body, n, out); /* calls.rs:276-309 and :519-527 */
     if (!strcmp(name, "north") || !strcmp(name, "coordinates")) { /* ADR 0045, query.h: null without a model */
         buf_puts(out, "null");

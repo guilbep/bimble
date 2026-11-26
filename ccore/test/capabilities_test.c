@@ -115,6 +115,12 @@ int main(void) {
     check_true("settings false <=> action settings off", (cap(c1, "settings") == 0) == !enabled(s, "settings"));
     check_true("about false <=> action about off", (cap(c1, "about") == 0) == !enabled(s, "about"));
     check_true("materials false <=> action materials off", (cap(c1, "materials") == 0) == !enabled(s, "materials"));
+    { /* MAT1: materials true, the action on with a model (ribbon.rs:611 `_ => loaded`), the page's data served */
+        char *mp = ask(s, "query", "materials_page", "", &st);
+        check_true("MAT1: materials true, action on, query materials_page answers",
+                   cap(c1, "materials") == 1 && enabled(s, "materials") && st == CC_OK && !strncmp(mp, "{\"editable\":true,", 17));
+        free(mp);
+    }
     check_true("collaboration false <=> action shared_folder off", (cap(c1, "collaboration") == 0) == !enabled(s, "shared_folder"));
     /* PAPER1: export_view and paper_view are served now: Export view is enabled with a model, and
      * view_svg draws a view (false before PAPER1). */

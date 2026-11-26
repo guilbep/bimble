@@ -762,3 +762,38 @@ folder), `ui_theme.rs` (themes, fonts, text sizes), `lib.rs:4023-4190` (Settings
 `calls.c` and `capabilities.c` (SET1 blocks); `web-ui/src/dialogs/Settings.vue`, `About.vue`,
 `web-ui/src/shell/theme.ts`, `web-ui/src/ccore.ts` (SET1 block); tests `ccore/test/settings_test.c`,
 `ccore/test/lab_settings.mjs`.
+
+## 24. The materials browser: verbs, queries and the page (ticket MAT1, ADR 0031)
+
+**Oracle.** `crates/bimble-core/src/command.rs:183-198,317-341,399-458` (AddMaterial,
+RemoveMaterial, SetMaterial: checks, error and describe texts), `library.rs` (the table, `lookup`,
+`to_material`), `model.rs:48-85,173-185` (MaterialCategory, Material),
+`crates/bimble-viewer/src/materials_page.rs` (the page), `ribbon.rs:611,791` (the action).
+Golden: `golden/materials/` from `ccore_golden` `materials_files` (branch `oracle/mat1`).
+
+**Same.** The command `set_material` (it was refused before MAT1): JSON, checks in Rust's order,
+error texts, describe and undo texts, canonical writing; the 26 commands of
+`golden/materials/transcript.txt`, the model after them (`after.json`) and its IFC4 export
+(`after.ifc`) byte for byte; undoing them gives `frame2.json` back. AddMaterial does not check the
+name (Rust's): only SetMaterial refuses a name taken (trimmed, ASCII case ignored). The library is
+Rust's (16 grades, values and sources). The action `materials` is enabled as Rust's (`_ => loaded`).
+
+**Differs.**
+- **Verbs.** Rust's page applies the commands itself; its dispatch has no material verb. The C
+  core's writers are verbs (ADR 0068 rule 1): `material_add`, `material_set`, `material_remove`
+  are C additions (`src/verbs_materials.h`), one history step each. `material_add` refuses a name
+  already there (Rust's page offers no Add for a grade in the model, `materials_page.rs:180`, but
+  its command would add it), and adds a blank material by name (Rust's page has no blank add).
+  `material_remove` refuses a material in use with the element count
+  ("material_remove: <name> is the material of N elements: give them another material first"), where
+  the command's text names the id only; Rust's page has no remove at all.
+- **Queries.** `materials` stays Rust's summary; `materials_full` (every field) and
+  `material_library` (the table) are C additions, and `materials_page` (the page's rows: the
+  values or the grade's, the family's screen colour and pattern, the paper hatch names) is the
+  session's. Rows sort by the lowercase name as Rust; lowercase covers ASCII and Latin-1 only.
+- **The page** shows the family's on-screen pattern (lines, stipple) as a swatch; Rust paints the
+  paper hatch of the standards (`paint_hatch`). The default standards set no paper hatch per
+  family, so both say "the family's own pattern". On-screen hatching of the viewport is not drawn
+  by the lab yet: the colour changes on screen at once, the hatch shows on paper drawings.
+- **Assign** (the selected elements to the material): Rust does it in the Properties panel; the C
+  page has a button too, through Rust's verb `set_material`.

@@ -41,6 +41,7 @@ const FEATURES = [
   ["verbs (edits by name, verb table)", "verbs verb_table verbs_views"],
   ["relations", "relation"],
   ["levels and grids", "grid verbs_levels"],
+  ["materials (MAT1: verbs, library and page queries)", "verbs_materials materials_page"],
   ["georef", "georef"],
   ["queries (model queries)", "query"],
   ["quantities and schedules", "quantity schedules"],

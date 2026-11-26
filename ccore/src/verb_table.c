@@ -1,6 +1,7 @@
 /* See verb_table.h. The schema and summary texts below are Rust's (crates/bimble-api/src/
  * dispatch.rs), compacted from golden/verbs_schema/<verb>.json and golden/verbs_list.json. */
 #include "verb_table.h"
+#include "verbs_materials.h" /* MAT1 */
 #include <string.h>
 #include "json_w.h"
 
@@ -445,6 +446,43 @@ int cc_vh_view_add(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err)
 int cc_vh_view_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 int cc_vh_view_edit(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 /* ---- end SEC1 ---- */
+/* ---- MAT1: the materials (verbs_materials.h), C additions ---- */
+static const char SCHEMA_MATERIAL_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `material_add`: a library grade, or a blank material by name.\",\"pr"
+    "operties\":{\"category\":{\"description\":\"The material family (default: the grade's, or other)"
+    ".\",\"enum\":[\"concrete\",\"steel\",\"timber\",\"masonry\",\"insulation\",\"earth\",\"glass\","
+    "\"other\",null],\"type\":[\"string\",\"null\"]},\"library\":{\"description\":\"A grade of the li"
+    "brary (query material_library), e.g. \\\"C30/37\\\".\",\"type\":[\"string\",\"null\"]},\"name\":"
+    "{\"description\":\"The material's name (default: the grade's); required without `library`.\",\"t"
+    "ype\":[\"string\",\"null\"]}},\"title\":\"MaterialAddArgs\",\"type\":\"object\"}";
+static const char SUMMARY_MATERIAL_ADD[] =
+    "Add a material: a grade of the library with its values, or a blank one by name (a C addition).";
+static const char SCHEMA_MATERIAL_SET[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `material_set`: the fields to change, others kept.\",\"properties\":"
+    "{\"category\":{\"description\":\"The material family.\",\"enum\":[\"concrete\",\"steel\",\"timbe"
+    "r\",\"masonry\",\"insulation\",\"earth\",\"glass\",\"other\",null],\"type\":[\"string\",\"null\""
+    "]},\"id\":{\"description\":\"GlobalId of the material.\",\"type\":\"string\"},\"name\":{\"descri"
+    "ption\":\"The new name, not blank, unique.\",\"type\":[\"string\",\"null\"]},\"props\":{\"additi"
+    "onalProperties\":false,\"description\":\"The values (all four replaced; {} clears them).\",\"pro"
+    "perties\":{\"density_kg_m3\":{\"description\":\"kg/m³, up to 30000.\",\"format\":\"double\",\"ty"
+    "pe\":[\"number\",\"null\"]},\"e_mpa\":{\"description\":\"Modulus of elasticity, MPa, up to 10000"
+    "00.\",\"format\":\"double\",\"type\":[\"number\",\"null\"]},\"source\":{\"description\":\"Where "
+    "the values come from, at most 200 characters.\",\"type\":[\"string\",\"null\"]},\"strength_mpa\""
+    ":{\"description\":\"Characteristic strength, MPa, up to 10000.\",\"format\":\"double\",\"type\":"
+    "[\"number\",\"null\"]}},\"type\":[\"object\",\"null\"]}},\"required\":[\"id\"],\"title\":\"Mater"
+    "ialSetArgs\",\"type\":\"object\"}";
+static const char SUMMARY_MATERIAL_SET[] =
+    "Change a material's name, family or values (a C addition; the command set_material).";
+static const char SCHEMA_MATERIAL_REMOVE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `material_remove`.\",\"properties\":{\"id\":{\"description\":\"Globa"
+    "lId of the material.\",\"type\":\"string\"}},\"required\":[\"id\"],\"title\":\"MaterialRemoveArg"
+    "s\",\"type\":\"object\"}";
+static const char SUMMARY_MATERIAL_REMOVE[] =
+    "Delete a material; refused while elements are made of it (a C addition).";
+/* ---- end MAT1 ---- */
 #define V(n, N) {#n, SUMMARY_##N, SCHEMA_##N, cc_vh_##n, 0}
 const cc_verb_def cc_verb_table[] = {
     V(place, PLACE),
@@ -485,6 +523,11 @@ const cc_verb_def cc_verb_c_additions[] = {
     V(view_remove, VIEW_REMOVE),
     V(view_edit, VIEW_EDIT),
     /* ---- end SEC1 ---- */
+    /* ---- MAT1 ---- */
+    V(material_add, MATERIAL_ADD),
+    V(material_set, MATERIAL_SET),
+    V(material_remove, MATERIAL_REMOVE),
+    /* ---- end MAT1 ---- */
 };
 #undef V
 const size_t cc_verb_count = sizeof cc_verb_table / sizeof cc_verb_table[0];
