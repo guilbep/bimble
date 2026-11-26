@@ -1,0 +1,42 @@
+Third-party code and fonts in bimble-ccore (the program and its web/ folder)
+
+Bimble itself is MIT (LICENSE). These parts come from others. Each line gives the name, the
+licence as an SPDX identifier, and where its licence text is: the licences/ folder of this archive
+when the text is in Bimble's repository, else the upstream file at the commit that was built.
+
+Built into the program
+- manifold (3D boolean kernel, C++, with its C binding), v3.5.3, commit 0edd9d5
+  Apache-2.0
+  https://github.com/elalish/manifold/blob/0edd9d54876f3135e431575214dd6d8a72866fee/LICENSE
+- Clipper2 (polygon clipping, fetched by manifold's build), commit 46f6391
+  BSL-1.0
+  https://github.com/AngusJohnson/Clipper2/blob/46f639177fe418f9689e8ddb74f08a870c71f5b4/LICENSE
+- BLAKE3 (hash; portable C code), 1.8.7, commit f3149ec
+  CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception
+  licences/BLAKE3-LICENSE_CC0, licences/BLAKE3-LICENSE_A2, licences/BLAKE3-LICENSE_A2LLVM
+  https://github.com/BLAKE3-team/BLAKE3
+- Ryu (shortest round-trip number printing), commit 4c0618b
+  Apache-2.0 OR BSL-1.0
+  licences/Ryu-LICENSE-Apache2, licences/Ryu-LICENSE-Boost
+  https://github.com/ulfjack/ryu
+- earcutr 0.5.0 (polygon triangulation), ported to C; itself a port of Mapbox earcut
+  ISC
+  licences/earcutr-LICENSE
+  https://github.com/frewsxcv/earcutr
+- The C++ runtime (Linux: libstdc++ and libgcc, linked static; macOS: the system's libc++;
+  Windows: libc++, libunwind and winpthreads, linked static)
+  libstdc++ and libgcc: GPL-3.0-or-later WITH GCC-exception-3.1 (https://gcc.gnu.org);
+  libc++ and libunwind: Apache-2.0 WITH LLVM-exception (https://llvm.org);
+  winpthreads: mingw-w64-libraries/winpthreads/COPYING in the mingw-w64 sources
+  (https://www.mingw-w64.org)
+
+In web/ (the lab's interface fonts, from @fontsource)
+- Sora 5.3.0
+  OFL-1.1
+  licences/OFL-Sora.txt
+- Source Sans 3 5.3.1
+  OFL-1.1
+  licences/OFL-SourceSans3.txt
+- DM Mono 5.3.0
+  OFL-1.1
+  licences/OFL-DMMono.txt

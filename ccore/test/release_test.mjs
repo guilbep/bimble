@@ -12,6 +12,8 @@
 //     answers a Helvetica PDF (nothing embedded) and `pdf_fonts` says roboto false (BIMBLE_FONTS: an
 //     empty folder of the test, so the real ~/.config is never read); with BIMBLE_FONTS holding the
 //     two Roboto files (copied from the repository), roboto true and `{"font":"roboto"}` embeds them;
+//   - FIXDOC: THIRD-PARTY.txt and every licences/ file it names; readelf -d: BIND_NOW (Linux);
+//     the Roboto files of the user's Bimble folder (settings.rs's spelling) under a non-ASCII profile;
 //   - `--port N` serves on N; a web/ without index.html or over 64 MiB refuses to start;
 //   - without --no-browser, xdg-open (a stand-in first on PATH) gets the URL and no socket.
 // The ports: the system's free ones (open picks one; --port gets one from node), not test/ports.mjs.
@@ -127,11 +129,22 @@ try {
   const list = execFileSync(TAR, WIN ? ["tf", ARCHIVE] : ["tzf", ARCHIVE], { encoding: "utf8" }).split(/\r?\n/).filter(Boolean);
   const top = new Set(list.map((p) => p.split("/")[0]));
   check("one top folder named after the version and arch", top.size === 1 && top.has(NAME), [...top].join(" "));
-  for (const f of [EXE, "web/index.html", "LICENSE", "README.txt"])
+  for (const f of [EXE, "web/index.html", "LICENSE", "README.txt", "THIRD-PARTY.txt"])
     check(`archive holds ${f}`, list.includes(`${NAME}/${f}`));
+  // FIXDOC: every licence file THIRD-PARTY.txt names under licences/ is in the archive, and it
+  // names the parts built in and the fonts of web/.
+  const tp = execFileSync(TAR, WIN ? ["xOf", ARCHIVE, `${NAME}/THIRD-PARTY.txt`] : ["xzOf", ARCHIVE, `${NAME}/THIRD-PARTY.txt`], { encoding: "utf8" });
+  const named = [...tp.matchAll(/licences\/[\w.-]+/g)].map((m) => m[0]);
+  const missing = named.filter((l) => !list.includes(`${NAME}/${l}`));
+  check("THIRD-PARTY.txt: every licences/ file it names is in the archive", named.length >= 9 && missing.length === 0, `${named.length} named; missing ${missing.join(" ")}`);
+  const parts = ["manifold", "Clipper2", "BLAKE3", "Ryu", "earcutr", "Sora", "Source Sans 3", "DM Mono"];
+  const absent = parts.filter((p) => !tp.includes(p));
+  check("THIRD-PARTY.txt names manifold, Clipper2, BLAKE3, Ryu, earcutr and the three UI fonts", absent.length === 0, absent.join(", "));
+  const spdx = ["Apache-2.0", "BSL-1.0", "CC0-1.0", "ISC", "OFL-1.1"].filter((id) => !tp.includes(id));
+  check("THIRD-PARTY.txt gives their SPDX identifiers", spdx.length === 0, spdx.join(", "));
   const ttf = list.filter((p) => /\.(ttf|otf)$/i.test(p) || /\/fonts\//.test(p));
   check("SIZE1: no font file in the archive", ttf.length === 0, ttf.join(" "));
-  const rest = list.filter((p) => !(WIN ? /^[^/]+\/(bimble-ccore\.exe|LICENSE|README\.txt|web\/.*)?$/ : /^[^/]+\/(bimble-ccore|LICENSE|README\.txt|web\/.*)?$/).test(p));
+  const rest = list.filter((p) => !(WIN ? /^[^/]+\/(bimble-ccore\.exe|LICENSE|README\.txt|THIRD-PARTY\.txt|licences\/.*|web\/.*)?$/ : /^[^/]+\/(bimble-ccore|LICENSE|README\.txt|THIRD-PARTY\.txt|licences\/.*|web\/.*)?$/).test(p));
   check("nothing else in the archive", rest.length === 0, rest.join(" "));
 
   execFileSync(TAR, [WIN ? "xf" : "xzf", ARCHIVE, "-C", tmp]);
@@ -150,6 +163,12 @@ try {
     const ldd = execFileSync(MAC ? "otool" : "ldd", MAC ? ["-L", bin] : [bin], { encoding: "utf8" });
     check("ldd names no libmanifold", !/manifold/i.test(ldd) && (MAC ? /libSystem/ : /libc\.so/).test(ldd), ldd.replace(/\s+/g, " ").trim());
     check("ldd names no libstdc++ (static)", !/libstdc\+\+/.test(ldd));
+    if (!MAC) { // FIXDOC: the hardened link (build.sh release: -z relro -z now)
+      const dyn = execFileSync("readelf", ["-d", bin], { encoding: "utf8" });
+      check("readelf -d: BIND_NOW (-z now)", /\(BIND_NOW\)|Flags:.*\bNOW\b/.test(dyn), dyn.split("\n").filter((l) => /FLAGS|BIND/.test(l)).join(" | "));
+      const seg = execFileSync("readelf", ["-lW", bin], { encoding: "utf8" });
+      check("readelf -l: a GNU_RELRO segment", /GNU_RELRO/.test(seg));
+    }
   }
 
   // Untrusted web/ content added after unpacking: a link out of the tree and a hidden file.
@@ -260,6 +279,24 @@ try {
     check('view_pdf {"font":"roboto"}: Roboto embedded', rp && rp.status === 200 && rp.body.includes("/FontFile2") && rp.body.includes("/BaseFont /Roboto"), rp ? `${rp.status} ${rp.body.length} bytes` : "");
     const hp = mu ? await post(Number(mu[1]), `/query/view_pdf?t=${mu[2]}`, JSON.stringify({ view: plan.id })) : null;
     check("view_pdf without font, the files there: still Helvetica", hp && hp.status === 200 && !hp.body.includes("/FontFile2"), hp ? `${hp.status}` : "");
+    await stop(host);
+    host = null;
+  }
+
+  // FIXDOC: no BIMBLE_FONTS: the fonts of the user's Bimble folder, the settings.rs spelling on
+  // every system (macOS .../Application Support/Bimble, Windows %APPDATA%\Bimble, Linux
+  // $XDG_CONFIG_HOME/bimble), under a profile whose name is not ASCII (Windows: read with
+  // _wgetenv, not the ANSI code page).
+  if (plan) {
+    const prof = join(tmp, "Jérôme");
+    const cfg = MAC ? join(prof, "Library", "Application Support", "Bimble") : WIN ? join(prof, "Bimble") : join(prof, "bimble");
+    mkdirSync(join(cfg, "fonts"), { recursive: true });
+    for (const f of ["Roboto-Regular.ttf", "Roboto-Bold.ttf"]) cpSync(join(CCORE, "fonts", f), join(cfg, "fonts", f));
+    const env = { BIMBLE_FONTS: "", ...(MAC ? { HOME: prof } : WIN ? { APPDATA: prof } : { XDG_CONFIG_HOME: prof }) };
+    host = start(bin, ["open", "--no-browser", "frame.json"], work, env);
+    const mu = /port=(\d+)&token=([0-9a-f]{32})$/.exec(await waitUrl(host));
+    const pf3 = mu ? await post(Number(mu[1]), `/query/pdf_fonts?t=${mu[2]}`) : null;
+    check("no BIMBLE_FONTS: the fonts of <the user's Bimble folder>/fonts, a non-ASCII profile: roboto true", pf3 && pf3.body.toString() === '{"helvetica":true,"roboto":true}', pf3 ? pf3.body.toString() : "no URL");
     await stop(host);
     host = null;
   }

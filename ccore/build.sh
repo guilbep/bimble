@@ -26,7 +26,8 @@
 #   release  the release archive (ticket R1, ADR 0069 rule 2): the host with clang -O2 and
 #          the boolean kernel static (fails without it), the lab built by Vite (web-ui/, needs
 #          node_modules), then out/release/bimble-ccore-<VERSION>-<arch>-<os>.tar.gz holding
-#          bimble-ccore, web/ (no font: SIZE1, the PDF is Helvetica by default), LICENSE and README.txt
+#          bimble-ccore, web/ (no font: SIZE1, the PDF is Helvetica by default), LICENSE, README.txt,
+#          THIRD-PARTY.txt and licences/ (FIXDOC; Linux: hardened, -z relro -z now)
 #          (test: node test/release_test.mjs). <os> is
 #          linux (libstdc++ static) or macos (ticket MAC1: libc++ is the system's, stripped then
 #          signed ad hoc; CMAKE_OSX_ARCHITECTURES=x86_64 builds the Intel one on an arm64 Mac, with
@@ -292,6 +293,14 @@ release() {
     # deps.sh builds manifold the same way): 3,674,408 -> 2,232,352 bytes on aarch64 Linux, the
     # read benchmark unchanged (results/native-size.md). Linux only: macOS's -dead_strip is not measured.
     [[ $CC_OS == Darwin ]] || flags+=(-ffunction-sections -fdata-sections)
+    # FIXDOC: hardening on Linux: checked libc calls where the size is known, stack canaries in
+    # functions with arrays, and (at the link) the relocations read-only and resolved at start
+    # (RELRO, BIND_NOW: test/release_test.mjs checks it with readelf -d).
+    local harden_link=()
+    if [[ $CC_OS == Linux ]]; then
+        flags+=(-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -fstack-protector-strong)
+        harden_link=(-Wl,-z,relro,-z,now)
+    fi
     compile_release() { # at most $JOBS at once: wait for the oldest (bash 3.2 has no `wait -n`)
         local f o q=() rc=0 pid
         for f in "${LIB[@]}" "${SESSION[@]}" "${HOST[@]}"; do
@@ -329,7 +338,8 @@ release() {
     else
         # SIZE1: the link map (out/release/bimble-ccore.map) gives tools/weight.mjs the bytes per object.
         step "link bimble-ccore (kernel static)" clang -pthread -s "$obj"/*.o "$kd/libmanifoldc.a" "$kd/libmanifold.a" \
-            "$kd/libClipper2.a" -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc -lm -Wl,--gc-sections -Wl,-Map="$R/bimble-ccore.map" -o "$bin"
+            "$kd/libClipper2.a" -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic -static-libgcc -lm -Wl,--gc-sections \
+            ${harden_link[@]+"${harden_link[@]}"} -Wl,-Map="$R/bimble-ccore.map" -o "$bin"
     fi
     local web
     web=$(cd "$stage" && pwd)/web
@@ -340,6 +350,14 @@ release() {
     # in public/ccore/fonts/ would ship them: removed.
     rm -rf "$web/ccore/fonts" "$web/fonts"
     cp ../LICENSE "$stage/LICENSE"
+    # FIXDOC: the third parties (THIRD-PARTY.txt) and the licence texts the repository holds.
+    cp THIRD-PARTY.txt "$stage/THIRD-PARTY.txt"
+    mkdir -p "$stage/licences"
+    local lf
+    for lf in LICENSE_CC0 LICENSE_A2 LICENSE_A2LLVM; do cp "vendor/blake3/$lf" "$stage/licences/BLAKE3-$lf"; done
+    for lf in LICENSE-Apache2 LICENSE-Boost; do cp "vendor/ryu/$lf" "$stage/licences/Ryu-$lf"; done
+    cp vendor/earcutr/LICENSE "$stage/licences/earcutr-LICENSE"
+    for lf in OFL-Sora.txt OFL-SourceSans3.txt OFL-DMMono.txt; do cp "../web-ui/src/brand/$lf" "$stage/licences/$lf"; done
     local needs="Linux with glibc 2.35 or newer and a browser with WebGL2. Nothing is installed."
     local last=""
     if [[ $CC_OS == Darwin ]]; then
@@ -355,7 +373,7 @@ Run:    bimble-ccore.exe open model.ifc     (also .bimble or .json; no model: an
         It serves the lab on 127.0.0.1 only, prints its address and opens it in your browser.
         --no-browser: only print the address. --port N: this port, not a free one.
 Stop:   Ctrl-C.
-Files:  bimble-ccore.exe (the program) and web\ (the lab; keep it next to the program).
+Files:  bimble-ccore.exe, web\ (the lab: keep it next to the program), THIRD-PARTY.txt, licences\.
 Needs:  Windows 10 or newer (x64) and a browser with WebGL2. Nothing is installed. Not signed.
 EOF
         sed -i 's/$/\r/' "$stage/README.txt"
@@ -371,7 +389,7 @@ Run:    ./bimble-ccore open model.ifc       (also .bimble or .json; no model: an
         It serves the lab on 127.0.0.1 only, prints its address and opens it in your browser.
         --no-browser: only print the address. --port N: this port, not a free one.
 Stop:   Ctrl-C.
-Files:  bimble-ccore (the program) and web/ (the lab; keep it next to the program).
+Files:  bimble-ccore, web/ (the lab: keep it next to the program), THIRD-PARTY.txt, licences/.
 Needs:  $needs
 EOF
     [[ -z $last ]] || echo "$last" >> "$stage/README.txt"
