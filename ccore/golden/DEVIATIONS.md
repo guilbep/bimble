@@ -1413,3 +1413,17 @@ its bytes (a session without links answers as before; a `.bimble` without notes 
   `query link_notes`; not model data (no Command, no undo step), as LNK1's links section. A plan or
   section drawn on paper shows the notes as texts.
 - Tests: `test/m1links_test.c` (hostile tables, sections and notes), `test/lab_mission1_links.mjs`.
+- **LNK3D (ADR 0078 amendment 3): the draw path of links.** The `/mesh` trailer no longer leaves a
+  link's hidden elements out (the page hides them by GlobalId from `visibility_sets`, in its per-element
+  state); `/mesh` is cached on `links_mesh_gen` (a link added, read, converted, removed, unloaded) and the
+  trailer's light fields (shown, placement, colour), so a hide, a move or a colour writes the trailer
+  again for a reader that asks but the page does not ask. The change JSON gains `links_mesh` beside
+  `links` (only once links changed: a session without links answers Rust's bytes). New queries
+  `link_draw` (each link's flag, colour, turn and placed origin: the trailer's version 2 numbers) and
+  `mesh_key` (`draw`: + 1 with each rev that may change what is drawn, not a change of views, sheets or
+  schedules alone; `links`: `links_mesh_gen`). A link cache is format `bimble-link-cache 4`: a section
+  `HLOD` (the link's proxies, BPRX, built at conversion; before `PROP`, both kept on disk; older caches
+  are converted again), served by `GET /mesh?link_proxies=k` after `cc_hlod_bprx_check`; the report
+  gives its cells, triangles, bytes and time. Rust has none of this (no proxies of links, a mesh rebuilt
+  on every visibility change). Tests: `test/lab_links_3d.mjs`, `test/hlod_test.c` (hostile BPRX),
+  `test/viewfile_test.c` (the HLOD section), `test/lab_mission1_links.mjs` (the mesh bytes stay on a hide).

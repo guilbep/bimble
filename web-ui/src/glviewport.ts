@@ -696,7 +696,8 @@ interface GlStats {
   /** 3D2: true while the proxies are being asked for (frames.mjs waits for them). */
   proxiesPending?: boolean;
   bench?: { frame: (dyaw: number, moving: boolean) => number; zoom: (k: number) => void; snap: (dyaw: number, dpitch: number) => { w: number; h: number; rgba: Uint8Array };
-    look?: (t: number[], d: number) => void; read?: () => { w: number; h: number; rgba: Uint8Array } };
+    look?: (t: number[], d: number) => void; read?: () => { w: number; h: number; rgba: Uint8Array };
+    stateCost?: (n: number, v: number) => { texMs: number; texBytes: number; bufMs: number; bufBytes: number } };
 }
 declare global {
   interface Window {
@@ -3523,6 +3524,24 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const o = mesh?.origin ?? [0, 0, 0];
       target = [t[0]! - o[0], t[1]! - o[1], t[2]! - o[2]], distance = d, yaw = HOME_YAW + projectNorth(), pitch = HOME_PITCH;
       dirty = true;
+    },
+    /** LNK3D (B): what a visibility change costs for n elements of v vertices each, the two ways weighed:
+     *  the state texels (n x 4 bytes, texSubImage2D of their rows) against a flag per vertex (n x v x 4 bytes,
+     *  bufferSubData), each with a 1x1 readPixels after it (the GPU's copy done); ms, best of 5. */
+    stateCost: (n: number, v: number) => {
+      const tex = gl.createTexture(), buf = gl.createBuffer(), rows = Math.ceil(n / STATE_TEX_W);
+      const texels = new Uint8Array(4 * rows * STATE_TEX_W), flags = new Uint32Array(n * v);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, STATE_TEX_W, rows, 0, gl.RGBA, gl.UNSIGNED_BYTE, texels);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, flags, gl.DYNAMIC_DRAW);
+      const best = (f: () => void) => { let b = Infinity; for (let i = 0; i < 5; i++) { const t = performance.now(); f(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px1); b = Math.min(b, performance.now() - t); } return b; };
+      const texMs = best(() => { for (let e = 0; e < n; e++) texels[4 * e + 3] = texels[4 * e + 3]! ^ 1; gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, STATE_TEX_W, rows, gl.RGBA, gl.UNSIGNED_BYTE, texels); });
+      const bufMs = best(() => { for (let i = 0; i < flags.length; i++) flags[i] = flags[i]! ^ 1; gl.bufferSubData(gl.ARRAY_BUFFER, 0, flags); });
+      gl.deleteTexture(tex), gl.deleteBuffer(buf);
+      gl.activeTexture(gl.TEXTURE0);
+      return { texMs, texBytes: texels.byteLength, bufMs, bufBytes: flags.byteLength };
     },
     /** LNK3D: the canvas as last drawn (RGBA, bottom row first), no new frame. */
     read: () => {

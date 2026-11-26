@@ -45,7 +45,7 @@
 // target; occlusion queries are WebGL2's only (not measured). The report goes to
 // out/frames/frames-webgpu.md unless --out. It fails when the page does not draw with WebGPU.
 // --links N (ticket LNK3D, ADR 0078 amendment 3): instead of the models, N synthetic links (bench/links_synth.mjs:
-// mesh_heavy_model.py's model, --link-proxies (160) unique closed meshes of about 600 triangles each, exported as
+// mesh_heavy_model.py's model, --link-proxies (160) unique closed meshes of about --link-tris (600) triangles each, exported as
 // IFC4 through the native host, linked as a folder into a new project, placed in rows of 5, 30 m apart), the
 // native build only: open -> first picture (the links' proxies, or the first frame) and complete picture, the
 // still and moving frames (triangles, draws), GPU bytes; then half the links hidden and the GPU budget (a page
@@ -578,7 +578,7 @@ function report(rows, history, cmp, forced, loads) {
 // ---- LNK3D: --links N ----
 async function linksMain() {
   const { makeLinkFolder } = await import("../bench/links_synth.mjs");
-  const P = Number(opt("--link-proxies") ?? 160);
+  const P = Number(opt("--link-proxies") ?? 160), T = Number(opt("--link-tris") ?? 600);
   log(`links: ${LINKS} synthetic links of ${P} unique meshes (load ${loadNow()})`);
   const site = buildSite();
   await serve(site);
@@ -591,7 +591,7 @@ async function linksMain() {
     const r = await fetch(`http://127.0.0.1:${HOST_PORT}/${op}/${name}?t=${TOKEN}`, { method: "POST", body: JSON.stringify(body) });
     return { status: r.status, text: await r.text() };
   };
-  const files = await makeLinkFolder({ hcall, dir, work: tmp, n: LINKS, proxies: P, tris: 600, unique: true });
+  const files = await makeLinkFolder({ hcall, dir, work: tmp, n: LINKS, proxies: P, tris: T, unique: true });
   await hcall("action", "new");
   const t0 = Date.now();
   await hcall("action", "link_folder", { path: dir });
@@ -637,6 +637,16 @@ async function linksMain() {
   await quiet(20000);
   out.gpuBytes = await ev("window.__bbGl.gpuBytes ?? null");
   if (PIXELS) { mkdirSync(PIXELS, { recursive: true }); await pixels(); }
+  // a class hidden (every link's closed meshes): the page's work (visibility in the page, the state texture's
+  // upload: elements in the rows sent), the /mesh fetches it made
+  const f0 = await ev("window.__bbGl.meshFetches ?? null");
+  await hcall("action", "view_rule", { op: "hide", class: "IfcBuildingElementProxy" });
+  await sleep(500);
+  await quiet(20000);
+  out.hideClass = await ev(`(() => { const g = window.__bbGl; return { vis: g.visApplyMs ?? null, upload: g.stateUpload ?? null, fetches: (g.meshFetches ?? 0) - ${f0 ?? 0}, elements: g.links.reduce((n, l) => n + l.elements, 0) }; })()`);
+  await hcall("action", "undo");
+  await sleep(500);
+  await quiet(20000);
   // half the links hidden, the budget at half: what the GPU keeps
   for (let k = 0; k < LINKS; k += 2) await hcall("action", "manage_links", { op: "hide", name: `link_${k}.ifc` });
   await ev(`(window.__bbGl.gpuBudget = Math.round(window.__bbGl.gpuBytes / 2), 0)`);
@@ -646,6 +656,9 @@ async function linksMain() {
   out.detailLoaded = await ev("window.__bbGl.linkDetail ? window.__bbGl.linkDetail.filter((x) => x.detail).length : null");
   out.endLoad = loadNow();
   writeFileSync(join(RAW, `links-${LABEL}.json`), JSON.stringify(out, null, 1));
+  console.log(`hide a class: ${JSON.stringify(out.hideClass)}`);
+  out.stateCost30k = await ev("window.__bbGl.bench.stateCost ? window.__bbGl.bench.stateCost(30000, 100) : null");
+  console.log(`a visibility change of 30,000 elements (100 vertices each): ${JSON.stringify(out.stateCost30k)}`);
   const r = out, f = (v, d = 0) => fmt(v, d);
   console.log(["| label | links | detail triangles | caches MB (proxies MB, ms) | open → first picture ms (from) | → complete ms | still ms: triangles / draws (without edges ms; segments) | moving ms median (p95): triangles / draws | close still ms: triangles / draws | GPU MB | GPU MB, half hidden, budget ½ (detail loaded) | load start → end |",
     "|---|---|---|---|---|---|---|---|---|---|---|---|",

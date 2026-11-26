@@ -27,7 +27,7 @@ import { CHROMIUM, port, vitePort } from "./ports.mjs";
 import { makeLinkFolder } from "../bench/links_synth.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const UI = resolve(CCORE, "../web-ui");
+const UI = process.env.LNK3D_UI ? resolve(process.env.LNK3D_UI) : resolve(CCORE, "../web-ui"); // (LNK3D_UI, HOST_BIN: the code before, to see it fail)
 const BIN = process.env.HOST_BIN ?? join(CCORE, "out/tcc/bimble-ccore");
 const PORT = port("lab_links_3d");
 const VITE = vitePort("lab_links_3d");
