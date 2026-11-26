@@ -226,7 +226,8 @@ async function tab(S, evalJs) {
   await sleep(400);
   const svg0 = await B(`return b.viewSvg(${JSON.stringify(plan1)}).svg.length;`);
   ms = await timed("Section (tool on)", tool(5, 2), CLICK, "b.actions.value.find((a) => a.name === 'draw_section')?.pressed");
-  check("Section in a plan: the tool is on (pressed)", ms !== null && (await attr(tool(5, 2), "aria-pressed")) === "true");
+  check("Section in a plan: the tool is on (pressed), the status bar says the gesture", ms !== null && (await attr(tool(5, 2), "aria-pressed")) === "true" &&
+    /Esc/.test(await evalJs("document.querySelector('[data-bb=status-hint]')?.textContent ?? ''")), await evalJs("document.querySelector('[data-bb=status-hint]')?.textContent ?? ''"));
   // Esc: the first point goes, then the tool.
   const pA = await screenOf(2000, 5000), pB = await screenOf(16000, 5000);
   check("the plan projects the two points", !!pA && !!pB, JSON.stringify([pA, pB]));

@@ -35,6 +35,7 @@ const hintText = (): string => {
   if (h) return t(h as Key);
   const p = placingHint();
   if (p) return t(p);
+  if (actions.value.find((a) => a.name === "draw_section")?.pressed) return t("vs.sectionHint"); // VIEWSHEET: the section tool
   // D2: on paper the reference shows the Dimension tool's hint; Rust has no "sheet tool active" state, so on paper at all.
   if (openViews.value.paper?.on) return t("onpaper.hint");
   if (state.value.selection.length && !page()) return t("shell.selectionHint");

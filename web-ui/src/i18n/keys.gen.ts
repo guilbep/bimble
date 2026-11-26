@@ -1214,7 +1214,6 @@ export type PartKey =
   | "vs.revisionOff"
   | "vs.scale"
   | "vs.sectionHint"
-  | "vs.sectionNext"
   | "vs.sectionOff"
   | "vs.types.default"
   | "vs.types.tip";
