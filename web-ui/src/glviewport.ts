@@ -449,6 +449,14 @@ interface GlStats {
    *  began after its action, with the state's rev drawn at the canvas's layout size (no fixed sleep). */
   loops?: number;
   drawn?: { frame: number; rev: number | null; w: number; h: number };
+  /** 3D1 (ADR 0078, ccore/tools/frames.mjs): what the last model draw submitted (triangles, draw calls of
+   *  faces and edges), the bytes the model's GPU buffers hold, and the benchmark's hook: `frame(dyaw,
+   *  moving)` turns the camera by dyaw radians, draws at once and waits for the pixels (a 1x1 readPixels),
+   *  returning its ms; `moving` says the camera is moving (a drag frame) or still. */
+  frameTris?: number;
+  frameDraws?: number;
+  gpuBytes?: number;
+  bench?: { frame: (dyaw: number, moving: boolean) => number; zoom: (k: number) => void; snap: (dyaw: number, dpitch: number) => { w: number; h: number; rgba: Uint8Array } };
 }
 declare global {
   interface Window {
@@ -716,6 +724,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
 
   /** Per element: its vertices' box (min xyz, max xyz), for the pick's ray-box test. */
   let boxes = new Float32Array(0);
+  let meshBytes = 0, listBytes = 0; // 3D1: the model's GPU bytes (stats.gpuBytes)
   const upload = (m: Bmsh) => {
     mesh = m;
     boxes = new Float32Array(6 * m.ids.length);
@@ -755,6 +764,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, edgeNrm);
     gl.bufferData(gl.ARRAY_BUFFER, nrm, gl.STATIC_DRAW);
+    meshBytes = m.pos.byteLength + m.edges.byteLength + nrm.byteLength + m.pos.length; // 3D1: + colours (3 B a vertex)
+    stats.gpuBytes = meshBytes + listBytes;
     visKey = "\u0000"; // the draw lists on the next frame
     selKey = "\u0000"; // recolour on the next frame
     if (tool) showTool(tool); // the ghost against the new mesh's origin
@@ -844,6 +855,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindVertexArray(null);
     faceN = nf;
     edgeN = 2 * ne;
+    listBytes = fi.byteLength + ei.byteLength; // 3D1
+    stats.gpuBytes = meshBytes + listBytes;
     stats.hiddenElements = nh;
     stats.drawnTris = nf / 3;
     selKey = "\u0000"; // revealed elements change colour
@@ -966,11 +979,13 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.vertexAttribPointer(1, 3, gl.UNSIGNED_BYTE, true, 0, 0);
     // The open model's faces, then the links' pushed a hair behind (bimble-render LINKED_DEPTH_PUSH:
     // where both have a face, the model's wins).
+    let fTris = 0, fDraws = 0; // 3D1: what this frame submits
     const faces = (push: number) => {
       gl.polygonOffset(1.5 + push, 2 + 2.4 * push); // (1.5, 2), and (4, 8) for the inward pass, as before
       gl.drawElements(gl.TRIANGLES, faceMainN, gl.UNSIGNED_INT, 0);
       gl.polygonOffset(2.5 + push, 16 + 2.4 * push);
       if (faceN > faceMainN) gl.drawElements(gl.TRIANGLES, faceN - faceMainN, gl.UNSIGNED_INT, 4 * faceMainN);
+      fTris += faceN / 3, fDraws += faceN > faceMainN ? 2 : 1;
     };
     if (!box) faces(0);
     else {
@@ -1004,6 +1019,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       gl.vertexAttrib3f(1, REFERENCE_EDGE_SRGB[0] / 255, REFERENCE_EDGE_SRGB[1] / 255, REFERENCE_EDGE_SRGB[2] / 255);
       gl.drawElements(gl.LINES, edgeN - edgeMainN, gl.UNSIGNED_INT, 4 * edgeMainN);
     }
+    if (edgesOn) fDraws += edgeN > edgeMainN ? 2 : 1;
+    stats.frameTris = fTris, stats.frameDraws = fDraws; // 3D1
     gl.uniform1f(uZbias, 0);
     gl.depthMask(true);
     gl.bindVertexArray(null);
@@ -1896,6 +1913,32 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     dirty = true;
   };
   // ---- end Q2 ----
+
+  // ---- 3D1 (ccore/tools/frames.mjs): one frame drawn now, finished (a 1x1 readPixels waits for the pixels) ----
+  const px1 = new Uint8Array(4);
+  stats.bench = {
+    frame: (dyaw: number, moving: boolean) => {
+      void moving;
+      const t0 = performance.now();
+      yaw += dyaw;
+      draw();
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px1);
+      return performance.now() - t0;
+    },
+    /** The camera's distance times k (a close orbit: 0.2). */
+    zoom: (k: number) => { turn = null; distance *= k; },
+    /** The picture at the home camera fitted (yaw, pitch offsets in radians), as RGBA bytes (bottom row first). */
+    snap: (dyaw: number, dpitch: number) => {
+      turn = null;
+      yaw = HOME_YAW + projectNorth() + dyaw, pitch = HOME_PITCH + dpitch;
+      fit();
+      draw();
+      const out = new Uint8Array(4 * canvas.width * canvas.height);
+      gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, out);
+      return { w: canvas.width, h: canvas.height, rgba: out };
+    },
+  };
+  // ---- end 3D1 ----
 
   let seenAnnot: AnnotateState | null = null;
   const loop = () => {
