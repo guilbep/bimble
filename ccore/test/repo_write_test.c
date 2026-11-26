@@ -588,6 +588,11 @@ static void own_sections(void) {
 int main(void) {
     native = cc_platform_native();
     const char *t = getenv("TMPDIR");
+#ifdef _WIN32
+    /* A native Windows program: /tmp is MSYS2's path, not the system's. %TEMP%, else the suite's folder. */
+    if (!t || !*t) t = getenv("TEMP");
+    if (!t || !*t) t = ".";
+#endif
     snprintf(tmp, sizeof tmp, "%s/h2a-repo-XXXXXX", t && *t ? t : "/tmp");
     if (!mkdtemp(tmp)) printf("mkdtemp failed\n"), exit(2);
     interop();
