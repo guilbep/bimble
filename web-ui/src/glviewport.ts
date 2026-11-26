@@ -3447,7 +3447,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (key === ptrDone) return;
     ptrDone = key;
     stats.pointerQueries++;
-    const w = pointerWorld(ptrAt[0], ptrAt[1]);
+    const w0 = pointerWorld(ptrAt[0], ptrAt[1]);
+    // A point that is not three finite numbers (a pick on a frame whose mesh is being replaced) is
+    // no point: the core would refuse it (400), and there is nothing to read out.
+    const w = w0 && w0.every((v) => Number.isFinite(v)) ? w0 : null;
     const c = w ? coordinates(w) : null;
     pointer.value = w && c ? { world_mm: w, text: c.text } : null;
   };
