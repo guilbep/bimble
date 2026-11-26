@@ -459,12 +459,17 @@ layout(location = 5) in vec3 a_iy;
 layout(location = 6) in vec3 a_iz;
 layout(location = 7) in vec3 a_it;
 // LNK3D (ADR 0078 amendment 3): the element of a vertex (an instance's, per instance); 0xffffffff: none
-// (proxies, outlines, the ghost: their own colour, the draw's model u_model). Its state (gl/cull.ts
-// packState: colour, model, drawn) in u_state; each model's placement (3 rows) in u_models.
+// (proxies, outlines, the ghost: their own colour). Its state (gl/cull.ts packState: colour, model, drawn) in
+// u_state. A draw holds one model's vertices (its own buffers): u_model (0: the open one) and its placement's
+// three rows u_m0..u_m2 (gl/cull.ts xfRows) are the draw's uniforms.
 layout(location = 8) in uint a_el;
 uniform highp sampler2D u_state;
-uniform highp sampler2D u_models;
 uniform int u_model;
+uniform vec4 u_m0, u_m1, u_m2;
+// LNK3D: a draw whose elements are all shown in one colour (a link with nothing hidden, selected or revealed)
+// reads no state: u_plain 1, its colour u_plain_col (a texel fetch a vertex is a cost on a CPU rasteriser)
+uniform int u_plain;
+uniform vec3 u_plain_col;
 uniform int u_el_col; // 1: the element's colour (faces); 0: a_col (edges, a constant)
 uniform mat4 u_mvp;
 uniform vec3 u_eye;
@@ -478,18 +483,15 @@ void main() {
   vec3 p = a_ix * a_pos.x + a_iy * a_pos.y + a_iz * a_pos.z + a_it;
   mat3 lin = mat3(a_ix, a_iy, a_iz); // the face normals turn as cc_scene_world_mesh turns them
   vec3 col = a_col;
-  int mdl = u_model;
-  if (a_el != 0xffffffffu) { // LNK3D: hidden: outside the clip volume (no pixel, no rebuild)
+  if (a_el != 0xffffffffu && u_plain == 1) { if (u_el_col == 1) col = u_plain_col; }
+  else if (a_el != 0xffffffffu) { // LNK3D: hidden: outside the clip volume (no pixel, no rebuild)
     vec4 st = texelFetch(u_state, ivec2(int(a_el & 2047u), int(a_el >> 11u)), 0);
-    int a = int(st.a * 255.0 + 0.5);
-    if ((a & 1) == 0) { v_pos = vec3(0.0); v_col = vec3(0.0); v_back = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-    mdl = a >> 1;
+    if ((int(st.a * 255.0 + 0.5) & 1) == 0) { v_pos = vec3(0.0); v_col = vec3(0.0); v_back = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
     if (u_el_col == 1) col = st.rgb;
   }
-  if (mdl != 0) { // LNK3D: the model's placement (a link moved, turned: this uniform data only)
-    vec4 r0 = texelFetch(u_models, ivec2(0, mdl), 0), r1 = texelFetch(u_models, ivec2(1, mdl), 0), r2 = texelFetch(u_models, ivec2(2, mdl), 0);
-    p = vec3(dot(r0.xyz, p) + r0.w, dot(r1.xyz, p) + r1.w, dot(r2.xyz, p) + r2.w);
-    lin = transpose(mat3(r0.xyz, r1.xyz, r2.xyz)) * lin;
+  if (u_model != 0) { // LNK3D: the model's placement (a link moved, turned: these uniforms only)
+    p = vec3(dot(u_m0.xyz, p) + u_m0.w, dot(u_m1.xyz, p) + u_m1.w, dot(u_m2.xyz, p) + u_m2.w);
+    lin = transpose(mat3(u_m0.xyz, u_m1.xyz, u_m2.xyz)) * lin;
   }
   v_pos = p; v_col = col;
   vec3 to_eye = u_eye_dir > 0.5 ? u_eye : u_eye - p;
@@ -821,12 +823,16 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   // 3D1: outside an instanced draw a vertex is placed by the identity (generic attribute values: context state)
   gl.vertexAttrib3f(4, 1, 0, 0), gl.vertexAttrib3f(5, 0, 1, 0), gl.vertexAttrib3f(6, 0, 0, 1), gl.vertexAttrib3f(7, 0, 0, 0);
   // ---- LNK3D (ADR 0078 amendment 3): the per-element state texture (unit 1) and the per-model placements
-  // (unit 2); a draw without element ids reads STATE_NONE (generic attribute: context state) ----
+  // (as uniforms, per draw: setModel); a draw without element ids reads STATE_NONE (generic attribute: context state) ----
   gl.vertexAttribI4ui(8, STATE_NONE, 0, 0, 0);
-  const uState = gl.getUniformLocation(prog, "u_state"), uModels = gl.getUniformLocation(prog, "u_models");
+  const uState = gl.getUniformLocation(prog, "u_state");
   const uModel = gl.getUniformLocation(prog, "u_model"), uElCol = gl.getUniformLocation(prog, "u_el_col");
-  const stateTex = gl.createTexture(), modelTex = gl.createTexture();
-  for (const [unit, tex] of [[1, stateTex], [2, modelTex]] as const) {
+  const uM = [gl.getUniformLocation(prog, "u_m0"), gl.getUniformLocation(prog, "u_m1"), gl.getUniformLocation(prog, "u_m2")];
+  const uPlain = gl.getUniformLocation(prog, "u_plain"), uPlainCol = gl.getUniformLocation(prog, "u_plain_col");
+  /** Per model: its one colour when every element of it is shown in it (u_plain), else null (colours()). */
+  let plainOf: ([number, number, number] | null)[] = [];
+  const stateTex = gl.createTexture();
+  for (const [unit, tex] of [[1, stateTex]] as const) {
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -836,7 +842,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   }
   gl.activeTexture(gl.TEXTURE0);
   gl.useProgram(prog);
-  gl.uniform1i(uState, 1), gl.uniform1i(uModels, 2), gl.uniform1i(uModel, 0), gl.uniform1i(uElCol, 1);
+  gl.uniform1i(uState, 1), gl.uniform1i(uModel, 0), gl.uniform1i(uElCol, 1);
   /** The state texels (RGBA8, STATE_TEX_W a row) and the rows the state texture holds. */
   let stateTexels = new Uint8Array(0), stateRows = 0;
   /** Uploads the state texels of elements [a, b) (whole rows; all when the texture is too small). */
@@ -856,17 +862,19 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     gl.activeTexture(gl.TEXTURE0);
   };
-  /** Each model's placement: the open one, then the links (3 RGBA32F texels each). */
+  /** Each model's placement: the open one, then the links; a draw of model k sets its uniforms (setModel). */
   let modelXf: ModelXf[] = [IDENTITY_XF];
-  const uploadModels = () => {
-    const rows = new Float32Array(12 * Math.max(1, modelXf.length));
-    modelXf.forEach((x, k) => xfRows(x, rows, 12 * k));
-    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, modelTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 3, Math.max(1, modelXf.length), 0, gl.RGBA, gl.FLOAT, rows);
-    gl.activeTexture(gl.TEXTURE0);
+  const uploadModels = () => { /* the next frame's draws read modelXf */ };
+  const xfRow = new Float32Array(12);
+  const setModel = (k: number) => {
+    gl.uniform1i(uModel, k);
+    const pc = k ? plainOf[k] ?? null : null;
+    gl.uniform1i(uPlain, pc ? 1 : 0);
+    if (pc) gl.uniform3f(uPlainCol, pc[0] / 255, pc[1] / 255, pc[2] / 255);
+    if (!k) return;
+    xfRows(modelXf[k] ?? IDENTITY_XF, xfRow);
+    for (let r = 0; r < 3; r++) gl.uniform4f(uM[r]!, xfRow[4 * r]!, xfRow[4 * r + 1]!, xfRow[4 * r + 2]!, xfRow[4 * r + 3]!);
   };
-  uploadModels();
   // ---- end LNK3D ----
 
   // ---- LNK3D (D, ADR 0078 amendment 3): each model (the open one, each link) has its own buffers and VAOs
@@ -1075,7 +1083,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const drawLinkCells = (x: LinkPrx, cells: number[], mdl: number, colour: number): number => {
     let tris = 0;
     gl.bindVertexArray(x.vao);
-    gl.uniform1i(uModel, mdl);
+    setModel(mdl);
     const c = LINK_SRGB[colour] ?? REFERENCE_SRGB;
     gl.vertexAttrib3f(1, c[0] / 255, c[1] / 255, c[2] / 255);
     const runs: [number, number][] = [];
@@ -1086,7 +1094,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       else runs.push([q.i0, q.ni]);
     }
     for (const [a, n] of runs) gl.drawElements(gl.TRIANGLES, n, gl.UNSIGNED_INT, 4 * a), tris += n / 3;
-    gl.uniform1i(uModel, 0);
+    setModel(0);
     gl.bindVertexArray(null);
     x.drawnCells = cells.length, x.drawnTris = tris;
     return tris;
@@ -1384,6 +1392,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       }
     }
     if (!was) recoloured = null;
+    // LNK3D: a link all shown in its own colour draws without reading the state (u_plain)
+    plainOf = [null, ...(m.links ?? []).map((l) => {
+      const c = LINK_SRGB[l.colour ?? -1] ?? REFERENCE_SRGB, v = (c[0] << 16) | (c[1] << 8) | c[2];
+      for (let e = l.e0; e < l.e0 + l.elements; e++) if (shown[e] !== 1 || elColour[e] !== v) return null;
+      return c;
+    })];
     const t0 = performance.now();
     if (hi > lo || stateRows === 0) uploadStates(lo, hi);
     stats.stateUpload = { elements: Math.max(0, hi - lo), ms: performance.now() - t0 };
@@ -1428,11 +1442,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     useModel(host);
     gl.bindVertexArray(vao);
     gl.disableVertexAttribArray(1); // LNK3D: the colour is the element's state
-    gl.uniform1i(uElCol, 1), gl.uniform1i(uModel, 0);
+    gl.uniform1i(uElCol, 1), setModel(0);
     const shownEls = els.filter((el) => shown[el]);
     for (const el of shownEls) {
       const link = (m.model?.[el] ?? 0) > 0;
-      useModel(gOf(el)), gl.bindVertexArray(vao);
+      useModel(gOf(el)), setModel(m.model?.[el] ?? 0), gl.bindVertexArray(vao);
       gl.polygonOffset(link ? 2.5 : 1.5, link ? 16 : 2);
       if (elFace[el]! >= 0) { gl.drawElements(gl.TRIANGLES, m.ni[el] ?? 0, gl.UNSIGNED_INT, 4 * elFace[el]!); continue; }
       const g = groups[elGroup[el]!];
@@ -1452,7 +1466,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       for (const el of shownEls) {
         const link = (m.model?.[el] ?? 0) > 0, c = link ? REFERENCE_EDGE_SRGB : EDGE_SRGB;
         if (dbs[elDb[el] ?? -1]?.noEdge) continue; // LNK3D (F): as the frame drew it, without edges
-        useModel(gOf(el));
+        useModel(gOf(el)), setModel(m.model?.[el] ?? 0);
         if (elEdge[el]! >= 0) {
           gl.bindVertexArray(edgeVao);
           gl.vertexAttrib3f(1, c[0]! / 255, c[1]! / 255, c[2]! / 255);
@@ -1469,7 +1483,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       gl.depthMask(true);
     }
     gl.uniform1i(uElCol, 1);
-    useModel(host);
+    useModel(host), setModel(0);
     gl.bindVertexArray(null);
     drawOverlay();
     stats.frames++;
@@ -2157,7 +2171,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
     gl.disableVertexAttribArray(1); // LNK3D: a face's colour is its element's state (u_el_col)
-    gl.uniform1i(uElCol, 1), gl.uniform1i(uModel, 0);
+    gl.uniform1i(uElCol, 1), setModel(0);
     // The open model's faces, then the links' pushed a hair behind (bimble-render LINKED_DEPTH_PUSH:
     // where both have a face, the model's wins).
     let fTris = 0, fDraws = 0, linkPrxTris = 0; // 3D1: what this frame submits (LNK3D: of it, links' proxies)
@@ -2395,9 +2409,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       else merged(0), instFaces(0);
       prxFaces(); // 3D2 (none with a section box)
       gl.polygonOffset(2.5 + push, 16 + 2.4 * push);
-      for (const x of slots) if (x.k > 0 && x.gl) { useModel(x.gl), gl.bindVertexArray(vao); merged(x.k); instFaces(x.k); } // LNK3D (D): each link's loaded detail
+      for (const x of slots) if (x.k > 0 && x.gl) { useModel(x.gl), setModel(x.k), gl.bindVertexArray(vao); merged(x.k); instFaces(x.k); } // LNK3D (D): each link's loaded detail
       if (!slice || fill?.t === Infinity) for (const c of linkCut) { const n = drawLinkCells(c.x, c.cells, c.mdl, c.colour); fTris += n, fDraws++, linkPrxTris += n; } // LNK3D (C)
-      useModel(hostGl), gl.bindVertexArray(vao);
+      useModel(hostGl), setModel(0), gl.bindVertexArray(vao);
     };
     if (!box) faces(0);
     else {
@@ -2475,8 +2489,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (stats.proxyEdges) prxEdges(); // LNK3D (F): never for proxies (a bench hook keeps 3D2's)
       // linked models: their edges in the reference edge colour
       gl.vertexAttrib3f(1, REFERENCE_EDGE_SRGB[0] / 255, REFERENCE_EDGE_SRGB[1] / 255, REFERENCE_EDGE_SRGB[2] / 255);
-      for (const x of slots) if (x.k > 0 && x.gl) { useModel(x.gl), gl.bindVertexArray(edgeVao); mergedEdges(x.k); instEdges(x.k); } // LNK3D (D)
-      useModel(hostGl), gl.bindVertexArray(edgeVao);
+      for (const x of slots) if (x.k > 0 && x.gl) { useModel(x.gl), setModel(x.k), gl.bindVertexArray(edgeVao); mergedEdges(x.k); instEdges(x.k); } // LNK3D (D)
+      useModel(hostGl), setModel(0), gl.bindVertexArray(edgeVao);
     }
     stats.q2 = { edges: edgesOn, ortho: ortho3d(), edgeSegs: edgesOn ? segs + instSegs : 0 };
     if (unfinished.length) drawOutlines(unfinished), fDraws++;
@@ -2510,7 +2524,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.depthMask(true);
     gl.bindVertexArray(null);
     gl.uniform1i(uClip, 0);
-    gl.uniform1i(uElCol, 1), gl.uniform1i(uModel, 0);
+    gl.uniform1i(uElCol, 1), setModel(0);
     if (box && !plan) drawBox(box);
     stats.boxHandles = box && !plan ? boxHandles(box) : []; // ISS71: drawn by drawOverlay
     if (!slice) drawGhost(); // (a slice adds to the kept picture: the ghost is drawn once)

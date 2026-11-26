@@ -627,6 +627,9 @@ async function linksMain() {
   const still = await ev(`(() => { const b = window.__bbGl.bench, ms = []; for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
     return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
   out.still = med(still.ms), out.stillTris = still.tris, out.stillDraws = still.draws;
+  const ne = await ev(`(() => { const b = window.__bbGl.bench, g = window.__bbGl, ms = []; g.noEdges = true; for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
+    g.noEdges = false; const r = { ms, segs: g.q2 ? g.q2.edgeSegs : null }; b.frame(0, false); r.segs = g.q2 ? g.q2.edgeSegs : null; return r; })()`);
+  out.stillNoEdges = med(ne.ms), out.edgeSegs = ne.segs;
   const close = await ev(`(() => { const b = window.__bbGl.bench, ms = []; b.snap(0, 0); b.zoom(0.25); for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
     return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
   out.closeStill = med(close.ms), out.closeTris = close.tris, out.closeDraws = close.draws;
@@ -644,9 +647,9 @@ async function linksMain() {
   out.endLoad = loadNow();
   writeFileSync(join(RAW, `links-${LABEL}.json`), JSON.stringify(out, null, 1));
   const r = out, f = (v, d = 0) => fmt(v, d);
-  console.log(["| label | links | detail triangles | caches MB (proxies MB, ms) | open → first picture ms (from) | → complete ms | still ms: triangles / draws | moving ms median (p95): triangles / draws | close still ms: triangles / draws | GPU MB | GPU MB, half hidden, budget ½ (detail loaded) | load start → end |",
+  console.log(["| label | links | detail triangles | caches MB (proxies MB, ms) | open → first picture ms (from) | → complete ms | still ms: triangles / draws (without edges ms; segments) | moving ms median (p95): triangles / draws | close still ms: triangles / draws | GPU MB | GPU MB, half hidden, budget ½ (detail loaded) | load start → end |",
     "|---|---|---|---|---|---|---|---|---|---|---|---|",
-    `| ${r.label} | ${r.links} | ${f(r.detailTris)} | ${mb(r.cacheBytes)} (${mb(r.hlodBytes)}, ${f(r.hlodMs)}) | ${f(r.firstPicture)} (${r.fromProxies ? "proxies" : "first frame"}) | ${f(r.complete)} | ${f(r.still, 1)}: ${f(r.stillTris)} / ${f(r.stillDraws)} | ${f(r.moving, 1)} (${f(r.movingP95, 1)}): ${f(r.movingTris)} / ${f(r.movingDraws)} | ${f(r.closeStill, 1)}: ${f(r.closeTris)} / ${f(r.closeDraws)} | ${mb(r.gpuBytes)} | ${mb(r.gpuBudgetBytes)} (${r.detailLoaded ?? "–"}) | ${r.load.split(" ")[0]} → ${r.endLoad.split(" ")[0]} |`].join("\n"));
+    `| ${r.label} | ${r.links} | ${f(r.detailTris)} | ${mb(r.cacheBytes)} (${mb(r.hlodBytes)}, ${f(r.hlodMs)}) | ${f(r.firstPicture)} (${r.fromProxies ? "proxies" : "first frame"}) | ${f(r.complete)} | ${f(r.still, 1)}: ${f(r.stillTris)} / ${f(r.stillDraws)} (${f(r.stillNoEdges, 1)}; ${f(r.edgeSegs)}) | ${f(r.moving, 1)} (${f(r.movingP95, 1)}): ${f(r.movingTris)} / ${f(r.movingDraws)} | ${f(r.closeStill, 1)}: ${f(r.closeTris)} / ${f(r.closeDraws)} | ${mb(r.gpuBytes)} | ${mb(r.gpuBudgetBytes)} (${r.detailLoaded ?? "–"}) | ${r.load.split(" ")[0]} → ${r.endLoad.split(" ")[0]} |`].join("\n"));
   if (COMPARE && PIXELS) for (const c of comparePixels()) console.log(`pictures: camera ${c.cam}: ${c.changed} of ${c.pixels} pixels differ by more than 40 levels (${c.any} at all)`);
 }
 
