@@ -1286,10 +1286,92 @@ static int verb_query(cc_session *s, const char *name, const char *body, size_t 
     return CC_ERR;
 }
 
+/* SMALL1: query "batch" {"queries":[<name> | {"name":<name>,"args":<the body as a JSON string>}]}:
+ * the answers of several queries in one call (one round trip of the native host after an edit,
+ * instead of one per query). Answers [{"ok":<the query's answer, its bytes as is>} |
+ * {"error":<its error text>}], in order: each part is byte for byte what `query <name>` with that
+ * body answers alone (test/batch_test.c). Bounded: at most CC_BATCH_MAX queries, each a name of
+ * BATCH_NAMES (reads of the model and the session; never "batch" itself, so no recursion). */
+#define CC_BATCH_MAX 32
+static const char *const BATCH_NAMES[] = {
+    "actions", "annotation_types", "collab", "coordinates", "element", "elements", "foundation_rows",
+    "grid_axes", "grids", "history", "level_refusals", "links", "materials", "measure", "measurements",
+    "north", "open_views", "opening_rows", "openings", "placing", "project", "reference_planes",
+    "schedule_list", "schedules", "setting_out", "sheets", "state", "status", "storeys", "view_annotations",
+    "view_clip", "view_references", "view_visibility", "views", "visibility", "visibility_sets",
+};
+static int batch_name(const char *s, size_t n) {
+    for (size_t i = 0; i < sizeof BATCH_NAMES / sizeof *BATCH_NAMES; i++)
+        if (strlen(BATCH_NAMES[i]) == n && !memcmp(BATCH_NAMES[i], s, n)) return 1;
+    return 0;
+}
+static int q_batch(cc_session *s, const char *body, size_t n, cc_buf *out) {
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    int rc = CC_ERR;
+    const JrVal *v = jr_parse(&a, body, n, &je);
+    const JrVal *q = v && v->type == JR_OBJ ? jr_get(v, "queries") : NULL;
+    if (!v) {
+        buf_puts(out, je.msg);
+        goto end;
+    }
+    if (!q || q->type != JR_ARR) {
+        buf_puts(out, "batch: {\"queries\":[...]} expected");
+        goto end;
+    }
+    if (q->n > CC_BATCH_MAX) {
+        buf_puts(out, "batch: more than 32 queries");
+        goto end;
+    }
+    for (size_t i = 0; i < q->n; i++) { /* every part checked before any is asked */
+        const JrVal *it = &q->items[i], *nm = it, *ar = NULL;
+        if (it->type == JR_OBJ) nm = jr_get(it, "name"), ar = jr_get(it, "args");
+        if (!nm || nm->type != JR_STR || !batch_name(nm->s, nm->n) || (ar && ar->type != JR_STR)) {
+            buf_puts(out, "batch: query ");
+            buf_u64(out, i);
+            buf_puts(out, ": a name of the batch list and an optional args text expected");
+            goto end;
+        }
+    }
+    buf_putc(out, '[');
+    for (size_t i = 0; i < q->n; i++) {
+        const JrVal *it = &q->items[i], *nm = it, *ar = NULL;
+        if (it->type == JR_OBJ) nm = jr_get(it, "name"), ar = jr_get(it, "args");
+        cc_buf one;
+        buf_init(&one);
+        int r = cc_call(s, "query", nm->s, ar ? ar->s : "", ar ? ar->n : 0, &one);
+        if (i) buf_putc(out, ',');
+        if (r == CC_OK) {
+            buf_puts(out, "{\"ok\":");
+            if (one.len) buf_append(out, one.p, one.len);
+            else buf_puts(out, "null");
+        } else {
+            buf_puts(out, "{\"error\":");
+            Buf t;
+            buf_init(&t);
+            JsonW w;
+            jw_init(&w, &t, 0);
+            jw_str_n(&w, one.p ? one.p : "", one.len);
+            if (jw_finish(&w) != JW_OK) out->oom = 1;
+            else buf_append(out, t.p, t.len);
+            buf_free(&t);
+        }
+        buf_putc(out, '}');
+        buf_free(&one);
+    }
+    buf_putc(out, ']');
+    rc = out->oom ? CC_ERR : CC_OK;
+end:
+    arena_free(&a);
+    return rc;
+}
+
 static int measure_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out); /* WAVE1B: opening_at */
 static int call_query(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     JsonW w;
     jw_init(&w, out, 0);
+    if (!strcmp(name, "batch")) return q_batch(s, body, n, out); /* SMALL1 */
     if (!strcmp(name, "state")) return q_state(s, &w);
     if (!strcmp(name, "actions")) return q_actions(s, &w);
     if (!strcmp(name, "capabilities")) return cc_capabilities_json(s, out); /* FAKE1, capabilities.h */

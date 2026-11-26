@@ -1,6 +1,7 @@
 // The one typed client of the wasm viewer (ADR 0048). Components never touch the wasm directly.
 import { shallowRef } from "vue";
 import { applyLook } from "./shell/theme"; // SET1
+import { QueryCache, cachedClient } from "./querycache"; // SMALL1
 
 export interface State {
   selection: string[];
@@ -609,8 +610,11 @@ export async function start(): Promise<void> {
     // Timings from navigation start, read by Lighthouse's user-timings audit (make perf-web).
     performance.mark("bimble:wasm-ready");
     performance.measure("bimble:wasm-ready", { start: 0, end: "bimble:wasm-ready" });
-    wasm = w;
     backend = url.searchParams.get("ccore") === "1" ? "ccore" : native ? "native" : "rust"; // UX1
+    // SMALL1: the C core's queries through the cache, one batch per change (querycache.ts)
+    const qcache = backend === "rust" ? null : new QueryCache((n, a) => w.query(n, a));
+    wasm = qcache ? cachedClient(w, qcache) : w;
+    if (qcache) (window as unknown as { __bbQueries?: QueryCache }).__bbQueries = qcache;
     let shown = false;
     // The callback runs inside a frame: calls back into the viewer would throw "busy", so defer.
     w.on_change((json) => {
@@ -622,6 +626,7 @@ export async function start(): Promise<void> {
         performance.measure("bimble:model-shown", { start: 0, end: "bimble:model-shown" });
       }
       queueMicrotask(() => {
+        qcache?.changed(s); // SMALL1: one call for what the refresh and the panels shown read
         const prev = state.value;
         // schema and user are not in on_change: read them from query("state").
         const q = tryQuery<Pick<State, "schema" | "user" | "version" | "editable">>("state", {});
