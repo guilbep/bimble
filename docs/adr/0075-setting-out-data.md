@@ -102,6 +102,19 @@ SLAB1).
     {hidden_classes}}`): the existing per-view class visibility is the toggle. *Alternative:* a
     3D grid at every level: a cage over the model, and Rust drew grids on paper only.
 
+15. **"Move the base point…" stays "not available yet"** (WAVE1B A4, reasoned, not built). Under
+    decision 2 the base point is the world origin. "Pick a point P, it becomes the base point, every
+    point keeps its E, N, H and no element's local coordinates change" cannot all hold: with local
+    coordinates and E, N, H unchanged the georeference maps the same way, so nothing moves (a
+    no-op that tells the user it worked); with P as the new origin and E, N, H kept, every local
+    coordinate must shift by -P (elements, grids, reference planes, the survey point, section
+    origins and crops, annotations, sheets' view positions, links' offsets), the opposite of the
+    stated rule. A Revit user expects the second (the model stays put on the site, the base point's
+    coordinates change). *Alternative:* that model-wide translation as one Command list (and the
+    georeference's east, north, height increased by P turned by the map rotation): a change to
+    every object kind at once, kept for its own ticket with a hand-computed test on a rotated
+    georeference; the side panel's E, N, H fields already set the base point's survey values.
+
 ## Consequences
 
 - The tab has no dead control: 7 of its 8 controls act (Survey point, Project base point, True /
