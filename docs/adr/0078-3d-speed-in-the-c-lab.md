@@ -265,6 +265,11 @@ both (other tickets' browsers running):
 | after | 1,556 ms (the links' proxies; complete 2,032) | 124.1 ms (90.7) | 12.6 ms: 64,950 | 71.8 ms | 12.9 MB | 7.0 MB (3 of 6 links' detail) |
 
 The pictures of three fixed cameras: 0 of 538,248 pixels differ (at all) between before and after.
+`--links 17` (1,581,408 triangles; load 3.3-4.3 before, 3.7-6.1 after): first picture 3,401 ms (the
+first frame) → 1,921 ms (proxies), complete 4,201 → 2,631 ms, still 342.4 → 260.8 ms (2 → 34 draws),
+moving 32.2 → 33.2 ms (147,060 → 184,025 triangles), close still 206.3 → 191.2 ms, GPU 32.2 → 36.6 MB
+(proxies 7.8 MB of the caches' 52.8; 1.3 s of conversion for the 17), half hidden with the budget at
+half: 22.4 → 18.9 MB (8 of 17 links' detail kept); pictures: 0 pixels over 40 levels, 1 pixel at all.
 A class hidden over the six links (1,392 elements): 1.4 ms in the page, 0.1 ms of state upload, no mesh
 fetched. Decision 15's choice by cost (`bench.stateCost(30000, 100)`): 30,000 elements' texels (120 kB)
 upload in 0.2 ms, a flag per vertex for them (100 vertices each, 12 MB) in 8.5 ms.
