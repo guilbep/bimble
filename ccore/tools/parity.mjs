@@ -30,6 +30,16 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { port } from "../test/ports.mjs";
 
+// 3D1 (ADR 0078): Rust's 3D speed features and the C lab's state; update a row when a ticket ports one.
+const THREED_SPEED = [
+  { feature: "Box tree for picks", rust: "bimble-geom bvh.rs, pick_hit_bvh", ported: false, note: "the page tests each element's box before its triangles (linear); MEAS1's measure tool likewise in the core; frames.md: a pick answers well under 200 ms, so no tree yet" },
+  { feature: "Copies as instances", rust: "bimble-geom dedup.rs, instanced draws", ported: true, note: "dedup in ccore/src/scene.c; BMSH version 3 (ccore/src/scene_bmsh.h) sends each shape once; glviewport.ts draws shapes of 4 copies or more instanced" },
+  { feature: "Frustum culling", rust: "bimble-render clusters, DrawOptions::cull", ported: true, note: "web-ui/src/gl/cull.ts: spatial batches of at most 32,768 triangles culled as wholes" },
+  { feature: "Moving budget", rust: "next_moving_px, moving_fps, DrawOptions::min_radius", ported: true, note: "largest first in each batch, a prefix while the view moves, the whole picture 150 ms after it stops" },
+  { feature: "HLOD proxies", rust: "bimble-geom hlod.rs, bimble-render proxies.rs", ported: false, note: "next ticket (ADR 0078): an octree of simplified stand-ins drawn under a pixel of error" },
+  { feature: "GPU occlusion", rust: "gpu_occlusion.rs, gpu_occlusion_poll", ported: false, note: "WebGL2 occlusion queries answer a frame late; Rust ran it on native backends only (ADR 0036 #1)" },
+];
+
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT = resolve(CCORE, "..");
 const GOLD = join(CCORE, "golden/parity");
@@ -759,6 +769,12 @@ function report(R, C, rib, settings, shortcuts, vue, cmp, meta) {
 
   L.push("File actions with no body (scenario `frame`), as a desktop button sends them. Rust shows a file dialog (not asked: the headless twin has no window); the C core answers:", "");
   for (const [a, v] of Object.entries(C.fileActions ?? {})) L.push(`- \`${a}\`: ${esc(v)}`);
+  L.push("");
+  // ---- 3D1 (ADR 0078): the 3D speed features of the Rust app, ported or not (THREED_SPEED below) ----
+  L.push("## 3D speed features of the Rust app", "");
+  L.push("What Rust v0.19.0's renderer did to draw large models fast (ADR 0034-0036) and whether the C lab's viewport does it (ticket 3D1, ADR 0078; numbers in `ccore/results/frames.md`). The list is `THREED_SPEED` in this tool.", "");
+  L.push("| Feature | Rust | C lab | Where / why not |", "|---|---|---|---|");
+  for (const f of THREED_SPEED) L.push(`| ${f.feature} | \`${f.rust}\` | ${f.ported ? "ported" : "**not ported**"} | ${esc(f.note)} |`);
   L.push("");
   L.push("## Settings (Rust `settings.rs`)", "");
   // SET1: the lab's Settings dialog (its `data-setting` fields) and the C core's `query settings`

@@ -174,7 +174,7 @@ async function warm(X: Exports, steps: OpenSteps = {}): Promise<void> {
   try { run(X.call.bind(X), [enc.encode("query"), enc.encode("status"), enc.encode("{}")]); } catch { /* asked again by the page */ }
   await yieldTask();
   steps.step?.("mesh");
-  try { run(X.host_mesh.bind(X), [], [0]); } catch { /* asked again by the viewport */ }
+  try { run(X.host_mesh.bind(X), [], [2]); } catch { /* asked again by the viewport (3D1: BMSH version 3) */ }
   await yieldTask();
 }
 // ---- end PERF2 ----
@@ -185,10 +185,10 @@ function hostLog(): void {
   for (const line of t.split("\n")) if (line) console.info(line);
 }
 
-/** The BMSH bytes of the session's scene (native GET /mesh) and the revision they show. */
+/** The BMSH bytes of the session's scene (native GET /mesh?shapes=1: version 3) and the revision they show. */
 export function ccoreMesh(): { bytes: ArrayBuffer; rev: number } {
   if (!module) throw new Error("ccore: not loaded");
-  const r = run(module.X.host_mesh.bind(module.X), [], [0]);
+  const r = run(module.X.host_mesh.bind(module.X), [], [2]); // 3D1 (ADR 0078): BMSH version 3, shapes once
   if (r.status !== 200) throw new Error(`mesh: ${r.status} ${dec.decode(r.bytes)}`);
   return { bytes: r.bytes.buffer as ArrayBuffer, rev: r.value };
 }
@@ -269,7 +269,7 @@ export async function ccoreWarmMesh(): Promise<void> {
   if (!module) return;
   await yieldTask();
   const { X } = module;
-  try { run(X.host_mesh.bind(X), [], [0]); } catch { /* asked again by the viewport */ }
+  try { run(X.host_mesh.bind(X), [], [2]); } catch { /* asked again by the viewport (3D1: BMSH version 3) */ }
 }
 
 /** The bytes the module wrote last and their file name (host_saved, host_saved_path). */

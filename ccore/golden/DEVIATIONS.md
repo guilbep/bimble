@@ -763,9 +763,10 @@ folder), `ui_theme.rs` (themes, fonts, text sizes), `lib.rs:4023-4190` (Settings
 - **A file that is not a JSON object is left alone** (FS1's rule): the change is kept for the
   session and `query settings` says so in `note`; Rust overwrites it with the defaults and the
   change.
-- **Applies**: `memory_share`, `moving_fps`, `moving_proxies` and `gpu_cull` are stored and round
+- **Applies**: `memory_share`, `moving_proxies` and `gpu_cull` are stored and round
   tripped but used by nothing (the lab's viewport is the page's WebGL one, natively too): `query
-  settings` reports `applies: false` and what each would need. They are not shown in the lab's
+  settings` reports `applies: false` and what each would need. `moving_fps` applies since ticket
+  3D1 (section 36). They are not shown in the lab's
   dialog. `recent` does not apply in the browser (no paths).
 - **The look**: the lab maps Rust's theme ids onto its own design tokens (`web-ui/src/shell/theme.ts`).
   `grey`, Rust's default, is the lab's own default look (the Bimble design), not Rust's grey
@@ -1193,3 +1194,23 @@ Rust's default, so no golden changes. Test: `test/dead1_test.c`.
   storey would answer, told before the click (the verbs `level_remove` and `level_set` run dry):
   the page disables the control with the core's text. Rust's page showed the refusal after the
   click.
+
+## 36. The lab's 3D: copies sent once and drawn instanced, batches culled, a moving budget (ticket 3D1, ADR 0078)
+
+- **BMSH version 3** (C only, `ccore/src/scene_bmsh.h`): the rows of version 1, each shared shape
+  once in its own coordinates and a placement per element. Rust had no BMSH: its viewer drew the
+  scene in process (ADR 0034 phase 2). The page asks version 3 (`GET /mesh?shapes=1`, wasm
+  `host_mesh` flag 2); version 1 is unchanged for every other reader. Test: `test/scene_bmsh_test.c`
+  (each element placed from version 3 equals version 1 bit for bit; dedup's bounded work on a
+  hostile bucket).
+- **The page's draw** follows bimble-render: shapes of 4 copies or more instanced, fewer placed
+  into the merged buffers (the page places them as `cc_scene_world_mesh` does); batches of at most
+  32,768 triangles culled against the view; largest first inside a batch, so while the view moves
+  a frame draws each batch's prefix of the elements at least `px` pixels big (Rust's
+  `next_moving_px` and its tests, `test/cull_test.mjs`). Differences: the size is half the element's
+  box diagonal (Rust: its bounding radius); no MSAA to drop (the lab draws without it); culling
+  ignores the section box (Rust culled against it too); the whole picture is drawn 150 ms after the
+  camera stops, as Rust, in one frame.
+- **Settings**: `moving_fps` applies (`query settings` `applies.moving_fps` true, no `needs` row);
+  `gpu_cull` (Rust's compute-shader test of copies) and `moving_proxies` (HLOD proxies, not ported)
+  still do not.

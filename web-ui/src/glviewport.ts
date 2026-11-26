@@ -76,10 +76,12 @@ import {
   annotate, annotateCall, boxTool, deleteAnnotation, moveAnnotation, openViews, placing, select, selectLinked, state, toolCall,
   viewAnnotations, viewClip, visibility, visibilitySets, measure, measureCall, type MeasureState,
   settingOut, // SETOUT
+  userSettings, // 3D1: moving_fps
   type AnnotateState, type ToolPointer, type ToolState, type ViewAnnotation, type ViewAnnotations, type ViewClip, type Visibility,
   type VisibilitySets,
 } from "./bimble";
 import { drawMeasure } from "./gl/measure";
+import { BATCH_TRIS, boxInFrustum, frustumPlanes, makeBatches, nextMovingPx, prefixCount, type Batch } from "./gl/cull"; // 3D1
 import { referenceLayer } from "./gl/reference"; // L1: reference plans
 import { sectionMatrices, sectionFit, isSection } from "./gl/section"; // SEC1
 import { gridLayer } from "./gl/grids"; // ---- G2: grid axes in plans ---- / ---- end G2 ----
@@ -161,17 +163,29 @@ interface Bmsh {
   model?: Uint8Array;
   /** The links of a merged mesh, in link order. */
   links?: { name: string; visible: boolean; elements: number }[];
+  /** 3D1 (BMSH version 3, ccore/src/scene_bmsh.h): per element 0 (its own mesh, scene coordinates) or
+   *  k + 1 (it places shape k: its row's ranges are the shape's, in the shape's own coordinates), and
+   *  per element its placement (12 floats: columns x, y, z, t). Absent: version 1, every mesh placed. */
+  shape?: Uint32Array;
+  place?: Float32Array;
 }
+
+/** 3D1: a shape with fewer copies, or fewer triangles, is baked into the merged buffers (placed like an
+ *  own mesh): a draw call per shape costs more than it saves for few copies (ADR 0034, xeokit's pitfall),
+ *  and an instance has a cost of its own (SwiftShader: 20,000 instanced boxes of 12 triangles drew in
+ *  1.2 s against 0.19 s merged; frames.md, ADR 0078). */
+const INSTANCE_MIN_COPIES = 4, INSTANCE_MIN_TRIS = 64;
 
 /** Parses BMSH version 1 (ccore/session/mesh.c) at byte `at`; `exact`: it must end the buffer.
  *  Throws on a malformed buffer. */
 export function parseBmsh(ab: ArrayBuffer, at = 0, exact = true): Bmsh {
   const dv = new DataView(ab);
   if (ab.byteLength < at + 52 || dv.getUint32(at, true) !== 0x48534d42) throw new Error("not BMSH");
-  if (dv.getUint32(at + 4, true) !== 1) throw new Error(`BMSH version ${dv.getUint32(at + 4, true)}`);
+  const version = dv.getUint32(at + 4, true);
+  if (version !== 1 && version !== 3) throw new Error(`BMSH version ${version}`);
   const u = (o: number) => dv.getUint32(at + o, true);
   const rev = u(8), nE = u(12), nV = u(16), nI = u(20), nS = u(24);
-  const size = 52 + 48 * nE + 12 * nV + 4 * nI + 32 * nS;
+  const size = 52 + 48 * nE + 12 * nV + 4 * nI + 32 * nS + (version === 3 ? 52 * nE : 0);
   if (exact ? size !== ab.byteLength - at : size > ab.byteLength - at) throw new Error(`BMSH size ${ab.byteLength - at}, expected ${size}`);
   const origin: [number, number, number] = [dv.getFloat64(at + 28, true), dv.getFloat64(at + 36, true), dv.getFloat64(at + 44, true)];
   const ids: string[] = [];
@@ -196,10 +210,69 @@ export function parseBmsh(ab: ArrayBuffer, at = 0, exact = true): Bmsh {
   const edges = new Float32Array(ab, o, 6 * nS);
   o += 24 * nS;
   const normals = new Int8Array(ab, o, 8 * nS);
+  o += 8 * nS;
   for (let i = 0; i < nI; i++) if ((idx[i] ?? 0) >= nV) throw new Error("BMSH index out of range");
   for (let e = 0; e < nE; e++)
     if ((i0[e] ?? 0) + (ni[e] ?? 0) > nI || (v0[e] ?? 0) + (nv[e] ?? 0) > nV || (s0[e] ?? 0) + (ns[e] ?? 0) > nS) throw new Error("BMSH row out of range");
-  return { rev, origin, ids, cats, v0, nv, i0, ni, s0, ns, pos, idx, edges, normals, size };
+  const m: Bmsh = { rev, origin, ids, cats, v0, nv, i0, ni, s0, ns, pos, idx, edges, normals, size };
+  if (version === 3) { // 3D1: the placements block (u32 shape + 1 or 0, f32[12]), 52 bytes a row
+    const shape = new Uint32Array(nE), place = new Float32Array(12 * nE);
+    for (let e = 0; e < nE; e++, o += 52) {
+      shape[e] = dv.getUint32(o, true);
+      for (let k = 0; k < 12; k++) place[12 * e + k] = dv.getFloat32(o + 4 + 4 * k, true);
+    }
+    m.shape = shape, m.place = place;
+    return bake(m);
+  }
+  return m;
+}
+
+/** 3D1: an element of a version-3 mesh whose shape has fewer than INSTANCE_MIN_COPIES copies is placed
+ *  into new merged data (as ccore/src/scene.c cc_scene_world_mesh places it: f32, a mirrored placement's
+ *  triangles turned) and becomes an own mesh (shape 0). */
+function bake(m: Bmsh): Bmsh {
+  const S = m.shape!, Pl = m.place!, nE = m.ids.length;
+  const copies = new Map<number, number>();
+  for (let e = 0; e < nE; e++) if (S[e]) copies.set(S[e]!, (copies.get(S[e]!) ?? 0) + 1);
+  let av = 0, ai = 0, as = 0;
+  const baked = (e: number) => (copies.get(S[e]!) ?? 0) < INSTANCE_MIN_COPIES || m.ni[e]! < 3 * INSTANCE_MIN_TRIS;
+  for (let e = 0; e < nE; e++) if (S[e] && baked(e)) av += m.nv[e]!, ai += m.ni[e]!, as += m.ns[e]!;
+  if (!av && !ai && !as) return m;
+  const nV = m.pos.length / 3, nI = m.idx.length, nS = m.edges.length / 6;
+  const pos = new Float32Array(3 * (nV + av)), idx = new Uint32Array(nI + ai), edges = new Float32Array(6 * (nS + as)), normals = new Int8Array(8 * (nS + as));
+  pos.set(m.pos), idx.set(m.idx), edges.set(m.edges), normals.set(m.normals);
+  const f = Math.fround;
+  let v = nV, i = nI, sg = nS;
+  for (let e = 0; e < nE; e++) {
+    if (!S[e] || !baked(e)) continue;
+    const p = Pl.subarray(12 * e, 12 * e + 12);
+    const at = (q: Float32Array, a: number, o: Float32Array, b: number) => {
+      for (let j = 0; j < 3; j++) o[b + j] = f(f(f(f(p[j]! * q[a]!) + f(p[3 + j]! * q[a + 1]!)) + f(p[6 + j]! * q[a + 2]!)) + p[9 + j]!);
+    };
+    const v0 = m.v0[e]!, n = m.nv[e]!;
+    for (let k = 0; k < n; k++) at(m.pos, 3 * (v0 + k), pos, 3 * (v + k));
+    const c0 = p[4]! * p[8]! - p[5]! * p[7]!, c1 = p[5]! * p[6]! - p[3]! * p[8]!, c2 = p[3]! * p[7]! - p[4]! * p[6]!;
+    const mirrors = p[0]! * c0 + p[1]! * c1 + p[2]! * c2 < 0;
+    const i0 = m.i0[e]!, ni = m.ni[e]!;
+    for (let k = 0; k < ni; k++) {
+      const kk = mirrors && k % 3 ? (k % 3 === 1 ? k + 1 : k - 1) : k;
+      idx[i + k] = m.idx[i0 + kk]! - v0 + v;
+    }
+    const s0 = m.s0[e]!, ns = m.ns[e]!;
+    for (let k = 0; k < 2 * ns; k++) at(m.edges, 6 * s0 + 3 * k, edges, 6 * sg + 3 * k);
+    for (let k = 0; k < 2 * ns; k++) { // a face normal turned by the linear part, as cc_scene_world_mesh (snorm8)
+      const a = 8 * s0 + 4 * k, b = 8 * sg + 4 * k, q = m.normals;
+      if (!q[a] && !q[a + 1] && !q[a + 2] && !q[a + 3]) continue;
+      const x = q[a]! / 127, y = q[a + 1]! / 127, z = q[a + 2]! / 127;
+      const w = [0, 1, 2].map((j) => p[j]! * x + p[3 + j]! * y + p[6 + j]! * z);
+      const l = Math.max(Math.hypot(w[0]!, w[1]!, w[2]!), 1e-12);
+      for (let j = 0; j < 3; j++) normals[b + j] = Math.round((w[j]! / l) * 127);
+      normals[b + 3] = 0;
+    }
+    m.v0[e] = v, m.i0[e] = i, m.s0[e] = sg, S[e] = 0;
+    v += n, i += ni, sg += ns;
+  }
+  return { ...m, pos, idx, edges, normals };
 }
 
 // ---- TEST1: an empty BMSH (no element; what the host answers with no model open) ----
@@ -242,6 +315,7 @@ export function parseMesh(ab: ArrayBuffer): Bmsh {
   if (o !== ab.byteLength) throw new Error(`LNKS: ${ab.byteLength - o} trailing bytes`);
   const all = [main, ...parts.map((p) => p.m)];
   const sum = (f: (m: Bmsh) => number) => all.reduce((a, m) => a + f(m), 0);
+  const placed = all.some((m) => m.shape); // 3D1: version 3: shapes move by their placement, not their vertices
   const nE = sum((m) => m.ids.length), nV = sum((m) => m.pos.length / 3), nI = sum((m) => m.idx.length), nS = sum((m) => m.edges.length / 6);
   const out: Bmsh = {
     rev: main.rev, origin: main.origin, ids: [], cats: new Uint8Array(nE), v0: new Uint32Array(nE), nv: new Uint32Array(nE),
@@ -249,9 +323,23 @@ export function parseMesh(ab: ArrayBuffer): Bmsh {
     pos: new Float32Array(3 * nV), idx: new Uint32Array(nI), edges: new Float32Array(6 * nS), normals: new Int8Array(8 * nS),
     size: ab.byteLength, model: new Uint8Array(nE), links: parts.map((p) => ({ name: p.name, visible: p.visible, elements: p.m.ids.length })),
   };
-  let e0 = 0, v0 = 0, i0 = 0, s0 = 0;
+  if (placed) out.shape = new Uint32Array(nE), out.place = new Float32Array(12 * nE);
+  let e0 = 0, v0 = 0, i0 = 0, s0 = 0, sh0 = 0;
   all.forEach((m, k) => {
     const d = [m.origin[0] - main.origin[0], m.origin[1] - main.origin[1], m.origin[2] - main.origin[2]];
+    // 3D1: the vertices and segments of shapes (version 3) stay in their own coordinates; the placement moves
+    const inShape = new Uint8Array(m.pos.length / 3), segShape = new Uint8Array(m.edges.length / 6);
+    let shMax = 0;
+    if (m.shape)
+      for (let e = 0; e < m.ids.length; e++) {
+        const sh = m.shape[e] ?? 0;
+        if (!sh) continue;
+        shMax = Math.max(shMax, sh);
+        inShape.fill(1, m.v0[e] ?? 0, (m.v0[e] ?? 0) + (m.nv[e] ?? 0));
+        segShape.fill(1, m.s0[e] ?? 0, (m.s0[e] ?? 0) + (m.ns[e] ?? 0));
+        out.shape![e0 + e] = sh + sh0;
+        for (let j = 0; j < 12; j++) out.place![12 * (e0 + e) + j] = (m.place![12 * e + j] ?? 0) + (j >= 9 ? d[j - 9] ?? 0 : 0);
+      }
     for (let e = 0; e < m.ids.length; e++) {
       out.ids.push(m.ids[e] ?? "");
       out.cats[e0 + e] = m.cats[e] ?? 7;
@@ -260,11 +348,11 @@ export function parseMesh(ab: ArrayBuffer): Bmsh {
       out.s0[e0 + e] = (m.s0[e] ?? 0) + s0, out.ns[e0 + e] = m.ns[e] ?? 0;
       out.model![e0 + e] = k;
     }
-    for (let i = 0; i < m.pos.length; i++) out.pos[3 * v0 + i] = (m.pos[i] ?? 0) + (d[i % 3] ?? 0);
+    for (let i = 0; i < m.pos.length; i++) out.pos[3 * v0 + i] = (m.pos[i] ?? 0) + (inShape[Math.floor(i / 3)] ? 0 : d[i % 3] ?? 0);
     for (let i = 0; i < m.idx.length; i++) out.idx[i0 + i] = (m.idx[i] ?? 0) + v0;
-    for (let i = 0; i < m.edges.length; i++) out.edges[6 * s0 + i] = (m.edges[i] ?? 0) + (d[i % 3] ?? 0);
+    for (let i = 0; i < m.edges.length; i++) out.edges[6 * s0 + i] = (m.edges[i] ?? 0) + (segShape[Math.floor(i / 6)] ? 0 : d[i % 3] ?? 0);
     out.normals.set(m.normals, 8 * s0);
-    e0 += m.ids.length, v0 += m.pos.length / 3, i0 += m.idx.length, s0 += m.edges.length / 6;
+    e0 += m.ids.length, v0 += m.pos.length / 3, i0 += m.idx.length, s0 += m.edges.length / 6, sh0 += shMax;
   });
   return out;
 }
@@ -305,6 +393,11 @@ layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_col;
 layout(location = 2) in vec4 a_n1; // an edge's two face normals (snorm8); 0 or unset: unknown
 layout(location = 3) in vec4 a_n2;
+// 3D1: a placed shape's columns x, y, z, t (per instance); merged draws: the constants (1,0,0) (0,1,0) (0,0,1) (0,0,0)
+layout(location = 4) in vec3 a_ix;
+layout(location = 5) in vec3 a_iy;
+layout(location = 6) in vec3 a_iz;
+layout(location = 7) in vec3 a_it;
 uniform mat4 u_mvp;
 uniform vec3 u_eye;
 uniform float u_eye_dir; // 1: u_eye is the direction to the eye (an orthographic plan camera)
@@ -314,11 +407,13 @@ out vec3 v_pos;
 out vec3 v_col;
 flat out float v_back;
 void main() {
-  v_pos = a_pos; v_col = a_col;
-  vec3 to_eye = u_eye_dir > 0.5 ? u_eye : u_eye - a_pos;
-  v_back = (dot(a_n1.xyz, to_eye) < 0.0 && dot(a_n2.xyz, to_eye) < 0.0) ? 1.0 : 0.0;
+  vec3 p = a_ix * a_pos.x + a_iy * a_pos.y + a_iz * a_pos.z + a_it;
+  mat3 lin = mat3(a_ix, a_iy, a_iz); // the face normals turn as cc_scene_world_mesh turns them
+  v_pos = p; v_col = a_col;
+  vec3 to_eye = u_eye_dir > 0.5 ? u_eye : u_eye - p;
+  v_back = (dot(lin * a_n1.xyz, to_eye) < 0.0 && dot(lin * a_n2.xyz, to_eye) < 0.0) ? 1.0 : 0.0;
   gl_PointSize = u_point;
-  gl_Position = u_mvp * vec4(a_pos, 1.0);
+  gl_Position = u_mvp * vec4(p, 1.0);
   gl_Position.z -= u_zbias * gl_Position.w;
 }`;
 const FS = `#version 300 es
@@ -456,6 +551,10 @@ interface GlStats {
   frameTris?: number;
   frameDraws?: number;
   gpuBytes?: number;
+  /** 3D1: the moving budget of the last frame (px at the target, the size left out under in mm), the
+   *  batches and how many drew nothing; a test hook to turn frustum culling off (the same picture). */
+  moving?: { px: number; minMm: number; batches: number; culled: number };
+  noCull?: boolean;
   bench?: { frame: (dyaw: number, moving: boolean) => number; zoom: (k: number) => void; snap: (dyaw: number, dpitch: number) => { w: number; h: number; rgba: Uint8Array } };
 }
 declare global {
@@ -507,7 +606,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       return typeof m.epoch === "string" ? m.epoch : null;
     },
     mesh: async () => {
-      const r = await fetch(`${base}/mesh?t=${t}`, { cache: "no-store" });
+      const r = await fetch(`${base}/mesh?t=${t}&shapes=1`, { cache: "no-store" }); // 3D1: BMSH version 3
       if (!r.ok) throw new Error(`mesh: HTTP ${r.status} ${await r.text()}`);
       return r.arrayBuffer();
     },
@@ -539,6 +638,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const uClipRot = gl.getUniformLocation(prog, "u_clip_rot"); // ISS71
   const uCut = gl.getUniformLocation(prog, "u_cut");
   const uZbias = gl.getUniformLocation(prog, "u_zbias");
+  // 3D1: outside an instanced draw a vertex is placed by the identity (generic attribute values: context state)
+  gl.vertexAttrib3f(4, 1, 0, 0), gl.vertexAttrib3f(5, 0, 1, 0), gl.vertexAttrib3f(6, 0, 0, 1), gl.vertexAttrib3f(7, 0, 0, 0);
 
   // One VAO: positions (location 0), per-vertex sRGB colour (location 1, u8 normalized), indices.
   // Edges reuse it: location 0 points at the edge buffer, location 1 is a constant.
@@ -562,6 +663,49 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   gl.vertexAttribPointer(3, 4, gl.BYTE, true, 8, 4);
   gl.bindVertexArray(null);
   let faceN = 0, faceMainN = 0, edgeN = 0, edgeMainN = 0;
+  // ---- 3D1 (ADR 0078): copies drawn instanced. The shapes' indices packed (shapeIdxBuf), per visible
+  // instance its placement (instMat, 48 bytes) and colour (instCol, 4 bytes), grouped by (link or not,
+  // shape, mirrored); a group is one drawElementsInstanced (faces) and one drawArraysInstanced (edges). ----
+  const shapeIdxBuf = gl.createBuffer(), instMat = gl.createBuffer(), instCol = gl.createBuffer();
+  const instVao = gl.createVertexArray(), instEdgeVao = gl.createVertexArray();
+  gl.bindVertexArray(instVao);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, shapeIdxBuf);
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, instCol);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribDivisor(1, 1);
+  for (const l of [4, 5, 6, 7]) gl.enableVertexAttribArray(l), gl.vertexAttribDivisor(l, 1);
+  gl.bindVertexArray(instEdgeVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, edgeBuf);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, edgeNrm);
+  gl.enableVertexAttribArray(2);
+  gl.vertexAttribPointer(2, 4, gl.BYTE, true, 8, 0);
+  gl.enableVertexAttribArray(3);
+  gl.vertexAttribPointer(3, 4, gl.BYTE, true, 8, 4);
+  for (const l of [4, 5, 6, 7]) gl.enableVertexAttribArray(l), gl.vertexAttribDivisor(l, 1);
+  gl.bindVertexArray(null);
+  /** A run of instances of one shape: its packed index range, its segments, its instances [first, first + count). */
+  interface InstGroup { i0: number; ni: number; s0: number; ns: number; first: number; count: number; mirrored: boolean; link: boolean; dbs: DrawBatch[] }
+  /** 3D1 (steps 2, 3): a batch of the merged lists (g null: faces from index f0, edges from e0) or of a
+   *  group's instances (from g.first + b.first), and how many of its items this frame draws (k). */
+  interface DrawBatch { b: Batch; f0: number; e0: number; link: boolean; g: InstGroup | null; k: number }
+  let dbs: DrawBatch[] = [];
+  let groups: InstGroup[] = [];
+  /** Per shape (k + 1 - 1): its first index in the packed shape indices. */
+  let shapeI0 = new Uint32Array(0);
+  /** The elements of the instances, in instance order (for their colours). */
+  let instEls = new Uint32Array(0);
+  /** Points the instance attributes at instance `first` (WebGL2 has no base instance). */
+  const instAttrs = (first: number, colour: boolean) => {
+    gl.bindBuffer(gl.ARRAY_BUFFER, instMat);
+    for (let c = 0; c < 4; c++) gl.vertexAttribPointer(4 + c, 3, gl.FLOAT, false, 48, 48 * first + 12 * c);
+    if (colour) { gl.bindBuffer(gl.ARRAY_BUFFER, instCol); gl.vertexAttribPointer(1, 3, gl.UNSIGNED_BYTE, true, 4, 4 * first); }
+  };
+  // ---- end 3D1 ----
   // Visibility (query visibility and visibility_sets) and the box drag's preview.
   let vis: Visibility | null = null;
   let sets: VisibilitySets | null = null;
@@ -611,6 +755,31 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   // MEAS1 (ADR 0074): only the 2D overlay changed (the measure tool's marker, rubber line, tags):
   // the overlay is drawn again, not the model (the 3D scene: when the camera or the model changes).
   let overlayDirty = false;
+  // ---- 3D1 (step 3, ADR 0035): while the camera moves, what is smaller than movingPx pixels at the
+  // orbit target is left out; movingPx follows the frame time against the setting moving_fps (Rust's
+  // next_moving_px); STILL_MS after the camera stopped, the whole picture is drawn again. ----
+  const STILL_MS = 150;
+  let movingPx = 0, frameFloor = Infinity, lastMovingAt: number | null = null, lastCamKey: string | null = null, stillDue = 0;
+  // (not the canvas size: a panel shown by a selection resizes it, and that is not a camera move)
+  const camKey = () => `${yaw}|${pitch}|${distance}|${target.join(",")}|${half}|${viewId}`;
+  /** The size (mm, half a box diagonal) under which an element is left out of this frame (0: all). */
+  const movingMinSize = (): number => {
+    const key = camKey(), now = performance.now();
+    const fps = userSettings.value?.values.moving_fps ?? 30;
+    const moving = lastCamKey !== null && key !== lastCamKey && fps > 0;
+    lastCamKey = key;
+    if (!moving) { lastMovingAt = null; return 0; }
+    if (lastMovingAt !== null) {
+      const dt = (now - lastMovingAt) / 1000;
+      if (dt > 0.002) frameFloor = Math.min(frameFloor, dt);
+      movingPx = nextMovingPx(movingPx, dt, fps, frameFloor);
+    }
+    lastMovingAt = now;
+    stillDue = now + STILL_MS;
+    const mmPerPx = (plan ? 2 * half : 2 * distance * Math.tan(FOV_Y / 2)) / Math.max(1, canvas.height); // Camera::mm_per_pixel
+    return movingPx * mmPerPx;
+  };
+  // ---- end 3D1 ----
   let loading = false;
   // What the mesh shows: the model's rev and the links' counter (change JSON `links`).
   const meshKey = () => `${state.value.rev}/${state.value.links ?? 0}`;
@@ -710,15 +879,25 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // A linked element selected: its id is the selection; the open model's same id is not selected.
     const sel = new Set(linked ? [] : state.value.selection);
     const out = new Uint8Array(m.pos.length);
-    for (let e = 0; e < m.ids.length; e++) {
+    const colourOf = (e: number) => {
       const k = m.model?.[e] ?? 0;
-      const c = k > 0
+      return k > 0
         ? (linked && linked.id === m.ids[e] && linked.link === m.links?.[k - 1]?.name ? SELECTION_SRGB : REFERENCE_SRGB)
         : sel.has(m.ids[e] ?? "") ? SELECTION_SRGB : shown[e] === 2 ? REVEALED_SRGB
         : (CATEGORY_SRGB[m.cats[e] ?? 7] ?? CATEGORY_SRGB[7] ?? SELECTION_SRGB);
+    };
+    for (let e = 0; e < m.ids.length; e++) {
+      if (m.shape?.[e]) continue; // 3D1: a placed shape's colour is its instance's
+      const c = colourOf(e);
       const a = m.v0[e] ?? 0, n = m.nv[e] ?? 0;
       for (let v = a; v < a + n; v++) out.set(c, 3 * v);
     }
+    // 3D1: the instances' colours, in instance order
+    const ic = new Uint8Array(4 * instEls.length);
+    for (let i = 0; i < instEls.length; i++) ic.set(colourOf(instEls[i]!), 4 * i);
+    gl.bindBuffer(gl.ARRAY_BUFFER, instCol);
+    gl.bufferData(gl.ARRAY_BUFFER, ic, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, colBuf); // the caller uploads the per-vertex colours into colBuf
     return out;
   };
 
@@ -728,11 +907,17 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const upload = (m: Bmsh) => {
     mesh = m;
     boxes = new Float32Array(6 * m.ids.length);
+    const f = Math.fround;
     for (let e = 0; e < m.ids.length; e++) {
       let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
       const a = m.v0[e] ?? 0, n = m.nv[e] ?? 0, P = m.pos;
+      const pl = m.shape?.[e] ? m.place!.subarray(12 * e, 12 * e + 12) : null; // 3D1: a placed shape: its placed vertices
       for (let v = 3 * a; v < 3 * (a + n); v += 3) {
-        const x = P[v] ?? 0, y = P[v + 1] ?? 0, z = P[v + 2] ?? 0;
+        let x = P[v] ?? 0, y = P[v + 1] ?? 0, z = P[v + 2] ?? 0;
+        if (pl) {
+          const q = [x, y, z].map((_, j) => f(f(f(f(pl[j]! * x) + f(pl[3 + j]! * y)) + f(pl[6 + j]! * z)) + pl[9 + j]!));
+          x = q[0]!, y = q[1]!, z = q[2]!;
+        }
         if (x < x0) x0 = x;
         if (x > x1) x1 = x;
         if (y < y0) y0 = y;
@@ -743,10 +928,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       boxes.set([x0, y0, z0, x1, y1, z1], 6 * e);
     }
     const min: V3 = [Infinity, Infinity, Infinity], max: V3 = [-Infinity, -Infinity, -Infinity];
-    for (let i = 0; i < m.pos.length; i++) {
-      const a = i % 3, v = m.pos[i] ?? 0;
-      if (v < min[a]!) min[a] = v;
-      if (v > max[a]!) max[a] = v;
+    for (let e = 0; e < m.ids.length; e++) { // 3D1: the elements' boxes (placed shapes placed): the vertices' bounds
+      if (!(m.nv[e] ?? 0)) continue;
+      for (let a = 0; a < 3; a++) {
+        min[a] = Math.min(min[a]!, boxes[6 * e + a] ?? 0);
+        max[a] = Math.max(max[a]!, boxes[6 * e + 3 + a] ?? 0);
+      }
     }
     bounds = m.pos.length ? { center: scale(add(min, max), 0.5), radius: Math.max(1, Math.hypot(...sub(max, min)) / 2) } : null;
     gl.bindVertexArray(vao);
@@ -764,7 +951,23 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, edgeNrm);
     gl.bufferData(gl.ARRAY_BUFFER, nrm, gl.STATIC_DRAW);
-    meshBytes = m.pos.byteLength + m.edges.byteLength + nrm.byteLength + m.pos.length; // 3D1: + colours (3 B a vertex)
+    // 3D1: each placed shape's indices once, packed (the merged lists hold the own meshes')
+    let nsh = 0;
+    for (let e = 0; e < m.ids.length; e++) nsh = Math.max(nsh, m.shape?.[e] ?? 0);
+    shapeI0 = new Uint32Array(nsh);
+    const seen = new Uint8Array(nsh);
+    let si = 0;
+    for (let e = 0; e < m.ids.length; e++) { const k = m.shape?.[e] ?? 0; if (k && !seen[k - 1]) seen[k - 1] = 1, shapeI0[k - 1] = si, si += m.ni[e] ?? 0; }
+    const sidx = new Uint32Array(si);
+    for (let e = 0; e < m.ids.length; e++) {
+      const k = m.shape?.[e] ?? 0;
+      if (k && seen[k - 1] === 1) seen[k - 1] = 2, sidx.set(m.idx.subarray(m.i0[e] ?? 0, (m.i0[e] ?? 0) + (m.ni[e] ?? 0)), shapeI0[k - 1]);
+    }
+    gl.bindVertexArray(instVao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, shapeIdxBuf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sidx, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    meshBytes = m.pos.byteLength + m.edges.byteLength + nrm.byteLength + m.pos.length + sidx.byteLength; // 3D1: + colours (3 B a vertex), shape indices
     stats.gpuBytes = meshBytes + listBytes;
     visKey = "\u0000"; // the draw lists on the next frame
     selKey = "\u0000"; // recolour on the next frame
@@ -831,17 +1034,30 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (shown[e]) nf += m.ni[e] ?? 0, ne += m.ns[e] ?? 0;
       else nh++;
     }
+    // 3D1: placed shapes are drawn instanced, not from the merged lists
+    if (m.shape) // (stats.linkTris above counts the links' instances too)
+      for (let e = 0; e < m.ids.length; e++)
+        if (shown[e] && m.shape[e]) nf -= m.ni[e] ?? 0, ne -= m.ns[e] ?? 0;
     const fi = new Uint32Array(nf), ei = new Uint32Array(2 * ne);
     let f = 0, k = 0;
+    dbs = [];
+    const linkDbs: DrawBatch[] = [];
     // Edges: the open model's first, then the links' (drawn in their own colour).
+    // 3D1 (step 2): in spatial batches, largest first inside each (gl/cull.ts)
     for (const links of [false, true]) {
-      for (let e = 0; e < m.ids.length; e++) {
-        if (!shown[e] || ((m.model?.[e] ?? 0) > 0) !== links) continue;
-        const i0 = m.i0[e] ?? 0, n = m.ni[e] ?? 0;
-        fi.set(m.idx.subarray(i0, i0 + n), f);
-        f += n;
-        const s0 = m.s0[e] ?? 0, ns = m.ns[e] ?? 0;
-        for (let q = s0; q < s0 + ns; q++) ei[k++] = 2 * q, ei[k++] = 2 * q + 1;
+      const items: number[] = [];
+      for (let e = 0; e < m.ids.length; e++) if (shown[e] && ((m.model?.[e] ?? 0) > 0) === links && !m.shape?.[e]) items.push(e);
+      const { order: ord, batches: bs } = makeBatches(items, boxes, (e) => (m.ni[e] ?? 0) / 3, (e) => m.ns[e] ?? 0, BATCH_TRIS);
+      for (const b of bs) {
+        (links ? linkDbs : dbs).push({ b, f0: f, e0: k, link: links, g: null, k: b.n });
+        for (let j = b.first; j < b.first + b.n; j++) {
+          const e = ord[j]!;
+          const i0 = m.i0[e] ?? 0, n = m.ni[e] ?? 0;
+          fi.set(m.idx.subarray(i0, i0 + n), f);
+          f += n;
+          const s0 = m.s0[e] ?? 0, ns = m.ns[e] ?? 0;
+          for (let q = s0; q < s0 + ns; q++) ei[k++] = 2 * q, ei[k++] = 2 * q + 1;
+        }
       }
       if (!links) edgeMainN = k, faceMainN = f;
     }
@@ -855,10 +1071,52 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bindVertexArray(null);
     faceN = nf;
     edgeN = 2 * ne;
-    listBytes = fi.byteLength + ei.byteLength; // 3D1
+    // ---- 3D1: the instances shown, grouped by (link or not, shape, mirrored) ----
+    const order: number[] = [];
+    if (m.shape) for (let e = 0; e < m.ids.length; e++) if (shown[e] && m.shape[e]) order.push(e);
+    const P = m.place ?? new Float32Array(0);
+    const mirroredOf = (e: number) => {
+      const p = P.subarray(12 * e, 12 * e + 12);
+      return p[0]! * (p[4]! * p[8]! - p[5]! * p[7]!) + p[1]! * (p[5]! * p[6]! - p[3]! * p[8]!) + p[2]! * (p[3]! * p[7]! - p[4]! * p[6]!) < 0;
+    };
+    const key = (e: number) => ((m.model?.[e] ?? 0) > 0 ? 1 : 0) * 2 ** 33 + (m.shape?.[e] ?? 0) * 2 + (mirroredOf(e) ? 1 : 0);
+    const keys = new Map<number, number>();
+    for (const e of order) keys.set(e, key(e));
+    order.sort((a, b) => keys.get(a)! - keys.get(b)! || a - b);
+    groups = [];
+    let tri = 0;
+    const byGroup: number[][] = [];
+    order.forEach((e) => {
+      const g = groups[groups.length - 1], kk = keys.get(e)!;
+      tri += (m.ni[e] ?? 0) / 3;
+      if (g && keys.get(byGroup[byGroup.length - 1]![0]!) === kk) { g.count++; byGroup[byGroup.length - 1]!.push(e); return; }
+      byGroup.push([e]);
+      groups.push({ i0: shapeI0[(m.shape![e] ?? 1) - 1] ?? 0, ni: m.ni[e] ?? 0, s0: m.s0[e] ?? 0, ns: m.ns[e] ?? 0, first: 0, count: 1,
+        mirrored: mirroredOf(e), link: (m.model?.[e] ?? 0) > 0, dbs: [] });
+    });
+    // 3D1 (step 2): each group's instances in spatial batches, largest first inside each
+    const inst: number[] = [];
+    groups.forEach((g, gi) => {
+      g.first = inst.length;
+      const { order: ord, batches: bs } = makeBatches(byGroup[gi]!, boxes, () => g.ni / 3, () => g.ns, BATCH_TRIS);
+      for (const b of bs) {
+        const d: DrawBatch = { b, f0: 0, e0: 0, link: g.link, g, k: b.n };
+        g.dbs.push(d);
+        (g.link ? linkDbs : dbs).push(d);
+      }
+      inst.push(...ord);
+    });
+    dbs.push(...linkDbs);
+    instEls = Uint32Array.from(inst);
+    const mats = new Float32Array(12 * inst.length);
+    inst.forEach((e, i) => mats.set(P.subarray(12 * e, 12 * e + 12), 12 * i));
+    gl.bindBuffer(gl.ARRAY_BUFFER, instMat);
+    gl.bufferData(gl.ARRAY_BUFFER, mats, gl.STATIC_DRAW);
+    // ---- end 3D1 ----
+    listBytes = fi.byteLength + ei.byteLength + mats.byteLength + 4 * order.length; // 3D1
     stats.gpuBytes = meshBytes + listBytes;
     stats.hiddenElements = nh;
-    stats.drawnTris = nf / 3;
+    stats.drawnTris = nf / 3 + tri; // 3D1: + the instances'
     selKey = "\u0000"; // revealed elements change colour
     dirty = true;
   };
@@ -980,12 +1238,62 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // The open model's faces, then the links' pushed a hair behind (bimble-render LINKED_DEPTH_PUSH:
     // where both have a face, the model's wins).
     let fTris = 0, fDraws = 0; // 3D1: what this frame submits
+    // ---- 3D1 (steps 2, 3): what each batch draws this frame: none when its box is off screen (frustum
+    // culling, the planes of the view-projection), else its items at least `minSize` big while the view
+    // moves (ADR 0035), all of them when it is still. ----
+    const planes = stats.noCull ? null : frustumPlanes(mvp);
+    const minSize = movingMinSize();
+    let culled = 0;
+    for (const d of dbs) {
+      d.k = planes && !boxInFrustum(planes, d.b.box, 0) ? 0 : prefixCount(d.b, minSize);
+      if (!d.k) culled++;
+    }
+    stats.moving = { px: movingPx, minMm: minSize, batches: dbs.length, culled };
+    // 3D1: the instanced groups after the merged faces of the same model (the open one, then the links);
+    // a mirrored placement turns the winding, so its group takes the other front face.
+    const front = box && mirror() ? gl.CW : gl.CCW;
+    const instFaces = (link: boolean) => {
+      let any = false;
+      for (const g of groups) {
+        if (g.link !== link || !g.ni) continue;
+        let a = -1, z = -1; // a run of instances [a, z)
+        const flush = () => {
+          if (z <= a) return;
+          if (!any) gl.bindVertexArray(instVao), any = true;
+          instAttrs(a, true);
+          if (g.mirrored) gl.frontFace(front === gl.CCW ? gl.CW : gl.CCW);
+          gl.drawElementsInstanced(gl.TRIANGLES, g.ni, gl.UNSIGNED_INT, 4 * g.i0, z - a);
+          if (g.mirrored) gl.frontFace(front);
+          fTris += (g.ni / 3) * (z - a), fDraws++;
+        };
+        for (const d of g.dbs) {
+          if (!d.k) continue;
+          const s = g.first + d.b.first;
+          if (s === z) z = s + d.k;
+          else flush(), a = s, z = s + d.k;
+        }
+        flush();
+      }
+      if (any) gl.bindVertexArray(vao);
+    };
+    const merged = (link: boolean) => { // runs of the merged index list, neighbouring batches joined
+      let a = -1, z = -1;
+      const flush = () => { if (z > a) gl.drawElements(gl.TRIANGLES, z - a, gl.UNSIGNED_INT, 4 * a), fDraws++, fTris += (z - a) / 3; };
+      for (const d of dbs) {
+        if (d.g || d.link !== link || !d.k) continue;
+        const s = d.f0, t = d.f0 + 3 * d.b.cum[d.k]!;
+        if (s === z) z = t;
+        else flush(), a = s, z = t;
+      }
+      flush();
+    };
     const faces = (push: number) => {
       gl.polygonOffset(1.5 + push, 2 + 2.4 * push); // (1.5, 2), and (4, 8) for the inward pass, as before
-      gl.drawElements(gl.TRIANGLES, faceMainN, gl.UNSIGNED_INT, 0);
+      merged(false);
+      instFaces(false);
       gl.polygonOffset(2.5 + push, 16 + 2.4 * push);
-      if (faceN > faceMainN) gl.drawElements(gl.TRIANGLES, faceN - faceMainN, gl.UNSIGNED_INT, 4 * faceMainN);
-      fTris += faceN / 3, fDraws += faceN > faceMainN ? 2 : 1;
+      merged(true);
+      instFaces(true);
     };
     if (!box) faces(0);
     else {
@@ -1013,13 +1321,49 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // A plan: edges 2 mm ahead, so the outline of a cut drawn where it stands on something stays.
     if (plan) gl.uniform1f(uZbias, (2 * 2) / (2 * (4 * (bounds?.radius ?? distance) + 1000) - 1));
     const edgesOn = pressed("edges", true); // Q2: ribbon.rs:695 Edges (opts.edges): no edge drawn when off
-    stats.q2 = { edges: edgesOn, ortho: ortho3d(), edgeSegs: edgesOn ? edgeN / 2 : 0 };
-    if (edgesOn) gl.drawElements(gl.LINES, edgeMainN, gl.UNSIGNED_INT, 0);
-    if (edgesOn && edgeN > edgeMainN) { // linked models: their edges in the reference edge colour
+    let instSegs = 0, segs = 0;
+    const instEdges = (link: boolean) => { // 3D1: the instanced groups' segments, the batches drawn
+      let any = false;
+      for (const g of groups) {
+        if (g.link !== link || !g.ns) continue;
+        let a = -1, z = -1;
+        const flush = () => {
+          if (z <= a) return;
+          if (!any) gl.bindVertexArray(instEdgeVao), any = true;
+          instAttrs(a, false);
+          gl.drawArraysInstanced(gl.LINES, 2 * g.s0, 2 * g.ns, z - a);
+          instSegs += g.ns * (z - a), fDraws++;
+        };
+        for (const d of g.dbs) {
+          if (!d.k) continue;
+          const s = g.first + d.b.first;
+          if (s === z) z = s + d.k;
+          else flush(), a = s, z = s + d.k;
+        }
+        flush();
+      }
+      if (any) gl.bindVertexArray(edgeVao);
+    };
+    const mergedEdges = (link: boolean) => {
+      let a = -1, z = -1;
+      const flush = () => { if (z > a) gl.drawElements(gl.LINES, z - a, gl.UNSIGNED_INT, 4 * a), fDraws++, segs += (z - a) / 2; };
+      for (const d of dbs) {
+        if (d.g || d.link !== link || !d.k) continue;
+        const s = d.e0, t = d.e0 + 2 * d.b.ecum[d.k]!;
+        if (s === z) z = t;
+        else flush(), a = s, z = t;
+      }
+      flush();
+    };
+    if (edgesOn) {
+      mergedEdges(false);
+      instEdges(false);
+      // linked models: their edges in the reference edge colour
       gl.vertexAttrib3f(1, REFERENCE_EDGE_SRGB[0] / 255, REFERENCE_EDGE_SRGB[1] / 255, REFERENCE_EDGE_SRGB[2] / 255);
-      gl.drawElements(gl.LINES, edgeN - edgeMainN, gl.UNSIGNED_INT, 4 * edgeMainN);
+      mergedEdges(true);
+      instEdges(true);
     }
-    if (edgesOn) fDraws += edgeN > edgeMainN ? 2 : 1;
+    stats.q2 = { edges: edgesOn, ortho: ortho3d(), edgeSegs: edgesOn ? segs + instSegs : 0 };
     stats.frameTris = fTris, stats.frameDraws = fDraws; // 3D1
     gl.uniform1f(uZbias, 0);
     gl.depthMask(true);
@@ -1523,14 +1867,24 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       }
       if (tn > tf || tf <= 0 || tn >= best) continue;
       const k0 = m.i0[el] ?? 0, k1 = k0 + (m.ni[el] ?? 0);
+      // 3D1: a placed shape: the ray in the shape's own coordinates (an affine map keeps the ray's parameter)
+      let eo = e, dl = dir;
+      if (m.shape?.[el]) {
+        const pl = m.place!.subarray(12 * el, 12 * el + 12);
+        const cx: V3 = [pl[0]!, pl[1]!, pl[2]!], cy: V3 = [pl[3]!, pl[4]!, pl[5]!], cz: V3 = [pl[6]!, pl[7]!, pl[8]!];
+        const r0 = cross(cy, cz), r1 = cross(cz, cx), r2 = cross(cx, cy), dt = dot(cx, r0);
+        if (Math.abs(dt) < 1e-30) continue;
+        const toLocal = (v: V3): V3 => [dot(r0, v) / dt, dot(r1, v) / dt, dot(r2, v) / dt];
+        eo = toLocal(sub(e, [pl[9]!, pl[10]!, pl[11]!])), dl = toLocal(dir);
+      }
       for (let k = k0; k + 2 < k1; k += 3) {
         // Möller–Trumbore, two-sided.
         const a = vtx(I[k] ?? 0), b = vtx(I[k + 1] ?? 0), c = vtx(I[k + 2] ?? 0);
-        const e1 = sub(b, a), e2 = sub(c, a), p = cross(dir, e2), det = dot(e1, p);
+        const e1 = sub(b, a), e2 = sub(c, a), p = cross(dl, e2), det = dot(e1, p);
         if (Math.abs(det) < 1e-12) continue;
-        const inv = 1 / det, tv = sub(e, a), uu = dot(tv, p) * inv;
+        const inv = 1 / det, tv = sub(eo, a), uu = dot(tv, p) * inv;
         if (uu < 0 || uu > 1) continue;
-        const q = cross(tv, e1), vv = dot(dir, q) * inv;
+        const q = cross(tv, e1), vv = dot(dl, q) * inv;
         if (vv < 0 || uu + vv > 1) continue;
         const d = dot(e2, q) * inv;
         if (d > 0 && d < best && !outside(d)) { // ADR 0014: what the box removes is not picked
@@ -1922,8 +2276,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       const t0 = performance.now();
       yaw += dyaw;
       draw();
+      const t1 = performance.now();
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px1);
-      return performance.now() - t0;
+      const t2 = performance.now();
+      (stats as unknown as { split?: number[] }).split = [t1 - t0, t2 - t1];
+      return t2 - t0;
     },
     /** The camera's distance times k (a close orbit: 0.2). */
     zoom: (k: number) => { turn = null; distance *= k; },
@@ -1932,6 +2289,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       turn = null;
       yaw = HOME_YAW + projectNorth() + dyaw, pitch = HOME_PITCH + dpitch;
       fit();
+      fitCanvas();
+      lastCamKey = camKey(); // 3D1: a still picture (not a moving frame)
       draw();
       const out = new Uint8Array(4 * canvas.width * canvas.height);
       gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, out);
@@ -2032,6 +2391,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       dirty = true;
     }
     fitCanvas(); // BUG1
+    if (!dirty && stillDue && performance.now() >= stillDue) { stillDue = 0; if ((stats.moving?.minMm ?? 0) > 0) dirty = true; } // 3D1: the whole picture once the camera stopped
     if (dirty) {
       dirty = false;
       overlayDirty = false; // draw() draws the overlay too

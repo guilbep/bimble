@@ -312,7 +312,8 @@ async function measure() {
   // Orbit: NFRAMES frames over 360 degrees, each a moving frame, finished.
   const orbit = await ev(`(() => { const b = window.__bbGl.bench, ms = []; const d = 2 * Math.PI / ${NFRAMES};
     for (let i = 0; i < ${NFRAMES}; i++) ms.push(b.frame(d, true));
-    return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
+    return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws, split: window.__bbGl.split, mv: window.__bbGl.moving }; })()`);
+  out.orbitSplit = orbit.split, out.orbitMoving = orbit.mv;
   out.orbitMedian = med(orbit.ms), out.orbitP95 = p95(orbit.ms), out.movingTris = orbit.tris, out.movingDraws = orbit.draws;
   const still = await ev(`(() => { const b = window.__bbGl.bench, ms = []; for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
     return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
@@ -369,7 +370,10 @@ async function measure() {
 const CAMS = [[0, 0], [2.0944, 0], [0.5, 0.9]];
 async function pixels() {
   mkdirSync(PIXELS, { recursive: true });
+  await quiet(20000);
   for (let i = 0; i < CAMS.length; i++) {
+    await ev(`(window.__bbGl.bench.snap(${CAMS[i][0]}, ${CAMS[i][1]}), 0)`); // the layout settled first
+    await quiet(20000);
     const [dy, dp] = CAMS[i];
     const b64 = await ev(`(() => { const s = window.__bbGl.bench.snap(${dy}, ${dp}); let t = ""; const u = s.rgba; for (let k = 0; k < u.length; k += 32768) t += String.fromCharCode.apply(null, u.subarray(k, k + 32768)); return s.w + "x" + s.h + ":" + btoa(t); })()`);
     const [wh, data] = b64.split(":");
@@ -483,4 +487,5 @@ async function main() {
   if (cmp) for (const c of cmp) if (c.changed < 0 || c.changed > 0.001 * c.pixels) { log(`pictures differ: ${JSON.stringify(c)}`); process.exitCode = 1; }
 }
 
-main().catch((e) => { console.error(`frames: ${e.stack ?? e}`); process.exitCode = 1; }).finally(cleanup);
+main().catch((e) => { console.error(`frames: ${e.stack ?? e}`); process.exitCode = 1; })
+  .finally(async () => { await cleanup(); process.exit(process.exitCode ?? 0); }); // keep-alive sockets would hold the loop

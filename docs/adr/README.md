@@ -89,6 +89,7 @@ a decision that changes an old one says which one it supersedes.
 | [0075](0075-setting-out-data.md) | Setting out: the base point is the world origin, a survey point in the georeference, project zero its height, one true north for views, box and tab; markers as session state; reference planes not served yet | Accepted |
 | [0076](0076-views-and-sheets-from-the-ribbon.md) | Views and sheets from the ribbon: New view… a dialog over `view_add` (scale in it, one step), Section a two-click tool in a plan snapped to four facings, Place view… a list placed at the sheet's centre, Revision… the sheet's one index (Rust's), text and dimension types as selects of the standards | Accepted |
 | [0077](0077-concrete-openings-and-foundations.md) | Concrete from the ribbon: pad footing under a column or free, strip footing along a wall, raft (IfcSlab BASESLAB) from the slab outline, openings and sleeves cut through walls and slabs (`set_openings`, refused outside the host or over another), PredefinedType as a property, delegated by Pierre | Accepted |
+| [0078](0078-3d-speed-in-the-c-lab.md) | 3D speed in the C lab: BMSH version 3 sends each shared shape once, copies of 4 or more drawn instanced, spatial batches culled against the view, Rust's moving budget (`moving_fps`); box tree, HLOD proxies and GPU occlusion left for later | Accepted |
 ## Alternatives considered
 ## Context / Problem
 # ADR NNNN — Title
