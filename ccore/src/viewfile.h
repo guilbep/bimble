@@ -86,6 +86,10 @@ typedef struct {
 
 typedef struct { /* the text of one scene element (SceneElement's fields beside class, family) */
     cc_str global_id, name, storey, material;
+    /* WAVE1B (B1): what the quantities add to the mesh's volume (m3): for each sleeve of the element,
+     * its 32-gon's area minus the circle's, times the host's thickness (the exact cylinder pi r^2 t,
+     * ADR 0077). From the model only (cc_viewfile_meta_from_model); 0 otherwise; never written. */
+    double volume_fix_m3;
 } cc_view_info;
 
 /* A scene's META (and GEOR) for the writer. Every string and array is borrowed (from the model,

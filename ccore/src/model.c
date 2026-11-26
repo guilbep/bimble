@@ -555,3 +555,23 @@ const cc_str *cc_element_predefined(const cc_element *e) {
     return NULL;
 }
 /* ---- end CONC1 ---- */
+
+double cc_sleeve_volume_fix_m3(const cc_element *e) { /* WAVE1B (B1), model.h */
+    double t = e->generator.kind == CC_GEN_WALL ? e->generator.u.wall.thickness
+               : e->generator.kind == CC_GEN_SLAB ? e->generator.u.slab.thickness
+                                                   : 0.0;
+    double fix = 0.0, r;
+    for (size_t i = 0; t > 0.0 && i < e->nopenings; i++) {
+        const cc_opening *o = &e->openings[i];
+        if (!cc_opening_is_sleeve(o, &r)) continue;
+        const cc_loop *l = &o->generator.u.poly.outline;
+        double a2 = 0.0; /* shoelace: twice the polygon's area */
+        for (size_t k = 0; k < l->n; k++) {
+            const double *p = l->pts[k], *q = l->pts[(k + 1) % l->n];
+            a2 += p[0] * q[1] - q[0] * p[1];
+        }
+        double area = (a2 < 0 ? -a2 : a2) / 2.0;
+        fix += (area - 3.141592653589793 * r * r) * t / 1e9;
+    }
+    return fix + 0.0;
+}

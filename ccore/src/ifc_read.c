@@ -1191,6 +1191,7 @@ int cc_ifc_scene_meta(const cc_ifc_scene *s, cc_viewfile_meta *mt) {
         info[k].name = x->name;
         info[k].storey = x->storey;
         info[k].material = x->material;
+        info[k].volume_fix_m3 = 0.0; /* WAVE1B (B1): a model's sleeves only */
     }
     for (size_t i = 0; i < s->nstoreys; i++) {
         st[i].name = s->storeys[i].name;

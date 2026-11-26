@@ -1470,6 +1470,13 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
 #endif
     }
     if (!strcmp(name, "opening_at")) return measure_tool(s, "opening_at", body, n, out); /* WAVE1B (B2) */
+    if (!strcmp(name, "opening_rows")) { /* WAVE1B (B1, concrete.h): the openings and sleeves of the model */
+        if (!s->open) return buf_puts(out, READ_ONLY), CC_ERR;
+        JsonW w;
+        jw_init(&w, out, 0);
+        cc_conc_opening_rows_json(&s->model, &w);
+        return done(&w);
+    }
     if (!strcmp(name, "openings")) { /* WAVE1B (B2, concrete.h): {"host"}: its openings */
         if (!s->open) return buf_puts(out, READ_ONLY), CC_ERR;
         Arena a;

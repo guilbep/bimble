@@ -14,6 +14,8 @@
 #include "../src/json_w.h"
 #include "../src/fmt.h"
 #include "../src/quantity.h"
+#include "../src/command.h" /* WAVE1B (B1) */
+#include "../src/verbs.h"   /* WAVE1B (B1) */
 #include "check.h"
 
 static const char *golden;
@@ -312,5 +314,61 @@ int main(int argc, char **argv) {
     formatter();
     definitions();
     empty_and_order();
+    { /* WAVE1B (B1): a wall with a sleeve: cc_measure counts the exact cylinder pi r^2 t, not the 32-gon */
+        cc_model m;
+        cc_error e;
+        size_t n;
+        char *text = slurp("golden", "frame.json", &n);
+        int ok = text && !cc_model_load(&m, text, n, &e);
+        free(text);
+        cc_gid wall;
+        memset(&wall, 0, sizeof wall);
+        for (int step = 0; ok && step < 2; step++) {
+            cc_cmds l;
+            cc_cmds_init(&l);
+            Buf err, args;
+            buf_init(&err), buf_init(&args);
+            if (step == 0) buf_puts(&args, "{\"kind\":\"wall\",\"storey\":\"1uAZA0Yfn05f$xRd1k4uPR\",\"a\":[0,-3000],\"b\":[6000,-3000]}");
+            else {
+                buf_puts(&args, "{\"host\":\""), buf_append(&args, wall.c, 22);
+                buf_puts(&args, "\",\"a\":[2000,-3000],\"shape\":\"round\",\"diameter\":300}");
+            }
+            ok = !cc_verb_run_ex(&m, step ? "opening_add" : "place", args.p, args.len, 0, -1, 0, &l, &err);
+            for (size_t i = 0; ok && i < l.n; i++) {
+                cc_command inv;
+                ok = !cc_command_apply(&m, &l.v[i], &inv, &err);
+                if (step == 0 && l.v[i].op == CC_CMD_ADD_ELEMENT) wall = l.v[i].element.id;
+            }
+            if (!ok) printf("  B1 setup: %s\n", buf_cstr(&err));
+            cc_cmds_free(&l), buf_free(&err), buf_free(&args);
+        }
+        check_true("B1 setup: a wall and a sleeve of 300", ok);
+        if (ok) {
+            const cc_element *w = cc_model_element(&m, &wall);
+            double gross = w->generator.u.wall.length * w->generator.u.wall.thickness * w->generator.u.wall.height / 1e9;
+            double cyl = 3.141592653589793 * 150.0 * 150.0 * w->generator.u.wall.thickness / 1e9;
+            cc_scene sc;
+            cc_viewfile_meta mt;
+            double v = -1;
+            if (!cc_scene_build(&sc, &m, &e)) {
+                if (!cc_viewfile_meta_from_model(&mt, &m, &sc)) {
+                    for (size_t k = 0; k < sc.nelements; k++) {
+                        if (cc_gid_cmp(&sc.elements[k].id, &wall)) continue;
+                        Arena a;
+                        arena_init(&a, 0);
+                        cc_measures q;
+                        if (cc_measure(&sc, &mt, k, &a, &q) == 1) v = q.volume_m3;
+                        arena_free(&a);
+                    }
+                    cc_viewfile_meta_free(&mt);
+                }
+                cc_scene_free(&sc);
+            }
+            printf("  B1 wall %.0f x %.0f x %.0f with a sleeve of 300: %.9f m3 (hand: %.9f - %.9f = %.9f)\n", w->generator.u.wall.length,
+                   w->generator.u.wall.thickness, w->generator.u.wall.height, v, gross, cyl, gross - cyl);
+            check_true("B1 cc_measure: the wall's volume is the gross minus the exact cylinder pi r^2 t", v - (gross - cyl) < 1e-6 && (gross - cyl) - v < 1e-6); /* the mesh is f32: 1e-6 m3 */
+            cc_model_free(&m);
+        }
+    }
     return report("quantity");
 }

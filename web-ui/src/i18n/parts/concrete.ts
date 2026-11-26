@@ -50,6 +50,17 @@ export const fr = {
   "props.op.diameter": "Diamètre",
   "props.op.at": "Centre {axis}",
   "props.op.notEditable": "Forme importée : supprimez-la et redessinez-la pour la modifier.",
+  // ---- WAVE1B (B1): the Quantities page's openings and sleeves ----
+  "quantities.op.title": "Réservations et fourreaux",
+  "quantities.op.level": "Niveau",
+  "quantities.op.host": "Dans",
+  "quantities.op.kind": "Type",
+  "quantities.op.size": "Dimensions (mm)",
+  "quantities.op.volume": "Volume (m³)",
+  "quantities.op.opening": "Réservation",
+  "quantities.op.sleeve": "Fourreau",
+  "quantities.op.other": "Réservation importée",
+  "quantities.op.note": "Volume d'un fourreau : le cylindre exact π r² e (e : l'épaisseur de son hôte), déduit aussi du volume net de l'hôte.",
 };
 export const en: Record<keyof typeof fr, string> = {
   "placeslab.title.footing": "Place: pad footing",
@@ -101,4 +112,15 @@ export const en: Record<keyof typeof fr, string> = {
   "props.op.diameter": "Diameter",
   "props.op.at": "Centre {axis}",
   "props.op.notEditable": "An imported shape: delete it and draw it again to change it.",
+  // ---- WAVE1B (B1): the Quantities page's openings and sleeves ----
+  "quantities.op.title": "Openings and sleeves",
+  "quantities.op.level": "Level",
+  "quantities.op.host": "In",
+  "quantities.op.kind": "Kind",
+  "quantities.op.size": "Size (mm)",
+  "quantities.op.volume": "Volume (m³)",
+  "quantities.op.opening": "Opening",
+  "quantities.op.sleeve": "Sleeve",
+  "quantities.op.other": "Imported opening",
+  "quantities.op.note": "A sleeve's volume is the exact cylinder π r² t (t: its host's thickness), also taken out of the host's net volume.",
 };

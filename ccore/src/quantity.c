@@ -409,7 +409,7 @@ int cc_measure(const cc_scene *s, const cc_viewfile_meta *mt, size_t k, Arena *a
     else if (standing) out->area_m2 = volume_m3 * 1e9 / fmax_(height, 1e-9) / 1e6;
     else if (height > 1e-6) out->area_m2 = volume_m3 * 1e9 / height / 1e6;
     else out->area_m2 = 0.0;
-    out->volume_m3 = volume_m3;
+    out->volume_m3 = volume_m3 + (k < mt->ninfo ? mt->info[k].volume_fix_m3 : 0.0); /* WAVE1B (B1): sleeves' exact cylinders */
     return 1;
 }
 

@@ -263,6 +263,10 @@ void cc_buf_gid(Buf *b, const cc_gid *g);
 /* An opening made by opening_add with shape "round": an extruded_polygon of CC_SLEEVE_SIDES corners
  * at one radius around the opening's origin. 1 with the radius in *r (may be NULL), else 0. */
 int cc_opening_is_sleeve(const cc_opening *o, double *r);
+/* WAVE1B (B1): the exact cylinder against the polygon drawn: for each sleeve of `e` (a wall or slab
+ * generator host), (polygon area - pi r^2) x the host's thickness, in m3 (<= 0); 0 without one. The
+ * radius is the opening's own parameter (its polygon's circumradius), not read from the mesh. */
+double cc_sleeve_volume_fix_m3(const cc_element *e);
 /* The element's PredefinedType property (CC_PREDEFINED_KEY), NULL when it has none. */
 const cc_str *cc_element_predefined(const cc_element *e);
 #endif

@@ -80,6 +80,24 @@ Each choice, then the alternative rejected.
     diameter; the centre X, Y) run `opening_set`. Rejected: openings as selectable ids of the
     selection (every selection consumer would have to tell an opening from an element).
 
+13. **A sleeve's quantities are the exact cylinder** (WAVE1B B1): the value is carried by the
+    opening's own parameter, the radius of its 32-gon (`cc_opening_is_sleeve`), never read from
+    the mesh: the host's net volume is the mesh's plus (polygon area - pi r^2) x the host's
+    thickness (`cc_sleeve_volume_fix_m3`, added by `cc_measure`), and the Quantities page lists
+    each opening and sleeve in its own row (`query opening_rows`: pi r^2 t; a box w x h x t).
+    Decision 8's polygon stays the drawn and cut solid. Rejected: a circle generator (every table
+    of kinds, the file and the readers would change for one number).
+14. **The sleeve's plan symbol**: a round hole (24 corners or more) of a slab seen in a plan gets
+    a cross of two diameters at 45 degrees with the Annotate "Openings" toggle. A wall's sleeve is
+    not drawn in plan (the cut plane rarely meets it). Rejected: a symbol for every round hole
+    whatever the toggle (Rust's plans would change for imported round holes).
+15. **IFC: `IfcCircleProfileDef`** of the sleeve's radius for its body (IFC2x3: the profile placed,
+    as its rectangles), ObjectType `SLEEVE` kept. Supersedes decision 8's "a circle profile in IFC"
+    rejection: the writer needs no circle generator for it.
+16. **Wasm: a sleeve in a wall is cut** (decision 9 left it uncut): without a kernel the wall is
+    seen as a slab of its face (x, z) extruded through its thickness, and its openings across it
+    (boxes and 32-gons) are the "holes" case of `prism_cut.h`, mapped back.
+
 ## Response times (ADR 0074)
 
 Measured by `ccore/test/lab_concrete.mjs` on the native host (tcc build), headless Chromium with

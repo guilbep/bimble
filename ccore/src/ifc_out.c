@@ -822,7 +822,16 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
             uint64_t opl = begin(w);
             put(w, "IFCLOCALPLACEMENT("), ref(w, pl), put(w, ","), ref(w, oa), put(w, ")"), end(w, opl);
             const char *orepr;
-            uint64_t osolid = write_geometry(w, &op->generator, world, z, &orepr);
+            double sr;
+            uint64_t osolid;
+            if (cc_opening_is_sleeve(op, &sr)) { /* WAVE1B (B1): the exact circle, IfcCircleProfileDef */
+                uint64_t cp = begin(w);
+                put(w, "IFCCIRCLEPROFILEDEF(.AREA.,$,$,"), real(w, sr), put(w, ")"), end(w, cp);
+                osolid = begin(w);
+                put(w, "IFCEXTRUDEDAREASOLID("), ref(w, cp), put(w, ","), ref(w, world), put(w, ","), ref(w, z);
+                put(w, ","), real(w, op->generator.u.poly.height), put(w, ")"), end(w, osolid);
+                orepr = "SweptSolid";
+            } else osolid = write_geometry(w, &op->generator, world, z, &orepr);
             uint64_t oshape = begin(w);
             put(w, "IFCSHAPEREPRESENTATION("), ref(w, body), put(w, ",'Body','"), put(w, orepr), put(w, "',(");
             ref(w, osolid), put(w, "))"), end(w, oshape);
@@ -1059,7 +1068,8 @@ static int to_ifc2x3(const char *t, size_t n, Buf *out) {
                 args[na - 1] = (cc_str){"$", 1};
             } else if (NAME_IS("IFCMATERIAL")) {
                 if (na > 1) na = 1;
-            } else if (NAME_IS("IFCRECTANGLEPROFILEDEF") && na > 2 && args[2].n == 1 && args[2].p[0] == '$') {
+            } else if ((NAME_IS("IFCRECTANGLEPROFILEDEF") || NAME_IS("IFCCIRCLEPROFILEDEF") /* WAVE1B */) && na > 2 &&
+                       args[2].n == 1 && args[2].p[0] == '$') {
                 args[2] = (cc_str){at2s, at2n};
             }
 #undef NAME_IS

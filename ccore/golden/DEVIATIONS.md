@@ -1204,6 +1204,20 @@ C core's references are hand-computed in `test/concrete_test.c` (volumes, positi
   tool's answer carries a ghost for the opening and sleeve kinds (CONC1 answered `null`).
   Hand-computed in `test/concrete_test.c`, gestures in `test/lab_concrete.mjs`.
 
+- **Sleeves (ticket WAVE1B B1, ADR 0077 decisions 13-16).** The quantities (`cc_measure`) add to a
+  host's mesh volume, for each sleeve, (32-gon area - pi r^2) x its thickness (`cc_view_info.
+  volume_fix_m3`, from the model only; a view file's and an IFC scene's stay 0, so Rust's
+  schedules of every model without a sleeve keep their bytes); `query opening_rows` lists every
+  opening (a sleeve's volume pi r^2 t). A plan draws a cross of two 45-degree diameters in a round
+  hole (24 corners or more, a square box, the circle's area within 3 %) of a slab seen from
+  above when the plan template's `opening_dimensions` (the "Openings" toggle) is on: a Rust plan
+  of a model with such a hole differs there. The IFC writer gives a sleeve's body an
+  `IFCCIRCLEPROFILEDEF(.AREA.,$,$,r)` (IFC2x3: placed); IfcOpenShell validates both. Without a
+  kernel (wasm) a wall's openings across its thickness, boxes and sleeves together, are cut as
+  holes of its face (`scene.c wall_holes`); before, a sleeve in a wall was drawn uncut. Hand-computed:
+  `test/concrete_test.c` (3.408 - pi 0.1^2 0.2 = 3.4017168 m3; run without the kernel too),
+  `test/quantity_test.c`, `test/draw_plan_test.c`.
+
 ## 35. What the core refuses, told before the click; a new plan of a low storey (ticket DEAD1, ADR 0074)
 
 Rust v0.19.0's default view range (view.rs:299 `ViewRange::default_for`) cuts a floor plan

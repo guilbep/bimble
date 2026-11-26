@@ -26,6 +26,7 @@
 #include "file.h"
 #include "ifc_out.h"
 #include "scene.h"
+#include "boolean.h" /* WAVE1B (B1) */
 
 #define N1 "1uAZA0Yfn05f$xRd1k4uPR" /* Niveau 1, elevation 0 */
 #define FONDATIONS "04Aobkc8v6$94cGl_9HNVX"
@@ -247,6 +248,38 @@ int main(void) {
                                                                        w->openings[0].placement.origin[0] == 4000 &&
                                                                        w->openings[0].generator.u.col.width == 800);
     check_true("opening_set: 3.6 - 0.8 * 1.2 * 0.2 = 3.408 m3", near(volume(&s->model, &wid), 3.408, 1e-6));
+    { /* ---- WAVE1B (B1): a sleeve in the wall: cut (with or without the kernel), counted as the exact cylinder ---- */
+        printf("  (boolean kernel: %s)\n", cc_boolean_kernel() ? "yes" : "no: the prism cases");
+        snprintf(body, sizeof body, "{\"host\":\"%s\",\"a\":[2000,-2000],\"shape\":\"round\",\"diameter\":200}", ws);
+        check_true("B1 a sleeve of 200 in the wall", call_ok(s, "verb", "opening_add", body));
+        double ngon = 16.0 * 0.1 * 0.1 * 0.19509032201612825 * 0.2; /* the 32-gon through 200 mm, m3 */
+        double cyl = 3.141592653589793 * 0.1 * 0.1 * 0.2;          /* pi r^2 t = 0.00628319 m3 */
+        check_true("B1 the wall's mesh is cut by the 32-gon: 3.408 - 0.0062429 m3", near(volume(&s->model, &wid), 3.408 - ngon, 1e-6));
+        double fix = cc_sleeve_volume_fix_m3(cc_model_element(&s->model, &wid)); /* what cc_measure adds (quantity_test checks it there) */
+        check_true("B1 the quantities: 3.408 - pi 0.1^2 0.2 = 3.4017168 m3 (the exact cylinder)", near(volume(&s->model, &wid) + fix, 3.408 - cyl, 1e-6)); /* the mesh is f32 */
+        printf("  wall: mesh %.7f m3, quantities %.7f m3 (hand: %.7f)\n", volume(&s->model, &wid), volume(&s->model, &wid) + fix, 3.408 - cyl);
+        r = ask(s, "query", "opening_rows", "", &st);
+        check_true("B1 opening_rows: the sleeve's own row, 0.006283185307179587 m3, and the box's 0.192",
+                   st == CC_OK && has(r, "\"kind\":\"sleeve\"") && has(r, "\"volume_m3\":0.00628318530717958") && has(r, "\"volume_m3\":0.192"));
+        if (!has(r, "0.00628318530717958")) printf("  got %s\n", r);
+        free(r);
+        Buf ifc;
+        buf_init(&ifc);
+        check_true("B1 IFC4: the sleeve's body is an IfcCircleProfileDef of radius 100",
+                   cc_ifc_export(&s->model, "x.ifc", "2026-11-26T10:00:00", CC_IFC4, &ifc) == 0 && has(buf_cstr(&ifc), "IFCCIRCLEPROFILEDEF(.AREA.,$,$,100.0)"));
+        buf_clear(&ifc);
+        check_true("B1 IFC2x3: the circle profile placed (Position required there)",
+                   cc_ifc_export(&s->model, "x.ifc", "2026-11-26T10:00:00", CC_IFC2X3, &ifc) == 0 && has(buf_cstr(&ifc), "IFCCIRCLEPROFILEDEF(.AREA.,$,#"));
+        const char *dump = getenv("WAVE1B_SLEEVE_IFC");
+        if (dump) {
+            FILE *f = fopen(dump, "wb");
+            buf_clear(&ifc);
+            cc_ifc_export(&s->model, "x.ifc", "2026-11-26T10:00:00", CC_IFC4, &ifc);
+            if (f) fwrite(ifc.p, 1, ifc.len, f), fclose(f);
+        }
+        buf_free(&ifc);
+        free(ask(s, "undo", "", "", &st));
+    }
     snprintf(body, sizeof body, "{\"ids\":[\"%s\"],\"d\":[100,0,0]}", ws);
     check_true("the wall moves", call_ok(s, "verb", "move", body));
     w = cc_model_element(&s->model, &wid);

@@ -1629,5 +1629,10 @@ export const openingAt = (ray: number[]) => tryQuery<{ host: string; id: string 
 export type OpeningPatch = { width?: number; height?: number; length?: number; sill?: number; diameter?: number; a?: [number, number] };
 /** Changes an opening by its parameters (verb opening_set), its GlobalId kept. One step. Returns the error, or null. */
 export const openingSet = (host: string, id: string, patch: OpeningPatch) => runVerb("opening_set", { host, id, ...patch });
+/** WAVE1B (B1): every opening and sleeve of the model, a row each (`query opening_rows`): a sleeve's
+ *  volume is the exact cylinder pi r^2 t, a box's width x height x t; another shape's null. */
+export interface OpeningRow { host: string; host_name: string; id: string; kind: "opening" | "sleeve" | "other"; level: string;
+  width?: number; height?: number; length?: number; diameter?: number; volume_m3: number | null }
+export const openingRows = () => tryQuery<OpeningRow[]>("opening_rows", []);
 // ---- end WAVE1B ----
 // ---- end G2 ----

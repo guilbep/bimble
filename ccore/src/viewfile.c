@@ -126,6 +126,7 @@ int cc_viewfile_meta_from_model(cc_viewfile_meta *mt, const cc_model *m, const c
         const cc_material *mat = cc_model_material(m, &me->material);
         if (!sto || !mat) return -1;
         info[k].global_id.p = e->id.c, info[k].global_id.n = 22;
+        info[k].volume_fix_m3 = cc_sleeve_volume_fix_m3(me); /* WAVE1B (B1) */
         info[k].name = me->name;
         info[k].storey = sto->name;
         info[k].material = mat->name;
@@ -180,6 +181,7 @@ int cc_viewfile_meta_from_file(cc_viewfile_meta *mt, const cc_viewfile *v) {
         info[k].name = x->name;
         info[k].storey = x->storey;
         info[k].material = x->material;
+        info[k].volume_fix_m3 = 0.0; /* WAVE1B (B1): a model's sleeves only */
     }
     mt->info = info, mt->ninfo = v->nelements;
     mt->storeys = v->storeys, mt->nstoreys = v->nstoreys;

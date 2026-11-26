@@ -334,6 +334,20 @@ async function tab(S, evalJs, model) {
   const slabEl = await el(slabId);
   check("Sleeve: an opening of a slab, one step", slabEl?.class === "IfcSlab" && slabEl?.openings === 1 && (await undoN()) === u0 + 1, JSON.stringify(slabEl)?.slice(0, 200));
 
+  // ---- WAVE1B (B1): the Quantities page lists the sleeve with the exact cylinder (pi r^2 t) ----
+  {
+    const t0 = await evalJs(`(async () => { const s = await import('/src/shell/send.ts'); const t = performance.now(); s.send({ do: "showPage", page: "quantities" });
+      const raf = () => new Promise((r) => requestAnimationFrame(r));
+      while (performance.now() - t < 5000) { await raf(); if (document.querySelector('[data-bb=quantities-opening][data-kind=sleeve]')) return performance.now() - t; }
+      return null; })()`);
+    if (typeof t0 === "number") times.push(["Quantities: the openings and sleeves table shown", t0]);
+    const rowTxt = await evalJs("[...document.querySelectorAll('[data-bb=quantities-opening][data-kind=sleeve] td')].map((e) => e.textContent.trim())");
+    const want = (Math.PI * 75 * 75 * 220 / 1e9).toFixed(4); // the default 150 mm sleeve through the 220 mm slab
+    check("B1 Quantities: the sleeve's own row, Ø 150, its exact cylinder pi r^2 t = " + want + " m3", t0 !== null && rowTxt[3] === "Ø 150" && rowTxt[4] === want, JSON.stringify(rowTxt));
+    await evalJs(`(async () => { const s = await import('/src/shell/send.ts'); s.send({ do: "showView" }); })()`);
+    await settle();
+  }
+
   // ---- Raft: three corners and Enter ----
   ms = await timedTool("Raft (tool on)", tool(2, 2), "b.placing.value?.active && b.placing.value.kind === 'raft'");
   check("Raft: the place tool is on", ms !== null);

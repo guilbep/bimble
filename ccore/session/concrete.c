@@ -323,3 +323,38 @@ int cc_conc_opening_ghost(const cc_model *m, const cc_cmds *in, cc_cmds *out) {
     }
     return -1;
 }
+
+void cc_conc_opening_rows_json(const cc_model *m, JsonW *w) { /* WAVE1B (B1), concrete.h */
+    jw_arr_begin(w);
+    for (size_t i = 0; i < m->nelements; i++) {
+        const cc_element *e = &m->elements[i];
+        if (!e->nopenings) continue;
+        const cc_storey *st = cc_model_storey(m, &e->storey);
+        double t = e->generator.kind == CC_GEN_WALL ? e->generator.u.wall.thickness
+                   : e->generator.kind == CC_GEN_SLAB ? e->generator.u.slab.thickness
+                                                       : 0.0;
+        for (size_t k = 0; k < e->nopenings; k++) {
+            cc_opening_info in;
+            cc_opening_info_of(e, k, &in);
+            const cc_opening *o = &e->openings[k];
+            jw_obj_begin(w);
+            if (in.kind == 1) jw_key(w, "diameter"), jw_f64(w, in.dia);
+            if (in.kind == 0 && in.wall) jw_key(w, "height"), jw_f64(w, in.h);
+            jw_key(w, "host"), jw_str_n(w, e->id.c, 22);
+            jw_key(w, "host_name"), jw_str_n(w, e->name.n ? e->name.p : "", e->name.n);
+            jw_key(w, "id");
+            if (o->has_id) jw_str_n(w, o->id.c, 22);
+            else jw_str(w, "");
+            jw_key(w, "kind"), jw_str(w, in.kind == 0 ? "opening" : in.kind == 1 ? "sleeve" : "other");
+            if (in.kind == 0 && !in.wall) jw_key(w, "length"), jw_f64(w, in.len);
+            jw_key(w, "level"), jw_str_n(w, st && st->name.n ? st->name.p : "", st ? st->name.n : 0);
+            jw_key(w, "volume_m3");
+            if (in.kind == 1 && t > 0) jw_f64(w, 3.141592653589793 * (in.dia / 2.0) * (in.dia / 2.0) * t / 1e9);
+            else if (in.kind == 0 && t > 0) jw_f64(w, in.w * (in.wall ? in.h : in.len) * t / 1e9);
+            else jw_null(w);
+            if (in.kind == 0) jw_key(w, "width"), jw_f64(w, in.w);
+            jw_obj_end(w);
+        }
+    }
+    jw_arr_end(w);
+}

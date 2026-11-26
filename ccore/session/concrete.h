@@ -44,4 +44,9 @@ int cc_conc_opening_at(const cc_model *m, const double ray[6], double t_max, dou
  * of the new opening's solid (in the host's storey, its placement through the host's) in `out`, so
  * cc_tool_ghost meshes it. 0 ok, -1 none (no set_openings, out of memory). */
 int cc_conc_opening_ghost(const cc_model *m, const cc_cmds *in, cc_cmds *out);
+/* WAVE1B (B1): query opening_rows: every opening of the model, a row each, hosts in model order:
+ * [{"diameter"?,"height"?,"host","host_name","id","kind","length"?,"level","volume_m3"|null,"width"?}];
+ * volume: a sleeve's exact cylinder pi r^2 t (t the host's thickness, r its own radius), a box's
+ * width x height (or length) x t; another shape: null. */
+void cc_conc_opening_rows_json(const cc_model *m, JsonW *w);
 #endif
