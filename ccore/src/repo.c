@@ -575,8 +575,9 @@ int cc_repo_read_tree(const cc_repo *r, const char *tree, cc_model *m, Buf *err)
     const JrVal *t = get_dom(r, tree, &a, err);
     if (!t) goto done;
     static const char *const F[] = {"project_id", "project_name", "storeys", "materials", "elements", "views",
-                                    "sheets",     "project",      "schedules", "georef",   "meshes"};
-    if (check_fields(t, F, 11, tree, "Tree", err)) goto done;
+                                    "sheets",     "project",      "schedules", "georef",   "meshes",
+                                    "relations",  "grids" /* H2a: the C model's own sections (DEVIATIONS 26) */};
+    if (check_fields(t, F, 13, tree, "Tree", err)) goto done;
     static const char *const REQ[] = {"project_id", "project_name", "storeys", "materials", "elements"};
     for (int i = 0; i < 5; i++)
         if (!jr_get(t, REQ[i])) {
@@ -616,6 +617,11 @@ int cc_repo_read_tree(const cc_repo *r, const char *tree, cc_model *m, Buf *err)
         buf_putc(&text, ':');
         write_raw(v, &text);
     }
+    /* ---- H2a: relations and grids, objects as the others (DEVIATIONS 26) ---- */
+    if (put_map(r, &mc, tree, jr_get(t, "relations"), "relations", 0, &text, err) ||
+        put_map(r, &mc, tree, jr_get(t, "grids"), "grids", 0, &text, err))
+        goto done;
+    /* ---- end H2a ---- */
     buf_puts(&text, "}}");
     if (text.oom) {
         err_set(err, "io: out of memory");

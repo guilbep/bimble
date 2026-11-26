@@ -53,6 +53,7 @@ VIEW_DENY+=(src/draw_cut.c src/paper.c src/draw_style.c src/draw_plan.c src/draw
 VIEW_DENY+=(src/draw_sheet.c) # sheets on paper (D5)
 VIEW_DENY+=(src/pdf_out.c) # the PDF writer (D6): not in the viewer
 VIEW_DENY+=(src/repo.c src/diff.c) # the history store (H1): no history folder in the browser (session/versions.c)
+VIEW_DENY+=(src/repo_write.c) # H2a: writing the history store (no folder in the browser)
 VIEW_DENY+=(src/pdf_in.c src/ref_read.c) # L1: reading a PDF is link_pdf, an edit (view_only.c): the viewer shows the stored references only
 VIEW_DENY+=(src/dxf_in.c) # L2: reading a DXF is link_dxf, an edit, as link_pdf
 VIEW_DENY+=(src/verbs_views.c) # SEC1: view_add, view_remove, view_edit are verbs (the table is not in the viewer)
