@@ -1234,6 +1234,16 @@ C core's references are hand-computed in `test/concrete_test.c` (volumes, positi
   `test/repo_merge_test.c` (six checks that fail on the old code; the host-moved case passed
   before too).
 
+- **Import of openings, strips and rafts (ticket WAVE1B B3, ADR 0077 decision 18).** Rust's import
+  (import.rs) reads every opening as a mesh in its host's frame; the C import reads a box or a
+  cylinder extrusion (rectangle or circle profile at its origin, along +z) as a `rect_column` or a
+  32-gon opening instead (the same solid; its GlobalId kept). `golden/ifc/import/opening.json` (Rust's
+  window box) changes no byte: its rectangle profile is placed off its origin (600, 100), which is
+  not this case, so it is read as before (the `ifc_in` and `ifc_read` suites pass unchanged). An `IfcFooting .STRIP_FOOTING.` or an `IfcSlab .BASESLAB.` without a
+  `Bimble/PredefinedType` property gets it from the attribute; a strip read as a pad becomes the
+  wall generator. Round trip: `test/concrete_test.c` (18 elements, 3 openings, the same), the lab
+  (`test/lab_concrete.mjs`: the export imported back).
+
 ## 35. What the core refuses, told before the click; a new plan of a low storey (ticket DEAD1, ADR 0074)
 
 Rust v0.19.0's default view range (view.rs:299 `ViewRange::default_for`) cuts a floor plan

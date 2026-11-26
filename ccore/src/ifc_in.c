@@ -543,6 +543,77 @@ static int mapped_copy(R *r, Arena *ar, const cc_step_entity *e, int has_opening
 }
 
 
+/* ---- WAVE1B (B3, ADR 0077 decision 18): an opening whose Body is one extrusion along its own +z of
+ * a rectangle or a circle (profile at its origin) comes back parametric, in the host's frame `fr`
+ * (selev: the host storey's elevation, mm): a box (rect_column) or a sleeve (the CC_SLEEVE_SIDES-gon
+ * opening_add makes), so opening_set edits it again. 1 done (*o filled), 0 not this case (the mesh,
+ * as before), -1 out of memory. */
+static int parametric_opening(R *r, Arena *ar, const cc_step_entity *op, const Aff *fr, double selev, double scale, cc_opening *o) {
+    const cc_step_entity *solid = extruded_solid(r, op);
+    if (!solid) return 0;
+    { /* the Body's one item is the solid itself (no mapping in between) */
+        const cc_step_entity *shape = get(r, arg(op, 6));
+        const cc_sv *reps, *its;
+        size_t nr, ni, count = 0;
+        const cc_step_entity *first = NULL;
+        if (!shape || !cc_sv_as_list(arg(shape, 2), &reps, &nr)) return 0;
+        for (size_t i = 0; i < nr; i++) {
+            const cc_step_entity *rep = get(r, &reps[i]);
+            if (!rep || !is_body(rep) || !cc_sv_as_list(arg(rep, 3), &its, &ni)) continue;
+            if (ni && !first) first = get(r, &its[0]);
+            count += ni;
+        }
+        if (count != 1 || first != solid) return 0;
+    }
+    const cc_step_entity *pd = get(r, arg(solid, 0));
+    int rect = is(pd, "IFCRECTANGLEPROFILEDEF"), circ = is(pd, "IFCCIRCLEPROFILEDEF");
+    if (!rect && !circ) return 0;
+    const cc_sv *ppos = arg(pd, 2);
+    if (ppos && ppos->kind == CC_SV_REF) { /* a profile placed anywhere but its origin: not this case */
+        Aff pp = axis_placement(r, ppos);
+        if (pp.t[0] != 0.0 || pp.t[1] != 0.0 || pp.x[0] != 1.0 || pp.x[1] != 0.0) return 0;
+    }
+    double a, b = 0.0, depth, dir[3];
+    if (!cc_sv_as_f64(arg(pd, 3), &a) || (rect && !cc_sv_as_f64(arg(pd, 4), &b))) return 0;
+    if (!direction(r, arg(solid, 2), dir) || !cc_sv_as_f64(arg(solid, 3), &depth)) return 0;
+    if (!(dir[0] == 0.0 && dir[1] == 0.0 && dir[2] > 0.0) || !finite(a) || !finite(b) || !finite(depth) || !(a > 0) ||
+        (rect && !(b > 0)) || !(depth > 0))
+        return 0;
+    uint64_t plid;
+    Aff opa = IDENT;
+    if (cc_sv_as_ref(arg(op, 5), &plid)) opa = object_placement(r, plid, 0);
+    Aff sp = axis_placement(r, arg(solid, 1));
+    Aff full = aff_then(&opa, &sp);
+    double w[3] = {full.t[0] * scale, full.t[1] * scale, full.t[2] * scale - selev}, zx[3], xx[3];
+    if (!unit3(full.z, zx) || !unit3(full.x, xx)) return 0;
+    memset(o, 0, sizeof *o);
+    aff_local(fr, w, o->placement.origin);
+    for (int k = 0; k < 3; k++) {
+        o->placement.z_axis[k] = dot(zx, k == 0 ? fr->x : k == 1 ? fr->y : fr->z) + 0.0;
+        o->placement.x_axis[k] = dot(xx, k == 0 ? fr->x : k == 1 ? fr->y : fr->z) + 0.0;
+    }
+    for (int k = 0; k < 3; k++) { /* exact where it is (an axis-aligned frame stays exact) */
+        double *v[2] = {o->placement.z_axis, o->placement.x_axis};
+        for (int j = 0; j < 2; j++)
+            if (v[j][k] < 1e-12 && v[j][k] > -1e-12) v[j][k] = 0.0;
+    }
+    if (rect) {
+        o->generator.kind = CC_GEN_RECT_COLUMN;
+        o->generator.u.col.width = a * scale, o->generator.u.col.depth = b * scale, o->generator.u.col.height = depth * scale;
+        return 1;
+    }
+    double rr = a * scale, (*pts)[2] = arena_alloc(ar, CC_SLEEVE_SIDES * sizeof *pts, 8);
+    if (!pts) return -1;
+    for (int i = 0; i < CC_SLEEVE_SIDES; i++) { /* as opening_add draws it (verbs_concrete.c) */
+        double t = 2.0 * 3.141592653589793 * (double)i / (double)CC_SLEEVE_SIDES;
+        pts[i][0] = rr * cc_cos(t) + 0.0, pts[i][1] = rr * cc_sin(t) + 0.0;
+    }
+    o->generator.kind = CC_GEN_EXTRUDED_POLYGON;
+    o->generator.u.poly.outline.pts = pts, o->generator.u.poly.outline.n = CC_SLEEVE_SIDES;
+    o->generator.u.poly.height = depth * scale;
+    return 1;
+}
+
 static int class_of(const char *n, cc_ifc_class *c) {
     static const struct { const char *n; cc_ifc_class c; } S[] = {
         {"IFCCOLUMN", CC_IFC_COLUMN}, {"IFCBEAM", CC_IFC_BEAM}, {"IFCSLAB", CC_IFC_SLAB},
@@ -1126,6 +1197,17 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
             for (size_t k = 0; k < nopen[i]; k++) {
                 const cc_step_entity *op = cc_step_get(&f, open_ids[open_at[i] + k]);
                 if (!op) continue;
+                { /* WAVE1B (B3): a box or a cylinder comes back parametric */
+                    cc_opening *po = &ov[no];
+                    int pr = parametric_opening(&r, &m->arena, op, &fr, selev, scale, po);
+                    if (pr < 0) { buf_free(&ent); goto oom_loop; }
+                    if (pr) {
+                        cc_gid og;
+                        if (gid_from_sv(arg(op, 0), &og) && gset_insert(&opening_seen, &og)) po->has_id = 1, po->id = og;
+                        no++;
+                        continue;
+                    }
+                }
                 Tris mb = {0};
                 Emit em = {&mb, scale, &budget};
                 product_body(&r, op, &em);
@@ -1203,6 +1285,49 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
                     }
                 pe->el.nproperties = cnt;
                 rep->properties += cnt;
+            }
+        }
+        /* ---- WAVE1B (B3, ADR 0077 decision 18): the entity's PredefinedType STRIP_FOOTING (IfcFooting)
+         * or BASESLAB (IfcSlab) kept as the property Bimble/PredefinedType when the file has none;
+         * a strip footing read as a pad (the rectangle extruded) becomes the wall generator along
+         * its long side, as footing_add makes it. ---- */
+        if (cls == CC_IFC_FOOTING || cls == CC_IFC_SLAB) {
+            const char *pt;
+            size_t ptn;
+            const char *want = cls == CC_IFC_FOOTING ? "STRIP_FOOTING" : "BASESLAB";
+            size_t wn = strlen(want);
+            const cc_sv *pa = arg(e, 8);
+            if (pa && cc_sv_as_enum(pa, &pt) && (ptn = pa->u.s.n) == wn && !memcmp(pt, want, wn) && !cc_element_predefined(&pe->el)) {
+                size_t np = pe->el.nproperties, kn = strlen(CC_PREDEFINED_KEY), at = 0;
+                cc_kv *nv = arena_alloc(&m->arena, (np + 1) * sizeof *nv, 8);
+                if (!nv) { buf_free(&ent); free(nopen); goto oom; }
+                while (at < np) { /* sorted by key bytes */
+                    cc_str k = pe->el.properties[at].key;
+                    size_t mn = k.n < kn ? k.n : kn;
+                    int c = memcmp(k.p, CC_PREDEFINED_KEY, mn);
+                    if (c > 0 || (c == 0 && k.n > kn)) break;
+                    at++;
+                }
+                if (at) memcpy(nv, pe->el.properties, at * sizeof *nv);
+                nv[at].key = astr(&m->arena, CC_PREDEFINED_KEY, kn), nv[at].value = astr(&m->arena, want, wn);
+                if (np > at) memcpy(nv + at + 1, pe->el.properties + at, (np - at) * sizeof *nv);
+                pe->el.properties = nv, pe->el.nproperties = np + 1;
+            }
+            const cc_str *pv = cc_element_predefined(&pe->el);
+            cc_generator *g = &pe->el.generator;
+            if (cls == CC_IFC_FOOTING && pv && pv->n == 13 && !memcmp(pv->p, "STRIP_FOOTING", 13) && g->kind == CC_GEN_PAD_FOOTING) {
+                double w = g->u.col.width, d = g->u.col.depth, h = g->u.col.height;
+                cc_placement *pl = &pe->el.placement;
+                double y[3];
+                cross(pl->z_axis, pl->x_axis, y);
+                double len = w, th = d, *ax = pl->x_axis;
+                if (d > w) { /* the long side along y: x turns to it */
+                    len = d, th = w;
+                    memcpy(pl->x_axis, y, sizeof y);
+                }
+                for (int k = 0; k < 3; k++) pl->origin[k] = pl->origin[k] - ax[k] * len / 2.0 + 0.0;
+                g->kind = CC_GEN_WALL;
+                g->u.wall.length = len, g->u.wall.thickness = th, g->u.wall.height = h;
             }
         }
         /* Material: name -> derived id, category from the grade (first one wins). */

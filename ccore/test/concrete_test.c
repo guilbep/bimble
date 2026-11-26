@@ -27,6 +27,7 @@
 #include "ifc_out.h"
 #include "scene.h"
 #include "boolean.h" /* WAVE1B (B1) */
+#include "ifc_in.h"  /* WAVE1B (B3) */
 
 #define N1 "1uAZA0Yfn05f$xRd1k4uPR" /* Niveau 1, elevation 0 */
 #define FONDATIONS "04Aobkc8v6$94cGl_9HNVX"
@@ -403,6 +404,65 @@ int main(void) {
     check_true("hostile: set_placing concrete out of range refused", has(r, "footing_width"));
     free(r);
 
+    { /* ---- WAVE1B (B3): export -> import -> the same model up to what IFC does not carry ---- */
+        Buf ifc;
+        buf_init(&ifc);
+        int ex = cc_ifc_export(&s->model, "x.ifc", "2026-11-26T10:00:00", CC_IFC4, &ifc);
+        const char *dump = getenv("WAVE1B_RT_IFC");
+        if (dump) {
+            FILE *f = fopen(dump, "wb");
+            if (f) fwrite(ifc.p, 1, ifc.len, f), fclose(f);
+        }
+        cc_model im;
+        cc_ifc_report rep;
+        int irc = ex ? -1 : cc_ifc_import(&im, &rep, ifc.p, ifc.len, &e2);
+        check_true("B3 export and import", irc == 0);
+        size_t checked = 0, bad = 0, nop = 0;
+        char why[256] = "";
+#define NEAR6(a, b) ((a) - (b) < 1e-6 && (b) - (a) < 1e-6)
+        for (size_t i = 0; irc == 0 && i < s->model.nelements; i++) {
+            const cc_element *a = &s->model.elements[i];
+            int mine = a->cls == CC_IFC_FOOTING || a->nopenings || cc_element_predefined(a);
+            if (!mine) continue;
+            const cc_element *b = cc_model_element(&im, &a->id);
+            checked++;
+            const cc_str *pa = cc_element_predefined(a), *pb = b ? cc_element_predefined(b) : NULL;
+            int ok = b && b->cls == a->cls && b->generator.kind == a->generator.kind && b->nopenings == a->nopenings &&
+                     (!pa || (pb && pb->n == pa->n && !memcmp(pb->p, pa->p, pa->n)));
+            for (int k = 0; ok && k < 3; k++)
+                ok = NEAR6(a->placement.origin[k], b->placement.origin[k]) && NEAR6(a->placement.x_axis[k], b->placement.x_axis[k]) &&
+                     NEAR6(a->placement.z_axis[k], b->placement.z_axis[k]);
+            if (ok && a->generator.kind == CC_GEN_WALL)
+                ok = NEAR6(a->generator.u.wall.length, b->generator.u.wall.length) && NEAR6(a->generator.u.wall.thickness, b->generator.u.wall.thickness) &&
+                     NEAR6(a->generator.u.wall.height, b->generator.u.wall.height);
+            if (ok && a->generator.kind == CC_GEN_PAD_FOOTING)
+                ok = NEAR6(a->generator.u.col.width, b->generator.u.col.width) && NEAR6(a->generator.u.col.height, b->generator.u.col.height);
+            for (size_t k = 0; ok && k < a->nopenings; k++) {
+                const cc_opening *x = &a->openings[k], *y = &b->openings[k];
+                double rx = 0, ry = 0;
+                ok = x->has_id == y->has_id && !cc_gid_cmp(&x->id, &y->id) && x->generator.kind == y->generator.kind &&
+                     cc_opening_is_sleeve(x, &rx) == cc_opening_is_sleeve(y, &ry) && NEAR6(rx, ry);
+                for (int q = 0; ok && q < 3; q++)
+                    ok = NEAR6(x->placement.origin[q], y->placement.origin[q]) && NEAR6(x->placement.z_axis[q], y->placement.z_axis[q]) &&
+                         NEAR6(x->placement.x_axis[q], y->placement.x_axis[q]);
+                if (ok && x->generator.kind == CC_GEN_RECT_COLUMN)
+                    ok = NEAR6(x->generator.u.col.width, y->generator.u.col.width) && NEAR6(x->generator.u.col.depth, y->generator.u.col.depth) &&
+                         NEAR6(x->generator.u.col.height, y->generator.u.col.height);
+                nop++;
+            }
+            if (!ok) {
+                bad++;
+                if (!why[0])
+                    snprintf(why, sizeof why, "%.*s: class %d/%d gen %d/%d openings %zu/%zu", (int)a->name.n, a->name.p, a->cls, b ? (int)b->cls : -1,
+                             a->generator.kind, b ? (int)b->generator.kind : -1, a->nopenings, b ? b->nopenings : 0);
+            }
+        }
+#undef NEAR6
+        printf("  B3 round trip: %zu elements (footings, hosts, rafts), %zu openings compared, %zu differ%s%s\n", checked, nop, bad, bad ? ": " : "", why);
+        check_true("B3 round trip: strip footings, BASESLAB, openings and sleeves come back parametric, the same", irc == 0 && checked >= 5 && nop >= 3 && bad == 0);
+        if (irc == 0) cc_model_free(&im), cc_ifc_report_free(&rep);
+        buf_free(&ifc);
+    }
     /* A model without the new data keeps its bytes (frame.json reopened and saved). */
     cc_model m3;
     Buf b3;

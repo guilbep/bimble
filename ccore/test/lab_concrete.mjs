@@ -392,6 +392,24 @@ async function tab(S, evalJs, model) {
     ex === null && /IFCFOOTING\(.*\.STRIP_FOOTING\.\)/.test(text) && /IFCSLAB\(.*\.BASESLAB\.\)/.test(text) && /IFCOPENINGELEMENT\(/.test(text) &&
     (text.match(/IFCRELVOIDSELEMENT\(/g) ?? []).length === 2 && /'SLEEVE'/.test(text), String(ex));
   if (process.env.CONC1_IFC) copyFileSync(ifc, process.env.CONC1_IFC);
+  // ---- WAVE1B (B3): the export imported back: the strip footing a strip, the raft BASESLAB, the
+  // wall's opening and the slab's sleeve parametric again (editable in Properties). Before B3 the
+  // openings came back as meshes ("other") and the strip as a pad: these checks fail there. ----
+  {
+    const t0 = Date.now();
+    const imp = await B(`try { b.actionBody('import_ifc', { path: ${JSON.stringify(ifc)} }); return null; } catch (e) { return String(e); }`);
+    await settle();
+    const ms3 = Date.now() - t0;
+    times.push(["Import IFC (the export back, 79 elements)", ms3]);
+    const els3 = await elements();
+    const w3 = els3.find((e) => e.id === wallId), s3 = els3.find((e) => e.id === slabId), f3 = els3.find((e) => e.id === strip), r3 = els3.find((e) => e.id === raft);
+    const ow = w3 ? await B(`return b.openingsOf(${JSON.stringify(wallId)});`) : [], os = s3 ? await B(`return b.openingsOf(${JSON.stringify(slabId)});`) : [];
+    const fe = f3 ? await el(strip) : null, re = r3 ? await el(raft) : null;
+    check("B3 import: the wall's opening a box again, the slab's sleeve a sleeve, the strip a strip, the raft BASESLAB",
+      imp === null && ow.length === 1 && ow[0].kind === "opening" && os.some((o) => o.kind === "sleeve") && fe?.generator === "wall" &&
+      fe?.properties?.["Bimble/PredefinedType"] === "STRIP_FOOTING" && re?.properties?.["Bimble/PredefinedType"] === "BASESLAB",
+      JSON.stringify({ imp, ow: ow.map((o) => o.kind), os: os.map((o) => o.kind), fe: fe?.generator, re: re?.properties }));
+  }
 
   // ---- the 3D view with the new elements ----
   if (SHOTS) {

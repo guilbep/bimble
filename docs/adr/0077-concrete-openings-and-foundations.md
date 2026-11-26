@@ -106,6 +106,18 @@ Each choice, then the alternative rejected.
     GlobalId is taken whole, as Rust does. Rejected: openings as objects of their own in the
     commit tree (a file and repo format change for the same result).
 
+18. **Import** (WAVE1B B3): an `IfcOpeningElement` voiding a host comes back as an opening of the
+    host in parameters when its Body is one `IfcExtrudedAreaSolid` along its own +z of an
+    `IfcRectangleProfileDef` (a box: `rect_column`) or an `IfcCircleProfileDef` (a sleeve: the
+    32-gon `opening_add` draws), its profile at its origin, whatever host it is in; anything else
+    stays today's mesh in the host's frame (cut, listed as "other", not editable by its
+    parameters). The entity's PredefinedType `STRIP_FOOTING` (IfcFooting) or `BASESLAB` (IfcSlab)
+    becomes the property `Bimble/PredefinedType` when the file has no `Bimble` one, and a strip
+    footing read as a pad (its rectangle extruded) becomes the wall generator along its long side.
+    Export -> import gives the same footings, rafts, hosts and openings (placements and sizes within
+    1e-6 mm, GlobalIds kept). Rejected: checking that the box goes through the host first (the cut
+    is the same solid either way; a recess keeps its depth).
+
 ## Response times (ADR 0074)
 
 Measured by `ccore/test/lab_concrete.mjs` on the native host (tcc build), headless Chromium with
