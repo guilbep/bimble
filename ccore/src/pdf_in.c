@@ -273,15 +273,51 @@ static int p_hexstr(P *p, PObj *o) {
 
 static int p_object(P *p, int depth, PObj *o);
 
-/* Sets key k to v (lopdf Dictionary::set: a key again replaces its value, in its place). */
-static void dict_set(PKey *keys, size_t *n, const unsigned char *k, size_t kn, PObj *v) {
-    for (size_t i = 0; i < *n; i++)
-        if (keys[i].kn == kn && !memcmp(keys[i].k, k, kn)) {
-            keys[i].v = v;
-            return;
+/* lopdf Dictionary::set for every pair, in the document's order: a key again replaces its value,
+ * in the first one's place. A linear search per key was quadratic (100,000 keys: 12.5 s); past
+ * DICT_SMALL keys the pairs are sorted once by (key, position) instead. 0, -1 out of memory. */
+#define DICT_SMALL 32
+typedef struct {
+    const unsigned char *k;
+    size_t kn, at;
+} KeyAt;
+static int key_at_cmp(const void *a, const void *b) {
+    const KeyAt *x = a, *y = b;
+    size_t m = x->kn < y->kn ? x->kn : y->kn;
+    int c = m ? memcmp(x->k, y->k, m) : 0;
+    if (c) return c;
+    if (x->kn != y->kn) return x->kn < y->kn ? -1 : 1;
+    return x->at < y->at ? -1 : x->at > y->at;
+}
+static int dict_dedup(PKey *keys, size_t *n) {
+    size_t out = 0;
+    if (*n <= DICT_SMALL) {
+        for (size_t i = 0; i < *n; i++) {
+            size_t j = 0;
+            while (j < out && !(keys[j].kn == keys[i].kn && !memcmp(keys[j].k, keys[i].k, keys[i].kn))) j++;
+            if (j < out) keys[j].v = keys[i].v;
+            else keys[out++] = keys[i];
         }
-    keys[*n].k = k, keys[*n].kn = kn, keys[*n].v = v;
-    ++*n;
+        *n = out;
+        return 0;
+    }
+    KeyAt *s = malloc(*n * sizeof *s);
+    unsigned char *drop = calloc(*n, 1);
+    if (!s || !drop) return free(s), free(drop), -1;
+    for (size_t i = 0; i < *n; i++) s[i].k = keys[i].k, s[i].kn = keys[i].kn, s[i].at = i;
+    qsort(s, *n, sizeof *s, key_at_cmp);
+    for (size_t i = 0; i < *n;) {
+        size_t e = i + 1;
+        while (e < *n && s[e].kn == s[i].kn && !memcmp(s[e].k, s[i].k, s[i].kn)) e++;
+        keys[s[i].at].v = keys[s[e - 1].at].v; /* the first place, the last value */
+        for (size_t k = i + 1; k < e; k++) drop[s[k].at] = 1;
+        i = e;
+    }
+    for (size_t i = 0; i < *n; i++)
+        if (!drop[i]) keys[out++] = keys[i];
+    *n = out;
+    free(s), free(drop);
+    return 0;
 }
 
 /* Growable arrays of the parser, in the arena (doubling; the old copy is left behind). */
@@ -315,9 +351,11 @@ static int p_dict(P *p, int depth, PObj *o) {
             break;
         }
         if (grow(p, (void **)&keys, &cap, n, sizeof *keys)) return p->pos = s, 0;
-        dict_set(keys, &n, k.s, k.n, v);
+        keys[n].k = k.s, keys[n].kn = k.n, keys[n].v = v;
+        n++;
     }
     if (!starts(p, ">>")) return p->pos = s, 0;
+    if (dict_dedup(keys, &n)) return *p->oom = 1, p->pos = s, 0;
     p->pos += 2;
     memset(o, 0, sizeof *o);
     o->t = O_DICT, o->keys = keys, o->n = n;

@@ -13,7 +13,9 @@
  *   query view_references (segments in view mm, the count), undo, redo, a 3D view refused, a bad
  *   file refused with nothing changed, the saved file keeps the reference and an unlinked model
  *   keeps its bytes. */
+#define _POSIX_C_SOURCE 200809L /* clock_gettime under -std=c11 */
 #include <dirent.h>
+#include <time.h>
 #include <stdint.h>
 #include <string.h>
 #include "../session/calls.h"
@@ -246,6 +248,52 @@ static void pdf_chain(size_t n, Buf *pdf) {
     free(off);
 }
 
+/* FIXLIB: a page dictionary of `extra` keys /K0../Kn plus /Contents twice: first a missing object,
+ * last the line (lopdf's set: the last value, in the first one's place). */
+static void pdf_big_dict(size_t extra, Buf *pdf) {
+    size_t off[6];
+    char t[256];
+    buf_clear(pdf);
+    buf_puts(pdf, "%PDF-1.4\n");
+    off[1] = pdf->len, buf_puts(pdf, "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    off[2] = pdf->len, buf_puts(pdf, "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+    off[3] = pdf->len, buf_puts(pdf, "3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 99 0 R /MediaBox [0 0 595 842]");
+    for (size_t k = 0; k < extra; k++) snprintf(t, sizeof t, " /K%zu %zu", k, k), buf_puts(pdf, t);
+    buf_puts(pdf, " /Contents 4 0 R >>\nendobj\n");
+    off[4] = pdf->len, buf_puts(pdf, "4 0 obj\n<< /Length 15 >>\nstream\n0 0 m 72 0 l S\nendstream\nendobj\n");
+    size_t x = pdf->len;
+    buf_puts(pdf, "xref\n0 5\n0000000000 65535 f \n");
+    for (int k = 1; k <= 4; k++) snprintf(t, sizeof t, "%010zu 00000 n \n", off[k]), buf_puts(pdf, t);
+    snprintf(t, sizeof t, "trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n%zu\n%%%%EOF\n", x);
+    buf_puts(pdf, t);
+}
+
+static double now_s(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+static void big_dicts(void) {
+    Buf pdf, out;
+    buf_init(&pdf), buf_init(&out);
+    static const size_t E[] = {3, 100000};
+    for (int i = 0; i < 2; i++) {
+        pdf_big_dict(E[i], &pdf);
+        double t0 = now_s();
+        read_text(&out, "dict.pdf", pdf.p, pdf.len, 100.0);
+        double dt = now_s() - t0;
+        printf("  a page dictionary of %zu keys: %.3f s\n", E[i] + 5, dt);
+        char what[128];
+        snprintf(what, sizeof what, "%zu keys, /Contents twice: the last one's line", E[i] + 5);
+        check_true(what, strstr(buf_cstr(&out), "polylines 1 points 2\n[[0.0, 0.0], [2539.9999999999995, 0.0]]\n") != NULL);
+        /* the linear search took 12.5 s for 100,000 keys (clang -O1); the sort, milliseconds */
+        if (E[i] > 1000) check_true("100,005 keys read in under 3 s", dt < 3.0);
+        buf_clear(&out);
+    }
+    buf_free(&pdf), buf_free(&out);
+}
+
 static void deref_limit(void) {
     Buf pdf, out;
     buf_init(&pdf), buf_init(&out);
@@ -351,6 +399,7 @@ static void session(void) {
 
 int main(void) {
     deref_limit();
+    big_dicts();
     fflush(stdout); /* first: without the limit cycle.pdf (goldens, damaged) hangs */
     int n = goldens();
     printf("  ref: %d goldens byte for byte\n", n);
