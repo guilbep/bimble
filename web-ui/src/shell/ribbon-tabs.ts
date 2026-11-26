@@ -62,6 +62,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
       { key: "ribbon.settingOut.g3.t1", tag: "a", icon: "<path d=\"M3 7h3M9 7h3M15 7h6\"/><path d=\"M3 17h3M9 17h3M15 17h6\"/><path d=\"m18 4 2 3-2 0\"/>", action: null, page: "levels-grids" },
       { key: "ribbon.settingOut.g3.t2", tag: "a", icon: "<path d=\"M8 3v18M16 3v18M3 8h18M3 16h18\"/>", action: null, page: "levels-grids" },
       { key: "ribbon.settingOut.g3.t3", tag: "button", icon: "<path d=\"M4 8 12 4l8 4-8 4z\"/><path d=\"M4 8v8l8 4 8-4V8\"/>", action: "reference_planes" },
+      { key: "ribbon.settingOut.g3.t4", tag: "button", icon: "<path d=\"M8 3v18\"/><circle cx=\"8\" cy=\"3.5\" r=\"2\"/><path d=\"m14 10 6 6M20 10l-6 6\"/>", action: "place_grid_axis" }, // WAVE1B (A2)
     ] },
     { key: "ribbon.settingOut.g4", tools: [
       { key: "ribbon.settingOut.g4.t1", tag: "button", icon: "<path d=\"m4 16 12-12 4 4L8 20z\"/><path d=\"m8 12 2 2M11 9l2 2M14 6l2 2\"/>", action: "measure" },

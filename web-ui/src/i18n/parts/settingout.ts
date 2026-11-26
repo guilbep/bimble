@@ -41,6 +41,12 @@ export const fr = {
   "settingout.rp.add": "Ajouter le plan",
   "settingout.rp.pick": "Par trois points : bouton du ruban Plans de référence, puis trois clics dans la vue (Échap reprend le dernier point).",
   "settingout.rp.picking": "{n} point(s) sur 3 : cliquez dans la vue",
+  // ---- WAVE1B (A2): the grid axis tool's left panel ----
+  "placeslab.title.grid_axis": "Placer : axe de trame",
+  "placing.kind.grid_axis": "axe de trame",
+  "placing.grid_axis.0": "Clic : début de l'axe · Échap : annuler",
+  "placing.grid_axis.1": "Clic : fin de l'axe · Maj : parallèle à x ou y · Échap : annuler",
+  "placeslab.howNote.grid_axis": "Deux clics dans un plan : le début et la fin de l'axe (accroché aux axes et à leurs croisements ; Maj : parallèle à x ou y). Son nom suit ceux de sa direction (1, 2, 3… ou A, B, C…). Échap annule.",
 };
 export const en: Record<keyof typeof fr, string> = {
   "settingout.title": "Project base point",
@@ -84,4 +90,10 @@ export const en: Record<keyof typeof fr, string> = {
   "settingout.rp.add": "Add the plane",
   "settingout.rp.pick": "By three points: the ribbon's Reference planes button, then three clicks in the view (Esc takes the last point back).",
   "settingout.rp.picking": "{n} of 3 points: click in the view",
+  // ---- WAVE1B (A2): the grid axis tool's left panel ----
+  "placeslab.title.grid_axis": "Place: grid axis",
+  "placing.kind.grid_axis": "grid axis",
+  "placing.grid_axis.0": "Click: the axis' start · Esc: cancel",
+  "placing.grid_axis.1": "Click: the axis' end · Shift: along x or y · Esc: cancel",
+  "placeslab.howNote.grid_axis": "Two clicks in a plan: the axis' start and end (snapped to the axes and their crossings; Shift: along x or y). Its name follows those of its direction (1, 2, 3… or A, B, C…). Esc cancels.",
 };

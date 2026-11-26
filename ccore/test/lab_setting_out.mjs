@@ -150,7 +150,7 @@ async function tab(S, evalJs) {
 
   // ---- the controls, counted (none may be dead: an effect, or "not yet") ----
   const ribbon = await evalJs("[...document.querySelectorAll('[data-bb=ribbon] .tool, [data-bb=ribbon] .rbox')].map((e) => e.getAttribute('data-bb'))");
-  check("the tab has 7 tools and 1 box", ribbon.length === 8, JSON.stringify(ribbon));
+  check("the tab has 8 tools and 1 box (WAVE1B: Grid axis)", ribbon.length === 9, JSON.stringify(ribbon));
   const notYet = await evalJs("[...document.querySelectorAll('[data-bb=ribbon] [data-not-yet]')].map((e) => e.getAttribute('data-bb'))");
   check("nothing is 'not yet' in the ribbon (WAVE1B: Reference planes served)", notYet.length === 0, JSON.stringify(notYet));
   if (SHOTS) {
@@ -240,12 +240,12 @@ async function tab(S, evalJs) {
   ms = await timed("reference planes tool on", tool(3, 3), CLICK, "b.refPlanes.value?.pick.on === true");
   check("Reference planes (ribbon): pressed, the pick tool on", ms !== null && (await attr(tool(3, 3), "aria-pressed")) === "true");
   const screen = async (x, y, z) => JSON.parse(await evalJs(`JSON.stringify(window.__bbGl.toScreen(${x}, ${y}, ${z}))`));
-  const canvasClick = async (name, [x, y, z], cond) => {
+  const canvasClick = async (name, [x, y, z], cond, modifiers = 1) => {
     const [sx, sy] = await screen(x, y, z);
     await evalJs(`(() => { window.__rpT = null; document.addEventListener('pointerdown', (e) => { window.__rpT = e.timeStamp; }, { capture: true, once: true }); window.__rpF = window.__bbGl.frames; })()`);
-    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: sx, y: sy, button: "none", buttons: 0, modifiers: 1 });
-    await S("Input.dispatchMouseEvent", { type: "mousePressed", x: sx, y: sy, button: "left", buttons: 1, clickCount: 1, modifiers: 1 });
-    await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: sx, y: sy, button: "left", buttons: 0, clickCount: 1, modifiers: 1 });
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: sx, y: sy, button: "none", buttons: 0, modifiers });
+    await S("Input.dispatchMouseEvent", { type: "mousePressed", x: sx, y: sy, button: "left", buttons: 1, clickCount: 1, modifiers });
+    await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: sx, y: sy, button: "left", buttons: 0, clickCount: 1, modifiers });
     const t = await evalJs(`(async () => {
       const b = await import('/src/bimble.ts'); const g = () => window.__bbGl;
       const raf = () => new Promise((r) => requestAnimationFrame(r)); const t0 = performance.now();
@@ -322,6 +322,33 @@ async function tab(S, evalJs) {
   await B("return b.undo();");
   await waitFor("undo", 5000, async () => !(await B("return b.actions.value.find((a) => a.name === 'view_true_north')?.pressed;"))).catch(() => {});
   check("undo: the plan in project north again", !(await B("return b.actions.value.find((a) => a.name === 'view_true_north')?.pressed;")));
+
+  // ---- WAVE1B (A2): the two-click grid axis tool in a plan (Shift: along x or y; Esc cancels) ----
+  // Before A2 the ribbon had no such tool (the tab's count and every check below fail there).
+  check("Grid axis: off while the model has no grid", (await attr(tool(3, 4), "aria-disabled")) === "true");
+  check("a grid 1 / A (verb grid_add)", (await B(`return b.runVerb('grid_add', { name: 'G', axes: [{ tag: '1', start: [0, -1000], end: [0, 11000] }, { tag: 'A', start: [-1000, 0], end: [19000, 0] }] });`)) === null);
+  await waitFor("the tool enabled", 5000, async () => (await attr(tool(3, 4), "aria-disabled")) !== "true").catch(() => {});
+  ms = await timed("grid axis tool on", tool(3, 4), CLICK, "b.placing.value?.active === true && b.placing.value.kind === 'grid_axis'");
+  check("Grid axis (ribbon): the tool on in the plan", ms !== null && (await attr(tool(3, 4), "aria-pressed")) === "true");
+  const nAxes = async () => (await B("return b.query('grids')[0]?.axes.length ?? 0;"));
+  await B("return b.runAction('fit');");
+  await sleep(300);
+  await canvasClick("grid axis: first click", [6000, 1000, 0], "b.placing.value?.points.length === 1", 0);
+  ms = await canvasClick("grid axis: second click (Shift) -> axis 2", [6300, 9000, 0], "b.query('grids')[0]?.axes.length === 3", 8);
+  const ax = await B("return b.query('grids')[0].axes.find((a) => a.tag === '2') ?? null;");
+  check("two clicks, the second with Shift: axis '2' (after '1', parallel), vertical (x locked) at about x 6000 (the work plane Face A does not pull it)",
+    ms !== null && !!ax && Math.abs(ax.start_mm[0] - ax.end_mm[0]) < 1e-6 && Math.abs(ax.start_mm[0] - 6000) < 400,
+    JSON.stringify({ ax, placing: await B("return b.placing.value;"), err: await evalJs("window.__bbGl.toolError ?? null"), view: await B("return b.openViews.value.active;") }));
+  await canvasClick(null, [12000, 1000, 0], "b.placing.value?.points.length === 1", 0);
+  await evalJs(`(() => { window.__rpT = null; document.addEventListener('keydown', (e) => { window.__rpT = e.timeStamp; }, { capture: true, once: true }); })()`);
+  await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await waitFor("Esc", 5000, async () => (await B("return b.placing.value?.active !== true;"))).catch(() => {});
+  check("Esc: the first point goes, nothing added, the tool stops", (await nAxes()) === 3 && (await B("return b.placing.value?.active !== true;")));
+  if (SHOTS) {
+    const { data } = await S("Page.captureScreenshot", { format: "png" });
+    writeFileSync(join(SHOTS, "setting-out-grid-axis-plan-1280.png"), Buffer.from(data, "base64"));
+  }
 
   // ---- Levels, Grids, Measure ----
   for (const [m, name] of [[1, "Levels"], [2, "Grids"]]) {

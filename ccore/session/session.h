@@ -26,6 +26,7 @@ typedef enum {
     CC_KIND_COLUMN, CC_KIND_BEAM, CC_KIND_WALL, CC_KIND_SLAB, /* verbs.rs:29 */
     /* CONC1 (ADR 0077, concrete.h): the Concrete tab's kinds, run by their own verbs */
     CC_KIND_FOOTING, CC_KIND_STRIP_FOOTING, CC_KIND_RAFT, CC_KIND_OPENING, CC_KIND_SLEEVE,
+    CC_KIND_GRID_AXIS, /* WAVE1B (A2): an axis of the model's grid by two clicks (verb grid_axis_add) */
     CC_KIND_COUNT
 } cc_kind;
 #define CC_CONC_N 11 /* concrete.c: the sizes of the CONC1 kinds */

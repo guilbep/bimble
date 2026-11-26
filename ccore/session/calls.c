@@ -165,11 +165,13 @@ static const ActionRow ACTIONS[] = {
     {"place_sleeve", "Place: Sleeve", "Concrete", 0, 0},
     /* ---- end CONC1 ---- */
     {"reference_planes", "Reference plane by three points", "Setting out", 0, 0}, /* WAVE1B (refplanes.h) */
+    {"place_grid_axis", "Place: Grid axis", "Setting out", 0, 0},                 /* WAVE1B (A2) */
 };
-_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4 + 5 + 1, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4, CONC1 5, WAVE1B 1");
+_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4 + 5 + 2, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4, CONC1 5, WAVE1B 2");
 
 static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab", /* verbs.rs:28 snake_case */
-                                        "footing", "strip_footing", "raft", "opening", "sleeve"}; /* CONC1 */
+                                        "footing", "strip_footing", "raft", "opening", "sleeve", /* CONC1 */
+                                        "grid_axis"};                                            /* WAVE1B (A2) */
 _Static_assert(sizeof KIND_NAME / sizeof KIND_NAME[0] == CC_KIND_COUNT, "a name per kind");
 static const char *const SIZE_KEY[] = {"column", "beam_width", "beam_height", "wall", "slab"}; /* verbs.rs:78 */
 /* Sizes serialized through json! (a sorted map): beam_height, beam_width, column, slab, wall. */
@@ -298,6 +300,8 @@ static const char *hint(const cc_session *s) { /* edit.rs:84-95 `Placing::hint` 
     if (s->placing_kind == CC_KIND_SLAB && s->polygon) /* edit.rs:402-405 (SLAB1: the second text) */
         return s->tool.npoints < 3 ? "Click the next corner of the slab." : "Click the next corner; click the first corner or Enter closes.";
     if (s->placing_kind == CC_KIND_COLUMN) return "Click where the column goes (on the storey level). Esc stops.";
+    if (s->placing_kind == CC_KIND_GRID_AXIS) /* WAVE1B (A2) */
+        return s->tool.npoints ? "Click the axis' end (Shift: along x or y). Esc cancels." : "Click the axis' start. Esc cancels.";
     if (!s->tool.npoints) return s->placing_kind == CC_KIND_SLAB ? "Click a corner of the slab." : "Click the start point.";
     return s->placing_kind == CC_KIND_SLAB ? "Click the opposite corner." : "Click the end point.";
 }
@@ -707,6 +711,7 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "save")) return cc_session_unsaved(s);
     if (!strcmp(name, "undo")) return s->open && s->hist.nundo > 0;
     if (!strcmp(name, "redo")) return s->open && s->hist.nredo > 0;
+    if (!strcmp(name, "place_grid_axis")) return s->open && s->model.ngrids > 0; /* WAVE1B (A2): an axis of a grid */
     if (!strncmp(name, "place_", 6)) return s->open;
     if (!strcmp(name, "export_ifc4") || !strcmp(name, "export_ifc2x3")) return s->open; /* ribbon.rs:577 */
     if (!strcmp(name, "home")) return 1;
@@ -2784,7 +2789,7 @@ static void tool_pointer(cc_session *s, const ToolArgs *a) {
         if (r[0] != q[0] || r[1] != q[1]) kind = CC_SNAP_NONE;
         q[0] = r[0], q[1] = r[1];
     }
-    if (wpl && hit == level) { /* WAVE1B: onto the plane's trace on the level (n.x = n.o, z = level) */
+    if (wpl && hit == level && s->placing_kind != CC_KIND_GRID_AXIS) { /* WAVE1B: onto the plane's trace on the level (n.x = n.o, z = level); a grid axis is drawn freely in plan */
         double l2 = wn[0] * wn[0] + wn[1] * wn[1];
         if (l2 > 1e-12) {
             double c = wn[0] * wo[0] + wn[1] * wo[1] + wn[2] * (wo[2] - level), d = wn[0] * q[0] + wn[1] * q[1] - c;
@@ -2834,8 +2839,99 @@ static int place_cmds(cc_session *s, const double *a, const double *b, int dry_r
     if (!rc) wp_raise(s, l);
     return rc;
 }
+/* WAVE1B (A2): the next free tag of an axis' family: a number after the highest number, or a
+ * letter after the highest letter tag (A..Z, AA..ZZ); `letters` chooses. */
+static void next_tag(const cc_grid *g, const int *fam, int want, int letters, char *out) {
+    uint64_t best = 0;
+    for (size_t k = 0; k < g->naxes; k++) {
+        if (fam && fam[k] != want) continue;
+        const cc_str *t = &g->axes[k].tag;
+        uint64_t v = 0;
+        int ok = t->n > 0 && t->n <= 6;
+        for (size_t i = 0; ok && i < t->n; i++) {
+            char c = t->p[i];
+            if (letters) ok = c >= 'A' && c <= 'Z', v = v * 26 + (uint64_t)(c - 'A' + 1);
+            else ok = c >= '0' && c <= '9', v = v * 10 + (uint64_t)(c - '0');
+        }
+        if (ok && v > best) best = v;
+    }
+    best++;
+    char tmp[16];
+    int n = 0;
+    if (letters)
+        for (uint64_t v = best; v && n < 15; v = (v - 1) / 26) tmp[n++] = (char)('A' + (v - 1) % 26);
+    else
+        for (uint64_t v = best; v && n < 15; v /= 10) tmp[n++] = (char)('0' + v % 10);
+    for (int i = 0; i < n; i++) out[i] = tmp[n - 1 - i];
+    out[n] = 0;
+}
+static int tag_is_letters(const cc_str *t) {
+    int ok = t->n > 0;
+    for (size_t i = 0; ok && i < t->n; i++) ok = t->p[i] >= 'A' && t->p[i] <= 'Z';
+    return ok;
+}
+/* The commands of a grid axis from a to b (verb grid_axis_add): the first grid that has an axis
+ * parallel to it (within 0.1 degree), else the first grid; its tag continues the parallel family's
+ * style (numbers or letters), else takes the other style than the grid's first axis. */
+static int grid_axis_cmds(cc_session *s, const double *a, const double *b, cc_cmds *l, cc_buf *err) {
+    if (!s->model.ngrids) {
+        buf_puts(err, "no grid: add one on the Levels & grids page first");
+        return -1;
+    }
+    double dx = b[0] - a[0], dy = b[1] - a[1], len = cc_hypot(dx, dy);
+    if (!(len >= 1.0)) {
+        buf_puts(err, "the two points are too close");
+        return -1;
+    }
+    const cc_grid *g = NULL;
+    size_t par = (size_t)-1;
+    for (size_t i = 0; i < s->model.ngrids && !g; i++)
+        for (size_t k = 0; k < s->model.grids[i].naxes; k++) {
+            const cc_grid_axis *x = &s->model.grids[i].axes[k];
+            double ex = x->end[0] - x->start[0], ey = x->end[1] - x->start[1], el = cc_hypot(ex, ey);
+            double cr = (dx * ey - dy * ex) / (len * (el > 0 ? el : 1));
+            if (cr < 0.0017 && cr > -0.0017) {
+                g = &s->model.grids[i], par = k;
+                break;
+            }
+        }
+    if (!g) g = &s->model.grids[0];
+    int letters;
+    char tag[20];
+    if (par != (size_t)-1) {
+        letters = tag_is_letters(&g->axes[par].tag);
+        int *fam = malloc((g->naxes + 1) * sizeof *fam);
+        if (!fam) return buf_puts(err, "out of memory"), -1;
+        for (size_t k = 0; k < g->naxes; k++) fam[k] = tag_is_letters(&g->axes[k].tag) == letters;
+        next_tag(g, fam, 1, letters, tag);
+        free(fam);
+    } else {
+        letters = g->naxes ? !tag_is_letters(&g->axes[0].tag) : dx * dx > dy * dy; /* along x: letters */
+        int *fam = malloc((g->naxes + 1) * sizeof *fam);
+        if (!fam) return buf_puts(err, "out of memory"), -1;
+        for (size_t k = 0; k < g->naxes; k++) fam[k] = tag_is_letters(&g->axes[k].tag) == letters;
+        next_tag(g, fam, 1, letters, tag);
+        free(fam);
+    }
+    Buf args;
+    buf_init(&args);
+    JsonW w;
+    jw_init(&w, &args, 0);
+    jw_obj_begin(&w);
+    jw_key(&w, "end"), jw_arr_begin(&w), jw_f64(&w, b[0]), jw_f64(&w, b[1]), jw_arr_end(&w);
+    jw_key(&w, "grid"), jw_str_n(&w, g->id.c, 22);
+    jw_key(&w, "start"), jw_arr_begin(&w), jw_f64(&w, a[0]), jw_f64(&w, a[1]), jw_arr_end(&w);
+    jw_key(&w, "tag"), jw_str(&w, tag);
+    jw_obj_end(&w);
+    jw_finish(&w);
+    int rc = args.oom ? (buf_puts(err, "out of memory"), -1) : cc_verb_run_ex(&s->model, "grid_axis_add", args.p, args.len, 0, -1, s->rev, l, err) ? -1 : 0;
+    buf_free(&args);
+    return rc;
+}
+
 static int place_cmds_(cc_session *s, const double *a, const double *b, int dry_run, cc_cmds *l, cc_buf *err) {
     if (cc_conc_kind(s->placing_kind)) return cc_conc_cmds(s, a, b, dry_run, l, err); /* CONC1 */
+    if (s->placing_kind == CC_KIND_GRID_AXIS) return b ? grid_axis_cmds(s, a, b, l, err) : (buf_puts(err, "click the axis' end"), -1); /* WAVE1B (A2) */
     if (!s->has_storey) {
         buf_puts(err, "choose a storey");
         return -1;
@@ -2929,7 +3025,7 @@ static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out) {
             has_ghost = !cc_tool_ghost(&w, &s->model, l.v, l.n, org, &gerr);
         }
         cc_cmds_free(&l);
-    } else if (s->placing && t->has_hover && !polygon_now(s) &&
+    } else if (s->placing && t->has_hover && !polygon_now(s) && s->placing_kind != CC_KIND_GRID_AXIS && /* WAVE1B: a line, no solid */
                (one_click(s) || t->npoints >= 1 || s->placing_kind == CC_KIND_STRIP_FOOTING)) {
         cc_cmds l;
         cc_cmds_init(&l);

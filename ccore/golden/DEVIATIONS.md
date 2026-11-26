@@ -1138,6 +1138,12 @@ own references are hand-computed in `test/setting_out_test.c`; no golden changes
   one is chosen; with none, the bytes are Rust's. Hand-computed references: `test/refplane_test.c`;
   every model without a plane keeps its bytes (tested on `frame.json`).
 
+- **The grid axis tool (WAVE1B A2, ADR 0075 decision 13).** A tenth place kind `grid_axis` (after
+  CONC1's), action `place_grid_axis` (72 rows; enabled with an editable model that has a grid):
+  two clicks run `grid_axis_add`, the tag the next of its family. `set_placing {"kind":
+  "grid_axis"}` is accepted; Rust's kinds keep their bytes. Hand-computed: `test/setting_out_test.c`
+  (axis 2 after 1, B after A, the crossing snapped, Esc, undo).
+
 ## 33. Views and sheets from the ribbon: New view…, the section tool, Place view…, Revision…, annotation types (ticket VIEWSHEET, ADR 0076)
 
 Rust v0.19.0 made views from the navigator's "New view…" menu (viewing.rs:806-840), placed views

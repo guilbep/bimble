@@ -166,7 +166,7 @@ export interface ScheduleTable {
 /** `query("placing")`: what is placed (edit.rs `Editor::placing_json`). Sizes and offset in mm. */
 export interface Placing {
   active: boolean;
-  kind: "column" | "beam" | "wall" | "slab" | "footing" | "strip_footing" | "raft" | "opening" | "sleeve"; // CONC1: the Concrete tab's kinds
+  kind: "column" | "beam" | "wall" | "slab" | "footing" | "strip_footing" | "raft" | "opening" | "sleeve" | "grid_axis"; // CONC1: the Concrete tab's kinds; WAVE1B: a grid axis
   storey: string | null;
   storey_name: string | null;
   material: string | null;

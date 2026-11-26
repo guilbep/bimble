@@ -221,6 +221,49 @@ int main(void) {
     load_err("load: survey_point_mm of 1e400 refused", "{\"survey_point_mm\":[1e400,0,0]}");
     load_err("load: an unknown georef key still refused", "{\"survey_point\":[0,0,0]}");
 
+    { /* ---- WAVE1B (A2): the two-click grid axis tool (place kind grid_axis, verb grid_axis_add) ---- */
+        cc_session *g = cc_session_new(pf);
+        if (cc_session_open(g, "golden/frame.json", &err)) return printf("open: %s\n", err.msg), 1;
+        memcpy(g->storey.c, "1uAZA0Yfn05f$xRd1k4uPR", 22), g->has_storey = 1;
+        check_true("A2 place_grid_axis: off without a grid", flag(g, "place_grid_axis", 'e') == 0);
+        q = ask(g, "verb", "grid_add",
+                "{\"name\":\"G\",\"axes\":[{\"tag\":\"1\",\"start\":[0,-1000],\"end\":[0,11000]},"
+                "{\"tag\":\"A\",\"start\":[-1000,0],\"end\":[19000,0]}]}",
+                &st);
+        check_true("A2 a grid 1 / A", st == CC_OK && g->model.ngrids == 1);
+        free(q);
+        check_true("A2 place_grid_axis: on with a grid", flag(g, "place_grid_axis", 'e') == 1);
+        free(ask(g, "action", "place_grid_axis", "", &st));
+        check_true("A2 the tool on: pressed", flag(g, "place_grid_axis", 'p') == 1);
+        uint64_t r0 = g->rev;
+        free(ask(g, "tool", "click", "{\"at\":[6000,-1000],\"free\":true}", &st));
+        q = ask(g, "tool", "click", "{\"at\":[6000,11000],\"free\":true}", &st);
+        const cc_grid *gr = &g->model.grids[0];
+        check_true("A2 two clicks: axis 2 (after 1, parallel to it), one step",
+                   st == CC_OK && gr->naxes == 3 && gr->axes[2].tag.n == 1 && gr->axes[2].tag.p[0] == '2' && g->rev == r0 + 1 &&
+                       gr->axes[2].start[0] == 6000 && gr->axes[2].end[1] == 11000);
+        free(q);
+        /* Shift (ortho): the end along x from the start */
+        free(ask(g, "tool", "click", "{\"at\":[-1000,5000],\"free\":true}", &st));
+        q = ask(g, "tool", "pointer", "{\"at\":[19000,5400],\"free\":true,\"ortho\":true}", &st);
+        check_true("A2 ortho: the hover at y 5000", has(q, "\"at\":[19000.0,5000.0]"));
+        free(q);
+        free(ask(g, "tool", "click", "{\"at\":[19000,5400],\"free\":true,\"ortho\":true}", &st));
+        gr = &g->model.grids[0];
+        check_true("A2 along x: axis B (after A), horizontal", gr->naxes == 4 && gr->axes[3].tag.n == 1 && gr->axes[3].tag.p[0] == 'B' &&
+                                                                   gr->axes[3].start[1] == 5000 && gr->axes[3].end[1] == 5000);
+        /* snapping: near the crossing of 1 and A */
+        q = ask(g, "tool", "pointer", "{\"at\":[30,20],\"tol_mm\":200}", &st);
+        check_true("A2 snap: the crossing of 1 and A", has(q, "\"at\":[0.0,0.0]"));
+        free(q);
+        /* Esc: the first point goes, nothing added, the tool stops */
+        free(ask(g, "tool", "click", "{\"at\":[12000,-1000],\"free\":true}", &st));
+        free(ask(g, "tool", "cancel", "", &st));
+        check_true("A2 Esc: nothing added, the tool off", g->model.grids[0].naxes == 4 && flag(g, "place_grid_axis", 'p') == 0);
+        free(ask(g, "undo", "", "", &st));
+        check_true("A2 undo: axis B goes", g->model.grids[0].naxes == 3);
+        cc_session_free(g);
+    }
     cc_session_free(s);
     return report("setting_out");
 }

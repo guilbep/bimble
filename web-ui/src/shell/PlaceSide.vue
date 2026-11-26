@@ -13,6 +13,7 @@ const ROWS: Record<Placing["kind"], { size: Size; label: "section" | "width" | "
   wall: [{ size: "wall", label: "thickness" }],
   slab: [{ size: "slab", label: "thickness" }],
   footing: [], strip_footing: [], raft: [], opening: [], sleeve: [], // CONC1: their sizes are CROWS'
+  grid_axis: [], // WAVE1B (A2): two clicks, no size
 };
 // ---- CONC1 (ADR 0077) ---- the Concrete tab's kinds: their sizes (ccore/session/concrete.h)
 type CSize = keyof ConcreteSizes;

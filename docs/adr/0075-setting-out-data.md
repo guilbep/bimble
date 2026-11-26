@@ -86,6 +86,16 @@ SLAB1).
     stops. *Alternative:* a dialog of nine numbers only (kept as "origin + normal" in the side
     panel): no pick of what is on screen.
 
+13. **The two-click grid axis tool** (WAVE1B A2): a place kind `grid_axis` (action
+    `place_grid_axis`, the ribbon's Grid axis), so the place tool's snapping (grid axes, their
+    crossings, then the elements), its rubber line and Esc are the same; Shift locks the axis
+    along x or y (Ctrl does for the other kinds; Shift is their "no snap"). One `grid_axis_add`
+    step into the first grid with an axis parallel to it (else the first grid); its tag follows
+    its family: the next number after the highest, or the next letter (A..Z, AA..). Off without a
+    grid (a grid needs axes in two directions: the Levels & grids page makes the first). A work
+    plane does not pull a grid axis onto its trace. *Alternative:* a page-side tool as the
+    section line's: no snapping to the axes without porting snap.rs to the page.
+
 ## Consequences
 
 - The tab has no dead control: 7 of its 8 controls act (Survey point, Project base point, True /
@@ -97,6 +107,6 @@ SLAB1).
 
 ## Not done
 
-- ~~Reference planes (decision 8)~~: served by decisions 9-12 (WAVE1B). A two-click grid axis tool in a plan (the Levels & grids page
+- ~~Reference planes (decision 8)~~: served by decisions 9-12 (WAVE1B). ~~A two-click grid axis tool in a plan~~ (decision 13; the Levels & grids page
   adds axes by numbers), grids drawn in 3D (Rust draws them on paper only; the lab in plans).
 - Survey point in IFC (decision 7), moving the base point by clicks (decision 2).

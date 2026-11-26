@@ -19,7 +19,7 @@ _Static_assert(P_N == CC_CONC_N, "session.h CC_CONC_N");
 
 void cc_conc_defaults(double *p) { memcpy(p, DEF, sizeof DEF); }
 
-int cc_conc_kind(cc_kind k) { return k >= CC_KIND_FOOTING && k < CC_KIND_COUNT; }
+int cc_conc_kind(cc_kind k) { return k >= CC_KIND_FOOTING && k <= CC_KIND_SLEEVE; } /* WAVE1B: not the grid axis */
 
 int cc_conc_clicks(cc_kind k) {
     switch (k) {

@@ -1856,7 +1856,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   const toolAt = (name: "pointer" | "click", cx: number, cy: number, mods: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
     const r = canvas.getBoundingClientRect();
     const x = cx - r.left, y = cy - r.top;
-    const args: ToolPointer = { ray: rayAt(x, y), ray_tol: rayAt(x + SNAP_PX, y), free: mods.shiftKey, ortho: mods.ctrlKey || mods.metaKey };
+    const gridAxis = placing.value?.kind === "grid_axis"; // WAVE1B (A2): Shift locks the axis along x or y (it snaps always)
+    const args: ToolPointer = { ray: rayAt(x, y), ray_tol: rayAt(x + SNAP_PX, y), free: gridAxis ? false : mods.shiftKey, ortho: gridAxis ? mods.shiftKey || mods.ctrlKey || mods.metaKey : mods.ctrlKey || mods.metaKey };
     stats.toolCalls++;
     const { state: t, error } = toolCall(name, args);
     stats.toolError = error;

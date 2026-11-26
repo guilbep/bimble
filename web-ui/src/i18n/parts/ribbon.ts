@@ -29,6 +29,7 @@ export const fr = {
   "ribbon.settingOut.g3.t1": "Niveaux",
   "ribbon.settingOut.g3.t2": "Quadrillages",
   "ribbon.settingOut.g3.t3": "Plans de référence",
+  "ribbon.settingOut.g3.t4": "Axe de trame", // WAVE1B (A2)
   "ribbon.settingOut.g4": "Mesurer",
   "ribbon.settingOut.g4.t1": "Mesurer",
   "ribbon.site.g1": "Levé",
@@ -188,6 +189,7 @@ export const en: Record<keyof typeof fr, string> = {
   "ribbon.settingOut.g3.t1": "Levels",
   "ribbon.settingOut.g3.t2": "Grids",
   "ribbon.settingOut.g3.t3": "Reference planes",
+  "ribbon.settingOut.g3.t4": "Grid axis", // WAVE1B (A2)
   "ribbon.settingOut.g4": "Measure",
   "ribbon.settingOut.g4.t1": "Measure",
   "ribbon.site.g1": "Survey",
