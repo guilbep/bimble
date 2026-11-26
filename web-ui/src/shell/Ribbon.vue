@@ -6,6 +6,7 @@ import RibbonTool from "./RibbonTool.vue";
 import { HIDE_NOT_AVAILABLE } from "./capability"; // FAKE1
 import BoxNorth from "./BoxNorth.vue"; // ISS71: the section box's orientation
 import ProjectZeroBox from "./ProjectZeroBox.vue"; // SETOUT: project zero (the georeference's height)
+import AnnotationTypes from "./AnnotationTypes.vue"; // VIEWSHEET: Text type, Dimension type
 </script>
 
 <template>
@@ -18,6 +19,7 @@ import ProjectZeroBox from "./ProjectZeroBox.vue"; // SETOUT: project zero (the 
         <!-- Reference .rbox: no Rust call yet, drawn disabled (.off) and empty (no sample value). -->
         <!-- FAKE1: a box with no call behind it is "not yet" (ny), with the tooltip, as a tool. -->
         <ProjectZeroBox v-if="grp.box?.kind === 'zero'" :label="grp.box.key" :bb="`ribbon-box-${g + 1}`" /><!-- SETOUT -->
+        <AnnotationTypes v-else-if="grp.box?.kind === 'types'" :bb="`ribbon-box-${g + 1}`" /><!-- VIEWSHEET -->
         <div v-else-if="grp.box && !HIDE_NOT_AVAILABLE" class="rbox off ny" :class="{ readout: grp.box.kind === 'readout' }" aria-disabled="true"
              :data-missing="grp.box.missing" :data-bb="`ribbon-box-${g + 1}`" data-not-yet="" :title="t('na.tooltip', { name: t(grp.box.key) })">
           <span class="lbl">{{ t(grp.box.key) }}</span>

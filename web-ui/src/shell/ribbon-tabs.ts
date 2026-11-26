@@ -9,10 +9,13 @@ export type RibbonKey = keyof typeof fr;
 // page / panel: the Vue screen the tool opens instead of its egui action (pressed while that screen is open).
 // dialog (FAKE1): the Vue dialog the tool opens. A tool that cannot work in this core (no action and no screen, or
 // one whose capability the core does not serve: shell/capability.ts toolNotYet) is drawn "not yet", with a tooltip.
-export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string; action: string | null; page?: string; panel?: string; dialog?: string }
+// VIEWSHEET: a tool with both an action and a dialog is enabled by the action (`query actions`), opens the dialog;
+// offTip: the reason shown when the action is off (an i18n key).
+export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string; action: string | null; page?: string; panel?: string; dialog?: string; offTip?: string }
 // Reference .rbox: a label over a 150 px select (sel) or a mono readout (readout). No Rust call yet: drawn disabled, empty.
 // SETOUT: kind "zero" is the Setting out tab's project zero (shell/ProjectZeroBox.vue: the georeference's height).
-export interface RibbonBox { key: RibbonKey; kind: "sel" | "readout" | "zero"; missing: string }
+// VIEWSHEET: kind "types" is the Annotate tab's Text type and Dimension type selects (shell/AnnotationTypes.vue).
+export interface RibbonBox { key: RibbonKey; kind: "sel" | "readout" | "zero" | "types"; missing: string }
 // box: drawn after the tools, in a `.tools` with style="align-items:center" (as the reference).
 // north (ISS71): the section box's orientation control after the tools (shell/BoxNorth.vue).
 export interface RibbonGroup { key: RibbonKey; tools: RibbonTool[]; box?: RibbonBox; north?: boolean }
@@ -149,10 +152,9 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
       { key: "ribbon.annotate.g1.t2", tag: "button", icon: "<path d=\"M5 6V4h14v2\"/><path d=\"M12 4v16M9 20h6\"/>", action: "sheet_tool_text" },
       { key: "ribbon.annotate.g1.t3", tag: "button", icon: "<path d=\"M4 6v12M20 6v12M4 12h16\"/><path d=\"m7 9-3 3 3 3M17 9l3 3-3 3\"/>", action: "sheet_tool_dimension" },
     ] },
+    // VIEWSHEET: Text type, Dimension type: two selects of the standards' types (query annotation_types)
     { key: "ribbon.annotate.g2", tools: [
-      { key: "ribbon.annotate.g2.t1", tag: "button", icon: "<path d=\"M5 6V4h14v2\"/><path d=\"M12 4v16M9 20h6\"/>", action: null },
-      { key: "ribbon.annotate.g2.t2", tag: "button", icon: "<path d=\"M4 6v12M20 6v12M4 12h16\"/><path d=\"m7 9-3 3 3 3M17 9l3 3-3 3\"/>", action: null },
-    ] },
+    ], box: { key: "ribbon.annotate.g2", kind: "types", missing: "" } },
     { key: "ribbon.annotate.g3", tools: [
       { key: "ribbon.annotate.g3.t1", tag: "button", icon: "<circle cx=\"7\" cy=\"12\" r=\"3\"/><path d=\"M10 12h11\"/>", action: "section_labels" },
       { key: "ribbon.annotate.g3.t2", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\"/><rect x=\"9\" y=\"8\" width=\"6\" height=\"8\"/>", action: "openings" },
@@ -185,14 +187,16 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
       // ---- end ISS72 ----
     ] },
     { key: "ribbon.view.g5", tools: [
-      { key: "ribbon.view.g5.t1", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\"/><path d=\"M4 12h9v8M13 4v4\"/>", action: null },
-      { key: "ribbon.view.g5.t2", tag: "button", icon: "<path d=\"M3 12h18\"/><path d=\"m7 8-4 4 4 4\"/><rect x=\"9\" y=\"5\" width=\"6\" height=\"14\" stroke-dasharray=\"2 2\"/>", action: null },
+      // VIEWSHEET: New view… (dialogs/NewView.vue, verb view_add), Section (the section tool: two clicks in a plan)
+      { key: "ribbon.view.g5.t1", tag: "button", icon: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\"/><path d=\"M4 12h9v8M13 4v4\"/>", action: "new_view", dialog: "new-view" },
+      { key: "ribbon.view.g5.t2", tag: "button", icon: "<path d=\"M3 12h18\"/><path d=\"m7 8-4 4 4 4\"/><rect x=\"9\" y=\"5\" width=\"6\" height=\"14\" stroke-dasharray=\"2 2\"/>", action: "draw_section", offTip: "vs.sectionOff" },
     ] },
   ],
   sheets: [
     { key: "ribbon.sheets.g1", tools: [
       { key: "ribbon.sheets.g1.t1", tag: "a", icon: "<path d=\"M5 3h10l4 4v6\"/><path d=\"M5 3v18h8\"/><path d=\"M18 16v6M15 19h6\"/>", action: "new_sheet" },
-      { key: "ribbon.sheets.g1.t2", tag: "button", icon: "<rect x=\"3\" y=\"4\" width=\"18\" height=\"16\"/><rect x=\"6\" y=\"7\" width=\"7\" height=\"6\"/>", action: null },
+      // VIEWSHEET: Place view… (dialogs/PlaceView.vue, verb sheet_place), Revision… below (dialogs/SheetRevision.vue, set_sheet)
+      { key: "ribbon.sheets.g1.t2", tag: "button", icon: "<rect x=\"3\" y=\"4\" width=\"18\" height=\"16\"/><rect x=\"6\" y=\"7\" width=\"7\" height=\"6\"/>", action: "sheet_place_view", dialog: "place-view", offTip: "vs.placeOff" },
       { key: "ribbon.sheets.g1.t3", tag: "button", icon: "<path d=\"M6 6l12 12M18 6 6 18\"/>", action: "close_sheet" },
     ] },
     { key: "ribbon.sheets.g2", tools: [
@@ -201,7 +205,7 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
       { key: "ribbon.sheets.g2.t3", tag: "button", icon: "<path d=\"M4 6v12M20 6v12M4 12h16\"/><path d=\"m7 9-3 3 3 3M17 9l3 3-3 3\"/>", action: "sheet_tool_dimension" },
     ] },
     { key: "ribbon.sheets.g3", tools: [
-      { key: "ribbon.sheets.g3.t1", tag: "button", icon: "<path d=\"M5 21V4\"/><path d=\"M5 4h12l-2 4 2 4H5\"/>", action: null },
+      { key: "ribbon.sheets.g3.t1", tag: "button", icon: "<path d=\"M5 21V4\"/><path d=\"M5 4h12l-2 4 2 4H5\"/>", action: "sheet_revision", dialog: "sheet-revision", offTip: "vs.revisionOff" },
     ] },
     { key: "ribbon.sheets.g4", tools: [
       { key: "ribbon.sheets.g4.t1", tag: "a", icon: "<path d=\"M7 9V4h10v5\"/><rect x=\"4\" y=\"9\" width=\"16\" height=\"7\" rx=\"1\"/><path d=\"M7 14h10v6H7z\"/>", action: null, dialog: "export" },

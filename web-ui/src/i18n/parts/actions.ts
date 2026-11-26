@@ -62,6 +62,10 @@ export const fr = {
   "action.show_base_point": "Point de base du projet", // SETOUT
   "action.show_survey_point": "Point topographique", // SETOUT
   "action.view_true_north": "Nord géo. / projet", // SETOUT
+  "action.new_view": "Nouvelle vue…", // VIEWSHEET
+  "action.draw_section": "Coupe", // VIEWSHEET
+  "action.sheet_place_view": "Placer une vue…", // VIEWSHEET
+  "action.sheet_revision": "Indice de la feuille…", // VIEWSHEET
   "actionTab.Model": "Modèle",
   "actionTab.Manage": "Gérer",
   "actionTab.Quick access": "Accès rapide",
@@ -126,6 +130,10 @@ export const en: Record<keyof typeof fr, string> = {
   "action.show_base_point": "Project base point", // SETOUT
   "action.show_survey_point": "Survey point", // SETOUT
   "action.view_true_north": "True / project north", // SETOUT
+  "action.new_view": "New view…", // VIEWSHEET
+  "action.draw_section": "Section", // VIEWSHEET
+  "action.sheet_place_view": "Place view…", // VIEWSHEET
+  "action.sheet_revision": "Sheet revision…", // VIEWSHEET
   "actionTab.Model": "Model",
   "actionTab.Manage": "Manage",
   "actionTab.Quick access": "Quick access",

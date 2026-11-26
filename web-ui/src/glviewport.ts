@@ -72,6 +72,7 @@ import {
   actions, viewActions, // Q2: the view switches (edges, orthographic, fit, top)
   viewportKeys, // KEY1: Esc and Delete in the viewport (shell/keys.ts)
   pointer, coordinates, // KEY1: the status bar's pointer coordinates
+  runAction, viewAdd, // VIEWSHEET: the section tool
   annotate, annotateCall, boxTool, deleteAnnotation, moveAnnotation, openViews, placing, select, selectLinked, state, toolCall,
   viewAnnotations, viewClip, visibility, visibilitySets, measure, measureCall, type MeasureState,
   settingOut, // SETOUT
@@ -424,6 +425,9 @@ interface GlStats {
   cubeCellAt?: (d: Dir) => [number, number] | null;
   cubeLetterAt?: (t: "N" | "E" | "S" | "W") => [number, number] | null;
   cubeHitAt?: (x: number, y: number) => Dir | null;
+  /** VIEWSHEET: the section tool (action draw_section): its first point and the pointer (world mm), the
+   *  view it made last, its error, the time of the second click (performance.now) and of the frame after it. */
+  section: { a: number[] | null; hover: number[] | null; added: string | null; error: string | null; clickAt: number | null; drawnAt: number | null };
   /** The measure tool (ticket T1): its state as last answered, calls made, the last error. */
   measure: MeasureState | null;
   measureCalls: number;
@@ -468,6 +472,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     hiddenElements: 0, drawnTris: 0, clip: null, boxFace: null, boxCalls: 0, boxError: null, menus: 0, boxHandles: [], boxHover: null, links: [], linkTris: 0,
     annotations: null, overlayTexts: [], selectedAnnotation: null, annotate: null, annotateCalls: 0, annotError: null, annotAdded: null,
     measure: null, measureCalls: 0, measureError: null,
+    section: { a: null, hover: null, added: null, error: null, clickAt: null, drawnAt: null }, // VIEWSHEET
     nav: { picks: 0, zoomPivot: null, zoomFrom: null, orbitPivot: null, orbitFrom: null, fits: 0 }, pointerQueries: 0 };
   window.__bbGl = stats;
   if (!(canvas instanceof HTMLCanvasElement)) return () => undefined;
@@ -1273,6 +1278,28 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         return p ? [p[0] - b.left, p[1] - b.top] : null;
       }, texts);
     }
+    // ---- VIEWSHEET: the section line being drawn, its look direction (an arrow to the facing) ----
+    const sl = stats.section;
+    if (mesh && sl.a && sl.hover && sectionNow()) {
+      const b = canvas.getBoundingClientRect(), z = plan?.elevation ?? 0;
+      const pa = stats.toScreen?.(sl.a[0] ?? 0, sl.a[1] ?? 0, z), pb = stats.toScreen?.(sl.hover[0] ?? 0, sl.hover[1] ?? 0, z);
+      if (pa && pb) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const ax = pa[0] - b.left, ay = pa[1] - b.top, bx = pb[0] - b.left, by = pb[1] - b.top;
+        ctx.strokeStyle = "#141414";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([10, 4, 2, 4]);
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+        ctx.setLineDash([]);
+        const len = Math.hypot(bx - ax, by - ay);
+        if (len > 1) { // screen right of A -> B (y down): (-dy, dx) / len
+          const nx = -(by - ay) / len, ny = (bx - ax) / len, mx = (ax + bx) / 2, my = (ay + by) / 2;
+          ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx + nx * 18, my + ny * 18); ctx.stroke();
+          ctx.beginPath(); ctx.arc(mx + nx * 18, my + ny * 18, 3, 0, 2 * Math.PI); ctx.fill();
+        }
+      }
+    }
+    if (sl.clickAt !== null && sl.drawnAt === null && !sl.a) sl.drawnAt = performance.now(); // the frame after the view was made
     // ---- SETOUT: the base point, the survey point and north, in 3D and in a plan ----
     if (mesh) {
       const b = canvas.getBoundingClientRect();
@@ -1386,6 +1413,41 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     stats.measure = st;
     dirty = true;
   };
+  // ---- VIEWSHEET ---- the section tool (action draw_section, ADR 0076): in a plan, two clicks draw the section
+  // line; the view looks to the line's right (A to B), snapped to the four facings the core's sections have; its cut
+  // goes through the line's middle; depth 0 (all, Properties: Depth). One view_add, one undo step; the plan stays
+  // shown with the new mark; the tool stops (Rust's tools stop after one view). Esc: the first point, then the tool.
+  const sectionNow = () => plan?.type === "plan" && mesh !== null && pressed("draw_section", false);
+  const worldAt = (cx: number, cy: number): number[] => {
+    const r = canvas.getBoundingClientRect();
+    const ray = rayAt(cx - r.left, cy - r.top), o = mesh?.origin ?? [0, 0, 0];
+    return [Math.round((ray[0] ?? 0) + (o[0] ?? 0)), Math.round((ray[1] ?? 0) + (o[1] ?? 0))];
+  };
+  const sectionClick = (cx: number, cy: number) => {
+    const p = worldAt(cx, cy), sec = stats.section;
+    if (!sec.a) { sec.a = p; sec.hover = p; dirty = true; return; }
+    const a = sec.a, dx = (p[0] ?? 0) - (a[0] ?? 0), dy = (p[1] ?? 0) - (a[1] ?? 0);
+    if (Math.hypot(dx, dy) < 1) return; // the same point: wait for the end
+    const nx = dy, ny = -dx; // the right of A -> B
+    const facing = Math.abs(nx) >= Math.abs(ny) ? (nx > 0 ? "east" : "west") : (ny > 0 ? "north" : "south");
+    sec.clickAt = performance.now();
+    sec.drawnAt = null;
+    const r = viewAdd({ kind: "section", facing, origin: [Math.round(((a[0] ?? 0) + (p[0] ?? 0)) / 2), Math.round(((a[1] ?? 0) + (p[1] ?? 0)) / 2)] });
+    sec.error = r.error;
+    if (r.error) console.warn("gl viewport: section:", r.error);
+    sec.added = r.id;
+    sec.a = sec.hover = null;
+    runAction("draw_section"); // the tool stops
+    dirty = true;
+  };
+  const sectionCancel = (): boolean => {
+    if (!sectionNow()) { if (stats.section.a) { stats.section.a = stats.section.hover = null; dirty = true; } return false; }
+    if (stats.section.a) stats.section.a = stats.section.hover = null;
+    else runAction("draw_section");
+    dirty = true;
+    return true;
+  };
+  // ---- end VIEWSHEET ----
   // Pointer moves while placing: at most one tool call per frame (the latest position).
   let pendingMove: PointerEvent | null = null;
   stats.toScreen = (x, y, z) => {
@@ -1573,7 +1635,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     drag = { pan: e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey), box: onHandle, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
     if (onHandle) canvas.style.cursor = "grabbing"; // ISS71
     // A left press on a dimension or a text of the plan: it is held (a click selects it, a drag moves it).
-    if (plan && e.button === 0 && !e.shiftKey && !placingNow() && !annotatingNow() && !measuringNow()) {
+    if (plan && e.button === 0 && !e.shiftKey && !placingNow() && !annotatingNow() && !measuringNow() && !sectionNow()) {
       const r = canvas.getBoundingClientRect();
       const id = annotationAt(e.clientX - r.left, e.clientY - r.top);
       if (id) drag.annot = id;
@@ -1582,6 +1644,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   canvas.addEventListener("pointermove", (e) => {
     if (!drag) {
       if (placingNow() || annotatingNow() || measuringNow()) pendingMove = e;
+      if (sectionNow() && stats.section.a) { stats.section.hover = worldAt(e.clientX, e.clientY); dirty = true; } // VIEWSHEET
       // ---- ISS71 ---- the arrowhead under the pointer: drawn larger, the grab cursor
       const r = canvas.getBoundingClientRect();
       const hv = !placingNow() && !measuringNow() && !plan ? handleAt(e.clientX - r.left, e.clientY - r.top) : null;
@@ -1680,6 +1743,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       measureAt("measure_click", e.clientX, e.clientY, e);
       return;
     }
+    if (sectionNow()) { sectionClick(e.clientX, e.clientY); return; } // VIEWSHEET: the section tool
     if (selAnn) { selAnn = stats.selectedAnnotation = null; dirty = true; } // a click elsewhere: the annotation is let go
     if (d.pan) return;
     if (plan && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > CLICK_PX) return;
@@ -1699,6 +1763,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   // measure tool (its first point, then the tool: ticket T1).
   viewportKeys.cancelTool = () => {
     if (annotate.value?.active === true) { annotCancel(); return true; }
+    if (sectionCancel()) return true; // VIEWSHEET
     if (placing.value?.active === true) {
       stats.toolCalls++;
       const { state: t, error } = toolCall("cancel");

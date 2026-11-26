@@ -215,6 +215,10 @@ export const CONTROLS: readonly Control[] = [
   { id: "shell-lost-home", event: { do: "home" }, shown: k("sessionLost") },
   { id: "shell-lost-reopen", event: { do: "open", path: "/recent/file.bimble" }, shown: (s) => s.at === "sessionLost" && s.file !== null },
   { id: "shell-lost-show", event: { do: "showView" }, shown: (s, c) => kind(s) === "sessionLost" && c.file !== null },
+  // VIEWSHEET: View → New view… creates the view and shows it (dialogs/NewView.vue); Sheets → Place view… places
+  // a view on the sheet shown and stays on that sheet (dialogs/PlaceView.vue). Dialogs are drawn over any model state.
+  { id: "newview-create", event: { do: "showView" }, shown: inModel },
+  { id: "placeview-pick", event: { do: "showSheet", sheet: "S-101" }, shown: k("model.sheet") },
 ];
 
 /** Whether the control `id` is shown in `s` (an unknown id: never). */

@@ -1150,6 +1150,8 @@ export function runAction(name: string): string | null {
       refreshSettingOut();
     }
     // ---- end SETOUT ----
+    // ---- VIEWSHEET ---- the section tool is session state: its pressed button here
+    if (name === "draw_section") actions.value = tryQuery<ActionState[]>("actions", []);
     // ---- Q2: the view switches are session state, not in the change JSON: their pressed state
     // here; fit and top move the page's camera (glviewport.ts registers `viewActions`). ----
     if (VIEW_SWITCHES.includes(name)) {
@@ -1209,7 +1211,8 @@ export const viewClip = (): ViewClip | null => tryQuery<ViewClip | null>("view_c
 /** A section's extra fields in `view_clip`: its look (world x, y, turned), facing, cut line point
  *  (world mm), depth (0: all) and turn (project north, radians). */
 export interface SectionClip extends ViewClip { dir?: number[]; facing?: string; origin?: number[]; depth_mm?: number; yaw?: number }
-export type ViewAdd = { kind?: "plan" | "ceiling" | "section" | "three_d"; storey?: string; facing?: string; origin?: number[]; from?: string; name?: string };
+export type ViewAdd = { kind?: "plan" | "ceiling" | "section" | "three_d"; storey?: string; facing?: string; origin?: number[]; from?: string; name?: string;
+  scale?: number; depth_mm?: number /* VIEWSHEET */ };
 /** `view_add`, then the new view's id (the one `open_views` did not list before), or the error. */
 export function viewAdd(args: ViewAdd): { id: string | null; error: string | null } {
   const ids = (v: unknown) => new Set(((v as { views?: { id: string }[] }).views ?? []).map((x) => x.id));
@@ -1403,6 +1406,19 @@ function actionWith(name: string, args: unknown): string {
   if (!w.action_with) throw new Error(`${name}: not in this viewer`);
   return w.action_with(name, JSON.stringify(args));
 }
+
+// ---- VIEWSHEET ---- the standards' text and dimension types, the one new annotations get (ccore/session/view_sheet.h)
+export interface AnnotationTypes {
+  dimension: string | null; dimension_types: { decimals: number; name: string; text_mm: number; unit: string }[];
+  text: string | null; text_types: { font: string; name: string; size_mm: number }[];
+}
+/** `query annotation_types`; null where the core does not answer it. */
+export const annotationTypes = (): AnnotationTypes | null => tryQuery<AnnotationTypes | null>("annotation_types", null);
+/** The type new texts or dimensions get (null: Default). Returns the error, or null. */
+export function setAnnotationType(which: "text" | "dimension", name: string | null): string | null {
+  try { actionWith("annotation_type", { [which]: name }); return null; } catch (e) { return message(e); }
+}
+// ---- end VIEWSHEET ----
 
 /** Link a model read-only beside the open one (`link_model {path}`; native host: a path it can read). Returns the error, or null. */
 export function linkModel(path: string): string | null {
