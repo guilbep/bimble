@@ -9,14 +9,17 @@
 // (20000, 0, 0) puts the frame's column P1.00 (centred on (0, 0) in its file) under the point (20000, 0, 1000) and
 // nothing of it under (0, 0, 1000) (pick); one undo removes all four (the mesh has no link); the project saved,
 // one IFC made unreadable, reopened: the four links from their caches, drawn. No uncaught page error, no console
-// error. Prints "N passed, M failed"; exits non-zero on a failure. Fails before LNK… LINKF: no Link a folder…
+// error. Each timed click starts from a settled page (three frames under 25 ms apart; the eye: the
+// four links drawn). LINKF_PROBE=1 (or =all) prints the frames, the long tasks and every call
+// between a click and its rows. Prints "N passed, M failed"; exits non-zero on a failure. Fails before LNK… LINKF: no Link a folder…
 // ([data-bb=link-add-folder]) and no link_folder action.
 import { spawn } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHROMIUM, port, vitePort } from "./ports.mjs";
+import { loops, settled } from "./lib/frames.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const G = join(CCORE, "golden");
@@ -150,9 +153,24 @@ async function main() {
   await evalJs(`(() => { const i = document.querySelector('[data-bb=file-browser-path]'); i.value = ${JSON.stringify(dir)}; i.dispatchEvent(new Event('input'));
     i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
   await waitFor("the folder listed", 5000, () => evalJs("[...document.querySelectorAll('[data-bb=file-browser-entry]')].length === 4 && !document.querySelector('[data-bb=file-browser-go]').disabled"));
-  const ms = await evalJs(`new Promise((res) => { const t0 = performance.now(); document.querySelector('[data-bb=file-browser-go]').click();
+  if (process.env.LINKF_PROBE) await evalJs(`(() => { window.__xlog = []; const o = XMLHttpRequest.prototype.open, sd = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (m, u, a) { this.__u = u; return o.apply(this, arguments); };
+    XMLHttpRequest.prototype.send = function () { const t = performance.now(); const r = sd.apply(this, arguments); window.__xlog.push([performance.now() - window.__t0, performance.now() - t, String(this.__u).replace(/\\?t=.*/, '')]); return r; };
+    const f = window.fetch; window.fetch = function (u) { window.__xlog.push([performance.now() - window.__t0, 0, 'fetch ' + String(u).replace(/[?&]t=[^&]*/, '')]); return f.apply(this, arguments); };
+    new MutationObserver(() => { if (!window.__rowsAt && document.querySelectorAll('[data-bb=link-model]').length === 4) window.__rowsAt = performance.now() - window.__t0; }).observe(document.body, { childList: true, subtree: true }); })()`);
+  await evalJs(`new Promise((res) => { let last = performance.now(), calm = 0; const f = (t) => { calm = t - last < 25 ? calm + 1 : 0; last = t; if (calm >= 3) res(); else requestAnimationFrame(f); }; requestAnimationFrame(f); })`); // a settled page first
+  if (process.env.LINKF_PROBE) console.log(`  idle frames before the click (ms apart): ${await evalJs(`new Promise((res) => { const t = []; const f = (x) => { t.push(x); if (t.length < 30) requestAnimationFrame(f); else res(t.slice(1).map((v, i) => (v - t[i]).toFixed(0)).join(' ')); }; requestAnimationFrame(f); })`)}`);
+  if (process.env.LINKF_PROBE) await evalJs(`(() => { window.__raf = []; const f = () => { window.__raf.push(performance.now() - (window.__t0 ?? 0)); if (window.__raf.length < 400) requestAnimationFrame(f); }; requestAnimationFrame(f);
+    window.__lt = []; try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lt.push([e.startTime - (window.__t0 ?? 0), e.duration]); }).observe({ type: 'longtask', buffered: false }); } catch {} })()`);
+  const ms = await evalJs(`new Promise((res) => { const t0 = performance.now(); window.__t0 = t0; document.querySelector('[data-bb=file-browser-go]').click();
     const tick = () => document.querySelectorAll('[data-bb=link-model]').length === 4 ? res(performance.now() - t0) : requestAnimationFrame(tick); tick(); })`);
   check("Link this folder: four rows within 200 ms of the click (ADR 0074)", ms < 200, `${ms.toFixed(1)} ms`);
+  if (process.env.LINKF_PROBE) {
+    console.log(`probe: rows in the DOM at ${(await evalJs("window.__rowsAt"))?.toFixed(1)} ms, loadavg ${readFileSync("/proc/loadavg", "utf8").trim()}`);
+    console.log(`  frames at: ${(await evalJs("window.__raf.filter((t) => t > 0 && t < 1500).map((t) => t.toFixed(0)).join(' ')"))}`);
+    console.log(`  long tasks: ${(await evalJs("window.__lt.filter(([t]) => t > -50 && t < 1500).map(([t, d]) => t.toFixed(0) + '+' + d.toFixed(0)).join(' ')"))}`);
+    for (const [at, d, u] of await evalJs("window.__xlog")) if (at < 1500 && (process.env.LINKF_PROBE === "all" || /fetch|action/.test(u))) console.log(`  ${at.toFixed(1)} +${d.toFixed(1)} ${u}`);
+  }
   const ready = await waitFor("each link ready", 60000, async () => { const r = await rows(); return r.length === 4 && r.every((m) => m.state === "ready") ? r : null; });
   check("each becomes ready", ready.length === 4);
   check("caches and reports beside each IFC", Object.keys(FILES).every((n) => existsSync(join(dir, `${n}.bimbleview`)) && existsSync(join(dir, `${n}.log.txt`))));
@@ -161,12 +179,19 @@ async function main() {
   check("the scene holds the sum of their elements", sum === drawn && sum > 0, `${sum} / ${drawn}`);
   await waitFor("rows ready in the panel", 5000, () => evalJs("[...document.querySelectorAll('[data-bb=link-model]')].every((r) => r.dataset.state === 'ready')"));
 
-  // hide one through its eye
+  // hide one through its eye, once the viewport drew the four links (a click is timed from a settled picture)
+  await settled(evalJs, "the four links drawn", (await loops(evalJs)) - 1, { rev: "mesh" });
+  await evalJs(`new Promise((res) => { let last = performance.now(), calm = 0; const f = (t) => { calm = t - last < 25 ? calm + 1 : 0; last = t; if (calm >= 3) res(); else requestAnimationFrame(f); }; requestAnimationFrame(f); })`);
   const t0 = await gl();
-  const hide = await evalJs(`new Promise((res) => { const t0 = performance.now(); let row = 0; document.querySelector('[data-bb=link-row][data-name="b_frame2.ifc"] [data-bb=link-eye]').click();
+  if (process.env.LINKF_PROBE) await evalJs("window.__xlog = []; window.__lt = []; window.__raf = []; window.__rowsAt = 0; (() => { const f = () => { window.__raf.push(performance.now() - window.__t0); if (window.__raf.length < 200) requestAnimationFrame(f); }; requestAnimationFrame(f); })()");
+  const hide = await evalJs(`new Promise((res) => { const t0 = performance.now(); window.__t0 = t0; let row = 0; document.querySelector('[data-bb=link-row][data-name="b_frame2.ifc"] [data-bb=link-eye]').click();
     const tick = () => { if (!row && document.querySelector('[data-bb=link-row][data-name="b_frame2.ifc"]')?.dataset.visible === '0') row = performance.now() - t0;
       if (row && window.__bbGl.links.find((l) => l.name === 'b_frame2.ifc')?.visible === false) res({ row, view: performance.now() - t0 }); else requestAnimationFrame(tick); }; tick(); })`);
   const t1 = await gl();
+  if (process.env.LINKF_PROBE) {
+    console.log(`  hide frames at: ${(await evalJs("window.__raf.filter((t) => t > 0 && t < 600).map((t) => t.toFixed(0)).join(' ')"))}; long tasks ${(await evalJs("window.__lt.filter(([t]) => t > -50 && t < 600).map(([t, d]) => t.toFixed(0) + '+' + d.toFixed(0)).join(' ')"))}`);
+    for (const [at, d, u] of await evalJs("window.__xlog")) if (at < 600) console.log(`  hide ${at.toFixed(1)} +${d.toFixed(1)} ${u}`);
+  }
   console.log(`hide: the row in ${hide.row.toFixed(1)} ms, the viewport (its /mesh fetched again) in ${hide.view.toFixed(1)} ms`);
   check("the eye hides one: the row answers within 200 ms, its triangles go", hide.row < 200 && t1.linkTris < t0.linkTris, `${hide.row.toFixed(1)} ms, ${t0.linkTris} -> ${t1.linkTris}`);
 

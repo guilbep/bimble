@@ -777,9 +777,10 @@ int cc_links_tick(cc_session *s) {
     if (j) {
         int at = link_by_uid(s, s->link_job_uid);
         if (!cc_link_job_done(j)) {
-            unsigned d = (unsigned)cc_atomic_load(&j->pg.done);
-            if (at >= 0 && d / 50 != s->links[at].progress / 50) s->links[at].progress = d, ch = 1; /* every 5 % */
-            if (!ch) return 0;
+            /* the progress is served by query links_panel (the page polls it while a link converts):
+             * no change published for it, so the page's full refresh runs once per finished link */
+            if (at >= 0) s->links[at].progress = (unsigned)cc_atomic_load(&j->pg.done);
+            return 0;
         } else {
             if (at >= 0) take(s, &s->links[at], j);
             cc_link_job_free(j);
@@ -791,7 +792,7 @@ int cc_links_tick(cc_session *s) {
         int best = -1;
         for (size_t i = 0; i < s->nlinks; i++)
             if (s->links[i].state == CC_LS_QUEUED && (best < 0 || s->links[i].bytes < s->links[best].bytes)) best = (int)i;
-        if (best >= 0) start(s, best), ch = 1;
+        if (best >= 0) start(s, best); /* "converting": no change published (above) */
         if (s->link_job && cc_link_job_done(s->link_job)) /* ran here (no thread): take it now */
             return cc_links_tick(s), 1;
     }

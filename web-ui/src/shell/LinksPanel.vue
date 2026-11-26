@@ -4,11 +4,11 @@
 // reference plan (PDF, DXF, with the view it is placed in): show / hide, reload, reload from…,
 // remove; a reference also moves by numbers (mm) and turns (degrees), one undo step each. The calls
 // are shell/links.ts's; errors show under the rows.
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onUnmounted, reactive, ref, watch } from "vue";
 import { t } from "../i18n";
 import { state } from "../bimble";
 import { send } from "./send";
-import { enabled, linkFolder, linkLog, linkNew, linksBusy, linksError, linksPanel, modelOp, modelReload, modelSet, refOp, refReload, reloadAll, type PanelModel, type PanelReference } from "./links";
+import { enabled, linkFolder, linkLog, linksTick, linkNew, linksBusy, linksError, linksPanel, modelOp, modelReload, modelSet, refOp, refReload, reloadAll, type PanelModel, type PanelReference } from "./links";
 
 const rows = computed(() => { void state.value; return linksPanel(); });
 // The move and rotate fields of each reference, by id (filled from its placement).
@@ -49,6 +49,14 @@ const logOf = ref<{ name: string; text: string } | null>(null);
 const showLog = (m: PanelModel) => { logOf.value = logOf.value?.name === m.name ? null : { name: m.name, text: linkLog(m.name) }; };
 const confirmEdit = ref<string | null>(null);
 const openEditable = (m: PanelModel) => { confirmEdit.value = null; send({ do: "import", path: m.path }); };
+// LINKF: while a link is queued or converting, its row is polled (query links_panel, 250 ms): the
+// core publishes no change for the progress (one full refresh per finished link, not per 5 %).
+let poll: number | null = null;
+watch(() => rows.value.models.some(busy), (b) => {
+  if (b && poll === null) poll = window.setInterval(() => linksTick.value++, 250);
+  if (!b && poll !== null) window.clearInterval(poll), (poll = null);
+}, { immediate: true });
+onUnmounted(() => { if (poll !== null) window.clearInterval(poll); });
 const anyReady = computed(() => rows.value.models.some((m) => m.state === "ready" || m.state === "unloaded" || m.state === "failed"));
 </script>
 

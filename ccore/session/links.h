@@ -100,8 +100,10 @@ struct cc_link {
  * beside the IFC loaded, else the IFC read and the cache written) runs on the carrier's thread
  * (pf->spawn), one at a time, the smallest queued first, while the session answers. A carrier
  * calls cc_links_tick often while cc_links_busy (the native host: every 100 ms of its poll loop):
- * it takes a finished conversion (state "ready", the link drawn) and starts the next; each change
- * bumps links_gen, so the change long-poll tells the page. Without pf->spawn (the wasm module, the
+ * it takes a finished conversion (state "ready", the link drawn) and starts the next. Only a
+ * finished conversion bumps links_gen (the change long-poll tells the page, which refreshes and
+ * fetches the mesh); the start of one and its progress are served by query links_panel, which the
+ * page polls while a link is queued or converting (LinksPanel.vue). Without pf->spawn (the wasm module, the
  * C suites) and for smaller files the conversion runs in the call, as before.
  *   action link_folder {path, recursive?}: links every *.ifc of the folder (and each *.bimbleview
  *     without its IFC: not a cache), sorted by name, at most CC_MAX_LINKS in all; one undo step
