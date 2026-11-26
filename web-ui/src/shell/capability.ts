@@ -53,6 +53,8 @@ export const ACTION_CAPABILITY: Readonly<Record<string, string>> = {
   link_pdf: "references", link_dxf: "references", link_model: "references", manage_links: "references",
   project: "project_info", history: "history", new_sheet: "sheets", close_sheet: "sheets",
   measure: "measure",
+  show_base_point: "setting_out", show_survey_point: "setting_out", view_true_north: "setting_out", // SETOUT
+  reference_planes: "reference_planes", // SETOUT: no such action yet: "not yet" while the core does not serve it
 };
 
 /** Whether the action `name` is not available in this core at all (no action: not yet either). */

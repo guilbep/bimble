@@ -11,7 +11,8 @@ export type RibbonKey = keyof typeof fr;
 // one whose capability the core does not serve: shell/capability.ts toolNotYet) is drawn "not yet", with a tooltip.
 export interface RibbonTool { key: RibbonKey; tag: "button" | "a"; icon: string; action: string | null; page?: string; panel?: string; dialog?: string }
 // Reference .rbox: a label over a 150 px select (sel) or a mono readout (readout). No Rust call yet: drawn disabled, empty.
-export interface RibbonBox { key: RibbonKey; kind: "sel" | "readout"; missing: string }
+// SETOUT: kind "zero" is the Setting out tab's project zero (shell/ProjectZeroBox.vue: the georeference's height).
+export interface RibbonBox { key: RibbonKey; kind: "sel" | "readout" | "zero"; missing: string }
 // box: drawn after the tools, in a `.tools` with style="align-items:center" (as the reference).
 // north (ISS71): the section box's orientation control after the tools (shell/BoxNorth.vue).
 export interface RibbonGroup { key: RibbonKey; tools: RibbonTool[]; box?: RibbonBox; north?: boolean }
@@ -48,16 +49,16 @@ export const RIBBON: Record<TabId, RibbonGroup[]> = {
   ],
   settingOut: [
     { key: "ribbon.settingOut.g1", tools: [
-      { key: "ribbon.settingOut.g1.t1", tag: "button", icon: "<path d=\"M12 21s-6-6-6-11a6 6 0 0 1 12 0c0 5-6 11-6 11z\"/><circle cx=\"12\" cy=\"10\" r=\"2\"/>", action: null },
-      { key: "ribbon.settingOut.g1.t2", tag: "button", icon: "<circle cx=\"12\" cy=\"12\" r=\"7\"/><path d=\"M12 3v18M3 12h18\"/>", action: null },
-      { key: "ribbon.settingOut.g1.t3", tag: "button", icon: "<path d=\"M12 3 7 20l5-4 5 4z\"/>", action: null },
+      { key: "ribbon.settingOut.g1.t1", tag: "button", icon: "<path d=\"M12 21s-6-6-6-11a6 6 0 0 1 12 0c0 5-6 11-6 11z\"/><circle cx=\"12\" cy=\"10\" r=\"2\"/>", action: "show_survey_point" },
+      { key: "ribbon.settingOut.g1.t2", tag: "button", icon: "<circle cx=\"12\" cy=\"12\" r=\"7\"/><path d=\"M12 3v18M3 12h18\"/>", action: "show_base_point" },
+      { key: "ribbon.settingOut.g1.t3", tag: "button", icon: "<path d=\"M12 3 7 20l5-4 5 4z\"/>", action: "view_true_north" },
     ] },
     { key: "ribbon.settingOut.g2", tools: [
-    ], box: { key: "ribbon.settingOut.g2.b1", kind: "readout", missing: "project zero elevation (IfcSite.RefElevation query)" } },
+    ], box: { key: "ribbon.settingOut.g2.b1", kind: "zero", missing: "" } },
     { key: "ribbon.settingOut.g3", tools: [
       { key: "ribbon.settingOut.g3.t1", tag: "a", icon: "<path d=\"M3 7h3M9 7h3M15 7h6\"/><path d=\"M3 17h3M9 17h3M15 17h6\"/><path d=\"m18 4 2 3-2 0\"/>", action: null, page: "levels-grids" },
       { key: "ribbon.settingOut.g3.t2", tag: "a", icon: "<path d=\"M8 3v18M16 3v18M3 8h18M3 16h18\"/>", action: null, page: "levels-grids" },
-      { key: "ribbon.settingOut.g3.t3", tag: "button", icon: "<path d=\"M4 8 12 4l8 4-8 4z\"/><path d=\"M4 8v8l8 4 8-4V8\"/>", action: null },
+      { key: "ribbon.settingOut.g3.t3", tag: "button", icon: "<path d=\"M4 8 12 4l8 4-8 4z\"/><path d=\"M4 8v8l8 4 8-4V8\"/>", action: "reference_planes" },
     ] },
     { key: "ribbon.settingOut.g4", tools: [
       { key: "ribbon.settingOut.g4.t1", tag: "button", icon: "<path d=\"m4 16 12-12 4 4L8 20z\"/><path d=\"m8 12 2 2M11 9l2 2M14 6l2 2\"/>", action: "measure" },

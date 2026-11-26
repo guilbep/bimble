@@ -5,6 +5,7 @@ import { RIBBON } from "./ribbon-tabs";
 import RibbonTool from "./RibbonTool.vue";
 import { HIDE_NOT_AVAILABLE } from "./capability"; // FAKE1
 import BoxNorth from "./BoxNorth.vue"; // ISS71: the section box's orientation
+import ProjectZeroBox from "./ProjectZeroBox.vue"; // SETOUT: project zero (the georeference's height)
 </script>
 
 <template>
@@ -16,7 +17,8 @@ import BoxNorth from "./BoxNorth.vue"; // ISS71: the section box's orientation
         <BoxNorth v-if="grp.north" /><!-- ISS71 -->
         <!-- Reference .rbox: no Rust call yet, drawn disabled (.off) and empty (no sample value). -->
         <!-- FAKE1: a box with no call behind it is "not yet" (ny), with the tooltip, as a tool. -->
-        <div v-if="grp.box && !HIDE_NOT_AVAILABLE" class="rbox off ny" :class="{ readout: grp.box.kind === 'readout' }" aria-disabled="true"
+        <ProjectZeroBox v-if="grp.box?.kind === 'zero'" :label="grp.box.key" :bb="`ribbon-box-${g + 1}`" /><!-- SETOUT -->
+        <div v-else-if="grp.box && !HIDE_NOT_AVAILABLE" class="rbox off ny" :class="{ readout: grp.box.kind === 'readout' }" aria-disabled="true"
              :data-missing="grp.box.missing" :data-bb="`ribbon-box-${g + 1}`" data-not-yet="" :title="t('na.tooltip', { name: t(grp.box.key) })">
           <span class="lbl">{{ t(grp.box.key) }}</span>
           <span v-if="grp.box.kind === 'sel'" class="sel-inp" style="width:150px"><span /><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>

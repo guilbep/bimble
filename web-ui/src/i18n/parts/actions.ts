@@ -59,6 +59,9 @@ export const fr = {
   "action.show_all_in_view": "Tout afficher dans la vue",
   "action.show_all": "Tout réafficher", // ISS72
   "action.show_previous": "Affichage précédent", // ISS72
+  "action.show_base_point": "Point de base du projet", // SETOUT
+  "action.show_survey_point": "Point topographique", // SETOUT
+  "action.view_true_north": "Nord géo. / projet", // SETOUT
   "actionTab.Model": "Modèle",
   "actionTab.Manage": "Gérer",
   "actionTab.Quick access": "Accès rapide",
@@ -120,6 +123,9 @@ export const en: Record<keyof typeof fr, string> = {
   "action.show_all_in_view": "Show all in view",
   "action.show_all": "Show all", // ISS72
   "action.show_previous": "Show previous", // ISS72
+  "action.show_base_point": "Project base point", // SETOUT
+  "action.show_survey_point": "Survey point", // SETOUT
+  "action.view_true_north": "True / project north", // SETOUT
   "actionTab.Model": "Model",
   "actionTab.Manage": "Manage",
   "actionTab.Quick access": "Quick access",

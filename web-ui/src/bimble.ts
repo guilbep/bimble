@@ -985,6 +985,7 @@ function refresh(modelChanged: boolean): void {
     // ---- end FAKE1 ----
     refreshNorth(); // G2: project north (viewcube.ts projectNorth) and the setting-out panel
   }
+  refreshSettingOut(); // SETOUT: the markers (session state) and the georeference they show
   // A model is loaded and its first refresh is done (deeplink.ts then sets data-bb-ready for the design check).
   if (state.value.file !== null && actions.value.length > 0) resolveModel();
   if (!timed && modelChanged && state.value.file !== null) {
@@ -1142,6 +1143,13 @@ export function runAction(name: string): string | null {
       actions.value = tryQuery<ActionState[]>("actions", []);
     }
     // ---- end ISS71 ----
+    // ---- SETOUT ---- the markers shown and the box's north are session state: no change event
+    if (SETOUT_ACTIONS.includes(name)) {
+      actions.value = tryQuery<ActionState[]>("actions", []);
+      visibility.value = tryQuery<Visibility | null>("visibility", null);
+      refreshSettingOut();
+    }
+    // ---- end SETOUT ----
     // ---- Q2: the view switches are session state, not in the change JSON: their pressed state
     // here; fit and top move the page's camera (glviewport.ts registers `viewActions`). ----
     if (VIEW_SWITCHES.includes(name)) {
@@ -1507,6 +1515,25 @@ export const refreshNorth = () => (northInfo.value = tryQuery<NorthInfo | null>(
 export interface Coordinates { survey: [number, number, number]; text: string; wgs84: [number, number] | null; world_mm: [number, number, number] }
 export const coordinates = (at: [number, number, number], system: string | undefined = readoutSystem()) => // SET1: the setting's system
   tryQuery<Coordinates | null>("coordinates", null, system && system !== "survey" ? { at, system } : { at });
-export type GeorefPatch = { crs?: string; east_m?: number; north_m?: number; height_m?: number; rotation_deg?: number; map_rotation_deg?: number; clear?: boolean };
+export type GeorefPatch = { crs?: string; east_m?: number; north_m?: number; height_m?: number; rotation_deg?: number; map_rotation_deg?: number; clear?: boolean; survey_point_mm?: number[] };
 export const georefSet = (patch: GeorefPatch) => runVerb("georef_set", patch);
+// ---- SETOUT (ADR 0075, ccore/session/setting_out.h): the Setting out tab's markers ----
+export interface SetOutPoint { at_mm: [number, number, number]; shown: boolean; survey_m: [number, number, number] }
+export interface SettingOut {
+  base_point: SetOutPoint;
+  crs: string | null;
+  /** World plan unit vectors pointing to project north and to true north. */
+  north: { project: [number, number]; rotation_deg: number; true: [number, number] };
+  /** Project zero: the survey height of world z = 0, m (ADR 0056 decision 1). */
+  project_zero_m: number;
+  survey_point: SetOutPoint & { set: boolean };
+}
+/** The actions of the Setting out tab that change session state only. */
+export const SETOUT_ACTIONS = ["show_base_point", "show_survey_point", "view_true_north"];
+/** `query setting_out` as last asked (null: no editable model). */
+export const settingOut = shallowRef<SettingOut | null>(null);
+export const refreshSettingOut = () => { settingOut.value = tryQuery<SettingOut | null>("setting_out", null); };
+/** Sets the survey point (world mm), or removes it (null). One undoable step (`georef_set`). */
+export const surveyPointSet = (at: [number, number, number] | null) => runVerb("georef_set", { survey_point_mm: at ?? [] });
+// ---- end SETOUT ----
 // ---- end G2 ----

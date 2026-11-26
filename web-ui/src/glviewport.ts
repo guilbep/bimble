@@ -74,6 +74,7 @@ import {
   pointer, coordinates, // KEY1: the status bar's pointer coordinates
   annotate, annotateCall, boxTool, deleteAnnotation, moveAnnotation, openViews, placing, select, selectLinked, state, toolCall,
   viewAnnotations, viewClip, visibility, visibilitySets, measure, measureCall, type MeasureState,
+  settingOut, // SETOUT
   type AnnotateState, type ToolPointer, type ToolState, type ViewAnnotation, type ViewAnnotations, type ViewClip, type Visibility,
   type VisibilitySets,
 } from "./bimble";
@@ -81,6 +82,7 @@ import { drawMeasure } from "./gl/measure";
 import { referenceLayer } from "./gl/reference"; // L1: reference plans
 import { sectionMatrices, sectionFit, isSection } from "./gl/section"; // SEC1
 import { gridLayer } from "./gl/grids"; // ---- G2: grid axes in plans ---- / ---- end G2 ----
+import { drawSettingOut, type MarkerDrawn } from "./gl/settingout"; // SETOUT: base point, survey point, north
 import { clipPlanes, onTargetPlane, orbitAbout, ORBIT_RAD_PER_PX, sameCam, wheelFactor, zoomAt, type OrbitCam } from "./gl/nav";
 import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
 
@@ -388,6 +390,9 @@ interface GlStats {
   linkTris: number;
   /** Test hook: a world point (mm) -> CSS px in the viewport (clientX, clientY), or null. */
   toScreen?: (x: number, y: number, z: number) => [number, number] | null;
+  /** SETOUT: the setting-out markers last drawn (overlay CSS px) and when (performance.now()). */
+  setout?: MarkerDrawn[];
+  setoutAt?: number;
   /** Dimensions and texts (ticket C4): the view's annotations as last fetched, the strings the
    *  overlay drew in its last frame, the selected annotation, the annotate tool's state and calls,
    *  the last annotation error. */
@@ -1268,6 +1273,17 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         return p ? [p[0] - b.left, p[1] - b.top] : null;
       }, texts);
     }
+    // ---- SETOUT: the base point, the survey point and north, in 3D and in a plan ----
+    if (mesh) {
+      const b = canvas.getBoundingClientRect();
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      stats.setout = drawSettingOut(ctx, settingOut.value, (x, y, z) => {
+        const p = stats.toScreen?.(x, y, z);
+        return p ? [p[0] - b.left, p[1] - b.top] : null;
+      });
+      stats.setoutAt = performance.now();
+    }
+    // ---- end SETOUT ----
     if (stats.boxHandles.length) { ctx.setTransform(dpr, 0, 0, dpr, 0, 0); drawHandles(ctx); } // ISS71
     // ---- navigation (NAV1): where the drag turns the view about (lib.rs handle_view_input) ----
     const op = drag?.orbit;
@@ -1289,6 +1305,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     stats.overlayTexts = texts;
   };
+  /** SETOUT: the setting-out answer last drawn. */
+  let seenSetOut: unknown = null;
   /** NAV1: where the orbit pivot's marker was last drawn (overlay CSS px), or null. */
   let navMark: [number, number] | null = null;
   /** The annotations of the view shown, again when the model or the view changed. */
@@ -1873,6 +1891,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       else if (measuringNow()) measureAt("measure_pointer", e.clientX, e.clientY, e);
     }
     if (measure.value !== stats.measure) { stats.measure = measure.value; dirty = true; } // the action, a clear, another model
+    if (settingOut.value !== seenSetOut) { seenSetOut = settingOut.value; dirty = true; } // SETOUT: shown, moved, turned
     if (annotate.value !== seenAnnot) { // started or stopped (bimble.ts startDimension, startText)
       seenAnnot = annotate.value;
       stats.annotate = seenAnnot;

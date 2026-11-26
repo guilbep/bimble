@@ -17,6 +17,13 @@ export const fr = {
   "settingout.badNumber": "Un nombre est attendu",
   "settingout.basePoint": "Point de base",
   "settingout.noModel": "Pas de modèle modifiable ouvert : le géoréférencement se règle sur un .bimble.",
+  "settingout.zeroTip": "Niveau zéro du projet : l'altitude du z = 0 du modèle (m), celle du point de base",
+  "settingout.survey": "Point topographique",
+  "settingout.surveyAt": "Position {axis} (mm)",
+  "settingout.surveyCoords": "Coordonnées",
+  "settingout.surveyAtBase": "Au point de base (non placé)",
+  "settingout.surveyRemove": "Ramener au point de base",
+  "settingout.markers": "Repères affichés : boutons du ruban Point topographique et Point de base du projet",
 };
 export const en: Record<keyof typeof fr, string> = {
   "settingout.title": "Project base point",
@@ -36,4 +43,11 @@ export const en: Record<keyof typeof fr, string> = {
   "settingout.badNumber": "A number is expected",
   "settingout.basePoint": "Base point",
   "settingout.noModel": "No editable model open: the georeference is set on a .bimble.",
+  "settingout.zeroTip": "Project zero: the elevation of the model's z = 0 (m), the base point's",
+  "settingout.survey": "Survey point",
+  "settingout.surveyAt": "Position {axis} (mm)",
+  "settingout.surveyCoords": "Coordinates",
+  "settingout.surveyAtBase": "At the base point (not placed)",
+  "settingout.surveyRemove": "Back to the base point",
+  "settingout.markers": "Markers shown: the ribbon's Survey point and Project base point buttons",
 };
