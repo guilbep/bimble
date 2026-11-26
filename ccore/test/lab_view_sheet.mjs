@@ -6,6 +6,7 @@
 // raw CDP, then opens /?native=1&gl=1&tab=view and works:
 //   View → New view…: the dialog (kind, level, name, scale; Elevation listed "not available yet"),
 //     a plan of Niveau 2 named "Formwork 2" at 1:50: one view_add (one undo step), the view opens;
+//     DEAD1: a plan and a ceiling plan of Fondations (the lowest level, 800 mm tall) by default are made;
 //   View → Section: off in 3D with its reason; in the plan, two clicks (real mouse events) draw the
 //     line (2000, 5000) → (16000, 5000): a section looking south through (9000, 5000) is listed, the
 //     plan stays shown and its drawing (view_svg) changes (the mark); Esc drops the first point,
@@ -210,6 +211,22 @@ async function tab(S, evalJs) {
   check("New view…: plan 'Formwork 2' of Niveau 2 at 1:50, opened and active", ms !== null && fw?.type === "plan" && fw?.storey === lv2 && fw?.scale === 50, JSON.stringify(fw));
   const u0b = await B("return b.query('history').undo.length;");
   check("New view…: one undo step, the dialog closed", u0b === u0 + 1 && !(await exists("[data-bb=new-view-dialog]")), `${u0} -> ${u0b}, dialog ${await evalJs("(async () => (await import('/src/dialogs/index.ts')).currentDialog.value)()")} ${await evalJs("document.querySelector('[data-bb=new-view-error]')?.textContent ?? ''")}`);
+
+  // DEAD1: a plan and a ceiling plan of the lowest level (Fondations, 800 mm under Niveau 1) by default: made
+  // (the core's default cut fits the storey, DEVIATIONS 34; it was refused: "the planes must be in order")
+  const fond = await B("return b.storeys.value.find((s) => s.name === 'Fondations')?.id;");
+  for (const kind of ["plan", "ceiling"]) {
+    const n0 = await B("return b.openViews.value.views.length;");
+    await timed(`New view… (dialog) for a ${kind} of Fondations`, tool(5, 1), CLICK, "!!document.querySelector('[data-bb=new-view-dialog]')");
+    await evalJs(`document.querySelector('[data-bb=new-view-kind-${kind}]')?.click()`);
+    await sleep(100);
+    await evalJs(`(() => { const el = document.querySelector('[data-bb=new-view-level]'); ${pick(fond)}; })()`);
+    const ok = await timed(`New view… create a ${kind} of Fondations`, "[data-bb=new-view-create]", CLICK,
+      `(() => { const ov = b.openViews.value; return ov.views.length === ${n0} + 1 && ov.views.some((x) => x.id === ov.active && x.storey === ${JSON.stringify(fond)}); })()`);
+    const errTxt = await evalJs("document.querySelector('[data-bb=new-view-error]')?.textContent ?? ''");
+    check(`New view…: a ${kind} of Fondations by default is made and shown, no error (DEAD1)`, ok !== null && errTxt === "", errTxt);
+    if (await exists("[data-bb=new-view-dialog]")) for (const type of ["keyDown", "keyUp"]) await S("Input.dispatchKeyEvent", { type, key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  }
 
   // ======== View → Section ========
   // In 3D: off, with the reason on a click.

@@ -204,10 +204,18 @@ int cc_vh_view_add(const cc_model *m, const JrVal *args, cc_cmds *l, Buf *err) {
             v.look = k == 1 ? CC_LOOK_UP : CC_LOOK_DOWN;
             v.name = cat(a, k == 1 ? "Ceiling " : "Plan ", hit->name, " (copy)");
             v.storey = cat(a, "", hit->key, "");
+            /* DEAD1 (DEVIATIONS 34): Rust's default cut (1200 mm, a ceiling 2300 mm above the level)
+             * lies above the level above on a storey lower than that (Fondations, 800 mm): Rust's
+             * own check then refuses its default. There the cut goes half way up the storey; every
+             * other default is Rust's. The level above as view.rs resolve finds it (> level + 1 mm). */
+            double cut = k == 1 ? 2300.0 : 1200.0, above = 1.0 / 0.0;
+            for (size_t i = 0; i < n; i++)
+                if (lv[i].elevation > hit->elevation + 1.0 && lv[i].elevation < above) above = lv[i].elevation;
+            if (hit->elevation + cut > above) cut = (above - hit->elevation) / 2.0;
             arena_free(&t);
             /* ViewRange::default_for */
             v.range[CC_RANGE_TOP] = (cc_range_plane){CC_LEVEL_ABOVE, 0.0};
-            v.range[CC_RANGE_CUT] = (cc_range_plane){CC_LEVEL_ASSOCIATED, k == 1 ? 2300.0 : 1200.0};
+            v.range[CC_RANGE_CUT] = (cc_range_plane){CC_LEVEL_ASSOCIATED, cut};
             v.range[CC_RANGE_BOTTOM] = (cc_range_plane){CC_LEVEL_ASSOCIATED, 0.0};
             v.range[CC_RANGE_DEPTH] = (cc_range_plane){k == 1 ? CC_LEVEL_ABOVE : CC_LEVEL_ASSOCIATED, 0.0};
         } else if (k == 2) { /* views.rs new_section */

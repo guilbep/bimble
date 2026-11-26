@@ -1179,8 +1179,17 @@ C core's references are hand-computed in `test/concrete_test.c` (volumes, positi
 - **`query element` `openings`**: the element's count (Rust's `e.openings.len()`, query.rs:146);
   the C core answered 0.
 ## 34. What the core refuses, told before the click (ticket DEAD1, ADR 0074)
+## 34. What the core refuses, told before the click; a new plan of a low storey (ticket DEAD1, ADR 0074)
+
+Rust v0.19.0's default view range (view.rs:299 `ViewRange::default_for`) cuts a floor plan
+1200 mm above its level and a ceiling plan 2300 mm above it, the top at the level above. On a
+storey lower than that (the frame's Fondations: −800 mm, the level above at 0), the cut lies above
+the top and Rust's own check (view.rs:401 `resolve`) refuses its own default: "looking down, the
+planes must be in order". The C core's `view_add` of a plan or a ceiling plan then puts the cut
+half way up the storey (Fondations: −400 mm); a storey tall enough, or the highest one, keeps
+Rust's default, so no golden changes. Test: `test/dead1_test.c`.
 
 - **Query `level_refusals`** (C only, ticket DEAD1): what the Levels page's Remove and Building
   storey would answer, told before the click (the verbs `level_remove` and `level_set` run dry):
   the page disables the control with the core's text. Rust's page showed the refusal after the
-  click. Test: `test/dead1_test.c`.
+  click.
