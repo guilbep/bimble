@@ -27,6 +27,13 @@ export const fr = {
   "history.added": "ajouté",
   "history.removed": "supprimé",
   "history.first": "Première version : tout est ajouté",
+  "history.author": "Auteur",
+  "history.setName": "Indiquer votre nom dans les Réglages",
+  "history.branch": "Variante",
+  "history.branchName": "Nom de la variante",
+  "history.branchPlaceholder": "nom-de-variante",
+  "history.createBranch": "Créer",
+  "history.switchHint": "Mettez d'abord les changements dans une version",
 } as const;
 export const en: Record<keyof typeof fr, string> = {
   "page.history": "History",
@@ -56,4 +63,11 @@ export const en: Record<keyof typeof fr, string> = {
   "history.added": "added",
   "history.removed": "removed",
   "history.first": "First version: everything is added",
+  "history.author": "Author",
+  "history.setName": "Set your name in Settings",
+  "history.branch": "Variant",
+  "history.branchName": "Variant name",
+  "history.branchPlaceholder": "variant-name",
+  "history.createBranch": "Create",
+  "history.switchHint": "Commit or undo the changes first",
 };
