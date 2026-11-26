@@ -158,7 +158,8 @@ static void tree(const char *what, cc_session *ro, cc_session *ed) {
     check_true(msg, rows && rows_ok == rows);
     arena_free(&a);
     rc = call(ed, "query", "scene_tree", "", &t);
-    check_true("scene_tree on an editable model: refused", rc == CC_ERR);
+    check_eq("scene_tree on an editable model: the empty tree (its tree is query storeys)", t.p, rc == CC_OK ? t.len : 0,
+             "{\"storeys\":[],\"total\":0}", 24);
     rc = call(ro, "query", "scene_elements", "{}", &t);
     check_eq("scene_elements without a storey", t.p, rc == CC_ERR ? t.len : 0, "storey: a string", 16);
     buf_free(&t), buf_free(&st), buf_free(&el);

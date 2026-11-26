@@ -329,12 +329,14 @@ int cc_scene_tree_json(cc_session *s, Buf *out) {
     size_t n;
     int oom;
     ro_row *r = ro_rows(s, &n, &oom);
-    if (!r && !oom && !s->open) { /* no model: an empty tree, as `sheets` answers [] (calls.c EMPTY_NO_MODEL) */
+    if (!r && !oom) { /* no read-only scene (no model, or an editable one: query storeys): the empty
+                         * tree, as `sheets` answers [] without a model; the page may ask while a
+                         * file opens or closes */
         buf_puts(out, "{\"storeys\":[],\"total\":0}");
         return 0;
     }
     if (!r) {
-        buf_puts(out, oom ? "out of memory" : "scene_tree: the file is editable: query storeys");
+        buf_puts(out, "out of memory");
         return -1;
     }
     size_t ng = 0;

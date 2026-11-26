@@ -111,9 +111,9 @@ int cc_scene_element_json(cc_session *s, const char *id, size_t idn, Buf *out);
  * grouped by the reader's storey (container) name, then IFC class:
  *   {"storeys": [{"classes": [{"class", "count"}], "count", "name"}], "total"}
  * storeys in the file's storey order (lowest first; other containers and "" after, in name
- * order), classes in byte order; total = the scene's elements. O(n log n). No model: the empty
- * tree (the page may ask while a file closes). 0 ok, -1 with the error text (an editable model:
- * query storeys). */
+ * order), classes in byte order; total = the scene's elements. O(n log n). No read-only scene
+ * (no model, or an editable one: its tree is query storeys): the empty tree (the page may ask
+ * while a file opens or closes). 0 ok, -1 out of memory. */
 int cc_scene_tree_json(cc_session *s, Buf *out);
 
 /* query scene_elements {"storey": name, "class"?: name, "limit"?: n (default 200)} (FIXUI): the
