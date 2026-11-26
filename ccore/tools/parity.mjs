@@ -640,8 +640,13 @@ function compare(R, C, rib, vue, known) {
     // ISS72: `actions` compared on Rust's rows; the C-only rows are the actions table's "C-only".
     const cl = SCN.map((sc) => n === "actions" && C.scenarios[sc]?.queries[n]?.startsWith("200 ")
       ? answerLine({ status: 200, body: JSON.stringify(C.scenarios[sc].actions.filter((a) => rNames.includes(a.name))) }) : C.scenarios[sc]?.queries[n]);
+    // TEST1: C knows a query when the grep of its dispatchers names it OR when the C host answered it in
+    // some scenario with anything but "unknown query" (asked, not grepped: Q2's schedule_* are
+    // dispatched from session/schedules.c, which the grep of calls.c does not see). Rust's names stay
+    // its dispatcher's (golden/parity/names.json): its fallthrough answers a name it does not know
+    // with "this file is read only" when no model is open, so an answer there proves nothing.
     row.rust = known.rust.includes(n);
-    row.c = known.c.includes(n);
+    row.c = known.c.includes(n) || cl.some((l) => typeof l === "string" && !/unknown query/.test(l));
     row.keyOrder = [];
     SCN.forEach((sc, i) => {
       if (rl[i] === cl[i]) return;
@@ -680,7 +685,9 @@ function report(R, C, rib, settings, shortcuts, vue, cmp, meta) {
   L.push(`- C core and Vue lab measured at commit \`${head}\` (the working tree at that commit). Tickets S1, Q2, D7 and IFC3 run in parallel and change these answers: run the tool again after they merge.`);
   L.push(`- Rust reference: \`${meta.rust_version}\`, goldens \`ccore/golden/parity/\` made by \`parity.mjs --rust\` at commit \`${meta.commit}\` (the headless native twin, ADR 0066: the real \`Viewer::call\`, no window).`);
   L.push(`- Scenarios (${SCN.length}): ${SCN.map((s) => `\`${s}\``).join(", ")}. How each one is reached, per side: \`steps.txt\` (Rust: \`golden/parity/<scenario>/\`, C: \`out/parity/c/<scenario>/\`).`);
-  L.push(`- Vue sources parsed: ${vue.files} files under \`web-ui/src\` (grep-level; see "Not resolved" at the end).`, "");
+  L.push(`- Vue sources parsed: ${vue.files} files under \`web-ui/src\` (grep-level; see "Not resolved" at the end).`);
+  L.push("- A query counts as known in C when the C host answered it in some scenario (anything but \"unknown query\"), or its dispatchers name it (ticket TEST1: asked, not grepped).");
+  L.push("- Gap (TEST1): no scenario hides anything, so `unhide`, `clear_temporary` and `show_all_in_view` are never enabled on either side and their enabled state is not compared. A scenario that hides an element (Rust goldens: on the branch `oracle/rust`, `parity.mjs --rust`) is still to add.", "");
   L.push("## C crashes and malformed answers", "");
   L.push(C.problems.length ? C.problems.map((p) => `- **${esc(p)}**`).join("\n") : "None: the C host stayed up in every scenario, and every query and tool answer that said 200 was valid JSON.", "");
   L.push("## Summary", "");
