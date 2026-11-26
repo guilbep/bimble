@@ -415,6 +415,18 @@ jobs:
           CC=clang CFLAGS=-DWIN1_KERNEL_PROBE test/run.sh > out/ci/win1-kernel-run.log 2>&1 || rc=$?
           grep -E '^FAIL|passed, [0-9]+ failed|^run.sh' out/ci/win1-kernel-run.log
           exit $rc
+      # WIN2: the host with the kernel too (host_test, lab_boot), a probe as the step above.
+      - name: test/host.sh with the kernel (probe)
+        if: ${{ !cancelled() && steps.kernel.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 15
+        working-directory: ccore
+        run: |
+          mkdir -p out/ci
+          rc=0
+          CCORE_PORT_BASE=auto HOST_BUILD=native test/host.sh > out/ci/win2-kernel-host.log 2>&1 || rc=$?
+          grep -E '^FAIL|^skip|passed, [0-9]+ failed|boolean kernel' out/ci/win2-kernel-host.log out/t9b-*.log || true
+          exit $rc
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -423,6 +435,7 @@ jobs:
             ccore/out/ci/
             ccore/out/t9b-*.log
             ccore/out/run-clang/log/
+            ccore/out/run-clang-*/log/
           retention-days: 14
 
   # The release archives (ticket R1, ADR 0069 rule 2; macOS: ticket MAC1): ccore/build.sh release

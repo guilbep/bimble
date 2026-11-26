@@ -85,10 +85,16 @@ deps_main() {
     fi
     local src=out/deps/src/manifold bld=out/deps/build/manifold
     [[ -d $src/.git ]] || git clone --depth 1 --branch "$MANIFOLD_TAG" "$MANIFOLD_URL" "$src"
+    local cxxflags="-ffunction-sections -fdata-sections"
+    # WIN2: MSYS2 CLANG64's libc++ (LLVM 23) no longer includes <iterator> and <istream> through
+    # other headers: Clipper2 uses std::back_inserter, manifold's headers std::istream without
+    # them (the probe of run 45726496943; zig's libc++ with -D_LIBCPP_REMOVE_TRANSITIVE_INCLUDES
+    # fails the same way, and builds with these two).
+    [[ $CC_OS == Windows ]] && cxxflags+=" -include iterator -include istream"
     cmake -S "$src" -B "$bld" -DCMAKE_BUILD_TYPE=Release -DMANIFOLD_TEST=OFF -DMANIFOLD_PYBIND=OFF \
         -DMANIFOLD_JSBIND=OFF -DMANIFOLD_CBIND=ON -DMANIFOLD_CROSS_SECTION=ON -DMANIFOLD_USE_BUILTIN_CLIPPER2=ON \
         -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DMANIFOLD_PAR=OFF \
-        "-DCMAKE_C_FLAGS=-ffunction-sections -fdata-sections" "-DCMAKE_CXX_FLAGS=-ffunction-sections -fdata-sections" \
+        "-DCMAKE_C_FLAGS=-ffunction-sections -fdata-sections" "-DCMAKE_CXX_FLAGS=$cxxflags" \
         ${CMAKE_OSX_ARCHITECTURES:+"-DCMAKE_OSX_ARCHITECTURES=$CMAKE_OSX_ARCHITECTURES"}
     cmake --build "$bld" -j "${JOBS:-2}"
     deps_import "$bld" "$src"
