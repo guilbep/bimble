@@ -88,7 +88,7 @@ fail), collaboration, rebar, steel. See [ROADMAP.md](ROADMAP.md).
 
 ## Try it
 
-- **In a browser:** <https://guilbep.github.io/bimble/c/> (the C lab, built from `main`). Files
+- **In a browser:** <https://guilbep.github.io/bimble/> (the C lab, built from `main`). Files
   you open stay on your computer.
 - **Desktop (Linux x86_64 and aarch64, macOS arm64 and x86_64):** the archives of the latest
   `ccore-v*` [prerelease](https://github.com/guilbep/bimble/releases). Unpack, then
@@ -120,7 +120,7 @@ Releases: [docs/RELEASING.md](docs/RELEASING.md).
 Bimble was written in Rust until 25 Nov 2026. The last Rust release, **v0.19.0**, is the frozen
 reference the C core is checked against (ADR 0067): its binaries stay on the
 [releases page](https://github.com/guilbep/bimble/releases/tag/v0.19.0), `brew install bimble`
-installs it, and its lab is still the root of <https://guilbep.github.io/bimble/>. The Rust
+installs it, and its lab is under <https://guilbep.github.io/bimble/rust/>. The Rust
 sources are on the tag `v0.19.0` and on the branch `oracle/rust` (with the dumpers that wrote
 `ccore/golden/`), not on `main` (ADR 0072).
 

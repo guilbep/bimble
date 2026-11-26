@@ -84,3 +84,11 @@ The current numbers are in the README's Status block, written from the reports b
 its CI and its scripts come back beside the C core. Reverting the merge of the whole C work branch
 (`git revert -m 1 <merge>`) would also take the C core out of `main`. To work on Rust without
 reverting: `git worktree add ../bimble-rust oracle/rust`.
+
+## Change of 26 November 2026: the C lab is the site root
+
+Pierre's decision ("move C lab to / and rust to /rust/"). Point 5 above is replaced: the site
+root is the C lab built from `main`; the Rust v0.19.0 lab is under `/rust/` (and its egui page
+under `/rust/egui/`), still built from that release's assets and that tag's `web-ui`, nothing
+compiled. `/c/` and `/egui/` hold one page each that sends an old link on, with its query and
+fragment. A failed C build stops the deployment on every run, since the root cannot be empty.

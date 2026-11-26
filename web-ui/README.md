@@ -8,7 +8,7 @@ native host over HTTP (`?native=1`) or on the wasm module in the page (`?ccore=1
 
 - `npm run dev` (= `../ccore/dev.sh`): the native C host and Vite, rebuilt and restarted on every
   save of a C file; it prints the lab address. The guide is `../DEV.md`.
-- `npm run dev:wasm`: the C core's wasm module in the page, no server (as GitHub Pages under `/c/`);
+- `npm run dev:wasm`: the C core's wasm module in the page, no server (as on GitHub Pages);
   open http://localhost:5173/. `npm run ccore:wasm` again after a C change.
 - `npm run build`: the lab for the native host (what `ccore/build.sh release` puts in the archive);
   `npm run build:ccore`: the lab on the C wasm (GitHub Pages).
