@@ -950,7 +950,16 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
         int has_ent = 0;
         Buf ent;
         buf_init(&ent);
-        if (!class_of(e->name, &cls)) {
+        /* WAVE1B (ADR 0075): an IfcVirtualElement with ObjectType REFERENCE_PLANE is a reference plane;
+         * other virtual elements (space boundaries' helpers) are skipped as before. */
+        int refplane = 0;
+        if (!strcmp(e->name, "IFCVIRTUALELEMENT")) {
+            const char *ot;
+            size_t otn;
+            if (cc_sv_as_str(arg(e, 4), &ot, &otn) && otn == 15 && !memcmp(ot, "REFERENCE_PLANE", 15)) refplane = 1;
+        }
+        if (refplane) cls = CC_IFC_VIRTUAL_ELEMENT;
+        else if (!class_of(e->name, &cls)) {
             int skip = 0;
             for (size_t k = 0; k < sizeof SKIP_CLASSES / sizeof *SKIP_CLASSES; k++) skip |= !strcmp(e->name, SKIP_CLASSES[k]);
             const cc_step_entity *s6 = get(&r, arg(e, 6));
@@ -1028,6 +1037,26 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
 
         Pending *pe = &els[nels];
         memset(pe, 0, sizeof *pe);
+        if (refplane) { /* its frame from the placement (unit axes, x made perpendicular), no shape */
+            double zz[3], xx[3];
+            if (!unit3(rel.z, zz) || !unit3(rel.x, xx)) {
+                tally_add(&skipped, "IfcVirtualElement: a reference plane without a usable placement", 61, 0);
+                buf_free(&ent);
+                continue;
+            }
+            double d0 = dot(xx, zz);
+            for (int k = 0; k < 3; k++) xx[k] -= d0 * zz[k];
+            if (!unit3(xx, xx)) {
+                tally_add(&skipped, "IfcVirtualElement: a reference plane without a usable placement", 61, 0);
+                buf_free(&ent);
+                continue;
+            }
+            for (int k = 0; k < 3; k++)
+                pe->el.placement.origin[k] = rel.t[k] * scale + 0.0, pe->el.placement.z_axis[k] = zz[k] + 0.0,
+                pe->el.placement.x_axis[k] = xx[k] + 0.0;
+            pe->el.generator.kind = CC_GEN_NONE;
+            goto refplane_done;
+        }
         const cc_step_entity *solid = extruded_solid(&r, e);
         if (solid && !only_item(&r, e, solid)) solid = NULL;
         int kind = solid ? extruded_element(&r, &m->arena, solid, &rel, cls, scale, &pe->el.placement, &pe->el.generator) : 0;
@@ -1140,6 +1169,7 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
             pe->el.nopenings = no;
             rep->openings += no;
         }
+    refplane_done:
         gset_insert(&seen, &gid);
         pe->el.id = gid;
         pe->el.cls = cls;
@@ -1177,6 +1207,16 @@ int cc_ifc_import(cc_model *m, cc_ifc_report *rep, const char *text, size_t n, c
         }
         /* Material: name -> derived id, category from the grade (first one wins). */
         const ElMat *mi = elmat_get(&em, i);
+        if (refplane && !(mi && mi->set) && nmats) { /* WAVE1B: a plane is of no material; the element needs one */
+            pe->el.material = mats[0].id;
+            buf_clear(&b);
+            buf_puts(&b, cname);
+            tally_buf(&by_class, &b, 0);
+            rep->elements++;
+            nels++;
+            buf_free(&ent);
+            continue;
+        }
         const char *mn = mi && mi->set && mi->n ? mi->name : "Undefined";
         size_t mnn = mi && mi->set && mi->n ? mi->n : 9;
         cc_category cat = mi && mi->set ? mi->cat : CC_CAT_OTHER;

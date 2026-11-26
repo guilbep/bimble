@@ -24,6 +24,7 @@
 #include "inflate.h"
 #include "json_r.h"
 #include "json_w.h"
+#include "refplane.h" /* WAVE1B */
 #include "relation.h"
 #include "view_io.h"
 
@@ -527,14 +528,14 @@ static int d_element(D *d, const JrVal *v, cc_element *e) {
     if (d_gid(d, f[0], &e->id) ||
         d_enum(d, f[1], class_name_i, CC_IFC_CLASS_COUNT,
                "`IfcColumn`, `IfcBeam`, `IfcSlab`, `IfcWall`, `IfcFooting`, `IfcBuildingElementProxy`, "
-               "`IfcElementAssembly`",
+               "`IfcElementAssembly`, `IfcVirtualElement`",
                &cls) ||
         d_str(d, f[2], &e->name) || d_gid(d, f[3], &e->storey) || d_gid(d, f[4], &e->material) ||
         d_placement(d, f[5], &e->placement))
         return -1;
     e->cls = (cc_ifc_class)cls;
     /* An IfcElementAssembly has no generator (ADR 0070): the key is left out. */
-    if (!f[6] && e->cls == CC_IFC_ELEMENT_ASSEMBLY) e->generator.kind = CC_GEN_NONE;
+    if (!f[6] && cc_class_shapeless(e->cls)) e->generator.kind = CC_GEN_NONE; /* WAVE1B: a reference plane too */
     else if (need(d, v, f[6], F[6]) || d_generator(d, f[6], &e->generator)) return -1;
     if (f[7]) {
         if (f[7]->type != JR_ARR) return type_err(d, f[7], "a sequence");

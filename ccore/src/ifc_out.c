@@ -10,6 +10,7 @@
 #include "ifc_math.h"
 #include "guid.h"
 #include "json_w.h"
+#include "refplane.h" /* WAVE1B */
 
 /* No memchr or qsort in the freestanding wasm32 build: these two instead. */
 static const char *find_byte(const void *p, int c, size_t n) {
@@ -749,6 +750,31 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
         uint64_t pl = begin(w);
         put(w, "IFCLOCALPLACEMENT("), ref(w, st_pl[el_st[i]]), put(w, ","), ref(w, a), put(w, ")"), end(w, pl);
 
+        if (e->cls == CC_IFC_VIRTUAL_ELEMENT) { /* WAVE1B (ADR 0075): a reference plane, its outline as a closed
+                                                   * polyline in its own frame (z = 0), ObjectType REFERENCE_PLANE */
+            double pw, ph;
+            cc_refplane_size(e, &pw, &ph);
+            static const double S[5][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}, {-1, -1}};
+            uint64_t pts[5];
+            for (int q = 0; q < 4; q++) {
+                double c[3] = {S[q][0] * pw / 2.0, S[q][1] * ph / 2.0, 0.0};
+                pts[q] = point3(w, c);
+            }
+            pts[4] = pts[0];
+            uint64_t poly = begin(w);
+            put(w, "IFCPOLYLINE(("), refs(w, pts, 5), put(w, "))"), end(w, poly);
+            uint64_t vshape = begin(w);
+            put(w, "IFCSHAPEREPRESENTATION("), ref(w, body), put(w, ",'Reference','Curve3D',("), ref(w, poly);
+            put(w, "))"), end(w, vshape);
+            uint64_t vpds = begin(w);
+            put(w, "IFCPRODUCTDEFINITIONSHAPE($,$,("), ref(w, vshape), put(w, "))"), end(w, vpds);
+            uint64_t vel = begin(w);
+            put(w, "IFCVIRTUALELEMENT("), gid_lit(w, &e->id), put(w, ",$,"), cstr(w, e->name), put(w, ",$,'REFERENCE_PLANE',");
+            ref(w, pl), put(w, ","), ref(w, vpds), put(w, ",$)");
+            el_ent[i] = end(w, vel);
+            element_psets(w, e, vel);
+            continue;
+        }
         const char *repr;
         uint64_t solid = write_geometry(w, &e->generator, world, z, &repr);
         uint64_t shape = begin(w);
@@ -851,6 +877,9 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
     group(el_mat, ne, nm, start, order);
     for (size_t k = 0; k < nm; k++) {
         if (start[k] == start[k + 1]) continue;
+        size_t real_els = 0; /* WAVE1B: a reference plane is not made of the material */
+        for (size_t q = start[k]; q < start[k + 1]; q++) real_els += m->elements[order[q]].cls != CC_IFC_VIRTUAL_ELEMENT;
+        if (!real_els) continue;
         const cc_material *mat = &m->materials[k];
         uint64_t me = begin(w);
         put(w, "IFCMATERIAL("), cstr(w, mat->name), put(w, ",$,");
@@ -886,7 +915,8 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
             put(w, "),"), ref(w, me), put(w, ")"), end(w, mp);
         }
         w->tmp.n = 0;
-        for (size_t q = start[k]; q < start[k + 1]; q++) ids_push(&w->tmp, el_ent[order[q]]);
+        for (size_t q = start[k]; q < start[k + 1]; q++)
+            if (m->elements[order[q]].cls != CC_IFC_VIRTUAL_ELEMENT) ids_push(&w->tmp, el_ent[order[q]]);
         uint64_t rel = begin(w);
         put(w, "IFCRELASSOCIATESMATERIAL("), gid_id(w, "material/", &mat->id), put(w, ",$,$,$,(");
         refs(w, w->tmp.v, w->tmp.n), put(w, "),"), ref(w, me), put(w, ")"), end(w, rel);
@@ -911,7 +941,8 @@ static const char *const ROOTED[] = {"IFCPROJECT", "IFCSITE", "IFCBUILDING", "IF
                                      "IFCBEAM", "IFCSLAB", "IFCWALL", "IFCFOOTING", "IFCBUILDINGELEMENTPROXY",
                                      "IFCOPENINGELEMENT", "IFCPROPERTYSET", "IFCRELAGGREGATES",
                                      "IFCRELCONTAINEDINSPATIALSTRUCTURE", "IFCRELDEFINESBYPROPERTIES",
-                                     "IFCRELVOIDSELEMENT", "IFCRELASSOCIATESMATERIAL", "IFCGRID", NULL};
+                                     "IFCRELVOIDSELEMENT", "IFCRELASSOCIATESMATERIAL", "IFCGRID",
+                                     "IFCVIRTUALELEMENT" /* WAVE1B: a reference plane */, NULL};
 static const char *const DROPPED[] = {"IFCMATERIALPROPERTIES", "IFCPROJECTEDCRS", "IFCMAPCONVERSION", NULL};
 
 #define MAX_ARGS 64

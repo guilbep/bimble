@@ -214,7 +214,7 @@ static void heavy(const char *dir) {
     arena_free(&a);
     check_true("MEAS1: every placed point and edge end lies in its element's box", in);
     cc_mlayer L = {&sc, {0, 0, 0}, NULL, (const float(*)[6])bx.box};
-    cc_mview v = {&L, 1, NULL, NULL, sc.origin, 0.0f, NULL, 0};
+    cc_mview v = {&L, 1, NULL, NULL, sc.origin, 0.0f, NULL, 0, NULL}; /* WAVE1B: no work plane */
     /* One pointer ray along a row of 27 spheres (y 7500, z 400, from x -5000), the ray_tol 24 mm
      * beside: the first sphere's face. */
     const double *o = sc.origin;

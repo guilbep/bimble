@@ -164,8 +164,9 @@ static const ActionRow ACTIONS[] = {
     {"place_opening", "Place: Opening", "Concrete", 0, 0},
     {"place_sleeve", "Place: Sleeve", "Concrete", 0, 0},
     /* ---- end CONC1 ---- */
+    {"reference_planes", "Reference plane by three points", "Setting out", 0, 0}, /* WAVE1B (refplanes.h) */
 };
-_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4 + 5, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4, CONC1 5");
+_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4 + 5 + 1, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4, CONC1 5, WAVE1B 1");
 
 static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab", /* verbs.rs:28 snake_case */
                                         "footing", "strip_footing", "raft", "opening", "sleeve"}; /* CONC1 */
@@ -735,6 +736,7 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
      * north differs from project north (in 3D the section box's, ISS71; in a plan or a section the
      * stored view's true_north, ADR 0045) ---- */
     if (cc_setout_index(name) >= 0) return s->open;
+    if (!strcmp(name, "reference_planes")) return s->open && loaded(s); /* WAVE1B */
     if (!strcmp(name, "view_true_north")) return s->open && iss71_yaw(s, 0) != iss71_yaw(s, 1);
     /* ---- end SETOUT ---- */
     /* ---- FAKE1: pages the lab serves and the sheet verbs. project: ribbon.rs:611 `_ => loaded`,
@@ -827,7 +829,8 @@ static int action_pressed(cc_session *s, const ActionRow *a) {
     if (!strcmp(a->name, "view_true_north")) return s->open && setout_true_north(s); /* SETOUT */
     if (!strcmp(a->name, "draw_section")) return s->vsh.section_draw && vs_plan_shown(s); /* VIEWSHEET */
     if (!strcmp(a->name, "reveal_hidden")) return s->vis.reveal;   /* ribbon.rs:643 */
-    if (!strcmp(a->name, "measure")) return loaded(s) && s->measure.on; /* ribbon.rs:625 (ticket T1) */
+    if (!strcmp(a->name, "measure")) return loaded(s) && s->measure.on && !s->wp.pick; /* ribbon.rs:625 (ticket T1); WAVE1B */
+    if (!strcmp(a->name, "reference_planes")) return s->open && s->wp.pick; /* WAVE1B */
     if (!strcmp(a->name, "edges")) return s->edges;               /* Q2: ribbon.rs:626 opts.edges */
     if (!strcmp(a->name, "hatching")) return s->hatching;         /* Q2: ribbon.rs:627 opts.hatching */
     if (!strcmp(a->name, "orthographic")) return s->orthographic; /* Q2: ribbon.rs:628 camera.orthographic */
@@ -1464,6 +1467,13 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         arena_free(&sa);
         return done(&w);
 #endif
+    }
+    if (!strcmp(name, "reference_planes")) { /* WAVE1B (refplanes.h): null without an editable model */
+        JsonW w;
+        jw_init(&w, out, 0);
+        if (s->open) cc_wplane_json(&s->wp, &s->model, &w);
+        else jw_null(&w);
+        return done(&w);
     }
     if (!strcmp(name, "setting_out")) { /* SETOUT (setting_out.h): null without an editable model */
         if (!s->open) return buf_puts(out, "null"), CC_OK;
@@ -2186,8 +2196,15 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     else if (!strncmp(name, "place_", 6)) {
         for (int k = 0; k < CC_KIND_COUNT; k++) /* CONC1: and the Concrete tab's kinds */
             if (!strcmp(name + 6, KIND_NAME[k])) place_action(s, (cc_kind)k);
-        if (s->placing) s->measure.on = 0, s->measure.has_first = s->measure.has_hover = 0; /* ribbon.rs:687 */
-    } else if (!strcmp(name, "measure")) cc_measure_toggle(&s->measure), s->vsh.section_draw = 0; /* ribbon.rs:691 (ticket T1); VIEWSHEET: one tool */
+        if (s->placing) s->measure.on = 0, s->measure.has_first = s->measure.has_hover = 0, s->wp.pick = 0; /* ribbon.rs:687; WAVE1B */
+    } else if (!strcmp(name, "measure")) { /* ribbon.rs:691 (ticket T1); VIEWSHEET: one tool; WAVE1B: the plane tool stops */
+        if (s->wp.pick) s->wp.pick = 0, s->measure.on = 0;
+        cc_measure_toggle(&s->measure), s->vsh.section_draw = 0;
+    } else if (!strcmp(name, "reference_planes")) { /* WAVE1B: the three-point plane tool (the measure tool's snapping) */
+        s->wp.pick = !s->wp.pick, s->wp.npick = 0;
+        if (s->wp.pick) cc_tool_clear(&s->tool), s->placing = 0, s->vsh.section_draw = 0;
+        if (!!s->measure.on != !!s->wp.pick) cc_measure_toggle(&s->measure);
+    }
     else if (cc_setout_index(name) >= 0) cc_setout_flip(&s->setout, cc_setout_index(name)); /* SETOUT */
     else if (!strcmp(name, "view_true_north")) return setout_flip_north(s, out); /* SETOUT */
     else if (vis_action(s, name, out)) return CC_ERR;
@@ -2703,13 +2720,18 @@ static void tool_pointer(cc_session *s, const ToolArgs *a) {
     if (sc) memcpy(org, sc->origin, sizeof org);
     if (!a->has_at && !a->has_ray) return; /* a click without a position: where the pointer was */
     t->has_hover = 0;
+    /* WAVE1B: a horizontal work plane is where the pointer lands; another one's trace on the level
+     * is where the point is moved to (wp_trace below) */
+    double wo[3], wn[3];
+    int wpl = s->open && cc_wplane_frame(&s->wp, &s->model, level, wo, wn);
+    double hit = wpl && (wn[2] > 0.999 || wn[2] < -0.999) ? wo[2] : level;
     if (a->has_at) p[0] = a->at[0], p[1] = a->at[1];
-    else if (cc_ray_plane(a->ray, level - org[2], p)) return;
+    else if (cc_ray_plane(a->ray, hit - org[2], p)) return;
     else p[0] += org[0], p[1] += org[1];
     if (a->has_tol) tol = a->tol;
     else if (a->has_ray && a->has_ray_tol) {
         double q[2];
-        if (!cc_ray_plane(a->ray_tol, level - org[2], q)) tol = cc_hypot(q[0] + org[0] - p[0], q[1] + org[1] - p[1]);
+        if (!cc_ray_plane(a->ray_tol, hit - org[2], q)) tol = cc_hypot(q[0] + org[0] - p[0], q[1] + org[1] - p[1]);
         if (!(tol <= CC_MAX_MM)) tol = 0.0;
     }
     int kind = CC_SNAP_NONE;
@@ -2737,6 +2759,16 @@ static void tool_pointer(cc_session *s, const ToolArgs *a) {
         if (r[0] != q[0] || r[1] != q[1]) kind = CC_SNAP_NONE;
         q[0] = r[0], q[1] = r[1];
     }
+    if (wpl && hit == level) { /* WAVE1B: onto the plane's trace on the level (n.x = n.o, z = level) */
+        double l2 = wn[0] * wn[0] + wn[1] * wn[1];
+        if (l2 > 1e-12) {
+            double c = wn[0] * wo[0] + wn[1] * wo[1] + wn[2] * (wo[2] - level), d = wn[0] * q[0] + wn[1] * q[1] - c;
+            if (d > 1e-9 || d < -1e-9) {
+                q[0] -= d * wn[0] / l2, q[1] -= d * wn[1] / l2;
+                kind = CC_SNAP_NONE;
+            }
+        }
+    }
     t->has_hover = 1, t->hover[0] = q[0] + 0.0, t->hover[1] = q[1] + 0.0, t->hover_kind = kind;
 }
 
@@ -2759,7 +2791,25 @@ static void place_args(const cc_session *s, const double *a, const double *b, cc
 
 /* edit.rs Editor::click: the commands of `verb place` for points a, b (a run, or a dry run for
  * the ghost), a slab raised by top_offset_mm. 0 ok, -1 with the error in `err`. */
+/* WAVE1B: how far a horizontal work plane is above the storey's level (0: none or another one);
+ * what the place tools make is raised by it. */
+static double wp_dz(const cc_session *s) {
+    double wo[3], wn[3], level = storey_level(s);
+    if (!s->open || !cc_wplane_frame(&s->wp, &s->model, level, wo, wn) || !(wn[2] > 0.999 || wn[2] < -0.999)) return 0.0;
+    return wo[2] - level;
+}
+static void wp_raise(const cc_session *s, cc_cmds *l) {
+    double dz = wp_dz(s);
+    for (size_t i = 0; dz != 0.0 && i < l->n; i++)
+        if (l->v[i].op == CC_CMD_ADD_ELEMENT) l->v[i].element.placement.origin[2] += dz;
+}
+static int place_cmds_(cc_session *s, const double *a, const double *b, int dry_run, cc_cmds *l, cc_buf *err);
 static int place_cmds(cc_session *s, const double *a, const double *b, int dry_run, cc_cmds *l, cc_buf *err) {
+    int rc = place_cmds_(s, a, b, dry_run, l, err);
+    if (!rc) wp_raise(s, l);
+    return rc;
+}
+static int place_cmds_(cc_session *s, const double *a, const double *b, int dry_run, cc_cmds *l, cc_buf *err) {
     if (cc_conc_kind(s->placing_kind)) return cc_conc_cmds(s, a, b, dry_run, l, err); /* CONC1 */
     if (!s->has_storey) {
         buf_puts(err, "choose a storey");
@@ -2792,10 +2842,11 @@ static int polygon_cmds(cc_session *s, const double (*pts)[2], size_t n, cc_cmds
         buf_puts(err, "choose a storey");
         return -1;
     }
-    if (s->placing_kind == CC_KIND_RAFT) return cc_conc_raft_cmds(s, pts, n, l, err); /* CONC1 */
+    if (s->placing_kind == CC_KIND_RAFT) return cc_conc_raft_cmds(s, pts, n, l, err) ? -1 : (wp_raise(s, l), 0); /* CONC1 */
     if (cc_verb_new_slab(&s->model, &s->storey, pts, n, s->sizes, s->material, l, err)) return -1;
     for (size_t i = 0; i < l->n; i++)
         if (l->v[i].op == CC_CMD_ADD_ELEMENT) l->v[i].element.placement.origin[2] += s->top_offset_mm;
+    wp_raise(s, l); /* WAVE1B */
     return 0;
 }
 /* edit.rs close_polygon (Enter, or a click on the first point): one slab with the clicked
@@ -2879,7 +2930,7 @@ static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out) {
         jw_key(&w, "snap");
         if (cc_snap_label(t->hover_kind)) jw_str(&w, cc_snap_label(t->hover_kind));
         else jw_null(&w);
-        jw_key(&w, "z"), jw_f64(&w, storey_level(s) + 0.0);
+        jw_key(&w, "z"), jw_f64(&w, storey_level(s) + wp_dz(s) + 0.0); /* WAVE1B: on a horizontal work plane */
         jw_obj_end(&w);
     } else jw_null(&w);
     jw_key(&w, "kind"), jw_str(&w, KIND_NAME[s->placing ? s->placing_kind : s->kind]);
@@ -3180,6 +3231,51 @@ static int annot_call(cc_session *s, int pointer, int cancel, const ToolArgs *ta
     return annot_json(s, has_id ? &id : NULL, out);
 }
 
+/* WAVE1B: a click of the three-point plane tool (refplanes.h): the measure tool's hover (its
+ * snapping) is the point; the third makes the plane through them (verb reference_plane_add on the
+ * active storey, one history step). The answer is the measure tool's state. */
+static int plane_pick_click(cc_session *s, const char *body, size_t n, const cc_mview *mv, cc_buf *out) {
+    Buf tmp;
+    buf_init(&tmp);
+    int rc = cc_measure_call(&s->measure, "measure_pointer", body, n, mv, &tmp);
+    buf_free(&tmp);
+    if (rc != 200) return cc_measure_call(&s->measure, "measure_pointer", body, n, mv, out) == 200 ? CC_OK : CC_ERR;
+    if (s->measure.has_hover && s->wp.npick < 3) {
+        const cc_msnap *h = &s->measure.hover;
+        for (int k = 0; k < 3; k++) s->wp.pts[s->wp.npick][k] = (double)h->p[k] + h->org[k];
+        s->wp.npick++;
+    }
+    if (s->wp.npick == 3) {
+        s->wp.npick = 0;
+        if (!s->has_storey) return fail(out, "choose a storey");
+        Buf args;
+        buf_init(&args);
+        JsonW w;
+        jw_init(&w, &args, 0);
+        jw_obj_begin(&w);
+        jw_key(&w, "points"), jw_arr_begin(&w);
+        for (int i = 0; i < 3; i++) {
+            jw_arr_begin(&w);
+            for (int k = 0; k < 3; k++) jw_f64(&w, cc_round10(s->wp.pts[i][k] * 10.0) / 10.0 + 0.0); /* to 1 mm */
+            jw_arr_end(&w);
+        }
+        jw_arr_end(&w);
+        jw_key(&w, "storey"), jw_str_n(&w, s->storey.c, 22);
+        jw_obj_end(&w);
+        jw_finish(&w);
+        cc_cmds l;
+        cc_cmds_init(&l);
+        int vrc = args.oom ? (buf_puts(out, "out of memory"), CC_ERR)
+                  : cc_verb_run_ex(&s->model, "reference_plane_add", args.p, args.len, 0, -1, s->rev, &l, out) ? CC_ERR
+                                                                                                              : try_apply(s, l.v, l.n, out);
+        cc_cmds_free(&l);
+        buf_free(&args);
+        if (vrc != CC_OK) return vrc;
+        buf_clear(out);
+    }
+    return cc_measure_call(&s->measure, "measure_pointer", "{}", 2, mv, out) == 200 ? CC_OK : CC_ERR;
+}
+
 /* The measure tool (ticket T1, measure.h): the shown scene and its visible links, the box that
  * cuts (a plan's range, else the section box when on). */
 static int measure_tool(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
@@ -3215,7 +3311,18 @@ static int measure_tool(cc_session *s, const char *name, const char *body, size_
         }
         arena_free(&a);
     }
-    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL, yaw, NULL, 0};
+    cc_mview mv = {layers, nl, has_box ? mn : NULL, has_box ? mx : NULL, sc ? sc->origin : NULL, yaw, NULL, 0, NULL};
+    double wplane[6]; /* WAVE1B: the work plane in scene coordinates (a ray that meets nothing ends on it) */
+    if (sc && s->open && cc_wplane_frame(&s->wp, &s->model, storey_level(s), wplane, wplane + 3)) {
+        for (int k = 0; k < 3; k++) wplane[k] -= sc->origin[k];
+        mv.plane = wplane;
+    }
+    if (s->wp.pick && s->open && !strcmp(name, "measure_click")) return plane_pick_click(s, body, n, sc ? &mv : NULL, out);
+    if (s->wp.pick && s->open && !strcmp(name, "measure_cancel")) { /* WAVE1B: the last point back, then the tool stops */
+        if (s->wp.npick) s->wp.npick--;
+        else s->wp.pick = 0, s->measure.on = 0, s->measure.has_hover = 0;
+        return cc_measure_call(&s->measure, "measure_pointer", "{}", 2, sc ? &mv : NULL, out) == 200 ? CC_OK : CC_ERR;
+    }
     return cc_measure_call(&s->measure, name, body, n, sc ? &mv : NULL, out) == 200 ? CC_OK : CC_ERR;
 }
 
@@ -3230,6 +3337,15 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
         return cc_vis_tool(&s->vis, name, body, n, out) == 200 ? CC_OK : CC_ERR;
     }
     if (!strcmp(name, "annotate")) return annot_start(s, body, n, out);
+    if (!strcmp(name, "work_plane")) { /* WAVE1B (refplanes.h): the place tools' and Measure's plane */
+        if (!s->open) return fail(out, READ_ONLY);
+        if (cc_wplane_set(&s->wp, &s->model, body, n, out)) return CC_ERR;
+        s->tool.has_targets = 0;
+        JsonW w;
+        jw_init(&w, out, 0);
+        cc_wplane_json(&s->wp, &s->model, &w);
+        return done(&w);
+    }
     int pointer = !strcmp(name, "pointer"), click = !strcmp(name, "click"), cancel = !strcmp(name, "cancel");
     int close = !strcmp(name, "close"); /* SLAB1: Enter closes a polygon slab */
     if (!pointer && !click && !cancel && !close) {

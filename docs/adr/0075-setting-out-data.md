@@ -1,6 +1,6 @@
 # ADR 0075 — Setting out: base point, survey point, project zero and north as project data
 
-- Status: Accepted, 26 Nov 2026
+- Status: Accepted, 26 Nov 2026 (decisions 9-12: ticket WAVE1B, the same day, same delegation)
 - Decided by: Pierre delegated the decision ("don't wait for me to validate the ADR, just do your
   best, I'll review once it's implemented"); the choices below by Claude on ticket SETOUT, to be
   reviewed by Pierre on the implementation.
@@ -59,6 +59,33 @@ SLAB1).
    (a virtual boundary is what IFC4 offers for a non-physical plane; an `IfcAnnotation` would do in
    IFC4x3 only); levels and grid axes count as implicit planes for the work-plane choice.
 
+9. **Reference planes are elements of class `IfcVirtualElement`** (ticket WAVE1B, under the same
+   delegation): no generator (as an `IfcElementAssembly`, ADR 0070), the placement is the plane's
+   frame (z axis = unit normal), the outline's size the properties `Bimble/PlaneWidth`,
+   `Bimble/PlaneHeight` (mm, default 10 m). So create (verb `reference_plane_add`: origin + normal,
+   or three points), rename (`rename`), move, delete, undo, history, merge and save are the element
+   paths that exist, and a model without one keeps its bytes. At most 1,000 in a model.
+   *Alternative:* decision 8's planned `Model.reference_planes` section: its own commands, file
+   section, repo tree, merge and diff code for the same data an element carries; rejected.
+10. **IFC: `IfcVirtualElement`, ObjectType `REFERENCE_PLANE`**, its placement the frame, a
+    `'Reference'`/`'Curve3D'` representation (the closed outline in its own z = 0), the sizes in
+    the `Bimble` property set, no material; read back as a plane (IFC4 and IFC2x3; IfcOpenShell
+    validates both). *Alternative:* `IfcAnnotation` (IFC4x3 only) or an `IfcGrid`'s plane: neither
+    is a bounded plane of its own in IFC4.
+11. **The work plane** (session state, `tool work_plane`): the active storey's level by default; a
+    stored plane, a level, or a grid axis' vertical plane (the implicit ones, listed by `query
+    reference_planes`, never stored) can be chosen. The place tools land the pointer on a
+    horizontal work plane and raise what they make by its height above the level; any other work
+    plane moves the point onto its trace on the level. Measure ends a ray that meets no element
+    on the work plane. A chosen plane that is deleted stops being the work plane. *Alternative:*
+    elements placed in the plane's own frame (a column normal to an oblique plane): no generator
+    of the core is meant for it yet.
+12. **Three points by clicks** (the ribbon's Reference planes button): the Measure tool's snapping
+    (corner, edge, face, else the work plane) gives each point; the third makes the plane (origin
+    the first point, x towards the second), one history step; Esc takes the last point back, then
+    stops. *Alternative:* a dialog of nine numbers only (kept as "origin + normal" in the side
+    panel): no pick of what is on screen.
+
 ## Consequences
 
 - The tab has no dead control: 7 of its 8 controls act (Survey point, Project base point, True /
@@ -70,6 +97,6 @@ SLAB1).
 
 ## Not done
 
-- Reference planes (decision 8), a two-click grid axis tool in a plan (the Levels & grids page
+- ~~Reference planes (decision 8)~~: served by decisions 9-12 (WAVE1B). A two-click grid axis tool in a plan (the Levels & grids page
   adds axes by numbers), grids drawn in 3D (Rust draws them on paper only; the lab in plans).
 - Survey point in IFC (decision 7), moving the base point by clicks (decision 2).

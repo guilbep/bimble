@@ -12,8 +12,10 @@
 //       one history step (the view's true_north), undone by undo;
 //     Project zero: typed 432.8 -> query setting_out project_zero_m 432.8, one history step;
 //     Levels, Grids: the Levels & grids page opens; Measure: pressed;
-//     Reference planes: "not yet" (data-not-yet), and `query capabilities` says reference_planes
-//       false (the core does not serve it: ADR 0075).
+//     Reference planes (WAVE1B): the work plane chosen in the side panel (a level), the ribbon's
+//       three-point tool (three clicks on the canvas make a plane), a plane by origin + normal,
+//       listed in the panel and the navigator, renamed, made the work plane, deleted, undone; the
+//       outline drawn in 3D, the cut line in a plan.
 //   Side panel (shell/SettingOutSide.vue): the system, east, north, height, angle and map angle
 //     fields (query north / setting_out read them back), the orientation select (the active view's
 //     true_north), the survey point's X, Y, Z (its survey coordinates move with it), "Back to the
@@ -150,7 +152,7 @@ async function tab(S, evalJs) {
   const ribbon = await evalJs("[...document.querySelectorAll('[data-bb=ribbon] .tool, [data-bb=ribbon] .rbox')].map((e) => e.getAttribute('data-bb'))");
   check("the tab has 7 tools and 1 box", ribbon.length === 8, JSON.stringify(ribbon));
   const notYet = await evalJs("[...document.querySelectorAll('[data-bb=ribbon] [data-not-yet]')].map((e) => e.getAttribute('data-bb'))");
-  check("only Reference planes is 'not yet' in the ribbon", JSON.stringify(notYet) === JSON.stringify(["ribbon-tool-3-3"]), JSON.stringify(notYet));
+  check("nothing is 'not yet' in the ribbon (WAVE1B: Reference planes served)", notYet.length === 0, JSON.stringify(notYet));
   if (SHOTS) {
     for (const [w, h] of [[1280, 800], [360, 740]]) {
       await S("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: w < 500 });
@@ -226,10 +228,76 @@ async function tab(S, evalJs) {
   // ---- Move the base point: not served ----
   check("Move the base point: 'not yet', capability base_point_move false", (await attr("[data-bb=settingout-move]", "data-not-yet")) === "" &&
     (await B("return b.query('capabilities').base_point_move;")) === false);
-  // ---- Reference planes: not served ----
-  await evalJs(`document.querySelector(${JSON.stringify(tool(3, 3))}).click()`);
-  check("Reference planes: 'not yet' with its tooltip, capability reference_planes false", (await exists("[data-bb=not-yet-tip]")) &&
-    (await B("return b.query('capabilities').reference_planes;")) === false);
+  // ---- WAVE1B: Reference planes (ADR 0075): the work plane, the three-point tool, the panel ----
+  // Before WAVE1B the ribbon's button was "not yet" and the panel had no such section: every check
+  // below fails there (no data-bb=refplane-*, query reference_planes unknown).
+  check("Reference planes: capability reference_planes true", (await B("return b.query('capabilities').reference_planes;")) === true);
+  const lvl0 = await B("return b.storeys.value.find((s) => s.elevation === 0)?.id;");
+  ms = await timed("work plane: level", "[data-bb=refplane-work]", type(`level:${lvl0}`), "b.refPlanes.value?.active?.kind === 'level'");
+  check("Work plane: Level Niveau 1 chosen -> active", ms !== null);
+  const nPlanes = async () => (await B("return b.query('reference_planes').planes.length;"));
+  const p0 = await nPlanes();
+  ms = await timed("reference planes tool on", tool(3, 3), CLICK, "b.refPlanes.value?.pick.on === true");
+  check("Reference planes (ribbon): pressed, the pick tool on", ms !== null && (await attr(tool(3, 3), "aria-pressed")) === "true");
+  const screen = async (x, y, z) => JSON.parse(await evalJs(`JSON.stringify(window.__bbGl.toScreen(${x}, ${y}, ${z}))`));
+  const canvasClick = async (name, [x, y, z], cond) => {
+    const [sx, sy] = await screen(x, y, z);
+    await evalJs(`(() => { window.__rpT = null; document.addEventListener('pointerdown', (e) => { window.__rpT = e.timeStamp; }, { capture: true, once: true }); window.__rpF = window.__bbGl.frames; })()`);
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: sx, y: sy, button: "none", buttons: 0, modifiers: 1 });
+    await S("Input.dispatchMouseEvent", { type: "mousePressed", x: sx, y: sy, button: "left", buttons: 1, clickCount: 1, modifiers: 1 });
+    await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: sx, y: sy, button: "left", buttons: 0, clickCount: 1, modifiers: 1 });
+    const t = await evalJs(`(async () => {
+      const b = await import('/src/bimble.ts'); const g = () => window.__bbGl;
+      const raf = () => new Promise((r) => requestAnimationFrame(r)); const t0 = performance.now();
+      while (performance.now() - t0 < 5000) {
+        await raf();
+        let ok = false; try { ok = await (async () => (${cond}))(); } catch { ok = false; }
+        if (ok && window.__rpT !== null) { if (g().frames === window.__rpF) await raf(); return performance.now() - window.__rpT; }
+      }
+      return null; })()`);
+    if (typeof t === "number") times.push([name, t]);
+    return t;
+  };
+  ms = await canvasClick("plane point 1", [-2000, 3000, 0], "b.refPlanes.value?.pick.points.length === 1");
+  check("three-point tool: the first click takes a point on the work plane (drawn as a cross)", ms !== null &&
+    (await evalJs("(window.__bbGl.refplanes ?? []).filter((d) => d.kind === 'point').length")) === 1);
+  await canvasClick("plane point 2", [-2000, 8000, 0], "b.refPlanes.value?.pick.points.length === 2");
+  const picked = await B("return b.refPlanes.value.pick.points;");
+  ms = await canvasClick("plane point 3 (made)", [-6000, 5000, 0], `b.refPlanes.value?.planes.length === ${p0 + 1}`);
+  check("the third click makes the plane (one step), drawn as an outline in 3D", ms !== null && (await nPlanes()) === p0 + 1 &&
+    (await evalJs("(window.__bbGl.refplanes ?? []).filter((d) => d.kind === 'outline').length")) === p0 + 1);
+  const made = await B("return b.query('reference_planes').planes[0];");
+  // the points snap as Measure's (a face, an edge, a corner, else the work plane): the plane holds
+  // the first two (its origin the first, rounded to 1 mm), its normal a unit vector
+  const off = (q) => Math.abs((q[0] - made.origin[0]) * made.normal[0] + (q[1] - made.origin[1]) * made.normal[1] + (q[2] - made.origin[2]) * made.normal[2]);
+  check("the plane through the picked points (origin the first, the second on it)", picked.length === 2 && off(picked[0]) < 1 && off(picked[1]) < 1 &&
+    Math.abs(Math.hypot(...made.normal) - 1) < 1e-9, JSON.stringify({ made, picked }));
+  await timed("reference planes tool off", tool(3, 3), CLICK, "b.refPlanes.value?.pick.on === false");
+  // by origin + normal: a vertical plane x = -1000 (normal X)
+  for (const [k, v] of [["origin-X", "-1000"], ["origin-Y", "5000"], ["origin-Z", "1500"], ["normal-X", "1"], ["normal-Z", "0"]])
+    await evalJs(`(() => { const el = document.querySelector('[data-bb=refplane-${k}]'); ${type(v)}; })()`);
+  ms = await timed("add plane (origin + normal)", "[data-bb=refplane-add]", CLICK, `b.refPlanes.value?.planes.length === ${p0 + 2}`);
+  check("Add the plane: origin (-1000, 5000, 1500), normal X -> stored, listed in the panel and the navigator", ms !== null &&
+    (await evalJs("document.querySelectorAll('[data-bb=refplane-row]').length")) === p0 + 2);
+  const vert = await B("return b.query('reference_planes').planes.find((p) => Math.abs(p.normal[0] - 1) < 1e-9);");
+  check("its frame: normal (1, 0, 0), origin (-1000, 5000, 1500)", !!vert && vert.origin[0] === -1000 && vert.origin[2] === 1500, JSON.stringify(vert));
+  await evalJs("document.querySelector('[data-bb=nav-refplanes]')?.click()");
+  check("the navigator lists the planes", (await evalJs("document.querySelectorAll('[data-bb=nav-refplane]').length")) === p0 + 2);
+  ms = await timed("rename plane", `[data-bb=refplane-row][data-id="${vert.id}"] [data-bb=refplane-name]`, type("Face A"),
+    `b.refPlanes.value?.planes.some((p) => p.name === 'Face A')`);
+  check("rename: Face A", ms !== null);
+  ms = await timed("work plane: Face A", "[data-bb=refplane-work]", type(`plane:${vert.id}`), `b.refPlanes.value?.active?.id === ${JSON.stringify(vert.id)}`);
+  check("Work plane: Face A chosen (the navigator marks it)", ms !== null && (await evalJs(`!!document.querySelector('[data-bb=nav-refplane][data-id="${vert.id}"] .n')`)));
+  const r3 = await rev();
+  ms = await timed("delete plane", `[data-bb=refplane-row][data-id="${vert.id}"] [data-bb=refplane-delete]`, CLICK, `b.refPlanes.value?.planes.length === ${p0 + 1}`);
+  check("Delete: one step; the work plane falls back to the storey's level", ms !== null && (await rev()) === r3 + 1 && (await B("return b.refPlanes.value.active;")) === null);
+  await B("return b.undo();");
+  await waitFor("undo of the delete", 5000, async () => (await nPlanes()) === p0 + 2).catch(() => {});
+  check("undo: the plane is back (same GlobalId)", (await B(`return b.query('reference_planes').planes.some((p) => p.id === ${JSON.stringify(vert.id)});`)) === true);
+  if (SHOTS) {
+    const { data } = await S("Page.captureScreenshot", { format: "png" });
+    writeFileSync(join(SHOTS, "setting-out-reference-planes-1280.png"), Buffer.from(data, "base64"));
+  }
 
   // ---- Orientation (the active view's true_north) ----
   const vid = await B("return b.openViews.value.active;");
@@ -245,6 +313,12 @@ async function tab(S, evalJs) {
   ms = await timed("north (plan)", tool(1, 3), CLICK, "b.actions.value.find((a) => a.name === 'view_true_north')?.pressed");
   check("True / project north in a plan: pressed, one history step", ms !== null && (await rev()) === r2 + 1);
   check("the plan's markers: the base point drawn in the plan too", (await markers()).includes("base_point"), JSON.stringify(await markers()));
+  check("WAVE1B: the vertical plane is a line in the plan (its cut)", (await evalJs(`(window.__bbGl.refplanes ?? []).filter((d) => d.kind === 'line' && d.id === ${JSON.stringify(vert.id)}).length`)) === 1,
+    await evalJs("JSON.stringify(window.__bbGl.refplanes ?? [])"));
+  if (SHOTS) {
+    const { data } = await S("Page.captureScreenshot", { format: "png" });
+    writeFileSync(join(SHOTS, "setting-out-reference-plane-plan-1280.png"), Buffer.from(data, "base64"));
+  }
   await B("return b.undo();");
   await waitFor("undo", 5000, async () => !(await B("return b.actions.value.find((a) => a.name === 'view_true_north')?.pressed;"))).catch(() => {});
   check("undo: the plan in project north again", !(await B("return b.actions.value.find((a) => a.name === 'view_true_north')?.pressed;")));

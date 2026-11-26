@@ -10,6 +10,7 @@
 // base point" is a capability the core does not serve (base_point_move): drawn "not yet".
 import { computed, ref } from "vue";
 import { coordinates, editableNow, element, georefSet, northInfo, openViews, setView, settingOut, state, surveyPointSet, type GeorefPatch } from "../bimble";
+import { placing, referencePlaneAdd, referencePlaneDelete, referencePlaneRename, refPlanes, storeys, workPlaneSet } from "../bimble"; // WAVE1B
 import { t } from "../i18n";
 import { has } from "./capability";
 
@@ -59,6 +60,38 @@ const spText = computed(() => {
 });
 const moveServed = computed(() => has("base_point_move"));
 // ---- end SETOUT ----
+// ---- WAVE1B: reference planes (ADR 0075, ccore/session/refplanes.h): the work plane chosen among the
+// stored planes and the implicit ones (levels, grid axes); stored planes renamed and deleted (verbs
+// rename, delete); a new one by origin + normal (verb reference_plane_add); by three points through
+// the ribbon's Reference planes tool. ----
+const rpServed = computed(() => has("reference_planes"));
+const rp = computed(() => refPlanes.value);
+const wpValue = computed(() => (rp.value?.active ? `${rp.value.active.kind}:${rp.value.active.id}` : ""));
+const levels = computed(() => (rp.value?.implicit ?? []).filter((x) => x.kind === "level").sort((a, b) => (a.kind === "level" && b.kind === "level" ? a.elevation - b.elevation : 0)));
+const axes = computed(() => (rp.value?.implicit ?? []).filter((x) => x.kind === "axis"));
+const setWork = (e: Event) => {
+  const v = (e.target as HTMLSelectElement).value, i = v.indexOf(":");
+  error.value = i < 0 ? workPlaneSet(null) : workPlaneSet(v.slice(0, i) as "plane" | "level" | "axis", v.slice(i + 1));
+  ver.value++;
+};
+const rename = (id: string, e: Event) => { error.value = referencePlaneRename(id, (e.target as HTMLInputElement).value.trim()); ver.value++; };
+const ORIGIN = ref<[number, number, number]>([0, 0, 0]);
+const NORMAL = ref<[number, number, number]>([0, 0, 1]);
+const setVec = (which: "o" | "n", i: number, e: Event) => {
+  const v = which === "o" ? ORIGIN : NORMAL;
+  const x = Number((e.target as HTMLInputElement).value.trim().replace(",", "."));
+  if (!Number.isFinite(x)) { error.value = t("settingout.badNumber"); ver.value++; return; }
+  const a = [...v.value] as [number, number, number];
+  a[i] = x;
+  v.value = a;
+};
+const addPlane = () => {
+  const storey = placing.value?.storey ?? storeys.value[0]?.id;
+  if (!storey) return;
+  error.value = referencePlaneAdd({ storey, origin: ORIGIN.value, normal: NORMAL.value });
+  ver.value++;
+};
+// ---- end WAVE1B ----
 /** The first selected element's origin in the survey system (the status bar's text). */
 const selText = computed(() => {
   void northInfo.value;
@@ -97,6 +130,35 @@ const selText = computed(() => {
       <button v-else type="button" class="btn s" data-bb="settingout-survey-remove" :disabled="!sp?.set" @click="error = surveyPointSet(null); ver++">{{ t("settingout.surveyRemove") }}</button>
     </div>
     <p class="note">{{ t("settingout.markers") }}</p>
+    <!-- WAVE1B: reference planes and the work plane -->
+    <template v-if="rpServed && rp">
+      <div class="sec">{{ t("settingout.rp.title") }}</div>
+      <div class="row"><label class="k" for="so-wp">{{ t("settingout.rp.work") }}</label>
+        <select id="so-wp" class="sel-inp" style="width:170px" data-bb="refplane-work" :value="wpValue" @change="setWork">
+          <option value="">{{ t("settingout.rp.storeyLevel") }}</option>
+          <optgroup :label="t('settingout.rp.stored')"><option v-for="p in rp.planes" :key="p.id" :value="`plane:${p.id}`">{{ p.name }}</option></optgroup>
+          <optgroup :label="t('settingout.rp.levels')"><option v-for="l in levels" :key="l.id" :value="`level:${l.id}`">{{ t("settingout.rp.level", { name: l.name }) }}</option></optgroup>
+          <optgroup v-if="axes.length" :label="t('settingout.rp.axes')"><option v-for="a in axes" :key="a.id" :value="`axis:${a.id}`">{{ t("settingout.rp.axis", { name: a.name }) }}</option></optgroup>
+        </select></div>
+      <div :key="`rp${ver}`" style="display:contents">
+        <p v-if="!rp.planes.length" class="note">{{ t("settingout.rp.none") }}</p>
+        <div v-for="(p, i) in rp.planes" :key="p.id" class="row" data-bb="refplane-row" :data-id="p.id">
+          <input class="inp" style="width:150px" :value="p.name" :aria-label="t('settingout.rp.name', { n: i + 1 })" data-bb="refplane-name" @change="rename(p.id, $event)">
+          <button type="button" class="btn s" data-bb="refplane-delete" @click="error = referencePlaneDelete(p.id); ver++">{{ t("settingout.rp.delete") }}</button>
+        </div>
+        <div v-for="(a, i) in (['X', 'Y', 'Z'] as const)" :key="`o${a}`" class="row">
+          <label class="k" :for="`so-rpo-${a}`">{{ t("settingout.rp.origin", { axis: a }) }}</label>
+          <input :id="`so-rpo-${a}`" class="inp mono" style="width:90px;text-align:right" :value="ORIGIN[i]" :data-bb="`refplane-origin-${a}`" @change="setVec('o', i, $event)">
+        </div>
+        <div v-for="(a, i) in (['X', 'Y', 'Z'] as const)" :key="`n${a}`" class="row">
+          <label class="k" :for="`so-rpn-${a}`">{{ t("settingout.rp.normal", { axis: a }) }}</label>
+          <input :id="`so-rpn-${a}`" class="inp mono" style="width:90px;text-align:right" :value="NORMAL[i]" :data-bb="`refplane-normal-${a}`" @change="setVec('n', i, $event)">
+        </div>
+      </div>
+      <button type="button" class="btn s" style="align-self:flex-start" data-bb="refplane-add" @click="addPlane">{{ t("settingout.rp.add") }}</button>
+      <p class="note" data-bb="refplane-pick">{{ rp.pick.on ? t("settingout.rp.picking", { n: rp.pick.points.length }) : t("settingout.rp.pick") }}</p>
+    </template>
+    <!-- end WAVE1B -->
   </template>
   <p v-else class="note" data-bb="settingout-readonly">{{ t("settingout.noModel") }}</p>
   <div class="row"><span class="k">{{ t("settingout.readFrom") }}</span><span data-missing="where the georeference was read from (IfcMapConversion of an imported IFC)">—</span></div>

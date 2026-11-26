@@ -42,7 +42,7 @@ const FEATURES = [
   ["relations", "relation"],
   ["levels and grids", "grid verbs_levels"],
   ["materials (MAT1: verbs, library and page queries)", "verbs_materials materials_page"],
-  ["georef and setting out (SETOUT: markers, north)", "georef setting_out"],
+  ["georef and setting out (SETOUT: markers, north; WAVE1B: reference planes)", "georef setting_out refplane refplanes"],
   ["concrete tools (CONC1: footings, raft, openings, sleeves)", "verbs_concrete concrete"],
   ["views and sheets from the ribbon (VIEWSHEET: section tool, annotation types)", "view_sheet"],
   ["queries (model queries)", "query"],

@@ -16,6 +16,7 @@
 #include "platform.h"
 #include "scene.h"
 #include "setting_out.h" /* SETOUT */
+#include "refplanes.h" /* WAVE1B */
 #include "view_sheet.h"  /* VIEWSHEET */
 #include "tool.h"
 #include "viewfile.h"
@@ -152,6 +153,8 @@ typedef struct cc_session {
     /* ---- end MEAS1 ---- */
     /* ---- SETOUT: the setting-out markers shown (setting_out.h), session state ---- */
     cc_setout setout;
+    /* ---- WAVE1B: the work plane and the three-point plane tool (refplanes.h), session state ---- */
+    cc_wplane wp;
     /* ---- VIEWSHEET: the section tool and the annotation types (view_sheet.h), session state ---- */
     cc_viewsheet vsh;
     /* ---- PAPER1: paper.rs paper_views, the views shown On paper (by id, unsorted, unique;

@@ -2,6 +2,7 @@
  * dispatch.rs), compacted from golden/verbs_schema/<verb>.json and golden/verbs_list.json. */
 #include "verb_table.h"
 #include "verbs_concrete.h" /* CONC1 */
+#include "refplane.h" /* WAVE1B */
 #include "verbs_materials.h" /* MAT1 */
 #include <string.h>
 #include "json_w.h"
@@ -572,6 +573,21 @@ static const char SCHEMA_OPENING_REMOVE[] =
     "gs\",\"type\":\"object\"}";
 static const char SUMMARY_OPENING_REMOVE[] = "Delete an opening of a host; a C addition.";
 /* ---- end CONC1 ---- */
+/* ---- WAVE1B: reference planes (refplane.h, ADR 0075) ---- */
+static const char SCHEMA_REFERENCE_PLANE_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":"
+    "\"Arguments of `reference_plane_add` (WAVE1B, ADR 0075): origin and normal, or three points.\",\"properties\":{"
+    "\"height\":{\"description\":\"Outline size along normal x x_axis, mm (default 10000).\",\"type\":\"number\"},"
+    "\"name\":{\"description\":\"Its name (default RP 1, RP 2...).\",\"type\":\"string\"},"
+    "\"normal\":{\"description\":\"[x, y, z] a direction.\",\"items\":{\"type\":\"number\"},\"maxItems\":3,\"minItems\":3,\"type\":\"array\"},"
+    "\"origin\":{\"description\":\"[x, y, z] world mm.\",\"items\":{\"type\":\"number\"},\"maxItems\":3,\"minItems\":3,\"type\":\"array\"},"
+    "\"points\":{\"description\":\"Three points [x, y, z] world mm, not on one line.\",\"maxItems\":3,\"minItems\":3,\"type\":\"array\"},"
+    "\"storey\":{\"description\":\"GlobalId of the storey.\",\"type\":\"string\"},"
+    "\"width\":{\"description\":\"Outline size along x_axis, mm (default 10000).\",\"type\":\"number\"},"
+    "\"x_axis\":{\"description\":\"[x, y, z] a direction in the plane.\",\"items\":{\"type\":\"number\"},\"maxItems\":3,\"minItems\":3,\"type\":\"array\"}},"
+    "\"required\":[\"storey\"],\"title\":\"ReferencePlaneAddArgs\",\"type\":\"object\"}";
+static const char SUMMARY_REFERENCE_PLANE_ADD[] = "Add a reference plane (an IfcVirtualElement); a C addition.";
+/* ---- end WAVE1B ---- */
 #define V(n, N) {#n, SUMMARY_##N, SCHEMA_##N, cc_vh_##n, 0}
 const cc_verb_def cc_verb_table[] = {
     V(place, PLACE),
@@ -626,6 +642,7 @@ const cc_verb_def cc_verb_c_additions[] = {
     V(opening_set, OPENING_SET),
     V(opening_remove, OPENING_REMOVE),
     /* ---- end CONC1 ---- */
+    V(reference_plane_add, REFERENCE_PLANE_ADD), /* WAVE1B */
 };
 #undef V
 const size_t cc_verb_count = sizeof cc_verb_table / sizeof cc_verb_table[0];

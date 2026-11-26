@@ -1121,6 +1121,23 @@ own references are hand-computed in `test/setting_out_test.c`; no golden changes
   draws; null without an editable model. **`query capabilities`** gains `setting_out` (true),
   `reference_planes` and `base_point_move` (false: not served yet).
 
+- **Reference planes (ticket WAVE1B, ADR 0075 decisions 9-12).** Rust v0.19.0 has none (`git grep
+  -n -i "reference plane\|work_plane\|workplane" oracle/rust -- crates/` finds nothing). A plane is
+  an element of a new class `IfcVirtualElement` (the C core's `cc_ifc_class` gains it after
+  `IfcElementAssembly`; Rust's `IfcClass` has no such variant, so Rust v0.19.0 refuses a file that
+  holds one, as it refuses `grids`): no `generator` key, no openings, properties
+  `Bimble/PlaneWidth` / `Bimble/PlaneHeight` (finite, [10, 1e6] mm, else the file is refused, as
+  is a `set_property` that would make it so), at most 1,000 (`src/refplane.h`). The scene draws
+  no mesh for it (no "could not mesh" warning), the IFC export writes `IFCVIRTUALELEMENT(...,
+  'REFERENCE_PLANE', ...)` with a `Curve3D` outline and the `Bimble` property set, without a
+  material association (IFC2x3: rooted with the owner history as every product); the import reads
+  it back (an `IfcVirtualElement` of another ObjectType is still skipped). New verb
+  `reference_plane_add`, new action `reference_planes` (71 rows), new query `reference_planes`,
+  new tool call `work_plane`; `query capabilities` says `reference_planes` true. The place tools'
+  plane (Rust's `storey_point`) and Measure's empty ray (Rust: no point) follow the work plane when
+  one is chosen; with none, the bytes are Rust's. Hand-computed references: `test/refplane_test.c`;
+  every model without a plane keeps its bytes (tested on `frame.json`).
+
 ## 33. Views and sheets from the ribbon: New view…, the section tool, Place view…, Revision…, annotation types (ticket VIEWSHEET, ADR 0076)
 
 Rust v0.19.0 made views from the navigator's "New view…" menu (viewing.rs:806-840), placed views

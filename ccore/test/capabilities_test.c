@@ -146,7 +146,8 @@ int main(void) {
                    cap(c1, "setting_out") == 1 && st == CC_OK && !strncmp(so, "{\"base_point\":", 14) && enabled(s, "show_base_point"));
         free(so);
         char *rp = ask(s, "query", "reference_planes", "", &st);
-        check_true("SETOUT: reference_planes false <=> query reference_planes unknown", cap(c1, "reference_planes") == 0 && st == CC_ERR);
+        check_true("WAVE1B: reference_planes true <=> query reference_planes answers, action reference_planes on",
+                   cap(c1, "reference_planes") == 1 && st == CC_OK && !strncmp(rp, "{\"active\":", 10) && enabled(s, "reference_planes"));
         free(rp);
         char *bm = ask(s, "action", "base_point_move", "", &st);
         check_true("SETOUT: base_point_move false <=> no such action", cap(c1, "base_point_move") == 0 && st == CC_ERR);

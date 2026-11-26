@@ -419,6 +419,20 @@ int cc_measure_snap(const cc_mview *v, const double ray[6], const double *ray_to
         goto end;
     }
     arena_reset(&a);
+    if (!h.found && v->plane) { /* WAVE1B: the work plane under the pointer */
+        double dn = r.d[0] * v->plane[3] + r.d[1] * v->plane[4] + r.d[2] * v->plane[5];
+        double t = dn != 0.0 ? ((v->plane[0] - r.o[0]) * v->plane[3] + (v->plane[1] - r.o[1]) * v->plane[4] +
+                                (v->plane[2] - r.o[2]) * v->plane[5]) / dn
+                             : -1.0;
+        if (t >= 0.0 && t < 1e9) {
+            memset(out, 0, sizeof *out);
+            memcpy(out->org, v->org, sizeof out->org);
+            out->kind = CC_MSNAP_FACE, out->has_n = 1;
+            for (int k = 0; k < 3; k++) out->p[k] = (float)(r.o[k] + t * r.d[k]), out->n[k] = (float)v->plane[3 + k];
+            rc = 1;
+        }
+        goto end;
+    }
     if (!h.found) goto end;
     memset(out, 0, sizeof *out);
     memcpy(out->org, v->org, sizeof out->org);

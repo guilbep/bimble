@@ -77,6 +77,7 @@ import {
   viewAnnotations, viewClip, visibility, visibilitySets, measure, measureCall, type MeasureState,
   settingOut, // SETOUT
   userSettings, // 3D1: moving_fps
+  refPlanes, // WAVE1B
   type AnnotateState, type ToolPointer, type ToolState, type ViewAnnotation, type ViewAnnotations, type ViewClip, type Visibility,
   type VisibilitySets,
 } from "./bimble";
@@ -86,6 +87,7 @@ import { referenceLayer } from "./gl/reference"; // L1: reference plans
 import { sectionMatrices, sectionFit, isSection } from "./gl/section"; // SEC1
 import { gridLayer } from "./gl/grids"; // ---- G2: grid axes in plans ---- / ---- end G2 ----
 import { drawSettingOut, type MarkerDrawn } from "./gl/settingout"; // SETOUT: base point, survey point, north
+import { drawRefPlanes, type RefPlaneDrawn } from "./gl/refplanes"; // WAVE1B: reference planes
 import { clipPlanes, onTargetPlane, orbitAbout, ORBIT_RAD_PER_PX, sameCam, wheelFactor, zoomAt, type OrbitCam } from "./gl/nav";
 import { HOME_PITCH, HOME_YAW, PITCH_LIMIT, projectNorth, startTurn, turnAt, viewCube, type CubeStats, type Dir, type Turn } from "./viewcube";
 
@@ -493,6 +495,8 @@ interface GlStats {
   /** SETOUT: the setting-out markers last drawn (overlay CSS px) and when (performance.now()). */
   setout?: MarkerDrawn[];
   setoutAt?: number;
+  /** WAVE1B: the reference planes last drawn (overlay CSS px). */
+  refplanes?: RefPlaneDrawn[];
   /** Dimensions and texts (ticket C4): the view's annotations as last fetched, the strings the
    *  overlay drew in its last frame, the selected annotation, the annotate tool's state and calls,
    *  the last annotation error. */
@@ -1736,6 +1740,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         return p ? [p[0] - b.left, p[1] - b.top] : null;
       });
       stats.setoutAt = performance.now();
+      // ---- WAVE1B: reference planes: the outline in 3D, the cut line in a plan or a section ----
+      const sc = plan as (ViewClip & { origin?: number[]; dir?: number[] }) | null;
+      const cut = !sc ? null : sc.type === "plan" ? { at: [0, 0, sc.cut ?? (sc.elevation ?? 0) + 1200] as [number, number, number], n: [0, 0, 1] as [number, number, number] }
+        : sc.origin && sc.dir ? { at: [sc.origin[0] ?? 0, sc.origin[1] ?? 0, 0] as [number, number, number], n: [sc.dir[0] ?? 0, sc.dir[1] ?? 0, 0] as [number, number, number] } : null;
+      stats.refplanes = drawRefPlanes(ctx, refPlanes.value, (x, y, z) => {
+        const p = stats.toScreen?.(x, y, z);
+        return p ? [p[0] - b.left, p[1] - b.top] : null;
+      }, sc ? cut : null);
     }
     // ---- end SETOUT ----
     if (stats.boxHandles.length) { ctx.setTransform(dpr, 0, 0, dpr, 0, 0); drawHandles(ctx); } // ISS71
@@ -1761,6 +1773,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   /** SETOUT: the setting-out answer last drawn. */
   let seenSetOut: unknown = null;
+  let seenRefPlanes: unknown = null; // WAVE1B
   /** NAV1: where the orbit pivot's marker was last drawn (overlay CSS px), or null. */
   let navMark: [number, number] | null = null;
   /** The annotations of the view shown, again when the model or the view changed. */
@@ -2433,6 +2446,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     }
     if (measure.value !== stats.measure) { stats.measure = measure.value; dirty = true; } // the action, a clear, another model
     if (settingOut.value !== seenSetOut) { seenSetOut = settingOut.value; dirty = true; } // SETOUT: shown, moved, turned
+    if (refPlanes.value !== seenRefPlanes) { seenRefPlanes = refPlanes.value; dirty = true; } // WAVE1B
     if (annotate.value !== seenAnnot) { // started or stopped (bimble.ts startDimension, startText)
       seenAnnot = annotate.value;
       stats.annotate = seenAnnot;

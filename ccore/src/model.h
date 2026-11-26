@@ -31,6 +31,7 @@ typedef enum {
     CC_IFC_FOOTING,
     CC_IFC_PROXY, /* IfcBuildingElementProxy */
     CC_IFC_ELEMENT_ASSEMBLY, /* IfcElementAssembly: no generator, its shape is its parts (ADR 0070) */
+    CC_IFC_VIRTUAL_ELEMENT,  /* IfcVirtualElement: a reference plane, no generator (WAVE1B, refplane.h) */
     CC_IFC_CLASS_COUNT
 } cc_ifc_class;
 

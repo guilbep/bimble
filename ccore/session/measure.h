@@ -101,6 +101,8 @@ typedef struct {
     float clip_yaw; /* ISS71: the box's turn (visibility.h cc_vis.yaw): min, max are in its frame */
     cc_mwork *work; /* MEAS1: counted into when not NULL */
     int brute;      /* MEAS1, tests: every visible element meshed and tested in order (the old way) */
+    const double *plane; /* WAVE1B: the work plane (origin, unit normal; scene coordinates): a ray that
+                          * meets no element ends on it (a face point); NULL: none */
 } cc_mview;
 
 void cc_measure_free(cc_measure *m);  /* the measurements; the state is zeroed */

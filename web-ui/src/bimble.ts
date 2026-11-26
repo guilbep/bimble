@@ -993,6 +993,7 @@ function refresh(modelChanged: boolean): void {
     refreshNorth(); // G2: project north (viewcube.ts projectNorth) and the setting-out panel
   }
   refreshSettingOut(); // SETOUT: the markers (session state) and the georeference they show
+  refreshRefPlanes(); // WAVE1B: the planes and the work plane (a deleted one is no work plane)
   // A model is loaded and its first refresh is done (deeplink.ts then sets data-bb-ready for the design check).
   if (state.value.file !== null && actions.value.length > 0) resolveModel();
   if (!timed && modelChanged && state.value.file !== null) {
@@ -1145,9 +1146,10 @@ export function runAction(name: string): string | null {
       if (made) shellHooks.sheetShown?.(made.id);
     }
     // Measuring is session state, not in the change JSON: its state and pressed button here (ticket T1).
-    if (name === "measure" || name.startsWith("place_")) {
+    if (name === "measure" || name.startsWith("place_") || name === "reference_planes") { // WAVE1B: the plane tool measures
       setMeasure(tryQuery<MeasureState | null>("measure", null));
       actions.value = tryQuery<ActionState[]>("actions", []);
+      refreshRefPlanes(); // WAVE1B: pick.on
     }
     // The box moves without a change event (its geometry is not in the change signature, calls.rs:152).
     if (name === "box_to_selection") visibility.value = tryQuery<Visibility | null>("visibility", null);
@@ -1482,6 +1484,10 @@ export function measureCall(name: "measure_pointer" | "measure_click" | "measure
     const st = JSON.parse(w.tool(name, JSON.stringify(args))) as MeasureState;
     setMeasure(st);
     if (name === "measure_cancel" && !st.active) actions.value = tryQuery<ActionState[]>("actions", []); // its pressed state
+    if (refPlanes.value?.pick.on) { // WAVE1B: the three-point tool's points (its pressed state when Esc stopped it)
+      refreshRefPlanes();
+      if (!refPlanes.value?.pick.on) actions.value = tryQuery<ActionState[]>("actions", []);
+    }
     return { state: st, error: null };
   } catch (e) {
     return { state: null, error: message(e) };
@@ -1571,4 +1577,35 @@ export const refreshSettingOut = () => { settingOut.value = tryQuery<SettingOut 
 /** Sets the survey point (world mm), or removes it (null). One undoable step (`georef_set`). */
 export const surveyPointSet = (at: [number, number, number] | null) => runVerb("georef_set", { survey_point_mm: at ?? [] });
 // ---- end SETOUT ----
+// ---- WAVE1B (ADR 0075, ccore/session/refplanes.h): reference planes and the work plane ----
+type V3 = [number, number, number];
+export interface RefPlane { corners: V3[]; height: number; id: string; name: string; normal: V3; origin: V3; storey: string; width: number; x_axis: V3 }
+export type ImplicitPlane =
+  | { kind: "level"; id: string; name: string; elevation: number }
+  | { kind: "axis"; id: string; name: string; start: [number, number]; end: [number, number] };
+export interface RefPlanes {
+  /** The work plane of the place tools and of Measure; null: the active storey's level. */
+  active: { id: string; kind: "plane" | "level" | "axis"; name: string } | null;
+  implicit: ImplicitPlane[];
+  /** The three-point tool (action reference_planes): its points so far, world mm. */
+  pick: { on: boolean; points: V3[] };
+  planes: RefPlane[];
+}
+/** `query reference_planes` as last asked (null: no editable model). */
+export const refPlanes = shallowRef<RefPlanes | null>(null);
+export const refreshRefPlanes = () => { refPlanes.value = tryQuery<RefPlanes | null>("reference_planes", null); };
+/** Choose the work plane (kind null: the storey's level again). Session state. Returns the error, or null. */
+export function workPlaneSet(kind: "plane" | "level" | "axis" | null, id?: string): string | null {
+  try {
+    const w = wasmOrThrow();
+    if (!w.tool) return "the work plane needs the C core";
+    refPlanes.value = JSON.parse(w.tool("work_plane", JSON.stringify(kind ? { kind, id } : { kind: null }))) as RefPlanes;
+    return null;
+  } catch (e) { return message(e); }
+}
+export interface RefPlaneArgs { storey: string; name?: string; origin?: V3; normal?: V3; x_axis?: V3; points?: V3[]; width?: number; height?: number }
+/** A new reference plane (verb reference_plane_add): one undoable step. Returns the error, or null. */
+export const referencePlaneAdd = (args: RefPlaneArgs) => runVerb("reference_plane_add", args);
+export const referencePlaneRename = (id: string, name: string) => runVerb("rename", { id, name });
+export const referencePlaneDelete = (id: string) => runVerb("delete", { ids: [id] });
 // ---- end G2 ----

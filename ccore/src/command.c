@@ -8,6 +8,7 @@
 #include <string.h>
 #include "file.h"
 #include "grid.h"
+#include "refplane.h" /* WAVE1B */
 #include "relation.h"
 #include "view_io.h"
 
@@ -270,6 +271,12 @@ static int placement_validate(Buf *b, const cc_placement *p) {
 /* ADR 0070: an IfcElementAssembly has no generator (its shape is its parts) and no openings;
  * every other element has a generator of its own. The same texts as model.c. */
 static int assembly_check(Buf *b, cc_ifc_class cls, const cc_generator *g, size_t nopenings) {
+    if (cls == CC_IFC_VIRTUAL_ELEMENT) { /* WAVE1B: a reference plane (refplane.h; its sizes: refplane_props) */
+        cc_element e;
+        memset(&e, 0, sizeof e);
+        e.cls = cls, e.generator = *g, e.nopenings = nopenings;
+        return cc_refplane_check(&e, b);
+    }
     if (cls != CC_IFC_ELEMENT_ASSEMBLY) {
         if (g->kind == CC_GEN_NONE) {
             buf_puts(b, "missing generator");
@@ -708,8 +715,14 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
             return invalid_buf(err, &why);
         }
         if (!cc_model_material(m, &e->material)) return not_found(err, &e->material);
-        if (assembly_check(&why, e->cls, &e->generator, e->nopenings) || placement_validate(&why, &e->placement))
+        if (assembly_check(&why, e->cls, &e->generator, e->nopenings) || placement_validate(&why, &e->placement) ||
+            (e->cls == CC_IFC_VIRTUAL_ELEMENT && cc_refplane_check(e, &why))) /* WAVE1B: its sizes */
             return invalid_buf(err, &why);
+        if (e->cls == CC_IFC_VIRTUAL_ELEMENT) { /* WAVE1B: at most CC_REFPLANES_MAX */
+            size_t np = 0;
+            for (size_t i = 0; i < m->nelements; i++) np += m->elements[i].cls == CC_IFC_VIRTUAL_ELEMENT;
+            if (np >= CC_REFPLANES_MAX) return invalid(err, "too many reference planes", 25);
+        }
         size_t at = lower_bound(m->elements, m->nelements, sizeof *e, &e->id);
         cc_element *p = arr_insert_grow(a, m->elements, m->nelements, &m->cap_elements, sizeof *e, at, e);
         if (!p) return oom(err);
@@ -805,6 +818,8 @@ int cc_command_apply_inverse(cc_model *m, const cc_command *c, cc_command *inv, 
         if (!e) return not_found(err, &c->id);
         cc_str old = {0, 0};
         int has_old = 0;
+        if (e->cls == CC_IFC_VIRTUAL_ELEMENT && cc_refplane_prop_ok(c->key, c->has_value ? &c->value : NULL))
+            return invalid(err, "a reference plane's width and height are numbers within [10, 1000000] mm", 72);
         if (set_prop(a, e, c->key, c->has_value ? &c->value : NULL, &old, &has_old)) return oom(err);
         inv_init(inv, CC_CMD_SET_PROPERTY);
         inv->id = c->id;
@@ -1886,14 +1901,14 @@ static int d_element(D *d, const JrVal *v, cc_element *e) {
     if (d_gid(d, f[0], &e->id) ||
         d_enum(d, f[1], class_name_i, CC_IFC_CLASS_COUNT,
                "`IfcColumn`, `IfcBeam`, `IfcSlab`, `IfcWall`, `IfcFooting`, `IfcBuildingElementProxy`, "
-               "`IfcElementAssembly`",
+               "`IfcElementAssembly`, `IfcVirtualElement`",
                &cls) ||
         d_str(d, f[2], &e->name) || d_gid(d, f[3], &e->storey) || d_gid(d, f[4], &e->material) ||
         d_placement(d, f[5], &e->placement))
         return -1;
     e->cls = (cc_ifc_class)cls;
     /* An IfcElementAssembly has no generator (ADR 0070): the key is left out. */
-    if (!f[6] && e->cls == CC_IFC_ELEMENT_ASSEMBLY) e->generator.kind = CC_GEN_NONE;
+    if (!f[6] && cc_class_shapeless(e->cls)) e->generator.kind = CC_GEN_NONE; /* WAVE1B: a reference plane too */
     else if (need(d, v, f[6], F[6]) || d_generator(d, f[6], &e->generator)) return -1;
     if (f[7] && d_openings(d, f[7], e)) return -1; /* CONC1 */
     if (f[8] && d_strmap(d, f[8], &e->properties, &e->nproperties)) return -1;

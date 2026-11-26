@@ -67,6 +67,7 @@ export const fr = {
   "action.show_base_point": "Point de base du projet", // SETOUT
   "action.show_survey_point": "Point topographique", // SETOUT
   "action.view_true_north": "Nord géo. / projet", // SETOUT
+  "action.reference_planes": "Plan de référence par trois points", // WAVE1B
   "action.new_view": "Nouvelle vue…", // VIEWSHEET
   "action.draw_section": "Coupe", // VIEWSHEET
   "action.sheet_place_view": "Placer une vue…", // VIEWSHEET
@@ -140,6 +141,7 @@ export const en: Record<keyof typeof fr, string> = {
   "action.show_base_point": "Project base point", // SETOUT
   "action.show_survey_point": "Survey point", // SETOUT
   "action.view_true_north": "True / project north", // SETOUT
+  "action.reference_planes": "Reference plane by three points", // WAVE1B
   "action.new_view": "New view…", // VIEWSHEET
   "action.draw_section": "Section", // VIEWSHEET
   "action.sheet_place_view": "Place view…", // VIEWSHEET

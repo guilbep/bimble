@@ -152,6 +152,7 @@ static void drop_model(cc_session *s) {
     cc_tool_clear(&s->tool);
     cc_vis_reset(&s->vis); /* lib.rs:1657-1676: a box or a hide means nothing for another model */
     cc_measure_reset(&s->measure); /* lib.rs:1677: measurements mean nothing for another model */
+    memset(&s->wp, 0, sizeof s->wp); /* WAVE1B: the storey's level again, the plane tool off */
     cc_session_mboxes_free(s); /* MEAS1: the boxes are the old scenes' */
     free(s->material), s->material = NULL;
     s->open = 0, s->untitled = 0;

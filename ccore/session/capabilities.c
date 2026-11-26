@@ -41,7 +41,7 @@ static const struct {
     {"quantities", FULL_BUILD}, /* schedules.h schedule_rows, schedule_csv (Q2) */
     {"rebar", NO},
     {"recent_files", NATIVE},  /* FS1: settings_file.h, the native host reads and opens paths (the browser cannot) */
-    {"reference_planes", NO},  /* SETOUT: named work planes (ADR 0075 item 4): not in the C core yet */
+    {"reference_planes", YES}, /* WAVE1B: named work planes (ADR 0075 decisions 9-11): query reference_planes, tool work_plane */
     {"references", YES},       /* links.h, links_ref.h */
     {"schedules", FULL_BUILD},
     {"section_catalogue", NO},

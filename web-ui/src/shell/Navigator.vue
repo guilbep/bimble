@@ -7,6 +7,7 @@ import { links, query, select, measurements, openView, openViews, scheduleList, 
 // ---- SEC1 ---- new views, duplicate, delete (verbs view_add, view_remove; viewing.rs:781-840)
 import { viewAdd, viewRemove } from "../bimble";
 import { editableModel, has } from "./capability";
+import { refPlanes } from "../bimble"; // WAVE1B
 // ---- end SEC1 ----
 // ---- LNK1 ----
 import LinksPanel from "./LinksPanel.vue";
@@ -56,6 +57,10 @@ const measureCount = computed(() => { void state.value.rev; void openViews.value
 const linkOpen = linksOpen;
 // ---- end LNK1 ----
 const measureOpen = ref(false);
+// ---- WAVE1B: the stored reference planes (IfcVirtualElement), the work plane marked; a row selects it
+const rpOpen = ref(false);
+const rpRows = computed(() => refPlanes.value?.planes ?? []);
+// ---- end WAVE1B ----
 const measureRows = computed(() => { void state.value.rev; return measureOpen.value ? measurements() : []; });
 // ---- FIXUI ---- a file open read only (an IFC, a .bimbleview) has no model storeys: its tree comes
 // from the scene the reader drew (query scene_tree / scene_elements, ccore/session/links.h).
@@ -203,6 +208,19 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
       <span>{{ t('nav.measures') }}</span><span class="n">{{ measureCount }}</span>
     </a>
     <span v-for="m in measureRows" :key="m.id" class="ti" style="padding-left:22px"><span>{{ m.label }}</span></span>
+    <!-- WAVE1B: reference planes -->
+    <template v-if="has('reference_planes') && refPlanes">
+      <a class="ti h" href="#" style="padding-left:6px" :aria-expanded="rpOpen" data-bb="nav-refplanes" @click.prevent="rpOpen = !rpOpen">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="rpOpen ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'"/></svg>
+        <span>{{ t('nav.refPlanes') }}</span><span class="n">{{ rpRows.length }}</span>
+      </a>
+      <template v-if="rpOpen">
+        <a v-for="p in rpRows" :key="p.id" class="ti" :class="{ sel: state.selection.includes(p.id) }" href="#" style="padding-left:22px"
+           data-bb="nav-refplane" :data-id="p.id" @click.prevent="select([p.id])">
+          <span>{{ p.name }}</span><span v-if="refPlanes.active?.kind === 'plane' && refPlanes.active.id === p.id" class="n">{{ t('nav.workPlane') }}</span>
+        </a>
+      </template>
+    </template>
   </nav>
 </template>
 

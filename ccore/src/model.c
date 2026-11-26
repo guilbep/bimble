@@ -7,6 +7,7 @@
 #include "relation.h"
 #include "view_io.h"
 #include "math.h" /* CONC1: cc_hypot */
+#include "refplane.h" /* WAVE1B */
 
 const char cc_gid_alphabet[65] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
 
@@ -25,7 +26,7 @@ int cc_gid_valid(const char *s, size_t n) {
 int cc_gid_cmp(const cc_gid *a, const cc_gid *b) { return memcmp(a->c, b->c, 22); }
 
 static const char *const CLASS[] = {"IfcColumn", "IfcBeam", "IfcSlab", "IfcWall", "IfcFooting",
-                                    "IfcBuildingElementProxy", "IfcElementAssembly"};
+                                    "IfcBuildingElementProxy", "IfcElementAssembly", "IfcVirtualElement"};
 static const char *const CAT[] = {"concrete", "steel", "timber", "masonry",
                                   "insulation", "earth", "glass", "other"};
 static const char *const KIND[] = {"rect_column", "rect_beam", "slab", "wall",
@@ -356,6 +357,7 @@ int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid 
             return set_err(err, &b);
         }
     }
+    size_t nplanes = 0; /* WAVE1B: reference planes counted against CC_REFPLANES_MAX */
     for (size_t i = 0; i < m->nelements; i++) {
         const cc_element *e = &m->elements[i];
         const cc_gid *k = ekeys ? &ekeys[i] : &e->id;
@@ -391,7 +393,13 @@ int cc_model_validate_keys(const cc_model *m, const cc_gid *skeys, const cc_gid 
         if (placement_validate(&b, &e->placement)) return set_err(err, &b);
         /* ADR 0070: an assembly has no generator (its shape is its parts) and nothing to cut;
          * every other element has one. */
-        if (e->cls == CC_IFC_ELEMENT_ASSEMBLY || e->generator.kind == CC_GEN_NONE) {
+        if (e->cls == CC_IFC_VIRTUAL_ELEMENT) { /* WAVE1B: a reference plane (refplane.h) */
+            if (++nplanes > CC_REFPLANES_MAX) {
+                buf_puts(&b, "too many reference planes (1000)");
+                return set_err(err, &b);
+            }
+            if (cc_refplane_check(e, &b)) return set_err(err, &b);
+        } else if (e->cls == CC_IFC_ELEMENT_ASSEMBLY || e->generator.kind == CC_GEN_NONE) {
             if (e->cls != CC_IFC_ELEMENT_ASSEMBLY) {
                 buf_puts(&b, "missing generator");
                 return set_err(err, &b);

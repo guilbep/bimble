@@ -10,6 +10,8 @@ export const fr = {
   "nav.subprojects": "Sous-projets",
   "nav.links": "Liens",
   "nav.measures": "Mesures",
+  "nav.refPlanes": "Plans de référence", // WAVE1B
+  "nav.workPlane": "plan de travail", // WAVE1B
   "nav.refs": "{n} réf.",
   "nav.more": "… {n} de plus",
   "view.props": "Propriétés de la vue : {name}",
@@ -41,6 +43,8 @@ export const en: Record<keyof typeof fr, string> = {
   "nav.subprojects": "Sub-projects",
   "nav.links": "Links",
   "nav.measures": "Measurements",
+  "nav.refPlanes": "Reference planes", // WAVE1B
+  "nav.workPlane": "work plane", // WAVE1B
   "nav.refs": "{n} réf.",
   "nav.more": "… {n} more",
   "view.props": "View properties: {name}",

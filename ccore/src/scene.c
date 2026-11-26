@@ -1140,6 +1140,11 @@ static int scene_build(cc_scene *s, const cc_model *m, cc_error *err, Arena *scr
         buf_init(&why);
         arena_reset(scratch);
         size_t uncut = 0;
+        if (e->cls == CC_IFC_VIRTUAL_ELEMENT) { /* WAVE1B: a reference plane has no mesh (the page draws its outline) */
+            buf_free(&why);
+            w[i].ntris = 0;
+            continue;
+        }
         int rc = local_mesh(e, scratch, &l, &why, &uncut);
         if (rc == LIMIT) {
             buf_free(&why);
