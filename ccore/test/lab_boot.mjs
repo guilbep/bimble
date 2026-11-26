@@ -152,7 +152,7 @@ async function main() {
   const startError = await bb("b.startError.value");
   check("startError is null", startError === null, String(startError));
   const n = await bb("b.actions.value.length");
-  check("page holds 76 actions (Rust's 54 + ISS72's show_all, show_previous + ISS71's box_north_project, box_north_true + SETOUT's show_base_point, show_survey_point, view_true_north + VIEWSHEET's new_view, draw_section, sheet_place_view, sheet_revision + CONC1's place_footing, place_strip_footing, place_raft, place_opening, place_sleeve + WAVE1B's reference_planes, place_grid_axis + LINKF's link_folder + QTY1's new_quantities, quantity_columns, quantities_by_material)\", booted && n === 76, String(n));
+  check("page holds 76 actions (Rust's 54 + ISS72's show_all, show_previous + ISS71's box_north_project, box_north_true + SETOUT's show_base_point, show_survey_point, view_true_north + VIEWSHEET's new_view, draw_section, sheet_place_view, sheet_revision + CONC1's place_footing, place_strip_footing, place_raft, place_opening, place_sleeve + WAVE1B's reference_planes, place_grid_axis + LINKF's link_folder + QTY1's new_quantities, quantity_columns, quantities_by_material)", booted && n === 76, String(n));
   const stateFile = await bb("JSON.stringify(b.state.value)");
   console.log(`page state: ${stateFile}`);
   const ribbon = await evalJs("(() => { const r = document.querySelector('[data-bb=ribbon]'); return r ? r.querySelectorAll('[data-bb^=ribbon-tool-]').length : -1; })()");
