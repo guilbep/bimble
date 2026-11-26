@@ -1362,6 +1362,32 @@ Rust's default, so no golden changes. Test: `test/dead1_test.c`.
   - **The moving rate** counts only a budgeted frame after a budgeted frame (3D1 counted a whole
     frame too and could draw everything while moving).
 
+## 38. Saved quantity lists: New quantities, Columns, By material (ticket QTY1, ADR 0080)
+
+- **Five keys of a schedule** (C only, `ccore/src/view.c`): `properties`, `group_by_material`,
+  `summary`, `filter`, `sort`, written after Rust's six and only when set: a Rust schedule keeps its
+  bytes (every `golden/schedule/` file and `verbs_all.txt` unchanged). Rust's `ScheduleDef` denies
+  unknown fields: a file with them does not open in Rust v0.19.0. Read as untrusted input: 32
+  property keys at most, each 1 to 200 bytes, a filter or sort column 1 to 200 bytes, 1 to 32
+  columns in all; an unknown Field, a wrong type, a duplicate key: refused
+  (`test/quantity_lists_test.c`, hostile lists). The error texts of Rust's six keys and 13 fields
+  stay Rust's (the C keys and fields are matched apart).
+- **Three fields** after Rust's 13: `count` (1 a row, summed, "Count"), `type` (the element's
+  PredefinedType property, "Type"), `gross_volume` (the cut mesh's volume plus its openings' prisms,
+  a sleeve's exact cylinder, "Gross volume (m³)"). Rust's `set_schedule` still takes Rust's 13 only.
+- **Grouping by material**: a material's line (its sums) before its level groups (`head` in the
+  page's JSON), materials by name, no material last; `summary`: no element row written (CSV, JSON).
+  **Filter**: one equality on a column's text, ASCII case ignored. **Sort**: stable after Rust's
+  order (location, name), numbers before texts before empty cells.
+- **Verbs** `schedule_add`, `schedule_edit`, `schedule_remove` (C additions, `verbs_schedules.h`);
+  Rust's viewer made the same `SetSchedules` commands from its panel. **Actions** `new_quantities`,
+  `quantity_columns`, `quantities_by_material` (C additions, tab "Quantities"); **query**
+  `schedule_columns`; `schedule_rows {offset, limit}` answers a window with `first`, `head`,
+  `material`, `offset`, `row_count` (without them Rust's 50-row answer, unchanged);
+  `schedule_csv {headers}` writes the given header line (without it Rust's titles). **Capability**
+  `cfc` (false: Assign CFC and CFC catalogue, ticket QTY2); Bar schedule is the `rebar` one.
+- Tests: `test/quantity_lists_test.c` (hand-computed totals on the frame), `test/lab_quantity_lists.mjs`.
+
 ## 39. Mission 1 across linked models (ticket M1LINKS, ADR 0081)
 
 Rust v0.19.0 draws at most three linked layers and nothing below applies to them; every golden keeps
