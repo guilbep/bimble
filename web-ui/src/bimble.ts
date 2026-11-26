@@ -1452,6 +1452,11 @@ export const gridAdd = (name: string, x: number[], y: number[], tags?: string[])
 export const gridAxisSet = (grid: string, axis: string, patch: { tag?: string; start?: [number, number]; end?: [number, number] }) =>
   runVerb("grid_axis_set", { grid, axis, ...patch });
 export const gridRemove = (id: string) => runVerb("grid_remove", { id });
+// ---- SLAB1: one axis more or less (verbs_levels.c grid_axis_add, grid_axis_remove) ----
+export const gridAxisAdd = (grid: string, tag: string, start: [number, number], end: [number, number]) =>
+  runVerb("grid_axis_add", { grid, tag, start, end });
+export const gridAxisRemove = (grid: string, axis: string) => runVerb("grid_axis_remove", { grid, axis });
+// ---- end SLAB1 ----
 
 /** `query("north")`: the georeference as the viewport turns by it; null without an editable model. */
 export interface NorthInfo { crs: string | null; has_map: boolean; map_rotation_deg: number; plan_turn_project: number; plan_turn_true: number; rotation_deg: number }

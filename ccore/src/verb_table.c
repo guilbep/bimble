@@ -326,6 +326,31 @@ int cc_vh_grid_add(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err)
 int cc_vh_grid_axis_set(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 int cc_vh_grid_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
 
+/* ---- SLAB1: single grid axes, handlers in verbs_levels.c ---- */
+static const char SCHEMA_GRID_AXIS_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `grid_axis_add`: one straight axis in plan, world mm.\",\"properties"
+    "\":{\"end\":{\"description\":\"End [x, y], mm.\",\"items\":{\"format\":\"double\",\"type\":\"num"
+    "ber\"},\"maxItems\":2,\"minItems\":2,\"type\":\"array\"},\"grid\":{\"description\":\"GlobalId of"
+    " the grid.\",\"type\":\"string\"},\"start\":{\"description\":\"Start [x, y], mm.\",\"items\":{\""
+    "format\":\"double\",\"type\":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":\"array\"},\"tag"
+    "\":{\"description\":\"Its tag (\\\"A\\\", \\\"1\\\"), unique in the grid.\",\"type\":\"string\"}"
+    "},\"required\":[\"grid\",\"tag\",\"start\",\"end\"],\"title\":\"GridAxisAddArgs\",\"type\":\"obj"
+    "ect\"}";
+static const char SUMMARY_GRID_AXIS_ADD[] =
+    "Add one axis to a grid, with a new GlobalId (a C addition).";
+static const char SCHEMA_GRID_AXIS_REMOVE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `grid_axis_remove`.\",\"properties\":{\"axis\":{\"description\":\"Gl"
+    "obalId of the axis.\",\"type\":\"string\"},\"grid\":{\"description\":\"GlobalId of the grid.\","
+    "\"type\":\"string\"}},\"required\":[\"grid\",\"axis\"],\"title\":\"GridAxisRemoveArgs\",\"type\":"
+    "\"object\"}";
+static const char SUMMARY_GRID_AXIS_REMOVE[] =
+    "Delete one grid axis; the last axis of a direction stays (IfcGrid needs U and V axes; a C addition).";
+int cc_vh_grid_axis_add(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+int cc_vh_grid_axis_remove(const cc_model *m, const JrVal *args, cc_cmds *out, Buf *err);
+/* ---- end SLAB1 ---- */
+
 /* C additions of ticket SH1: views placed on sheets, handlers in verbs_sheets.c. */
 static const char SCHEMA_SHEET_PLACE[] =
     "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
@@ -512,6 +537,8 @@ const cc_verb_def cc_verb_c_additions[] = {
     V(grid_add, GRID_ADD),
     V(grid_axis_set, GRID_AXIS_SET),
     V(grid_remove, GRID_REMOVE),
+    V(grid_axis_add, GRID_AXIS_ADD),       /* SLAB1 */
+    V(grid_axis_remove, GRID_AXIS_REMOVE), /* SLAB1 */
     /* ticket SH1 */
     V(sheet_place, SHEET_PLACE),
     V(sheet_move, SHEET_MOVE),

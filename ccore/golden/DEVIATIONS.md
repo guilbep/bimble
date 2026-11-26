@@ -1009,3 +1009,15 @@ directly): the C core exports `cc_verb_new_slab` (verbs.h) for the tool, not a n
   edge. A crossing outline has no ghost; `ghost_error` says why.
 - **At most 63 corners** per outline (`CC_TOOL_MAX_POINTS`; Rust's `Vec` has no bound): a 64th
   click is refused with `a slab outline has at most 63 corners`.
+
+**Single grid axes (C additions, no Rust oracle).** Rust edits no grid (it reads them from IFC).
+`grid_axis_add {grid, tag, start, end}` appends one axis with a new GlobalId; `grid_axis_remove
+{grid, axis}` drops one; both answer one `set_grid` (one history step), every other GlobalId kept,
+and run the grid rules of `grid_add` (tags unique in the grid, at least 1 mm long, ends within
+1e7 mm, at most 1000 axes). IFC4 `IfcGrid` has `UAxes` and `VAxes`, each `LIST [1:?] OF UNIQUE
+IfcGridAxis` (`WAxes` optional): the export puts the axes parallel to the first in U and the others
+in V, so the grid must keep axes in two directions. What is enforced: removing the last axis of a
+direction is refused with `grid_axis_remove: <tag> is the last axis of its direction; an IfcGrid
+needs axes in two (UAxes and VAxes)`. Removing the first axis is allowed (U is then the axes
+parallel to the new first one). Tested by `test/grid_axis_test.c` (the IFC4 and IFC2x3 exports
+carry the new axis), not in `golden/grids/verbs.txt` (that transcript keeps its bytes).
