@@ -79,6 +79,7 @@ import {
   userSettings, // 3D1: moving_fps
   refPlanes, // WAVE1B
   openingAt, openingsOf, selectedOpening, // WAVE1B (B2)
+  storeys, viewVisibility, // WAVE1B (A3)
   type AnnotateState, type ToolPointer, type ToolState, type ViewAnnotation, type ViewAnnotations, type ViewClip, type Visibility,
   type VisibilitySets,
 } from "./bimble";
@@ -1744,6 +1745,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
         return p ? [p[0] - b.left, p[1] - b.top] : null;
       });
       stats.setoutAt = performance.now();
+      // ---- WAVE1B (A3): the grid axes in 3D, at the active level's elevation (Rust: on paper only) ----
+      if (!plan) gridAxesLayer.draw(ctx, (x, y) => { const p = stats.toScreen?.(x, y, gridElev); return p ? [p[0] - b.left, p[1] - b.top] : null; });
       // ---- WAVE1B (B2): the selected opening's box, in the selection colour ----
       stats.openingDrawn = false;
       const so = selectedOpening.value;
@@ -1799,6 +1802,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   /** SETOUT: the setting-out answer last drawn. */
   let seenSetOut: unknown = null;
   let seenRefPlanes: unknown = null; // WAVE1B
+  let gridKey3 = "", gridHidden = false, gridElev = 0; // WAVE1B (A3): grids in 3D
   let seenOpening: unknown = null; // WAVE1B (B2)
   let openingKey = "", openingBox: ReturnType<typeof openingsOf>[number] | undefined; // WAVE1B (B2): the box drawn, per rev
   /** NAV1: where the orbit pivot's marker was last drawn (overlay CSS px), or null. */
@@ -2490,7 +2494,11 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     refreshAnnotations();
     if (refLayer.refresh(`${state.value.rev}|${viewId}`, plan !== null && !isSection(plan))) dirty = true; // L1 (SEC1: plans)
     // ---- G2: grid axes, again when the model, its links or the view change ----
-    if (gridAxesLayer.refresh(`${state.value.rev}|${state.value.file}|${state.value.links ?? 0}|${viewId}`, plan !== null && !isSection(plan))) dirty = true; // SEC1: plans
+    // WAVE1B (A3): in 3D too, at the active level's elevation, unless the view hides IfcGrid (its visibility)
+    const gElev = storeys.value.find((x) => x.id === placing.value?.storey)?.elevation ?? 0;
+    const gKey = `${state.value.rev}|${state.value.file}|${state.value.links ?? 0}|${viewId}|${plan ? "p" : `3d${gElev}`}`;
+    if (gKey !== gridKey3) { gridKey3 = gKey; gridHidden = !plan && (viewVisibility()?.hidden_classes ?? []).includes("IfcGrid"); gridElev = gElev; }
+    if (gridAxesLayer.refresh(gKey, (plan !== null && !isSection(plan)) || (!plan && !gridHidden))) dirty = true; // SEC1: plans
     // ---- end G2 ----
     if (tool && placing.value?.active !== true) showTool(null); // placing stopped elsewhere
     const key = mesh ? `${state.value.selection.join(",")}|${state.value.linked?.link ?? ""}` : "";

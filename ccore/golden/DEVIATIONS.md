@@ -1144,6 +1144,11 @@ own references are hand-computed in `test/setting_out_test.c`; no golden changes
   "grid_axis"}` is accepted; Rust's kinds keep their bytes. Hand-computed: `test/setting_out_test.c`
   (axis 2 after 1, B after A, the crossing snapped, Esc, undo).
 
+- **Grids in 3D (WAVE1B A3, ADR 0075 decision 14).** Rust draws grid axes on paper only (and the
+  lab, since G2, in plans); the lab draws them in the 3D view too, at the active level's elevation,
+  off when the view hides `IfcGrid`. Page-side only (`web-ui/src/glviewport.ts` with
+  `gl/grids.ts`); no core output changes. Checked by `test/lab_setting_out.mjs`.
+
 ## 33. Views and sheets from the ribbon: New view…, the section tool, Place view…, Revision…, annotation types (ticket VIEWSHEET, ADR 0076)
 
 Rust v0.19.0 made views from the navigator's "New view…" menu (viewing.rs:806-840), placed views

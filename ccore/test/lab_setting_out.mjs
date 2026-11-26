@@ -349,6 +349,27 @@ async function tab(S, evalJs) {
     const { data } = await S("Page.captureScreenshot", { format: "png" });
     writeFileSync(join(SHOTS, "setting-out-grid-axis-plan-1280.png"), Buffer.from(data, "base64"));
   }
+  // ---- WAVE1B (A3): the grids in 3D at the active level's elevation, off with the view's IfcGrid
+  // visibility. Before A3 the 3D view drew no grid (window.__bbGrids.axes 0 there). ----
+  const v3d = await B("return b.openViews.value.views.find((v) => v.type === 'three_d')?.id;");
+  ms = await timed("grids in 3D (the 3D view opened)", "body", `b.openView(${JSON.stringify(v3d)})`, "window.__bbGl.camera?.mode !== 'plan' && (window.__bbGrids?.axes ?? 0) === 3");
+  const g3 = await evalJs("JSON.stringify(window.__bbGrids)");
+  check("Grids in 3D: the three axes drawn with their bubbles (1, 2, A), at the active level", ms !== null && JSON.parse(g3).bubbles.length === 6, g3);
+  const lvl = await B("return b.storeys.value.find((x) => x.id === b.placing.value?.storey)?.elevation ?? 0;");
+  check("the axis 1's bubble sits where (0, -1000, level) projects (just past the start)", await evalJs(`(() => { const g = window.__bbGl, bb = window.__bbGrids; const r = document.getElementById('bimble').getBoundingClientRect();
+    const p = g.toScreen(0, -1000, ${lvl}), q = g.toScreen(0, 11000, ${lvl}); if (!p || !q) return false; const b0 = bb.bubbles.find((x) => x.tag === '1'); if (!b0) return false;
+    const ux = q[0] - p[0], uy = q[1] - p[1], l = Math.hypot(ux, uy); const ex = p[0] - r.left - ux / l * 12, ey = p[1] - r.top - uy / l * 12;
+    return Math.hypot(ex - b0.at[0], ey - b0.at[1]) < 1.5; })()`));
+  ms = await timed("grids in 3D hidden (view visibility IfcGrid)", "body", `b.runVerb('view_edit', { id: ${JSON.stringify(v3d)}, visibility: { hidden_classes: ['IfcGrid'] } })`, "(window.__bbGrids?.axes ?? 0) === 0");
+  check("the view's visibility hides IfcGrid: no axis drawn in 3D", ms !== null);
+  await B(`return b.runVerb('view_edit', { id: ${JSON.stringify(v3d)}, visibility: { hidden_classes: [] } });`);
+  if (SHOTS) {
+    await sleep(300);
+    const { data } = await S("Page.captureScreenshot", { format: "png" });
+    writeFileSync(join(SHOTS, "setting-out-grids-3d-1280.png"), Buffer.from(data, "base64"));
+  }
+  await B(`return b.openView(${JSON.stringify(plan)});`);
+  await waitFor("the plan again", 8000, async () => (await evalJs("window.__bbGl.camera?.mode")) === "plan").catch(() => {});
 
   // ---- Levels, Grids, Measure ----
   for (const [m, name] of [[1, "Levels"], [2, "Grids"]]) {

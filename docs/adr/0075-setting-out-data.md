@@ -96,6 +96,12 @@ SLAB1).
     plane does not pull a grid axis onto its trace. *Alternative:* a page-side tool as the
     section line's: no snapping to the axes without porting snap.rs to the page.
 
+14. **Grids in 3D** (WAVE1B A3): the grid axes are drawn in the 3D view as in plans (thin dash-dot
+    ink, a bubble with the tag past each end), at the active level's elevation (the storey the
+    place tools use), unless the view's visibility hides `IfcGrid` (`view_edit {visibility:
+    {hidden_classes}}`): the existing per-view class visibility is the toggle. *Alternative:* a
+    3D grid at every level: a cage over the model, and Rust drew grids on paper only.
+
 ## Consequences
 
 - The tab has no dead control: 7 of its 8 controls act (Survey point, Project base point, True /
@@ -108,5 +114,5 @@ SLAB1).
 ## Not done
 
 - ~~Reference planes (decision 8)~~: served by decisions 9-12 (WAVE1B). ~~A two-click grid axis tool in a plan~~ (decision 13; the Levels & grids page
-  adds axes by numbers), grids drawn in 3D (Rust draws them on paper only; the lab in plans).
+  adds axes by numbers), ~~grids drawn in 3D~~ (decision 14).
 - Survey point in IFC (decision 7), moving the base point by clicks (decision 2).
