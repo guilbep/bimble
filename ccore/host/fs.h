@@ -70,6 +70,8 @@ int cc_host_fs_query(const char *name, const char *body, size_t n, Buf *out);
  * fs_list (the lexical rule, then resolved), else CC_ERR with "link_folder: the folder is outside
  * the folders Bimble lists (query fs_roots)". -1: let the session answer. */
 int cc_host_fs_check_link_folder(const char *body, size_t n, Buf *out);
+/* LINKF: 1 when the file `path` is under a root (lexically and resolved) or a staged drop. */
+int cc_host_fs_path_allowed(const char *path);
 
 /* POST /stage?name=<file name>&t=<token> (server.c), the body the file's bytes (at most
  * FS_STAGE_MAX): a file dropped on the page, whose path the browser does not give. Written to a

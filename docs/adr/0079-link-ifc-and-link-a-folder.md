@@ -111,6 +111,22 @@ caches weigh 96 MB on disk for 1.84 GB of IFC (5 %). BLAKE3 (the portable code t
     would rebuild its buffers in the page instead of changing one matrix. The base point is the
     building's origin, not Revit's project base point (an IFC has none): said in the panel's
     vocabulary only.
+12. **Several chosen files in one go** (the owner: "is there a way to select like 4 files at once?"):
+    `link_model {paths: [...]}` beside `{path}`: one call, one undo step, the same queue; a path
+    already linked is skipped with a note, one outside the dialog's roots (`cc_platform.path_allowed`),
+    beyond 64 links or unreadable gets a "refused" row with its reason; the answer lists them. The
+    native dialog's Link IFC… selects several files (click, Ctrl/Cmd-click, Shift-click, Ctrl A; a
+    checkbox per row under 480 px; "N files, size") and still offers "Link this folder"; several files
+    dropped on the page are linked in one call (natively staged, 256 MB each at most: a larger one is
+    told to use the dialog). Alternative: `link_folder` taking a list; refused: a folder and a
+    selection are different answers of the dialog, and `link_model` already names "link these files".
+13. **Responsiveness (ADR 0074)**: the rows of Link this folder showed 392 to 500 ms after the click
+    while the host answered in 4 ms: each change the host published during a conversion (its start,
+    each 5 %) made the page run its full refresh (18 synchronous queries, a 66 to 93 ms long task) and
+    no frame was painted meanwhile. Only a finished conversion now publishes a change; the panel polls
+    its rows while one runs. After: 16 to 57 ms (load average 3.4 to 5). The eye's row answers within
+    200 ms; the viewport follows when /mesh is fetched again (51 to 131 ms measured): a per-batch
+    visibility flag in the draw path is left for after ticket 3D2.
 11. **Unload / Load** keep the link and free its memory; **Reload all** reads each link again (its
     cache unless the IFC changed).
 

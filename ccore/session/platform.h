@@ -76,6 +76,9 @@ typedef struct cc_platform {
     /* Runs fn(arg) on another thread and returns at once: 0 started, -1 none (the caller then runs
      * it itself). The thread touches only what `arg` holds; it is the carrier's. */
     int (*spawn)(void *ctx, void (*fn)(void *arg), void *arg);
+    /* 1 when `path` may be linked from a list the page picked (link_model {paths}): under a folder
+     * the file dialog lists (host/fs.h, the path rule) or a dropped file's staged copy; NULL: all. */
+    int (*path_allowed)(void *ctx, const char *path);
     /* ---- end LINKF ---- */
 } cc_platform;
 

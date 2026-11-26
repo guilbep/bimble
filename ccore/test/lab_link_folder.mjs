@@ -8,7 +8,8 @@
 // triangles go); one link coloured red (palette 0) shows red pixels; the pin refuses a move, unpinned a move of
 // (20000, 0, 0) puts the frame's column P1.00 (centred on (0, 0) in its file) under the point (20000, 0, 1000) and
 // nothing of it under (0, 0, 1000) (pick); one undo removes all four (the mesh has no link); the project saved,
-// one IFC made unreadable, reopened: the four links from their caches, drawn. No uncaught page error, no console
+// one IFC made unreadable, reopened: the four links from their caches, drawn; Link IFC… with four
+// files picked by click, Ctrl-click and Shift-click: "4 files", one call, four rows within 200 ms. No uncaught page error, no console
 // error. Each timed click starts from a settled page (three frames under 25 ms apart; the eye: the
 // four links drawn). LINKF_PROBE=1 (or =all) prints the frames, the long tasks and every call
 // between a click and its rows. Prints "N passed, M failed"; exits non-zero on a failure. Fails before LNK… LINKF: no Link a folder…
@@ -193,7 +194,11 @@ async function main() {
     for (const [at, d, u] of await evalJs("window.__xlog")) if (at < 600) console.log(`  hide ${at.toFixed(1)} +${d.toFixed(1)} ${u}`);
   }
   console.log(`hide: the row in ${hide.row.toFixed(1)} ms, the viewport (its /mesh fetched again) in ${hide.view.toFixed(1)} ms`);
-  check("the eye hides one: the row answers within 200 ms, its triangles go", hide.row < 200 && t1.linkTris < t0.linkTris, `${hide.row.toFixed(1)} ms, ${t0.linkTris} -> ${t1.linkTris}`);
+  check("the eye hides one: the control's own feedback (its row) within 200 ms (ADR 0074)", hide.row < 200, `${hide.row.toFixed(1)} ms`);
+  // The viewport's update is the work that follows (the change, the page's refresh, /mesh fetched
+  // again): printed and guarded at 1,000 ms. Hiding a link should become a per-batch flag once the
+  // draw path is free (ticket 3D2 edits it): no refetch then.
+  check("then the viewport drops its triangles (the work that follows, guard 1,000 ms)", hide.view < 1000 && t1.linkTris < t0.linkTris, `${hide.view.toFixed(1)} ms, ${t0.linkTris} -> ${t1.linkTris}`);
 
   // colour: only a_frame shown, red (palette 0)
   for (const n of ["c_mapped.ifc", "d_column.ifc"]) await hcall("action", "manage_links", { op: "hide", name: n });
@@ -245,6 +250,33 @@ async function main() {
   const st2 = await waitFor("drawn", 15000, async () => { const s = await gl(); return s.links.length === 4 ? s : null; }).catch(() => null);
   check("reopened: the viewport draws four links", st2?.links.length === 4);
   chmodSync(join(dir, "b_frame2.ifc"), 0o644);
+
+  // Link IFC…: several files picked with real clicks (click, Ctrl-click, Shift-click), one call
+  const more = join(home, "more");
+  mkdirSync(more);
+  ["e1.ifc", "e2.ifc", "e3.ifc", "e4.ifc"].forEach((n, i) => copyFileSync(join(G, i % 2 ? "ifc/frame2.ifc" : "ifc/fixtures/mapped_item.ifc"), join(more, n)));
+  await evalJs("(async () => (await import('/src/bimble.ts')).runAction('manage_links'))()");
+  await waitFor("the Links panel", 5000, () => evalJs("!!document.querySelector('[data-bb=link-add-model]') && !document.querySelector('[data-bb=link-add-model]').disabled"));
+  await evalJs("document.querySelector('[data-bb=link-add-model]').click()");
+  await waitFor("the file dialog", 5000, () => evalJs("document.querySelector('[data-bb=file-browser]')?.dataset.purpose === 'link_model'"));
+  await evalJs(`(() => { const i = document.querySelector('[data-bb=file-browser-path]'); i.value = ${JSON.stringify(more)}; i.dispatchEvent(new Event('input'));
+    i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+  await waitFor("the four files listed", 5000, () => evalJs("document.querySelectorAll('[data-bb=file-browser-entry]').length === 4"));
+  const clickAt = async (name, modifiers) => {
+    const [x, y] = await evalJs(`(() => { const r = document.querySelector('[data-bb=file-browser-entry][data-name="${name}"]').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    for (const type of ["mousePressed", "mouseReleased"]) await S("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1, modifiers });
+  };
+  await clickAt("e1.ifc", 0);
+  await clickAt("e2.ifc", 2); // Ctrl
+  await clickAt("e4.ifc", 8); // Shift: e2..e4
+  const count = await evalJs("document.querySelector('[data-bb=file-browser-count]')?.textContent ?? ''");
+  check("click, Ctrl-click, Shift-click: four files selected, their size shown", /^4 file/.test(count) && /KB|MB/.test(count), count);
+  const nBefore = (await rows()).length;
+  const msMany = await evalJs(`new Promise((res) => { const t0 = performance.now(); const n0 = document.querySelectorAll('[data-bb=link-model]').length; document.querySelector('[data-bb=file-browser-go]').click();
+    const tick = () => document.querySelectorAll('[data-bb=link-model]').length >= n0 + 4 ? res(performance.now() - t0) : requestAnimationFrame(tick); tick(); })`);
+  check("Link 4 files: four rows within 200 ms of the click (one call)", msMany < 200, `${msMany.toFixed(1)} ms`);
+  const many = await waitFor("the four ready", 60000, async () => { const x = await rows(); return x.length === nBefore + 4 && x.every((m) => m.state === "ready") ? x : null; }).catch(() => null);
+  check("the four chosen files linked and ready", many !== null, JSON.stringify((await rows()).map((m) => [m.name, m.state])));
 
   const errors = consoleLog.filter((m) => /error/.test(m.level) && !/favicon|Synchronous XMLHttpRequest/.test(m.text));
   check("no uncaught page error", exceptions.length === 0, exceptions.join(" | "));

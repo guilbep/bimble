@@ -1329,3 +1329,6 @@ Rust's default, so no golden changes. Test: `test/dead1_test.c`.
   the page (ADR 0079 decision 10). Rust placed a link only by its georeference's offset
   (`lib.rs:1499`, origin minus origin). `query link_log {name}`: the link's conversion report.
   Test: `test/link_place_test.c` (hand-computed placements), `file2_test.c` (hostile values).
+- **`link_model {paths}`** (a C addition): several files in one call and one undo step; per path
+  linked, skipped (already linked) or a "refused" row with its reason (outside the file dialog's
+  roots: the native host's `path_allowed`). Test: `test/link_folder_test.mjs`.

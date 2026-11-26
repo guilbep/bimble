@@ -1310,3 +1310,75 @@ int cc_link_log_text(cc_session *s, const char *body, size_t n, Buf *out) {
     arena_free(&a);
     return rc;
 }
+
+/* ---- LINKF: link_model {paths}: several files in one call, one undo step (links.h) ---- */
+
+/* A row that says why a path of the list was not linked (state "refused", nothing drawn). */
+static int add_refused(cc_session *s, const char *path, const char *why) {
+    if (add_missing(s, path, 1)) return -1;
+    cc_link *k = &s->links[s->nlinks - 1];
+    k->state = CC_LS_REFUSED;
+    k->msg = dup_z(why);
+    return 0;
+}
+
+static int linked_already(const cc_session *s, const char *path) {
+    char a[4096], b[4096];
+    int ra = s->pf->real_path && !s->pf->real_path(s->pf->ctx, path, a, sizeof a);
+    for (size_t i = 0; i < s->nlinks; i++) {
+        const char *p = s->links[i].path;
+        if (!p) continue;
+        if (!strcmp(p, path)) return 1;
+        if (ra && s->pf->real_path && !s->pf->real_path(s->pf->ctx, p, b, sizeof b) && !strcmp(a, b)) return 1;
+    }
+    return 0;
+}
+
+int cc_links_add_list(cc_session *s, const char *const *paths, size_t n, Buf *answer, cc_error *err) {
+    err->offset = CC_NO_OFFSET;
+    err->msg[0] = 0;
+    Buf done, refused, skipped;
+    buf_init(&done), buf_init(&refused), buf_init(&skipped);
+    JsonW wr, ws;
+    jw_init(&wr, &refused, 0), jw_init(&ws, &skipped, 0);
+    jw_arr_begin(&wr), jw_arr_begin(&ws);
+    size_t nd = 0;
+    for (size_t i = 0; i < n; i++) {
+        const char *p = paths[i];
+        const char *why = NULL;
+        cc_error e;
+        e.msg[0] = 0;
+        if (linked_already(s, p)) { /* a duplicate: skipped, said */
+            jw_obj_begin(&ws), jw_key(&ws, "note"), jw_str(&ws, "already linked"), jw_key(&ws, "path"), jw_str(&ws, p), jw_obj_end(&ws);
+            continue;
+        }
+        if (s->pf->path_allowed && !s->pf->path_allowed(s->pf->ctx, p))
+            why = "outside the folders Bimble lists (query fs_roots)";
+        else if (s->nlinks >= CC_MAX_LINKS) why = "at most 64 linked models";
+        else if (cc_links_add(s, p, &e)) why = e.msg;
+        if (why) {
+            jw_obj_begin(&wr), jw_key(&wr, "path"), jw_str(&wr, p), jw_key(&wr, "reason"), jw_str(&wr, why), jw_obj_end(&wr);
+            if (s->nlinks < CC_MAX_LINKS && !add_refused(s, p, why)) buf_puts(&done, p), buf_putc(&done, 0), nd++;
+            continue;
+        }
+        buf_puts(&done, p), buf_putc(&done, 0), nd++;
+    }
+    jw_arr_end(&wr), jw_arr_end(&ws);
+    jw_finish(&wr), jw_finish(&ws);
+    int rc = 0;
+    if (nd && !done.oom) { /* one undo step: what this call added (refused rows too) */
+        struct cc_links_undo u = {malloc(done.len), done.len, nd, s->open ? s->hist.nundo : 0};
+        if (u.paths) {
+            memcpy(u.paths, done.p, done.len);
+            if (push_entry(&s->links_undo, &s->nlinks_undo, &s->caplinks_undo, u)) free(u.paths);
+            else cc_links_undo_clear_redo(s);
+        }
+    }
+    /* the answer: the rows as they are now (queued, ready, refused), and what was skipped */
+    buf_puts(answer, "{\"added\":"), buf_u64(answer, nd), buf_puts(answer, ",\"refused\":");
+    buf_append(answer, refused.p, refused.len), buf_puts(answer, ",\"skipped\":"), buf_append(answer, skipped.p, skipped.len);
+    buf_putc(answer, '}');
+    if (answer->oom || done.oom || refused.oom || skipped.oom) rc = -1, snprintf(err->msg, sizeof err->msg, "out of memory");
+    buf_free(&done), buf_free(&refused), buf_free(&skipped);
+    return rc;
+}

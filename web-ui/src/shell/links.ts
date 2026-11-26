@@ -78,6 +78,8 @@ export function linkNew(purpose: LinkPurpose): Promise<string | null> {
     if (!enabled(purpose)) return purpose === "link_model" ? "open a model first" : "open a plan or a section first";
     const r = await pickFile(purpose);
     if (!r) return null; // cancelled
+    if (r.paths) { actionBody("link_model", { paths: r.paths }); return null; } // LINKF: one call, one undo step
+    if (r.folder) { actionBody("link_folder", { path: r.folder }); return null; }
     if (r.path) { actionBody(purpose, { path: r.path }); return null; }
     if (r.file && isWasm()) { await linkBytes(purpose, r.file); return null; }
     return "no file";

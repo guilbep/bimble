@@ -2094,6 +2094,25 @@ static int link_action(cc_session *s, const char *name, const char *body, size_t
         rc = CC_OK;
         goto end;
     }
+    if (!strcmp(name, "link_model") && v && jr_get(v, "paths")) { /* ---- LINKF: several files, one undo step ---- */
+        const JrVal *ps = jr_get(v, "paths");
+        if (ps->type != JR_ARR || !ps->n || ps->n > CC_MAX_LINKS) {
+            buf_puts(out, "paths: 1 to 64 file paths");
+            goto end;
+        }
+        const char *list[CC_MAX_LINKS];
+        for (size_t i = 0; i < ps->n; i++) {
+            const JrVal *x = &ps->items[i];
+            if (x->type != JR_STR || !x->n || strlen(x->s) < x->n) {
+                buf_puts(out, "paths: each a file path, not empty, without NUL");
+                goto end;
+            }
+            list[i] = x->s;
+        }
+        cc_error err;
+        rc = cc_links_add_list(s, list, ps->n, out, &err) ? (buf_clear(out), buf_puts(out, err.msg), CC_ERR) : CC_OK;
+        goto end;
+    }
     if (!strcmp(name, "link_model")) {
         const JrVal *p = v ? jr_get(v, "path") : NULL;
         if (!p || p->type != JR_STR) {

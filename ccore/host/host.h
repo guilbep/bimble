@@ -40,6 +40,9 @@ void cc_host_publish_change(const char *json, size_t n);
 /* The native cc_platform (platform_native.c): POSIX files, CLOCK_MONOTONIC, time(), /dev/urandom,
  * stderr. Static, never freed. On Windows platform_win.c (ticket WIN1). */
 const cc_platform *cc_platform_native(void);
+/* LINKF: the native platform's path_allowed asks this rule (host/fs.c sets it at cc_host_fs_init);
+ * NULL: every path. */
+extern int (*cc_host_path_rule)(const char *path);
 
 #ifdef _WIN32
 #include <stdio.h>

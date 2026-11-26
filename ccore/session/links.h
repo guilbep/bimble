@@ -133,6 +133,12 @@ int cc_links_load(cc_session *s, int i, cc_error *err);
 /* link_folder: the files of folder `dir` to link (calls.c), added in one undo step. 0 ok with
  * *added; -1 with err. */
 int cc_links_add_folder(cc_session *s, const char *dir, int recursive, size_t *added, cc_error *err);
+/* link_model {paths: [...]} (LINKF): each path linked as cc_links_add does, in one undo step; a
+ * path already linked is skipped (a note); one the platform refuses (pf->path_allowed: outside the
+ * dialog's roots), one beyond CC_MAX_LINKS or one that cannot be read gets a row "refused" with its
+ * reason; the others go on. `answer`: {"added": n, "refused": [{"path", "reason"}], "skipped":
+ * [{"note", "path"}]}. 0 ok, -1 out of memory. */
+int cc_links_add_list(cc_session *s, const char *const *paths, size_t n, Buf *answer, cc_error *err);
 /* link_folder's undo and redo (calls.c undo_redo): 1 when it took the step. */
 int cc_links_undo_step(cc_session *s, int undo);
 int cc_links_can_undo(const cc_session *s, int undo);

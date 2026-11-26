@@ -263,12 +263,15 @@ static int np_spawn(void *ctx, void (*fn)(void *), void *arg) {
     if (rc) return free(a), -1;
     return 0;
 }
+/* The dialog's path rule, set by fs.c when the host lists folders (cc_host_fs_init); none: all. */
+int (*cc_host_path_rule)(const char *path);
+static int np_path_allowed(void *ctx, const char *path) { return (void)ctx, cc_host_path_rule ? cc_host_path_rule(path) : 1; }
 /* ---- end LINKF ---- */
 
 static const cc_platform NATIVE = {
     NULL, 1, np_read_file, np_exists, np_write_file, np_now_ms, np_unix_s, np_random, np_log, np_list_dir,
     np_stat_path, np_real_path, np_make_dir, /* FS1 */
-    np_mem_available, np_read_range, np_cache_dir, np_spawn, /* LINKF */
+    np_mem_available, np_read_range, np_cache_dir, np_spawn, np_path_allowed, /* LINKF */
 };
 
 const cc_platform *cc_platform_native(void) { return &NATIVE; }

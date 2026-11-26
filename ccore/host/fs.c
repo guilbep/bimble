@@ -137,6 +137,7 @@ int cc_host_fs_add_root(const char *dir) {
 }
 
 void cc_host_fs_init(void) {
+    cc_host_path_rule = cc_host_fs_path_allowed; /* LINKF: link_model {paths} follows the dialog's rule */
 #ifdef _WIN32
     const char *h = cc_host_getenv("USERPROFILE");
 #else
@@ -367,6 +368,19 @@ int cc_host_fs_check_link_folder(const char *body, size_t n, Buf *out) {
     return rc; /* -1: the session answers (also a body it refuses) */
 }
 
+static char stage_dir[FS_MAX_PATH + 1];
+
+int cc_host_fs_path_allowed(const char *path) {
+    char nd[FS_MAX_PATH + 2], rd[FS_MAX_PATH + 1];
+    const cc_platform *pf = cc_platform_native();
+    if (!path || !*path || strlen(path) > FS_MAX_PATH) return 0;
+    int lx = fsr_normalise(path, FSR_WIN, nd, sizeof nd);
+    if (lx == FSR_BAD || lx == FSR_DEVICE || (lx == FSR_UNC && !unc_root())) return 0;
+    if (pf->real_path(pf->ctx, path, rd, sizeof rd)) return in_roots_lexical(nd); /* not there: the reader says so */
+    if (stage_dir[0] && fsr_under(rd, stage_dir, FSR_WIN)) return 1; /* a dropped file's staged copy */
+    return in_roots_lexical(nd) && in_roots(rd);
+}
+
 int cc_host_fs_query(const char *name, const char *body, size_t n, Buf *out) {
     if (!strcmp(name, "fs_list")) return fs_list(body, n, out);
     if (!strcmp(name, "fs_home")) { /* {purpose?}: also the folder that purpose listed last */
@@ -407,8 +421,9 @@ int cc_host_fs_query(const char *name, const char *body, size_t n, Buf *out) {
 }
 
 /* ---- POST /stage: a dropped file (fs.h) ---- */
+/* stage_dir: declared above (LINKF: cc_host_fs_path_allowed) */
 
-static char stage_dir[FS_MAX_PATH + 1];
+
 #define FS_STAGED_MAX 256
 static char *staged[FS_STAGED_MAX]; /* the files written there, removed at exit */
 static int nstaged;

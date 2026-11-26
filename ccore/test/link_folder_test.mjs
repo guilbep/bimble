@@ -146,6 +146,30 @@ check("query link_log: only a link's own report", r.status === 400 && /no linked
 r = await a.call("query", "link_log", JSON.stringify({ path: "/etc/passwd" }));
 check("query link_log: no path from the caller", r.status === 400, r.text);
 
+// several chosen files in one call: two new, one outside the roots, one already linked
+const more = join(home, "more");
+mkdirSync(more);
+copyFileSync(join(G, "ifc/frame.ifc"), join(more, "e_frame.ifc"));
+copyFileSync(join(G, "ifc/fixtures/triangulated.ifc"), join(more, "f_tri.ifc"));
+const before4 = (await a.models()).length;
+r = await a.call("action", "link_model", JSON.stringify({ paths: [join(more, "e_frame.ifc"), join(G, "ifc/frame2.ifc"), join(dir, "a_frame.ifc"), join(more, "f_tri.ifc")] }));
+const ans = r.status === 200 ? JSON.parse(r.text) : {};
+check("link_model {paths}: one call within 200 ms, its answer: 3 rows added, 1 refused, 1 skipped", r.status === 200 && r.ms < 200 && ans.added === 3 &&
+  ans.refused?.length === 1 && /outside the folders Bimble lists/.test(ans.refused[0].reason) && ans.skipped?.length === 1 && ans.skipped[0].note === "already linked",
+  `${r.ms.toFixed(1)} ms ${r.text}`);
+rows = await settle(a);
+const rowOf = (n) => rows.find((m) => m.name === n);
+check("the two new ones ready, the outside one a refused row with its reason", rows.length === before4 + 3 && rowOf("e_frame.ifc")?.state === "ready" &&
+  rowOf("f_tri.ifc")?.state === "ready" && rowOf("frame2.ifc")?.state === "refused" && /outside/.test(rowOf("frame2.ifc")?.message ?? ""),
+  JSON.stringify(rows.map((m) => [m.name, m.state, m.message])));
+r = await a.call("undo");
+rows = await a.models();
+check("one undo removes what the call added (three rows)", r.status === 200 && rows.length === before4 && !rowOf("e_frame.ifc"), JSON.stringify(rows.map((m) => m.name)));
+r = await a.call("action", "link_model", JSON.stringify({ paths: [] }));
+check("link_model {paths: []}: refused", r.status === 400, r.text);
+r = await a.call("action", "link_model", JSON.stringify({ paths: [1] }));
+check("link_model {paths: [1]}: refused", r.status === 400, r.text);
+
 // outside the roots
 r = await a.call("action", "link_folder", JSON.stringify({ path: "/" }));
 check("a folder outside the roots refused with the human text", r.status === 400 && /outside the folders Bimble lists/.test(r.text), r.text);
