@@ -112,4 +112,29 @@ Not built, and why:
 
 ## 5. Measured (ccore/tools/perf.mjs --full --no-remote, same machine)
 
-Filled from the runs of part B; the full tables are in `ccore/results/perf.md`.
+Two pairs of runs on the same two site builds (base 9368218; PERF2), Chromium 153 headless,
+SwiftShader. Pair 1 with Lighthouse (3 runs each), load average at start 3.72 (base) and 3.98
+(PERF2); pair 2 without Lighthouse, back to back, load 8.99 and 9.61 (other builders were running).
+Long tasks: n / total / longest, ms, median of 3 loads.
+
+| | base, pair 1 | PERF2, pair 1 | base, pair 2 | PERF2, pair 2 |
+|---|---|---|---|---|
+| editor, large model | 2 / 904 / 635 | 6 / 858 / 429 | 2 / 846 / 620 | 5 / 796 / 431 |
+| viewer, large model | 3 / 1,005 / 764 | 4 / 940 / 545 | 3 / 1,012 / 762 | 4 / 935 / 545 |
+| editor, sample | 1 / 119 / 119 | 2 / 350 / 289 | 1 / 215 / 215 | 1 / 294 / 231 |
+| viewer, sample | 1 / 137 / 137 | 1 / 63 / 63 | 2 / 177 / 96 | 1 / 145 / 80 |
+
+| Lighthouse (pair 1, median of 3) | base | PERF2 |
+|---|---|---|
+| LCP desktop / mobile, editor | 390 / 4,360 ms | 385 / 4,352 ms |
+| LCP desktop / mobile, viewer | 395 / 3,302 ms | 382 / 3,154 ms |
+| transfer, editor (desktop) | 647 KB | 648 KB |
+| unused JS, editor (desktop / mobile) | 53 / 62 KB | 53 / 61 KB |
+| a11y desktop / mobile, editor | 95 / 100 | 100 / 100 |
+
+Reading: on the large model the longest task drops by ~190 ms (editor) and ~220 ms (viewer)
+in both pairs; the total does not drop (the same work, in more tasks). The new longest task is
+the scene or the BMSH (each ~430-550 ms in the browser): the next cut is the resumable BMSH and
+scene (section 3, Y). On the sample model the tasks are 60-300 ms and move with the machine's
+load from run to run (the base's own two runs: 119 and 215 ms): no claim either way. LCP and the
+transfer do not move (section 4: the lazy editor is what moves them); a11y 95 -> 100.
