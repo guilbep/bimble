@@ -19,7 +19,7 @@ and as an MCP server for agents (ADR 0067–0069, ADR 0072).
 <!-- status:begin -->
 <!-- Written by `node ccore/tools/status.mjs --write` from ccore/results/. Do not edit between the markers: `ci/run.sh unit` checks them. -->
 
-## Status (version `0.1.0-preview.2`)
+## Status (version `0.1.0-preview.3`)
 
 A preview. Each number is copied from a generated report under `ccore/results/`; the sources and
 the conditions of each number are listed under the list.

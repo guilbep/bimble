@@ -11,7 +11,7 @@ _5 Nov 2026. Supersedes v0 (Python / IFC-file-as-native). Sources: the Bimble PR
   Rust era, which shipped as v0.1–v0.19.
 - **Where the port stands:** `ccore/results/parity.md` (actions, queries, shortcuts against the
   Rust app), `ifc_corpus.md` (617 public IFC files), `weight.md`, `perf.md`, `bench.md`. Releases:
-  `ccore-v0.1.0-preview.2` (Linux, macOS); the C lab on <https://guilbep.github.io/bimble/>.
+  `ccore-v0.1.0-preview.3` (Linux, macOS); the C lab on <https://guilbep.github.io/bimble/>.
 - **Next:** `docs/research/round-4.md`. Waves A and B (the shell as a state machine, files from
   the desktop UI, levels and grids, size review, nothing fake, shortcuts) and PAPER1 are merged;
   SET1 and SEC1 are in progress; then materials, polygon slabs and openings in wasm, links,
