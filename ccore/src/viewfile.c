@@ -1,5 +1,6 @@
 /* The .bimbleview writer and reader, see viewfile.h. A port of crates/bimble-geom/src/viewfile.rs. */
 #include "viewfile.h"
+#include "ifc_psets.h"
 #include "georef.h"
 #include <stdlib.h>
 #include <string.h>
@@ -583,6 +584,7 @@ static int read_elem(Rd *s, cc_viewfile *v, size_t *shape_cap, size_t *elem_cap,
 }
 
 static int read_raw(const uint8_t *p, size_t n, cc_viewfile *v, Err *e) {
+    const uint8_t *file0 = p; /* M1LINKS: PSET's offset in the file */
     if (n < 12 || memcmp(p, MAGIC, 8) != 0) return fail(e, E_NOT, NULL);
     uint32_t version = (uint32_t)p[8] | (uint32_t)p[9] << 8 | (uint32_t)p[10] << 16 | (uint32_t)p[11] << 24;
     if (version != CC_VIEWFILE_VERSION) {
@@ -640,6 +642,20 @@ static int read_raw(const uint8_t *p, size_t n, cc_viewfile *v, Err *e) {
             if (!ok) return fail(e, E_INVALID, "source: not JSON");
             v->source = g;
             v->has_source = 1;
+        } else if (memcmp(kind, "PSET", 4) == 0 && !v->has_psets) { /* M1LINKS: kept on disk (ifc_psets.h) */
+            if (s.n < 4) return fail(e, E_INVALID, "psets: no head");
+            uint64_t ne = (uint64_t)s.p[0] | (uint64_t)s.p[1] << 8 | (uint64_t)s.p[2] << 16 | (uint64_t)s.p[3] << 24;
+            if (ne != want_elems || cc_psets_head(ne) > s.n) return fail(e, E_INVALID, "psets: entries");
+            uint64_t last = 0;
+            for (uint64_t i = 0; i < ne; i++) {
+                const uint8_t *q = s.p + 4 + 4 * i;
+                uint64_t end = (uint64_t)q[0] | (uint64_t)q[1] << 8 | (uint64_t)q[2] << 16 | (uint64_t)q[3] << 24;
+                if (end < last || cc_psets_head(ne) + end > s.n) return fail(e, E_INVALID, "psets: entries");
+                last = end;
+            }
+            v->has_psets = 1;
+            v->psets_off = (uint64_t)(s.p - file0), v->psets_len = s.n;
+            s.n = 0;
         } else if (memcmp(kind, "HEAD", 4) == 0 || memcmp(kind, "META", 4) == 0) {
             return fail(e, E_INVALID, "section repeated");
         } else {
@@ -688,6 +704,16 @@ int cc_viewfile_append_source(Buf *out, const char *json, size_t n) {
     return bad ? -1 : 0;
 }
 
+int cc_viewfile_append_psets(Buf *out, const char *t, size_t n) {
+    Buf p;
+    buf_init(&p);
+    buf_append(&p, t, n);
+    section(out, "PSET", &p);
+    int bad = p.oom || out->oom;
+    buf_free(&p);
+    return bad ? -1 : 0;
+}
+
 int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err) {
     memset(out, 0, sizeof *out);
     arena_init(&out->arena, 0);
@@ -711,9 +737,36 @@ int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err
         size_t len = raw.len;
         buf_free(&raw);
         rc = copy ? read_raw(copy, len, out, &e) : fail(&e, E_OOM, NULL);
+        out->has_psets = 0; /* M1LINKS: offsets in the inflated stream, not the file: not read lazily */
     } else {
-        uint8_t *copy = arena_dup(&out->arena, p, n);
-        rc = copy ? read_raw(copy, n, out, &e) : fail(&e, E_OOM, NULL);
+        /* M1LINKS: a last section PSET stays out of the copy (read lazily from the file, ifc_psets.h):
+         * the sections' heads walked, the copy cut where it starts. */
+        size_t cut = n, at = 12, pset = 0;
+        while (n >= 12 && at + 12 <= n) {
+            uint64_t len = 0;
+            for (int i = 0; i < 8; i++) len |= (uint64_t)p[at + 4 + i] << (8 * i);
+            if (len > n - at - 12) break;
+            if (!memcmp(p + at, "PSET", 4) && at + 12 + len == n) pset = at;
+            at += 12 + (size_t)len;
+        }
+        if (pset && at == n) cut = pset;
+        uint8_t *copy = arena_dup(&out->arena, p, cut);
+        rc = copy ? read_raw(copy, cut, out, &e) : fail(&e, E_OOM, NULL);
+        if (!rc && cut < n) { /* the head checked as read_raw does */
+            const uint8_t *q = p + cut + 12;
+            size_t ln = n - cut - 12;
+            uint64_t ne = ln >= 4 ? ((uint64_t)q[0] | (uint64_t)q[1] << 8 | (uint64_t)q[2] << 16 | (uint64_t)q[3] << 24) : 0;
+            int ok = ln >= 4 && ne == out->nelements && cc_psets_head(ne) <= ln;
+            uint64_t last = 0;
+            for (uint64_t i = 0; ok && i < ne; i++) {
+                const uint8_t *x = q + 4 + 4 * i;
+                uint64_t end = (uint64_t)x[0] | (uint64_t)x[1] << 8 | (uint64_t)x[2] << 16 | (uint64_t)x[3] << 24;
+                ok = end >= last && cc_psets_head(ne) + end <= ln;
+                last = end;
+            }
+            if (!ok) rc = fail(&e, E_INVALID, "psets: entries");
+            else out->has_psets = 1, out->psets_off = cut + 12, out->psets_len = ln;
+        }
     }
     if (rc) set_msg(err, &e);
     return rc;

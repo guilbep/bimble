@@ -65,6 +65,10 @@ int cc_step_parse(cc_step_file *f, const char *text, size_t n, cc_error *err);
  * always kept). Chunks are parsed in parallel (cc_jobs), merged in file order. */
 int cc_step_parse_skipping(cc_step_file *f, const char *text, size_t n, const char *const *skip, size_t nskip,
                            cc_error *err);
+/* M1LINKS: the converse: only the simple instances of the types in `keep` (upper case) are parsed
+ * and stored; every other instance (a complex one too) is stepped over. The property and quantity
+ * sets the display skips (ifc_psets.h). */
+int cc_step_parse_only(cc_step_file *f, const char *text, size_t n, const char *const *keep, size_t nkeep, cc_error *err);
 void cc_step_free(cc_step_file *f);
 
 const cc_step_entity *cc_step_get(const cc_step_file *f, uint64_t id);

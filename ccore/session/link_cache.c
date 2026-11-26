@@ -8,6 +8,7 @@
 #include "jobs.h"
 #include "json_w.h"
 #include "link_cache.h"
+#include "ifc_psets.h"
 #include "session.h"
 
 #define ENDS ((size_t)1 << 20) /* the first and last MiB hashed */
@@ -117,6 +118,7 @@ void cc_link_job_free(cc_link_job *j) {
     if (!j) return;
     if (j->vf) cc_viewfile_free(j->vf), free(j->vf);
     if (j->ifc) cc_ifc_scene_free(j->ifc), free(j->ifc);
+    free(j->psets); /* M1LINKS */
     free(j->path);
     free(j);
 }
@@ -285,24 +287,34 @@ static void run(cc_link_job *j) {
     if (!rc && cached && cc_link_cache_source(j->bytes, j->mtime_s, text, n < ENDS ? n : ENDS, n > ENDS ? text + n - ENDS : text,
                                               n < ENDS ? n : ENDS, s->base_point_mm, src, sizeof src))
         cached = 0;
+    Buf psb; /* M1LINKS: the property sets, read beside the display (ifc_psets.h); none when they cannot be */
+    buf_init(&psb);
+    if (!rc) {
+        cc_error pe;
+        if (cc_ifc_psets(text, n, s, &psb, &pe) || psb.oom) buf_free(&psb), buf_init(&psb);
+    }
     free(text); /* the scene owns its strings (ifc_read.h) */
     if (!s) snprintf(j->err.msg, sizeof j->err.msg, "out of memory");
     if (rc) {
         if (s) cc_ifc_scene_free(s), free(s);
+        buf_free(&psb);
         fail(j, cc_atomic_load(&j->pg.cancel) ? CC_JOB_CANCELLED : CC_JOB_FAILED, NULL);
         return;
     }
     double read_ms = pf->now_ms(pf->ctx) - t0;
     if (!cached) { /* small: kept as read */
         j->ifc = s;
+        j->psets = psb.p, j->npsets = psb.len; /* M1LINKS: in memory */
         return;
     }
     cc_viewfile_meta mt;
     Buf vb;
     buf_init(&vb);
     int wr = cc_ifc_scene_meta(s, &mt) || cc_viewfile_write_meta(&mt, &s->scene, 0, &vb) ||
-             cc_viewfile_append_source(&vb, src, strlen(src));
+             cc_viewfile_append_source(&vb, src, strlen(src)) ||
+             (psb.len && cc_viewfile_append_psets(&vb, psb.p, psb.len)); /* M1LINKS: last, read lazily */
     cc_viewfile_meta_free(&mt);
+    buf_free(&psb);
     if (wr || vb.oom) {
         buf_free(&vb);
         cc_ifc_scene_free(s), free(s);

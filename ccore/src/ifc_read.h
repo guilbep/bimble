@@ -47,6 +47,7 @@ typedef struct { /* ElementInfo of a scene element (SceneElement's text fields) 
     cc_str name;
     cc_str storey;    /* the storey's (or other container's) name */
     cc_str material;  /* display name, "A / B" for layer sets */
+    uint64_t step_id; /* M1LINKS: the product's STEP instance number (ifc_psets.h finds its sets by it) */
 } cc_ifc_info;
 
 typedef struct {

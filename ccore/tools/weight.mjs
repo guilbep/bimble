@@ -34,7 +34,7 @@ const VIEW_MAX = 1000000; // build.sh VIEW_MAX (ADR 0069 as amended)
 const FEATURES = [
   ["base (L0: arena, buffers, numbers, JSON, CBOR, ids, inflate)", "arena buf fmt strtod json_r json_w cbor math guid inflate jobs"],
   ["model (L1: model, commands, history, library, materials, annotations)", "model command history library material_class annot"],
-  ["IFC read (STEP parser, scene of an IFC)", "step ifc_read ifc_math"],
+  ["IFC read (STEP parser, scene of an IFC)", "step ifc_read ifc_math ifc_psets"],
   ["IFC import (IFC -> model)", "ifc_in"],
   ["IFC export (model -> IFC)", "ifc_out ifc_out_grid"],
   [".bimble file (read, write, view files)", "file viewfile"],
@@ -56,7 +56,7 @@ const FEATURES = [
   ["PDF writer (D6)", "pdf_out"],
   ["PDF reader (L1)", "pdf_in"],
   ["DXF reader (L2)", "dxf_in"],
-  ["links and references", "ref_read links links_ref links_dxf links_panel link_cache"],
+  ["links and references", "ref_read links links_ref links_dxf links_panel link_cache m1links"],
   ["history store (H1 read, H2a write)", "repo repo_write diff versions merge repo_merge"],
   ["session (calls, tools, platform, view-only)", "session calls tool platform view_only capabilities"],
   ["measure", "measure"],

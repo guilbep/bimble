@@ -113,6 +113,9 @@ typedef struct cc_session {
     cc_link *links;
     size_t nlinks, caplinks;
     uint64_t links_gen, mesh_links_gen;
+    uint64_t vis_links_gen; /* M1LINKS: the links_gen the view's rules were last folded at (m1links.h) */
+    struct cc_note *notes;  /* M1LINKS: the notes on linked elements (m1links.h), in the order made */
+    size_t nnotes, capnotes;
     /* An element of a linked model selected (lib.rs:945 link_selected): its link (-1: none) and
      * its id text as the link's BMSH rows give it. The open model's selection is then empty. */
     int link_sel;

@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "links.h"
+#include "m1links.h"
 #include "link_cache.h" /* LINKF */
 #include "jobs.h"       /* LINKF: cc_atomic_load */
 #include "ifc_math.h"   /* LINKF: cc_sin, cc_cos */
@@ -23,6 +24,7 @@ static void link_drop_data(cc_link *k) {
     if (k->model) cc_scene_free(&k->scene), cc_model_free(k->model), free(k->model), k->model = NULL;
     memset(&k->scene, 0, sizeof k->scene);
     if (k->placed) cc_scene_free(&k->pscene), k->placed = 0; /* LINKF */
+    free(k->psets), k->psets = NULL, k->npsets = 0; /* M1LINKS */
     k->kind = 0;
 }
 
@@ -145,6 +147,7 @@ void cc_links_clear(cc_session *s) {
     for (size_t i = 0; i < s->nlinks; i++) cc_link_free(&s->links[i]);
     s->nlinks = 0;
     s->link_sel = -1;
+    cc_notes_clear(s); /* M1LINKS: the notes go with the links */
 }
 
 void cc_links_json(const cc_session *s, JsonW *w) { /* state.rs:199-216, json! sorted */
@@ -269,7 +272,14 @@ int cc_link_element_json(cc_session *s, const char *name, size_t nn, const char 
     }
     char t[22];
     cc_link_id(k, (size_t)i, t);
-    return ro_element_json(sc, (size_t)i, cls, nm, storey, material, t, k->name, out);
+    size_t at = out->len;
+    if (ro_element_json(sc, (size_t)i, cls, nm, storey, material, t, k->name, out)) return -1;
+    if (out->len > at && out->p[out->len - 1] == '}') { /* M1LINKS: its property sets (m1links.h) */
+        out->len--;
+        cc_link_psets_json(s, k, (size_t)i, out);
+        buf_putc(out, '}');
+    }
+    return out->oom ? -1 : 0;
 }
 
 int cc_scene_element_json(cc_session *s, const char *id, size_t idn, Buf *out) {
@@ -518,6 +528,7 @@ static void sig(const cc_session *s, Buf *b) {
         buf_append(b, &k->rotation_deg, sizeof k->rotation_deg), buf_putc(b, k->pinned ? 'p' : 'u');
         buf_append(b, &k->colour, sizeof k->colour), buf_putc(b, '\n');
     }
+    cc_notes_sig(s, b); /* M1LINKS: a note added or removed is an unsaved change */
 }
 
 void cc_links_saved(cc_session *s) {
@@ -621,6 +632,7 @@ int cc_links_from_model(cc_session *s, const char *path) {
         }
         free(abs), free(rel);
     }
+    if (cc_notes_from_model(s)) return -1; /* M1LINKS: the notes the file keeps on linked elements */
     cc_links_saved(s);
     return 0;
 }
@@ -655,6 +667,7 @@ int cc_links_to_model(cc_session *s, const char *path) {
         l[i].origin = k->origin, l[i].rotation_deg = k->rotation_deg, l[i].unpinned = !k->pinned;
         l[i].has_colour = k->colour >= 0, l[i].colour = k->colour >= 0 ? k->colour : 0;
         memcpy(l[i].move_mm, k->move_mm, sizeof l[i].move_mm);
+        if (cc_notes_to_model(s, &m->arena, &l[i], k->name)) return -1; /* M1LINKS */
     }
     m->links = l, m->nlinks = s->nlinks;
     return 0;
@@ -742,6 +755,7 @@ static void take(cc_session *s, cc_link *k, cc_link_job *j) {
         }
         k->vf = j->vf, j->vf = NULL, k->kind = CC_LINK_VIEW;
     } else k->ifc = j->ifc, j->ifc = NULL, k->kind = CC_LINK_IFC;
+    k->psets = j->psets, k->npsets = j->npsets, j->psets = NULL, j->npsets = 0; /* M1LINKS: a small IFC's */
     k->state = CC_LS_READY;
     link_geo(k); /* LINKF: where the file says it is */
     k->cache = dup_z(j->cache), k->log = dup_z(j->log), k->msg = dup_z(j->note);

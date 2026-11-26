@@ -19,6 +19,7 @@
 #include "view_effective.h" /* D7 */
 #include "paper_scene.h" /* LNK1 */
 #include "views.h"       /* LNK1: cc_sv_list */
+#include "m1links.h"     /* M1LINKS: notes on paper */
 #endif
 
 void cc_paper_cache_free(struct cc_session *s) {
@@ -463,13 +464,17 @@ int cc_paper_pdf_query(struct cc_session *s, const cc_scene *sc, int view, const
         memcpy(id.c, idv->s, 22);
         if (!view) sh = cc_model_sheet(&s->model, &id);
         else {
-            if (s->open ? cc_views_effective(&s->model, &a, &views, &nv)
+            if (s->open ? cc_sv_list(s, &a, &views, &nv) /* M1LINKS: the plans from links too (views.h) */
                         : cc_sv_list(s, &a, &views, &nv) || cc_paper_src_views(s, views, nv, &a)) {
                 buf_puts(out, "out of memory");
                 goto end;
             }
             for (size_t k = 0; k < nv && !vw; k++)
                 if (!cc_gid_cmp(&views[k].id, &id)) vw = &views[k];
+            if (vw && cc_notes_into_view(s, &views[vw - views], &a)) { /* M1LINKS: the notes on linked elements */
+                buf_puts(out, "out of memory");
+                goto end;
+            }
         }
     }
     if (!sh && !vw) {
@@ -577,13 +582,17 @@ int cc_paper_view_svg(struct cc_session *s, const cc_scene *sc, const char *body
     if ((s->open || s->view) && idv->n == 22) { /* LNK1: a read-only scene's views too */
         cc_gid id;
         memcpy(id.c, idv->s, 22);
-        if (s->open ? cc_views_effective(&s->model, &a, &views, &nv)
+        if (s->open ? cc_sv_list(s, &a, &views, &nv) /* M1LINKS: the plans from links too (views.h) */
                     : cc_sv_list(s, &a, &views, &nv) || cc_paper_src_views(s, views, nv, &a)) {
             buf_puts(out, "out of memory");
             goto end;
         }
         for (size_t k = 0; k < nv && !vw; k++)
             if (!cc_gid_cmp(&views[k].id, &id)) vw = &views[k];
+        if (vw && cc_notes_into_view(s, &views[vw - views], &a)) { /* M1LINKS: the notes on linked elements */
+            buf_puts(out, "out of memory");
+            goto end;
+        }
     }
     if (!vw) {
         buf_puts(out, "no view with id ");

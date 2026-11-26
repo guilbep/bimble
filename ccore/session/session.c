@@ -18,6 +18,7 @@
 #include "session.h"
 #include "concrete.h" /* CONC1 */
 #include "links.h"
+#include "ifc_psets.h"
 #include "link_cache.h" /* LINKF */
 #include "sheet_svg.h"
 #include "views.h"
@@ -374,7 +375,14 @@ int cc_link_load(cc_session *s, const char *path, cc_link *k, cc_error *err) {
     else if (ifc) {
         if (!(l.ifc = malloc(sizeof *l.ifc))) snprintf(err->msg, sizeof err->msg, "out of memory");
         else if (cc_ifc_read(text, n, l.ifc, err) != 0) cc_ifc_scene_free(l.ifc), free(l.ifc), l.ifc = NULL;
-        else rc = 0;
+        else { /* M1LINKS: its property sets kept beside (ifc_psets.h; none when they cannot be read) */
+            Buf pb;
+            buf_init(&pb);
+            cc_error pe;
+            if (!cc_ifc_psets(text, n, l.ifc, &pb, &pe) && !pb.oom) l.psets = pb.p, l.npsets = pb.len;
+            else buf_free(&pb);
+            rc = 0;
+        }
     } else if (vw) {
         if (!(l.vf = malloc(sizeof *l.vf))) snprintf(err->msg, sizeof err->msg, "out of memory");
         else if (cc_viewfile_read((const uint8_t *)text, n, l.vf, err) != 0) cc_viewfile_free(l.vf), free(l.vf), l.vf = NULL;

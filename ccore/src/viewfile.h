@@ -87,6 +87,11 @@ typedef struct {
     cc_str georef; /* GEOR's JSON text (checked to parse), when has_georef */
     int has_source;
     cc_str source;   /* LINKF: SRCE's JSON text (a link cache: the IFC it was read from), when has_source */
+    /* M1LINKS: a section PSET (a link cache: the elements' property sets, ifc_psets.h), not kept in
+     * memory: where its bytes are in the raw file (read lazily: pf->read_range), when has_psets. Its
+     * head was checked (entries = elements, ends rising, within the section). */
+    int has_psets;
+    uint64_t psets_off, psets_len;
     cc_mesh *shapes; /* shared shapes, own coordinates (malloc) */
     size_t nshapes;
     cc_view_element *elements; /* malloc */
@@ -133,6 +138,9 @@ int cc_viewfile_write_meta(const cc_viewfile_meta *mt, const cc_scene *s, int gz
  * that does not know SRCE skips it (Rust's and this one skip a later addition); this reader keeps
  * it in `source` (checked to be UTF-8 JSON). 0 ok, -1 out of memory. */
 int cc_viewfile_append_source(Buf *out, const char *json, size_t n);
+/* M1LINKS: appends a section PSET holding the property sets table `t` (ifc_psets.h) to the raw
+ * view file in `out`. 0 ok, -1 out of memory. */
+int cc_viewfile_append_psets(Buf *out, const char *t, size_t n);
 
 /* Reads a view file. Always initializes `out` (free it with cc_viewfile_free either way).
  * 0 ok, -1 with err->msg. */

@@ -548,12 +548,13 @@ static int ent_push(EntVec *ev, const cc_step_entity *e) {
 typedef struct {
     const char *const *skip; /* entity types not stored (upper case) */
     size_t nskip;
+    int only; /* M1LINKS: `skip` lists the only types stored (cc_step_parse_only) */
 } Skip;
 
 static int skipped_type(const Skip *sk, const char *name) {
     for (size_t k = 0; k < sk->nskip; k++)
-        if (strcmp(sk->skip[k], name) == 0) return 1;
-    return 0;
+        if (strcmp(sk->skip[k], name) == 0) return !sk->only;
+    return sk->only;
 }
 
 static void parse_chunk(P *p, size_t start, size_t line, size_t stop, const Skip *sk, EntVec *ev, size_t *skipped) {
@@ -577,7 +578,10 @@ static void parse_chunk(P *p, size_t start, size_t line, size_t stop, const Skip
         if (!bad) {
             e.id = idv.u.ref;
             skip_ws(p);
-            if (peek(p) == '(') {
+            if (peek(p) == '(' && sk->only) { /* M1LINKS: a complex instance is none of the types asked */
+                skip_statement(p);
+                skip = 1;
+            } else if (peek(p) == '(') {
                 p->i++;
                 size_t st, en;
                 keyword_span(p, &st, &en);
@@ -679,8 +683,17 @@ int cc_step_parse(cc_step_file *f, const char *text, size_t n, cc_error *err) {
     return cc_step_parse_skipping(f, text, n, NULL, 0, err);
 }
 
+static int parse_listed(cc_step_file *f, const char *text, size_t n, const char *const *skip, size_t nskip, int only,
+                        cc_error *err);
 int cc_step_parse_skipping(cc_step_file *f, const char *text, size_t n, const char *const *skip, size_t nskip,
                            cc_error *err) {
+    return parse_listed(f, text, n, skip, nskip, 0, err);
+}
+int cc_step_parse_only(cc_step_file *f, const char *text, size_t n, const char *const *keep, size_t nkeep, cc_error *err) {
+    return parse_listed(f, text, n, keep, nkeep, 1, err);
+}
+static int parse_listed(cc_step_file *f, const char *text, size_t n, const char *const *skip, size_t nskip, int only,
+                        cc_error *err) {
     memset(f, 0, sizeof *f);
     arena_init(&f->arena, 0);
     if ((uint64_t)n > CC_STEP_MAX_BYTES) return fail(err, 0, 0, "file too large for the C core");
@@ -778,7 +791,7 @@ int cc_step_parse_skipping(cc_step_file *f, const char *text, size_t n, const ch
 
     /* The chunks on all workers, each into its own vector; merged in file order. */
     c.text = text, c.n = n, c.starts = starts_v, c.nst = nst, c.end = end;
-    c.sk.skip = skip, c.sk.nskip = skip ? nskip : 0;
+    c.sk.skip = skip, c.sk.nskip = skip ? nskip : 0, c.sk.only = only;
     nw = cc_jobs_workers(nst);
     c.ps = calloc(nw, sizeof *c.ps);
     c.arenas = calloc(nw, sizeof *c.arenas);

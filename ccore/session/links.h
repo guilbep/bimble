@@ -92,6 +92,10 @@ struct cc_link {
     int placed;
     cc_scene pscene;
     double pc, ps, pt[3]; /* the placement pscene was built with */
+    /* M1LINKS (ifc_psets.h): a small IFC's property sets table, in memory (malloc'd, NULL: none); a
+     * cache's stays in its file (vf->has_psets: read lazily) */
+    char *psets;
+    size_t npsets;
 };
 
 /* ---- LINKF (ADR 0079, DEVIATIONS 37): link a folder, conversions in turn, positioning ----

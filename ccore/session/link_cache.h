@@ -27,7 +27,7 @@
 #include "viewfile.h"
 
 #define CC_LINK_CACHE_MIN ((uint64_t)1 << 20) /* bytes; below, no cache (ADR 0079) */
-#define CC_LINK_CACHE_FORMAT "bimble-link-cache 2" /* 2: SRCE names the base point */
+#define CC_LINK_CACHE_FORMAT "bimble-link-cache 3" /* 2: SRCE names the base point; 3 (M1LINKS): a section PSET */
 
 enum { CC_JOB_OK = 0, CC_JOB_FAILED = -1, CC_JOB_REFUSED = -2, CC_JOB_CANCELLED = -3 };
 
@@ -43,6 +43,8 @@ typedef struct cc_link_job {
     cc_error err;
     cc_viewfile *vf;     /* the light scene (malloc'd), or */
     cc_ifc_scene *ifc;   /* a small IFC read as it is (no cache) */
+    char *psets;         /* M1LINKS: its property sets table (ifc_psets.h, malloc'd), or NULL */
+    size_t npsets;
     int from_cache;      /* 1: the cache was loaded, the IFC not read */
     char cache[4096];    /* the cache's path ("" none) */
     char log[4096];      /* the report's path ("" none) */
