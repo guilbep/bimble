@@ -643,9 +643,12 @@ static int d_links(D *d, const JrVal *v, cc_model *m) {
         if (f[0] && f[0]->type != JR_BOOL) return type_err(d, f[0], "a boolean");
         k->hidden = f[0] && f[0]->b;
         const cc_str t[3] = {k->name, k->path, k->relative};
-        for (int j = 0; j < 3; j++)
-            if (t[j].n > 4096 || (t[j].n && memchr(t[j].p, 0, t[j].n)) || (j < 2 && !t[j].n))
+        for (int j = 0; j < 3; j++) {
+            int nul = 0;
+            for (size_t c = 0; c < t[j].n && t[j].n <= 4096; c++) nul |= t[j].p[c] == 0;
+            if (t[j].n > 4096 || nul || (j < 2 && !t[j].n))
                 return dfail(d, x->off, "links: a name and a path (4096 bytes at most, no NUL)", 0, 0);
+        }
     }
     m->nlinks = v->n;
     return 0;
