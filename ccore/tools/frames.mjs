@@ -3,7 +3,8 @@
 //     [--frames 120] [--site DIR] [--pixels DIR] [--compare DIR] [--out FILE] [--no-history]
 // Writes ccore/results/frames.md (never edit it by hand) and the raw numbers to out/frames/frames.json.
 //
-// ONE headless Chromium (SwiftShader: WebGL2 drawn on the CPU, 1280x800) opens the lab as tools/ux.mjs
+// ONE headless Chromium (SwiftShader: WebGL2 drawn on the CPU, 1280x800; LAB_GPU=gl|vulkan: the machine's
+// GPU, test/lib/chromium.mjs, REAL1: the renderer string is logged and checked) opens the lab as tools/ux.mjs
 // does: the production build of the C lab with out/wasm/ccore.wasm (the core in the page), and the same
 // build against the native host (out/tcc/bimble-ccore, HOME and BIMBLE_CONFIG_DIR in a temporary
 // folder). SwiftShader's numbers compare before and after on this machine; they are not what a GPU gives.
@@ -40,7 +41,7 @@
 // --label NAME: the run's name in the report's history (one table row per label, kept from the
 // committed report: before and after each step of ticket 3D1).
 // --renderer webgl2|webgpu (GPU1, ADR 0083): webgpu opens the page with ?gpu=webgpu&gpuSoftware=1 in a
-// Chromium with a WebGPU adapter (Dawn's Vulkan on SwiftShader here), each frame finished by the
+// Chromium with a WebGPU adapter (Dawn's Vulkan on SwiftShader; LAB_GPU=vulkan: the machine's GPU, no ?gpuSoftware=1), each frame finished by the
 // queue's onSubmittedWorkDone instead of a 1x1 readPixels, the pictures read from the renderer's
 // target; occlusion queries are WebGL2's only (not measured). The report goes to
 // out/frames/frames-webgpu.md unless --out. It fails when the page does not draw with WebGPU.
@@ -59,7 +60,8 @@ import { arch, cpus, loadavg, platform, release, tmpdir, totalmem } from "node:o
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
-import { CHROMIUM, port } from "../test/ports.mjs";
+import { port } from "../test/ports.mjs";
+import { CHROMIUM, LAB_GPU, checkGpu, gpuFlags, rendererInfo, webgpuFlags } from "../test/lib/chromium.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UI = process.env.FRAMES_UI ? resolve(process.env.FRAMES_UI) : resolve(CCORE, "../web-ui");
@@ -278,9 +280,10 @@ const NONBG = `(() => { const c = document.getElementById("bimble"), gl = c.getC
 async function startBrowser() {
   const gb = await waitMemory();
   log(`memory available ${gb.toFixed(1)} GB; starting Chromium`);
-  browser = start("chromium", CHROMIUM, ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--remote-debugging-port=0",
+  // REAL1: LAB_GPU (test/lib/chromium.mjs) picks SwiftShader (default), the machine's GL or its Vulkan
+  browser = start("chromium", CHROMIUM, ["--headless=new", ...gpuFlags(), "--remote-debugging-port=0",
     `--user-data-dir=${join(tmp, "chromium")}`, "--no-first-run", "--no-default-browser-check", "--lang=en-US", "--window-size=1280,800",
-    "--js-flags=--expose-gc", ...(GPU ? ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-vulkan=swiftshader", "--disable-vulkan-surface"] : []), // GPU1
+    "--js-flags=--expose-gc", ...(GPU ? webgpuFlags() : []), // GPU1
     "about:blank"], { env: { ...process.env, HOME } });
   const wsUrl = await waitFor("DevTools line", 60000, () => browser.out.match(/DevTools listening on (ws:\/\/\S+)/)?.[1]);
   cdp = await cdpConnect(wsUrl);
@@ -311,7 +314,7 @@ async function ev(expr) {
 }
 
 let BUILD = "wasm", MODEL = "large";
-const pageUrl = () => (BUILD === "wasm" ? `${ORIGIN}/?model=${siteName(MODEL)}` : `${ORIGIN}/?ccore=0&native=1&gl=1&port=${HOST_PORT}&token=${TOKEN}`) + (GPU ? "&gpu=webgpu&gpuSoftware=1" : ""); // GPU1
+const pageUrl = () => (BUILD === "wasm" ? `${ORIGIN}/?model=${siteName(MODEL)}` : `${ORIGIN}/?ccore=0&native=1&gl=1&port=${HOST_PORT}&token=${TOKEN}`) + (GPU ? `&gpu=webgpu${LAB_GPU === "software" ? "&gpuSoftware=1" : ""}` : ""); // GPU1; REAL1: a real adapter needs no ?gpuSoftware=1
 async function fresh() {
   if (BUILD === "native") await startHost(MODEL);
   await openTab();
@@ -324,7 +327,17 @@ async function fresh() {
     if (r.using !== "WebGPU") throw new Error(`--renderer webgpu: ${r.using} draws (${r.reason})`);
     await S("Runtime.evaluate", { expression: GPU_HELPERS }); // (not through ev: its rewriting is for the measures)
   }
+  await whichGpu();
   await quiet(30000);
+}
+/** REAL1 (spike NAT1): which GPU draws, from the page (WEBGL_debug_renderer_info; WebGPU's adapter when it
+ *  draws), logged and kept for the report; a GPU asked by LAB_GPU that the page does not have stops the run. */
+const GPU_SEEN = { webgl: null, webgpu: null };
+async function whichGpu() {
+  const r = checkGpu(await rendererInfo((e) => S("Runtime.evaluate", { expression: e, returnByValue: true }).then((x) => x.result.value)));
+  const a = GPU ? (await ev("window.__bbPerf.snapshot().renderer.adapter")) : null;
+  GPU_SEEN.webgl = r.renderer, GPU_SEEN.webgpu = a;
+  log(`renderer (LAB_GPU=${LAB_GPU}): WebGL2 ${r.renderer}${GPU ? `; WebGPU adapter ${JSON.stringify(a)}` : ""}`);
 }
 /** Waits until no frame was drawn for QUIET ms; returns the last draw's time. */
 async function quiet(maxMs) {
@@ -621,6 +634,13 @@ async function linksMain() {
   await openTab();
   await S("Page.navigate", { url: pageUrl() });
   await waitFor("the page ready", 240000, () => ev(`!!(document.querySelector('[data-bb-ready]') && window.__bbGl && window.__bbGl.firstFrameMs && window.__bbGl.links && window.__bbGl.links.length === ${LINKS})`), 50);
+  if (GPU) { // GPU1: the WebGPU renderer must be the one drawing
+    await waitFor("the renderer", 30000, () => ev("(window.__bbPerf?.snapshot().renderer.reason ?? '') !== 'starting…'"), 50);
+    const r = await ev("window.__bbPerf.snapshot().renderer");
+    if (r.using !== "WebGPU") throw new Error(`--renderer webgpu: ${r.using} draws (${r.reason})`);
+    await S("Runtime.evaluate", { expression: GPU_HELPERS });
+  }
+  await whichGpu();
   await quiet(30000);
   const g0 = await ev(`(() => { const g = window.__bbGl; return { first: g.firstFrameMs, preview: g.proxyPreview ? g.proxyPreview.at : null, meshAt: g.meshAt ?? null, full: g.fullFrameMs ?? null,
     fetch: g.meshFetchMs, bytes: g.meshBytes }; })()`);
