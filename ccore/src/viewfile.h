@@ -92,6 +92,11 @@ typedef struct {
      * head was checked (entries = elements, ends rising, within the section). */
     int has_psets;
     uint64_t psets_off, psets_len;
+    /* LNK3D (ADR 0078 amendment 3): a section HLOD (a link cache's baked proxies, BPRX: hlod.h), kept on
+     * disk as PROP (only HLOD and PROP sections after it): its bytes' place in the raw file, when has_hlod.
+     * Not checked here: the session checks the bytes it reads back (cc_hlod_bprx_check). */
+    int has_hlod;
+    uint64_t hlod_off, hlod_len;
     cc_mesh *shapes; /* shared shapes, own coordinates (malloc) */
     size_t nshapes;
     cc_view_element *elements; /* malloc */
@@ -144,6 +149,8 @@ int cc_viewfile_append_source(Buf *out, const char *json, size_t n);
 /* M1LINKS: appends a section PROP holding the property sets table `t` (ifc_psets.h) to the raw
  * view file in `out`. 0 ok, -1 out of memory. */
 int cc_viewfile_append_psets(Buf *out, const char *t, size_t n);
+/* LNK3D: appends a section HLOD holding BPRX bytes `t` (before PROP: both stay on disk when read). 0 ok, -1 out of memory. */
+int cc_viewfile_append_hlod(Buf *out, const char *t, size_t n);
 
 /* Reads a view file. Always initializes `out` (free it with cc_viewfile_free either way).
  * 0 ok, -1 with err->msg. */

@@ -1753,6 +1753,9 @@ export const linkNotes = () => tryQuery<LinkNote[]>("link_notes", []);
  *  its turn about Z (cos, sin) and placed origin (host world mm), in link order. */
 export interface LinkDraw { colour: number; cos: number; name: string; origin: [number, number, number]; sin: number; visible: boolean }
 export const linkDraw = () => tryQuery<LinkDraw[]>("link_draw", []);
+/** LNK3D: what the mesh holds (`query mesh_key`): `draw` moves with a change that may change what is drawn
+ *  (not a hide in a view, a sheet), `links` with the links' geometry. null: not served (the Rust viewer). */
+export const meshKey = () => tryQuery<{ draw: number; links: number; rev: number } | null>("mesh_key", null);
 /** A linked element's property and quantity sets (in `query element {id, link}`). */
 export interface PropertySet { name: string; properties: { name: string; value: string }[]; type: string }
 /** The Navigator's eye: hide, show or isolate a class, a link's storey, a link or an element (hidden action view_rule). */

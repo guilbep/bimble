@@ -80,7 +80,7 @@ import {
   refPlanes, // WAVE1B
   openingAt, openingsOf, selectedOpening, // WAVE1B (B2)
   storeys, viewVisibility, // WAVE1B (A3)
-  linkDraw, linkNotes, type LinkDraw, type LinkNote, // LNK3D
+  linkDraw, linkNotes, meshKey as coreMeshKey, type LinkDraw, type LinkNote, // LNK3D
   type AnnotateState, type ToolPointer, type ToolState, type ViewAnnotation, type ViewAnnotations, type ViewClip, type Visibility,
   type VisibilitySets,
 } from "./bimble";
@@ -668,6 +668,11 @@ interface GlStats {
   visApplyMs?: number;
   stateUpload?: { elements: number; ms: number };
   meshFetches?: number;
+  /** LNK3D (C): each link's baked proxies held (cells, triangles, GPU bytes) and what the last frame drew of them;
+   *  the first picture drawn from them before the mesh (when, links, triangles); ms to ask them. */
+  linkProxies?: { name: string; cells: number; tris: number; bytes: number; drawnCells: number; drawnTris: number }[];
+  proxyPreview?: { at: number; links: number; tris: number };
+  linkProxiesMs?: number;
   linkDraw?: { name: string; visible: boolean; colour: number; xf: ModelXf }[];
   /** LNK3D (E): the notes on linked elements as last drawn (client px of the anchor) and the selected one. */
   notes?: { link: string; element: string; text: string; drawn: boolean; x: number; y: number }[];
@@ -676,7 +681,8 @@ interface GlStats {
   pickMs?: number;
   /** 3D2: true while the proxies are being asked for (frames.mjs waits for them). */
   proxiesPending?: boolean;
-  bench?: { frame: (dyaw: number, moving: boolean) => number; zoom: (k: number) => void; snap: (dyaw: number, dpitch: number) => { w: number; h: number; rgba: Uint8Array } };
+  bench?: { frame: (dyaw: number, moving: boolean) => number; zoom: (k: number) => void; snap: (dyaw: number, dpitch: number) => { w: number; h: number; rgba: Uint8Array };
+    look?: (t: number[], d: number) => void; read?: () => { w: number; h: number; rgba: Uint8Array } };
 }
 declare global {
   interface Window {
@@ -695,6 +701,9 @@ export interface MeshSource {
   /** 3D2 (ADR 0078): the HLOD proxies in steps (GET /mesh?proxies=N, wasm host_proxies): `budget`
    *  triangles more a call; 202 while building, 200 with the BPRX bytes, else none served. */
   proxies?(budget: number): Promise<{ status: number; bytes: ArrayBuffer; rev: number }>;
+  /** LNK3D (ADR 0078 amendment 3): link k's proxies baked in its cache (GET /mesh?link_proxies=k): 200 with
+   *  BPRX (rev 0, nE its elements), else none. */
+  linkProxies?(k: number): Promise<{ status: number; bytes: ArrayBuffer }>;
 }
 
 /** Draws the host's `/mesh` (or `source`'s) into #bimble with WebGL2. Returns a function that marks the view dirty. */
@@ -764,6 +773,10 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     proxies: async (budget: number) => { // 3D2
       const r = await fetch(`${base}/mesh?t=${t}&proxies=${budget}`, { cache: "no-store" });
       return { status: r.status, bytes: await r.arrayBuffer(), rev: Number(r.headers.get("X-Rev") ?? -1) };
+    },
+    linkProxies: async (k: number) => { // LNK3D
+      const r = await fetch(`${base}/mesh?t=${t}&link_proxies=${k}`, { cache: "no-store" });
+      return { status: r.status, bytes: await r.arrayBuffer() };
     },
   };
 
@@ -967,6 +980,113 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   };
   /** The mesh the proxies are being asked for (a newer mesh abandons the steps). */
   let prxFor: object | null = null;
+  // ---- LNK3D (C, ADR 0078 amendment 3): each link's proxies, baked in its cache at conversion and read from
+  // disk (GET /mesh?link_proxies=k), asked before the mesh: the first picture of a project of links is
+  // drawn from them, then the detail refines it. Each frame a link's tree is cut with the eye in the
+  // link's own frame (its placement is rigid: distances hold) and its cells' boxes placed for culling;
+  // a leaf drawn as a proxy leaves its batches out (the link's batches are cut by its leaves). ----
+  interface LinkPrx { name: string; p: Proxies; vao: WebGLVertexArrayObject; bufs: WebGLBuffer[]; bytes: number;
+    usable: Uint8Array; usableKey: string; drawnCells: number; drawnTris: number }
+  /** By link name (a link renamed or reloaded with another element count asks again). */
+  const linkPrx = new Map<string, LinkPrx>();
+  /** Per model of the mesh (k + 1: link k), its proxies (null: none). */
+  let modelPrx: (LinkPrx | null)[] = [];
+  // A link's proxies take its colour (the reference colour or its override), as its elements: no colour per vertex.
+  const makeLinkPrx = (name: string, p: Proxies): LinkPrx => {
+    const vao = gl.createVertexArray(), pb = gl.createBuffer(), ib = gl.createBuffer();
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, p.idx, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, pb);
+    gl.bufferData(gl.ARRAY_BUFFER, p.pos, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+    return { name, p, vao, bufs: [pb, ib], bytes: p.pos.byteLength + p.idx.byteLength, usable: new Uint8Array(0), usableKey: "", drawnCells: 0, drawnTris: 0 };
+  };
+  const dropLinkPrx = (x: LinkPrx) => { gl.deleteVertexArray(x.vao); for (const b of x.bufs) gl.deleteBuffer(b); };
+  /** Asks every link's proxies not held yet (rows: query link_draw, in link order). */
+  const fetchLinkProxies = async (rows: LinkDraw[]): Promise<number> => {
+    const ask = source.linkProxies;
+    if (!ask || !proxiesOn()) return 0;
+    let got = 0;
+    await Promise.all(rows.map(async (r, k) => {
+      if (linkPrx.has(r.name)) return;
+      try {
+        const a = await ask(k);
+        if (a.status !== 200) return;
+        const p = parseBprx(a.bytes);
+        if (p.cells.length) linkPrx.set(r.name, makeLinkPrx(r.name, p)), got++;
+      } catch (err) { console.warn("gl viewport: link proxies:", err); }
+    }));
+    return got;
+  };
+  /** The links' proxies before their mesh: the first picture (each cell cut at the still threshold, placed by rows). */
+  let prePrx: { x: LinkPrx; xf: ModelXf; visible: boolean; colour: number }[] = [];
+  const prePrxBounds = (): { center: V3; radius: number } | null => {
+    const lo: V3 = [Infinity, Infinity, Infinity], hi: V3 = [-Infinity, -Infinity, -Infinity], b = new Float32Array(6);
+    for (const { x, xf, visible } of prePrx) {
+      const root = x.p.cells[0];
+      if (!visible || !root) continue;
+      xfBox(xf, root.box, 0, b, 0);
+      for (let a = 0; a < 3; a++) lo[a] = Math.min(lo[a]!, b[a]!), hi[a] = Math.max(hi[a]!, b[3 + a]!);
+    }
+    return lo[0] <= hi[0] ? { center: scale(add(lo, hi), 0.5), radius: Math.max(1, Math.hypot(...sub(hi, lo)) / 2) } : null;
+  };
+  const tmpBox = new Float32Array(6);
+  /** A link's cut this frame: the cells drawn as proxies and the leaves they stand for. */
+  const cutLinkPrx = (x: LinkPrx, xf: ModelXf, usable: Uint8Array, planes: Float64Array | null, eyeW: V3, px: number) => {
+    const eyeL = xfRayToLocal(xf, eyeW, [0, 0, 0]).e;
+    const k = (2 * Math.tan(FOV_Y / 2)) / Math.max(1, canvas.height);
+    const mmPerPx = ortho3d() ? () => distance * k : (d: number) => d * k;
+    return cutProxies(x.p, usable, planes ? (b) => { xfBox(xf, b, 0, tmpBox, 0); return boxInFrustum(planes, tmpBox, 0); } : null, eyeL, mmPerPx, px);
+  };
+  /** Draws a link's proxy cells (faces only: F, never their edges), placed by model `mdl`'s row. */
+  const drawLinkCells = (x: LinkPrx, cells: number[], mdl: number, colour: number): number => {
+    let tris = 0;
+    gl.bindVertexArray(x.vao);
+    gl.uniform1i(uModel, mdl);
+    const c = LINK_SRGB[colour] ?? REFERENCE_SRGB;
+    gl.vertexAttrib3f(1, c[0] / 255, c[1] / 255, c[2] / 255);
+    const runs: [number, number][] = [];
+    for (const c of [...cells].sort((a, b) => a - b)) for (const q of x.p.cells[c]!.parts) {
+      const last = runs[runs.length - 1];
+      if (!q.ni) continue;
+      if (last && last[0] + last[1] === q.i0) last[1] += q.ni;
+      else runs.push([q.i0, q.ni]);
+    }
+    for (const [a, n] of runs) gl.drawElements(gl.TRIANGLES, n, gl.UNSIGNED_INT, 4 * a), tris += n / 3;
+    gl.uniform1i(uModel, 0);
+    gl.bindVertexArray(null);
+    x.drawnCells = cells.length, x.drawnTris = tris;
+    return tris;
+  };
+  /** LNK3D (C): the first picture of a project of links, before their mesh: every visible link's proxies. */
+  const drawProxyPreview = () => {
+    if (!prePrx.length) return;
+    const all = prePrx.filter((q) => q.visible);
+    modelXf = [IDENTITY_XF, ...prePrx.map((q) => q.xf)];
+    uploadModels();
+    const { e, mvp } = matrices();
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(uMvp, false, mvp);
+    gl.uniform3fv(uLight, norm(add(norm(sub(e, target)), [-0.3, -0.2, 0.9])));
+    gl.uniform3fv(uEye, ortho3d() ? norm(sub(e, target)) : e);
+    gl.uniform1f(uEyeDir, ortho3d() ? 1 : 0);
+    gl.uniform1f(uPoint, 1), gl.uniform1f(uAlpha, 1), gl.uniform1i(uClip, 0), gl.uniform1f(uZbias, 0), gl.uniform1f(uAmbient, AMBIENT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    const planes = frustumPlanes(mvp);
+    let tris = 0;
+    prePrx.forEach((q) => {
+      if (!q.visible) return;
+      const usable = Uint8Array.from(q.x.p.cells, (c) => (c.parts.length ? 1 : 0));
+      const { cells } = cutLinkPrx(q.x, q.xf, usable, planes, e, STILL_PROXY_PX);
+      tris += drawLinkCells(q.x, cells, 1 + prePrx.indexOf(q), q.colour);
+    });
+    stats.proxyPreview = { at: performance.now(), links: all.length, tris };
+  };
+  // ---- end LNK3D (C) ----
   // ---- end 3D2 ----
   /** A run of instances of one shape: its packed index range, its segments, its instances [first, first + count). */
   interface InstGroup { i0: number; ni: number; s0: number; ns: number; first: number; count: number; mirrored: boolean; link: boolean; model: number; dbs: DrawBatch[] }
@@ -1098,8 +1218,17 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   // ---- end 3D1 ----
   let loading = false;
   // What the mesh shows: the model's rev and the links' counter (change JSON `links`).
-  // LNK3D: the links' geometry counter (links_mesh), not every change of the links (a hide, a move, a colour)
-  const meshKey = () => `${state.value.rev}/${state.value.links_mesh ?? state.value.links ?? 0}`;
+  // LNK3D: what the mesh holds (query mesh_key, asked once per rev): a change of views alone (a hide in a
+  // view) or of the links' flags, colours and placements (links_mesh stays) asks no new mesh
+  let keyRev = -1, drawKey = "";
+  const meshKey = () => {
+    if (state.value.rev !== keyRev) {
+      keyRev = state.value.rev;
+      const k = state.value.file === null ? null : coreMeshKey();
+      drawKey = k ? `d${k.draw}/${k.links}` : `${state.value.rev}/${state.value.links_mesh ?? state.value.links ?? 0}`;
+    }
+    return state.value.links_mesh !== undefined ? `${drawKey.split("/")[0]}/${state.value.links_mesh}` : drawKey;
+  };
   let wantRev: string | null = null;
   // The host process the mesh came from (`epoch` of GET /change). A restarted host may restore
   // its session and answer the same rev with a new build's mesh: a new epoch also refetches.
@@ -1121,7 +1250,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       checking = false;
     }
   };
-  let fitted = false;
+  let fitted = false, fittedByPreview = false;
 
   const eye = (): V3 => {
     const cp = Math.cos(pitch);
@@ -1238,7 +1367,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
   let elFace = new Int32Array(0), elEdge = new Int32Array(0), elInst = new Int32Array(0), elGroup = new Int32Array(0);
   /** The last frame was a complete picture of the open model (whole, or the end of a fill) and which
    *  leaves its proxies stood for. */
-  let lastComplete = false, lastReplaced: Uint8Array | null = null;
+  let lastComplete = false, lastReplaced: Uint8Array | null = null, lastLinkRep: (Uint8Array | null)[] = [];
   const OVERPAINT_MAX = 2000;
   const overpaint = (els: number[]): boolean => {
     const m = mesh;
@@ -1247,6 +1376,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (elFace[el] === undefined || (elFace[el]! < 0 && elInst[el]! < 0 && shown[el])) return false;
       const lf = prx && !((m.model?.[el] ?? 0) > 0) ? prx.leafOf[el] ?? -1 : -1;
       if (lf >= 0 && lastReplaced?.[lf]) return false; // under a proxy: the picture changes more
+      const mdl = m.model?.[el] ?? 0, lx = mdl > 0 ? modelPrx[mdl] : null, ll = mdl > 0 ? m.links?.[mdl - 1] : undefined; // LNK3D (C): a link's
+      if (lx && ll && lastLinkRep[mdl]?.[lx.p.leafOf[el - ll.e0] ?? -1]) return false;
     }
     const tOver = performance.now(); // GPU1
     const { e, mvp } = matrices();
@@ -1412,6 +1543,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     visKey = "\u0000"; // the draw lists on the next frame
     selKey = "\u0000"; // recolour on the next frame
     if (tool) showTool(tool); // the ghost against the new mesh's origin
+    if (fittedByPreview) fittedByPreview = false, fitted = false; // LNK3D (C): fitted again on the mesh's own bounds
     if (!fitted && bounds) {
       if (plan) fitPlan();
       else fit();
@@ -1509,6 +1641,20 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     try {
       const t0 = performance.now();
       epoch = await hostEpoch().catch(() => null);
+      // LNK3D (C): the links' baked proxies first (read from their caches: small), drawn at once when nothing is
+      // on screen yet (the first picture of a project of links), then the mesh refines it
+      const rows = source.linkProxies ? linkDraw() : []; // ([] without links)
+      if (rows.length) {
+        const tq = performance.now();
+        await fetchLinkProxies(rows);
+        stats.linkProxiesMs = performance.now() - tq;
+        if (!mesh || !mesh.ids.length) {
+          prePrx = rows.flatMap((r) => { const x = linkPrx.get(r.name); return x ? [{ x, xf: { c: r.cos, s: r.sin, t: [r.origin[0], r.origin[1], r.origin[2]] } as ModelXf, visible: r.visible, colour: r.colour }] : []; });
+          // (no open scene yet: its origin is taken as 0 here; the mesh's arrival places them exactly)
+          if (prePrx.length && !fitted) { bounds = prePrxBounds(); if (bounds) fit(), fitted = fittedByPreview = true; }
+          if (prePrx.length) fitCanvas(), draw(); // at once: on screen before the mesh is asked (its build may take seconds)
+        }
+      }
       const ab = await source.mesh();
       stats.meshFetches = (stats.meshFetches ?? 0) + 1; // LNK3D: a hide or a link's move never asks
       stats.meshFetchMs = performance.now() - t0;
@@ -1525,6 +1671,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       stats.error = null;
       upload(m);
       perfMesh(m); // GPU1
+      prePrx = []; // LNK3D (C): the detail is here
+      modelPrx = [null, ...(m.links ?? []).map((l) => { const x = linkPrx.get(l.name); return x && x.p.nElements === l.elements ? x : null; })];
+      for (const [name, x] of linkPrx) if (!(m.links ?? []).some((l) => l.name === name)) dropLinkPrx(x), linkPrx.delete(name); // a link gone
       seenLinkKey = ""; // LNK3D: asked again once against this mesh
       stats.linkDraw = (m.links ?? []).map((l) => ({ name: l.name, visible: l.visible, colour: l.colour ?? -1, xf: l.xf }));
       stats.loadSteps = { parse: tu - tp, upload: performance.now() - tu, lists: 0, colours: 0 }; // 3D2 (step 5)
@@ -1702,7 +1851,12 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     // Edges: the open model's first, then the links' (drawn in their own colour).
     // 3D1 (step 2): in spatial batches, largest first inside each (gl/cull.ts)
     // 3D2: with proxies, batched by HLOD leaf too (a far cell's proxy stands for its leaves' batches)
-    const p = prx, grp = (e: number) => (p && !((m.model?.[e] ?? 0) > 0) ? p.leafOf[e] ?? -1 : -1);
+    const p = prx, grp = (e: number) => {
+      const mdl = m.model?.[e] ?? 0;
+      if (mdl === 0) return p ? p.leafOf[e] ?? -1 : -1;
+      const x = modelPrx[mdl], l = m.links?.[mdl - 1]; // LNK3D (C): a link's batches cut by its own leaves
+      return x && l ? x.p.leafOf[e - l.e0] ?? -1 : -1;
+    };
     listsGen++;
     occReset(); // 3D2: the batches change (a model): every answer is forgotten
     elFace = new Int32Array(m.ids.length).fill(-1), elEdge = new Int32Array(m.ids.length).fill(-1);
@@ -1784,7 +1938,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.bufferData(gl.ARRAY_BUFFER, instEls, gl.STATIC_DRAW);
     // ---- end 3D1 ----
     listBytes = fi.byteLength + ei.byteLength + mats.byteLength + instEls.byteLength; // 3D1
-    stats.gpuBytes = meshBytes + listBytes + prxBytes + 4 * STATE_TEX_W * stateRows; // (3D2: + the proxies; LNK3D: + the state texture)
+    stats.gpuBytes = meshBytes + listBytes + prxBytes + 4 * STATE_TEX_W * stateRows + [...linkPrx.values()].reduce((n, x) => n + x.bytes, 0); // (3D2: + the proxies; LNK3D: + the state texture, the links' proxies)
     stats.listsBuilt = (stats.listsBuilt ?? 0) + 1;
     applyVisibility();
   };
@@ -1881,7 +2035,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     const slice = !movingNow && (fill !== null || fillEdges);
     if (!slice || fill?.t === Infinity) gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); // a fill's first slice starts over
     const m = mesh;
-    if (!m) { stats.boxHandles = []; drawOverlay(); return; } // ISS71: no handles
+    if (!m) { stats.boxHandles = []; drawProxyPreview(); drawOverlay(); return; } // ISS71: no handles (LNK3D: the links' proxies before their mesh)
     const { e, mvp } = matrices();
     const light = norm(add(norm(sub(e, target)), [-0.3, -0.2, 0.9]));
     const box = clipBox();
@@ -1914,7 +2068,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     gl.uniform1i(uElCol, 1), gl.uniform1i(uModel, 0);
     // The open model's faces, then the links' pushed a hair behind (bimble-render LINKED_DEPTH_PUSH:
     // where both have a face, the model's wins).
-    let fTris = 0, fDraws = 0; // 3D1: what this frame submits
+    let fTris = 0, fDraws = 0, linkPrxTris = 0; // 3D1: what this frame submits (LNK3D: of it, links' proxies)
     // ---- 3D1 (steps 2, 3): what each batch draws this frame: none when its box is off screen (frustum
     // culling, the planes of the view-projection), else its items at least `minSize` big while the view
     // moves (ADR 0035), all of them when it is still. ----
@@ -1941,9 +2095,31 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       if (movingNow && prxCells.length) prxCells = fitProxies(p, prxUsable, prxCells, replaced, frameBudget() / 2);
     }
     // ---- end 3D2 ----
+    // ---- LNK3D (C): each shown link's proxies, cut with the eye in its frame (same rules: not in a plan, not
+    // with a section box, not over a hidden or selected element: usableCells) ----
+    const linkCut: { x: LinkPrx; cells: number[]; mdl: number; colour: number }[] = [];
+    const linkRep: (Uint8Array | null)[] = [];
+    if (!stats.noProxies && !box && !plan && proxiesOn() && m.links) {
+      const linked = state.value.linked ?? null;
+      m.links.forEach((l, k) => {
+        const x = modelPrx[k + 1];
+        if (!x || !l.visible) return;
+        const uk = `${listsGen}|${visGen}|${selKey}`;
+        if (x.usableKey !== uk) {
+          x.usableKey = uk;
+          x.usable = usableCells(x.p, (el) => shown[l.e0 + el] === 1 && !(linked && linked.link === l.name && linked.id === m.ids[l.e0 + el]));
+        }
+        const { cells, replaced: r } = cutLinkPrx(x, l.xf, x.usable, planes, e, movingNow ? MOVING_PROXY_PX : STILL_PROXY_PX);
+        linkRep[k + 1] = r;
+        if (cells.length) linkCut.push({ x, cells, mdl: k + 1, colour: l.colour ?? -1 });
+      });
+    }
+    for (const x of linkPrx.values()) x.drawnCells = x.drawnTris = 0;
+    // ---- end LNK3D (C) ----
     for (const d of dbs) {
       if (d.b.shown === 0) { d.k0 = d.k1 = 0; continue; } // LNK3D: every element of it hidden (a link hidden too)
-      if (replaced && d.b.group >= 0 && replaced[d.b.group]) { d.k0 = d.k1 = 0; continue; } // 3D2: a proxy stands for it
+      const rp = d.model === 0 ? replaced : linkRep[d.model] ?? null; // LNK3D (C): a link's own leaves
+      if (rp && d.b.group >= 0 && rp[d.b.group]) { d.k0 = d.k1 = 0; continue; } // 3D2: a proxy stands for it
       if (planes && !boxInFrustum(planes, d.b.box, 0)) { d.k0 = d.k1 = 0; culled++; continue; }
       // the nearest point of the batch's box: its items are at most that near (largest on screen first)
       const bx = d.b.box, q = [0, 1, 2].map((a) => Math.min(Math.max(e[a]!, bx[a]!), bx[3 + a]!));
@@ -2112,6 +2288,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       gl.polygonOffset(2.5 + push, 16 + 2.4 * push);
       merged(true);
       instFaces(true);
+      if (!slice || fill?.t === Infinity) for (const c of linkCut) { const n = drawLinkCells(c.x, c.cells, c.mdl, c.colour); fTris += n, fDraws++, linkPrxTris += n; } // LNK3D (C)
+      gl.bindVertexArray(vao);
     };
     if (!box) faces(0);
     else {
@@ -2141,6 +2319,8 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     if (plan) gl.uniform1f(uZbias, (2 * 2) / (2 * (4 * (bounds?.radius ?? distance) + 1000) - 1));
     const edgesOn = pressed("edges", true) && !stats.noEdges; // Q2: ribbon.rs:695 Edges (opts.edges): no edge drawn when off (3D2: a bench hook too)
     let instSegs = 0, segs = 0;
+    stats.linkProxies = [...linkPrx.values()].map((x) => ({ name: x.name, cells: x.p.cells.length, tris: x.p.tris.reduce((a, b) => a + b, 0), bytes: x.bytes,
+      drawnCells: x.drawnCells, drawnTris: x.drawnTris })); // LNK3D (C)
     const instEdges = (link: boolean) => { // 3D1: the instanced groups' segments, the batches drawn
       let any = false;
       for (const g of groups) {
@@ -2215,6 +2395,7 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       stats.fullFrameMs = tNow;
     lastComplete = !movingNow && !(stats.moving?.outlines ?? 0) && (slice ? fill === null && !fillEdges && cutT === 0 : cutT === 0) && !box && !plan; // 3D2 (step 4)
     lastReplaced = replaced;
+    lastLinkRep = linkRep; // LNK3D (C)
     if (first) stats.firstFrame = { moving: movingNow, tris: fTris, draws: fDraws, budget, t: cutT, ms: performance.now() - tNow }, stats.frameLog = [];
     if (stats.frameLog && stats.frameLog.length < 80) stats.frameLog.push(`${Math.round(tNow)} ${movingNow ? "m" : slice ? "s" : "w"} t${cutT.toPrecision(2)} ${fTris} f${fill ? fill.t : "-"} e${fillEdges ? 1 : 0}`);
     gl.uniform1f(uZbias, 0);
@@ -3214,6 +3395,19 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
     },
     /** The camera's distance times k (a close orbit: 0.2). */
     zoom: (k: number) => { turn = null; distance *= k; },
+    /** LNK3D: the camera looking at world point `t` (mm) from `d` mm, home angles; the next frame draws it. */
+    look: (t: number[], d: number) => {
+      turn = null;
+      const o = mesh?.origin ?? [0, 0, 0];
+      target = [t[0]! - o[0], t[1]! - o[1], t[2]! - o[2]], distance = d, yaw = HOME_YAW + projectNorth(), pitch = HOME_PITCH;
+      dirty = true;
+    },
+    /** LNK3D: the canvas as last drawn (RGBA, bottom row first), no new frame. */
+    read: () => {
+      const out = new Uint8Array(4 * canvas.width * canvas.height);
+      gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, out);
+      return { w: canvas.width, h: canvas.height, rgba: out };
+    },
     /** The picture at the home camera fitted (yaw, pitch offsets in radians), as RGBA bytes (bottom row first). */
     snap: (dyaw: number, dpitch: number) => {
       turn = null;
@@ -3272,6 +3466,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       // ---- end TEST1 ----
       wantRev = rev;
       void load();
+    } else if (!loading && mesh && wantRev === rev && mesh.rev !== state.value.rev && rev.startsWith("d")) {
+      mesh.rev = stats.meshRev = state.value.rev; // LNK3D: a new rev drawing the same (a hide in a view): its frame is this rev's
+      dirty = true;
     }
     if (visibility.value !== seenVis) { // a change (or the box tool): what is hidden, the box
       seenVis = visibility.value;

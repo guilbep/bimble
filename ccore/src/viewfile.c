@@ -707,6 +707,16 @@ int cc_viewfile_append_source(Buf *out, const char *json, size_t n) {
     return bad ? -1 : 0;
 }
 
+int cc_viewfile_append_hlod(Buf *out, const char *t, size_t n) {
+    Buf p;
+    buf_init(&p);
+    buf_append(&p, t, n);
+    section(out, "HLOD", &p);
+    int bad = p.oom || out->oom;
+    buf_free(&p);
+    return bad ? -1 : 0;
+}
+
 int cc_viewfile_append_psets(Buf *out, const char *t, size_t n) {
     Buf p;
     buf_init(&p);
@@ -741,23 +751,37 @@ int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err
         buf_free(&raw);
         rc = copy ? read_raw(copy, len, out, &e) : fail(&e, E_OOM, NULL);
         out->has_psets = 0; /* M1LINKS: offsets in the inflated stream, not the file: not read lazily */
+        out->has_hlod = 0;  /* LNK3D: the same */
     } else {
         /* M1LINKS: a last section PROP stays out of the copy (read lazily from the file, ifc_psets.h):
-         * the sections' heads walked, the copy cut where it starts. */
-        size_t cut = n, at = 12, pset = 0;
+         * the sections' heads walked, the copy cut where it starts. LNK3D: so does a section HLOD (a link
+         * cache's baked proxies, BPRX; served from the file and checked then: hlod.h
+         * cc_hlod_bprx_check), when only HLOD and PROP sections follow it. */
+        size_t cut = n, at = 12, pset = 0, lazy = 0, hlod = 0;
         while (n >= 12 && at + 12 <= n) {
             uint64_t len = 0;
             for (int i = 0; i < 8; i++) len |= (uint64_t)p[at + 4 + i] << (8 * i);
             if (len > n - at - 12) break;
-            if (!memcmp(p + at, "PROP", 4) && at + 12 + len == n) pset = at;
+            int is_prop = !memcmp(p + at, "PROP", 4), is_hlod = !memcmp(p + at, "HLOD", 4);
+            if (is_prop && at + 12 + len == n) pset = at;
+            if (is_hlod && !hlod) hlod = at;
+            if ((is_prop || is_hlod) && !lazy) lazy = at;
+            else if (!is_prop && !is_hlod) lazy = 0, hlod = 0;
             at += 12 + (size_t)len;
         }
-        if (pset && at == n) cut = pset;
+        if (at == n && lazy) cut = lazy;
+        else if (pset && at == n) cut = pset;
+        if (at != n || !lazy) hlod = 0;
         uint8_t *copy = arena_dup(&out->arena, p, cut);
         rc = copy ? read_raw(copy, cut, out, &e) : fail(&e, E_OOM, NULL);
-        if (!rc && cut < n) { /* the head checked as read_raw does */
-            const uint8_t *q = p + cut + 12;
-            size_t ln = n - cut - 12;
+        if (!rc && hlod) { /* LNK3D: where it is in the file; its bytes checked when served */
+            uint64_t len = 0;
+            for (int i = 0; i < 8; i++) len |= (uint64_t)p[hlod + 4 + i] << (8 * i);
+            out->has_hlod = 1, out->hlod_off = hlod + 12, out->hlod_len = len;
+        }
+        if (!rc && pset && cut < n) { /* the head checked as read_raw does */
+            const uint8_t *q = p + pset + 12;
+            size_t ln = n - pset - 12;
             uint64_t ne = ln >= 4 ? ((uint64_t)q[0] | (uint64_t)q[1] << 8 | (uint64_t)q[2] << 16 | (uint64_t)q[3] << 24) : 0;
             int ok = ln >= 4 && ne == out->nelements && cc_psets_head(ne) <= ln;
             uint64_t last = 0;
@@ -768,7 +792,7 @@ int cc_viewfile_read(const uint8_t *p, size_t n, cc_viewfile *out, cc_error *err
                 last = end;
             }
             if (!ok) rc = fail(&e, E_INVALID, "psets: entries");
-            else out->has_psets = 1, out->psets_off = cut + 12, out->psets_len = ln;
+            else out->has_psets = 1, out->psets_off = pset + 12, out->psets_len = ln;
         }
     }
     if (rc) set_msg(err, &e);

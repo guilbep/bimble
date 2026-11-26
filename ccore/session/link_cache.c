@@ -4,6 +4,8 @@
 #include <string.h>
 
 #include "guid.h"
+#include "hlod.h"
+#include "links.h"
 #include "json_r.h"
 #include "jobs.h"
 #include "json_w.h"
@@ -174,9 +176,8 @@ static int str_cmp(const void *x, const void *y) {
     return c ? c : (a->n > b->n) - (a->n < b->n);
 }
 
-/* The conversion report (link_cache.h). */
-static void report(Buf *b, const cc_link_job *j, const cc_ifc_scene *s, double read_ms, uint64_t cache_bytes,
-                   const char *cache, const char *where) {
+/* The conversion report (link_cache.h): what the IFC held (report), then where the cache went (report_tail). */
+static void report(Buf *b, const cc_link_job *j, const cc_ifc_scene *s, double read_ms) {
     const char *sl = cc_path_last_sep(j->path);
     buf_puts(b, "Bimble: link conversion report\n\nsource: "), buf_puts(b, sl ? sl + 1 : j->path);
     buf_puts(b, "\nsource bytes: "), buf_u64(b, j->bytes);
@@ -211,11 +212,67 @@ static void report(Buf *b, const cc_link_job *j, const cc_ifc_scene *s, double r
     for (size_t i = 0; i < s->scene.nwarnings; i++)
         buf_puts(b, "  "), buf_append(b, s->scene.warnings[i].p, s->scene.warnings[i].n), buf_putc(b, '\n');
     if (!s->scene.nwarnings) buf_puts(b, "  none\n");
+}
+
+static void report_tail(Buf *b, const cc_link_job *j, uint64_t cache_bytes, const char *cache, const char *where) {
+    /* LNK3D (ADR 0078 amendment 3): the proxies baked into the cache (section HLOD) */
+    buf_puts(b, "\nproxies (HLOD, baked for the 3D view): ");
+    if (j->hlod_bytes) {
+        buf_u64(b, j->hlod_cells), buf_puts(b, " cells, "), buf_u64(b, j->hlod_tris), buf_puts(b, " triangles, ");
+        buf_u64(b, j->hlod_bytes), buf_puts(b, " bytes, built in "), buf_u64(b, (uint64_t)(j->hlod_ms + 0.5)), buf_puts(b, " ms");
+    } else buf_puts(b, j->hlod_why[0] ? j->hlod_why : "none");
     buf_puts(b, "\ncache: ");
     if (cache[0]) buf_puts(b, cache), buf_puts(b, " ("), buf_u64(b, cache_bytes), buf_puts(b, " bytes)");
     else buf_puts(b, "none written");
     if (where && *where) buf_puts(b, "\n"), buf_puts(b, where);
     buf_puts(b, "\nThe cache is the IFC read for display, read only. Do not edit it; it is written again when the IFC changes.\n");
+}
+
+/* LNK3D (ADR 0078 amendment 3): the cache's proxies, baked once here (on the conversion's thread): the
+ * view file just written read back as the session will read it (its scene's element order is the
+ * link's BMSH rows), its HLOD built in steps (3D2's builder and options: bounded; cancellable between
+ * steps), appended as a section HLOD. A failure leaves the cache without proxies (the page draws the
+ * link in detail), said in the report. */
+static void bake_hlod(cc_link_job *j, Buf *vb) {
+    const cc_platform *pf = j->pf;
+    double t0 = pf->now_ms(pf->ctx);
+    cc_viewfile vf;
+    cc_scene sc;
+    cc_error e;
+    if (cc_viewfile_read((const uint8_t *)vb->p, vb->len, &vf, &e)) {
+        snprintf(j->hlod_why, sizeof j->hlod_why, "none (%s)", e.msg);
+        return;
+    }
+    if (cc_view_scene(&sc, &vf, &e)) {
+        cc_viewfile_free(&vf);
+        snprintf(j->hlod_why, sizeof j->hlod_why, "none (%s)", e.msg);
+        return;
+    }
+    cc_hlod h;
+    cc_hlod_opts o;
+    cc_hlod_default(&o);
+    Buf b;
+    buf_init(&b);
+    int rc = cc_hlod_start(&h, &sc, &o, &e);
+    while (rc == 0 && !cc_atomic_load(&j->pg.cancel)) {
+        int st = cc_hlod_step(&h, 1000000, &e);
+        if (st < 0) rc = -1;
+        if (st != 0) break;
+    }
+    if (rc == 0 && h.work) snprintf(j->hlod_why, sizeof j->hlod_why, "none (cancelled)"), rc = 1;
+    if (rc == 0 && cc_hlod_bprx(&h, 0, (uint32_t)sc.nelements, &b, &e)) rc = -1;
+    if (rc == 0 && sc.nelements && h.ncells) {
+        j->hlod_cells = h.ncells;
+        for (uint32_t i = 0; i < h.ncells; i++) j->hlod_tris += cc_hlod_proxy_triangles(&h.cells[i]);
+        if (cc_viewfile_append_hlod(vb, b.p, b.len)) j->hlod_cells = j->hlod_tris = 0;
+        else j->hlod_bytes = b.len;
+    } else if (rc < 0) snprintf(j->hlod_why, sizeof j->hlod_why, "none (%s)", e.msg);
+    else if (!j->hlod_why[0]) snprintf(j->hlod_why, sizeof j->hlod_why, "none (nothing drawn)");
+    buf_free(&b);
+    cc_hlod_free(&h);
+    cc_scene_free(&sc);
+    cc_viewfile_free(&vf);
+    j->hlod_ms = pf->now_ms(pf->ctx) - t0;
 }
 
 static void run(cc_link_job *j) {
@@ -308,16 +365,18 @@ static void run(cc_link_job *j) {
         return;
     }
     cc_viewfile_meta mt;
-    Buf vb;
-    buf_init(&vb);
+    Buf vb, lg;
+    buf_init(&vb), buf_init(&lg);
     int wr = cc_ifc_scene_meta(s, &mt) || cc_viewfile_write_meta(&mt, &s->scene, 0, &vb) ||
-             cc_viewfile_append_source(&vb, src, strlen(src)) ||
-             (psb.len && cc_viewfile_append_psets(&vb, psb.p, psb.len)); /* M1LINKS: last, read lazily */
+             cc_viewfile_append_source(&vb, src, strlen(src));
     cc_viewfile_meta_free(&mt);
+    report(&lg, j, s, read_ms);
+    cc_ifc_scene_free(s), free(s); /* LNK3D: the IFC's scene goes before the proxies are built (its peak) */
+    if (!wr && !vb.oom) bake_hlod(j, &vb); /* LNK3D: then HLOD, then PROP (both read lazily) */
+    if (!wr && psb.len) wr = cc_viewfile_append_psets(&vb, psb.p, psb.len); /* M1LINKS: last, read lazily */
     buf_free(&psb);
     if (wr || vb.oom) {
-        buf_free(&vb);
-        cc_ifc_scene_free(s), free(s);
+        buf_free(&vb), buf_free(&lg);
         fail(j, CC_JOB_FAILED, "out of memory");
         return;
     }
@@ -340,13 +399,10 @@ static void run(cc_link_job *j) {
         cc_pf_stat cs;
         j->cache_bytes = vb.len;
         if (pf->stat_path(pf->ctx, j->cache, 1, &cs) == CC_PF_OK) j->cache_mtime_s = cs.mtime_s;
-        Buf lg;
-        buf_init(&lg);
-        report(&lg, j, s, read_ms, vb.len, j->cache, where);
+        report_tail(&lg, j, vb.len, j->cache, where);
         if (!lg.oom && pf->write_file(pf->ctx, logp, lg.p, lg.len) == 0) snprintf(j->log, sizeof j->log, "%s", logp);
-        buf_free(&lg);
     }
-    cc_ifc_scene_free(s), free(s); /* the session keeps the light scene only */
+    buf_free(&lg); /* the session keeps the light scene only (the IFC's went above) */
     cc_viewfile *vf = malloc(sizeof *vf);
     if (!vf || cc_viewfile_read((const uint8_t *)vb.p, vb.len, vf, &j->err)) {
         if (vf) cc_viewfile_free(vf), free(vf);

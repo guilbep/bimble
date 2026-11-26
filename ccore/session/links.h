@@ -199,7 +199,10 @@ void cc_links_json(const cc_session *s, JsonW *w);
  * origin, host world mm), "sin", "visible" (drawn: shown and loaded)}] in link order, the numbers of
  * the LNKS trailer's version 2. A vertex p of link k goes to R(cos, sin) p + (origin - the open
  * scene's origin_mm). The change JSON's "links_mesh" (present with "links") counts the changes of
- * the links' geometry; "links" counts every change (a hide, a move, a colour too). */
+ * the links' geometry; "links" counts every change (a hide, a move, a colour too).
+ * query mesh_key (calls.c): {"draw", "links", "rev"}: draw + 1 with each rev that may change what the
+ * open scene draws (not views, sheets or schedules alone: a hide in a view), links = links_mesh; the
+ * page fetches /mesh only when one of them moves (the change JSON stays Rust's without links). */
 void cc_links_draw_json(cc_session *s, JsonW *w);
 /* query element {"id","link"}: the element of a link, read-only, in query element's shape
  * (ElementDetail: id, class, name, storey and material ids empty, generator "", no params, no

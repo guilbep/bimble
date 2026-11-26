@@ -55,6 +55,7 @@ void cc_session_free(cc_session *s) {
     if (s->scene_rev) cc_scene_free(&s->scene);
     buf_free(&s->mesh);
     cc_mesh_proxies_free(s); /* 3D2 */
+    buf_free(&s->link_prx_out); /* LNK3D */
     cc_paper_cache_free(s);
     cc_paper_fonts_free(s); /* D7 */
     cc_versions_free(s); /* H2a */
@@ -217,7 +218,7 @@ static void install(cc_session *s, cc_model *m, const char *path, uint64_t saved
     cc_history_init(&s->hist);
     set_path(s, path);
     s->open = 1;
-    s->rev++;
+    s->rev++, s->draw_gen++; /* LNK3D */
     s->next_step = 1;
     s->saved_step = saved_step; /* UINT64_MAX: edit.rs `Editor::imported`, starts dirty */
     /* edit.rs `Editor::new`: the lowest storey at or above -1 mm, else the first one. */
@@ -442,7 +443,7 @@ int cc_session_open_file(cc_session *s, const char *path, cc_error *err) {
     set_path(s, path);
     s->view = ifc ? CC_VIEW_IFC : CC_VIEW_FILE;
     s->ifc = is, s->vf = vf, s->vscene = vs;
-    s->rev++;
+    s->rev++, s->draw_gen++; /* LNK3D */
     s->next_step = 1, s->saved_step = 0;
     cc_sv_loaded(s); /* the 3D view is shown on load, its tab open */
     s->load_ms = s->pf->now_ms(s->pf->ctx) - t0;
@@ -453,7 +454,7 @@ int cc_session_open_file(cc_session *s, const char *path, cc_error *err) {
 void cc_session_close(cc_session *s) {
     if (!s->open && !s->view) return;
     drop_model(s);
-    s->rev++; /* the view changed: nothing to show */
+    s->rev++, s->draw_gen++; /* the view changed: nothing to show */
     persist_follow(s, NULL, 1);
 }
 
@@ -1070,7 +1071,7 @@ static int replay_entry(cc_session *s, const char *line, size_t n, const char **
         goto end;
     }
     if (strcmp(op, "state")) P->model_is_file = 0;
-    s->rev = rev, s->saved_step = saved_step;
+    s->rev = rev, s->saved_step = saved_step, s->draw_gen++; /* LNK3D */
     if (read_selection(s, o, why)) {
         s->has_primary = 0, s->nalso = 0; /* the op is kept; the selection is not */
         goto end;
@@ -1085,7 +1086,7 @@ end:
 
 static void close_session(cc_session *s) { /* a restore that failed: as if never opened */
     drop_model(s);
-    s->rev = 0;
+    s->rev = 0, s->draw_gen++; /* LNK3D */
 }
 
 static void persist_drop_cmds(cc_session *s) {
@@ -1336,7 +1337,7 @@ static int restore(cc_session *s, size_t *keep, int *rewrite, int *unsaved) {
     s->undo_ids = uids, s->nundo_ids = s->cap_undo_ids = nu;
     s->redo_ids = rids, s->nredo_ids = s->cap_redo_ids = nr;
     uids = rids = NULL;
-    s->rev = rev, s->next_step = next_step, s->saved_step = saved_step;
+    s->rev = rev, s->next_step = next_step, s->saved_step = saved_step, s->draw_gen++; /* LNK3D */
     P->snap_bytes = first + 1, P->model_file_bytes = size;
     P->W.size = size, P->W.mtime = mt;
 

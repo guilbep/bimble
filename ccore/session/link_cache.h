@@ -27,7 +27,7 @@
 #include "viewfile.h"
 
 #define CC_LINK_CACHE_MIN ((uint64_t)1 << 20) /* bytes; below, no cache (ADR 0079) */
-#define CC_LINK_CACHE_FORMAT "bimble-link-cache 3" /* 2: SRCE names the base point; 3 (M1LINKS): a section PROP */
+#define CC_LINK_CACHE_FORMAT "bimble-link-cache 4" /* 2: SRCE names the base point; 3 (M1LINKS): a section PROP; 4 (LNK3D): a section HLOD */
 
 enum { CC_JOB_OK = 0, CC_JOB_FAILED = -1, CC_JOB_REFUSED = -2, CC_JOB_CANCELLED = -3 };
 
@@ -52,6 +52,10 @@ typedef struct cc_link_job {
     uint64_t bytes, cache_bytes;
     int64_t mtime_s, cache_mtime_s;
     double ms;           /* the whole job */
+    /* LNK3D (ADR 0078 amendment 3): the proxies baked into the cache (section HLOD) */
+    uint64_t hlod_cells, hlod_tris, hlod_bytes;
+    double hlod_ms;
+    char hlod_why[160];  /* "" or why none were baked */
 } cc_link_job;
 
 /* A new job for `path` (copied). NULL out of memory. */

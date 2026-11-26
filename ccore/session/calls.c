@@ -268,11 +268,22 @@ static int push_id(uint64_t **v, size_t *n, size_t *cap, uint64_t id) {
 
 /* lib.rs:1767-1805 `rebuild_scene`: rev + 1; the primary selection kept by GlobalId, the others
  * dropped. */
-static void rebuild(cc_session *s) {
+static void rebuild(cc_session *s, int drawn) {
     s->rev++;
+    if (drawn) s->draw_gen++; /* LNK3D: views, sheets, schedules alone draw nothing new */
     if (s->has_primary && !cc_model_element(&s->model, &s->primary)) s->has_primary = 0;
     s->nalso = 0;
     cc_sv_vis_load(s); /* ---- SEC1 ---- the view's hides, as the edit, undo or redo left them */
+}
+
+/* LNK3D: 1 when `cmds` may change what the scene draws (anything but views, sheets, schedules). */
+static int cmds_drawn(const cc_command *c, size_t n) {
+    for (size_t i = 0; i < n; i++) switch (c[i].op) {
+        case CC_CMD_ADD_VIEW: case CC_CMD_REMOVE_VIEW: case CC_CMD_SET_VIEW:
+        case CC_CMD_ADD_SHEET: case CC_CMD_REMOVE_SHEET: case CC_CMD_SET_SHEET: case CC_CMD_SET_SCHEDULES: continue;
+        default: return 1;
+        }
+    return 0;
 }
 
 /* lib.rs:1725 `try_apply` through edit.rs:233 `Editor::apply` (no commands: no step, but the
@@ -292,7 +303,7 @@ static int try_apply(cc_session *s, const cc_command *cmds, size_t n, cc_buf *ou
         cc_links_undo_clear_redo(s); /* LINKF: a new step: link_folder's redo goes too */
         cc_session_note_apply(s, cmds, n); /* the session file logs the step with these */
     }
-    rebuild(s);
+    rebuild(s, !n || cmds_drawn(cmds, n));
     return CC_OK;
 }
 
@@ -300,6 +311,8 @@ static int try_apply(cc_session *s, const cc_command *cmds, size_t n, cc_buf *ou
 static void undo_redo(cc_session *s, int undo) {
     if (!s->open) return;
     if (cc_links_undo_step(s, undo)) return; /* LINKF: link_folder was the last step (links.h) */
+    const cc_step *st = undo ? (s->hist.nundo ? &s->hist.undo[s->hist.nundo - 1] : NULL) : (s->hist.nredo ? &s->hist.redo[s->hist.nredo - 1] : NULL);
+    int drawn = !st || cmds_drawn(st->cmds, st->n); /* LNK3D */
     if (undo ? cc_history_undo(&s->hist, &s->model) : cc_history_redo(&s->hist, &s->model)) {
         if (undo && s->nundo_ids) {
             if (!push_id(&s->redo_ids, &s->nredo_ids, &s->cap_redo_ids, s->undo_ids[s->nundo_ids - 1])) s->nundo_ids--;
@@ -307,7 +320,7 @@ static void undo_redo(cc_session *s, int undo) {
             if (!push_id(&s->undo_ids, &s->nundo_ids, &s->cap_undo_ids, s->redo_ids[s->nredo_ids - 1])) s->nredo_ids--;
         }
         s->saved_step = UINT64_MAX; /* FAKE1: edit.rs:292-308, undo and redo set `dirty`: unsaved until saved */
-        rebuild(s);
+        rebuild(s, drawn);
     }
 }
 
@@ -1435,6 +1448,14 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
     if (!strcmp(name, "pointer") || !strcmp(name, "standards")) {
         buf_puts(out, "null");
         return CC_OK;
+    }
+    if (!strcmp(name, "mesh_key")) { /* LNK3D (ADR 0078 amendment 3): what /mesh would hold; the page fetches it when this moves */
+        jw_obj_begin(&w);
+        jw_key(&w, "draw"), jw_u64(&w, s->draw_gen);
+        jw_key(&w, "links"), jw_u64(&w, s->links_mesh_gen);
+        jw_key(&w, "rev"), jw_u64(&w, s->rev);
+        jw_obj_end(&w);
+        return done(&w);
     }
     if (!strcmp(name, "link_draw")) { /* LNK3D (links.h) */
         cc_links_draw_json(s, &w);

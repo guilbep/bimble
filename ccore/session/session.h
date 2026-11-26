@@ -105,6 +105,7 @@ typedef struct cc_session {
     uint32_t hlod_rev;
     int hlod_status; /* 0 none, 202 building, 200 built (hlod_out: BPRX), 500 (hlod_out: the error) */
     Buf hlod_out;
+    Buf link_prx_out; /* LNK3D: the last link proxies answered (mesh.h cc_link_proxies) */
     double hlod_ms;  /* build time so far */
     cc_persist *persist;
     /* Linked models (ticket B5, links.h): read-only scenes drawn with the open one, in link
@@ -118,6 +119,9 @@ typedef struct cc_session {
      * a move, a colour or a visibility rule never makes the page fetch the mesh again. mesh_links_head:
      * the trailer's light fields (visible, placement, colour) the cached /mesh was written with. */
     uint64_t links_mesh_gen, mesh_links_mesh_gen, mesh_links_head;
+    /* LNK3D: + 1 with every rev that may change what the scene draws (not a change of views, sheets or
+     * schedules alone: a hide in a view, a sheet): query mesh_key, so the page fetches /mesh only then. */
+    uint64_t draw_gen;
     uint64_t vis_links_gen; /* M1LINKS: the links_gen the view's rules were last folded at (m1links.h) */
     uint64_t vis_sig;       /* M1LINKS: cc_vis_sig when the /mesh trailer was last told (links_gen) */
     int has_vis_sig;        /* M1LINKS: vis_sig was taken (the first one bumps nothing) */
