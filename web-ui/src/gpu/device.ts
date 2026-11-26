@@ -4,7 +4,12 @@
 // unless asked for (`?gpuSoftware=1`: the lab tests and benchmarks on SwiftShader); and a first tiny
 // render, read back, must give the right pixel. Any refusal is a reason, kept for the performance
 // panel; the view then stays on WebGL2. A device lost later calls `lost` (the view falls back live).
-import { isSoftware, type PerfAdapter } from "../perf";
+// "Software" is decided from evidence, not from Dawn's architecture string (REAL1: Dawn calls Mesa's
+// Asahi driver on an Apple M1 Pro architecture "software"; it is a GPU, not a fallback adapter):
+// the API's own isFallbackAdapter, a CPU rasteriser's name (SwiftShader, llvmpipe, lavapipe), and a
+// measured fill rate (FILL_SOFTWARE_MPXS). The API's flag and the names refuse (unless
+// ?gpuSoftware=1); the fill rate only labels (an old GPU may fill slowly and still beat a CPU).
+import { isCpuName, type PerfAdapter } from "../perf";
 
 export interface GpuDevice { device: GPUDevice; adapter: PerfAdapter; format: GPUTextureFormat; fallback: boolean }
 
@@ -40,6 +45,35 @@ async function probe(device: GPUDevice): Promise<string | null> {
   return ok ? null : `a test render gave the wrong pixel (${px.join(", ")}, expected 255, 128, 0, 255): the black picture of ADR 0040`;
 }
 
+/** Below this fill rate (megapixels a second) the adapter draws like a CPU rasteriser (REAL1, measured by
+ *  fillRate on the Asahi dev machine: SwiftShader's Vulkan under Dawn 722-1,111 on 8 cores, the M1 Pro
+ *  through Mesa 5,785-12,428). A label only: the panel and the report say it, nothing is refused on it. */
+export const FILL_SOFTWARE_MPXS = 2000;
+const FILL_SIZE = 1024, FILL_DRAWS = 32;
+
+/** Fill rate: FILL_DRAWS full-screen triangles into a FILL_SIZE² target, after one warm-up pass (the
+ *  pipeline's first use), timed on the CPU from submit to onSubmittedWorkDone. Megapixels a second. */
+async function fillRate(device: GPUDevice): Promise<number> {
+  const tex = device.createTexture({ size: [FILL_SIZE, FILL_SIZE], format: "rgba8unorm", usage: TU.RENDER_ATTACHMENT });
+  const sm = device.createShaderModule({ code: PROBE });
+  const pl = device.createRenderPipeline({ layout: "auto", vertex: { module: sm, entryPoint: "vs" }, fragment: { module: sm, entryPoint: "fs", targets: [{ format: "rgba8unorm" }] } });
+  const pass = async (n: number) => {
+    const e = device.createCommandEncoder();
+    const p = e.beginRenderPass({ colorAttachments: [{ view: tex.createView(), loadOp: "clear", clearValue: [0, 0, 0, 1], storeOp: "store" }] });
+    p.setPipeline(pl);
+    for (let i = 0; i < n; i++) p.draw(3);
+    p.end();
+    const t0 = performance.now();
+    device.queue.submit([e.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    return performance.now() - t0;
+  };
+  await pass(1);
+  const ms = Math.max(await pass(FILL_DRAWS), 0.05);
+  tex.destroy();
+  return (FILL_DRAWS * FILL_SIZE * FILL_SIZE) / 1e6 / (ms / 1000);
+}
+
 /** The device, or the reason there is none. `allowSoftware`: accept a fallback adapter (tests). */
 export async function openDevice(allowSoftware: boolean, lost: (why: string) => void): Promise<GpuDevice | { reason: string }> {
   const gpu = (navigator as Navigator & { gpu?: GPU }).gpu;
@@ -49,10 +83,12 @@ export async function openDevice(allowSoftware: boolean, lost: (why: string) => 
   if (!a) return { reason: "navigator.gpu gave no adapter (ADR 0020: WebGPU exposed with no GPU behind it)" };
   const i = a.info ?? ({} as GPUAdapterInfo);
   const fallback = !!(i.isFallbackAdapter ?? (a as unknown as { isFallbackAdapter?: boolean }).isFallbackAdapter);
-  const adapter: PerfAdapter = { vendor: i.vendor ?? "", architecture: i.architecture ?? "", description: i.description ?? "",
-    software: fallback || isSoftware(`${i.vendor ?? ""} ${i.architecture ?? ""} ${i.description ?? ""}`) };
-  const name = [adapter.vendor, adapter.architecture, adapter.description].filter(Boolean).join(" / ") || "no name";
-  if (fallback && !allowSoftware) return { reason: `the only adapter is a fallback (software) one (${name}); ?gpuSoftware=1 accepts it` };
+  const names = `${i.vendor ?? ""} ${i.architecture ?? ""} ${i.device ?? ""} ${i.description ?? ""}`;
+  const cpuName = isCpuName(names);
+  const adapter: PerfAdapter = { vendor: i.vendor ?? "", architecture: i.architecture ?? "", device: i.device ?? "", description: i.description ?? "",
+    software: fallback || cpuName, fallback, fillMpxS: null };
+  const name = [adapter.vendor, adapter.architecture, adapter.device, adapter.description].filter(Boolean).join(" / ") || "no name";
+  if ((fallback || cpuName) && !allowSoftware) return { reason: `the only adapter is a ${fallback ? "fallback" : "CPU"} (software) one (${name}); ?gpuSoftware=1 accepts it` };
   let device: GPUDevice;
   try {
     device = await a.requestDevice({ requiredLimits: { maxStorageBufferBindingSize: a.limits.maxStorageBufferBindingSize, maxBufferSize: a.limits.maxBufferSize } });
@@ -64,5 +100,13 @@ export async function openDevice(allowSoftware: boolean, lost: (why: string) => 
   try { bad = await probe(device); } catch (e) { bad = `the test render failed: ${String(e)}`; }
   if (gone) return { reason: "the device was lost during the test render" };
   if (bad) { device.destroy(); return { reason: `${bad} (${name})` }; }
+  let fill: number | null = null;
+  try { fill = await fillRate(device); } catch (e) { console.warn("webgpu: the fill-rate check failed:", String(e)); }
+  if (gone) return { reason: "the device was lost during the fill-rate check" };
+  const slow = fill !== null && fill < FILL_SOFTWARE_MPXS;
+  adapter.fillMpxS = fill === null ? null : Math.round(fill);
+  adapter.software = fallback || cpuName || slow;
+  adapter.evidence = [fallback ? "isFallbackAdapter" : "not a fallback adapter", cpuName ? "a CPU rasteriser's name" : null,
+    fill === null ? "fill rate not measured" : `fill ${Math.round(fill).toLocaleString("en-US")} Mpx/s${slow ? ` (under ${FILL_SOFTWARE_MPXS}: a CPU's)` : ""}`].filter(Boolean).join(", ");
   return { device, adapter, format: gpu.getPreferredCanvasFormat(), fallback };
 }

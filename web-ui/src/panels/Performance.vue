@@ -12,7 +12,7 @@ import { onMounted, onUnmounted, shallowRef } from "vue";
 import { state } from "../bimble";
 import { t } from "../i18n";
 import { currentPanel } from ".";
-import { perfRecord, perfReport, perfSnapshot, perfWait, type FrameStats, type PerfSnapshot } from "../perf";
+import { adapterNames, perfRecord, perfReport, perfSnapshot, perfWait, type FrameStats, type PerfSnapshot } from "../perf";
 
 const snap = shallowRef<PerfSnapshot>(perfSnapshot());
 const names = shallowRef(false);
@@ -29,7 +29,7 @@ const row = (s: FrameStats) => (s.n ? `${s.n} · ${ms(s.last)} · ${ms(s.median)
 const adapterText = (s: PerfSnapshot) => {
   const a = s.adapter;
   if (!a) return t("perf.unknown");
-  return [a.vendor, a.architecture, a.description].filter(Boolean).join(" · ") || t("perf.unknown");
+  return adapterNames(a, " · ") || t("perf.unknown");
 };
 async function copy() {
   const text = perfReport(names.value, state.value.file);
@@ -64,6 +64,7 @@ function record() {
       <dt>{{ t('perf.adapter') }}</dt>
       <dd data-bb="perf-adapter">{{ adapterText(snap) }}</dd>
       <dd v-if="snap.adapter?.software" class="warn" data-bb="perf-software">{{ t('perf.software') }}</dd>
+      <dd v-if="snap.adapter?.fillMpxS" class="q" data-bb="perf-fill">{{ t('perf.fill', { rate: num(snap.adapter.fillMpxS) }) }}</dd>
     </dl>
     <div class="sec">{{ t('perf.frames') }}<span v-if="snap.moving.n + snap.still.n > 0 && !snap.synced" class="q"> · {{ t('perf.notSynced') }}</span></div>
     <table class="t">

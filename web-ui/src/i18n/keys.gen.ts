@@ -616,6 +616,7 @@ export type PartKey =
   | "perf.draws"
   | "perf.elements"
   | "perf.fallback"
+  | "perf.fill"
   | "perf.frames"
   | "perf.gpuBytes"
   | "perf.gpuCull"
