@@ -40,7 +40,7 @@ const THREED_SPEED = [
   { feature: "GPU occlusion", rust: "gpu_occlusion.rs, gpu_occlusion_poll", ported: true, note: "3D2: WebGL2 occlusion queries per batch, last frames' answers, Rust's rule against a still view redrawing forever; off by default as Rust on WebGL2 (a test hook turns it on; frames.md measures it)" },
   { feature: "CPU occlusion", rust: "occlusion.rs (ADR 0036 #5)", ported: false, note: "not ported: the GPU queries above stand for it under SwiftShader" },
   { feature: "Screen edges while moving", rust: "edges.wgsl, DrawOptions::screen_edges (ADR 0036 #6)", ported: false, note: "not ported: a moving frame draws the edges of what its budget draws; frames.md measures the still frame without its edge pass" },
-  { feature: "GPU culling of copies", rust: "DrawOptions::gpu_cull (ADR 0036 #10)", ported: false, note: "does not apply: WebGL2 has no compute shaders (query settings needs.gpu_cull)" },
+  { feature: "GPU culling of copies", rust: "DrawOptions::gpu_cull (ADR 0036 #10)", ported: true, note: "GPU1 (ADR 0083): with the WebGPU renderer (setting renderer), a compute pass per frame and one drawIndexedIndirect per group of copies; WebGL2 has no compute shaders (query settings applies.gpu_cull)" },
 ];
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");

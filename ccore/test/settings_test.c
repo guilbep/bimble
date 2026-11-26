@@ -469,6 +469,7 @@ int main(void) {
         Buf b;
         buf_init(&b);
         cc_settings_to_json(&d, NULL, 0, &b);
+        buf_append(&b, "", 1); /* a Buf is not NUL-terminated: one for strstr */
         check_true("renderer: not in Rust's to_json", b.p && !strstr(b.p, "renderer"));
         buf_free(&b);
         cc_session_free(s);
