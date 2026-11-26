@@ -18,7 +18,7 @@
 // buttons (view cube's Home and Fit all), the status bar, the selection's panels (an element selected),
 // the viewport's right-click menu, the key table (window.__bbKeys.KEYS) and, discovered when a control
 // opens them, every dialog (File menu, palette, Settings…), page (Levels & grids, Materials…) and right
-// panel, one level deep. A ribbon tool's binding (action / page / panel / dialog) is read from
+// panel, two levels deep (a dialog opened from the File menu, a page from the palette). A ribbon tool's binding (action / page / panel / dialog) is read from
 // web-ui/src/shell/ribbon-tabs.ts by its place (data-bb ribbon-tool-<group>-<tool>); other controls are
 // bound by their label to the core's `query actions` label when one matches.
 //
@@ -261,7 +261,7 @@ const INSTR = String.raw`(() => {
       ux.muts++; ux.lastMut = now(); break;
     }
   }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
-  for (const t of ["pointerdown", "keydown", "wheel", "mousedown"]) addEventListener(t, (e) => { if (ux.arm) { ux.arm = false; ux.tIn = e.timeStamp; } }, true);
+  for (const t of ["pointerdown", "keydown", "wheel", "mousedown", "pointermove"]) addEventListener(t, (e) => { if (ux.arm) { ux.arm = false; ux.tIn = e.timeStamp; } }, true);
   const raf = window.requestAnimationFrame.bind(window);
   const tick = () => {
     const n = now(), f = window.__bbGl ? window.__bbGl.frames : -1;
@@ -361,12 +361,15 @@ const INSTR = String.raw`(() => {
       dialog: box(".bb-backdrop [role=dialog], .bb-backdrop > *"), page: box('[data-bb="page"]'), panel: box('[data-bb="right-panel"]'),
       menu: box('[role="menu"]'), props: box('[data-bb="properties"]'), modifier: box('[data-bb="modifier"]'),
       tab: (document.querySelector('a.tab.on') || {}).innerText || null,
+      pageName: (() => { const p = document.querySelector('[data-bb="page"]'); if (!p) return null; const h = p.querySelector('h1, h2, [data-bb$="-title"], .title'); const c = p.querySelector('[data-bb]'); return (h ? h.innerText.trim() : "") || (c ? c.getAttribute("data-bb") : "") || "page"; })(),
       notYetTip: !!document.querySelector('[data-bb="not-yet-tip"]'),
       // the screen a control opens is "not available" as a whole (FAKE1: App.vue puts NotAvailable in its place)
       naMain: ['[data-bb="page"] > [data-bb="not-available"]', '[data-bb="right-panel"] > [data-bb="not-available"]', '.bb-backdrop > [role="dialog"] > [data-bb="not-available"]'].filter((q) => document.querySelector(q)).join(",") || null,
       naSide: !!document.querySelector('[data-bb="properties"] [data-bb="not-available"]'),
       alert: [...document.querySelectorAll('[role="alert"]')].map((e) => e.innerText.trim()).filter(Boolean).join(" | "),
       text: hash(text),
+      // the state of the form controls (a radio or a checkbox shows no text)
+      inputs: hash([...document.querySelectorAll("input, select")].map((e) => (e.type === "checkbox" || e.type === "radio" ? (e.checked ? "1" : "0") : e.value)).join("|")),
       camera: JSON.stringify([r(g.navEye ? g.navEye() : null), g.q2 || null, g.clip ? JSON.stringify(g.clip).length : null]),
       frames: g.frames ?? -1, measureCalls: g.measureCalls ?? 0, url: location.search,
     };
@@ -375,7 +378,7 @@ const INSTR = String.raw`(() => {
 
 // ---- one browser, one tab ----
 let cdp = null, S = null, browser = null;
-const events = { console: [], exceptions: [], http: [], chooser: 0, downloads: 0, jsdialogs: 0, requests: 0 };
+const events = { console: [], exceptions: [], http: [], chooser: 0, downloads: 0, jsdialogs: 0, requests: 0, tabs: 0 };
 async function startBrowser() {
   const gb = await waitMemory();
   log(`memory available ${gb.toFixed(1)} GB; starting Chromium`);
@@ -386,6 +389,7 @@ async function startBrowser() {
   cdp = await cdpConnect(wsUrl);
   cdp.on((msg) => {
     if (msg.method === "Browser.downloadWillBegin") events.downloads++;
+    if (msg.method === "Target.targetCreated" && msg.params.targetInfo.type === "page" && msg.params.targetInfo.openerId) events.tabs++; // a link to a new tab
     if (msg.sessionId !== curSession) return;
     const p = msg.params;
     if (msg.method === "Runtime.consoleAPICalled" && (p.type === "error" || p.type === "assert")) events.console.push(p.args.map((a) => a.value ?? a.description ?? a.type).join(" ").slice(0, 300));
@@ -396,6 +400,7 @@ async function startBrowser() {
     else if (msg.method === "Page.fileChooserOpened") events.chooser++;
     else if (msg.method === "Page.javascriptDialogOpening") { events.jsdialogs++; S("Page.handleJavaScriptDialog", { accept: true }).catch(() => {}); }
   });
+  await cdp.send("Target.setDiscoverTargets", { discover: true });
   await cdp.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: DL, eventsEnabled: true });
 }
 let curSession = null, curTarget = null;
@@ -463,14 +468,14 @@ async function core(op, name, body = "{}") {
 }
 async function coreSnap() {
   const o = {};
-  for (const q of ["state", "actions", "measure", "visibility", "open_views", "history"]) o[q] = await core("query", q);
+  for (const q of ["state", "actions", "measure", "visibility", "open_views", "history", "settings"]) o[q] = await core("query", q);
   // `query state` has no rev: a model change is a new undo step (or a changed redo list / unsaved flag)
   try { const h = JSON.parse(o.history), st = JSON.parse(o.state); o.rev = `${h.undo.length}/${h.redo.length}/${st.unsaved}/${st.file}`; } catch { o.rev = null; }
   try { o.measurements = JSON.parse(o.measure)?.items?.length ?? 0; } catch { o.measurements = 0; }
   return o;
 }
 async function snap() {
-  return { dom: await ev("window.__ux.dom()"), core: await coreSnap(), ev: { c: events.console.length, x: events.exceptions.length, h: events.http.length, ch: events.chooser, dl: events.downloads, js: events.jsdialogs, rq: events.requests },
+  return { dom: await ev("window.__ux.dom()"), core: await coreSnap(), ev: { c: events.console.length, x: events.exceptions.length, h: events.http.length, ch: events.chooser, dl: events.downloads, js: events.jsdialogs, rq: events.requests, tabs: events.tabs },
     calls: BUILD === "wasm" ? await ev("window.__ux.calls.length") : 0 };
 }
 /** Waits until nothing changed for QUIET ms (DOM, WebGL draw, core call); returns the probe. */
@@ -484,11 +489,12 @@ async function settle(maxMs = 5000, armed = true) {
     await sleep(30);
   }
 }
-const DIFF_KEYS = ["shell", "dialog", "page", "panel", "menu", "props", "modifier", "tab", "text", "camera", "url"];
+const DIFF_KEYS = ["shell", "dialog", "page", "panel", "menu", "props", "modifier", "tab", "text", "inputs", "camera", "url"];
 function effects(a, b) {
   const out = [];
   if (a.core.rev !== b.core.rev) out.push("model");
-  for (const q of ["state", "actions", "measure", "visibility", "open_views", "history"]) if (q !== "state" || a.core.rev === b.core.rev) if (a.core[q] !== b.core[q]) out.push(q === "state" ? "state" : q);
+  for (const q of ["state", "actions", "measure", "visibility", "open_views", "history", "settings"]) if (q !== "state" || a.core.rev === b.core.rev) if (a.core[q] !== b.core[q]) out.push(q === "state" ? "state" : q);
+  if (b.ev.tabs > a.ev.tabs) out.push("new tab");
   for (const k of DIFF_KEYS) if (a.dom[k] !== b.dom[k]) out.push(k);
   if (b.ev.ch > a.ev.ch) out.push("file chooser");
   if (b.ev.dl > a.ev.dl) out.push("download");
@@ -568,7 +574,9 @@ function bindingOf(surface, e) {
   const fm = /^file-menu-(.+)$/.exec(e.bb);
   if (fm) return `action ${fm[1]}`;
   if (surface.kind === "key") return surface.binding;
-  const a = ACTIONS.find((x) => x.label === e.label || x.label.replace(/…$/, "") === e.label.replace(/…$/, ""));
+  const a = ACTIONS.find((x) => x.label === e.label || x.label.replace(/…$/, "") === e.label.replace(/…$/, ""))
+    // a palette row: "<label> <tab> <shortcut>" (the longest label that starts it)
+    ?? (e.bb === "palette-item" ? ACTIONS.filter((x) => e.label.startsWith(`${x.label} `)).sort((p, q) => q.label.length - p.label.length)[0] : undefined);
   return a ? `action ${a.name}` : "";
 }
 
@@ -601,9 +609,11 @@ async function enumerateBase() {
 function opened(a, b) {
   const out = [];
   if (b.dom.dialog && b.dom.dialog !== a.dom.dialog) out.push({ roots: [".bb-backdrop"], what: "dialog", sig: `dialog:${b.dom.dialog.split(":")[0]}` });
-  if (b.dom.page && b.dom.shell !== a.dom.shell) out.push({ roots: ['[data-bb="page"]', '[data-bb="properties"]'], what: "page", sig: `page:${b.dom.shell}` });
+  if (b.dom.page && (b.dom.shell !== a.dom.shell || b.dom.pageName !== a.dom.pageName)) out.push({ roots: ['[data-bb="page"]', '[data-bb="properties"]'], what: "page", sig: `page:${b.dom.pageName}` });
   if (b.dom.panel && b.dom.panel !== a.dom.panel) out.push({ roots: ['[data-bb="right-panel"]'], what: "panel", sig: `panel:${b.dom.panel.split(":")[0]}` });
   if (b.dom.menu && !a.dom.menu && !b.dom.dialog) out.push({ roots: ['[role="menu"]'], what: "menu", sig: `menu:${b.dom.menu.split(":")[0]}` });
+  // a tab with its own left panel (Setting out: the survey point's fields)
+  if (b.dom.tab !== a.dom.tab && b.dom.props !== a.dom.props && b.dom.props) out.push({ roots: ['[data-bb="properties"]'], what: "side", sig: `side:${b.dom.tab}` });
   return out;
 }
 
@@ -750,10 +760,10 @@ async function exploreControl(surface, depth, list, e, dirty) {
     }
     if (e.disabled) { const a = ACTIONS.find((x) => `action ${x.name}` === rec.binding); rec.note = [rec.note, a ? `core: action ${a.name} enabled=${a.enabled}` : "core: no action"].filter(Boolean).join("; "); }
     if (rec.verdict === "dead" && rec.calls) rec.note = [rec.note, `${rec.calls} core call(s), nothing changed`].filter(Boolean).join("; ");
-    if (rec.verdict === "works" && depth < 1 && surface.kind !== "keys" && surface.kind !== "canvas") {
+    if (rec.verdict === "works" && depth < 2 && surface.kind !== "keys" && surface.kind !== "canvas") {
       for (const o of opened(before, after)) {
         const steps = [...surface.steps, { click: { roots: surface.roots, i: e.i, label: e.label } }];
-        addSurface({ sig: o.sig, where: `${o.what === "page" ? "Page" : o.what === "dialog" ? "Dialog" : o.what === "panel" ? "Right panel" : "Menu"} ${e.label} (from ${surface.where})`, roots: o.roots, steps, depth: depth + 1,
+        addSurface({ sig: o.sig, where: `${o.what === "page" ? "Page" : o.what === "dialog" ? "Dialog" : o.what === "panel" ? "Right panel" : o.what === "side" ? "Left panel of the tab" : "Menu"} ${e.label} (from ${surface.where})`, roots: o.roots, steps, depth: depth + 1,
           skipLabels: o.what === "page" ? new Set(list.map((x) => `${x.bb}|${x.label}`)) : undefined });
       }
     }
@@ -783,6 +793,7 @@ const median = (a) => { const s = a.filter((x) => Number.isFinite(x)).sort((p, q
 
 // ---- Measure, profiled ----
 async function measureStudy() {
+  const load = loadNow();
   await fresh();
   await arm();
   await key("m");
@@ -826,7 +837,7 @@ async function measureStudy() {
   } catch (x) { profile = [{ fn: `profiler: ${x.message}`, ms: 0, share: 0 }]; }
   let count = null;
   try { count = JSON.parse((await core("query", "storeys")) ?? "[]").reduce((a, x) => a + (x.element_count ?? 0), 0); } catch { /* unknown */ }
-  return { on, tris, count, moves, clicks, profile };
+  return { on, tris, count, moves, clicks, profile, load, loadAfter: loadNow() };
 }
 
 // ---- the report ----
@@ -837,8 +848,8 @@ function writeReport(R) {
   const L = [];
   L.push("# The lab's controls: what works, and how fast (ticket UXMAP)", "",
     "Generated by `node ccore/tools/ux.mjs`. Do not edit by hand. The study: `docs/research/ux-map.md`; the goal: ADR 0074.", "",
-    "**What this report supports.** Each control the lab shows (enumerated from the page: ribbon tabs and tools, title row, tabs, left panel, view tabs, viewport buttons, status bar, the selection's panels, the right-click menu, the key table, and every dialog, page and right panel a control opens, one level deep) was activated with real input on a freshly loaded page, and its verdict says what changed: the core's state (rev, actions, measure, visibility, open views, history), the shell, a dialog, page or panel, the page's text, the camera, a file chooser or a download. A tool counts as working only when its gesture gives its result.", "",
-    "**What it does not support.** That a working control does the *right* thing (only that something observable happened); controls two levels deep (inside a dialog opened from a page); text fields and selects (not typed into); the small-screen layout; French; any machine but this one. A response time is headless Chromium with SwiftShader (CPU rasterization): a GPU would draw faster.", "",
+    "**What this report supports.** Each control the lab shows (enumerated from the page: ribbon tabs and tools, title row, tabs, left panel, view tabs, viewport buttons, status bar, the selection's panels, the right-click menu, the key table, and every dialog, page and right panel a control opens, two levels deep) was activated with real input on a freshly loaded page, and its verdict says what changed: the core's state (the undo list, actions, measure, visibility, open views, history), the shell, a dialog, page or panel, the page's text, the camera, a file chooser or a download. A tool counts as working only when its gesture gives its result.", "",
+    "**What it does not support.** That a working control does the *right* thing (only that something observable happened); controls three levels deep (inside a dialog opened from a page opened from a menu); text fields and selects (not typed into); the small-screen layout; French; any machine but this one. A response time is headless Chromium with SwiftShader (CPU rasterization): a GPU would draw faster.", "",
     "**Response** (ADR 0074): from the input event (the page's pointerdown / keydown / wheel timeStamp) to the end of the animation-frame callbacks of the first frame that holds the last effect (the last DOM change, WebGL draw or core call, followed by 300 ms with none); the frame is then handed to the compositor. Median of the repetitions, each on a freshly loaded page (and a freshly started host). Over 200 ms: **bold** ⚠.", "");
   L.push(`- Commit: \`${R.commit}\`${R.dirty ? " (with uncommitted changes)" : ""}; run ${R.date}; ${R.runS} s.`,
     `- Machine: ${R.machine}; load at start \`${R.load0}\`, before the timings \`${R.loadT ?? "-"}\`.${R.numbersNote ? ` ${R.numbersNote}` : ""}`,
@@ -874,7 +885,7 @@ function writeReport(R) {
   // works + timings
   const works = C.filter((c) => c.verdict === "works");
   const cols = R.timingCols;
-  L.push(`## Works (${works.length}) and response times`, "");
+  L.push(`## Works (${works.length}) and response times`, "", "One control per binding is timed (the palette, the keys and the ribbon often run the same action: the others show its number). On the large model only the ribbon, the keys, the viewport and the title row are timed (a page load takes seconds there); \"–\": not timed.", "");
   if (R.numbersNote && !cols.length) L.push(R.numbersNote, "");
   L.push(`| Where | Control | Bound to | Effect | ${cols.map((c) => `ms ${c}`).join(" | ")} |`, `|---|---|---|---|${cols.map(() => "---:").join("|")}|`);
   for (const c of works) {
@@ -894,6 +905,7 @@ function writeReport(R) {
     const callMs = (xs) => { const t = new Map(); for (const s of xs) for (const [n, ms] of s.calls) t.set(n, [(t.get(n)?.[0] ?? 0) + 1, (t.get(n)?.[1] ?? 0) + ms]); return [...t.entries()].map(([n, [k, ms]]) => `${n} ×${(k / xs.length).toFixed(1)} ${(ms / xs.length).toFixed(1)} ms`).join(", "); };
     const named = { small: "small (golden/frame.json)", large: `large (bench/large_model.py ${LARGE_N})`, heavy: `heavy (bench/mesh_heavy_model.py ${HEAVY} ${HEAVY_TRIS})`, local: "a local model (not committed)" }[m.model] ?? m.model;
     L.push(`### ${m.build}, ${named}: ${m.count ?? "?"} elements, ${m.tris} triangles drawn, tool on: ${m.on}`, "",
+      `- Load (/proc/loadavg) before / after: \`${m.load ?? "?"}\` / \`${m.loadAfter ?? "?"}\`${Number(String(m.load).split(" ")[0]) > 4 ? " (above 4: the numbers are indicative, the shares of the profile hold)" : ""}.`,
       `- Pointer move → frame: median ${fmt(median(mv))} ms, max ${fmt(Math.max(...mv.filter(Number.isFinite)))} ms (${mv.length} moves); frames drawn per move: median ${median(m.moves.map((x) => x.frames))}.`,
       `- Click → frame: ${cl.map(fmt).join(", ")} ms.`,
       m.build === "wasm" ? `- Core calls per move (mean count and ms): ${callMs(m.moves) || "none"}.` : `- Requests to the host per move: median ${median(m.moves.map((x) => x.requests))}.`,
@@ -919,7 +931,7 @@ async function main() {
   // for a build it has), its Measure rows and times kept where this run has none: verdicts, the
   // Measure study and the timings can be run one at a time (one browser, a load that changes).
   const M = opt("--merge") ? JSON.parse(readFileSync(resolve(opt("--merge")), "utf8")) : null;
-  const passes = M ? [...M.passes] : [];
+  const passes = M && !flag("--fresh-verdicts") ? [...M.passes] : []; // --fresh-verdicts: new verdicts, the merged times and Measure
   const times = M ? { ...(M.times ?? {}) } : {};
   const timingCols = M ? [...(M.timingCols ?? [])] : [];
   const measure = [];
@@ -956,8 +968,11 @@ async function main() {
         const col = `${model} ${build}`;
         if (!timingCols.includes(col)) timingCols.push(col);
         times[col] = {};
-        log(`timing ${col}: ${todo.length} controls × ${REPS}`);
-        for (const c of todo) {
+        // the large model: the ribbon, the keys, the viewport and the title row only (a page load is
+        // seconds there: every control would take an hour); --large-all for all of them
+        const set = model === "small" || flag("--large-all") ? todo : todo.filter((c) => /^(Ribbon|Keys|Viewport|Title row)/.test(c.where));
+        log(`timing ${col}: ${set.length} controls × ${REPS}`);
+        for (const c of set) {
           const k = `${c.where}|${c.label}|${c.i}`;
           const reps = model === "small" ? Math.max(0, REPS - (c.ms?.length ?? 0)) : REPS;
           const r = await timeControl(c, reps);
