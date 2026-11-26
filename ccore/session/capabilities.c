@@ -27,7 +27,7 @@ static const struct {
     {"georef", YES},           /* query north, coordinates (ADR 0045); G2's setting-out panel */
     {"grids", YES},            /* query grids, grid_axes (S1); G2 */
     {"history", YES},          /* query history: the undo list (calls.rs:346) */
-    {"history_write", NATIVE}, /* H2a: action commit, branch_create, branch_switch (versions.h) */
+    {"history_write", NATIVE}, /* H2a: action commit, branch_create, branch_switch; H2b: merge (versions.h) */
     {"lca", NO},
     {"levels", YES},           /* query storeys; G2 */
     {"materials", YES},        /* the materials browser (MAT1): query materials_page, verbs material_* */

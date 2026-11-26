@@ -621,6 +621,7 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "recent_remove")) return 1; /* FS1 */
     /* ---- H2a: the history store's writes answer their own refusals (versions.h) ---- */
     if (!strcmp(name, "commit") || !strcmp(name, "branch_create") || !strcmp(name, "branch_switch")) return 1;
+    if (!strcmp(name, "merge")) return 1; /* H2b */
     /* ---- SET1: ribbon.rs:591 `Settings | About | Home => true`; set_settings, settings_load (settings.h) ---- */
     if (!strcmp(name, "settings") || !strcmp(name, "about")) return 1; /* the viewer-only build too (its actions are the editor's) */
     if (!strcmp(name, "set_settings") || !strcmp(name, "settings_load")) return 1;
@@ -1830,7 +1831,7 @@ static int new_sheet_action(cc_session *s, cc_buf *out) {
 
 /* Actions the C core runs that the ribbon does not list (above). */
 static const char *const HIDDEN_ACTIONS[] = {"save_as", "close", "recent_remove" /* FS1 */, "set_settings", "settings_load" /* SET1 */,
-                                             "commit", "branch_create", "branch_switch" /* H2a */};
+                                             "commit", "branch_create", "branch_switch" /* H2a */, "merge" /* H2b */};
 
 /* calls.rs:538-547 call_action, ribbon.rs:650 run_action. */
 static int call_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {

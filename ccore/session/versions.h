@@ -47,6 +47,23 @@ int cc_versions_query(cc_session *s, const char *name, const char *body, size_t 
  * Each: 400 without a file system (NO_BROWSER), without an editable model, for a model with no
  * file yet. The queries above follow (pending is cached per file, HEAD and rev).
  * cc_versions_free: the session's pending cache (cc_session_free). */
+/* ---- H2b ----
+ *   action merge {name, prefer?: "ours"|"theirs"}
+ *                                 Repo::merge of branch (or revision) `name` into HEAD
+ *                                 (lib.rs:2015-2033), author as commit's, message "Merge <name>".
+ *                                 Refused onto the current branch ("merge: <name> is the current
+ *                                 branch") and while changes are not committed ("uncommitted
+ *                                 changes: commit them first": Rust disables Merge). 200
+ *                                 {"merged": "up_to_date"|"fast_forward"|"commit", "commit": hash,
+ *                                 "conflicts": [...]} (a fast-forward or a merge commit is written
+ *                                 to the file and opened again, as after a switch); without
+ *                                 `prefer` and with conflicts nothing is merged: 200 {"merged":
+ *                                 "conflicts", "conflicts": [{"kind", "id"|null, "name", "text"}]}
+ *                                 (text: Rust's Display); the page offers keep mine (prefer ours)
+ *                                 and take theirs (prefer theirs), which merge again. 400 with
+ *                                 Rust's text ("the merged model is invalid: …", "unknown
+ *                                 revision …").
+ * ---- end H2b ---- */
 int cc_versions_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out);
 void cc_versions_free(cc_session *s);
 /* ---- end H2a ---- */

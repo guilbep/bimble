@@ -6,6 +6,7 @@
 #include "json_w.h"
 #include "repo.h"
 #include "repo_write.h" /* H2a */
+#include "repo_merge.h" /* H2b */
 #include <stdlib.h>
 #include "file.h"
 #include "settings.h"
@@ -25,7 +26,9 @@ int cc_versions_query(cc_session *s, const char *name, const char *body, size_t 
 }
 int cc_versions_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
     (void)s, (void)body, (void)n;
-    if (strcmp(name, "commit") && strcmp(name, "branch_create") && strcmp(name, "branch_switch")) return -1;
+    if (strcmp(name, "commit") && strcmp(name, "branch_create") && strcmp(name, "branch_switch") &&
+        strcmp(name, "merge") /* H2b */)
+        return -1;
     buf_clear(out);
     buf_puts(out, NO_BROWSER);
     return CC_ERR;
@@ -578,8 +581,128 @@ done:
     return rc;
 }
 
+/* ---- H2b: merge {name, prefer?} (lib.rs:2015-2033, the panel's Merge) ---- */
+
+/* The conflicts as the page lists them: [{"kind", "id" (or null), "name", "text"}]. */
+static void conflicts_json(JsonW *w, const cc_conflicts *cf) {
+    jw_key(w, "conflicts");
+    jw_arr_begin(w);
+    Buf t;
+    buf_init(&t);
+    for (size_t i = 0; i < cf->n; i++) {
+        const cc_conflict *c = &cf->v[i];
+        jw_obj_begin(w);
+        jw_key(w, "kind");
+        jw_str(w, c->kind);
+        jw_key(w, "id");
+        if (c->has_id) jw_str(w, c->id);
+        else
+            jw_null(w);
+        jw_key(w, "name");
+        jw_str(w, c->name);
+        jw_key(w, "text");
+        buf_clear(&t);
+        cc_conflict_display(c, &t);
+        jw_str_n(w, t.p ? t.p : "", t.len);
+        jw_obj_end(w);
+    }
+    buf_free(&t);
+    jw_arr_end(w);
+}
+
+static int a_merge(cc_session *s, const JrVal *v, cc_buf *out) {
+    int bad = 0;
+    const char *name = str_arg(v, "name", NULL, &bad);
+    const char *pv = str_arg(v, "prefer", NULL, &bad);
+    cc_prefer prefer = CC_PREFER_NEITHER;
+    if (pv && !strcmp(pv, "ours")) prefer = CC_PREFER_OURS;
+    else if (pv && !strcmp(pv, "theirs"))
+        prefer = CC_PREFER_THEIRS;
+    else if (pv && strcmp(pv, "neither"))
+        bad = 1;
+    if (bad || !name || !*name)
+        return refuse(out, "merge: {name: the branch (or revision) to merge into the current one, prefer?: "
+                           "\"ours\" | \"theirs\"}");
+    cc_repo r;
+    int answer;
+    if (open_repo(s, &r, out, &answer)) return answer == CC_OK ? refuse(out, "no history yet: commit a first version") : answer;
+    Buf e, author;
+    buf_init(&e), buf_init(&author);
+    cc_model m;
+    cc_model_init(&m);
+    cc_conflicts cf;
+    cc_conflicts_init(&cf);
+    int rc = CC_ERR;
+    cc_repo_head_t hd;
+    if (cc_repo_head(&r, &hd, &e)) {
+        fail(out, &e);
+        goto done;
+    }
+    /* Rust offers Merge on the other branches only. */
+    if (!hd.detached && !strcmp(hd.branch, name)) {
+        buf_clear(out), buf_puts(out, "merge: "), buf_puts(out, name), buf_puts(out, " is the current branch");
+        goto done;
+    }
+    if (author_of(s, &author)) {
+        refuse(out, "merge: set your name in Settings first (the author of the merge)");
+        goto done;
+    }
+    /* lib.rs:2016: Merge is disabled while changes are not committed. */
+    {
+        cc_changes c;
+        cc_changes_init(&c);
+        int st = cc_repo_status(&r, &s->model, &c, &e);
+        size_t n = c.n;
+        cc_changes_free(&c);
+        if (st) {
+            fail(out, &e);
+            goto done;
+        }
+        if (n) {
+            refuse(out, "uncommitted changes: commit them first");
+            goto done;
+        }
+    }
+    int how = 0;
+    cc_hash h;
+    int64_t now = s->pf->unix_s ? s->pf->unix_s(s->pf->ctx) : 0;
+    if (cc_repo_merge(&r, name, prefer, buf_cstr(&author), now, NULL, &how, &h, &m, &cf, &e)) {
+        fail(out, &e);
+        goto done;
+    }
+    /* lib.rs:2077-2092: the merged model (or the one fast-forwarded to) becomes the working file. */
+    if (how == CC_MERGED_FAST_FORWARD || how == CC_MERGED_COMMIT) {
+        if (follow(s, &m, out) != CC_OK) goto done;
+    }
+    buf_clear(out);
+    JsonW w;
+    jw_init(&w, out, 0);
+    jw_obj_begin(&w);
+    jw_key(&w, "merged");
+    jw_str(&w, how == CC_MERGED_UP_TO_DATE    ? "up_to_date"
+               : how == CC_MERGED_FAST_FORWARD ? "fast_forward"
+               : how == CC_MERGED_COMMIT       ? "commit"
+                                               : "conflicts");
+    if (how != CC_MERGED_CONFLICTS) {
+        jw_key(&w, "commit");
+        jw_str(&w, h.h);
+    }
+    conflicts_json(&w, &cf);
+    jw_obj_end(&w);
+    rc = jw_finish(&w) == JW_OK ? CC_OK : CC_ERR;
+done:
+    cc_conflicts_free(&cf);
+    cc_model_free(&m);
+    buf_free(&e), buf_free(&author);
+    cc_repo_close(&r);
+    return rc;
+}
+/* ---- end H2b ---- */
+
 int cc_versions_action(cc_session *s, const char *name, const char *body, size_t n, cc_buf *out) {
-    int which = !strcmp(name, "commit") ? 1 : !strcmp(name, "branch_create") ? 2 : !strcmp(name, "branch_switch") ? 3 : 0;
+    int which = !strcmp(name, "commit") ? 1 : !strcmp(name, "branch_create") ? 2 : !strcmp(name, "branch_switch") ? 3
+                : !strcmp(name, "merge")                                                                          ? 4 /* H2b */
+                                                                                                                  : 0;
     if (!which) return -1;
     if (!s->pf->files) return refuse(out, NO_BROWSER);
     if (!s->open) return refuse(out, s->view ? "this file is read only: import it to edit" : "no model open");
@@ -591,7 +714,7 @@ int cc_versions_action(cc_session *s, const char *name, const char *body, size_t
     int rc;
     if (n && !v) rc = refuse(out, "the body is not JSON");
     else
-        rc = which == 1 ? a_commit(s, v, out) : a_branch(s, which == 2, v, out);
+        rc = which == 1 ? a_commit(s, v, out) : which == 4 ? a_merge(s, v, out) : a_branch(s, which == 2, v, out);
     arena_free(&a);
     return rc;
 }

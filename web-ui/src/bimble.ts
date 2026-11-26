@@ -1067,6 +1067,9 @@ export const fileRoutes: { run?: (name: string) => boolean } = {};
 /** An action with a JSON body (`{path, discard}`): throws the error text. */
 export function actionBody(name: string, body: unknown): void { actionWith(name, body); }
 // ---- end FS1 ----
+// ---- H2b: an action's answer, parsed (merge: {merged, commit?, conflicts}) ----
+export function actionAnswer<T>(name: string, body: unknown): T { return JSON.parse(actionWith(name, body)) as T; }
+// ---- end H2b ----
 
 export function runAction(name: string): string | null {
   const route = screenRoutes[name];

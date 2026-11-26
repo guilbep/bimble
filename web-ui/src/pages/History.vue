@@ -11,11 +11,13 @@ export const capability = "history"; // FAKE1
 // ccore/session/versions.h). H2a: Create version (action commit, the author from the settings: without a
 // name the card sends the user to Settings), New variant (branch_create) and the branch switch
 // (branch_switch, refused while changes are not in a version, as Rust's Switch) where the core says
-// history_write (natively). Merging and compare are tickets H2b and later: drawn as the reference,
+// history_write (natively). H2b: Merge (action merge: pick the variant to merge into the current one;
+// conflicts listed as Rust lists them, up to 8, with keep mine / take theirs, which merge again with
+// prefer); merge versions show their two parents. Compare is a later ticket: drawn as the reference,
 // disabled, data-missing. Without a history (the Rust viewer, the browser, a model with no history
 // folder) the page says why; the first version starts one.
 import { computed, onMounted, ref, watch } from "vue";
-import { actionBody, loadRepoHistory, repoHistory, state, versionChanges, type VersionChange } from "../bimble";
+import { actionAnswer, actionBody, loadRepoHistory, repoHistory, state, versionChanges, type VersionChange } from "../bimble";
 import { t } from "../i18n";
 import { act, send } from "../shell/send";
 import { useCapability } from "../shell/capability";
@@ -91,6 +93,39 @@ function switchTo(name: string): void {
   loadRepoHistory();
 }
 // ---- end H2a ----
+// ---- H2b: merge a variant into the current one (lib.rs:2015-2033) ----
+interface MergeConflict { kind: string; id: string | null; name: string; text: string }
+interface MergeAnswer { merged: "up_to_date" | "fast_forward" | "commit" | "conflicts"; commit?: string; conflicts: MergeConflict[] }
+const mergeChoices = computed(() => branches.value.map((b) => b.name).filter((n) => n !== head.value?.branch));
+const mergeFrom = ref("");
+watch(mergeChoices, (c) => { if (!c.includes(mergeFrom.value)) mergeFrom.value = c[0] ?? ""; }, { immediate: true });
+/** Rust disables Merge while changes are not committed; the merge commit needs an author. */
+const canMerge = computed(() => canWrite.value && !!head.value?.commit && mergeFrom.value !== "" &&
+  author.value !== null && (pending.value?.length ?? 1) === 0);
+const mergeNote = ref<string | null>(null);
+const mergeError = ref<string | null>(null);
+const conflicts = ref<MergeConflict[] | null>(null);
+const conflictsFrom = ref("");
+/** Shown as Rust shows them: the first 8, then how many more. */
+const MAX_CONFLICTS = 8;
+function merge(prefer?: "ours" | "theirs"): void {
+  const name = prefer ? conflictsFrom.value : mergeFrom.value;
+  mergeNote.value = null;
+  mergeError.value = null;
+  try {
+    const a = actionAnswer<MergeAnswer>("merge", prefer ? { name, prefer } : { name });
+    if (a.merged === "conflicts") {
+      conflicts.value = a.conflicts;
+      conflictsFrom.value = name;
+    } else {
+      conflicts.value = null;
+      const key = a.merged === "up_to_date" ? "history.upToDate" : a.merged === "fast_forward" ? "history.fastForward" : "history.merged";
+      mergeNote.value = t(key, { variant: name, hash: short(a.commit ?? "") });
+    }
+  } catch (e) { mergeError.value = e instanceof Error ? e.message : String(e); }
+  loadRepoHistory();
+}
+// ---- end H2b ----
 const when = (s: number) => new Date(s * 1000).toISOString().slice(0, 16).replace("T", " ");
 const short = (h: string) => h.slice(0, 12);
 </script>
@@ -126,7 +161,7 @@ const short = (h: string) => h.slice(0, 12);
         <button v-for="v in versions" :key="v.hash" type="button" class="ver" :class="{ on: v.hash === selected }" :aria-pressed="v.hash === selected" @click="selected = v.hash">
           <span class="mono">{{ short(v.hash) }}</span>
           <span class="msg">{{ v.message }}</span>
-          <span class="who">{{ v.author }} · {{ when(v.time) }}</span>
+          <span class="who">{{ v.author }} · {{ when(v.time) }}<!-- H2b: Rust's "[merge]", with the two parents --><span v-if="v.parents.length > 1" class="mono" data-bb="history-merge-row"> · [{{ t('history.mergeRow') }}] {{ v.parents.map(short).join(' + ') }}</span></span>
         </button>
       </div>
       <div class="card" data-bb="history-new-version">
@@ -160,9 +195,30 @@ const short = (h: string) => h.slice(0, 12);
         <button class="btn s" type="button" disabled data-missing="verb: compare two versions in 3D" data-bb="history-compare">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="7" height="14" /><rect x="14" y="5" width="7" height="14" /><path d="M10 12h4" /></svg>{{ t('history.compare3d') }}
         </button>
-        <button class="btn s" type="button" disabled data-missing="verb: merge a variant" data-bb="history-merge">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="8" r="2" /><path d="M6 7v10M18 10c0 5-12 3-12 7" /></svg>{{ t('history.merge', { variant: '—' }) }}
+        <!-- H2b: the variant to merge into the current one (action merge); disabled while changes are not in a version (Rust's Merge). -->
+        <label class="sel-inp" :class="{ off: !canWrite || !mergeChoices.length }" style="width:150px" data-bb="history-merge-pick">
+          <select v-model="mergeFrom" class="sel" :aria-label="t('history.mergeFrom')" :disabled="!canWrite || !mergeChoices.length" data-bb="history-merge-from">
+            <option v-if="!mergeChoices.length" value="">—</option>
+            <option v-for="b in mergeChoices" :key="b" :value="b">{{ b }}</option>
+          </select>
+        </label>
+        <button class="btn s" type="button" :disabled="!canMerge" :title="canMerge ? '' : t('history.switchHint')" data-bb="history-merge" @click="merge()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="8" r="2" /><path d="M6 7v10M18 10c0 5-12 3-12 7" /></svg>{{ t('history.merge', { variant: mergeFrom || '—' }) }}
         </button>
+      </div>
+      <p v-if="mergeNote" class="note" style="margin:0" role="status" data-bb="history-merge-note">{{ mergeNote }}</p>
+      <p v-if="mergeError" class="error" role="alert" data-bb="history-merge-error">{{ mergeError }}</p>
+      <!-- H2b: the conflicts (lib.rs:2024-2031: up to 8 listed), nothing merged; keep mine / take theirs merge again with prefer. -->
+      <div v-if="conflicts" class="card" role="alert" data-bb="history-conflicts">
+        <div class="eyebrow">{{ t('history.conflicts', { n: conflicts.length }) }}</div>
+        <ul class="cl">
+          <li v-for="(c, i) in conflicts.slice(0, MAX_CONFLICTS)" :key="i" class="mono" data-bb="history-conflict">{{ c.text }}</li>
+        </ul>
+        <p v-if="conflicts.length > MAX_CONFLICTS" class="note" style="margin:0" data-bb="history-conflicts-more">{{ t('history.andMore', { n: conflicts.length - MAX_CONFLICTS }) }}</p>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="btn s" type="button" :disabled="!canWrite" data-bb="history-keep-mine" @click="merge('ours')">{{ t('history.keepMine') }}</button>
+          <button class="btn p" type="button" :disabled="!canWrite" data-bb="history-take-theirs" @click="merge('theirs')">{{ t('history.takeTheirs') }}</button>
+        </div>
       </div>
     </section>
   </div>
@@ -208,6 +264,8 @@ h2 { font-family: 'Sora', sans-serif; margin: 0; }
 .sel { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; color: var(--bb-ink); }
 .sel:focus-visible { outline: var(--bb-focus); outline-offset: 2px; }
 .newb { display: flex; gap: 10px; align-items: center; }
+/* H2b: the conflict list */
+.cl { margin: 0; padding-left: 18px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
 /* table.t ... */
 table.t { border-collapse: collapse; width: 100%; font-size: 13.5px; }
 table.t th { text-align: left; font-weight: 600; color: var(--bb-stone); border-bottom: 1px solid var(--bb-stone); padding: 6px 8px; white-space: nowrap; font-size: 13px; }
