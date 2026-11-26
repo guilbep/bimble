@@ -1,0 +1,104 @@
+cmd {"op":"add_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"S235","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":210000.0,"strength_mpa":235.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+describe add the material S235
+ok {"op":"remove_material","id":"2kcZmK9IBJhJsJJqHH4PMM"}
+undo delete the material S235
+cmd {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"Steel S235 JR","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":210000.0,"strength_mpa":235.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+describe rename the material S235 to Steel S235 JR
+ok {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"S235","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":210000.0,"strength_mpa":235.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+undo rename the material Steel S235 JR to S235
+cmd {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":" c30/37 ","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":210000.0,"strength_mpa":235.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+describe rename the material Steel S235 JR to  c30/37 
+err invalid: there is already a material named "c30/37"
+undo -
+cmd {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"   ","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":210000.0,"strength_mpa":235.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+describe rename the material Steel S235 JR to    
+err invalid: a material needs a name (at most 200 characters)
+undo -
+cmd {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":210000.0,"strength_mpa":235.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+describe rename the material Steel S235 JR to ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé
+err invalid: a material needs a name (at most 200 characters)
+undo -
+cmd {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":210000.0,"strength_mpa":235.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+describe rename the material Steel S235 JR to éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé
+ok {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"Steel S235 JR","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":210000.0,"strength_mpa":235.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+undo rename the material éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé to Steel S235 JR
+cmd {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"S235","category":"steel","props":{"density_kg_m3":-1.0,"e_mpa":210000.0,"strength_mpa":235.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+describe rename the material éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé to S235
+err invalid: material density: a positive number up to 30000
+undo -
+cmd {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"S235","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":2000000.0,"strength_mpa":235.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+describe rename the material éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé to S235
+err invalid: material modulus: a positive number up to 1000000
+undo -
+cmd {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"S235","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":210000.0,"strength_mpa":10000.5,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+describe rename the material éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé to S235
+err invalid: material strength: a positive number up to 10000
+undo -
+cmd {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"S235","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":210000.0,"strength_mpa":235.0,"source":"sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"}}
+describe rename the material éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé to S235
+err invalid: material source: at most 200 characters
+undo -
+cmd {"op":"set_material","id":"0000000000000000000000","name":"S235","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":210000.0,"strength_mpa":235.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+describe change the material S235
+err no such object: 0000000000000000000000
+undo -
+cmd {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"Épicéa \"C24\" \\ local","category":"timber","props":{"density_kg_m3":480.0,"strength_mpa":30.25,"source":"EN 338 (changed)"}}
+describe rename the material éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé to Épicéa "C24" \ local
+ok {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé","category":"steel","props":{"density_kg_m3":7850.0,"e_mpa":210000.0,"strength_mpa":235.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+undo rename the material Épicéa "C24" \ local to éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé
+cmd {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"Épicéa \"C24\" \\ local","category":"timber"}
+describe change the material Épicéa "C24" \ local
+ok {"op":"set_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"Épicéa \"C24\" \\ local","category":"timber","props":{"density_kg_m3":480.0,"strength_mpa":30.25,"source":"EN 338 (changed)"}}
+undo change the material Épicéa "C24" \ local
+cmd {"op":"set_element_material","id":"0uTOdmIsz6iAjMnb$AZIG3","material":"2kcZmK9IBJhJsJJqHH4PMM"}
+describe set the material of C1 to Épicéa "C24" \ local
+ok {"op":"set_element_material","id":"0uTOdmIsz6iAjMnb$AZIG3","material":"1mkwj1Nm95IQysWJ$GMN4N"}
+undo set the material of C1 to C30/37
+cmd {"op":"remove_material","id":"2kcZmK9IBJhJsJJqHH4PMM"}
+describe delete the material Épicéa "C24" \ local
+err 2kcZmK9IBJhJsJJqHH4PMM is still used by elements
+undo -
+cmd {"op":"set_element_material","id":"0uTOdmIsz6iAjMnb$AZIG3","material":"1mkwj1Nm95IQysWJ$GMN4N"}
+describe set the material of C1 to C30/37
+ok {"op":"set_element_material","id":"0uTOdmIsz6iAjMnb$AZIG3","material":"2kcZmK9IBJhJsJJqHH4PMM"}
+undo set the material of C1 to Épicéa "C24" \ local
+cmd {"op":"set_element_material","id":"0uTOdmIsz6iAjMnb$AZIG3","material":"0000000000000000000000"}
+describe set the material of C1 to 
+err no such object: 0000000000000000000000
+undo -
+cmd {"op":"remove_material","id":"2kcZmK9IBJhJsJJqHH4PMM"}
+describe delete the material Épicéa "C24" \ local
+ok {"op":"add_material","id":"2kcZmK9IBJhJsJJqHH4PMM","name":"Épicéa \"C24\" \\ local","category":"timber"}
+undo add the material Épicéa "C24" \ local
+cmd {"op":"remove_material","id":"2kcZmK9IBJhJsJJqHH4PMM"}
+describe delete the material 
+err no such object: 2kcZmK9IBJhJsJJqHH4PMM
+undo -
+cmd {"op":"add_material","id":"1GL128$P1Z2STuaTPLGVgS","name":"c30/37","category":"concrete","props":{"density_kg_m3":2500.0,"e_mpa":33000.0,"strength_mpa":30.0,"source":"EN 1992-1-1 Table 3.1; 25 kN/m³ reinforced (EN 1991-1-1)"}}
+describe add the material c30/37
+ok {"op":"remove_material","id":"1GL128$P1Z2STuaTPLGVgS"}
+undo delete the material c30/37
+cmd {"op":"remove_material","id":"1GL128$P1Z2STuaTPLGVgS"}
+describe delete the material c30/37
+ok {"op":"add_material","id":"1GL128$P1Z2STuaTPLGVgS","name":"c30/37","category":"concrete","props":{"density_kg_m3":2500.0,"e_mpa":33000.0,"strength_mpa":30.0,"source":"EN 1992-1-1 Table 3.1; 25 kN/m³ reinforced (EN 1991-1-1)"}}
+undo add the material c30/37
+cmd {"op":"add_material","id":"1mkwj1Nm95IQysWJ$GMN4N","name":"C30/37","category":"concrete","props":{"density_kg_m3":2500.0,"e_mpa":33000.0,"strength_mpa":30.0,"source":"EN 1992-1-1 Table 3.1; 25 kN/m³ reinforced (EN 1991-1-1)"}}
+describe add the material C30/37
+err object already exists: 1mkwj1Nm95IQysWJ$GMN4N
+undo -
+cmd {"op":"add_material","id":"3BoCCKNlhl5Q_DVSQuFWig","name":"S355","category":"steel","props":{"density_kg_m3":30000.5,"e_mpa":210000.0,"strength_mpa":355.0,"source":"EN 1993-1-1 Table 3.1 (t ≤ 40 mm)"}}
+describe add the material S355
+err invalid: material density: a positive number up to 30000
+undo -
+cmd {"op":"add_material","id":"0z9QdOp0XsgPDX4VA_KiXt","name":"Other one","category":"timber","props":{"density_kg_m3":420.0,"e_mpa":11500.0,"strength_mpa":24.0,"source":"EN 14080 (E0,g,mean, ρg,mean)"}}
+describe add the material Other one
+ok {"op":"remove_material","id":"0z9QdOp0XsgPDX4VA_KiXt"}
+undo delete the material Other one
+cmd {"op":"set_material","id":"0z9QdOp0XsgPDX4VA_KiXt","name":"  Padded  ","category":"other","props":{"density_kg_m3":420.0,"e_mpa":11500.0,"strength_mpa":24.0,"source":"EN 14080 (E0,g,mean, ρg,mean)"}}
+describe rename the material Other one to   Padded  
+ok {"op":"set_material","id":"0z9QdOp0XsgPDX4VA_KiXt","name":"Other one","category":"timber","props":{"density_kg_m3":420.0,"e_mpa":11500.0,"strength_mpa":24.0,"source":"EN 14080 (E0,g,mean, ρg,mean)"}}
+undo rename the material   Padded   to Other one
+cmd {"op":"set_material","id":"1mkwj1Nm95IQysWJ$GMN4N","name":"PADDED","category":"concrete","props":{"density_kg_m3":2500.0,"e_mpa":33000.0,"strength_mpa":30.0,"source":"EN 1992-1-1 Table 3.1; 25 kN/m³ reinforced (EN 1991-1-1)"}}
+describe rename the material C30/37 to PADDED
+err invalid: there is already a material named "PADDED"
+undo -

@@ -223,6 +223,7 @@ fn derive(dir: &Path) -> Files {
     dxf_files(dir, &mut files); // L2
     ifc_views_files(dir, &mut files); // S1
     schedule_session_files(&m, &mut files); // Q2
+    materials_files(dir, &mut files); // MAT1
     files
 }
 
@@ -3970,4 +3971,142 @@ fn schedule_session_files(frame: &Model, files: &mut Files) {
     let scene = Scene::from_model(frame);
     let csv = json!({ "csv": to_csv(&schedule(&scene, &def)) }).to_string();
     files.insert("schedule/session/csv-frame-slabs.json".into(), line(csv));
+}
+
+// ---------------------------------------------------------------- materials (ticket MAT1)
+
+/// `materials/`: the material commands (ADR 0031) on `frame2.json`, which has three materials
+/// (full, partial and library props, a name with JSON escapes). `transcript.txt` holds one
+/// record of four lines per command, in order:
+///   `cmd <command JSON>`, `describe <describe(m) before applying>`,
+///   then `ok <inverse JSON>` and `undo <inverse.describe(m) after applying>`,
+///   or `err <CommandError text>` and `undo -`.
+/// `after.json`: the model after every command (`file::to_string`); `after.ifc`: its IFC4
+/// export. The inverses applied in reverse give `frame2.json` back byte for byte (asserted).
+fn materials_files(dir: &Path, files: &mut Files) {
+    let text = std::fs::read_to_string(dir.join("frame2.json")).expect("frame2.json");
+    let mut m = file::from_str(&text).expect("frame2.json loads");
+    let mid = |s: &str| GlobalId::derived(format!("ccore mat1 {s}").as_bytes());
+    let steel_id = mid("steel");
+    let dup_id = mid("dup");
+    let lib = |n: &str| library::to_material(&library::lookup(n).unwrap());
+    let mut steel = lib("S235");
+    steel.id = steel_id;
+    let concrete = m
+        .materials
+        .values()
+        .find(|x| x.name == "C30/37")
+        .expect("C30/37")
+        .clone();
+    let column = m
+        .elements
+        .values()
+        .find(|e| e.class == IfcClass::IfcColumn)
+        .map(|e| (e.id, e.material))
+        .unwrap_or_else(|| {
+            let e = m.elements.values().next().unwrap();
+            (e.id, e.material)
+        });
+    let with = |f: &dyn Fn(&mut Material)| {
+        let mut x = steel.clone();
+        f(&mut x);
+        x
+    };
+    let mut cmds: Vec<Command> = vec![Command::AddMaterial(steel.clone())];
+    cmds.push(Command::SetMaterial(with(&|x| x.name = "Steel S235 JR".into())));
+    cmds.push(Command::SetMaterial(with(&|x| x.name = " c30/37 ".into())));
+    cmds.push(Command::SetMaterial(with(&|x| x.name = "   ".into())));
+    cmds.push(Command::SetMaterial(with(&|x| x.name = "é".repeat(201))));
+    cmds.push(Command::SetMaterial(with(&|x| x.name = "é".repeat(200))));
+    cmds.push(Command::SetMaterial(with(&|x| {
+        x.props.density_kg_m3 = Some(-1.0)
+    })));
+    cmds.push(Command::SetMaterial(with(&|x| x.props.e_mpa = Some(2e6))));
+    cmds.push(Command::SetMaterial(with(&|x| {
+        x.props.strength_mpa = Some(10_000.5)
+    })));
+    cmds.push(Command::SetMaterial(with(&|x| x.props.source = "s".repeat(201))));
+    cmds.push(Command::SetMaterial(with(&|x| x.id = GlobalId::from_u128(0))));
+    cmds.push(Command::SetMaterial(with(&|x| {
+        x.name = "Épicéa \"C24\" \\ local".into();
+        x.category = MaterialCategory::Timber;
+        x.props = MaterialProps {
+            density_kg_m3: Some(480.0),
+            e_mpa: None,
+            strength_mpa: Some(30.25),
+            source: "EN 338 (changed)".into(),
+        };
+    })));
+    cmds.push(Command::SetMaterial(with(&|x| {
+        x.name = "Épicéa \"C24\" \\ local".into();
+        x.category = MaterialCategory::Timber;
+        x.props = MaterialProps::default();
+    })));
+    cmds.push(Command::SetElementMaterial {
+        id: column.0,
+        material: steel_id,
+    });
+    cmds.push(Command::RemoveMaterial { id: steel_id });
+    cmds.push(Command::SetElementMaterial {
+        id: column.0,
+        material: column.1,
+    });
+    cmds.push(Command::SetElementMaterial {
+        id: column.0,
+        material: GlobalId::from_u128(0),
+    });
+    cmds.push(Command::RemoveMaterial { id: steel_id });
+    cmds.push(Command::RemoveMaterial { id: steel_id });
+    let mut dup = lib("C30/37");
+    dup.id = dup_id;
+    dup.name = "c30/37".into();
+    // AddMaterial does not check the name (only SetMaterial does): a second "c30/37" is added.
+    cmds.push(Command::AddMaterial(dup.clone()));
+    cmds.push(Command::RemoveMaterial { id: dup_id });
+    cmds.push(Command::AddMaterial(concrete.clone()));
+    let mut bad = lib("S355");
+    bad.id = mid("bad");
+    bad.props.density_kg_m3 = Some(30_000.5);
+    cmds.push(Command::AddMaterial(bad));
+    let mut dup2 = lib("GL24h");
+    dup2.id = mid("dup2");
+    dup2.name = "Other one".into();
+    cmds.push(Command::AddMaterial(dup2.clone()));
+    let mut padded = dup2.clone();
+    padded.name = "  Padded  ".into();
+    padded.category = MaterialCategory::Other;
+    cmds.push(Command::SetMaterial(padded));
+    let mut renamed = concrete.clone();
+    renamed.name = "PADDED".into();
+    cmds.push(Command::SetMaterial(renamed));
+    let mut t = String::new();
+    let mut inverses: Vec<Command> = Vec::new();
+    for c in cmds {
+        let json = serde_json::to_string(&c).unwrap();
+        let describe = c.describe(&m);
+        writeln!(t, "cmd {json}").unwrap();
+        writeln!(t, "describe {describe}").unwrap();
+        match c.apply(&mut m) {
+            Ok(inv) => {
+                writeln!(t, "ok {}", serde_json::to_string(&inv).unwrap()).unwrap();
+                writeln!(t, "undo {}", inv.describe(&m)).unwrap();
+                inverses.push(inv);
+            }
+            Err(e) => {
+                writeln!(t, "err {e}").unwrap();
+                writeln!(t, "undo -").unwrap();
+            }
+        }
+    }
+    m.validate().expect("the model after the material commands is valid");
+    let after = file::to_string(&m);
+    let ifc = mask_version(&bimble_ifc::export(&m, "materials.ifc", IFC_TIMESTAMP));
+    let mut back = m.clone();
+    for inv in inverses.into_iter().rev() {
+        inv.apply(&mut back).expect("an inverse applies");
+    }
+    assert_eq!(file::to_string(&back), text, "materials: undo gives frame2.json back");
+    files.insert("materials/transcript.txt".into(), t.into_bytes());
+    files.insert("materials/after.json".into(), after.into_bytes());
+    files.insert("materials/after.ifc".into(), ifc.into_bytes());
 }
