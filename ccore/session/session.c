@@ -443,6 +443,7 @@ int cc_session_open_persisted(cc_session *s, const char *model_path, const char 
     return cc_session_open(s, model_path, err);
 }
 void cc_session_persist_now(cc_session *s) { (void)s; }
+const char *cc_session_set_aside(const cc_session *s) { (void)s; return NULL; } /* FIXSES */
 void cc_session_note_apply(cc_session *s, const cc_command *cmds, size_t n) { (void)s, (void)cmds, (void)n; }
 static void persist_free(cc_session *s) { (void)s; }
 static void persist_follow(cc_session *s, const char *model_file, int again) { (void)s, (void)model_file, (void)again; }
@@ -502,6 +503,7 @@ struct cc_persist {
     int pend_ok;
     int follow;    /* set up (cc_session_open_persisted returned): the file actions move it */
     int auto_name; /* sess_path is "<sess_model>.ccore-session": it moves with the model */
+    char aside[4096 + 48]; /* FIXSES: where a session file with steps not saved was set aside, "" none */
 };
 static void close_session(cc_session *s);
 
@@ -1055,18 +1057,118 @@ static void persist_follow(cc_session *s, const char *model_file, int again) {
     if (write_snapshot(s) == 0) cc_log(s->pf, "bimble-ccore: session file %s", P->sess_path);
 }
 
+/* FIXSES: 1 when the session file's text may hold steps that are not saved, or cannot be read
+ * enough to tell; 0 when it holds none. The stacks of the snapshot line are followed through the
+ * entries (apply, undo, redo): the file holds none when, after its last complete line, the redo
+ * stack is empty and the step is the saved one. Bounded by the text (one id per step). */
+static int holds_unsaved(const char *text, size_t n) {
+    const char *nl = memchr(text, '\n', n);
+    if (!nl) return n != 0;
+    Arena a;
+    arena_init(&a, 0);
+    JrError je;
+    int dirty = 1;
+    uint64_t *u = NULL, saved = UINT64_MAX, x;
+    size_t nu = 0, cu = 0, nr = 0;
+    const JrVal *root = jr_parse(&a, text, (size_t)(nl - text), &je);
+    const JrVal *ua = root && root->type == JR_OBJ ? jr_get(root, "undo") : NULL;
+    const JrVal *ra = root && root->type == JR_OBJ ? jr_get(root, "redo") : NULL;
+    const JrVal *sv = root && root->type == JR_OBJ ? jr_get(root, "saved_step") : NULL;
+    if (!ua || ua->type != JR_ARR || !ra || ra->type != JR_ARR || !sv) goto end;
+    for (size_t i = 0; i < ua->n; i++)
+        if (get_u64(&ua->items[i], "id", 1, 1ull << 52, &x) || push_u64(&u, &nu, &cu, x)) goto end;
+    nr = ra->n;
+    if (sv->type != JR_NULL && get_u64(root, "saved_step", 0, 1ull << 52, &saved)) goto end;
+    for (const char *at = nl + 1, *e; at < text + n && (e = memchr(at, '\n', (size_t)(text + n - at))); at = e + 1) {
+        arena_free(&a);
+        arena_init(&a, 0);
+        const JrVal *o = jr_parse(&a, at, (size_t)(e - at), &je);
+        const JrVal *op = o && o->type == JR_OBJ ? jr_get(o, "op") : NULL;
+        const JrVal *s2 = o && o->type == JR_OBJ ? jr_get(o, "saved_step") : NULL;
+        if (!op || op->type != JR_STR || !s2) goto end;
+        saved = UINT64_MAX;
+        if (s2->type != JR_NULL && get_u64(o, "saved_step", 0, 1ull << 52, &saved)) goto end;
+        if (!strcmp(op->s, "apply")) {
+            if (get_u64(o, "id", 1, 1ull << 52, &x) || push_u64(&u, &nu, &cu, x)) goto end;
+            nr = 0;
+        } else if (!strcmp(op->s, "undo")) {
+            if (!nu) goto end;
+            nu--, nr++;
+        } else if (!strcmp(op->s, "redo")) {
+            if (!nr || get_u64(o, "id", 1, 1ull << 52, &x) || push_u64(&u, &nu, &cu, x)) goto end;
+            nr--;
+        } else if (strcmp(op->s, "state"))
+            goto end;
+    }
+    dirty = nr != 0 || (nu ? u[nu - 1] : 0) != saved;
+end:
+    free(u);
+    arena_free(&a);
+    return dirty;
+}
+
+/* FIXSES: the session file (and its model side files) renamed `<session>.orphan-<unix time>`
+ * (`-2`, `-3`… when taken), never overwritten: it holds steps that are not saved and the session
+ * does not keep them (written for another model path, a model file changed since, a line that
+ * does not replay). The time is the carrier's clock (pf->unix_s). Reported by `query state`
+ * (`session_set_aside`) and logged. 0 set aside, -1 not (logged: the caller then writes no
+ * snapshot over it). */
+static int set_aside(cc_session *s) {
+    cc_persist *P = s->persist;
+    long long t = s->pf->unix_s ? (long long)s->pf->unix_s(s->pf->ctx) : 0;
+    char to[sizeof P->aside];
+    for (unsigned k = 1; k < 1000; k++) {
+        int w = k == 1 ? snprintf(to, sizeof to, "%s.orphan-%lld", P->sess_path, t)
+                       : snprintf(to, sizeof to, "%s.orphan-%lld-%u", P->sess_path, t, k);
+        if (w < 0 || (size_t)w >= sizeof to) break;
+        if (access(to, F_OK) == 0) continue;
+        if (rename(P->sess_path, to) != 0) break;
+        for (char c = 'a'; c <= 'b'; c++) { /* the side files the line may name follow it */
+            char from[sizeof P->sess_path + 16], side[sizeof to + 16];
+            snprintf(from, sizeof from, "%s.model-%c", P->sess_path, c);
+            snprintf(side, sizeof side, "%s.model-%c", to, c);
+            if (access(from, F_OK) == 0 && rename(from, side) != 0)
+                cc_log(s->pf, "bimble-ccore: %s: cannot be renamed %s", from, side);
+        }
+        memcpy(P->aside, to, sizeof to);
+        cc_log(s->pf, "bimble-ccore: session %s holds changes not saved: set aside as %s", P->sess_path, to);
+        return 0;
+    }
+    cc_log(s->pf, "bimble-ccore: session %s holds changes not saved and cannot be set aside: left as it is, "
+           "no session file this time", P->sess_path);
+    return -1;
+}
+
+const char *cc_session_set_aside(const cc_session *s) {
+    return s->persist && s->persist->aside[0] ? s->persist->aside : NULL;
+}
+
+/* FIXSES: the model path a session file names is the open model's when both name one file: the
+ * same text, or the same path once the carrier resolved both (pf->real_path; `m.json` and
+ * `./m.json` share the default session file `m.json.ccore-session`). */
+static int same_model_path(const cc_session *s, const char *recorded, size_t n, const char *model) {
+    if (strlen(model) == n && !memcmp(recorded, model, n)) return 1;
+    if (!s->pf->real_path || n >= 4096 || memchr(recorded, 0, n)) return 0;
+    char a[4096], ra[4096], rb[4096];
+    memcpy(a, recorded, n), a[n] = 0;
+    return !s->pf->real_path(s->pf->ctx, a, ra, sizeof ra) && !s->pf->real_path(s->pf->ctx, model, rb, sizeof rb) &&
+           !strcmp(ra, rb);
+}
+
 /* Opens the session from the session file. 1 restored (S open; *keep: bytes of the file that are
  * valid, *rewrite: the file needs a new snapshot), 0 not (no file, or ignored with the reason
- * logged: S closed). */
-static int restore(cc_session *s, size_t *keep, int *rewrite) {
+ * logged: S closed). *unsaved (FIXSES): the file holds steps not saved that the session does not
+ * keep (ignored, or lines dropped): the caller sets it aside before any new snapshot. */
+static int restore(cc_session *s, size_t *keep, int *rewrite, int *unsaved) {
     cc_persist *P = s->persist;
     cc_error err;
     size_t n = 0;
-    *keep = 0, *rewrite = 0;
+    *keep = 0, *rewrite = 0, *unsaved = 0;
     if (access(P->sess_path, F_OK) != 0) return 0;
     char *text = read_all(s, P->sess_path, &n, &err);
     if (!text) {
         cc_log(s->pf, "bimble-ccore: session %s ignored: %s", P->sess_path, err.msg);
+        *unsaved = 1; /* FIXSES: not read, so not known to be clean */
         return 0;
     }
     const char *why = NULL;
@@ -1091,7 +1193,7 @@ static int restore(cc_session *s, size_t *keep, int *rewrite) {
         goto fail;
     }
     const JrVal *mp = jr_get(root, "model_path");
-    if (!mp || mp->type != JR_STR || strlen(P->sess_model) != mp->n || memcmp(mp->s, P->sess_model, mp->n)) {
+    if (!mp || mp->type != JR_STR || !same_model_path(s, mp->s, mp->n, P->sess_model)) { /* FIXSES: resolved */
         why = "written for another model path";
         goto fail;
     }
@@ -1191,6 +1293,7 @@ static int restore(cc_session *s, size_t *keep, int *rewrite) {
         at += len + 1, ok++;
     }
     *keep = at;
+    if (*rewrite) *unsaved = holds_unsaved(text, n); /* FIXSES: the lines from the bad one would be dropped */
     P->log_bytes = at - P->snap_bytes, P->log_entries = ok;
     cc_sv_vis_load(s); /* ISS72: what the active view hides, as the restored steps left it (SEC1's rebuild does it after a live edit) */
     if (at < n)
@@ -1204,6 +1307,7 @@ static int restore(cc_session *s, size_t *keep, int *rewrite) {
 fail:
     cc_log(s->pf, "bimble-ccore: session %s ignored: %s; starting from %s", P->sess_path, why ? why : "invalid",
             P->sess_model);
+    *unsaved = holds_unsaved(text, n); /* FIXSES */
     close_session(s);
     free(side);
     free_steps(undo, nu), free_steps(redo, nr);
@@ -1237,13 +1341,15 @@ int cc_session_open_persisted(cc_session *s, const char *model_path, const char 
         P->auto_name = !strncmp(session_path, model_path, k) && !strcmp(session_path + k, ".ccore-session");
     }
     size_t keep = 0;
-    int rewrite = 0;
-    if (restore(s, &keep, &rewrite)) {
+    int rewrite = 0, unsaved = 0;
+    if (restore(s, &keep, &rewrite, &unsaved)) {
         P->on = 1;
         if (!rewrite) {
             P->sess_fd = open(P->sess_path, O_WRONLY | O_APPEND);
             if (P->sess_fd >= 0 && ftruncate(P->sess_fd, (off_t)keep) == 0 && remember(s) == 0) return P->follow = 1, 0;
         }
+        /* FIXSES: never a new snapshot over lines with steps not saved: set aside first. */
+        if (unsaved && set_aside(s)) return P->on = 0, 0; /* no file this run: it is left alone */
         write_snapshot(s);
         P->follow = 1;
         return 0;
@@ -1252,6 +1358,9 @@ int cc_session_open_persisted(cc_session *s, const char *model_path, const char 
         persist_free(s);
         return -1;
     }
+    /* FIXSES: the file the session ignored, when it holds steps not saved, is set aside, never
+     * overwritten; when it cannot be, the session runs without a file this time (on, follow 0). */
+    if (unsaved && set_aside(s)) return 0;
     P->on = 1;
     P->model_is_file = 1;
     write_snapshot(s); /* no model text: cheap */

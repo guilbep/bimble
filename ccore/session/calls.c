@@ -540,6 +540,9 @@ static int q_state(cc_session *s, JsonW *w) { /* calls.rs:239-258 */
     if (s->open && s->schema_bimble) jw_str(w, ".bimble");
     else if (s->view == CC_VIEW_IFC && s->ifc->schema.n) jw_str_n(w, s->ifc->schema.p, s->ifc->schema.n);
     else jw_null(w); /* a model's scene and a view file's have no IFC schema */
+    /* FIXSES (a C addition): where a session file holding changes not saved was set aside at
+     * start (session.h cc_session_set_aside); left out when none. */
+    if (cc_session_set_aside(s)) jw_key(w, "session_set_aside"), jw_str(w, cc_session_set_aside(s));
     jw_key(w, "unsaved"), jw_bool(w, cc_session_unsaved(s));
     jw_key(w, "user"), cc_settings_user_json(s, w); /* SET1: calls.rs:253, Settings → You */
     jw_key(w, "version"), jw_str(w, CC_VERSION);
