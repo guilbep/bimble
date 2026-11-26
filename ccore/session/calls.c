@@ -48,6 +48,7 @@
 #include "georef.h"  /* SEC1: cc_georef_plan_turn */
 #include "ifc_math.h" /* SEC1: cc_sin, cc_cos */
 #include "settings.h"      /* SET1 */
+#include "concrete.h"      /* CONC1 */
 
 #define CC_VERSION "0.1.0-ccore" /* `version` is the C core's own (spec §1, deviations) */
 
@@ -156,10 +157,19 @@ static const ActionRow ACTIONS[] = {
     {"sheet_place_view", "Place view…", "Sheets", 0, 0},
     {"sheet_revision", "Revision…", "Sheets", 0, 0},
     /* ---- end VIEWSHEET ---- */
+    /* ---- CONC1 (ADR 0077): the Concrete tab's place kinds (concrete.h, DEVIATIONS 34) ---- */
+    {"place_footing", "Place: Footing", "Concrete", 0, 0},
+    {"place_strip_footing", "Place: Strip footing", "Concrete", 0, 0},
+    {"place_raft", "Place: Raft", "Concrete", 0, 0},
+    {"place_opening", "Place: Opening", "Concrete", 0, 0},
+    {"place_sleeve", "Place: Sleeve", "Concrete", 0, 0},
+    /* ---- end CONC1 ---- */
 };
-_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4");
+_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4 + 5, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4, CONC1 5");
 
-static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab"}; /* verbs.rs:28 snake_case */
+static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab", /* verbs.rs:28 snake_case */
+                                        "footing", "strip_footing", "raft", "opening", "sleeve"}; /* CONC1 */
+_Static_assert(sizeof KIND_NAME / sizeof KIND_NAME[0] == CC_KIND_COUNT, "a name per kind");
 static const char *const SIZE_KEY[] = {"column", "beam_width", "beam_height", "wall", "slab"}; /* verbs.rs:78 */
 /* Sizes serialized through json! (a sorted map): beam_height, beam_width, column, slab, wall. */
 static const int SIZE_SORTED[] = {2, 1, 0, 4, 3};
@@ -259,6 +269,7 @@ static void undo_redo(cc_session *s, int undo) {
 /* ---- placing (edit.rs:387-460) ---- */
 
 static const char *hint(const cc_session *s) { /* edit.rs:84-95 `Placing::hint` */
+    if (cc_conc_kind(s->placing_kind)) return cc_conc_hint(s); /* CONC1 */
     if (s->placing_kind == CC_KIND_SLAB && s->polygon) /* edit.rs:402-405 (SLAB1: the second text) */
         return s->tool.npoints < 3 ? "Click the next corner of the slab." : "Click the next corner; click the first corner or Enter closes.";
     if (s->placing_kind == CC_KIND_COLUMN) return "Click where the column goes (on the storey level). Esc stops.";
@@ -271,7 +282,8 @@ static void placing_json(cc_session *s, JsonW *w) { /* edit.rs:387-408, json! so
     const cc_storey *st = s->has_storey ? cc_model_storey(&s->model, &s->storey) : NULL;
     jw_obj_begin(w);
     jw_key(w, "active"), jw_bool(w, s->placing);
-    jw_key(w, "clicks_needed"), jw_u64(w, kind == CC_KIND_COLUMN ? 1 : 2);
+    jw_key(w, "clicks_needed"), jw_u64(w, kind == CC_KIND_COLUMN ? 1 : cc_conc_kind(kind) ? (uint64_t)cc_conc_clicks(kind) : 2);
+    if (cc_conc_kind(kind)) jw_key(w, "concrete"), cc_conc_json(s, w); /* CONC1: only for its kinds (Rust's bytes kept) */
     jw_key(w, "hint");
     if (s->placing) jw_str(w, hint(s));
     else jw_null(w);
@@ -390,7 +402,7 @@ static int call_set_placing(cc_session *s, const char *body, size_t n, cc_buf *o
         goto end;
     }
     size_t nm = sorted_members(v, ms);
-    const JrVal *kind = 0, *storey = 0, *material = 0, *sizes = 0, *top = 0;
+    const JrVal *kind = 0, *storey = 0, *material = 0, *sizes = 0, *top = 0, *conc = 0;
     int has_polygon = 0, polygon = 0;
     cc_kind k = CC_KIND_COLUMN;
     cc_gid sid;
@@ -400,7 +412,7 @@ static int call_set_placing(cc_session *s, const char *body, size_t n, cc_buf *o
         if (jr_key_is(m, "kind")) {
             int found = -1;
             if (x->type == JR_STR)
-                for (int j = 0; j < 4; j++)
+                for (int j = 0; j < CC_KIND_COUNT; j++)
                     if (strlen(KIND_NAME[j]) == x->n && !memcmp(KIND_NAME[j], x->s, x->n)) found = j;
             if (found < 0) {
                 buf_puts(out, "kind: ");
@@ -440,6 +452,8 @@ static int call_set_placing(cc_session *s, const char *body, size_t n, cc_buf *o
                 goto end;
             }
             top = x;
+        } else if (jr_key_is(m, "concrete")) { /* CONC1 (concrete.h) */
+            conc = x;
         } else if (jr_key_is(m, "shape")) {
             if (x->type == JR_STR && x->n == 9 && !memcmp(x->s, "rectangle", 9)) polygon = 0;
             else if (x->type == JR_STR && x->n == 7 && !memcmp(x->s, "polygon", 7)) polygon = 1;
@@ -517,6 +531,7 @@ static int call_set_placing(cc_session *s, const char *body, size_t n, cc_buf *o
         buf_puts(out, " is not a finite value within ±10000000 mm");
         goto end;
     }
+    if (conc && cc_conc_set(s, conc, out)) goto end; /* CONC1: the last check, all or nothing */
     memcpy(s->sizes, ns, sizeof ns);
     if (has_polygon && polygon != s->polygon) s->polygon = polygon, s->tool.npoints = 0; /* points cleared */
     if (top) s->top_offset_mm = top->num + 0.0; /* no -0.0 */
@@ -2120,7 +2135,7 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     if (!strcmp(name, "undo")) undo_redo(s, 1);
     else if (!strcmp(name, "redo")) undo_redo(s, 0);
     else if (!strncmp(name, "place_", 6)) {
-        for (int k = 0; k < 4; k++)
+        for (int k = 0; k < CC_KIND_COUNT; k++) /* CONC1: and the Concrete tab's kinds */
             if (!strcmp(name + 6, KIND_NAME[k])) place_action(s, (cc_kind)k);
         if (s->placing) s->measure.on = 0, s->measure.has_first = s->measure.has_hover = 0; /* ribbon.rs:687 */
     } else if (!strcmp(name, "measure")) cc_measure_toggle(&s->measure), s->vsh.section_draw = 0; /* ribbon.rs:691 (ticket T1); VIEWSHEET: one tool */
@@ -2695,6 +2710,7 @@ static void place_args(const cc_session *s, const double *a, const double *b, cc
 /* edit.rs Editor::click: the commands of `verb place` for points a, b (a run, or a dry run for
  * the ghost), a slab raised by top_offset_mm. 0 ok, -1 with the error in `err`. */
 static int place_cmds(cc_session *s, const double *a, const double *b, int dry_run, cc_cmds *l, cc_buf *err) {
+    if (cc_conc_kind(s->placing_kind)) return cc_conc_cmds(s, a, b, dry_run, l, err); /* CONC1 */
     if (!s->has_storey) {
         buf_puts(err, "choose a storey");
         return -1;
@@ -2713,7 +2729,9 @@ static int place_cmds(cc_session *s, const double *a, const double *b, int dry_r
 
 /* ---- SLAB1: the polygon slab by clicks (edit.rs:318-385) ---- */
 #define CLOSE_MM 100.0 /* edit.rs CLOSE_MM: a click this close to the first point closes */
-static int polygon_now(const cc_session *s) { return s->placing && s->placing_kind == CC_KIND_SLAB && s->polygon; }
+static int polygon_now(const cc_session *s) {
+    return s->placing && ((s->placing_kind == CC_KIND_SLAB && s->polygon) || s->placing_kind == CC_KIND_RAFT); /* CONC1: a raft */
+}
 /* edit.rs click: 3 points or more and `p` within CLOSE_MM of the first. */
 static int polygon_closes(const cc_tool *t, const double *p) {
     return t->npoints >= 3 && cc_hypot(t->points[0][0] - p[0], t->points[0][1] - p[1]) <= CLOSE_MM;
@@ -2724,6 +2742,7 @@ static int polygon_cmds(cc_session *s, const double (*pts)[2], size_t n, cc_cmds
         buf_puts(err, "choose a storey");
         return -1;
     }
+    if (s->placing_kind == CC_KIND_RAFT) return cc_conc_raft_cmds(s, pts, n, l, err); /* CONC1 */
     if (cc_verb_new_slab(&s->model, &s->storey, pts, n, s->sizes, s->material, l, err)) return -1;
     for (size_t i = 0; i < l->n; i++)
         if (l->v[i].op == CC_CMD_ADD_ELEMENT) l->v[i].element.placement.origin[2] += s->top_offset_mm;
@@ -2750,6 +2769,11 @@ static int polygon_close(cc_session *s, cc_buf *out) {
     return tool_json(s, has_id ? &id : NULL, out);
 }
 /* ---- end SLAB1 ---- */
+
+/* CONC1: a one-click kind (column, pad footing, sleeve). */
+static int one_click(const cc_session *s) {
+    return s->placing_kind == CC_KIND_COLUMN || (cc_conc_kind(s->placing_kind) && cc_conc_clicks(s->placing_kind) == 1);
+}
 
 /* The tool's state: {"active","ghost","ghost_error","hover","kind","placed","points"} (sorted).
  * ghost: what the next click adds (tool.h cc_tool_ghost), null without one; ghost_error: why a
@@ -2779,12 +2803,13 @@ static int tool_json(cc_session *s, const cc_gid *placed, cc_buf *out) {
             has_ghost = !cc_tool_ghost(&w, &s->model, l.v, l.n, org, &gerr);
         }
         cc_cmds_free(&l);
-    } else if (s->placing && t->has_hover && !(s->placing_kind == CC_KIND_SLAB && s->polygon) &&
-        (s->placing_kind == CC_KIND_COLUMN || t->npoints >= 1)) {
+    } else if (s->placing && t->has_hover && !polygon_now(s) && s->placing_kind != CC_KIND_OPENING &&
+               s->placing_kind != CC_KIND_SLEEVE && /* CONC1: an opening's preview is its cut, not a solid */
+               (one_click(s) || t->npoints >= 1 || s->placing_kind == CC_KIND_STRIP_FOOTING)) {
         cc_cmds l;
         cc_cmds_init(&l);
-        const double *a = s->placing_kind == CC_KIND_COLUMN ? t->hover : t->points[0];
-        if (!place_cmds(s, a, t->hover, 1, &l, &gerr)) {
+        const double *a = one_click(s) || !t->npoints ? t->hover : t->points[0];
+        if (!place_cmds(s, a, one_click(s) || !t->npoints ? NULL : t->hover, 1, &l, &gerr)) {
             const cc_scene *sc = scene_now(s);
             double org[3] = {0, 0, 0};
             if (sc) memcpy(org, sc->origin, sizeof org);
@@ -3199,7 +3224,17 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
     }
     if (t->npoints >= CC_TOOL_MAX_POINTS) t->npoints = 0;
     t->points[t->npoints][0] = t->hover[0], t->points[t->npoints][1] = t->hover[1], t->npoints++;
-    if (t->npoints < (s->placing_kind == CC_KIND_COLUMN ? 1u : 2u)) return tool_json(s, NULL, out);
+    int on_wall = 0; /* CONC1: a strip footing's first click on a wall places it along the wall */
+    if (s->placing_kind == CC_KIND_STRIP_FOOTING && t->npoints == 1) {
+        cc_cmds d;
+        cc_cmds_init(&d);
+        Buf derr;
+        buf_init(&derr);
+        on_wall = !cc_conc_cmds(s, t->points[0], NULL, 1, &d, &derr);
+        cc_cmds_free(&d);
+        buf_free(&derr);
+    }
+    if (!on_wall && t->npoints < (one_click(s) ? 1u : 2u)) return tool_json(s, NULL, out);
     double pa[2] = {t->points[0][0], t->points[0][1]}, pb[2] = {t->points[t->npoints - 1][0], t->points[t->npoints - 1][1]};
     t->npoints = 0; /* edit.rs: the points are taken, also when the element fails */
     cc_cmds l;
@@ -3207,9 +3242,10 @@ static int call_tool(cc_session *s, const char *name, const char *body, size_t n
     int rc = CC_ERR;
     cc_gid id;
     int has_id = 0;
-    if (!place_cmds(s, pa, pb, 0, &l, out)) {
+    if (!place_cmds(s, pa, on_wall ? NULL : pb, 0, &l, out)) {
         for (size_t i = 0; i < l.n; i++)
-            if (l.v[i].op == CC_CMD_ADD_ELEMENT) id = l.v[i].element.id, has_id = 1;
+            if (l.v[i].op == CC_CMD_ADD_ELEMENT || l.v[i].op == CC_CMD_SET_OPENINGS) /* CONC1: an opening's host */
+                id = l.v[i].op == CC_CMD_ADD_ELEMENT ? l.v[i].element.id : l.v[i].id, has_id = 1;
         rc = try_apply(s, l.v, l.n, out);
     }
     cc_cmds_free(&l);

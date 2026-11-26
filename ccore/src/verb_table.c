@@ -1,6 +1,7 @@
 /* See verb_table.h. The schema and summary texts below are Rust's (crates/bimble-api/src/
  * dispatch.rs), compacted from golden/verbs_schema/<verb>.json and golden/verbs_list.json. */
 #include "verb_table.h"
+#include "verbs_concrete.h" /* CONC1 */
 #include "verbs_materials.h" /* MAT1 */
 #include <string.h>
 #include "json_w.h"
@@ -512,6 +513,65 @@ static const char SCHEMA_MATERIAL_REMOVE[] =
 static const char SUMMARY_MATERIAL_REMOVE[] =
     "Delete a material; refused while elements are made of it (a C addition).";
 /* ---- end MAT1 ---- */
+/* ---- CONC1 (ADR 0077): footings, raft, openings (verbs_concrete.h) ---- */
+static const char SCHEMA_FOOTING_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `footing_add` (CONC1, ADR 0077).\",\"properties\":{\"a\":{\"descript"
+    "ion\":\"A pad's centre (under a column there: centred on it), or a strip's first point (on a wal"
+    "l: along the whole wall), mm.\",\"items\":{\"type\":\"number\"},\"maxItems\":2,\"minItems\":2,\""
+    "type\":\"array\"},\"b\":{\"description\":\"A free strip's second point, mm.\",\"items\":{\"type\""
+    ":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":\"array\"},\"depth\":{\"description\":\"Thic"
+    "kness below the top, mm.\",\"type\":\"number\"},\"kind\":{\"description\":\"pad (default) or str"
+    "ip.\",\"enum\":[\"pad\",\"strip\"],\"type\":\"string\"},\"length\":{\"description\":\"Pad: size "
+    "along y, mm.\",\"type\":\"number\"},\"material\":{\"description\":\"Material name.\",\"type\":\""
+    "string\"},\"storey\":{\"description\":\"GlobalId of the storey.\",\"type\":\"string\"},\"width\""
+    ":{\"description\":\"Pad: size along x; strip: width, mm.\",\"type\":\"number\"}},\"required\":[\""
+    "storey\",\"a\"],\"title\":\"FootingAddArgs\",\"type\":\"object\"}";
+static const char SUMMARY_FOOTING_ADD[] = "Add an IfcFooting: a pad (under a column, centred, top at its base) or a strip (along a wall or between two points); a C addition.";
+static const char SCHEMA_RAFT_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `raft_add` (CONC1, ADR 0077).\",\"properties\":{\"material\":{\"desc"
+    "ription\":\"Material name.\",\"type\":\"string\"},\"outline\":{\"description\":\"Corners [x, y],"
+    " mm.\",\"items\":{\"description\":\"A corner.\",\"items\":{\"type\":\"number\"},\"maxItems\":2,\""
+    "minItems\":2,\"type\":\"array\"},\"type\":\"array\"},\"storey\":{\"description\":\"GlobalId of t"
+    "he storey (default: the lowest).\",\"type\":\"string\"},\"thickness\":{\"description\":\"mm, def"
+    "ault 400.\",\"type\":\"number\"}},\"required\":[\"outline\"],\"title\":\"RaftAddArgs\",\"type\":"
+    "\"object\"}";
+static const char SUMMARY_RAFT_ADD[] = "Add a raft: an IfcSlab BASESLAB from an outline, top at the storey's elevation; a C addition.";
+static const char SCHEMA_OPENING_ADD[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `opening_add` (CONC1, ADR 0077).\",\"properties\":{\"a\":{\"descript"
+    "ion\":\"Centre (one point) or first corner/end, mm.\",\"items\":{\"type\":\"number\"},\"maxItems"
+    "\":2,\"minItems\":2,\"type\":\"array\"},\"b\":{\"description\":\"Opposite corner (slab) or other"
+    " end (wall), mm.\",\"items\":{\"type\":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\":\"arra"
+    "y\"},\"diameter\":{\"description\":\"A sleeve's diameter, mm.\",\"type\":\"number\"},\"height\":"
+    "{\"description\":\"A wall opening's height, mm.\",\"type\":\"number\"},\"host\":{\"description\""
+    ":\"GlobalId of the IfcWall or IfcSlab.\",\"type\":\"string\"},\"length\":{\"description\":\"A sl"
+    "ab opening's size along y, mm.\",\"type\":\"number\"},\"shape\":{\"description\":\"rectangle (de"
+    "fault) or round (a sleeve).\",\"enum\":[\"rectangle\",\"round\"],\"type\":\"string\"},\"sill\":{"
+    "\"description\":\"A wall opening's bottom above the wall's base, mm.\",\"type\":\"number\"},\"wi"
+    "dth\":{\"description\":\"mm.\",\"type\":\"number\"}},\"required\":[\"host\",\"a\"],\"title\":\"O"
+    "peningAddArgs\",\"type\":\"object\"}";
+static const char SUMMARY_OPENING_ADD[] = "Cut an opening (IfcOpeningElement) or a sleeve through a wall or a slab; refused outside the host or over another opening; a C addition.";
+static const char SCHEMA_OPENING_SET[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `opening_set` (CONC1, ADR 0077).\",\"properties\":{\"a\":{\"descript"
+    "ion\":\"New centre, mm.\",\"items\":{\"type\":\"number\"},\"maxItems\":2,\"minItems\":2,\"type\""
+    ":\"array\"},\"diameter\":{\"description\":\"mm.\",\"type\":\"number\"},\"height\":{\"description"
+    "\":\"mm.\",\"type\":\"number\"},\"host\":{\"description\":\"GlobalId of the host.\",\"type\":\"s"
+    "tring\"},\"id\":{\"description\":\"GlobalId of the opening.\",\"type\":\"string\"},\"length\":{\""
+    "description\":\"mm.\",\"type\":\"number\"},\"sill\":{\"description\":\"mm.\",\"type\":\"number\""
+    "},\"width\":{\"description\":\"mm.\",\"type\":\"number\"}},\"required\":[\"host\",\"id\"],\"titl"
+    "e\":\"OpeningSetArgs\",\"type\":\"object\"}";
+static const char SUMMARY_OPENING_SET[] = "Move or resize an opening by its parameters (its GlobalId kept); a C addition.";
+static const char SCHEMA_OPENING_REMOVE[] =
+    "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"d"
+    "escription\":\"Arguments of `opening_remove` (CONC1, ADR 0077).\",\"properties\":{\"host\":{\"de"
+    "scription\":\"GlobalId of the host.\",\"type\":\"string\"},\"id\":{\"description\":\"GlobalId of"
+    " the opening.\",\"type\":\"string\"}},\"required\":[\"host\",\"id\"],\"title\":\"OpeningRemoveAr"
+    "gs\",\"type\":\"object\"}";
+static const char SUMMARY_OPENING_REMOVE[] = "Delete an opening of a host; a C addition.";
+/* ---- end CONC1 ---- */
 #define V(n, N) {#n, SUMMARY_##N, SCHEMA_##N, cc_vh_##n, 0}
 const cc_verb_def cc_verb_table[] = {
     V(place, PLACE),
@@ -559,6 +619,13 @@ const cc_verb_def cc_verb_c_additions[] = {
     V(material_set, MATERIAL_SET),
     V(material_remove, MATERIAL_REMOVE),
     /* ---- end MAT1 ---- */
+    /* ---- CONC1 ---- */
+    V(footing_add, FOOTING_ADD),
+    V(raft_add, RAFT_ADD),
+    V(opening_add, OPENING_ADD),
+    V(opening_set, OPENING_SET),
+    V(opening_remove, OPENING_REMOVE),
+    /* ---- end CONC1 ---- */
 };
 #undef V
 const size_t cc_verb_count = sizeof cc_verb_table / sizeof cc_verb_table[0];

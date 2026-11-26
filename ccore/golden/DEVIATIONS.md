@@ -1149,3 +1149,32 @@ references are hand-computed in `test/view_sheet_test.c`.
   (the C core's sheet tools are not served yet, capability `sheet_tools` false).
 - **Revision**: Rust's one `revision` per sheet, nothing new (no revision table, no date, no
   author: Rust had none; ADR 0076 decision 4).
+
+## 34. Concrete: footings, raft, openings and sleeves from the ribbon (ticket CONC1, ADR 0077)
+
+Rust v0.19.0 has the `pad_footing` generator and openings as data (`model.rs` `Opening`, exported
+by `bimble-ifc/src/lib.rs:498-524`), and no verb, command or tool that makes a footing, a raft, an
+opening or a sleeve (`git grep -i "opening\|footing\|raft\|sleeve" oracle/rust -- crates/`). The
+C core's references are hand-computed in `test/concrete_test.c` (volumes, positions, counts) and
+`test/lab_concrete.mjs` (the gestures in the lab). No golden changes.
+
+- **Verbs (C additions):** `footing_add`, `raft_add`, `opening_add`, `opening_set`,
+  `opening_remove` (`src/verbs_concrete.h`). Five actions after VIEWSHEET's (`query actions`: 70
+  rows): `place_footing`, `place_strip_footing`, `place_raft`, `place_opening`, `place_sleeve`,
+  enabled with an editable model, pressed while that kind is placed. `set_placing` takes
+  `"concrete": {sizes}`; `query placing` answers it while one of these kinds is chosen (Rust's
+  bytes otherwise).
+- **Command `set_openings {id, openings}`** (the C core's own, after `set_material`): an element's
+  whole opening list, the old one its inverse; each opening's placement and generator validated,
+  GlobalIds unique in the list, at most 10,000. `add_element` now writes and reads `openings` in
+  the command JSON (the session journal); before, the C parser refused them ("unsupported by the
+  C core: element openings") and the writer left them out.
+- **IFC export of openings** (Rust's, now ported): the C writer left every opening out ("No
+  openings in the C model"); it now writes `IfcOpeningElement` + `IfcRelVoidsElement` as Rust,
+  GlobalIds from the opening's own id or `opening/<element>/<i>`. A sleeve (a 32-gon opening) is
+  written with ObjectType `'SLEEVE'` and `.USERDEFINED.` (Rust has no sleeve).
+- **PredefinedType from the property `Bimble/PredefinedType`** when it is one of the class's
+  enumeration (slab: FLOOR, ROOF, LANDING, BASESLAB; footing: FOOTING_BEAM, PAD_FOOTING, PILE_CAP,
+  STRIP_FOOTING); otherwise Rust's (FLOOR, PAD_FOOTING…). No file without the property changes.
+- **`query element` `openings`**: the element's count (Rust's `e.openings.len()`, query.rs:146);
+  the C core answered 0.

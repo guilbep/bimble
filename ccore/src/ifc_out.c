@@ -423,7 +423,21 @@ static uint64_t write_geometry(W *w, const cc_generator *g, uint64_t world, uint
     return end(w, solid);
 }
 
+/* CONC1 (ADR 0077): the PredefinedType property the Concrete tab's tools set (model.h
+ * CC_PREDEFINED_KEY), written when it is one of the class's enumeration in IFC4 and IFC2x3. */
+static const char *predefined_property(const cc_element *e) {
+    static const char *const SLAB[] = {".FLOOR.", ".ROOF.", ".LANDING.", ".BASESLAB."};
+    static const char *const FOOTING[] = {".FOOTING_BEAM.", ".PAD_FOOTING.", ".PILE_CAP.", ".STRIP_FOOTING."};
+    const cc_str *v = cc_element_predefined(e);
+    const char *const *t = e->cls == CC_IFC_SLAB ? SLAB : e->cls == CC_IFC_FOOTING ? FOOTING : NULL;
+    if (!v || !t) return NULL;
+    for (int i = 0; i < 4; i++)
+        if (v->n + 2 == strlen(t[i]) && !memcmp(v->p, t[i] + 1, v->n)) return t[i];
+    return NULL;
+}
+
 static const char *predefined(const cc_element *e) {
+    if (predefined_property(e)) return predefined_property(e); /* CONC1 */
     switch (e->cls) {
     case CC_IFC_COLUMN: return ".COLUMN.";
     case CC_IFC_BEAM: return ".BEAM.";
@@ -770,7 +784,55 @@ static void export_ifc4(W *w, const char *file_name, const char *timestamp, Buf 
         put(w, "IFCRELDEFINESBYPROPERTIES("), gid_id(w, "rel-pset/", &e->id), put(w, ",$,$,$,("), ref(w, el);
         put(w, "),"), ref(w, pset), put(w, ")"), end(w, rel);
 
-        /* No openings in the C model. Property sets beyond the material (ADR 0032). */
+        /* Openings (lib.rs:498-524, CONC1): IfcOpeningElement voids of this element, geometry
+         * relative to it; the opening's own GlobalId when it has one, else derived from its index. */
+        for (size_t k = 0; k < e->nopenings && !w->err; k++) {
+            const cc_opening *op = &e->openings[k];
+            uint64_t oo = point3(w, op->placement.origin), oz = dir3(w, op->placement.z_axis);
+            uint64_t ox = dir3(w, op->placement.x_axis);
+            uint64_t oa = begin(w);
+            put(w, "IFCAXIS2PLACEMENT3D("), ref(w, oo), put(w, ","), ref(w, oz), put(w, ","), ref(w, ox), put(w, ")");
+            end(w, oa);
+            uint64_t opl = begin(w);
+            put(w, "IFCLOCALPLACEMENT("), ref(w, pl), put(w, ","), ref(w, oa), put(w, ")"), end(w, opl);
+            const char *orepr;
+            uint64_t osolid = write_geometry(w, &op->generator, world, z, &orepr);
+            uint64_t oshape = begin(w);
+            put(w, "IFCSHAPEREPRESENTATION("), ref(w, body), put(w, ",'Body','"), put(w, orepr), put(w, "',(");
+            ref(w, osolid), put(w, "))"), end(w, oshape);
+            uint64_t opds = begin(w);
+            put(w, "IFCPRODUCTDEFINITIONSHAPE($,$,("), ref(w, oshape), put(w, "))"), end(w, opds);
+            char idx[24];
+            int ni = 0;
+            for (size_t v = k;; v /= 10) {
+                idx[ni++] = (char)('0' + v % 10);
+                if (v < 10) break;
+            }
+            uint64_t opening = begin(w);
+            put(w, "IFCOPENINGELEMENT(");
+            if (op->has_id) gid_lit(w, &op->id);
+            else {
+                Buf *sd = seed_begin(w);
+                buf_puts(sd, "opening/"), buf_append(sd, e->id.c, 22), buf_putc(sd, '/');
+                for (int q = ni - 1; q >= 0; q--) buf_putc(sd, idx[q]);
+                gid_end(w);
+            }
+            /* A sleeve (ADR 0077): ObjectType SLEEVE, PredefinedType USERDEFINED. */
+            int sleeve = cc_opening_is_sleeve(op, NULL);
+            put(w, sleeve ? ",$,$,$,'SLEEVE'," : ",$,$,$,$,"), ref(w, opl), put(w, ","), ref(w, opds);
+            put(w, sleeve ? ",$,.USERDEFINED.)" : ",$,.OPENING.)"), end(w, opening);
+            uint64_t rv = begin(w);
+            put(w, "IFCRELVOIDSELEMENT(");
+            if (op->has_id) gid_id(w, "voids/", &op->id);
+            else {
+                Buf *sd = seed_begin(w);
+                buf_puts(sd, "voids/"), buf_append(sd, e->id.c, 22), buf_putc(sd, '/');
+                for (int q = ni - 1; q >= 0; q--) buf_putc(sd, idx[q]);
+                gid_end(w);
+            }
+            put(w, ",$,$,$,"), ref(w, el), put(w, ","), ref(w, opening), put(w, ")"), end(w, rv);
+        }
+        /* Property sets beyond the material (ADR 0032). */
         element_psets(w, e, el);
     }
     if (w->err) goto done;

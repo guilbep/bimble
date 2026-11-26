@@ -6,6 +6,7 @@
 #include "grid.h"
 #include "relation.h"
 #include "view_io.h"
+#include "math.h" /* CONC1: cc_hypot */
 
 const char cc_gid_alphabet[65] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
 
@@ -525,3 +526,24 @@ void cc_model_canonical(cc_model *m) {
     for (size_t i = 0; i < m->ngrids; i++) cc_grid_canonical(&m->grids[i]);
     cc_georef_canonical(&m->georef);
 }
+
+/* ---- CONC1 (ADR 0077): what the Concrete tab's tools mark (model.h) ---- */
+static double fabs_c(double x) { return x < 0 ? -x : x; }
+int cc_opening_is_sleeve(const cc_opening *o, double *r) {
+    const cc_generator *g = &o->generator;
+    if (g->kind != CC_GEN_EXTRUDED_POLYGON || g->u.poly.nvoids || g->u.poly.outline.n != CC_SLEEVE_SIDES) return 0;
+    double r0 = cc_hypot(g->u.poly.outline.pts[0][0], g->u.poly.outline.pts[0][1]);
+    for (size_t i = 1; i < g->u.poly.outline.n; i++)
+        if (fabs_c(cc_hypot(g->u.poly.outline.pts[i][0], g->u.poly.outline.pts[i][1]) - r0) > 1e-6 * (1.0 + r0)) return 0;
+    if (r) *r = r0;
+    return r0 > 0;
+}
+
+const cc_str *cc_element_predefined(const cc_element *e) {
+    size_t kn = strlen(CC_PREDEFINED_KEY);
+    for (size_t i = 0; i < e->nproperties; i++)
+        if (e->properties[i].key.n == kn && !memcmp(e->properties[i].key.p, CC_PREDEFINED_KEY, kn))
+            return &e->properties[i].value;
+    return NULL;
+}
+/* ---- end CONC1 ---- */

@@ -21,7 +21,13 @@
 #include "viewfile.h"
 #include "visibility.h"
 
-typedef enum { CC_KIND_COLUMN, CC_KIND_BEAM, CC_KIND_WALL, CC_KIND_SLAB } cc_kind; /* verbs.rs:29 */
+typedef enum {
+    CC_KIND_COLUMN, CC_KIND_BEAM, CC_KIND_WALL, CC_KIND_SLAB, /* verbs.rs:29 */
+    /* CONC1 (ADR 0077, concrete.h): the Concrete tab's kinds, run by their own verbs */
+    CC_KIND_FOOTING, CC_KIND_STRIP_FOOTING, CC_KIND_RAFT, CC_KIND_OPENING, CC_KIND_SLEEVE,
+    CC_KIND_COUNT
+} cc_kind;
+#define CC_CONC_N 11 /* concrete.c: the sizes of the CONC1 kinds */
 
 enum { CC_VIEW_NONE, CC_VIEW_IFC, CC_VIEW_FILE };
 
@@ -68,6 +74,7 @@ typedef struct cc_session {
     double offset[3];
     double top_offset_mm;
     int polygon;
+    double conc[CC_CONC_N]; /* CONC1: the Concrete tab's sizes (concrete.h) */
     cc_tool tool; /* the place tool's points and pointer (tool.h); cleared with the placing state */
     int tab_open; /* a view tab is current (`active`); 0: Home (views.h) */
     /* The views (ticket C1, views.h): the active view and the open view tabs, in order. */

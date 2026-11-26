@@ -107,6 +107,7 @@ typedef struct {
     } u;
 } cc_generator;
 
+#define CC_MAX_OPENINGS 10000 /* CONC1: openings of one element in a command (set_openings, add_element) */
 typedef struct { /* model.rs Opening: a solid cut out of its element (element-local mm) */
     int has_id; /* id: Option<GlobalId> */
     cc_gid id;
@@ -255,4 +256,12 @@ void cc_model_canonical(cc_model *m);
 void cc_buf_display_f64(Buf *b, double x);              /* format!("{}", x): "300", "-0.5", "NaN" */
 void cc_buf_debug_str(Buf *b, const char *s, size_t n); /* format!("{:?}", s), common escapes */
 void cc_buf_gid(Buf *b, const cc_gid *g);
+/* CONC1 (ADR 0077, verbs_concrete.h). */
+#define CC_SLEEVE_SIDES 32     /* a sleeve's polygon (area error 0.64 % against the circle) */
+#define CC_PREDEFINED_KEY "Bimble/PredefinedType" /* the element property the IFC export writes as PredefinedType */
+/* An opening made by opening_add with shape "round": an extruded_polygon of CC_SLEEVE_SIDES corners
+ * at one radius around the opening's origin. 1 with the radius in *r (may be NULL), else 0. */
+int cc_opening_is_sleeve(const cc_opening *o, double *r);
+/* The element's PredefinedType property (CC_PREDEFINED_KEY), NULL when it has none. */
+const cc_str *cc_element_predefined(const cc_element *e);
 #endif

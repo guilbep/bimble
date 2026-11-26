@@ -15,6 +15,7 @@
 #include "inflate.h"
 #include "json_w.h"
 #include "session.h"
+#include "concrete.h" /* CONC1 */
 #include "links.h"
 #include "sheet_svg.h"
 #include "views.h"
@@ -176,6 +177,7 @@ static void install(cc_session *s, cc_model *m, const char *path, uint64_t saved
     if (!best && s->model.nstoreys) best = &s->model.storeys[0];
     if (best) s->has_storey = 1, s->storey = best->id;
     s->kind = CC_KIND_COLUMN;
+    cc_conc_defaults(s->conc); /* CONC1 */
     double sizes[5] = {300.0, 250.0, 500.0, 200.0, 250.0}; /* verbs.rs:86-96 */
     memcpy(s->sizes, sizes, sizeof sizes);
     s->offset[0] = 1000.0, s->offset[1] = 0.0, s->offset[2] = 0.0;
