@@ -116,9 +116,11 @@ async function page(cdp, mode) {
   const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
   const S = (m, p) => cdp.send(m, p, sessionId);
-  const consoleLog = [], exceptions = [], dialogs = [];
+  const consoleLog = [], exceptions = [], dialogs = [], responses = [];
   cdp.on((msg) => {
     if (msg.sessionId !== sessionId) return;
+    // FIXUI 7: every 4xx/5xx with its URL, so a forgiven refusal is the one expected, not any 400.
+    if (msg.method === "Network.responseReceived" && msg.params.response.status >= 400) responses.push({ status: msg.params.response.status, url: msg.params.response.url });
     if (msg.method === "Runtime.consoleAPICalled") {
       consoleLog.push({ level: msg.params.type, text: msg.params.args.map((a) => a.value ?? a.description ?? a.type).join(" ") });
     } else if (msg.method === "Runtime.exceptionThrown") {
@@ -131,7 +133,7 @@ async function page(cdp, mode) {
       void S("Page.handleJavaScriptDialog", { accept: false }); // stay on the page
     }
   });
-  for (const d of ["Runtime", "Log", "Page"]) await S(`${d}.enable`);
+  for (const d of ["Runtime", "Log", "Page", "Network"]) await S(`${d}.enable`);
   await S("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
   await S("Page.navigate", { url: PAGES[mode] });
   const evalJs = async (expr) => {
@@ -152,7 +154,7 @@ async function page(cdp, mode) {
   const drop = (name, text) => evalJs(`(() => {
     const dt = new DataTransfer(); dt.items.add(new File([${JSON.stringify(text)}], ${JSON.stringify(name)}));
     window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); return true; })()`);
-  return { S, evalJs, B, click, has, realClick, drop, consoleLog, exceptions, dialogs, close: () => cdp.send("Target.closeTarget", { targetId }) };
+  return { S, evalJs, B, click, has, realClick, drop, consoleLog, exceptions, dialogs, responses, close: () => cdp.send("Target.closeTarget", { targetId }) };
 }
 
 function noErrors(P, mode, extra = []) {
@@ -206,6 +208,32 @@ async function native(cdp) {
   await waitFor("the save dialog", 5000, () => has("[data-bb=file-browser-name]"));
   const proposed = await P.evalJs("document.querySelector('[data-bb=file-browser-name]').value");
   check("Save as: proposes frame.bimble, in work (the folder listed last for… open: a new purpose starts at home)", proposed === "frame.bimble", proposed);
+  // FIXUI 5: a typed folder outside the folders Bimble lists: a message for a person (the folders it
+  // lists, --root), the typed path kept and marked, Save disabled: never a save into the folder listed
+  // before while another is shown (it showed "fs_list: outside …" and saved into home).
+  {
+    const dir0 = await P.evalJs("document.querySelector('[data-bb=file-browser-path]').value");
+    const log0 = P.consoleLog.length, resp0 = P.responses.length;
+    await P.evalJs(`(() => { const i = document.querySelector('[data-bb=file-browser-path]'); i.value = '/etc'; i.dispatchEvent(new Event('input'));
+      i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+    await sleep(300);
+    const r = JSON.parse(await P.evalJs(`JSON.stringify({ err: document.querySelector('[data-bb=file-browser-error]')?.textContent ?? null,
+      path: document.querySelector('[data-bb=file-browser-path]').value, invalid: document.querySelector('[data-bb=file-browser-path]').getAttribute('aria-invalid'),
+      go: document.querySelector('[data-bb=file-browser-go]').disabled, places: [...document.querySelectorAll('[data-bb=file-browser-root]')].map((e) => e.title) })`));
+    check("Save as: a folder outside the roots: the folders Bimble lists and --root, not the core's words",
+      !!r.err && r.err.includes(home) && r.err.includes("--root") && !r.err.includes("fs_list") && !r.err.includes("query fs_roots"), JSON.stringify(r));
+    check("Save as: the typed path stays, marked rejected; Save disabled", r.path === "/etc" && r.invalid === "true" && r.go === true, JSON.stringify(r));
+    check("Save as: Places lists the roots", r.places.length >= 1 && r.places.includes(home), JSON.stringify(r.places));
+    // The host's refusal of the folder is the message shown: exactly that 400 is forgiven.
+    const late = P.consoleLog.splice(log0), got = P.responses.slice(resp0);
+    check("Save as: one 400, the host's /query/fs_list for /etc", got.length === 1 && /\/query\/fs_list\?/.test(got[0].url) && late.filter((m) => /status of 400/.test(m.text)).length === 1, JSON.stringify(got));
+    P.consoleLog.push(...late.filter((m) => !/status of 400/.test(m.text)));
+    const f0 = await file();
+    await click("[data-bb=file-browser-go]");
+    await sleep(300);
+    check("Save as: a click on Save writes nothing while the shown folder is not the listed one",
+      (await has("[data-bb=file-browser]")) && (await file()) === f0 && !existsSync(join(dir0, "frame.bimble")), `${f0} ${dir0}`);
+  }
   await click("[data-bb=file-browser-entry][data-name=work]");
   await waitFor("work listed", 5000, () => P.evalJs("document.querySelector('[data-bb=file-browser-path]').value.endsWith('/work')"));
   check("Save as: an existing name is flagged", await has("[data-bb=file-browser-replace]"));
@@ -265,11 +293,16 @@ async function native(cdp) {
   const fj = join(work, "frame.json");
   const fjText = readFileSync(fj, "utf8");
   writeFileSync(fj, "not a model any more\n");
-  const before400 = P.consoleLog.length;
+  const before400 = P.consoleLog.length, resp400 = P.responses.length;
   await click(`[data-bb=home-recent-file][data-path=${JSON.stringify(fj)}]`);
   await waitFor("the error", 5000, () => has("[data-bb=shell-error]"));
-  // The host's 400 for the refused open is the error shown (one log line).
-  P.consoleLog.push(...P.consoleLog.splice(before400).filter((m) => !/status of 400/.test(m.text)));
+  // The host's 400 for the refused open is the error shown (one log line): exactly that one is forgiven.
+  {
+    const late = P.consoleLog.splice(before400), got = P.responses.slice(resp400);
+    check("a recent file that does not open: exactly one 400, the host's /action/open",
+      got.length === 1 && got[0].status === 400 && /\/action\/open\?/.test(got[0].url) && late.filter((m) => /status of 400/.test(m.text)).length === 1, JSON.stringify(got));
+    P.consoleLog.push(...late.filter((m) => !/status of 400/.test(m.text)));
+  }
   await click("[data-bb=shell-error-back]");
   await sleep(300);
   check("a recent file that does not open: the shell's error, Back -> Home, the model kept", (await has("[data-bb=home]")) && !(await has("[data-bb=shell-error]")) && (await file()) === "saved.bimble");
@@ -308,11 +341,13 @@ async function native(cdp) {
   check("... no recent file for it", !(await B("return b.recentFiles().map((f) => f.name);")).includes("dropped.json"));
   await hostCall("verb", "place", JSON.stringify({ a: [2000, 0], kind: "column", storey: JSON.parse((await hostCall("query", "storeys", "{}")).text)[0].id }));
   await waitFor("unsaved", 5000, () => B("return b.state.value.unsaved;"));
-  const before = P.consoleLog.length;
+  const before = P.consoleLog.length, respSave = P.responses.length;
   await B("b.runAction('save'); return true;");
   await waitFor("Save of a dropped model: the Save as dialog", 5000, () => P.evalJs("document.querySelector('[data-bb=file-browser]')?.dataset.purpose === 'save_as'"));
   // The page tries Save first; the host's 400 "a new model has no file yet" sends it to Save as (one log line).
-  const late = P.consoleLog.splice(before);
+  const late = P.consoleLog.splice(before), got = P.responses.slice(respSave);
+  check("Save of a dropped model: exactly one refusal, the host's 400 for /action/save",
+    got.length === 1 && got[0].status === 400 && /\/action\/save\?/.test(got[0].url) && late.filter((m) => /status of 400/.test(m.text)).length === 1, JSON.stringify(got));
   P.consoleLog.push(...late.filter((m) => !/status of 400/.test(m.text)));
   check("Save of a dropped model asks where (Save as)", await P.evalJs("document.querySelector('[data-bb=file-browser-name]').value") === "dropped.bimble");
   await click("[data-bb=file-browser-close]");
@@ -324,8 +359,8 @@ async function wasm(cdp) {
   const P = await page(cdp, "wasm");
   await waitFor("wasm: the demo model", 30000, () => P.B("return b.state.value.file === 'frame.json';"));
   await P.drop("dropped.json", readFileSync(join(CCORE, "golden/frame.json"), "utf8"));
-  await waitFor("wasm: the dropped file open", 10000, () => P.B("return b.state.value.file === 'dropped.json';"));
-  check("wasm: a .json dropped on the page opens under its name", true);
+  const opened = await waitFor("wasm: the dropped file open", 10000, () => P.B("return b.state.value.file === 'dropped.json';")).then(() => true, () => false);
+  check("wasm: a .json dropped on the page opens under its name", opened && (await P.B("return b.state.value.file;")) === "dropped.json");
   check("wasm: its elements", (await P.B("return b.query('elements', { limit: 10000 }).length;")) > 0);
   noErrors(P, "wasm");
   await P.close();

@@ -32,15 +32,30 @@ const entries = computed(() => {
 });
 const join = (dir: string, n: string) => (dir.endsWith("/") ? dir + n : `${dir}/${n}`);
 
+// FIXUI: a folder the host refuses stays typed and marked rejected; the listing (and so where a save
+// goes) is the folder shown before. Save/Open waits until the path field and the listing agree.
+const rejected = ref<string | null>(null);
+// The core's words for a folder outside the roots (ccore/host/fs.h FS_OUTSIDE), said for a person.
+function human(m: string): string {
+  if (/outside the folders Bimble lists/.test(m)) {
+    const where = roots.value.map((r) => r.path).join(", ") || "—";
+    return t("files.outsideRoots", { roots: where });
+  }
+  return t("files.cannotList", { msg: m.replace(/^fs_list: /, "") });
+}
 function list(dir: string): void {
   try {
     listing.value = query<Listing>("fs_list", { dir, ext: PURPOSES[purpose].ext, purpose });
     where.value = listing.value.dir;
     error.value = null;
+    rejected.value = null;
   } catch (e) {
-    error.value = msg(e);
+    error.value = human(msg(e));
+    rejected.value = dir;
   }
 }
+// The folder shown and the folder listed are the same (a typed path not yet listed, or refused: not).
+const agree = computed(() => !!listing.value && where.value === listing.value.dir);
 
 onMounted(() => {
   try {
@@ -64,7 +79,7 @@ function click(e: Entry): void {
   }
 }
 function choose(n: string | null = saving ? name.value.trim() : picked.value): void {
-  if (!n || !listing.value) return;
+  if (!n || !listing.value || !agree.value) return; // FIXUI: never into a folder other than the one shown
   let file = n;
   // A typed name without its extension takes the purpose's first one.
   if (saving && !PURPOSES[purpose].ext.some((x) => file.toLowerCase().endsWith(x))) file += PURPOSES[purpose].ext[0];
@@ -84,7 +99,8 @@ const date = (s: number) => new Date(s * 1000).toLocaleString();
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <button class="btn s" type="button" :disabled="!listing?.parent" :aria-label="t('files.up')" :title="t('files.up')" data-bb="file-browser-up" @click="listing?.parent && list(listing.parent)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg></button>
-      <input v-model="where" class="inp mono" style="flex:1" :aria-label="t('files.folder')" data-bb="file-browser-path" @keydown.enter.prevent="list(where)">
+      <input v-model="where" class="inp mono" :class="{ bad: rejected !== null && where === rejected }" style="flex:1" :aria-label="t('files.folder')"
+        :aria-invalid="rejected !== null && where === rejected ? 'true' : 'false'" data-bb="file-browser-path" @keydown.enter.prevent="list(where)">
     </div>
     <div class="body">
       <nav class="places" :aria-label="t('files.places')">
@@ -114,7 +130,7 @@ const date = (s: number) => new Date(s * 1000).toLocaleString();
       <span v-if="error" class="note err" role="alert" data-bb="file-browser-error">{{ error }}</span>
       <span v-else-if="exists" class="note" data-bb="file-browser-replace">{{ t('files.replace', { name: name.trim() }) }}</span>
       <span style="flex:1"></span>
-      <button class="btn p" type="button" :disabled="saving ? !name.trim() : !picked" data-bb="file-browser-go" @click="choose()">{{ go }}</button>
+      <button class="btn p" type="button" :disabled="!agree || (saving ? !name.trim() : !picked)" :title="agree ? undefined : t('files.notShown')" data-bb="file-browser-go" @click="choose()">{{ go }}</button>
     </div>
   </div>
 </template>
@@ -141,6 +157,8 @@ h2 { font-family: 'Sora', sans-serif; margin: 0; }
 .fld { display: flex; flex-direction: column; gap: 3px; }
 .inp { height: 30px; border: 1px solid var(--bb-stone); border-radius: 8px; background: var(--bb-sheet); padding: 0 8px; font: inherit; font-size: 13.5px; color: var(--bb-ink); min-width: 0; }
 .inp.mono { font-family: 'DM Mono', monospace; font-size: 13px; }
+/* FIXUI: the typed folder the host refused: ink text, an ochre outline (bimble-design error colour) */
+.inp.bad { border: 2px solid var(--bb-error); text-decoration: line-through; text-decoration-color: var(--bb-stone); }
 .note { font-size: 13px; color: var(--bb-stone); }
 .note.err { color: var(--bb-error); }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 16px; border-radius: var(--bb-radius-pill); font: inherit; font-weight: 600; color: var(--bb-ink); cursor: pointer; white-space: nowrap; border: 1px solid var(--bb-stone); background: none; }
