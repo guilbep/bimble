@@ -568,6 +568,17 @@ static void handle_one(Conn *c, int *again) {
         if (ms > 0) fprintf(stderr, "bimble-ccore: mesh rev %u built in %.3f ms, %zu bytes\n", (unsigned)rev, ms, mn);
         char xrev[80];
         snprintf(xrev, sizeof xrev, "X-Rev: %u\r\nAccess-Control-Expose-Headers: X-Rev\r\n", (unsigned)rev);
+        /* ---- TEST1: no model open (mesh.c's only 404): a well-formed empty BMSH (52 bytes, no
+         * element, origin 0, the session's rev), 200: "no geometry" is an answer, not an error. A page
+         * that asks between a close and the change that tells it (BUG2) draws nothing and does not
+         * retry; mesh.c's 404 stays for the wasm module (the page does not ask it with no model). */
+        unsigned char none[52] = {'B', 'M', 'S', 'H', 1, 0, 0, 0};
+        if (st == 404) {
+            uint32_t r32 = rev;
+            memcpy(none + 8, &r32, 4); /* little-endian host (mesh.c) */
+            st = 200, mp = (const char *)none, mn = sizeof none;
+        }
+        /* ---- end TEST1 ---- */
         respond_x(c, st, st == 200 ? "application/octet-stream" : TEXT, st == 200 ? xrev : NULL, mp, mn, keep);
     } else if (is_static) {
         const cc_static_file *f = cc_static_find(cfg->web, path.p, path.n);

@@ -4,7 +4,7 @@
 // scene of the same model, cc_scene_build): element count, each row's GlobalId, category and
 // vertex / triangle / edge counts, the origin bits, index ranges; the X-Rev header; a second
 // fetch is served from the cache (same bytes, one build); 403 on a bad token. Then a host with
-// no model on <port> answers 404. Prints sizes and times, "N passed, M failed"; exits non-zero on
+// no model on <port> answers 200 and an empty BMSH (TEST1). Prints sizes and times, "N passed, M failed"; exits non-zero on
 // a failure. No dependencies. Kills the hosts it starts.
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -134,8 +134,14 @@ try {
 
   await startHost(NOMODEL, { CCORE_MODEL: "" });
   const nm = await fetch(`http://127.0.0.1:${NOMODEL}/mesh?t=${TOKEN}`);
-  const nmText = await nm.text();
-  check("no model -> 404 text", nm.status === 404 && /no model/.test(nmText), `${nm.status} ${nmText}`);
+  const nmBody = Buffer.from(await nm.arrayBuffer());
+  // TEST1 (BUG2): no model is "no geometry", not an error: 200, an empty BMSH (52 bytes, no element,
+  // origin 0) and the session's rev in X-Rev and the header (was 404 "no model open").
+  const nmM = nm.status === 200 && nmBody.length === 52 ? parseBmsh(nmBody) : null;
+  check("no model -> 200, an empty BMSH (52 bytes, 0 elements, origin 0), X-Rev = its rev",
+    nmM !== null && nmM.magic === "BMSH" && nmM.version === 1 && nmM.nE === 0 && nmM.nV === 0 && nmM.nI === 0 && nmM.nS === 0 && nmBody.subarray(28, 52).equals(Buffer.alloc(24)) &&
+    nm.headers.get("content-type") === "application/octet-stream" && nm.headers.get("x-rev") === String(nmBody.readUInt32LE(8)),
+    `${nm.status} ${nmBody.length} bytes ${nm.headers.get("x-rev")} ${nmBody.subarray(0, 16).toString("hex")}`);
 } catch (e) {
   check("no exception in the test", false, e.stack ?? String(e));
   for (const h of hosts) console.log(`--- host ---\n${h.log.slice(-2000)}`);

@@ -258,7 +258,9 @@ try {
   const ob = await H.act("open", { path: bv });
   check("open a broken .bimbleview -> 400 (viewfile's text), the open scene kept", ob.status === 400 && ob.text.includes("bimbleview") && (await H.q("state")).file === "fv.bimbleview", ob.text);
   const cv2 = await H.act("close");
-  check("close of a read-only scene -> 200, nothing open, /mesh 404", cv2.status === 200 && (await H.q("state")).file === null && (await H.mesh()).status === 404, cv2.text);
+  const cvm = await H.mesh(); // TEST1: no model -> an empty BMSH (was 404)
+  check("close of a read-only scene -> 200, nothing open, /mesh an empty BMSH", cv2.status === 200 && (await H.q("state")).file === null &&
+    cvm.status === 200 && cvm.magic === "BMSH" && cvm.elements === 0 && cvm.triangles === 0, `${cv2.text} ${JSON.stringify(cvm)}`);
   await H.act("open", { path: fj });
 
   // close; errors.

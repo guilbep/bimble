@@ -188,6 +188,15 @@ export function parseBmsh(ab: ArrayBuffer, at = 0, exact = true): Bmsh {
   return { rev, origin, ids, cats, v0, nv, i0, ni, s0, ns, pos, idx, edges, normals, size };
 }
 
+// ---- TEST1: an empty BMSH (no element; what the host answers with no model open) ----
+const EMPTY_BMSH = (): ArrayBuffer => {
+  const ab = new ArrayBuffer(52), dv = new DataView(ab);
+  dv.setUint32(0, 0x48534d42, true); // "BMSH"
+  dv.setUint32(4, 1, true); // version 1; rev, counts and origin 0
+  return ab;
+};
+// ---- end TEST1 ----
+
 /** GET /mesh: the open model's BMSH, then (with links) the LNKS trailer of ccore/session/links.h,
  *  merged into one mesh: the links' elements after ours (`model` k + 1), moved by their origin minus
  *  ours (f64, then f32). Without a trailer: the BMSH as parseBmsh gives it. */
@@ -731,6 +740,9 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       stats.meshFetchMs = performance.now() - t0;
       stats.meshBytes = ab.byteLength;
       const m = parseMesh(ab);
+      // ---- TEST1: the model closed while this answer was on its way: not drawn (the frame loop cleared the view) ----
+      if (state.value.file === null) return;
+      // ---- end TEST1 ----
       stats.meshRev = m.rev;
       stats.links = m.links ?? [];
       stats.error = null;
@@ -1699,7 +1711,14 @@ export function glViewport(base: string | MeshSource, token = ""): () => void {
       seenState = state.value;
       if (!loading && !checking && wantRev === rev) void checkEpoch();
     }
-    if (!loading && wantRev !== rev) {
+    // ---- TEST1: no model open (state.file null): nothing to ask the host for (it would answer an empty
+    // mesh; GET /mesh used to 404 there and the error path retried every second). The last model's
+    // picture goes; the next model loads whatever its rev (wantRev forgotten). ----
+    if (state.value.file === null) {
+      wantRev = null;
+      if (mesh !== null && mesh.ids.length > 0) upload(parseMesh(EMPTY_BMSH()));
+    } else if (!loading && wantRev !== rev) {
+      // ---- end TEST1 ----
       wantRev = rev;
       void load();
     }

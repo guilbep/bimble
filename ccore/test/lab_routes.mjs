@@ -10,7 +10,8 @@
 //     (`data-not-yet`) with a tooltip, and a click on it changes nothing and shows the tooltip;
 //   - a ribbon tab whose every tool is "not yet" carries the "preview" mark;
 //   - a file open read only: the header says "Read only" (not "Saved"), no Save is enabled;
-//   - no console error, no uncaught exception, no 4xx/5xx answer during the walk.
+//   - no console error, no uncaught exception, no 4xx/5xx answer during the walk (GET /mesh with no
+//     model too: no request at all, TEST1); closing the model asks no /mesh and draws nothing.
 // Runs on: the native host (/?native=1) with no model, an editable model (golden/frame.json) and a
 // read-only IFC (golden/ifc/frame.ifc); the C core's wasm (/?ccore=1, the model it boots with)
 // and the viewer-only wasm (&ccore_wasm=ccore/ccore-view.wasm). Needs web-ui/node_modules,
@@ -114,9 +115,11 @@ async function session(cdp) {
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
   const S = (m, p) => cdp.send(m, p, sessionId);
   const errors = [];
+  const meshReqs = []; // TEST1: every GET /mesh the page sends (its URL)
   cdp.on((msg) => {
     if (msg.sessionId !== sessionId) return;
     const p = msg.params;
+    if (msg.method === "Network.requestWillBeSent" && /^\/mesh$/.test(new URL(p.request.url).pathname)) meshReqs.push(p.request.url);
     if (msg.method === "Runtime.exceptionThrown") errors.push(`exception: ${p.exceptionDetails.exception?.description ?? p.exceptionDetails.text}`);
     if (msg.method === "Runtime.consoleAPICalled" && p.type === "error") errors.push(`console.error: ${p.args.map((a) => a.value ?? a.description).join(" ")}`);
     // The browser's own favicon request (the lab has none) is not the page's.
@@ -152,7 +155,7 @@ async function session(cdp) {
     await sleep(150);
     return true;
   };
-  return { S, evalJs, js, go, click, errors, seen: 0, close: () => cdp.send("Target.closeTarget", { targetId }) };
+  return { S, evalJs, js, go, click, errors, meshReqs, seen: 0, close: () => cdp.send("Target.closeTarget", { targetId }) };
 }
 
 // What a screen shows, from the DOM: NotAvailable, or data (text, no empty table), or empty.
@@ -235,11 +238,11 @@ async function walk(P, label, { model }) {
     await P.js("pn.currentPanel.value = null; return 1");
   }
   if (!model) {
-    // Known, not FAKE1's: the WebGL viewport (glviewport.ts, ticket G2's file) asks GET /mesh with no
-    // model open and the host answers 404 (session/mesh.c). Listed in the report; every other error counts.
-    const errs = P.errors.slice(before).filter((e) => !/(404|Not Found).*\/mesh\?/.test(e));
-    if (errs.length !== P.errors.length - before) console.log(`note ${label}: GET /mesh 404 with no model (glviewport.ts), ${P.errors.length - before - errs.length} line(s), not counted`);
-    check(`${label}: no console error, no 4xx/5xx during the walk`, errs.length === 0, errs.join(" | "));
+    // TEST1 (BUG2): GET /mesh with no model counts like any other answer (it was exempt: the WebGL
+    // viewport asked every second and the host answered 404). The page asks nothing with no model.
+    const errs = P.errors.slice(before);
+    check(`${label}: no console error, no 4xx/5xx since the page opened, nor during the walk`, errs.length === 0, errs.join(" | "));
+    check(`${label}: no GET /mesh with no model open`, P.meshReqs.length === 0, P.meshReqs.join(" | "));
     P.seen = P.errors.length;
     return;
   }
@@ -348,6 +351,18 @@ async function main() {
     await P.js("sh.send({ do: 'showView' }); return 1");
     await sleep(500);
     await walk(P, "native, read-only IFC", { model: true });
+    // TEST1 (BUG2): close the model: the page drops the picture, asks no /mesh, sees no 4xx. 2.5 s
+    // is more than two turns of the old error path (a 404, then a retry a second later).
+    const e0 = P.errors.length, m0 = P.meshReqs.length;
+    const cl = await host("action", "close");
+    check("native: close", cl.status === 200, cl.text);
+    await waitFor("no model in the page", 10000, () => P.js("return b.state.value.file === null"));
+    await sleep(2500);
+    const tris = await P.evalJs("window.__bbGl?.drawnTris ?? -1");
+    check("native, closed: no GET /mesh after the close, no 4xx/5xx, nothing drawn",
+      P.meshReqs.length === m0 && P.errors.length === e0 && tris === 0,
+      `mesh ${P.meshReqs.slice(m0).join(" | ")}; errors ${P.errors.slice(e0).join(" | ")}; triangles drawn ${tris}`);
+    P.seen = P.errors.length;
     await P.close();
   });
   // The C core's wasm and the viewer-only wasm: the model each boots with.
