@@ -120,6 +120,9 @@ typedef struct {
     size_t ndensities;
     int has_georef;
     cc_str georef; /* GEOR's JSON text, when has_georef (Rust: only when not the default) */
+    /* QTY1 (ADR 0080): per scene element its model element (properties, PredefinedType, openings),
+     * set by cc_viewfile_meta_from_model only; NULL for an IFC read as it is or a view file. */
+    const cc_element *const *elements;
 } cc_viewfile_meta;
 
 void cc_viewfile_meta_init(cc_viewfile_meta *mt);

@@ -61,6 +61,7 @@ VIEW_DENY+=(src/merge.c src/repo_merge.c) # H2b: merging history branches (no fo
 VIEW_DENY+=(src/pdf_in.c src/ref_read.c) # L1: reading a PDF is link_pdf, an edit (view_only.c): the viewer shows the stored references only
 VIEW_DENY+=(src/dxf_in.c) # L2: reading a DXF is link_dxf, an edit, as link_pdf
 VIEW_DENY+=(src/verbs_views.c) # SEC1: view_add, view_remove, view_edit are verbs (the table is not in the viewer)
+VIEW_DENY+=(src/verbs_schedules.c) # QTY1: schedule_add, schedule_edit, schedule_remove are verbs
 VIEW_OPT=-Os
 VIEW_MAX=1000000 # Pierre, 25 Nov 2026: up to 1-2 MB is acceptable for the viewer; watch performance (Lighthouse), not bytes
 HOST=(host/*.c)

@@ -1775,8 +1775,8 @@ static uint8_t FD_FOOTING[] = {F_LEVEL, F_LOC, F_NAME, F_MAT, F_SEC, F_HEI, F_VO
 static uint8_t FD_ALL[] = {F_LEVEL, F_NAME, F_CLASS, F_MAT, F_VOL, F_MASS};
 #define DEF(nm, cls, fam, fd)                                                                                    \
     {{nm, sizeof nm - 1}, {cls, sizeof cls / sizeof cls[0]}, fam >= 0, fam >= 0 ? fam : 0, fd,                \
-     sizeof fd, 1, 1}
-#define DEF0(nm, fam, fd) {{nm, sizeof nm - 1}, {NULL, 0}, fam >= 0, fam >= 0 ? fam : 0, fd, sizeof fd, 1, 1}
+     sizeof fd, 1, 1, {NULL, 0}, 0, 0, 0, {NULL, 0}, {NULL, 0}, 0, {NULL, 0}, 0}
+#define DEF0(nm, fam, fd) {{nm, sizeof nm - 1}, {NULL, 0}, fam >= 0, fam >= 0 ? fam : 0, fd, sizeof fd, 1, 1, {NULL, 0}, 0, 0, 0, {NULL, 0}, {NULL, 0}, 0, {NULL, 0}, 0}
 static const cc_schedule BUILTIN[] = {
     DEF("Concrete columns", CLS_COLUMN, CC_CAT_CONCRETE, FD_COL),
     DEF("Steel columns", CLS_COLUMN, CC_CAT_STEEL, FD_STEEL_COL),
@@ -1852,15 +1852,15 @@ static int sched_field(void *ctx, int i, const JrVal *v, Buf *err) {
     default: {
         if (v->type == JR_NULL) return 0;
         if (v->type != JR_ARR) return bad_type(err, v, "a sequence");
-        const char *names[CC_FIELD_COUNT];
-        for (int k = 0; k < CC_FIELD_COUNT; k++) names[k] = cc_sched_field_name(k);
+        const char *names[CC_FIELD_RUST]; /* QTY1: Rust's set_schedule takes Rust's 13 */
+        for (int k = 0; k < CC_FIELD_RUST; k++) names[k] = cc_sched_field_name(k);
         p->has_columns = 1;
         p->ncolumns = v->n;
         p->columns = v->n ? arena_alloc(p->a, v->n, 1) : NULL;
         if (v->n && !p->columns) return bad(err, "out of memory", 0, 0);
         for (size_t k = 0; k < v->n; k++) {
             int f;
-            if (d_variant(err, &v->items[k], "Field", names, CC_FIELD_COUNT, &f)) return -1;
+            if (d_variant(err, &v->items[k], "Field", names, CC_FIELD_RUST, &f)) return -1;
             p->columns[k] = (uint8_t)f;
         }
         return 0;

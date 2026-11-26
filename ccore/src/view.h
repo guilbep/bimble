@@ -139,8 +139,14 @@ typedef enum {
     CC_FIELD_VOLUME,
     CC_FIELD_MASS,
     CC_FIELD_GLOBAL_ID,
+    /* ---- QTY1 (ADR 0080): C additions, written only by C-own lists (DEVIATIONS 38) ---- */
+    CC_FIELD_ELEMENTS,     /* "count": 1 per row, summed: the element count */
+    CC_FIELD_TYPE,         /* "type": the element's PredefinedType (Bimble/PredefinedType), else empty */
+    CC_FIELD_GROSS_VOLUME, /* "gross_volume": Volume (net, openings cut) + its openings' volume, m3 */
+    /* ---- end QTY1 ---- */
     CC_FIELD_COUNT
 } cc_sched_field;
+#define CC_FIELD_RUST 13 /* the fields Rust's schedule::Field has (level ... global_id) */
 
 typedef struct { /* ScheduleDef */
     cc_str name;
@@ -150,7 +156,19 @@ typedef struct { /* ScheduleDef */
     uint8_t *fields; /* cc_sched_field */
     size_t nfields;
     int group_by_level, totals;
+    /* ---- QTY1 (ADR 0080): saved quantity lists; each left out of the file when empty / off, so
+     * a schedule Rust wrote keeps its bytes ---- */
+    cc_strs properties;   /* property columns ("Pset_WallCommon/IsExternal"), after the fields */
+    int group_by_material; /* groups by material (then by level within it when group_by_level) */
+    int summary;           /* only the subtotal and total lines, no element rows */
+    int has_filter;        /* rows whose `filter_column` text equals `filter_value` (ASCII case) */
+    cc_str filter_column, filter_value;
+    int has_sort;          /* rows sorted by `sort_column` (a field name or a property key) */
+    cc_str sort_column;
+    int sort_desc;
+    /* ---- end QTY1 ---- */
 } cc_schedule;
+#define CC_SCHED_MAX_TEXT 200 /* QTY1: a property key, a filter's column or value, a sort column */
 
 const char *cc_view_kind_name(int k);   /* "three_d", "plan", "section" */
 const char *cc_look_name(int k);        /* "down", "up" */

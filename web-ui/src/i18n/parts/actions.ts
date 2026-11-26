@@ -74,6 +74,9 @@ export const fr = {
   "action.draw_section": "Coupe", // VIEWSHEET
   "action.sheet_place_view": "Placer une vue…", // VIEWSHEET
   "action.sheet_revision": "Indice de la feuille…", // VIEWSHEET
+  "action.new_quantities": "Nouveau métré…", // QTY1
+  "action.quantity_columns": "Colonnes du métré…", // QTY1
+  "action.quantities_by_material": "Métré par matériau", // QTY1
   "actionTab.Model": "Modèle",
   "actionTab.Manage": "Gérer",
   "actionTab.Quick access": "Accès rapide",
@@ -150,6 +153,9 @@ export const en: Record<keyof typeof fr, string> = {
   "action.draw_section": "Section", // VIEWSHEET
   "action.sheet_place_view": "Place view…", // VIEWSHEET
   "action.sheet_revision": "Sheet revision…", // VIEWSHEET
+  "action.new_quantities": "New quantities…", // QTY1
+  "action.quantity_columns": "Quantity columns…", // QTY1
+  "action.quantities_by_material": "Quantities by material", // QTY1
   "actionTab.Model": "Model",
   "actionTab.Manage": "Manage",
   "actionTab.Quick access": "Quick access",

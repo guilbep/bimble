@@ -3,9 +3,10 @@
 // (scripts/copy-ccore.mjs), Vite from web-ui/ and headless /usr/bin/chromium over raw CDP. Twice,
 // on the native host (/?native=1&gl=1&page=quantities) and on ccore.wasm (/?ccore=1&gl=1&page=quantities):
 //   Quantities: the page's schedule_rows("All elements") is golden/schedule/frame/all-elements.json
-//     (Rust's text); the table shows "All elements", its 50 rows (truncated note: 50 of 72), its
-//     group lines and the total line's cells as Rust's; Export CSV (the page's download path, the
-//     anchor's Blob read back) gives golden/schedule/frame/all-elements.csv; a real click on a row
+//     (Rust's text); the table shows "All elements", all its 72 rows (QTY1: a page of 200, "Rows 1–72
+//     of 72"; before, 50 and a note), its group lines and the total line's cells as Rust's; Export CSV
+//     (the page's download path, the anchor's Blob read back) gives golden/schedule/frame/all-elements.csv
+//     under the header line the table shows (QTY1: one source for both); a real click on a row
 //     selects its element (state.selection, the row drawn selected); the group select set to "none"
 //     (set_schedule, one history step) leaves no group line and the rows change; undo restores it.
 //   Palette: Ctrl+K opens it (the query field focused), "section box" typed lists fewer items (the
@@ -126,14 +127,17 @@ async function quantities(mode, S, evalJs) {
       rows: [...t.querySelectorAll('tbody tr:not(.g)')].map(cells),
       total: [...t.querySelectorAll('tfoot td')].map((td) => td.textContent.trim()),
       truncated: !!document.querySelector('[data-bb=quantities-truncated]'),
+      rowsNote: document.querySelector('[data-bb=quantities-rows]')?.textContent.trim() ?? null, // QTY1
       empty: document.querySelector('[data-bb=quantities]')?.textContent.includes('quantities.empty') ?? false,
     };
   })())`));
   check(`${mode}: the title is the schedule's name`, dom.title === want.name, dom.title);
   check(`${mode}: ${want.columns.length} columns`, dom.head.length === want.columns.length, JSON.stringify(dom.head));
-  const wantRows = want.groups.flatMap((g) => g.rows);
-  check(`${mode}: the rows are Rust's (${wantRows.length} of ${want.count}, truncated note)`,
-    JSON.stringify(dom.rows) === JSON.stringify(wantRows) && dom.truncated === want.truncated, `${dom.rows.length} rows; ${JSON.stringify(dom.rows[0])}`);
+  // QTY1: every row of Rust's CSV (its element lines: a name in the second cell), no truncated note.
+  const wantRows = golden("schedule/frame/all-elements.csv").trimEnd().split("\n").slice(1).map((l) => l.split(",")).filter((c) => c[1] !== "");
+  check(`${mode}: the rows are Rust's (all ${wantRows.length} of ${want.count}, no truncated note; QTY1)`,
+    wantRows.length === want.count && JSON.stringify(dom.rows) === JSON.stringify(wantRows) && !dom.truncated && /72.*72/.test(dom.rowsNote ?? ""),
+    `${dom.rows.length} rows; ${JSON.stringify(dom.rows[0])}; ${dom.rowsNote}`);
   check(`${mode}: one group line per level`, dom.groups.length === want.groups.filter((g) => g.level).length, JSON.stringify(dom.groups));
   const span = (c) => { const i = c.findIndex((x) => x !== ""); return Math.max(1, i < 0 ? c.length : i); };
   check(`${mode}: the total line's values are Rust's`, JSON.stringify(dom.total.slice(1)) === JSON.stringify(want.total.slice(span(want.total))),
@@ -153,7 +157,9 @@ async function quantities(mode, S, evalJs) {
   })()`);
   await evalJs("document.querySelector('[data-bb=quantities-export]').click(), true");
   const csv = await waitFor(`${mode}: the CSV`, 5000, async () => JSON.parse(await evalJs("JSON.stringify(window.__q2csv)")));
-  check(`${mode}: Export CSV = golden all-elements.csv, named "All elements.csv"`, csv.text === golden("schedule/frame/all-elements.csv") && csv.name === "All elements.csv" && csv.type === "text/csv",
+  const gcsv = golden("schedule/frame/all-elements.csv");
+  const wantCsv = `${dom.head.join(",")}\n${gcsv.slice(gcsv.indexOf("\n") + 1)}`; // QTY1: the table's header line
+  check(`${mode}: Export CSV = golden all-elements.csv under the table's headers (${dom.head.join(",")}), named "All elements.csv"`, csv.text === wantCsv && csv.name === "All elements.csv" && csv.type === "text/csv",
     `${csv.name} ${csv.type} ${csv.text.slice(0, 80)}`);
 
   // A real click on the third row selects its element.

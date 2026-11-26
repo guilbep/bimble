@@ -46,7 +46,7 @@ const FEATURES = [
   ["concrete tools (CONC1: footings, raft, openings, sleeves)", "verbs_concrete concrete"],
   ["views and sheets from the ribbon (VIEWSHEET: section tool, annotation types)", "view_sheet"],
   ["queries (model queries)", "query"],
-  ["quantities and schedules", "quantity schedules"],
+  ["quantities and schedules", "quantity schedules verbs_schedules"], // QTY1: saved lists (ADR 0080)
   ["command palette", "palette"],
   ["scene and mesh (triangulation, BMSH)", "scene earcut meshcodec mesh mesh_model prism_cut scene_bmsh hlod bvh"],
   ["booleans glue (kernel calls)", "boolean"],

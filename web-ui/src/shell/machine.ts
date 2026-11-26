@@ -223,6 +223,11 @@ export const CONTROLS: readonly Control[] = [
   { id: "newview-create", event: { do: "showView" }, shown: inModel },
   { id: "placeview-pick", event: { do: "showSheet", sheet: "S-101" }, shown: k("model.sheet") },
   { id: "ribbon-new-sheet", event: { do: "showSheet", sheet: "S-102" }, shown: inModel }, // DEAD1: New sheet shows the sheet it made
+  // QTY1: New quantities… creates the list and shows it on the Quantities page; Columns… applies and shows it;
+  // Quantities → By material makes its list once and shows it (dialogs/NewQuantities.vue, QuantityColumns.vue, RibbonTool.vue).
+  { id: "newquantities-create", event: { do: "showPage", page: "quantities" }, shown: inModel },
+  { id: "quantitycolumns-apply", event: { do: "showPage", page: "quantities" }, shown: inModel },
+  { id: "ribbon-by-material", event: { do: "showPage", page: "quantities" }, shown: inModel },
 ];
 
 /** Whether the control `id` is shown in `s` (an unknown id: never). */

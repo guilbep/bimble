@@ -114,11 +114,12 @@ int cc_viewfile_meta_from_model(cc_viewfile_meta *mt, const cc_model *m, const c
     Arena *a = &mt->arena;
     size_t ne = s->nelements;
     cc_view_info *info = arena_alloc(a, (ne + 1) * sizeof *info, 8);
+    const cc_element **els = arena_alloc(a, (ne + 1) * sizeof *els, 8); /* QTY1 */
     StoreyRef *st = arena_alloc(a, (m->nstoreys + 1) * sizeof *st, 8);
     DensityRef *dens = arena_alloc(a, (m->nmaterials + 1) * sizeof *dens, 8);
     cc_view_storey *storeys = arena_alloc(a, (m->nstoreys + 1) * sizeof *storeys, 8);
     cc_view_density *dout = arena_alloc(a, (m->nmaterials + 1) * sizeof *dout, 8);
-    if (!info || !st || !dens || !storeys || !dout) return -1;
+    if (!info || !els || !st || !dens || !storeys || !dout) return -1;
     for (size_t k = 0; k < ne; k++) {
         const cc_scene_element *e = &s->elements[k];
         if (e->model_index >= m->nelements) return -1;
@@ -131,7 +132,9 @@ int cc_viewfile_meta_from_model(cc_viewfile_meta *mt, const cc_model *m, const c
         info[k].name = me->name;
         info[k].storey = sto->name;
         info[k].material = mat->name;
+        els[k] = me; /* QTY1 */
     }
+    mt->elements = els;
     for (size_t i = 0; i < m->nstoreys; i++) {
         const cc_storey *x = &m->storeys[i];
         st[i].s.name = x->name;

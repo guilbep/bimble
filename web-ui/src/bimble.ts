@@ -153,15 +153,25 @@ export interface ScheduleDef {
   [field: string]: unknown;
 }
 
-/** `query("schedule_rows")`: text cells, at most 50 rows in all. */
+/** `query("schedule_rows")`: text cells, at most 50 rows in all; QTY1: with `offset` and `limit`, a window of
+ *  the rows (`row_count` all of them, `first` the index of a group's first row; a material's line `head`). */
 export interface ScheduleTable {
   name: string;
   columns: string[];
   /** `ids`: one GlobalId (or null) per row, same order as `rows`. */
-  groups: { level: number; rows: string[][]; ids: (string | null)[]; subtotal: string[] }[];
+  groups: { level: string; rows: string[][]; ids: (string | null)[]; subtotal: string[]; material?: string; head?: boolean; first?: number }[];
   total: string[] | null;
   count: number;
   truncated: boolean;
+  offset?: number;
+  row_count?: number;
+}
+
+/** QTY1 (ADR 0080): what a saved list's columns can be (`query schedule_columns`). */
+export interface ScheduleColumns {
+  builtin: string[];
+  fields: { id: string; summed: boolean; title: string }[];
+  properties: string[];
 }
 
 /** `query("placing")`: what is placed (edit.rs `Editor::placing_json`). Sizes and offset in mm. */
@@ -1288,6 +1298,29 @@ export const setView = (id: string, patch: ViewPatch) => runVerb("set_view", { i
 /** Change only the given fields of a schedule (`set_schedule`); `family: null` lists every family. Columns are field names ("level", "volume"). */
 export type SchedulePatch = { group_by_level?: boolean; family?: string | null; columns?: string[] };
 export const setSchedule = (name: string, patch: SchedulePatch) => runVerb("set_schedule", { name, ...patch });
+// ---- QTY1 (ADR 0080): saved quantity lists (ccore/src/verbs_schedules.h) ----
+/** What a list is: what it lists, its columns, filter, grouping and sort (every key optional). */
+export interface ScheduleSpec {
+  classes?: string[] | null;
+  family?: string | null;
+  columns?: string[];
+  properties?: string[] | null;
+  group_by_level?: boolean;
+  group_by_material?: boolean;
+  summary?: boolean;
+  totals?: boolean;
+  filter?: { column: string; value: string } | null;
+  sort?: { column: string; descending: boolean } | null;
+}
+export const scheduleAdd = (name: string | null, spec: ScheduleSpec) => runVerb("schedule_add", { ...(name ? { name } : {}), ...spec });
+export const scheduleEdit = (name: string, spec: ScheduleSpec & { new_name?: string }) => runVerb("schedule_edit", { name, ...spec });
+export const scheduleRemove = (name: string) => runVerb("schedule_remove", { name });
+export const scheduleColumns = () => tryQuery<ScheduleColumns>("schedule_columns", { builtin: [], fields: [], properties: [] });
+/** A window of a list's rows (the page's paging; the table is built once per model revision). */
+export const scheduleWindow = (name: string, offset: number, limit: number) => query<ScheduleTable>("schedule_rows", { name, offset, limit });
+/** The CSV with the headers the table shows (one per column), so the file says what the page says. */
+export const scheduleCsvAs = (name: string, headers: string[]) => query<{ csv: string }>("schedule_csv", { name, headers }).csv;
+// ---- end QTY1 ----
 
 /** Select by GlobalId, primary first; `[]` clears. Returns the Rust error, or null. */
 export function select(ids: string[]): string | null {

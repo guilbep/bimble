@@ -58,6 +58,10 @@ typedef struct { /* Group */
     cc_sched_row *rows;
     size_t nrows;
     cc_cell *subtotal; /* one per field, or NULL (not grouped) */
+    /* QTY1 (ADR 0080), a list grouped by material: the group's material; `head` 1 for the
+     * material's own line (no rows, its subtotal: the material's sums) before its level groups. */
+    cc_str material;
+    int head;
 } cc_sched_group;
 
 typedef struct { /* Table; all memory in `arena` */
@@ -69,7 +73,13 @@ typedef struct { /* Table; all memory in `arena` */
     size_t ngroups;
     cc_cell *total; /* one per field, or NULL */
     size_t count;
+    /* QTY1 (ADR 0080): the property columns, after the fields (their `fields` entry is
+     * CC_SCHED_PROP); grouped by material; only the subtotal and total lines written. */
+    const cc_str *props;
+    size_t nprops;
+    int by_material, summary;
 } cc_sched_table;
+#define CC_SCHED_PROP 255 /* QTY1: a property column in cc_sched_table.fields */
 
 /* schedule(scene, def). Always initializes `t` (free it with cc_sched_table_free either way).
  * 0 ok, -1 with `err` (out of memory). */
@@ -81,6 +91,14 @@ void cc_sched_table_free(cc_sched_table *t);
 void cc_cell_text(Buf *b, const cc_cell *c);
 /* to_csv(table), appended. */
 void cc_schedule_csv(Buf *out, const cc_sched_table *t);
+/* QTY1: the same with the header line given (`nh` == the table's columns; else the titles). */
+void cc_schedule_csv_headers(Buf *out, const cc_sched_table *t, const cc_str *headers, size_t nh);
+/* QTY1: the title of column `k` ("Length (m)", or a property column's key). */
+cc_str cc_sched_column_title(const cc_sched_table *t, size_t k);
+/* QTY1: table_json's object for the page, rows `offset` .. `offset + limit` (in the table's order)
+ * and the groups they are in (a material's line with its first rows); `offset`, `row_count` (all
+ * rows), `material` and `head` keys added, keys sorted. */
+void cc_schedule_json_page(Buf *out, const cc_sched_table *t, const cc_viewfile_meta *mt, size_t offset, size_t limit);
 /* table_json(table, scene, max) as serde_json::to_string writes it (keys sorted), appended. */
 void cc_schedule_json(Buf *out, const cc_sched_table *t, const cc_viewfile_meta *mt, size_t max);
 

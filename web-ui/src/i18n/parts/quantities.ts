@@ -26,14 +26,14 @@ export const fr = {
   "quantities.col.Level": "Étage",
   "quantities.col.Location": "Position",
   "quantities.col.Name": "Nom",
-  "quantities.col.IFC class": "Classe",
+  "quantities.col.IFC class": "Classe IFC", // QTY1: IFC names in the UI
   "quantities.col.Material": "Matériau",
   "quantities.col.Section": "Section",
   "quantities.col.Length (m)": "Longueur (m)",
   "quantities.col.Width (cm)": "Largeur (cm)",
   "quantities.col.Height (cm)": "Hauteur (cm)",
   "quantities.col.Area (m²)": "Surface (m²)",
-  "quantities.col.Volume (m³)": "Volume (m³)",
+  "quantities.col.Volume (m³)": "Volume net (m³)", // QTY1: openings deducted (the mesh is cut)
   "quantities.col.Mass (kg)": "Masse (kg)",
   "quantities.col.GlobalId": "GlobalId",
 } as const;
@@ -63,14 +63,14 @@ export const en: Record<keyof typeof fr, string> = {
   "quantities.col.Level": "Storey",
   "quantities.col.Location": "Location",
   "quantities.col.Name": "Name",
-  "quantities.col.IFC class": "Class",
+  "quantities.col.IFC class": "IFC class", // QTY1
   "quantities.col.Material": "Material",
   "quantities.col.Section": "Section",
   "quantities.col.Length (m)": "Length (m)",
   "quantities.col.Width (cm)": "Width (cm)",
   "quantities.col.Height (cm)": "Height (cm)",
   "quantities.col.Area (m²)": "Area (m²)",
-  "quantities.col.Volume (m³)": "Volume (m³)",
+  "quantities.col.Volume (m³)": "Net volume (m³)", // QTY1
   "quantities.col.Mass (kg)": "Mass (kg)",
   "quantities.col.GlobalId": "GlobalId",
 };

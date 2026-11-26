@@ -56,6 +56,8 @@ export const ACTION_CAPABILITY: Readonly<Record<string, string>> = {
   show_base_point: "setting_out", show_survey_point: "setting_out", view_true_north: "setting_out", // SETOUT
   reference_planes: "reference_planes", // SETOUT: no such action yet: "not yet" while the core does not serve it
   new_view: "views", draw_section: "views", sheet_place_view: "sheets", sheet_revision: "sheets", // VIEWSHEET
+  new_quantities: "schedules", quantity_columns: "schedules", quantities_by_material: "schedules", // QTY1
+  assign_cfc: "cfc", cfc_catalogue: "cfc", bar_schedule: "rebar", // QTY1: tickets QTY2 and RBR4, "not available yet" until then
 };
 
 /** Whether the action `name` is not available in this core at all (no action: not yet either). */

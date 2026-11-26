@@ -169,8 +169,13 @@ static const ActionRow ACTIONS[] = {
     {"reference_planes", "Reference plane by three points", "Setting out", 0, 0}, /* WAVE1B (refplanes.h) */
     {"place_grid_axis", "Place: Grid axis", "Setting out", 0, 0},                 /* WAVE1B (A2) */
     {"link_folder", "Link a folder…", "Collaborate", 0, 0}, /* LINKF (links.h) */
+    /* ---- QTY1 (ADR 0080): the Quantities tab (verbs_schedules.h, DEVIATIONS 38) ---- */
+    {"new_quantities", "New quantities…", "Quantities", 0, 0},
+    {"quantity_columns", "Columns…", "Quantities", 0, 0},
+    {"quantities_by_material", "Quantities by material", "Quantities", 0, 0},
+    /* ---- end QTY1 ---- */
 };
-_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4 + 5 + 2 + 1, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4, CONC1 5, WAVE1B 2, LINKF 1");
+_Static_assert(sizeof ACTIONS / sizeof ACTIONS[0] == 54 + 4 + 3 + 4 + 5 + 2 + 1 + 3, "ribbon.rs:130 has 54 actions; ISS72 and ISS71 add 2 each, SETOUT 3, VIEWSHEET 4, CONC1 5, WAVE1B 2, LINKF 1, QTY1 3");
 
 static const char *const KIND_NAME[] = {"column", "beam", "wall", "slab", /* verbs.rs:28 snake_case */
                                         "footing", "strip_footing", "raft", "opening", "sleeve", /* CONC1 */
@@ -774,6 +779,8 @@ static int action_enabled(cc_session *s, const char *name) { /* ribbon.rs:555-61
     if (!strcmp(name, "annotation_type")) return 1;
     if (!strcmp(name, "view_rule")) return loaded(s); /* M1LINKS: the Navigator's eyes (m1_view_rule) */
     /* ---- end VIEWSHEET ---- */
+    /* ---- QTY1: the saved lists are an editable model's (a read-only scene shows the built-in ones) ---- */
+    if (!strcmp(name, "new_quantities") || !strcmp(name, "quantity_columns") || !strcmp(name, "quantities_by_material")) return s->open;
     /* ---- PAPER1: ribbon.rs:597 PaperView two_pictures(); OnPaper (Export view) `_ => loaded`
      * (the C core draws a model's views only: s->open) ---- */
     if (!strcmp(name, "paper_view")) return two_pictures(s);
@@ -2694,6 +2701,23 @@ static int call_action(cc_session *s, const char *name, const char *body, size_t
     /* ---- VIEWSHEET (view_sheet.h): the dialogs open in the page; the section tool is a switch
      * (it stops the place, annotate and measure tools, as one tool at a time); the types ---- */
     if (!strcmp(name, "new_view") || !strcmp(name, "sheet_place_view") || !strcmp(name, "sheet_revision")) return CC_OK;
+    /* ---- QTY1: New quantities and Columns open their dialog in the page; By material creates the
+     * "By material" list once (schedule_add preset, one history step), the page then shows it ---- */
+    if (!strcmp(name, "new_quantities") || !strcmp(name, "quantity_columns")) return CC_OK;
+    if (!strcmp(name, "quantities_by_material")) {
+        for (size_t i = 0; i < s->model.nschedules; i++) {
+            cc_str nm = s->model.schedules[i].name;
+            if (nm.n == 11 && !memcmp(nm.p, "By material", 11)) return CC_OK;
+        }
+        cc_cmds l;
+        cc_cmds_init(&l);
+        int rc = CC_ERR;
+        if (!cc_verb_run_ex(&s->model, "schedule_add", "{\"preset\":\"by_material\"}", 24, 0, -1, s->rev, &l, out))
+            rc = try_apply(s, l.v, l.n, out);
+        cc_cmds_free(&l);
+        return rc;
+    }
+    /* ---- end QTY1 ---- */
     if (!strcmp(name, "draw_section")) {
         s->vsh.section_draw = !(s->vsh.section_draw && vs_plan_shown(s));
         if (s->vsh.section_draw) {
