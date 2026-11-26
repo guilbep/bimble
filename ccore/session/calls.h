@@ -82,6 +82,10 @@ enum { CC_OK = 200, CC_ERR = 400 };
  * "edge"|"face"},"items":[{"a","b","id","label","text","value_mm"}],"preview":null|{"text",
  * "value_mm"}} (world mm); query "measure" answers the same, query "measurements" Rust's
  * [{"id","label","value_mm"}].
+ * query "level_refusals" (a C addition, DEAD1): what the core would refuse on the Levels page,
+ * told before the click (the verbs run dry): {"<storey id>": {"remove": null|text (level_remove),
+ * "storey": null|text (level_set storey false; null for a level that is not a storey)}}; {} with
+ * no model open.
  * query "visibility_sets" (a C addition): the whole sets the page draws from (query visibility
  * caps its lists at 50): {"hidden_in_view":[…],"isolated_in_view":[…],"now":null|{"ids":[…],
  * "isolate":bool},"reveal":bool}.

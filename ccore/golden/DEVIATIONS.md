@@ -1178,3 +1178,9 @@ C core's references are hand-computed in `test/concrete_test.c` (volumes, positi
   STRIP_FOOTING); otherwise Rust's (FLOOR, PAD_FOOTING…). No file without the property changes.
 - **`query element` `openings`**: the element's count (Rust's `e.openings.len()`, query.rs:146);
   the C core answered 0.
+## 34. What the core refuses, told before the click (ticket DEAD1, ADR 0074)
+
+- **Query `level_refusals`** (C only, ticket DEAD1): what the Levels page's Remove and Building
+  storey would answer, told before the click (the verbs `level_remove` and `level_set` run dry):
+  the page disables the control with the core's text. Rust's page showed the refusal after the
+  click. Test: `test/dead1_test.c`.

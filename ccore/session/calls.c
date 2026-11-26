@@ -1375,6 +1375,31 @@ static int call_query(cc_session *s, const char *name, const char *body, size_t 
         arena_free(&a);
         if (rc != -2) return rc ? CC_ERR : CC_OK;
     }
+    if (!strcmp(name, "level_refusals")) { /* DEAD1, a C addition (calls.h): what the core refuses, told before */
+        jw_obj_begin(&w);
+        for (size_t i = 0; s->open && i < s->model.nstoreys; i++) {
+            const cc_storey *st = &s->model.storeys[i];
+            jw_key_n(&w, st->id.c, 22), jw_obj_begin(&w);
+            for (int k = 0; k < 2; k++) { /* level_remove {id}; level_set {id, storey: false} (a storey only) */
+                jw_key(&w, k ? "storey" : "remove");
+                if (k && st->not_storey) { jw_null(&w); continue; }
+                char args[80];
+                snprintf(args, sizeof args, k ? "{\"id\":\"%.22s\",\"storey\":false}" : "{\"id\":\"%.22s\"}", st->id.c);
+                cc_cmds l;
+                cc_cmds_init(&l);
+                Buf e;
+                buf_init(&e);
+                if (cc_verb_run_ex(&s->model, k ? "level_set" : "level_remove", args, strlen(args), 1, -1, s->rev, &l, &e)) jw_str_n(&w, e.p ? e.p : "", e.len);
+                else jw_null(&w);
+                if (e.oom) w.b->oom = 1;
+                buf_free(&e);
+                cc_cmds_free(&l);
+            }
+            jw_obj_end(&w);
+        }
+        jw_obj_end(&w);
+        return done(&w);
+    }
     if (!strcmp(name, "measurements")) { /* calls.rs:425, state.rs measurements_json (ticket T1) */
         cc_measurements_json(&w, s->measure.dims, s->measure.n);
         return done(&w);

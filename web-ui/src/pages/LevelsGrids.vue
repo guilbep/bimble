@@ -16,7 +16,7 @@ export const capability = "levels"; // FAKE1 capability; no `editable`: G2 lists
 import { computed, ref } from "vue";
 import {
   coordinates, editableNow, gridAdd, gridAxes, gridAxisAdd, gridAxisRemove, gridAxisSet, gridRemove, grids, levelAdd, levelRemove, levelSet,
-  state, storeys, type GridAxisSummary, type LevelSummary,
+  state, storeys, levelRefusals, type GridAxisSummary, type LevelSummary,
 } from "../bimble";
 import { t } from "../i18n";
 import { picked } from "./levelsPick";
@@ -37,6 +37,12 @@ const rows = computed<Row[]>(() => {
     }));
   }
   return [...(scene.value?.levels ?? [])].reverse().map((l) => ({ id: l.key, name: l.name, elevation: l.elevation_mm, count: null, height: null, isStorey: true }));
+});
+/** DEAD1: the core's refusal, told before the click (query level_refusals): Remove of a level that
+ *  holds elements, and Building storey unticked on one. The control is disabled with the core's text. */
+const why = computed(() => {
+  void state.value.rev; void state.value.file;
+  return new Map(Object.entries(editable.value ? levelRefusals() : {}));
 });
 const fmt = (mm: number) => (mm === 0 ? "±0.00" : (mm > 0 ? "+" : "−") + (Math.abs(mm) / 1000).toFixed(2));
 /** Metres typed ("+3.20", "−0.5", "3,2") -> mm, to the micrometre; null when not a number. */
@@ -176,9 +182,12 @@ const planLines = computed(() => {
               <td v-else class="r mono" data-bb="level-mm">{{ fmt(s.elevation) }}</td>
               <td class="r mono">{{ altitude(s.elevation) }}</td>
               <td class="r mono">{{ s.height === null ? '—' : (s.height / 1000).toFixed(2) }}</td>
-              <td style="text-align:center"><input type="checkbox" :aria-label="t('levelsgrids.storeyAria')" :checked="s.isStorey" :disabled="!editable" data-bb="level-storey" @change="setStorey(s, $event)"></td>
+              <td style="text-align:center"><input type="checkbox" :aria-label="t('levelsgrids.storeyAria')" :checked="s.isStorey" :disabled="!editable || !!why.get(s.id)?.storey" :title="why.get(s.id)?.storey ?? undefined" data-bb="level-storey" @change="setStorey(s, $event)"></td>
               <td data-missing="query: storeys.plan_view (ADR 0056)" />
-              <td v-if="editable"><button type="button" class="x" :aria-label="t('levelsgrids.remove', { name: s.name })" :title="t('levelsgrids.remove', { name: s.name })" data-bb="level-remove" @click.stop="remove(s)">×</button></td>
+              <td v-if="editable" class="rm">
+                <button type="button" class="x" :aria-label="t('levelsgrids.remove', { name: s.name })" :title="why.get(s.id)?.remove ?? t('levelsgrids.remove', { name: s.name })" :disabled="!!why.get(s.id)?.remove" data-bb="level-remove" @click.stop="remove(s)">×</button>
+                <span v-if="why.get(s.id)?.remove" class="why" data-bb="level-why">{{ why.get(s.id)?.remove }}</span>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -282,6 +291,9 @@ table.t td.r, table.t th.r { text-align: right; }
 .qb:disabled { opacity: .55; cursor: default; }
 .x { border: 0; background: none; font: inherit; font-size: 18px; line-height: 1; color: var(--bb-stone); cursor: pointer; padding: 2px 6px; border-radius: 6px; }
 .x:hover { color: var(--bb-ink); background: var(--bb-sunk); }
+.x:disabled { cursor: not-allowed; opacity: 0.4; background: none; }
+.rm { white-space: nowrap; }
+.why { font-size: 11px; color: var(--bb-stone); white-space: normal; display: inline-block; max-width: 220px; vertical-align: middle; }
 .addrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .grid { display: flex; flex-direction: column; gap: 6px; }
 .ghead { display: flex; align-items: center; gap: 10px; }

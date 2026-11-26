@@ -1518,6 +1518,11 @@ export const levelAdd = (name: string, level_mm: number, storey?: boolean) =>
   runVerb("level_add", storey === undefined ? { name, level_mm } : { name, level_mm, storey });
 export const levelSet = (id: string, patch: { name?: string; level_mm?: number; storey?: boolean }) => runVerb("level_set", { id, ...patch });
 export const levelRemove = (id: string) => runVerb("level_remove", { id });
+/** DEAD1: what the core would refuse on the Levels page, told before the click (query
+ *  level_refusals: the verbs level_remove and level_set {storey: false} run dry), per storey id:
+ *  the refusal texts, null where it would run. A control the core refuses is disabled with it. */
+export type LevelRefusals = Record<string, { remove: string | null; storey: string | null }>;
+export const levelRefusals = (): LevelRefusals => tryQuery<LevelRefusals>("level_refusals", {});
 /** A rectangular grid: axes at `x` (numbered 1, 2…) and at `y` (lettered A, B…), as the verb tags them. */
 export const gridAdd = (name: string, x: number[], y: number[], tags?: string[]) =>
   runVerb("grid_add", tags ? { name, x, y, tags } : { name, x, y });
