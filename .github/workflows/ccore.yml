@@ -10,6 +10,12 @@ name: ccore
 # request to main (no path filter: a required check must report on every pull request), the tags
 # ccore-v*, and by hand. The jobs' names are the required checks of main's branch protection:
 # ccore-linux, ccore-san, ccore-lab, ccore-macos (ccore-windows is allowed to fail).
+# Every job reads only; ccore-prerelease alone writes (its own permissions: contents: write).
+# Third-party actions are pinned by commit, the tag in a comment (ticket FIXDOC): to update one,
+# `git ls-remote https://github.com/<owner>/<repo> refs/tags/<tag>` and change both.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -33,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (v4 on 26 Nov 2026)
       # clang and lld: the wasm32 build (wasm-ld); cmake: manifold (deps.sh); inotify-tools: dev.sh's
       # watcher (test/dev_test.mjs). tcc comes from source below.
       - run: scripts/apt-install.sh clang lld cmake inotify-tools
@@ -50,10 +56,10 @@ jobs:
       # Ubuntu's tcc (Aug 2020) has no stdatomic.h nor __atomic builtins: the pinned one of ci/tcc.sh.
       - name: tcc (cache)
         id: tcc
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           path: ~/.local/tcc
-          key: tcc-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.tcc }}
+          key: tcc-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.tcc }}-${{ hashFiles('ccore/ci/tcc.sh') }}
       - if: steps.tcc.outputs.cache-hit != 'true'
         run: ccore/ci/tcc.sh "$HOME/.local/tcc"
       - run: |
@@ -65,10 +71,10 @@ jobs:
       # runs it after `build.sh wasm` (-O2), as on the dev machine.
       - name: binaryen (cache)
         id: binaryen
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           path: ~/.local/binaryen
-          key: binaryen-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.binaryen }}
+          key: binaryen-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.binaryen }}-${{ hashFiles('ccore/ci/binaryen.sh') }}
       - if: steps.binaryen.outputs.cache-hit != 'true'
         run: ccore/ci/binaryen.sh "$HOME/.local/binaryen"
       - run: |
@@ -77,7 +83,7 @@ jobs:
       # The boolean kernel: manifold's C binding, built by deps.sh into ccore/out/deps/manifold.
       - name: manifold (cache)
         id: manifold
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           path: ccore/out/deps/manifold
           key: manifold-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh') }}
@@ -101,7 +107,7 @@ jobs:
       - name: ccore/ci/run.sh unit
         run: ccore/ci/run.sh unit
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
         with:
           name: ccore-ci-logs-unit
           path: ccore/out/ci/
@@ -111,7 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (v4 on 26 Nov 2026)
       # clang: the sanitizer build; cmake: manifold (deps.sh), linked into every suite.
       - run: scripts/apt-install.sh clang cmake
         timeout-minutes: 12
@@ -125,7 +131,7 @@ jobs:
       # The boolean kernel: manifold's C binding, built by deps.sh into ccore/out/deps/manifold.
       - name: manifold (cache)
         id: manifold
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           path: ccore/out/deps/manifold
           key: manifold-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh') }}
@@ -139,7 +145,7 @@ jobs:
       - name: ccore/ci/run.sh san
         run: ccore/ci/run.sh san
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
         with:
           name: ccore-ci-logs-san
           path: ccore/out/ci/
@@ -149,7 +155,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (v4 on 26 Nov 2026)
       # clang and lld: build.sh wasm (lab_wasm, lab_pages); cmake: manifold (deps.sh), in the host.
       - run: scripts/apt-install.sh clang lld cmake poppler-utils # pdftotext: lab_export reads the exported PDF
         timeout-minutes: 12
@@ -165,10 +171,10 @@ jobs:
       # Ubuntu's tcc (Aug 2020) has no stdatomic.h nor __atomic builtins: the pinned one of ci/tcc.sh.
       - name: tcc (cache)
         id: tcc
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           path: ~/.local/tcc
-          key: tcc-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.tcc }}
+          key: tcc-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.tcc }}-${{ hashFiles('ccore/ci/tcc.sh') }}
       - if: steps.tcc.outputs.cache-hit != 'true'
         run: ccore/ci/tcc.sh "$HOME/.local/tcc"
       - run: |
@@ -178,10 +184,10 @@ jobs:
       # the lab loads the same ccore.wasm as wasm_run there.
       - name: binaryen (cache)
         id: binaryen
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           path: ~/.local/binaryen
-          key: binaryen-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.binaryen }}
+          key: binaryen-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.binaryen }}-${{ hashFiles('ccore/ci/binaryen.sh') }}
       - if: steps.binaryen.outputs.cache-hit != 'true'
         run: ccore/ci/binaryen.sh "$HOME/.local/binaryen"
       - run: |
@@ -190,7 +196,7 @@ jobs:
       # The boolean kernel: manifold's C binding, built by deps.sh into ccore/out/deps/manifold.
       - name: manifold (cache)
         id: manifold
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           path: ccore/out/deps/manifold
           key: manifold-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh') }}
@@ -214,7 +220,7 @@ jobs:
       - name: ccore/ci/run.sh lab
         run: ccore/ci/run.sh lab
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
         with:
           name: ccore-ci-logs-lab
           path: ccore/out/ci/
@@ -230,7 +236,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (v4 on 26 Nov 2026)
       - name: Versions and keys
         id: keys
         run: |
@@ -246,7 +252,7 @@ jobs:
           "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version || echo "no Google Chrome"
       - name: manifold (cache)
         id: manifold
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           path: ccore/out/deps/manifold
           key: manifold-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh', 'ccore/portable.sh') }}
@@ -292,7 +298,7 @@ jobs:
             echo "::endgroup::"
           done
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
         with:
           name: ccore-macos-logs
           path: |
@@ -324,8 +330,8 @@ jobs:
       - name: No line-end conversion at checkout
         shell: pwsh
         run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
-      - uses: msys2/setup-msys2@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (v4 on 26 Nov 2026)
+      - uses: msys2/setup-msys2@3c51bf698df1e37b2261f53cb67797b97761185c # v2.34.0 (v2 on 26 Nov 2026)
         with:
           msystem: CLANG64
           update: false
@@ -434,7 +440,7 @@ jobs:
           grep -E '^FAIL|^skip|passed, [0-9]+ failed|boolean kernel' out/ci/win2-kernel-host.log out/t9b-*.log || true
           exit $rc
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
         with:
           name: ccore-windows-logs
           path: |
@@ -478,9 +484,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (v4 on 26 Nov 2026)
       - if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@3c51bf698df1e37b2261f53cb67797b97761185c # v2.34.0 (v2 on 26 Nov 2026)
         with:
           msystem: CLANG64
           update: false
@@ -511,7 +517,7 @@ jobs:
           echo "CMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES:-} MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-}"
       - name: manifold (cache)
         id: manifold
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           path: ccore/out/deps/manifold
           key: manifold-${{ matrix.name }}-${{ runner.arch }}-${{ steps.keys.outputs.manifold }}-${{ hashFiles('ccore/deps.sh', 'ccore/portable.sh') }}
@@ -541,7 +547,7 @@ jobs:
             export RELEASE_ARCH=x86_64
           fi
           node ccore/test/release_test.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
         with:
           name: ccore-release-${{ matrix.name }}
           path: |
@@ -561,8 +567,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (v4 on 26 Nov 2026)
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0 (v4 on 26 Nov 2026)
         with:
           pattern: ccore-release-*
           path: dist
@@ -573,7 +579,7 @@ jobs:
           (cd dist && sha256sum *.tar.gz $(ls *.zip 2> /dev/null) > SHA256SUMS && cat SHA256SUMS)
           ccore/ci/formula.sh "${GITHUB_REF_NAME#ccore-v}" dist/SHA256SUMS > bimble-ccore.rb
           cat bimble-ccore.rb
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (v4 on 26 Nov 2026)
         with:
           name: ccore-formula
           path: bimble-ccore.rb
@@ -589,4 +595,6 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --verify-tag --prerelease --title "bimble-ccore $v (preview)" \
               --notes "The C core of Bimble with its lab, for Linux (x86_64, aarch64) and macOS (arm64, x86_64; 11 or newer, signed ad hoc). Unpack, then run \`./bimble-ccore open model.ifc\`: the lab opens in your browser. See README.txt in the archive."
           fi
-          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz $(ls dist/*.zip 2> /dev/null) dist/SHA256SUMS --clobber
+          # No --clobber (FIXDOC): an asset already there fails the job; a published archive is never
+          # replaced in place. To redo a release, delete its assets (or the release) by hand first.
+          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz $(ls dist/*.zip 2> /dev/null) dist/SHA256SUMS
