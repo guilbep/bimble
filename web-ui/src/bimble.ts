@@ -1640,3 +1640,32 @@ export interface FoundationRow { id: string; kind: "pad" | "strip" | "raft" | "f
 export const foundationRows = () => tryQuery<FoundationRow[]>("foundation_rows", []);
 // ---- end WAVE1B ----
 // ---- end G2 ----
+// ---- M1LINKS (ccore/session/m1links.h, ADR 0081): Mission 1 across linked models ----
+/** A level from links (`query link_levels`): its floor plan's view id in `view`. */
+export interface LinkLevel { elevation_mm: number; key: string; link: string; name: string; view: string }
+export const linkLevels = () => tryQuery<LinkLevel[]>("link_levels", []);
+/** A link's object tree (`query links_tree`, `scene_tree {link}`): storeys at their placed elevation. */
+export interface LinkTree {
+  link: string; total: number; visible: boolean;
+  storeys: { count: number; elevation_mm: number | null; name: string; classes?: { class: string; count: number }[] }[];
+}
+export const linksTree = () => tryQuery<LinkTree[]>("links_tree", []);
+export const linkTree = (link: string) => tryQuery<LinkTree | null>("scene_tree", null, { link });
+export const linkElements = (link: string, storey: string, cls: string, limit = 200) =>
+  tryQuery<{ class: string; id: string; link: string; name: string }[]>("scene_elements", [], { link, storey, class: cls, limit });
+/** A note on a linked element (`query link_notes`): `at` in the host's world mm. */
+export interface LinkNote { at: [number, number, number]; element: string; index: number; link: string; orphan: boolean; text: string; visible: boolean }
+export const linkNotes = () => tryQuery<LinkNote[]>("link_notes", []);
+/** A linked element's property and quantity sets (in `query element {id, link}`). */
+export interface PropertySet { name: string; properties: { name: string; value: string }[]; type: string }
+/** The Navigator's eye: hide, show or isolate a class, a link's storey, a link or an element (hidden action view_rule). */
+export function viewRule(op: "hide" | "show" | "isolate", rule: { class?: string; storey?: string; link?: string; element?: string }): string | null {
+  try { actionWith("view_rule", { op, ...rule }); return null; } catch (e) { return message(e); }
+}
+export function noteAdd(link: string, element: string, text: string): string | null {
+  try { actionWith("manage_links", { op: "note_add", name: link, element, text }); return null; } catch (e) { return message(e); }
+}
+export function noteRemove(link: string, index: number): string | null {
+  try { actionWith("manage_links", { op: "note_remove", name: link, index }); return null; } catch (e) { return message(e); }
+}
+// ---- end M1LINKS ----

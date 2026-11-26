@@ -13,6 +13,11 @@ import { refPlanes } from "../bimble"; // WAVE1B
 import LinksPanel from "./LinksPanel.vue";
 import { linksOpen } from "./links";
 // ---- end LNK1 ----
+// ---- M1LINKS ---- the linked models' tree and notes (shell/LinksTree.vue); the plans from links marked
+import LinksTree from "./LinksTree.vue";
+import { linkLevels } from "../bimble";
+const fromLinks = computed(() => { void state.value.rev; void state.value.links; return new Set(linkLevels().map((l) => l.view)); });
+// ---- end M1LINKS ----
 
 // `open_views` is `{views, active, tabs}` (bridge.rs); bimble.ts types it loosely until then.
 const ov = computed(() => openViews.value as unknown as { views?: ViewSummary[]; active?: string | null });
@@ -148,6 +153,7 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
           <template v-else><path d="M3 12h18"/><path d="m7 8-4 4 4 4"/><rect x="9" y="5" width="6" height="14" stroke-dasharray="2 2"/></template>
         </svg>
         <span>{{ viewName(v) }}</span>
+        <span v-if="fromLinks.has(v.id)" class="n" data-bb="from-links" :title="t('m1.fromLinksTip')">{{ t('m1.fromLinks') }}</span>
         <span v-if="v.references > 0" class="n">{{ t('nav.refs', { n: v.references }) }}</span>
       </a>
       <!-- SEC1: the view's menu (right click), as Rust's context menu -->
@@ -191,6 +197,8 @@ function icon(v: ViewSummary): "three_d" | "plan" | "section" {
         </template>
       </template>
     </template>
+    <!-- M1LINKS: the linked models' storeys, classes, elements with their eyes; the notes -->
+    <LinksTree />
     <!-- No sub-project data in Rust yet (ADR 0059 proposed): the group opens the Sub-projects page. -->
     <a class="ti h" href="#" style="padding-left:6px" data-missing="subprojects query" @click.prevent="send({ do: 'showPage', page: 'subprojects' })">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
