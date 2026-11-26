@@ -742,7 +742,7 @@ static int d_file(D *d, const JrVal *root, cc_model *m, Keys *keys) {
     return 0;
 }
 
-int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) {
+static int load(cc_model *m, const char *text, size_t n, cc_error *err, int validate) {
     cc_error dummy;
     if (!err) err = &dummy;
     cc_model_init(m);
@@ -788,7 +788,7 @@ int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) {
         rc = -1;
     } else {
         cc_error verr;
-        if (cc_model_validate_keys(m, keys.skeys, keys.mkeys, keys.ekeys, keys.vkeys, keys.shkeys, keys.rkeys,
+        if (validate && cc_model_validate_keys(m, keys.skeys, keys.mkeys, keys.ekeys, keys.vkeys, keys.shkeys, keys.rkeys,
                                    keys.gkeys, &verr)) {
             rc = dfail(&d, CC_NO_OFFSET, "invalid model: ", verr.msg, 0);
         } else {
@@ -803,6 +803,14 @@ int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) {
     }
     return rc;
 }
+
+int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err) { return load(m, text, n, err, 1); }
+
+/* ---- H2b: a merged model, decoded but not validated (merge.c) ---- */
+int cc_model_load_unchecked(cc_model *m, const char *text, size_t n, cc_error *err) {
+    return load(m, text, n, err, 0);
+}
+/* ---- end H2b ---- */
 
 /* ---- save ---- */
 

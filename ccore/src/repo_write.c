@@ -346,6 +346,48 @@ done:
 
 /* ---------------------------------------------------------------- operations */
 
+/* repo.rs Commit object: tree, parents, author, time, message (as given). */
+static int put_commit(const cc_repo *r, const char *tree, const cc_hash *parents, size_t nparents, const char *author,
+                      int64_t time, const char *msg, size_t msg_n, cc_hash *out, Buf *err) {
+    Buf c;
+    buf_init(&c);
+    buf_puts(&c, "{\"tree\":\"");
+    buf_append(&c, tree, 64);
+    buf_puts(&c, "\",\"parents\":[");
+    for (size_t i = 0; i < nparents; i++) {
+        if (i) buf_putc(&c, ',');
+        buf_putc(&c, '"'), buf_append(&c, parents[i].h, 64), buf_putc(&c, '"');
+    }
+    buf_puts(&c, "],\"author\":");
+    json_escape(&c, author, strlen(author));
+    char num[32];
+    snprintf(num, sizeof num, ",\"time\":%lld,\"message\":", (long long)time);
+    buf_puts(&c, num);
+    json_escape(&c, msg, msg_n);
+    buf_putc(&c, '}');
+    int rc = c.oom ? oom(err) : cc_repo_put_bytes(r, c.p, c.len, out, err);
+    buf_free(&c);
+    return rc;
+}
+
+/* ---- H2b: a commit with any parents (a merge has two), and HEAD's ref moved ---- */
+int cc_repo_put_commit(const cc_repo *r, const char *tree, const cc_hash *parents, size_t nparents,
+                       const char *author, int64_t time, const char *message, cc_hash *out, Buf *err) {
+    return put_commit(r, tree, parents, nparents, author, time, message, strlen(message), out, err);
+}
+
+int cc_repo_move_head(const cc_repo *r, const char *hash, Buf *err) {
+    cc_repo_head_t h;
+    if (cc_repo_head(r, &h, err)) return -1;
+    if (h.detached) {
+        memcpy(h.commit.h, hash, 64);
+        h.commit.h[64] = 0;
+        return cc_repo_set_head(r, &h, err);
+    }
+    return cc_repo_set_branch(r, h.branch, hash, err);
+}
+/* ---- end H2b ---- */
+
 int cc_repo_commit(const cc_repo *r, const cc_model *m, const char *message, const char *author, int64_t time,
                    cc_hash *out, Buf *err) {
     size_t ma, mb;
@@ -368,31 +410,10 @@ int cc_repo_commit(const cc_repo *r, const cc_model *m, const char *message, con
             return CC_REPO_NOTHING;
         }
     }
-    /* repo.rs Commit: tree, parents, author, time, message. */
-    Buf c;
-    buf_init(&c);
-    buf_puts(&c, "{\"tree\":\"");
-    buf_append(&c, tree.h, 64);
-    buf_puts(&c, "\",\"parents\":[");
-    if (found) buf_putc(&c, '"'), buf_append(&c, parent.h, 64), buf_putc(&c, '"');
-    buf_puts(&c, "],\"author\":");
-    json_escape(&c, author, strlen(author));
-    char num[32];
-    snprintf(num, sizeof num, ",\"time\":%lld,\"message\":", (long long)time);
-    buf_puts(&c, num);
-    json_escape(&c, message + ma, mb - ma);
-    buf_putc(&c, '}');
-    int rc = c.oom ? oom(err) : cc_repo_put_bytes(r, c.p, c.len, out, err);
-    buf_free(&c);
-    if (rc) return -1;
+    if (put_commit(r, tree.h, found ? &parent : NULL, found ? 1 : 0, author, time, message + ma, mb - ma, out, err))
+        return -1;
     /* The ref last: until here the old HEAD stands. */
-    cc_repo_head_t h;
-    if (cc_repo_head(r, &h, err)) return -1;
-    if (h.detached) {
-        h.commit = *out;
-        return cc_repo_set_head(r, &h, err);
-    }
-    return cc_repo_set_branch(r, h.branch, out->h, err);
+    return cc_repo_move_head(r, out->h, err);
 }
 
 int cc_repo_create_branch(const cc_repo *r, const char *name, const char *at, cc_hash *out, Buf *err) {

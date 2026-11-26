@@ -1,0 +1,15 @@
+prefer neither: 2 conflict(s)
+conflict view V ours: name [1oUd0GlW9JWNOQxiRBQrZU] | 1oUd0GlW9JWNOQxiRBQrZU
+conflict sheet S-101 Plans: placed [0$oP$5B0dXqAvthHSiSCuV] | 0$oP$5B0dXqAvthHSiSCuV
+valid
+model view_sheet_conflict.ours.json
+prefer ours: 2 conflict(s)
+conflict view V ours: name [1oUd0GlW9JWNOQxiRBQrZU] | 1oUd0GlW9JWNOQxiRBQrZU
+conflict sheet S-101 Plans: placed [0$oP$5B0dXqAvthHSiSCuV] | 0$oP$5B0dXqAvthHSiSCuV
+valid
+model view_sheet_conflict.ours.json
+prefer theirs: 2 conflict(s)
+conflict view V ours: name [1oUd0GlW9JWNOQxiRBQrZU] | 1oUd0GlW9JWNOQxiRBQrZU
+conflict sheet S-101 Plans: placed [0$oP$5B0dXqAvthHSiSCuV] | 0$oP$5B0dXqAvthHSiSCuV
+valid
+model view_sheet_conflict.theirs.json

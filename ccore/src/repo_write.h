@@ -53,4 +53,12 @@ int cc_repo_create_branch(const cc_repo *r, const char *name, const char *at, cc
  * the model there, for the working file (always initialized: cc_model_free it either way). The
  * model is read before HEAD moves: a damaged target leaves HEAD as it was. */
 int cc_repo_switch(const cc_repo *r, const char *rev, cc_model *m, Buf *err);
+/* ---- H2b ----
+ * The commit object (repo.rs Commit) with `nparents` parents, the message as given (Repo::merge
+ * does not trim it); `out` its hash. No ref moves. */
+int cc_repo_put_commit(const cc_repo *r, const char *tree, const cc_hash *parents, size_t nparents,
+                       const char *author, int64_t time, const char *message, cc_hash *out, Buf *err);
+/* HEAD's branch to `hash`, or a detached HEAD to it (repo.rs: the end of commit and merge). */
+int cc_repo_move_head(const cc_repo *r, const char *hash, Buf *err);
+/* ---- end H2b ---- */
 #endif

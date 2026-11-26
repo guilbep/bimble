@@ -1,0 +1,12 @@
+prefer neither: 1 conflict(s)
+conflict element IfcBeam B2.x01: generator [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+valid
+model generator_kind.ours.json
+prefer ours: 1 conflict(s)
+conflict element IfcBeam B2.x01: generator [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+valid
+model generator_kind.ours.json
+prefer theirs: 1 conflict(s)
+conflict element IfcBeam B2.x01: generator [01KnL9d95C2OMpOLdTJDE_] | 01KnL9d95C2OMpOLdTJDE_
+valid
+model generator_kind.theirs.json

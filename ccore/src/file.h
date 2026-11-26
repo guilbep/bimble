@@ -27,6 +27,11 @@ int cc_model_load(cc_model *m, const char *text, size_t n, cc_error *err);
 /* (binary: also "parse: gzip: …" for damaged or too large compressed data, "parse: …" for
  * broken CBOR, offsets then in the inflated CBOR.) */
 
+/* ---- H2b: the same without Model::validate (merge_models' result, which Rust validates only
+ * in Repo::merge): decoded, canonical. ---- */
+int cc_model_load_unchecked(cc_model *m, const char *text, size_t n, cc_error *err);
+/* ---- end H2b ---- */
+
 /* Appends file::to_string(m): pretty JSON, 2 spaces, no final newline. 0 ok, -1 on a
  * non-finite value or out of memory (a validated model has neither). */
 int cc_model_save(const cc_model *m, Buf *b);

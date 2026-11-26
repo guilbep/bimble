@@ -1,0 +1,9 @@
+prefer neither: 0 conflict(s)
+invalid IfcColumn 004z1Cm4z4hgNOg0ez4Id1 (P2.00): unknown storey 04Aobkc8v6$94cGl_9HNVX
+model invalid_union.neither.json
+prefer ours: 0 conflict(s)
+invalid IfcColumn 004z1Cm4z4hgNOg0ez4Id1 (P2.00): unknown storey 04Aobkc8v6$94cGl_9HNVX
+model invalid_union.neither.json
+prefer theirs: 0 conflict(s)
+invalid IfcColumn 004z1Cm4z4hgNOg0ez4Id1 (P2.00): unknown storey 04Aobkc8v6$94cGl_9HNVX
+model invalid_union.neither.json
