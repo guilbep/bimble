@@ -921,6 +921,8 @@ export type PartKey =
   | "settings.font"
   | "settings.font.roboto"
   | "settings.font.ubuntu"
+  | "settings.fontMissing"
+  | "settings.fontNotInstalled"
   | "settings.kept"
   | "settings.name"
   | "settings.textSize"

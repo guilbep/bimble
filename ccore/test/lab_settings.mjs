@@ -4,7 +4,8 @@
 // the wasm build (scripts/copy-ccore.mjs), Vite from web-ui/ and headless /usr/bin/chromium over raw CDP.
 // Twice, on the native host (/?native=1&gl=1: the settings file) and on ccore.wasm (/?ccore=1&gl=1: the
 // browser's localStorage `bimble.settings`, settings.rs:246):
-//   File › Settings is enabled and opens the dialog; a name typed there is the header disc's trigram
+//   File › Settings is enabled and opens the dialog (DEAD1: a font choice not installed, Ubuntu Light,
+//     is disabled with where its files go); a name typed there is the header disc's trigram
 //     and Home's greeting, and is in the file (native: settings.json in Rust's form; wasm: the stored
 //     text); the theme "dark" turns the app's ground to Rust's dark panel colour (#1E1E1E); the text
 //     size 14 pt makes the root font 18.67 px; after a reload the name, the disc, the theme and the
@@ -157,6 +158,14 @@ async function lab(mode, S, evalJs) {
   check(`${mode}: File › Settings enabled`, off === false, String(off));
   await click("[data-bb=file-menu-settings]");
   check(`${mode}: the Settings dialog opens`, await exists("[data-bb=settings] [data-bb=settings-name]"), await text("[data-bb=settings]") ?? "none");
+  // DEAD1: a font choice this computer lacks (Ubuntu Light: no Ubuntu face installed, measured as the page does) is
+  // disabled with where its files go; the lab's own font ("roboto": the interface's own, shipped) stays on
+  const fontUi = await evalJs(`(() => { const u = document.querySelector('[data-bb=settings-font-ubuntu]'), r = document.querySelector('[data-bb=settings-font-roboto]');
+    const c = document.createElement('canvas').getContext('2d'), t = 'mmmmmmmmmmlli1WQ@#ąé'; let has = false;
+    for (const f of ['Ubuntu', 'Ubuntu Light']) for (const b of ['monospace', 'serif']) { c.font = '72px ' + b; const w = c.measureText(t).width; c.font = "72px '" + f + "', " + b; if (c.measureText(t).width !== w) has = true; }
+    return u && r ? { has, uOff: u.disabled, title: u.closest('label')?.title ?? '', note: document.querySelector('[data-bb=settings-font-missing-ubuntu]')?.textContent ?? null, rOff: r.disabled } : null; })()`);
+  check(`${mode}: Settings: Ubuntu Light ${fontUi?.has ? "installed: on" : "not installed: off, with where its files go"}; the interface's own font on (DEAD1)`,
+    !!fontUi && fontUi.rOff === false && (fontUi.has ? fontUi.uOff === false : fontUi.uOff === true && /fonts/.test(fontUi.title) && !!fontUi.note), JSON.stringify(fontUi));
   // The name
   await field("[data-bb=settings-name]", "Ada Lovelace");
   await field("[data-bb=settings-email]", "ada@example.org");

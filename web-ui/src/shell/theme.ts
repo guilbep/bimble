@@ -64,6 +64,28 @@ export const FONTS: Readonly<Record<string, string | null>> = {
   ubuntu: "'Ubuntu', 'Ubuntu Light', 'Source Sans 3', 'Helvetica Neue', Arial, sans-serif",
 };
 
+/** DEAD1: the faces a font choice needs from this computer (none shipped with the lab: ADR 0071);
+ *  a choice not listed here is the lab's own fonts (shipped, brand/fonts.css). */
+const SYSTEM_FACES: Readonly<Record<string, readonly string[]>> = { ubuntu: ["Ubuntu", "Ubuntu Light"] };
+/** DEAD1: whether the font choice `id` can show on this computer: the lab's own fonts always; a
+ *  system font when one of its faces is installed (text measured with it differs from the generic
+ *  fallbacks). Without a canvas: assumed installed. */
+export function fontInstalled(id: string): boolean {
+  const faces = SYSTEM_FACES[id];
+  if (!faces) return id in FONTS;
+  const c = document.createElement("canvas").getContext("2d");
+  if (!c) return true;
+  const text = "mmmmmmmmmmlli1WQ@#ąé";
+  for (const face of faces)
+    for (const base of ["monospace", "serif"]) {
+      c.font = `72px ${base}`;
+      const w0 = c.measureText(text).width;
+      c.font = `72px '${face}', ${base}`;
+      if (c.measureText(text).width !== w0) return true;
+    }
+  return false;
+}
+
 /** Rust's text sizes (ui_theme.rs TEXT_SIZE, TEXT_SIZES). */
 export const TEXT_SIZE = 12;
 export const TEXT_SIZES: readonly [number, number] = [10, 16];

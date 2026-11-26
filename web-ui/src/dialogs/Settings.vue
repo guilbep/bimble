@@ -13,7 +13,7 @@ import { setSettings, userSettings, type SettingsValues } from "../bimble";
 import { t } from "../i18n";
 import type * as copy from "../i18n/parts/settings";
 import { currentDialog } from ".";
-import { TEXT_SIZE } from "../shell/theme";
+import { TEXT_SIZE, fontInstalled } from "../shell/theme";
 
 type K = keyof typeof copy.fr;
 const tx = (k: K, v: Record<string, string | number> = {}) => t(k, v);
@@ -46,6 +46,8 @@ const commitEpsg = () => { const c = epsg.value.trim(); if (/^\d{1,5}$/.test(c))
 // Appearance.
 const themes = computed(() => s.value?.themes ?? []);
 const fonts = computed(() => s.value?.fonts ?? []);
+/** DEAD1: a font this computer lacks cannot be chosen (it would change nothing): disabled with where its files go. */
+const installed = computed(() => new Map(fonts.value.map((f) => [f, fontInstalled(f)])));
 const sizes = computed<[number, number]>(() => s.value?.text_sizes ?? [10, 16]);
 const isDefaultLook = computed(() => !v.value || (v.value.theme === "grey" && v.value.ui_font === "roboto" && v.value.text_size === TEXT_SIZE));
 const close = () => { currentDialog.value = null; };
@@ -93,7 +95,7 @@ const close = () => { currentDialog.value = null; };
           </select></label>
         <div class="row" role="radiogroup" :aria-label="tx('settings.font')" data-setting="ui_font"><span>{{ tx('settings.font') }}</span>
           <span style="display:flex;gap:14px">
-            <label v-for="f in fonts" :key="f" class="radio"><input type="radio" name="bb-font" :checked="v.ui_font === f" :data-bb="`settings-font-${f}`" @change="set({ ui_font: f })"><span>{{ tx(`settings.font.${f}` as K) }}</span></label>
+            <label v-for="f in fonts" :key="f" class="radio" :title="installed.get(f) === false ? tx('settings.fontMissing') : undefined"><input type="radio" name="bb-font" :checked="v.ui_font === f" :disabled="installed.get(f) === false" :data-bb="`settings-font-${f}`" @change="set({ ui_font: f })"><span>{{ tx(`settings.font.${f}` as K) }}</span><span v-if="installed.get(f) === false" class="note" :data-bb="`settings-font-missing-${f}`">{{ tx('settings.fontNotInstalled') }}</span></label>
           </span></div>
         <label class="row"><span>{{ tx('settings.textSize') }}</span>
           <span style="display:flex;gap:8px;align-items:center">
