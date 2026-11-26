@@ -6,6 +6,8 @@
 // - the path rule (host/fs.h): a relative path, a path with NUL, ".." out of a root, an absolute
 //   path outside the roots and a symbolic link that leaves them are refused, each with one text;
 //   a link inside the roots is listed as a link with its target, one outside as "outside";
+//   the text is checked before the file system (FIXDOC: a missing folder outside is "outside",
+//   ".." resolved lexically; Windows network and device paths refused, POSIX "//" is "/");
 //   an unreadable folder is refused (not as root); a missing token is 403;
 // - 10,000 entries: 5,000 listed, "truncated": true;
 // - recent files: a settings.json in Rust's schema (settings.rs to_json, a hand-written fixture:
@@ -87,6 +89,7 @@ const rawPost = (p, path, len) => new Promise((res) => {
   setTimeout(() => sock.destroy(), 3000);
 });
 const OUTSIDE = "fs_list: outside the folders Bimble lists (query fs_roots)";
+const NETWORK = "fs_list: dir: network and device paths are not listed (\\\\server, \\\\.\\, \\\\?\\)"; // host/fs.h FS_NETWORK
 
 try {
   // The tree: files, a folder, a hidden file, a 255-byte name, a non-UTF-8 name (Linux only),
@@ -161,6 +164,28 @@ try {
   check("fs_list / -> 400 outside", etc.status === 400 && etc.text === OUTSIDE, etc.text);
   const lk = await H.ls(join(home, "outlink"));
   check("fs_list a link that leaves the roots -> 400 outside", lk.status === 400 && lk.text === OUTSIDE, lk.text);
+  // FIXDOC: the lexical rule (host/fs_rule.h) comes before the file system: a missing folder
+  // outside the roots gets the outside text, not "no such folder" (the old order said whether it
+  // existed); ".." in the text is resolved before the check; "//" is not a network path on POSIX.
+  const goneOut = await H.ls(join(outside, "nothing", "deeper"));
+  check("fs_list a missing folder outside -> 400 outside (checked before the file system)", goneOut.status === 400 && goneOut.text === OUTSIDE, goneOut.text);
+  const dots = await H.ls(home + "/sub/../../outside");
+  check("fs_list home/sub/../../outside (text not normalised by the client) -> 400 outside", dots.status === 400 && dots.text === OUTSIDE, dots.text);
+  const dotsIn = await H.ls(home + "/sub/./../sub");
+  check("fs_list home/sub/./../sub -> 200, resolved", dotsIn.status === 200 && JSON.parse(dotsIn.text).dir === join(home, "sub"), dotsIn.text);
+  const above = await H.ls(process.platform === "win32" ? home.slice(0, 3) + ".." : "/../..");
+  check("fs_list .. above the file system's root -> 400 absolute path", above.status === 400 && above.text.startsWith("fs_list: dir: an absolute path"), above.text);
+  if (process.platform !== "win32") {
+    const two = await H.ls("/" + outside);
+    check("fs_list //<outside> (POSIX: not a network path) -> 400 outside", two.status === 400 && two.text === OUTSIDE, two.text);
+    const twoIn = await H.ls("/" + home);
+    check("fs_list //<home> (POSIX: the same folder) -> 200", twoIn.status === 200 && JSON.parse(twoIn.text).dir === home, twoIn.text);
+  } else {
+    const unc = await H.ls("\\\\127.0.0.1\\c$");
+    check("fs_list \\\\server\\share -> 400 network (never opened)", unc.status === 400 && unc.text === NETWORK, unc.text);
+    const dev = await H.ls("\\\\.\\PhysicalDrive0");
+    check("fs_list \\\\.\\device -> 400 network", dev.status === 400 && dev.text === NETWORK, dev.text);
+  }
   const gone = await H.ls(join(home, "nothing"));
   check("fs_list a missing folder -> 400", gone.status === 400 && gone.text === "fs_list: no such folder", gone.text);
   const file = await H.ls(join(home, "b.ifc"));

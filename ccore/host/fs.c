@@ -4,6 +4,7 @@
 #define _POSIX_C_SOURCE 200809L /* mkdtemp */
 #endif
 #include "fs.h"
+#include "fs_rule.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,7 +23,8 @@
 #define FS_MAX_PATH 4096
 #define FS_LIST_BYTES ((size_t)16 << 20) /* the names of one folder, all together */
 
-static char *roots[FS_MAX_ROOTS];
+static char *roots[FS_MAX_ROOTS];       /* resolved (realpath) */
+static char *roots_given[FS_MAX_ROOTS]; /* as given, normalised by fs_rule.h; NULL: not absolute */
 static int nroots, home_root = -1;
 
 /* The folder listed last per purpose ("open", "save_as"…): the dialog starts there next time.
@@ -57,51 +59,49 @@ static void remember(const JrVal *p, const char *dir) {
 }
 
 #ifdef _WIN32
-static int ch_eq(char a, char b) { /* Windows: paths compare without case (ASCII) */
-    if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
-    if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
-    return a == b;
-}
+#define FSR_WIN 1
 #else
-static int ch_eq(char a, char b) { return a == b; }
+#define FSR_WIN 0
 #endif
 
-/* `p` is `root` or under it (both resolved, '/' separators). */
-static int under(const char *p, const char *root) {
-    size_t k = strlen(root);
-    while (k > 1 && root[k - 1] == '/') k--; /* "/" stays "/"; "C:/" -> "C:" */
-    for (size_t i = 0; i < k; i++)
-        if (!p[i] || !ch_eq(p[i], root[i])) return 0;
-    return p[k] == 0 || p[k] == '/' || (k == 1 && root[0] == '/');
-}
-
+/* The resolved path `p` is a root or under one (fs_rule.h). */
 static int in_roots(const char *p) {
     for (int i = 0; i < nroots; i++)
-        if (under(p, roots[i])) return 1;
+        if (fsr_under(p, roots[i], FSR_WIN)) return 1;
     return 0;
 }
 
-static int absolute(const char *p) {
-    if (p[0] == '/') return 1;
-#ifdef _WIN32
-    if (p[0] == '\\' && p[1] == '\\') return 1;
-    if (((p[0] | 32) >= 'a' && (p[0] | 32) <= 'z') && p[1] == ':' && (p[2] == '/' || p[2] == '\\')) return 1;
-#endif
+/* The normalised (not resolved) path `p` is under a root as resolved or as given: the lexical
+ * check, before the file system is touched (fs_rule.h). */
+static int in_roots_lexical(const char *p) {
+    for (int i = 0; i < nroots; i++)
+        if (fsr_under(p, roots[i], FSR_WIN) || (roots_given[i] && fsr_under(p, roots_given[i], FSR_WIN))) return 1;
+    return 0;
+}
+
+/* A root is a network path ("//server/share"): only then may fs_list take one. */
+static int unc_root(void) {
+    for (int i = 0; i < nroots; i++)
+        if (roots[i][0] == '/' && roots[i][1] == '/') return 1;
     return 0;
 }
 
 int cc_host_fs_add_root(const char *dir) {
     const cc_platform *pf = cc_platform_native();
-    char r[FS_MAX_PATH + 1];
+    char r[FS_MAX_PATH + 1], g[FS_MAX_PATH + 2];
     cc_pf_stat st;
-    if (nroots >= FS_MAX_ROOTS || !dir || !*dir || pf->real_path(pf->ctx, dir, r, sizeof r) ||
+    /* a device path is never a root; a relative root is resolved, but has no lexical form */
+    int lx = dir && *dir ? fsr_normalise(dir, FSR_WIN, g, sizeof g) : FSR_BAD;
+    if (nroots >= FS_MAX_ROOTS || !dir || !*dir || lx == FSR_DEVICE || pf->real_path(pf->ctx, dir, r, sizeof r) ||
         pf->stat_path(pf->ctx, r, 1, &st) || st.kind != CC_PF_DIR)
         return -1;
     for (int i = 0; i < nroots; i++)
         if (!strcmp(roots[i], r)) return 0;
-    char *c = malloc(strlen(r) + 1);
-    if (!c) return -1;
+    char *c = malloc(strlen(r) + 1), *cg = lx == FSR_BAD ? NULL : malloc(strlen(g) + 1);
+    if (!c || (lx != FSR_BAD && !cg)) return free(c), free(cg), -1;
     strcpy(c, r);
+    if (cg) strcpy(cg, g);
+    roots_given[nroots] = cg;
     roots[nroots++] = c;
     return 0;
 }
@@ -169,8 +169,19 @@ static int fs_list(const char *body, size_t n, Buf *out) {
     char *names = NULL;
     Name *list = NULL;
     if (ext && ext->type == JR_NULL) ext = NULL;
-    if (!d || d->type != JR_STR || !d->n || d->n > FS_MAX_PATH || strlen(d->s) != d->n || !absolute(d->s)) {
+    /* FIXDOC: the lexical rule first (fs_rule.h): nothing outside the roots reaches the file system */
+    char nd[FS_MAX_PATH + 2];
+    int lx = d && d->type == JR_STR && strlen(d->s) == d->n ? fsr_normalise(d->s, FSR_WIN, nd, sizeof nd) : FSR_BAD;
+    if (lx == FSR_BAD || !d->n || d->n > FS_MAX_PATH) {
         rc = fs_err(out, "dir: an absolute path, without NUL, at most 4096 bytes");
+        goto end;
+    }
+    if (lx == FSR_DEVICE || (lx == FSR_UNC && !unc_root())) {
+        rc = fs_err(out, FS_NETWORK);
+        goto end;
+    }
+    if (!in_roots_lexical(nd)) {
+        rc = fs_err(out, FS_OUTSIDE);
         goto end;
     }
     if (ext && (ext->type != JR_ARR || ext->n > 16)) {
@@ -184,7 +195,7 @@ static int fs_list(const char *body, size_t n, Buf *out) {
         }
     char rd[FS_MAX_PATH + 1];
     cc_pf_stat st;
-    /* resolved first: "..", "." and every link, then the rule */
+    /* then resolved: "..", "." and every link, and the rule again */
     if (pf->real_path(pf->ctx, d->s, rd, sizeof rd)) {
         rc = fs_err(out, "no such folder");
         goto end;

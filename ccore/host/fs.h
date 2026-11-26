@@ -8,11 +8,17 @@
  *   query fs_list {dir, ext?: [".bimble", ...], purpose?}
  *       {"dir", "parent", "entries": [{"kind", "mtime", "name", "size", "target"?, "outside"?}],
  *        "hidden", "skipped", "truncated"}
- * THE PATH RULE (tested by test/fs_test.mjs):
- *   - `dir` is an absolute path (POSIX "/…", Windows "X:/…", "X:\…", "\\…") without NUL, at most
- *     4096 bytes; anything else is refused.
- *   - It is resolved (realpath: every "..", "." and symbolic link) before the check, then it must
- *     be one of the roots or under one: the user's home folder (HOME, Windows USERPROFILE) and
+ * THE PATH RULE (tested by test/fs_test.mjs and, its lexical part with the Windows forms, by
+ * test/fs_rule_test.c):
+ *   - `dir` is an absolute path (POSIX "/…", Windows "X:/…", "X:\…") without NUL, at most 4096
+ *     bytes; anything else is refused. Windows network and device paths ("\\server\share",
+ *     "//server/share", "\\.\…", "\\?\…") are refused with FS_NETWORK, a network path unless a
+ *     root is one.
+ *   - Checked first by its text alone (host/fs_rule.h: separators, ".", ".." resolved lexically):
+ *     it must be under a root as given or as resolved, else FS_OUTSIDE, before any call that
+ *     touches the file system (so a path outside, even one that does not exist, gets the same text).
+ *   - Then it is resolved (realpath: every "..", "." and symbolic link) and must again be one of
+ *     the roots or under one: the user's home folder (HOME, Windows USERPROFILE) and
  *     the folders given at start (`--root <dir>`, repeatable; the folder of the model on the
  *     command line is one). Anything else is refused with one text: OUTSIDE below.
  *   - The answer holds names and metadata only, never a file's bytes. An entry that is a link is
@@ -35,6 +41,7 @@
 #define FS_STAGE_MAX ((size_t)256 << 20) /* a dropped file's bytes (POST /stage) */
 #define FS_MAX_ROOTS 16
 #define FS_OUTSIDE "outside the folders Bimble lists (query fs_roots)"
+#define FS_NETWORK "dir: network and device paths are not listed (\\\\server, \\\\.\\, \\\\?\\)"
 
 /* Adds a root folder (resolved). 0, -1 when it is not a folder or there are too many. The home
  * folder is added by cc_host_fs_init. */
