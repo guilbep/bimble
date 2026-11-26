@@ -44,6 +44,14 @@
 // queue's onSubmittedWorkDone instead of a 1x1 readPixels, the pictures read from the renderer's
 // target; occlusion queries are WebGL2's only (not measured). The report goes to
 // out/frames/frames-webgpu.md unless --out. It fails when the page does not draw with WebGPU.
+// --links N (ticket LNK3D, ADR 0078 amendment 3): instead of the models, N synthetic links (bench/links_synth.mjs:
+// mesh_heavy_model.py's model, --link-proxies (160) unique closed meshes of about 600 triangles each, exported as
+// IFC4 through the native host, linked as a folder into a new project, placed in rows of 5, 30 m apart), the
+// native build only: open -> first picture (the links' proxies, or the first frame) and complete picture, the
+// still and moving frames (triangles, draws), GPU bytes; then half the links hidden and the GPU budget (a page
+// hook) set to half: GPU bytes with the budget. Printed and written to out/frames/links-<label>.json, never to
+// frames.md. --pixels DIR / --compare DIR as above (three cameras of the links). FRAMES_UI=<web-ui dir> and
+// HOST_BIN measure another tree (the code before a change).
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -54,7 +62,7 @@ import { gzipSync } from "node:zlib";
 import { CHROMIUM, port } from "../test/ports.mjs";
 
 const CCORE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const UI = resolve(CCORE, "../web-ui");
+const UI = process.env.FRAMES_UI ? resolve(process.env.FRAMES_UI) : resolve(CCORE, "../web-ui");
 const argv = process.argv.slice(2);
 const opt = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : null; };
 const flag = (n) => argv.includes(n);
@@ -65,7 +73,8 @@ if (RENDERER !== "webgl2" && RENDERER !== "webgpu") throw new Error(`--renderer:
 const GPU = RENDERER === "webgpu";
 const BUILDS = (opt("--builds") ?? "wasm,native").split(",");
 const EXTRA = process.env.FRAMES_EXTRA_MODEL ? resolve(process.env.FRAMES_EXTRA_MODEL) : null;
-const MODELS = (opt("--models") ?? (EXTRA ? "large,heavy,local" : "large,heavy")).split(",");
+const LINKS = opt("--links") ? Number(opt("--links")) : 0;
+const MODELS = LINKS ? ["links"] : (opt("--models") ?? (EXTRA ? "large,heavy,local" : "large,heavy")).split(",");
 const NFRAMES = Number(opt("--frames") ?? 120);
 const PIXELS = opt("--pixels") ? resolve(opt("--pixels")) : null;
 const COMPARE = opt("--compare") ? resolve(opt("--compare")) : null;
@@ -156,13 +165,13 @@ function serve(site) {
 }
 function buildSite() {
   if (opt("--site")) return resolve(opt("--site"));
-  if (!existsSync(WASM)) throw new Error(`no ${WASM}: ccore/build.sh wasm`);
+  if (!LINKS && !existsSync(WASM)) throw new Error(`no ${WASM}: ccore/build.sh wasm`); // (--links: the native build only)
   const site = join(tmp, "site"), t0 = Date.now();
   execFileSync("npx", ["vite", "build", "--base", "./", "--outDir", site, "--emptyOutDir", "--logLevel", "warn"],
     { cwd: UI, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, VITE_CCORE: "1", VITE_CCORE_REV: "" } });
   rmSync(join(site, "ccore"), { recursive: true, force: true });
   mkdirSync(join(site, "ccore"));
-  copyFileSync(WASM, join(site, "ccore/ccore.wasm"));
+  if (existsSync(WASM)) copyFileSync(WASM, join(site, "ccore/ccore.wasm"));
   copyFileSync(FIXTURE, join(site, "ccore/frame.json"));
   log(`vite build ${Date.now() - t0} ms`);
   return site;
@@ -566,7 +575,83 @@ function report(rows, history, cmp, forced, loads) {
   return L.join("\n");
 }
 
+// ---- LNK3D: --links N ----
+async function linksMain() {
+  const { makeLinkFolder } = await import("../bench/links_synth.mjs");
+  const P = Number(opt("--link-proxies") ?? 160);
+  log(`links: ${LINKS} synthetic links of ${P} unique meshes (load ${loadNow()})`);
+  const site = buildSite();
+  await serve(site);
+  const dir = join(HOME, "links");
+  mkdirSync(dir, { recursive: true });
+  host = start("host", BIN, [String(HOST_PORT)], { cwd: FILES, env: { ...process.env, HOME, BIMBLE_CONFIG_DIR: CONFIG, BIMBLE_TOKEN: TOKEN, BIMBLE_ORIGINS: ORIGIN,
+    BIMBLE_LINK_CACHE_MIN: "0", BIMBLE_CACHE_DIR: join(tmp, "cache") } });
+  await waitFor("the host", 60000, async () => { if (host.exitCode !== null) throw new Error(host.out.slice(-400)); return host.out.includes("listening"); }, 30);
+  const hcall = async (op, name, body = {}) => {
+    const r = await fetch(`http://127.0.0.1:${HOST_PORT}/${op}/${name}?t=${TOKEN}`, { method: "POST", body: JSON.stringify(body) });
+    return { status: r.status, text: await r.text() };
+  };
+  const files = await makeLinkFolder({ hcall, dir, work: tmp, n: LINKS, proxies: P, tris: 600, unique: true });
+  await hcall("action", "new");
+  const t0 = Date.now();
+  await hcall("action", "link_folder", { path: dir });
+  await waitFor("the links converted", 600000, async () => { const r = JSON.parse((await hcall("query", "links_panel")).text).models; return r.length === LINKS && r.every((m) => m.state === "ready"); }, 200);
+  const convertMs = Date.now() - t0;
+  for (let k = 0; k < LINKS; k++) {
+    await hcall("action", "manage_links", { op: "unpin", name: `link_${k}.ifc` });
+    await hcall("action", "manage_links", { op: "place", name: `link_${k}.ifc`, move_mm: [30000 * (k % 5), 30000 * Math.floor(k / 5), 0] });
+  }
+  const logs = files.map((f) => readFileSync(`${f}.log.txt`, "utf8"));
+  const detail = logs.reduce((n, t) => n + Number(/\ntriangles: (\d+)/.exec(t)?.[1] ?? 0), 0);
+  const cacheBytes = files.reduce((n, f) => n + statSync(`${f}.bimbleview`).size, 0);
+  const hlod = logs.map((t) => /proxies \(HLOD, baked for the 3D view\): (\d+) cells, (\d+) triangles, (\d+) bytes, built in (\d+) ms/.exec(t));
+  const out = { label: LABEL, links: LINKS, load: loadNow(), detailTris: detail, cacheBytes, convertMs,
+    hlodBytes: hlod.reduce((n, m) => n + Number(m?.[3] ?? 0), 0), hlodMs: hlod.reduce((n, m) => n + Number(m?.[4] ?? 0), 0) };
+  await startBrowser();
+  BUILD = "native", MODEL = "links";
+  await openTab();
+  await S("Page.navigate", { url: pageUrl() });
+  await waitFor("the page ready", 240000, () => ev(`!!(document.querySelector('[data-bb-ready]') && window.__bbGl && window.__bbGl.firstFrameMs && window.__bbGl.links && window.__bbGl.links.length === ${LINKS})`), 50);
+  await quiet(30000);
+  const g0 = await ev(`(() => { const g = window.__bbGl; return { first: g.firstFrameMs, preview: g.proxyPreview ? g.proxyPreview.at : null, meshAt: g.meshAt ?? null, full: g.fullFrameMs ?? null,
+    fetch: g.meshFetchMs, bytes: g.meshBytes }; })()`);
+  out.firstPicture = g0.preview !== null && g0.preview !== undefined ? Math.min(g0.preview, g0.first) : g0.first;
+  out.fromProxies = g0.preview !== null && g0.preview !== undefined;
+  out.firstFrameMs = g0.first, out.meshAt = g0.meshAt, out.complete = g0.full, out.meshFetchMs = g0.fetch, out.meshBytes = g0.bytes;
+  await ev("(window.__bbGl.bench.snap(0, 0), 0)");
+  await quiet(20000);
+  const orbit = await ev(`(() => { const b = window.__bbGl.bench, ms = []; const d = 2 * Math.PI / ${NFRAMES};
+    for (let i = 0; i < ${NFRAMES}; i++) ms.push(b.frame(d, true));
+    return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
+  out.moving = med(orbit.ms), out.movingP95 = p95(orbit.ms), out.movingTris = orbit.tris, out.movingDraws = orbit.draws;
+  const still = await ev(`(() => { const b = window.__bbGl.bench, ms = []; for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
+    return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
+  out.still = med(still.ms), out.stillTris = still.tris, out.stillDraws = still.draws;
+  const close = await ev(`(() => { const b = window.__bbGl.bench, ms = []; b.snap(0, 0); b.zoom(0.25); for (let i = 0; i < 5; i++) ms.push(b.frame(0, false));
+    return { ms, tris: window.__bbGl.frameTris, draws: window.__bbGl.frameDraws }; })()`);
+  out.closeStill = med(close.ms), out.closeTris = close.tris, out.closeDraws = close.draws;
+  await ev("(window.__bbGl.bench.snap(0, 0), 0)");
+  await quiet(20000);
+  out.gpuBytes = await ev("window.__bbGl.gpuBytes ?? null");
+  if (PIXELS) { mkdirSync(PIXELS, { recursive: true }); await pixels(); }
+  // half the links hidden, the budget at half: what the GPU keeps
+  for (let k = 0; k < LINKS; k += 2) await hcall("action", "manage_links", { op: "hide", name: `link_${k}.ifc` });
+  await ev(`(window.__bbGl.gpuBudget = Math.round(window.__bbGl.gpuBytes / 2), 0)`);
+  await sleep(1500);
+  await quiet(20000);
+  out.gpuBudgetBytes = await ev("window.__bbGl.gpuBytes ?? null");
+  out.detailLoaded = await ev("window.__bbGl.linkDetail ? window.__bbGl.linkDetail.filter((x) => x.detail).length : null");
+  out.endLoad = loadNow();
+  writeFileSync(join(RAW, `links-${LABEL}.json`), JSON.stringify(out, null, 1));
+  const r = out, f = (v, d = 0) => fmt(v, d);
+  console.log(["| label | links | detail triangles | caches MB (proxies MB, ms) | open → first picture ms (from) | → complete ms | still ms: triangles / draws | moving ms median (p95): triangles / draws | close still ms: triangles / draws | GPU MB | GPU MB, half hidden, budget ½ (detail loaded) | load start → end |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|",
+    `| ${r.label} | ${r.links} | ${f(r.detailTris)} | ${mb(r.cacheBytes)} (${mb(r.hlodBytes)}, ${f(r.hlodMs)}) | ${f(r.firstPicture)} (${r.fromProxies ? "proxies" : "first frame"}) | ${f(r.complete)} | ${f(r.still, 1)}: ${f(r.stillTris)} / ${f(r.stillDraws)} | ${f(r.moving, 1)} (${f(r.movingP95, 1)}): ${f(r.movingTris)} / ${f(r.movingDraws)} | ${f(r.closeStill, 1)}: ${f(r.closeTris)} / ${f(r.closeDraws)} | ${mb(r.gpuBytes)} | ${mb(r.gpuBudgetBytes)} (${r.detailLoaded ?? "–"}) | ${r.load.split(" ")[0]} → ${r.endLoad.split(" ")[0]} |`].join("\n"));
+  if (COMPARE && PIXELS) for (const c of comparePixels()) console.log(`pictures: camera ${c.cam}: ${c.changed} of ${c.pixels} pixels differ by more than 40 levels (${c.any} at all)`);
+}
+
 async function main() {
+  if (LINKS) return linksMain();
   const loads = [];
   // The load before the run (the run's own SwiftShader threads raise it: it is recorded per model, not checked).
   for (let i = 0; load1() > 4 && i < (flag("--no-wait") ? 0 : 60); i++) { if (i % 6 === 0) log(`waiting: 1-minute load ${load1()} over 4`); await sleep(10000); }
